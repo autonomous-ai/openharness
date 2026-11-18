@@ -1077,18 +1077,18 @@ describe('ObservedSource and the name in a session\'s own record', () => {
   }
 
   it('a Claude session the scan lists reads the name its record gives', async () => {
-    const s = setup({ recordName: async () => 'Tho' })
+    const s = setup({ record: async () => ({ name: 'Tho' }) })
     found(s, 'a', 11)
     await s.src.scanOpen()
     expect(s.src.list()[0]).toMatchObject({ name: 'Tho', cwd: '/x/a' })
     expect(s.changes).toHaveBeenCalled()
   })
 
-  it.each<[string, ObservedDeps['recordName']]>([
-    ['gives none', async () => undefined],
+  it.each<[string, ObservedDeps['record']]>([
+    ['gives none', async () => ({})],
     ['fails', async () => { throw new Error('EACCES /Users/someone/.claude/sessions/11.json') }],
-  ])('a reader that %s still lists the session by its folder', async (_what, recordName) => {
-    const s = setup({ recordName })
+  ])('a reader that %s still lists the session by its folder', async (_what, record) => {
+    const s = setup({ record })
     found(s, 'a', 11)
     await s.src.scanOpen()
     expect(s.src.list()[0].name).toBe('a')
@@ -1097,8 +1097,8 @@ describe('ObservedSource and the name in a session\'s own record', () => {
   })
 
   it('the reader is asked once, for the Claude sessions the scan is about to list', async () => {
-    const recordName = vi.fn(async (_owner: unknown): Promise<string | undefined> => undefined)
-    const s = setup({ recordName })
+    const record = vi.fn(async (_owner: unknown): Promise<{ name?: string }> => ({}))
+    const s = setup({ record })
     found(s, 'a', 11)
     found(s, 'b', 12, 'codex')
     // No row: never listed.
@@ -1111,25 +1111,25 @@ describe('ObservedSource and the name in a session\'s own record', () => {
     found(s, 'd', 15)
     await s.src.scanOpen()
     await s.src.scanOpen()
-    expect(recordName.mock.calls).toEqual([[{ pid: 11, record: '/s/11.json', sessionId: 'a' }], [{ pid: 15, record: '/s/15.json', sessionId: 'd' }]])
+    expect(record.mock.calls).toEqual([[{ pid: 11, record: '/s/11.json', sessionId: 'a' }], [{ pid: 15, record: '/s/15.json', sessionId: 'd' }]])
   })
 
   it('at most 50 are asked a look', async () => {
-    const recordName = vi.fn(async (_owner: unknown): Promise<string | undefined> => undefined)
-    const s = setup({ recordName })
+    const record = vi.fn(async (_owner: unknown): Promise<{ name?: string }> => ({}))
+    const s = setup({ record })
     for (let i = 0; i < 51; i++) found(s, `s${i}`, 200 + i)
     await s.src.scanOpen()
-    expect(recordName).toHaveBeenCalledTimes(50)
+    expect(record).toHaveBeenCalledTimes(50)
   })
 
   it.each<[Partial<ObservedHookEvent>, string]>([[{ title: 'Math' }, 'Math'], [{}, 'a']])(
     'a hook that came while the names were read keeps what it said (%j)', async (over, name) => {
       let answer: (recorded: string | undefined) => void = () => {}
-      const recordName = vi.fn(() => new Promise<string | undefined>((resolve) => { answer = resolve }))
-      const s = setup({ recordName })
+      const record = vi.fn(() => new Promise<{ name?: string }>((resolve) => { answer = (name) => resolve(name ? { name } : {}) }))
+      const s = setup({ record })
       found(s, 'a', 11)
       const scan = s.src.scanOpen()
-      await vi.waitFor(() => expect(recordName).toHaveBeenCalled())
+      await vi.waitFor(() => expect(record).toHaveBeenCalled())
       s.src.ingest(s.ev('turn-start', { sessionId: 'a', callerPid: 11, cwd: '/x/a', ...over }))
       answer('Tho')
       await scan
@@ -1138,7 +1138,7 @@ describe('ObservedSource and the name in a session\'s own record', () => {
     })
 
   it('the record\'s name holds until a hook says otherwise', async () => {
-    const s = setup({ recordName: async () => 'Tho' })
+    const s = setup({ record: async () => ({ name: 'Tho' }) })
     found(s, 'a', 11)
     await s.src.scanOpen()
     expect(s.src.list()[0].name).toBe('Tho')
@@ -1151,7 +1151,7 @@ describe('ObservedSource and the name in a session\'s own record', () => {
   })
 
   it('the scan\'s line counts the named ones and holds no name', async () => {
-    const s = setup({ recordName: async (owner) => (owner.pid === 11 ? 'Tho 7f3a91c2' : undefined) })
+    const s = setup({ record: async (owner) => (owner.pid === 11 ? { name: 'Tho 7f3a91c2' } : {}) })
     found(s, 'a', 11)
     found(s, 'b', 12)
     await s.src.scanOpen()
@@ -1325,7 +1325,7 @@ describe('ObservedSource and the last answer the scan reads', () => {
   it('the scan\'s line counts the answered ones and times every read of the look', async () => {
     const s = setup({
       apps: async () => { s.clock.t += 7; return new Map([[11, 'ghostty']]) },
-      recordName: async (owner) => { s.clock.t += 5; return owner.sessionId === 'a' ? 'Tho 7f3a91c2' : undefined },
+      record: async (owner) => { s.clock.t += 5; return owner.sessionId === 'a' ? { name: 'Tho 7f3a91c2' } : {} },
       lastAnswer: async (_engine, path) => { s.clock.t += 2; return path === '/t/a.jsonl' ? 'Done: 3 files' : undefined },
     })
     s.holdBusy(async () => { s.clock.t += 3 })
@@ -2130,7 +2130,7 @@ describe('ObservedSource and the Herdr terminal a session the scan found runs in
   })
 
   it('the herdr line counts only: two paired in one look, and no pid, address or name in any line', async () => {
-    const s = paired({ recordName: async (owner) => (owner.sessionId === 'a' ? 'Tho 7f3a91c2' : undefined) })
+    const s = paired({ record: async (owner) => (owner.sessionId === 'a' ? { name: 'Tho 7f3a91c2' } : {}) })
     found(s, 'a', 11)
     found(s, 'b', 12)
     s.terminals.set(11, 't7').set(12, 't8')
@@ -2138,6 +2138,124 @@ describe('ObservedSource and the Herdr terminal a session the scan found runs in
     expect(s.logs).toEqual(['[observed] scan · 2 found · 0 app known · 1 named · 2 answered · 0 ms', '[observed] herdr · 2 paired'])
     const said = s.logs.join('\n')
     for (const word of ['t7', 't8', '11', '12', ...s.src.list().map((a) => a.name)]) expect(said).not.toMatch(new RegExp(`\\b${word}\\b`))
+  })
+})
+
+describe('ObservedSource and a Claude app session the scan found (docs/plans/2026-11-18-dial-claude-app-swipe-before-hook-design.md)', () => {
+  const CLAUDE_APP = 'com.anthropic.claudefordesktop'
+  const LOCAL = 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
+  const LOCAL_OTHER = 'local_0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
+  /** Session `a` of pid 11, found open by the scan in `app` (left out, the Claude app; given as undefined, none learnt),
+   *  its record giving `record`. */
+  const scanned = async (o: {
+    app?: string; record?: { name?: string; hostSession?: string }; fakes?: Partial<Fakes>; over?: Partial<ObservedDeps>
+  } = {}) => {
+    const app = 'app' in o ? o.app : 'claude'
+    const record = o.record ?? { hostSession: LOCAL }
+    const { actions } = fakeActions(o.fakes)
+    const s = setup({ actions, apps: async () => new Map(app ? [[11, app]] : []), record: async () => record, ...o.over })
+    s.open.set('a', 'terminal')
+    s.owners.set('a', { pid: 11, engine: 'claude', record: '/s/11.json' })
+    s.externals.set('a', { cwd: '/x/a' })
+    await s.src.scanOpen()
+    return { ...s, actions }
+  }
+  /** Nothing of the Claude app's: no pane a rest shows, and no tap or rest names its session. */
+  const noClaude = async (t: Awaited<ReturnType<typeof scanned>>, agent: HostAgent): Promise<void> => {
+    expect(t.src.hasPane(agent)).toBe(false)
+    await t.src.showPane(agent)
+    await t.src.focus(agent)
+    expect(JSON.stringify(t.actions.open.mock.calls)).not.toContain(LOCAL)
+    expect(JSON.stringify(t.actions.claudeShow.mock.calls)).not.toContain(LOCAL)
+  }
+
+  it('with the Claude app\'s parents and its record\'s id, it has the Claude pane before any hook', async () => {
+    const t = await scanned()
+    const [agent] = t.src.list()
+    expect(t.src.hasPane(agent)).toBe(true)
+    expect(await t.src.showPane(agent)).toBe('ok')
+    expect(t.actions.claudeShow.mock.calls).toEqual([[agent.id, LOCAL]])
+    expect(await t.src.focus(agent)).toBe(true)
+    // No hook named its app: its pane's adapter does, so a link that fails still brings the app (open.ts).
+    expect(t.actions.open.mock.calls).toEqual([[agent.id, { bundle: CLAUDE_APP, pane: { adapter: 'claude', id: LOCAL } }]])
+  })
+
+  it('with the Claude app not in front, no rest is offered and none runs', async () => {
+    const t = await scanned({ fakes: { claudeInFront: vi.fn(() => false) } })
+    const [agent] = t.src.list()
+    expect(t.src.hasPane(agent)).toBe(false)
+    expect(await t.src.showPane(agent)).toBe('failed')
+    expect(t.actions.claudeShow).not.toHaveBeenCalled()
+  })
+
+  it('the record\'s id under a Ghostty parent places nothing', async () => {
+    const t = await scanned({ app: 'ghostty' })
+    await noClaude(t, t.src.list()[0])
+  })
+
+  it('the Claude app\'s parents with no id in the record place nothing', async () => {
+    const t = await scanned({ record: { name: 'Tho' } })
+    const [agent] = t.src.list()
+    expect(agent.name).toBe('Tho')
+    await noClaude(t, agent)
+  })
+
+  it('an app the scan did not learn places nothing', async () => {
+    const t = await scanned({ app: undefined })
+    await noClaude(t, t.src.list()[0])
+  })
+
+  it('the first hook places it by its own hints: another local_ id wins', async () => {
+    const t = await scanned()
+    t.src.ingest(t.ev('turn-start', { sessionId: 'a', callerPid: 11, cwd: '/x/a',
+      hostHints: { __CFBundleIdentifier: CLAUDE_APP, CLAUDE_CODE_HOST_SESSION_ID: LOCAL_OTHER } }))
+    const [agent] = t.src.list()
+    expect(await t.src.showPane(agent)).toBe('ok')
+    expect(t.actions.claudeShow.mock.calls).toEqual([[agent.id, LOCAL_OTHER]])
+  })
+
+  it('a first hook whose hints name no app takes the record\'s pane away', async () => {
+    const t = await scanned()
+    // The record's pane, until the hook.
+    expect(t.src.hasPane(t.src.list()[0])).toBe(true)
+    t.src.ingest(t.ev('turn-start', { sessionId: 'a', callerPid: 11, cwd: '/x/a', hostHints: {} }))
+    // The caller's parents answer the Claude app.
+    await flushed()
+    const [agent] = t.src.list()
+    expect(agent.app).toBe('claude')
+    await noClaude(t, agent)
+  })
+
+  it('a Herdr pairing wins', async () => {
+    const t = await scanned({ over: { herdrTerminal: (pid) => (pid === 11 ? 't7' : undefined) } })
+    const [agent] = t.src.list()
+    expect(agent).toMatchObject({ app: 'herdr', paneKeys: ['herdr-app:t7'] })
+    expect(await t.src.focus(agent)).toBe(true)
+    expect(t.actions.open.mock.calls[0][1].pane).toEqual({ adapter: 'herdr-app', id: 't7' })
+    await noClaude(t, agent)
+  })
+
+  it('a hook that came while the record was read keeps its own place', async () => {
+    let answer: (record: { hostSession?: string }) => void = () => {}
+    const record = vi.fn(() => new Promise<{ hostSession?: string }>((resolve) => { answer = resolve }))
+    const { actions } = fakeActions()
+    const s = setup({ actions, apps: async () => new Map([[11, 'claude']]), record })
+    s.open.set('a', 'terminal')
+    s.owners.set('a', { pid: 11, engine: 'claude', record: '/s/11.json' })
+    s.externals.set('a', { cwd: '/x/a' })
+    const scan = s.src.scanOpen()
+    await vi.waitFor(() => expect(record).toHaveBeenCalled())
+    s.src.ingest(s.ev('turn-start', { sessionId: 'a', callerPid: 11, cwd: '/x/a', hostHints: { TERM_PROGRAM: 'ghostty' } }))
+    answer({ hostSession: LOCAL })
+    await scan
+    expect(s.src.list()).toHaveLength(1)
+    await noClaude({ ...s, actions }, s.src.list()[0])
+  })
+
+  it('the scan\'s line is unchanged and no line holds the id', async () => {
+    const t = await scanned()
+    expect(t.logs).toEqual(['[observed] scan · 1 found · 1 app known · 0 named · 0 answered · 0 ms'])
+    expect(t.logs.join('\n')).not.toContain('local_')
   })
 })
 
@@ -3098,7 +3216,7 @@ describe('ObservedSource panes', () => {
 
   it('its own title (the hook\'s) and a user record name win over a pane name the person did not set', async () => {
     const { actions } = fakeActions()
-    const s = setup({ actions, recordName: async () => 'Mine' })
+    const s = setup({ actions, record: async () => ({ name: 'Mine' }) })
     s.src.ingest(s.ev('turn-start', { title: 'Tho', ...inOrca() }))
     s.open.set('a', 'terminal')
     s.owners.set('a', { pid: 11, engine: 'claude' })
@@ -3160,7 +3278,7 @@ describe('ObservedSource panes', () => {
 
   it('a pane name the person set wins over the session\'s own name; one they did not set leaves it', async () => {
     const { actions } = fakeActions()
-    const s = setup({ actions, recordName: async () => 'harness root' })
+    const s = setup({ actions, record: async () => ({ name: 'harness root' }) })
     // Diego's PM: the session he named "harness root" in a tab he renamed "PM". Its name from its hook, then its record's.
     s.src.ingest(s.ev('turn-start', { title: 'harness root', ...inOrca() }))
     s.open.set('a', 'terminal')

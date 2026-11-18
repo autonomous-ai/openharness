@@ -13,6 +13,7 @@ import { APP_BUNDLES, detectApp, detectHost, hostDisplayName, UNKNOWN_APP } from
 import type { Delivery } from './inbox.js'
 import { bundleOf, type OpenTarget } from './open.js'
 import { MAX_TEXT } from './orca.js'
+import type { SessionRecord } from './record.js'
 import { isTabApp } from './tabs.js'
 import type { Caps, HostAgent, HostAgentState, HostSource, PaneSwitch, SendResult } from './types.js'
 
@@ -102,9 +103,9 @@ export interface ObservedDeps {
   actions?: ObservedActions
   /** The app each of these processes runs in, where its parents name one (scannedApp.ts); absent, nothing is learned. */
   apps?(pids: readonly number[]): Promise<ReadonlyMap<number, string>>
-  /** The name the person gave a Claude Code session, from its own process record (recordName.ts); one that rejects names
-   *  nothing. Absent, the scan names by folder. */
-  recordName?(owner: Pick<SessionOwner, 'pid' | 'record'> & { sessionId: string }): Promise<string | undefined>
+  /** What a Claude Code session's own process record gives (record.ts): the name the person gave it, and the Claude
+   *  app's id of it; one that rejects gives nothing. Absent, the scan names by folder and places by its app alone. */
+  record?(owner: Pick<SessionOwner, 'pid' | 'record'> & { sessionId: string }): Promise<SessionRecord>
   /** The tty of a process in a tab app (tabs.ts readTty), rejecting when `ps` could not be read; absent (off macOS), no
    *  agent has a tab. */
   tty?(pid: number): Promise<string | undefined>
@@ -169,6 +170,8 @@ interface Entry {
   /** The hc terminal a session the scan found runs in, until its first hook, and the app the scan gave it, which a
    *  pairing that no longer holds puts back. No hook's hints: only locate() reads it. */
   paired?: { address: string; app: string; appPending?: true }
+  /** The Claude app's id of a session the scan found, from its record, until its first hook: only locate() reads it. */
+  hostSession?: string
   /** Every pane an adapter knows it by, from its latest event and its tty, in the adapters' order. */
   panes: readonly Located[]
   /** The process its tty was read for, its latest in a tab app, and that tty once read. */
@@ -430,8 +433,8 @@ export class ObservedSource implements HostSource {
    *  its own process (the engine's record's, or the rollout's owner) places it. */
   private locate(entry: Entry): void {
     const hints = entry.paired ? { HC_TERMINAL_ID: entry.paired.address } : entry.hints
-    const place = { host: entry.agent.host, app: entry.agent.app, hints, tty: entry.tty, pid: entry.caller ?? entry.pid,
-      sessionId: entry.agent.sessionId, engine: entry.agent.engine }
+    const place = { host: entry.agent.host, app: entry.agent.app, hints, tty: entry.tty, hostSession: entry.hostSession,
+      pid: entry.caller ?? entry.pid, sessionId: entry.agent.sessionId, engine: entry.agent.engine }
     entry.panes = (this.deps.actions?.adapters ?? []).flatMap((adapter) => {
       const pane = adapter.paneOf(place)
       return pane ? [{ adapter, pane }] : []
@@ -601,6 +604,7 @@ export class ObservedSource implements HostSource {
     // no hook said it, so until the caller's parents answer it keeps the app the scan gave it.
     if (entry.paired) a.app = entry.paired.app
     entry.paired = undefined
+    entry.hostSession = undefined
     // A hook says where a session runs: one the open scan found is not known yet until its first, unless its parent
     // processes named its app. A hook whose hints name no app (the Codex app's own Codex) learns it from its caller's
     // parents.
@@ -854,7 +858,7 @@ export class ObservedSource implements HostSource {
     // told of during the reads, which keeps what it said.
     const learning = this.deps.now()
     const apps = await this.appsOf(listing.map(([sessionId]) => owners.get(sessionId)!.pid))
-    const names = await this.namesOf(listing, owners)
+    const records = await this.recordsOf(listing, owners)
     const busy = await this.busyOf(listing, owners)
     const answers = await this.answersOf(listing, rows, busy)
     // Every read of the look, so a slow one shows in the line.
@@ -873,9 +877,9 @@ export class ObservedSource implements HostSource {
       const entry = this.entry(engine, sessionId, now, { cwd: row.cwd, transcriptPath: row.transcriptPath, pid: owner.pid })
       if (!entry) continue
       listed++
-      const name = names.get(sessionId)
-      if (name) {
-        entry.title = name
+      const record = records.get(sessionId)
+      if (record?.name) {
+        entry.title = record.name
         named++
       }
       // The app alone: its host and what a tap opens stay unknown until its first hook.
@@ -885,6 +889,8 @@ export class ObservedSource implements HostSource {
         delete entry.agent.appPending
         known++
       }
+      // The Claude app's id of it: with its app, it places it until its first hook (claudeApp.ts).
+      if (record?.hostSession) entry.hostSession = record.hostSession
       if (this.pair(entry)) paired++
       this.learnTty(entry, owner.pid)
       // Once its panes are known.
@@ -992,24 +998,25 @@ export class ObservedSource implements HostSource {
     return answers
   }
 
-  /** The name in each Claude Code session's own record, by session id, read one at a time; none when there is no reader.
-   *  A read that fails names nothing and logs nothing: its error can hold a path, and the session keeps its folder. */
-  private async namesOf(
+  /** What each Claude Code session's own record gives, by session id, read one at a time; none when there is no reader.
+   *  A read that fails gives nothing and logs nothing: its error can hold a path, and the session keeps its folder and
+   *  its app's place. */
+  private async recordsOf(
     listing: readonly [string, ExternalEngine][], owners: ReadonlyMap<string, SessionOwner>,
-  ): Promise<ReadonlyMap<string, string>> {
-    const names = new Map<string, string>()
-    if (!this.deps.recordName) return names
+  ): Promise<ReadonlyMap<string, SessionRecord>> {
+    const records = new Map<string, SessionRecord>()
+    if (!this.deps.record) return records
     for (const [sessionId, engine] of listing) {
       if (engine !== 'claude') continue
       try {
         const { pid, record } = owners.get(sessionId)!
-        const name = await this.deps.recordName({ pid, record, sessionId })
-        if (name) names.set(sessionId, name)
+        const read = await this.deps.record({ pid, record, sessionId })
+        if (read.name !== undefined || read.hostSession !== undefined) records.set(sessionId, read)
       } catch {
         // Named by its folder, as a session with no name is.
       }
     }
-    return names
+    return records
   }
 
   /** None when there is no reader or it failed: every session is still listed, not known yet. */

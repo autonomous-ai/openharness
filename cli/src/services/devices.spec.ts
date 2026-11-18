@@ -176,7 +176,7 @@ const readers = vi.hoisted(() => ({
   scans: 0,
   answer: vi.fn(async (..._args: unknown[]): Promise<string | undefined> => undefined),
   apps: vi.fn(async (_pids: readonly number[]) => new Map<number, string>()),
-  name: vi.fn(async (..._args: unknown[]): Promise<string | undefined> => undefined),
+  record: vi.fn(async (..._args: unknown[]): Promise<{ name?: string; hostSession?: string }> => ({})),
   processes: vi.fn(async () => [] as Array<{ pid: number; ppid: number; executable: string }>),
 }))
 vi.mock('../lib/sessionSearch/external.js', async (real) => ({
@@ -209,8 +209,8 @@ vi.mock('../cable/hosts/scannedApp.js', async (real) => ({
   learnApps: readers.apps,
   readProcessNames: readers.processes,
 }))
-// The name in a session's own process record: never this machine's ~/.claude.
-vi.mock('../cable/hosts/recordName.js', () => ({ readRecordName: readers.name }))
+// What a session's own process record gives: never this machine's ~/.claude.
+vi.mock('../cable/hosts/record.js', () => ({ readRecord: readers.record }))
 vi.mock('../cable/hosts/lastAnswer.js', async (real) => ({
   ...await real<typeof import('../cable/hosts/lastAnswer.js')>(),
   readLastAnswer: readers.answer,
@@ -408,7 +408,7 @@ beforeEach(() => {
   readers.scans = 0
   vi.clearAllMocks()
   readers.answer.mockResolvedValue(undefined)
-  readers.name.mockResolvedValue(undefined)
+  readers.record.mockResolvedValue({})
   readers.processes.mockResolvedValue([])
   processTable.rows = []
   processTable.reads = 0
@@ -1721,11 +1721,11 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     readers.owners.set('sess-7', { engine: 'claude', pid: 78, record: '/s/78.json' })
     readers.rows.set('sess-7', { cwd: '/work/scratch-2016', transcriptPath: null })
     readers.working.set('/s/78.json', false)
-    readers.name.mockResolvedValue('Tho')
+    readers.record.mockResolvedValue({ name: 'Tho' })
     seen.host.watching!(true)
     await vi.waitFor(async () => expect((await machineList(port)).agents)
       .toEqual([expect.objectContaining({ id: observedAgentId('claude', 'sess-7'), name: 'Tho' })]))
-    expect(readers.name.mock.calls).toEqual([[{ pid: 78, record: '/s/78.json', sessionId: 'sess-7' },
+    expect(readers.record.mock.calls).toEqual([[{ pid: 78, record: '/s/78.json', sessionId: 'sess-7' },
       { records: [join(dirname(env.CLAUDE_PROJECTS_DIR), 'sessions'), join(orca, 'sessions')] }]])
   })
 
@@ -4461,6 +4461,32 @@ describe('the session the Claude app shows turns the dial (docs/specs/2026-11-15
     expect([...attaches()].sort()).toEqual(lines.sort())
     const secrets = [SESSION, SECOND, UNLISTED, A, B, LOCAL, LOCAL_SECOND, BUNDLE]
     expect(logs.filter((line) => secrets.some((secret) => line.includes(secret)))).toEqual([])
+  })
+
+  // docs/plans/2026-11-18-dial-claude-app-swipe-before-hook-design.md: the scan's parents and the session's record place it.
+  it('a rest on a Claude app agent the scan found runs one continue link, with no hook sent', async () => {
+    const S = '3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f'
+    vi.useFakeTimers()
+    const listener = fakeListener()
+    const { port } = start({ faults: ['fleet'], listen: listener.listen, orca: { ...orca, platform: 'darwin' }, now: () => Date.now(),
+      tty: async () => '/dev/ttys023' })
+    readers.known.set(S, 'terminal')
+    readers.owners.set(S, { engine: 'claude', pid: 4300, record: '/s/4300.json' })
+    readers.rows.set(S, { cwd: '/work/api', transcriptPath: null })
+    readers.working.set('/s/4300.json', false)
+    readers.apps.mockResolvedValueOnce(new Map([[4300, 'claude']]))
+    readers.record.mockResolvedValue({ hostSession: LOCAL })
+    seen.host.watching!(true)
+    port.swarms(null)
+    await vi.waitFor(async () => {
+      port.swarms(null)
+      expect((await host().listAgentSnapshot()).agents).toEqual([expect.objectContaining({ id: observedAgentId('claude', S) })])
+    })
+    expect(listener.front('claude')).toBeUndefined()
+    await wait(FRONT_SETTLE_MS)
+    await rest(observedAgentId('claude', S))
+    expect(orcaRuns).toEqual([continued(LOCAL)])
+    expect(logs.filter((line) => line.includes(LOCAL))).toEqual([])
   })
 })
 

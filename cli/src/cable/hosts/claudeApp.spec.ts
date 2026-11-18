@@ -42,12 +42,15 @@ function holding() {
 const place = (hints: Record<string, string>): Place => ({ host: 'claude', app: 'claude', hints })
 const pane = (id: string) => ({ adapter: 'claude', id })
 const link = (session: string): Call => ({ file: OPEN, args: ['-b', CLAUDE, `claude://code/continue?session=${session}`], timeoutMs: 10_000 })
+/** A session the open scan found: the app its parents name and the id its record holds, and no hook's hints yet. */
+const scanned = (over: Partial<Place> = {}): Place => ({ host: 'terminal', app: 'claude', hints: {}, hostSession: SESSION, ...over })
 
 describe('the Claude app adapter', () => {
-  it('its id is claude, and its link takes the place of open -b', () => {
+  it('its id is claude, its link takes the place of open -b, and its bundle is the Claude app\'s', () => {
     const { adapter } = recorder()
     expect(adapter.id).toBe('claude')
     expect(adapter.tap).toBe('instead')
+    expect(adapter.bundle).toBe(CLAUDE)
     expect(adapter.type).toBeUndefined()
   })
 
@@ -65,6 +68,26 @@ describe('the Claude app adapter', () => {
     }
   })
 
+  it('paneOf takes the id the scan read from the record of a session the Claude app runs', () => {
+    const { adapter } = recorder()
+    expect(adapter.paneOf(scanned())).toEqual(pane(SESSION))
+  })
+
+  it('paneOf refuses the record\'s id under any other app, with none, or in any other form', () => {
+    const { adapter } = recorder()
+    for (const app of ['ghostty', 'terminal', 'herdr', 'codex', 'orca', 'unknown']) {
+      expect(adapter.paneOf(scanned({ app })), app).toBeUndefined()
+    }
+    expect(adapter.paneOf(scanned({ hostSession: undefined }))).toBeUndefined()
+    const forged = ['local_', 'local_a/b', 'local_x&source=y', `local_${'a'.repeat(65)}`, 'session_abc', '--args', '8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b']
+    for (const hostSession of forged) expect(adapter.paneOf(scanned({ hostSession })), hostSession).toBeUndefined()
+  })
+
+  it('the hook\'s hints win over the record\'s id', () => {
+    const { adapter } = recorder()
+    expect(adapter.paneOf(scanned({ hints: { __CFBundleIdentifier: CLAUDE, CLAUDE_CODE_HOST_SESSION_ID: OTHER } }))).toEqual(pane(OTHER))
+  })
+
   it('canFocus is macOS only; canShow also needs the app in front, asked each time', () => {
     for (const platform of ['linux', 'win32'] as const) {
       const { adapter } = recorder({ platform })
@@ -80,6 +103,7 @@ describe('the Claude app adapter', () => {
     expect(adapter.canShow(pane(SESSION))).toBe(false)
   })
 
+  // A link that fails leaves the app to the opener's fallback, by the adapter's bundle (open.ts).
   it('focus runs the continue link alone', async () => {
     const { calls, adapter } = recorder()
     expect(await adapter.focus(pane(SESSION))).toBe(true)
