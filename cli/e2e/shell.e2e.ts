@@ -17,7 +17,8 @@ function shell(d: IsolatedDaemon) {
   const script = join(cwd, 'start shell.sh')
   // The caller sends only a path and literal arguments. This fixture writes what the shell received,
   // then becomes an interactive shell so the client can attach and type through the real stream.
-  writeFileSync(script, 'marker="$1"\nshift\nprintf "%s\\n" "$PWD" "$@" > "$marker"\nexec /bin/sh -i\n')
+  // Each file the test reads is written aside and moved into place whole: `>` creates it empty first.
+  writeFileSync(script, 'marker="$1"\nshift\nprintf "%s\\n" "$PWD" "$@" > "$marker.tmp" && mv "$marker.tmp" "$marker"\nexec /bin/sh -i\n')
   const args = ['a b', '$(touch injected)', '; touch injected', "quote'and\"quote", '']
   return { cwd, marker, args, payload: { creationId: randomUUID(), cwd, argv: ['/bin/sh', script, marker, ...args] } }
 }
@@ -56,7 +57,7 @@ describe('opening connected shells', () => {
     const ready = await attached
     expect(ready.type, JSON.stringify(ready)).toBe('terminal_ready')
     client.sendBinary({ kind: TerminalBinaryKind.input, streamId: ready.payload!.streamId, seq: 0, compressed: false,
-      bytes: Buffer.from('printf shell-input-ok > input.txt\r') })
+      bytes: Buffer.from('printf shell-input-ok > input.tmp && mv input.tmp input.txt\r') })
     await until('the shell to receive input from its attached view', () => existsSync(join(fixture.cwd, 'input.txt')) || null, 20_000, 100)
     expect(readFileSync(join(fixture.cwd, 'input.txt'), 'utf8')).toBe('shell-input-ok')
     // Kill only the edge child recorded by this fixture's master. The existing terminal stream belongs
@@ -68,7 +69,7 @@ describe('opening connected shells', () => {
     process.kill(edgePid!, 'SIGKILL')
     await until('shell receipts to reconnect after the edge crash', () => d.log().split('[services] shell connected').length > connects || null, 30_000)
     client.sendBinary({ kind: TerminalBinaryKind.input, streamId: ready.payload!.streamId, seq: 1, compressed: false,
-      bytes: Buffer.from('printf still-connected > after-crash.txt\r') })
+      bytes: Buffer.from('printf still-connected > after-crash.tmp && mv after-crash.tmp after-crash.txt\r') })
     await until('the existing stream to keep writing after the service crash', () => existsSync(join(fixture.cwd, 'after-crash.txt')) || null, 20_000)
     expect(readFileSync(join(fixture.cwd, 'after-crash.txt'), 'utf8')).toBe('still-connected')
     expect(d.coresStarted()).toBe(1)

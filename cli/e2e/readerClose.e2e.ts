@@ -38,7 +38,9 @@ it('closes and resumes the same conversation after its reader dies during the re
         if (fs.existsSync(${JSON.stringify(release)})) { clearTimeout(deadline); watcher.close(); finish(); }
       });
       const deadline = setTimeout(() => { watcher.close(); finish(); }, 10000);
-      fs.writeFileSync(${JSON.stringify(signalled)}, JSON.stringify({ pid: process.pid, signal: 'SIGTERM' }));
+      // Written aside and moved into place whole: the test parses it the moment it exists.
+      fs.writeFileSync(${JSON.stringify(`${signalled}.tmp`)}, JSON.stringify({ pid: process.pid, signal: 'SIGTERM' }));
+      fs.renameSync(${JSON.stringify(`${signalled}.tmp`)}, ${JSON.stringify(signalled)});
     });
   })\n`
   writeFileSync(d.env.HERMES_PATH!, fake, { mode: 0o755 })

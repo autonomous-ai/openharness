@@ -31,7 +31,9 @@ it('keeps the actual update exit when a status reply reaches a core whose IPC ha
 if (process.argv[2] === '__run' && process.env.HARNESSD_RESTARTS === '0') {
   const fs = await import('node:fs');
   const wait = async (name) => { while (!fs.existsSync(${JSON.stringify(daemon.root)} + '/' + name)) await new Promise(r => setTimeout(r, 10)); };
-  fs.writeFileSync(${JSON.stringify(file('first-core'))}, String(process.pid));
+  // Written aside and moved into place whole: the test reads the pid the moment the file exists.
+  fs.writeFileSync(${JSON.stringify(file('first-core.tmp'))}, String(process.pid));
+  fs.renameSync(${JSON.stringify(file('first-core.tmp'))}, ${JSON.stringify(file('first-core'))});
   await wait('send');
   await new Promise(r => process.send({type:'harnessd:bound',protocol:2,port:1}, r));
   await new Promise(r => process.send({type:'harnessd:ready'}, r));

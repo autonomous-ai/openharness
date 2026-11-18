@@ -84,7 +84,9 @@ it.runIf(binary)('keeps connected local shells interactive and composes a remote
 const fs = require('node:fs');
 if (process.argv.includes('--version')) { console.log('2.0.0'); process.exit(0); }
 if (process.argv.includes('--help')) { console.log('--resume --model'); process.exit(0); }
-fs.writeFileSync(${JSON.stringify(marker)}, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd() }));
+// Written aside and moved into place whole: the test parses it the moment it exists.
+fs.writeFileSync(${JSON.stringify(`${marker}.tmp`)}, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd() }));
+fs.renameSync(${JSON.stringify(`${marker}.tmp`)}, ${JSON.stringify(marker)});
 console.log('REMOTE_AGENT_READY');
 process.stdin.setRawMode(true); process.stdin.resume();
 process.stdin.on('data', data => { if (data.includes(3)) process.exit(130); });
