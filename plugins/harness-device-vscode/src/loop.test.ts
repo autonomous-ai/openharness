@@ -159,6 +159,11 @@ function world(answers: (Ran | Promise<Ran>)[], win = fakeWindow(), over: Partia
       called()
       return scrolled
     },
+    pageKey(pid, up) {
+      const sent = win.window.pageKey(pid, up)
+      called()
+      return sent
+    },
   }
   const loop = startLoop(inputs, window, {
     changed(state) {

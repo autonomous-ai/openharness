@@ -1,5 +1,5 @@
-// A window the loop's tests drive: its state is what the test sets, and each terminal the loop asks for, each raise and
-// each scroll, is recorded.
+// A window the loop's tests drive: its state is what the test sets, and each terminal the loop asks for, each raise,
+// each scroll and each page key, is recorded.
 import type { WindowFacade, WindowState } from '../window'
 
 export function fakeWindow(initial: Partial<WindowState> & { remote?: boolean } = {}): {
@@ -16,6 +16,8 @@ export function fakeWindow(initial: Partial<WindowState> & { remote?: boolean } 
   scrollReplies: ('held' | 'rejected')[]
   /** Resolves every scrollLine held. */
   release(): void
+  /** Each page key asked, in order. */
+  pageKeys: Array<{ pid: number; up: boolean }>
 } {
   const { remote = false, ...first } = initial
   let state: WindowState = { terminals: [], active: null, focused: false, ...first }
@@ -24,6 +26,7 @@ export function fakeWindow(initial: Partial<WindowState> & { remote?: boolean } 
   const raised: number[] = []
   const scrolls: boolean[] = []
   const scrollReplies: ('held' | 'rejected')[] = []
+  const pageKeys: Array<{ pid: number; up: boolean }> = []
   let held: (() => void)[] = []
   return {
     window: {
@@ -49,6 +52,10 @@ export function fakeWindow(initial: Partial<WindowState> & { remote?: boolean } 
         if (reply === 'held') return new Promise<void>((done) => held.push(done))
         return Promise.resolve()
       },
+      pageKey(pid, up) {
+        pageKeys.push({ pid, up })
+        return state.terminals.includes(pid)
+      },
     },
     set(next) {
       state = { ...state, ...next }
@@ -63,5 +70,6 @@ export function fakeWindow(initial: Partial<WindowState> & { remote?: boolean } 
       held = []
       for (const resolve of done) resolve()
     },
+    pageKeys,
   }
 }
