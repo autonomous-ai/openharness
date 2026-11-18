@@ -5,6 +5,7 @@ import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LocalModels } from './localModels.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 it('discovers, downloads, starts, verifies, stops and restarts across real subprocesses and HTTP', async () => {
   const root = await mkdtemp(join(tmpdir(), 'models-pipeline-'))
@@ -43,7 +44,7 @@ it('discovers, downloads, starts, verifies, stops and restarts across real subpr
     await mkdir(gridHome)
     await writeFile(join(gridHome, 'credentials.toml'), `session_token = 'catalog-fixture'\napi_url = '${base}'\n`)
     const executable = join(root, 'grid.mjs')
-    await writeFile(executable, `#!${process.execPath}
+    writeExecutable(executable, `#!${process.execPath}
 import { mkdirSync, writeFileSync, appendFileSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 const home = process.env.GRID_HOME, args = process.argv.slice(2);
@@ -63,7 +64,7 @@ else if (args.includes('leave')) { rmSync(record); rmSync(registered); }
 else if (args.includes('info') && args.includes('--json')) result({ grid: 'home', status: 'running' });
 else if (args.includes('info')) console.log("export OPENAI_BASE_URL='${base}/v1'\\nexport OPENAI_API_KEY='inference-fixture'");
 else process.exitCode = 2;
-`, { mode: 0o700 })
+`)
     // The grid's own answer, as the credential-less reader would give it: the engine is listed while its
     // run record exists (the fake's `join` writes it, `leave` removes it).
     const record = join(gridHome, 'run', 'engines', 'fixture-grid', 'remote.json')

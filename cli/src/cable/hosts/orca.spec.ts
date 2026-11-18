@@ -1,10 +1,11 @@
 import { ChildProcess, execFile, spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { chmodSync, existsSync, lutimesSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, lutimesSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { createOrcaAdapter, createOrcaReads, ORCA_HANDLE, type OrcaChild, orcaDeps, type OrcaDeps, type OrcaReadDeps } from './orca.js'
+import { writeExecutable } from '../../testing/executableFixture.js'
 
 // The real execFile and spawn, watched: a spec reads how the child of a run or a watch ended.
 vi.mock('node:child_process', async (original) => {
@@ -71,8 +72,7 @@ afterEach(() => {
 function fakeOrca(tail = 'exit 0'): { file: string; argv(): string[] } {
   const file = join(dir, 'orca')
   const out = join(dir, 'argv')
-  writeFileSync(file, `#!/bin/sh\nprintf '%s\\0' "$@" > '${out}'\n${tail}\n`)
-  chmodSync(file, 0o755)
+  writeExecutable(file, `#!/bin/sh\nprintf '%s\\0' "$@" > '${out}'\n${tail}\n`)
   return { file, argv: () => readFileSync(out, 'utf8').split('\0').slice(0, -1) }
 }
 

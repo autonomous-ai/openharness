@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { alive } from './spawnedRuns.js'
+import { writeExecutable } from './executableFixture.js'
 
 const REAPER = resolve(import.meta.dirname, '..', '..', 'e2e', 'harness', 'reaperProcess.mjs')
 
@@ -92,7 +93,7 @@ describe.skipIf(process.platform === 'win32')('the worker\'s reaper and a proces
     // An lsof that puts both in the root, the second as another account's. The real one lists another account's only for root.
     const bin = join(outside, 'bin'), uid = process.getuid!()
     mkdirSync(bin)
-    writeFileSync(join(bin, 'lsof'), `#!/bin/sh\nprintf 'p%s\\nu%s\\nfcwd\\nn%s\\n' ${mine.pid} ${uid} ${dir}/work ${theirs.pid} ${uid + 1} ${dir}/work\n`, { mode: 0o755 })
+    writeExecutable(join(bin, 'lsof'), `#!/bin/sh\nprintf 'p%s\\nu%s\\nfcwd\\nn%s\\n' ${mine.pid} ${uid} ${dir}/work ${theirs.pid} ${uid + 1} ${dir}/work\n`)
     await reaped([{ tmux: join(dir, 'no-server'), root: dir }], { ...process.env, PATH: `${bin}:${process.env.PATH}` })
     await expect.poll(() => gone(mine), { timeout: 10_000 }).toBe(true)
     expect(alive(theirs.pid!)).toBe(true)

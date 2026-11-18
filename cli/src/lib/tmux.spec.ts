@@ -27,6 +27,7 @@ import {
 } from './processTable.js'
 import { tmuxControlGate } from './tmuxControlGate.js'
 import { assumeTmuxVersion, resetTmuxVersionCache } from './tmuxVersion.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 const ownership = (cursor: string[] = [], grok: string[] = []): AgentCommandOwnershipSnapshot => ({
   cursorFileKeys: new Set(cursor),
@@ -530,7 +531,7 @@ describe('tmux process primitives', () => {
     const stdinFile = join(dir, 'stdin')
     const fakeTmux = join(dir, 'tmux')
     const sentinel = `prompt sentinel $' ${process.pid}`
-    writeFileSync(fakeTmux, `#!/bin/sh
+    writeExecutable(fakeTmux, `#!/bin/sh
 printf '%s\\n' "$*" >> "$TMUX_INPUT_ARGS"
 if [ "$1" = "load-buffer" ]; then
   cat >> "$TMUX_INPUT_STDIN"
@@ -541,7 +542,6 @@ if [ "$1" = "paste-buffer" ] && [ "$TMUX_INPUT_FAIL_PASTE" = "1" ]; then
   exit 2
 fi
 `)
-    chmodSync(fakeTmux, 0o700)
     const previous = {
       path: process.env.PATH,
       args: process.env.TMUX_INPUT_ARGS,
@@ -585,12 +585,11 @@ fi
     const dir = mkdtempSync(join(tmpdir(), 'harness-tmux-submit-'))
     const argsFile = join(dir, 'args')
     const fakeTmux = join(dir, 'tmux')
-    writeFileSync(fakeTmux, `#!/bin/sh
+    writeExecutable(fakeTmux, `#!/bin/sh
 printf '%s\\n' "$*" >> "$TMUX_SUBMIT_ARGS"
 if [ "$1" = "load-buffer" ]; then cat > /dev/null; fi
 if [ "$1" = "paste-buffer" ] && [ "$TMUX_SUBMIT_FAIL" = "1" ]; then exit 2; fi
 `)
-    chmodSync(fakeTmux, 0o700)
     const previous = { path: process.env.PATH, args: process.env.TMUX_SUBMIT_ARGS, fail: process.env.TMUX_SUBMIT_FAIL }
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const commands = () => readFileSync(argsFile, 'utf8').trim().split('\n')
@@ -683,13 +682,12 @@ if [ "$1" = "paste-buffer" ] && [ "$TMUX_SUBMIT_FAIL" = "1" ]; then exit 2; fi
     // was typed (e2e/content.e2e.ts): a buffer tmux pastes bracketed holds no control but tab and newline.
     const dir = mkdtempSync(join(tmpdir(), 'harness-tmux-paste-'))
     const fakeTmux = join(dir, 'tmux')
-    writeFileSync(fakeTmux, `#!/bin/sh
+    writeExecutable(fakeTmux, `#!/bin/sh
 if [ "$1" = "load-buffer" ]; then
   n=$(cat "$TMUX_PASTE_DIR/count" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$TMUX_PASTE_DIR/count"
   cat > "$TMUX_PASTE_DIR/buffer-$n"
 fi
 `)
-    chmodSync(fakeTmux, 0o700)
     const previous = { path: process.env.PATH, dir: process.env.TMUX_PASTE_DIR }
     const hostile = 'hello\x1b[201~\r!exit\r'
     try {
@@ -717,11 +715,10 @@ describe('a paste on a tmux that crashes when one attaches as a buffer changes (
   it('waits for a terminal attaching before it sets its buffer, and goes straight through on tmux 3.7', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'harness-tmux-gate-'))
     const argsFile = join(dir, 'args')
-    writeFileSync(join(dir, 'tmux'), `#!/bin/sh
+    writeExecutable(join(dir, 'tmux'), `#!/bin/sh
 printf '%s\\n' "$1" >> "$TMUX_GATE_ARGS"
 if [ "$1" = "load-buffer" ]; then cat > /dev/null; fi
 `)
-    chmodSync(join(dir, 'tmux'), 0o700)
     writeFileSync(argsFile, '')
     const previous = { path: process.env.PATH, args: process.env.TMUX_GATE_ARGS }
     const asked = () => readFileSync(argsFile, 'utf8').trim().split('\n').filter(Boolean)
@@ -760,11 +757,10 @@ if [ "$1" = "load-buffer" ]; then cat > /dev/null; fi
     // Asked again between load-buffer and paste-buffer: the stream the paste came on may have closed meanwhile.
     const dir = mkdtempSync(join(tmpdir(), 'harness-tmux-allowed-'))
     const argsFile = join(dir, 'args')
-    writeFileSync(join(dir, 'tmux'), `#!/bin/sh
+    writeExecutable(join(dir, 'tmux'), `#!/bin/sh
 printf '%s\\n' "$1" >> "$TMUX_GATE_ARGS"
 if [ "$1" = "load-buffer" ]; then cat > /dev/null; fi
 `)
-    chmodSync(join(dir, 'tmux'), 0o700)
     writeFileSync(argsFile, '')
     const previous = { path: process.env.PATH, args: process.env.TMUX_GATE_ARGS }
     try {

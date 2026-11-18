@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { alive } from '../../testing/spawnedRuns.js'
 import { fakePodman, type FakePodman } from './fakePodman.js'
 import { createPodman, OUTPUT_LIMIT, PodmanError, type Podman } from './podman.js'
+import { writeExecutable } from '../../testing/executableFixture.js'
 
 // A pass-through spy: every call still reaches the fake script, and the spec can read what it was started with.
 vi.mock('node:child_process', async (importOriginal) => {
@@ -91,8 +92,7 @@ describe('createPodman', () => {
   it('with nothing handed in, asks the person\'s own shell', async () => {
     // A stand-in login shell beside the fake: the developer's own shell is never started.
     const shell = join(dirname(fake.path), 'zsh')
-    writeFileSync(shell, `#!/bin/sh\nprintf '%s\\n' '${fake.path}'\n`)
-    chmodSync(shell, 0o755)
+    writeExecutable(shell, `#!/bin/sh\nprintf '%s\\n' '${fake.path}'\n`)
     vi.stubEnv('SHELL', shell)
     expect(await createPodman().path()).toBe(fake.path)
   })

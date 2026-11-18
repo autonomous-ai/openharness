@@ -14,6 +14,7 @@ import {
   buildVersion, packVsix, recordVersion, vscodeDisable, vscodeEnable, vscodeExtensionDeps, vscodeStatus,
   VSCODE_EXTENSION_ID, VSCODE_RECORD_MAX_BYTES, type VscodeExtensionDeps, type VscodeExtensionFiles,
 } from './vscodeExtension.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 const HOME = '/Users/someone'
 const APP = '/Applications/Visual Studio Code.app'
@@ -357,7 +358,7 @@ describe('the real dependencies, on the test\'s own files', () => {
     const bin = join(scratch, 'Visual Studio Code.app', 'Contents', 'Resources', 'app', 'bin')
     mkdirSync(bin, { recursive: true })
     const said = join(scratch, 'args')
-    writeFileSync(join(bin, 'code'), `#!/bin/sh\nprintf '%s\\n' "$@" > '${said}'\nexit 3\n`, { mode: 0o755 })
+    writeExecutable(join(bin, 'code'), `#!/bin/sh\nprintf '%s\\n' "$@" > '${said}'\nexit 3\n`)
     const vsix = join(scratch, 'a b;$(touch x).vsix')
     expect(await vscodeExtensionDeps().run(join(bin, 'code'), ['--install-extension', vsix, '--force'], 30_000)).toEqual({ code: 3, timedOut: false })
     expect(readFileSync(said, 'utf8')).toBe(`--install-extension\n${vsix}\n--force\n`)

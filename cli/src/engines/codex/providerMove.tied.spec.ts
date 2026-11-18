@@ -1,7 +1,7 @@
-import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it } from 'vitest'
 import { tiedScene } from '../../testing/tiedStandIn.js'
+import { writeExecutable } from '../../testing/executableFixture.js'
 
 const MODULE = JSON.stringify(new URL('./providerMove.ts', import.meta.url).href)
 const q = JSON.stringify
@@ -21,7 +21,7 @@ describe.skipIf(process.platform === 'win32')('a provider move\'s Codex', () => 
     const scene = tiedScene()
     // The app-server answers as providerMove.spec.ts's does and logs nothing, so the one pid logged is the catalog read's.
     const fake = join(scene.dir, 'codex')
-    writeFileSync(fake, `#!${process.execPath}
+    writeExecutable(fake, `#!${process.execPath}
 const { appendFileSync } = require('node:fs')
 if (process.argv[2] === 'debug') {
   appendFileSync(${q(scene.log)}, process.pid + '\\n')
@@ -31,7 +31,7 @@ if (process.argv[2] === 'debug') {
   if (m.id === undefined) return
   console.log(JSON.stringify({ id: m.id, result: m.method === 'model/list' ? { data: [{ model: 'own-model', isDefault: true }] } : {} }))
 })
-`, { mode: 0o755 })
+`)
     await scene.endsWithItsProcess(move(fake, false))
   }, 90_000)
 })

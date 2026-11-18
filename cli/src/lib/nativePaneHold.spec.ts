@@ -10,6 +10,7 @@ import { shellSingleQuote } from './shellQuote.js'
 import { TmuxBackend } from './tmuxBackend.js'
 import { resetTmuxVersionCache } from './tmuxVersion.js'
 import { paneOwnerFormat, paneOwnerOf } from './harnessSessionLabel.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 const binary = resolveBinaryOnPath('tmux')
 const owner = 'd00df00dd00df00d'
@@ -86,7 +87,7 @@ describe.skipIf(!binary)('native guard publication on private tmux servers', () 
     const recorder = join(tmux.root, 'record-tmux')
     // A shell, as fast to start as tmux itself: a Node stand-in took 0.4 s to start at load 30, inside the 2 s the
     // transition gives its tmux client after its own Node start, and was killed before it recorded anything.
-    writeFileSync(recorder, `#!/bin/sh\nprintf '%s\\0' "$@" > ${shellSingleQuote(invocation + '.part')} && mv ${shellSingleQuote(invocation + '.part')} ${shellSingleQuote(invocation)}\n`, { mode: 0o700 })
+    writeExecutable(recorder, `#!/bin/sh\nprintf '%s\\0' "$@" > ${shellSingleQuote(invocation + '.part')} && mv ${shellSingleQuote(invocation + '.part')} ${shellSingleQuote(invocation)}\n`)
     const pane = await start(token, hold(token, recorder, held(token)))
     // The transition is a Node start, then its client, bounded at 2 s: vi.waitFor's 1 s default was shorter than that.
     await vi.waitFor(() => expect(existsSync(invocation)).toBe(true), { timeout: 5_000 })

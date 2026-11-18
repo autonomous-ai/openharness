@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { isolatedTmux, type IsolatedTmux } from '../testing/isolatedTmux.js'
 import { resolveBinaryOnPath } from './binaryOnPath.js'
 import { buildEngineCommandArgv, buildEngineLaunchArgv, type LaunchCommandOptions } from './engineLaunch.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 const real = process.env.RUN_REAL_TMUX_DISCOVERY === '1' ? describe : describe.skip
 const updated = '🎉 Update ran successfully! Please restart Codex.'
@@ -38,7 +39,7 @@ real('Codex update restart in an isolated real tmux pane', () => {
     // This models the observed updater boundary without installing software or
     // contacting an account: a real update prompt, real TTYs, and Codex's final
     // success line. Successful starts remain interactive in the same pane.
-    await writeFile(binary, `#!${process.execPath}
+    writeExecutable(binary, `#!${process.execPath}
 const fs = require('node:fs');
 const state = ${JSON.stringify(state)};
 const attempts = JSON.parse(fs.readFileSync(state, 'utf8'));
@@ -62,7 +63,7 @@ if (output !== undefined) {
   console.log('CODEX_READY');
   process.stdin.on('data', data => console.log('INPUT:' + data.toString()));
 }
-`, { mode: 0o755 })
+`)
     server = await isolatedTmux({ ZDOTDIR: dir, CODEX_HOME: dir })
     const launchOptions = { cwd: dir, permissionMode: 'auto', firstPrompt: prompt, extraArgs: ['--image', image, '--model', 'chosen-model'], ...options }
     const command = buildEngineLaunchArgv('codex', launchOptions, shell, undefined, 'grid', resolveBinaryOnPath('tmux'))

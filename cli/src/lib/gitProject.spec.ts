@@ -13,6 +13,7 @@ import { prepareGitProject, readGitProject } from './gitProject.js'
 import { prepareGitFolder } from './gitProjectFolder.js'
 import { parseProjectFolder, type GitProjectFolder } from './projectFolder.js'
 import { engineSessionTitle, namingTitle } from './sessionTitle.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 const exec = promisify(execFile)
 // Real Git, several worktrees a test: slower than the default 5s under a full, parallel run.
@@ -169,7 +170,7 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
       const realGit = (await exec('sh', ['-c', 'command -v git'])).stdout.trim()
       const bin = join(root, 'bin')
       await mkdir(bin)
-      await writeFile(join(bin, 'git'), `#!/bin/sh
+      writeExecutable(join(bin, 'git'), `#!/bin/sh
 case " $* " in *" worktree add "*|*" branch -m "*)
   repo=; prev=; for arg in "$@"; do [ "$prev" = -C ] && repo=$arg; prev=$arg; done
   echo "start $repo" >> '${log()}'
@@ -179,7 +180,7 @@ case " $* " in *" worktree add "*|*" branch -m "*)
   exit $code;;
 esac
 exec '${realGit}' "$@"
-`, { mode: 0o755 })
+`)
       vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
     })
     const lines = async () => (await readFile(log(), 'utf8')).trim().split('\n')
@@ -509,8 +510,8 @@ exec '${realGit}' "$@"
       const realGit = (await exec('sh', ['-c', 'command -v git'])).stdout.trim()
       const bin = join(root, 'bin'), made = join(root, 'person-made-it')
       await mkdir(bin)
-      await writeFile(join(bin, 'git'), `#!/bin/sh\nfor arg in "$@"; do if [ "$arg" = check-ref-format ] && [ ! -e '${made}' ]; then\n`
-        + `  : > '${made}'; '${realGit}' -C '${repo}' branch mine feature\nfi; done\nexec '${realGit}' "$@"\n`, { mode: 0o755 })
+      writeExecutable(join(bin, 'git'), `#!/bin/sh\nfor arg in "$@"; do if [ "$arg" = check-ref-format ] && [ ! -e '${made}' ]; then\n`
+        + `  : > '${made}'; '${realGit}' -C '${repo}' branch mine feature\nfi; done\nexec '${realGit}' "$@"\n`)
       vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
       await expect(prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'mine' })).rejects.toMatchObject({ code: 'BRANCH_EXISTS' })
       expect(await git('rev-parse', 'mine')).toBe(await git('rev-parse', 'feature'))
@@ -534,10 +535,11 @@ exec '${realGit}' "$@"
     describe('on Windows, where taskkill cannot stop what git started', () => {
       const platform = process.platform
       beforeEach(async () => {
-        Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
         const bin = join(root, 'bin')
         await mkdir(bin)
-        await writeFile(join(bin, 'taskkill'), '#!/bin/sh\necho \'ERROR: The process with PID 1 could not be terminated.\' >&2\nexit 1\n', { mode: 0o755 })
+        // Written while the platform still reads as this machine's, so writeExecutable runs it once on macOS.
+        writeExecutable(join(bin, 'taskkill'), '#!/bin/sh\necho \'ERROR: The process with PID 1 could not be terminated.\' >&2\nexit 1\n')
+        Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
         vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
       })
       afterEach(() => { Object.defineProperty(process, 'platform', { value: platform, configurable: true }) })

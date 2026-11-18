@@ -4,7 +4,7 @@
  */
 import { type ChildProcess, spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, join, relative } from 'node:path'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
@@ -18,6 +18,7 @@ import {
   type OrcaHomesRead,
   readOrcaHomes,
 } from './orcaHomes.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 // The real spawn, watched: a spec reads how the child of a run ended.
 vi.mock('node:child_process', async (original) => {
@@ -208,8 +209,7 @@ describe('orcaHomesDeps', () => {
   function script(body: string, path = 'orca'): string {
     const file = join(home(), path)
     mkdirSync(dirname(file), { recursive: true })
-    writeFileSync(file, `#!/bin/sh\n${body}\n`)
-    chmodSync(file, 0o755)
+    writeExecutable(file, `#!/bin/sh\n${body}\n`)
     return file
   }
 

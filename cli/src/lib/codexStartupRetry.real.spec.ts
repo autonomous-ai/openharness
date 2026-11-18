@@ -7,6 +7,7 @@ import { promisify } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
 import { resolveBinaryOnPath } from './binaryOnPath.js'
 import { buildEngineLaunchArgv } from './engineLaunch.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 const exec = promisify(execFile)
 const real = process.env.RUN_REAL_TMUX_CODEX_STARTUP === '1' ? describe : describe.skip
@@ -38,14 +39,14 @@ real('Codex startup recovery in an isolated real tmux server', () => {
     await writeFile(state, '[]')
     // A faithful terminal boundary: the engine receives three real TTYs and
     // prints Codex's observed fatal error directly to stderr. No real account.
-    await writeFile(join(dir, 'codex'), `#!${process.execPath}\n`
+    writeExecutable(join(dir, 'codex'), `#!${process.execPath}\n`
       + `const fs = require('node:fs');\n`
       + `if (process.argv.includes('--help')) { console.log('--no-daemon'); process.exit(0); }\n`
       + `const file = ${JSON.stringify(state)}; const attempts = JSON.parse(fs.readFileSync(file, 'utf8'));\n`
       + `attempts.push({ args: process.argv.slice(2), tty: [process.stdin.isTTY, process.stdout.isTTY, process.stderr.isTTY], cwd: process.cwd() });\n`
       + `fs.writeFileSync(file, JSON.stringify(attempts));\n`
       + `if (attempts.length <= ${failures}) { console.error(${differentSecondError ? `attempts.length === 1 ? ${JSON.stringify(timeout)} : 'Error: invalid configuration'` : JSON.stringify(timeout)}); process.exitCode = ${exitStatus}; }\n`
-      + `else { console.log('STARTUP_RECOVERED'); process.stdin.resume(); }\n`, { mode: 0o755 })
+      + `else { console.log('STARTUP_RECOVERED'); process.stdin.resume(); }\n`)
     const command = buildEngineLaunchArgv('codex', { cwd: dir, firstPrompt: prompt, permissionMode: 'auto' }, '/bin/sh', undefined, 'grid', tmuxBin)
     // An interactive rc file may replace PATH. Never let a fixture resolve to
     // the developer's installed Codex, even when their shell does that.

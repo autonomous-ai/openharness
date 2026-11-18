@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -17,6 +17,7 @@ import {
   HANDOFF_DIR, HandoffError, MAX_FORK_HOPS, cutTurnsAt, excludePathOf, handoffBaseName, isSubagentTranscript, prepareAgentHandoff, redactHandoffSecrets,
   renderHandoff, renderTranscript, repoState, secureText, type HandoffDeps, type HandoffRequest, type HandoffResult,
 } from './agentHandoff.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 // What the publication does on disk, in order, while `on`: each flush (fsync) and each name it adds to a directory.
 const disk = vi.hoisted(() => ({ on: false, seq: 0, flushes: [] as Array<{ seq: number; ino: bigint; directory: boolean; state: string }>,
@@ -611,8 +612,7 @@ describe('prepareAgentHandoff: a repository', () => {
   function fakeGit(body: string): string {
     const real = execFileSync('which', ['git'], { encoding: 'utf8' }).trim()
     const path = join(root, 'gitwrap')
-    writeFileSync(path, `#!/bin/sh\n${body.replaceAll('REAL', real)}\nexec ${real} "$@"\n`)
-    chmodSync(path, 0o755)
+    writeExecutable(path, `#!/bin/sh\n${body.replaceAll('REAL', real)}\nexec ${real} "$@"\n`)
     return path
   }
 
