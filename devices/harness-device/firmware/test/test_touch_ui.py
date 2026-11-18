@@ -886,7 +886,9 @@ static void pane_notification_soak(void) {
         for(int i=0;i<s.notice_count;i++) {
             assert(s.notice[i].agent_id[0] && memchr(s.notice[i].agent_id,0,ID_MAX));
             assert(memchr(s.notice[i].summary,0,sizeof s.notice[i].summary));
-            for(int j=0;j<i;j++) assert(strcmp(s.notice[i].agent_id,s.notice[j].agent_id));
+            // One row per agent and kind: an agent's news sits beside its open question.
+            for(int j=0;j<i;j++)
+                assert(strcmp(s.notice[i].agent_id,s.notice[j].agent_id) || s.notice[i].question!=s.notice[j].question);
         }
         if((step&255)==0) {
             for(int i=0;i<PANE_MEMORY_MAX;i++) {
