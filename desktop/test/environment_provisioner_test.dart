@@ -135,6 +135,13 @@ void main() {
     };
   }
 
+  test('with no harnessHome it is .harness under the user home', () {
+    expect(
+      EnvironmentProvisioner().harnessHome.path,
+      '${EnvironmentProvisioner.userHome()}${Platform.pathSeparator}.harness',
+    );
+  });
+
   test(
     'launch pre-flight is read-only when required tools are missing',
     () async {
@@ -406,6 +413,10 @@ void main() {
       EnvironmentStepStatus.needsTerminal,
     );
     expect(terminalScript, isNotNull);
+    expect(
+      terminalScript,
+      startsWith('${scratch.path}/desktop-app-v2/setup-runs/'),
+    );
     expect(calls.where((line) => line.contains('install.sh')), isEmpty);
     final script = await File(terminalScript!).readAsString();
     expect(script, contains('apt_as_root install -y tmux'));
