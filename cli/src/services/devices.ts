@@ -1858,6 +1858,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     stop: async () => {
       // A cable still waiting on the listener never starts, and a stroke's answer landing from here on sends nothing.
       stopped = true
+      herdrApp.stop()
       // The listener before anything, once it has opened: no front reaches a stopped cable or sets a timer after the
       // timers below are cleared.
       await (await listening)?.close()

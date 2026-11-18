@@ -76,6 +76,8 @@ export interface HerdrAppAdapter extends HostAdapter {
   canScroll(pane: Pane): boolean
   onScreen(pane: Pane): Promise<boolean>
   scroll(pane: Pane, lines: number): void
+  /** The devices stopping: no scroll run starts from here on, whatever a queue holds (devices.ts stop). */
+  stop(): void
 }
 
 /** What a run did: whether Herdr is forward, and whether its window switched to the terminal. */
@@ -110,6 +112,8 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
   let reading: Promise<string | null> | undefined
   // As a scroll's: said once until a read succeeds.
   let statusFailedSaid = false
+  // The devices began to stop: the lines a queue holds for its gap or behind a run under way never run.
+  let stopped = false
 
   const binary = (): string | null => deps.onPath('herdr-app') ?? (deps.exists(HERDR_APP) ? HERDR_APP : null)
 
@@ -151,7 +155,7 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
   // Its lines are dropped on a failure, never retried: a run that timed out may still have scrolled. The line names no
   // terminal: hc's addresses are a person's agents.
   const drain = async (address: string, queue: Scrolling): Promise<void> => {
-    while (queue.pending !== 0) {
+    while (queue.pending !== 0 && !stopped) {
       // The lines that come while it waits for the gap are summed into the next run, or cancel out.
       if (queue.gap) {
         await queue.gap
@@ -272,5 +276,6 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
     paneKey: (pane) => hcPaneKey(pane.id),
     prompt,
     binary,
+    stop: () => { stopped = true },
   }
 }
