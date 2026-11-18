@@ -26,8 +26,9 @@ describe('the move\'s plan', () => {
   })
 
   it('the move\'s own files are not entries', () => {
-    // .move-old holds what a copy across filesystems kept, until the finish drops it.
-    expect(planMove('/h', {}, ['.move.json', '.move-old', 'cli', 'home-move.json']).entries.map((entry) => entry.name)).toEqual(['cli'])
+    // .move-before holds the previous bytes of the files the move rewrites, and .move-old what a copy across filesystems
+    // kept, until the finish drops them.
+    expect(planMove('/h', {}, ['.move.json', '.move-before', '.move-old', 'cli', 'home-move.json']).entries.map((entry) => entry.name)).toEqual(['cli'])
   })
 
   it('movedPath maps <legacy>/runtime/x to <state>/runtime/x, <legacy>/cli/data to <data>/cli/data, and leaves /usr/bin/node alone', () => {

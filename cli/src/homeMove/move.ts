@@ -7,7 +7,7 @@ import { isAbsolute, join, resolve } from 'node:path'
 import { legacyHarnessHome, type HarnessRootKind } from '../config/harnessHome.js'
 import { makeRealFolders, writeBridge } from './bridge.js'
 import type { MoveCheck, Reason } from './conditions.js'
-import { openJournal, readJournal, type Done, type Journal } from './journal.js'
+import { forgetJournal, openJournal, readJournal, type Done, type Journal } from './journal.js'
 import type { Tmux } from './panes.js'
 import { draftOf, OWN_FILES, type MoveEntry, type MovePlan } from './plan.js'
 import { writeMoveRecord } from './record.js'
@@ -120,7 +120,7 @@ function complete(journal: Journal, steps: Steps, oldDataDir: string, bytesCopie
     for (const path of [draftOf(record), record]) io.rmSync(path, { force: true })
     const outcome = { state: 'bridged', entries: plan.entries.length, bytesCopied, panes: panes.length } as const
     writeMoveRecord(plan.state, { version: 1, ...outcome, oldProcesses: 0, at: deps.now() })
-    forget(plan.legacy, io)
+    forgetJournal(plan.legacy, io)
     return outcome
   } catch (error) {
     // Committed: nothing is undone.
@@ -160,7 +160,7 @@ function rollBack(journal: Journal, deps: MoveDeps): unknown {
       if (there(stagingOf(plan, root), io) && io.readdirSync(stagingOf(plan, root)).length === 0) io.rmSync(stagingOf(plan, root), { recursive: true })
     })
   }
-  if (failure === null) forget(plan.legacy, io)
+  if (failure === null) forgetJournal(plan.legacy, io)
   return failure
 }
 
@@ -170,13 +170,6 @@ function restoreChanged(done: Extract<Done, { did: 'file' }>, io: Io): void {
   const before = done.before === null ? null : Buffer.from(done.before, 'base64')
   if (now === null ? before === null : before !== null && now.equals(before)) return
   restoreFile(done)
-}
-
-/** The journal goes last, its draft (a crash mid-write) just before: either would keep ~/.harness from reading as the bridge. */
-function forget(legacy: string, io: Io): void {
-  const journal = join(legacy, OWN_FILES.journal)
-  io.rmSync(draftOf(journal), { force: true })
-  io.rmSync(journal, { force: true })
 }
 
 /** The outcome of a move that did not finish, and its record in the state root the rule reads now. */

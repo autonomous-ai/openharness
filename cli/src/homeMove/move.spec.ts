@@ -206,35 +206,63 @@ function acrossDisks(t: Home, during: (from: string, to: string) => void = () =>
  * called. Taken during a move, it is what a crash then leaves the next start.
  */
 function imageOf(t: Home, name: string): () => void {
-  const image = `${t.root}.${name}`, copy = { recursive: true, preserveTimestamps: true, verbatimSymlinks: true }
+  const image = `${t.root}.${name}`
   rmSync(image, { recursive: true, force: true })
-  cpSync(t.root, image, copy)
+  copyTree(t.root, image)
   const panes = [...t.panes]
   return () => {
     rmSync(t.root, { recursive: true, force: true })
-    cpSync(image, t.root, copy)
+    copyTree(image, t.root)
     t.panes.clear()
     for (const [id, tag] of panes) t.panes.set(id, tag)
   }
 }
 
+/** [from] copied to [to] as it is: cpSync keeps a file's mode, not a folder's (Node 24.3), which is set after. */
+function copyTree(from: string, to: string): void {
+  cpSync(from, to, { recursive: true, preserveTimestamps: true, verbatimSymlinks: true })
+  const walk = (path: string): void => {
+    const st = lstatSync(join(from, path))
+    if (!st.isDirectory()) return
+    for (const name of readdirSync(join(from, path))) walk(join(path, name))
+    chmodSync(join(to, path), st.mode & 0o7777)
+  }
+  walk('')
+}
+
+/** [io] that calls [written] once each journal write is done: its head's rename into place, and each step's line. */
+function journalWrites(t: Home, io: Io, written: () => void): Io {
+  const path = join(t.legacy, '.move.json'), lines = new Set<number>()
+  return {
+    ...io,
+    openSync: ((file: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+      const fd = io.openSync(file, flags, mode)
+      if (file === path) lines.add(fd)
+      return fd
+    }) as typeof fs.openSync,
+    closeSync: (fd) => {
+      io.closeSync(fd)
+      if (lines.delete(fd)) written()
+    },
+    renameSync: (from, to) => {
+      io.renameSync(from, to)
+      if (to === path) written()
+    },
+  }
+}
+
 /** Runs the move and crashes it after the journal write [when] picks; returns the journal the crash left, null with no crash. */
 async function crashAfter(t: Home, when: (write: number, journal: Journal) => boolean): Promise<Journal | null> {
-  const path = join(t.legacy, '.move.json')
   let writes = 0
   // Set in the io's call: typed by its initial value, it would read as never set.
   let crashed = null as { journal: Journal; restore: () => void } | null
-  const io: Io = {
-    ...disk,
-    renameSync: (from, to) => {
-      fs.renameSync(from, to)
-      if (to !== path || crashed) return
-      const journal = readJournal(t.legacy)!
-      if (!when(writes++, journal)) return
-      crashed = { journal, restore: imageOf(t, 'crash') }
-      throw new Error('crash')
-    },
-  }
+  const io = journalWrites(t, disk, () => {
+    if (crashed) return
+    const journal = readJournal(t.legacy)!
+    if (!when(writes++, journal)) return
+    crashed = { journal, restore: imageOf(t, 'crash') }
+    throw new Error('crash')
+  })
   await runMove(t.check, t.env, t.deps({ io }))
   if (!crashed) return null
   crashed.restore()
@@ -520,10 +548,7 @@ describe('recovery after a crash', () => {
     const pristine = imageOf(t, 'pristine')
     const before = snapshot(t)
     let writes = 0
-    const counting: Io = { ...disk, renameSync: (from, to) => {
-      fs.renameSync(from, to)
-      if (to === join(t.legacy, '.move.json')) writes += 1
-    } }
+    const counting = journalWrites(t, disk, () => { writes += 1 })
     const moved = await runMove(t.check, t.env, t.deps({ io: counting }))
     const after = snapshot(t)
     const seen = { finished: 0, rolledBack: 0 }

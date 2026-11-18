@@ -6,10 +6,10 @@ export interface MoveEntry { name: string; kind: HarnessRootKind; known: boolean
 export interface MovePlan { home: string; legacy: string; data: string; state: string; entries: MoveEntry[] }
 
 /**
- * The move's journal, its record, and the originals a copy across filesystems keeps until the finish (stage.ts): they
- * sit in ~/.harness while it runs, and are not Harness's to move.
+ * The move's journal, the previous bytes of the files it rewrites (journal.ts), its record, and the originals a copy
+ * across filesystems keeps until the finish (stage.ts): they sit in ~/.harness while it runs, and are not Harness's to move.
  */
-export const OWN_FILES = { journal: '.move.json', record: 'home-move.json', kept: '.move-old' } as const
+export const OWN_FILES = { journal: '.move.json', before: '.move-before', record: 'home-move.json', kept: '.move-old' } as const
 /** Where a file of the move's is written before it is renamed into place, whole. A crash can leave one: it is the move's too. */
 export const draftOf = (path: string): string => `${path}.next`
 const OWN_NAMES: readonly string[] = Object.values(OWN_FILES).flatMap((name) => [name, draftOf(name)])
@@ -19,7 +19,7 @@ const known = (name: string): name is keyof typeof HARNESS_ENTRIES => Object.has
 // A name the table does not know goes to data: nothing is lost.
 const kindOf = (name: string): HarnessRootKind => known(name) ? HARNESS_ENTRIES[name] : 'data'
 
-/** Every top-level name of ~/.harness but the move's own files (.move.json, home-move.json, their drafts). An unknown name goes to data. */
+/** Every top-level name of ~/.harness but the move's own files (OWN_FILES, their drafts). An unknown name goes to data. */
 export function planMove(home: string, env: NodeJS.ProcessEnv, names: readonly string[]): MovePlan {
   // The move runs on Linux alone: its paths are Linux's wherever this is asked.
   const legacy = legacyHarnessHome(home, 'linux')
