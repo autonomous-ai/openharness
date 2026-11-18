@@ -76,7 +76,9 @@ export function uploadPath(raw: string, env: NodeJS.ProcessEnv = process.env): s
   let real: string
   try { real = realpathSync.native(path) } catch { throw new CallFailure(2, `cannot read upload ${raw}`) }
   const forbidden = forbiddenDirs(env, [homedir(), accountHome()]).map(dir => { try { return realpathSync.native(dir) } catch { return resolve(dir) } })
-  if (forbidden.some(dir => inside(dir, real)) || !statSync(real).isFile()) {
+  const stat = statSync(real)
+  // A hard link's other names, which may be inside a forbidden folder, are found by no path the fence can check.
+  if (forbidden.some(dir => inside(dir, real)) || !stat.isFile() || stat.nlink > 1) {
     throw new CallFailure(2, `refusing to upload ${raw}: not a media file the helper may send`)
   }
   if (!UPLOAD_SUFFIXES.includes(extname(real).toLowerCase()) || !UPLOAD_SUFFIXES.includes(extname(path).toLowerCase())) {
