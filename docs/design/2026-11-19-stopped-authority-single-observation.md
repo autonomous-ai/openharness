@@ -109,6 +109,34 @@ two real-child failures both returned `{ accepted: false, code: 'changed' }` for
 graph. Actual exit1 /1.194s, no timeout or cleanup signal, PID/group53650 absent. Runtime still at the
 reviewed correctness checkpoint for this RED; four other tests were deliberately not selected.
 
+## Implemented checkpoint and evidence
+
+The three-file runtime matches the independently reviewed artifact
+`/tmp/core-grid-storage-authority-single-runtime-review1-20261119.diff`, SHA256
+`634630bb39b3de2ee5ec6c44aa27d100dff8712eda6de3a1bc8986d8617ff81b`.
+The initial security/custody admission remains; the observed digest is seeded lazily from the checked
+first page directory. Windows uses the existing secure-root policy around its stable pathname identity;
+POSIX uses the held directory descriptor. Directory-observation failures are sticky through page close.
+
+Source evidence is `/tmp/core-grid-storage-authority-single-evidence-20261119.json`, SHA256
+`6bd6e1bdba88a0bff45389eefde0d2a7f27058ff1209c50f56a071fe02c78a5a`:
+
+- GREEN:60tests/4files, actual0/2.784s. Both before-read callers succeed; original and cross-page
+  A→B→A callers refuse. Empty/missing, excluded metadata, incomplete enumeration, work/deadline/close,
+  mode/owner, simulated Windows and sticky-custody controls pass.
+- Selected coverage:225tests/9files, actual0/9.351s. `stoppedAuthorityMetadata.ts` and `privateImage.ts`
+  each100% for statements/branches/functions/lines. Identical-runtime direct-codec follow-up:22tests,
+  actual0/1.018s, covers the selected-owner return that the real-child test had exercised outside Vitest
+  instrumentation. Combined changed codec coverage is15/15statements and10/10branch arms. Whole existing
+  codec coverage remains partial and is not claimed100%.
+- Types:actual0/38.344s. All accepted runs have no timeout, no cleanup signal and no remaining owned
+  process group. The final follow-up adds only a direct-codec assertion; runtime bytes are unchanged.
+- Unchanged and changed-last-row65-record controls each perform65raw image opens/parses and one child
+  metadata scan; the separate parent witness adds one scan and no raw reads/parses. No timing claim.
+
+Native Windows remains deferred. All prior cost/native packets stay frozen; performance acceptance and
+the eventual combined artifact validation remain outstanding.
+
 ## Data-design checklist
 
 1. Growth: one per-query digest and directory identity; discarded on every completion/refusal/reap. No

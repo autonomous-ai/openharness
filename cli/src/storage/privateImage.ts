@@ -10,7 +10,8 @@ export const readPrivateImage: PrivateImageReader = (file, maxBytes) => readImag
   () => secureStateDirectory(dirname(file), false))
 
 /** Keep every directory admission check; a bounded page needs only one retained open/close pair. */
-export async function withPrivateImageDirectory<T>(directory: string, work: (read: PrivateImageReader, inspect: (file: string) => BigIntStats | null) => Promise<T>): Promise<T> {
+export async function withPrivateImageDirectory<T>(directory: string, work: (read: PrivateImageReader, inspect: (file: string) => BigIntStats | null,
+  directoryStat: () => BigIntStats) => Promise<T>): Promise<T> {
   let fd: number | undefined, active = true
   try {
     stateFileCustodyHealthy()
@@ -64,6 +65,24 @@ export async function withPrivateImageDirectory<T>(directory: string, work: (rea
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
         throw new SessionStorageUnavailable(sessionStorageFailureCode(error))
+      }
+    }, () => {
+      if (!active) throw new SessionStorageUnavailable('invalid')
+      check()
+      try {
+        const stat = fd === undefined ? lstatSync(directory, { bigint: true }) : fstatSync(fd, { bigint: true })
+        check()
+        if (fd === undefined) {
+          const after = lstatSync(directory, { bigint: true })
+          for (const field of ['dev', 'ino', 'birthtimeNs', 'mode', 'uid', 'gid'] as const) {
+            if (stat[field] !== after[field]) throw new SessionStorageUnavailable('changed')
+          }
+        }
+        return stat
+      } catch (error) {
+        directoryFailure = new SessionStorageUnavailable(error instanceof StateFileCleanupUnconfirmed
+          ? 'cleanup-unconfirmed' : sessionStorageFailureCode(error))
+        throw directoryFailure
       }
     })
     check()

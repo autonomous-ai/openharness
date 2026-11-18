@@ -24,7 +24,7 @@ afterEach(async () => {
 const write = (folder: string, agentId: string, sessionId: string, title = 'Original') => writeFileSync(join(folder, `${agentId}.json`),
   JSON.stringify({ version: 1, session: { schemaVersion: 2, agentId, registeredAt: 1, engine: 'claude', sessionId, title } }), { mode: 0o600 })
 
-function replaceBetweenWitnesses(): void {
+function replaceBetweenWitnesses(afterPage = false): void {
   const file = join(root, 'storage-authority-fixture.mjs')
   const processModule = new URL('../storage/process.ts', import.meta.url).href
   const admissionModule = new URL('../harnessd/childAdmission.ts', import.meta.url).href
@@ -36,13 +36,26 @@ function replaceBetweenWitnesses(): void {
     import { childAdmissionFailure } from ${JSON.stringify(admissionModule)};
     if (childAdmissionFailure(process.env, process.ppid, process.argv[1])) process.exit(2);
     const open = fs.opendir;
-    let injected = false;
+    let injected = false, reads = 0;
+    const replace = () => {
+      injected = true;
+      syncFs.renameSync(${JSON.stringify(directory)}, ${JSON.stringify(directory + '-held')});
+      syncFs.renameSync(${JSON.stringify(replacement)}, ${JSON.stringify(directory)});
+    };
+    if (${afterPage}) {
+      const close = syncFs.closeSync;
+      syncFs.closeSync = fd => {
+        const page = syncFs.fstatSync(fd).isDirectory();
+        close(fd);
+        if (page && reads === 64 && !injected) replace();
+      };
+    }
     fs.opendir = async (...args) => {
       const directory = await open(...args);
       if (args[0] === ${JSON.stringify(directory)} && !injected) {
-        injected = true;
-        syncFs.renameSync(${JSON.stringify(directory)}, ${JSON.stringify(directory + '-held')});
-        syncFs.renameSync(${JSON.stringify(replacement)}, ${JSON.stringify(directory)});
+        if (!${afterPage}) replace();
+        const read = directory.read.bind(directory);
+        directory.read = async () => { const entry = await read(); if (entry) reads++; return entry; };
         const close = directory.close.bind(directory);
         directory.close = async () => {
           try { return await close(); }
@@ -127,6 +140,18 @@ it.each(['absence', 'selected'] as const)('refuses %s authority from a replaced 
   expect(readFileSync(join(root, 'restored'), 'utf8')).toBe('yes')
   expect(stoppedArchiveWitness(directory) === before).toBe(true)
   expect(outcome).toEqual({ accepted: false, code: 'changed' })
+})
+
+it('refuses replacement between valid directory pages even when the original graph is restored for current()', async () => {
+  const ids = Array.from({ length: 65 }, (_, index) => `conversation-${index}`)
+  for (let index = 0; index < ids.length; index++) {
+    write(directory, `row-${index}`, ids[index]); write(replacement, `row-${index}`, 'other')
+  }
+  const before = stoppedArchiveWitness(directory)
+  replaceBetweenWitnesses(true)
+  await expect(storage.stoppedQuery({ kind: 'conversations', ids, reservations: false })).rejects.toMatchObject({ code: 'changed' })
+  expect(readFileSync(join(root, 'restored'), 'utf8')).toBe('yes')
+  expect(stoppedArchiveWitness(directory) === before).toBe(true)
 })
 
 it('keeps excluded records in final metadata authority while ignoring unrelated non-JSON entries', async () => {

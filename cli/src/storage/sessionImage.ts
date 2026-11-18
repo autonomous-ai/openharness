@@ -12,7 +12,8 @@ import { sessionStorageFailureCode, SessionStorageUnavailable, sessionDocument, 
 import { readPrivateImage, withPrivateImageDirectory, type PrivateImageReader } from './privateImage.js'
 import type { StoppedPageRead } from './stoppedList.js'
 import { createStoppedCatalog } from './stoppedCatalog.js'
-import { observeStoppedArchive, stoppedArchiveWitness, STOPPED_AUTHORITY_ENTRIES } from '../lib/stoppedAuthorityMetadata.js'
+import { observeStoppedArchive, stoppedArchiveWitness, stoppedAuthorityHealthy, STOPPED_AUTHORITY_ENTRIES } from '../lib/stoppedAuthorityMetadata.js'
+import { secureStateDirectory, StateFileCleanupUnconfirmed } from '../lib/secureState.js'
 import { externalReservations, parseExternalResume } from '../lib/externalResume.js'
 import type { StoppedArchiveAnswer, StoppedArchiveQuery } from '../lib/sessionStorageWire.js'
 import { conversationKeyAtHome } from '../lib/conversationIdentity.js'
@@ -301,16 +302,22 @@ export function createSessionImageCodec(root: string, retained: readonly Retaine
       || query.kind === 'owners' && (!Array.isArray(query.keys) || query.keys.length > 258
         || !query.keys.every(key => typeof key === 'string' && key.length > 0)
         || typeof query.defaultCodexHome !== 'string' || !isAbsolute(query.defaultCodexHome))) throw new SessionStorageUnavailable('invalid')
-    const directory = join(root, stoppedLeaf), observed = observeStoppedArchive(directory), before = observed?.witness ?? 'missing'
+    const directory = join(root, stoppedLeaf)
     const matches = query.kind === 'conversations' ? query.ids.map(() => false) : query.kind === 'owners' ? query.keys.map(() => false) : [false]
     const selected: SessionImage[] = []
-    if (!observed) return { witness: before, matches, ...(query.kind === 'owners' ? { selected } : {}) }
+    try { stoppedAuthorityHealthy(); secureStateDirectory(directory, false) }
+    catch (error) {
+      if (error instanceof StateFileCleanupUnconfirmed) throw new SessionStorageUnavailable('cleanup-unconfirmed')
+      if (absent(error)) return { witness: 'missing', matches, ...(query.kind === 'owners' ? { selected } : {}) }
+      throw new SessionStorageUnavailable(sessionStorageFailureCode(error))
+    }
     const directoryHandle = await fs.opendir(directory, { bufferSize: 32 })
-    let count = 0
+    let count = 0, observed: ReturnType<typeof observeStoppedArchive> | undefined
     try {
       let more = true
       while (more) {
-        more = await withPrivateImageDirectory(directory, async reader => {
+        more = await withPrivateImageDirectory(directory, async (reader, _inspect, directoryStat) => {
+          observed ??= observeStoppedArchive(directoryStat())
           for (let considered = 0; considered < STOPPED_LIST_ROWS; considered++) {
             const entry = await directoryHandle.read()
             if (!entry) return false
@@ -362,8 +369,8 @@ export function createSessionImageCodec(root: string, retained: readonly Retaine
     const final = stoppedArchiveWitness(directory)
     // Before/after path snapshots alone miss A→B→A replacement between pages. The parsed bytes
     // must describe that same graph, even after the original directory is restored.
-    if (final !== before || observed.digest() !== final) throw new SessionStorageUnavailable('changed')
-    return { witness: before, matches, ...(query.kind === 'owners' ? { selected } : {}) }
+    if (observed!.digest() !== final) throw new SessionStorageUnavailable('changed')
+    return { witness: final, matches, ...(query.kind === 'owners' ? { selected } : {}) }
   }
 
   return { read, readStoppedPage, readStoppedCatalogPage, equal, prepare, discard, resolve, queryStopped,

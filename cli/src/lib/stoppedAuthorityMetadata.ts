@@ -1,6 +1,6 @@
 /** Metadata only: final archive authority stays in core without reading an archive's contents. */
 import { createHash } from 'node:crypto'
-import { lstatSync, opendirSync, type Dir } from 'node:fs'
+import { lstatSync, opendirSync, type BigIntStats, type Dir } from 'node:fs'
 import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { secureStateDirectory, StateFileCleanupUnconfirmed } from './secureState.js'
@@ -28,7 +28,7 @@ function archiveDigest(identity: string) {
 }
 
 type ScanOptions = { entries?: number; now?: () => number; milliseconds?: number }
-function scanArchive(directory: string, options: ScanOptions = {}): { witness: string; identity: string } | null {
+export function stoppedArchiveWitness(directory: string, options: ScanOptions = {}): string {
   stoppedAuthorityHealthy()
   const now = options.now ?? (() => performance.now()), expires = now() + (options.milliseconds ?? STOPPED_AUTHORITY_MS)
   const limit = options.entries ?? STOPPED_AUTHORITY_ENTRIES
@@ -36,8 +36,7 @@ function scanArchive(directory: string, options: ScanOptions = {}): { witness: s
   try {
     secureStateDirectory(directory, false)
     const stat = lstatSync(directory, { bigint: true }), before = sessionFileIdentity(stat)
-    const identity = [stat.dev, stat.ino, stat.birthtimeNs, stat.mode, stat.uid, stat.gid].join(':')
-    const observed = archiveDigest(identity)
+    const observed = observeStoppedArchive(stat)
     dir = opendirSync(directory, { bufferSize: 32 })
     for (;;) {
       if (now() >= expires) throw new SessionStorageUnavailable('expired')
@@ -49,10 +48,10 @@ function scanArchive(directory: string, options: ScanOptions = {}): { witness: s
     }
     const after = sessionFileIdentity(lstatSync(directory, { bigint: true }))
     if (before !== after) throw new SessionStorageUnavailable('changed')
-    return { witness: observed.digest(), identity }
+    return observed.digest()
   } catch (error) {
     if (error instanceof StateFileCleanupUnconfirmed) throw new SessionStorageUnavailable('cleanup-unconfirmed')
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT' && !dir) return null
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT' && !dir) return 'missing'
     if (error instanceof SessionStorageUnavailable) throw error
     throw new SessionStorageUnavailable('unsafe')
   } finally {
@@ -63,12 +62,7 @@ function scanArchive(directory: string, options: ScanOptions = {}): { witness: s
   }
 }
 
-export function stoppedArchiveWitness(directory: string, options: ScanOptions = {}): string {
-  return scanArchive(directory, options)?.witness ?? 'missing'
-}
-
-/** Bind parsed query rows to the same directory observation as their original metadata witness. */
-export function observeStoppedArchive(directory: string) {
-  const source = scanArchive(directory)
-  return source ? { witness: source.witness, ...archiveDigest(source.identity) } : null
+/** The page owner supplies its checked directory identity; each exact image supplies its own identity. */
+export function observeStoppedArchive(stat: BigIntStats) {
+  return archiveDigest([stat.dev, stat.ino, stat.birthtimeNs, stat.mode, stat.uid, stat.gid].join(':'))
 }

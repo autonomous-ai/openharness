@@ -56,6 +56,60 @@ it('bounds metadata probes to the active directory and preserves missing or refu
   expect(() => retained(file)).toThrow(expect.objectContaining({ code: 'invalid' }))
 })
 
+it('observes only the checked owned directory and revokes its observation callback at close', async () => {
+  let retained!: () => fs.BigIntStats
+  await withPrivateImageDirectory(directory, async (_read, _inspect, directoryStat) => {
+    retained = directoryStat
+    const observed = directoryStat(), current = fs.lstatSync(directory, { bigint: true })
+    expect(observed.dev).toBe(current.dev); expect(observed.ino).toBe(current.ino)
+    if (process.platform !== 'win32') {
+      fs.chmodSync(directory, 0o750)
+      expect(directoryStat().mode & 0o777n).toBe(0o700n)
+    }
+  })
+  expect(() => retained()).toThrow(expect.objectContaining({ code: 'invalid' }))
+})
+
+it.each(['metadata', 'cleanup'] as const)('makes a caught %s directory-observation failure sticky through page close', async fault => {
+  await expect(withPrivateImageDirectory(directory, async (_read, _inspect, directoryStat) => {
+    const stat = process.platform === 'win32' ? fs.lstatSync : fs.fstatSync
+    let calls = 0
+    const probe = vi.spyOn(fs, process.platform === 'win32' ? 'lstatSync' : 'fstatSync')
+      .mockImplementation(((...args: Parameters<typeof stat>) => {
+        // The held-directory check precedes the observation itself on POSIX.
+        if (++calls === (process.platform === 'win32' ? 1 : 2)) {
+          if (fault === 'cleanup') throw new custody.StateFileCleanupUnconfirmed()
+          throw Object.assign(new Error('fixture directory stat'), { code: 'EACCES' })
+        }
+        return (stat as (...args: unknown[]) => unknown)(...args)
+      }) as typeof stat)
+    expect(() => directoryStat()).toThrow(expect.objectContaining({ code: fault === 'cleanup' ? 'cleanup-unconfirmed' : 'EACCES' }))
+    probe.mockRestore()
+  })).rejects.toMatchObject({ code: fault === 'cleanup' ? 'cleanup-unconfirmed' : 'EACCES' })
+})
+
+it('brackets a simulated Windows directory observation with the existing secure-root policy', async () => {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+  Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+  const secure = vi.spyOn(custody, 'secureStateDirectory').mockImplementation(() => {})
+  try {
+    await withPrivateImageDirectory(directory, async (_read, _inspect, directoryStat) => {
+      expect(directoryStat().ino).toBe(fs.lstatSync(directory, { bigint: true }).ino)
+      expect(secure).toHaveBeenCalledTimes(2)
+      fs.writeFileSync(join(directory, 'unrelated.tmp'), '')
+      expect(directoryStat().ino).toBe(fs.lstatSync(directory, { bigint: true }).ino)
+    })
+    expect(secure).toHaveBeenCalledTimes(5)
+    await expect(withPrivateImageDirectory(directory, async (_read, _inspect, directoryStat) => {
+      secure.mockImplementationOnce(() => {}).mockImplementationOnce(() => {
+        fs.renameSync(directory, directory + '-old'); fs.mkdirSync(directory, { mode: 0o700 })
+      })
+      expect(() => directoryStat()).toThrow(expect.objectContaining({ code: 'changed' }))
+      fs.rmSync(directory, { recursive: true }); fs.renameSync(directory + '-old', directory)
+    })).rejects.toMatchObject({ code: 'changed' })
+  } finally { Object.defineProperty(process, 'platform', platform) }
+})
+
 it.skipIf(process.platform === 'win32')('keeps a caught directory failure sticky through metadata-only hits and closes the page', async () => {
   const open = vi.spyOn(fs, 'openSync')
   await expect(withPrivateImageDirectory(directory, async (_read, inspect) => {
