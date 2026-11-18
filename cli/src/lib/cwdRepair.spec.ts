@@ -1,6 +1,6 @@
 import { removeRegistryAgent } from '../testing/registryFixtures.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { RegisteredSession } from './registry.js'
@@ -132,5 +132,29 @@ describe('repairProjectCwds (Claude Code rows)', () => {
     expect(await repairClaudeCwd({ registry, stoppedAgents: store, log })).toEqual({ registry: 0, archived: 0 })
     expect(registry.byAgent(codex.agentId)?.cwd).toBe(join(project, 'cli'))
     expect(registry.byAgent(gone.agentId)?.cwd).toBe(join(project, 'cli'))
+  })
+
+  it.each(['destination replaced', 'source changed'] as const)('does not patch an archived fork after its %s', async change => {
+    const { registry, store, repairClaudeCwd, project, open, bind, log } = await fixture()
+    const drifted = join(project, 'cli')
+    const source = await bind(await open('source', '%1', drifted), 'source-session', [project])
+    registry.setCwd(source.agentId, drifted)
+    const fork = await open('fork', '%2', drifted, { forkedFrom: { agentId: source.agentId, name: 'source' } })
+    await store.save(fork)
+    await removeRegistryAgent(registry, fork.agentId)
+    const patch = store.patch.bind(store)
+    vi.spyOn(store, 'patch').mockImplementationOnce(async (...args) => {
+      if (change === 'source changed') registry.setCwd(source.agentId, '/replacement')
+      else {
+        const file = join(directory, 'stopped-agents', `${fork.agentId}.json`)
+        const replacement = JSON.parse(readFileSync(file, 'utf8'))
+        replacement.session.sessionId = 'replacement'
+        replacement.session.cwd = '/replacement'
+        writeFileSync(file, JSON.stringify(replacement))
+      }
+      return patch(...args)
+    })
+    await expect(repairClaudeCwd({ registry, stoppedAgents: store, log })).rejects.toThrow()
+    expect((await store.get(fork.agentId))?.cwd).toBe(change === 'source changed' ? drifted : '/replacement')
   })
 })

@@ -349,3 +349,12 @@ conflicts during preparation and offline durable selected Grid resolution. The h
 (one skipped) with 100% statements, branches, functions and lines per file. Type checking passes. The rerun of
 the full core gate, compiled admission checks, remaining relevant coverage and coordinated measurements are
 still acceptance work; these results alone do not establish release readiness or a bounded whole-image design.
+
+The coordinator reviewed the exact launch matrix categories before recording expected bytes. Grid changes cover
+204 of 364 cases (66 creates and 138 relaunches), with 32 to 44 scripts because relaunch now records its actual
+final deferred dispatch. DSH changes cover 112 of 130 cases (46 creates, 54 relaunches and 12 forks), with 36 scripts
+before and after. These are the admitted native proof/captured-environment/after-exit path; saved-API refresh already
+introduced by `9c41a90cd4`; intermediate settings movement from `ff33cd095c`; deliberate template-trust removal from
+`38f9eba9e0`, including unchanged fixture modes; and verified credential-reference representation. A separate literal
+historical Grid-and-DSH final argv assertion stays independent of rerecording. Fresh matrix verification passes all
+five tests. No flags, config, permission or precedence category outside that review was accepted.

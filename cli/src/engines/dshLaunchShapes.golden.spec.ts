@@ -399,8 +399,13 @@ describe('every launch of a harness package starts as it did before the Store pr
     installAll()
     const row = session('claude', { gridLaunch: storedGridFixture(GRID) })
     const actual = await relaunchCase(row) as { dispatch: { argv: string[]; afterExit: unknown } }
-    const old = JSON.parse(readFileSync(GOLDEN, 'utf8')).relaunch['claude · on a grid too'].result.overrides.extraArgs as string[]
-    const expected = old.map(value => value.replace(/<root>\/work\/w[0-9]+/g, String(norm(row.cwd))))
+    // Literal final arguments from the pre-settings-migration record, independent of rerecording the matrix.
+    const expected = [
+      '--disallowedTools=WebSearch,WebFetch', '--system-prompt-snapshot', 'off', '--add-dir', '<root>/work/w48/input',
+      '--settings', '{"statusLine":{"type":"command","command":"\'<daemon-node>\' \'<root>/data/statusline/statusline.mjs\' --data \'<root>/data\'"}}',
+      '--append-system-prompt',
+      'This session has no web tools. The built-in `WebSearch` and `WebFetch` tools are not available in this session, even where earlier turns of this conversation used them — do not call them; tell the user the web cannot be searched or read from here instead.\n\nRead the harness context at "<root>/work/w48/.harness/runtime/b53c366c4e4cb65e4639b3c9e7a9d4f56d5b1a764749dc88ba8327d2cebedca3/CONTEXT.md" before working.',
+    ].map(value => value.replace(/<root>\/work\/w[0-9]+/g, String(norm(row.cwd))))
     const at = actual.dispatch.argv.indexOf('<root>/bin/claude')
     expect(at).toBeGreaterThan(0)
     expect(actual.dispatch.argv.slice(at + 1)).toEqual(expected)

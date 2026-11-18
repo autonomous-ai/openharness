@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -66,6 +66,27 @@ describe('keeping a conversation the daemon left for a new one', () => {
     expect((await store.list()).map(row => row.agentId)).toEqual(['peer'])
     expect(publish).not.toHaveBeenCalled()
     expect(console.warn).toHaveBeenCalled()
+  })
+
+  it.each(['unsafe', 'replaced'] as const)('refuses an %s archive container at the keep action', async state => {
+    const saved = join(dir, 'saved')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    if (state === 'unsafe') {
+      mkdirSync(join(dir, 'elsewhere'), { mode: 0o700 })
+      symlinkSync(join(dir, 'elsewhere'), saved)
+    } else {
+      const query = store.query.bind(store)
+      vi.spyOn(store, 'query').mockImplementationOnce(async (...args) => {
+        const answer = await query(...args)
+        renameSync(saved, join(dir, 'original'))
+        mkdirSync(saved, { mode: 0o700 })
+        return answer
+      })
+    }
+    await createKeepAbandonedConversation({ stoppedAgents: store, publishStoppedAgent: publish })(left())
+    expect(publish).not.toHaveBeenCalled()
+    expect(console.warn).toHaveBeenCalled()
+    if (state === 'replaced') expect(await store.list()).toEqual([])
   })
 
   it('does not confirm a saved row if its live authority is lost during directory sync', async () => {
