@@ -25,6 +25,8 @@ type Entry = {
   submitted?: Promise<AnswerReceipt>
   /** Asked of the dial since it last lost its questions. */
   asked?: boolean
+  /** Read when its row is opened, never asked: it rang before the devices process restarted (cable/notices.ts). */
+  held?: true
 }
 
 /** Questions as JSON, while one frame's payload could carry them. A larger one did not reach the dial (only many half
@@ -44,7 +46,7 @@ export class QuestionInbox {
   /** The questions each agent asked last, as they came (JSON), reviewable or not: the dial's answer is read against them. */
   private readonly latest = new Map<string, { id: string; json?: string }>()
 
-  set(agentId: string, id: string, raw: unknown): void {
+  set(agentId: string, id: string, raw: unknown, held = false): void {
     if (this.latest.size >= 64 && !this.latest.has(agentId)) {
       const oldest = this.latest.keys().next().value!
       this.latest.delete(oldest); this.entries.delete(oldest)
@@ -64,19 +66,21 @@ export class QuestionInbox {
     if (this.entries.size >= 64 && !this.entries.has(agentId)) this.entries.delete(this.entries.keys().next().value!)
     for (const question of questions) { Object.freeze(question.options); Object.freeze(question) }
     Object.freeze(questions)
-    this.entries.set(agentId, { agentId, id, token: randomUUID(), signature, questions, drafts: new Map() })
+    this.entries.set(agentId, { agentId, id, token: randomUUID(), signature, questions, drafts: new Map(),
+      ...(held ? { held: true as const } : {}) })
   }
 
   /** Every question still open, for a resync. */
-  open(): Array<{ agentId: string; id: string; questions: ReviewQuestion[] }> {
-    return [...this.entries.values()].map(({ agentId, id, questions }) => ({ agentId, id, questions }))
+  open(): Array<{ agentId: string; id: string; questions: ReviewQuestion[]; held?: true }> {
+    return [...this.entries.values()].map(({ agentId, id, questions, held }) =>
+      ({ agentId, id, questions, ...(held ? { held } : {}) }))
   }
 
   /** Whether the dial is to be asked that agent's open question, marking it asked: the dial beeps at each ask, so it is
    *  asked once until it loses its questions. False when it was, or that question is no longer the open one. */
   ask(agentId: string, id: string): boolean {
     const entry = this.entries.get(agentId)
-    if (!entry || entry.id !== id || entry.asked) return false
+    if (!entry || entry.id !== id || entry.asked || entry.held) return false
     entry.asked = true
     return true
   }

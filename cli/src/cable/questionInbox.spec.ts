@@ -102,6 +102,33 @@ describe('QuestionInbox', () => {
     inbox.forget()
     expect(['a', 'b', 'c'].map((id) => inbox.ask(id, `q${id}`))).toEqual([true, true, true])
   })
+  const notice = [{ key: 'notice', q: 'Tests pass.', options: ['In Terminal'] }]
+  it('a held question is read, never asked, though the dial loses its questions', () => {
+    const inbox = new QuestionInbox()
+    inbox.set('a', 'shown:n1', notice, true)
+    const state = read(inbox)
+    expect(state.id).toBe('shown:n1')
+    expect(state.questions[0].q).toBe('Tests pass.')
+    expect(inbox.ask('a', 'shown:n1')).toBe(false)
+    inbox.forget()
+    inbox.forget(new Set())
+    expect(inbox.ask('a', 'shown:n1')).toBe(false)
+    inbox.set('a', 'shown:n1', notice)
+    expect(inbox.ask('a', 'shown:n1')).toBe(false)
+    expect(inbox.open()).toEqual([{ agentId: 'a', id: 'shown:n1',
+      questions: [expect.objectContaining({ q: 'Tests pass.' })], held: true }])
+  })
+  it('a later question of the agent replaces a held one and is asked; a close under the held id removes it', () => {
+    const inbox = new QuestionInbox()
+    inbox.set('a', 'shown:n1', notice, true)
+    inbox.set('a', 'q2', question())
+    expect(inbox.ask('a', 'q2')).toBe(true)
+    expect(inbox.open()[0]).not.toHaveProperty('held')
+    const fresh = new QuestionInbox()
+    fresh.set('a', 'shown:n1', notice, true)
+    expect(fresh.close('a', 'shown:n1')).toBe(true)
+    expect(fresh.read('a').ok).toBe(false)
+  })
 })
 
 describe('spoken answer drafts', () => {

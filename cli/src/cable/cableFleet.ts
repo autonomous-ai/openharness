@@ -239,7 +239,10 @@ export class CableFleet {
         // The host asks again only as the first dial arrives, so this one is given what its sibling would be asked again.
         // Mid-greeting: the session only takes them in here, and asks each once as its greeting's push ends.
         const failed = (error: unknown) => this.host.log(`cable: ${port.path} open questions: ${String(error)} [usb ${id}]`)
-        for (const open of sibling.session.owedQuestions()) entry.session.question(open.agentId, open.id, open.questions).catch(failed)
+        // One its sibling holds rang before the devices restarted: held here too, never asked.
+        for (const open of sibling.session.owedQuestions()) (open.held
+          ? entry.session.hold(open.agentId, open.id, open.questions)
+          : entry.session.question(open.agentId, open.id, open.questions)).catch(failed)
       }
       const gone = () => {
         if (!entry.attached) return
@@ -428,6 +431,7 @@ export class CableFleet {
   replaceNotifications(...args: Parameters<Surface['replaceNotifications']>) { return this.send('replaceNotifications', ...args) }
   agentSeen(...args: Parameters<Surface['agentSeen']>) { return this.send('agentSeen', ...args) }
   question(...args: Parameters<Surface['question']>) { return this.send('question', ...args) }
+  hold(...args: Parameters<Surface['hold']>) { return this.send('hold', ...args) }
   questionClose(...args: Parameters<Surface['questionClose']>) { return this.send('questionClose', ...args) }
   turnStarted(...args: Parameters<Surface['turnStarted']>) { return this.send('turnStarted', ...args) }
   turnStep(...args: Parameters<Surface['turnStep']>) { return this.send('turnStep', ...args) }

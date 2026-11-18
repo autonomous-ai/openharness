@@ -4021,6 +4021,44 @@ describe('hello capabilities', () => {
     } finally { await session.stop() }
   })
 
+  it('a held question is read when its row is opened, and never asked: not as it is held, at a greeting, a drawer replace or a resync', async () => {
+    const { session, port } = await connect(richHost())
+    const notice = [{ key: 'notice', q: 'Tests pass.', options: ['In Terminal'] }]
+    const NID = `${SHOWN_ONLY_PREFIX}n1`
+    const asked = (agentId: string) => ofType(port, 'question').filter((m) => m.agentId === agentId)
+    try {
+      port.say({ ...PRO_HELLO })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      port.sent.length = 0
+      await session.hold('a3', NID, notice)
+      expect(port.sent).toEqual([])
+      port.say({ t: 'question.read', agentId: 'a3', requestId: 'read-1' })
+      await vi.waitFor(() => expect(ofType(port, 'question.state')).toHaveLength(1))
+      expect(ofType(port, 'question.state')[0]).toMatchObject({ ok: true, id: NID, questions: [{ q: 'Tests pass.' }] })
+      // A real question is the barrier at a greeting, which asks it again, so the held one would be asked by then.
+      await session.question('a1', 'q1', [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }])
+      // Rebooted on a new image: the same hello again is a keepalive, which asks nothing.
+      port.say({ ...PRO_HELLO, fw: '1.0.1' })
+      await vi.waitFor(() => expect(asked('a1')).toHaveLength(2))
+      await settle()
+      expect(asked('a3')).toEqual([])
+      await session.replaceNotifications([{ agentId: 'a3', machineId: 'local', question: true, text: 'Tests pass.' }])
+      // A resync's drawer carries the open questions as rows and asks none: the held one is a row there, never asked.
+      const drawers = ofType(port, 'notif.replace').length
+      port.say({ t: 'resync' })
+      await vi.waitFor(() => expect(ofType(port, 'notif.replace')).toHaveLength(drawers + 1))
+      expect(ofType(port, 'notif.replace')[drawers].items).toContainEqual(expect.objectContaining({ agentId: 'a3', question: true }))
+      await settle()
+      expect(asked('a3')).toEqual([])
+      expect(session.owedQuestions()).toContainEqual(expect.objectContaining({ agentId: 'a3', id: NID, held: true }))
+      await session.questionClose('a3', NID)
+      expect(ofType(port, 'question.close')).toMatchObject([{ agentId: 'a3', id: NID }])
+      port.say({ t: 'question.read', agentId: 'a3', requestId: 'read-2' })
+      await vi.waitFor(() => expect(ofType(port, 'question.state')).toHaveLength(2))
+      expect(ofType(port, 'question.state')[1]).toMatchObject({ ok: false })
+    } finally { await session.stop() }
+  })
+
   it('sends turn.stats only to a stats: turn-v1 device, and only when there is something to say', async () => {
     const { session, port } = await connect(richHost())
     try {

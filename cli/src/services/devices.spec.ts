@@ -85,6 +85,7 @@ vi.mock('../cable/cableFleet.js', async (real) => {
     agentSeen = recorder('agentSeen')
     question = recorder('question')
     questionClose = recorder('questionClose')
+    hold = recorder('hold')
     turnStarted = recorder('turnStarted')
     turnStep = recorder('turnStep')
     turnReply = recorder('turnReply')
@@ -6052,6 +6053,313 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     expect(listener.notice({ text: LINE })).toEqual({ result: 'no dial' })
     expect(logs).toContain('[device] notify · agent · no dial')
     expect(logs).toContainEqual(expect.stringMatching(/^\[device\] notify · day \d{4}-\d\d-\d\d · claude shown 0 no dial 0 limited 0 · codex shown 0 no dial 0 limited 0 · agent shown 0 no dial 1 limited 0$/))
+  })
+
+  describe('outlives a restart of the devices (docs/plans/2026-11-18-dial-notices-restart-design.md)', () => {
+    const FILE = () => join(dataDir, 'dial-notices.json')
+    const saved = () => JSON.parse(readFileSync(FILE(), 'utf8'))
+    const T = Date.parse('2026-11-18T03:00:00Z')
+    beforeEach(() => {
+      vi.useFakeTimers()
+      vi.setSystemTime(T)
+    })
+
+    it('a notice shown is in the file a second later, with its agent\'s keys', () => {
+      const { port, listener } = devices()
+      port.observed(hook('session-start'))
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+      expect(existsSync(FILE())).toBe(false)
+      vi.advanceTimersByTime(1_000)
+      expect(saved()).toEqual({ v: 1, cards: [{ agentId: ID, keys: ['claude:sess-1'], id: ids()[0], line: LINE, host: 'orca', at: T }] })
+    })
+
+    it('a Harness agent\'s card and a caller no list holds are kept too', () => {
+      const { listener } = devices({ core: bound() })
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
+      listener.notice({ text: LINE, engine: 'codex', sessionId: 't-9', folder: 'api' })
+      vi.advanceTimersByTime(1_000)
+      const [own, caller] = ids()
+      expect(saved().cards).toEqual([
+        { agentId: 'h1', keys: ['claude:s-h1'], id: own, line: LINE, host: 'harness', at: T },
+        { agentId: observedAgentId('codex', 't-9'), keys: [], id: caller, line: LINE, host: '',
+          who: { name: 'api', engine: 'codex', machine: 'This machine' }, at: T },
+      ])
+    })
+
+    it('a card that ends leaves the file', () => {
+      const { port, listener } = devices()
+      port.observed(hook('session-start'))
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })
+      vi.advanceTimersByTime(1_000)
+      port.observed(hook('turn-start'))
+      vi.advanceTimersByTime(1_000)
+      expect(saved().cards).toEqual([])
+    })
+
+    // The stop detaches the dial and empties herdr's list, which end their cards in memory as an unplug or an agent
+    // leaving does: the file must keep them for the next start.
+    it('a stop writes what was waiting; neither its detach nor herdr\'s emptied list is written', async () => {
+      const subs: HerdrSubscriber[] = []
+      let list: Promise<HerdrAnswer> | undefined
+      const agent = { pane_id: 'w1:p1', agent: 'claude', agent_status: 'idle', cwd: '/work/api', agent_session: { kind: 'id', agent: 'claude', value: 'sess-h' } }
+      const client: HerdrClient = {
+        request: () => (list = Promise.resolve<HerdrAnswer>({ ok: true, result: { type: 'agent_list', agents: [agent] } })),
+        subscribe: (_entries, to) => { subs.push(to); return { close: () => {} } },
+        prompt: async () => ({ outcome: 'sent' }),
+        socketStamp: () => '1:1',
+      }
+      const onMac = { ...orca, platform: 'darwin' as const, onPath: (name: string) => `/opt/${name}/bin/${name}` }
+      const { port, listener } = devices({ core: bound(), herdr: client, orca: onMac, tty: async () => undefined })
+      seen.host.watching!(true)
+      port.swarms(null)
+      subs[0].started()
+      await list
+      const [{ id }] = (await host().listAgentSnapshot()).agents.filter((entry) => entry.id !== 'h1')
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-h' })).toEqual({ result: 'shown' })
+      const [own, outside] = ids()
+      await port.stop()
+      expect(saved().cards.map((card: { agentId: string }) => card.agentId)).toEqual(['h1', id])
+      expect(saved().cards[1].keys).toEqual(['claude:sess-h', 'herdr:w1:p1'])
+      expect(calls('questionClose')).toEqual(expect.arrayContaining([['h1', own], [id, outside]]))
+      const kept = readFileSync(FILE(), 'utf8')
+      vi.advanceTimersByTime(10_000)
+      expect(readFileSync(FILE(), 'utf8')).toBe(kept)
+    })
+
+    it('a write that fails is one line with the error\'s code', () => {
+      mkdirSync(FILE())
+      const { port, listener } = devices()
+      port.observed(hook('session-start'))
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+      vi.advanceTimersByTime(1_000)
+      expect(logs).toContain('[device] notices · not saved · EISDIR')
+      expect(logs.filter((line) => ['dial-notices', 'VPN', 'sess-1'].some((secret) => line.includes(secret)))).toEqual([])
+    })
+
+    /** The devices again, on the same data folder: the first one's later stop (onTestFinished) writes nothing, its file is closed. */
+    const again = async (first: ReturnType<typeof devices>, over: Parameters<typeof devices>[0] = {}) => {
+      await first.port.stop()
+      return devices(over)
+    }
+    const ringing = () => seen.cable.calls.filter(([name]) => name === 'question' || name === 'summary' || name === 'turnError')
+    const CALLER = observedAgentId('codex', 't-9')
+    /** A caller no list holds rings, and the devices restart with its card pending. */
+    const restartWithCaller = async () => {
+      const first = devices()
+      expect(first.listener.notice({ text: LINE, engine: 'codex', sessionId: 't-9', folder: 'api' })).toEqual({ result: 'shown' })
+      const [restored] = ids()
+      return { ...await again(first), restored }
+    }
+
+    // It rang before the restart, so it comes back silent and opens to its line.
+    it('a restart puts the row of a caller no list holds back in the drawer, with no question and no alert, and holds the question its row opens to', async () => {
+      const { port, restored } = await restartWithCaller()
+      seen.host.watching!(true)
+      // The greeting draws it, after the carousel push its rows name: no drawer of the attach's own goes ahead of that.
+      expect(calls('replaceNotifications')).toEqual([])
+      port.unread([])
+      expect(calls('replaceNotifications').at(-1)).toEqual([[{ agentId: CALLER, machineId: 'machine-1', question: true, text: LINE }]])
+      expect(ringing()).toEqual([])
+      expect(calls('hold')).toEqual([[CALLER, restored, [{ key: 'notice', q: LINE, options: ['In Terminal'] }]]])
+      expect(host().describe(CALLER)).toEqual({ name: 'api', engine: 'codex', machine: 'This machine' })
+      expect(logs).toContain('[device] notices · restored 1 · aged out 0')
+    })
+
+    it('a card older than 24 hours is not restored, and leaves the file', () => {
+      writeFileSync(FILE(), JSON.stringify({ v: 1, cards: [{ agentId: CALLER, keys: [], id: 'shown:k1', line: LINE, host: '',
+        who: { name: 'api', engine: 'codex', machine: 'This machine' }, at: T - 24 * 3_600_000 - 1 }] }))
+      devices()
+      expect(host().listUnread()).toEqual([])
+      expect(logs).toContain('[device] notices · restored 0 · aged out 1')
+      vi.advanceTimersByTime(1_000)
+      expect(saved().cards).toEqual([])
+    })
+
+    it('a bad file never stops the devices: one line, and the next notice replaces it', () => {
+      writeFileSync(FILE(), '{not json')
+      const { port, listener } = devices()
+      expect(logs).toContain('[device] notices · file dropped · json')
+      port.observed(hook('session-start'))
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+      vi.advanceTimersByTime(1_000)
+      expect(saved().cards).toHaveLength(1)
+    })
+
+    it('only a new notice of that agent rings again, at once, and takes the restored card\'s place', async () => {
+      const { listener, restored } = await restartWithCaller()
+      // The limits start fresh: the same line again is not limited.
+      expect(listener.notice({ text: LINE, engine: 'codex', sessionId: 't-9', folder: 'api' })).toEqual({ result: 'shown' })
+      expect(calls('questionClose')).toEqual([[CALLER, restored]])
+      expect(calls('question')).toEqual([[CALLER, expect.stringMatching(/^shown:/), card('Terminal')]])
+      expect(ids()[0]).not.toBe(restored)
+    })
+
+    it('a restored row comes back by a drawer replace as the wait that covered it closes', async () => {
+      // No hook of sess-1 before its notice: a caller no list holds, under its session's id.
+      const first = devices()
+      expect(first.listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+      const [restored] = ids()
+      const { port } = await again(first)
+      port.observed(hook('needs-input'))
+      port.observed({ engine: 'claude', sessionId: 'sess-1', event: 'asked', tool: 'Bash', summary: 'npm test', cwd: '/work/api' })
+      port.observed(hook('turn-stop'))
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+      expect(calls('replaceNotifications').at(-1)?.[0]).toContainEqual({ agentId: ID, machineId: 'machine-1', question: true, text: LINE })
+      // Held again: the wait's own question took its place in the session.
+      expect(calls('hold').at(-1)).toEqual([ID, restored, card('Terminal')])
+      expect(calls('question').filter(([, id]) => id === restored)).toEqual([])
+    })
+
+    /** An observed agent of sess-1 rings, and the devices restart with its card pending. */
+    const restartWithObserved = async (between: () => void = () => {}) => {
+      const first = devices()
+      first.port.observed(hook('session-start'))
+      expect(first.listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+      const [restored] = ids()
+      between()
+      return { ...await again(first), restored }
+    }
+
+    it('a restart with a pending card puts its row back as its agent is listed, with no question and no alert', async () => {
+      const { port, restored } = await restartWithObserved()
+      seen.host.watching!(true)
+      // Not listed yet: no row.
+      expect(host().listUnread()).toEqual([])
+      port.observed(hook('session-start'))
+      expect(calls('replaceNotifications').at(-1)).toEqual([[{ agentId: ID, machineId: 'machine-1', question: true, text: LINE }]])
+      expect(calls('hold')).toEqual([[ID, restored, card('Orca')]])
+      expect(ringing()).toEqual([])
+    })
+
+    // Most likely a turn after the notice: the card it rang for is over.
+    it('a restored card of an observed agent the scan finds working is not shown', async () => {
+      const { port, restored } = await restartWithObserved(() => {
+        // An open session the scan finds; with no idle record it reads as in a turn.
+        readers.known.set('sess-1', 'terminal')
+        readers.owners.set('sess-1', { engine: 'claude', pid: 4242 })
+        readers.rows.set('sess-1', { cwd: '/work/api', transcriptPath: null })
+      })
+      seen.host.watching!(true)
+      port.swarms(null)
+      await vi.waitFor(async () => expect((await host().listAgentSnapshot()).agents.map((agent) => agent.id)).toContain(ID))
+      expect(host().listUnread()).toEqual([])
+      expect(calls('replaceNotifications').filter(([rows]) => (rows as Array<{ agentId: string }>).some((row) => row.agentId === ID))).toEqual([])
+      expect(calls('questionClose')).toEqual([[ID, restored]])
+      vi.advanceTimersByTime(1_000)
+      expect(saved().cards).toEqual([])
+    })
+
+    const H1 = [{ agentId: 'h1', registeredAt: 1, engine: 'claude', sessionId: 's-h1' }] as RegisteredSession[]
+    /** h1 rings, and the devices restart with its card pending, on a core whose agents are read only by a refresh, after
+     *  the dial attached: as a devices process that just started and has not read the core's agents yet. */
+    const restartWithHarness = async (over: Parameters<typeof devices>[0] = {}, before: (port: DevicesPort) => void = () => {}) => {
+      const first = devices({ core: bound() })
+      expect(first.listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })).toEqual({ result: 'shown' })
+      const [restored] = ids()
+      let view: RegisteredSession[] = []
+      const core = fakeCore({ dataDir, agents: { advertised: vi.fn(() => view) } })
+      const second = await again(first, { core, refresh: async () => { view = H1 }, ...over })
+      seen.host.watching!(true)
+      expect(host().listUnread()).toEqual([])
+      before(second.port)
+      second.port.swarms(null)
+      await host().listAgentSnapshot()
+      return { ...second, restored }
+    }
+
+    it('a Harness agent\'s restored row comes with the list that first names it, though the dial attached first', async () => {
+      const { restored } = await restartWithHarness()
+      expect(calls('replaceNotifications').at(-1)).toEqual([[{ agentId: 'h1', machineId: 'machine-1', question: true, text: LINE }]])
+      expect(calls('hold')).toEqual([['h1', restored, card('Harness')]])
+      expect(ringing()).toEqual([])
+    })
+
+    // The dial's question close drops its agent's row: a drawer replace that put the restored row back ahead of a close
+    // still queued behind the agent's earlier cards would lose it.
+    describe('its row put back reaches the dial after what its agent\'s order already holds', () => {
+      /** A failed turn's summary rings even with a notice pending, and waits on the decider: h1's order is busy. */
+      const busy = () => {
+        let decide!: () => void
+        const decideTier = vi.fn(() => new Promise<{ tier: 'alert'; by: string; detail: string; ms: number }>((resolve) => {
+          decide = () => resolve({ tier: 'alert', by: 'test', detail: '', ms: 0 })
+        }))
+        return { decideTier, decide: () => decide() }
+      }
+      const QUESTIONS = [{ key: 'go', q: 'Deploy now?', options: ['Yes', 'No'] }]
+      const coverAndClose = (port: DevicesPort) => {
+        port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'summary', text: 'done', recap: 'Built.', failed: true } })
+        port.card({ type: 'commander_question', agentId: 'h1', payload: { requestId: 'r1', questions: QUESTIONS } })
+        port.card({ type: 'commander_question_close', agentId: 'h1', payload: { requestId: 'r1' } })
+      }
+      const sent = (from: number) => seen.cable.calls.slice(from).map(([name]) => name)
+        .filter((name) => ['question', 'questionClose', 'hold', 'replaceNotifications'].includes(name))
+      const ROW = { agentId: 'h1', machineId: 'machine-1', question: true, text: LINE }
+
+      it('as the question that covered it closes', async () => {
+        const { decideTier, decide } = busy()
+        const { port, restored } = await restartWithHarness({ decideTier })
+        const from = seen.cable.calls.length
+        coverAndClose(port)
+        decide()
+        await vi.waitFor(() => expect(calls('questionClose')).toHaveLength(1))
+        await vi.waitFor(() => expect(sent(from)).toEqual(['question', 'questionClose', 'hold', 'replaceNotifications']))
+        expect(calls('hold').at(-1)).toEqual(['h1', restored, card('Harness')])
+        expect(calls('replaceNotifications').at(-1)).toEqual([[ROW]])
+      })
+
+      it('as the list that first names its agent comes', async () => {
+        const { decideTier, decide } = busy()
+        let from = 0
+        const { restored } = await restartWithHarness({ decideTier }, (port) => {
+          from = seen.cable.calls.length
+          coverAndClose(port)
+        })
+        decide()
+        await vi.waitFor(() => expect(sent(from)).toEqual(['question', 'questionClose', 'hold', 'replaceNotifications']))
+        expect(calls('hold')).toEqual([['h1', restored, card('Harness')]])
+        expect(calls('replaceNotifications').at(-1)).toEqual([[ROW]])
+      })
+    })
+
+    it('a card of a running turn ends a Harness agent\'s restored row', async () => {
+      const { port, restored } = await restartWithHarness()
+      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'processing', text: 'Working' } })
+      expect(calls('questionClose')).toEqual([['h1', restored]])
+    })
+
+    it('an agent herdr lists under a new id is found by its session, and the file takes the new id', async () => {
+      const subs: HerdrSubscriber[] = []
+      let list: Promise<HerdrAnswer> | undefined
+      const agent = { pane_id: 'w1:p1', agent: 'claude', agent_status: 'idle', cwd: '/work/api', agent_session: { kind: 'id', agent: 'claude', value: 'sess-h' } }
+      const client: HerdrClient = {
+        request: () => (list = Promise.resolve<HerdrAnswer>({ ok: true, result: { type: 'agent_list', agents: [agent] } })),
+        subscribe: (_entries, to) => { subs.push(to); return { close: () => {} } },
+        prompt: async () => ({ outcome: 'sent' }),
+        socketStamp: () => '1:1',
+      }
+      const onMac = { ...orca, platform: 'darwin' as const, onPath: (name: string) => `/opt/${name}/bin/${name}` }
+      const withHerdr = { herdr: client, orca: onMac, tty: async () => undefined }
+      /** The dial attached, and the id herdr's agent is listed under. */
+      const listedId = async (port: DevicesPort): Promise<string> => {
+        seen.host.watching!(true)
+        port.swarms(null)
+        subs.at(-1)!.started()
+        await list
+        const [{ id }] = (await host().listAgentSnapshot()).agents
+        return id
+      }
+      const first = devices(withHerdr)
+      const firstId = await listedId(first.port)
+      expect(first.listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-h' })).toEqual({ result: 'shown' })
+      const { port } = await again(first, withHerdr)
+      const second = await listedId(port)
+      expect(second).not.toBe(firstId)
+      expect(calls('replaceNotifications').at(-1)).toEqual([[{ agentId: second, machineId: 'machine-1', question: true, text: LINE }]])
+      expect(ringing()).toEqual([])
+      vi.advanceTimersByTime(1_000)
+      expect(saved().cards[0].agentId).toBe(second)
+    })
   })
 })
 
