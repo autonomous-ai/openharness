@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/harness_file_store.dart';
+import 'package:harness/core/harness_home.dart';
 import 'package:harness/core/posix_file_mode.dart';
 import 'package:harness/core/uninstall_marker.dart';
 import 'package:harness/settings/config_store.dart';
@@ -32,14 +33,17 @@ void main() {
   }, skip: Platform.isWindows);
 
   test('names a sibling under Harness home', () {
-    String sibling(String name) => HarnessFileStore.defaultDirectoryPath(
+    String sibling(HarnessEntry entry) => HarnessFileStore.defaultDirectoryPath(
       environment: {'HOME': '/Users/tester'},
-      name: name,
+      entry: entry,
     );
 
-    expect(sibling('logs'), '/Users/tester/.harness/logs');
-    expect(sibling('flasher'), '/Users/tester/.harness/flasher');
-    expect(sibling('uninstalling'), '/Users/tester/.harness/uninstalling');
+    expect(sibling(HarnessEntry.logs), '/Users/tester/.harness/logs');
+    expect(sibling(HarnessEntry.flasher), '/Users/tester/.harness/flasher');
+    expect(
+      sibling(HarnessEntry.uninstalling),
+      '/Users/tester/.harness/uninstalling',
+    );
   }, skip: Platform.isWindows);
 
   test('with no home', () {

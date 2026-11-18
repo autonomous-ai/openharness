@@ -6,6 +6,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart' show visibleForTesting;
 
+import 'harness_home.dart';
 import 'host_platform.dart';
 import 'posix_file_mode.dart';
 import 'viewer_mode.dart';
@@ -25,9 +26,9 @@ class HarnessFileStore implements BatchLocalKeyValueStore {
   // rather than in it. On a Mac, where the viewer path is developed with
   // `--dart-define=HARNESS_VIEWER_MODE=true`, the two would otherwise overwrite
   // each other's state.
-  static final String directoryName = kViewerMode
-      ? 'viewer-app-v2'
-      : 'desktop-app-v2';
+  static final HarnessEntry _ownEntry = kViewerMode
+      ? HarnessEntry.viewerApp
+      : HarnessEntry.desktopApp;
   static const fileName = 'state.json';
   static const lockFileName = 'state.lock';
 
@@ -45,16 +46,16 @@ class HarnessFileStore implements BatchLocalKeyValueStore {
   HarnessFileStore({Directory? directory})
     : directory = directory ?? Directory(defaultDirectoryPath());
 
-  /// [name] names the sibling under `~/.harness`; it defaults to this store's own.
+  /// [entry] names the sibling under `~/.harness`; it defaults to this store's own.
   static String defaultDirectoryPath({
     Map<String, String>? environment,
-    String? name,
+    HarnessEntry? entry,
   }) {
     final home = maybeHomeDir(environment: environment);
     if (home == null) {
       throw StateError('Could not resolve the current user home directory');
     }
-    return _join(_join(home, '.harness'), name ?? directoryName);
+    return HarnessHome.of(home, join: _join).path(entry ?? _ownEntry);
   }
 
   File get stateFile => File(_join(directory.path, fileName));
