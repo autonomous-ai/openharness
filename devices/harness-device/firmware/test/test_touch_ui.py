@@ -1200,6 +1200,29 @@ static void notification_read_checks(const char *dir) {
     assert(s.notice_count==3 && !strcmp(s.notice[s.offset].agent_id,"b") && !s.notice[s.offset].question);
     notice_mark_read(&s.notice[s.offset]); ui_notif_replace(&asked,1);
     assert(s.notice_count==2 && !strcmp(s.notice[s.offset].agent_id,"b") && !s.notice[s.offset].question);
+    // The question's row goes alone too: read on the desktop, closed elsewhere or answered here, the news beside it stays.
+    reset(); ui_notif_replace(beside,2);
+    ui_notif_read("b","question-1"); assert(s.notice_count==1 && !s.notice[0].question);
+    reset(); ui_notif_replace(beside,2);
+    ui_question_close("b","request-1"); assert(s.notice_count==1 && !s.notice[0].question);
+    reset(); ui_notif_replace(beside,2);
+    strcpy(s.q.agent,"b"); strcpy(s.q.fetch,"fetch-1"); strcpy(s.q.token,"token-1"); s.q.valid=s.q.pending=true;
+    {
+        cJSON fields[]={
+            {.string="agentId",.type=JSTRING,.valuestring="b"},
+            {.string="requestId",.type=JSTRING,.valuestring="fetch-1"},
+            {.string="token",.type=JSTRING,.valuestring="token-1"},
+            {.string="ok",.type=JTRUE}};
+        for(int i=0;i<3;i++)fields[i].next=&fields[i+1];
+        cJSON receipt={.child=fields}; ui_answer_receipt(&receipt);
+    }
+    assert(!s.q.valid && s.notice_count==1 && !s.notice[0].question);
+    // News about the agent keeps the read of its question's row: the receipt still goes out, and the row stays read.
+    reset(); ui_notif_replace(&asked,1); congestion=true; notice_mark_read(&s.notice[0]);
+    ui_notify_summary("b","B","M2","Built.","list",false,false); ui_turn_error("b","The build crashed.");
+    receipts=0; for (int i=0;i<NOTICES;i++) receipts+=s.notice_reads[i].pending;
+    assert(receipts==1); congestion=false;
+    ui_notif_replace(&asked,1); assert(s.notice_count==1 && s.notice[0].read_on_dial);
     puts("Notification beside a question: summary, failure, drawer tokens, desktop read, receipts and the card being read PASS");
     reset();
 }
