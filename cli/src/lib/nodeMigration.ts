@@ -1,6 +1,7 @@
 import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
+import { errorKind } from './log.js'
 import { MINIMUM_NODE_MAJOR } from './nodeRuntime.js'
 import type { NodeMigrationReason } from './runtimeInstall.js'
 
@@ -48,7 +49,7 @@ export function recordNodeMigration(dir: string, reason: NodeMigration | null, f
     renameSync(`${file}.tmp`, file)
   } catch (error) {
     // A full disk costs `harness status` the reason, never the update.
-    console.error(`[update] could not record why the daemon's Node stays as it is (${error instanceof Error ? error.message : String(error)})`)
+    console.error(`[update] could not record why the daemon's Node stays as it is (${errorKind(error)})`)
   }
 }
 

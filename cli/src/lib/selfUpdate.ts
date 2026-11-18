@@ -18,7 +18,8 @@ import { existsSync, linkSync, mkdirSync, readFileSync, renameSync, rmSync, writ
 import { execFile } from 'child_process'
 import { dirname, join, sep } from 'path'
 import { env } from '../config/env.js'
-import { SpawnLockBusyError, describeSpawnLockFailure } from './daemonSpawnLock.js'
+import { SpawnLockBusyError, describeSpawnLockOwner } from './daemonSpawnLock.js'
+import { errorKind } from './log.js'
 import { MINIMUM_NODE_MAJOR, managedNodePath, nodeMajorOf } from './nodeRuntime.js'
 import { failedNode, recordNodeMigration, type NodeMigration } from './nodeMigration.js'
 import type { NodeMigrationReason } from './runtimeInstall.js'
@@ -539,7 +540,7 @@ export function putNodeBack(dir: string, previous: string | null, reason: NodeMi
   try {
     nameNode(previous, platform)
   } catch (error) {
-    console.error(`[harnessd] could not put current-node back on ${previous} (${error instanceof Error ? error.message : String(error)}) — the daemon stays on the Node it names`)
+    console.error(`[harnessd] could not put current-node back on the Node before (${errorKind(error)}) — the daemon stays on the Node it names`)
     return null
   }
   recordNodeMigration(dir, reason, reason === 'cannot-switch' ? failedNode(dir) : moved)
@@ -879,7 +880,7 @@ export function startSelfUpdater(opts: {
         // Named only now, on the probation the stage began: a rollback puts it back.
         if (ready.node) {
           try { nameNode(ready.node, platform) } catch (error) {
-            console.error(`[update] could not name ${ready.node} in current-node (${error instanceof Error ? error.message : String(error)}) — ${ready.version} comes up on the Node the daemon runs on`)
+            console.error(`[update] could not name the new Node in current-node (${errorKind(error)}) — ${ready.version} comes up on the Node the daemon runs on`)
             recordNodeMigration(opts.dir, 'cannot-switch')
           }
         }
@@ -891,10 +892,10 @@ export function startSelfUpdater(opts: {
         // A busy lock is not a failed check: the bytes are good and waiting, and the next tick tries
         // the swap again. Say so, or a minute of "check failed" reads as the updater being broken.
         if (!(err instanceof SpawnLockBusyError)) throw err
-        console.log(`[update] ${ready.version} is ready but the daemon spawn lock is ${describeSpawnLockFailure(err)} — trying again next check`)
+        console.log(`[update] ${ready.version} is ready but the daemon spawn lock is held (${err.owner ? describeSpawnLockOwner(err.owner) : errorKind(err)}) — trying again next check`)
       })
     } catch (err) {
-      console.error('[update] check failed (will retry):', err instanceof Error ? err.message : err)
+      console.error('[update] check failed (will retry):', errorKind(err))
     } finally {
       checking = false
     }

@@ -8,6 +8,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { errorKind } from '../log.js'
 import type { ProcessRow } from '../processTable.js'
 import { CLI_POINTER, writePointer } from './installLayout.js'
 import { STABLE_NOTIFY, VERSION_FOLDER } from './installNames.js'
@@ -99,7 +100,7 @@ export function switchTo(cliDir: string, version: string, log: (line: string) =>
   try {
     replaceFile(join(cliDir, STABLE_NOTIFY), readFileSync(join(cliDir, version, NOTIFY)))
   } catch (error) {
-    log(`[update] the hooks' notify.mjs could not be refreshed yet (${error instanceof Error ? error.message : String(error)}) — they keep the one before until the next update`)
+    log(`[update] the hooks' notify.mjs could not be refreshed yet (${errorKind(error)}) — they keep the one before until the next update`)
   }
 }
 
@@ -156,7 +157,7 @@ export async function retireUnused(
       deps.remove(join(cliDir, name))
       removed.push(name)
     } catch (error) {
-      deps.log(`[update] ${name} could not be removed yet (${(error as NodeJS.ErrnoException).code ?? (error as Error).message}) — trying again later`)
+      deps.log(`[update] ${name} could not be removed yet (${errorKind(error)}) — trying again later`)
     }
   }
   return removed
