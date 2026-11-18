@@ -96,14 +96,16 @@ static void sender(void *unused)
     (void)unused;
     for (;;) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        // Before any new voice.begin: the daemon must hear the old clip's cancel first.
+        // Before any new voice.begin: the daemon must hear the old clip's cancel first. Both are read in one step: a
+        // cancel that landed before the start is then never left behind it.
         char cancel[sizeof s_discarded];
         portENTER_CRITICAL(&s_mux);
         snprintf(cancel, sizeof cancel, "%s", s_discarded);
         s_discarded[0] = 0;
+        const bool started = atomic_load(&s_active);
         portEXIT_CRITICAL(&s_mux);
         if (cancel[0]) (void)pro_cable_voice_cancel(cancel);
-        if (!atomic_load(&s_active)) continue;
+        if (!started) continue;
         char agent[ID_MAX], upload[24], lang[CFG_VLANG_MAX];
         portENTER_CRITICAL(&s_mux);
         snprintf(agent, sizeof agent, "%s", s_agent);

@@ -1,7 +1,8 @@
 // The recorder under pro_voice: a 10 ms capture task, a 32 KB PSRAM ring and a lower-priority sender task that
 // streams the PCM over the cable (pro_cable_voice_*). It knows nothing of Pod, pro_app or the 600 s / 65 s rules:
 // pro_voice.c owns those and drives this through the calls below. Split from pro_voice.c so the state machine can be
-// replayed on the host with a fake recorder (test/test_pro_voice_gate.py).
+// replayed on the host with a fake recorder (test/test_pro_voice_gate.py); the recorder runs on its own threads in
+// test/test_pro_recorder.py.
 //
 // Locking: one spinlock guards the metadata (agent, upload id and where it stands with the daemon); everything else is
 // an atomic.

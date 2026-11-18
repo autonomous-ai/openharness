@@ -110,15 +110,17 @@ static void send_audio(void *unused)
     (void)unused;
     for (;;) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        // Before any new voice.begin: the host must hear the old clip's cancel first.
+        // Before any new voice.begin: the host must hear the old clip's cancel first. Both are read in one step: a
+        // cancel that landed before the start is then never left behind it.
         char cancel[sizeof discarded];
         portENTER_CRITICAL(&state_lock);
         snprintf(cancel, sizeof cancel, "%s", discarded);
         discarded[0] = 0;
+        bool started = atomic_load(&active);
         portEXIT_CRITICAL(&state_lock);
         if (cancel[0])
             cable_client_voice_cancel(cancel);
-        if (!atomic_load(&active))
+        if (!started)
             continue;
         char lang[CFG_VLANG_MAX];
         config_load_voicelang(lang, sizeof(lang));
