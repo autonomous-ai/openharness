@@ -227,7 +227,7 @@ describe('Harness’s own Codex hooks, recorded as reviewed', () => {
     expect(await installHookSettings('codex', hooks.settings, 19473, codexHome)).toBe(false)
     expect(readFileSync(join(codexHome, 'config.toml'), 'utf8')).toBe('[hooks]\nstate = {}\n')
     expect(existsSync(join(codexHome, 'hooks.json'))).toBe(false)
-    expect(error).toHaveBeenCalledWith(hooks.settings.messages.failed, expect.objectContaining({ name: 'HookPreparationHeld' }))
+    expect(error).toHaveBeenCalledWith(hooks.settings.messages.failed, 'HookPreparationHeld')
   })
 
   it('keys a symlinked hooks.json by its own name in CODEX_HOME, not its target, as Codex does', async () => {

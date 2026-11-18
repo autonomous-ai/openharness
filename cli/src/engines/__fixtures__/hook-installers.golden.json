@@ -1067,14 +1067,14 @@
    {
     "logs": [
      "log [hooks] Claude Code session, turn, wait and subagent hooks already installed",
-     "warn [hooks] Agent Messages' hook not installed in <root>/moved/claude-work/settings.json (messages reach its agents once they are idle): Hook preparation is waiting: the settings file is read-only"
+     "warn [hooks] Agent Messages' hook not installed (messages reach its agents once they are idle): HookPreparationHeld"
     ],
     "threw": null
    },
    {
     "logs": [
      "log [hooks] Claude Code session, turn, wait and subagent hooks already installed",
-     "warn [hooks] Agent Messages' hook not installed in <root>/moved/claude-work/settings.json (messages reach its agents once they are idle): Hook preparation is waiting: the settings file is read-only"
+     "warn [hooks] Agent Messages' hook not installed (messages reach its agents once they are idle): HookPreparationHeld"
     ],
     "threw": null
    }
@@ -1095,13 +1095,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write settings.json: Error EACCES open <root>/moved/claude-work/settings.json"
+     "error [hooks] failed to write settings.json: EACCES"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write settings.json: Error EACCES open <root>/moved/claude-work/settings.json"
+     "error [hooks] failed to write settings.json: EACCES"
     ],
     "threw": null
    }
@@ -1122,13 +1122,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write settings.json: Error EACCES access <root>/moved/claude-work"
+     "error [hooks] failed to write settings.json: EACCES"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write settings.json: Error EACCES access <root>/moved/claude-work"
+     "error [hooks] failed to write settings.json: EACCES"
     ],
     "threw": null
    }
@@ -1144,13 +1144,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write settings.json: Error EACCES access <root>/moved/claude-work"
+     "error [hooks] failed to write settings.json: EACCES"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write settings.json: Error EACCES access <root>/moved/claude-work"
+     "error [hooks] failed to write settings.json: EACCES"
     ],
     "threw": null
    }
@@ -2860,14 +2860,14 @@
     "logs": [
      "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json",
      "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml",
-     "warn [hooks] Agent Messages' hook not installed in <root>/moved/codex-work/hooks.json (messages reach its agents once they are idle): Hook preparation is waiting: the settings file is read-only"
+     "warn [hooks] Agent Messages' hook not installed (messages reach its agents once they are idle): HookPreparationHeld"
     ],
     "threw": null
    },
    {
     "logs": [
      "log [hooks] Codex session and turn hooks already installed → <root>/moved/codex-work/hooks.json",
-     "warn [hooks] Agent Messages' hook not installed in <root>/moved/codex-work/hooks.json (messages reach its agents once they are idle): Hook preparation is waiting: the settings file is read-only"
+     "warn [hooks] Agent Messages' hook not installed (messages reach its agents once they are idle): HookPreparationHeld"
     ],
     "threw": null
    }
@@ -2902,13 +2902,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: Error EACCES open <root>/moved/codex-work/hooks.json"
+     "error [hooks] failed to write Codex hooks.json: EACCES"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: Error EACCES open <root>/moved/codex-work/hooks.json"
+     "error [hooks] failed to write Codex hooks.json: EACCES"
     ],
     "threw": null
    }
@@ -2929,13 +2929,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: Error EACCES access <root>/moved/codex-work"
+     "error [hooks] failed to write Codex hooks.json: EACCES"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: Error EACCES access <root>/moved/codex-work"
+     "error [hooks] failed to write Codex hooks.json: EACCES"
     ],
     "threw": null
    }
@@ -2951,13 +2951,13 @@
   "runs": [
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: Error EACCES access <root>/moved/codex-work"
+     "error [hooks] failed to write Codex hooks.json: EACCES"
     ],
     "threw": null
    },
    {
     "logs": [
-     "error [hooks] failed to write Codex hooks.json: Error EACCES access <root>/moved/codex-work"
+     "error [hooks] failed to write Codex hooks.json: EACCES"
     ],
     "threw": null
    }

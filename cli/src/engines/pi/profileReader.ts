@@ -3,6 +3,7 @@ import type { ProfileEvidence, RuntimeModelOption } from '../facets/runtime.js'
 import { addOption, record, text } from '../kit/runtime.js'
 import { confirmObserved } from '../kit/runtimeReader.js'
 import { env } from '../../config/env.js'
+import { errorKind } from '../../lib/log.js'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import * as pi from './runtimeProfile.js'
@@ -79,7 +80,7 @@ class ProfileReader {
         })
         entries = pi.parsePiModelsOutput(result.stdout)
       } catch (err) {
-        console.warn('[runtime-profile] Pi model catalog failed:', err instanceof Error ? err.message : err)
+        console.warn('[runtime-profile] Pi model catalog failed:', errorKind(err))
       }
       this.piCatalogCache = { key, entries, expiresAt: Date.now() + CATALOG_TTL_MS, names: new Set(entries.map(entry => entry.model)) }
       return entries

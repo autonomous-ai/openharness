@@ -28,7 +28,7 @@
  */
 import { statSync } from 'node:fs'
 import * as zlib from 'node:zlib'
-import { sid } from '../../lib/log.js'
+import { errorKind, sid } from '../../lib/log.js'
 import { builtinSqlite } from '../../lib/sqliteBuiltin.js'
 import { PAGE_ROWS, readStorePage, readStorePages, utf8Bytes, type StorePage } from '../../lib/sqlitePage.js'
 import { sqliteReadAll, type SqliteParam, type SqliteRow } from '../../lib/sqliteRead.js'
@@ -43,8 +43,8 @@ export type OpenclawEvent = { windowId: string; seq: number; record: Record<stri
  * `transient`: locked, mid-checkpoint or replaced; read again on the next poll.
  */
 class OpenclawReadError extends Error {
-  constructor(readonly reason: 'missing' | 'unsupported' | 'transient', detail: string) {
-    super(`openclaw store ${reason} · ${detail}`)
+  constructor(readonly reason: 'missing' | 'unsupported' | 'transient', detail: string, options?: ErrorOptions) {
+    super(`openclaw store ${reason} · ${detail}`, options)
   }
 }
 
@@ -134,7 +134,8 @@ function ensureReadable(): void {
 function unanswered(db: string, error: unknown): never {
   // A read that failed may be a store whose columns changed under it: check them again on the next read.
   checked.delete(db)
-  throw new OpenclawReadError('transient', errorCode(error))
+  // On `cause`, so the line that says it names the store's own code (errorKind reads it there), never a message.
+  throw new OpenclawReadError('transient', errorKind(error), { cause: error })
 }
 
 /** A read of ids and numbers, which sqliteReadAll's own reply limit holds. */
@@ -154,12 +155,6 @@ async function storePages(db: string, page: StorePage): Promise<SqliteRow[]> {
   ensureReadable()
   const read = await readStorePages(db, page)
   return read.ok ? read.rows : unanswered(db, read.error)
-}
-
-/** A short name for an error, never its message: a JSON parse error quotes the row's text. */
-function errorCode(error: unknown): string {
-  const code = (error as { code?: unknown } | undefined)?.code
-  return typeof code === 'string' ? code : error instanceof Error ? error.name : 'unknown'
 }
 
 const checked = new Map<string, string[]>()
@@ -231,7 +226,7 @@ function decode(key: string, windowId: string, row: SqliteRow): Record<string, u
       : zstd.zstdDecompressSync!(row.event_zstd as Uint8Array, { maxOutputLength: MAX_EVENT_BYTES }).toString('utf8')
     record = JSON.parse(text)
   } catch (error) {
-    unreadable(key, windowId, seq, errorCode(error))
+    unreadable(key, windowId, seq, errorKind(error))
     return null
   }
   if (!isRecord(record)) { unreadable(key, windowId, seq, 'not an object'); return null }
@@ -548,7 +543,7 @@ export class OpenclawReader {
     }
     if (this.said !== 'failing') {
       this.said = 'failing'
-      console.error(`[openclaw] ${sid(this.deps.key)} read failed · ${error instanceof OpenclawReadError ? error.message : errorCode(error)}`)
+      console.error(`[openclaw] ${sid(this.deps.key)} read failed · ${errorKind(error)}`)
     }
   }
 }

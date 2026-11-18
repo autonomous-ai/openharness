@@ -67,7 +67,7 @@ it('does not clean a substituted staging directory or unknown entries', async ()
   await t.worker.prepare(ask)
   writeFileSync(join(repairDirectory(t.file, ask.token), 'someone-else'), 'keep')
   expect(t.worker.release(ask.token)).toBe(false)
-  expect(t.log).toHaveBeenCalledWith('RESUME_REPAIR_CLEANUP_FAILED · Error ENOTEMPTY')
+  expect(t.log).toHaveBeenCalledWith('RESUME_REPAIR_CLEANUP_FAILED · ENOTEMPTY')
   expect(readFileSync(join(repairDirectory(t.file, ask.token), 'someone-else'), 'utf8')).toBe('keep')
 })
 

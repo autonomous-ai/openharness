@@ -1,7 +1,8 @@
 /** Eager mechanics for native JSON hook schemas; unreadable settings are never empty settings. */
-import { command, requireHookScript, hooksNotInstalled, hooksNotOnWindows, identitySettings, isManagedHook, isManagedHookCommand, foreignHookBlocks, type HookRunner, type Settings, type HookBlock } from './notifyHooks.js'
+import { command, requireHookScript, hooksHeld, hooksNotInstalled, hooksNotOnWindows, identitySettings, isManagedHook, isManagedHookCommand, foreignHookBlocks, type HookRunner, type Settings, type HookBlock } from './notifyHooks.js'
 import { HookPreparationHeld, inspectHookFile, runHookPreparation } from './nativeHookFiles.js'
 import type { NativeHookOptions } from './nativeLocations.js'
+import { errorKind } from '../../lib/log.js'
 import { hostPlatform } from './windowsFiles.js'
 
 export interface NativeHookSettings {
@@ -93,9 +94,8 @@ export async function installNativeHookSettings(rule: NativeHookSettings, port: 
       return true
     }, { ...options, identity: JSON.stringify([identitySettings(rule, platform), port, cmd]) })
   } catch (error) {
-    const line = hooksNotInstalled(rule.engine, error, platform)
-    if (line) console.error(line)
-    else console.error(rule.messages.failed, error)
+    if (hooksHeld(error, platform)) console.error(`${hooksNotInstalled(rule.engine)} · ${errorKind(error)}`)
+    else console.error(rule.messages.failed, errorKind(error))
     return false
   }
 }

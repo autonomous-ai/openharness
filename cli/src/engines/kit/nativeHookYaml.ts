@@ -1,6 +1,7 @@
 /** A managed YAML hook block and exact-command approvals, applied from eager engine declarations. */
 import { isMap, isScalar, isSeq, Lexer, parseDocument, visit, type Document } from 'yaml'
 import { basename, join } from 'node:path'
+import { errorKind } from '../../lib/log.js'
 import { HookPreparationHeld, inspectHookFile, type HookFilePublication, runHookPreparation, type HookPreparationAttempt, type HookPreparationOptions } from './nativeHookFiles.js'
 import { NativeEvidenceBudget } from './nativeEvidence.js'
 import { isManagedHookCommand } from './notifyHooks.js'
@@ -456,7 +457,7 @@ async function installIn(rule: NativeYamlHooks, cmd: string, home: string, optio
     log(rule.messages.after)
     return true
   }, { ...options, identity: JSON.stringify([rule, cmd, home]) }) } catch (err) {
-    error(rule.messages.failed, err)
+    error(rule.messages.failed, errorKind(err))
     return false
   }
 }

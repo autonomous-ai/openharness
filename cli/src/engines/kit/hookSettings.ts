@@ -12,8 +12,9 @@ import { env } from '../../config/env.js'
 import { HARNESS_AGENT_COMMANDS, HARNESS_AGENT_TOOLS, HARNESS_AGENT_VERBS, type HarnessAgentVerb, type HookSettings } from '../facets/hooks.js'
 import { prepareReviewed } from './hookReview.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
+import { errorKind } from '../../lib/log.js'
 import { isMessagesBlock, messagesCommand, writeMessagesHook } from './messagesHook.js'
-import { HOOK_SCRIPT, hookArgv, hooksNotInstalled, hooksNotOnWindows, identitySettings, isManagedHook, requireHookScript, foreignHookBlocks, quoteHookCommand, withoutOwnHooks, type CommandHook, type HookBlock, type Settings } from './notifyHooks.js'
+import { HOOK_SCRIPT, hookArgv, hooksHeld, hooksNotInstalled, hooksNotOnWindows, identitySettings, isManagedHook, requireHookScript, foreignHookBlocks, quoteHookCommand, withoutOwnHooks, type CommandHook, type HookBlock, type Settings } from './notifyHooks.js'
 import { HookPreparationHeld, inspectHookFile, runHookPreparation, type HookPreparationAttempt } from './nativeHookFiles.js'
 import type { NativeHookOptions } from './nativeLocations.js'
 import { hostPlatform } from './windowsFiles.js'
@@ -64,10 +65,9 @@ export async function installHookSettings(engine: HookEngine, settings: HookSett
       return true
     }, { ...options, identity: JSON.stringify([engine, identitySettings(settings, platform), port, home, entry.args ? [entry.command, entry.args] : entry.command, env.HARNESS_AGENT_MESSAGES_DIR]) })
   } catch (err) {
-    const line = hooksNotInstalled(engine, err, platform)
-    if (line) { console.error(line); return false }
+    if (hooksHeld(err, platform)) { console.error(`${hooksNotInstalled(engine)} · ${errorKind(err)}`); return false }
     console.error(settings.messages.failed.replace(/\{(file|script|port)\}/g, (_, name: string) =>
-      name === 'file' ? files[0] : name === 'script' ? HOOK_SCRIPT : String(port)), err)
+      name === 'file' ? files[0] : name === 'script' ? HOOK_SCRIPT : String(port)), errorKind(err))
     return false
   }
 }
@@ -112,12 +112,11 @@ async function installMessagesBlock(settings: HookSettings, home: string, attemp
     published.verify(); approval?.verify()
     if (inbox) writeMessagesHook(root)
   } catch (err) {
-    const reason = err instanceof Error ? err.message : err
-    if (blockChanged) console.warn(`[hooks] Agent Messages' hook not installed in ${file} (messages reach its agents once they are idle):`, reason)
+    if (blockChanged) console.warn("[hooks] Agent Messages' hook not installed (messages reach its agents once they are idle):", errorKind(err))
     else {
       // The hook was already in place and only the allowance was refused (a read-only file): its script is
       // still kept current, and the log names what failed rather than calling the hook missing.
-      console.warn(`[hooks] could not allow Harness's agent commands in ${file} (the engine asks before each one):`, reason)
+      console.warn("[hooks] could not allow Harness's agent commands (the engine asks before each one):", errorKind(err))
       if (inbox) try { writeMessagesHook(root) } catch { /* the hook runs nothing it cannot find; messages wait for idle */ }
     }
     verifyRequired()
@@ -125,7 +124,7 @@ async function installMessagesBlock(settings: HookSettings, home: string, attemp
   if (allow && 'file' in allow) {
     // Each path written as a Starlark string's contents: the file's rules are `prefix_rule(pattern=["…"])`.
     try { writeRulesFile(join(home, allow.file), harnessRules(allow.rules, (path) => JSON.stringify(path).slice(1, -1)).flat().join('\n')) } catch (err) {
-      console.warn(`[hooks] could not allow Harness's agent commands in ${join(home, allow.file)} (the engine asks before each one):`, err instanceof Error ? err.message : err)
+      console.warn("[hooks] could not allow Harness's agent commands (the engine asks before each one):", errorKind(err))
     }
   }
 }

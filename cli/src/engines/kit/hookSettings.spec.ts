@@ -172,7 +172,7 @@ it('reports a held malformed file even when an engine declares no malformed-file
   writeFileSync(join(home, 'hooks.json'), '{not-json')
   const { malformed: _, ...messages } = codex.settings.messages
   expect(await installHookSettings('codex', { ...codex.settings, messages }, 19473, home)).toBe(false)
-  expect(error).toHaveBeenCalledWith(codex.settings.messages.failed, expect.any(SyntaxError))
+  expect(error).toHaveBeenCalledWith(codex.settings.messages.failed, 'SyntaxError')
   expect(readFileSync(join(home, 'hooks.json'), 'utf8')).toBe('{not-json')
 })
 

@@ -5,6 +5,7 @@ import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { engineName } from '../lib/agentNames.js'
 import { failureReason } from '../lib/failureReason.js'
+import { errorKind } from '../lib/log.js'
 import { permissionFlagToVerify, type PermissionLaunchChoice } from '../lib/engineLaunch.js'
 import type { EngineInstallRecipe } from '../lib/engineInstall.js'
 import { patientDeadline } from '../lib/patientExec.js'
@@ -290,7 +291,7 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
         valid = true; prepared = true
         return true
       } catch (error) {
-        console.warn(`[launch] native hook preparation held · ${error instanceof Error ? error.message : error}`)
+        console.warn(`[launch] native hook preparation held · ${errorKind(error)}`)
         return false
       } finally { preparing = false }
     },
