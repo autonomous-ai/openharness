@@ -103,6 +103,17 @@ export class AppFilter {
     return 'switched'
   }
 
+  /** Shows `app` and holds it as a pick does, even when it is already shown: `pick` answers `same` there and holds
+   *  nothing, so a pick made off the app's own view (the tab) would leave the next app in front free to turn the dial.
+   *  False for an app with no agents, and nothing changes. */
+  hold(app: string): boolean {
+    if (!has(this.deps.counts().all, app)) return false
+    this.pickedOnDial = true
+    this.byDefault = false
+    this.show(app, 'pick')
+    return true
+  }
+
   private settle(app: string): void {
     this.cancelSettle = undefined
     if (app !== this.settledFront) {
