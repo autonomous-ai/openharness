@@ -18,6 +18,7 @@ import {
   terminalHintLines,
   buildEngineCommandArgv,
   buildEngineLaunchArgv,
+  launchAttempts,
   shellAgentArgv,
   buildTerminalLaunchArgv,
   interactiveEngineShell,
@@ -183,6 +184,26 @@ describe('buildEngineLaunchArgv', () => {
     buildEngineLaunchArgv('claude', {}, '/bin/zsh', undefined, undefined, NO_TMUX)
     expect(existsSync(stale)).toBe(false)
     expect(existsSync(fresh)).toBe(true)
+  })
+
+  it.each(['/bin/zsh', '/usr/local/bin/fish'])('a retry under %s removes the launch file its closed pane\'s shell never read, and no other', (shell) => {
+    const build = () => buildEngineLaunchArgv('claude', { cwd: '/work' }, shell, undefined, undefined, NO_TMUX)
+    const fileOf = (argv: string[]) => argv.map(arg => /^(?:\.|exec \S+) '(.+\.sh)'$/.exec(arg)?.[1]).find(Boolean)!
+    const another = fileOf(build())
+    const first = build()
+    const attempts = launchAttempts(first, build)
+    expect(attempts(1)).toBe(first)
+    const second = attempts(2)
+    // Its pane was closed at once (its registration refused), before its shell read the file: it waited an hour for
+    // the sweep, one more for each retry.
+    expect(existsSync(fileOf(first))).toBe(false)
+    expect(existsSync(fileOf(second))).toBe(true)
+    const third = attempts(3)
+    expect(existsSync(fileOf(second))).toBe(false)
+    // Another launch's file, its pane still to read it, stays.
+    expect(existsSync(another)).toBe(true)
+    rmSync(another)
+    rmSync(fileOf(third))
   })
 
   it('puts the script on the command line when there is no data folder to write it in', () => {
