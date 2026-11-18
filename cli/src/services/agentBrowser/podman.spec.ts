@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -379,8 +379,7 @@ describe('createPodman', () => {
     // A podman that leaves a helper behind holding its stdout, as `machine start` leaves its VM's.
     const script = join(dirname(fake.path), 'leaves-a-helper')
     const helper = join(dirname(fake.path), 'helper.pid')
-    writeFileSync(script, `#!/bin/sh\nsleep 60 &\necho $! > '${helper}'\nexec sleep 60\n`)
-    chmodSync(script, 0o755)
+    writeExecutable(script, `#!/bin/sh\nsleep 60 &\necho $! > '${helper}'\nexec sleep 60\n`)
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     const slow = failure(createPodman({ resolve: async () => script, platform: 'linux' }).run(['machine', 'start'], { timeoutMs: 500 }))
     // The clock moves once the helper is there: under load, a real 500 ms ran out before the script had started it.
