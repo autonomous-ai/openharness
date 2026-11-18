@@ -23,9 +23,13 @@ type Entry = {
   agentId: string; id: string; token: string; signature: string; questions: ReviewQuestion[]
   drafts: Map<number, Draft>
   submitted?: Promise<AnswerReceipt>
-  /** Asked of the dial since it last lost its questions. */
+  /** The dial holds this question now, as a row. */
   asked?: boolean
-  /** Read when its row is opened, never asked: it rang before the devices process restarted (cable/notices.ts). */
+  /** The dial has had this question since it last lost everything, by a ring or as a drawer row: a person who could
+   *  see the row was told, so ringing it again because the drawer changed would be a beep for nothing new. */
+  told?: boolean
+  /** Read when its row is opened, never asked: it rang before the devices process restarted (cable/notices.ts), so it
+   *  is created told. */
   held?: true
 }
 
@@ -67,7 +71,7 @@ export class QuestionInbox {
     for (const question of questions) { Object.freeze(question.options); Object.freeze(question) }
     Object.freeze(questions)
     this.entries.set(agentId, { agentId, id, token: randomUUID(), signature, questions, drafts: new Map(),
-      ...(held ? { held: true as const } : {}) })
+      ...(held ? { held: true as const, told: true } : {}) })
   }
 
   /** Every question still open, for a resync. */
@@ -76,19 +80,39 @@ export class QuestionInbox {
       ({ agentId, id, questions, ...(held ? { held } : {}) }))
   }
 
-  /** Whether the dial is to be asked that agent's open question, marking it asked: the dial beeps at each ask, so it is
-   *  asked once until it loses its questions. False when it was, or that question is no longer the open one. */
+  /** Whether the dial is to be asked that agent's open question, marking it asked and told: the dial beeps at each ask,
+   *  so it is asked once until it loses its questions. False when it was, or that question is no longer the open one. */
   ask(agentId: string, id: string): boolean {
     const entry = this.entries.get(agentId)
     if (!entry || entry.id !== id || entry.asked || entry.held) return false
+    entry.asked = entry.told = true
+    return true
+  }
+
+  /** Whether the dial was told that agent's open question since it last lost everything. */
+  told(agentId: string, id: string): boolean {
+    const entry = this.entries.get(agentId)
+    return !!entry && entry.id === id && !!entry.told
+  }
+
+  /** Whether that agent's open question, told but no longer on the dial, is to be given back to it as a row with no
+   *  ring, marking it asked. False when it was never told (it is rung instead), the dial has it, or it is no longer the
+   *  open one. */
+  refile(agentId: string, id: string): boolean {
+    const entry = this.entries.get(agentId)
+    if (!entry || entry.id !== id || !entry.told || entry.asked) return false
     entry.asked = true
     return true
   }
 
-  /** The dial lost its questions (a greeting, a drawer replaced whole, a resync), but those of the agents named `kept`
-   *  (rows of the drawer that replaced its own), which it holds as asked: each other is to be asked again. */
+  /** With `kept`, a drawer replaced whole: the dial holds, and so was told, the questions of the agents it names as
+   *  rows, and holds no other; it was still told those. Without, a greeting: its RAM is gone, so each open question it
+   *  is not given as a row is to be rung again. */
   forget(kept?: ReadonlySet<string>): void {
-    for (const entry of this.entries.values()) entry.asked = !!kept?.has(entry.agentId)
+    for (const entry of this.entries.values()) {
+      entry.asked = !!kept?.has(entry.agentId)
+      entry.told = entry.asked || (!!kept && !!entry.told)
+    }
   }
 
   close(agentId: string, id: string): boolean {
