@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { CABLE_MAX_PAYLOAD } from './cableFrame.js'
+import { noticeSummary } from './dialText.js'
 
 export interface ReviewQuestion {
   key: string
@@ -43,35 +44,51 @@ function frameJson(raw: unknown): string | undefined {
   } catch { return undefined }
 }
 
+/** A refused question as the dial can file it: its first question's words, cut as a drawer row's are, so the row and
+ *  the question it opens read the same. Only a string `q` is read: `raw` may hold anything, a BigInt included. */
+function summaryOnly(raw: unknown): ReviewQuestion[] {
+  const first: unknown = Array.isArray(raw) ? raw[0] : undefined
+  const text = first && typeof first === 'object' && 'q' in first && typeof first.q === 'string' ? noticeSummary(first.q) : ''
+  return [{ key: '', q: text || 'Needs your answer', options: [], multi: false }]
+}
+
 /** The host owns the pending catalog; the dial holds only the question it is reading.
- * Tokens name immutable contents, not merely the engine's sometimes-reused id. */
+ * Tokens name immutable contents, not merely the engine's sometimes-reused id.
+ * An entry may be unreadable: a question the dial cannot answer (too many questions or options, none, a repeated key,
+ * past 6500 bytes) is kept as its summary alone, so it stays a row on the dial's drawer until the agent closes it,
+ * instead of ringing once and vanishing. `submit`, `canSpeak` and `draft` refuse it by its shape: no mask is valid for
+ * an empty option list, and it has no `canText`. */
 export class QuestionInbox {
   private readonly entries = new Map<string, Entry>()
   /** The questions each agent asked last, as they came (JSON), reviewable or not: the dial's answer is read against them. */
   private readonly latest = new Map<string, { id: string; json?: string }>()
 
-  set(agentId: string, id: string, raw: unknown, held = false): void {
+  /** True when the inbox holds the question as it came; false when it kept only its summary, or nothing. */
+  set(agentId: string, id: string, raw: unknown, held = false): boolean {
+    // Nobody can close a question with no agent or id: it must not evict, nor replace, one that can be.
+    if (!agentId || !id) return false
     if (this.latest.size >= 64 && !this.latest.has(agentId)) {
       const oldest = this.latest.keys().next().value!
       this.latest.delete(oldest); this.entries.delete(oldest)
     }
     this.latest.set(agentId, { id, json: frameJson(raw) })
-    const valid = agentId && id && Array.isArray(raw) && raw.length > 0 && raw.length <= 4 &&
+    const valid = Array.isArray(raw) && raw.length > 0 && raw.length <= 4 &&
       raw.every(q => q && typeof q.key === 'string' && q.key && typeof q.q === 'string' && q.q &&
         Array.isArray(q.options) && q.options.length > 0 && q.options.length <= 6 &&
         q.options.every((o: unknown) => typeof o === 'string' && o.length > 0)) &&
       new Set(raw.map(q => q.key)).size === raw.length
-    if (!valid) { this.entries.delete(agentId); return }
-    const questions: ReviewQuestion[] = raw.map(q => ({ key: q.key, q: q.q,
-      options: [...q.options], multi: q.multi === true, ...(q.canText === true ? { canText: true } : {}) }))
+    const asked: ReviewQuestion[] | undefined = valid ? raw.map(q => ({ key: q.key, q: q.q,
+      options: [...q.options], multi: q.multi === true, ...(q.canText === true ? { canText: true } : {}) })) : undefined
+    const whole = !!asked && Buffer.byteLength(JSON.stringify([id, asked]), 'utf8') <= 6500
+    const questions = whole ? asked! : summaryOnly(raw)
     const signature = JSON.stringify([id, questions])
-    if (Buffer.byteLength(signature, 'utf8') > 6500) { this.entries.delete(agentId); return }
-    if (this.entries.get(agentId)?.signature === signature) return
+    if (this.entries.get(agentId)?.signature === signature) return whole
     if (this.entries.size >= 64 && !this.entries.has(agentId)) this.entries.delete(this.entries.keys().next().value!)
     for (const question of questions) { Object.freeze(question.options); Object.freeze(question) }
     Object.freeze(questions)
     this.entries.set(agentId, { agentId, id, token: randomUUID(), signature, questions, drafts: new Map(),
       ...(held ? { held: true as const, told: true } : {}) })
+    return whole
   }
 
   /** Every question still open, for a resync. */
