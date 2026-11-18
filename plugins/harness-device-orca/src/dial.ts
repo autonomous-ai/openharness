@@ -232,8 +232,12 @@ export function startDial(inputs: DialInputs, tell: { changed(state: DialState):
     if (open !== stream) return
     if (status !== null && status >= 200 && status < 300) {
       open.sent = body
-      push()
-    } else if (body !== latest) push()
+      return push()
+    }
+    // One with no answer may still land, read by a devices process that stalled past the deadline once it runs again:
+    // what they hold is not known, so the latest goes even when it is what they took before.
+    if (status === null) open.sent = undefined
+    if (body !== latest) push()
     else if (retried) {
       open.failed = body
       log('dial: front not sent')

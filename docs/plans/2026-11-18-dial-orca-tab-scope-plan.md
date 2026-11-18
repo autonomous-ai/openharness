@@ -317,10 +317,10 @@ The draft's two questions, answered by the PM on 2026-11-18:
   - `front()`: nothing after `stop()`. Else it sets `latest` and pushes.
   - A stream opens: push. It ends: its retry is cancelled, and nothing more is sent or logged for it.
   - Push: nothing when no stream is open, there is no `latest`, a send is in flight, `latest` is `sent`, or `latest` is the body whose retry waits. Else it cancels a waiting retry and sends `latest`.
-  - A send is `inputs.post(socket, body, signal)` on the stream's own socket, aborted with the pass and after `HEAD_MS` (2 s) on the loop's clock. A status from 200 to 299: `sent` is that body, then push. Anything else, `null` included, failed:
+  - A send is `inputs.post(socket, body, signal)` on the stream's own socket, aborted with the pass and after `HEAD_MS` (2 s) on the loop's clock. A status from 200 to 299: `sent` is that body, then push. Anything else, `null` included, failed, and `null` (no answer) also unsets `sent`: an aborted send may still land, read by a devices process that stalled past the deadline. Then:
     - the body is no longer `latest`: push;
     - a first failure: once more after `FRONT_RETRY_MS = 1_000`, if it is still `latest` and the stream still open;
-    - the retry failed: log `dial: front not sent`. `sent` stays as it was, and a push sends nothing while `latest` is that body.
+    - the retry failed: log `dial: front not sent`, and a push sends nothing while `latest` is that body.
   - On Windows nothing is ever sent. `stop()` aborts a send in flight and cancels a retry.
 
 - [ ] **Step 1: Write the failing tests.** `world()` gains `posts` (each `{ socket, body, signal }`) and a `post` that answers what the test queued: a status, `null`, or a hold that ends as `null` when its signal aborts; 204 with nothing queued. `H(n)` as in Task 1.
