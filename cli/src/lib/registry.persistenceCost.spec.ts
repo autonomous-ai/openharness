@@ -8,7 +8,8 @@ import type { SessionStorage } from './sessionStorage.js'
 
 type Row = Record<string, unknown>
 const io = vi.hoisted(() => ({ file: '', published: false, failDirectorySync: false,
-  durable: [] as Row[][], prepared: [] as Row[][], prepare: undefined as undefined | (() => Promise<void>) }))
+  durable: [] as Row[][], prepared: [] as Row[][], prepare: undefined as undefined | (() => Promise<void>),
+  durability: undefined as undefined | (() => Promise<void>) }))
 vi.mock('node:fs', async original => {
   const actual = await original<typeof import('node:fs')>()
   const record = () => {
@@ -32,7 +33,12 @@ vi.mock('node:fs', async original => {
     fsync: (fd: number, callback: (error: NodeJS.ErrnoException | null) => void) => {
       const publication = io.published && actual.fstatSync(fd).isDirectory()
       if (publication && io.failDirectorySync) { queueMicrotask(() => callback(new Error('fixture directory durability unavailable'))); return }
-      actual.fsync(fd, error => { if (!error && publication) record(); callback(error) })
+      actual.fsync(fd, error => {
+        if (!error && publication) record()
+        const held = !error && publication ? io.durability?.() : undefined
+        if (held) void held.then(() => callback(error), callback)
+        else callback(error)
+      })
     },
   }
 })
@@ -93,10 +99,23 @@ function holdEquality() {
   return { entered: () => within(entered, 'exact equality arrival'), release: resume }
 }
 
+function holdDurability() {
+  let enter!: () => void, resume!: () => void
+  const entered = new Promise<void>(resolve => { enter = resolve })
+  const held = new Promise<void>(resolve => { resume = resolve })
+  release = resume
+  io.durability = async () => {
+    io.durability = undefined
+    enter()
+    await within(held, 'directory durability release')
+  }
+  return { entered: () => within(entered, 'directory durability arrival'), release: resume }
+}
+
 beforeEach(async () => {
   vi.resetModules()
   registry = undefined; storage = undefined; release = undefined; accepted.length = 0
-  io.published = false; io.failDirectorySync = false; io.durable = []; io.prepared = []; io.prepare = undefined
+  io.published = false; io.failDirectorySync = false; io.durable = []; io.prepared = []; io.prepare = undefined; io.durability = undefined
   root = mkdtempSync(join(tmpdir(), 'registry-persistence-cost-'))
   for (const folder of ['home', 'data', 'runtime']) mkdirSync(join(root, folder), { mode: 0o700 })
   for (const [key, value] of Object.entries({ HOME: join(root, 'home'), USERPROFILE: join(root, 'home'),
@@ -132,7 +151,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  io.prepare = undefined; release?.(); release = undefined
+  io.prepare = undefined; io.durability = undefined; release?.(); release = undefined
   io.failDirectorySync = false
   let settled = false
   try {
@@ -391,6 +410,97 @@ it('avoids repeated row comparisons and unused owner captures in a changed save 
   expect(io.prepared).toEqual(io.durable)
   expect(fingerprints).toBeLessThanOrEqual(12)
   expect(owners).toBe(0)
+})
+
+it('does not canonically serialize an unchanged peer again for either fresh live rebase', async () => {
+  const live = registry!.byAgent(A)!, peer = registry!.byAgent(B)!, savedPeer = row(disk(), B)
+  const serialize = JSON.stringify
+  let peerFingerprints = 0
+  const stringify = vi.spyOn(JSON, 'stringify').mockImplementation((value, replacer, space) => {
+    if (io.prepared.length && isPersistedRow(value) && value.agentId === B && typeof replacer === 'function') peerFingerprints++
+    return serialize(value, replacer, space)
+  })
+  try {
+    expect(registry!.setCwd(A, '/fixture/rebase-comparison')).toBe(true)
+    await registry!.flush()
+  } finally { stringify.mockRestore() }
+  expect(row(disk())).toMatchObject({ cwd: '/fixture/rebase-comparison', launchArgs: ['--before'] })
+  expect(row(disk(), B)).toEqual(savedPeer)
+  expect(registry!.byAgent(A)).toBe(live)
+  expect(registry!.byProcess('claude', live.processIdentity!)).toBe(live)
+  expect(registry!.byAgent(B)).toBe(peer)
+  expect(registry!.byProcess('claude', peer.processIdentity!)).toBe(peer)
+  expect(io.durable).toHaveLength(1)
+  expect(io.prepared).toEqual(io.durable)
+  // One comparison installs the durable baseline; one belongs to the explicit following flush.
+  expect(peerFingerprints).toBeLessThanOrEqual(2)
+})
+
+it.each(['omitted nested value', 'credential witness'] as const)('preserves canonical equality after a live %s changes during preparation', async change => {
+  const apiKey = randomUUID()
+  if (change === 'credential witness') {
+    expect(await registry!.setGridLaunch(B, { override: { networkId: 'fixture-grid', networkName: 'Fixture',
+      baseUrl: 'https://grid.example.test/relay/v1', apiKey, model: 'fixture-model' }, webSearch: 'on' })).toBe(true)
+  } else {
+    registry!.byAgent(B)!.grid = { baseUrl: 'https://grid.example.test/v1', model: 'captured' }
+    await registry!.flush()
+  }
+  io.prepared = []; io.durable = []
+  const peer = registry!.byAgent(B)!, savedPeer = row(disk(), B)
+  const held = holdPreparation()
+  expect(registry!.setCwd(A, '/fixture/canonical-fallback')).toBe(true)
+  const pending = track(registry!.flush())
+  await held.entered()
+  if (change === 'credential witness') {
+    const source = peer.gridLaunch!.credential.source
+    if (source.kind !== 'image') throw new Error('fixture expected an image witness')
+    peer.gridLaunch!.credential.source = { kind: 'image', proof: { ...source.proof, identity: source.proof.identity + '0' } }
+  } else {
+    // Different insertion order and an extra undefined property still have the same JSON meaning.
+    peer.grid = { model: 'captured', baseUrl: 'https://grid.example.test/v1', omitted: undefined } as typeof peer.grid
+  }
+  const serialize = JSON.stringify
+  let peerFingerprints = 0
+  const stringify = vi.spyOn(JSON, 'stringify').mockImplementation((value, replacer, space) => {
+    if (isPersistedRow(value) && value.agentId === B && typeof replacer === 'function') peerFingerprints++
+    return serialize(value, replacer, space)
+  })
+  try {
+    held.release()
+    await pending
+  } finally { stringify.mockRestore() }
+  expect(registry!.byAgent(B)).toBe(peer)
+  expect(registry!.byProcess('claude', peer.processIdentity!)).toBe(peer)
+  expect(row(disk(), B)).toEqual(savedPeer)
+  expect(io.durable).toHaveLength(1)
+  expect(io.prepared).toEqual(io.durable)
+  // Both live rebases must fall back to canonical equality, followed by baseline and flush checks.
+  expect(peerFingerprints).toBe(4)
+  if (change === 'credential witness') {
+    expect((await storage!.resolveSelected(peer.gridLaunch!)).apiKey === apiKey).toBe(true)
+    expect(JSON.stringify(peer).includes(apiKey)).toBe(false)
+  }
+})
+
+it.skipIf(process.platform === 'win32')('reads fresh nested peer edits again after actual directory durability', async () => {
+  const peer = registry!.byAgent(B)!
+  peer.launchArgs = ['--before']
+  await registry!.flush()
+  io.prepared = []; io.durable = []
+  const held = holdDurability()
+  expect(registry!.setCwd(A, '/fixture/durable-rebase')).toBe(true)
+  const pending = track(registry!.flush())
+  await held.entered()
+  expect(row(io.durable[0], B).launchArgs).toEqual(['--before'])
+  peer.launchArgs.push('--during-durability')
+  held.release()
+  await pending
+  expect(registry!.byAgent(B)).toBe(peer)
+  expect(registry!.byProcess('claude', peer.processIdentity!)).toBe(peer)
+  expect(peer.launchArgs).toEqual(['--before', '--during-durability'])
+  expect(row(disk(), B).launchArgs).toEqual(peer.launchArgs)
+  expect(io.durable).toHaveLength(2)
+  expect(io.prepared).toEqual(io.durable)
 })
 
 it('admits a durable owner without temporary property-pair arrays for its canonical row comparisons', async () => {
