@@ -3,8 +3,9 @@
 //
 //   - answers `--version` / `--help` probes;
 //   - as `codex app-server`, reads its stdin, answers nothing and ends when that stdin ends;
-//   - as `codex queue --thread <id> --message=<text>`, notes the call in `codex-queue` under the test's root when that
-//     thread's rollout is in its CODEX_HOME, else exits 1 having noted nothing, as 0.167 does;
+//   - as `codex queue --thread <id> --message=<text>`, notes the call under the test's root, in `codex-queue` or the
+//     config's `queueLedger` (the ChatGPT app's own CLI notes apart), when that thread's rollout is in its CODEX_HOME,
+//     else exits 1 having noted nothing, as 0.167 does;
 //   - as `claude plugin …`, adds, installs, turns on and off, uninstalls and lists the harness-device plugin as 2.1.326
 //     does, noting each call in `claude-plugin-calls` under the test's root (`claudePlugin`);
 //   - as `claude -p … --input-format stream-json`, answers the `initialize` control request with its `/model` and `/`
@@ -405,7 +406,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
       process.stderr.write(`Error: no thread ${thread} in ${home}\n`)
       process.exit(1)
     }
-    appendFileSync(join(config.root, 'codex-queue'), `${JSON.stringify({ args, codexHome: process.env.CODEX_HOME ?? null })}\n`)
+    appendFileSync(join(config.root, config.queueLedger ?? 'codex-queue'), `${JSON.stringify({ args, codexHome: process.env.CODEX_HOME ?? null })}\n`)
     return
   }
   // `claude plugin …` changes or lists plugins and starts no session: no launch, kept out of the launch-argv ledger.
