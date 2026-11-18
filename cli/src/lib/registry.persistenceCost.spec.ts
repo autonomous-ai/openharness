@@ -146,6 +146,103 @@ it('fingerprints each unchanged row once while preserving the exact durable byte
   expect(owners).toBe(0)
 })
 
+it('flushes an unchanged image without copying rows or publishing different bytes', async () => {
+  const live = registry!.byAgent(A)!, peer = registry!.byAgent(B)!, before = readFileSync(io.file, 'utf8')
+  const clone = vi.spyOn(globalThis, 'structuredClone')
+  await registry!.flush()
+  const copied = clone.mock.calls.filter(([value]) => isPersistedRow(value)).length
+  clone.mockRestore()
+  expect(readFileSync(io.file, 'utf8')).toBe(before)
+  expect(registry!.byAgent(A)).toBe(live)
+  expect(registry!.byAgent(B)).toBe(peer)
+  expect(io.prepared).toEqual([])
+  expect(io.durable).toEqual([])
+  expect(copied).toBe(0)
+})
+
+it('persists a direct last-row mutation without an additional full fingerprint pass', async () => {
+  const live = registry!.byAgent(B)!, first = row(disk(), A)
+  live.launchArgs = ['--direct-last-row']
+  const stringify = vi.spyOn(JSON, 'stringify')
+  await registry!.flush()
+  const fingerprints = stringify.mock.calls.filter(([value, replacer]) => isPersistedRow(value) && typeof replacer === 'function').length
+  stringify.mockRestore()
+  expect(registry!.byAgent(B)).toBe(live)
+  expect(row(disk(), B).launchArgs).toEqual(['--direct-last-row'])
+  expect(row(disk(), A)).toEqual(first)
+  expect(io.prepared).toEqual(io.durable)
+  expect(io.durable).toHaveLength(1)
+  expect(fingerprints).toBeLessThanOrEqual(8)
+})
+
+it('preserves nested launch metadata from the actual pending caller across unchanged and directly edited flushes', async () => {
+  const id = 'cost-pending-metadata'
+  expect(await registry!.openPendingAgent({ agentId: id, engine: 'claude',
+    runtimes: [{ backend: 'tmux', paneId: '%3' }], cwd: '/fixture/pending',
+    grid: { baseUrl: 'https://grid.example.test/v1', model: 'captured' },
+    scmLaunchRecord: { kind: 'git' }, launchModel: { model: 'opus', effort: 'high' },
+    forkedFrom: { agentId: A, name: 'fixture parent', sessionId: 'fixture-history', transcriptPath: '/fixture/history.jsonl' },
+  })).not.toBeNull()
+  const live = registry!.byAgent(id)!, saved = row(disk(), id)
+  io.durable = []; io.prepared = []
+  await registry!.flush()
+  expect(row(disk(), id)).toEqual(saved)
+  expect(io.durable).toEqual([])
+  live.grid!.model = 'edited'
+  live.launchModel!.effort = 'low'
+  live.forkedFrom!.name = 'edited parent'
+  await registry!.flush()
+  expect(row(disk(), id)).toMatchObject({ grid: { baseUrl: 'https://grid.example.test/v1', model: 'edited' },
+    launchModel: { model: 'opus', effort: 'low' }, scmLaunch: { kind: 'git' },
+    forkedFrom: { agentId: A, name: 'edited parent', sessionId: 'fixture-history', transcriptPath: '/fixture/history.jsonl' } })
+  expect(registry!.byAgent(id)).toBe(live)
+  expect(io.durable).toHaveLength(1)
+})
+
+it('preserves nested historical JSON from a late writer and persists its later direct edit', async () => {
+  const images = disk()
+  row(images, B).historical = JSON.parse('{"constructor":"literal","__proto__":{"nested":[null,true,{"z":2,"a":1}]}}')
+  writeFileSync(io.file, JSON.stringify(images), { mode: 0o600 })
+  await registry!.flush()
+  const live = registry!.byAgent(B)! as RegisteredSession & { historical: { __proto__: { nested: unknown[] } } }
+  expect(live.historical).toEqual(row(images, B).historical)
+  expect(Object.getPrototypeOf(live.historical)).toBe(Object.prototype)
+  io.durable = []; io.prepared = []
+  await registry!.flush()
+  expect(io.durable).toEqual([])
+  live.historical.__proto__.nested.push({ edited: true })
+  await registry!.flush()
+  expect((row(disk(), B).historical as typeof live.historical).__proto__.nested).toEqual([null, true, { z: 2, a: 1 }, { edited: true }])
+  expect(registry!.byAgent(B)).toBe(live)
+  expect(io.durable).toHaveLength(1)
+})
+
+it('keeps the unchanged flush snapshot while a direct live edit arrives during exact equality', async () => {
+  const live = registry!.byAgent(A)!, before = readFileSync(io.file, 'utf8')
+  let enter!: () => void
+  const entered = new Promise<void>(resolve => { enter = resolve })
+  const held = new Promise<void>(resolve => { release = resolve })
+  const equal = storage!.equal.bind(storage!)
+  let intercepted = false
+  vi.spyOn(storage!, 'equal').mockImplementation(async proof => {
+    if (proof.document.kind === 'registry' && !intercepted) {
+      intercepted = true; enter(); await within(held, 'exact equality release')
+    }
+    return equal(proof)
+  })
+  const flushing = track(registry!.flush())
+  await within(entered, 'exact equality arrival')
+  live.launchArgs!.push('--after-flush-snapshot')
+  release!()
+  await flushing
+  expect(readFileSync(io.file, 'utf8')).toBe(before)
+  expect(io.durable).toEqual([])
+  await registry!.flush()
+  expect(row(disk()).launchArgs).toEqual(['--before', '--after-flush-snapshot'])
+  expect(registry!.byAgent(A)).toBe(live)
+  expect(io.durable).toHaveLength(1)
+})
+
 it('avoids repeated row comparisons and unused owner captures in a changed save and flush', async () => {
   const live = registry!.byAgent(A)!, peer = row(disk(), B)
   const stringify = vi.spyOn(JSON, 'stringify')
