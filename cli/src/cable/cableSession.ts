@@ -2879,9 +2879,10 @@ export class CableSession {
   }
 
   /** Whether a dial that lost its questions is asked this one again. A real question whose turn moved on without a close
-   *  is not. A notice or a wait is: its owner closes it, and it stays on the dial after its turn ends. */
+   *  is not. A notice or a wait is: its owner closes it, and it stays on the dial after its turn ends. One whose id the
+   *  dial cannot keep is not either: the dial drops it, and it was sent again for nothing at each drawer. */
   private owed(agentId: string, id: string): boolean {
-    return id.startsWith(SHOWN_ONLY_PREFIX) || this.liveTurns.get(agentId) === 'question'
+    return dialKeepsId(agentId) && (id.startsWith(SHOWN_ONLY_PREFIX) || this.liveTurns.get(agentId) === 'question')
   }
 
   /**
@@ -3314,7 +3315,7 @@ export class CableSession {
     // cap) goes back on it as a row, first, in place of that agent's news (2026-11-18). An ask would beep and wake it
     // at every change of that list. A greeting dial lost them with its RAM, and its push asks them after this drawer.
     const carried = new Set(listed.filter((row) => row.question).map((row) => row.agentId))
-    const open = this.greeting ? [] : this.owedQuestions().filter(({ agentId }) => !carried.has(agentId) && dialKeepsId(agentId))
+    const open = this.greeting ? [] : this.owedQuestions().filter(({ agentId }) => !carried.has(agentId))
     const back = new Set(open.map(({ agentId }) => agentId))
     const rest = listed.filter((row) => !back.has(row.agentId))
     // Questions before news within the eight: a question cut for a news row was asked again, a beep, at every change.
