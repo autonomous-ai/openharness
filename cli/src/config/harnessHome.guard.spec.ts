@@ -1,8 +1,8 @@
 /**
  * Every path under the account's ~/.harness is built by config/harnessHome.ts, so a later change of the home's layout
  * (XDG, docs/plans/2026-11-18-harness-paths-design.md) is one table. This guard fails on a hand-built one, in the shapes
- * the code used before the module: a `.harness` segment joined onto a home, `.harness` straight after home text, and a
- * pattern that matches a home path. A project's or workspace's `.harness/` and `.harness-<name>` files are not the home.
+ * the code used before the module: a `.harness` segment joined onto a home, `.harness` straight after home text, a
+ * pattern that matches a home path, and the module's HARNESS_HOME_NAME used elsewhere. A project's or workspace's `.harness/` and `.harness-<name>` files are not the home.
  */
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
@@ -24,6 +24,8 @@ const INLINE = /(?:\$HOME|~|%USERPROFILE%|\$env:USERPROFILE)[\\/]+\.harness(?![\
 const INTERPOLATED = /\}[\\/]+\.harness(?![\w-])/g
 /** A regular expression that matches a home path: \/\.harness, [\\/]\.harness. */
 const PATTERN = /(?:\\\/|\[\\\\\/\])\\\.harness(?![\w-])/g
+/** The home folder's name, which joined onto a home is a hand-built path with no literal to find. */
+const NAME = /\bHARNESS_HOME_NAME\b/g
 
 /** [code] is the hit's whole line, without comments, trimmed. */
 interface Hit { file: string, line: number, text: string, code: string }
@@ -35,7 +37,7 @@ function hitsIn(file: string, source: string): Hit[] {
   const lines = withoutComments(source.split('\n'), file.endsWith('.sh'))
   return lines.flatMap((code, index) => {
     const nearHome = lines.slice(Math.max(0, index - 2), index + 1).some((line) => HOME.test(line))
-    const texts = [...(nearHome ? [...code.matchAll(SEGMENT), ...code.matchAll(INTERPOLATED)] : []), ...code.matchAll(INLINE), ...code.matchAll(PATTERN)]
+    const texts = [...(nearHome ? [...code.matchAll(SEGMENT), ...code.matchAll(INTERPOLATED)] : []), ...code.matchAll(INLINE), ...code.matchAll(PATTERN), ...code.matchAll(NAME)]
     return texts.map(([text]) => ({ file, line: index + 1, text, code: code.trim() }))
   })
 }
@@ -81,6 +83,7 @@ const ALLOWED: { files: string[], hit: (hit: Hit) => boolean, why: string }[] = 
   { files: ['engines/kit/notifyHooks.ts'], hit: onLine(String.raw`const LEGACY_SCRIPT = /\/\.harness\/cli\/(?:hook\/)?notify\.mjs$/`), why: 'LEGACY_SCRIPT: what old installs wrote' },
   { files: ['lib/localSocket.ts'], hit: onLine(String.raw`if (!/[\\/]\.harness[\\/]s[\\/][0-9a-f]{16}$/.test(folder)) return`), why: 'prepareShortFolder checks the shape of a folder it is handed' },
   { files: ['harnessd/platform.ts'], hit: onLine('return this.deps.dataDir ?? join(this.deps.home, \'.harness\', \'cli\', \'data\')'), why: 'The master imports only Node and its own folder; its fallback is listed for PR 2' },
+  { files: ['lib/uninstall/removal.ts'], hit: onLine('import { HARNESS_HOME_NAME } from \'../../config/harnessHome.js\'', 'export const ROOT_NAME = HARNESS_HOME_NAME'), why: 'checkRoot refuses a root not named after the home folder; listed for PR 2' },
   { files: ['cli.ts', 'lib/uninstall/command.ts', 'config/startHome.ts', 'config/testIsolation.ts'], hit: (hit) => hit.text.startsWith('~'), why: 'Help and message text a person reads' },
 ]
 
