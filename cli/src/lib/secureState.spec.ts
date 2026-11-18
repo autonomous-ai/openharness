@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { AtomicWriteUnconfirmed, RENAME_TRIES, atomicWriteFile, atomicWriteJson, directorySyncSupported, hardenPrivateStateFileIfPresent, insideWindowsRoots, readPrivateStateFile, requireWindowsStateFile, secureStateDirectory, syncStateDirectory, windowsStateRoots } from './secureState.js'
+import { AtomicWriteUnconfirmed, RENAME_TRIES, RENAME_WAIT_MS, atomicWriteFile, atomicWriteJson, directorySyncSupported, hardenPrivateStateFileIfPresent, insideWindowsRoots, readPrivateStateFile, requireWindowsStateFile, secureStateDirectory, syncStateDirectory, windowsStateRoots } from './secureState.js'
 
 const WINDOWS = process.platform === 'win32'
 
@@ -40,6 +40,11 @@ vi.mock('node:fs', async original => {
     },
   }
 })
+
+// The retries' blocking waits (pauseSync) are recorded, not slept: a test never waits for real.
+let pauses: MockInstance<typeof Atomics.wait>
+const pausedFor = () => pauses.mock.calls.map(call => call[3])
+beforeEach(() => { pauses = vi.spyOn(Atomics, 'wait').mockReturnValue('timed-out') })
 
 const dirs: string[] = []
 afterEach(() => {
@@ -198,8 +203,9 @@ describe('syncStateDirectory', () => {
 })
 
 // Windows' open has no O_NOFOLLOW: a credential file is checked by itself before it is read (hookAuth.ts, the daemon
-// token). The rule needs no Windows API, so it runs here too.
-describe('requireWindowsStateFile', () => {
+// token). The rule needs no Windows API, so it runs here too; on Windows itself there is no folder outside the profile
+// to make one in (its temp folder is in it, /tmp is not there) and a link needs a privilege.
+describe.skipIf(WINDOWS)('requireWindowsStateFile', () => {
   it('takes a real file inside the state roots, and refuses a link or a file outside them', () => {
     const dir = mkdtempSync('/tmp/secure-file-')
     const outside = mkdtempSync('/tmp/secure-outside-')
@@ -331,6 +337,7 @@ describe('atomicWriteFile', () => {
     fault.rename = attempt => { if (attempt <= 2) throw errno(code) }
     expect(onPlatform('win32', () => atomicWriteFile(f, 'new', 'cache'))).toBe(true)
     expect(fault.renames).toBe(3)
+    expect(pausedFor()).toEqual([RENAME_WAIT_MS, RENAME_WAIT_MS])
     expect(readFileSync(f, 'utf8')).toBe('new')
   })
 
@@ -340,6 +347,7 @@ describe('atomicWriteFile', () => {
     fault.rename = () => { throw errno('EBUSY') }
     expect(() => onPlatform('win32', () => atomicWriteFile(f, 'new', 'cache'))).toThrow(/EBUSY/)
     expect(fault.renames).toBe(RENAME_TRIES)
+    expect(pausedFor()).toEqual(Array(RENAME_TRIES - 1).fill(RENAME_WAIT_MS))
     expect(readFileSync(f, 'utf8')).toBe('old')
     expect(readdirSync(dir)).toEqual(['f'])
   })
@@ -349,6 +357,7 @@ describe('atomicWriteFile', () => {
     fault.rename = () => { throw errno(code) }
     expect(() => onPlatform(platform, () => atomicWriteFile(f, 'new', 'cache'))).toThrow(code)
     expect(fault.renames).toBe(1)
+    expect(pausedFor()).toEqual([])
   })
 
   it.runIf(WINDOWS)('replaces an existing file for real, and loses an exclusive create for real', () => {
