@@ -181,7 +181,7 @@ describe('a question the dial cannot answer', () => {
     ]
     for (const [why, raw, words] of refused) {
       const inbox = new QuestionInbox()
-      expect(inbox.set('a', 'q', raw), why).toBe(false)
+      inbox.set('a', 'q', raw)
       expect(read(inbox).questions, why).toEqual(summaryOnly(words))
       expect(inbox.open(), why).toEqual([{ agentId: 'a', id: 'q', questions: summaryOnly(words) }])
     }
@@ -191,13 +191,14 @@ describe('a question the dial cannot answer', () => {
     // 8 kB of id; and 1400 control characters, 1.4 kB as they came but 8.4 kB as JSON writes them, past a frame.
     for (const id of ['x'.repeat(8000), '\u0001'.repeat(1400)]) {
       const inbox = new QuestionInbox()
-      expect(inbox.set('a', 'q', question())).toBe(true)
+      inbox.set('a', 'q', question())
+      expect(read(inbox).questions).toEqual(question())
       for (const raw of [[{ ...one, options: [] }], question()]) {
-        expect(inbox.set('a', id, raw)).toBe(false)
+        inbox.set('a', id, raw)
         expect(inbox.read('a').ok).toBe(false)              // the earlier question is replaced, by nothing
         expect(inbox.open()).toEqual([])
       }
-      expect(inbox.set('a', id, [{ ...one, options: [] }], true)).toBe(false)
+      inbox.set('a', id, [{ ...one, options: [] }], true)
       expect(inbox.open()).toEqual([])
       expect(inbox.close('a', id)).toBe(true)
     }
@@ -216,17 +217,21 @@ describe('a question the dial cannot answer', () => {
 
   it('is the same entry when delivered again or as its own summary, and is replaced or closed like any other', () => {
     const inbox = new QuestionInbox(), plan = [{ ...one, q: `Approve? ${'x'.repeat(7000)}` }]
-    expect(inbox.set('a', 'q', plan)).toBe(false)
+    inbox.set('a', 'q', plan)
     const first = read(inbox)
+    expect(first.questions).toEqual(summaryOnly(`Approve? ${'x'.repeat(230)}`))
     expect(inbox.ask('a', 'q')).toBe(true)
-    expect(inbox.set('a', 'q', plan)).toBe(false)
-    expect(inbox.set('a', 'q', first.questions)).toBe(false)   // the fleet hands a dial beside this one `open()`'s questions
+    inbox.set('a', 'q', plan)
+    inbox.set('a', 'q', first.questions)                       // the fleet hands a dial beside this one `open()`'s questions
     expect(read(inbox).token).toBe(first.token)
     expect(inbox.ask('a', 'q')).toBe(false)                    // the same entry, still asked
-    expect(inbox.set('a', 'q', question())).toBe(true)         // the same id, answerable now: a new entry
-    expect(read(inbox).token).not.toBe(first.token)
-    expect(inbox.set('a', 'q', question())).toBe(true)         // unchanged: still as it came
-    expect(inbox.set('a', 'q2', plan)).toBe(false)
+    inbox.set('a', 'q', question())                            // the same id, answerable now: a new entry
+    const answerable = read(inbox)
+    expect(answerable.token).not.toBe(first.token)
+    expect(answerable.questions).toEqual(question())
+    inbox.set('a', 'q', question())                            // unchanged: the same entry, still as it came
+    expect(read(inbox).token).toBe(answerable.token)
+    inbox.set('a', 'q2', plan)
     expect(inbox.close('a', 'q')).toBe(false)
     expect(inbox.close('a', 'q2')).toBe(true)
     expect(inbox.open()).toEqual([])
@@ -236,8 +241,8 @@ describe('a question the dial cannot answer', () => {
     const inbox = new QuestionInbox()
     inbox.set('a', 'q', question())
     const before = inbox.open()
-    for (const [agent, id] of [['', 'q'], ['a', ''], ['', '']]) expect(inbox.set(agent, id, question())).toBe(false)
-    expect(inbox.set('a', '', [])).toBe(false)
+    for (const [agent, id] of [['', 'q'], ['a', ''], ['', '']]) inbox.set(agent, id, question())
+    inbox.set('a', '', [])
     expect(inbox.open()).toEqual(before)                       // a's open question is as it was
     expect(inbox.asked('a', 'q')).toEqual(question())          // and so are the words it was asked in
     expect(inbox.close('a', 'q')).toBe(true)
@@ -246,7 +251,7 @@ describe('a question the dial cannot answer', () => {
     expect(inbox.open()).toHaveLength(64)
     const full = new QuestionInbox()
     for (let i = 0; i < 64; i++) full.set(`agent-${i}`, 'q', question())
-    expect(full.set('', 'q', question())).toBe(false)
+    full.set('', 'q', question())
     expect(full.read('agent-0').ok).toBe(true)                 // not evicted for a question nobody can close
   })
 })
