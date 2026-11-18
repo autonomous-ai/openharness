@@ -3,15 +3,16 @@
  * build's version and its sources that are not tests, each by its path in the plugin's folder.
  */
 import { execFileSync } from 'node:child_process'
-import { readdirSync, readFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, relative, sep } from 'node:path'
+import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { ensureOrcaPluginFolder } from './orcaPluginFolder.js'
 
 // @ts-expect-error — plain ESM with no declaration file
 const { readOrcaPluginBundle } = await import('../../scripts/lib/orcaPluginBundle.mjs') as {
-  readOrcaPluginBundle: (version: string) => string
+  readOrcaPluginBundle: (version: string, root?: string) => string
 }
 
 const PLUGIN = new URL('../../../plugins/harness-device-orca/', import.meta.url)
@@ -22,11 +23,32 @@ const ORCA_SEMVER = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-
 const files = (version: string): Record<string, string> => JSON.parse(readOrcaPluginBundle(version)) as Record<string, string>
 const manifest = (version: string): Record<string, unknown> => JSON.parse(files(version)['orca-plugin.json']!) as Record<string, unknown>
 
+const temps: string[] = []
+afterEach(() => {
+  for (const temp of temps.splice(0)) rmSync(temp, { recursive: true, force: true })
+})
+const aTemp = (): string => {
+  const temp = mkdtempSync(join(tmpdir(), 'orca-plugin-bundle-'))
+  temps.push(temp)
+  return temp
+}
+
+/** A plugin's folder of its own holding a manifest and [paths], each under src/. */
+function aPlugin(paths: string[]): string {
+  const root = aTemp()
+  writeFileSync(join(root, 'orca-plugin.json'), '{"id":"harness-device","version":"0.0.1"}\n')
+  for (const path of paths) {
+    mkdirSync(dirname(join(root, 'src', path)), { recursive: true })
+    writeFileSync(join(root, 'src', path), 'export {}\n')
+  }
+  return root
+}
+
 describe('Orca\'s plugin inside cli.js', () => {
   it('carries the manifest and each source that is not a test, and nothing else', () => {
     const src = fileURLToPath(new URL('src/', PLUGIN))
     const sources = readdirSync(src, { recursive: true, withFileTypes: true })
-      .filter((entry) => entry.isFile() && !/\.test\.tsx?$/.test(entry.name))
+      .filter((entry) => entry.isFile() && /\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name))
       .map((entry) => ['src', ...relative(src, join(entry.parentPath, entry.name)).split(sep)].join('/'))
     const keys = Object.keys(files('1.2.3'))
     expect(keys.sort()).toEqual(['orca-plugin.json', ...sources].sort())
@@ -38,6 +60,25 @@ describe('Orca\'s plugin inside cli.js', () => {
     const shipped = manifest('1.2.3') as { main: string, contributes: { panels: { entry: string }[] } }
     expect(keys).toContain(shipped.main)
     for (const panel of shipped.contributes.panels) expect(keys).toContain(panel.entry)
+  })
+
+  it('carries only the sources that are .ts or .tsx and not tests', () => {
+    const root = aPlugin(['worker.ts', 'panel.tsx', 'views/list.ts', 'worker.test.ts', 'panel.test.tsx', 'NOTES.md', 'data.json', '.DS_Store'])
+    expect(Object.keys(JSON.parse(readOrcaPluginBundle('1.2.3', root)) as object).sort())
+      .toEqual(['orca-plugin.json', 'src/panel.tsx', 'src/views/list.ts', 'src/worker.ts'])
+  })
+
+  it('a name the plugin\'s folder would not take fails the build', () => {
+    for (const name of ['my worker.ts', 'wörker.ts', 'a+b.ts', 'panel (copy)/view.ts']) {
+      expect(ensureOrcaPluginFolder(join(aTemp(), 'orca-plugin'), { [`src/${name}`]: '' }), name).toEqual({ failed: 'EINVAL' })
+      const root = aPlugin([name])
+      expect(() => readOrcaPluginBundle('1.2.3', root), name).toThrow(/takes/)
+    }
+    expect(Object.keys(JSON.parse(readOrcaPluginBundle('1.2.3', aPlugin(['a-b_c.d.ts']))) as object)).toContain('src/a-b_c.d.ts')
+  })
+
+  it('the plugin\'s folder takes every key the build carries', () => {
+    expect(ensureOrcaPluginFolder(join(aTemp(), 'orca-plugin'), files('1.2.3'))).toBe('written')
   })
 
   it('each source is the file\'s own text', () => {
