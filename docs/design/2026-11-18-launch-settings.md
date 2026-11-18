@@ -571,3 +571,46 @@ functions and 96.51% lines; nativePaths.ts reaches 88.23%, 85.51%, 100% and 95.9
 100% in all metrics. The merged full maps and summary are in `/tmp/core-launch-settings-directory-pass-merged/`.
 This incremental coverage result neither fixes the reproduced Hermes coverage deadline failure nor claims those
 historical whole files have complete coverage. No unrelated fault cases or timeout changes are added.
+
+### Frozen v7 result: directory reads do not close the cost gap
+
+The reviewed packet freezes A=9a2ae217cf and B=264157fac5, manifest SHA256
+`5dfca5fa719c9bebea07cf03ad68940801a0317c610cc96b1eb13064c5f77f4f` (791 inputs, eight arms). Source closure lists,
+caller, worker, fixture, recording replies and all three custody helpers are unchanged from v6. The run/freeze code
+changes only B's snapshot path. One approved semantic smoke completes actual 0 in 12.526 s: both three-operation
+arms equal the exact v6 normalized outputs, leave zero unused scripts and invoke the candidate factory three times.
+Independent custody verifies all eight PIDs, two groups/sockets, four private roots and the outer group are gone,
+with all frozen hashes unchanged (`/tmp/core-launch-settings-cost-v7-smoke-custody.json`).
+
+One approved fixed ABBA completes actual outer 0 in 43.636 s. All 448 operations preserve the exact semantics, with
+56 candidate factories per arm and no unused script. Every sample, worker and capture child has actual zero exit,
+close and both EOFs. Independent custody checks all 32 PIDs, eight groups/sockets, sixteen private roots and outer
+gone, and all 791 source hashes unchanged (`/tmp/core-launch-settings-cost-v7-abba-custody.json`). Raw samples are
+in `/tmp/core-launch-settings-cost-v7-abba/manifest.json`; the outer receipt is
+`/tmp/core-launch-settings-cost-v7-abba-outer-receipt.json`. The unchanged v4 summarizer produces every arm, range
+and paired delta in `/tmp/core-launch-settings-cost-v7-summary.json`. There is no retry or dropped sample.
+
+| Arm | First publication ms | Warm p50 ms | Warm p95 ms | Core CPU ms/op | Worker CPU ms/op | Combined CPU ms/op |
+|---|---:|---:|---:|---:|---:|---:|
+| 0-A | 3.867 | 0.855 | 0.974 | 0.960 | 0.245 | 1.205 |
+| 1-B | 88.919 | 4.954 | 5.800 | 5.124 | 1.006 | 6.130 |
+| 2-B | 89.027 | 4.761 | 5.740 | 4.937 | 0.941 | 5.878 |
+| 3-A | 3.934 | 0.833 | 0.949 | 0.935 | 0.303 | 1.239 |
+| 4-A | 3.795 | 0.827 | 0.974 | 0.926 | 0.241 | 1.167 |
+| 5-B | 86.246 | 4.837 | 5.805 | 4.966 | 0.963 | 5.929 |
+| 6-B | 87.633 | 4.741 | 5.590 | 5.000 | 0.944 | 5.943 |
+| 7-A | 4.055 | 0.849 | 0.982 | 0.954 | 0.239 | 1.193 |
+
+Mean A→B first publication is 3.912→87.956 ms (B range 86.246–89.027), warm p50 0.841→4.823 ms and p95
+0.970→5.734 ms. Core CPU is 0.944→5.007 ms/op, worker 0.257→0.963 and combined 1.201→5.970. All four paired
+p50 deltas are positive: +4.099, +3.928, +4.010 and +3.892 ms. First core CPU is 4.206→42.451 ms and worker
+11.369→24.880 ms. Relative to the earlier v6 candidate, p50 changes only 4.892→4.823 ms and core CPU
+5.130→5.007 ms/op. This small observed difference does not establish a strong speedup or close the baseline gap;
+performance acceptance remains held.
+
+Core retained-heap growth is 0.181→0.221 MiB and worker -0.0147→0.1049 MiB. Post-batch core RSS is
+125.892→124.098 MiB (B range 122.672–125.855), worker 98.335→102.401 MiB. These are process measurements,
+not a whole-daemon memory claim. The original exclusions remain: common semantic checks are inside operation
+latency, worker CPU includes the ending GC snapshot, and permission probing, extra model capture, cold service
+startup, real terminal I/O and native Windows/Linux acceptance are outside this packet. No further optimization,
+profile or timing run follows from these results without review.
