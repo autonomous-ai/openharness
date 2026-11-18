@@ -34,7 +34,7 @@ code=defines('ID_MAX')+r'''
 #define portMUX_TYPE pthread_mutex_t
 #define portMUX_INITIALIZER_UNLOCKED PTHREAD_MUTEX_INITIALIZER
 #define portENTER_CRITICAL(p) assert(!pthread_mutex_lock(p))
-#define portEXIT_CRITICAL(p) assert(!pthread_mutex_unlock(p))
+#define portEXIT_CRITICAL(p) exit_critical(p)
 typedef int BaseType_t;
 typedef struct task {
     pthread_t thread;
@@ -58,8 +58,15 @@ static uint32_t esp_random(void) { static atomic_uint counter;return atomic_fetc
 static void vTaskDelay(unsigned ms) {
     (void)ms;struct timespec t={0,10000};nanosleep(&t,NULL);
 }
-static atomic_bool park,parked;
+static atomic_bool park,parked,stall,stalled;
 static void send_audio(void *);
+// The test can stall the sender just after its next step under the lock, as a preemption there would.
+static void exit_critical(pthread_mutex_t *lock) {
+    assert(!pthread_mutex_unlock(lock));
+    if(self&&self->function==send_audio&&atomic_exchange(&stall,false)) {
+        atomic_store(&stalled,true);while(atomic_load(&stalled))sched_yield();
+    }
+}
 static int ulTaskNotifyTake(int clear,int ticks) {
     // The test parks the sender at its idle wait to line up what it finds there when it wakes.
     if(ticks==portMAX_DELAY&&self->function==send_audio&&atomic_load(&park)) {
@@ -185,7 +192,7 @@ static void wait_finished(void) {
         sched_yield();
         // Lock-free first so this spin does not contend with the workers' notifications.
         if(!atomic_load(&capture_task->forever)||!atomic_load(&sender_task->forever))continue;
-        // Only start_context and the workers notify, so both workers asleep with nothing
+        // Only start_context, audio_client_cancel and the workers notify, so both workers asleep with nothing
         // pending while the session is active can never wake. Tasks lock only themselves or
         // their target, so taking both here in a fixed order cannot deadlock.
         assert(!pthread_mutex_lock(&capture_task->lock));assert(!pthread_mutex_lock(&sender_task->lock));
@@ -239,8 +246,22 @@ int main(void) {
         while(atomic_load(&cancels)!=2*round+2)sched_yield();
         assert(!strcmp(cancelled,next));
     }
+    // A discard after voice.end and the next start both land while the sender, woken for nothing, is preempted between
+    // its look at the pending cancel and its look for a start: the cancel still goes before that start's voice.begin.
+    for(unsigned round=0;round<100;round++) {
+        char ended[24],next[24];
+        wait_idle();atomic_store(&parked,false);atomic_store(&park,true);
+        session(HEALTHY,ended);atomic_store(&start_gate,true);
+        while(!atomic_load(&parked))sched_yield();
+        const unsigned before=atomic_load(&cancels);
+        atomic_store(&stall,true);xTaskNotifyGive(sender_task);atomic_store(&park,false);
+        while(!atomic_load(&stalled))sched_yield();
+        audio_client_cancel(ended);session(HEALTHY,next);
+        atomic_store(&stalled,false);atomic_store(&start_gate,true);wait_finished();
+        assert(ends==1&&cancels_at_begin==before+1&&!strcmp(cancelled,ended));
+    }
     vTaskDelete(capture_task);vTaskDelete(sender_task);free(storage);
-    puts("Audio threads: 1000 concurrent offline sessions; exact PCM, pinned targets, explicit stop/abort, start/read/USB/overflow failures, immediate restart and one host abort per discard PASS");
+    puts("Audio threads: 1000 concurrent offline sessions; exact PCM, pinned targets, explicit stop/abort, start/read/USB/overflow failures, immediate restart and one host abort per discard, before the next voice.begin PASS");
 }
 '''
 with tempfile.TemporaryDirectory(prefix='harness-audio-threads-') as d:
