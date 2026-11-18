@@ -6,9 +6,10 @@ use crate::desktop;
 use crate::front::{FrontFeed, FrontSource};
 use crate::install::{self, NOT_SUPPORTED, Shell};
 use crate::loginitem::LoginItem;
+use crate::logs;
 use crate::state::StateFile;
 use crate::tabs::{Out, POLL_EVERY, Select, TabApp, TabFollow, TabScripts};
-use crate::types::{Effect, Event, Log, LoginEvent};
+use crate::types::{Effect, Event, ExportFailure, Log, LoginEvent};
 use crate::update::AppUpdater;
 use crate::watch::{self, Watch};
 use std::ffi::OsString;
@@ -245,6 +246,18 @@ impl Runner {
                 Ok(()) => Event::UpdateInstalled,
                 Err(failure) => Event::UpdateFailed(failure),
             }),
+            // Not with_cli: its Cli(false) would leave the row waiting for an answer that never comes.
+            Effect::ExportLogs => match shared.cli() {
+                Some(cli) => {
+                    let (send, home) = (shared.send.clone(), shared.doors.home.clone());
+                    thread::spawn(move || send(Event::LogsExported(logs::export(&*cli, &home))));
+                }
+                None => shared.answer(Event::LogsExported(Err(ExportFailure::NoAnswer))),
+            },
+            Effect::Reveal(zip) => {
+                let args = logs::reveal_args(std::env::consts::OS, &zip);
+                shared.open(&args.iter().map(String::as_str).collect::<Vec<_>>(), "logs");
+            }
         }
         None
     }

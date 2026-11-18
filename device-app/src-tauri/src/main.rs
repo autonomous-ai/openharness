@@ -294,12 +294,13 @@ fn menu_id(action: MenuAction) -> &'static str {
         MenuAction::OpenHarness => "open_harness",
         MenuAction::About => "about",
         MenuAction::Quit => "quit",
+        MenuAction::ExportLogs => "export_logs",
     }
 }
 
 fn menu_action(id: &str) -> Option<MenuAction> {
     use MenuAction::*;
-    [Install, SignIn, SoundOn, SoundOff, NotifyFull, NotifyYou, Update, OpenHarness, About, Quit]
+    [Install, SignIn, SoundOn, SoundOff, NotifyFull, NotifyYou, Update, OpenHarness, About, Quit, ExportLogs]
         .into_iter()
         .find(|action| menu_id(*action) == id)
 }

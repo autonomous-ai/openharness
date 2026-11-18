@@ -1,6 +1,12 @@
 //! What the menu shows and which screen is due, from the app's state.
 
-use crate::types::{AppState, AppUpdate, CliState, Daemon, DialStatus, MenuAction, MenuItem, NotifyMode, Screen};
+use crate::logs::reason;
+use crate::types::{
+    AppState, AppUpdate, CliState, Daemon, DialStatus, LogsExport, MenuAction, MenuItem, NotifyMode, Screen,
+};
+
+/// The start of the line a saved export leaves in the menu, which the log writes as `Saved`.
+const SAVED_TO: &str = "Saved to ";
 
 /// The menu's first, disabled row: the first of these that applies.
 pub fn dial_line(state: &AppState) -> String {
@@ -72,6 +78,18 @@ pub fn menu(state: &AppState) -> Vec<MenuItem> {
     if state.desktop_installed {
         items.push(MenuItem::Action(MenuAction::OpenHarness, "Open Harness".into()));
     }
+    // The export runs the CLI; its answer is heard, and kept, whatever became of the CLI since.
+    if state.cli == CliState::Found {
+        items.push(match state.logs {
+            LogsExport::Running => MenuItem::Text("Exporting logs…".into()),
+            _ => MenuItem::Action(MenuAction::ExportLogs, "Export logs".into()),
+        });
+    }
+    match &state.logs {
+        LogsExport::Saved(shown) => items.push(MenuItem::Text(format!("{SAVED_TO}{shown}"))),
+        LogsExport::Failed(failure) => items.push(MenuItem::Text(format!("Export failed: {}", reason(*failure)))),
+        LogsExport::Idle | LogsExport::Running => {}
+    }
     items.push(MenuItem::Action(MenuAction::About, "About".into()));
     items.push(MenuItem::Action(MenuAction::Quit, "Quit".into()));
     items
@@ -91,6 +109,8 @@ pub fn menu_log(items: &[MenuItem]) -> String {
     let labels: Vec<String> = items
         .iter()
         .filter_map(|item| match item {
+            // The zip may be outside the home, where the line names it whole: the log never names it.
+            MenuItem::Text(label) if label.starts_with(SAVED_TO) => Some("Saved".into()),
             MenuItem::Text(label) | MenuItem::Action(_, label) | MenuItem::Check(_, label, false) => {
                 Some(label.clone())
             }

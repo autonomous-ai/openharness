@@ -2,10 +2,11 @@
 
 use crate::install::GETTING_READY;
 use crate::keepalive::{Keep, KeepAlive};
+use crate::logs::reason;
 use crate::model::{about_credits, due, menu, menu_log};
 use crate::types::{
-    Action, AppState, AppUpdate, CliState, Daemon, Effect, Event, LoginEvent, MenuAction, MenuItem, NotifyMode, Phase,
-    Saved, Screen, UpdateFailure, View,
+    Action, AppState, AppUpdate, CliState, Daemon, Effect, Event, LoginEvent, LogsExport, MenuAction, MenuItem,
+    NotifyMode, Phase, Saved, Screen, UpdateFailure, View,
 };
 
 /// The menu reads the account and the CLI's version again at most this often.
@@ -71,6 +72,7 @@ impl App {
             saved,
             app_update: AppUpdate::None,
             cli_version: None,
+            logs: LogsExport::Idle,
         };
         let mut app = App {
             state,
@@ -258,6 +260,14 @@ impl App {
                     self.stop_watch(effects);
                     effects.push(Effect::Quit);
                 }
+                // The row is a disabled line while one runs, or absent with no CLI: a click that lands then does
+                // nothing.
+                MenuAction::ExportLogs => {
+                    if self.state.cli == CliState::Found && self.state.logs != LogsExport::Running {
+                        self.state.logs = LogsExport::Running;
+                        effects.push(Effect::ExportLogs);
+                    }
+                }
             },
             Event::Act(action) => self.act(action, effects),
             // Decision 2: closing answers an offer, and never stops what runs.
@@ -306,6 +316,15 @@ impl App {
                 self.relaunch = true;
             }
             Event::UpdateFailed(failure) => self.update_failed(failure, effects),
+            // Heard whatever became of the CLI since the click: the runner always answers, so the row never waits.
+            Event::LogsExported(Ok(exported)) => {
+                self.state.logs = LogsExport::Saved(exported.shown);
+                effects.extend([Effect::Reveal(exported.zip), Effect::Log("logs: exported".into())]);
+            }
+            Event::LogsExported(Err(failure)) => {
+                self.state.logs = LogsExport::Failed(failure);
+                effects.push(Effect::Log(format!("logs: export failed: {}", reason(failure))));
+            }
         }
     }
 
