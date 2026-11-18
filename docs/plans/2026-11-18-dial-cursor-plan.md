@@ -175,15 +175,16 @@ The spec's Design section stands. Stored: two fields in files that exist. In mem
 | 10 | `harness device cursor`, and the support bundle | 4, 5 | high |
 | 11 | End to end: Cursor's terminal and folder window | 7 | xhigh |
 | 12 | End to end: Claude Code's panel link in Cursor | 7 | high |
-| 13 | Gate feasibility: a throwaway Cursor under `runTests` | none | xhigh |
-| 14 | Gate: the run for either editor | 13 | xhigh |
+| 13 | ~~Gate feasibility: a throwaway Cursor under `runTests`~~ dropped (PM, 2026-11-19) | none | xhigh |
+| 14 | ~~Gate: the run for either editor~~ dropped (PM, 2026-11-19) | 13 | xhigh |
 | 15 | Docs | none | medium |
 
 **Longest chain:** 1 → 3 → 7 → 11 (four). Tasks 1, 4, 5, 9, 13 and 15 start at once; 2 as soon as no running task
 shares its files.
 
-**Task 13 decides the gate.** If its launch does not pass, the run stops for the PM and Task 14 does not start. No
-task outside 13 and 14 depends on either.
+**Tasks 13 and 14 are dropped (PM, 2026-11-19).** Task 13's one launch ran, but the throwaway Cursor's crash
+reporting wrote into the person's own `~/Library/Application Support/Cursor/` (spec §7). Nothing of either lands on
+this branch, and `npm run test:cursor` is never run. No other task depended on them.
 
 **Task 8 waits for Task 9** though they share no file: without `HARNESS_CURSOR_BIN` an end-to-end daemon on a Mac
 with Cursor would install Harness's extension into the developer's own Cursor.
@@ -951,7 +952,7 @@ panel in Cursor opens by cursor://`): one commit, no red test.
   `[['-b', CURSOR, 'cursor://anthropic.claude-code/open?session=<v2>'], ['-b', CURSOR, 'cursor://…<v1>']]`.
 - [ ] **Step 3: Commit** `Dial: a rest opens Claude Code's panel session in Cursor by its link, end to end`.
 
-### Task 13: Gate feasibility: a throwaway Cursor under `runTests`
+### Task 13 (dropped, spec §7): Gate feasibility: a throwaway Cursor under `runTests`
 
 **Depends on:** none. **Effort:** xhigh (it starts a copy of an app on the person's Mac). Run it in a desktop session
 on this Mac: a Cursor window opens for some seconds.
@@ -1068,7 +1069,7 @@ it('a changed file is said to be the named app\'s', …)                        
   attempt passed, commit the same files with `(feasibility: not passed)` at the message's end, and **stop: report to
   the main session, which asks the PM.** Task 14 does not start. Do not try a third way.
 
-### Task 14: Gate: the run for either editor
+### Task 14 (dropped, spec §7): Gate: the run for either editor
 
 **Depends on:** 13 (passed). **Effort:** xhigh. A check and its tools, no product behavior: one commit, no red test.
 Run in a desktop session on this Mac.
@@ -1193,19 +1194,16 @@ as one tester group (check 2), and the whole suite runs once on GitHub at the fi
 | 1 | **Unit:** `cd cli && npx tsc --noEmit -p . && npx vitest run src/cable/hosts/observed.spec.ts src/cable/hosts/vscode.spec.ts src/cable/hosts/cursorFolder.spec.ts src/cable/hosts/vscodeTerminals.spec.ts src/cable/vscodeExtensionSetup.spec.ts src/cable/dialSetup.spec.ts src/cable/dialHomeSetup.spec.ts src/devices src/deviceClaude src/lib/logBundleFacts.spec.ts src/lib/logBundle.spec.ts src/services/devices.spec.ts ../plugins/harness-device-vscode src/architecture.spec.ts src/architecture.startEnvironment.spec.ts src/config/harnessHome.guard.spec.ts` | this Mac; PR CI on Linux | fakes only: a fake `open`, fake editors, records under each spec's temporary folder | all pass; each behavior's test was committed red before its code; no log line of a case holds its `SECRET-` marker |
 | 2 | **CLI end to end, the touched files, locally in phase 4 (one tester group):** `cd cli && TMPDIR=/tmp npx vitest run --config vitest.e2e.config.ts e2e/dialVscode.e2e.ts e2e/dialVscodeFollow.e2e.ts e2e/developerState.e2e.ts` | this Mac | the repo's own (cli/AGENTS.md rule 6): each daemon under a throwaway root and home on a port of its own (never 18473), a fake dial, the fake engine under a fake Cursor in a pseudo-terminal, the extension's real loop over a fake window, the harness's fake `open`; `HARNESS_CURSOR_BIN` and `HARNESS_VSCODE_BIN` name files that are not there; no Cursor, no VS Code, no `claude` | every case passes; Cursor's shows its terminal, raises its window, scrolls three lines, and records `open -b com.todesktop.230313mzl4w4u92 <folder>` and the `cursor://` link; no line of the devices holds the folder, a pid, a window's id or a session's id |
 | 3 | **CLI end to end on Linux, the whole suite, one run at the final head, only on the PM's go** (PM, 2026-11-18): `gh workflow run cli-e2e.yml --ref feat/dial-cursor` (Actions → CLI end to end → Run workflow). The merge does not wait for it unless the PM says so. | GitHub, eight Linux runners | each daemon under a throwaway root, fake dials, fake engines | every shard green, `e2e/dialVscode.e2e.ts` and `e2e/developerState.e2e.ts` among them; `dialVscodeFollow.e2e.ts` is skipped off macOS |
-| 4 | **The extension in a real Cursor:** `cd cli && npm run test:cursor` | this Mac, in a desktop session (it opens a window), with Cursor in `/Applications` | a clone of `Cursor.app` in a temporary root, rebranded to `ai.autonomous.harness.cursor-gate` and signed ad hoc before any launch, with its own user data, extensions and home, all removed at the end; never the person's Cursor, `~/.cursor` or a `cursor://` link | a Cursor window opens and closes by itself; six cases pass; `~/Library/Preferences/com.todesktop.230313mzl4w4u92.plist` is as it was |
-| 5 | **The extension in a real VS Code,** since the gate's shared code changes: `cd cli && npm run test:vscode` | this Mac, in a desktop session | as today: a downloaded VS Code under a temporary root with a bundle id of its own | a VS Code window opens and closes by itself; six cases pass |
-| 6 | **Local gates' receipt:** `python3 scripts/local-checks.py --run` from a clean tree at the final commit. `cli/package.json` changes (the `test:cursor` script), so it runs every `cli-*` gate, `cli-core` (`devices.ts` at 100%) among them. Its output goes in the pull request body before the push that carries that head. | this Mac | the unit suites' own | one `harness-local-checks` fence, every gate passed |
+| 6 | **Local gates' receipt:** `python3 scripts/local-checks.py --run` from a clean tree at the final commit. It runs the gates the changed files select, `cli-core` (`devices.ts` at 100%) among them. Its output goes in the pull request body before the push that carries that head. | this Mac | the unit suites' own | one `harness-local-checks` fence, every gate passed |
 | 7 | **By a person, in the morning. Needs Diego himself** (his Cursor, his Claude Code login, his dial, his eye). Listed in the pull request body; it does not hold the merge. | Diego's Mac | his own Cursor: a check only he can do | (a) a Claude Code panel session in Cursor: a tap on the dial opens its tab; (b) Cursor's Extensions view lists Harness Device after the dial attached; (c) a tap on Cursor's own agent opens its folder's window; (d) with two Cursor windows, a tap on a terminal agent in the one behind brings that window forward |
 
 **No temporary workflow.** The one long check that can run on GitHub, the end-to-end suite, has its own workflow,
-started by hand only on the PM's go. The two gates open an app's window and need this Mac.
+started by hand only on the PM's go. No real-app gate runs (spec §7).
 
 No check runs against production: nothing here calls a backend. No check uses an account: checks 1 to 6 need none,
 and check 7 is the person's own.
 
 **In the pull request:** the red-then-green commits; checks 1 to 6 with their output or links; Task 7's numbers; the
 platforms (macOS all of it; Linux the setup and a terminal's tap, and in Cursor on Linux no swipe or scroll, said
-so: "On Linux, in Cursor, a tap shows the terminal; swipe and scroll do not follow"; Windows unchanged); Task 13's
-report; the three log lines this work adds, word for word; Diego's morning check (7), (a) to (d).
+so: "On Linux, in Cursor, a tap shows the terminal; swipe and scroll do not follow"; Windows unchanged); the dropped Cursor gate and why (spec §7), with the three files it wrote into Diego's Cursor folder; the three log lines this work adds, word for word; Diego's morning check (7), (a) to (d).
 

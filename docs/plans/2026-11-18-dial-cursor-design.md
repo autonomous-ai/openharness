@@ -40,6 +40,7 @@ or window is chosen, and swipe and scroll do nothing. The VS Code work already h
    preferences plist checked before and after; the copy's own preferences removed after (Q3).
 4. cursor-agent in a terminal: tap, swipe and scroll; no page keys (Q4).
 5. No change in the core; paths under `~/.harness` only through `cli/src/config/harnessHome.ts`.
+6. Q3 reversed (PM, 2026-11-19): no real-app gate in this work (§7).
 
 ## What a person sees
 
@@ -153,17 +154,15 @@ Every script that sets `HARNESS_VSCODE_BIN` for a local stack sets `HARNESS_CURS
 (`scripts/remote-viewers-stack.ts`, `scripts/local-stack-peer.ts`, `scripts/remote-viewer-peer.ts`).
 `cli/src/services/AGENTS.md`'s `vscode` stream paragraph says Cursor's windows use it too.
 
-### 7. The real-app gate (`plugins/harness-device-vscode/gate/`)
+### 7. No real-app gate in this work (PM, 2026-11-19)
 
-The VS Code gate's run, parameterized by editor. `throwawayApp.ts` takes the app's original bundle id, gate id and
-preferences path from a table instead of Microsoft's constants (Cursor: `com.todesktop.230313mzl4w4u92`,
-`ai.autonomous.harness.cursor-gate`, `~/Library/Preferences/com.todesktop.230313mzl4w4u92.plist`), and `rebrand`
-rewrites whichever original id it is given. VS Code's run downloads VS Code as today; Cursor's clones
-`/Applications/Cursor.app` (`cp -c`, APFS, no copy of its 932 MB) into the root and finds its CLI at `bin/cursor`.
-`cli/vitest.vscode.config.ts` includes only the VS Code gate; a `cli/vitest.cursor.config.ts` (`npm run test:cursor`)
-includes only Cursor's. Whether `@vscode/test-electron`'s `runTests` drives Cursor past its updater and sign-in screen
-is not known yet: the plan's first gate task finds out, and if it cannot, the child stops and asks the PM before any
-other gate work (the rest of this spec does not depend on it).
+A throwaway Cursor (a rebranded, re-signed APFS clone of `/Applications/Cursor.app`, run under `@vscode/test-electron`
+with its own `--user-data-dir`, extensions and `HOME`) did run the extension and its driver, but its crash reporting
+(Crashpad and Sentry) wrote into the person's own `~/Library/Application Support/Cursor/` (`Crashpad/settings.dat`,
+`sentry/session.json`, `sentry/scope_v3.json`): it follows the app's name, not the user data folder or `HOME`, and the
+plist check does not see it. The gate is dropped from this branch and `npm run test:cursor` does not exist. A Cursor
+gate is later work, on a VM or a machine with no person's Cursor on it. Cursor is checked here by unit tests, the e2e
+and Diego's own check in the morning (Verification).
 
 ## Measures (rule 8)
 
@@ -217,27 +216,18 @@ a pid, a window id, a path or a name.
   Cursor's bundle; with no reported terminal, a tap's fake `open` records Cursor's bundle and its folder; the panel
   tab's link is `cursor://` as `dialVscodeFollow.e2e.ts` checks `vscode://`. The e2e harness's `FakeApp` gains
   `cursor`; its engines stay `claude` and `codex` (cursor-agent's terminal pane is unit-tested).
-- Real-app gate, local, macOS (`npm run test:cursor` in `cli/`, §7): the gate run on a clone (`cp -c`) of
-  `/Applications/Cursor.app` in a temporary root, rebranded to `ai.autonomous.harness.cursor-gate` and re-signed ad hoc
-  before any launch, with its own user data, extensions and home. It checks the extension installs,
-  reports its terminals, shows, scrolls and presses page keys in Cursor; no raise case, as VS Code's gate (PM plan
-  question 2). Before and after:
-  `~/Library/Preferences/com.todesktop.230313mzl4w4u92.plist` unchanged (the run fails otherwise); after: the copy's
-  own preferences removed and LaunchServices holds nothing of its id. It fails, not skips, when Cursor is not installed.
-  It never opens a `cursor://` link (LaunchServices would hand it to the person's own Cursor).
-- Not gated: Claude Code's panel link in a real Cursor (it needs Claude Code signed in, and the `cursor://` scheme
-  belongs to the person's Cursor). The link's code is the one VS Code's tap uses (#4407). Diego's morning check, in
-  the PR body, not holding the merge: a Claude Code panel session in Cursor, tap it on the dial; and with two Cursor
-  windows, a tap on a terminal agent in the one behind brings that window forward.
-- Local gates: `npx tsc --noEmit -p .` and the touched Vitest files in `cli/`; the extension's Vitest; `npm run
-  test:vscode` too, since the gate's shared code changes.
+- No real-app gate (§7). Diego's morning check, in the PR body, not holding the merge, in his own Cursor once the
+  extension installs itself there: Claude Code or cursor-agent in Cursor's terminal (tap, swipe, scroll, Claude Code's
+  fullscreen pages); a Claude Code panel session (tap); Cursor's own agent (tap opens its folder's window); with two
+  Cursor windows, a tap on a terminal agent in the one behind brings that window forward.
+- Local gates: `npx tsc --noEmit -p .` and the touched Vitest files in `cli/`; the extension's Vitest. The VS Code gate
+  (`npm run test:vscode`) is untouched by this branch.
 
 ## Docs changed in the same pull request
 
 - `plugins/harness-device-vscode/README.md`: runs in Cursor; `harness device cursor disable`.
 - `docs/cli.md`: one row for `harness device vscode enable|disable` and `harness device cursor enable|disable` (the
   table has `claude` and `codex` rows and none for `vscode` yet).
-- `docs/validation-and-release.md`: the Cursor gate's row beside the VS Code gate's.
 - `cli/src/services/AGENTS.md`: the `vscode` stream serves Cursor's windows too.
 - `cli/AGENTS.md`: the devices row names Cursor (PM plan question 3).
 - `docs/plans/2026-11-17-dial-vscode-extension-design.md` "Platforms": Cursor now covered, by this spec.
