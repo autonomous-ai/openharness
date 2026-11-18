@@ -1,3 +1,4 @@
+import { createQuestionPresentations } from '../core/questions.js'
 import { cloudFactory } from '../testing/sessionFactories.js'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -27,7 +28,8 @@ vi.mock('node:fs', async importOriginal => {
 function fixture() {
   const dataDir = mkdtempSync(join(tmpdir(), 'cloud-publication-'))
   const clients = { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }
-  const freshCore = () => createCloudAgents({ ownsFactory: cloudFactory, port: () => null, clients, openQuestions: new Map(), log: () => {} })
+  let service: ReturnType<typeof startCloudService>
+  const freshCore = () => createCloudAgents({ ownsFactory: cloudFactory, port: () => service?.port ?? null, clients, questions: createQuestionPresentations(), log: () => {} })
   let core = freshCore(), disconnected = false, lostAck = false, publicationCalls = 0
   let poll: (() => void) | undefined
   const rejected = () => { const result = Promise.reject(new Error('fixture disconnect')); void result.catch(() => {}); return result }
@@ -52,7 +54,7 @@ function fixture() {
     setTimer: fn => { poll = fn; return fn }, clearTimer: () => {},
     adapters: { 'devin-cloud': adapter },
   })
-  let service = makeService()
+  service = makeService()
   const completions = () => clients.sendCommander.mock.calls.map(([frame]) => frame)
     .filter(frame => frame.type === 'commander_event' && frame.payload.notification?.kind === 'done')
   return { row: () => JSON.parse(readFileSync(join(dataDir, 'cloud/harnesses.json'), 'utf8')).harnesses[0].harness, dataDir, clients, completions, adapter, publicationCalls: () => publicationCalls, poll: () => poll!(), get core() { return core }, get service() { return service },
@@ -259,5 +261,27 @@ it('reconstructs a question only on the next provider look after a component res
     expect(next.payload.requestId).not.toBe(first.payload.requestId)
     expect(f.clients.sendLocal.mock.calls.at(-2)![0]).toMatchObject({ type: 'commander_question_close', payload: { requestId: first.payload.requestId } })
     expect(f.completions()).toEqual([])
+  } finally { f.close() }
+})
+
+
+it('accepts a real service answer that closes its question before the provider reply', async () => {
+  const f = fixture()
+  try {
+    const id = await f.create()
+    f.adapter.poll.mockResolvedValueOnce({ state: 'needs_input', messages: [{ id: 'answer-question', text: 'Which branch?', at: 'x' }], question: { text: 'Which branch?', choices: ['main', 'dev'] } } as never)
+    f.poll()
+    await vi.waitFor(() => expect(f.clients.sendLocal.mock.calls.at(-1)?.[0].type).toBe('commander_question'))
+    const requestId = f.clients.sendLocal.mock.calls.at(-1)![0].payload.requestId
+    let finish!: () => void
+    f.adapter.send.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const answering = f.core.answer({ requestId, answers: { answer: 'main' } })
+    expect(answering).not.toBeNull()
+    await vi.waitFor(() => expect(f.adapter.send).toHaveBeenCalledOnce())
+    await vi.waitFor(() => expect(f.clients.sendLocal).toHaveBeenLastCalledWith({ type: 'commander_question_close', agentId: id, dbSessionId: id, payload: { requestId } }))
+    expect(f.core.answer({ requestId, answers: { answer: 'dev' } })).toBeNull()
+    finish()
+    expect(await answering).toEqual({ ok: true })
+    expect(f.adapter.send).toHaveBeenCalledExactlyOnceWith(expect.any(Object), 'main')
   } finally { f.close() }
 })

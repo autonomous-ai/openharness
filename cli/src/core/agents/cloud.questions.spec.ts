@@ -1,20 +1,22 @@
+import { createQuestionPresentations } from '../questions.js'
 import { cloudFactory } from '../../testing/sessionFactories.js'
 import { answerExperimentQuery } from '../experimentQueries.js'
 import { fakeCore } from '../../testing/fakeCore.js'
 import { cloudQuestionClose, prepareCloudQuestion } from '../../cloud/questions.js'
 import { expect, it, vi } from 'vitest'
 import { createCloudAgents } from './cloud.js'
+import { CLOUD_ANSWER_DOWN } from '../api.js'
 import type { CloudHarness } from '../../lib/cloudAgents.js'
 
 const owner: CloudHarness = { agentId: 'cloud_1', agent: 'devin-cloud', name: 'Fixture', state: 'needs_input', activity: null,
   repository: null, branch: null, links: [], messages: 1, createdAt: '2026-11-18T00:00:00.000Z', updatedAt: '2026-11-18T00:00:00.000Z' }
-function fixture() {
-  const clients = { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }, openQuestions = new Map<string, Record<string, unknown>>()
+function fixture(whenStarting?: () => Promise<boolean> | null) {
+  const clients = { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }, questions = createQuestionPresentations(), openQuestions = questions.openQuestions
   const answer = vi.fn(async () => ({ ok: true as const }))
   const port = { answer }
-  const cloud = createCloudAgents({ ownsFactory: cloudFactory, clients, openQuestions, port: () => port as never, log: () => {} })
+  const cloud = createCloudAgents({ ownsFactory: cloudFactory, clients, questions, whenStarting, port: () => port as never, log: () => {} })
   cloud.doors.publish([owner])
-  return { cloud, clients, openQuestions, answer }
+  return { cloud, clients, openQuestions, questions, answer }
 }
 it('an old close cannot erase the replacement question for the same owner', () => {
   const { cloud, openQuestions } = fixture()
@@ -125,10 +127,11 @@ it('enforces encoded byte bounds as well as character bounds', () => {
   expect(cloud.doors.unask(agentId, requestId, close)).toEqual(invalid)
 })
 it('does not delete another question written to the shared session question slot', () => {
-  const { cloud, openQuestions } = fixture()
+  const { cloud, openQuestions, questions } = fixture()
   cloud.doors.ask('cloud_1', 'cloud_q_one', question())
+  cloud.doors.unask('cloud_1', 'cloud_q_one', cloudQuestionClose('cloud_1', 'cloud_q_one'))
   const newer = { type: 'commander_question', payload: { requestId: 'another_source' } }
-  openQuestions.set('cloud_1', newer)
+  expect(questions.set({}, 'cloud_1', newer, { dial: false, remote: true })).toBe(true)
   expect(cloud.answer({ requestId: 'cloud_q_one' })).toBeNull()
   cloud.doors.unask('cloud_1', 'cloud_q_one', cloudQuestionClose('cloud_1', 'cloud_q_one'))
   expect(openQuestions.get('cloud_1')).toBe(newer)
@@ -150,4 +153,60 @@ it('returns truthful prepared-question refusal through the real dispatcher and f
   current = true
   expect(await answerExperimentQuery(core, active, 'cloud', 'cloud_unask', close, undefined, authority)).toEqual({ ok: true })
   expect(openQuestions.size).toBe(0)
+})
+
+
+it.each(['retired', 'replaced', 'retired and replayed', 'owner recreated'] as const)('fences an answer whose question is %s during startup', async change => {
+  let ready!: (up: boolean) => void
+  const starting = new Promise<boolean>(resolve => { ready = resolve })
+  const f = fixture(() => starting)
+  f.cloud.doors.ask(owner.agentId, 'cloud_q_one', question())
+  const pending = f.cloud.answer({ requestId: 'cloud_q_one', answers: { answer: 'Yes' } })
+  expect(f.answer).not.toHaveBeenCalled()
+  if (change === 'owner recreated') { f.cloud.doors.publish([]); f.cloud.doors.publish([owner]) }
+  else f.cloud.doors.unask(owner.agentId, 'cloud_q_one', cloudQuestionClose(owner.agentId, 'cloud_q_one'))
+  if (change === 'replaced') f.cloud.doors.ask(owner.agentId, 'cloud_q_two', question('cloud_q_two'))
+  if (change === 'retired and replayed' || change === 'owner recreated') f.cloud.doors.ask(owner.agentId, 'cloud_q_one', question())
+  ready(true)
+  expect(await pending).toEqual(CLOUD_ANSWER_DOWN)
+  expect(f.answer).not.toHaveBeenCalled()
+})
+
+it('keeps the canonical question identity across an identical Cloud replay during startup', async () => {
+  let ready!: (up: boolean) => void
+  const starting = new Promise<boolean>(resolve => { ready = resolve })
+  const f = fixture(() => starting)
+  f.cloud.doors.ask(owner.agentId, 'cloud_q_one', question())
+  const accepted = f.questions.request('cloud_q_one')
+  const pending = f.cloud.answer({ requestId: 'cloud_q_one', answers: { answer: 'Yes' } })
+  f.cloud.doors.publish([{ ...owner, messages: 2 }])
+  expect(f.cloud.doors.ask(owner.agentId, 'cloud_q_one', { ...question(), dial: false })).toEqual({ ok: true })
+  ready(true)
+  expect(await pending).toEqual({ ok: true })
+  expect(f.answer).toHaveBeenCalledExactlyOnceWith(owner.agentId, 'cloud_q_one', { answer: 'Yes' })
+  expect(f.questions.request('cloud_q_one')).toBe(accepted)
+})
+
+it.each(['removed', 'recreated with identical facts', 'replaced by a different incarnation'] as const)('fences an answer result after its owner is %s', async change => {
+  const f = fixture()
+  let finish!: (value: { ok: true }) => void
+  f.answer.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+  f.cloud.doors.ask(owner.agentId, 'cloud_q_one', question())
+  const pending = f.cloud.answer({ requestId: 'cloud_q_one', answers: { answer: 'Yes' } })
+  // The real service closes the answered question before replying. Owner revocation still wins.
+  f.cloud.doors.unask(owner.agentId, 'cloud_q_one', cloudQuestionClose(owner.agentId, 'cloud_q_one'))
+  finish({ ok: true })
+  if (change !== 'replaced by a different incarnation') f.cloud.doors.publish([])
+  if (change !== 'removed') f.cloud.doors.publish([{ ...owner, ...(change === 'replaced by a different incarnation' ? { createdAt: '2026-11-19T00:00:00.000Z' } : {}) }])
+  expect(await pending).toEqual(CLOUD_ANSWER_DOWN)
+})
+
+
+it('retires a question when the same id is published as a different owner incarnation', () => {
+  const f = fixture()
+  f.cloud.doors.ask(owner.agentId, 'cloud_q_one', question())
+  f.cloud.doors.publish([{ ...owner, createdAt: '2026-11-19T00:00:00.000Z' }])
+  expect(f.cloud.answer({ requestId: 'cloud_q_one', answers: { answer: 'Yes' } })).toBeNull()
+  expect(f.openQuestions.size).toBe(0)
+  expect(f.clients.sendLocal).toHaveBeenLastCalledWith(cloudQuestionClose(owner.agentId, 'cloud_q_one'))
 })

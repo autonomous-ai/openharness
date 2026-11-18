@@ -1,9 +1,10 @@
+import { createQuestionPresentations } from '../questions.js'
 import { cloudFactory } from '../../testing/sessionFactories.js'
 import { ENGINES } from '../../engines/types.js'
 import { SERVICE_HOSTS, sessionFactoryOwners } from '../../harnessd/services.js'
 import { describe, expect, it, vi } from 'vitest'
 import { CLOUD_DOWN, type CloudPort } from '../api.js'
-import { cloudAgentFrame, type CloudHarness } from '../../lib/cloudAgents.js'
+import { cloudAgentFrame, cloudFingerprint, cloudHarnessIn, type CloudHarness } from '../../lib/cloudAgents.js'
 import { prepareCloudQuestion } from '../../cloud/questions.js'
 import { createCloudAgents } from './cloud.js'
 
@@ -17,7 +18,7 @@ function setup() {
   const rename = vi.fn(() => new Promise(done => { resolve = done }))
   let current = { rename } as unknown as CloudPort | null
   const clients = { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }
-  const cloud = createCloudAgents({ ownsFactory: cloudFactory, port: () => current, clients, openQuestions: new Map(), log: () => {} })
+  const cloud = createCloudAgents({ ownsFactory: cloudFactory, port: () => current, clients, questions: createQuestionPresentations(), log: () => {} })
   cloud.doors.publish([owner]); clients.send.mockClear(); clients.sendCommander.mockClear()
   return { cloud, clients, rename, resolve: (value: unknown) => resolve(value), replace: () => { current = { rename } as unknown as CloudPort }, disable: () => { current = null } }
 }
@@ -51,7 +52,7 @@ function immediate(value: unknown, starting?: () => Promise<boolean> | null, own
   const call = vi.fn(async () => value)
   let port = { create: call, deliver: call, answer: call, rename: call, stopHarness: call } as unknown as CloudPort
   const clients = { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }, log = vi.fn()
-  const cloud = createCloudAgents({ ownsFactory, port: () => port, whenStarting: starting, clients, openQuestions: new Map(), log })
+  const cloud = createCloudAgents({ ownsFactory, port: () => port, whenStarting: starting, clients, questions: createQuestionPresentations(), log })
   cloud.doors.publish([owner]); cloud.doors.ask(owner.agentId, 'cloud_q_1', prepareCloudQuestion(owner.agentId, 'cloud_q_1', { text: 'Which?', choices: [] }))
   clients.send.mockClear(); clients.sendCommander.mockClear()
   return { cloud, call, clients, log, replace: () => { port = { ...port } } }
@@ -152,4 +153,18 @@ it('checks prepared create, answer, Stop and delivery shapes on the same inline 
     expect(await immediate(value).cloud.deliver(owner.agentId, 'hello')).toEqual(CLOUD_DOWN)
   }
   expect(await immediate({ ok: false, error: 'BUSY', detail: 'wait' }).cloud.deliver(owner.agentId, 'hello')).toEqual({ ok: false, error: 'BUSY', detail: 'wait' })
+})
+
+
+it('keeps owner incarnation metadata out of checkpoints, frames and raw prepared rename keys', async () => {
+  const t = setup(), normalized = cloudHarnessIn(owner)!
+  expect(t.cloud.doors.checkpoint()).toBe(cloudFingerprint([normalized]))
+  expect(JSON.stringify(t.cloud.frames())).toBe(JSON.stringify([cloudAgentFrame(normalized)]))
+  const pending = t.cloud.update({ agentId: owner.agentId, name: 'Renamed' })
+  const args = t.rename.mock.calls[0] as unknown as [string, string, CloudHarness]
+  expect(JSON.stringify(args[2])).toBe(JSON.stringify(normalized))
+  expect(Reflect.ownKeys(args[2])).toEqual(Reflect.ownKeys(normalized))
+  expect(Object.getOwnPropertySymbols(args[2])).toEqual([])
+  t.resolve(prepared())
+  expect(await pending).toEqual({ agent: prepared().agent })
 })

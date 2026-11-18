@@ -13,6 +13,7 @@ import { CLOUD_DOWN, CLOUD_REPLY_DOWN, CLOUD_ANSWER_DOWN } from '../api.js'
 import { cloudAgentFrame, cloudFingerprint, cloudHarnessIn, type CloudAgentFrame, type CloudHarness } from '../../lib/cloudAgents.js'
 import { boundedJsonBytes } from '../../lib/boundedJsonBytes.js'
 import type { QuestionAnswerResult } from '../../lib/questionController.js'
+import { questionClose, type QuestionPresentation, type QuestionPresentations } from '../questions.js'
 
 type Frame = { type: string; agentId?: string; dbSessionId?: string; payload: Record<string, unknown> }
 
@@ -26,7 +27,7 @@ export interface CloudAgentsDeps {
   /** Every client (`send`), the dial (`sendCommander`) and the windows on this computer (`sendLocal`). */
   clients: { send(frame: Frame): void; sendCommander(frame: Frame): void; sendLocal(frame: Frame): void }
   /** What is still being asked, by agent, for a window that connects later (core/questions.ts). */
-  openQuestions: Map<string, Record<string, unknown>>
+  questions: QuestionPresentations
   log?: (line: string) => void
 }
 
@@ -81,21 +82,24 @@ const answerReply = (value: unknown): boolean => fields(value, ['ok']) && value.
 const stopReply = (value: unknown): boolean => refusal(value) || record(value) && value.deleted === true
   && (value.detail === undefined || typeof value.detail === 'string') && Object.keys(value).every(key => key === 'deleted' || key === 'detail')
 
-export function createCloudAgents({ ownsFactory, port, whenStarting, clients, openQuestions, log = (line) => console.log(line) }: CloudAgentsDeps) {
+export function createCloudAgents({ ownsFactory, port, whenStarting, clients, questions, log = (line) => console.log(line) }: CloudAgentsDeps) {
   const agentReply = (value: unknown): value is CloudAgentFrame => record(value) && typeof value.id === 'string'
     && value.id.startsWith('cloud_') && value.id.length <= 80 && value.sessionId === value.id && ownsFactory(value.engine)
     && value.location === 'cloud' && typeof value.name === 'string' && value.name.length <= 120 && typeof value.createdAt === 'string'
-  let harnesses = new Map<string, CloudHarness>()
-  /** One accepted request per owner; its original close destination survives reconnects and replacement. */
-  const asked = new Map<string, { agentId: string; close: CloudQuestionClose; dial: boolean }>()
-  const retire = (requestId: string): void => {
-    const prior = asked.get(requestId)!
-    asked.delete(requestId)
-    if (prior.dial) clients.sendCommander(prior.close)
-    clients.sendLocal(prior.close)
-    if ((openQuestions.get(prior.agentId)?.payload as { requestId?: unknown } | undefined)?.requestId === requestId) openQuestions.delete(prior.agentId)
+  const incarnation = Symbol('owner')
+  type Owner = CloudHarness & { [incarnation]: object }
+  let harnesses = new Map<string, Owner>()
+  const questionOwner = {}
+  const close = (entry: QuestionPresentation): void => {
+    const frame = questionClose(entry.frame)
+    if (entry.dial) clients.sendCommander(frame)
+    clients.sendLocal(frame)
   }
-  const currentRequest = (agentId: string): string | undefined => (openQuestions.get(agentId)?.payload as { requestId?: string } | undefined)?.requestId
+  const retire = (requestId: string): void => {
+    const prior = questions.request(requestId)
+    if (prior?.owner === questionOwner && questions.remove(questionOwner, prior.key, requestId)) close(prior)
+  }
+  const currentRequest = (agentId: string): string | undefined => questions.current(agentId)?.requestId
   const invalidQuestion = () => { log('[cloud] CLOUD_QUESTION_INVALID'); return { ok: false, error: 'CLOUD_QUESTION_INVALID' } as const }
 
   const sync = (harness: CloudHarness): void => {
@@ -115,11 +119,15 @@ export function createCloudAgents({ ownsFactory, port, whenStarting, clients, op
     checkpoint: () => cloudFingerprint([...harnesses.values()]),
     publish(list, cards = []) {
       if (!Array.isArray(list)) return invalid()
-      const next = new Map<string, CloudHarness>()
+      const next = new Map<string, Owner>()
       for (const raw of list) {
         const harness = cloudHarnessIn(raw)
         if (!harness || next.has(harness.agentId)) return invalid()
-        next.set(harness.agentId, harness)
+        const prior = harnesses.get(harness.agentId)
+        // Authority survives ordinary snapshots, but not removal/recreation with identical provider facts.
+        const token = prior?.agent === harness.agent && prior.createdAt === harness.createdAt ? prior[incarnation] : {}
+        Object.defineProperty(harness, incarnation, { value: token })
+        next.set(harness.agentId, harness as Owner)
       }
       if (!admittedCards(cards, next)) return invalid()
       const byOwner = new Map(cards.map(card => [card.agentId, card]))
@@ -127,6 +135,10 @@ export function createCloudAgents({ ownsFactory, port, whenStarting, clients, op
       harnesses = next
       for (const [agentId, harness] of next) {
         const prior = before.get(agentId)
+        if (prior && prior[incarnation] !== harness[incarnation]) {
+          const requestId = currentRequest(agentId)
+          if (requestId) retire(requestId)
+        }
         if (JSON.stringify(prior) === JSON.stringify(harness)) continue
         sync(harness)
         const frame = byOwner.get(agentId)
@@ -135,7 +147,7 @@ export function createCloudAgents({ ownsFactory, port, whenStarting, clients, op
       }
       for (const agentId of before.keys()) if (!next.has(agentId)) {
         const requestId = currentRequest(agentId)
-        if (requestId && asked.has(requestId)) retire(requestId)
+        if (requestId) retire(requestId)
         gone(agentId)
       }
       return { ok: true }
@@ -143,40 +155,41 @@ export function createCloudAgents({ ownsFactory, port, whenStarting, clients, op
     ask(agentId, requestId, question) {
       if (!harnesses.has(agentId) || typeof requestId !== 'string' || !requestId.startsWith('cloud_q_') || requestId.length > 80
         || !admittedQuestion(question, agentId, requestId)) return invalidQuestion()
-      const prior = asked.get(requestId)
-      if (prior && (prior.agentId !== agentId || question.dial && !prior.dial
-        || JSON.stringify(openQuestions.get(agentId)) !== JSON.stringify(question.frame))) return invalidQuestion()
+      const prior = questions.request(requestId)
+      if (prior && (prior.owner !== questionOwner || prior.key !== agentId || question.dial && !prior.dial
+        || JSON.stringify(prior.frame) !== JSON.stringify(question.frame))) return invalidQuestion()
       // Inline callers retain their own objects. Keep only admitted immutable wire bytes, as IPC already does.
       const presentation: CloudQuestionPresentation = JSON.parse(JSON.stringify(question))
-      const oldRequest = currentRequest(agentId)
-      if (oldRequest && oldRequest !== requestId && asked.has(oldRequest)) retire(oldRequest)
-      asked.set(requestId, prior ?? { agentId, close: presentation.close, dial: presentation.dial })
+      const previous = questions.current(agentId)
+      const replacing = !!previous && previous.requestId !== requestId
+      if (!prior && !questions.set(questionOwner, agentId, presentation.frame,
+        { dial: presentation.dial, remote: false }, replacing)) return invalidQuestion()
+      if (replacing) close(previous)
       if (presentation.dial) clients.sendCommander(presentation.frame)
       clients.sendLocal(presentation.frame)
-      openQuestions.set(agentId, presentation.frame as unknown as Record<string, unknown>)
       log('[cloud] question accepted')
       return { ok: true }
     },
     unask(agentId, requestId, close) {
       if (typeof agentId !== 'string' || !agentId.startsWith('cloud_') || agentId.length > 80 || typeof requestId !== 'string' || !requestId.startsWith('cloud_q_') || requestId.length > 80
         || !admittedClose(close, agentId, requestId)) return invalidQuestion()
-      const prior = asked.get(requestId)
+      const prior = questions.request(requestId)
       if (!prior) return { ok: true }
-      if (prior.agentId !== agentId || !harnesses.has(agentId)) return invalidQuestion()
+      if (prior.owner !== questionOwner || prior.key !== agentId || !harnesses.has(agentId)) return invalidQuestion()
       retire(requestId)
       return { ok: true }
     },
   }
 
   const call = async <T>(work: (cloud: CloudPort) => Promise<T>, fallback: T, admit: (value: unknown) => boolean,
-    current = () => true, apply = (_value: T): void => {}): Promise<T> => {
+    current: (phase: 'dispatch' | 'result') => boolean = () => true, apply = (_value: T): void => {}): Promise<T> => {
     const starting = whenStarting?.()
     if (starting && !await starting) return fallback
     const cloud = port()
-    if (!cloud || !current()) return fallback
+    if (!cloud || !current('dispatch')) return fallback
     const result = await work(cloud)
     // The final physical-connection and owner check shares the synchronous continuation with its effects.
-    if (port() !== cloud || !current()) return fallback
+    if (port() !== cloud || !current('result')) return fallback
     if (boundedJsonBytes(result, 256 * 1024) === null || !admit(result)) {
       log('[cloud] CLOUD_RESPONSE_INVALID')
       return fallback
@@ -243,11 +256,16 @@ export function createCloudAgents({ ownsFactory, port, whenStarting, clients, op
     /** `question_response` to a cloud harness's question, answered as a terminal agent's is; null when it is not one. */
     answer(payload: { requestId?: unknown; answers?: unknown }): Promise<QuestionAnswerResult> | null {
       const requestId = typeof payload.requestId === 'string' ? payload.requestId : ''
-      const agentId = asked.get(requestId)?.agentId
-      if (!agentId || !harnesses.has(agentId) || currentRequest(agentId) !== requestId) return null
+      const question = questions.request(requestId)
+      const agentId = question?.owner === questionOwner ? question.key : undefined
+      const owner = agentId ? harnesses.get(agentId) : undefined
+      if (!agentId || !owner || questions.current(agentId) !== question) return null
       const answers = Object.fromEntries(Object.entries(payload.answers && typeof payload.answers === 'object' ? payload.answers : {})
         .filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
-      return call(cloud => cloud.answer(agentId, requestId, answers), CLOUD_ANSWER_DOWN, answerReply)
+      return call(cloud => cloud.answer(agentId, requestId, answers), CLOUD_ANSWER_DOWN, answerReply,
+        phase => harnesses.get(agentId)?.[incarnation] === owner[incarnation]
+          // A successful service answer closes its own question before returning.
+          && (phase === 'result' || questions.current(agentId) === question))
     },
     /**
      * `agent_update` for a cloud harness, answered as a terminal agent's is (core/agents/update.ts): its frame

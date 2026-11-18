@@ -12,6 +12,29 @@ const deferred = <T>() => { let resolve!: (value: T) => void; const promise = ne
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
 describe('asynchronous question evidence', () => {
+  it.each(['stale', 'missing answer', 'unmatched option', 'stuck', 'binding error'] as const)(
+    'logs only fixed metadata for native question refusals (%s)', async mode => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const current = { ...row(), agentId: 'CANARYID-agent', sessionId: 'CANARYID-session' }
+      const question = { kind: 'question' as const, question: 'CANARYCONTENT-question', multi: false, typeRow: null,
+        rows: [{ number: '1', label: 'Yes', checked: false }] }
+      const apply = vi.fn(async () => true), release = vi.fn(), sendKey = vi.fn(async () => true), sendText = vi.fn(async () => true)
+      const controller = new AskQuestionController({ getSession: () => current, capture: async () => 'synthetic pane',
+        readQuestion: async () => question, sendKey, sendText, acquireControl: () => release, wait: async () => {},
+        questionControlFor: () => { if (mode === 'binding error') throw new Error('CANARYERROR-provider'); return { apply } } })
+      const answers = mode === 'missing answer' ? { unrelated: 'Yes' }
+        : { [question.question]: mode === 'unmatched option' ? 'CANARYANSWER-option' : 'Yes' }
+      const result = await controller.answer({ agentId: current.agentId, answers,
+        ...(mode === 'stale' ? { requestId: 'CANARYREQUEST-old' } : {}) })
+      expect(result.ok).toBe(false)
+      expect(release).toHaveBeenCalledOnce()
+      expect(warn).toHaveBeenCalled()
+      expect(JSON.stringify([...log.mock.calls, ...warn.mock.calls])).not.toContain('CANARY')
+      if (mode !== 'stuck') expect(apply).not.toHaveBeenCalled()
+      expect(sendKey).not.toHaveBeenCalled(); expect(sendText).not.toHaveBeenCalled()
+    })
+
   it('binds native control before capture and snapshots the reviewed answer', async () => {
     const current = row(), release = vi.fn(), apply = vi.fn(async () => true), questionControlFor = vi.fn(() => ({ apply }))
     const sendKey = vi.fn(async () => true), sendText = vi.fn(async () => true)

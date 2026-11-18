@@ -1,3 +1,4 @@
+import { createQuestionPresentations } from '../questions.js'
 import { cloudFactory } from '../../testing/sessionFactories.js'
 import { answerExperimentQuery } from '../experimentQueries.js'
 import { fakeCore } from '../../testing/fakeCore.js'
@@ -16,7 +17,7 @@ const card = (agentId: string): TurnCardFrame => ({ type: 'commander_event', age
 const hash = (rows: CloudHarness[]) => createHash('sha256').update(JSON.stringify(rows.map(cloudHarnessIn))).digest('hex')
 const setup = () => {
   const events: string[] = []
-  const cloud = createCloudAgents({ ownsFactory: cloudFactory, port: () => null, openQuestions: new Map(), log: () => {}, clients: {
+  const cloud = createCloudAgents({ ownsFactory: cloudFactory, port: () => null, questions: createQuestionPresentations(), log: () => {}, clients: {
     send: frame => events.push(frame.type === 'agent_synced' ? `row:${(frame.payload.agent as { id: string }).id}` : `delete:${frame.payload.agentId}`),
     sendCommander: frame => { if (frame.type === 'commander_event') events.push(`card:${frame.agentId}`) },
     sendLocal: () => {},

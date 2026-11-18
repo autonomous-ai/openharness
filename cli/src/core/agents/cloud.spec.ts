@@ -1,3 +1,4 @@
+import { createQuestionPresentations } from '../questions.js'
 import { cloudFactory } from '../../testing/sessionFactories.js'
 import { cloudQuestionClose, prepareCloudQuestion } from '../../cloud/questions.js'
 import { describe, expect, it, vi } from 'vitest'
@@ -18,8 +19,8 @@ const harness = (over: Partial<CloudHarness> = {}): CloudHarness => {
 
 function setup(port: CloudPort | null = null) {
   const clients = { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }
-  const openQuestions = new Map<string, Record<string, unknown>>()
-  const cloud = createCloudAgents({ ownsFactory: cloudFactory, port: () => port, clients, openQuestions, log: () => {} })
+  const questions = createQuestionPresentations(), openQuestions = questions.openQuestions
+  const cloud = createCloudAgents({ ownsFactory: cloudFactory, port: () => port, clients, questions, log: () => {} })
   return { cloud, clients, openQuestions }
 }
 
@@ -238,7 +239,7 @@ describe('agents a service owns', () => {
     const service = port()
     const ownership = { ownsFactory: vi.fn(() => false) }
     const cloud = createCloudAgents({ ...ownership, port: () => service,
-      clients: { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }, openQuestions: new Map() })
+      clients: { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }, questions: createQuestionPresentations() })
     expect(cloud.create({ engine: 'fo', prompt: 'fixture' })).toBeNull()
     expect(service.create).not.toHaveBeenCalled()
   })
@@ -332,7 +333,7 @@ describe('agents a service owns', () => {
 
   it('logs a question by default', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    const cloud = createCloudAgents({ ownsFactory: cloudFactory, port: () => null, clients: { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }, openQuestions: new Map() })
+    const cloud = createCloudAgents({ ownsFactory: cloudFactory, port: () => null, clients: { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }, questions: createQuestionPresentations() })
     cloud.doors.publish([harness()])
     cloud.doors.ask('cloud_1', 'cloud_q_1', prepareCloudQuestion('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] }))
     expect(log).toHaveBeenCalledWith('[cloud] question accepted')

@@ -159,13 +159,13 @@ export class AskQuestionController {
     const sessionId = payload.sessionId || payload.agentId || remembered || ''
     const answers = payload.answers && typeof payload.answers === 'object' ? structuredClone(payload.answers) : null
     if (!sessionId || !answers || Object.keys(answers).length === 0) {
-      console.warn(`[question] ignoring answer with no session/answers (req=${requestId})`)
+      console.warn('[question] answer missing session or choices')
       return failed('The answer named no agent or carried no choice.')
     }
     const session = this.deps.getSession(sessionId)
     const terminalTarget = session?.agentId || session?.sessionId
     if (!terminalTarget) {
-      console.warn(`[question] no terminal target for ${sessionId.slice(0, 8)} — answer dropped`)
+      console.warn('[question] answer owner unavailable')
       return { ok: false, error: 'AGENT_NOT_FOUND', detail: 'That harness is no longer running.' }
     }
     if (remembered) {
@@ -173,7 +173,7 @@ export class AskQuestionController {
       if ((owner?.agentId || owner?.sessionId) !== terminalTarget) return STALE_CHANGED
     }
     if (this.driving.has(terminalTarget)) {
-      console.warn(`[question] ${sessionId.slice(0, 8)} answer dropped · already driving this dialog`)
+      console.warn('[question] answer busy')
       return { ok: false, error: 'ANSWER_BUSY', detail: 'Another answer is already being entered for this harness.' }
     }
     // `forAnswer`: a dialog is the engine waiting for input mid-turn, so the open turn must not block it.
@@ -181,7 +181,7 @@ export class AskQuestionController {
     // Silence here is the failure mode this whole file exists to prevent: the device sends an answer,
     // nothing keys it in, and the pane sits on the dialog looking like a hung agent.
     if (this.deps.acquireControl && !release) {
-      console.warn(`[question] ${sessionId.slice(0, 8)} answer dropped · terminal control unavailable`)
+      console.warn('[question] terminal control unavailable')
       return { ok: false, error: 'ANSWER_BUSY', detail: 'The agent\'s terminal is busy. Try again.' }
     }
     // The ids the watcher could have announced this dialog under: the session it was remembered for, and
@@ -195,14 +195,14 @@ export class AskQuestionController {
       try {
         native = session ? this.deps.questionControlFor(session) : undefined
         reviewed = payload.expectedQuestions ? structuredClone(payload) : undefined
-      } catch (error) {
-        console.warn(`[question] ${sessionId.slice(0, 8)} answer dropped · ${(error as Error).message}`)
+      } catch {
+        console.warn('[question] control preparation failed')
         return failed('The answer could not be prepared. Nothing was typed.')
       }
       const result = await this.drive(terminalTarget, answers, payload.allowPermissions !== false, { requestId, owners }, reviewed, native)
       this.pending.delete(requestId)
       const outcome = result.ok ? 'submitted' : result.error === 'STALE_QUESTION' ? 'refused · STALE_QUESTION, nothing typed' : 'FAILED'
-      console.log(`[question] ${sessionId.slice(0, 8)} answered from device · ${outcome} (req=${requestId || 'none'})`)
+      console.log(`[question] answer ${outcome}`)
       return result
     } finally {
       this.driving.delete(terminalTarget)
@@ -295,7 +295,7 @@ export class AskQuestionController {
       // then treat it as stuck rather than hammering the pane with more keystrokes. Never consume a
       // second answer for it.
       if (view.question === lastQuestion) {
-        if (++repeats >= 2) { console.warn(`[question] dialog stuck on "${view.question.slice(0, 60)}"`); return STUCK }
+        if (++repeats >= 2) { console.warn('[question] dialog stuck'); return STUCK }
         await wait(STEP_MS)
         continue
       }
@@ -307,7 +307,7 @@ export class AskQuestionController {
       let positional = false
       if (answered === 0 && asked.requestId) {
         if (!asked.owners.some((owner) => questionRequestId(owner, view) === asked.requestId)) {
-          console.warn(`[question] answer for req=${asked.requestId} arrived after the dialog changed to "${view.question.slice(0, 60)}" — nothing typed`)
+          console.warn('[question] stale request; nothing typed')
           return STALE_CHANGED
         }
         positional = true
@@ -327,7 +327,7 @@ export class AskQuestionController {
         : pickAnswer(answers, view.question, used, { positional })
       if (!picked) {
         if (answered > 0 && reviewedComplete()) return { ok: true }
-        console.warn(`[question] no answer names "${view.question.slice(0, 60)}" — nothing typed`)
+        console.warn('[question] question mismatch; nothing typed')
         return STALE_CHANGED
       }
       used.add(picked.key)
@@ -365,7 +365,7 @@ export class AskQuestionController {
         continue
       }
       if (reviewed) return failed('That answer matches no option.')
-      if (!view.typeRow) { console.warn(`[question] no option matched "${picked.value.slice(0, 40)}" and no free-text row`); return failed('That answer matches no option.') }
+      if (!view.typeRow) { console.warn('[question] option mismatch; no text input'); return failed('That answer matches no option.') }
       const typed = notEntered(await apply({ kind: 'text', row: view.typeRow, text: picked.value }))
       if (typed) return typed
     }
@@ -657,7 +657,7 @@ export class QuestionWatcher {
     const blocked = !this.deps.hasDevice(sessionId) ? 'no device' : this.deps.isDriving?.(sessionId) ? 'driving an answer' : ''
     if (blocked !== (this.blocked.get(sessionId) ?? '')) {
       this.blocked.set(sessionId, blocked)
-      console.log(`[question] ${sessionId.slice(0, 8)} watcher ${blocked ? `paused · ${blocked}` : 'polling'}`)
+      console.log(`[question] watcher ${blocked ? `paused · ${blocked}` : 'polling'}`)
     }
     if (blocked) return
     const pending = { cancelled: false }

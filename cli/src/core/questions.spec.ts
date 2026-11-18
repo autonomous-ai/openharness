@@ -1,7 +1,10 @@
+import { createCloudAgents } from './agents/cloud.js'
+import { cloudFactory } from '../testing/sessionFactories.js'
+import { prepareCloudQuestion, cloudQuestionClose } from '../cloud/questions.js'
 import { parseEngineQuestionPane } from '../engines/screens.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
-import { createQuestionResponse, createQuestions, type QuestionDeps } from './questions.js'
+import { createQuestionPresentations, createQuestionResponse, createQuestions, type QuestionDeps } from './questions.js'
 import { AskQuestionController, questionRequestId } from '../lib/questionController.js'
 
 const agents = new Map<string, RegisteredSession>([
@@ -71,6 +74,158 @@ describe('questions', () => {
     expect(asking.pendingQuestion('s1')).toBeNull()
   })
 
+  it('replaces an ordinary native wait with a permission notice without retaining stale input permission', () => {
+    const { asking, deps } = setup(), watcher = given(asking.questionWatcher)
+    watcher.onQuestion('s1', 'r1', [{ key: 'q', q: 'Choose?', options: ['Yes'], multi: false }])
+    expect(asking.pendingQuestion('s1')).not.toBeNull()
+    watcher.onQuestion('s1', 'r2', [], { permission: true, dialog: 'Permission?' })
+    expect(asking.pendingQuestion('s1')).toBeNull()
+    vi.mocked(deps.input.setUserAction).mockClear()
+    watcher.onQuestionGone('s1', 'r1')
+    expect(asking.openQuestions.get('s1')?.payload.requestId).toBe('r2')
+    expect(asking.monitorActivity('s1')).toBe('needsInput')
+    expect(deps.input.setUserAction).not.toHaveBeenCalled()
+  })
+
+  it('keeps the newer native question and wait state when the old request closes late', () => {
+    let now = 1
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const { deps, asking } = setup()
+    const watcher = given(asking.questionWatcher)
+    watcher.onQuestion('s1', 'r1', [{ q: 'First question', options: ['Yes'] }])
+    now = 2
+    watcher.onQuestion('s1', 'r2', [{ q: 'New question', options: ['No'] }])
+    const current = asking.openQuestions.get('s1')
+    vi.mocked(deps.input.setUserAction).mockClear()
+    vi.mocked(deps.waitOver).mockClear()
+    for (const send of Object.values(deps.clients)) vi.mocked(send).mockClear()
+    watcher.onQuestionGone('s1', 'r1')
+    expect(asking.openQuestions.get('s1')).toBe(current)
+    expect(asking.pendingQuestion('s1')).toEqual({ openedAt: 2, text: 'New question' })
+    expect(asking.monitorActivity('s1')).toBe('needsInput')
+    expect([...asking.snapshot('remote')]).toEqual([current])
+    expect(deps.input.setUserAction).not.toHaveBeenCalled()
+    expect(deps.waitOver).not.toHaveBeenCalled()
+    for (const send of Object.values(deps.clients)) expect(send).not.toHaveBeenCalled()
+    watcher.onQuestionGone('s1', 'r2')
+    expect(asking.openQuestions.has('s1')).toBe(false)
+    expect(asking.pendingQuestion('s1')).toBeNull()
+    expect(deps.input.setUserAction).toHaveBeenCalledWith('a1', false)
+  })
+
+  it('logs fixed native question events without question or identifier canaries', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const { asking } = setup()
+    const watcher = given(asking.questionWatcher)
+    watcher.onQuestion('session-canary', 'request-canary', [{ q: 'question-content-canary', options: ['choice-canary'] }],
+      { permission: true, dialog: 'permission-content-canary' })
+    watcher.onQuestionGone('session-canary', 'request-canary')
+    expect(log.mock.calls).toEqual([['[question] asked'], ['[question] closed']])
+    expect(JSON.stringify(log.mock.calls)).not.toContain('canary')
+  })
+
+  it('keeps actual native and service question routing, replay order and accepted close audiences in one store', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const { deps, asking } = setup(), watcher = given(asking.questionWatcher)
+    const answer = vi.fn(async () => ({ ok: true })), port = { answer }
+    const cloud = createCloudAgents({ ownsFactory: cloudFactory, port: () => port as never,
+      clients: { send: vi.fn(), sendCommander: deps.clients.sendCommander, sendLocal: deps.clients.sendLocal },
+      questions: asking.presentations, log: () => {} })
+    cloud.doors.publish([{ agentId: 'cloud_1', agent: 'fo', name: 'Service', state: 'idle', activity: null,
+      repository: null, branch: null, links: [], messages: 0, createdAt: '0', updatedAt: '0' }])
+    watcher.onQuestion('s1', 'native_one', [{ q: 'Native first', options: ['Yes'] }])
+    const first = prepareCloudQuestion('cloud_1', 'cloud_q_one', { text: 'Service first', choices: [] })
+    expect(cloud.doors.ask('cloud_1', 'cloud_q_one', first)).toEqual({ ok: true })
+    watcher.onQuestion('s2', 'native_two', [{ q: 'Native second', options: ['No'] }])
+    const ids = (audience: 'local' | 'remote') => [...asking.snapshot(audience)].map(frame => frame.payload.requestId)
+    expect(ids('local')).toEqual(['native_one', 'cloud_q_one', 'native_two'])
+    expect(ids('remote')).toEqual(['native_one', 'native_two'])
+    const second = prepareCloudQuestion('cloud_1', 'cloud_q_two', { text: 'Service second', choices: ['Yes'] })
+    expect(cloud.doors.ask('cloud_1', 'cloud_q_two', second)).toEqual({ ok: true })
+    watcher.onQuestion('s1', 'native_three', [{ q: 'Native changed', options: ['Yes'] }])
+    expect(ids('local')).toEqual(['native_three', 'native_two', 'cloud_q_two'])
+    expect(ids('remote')).toEqual(['native_three', 'native_two'])
+    expect([...asking.openQuestions.values()]).toEqual([...asking.snapshot('local')])
+    expect(asking.presentations.request('native_one')).toBeUndefined()
+    const nativeAnswer = vi.spyOn(asking.questions, 'answer').mockResolvedValue({ ok: true })
+    const route = (payload: Parameters<typeof asking.answer>[0]) => cloud.answer(payload) ?? asking.answer(payload)
+    expect(await route({ requestId: 'native_three', answers: { answer: 'Yes' } })).toEqual({ ok: true })
+    expect(await route({ requestId: 'cloud_q_two', answers: { answer: 'Yes' } })).toEqual({ ok: true })
+    expect(nativeAnswer).toHaveBeenCalledOnce()
+    expect(answer).toHaveBeenCalledWith('cloud_1', 'cloud_q_two', { answer: 'Yes' })
+    // A retired native request still reaches the existing controller's remembered/screen-proof path.
+    await route({ requestId: 'native_one', answers: { answer: 'Yes' } })
+    expect(nativeAnswer).toHaveBeenCalledTimes(2)
+    const narrow = { ...second, dial: false }
+    expect(cloud.doors.ask('cloud_1', 'cloud_q_two', narrow)).toEqual({ ok: true })
+    vi.mocked(deps.clients.sendCommander).mockClear()
+    cloud.doors.unask('cloud_1', 'cloud_q_one', cloudQuestionClose('cloud_1', 'cloud_q_one'))
+    expect(asking.openQuestions.has('cloud_1')).toBe(true)
+    cloud.doors.unask('cloud_1', 'cloud_q_two', cloudQuestionClose('cloud_1', 'cloud_q_two'))
+    expect(deps.clients.sendCommander).toHaveBeenCalledWith(second.close)
+    expect(ids('local')).toEqual(['native_three', 'native_two'])
+  })
+
+  it('refuses a conflicting owner or request before native or service question effects', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { deps, asking } = setup(), watcher = given(asking.questionWatcher)
+    const cloud = createCloudAgents({ ownsFactory: cloudFactory, port: () => null,
+      clients: { send: vi.fn(), sendCommander: deps.clients.sendCommander, sendLocal: deps.clients.sendLocal },
+      questions: asking.presentations, log: () => {} })
+    cloud.doors.publish([{ agentId: 'cloud_1', agent: 'fo', name: 'Service', state: 'idle', activity: null,
+      repository: null, branch: null, links: [], messages: 0, createdAt: '0', updatedAt: '0' }])
+    watcher.onQuestion('s1', 'cloud_q_collision', [{ q: 'Native', options: ['Yes'] }])
+    expect(cloud.doors.ask('cloud_1', 'cloud_q_collision', prepareCloudQuestion('cloud_1', 'cloud_q_collision', { text: 'Service', choices: [] })))
+      .toEqual({ ok: false, error: 'CLOUD_QUESTION_INVALID' })
+    expect(cloud.doors.unask('cloud_1', 'cloud_q_collision', cloudQuestionClose('cloud_1', 'cloud_q_collision')))
+      .toEqual({ ok: false, error: 'CLOUD_QUESTION_INVALID' })
+    cloud.doors.ask('cloud_1', 'cloud_q_owned', prepareCloudQuestion('cloud_1', 'cloud_q_owned', { text: 'Owned', choices: [] }))
+    const current = asking.openQuestions.get('cloud_1')
+    vi.mocked(deps.input.setUserAction).mockClear()
+    watcher.onQuestion('cloud_1', 'other', [{ q: 'Wrong owner', options: [] }])
+    watcher.onQuestionGone('cloud_1', 'cloud_q_owned')
+    expect(asking.openQuestions.get('cloud_1')).toBe(current)
+    expect(deps.input.setUserAction).not.toHaveBeenCalled()
+    expect(warning).toHaveBeenCalledWith('[question] QUESTION_ID_CONFLICT')
+    // The common request index cannot redirect one owner through another owner's current request.
+    watcher.onQuestion('s2', 'cloud_q_collision', [{ q: 'Wrong request', options: [] }])
+    expect(asking.openQuestions.has('s2')).toBe(false)
+  })
+
+  it('preserves a native question when a service publishes the same owner key', () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const { asking, deps } = setup(), watcher = given(asking.questionWatcher)
+    watcher.onQuestion('cloud_1', 'native_request', [{ q: 'Native', options: ['Yes'] }])
+    const native = asking.openQuestions.get('cloud_1')
+    const cloud = createCloudAgents({ ownsFactory: cloudFactory, port: () => null,
+      clients: { send: vi.fn(), sendCommander: deps.clients.sendCommander, sendLocal: deps.clients.sendLocal },
+      questions: asking.presentations, log: () => {} })
+    cloud.doors.publish([{ agentId: 'cloud_1', agent: 'fo', name: 'Service', state: 'idle', activity: null,
+      repository: null, branch: null, links: [], messages: 0, createdAt: '0', updatedAt: '0' }])
+    vi.mocked(deps.clients.sendLocal).mockClear()
+    expect(cloud.doors.ask('cloud_1', 'cloud_q_one', prepareCloudQuestion('cloud_1', 'cloud_q_one', { text: 'Service', choices: [] })))
+      .toEqual({ ok: false, error: 'CLOUD_QUESTION_INVALID' })
+    cloud.doors.publish([])
+    expect(asking.openQuestions.get('cloud_1')).toBe(native)
+    expect(asking.presentations.request('native_request')?.frame).toBe(native)
+    expect(deps.clients.sendLocal).not.toHaveBeenCalled()
+  })
+
+  it('rejects malformed and stale presentation mutations without changing the accepted owner', () => {
+    const store = createQuestionPresentations(), owner = {}, other = {}
+    const frame = { type: 'commander_question', agentId: 'agent', dbSessionId: 'session', payload: { requestId: 'r1' } }
+    expect(store.set(owner, 'session', { ...frame, payload: {} }, { dial: true, remote: true })).toBe(false)
+    expect(store.set(owner, 'session', { ...frame, payload: { requestId: '' } }, { dial: true, remote: true })).toBe(false)
+    expect(store.set(owner, 'session', frame, { dial: true, remote: true })).toBe(true)
+    expect(store.remove(other, 'session', 'r1')).toBeUndefined()
+    expect(store.remove(owner, 'session', 'old')).toBeUndefined()
+    expect(store.openQuestions.get('session')).toBe(frame)
+    expect(store.remove(owner, 'session', 'r1')?.frame).toBe(frame)
+    expect(store.remove(owner, 'session', 'r1')).toBeUndefined()
+  })
+
   it('drives the pane through the terminal it was given, holding it for the whole answer', () => {
     const { deps, asking } = setup()
     const controller = given(asking.questions)
@@ -113,7 +268,7 @@ describe('questions', () => {
 
   it('reports an agent as needing input while it asks, working while its turn is open, idle otherwise', () => {
     const { asking } = setup()
-    asking.openQuestions.set('s1', {})
+    given(asking.questionWatcher).onQuestion('s1', 'r1', [{ q: 'Question', options: [] }])
     expect(asking.monitorActivity('s1')).toBe('needsInput')
     expect(asking.monitorActivity('busy')).toBe('working')
     expect(asking.monitorActivity('quiet')).toBe('idle')
@@ -143,10 +298,10 @@ describe('questions', () => {
     // The owner's apps away from this desk hear the same question, over the relay.
     expect(vi.mocked(deps.clients.sendRemote).mock.calls.at(-1)).toEqual([asked])
     expect(asking.openQuestions.get('s1')).toBe(asked)
-    expect(log.mock.calls[0][0]).toContain('asking the user · "Ship it?" · req=r1')
+    expect(log.mock.calls[0][0]).toBe('[question] asked')
     // A question with nothing shaped still goes out, and still says so.
     given(asking.questionWatcher).onQuestion('s1', 'r2', [])
-    expect(log.mock.calls[1][0]).toContain('asking the user · "" · req=r2')
+    expect(log.mock.calls[1][0]).toBe('[question] asked')
   })
 
   it.each([true, false])('preserves permission metadata only for approval dialogs (%s)', permission => {
@@ -169,7 +324,8 @@ describe('questions', () => {
     vi.mocked(deps.input.setUserAction).mockClear()
     log.mockClear()
     asking.hearQuestions(answered)
-    asking.openQuestions.set('s1', {})
+    given(asking.questionWatcher).onQuestion('s1', 'r1', [{ q: 'Question', options: [] }])
+    log.mockClear()
     given(asking.questionWatcher).onQuestionGone('s1', 'r1')
     const closed = { type: 'commander_question_close', agentId: 'a1', dbSessionId: 's1', payload: { requestId: 'r1' } }
     expect(answered).toHaveBeenCalledWith('answered', 's1', 'r1')
@@ -178,7 +334,7 @@ describe('questions', () => {
     expect(deps.clients.sendLocal).toHaveBeenCalledWith(closed)
     expect(deps.clients.sendRemote).toHaveBeenCalledWith(closed)
     expect(asking.openQuestions.has('s1')).toBe(false)
-    expect(log.mock.calls[0][0]).toContain('answered elsewhere · closing on every client · req=r1')
+    expect(log.mock.calls[0][0]).toBe('[question] closed')
   })
 
   // A hook said the agent waits on the person (core/turns/turnHooks.ts): the watcher says when it no longer does.
@@ -250,7 +406,7 @@ describe('questions', () => {
 
   it('never tells the relay a question it did not ask: a cloud agent\'s shares the open list, not the relay', () => {
     const { deps, asking } = setup()
-    asking.openQuestions.set('cloud-a', { type: 'commander_question', agentId: 'cloud-a', payload: { requestId: 'cloud_q_1' } })
+    asking.presentations.set({}, 'cloud-a', { type: 'commander_question', agentId: 'cloud-a', payload: { requestId: 'cloud_q_1' } }, { dial: true, remote: false })
     asking.reannounceRemote()
     expect(vi.mocked(deps.clients.sendRemote).mock.calls).toEqual([[{ type: 'commander_questions_open', payload: { requestIds: [] } }]])
   })
@@ -260,14 +416,14 @@ describe('questions', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     given(asking.questionWatcher).onQuestion('s1', 'pane', [{ q: 'Pane question', options: [] }])
     const pane = asking.openQuestions.get('s1')
-    const cloud = { type: 'commander_question', agentId: 'cloud-a', payload: { requestId: 'cloud_q_1' } }
-    asking.openQuestions.set('cloud-a', cloud)
+    const cloudOwner = {}, cloud = { type: 'commander_question', agentId: 'cloud-a', payload: { requestId: 'cloud_q_1' } }
+    asking.presentations.set(cloudOwner, 'cloud-a', cloud, { dial: true, remote: false })
     const local = asking.snapshot('local')
     expect(local.next().value).toBe(pane)
     // The iterator sees the current owner, not a copied array made before a close.
-    asking.openQuestions.delete('cloud-a')
+    asking.presentations.remove(cloudOwner, 'cloud-a', 'cloud_q_1')
     expect(local.next().done).toBe(true)
-    asking.openQuestions.set('cloud-a', cloud)
+    asking.presentations.set(cloudOwner, 'cloud-a', cloud, { dial: true, remote: false })
     expect([...asking.snapshot('local')]).toEqual([pane, cloud])
     expect([...asking.snapshot('remote')]).toEqual([pane])
   })

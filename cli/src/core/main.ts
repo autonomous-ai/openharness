@@ -1552,7 +1552,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     return owner?.kind === 'service' && owner.service === 'cloud'
   }, port: () => serviceHost?.isOff('cloud') ? null : ports.cloud,
     whenStarting: () => outOfProcess.has('cloud') ? serviceLinks.whenStarting('cloud') : null,
-    clients: backend, openQuestions: asking.openQuestions })
+    clients: backend, questions: asking.presentations })
   const cloud = cloudAgents
   backend.questionProvider = createQuestionResponse((payload) => cloud.answer(payload) ?? asking.answer(payload))
   // An app away from this desk is told what is still being asked as it connects (core/questions.ts).
