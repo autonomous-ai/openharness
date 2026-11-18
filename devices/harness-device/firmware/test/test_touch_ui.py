@@ -1300,6 +1300,12 @@ static void notification_read_checks(const char *dir) {
     ui_notif_read("b","question-1"); assert(s.notice_count==1 && !s.notice[0].question);
     reset(); ui_notif_replace(beside,2);
     ui_question_close("b","request-1"); assert(s.notice_count==1 && !s.notice[0].question);
+    // The person opened question A of the agent, which then asked B: B's close takes B's row, the news stays.
+    reset(); ui_notif_replace(beside,2); strcpy(s.q.agent,"b"); strcpy(s.q.request,"A");
+    ui_question_close("b","B"); assert(s.notice_count==1 && !s.notice[0].question);
+    // A close while the agent's question screen still loads takes the row and the loading screen.
+    reset(); ui_notif_replace(beside,2); strcpy(s.q.agent,"b"); s.q.loading=true; s.view=QUESTION;
+    ui_question_close("b","B"); assert(s.notice_count==1 && !s.notice[0].question && s.view==HOME && !s.q.loading);
     reset(); ui_notif_replace(beside,2);
     strcpy(s.q.agent,"b"); strcpy(s.q.fetch,"fetch-1"); strcpy(s.q.token,"token-1"); s.q.valid=s.q.pending=true;
     {
