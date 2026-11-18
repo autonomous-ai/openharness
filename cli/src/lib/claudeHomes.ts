@@ -142,8 +142,9 @@ export function listClaudeProfiles(
 
 /**
  * Whether [claudeHome] may be handed to an agent as its CLAUDE_CONFIG_DIR: a profile this machine lists (the default account
- * has none), or a folder under `~/.harness/claude-profiles/`, where Desktop's "Add Claude account" makes a new one before it
- * holds any file. Any other path would be written into (hooks, folder trust) and adopted for good (core/agents/launches.ts).
+ * has none), or a folder under Harness's `claude-profiles` (harnessPath: `~/.harness`'s, or the XDG data root's on Linux),
+ * where Desktop's "Add Claude account" makes a new one before it holds any file. Any other path would be written into
+ * (hooks, folder trust) and adopted for good (core/agents/launches.ts).
  */
 export function claudeHomeListed(
   claudeHome: string, machineId: string, options: { home?: string; environment?: NodeJS.ProcessEnv } = {},

@@ -211,15 +211,17 @@ describe('profileHome', () => {
     expect(profileHome('codex', profileId(machineId, 'codex', codex), machineId, { home, environment: {} })).toBe('default')
   })
 
-  it('takes a claudeHome that is a listed profile or a folder under ~/.harness/claude-profiles, never the default or any other path', async () => {
+  // Harness's claude-profiles folder is ~/.harness's on macOS and the XDG data root's on a fresh Linux home like this one.
+  it('takes a claudeHome that is a listed profile or a folder under Harness\'s claude-profiles, never the default or any other path', async () => {
     const { claudeHomeListed } = await loadModule()
     const work = join(home, '.claude-work')
     account(work, { displayName: 'Work' })
     const options = { home, environment: {} }
+    const own = harnessPath('claude-profiles', home)
     expect(claudeHomeListed(work, machineId, options)).toBe(true)
-    expect(claudeHomeListed(join(home, '.harness', 'claude-profiles', 'new-one'), machineId, options)).toBe(true)
-    expect(claudeHomeListed(join(home, '.harness', 'claude-profilesx', 'new-one'), machineId, options)).toBe(false)
-    expect(claudeHomeListed(join(home, '.harness', 'claude-profiles', '..', '..', 'elsewhere'), machineId, options)).toBe(false)
+    expect(claudeHomeListed(join(own, 'new-one'), machineId, options)).toBe(true)
+    expect(claudeHomeListed(join(`${own}x`, 'new-one'), machineId, options)).toBe(false)
+    expect(claudeHomeListed(join(own, '..', '..', 'elsewhere'), machineId, options)).toBe(false)
     expect(claudeHomeListed(home, machineId, options)).toBe(false)
     expect(claudeHomeListed(join(home, 'not-listed'), machineId, options)).toBe(false)
   })
