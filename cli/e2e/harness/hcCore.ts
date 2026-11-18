@@ -245,10 +245,13 @@ export class PrivateHc {
     })
   }
 
-  /** A terminal Herdr's window would show (`herdr.space`), in <root>/work/<folder>, running the fake agent directly,
-   *  reported idle: its address. With [claude], the agent first leaves that Claude Code session on disk: its process
-   *  record in <dirname(projectsDir)>/sessions and its transcript under projectsDir, answered with [claude.answer]. */
-  async agent(folder: string, claude?: { projectsDir: string; sessionId: string; answer: string }): Promise<string> {
+  /** A terminal Herdr's window would show (`herdr.space`), with [labels] beside it, in <root>/work/<folder>, running the
+   *  fake agent directly, reported idle: its address. With [claude], the agent first leaves that Claude Code session on
+   *  disk: its process record in <dirname(projectsDir)>/sessions and its transcript under projectsDir, answered with
+   *  [claude.answer]. */
+  async agent(
+    folder: string, claude?: { projectsDir: string; sessionId: string; answer: string }, labels: Record<string, string> = {},
+  ): Promise<string> {
     const { root } = this.planned
     const cwd = join(root, 'work', folder)
     await mkdir(cwd, { recursive: true })
@@ -256,7 +259,7 @@ export class PrivateHc {
     if (!existsSync(script)) await writeFile(script, AGENT)
     const socket = join(root, `${folder}.sock`)
     const session = claude ? [claude.projectsDir, claude.sessionId, claude.answer] : []
-    const run = await this.rpc('terminal.run', { argv: [process.execPath, script, socket, ...session], cwd, labels: { 'herdr.space': 's1' } })
+    const run = await this.rpc('terminal.run', { argv: [process.execPath, script, socket, ...session], cwd, labels: { 'herdr.space': 's1', ...labels } })
     const address = run.address as string
     this.agents.set(address, socket)
     if (typeof run.pid === 'number') this.pids.add(run.pid)

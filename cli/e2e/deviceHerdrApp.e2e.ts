@@ -347,11 +347,10 @@ describe.skipIf(!hcBinary)("Herdr's agents on the dial, from a private Herdr Cor
     }
     let since = dial.messages.length
     const hc = await coreFor(planned)
-    const t = await hc.agent('api')
-    // Herdr's window labels each terminal it holds with its tab, the id its `status` names for the tab on screen. hc tells
-    // a change within a few milliseconds (F5), long before the first stroke, which waits on Herdr's ring and a swipe.
+    // Herdr's window labels each terminal it holds with its tab, the id its `status` names for the tab on screen. Labeled
+    // from its start, so every fact of it the daemon reads holds the tab: Herdr counting it below says it is known.
     const TAB = 'tbaaaa'
-    await hc.rpc('terminal.label', { terminal: t, labels: { 'herdr.tab': TAB } })
+    const t = await hc.agent('api', undefined, { 'herdr.tab': TAB })
     /** Herdr shows that tab, and its `status` names t as its agent whatever the tab. */
     const shown = (tab: string) => writeFileSync(join(d.root, 'herdr-app.screen'), `${tab} ${t}\n`)
     await dial.next((m) => m.t === 'apps' && m.shown === 'orca'
