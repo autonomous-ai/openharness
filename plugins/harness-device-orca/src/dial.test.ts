@@ -62,6 +62,7 @@ function world(answers: (Ran | Promise<Ran>)[], over: Partial<DialInputs> = {}) 
       return new Promise((settle) => bounds.signal.addEventListener('abort', () => settle(null)))
     },
     connect: nodeInputs().connect,
+    post: () => Promise.resolve(null),
     watch(folder, changed, failed) {
       const watch = { folder, changed, failed, closed: false }
       watches.push(watch)

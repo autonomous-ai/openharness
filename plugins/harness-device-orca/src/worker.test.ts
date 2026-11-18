@@ -104,6 +104,7 @@ function inputs(over: Partial<DialInputs>): DialInputs {
     path: '/usr/bin:/bin',
     run: pending,
     connect: () => Promise.resolve(null),
+    post: () => Promise.resolve(null),
     watch: () => () => {},
     now: () => 0,
     after: () => () => {},

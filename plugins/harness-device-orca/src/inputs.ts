@@ -18,6 +18,9 @@ export interface DialInputs {
   run(file: string, args: readonly string[], bounds: { path: string; timeoutMs: number; maxBytes: number; signal: AbortSignal }): Promise<Ran>
   /** POST `body` to `/` on the Unix socket. Null when it cannot connect, or is aborted before the answer's head. */
   connect(socketPath: string, body: string, signal: AbortSignal): Promise<Answer | null>
+  /** POST `body` to `/` on the Unix socket, on a connection of its own. The answer's status, its body drained and
+   *  dropped. Null when it cannot connect, or is aborted before the answer's head. */
+  post(socketPath: string, body: string, signal: AbortSignal): Promise<number | null>
   /** `changed` gets the entry's name, or null where the platform gives none. `failed` is told once if the watch cannot
    *  start (before this returns) or stops on its own. Returns its close. */
   watch(folder: string, changed: (name: string | null) => void, failed: () => void): () => void
@@ -53,6 +56,19 @@ export function nodeInputs(): DialInputs {
         req.on('response', (res) => {
           res.on('error', () => {})
           settle({ status: res.statusCode ?? 0, chunks: untilEnd(res) })
+        })
+        req.end(body)
+      })
+    },
+    post(socketPath, body, signal) {
+      return new Promise((settle) => {
+        // No shared agent: each message closes its own connection, so none is left open on the devices' socket.
+        const req = request({ socketPath, method: 'POST', path: '/', signal, agent: false })
+        req.on('error', () => settle(null))
+        req.on('response', (res) => {
+          res.on('error', () => {})
+          res.resume()
+          settle(res.statusCode ?? 0)
         })
         req.end(body)
       })
