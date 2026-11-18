@@ -37,9 +37,10 @@ Rust and Tauri 2 in `src-tauri/`; the window's two screens are plain TypeScript 
 - **Fixed arguments.** The app runs only the CLI it found, the two install lines and `open`, each with arguments
   fixed in Rust; `logs export --json` is one of them. `open -R` takes one argument that is not fixed text: the zip the
   CLI's answer names, kept only when it is an absolute path whose file name is `harness-logs-YYYYMMDD-HHMM.zip`
-  (`logs.rs`). Nothing from the webview becomes a command line: it sends one of four action names. It relaunches itself
-  through Tauri's restart (`open -n` on its own bundle), and the updater plugin runs `touch` on the bundle after the
-  swap (the `touch` found on the person's PATH); nothing from the webview or the manifest is in either.
+  (`logs.rs`); on Linux `xdg-open` takes that zip's folder. Nothing from the webview becomes a command line: it sends
+  one of four action names. It relaunches itself through Tauri's restart (`open -n` on its own bundle), and the updater
+  plugin runs `touch` on the bundle after the swap (the `touch` found on the person's PATH); nothing from the webview or
+  the manifest is in either.
 - **The app in front is private.** It is written to the watch's stdin and nowhere else (`front.rs`), and never logged.
 - **Fixed scripts.** Every AppleScript is fixed text in `tabs_macos.rs`, for an app from its own list of three. A tty
   passes the tty check and reaches a script only as a handler parameter, never in its text.
