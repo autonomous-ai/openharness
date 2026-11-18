@@ -3,6 +3,7 @@ import './loadEnv.js'
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
+import { harnessPath } from './harnessHome.js'
 import { EnvIssue, flag, matching, maybe, maybeNumber, number, oneOf, parseEnv, text, unlessFalse, url, type EnvField, type EnvOf } from './envFields.js'
 import { parseTerminalBackends } from './terminalConfig.js'
 import { adoptComputerId } from '../lib/computerIdentity.js'
@@ -10,12 +11,11 @@ import { openclawDefaultStateDir } from '../engines/openclaw/contract.js'
 
 // Packaged files (cli.js/notify.mjs) live in ~/.harness/cli; mutable state in ~/.harness/cli/data.
 // `~/.harness` is the PRODUCT data root and does not move — see the naming discipline in CLAUDE.md.
-const adapterRootDir = join(homedir(), '.harness')
-const adapterCliDir = join(adapterRootDir, 'cli')
+const adapterCliDir = harnessPath('cli')
 const adapterDataDir = join(adapterCliDir, 'data')
 // The private, checksum-verified Node the installers and Desktop Harness provision. `current-node`
 // inside it names the binary in use; both writers rewrite that file whenever they lay down a runtime.
-const adapterRuntimeDir = join(adapterRootDir, 'runtime')
+const adapterRuntimeDir = harnessPath('runtime')
 // The `harness` launcher the installers write. Not under ~/.harness: it has to sit on PATH.
 const adapterBinDir = join(homedir(), '.local', 'bin')
 // The computer id lives at the PRODUCT root, one level ABOVE `cli/`, and deliberately not in the data
@@ -24,7 +24,7 @@ const adapterBinDir = join(homedir(), '.local', 'bin')
 // a machine to it, so a regenerated id silently mints a SECOND machine for a box that already had one.
 // The SSO session is the only other product-root state (`~/.harness/auth/session.json`); both it and
 // this id intentionally survive an adapter-data reset.
-const computerIdFile = join(adapterRootDir, 'computer-id')
+const computerIdFile = harnessPath('computer-id')
 
 // ── One-time adoption of adapter state written under an older name ────────────────────────────────
 //
@@ -226,25 +226,25 @@ const fields = {
   // Logs meant to be READ and sent — the dial's `dial-YYYYMMDD.log` — beside the desktop app's own
   // `app-*.log`/`cli-*.log`, so one directory holds everything a bug report needs. Not the data dir:
   // `harness.log` there is the daemon's console, and `harness reset` wipes it.
-  HARNESS_LOGS_DIR: text(join(adapterRootDir, 'logs')),
+  HARNESS_LOGS_DIR: text(harnessPath('logs')),
   // The Harness PTY host's `--home` (the `ptyhost` terminal backend, pty/): it writes `run/` (its discovery
   // file and endpoint) and `logs/pty-host-<instance>.log` under it. Product-root state like the logs: the host outlives
   // a daemon restart, and the next daemon finds it here.
-  HARNESS_PTY_DIR: text(join(adapterRootDir, 'pty')),
+  HARNESS_PTY_DIR: text(harnessPath('pty')),
   // The dials' own product-root state: `pets/` holds the custom pet packs and which pack stands for what.
   // Not daemon data (`harness reset` must not lose a user's pets), and shared by this user's daemons.
-  HARNESS_DEVICES_DIR: text(join(adapterRootDir, 'devices')),
+  HARNESS_DEVICES_DIR: text(harnessPath('devices')),
   // Where each daemon on this computer records its data folder and port under the tag it puts on its
   // panes, so an engine's hook reaches the daemon that made its pane whichever daemon installed the hook
   // (lib/hookRoutes.ts). Product-root state, shared by every daemon of this user: not in a data folder.
-  HARNESS_HOOK_ROUTES_DIR: text(join(adapterRootDir, 'hook-routes')),
+  HARNESS_HOOK_ROUTES_DIR: text(harnessPath('hook-routes')),
   // Agent Messages' pane inboxes (messages/inbox.ts): what an engine's messages hook (hook/messages.mjs)
   // reads at a tool call. Product-root state like the hook routes: the hook is installed once per computer,
   // whichever daemon installed it, and a pane's message is its own whichever daemon wrote it.
-  HARNESS_AGENT_MESSAGES_DIR: text(join(adapterRootDir, 'agent-messages')),
+  HARNESS_AGENT_MESSAGES_DIR: text(harnessPath('agent-messages')),
   // Where domain-specific harnesses are installed (`harness dsh install`): one directory per
   // `<owner>/<name>` plus `installed.json`. Product-root state like the SSO session, not daemon data.
-  DSH_DIR: text(join(adapterRootDir, 'dsh')),
+  DSH_DIR: text(harnessPath('dsh')),
   // The ref the built-in shelf (`store/*` of the Harness monorepo) installs from, instead of the one
   // its registry entries name (`main`). For trying a store change end to end BEFORE it merges: push
   // the branch, run the daemon with HARNESS_STORE_REF=<branch>, and Get in the store fetches from it.

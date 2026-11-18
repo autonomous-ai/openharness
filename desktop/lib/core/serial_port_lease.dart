@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'harness_file_store.dart';
+import 'harness_home.dart';
 
 /// Held while `harness flash` needs the dial's USB serial port to itself.
 ///
@@ -25,7 +26,7 @@ abstract final class SerialPortLease {
     return env['HARNESS_FLASHER_CACHE'] ??
         HarnessFileStore.defaultDirectoryPath(
           environment: environment,
-          name: 'flasher',
+          entry: HarnessEntry.flasher,
         );
   }
 

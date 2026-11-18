@@ -4,6 +4,7 @@ pub mod command;
 pub mod desktop;
 pub mod discovery;
 mod files;
+pub mod harness_home;
 pub mod host_lock;
 pub mod instance;
 #[cfg(windows)]

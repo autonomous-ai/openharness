@@ -12,6 +12,7 @@ import '../core/uninstall_marker.dart';
 import '../core/config.dart';
 import '../core/harness_cli_runner.dart';
 import '../core/harness_file_store.dart';
+import '../core/harness_home.dart';
 import '../core/models.dart';
 import 'daemon_node.dart';
 import 'local_daemon_transport.dart';
@@ -86,13 +87,11 @@ class LocalMachineIdentity {
           computerIdFile ??
           File(defaultComputerIdPath(environment: environment));
 
-  static String defaultComputerIdPath({Map<String, String>? environment}) {
-    final desktopDirectory = HarnessFileStore.defaultDirectoryPath(
-      environment: environment,
-    );
-    final harnessHome = Directory(desktopDirectory).parent.path;
-    return _joinPath(harnessHome, 'computer-id');
-  }
+  static String defaultComputerIdPath({Map<String, String>? environment}) =>
+      HarnessFileStore.defaultDirectoryPath(
+        environment: environment,
+        entry: HarnessEntry.computerId,
+      );
 
   Future<String?> computerId() async {
     final pinned = _normalizeComputerId(environment['ADAPTER_COMPUTER_ID']);
@@ -105,9 +104,6 @@ class LocalMachineIdentity {
     }
   }
 }
-
-String _joinPath(String parent, String child) =>
-    '$parent${Platform.pathSeparator}$child';
 
 /// Discovers only the CLI bound to the fixed loopback address. The response
 /// advertises capabilities but never contains the machine API key.

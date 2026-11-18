@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'harness_file_store.dart';
+import 'harness_home.dart';
 
 /// `harness uninstall` at work: the CLI's `~/.harness/uninstalling` (cli/src/lib/uninstall/removal.ts
 /// `UNINSTALL_MARKER`).
@@ -26,7 +27,7 @@ abstract final class UninstallMarker {
     try {
       return HarnessFileStore.defaultDirectoryPath(
         environment: environment,
-        name: 'uninstalling',
+        entry: HarnessEntry.uninstalling,
       );
     } on StateError {
       return null;

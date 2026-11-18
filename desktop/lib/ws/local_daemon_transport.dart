@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
 
+import '../core/harness_home.dart';
 import '../core/test_run.dart';
 import 'daemon_pipe_record.dart';
 import 'trusted_pipe.dart';
@@ -58,7 +59,11 @@ String? defaultDaemonSocketPath(
   final home = (environment ?? Platform.environment)['HOME'] ?? '';
   final hash = const DartSha256().hashSync(utf8.encode(dataDir)).bytes;
   final hex = hash.take(8).map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-  final short = '$home/.harness/s/$hex/${daemonSocketName(port)}';
+  final sockets = HarnessHome.of(
+    home,
+    join: separatorJoin('/'),
+  ).path(HarnessEntry.s);
+  final short = '$sockets/$hex/${daemonSocketName(port)}';
   return utf8.encode(short).length <= _maxSocketPathBytes ? short : null;
 }
 

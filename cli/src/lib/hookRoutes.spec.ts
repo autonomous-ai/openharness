@@ -89,6 +89,6 @@ describe('hook routes', () => {
     // vitest.setup.ts moves it into the test's data folder; the default is the product root's.
     expect(env.HARNESS_HOOK_ROUTES_DIR).toBe(join(process.env.ADAPTER_DATA_DIR!, 'hook-routes'))
     const source = readFileSync(new URL('../config/env.ts', import.meta.url), 'utf8')
-    expect(source).toContain("HARNESS_HOOK_ROUTES_DIR: text(join(adapterRootDir, 'hook-routes'))")
+    expect(source).toContain("HARNESS_HOOK_ROUTES_DIR: text(harnessPath('hook-routes'))")
   })
 })

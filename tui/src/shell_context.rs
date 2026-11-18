@@ -504,7 +504,7 @@ pub fn local_reply(value: &serde_json::Value) -> bool {
     let (Some(token), Some(id), Some(code), Some(text)) = (value["context"].as_str(), value["id"].as_str(), value["code"].as_u64(), value["text"].as_str()) else { return false };
     if uuid::Uuid::parse_str(token).is_err() || token.len() != 36 || id.is_empty() || id.len() > 80 || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') || code > 1 || text.len() > 2048 { return false }
     let uid = unsafe { libc::geteuid() };
-    let base = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".harness/shell-requests");
+    let base = crate::harness_home::harness_path(std::env::var("HOME").unwrap_or_default(), crate::harness_home::Entry::ShellRequests);
     for path in [&base, &base.join(token)] {
         if !std::fs::symlink_metadata(path).ok().is_some_and(|m| m.is_dir() && m.uid() == uid && m.mode() & 0o077 == 0) { return false }
     }

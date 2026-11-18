@@ -10,6 +10,7 @@ import 'dart:typed_data';
 import 'package:path/path.dart' as p;
 
 import '../core/harness_cli_runner.dart';
+import '../core/harness_home.dart';
 import '../core/hidden_process.dart';
 import '../core/staging_build.dart';
 import '../core/windows_layout.dart';
@@ -547,7 +548,10 @@ class EnvironmentProvisioner {
     if (home == null) {
       throw StateError('Could not resolve the current user home directory');
     }
-    return '$home${Platform.pathSeparator}.harness';
+    return HarnessHome.of(
+      home,
+      join: separatorJoin(Platform.pathSeparator),
+    ).root(HarnessRootKind.data);
   }
 
   /// Checks the complete environment, and mutates it only when [install] is explicitly true.
@@ -1458,11 +1462,16 @@ fi''';
     _harnessOutdated = null;
     _harnessUnsigned = null;
     if (_isWindows) return _hasWindowsHarness();
-    final currentNode = File('${harnessHome.path}/runtime/current-node');
+    final runtime = HarnessHome.at(
+      harnessHome.path,
+      join: separatorJoin('/'),
+    ).path(HarnessEntry.runtime);
+    final currentNode = File('$runtime/current-node');
     if (!await currentNode.exists()) return false;
     final nodePath = (await currentNode.readAsString()).trim();
     if (nodePath.isEmpty || !File(nodePath).existsSync()) return false;
-    final runtimeRoot = '${harnessHome.absolute.path}/runtime/';
+    final runtimeRoot =
+        '${HarnessHome.at(harnessHome.absolute.path, join: separatorJoin('/')).path(HarnessEntry.runtime)}/';
     if (!File(nodePath).absolute.path.startsWith(runtimeRoot)) return false;
     final node = await _runProbe(
       nodePath,
@@ -1472,7 +1481,9 @@ fi''';
     );
     if (!_nodeRuns(node)) return false;
     try {
-      final cli = File('${harnessHome.path}/cli/cli.js');
+      final cli = File(
+        '${HarnessHome.at(harnessHome.path, join: separatorJoin('/')).path(HarnessEntry.cli)}/cli.js',
+      );
       if (!await cli.exists()) return false;
       return _versionAccepted(
         await _probeHarnessCommand(nodePath, [cli.path, 'version']),
@@ -1534,7 +1545,7 @@ fi''';
         _platformEnvironment['HARNESS_ALLOW_UNSIGNED'] == '1') {
       return true;
     }
-    final bin = p.join(harnessHome.path, 'bin');
+    final bin = HarnessHome.at(harnessHome.path).path(HarnessEntry.bin);
     final ProcessResult result;
     try {
       result = await _runProbe(
@@ -1735,7 +1746,7 @@ foreach ($name in ($env:HARNESS_SIGNATURE_FILES -split [string][char]10)) {
     List<String> linuxPackages = const [],
   }) async {
     final directory = Directory(
-      '${harnessHome.path}/desktop-app-v2/setup-runs/${DateTime.now().millisecondsSinceEpoch}',
+      '${HarnessHome.at(harnessHome.path, join: separatorJoin('/')).path(HarnessEntry.desktopApp)}/setup-runs/${DateTime.now().millisecondsSinceEpoch}',
     );
     await directory.create(recursive: true);
     await _run('/bin/chmod', ['700', directory.path]);

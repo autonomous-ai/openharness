@@ -15,7 +15,9 @@
  * adapter's one `tap` is `'instead'`, for the tab's link, so a terminal's tap runs VS Code's own `open -b` itself once
  * its line is queued; off macOS the line alone is the tap. The dial's scroll sends that window the stroke's lines on a
  * `{"scroll":<lines>,"pid":<shell>}` line while VS Code is in front (§4): the extension runs them only while that
- * terminal is the active one, so the adapter has no `onScreen`.
+ * terminal is the active one, so the adapter has no `onScreen`. A stroke whose `pageKeys` passed carries `"page":true`,
+ * and the extension also presses Claude Code's page keys in that terminal
+ * (docs/plans/2026-11-18-dial-vscode-claude-fullscreen-scroll-design.md).
  */
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { createAppLink, type AppLinkDeps } from './appLink.js'
@@ -36,7 +38,7 @@ export function termPid(paneId: string): number | undefined {
 }
 
 export function createVscodeAdapter(
-  deps: AppLinkDeps & { terminals: Pick<VscodeTerminals, 'terminalOf' | 'show' | 'scroll'> },
+  deps: AppLinkDeps & { terminals: Pick<VscodeTerminals, 'terminalOf' | 'show' | 'scroll' | 'pageKeys'> },
 ): HostAdapter & Required<Pick<HostAdapter, 'canShow' | 'show'>> {
   const mac = deps.platform === 'darwin'
   const openBin = openPath(deps.bin)
@@ -98,10 +100,15 @@ export function createVscodeAdapter(
       // A terminal's pane alone: the tab has no window stream. VS Code in front first: with it behind, no window is asked.
       return pid !== undefined && deps.inFront() && !!deps.terminals.terminalOf(pid)
     },
-    scroll(pane, lines) {
+    pageKeys(pane, agent) {
+      const pid = termPid(pane.id)
+      // The tab draws no terminal: no key has anywhere to go.
+      return pid === undefined ? false : deps.terminals.pageKeys(pid, agent)
+    },
+    scroll(pane, lines, page = false) {
       const pid = termPid(pane.id)
       const terminal = pid === undefined ? undefined : deps.terminals.terminalOf(pid)
-      if (terminal) deps.terminals.scroll(terminal, lines)
+      if (terminal) deps.terminals.scroll(terminal, lines, page)
     },
   }
 }

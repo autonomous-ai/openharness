@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 
 import '../core/harness_cli_runner.dart';
+import '../core/harness_home.dart';
 import '../core/project_folder.dart';
 import 'fork_link.dart';
 import 'hub_contract.dart';
@@ -49,7 +50,10 @@ class ForkProjectImporter {
     HarnessCliRunner? cli,
   }) : root =
            root ??
-           Directory(p.join(HarnessCliRunner().harnessHome.path, 'community')),
+           Directory(
+             HarnessHome.at(HarnessCliRunner().harnessHome.path)
+                 .path(HarnessEntry.community),
+           ),
        cli = cli ?? HarnessCliRunner(runTimeout: const Duration(minutes: 5));
   final Directory root;
 
@@ -433,8 +437,7 @@ class ForkProjectImporter {
       return;
     }
     final target = p.join(
-      cli.harnessHome.path,
-      'dsh',
+      HarnessHome.at(cli.harnessHome.path).path(HarnessEntry.dsh),
       'autonomous',
       'godogen',
       'node_modules',

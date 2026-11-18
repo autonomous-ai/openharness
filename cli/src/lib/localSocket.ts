@@ -22,6 +22,7 @@ import type { Duplex } from 'node:stream'
 import { chmodSync, linkSync, lstatSync, mkdirSync, renameSync, unlinkSync, type Stats } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { harnessPath } from '../config/harnessHome.js'
 import { configuredPortOf, readDaemonRecord } from './daemonRecord.js'
 import { daemonPipe, type LocalDaemonOptions } from './windows/daemonPipe.js'
 import { checkPipeAuth, newPipePath, NonceWindow, PIPE_AUTH_HEADER, PIPE_PROOF_HEADER, pipeIdOf, pipeProofValue } from './windows/pipeAuth.js'
@@ -56,7 +57,7 @@ const pipeProofs = new WeakMap<IncomingMessage, string>()
  *  and a shell, so clients would disagree. The same rule is in cli/hook/notify.mjs, store/tools/local-daemon.mjs and Desktop's
  *  local_daemon_transport.dart. */
 export function shortSocketFolder(folder: string, home: string = homedir()): string {
-  return join(home, '.harness', 's', createHash('sha256').update(folder).digest('hex').slice(0, 16))
+  return join(harnessPath('s', home), createHash('sha256').update(folder).digest('hex').slice(0, 16))
 }
 
 /** `name` in [folder], or in its short folder when that path is too long for a socket; null when even that is, the one case left on TCP. */

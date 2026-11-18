@@ -29,6 +29,7 @@ import { cableEventFor, cableStepFor, cableQuestionCloseFor, cableQuestionFor, D
 import { CableSession, SHOWN_ONLY_PREFIX, type DialStatus, type FollowCause } from '../cable/cableSession.js'
 import type { HostAdapter, Pane } from '../cable/hosts/adapter.js'
 import { createClaudeAppAdapter } from '../cable/hosts/claudeApp.js'
+import { MANAGED_SETTINGS, readFullscreen } from '../cable/hosts/claudeRenderer.js'
 import { cmuxClientDeps, cmuxStoreDir, cmuxStores, createCmuxClient, type CmuxClient } from '../cable/hosts/cmuxCli.js'
 import { createCmuxAppAdapter } from '../cable/hosts/cmuxApp.js'
 import { CmuxSource } from '../cable/hosts/cmuxSource.js'
@@ -58,7 +59,7 @@ import { createTmuxAdapter } from '../cable/hosts/tmux.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { watchSocket } from '../cable/hosts/unixSocket.js'
 import { createVscodeAdapter, termPid } from '../cable/hosts/vscode.js'
-import { readProcessParents, vscodeStreams, type VscodeTerminalsDeps } from '../cable/hosts/vscodeTerminals.js'
+import { readForeground, readProcessParents, vscodeStreams, type VscodeTerminalsDeps } from '../cable/hosts/vscodeTerminals.js'
 import { createWeztermAdapter } from '../cable/hosts/wezterm.js'
 import { createEngineTally } from '../cable/engineTally.js'
 import { createVscodeExtensionSetup } from '../cable/vscodeExtensionSetup.js'
@@ -149,6 +150,15 @@ export interface DevicesDeps {
   /** For this service's tests: the process table VS Code's terminals are matched by; `ps` by default
    *  (cable/hosts/vscodeTerminals.ts). */
   processParents?: VscodeTerminalsDeps['processes']
+  /** For this service's tests: whether a Claude Code session's settings draw it fullscreen; its settings files by default
+   *  (cable/hosts/claudeRenderer.ts readFullscreen). */
+  claudeFullscreen?: VscodeTerminalsDeps['fullscreen']
+  /** For this service's tests: Claude Code's managed settings file, which outranks a session's own; this platform's by
+   *  default (cable/hosts/claudeRenderer.ts MANAGED_SETTINGS). */
+  claudeManagedSettings?: string
+  /** For this service's tests: how an agent's process group and its VS Code terminal's foreground group, through that
+   *  terminal's shell, are read; `ps` by default (cable/hosts/vscodeTerminals.ts readForeground). */
+  processGroups?: VscodeTerminalsDeps['foreground']
   /** For this service's tests: how Claude Code is found for a Claude Code home; the daemon's own lookup by default
    *  (devices/claudePlugin.ts claudeFound). */
   claude?: (home: string, shell: boolean) => Promise<ClaudeRun | null>
@@ -384,8 +394,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // The streams Harness's own VS Code extension holds open, one a window, and the terminal each VS Code agent runs in
   // (docs/plans/2026-11-17-dial-vscode-extension-design.md). An adapter's capabilities are read at each look, so a
   // terminal found or lost tells the dials to look again.
+  const renderer = {
+    defaultHome: dirname(env.CLAUDE_PROJECTS_DIR), managed: deps.claudeManagedSettings ?? MANAGED_SETTINGS[apps.platform],
+  }
   const vscode = vscodeStreams({
     processes: deps.processParents ?? readProcessParents,
+    fullscreen: deps.claudeFullscreen ?? ((cwd, transcriptPath) => readFullscreen(cwd, transcriptPath, renderer)),
+    foreground: deps.processGroups ?? readForeground,
     changed: () => part.call('dial', () => cable.syncAgents()),
     now: monotonic,
     after: timerIn('vscode'),
@@ -690,29 +705,51 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (address !== undefined) targets.push({ adapter: herdrAppNoted, pane: hcPane(address) })
     return targets.find(({ adapter, pane }) => adapter.canScroll?.(pane))
   }
+  /** A stroke that goes to its app's pane, line by line. `page`: its guard said the program there takes its own page
+   *  keys, so its lines carry them too. */
+  type ToPane = ScrollTarget & { lines: ReturnType<typeof createScrollLines>; page: boolean }
   /** The route the stroke on the glass took at its `down`, kept to its `up`: Harness's windows are never left holding a
    *  drag whose `up` went to an app. A `move` or an `up` with no `down` before it chooses then. While its app is asked
-   *  whether the pane is on screen, the stroke is held: only the window knows which terminal it shows, and Herdr's answer
-   *  took 0.04 s. */
+   *  whether the pane is on screen, or whether Claude Code there takes its page keys, the stroke is held: only the
+   *  window knows which terminal it shows, and Herdr's answer took 0.04 s; the page guard answers within 500 ms. */
   let stroke:
-    | (ScrollTarget & { lines: ReturnType<typeof createScrollLines> })
+    | ToPane
     | { deciding: ScrollTarget; held: Held }
     | 'windows'
     | undefined
   const toWindows = (phase: 'down' | 'move' | 'up', dy: number, velocity: number): void =>
     core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity } })
-  /** The app's answer, for the stroke that asked it alone: one left behind by a newer stroke, or one that lands once the
-   *  devices began to stop (the dial still sends while the stop awaits its listener), is dropped, so nothing of that
-   *  stroke is sent anywhere. A stroke already decided keeps its route through the stop: a window that heard its down
-   *  hears its up. */
-  const decided = (asked: { deciding: ScrollTarget; held: Held }, visible: boolean): void => {
+  /** Lines to the stroke's pane. A page stroke reads its agent again first: once it waits on the person a key could
+   *  land in the prompt, so the rest of the stroke is lines alone. */
+  const toPane = (route: ToPane, phase: 'down' | 'move' | 'up', dy: number): void => {
+    if (route.page && observed?.byPane(route.adapter.id, route.pane.id)?.state === 'needs-you') route.page = false
+    route.adapter.scroll!(route.pane, route.lines.take(phase, dy), route.page)
+  }
+  /** What a stroke on that target waits on at its down: Herdr's whether its pane is on screen (its lines, or Harness's
+   *  windows), or whether the shown Claude Code takes its page keys (page, or lines). None when the stroke is lines at
+   *  once: any other engine, or a guard that refused with nothing read. A refused guard is the pane's lines, never the
+   *  windows: the person looks at that terminal, and its line scroll is what moved it before. */
+  const routeOf = ({ adapter, pane }: ScrollTarget): Promise<'page' | 'lines' | 'windows'> | undefined => {
+    if (adapter.onScreen) return adapter.onScreen(pane).then((visible) => (visible ? 'lines' : 'windows'))
+    const agent = observed?.byPane(adapter.id, pane.id)
+    if (agent?.engine !== 'claude') return undefined
+    const keys = adapter.pageKeys?.(pane, {
+      asking: agent.state === 'needs-you', cwd: observed?.startedIn(agent.id), transcriptPath: observed?.transcriptOf(agent.id),
+    })
+    return keys ? keys.then((page) => (page ? 'page' : 'lines')) : undefined
+  }
+  /** The app's answer, page, lines or Harness's windows, for the stroke that asked it alone: one left behind by a newer
+   *  stroke, or one that lands once the devices began to stop (the dial still sends while the stop awaits its
+   *  listener), is dropped, so nothing of that stroke is sent anywhere. A stroke already decided keeps its route
+   *  through the stop: a window that heard its down hears its up. */
+  const decided = (asked: { deciding: ScrollTarget; held: Held }, to: 'page' | 'lines' | 'windows'): void => {
     if (stopped || stroke !== asked) return
     const { deciding: { adapter, pane }, held } = asked
-    if (visible) {
+    if (to !== 'windows') {
       // The travel held meanwhile goes as lines at once; what follows goes line by line.
-      const lines = createScrollLines()
-      stroke = held.up === undefined ? { adapter, pane, lines } : undefined
-      adapter.scroll!(pane, lines.take('move', held.dy))
+      const route = { adapter, pane, lines: createScrollLines(), page: to === 'page' }
+      stroke = held.up === undefined ? route : undefined
+      toPane(route, 'move', held.dy)
       return
     }
     // A hand's pace, and no address: once per stroke the windows took because its pane was not on screen.
@@ -727,13 +764,19 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     let answer: Promise<void> | undefined
     // A held up ended its stroke too: a frame after it begins a new one, and the older answer is stale.
     if (phase === 'down' || !route || (route !== 'windows' && 'held' in route && route.held.up !== undefined)) {
+      // An older stroke held for its page guard is its pane's lines whatever the answer (routeOf): what it held goes out
+      // now, with no page, as the answer it waited on is left behind. One held for Herdr's on screen may be the windows'.
+      if (route && route !== 'windows' && 'held' in route && !route.deciding.adapter.onScreen && !stopped) {
+        toPane({ ...route.deciding, lines: createScrollLines(), page: false }, 'move', route.held.dy)
+      }
       // Once the devices began to stop, no app is asked or run: a stroke then is the windows', as before this route.
       const target = stopped ? undefined : scrollTarget()
-      if (target?.adapter.onScreen) {
-        const asked = { deciding: target, held: { down: false, dy: 0, velocity: 0 } }
+      const to = target && routeOf(target)
+      if (to) {
+        const asked = { deciding: target!, held: { down: false, dy: 0, velocity: 0 } }
         route = stroke = asked
-        answer = target.adapter.onScreen(target.pane).then((visible) => decided(asked, visible))
-      } else route = stroke = target ? { ...target, lines: createScrollLines() } : 'windows'
+        answer = to.then((answered) => decided(asked, answered))
+      } else route = stroke = target ? { ...target, lines: createScrollLines(), page: false } : 'windows'
     }
     if (route !== 'windows' && 'held' in route) {
       route.held.dy += dy
@@ -747,7 +790,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (route === 'windows') toWindows(phase, dy, velocity)
     // Whole lines, and an up's velocity is not played: the scroll stops where the finger stops. An app that went takes
     // nothing more of the stroke, which never turns to Harness's windows midway, and none once the devices began to stop.
-    else if (!stopped) route.adapter.scroll!(route.pane, route.lines.take(phase, dy))
+    else if (!stopped) toPane(route, phase, dy)
   }
 
   const cableHost = new DaemonCableHost({

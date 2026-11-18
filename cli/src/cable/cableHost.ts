@@ -272,10 +272,10 @@ export class DaemonCableHost implements CableHost {
     this.filter = new AppFilter({
       after: wiring.appTimer ?? unrefAfter,
       random: wiring.appRandom ?? Math.random,
-      // The registry's agents at each call, not the rings' last update: only a read of the machine list updates the
-      // rings, so a settle with the dials on a window's tab or unplugged, or a pick just after an app's last agent ended,
-      // would count the past. Harness's own agents still count as that read left them: the list read feeds their source
-      // (machineSnapshot).
+      // The registry's agents at each call, not the rings' last update: only a list read updates the rings (the machine
+      // list's, or the tab's for a dial that says `appFilter`), so a settle between two reads or with the dials
+      // unplugged, or a pick just after an app's last agent ended, would count the past. Harness's own agents still
+      // count as the last machine list left them: that read feeds their source (machineSnapshot).
       counts: () => this.counts(),
       switched: (cause) => wiring.appSwitched?.(cause),
       settled: (app) => {
@@ -636,13 +636,11 @@ export class DaemonCableHost implements CableHost {
 
   /**
    * On the tab, at a read by a dial that says `appFilter`, where the filter's own D1 is: the app in front getting known
-   * agents turns the view to its ring. The registry is read last, so a tab read with Harness or no listed app in front
-   * costs what it did before the view.
+   * agents turns the view to its ring. Decided on the agents the tab read listed, so the read takes one registry read.
    */
-  private viewOnTab(): void {
-    if (this.view !== 'tabs') return
+  private viewOnTab(listed: HostAgent[]): void {
     const front = this.otherFront()
-    if (front !== undefined && front !== this.pickedOver && has(this.counts().known, front)) this.setView('apps', 'front')
+    if (front !== undefined && front !== this.pickedOver && has(this.rings.counts(listed).known, front)) this.setView('apps', 'front')
   }
 
   /**
@@ -671,8 +669,8 @@ export class DaemonCableHost implements CableHost {
     this.waiting = null
   }
 
-  /** Every agent on this computer, by source; null when the devices have none. Read only for a dial that holds no
-   *  window's tab. */
+  /** Every agent on this computer, by source; null when the devices have none. Read for the machine list, and on the
+   *  window's tab only for a dial that says `appFilter` (its list of apps). */
   private registry: HostRegistry | null = null
   /** The machine list's ring: one for this host, so every dial here swipes through the same agents in the same order.
    *  In memory only: a restart of the devices process builds it again from the registry. */
@@ -741,8 +739,8 @@ export class DaemonCableHost implements CableHost {
     return this.onMachine(agentId, opts)?.agent.app
   }
 
-  /** A pick from the dial's list of apps. With a window, on the tab nothing is picked; on an app's ring Harness is the
-   *  window's tab, and any other app the filter's pick. */
+  /** A pick from the dial's list of apps. With a window, on the tab another app with agents turns the dial to its ring;
+   *  on an app's ring Harness is the window's tab, and any other app the filter's pick. */
   pickApp(app: string, cause: 'pick' | 'notice' = 'pick'): AppPick {
     if (cause === 'pick') this.wiring.appPicked?.()
     const answer = this.answerPick(app, cause)
@@ -753,7 +751,15 @@ export class DaemonCableHost implements CableHost {
 
   private answerPick(app: string, cause: 'pick' | 'notice'): AppPick {
     if (this.swarms === null) return this.filter.pick(app, cause)
-    if (this.view === 'tabs') return 'ignored'
+    if (this.view === 'tabs') {
+      // A notice's pick on the tab is not the dial's switch. The filter holds the app even when it already shows it, or
+      // the next read's D1 would show Harness again and turn the view straight back to the tab.
+      if (cause !== 'pick' || app === 'harness' || !this.filter.hold(app)) return 'ignored'
+      // Picked off the tab: the app Harness was picked over no longer holds the tab when it gets agents in front.
+      this.pickedOver = undefined
+      this.setView('apps', 'pick')
+      return 'switched'
+    }
     if (app !== 'harness') return this.filter.pick(app, cause)
     this.pickedOver = this.filter.settledApp()
     this.setView('tabs', 'pick')
@@ -808,7 +814,7 @@ export class DaemonCableHost implements CableHost {
     this.unread = items
   }
 
-  /** What is unread, the devices' own questions first: the dial keeps one row an agent, and the first it is sent. */
+  /** What is unread, the devices' own questions first: a drawer carries one row an agent, the first the dial is sent. */
   listUnread(): UnreadNotification[] {
     const asked = this.wiring.noticeRows?.() ?? []
     const agents = new Set(asked.map((row) => row.agentId))
@@ -866,13 +872,16 @@ export class DaemonCableHost implements CableHost {
    *   - a window with an empty tab         → `[]`; the dial shows "Nothing on this tab".
    *   - a window with panes                → those agents, in tile order; a tile whose machine dropped out
    *                                          is held from the router's `knownAgents` (see listAgentsFlat).
+   * A dial that says `appFilter` is also sent, on the tab, the other apps it can switch to (see tabApps).
    */
   async listAgents(): Promise<CableAgent[]> {
     return (await this.listAgentSnapshot()).agents
   }
 
   async listAgentSnapshot(opts: { apps?: boolean } = {}): Promise<{ agents: CableAgent[]; tab: string; total: number; view?: 'machine'; apps?: AppList }> {
-    if (opts.apps) this.viewOnTab()
+    // One registry read serves a tab read: the view's rule and the tab's list of apps.
+    const listed = opts.apps && this.view === 'tabs' ? this.agentsNow() : undefined
+    if (listed) this.viewOnTab(listed)
     const flat = await this.listAgentsFlat()
     const byId = new Map(flat.map((a) => [a.id, a]))
     const registry = this.registry
@@ -897,7 +906,10 @@ export class DaemonCableHost implements CableHost {
       this.deskShape = shape
       this.wiring.log(`cable: tab ${shape} · ${flat.length} in all`)
     }
-    return { agents: out, tab, total: this.viaFleet((r) => r.agentTotal()) }
+    const total = this.viaFleet((r) => r.agentTotal())
+    // A read that turned the view from a ring to the tab reads the registry once more.
+    if (opts.apps && this.view === 'tabs') return { agents: out, tab, total, apps: this.tabApps(listed ?? this.agentsNow()) }
+    return { agents: out, tab, total }
   }
 
   /** The machine list: the registry's agents, bounded by the ring (the 78-agent reconnect above is not repeated); with
@@ -927,7 +939,12 @@ export class DaemonCableHost implements CableHost {
 
   /** Each app's agents in the registry now: the filter and the view decide on these, never on the last read's. */
   private counts(): AppCounts {
-    return this.rings.counts(this.registry?.entries().map((e) => e.agent) ?? [])
+    return this.rings.counts(this.agentsNow())
+  }
+
+  /** Every agent in the registry now, read once: each read merges every source's whole list. */
+  private agentsNow(): HostAgent[] {
+    return this.registry?.entries().map((e) => e.agent) ?? []
   }
 
   /** The shown app's ring, or its scope's while that app is settled in front: a scope is what that app has on screen,
@@ -951,6 +968,15 @@ export class DaemonCableHost implements CableHost {
       shown,
       apps: rows.map((a) => ({ id: a.id, name: appDisplayName(a.id), count: a.count, waiting: a.waiting })),
     }
+  }
+
+  /** The apps the window's tab can switch to: every app with agents but Harness, which the tab already is, in the order
+   *  they appeared, as the machine view's list. It never asks `filter.shown()`, which can switch the filter and push
+   *  every dial from a read that shows no app. */
+  private tabApps(agents: HostAgent[]): AppList {
+    this.rings.update(agents, this.ranks)
+    const rows = this.rings.apps().filter((a) => a.id !== 'harness').slice(0, APP_LIMIT)
+    return { shown: 'harness', apps: rows.map((a) => ({ id: a.id, name: appDisplayName(a.id), count: a.count, waiting: a.waiting })) }
   }
 
   /** How many agents the account has across every machine — the overview's number, sent beside the

@@ -72,6 +72,20 @@ describe('QuestionInbox', () => {
     expect(inbox.read('agent-0').ok).toBe(false)
     expect(inbox.read('agent-64').ok).toBe(true)
   })
+  it('asks each question once until the dial loses it, and a drawer that carries one holds it as asked', () => {
+    const inbox = new QuestionInbox()
+    inbox.set('a', 'qa', question()); inbox.set('b', 'qb', question()); inbox.set('c', 'qc', question())
+    expect(inbox.ask('a', 'qa')).toBe(true)
+    expect(inbox.ask('a', 'qa')).toBe(false)
+    expect(inbox.ask('a', 'old')).toBe(false)
+    // A drawer naming b's question as a row puts it on the dial, asked or not; a's, which it does not name, is gone.
+    inbox.forget(new Set(['b']))
+    expect(inbox.ask('b', 'qb')).toBe(false)
+    expect(inbox.ask('a', 'qa')).toBe(true)
+    expect(inbox.ask('c', 'qc')).toBe(true)
+    inbox.forget()
+    expect(['a', 'b', 'c'].map((id) => inbox.ask(id, `q${id}`))).toEqual([true, true, true])
+  })
 })
 
 describe('spoken answer drafts', () => {

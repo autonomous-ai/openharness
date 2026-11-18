@@ -217,6 +217,7 @@ describe('profileHome', () => {
     const options = { home, environment: {} }
     expect(claudeHomeListed(work, machineId, options)).toBe(true)
     expect(claudeHomeListed(join(home, '.harness', 'claude-profiles', 'new-one'), machineId, options)).toBe(true)
+    expect(claudeHomeListed(join(home, '.harness', 'claude-profilesx', 'new-one'), machineId, options)).toBe(false)
     expect(claudeHomeListed(join(home, '.harness', 'claude-profiles', '..', '..', 'elsewhere'), machineId, options)).toBe(false)
     expect(claudeHomeListed(home, machineId, options)).toBe(false)
     expect(claudeHomeListed(join(home, 'not-listed'), machineId, options)).toBe(false)

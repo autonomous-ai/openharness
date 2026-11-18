@@ -78,6 +78,26 @@ void main() {
     expect(logs.single, contains('winget exited 7'));
   });
 
+  test('marks its one try under the profile\'s .harness/run', () async {
+    final asked = <String>[];
+    // Answering yes for the marker stops start() before it creates the file,
+    // so a wrong path is only recorded, never written.
+    await WindowsGitSetup(
+      environment: {'USERPROFILE': r'C:\Users\me', 'PATH': ''},
+      isFile: (path) {
+        asked.add(path);
+        return path.endsWith('git-install-tried');
+      },
+      isWindows: true,
+      run: (executable, arguments) async {
+        runs.add([executable, ...arguments]);
+        return 0;
+      },
+    ).start();
+    expect(asked.last, r'C:\Users\me\.harness\run\git-install-tried');
+    expect(runs, isEmpty);
+  });
+
   test('a computer without winget goes on without Git', () async {
     await setup(thrown: const ProcessException('winget', [])).start();
     expect(logs.single, contains('was not installed'));
