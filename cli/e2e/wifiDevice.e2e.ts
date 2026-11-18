@@ -2,7 +2,7 @@
  * The Wi-Fi device with the dials, in the devices' process (services/wifi.ts, docs/design/2026-10-06-core-
  * boundary-next.md, step 9), on the real daemon: a device paired with the machine reaches it through the
  * fake relay (harness/fakeWifiDevice.ts), its session the gateway's (in a process of its own), its service
- * the devices', every answer passing through the core:
+ * the devices', with requests and answers crossing their authenticated gateway peer:
  * - it is answered as it was in the core's process: its hello, its agents, a prompt with its receipt and the
  *   turn's events, and the focus a window gives;
  * - the devices' process killed: its session stays, it is told to resync and served on, the receipt of a
@@ -12,9 +12,10 @@
  * - its service failing to start costs it alone: the dials and the agents go on, and
  *   `harness device receipt` says it is not running;
  * - paired, it starts the devices' process with the daemon, with no dial (core/devicesWake.ts), and what it
- *   sends while that process starts again is held by the core and answered.
+ *   sends while that process starts again is held by the gateway and answered.
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import type { ChildProcess } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
@@ -38,6 +39,8 @@ describe('the Wi-Fi device with the dials', () => {
   let control: LocalClient | undefined
   let desk: Desk | undefined
   let dialsRoot: string | undefined
+  let master: ChildProcess | undefined
+  let masterClosed: { code: number | null; signal: NodeJS.Signals | null } | undefined
   afterEach(async () => {
     try {
       device?.close()
@@ -47,10 +50,24 @@ describe('the Wi-Fi device with the dials', () => {
       try {
         await desk?.close()
       } finally {
-        try { await world?.close() }
+        try {
+          if (world) {
+            // The fleet convenience closer suppresses daemon cleanup failures; acceptance must surface them.
+            await world.machine.daemon.close()
+            expect(await until('the fixture master to close', () => masterClosed ?? null, 5_000, 50))
+              .toEqual({ code: 0, signal: null })
+            expect(master?.stdout?.readableEnded).toBe(true)
+            expect(master?.stderr?.readableEnded).toBe(true)
+            expect(existsSync(world.machine.daemon.root)).toBe(false)
+          }
+        }
         finally {
-          if (dialsRoot) rmSync(dialsRoot, { recursive: true, force: true })
-          world = undefined; device = undefined; window = undefined; control = undefined; desk = undefined; dialsRoot = undefined
+          try { await world?.backend.close() }
+          finally {
+            if (dialsRoot) rmSync(dialsRoot, { recursive: true, force: true })
+            world = undefined; device = undefined; window = undefined; control = undefined; desk = undefined; dialsRoot = undefined
+            master = undefined; masterClosed = undefined
+          }
         }
       }
     }
@@ -78,6 +95,8 @@ describe('the Wi-Fi device with the dials', () => {
       ...env,
     } })
     world = w
+    master = w.machine.daemon.child!
+    master.once('close', (code, signal) => { masterClosed = { code, signal } })
     desk = new Desk(dials)
     const { backend, machine } = w
     onTestFailed(() => {

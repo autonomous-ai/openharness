@@ -904,3 +904,18 @@ now fences those global effects too. Matched older receipts settle independently
 native dispatch refusing the exact session/epoch/revision proof preserves the newer global state.
 Both mixed older/newer and only-newer native callers fail before the fix; non-native and valid-current
 cancellation remain controls. The correction changes no core authority or retained maps.
+
+### Integrated packaged checkpoint
+
+Integration `164587caf0` preserves the independent phone shim boundary and gateway metric provenance.
+The author reviewed both conflict resolutions. Selected integration checks passed 681 cases in 26 files,
+with all 13 covered core/service files at 100% on every metric, 382 transport/caller cases in seven files,
+and TypeScript. Receipt: `.harness/validation/20261118T033156.823876Z-99767/receipt.json`.
+
+That same receipt is failed overall: the packaged six-case Wi-Fi file passed inline compatibility and
+service-unavailable isolation, but four supervised cases timed out awaiting hello. Each reported
+`SESSION_EVENTS_UNAVAILABLE` followed by `WIFI_NOTICE_FAILED` at service startup. Source diagnosis found
+the process composition omitted the event observer's actual daemon address; its default read the process
+facade's unknown port. A separate correction is under failure-first validation; no native pass is claimed.
+The test now propagates daemon cleanup failures and checks master exit zero, actual close, both output
+EOFs and private-root removal. All six cases completed those cleanup checks, including the four failures.
