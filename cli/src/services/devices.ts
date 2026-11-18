@@ -434,7 +434,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     { ...claude, show: (pane: Pane, agentId: string) => { noteLink(agentId); return claude.show(pane, agentId) } },
     // No echo to guard: the Codex app sends no attach for the follow to take as a person's.
     createCodexAppAdapter({ ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'codex', log }),
-    createVscodeAdapter({ ...apps, bin: openBin }),
+    // No echo to guard: VS Code sends no attach for the follow to take as a person's.
+    createVscodeAdapter({ ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'vscode' }),
     createTabsAdapter({
       isOpen: () => tabs.isOpen(),
       select: (tab, raise) => {
