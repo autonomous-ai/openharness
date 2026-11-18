@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync, linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, join, posix, win32, type PlatformPath } from 'node:path'
+import { basename, dirname, join, posix, win32, type PlatformPath } from 'node:path'
 import { CallFailure, expandHome, fenced, forbiddenDirs, inside, tempDir, unc, uploadPath } from './call.js'
 
 // The account's own home, which a test that needs one points at a folder of its own: no test writes in the real one.
@@ -223,5 +223,45 @@ describe('uploadPath', () => {
   it('allows a document elsewhere, also written from ~/', () => {
     expect(uploadPath(join(home, 'docs', 'note.txt'), { HOME: home })).toBe(join(home, 'docs', 'note.txt'))
     expect(uploadPath('~/docs/note.txt', { HOME: home })).toBe(join(home, 'docs', 'note.txt'))
+  })
+})
+
+// A file under the home's Harness folder is never sent, judged by where it really is, while a picture beside that folder is.
+describe('uploadPath around the home\'s Harness folder', () => {
+  const REFUSED = 'not a media file the helper may send'
+  let base: string
+  let home: string
+  beforeEach(() => {
+    base = mkdtempSync(join(tmpdir(), 'connectors-call-'))
+    home = join(base, 'home')
+  })
+  afterEach(() => rmSync(base, { recursive: true, force: true }))
+
+  /** A `.png`, so that the fence refuses it and not the suffix rule. */
+  function picture(path: string): string {
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, 'png')
+    return path
+  }
+
+  it('refuses a file under the home\'s .harness', () => {
+    const shot = picture(join(home, '.harness', 'logs', 'shot.png'))
+    expect(() => uploadPath(shot, { HOME: home })).toThrow(REFUSED)
+  })
+
+  // A junction, which Windows makes with no admin rights; elsewhere the type is ignored and this is a symlink.
+  it('a linked root: refuses a file reached through the link, and the same file by its real path', () => {
+    const elsewhere = join(base, 'disk', 'harness')
+    const shot = picture(join(elsewhere, 'logs', 'shot.png'))
+    mkdirSync(home)
+    symlinkSync(elsewhere, join(home, '.harness'), 'junction')
+    expect(() => uploadPath(join(home, '.harness', 'logs', 'shot.png'), { HOME: home })).toThrow(REFUSED)
+    expect(() => uploadPath(shot, { HOME: home })).toThrow(REFUSED)
+  })
+
+  it('takes a picture beside it', () => {
+    mkdirSync(join(home, '.harness'), { recursive: true })
+    const shot = picture(join(home, 'pictures', 'shot.png'))
+    expect(uploadPath(shot, { HOME: home })).toBe(realpathSync.native(shot))
   })
 })
