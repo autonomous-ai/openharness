@@ -1,12 +1,13 @@
 /** Disposable real-machine peer for remote-viewer-live.ts. Requires explicit opt-in. */
 import { readFileSync, writeFileSync, mkdirSync, existsSync, cpSync, createWriteStream, rmSync } from 'node:fs'
-import { homedir, hostname, arch } from 'node:os'
+import { hostname, arch } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:net'
 import { spawn, execFileSync } from 'node:child_process'
 import { once } from 'node:events'
+import { harnessPath } from '../src/config/harnessHome.js'
 import { newIdentity, b64e } from '../src/lib/e2ee/core.js'
 
 if (process.env.HARNESS_VIEWER_LIVE_TEST !== '1') throw new Error('Opt in with HARNESS_VIEWER_LIVE_TEST=1')
@@ -16,7 +17,7 @@ const root = resolve(process.argv[3] || 'viewer-peer')
 if (existsSync(root)) throw new Error('Use a new peer directory')
 mkdirSync(root, { recursive: true, mode: 0o700 })
 const cli = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const originalAuth = JSON.parse(readFileSync(join(homedir(), '.harness/auth/session.json'), 'utf8'))
+const originalAuth = JSON.parse(readFileSync(join(harnessPath('auth'), 'session.json'), 'utf8'))
 const status = await fetch('http://127.0.0.1:18473/api/status', { headers: { 'x-adapter-local': '1' } }).then(r => r.json()) as any
 const base = String(status.backendUrl).replace(/^ws/, 'http').replace(/\/$/, '')
 if (!base.startsWith('https://')) throw new Error('Expected the existing authenticated hosted backend')
@@ -58,7 +59,7 @@ try {
   // the running app's session. Trust keys, computer id, registry and terminal socket are independent.
   writeFileSync(join(root, 'auth/session.json'), JSON.stringify({ ...originalAuth, refreshToken: undefined,
     computerId, machineId, updatedAt: Date.now() }), { mode: 0o600 })
-  const installed = JSON.parse(readFileSync(join(homedir(), '.harness/dsh/installed.json'), 'utf8'))
+  const installed = JSON.parse(readFileSync(join(harnessPath('dsh'), 'installed.json'), 'utf8'))
   writeFileSync(join(root, 'dsh/installed.json'), JSON.stringify(installed))
   const workspaces: Record<string, { path: string; engine: string }> = {}
   for (const name of ['blender', 'marp', 'manim', 'godogen']) {
