@@ -38,8 +38,9 @@ export interface NoticesDeps {
   /** The file's cards at the start (noticeFile.ts). */
   restored: readonly StoredNotice[]
   log(line: string): void
-  /** A row changed with no question frame to carry it: the dial's drawer is replaced. */
-  redraw(): void
+  /** Those agents' rows changed with no question frame to carry them: the dial's drawer is replaced, after what their
+   *  order already holds, as a close in it drops its agent's row. */
+  redraw(agentIds: readonly string[]): void
   /** The card's question to every dial, held for its row to open, never asked. */
   hold(agentId: string, id: string, questions: unknown): void
 }
@@ -159,13 +160,14 @@ export class Notices {
    *  under its id, unless one is still open. Nothing for an agent with none. A restored row comes back by a drawer
    *  replace, as no question frame carries it. */
   reask(agentId: string): void {
-    if (this.send(agentId)) this.deps.redraw()
+    if (this.send(agentId)) this.deps.redraw([agentId])
   }
 
-  /** A dial attached: each pending card is sent again, under its id, a live one asked and a restored one held. No
-   *  redraw: the attach's greeting replaces the drawer itself. */
+  /** A dial attached: each pending card is sent again, under its id, a live one asked and a restored one held. The
+   *  attach's greeting draws a restored row, but ahead of a close still in its agent's order: a redraw puts it back. */
   attached(): void {
-    for (const agentId of this.cards.keys()) this.send(agentId)
+    const held = [...this.cards.keys()].filter((agentId) => this.send(agentId))
+    if (held.length > 0) this.deps.redraw(held)
   }
 
   /** One kind of list as it is now: the core's Harness agents (`harness`), or the outside sources'. Each restored card of
@@ -178,7 +180,7 @@ export class Notices {
     const waiting = [...this.cards].filter(([, card]) => card.waiting && (card.host === 'harness') === harness)
     if (waiting.length === 0) return
     const agents = listed()
-    let shown = false
+    const shown: string[] = []
     for (const [agentId, card] of waiting) {
       const agent = agents.find((other) => other.agentId === agentId)
         ?? agents.find(({ session, panes }) => session ? card.keys.includes(session) : panes.some((pane) => card.keys.includes(pane)))
@@ -189,10 +191,10 @@ export class Notices {
       }
       delete card.waiting
       if (agent.agentId !== agentId) this.rename(agentId, agent.agentId)
-      if (this.send(agent.agentId)) shown = true
+      if (this.send(agent.agentId)) shown.push(agent.agentId)
     }
     // A covered card shows no row: it comes with its cover's close (reask).
-    if (shown) this.deps.redraw()
+    if (shown.length > 0) this.deps.redraw(shown)
   }
 
   /** That agent is in a turn: its restored card ends, as the turn most likely came after its notice. A live card stays:

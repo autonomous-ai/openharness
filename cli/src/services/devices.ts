@@ -1216,7 +1216,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     count: createEngineTally('[device] notify', ['claude', 'codex', 'agent'], ['shown', 'no dial', 'limited'], log),
     restored: noticeFile.load(),
     log,
-    redraw: () => { void cable.replaceNotifications(cableHost.listUnread()) },
+    // Behind every send those agents' order holds, their holds among them: a close that came after would drop the row.
+    redraw: (agentIds) => {
+      const replace = (): void => { void cable.replaceNotifications(cableHost.listUnread()) }
+      const behind = agentIds.flatMap((agentId) => queued.get(agentId) ?? [])
+      if (behind.length === 0) replace()
+      else void Promise.all(behind).then(() => part.call('notices', replace))
+    },
     // In its agent's order, as an ask is.
     hold: (agentId, id, questions) => inOrder(agentId, () => { void cable.hold(agentId, id, questions) }),
   })
