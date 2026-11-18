@@ -49,6 +49,13 @@ async function setup(git = false) {
   return { prepared, permit, publish, deps: authority, rows, exclusion, create: () => createHandoffPublisher(authority) }
 }
 
+it('refuses publication when its original archive witness changed during the child answer', async () => {
+  const ctx = await setup()
+  ctx.deps.authority = async () => ({ resolve: ctx.deps.resolve, ownedByOther: ctx.deps.ownedByOther, current: () => false })
+  await expect(ctx.publish(ctx.prepared, ctx.permit)).rejects.toThrow()
+  expect(fs.existsSync(join(cwd, ctx.prepared.result.file!))).toBe(false)
+})
+
 /** A .gitignore an earlier publication left: one this publication did not write, so it flushes it (a file it wrote was
  *  flushed as it was written, and is not flushed again). */
 function leftIgnore(): void {

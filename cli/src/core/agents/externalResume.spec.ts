@@ -93,6 +93,14 @@ function setup() {
   return { deps, registry, rows, panes, inspect, create, killHeld, controller, stage, setStopped: (rows: Array<{ sessionId: string }>) => { stoppedRows = rows; archiveVersion++ }, cancelWork: () => { cancelled = true } }
 }
 
+it('refuses a new adoption when its archive witness is already stale after the awaited query', async () => {
+  const test = setup()
+  vi.mocked(test.deps.stoppedQuery).mockResolvedValueOnce({ witness: 'fixture', matches: [false], current: () => false })
+  expect(await test.controller.create(input())).toMatchObject({ ok: false, error: 'CORE_NOT_READY' })
+  expect(test.create).not.toHaveBeenCalled()
+  expect(test.registry.openPendingAgent).not.toHaveBeenCalled()
+})
+
 it.each(['conversation', 'cancelled', 'signal owner'] as const)('holds external effects when %s changes during durable preparation', async change => {
   const test = setup()
   const persist = vi.mocked(test.registry.setExternalResume).getMockImplementation()!

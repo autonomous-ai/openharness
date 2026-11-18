@@ -29,6 +29,7 @@ import { linkClaudeProfile } from '../lib/claudeProfiles.js'
 import { listClaudeProfiles, profileId } from '../lib/claudeHomes.js'
 import { linkCodexProfile, listCodexProfiles } from '../lib/codexProfiles.js'
 import { fakeCore } from '../testing/fakeCore.js'
+import { storedGridFixture } from '../testing/gridCredentials.js'
 import { compactRuntimePickerModels, launchTarget, MODELS_REQUESTS, runtimeModelCatalog, startModels } from './models.js'
 import { ensureBundledModelManager } from '../dsh/builtins.js'
 vi.mock('../dsh/builtins.js', () => ({ ensureBundledModelManager: vi.fn(() => true) }))
@@ -851,6 +852,13 @@ describe('the models service', () => {
         expect(vi.mocked(refreshApiFor).mock.calls.at(-1)![0]).toBeInstanceOf(ApiConnections)
         expect(await port.apiTarget({ connectionId: 'a', model: 'm' })).toEqual({ detail: 'This API is not saved. Add it in Models → APIs.' })
         expect(vi.mocked(apiTargetAnswer).mock.calls.at(-1)!.slice(1)).toEqual(['a', 'm'])
+      })
+
+      it('refuses a saved reference when no private storage resolver was composed', async () => {
+        const { port } = setup()
+        const override = storedGridFixture({ networkId: 'fixture', networkName: 'Fixture', baseUrl: 'https://fixture.invalid/v1', apiKey: 'synthetic' })
+        expect(await port.gridLaunch({ engine: 'claude', override, machine: { hermesSystemManaged: false } }))
+          .toMatchObject({ ok: false, error: 'GRID_CREDENTIAL_UNAVAILABLE', unavailable: 'session-storage' })
       })
 
       it('codex_profiles_list: the folders this machine lists, with the ones the asker has seen; a failed scan is said', async () => {

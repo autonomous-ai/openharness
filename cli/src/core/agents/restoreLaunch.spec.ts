@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../../lib/registry.js'
-import type { LaunchOverridesResult } from '../../lib/launchOverrides.js'
+import type { LaunchOverrides, LaunchOverridesResult } from '../../lib/launchOverrides.js'
 import { createRestoreLaunch } from './restoreLaunch.js'
 import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
 import { createLaunchHelpers } from './launch.js'
@@ -14,7 +14,8 @@ const setup = () => {
     workspaceMissing: vi.fn((): { error: string; detail: string } | null => null),
     relaunchOverrides: vi.fn(async (): Promise<LaunchOverridesResult> => built),
     downgradedPermission: vi.fn(async () => ({ bypassPermission: false })),
-    prepareSessionResume: vi.fn(async (_entry: RegisteredSession, _current: () => boolean) => {}), refreshGridWebSearch: vi.fn(),
+    prepareSessionResume: vi.fn(async (_entry: RegisteredSession, _current: () => boolean) => {}),
+    refreshGridWebSearch: vi.fn(async (_agentId: string, _overrides: LaunchOverrides, _current: () => boolean) => {}),
     launch: vi.fn(() => ({ argv: ['engine'] })),
   }
   return { deps, build: createRestoreLaunch(deps) }
@@ -95,6 +96,8 @@ describe('a launch built without preparation', () => {
     expect(deps.prepareSessionResume).toHaveBeenCalledWith(entry, expect.any(Function))
     expect(deps.refreshGridWebSearch).toHaveBeenCalledWith('agent', built.overrides, expect.any(Function))
     expect(deps.relaunchOverrides).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(deps.prepareSessionResume).mock.lastCall![1]()).toBe(true)
+    expect(deps.refreshGridWebSearch.mock.lastCall![2]()).toBe(true)
     // A preparation that fails says so to its caller, which falls back (hostMove/moveAgent.ts).
     deps.prepareSessionResume.mockRejectedValueOnce(new Error('rollout unreadable'))
     await expect(launch.deferred!.prepare()).rejects.toThrow('rollout unreadable')
@@ -113,9 +116,20 @@ describe('a launch built without preparation', () => {
     let waiting = true
     await launch.deferred.prepare(() => waiting)
     const holds = vi.mocked(deps.prepareSessionResume).mock.lastCall![1]
+    const gridHolds = deps.refreshGridWebSearch.mock.lastCall![2]
     expect(holds()).toBe(true)
+    expect(gridHolds()).toBe(true)
     waiting = false
     expect(holds()).toBe(false)
+    expect(gridHolds()).toBe(false)
+  })
+
+  it('does not dispatch after durable Grid refresh revokes the restore owner', async () => {
+    const { deps, build } = setup()
+    let current = true
+    deps.refreshGridWebSearch.mockImplementation(async () => { current = false })
+    expect(await build(entry, { current: () => current })).toEqual({ cancelled: true })
+    expect(deps.launch).not.toHaveBeenCalled()
   })
 
   it('writes no grid for a move that stopped holding while its history was prepared', async () => {
@@ -206,7 +220,7 @@ describe('restore preparation keeps session authority in core', () => {
     let current = true
     const replacement = { transcript: 'new turn', tail: 42, grid: 'new grid' }
     deps.prepareSessionResume.mockImplementation(async () => { replacement.transcript = 'repaired old turn'; replacement.tail = 0 })
-    deps.refreshGridWebSearch.mockImplementation(() => { replacement.grid = 'old grid' })
+    deps.refreshGridWebSearch.mockImplementation(async () => { replacement.grid = 'old grid' })
     const result = build(entry, { resumeSessionId: 'conversation', current: () => current })
     await vi.waitFor(() => expect(stage === 'Store' ? deps.relaunchOverrides : deps.downgradedPermission).toHaveBeenCalled())
     current = false

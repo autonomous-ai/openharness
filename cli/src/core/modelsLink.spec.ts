@@ -6,6 +6,7 @@ import { createModelsLink, glancesIn } from './modelsLink.js'
 import { ServiceUnavailableError } from './serviceHost.js'
 import { gridLaunchThrough } from './agents/launch.js'
 import type { ServiceFrame } from './serviceLinks.js'
+import { storedGridFixture } from '../testing/gridCredentials.js'
 
 const RELAY = 'https://fixture.invalid/g/net-own/relay/v1'
 const LAUNCH = { networkId: 'net-own', networkName: 'mine', baseUrl: RELAY, apiKey: 'fixture-key', model: 'Small-Q4' }
@@ -22,6 +23,19 @@ function setup(answers: Record<string, Record<string, unknown>> = {}, agents: Re
 }
 
 describe('models in its own process, as the core reaches it', () => {
+  it('accepts only the exact selected private credential reference from models', async () => {
+    const override = storedGridFixture(LAUNCH)
+    const request = { engine: 'claude' as const, override, machine: { hermesSystemManaged: false } }
+    const answer = { ok: true, override, launch: { env: {}, args: [], webSearch: 'unavailable' } }
+    expect(await gridLaunchThrough(() => setup({ gridLaunch: answer }).port)(request)).toEqual(answer)
+    for (const changed of [storedGridFixture(LAUNCH), LAUNCH]) {
+      expect(await gridLaunchThrough(() => setup({ gridLaunch: { ...answer, override: changed } }).port)(request))
+        .toMatchObject({ ok: false, error: 'GRID_UNAVAILABLE' })
+    }
+    expect(await gridLaunchThrough(() => setup({ gridLaunch: answer }).port)({ ...request, override: LAUNCH }))
+      .toMatchObject({ ok: false, error: 'GRID_UNAVAILABLE' })
+  })
+
   describe('what a frame and a keystroke read: the glances models last told', () => {
     it('answers no note before models has said anything, and the note its last glance gives after', async () => {
       const { link, port } = setup()

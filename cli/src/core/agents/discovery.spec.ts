@@ -391,6 +391,20 @@ describe('discovery', () => {
         expect(vi.mocked(run.deps.taken).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(run.deps.attach).mock.invocationCallOrder[0]!)
       })
 
+      it('does not announce an adopted row replaced while reading its previous archive', async () => {
+        const saved = row({ agentId: 'ended' }), run = typed(saved)
+        vi.mocked(run.deps.stoppedAgents.get).mockImplementation(async () => {
+          if (vi.mocked(run.deps.registry.adoptEngine).mock.calls.length) {
+            run.rows.set('shell', row({ agentId: 'shell', sessionId: 'replacement' }))
+          }
+          return saved
+        })
+        await run.handlers.onObserved(seen(), run.shell)
+        expect(run.deps.taken).not.toHaveBeenCalled()
+        expect(run.deps.announceSession).not.toHaveBeenCalled()
+        expect(run.deps.attach).not.toHaveBeenCalled()
+      })
+
       it('nothing moves for a shell that names nobody, for a previous agent with no saved record, while its resume is under way, or when the saved agents cannot be read', async () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
         const nobody = typed(row({ agentId: 'ended', browser: true }))
@@ -473,6 +487,9 @@ describe('discovery', () => {
         vi.mocked(run.deps.stoppedAgents.list).mockResolvedValue([archived({ agentId: 'other', runtimes: [{ ...PANE, paneId: '%2009' }] }), saved])
         vi.mocked(run.deps.registry.reinstateArchived).mockResolvedValue(live as RegisteredSession)
         run.rows.set('bcdaa2eb', live as RegisteredSession)
+        vi.mocked(run.deps.stoppedAgents.remove).mockImplementation(async (_agentId, current) => {
+          expect(current?.()).toBe(true)
+        })
         await run.handlers.onObserved(hermesSeen(), shell)
         expect(run.deps.registry.reinstateArchived).toHaveBeenCalledWith('0e375534', saved, HERMES, expect.any(Object))
         expect(run.deps.stoppedAgents.remove).toHaveBeenCalledWith('bcdaa2eb', expect.any(Function))

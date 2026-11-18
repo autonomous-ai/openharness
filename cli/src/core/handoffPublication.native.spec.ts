@@ -325,6 +325,16 @@ it.each(['recorded', 'parent path', 'legacy', 'stopped', 'by ID'])('publishes ex
   expect(fs.readFileSync(join(cwd, result.file as string), 'utf8')).toContain('Keep the reviewed conversation')
 })
 
+it('refuses a stopped ancestor removed before the final selected authority read', async () => {
+  const parent = { ...row, agentId: 'parent' }
+  row = { ...row, sessionId: '', transcriptPath: null, forkedFrom: { agentId: parent.agentId, name: 'Parent', sessionId: ID, transcriptPath: path } }
+  const ctx = await setup([row])
+  ctx.saved.set(parent.agentId, parent)
+  const result = await processPrepare(ctx, () => { ctx.saved.delete(parent.agentId) })
+  expect(result.error).toBe('IDENTITY_UNAVAILABLE')
+  noPublication()
+})
+
 it.each(['missing link', 'wrong parent', 'other project', 'invalid cutoff', 'late legacy binding'])
 ('rejects %s ancestry even when the service supplies matching current row fingerprints', async fault => {
   const parent = { ...row, agentId: 'parent' }

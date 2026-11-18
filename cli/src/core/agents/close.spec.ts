@@ -81,6 +81,11 @@ describe('closing agents no window shows', () => {
     // Being resumed: about to be live again, not closed.
     stoppedAgents.resumeReservedAt.mockReturnValueOnce(1)
     expect(await close.closedAlready!(asked('kept'))).toBeNull()
+    // A fresh archive read may yield to a new live owner or a newly reserved resume.
+    vi.mocked(registry.byAgent).mockReturnValueOnce(undefined).mockReturnValueOnce(live)
+    expect(await close.closedAlready!(asked('kept'))).toBeNull()
+    stoppedAgents.resumeReservedAt.mockReturnValueOnce(null).mockReturnValueOnce(1)
+    expect(await close.closedAlready!(asked('kept'))).toBeNull()
     // A record that cannot be read says nothing.
     stoppedAgents.get.mockImplementationOnce(() => { throw new Error('unreadable') })
     expect(await close.closedAlready!(asked('kept'))).toBeNull()

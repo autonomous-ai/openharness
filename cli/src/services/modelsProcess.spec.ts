@@ -4,6 +4,12 @@ import type { GridGlance } from '../lib/gridAnnotation.js'
 import type { CoreConnection, ServiceProcessOptions } from './process.js'
 import type { GridLaunchAnswer, GridLaunchRequest } from '../lib/gridLaunchWire.js'
 import { gridLaunchRequestIn, modelsCoreApi, runModelsService } from './modelsProcess.js'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createSessionImageCodec } from '../storage/sessionImage.js'
+import type { StoredGridLaunch } from '../lib/sessionStorageWire.js'
 
 // The real default reaches a real socket and this process's own channel: never in a test.
 vi.mock('./process.js', () => ({ runServiceProcess: vi.fn(() => ({ stop: vi.fn() })) }))
@@ -66,6 +72,24 @@ describe('models in its own process', () => {
     })
     return { models, api: api!, options: options!, service, handle, setGlances: (next: GridGlance[]) => { glances = next }, changed: () => changed() }
   }
+
+  it('resolves a selected durable reference only inside the models process composition', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'models-credential-')), canary = randomUUID()
+    let resolver!: (reference: StoredGridLaunch) => Promise<import('../lib/gridLaunchWire.js').GridLaunchOverride>
+    try {
+      writeFileSync(join(directory, 'registry.json'), JSON.stringify([{ agentId: 'selected', registeredAt: 1, gridLaunch: { ...LAUNCH, apiKey: canary } }]), { mode: 0o600 })
+      const image = await createSessionImageCodec(directory).read({ kind: 'registry' })
+      if (image.state !== 'image' || !image.json) throw new Error('fixture image unavailable')
+      const reference = (image.value as Array<{ gridLaunch: StoredGridLaunch }>)[0].gridLaunch
+      expect(JSON.stringify(reference).includes(canary)).toBe(false)
+      const { handle } = setup({ dataDir: directory, start: (_core, ports, resolve) => {
+        resolver = resolve!
+        ports.models = fakeModels().port
+        return {}
+      } })
+      try { expect((await resolver(reference)).apiKey === canary).toBe(true) } finally { handle.stop() }
+    } finally { rmSync(directory, { recursive: true, force: true }) }
+  })
 
   it('reaches the core as `models`, answering the apps\' requests and the core\'s port calls, and stops with its link', () => {
     const { models, options, handle, service } = setup()

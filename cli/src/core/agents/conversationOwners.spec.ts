@@ -42,6 +42,25 @@ describe('a conversation', () => {
 describe('one owner per conversation, stopped harnesses included', () => {
   afterEach(() => vi.restoreAllMocks())
 
+  it.each(['live loser', 'reservation', 'changed loser', 'changed winner', 'new live winner'] as const)(
+    'retains a selected archive when %s appears before supersession', async change => {
+      const loser = row('old', 'c1'), winner = row('winner', 'c1', { boundAt: 9_000 })
+      const live: RegisteredSession[] = []
+      const { owners, stoppedAgents, records, reservations, sent } = setup([loser, winner], live)
+      stoppedAgents.supersede.mockImplementationOnce(async (_id, current = () => true) => {
+        if (change === 'live loser') live.push(loser)
+        if (change === 'reservation') reservations.set(loser.agentId, 9_999_999)
+        if (change === 'changed loser') records.set(loser.agentId, { ...loser })
+        if (change === 'changed winner') records.set(winner.agentId, { ...winner })
+        if (change === 'new live winner') live.push(row('another', 'c1'))
+        expect(current()).toBe(false)
+        return null
+      })
+      expect(await owners.settle()).toEqual([])
+      expect(records.has(loser.agentId)).toBe(true)
+      expect(sent).toEqual([])
+    })
+
   it('a running harness wins: every stopped record of another harness holding it is set aside and announced', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const { owners, records, sent, commander } = setup([row('old', 'c1', { boundAt: 9_000 }), row('older', 'c1')], [row('new', 'c1', { boundAt: 1 })])

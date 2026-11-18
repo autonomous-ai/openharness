@@ -170,6 +170,21 @@ describe('relaunch helpers', () => {
     const record = { networkId: 'grid-1' }
     await helpers.refreshGridWebSearch('a1', { gridLaunchRecord: record } as unknown as LaunchOverrides)
     expect(deps.setGridLaunch).toHaveBeenCalledWith('a1', record, { current: expect.any(Function) })
+    expect(vi.mocked(deps.setGridLaunch).mock.lastCall![2]!.current!()).toBe(true)
+  })
+
+  it.each(['caller', 'owner'] as const)('keeps the %s fence live through durable Grid refresh', async revoked => {
+    const { deps } = setup()
+    let caller = true, owner = true
+    deps.authority = () => () => owner
+    deps.setGridLaunch = vi.fn(async (_id, _record, authority) => {
+      expect(authority!.current!()).toBe(true)
+      if (revoked === 'caller') caller = false; else owner = false
+      expect(authority!.current!()).toBe(false)
+      return false
+    })
+    const helpers = createLaunchHelpers(deps)
+    await helpers.refreshGridWebSearch('a1', { gridLaunchRecord: {} } as LaunchOverrides, () => caller)
   })
 
   it('retains an imported Hermes profile for every relaunch, without applying it after an engine change', async () => {

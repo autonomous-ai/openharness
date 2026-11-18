@@ -351,10 +351,12 @@ The first full core gate preserved 54 failures (5,794 passing, 43 skipped); fixt
 exposed archive/forget authority gaps are tracked separately, not treated as an initial pass. Its next full run
 passed all 285 test files (5,851 tests, 43 skipped), but **exited 1** for uncovered branches/functions in twelve
 changed files. Focused authority tests now exercise those paths; that coverage failure remains open until the
-current full gate passes. The harnessd gate after lazy entry preparation passed 552 tests (one skipped), with
-100% statements, branches, functions and lines per file. Type checking passes. Compiled admission, the final
-current-source gates and coordinated measurements remain acceptance work; these results alone do not establish
-release readiness or a bounded whole-image design.
+current full gate passes. The final full core gate then exited 0: 285 files, 5,869 passing tests and 43 skipped,
+with 100% statements, branches, functions and lines in every file. The current harnessd gate also exited 0:
+21 files, 552 tests (one skipped), with 100% in all four measures per file. The final selected boundary suite
+passes 159 tests; source types and the packaged fixture's separate type check pass. Compiled admission and
+coordinated measurements remain acceptance work; these results alone do not establish release readiness or a
+bounded whole-image design.
 
 Review failure injection found and fixed four custody boundaries. Parent preparation records its exclusive
 temporary and descriptor immediately after successful open, before chmod/stat can fail. A failed helper close
