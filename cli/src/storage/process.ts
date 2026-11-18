@@ -40,7 +40,7 @@ export function runSessionStorage(): void {
       })
       const codec = createSessionImageCodec(init.root, inherited, init.stoppedLeaf)
       const creations = createPendingCreationIndex(join(init.root, 'agent-creations'))
-      const stopped = createStoppedList(join(init.root, init.stoppedLeaf), document => codec.read(document))
+      const stopped = createStoppedList(join(init.root, init.stoppedLeaf), codec.readStoppedPage)
       initialized = true
       frames = sessionStorageFrames(init.incarnation, write, (id, message) => {
         if (busy) { stop(); return }

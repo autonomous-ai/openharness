@@ -4,11 +4,65 @@ import { dirname } from 'node:path'
 import { closeStateFileDescriptor, requireWindowsStateFile, secureStateDirectory, stateFileCustodyHealthy, StateFileCleanupUnconfirmed } from '../lib/secureState.js'
 import { sameSessionFileIdentity, SessionStorageUnavailable, sessionStorageFailureCode } from '../lib/sessionStorageWire.js'
 
-export async function readPrivateImage(file: string, maxBytes: number): Promise<{ bytes: Buffer; stat: BigIntStats } | null> {
+export type PrivateImageReader = (file: string, maxBytes: number) => Promise<{ bytes: Buffer; stat: BigIntStats } | null>
+
+export const readPrivateImage: PrivateImageReader = (file, maxBytes) => readImage(file, maxBytes,
+  () => secureStateDirectory(dirname(file), false))
+
+/** Keep every directory admission check; a bounded page needs only one retained open/close pair. */
+export async function withPrivateImageDirectory<T>(directory: string, work: (read: PrivateImageReader) => Promise<T>): Promise<T> {
+  let fd: number | undefined, active = true
+  try {
+    stateFileCustodyHealthy()
+    let verify = () => secureStateDirectory(directory, false)
+    if (process.platform !== 'win32') {
+      secureStateDirectory(directory, false)
+      fd = openSync(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
+      const original = fstatSync(fd, { bigint: true })
+      const uid = typeof process.getuid === 'function' ? BigInt(process.getuid()) : null
+      verify = () => {
+        stateFileCustodyHealthy()
+        const inspect = (): boolean => {
+          const descriptor = fstatSync(fd!, { bigint: true }), path = lstatSync(directory, { bigint: true })
+          for (const stat of [descriptor, path]) {
+            if (!stat.isDirectory() || uid !== null && stat.uid !== uid || (stat.mode & 0o022n) !== 0n) {
+              throw new SessionStorageUnavailable('unsafe')
+            }
+            if (stat.dev !== original.dev || stat.ino !== original.ino) throw new SessionStorageUnavailable('changed')
+          }
+          return (descriptor.mode & 0o777n) === 0o700n && (path.mode & 0o777n) === 0o700n
+        }
+        if (!inspect()) {
+          fchmodSync(fd!, 0o700)
+          // Tightening does not excuse a replacement between the descriptor and pathname checks.
+          if (!inspect()) throw new SessionStorageUnavailable('unsafe')
+        }
+      }
+      verify()
+    }
+    const value = await work((file, maxBytes) => readImage(file, maxBytes, () => {
+      if (!active || dirname(file) !== directory) throw new SessionStorageUnavailable('invalid')
+      verify()
+    }))
+    verify()
+    return value
+  } catch (error) {
+    if (error instanceof StateFileCleanupUnconfirmed) throw new SessionStorageUnavailable('cleanup-unconfirmed')
+    throw new SessionStorageUnavailable(sessionStorageFailureCode(error))
+  } finally {
+    active = false
+    if (fd !== undefined) {
+      try { closeStateFileDescriptor(fd) }
+      catch { throw new SessionStorageUnavailable('cleanup-unconfirmed') }
+    }
+  }
+}
+
+async function readImage(file: string, maxBytes: number, admitDirectory: () => void): ReturnType<PrivateImageReader> {
   let fd: number | undefined
   try {
     stateFileCustodyHealthy()
-    secureStateDirectory(dirname(file), false)
+    admitDirectory()
     if (process.platform === 'win32') requireWindowsStateFile(file)
     fd = openSync(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0))
     let before = fstatSync(fd, { bigint: true })

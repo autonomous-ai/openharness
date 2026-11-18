@@ -24,7 +24,10 @@ const write = (id: string, extra: object = {}) => writeFileSync(join(directory, 
 const fixture = () => {
   const codec = createSessionImageCodec(root)
   const read = vi.fn((document: SessionDocument) => codec.read(document))
-  return { codec, read, listing: createStoppedList(directory, read) }
+  return { codec, read, listing: createStoppedList(directory, work => codec.readStoppedPage(async reader => {
+    read.mockImplementation(reader)
+    return work(read)
+  })) }
 }
 const ids = (images: SessionImage[]) => images.map(image => image.state === 'image' && image.proof.document.kind === 'stopped' ? image.proof.document.agentId : '')
 
@@ -143,8 +146,21 @@ describe('child-owned stopped list pages', () => {
     write('a'); write('b')
     const { listing, read } = fixture()
     read.mockRejectedValueOnce(new Error('fixture read failed'))
-    await expect(listing.page(null, deadline())).rejects.toThrow('fixture read failed')
+    await expect(listing.page(null, deadline())).rejects.toMatchObject({ code: 'unsafe' })
     expect((await listing.page(null, deadline())).images).toHaveLength(2)
+  })
+
+  it.skipIf(process.platform === 'win32')('refuses a page whose directory became writable after its last readable image', async () => {
+    write('a')
+    const { listing, read, codec } = fixture()
+    read.mockImplementationOnce(async document => {
+      const image = await codec.read(document)
+      chmodSync(directory, 0o777)
+      return image
+    })
+    await expect(listing.page(null, deadline())).rejects.toMatchObject({ code: 'unsafe' })
+    chmodSync(directory, 0o700)
+    expect((await listing.page(null, deadline())).images).toHaveLength(1)
   })
 })
 

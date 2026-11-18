@@ -8,8 +8,9 @@ import { parseGridLaunchOverride, type GridLaunchOverride } from '../lib/gridLau
 import { privateRegistryDirectory } from '../lib/registryPersistence.js'
 import { sessionStorageFailureCode, SessionStorageUnavailable, sessionDocument, sessionImageProof, storedGridLaunch, sessionFileIdentity,
   type CredentialRow, type SessionCredentialReference, type SessionDocument, type SessionImage,
-  type SessionImageProof, type SessionImageReservation, type SessionPreparedImage, type StoredGridLaunch } from '../lib/sessionStorageWire.js'
-import { readPrivateImage } from './privateImage.js'
+  STOPPED_LIST_ROWS, type SessionImageProof, type SessionImageReservation, type SessionPreparedImage, type StoredGridLaunch } from '../lib/sessionStorageWire.js'
+import { readPrivateImage, withPrivateImageDirectory, type PrivateImageReader } from './privateImage.js'
+import type { StoppedPageRead } from './stoppedList.js'
 import { stoppedArchiveWitness, STOPPED_AUTHORITY_ENTRIES } from '../lib/stoppedAuthorityMetadata.js'
 import { externalReservations, parseExternalResume } from '../lib/externalResume.js'
 import type { StoppedArchiveAnswer, StoppedArchiveQuery } from '../lib/sessionStorageWire.js'
@@ -84,10 +85,10 @@ export function createSessionImageCodec(root: string, retained: readonly Retaine
         : join(root, stoppedLeaf, ...(document.kind === 'superseded' ? ['superseded'] : []), `${document.agentId}.json`)
   }
 
-  async function privateImage(document: SessionDocument): Promise<{ contents: string; proof: SessionImageProof } | null> {
+  async function privateImage(document: SessionDocument, readImage: PrivateImageReader = readPrivateImage): Promise<{ contents: string; proof: SessionImageProof } | null> {
     const path = file(document)
     try {
-      const read = await readPrivateImage(path, document.kind === 'registry' || document.kind === 'legacy-registry' ? Number.MAX_SAFE_INTEGER : ONE_MIB)
+      const read = await readImage(path, document.kind === 'registry' || document.kind === 'legacy-registry' ? Number.MAX_SAFE_INTEGER : ONE_MIB)
       if (!read) return null
       return { contents: read.bytes.toString('utf8'), proof: { document, identity: sessionImageIdentity(read.stat), bytes: read.bytes.length, sha256: digest(read.bytes) } }
     } catch (error) {
@@ -180,9 +181,9 @@ export function createSessionImageCodec(root: string, retained: readonly Retaine
     return override
   }
 
-  async function read(document: SessionDocument, retain?: string): Promise<SessionImage> {
+  async function read(document: SessionDocument, retain?: string, readImage?: PrivateImageReader): Promise<SessionImage> {
     if (retain && (images.size >= 2 || !/^[a-f0-9-]{36}$/.test(retain))) throw new SessionStorageUnavailable('busy')
-    const image = await privateImage(document)
+    const image = await privateImage(document, readImage)
     if (!image) return { state: 'missing' }
     if (retain) images.set(retain, image)
     let value: unknown
@@ -190,6 +191,9 @@ export function createSessionImageCodec(root: string, retained: readonly Retaine
     catch { return { state: 'image', proof: image.proof, json: false } }
     return { state: 'image', proof: image.proof, json: true, value: projectValue(document, value, image.proof) }
   }
+
+  const readStoppedPage: StoppedPageRead = work => withPrivateImageDirectory(join(root, stoppedLeaf),
+    reader => work(document => read(document, undefined, reader)))
 
   async function equal(proof: SessionImageProof): Promise<SessionImageProof | null> {
     const current = await privateImage(proof.document)
@@ -294,41 +298,48 @@ export function createSessionImageCodec(root: string, retained: readonly Retaine
     if (before === 'missing') return { witness: before, matches, ...(query.kind === 'owners' ? { selected } : {}) }
     const directoryHandle = await fs.opendir(directory, { bufferSize: 32 })
     let count = 0
-    try { for (;;) {
-      const entry = await directoryHandle.read()
-      if (!entry) break
-      if (++count > STOPPED_AUTHORITY_ENTRIES || performance.now() >= expires) throw new SessionStorageUnavailable('expired')
-      if (!entry.name.endsWith('.json')) continue
-      const agentId = entry.name.slice(0, -5)
-      if (agentId === query.exceptAgentId) continue
-      const image = await privateImage({ kind: 'stopped', agentId })
-      if (!image) throw new SessionStorageUnavailable('changed')
-      let value: unknown
-      try { value = JSON.parse(image.contents) } catch { throw new SessionStorageUnavailable('invalid') }
-      if (!object(value) || value.version !== 1 || !object(value.session) || value.session.agentId !== agentId
-        || value.session.schemaVersion !== 2 || typeof value.session.sessionId !== 'string') throw new SessionStorageUnavailable('invalid')
-      const row = value.session
-      if (query.kind === 'owners') {
-        if (typeof row.engine !== 'string' || row.codexHome != null && typeof row.codexHome !== 'string'
-          || row.hermesHome != null && typeof row.hermesHome !== 'string') throw new SessionStorageUnavailable('invalid')
-        const key = conversationKeyAtHome(row as unknown as RegisteredSession, query.defaultCodexHome)
-        const index = key === null ? -1 : query.keys.indexOf(key)
-        if (index !== -1) {
-          matches[index] = true
-          selected.push({ state: 'image', json: true, proof: image.proof, value: projectValue(image.proof.document, value, image.proof) })
-        }
-      } else if (query.kind === 'conversations') {
-        if (query.scope && (row.engine !== query.scope.engine || (row.codexHome ?? null) !== query.scope.codexHome)) continue
-        const external = row.externalResume === undefined ? undefined : parseExternalResume(row.externalResume)
-        if (external === null) throw new SessionStorageUnavailable('invalid')
-        const ids = query.reservations ? externalReservations({ sessionId: row.sessionId as string, ...(external ? { externalResume: external } : {}) }) : [row.sessionId]
-        for (let index = 0; index < query.ids.length; index++) if (agentId !== query.exceptAgentIds?.[index] && ids.includes(query.ids[index])) matches[index] = true
-      } else if (row.cwd) {
-        if (typeof row.cwd !== 'string') throw new SessionStorageUnavailable('invalid')
-        const cwd = await fs.realpath(row.cwd).catch(() => resolvePath(row.cwd as string))
-        if (cwd === query.root || cwd.startsWith(query.root + sep) || query.root.startsWith(cwd + sep)) matches[0] = true
+    try {
+      let more = true
+      while (more) {
+        more = await withPrivateImageDirectory(directory, async reader => {
+          for (let considered = 0; considered < STOPPED_LIST_ROWS; considered++) {
+            const entry = await directoryHandle.read()
+            if (!entry) return false
+            if (++count > STOPPED_AUTHORITY_ENTRIES || performance.now() >= expires) throw new SessionStorageUnavailable('expired')
+            if (!entry.name.endsWith('.json')) continue
+            const agentId = entry.name.slice(0, -5)
+            if (agentId === query.exceptAgentId) continue
+            const image = await privateImage({ kind: 'stopped', agentId }, reader)
+            if (!image) throw new SessionStorageUnavailable('changed')
+            let value: unknown
+            try { value = JSON.parse(image.contents) } catch { throw new SessionStorageUnavailable('invalid') }
+            if (!object(value) || value.version !== 1 || !object(value.session) || value.session.agentId !== agentId
+              || value.session.schemaVersion !== 2 || typeof value.session.sessionId !== 'string') throw new SessionStorageUnavailable('invalid')
+            const row = value.session
+            if (query.kind === 'owners') {
+              if (typeof row.engine !== 'string' || row.codexHome != null && typeof row.codexHome !== 'string'
+                || row.hermesHome != null && typeof row.hermesHome !== 'string') throw new SessionStorageUnavailable('invalid')
+              const key = conversationKeyAtHome(row as unknown as RegisteredSession, query.defaultCodexHome)
+              const index = key === null ? -1 : query.keys.indexOf(key)
+              if (index !== -1) {
+                matches[index] = true
+                selected.push({ state: 'image', json: true, proof: image.proof, value: projectValue(image.proof.document, value, image.proof) })
+              }
+            } else if (query.kind === 'conversations') {
+              if (query.scope && (row.engine !== query.scope.engine || (row.codexHome ?? null) !== query.scope.codexHome)) continue
+              const external = row.externalResume === undefined ? undefined : parseExternalResume(row.externalResume)
+              if (external === null) throw new SessionStorageUnavailable('invalid')
+              const ids = query.reservations ? externalReservations({ sessionId: row.sessionId as string, ...(external ? { externalResume: external } : {}) }) : [row.sessionId]
+              for (let index = 0; index < query.ids.length; index++) if (agentId !== query.exceptAgentIds?.[index] && ids.includes(query.ids[index])) matches[index] = true
+            } else if (row.cwd) {
+              if (typeof row.cwd !== 'string') throw new SessionStorageUnavailable('invalid')
+              const cwd = await fs.realpath(row.cwd).catch(() => resolvePath(row.cwd as string))
+              if (cwd === query.root || cwd.startsWith(query.root + sep) || query.root.startsWith(cwd + sep)) matches[0] = true
+            }
+          }
+          return true
+        })
       }
-    }
     } finally {
       try { await directoryHandle.close() }
       catch { uncertainHandles.add(directoryHandle); throw new SessionStorageUnavailable('cleanup-unconfirmed') }
@@ -337,7 +348,7 @@ export function createSessionImageCodec(root: string, retained: readonly Retaine
     return { witness: before, matches, ...(query.kind === 'owners' ? { selected } : {}) }
   }
 
-  return { read, equal, prepare, discard, resolve, queryStopped,
+  return { read, readStoppedPage, equal, prepare, discard, resolve, queryStopped,
     import(lease: string, row: CredentialRow, override: GridLaunchOverride): StoredGridLaunch {
       if (!/^[a-f0-9-]{36}$/.test(lease) || imports.has(lease) || imports.size >= 64) throw new SessionStorageUnavailable('busy')
       const parsed = parseGridLaunchOverride(override)

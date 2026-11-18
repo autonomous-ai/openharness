@@ -35,7 +35,7 @@ const override = () => ({ networkId: 'fixture', networkName: 'Fixture', baseUrl:
 const row = () => ({ agentId: 'fixture-agent', registeredAt: 1, title: 'fixture', gridLaunch: override() })
 const containsKey = (value: unknown) => JSON.stringify(value).includes(key)
 
-function faultChild(fault: 'after-sync' | 'replace-before-open' | 'directory-close' | 'file-close'): void {
+function faultChild(fault: 'after-sync' | 'replace-before-open' | 'directory-close' | 'file-close' | 'page-close'): void {
   const file = join(root, 'storage-fixture.mjs')
   const processModule = new URL('../storage/process.ts', import.meta.url).href
   const admissionModule = new URL('../harnessd/childAdmission.ts', import.meta.url).href
@@ -47,10 +47,14 @@ function faultChild(fault: 'after-sync' | 'replace-before-open' | 'directory-clo
     import { childAdmissionFailure } from ${JSON.stringify(admissionModule)};
     if (childAdmissionFailure(process.env, process.ppid, process.argv[1])) process.exit(2);
     const closeSync = syncFs.closeSync;
-    let directoryFault = false;
+    let directoryFault = false, stoppedCloses = 0;
     syncFs.closeSync = fd => {
+      const stat = syncFs.fstatSync(fd);
+      if (${JSON.stringify(fault)} === 'page-close' && stat.isDirectory()
+        && stat.ino === syncFs.statSync(${JSON.stringify(join(root, 'stopped-agents'))}).ino) stoppedCloses++;
       if (!directoryFault && (${JSON.stringify(fault)} === 'directory-close' && syncFs.fstatSync(fd).isDirectory()
-        || ${JSON.stringify(fault)} === 'file-close' && syncFs.fstatSync(fd).isFile())) {
+        || ${JSON.stringify(fault)} === 'file-close' && syncFs.fstatSync(fd).isFile()
+        || ${JSON.stringify(fault)} === 'page-close' && stoppedCloses === 3)) {
         directoryFault = true; throw new Error('fixture directory close failure');
       }
       return closeSync(fd);
@@ -75,6 +79,23 @@ function faultChild(fault: 'after-sync' | 'replace-before-open' | 'directory-clo
 }
 
 describe('required session storage process', () => {
+  it.skipIf(process.platform === 'win32')('reaps actual page-directory close uncertainty before returning any catalog', async () => {
+    mkdirSync(join(root, 'stopped-agents'), { mode: 0o700 })
+    writeFileSync(join(root, 'stopped-agents', 'fixture-agent.json'), JSON.stringify({ version: 1, session: row() }), { mode: 0o600 })
+    faultChild('page-close')
+    await storage.read({ kind: 'names' })
+    const child = (storage as unknown as { child: ChildProcess }).child
+    const exit = new Promise<void>(resolve => child.once('exit', () => resolve()))
+    const close = new Promise<void>(resolve => child.once('close', () => resolve()))
+    const disconnect = new Promise<void>(resolve => child.once('disconnect', () => resolve()))
+    const received = vi.fn()
+    await expect(storage.stoppedList(received)).rejects.toMatchObject({ code: 'disconnected' })
+    await Promise.all([exit, close, disconnect])
+    expect(received).not.toHaveBeenCalled()
+    expect(() => process.kill(child.pid!, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }))
+    expect((storage as unknown as { child?: ChildProcess }).child).toBeUndefined()
+  })
+
   it.each(['missing-result', 'missing-proof'])('reaps an unrecognizable %s preparation reply before releasing its slot', async fault => {
     const owner = storage as unknown as { child?: ChildProcess; request(operation: SessionStorageOperation): Promise<unknown> }
     const request = owner.request.bind(storage)

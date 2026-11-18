@@ -660,3 +660,21 @@ The first bounded page regression fails with 65 actual directory opens for 64
 proved images, versus the selected limit of three (initial list admission, page
 admission, retained page descriptor). Sixteen existing cursor/filtering controls
 pass. Receipt: `/tmp/core-grid-storage-directory-page-red1-20261118.log`.
+
+The correction passes 84 focused reader/list/query cases, with privateImage and
+stoppedList at 100% statements, branches, functions and lines. A separate 79-case,
+seven-file selection passes real storage transport/codec/query, unreadable-record
+compatibility and metadata-authority checks; its owned process group is absent.
+The actual page-directory close fault refuses the entire catalog and waits for
+child exit, close and IPC disconnect, then proves the PID absent. TypeScript passes.
+Receipts: `/tmp/core-grid-storage-directory-page-coverage3-20261118.log`,
+`/tmp/core-grid-storage-directory-page-callers1-20261118.log`, and
+`/tmp/core-grid-storage-directory-page-types2-20261118.log`.
+
+The initial focused run retained one test mismatch: an arbitrary private callback
+error now passes through the directory owner's fixed `unsafe` classification,
+matching the existing process dispatcher category. The assertion now requires
+that category and still proves fatal/no-partial behavior. No wire failure category
+or system-error filtering changed. Earlier failed logs remain. The final raw byte
+reader, authority witness, per-row Registry capture and fingerprint semantics are
+unchanged. No new timing claim is made; measured parent save cost remains open.
