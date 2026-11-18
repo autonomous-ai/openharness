@@ -162,10 +162,29 @@ mod tests {
             r#"let tilde = "~/.harness";"#,
             r#"let windows = r"%USERPROFILE%\.harness";"#,
             r#"let text = format!("{home}/.harness/cli");"#,
+            r#"let root = std::env::home_dir().unwrap().join(".harness");"#,
+            r#"let root = paths.home_dir()?.join(".harness");"#,
+            r#"let bin = "%USERPROFILE%\\.harness\\bin";"#,
+            r#"let cli = format!("{}/.harness/cli", home.display());"#,
+            r#"let cli = format!("{}\\.harness", profile.display());"#,
+            r#"let q = '"'; let url = "https://x"; let root = home.join(".harness");"#,
         ];
         for text in planted {
             assert_eq!(hits(text), vec![text.lines().count()], "{text}");
         }
+        // A test module that never ends fails, and the lines after it are read.
+        assert_eq!(hits("#[cfg(test)]\nmod t {\n    fn f() {}\nlet root = home.join(\".harness\");"), [2, 4]);
+    }
+
+    #[test]
+    fn the_guard_reads_a_harness_home_rs_below_src() {
+        let dir = std::env::temp_dir().join(format!("harness-home-guard-{}", std::process::id()));
+        fs::create_dir_all(dir.join("x")).unwrap();
+        fs::write(dir.join("x").join("harness_home.rs"), "").unwrap();
+        let mut files = Vec::new();
+        sources(&dir, &mut files);
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(files, [dir.join("x").join("harness_home.rs")]);
     }
 
     #[test]
@@ -178,6 +197,7 @@ mod tests {
             r#"let handoff = project.join(format!(".harness/handoff/{}", id));"#,
             r#"let lock = home.join(".harness-lock");"#,
             r#"let lock = "~/.harness-lock";"#,
+            "#[cfg(test)]\n// why\npub(crate) mod t {\n    const C: char = '}';\n    fn f() { home.join(\".harness\"); }\n}",
         ];
         for text in ignored {
             assert_eq!(hits(text), Vec::<usize>::new(), "{text}");

@@ -216,6 +216,10 @@ mod tests {
             ("let s = \"%USERPROFILE%\\\\.harness\";", "%USERPROFILE%\\\\.harness"),
             ("let s = format!(\"{home}/.harness/s\");", "{home}/.harness"),
             ("_hn_dir=\"$HOME/.harness/x\"", "$HOME/.harness"),
+            ("let p = std::env::home_dir().unwrap().join(\".harness\");", "\".harness\""),
+            ("let p = paths.home_dir()?.join(\".harness\");", "\".harness\""),
+            ("let s = format!(\"{}/.harness/cli\", home.display());", "{}/.harness"),
+            ("let s = format!(\"{}\\\\.harness\", profile.display());", "{}\\\\.harness"),
         ];
         for (line, text) in planted {
             assert_eq!(hits("a.rs", line), vec![Hit { file: "a.rs".into(), line: 1, text: text.into() }], "{line}");
@@ -224,6 +228,17 @@ mod tests {
         let text = "let home = h();\nlet x = 1;\nlet p = x.join(\".harness\");\n#[cfg(test)]\nmod t {\n    let c = '{';\n}\nlet q = home.join(\".harness/y\");";
         let lines: Vec<usize> = hits("a.rs", text).iter().map(|h| h.line).collect();
         assert_eq!(lines, [3, 8]);
+        // A test module that never ends fails, and the lines after it are read.
+        let text = "#[cfg(test)]\nmod t {\n    fn f() {}\nlet p = home.join(\".harness\");";
+        let found: Vec<(usize, String)> = hits("a.rs", text).into_iter().map(|h| (h.line, h.text)).collect();
+        assert_eq!(found, [(2, "a test module whose braces never close".into()), (4, "\".harness\"".into())]);
+    }
+
+    #[test]
+    fn an_allowlist_entry_excuses_one_hit() {
+        let (file, text, _) = ALLOWED[1];
+        let twice = [1, 2].map(|line| Hit { file: file.into(), line, text: text.unwrap().into() });
+        assert!(!twice.iter().all(allowed), "a second {text:?} in {file} is excused");
     }
 
     #[test]
@@ -240,6 +255,11 @@ mod tests {
             "let p = folder.join(\".harness\");",
             "let p = home.join(\".harness-tmux\");",
             "let s = \"~/.harness-name\";",
+            "#[cfg(all(test, unix))]",
+            "#[allow(dead_code)]",
+            "mod recovery_tests {",
+            "    const ROOT: &str = \"~/.harness\";",
+            "}",
         ];
         assert_eq!(hits("a.rs", &rust.join("\n")), vec![]);
         assert_eq!(hits("a.sh", "# $HOME/.harness/x\necho hi  # ~/.harness"), vec![]);

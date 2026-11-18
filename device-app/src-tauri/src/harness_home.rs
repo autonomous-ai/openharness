@@ -208,6 +208,21 @@ let d = format!("{home}/.harness/cli");"#;
             ]
         );
         assert_eq!(hits("planted.sh", r#"dir="$HOME/.harness/tui""#), ["planted.sh:1: $HOME/.harness"]);
+        let planted = [
+            (r#"let root = std::env::home_dir().unwrap().join(".harness");"#, r#"".harness""#),
+            (r#"let root = paths.home_dir()?.join(".harness");"#, r#"".harness""#),
+            (r#"let cli = format!("{}/.harness/cli", home.display());"#, "{}/.harness"),
+            (r#"let cli = format!("{}\\.harness", profile.display());"#, r"{}\\.harness"),
+            (r#"let q = '"'; let url = "https://x"; let root = home.join(".harness");"#, r#"".harness""#),
+        ];
+        for (text, matched) in planted {
+            assert_eq!(hits("planted.rs", text), [format!("planted.rs:1: {matched}")], "{text}");
+        }
+        // A test module that never ends fails, and the lines after it are read.
+        assert_eq!(
+            hits("planted.rs", "#[cfg(test)]\nmod t {\n    fn f() {}\nlet root = home.join(\".harness\");"),
+            ["planted.rs:2: a test module whose braces never close", r#"planted.rs:4: ".harness""#]
+        );
     }
 
     #[test]
@@ -221,6 +236,8 @@ let d = format!("{home}/.harness/cli");"#;
             r#"let handoff = project.join(format!(".harness/handoff/{}", id));"#,
             r#"let lock = home.join(".harness-lock");"#,
             r#"let lock = "~/.harness-lock";"#,
+            "#[cfg(all(test, unix))]\n#[allow(dead_code)]\nmod tests {\n    const ROOT: &str = \"~/.harness\";\n}",
+            "#[cfg(test)]\n// why\npub(crate) mod t {\n    const C: char = '}';\n    fn f() { home.join(\".harness\"); }\n}",
         ];
         for text in ignored {
             assert_eq!(hits("ignored.rs", text), Vec::<String>::new(), "{text}");
