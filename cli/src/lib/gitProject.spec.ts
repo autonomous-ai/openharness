@@ -535,11 +535,10 @@ exec '${realGit}' "$@"
     describe('on Windows, where taskkill cannot stop what git started', () => {
       const platform = process.platform
       beforeEach(async () => {
+        Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
         const bin = join(root, 'bin')
         await mkdir(bin)
-        // Written while the platform still reads as this machine's, so writeExecutable runs it once on macOS.
         writeExecutable(join(bin, 'taskkill'), '#!/bin/sh\necho \'ERROR: The process with PID 1 could not be terminated.\' >&2\nexit 1\n')
-        Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
         vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
       })
       afterEach(() => { Object.defineProperty(process, 'platform', { value: platform, configurable: true }) })

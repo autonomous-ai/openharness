@@ -49,16 +49,19 @@ describe('writeExecutable', () => {
     expect(vi.mocked(spawnSync).mock.calls.map(([command]) => command)).toEqual([file])
   })
 
-  it('on Windows only writes the file: there is no /bin/sh to run it', () => {
+  it('on Windows only writes the file: there is no /bin/sh to run it', async () => {
+    // Loaded on Windows: the module reads the platform as it loads.
     const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
     Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+    vi.resetModules()
     try {
-      writeExecutable(join(dir, 'tool.cmd'), '@echo off\r\n')
+      const { writeExecutable: onWindows } = await import('./executableFixture.js')
+      onWindows(join(dir, 'tool.cmd'), '@echo off\r\n')
     } finally {
       Object.defineProperty(process, 'platform', platform)
     }
 
     expect(readFileSync(join(dir, 'tool.cmd'), 'utf8')).toBe('@echo off\r\n')
-    expect(spawnSync).not.toHaveBeenCalled()
+    expect(vi.mocked((await import('node:child_process')).spawnSync)).not.toHaveBeenCalled()
   })
 })

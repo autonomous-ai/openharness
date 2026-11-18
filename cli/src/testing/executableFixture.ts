@@ -10,9 +10,13 @@
 import { chmodSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 
+// Read as this module loads, before a test takes the machine for Windows (process.platform redefined): such a test's
+// fixtures still run here, as gitProject.spec.ts's taskkill does. Windows has no /bin/sh to run the stub with, and no
+// such check on a first exec.
+const RUNS_SH = process.platform !== 'win32'
+
 export function writeExecutable(path: string, content: string): void {
-  // Windows has no /bin/sh to run the stub with, and no such check on a first exec.
-  if (process.platform !== 'win32') {
+  if (RUNS_SH) {
     writeFileSync(path, '#!/bin/sh\n')
     chmodSync(path, 0o700)
     spawnSync(path)
