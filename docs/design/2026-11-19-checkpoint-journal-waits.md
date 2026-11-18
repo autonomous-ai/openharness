@@ -148,3 +148,13 @@ No timeout or unexpected harness failure occurs. Receipt:
 `.harness/validation/20261118T210804.400032Z-57354/receipt.json` (1.2 s + 0.7 s, actual exit 1).
 The reviewed runtime patch SHA `cca38744d9203531c65478baf8cf9d4854ac62e349dd1c90533af6a4f450ff89`
 follows this captured RED; targeted GREEN and all 19 new controls are next.
+
+
+## First targeted GREEN and fixture identity correction
+
+At clean `3bd27c5a31`, seven of eight targeted cases pass. The initial-directory case's close-count
+assertion fails because it counts reused descriptor integers, including a later proof's separate open.
+Receipt `.harness/validation/20261118T210853.259025Z-58363/receipt.json` retains this failure (actual
+exit 1, no timeout). The fixture now assigns each open a monotonic identity and counts that exact
+open's close; the no-close-before-actual-callback guard remains. Runtime is unchanged. The planned
+all-19 control pass includes the same eight cases, so it also supplies their corrected GREEN result.

@@ -6,27 +6,27 @@ import { tmpdir } from 'node:os'
 import { CheckpointStages, type CheckpointStage } from './checkpointStages.js'
 
 const disk = vi.hoisted(() => ({
-  paths: new Map<number, string>(), held: new Map<number, { release(error?: NodeJS.ErrnoException): Promise<void> }>(),
+  paths: new Map<number, string>(), openings: new Map<number, number>(), nextOpen: 0, held: new Map<number, { release(error?: NodeJS.ErrnoException): Promise<void> }>(),
   history: [] as Promise<void>[],
   beforeHistoryClose: undefined as ((path: string) => Promise<void>) | undefined,
   closeFailure: undefined as string | undefined,
   target: undefined as ((path: string) => boolean) | undefined,
   entered: undefined as ((fd: number) => void) | undefined,
   trap: false,
-  closed: [] as number[],
+  closed: [] as Array<{ fd: number; opened: number }>,
 }))
 vi.mock('node:fs', async original => {
   const fs = await original<typeof import('node:fs')>()
   return { ...fs,
     openSync: (...args: Parameters<typeof fs.openSync>) => {
-      const fd = fs.openSync(...args); disk.paths.set(fd, String(args[0])); return fd
+      const fd = fs.openSync(...args); disk.paths.set(fd, String(args[0])); disk.openings.set(fd, ++disk.nextOpen); return fd
     },
     closeSync: (fd: number) => {
       if (disk.held.has(fd)) throw new Error('closed before the actual flush callback')
       try {
-        fs.closeSync(fd); disk.closed.push(fd)
+        fs.closeSync(fd); disk.closed.push({ fd, opened: disk.openings.get(fd)! })
         if (disk.closeFailure === disk.paths.get(fd)) { disk.closeFailure = undefined; throw new Error('injected uncertain close') }
-      } finally { disk.paths.delete(fd) }
+      } finally { disk.paths.delete(fd); disk.openings.delete(fd) }
     },
     fsyncSync: (fd: number) => {
       if (disk.trap && disk.target?.(disk.paths.get(fd)!)) throw new Error('journal flush blocked the main thread')
@@ -100,14 +100,14 @@ it.each(['owner file', 'owner directory'] as const)('keeps the main loop availab
   const waiting = hold(target)
   let answered = false
   const acquiring = manager().acquire().then(lease => { answered = true; leases.push(lease); return lease })
-  const fd = await entered(waiting, acquiring), closesBefore = disk.closed.length
+  const fd = await entered(waiting, acquiring), opened = disk.openings.get(fd)!
   try {
     await turn(); expect(answered).toBe(false)
     expect(fs.fstatSync(fd)).toBeTruthy()
-    expect(disk.closed.slice(closesBefore)).not.toContain(fd)
+    expect(disk.closed.some(value => value.opened === opened)).toBe(false)
   } finally { await release(fd) }
   await acquiring
-  expect(disk.closed.slice(closesBefore).filter(value => value === fd)).toHaveLength(1)
+  expect(disk.closed.filter(value => value.opened === opened)).toHaveLength(1)
 })
 
 it.each(['writer', 'settled', 'destination'] as const)('keeps %s durability pending without blocking the main loop', async phase => {
@@ -119,18 +119,18 @@ it.each(['writer', 'settled', 'destination'] as const)('keeps %s durability pend
   let answered = false
   const work = (phase === 'writer' ? lease.writer(process.pid) : phase === 'settled' ? Promise.resolve(lease.settled())
     : lease.publish(destination(), allowed)).then(() => { answered = true })
-  const fd = await entered(waiting, work), closesBefore = disk.closed.length
+  const fd = await entered(waiting, work), opened = disk.openings.get(fd)!
   try {
     await turn(); expect(answered).toBe(false); expect(allowed).not.toHaveBeenCalled()
     expect(fs.fstatSync(fd).isFile()).toBe(true)
-    expect(disk.closed.slice(closesBefore)).not.toContain(fd)
+    expect(disk.closed.some(value => value.opened === opened)).toBe(false)
     await expect(lease.writer(process.pid)).rejects.toThrow()
     await expect(lease.settled()).rejects.toThrow(/busy/)
     await expect(lease.verify({ bytes: 7, sha256: 'a'.repeat(64) })).rejects.toThrow(/busy/)
     await expect(stat(destination())).rejects.toMatchObject({ code: 'ENOENT' })
   } finally { await release(fd) }
   await work
-  expect(disk.closed.slice(closesBefore).filter(value => value === fd)).toHaveLength(1)
+  expect(disk.closed.filter(value => value.opened === opened)).toHaveLength(1)
   if (phase === 'destination') {
     expect(allowed).toHaveBeenCalledOnce()
     await writeFile(join(root, `${'a'.repeat(64)}.json`), JSON.stringify({ version: 1, file: basename(destination()) }), { mode: 0o600 })
@@ -238,12 +238,12 @@ it('keeps the first destination intent exclusive while its actual history descri
 // An uncertain close deliberately poisons this module instance; keep that terminal failure last.
 it('never retries an uncertain owner descriptor close or reuses its reserved slot', async () => {
   const lease = await acquire(), path = record(lease), waiting = hold(path), work = lease.writer(process.pid)
-  const result = work.catch(error => error), fd = await entered(waiting, work), closesBefore = disk.closed.length
+  const result = work.catch(error => error), fd = await entered(waiting, work), opened = disk.openings.get(fd)!
   disk.closeFailure = path
   await release(fd)
   expect(await result).toMatchObject({ code: 'STATE_FILE_CLEANUP_UNCONFIRMED' })
   await lease.close(); await lease.close()
-  expect(disk.closed.slice(closesBefore).filter(value => value === fd)).toHaveLength(1)
+  expect(disk.closed.filter(value => value.opened === opened)).toHaveLength(1)
   expect(await stat(path)).toBeTruthy()
   expect(await stat(lease.stage.path)).toBeTruthy()
   await expect(manager().acquire()).rejects.toMatchObject({ code: 'STATE_FILE_CLEANUP_UNCONFIRMED' })
