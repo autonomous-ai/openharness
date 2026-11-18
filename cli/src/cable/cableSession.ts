@@ -172,6 +172,8 @@ export interface ActivitySnapshot {
 const ACTION_MAX_BYTES = 188
 /** A drawer row's words on the device (cable_notif_t summary, 240 B with its end): eight rows stay one frame. */
 const NOTICE_SUMMARY_MAX = 239
+/** An agent's name and machine on the device (CABLE_NAME_MAX, 40 B with its end). */
+const NAME_MAX = 39
 
 /** What the Pro's firmware holds of a swarms frame: 24 tabs, 24 ids each, and 512 JSON tokens (480 here). */
 const SWARMS_MAX = 24
@@ -194,6 +196,47 @@ function fitsFrame(m: unknown): boolean {
   return Buffer.byteLength(JSON.stringify(m), 'utf8') <= CABLE_MAX_PAYLOAD - 256 && jsonTokens(m) <= SWARM_TOKENS_MAX
 }
 
+/** An escaped backslash, matched so the text after it is not read as an escape, or half an emoji as JSON escapes it. */
+const JSON_LONE_SURROGATE = /\\\\|\\ud[89a-f][0-9a-f]{2}/g
+
+/** A frame's JSON as the dial can parse it. JSON writes half an emoji as the escape \ud83d, and the dial's parser
+ *  refuses the whole frame for it: an agent named with one never got its question onto the dial. It is written '?', as
+ *  the dial writes a byte it cannot read, in keys and values alike. */
+function dialJson(m: unknown): string {
+  const json = JSON.stringify(m)
+  return json.includes('\\ud') ? json.replace(JSON_LONE_SURROGATE, (escape) => escape === '\\\\' ? escape : '?') : json
+}
+
+/** A text as the dial reads it from a frame: dialJson's own rewrite, so the two cannot disagree. */
+function dialReads(text: string): string {
+  return JSON.parse(dialJson(text)) as string
+}
+
+/** The dial's answers in the words they were asked with. The dial answers with the text it read, half an emoji '?'
+ *  (dialJson), and '?yes' matched no row of the dialog, which typed it into its free-text row instead of choosing the
+ *  option. Each key and chosen option is put back as asked; a value that reads as no option is words the person typed,
+ *  kept as typed. Null when the dial's text reads as two of them: either could be what the person did not choose. Two in
+ *  the same words are one: refused, a question that repeats an option went to the terminal for nothing. */
+function asAsked(raw: unknown, answers: Record<string, string>): Record<string, string> | null {
+  const questions = Array.isArray(raw)
+    ? raw.filter((q): q is { key: string; options?: unknown; multi?: unknown } => typeof q?.key === 'string') : []
+  const pick = (asked: string[], text: string): string | null => {
+    const found = new Set(asked.filter((a) => dialReads(a) === text))
+    return found.size > 1 ? null : [...found][0] ?? text
+  }
+  const out: Record<string, string> = {}
+  for (const [key, value] of Object.entries(answers)) {
+    const k = pick(questions.map((q) => q.key), key)
+    const named = questions.filter((q) => q.key === k)
+    const options = named.flatMap((q) => Array.isArray(q.options) ? q.options.filter((o): o is string => typeof o === 'string') : [])
+    // The dial joins the options chosen with ', ' (q_done_tap).
+    const picked = (named.some((q) => q.multi === true) ? value.split(', ') : [value]).map((part) => pick(options, part))
+    if (k === null || picked.includes(null)) return null
+    out[k] = picked.join(', ')
+  }
+  return out
+}
+
 function clipUtf8(text: string, max: number): string {
   const flat = text.replace(/[\r\n\t]+/g, ' ')
   if (Buffer.byteLength(flat, 'utf8') <= max) return flat
@@ -202,24 +245,51 @@ function clipUtf8(text: string, max: number): string {
 }
 
 /**
- * A drawer row's words as the dial keeps them (firmware recap_preview): whitespace folded to one space, cut on a whole
- * character at 239 bytes, no ellipsis. The dial matches a read row by its words, so a question asked whole and then
+ * A drawer row's text as the dial keeps it (firmware recap_preview): whitespace folded to one space, cut on a whole
+ * character at `max` bytes, no ellipsis. The dial matches a read row by its words, so a question asked whole and then
  * carried in a drawer stays read; and a window's question text, a plan of kilobytes, made the drawer frame too big to
- * send, every question it carried with it (2026-11-18).
+ * send, every question it carried with it (2026-11-18). It is cut sooner where its JSON passes twice `max`, a field of
+ * quotes: JSON writes a control character six bytes wide, and eight rows of them passed the frame cap. Folding them
+ * instead changed the words of a question the dial had filed with them, and a read question came back unread. Half an
+ * emoji is written '?' here as `send` writes it for the dial: counted as the three bytes UTF-8 gives it, the cut fell
+ * short of the dial's own and a read question came back unread.
  */
-function noticeSummary(text: string): string {
+function dialText(text: string, max: number): string {
   let out = ''
   let bytes = 0
+  let width = 0
   let space = false
-  for (const ch of text) {
-    if (ch === ' ' || (ch >= '\t' && ch <= '\r')) { space = bytes > 0; continue }
-    const size = Buffer.byteLength(ch, 'utf8') + (space ? 1 : 0)
-    if (bytes + size > NOTICE_SUMMARY_MAX) break
+  for (const char of text) {
+    if (char === ' ' || (char >= '\t' && char <= '\r')) { space = bytes > 0; continue }
+    const ch = /[\ud800-\udfff]/u.test(char) ? '?' : char
+    const gap = space ? 1 : 0
+    const size = Buffer.byteLength(ch, 'utf8')
+    const wide = ch === '"' || ch === '\\' ? 2 : ch < ' ' ? 6 : size
+    if (bytes + gap + size > max || width + gap + wide > 2 * max) break
     out += space ? ` ${ch}` : ch
-    bytes += size
+    bytes += gap + size
+    width += gap + wide
     space = false
   }
   return out
+}
+
+/** Whether the dial keeps a drawer row of this agent: it skips an id of ID_MAX (48 B) or more. One with a control
+ *  character or half an emoji is left out too: JSON writes the first six bytes wide, past the room eight rows have,
+ *  and the dial gets the second as '?', an id no agent has. No agent's id holds either. */
+function dialKeepsId(agentId: string): boolean {
+  return Buffer.byteLength(agentId, 'utf8') < 48 && !/[\u0000-\u001f\ud800-\udfff]/u.test(agentId)
+}
+
+/**
+ * The leading drawer rows that fit one frame. Every field is bounded, so eight rows fit today; this guards a field added
+ * later without a bound, whose frame `send` would refuse, leaving the dial without its drawer. A question row cut here
+ * stays owed and is asked again.
+ */
+export function fitDrawer<T>(rows: T[]): T[] {
+  const kept = [...rows]
+  while (kept.length > 0 && !fitsFrame({ t: 'notif.replace', items: kept })) kept.pop()
+  return kept
 }
 
 export interface CableAgent {
@@ -399,8 +469,8 @@ export interface CableHost {
   stopTurn(agentId: string): void
   /**
    * The user answered a `question`. `answers` is keyed by the QUESTION keys the daemon itself asked with
-   * and travels verbatim — re-deriving it, or keying it by the requestId, is how a rename at either end
-   * becomes an answer nobody gave.
+   * and travels verbatim, but for half an emoji the dial read as '?', put back — re-deriving it, or keying it by the
+   * requestId, is how a rename at either end becomes an answer nobody gave.
    */
   answer(agentId: string, requestId: string, answers: Record<string, string>): void
   answerReviewed?(answer: ReviewedAnswer): Promise<AnswerReceipt>
@@ -1729,8 +1799,9 @@ export class CableSession {
       }
       case 'answer': {
         // `answers` is the dial's own object, one entry per question, keyed by the keys WE asked with. It
-        // travels verbatim. Until proto 2 this case demanded `{id, optionId}` — a shape the dial has never
-        // sent — so every answer from the question screen was silently dropped on the floor.
+        // travels as the dial sent it, but for half an emoji it read as '?' (asAsked). Until proto 2 this case
+        // demanded `{id, optionId}` — a shape the dial has never sent — so every answer from the question screen was
+        // silently dropped on the floor.
         const agentId = str('agentId')
         const requestId = str('requestId')
         const answers = msg.answers
@@ -1747,7 +1818,9 @@ export class CableSession {
           }
           // Its agent may have gone from the list since: the id alone says nothing here answers it.
           if (requestId.startsWith(SHOWN_ONLY_PREFIX)) return
-          this.host.answer(agentId, requestId, flat)
+          const asked = asAsked(this.questionInbox.asked(agentId, requestId), flat)
+          if (!asked) { await this.toast('Use the terminal to answer this question.'); return }
+          this.host.answer(agentId, requestId, asked)
         }
         return
       }
@@ -2564,7 +2637,7 @@ export class CableSession {
     let frame: Uint8Array
     try {
       const framed = this.seqOn ? { ...msg, seq: this.seq } : msg
-      frame = encodeCableFrame(CableType.Json, Buffer.from(JSON.stringify(framed), 'utf8'))
+      frame = encodeCableFrame(CableType.Json, Buffer.from(dialJson(framed), 'utf8'))
     } catch (err) {
       this.log(`cable: dropped a ${String(msg.t)} frame (${(err as Error).message})`)
       return false
@@ -2853,9 +2926,12 @@ export class CableSession {
   }
 
   /** Whether a dial that lost its questions is asked this one again. A real question whose turn moved on without a close
-   *  is not. A notice or a wait is: its owner closes it, and it stays on the dial after its turn ends. */
+   *  is not. A notice or a wait is: its owner closes it, and it stays on the dial after its turn ends. One whose id no
+   *  drawer row carries is not either (dialKeepsId), and it was sent again for nothing at each drawer: the dial drops an
+   *  id of 48 B or more and gets half an emoji as '?', no agent's id, and a control character, six bytes of JSON, is
+   *  left out here. */
   private owed(agentId: string, id: string): boolean {
-    return id.startsWith(SHOWN_ONLY_PREFIX) || this.liveTurns.get(agentId) === 'question'
+    return dialKeepsId(agentId) && (id.startsWith(SHOWN_ONLY_PREFIX) || this.liveTurns.get(agentId) === 'question')
   }
 
   /**
@@ -3239,9 +3315,14 @@ export class CableSession {
    * question card for an agent off this tab have nobody to ask but the frame. Sent on every card rather
    * than only the off-tab ones: the dial then has one path, and a tab switch mid-flight cannot strand a
    * card with an id and no name.
+   *
+   * Name and machine are cut to what the dial keeps: they are the host's words, of any length, and a frame of a few KB
+   * of them passed the cable cap and was dropped, the card with it.
    */
   private whoIs(agentId: string): { name: string; engine: string; machine: string } {
-    return this.host.describe(agentId) ?? { name: '', engine: '', machine: '' }
+    const who = this.host.describe(agentId)
+    if (!who) return { name: '', engine: '', machine: '' }
+    return { name: dialText(who.name, NAME_MAX), engine: who.engine, machine: dialText(who.machine, NAME_MAX) }
   }
   /**
    * Replace the dial's whole drawer with what the window still has unread.
@@ -3260,7 +3341,7 @@ export class CableSession {
     const replay = { seen: new Set<string>() }
     this.notificationReplay = replay
     const link = this.link
-    const rows = await Promise.all(items.slice(0, 8).map(async (item) => {
+    const rows = await Promise.all(items.filter((item) => dialKeepsId(item.agentId)).slice(0, 8).map(async (item) => {
       const who = this.whoIs(item.agentId)
       // A QUESTION BRINGS ITS OWN WORDS; a finished turn takes the recap this daemon summarised. The
       // dial cannot supply either after a reboot, and a row with neither renders as the word its type
@@ -3272,8 +3353,8 @@ export class CableSession {
           summary = summary ? extendShortRecap(summary, saved?.text ?? '') : saved?.recap ?? ''
         } catch { /* keep the supplied text if history cannot be read */ }
       }
-      return { agentId: item.agentId, name: who.name, machine: who.machine, summary: noticeSummary(summary), question: item.question,
-        ...(notificationReadToken(item.readToken) ? { readToken: item.readToken } : {}) }
+      return { agentId: item.agentId, name: who.name, machine: who.machine, summary: dialText(summary, NOTICE_SUMMARY_MAX),
+        question: item.question, ...(notificationReadToken(item.readToken) ? { readToken: item.readToken } : {}) }
     }))
     if (this.notificationReplay !== replay) return
     this.notificationReplay = undefined
@@ -3291,14 +3372,16 @@ export class CableSession {
     const back = new Set(open.map(({ agentId }) => agentId))
     const rest = listed.filter((row) => !back.has(row.agentId))
     // Questions before news within the eight: a question cut for a news row was asked again, a beep, at every change.
-    const drawer = [
+    const eight = [
       ...open.map(({ agentId, questions }) => {
-        const who = this.whoIs(agentId)
-        return { agentId, name: who.name, machine: who.machine, summary: noticeSummary(questions[0].q), question: true }
+        const { name, machine } = this.whoIs(agentId)
+        return { agentId, name, machine, summary: dialText(questions[0].q, NOTICE_SUMMARY_MAX), question: true }
       }),
       ...rest.filter((row) => row.question),
       ...rest.filter((row) => !row.question),
     ].slice(0, 8)
+    const drawer = fitDrawer(eight)
+    if (drawer.length < eight.length) this.log(`cable: notif.replace over the cap, dropped ${eight.length - drawer.length} rows`)
     // Before the frame, so an ask that overtakes it stays marked.
     this.questionInbox.forget(new Set(drawer.filter((row) => row.question).map((row) => row.agentId)))
     await this.send({ t: 'notif.replace', items: drawer })

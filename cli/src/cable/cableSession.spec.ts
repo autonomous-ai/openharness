@@ -11,10 +11,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi, type Mock } from 'vitest'
 
-import { CABLE_MAX_FRAME, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
+import { CABLE_MAX_FRAME, CABLE_MAX_PAYLOAD, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DaemonCableHost } from './cableHost.js'
 import type { MachineFleet } from './machineFleet.js'
-import { CableSession, SHOWN_ONLY_PREFIX, SWIPE_REST_MS, type CableAgent, type CableHost, type CableMachine, type CablePort, type DialAgent, type SendOutcome } from './cableSession.js'
+import { CableSession, fitDrawer, SHOWN_ONLY_PREFIX, SWIPE_REST_MS, type CableAgent, type CableHost, type CableMachine, type CablePort, type DialAgent, type SendOutcome } from './cableSession.js'
 import { DialLog } from './dialLog.js'
 import type { PetStore } from './pets/store.js'
 import { HostRegistry } from './hosts/registry.js'
@@ -366,6 +366,143 @@ describe('cable session', () => {
       expect(readNotification).toHaveBeenCalledExactlyOnceWith('a1', 'question-2')
       expect(openAgent).not.toHaveBeenCalled()
     } finally { await session.stop() }
+  })
+
+  it('bounds every drawer field to what the dial keeps, so eight rows of the worst text stay one frame', async () => {
+    const long = '\u0001"\u001f\u007f"'.repeat(200)
+    const { session, port } = await connect(makeHost({ describe: () => ({ name: long, engine: 'claude', machine: long }) }))
+    try {
+      // Every character of an id the dial keeps escaped to two bytes, every summary 1000+ characters of escapes.
+      await session.replaceNotifications(Array.from({ length: 8 }, (_, i) => ({
+        agentId: '"'.repeat(46) + i, machineId: 'mac-local', question: i % 2 === 0, text: '\u0001"\u007fé\u001f😀'.repeat(300) })))
+      const replace = port.sent.find((m) => m.t === 'notif.replace')
+      expect(replace).toBeDefined()
+      expect(Buffer.byteLength(JSON.stringify(replace), 'utf8')).toBeLessThanOrEqual(CABLE_MAX_PAYLOAD - 256)
+      const items = replace!.items as Array<{ name: string; machine: string; summary: string }>
+      expect(items).toHaveLength(8)
+      for (const { name, machine, summary } of items) {
+        for (const [text, max] of [[name, 39], [machine, 39], [summary, 239]] as const) {
+          expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(max)
+          // Its JSON, quotes aside, no wider than a field of quotes the dial keeps whole.
+          expect(Buffer.byteLength(JSON.stringify(text), 'utf8') - 2).toBeLessThanOrEqual(2 * max)
+        }
+      }
+      expect(port.isOpen).toBe(true)
+    } finally { await session.stop() }
+  })
+
+  it('leaves out a row whose id the dial cannot keep', async () => {
+    const { session, port } = await connect()
+    try {
+      await session.replaceNotifications(['x'.repeat(48), 'é'.repeat(24), 'a\u0001b', 'a\ud800', 'x'.repeat(47), 'a1'].map((agentId) => (
+        { agentId, machineId: 'mac-local', question: true, text: 'Which branch?' })))
+      expect((port.sent.at(-1)!.items as Array<{ agentId: string }>).map((row) => row.agentId)).toEqual(['x'.repeat(47), 'a1'])
+    } finally { await session.stop() }
+  })
+
+  it('writes half an emoji in a drawer row as the dial writes a byte it cannot read, so the dial can parse the frame', async () => {
+    // JSON escapes a lone surrogate as \ud83d, and the dial's parser refuses the whole frame for it.
+    const { session, port } = await connect(makeHost({ describe: () => ({ name: 'Fix \ud83d', engine: 'claude', machine: '\ude00Mac' }) }))
+    try {
+      await session.replaceNotifications([{ agentId: 'a1', machineId: 'mac-local', question: true, text: 'Ship \ud83d it? 😀' }])
+      expect(port.sent.at(-1)!.items).toMatchObject([{ name: 'Fix ?', machine: '?Mac', summary: 'Ship ? it? 😀' }])
+    } finally { await session.stop() }
+  })
+
+  it('writes half an emoji in any frame as the dial writes a byte it cannot read, so the dial can parse the frame', async () => {
+    // JSON escapes a lone surrogate as \ud83d, and the dial's parser refuses the whole frame for it: the agent list and
+    // the question never reached the dial.
+    const agents = [{ id: 'a1', name: 'Fix \ud83d', engine: 'claude' }]
+    const { session, port } = await connect(makeHost({ listAgents: async () => agents, describe: () => ({ name: 'Fix \ud83d', engine: 'claude', machine: '' }) }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+      await session.question('a1', 'q1', [{ key: 'k', q: 'Ship \ud83d it? 😀', options: ['\udc00yes', 'no'] }])
+      for (const frame of port.frames) expect(Buffer.from(frame).toString('utf8')).not.toMatch(/\\ud[89a-f]/i)
+      expect(port.sent.find((m) => m.t === 'agent')).toMatchObject({ name: 'Fix ?' })
+      expect(port.sent.find((m) => m.t === 'question'))
+        .toMatchObject({ name: 'Fix ?', questions: [{ q: 'Ship ? it? 😀', options: ['?yes', 'no'] }] })
+    } finally { await session.stop() }
+  })
+
+  it('keeps words that only read like half an emoji after a backslash', async () => {
+    // JSON writes a backslash as \\: the `\ud83d` of a path is words, and half an emoji after a backslash is still half.
+    const names = ['C:\\ud83d\\udc00', 'C:\\\\ud83d', 'C:\\\ud83d', 'C:\\\\\ud83d']
+    const agents = names.map((name, i) => ({ id: `a${i}`, name, engine: 'claude' }))
+    const { session, port } = await connect(makeHost({ listAgents: async () => agents }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+      expect(port.sent.filter((m) => m.t === 'agent').map((m) => m.name))
+        .toEqual(['C:\\ud83d\\udc00', 'C:\\\\ud83d', 'C:\\?', 'C:\\\\?'])
+    } finally { await session.stop() }
+  })
+
+  describe('an answer to a question with half an emoji, which the dial read as ?', () => {
+    async function asked(questions: unknown, over: Partial<CableHost> = {}) {
+      const c = await connect(makeHost(over))
+      c.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(c.port.types()).toContain('agents.end'))
+      await c.session.question('a1', 'q1', questions)
+      return c
+    }
+
+    it('reaches the host in the words it was asked with, and typed words as typed', async () => {
+      // '?yes' matched no row of the dialog, which typed it into its free-text row instead of choosing the option.
+      const { session, port, host } = await asked([
+        { key: 'Ship \ud83d it?', q: 'Ship \ud83d it?', options: ['\ud83dyes', 'no'] },
+        { key: 'Why?', q: 'Why?', options: ['tests'] },
+      ])
+      try {
+        port.say({ t: 'answer', agentId: 'a1', requestId: 'q1', answers: { 'Ship ? it?': '?yes', 'Why?': 'see ?' } })
+        await vi.waitFor(() => expect(host.answer).toHaveBeenCalled())
+        expect(host.answer).toHaveBeenCalledWith('a1', 'q1', { 'Ship \ud83d it?': '\ud83dyes', 'Why?': 'see ?' })
+      } finally { await session.stop() }
+    })
+
+    it('reaches the host in the words it was asked with when several options are chosen', async () => {
+      const { session, port, host } = await asked([{ key: 'k', q: 'Which?', options: ['\ud83da', 'b', 'c'], multi: true }])
+      try {
+        port.say({ t: 'answer', agentId: 'a1', requestId: 'q1', answers: { k: '?a, b' } })
+        await vi.waitFor(() => expect(host.answer).toHaveBeenCalled())
+        expect(host.answer).toHaveBeenCalledWith('a1', 'q1', { k: '\ud83da, b' })
+      } finally { await session.stop() }
+    })
+
+    it('is refused when two options read the same on the dial', async () => {
+      const { session, port, host } = await asked([{ key: 'k', q: 'Which?', options: ['\ud83dyes', '\udc00yes'] }])
+      try {
+        port.say({ t: 'answer', agentId: 'a1', requestId: 'q1', answers: { k: '?yes' } })
+        await vi.waitFor(() => expect(port.types()).toContain('toast'))
+        expect(host.answer).not.toHaveBeenCalled()
+      } finally { await session.stop() }
+    })
+
+    it('reviewed, reaches the host in the words it was asked with', async () => {
+      const answerReviewed = vi.fn<NonNullable<CableHost['answerReviewed']>>(async () => ({ ok: true }))
+      const { session, port } = await asked([{ key: 'Ship \ud83d it?', q: 'Ship \ud83d it?', options: ['\ud83dyes', 'no'] }],
+        { answerReviewed })
+      try {
+        port.say({ t: 'question.read', agentId: 'a1', requestId: 'read-1' })
+        await vi.waitFor(() => expect(port.types()).toContain('question.state'))
+        const { token } = port.sent.find((m) => m.t === 'question.state')!
+        port.say({ t: 'answer.reviewed', agentId: 'a1', requestId: 'send-1', token, choices: [1] })
+        await vi.waitFor(() => expect(port.types()).toContain('answer.receipt'))
+        expect(port.sent.find((m) => m.t === 'answer.receipt')).toMatchObject({ ok: true })
+        expect(answerReviewed).toHaveBeenCalledWith(expect.objectContaining({
+          answers: { 'Ship \ud83d it?': '\ud83dyes' }, selections: { 'Ship \ud83d it?': ['\ud83dyes'] } }))
+      } finally { await session.stop() }
+    })
+  })
+
+  it('keeps the leading drawer rows that fit one frame', () => {
+    const rows = Array.from({ length: 8 }, (_, i) => ({ agentId: `a${i}`, summary: 'x'.repeat(2000) }))
+    const kept = fitDrawer(rows)
+    expect(kept).toEqual(rows.slice(0, kept.length))
+    expect(kept.length).toBeGreaterThan(0)
+    expect(kept.length).toBeLessThan(8)
+    expect(Buffer.byteLength(JSON.stringify({ t: 'notif.replace', items: kept }), 'utf8')).toBeLessThanOrEqual(CABLE_MAX_PAYLOAD - 256)
+    expect(fitDrawer(rows.slice(0, 2))).toEqual(rows.slice(0, 2))
   })
 
   it.each(['turn-1', 'turn-2'])('a late read of %s cannot clear a newer snapshot occurrence', async readToken => {
@@ -2281,6 +2418,23 @@ describe('cable session', () => {
     await session.stop()
   })
 
+  it('bounds the name and machine on a summary and a question, so a hostile name cannot push either past the cap', async () => {
+    // Several KB each, its JSON wider still: quotes and control characters escape, the rest is multibyte.
+    const long = '"\u0001é😀\\'.repeat(800)
+    const { session, port } = await connect(makeHost({ describe: () => ({ name: long, engine: 'claude', machine: long }) }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' }); await settle()
+      await session.summary('a1', 'recap', 'body')
+      await session.question('a1', 'q1', [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }])
+      for (const t of ['summary', 'question']) {
+        const frame = port.sent.find((m) => m.t === t)
+        expect(frame).toBeDefined()
+        for (const text of [frame!.name, frame!.machine] as string[]) expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(39)
+      }
+      expect(port.isOpen).toBe(true)
+    } finally { await session.stop() }
+  })
+
   it('marks a summary quiet when the window already has that agent on screen', async () => {
     const { session, port } = await connect(makeHost({}))
     port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
@@ -2791,6 +2945,23 @@ describe('cable session', () => {
     port.say({ t: 'answer', agentId: 'a1', requestId: 'req-7', answers: { scope: 'wide', mode: 'plan' } })
     await vi.waitFor(() => expect(host.answer).toHaveBeenCalled())
     expect(host.answer).toHaveBeenCalledWith('a1', 'req-7', { scope: 'wide', mode: 'plan' })
+    await session.stop()
+  })
+
+  it('forwards an answer verbatim to a question that repeats a key or an option', async () => {
+    // Two options in the same words are one answer, not two the dial could have meant: refused, they sent the person to
+    // the terminal for a question the dial had always answered.
+    const host = makeHost()
+    const { session, port } = await connect(host)
+    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+    await session.question('a1', 'req-7', [
+      { key: 'scope', q: 'Which scope?', options: ['wide', 'wide', 'narrow'] },
+      { key: 'scope', q: 'Which scope?', options: ['wide'] },
+    ])
+    port.say({ t: 'answer', agentId: 'a1', requestId: 'req-7', answers: { scope: 'wide' } })
+    await vi.waitFor(() => expect(host.answer).toHaveBeenCalled())
+    expect(host.answer).toHaveBeenCalledWith('a1', 'req-7', { scope: 'wide' })
     await session.stop()
   })
 
@@ -3638,6 +3809,21 @@ describe('hello capabilities', () => {
     } finally { await session.stop() }
   })
 
+  it('an open question whose id the dial cannot keep is not carried as a row, nor asked again at each replace', async () => {
+    const { session, port } = await connect(richHost())
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      await session.question('x'.repeat(48), 'q1', [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }])
+      port.sent.length = 0
+      await session.replaceNotifications([])
+      await session.replaceNotifications([])
+      // The dial drops a question frame of that id: asking it again sent one for nothing at every change of the list.
+      expect(port.types()).toEqual(['notif.replace', 'notif.replace'])
+      expect(ofType(port, 'notif.replace')[0].items).toEqual([])
+    } finally { await session.stop() }
+  })
+
   it('a drawer that names an open question as news, or not at all, carries the question in its place', async () => {
     const { session, port } = await connect(richHost())
     try {
@@ -3714,6 +3900,19 @@ describe('hello capabilities', () => {
       const items = ofType(port, 'notif.replace')[0].items as Array<{ agentId: string; summary: string }>
       expect(items.map((row) => row.agentId)).toEqual(['a0', 'w0', 'w1', 'w2', 'w3', 'w4', 'w5', 'w6'])
       for (const row of items) expect(row.summary).toBe(preview)
+    } finally { await session.stop() }
+  })
+
+  it("a drawer row keeps its words' control characters, as the dial previews them, so a read question stays read", async () => {
+    const { session, port } = await connect(richHost())
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      // Colored text: the dial filed the asked question with its escapes and bell (recap_preview folds only whitespace).
+      await session.question('a0', 'id0', [{ key: 'k', q: '\u001b[1mShip\u001b[0m  it?\u0007\u007f', options: ['yes', 'no'] }])
+      port.sent.length = 0
+      await session.replaceNotifications([])
+      expect(ofType(port, 'notif.replace')[0].items).toMatchObject([{ agentId: 'a0', summary: '\u001b[1mShip\u001b[0m it?\u0007\u007f' }])
     } finally { await session.stop() }
   })
 

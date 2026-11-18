@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { CABLE_MAX_PAYLOAD } from './cableFrame.js'
 
 export interface ReviewQuestion {
   key: string
@@ -26,18 +27,29 @@ type Entry = {
   asked?: boolean
 }
 
+/** Questions as JSON, while one frame's payload could carry them. A larger one did not reach the dial (only many half
+ *  emojis, each one byte there, shrink one under the cap), so no answer is in its words: kept, 64 agents' questions of
+ *  any size were held for nothing. */
+function frameJson(raw: unknown): string | undefined {
+  try {
+    const json = JSON.stringify(raw)
+    return json !== undefined && Buffer.byteLength(json, 'utf8') <= CABLE_MAX_PAYLOAD ? json : undefined
+  } catch { return undefined }
+}
+
 /** The host owns the pending catalog; the dial holds only the question it is reading.
  * Tokens name immutable contents, not merely the engine's sometimes-reused id. */
 export class QuestionInbox {
   private readonly entries = new Map<string, Entry>()
-  private readonly latestIds = new Map<string, string>()
+  /** The questions each agent asked last, as they came (JSON), reviewable or not: the dial's answer is read against them. */
+  private readonly latest = new Map<string, { id: string; json?: string }>()
 
   set(agentId: string, id: string, raw: unknown): void {
-    if (this.latestIds.size >= 64 && !this.latestIds.has(agentId)) {
-      const oldest = this.latestIds.keys().next().value!
-      this.latestIds.delete(oldest); this.entries.delete(oldest)
+    if (this.latest.size >= 64 && !this.latest.has(agentId)) {
+      const oldest = this.latest.keys().next().value!
+      this.latest.delete(oldest); this.entries.delete(oldest)
     }
-    this.latestIds.set(agentId, id)
+    this.latest.set(agentId, { id, json: frameJson(raw) })
     const valid = agentId && id && Array.isArray(raw) && raw.length > 0 && raw.length <= 4 &&
       raw.every(q => q && typeof q.key === 'string' && q.key && typeof q.q === 'string' && q.q &&
         Array.isArray(q.options) && q.options.length > 0 && q.options.length <= 6 &&
@@ -76,10 +88,16 @@ export class QuestionInbox {
   }
 
   close(agentId: string, id: string): boolean {
-    const current = this.latestIds.get(agentId)
+    const current = this.latest.get(agentId)?.id
     if (current !== undefined && current !== id) return false
-    this.latestIds.delete(agentId); this.entries.delete(agentId)
+    this.latest.delete(agentId); this.entries.delete(agentId)
     return true
+  }
+
+  /** The questions that agent asked under `id`, as they came, while it is the open one. */
+  asked(agentId: string, id: string): unknown {
+    const latest = this.latest.get(agentId)
+    return latest?.id === id && latest.json !== undefined ? JSON.parse(latest.json) : undefined
   }
 
   read(agentId: string): { ok: true; id: string; token: string; questions: ReviewQuestion[]; submitted: boolean }
