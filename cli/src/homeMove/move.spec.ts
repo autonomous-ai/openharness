@@ -307,10 +307,11 @@ describe('the move', () => {
     expect(t.systemctl).toEqual([['systemctl', '--user', 'daemon-reload']])
     expect([...t.panes]).toEqual([['%1', check.newTag], ['%2', check.newTag], ['%3', OTHER_TAG]])
 
-    // With this boot's id, where /proc has one (bridge.ts writeBridge).
+    // Only what its readers read: the old home and data folder, the panes' new tag, and the move's time on this boot's
+    // clock, where /proc has one (bridge.ts writeBridge).
     const boot = bootId()
     expect(readBridge(plan.state)).toEqual({
-      version: 1, movedAt: PROC_NOW, oldHome: t.legacy, oldDataDir: join(t.legacy, 'cli', 'data'), oldTag: check.oldTag, newTag: check.newTag, panes: ['%1', '%2'],
+      version: 1, oldHome: t.legacy, oldDataDir: join(t.legacy, 'cli', 'data'), newTag: check.newTag,
       ...(boot ? { boot: { id: boot, uptime: expect.any(Number) } } : {}),
     })
     expect(readMoveRecord(t.home, t.env)).toEqual({ version: 1, state: 'bridged', entries: ENTRIES, bytesCopied: 0, panes: 2, left: 0, oldProcesses: 0, at: NOW })
@@ -405,7 +406,7 @@ describe('the move', () => {
     // Its folder stays, its records are rewritten where it is, and its panes keep their tag.
     expect(json(join(dataDir, 'registry.json'))).toEqual([{ id: 'a1', claudeHome: `${t.plan.data}/claude-profiles/work` }])
     expect([...t.panes.values()]).toEqual([t.check.oldTag, t.check.oldTag, OTHER_TAG])
-    expect(readBridge(t.plan.state)).toMatchObject({ oldDataDir: dataDir, panes: [] })
+    expect(readBridge(t.plan.state)).toMatchObject({ oldDataDir: dataDir })
     // The launcher where HARNESS_BIN_DIR put it.
     expect(readFileSync(join(t.binDir, 'harness'), 'utf8')).toContain(`'${t.plan.data}/cli/cli.js'`)
   })
