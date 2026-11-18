@@ -237,7 +237,9 @@ master too old to run it starts it beside itself, still in its own process (`src
   (plugins/harness-device-orca) whether a dial is attached and which agent it shows, and its end drops what
   `orcaFront` set; on `vscode`, keyed by its window and at most 8, they tell Harness's VS Code extension
   (plugins/harness-device-vscode) which terminal to show and scroll, and that window reports its terminals' shells in
-  a `vscode-state` message (src/cable/hosts/vscodeTerminals.ts).
+  a `vscode-state` message (src/cable/hosts/vscodeTerminals.ts). Cursor's windows hold the same `vscode` stream: the
+  extension is the same and cannot tell the apps apart, and a terminal is found by its shell's pid, whichever app holds
+  it.
   Which path: a route of the core's local door, where the core checks who calls (the account's, the Wi-Fi device's,
   the add-ons'), is a `SERVICE_HTTP_ROUTES` route (above); what a tool on this computer tells the devices alone is a
   message on their listener, which the core never routes or reads.

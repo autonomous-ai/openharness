@@ -301,7 +301,8 @@ or a label. The extension's output channel: its state and counts, nothing else.
     without raising VS Code; swipe and scroll need the app in front, which only Harness Device's X11 reader reports, so
     they work under X11 with Harness Device running, not under Wayland. Windows: the devices listener has no Windows
     path, so the extension stops and the setup never installs it. VS Code's default profile only (`--install-extension`
-    and `~/.vscode/extensions`); Cursor, VS Code Insiders and VSCodium are not in this work.
+    and `~/.vscode/extensions`); Cursor is covered by [2026-11-18-dial-cursor-design.md](2026-11-18-dial-cursor-design.md);
+    VS Code Insiders and VSCodium are not in this work.
 
 ## Verification
 

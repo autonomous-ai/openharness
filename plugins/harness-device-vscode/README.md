@@ -1,6 +1,7 @@
 # Harness Device for VS Code
 
-Lets the Harness dial reach Claude Code and Codex running in VS Code's integrated terminal, on this computer.
+Lets the Harness dial reach Claude Code, Codex and cursor-agent running in VS Code's or Cursor's integrated terminal,
+on this computer.
 
 ## What it does
 
@@ -10,6 +11,9 @@ Lets the Harness dial reach Claude Code and Codex running in VS Code's integrate
 - **Scroll** on the dial while VS Code is in front: that terminal scrolls, line by line. With `"tui": "fullscreen"` in
   Claude Code's settings, its view moves a page for each 8 lines. Fullscreen set only by `CLAUDE_CODE_NO_FLICKER=1`
   does not move: set `"tui": "fullscreen"`.
+
+In Cursor it does the same. There the dial also lists Cursor's own agent: a tap on one opens Cursor's window for its
+folder (for a multi-root workspace its first folder, which may open as a second window).
 
 Each window tells the devices process on this computer which shells its terminals run, and shows or scrolls the
 terminal the devices process names, or presses its page keys, raising itself when the show is a tap's. It asks `harness device vscode link` (`~/.local/bin/harness`, then `harness` in an absolute `PATH` folder) where
@@ -27,18 +31,20 @@ that process listens.
 
 ## On and off
 
-It turns on by itself: once a dial has attached on this computer, Harness installs it into VS Code.
+It turns on by itself: once a dial has attached on this computer, Harness installs it into VS Code and into Cursor.
 
-Off: uninstall it in VS Code's Extensions view, or:
+Off: uninstall it in the editor's Extensions view, or, one editor at a time:
 
 ```
 harness device vscode disable
+harness device cursor disable
 ```
 
 Harness then leaves it off. Back on:
 
 ```
 harness device vscode enable
+harness device cursor enable
 ```
 
 ## Its output channel
@@ -52,4 +58,5 @@ harness device vscode enable
 
 ## Where it runs
 
-VS Code 1.75 or later, its default profile. Cursor, VS Code Insiders and VSCodium are not covered.
+VS Code 1.75 or later and Cursor, each in its default profile. VS Code Insiders, VSCodium and Windsurf are not covered.
+On Linux, in Cursor, a tap shows the terminal; swipe and scroll do not follow.
