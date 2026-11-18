@@ -106,6 +106,9 @@ export interface DaemonOptions {
   /** Run this bundle (an installed `cli.js`, its `notify.mjs` beside it: `assertHookScriptBeside`) instead of
    *  the checkout's source. */
   scriptPath?: string
+  /** Start from the sources with no process-image helper, even under `E2E_BUNDLE` (whose build embeds it): a build
+   *  that ships without the helper (identityHoldVisible.e2e.ts). */
+  withoutProcessImages?: boolean
   /** Keep the daemon's data folder here instead of under the throwaway root (a test volume). The fake
    *  engines read their hook credential from it, so it is set for them too. Its socket path is never measured:
    *  where it sits is the test's subject (noSocket.e2e.ts passes one too long on purpose). */
@@ -562,6 +565,8 @@ esac
     // and a test may name its script after `create` (`masterIpcExit.e2e.ts`).
     assertHooksContained(this.root, this.env)
     if (this.options.scriptPath) assertHookScriptBeside(this.options.scriptPath)
+    // An installed bundle may embed a helper of its own.
+    if (this.options.withoutProcessImages && this.options.scriptPath) throw new Error('withoutProcessImages runs the sources; it cannot run a given bundle')
     // The product looks for npm-installed engines beside the Node the daemon runs on (lib/engineLaunch.ts
     // `npmRuntimeBins`), and on a developer's Mac the worker's Node was in the version manager's folder with their real
     // engines, which freshMachineEngines.e2e.ts's daemon found "already installed" (audit of 2026-11-16,
@@ -576,10 +581,10 @@ esac
     // Readiness is judged from what this start prints, never from an earlier boot's lines.
     const from = this.output.length
     // A test's own bundle (an old release), the run's bundle (`E2E_BUNDLE`, see bundle.ts), or the sources.
-    const bundle = this.options.scriptPath ?? process.env.E2E_BUNDLE_PATH
+    const bundle = this.options.withoutProcessImages ? undefined : this.options.scriptPath ?? process.env.E2E_BUNDLE_PATH
     // From the sources on macOS, the helper a release embeds comes in by a preload (processImages.ts): without it the
     // daemon held every Codex read for good. The master passes its flags on to the core and the services.
-    const preload = process.env.E2E_PROCESS_IMAGES_PRELOAD
+    const preload = this.options.withoutProcessImages ? undefined : process.env.E2E_PROCESS_IMAGES_PRELOAD
     const script = bundle ? [bundle] : [...(preload ? ['--import', preload] : []), '--import', 'tsx', 'src/cli.ts']
     // A process group of its own, which the core and the services join: one signal reaches all of them, whether or
     // not the master is still there, and the worker's reaper (reaper.ts) ends it should the worker go without closing it.
