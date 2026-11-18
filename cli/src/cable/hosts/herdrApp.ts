@@ -13,9 +13,9 @@
  *
  * A stroke on the dial scrolls Herdr's view of a terminal through `herdr-app do terminal.scroll`. A `herdr-app` run took
  * 10–50 ms (`herdr-app commands`, which does not reach the window: 5 runs on Diego's Mac, 2026-11-17; a scroll's own is
- * not measured), so it has 2 s, where a focus's 10 s would freeze a stroke. One run at a time per terminal, the lines
- * that come meanwhile carried by the next: a fast stroke costs one process per round trip, not one per dial frame. Its
- * queue is its own: a scroll that joined an `agent.focus` run would lose its lines.
+ * not measured), so it has 2 s, where a focus's 10 s would freeze a stroke. One run at a time per terminal, and one every
+ * 50 ms at most, the lines that come meanwhile carried by the next: a fast stroke costs at most 20 processes a second,
+ * not one per dial frame. Its queue is its own: a scroll that joined an `agent.focus` run would lose its lines.
  *
  * Which terminal is on screen is the window's alone: hc's terminal facts have no focus or viewer. So a stroke asks
  * `herdr-app status` (one run took 0.04 s) and reads its `tab` alone, the tab on screen, which it matches with the
@@ -35,8 +35,11 @@ import type { PaneSwitch } from './types.js'
 export const HERDR_APP = '/Applications/Herdr.app/Contents/MacOS/Herdr'
 
 const SCROLL_TIMEOUT_MS = 2_000
-/** The most lines that wait, either way, for a terminal's run under way: a run that hangs to its deadline is followed by a
- *  bounded jump, not by all the travel of the stroke meanwhile. */
+/** The least time from one run's start to the next's for a terminal (PM, 2026-11-18): Diego's first check logged 109 runs
+ *  for 161 lines in about 3 s, about 40 processes a second carrying a line or two each. */
+const SCROLL_GAP_MS = 50
+/** The most lines that wait, either way, for a terminal's run under way or its gap: a run that hangs to its deadline is
+ *  followed by a bounded jump, not by all the travel of the stroke meanwhile. */
 const SCROLL_PENDING_MAX = 100
 /** How long a terminal's scrolling is quiet before its tally is said: a run is faster than the dial's line, so a queue
  *  drains after almost every line, and a line at each drain would bury the log while scrolling. */
@@ -78,11 +81,13 @@ export interface HerdrAppAdapter extends HostAdapter {
 /** What a run did: whether Herdr is forward, and whether its window switched to the terminal. */
 interface Run { forward: boolean; switched: boolean }
 
-/** A terminal's scroll queue until it has been quiet for SCROLL_QUIET_MS: whether a run is under way, the lines that came
- *  meanwhile, what it did since it started, for the line it says once quiet, and the timer of that quiet. */
+/** A terminal's scroll queue until it has been quiet for SCROLL_QUIET_MS: whether it is draining (a run under way, or the
+ *  wait for the gap before one), the lines that wait, the gap since its last run started while it lasts, what it did
+ *  since it started, for the line it says once quiet, and the timer of that quiet. */
 interface Scrolling {
   running: boolean
   pending: number
+  gap?: Promise<void>
   lines: number
   runs: number
   failed: number
@@ -130,6 +135,12 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
     const herdrApp = binary()
     if (herdrApp === null) return false
     queue.runs++
+    // On the timer the quiet second uses, never a sleep. It counts from the run's start: a run longer than the gap holds
+    // the next by itself.
+    queue.gap = new Promise((resolve) => setTimeout(() => {
+      queue.gap = undefined
+      resolve()
+    }, SCROLL_GAP_MS))
     try {
       return (await deps.run(herdrApp, ['do', 'terminal.scroll', '--terminal', address, '--lines', String(lines)], SCROLL_TIMEOUT_MS)).code === 0
     } catch {
@@ -139,9 +150,15 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
 
   // Its lines are dropped on a failure, never retried: a run that timed out may still have scrolled. The line names no
   // terminal: hc's addresses are a person's agents.
-  const drain = async (address: string, queue: Scrolling, first: number): Promise<void> => {
-    let lines = first
-    while (lines !== 0) {
+  const drain = async (address: string, queue: Scrolling): Promise<void> => {
+    while (queue.pending !== 0) {
+      // The lines that come while it waits for the gap are summed into the next run, or cancel out.
+      if (queue.gap) {
+        await queue.gap
+        continue
+      }
+      const lines = queue.pending
+      queue.pending = 0
       if (!(await scrollRun(address, lines, queue))) {
         queue.failed += Math.abs(lines) + Math.abs(queue.pending)
         queue.pending = 0
@@ -151,8 +168,6 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
       }
       scrollFailedSaid = false
       queue.lines += Math.abs(lines)
-      lines = queue.pending
-      queue.pending = 0
     }
     queue.running = false
     queue.quiet = setTimeout(() => {
@@ -203,8 +218,9 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
       return
     }
     queue.running = true
+    queue.pending = lines
     scrolling.set(pane.id, queue)
-    void drain(pane.id, queue, lines)
+    void drain(pane.id, queue)
   }
 
   const prompt = async (address: string, kind: string, text: string): Promise<HcPrompt> => {
