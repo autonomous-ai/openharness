@@ -33,7 +33,10 @@ connection is opened for an answer.
 - Growth: the existing observer owns a map of pending answers keyed by question id. Reuse a process-owned
   `DeviceWorkBudget` for at most 100 answers and 16 MiB of encoded retained payload across observer
   generations; this is application accounting, not a claim about total JavaScript heap. Every answer
-  has a 30-second deadline, matching the former service query. There is no queue or retry. A duplicate
+  has a new explicit 30-second deadline. The former service-to-core `CoreConnection.query` had no timer
+  of its own; the core-to-service 30-second request default is the opposite direction. This deadline
+  therefore bounds an earlier unbounded wait rather than preserving a prior query timeout. A timed-out
+  effect remains unknown even if the native controller later finishes. There is no queue or retry. A duplicate
   pending question id is refused; it cannot replace another waiter. No answer is accepted before the
   observation's complete snapshot. No persistent data is added.
 - Concurrency: capture the original observer and component core epoch. Check them immediately before
@@ -129,3 +132,5 @@ this slice. Shared abort-card presentation remains a broader dial/legacy caller 
   deferred by the user. No new runtime dependency, Desktop UI or mobile change.
 
 The evidence paragraph was added after the fixed-source run; no runtime or test changed afterward.
+Subsequent source review corrected the timeout comparison above; the implemented 30-second bound and
+its timeout/no-replay/physical-close tests are unchanged.
