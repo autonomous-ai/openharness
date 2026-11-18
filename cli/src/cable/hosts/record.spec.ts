@@ -148,6 +148,12 @@ describe('readRecord', () => {
     expect(await read(record(11, { ...named, entrypoint: 'cli', hostSessionId: LOCAL }))).toEqual({ name: 'Tho' })
   })
 
+  // Only the Claude app's own record: its name is the person's here, so only the host session can differ.
+  it.each<[unknown]>([['sdk-cli'], [undefined], [7], ['Claude-Desktop'], ['claude-desktop ']])(
+    'a record whose entrypoint is %j gives no host session', async (entrypoint) => {
+      expect(await read(record(11, { ...app, nameSource: 'user', entrypoint }))).toEqual({ name: 'Tho' })
+    })
+
   it('a Claude app record for another session gives neither', async () => {
     expect(await read(record(11, { ...app, sessionId: 't' }))).toEqual({})
   })
