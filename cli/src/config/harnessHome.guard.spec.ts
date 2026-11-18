@@ -119,6 +119,8 @@ describe('no hand-built home .harness path outside config/harnessHome.ts', () =>
       ' */',
       'const a = join(workspace, \'.harness\', \'runtime\')',
       'const b = \'.harness/handoff\'',
+      'const runtime = `${workspace}/.harness/runtime`',
+      'const handoff = `${cwd}/.harness/handoff/${id}.json`',
       'const c = \'.harness-team-privacy\'',
       'const d = `${file}.harness-${process.pid}.tmp`',
       'const e = owner.harness',
