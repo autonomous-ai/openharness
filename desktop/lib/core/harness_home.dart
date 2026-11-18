@@ -118,14 +118,6 @@ final class HarnessHome {
   const HarnessHome.at(String root, {HarnessJoin join = p.join})
     : this._(root, root, root, join);
 
-  /// Two roots a caller already holds. No older folder is known, so
-  /// [legacyPath] names the data root's entry.
-  const HarnessHome.roots({
-    required String data,
-    required String state,
-    HarnessJoin join = p.join,
-  }) : this._(data, state, data, join);
-
   const HarnessHome._(this._data, this._state, this._legacy, this._join);
 
   final String _data;

@@ -237,20 +237,11 @@ void main() {
       expect(home.legacyPath(HarnessEntry.runtime), '/h/.harness/runtime');
     });
 
-    test('at() and roots() ignore the rule', () {
+    test('at() ignores the rule', () {
       final at = HarnessHome.at('/t/h', join: p.posix.join);
       expectRoots(at, '/t/h', '/t/h');
       expect(at.path(HarnessEntry.cli), '/t/h/cli');
       expect(at.path(HarnessEntry.runtime), '/t/h/runtime');
-
-      final roots = HarnessHome.roots(
-        data: '/t/d',
-        state: '/t/s',
-        join: p.posix.join,
-      );
-      expectRoots(roots, '/t/d', '/t/s');
-      expect(roots.path(HarnessEntry.cli), '/t/d/cli');
-      expect(roots.path(HarnessEntry.runtime), '/t/s/runtime');
     });
   });
 }
