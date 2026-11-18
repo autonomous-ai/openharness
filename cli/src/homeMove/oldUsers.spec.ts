@@ -12,11 +12,11 @@ const BRIDGE: BridgeRecord = {
   oldTag: '0123456789abcdef', newTag: 'fedcba9876543210', panes: ['%1'],
 }
 const DATA = '/h/.local/share/harness', STATE = '/h/.local/state/harness'
-const ME = 1000, SERVICE = 4000
-const FACTS: OldUserFacts = {
-  uid: ME, self: SERVICE, roots: [DATA, STATE], engines: new Set(['claude', 'codex']),
+const ME = 1000, SERVICE = 4000, MASTER = 3000
+const FACTS = {
+  uid: ME, self: SERVICE, master: MASTER, roots: [DATA, STATE], engines: new Set(['claude', 'codex']),
   apps: new Set(['harness', 'harness-device']), panePids: [],
-}
+} as OldUserFacts
 /** A minute before the move, and a minute after it. */
 const OLD = BRIDGE.movedAt - 60, NEW = BRIDGE.movedAt + 60
 
@@ -109,9 +109,25 @@ describe('not an old user', () => {
     const runtime = `${STATE}/runtime/node-v24.11.0-linux-x64/libexec/harnessd`
     const systemd = row({ name: 'systemd', exe: '/usr/lib/systemd/systemd' })
     // Started by systemd before the move, and the same process since: its executable is now in the new roots.
-    const master = row({ name: 'harnessd', exe: `${runtime}/harnessd`, parent: systemd.pid })
+    const master = row({ pid: MASTER, name: 'harnessd', exe: `${runtime}/harnessd`, parent: systemd.pid })
     const service = row({ pid: SERVICE, name: 'harnessd-edge', exe: `${runtime}/harnessd-edge`, parent: master.pid })
     expect(count([systemd, master, service])).toBe(0)
+  })
+
+  it('every process the daemon\'s master started, and theirs: the core, the other services, a PTY host', () => {
+    const runtime = `${STATE}/runtime/node-v24.11.0-linux-x64/libexec/harnessd`
+    const systemd = row({ name: 'systemd', exe: '/usr/lib/systemd/systemd' })
+    const master = row({ pid: MASTER, name: 'harnessd', exe: `${runtime}/harnessd`, parent: systemd.pid })
+    // Started in the move's own second, by the master that moved: each runs from the new roots.
+    const core = row({ name: 'harnessd-core', exe: `${runtime}/harnessd-core`, parent: master.pid })
+    const service = row({ pid: SERVICE, name: 'harnessd-edge', exe: `${runtime}/harnessd-edge`, parent: master.pid })
+    const viewers = row({ name: 'harnessd-viewer', exe: `${runtime}/harnessd-viewers`, parent: master.pid })
+    const ptyHost = row({ name: 'harness-pty-hos', exe: `${DATA}/bin/harness-pty-host`, parent: core.pid })
+    expect(count([systemd, master, core, service, viewers, ptyHost])).toBe(0)
+    // With no master the core is the daemon's first process, and the service runs in it.
+    expect(count([systemd, core, ptyHost], { master: core.pid, self: core.pid } as Partial<OldUserFacts>)).toBe(0)
+    // An old agent beside them is still one.
+    expect(count([systemd, master, core, row({ name: 'claude', parent: systemd.pid })])).toBe(1)
   })
 })
 

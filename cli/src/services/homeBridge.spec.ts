@@ -315,6 +315,25 @@ describe('the home bridge service', () => {
     expect(log).not.toHaveBeenCalled()
   })
 
+  it('the daemon\'s own processes are no old users: in its own process all its master started, in the core\'s all the core did', async () => {
+    const at = (h: Home, name: string): string => join(h.state, 'runtime', 'node-v24', 'libexec', name)
+    // In the edge host its parent is the master, which re-executed in place at the move and started the core after it.
+    const h = movedHome()
+    const master = row({ pid: process.ppid, name: 'harnessd', exe: at(h, 'harnessd') })
+    const core = row({ name: 'harnessd-core', exe: at(h, 'harnessd-core'), parent: process.ppid })
+    const edge = row({ pid: process.pid, name: 'harnessd-edge', exe: at(h, 'harnessd-edge'), parent: process.ppid })
+    start(h, { rows: () => [master, core, edge] })
+    await settle()
+    expect(existsSync(join(h.state, BRIDGE_FILE))).toBe(false)
+    // In the core's process: a PTY host the core started.
+    const inCore = movedHome()
+    const own = row({ pid: process.pid, name: 'harnessd-core', exe: at(inCore, 'harnessd-core') })
+    const ptyHost = row({ name: 'harness-pty-hos', exe: join(inCore.data, 'bin', 'harness-pty-host'), parent: process.pid })
+    startHomeBridgeInCore(fakeCore({ dataDir: inCore.dataDir }), handed(inCore, { rows: () => [own, ptyHost] }).given)
+    await settle()
+    expect(existsSync(join(inCore.state, BRIDGE_FILE))).toBe(false)
+  })
+
   it('the record\'s oldProcesses is written when the count changes, not at each check', async () => {
     fakeInterval()
     const h = movedHome()
