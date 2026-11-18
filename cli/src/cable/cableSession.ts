@@ -207,6 +207,35 @@ function dialJson(m: unknown): string {
   return json.includes('\\ud') ? json.replace(JSON_LONE_SURROGATE, (escape) => escape === '\\\\' ? escape : '?') : json
 }
 
+/** A text as the dial reads it from a frame: dialJson's own rewrite, so the two cannot disagree. */
+function dialReads(text: string): string {
+  return JSON.parse(dialJson(text)) as string
+}
+
+/** The dial's answers in the words they were asked with. The dial answers with the text it read, half an emoji '?'
+ *  (dialJson), and '?yes' matched no row of the dialog, which typed it into its free-text row instead of choosing the
+ *  option. Each key and chosen option is put back as asked; a value that reads as no option is words the person typed,
+ *  kept as typed. Null when the dial's text reads as two of them: either could be what the person did not choose. */
+function asAsked(raw: unknown, answers: Record<string, string>): Record<string, string> | null {
+  const questions = Array.isArray(raw)
+    ? raw.filter((q): q is { key: string; options?: unknown; multi?: unknown } => typeof q?.key === 'string') : []
+  const pick = (asked: string[], text: string): string | null => {
+    const found = asked.filter((a) => dialReads(a) === text)
+    return found.length > 1 ? null : found[0] ?? text
+  }
+  const out: Record<string, string> = {}
+  for (const [key, value] of Object.entries(answers)) {
+    const k = pick(questions.map((q) => q.key), key)
+    const question = questions.find((q) => q.key === k)
+    const options = Array.isArray(question?.options) ? question.options.filter((o): o is string => typeof o === 'string') : []
+    // The dial joins the options chosen with ', ' (q_done_tap).
+    const picked = (question?.multi === true ? value.split(', ') : [value]).map((part) => pick(options, part))
+    if (k === null || picked.includes(null)) return null
+    out[k] = picked.join(', ')
+  }
+  return out
+}
+
 function clipUtf8(text: string, max: number): string {
   const flat = text.replace(/[\r\n\t]+/g, ' ')
   if (Buffer.byteLength(flat, 'utf8') <= max) return flat
@@ -439,8 +468,8 @@ export interface CableHost {
   stopTurn(agentId: string): void
   /**
    * The user answered a `question`. `answers` is keyed by the QUESTION keys the daemon itself asked with
-   * and travels verbatim — re-deriving it, or keying it by the requestId, is how a rename at either end
-   * becomes an answer nobody gave.
+   * and travels verbatim, but for half an emoji the dial read as '?', put back — re-deriving it, or keying it by the
+   * requestId, is how a rename at either end becomes an answer nobody gave.
    */
   answer(agentId: string, requestId: string, answers: Record<string, string>): void
   answerReviewed?(answer: ReviewedAnswer): Promise<AnswerReceipt>
@@ -1766,8 +1795,9 @@ export class CableSession {
       }
       case 'answer': {
         // `answers` is the dial's own object, one entry per question, keyed by the keys WE asked with. It
-        // travels verbatim. Until proto 2 this case demanded `{id, optionId}` — a shape the dial has never
-        // sent — so every answer from the question screen was silently dropped on the floor.
+        // travels as the dial sent it, but for half an emoji it read as '?' (asAsked). Until proto 2 this case
+        // demanded `{id, optionId}` — a shape the dial has never sent — so every answer from the question screen was
+        // silently dropped on the floor.
         const agentId = str('agentId')
         const requestId = str('requestId')
         const answers = msg.answers
@@ -1784,7 +1814,9 @@ export class CableSession {
           }
           // Its agent may have gone from the list since: the id alone says nothing here answers it.
           if (requestId.startsWith(SHOWN_ONLY_PREFIX)) return
-          this.host.answer(agentId, requestId, flat)
+          const asked = asAsked(this.questionInbox.asked(agentId, requestId), flat)
+          if (!asked) { await this.toast('Use the terminal to answer this question.'); return }
+          this.host.answer(agentId, requestId, asked)
         }
         return
       }
