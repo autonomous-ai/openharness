@@ -341,6 +341,15 @@ describe('the move', () => {
     expect(snapshot(t)).toEqual(before)
   })
 
+  it('records it cannot read are left as they were, and said in one line by count and kind, with no path or name', async () => {
+    const t = await legacyHome()
+    put(join(t.legacy, 'cli', 'data', 'claude-profiles.json'), '{ not json')
+    for (const agent of ['agent-7f3a', 'agent-8e2b']) put(join(t.legacy, 'cli', 'data', 'stopped-agents', `${agent}.json`), '{ cut')
+    expect(await runMove(t.check, t.env, t.deps())).toMatchObject({ state: 'bridged' })
+    expect(t.logs.filter((line) => !line.includes(UNKNOWN))).toEqual(['home move: 3 records left as they were · claude-profiles.json, stopped-agents'])
+    expect(readFileSync(join(t.plan.data, 'cli', 'data', 'claude-profiles.json'), 'utf8')).toBe('{ not json')
+  })
+
   it('a folder recreated at an old path mid-move is merged', async () => {
     const t = await legacyHome()
     const logs = entryNamed(t, 'logs'), auth = entryNamed(t, 'auth')
