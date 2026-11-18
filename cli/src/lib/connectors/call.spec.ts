@@ -448,8 +448,7 @@ describe('uploadFile', () => {
 
   it('closes the descriptor whatever the answer', () => {
     linkSync(join(home, '.ssh', 'note.txt'), join(home, 'docs', 'link.txt'))
-    mkdirSync(join(home, 'docs', 'dir.txt'))
-    for (const [file, answer] of [['docs/note.txt', /^sent$/], ['.ssh/note.txt', /not a media file/], ['docs/link.txt', /not a media file/], ['docs/dir.txt', /not a media file/]] as const) {
+    for (const [file, answer] of [['docs/note.txt', /^sent$/], ['.ssh/note.txt', /not a media file/], ['docs/link.txt', /not a media file/]] as const) {
       const { opened, closed } = descriptors()
       expect(said(join(home, file)), file).toMatch(answer)
       expect(opened.length, file).toBe(1)
@@ -457,11 +456,30 @@ describe('uploadFile', () => {
     }
   })
 
-  // An open for reading waits for a FIFO's writer; with O_NONBLOCK it returns at once.
-  it.skipIf(process.platform === 'win32')('never waits on a FIFO named as a document', () => {
-    execFileSync('mkfifo', [join(home, 'docs', 'pipe.txt')])
+  // Opening a device acts on it: a serial port's DTR line toggles and resets the board behind it, and a FIFO waits for a
+  // writer. Windows has neither a FIFO nor /dev/null to link to; a folder is everywhere.
+  it('opens no folder, FIFO or device named as a document', () => {
+    const named = [join(home, 'docs', 'dir.txt')]
+    mkdirSync(named[0])
+    if (process.platform !== 'win32') {
+      execFileSync('mkfifo', [join(home, 'docs', 'pipe.txt')])
+      symlinkSync('/dev/null', join(home, 'docs', 'port.txt'))
+      named.push(join(home, 'docs', 'pipe.txt'), join(home, 'docs', 'port.txt'))
+    }
+    const { tried } = descriptors()
+    for (const file of named) expect(said(file), file).toMatch(/not a media file/)
+    expect(tried).toEqual([])
+  }, 5_000)
+
+  // A FIFO put in the document's place after its check: an open for reading waits for its writer; with O_NONBLOCK it
+  // returns at once.
+  it.skipIf(process.platform === 'win32')('never waits on a FIFO put in a document\'s place after its check', () => {
+    const file = join(home, 'docs', 'note.txt')
     const { opened, closed } = descriptors()
-    expect(said(join(home, 'docs', 'pipe.txt'))).toMatch(/not a media file/)
+    const open = disk.hooks.openSync!
+    disk.hooks.openSync = (real, ...args) => { rmSync(file); execFileSync('mkfifo', [file]); return open(real, ...args) }
+    expect(said(file)).toMatch(/not a media file/)
+    expect(opened.length).toBe(1)
     expect(closed).toEqual(opened)
   }, 5_000)
 
