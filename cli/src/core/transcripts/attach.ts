@@ -529,10 +529,10 @@ export function createAttach({
         // still reports the last turn as open, and after a daemon restart nothing is ever coming to close it. The pane
         // is the one place the answer exists; ask it. Its chips are read from the same capture. A close names the turn
         // the fold left: one a newer record began since is left to its own records.
-        const agentId = session.agentId, identity = paneReadIdentity(session), turn = opened.turn.identity
-        const capturing = captureTerminal(agentId, paneLines)
+        const turn = opened.turn.identity
+        const capturing = captureTerminal(session.agentId, paneLines)
         const [, capture] = await Promise.all([runtimeProfiles.capturePane(session, () => capturing, paneLines, true), capturing])
-        if (paneReadIdentity(resolve(agentId)) !== identity) return keepLiveNormalizer('changed binding while its pane was read')
+        if (!current()) return movedOn()
         const closeHistory = async (): Promise<boolean> => {
           if (await others.closeIf(session.sessionId, turn)) { historyTurnOpen = false; return true }
           historySuperseded = true
