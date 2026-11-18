@@ -86,9 +86,10 @@ const FAILED_LINE = '[herdr-app] focus · failed'
 const scrollCall = (address: string, lines: number, file = FAKE_PATH_HERDR_APP): Call =>
   ({ file, args: ['do', 'terminal.scroll', '--terminal', address, '--lines', String(lines)], timeoutMs: 2_000 })
 const SCROLL_FAILED = '[herdr-app] scroll · failed'
-/** The line a terminal's scroll queue says once it has been quiet for 1 s. */
-const drained = (lines: number, runs: number, failed: number) =>
-  `[herdr-app] scroll · ${lines} lines · ${runs} runs · ${failed} failed`
+/** The line a terminal's scroll queue says once it has been quiet for 1 s: the lines it scrolled, its runs, and the
+ *  lines it did not scroll (a failed run's, a question's, a Claude Code terminal's short of a key). */
+const drained = (lines: number, runs: number, dropped: number) =>
+  `[herdr-app] scroll · ${lines} lines · ${runs} runs · ${dropped} dropped`
 const scrollFailures = (log: string[]) => log.filter((line) => line === SCROLL_FAILED).length
 const statusCall: Call = { file: FAKE_PATH_HERDR_APP, args: ['status'], timeoutMs: 2_000 }
 const STATUS_FAILED = '[herdr-app] status · failed'
@@ -723,7 +724,7 @@ describe('the Herdr adapter', () => {
       })
 
       // canScroll is asked at the stroke's down only: a question that comes up mid-stroke must stop its keys too.
-      it('a Claude Code that begins to ask mid-stroke takes no key from then on: the lines that wait are dropped and counted failed', async () => {
+      it('a Claude Code that begins to ask mid-stroke takes no key from then on: the lines that wait are dropped and counted', async () => {
         let state: HcStatus | undefined = 'working'
         const { pressed, log, adapter, answer } = claudeCode(true, { statusOf: () => state })
         adapter.scroll(pane('t7'), -8)
