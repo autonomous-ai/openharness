@@ -32,7 +32,6 @@ export interface IngestDeps {
   has: (sessionId: string) => boolean
   bySession: (sessionId: string) => RegisteredSession | undefined
   tokenUsage: { changed(session: RegisteredSession): void }
-  /** The Wi-Fi device's service, wherever it runs (core/wifi.ts): it proves its turns by the raw transcript. */
   runtimeProfiles: Pick<RuntimeProfileManager, 'ingest' | 'evidence'>
   normalizers: Pick<SessionNormalizers, 'liveParsers'>
   announceTurnAborted: (sessionId: string, engine: string, message: string, deviceMessage?: string) => void

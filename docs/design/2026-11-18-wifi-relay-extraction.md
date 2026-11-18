@@ -897,3 +897,10 @@ inline acceptance, restored nonfocused-question behavior, and hot-path cost meas
 execution is deferred by the user. No native, Windows or performance acceptance is claimed here.
 The remaining `wifiAgents` door is stateless; this slice removes feature observation/relay state and
 raw/normalized feed plumbing rather than claiming that every named feature door has disappeared.
+
+A subsequent caller RED found that refusing an old end/cancel for native receipts still emitted an
+unscoped `turn.done`/`turn.error` and cleared the agent's open-turn state. The existing receipt proof
+now fences those global effects too. Matched older receipts settle independently, while any live
+native dispatch refusing the exact session/epoch/revision proof preserves the newer global state.
+Both mixed older/newer and only-newer native callers fail before the fix; non-native and valid-current
+cancellation remain controls. The correction changes no core authority or retained maps.

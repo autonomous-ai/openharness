@@ -1657,7 +1657,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     state: () => ({ desk: appPaneAgents, foreground: appWindowForeground, swarms: appSwarmsLatest, unread: appUnreadLatest,
       focus: focusState.state(), engines: registry.active().map((agent) => agent.engine), commanders: backend.hasCommander() }),
   })
-  // The remaining Wi-Fi feed and final focus fence use the ordered core link (core/wifiLink.ts).
+  // Input facts and final focus validation use the ordered core link (core/wifiLink.ts).
   const wifiLink = createWifiLink({
     core: coreApi,
     notify: (frame) => serviceLinks.notify('wifi', frame),
@@ -3376,11 +3376,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   }
 
 
-  // Every card bound for the Wi-Fi device goes to the devices too: the dial is told what the Wi-Fi device is,
-  // in the same order, so the two device surfaces cannot drift. Teeing beats emitting again at each call
-  // site: a new kind of card reaches the dial the day it reaches the socket. The tee runs before the frame
-  // is queued for the Wi-Fi device (BackendSocket.sendCommander): a device fault here must cost neither
-  // that frame nor whoever is sending it, which the guards and the devices' port see to.
+  // The dial observes every published card through this single callback. A devices fault must not
+  // prevent the app publication; BackendSocket and the devices port isolate that callback.
   backend.onOutboundCommander = (frame) => {
     const card = frame as Record<string, unknown>
     // The dial's summary carries the whole answer. Wi-Fi receives its immutable card/text pair

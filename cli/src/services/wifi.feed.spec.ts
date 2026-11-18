@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { emptyPorts, type AgentView, type WifiPort } from '../core/api.js'
-import { AutonomousDeviceService } from '../lib/autonomous-device/service.js'
+import { AutonomousDeviceService, type AutonomousDeviceFrame } from '../lib/autonomous-device/service.js'
 import { GatewayDeviceFixture } from '../testing/devicePeer.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { startWifi, type WifiDeps } from './wifi.js'
@@ -53,6 +53,7 @@ async function fixture(over: { unbound?: boolean; actualFile?: boolean; arm?: Pr
     wifi: { view: vi.fn(async () => ({ agents: [{ agentId: 'agent', name: 'Agent', engine: agent.engine, state: 'working' }], store: [], hasWindow: false })) },
   })
   let sink: EvidenceSink | undefined, service!: AutonomousDeviceService, feedOptions: DeviceSessionFeedOptions | undefined
+  const events: AutonomousDeviceFrame[] = []
   let serviceOptions!: ConstructorParameters<typeof AutonomousDeviceService>[0]
   let feed = { ready: Promise.resolve(), close: vi.fn(), stop: vi.fn(async () => {}), barrier: vi.fn(async (_agentId: string) => {}) }
   let nextReady = Promise.resolve()
@@ -70,7 +71,9 @@ async function fixture(over: { unbound?: boolean; actualFile?: boolean; arm?: Pr
   // This is the proposed production dependency seam, like the existing service/store factories.
   // Until the caller uses it, the behavioral assertions expose the missing pre-input/drain boundary.
   startWifi(core, ports, {
-    service: options => { serviceOptions = options; return service = new AutonomousDeviceService({ ...options, now: () => 1_000 }) },
+    service: options => { serviceOptions = options; return service = new AutonomousDeviceService({ ...options, now: () => 1_000,
+      emit: (frame, deviceId) => { events.push(frame); options.emit?.(frame, deviceId) },
+    }) },
     ...(over.actualFile ? {} : { evidence: (given: EvidenceSink) => { sink = given; return reader } }),
     observeSessions: (given: DeviceSessionFeedOptions) => {
       feedOptions = given
@@ -98,10 +101,10 @@ async function fixture(over: { unbound?: boolean; actualFile?: boolean; arm?: Pr
   } as WifiDeps)
   const port = ports.wifi!; running.push(port)
   await port.resume({ focus: null })
-  const send = () => service.request('device', { type: 'turn.send', requestId: randomUUID(), machineId: 'machine-1',
-    agentId: 'agent', idempotencyKey: 'input-A', text: 'hello' })
-  const dispatched = (revision?: number): void => {
-    const receipt = service.receipt('device', 'input-A')!
+  const send = (key = 'input-A') => service.request('device', { type: 'turn.send', requestId: randomUUID(), machineId: 'machine-1',
+    agentId: 'agent', idempotencyKey: key, text: 'hello' })
+  const dispatched = (revision?: number, key = 'input-A'): void => {
+    const receipt = service.receipt('device', key)!
     port.input!({ agentId: 'agent', deliveryId: receipt.deliveryId, when: 'composer', phase: 'dispatching',
       sessionId: agent.sessionId, content: 'hello', ...(revision === undefined ? {} : { activity: { epoch: 'boot', revision } }) })
     service.delivery({ sessionId: 'agent', deliveryId: receipt.deliveryId, state: 'started' })
@@ -112,7 +115,7 @@ async function fixture(over: { unbound?: boolean; actualFile?: boolean; arm?: Pr
     captured.observe('agent', 's1', 'claude', JSON.stringify({ type: 'assistant', uuid: 'result', parentUuid: 'input',
       message: { id: 'answer', stop_reason: 'end_turn', content: [{ type: 'text', text: 'finished' }] } }))
   }
-  return { core, port, agent, reader, service, serviceOptions, send, dispatched, prove, sink: () => sink, feed, feedOptions: () => feedOptions, observations,
+  return { core, port, agent, reader, service, serviceOptions, events, send, dispatched, prove, sink: () => sink, feed, feedOptions: () => feedOptions, observations,
     readyNext: (ready: Promise<void>) => { nextReady = ready }, backend, peer: peers.at(-1)! }
 }
 
@@ -397,9 +400,24 @@ describe('component evidence and normalized-feed ordering', () => {
       payload: { cause: 'cancel', activity: { epoch: 'boot', revision, state: 'idle', validForMs: 0 } } }], () => true)
     await cancel(9)
     expect(t.service.receipt('device', 'input-A')?.state).toBe('started')
+    expect(t.events.filter(event => event.kind === 'turn.error')).toEqual([])
     await cancel(11)
     expect(t.service.receipt('device', 'input-A')).toMatchObject({ state: 'unknown', error: { code: 'TURN_INTERRUPTED' } })
+    expect(t.events.filter(event => event.kind === 'turn.error')).toHaveLength(1)
     expect(t.core.turns.deliver).toHaveBeenCalledOnce()
+  })
+
+  it.each(['cancel', 'end'] as const)('updates an older native receipt without broadcasting its %s as the newer input\'s end', async kind => {
+    const t = await fixture()
+    await t.send(); t.dispatched(10)
+    await t.send('input-B'); t.dispatched(20, 'input-B')
+    await t.feedOptions()!.receive('agent', [{ type: kind === 'cancel' ? 'agent_activity' : 'turn_ended', dbSessionId: 's1', payload: {
+      ...(kind === 'cancel' ? { cause: 'cancel' } : {}), activity: { epoch: 'boot', revision: 15, state: 'idle', validForMs: 0 },
+    } }], () => true)
+    expect(t.service.receipt('device', 'input-A')).toMatchObject({ state: 'unknown', error: { code: kind === 'cancel' ? 'TURN_INTERRUPTED' : 'RESULT_EVIDENCE_MISSING' } })
+    expect(t.service.receipt('device', 'input-B')?.state).toBe('started')
+    expect(t.events.filter(event => event.kind === 'turn.error' || event.kind === 'turn.done')).toEqual([])
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(2)
   })
 
   it('does not consume a newer input start from a delayed older normalized start', async () => {

@@ -631,18 +631,28 @@ export class AutonomousDeviceService {
       return proof.sessionId === entry.dispatch.sessionId && proof.epoch === entry.dispatch.epoch && entry.dispatch.revision < proof.revision
     }
     // Session-wide close is not evidence for Device native inputs. Raw engine evidence owns completion.
+    let nativeRefusesEnd = false
     for (const entry of this.entries.values()) if (entry.evidenceManaged && entry.receipt.agentId === agentId
-      && entry.receipt.state === 'started' && before(entry) !== false) this.update(entry, 'unknown', aborted && before(entry) ? 'TURN_INTERRUPTED' : 'RESULT_EVIDENCE_MISSING')
+      && !['completed', 'rejected'].includes(entry.receipt.state)) {
+      const matched = before(entry)
+      if (matched === false) nativeRefusesEnd = true
+      else if (entry.receipt.state === 'started') this.update(entry, 'unknown', aborted && matched ? 'TURN_INTERRUPTED' : 'RESULT_EVIDENCE_MISSING')
+    }
     const entry = this.turns.get(agentId)
     if (entry && before(entry) === false) return
-    this.ambiguousTurns.delete(agentId)
-    this.openTurns.delete(agentId)
-    this.pendingStarts.delete(agentId)
+    if (!nativeRefusesEnd) {
+      this.ambiguousTurns.delete(agentId)
+      this.openTurns.delete(agentId)
+      this.pendingStarts.delete(agentId)
+    }
     if (entry) {
       const matched = before(entry)
       this.update(entry, aborted || !matched ? 'unknown' : 'completed', !matched ? 'RESULT_EVIDENCE_MISSING' : aborted ? 'TURN_INTERRUPTED' : undefined)
       this.turns.delete(agentId)
     }
+    // A matched older receipt can settle independently. Its unscoped terminal event
+    // and agent-wide cleanup cannot describe another dispatch that refused this proof.
+    if (nativeRefusesEnd) return
     this.event(aborted ? 'turn.error' : 'turn.done', agentId, entry ? { turnId: entry.receipt.turnId, idempotencyKey: entry.receipt.idempotencyKey } : {})
   }
   /** Reconcile in the existing owner; incomplete generations never remove questions that were missed. */
