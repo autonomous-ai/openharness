@@ -74,8 +74,8 @@ describe('delivered turns from a service in its own process', () => {
     link.turns.onDelivery(after)
     link.heard({ kind: 'delivery', event: { deliveryId: 'd1', sessionId: 'a', state: 'queued' } })
     expect(after).toHaveBeenCalledOnce()
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('boom'))
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('not an error'))
+    expect(log).toHaveBeenCalledWith('[deliveries] a listener failed on d1 · Error')
+    expect(log).toHaveBeenCalledWith('[deliveries] a listener failed on d1 · string')
   })
 
   it('logs to the console when given no log of its own', () => {
@@ -84,7 +84,7 @@ describe('delivered turns from a service in its own process', () => {
       const link = turnsLink(async () => ({}))
       link.turns.onDelivery(() => { throw new Error('boom') })
       link.heard({ kind: 'delivery', event: { deliveryId: 'd1', sessionId: 'a', state: 'queued' } })
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('boom'))
+      expect(warn).toHaveBeenCalledWith('[deliveries] a listener failed on d1 · Error')
     } finally {
       warn.mockRestore()
     }

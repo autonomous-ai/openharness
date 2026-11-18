@@ -254,7 +254,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     f.event({ kind: 'resume' })
     f.event({ kind: 'turnStarted', agentId: 'a' })
     await f.settled()
-    expect(warn).toHaveBeenCalledWith('[wifi] did not start · journal unreadable')
+    expect(warn).toHaveBeenCalledWith('[wifi] did not start · Error')
     expect(await f.options().requests!.wifi_http({ method: 'GET', target: '/api/autonomous-device/addon/state' }, { local: true, owner: true })).toEqual({ error: 'SERVICE_UNAVAILABLE' })
     // A start that leaves its port empty is off too, and is tried again on the next connection.
     const g = setup({ leavesOff: true })
@@ -270,7 +270,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     h.connect()
     h.event({ kind: 'resume' })
     await h.settled()
-    expect(warn).toHaveBeenCalledWith('[wifi] did not start · no')
+    expect(warn).toHaveBeenCalledWith('[wifi] did not start · string')
   })
 
   it('logs what fails while it hears the core, and goes on with what follows', async () => {
@@ -280,7 +280,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     f.answer('machine', new Error('the core went away'))
     f.event({ kind: 'resume' })
     await f.settled()
-    expect(warn).toHaveBeenCalledWith('[wifi] the core went away')
+    expect(warn).toHaveBeenCalledWith('[wifi] Error')
     f.answer('machine', { id: 'machine-1' })
     f.event({ kind: 'resume' })
     await f.settled()
@@ -289,7 +289,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     f.event({ kind: 'appFocus', machineId: 'm', agentId: 'a', connId: 'w' })
     f.event({ kind: 'turnStarted', agentId: 'a' })
     await f.settled()
-    expect(warn).toHaveBeenCalledWith('[wifi] not an error')
+    expect(warn).toHaveBeenCalledWith('[wifi] string')
     expect(f.log.at(-1)).toBe('machine-1 turnStarted ["a"]')
   })
 

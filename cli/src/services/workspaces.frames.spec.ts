@@ -119,7 +119,7 @@ describe('workspaces frame facts', () => {
     reads.project.mockRejectedValueOnce(new Error('/private/customer/secret'))
     const service = setup(), source = row()
     service.hear({ kind: 'running', session: source })
-    await vi.waitFor(() => expect(warn).toHaveBeenCalledWith('[workspaces] WORKSPACE_FACTS_UNAVAILABLE'))
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledWith('[workspaces] WORKSPACE_FACTS_UNAVAILABLE · Error'))
     now.mockReturnValue(16_000)
     service.hear({ kind: 'running', session: source })
     await vi.waitFor(() => expect(service.publish).toHaveBeenCalledOnce())

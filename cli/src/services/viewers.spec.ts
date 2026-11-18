@@ -99,7 +99,7 @@ describe('the DSH viewers service', () => {
     finish()
     viewers.stop.mockRejectedValueOnce(new Error('stop failed'))
     detach('a1')
-    await vi.waitFor(() => expect(console.warn).toHaveBeenCalledWith('[viewers] VIEWER_STOP_FAILED'))
+    await vi.waitFor(() => expect(console.warn).toHaveBeenCalledWith('[viewers] VIEWER_STOP_FAILED · Error'))
   })
   it('a new core lease keeps the running viewer and republishes its URL under the new lease', () => {
     const { attach, viewers, verdicts, core } = setup()
@@ -254,8 +254,8 @@ describe('the DSH viewers service', () => {
       attach(agent())
       attach(agent())
       await vi.waitFor(() => expect(console.warn).toHaveBeenCalledTimes(2))
-      expect(console.warn).toHaveBeenCalledWith('[dsh] blender viewer failed to start · port in use')
-      expect(console.warn).toHaveBeenCalledWith('[dsh] blender viewer failed to start · no python')
+      expect(console.warn).toHaveBeenCalledWith('[dsh] blender viewer failed to start · Error')
+      expect(console.warn).toHaveBeenCalledWith('[dsh] blender viewer failed to start · string')
     })
 
     it('detaching stops the watch and the viewer and forgets what the frame said', async () => {

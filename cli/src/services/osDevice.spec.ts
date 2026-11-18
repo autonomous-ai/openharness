@@ -338,7 +338,7 @@ describe('the Harness OS computer, managed from the phone', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { ask } = service({ exec: vi.fn(async () => { throw new Error('nmcli: not found') }) })
     expect(await ask({ action: 'wifi_scan' })).toEqual({ error: 'FAILED', message: 'Could not list Wi-Fi networks: nmcli: not found' })
-    expect(error).toHaveBeenCalledWith('[os-device] wifi_scan failed:', 'Could not list Wi-Fi networks: nmcli: not found')
+    expect(error).toHaveBeenCalledWith('[os-device] wifi_scan failed:', 'Error')
   })
 
   it('joins another network detached, the password on stdin alone', async () => {
@@ -480,7 +480,7 @@ describe('the Harness OS computer, managed from the phone', () => {
       await ask({ action: 'github', state: 'sign_in' })
       signInAs('octo')
       login.end()
-      await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[os-device] gh auth setup-git failed:', 'gh: git not found'))
+      await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[os-device] gh auth setup-git failed:', 'Error'))
       expect(await ask({ action: 'github' })).toEqual({ login: 'octo' })
     })
 
@@ -696,7 +696,7 @@ describe('the defaults that run commands', () => {
     expect(proc.unref).toHaveBeenCalled()
     stdin.emit('error', new Error('EPIPE'))
     proc.emit('error', new Error('spawn sudo ENOENT'))
-    expect(error).toHaveBeenCalledWith('[os-device] could not start sudo:', 'spawn sudo ENOENT')
+    expect(error).toHaveBeenCalledWith('[os-device] could not start a detached command:', 'Error')
     expect(JSON.stringify(error.mock.calls)).not.toContain('secret-pass')
     const bare = Object.assign(new EventEmitter(), { unref: vi.fn() })
     child.spawn.mockReturnValueOnce(bare)

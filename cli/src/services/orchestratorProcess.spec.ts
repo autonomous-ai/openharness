@@ -117,8 +117,8 @@ describe('the orchestrator in its own process', () => {
       await flush()
       options.onConnected!({ query: core.query })
       await flush()
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('not a folder'))
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('odd'))
+      expect(warn).toHaveBeenCalledWith("[service orchestrator] could not report its agents' roles · Error")
+      expect(warn).toHaveBeenCalledWith("[service orchestrator] could not report its agents' roles · string")
       expect(core.asked.filter(([name]) => name === 'roles')).toHaveLength(1)
     } finally {
       warn.mockRestore()
