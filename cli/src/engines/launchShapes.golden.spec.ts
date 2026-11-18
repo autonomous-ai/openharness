@@ -123,7 +123,9 @@ beforeAll(async () => {
   process.env.CODEX_HOME = join(root, 'home', '.codex')
   // A zsh user with a startup file of their own: the plain launch.
   process.env.ZDOTDIR = join(root, 'zdotdir')
-  for (const dir of ['data', 'zdotdir', 'home/.grok/sessions', 'home/.pi/agent/skills', 'home/.codex']) mkdirSync(join(root, dir), { recursive: true })
+  // A home Harness ran in before the XDG move (`~/.harness` is in it), so a launch on linux names `$HOME/.harness/…` as on
+  // darwin and the record holds for both; lib/engineLaunch.spec.ts checks the text on a moved home.
+  for (const dir of ['data', 'zdotdir', 'home/.grok/sessions', 'home/.pi/agent/skills', 'home/.codex', 'home/.harness']) mkdirSync(join(root, dir), { recursive: true })
   writeFileSync(join(root, 'zdotdir', '.zshrc'), '')
   // A saved API's model list, as an OpenAI-compatible API answers it, only for the key saved now.
   server = createServer((request, response) => {
