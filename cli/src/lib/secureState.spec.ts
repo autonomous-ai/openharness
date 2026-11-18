@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync } from 'node:fs'
+import { chmodSync, existsSync, fstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { AtomicWriteUnconfirmed, READ_TRIES, READ_WAIT_MS, RENAME_TRIES, RENAME_WAIT_MS, StateFileUnreadable, atomicWriteFile, atomicWriteJson, directorySyncSupported, hardenPrivateStateFileIfPresent, insideWindowsRoots, jsonArray, jsonObject, probeState, readPrivateStateFile, readState, requireState, requireWindowsStateFile, secureStateDirectory, syncStateDirectory, windowsStateRoots } from './secureState.js'
@@ -12,7 +12,7 @@ const fault = vi.hoisted(() => ({
   rename: undefined as ((attempt: number) => void) | undefined,
   renames: 0,
   link: undefined as string | undefined,
-  directorySync: undefined as string | undefined,
+  sync: undefined as ((fd: number) => void) | undefined,
 }))
 const errno = (code: string) => Object.assign(new Error(`${code}: fixture`), { code })
 vi.mock('node:fs', async original => {
@@ -33,9 +33,7 @@ vi.mock('node:fs', async original => {
       return actual.linkSync(...args)
     },
     fsyncSync: (fd: number) => {
-      if (fault.directorySync && actual.fstatSync(fd).isDirectory()) {
-        throw Object.assign(new Error(`${fault.directorySync}: fixture`), { code: fault.directorySync })
-      }
+      fault.sync?.(fd)
       return actual.fsyncSync(fd)
     },
   }
@@ -49,7 +47,7 @@ beforeEach(() => { pauses = vi.spyOn(Atomics, 'wait').mockReturnValue('timed-out
 const dirs: string[] = []
 afterEach(() => {
   vi.restoreAllMocks()
-  Object.assign(fault, { write: undefined, rename: undefined, renames: 0, link: undefined, directorySync: undefined })
+  Object.assign(fault, { write: undefined, rename: undefined, renames: 0, link: undefined, sync: undefined })
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
@@ -277,7 +275,7 @@ describe('atomicWriteFile', () => {
   it.skipIf(WINDOWS)('a rename the folder does not confirm is AtomicWriteUnconfirmed', () => {
     const dir = folder(), f = join(dir, 'f')
     writeFileSync(f, 'old')
-    fault.directorySync = 'EIO'
+    fault.sync = fd => { if (fstatSync(fd).isDirectory()) throw errno('EIO') }
     let failure: unknown
     try { atomicWriteFile(f, 'new', 'trust') } catch (error) { failure = error }
     expect(failure).toBeInstanceOf(AtomicWriteUnconfirmed)
@@ -315,6 +313,31 @@ describe('atomicWriteFile', () => {
     expect(readFileSync(f, 'utf8')).toBe('first')
     if (!WINDOWS) expect(modeOf(f)).toBe(0o600)
     expect(atomicWriteFile(f, 'second', 'trust', { exclusive: true })).toBe(false)
+    expect(readFileSync(f, 'utf8')).toBe('first')
+    expect(readdirSync(dir)).toEqual(['f'])
+  })
+
+  // The temporary file's flush covers a link (the same file under a second name), not a copy (a new file).
+  it('exclusive: a copy is flushed before its folder, as a link is', () => {
+    const f = join(folder(), 'f')
+    const synced: Array<number | 'folder'> = []
+    fault.sync = fd => { const stat = fstatSync(fd); synced.push(stat.isDirectory() ? 'folder' : stat.ino) }
+    fault.link = 'EXDEV'
+    expect(atomicWriteFile(f, 'first', 'trust', { exclusive: true })).toBe(true)
+    const flushed = synced.indexOf(statSync(f).ino)
+    expect(flushed).toBeGreaterThan(-1)
+    if (directorySyncSupported()) expect(synced.indexOf('folder')).toBeGreaterThan(flushed)
+  })
+
+  it('exclusive: a copy that cannot be flushed is AtomicWriteUnconfirmed', () => {
+    const dir = folder(), f = join(dir, 'f')
+    let files = 0
+    fault.sync = fd => { if (!fstatSync(fd).isDirectory() && ++files === 2) throw errno('EIO') }   // the temporary's, then the copy's
+    fault.link = 'EXDEV'
+    let failure: unknown
+    try { atomicWriteFile(f, 'first', 'trust', { exclusive: true }) } catch (error) { failure = error }
+    expect(failure).toBeInstanceOf(AtomicWriteUnconfirmed)
+    expect((failure as Error).cause).toMatchObject({ code: 'EIO' })
     expect(readFileSync(f, 'utf8')).toBe('first')
     expect(readdirSync(dir)).toEqual(['f'])
   })
