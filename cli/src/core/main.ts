@@ -1378,6 +1378,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // initialization immediately after the localhost server binds: events wait until it is armed below.
   const funnel = createEventFunnel({
     clients: backend,
+    failure: failure => mirror.failure(failure),
     // Declared further down: read when a turn aborts, never now.
     agentIdFor: (sessionId) => agentIdFor(sessionId),
   })
@@ -1466,6 +1467,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const shortTurns = createShortTurnGuard({ now: Date.now, log: (line) => console.warn(line) })
   // The shared input operation and writer for every pane caller (core/input.ts).
   const inputs = createInput({
+    failure: failure => mirror.failure(failure),
     shortTurns,
     activity: sessionId => turnActivity.snapshot(sessionId),
     readScreen: screens.read,

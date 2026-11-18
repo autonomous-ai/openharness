@@ -40,6 +40,23 @@ describe('the recaps in their own process, as the core sees them', () => {
     ])
   })
 
+  it('admits failure notices only when their complete encoded bytes fit with the pending socket bytes', () => {
+    const { deps, link, back } = setup()
+    const event = { kind: 'failure' as const, failure: { agentId: 'a1', sessionId: 's1', message: 'failure' } }
+    const frame = { type: 'service_event', payload: { kind: 'lifecycle', event, watchers } }
+    const bytes = Buffer.byteLength(JSON.stringify(frame))
+    back(RECAPS_BUFFER_LIMIT - bytes)
+    link.port.lifecycle(event as never, watchers)
+    expect(deps.notify).toHaveBeenCalledExactlyOnceWith(frame, {})
+    back(RECAPS_BUFFER_LIMIT - bytes + 1)
+    link.port.lifecycle(event as never, watchers)
+    back(0)
+    link.port.lifecycle({ ...event, failure: { ...event.failure, message: 'x'.repeat(RECAPS_BUFFER_LIMIT) } } as never, watchers)
+    expect(deps.notify).toHaveBeenCalledTimes(1)
+    link.port.lifecycle(event as never, watchers)
+    expect(deps.notify).toHaveBeenCalledTimes(2)
+  })
+
   it('drops what would pile up on a process that reads nothing, says so once a minute, and never a purge', () => {
     const { deps, link, back, later } = setup()
     back(RECAPS_BUFFER_LIMIT + 1)

@@ -3,7 +3,6 @@ import { inlineSubmission } from '../testing/inlineSubmission.js'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { deviceErrorText } from './cardText.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { SessionInputController, SessionInputDelivery } from '../lib/sessionInput.js'
 import { TERMINAL_LEASE_REFUSED, type ProcessIdentity, type TerminalActionResult } from '../lib/terminalTypes.js'
@@ -63,7 +62,7 @@ function deps(over: Partial<InputDeps> = {}) {
       canWrite: vi.fn(() => true),
       input: vi.fn(),
     },
-    clients: { send: vi.fn(), sendCommander: vi.fn() },
+    clients: { send: vi.fn() }, failure: vi.fn(),
     agentIdFor: (sessionId) => agents.get(sessionId)?.agentId ?? sessionId,
     openTurn: normalizer.openTurn,
     emit: vi.fn(),
@@ -411,14 +410,31 @@ describe('the session input controller\'s dependencies', () => {
     expect(run.deps.terminal.keyTerminalAction).not.toHaveBeenCalled()
   })
 
-  it('reports an error to the app and, in the device\'s words, to the dial', () => {
+  it('publishes the raw input error and hands its failure facts to the component without constructing a card', () => {
+    const failure = vi.fn(), { deps: given } = deps({ failure })
+    const clients = { ...given.clients, sendCommander: vi.fn() }
+    sessionInputDeps({ ...given, clients }).onError('s1', 'The agent did not accept the message. Please try again.')
+    expect(given.clients.send).toHaveBeenCalledExactlyOnceWith({ type: 'error', agentId: 'a1', dbSessionId: 's1',
+      payload: { message: 'The agent did not accept the message. Please try again.' } })
+    expect(failure).toHaveBeenCalledExactlyOnceWith({ agentId: 'a1', sessionId: 's1', engine: 'claude',
+      message: 'The agent did not accept the message. Please try again.' })
+    expect(vi.mocked(given.clients.send).mock.invocationCallOrder[0]).toBeLessThan(failure.mock.invocationCallOrder[0])
+    expect(clients.sendCommander).not.toHaveBeenCalled()
+  })
+
+  it('keeps the captured app address when its publication reenters a changed binding and the engine is absent', () => {
+    let agentId = 'before'
+    const { deps: given } = deps({ agentIdFor: () => agentId, resolve: () => undefined })
+    vi.mocked(given.clients.send).mockImplementation(() => { agentId = 'after' })
+    sessionInputDeps(given).onError('session', 'raw')
+    expect(given.failure).toHaveBeenCalledExactlyOnceWith({ agentId: 'before', sessionId: 'session', message: 'raw' })
+  })
+
+  it('reports an error to the app and its raw facts to the lifecycle', () => {
     const { deps: given } = deps()
     sessionInputDeps(given).onError('s1', 'the pane is gone')
     expect(given.clients.send).toHaveBeenCalledWith({ type: 'error', agentId: 'a1', dbSessionId: 's1', payload: { message: 'the pane is gone' } })
-    expect(given.clients.sendCommander).toHaveBeenCalledWith({
-      type: 'commander_event', agentId: 'a1', dbSessionId: 's1',
-      payload: { kind: 'error', text: deviceErrorText('the pane is gone', 'claude') },
-    })
+    expect(given.failure).toHaveBeenCalledWith({ agentId: 'a1', sessionId: 's1', engine: 'claude', message: 'the pane is gone' })
   })
 
   it('opens a Command Code turn on our own paste, in its worker, and nobody else\'s', async () => {

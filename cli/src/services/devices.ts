@@ -913,7 +913,8 @@ export function startDevices(core: DevicesCore, ports: CorePorts, deps: DevicesD
   /** One card for the dial, in its four calls. A remote machine's and this computer's are the same calls,
    *  so a new kind of card lands on both the day it lands on either. [notice]: its agent's notice was pending as the
    *  card came (toDial). */
-  const dispatch = (event: DialEvent, notice: boolean): void | Promise<void> => {
+  const dispatch = (event: DialEvent, notice: boolean, current: () => boolean): void | Promise<void> => {
+    if (!current()) return
     if (event.kind !== 'processing') latestUpdate.delete(event.agentId)
     if (event.kind === 'processing') {
       if (event.update) latestUpdate.set(event.agentId, event.update)
@@ -929,6 +930,7 @@ export function startDevices(core: DevicesCore, ports: CorePorts, deps: DevicesD
       const start = starts.get(event.agentId)
       starts.delete(event.agentId)
       const finish = (tokens: Pick<TurnStatsFields, 'tokensIn' | 'tokensOut'>): void => {
+        if (!current()) return
         const all = { ...fields, ...tokens }
         if (Object.keys(all).length) void cable.turnStats(event.agentId, all)
         void cable.turnDone(event.agentId)
@@ -967,7 +969,7 @@ export function startDevices(core: DevicesCore, ports: CorePorts, deps: DevicesD
       return tierOf({ engine: who?.engine ?? '', recap, durationS: turn?.durationS ?? null,
         stats: turn?.stats ?? {}, subagent: false, onScreen: false, failed: event.failed === true, needsYou })
         .then((d) => d.tier, () => 'list' as const)
-        .then((tier) => { void cable.summary(agentId, recap, event.text, tier, event.fullText, false) })
+        .then((tier) => { if (current()) void cable.summary(agentId, recap, event.text, tier, event.fullText, false) })
     }
     else {
       began.delete(event.agentId); ended.delete(event.agentId)
@@ -1023,13 +1025,14 @@ export function startDevices(core: DevicesCore, ports: CorePorts, deps: DevicesD
     queued.set(agentId, tail)
     void tail.then(() => { if (queued.get(agentId) === tail) queued.delete(agentId) })
   }
-  const toDial = (event: DialEvent): void => {
+  const toDial = (event: DialEvent, current: () => boolean = () => true): void => {
+    if (!current()) return
     // The last streamed text goes out before the turn's end, in the same per-agent order.
     if (event.kind !== 'processing') endReplies(event.agentId, true)
     // Read as the card comes, not as its turn in the queue does: a summary can wait up to 2 s behind its turn's done
     // (TOKENS_WAIT_MS), and the next turn's start, a message sent while the agent worked, ends the notice meanwhile.
     const notice = event.kind === 'summary' && notices.pending(event.agentId)
-    inOrder(event.agentId, () => dispatch(event, notice))
+    inOrder(event.agentId, () => dispatch(event, notice, current))
   }
 
   // A remote machine's cards reach the dial through the same calls. The fleet has already noted which
@@ -1569,6 +1572,15 @@ export function startDevices(core: DevicesCore, ports: CorePorts, deps: DevicesD
 
   /** A card bound for the devices, translated once for the cable. */
   const toCable = (frame: Record<string, unknown>): void => {
+    // Addressed cards describe one conversation, even after waiting in the existing send queue.
+    const agentId = frame.agentId, sessionId = frame.dbSessionId
+    const current = frame.type === 'commander_event' && sessionId !== undefined ? () => {
+      if (stopped || typeof agentId !== 'string' || typeof sessionId !== 'string' || !sessionId) return false
+      const row = core.agents.advertised().find(row => row.agentId === agentId)
+        ?? core.agents.cloud?.().find(row => row.agentId === agentId)
+      return row?.sessionId === sessionId
+    } : () => true
+    if (!current()) return
     // A question, its close and a turn's card each also move the agent on the dial's list with no window (hosts/harness.ts).
     const close = cableQuestionCloseFor(frame as Parameters<typeof cableQuestionCloseFor>[0])
     if (close) {
@@ -1609,7 +1621,7 @@ export function startDevices(core: DevicesCore, ports: CorePorts, deps: DevicesD
     const gone = (frame as { type?: string; payload?: { agentId?: unknown } })
     if (gone.type === 'agent_deleted' && typeof gone.payload?.agentId === 'string') { latestUpdate.delete(gone.payload.agentId); began.delete(gone.payload.agentId); ended.delete(gone.payload.agentId); endReplies(gone.payload.agentId, false); endNotice(gone.payload.agentId); questionsOpen.delete(gone.payload.agentId) }
     const step = cableStepFor(frame as Parameters<typeof cableStepFor>[0])
-    if (step) { inOrder(step.agentId, () => { void cable.turnStep(step.agentId, step.step) }); return }
+    if (step) { inOrder(step.agentId, () => { if (current()) void cable.turnStep(step.agentId, step.step) }); return }
     const event = cableEventFor(frame as Parameters<typeof cableEventFor>[0])
     // Logged at the fork, not at the send: this answers "did the daemon even decide to tell the dial",
     // a different question from "did the wire carry it", and the one nobody could answer when a tile
@@ -1620,7 +1632,7 @@ export function startDevices(core: DevicesCore, ports: CorePorts, deps: DevicesD
     if (!event) return
     // A silent one (a sub-agent's, a restored recap) is not news of the agent itself.
     if (!event.subagent) cableHost.harness.noteCard(event.agentId, event.kind)
-    toDial(event)
+    toDial(event, current)
   }
   /**
    * A turn's start outside a pane turns the dials to its agent only when a person typed its prompt in the app settled in

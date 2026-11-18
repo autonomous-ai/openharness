@@ -60,7 +60,7 @@ The core stays small and secure, in the code and at run time: read
   a revocable grant (`engines/questionControls.ts`).
   `lib/sessionInput.ts`: one shared pane writer and bounded session queue for ordinary, whole-turn and correlated composer input.
   Device admissions, receipt correlation and result evidence live in the device component process.
-  `cardText.ts`: an engine's error, rewritten for a device's card.
+  Raw failures follow the existing recaps lifecycle; device error text lives in `services/cardText.ts`.
 - `deliveries.ts`: delivered turns, the Wi-Fi device's, Agent Messages' and the orchestrator's: text written into an
   agent under a delivery id of its maker's, and what became of it, told back to that maker in its process.
 - `updateHandoff.ts`: the core handing over to a build the updater staged (exit 75, when the master asks),

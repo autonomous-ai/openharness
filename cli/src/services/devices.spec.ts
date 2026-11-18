@@ -977,6 +977,71 @@ describe('the window bridges, wired to the core', () => {
 })
 
 describe('what the windows say, reaching the dial', () => {
+  it('keeps same-session Cloud cards and refuses a session removed by a reentrant card observer', () => {
+    let present = true
+    const core = fakeCore({ dataDir, agents: { advertised: () => present ? [{ agentId: 'a1', sessionId: 's1' } as RegisteredSession] : [] } })
+    const devicesCore = { ...core, agents: { ...core.agents, cloud: () => [{ agentId: 'cloud', sessionId: 'cloud' } as RegisteredSession] } }
+    const { port } = start({ core: devicesCore })
+    port.card({ type: 'commander_event', agentId: 'cloud', dbSessionId: 'cloud', payload: { kind: 'error', text: 'cloud failure' } })
+    expect(calls('turnError')).toEqual([['cloud', 'cloud failure']])
+    vi.spyOn((seen.dial as unknown as DaemonCableHost).harness, 'noteCard').mockImplementation(() => { present = false })
+    port.card({ type: 'commander_event', agentId: 'a1', dbSessionId: 's1', payload: { kind: 'error', text: 'old' } })
+    expect(calls('turnError')).toEqual([['cloud', 'cloud failure']])
+  })
+
+  it('keeps every same-session cable card and refuses unknown or malformed addressed cards', async () => {
+    const core = fakeCore({ dataDir, agents: { advertised: () => [{ agentId: 'a1', sessionId: 's1' } as RegisteredSession] } })
+    const { port } = start({ core })
+    const card = (kind: string) => ({ type: 'commander_event', agentId: 'a1', dbSessionId: 's1', payload: { kind, text: 'same', tier: 'list' } })
+    for (const kind of ['processing', 'tool', 'done', 'summary', 'error']) port.card(card(kind))
+    expect(seen.cable.calls.slice(1).map(([name]) => name)).toEqual(['turnStarted', 'turnStep', 'turnDone', 'summary', 'turnError'])
+    const count = seen.cable.calls.length
+    for (const patch of [{ agentId: 'gone' }, { agentId: 4 }, { dbSessionId: null }, { dbSessionId: '' }]) port.card({ ...card('error'), ...patch })
+    expect(seen.cable.calls).toHaveLength(count)
+    await port.stop()
+    const stopped = seen.cable.calls.length
+    port.card(card('error'))
+    expect(seen.cable.calls).toHaveLength(stopped)
+  })
+
+  it('fences session-addressed done and queued steps after delayed token work sees deletion', async () => {
+    let present = true, finish!: (value: { input: number; cached: number; output: number }) => void, n = 0
+    const core = fakeCore({ dataDir, agents: { advertised: () => present ? [{ agentId: 'a1', sessionId: 's1' } as RegisteredSession] : [] } })
+    const readUsage = vi.fn(() => ++n === 1 ? Promise.resolve({ input: 1, cached: 0, output: 1 })
+      : new Promise<{ input: number; cached: number; output: number }>(done => { finish = done }))
+    const { port } = start({ core, readUsage })
+    const card = (kind: string) => ({ type: 'commander_event', agentId: 'a1', dbSessionId: 's1', payload: { kind, text: 'old' } })
+    port.card(card('turn_started')); port.card(card('done')); port.card(card('tool'))
+    port.card({ type: 'commander_question_close', agentId: 'a1', payload: { requestId: 'drained' } })
+    present = false
+    finish({ input: 2, cached: 0, output: 2 })
+    await vi.waitFor(() => expect(calls('questionClose')).toEqual([['a1', 'drained']]))
+    expect(calls('turnDone')).toEqual([])
+    expect(calls('turnStats')).toEqual([])
+    expect(calls('turnStep')).toEqual([])
+  })
+
+  it('fences session-addressed cable cards at dispatch and after a held tier decision', async () => {
+    let sessionId = 's1', finish!: (decision: { tier: 'list'; by: string; detail: string; ms: number }) => void
+    const core = fakeCore({ dataDir, agents: { advertised: () => [{ agentId: 'a1', sessionId } as RegisteredSession] } })
+    const decideTier = vi.fn(() => new Promise<{ tier: 'list'; by: string; detail: string; ms: number }>(done => { finish = done }))
+    const { port } = start({ core, decideTier })
+    const card = (kind: string) => ({ type: 'commander_event', agentId: 'a1', dbSessionId: 's1', payload: { kind, text: 'old' } })
+    port.card(card('error'))
+    expect(calls('turnError')).toEqual([['a1', 'old']])
+    port.card(card('summary'))
+    expect(decideTier).toHaveBeenCalledOnce()
+    port.card(card('error'))
+    sessionId = 'replacement'
+    port.card({ ...card('error'), dbSessionId: 'replacement', payload: { kind: 'error', text: 'new' } })
+    finish({ tier: 'list', by: 'test', detail: '', ms: 0 })
+    await vi.waitFor(() => expect(calls('turnError').at(-1)).toEqual(['a1', 'new']))
+    expect(calls('summary')).toEqual([])
+    expect(calls('turnError')).toEqual([['a1', 'old'], ['a1', 'new']])
+    port.card(card('processing'))
+    expect(calls('turnStarted')).toEqual([])
+  })
+
   it('pushes a changed desk at once, and only a changed one, and says whether a tile is on screen', async () => {
     const { port } = start()
     port.desk(['a1', 'a2'], true)

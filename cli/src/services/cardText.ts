@@ -6,8 +6,8 @@
  * long sentence pushes the one fact that matters off the card. So each rule here keeps the WHAT and the
  * WHEN and drops the rest, rather than truncating, which cuts the end — where the useful part usually is.
  *
- * The core writes these into the cards it sends every device (core/turns/funnel.ts, core/input.ts), so
- * the text is the core's: a device, in its own process, draws what it is sent.
+ * The recaps component builds these cards from raw session failure facts; the core keeps
+ * the original app error and owns no device copy.
  */
 
 const AGENT_DID_NOT_ACCEPT = 'The agent did not accept the message. Please try again.'

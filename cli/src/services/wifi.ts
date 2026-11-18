@@ -356,6 +356,8 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
         catch { console.warn('[wifi] SESSION_SUMMARY_UNAVAILABLE'); throw new Error('SESSION_SUMMARY_UNAVAILABLE') }
         if (!current()) return
       }
+      const session = await core.conversations.resolve(String(frame.agentId))
+      if (!current() || !session || session.agentId !== frame.agentId || !frame.dbSessionId || session.sessionId !== frame.dbSessionId) return
       fullText = text
       try { service.commander(frame) } finally { fullText = undefined }
     },

@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { deviceErrorText } from '../cardText.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createEventFunnel, funnelFor, type FunnelDeps } from './funnel.js'
 import { createShortTurnGuard } from './shortTurnGuard.js'
@@ -285,7 +284,7 @@ describe('createEventFunnel', () => {
 
   it('holds events until it is armed, delivers them in order, and is the same function after', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
-    const funnel = createEventFunnel({ clients: { send: vi.fn(), sendCommander: vi.fn() }, agentIdFor: () => 'a1' })
+    const funnel = createEventFunnel({ clients: { send: vi.fn() }, failure: vi.fn(), agentIdFor: () => 'a1' })
     const emit = funnel.emit
     emit('s1', [started('first')])
     emit('s1', [])
@@ -298,20 +297,40 @@ describe('createEventFunnel', () => {
     expect(calls.filter((call) => call.startsWith('send'))).toEqual(['send turn_started', 'send text_delta', 'send turn_ended'])
   })
 
-  it('tells the app and, in the device\'s words, the dial when an engine aborts a turn', () => {
+  it('tells the app and raw lifecycle when an engine aborts a turn', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    const clients = { send: vi.fn(), sendCommander: vi.fn() }
-    const funnel = createEventFunnel({ clients, agentIdFor: () => 'a1' })
+    const clients = { send: vi.fn(), sendCommander: vi.fn() }, failure = vi.fn()
+    const funnel = createEventFunnel({ clients, agentIdFor: () => 'a1', failure })
     funnel.announceTurnAborted('s1', 'devin', 'the model refused')
     funnel.announceTurnAborted('s1', 'commandcode', 'rate limited: retry in 60s', 'rate limited')
     expect(clients.send.mock.calls).toEqual([
       [{ type: 'error', agentId: 'a1', dbSessionId: 's1', payload: { message: 'the model refused' } }],
       [{ type: 'error', agentId: 'a1', dbSessionId: 's1', payload: { message: 'rate limited: retry in 60s' } }],
     ])
-    expect(clients.sendCommander.mock.calls.map(([frame]) => frame.payload.text)).toEqual([
-      deviceErrorText('the model refused', 'devin'),
-      deviceErrorText('rate limited', 'commandcode'),
+    expect(failure.mock.calls).toEqual([
+      [{ agentId: 'a1', sessionId: 's1', engine: 'devin', message: 'the model refused' }],
+      [{ agentId: 'a1', sessionId: 's1', engine: 'commandcode', message: 'rate limited: retry in 60s', failureSummary: 'rate limited' }],
     ])
+    expect(clients.sendCommander).not.toHaveBeenCalled()
     expect(String(log.mock.calls[0][0])).toContain('aborted by devin error')
   })
+
+  it('preserves the distinct raw failure and summary while delegating card construction', () => {
+    const clients = { send: vi.fn(), sendCommander: vi.fn() }, failure = vi.fn()
+    const funnel = createEventFunnel({ clients, agentIdFor: () => 'a1', failure })
+    funnel.announceTurnAborted('s1', 'commandcode', 'Error: 500\nTrace ID: private', 'Error: 500')
+    expect(clients.send).toHaveBeenCalledExactlyOnceWith({ type: 'error', agentId: 'a1', dbSessionId: 's1', payload: { message: 'Error: 500\nTrace ID: private' } })
+    expect(failure).toHaveBeenCalledExactlyOnceWith({ agentId: 'a1', sessionId: 's1', engine: 'commandcode', message: 'Error: 500\nTrace ID: private', failureSummary: 'Error: 500' })
+    expect(clients.send.mock.invocationCallOrder[0]).toBeLessThan(failure.mock.invocationCallOrder[0])
+    expect(clients.sendCommander).not.toHaveBeenCalled()
+  })
+
+  it('keeps an explicitly empty failure summary and the address captured before reentrant app publication', () => {
+    let agentId = 'before'
+    const failure = vi.fn(), funnel = createEventFunnel({ failure, agentIdFor: () => agentId,
+      clients: { send: () => { agentId = 'after' } } })
+    funnel.announceTurnAborted('s1', 'codex', 'raw', '')
+    expect(failure).toHaveBeenCalledExactlyOnceWith({ agentId: 'before', sessionId: 's1', engine: 'codex', message: 'raw', failureSummary: '' })
+  })
+
 })

@@ -7,7 +7,7 @@
  * what it reaches in the registry, the terminal, the deliveries and device features and the clients is passed
  * in. Every message uses the same session input operation; optional callers keep their receipts elsewhere.
  */
-import { deviceErrorText } from './cardText.js'
+import type { SessionFailure } from './api.js'
 import { adaptSlashCommand } from '../lib/goalCommand.js'
 import { sid } from '../lib/log.js'
 import { redactSecretsInText } from '../lib/redactSecrets.js'
@@ -42,8 +42,9 @@ export interface InputDeps {
     /** Whether Agent Messages still wants one of its typed (`team:`) deliveries written. */
     canWrite: (deliveryId: string) => boolean
   }
-  /** The app (`send`) and the dial (`sendCommander`). */
-  clients: { send(frame: Frame): void; sendCommander(frame: Frame): void }
+  /** The app's unmodified session frames. */
+  clients: { send(frame: Frame): void }
+  failure(failure: SessionFailure): void
   agentIdFor: (sessionId: string) => string
   /** Command Code's turn opened on our paste, from outside its transcript, in its worker (core/engines/otherStreams.ts). */
   openTurn: (sessionId: string, text: string) => Promise<LiveEvent[]>
@@ -205,9 +206,10 @@ export function sessionInputDeps(
       clients.send({ type: 'message_waiting', agentId: agentIdFor(sessionId), dbSessionId: sessionId, payload: { reason } })
     },
     onError: (sessionId, message) => {
-      clients.send({ type: 'error', agentId: agentIdFor(sessionId), dbSessionId: sessionId, payload: { message } })
+      const agentId = agentIdFor(sessionId)
+      clients.send({ type: 'error', agentId, dbSessionId: sessionId, payload: { message } })
       const engine = resolve(sessionId)?.engine
-      clients.sendCommander({ type: 'commander_event', agentId: agentIdFor(sessionId), dbSessionId: sessionId, payload: { kind: 'error', text: deviceErrorText(message, engine) } })
+      deps.failure({ agentId, sessionId, ...(engine ? { engine } : {}), message })
     },
     // Command Code writes its transcript only once the turn is OVER, so a turn that calls no tool has
     // nothing to announce it: measured on 1.28.4, "hi" produced turn_started and turn_ended 1ms apart

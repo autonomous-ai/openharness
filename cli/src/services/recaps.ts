@@ -18,6 +18,9 @@ import { statSync } from 'node:fs'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
 import type { CoreApi, CorePorts, RecapSession, RecapsPort, RecapWatchers, TurnCardFrame, TurnLifecycle } from '../core/api.js'
+import { RECAPS_BUFFER_LIMIT } from '../core/api.js'
+import { boundedJsonBytes } from '../lib/boundedJsonBytes.js'
+import { deviceErrorText } from './cardText.js'
 import { AgentNotifications } from '../lib/agentNotifications.js'
 import { CommanderMirror, SUBAGENT_IDLE_MS } from '../lib/commander.js'
 import { deriveTurnSummary } from '../lib/deviceRecap.js'
@@ -60,6 +63,12 @@ export function createRecaps(core: CoreApi, options: RecapsOptions = {}): Recaps
   const working = new Map<string, boolean>()
   let watchers: RecapWatchers = { device: false, active: false }
   let wifiWatching = false
+  const publish = (frame: TurnCardFrame): void => {
+    // Capture this exact pair before either recipient can reenter publication.
+    const fullText = frame.payload.kind === 'summary' ? mirror.lastFullText(frame.dbSessionId) : undefined
+    if ((wifiWatching || frame.payload.kind === 'error') && !isLocalOnly(frame)) presence?.card(withoutUpdate(frame), fullText)
+    core.clients.turnCard(frame)
+  }
   // Shared by the turns' ends and the questions put to the person: a turn waiting on an answer is not
   // announced as done (lib/agentNotifications.ts). The core tells this service both.
   const notifications = new AgentNotifications()
@@ -75,12 +84,7 @@ export function createRecaps(core: CoreApi, options: RecapsOptions = {}): Recaps
     // waiting on the person keeps the card busy: the core withdraws Working while it waits (core/turns/turnHooks.ts),
     // and the dial keeps its tile working under the question (core/questions.ts).
     verifiedWorking: (sessionId) => working.get(sessionId) === true || notifications.asking(sessionId),
-    send: (frame) => {
-      // The callback owns this exact pair. A later core card publication may reenter another turn.
-      const fullText = frame.payload.kind === 'summary' ? mirror.lastFullText(frame.dbSessionId) : undefined
-      if (wifiWatching && !isLocalOnly(frame)) presence?.card(withoutUpdate(frame), fullText)
-      core.clients.turnCard(frame)
-    },
+    send: publish,
     // turn_summary_pending / turn_summary → the web indicator.
     sendWeb: (frame) => core.clients.turnSummary(frame as Parameters<CoreApi['clients']['turnSummary']>[0]),
     hasDevice: () => watchers.device || wifiWatching,
@@ -137,6 +141,20 @@ export function createRecaps(core: CoreApi, options: RecapsOptions = {}): Recaps
   }
 
   const lifecycle = (event: TurnLifecycle, seen: RecapWatchers): void => {
+    if (event.kind === 'failure') {
+      const failure = event.failure
+      // Bound before formatting or retaining any part, in inline and process compositions alike.
+      const bytes = boundedJsonBytes({ type: 'service_event', payload: { kind: 'lifecycle', event, watchers: seen } }, RECAPS_BUFFER_LIMIT)
+      if (bytes === null || !failure || typeof failure.agentId !== 'string' || !failure.agentId
+        || typeof failure.sessionId !== 'string' || !failure.sessionId || typeof failure.message !== 'string'
+        || failure.engine !== undefined && typeof failure.engine !== 'string'
+        || failure.failureSummary !== undefined && typeof failure.failureSummary !== 'string') {
+        console.warn('[recaps] FAILURE_INVALID'); return
+      }
+      publish({ type: 'commander_event', agentId: failure.agentId, dbSessionId: failure.sessionId,
+        payload: { kind: 'error', text: deviceErrorText(failure.failureSummary ?? failure.message, failure.engine) } })
+      return
+    }
     watchers = seen
     switch (event.kind) {
       // `quiet`: a quiet delivery started the turn this batch ends (core/turns/recaps.ts): no recap, no notification.

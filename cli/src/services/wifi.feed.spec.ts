@@ -273,9 +273,9 @@ describe('component evidence and normalized-feed ordering', () => {
     await vi.waitFor(() => expect(commander).toHaveBeenCalledExactlyOnceWith(fresh))
   })
 
-  it('publishes an ordinary direct card without a summary barrier', async () => {
+  it.each(['error', 'processing', 'tool', 'done'])('publishes a same-session direct %s card without a summary barrier', async kind => {
     const t = await fixture(), commander = vi.spyOn(t.service, 'commander')
-    const frame = { type: 'commander_event' as const, agentId: 'agent', dbSessionId: 's1', payload: { kind: 'error', text: 'failed' } }
+    const frame = { type: 'commander_event' as const, agentId: 'agent', dbSessionId: 's1', payload: { kind, text: 'same session' } }
     await t.peer.card(frame, null)
     await vi.waitFor(() => expect(commander).toHaveBeenCalledExactlyOnceWith(frame))
     expect(t.feed.barrier).not.toHaveBeenCalled()

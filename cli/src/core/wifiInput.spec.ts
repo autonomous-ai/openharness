@@ -65,7 +65,7 @@ async function bridge() {
     terminal: { validateTerminal: async () => true, captureTerminal: async () => READY, submitTerminalAction: paste,
       keyTerminalAction: vi.fn(), pinTerminalControl: () => () => {} },
     deliveries: { settled: deliveries.settled, input: deliveries.input, canWrite: () => true },
-    clients: { send: vi.fn(), sendCommander: vi.fn() }, agentIdFor: id => id, openTurn: async () => [], emit: vi.fn(),
+    clients: { send: vi.fn() }, failure: vi.fn(), agentIdFor: id => id, openTurn: async () => [], emit: vi.fn(),
   })
   const authority = { current: () => true, ownsRequest: () => false }
   const connection: CoreConnection = {

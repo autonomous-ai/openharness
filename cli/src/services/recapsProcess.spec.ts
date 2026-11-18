@@ -12,7 +12,7 @@ import { recapsCoreApi, runRecapsService } from './recapsProcess.js'
 // The real default reaches a real socket and this process's own channel: never in a test.
 vi.mock('./process.js', () => ({ runServiceProcess: vi.fn(() => ({ stop: vi.fn() })) }))
 vi.mock('../lib/autonomous-device/peerPresence.js', () => ({ devicePeerPresence: vi.fn(options => ({
-  start: vi.fn(), stop: vi.fn(async () => options.changed(false, false)),
+  start: vi.fn(), stop: vi.fn(async () => options.changed(false, false)), card: vi.fn(() => true),
 })) }))
 
 const dirs: string[] = []
@@ -60,6 +60,18 @@ describe('the recaps in their own process', () => {
     expect(Object.keys(options.requests)).toEqual(['liveCards'])
     await handle.stop()
     expect(service.stop).toHaveBeenCalledOnce()
+  })
+
+  it('formats one raw failure on its existing lifecycle route and never replays it to a replacement core', () => {
+    const { options } = setup(), first = connection(), second = connection()
+    options.onConnected!(first.core)
+    options.onEvent!(lifecycle({ kind: 'failure', failure: { agentId: 'a1', sessionId: 's1', message: 'raw', failureSummary: '' } }))
+    expect(first.said('card')).toEqual([{ frame: { type: 'commander_event', agentId: 'a1', dbSessionId: 's1', payload: { kind: 'error', text: '' } } }])
+    expect(first.said('recaps')).toEqual([])
+    options.onDisconnected!()
+    options.onConnected!(second.core)
+    expect(second.said('card')).toEqual([])
+    expect(second.said('recaps')).toEqual([])
   })
 
   it('cuts a turn\'s recap, sends its cards and recap as notices, and says what it now holds of the session', async () => {

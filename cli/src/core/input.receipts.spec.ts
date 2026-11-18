@@ -47,7 +47,7 @@ function fixture(engine = 'claude') {
       submitTerminalAction: inject, keyTerminalAction: key, pinTerminalControl: () => () => {},
     },
     deliveries: { settled: deliveries.settled, input: deliveries.input, canWrite: () => true },
-    clients: { send: vi.fn(), sendCommander: vi.fn() }, agentIdFor: id => id,
+    clients: { send: vi.fn() }, failure: vi.fn(), agentIdFor: id => id,
     openTurn: async () => [], emit: () => {},
   }
   const inputs = createInput(deps)

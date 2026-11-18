@@ -15,7 +15,7 @@ import { correlateAgentEvent } from '../../lib/agentEvent.js'
 import type { TurnRecaps } from './recaps.js'
 import type { QuietTitles } from '../agents/quietTitles.js'
 import type { ShortTurnGuard } from './shortTurnGuard.js'
-import { deviceErrorText } from '../cardText.js'
+import type { SessionFailure } from '../api.js'
 import { preview, sid } from '../../lib/log.js'
 import type { CursorNormalizer } from '../../engines/cursor/normalizer.js'
 import type { QuestionWatcher } from '../../lib/questionController.js'
@@ -32,8 +32,6 @@ type Frame = { type: string; agentId?: string; dbSessionId?: string; payload: Re
 export interface FunnelClients {
   /** The app. */
   send(frame: Frame, batch?: SessionEventBatch): void
-  /** The dial. */
-  sendCommander(frame: Frame): void
 }
 
 /** What the funnel feeds, built by the time it is armed. */
@@ -153,7 +151,9 @@ export function funnelFor({
   }
 }
 
-export function createEventFunnel({ clients, agentIdFor }: { clients: FunnelClients; agentIdFor: (sessionId: string) => string }) {
+export function createEventFunnel({ clients, agentIdFor, failure }: {
+  clients: FunnelClients; agentIdFor: (sessionId: string) => string; failure(failure: SessionFailure): void
+}) {
   const queuedSessionEvents: Array<{ sessionId: string; events: Events; opts?: EmitOptions }> = []
   let funnel: ((sessionId: string, events: Events, opts?: EmitOptions) => void) | null = null
   const emit = (sessionId: string, events: Events, opts?: EmitOptions): void => {
@@ -175,16 +175,12 @@ export function createEventFunnel({ clients, agentIdFor }: { clients: FunnelClie
     sessionId: string,
     engine: string,
     message: string,
-    deviceMessage = message,
+    failureSummary?: string,
   ): void => {
     console.log(`[turn] ${sid(sessionId)} aborted by ${engine} error · ${preview(message)}`)
-    clients.send({ type: 'error', agentId: agentIdFor(sessionId), dbSessionId: sessionId, payload: { message } })
-    clients.sendCommander({
-      type: 'commander_event',
-      agentId: agentIdFor(sessionId),
-      dbSessionId: sessionId,
-      payload: { kind: 'error', text: deviceErrorText(deviceMessage, engine) },
-    })
+    const agentId = agentIdFor(sessionId)
+    clients.send({ type: 'error', agentId, dbSessionId: sessionId, payload: { message } })
+    failure({ agentId, sessionId, engine, message, ...(failureSummary === undefined ? {} : { failureSummary }) })
   }
   return { emit, arm, announceTurnAborted }
 }

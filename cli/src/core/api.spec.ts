@@ -593,11 +593,37 @@ describe('the core API services stand on', () => {
     expect(readFallback(forgetTold)).toEqual({ deferred: true, value: false })
   })
 
+  it.each(['processing', 'tool', 'done', 'summary', 'error'])('fences session-addressed recaps %s at the current registry binding', (kind) => {
+    let current: RegisteredSession | undefined = { ...row('a'), sessionId: 's' }
+    const turnCard = vi.fn(), registry = { byAgent: vi.fn(() => current) }
+    const core = createCoreApi({ registry, turnCard } as unknown as CoreApiDeps)
+    const card = { type: 'commander_event' as const, agentId: 'a', dbSessionId: 's', payload: { kind, text: 'old' } }
+    core.clients.turnCard(card)
+    expect(turnCard).toHaveBeenCalledExactlyOnceWith(card)
+    current = { ...row('a'), sessionId: 'replacement' }
+    core.clients.turnCard(card)
+    current = undefined
+    core.clients.turnCard(card)
+    expect(turnCard).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses unknown and malformed recaps addresses but keeps an inactive registered session', () => {
+    const turnCard = vi.fn(), registry = { byAgent: (id: string) => id === 'a' ? { agentId: 'a', sessionId: 's', active: false } : undefined }
+    const core = createCoreApi({ registry, turnCard } as unknown as CoreApiDeps)
+    const card = { type: 'commander_event' as const, agentId: 'a', dbSessionId: 's', payload: { kind: 'error' } }
+    for (const patch of [{ agentId: 4 }, { agentId: 'unknown' }, { dbSessionId: 4 }, { dbSessionId: '' }, { dbSessionId: undefined }]) {
+      core.clients.turnCard({ ...card, ...patch } as never)
+    }
+    expect(turnCard).not.toHaveBeenCalled()
+    core.clients.turnCard(card)
+    expect(turnCard).toHaveBeenCalledExactlyOnceWith(card)
+  })
+
   it('lets the recaps send a turn\'s cards and recaps, and nothing else, down those doors', () => {
     const log = vi.fn()
     const turnCard = vi.fn()
     const turnSummary = vi.fn()
-    const core = createCoreApi({ turnCard, turnSummary, log } as unknown as CoreApiDeps)
+    const core = createCoreApi({ turnCard, turnSummary, log, registry: { byAgent: () => ({ agentId: 'a', sessionId: 's' }) } } as unknown as CoreApiDeps)
     const card = { type: 'commander_event' as const, agentId: 'a', dbSessionId: 's', payload: { kind: 'done' } }
     core.clients.turnCard(card)
     core.clients.turnSummary({ type: 'turn_summary', payload: {} })

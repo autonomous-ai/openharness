@@ -47,7 +47,6 @@ core/agents/retarget.ts
 core/agents/swap.ts
 core/agents/update.ts
 core/api.ts
-core/cardText.ts
 core/clientStreams.ts
 core/cloudLink.ts
 core/connectorsLink.ts

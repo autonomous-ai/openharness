@@ -15,7 +15,7 @@ import { lastFullText, recentAsks, recentRecaps, type RecentRecap, type SessionR
 import { projectDisplayName, type RegisteredSession } from '../../lib/registry.js'
 import type { TurnActivity } from '../../lib/turnActivity.js'
 import type { OrchestratorService } from '../../orchestrator/service.js'
-import type { RecapSession, RecapsPort, RecapWatchers, TurnCardFrame, TurnLifecycle } from '../api.js'
+import type { RecapSession, RecapsPort, RecapWatchers, SessionFailure, TurnCardFrame, TurnLifecycle } from '../api.js'
 
 export interface RecapDeps {
   /** The recaps service's port, or null while it is off. */
@@ -43,6 +43,7 @@ export interface RecapDeps {
 
 /** The calls the core makes about a turn's recap. */
 export interface TurnRecaps {
+  failure(failure: SessionFailure): void
   /** A session's events, as one batch. */
   ingest(events: LiveEvent[], sessionId: string, options?: { replay?: boolean }): void
   /** The turn heartbeat: whether the devices' card for it is still busy, as the recaps last said. */
@@ -115,6 +116,10 @@ export function createRecaps({
   const quiet = new Set<string>()
 
   const mirror: TurnRecaps = {
+    failure: failure => {
+      try { tell({ kind: 'failure', failure }) }
+      catch { console.warn('[recaps] FAILURE_UNAVAILABLE') }
+    },
     ingest: (events, sessionId, options) => {
       const ends = events.some((event) => event.type === 'turn_ended')
       const replay = !!options?.replay

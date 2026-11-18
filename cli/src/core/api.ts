@@ -1009,8 +1009,21 @@ export interface RecapSession {
  *  over the relay, and hears how loudly each turn ends (`turn_summary`'s `tier`); absent from an older core. */
 export interface RecapWatchers { device: boolean; active: boolean; remote?: boolean }
 
+/** Raw session failure facts; presentation belongs to the lifecycle consumer. */
+export interface SessionFailure {
+  agentId: string
+  sessionId: string
+  engine?: string
+  message: string
+  failureSummary?: string
+}
+
+/** The most lifecycle data allowed to wait for the recaps component. */
+export const RECAPS_BUFFER_LIMIT = 4 * 1024 * 1024
+
 /** The turn lifecycle, as the core tells the recaps. */
 export type TurnLifecycle =
+  | { kind: 'failure'; failure: SessionFailure }
   /** A session's events (a turn started, its text, its tools and sub-agents, its end), as one batch. `quiet`: the turn
    *  that ends in this batch was started by a quiet delivery (`DeliveryOptions.quiet`); absent from an older core. */
   | { kind: 'events'; session: RecapSession; events: LiveEvent[]; replay: boolean; quiet?: true }
@@ -2299,7 +2312,12 @@ export function createCoreApi({
       streamFrame: streamFrame ?? (() => false),
       ...(streamBytes ? { streamBytes } : {}),
       sendWindow: LOCAL_WINDOW_OFF,
-      turnCard: (frame) => { if (TURN_CARD_TYPES.has(frame?.type)) turnCard(frame); else refusedRecap(frame?.type) },
+      turnCard: (frame) => {
+        if (!TURN_CARD_TYPES.has(frame?.type)) { refusedRecap(frame?.type); return }
+        // A delayed session card cannot describe the agent's replacement conversation.
+        const current = typeof frame.agentId === 'string' ? registry.byAgent(frame.agentId) : undefined
+        if (typeof frame.dbSessionId === 'string' && frame.dbSessionId && current?.sessionId === frame.dbSessionId) turnCard(frame)
+      },
       turnSummary: (frame) => { if (TURN_SUMMARY_TYPES.has(frame?.type)) turnSummary(frame); else refusedRecap(frame?.type) },
       ...(goalDone ? { hachiGoalDone: goalDone } : {}),
     },

@@ -21,9 +21,11 @@
 import type { CoreApi, RecapsPort, TurnCardFrame } from './api.js'
 import type { SessionRecaps } from '../lib/recapReads.js'
 import type { ServiceFrame } from './serviceLinks.js'
+import { RECAPS_BUFFER_LIMIT } from './api.js'
+import { boundedJsonBytes } from '../lib/boundedJsonBytes.js'
 
 /** The most the core lets wait on the socket to a recaps process that reads nothing. */
-export const RECAPS_BUFFER_LIMIT = 4 * 1024 * 1024
+export { RECAPS_BUFFER_LIMIT } from './api.js'
 
 export interface RecapsLinkDeps {
   /** Tell the recaps' process something (core/serviceLinks.ts `notify`, for `recaps`). */
@@ -67,7 +69,9 @@ export function createRecapsLink(deps: RecapsLinkDeps) {
     lifecycle: (event, watchers) => {
       if (event.kind === 'purged') known.delete(event.sessionId)
       const held = event.kind === 'purged' || event.kind === 'rebound'
-      if (!held && deps.buffered() > RECAPS_BUFFER_LIMIT) {
+      const frame: ServiceFrame = { type: 'service_event', payload: { kind: 'lifecycle', event, watchers } }
+      const bytes = event.kind === 'failure' ? boundedJsonBytes(frame, RECAPS_BUFFER_LIMIT) : 0
+      if (!held && (bytes === null || deps.buffered() + bytes > RECAPS_BUFFER_LIMIT)) {
         dropped++
         if (now() - saidAt >= 60_000) {
           log(`[recaps] the recaps' process is not reading: ${dropped} turn event(s) dropped; those turns have no recap`)
@@ -76,7 +80,7 @@ export function createRecapsLink(deps: RecapsLinkDeps) {
         }
         return
       }
-      deps.notify({ type: 'service_event', payload: { kind: 'lifecycle', event, watchers } }, held ? { untilDelivered: true } : {})
+      deps.notify(frame, held ? { untilDelivered: true } : {})
     },
     recaps: (sessionId) => known.get(sessionId) ?? null,
     liveCards: async () => {

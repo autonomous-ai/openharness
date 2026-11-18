@@ -42,6 +42,19 @@ const said = { type: 'text_delta', payload: { content: 'Looking.' } } as LiveEve
 describe('recaps, as the core keeps them', () => {
   afterEach(() => { vi.restoreAllMocks() })
 
+  it('forwards the captured failure unchanged and lets unavailable recaps cost only that card', () => {
+    const f = setup(), warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const failure = { agentId: 'captured-agent', sessionId: 'old-session', message: 'raw', failureSummary: '' }
+    f.recaps.mirror.failure(failure)
+    expect(f.port.lifecycle).toHaveBeenCalledExactlyOnceWith({ kind: 'failure', failure }, watching)
+    f.port.lifecycle.mockImplementationOnce(() => { throw new Error('private failure') })
+    expect(() => f.recaps.mirror.failure(failure)).not.toThrow()
+    expect(warn).toHaveBeenCalledExactlyOnceWith('[recaps] FAILURE_UNAVAILABLE')
+    f.off()
+    f.recaps.mirror.failure(failure)
+    expect(f.port.lifecycle).toHaveBeenCalledTimes(2)
+  })
+
   it('counts a specialist\'s turn, or a director\'s while specialists are out, as a sub-agent\'s', () => {
     const { deps, recaps } = setup()
     const role = vi.mocked(deps.orchestratorRoleOf)

@@ -767,6 +767,53 @@ describe('the Wi-Fi device, with the dials', () => {
       .toMatchObject({ receipt: { state: 'unknown' } })
   })
 
+  it.each(['error', 'tool', 'summary'])('fences session-addressed WiFi %s against the resolved session', async kind => {
+    const { core, peer, hello } = started()
+    await hello()
+    peer.sent.length = 0
+    const card = { type: 'commander_event' as const, agentId: 'agent', dbSessionId: 's1', payload: { kind, text: 'old' } }
+    await peer.card(card, null)
+    await vi.waitFor(() => expect(sent(core).filter(frame => frame.frame === 'autonomous_device_event')).toHaveLength(1))
+    peer.sent.length = 0
+    vi.mocked(core.conversations.resolve).mockResolvedValueOnce({ ...agent, sessionId: 'replacement' } as never)
+    await peer.card(card, null)
+    vi.mocked(core.conversations.resolve).mockResolvedValueOnce(null)
+    await peer.card(card, null)
+    await peer.card({ ...card, payload: { kind, text: 'current' } }, null)
+    await vi.waitFor(() => expect(sent(core).at(-1)?.payload).toMatchObject({ text: 'current' }))
+    expect(sent(core).filter(frame => frame.frame === 'autonomous_device_event')).toHaveLength(1)
+  })
+
+  it('contains a rejected card-session read in the existing peer handler and accepts a fresh connection', async () => {
+    const { core, peer, hello } = started(), warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await hello(); peer.sent.length = 0
+    vi.mocked(core.conversations.resolve).mockRejectedValueOnce(new Error('private resolver text'))
+    const card = { type: 'commander_event' as const, agentId: 'agent', dbSessionId: 's1', payload: { kind: 'error', text: 'old' } }
+    await peer.card(card, null)
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledWith('[wifi] PEER_HANDLER_FAILED'))
+    expect(sent(core)).toEqual([])
+    expect(warn.mock.calls.some(([line]) => String(line).includes('private'))).toBe(false)
+    peer.start()
+    await peer.card({ ...card, payload: { kind: 'error', text: 'fresh' } }, null)
+    await vi.waitFor(() => expect(sent(core).at(-1)?.payload).toMatchObject({ text: 'fresh' }))
+  })
+
+  it.each(['core', 'peer'] as const)('revokes a card whose session read crosses the %s connection lifetime', async end => {
+    const { core, peer, port, hello } = started()
+    await hello(); peer.sent.length = 0
+    let finish!: (value: never) => void
+    vi.mocked(core.conversations.resolve).mockImplementationOnce(() => new Promise(done => { finish = done }))
+    const card = { type: 'commander_event' as const, agentId: 'agent', dbSessionId: 's1', payload: { kind: 'error', text: 'old' } }
+    await peer.card(card, null)
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+    if (end === 'core') { port.disconnected(); await port.resume({ focus: null }) }
+    else { await peer.stop(); peer.start() }
+    finish({ ...agent, sessionId: 's1' } as never)
+    await peer.card({ ...card, payload: { kind: 'error', text: 'fresh' } }, null)
+    await vi.waitFor(() => expect(sent(core).at(-1)?.payload).toMatchObject({ text: 'fresh' }))
+    expect(sent(core).filter(frame => frame.frame === 'autonomous_device_event' && frame.kind === 'agent.error').map(frame => frame.payload.text)).toEqual(['fresh'])
+  })
+
   it('reads the turn\'s whole answer off a summary card, and passes the agents\' turns and live events on', async () => {
     const { core, port, hello } = started()
     await hello()
