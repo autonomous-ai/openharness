@@ -35,6 +35,15 @@ describe('the move record', () => {
     expect(onDisk(dir)).toEqual({ ...bridged, oldProcesses: 1 })
   })
 
+  it('a failed move\'s record takes each try\'s time: the next try waits an hour from the last one', () => {
+    const dir = folder()
+    const failed: MoveRecord = { ...WAITING, state: 'failed', reason: 'io', at: 1, failedAt: 1 }
+    expect(writeMoveRecord(dir, failed)).toBe(true)
+    expect(writeMoveRecord(dir, { ...failed, at: 2, failedAt: 2 })).toBe(true)
+    expect(onDisk(dir)).toEqual({ ...failed, at: 2, failedAt: 2 })
+    expect(writeMoveRecord(dir, { ...failed, at: 3, failedAt: 2 })).toBe(false)
+  })
+
   it('a stray ~/.harness is said once', () => {
     const dir = folder()
     expect(writeMoveRecord(dir, MOVED)).toBe(true)
