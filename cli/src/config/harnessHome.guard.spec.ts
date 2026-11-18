@@ -11,10 +11,13 @@ import { describe, expect, it } from 'vitest'
 const SRC = join(__dirname, '..')
 const HOOK = join(SRC, '..', 'hook')
 
-/** A `.harness` path segment that starts a string literal: '.harness', ".harness/runtime". */
-const SEGMENT = /(['"`])\.harness(?:[\\/][^'"`\n]*)?\1/g
-/** A home, on the literal's line or one of the two lines above it: SEGMENT is a hit only with one. */
-const HOME = /homedir\(\)|accountHome\(\)|\bhome\b|\bHOME\b|\bUSERPROFILE\b|\baccount\b/
+/** A `.harness` path segment that starts a string literal, after a separator or not: '.harness', ".harness/runtime", '/.harness', '\\.harness'. */
+const SEGMENT = /(['"`])(?:\\\\|[\\/])?\.harness(?:[\\/][^'"`\n]*)?\1/g
+/**
+ * A home, on the literal's line or one of the two lines above it: SEGMENT is a hit only with one. Any "home" in any case
+ * (homedir(), userInfo().homedir, homeDir, ownerHome, HOME), USERPROFILE in any case, or an account.
+ */
+const HOME = /home|userprofile|\baccount\b/i
 /** `.harness` straight after home text in one literal: $HOME/.harness, ~/.harness, %USERPROFILE%\.harness, ${x}/.harness. */
 const INLINE = /(?:\$HOME|~|%USERPROFILE%|\$env:USERPROFILE|\})[\\/]+\.harness(?![\w-])/g
 /** A regular expression that matches a home path: \/\.harness, [\\/]\.harness. */
