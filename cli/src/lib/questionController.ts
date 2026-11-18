@@ -69,7 +69,7 @@ export function matchRow(rows: QuestionRow[], answer: string): QuestionRow | nul
 /**
  * Read a multi-choice answer as the rows whose labels spell it, comma by comma. Senders join the chosen labels
  * with ", " and a label may hold a comma itself, so the answer is split only where every piece is a whole label
- * (exactly, as matchRow's first test). Of several readings the fewest pieces wins; on a tie, the longest first
+ * (exactly, as matchRow's first test) or blank. Of several readings the fewest pieces wins; on a tie, the longest first
  * piece, then the same rule on the rest. Null when no reading spells the whole answer.
  *
  * The answer is outside text read in the core's own loop, so the work grows with its length alone: a piece holds
@@ -92,6 +92,9 @@ export function partitionLabels(rows: QuestionRow[], answer: string): QuestionRo
   const first = Array<QuestionRow | undefined>(parts.length), next = Array<number>(parts.length)
   count[parts.length] = 0
   for (let i = parts.length - 1; i >= 0; i--) {
+    // A blank piece (a stray or trailing comma) spells nothing, as the loose reading drops it: refusing it would
+    // send a comma label back to that reading.
+    if (!norm(parts[i])) { count[i] = count[i + 1]; next[i] = i + 1; continue }
     // Longest piece first, so a tie keeps it.
     for (let j = Math.min(parts.length, i + widest); j > i; j--) {
       const row = byLabel.get(norm(parts.slice(i, j).join(',')))
@@ -100,7 +103,7 @@ export function partitionLabels(rows: QuestionRow[], answer: string): QuestionRo
   }
   if (count[0] === Infinity) return null
   const spelled: QuestionRow[] = []
-  for (let i = 0; i < parts.length; i = next[i]) spelled.push(first[i]!)
+  for (let i = 0; i < parts.length; i = next[i]) if (first[i]) spelled.push(first[i]!)
   return spelled
 }
 
