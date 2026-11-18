@@ -160,6 +160,22 @@ describe('the home bridge service', () => {
     bridge.stop()
   })
 
+  it('a bridge.json that names a folder other than ~/.harness is refused: nothing is served or removed there', async () => {
+    const h = movedHome()
+    const other = join(h.home, 'projects')
+    mkdirSync(join(other, 'hook-routes'), { recursive: true })
+    symlinkSync(h.data, join(other, 'data'))
+    writeBridge(h.state, { ...h.bridge, oldHome: other, oldDataDir: join(other, 'data') }, (path) => PROC[path])
+    const rows = vi.fn((): ProcRow[] => [])
+    const { log } = start(h, { rows })
+    await settle()
+    expect(readdirSync(other).sort()).toEqual(['data', 'hook-routes'])
+    expect(readdirSync(join(other, 'hook-routes'))).toEqual([])
+    expect(rows).not.toHaveBeenCalled()
+    expect(existsSync(join(h.state, BRIDGE_FILE))).toBe(true)
+    expect(log.mock.calls).toEqual([['home bridge: bridge.json names a folder other than ~/.harness · nothing is served or removed']])
+  })
+
   it('in its own process it serves and checks nothing until the core connects: before, there is no socket to link or Store to ask', async () => {
     const h = movedHome()
     const rows = vi.fn((): ProcRow[] => [])
