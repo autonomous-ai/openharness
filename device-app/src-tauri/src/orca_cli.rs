@@ -283,6 +283,21 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn a_grant_with_a_character_it_cannot_show_is_failed_as_in_the_cli() {
+        let shown = vec!["Đọc dự án của bạn 🚀".to_string()];
+        assert_eq!(connected(&[&approve_line(FINGERPRINT, &shown, false)]), approve(shown, false));
+        // The cases of orcaPlugin.spec.ts but its lone surrogate, which serde already fails: bidi overrides and
+        // isolates, format characters, and Unicode's line and paragraph separators (WebKit breaks a line on them).
+        for unshown in ['\u{202E}', '\u{2066}', '\u{200B}', '\u{FEFF}', '\u{2028}', '\u{2029}'] {
+            let line = approve_line(FINGERPRINT, &[format!("Read your{unshown} projects")], false);
+            assert_eq!(connected(&[&line]), OrcaAnswer::Failed(OrcaError::Failed), "{unshown:?}");
+        }
+        let lone = r#"{"connect":"approve","fingerprint":"ap1-0123456789abcdef0123456789abcdef","grants":["Read\ud800"],"update":false}"#;
+        assert_eq!(connected(&[lone]), OrcaAnswer::Failed(OrcaError::Failed));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn an_approve_line_with_no_grant() {
         // The CLI drops a blank grant and fails an answer with none left: one here would ask for a click on an empty
         // list, or an empty line in it.
