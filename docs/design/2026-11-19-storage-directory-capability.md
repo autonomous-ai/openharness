@@ -146,6 +146,25 @@ claim substitution return successful empty IDs; awaited iterator controls observ
 permanent replacement page/ensure operations incorrectly succeed. Root reviewed the four-file runtime
 diff `a368fc1081186f1393ce86be50acccb03931c0b90b53f04f1fffc6e628cbcd4d` before the same 20 child cases
 passed in `/tmp/core-grid-storage-directory-capability-green1-20261119.{log,receipt.json}`: actual exit 0,
-4.853 seconds, no timeout, cleanup signal or surviving group. Selected caller/coverage and type gates
-are released next. Parent-process V8 coverage does not include the admitted child's code; actual-child
-behavior evidence and numerical in-process coverage are reported separately.
+4.853 seconds, no timeout, cleanup signal or surviving group.
+
+The clean correction `ec89bfe2ab499b59f4402d06e5817a5a9db4c52c` passed the selected 18-file caller gate:
+540 tests, actual exit 0 / 87.589 seconds. Types passed, actual exit 0 / 42.480 seconds. Neither run
+timed out, sent a cleanup signal or retained a process-group member. Receipts/logs are
+`/tmp/core-grid-storage-directory-capability-{coverage1,types1}-20261119.*`.
+
+Parent-process V8 coverage does not include the admitted child's code; actual-child behavior evidence
+and numerical in-process coverage are reported separately. `pendingLaunches` and `conversationIdentity`
+are 100% in all metrics. Scanner whole-file coverage is 92.16% statements / 91.2% branches; child-only
+capability lines 31–52 are not observed by this instrumenter. `process.ts` is 3.09% / 10.16%, and
+`sessionImage.ts` is 72.85% / 61.35%; no whole-file completion is claimed for either. Changed-location
+accounting (implicit branch locations use their parent's location) is recorded separately in
+`/tmp/core-storage-directory-capability-changed-coverage-20261119.json`, SHA256
+`c6ea61aab27e676e054fbf63db9f125e582beca14cd233291c7bfd48f1046954`.
+
+One new test-only control targets the remaining non-EEXIST mkdir error arm: remove the private data
+root immediately before creation-leaf mkdir and prove that refusal does not recreate the data root.
+It will run against the pre-runtime parent and the corrected runtime in a separate narrow window.
+The accepted 18-file outcome is not being repeated for this test-only addition. The added binding
+stats still need actual cost in the held pending-history workload; this checkpoint makes no performance
+or final-release claim.
