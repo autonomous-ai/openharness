@@ -192,3 +192,54 @@ and unchanged source. Together with the unchanged other nine suites, the selecte
 200 passing cases and two platform skips; architecture also remains passed. All 20 new controls
 are exercised. This is source acceptance only: native Close/Resume measurement and the independent
 full V5 cost hold are still pending. No remaining synchronous cleanup or manifest flush is removed.
+
+
+## Fixed native Close/Resume comparison
+
+The macOS A/B/B/A comparison completed with pinned Node24.22.2 and the retained native process-image
+helper. A=`bab40380d4`, B=`3bd27c5a31`: exactly three runtime files differ, plus ten Design lines that
+record the earlier RED. The first freeze incorrectly asserted three total source files and stopped
+before writing inputs; its source and actual outcome (printed assertion, idle owned metadata process,
+exact-command SIGTERM and exit143) remain retained. The corrected provenance pins both runtime3 and
+full-source4 explicitly. No runtime, workload or completed build changed to fix that metadata.
+
+The original ten syntax checks and fixture typing pass in
+`.harness/validation/20261118T215251.644819Z-11088/receipt.json`; the two metadata syntax follow-ups
+pass in `.harness/validation/20261118T215709.391045Z-17557/receipt.json`. Both owned builds pass with
+actual exit0/EOF/guardian/group/environment cleanup: A bundle `9bd4b885...`, B `f042839b...`.
+
+Final input `/tmp/core-checkpoint-journal-close-resume-v1/inputs.json` SHA:
+`9c5233ce96175e425c0f192b2d3504eb147fc46c39ace1c0984767e15f03038a`.
+Output `/tmp/core-checkpoint-journal-close-resume-v1-abba` passes all four fixed arms, each with two
+preparation and eight measured Close/Resume/native-confirmation cycles and twenty delivered turns.
+Preparation cycles stay in whole-workload counters. There is no dropped cycle, extra warm-up or retry.
+Root independently verifies all 1,169 frozen inputs, four reports, 80 PIDs and eight groups gone.
+Manifest SHA `89b8a5f57aa17db6f6418d08d7c0795e66ce3a091b027ead9059751b2fe6b0cb`.
+
+The added measurement is exactly forty ordered raw points around Close and Resume requests plus one
+10 ms whole-workload event-loop histogram. It leaves original confirmation/GC/RSS probes intact and
+wraps no product filesystem operation. Raw CPU includes endpoint transport and incidental core work.
+The loop histogram covers all cycle work, not Close-only or a particular fsync; GC wall time is not CPU.
+
+| Arm | Whole core CPU ms | Whole main CPU ms | Ten Closes core CPU ms | Whole-loop p99 ms | Whole elapsed s |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1-A-resume | 3843.31 | 2264.81 | 1106.90 | 23.806 | 97.569 |
+| 2-B-resume | 3850.93 | 2280.17 | 1110.83 | 12.861 | 98.373 |
+| 3-B-resume | 3611.93 | 2117.78 | 1054.74 | 19.808 | 83.120 |
+| 4-A-resume | 3772.25 | 2233.52 | 1008.67 | 22.839 | 97.661 |
+
+Two-arm side medians show whole core CPU 3807.78→3731.43 ms (-2.01%) and main CPU
+2249.16→2198.97 ms (-2.23%). Close CPU increases: core 1057.78→1082.78 ms (+2.36%) and main
+633.01→650.87 ms (+2.82%). Total Close caller time is essentially unchanged, 13.489→13.499 seconds.
+Whole-loop p99 improves 23.323→16.335 ms (-29.96%); p95 remains about 12.165 ms, while maximum delay
+changes 108.003→102.990 ms. Every raw arm remains included, including the shorter third arm's natural
+discovery interval. The whole elapsed median changes -7.04%, without claiming statistical significance
+or attributing natural polling variation to the journal correction.
+
+The bounded evidence supports better loop-tail responsiveness with slightly higher Close CPU, not a
+guaranteed CPU or caller-latency reduction. Raw review is retained at
+`/tmp/core-checkpoint-journal-close-resume-v1-cost-review.json` (SHA
+`63b7e54e1ff2316ce6d8dc26d97ba842b93e9c969bde10c17aea50d8f020653a`). Remaining synchronous
+parent-slot, cleanup and manifest flushes are unchanged. No broad follow-on async rewrite or extra
+measurement follows from these four arms. The independent full V5 and final integrated input/Resume
+acceptance remain separate.
