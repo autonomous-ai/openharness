@@ -3859,19 +3859,147 @@ describe('hello capabilities', () => {
     } finally { await session.stop() }
   })
 
-  it('a drawer holds eight rows, open questions first: one past them is asked after it', async () => {
-    const { session, port } = await connect(richHost())
+  it('a drawer holds eight rows, open questions first: one past them comes back as a row, with no ring', async () => {
     const ask = [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }]
+    const round = { t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' }
+    const who = { name: '', engine: '', machine: '' }   // q8 is on no list
+    /** Nine questions rung live, then two changes of the window's list: what follows the drawers. */
+    const afterDrawers = async (hello: Record<string, unknown>) => {
+      const { session, port } = await connect(richHost())
+      try {
+        port.say(hello)
+        await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+        for (let i = 0; i < 9; i++) await session.question(`q${i}`, `id${i}`, ask)
+        expect(ofType(port, 'question')).toHaveLength(9)
+        port.sent.length = 0
+        await session.replaceNotifications([{ agentId: 'b', machineId: 'm1', question: false, text: 'The build passed, all green.' }])
+        await session.replaceNotifications([])
+        expect(ofType(port, 'notif.replace')).toHaveLength(2)
+        for (const drawer of ofType(port, 'notif.replace'))
+          expect((drawer.items as Array<{ agentId: string }>).map((row) => row.agentId)).toEqual(['q0', 'q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'q7'])
+        return port.sent.filter((m) => m.t !== 'notif.replace')
+      } finally { await session.stop() }
+    }
+    // A dial that says questionTier: the ninth goes back on it as a row after each drawer, with no ring.
+    const row = { t: 'question', agentId: 'q8', ...who, id: 'id8', tier: 'list', questions: [{ key: '', q: 'Ship it?', options: [] }] }
+    expect(await afterDrawers({ ...round, questionTier: 'v1' })).toEqual([row, row])
+    // An older round dial would ring, and so would one that says a tier this daemon does not know: neither is sent it.
+    expect(await afterDrawers(round)).toEqual([])
+    expect(await afterDrawers({ ...round, questionTier: 'v2' })).toEqual([])
+    // A Pro mutes a question sent again by its id and words: the plain frame, as before.
+    const plain = { t: 'question', agentId: 'q8', ...who, id: 'id8', questions: [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'], multi: false }] }
+    expect(await afterDrawers({ ...PRO_HELLO })).toEqual([plain, plain])
+  })
+
+  it("a question the greeting's drawer carried was told: a later drawer that cuts it does not ring", async () => {
+    const host = richHost()
+    const { session, port } = await connect(host)
+    const ask = [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }]
+    const eight = ['q0', 'q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'q7']
     try {
       port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' })
       await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
       for (let i = 0; i < 9; i++) await session.question(`q${i}`, `id${i}`, ask)
+      host.listUnread = () => [{ agentId: 'q8', machineId: 'm1', question: true, text: 'Ship it?' }]
       port.sent.length = 0
-      await session.replaceNotifications([{ agentId: 'b', machineId: 'm1', question: false, text: 'The build passed, all green.' }])
-      expect(port.types()).toEqual(['notif.replace', 'question'])
-      expect((ofType(port, 'notif.replace')[0].items as Array<{ agentId: string }>).map((row) => row.agentId))
-        .toEqual(['q0', 'q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'q7'])
-      expect(ofType(port, 'question')).toMatchObject([{ agentId: 'q8', id: 'id8' }])
+      // It rebooted. Its drawer carries q8's question as the window's row; the walk rings the eight it does not carry.
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.1' })
+      await vi.waitFor(() => expect(ofType(port, 'question')).toHaveLength(8))
+      await settle()
+      expect(ofType(port, 'question').map((m) => m.agentId)).toEqual(eight)
+      port.sent.length = 0
+      // Live: the drawer's eight rows are q0 to q7. q8 was shown as a row, so this older dial is not sent it again.
+      await session.replaceNotifications([])
+      expect(port.types()).toEqual(['notif.replace'])
+      expect((port.sent[0].items as Array<{ agentId: string }>).map((item) => item.agentId)).toEqual(eight)
+    } finally { await session.stop() }
+  })
+
+  it('a told question the dial lost, delivered again unchanged, follows the same rule and stays one small frame', async () => {
+    const long = [{ key: 'k', q: `Ship  it?\n${'x'.repeat(6000)}`, options: ['yes', 'no'] }]
+    const round = { t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' }
+    const who = { name: 'Fix login screen', engine: 'claude', machine: '' }
+    const again = async (hello: Record<string, unknown>) => {
+      const { session, port } = await connect(richHost())
+      try {
+        port.say(hello)
+        await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+        await session.question('a1', 'q1', long)      // rang
+        await session.turnDone('a1')                  // its turn moved on without a close: no longer owed
+        await session.replaceNotifications([])        // the drawer drops its row
+        port.sent.length = 0
+        await session.question('a1', 'q1', long)      // the core asks again as the devices reconnect
+        await session.question('a1', 'q1', long)      // and again: the dial holds it now
+        return port.sent
+      } finally { await session.stop() }
+    }
+    const row = { t: 'question', agentId: 'a1', ...who, id: 'q1', tier: 'list', questions: [{ key: '', q: `Ship it? ${'x'.repeat(230)}`, options: [] }] }
+    expect(await again({ ...round, questionTier: 'v1' })).toEqual([row])
+    expect(Buffer.byteLength(JSON.stringify(row), 'utf8')).toBeLessThan(600)
+    expect(await again(round)).toEqual([])
+    expect(await again({ ...PRO_HELLO })).toEqual([{ t: 'question', agentId: 'a1', ...who, id: 'q1', questions: long }])
+  })
+
+  it('a told question whose id the dial cannot keep is not given back, as a row or as the plain frame', async () => {
+    const ask = [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }]
+    const id48 = 'x'.repeat(48)
+    for (const hello of [{ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0', questionTier: 'v1' }, { ...PRO_HELLO }]) {
+      const { session, port } = await connect(richHost())
+      try {
+        port.say(hello)
+        await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+        await session.question(id48, 'q1', ask)       // rung once, as at the base: told
+        await session.replaceNotifications([])        // no row carries it
+        port.sent.length = 0
+        await session.question(id48, 'q1', ask)       // the core asks again as the devices reconnect
+        await session.replaceNotifications([])
+        expect(port.types()).toEqual(['notif.replace'])
+      } finally { await session.stop() }
+    }
+  })
+
+  it('a question delivered again while its row is being written is sent once', async () => {
+    const { session, port } = await connect(richHost())
+    const ask = [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }]
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0', questionTier: 'v1' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      for (let i = 0; i < 9; i++) await session.question(`q${i}`, `id${i}`, ask)
+      port.sent.length = 0
+      // The core asks q8 again at the moment the walk's row for it is on its way out.
+      const write = port.write.bind(port)
+      let again: Promise<void> | undefined
+      port.write = async (bytes) => {
+        await write(bytes)
+        if (!again && port.types().at(-1) === 'question') again = session.question('q8', 'id8', ask)
+      }
+      await session.replaceNotifications([])
+      await again
+      expect(ofType(port, 'question')).toEqual([expect.objectContaining({ agentId: 'q8', tier: 'list' })])
+    } finally { await session.stop() }
+  })
+
+  it('the welcome says question.tier only to a dial that says questionTier v1', async () => {
+    const round = { t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' }
+    const features = async (hello: Record<string, unknown>) => {
+      const { session, port } = await connect(richHost())
+      try {
+        port.say(hello)
+        await vi.waitFor(() => expect(port.types()).toContain('welcome'))
+        return ofType(port, 'welcome')[0].features as string[]
+      } finally { await session.stop() }
+    }
+    expect(await features({ ...round, questionTier: 'v1' })).toContain('question.tier')
+    for (const hello of [round, { ...round, questionTier: 'v2' }, { ...round, questionTier: 'V1' }, { ...round, questionTier: true }, { ...PRO_HELLO }])
+      expect(await features(hello)).not.toContain('question.tier')
+  })
+
+  it('names questionTier in the greeting line', async () => {
+    const log = vi.fn()
+    const { session, port } = await connect(richHost({ log }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0', questionTier: 'v1' })
+      await vi.waitFor(() => expect(log.mock.calls.map(([line]) => line)).toContainEqual(expect.stringMatching(/caps questionTier$/)))
     } finally { await session.stop() }
   })
 
@@ -4819,17 +4947,19 @@ describe('the app filter', () => {
     } finally { await noPick.session.stop() }
   })
 
-  it('the fullest round-dial welcome is eight names', async () => {
+  it('the fullest round-dial welcome is nine names', async () => {
     const { host } = appHost({
       form: async () => ({ ok: false, active: false, error: 'test' }),
       visit: async () => ({ ok: false, active: false, error: 'test' }),
       selectPassage: async () => ({ ok: false, error: 'test' }),
       answerReviewed: async () => ({ ok: false, error: 'test' }),
     })
-    const { session, port } = await greeted(host)
+    const { session, port } = await connect(host)
     try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', appFilter: 'v1', questionTier: 'v1' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
       const features = port.sent.find((m) => m.t === 'welcome')?.features as string[]
-      expect(features).toEqual(['voice.draft', 'agents.refresh', 'form', 'selection', 'visit', 'question.review', 'apps.switch', 'settings'])
+      expect(features).toEqual(['voice.draft', 'agents.refresh', 'form', 'selection', 'visit', 'question.review', 'apps.switch', 'question.tier', 'settings'])
       // The dial drops every feature of a welcome that lists more than 16 names.
       expect(features.length).toBeLessThanOrEqual(16)
     } finally { await session.stop() }
