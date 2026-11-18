@@ -200,8 +200,9 @@ if (process.argv[2] === '__run' && process.env.NODE_ENV === 'test' && process.en
       const found = await row(window, completed.agentId)
       return found?.sessionId ? found : null
     }, 45_000, 250)
+    // Registry stores only enabled bypass; the public agent frame has always emitted its absence as null.
     expect(made).toMatchObject({ project: { cwd: realpathSync(cwd) }, dsh: packageId, engine: 'claude',
-      bypassPermission: false, permissionMode: null, grid: null, codexHome: null, claudeHome: null, namedAgent: null })
+      bypassPermission: null, permissionMode: null, grid: null, codexHome: null, claudeHome: null, namedAgent: null })
     expect(readFileSync(join(cwd, 'fixture.txt'), 'utf8')).toBe('local package fixture\n')
     expect(await device.ask('agent.prepare', prepare)).toMatchObject({ status: 'duplicate', operation: { operationId: completed.operationId, agentId: completed.agentId } })
     const occupied = await device.ask('agent.prepare', { ...prepare, workspace: { kind: 'existing', path: join(machine.daemon.projectsDir, 'wifi') }, idempotencyKey: 'occupied-workspace' })
