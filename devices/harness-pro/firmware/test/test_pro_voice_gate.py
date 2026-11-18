@@ -106,21 +106,27 @@ uint32_t esp_random(void) { static uint32_t n = 0x1000; return n++; }
 bool audio_capture_init(void) { return true; }
 pro_touch_sample_t pro_touch_poll(int *x, int *y) { (void)x; (void)y; return PRO_TOUCH_NONE; }
 
-// The cable: what pro_app and pro_voice send.
-static struct { int opens, cancels; char cancel_id[24]; } CAB;
+// The cable: what pro_app and pro_voice send. `wire` is what the daemon hears about clips, in order.
+static struct { int opens, cancels; char cancel_id[24]; bool dead; char wire[256]; } CAB;
+static void on_wire(const char *what, const char *id) {
+    const size_t n = strlen(CAB.wire);
+    snprintf(CAB.wire + n, sizeof CAB.wire - n, "%s %s;", what, id);
+}
 bool pro_cable_send_open(const char *id) { CHECK(LOCK_DEPTH == 0); (void)id; CAB.opens++; return true; }
 bool pro_cable_send_scroll(pro_scroll_phase_t p, int dy, int v) { CHECK(LOCK_DEPTH == 0); (void)p; (void)dy; (void)v; return true; }
 bool pro_cable_request_library(int offset, uint32_t request) { CHECK(LOCK_DEPTH == 0); (void)offset; (void)request; return true; }
 bool pro_cable_library_supported(void) { return false; }
 cable_link_stats_t cable_link_stats(void) { return (cable_link_stats_t){0}; }
 void pro_cable_counters(uint32_t *bad, uint32_t *unknown) { *bad = 0; *unknown = 0; }
-bool pro_cable_voice_cancel(const char *id) { CHECK(LOCK_DEPTH == 0); CAB.cancels++; snprintf(CAB.cancel_id, sizeof CAB.cancel_id, "%s", id); return true; }
+bool pro_cable_voice_cancel(const char *id) { CHECK(LOCK_DEPTH == 0); CAB.cancels++; snprintf(CAB.cancel_id, sizeof CAB.cancel_id, "%s", id); on_wire("cancel", id); return true; }
+bool pro_cable_connected(void) { return !CAB.dead; }
 
 // The recorder: the capture and sender tasks are replaced by flags the test flips.
 void (*pro_test_in_start)(void);
 static struct {
     bool tick_inside;   // the render task ticks while the recorder is starting (the stream is already live)
     bool init_ok, refuse, active, recording, mic_tried, finalising;
+    bool abort, quiet, ended;   // what the sender decides on, and whether its voice.end went
     int starts, stops, aborts, aborts_quiet;
     char agent[ID_MAX], lang[CFG_VLANG_MAX], upload[24];
 } REC;
@@ -130,10 +136,11 @@ bool pro_rec_start(const char *agent, const char *lang, const char *upload) {
     if (REC.refuse || REC.active) return false;
     REC.starts++;
     REC.active = REC.recording = true;
-    REC.mic_tried = false;
+    REC.mic_tried = REC.abort = REC.quiet = REC.ended = false;
     snprintf(REC.agent, sizeof REC.agent, "%s", agent);
     snprintf(REC.lang, sizeof REC.lang, "%s", lang);
     snprintf(REC.upload, sizeof REC.upload, "%s", upload);
+    on_wire("begin", upload);   // the sender's first message
     if (REC.tick_inside) pro_voice_tick(now + 20000);   // the render task, mid-start
     if (pro_test_in_start) pro_test_in_start();
     return true;
@@ -144,7 +151,22 @@ void pro_rec_abort(bool quiet) {
     if (!REC.active) return;
     REC.aborts++;
     if (quiet) REC.aborts_quiet++;
+    REC.abort = true;
+    REC.quiet = REC.quiet || quiet;
     REC.recording = false;
+}
+// The recorder's rule: before the sender decides, the discard is its own voice.abort; after voice.end, one cancel.
+void pro_rec_cancel(const char *upload) {
+    CHECK(LOCK_DEPTH == 0);
+    if (!upload[0] || strcmp(upload, REC.upload)) return;
+    if (REC.active) {
+        REC.aborts++;
+        REC.abort = true;
+        REC.recording = false;
+    } else if (REC.ended) {
+        REC.ended = false;
+        pro_cable_voice_cancel(upload);
+    }
 }
 bool pro_rec_active(void) { return REC.active; }
 bool pro_rec_recording(void) { return REC.recording; }
@@ -153,7 +175,20 @@ bool pro_rec_heard(void) { return false; }
 unsigned pro_rec_level(void) { return 0; }
 // The capture task opened the mic, and (later) the sender finished with the clip.
 static void mic_opens(void) { REC.mic_tried = true; }
-static void sender_done(void) { REC.active = REC.recording = false; }
+static void sender_done(void) {
+    if (REC.active && !REC.abort) { REC.ended = true; on_wire("end", REC.upload); }
+    else if (REC.active && !REC.quiet) on_wire("abort", REC.upload);
+    REC.active = REC.recording = false;
+}
+// The daemon heard exactly `kinds` about the clip the recorder last started: "begin abort" is "begin <id>;abort <id>;".
+static bool wire_is(const char *kinds) {
+    char expect[sizeof CAB.wire] = "", kind[16];
+    for (int at = 0, n; sscanf(kinds + at, "%15s%n", kind, &n) == 1; at += n) {
+        const size_t len = strlen(expect);
+        snprintf(expect + len, sizeof expect - len, "%s %s;", kind, REC.upload);
+    }
+    return !strcmp(CAB.wire, expect);
+}
 
 // ---- the app ----------------------------------------------------------------------------------------------------
 static pod_out_t tap_at_(int x, int y) {
@@ -369,15 +404,19 @@ static void unsend(void) {
     press();
     CHECK(pro_voice_start_pending());
     tap(POD_A_TALK, 0);
-    CHECK(!pro_voice_open() && REC.aborts == 1 && CAB.cancels == 1 && !strcmp(CAB.cancel_id, REC.upload));
+    CHECK(!pro_voice_open() && REC.aborts == 1 && CAB.cancels == 0);
     CHECK(top() == POD_V_AGENT && !pod_ui_talking(&U));
+    sender_done();
+    CHECK(wire_is("begin abort"));   // the daemon is told once, by the recorder
 }
-// Back out of Talk while recording: discard and tell the daemon.
+// Back out of Talk while recording: discard and tell the daemon, once.
 static void back_discards(void) {
     situation(); to_agent(0);
     press(); mic_opens();
     tap(POD_A_BACK, 0);
-    CHECK(!pro_voice_open() && REC.aborts == 1 && CAB.cancels == 1 && !pod_ui_talking(&U));
+    CHECK(!pro_voice_open() && REC.aborts == 1 && CAB.cancels == 0 && !pod_ui_talking(&U));
+    sender_done();
+    CHECK(wire_is("begin abort"));
 }
 // R13: the 600 s cap sends what was said (as Done), and the reply wait is 65 s.
 static void cap_and_reply_wait(void) {
@@ -393,16 +432,17 @@ static void cap_and_reply_wait(void) {
     CHECK(pro_voice_open() && !U.notice_on);
     now += 1000; pro_app_tick();
     CHECK(!pro_voice_open() && CAB.cancels == 1 && U.notice_on && !strcmp(U.notice, "No response yet. Check Harness on your computer."));
+    CHECK(wire_is("begin end cancel"));   // the clip went: one cancel names it
 }
 // R13: a recorder that stopped by itself (mic failed, DMA overrun) is aborted with a notice, not left on Talk.
 static void recorder_died(void) {
     situation(); to_agent(0);
     press(); mic_opens();
-    sender_done();                         // the capture task gave up and the sender finalised the abort
+    REC.abort = true; sender_done();       // the capture task gave up and the sender finalised the abort
     now += 300; pro_app_tick();            // not yet: the 700 ms rule
     CHECK(pro_voice_open());
     now += 500; pro_app_tick();
-    CHECK(!pro_voice_open() && CAB.cancels == 1 && top() == POD_V_AGENT);
+    CHECK(!pro_voice_open() && CAB.cancels == 0 && wire_is("begin abort") && top() == POD_V_AGENT);   // told once, by the sender
     CHECK(U.notice_on && !strcmp(U.notice, "Recording stopped. Please try again."));
 }
 // The mic never opens: the start guard gives up instead of waiting for ever.
@@ -457,7 +497,10 @@ static void talk_over_in_tick(void) {
 // past every limit (so any step it judged would discard), yet a begin in flight is never discarded and never orphaned.
 static int STEPS_SEEN;
 static bool HOOK_ON;
+static int STEP_AT;              // another task acts at this step of pro_voice_begin: STEP_DO
+static void (*STEP_DO)(void);
 void pro_voice_test_step(int step) {
+    if (step == STEP_AT) STEP_DO();
     if (!HOOK_ON) return;
     STEPS_SEEN |= 1 << step;
     pro_voice_tick(now + 20000);
@@ -494,6 +537,29 @@ static void link_lost_mid_start_leaves_no_stream(void) {
     CHECK(!pro_voice_open());
     CHECK(!REC.recording && REC.aborts >= 1);          // the stream that began mid-drop was aborted afterwards
 }
+static void button_discards(void) { pro_voice_end(false); }
+static void cable_drops(void) { CAB.dead = true; pro_voice_link_lost(); }   // pro_cable ends its session, then tells pro_app
+// After a clip that went and was answered, the side button lands at each step of the next begin: the daemon hears one
+// voice.abort, for the new clip, and nothing about the one before. A cable that drops instead hears nothing more.
+static void discard_mid_begin(void) {
+    for (int step = 2; step <= 5; step++) {
+        situation(); to_agent(0);
+        press(); mic_opens(); tap(POD_A_TALK, 0); sender_done();
+        pro_app_voice_result(PRO_VOICE_OK, "a1");
+        CAB.wire[0] = 0;
+        STEP_AT = step; STEP_DO = button_discards;
+        pro_voice_begin("a1");
+        STEP_AT = 0;
+        sender_done();
+        CHECK(!pro_voice_open() && REC.starts == 2 && wire_is("begin abort"));
+    }
+    situation();
+    STEP_AT = 4; STEP_DO = cable_drops;
+    pro_voice_begin("a1");
+    STEP_AT = 0;
+    sender_done();
+    CHECK(!pro_voice_open() && REC.starts == 1 && wire_is("begin"));
+}
 
 int main(int argc, char **argv) {
     static const struct { const char *name; void (*run)(void); } tests[] = {
@@ -508,6 +574,7 @@ int main(int argc, char **argv) {
         {"voice_link_drop_while_waiting", voice_link_drop_while_waiting}, {"talk_over_in_tick", talk_over_in_tick},
         {"begin_is_atomic_to_the_tick", begin_is_atomic_to_the_tick},
         {"link_lost_mid_start_leaves_no_stream", link_lost_mid_start_leaves_no_stream},
+        {"discard_mid_begin", discard_mid_begin},
     };
     for (unsigned i = 0; i < sizeof tests / sizeof tests[0]; i++)
         if (argc == 1 || !strcmp(argv[1], tests[i].name)) { tests[i].run(); printf("PASS %s\n", tests[i].name); }
