@@ -77,7 +77,7 @@ static struct {
     int draft_drag, tab_drag, start_x, start_y, last_x, last_y, tab_count, machine_count, model_count, notice_count, pet_pose;
     int touch_far2;
     uint32_t touch_started, coast_until, character_activity, pet_until, nap_until, last_celebration;
-    uint32_t notice_sequence, voice_retry_until, error_until;
+    uint32_t voice_retry_until, error_until;
     char hint[40];
     bool machine_view;
     cable_app_t apps[CABLE_MAX_APPS];

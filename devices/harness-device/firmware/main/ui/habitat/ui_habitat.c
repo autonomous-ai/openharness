@@ -218,7 +218,6 @@ static EXT_RAM_BSS_ATTR struct {
     uint8_t notice_read_next;
     uint32_t notice_revision, notice_frame;
     int notice_count;
-    uint32_t notice_sequence;
     uint32_t error_until;   // when the turn-error view clears itself (ms() clock), 0 = not a timed one
     question_t q;
     char message[256], title[80], pending_focus[ID_MAX], opening_notice[ID_MAX];
@@ -4030,7 +4029,6 @@ bool ui_notify_summary(const char *id, const char *name, const char *machine, co
     // A full inbox of open questions refuses the row: with nothing to read, nothing rings, wakes or celebrates.
     bool filed = notice_add(id, name, machine, recap, false, false) != NULL;
     if (face) notice_read_now(id);
-    s.notice_sequence++;
     bool alert = filed && level == 2 && !face;
     uint32_t now = ms();
     if (alert && !waiting() && !s.nap && !s.quiet && (!s.last_celebration || now - s.last_celebration >= 20000)) {
@@ -4054,7 +4052,6 @@ bool ui_turn_error(const char *id, const char *message)
     // A row refused by a full inbox of open questions leaves the toast, as an error about no agent has, and no ring.
     bool ring = notice_add(id, known >= 0 ? s.agents[known].name : NULL, NULL, message, false, true) && !face;
     if (face) notice_read_now(id);
-    s.notice_sequence++;
     // Like any toast, never over a live recording or the person's own question; the drawer row still keeps the failure.
     if (!s.voice_open && !question_view(s.view)) {
         COPY(s.title, "Harness");
@@ -4182,7 +4179,6 @@ bool ui_question_show(const char *id, const char *name, const char *machine, con
     notice_forget_read(id, true);
     notice_add(id,name,machine,cJSON_IsString(prompt) ? prompt->valuestring : "Needs your answer",true,false);
     if (face) notice_read_now(id);   // already on the glass: shown in place, read at once
-    s.notice_sequence++;
     // A different agent's alert cannot replace the question being read.
     if (s.q.valid && !strcmp(s.q.agent,id) && strcmp(s.q.request,request)) {
         s.q.valid=false; s.q.pending=false; s.q.revision++;
