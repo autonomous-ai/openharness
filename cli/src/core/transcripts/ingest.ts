@@ -88,12 +88,13 @@ export function createIngest({
   const wireWatcher = (watcher: Pick<Watcher, 'on'>): void => {
     watcher.on('line', (evt: LineEvent) => {
       // This runs from a void-discarded async read, so a throw here would be an unhandledRejection. A
-      // single malformed line must never take the daemon down — contain it per line and move on.
+      // single malformed line must never take the daemon down — contain it per line and move on. Said by
+      // the error's kind only: a parser's message quotes the line, and the line is the person's.
       try {
         const line = readLine(evt)
         if (line) emit(evt.sessionId, line.events, line.read)
       } catch (err) {
-        console.error(`[cli] line handler error (session ${evt.sessionId}):`, err instanceof Error ? err.message : err)
+        console.error(`[cli] line handler error (session ${evt.sessionId}):`, err instanceof Error ? err.name : typeof err)
       }
     })
     // A transcript catch-up is history, including an unfinished last turn.
@@ -119,7 +120,7 @@ export function createIngest({
         // is not a fresh prompt; live runtime inspection can establish activity.
         emit(batch.sessionId, all, { replay: true })
       } catch (err) {
-        console.error(`[cli] history handler error (session ${batch.sessionId}):`, err instanceof Error ? err.message : err)
+        console.error(`[cli] history handler error (session ${batch.sessionId}):`, err instanceof Error ? err.name : typeof err)
       }
     })
   }
