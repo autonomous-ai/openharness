@@ -1,6 +1,7 @@
+import { SERVICE_HOSTS } from '../harnessd/services.js'
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { AGENT_BROWSER_REQUESTS, CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_SYNC_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, GATEWAY_REQUESTS, LANE_OFF, MACHINE_ADDON_REQUESTS, PAIR_WAIT_MS, SERVICE_HTTP_ROUTES, SERVICE_WS_FRAMES, WIFI_REQUESTS, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, WIFI_FALLBACKS, WIFI_OFF, WORKSPACES_FALLBACKS, WORKSPACES_OFF, WORKSPACES_UNAVAILABLE, type CoreApiDeps } from './api.js'
+import { AGENT_BROWSER_REQUESTS, CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_SYNC_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, sendLocalWindow, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, GATEWAY_REQUESTS, LANE_OFF, MACHINE_ADDON_REQUESTS, PAIR_WAIT_MS, SERVICE_HTTP_ROUTES, SERVICE_WS_FRAMES, WIFI_REQUESTS, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, WIFI_FALLBACKS, WIFI_OFF, WORKSPACES_FALLBACKS, WORKSPACES_OFF, WORKSPACES_UNAVAILABLE, type CoreApiDeps } from './api.js'
 import { FAIL, readFallback } from './serviceHost.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
 import { answerAgentQuery } from './agentQueries.js'
@@ -156,8 +157,6 @@ describe('the core API services stand on', () => {
       signedIn: vi.fn(() => true),
       environment: vi.fn(() => 'prod'),
       machines: vi.fn(async () => ({ status: 200, body: {} })),
-      sendLocal: vi.fn(),
-      sendToWindow: vi.fn(() => true),
       hasWindow: vi.fn(() => true),
       devicesChanged: vi.fn(),
       dialWatching: vi.fn(),
@@ -551,26 +550,52 @@ describe('the core API services stand on', () => {
     expect(readFallback(RECAPS_FALLBACKS.liveCards)).toEqual({ deferred: true, value: [] })
   })
 
-  it('lets the devices put their own frames in front of the windows, and no other', () => {
-    const deps = coreDeps()
-    const core = createCoreApi(deps)
-    core.clients.sendLocal({ type: 'dial_focus', payload: { agentId: 'a' } })
-    expect(deps.sendLocal).toHaveBeenCalledWith({ type: 'dial_focus', payload: { agentId: 'a' } })
-    expect(core.clients.sendToWindow('window-1', { type: 'dial_form', payload: {} })).toBe(true)
-    expect(deps.sendToWindow).toHaveBeenCalledWith('window-1', { type: 'dial_form', payload: {} })
-    // A devices process speaks as a service: what it may show a person is decided here, frame by frame.
-    core.clients.sendLocal({ type: 'agent_deleted', payload: {} } as unknown as Parameters<typeof core.clients.sendLocal>[0])
-    expect(core.clients.sendToWindow('window-1', { type: 'dial_focus', payload: {} } as unknown as Parameters<typeof core.clients.sendToWindow>[1])).toBe(false)
-    core.clients.sendLocal(null as unknown as Parameters<typeof core.clients.sendLocal>[0])
-    expect(deps.sendLocal).toHaveBeenCalledTimes(1)
-    expect(deps.sendToWindow).toHaveBeenCalledTimes(1)
-    expect(deps.log).toHaveBeenCalledWith('[services] the devices sent a window agent_deleted, which is not theirs to send')
-    expect(deps.log).toHaveBeenCalledWith('[services] the devices sent a window dial_focus, which is not theirs to send')
-    // Said to the console when the core gives no log of its own.
+  it('grants local delivery only for the authenticated service and declared target/type pair', () => {
+    const declarations = SERVICE_HOSTS.devices.windows!, send = vi.fn(() => true), log = vi.fn()
+    const delivery = (kind: string, type: string) => ({ target: kind === 'connection' ? { kind, connId: 'physical-window' } : { kind }, frame: { type, payload: {} } })
+    for (const [service, rights] of Object.entries(declarations)) {
+      for (const [kind, frames] of Object.entries(rights)) for (const type of frames!) {
+        const frame = delivery(kind, type)
+        expect(sendLocalWindow(frame, rights, send, log)).toBe(true)
+        expect(send).toHaveBeenLastCalledWith(frame)
+        expect(createCoreApi(coreDeps()).clients.sendWindow(frame as never)).toBe(false)
+      }
+    }
+    for (const [rights, kind, type] of [
+      [declarations.wifi, 'all', 'device_focus'], [declarations.wifi, 'connection', 'device_prepare_open'],
+      [declarations.devices, 'first', 'device_focus'], [declarations.devices, 'all', 'device_focus'],
+      [declarations.devices, 'all', 'dial_form'], [declarations.devices, 'connection', 'dial_focus'],
+      [declarations.wifi, 'first', 'agent_deleted'], [undefined, 'first', 'device_focus'],
+      [{ first: undefined }, 'first', 'device_focus'],
+    ] as const) expect(sendLocalWindow(delivery(kind, type), rights, send, log)).toBe(false)
+    expect(log.mock.calls.every(([line]) => line === '[services] WINDOW_FRAME_REFUSED')).toBe(true)
+  })
+
+  it('refuses malformed local delivery without forwarding content or trusting prototype keys', () => {
+    const rights = SERVICE_HOSTS.devices.windows!.wifi, send = vi.fn(() => true), log = vi.fn()
+    const valid = { target: { kind: 'first' }, frame: { type: 'device_focus', payload: {} } }
+    const bad = [undefined, null, [], new Date(), {}, { target: valid.target }, { ...valid, frame: { type: 'device_focus' } }, { ...valid, target: null }, { ...valid, target: [] },
+      { ...valid, frame: null }, { ...valid, frame: [] }, { ...valid, frame: { ...valid.frame, payload: null } },
+      { ...valid, frame: { ...valid.frame, payload: [] } }, { ...valid, frame: { ...valid.frame, payload: new Date() } },
+      { ...valid, target: { kind: 'constructor' } }, { ...valid, target: {} },
+      { ...valid, target: { kind: 'first', connId: 'chosen' } }, { ...valid, frame: { payload: {} } },
+      { ...valid, frame: { type: 3, payload: {} } }, { ...valid, target: Object.create({ kind: 'first' }) },
+      { ...valid, frame: Object.create(valid.frame) }]
+    for (const frame of bad) expect(sendLocalWindow(frame, rights, send, log)).toBe(false)
+    for (const target of [{ kind: 'connection' }, { kind: 'connection', connId: '' }, { kind: 'connection', connId: 1 },
+      { kind: 'connection', connId: 'x'.repeat(257) }, { kind: 'connection', connId: 'w', extra: true }]) {
+      expect(sendLocalWindow({ target, frame: { type: 'dial_form', payload: {} } }, SERVICE_HOSTS.devices.windows!.devices, send, log)).toBe(false)
+    }
+    expect(send).not.toHaveBeenCalled()
+    const plain = Object.assign(Object.create(null), valid)
+    plain.target = Object.assign(Object.create(null), valid.target)
+    plain.frame = { ...valid.frame, payload: Object.create(null) }
+    expect(sendLocalWindow(plain, rights, send, log)).toBe(true)
+    send.mockReturnValueOnce(false)
+    expect(sendLocalWindow(valid, rights, send, log)).toBe(false)
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    createCoreApi({ ...deps, log: undefined }).clients.sendLocal({ type: 'nothing' } as unknown as Parameters<typeof core.clients.sendLocal>[0])
-    expect(warn).toHaveBeenCalledWith('[services] the devices sent a window nothing, which is not theirs to send')
-    warn.mockRestore()
+    try { expect(sendLocalWindow(null, rights, send)).toBe(false); expect(warn).toHaveBeenCalledWith('[services] WINDOW_FRAME_REFUSED') }
+    finally { warn.mockRestore() }
   })
 
   // Hachi 5a (OPENHARNES-15): `harness goal done` on Hachi's home tells every window of the account, here and away.
@@ -630,8 +655,8 @@ describe('the core API services stand on', () => {
     expect(await WIFI_OFF.create('p', 'claude', '/w')).toEqual({ ok: false, error: 'UNSUPPORTED' })
     expect(await WIFI_OFF.stepFocus('next')).toBe('no_app')
     expect(WIFI_OFF.scroll('down', 0, 0)).toBe(false)
-    expect(WIFI_OFF.focusApp('a', 0, 'r')).toBe(false)
-    expect(WIFI_OFF.reveal('o', 'a')).toBeUndefined()
+    expect(WIFI_OFF).not.toHaveProperty('focusApp')
+    expect(WIFI_OFF).not.toHaveProperty('reveal')
   })
 
   it('falls back, when Agent Messages fails, to writing none of its deliveries', () => {

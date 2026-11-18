@@ -11,6 +11,11 @@ describe('the executed worker contract', () => {
   it('carries only a bounded parent and code contract into a child', () => {
     expect(workerCohortEnvironment(42, 'b'.repeat(64))).toEqual({ [WORKER_COHORT_ENV]: `42:${WORKER_CONTRACT}:${WORKER_PLAN}:${'b'.repeat(64)}` })
   })
+  it('accepts complete current and historical worker probe records', () => {
+    expect(readWorkerProbe(`harnessd-probe ok · protocol 8 · v1 · worker-cohort ${WORKER_CONTRACT} ${WORKER_PLAN}`))
+      .toEqual({ kind: 'modern', contract: WORKER_CONTRACT, plan: WORKER_PLAN })
+    expect(readWorkerProbe('harnessd-probe ok · protocol 7 · v1 · takes a handover')).toEqual({ kind: 'legacy' })
+  })
   it('rejects unknown, malformed and empty records rather than interpreting marker absence', () => {
     for (const value of ['', 'harnessd-probe ok', 'harnessd-probe ok · protocol 4 · v1', 'harnessd-probe ok · protocol 8 · v1', 'harnessd-probe ok · protocol 7 · v1 · worker-cohort 0 x']) expect(readWorkerProbe(value)).toBeUndefined()
   })

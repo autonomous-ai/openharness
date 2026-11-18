@@ -132,8 +132,8 @@ describe('the core API a light service runs on in its own process', () => {
     // What the devices' process starts from before it asks the core for the list, and all any other process has.
     await expect(api.account.machines()).resolves.toEqual({ status: 503, body: {} })
     await expect(UNASKED.account.machines()).resolves.toEqual({ status: 503, body: {} })
-    api.clients.sendLocal({ type: 'dial_focus', payload: {} })
-    expect(api.clients.sendToWindow('w1', { type: 'dial_form', payload: {} })).toBe(false)
+    expect(api.clients.sendWindow({ target: { kind: 'all' }, frame: { type: 'dial_focus', payload: {} } })).toBe(false)
+    expect(api.clients.sendWindow({ target: { kind: 'connection', connId: 'w1' }, frame: { type: 'dial_form', payload: {} } })).toBe(false)
     expect(api.clients.hasWindow()).toBe(false)
     api.clients.devicesChanged({})
     api.clients.dialWatching(true)

@@ -864,6 +864,17 @@ describe('the dial\'s host, wired to the core', () => {
     expect(core.agents.fork).toHaveBeenCalledWith('a1')
   })
 
+  it('shares one window transport for a desk gesture and a bridge on its exact physical connection', () => {
+    const sendWindow = vi.fn(() => true)
+    start({ core: fakeCore({ dataDir, clients: { sendWindow } }) })
+    seen.host.focused!('remote-machine', 'agent')
+    seen.bridges.WindowSelection.wiring.send('physical-window', { op: 'begin' })
+    expect(sendWindow.mock.calls).toEqual([
+      [{ target: { kind: 'all' }, frame: { type: 'dial_focus', payload: { machineId: 'remote-machine', agentId: 'agent' } } }],
+      [{ target: { kind: 'connection', connId: 'physical-window' }, frame: { type: 'dial_selection', payload: { op: 'begin' } } }],
+    ])
+  })
+
   it('tells the windows on this computer what a hand at this desk did, and the owner\'s apps the device status', () => {
     const { core } = start()
     const w = seen.host
@@ -876,7 +887,7 @@ describe('the dial\'s host, wired to the core', () => {
     w.scrolled!('move', 4, 120)
     w.dialStatus!({ attached: true, fw: '1.2.3' })
     w.dialStatus!({ attached: false })
-    expect(vi.mocked(core.clients.sendLocal).mock.calls.map(([frame]) => frame)).toEqual([
+    expect(vi.mocked(core.clients.sendWindow).mock.calls.filter(([delivery]) => delivery.target.kind === 'all').map(([{ frame }]) => frame)).toEqual([
       { type: 'dial_open', payload: { machineId: 'm1', agentId: 'a1' } },
       { type: 'dial_open', payload: { machineId: 'm1', agentId: 'a1', reason: 'question' } },
       { type: 'dial_notification_read', payload: { machineId: 'm1', agentId: 'a1', readToken: 'tok' } },
@@ -930,10 +941,10 @@ describe('the window bridges, wired to the core', () => {
     selection.wiring.send('w1', { op: 'begin' })
     visit.wiring.send('w1', { op: 'open' })
     form.wiring.send('w1', { op: 'open' })
-    expect(vi.mocked(core.clients.sendToWindow).mock.calls).toEqual([
-      ['w1', { type: 'dial_selection', payload: { op: 'begin' } }],
-      ['w1', { type: 'dial_visit', payload: { op: 'open' } }],
-      ['w1', { type: 'dial_form', payload: { op: 'open' } }],
+    expect(vi.mocked(core.clients.sendWindow).mock.calls).toEqual([
+      [{ target: { kind: 'connection', connId: 'w1' }, frame: { type: 'dial_selection', payload: { op: 'begin' } } }],
+      [{ target: { kind: 'connection', connId: 'w1' }, frame: { type: 'dial_visit', payload: { op: 'open' } } }],
+      [{ target: { kind: 'connection', connId: 'w1' }, frame: { type: 'dial_form', payload: { op: 'open' } } }],
     ])
     form.wiring.log('form: opened')
     router.wiring.log('route: asked')
@@ -941,7 +952,7 @@ describe('the window bridges, wired to the core', () => {
     expect(router.wiring.hasWindow()).toBe(true)
     router.wiring.send('v1', 'fix it', undefined)
     router.wiring.send('v2', 'fix it', 'review')
-    expect(vi.mocked(core.clients.sendLocal).mock.calls.map(([frame]) => frame)).toEqual([
+    expect(vi.mocked(core.clients.sendWindow).mock.calls.filter(([delivery]) => delivery.target.kind === 'all').map(([{ frame }]) => frame)).toEqual([
       { type: 'voice_route_request', payload: { voiceId: 'v1', text: 'fix it' } },
       { type: 'voice_route_request', payload: { voiceId: 'v2', text: 'fix it', cmd: 'review' } },
     ])
@@ -1659,7 +1670,7 @@ describe('⌘K, the Wi-Fi device\'s borrowed walk, the voice router and stopping
     seen.fleet!.fail = true
     expect(await port.stepFocus('next', 'a1')).toEqual(expect.objectContaining({ agentId: 'a2' }))
     port.scroll('down', 0, 0)
-    expect(vi.mocked(core.clients.sendLocal).mock.calls.map(([frame]) => frame.type)).toEqual(['dial_focus', 'dial_scroll'])
+    expect(vi.mocked(core.clients.sendWindow).mock.calls.filter(([delivery]) => delivery.target.kind === 'all').map(([{ frame }]) => frame.type)).toEqual(['dial_focus', 'dial_scroll'])
   })
 
   it('keeps the component-only desk endpoint bound to its caller and stops it before late gestures', async () => {
@@ -1671,16 +1682,16 @@ describe('⌘K, the Wi-Fi device\'s borrowed walk, the voice router and stopping
     seen.fleet!.fail = true
     expect(await desk.stepFocus('next', undefined, () => false)).toBe('no_agents')
     desk.scroll('move', 2, 3, () => false)
-    expect(core.clients.sendLocal).not.toHaveBeenCalled()
+    expect(core.clients.sendWindow).not.toHaveBeenCalled()
     expect(await desk.stepFocus('next', undefined, () => true)).toMatchObject({ agentId: 'a1' })
     desk.scroll('move', 2, 3, () => true)
-    expect(vi.mocked(core.clients.sendLocal).mock.calls.map(([frame]) => frame.type)).toEqual(['dial_focus', 'dial_scroll'])
+    expect(vi.mocked(core.clients.sendWindow).mock.calls.filter(([delivery]) => delivery.target.kind === 'all').map(([{ frame }]) => frame.type)).toEqual(['dial_focus', 'dial_scroll'])
     await port.stop()
-    vi.mocked(core.clients.sendLocal).mockClear()
+    vi.mocked(core.clients.sendWindow).mockClear()
     expect(await desk.stepFocus('next', undefined, () => true)).toBe('no_agents')
     expect(await port.stepFocus('next', undefined)).toBe('no_agents')
     desk.scroll('move', 2, 3, () => true)
-    expect(core.clients.sendLocal).not.toHaveBeenCalled()
+    expect(core.clients.sendWindow).not.toHaveBeenCalled()
   })
 
   it('walk the cloud harnesses on the desk too, where the core offers them', async () => {
@@ -2926,7 +2937,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(await caps()).toEqual([{ id: 'h1', caps: 'svfa' }])
     expect(await host().openAgent('h1')).toBeUndefined()
     expect(orcaRuns).toEqual([['/usr/bin/open', ['-b', 'ai.autonomous.harness'], 10_000]])
-    const opens = () => vi.mocked(core.clients.sendLocal).mock.calls.map(([frame]) => frame).filter((frame) => frame.type === 'dial_open')
+    const opens = () => vi.mocked(core.clients.sendWindow).mock.calls.filter(([delivery]) => delivery.target.kind === 'all').map(([{ frame }]) => frame).filter((frame) => frame.type === 'dial_open')
     expect(opens()).toEqual([])
     port.swarms({ active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds: [], panes: 0 }], tiles: [] })
     expect(opens()).toEqual([{ type: 'dial_open', payload: { machineId: host().localMachine().id, agentId: 'h1' } }])
@@ -3549,7 +3560,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     for (const dy of moves) host().scrolled('move', dy, 0)
     host().scrolled('up', 0, velocity)
   }
-  const dialScrolls = (core: CoreApi) => vi.mocked(core.clients.sendLocal).mock.calls.map(([frame]) => frame)
+  const dialScrolls = (core: CoreApi) => vi.mocked(core.clients.sendWindow).mock.calls.filter(([delivery]) => delivery.target.kind === 'all').map(([{ frame }]) => frame)
     .filter(({ type }) => type === 'dial_scroll')
   const toWindows = (phase: string, dy: number, velocity: number) => ({ type: 'dial_scroll', payload: { phase, dy, velocity } })
 
@@ -5328,7 +5339,7 @@ describe('the Notifications setting (docs/plans/2026-11-16-dial-agent-notify-des
     engine: 'claude', sessionId: 'sess-1', event, cwd: '/work/api', callerPid: 4242, transcriptPath: '/t/sess-1.jsonl',
     hostHints: { ORCA_AGENT_SESSION_ID: 'orca-1' },
   })
-  const sentLocal = (core: CoreApi) => vi.mocked(core.clients.sendLocal).mock.calls.map(([frame]) => frame)
+  const sentLocal = (core: CoreApi) => vi.mocked(core.clients.sendWindow).mock.calls.filter(([delivery]) => delivery.target.kind === 'all').map(([{ frame }]) => frame)
   const statuses = (core: CoreApi) => sentLocal(core).filter((frame) => frame.type === 'dial_status')
   const summary = (port: DevicesPort, agentId: string, payload: Record<string, unknown>) =>
     port.card({ type: 'commander_event', agentId, payload: { kind: 'summary', text: 'done', ...payload } })

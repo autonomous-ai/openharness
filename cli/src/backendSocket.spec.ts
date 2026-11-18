@@ -2485,6 +2485,30 @@ describe('BackendSocket outbound queue', () => {
     await socket.stop()
   })
 
+  it('keeps first-window delivery local, skips tools and advances past a failed physical sink', async () => {
+    const socket = relaySocket('token')
+    const tool = vi.fn(() => true), failed = vi.fn(() => true), good = vi.fn(() => true), later = vi.fn(() => true)
+    const frame = { type: 'device_prepare_open', payload: { machineId: 'local', operationId: 'op', agentId: 'a' } }
+    socket.registerLocalClient('local:tool', { sendFrame: tool, sendBinary: () => true }, { tool: true })
+    tool.mockClear()
+    expect(socket.sendFirstLocal(frame)).toBe(false)
+    expect(tool).not.toHaveBeenCalled()
+    socket.registerLocalClient('local:failed', { sendFrame: failed, sendBinary: () => true })
+    socket.registerLocalClient('local:good', { sendFrame: good, sendBinary: () => true })
+    socket.registerLocalClient('local:later', { sendFrame: later, sendBinary: () => true })
+    failed.mockClear().mockReturnValue(false); good.mockClear(); later.mockClear()
+    expect(socket.sendFirstLocal(frame)).toBe(true)
+    expect(failed).toHaveBeenCalledExactlyOnceWith(frame)
+    expect(good).toHaveBeenCalledExactlyOnceWith(frame)
+    expect(tool).not.toHaveBeenCalled()
+    expect(later).not.toHaveBeenCalled()
+    expect(socket.sendFirstLocal(frame)).toBe(true)
+    expect(failed).toHaveBeenCalledOnce()
+    expect(good).toHaveBeenCalledTimes(2)
+    for (const id of ['local:tool', 'local:failed', 'local:good', 'local:later']) await socket.unregisterLocalClient(id)
+    await socket.stop()
+  })
+
   it('hands a blocked agent to the window without putting the question on the cloud leg', async () => {
     const socket = relaySocket('token')
     expect(socket.hasLocalClient()).toBe(false)

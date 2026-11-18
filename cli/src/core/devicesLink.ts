@@ -19,7 +19,7 @@
 import type { AppSwarms } from '../cable/cableSession.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
 import type { ReviewedAnswer } from '../cable/questionInbox.js'
-import { DEVICES_FALLBACKS, readFallback, type CoreApi, type DeviceBridgeFrame, type DevicesPort, type DeviceWindowFrame, type InboxAnswer, type WindowFocus } from './api.js'
+import { DEVICES_FALLBACKS, readFallback, type CoreApi, type DevicesPort, type InboxAnswer, type WindowFocus } from './api.js'
 import { answerAccountQuery } from './accountQueries.js'
 import type { ServiceFrame } from './serviceLinks.js'
 
@@ -53,10 +53,6 @@ export const INBOX_CALL_MS = 27_000
 
 const fallback = <T>(member: keyof typeof DEVICES_FALLBACKS): T => readFallback(DEVICES_FALLBACKS[member]).value as T
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
-const isFrame = (value: unknown): value is { type: string; payload: Record<string, unknown> } =>
-  !!value && typeof value === 'object' && typeof (value as { type?: unknown }).type === 'string'
-  && !!(value as { payload?: unknown }).payload && typeof (value as { payload?: unknown }).payload === 'object'
-
 export function createDevicesLink(deps: DevicesLinkDeps) {
   const { core } = deps
   const log = deps.log ?? ((line: string) => console.warn(line))
@@ -136,10 +132,6 @@ export function createDevicesLink(deps: DevicesLinkDeps) {
     stop: ({ agentId }) => core.turns.stop(text(agentId)),
     answer: ({ agentId, requestId, answers }) => core.questions.answer(text(agentId), text(requestId), (answers && typeof answers === 'object' ? answers : {}) as Record<string, string>),
     setRuntime: ({ agentId, model, effort }) => core.agents.setRuntime(text(agentId), typeof model === 'string' ? model : undefined, typeof effort === 'string' ? effort : undefined),
-    sendLocal: ({ frame }) => { if (isFrame(frame)) core.clients.sendLocal(frame as DeviceWindowFrame) },
-    // A bridge's ask for one window: told, not asked, since the bridge answers a window that has gone by its
-    // own deadline either way.
-    sendToWindow: ({ connId, frame }) => { if (isFrame(frame)) core.clients.sendToWindow(text(connId), frame as DeviceBridgeFrame) },
     devicesChanged: ({ status, revision }) => core.clients.devicesChanged({ status, revision }),
     dialWatching: ({ watching: on }) => watching(on === true),
   }

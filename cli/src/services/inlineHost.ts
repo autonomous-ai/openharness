@@ -219,16 +219,25 @@ export function createServiceHost(ports: CorePorts, options: ServiceHostOptions 
     ): void {
       const staging: CorePorts = { ...ports, [name]: null }
       let answers: ServiceRequests | void
+      let stop: (() => unknown) | undefined
+      const revoke = (): void => { if (stoppers.get(name) === stopOwner) stoppers.delete(name) }
+      const stopOwner = (): void => { revoke(); void Promise.resolve(stop?.()).catch(() => {}) }
       try {
         claim(name, requests)
+        // The existing stop owner is this instance's authority, including while its constructor runs.
+        stoppers.set(name, stopOwner)
         inject(name)
-        answers = start(core, staging)
+        answers = start({ ...core, clients: { ...core.clients, sendWindow: delivery =>
+          stoppers.get(name) === stopOwner && !off.has(name) ? core.clients.sendWindow(delivery) : false,
+        } }, staging)
       } catch (error) {
+        revoke()
         didNotStart(name, error)
         return
       }
       const port = staging[name] as Port<K> | null
       if (!port) {
+        revoke()
         off.add(name)
         ports[name] = null
         return
@@ -236,12 +245,20 @@ export function createServiceHost(ports: CorePorts, options: ServiceHostOptions 
       try {
         install(name, requests, answers)
       } catch (error) {
+        revoke()
         didNotStart(name, error)
         return
       }
-      const stop = (port as unknown as { stop?: () => unknown }).stop
-      if (typeof stop === 'function') stoppers.set(name, () => { void Promise.resolve(stop.call(port)).catch(() => {}) })
-      ports[name] = guard<Port<K>>(name, port, fallbacks) as CorePorts[K]
+      const rawStop = (port as unknown as { stop?: () => unknown }).stop
+      if (typeof rawStop === 'function') stop = () => rawStop.call(port)
+      else revoke()
+      const guarded = guard<Port<K>>(name, port, fallbacks)
+      const guardedStop = (guarded as unknown as { stop?: () => unknown }).stop
+      if (typeof guardedStop === 'function') {
+        // Revoke before stop itself can call a retained API. Later starts never revive this owner.
+        ;(guarded as unknown as { stop(): unknown }).stop = () => { revoke(); return guardedStop() }
+      }
+      ports[name] = guarded as CorePorts[K]
     },
     /**
      * Start a service the core never calls: it has no port, and only answers the apps' `requests`.

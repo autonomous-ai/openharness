@@ -76,7 +76,7 @@ export function fakeCore(over: Overrides = {}): CoreApi {
     },
     clients: {
       viewerChanged: vi.fn(), streamFrame: vi.fn(() => false), gridNamed: vi.fn(), gridModelsChanged: vi.fn(), dshInstallStatus: vi.fn(), windows: vi.fn(), observer: vi.fn(() => true),
-      sendLocal: vi.fn(), sendToWindow: vi.fn(() => true), hasWindow: vi.fn(() => true), devicesChanged: vi.fn(), dialWatching: vi.fn(),
+      sendWindow: vi.fn(() => true), hasWindow: vi.fn(() => true), devicesChanged: vi.fn(), dialWatching: vi.fn(),
       turnCard: vi.fn(), turnSummary: vi.fn(),
       ...over.clients,
     },
@@ -85,7 +85,7 @@ export function fakeCore(over: Overrides = {}): CoreApi {
       view: vi.fn(async () => ({ agents: [], store: [], hasWindow: true })),
       stop: vi.fn(async () => true),
       create: vi.fn(async () => ({ ok: false as const, error: 'UNSUPPORTED' })),
-      stepFocus: vi.fn(async () => 'no_agents' as const), scroll: vi.fn(() => true), focusApp: vi.fn(() => true), reveal: vi.fn(),
+      stepFocus: vi.fn(async () => 'no_agents' as const), scroll: vi.fn(() => true),
       ...over.wifi,
     },
     // Only a spec that gives a counter has one, as only a core that offers it does.

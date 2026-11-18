@@ -38,6 +38,11 @@ function wifiPort(machineId: string, log: string[]) {
   return port
 }
 
+const focusWindow = (core: CoreApi, agentId: string, expiresAt: number, focusRevision: string): boolean =>
+  core.clients.sendWindow({ target: { kind: 'first' }, frame: { type: 'device_focus', payload: { machineId: core.machine.id(), agentId, expiresAt, focusRevision } } })
+const revealWindow = (core: CoreApi, operationId: string, agentId: string): boolean =>
+  core.clients.sendWindow({ target: { kind: 'first' }, frame: { type: 'device_prepare_open', payload: { operationId, machineId: core.machine.id(), agentId } } })
+
 function setup(over: { startThrows?: boolean; leavesOff?: boolean; dataDir?: string } = {}) {
   const log: string[] = []
   const ports: WifiPort[] = []
@@ -148,9 +153,9 @@ describe('the Wi-Fi device in the devices\' process', () => {
       () => old.conversations.resolve('a'), () => old.wifi.view(),
       () => adapter.submit!('a', 'old input', 'old-delivery', () => {})]) await expect(read()).rejects.toThrow()
     adapter.cancel!('old-delivery')
-    old.wifi.reveal('old-operation', 'a')
+    revealWindow(old, 'old-operation', 'a')
     expect(old.wifi.scroll('move', 2, 3)).toBe(false)
-    expect(old.wifi.focusApp('a', 9, 'revision')).toBe(false)
+    expect(focusWindow(old, 'a', 9, 'revision')).toBe(false)
     const oldRows = vi.fn(); old.agents.follow!(oldRows)()
     expect(oldRows).not.toHaveBeenCalled()
     expect(f.connection.query).not.toHaveBeenCalled()
@@ -197,7 +202,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     await expect(old.turns.recent('a', 1)).rejects.toThrow()
     await expect(old.conversations.resolve('a')).rejects.toThrow()
     await expect(old.wifi.view()).rejects.toThrow()
-    old.wifi.reveal('old-operation', 'a')
+    revealWindow(old, 'old-operation', 'a')
     expect(f.notices).toEqual([])
     f.answer('machine', { id: identity === 'same' ? 'machine-1' : 'machine-2' })
     f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, asker)
@@ -356,26 +361,60 @@ describe('the Wi-Fi device in the devices\' process', () => {
     await f.service.stop()
   })
 
+  it('delivers durable reveal after verified identity without requiring a transient view or replaying across reconnect', async () => {
+    const f = setup(), asker = { local: true, owner: true }
+    f.connect(); f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, asker)
+    const owner = f.api()
+    expect(focusWindow(owner, 'a', 9, 'revision')).toBe(false)
+    expect(revealWindow(owner, 'durable-operation', 'a')).toBe(true)
+    expect(f.notices).toEqual([['window', { target: { kind: 'first' }, frame: { type: 'device_prepare_open',
+      payload: { operationId: 'durable-operation', machineId: 'machine-1', agentId: 'a' } } }]])
+    f.disconnect()
+    expect(revealWindow(owner, 'while-disconnected', 'a')).toBe(false)
+    f.connect()
+    expect(revealWindow(owner, 'before-handshake', 'a')).toBe(false)
+    f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, asker)
+    expect(f.notices).toHaveLength(1)
+    expect(revealWindow(owner, 'durable-operation', 'a')).toBe(true)
+    expect(f.notices).toHaveLength(2)
+    expect(focusWindow(owner, 'a', 9, 'revision')).toBe(false)
+    await f.service.stop()
+    expect(revealWindow(owner, 'after-stop', 'a')).toBe(false)
+    expect(f.notices).toHaveLength(2)
+  })
+
+  it('keeps optional notice transport unavailable without throwing or queueing work', async () => {
+    const f = setup(), asker = { local: true, owner: true }
+    delete f.connection.notice
+    f.connect(); f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, asker)
+    expect(revealWindow(f.api(), 'op', 'a')).toBe(true)
+    f.answer('view', { agents: [], store: [], hasWindow: true }); await f.api().wifi.view()
+    expect(focusWindow(f.api(), 'a', 9, 'r')).toBe(true)
+    expect(f.api().wifi.scroll('move', 1, 2)).toBe(true)
+    expect(f.notices).toEqual([])
+    await f.service.stop()
+  })
+
   it('revokes cached window notices until a fresh view on the replacement connection', async () => {
     const f = setup(), asker = { local: true, owner: true }
     f.connect(); f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, asker)
     f.answer('view', { agents: [], store: [], hasWindow: true })
-    const wifi = f.api().wifi
+    const owner = f.api(), wifi = owner.wifi
     await wifi.view()
     f.disconnect()
     for (const reconnect of [false, true]) {
       if (reconnect) f.connect() // runServiceProcess reuses this same facade.
       expect(wifi.scroll('move', 2, 3)).toBe(false)
-      expect(wifi.focusApp('a', 9, 'revision')).toBe(false)
-      wifi.reveal('old-operation', 'a')
+      expect(focusWindow(owner, 'a', 9, 'revision')).toBe(false)
+      revealWindow(owner, 'old-operation', 'a')
       expect(f.notices).toEqual([])
     }
     f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, asker)
     await wifi.view()
     expect(wifi.scroll('move', 2, 3)).toBe(true)
-    expect(wifi.focusApp('a', 9, 'revision')).toBe(true)
-    wifi.reveal('durable-operation', 'a')
-    expect(f.notices.map(([kind]) => kind)).toEqual(['scroll', 'focusApp', 'reveal'])
+    expect(focusWindow(owner, 'a', 9, 'revision')).toBe(true)
+    revealWindow(owner, 'durable-operation', 'a')
+    expect(f.notices.map(([kind]) => kind)).toEqual(['scroll', 'window', 'window'])
     await f.service.stop()
   })
 
@@ -955,16 +994,16 @@ describe('the Wi-Fi device in the devices\' process', () => {
     f.connect()
     f.event({ kind: 'resume' })
     await f.settled()
-    const wifi = f.api().wifi
+    const owner = f.api(), wifi = owner.wifi
     f.answer('view', { agents: [{ agentId: 'a' }], store: 'no', hasWindow: true })
     expect(await wifi.view()).toEqual({ agents: [{ agentId: 'a' }], store: [], hasWindow: true })
     expect(wifi.scroll('move', 2, 3)).toBe(true)
-    expect(wifi.focusApp('a', 9, 'r')).toBe(true)
+    expect(focusWindow(owner, 'a', 9, 'r')).toBe(true)
     f.answer('view', {})
     await wifi.view()
     // Without a window in the view the request being answered asked for, nothing is sent to one.
     expect(wifi.scroll('down', 0, 0)).toBe(false)
-    expect(wifi.focusApp('a', 9, 'r')).toBe(false)
+    expect(focusWindow(owner, 'a', 9, 'r')).toBe(false)
     f.answer('recent', { turns: [{ recap: 'x' }] })
     expect(await f.api().turns.recent('a', 2)).toEqual([{ recap: 'x' }])
     f.answer('stop', { ok: true })
@@ -983,13 +1022,17 @@ describe('the Wi-Fi device in the devices\' process', () => {
     expect(f.connection.query).toHaveBeenCalledWith('input', { version: 1, agentId: 'a', text: 'hi', deliveryId: 'd', when: 'composer' })
     f.adapter().cancel!('d')
     await Promise.resolve()
-    wifi.reveal('op', 'a')
-    expect(f.notices.map(([kind]) => kind)).toEqual(['scroll', 'focusApp', 'reveal'])
+    revealWindow(owner, 'op', 'a')
+    expect(f.notices.map(([kind]) => kind)).toEqual(['scroll', 'window', 'window'])
     expect(f.notices[0][1]).toEqual({ phase: 'move', dy: 2, velocity: 3 })
+    expect(f.notices.slice(1)).toEqual([
+      ['window', { target: { kind: 'first' }, frame: { type: 'device_focus', payload: { machineId: 'machine-1', agentId: 'a', expiresAt: 9, focusRevision: 'r' } } }],
+      ['window', { target: { kind: 'first' }, frame: { type: 'device_prepare_open', payload: { operationId: 'op', machineId: 'machine-1', agentId: 'a' } } }],
+    ])
     // The core gone: asked, it says so; told, nothing goes.
     f.disconnect()
     await expect(wifi.stop('a')).rejects.toThrow('the Wi-Fi device is not connected to the core')
-    wifi.reveal('late', 'a')
+    revealWindow(owner, 'late', 'a')
     expect(f.notices).toHaveLength(3)
   })
 

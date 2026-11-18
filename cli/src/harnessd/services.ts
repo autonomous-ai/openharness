@@ -17,6 +17,8 @@ export const FRAME_PART_VALUES = 16_384
 export const FRAME_PART_TOTAL_BYTES = 4 * 1024 * 1024
 export const FRAME_PART_ENTRIES = 4096
 
+export type LocalWindowPermissions = Readonly<Partial<Record<'all' | 'first' | 'connection', readonly string[]>>>
+
 export interface ServiceSpec {
   /** The process's name: what the master logs it as, and the hard link it is started through (`harnessd-<name>`,
    *  ./processName.ts). */
@@ -38,6 +40,8 @@ export interface ServiceSpec {
   hears?: Readonly<Record<string, readonly HeldAgentLife[]>>
   /** Display fields a service may publish, and row fields required while they are shown. */
   frameParts?: Readonly<Record<string, { fields: readonly string[]; having?: readonly string[] }>>
+  /** Local app delivery rights, bound to the authenticated service and selection. */
+  windows?: Readonly<Record<string, LocalWindowPermissions>>
 }
 
 /** The kinds of what happens to an agent that a service in its own process can be held (core/api.ts `AgentLife`): a stop
@@ -136,7 +140,12 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // on a link of its own: its receipts, its streams and its Store preparations. Started only once there is
   // a device, or a request for one (core/devicesWake.ts): about 72 MiB at idle, which a computer with none
   // never pays.
-  devices: { services: ['devices', 'wifi', 'machineAddons'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true, askedSince: 4 },
+  devices: { services: ['devices', 'wifi', 'machineAddons'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true, askedSince: 4,
+    windows: {
+      devices: { all: ['dial_open', 'dial_notification_read', 'dial_forked', 'dial_focus', 'dial_swarm', 'dial_scroll', 'dial_status', 'voice_route_request'],
+        connection: ['dial_selection', 'dial_visit', 'dial_form'] },
+      wifi: { first: ['device_focus', 'device_prepare_open'] },
+    } },
   // The agent browser (services/agentBrowserProcess.ts): its Podman calls, one `podman events` stream, an image build that
   // prints for minutes and a setup that waits on a password dialog. Chrome itself runs in Podman's containers, outside
   // this budget. Started only once a browser is wanted here (the shared stream declaration): a computer that never ticked

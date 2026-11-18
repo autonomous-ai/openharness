@@ -215,8 +215,7 @@ describe('what the devices tell the core', () => {
     expect(core.turns.stop).toHaveBeenCalledWith('a1')
     expect(vi.mocked(core.questions.answer).mock.calls).toEqual([['a1', 'r1', { q: 'Coffee' }], ['a1', 'r1', {}]])
     expect(vi.mocked(core.agents.setRuntime).mock.calls).toEqual([['a1', 'opus', 'high'], ['a1', undefined, undefined]])
-    expect(vi.mocked(core.clients.sendLocal).mock.calls).toEqual([[{ type: 'dial_focus', payload: { agentId: 'a1' } }]])
-    expect(vi.mocked(core.clients.sendToWindow).mock.calls).toEqual([['w1', { type: 'dial_form', payload: {} }]])
+    expect(core.clients.sendWindow).not.toHaveBeenCalled() // old component-specific routes are retired
     expect(core.clients.devicesChanged).toHaveBeenCalledWith({ status: { attached: true }, revision: 2 })
   })
 

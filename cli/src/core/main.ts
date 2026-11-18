@@ -196,7 +196,7 @@ import { createStoreOf } from './transcripts/stores.js'
 import { createOtherStreams } from './engines/otherStreams.js'
 import { paneReadIdentity } from './transcripts/readIdentity.js'
 import { isOtherEngine, OTHER_ENGINE_STATES, OTHER_ENGINES_SERVICE } from '../engines/otherEngines.js'
-import { CLOUD_FALLBACKS, CLOUD_REQUESTS, type CloudCore, CONNECTORS_FALLBACKS, CONNECTORS_OFF, CONNECTORS_REQUESTS, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARED_MACHINES_REQUESTS, MEMORY_REQUESTS, ROUTER_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, MACHINE_ADDON_REQUESTS, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, OS_DEVICE_REQUESTS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_FALLBACKS, STORE_OFF, STORE_REQUESTS, MESSAGES_FALLBACKS, MESSAGES_REQUESTS, GOALS_REQUESTS, TURN_DELIVERERS, USAGE_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, VIEWERS_UNAVAILABLE, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, ENGINE_PROBE_REQUESTS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus } from './api.js'
+import { CLOUD_FALLBACKS, CLOUD_REQUESTS, type CloudCore, CONNECTORS_FALLBACKS, CONNECTORS_OFF, CONNECTORS_REQUESTS, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARED_MACHINES_REQUESTS, MEMORY_REQUESTS, ROUTER_REQUESTS, createCoreApi, sendLocalWindow, type LocalWindowDelivery, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, MACHINE_ADDON_REQUESTS, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, OS_DEVICE_REQUESTS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_FALLBACKS, STORE_OFF, STORE_REQUESTS, MESSAGES_FALLBACKS, MESSAGES_REQUESTS, GOALS_REQUESTS, TURN_DELIVERERS, USAGE_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, VIEWERS_UNAVAILABLE, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, ENGINE_PROBE_REQUESTS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus } from './api.js'
 import { createFrameParts } from './frameParts.js'
 import { testFaults } from './serviceHost.js'
 import { startStalls } from './stall.js'
@@ -224,7 +224,7 @@ import { answerConnectorsQuery } from './connectorsQueries.js'
 import { answerSharedMachinesQuery } from './sharedMachinesQueries.js'
 import { createOrchestratorLink } from './orchestratorLink.js'
 import { daemonCommand } from '../lib/daemonCommand.js'
-import { heldAgentLife, KNOWN_SERVICES, masterRunsEngineRuntime, masterRunsLiveEngines, otherEnginesVersion, servicesTheMasterRuns } from '../harnessd/services.js'
+import { SERVICE_HOSTS, heldAgentLife, KNOWN_SERVICES, masterRunsEngineRuntime, masterRunsLiveEngines, otherEnginesVersion, servicesTheMasterRuns } from '../harnessd/services.js'
 import { askForMessages, createMessagesLink } from './messagesLink.js'
 import { createDevicesLink } from './devicesLink.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE, PROBE_COMMAND } from '../harnessd/protocol.js'
@@ -989,12 +989,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const elapsedSeconds = elapsedSecondsOf(activity.indicator)
       return { text: activity.label, ...(elapsedSeconds !== undefined ? { elapsedSeconds } : {}) }
     },
-    // The devices' frames for the windows on this computer, never the cloud (createCoreApi checks their types).
-    sendLocal: (frame) => {
-      if (frame.type === 'dial_status') lastDialStatus = frame.payload
-      backendRef?.sendLocal(frame)
-    },
-    sendToWindow: (connId, frame) => localWsServerRef?.sendToWindow(connId, frame) ?? false,
     hasWindow: () => backendRef?.hasLocalClient() ?? false,
     devicesChanged: (payload) => backendRef?.send({ type: 'harness_devices_changed', payload }),
     // A goal Hachi closed: every window here and the owner's apps away, sealed for them (createCoreApi checks it).
@@ -1068,6 +1062,23 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   // Each service starts and is called through the host, so one that fails is logged and left off and
   // the core carries on without it (services/inlineHost.ts).
+  const localWindow = (delivery: LocalWindowDelivery): boolean => {
+    const { target, frame } = delivery
+    if (target.kind === 'connection') return localWsServerRef?.sendToWindow(target.connId, frame) ?? false
+    if (target.kind === 'first') return backendRef?.sendFirstLocal(frame) ?? false
+    if (frame.type === 'dial_status') lastDialStatus = frame.payload
+    if (!backendRef) return false
+    backendRef.sendLocal(frame)
+    return true
+  }
+  const sendWindow = (service: string, delivery: unknown): boolean => {
+    const host = Object.values(SERVICE_HOSTS).find(host => host.services.includes(service))
+    const permissions = host?.windows && Object.hasOwn(host.windows, service) ? host.windows[service] : undefined
+    return sendLocalWindow(delivery, permissions, localWindow)
+  }
+  const windowCore = (service: string): typeof coreApi => ({ ...coreApi,
+    clients: { ...coreApi.clients, sendWindow: delivery => sendWindow(service, delivery) },
+  })
   const serviceHost = inline?.createServiceHost(ports, { faults: testFaults(harnessd.HARNESSD_TEST_FAULTS) })
   // Services publish bounded display fields without putting their state or interpretation in the core.
   const frameParts = createFrameParts({ core: coreApi, epoch: agentLife.frameEpoch, available: service => !serviceHost?.isOff(service) })
@@ -1737,6 +1748,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The gateway's own traffic: its remote clients and what they sent, and its comings and goings; and what
     // the devices tell the core (a turn, a frame for the windows, a dial on the wire); a viewer stream's answers.
     notice: (service, payload) => {
+      if (payload.kind === 'window') { sendWindow(service, payload); return }
       if (payload.kind === 'client_stream' && typeof payload.grant === 'string' && typeof payload.type === 'string' && payload.payload && typeof payload.payload === 'object' && !Array.isArray(payload.payload)) {
         streamSinks.get(service)?.frame(payload.grant, payload.type, payload.payload as Record<string, unknown>); return
       }
@@ -3369,7 +3381,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       logsDir: env.HARNESS_LOGS_DIR, testDialPort: harnessd.HARNESSD_TEST_DIAL_PORT,
       dialSerials: process.env.HARNESS_DIAL_SERIALS?.split(',').map((serial) => serial.trim()).filter(Boolean),
       cableDisabled: env.CABLE_DISABLE, faults: testFaults(harnessd.HARNESSD_TEST_FAULTS),
-    }), coreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS)
+    }), windowCore('devices'), DEVICES_FALLBACKS, DEVICES_REQUESTS)
     // Everything the windows said while the devices were being built, and what the machine runs.
     if (ports.devices) devicesLink.started(ports.devices)
   }
@@ -3377,7 +3389,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The Wi-Fi device (services/wifi.ts), with the dials: in their process by default (core/wifiLink.ts,
   // resumed there as its link connects), or here.
   if (!outOfProcess.has('wifi')) {
-    serviceHost!.start('wifi', (core, started) => inline!.startWifi(core, started, { peer: { composition: 'inline', port: env.PORT } }), coreApi, WIFI_FALLBACKS, WIFI_REQUESTS)
+    serviceHost!.start('wifi', (core, started) => inline!.startWifi(core, started, { peer: { composition: 'inline', port: env.PORT } }), windowCore('wifi'), WIFI_FALLBACKS, WIFI_REQUESTS)
     void ports.wifi?.resume({ focus: focusState.state().voice }).catch(() => {})
   }
 

@@ -102,7 +102,8 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
     dataDir: core.dataDir, machineId,
     agents: () => view.store,
     create: (packageId, engine, cwd) => core.wifi.create(packageId, engine, cwd),
-    reveal: (operationId, agentId) => core.wifi.reveal(operationId, agentId),
+    reveal: (operationId, agentId) => { core.clients.sendWindow({ target: { kind: 'first' },
+      frame: { type: 'device_prepare_open', payload: { operationId, machineId, agentId } } }) },
   })
 
   // Built before the relay that speaks for it; a journal that does not parse leaves the Wi-Fi device off,
@@ -112,7 +113,8 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
     store,
     resultJournal: new DeviceResultJournal(join(core.dataDir, 'device-results.json')),
     machineId,
-    requestAppFocus: (agentId, expiresAt, focusRevision) => core.wifi.focusApp(agentId, expiresAt, focusRevision),
+    requestAppFocus: (agentId, expiresAt, focusRevision) => core.clients.sendWindow({ target: { kind: 'first' },
+      frame: { type: 'device_focus', payload: { machineId, agentId, expiresAt, focusRevision } } }),
     stepFocus: async (direction, currentAgentId) => {
       const epoch = coreEpoch, current = () => !stopped && coreConnected && coreEpoch === epoch
       if (!current()) return 'no_agents'

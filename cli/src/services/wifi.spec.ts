@@ -103,6 +103,23 @@ async function joinDevice(core: CoreApi, connId = 'c1'): Promise<void> {
 const KEY = Buffer.alloc(32, 7).toString('base64')
 
 describe('the Wi-Fi device, with the dials', () => {
+  it('builds first-window focus and reveal frames in the component with its verified machine', async () => {
+    const sendWindow = vi.fn(() => false)
+    const core = fakeCore({ dataDir, machine: { id: () => 'verified-machine' }, clients: { sendWindow } })
+    let device!: ConstructorParameters<typeof AutonomousDeviceService>[0]
+    let store!: Parameters<typeof createDeviceStore>[0]
+    startWifi(core, emptyPorts(), {
+      service: options => { device = options; return new AutonomousDeviceService(options) },
+      store: options => { store = options; return createDeviceStore(options) },
+    })
+    expect(device.requestAppFocus!('agent', 123, 'revision')).toBe(false)
+    store.reveal!('operation', 'agent')
+    expect(sendWindow.mock.calls).toEqual([
+      [{ target: { kind: 'first' }, frame: { type: 'device_focus', payload: { machineId: 'verified-machine', agentId: 'agent', expiresAt: 123, focusRevision: 'revision' } } }],
+      [{ target: { kind: 'first' }, frame: { type: 'device_prepare_open', payload: { operationId: 'operation', machineId: 'verified-machine', agentId: 'agent' } } }],
+    ])
+  })
+
   it('binds a cohost gesture to this component until its result settles', async () => {
     const core = fakeCore({ dataDir, wifi: { view: vi.fn(async () => ({ agents: [agent], store: [], hasWindow: true })) } })
     const ports = emptyPorts()
@@ -800,10 +817,12 @@ describe('the Wi-Fi device, with the dials', () => {
     await hello()
     expect(await ask({ type: 'turn.stop', machineId: 'machine-1', agentId: 'agent', idempotencyKey: 's1' })).toMatchObject({ receipt: { state: 'completed' } })
     expect(core.wifi.stop).toHaveBeenCalledWith('agent')
+    expect(await ask({ type: 'focus.ensure', machineId: 'untrusted-other-machine' })).toMatchObject({ error: { code: 'INVALID_REQUEST' } })
+    expect(core.clients.sendWindow).not.toHaveBeenCalled()
     // No window took the ask: said at once.
-    vi.mocked(core.wifi.focusApp).mockReturnValueOnce(false)
+    vi.mocked(core.clients.sendWindow).mockReturnValueOnce(false)
     expect(await ask({ type: 'focus.ensure' })).toMatchObject({ error: { code: 'FOCUS_UNAVAILABLE' } })
-    expect(core.wifi.focusApp).toHaveBeenCalledWith('agent', expect.any(Number), expect.any(String))
+    expect(core.clients.sendWindow).toHaveBeenCalledWith({ target: { kind: 'first' }, frame: { type: 'device_focus', payload: { machineId: 'machine-1', agentId: 'agent', expiresAt: expect.any(Number), focusRevision: expect.any(String) } } })
     expect(await ask({ type: 'scroll', phase: 'down', dy: 1, velocity: 2 })).not.toHaveProperty('error')
     expect(core.wifi.scroll).toHaveBeenCalledWith('down', 1, 2)
     const focus = (await ask({ type: 'focus.get' })).focusRevision
@@ -822,7 +841,7 @@ describe('the Wi-Fi device, with the dials', () => {
     await given!.create('autonomous/robot', 'claude', '/w')
     expect(core.wifi.create).toHaveBeenCalledWith('autonomous/robot', 'claude', '/w')
     given!.reveal!('op', 'a')
-    expect(core.wifi.reveal).toHaveBeenCalledWith('op', 'a')
+    expect(core.clients.sendWindow).toHaveBeenCalledWith({ target: { kind: 'first' }, frame: { type: 'device_prepare_open', payload: { operationId: 'op', machineId: 'machine-1', agentId: 'a' } } })
   })
 
   it('keeps transcript receipt evidence in the component and refuses an answer before its observation exists', async () => {

@@ -132,10 +132,6 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
     requireBinding(owner, binding)
     return answer
   }
-  const tell = (owner: Component, kind: string, payload: Record<string, unknown>): void => {
-    const binding = lastView?.binding ?? null
-    if (currentBinding(owner, binding)) binding.origin.notice?.(kind, payload)
-  }
   const stepFocus = async (owner: Component, direction: 'next' | 'previous', currentAgentId?: string, callerCurrent: () => boolean = () => true): Promise<DeskStep> => {
     const binding = bindingFor(owner, 'the Wi-Fi device is not connected to the core')
     const current = () => currentBinding(owner, binding) && callerCurrent()
@@ -154,7 +150,7 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
     if (!lastView?.view.hasWindow || !currentBinding(owner, lastView.binding) || !callerCurrent()) return false
     const binding = lastView.binding, desk = deviceDeskFor(options.dataDir, owner.machineId)
     if (desk) return desk.scroll(phase, dy, velocity, () => currentBinding(owner, binding) && callerCurrent())
-    tell(owner, 'scroll', { phase, dy, velocity })
+    binding.origin.notice?.('scroll', { phase, dy, velocity })
     return true
   }
 
@@ -174,6 +170,13 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
       agents: { ...unasked.agents, follow: listener => {
         if (component !== owner || stopped) return () => {}
         return owner.following.follow(event => { if (currentBinding(owner, verified)) listener(event) })
+      } },
+      clients: { ...unasked.clients, sendWindow: delivery => {
+        if (!currentBinding(owner, verified)) return false
+        // Focus needs the view this request read. Durable Store reveal can precede a view.
+        if (delivery.frame.type === 'device_focus' && (!lastView?.view.hasWindow || !currentBinding(owner, lastView.binding))) return false
+        verified.origin.notice?.('window', { ...delivery })
+        return true
       } },
       machine: { id: () => owner.machineId, computerId: () => options.machineId, name: () => '' },
       turns: { ...unasked.turns, recent: async (agentId, n) => list<RecentTurn>((await ask(owner, 'recent', { agentId, n })).turns) },
@@ -199,12 +202,6 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
         stepFocus: (direction, currentAgentId) => stepFocus(owner, direction, currentAgentId),
         // Read against the view the request being answered just asked for, as the core read its own sockets.
         scroll: (phase, dy, velocity) => scroll(owner, phase, dy, velocity),
-        focusApp: (agentId, expiresAt, focusRevision) => {
-          if (!lastView?.view.hasWindow || !currentBinding(owner, lastView.binding)) return false
-          tell(owner, 'focusApp', { agentId, expiresAt, focusRevision })
-          return true
-        },
-        reveal: (operationId, agentId) => tell(owner, 'reveal', { operationId, agentId }),
       },
     }
   }

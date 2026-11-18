@@ -98,7 +98,7 @@ describe('the agents as the Wi-Fi device lists them', () => {
 describe('the Wi-Fi device\'s doors into the core', () => {
   function doorsWith(over: { window?: boolean; socket?: boolean; devices?: boolean } = {}) {
     const agents = [agent({ agentId: 'a', sessionId: 's-a', engine: 'codex' })]
-    const socket = { hasLocalClient: vi.fn(() => over.window !== false), sendFirstLocal: vi.fn(() => true), onCreateAgent: null }
+    const socket = { hasLocalClient: vi.fn(() => over.window !== false), onCreateAgent: null }
     const devices = { stepFocus: vi.fn(async () => ({ machineId: 'mac', agentId: 'a' })), scroll: vi.fn() }
     const stop = vi.fn(async () => true)
     const doors = wifiDoors({
@@ -134,14 +134,9 @@ describe('the Wi-Fi device\'s doors into the core', () => {
     expect(doorsWith({ devices: false }).doors.scroll('up', 0, 0)).toBe(true)
   })
 
-  it('asks the first window to show an agent, or a Store preparation\'s, with this machine named', () => {
-    const { doors, socket } = doorsWith()
-    expect(doors.focusApp('a', 123, 'rev')).toBe(true)
-    expect(socket.sendFirstLocal).toHaveBeenCalledWith({ type: 'device_focus', payload: { machineId: 'mac', agentId: 'a', expiresAt: 123, focusRevision: 'rev' } })
-    doors.reveal('op', 'a')
-    expect(socket.sendFirstLocal).toHaveBeenLastCalledWith({ type: 'device_prepare_open', payload: { operationId: 'op', machineId: 'mac', agentId: 'a' } })
-    const none = doorsWith({ socket: false }).doors
-    expect(none.focusApp('a', 1, 'r')).toBe(false)
-    expect(none.reveal('op', 'a')).toBeUndefined()
+  it('owns no feature-specific window payload builder', () => {
+    const { doors } = doorsWith()
+    expect(doors).not.toHaveProperty('focusApp')
+    expect(doors).not.toHaveProperty('reveal')
   })
 })

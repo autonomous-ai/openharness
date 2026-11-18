@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
-import { emptyPorts, WORKSPACES_FALLBACKS, WORKSPACES_OFF, type CorePorts, type SearchPort, type ViewersPort, type WorkspacesPort } from './api.js'
+import { emptyPorts, WORKSPACES_FALLBACKS, WORKSPACES_OFF, type CoreApi, type CorePorts, type WifiPort, type SearchPort, type ViewersPort, type WorkspacesPort } from './api.js'
 import { FAIL, later, ServiceUnavailableError, testFaults, type PortFallbacks } from './serviceHost.js'
 import { createServiceHost } from '../services/inlineHost.js'
 
@@ -43,6 +43,84 @@ function startSearch(h: ReturnType<typeof host>, port: Partial<TestPort> = new F
 
 describe('hosting services so one that fails cannot take the core down', () => {
   afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
+
+  it('revokes an inline window sender before stop and never revives it for a new instance with the same service name', async () => {
+    const h = host(), sendWindow = vi.fn(() => true)
+    const core = fakeCore({ clients: { sendWindow } })
+    const captured: CoreApi[] = []
+    const seenAtStop: boolean[] = []
+    const delivery = { target: { kind: 'first' as const }, frame: { type: 'device_focus', payload: {} } }
+    const start = (owned: CoreApi, ports: CorePorts): void => {
+      captured.push(owned)
+      ports.wifi = { stop: async () => { seenAtStop.push(owned.clients.sendWindow(delivery)) } } as WifiPort
+    }
+    const fallback = { stop: later(undefined) } as PortFallbacks<WifiPort>
+    h.services.start('wifi', start, core, fallback)
+    expect(captured[0].clients.sendWindow(delivery)).toBe(true)
+    const oldPort = h.ports.wifi!
+    await oldPort.stop()
+    expect(seenAtStop).toEqual([false])
+    expect(captured[0].clients.sendWindow(delivery)).toBe(false)
+    h.services.start('wifi', start, core, fallback)
+    expect(captured[0].clients.sendWindow(delivery)).toBe(false)
+    await oldPort.stop() // A late stop from the old instance cannot revoke its replacement.
+    expect(captured[1].clients.sendWindow(delivery)).toBe(true)
+    await h.ports.wifi!.stop()
+    expect(seenAtStop).toEqual([false, false, false])
+    expect(sendWindow).toHaveBeenCalledTimes(2)
+  })
+
+  it.each(['throw', 'no-port', 'bad-answers', 'no-stop'] as const)('revokes window delivery from an incomplete inline start: %s', mode => {
+    const h = host(), sendWindow = vi.fn(() => true), core = fakeCore({ clients: { sendWindow } })
+    const delivery = { target: { kind: 'first' as const }, frame: { type: 'device_focus', payload: {} } }
+    let retained!: CoreApi
+    h.services.start('wifi', (owned, ports) => {
+      retained = owned
+      expect(owned.clients.sendWindow(delivery)).toBe(true)
+      if (mode === 'throw') throw new Error('startup failed')
+      if (mode !== 'no-port') ports.wifi = (mode === 'no-stop' ? {} : { stop: async () => {} }) as WifiPort
+      if (mode === 'bad-answers') return { undeclared: () => ({}) }
+    }, core, { stop: later(undefined) } as PortFallbacks<WifiPort>)
+    expect(retained.clients.sendWindow(delivery)).toBe(false)
+    expect(sendWindow).toHaveBeenCalledOnce()
+  })
+
+  it('revokes the inline sender before a failure stop and leaves it off during later startup', async () => {
+    const h = host({ maxFailures: 1 }), sendWindow = vi.fn(() => true), core = fakeCore({ clients: { sendWindow } })
+    const delivery = { target: { kind: 'first' as const }, frame: { type: 'device_focus', payload: {} } }
+    let retained!: CoreApi
+    const stopped = vi.fn()
+    h.services.start('wifi', (owned, ports) => {
+      retained = owned
+      ports.wifi = { stop: async () => { stopped(owned.clients.sendWindow(delivery)); throw new Error('stop failed') } } as unknown as WifiPort
+      return { fail: () => { throw new Error('handler failed') } }
+    }, core, { stop: later(undefined) } as PortFallbacks<WifiPort>, ['fail'])
+    expect(retained.clients.sendWindow(delivery)).toBe(true)
+    h.services.route('fail', {}, { local: true, owner: true }, vi.fn())
+    expect(stopped).toHaveBeenCalledExactlyOnceWith(false)
+    expect(retained.clients.sendWindow(delivery)).toBe(false)
+    h.services.start('wifi', (owned, ports) => {
+      expect(owned.clients.sendWindow(delivery)).toBe(false)
+      ports.wifi = { stop: async () => {} } as WifiPort
+    }, core, { stop: later(undefined) } as PortFallbacks<WifiPort>)
+    expect(sendWindow).toHaveBeenCalledOnce()
+    await Promise.resolve()
+  })
+
+  it('retains failure-stop revocation when no stop member is exposed to core callers', () => {
+    const h = host({ maxFailures: 1 }), core = fakeCore(), real = new FakeSearch()
+    const delivery = { target: { kind: 'all' as const }, frame: { type: 'dial_status', payload: {} } }
+    let retained!: CoreApi
+    h.services.start('search', (owned, ports) => {
+      retained = owned; ports.search = real
+      return { fail: () => { throw new Error('failed') } }
+    }, core, { touch: undefined } as PortFallbacks<SearchPort>, ['fail'])
+    expect(h.ports.search).not.toHaveProperty('stop')
+    expect(retained.clients.sendWindow(delivery)).toBe(true)
+    h.services.route('fail', {}, { local: true, owner: true }, vi.fn())
+    expect(retained.clients.sendWindow(delivery)).toBe(false)
+    expect(real.calls).toEqual(['stop'])
+  })
 
   describe('bounded inline calls', () => {
     const asker = { local: true, owner: true }

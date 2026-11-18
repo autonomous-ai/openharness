@@ -216,9 +216,7 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     },
     clients: {
       ...unasked.clients,
-      sendLocal: (frame) => tell('sendLocal', { frame }),
-      // Told, not asked: a bridge answers a window that has gone by its own deadline either way.
-      sendToWindow: (connId, frame) => { tell('sendToWindow', { connId, frame }); return core !== null },
+      sendWindow: delivery => { tell('window', { ...delivery }); return core !== null },
       hasWindow: () => view.hasWindow,
       devicesChanged: (payload) => tell('devicesChanged', payload),
       dialWatching: (watching) => {

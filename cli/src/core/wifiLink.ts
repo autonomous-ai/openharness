@@ -60,8 +60,6 @@ export function createWifiLink(deps: WifiLinkDeps) {
   /** What the service tells the core without asking (`service_notice`), by kind. */
   const notices: Record<string, (payload: Record<string, unknown>) => void> = {
     scroll: ({ phase, dy, velocity }) => { if (phase === 'down' || phase === 'move' || phase === 'up') core.wifi.scroll(phase, number(dy), number(velocity)) },
-    focusApp: ({ agentId, expiresAt, focusRevision }) => { core.wifi.focusApp(text(agentId), number(expiresAt), text(focusRevision)) },
-    reveal: ({ operationId, agentId }) => core.wifi.reveal(text(operationId), text(agentId)),
   }
 
   return {

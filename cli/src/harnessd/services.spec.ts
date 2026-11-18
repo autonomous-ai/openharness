@@ -624,9 +624,18 @@ describe('ServiceSupervisor', () => {
 
 // What the core holds for a service in its own process while it is down (core/agentLife.ts): a harness's children left
 // open, a deleted conversation left searchable, a browser's logins left with an agent that ended.
+it('declares local-window permissions only for the actual devices and Wi-Fi senders', () => {
+  expect(Object.entries(SERVICE_HOSTS).filter(([, host]) => host.windows).map(([name]) => name)).toEqual(['devices'])
+  expect(SERVICE_HOSTS.devices.windows).toEqual({
+    devices: { all: ['dial_open', 'dial_notification_read', 'dial_forked', 'dial_focus', 'dial_swarm', 'dial_scroll', 'dial_status', 'voice_route_request'],
+      connection: ['dial_selection', 'dial_visit', 'dial_form'] },
+    wifi: { first: ['device_focus', 'device_prepare_open'] },
+  })
+})
+
 describe('what the core holds of agents for the services out of its process', () => {
   it('is each process\'s `hears`, by service, for the services out of the core\'s process only', () => {
-    expect(heldAgentLife(new Set(KNOWN_SERVICES))).toEqual({ search: ['purged'], agentCleanup: ['stopped'], agentBrowser: ['purged', 'taken'] })
+    expect(heldAgentLife(new Set(KNOWN_SERVICES))).toEqual({ search: ['purged'], agentCleanup: ['stopped', 'input'], agentBrowser: ['purged', 'taken'], gateway: ['input', 'purged'] })
     expect(heldAgentLife(new Set(['search', 'viewers']))).toEqual({ search: ['purged'] })
     expect(heldAgentLife(new Set())).toEqual({})
     // A process that hears nothing holds nothing, and one names only its own services.

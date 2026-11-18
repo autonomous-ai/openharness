@@ -260,8 +260,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // a listener that failed to open, Windows) the menu must not offer a setting no click can change.
   const notifyMode = new NotifyModeStore(join(core.dataDir, NOTIFY_MODE_FILE))
   let listenerOpen = false
-  const sayStatus = (status: DialStatus): void => core.clients.sendLocal({ type: 'dial_status',
-    payload: { ...status, ...(listenerOpen ? { notify: notifyMode.get() } : {}) } })
+  const sayStatus = (status: DialStatus): void => { core.clients.sendWindow({ target: { kind: 'all' }, frame: { type: 'dial_status',
+    payload: { ...status, ...(listenerOpen ? { notify: notifyMode.get() } : {}) } } }) }
 
   // What the windows on this computer last said: the desk the dial walks and whether it is in front, and
   // which window has the person's attention for a spoken selection, a visit or a form.
@@ -297,23 +297,23 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     send: (voiceId, text, cmd) => {
       // To the windows on this computer, never the cloud: this asks the window in front of the dial to
       // open a palette, and fanning it out would pop one open on a computer nobody is sitting at.
-      core.clients.sendLocal({ type: 'voice_route_request', payload: { voiceId, text, ...(cmd ? { cmd } : {}) } })
+      core.clients.sendWindow({ target: { kind: 'all' }, frame: { type: 'voice_route_request', payload: { voiceId, text, ...(cmd ? { cmd } : {}) } } })
       log(`[route] voice → the window · ${Buffer.byteLength(text, 'utf8')} bytes${cmd ? ` · /${cmd}` : ''}`)
     },
     log: (line) => log(`[cable] ${line}`),
   })
   const windowSelection = new WindowSelection({
     focus: () => focus.voice ?? undefined,
-    send: (connId, payload) => core.clients.sendToWindow(connId, { type: 'dial_selection', payload }),
+    send: (connId, payload) => core.clients.sendWindow({ target: { kind: 'connection', connId }, frame: { type: 'dial_selection', payload } }),
   })
   const windowForm = new WindowForm({
     focus: () => focus.form ?? undefined,
-    send: (connId, payload) => core.clients.sendToWindow(connId, { type: 'dial_form', payload }),
+    send: (connId, payload) => core.clients.sendWindow({ target: { kind: 'connection', connId }, frame: { type: 'dial_form', payload } }),
     log: (line) => log(`[cable] ${line}`),
   })
   const windowVisit = new WindowVisit({
     focus: () => focus.voice ?? undefined,
-    send: (connId, payload) => core.clients.sendToWindow(connId, { type: 'dial_visit', payload }),
+    send: (connId, payload) => core.clients.sendWindow({ target: { kind: 'connection', connId }, frame: { type: 'dial_visit', payload } }),
   })
 
   // ── the dial on the USB cable ──────────────────────────────────────────────────────────────────────
@@ -694,7 +694,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       route = terminal ? { terminal, lines: createScrollLines() } : 'windows'
     }
     stroke = phase === 'up' ? undefined : route
-    if (route === 'windows') core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity } })
+    if (route === 'windows') core.clients.sendWindow({ target: { kind: 'all' }, frame: { type: 'dial_scroll', payload: { phase, dy, velocity } } })
     // Whole lines, and an up's velocity is not played: the scroll stops where the finger stops. A window that went takes
     // nothing more of the stroke, which never turns to Harness's windows midway.
     else vscode.scroll(route.terminal, route.lines.take(phase, dy))
@@ -753,7 +753,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // when the dial gave one ('question'): the window then brings the agent forward rather than opening a
     // tab, and an older window that does not know the field opens one as before.
     opened: (machineId, agentId, reason) =>
-      core.clients.sendLocal({ type: 'dial_open', payload: { machineId, agentId, ...(reason ? { reason } : {}) } }),
+      core.clients.sendWindow({ target: { kind: 'all' }, frame: { type: 'dial_open', payload: { machineId, agentId, ...(reason ? { reason } : {}) } } }),
     // A person's tap on an agent, a notice's "In <app>" among them, brings them to it: its notice goes. Opening the alert to
     // read it does not.
     tapped: (agentId) => endNotice(agentId),
@@ -766,16 +766,16 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
         ...[...shown].map(([agentId, { line }]) => ({ agentId, machineId, question: true, text: line }))]
     },
     notificationRead: (machineId, agentId, readToken) =>
-      core.clients.sendLocal({ type: 'dial_notification_read', payload: { machineId, agentId, readToken } }),
-    forked: (machineId, agentId, sourceAgentId) => core.clients.sendLocal({ type: 'dial_forked', payload: { machineId, agentId, sourceAgentId } }),
+      core.clients.sendWindow({ target: { kind: 'all' }, frame: { type: 'dial_notification_read', payload: { machineId, agentId, readToken } } }),
+    forked: (machineId, agentId, sourceAgentId) => core.clients.sendWindow({ target: { kind: 'all' }, frame: { type: 'dial_forked', payload: { machineId, agentId, sourceAgentId } } }),
     // The dial's Fork: the same path the window's `agent_fork` takes, then `forked` above lands on it.
     forkAgent: (agentId) => core.agents.fork(agentId),
-    focused: (machineId, agentId) => core.clients.sendLocal({ type: 'dial_focus', payload: { machineId, agentId } }),
+    focused: (machineId, agentId) => core.clients.sendWindow({ target: { kind: 'all' }, frame: { type: 'dial_focus', payload: { machineId, agentId } } }),
     // The outcome only: never the agent, its session or its terminal.
     swiped: (outcome) => log(`[device] swipe · ${outcome}`),
     turned: noteMove,
     localFollowed: (cause, outcome) => log(FOLLOWED[cause === 'attach' ? attachAsk : cause][outcome]),
-    swarmSelected: (swarmId) => core.clients.sendLocal({ type: 'dial_swarm', payload: { swarmId } }),
+    swarmSelected: (swarmId) => core.clients.sendWindow({ target: { kind: 'all' }, frame: { type: 'dial_swarm', payload: { swarmId } } }),
     // Guarded as a notice into the dial is: a throw on the scroll path (a window's stream) is logged, never the session's.
     scrolled: (phase, dy, velocity) => part.call('dial', () => routeScroll(phase, dy, velocity)),
     // Gestures stay at this desk. The device inventory and its settings also reach the owner's other

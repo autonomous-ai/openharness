@@ -1,3 +1,4 @@
+import type { LocalWindowPermissions } from '../harnessd/services.js'
 import type { ClientStreamQuota } from '../lib/clientStreamQueue.js'
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
 import type { PreparedHandoff, HandoffPermit, HandoffOutcome } from '../lib/handoffAuthority.js'
@@ -346,12 +347,9 @@ export interface CoreApi {
     /** A frame for one of Share's observers, sealed by Share itself, to the relay through the gateway; false
      *  when it could not be handed over. */
     observer(connId: string, type: string, payload: Record<string, unknown>): boolean
-    /** A frame from the devices for every window on this computer, never the cloud: what a hand at this
-     *  desk did. Only `DEVICE_WINDOW_FRAMES`; the core drops any other. */
-    sendLocal(frame: DeviceWindowFrame): void
-    /** A window bridge's ask, to one window on this computer; false when it is gone. Only
-     *  `DEVICE_BRIDGE_FRAMES`. */
-    sendToWindow(connId: string, frame: DeviceBridgeFrame): boolean
+    /** A declared frame to local windows. The owning service selects all, first or one physical connection.
+     *  Acceptance is a handoff, not the app's acknowledgement; unscoped APIs cannot send. */
+    sendWindow(delivery: LocalWindowDelivery): boolean
     /** Whether a window on this computer is attached. */
     hasWindow(): boolean
     /** The devices on this computer changed (`harness_devices_changed`): the windows and the owner's apps
@@ -389,10 +387,6 @@ export interface CoreApi {
     stepFocus(direction: 'next' | 'previous', currentAgentId?: string): Promise<{ machineId: string; agentId: string } | 'no_agents' | 'no_app'>
     /** A stroke on the device's glass for the window's terminal; false without a window. */
     scroll(phase: 'down' | 'move' | 'up', dy: number, velocity: number): boolean
-    /** Ask the window to select an agent (`device_focus`); false without a window. */
-    focusApp(agentId: string, expiresAt: number, focusRevision: string): boolean
-    /** Ask the window to open the agent a Store preparation made (`device_prepare_open`). */
-    reveal(operationId: string, agentId: string): void
   }
 }
 
@@ -1383,18 +1377,33 @@ export type ForkResult = { ok: true; agentId: string } | { ok: false; error: str
  * session.
  */
 
-/** The frames the devices may send every window on this computer (`clients.sendLocal`): what a hand at
- *  this desk did on a dial, and a spoken task offered to the window's palette. Never to the cloud. */
-export const DEVICE_WINDOW_FRAMES = [
-  'dial_open', 'dial_notification_read', 'dial_forked', 'dial_focus', 'dial_swarm', 'dial_scroll', 'dial_status',
-  'voice_route_request',
-] as const
-export type DeviceWindowFrame = { type: (typeof DEVICE_WINDOW_FRAMES)[number]; payload: Record<string, unknown> }
+export type LocalWindowTarget = { kind: 'all' } | { kind: 'first' } | { kind: 'connection'; connId: string }
+export interface LocalWindowDelivery {
+  target: LocalWindowTarget
+  frame: { type: string; payload: Record<string, unknown> }
+}
+export const LOCAL_WINDOW_OFF = (_delivery: LocalWindowDelivery): boolean => false
 
-/** The frames the devices may send one window (`clients.sendToWindow`): a window bridge's ask, to the
- *  window that has the person's attention. */
-export const DEVICE_BRIDGE_FRAMES = ['dial_selection', 'dial_visit', 'dial_form'] as const
-export type DeviceBridgeFrame = { type: (typeof DEVICE_BRIDGE_FRAMES)[number]; payload: Record<string, unknown> }
+/** Permission comes from the authenticated service's declaration, never the notice payload. */
+export function sendLocalWindow(delivery: unknown, permissions: LocalWindowPermissions | undefined,
+  send: (delivery: LocalWindowDelivery) => boolean, log: (line: string) => void = line => console.warn(line)): boolean {
+  const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object'
+    && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)
+  if (record(delivery) && Object.hasOwn(delivery, 'target') && Object.hasOwn(delivery, 'frame')
+    && record(delivery.target) && record(delivery.frame) && Object.hasOwn(delivery.frame, 'payload') && record(delivery.frame.payload)) {
+    const target = delivery.target, frame = delivery.frame
+    const kind = target.kind
+    if (Object.hasOwn(target, 'kind') && Object.hasOwn(frame, 'type') && (kind === 'all' || kind === 'first' || kind === 'connection')
+      && typeof frame.type === 'string'
+      && (kind === 'connection' ? Object.hasOwn(target, 'connId') && typeof target.connId === 'string' && target.connId.length > 0 && target.connId.length <= 256
+        && Object.keys(target).length === 2 : Object.keys(target).length === 1)
+      && permissions && Object.hasOwn(permissions, kind) && permissions[kind]?.includes(frame.type)) {
+      return send(delivery as unknown as LocalWindowDelivery)
+    }
+  }
+  log('[services] WINDOW_FRAME_REFUSED')
+  return false
+}
 
 /** Which window has the person's attention, as the local socket last heard (`app_focus` with a focus
  *  revision): where a spoken selection or visit goes (`voice`), and a New Harness form (`form`). */
@@ -1518,7 +1527,7 @@ export const WIFI_OFF: CoreApi['wifi'] = {
   view: async () => ({ agents: [], store: [], hasWindow: false }),
   stop: async () => false,
   create: async () => ({ ok: false, error: 'UNSUPPORTED' }),
-  stepFocus: async () => 'no_app', scroll: () => false, focusApp: () => false, reveal: () => {},
+  stepFocus: async () => 'no_app', scroll: () => false,
 }
 
 /**
@@ -2099,10 +2108,6 @@ export interface CoreApiDeps {
   signedIn: CoreApi['account']['signedIn']
   environment: CoreApi['account']['environment']
   machines: CoreApi['account']['machines']
-  /** Where the devices' frames go: every window on this computer, or one. Only the devices' own frame
-   *  types reach these (`createCoreApi`). */
-  sendLocal(frame: { type: string; payload: Record<string, unknown> }): void
-  sendToWindow(connId: string, frame: { type: string; payload: Record<string, unknown> }): boolean
   hasWindow: CoreApi['clients']['hasWindow']
   devicesChanged: CoreApi['clients']['devicesChanged']
   dialWatching: CoreApi['clients']['dialWatching']
@@ -2128,14 +2133,9 @@ export function createCoreApi({
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, tabKey, tabRelay, connectorSync, observer, privateGridName, machineName, backend, onNotice,
   runtimeProfile, setRuntime, fork, create, dsh, facts, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, streamFrame, streamBytes, machine, activityText, activitySnapshot, activity, summaries,
   closeAgent, activityAt, follow, panePid,
-  signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, cloud, cloudRows, lastTurn, turnCard, turnSummary,
+  signedIn, environment, machines, hasWindow, devicesChanged, dialWatching, wifi, cloud, cloudRows, lastTurn, turnCard, turnSummary,
   count, hachiGoalDone, log = (line) => console.warn(line),
 }: CoreApiDeps): CoreApi {
-  // The devices reach the windows through these alone, and only with their own frames: a devices process
-  // speaks to the core as a service, and what it may put in front of a person is decided here, not there.
-  const windowFrames = new Set<string>(DEVICE_WINDOW_FRAMES)
-  const bridgeFrames = new Set<string>(DEVICE_BRIDGE_FRAMES)
-  const refused = (type: unknown): void => log(`[services] the devices sent a window ${String(type).slice(0, 40)}, which is not theirs to send`)
   // The recaps reach the devices and the apps through their own two doors, and only with their own frames.
   const refusedRecap = (type: unknown): void => log(`[services] the recaps sent ${String(type).slice(0, 40)}, which is not theirs to send`)
   // A goals process speaks to the core as a service: a goal's notice goes to every window of the account only for the
@@ -2208,15 +2208,7 @@ export function createCoreApi({
       viewerChanged, gridNamed, gridModelsChanged, dshInstallStatus, windows, observer, hasWindow, devicesChanged, dialWatching,
       streamFrame: streamFrame ?? (() => false),
       ...(streamBytes ? { streamBytes } : {}),
-      sendLocal: (frame) => {
-        if (windowFrames.has(frame?.type)) sendLocal(frame)
-        else refused(frame?.type)
-      },
-      sendToWindow: (connId, frame) => {
-        if (bridgeFrames.has(frame?.type)) return sendToWindow(connId, frame)
-        refused(frame?.type)
-        return false
-      },
+      sendWindow: LOCAL_WINDOW_OFF,
       turnCard: (frame) => { if (TURN_CARD_TYPES.has(frame?.type)) turnCard(frame); else refusedRecap(frame?.type) },
       turnSummary: (frame) => { if (TURN_SUMMARY_TYPES.has(frame?.type)) turnSummary(frame); else refusedRecap(frame?.type) },
       ...(goalDone ? { hachiGoalDone: goalDone } : {}),

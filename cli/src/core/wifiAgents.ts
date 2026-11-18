@@ -72,7 +72,7 @@ export function wifiCreate(deps: Pick<WifiAgentsDeps, 'registry' | 'machineId' |
 export interface WifiDoorsDeps extends Pick<WifiAgentsDeps, 'registry' | 'machineId' | 'displayName' | 'running' | 'packageId'> {
   registry: WifiAgentsDeps['registry'] & Pick<typeof registry, 'resolve'>
   /** The socket, once it exists: the windows on this computer, and how an agent is created. */
-  socket(): Pick<BackendSocket, 'hasLocalClient' | 'sendFirstLocal' | 'onCreateAgent'> | null
+  socket(): Pick<BackendSocket, 'hasLocalClient' | 'onCreateAgent'> | null
   /** Stop a live agent's turn, as the stop button does. */
   stop(agentId: string): Promise<boolean>
   /** The dials' walk along the desk and their stroke, which the device borrows. */
@@ -100,8 +100,6 @@ export function wifiDoors(deps: WifiDoorsDeps): CoreApi['wifi'] {
       deps.devices()?.scroll(phase, dy, velocity)
       return true
     },
-    focusApp: (agentId, expiresAt, focusRevision) =>
-      !!socket()?.sendFirstLocal({ type: 'device_focus', payload: { machineId: machineId(), agentId, expiresAt, focusRevision } }),
-    reveal: (operationId, agentId) => { socket()?.sendFirstLocal({ type: 'device_prepare_open', payload: { operationId, machineId: machineId(), agentId } }) },
+
   }
 }

@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createServiceLinks, HELD_MAX, ON_DEMAND_START_MS, SERVICE_REQUESTS_MAX, type ServiceFrame } from './serviceLinks.js'
+import { sendLocalWindow } from './api.js'
+import { SERVICE_HOSTS } from '../harnessd/services.js'
 import { HANDOFF_DEADLINE_MS } from '../lib/handoffAuthority.js'
 
 const TOKEN = 'a'.repeat(48)
@@ -25,6 +27,38 @@ describe('service links', () => {
 
   beforeEach(() => { vi.useFakeTimers(); ids = 0; lines = [] })
   afterEach(() => vi.useRealTimers())
+
+  it('binds window delivery to the authenticated service and current connection without replay', () => {
+    const send = vi.fn(() => true), refused = vi.fn()
+    const declarations = SERVICE_HOSTS.devices.windows!
+    const links = make({ owned: { wifi: [], devices: [], search: [] }, notice: (service, payload) => {
+      if (payload.kind === 'window') sendLocalWindow(payload, declarations[service], send, refused)
+    } })
+    const focus = { type: 'service_notice', payload: { kind: 'window', service: 'devices',
+      target: { kind: 'first' }, frame: { type: 'device_focus', payload: { agentId: 'a' } } } }
+    const old = links.accept('wifi', TOKEN, sink(), vi.fn())!
+    old.receive(focus)
+    expect(send).toHaveBeenCalledOnce()
+    const current = links.accept('wifi', TOKEN, sink(), vi.fn())!
+    old.receive(focus)
+    old.closed()
+    expect(send).toHaveBeenCalledOnce()
+    current.receive(focus)
+    expect(send).toHaveBeenCalledTimes(2)
+    const devices = links.accept('devices', TOKEN, sink(), vi.fn())!
+    devices.receive(focus)
+    const search = links.accept('search', TOKEN, sink(), vi.fn())!
+    search.receive(focus)
+    expect(refused).toHaveBeenCalledTimes(2)
+    expect(send).toHaveBeenCalledTimes(2)
+    current.closed()
+    current.receive(focus)
+    const again = links.accept('wifi', TOKEN, sink(), vi.fn())!
+    expect(send).toHaveBeenCalledTimes(2)
+    again.receive(focus)
+    expect(send).toHaveBeenCalledTimes(3)
+    again.closed(); devices.closed(); search.closed()
+  })
 
   it('a query can recheck its exact connection after asynchronous dispatch', async () => {
     let release!: () => void

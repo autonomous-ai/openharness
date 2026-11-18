@@ -161,7 +161,7 @@ describe('the core\'s view, read in line by the dial', () => {
     const desk: DeviceDesk = {
       stepFocus: async (_direction, _agent, current) => {
         await new Promise<void>(resolve => { release = resolve })
-        if (current()) { effects.push('focus'); f.api().clients.sendLocal({ type: 'dial_focus', payload: {} }) }
+        if (current()) { effects.push('focus'); f.api().clients.sendWindow({ target: { kind: 'all' }, frame: { type: 'dial_focus', payload: {} } }) }
         return { machineId: 'machine-1', agentId: 'a1' }
       },
       scroll: (_phase, _dy, _velocity, current) => { if (current()) effects.push('scroll') },
@@ -340,8 +340,8 @@ describe('the core\'s doors, across the link', () => {
     api.turns.send('a1', 'hello')
     api.turns.stop('a1')
     api.questions.answer('a1', 'r1', { q: 'Coffee' })
-    api.clients.sendLocal({ type: 'dial_focus', payload: {} })
-    expect(api.clients.sendToWindow('w1', { type: 'dial_form', payload: {} })).toBe(true)
+    api.clients.sendWindow({ target: { kind: 'all' }, frame: { type: 'dial_focus', payload: {} } })
+    expect(api.clients.sendWindow({ target: { kind: 'connection', connId: 'w1' }, frame: { type: 'dial_form', payload: {} } })).toBe(true)
     api.clients.devicesChanged({ revision: 1 })
     api.clients.dialWatching(true)
     // What an experiment acts on the core through, the devices never do.
@@ -352,8 +352,8 @@ describe('the core\'s doors, across the link', () => {
       ['turn', { agentId: 'a1', text: 'hello' }],
       ['stop', { agentId: 'a1' }],
       ['answer', { agentId: 'a1', requestId: 'r1', answers: { q: 'Coffee' } }],
-      ['sendLocal', { frame: { type: 'dial_focus', payload: {} } }],
-      ['sendToWindow', { connId: 'w1', frame: { type: 'dial_form', payload: {} } }],
+      ['window', { target: { kind: 'all' }, frame: { type: 'dial_focus', payload: {} } }],
+      ['window', { target: { kind: 'connection', connId: 'w1' }, frame: { type: 'dial_form', payload: {} } }],
       ['devicesChanged', { revision: 1 }],
       ['dialWatching', { watching: true }],
     ])
@@ -363,7 +363,7 @@ describe('the core\'s doors, across the link', () => {
     // Gone from the core: told nothing, and a bridge's ask says it did not go.
     f.options().onDisconnected!()
     api.turns.send('a1', 'lost')
-    expect(api.clients.sendToWindow('w1', { type: 'dial_form', payload: {} })).toBe(false)
+    expect(api.clients.sendWindow({ target: { kind: 'connection', connId: 'w1' }, frame: { type: 'dial_form', payload: {} } })).toBe(false)
     expect(f.notices).toHaveLength(8)
   })
 
