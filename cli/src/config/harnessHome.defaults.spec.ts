@@ -134,7 +134,8 @@ describe('the default folders, as today', () => {
     const child = run(`process.argv[2] = 'status'; import(${JSON.stringify(source('./startHome.ts'))})`, { ADAPTER_DATA_DIR: dataDir })
     expect(child.status, child.stderr).toBe(0)
     const cli = process.platform === 'linux' ? join(child.home, '.local', 'share', 'harness', 'cli') : join(child.home, '.harness', 'cli')
+    const outside = process.platform === 'linux' ? '~/.harness, ~/.local/share/harness and ~/.local/state/harness' : '~/.harness'
     expect(child.stderr).toBe(`harness: HOME is ${child.home}, not this account's home, so ignoring ADAPTER_DATA_DIR=${dataDir}; `
-      + `using ${cli}/data. Set ADAPTER_DATA_DIR to a folder outside ~/.harness to choose one.\n`)
+      + `using ${cli}/data. Set ADAPTER_DATA_DIR to a folder outside ${outside} to choose one.\n`)
   }, 70_000)
 })
