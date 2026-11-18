@@ -1,11 +1,12 @@
 // The dial's setup in the devices' own process: the skill in each home (dialHomeSetup.ts), then Claude Code's plugin
 // (dialPluginSetup.ts), at the service's start, at each attach and at each open scan. The plugin reads from the homes'
-// record whether a dial attached here once, the version that last set it up and the Orca homes it turned on, so the
-// record has one writer.
+// record whether a dial attached here once, the version that last set it up and the Orca homes it turned on, and
+// Harness's VS Code extension (vscodeExtensionSetup.ts) reads and saves its own version through it too, so the record
+// has one writer.
 import type { ClaudeRun } from '../devices/claudePlugin.js'
 import { readPluginHomes } from '../devices/dialSkillFiles.js'
 import type { RolloutOwner } from './codexRolloutHome.js'
-import { createDialHomeSetup, type DialHomeSetupDeps } from './dialHomeSetup.js'
+import { createDialHomeSetup, type DialHomeSetup, type DialHomeSetupDeps } from './dialHomeSetup.js'
 import { createDialPluginSetup } from './dialPluginSetup.js'
 
 export interface DialSetupDeps extends DialHomeSetupDeps {
@@ -21,6 +22,8 @@ export interface DialSetup {
   started(): Promise<void>
   attached(): Promise<void>
   scanned(owners: Iterable<RolloutOwner>): Promise<void>
+  vscode: DialHomeSetup['vscode']
+  recordVscode: DialHomeSetup['recordVscode']
 }
 
 export function createDialSetup(deps: DialSetupDeps): DialSetup {
@@ -53,5 +56,7 @@ export function createDialSetup(deps: DialSetupDeps): DialSetup {
     started: () => moment(() => homes.started()),
     attached: () => moment(() => homes.attached(), true),
     scanned: (owners) => moment(() => homes.scanned(owners)),
+    vscode: () => homes.vscode(),
+    recordVscode: (version) => homes.recordVscode(version),
   }
 }

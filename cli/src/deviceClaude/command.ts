@@ -10,9 +10,14 @@
  * another (in an Orca terminal), all sharing the command's `plugins/`: there the plugin is only turned on or off.
  * `disable` turns those off first and never uninstalls there: an uninstall takes the files every home names, and another
  * home's entry would then stay on with nothing left to turn off (check 8).
- * `harness device orca link` is Orca's plugin's word, never typed either: whether the daemon is up and where the
- * devices' socket is, so the plugin builds no path. `harness device notify` is an agent's, from the dial skill (devices/notice.ts). This
- * runs only in the `harness` command's own process; nothing the core or a service loads imports this folder.
+ * `harness device orca link` and `harness device vscode link` are Orca's plugin's word and Harness's VS Code extension's,
+ * never typed either: whether the daemon is up and where the devices' socket is, so neither builds a path.
+ * `harness device vscode enable|disable` are the person's way to turn Harness's VS Code extension back on or off, which
+ * the devices service installs by itself once a dial has attached here (cable/vscodeExtensionSetup.ts): `disable` marks
+ * it removed in dial-skill.json, which the service then leaves alone, before VS Code's own uninstall, and `enable` clears
+ * the mark before its install (devices/vscodeExtension.ts); `status` is support's. `harness device notify` is an agent's,
+ * from the dial skill (devices/notice.ts). This runs only in the `harness` command's own process; nothing the core or a
+ * service loads imports this folder.
  */
 import { mkdirSync, realpathSync } from 'node:fs'
 import { connect, type Socket } from 'node:net'
@@ -22,18 +27,22 @@ import { claudePluginState, ownDirectory, removeSkill, skillsFolderOf, skillWant
 import { listable, MAX_HOMES, readRemoved, readSetup, readWritten, writePluginHomes, writeRemoved, type DialEngine } from '../devices/dialSkillFiles.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
 import { NOTICE_USAGE, runNotice } from '../devices/notice.js'
+import { vscodeDisable, vscodeEnable, vscodeStatus, type VscodeExtensionDeps } from '../devices/vscodeExtension.js'
 import { localSocketRoute, socketIsPrivate } from '../lib/localTransport.js'
 import { daemonPost, runAsked } from './asked.js'
 import { claudePluginOn, claudeSettingsPath } from './plugin.js'
 
-/** `asked`, `link` and `orca link` are left out: they are the plugins', and typed by hand they only wait on stdin or print a path. */
-export const DEVICE_USAGE = `Harness device (with a dial plugged in, Claude Code and Codex are set up to ring it; disable takes that away, enable brings it back):
+/** `asked`, `link`, `orca link` and `vscode link` are left out: they are the plugins', and typed by hand they only wait on
+ *  stdin or print a path. `vscode status` is too: VS Code's Extensions view shows whether the extension is on. */
+export const DEVICE_USAGE = `Harness device (with a dial plugged in, Claude Code and Codex are set up to ring it, and VS Code to follow it; disable takes that away, enable brings it back):
   harness device claude status [--json]  whether the dial is on for Claude Code (its harness-device plugin on, and not removed), and its version
   harness device claude enable           set Claude Code up again: the plugin and the dial skill (Claude Code 2.1.287 or later), in each Orca account too
   harness device claude disable          remove the plugin and the dial skill, in each Orca account too; Harness leaves them removed
   harness device codex status [--json]   whether the dial is on for Codex
   harness device codex enable            set Codex up again: the dial skill in its homes
   harness device codex disable           remove the dial skill Harness wrote; Harness leaves it removed
+  harness device vscode enable           set VS Code up again: Harness's extension in it
+  harness device vscode disable          remove Harness's extension; Harness leaves it removed
   ${NOTICE_USAGE}`
 
 export interface DeviceDeps {
@@ -54,6 +63,8 @@ export interface DeviceDeps {
   codexHome: string
   /** Whether Codex is on this computer: looked for only by `codex status` and `codex enable`. */
   codex(): boolean
+  /** What VS Code's words read and run: asked for only by `vscode status`, `enable` and `disable`. */
+  vscode(): VscodeExtensionDeps
   /** The command's own environment and folder: `notify` reads its caller from them. */
   env: NodeJS.ProcessEnv
   cwd: string
@@ -66,8 +77,9 @@ export async function runDeviceCommand(argv: string[], deps: DeviceDeps): Promis
   if (argv[0] === 'notify') return runNotice(argv.slice(1), deps)
   const words = argv.filter((arg) => !arg.startsWith('-'))
   const json = argv.includes('--json')
-  if (words.length === 2 && words[0] === 'orca' && words[1] === 'link') return orcaLink(deps)
+  if (words.length === 2 && (words[0] === 'orca' || words[0] === 'vscode') && words[1] === 'link') return devicesLink(deps)
   if (words.length === 2 && words[0] === 'codex') return codexCommand(words[1], json, deps)
+  if (words.length === 2 && words[0] === 'vscode') return vscodeCommand(words[1], json, deps)
   const verb = words.length === 2 && words[0] === 'claude' ? words[1] : null
   switch (verb) {
     case 'status': {
@@ -144,6 +156,40 @@ async function codexCommand(verb: string, json: boolean, deps: DeviceDeps): Prom
     case 'disable':
       // Removing the skill looks for no Codex: it may be gone already.
       return turnOff('codex', deps.codexHome, deps)
+    default:
+      deps.err(DEVICE_USAGE)
+      return 1
+  }
+}
+
+/** Each answer of VS Code's is one JSON line on stdout, failures too, with the word that says why. The removal's mark is
+ *  Harness's own setting: one not saved is said on stderr, as the engines' words say it. */
+async function vscodeCommand(verb: string, json: boolean, deps: DeviceDeps): Promise<number> {
+  switch (verb) {
+    case 'status': {
+      const status = vscodeStatus(deps.vscode())
+      deps.out(json ? JSON.stringify(status) : JSON.stringify(status, null, 2))
+      return 0
+    }
+    case 'enable': {
+      // Cleared first: the devices service brings it current from then on, and a failed save installs nothing.
+      if (writeRemoved(deps.dataDir, 'vscode', false) !== undefined) {
+        deps.err(SAVE_FAILED)
+        return 1
+      }
+      const result = await vscodeEnable(deps.vscode())
+      deps.out(JSON.stringify(result))
+      return result.vscode === 'on' ? 0 : 1
+    }
+    case 'disable': {
+      // Marked first, so a pass of the devices service that installs meanwhile takes it out again; the uninstall runs
+      // whatever the save did.
+      const saved = writeRemoved(deps.dataDir, 'vscode', true) === undefined
+      const result = await vscodeDisable(deps.vscode())
+      deps.out(JSON.stringify(result))
+      if (!saved) deps.err(SAVE_FAILED)
+      return 'error' in result || !saved ? 1 : 0
+    }
     default:
       deps.err(DEVICE_USAGE)
       return 1
@@ -339,11 +385,11 @@ async function turnOff(engine: DialEngine, home: string, deps: DeviceDeps, plugi
 }
 
 /**
- * Orca's plugin asks this before each pass. `daemon` connects only to a socket that is this account's own, since a socket
+ * Orca's plugin and the VS Code extension ask this before each pass. `daemon` connects only to a socket that is this account's own, since a socket
  * a crashed daemon left behind is still there and still private. `devicesReady` does not connect: a connection there
  * counts against that listener's own, and the plugin's open finds a stale socket itself.
  */
-async function orcaLink(deps: DeviceDeps): Promise<number> {
+async function devicesLink(deps: DeviceDeps): Promise<number> {
   const daemonSocket = localSocketRoute(deps.dataDir, deps.port, deps.platform)
   const daemon = daemonSocket !== null && socketIsPrivate(daemonSocket) && await takesConnect(daemonSocket)
   const devicesSocket = devicesListenerPath(deps.dataDir, deps.platform)

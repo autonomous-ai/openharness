@@ -1416,7 +1416,7 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
     { ...orca, type: (pane, text) => fake.orcaSend(pane.id, text), show: (pane) => fake.orcaSwitch(pane.id) },
     { ...claude, show: (pane, agentId) => fake.claudeShow(agentId, pane.id) },
     createCodexAppAdapter({ ...deps, inFront: () => fake.codexInFront(), log: () => {} }),
-    createVscodeAdapter({ ...deps, inFront: () => true }),
+    createVscodeAdapter({ ...deps, inFront: () => true, terminals: { terminalOf: () => undefined, show: () => false } }),
     createTabsAdapter({ isOpen: () => fake.tabsOpen(), select: (tab, raise) => fake.tabSelect(tab.app, tab.tty, raise) === 'ok' }),
   ]
   return { actions: { ...fake, adapters }, ready, ran }
@@ -2450,6 +2450,64 @@ describe('ObservedSource and the Codex app', () => {
   })
 })
 
+// A session the scan found has had no hook to name its caller or its app (VS Code's terminal pane, vscode.ts).
+describe('ObservedSource and a session the scan found', () => {
+  /** An adapter that places every agent by its process, and the pids it was asked about. */
+  const byPid = (bundle?: string) => {
+    const pids: (number | undefined)[] = []
+    const adapter: HostAdapter = {
+      id: 'pid', tap: 'before', ...(bundle ? { bundle } : {}),
+      paneOf: (place: Place): Pane | undefined => {
+        pids.push(place.pid)
+        return place.pid === undefined ? undefined : { adapter: 'pid', id: `p${place.pid}` }
+      },
+      canFocus: () => true,
+      focus: async () => true,
+    }
+    const { actions } = fakeActions()
+    return { actions: { ...actions, adapters: [adapter] }, pids }
+  }
+  /** A session only the open scan found, its process 100. */
+  const scanned = async (bundle?: string) => {
+    const { actions, pids } = byPid(bundle)
+    const t = setup({ actions })
+    t.open.set('s1', 'terminal')
+    t.owners.set('s1', { pid: 100, engine: 'claude' })
+    t.externals.set('s1', { cwd: '/work/proj' })
+    await t.src.scanOpen()
+    return { ...t, actions, pids }
+  }
+
+  it('a session the scan found is placed by its own pid until a hook names its caller', async () => {
+    const { src, ev, pids } = await scanned()
+    expect(pids.at(-1)).toBe(100)
+    src.ingest(ev('turn-start', { callerPid: 222 }))
+    expect(pids.at(-1)).toBe(222)
+  })
+
+  it('a tap on a session the scan found takes its pane\'s adapter\'s bundle', async () => {
+    const { src, actions } = await scanned('com.example.app')
+    const agent = src.list()[0]
+    expect(await src.focus(agent)).toBe(true)
+    expect(actions.open.mock.calls).toEqual([[agent.id, { bundle: 'com.example.app', pane: { adapter: 'pid', id: 'p100' } }]])
+  })
+
+  it('an entry\'s own bundle wins over its pane\'s adapter\'s', async () => {
+    const { src, ev, actions } = await scanned('com.example.app')
+    src.ingest(ev('turn-start', { callerPid: 222, hostHints: { TERM_PROGRAM: 'ghostty' } }))
+    const agent = src.list()[0]
+    expect(await src.focus(agent)).toBe(true)
+    expect(actions.open.mock.calls).toEqual([[agent.id, { bundle: 'com.mitchellh.ghostty', pane: { adapter: 'pid', id: 'p222' } }]])
+  })
+
+  it('a pane whose adapter declares no bundle adds none', async () => {
+    const { src, actions } = await scanned()
+    const agent = src.list()[0]
+    expect(await src.focus(agent)).toBe(true)
+    expect(actions.open.mock.calls).toEqual([[agent.id, { pane: { adapter: 'pid', id: 'p100' } }]])
+  })
+})
+
 // The Codex app's own Codex runs hooks whose hints name no listed app (Diego's first try, 2026-11-16).
 describe('ObservedSource and the app a hook\'s caller runs in', () => {
   const inApp = { engine: 'codex' as const, sessionId: THREAD }
@@ -2857,7 +2915,7 @@ describe('ObservedSource panes', () => {
     // It cannot bring its pane forward here: Orca's terminal is the first that can.
     near.canFocus.mockReturnValue(false)
     expect(await tap.src.focus(tap.agent)).toBe(true)
-    expect(tap.actions.open.mock.calls[1]).toEqual([tap.agent.id, { pane: { adapter: 'orca', id: HANDLE } }])
+    expect(tap.actions.open.mock.calls[1]).toEqual([tap.agent.id, { bundle: 'com.stablyai.orca', pane: { adapter: 'orca', id: HANDLE } }])
     expect(near.focus).not.toHaveBeenCalled()
 
     // It comes after its app: Orca's terminal is the tap's pane, and its own is raised once the app came.
@@ -2865,7 +2923,7 @@ describe('ObservedSource panes', () => {
     let opened!: (yes: boolean) => void
     const raised = first(late, both, { open: vi.fn(() => new Promise<boolean>((resolve) => { opened = resolve })) })
     const raising = raised.src.focus(raised.agent)
-    expect(raised.actions.open.mock.calls).toEqual([[raised.agent.id, { pane: { adapter: 'orca', id: HANDLE } }]])
+    expect(raised.actions.open.mock.calls).toEqual([[raised.agent.id, { bundle: 'com.stablyai.orca', pane: { adapter: 'orca', id: HANDLE } }]])
     expect(late.focus).not.toHaveBeenCalled()
     opened(true)
     expect(await raising).toBe(true)

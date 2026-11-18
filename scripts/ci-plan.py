@@ -58,6 +58,8 @@ ALSO = {"cli/src/lib/ptyHost/": "pty", "cli/src/lib/ptyHostBackend": "pty",
 ALSO.update({"scripts/test-desktop.py": "desktop", "scripts/desktop-test-durations.json": "desktop"})
 # The desktop test helper the phone's tests import (session_work_page_test.dart).
 ALSO.update({"desktop/test/support/real_fonts.dart": "mobile"})
+# The VS Code extension: the CLI's build inlines the folder and the CLI's vitest runs its tests.
+ALSO.update({"plugins/harness-device-vscode/": "cli"})
 # Narrower directories that add a suite on top of their component's (the ESP32-P4 build and golden screens).
 SUBCOMPONENTS = {"devices/harness-pro/": "pro"}
 

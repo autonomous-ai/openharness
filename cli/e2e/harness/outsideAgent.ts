@@ -47,13 +47,14 @@ const FAKE_APPS = {
 export type FakeApp = keyof typeof FAKE_APPS
 
 /**
- * What the fake app runs: the tab's pseudo-terminal on its own stdio, gone when it goes. Node 24 names its main thread
- * MainThread, which on Linux is the process's task name, the `comm` the scan reads: the fake takes back the name it was
- * started under, as the app it fakes keeps its own. macOS's `comm` is the path it was started from, which no name moves.
+ * What the fake app runs: the command it is given (the tab's pseudo-terminal, or a shell that runs it) on its own stdio,
+ * gone when it goes. Node 24 names its main thread MainThread, which on Linux is the process's task name, the `comm` the
+ * scan reads: the fake takes back the name it was started under, as the app it fakes keeps its own. macOS's `comm` is the
+ * path it was started from, which no name moves.
  */
 const UNDER_APP = `
 if (process.platform === 'linux') process.title = require('node:path').basename(process.argv0)
-const tab = require('node:child_process').spawn('python3', ['-c', ...process.argv.slice(1)], { stdio: 'inherit' })
+const tab = require('node:child_process').spawn(process.argv[1], process.argv.slice(2), { stdio: 'inherit' })
 tab.on('exit', (code) => process.exit(code ?? 1))
 `
 
@@ -82,18 +83,23 @@ function fakeApp(d: IsolatedDaemon, app: FakeApp): string {
 export class Outside {
   /** [home]: the config folder it was started in, when not the daemon's own. */
   private constructor(private readonly tab: ChildProcess, readonly pid: number, readonly sessionId: string, readonly folder: string,
-    private readonly home?: string) {}
+    private readonly home?: string,
+    /** With `shell`, the shell's pid: the one a terminal app reports for its tab. */
+    readonly shellPid?: number) {}
 
   /** The dial's id for it. */
   get id(): string { return observedAgentId('claude', this.sessionId) }
 
-  /** With [app], the tab runs under a fake of it: the engine's parents are the pseudo-terminal, the app, the test. */
-  static async start(d: IsolatedDaemon, folder: string, hints: Record<string, string>, app?: FakeApp): Promise<Outside> {
-    const { tab, pid } = await Outside.open(d, folder, hints, app)
+  /**
+   * With [app], the tab runs under a fake of it: the engine's parents are the pseudo-terminal, the app, the test. With
+   * `shell`, a real `/bin/sh` sits between the app and the pseudo-terminal, as the shell a terminal app starts for its tab.
+   */
+  static async start(d: IsolatedDaemon, folder: string, hints: Record<string, string>, app?: FakeApp, { shell = false } = {}): Promise<Outside> {
+    const { tab, pid, shellPid } = await Outside.open(d, folder, hints, app, shell)
     // Its conversation, as its SessionStart hook named it once that hook had run.
     const started = new RegExp(`claude pid=${pid} SessionStart\\(startup\\) session=(\\S+) ran`)
     const sessionId = await until(`${folder} to run its SessionStart hook`, () => d.hookLog().match(started)?.[1], 30_000, 100)
-    return new Outside(tab, pid, sessionId, folder)
+    return new Outside(tab, pid, sessionId, folder, undefined, shellPid)
   }
 
   /**
@@ -109,24 +115,31 @@ export class Outside {
     return new Outside(tab, pid, sessionId, folder, home)
   }
 
-  /** The tab, once it said the engine's pid. */
-  private static async open(d: IsolatedDaemon, folder: string, hints: Record<string, string>, app?: FakeApp): Promise<{ tab: ChildProcess; pid: number }> {
+  /** The tab, once it said the engine's pid (and with [shell], the shell's first). */
+  private static async open(d: IsolatedDaemon, folder: string, hints: Record<string, string>, app?: FakeApp, shell = false):
+    Promise<{ tab: ChildProcess; pid: number; shellPid?: number }> {
     const cwd = join(d.projectsDir, folder)
     mkdirSync(cwd, { recursive: true })
     // d.env carries none of the developer's host hints (testing/daemonEnvironment.ts): only [hints] name the app.
     const env: NodeJS.ProcessEnv = { ...d.env, TERM: 'xterm-256color' }
-    const [command, args] = app ? [fakeApp(d, app), ['-e', UNDER_APP, PTY, d.env.CLAUDE_PATH!]] : ['python3', ['-c', PTY, d.env.CLAUDE_PATH!]]
-    const tab = spawn(command, args, { cwd, env: { ...env, ...hints }, stdio: ['pipe', 'pipe', 'pipe'] })
+    // The shell prints its pid first. The tab is not its last command, so it cannot replace itself with the tab: it stays
+    // the tab's parent, as a person's shell does.
+    const tabCommand = ['python3', '-c', PTY, d.env.CLAUDE_PATH!]
+    const command = shell ? ['/bin/sh', '-c', 'echo $$ >&2; "$@"; exit $?', 'sh', ...tabCommand] : tabCommand
+    const [file, ...args] = app ? [fakeApp(d, app), '-e', UNDER_APP, ...command] : command
+    const tab = spawn(file, args, { cwd, env: { ...env, ...hints }, stdio: ['pipe', 'pipe', 'pipe'] })
     tab.stdout!.resume()
-    const pid = await new Promise<number>((resolve, reject) => {
+    const pids = await new Promise<number[]>((resolve, reject) => {
       let said = ''
       tab.stderr!.on('data', (chunk: Buffer) => {
         said += chunk.toString('utf8')
-        if (said.includes('\n')) resolve(Number(said.split('\n')[0]))
+        const lines = said.split('\n').slice(0, -1)
+        if (lines.length >= (shell ? 2 : 1)) resolve(lines.map(Number))
       })
       tab.once('exit', (code) => reject(new Error(`the terminal tab exited (${code}): ${said}`)))
     })
-    return { tab, pid }
+    const [shellPid, pid] = shell ? pids : [undefined, pids[0]]
+    return { tab, pid, shellPid }
   }
 
   /** Typed at its prompt, then Enter, as a person does. */

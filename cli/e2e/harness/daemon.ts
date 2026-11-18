@@ -450,6 +450,10 @@ export class IsolatedDaemon {
       HARNESS_GRID_BIN: '',
       HARNESS_OPEN_BIN: fakeOpen,
       HARNESS_ORCA_APP_BIN: orcaLauncher,
+      // Nor does a fake dial's attach install Harness's VS Code extension into the developer's VS Code
+      // (cable/vscodeExtensionSetup.ts): /Applications is the computer's, whatever the home, so the devices look for VS
+      // Code's `code` here alone, in place of /Applications, ~/Applications and PATH. Missing until a test writes its own.
+      HARNESS_VSCODE_BIN: join(own, 'vscode', 'code'),
       // Claude Code's and Codex's hooks, installed as on a person's computer, into this home and CODEX_HOME
       // (assertHooksContained), and run by the fake engines. Every other engine's installer writes into
       // folders these tests have no engine for.

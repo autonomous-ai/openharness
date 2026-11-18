@@ -32,7 +32,7 @@ Use **Harness** in prose. Wordmarks and ASCII artwork may use their established
 lettering. `hn` and `harness` are commands, and `harnessd` is the name of the
 daemon's process (the way `dockerd` is Docker's); none of them is an additional
 product brand. Prose says "the Harness daemon".
-Keep vendor names intact: **Claude Code**, **Codex**, **OpenCode**, and **pi**.
+Keep vendor names intact: **Claude Code**, **Codex**, **OpenCode**, **pi**, and **VS Code**.
 
 The roadmap can be explained in one sentence:
 

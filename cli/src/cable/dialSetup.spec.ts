@@ -3,7 +3,7 @@
  * data folder and a fake `claude` whose install, or enable in an Orca home, turns the plugin on in that home's settings,
  * as Claude Code's own does. The real `claude`, ~/.claude, ~/.codex and Orca's profiles are never touched.
  */
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -236,6 +236,35 @@ describe('createDialSetup', () => {
     expect(r.looked).toEqual([r.claudeHome, a])
     expect(r.fakeIn(a).writes()).toEqual([ENABLE])
     expect(readSetup(r.dataDir).pluginHomes).toEqual([c, a])
+  })
+
+  it('the VS Code extension\'s version is kept in the same record, beside the dial, the plugin and the homes', async () => {
+    const r = rig()
+    // Not read yet: nothing is known, so nothing is written over the record.
+    expect(r.setup.vscode()).toBeUndefined()
+    await r.setup.started()
+    expect(r.setup.vscode()).toEqual({ dial: false })
+    await r.setup.attached()
+
+    expect(r.setup.recordVscode('0.6.60')).toBe(true)
+
+    expect(r.setup.vscode()).toEqual({ dial: true, version: '0.6.60' })
+    expect(readSetup(r.dataDir)).toMatchObject({ dial: true, plugin: '0.6.59', vscode: '0.6.60', homes: { codex: [expect.any(String)] } })
+    // A version a read would drop is not saved, and the one before stays.
+    expect(r.setup.recordVscode('0.6.61 beta')).toBe(false)
+    expect(r.setup.vscode()).toEqual({ dial: true, version: '0.6.60' })
+    expect(readSetup(r.dataDir).vscode).toBe('0.6.60')
+  })
+
+  it('a record that could not be read leaves the VS Code extension\'s part not known', async () => {
+    const r = rig()
+    const file = join(r.dataDir, DIAL_SETUP_FILE)
+    writeFileSync(file, JSON.stringify({ dial: true, vscode: '0.6.60' }))
+    // Stands for any read error: EACCES, EIO, EMFILE.
+    chmodSync(file, 0o000)
+    await r.setup.started()
+    await r.setup.attached()
+    expect(r.setup.vscode()).toBeUndefined()
   })
 
   it('an attach reads the login shell\'s PATH at once, and the scans between read it at most every ten minutes', async () => {

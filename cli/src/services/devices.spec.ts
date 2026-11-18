@@ -26,6 +26,8 @@ import type { ClaudeRun } from '../devices/claudePlugin.js'
 import { DIAL_SKILL } from '../devices/dialSkill.js'
 import { readSetup, writeSetup } from '../devices/dialSkillFiles.js'
 import type { OrcaHomes, OrcaHomesCache } from '../devices/orcaHomes.js'
+import * as vscodeExtension from '../devices/vscodeExtension.js'
+import type { VscodeExtensionDeps } from '../devices/vscodeExtension.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
 import { STOP_HOOK_GRACE_MS } from '../core/turns/turnHooks.js'
 import type { FleetEvent } from '../cable/machineFleet.js'
@@ -53,6 +55,8 @@ const seen = vi.hoisted(() => ({
 
 // A copy of the module, so a spec can watch the daemon's own lookup of Claude Code run.
 vi.mock('../devices/claudePlugin.js', async (real) => ({ ...await real<object>() }))
+// A copy of the module, so a spec can watch the daemon's own VS Code deps be asked for, and answer with its fake.
+vi.mock('../devices/vscodeExtension.js', async (real) => ({ ...await real<object>() }))
 vi.mock('../cable/cableHost.js', async (real) => {
   const actual = await real<typeof import('../cable/cableHost.js')>()
   return {
@@ -352,6 +356,35 @@ function fakeOrcaHomes(homes: OrcaHomes = { claude: [], codex: [] }) {
   return fake
 }
 
+/** The process table VS Code's windows match their agents by (services/devices.ts processParents): the spec's own, empty
+ *  unless a spec sets it, and each read counted, so no spec reads this machine's processes. */
+const processTable = { rows: [] as Array<{ pid: number; ppid: number }>, reads: 0 }
+
+/** VS Code and Harness's extension as the devices see them (services/devices.ts vscodeExtension): the spec's own, absent
+ *  unless the spec says its [app] is there or names the version [installed], each `code` run kept, so no spec runs the
+ *  developer's VS Code or reads its ~/.vscode. A run installs this build's 9.9.9. */
+function fakeVscode({ installed = null, app = installed !== null }: { installed?: string | null; app?: boolean } = {}) {
+  const runs: string[][] = []
+  let version = installed
+  const deps: VscodeExtensionDeps = {
+    platform: 'darwin',
+    home: '/nowhere',
+    pathVar: '',
+    exists: () => app,
+    executable: () => app,
+    read: () => version === null ? null : JSON.stringify([{ identifier: { id: vscodeExtension.VSCODE_EXTENSION_ID }, version }]),
+    run: async (file, args) => { runs.push([file, ...args]); version = '9.9.9'; return { code: 0, timedOut: false } },
+    files: () => ({
+      manifest: JSON.stringify({ name: 'harness-device', version: '9.9.9', publisher: 'autonomous-ai', displayName: 'Harness Device', description: 'The dial in VS Code', engines: { vscode: '^1.90.0' } }),
+      main: '',
+    }),
+    tempDir: () => '/nowhere/vsix',
+    write: () => {},
+    remove: () => {},
+  }
+  return { deps, runs }
+}
+
 let dataDir: string
 let logs: string[]
 beforeEach(() => {
@@ -375,6 +408,8 @@ beforeEach(() => {
   readers.answer.mockResolvedValue(undefined)
   readers.name.mockResolvedValue(undefined)
   readers.processes.mockResolvedValue([])
+  processTable.rows = []
+  processTable.reads = 0
 })
 afterEach(() => {
   rmSync(dataDir, { recursive: true, force: true })
@@ -383,7 +418,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   // None, and no read under way, unless the spec gives its own; null leaves the devices to read this computer's.
   const orcaHomes = over.orcaHomes ?? fakeOrcaHomes()
@@ -417,6 +452,12 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     // A `claude` that finds none unless the spec gives its own: no spec runs the developer's. null leaves it out.
     claude: over.claude === null ? undefined : over.claude ?? (async () => null),
     orcaHomes: over.orcaHomes === null ? undefined : orcaHomes.cache(),
+    // A VS Code that is absent unless the spec gives its own: no spec runs the developer's. null leaves it out.
+    vscodeExtension: over.vscodeExtension === null ? undefined : over.vscodeExtension ?? fakeVscode().deps,
+    processParents: async () => {
+      processTable.reads++
+      return processTable.rows
+    },
   })
   const port = ports.devices as DevicesPort
   // Stopped once the spec ends, as the process stops them: a dial left attached on real timers keeps its 60 s scan, which
@@ -442,7 +483,8 @@ const turnTo = (agentId: string): void => {
 /** The listener the devices process opens (devicesProcess.ts), stood in for: what it was handed, its close, a front
  *  through its handler as `harness hardware watch` sends one, an attach as the harness-device mod sends one, the
  *  Notifications setting as a watch sends it, an agent's notice as `harness device notify` sends it, the tabs stream a
- *  watch holds open, and the dial stream Orca's Harness Device plugin holds open. */
+ *  watch holds open, the dial stream Orca's Harness Device plugin holds open, and a VS Code window's stream and state as
+ *  Harness's own extension sends them. */
 function fakeListener() {
   type Handlers = Readonly<Record<string, ListenerHandler | ListenerStreamHandler>>
   const given: Array<{ handlers: Handlers; log: (line: string) => void }> = []
@@ -490,7 +532,28 @@ function fakeListener() {
     })).toBeUndefined()
     return { lines, writable: () => writable(), end: (reason: string) => ended.abort(reason), break: () => { broken = true } }
   }
-  return { given, close, listen, front, attach, notify, notice, tabs, dial }
+  /** A VS Code window's stream, as Harness's extension holds one open: the lines the devices write on it, its end, and its
+   *  writes throwing from then on. */
+  const vscode = (window: string) => {
+    const lines: unknown[] = []
+    const ended = new AbortController()
+    let broken = false
+    expect((given[0].handlers.vscode as ListenerStreamHandler).open({ type: 'vscode', window }, {
+      write: (line) => {
+        if (broken) throw new Error('write broken')
+        if (ended.signal.aborted) return false
+        lines.push(line)
+        return true
+      },
+      onWritable: () => {},
+      ended: ended.signal,
+    })).toBeUndefined()
+    return { lines, end: (reason: string) => ended.abort(reason), break: () => { broken = true } }
+  }
+  /** A window's shells, as its extension reports them, the first one active. */
+  const vscodeState = (window: string, terminals: number[]): unknown => (given[0].handlers['vscode-state'] as ListenerHandler)
+    .handle({ type: 'vscode-state', window, terminals, active: terminals[0] ?? null, focused: true }, new AbortController().signal)
+  return { given, close, listen, front, attach, notify, notice, tabs, dial, vscode, vscodeState }
 }
 
 describe('the devices, as the core starts them', () => {
@@ -550,12 +613,12 @@ describe('the devices, as the core starts them', () => {
 })
 
 describe('the devices\' own listener (services/devicesListener.ts)', () => {
-  it('the devices open their listener once, with front, attach, the tab handler, the tabs stream, the dial stream, the Notifications setting and the notice', () => {
+  it('the devices open their listener once, with front, attach, the tab handler, the tabs stream, the dial stream, the Notifications setting, the notice and VS Code\'s windows', () => {
     const listener = fakeListener()
     start({ listen: listener.listen })
     expect(listener.listen).toHaveBeenCalledTimes(1)
     const [{ handlers, log }] = listener.given
-    expect(Object.keys(handlers)).toEqual(['front', 'attach', 'tab', 'tabs', 'dial', 'notify', 'notice'])
+    expect(Object.keys(handlers)).toEqual(['front', 'attach', 'tab', 'tabs', 'dial', 'notify', 'notice', 'vscode', 'vscode-state'])
     expect(handlers.notice).toMatchObject({ maxBytes: NOTICE_MAX_BYTES, perSecond: NOTICE_PER_SECOND })
     expect(handlers.front).toMatchObject({ maxBytes: FRONT_MAX_BYTES, perSecond: FRONT_PER_SECOND })
     expect([FRONT_MAX_BYTES, FRONT_PER_SECOND]).toEqual([64, 10])
@@ -573,6 +636,14 @@ describe('the devices\' own listener (services/devicesListener.ts)', () => {
     // What the listener says goes to the devices' own log.
     log('[devices] listener open')
     expect(logs).toEqual(['[devices] listener open'])
+  })
+
+  it('the listener is given the vscode stream and its state report, with their bounds', () => {
+    const listener = fakeListener()
+    start({ listen: listener.listen })
+    const [{ handlers }] = listener.given
+    expect(handlers.vscode).toMatchObject({ maxBytes: 96, perSecond: 1, keyed: { limit: 8 } })
+    expect(handlers['vscode-state']).toMatchObject({ maxBytes: 1024, perSecond: 8 })
   })
 
   it('the listener is closed when the devices stop, before the cable is', async () => {
@@ -3263,6 +3334,191 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     await swiped('failed')
     expect(said()).toEqual(['[device] swipe · ok', '[device] swipe · failed'])
     expect(logs.filter((line) => [UUID, V1, 'vscode://', VSCODE].some((secret) => line.includes(secret)))).toEqual([])
+  })
+
+  // An agent in VS Code's integrated terminal is shown by Harness's own extension, in the window that reports its shell,
+  // matched by the process tree (docs/plans/2026-11-17-dial-vscode-extension-design.md, §2 and §3).
+  const WINDOW_ID = 'window-1'
+  /** The shell VS Code started for the terminal: the hook's caller, 4242, runs under it. */
+  const SHELL = 4000
+  const TERMINAL_TREE = [{ pid: 4242, ppid: SHELL }, { pid: SHELL, ppid: 1 }]
+  /** Claude Code in a VS Code terminal, its dial on the cable once the listener opened; on macOS its hook carries VS Code's
+   *  bundle id too. */
+  const inVscodeTerminal = async (over: Parameters<typeof start>[0] = {}) => {
+    vi.useFakeTimers()
+    processTable.rows = TERMINAL_TREE
+    const listener = fakeListener()
+    const started = startHere({ listen: listener.listen, ...over })
+    const bundle: Record<string, string> = over.orca?.platform === 'darwin' ? { __CFBundleIdentifier: VSCODE } : {}
+    started.port.observed(hook('session-start', { hostHints: { TERM_PROGRAM: 'vscode', ...bundle } }))
+    attach(started.port)
+    await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+    const front = (app: string) => { expect(listener.front(app)).toBeUndefined() }
+    /** The window opens and reports the agent's shell: once the table is read, the dials are told to look. */
+    const reported = async () => {
+      const window = listener.vscode(WINDOW_ID)
+      const looks = calls('syncAgents').length
+      expect(listener.vscodeState(WINDOW_ID, [SHELL])).toBeUndefined()
+      await vi.waitFor(() => expect(calls('syncAgents')).toHaveLength(looks + 1))
+      return window
+    }
+    return { ...started, front, reported }
+  }
+
+  it('an agent in VS Code\'s terminal gets its terminal once its window reports the shell, and the dials are told to look', async () => {
+    const { reported } = await inVscodeTerminal()
+    expect(await caps()).toEqual([{ id: ID, caps: 's' }])
+    await reported()
+    expect(processTable.reads).toBe(1)
+    expect(await caps()).toEqual([{ id: ID, caps: 'sf' }])
+  })
+
+  it('a tap writes the show to its window, asking it to raise that window, then brings VS Code forward', async () => {
+    const { reported } = await inVscodeTerminal({ orca: mac })
+    const window = await reported()
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(window.lines).toEqual([{ show: SHELL, raise: true }])
+    // The adapter's own `open -b`, after the show: the opener runs none of its own, and falls back to none.
+    expect(orcaRuns).toEqual([['/usr/bin/open', ['-b', VSCODE], 10_000]])
+    expect(said()).toEqual([])
+  })
+
+  it('a rest shows the terminal only while VS Code is in front', async () => {
+    const { reported, front } = await inVscodeTerminal({ orca: mac })
+    const window = await reported()
+    front('vscode')
+    expect(host().swipeSwitches(ID)).toBe(true)
+    host().swipeEnded(ID, 'rest')
+    await swiped('ok')
+    expect(window.lines).toEqual([{ show: SHELL }])
+    expect(orcaRuns).toEqual([])
+    front('ghostty')
+    expect(host().swipeSwitches(ID)).toBe(false)
+  })
+
+  it('an agent that left has its chain dropped', async () => {
+    const { port, reported } = await inVscodeTerminal()
+    await reported()
+    expect(processTable.reads).toBe(1)
+    port.observed(hook('session-end', { hostHints: { TERM_PROGRAM: 'vscode' } }))
+    // Listed again under the same pid, which may be another process by now: its chain is read anew.
+    port.observed(hook('session-start', { hostHints: { TERM_PROGRAM: 'vscode' } }))
+    await vi.waitFor(() => expect(processTable.reads).toBe(2))
+  })
+
+  it('with no listener (the services inside the core) no process table is read', async () => {
+    processTable.rows = TERMINAL_TREE
+    const { port } = startHere()
+    port.observed(hook('session-start', { hostHints: { TERM_PROGRAM: 'vscode' } }))
+    attach(port)
+    expect(await caps()).toEqual([{ id: ID, caps: 's' }])
+    expect(processTable.reads).toBe(0)
+  })
+
+  it('a throw on the VS Code path costs the dial nothing', async () => {
+    const { port } = startHere({ faults: ['vscode'] })
+    port.observed(hook('session-start', { hostHints: { TERM_PROGRAM: 'vscode' } }))
+    attach(port)
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 's' }])
+    expect(logs).toContain('[devices] vscode failed · injected fault: vscode')
+  })
+
+  // The dial's scroll scrolls that terminal, line by line, while VS Code is in front and the dial shows its agent
+  // (docs/plans/2026-11-17-dial-vscode-extension-design.md, §4).
+  const DIAL = {}
+  /** The agent the dial shows, as its cable session tells the host; null for none. */
+  const shows = (agentId: string | null) => host().dialShows(DIAL, agentId ? { name: 'api', app: 'VS Code' } : null, agentId)
+  /** A finger on the glass: a down, its moves, and an up that leaves at that velocity. */
+  const stroke = (moves: number[], velocity = 0) => {
+    host().scrolled('down', 0, 0)
+    for (const dy of moves) host().scrolled('move', dy, 0)
+    host().scrolled('up', 0, velocity)
+  }
+  const dialScrolls = (core: CoreApi) => vi.mocked(core.clients.sendLocal).mock.calls.map(([frame]) => frame)
+    .filter(({ type }) => type === 'dial_scroll')
+  const toWindows = (phase: string, dy: number, velocity: number) => ({ type: 'dial_scroll', payload: { phase, dy, velocity } })
+
+  it('with VS Code in front and the dial on an agent whose terminal a window holds, a stroke\'s lines go to that window and the windows hear no dial_scroll', async () => {
+    const { core, reported, front } = await inVscodeTerminal()
+    const window = await reported()
+    front('vscode')
+    shows(ID)
+    // 20 px toward older lines twice (one line each, 8 px kept), then 60 px toward newer: 52 px, three lines.
+    stroke([8, 8, -24])
+    expect(window.lines).toEqual([{ scroll: -1, pid: SHELL }, { scroll: -1, pid: SHELL }, { scroll: 3, pid: SHELL }])
+    expect(dialScrolls(core)).toEqual([])
+  })
+
+  it.each<[string, (started: Awaited<ReturnType<typeof inVscodeTerminal>>) => Promise<{ lines: unknown[] } | undefined>]>([
+    ['another app in front', async ({ reported, front }) => { const window = await reported(); front('ghostty'); shows(ID); return window }],
+    // Its window never reported the shell.
+    ['an agent with no terminal', async ({ front }) => { front('vscode'); shows(ID); return undefined }],
+    ['a Harness agent', async ({ reported, front }) => { const window = await reported(); front('vscode'); shows('h1'); return window }],
+    ['no agent shown', async ({ reported, front }) => { const window = await reported(); front('vscode'); shows(ID); shows(null); return window }],
+  ])('with %s the stroke goes to the windows as before, velocity and all', async (_, situation) => {
+    const started = await inVscodeTerminal({ core: harnessAgent() })
+    const window = await situation(started)
+    stroke([8], 300)
+    expect(dialScrolls(started.core)).toEqual([toWindows('down', 0, 0), toWindows('move', 8, 0), toWindows('up', 0, 300)])
+    expect(window?.lines ?? []).toEqual([])
+  })
+
+  it('a stroke keeps the route its down chose: the front changing in its middle moves neither its moves nor its up', async () => {
+    const { core, reported, front } = await inVscodeTerminal()
+    const window = await reported()
+    shows(ID)
+    front('vscode')
+    host().scrolled('down', 0, 0)
+    front('ghostty')
+    host().scrolled('move', 8, 0)
+    host().scrolled('up', 8, 0)
+    expect(window.lines).toEqual([{ scroll: -1, pid: SHELL }, { scroll: -1, pid: SHELL }])
+    expect(dialScrolls(core)).toEqual([])
+    host().scrolled('down', 0, 0)
+    front('vscode')
+    host().scrolled('move', 8, 0)
+    host().scrolled('up', 0, 120)
+    expect(dialScrolls(core)).toEqual([toWindows('down', 0, 0), toWindows('move', 8, 0), toWindows('up', 0, 120)])
+    expect(window.lines).toHaveLength(2)
+    // The up ended that stroke: a move with no down before it chooses by the front it finds.
+    host().scrolled('move', 8, 0)
+    expect(window.lines).toEqual([{ scroll: -1, pid: SHELL }, { scroll: -1, pid: SHELL }, { scroll: -1, pid: SHELL }])
+  })
+
+  it('a fling is not played: an up with a velocity writes its own travel and no more', async () => {
+    const { core, reported, front } = await inVscodeTerminal()
+    const window = await reported()
+    front('vscode')
+    shows(ID)
+    host().scrolled('down', 0, 0)
+    host().scrolled('up', 8, 900)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(window.lines).toEqual([{ scroll: -1, pid: SHELL }])
+    expect(dialScrolls(core)).toEqual([])
+  })
+
+  it('a stroke whose window went writes nothing and never turns to the windows mid-stroke', async () => {
+    const { core, reported, front } = await inVscodeTerminal()
+    const window = await reported()
+    front('vscode')
+    shows(ID)
+    host().scrolled('down', 0, 0)
+    host().scrolled('move', 8, 0)
+    window.end('gone')
+    host().scrolled('move', 8, 0)
+    host().scrolled('up', 8, 300)
+    expect(window.lines).toEqual([{ scroll: -1, pid: SHELL }])
+    expect(dialScrolls(core)).toEqual([])
+  })
+
+  it('a throw on the scroll path is the part\'s, not the dial\'s', async () => {
+    const { reported, front } = await inVscodeTerminal()
+    const window = await reported()
+    front('vscode')
+    shows(ID)
+    window.break()
+    expect(() => host().scrolled('move', 8, 0)).not.toThrow()
+    expect(logs).toContain('[devices] dial failed · write broken')
   })
 
   it('no swipe line carries a handle, a session or an agent', async () => {
@@ -6872,6 +7128,75 @@ describe('the dial setup, from the devices\' own process (cable/dialSetup.ts)', 
     seen.host.watching!(true)
     expect(held(env.CODEX_HOME)).toBeUndefined()
     await vi.waitFor(() => expect(readers.apps.mock.calls).toEqual([[[77]]]))
+  })
+})
+
+describe('Harness\'s VS Code extension, set up once a computer from the devices\' own process (cable/vscodeExtensionSetup.ts)', () => {
+  /** Lets an install's answer be taken. */
+  const settled = () => new Promise((resolve) => setImmediate(resolve))
+  const flags = (vscode: ReturnType<typeof fakeVscode>) => vscode.runs.map(([, flag]) => flag)
+  const tallied = (line: string) => line.startsWith('[device] vscode extension · vscode')
+
+  it('a dial\'s first attach installs it once, records it in dial-setup.json and counts it set up', async () => {
+    const vscode = fakeVscode({ app: true })
+    start({ faults: ['fleet'], listen: fakeListener().listen, vscodeExtension: vscode.deps })
+    await settled()
+    // No dial here yet: the start installs nothing.
+    expect(vscode.runs).toEqual([])
+
+    seen.host.watching!(true)
+
+    await vi.waitFor(() => expect(readSetup(dataDir).vscode).toBe('9.9.9'))
+    expect(flags(vscode)).toEqual(['--install-extension'])
+    expect(logs.filter(tallied)).toEqual(['[device] vscode extension · vscode · set up'])
+    expect(logs).toContainEqual(expect.stringMatching(/^\[device\] vscode extension · day \d{4}-\d\d-\d\d · vscode set up 1 updated 0 failed 0 left removed 0$/))
+    // A replug installs nothing more.
+    seen.host.watching!(false)
+    seen.host.watching!(true)
+    await settled()
+    expect(flags(vscode)).toEqual(['--install-extension'])
+  })
+
+  it.each([
+    ['their own process: brought current as they start', true, ['--install-extension']],
+    ['the core\'s process: nothing, at a start or an attach', false, []],
+  ])('on at another version, in %s', async (_, own, runs) => {
+    const vscode = fakeVscode({ installed: '0.0.1' })
+    start({ faults: ['fleet'], listen: own ? fakeListener().listen : undefined, vscodeExtension: vscode.deps })
+    await vi.waitFor(() => expect(flags(vscode)).toEqual(runs))
+    seen.host.watching!(true)
+    await settled()
+    expect(flags(vscode)).toEqual(runs)
+    expect(logs.filter(tallied)).toEqual(own ? ['[device] vscode extension · vscode · updated'] : [])
+  })
+
+  // The end-to-end harness points HARNESS_VSCODE_BIN at a file inside each daemon's own root that is not there
+  // (e2e/harness/daemon.ts): a fake dial's attach on a Mac with VS Code in /Applications installs nothing into it.
+  it.each([
+    ['unset: VS Code in /Applications is found, and installed into', undefined, ['--install-extension']],
+    ['a file that is not there: none is found, and nothing runs', '/tmp/e2e/root/vscode/code', []],
+  ])('HARNESS_VSCODE_BIN %s', async (_, bin, runs) => {
+    vi.stubEnv('HARNESS_VSCODE_BIN', bin)
+    const vscode = fakeVscode({ app: true })
+    const inApplications = (path: string) => path.startsWith('/Applications/')
+    const own = vi.spyOn(vscodeExtension, 'vscodeExtensionDeps')
+      .mockImplementation((given) => ({ ...vscode.deps, exists: inApplications, executable: inApplications, bin: given }))
+    start({ faults: ['fleet'], listen: fakeListener().listen, vscodeExtension: null })
+    seen.host.watching!(true)
+    await settled()
+    expect(own.mock.calls).toEqual([[bin]])
+    expect(flags(vscode)).toEqual(runs)
+    expect(readSetup(dataDir).vscode).toBe(runs.length ? '9.9.9' : undefined)
+  })
+
+  it('a throw there costs the dial nothing', async () => {
+    const vscode = fakeVscode({ installed: '0.0.1' })
+    // Its start pass follows the dial setup's, once Orca's homes are read.
+    await start({ faults: ['fleet', 'vscodeExtension'], listen: fakeListener().listen, vscodeExtension: vscode.deps }).orcaHomes.landed()
+    expect(logs).toContain('[devices] vscodeExtension failed · injected fault: vscodeExtension')
+    await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+    await settled()
+    expect(vscode.runs).toEqual([])
   })
 })
 

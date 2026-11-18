@@ -116,6 +116,17 @@ describe('a daemon under test knows nothing of the developer\'s own state', () =
     expect((await IsolatedDaemon.create({ beside: d, env: { SHELL: '/bin/bash' } })).env.SHELL).toBe('/bin/bash')
   })
 
+  // A fake dial's attach has the devices install Harness's VS Code extension into the VS Code they find
+  // (cable/vscodeExtensionSetup.ts): /Applications is the computer's, whatever the home, so they look for VS Code's
+  // `code` in the daemon's own root alone, where there is none (devices/vscodeExtension.ts, services/devices.ts).
+  it('finds none of the developer\'s VS Code: its devices look for VS Code\'s code only in its own root, where there is none', async () => {
+    const d = daemon = await IsolatedDaemon.create()
+    const bin = d.env.HARNESS_VSCODE_BIN ?? ''
+    expect(isAbsolute(bin), bin).toBe(true)
+    expect(relative(d.root, bin).startsWith('..'), bin).toBe(false)
+    expect(existsSync(bin), bin).toBe(false)
+  })
+
   it('takes nothing from the shell but what it needs to run', async () => {
     vi.stubEnv('FAKE_SECRET_TOKEN', 'e2e-not-a-secret')
     vi.stubEnv('HARNESS_CONNECTIONS_DIR', join(scratch, 'connections'))

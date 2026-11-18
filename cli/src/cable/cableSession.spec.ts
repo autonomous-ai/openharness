@@ -5909,6 +5909,24 @@ describe('the agent the dial shows (docs/specs/2026-11-16-orca-device-plugin.md)
     } finally { await session.stop() }
   })
 
+  it('the host hears the shown agent\'s id beside its name and app', async () => {
+    const { session, port, dialShows } = await greeted()
+    try {
+      port.say({ t: 'focus', agentId: 'o1' })
+      await session.focusAgent('gone')
+      expect(dialShows.mock.calls.map(([, agent, agentId]) => [agent, agentId])).toEqual([[API, 'o1'], [null, null]])
+    } finally { await session.stop() }
+  })
+
+  it('a move between two agents of one name and app is told, with the new id', async () => {
+    const { session, port, dialShows } = await greeted({ listAgents: async () => [RING[0], { ...RING[0], id: 'o2' }] })
+    try {
+      port.say({ t: 'focus', agentId: 'o1' })
+      port.say({ t: 'focus', agentId: 'o2' })
+      expect(dialShows.mock.calls.map(([, agent, agentId]) => [agent, agentId])).toEqual([[API, 'o1'], [API, 'o2']])
+    } finally { await session.stop() }
+  })
+
   it('a move to an agent the ring does not hold reports none', async () => {
     const { session, port, told } = await greeted()
     try {

@@ -73,6 +73,7 @@ import { apiCommand, apiUsage } from './lib/apiCommand.js'
 import { connectionsCommand, connectionsUsage } from './lib/connectors/command.js'
 // Static, not import(): --help prints DEVICE_USAGE, so the module loads at start anyway, and the core and services never load cli.ts.
 import { DEVICE_USAGE, runDeviceCommand } from './deviceClaude/command.js'
+import { vscodeExtensionDeps } from './devices/vscodeExtension.js'
 import { claudeRun, claudeRunIn } from './devices/claudePlugin.js'
 import { orcaHomesDeps, readOrcaHomes } from './devices/orcaHomes.js'
 import { remoteCommand } from './remoteCommand.js'
@@ -3132,6 +3133,7 @@ switch (cmd) {
       defaultClaudeHome: dirname(env.CLAUDE_PROJECTS_DIR),
       codexHome: env.CODEX_HOME,
       codex: () => installedEngineBin('codex') !== null,
+      vscode: vscodeExtensionDeps,
       env: process.env,
       cwd: process.cwd(),
       out: (line) => console.log(line),
