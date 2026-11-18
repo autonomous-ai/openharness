@@ -142,9 +142,12 @@ export function migrateHarnessInstructions(workspace: string, current: Installed
     packages.push(pkg)
   }
   if (after === before) return
-  // Keep the exact pre-migration bytes; never replace somebody's earlier backup.
-  const backup = join(workspace, '.harness', 'legacy-AGENTS.md')
-  ensureRuntimeDir(workspace, join(resolve(workspace), '.harness'))
+  // Keep the exact pre-migration bytes; never replace somebody's earlier backup. In the workspace's own .harness, or for
+  // the home after the move beside its runtimes (runtimesOf): never in the bridge.
+  const base = runtimeBase(workspace)
+  const folder = base === workspace ? join(resolve(workspace), '.harness') : base
+  const backup = join(folder, 'legacy-AGENTS.md')
+  ensureRuntimeDir(base, folder)
   if (!existsSync(backup) && !isLink(backup)) writeFileSync(backup, before, { flag: 'wx', mode: 0o600 })
   writeManagedFile(path, after)
   for (const pkg of packages) {
