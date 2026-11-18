@@ -3614,7 +3614,7 @@ describe('hello capabilities', () => {
     } finally { await session.stop() }
   })
 
-  it('a drawer replaced without a question row loses that question: the next ask of it is sent', async () => {
+  it('a drawer replaced without a question row asks that question again, once, after the drawer', async () => {
     const { session, port } = await connect(richHost())
     const ask = [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }]
     try {
@@ -3622,11 +3622,81 @@ describe('hello capabilities', () => {
       await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
       await session.question('a1', 'q1', ask)
       await session.question('a2', 'q2', ask)
+      port.sent.length = 0
       // A window's unread list that names a1's question as a row keeps it on the dial; a2's is gone with the old drawer.
       await session.replaceNotifications([{ agentId: 'a1', machineId: 'm1', question: true, text: 'Ship it?' }])
-      port.sent.length = 0
+      expect(port.types()).toEqual(['notif.replace', 'question'])
+      expect(ofType(port, 'question')).toMatchObject([{ agentId: 'a2', id: 'q2' }])
+      // Each is on the dial now: the core asking again as the devices reconnect sends nothing.
       await session.question('a1', 'q1', ask)
       await session.question('a2', 'q2', ask)
+      expect(ofType(port, 'question')).toHaveLength(1)
+    } finally { await session.stop() }
+  })
+
+  it('a drawer that names an open question as news, or not at all, asks it again after the drawer', async () => {
+    const { session, port } = await connect(richHost())
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      await session.question('a1', 'q1', [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }])
+      port.sent.length = 0
+      // The window's mark for a1 turned into news: the dial clears its drawer, the question with it.
+      await session.replaceNotifications([{ agentId: 'a1', machineId: 'm1', question: false, text: 'The build passed, all green.' }])
+      expect(port.types()).toEqual(['notif.replace', 'question'])
+      expect(ofType(port, 'question')).toMatchObject([{ agentId: 'a1', id: 'q1' }])
+      port.sent.length = 0
+      await session.replaceNotifications([])
+      expect(port.types()).toEqual(['notif.replace', 'question'])
+    } finally { await session.stop() }
+  })
+
+  it('a replace overtaken by a newer one asks nothing: the newer asks each lost question once', async () => {
+    let finish!: (value: Array<{ recap: string; text: string }>) => void
+    const history = new Promise<Array<{ recap: string; text: string }>>(resolve => { finish = resolve })
+    const host = richHost()
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      await session.question('a1', 'q1', [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }])
+      host.recentSummaries = () => history
+      port.sent.length = 0
+      const older = session.replaceNotifications([{ agentId: 'a2', machineId: 'm1', question: false, text: '' }])
+      await session.replaceNotifications([])
+      finish([{ recap: 'Old result.', text: 'Old result.' }]); await older
+      expect(port.types()).toEqual(['notif.replace', 'question'])
+    } finally { await session.stop() }
+  })
+
+  it('answers agents.list with the drawer and asks each open question it lacks once', async () => {
+    const { session, port } = await connect(richHost())
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      await session.question('a1', 'q1', [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }])
+      port.sent.length = 0
+      port.say({ t: 'agents.list' })
+      await vi.waitFor(() => expect(port.types()).toContain('question'))
+      await settle()
+      expect(ofType(port, 'question')).toMatchObject([{ agentId: 'a1', id: 'q1' }])
+      expect(port.types().indexOf('question')).toBeGreaterThan(port.types().indexOf('notif.replace'))
+    } finally { await session.stop() }
+  })
+
+  it('a dial that greets anew with a drawer naming an open question is not asked it again', async () => {
+    const host = richHost()
+    const { session, port } = await connect(host)
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      await session.question('a1', 'q1', [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }])
+      await session.question('a2', 'q2', [{ key: 'k', q: 'Merge it?', options: ['yes', 'no'] }])
+      host.listUnread = () => [{ agentId: 'a1', machineId: 'm1', question: true, text: 'Ship it?' }]
+      port.sent.length = 0
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.1' })
+      await vi.waitFor(() => expect(port.types()).toContain('question'))
+      await settle()
       expect(ofType(port, 'question')).toMatchObject([{ agentId: 'a2', id: 'q2' }])
     } finally { await session.stop() }
   })

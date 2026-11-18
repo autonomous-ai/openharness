@@ -1170,6 +1170,35 @@ static void notification_read_checks(const char *dir) {
     assert(!strcmp(s.notice[0].summary,"The turn failed") && !strcmp(s.message,"The turn failed"));
     ui_turn_error("c",NULL); assert(!strcmp(s.message,"The turn failed"));
     puts("Notification tiers: alert/list/silent, old-daemon flags, face, one row per agent, 6 h expiry and 8 s error PASS");
+
+    // A question outlives news: a turn's summary, a failure or a drawer's news row about the same agent lands beside
+    // its open question, never in its place, and each row keeps its own read token.
+    cable_notif_t asked={.agent_id="b",.name="B",.summary="Ship it?",.question=true,.read_token="question-1"};
+    reset(); ui_notif_replace(&asked,1);
+    ui_notify_summary("b","B","M2","Built.","list",false,false);
+    assert(s.notice_count==2 && s.notice[0].question && !strcmp(s.notice[1].summary,"Built."));
+    ui_turn_error("b","The build crashed.");
+    assert(s.notice_count==2 && s.notice[0].question && s.notice[1].failed);
+    cable_notif_t beside[2]={
+        {.agent_id="b",.name="B",.summary="Built.",.read_token="turn-1"},
+        {.agent_id="b",.name="B",.summary="Ship it?",.question=true,.read_token="question-1"}};
+    ui_notif_replace(beside,2);
+    assert(s.notice_count==2 && !strcmp(s.notice[0].read_token,"question-1") && !strcmp(s.notice[1].read_token,"turn-1"));
+    // The desktop reading the news row clears that row, not the question beside it.
+    ui_notif_read("b","turn-1"); assert(s.notice_count==1 && s.notice[0].question);
+    // Both rows read before a receipt goes out: each keeps its own.
+    reset(); ui_notif_replace(beside,2); congestion=true;
+    notice_mark_read(&s.notice[0]); notice_mark_read(&s.notice[1]);
+    int receipts=0; for (int i=0;i<NOTICES;i++) receipts+=s.notice_reads[i].pending;
+    assert(receipts==2); congestion=false;
+    // The card being read, the news row, stays in place as another agent's news arrives, and as a drawer that names
+    // only its agent's question replaces the rest.
+    reset(); ui_notif_replace(beside,2); ui_notif_open(); s.offset=1;
+    ui_notify_summary("c","C","M2","Done.","list",false,false);
+    assert(s.notice_count==3 && !strcmp(s.notice[s.offset].agent_id,"b") && !s.notice[s.offset].question);
+    notice_mark_read(&s.notice[s.offset]); ui_notif_replace(&asked,1);
+    assert(s.notice_count==2 && !strcmp(s.notice[s.offset].agent_id,"b") && !s.notice[s.offset].question);
+    puts("Notification beside a question: summary, failure, drawer tokens, desktop read, receipts and the card being read PASS");
     reset();
 }
 
