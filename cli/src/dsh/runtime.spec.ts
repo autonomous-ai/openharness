@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { PROCESS_ENGINES } from '../engines/types.js'
 import { buildEngineCommandArgv, buildEngineLaunchArgv } from '../lib/engineLaunch.js'
 import { buildLaunchOverrides } from '../lib/launchOverrides.js'
@@ -15,6 +15,7 @@ import { forkRuntimeKey, harnessRuntimeDir, migrateHarnessInstructions, prepareH
 import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 import { HARNESS_INSTRUCTIONS, joinedInstructions } from '../lib/agentAttribution.js'
 import { env } from '../config/env.js'
+import { harnessPath } from '../config/harnessHome.js'
 import { setAgentSettingsForTest, signedOutForTest } from '../testing/agentSettings.js'
 
 // Harness's status line rides every Claude launch beside what these pin (engines/claude/statusLine.spec.ts).
@@ -313,6 +314,113 @@ describe('runtime validation and file ownership', () => {
     symlinkSync(`${join(pkg.realDir, 'skills/draw')}/`, skill)
     expect(() => prepareHarnessLaunch(pkg, ws, 'codex', 'key')).not.toThrow()
     expect(readFileSync(join(skill, 'SKILL.md'), 'utf8')).toContain('# Draw')
+  })
+})
+
+// On Linux Harness's folder moves from ~/.harness to the XDG places (docs/plans/2026-11-18-linux-xdg-paths-design.md), and a
+// workspace's saved runtime and skill links still name the old dsh folder. Linux is named and the home is the test's own,
+// so these run on any computer.
+describe('after Harness\'s folder moved', () => {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+  let home: string
+  let oldDsh: string
+  let newDsh: string
+  let dshDir: string
+  const on = (os: NodeJS.Platform) => Object.defineProperty(process, 'platform', { ...platform, value: os })
+  // The package's folder goes to [dir]; the old one is left absent.
+  const moveTo = (dir: string) => {
+    mkdirSync(dirname(dir), { recursive: true })
+    renameSync(oldDsh, dir)
+    pkg.dir = pkg.realDir = join(dir, 'acme', 'draw')
+  }
+  const runtimeFile = (key: string) => join(harnessRuntimeDir(ws, key), 'runtime.json')
+
+  // Before the move: a legacy Linux home, the package in ~/.harness/dsh, DSH_DIR at its default, a launch in the workspace.
+  beforeEach(() => {
+    home = join(root, 'home')
+    oldDsh = join(home, '.harness', 'dsh')
+    newDsh = join(home, '.local', 'share', 'harness', 'dsh')
+    dshDir = env.DSH_DIR
+    vi.stubEnv('HOME', home)
+    on('linux')
+    mkdirSync(join(oldDsh, 'acme'), { recursive: true })
+    renameSync(pkg.realDir, join(oldDsh, 'acme', 'draw'))
+    pkg.dir = pkg.realDir = join(oldDsh, 'acme', 'draw')
+    pkg.manifest.agent!.args = ['--add-dir', '${dsh}/assets']
+    env.DSH_DIR = harnessPath('dsh')
+    expect(env.DSH_DIR).toBe(oldDsh)
+  })
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', platform)
+    vi.unstubAllEnvs()
+    env.DSH_DIR = dshDir
+  })
+  // The move: the data root is in place, the dsh folder in it, and DSH_DIR at its default there.
+  const move = () => {
+    moveTo(newDsh)
+    env.DSH_DIR = harnessPath('dsh')
+  }
+
+  it('a skill link into the old dsh folder is replaced', () => {
+    prepareHarnessLaunch(pkg, ws, 'claude', 'key')
+    rmSync(runtimeFile('key'))
+    const link = join(harnessRuntimeDir(ws, 'key'), 'skills', 'draw')
+    expect(readlinkSync(link)).toBe(join(oldDsh, 'acme', 'draw', 'skills', 'draw'))
+    move()
+    expect(() => prepareHarnessLaunch(pkg, ws, 'claude', 'key')).not.toThrow()
+    expect(readlinkSync(link)).toBe(join(newDsh, 'acme', 'draw', 'skills', 'draw'))
+    expect(readFileSync(join(link, 'SKILL.md'), 'utf8')).toContain('# Draw')
+  })
+
+  it('a link to anywhere else is still refused', () => {
+    prepareHarnessLaunch(pkg, ws, 'claude', 'key')
+    rmSync(runtimeFile('key'))
+    move()
+    const link = join(harnessRuntimeDir(ws, 'key'), 'skills', 'draw')
+    for (const target of [join(root, 'user-skill'), join(oldDsh, 'acme', 'other', 'skills', 'draw')]) {
+      unlinkSync(link)
+      symlinkSync(target, link)
+      expect(() => prepareHarnessLaunch(pkg, ws, 'claude', 'key')).toThrow('Harness skill path is already occupied')
+      expect(readlinkSync(link)).toBe(target)
+    }
+  })
+
+  it('a saved runtime that names the old dsh folder is read at its new place', () => {
+    prepareHarnessLaunch(pkg, ws, 'claude', 'key')
+    prepareHarnessLaunch(pkg, ws, 'claude', 'fork', {}, 'key')
+    expect(readFileSync(runtimeFile('key'), 'utf8')).toContain(oldDsh)
+    move()
+    const moved = join(newDsh, 'acme', 'draw')
+    // A fork made before the move is the same runtime at the new place, retried.
+    expect(() => prepareHarnessLaunch(pkg, ws, 'claude', 'fork', {}, 'key')).not.toThrow()
+    const launch = prepareHarnessLaunch(pkg, ws, 'claude', 'key')
+    expect(launch.env).toMatchObject({ HARNESS_DSH_DIR: moved, TOOLCHAIN: join(moved, 'tools') })
+    expect(launch.args.slice(0, 2)).toEqual(['--add-dir', join(moved, 'assets')])
+    expect(readlinkSync(join(launch.env.HARNESS_SKILLS_DIR!, 'draw'))).toBe(join(moved, 'skills', 'draw'))
+    for (const key of ['key', 'fork']) {
+      const saved = readFileSync(runtimeFile(key), 'utf8')
+      expect(JSON.parse(saved).skills).toEqual([{ name: 'draw', dir: join(moved, 'skills', 'draw') }])
+      expect(saved).not.toContain(oldDsh)
+    }
+  })
+
+  const unmoved = {
+    // No rule runs off Linux, even beside an XDG folder.
+    macOS: () => { on('darwin'); moveTo(newDsh); env.DSH_DIR = harnessPath('dsh') },
+    // No data root: ~/.harness is still Harness's folder.
+    'a legacy Linux home': () => { moveTo(join(root, 'elsewhere', 'dsh')); env.DSH_DIR = harnessPath('dsh') },
+    // A folder the person named is theirs: only the default one moves.
+    'a custom DSH_DIR': () => { mkdirSync(dirname(newDsh), { recursive: true }); moveTo(join(root, 'custom')); env.DSH_DIR = join(root, 'custom') },
+  }
+  for (const [where, leave] of Object.entries(unmoved)) it(`nothing changes where the folder never moved: ${where}`, () => {
+    prepareHarnessLaunch(pkg, ws, 'claude', 'saved')
+    prepareHarnessLaunch(pkg, ws, 'claude', 'linked')
+    rmSync(runtimeFile('linked'))
+    const before = readFileSync(runtimeFile('saved'), 'utf8')
+    leave()
+    expect(() => prepareHarnessLaunch(pkg, ws, 'claude', 'saved')).toThrow(`Harness skill is missing: ${join(oldDsh, 'acme', 'draw', 'skills', 'draw')}`)
+    expect(readFileSync(runtimeFile('saved'), 'utf8')).toBe(before)
+    expect(() => prepareHarnessLaunch(pkg, ws, 'claude', 'linked')).toThrow('Harness skill path is already occupied')
   })
 })
 
