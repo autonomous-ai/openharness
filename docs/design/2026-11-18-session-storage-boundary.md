@@ -871,3 +871,20 @@ Failure-first evidence (all groups absent, no forced group kill needed):
 - core-grid-storage-custody-runtime-types2-20261118.log: TypeScript passed on the final
   runtime and all current fixture changes. These are macOS/source checks; final combined
   native/coverage/cost gates remain pending, Windows native remains deferred.
+
+## Preserve the safe malformed-JSON category (18 November)
+
+The validated storage reply already distinguishes a malformed JSON image without
+sending its raw content. Registry's persist path had converted that condition to a
+generic Error, losing its historical fixed `registry storage contains invalid JSON`
+category. It now constructs a local SyntaxError with fixed text only; the existing
+persistenceFailure classifier supplies the same safe category. No child error text or
+raw value crosses this boundary; admission and rollback behavior stay unchanged.
+
+Actual RED: the two existing privacy/adoption caller assertions fail in
+core-grid-storage-wider-registry-focused-red1-20261118.log (16 named failures total,
+with every category separately classified). After this one-line runtime correction,
+core-grid-storage-invalid-json-green1-20261118.log passes all three selected cases,
+including the unchanged names privacy control. Actual 0 and group absence recorded.
+Current TypeScript passed in custody-runtime-types2. The other fourteen wider failures
+are separate fixture composition/representation updates, not waived assertions.

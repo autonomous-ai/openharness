@@ -3549,7 +3549,7 @@ class Registry {
         const latestValues: unknown[] = (() => {
           deadline.check()
           if (source.image.state === 'missing') return []
-          if (!source.image.json) throw new Error('registry is not JSON')
+          if (!source.image.json) throw new SyntaxError('registry is not JSON')
           const stored = source.image.value
           if (!Array.isArray(stored)) throw new Error('registry root changed to a non-array value')
           const parsed = withoutRetiredRows(stored).rows
