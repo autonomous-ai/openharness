@@ -154,7 +154,7 @@ export interface UninstallDeps {
   listEntries(dir: string): RootEntry[]
   exists(path: string): boolean
   /**
-   * Linux, where Harness moves from ~/.harness to the XDG roots (homeMove/): the move's lock, beside the XDG state root
+   * Linux, where Harness moves from ~/.harness to the XDG roots (homeMove/): the move's lock, ~/.harness.move-lock
    * whether or not the move ran (lock.ts moveLockPath); the bridge it leaves at ~/.harness, by its record in the state
    * root (bridge.ts readBridge and removeBridge: each link goes, never what it points to); and what removes a file or
    * folder of the move's, a link as a link. Null on macOS and Windows, where nothing moves.

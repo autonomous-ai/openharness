@@ -492,7 +492,7 @@ const linux = {
   removeHooks: async () => [{ file: '/home/u/.claude/settings.json', removed: 5 }],
   removeLaunchers: () => ['/home/u/.local/bin/harness', '/home/u/.local/bin/hn'],
   removePathEntry: () => ({ kind: 'rc' as const, edits: [{ file: '/home/u/.bashrc', removed: 1, changedByPerson: 0 }], keptFor: [] }),
-  move: { lock: `${STATE}.move-lock`, readBridge: () => null, removeBridge: () => 'removed' as const, remove: () => {} },
+  move: { lock: '/home/u/.harness.move-lock', readBridge: () => null, removeBridge: () => 'removed' as const, remove: () => {} },
   tildify: (path: string) => path.replace('/home/u', '~'),
 }
 const xdg = {
@@ -510,9 +510,9 @@ const homes: string[] = []
 afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }) })
 
 /**
- * A Linux home Harness moved to its two XDG folders, on disk: the program and the person's data in them; the bridge at
- * ~/.harness, a link per entry and its two real folders (connections with a hard link to the shim); the bridge's record,
- * the move's own, and the lock a start left.
+ * A Linux home Harness moved to its two XDG folders, on disk: the program and the person's data in them, the data root's
+ * marker; the bridge at ~/.harness, a link per entry and its two real folders (connections with a hard link to the shim);
+ * the bridge's record, the move's own, and the lock a start left beside ~/.harness.
  */
 function movedHome() {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'uninstall-')))
@@ -520,10 +520,10 @@ function movedHome() {
   const oldHome = join(home, '.harness'), data = join(home, '.local', 'share', 'harness'), state = join(home, '.local', 'state', 'harness')
   const kept: Record<string, string> = {
     [join(data, 'auth', 'session.json')]: 'signed in', [join(data, 'cli', 'data', 'registry.json')]: '[]',
-    [join(data, 'connections', 'mcp-shim.mjs')]: 'shim', [join(state, 'logs', 'harness.log')]: 'started',
+    [join(data, 'connections', 'mcp-shim.mjs')]: 'shim', [join(state, 'logs', 'harness.log')]: 'started', [join(data, '.harness-root')]: '1\n',
   }
   const program = [join(data, 'bin', 'harness'), join(data, 'cli', 'cli.js'), join(state, 'runtime', 'current-node')]
-  const written = { ...kept, ...Object.fromEntries(program.map((path) => [path, 'program'])), [join(state, 'home-move.json')]: '{}', [join(moveLockPath(state), 'owner')]: '{}' }
+  const written = { ...kept, ...Object.fromEntries(program.map((path) => [path, 'program'])), [join(state, 'home-move.json')]: '{}', [join(moveLockPath(oldHome), 'owner')]: '{}' }
   for (const [path, text] of Object.entries(written)) {
     mkdirSync(dirname(path), { recursive: true })
     writeFileSync(path, text)
@@ -546,7 +546,7 @@ const onDisk = (home: string, roots: string[], lock: string) => ({
   move: { lock, readBridge, removeBridge, remove: removePath },
   tildify: (path: string) => path.replace(home, '~'),
 })
-const movedDisk = (m: ReturnType<typeof movedHome>) => onDisk(m.home, [m.data, m.state], moveLockPath(m.state))
+const movedDisk = (m: ReturnType<typeof movedHome>) => onDisk(m.home, [m.data, m.state], moveLockPath(m.oldHome))
 
 // Linux moves Harness from ~/.harness to two XDG folders, and leaves a bridge at ~/.harness while old processes run.
 describe('harness uninstall on Linux\'s two roots', () => {
@@ -556,7 +556,8 @@ describe('harness uninstall on Linux\'s two roots', () => {
     const t = fake(movedDisk(m))
     expect(await uninstallCommand(['--yes', '--keep-data'], t.deps)).toBe(0)
     expect(existsSync(m.oldHome)).toBe(false)
-    // What the links pointed to is whole, the shim the real connections folder linked to too; both roots' program is gone.
+    // What the links pointed to is whole, the shim the real connections folder linked to too, and the data root's marker
+    // with the data it keeps; both roots' program is gone.
     for (const [path, text] of Object.entries(m.kept)) expect(readFileSync(path, 'utf8'), path).toBe(text)
     for (const path of m.program) expect(existsSync(path), path).toBe(false)
     expect(t.out).toContain('✓ removed ~/.harness, which held only links')
@@ -567,6 +568,7 @@ describe('harness uninstall on Linux\'s two roots', () => {
     const left = fake(movedDisk(mine))
     expect(await uninstallCommand(['--yes'], left.deps)).toBe(1)
     expect(readdirSync(mine.oldHome)).toEqual(['notes.txt'])
+    // The data root goes whole, its marker with it.
     expect(existsSync(mine.data) || existsSync(mine.state)).toBe(false)
     expect(left.err).toEqual(['✗ Harness is uninstalled, except:', '  · ~/.harness is still there: something in it is not Harness\'s. Look in it, then delete it yourself'])
   })
@@ -575,12 +577,12 @@ describe('harness uninstall on Linux\'s two roots', () => {
     for (const keepData of [false, true]) {
       const m = movedHome()
       expect(await uninstallCommand(['--yes', ...(keepData ? ['--keep-data'] : [])], fake(movedDisk(m)).deps)).toBe(0)
-      for (const path of [moveLockPath(m.state), join(m.state, BRIDGE_FILE), join(m.state, 'home-move.json')]) expect(existsSync(path), `${path}, --keep-data ${keepData}`).toBe(false)
+      for (const path of [moveLockPath(m.oldHome), join(m.state, BRIDGE_FILE), join(m.state, 'home-move.json')]) expect(existsSync(path), `${path}, --keep-data ${keepData}`).toBe(false)
     }
-    // A home that has not moved: the record a waiting move left in ~/.harness, and the lock a start left beside the XDG state root.
+    // A home that has not moved: the record a waiting move left in ~/.harness, and the lock a start left beside it.
     const home = realpathSync(mkdtempSync(join(tmpdir(), 'uninstall-')))
     homes.push(home)
-    const root = join(home, '.harness'), lock = moveLockPath(join(home, '.local', 'state', 'harness'))
+    const root = join(home, '.harness'), lock = moveLockPath(root)
     for (const path of [join(root, 'auth', 'session.json'), join(root, 'cli', 'cli.js'), join(root, 'home-move.json'), join(lock, 'owner')]) {
       mkdirSync(dirname(path), { recursive: true })
       writeFileSync(path, '{}')
