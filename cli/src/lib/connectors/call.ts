@@ -9,7 +9,7 @@
  */
 import { readFileSync, realpathSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, extname, join, resolve } from 'node:path'
+import platformPath, { basename, extname, join, resolve, type PlatformPath } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { bearer, connectorsDir, ConnectorError, type Store, type Token } from './store.js'
 import { ready } from './renew.js'
@@ -39,15 +39,29 @@ export function hostAllowed(code: string, host: string): boolean {
   return (OFFICIAL_HOSTS[code] ?? []).some(allowed => host === allowed || host.endsWith('.' + allowed))
 }
 
+/**
+ * Whether `file` is `dir` or inside it, by path segments: a prefix check on `dir + '/'` misses Windows' backslashes
+ * and its case-insensitive names. `relative` is absolute when the two are on different drives.
+ */
+export function inside(dir: string, file: string, p: PlatformPath = platformPath): boolean {
+  const rel = p.relative(dir, file)
+  return rel === '' || !(rel === '..' || rel.startsWith('..' + p.sep) || p.isAbsolute(rel))
+}
+
+/** `~` before a separator is home; on posix a backslash is part of a name, so only Windows takes `~\`. */
+export function expandHome(raw: string, home: string, p: PlatformPath = platformPath): string {
+  return raw.replace(p.sep === '\\' ? /^~(?=$|[\\/])/ : /^~(?=$|\/)/, home)
+}
+
 /** An `@path` upload: plain media or a document, never from where credentials or configs live. */
 export function uploadPath(raw: string, env: NodeJS.ProcessEnv = process.env): string {
   const home = env.HOME || homedir()
-  const path = raw.replace(/^~(?=$|\/)/, home)
+  const path = expandHome(raw, home)
   let real: string
   try { real = realpathSync(path) } catch { throw new CallFailure(2, `cannot read upload ${raw}`) }
   const forbidden = [connectorsDir(env), join(home, '.ssh'), join(home, '.gnupg'), join(home, '.config'), join(home, '.local/share'),
     join(home, '.harness'), join(home, '.codex'), join(home, '.claude'), '/etc', '/proc', '/sys'].map(dir => { try { return realpathSync(dir) } catch { return resolve(dir) } })
-  if (forbidden.some(dir => real === dir || real.startsWith(dir + '/')) || !statSync(real).isFile()) {
+  if (forbidden.some(dir => inside(dir, real)) || !statSync(real).isFile()) {
     throw new CallFailure(2, `refusing to upload ${raw}: not a media file the helper may send`)
   }
   if (!UPLOAD_SUFFIXES.includes(extname(real).toLowerCase()) || !UPLOAD_SUFFIXES.includes(extname(path).toLowerCase())) {
