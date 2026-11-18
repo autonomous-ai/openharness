@@ -1,6 +1,8 @@
 // The mockup's tokens (Diego's "Harness bar" in the dial's look, tab 9 "Diego + 1 chạm"): colours, faces, the canvas.
 import 'package:flutter/widgets.dart';
 
+import '../model/types.dart';
+
 /// The canvas the pages are laid out on: the mockup's pixels, the Orange Pi bar's own (1480 x 320). BarFrame scales
 /// it to any glass of the same shape (1920 x 415 is 1.297 times it).
 const Size kCanvas = Size(1480, 320);
@@ -61,3 +63,12 @@ abstract final class Face {
 
 /// The pet art an engine plays: claude and codex have their own, every other engine the Muse.
 String petEngineOf(String engine) => engine == 'claude' || engine == 'codex' ? engine : 'muse';
+
+/// A state's colour: the cell's rail and glow, the strip's segment, the status word.
+Color statusInk(AgentState s) => switch (s) {
+      AgentState.working => Ink.accent,
+      AgentState.asking => Ink.ask,
+      AgentState.done => Ink.done,
+      AgentState.failed => Ink.fail,
+      AgentState.idle => Ink.rim,
+    };
