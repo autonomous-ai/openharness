@@ -984,3 +984,67 @@ with 100% per-file coverage (107 statements, 86 branches, 14 functions, 76 lines
 7.307 s. Both owned process groups are empty; receipts are `/tmp/core-launch-settings-worker-readonly-green-receipt.json`
 and `-types-receipt.json`, with coverage under `/tmp/core-launch-settings-worker-readonly-coverage`.
 No new cost run was made. The v9 baseline, cold and combined-process performance holds remain open.
+
+## V10 fixed comparison: smaller warm worker cost, baseline hold retained
+
+After runtime review, the unchanged v9 workload was frozen as v10 with A still `9a2ae217cf` and B exactly
+`4aa9b01801186ab928b1ce95184056f2df08ce46`. Manifest SHA256 is
+`067f4fa7bf389f2583a454c92569162f657b67d8952b6ca9d91074eb0f124121`, with 791 checked inputs and identical
+closure input lists. Only `services/nativeLaunchSettings.ts` changes among candidate runtime inputs. Caller, worker,
+fixture, semantic assertions, sample counts and three custody helpers are byte-identical to v9; run/freeze change
+only the candidate path. Exact review artifacts are `/tmp/core-launch-settings-cost-v10-harness.diff` and
+`/tmp/core-launch-settings-cost-v10-prepared.json`. Preparation exited 0 in 1.859 s with its owned group empty.
+
+One approved semantic smoke exited 0 in 12.594 s: both three-operation arms matched each other and v9, with no
+unused scripts and three candidate final factories. Actual sample/worker/capture exits, EOF/close, eight PIDs,
+two groups, two sockets, four roots, outer and all input hashes were checked. After fresh coordinator/worker quiet
+confirmations and the exact marker, one fixed eight-arm A/B/B/A/A/B/B/A run exited 0 in 43.324 s. All 448 operations
+passed unchanged semantics, with zero unused scripts and 56 candidate factories per arm. All 32 PIDs, eight groups,
+eight sockets, sixteen roots and outer settled, and every frozen hash and clean exact source head/tree matched.
+The coordinator released quiet before summary processing; no retry, adaptive workload or additional profile ran.
+Receipts: `/tmp/core-launch-settings-cost-v10-abba/manifest.json`, `-abba-outer-receipt.json`, `-abba-custody.json`;
+the smoke has equivalent paths. The unchanged summary script exited 0 in 0.078 s with an empty owned group.
+
+| Arm | First publication ms | Warm p50 ms | Warm p95 ms | Core CPU ms/op | Worker CPU ms/op | Combined CPU ms/op |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 A | 3.904074 | 0.844001 | 1.018429 | 0.94466 | 0.23454 | 1.17920 |
+| 1 B | 84.333891 | 3.362097 | 4.116415 | 1.59000 | 2.74588 | 4.33588 |
+| 2 B | 98.762738 | 3.449403 | 4.129243 | 1.53858 | 2.81678 | 4.35536 |
+| 3 A | 3.915379 | 0.859259 | 0.993158 | 0.96806 | 0.24140 | 1.20946 |
+| 4 A | 3.846175 | 0.842560 | 0.956826 | 0.94178 | 0.24058 | 1.18236 |
+| 5 B | 97.904980 | 3.635038 | 4.374812 | 1.68990 | 2.92434 | 4.61424 |
+| 6 B | 94.751064 | 3.570340 | 4.253266 | 1.63676 | 2.87558 | 4.51234 |
+| 7 A | 3.839568 | 0.867172 | 0.997144 | 0.95590 | 0.23414 | 1.19004 |
+
+A→B means are warm p50 0.853248→3.5042195 ms, p95 0.99138925→4.218434 ms, core CPU 0.95260→1.61381 ms/op,
+worker 0.237665→2.840645 and combined 1.190265→4.454455. Within-run paired p50 deltas are +2.518096, +2.590144,
++2.792478 and +2.703168 ms; paired combined CPU deltas are +3.15668, +3.14590, +3.43188 and +3.32230 ms/op.
+The original-baseline performance hold remains material.
+
+Relative to v9's candidate, v10's mean warm p50 falls 5.65%, p95 9.92%, worker CPU 8.51% and combined CPU 5.82%;
+core CPU changes only -0.69%. Control p50 is nearly unchanged (0.85087925→0.853248 ms), as is core CPU
+(0.952635→0.952600 ms/op). Each ordinal within-run paired p50 excess is smaller than its v9 counterpart by
+0.289032, 0.221627, 0.168774 and 0.168746 ms. These separate runs support the scoped warm reduction; cross-run
+ordinal pairing is descriptive, not a randomized v9/v10 comparison or proof that every observed delta is causal.
+Full paired values, ranges and descriptive differences of deltas are in `/tmp/core-launch-settings-cost-v10-versus-v9.json`.
+
+First-publication means are 3.876299→93.938168 ms, with B range 84.333891–98.762738 ms. First core CPU is
+4.195500→5.724250 ms and first worker CPU 11.437000→69.727250 ms. Candidate first-worker CPU is essentially
+unchanged from v9's 69.737 ms; the lower elapsed mean does not establish a cold-path correction. Source-loader/TSX
+asymmetry and cold service startup remain excluded from acceptance.
+
+Core retained-heap growth A→B is 0.179319→0.214302 MiB; worker -0.014709→0.143362 MiB (v9 B 0.133032).
+Post-batch core RSS is 125.865234→125.516602 MiB, B range 123.527344–127.574219; worker is
+98.697266→106.303711 MiB, B range 105.210938–107.445313. Before/after/lifetime-max RSS, heap and all raw samples
+remain in `/tmp/core-launch-settings-cost-v10-summary.json` and the manifest. Worker CPU includes its ending GC;
+common semantic checks are inside operation latency. Memory is per process, not a whole-daemon total. No native
+permission-probe, extra model-capture, actual terminal, packaged startup, native Windows/Linux or full-daemon claim
+is inferred. Core, cold and combined-baseline holds remain open despite the measured warm improvement.
+
+Source-only packaged assessment (`/tmp/core-launch-settings-packaged-cold-assessment.md`): final V5's existing setup
+workload fairly compares first `agent_create` response under already-wired packaged daemons, without candidate-only
+TSX transformation or the development statusline asset read. It does not measure daemon spawn-to-ready or
+agent-ready latency; its response may precede ready, and it records rather than asserts engineSetup absence.
+Keep its existing response metric distinct. Measuring request-to-ready or total startup would require a separately
+reviewed fixed extension on both sources, including cold setup/artifact preconditions. No packaged build or workload
+was executed for this assessment.
