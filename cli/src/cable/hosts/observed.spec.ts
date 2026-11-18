@@ -3069,7 +3069,8 @@ describe('ObservedSource panes', () => {
 
     const adapter = madeUp()
     const a = first(adapter, both)
-    expect(adapter.paneOf).toHaveBeenLastCalledWith({ host: 'terminal', app: 'terminal', hints: both, pid: 100, sessionId: 's1', engine: 'claude' })
+    expect(adapter.paneOf).toHaveBeenLastCalledWith({ host: 'terminal', app: 'terminal', hints: both, pid: 100, sessionId: 's1', engine: 'claude',
+      cwd: '/work/proj' })
     expect(a.src.capabilities(a.agent)).toMatchObject({ voice: true })
     expect(await a.src.send(a.agent, 'next')).toEqual({ ok: true })
     expect(adapter.type.mock.calls).toEqual([[PANE, 'next', 'claude']])
