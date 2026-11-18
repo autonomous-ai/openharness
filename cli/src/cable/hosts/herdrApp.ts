@@ -52,11 +52,12 @@ const SCROLL_PENDING_MAX = 100
 /** How long a terminal's scrolling is quiet before its tally is said: a run is faster than the dial's line, so a queue
  *  drains after almost every line, and a line at each drain would bury the log while scrolling. */
 const SCROLL_QUIET_MS = 1_000
-/** The lines a Claude Code page key stands for: one page moved 19 lines at 46 rows (2026-11-18). */
-const SCROLL_PAGE_LINES = 20
+/** The dial lines a Claude Code page key stands for (PM, 2026-11-18): a page moved 19 lines at 46 rows, but at 20 lines a
+ *  key Diego's strokes under 20 lines pressed nothing, so about half a screen follows about 8 lines of the finger. */
+const SCROLL_PAGE_LINES = 8
 /** The most page keys in one call: as many pages as the lines that may wait. hc presses them one by one, about 35 ms
  *  each. */
-const SCROLL_KEYS_MAX = SCROLL_PENDING_MAX / SCROLL_PAGE_LINES
+const SCROLL_KEYS_MAX = Math.trunc(SCROLL_PENDING_MAX / SCROLL_PAGE_LINES)
 /** A key call's deadline, past hc's hold: hc presses keys only once 3 s have passed since the person's own last key in
  *  Herdr's window, and presses them then even if their call was given up (measured on a private core, 2026-11-18). So
  *  a held call is waited for, not counted failed while its keys still go in, and the next call is asked about after
@@ -226,6 +227,8 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
     queue.running = false
     queue.quiet = setTimeout(() => {
       scrolling.delete(address)
+      // A Claude Code terminal's lines short of a key go with its quiet second: counted, so a stroke too short is seen.
+      queue.failed += Math.abs(queue.pending)
       deps.log(`[herdr-app] scroll · ${queue.lines} lines · ${queue.runs} runs · ${queue.failed} failed`)
     }, SCROLL_QUIET_MS)
   }
