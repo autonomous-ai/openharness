@@ -95,6 +95,32 @@ the complete33-status scan made141receipt-directory lstats against the39check bo
 original scan nevertheless created the replacement marker. Actual exit1/0.914s, no timeout or cleanup
 signal, PID/group76161 absent. Thirty unaffected cases were intentionally not selected.
 
+### Final source evidence
+
+The initial focused GREEN passed42tests/3files. An additional adversarial control then proved why the
+full mutation-directory check must remain outside damaged-record handling: when its observed replacement
+is immediately restored, the old catch could rerun the check against A and resolve a successful page
+with no IDs and `damaged:1`. Both pending and terminal cases failed; this intermediate RED and its exact
+runtime diff are preserved in `/tmp/core-grid-storage-pending-directory-sticky-red1-20261119.*` and
+`/tmp/core-pending-directory-sticky-red-runtime-20261119.diff` (SHA256
+`310e5cfa54325bc51bcad11c35f1113e24c7679d772e807b619fb026ea21f5f2`).
+
+Classification errors are now handled before the full mutation fence, which is outside that catch.
+Marker/file/status errors retain their existing damaged-evidence handling with fresh directory and custody
+checks; an observed directory-authority failure refuses the whole page even if the path returns.
+Final focused GREEN:44tests/3files, actual0/3.834s. Selected child/receipt-admission/coordinator gate:
+77tests/6files, actual0/12.988s, `pendingCreations.ts`100% statements/branches/functions/lines
+(190/111/18/127covered). Types:actual0/41.838s. Every accepted run has no timeout, no cleanup signal
+and no remaining process group. All earlier RED/GREEN receipts remain available.
+
+Full runtime review: `/tmp/core-pending-directory-runtime-review1-20261119.diff`, SHA256
+`a06988353dc6b501ff1639c84be0d908549fffd3823d970bd7bed3006cf3e660`.
+Evidence index: `/tmp/core-pending-directory-evidence-20261119.json`, SHA256
+`32084f3106a0f69ef65f45d215e4f6e1db5a2e872b6cfe024577b890c7d55e8d`.
+It checks that all code before the page implementation, including every marker/ancestor flush and
+actual descriptor owner, is byte-identical to the base. No corrected artifact/native/timing result is
+claimed; those remain subject to integration and separate frozen acceptance.
+
 ## Data-design checklist
 
 1. Growth: no new state; existing historical receipts remain indefinitely for duplicate prevention,

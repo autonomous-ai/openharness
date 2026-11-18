@@ -9,6 +9,7 @@ import { directorySyncSupported } from '../lib/secureState.js'
 
 const faults = vi.hoisted(() => ({ afterClose: undefined as ((fd: number) => void) | undefined,
   afterRead: undefined as ((path: string, entry: import('node:fs').Dirent | null) => void) | undefined,
+  afterDirectoryClose: undefined as (() => void) | undefined,
   closed: [] as string[] }))
 vi.mock('node:fs', async original => {
   const actual = await original<typeof import('node:fs')>()
@@ -20,7 +21,7 @@ vi.mock('node:fs/promises', async original => {
     const dir = await actual.opendir(...args), read = dir.read.bind(dir), close = dir.close.bind(dir), closeSync = dir.closeSync.bind(dir)
     dir.read = (async () => { const entry = await read(); faults.afterRead?.(dir.path, entry); return entry }) as typeof dir.read
     dir.close = (async () => { await close(); faults.closed.push(dir.path) }) as typeof dir.close
-    dir.closeSync = () => { closeSync(); faults.closed.push(dir.path) }
+    dir.closeSync = () => { closeSync(); faults.closed.push(dir.path); faults.afterDirectoryClose?.() }
     return dir
   } }
 })
@@ -34,10 +35,10 @@ const id = 'pending-worker-fixture-1', request = { kind: 'fixture', privateText:
 const fingerprint = creationFingerprint(request), held = { service: 'models', detail: 'Waiting for the model.' }
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'creation-index-worker-')); directory = join(root, 'agent-creations'); markers = join(directory, '.pending-v1')
-  faults.afterClose = undefined; faults.afterRead = undefined; faults.closed = []; vi.mocked(fs.fsyncSync).mockReset()
+  faults.afterClose = undefined; faults.afterRead = undefined; faults.afterDirectoryClose = undefined; faults.closed = []; vi.mocked(fs.fsyncSync).mockReset()
   vi.mocked(directorySyncSupported).mockReset()
 })
-afterEach(() => { faults.afterClose = undefined; faults.afterRead = undefined; vi.restoreAllMocks(); rmSync(root, { recursive: true, force: true }) })
+afterEach(() => { faults.afterClose = undefined; faults.afterRead = undefined; faults.afterDirectoryClose = undefined; vi.restoreAllMocks(); rmSync(root, { recursive: true, force: true }) })
 const deadline = () => performance.now() + 5_000
 const key = (n: number) => `pending-worker-${String(n).padStart(6, '0')}`
 function seed(id: string, pending = true) {
@@ -141,6 +142,78 @@ it('refuses the original scan before ensuring a marker in a directory replaced d
   expect(replaced).toBe(true)
   expect(existsSync(join(markers, id))).toBe(false)
   expect(faults.closed).toEqual(expect.arrayContaining([directory, markers]))
+})
+
+it('cannot omit a pending primary through A to B to A replacement within a page', async () => {
+  seed(id)
+  const alternate = join(root, 'alternate'), heldDirectory = directory + '-held'
+  mkdirSync(alternate, { mode: 0o700 })
+  writeFileSync(join(alternate, `${id}.json`), JSON.stringify({ version: 1, fingerprint,
+    outcome: { state: 'created', agentId: 'fixture' } }), { mode: 0o600 })
+  let replaced = false, restored = false
+  const restore = () => {
+    if (replaced && !restored) {
+      renameSync(directory, alternate); renameSync(heldDirectory, directory); restored = true
+    }
+  }
+  faults.afterRead = (path, entry) => {
+    if (path !== directory || entry?.name !== `${id}.json` || replaced) return
+    renameSync(directory, heldDirectory); renameSync(alternate, directory); replaced = true
+  }
+  const original = AgentCreationReceipts.prototype.status
+  const status = vi.spyOn(AgentCreationReceipts.prototype, 'status').mockImplementation(function (this: AgentCreationReceipts, key) {
+    const result = original.call(this, key); restore(); return result
+  })
+  faults.afterDirectoryClose = restore
+  await expect(createPendingCreationIndex(directory).page(null, deadline())).rejects.toMatchObject({ code: 'changed' })
+  expect(status).not.toHaveBeenCalled()
+  expect(replaced && restored).toBe(true)
+  expect(new AgentCreationReceipts(directory).pendingIntent(id)?.id).toBe(id)
+})
+
+it.each(['pending', 'terminal'] as const)('checks the original index before a %s marker mutation after classification', async state => {
+  seed(id, state === 'pending')
+  const index = createPendingCreationIndex(directory); index.ensure(id)
+  const status = AgentCreationReceipts.prototype.status
+  let replaced = false
+  vi.spyOn(AgentCreationReceipts.prototype, 'status').mockImplementation(function (this: AgentCreationReceipts, key) {
+    const result = status.call(this, key)
+    if (!replaced) {
+      replaced = true; renameSync(markers, markers + '-prior'); mkdirSync(markers, { mode: 0o700 })
+      if (state === 'terminal') writeFileSync(join(markers, id), '', { mode: 0o600 })
+    }
+    return result
+  })
+  await expect(index.page(null, deadline())).rejects.toMatchObject({ code: 'changed' })
+  expect(existsSync(join(markers, id))).toBe(state === 'terminal')
+  expect(faults.closed).toEqual(expect.arrayContaining([directory, markers]))
+})
+
+it.each(['pending', 'terminal'] as const)('keeps a failed %s mutation directory fence fatal when its original path is immediately restored', async state => {
+  seed(id, state === 'pending')
+  const index = createPendingCreationIndex(directory); index.ensure(id)
+  let now = 0, armed = false, replaced = false, cursor: string | undefined
+  vi.spyOn(performance, 'now').mockImplementation(() => now)
+  faults.afterRead = () => { now += 21 }
+  const status = AgentCreationReceipts.prototype.status, stat = fs.lstatSync
+  vi.spyOn(AgentCreationReceipts.prototype, 'status').mockImplementation(function (this: AgentCreationReceipts, key) {
+    const value = status.call(this, key); armed = !replaced; return value
+  })
+  vi.spyOn(fs, 'lstatSync').mockImplementation(((...args: Parameters<typeof stat>) => {
+    if (armed && args[0] === directory) {
+      armed = false; replaced = true
+      renameSync(directory, directory + '-held'); mkdirSync(directory, { mode: 0o700 })
+      const replacement = stat(...args)
+      rmSync(directory, { recursive: true }); renameSync(directory + '-held', directory)
+      return replacement
+    }
+    return stat(...args)
+  }) as typeof stat)
+  const page = index.page(null, 5000).then(value => { cursor = value.cursor; return value })
+  try { await expect(page).rejects.toMatchObject({ code: 'changed' }) }
+  finally { if (cursor) await index.close(cursor) }
+  expect(replaced).toBe(true)
+  expect(existsSync(join(markers, id))).toBe(true)
 })
 
 it('discovers bounded pending IDs across legacy history and preserves missing or damaged primary markers', async () => {

@@ -121,38 +121,54 @@ export function createPendingCreationIndex(directory: string) {
     const own = scan, ids: string[] = []
     let damaged = 0
     const started = performance.now()
-    const verify = () => {
+    const timely = () => {
       if (performance.now() >= deadline) throw new SessionStorageUnavailable('expired')
-      if (identity(directory) !== own.parent || own.index !== null && identity(markers) !== own.index) throw new SessionStorageUnavailable('changed')
+    }
+    const verifyReceiptDirectory = () => {
+      if (identity(directory) !== own.parent) throw new SessionStorageUnavailable('changed')
+    }
+    const verify = () => {
+      timely(); verifyReceiptDirectory()
+      if (own.index !== null && identity(markers) !== own.index) throw new SessionStorageUnavailable('changed')
+    }
+    const damagedEntry = (error: unknown) => {
+      if (error instanceof StateFileCleanupUnconfirmed) throw error
+      stateFileCustodyHealthy()
+      verify()
+      damaged++
     }
     try {
+      verify()
       for (let n = 0; n < 64 && performance.now() - started < 20; n++) {
-        verify()
+        timely()
         let which = own.next++ % 2
         if (!own.dirs[which]) which = 1 - which
         const dir = own.dirs[which]
         if (!dir) break
         const entry = await dir.read()
-        verify()
+        timely()
         if (!entry) { closeStateDirectoryIterator(dir); own.dirs[which] = null; continue }
         const id = which === 0 ? entry.name : entry.name.endsWith('.json') ? entry.name.slice(0, -5) : ''
         if (!entry.isFile() || !validCreationId(id)) continue
+        let marker: string | null
+        try { marker = which === 0 ? markerIdentity(id) : null }
+        catch (error) { damagedEntry(error); continue }
+        // A final page check cannot recover a pending ID omitted after reading a substituted directory.
+        verifyReceiptDirectory()
+        let status: ReturnType<typeof receipts.status>
+        try { status = receipts.status(id) }
+        catch (error) { damagedEntry(error); continue }
+        if (status.state !== 'pending' && (which !== 0 || status.state === 'missing')) continue
+        // Lost directory authority is fatal even if its path returns before damaged-record handling.
+        verify()
         try {
-          const marker = which === 0 ? markerIdentity(id) : null
-          const status = receipts.status(id)
           if (status.state === 'pending') { ensure(id); ids.push(id) }
-          else if (which === 0 && status.state !== 'missing') {
+          else {
             // Even unconfirmed dispatch claims forbid redispatch. Missing or damaged primary evidence does not.
-            verify()
             if (markerIdentity(id) !== marker) throw new SessionStorageUnavailable('changed')
             unlinkSync(join(markers, id)); durable.delete(id)
           }
-        } catch (error) {
-          if (error instanceof StateFileCleanupUnconfirmed) throw error
-          stateFileCustodyHealthy()
-          verify()
-          damaged++
-        }
+        } catch (error) { damagedEntry(error) }
       }
       verify()
       const done = own.dirs.every(dir => dir === null)
