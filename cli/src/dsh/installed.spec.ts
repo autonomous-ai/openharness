@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
 import {
-  dshInstallDir, dshRootDir, installedDsh, invalidateInstalledDsh, isBrokenDsh, listDshState, listInstalledDsh, markSetup,
+  awaitsSetup, dshInstallDir, dshRootDir, installedDsh, invalidateInstalledDsh, isBrokenDsh, listDshState, listInstalledDsh, markSetup,
   readInstalledIndex, removeInstalledRecord, resolveInstalled, setupsPending, upsertInstalledRecord, writeInstalledIndex,
   type InstalledDshRecord,
 } from './installed.js'
@@ -138,13 +138,14 @@ describe('the installed index', () => {
   it('setupsPending counts pending only', () => {
     const records = [
       record('acme/pending', { setup: 'pending' }), record('acme/failed', { setup: 'needs-setup' }), record('acme/plain'),
-      // A linked package's files are a checkout the move leaves where it is: nothing sets it up again, so it never counts.
+      // A linked package's checkout stays where it is, but what its setup built runs on Harness's Python, which moved.
       record('acme/linked', { setup: 'pending', linked: true }),
     ]
-    expect(setupsPending(records)).toBe(1)
+    expect(records.filter(awaitsSetup).map(({ id }) => id)).toEqual(['acme/pending', 'acme/linked'])
+    expect(setupsPending(records)).toBe(2)
     expect(setupsPending()).toBe(0)
     writeInstalledIndex(records)
-    expect(setupsPending()).toBe(1)
+    expect(setupsPending()).toBe(2)
   })
 
   it('markSetup with null removes the field', () => {

@@ -19,11 +19,11 @@ afterEach(() => {
   for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true })
 })
 
-/** A home whose ~/.harness is staged, as step 5 leaves it: each entry in its root's `.moving` folder. */
-function staged() {
+/** A home whose ~/.harness of [names] is staged, as step 5 leaves it: each entry in its root's `.moving` folder. */
+function staged(names = ['cli', 'dsh', 'claude-profiles', 'runtime']) {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'move-inside-')))
   homes.push(home)
-  const plan = planMove(home, {}, ['cli', 'dsh', 'claude-profiles', 'runtime'])
+  const plan = planMove(home, {}, names)
   const at = (entry: string, ...rest: string[]): string => join(plan.entries.find((each) => each.name === entry)!.staged, ...rest)
   const dataDir = at('cli', 'data')
   mkdirSync(dataDir, { recursive: true, mode: 0o700 })
@@ -152,11 +152,12 @@ describe('the move rewrites what names the old tree, inside it', () => {
     expect(steps.done).toEqual(expect.arrayContaining(records))
   })
 
-  it('dsh/installed.json: dir moves, and every record whose linked is not true gains setup pending; a linked one gains no mark', () => {
+  it('dsh/installed.json: dir moves, and every record gains setup pending, a linked one too while the runtime moves', () => {
     const t = staged()
     const godogen = { id: 'autonomous/godogen', dir: t.old('dsh', 'autonomous', 'godogen'), source: 'https://example.com/godogen.git', ref: 'main', commit: 'abc', linked: false, installedAt: 1 }
     const score = { id: 'autonomous/score', dir: t.old('dsh', 'autonomous', 'score'), source: 'https://example.com/score.git', ref: null, commit: null, linked: false, installedAt: 2, setup: 'needs-setup' }
-    // Its folder is a link in the tree to a checkout outside it: the link moves, the checkout's files do not.
+    // Its folder is a link in the tree to a checkout outside it: the link moves, the checkout's files do not, and what its
+    // setup built there runs on Harness's Python, in the runtime that moves.
     const dev = { id: 'me/dev', dir: t.old('dsh', 'me', 'dev'), source: '/src/dev', ref: null, commit: null, linked: true, installedAt: 3 }
     const index = put(t.at('dsh', 'installed.json'), [godogen, score, dev])
     const steps = journal()
@@ -164,9 +165,21 @@ describe('the move rewrites what names the old tree, inside it', () => {
     expect(json(index.path)).toEqual([
       { ...godogen, dir: `${t.plan.data}/dsh/autonomous/godogen`, setup: 'pending' },
       { ...score, dir: `${t.plan.data}/dsh/autonomous/score`, setup: 'pending' },
-      { ...dev, dir: `${t.plan.data}/dsh/me/dev` },
+      { ...dev, dir: `${t.plan.data}/dsh/me/dev`, setup: 'pending' },
     ])
     expect(steps.done).toEqual([index])
+  })
+
+  it('dsh/installed.json with no runtime in the tree: a linked record gains no mark, as nothing it built names the tree', () => {
+    const t = staged(['cli', 'dsh'])
+    const godogen = { id: 'autonomous/godogen', dir: t.old('dsh', 'autonomous', 'godogen'), source: 'https://example.com/godogen.git', ref: 'main', commit: 'abc', linked: false, installedAt: 1 }
+    const dev = { id: 'me/dev', dir: t.old('dsh', 'me', 'dev'), source: '/src/dev', ref: null, commit: null, linked: true, installedAt: 3 }
+    const index = put(t.at('dsh', 'installed.json'), [godogen, dev])
+    expect(rewriteInside(t.plan, t.dataDir, journal())).toEqual({ files: 1, left: [] })
+    expect(json(index.path)).toEqual([
+      { ...godogen, dir: `${t.plan.data}/dsh/autonomous/godogen`, setup: 'pending' },
+      { ...dev, dir: `${t.plan.data}/dsh/me/dev` },
+    ])
   })
 
   it('engine-homes.json is sealed again', () => {
@@ -272,7 +285,7 @@ describe('the move rewrites what names the old tree, inside it', () => {
     const t = staged()
     put(join(t.dataDir, 'claude-profiles.json'), ['/h2/.claude-personal'])
     put(t.at('runtime', 'current-node'), '/usr/bin/node\n')
-    put(t.at('dsh', 'installed.json'), [{ id: 'me/dev', dir: '/src/dev', source: '/src/dev', ref: null, commit: null, linked: true, installedAt: 3 }])
+    put(t.at('dsh', 'installed.json'), [{ id: 'me/dev', dir: '/src/dev', source: '/src/dev', ref: null, commit: null, linked: true, installedAt: 3, setup: 'pending' }])
     const file = join(t.dataDir, 'engine-homes.json')
     put(file, { claude: ['/h2/.claude-personal'], codex: [] })
     createHomeAdopter(file).adopt({ claude: [], codex: ['/h2/.codex'] })
