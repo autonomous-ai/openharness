@@ -69,8 +69,8 @@ export function matchRow(rows: QuestionRow[], answer: string): QuestionRow | nul
 /**
  * Read a multi-choice answer as the rows whose labels spell it, comma by comma. Senders join the chosen labels
  * with ", " and a label may hold a comma itself, so the answer is split only where every piece is a whole label
- * (exactly, as matchRow's first test) or blank. Of several readings the fewest pieces wins; on a tie, the longest first
- * piece, then the same rule on the rest. Null when no reading spells the whole answer.
+ * (exactly, as matchRow's first test) or blank. Of several readings the fewest pieces wins; on a tie, the longest
+ * first piece, then the same rule on the rest. Null when no reading spells the whole answer.
  *
  * The answer is outside text read in the core's own loop, so the work grows with its length alone: a piece holds
  * as many commas as the label it spells, never more than the label with the most. Trying every run of pieces
