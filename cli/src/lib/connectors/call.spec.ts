@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { basename, join, posix, win32 } from 'node:path'
 import { CallFailure, expandHome, fenced, forbiddenDirs, inside, tempDir, unc, uploadPath } from './call.js'
 
-// The account's own home, set by a test that needs one: a test never reads the real home's folders.
+// The account's own home, which a test that needs one points at a folder of its own: no test writes in the real one.
 const account = vi.hoisted(() => ({ home: undefined as string | undefined }))
 vi.mock('node:os', async importOriginal => {
   const os = await importOriginal<typeof import('node:os')>()
