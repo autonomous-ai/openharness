@@ -61,7 +61,7 @@ import { createVscodeAdapter, termPid } from '../cable/hosts/vscode.js'
 import { readProcessParents, vscodeStreams, type VscodeTerminal, type VscodeTerminalsDeps } from '../cable/hosts/vscodeTerminals.js'
 import { createWeztermAdapter } from '../cable/hosts/wezterm.js'
 import { createEngineTally } from '../cable/engineTally.js'
-import { startVscodeExtensionUpdate } from '../cable/vscodeExtensionUpdate.js'
+import { createVscodeExtensionSetup } from '../cable/vscodeExtensionSetup.js'
 import { Notices, type NoticeCaller } from '../cable/notices.js'
 import { NOTIFY_MODE_FILE, NotifyModeStore, type NotifyMode } from '../cable/notifyMode.js'
 import { PetStore } from '../cable/pets/store.js'
@@ -71,7 +71,7 @@ import { createDialSetup } from '../cable/dialSetup.js'
 import { claudeFound, type ClaudeRun } from '../devices/claudePlugin.js'
 import { readRemoved, SETUP_COUNTS } from '../devices/dialSkillFiles.js'
 import { createOrcaHomesCache, orcaHomesDeps, readOrcaHomes, type OrcaHomesCache } from '../devices/orcaHomes.js'
-import { buildVersion, vscodeEnable, vscodeExtensionDeps, vscodeStatus, type VscodeExtensionDeps } from '../devices/vscodeExtension.js'
+import { vscodeExtensionDeps, type VscodeExtensionDeps } from '../devices/vscodeExtension.js'
 import { WindowForm } from '../cable/windowForm.js'
 import { createWindowRouter } from '../cable/windowRoute.js'
 import { WindowSelection } from '../cable/windowSelection.js'
@@ -511,21 +511,19 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const skillPass = (): void => {
     if (skill && !stopped) part.call('skill', () => skill.started())
   }
-  // Harness's VS Code extension brought to this CLI's version (cable/vscodeExtensionUpdate.ts), in the devices' own
-  // process alone, as the dial setup: inside the core's the core would run VS Code's `code`. A part of its own, so a throw
-  // in VS Code's files is never the dial's.
-  if (deps.listen) part.call('vscodeExtension', () => {
-    const extension = deps.vscodeExtension ?? vscodeExtensionDeps()
-    const count = createEngineTally('[device] vscode extension', ['vscode'], ['updated', 'failed', 'off'], log)
-    startVscodeExtensionUpdate({
-      platform: extension.platform,
-      status: () => vscodeStatus(extension),
-      version: () => buildVersion(extension),
-      enable: () => vscodeEnable(extension),
-      after: timerIn('vscodeExtension'),
-      count: (kind, reason) => count('vscode', kind, reason),
-    })
-  })
+  // Harness's VS Code extension, set up once a computer through the dial setup's record (cable/vscodeExtensionSetup.ts),
+  // in the devices' own process alone, as the dial setup: inside the core's the core would run VS Code's `code`. A part
+  // of its own, so a throw in VS Code's files is never the dial's. `HARNESS_VSCODE_BIN`: the end-to-end tests' VS Code,
+  // so a daemon under test finds none of this computer's own (devices/vscodeExtension.ts).
+  const vscodeCount = createEngineTally('[device] vscode extension', ['vscode'], SETUP_COUNTS, log)
+  const vscodeSetup = skill ? createVscodeExtensionSetup({
+    vscode: deps.vscodeExtension ?? vscodeExtensionDeps(process.env.HARNESS_VSCODE_BIN),
+    removed: () => readRemoved(core.dataDir),
+    recorded: () => skill.vscode(),
+    record: (version) => skill.recordVscode(version),
+    after: timerIn('vscodeExtension'),
+    count: (kind, reason) => vscodeCount('vscode', kind, reason),
+  }) : null
   const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, orcaHomes, {
     adapters,
     modReady: (sessionId) => inbox.ready(sessionId),
@@ -547,7 +545,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   hookIds ? (pid): string | undefined => hcSource?.terminalOf(pid) : undefined) : null
   // Orca is asked only for the parts that use its homes, the first time as the devices start: the start pass waits for
   // that read (at most its 5 s), so an Orca home gets the skill with the default one.
-  if (skill || observed) void orcaHomes.refresh().then(skillPass)
+  if (skill || observed) void orcaHomes.refresh().then(() => {
+    skillPass()
+    // After the dial setup's start pass, which reads the record VS Code's goes by (dialHomeSetup.ts vscode()).
+    if (vscodeSetup && !stopped) part.call('vscodeExtension', () => vscodeSetup.pass())
+  })
   /** An open scan, once Orca's homes are read again where the last read is old (at most its 5 s): a session in an account
    *  added since is found by this scan. */
   const scanOpen = async (source: ObservedSource): Promise<void> => {
@@ -721,8 +723,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     environment: () => core.account.environment(),
     watching: (on) => {
       core.clients.dialWatching(on)
-      // Before the scan the attach starts, so that scan finds the dial recorded.
+      // Before the scan the attach starts, so that scan finds the dial recorded; and before VS Code's pass, which reads it.
       if (on && skill) part.call('skill', () => skill.attached())
+      if (on && vscodeSetup) part.call('vscodeExtension', () => vscodeSetup.pass())
       dialAttached(on)
       part.call('dialStream', () => dial.attached(on))
     },

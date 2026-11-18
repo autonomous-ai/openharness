@@ -3,7 +3,7 @@
  * Code's own CLI (`code --install-extension`, `--uninstall-extension`), for VS Code's default profile. Harness never
  * writes VS Code's files itself: it reads VS Code's record of its extensions, and hands VS Code a `.vsix` packed here from
  * the extension cli.js carries. It runs in the `harness` command's own process (`harness device vscode …`) and in the
- * devices' process, which brings an installed extension current; never in the core's.
+ * devices' process, which sets the extension up once a computer (cable/vscodeExtensionSetup.ts); never in the core's.
  */
 import { spawn } from 'node:child_process'
 import { accessSync, closeSync, constants, existsSync, fstatSync, mkdtempSync, openSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs'
@@ -43,6 +43,10 @@ export interface VscodeExtensionDeps {
   write(path: string, data: Buffer): void
   /** A folder and all in it; never throws. */
   remove(path: string): void
+  /** The end-to-end tests' VS Code, the raw `HARNESS_VSCODE_BIN` (read in services/devices.ts): an absolute path is the
+   *  only `code` looked for, so a daemon under test finds none of this computer's own; empty or relative, VS Code is
+   *  looked for where it is installed. */
+  bin?: string
 }
 
 const APP = 'Visual Studio Code.app'
@@ -54,6 +58,8 @@ const FAILED = { vscode: 'off', error: 'failed' } as const
 /** Where VS Code is: its app on a Mac, its `code` on Linux; null when it is not there and on any other platform. A
  *  relative PATH folder is wherever Harness happens to run, so only absolute ones are looked in. */
 function installed(deps: VscodeExtensionDeps): string | null {
+  // /Applications is the computer's whatever the home, so a daemon under test is given a `code` of its own instead.
+  if (deps.bin && isAbsolute(deps.bin)) return deps.executable(deps.bin) ? deps.bin : null
   if (deps.platform === 'darwin') return [join('/Applications', APP), join(deps.home, 'Applications', APP)].find((path) => deps.exists(path)) ?? null
   if (deps.platform === 'linux') {
     return deps.pathVar.split(delimiter).filter((dir) => isAbsolute(dir)).map((dir) => join(dir, 'code')).find((path) => deps.executable(path)) ?? null
@@ -64,7 +70,7 @@ function installed(deps: VscodeExtensionDeps): string | null {
 /** VS Code's own CLI: the one inside the app on a Mac, which a person may never have put on PATH. */
 function vscodeCli(deps: VscodeExtensionDeps): string | null {
   const found = installed(deps)
-  if (found === null || deps.platform !== 'darwin') return found
+  if (found === null || found === deps.bin || deps.platform !== 'darwin') return found
   const cli = join(found, 'Contents', 'Resources', 'app', 'bin', 'code')
   return deps.exists(cli) ? cli : null
 }
@@ -202,7 +208,7 @@ function readBounded(path: string, maxBytes: number): string | null {
 }
 
 /** [file] run with no shell, reading and writing nothing: no output of its is used. Its time ends it with SIGKILL: a
- *  `code` that does not end on TERM would hold the menu's click or the devices' update. */
+ *  `code` that does not end on TERM would hold the command or the devices' setup. */
 function runFile(file: string, args: readonly string[], timeoutMs: number): Promise<{ code: number | null; timedOut: boolean }> {
   return new Promise((resolve) => {
     // A process group of its own, and the time kills the group: VS Code's `code` on macOS and Linux is a script that
@@ -226,8 +232,9 @@ function runFile(file: string, args: readonly string[], timeoutMs: number): Prom
 }
 
 /** The real ones. `files` reads what the build inlined. */
-export function vscodeExtensionDeps(): VscodeExtensionDeps {
+export function vscodeExtensionDeps(bin?: string): VscodeExtensionDeps {
   return {
+    bin,
     platform: process.platform,
     home: homedir(),
     pathVar: process.env.PATH ?? '',

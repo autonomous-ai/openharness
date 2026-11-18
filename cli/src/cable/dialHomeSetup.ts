@@ -49,6 +49,11 @@ export interface DialHomeSetup {
   pluginHomes(): readonly string[]
   /** Replaces that list and saves the whole record; false when it could not be saved, and the list is as before. */
   recordPluginHomes(homes: string[]): boolean
+  /** Whether a dial attached here once, and the CLI version that last set Harness's VS Code extension up or found it
+   *  (vscodeExtensionSetup.ts); undefined until the record could be read, so nothing is saved over one not known. */
+  vscode(): { dial: boolean; version?: string } | undefined
+  /** false when the record could not be saved. */
+  recordVscode(version: string): boolean
 }
 
 type Counts = Record<DialEngine, { wrote: number; removed: number; failed: number }>
@@ -77,6 +82,8 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
   const defaultHome: Record<DialEngine, string> = { claude: deps.claudeHome, codex: deps.codexHome }
   // The devices process is the record's one writer: it is read at the start and at an attach, and saved whole.
   let record: DialSetupRecord = { dial: false, homes: { claude: [], codex: [] }, pluginHomes: [] }
+  /** Whether a read gave the record: before one, the record above is a stand-in, which no save may be made from. */
+  let known = false
   /** Homes done while their engine was on: a scan passes them with a set lookup. */
   const handled: Record<DialEngine, Set<string>> = { claude: new Set(), codex: new Set() }
   /** Homes, and recorded folders, given no skill for a reason the next try would meet again (no skills folder, a full
@@ -389,6 +396,7 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
       return false
     }
     record = read
+    known = true
     return true
   }
 
@@ -469,6 +477,15 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
     recordPluginHomes(homes) {
       // A copy: the caller's list changing later must not change the record without a save.
       const next = { ...record, pluginHomes: [...homes] }
+      if (writeSetup(deps.dataDir, next) !== undefined) return false
+      record = next
+      return true
+    },
+
+    vscode: () => known ? { dial: record.dial, version: record.vscode } : undefined,
+
+    recordVscode(version) {
+      const next = { ...record, vscode: version }
       if (writeSetup(deps.dataDir, next) !== undefined) return false
       record = next
       return true

@@ -22,15 +22,21 @@ that process listens.
   terminals' shell pids, which one is active and whether the window is focused.
 - In a remote window (SSH, WSL, a container) or on Windows, it does nothing.
 
-## Turn it on and off
+## On and off
 
-On: **Turn on VS Code** in Harness's menu-bar menu, or:
+It turns on by itself: once a dial has attached on this computer, Harness installs it into VS Code.
+
+Off: uninstall it in VS Code's Extensions view, or:
+
+```
+harness device vscode disable
+```
+
+Harness then leaves it off. Back on:
 
 ```
 harness device vscode enable
 ```
-
-Off: uninstall it in VS Code's Extensions view. Harness then leaves it alone.
 
 ## Its output channel
 

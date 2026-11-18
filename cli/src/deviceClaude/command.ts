@@ -12,10 +12,12 @@
  * home's entry would then stay on with nothing left to turn off (check 8).
  * `harness device orca link` and `harness device vscode link` are Orca's plugin's word and Harness's VS Code extension's,
  * never typed either: whether the daemon is up and where the devices' socket is, so neither builds a path.
- * `harness device vscode status|enable|disable` are Harness Device's menu's (Turn on VS Code) and support's: whether
- * Harness's VS Code extension is on, and VS Code's own install and uninstall of it (devices/vscodeExtension.ts). `harness
- * device notify` is an agent's, from the dial skill (devices/notice.ts). This runs only in the `harness` command's own
- * process; nothing the core or a service loads imports this folder.
+ * `harness device vscode enable|disable` are the person's way to turn Harness's VS Code extension back on or off, which
+ * the devices service installs by itself once a dial has attached here (cable/vscodeExtensionSetup.ts): `disable` marks
+ * it removed in dial-skill.json, which the service then leaves alone, before VS Code's own uninstall, and `enable` clears
+ * the mark before its install (devices/vscodeExtension.ts); `status` is support's. `harness device notify` is an agent's,
+ * from the dial skill (devices/notice.ts). This runs only in the `harness` command's own process; nothing the core or a
+ * service loads imports this folder.
  */
 import { mkdirSync, realpathSync } from 'node:fs'
 import { connect, type Socket } from 'node:net'
@@ -31,14 +33,16 @@ import { daemonPost, runAsked } from './asked.js'
 import { claudePluginOn, claudeSettingsPath } from './plugin.js'
 
 /** `asked`, `link`, `orca link` and `vscode link` are left out: they are the plugins', and typed by hand they only wait on
- *  stdin or print a path. `vscode status`, `enable` and `disable` are too: Harness Device's menu turns the extension on. */
-export const DEVICE_USAGE = `Harness device (with a dial plugged in, Claude Code and Codex are set up to ring it; disable takes that away, enable brings it back):
+ *  stdin or print a path. `vscode status` is too: VS Code's Extensions view shows whether the extension is on. */
+export const DEVICE_USAGE = `Harness device (with a dial plugged in, Claude Code and Codex are set up to ring it, and VS Code to follow it; disable takes that away, enable brings it back):
   harness device claude status [--json]  whether the dial is on for Claude Code (its harness-device plugin on, and not removed), and its version
   harness device claude enable           set Claude Code up again: the plugin and the dial skill (Claude Code 2.1.287 or later), in each Orca account too
   harness device claude disable          remove the plugin and the dial skill, in each Orca account too; Harness leaves them removed
   harness device codex status [--json]   whether the dial is on for Codex
   harness device codex enable            set Codex up again: the dial skill in its homes
   harness device codex disable           remove the dial skill Harness wrote; Harness leaves it removed
+  harness device vscode enable           set VS Code up again: Harness's extension in it
+  harness device vscode disable          remove Harness's extension; Harness leaves it removed
   ${NOTICE_USAGE}`
 
 export interface DeviceDeps {
@@ -158,7 +162,8 @@ async function codexCommand(verb: string, json: boolean, deps: DeviceDeps): Prom
   }
 }
 
-/** Each answer is one JSON line on stdout, failures too: Harness Device reads the word that says why. */
+/** Each answer of VS Code's is one JSON line on stdout, failures too, with the word that says why. The removal's mark is
+ *  Harness's own setting: one not saved is said on stderr, as the engines' words say it. */
 async function vscodeCommand(verb: string, json: boolean, deps: DeviceDeps): Promise<number> {
   switch (verb) {
     case 'status': {
@@ -167,14 +172,23 @@ async function vscodeCommand(verb: string, json: boolean, deps: DeviceDeps): Pro
       return 0
     }
     case 'enable': {
+      // Cleared first: the devices service brings it current from then on, and a failed save installs nothing.
+      if (writeRemoved(deps.dataDir, 'vscode', false) !== undefined) {
+        deps.err(SAVE_FAILED)
+        return 1
+      }
       const result = await vscodeEnable(deps.vscode())
       deps.out(JSON.stringify(result))
       return result.vscode === 'on' ? 0 : 1
     }
     case 'disable': {
+      // Marked first, so a pass of the devices service that installs meanwhile takes it out again; the uninstall runs
+      // whatever the save did.
+      const saved = writeRemoved(deps.dataDir, 'vscode', true) === undefined
       const result = await vscodeDisable(deps.vscode())
       deps.out(JSON.stringify(result))
-      return 'error' in result ? 1 : 0
+      if (!saved) deps.err(SAVE_FAILED)
+      return 'error' in result || !saved ? 1 : 0
     }
     default:
       deps.err(DEVICE_USAGE)
