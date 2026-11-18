@@ -768,10 +768,10 @@ theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
 - Geometry: dialog content inset 24; group / control gap 16 / 8; buttons are
   capsules, 32 high at least, trailing: secondary first, primary last, as the
   desktop's dialogs. The spinner stands still under Reduce Motion.
-- The menu-bar icon is the Pixel H, a 7x7-pixel H, a template image 18 points
+- The menu-bar icon is the Pixel H drawn 8x8 pixels, a template image 18 points
   square (`device-app/src-tauri/icons/tray.png`): black on a light bar, white on
-  a dark one. The app icon is the Pixel H: a black pixel H on the Harness green
-  tile.
+  a dark one. The app icon is the Pixel H, a black H of 7x7 square pixels on the
+  Harness green tile.
 - An on/off setting in the menu is one native check item: one row, its state in
   the check, a label that never changes. Sound is the first.
 - A choice among named options in the menu is one native submenu of check items,
