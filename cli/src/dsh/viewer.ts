@@ -26,6 +26,7 @@ import { isViewerPackage } from './manifest.js'
 import { resolveDshCommand } from './materialize.js'
 import { isShellNoise, killProcessGroup, spawnDshCommand } from './shell.js'
 import type { ViewerLedger } from './viewerLedger.js'
+import { errorKind } from '../lib/log.js'
 import { viewerTarget } from '../lib/viewerWire.js'
 
 /** The viewer that will actually run for a harness: its own, or the package it points at. */
@@ -307,7 +308,7 @@ export class DshViewerManager {
       state.rescanTimer.unref?.()
     }
     watcher.on('add', bump).on('change', bump).on('unlink', bump)
-      .on('error', (error: unknown) => this.log(`[dsh] artifact watch error · ${error instanceof Error ? error.message : error}`))
+      .on('error', (error: unknown) => this.log(`[dsh] artifact watch error · ${errorKind(error)}`))
     state.watcher = watcher
   }
 
@@ -357,7 +358,7 @@ export class DshViewerManager {
     child.stdout?.on('data', onData)
     child.stderr?.on('data', onData)
     child.on('error', (error) => {
-      const line = `[dsh] ${state.dsh.id} viewer could not start · ${error.message}`
+      const line = `[dsh] ${state.dsh.id} viewer could not start · ${errorKind(error)}`
       if (state.child === child) void this.fail(state, line)
       else this.log(line)
     })
@@ -432,7 +433,7 @@ export class DshViewerManager {
           timer = setTimeout(() => { this.log('[viewers] VIEWER_WATCH_CLOSE_TIMEOUT'); resolve() }, 10_000)
           timer.unref?.()
         })])
-      } catch { this.log('[viewers] VIEWER_WATCH_CLOSE_FAILED') }
+      } catch (error) { this.log(`[viewers] VIEWER_WATCH_CLOSE_FAILED · ${errorKind(error)}`) }
       finally { clearTimeout(timer) }
     }
   }

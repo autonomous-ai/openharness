@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { errorKind } from '../lib/log.js'
 import { DEVICES_BUILTIN_SOURCE, DEVICES_HARNESS_ID, HACHI_BUILTIN_SOURCE, HACHI_ID, HARNESS_MONITOR_BUILTIN_SOURCE, HARNESS_MONITOR_ID, MEMORIES_BUILTIN_SOURCE, MEMORIES_ID, MODEL_MANAGER_BUILTIN_SOURCE, MODEL_MANAGER_ID } from './builtinIds.js'
 import { dshRootDir, isBrokenDsh, readInstalledIndex, resolveInstalled, upsertInstalledRecord } from './installed.js'
 import { lockDsh } from './lock.js'
@@ -69,7 +70,7 @@ export function ensureBundledCoreHarnesses(options: { hachi: boolean }, log: (li
     try { if (!install()) ready = false }
     catch (error) {
       ready = false
-      log(`[core-harnesses] Could not prepare ${name}: ${error instanceof Error ? error.message : String(error)}`)
+      log(`[core-harnesses] Could not prepare ${name}: ${errorKind(error)}`)
     }
   }
   return ready

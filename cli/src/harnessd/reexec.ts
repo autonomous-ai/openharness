@@ -28,6 +28,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { closeSync, linkSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
+import { errorKind } from '../lib/log.js'
 import { PROBE_ANSWER, PROBE_COMMAND, PROBE_HANDOVER, PROBE_TIMEOUT_MS } from './protocol.js'
 import { signedExitCode, type ExitReason, type ReexecOutcome, type ResumeState } from './supervisor.js'
 
@@ -470,7 +471,7 @@ export function createReexec(deps: ReexecDeps): {
       try {
         return h.takeBack(token)
       } catch (error) {
-        if (!unknownSaid) deps.log(`[harnessd] could not take the handover back yet (${message(error)}) — trying again`)
+        if (!unknownSaid) deps.log(`[harnessd] could not take the handover back yet (${errorKind(error)}) — trying again`)
         unknownSaid = true
         return null
       }
@@ -481,7 +482,7 @@ export function createReexec(deps: ReexecDeps): {
       try {
         if (h.readPid() !== deps.pid) h.claim()
       } catch (error) {
-        deps.log(`[harnessd] could not claim the pid file back (${message(error)})`)
+        deps.log(`[harnessd] could not claim the pid file back (${errorKind(error)})`)
       }
       stay(why)
     }
@@ -634,7 +635,7 @@ export function createReexec(deps: ReexecDeps): {
             // which ends a master that has no core and no services running at this point. Without the
             // marker a re-execution that never came up would be taken for one in progress, so this master
             // keeps its code and starts the core on the new bundle itself, judging it as every update.
-            deps.log(`[harnessd] could not leave the re-execution marker (${error instanceof Error ? error.message : String(error)}) — keeping this master`)
+            deps.log(`[harnessd] could not leave the re-execution marker (${errorKind(error)}) — keeping this master`)
             carryOn('kept')
             return
           }
@@ -655,7 +656,7 @@ export function createReexec(deps: ReexecDeps): {
           } catch (error) {
             // Only what `process.execve` refuses before it begins: arguments it cannot take.
             deps.removeMarker()
-            deps.log(`[harnessd] could not re-execute this master (${error instanceof Error ? error.message : String(error)}) — keeping it`)
+            deps.log(`[harnessd] could not re-execute this master (${errorKind(error)}) — keeping it`)
             carryOn('kept')
           }
         })

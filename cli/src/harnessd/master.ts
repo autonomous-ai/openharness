@@ -7,7 +7,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { performance } from 'node:perf_hooks'
-import { ignoreLogWriteErrors, trimLogFile, ts } from '../lib/log.js'
+import { errorKind, ignoreLogWriteErrors, trimLogFile, ts } from '../lib/log.js'
 import { folderFingerprint } from './leanBundle.js'
 import { CORE, leanServices } from './leanServices.js'
 import { platformFromEnv, type PlatformName } from './platform.js'
@@ -473,7 +473,7 @@ export function runMaster(config: MasterConfig): Supervisor {
     // On a full disk the claim fails, and the master carries on without it: it was thrown out of the
     // core's `bound` message, and took the master down.
     claimPidFile: () => {
-      try { writePidFile() } catch (error) { log(`[harnessd] could not write the pid file: ${(error as Error).message}`) }
+      try { writePidFile() } catch (error) { log(`[harnessd] could not write the pid file: ${errorKind(error)}`) }
     },
     // Removed as this master exits, below: once a handover under way (Windows) is decided.
     releasePidFile: () => { releaseOnExit = true },
@@ -512,7 +512,7 @@ export function runMaster(config: MasterConfig): Supervisor {
     // which is never a reason for the master to stop.
     coreUp: () => {
       if (reexec && markerFile) removeMarker(markerFile)
-      try { config.coreUp?.(node) } catch (error) { log(`[harnessd] what the master does after its core came up failed: ${(error as Error).message}`) }
+      try { config.coreUp?.(node) } catch (error) { log(`[harnessd] what the master does after its core came up failed: ${errorKind(error)}`) }
     },
   }, options, { version: config.version, resume, unjudgedUpdate: unjudged })
   for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) onSignal(signal, () => stopAll(signal))
