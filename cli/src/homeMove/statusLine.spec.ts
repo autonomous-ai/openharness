@@ -12,7 +12,7 @@ describe('moveStatusLine', () => {
     expect(moveStatusLine(record('bridged'))).toBeNull()
   })
 
-  it('says what to do for a held, failed or skipped move, in one line with no path', () => {
+  it('says what to do for a held, failed or skipped move, in one plain line with no path and no code', () => {
     const lines = [
       moveStatusLine(record('waiting', 'update-pending')),
       moveStatusLine(record('waiting', 'old-tmux')),
@@ -24,15 +24,16 @@ describe('moveStatusLine', () => {
       moveStatusLine(record('skipped-override')),
     ]
     expect(lines).toEqual([
-      'home move: waiting update-pending · it moves at the start after this update settles',
-      'home move: waiting old-tmux · close the agents, then harness start',
-      'home move: waiting pty-host · close the agents, then harness start',
-      'home move: failed target-exists · move the XDG harness folders aside, then harness start',
-      'home move: failed no-space · free some disk space, then harness start',
-      'home move: failed permission · make the XDG folders yours, then harness start',
-      'home move: failed io · harness start tries again',
-      'home move: skipped-override · a setting or a link keeps Harness\'s folder where it is',
+      'Harness\'s folders move after this update settles.',
+      'Harness\'s folders stay in ~/.harness until the agents close: close them, then run harness start.',
+      'Harness\'s folders stay in ~/.harness until the agents close: close them, then run harness start.',
+      'Moving Harness\'s folders failed: the new folders already exist; move them aside, then run harness start.',
+      'Moving Harness\'s folders failed: free some disk space, then run harness start.',
+      'Moving Harness\'s folders failed: Harness cannot write where they go; make those folders yours, then run harness start.',
+      'Moving Harness\'s folders failed: run harness start to try again.',
+      'Harness\'s folders stay where a setting or a link keeps them.',
     ])
-    for (const line of lines) expect(line).not.toMatch(/[\n/]/)
+    // ~/.harness is the one path a line may name, and no internal code shows.
+    for (const line of lines) expect(line?.replaceAll('~/.harness', '')).not.toMatch(/[\n/]|-(override|pending|tmux|host|exists|space)|\bio\b/)
   })
 })
