@@ -242,6 +242,12 @@ int main(int argc,char **argv) {
     ui_question_show("b","Other","M2","q-b",NULL,false);assert(s.q.valid && s.q.pending && !strcmp(s.q.agent,"a"));
     ui_question_show("a","Research","M2","q-new",NULL,false);assert(!s.q.valid && s.q.error[0]);
     work(old);assert(!sent_answers); // Queued command cannot answer a replacement question.
+    // "Open the alert again." points at the new question: once it closes, the screen goes with it.
+    assert(s.view==QUESTION);ui_question_close("a","q-new");assert(s.view==HOME);
+    // The load deadline's screen holds no question id; that agent's close still takes it.
+    memset(&s,0,sizeof s);s.connected=true;s.pressed=-1;open_question();assert(s.q.loading && s.view==QUESTION);
+    s.q.loading=false;strcpy(s.q.error,"Question did not arrive. Open the alert again.");
+    ui_question_close("a","q-late");assert(s.view==HOME);
     reset(false);view(HOME);state("a",s.q.fetch,"token-a",false,long_question);assert(s.view==HOME);
     reset(false);s.view=MESSAGE;visit.available=true;strcpy(visit.agent,"b");b_known=false;
     ui_focus_project("b");assert(!strcmp(s.pending_focus,"b") && s.view==MESSAGE);
