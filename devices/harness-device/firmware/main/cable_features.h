@@ -17,6 +17,9 @@ enum {
     // can offer its TABS | APPS switch. An older daemon would ignore that pick, so without it there is
     // no switch.
     CABLE_FEATURE_APPS_SWITCH = 1u << 7,
+    // The daemon sends a question the dial was already told back as a `tier: "list"` row. Without it
+    // the dial treats such a frame as an alert, so an older daemon never mutes a ring.
+    CABLE_FEATURE_QUESTION_TIER = 1u << 8,
 };
 
 // Optional welcome field. Older daemons omit it and retain the core voice,

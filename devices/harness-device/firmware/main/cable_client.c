@@ -256,6 +256,9 @@ static void send_hello(void)
     // With no window, one app's agents at a time (spec 2026-11-14-dial-app-filter): `apps` in (handle_apps), `app.pick`
     // back. Older daemons ignore it and send the single ring.
     msg_string(&root, "appFilter", "v1");
+    // This dial files a `question` with `tier: "list"` as a silent row once the welcome lists `question.tier`. An
+    // older daemon ignores the field and never sends the tier.
+    msg_string(&root, "questionTier", "v1");
     // Which of the two dials this is (board.h) — informational, so a log or a bug report can say. A
     // daemon that predates the field ignores it.
     msg_string(&root, "hw", board()->name);
@@ -846,7 +849,8 @@ static void handle_apps(const cJSON *p)
 }
 
 // `question` {agentId, id, questions, tier?}. `tier: "list"` is a question the dial was told before, back on the
-// daemon's drawer; any other tier, or none, is an alert, so a tier this build does not know still rings.
+// daemon's drawer, and is silent only when this session's welcome listed `question.tier`; any other tier, or none,
+// or a daemon that did not list it, is an alert, so nothing this build cannot vouch for mutes a ring.
 static void handle_question(const cJSON *p, const char *agent_id)
 {
     const cJSON *questions = cJSON_GetObjectItemCaseSensitive(p, "questions");
@@ -856,7 +860,7 @@ static void handle_question(const cJSON *p, const char *agent_id)
         // A question is an alert: pinned row, wake and a (coalesced) beep, all but the beep inside
         // ui_question_show, which stays quiet for the pane already on the glass and for a list row.
         if (ui_question_show(agent_id, str_of(p, "name"), str_of(p, "machine"), str_of(p, "id"), questions,
-                             tier && !strcmp(tier, "list")))
+                             cable_client_supports(CABLE_FEATURE_QUESTION_TIER) && tier && !strcmp(tier, "list")))
             audio_notify_done();
     }
 }
