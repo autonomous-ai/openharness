@@ -11,7 +11,7 @@ import { HARNESS_ENTRIES } from '../config/harnessHome.js'
 import { createHomeAdopter, readAdoptedHomes } from '../engines/kit/homeAdoption.js'
 import { systemdUnit } from '../harnessd/platform.js'
 import { harnessPaneOwner } from '../lib/harnessSessionLabel.js'
-import { isBridge, readBridge } from './bridge.js'
+import { bootId, isBridge, readBridge } from './bridge.js'
 import { checkMove, type ConditionDeps, type MoveCheck, type Reason } from './conditions.js'
 import { readJournal, type Journal } from './journal.js'
 import { recoverMove, runMove, type MoveDeps } from './move.js'
@@ -305,8 +305,11 @@ describe('the move', () => {
     expect(t.systemctl).toEqual([['systemctl', '--user', 'daemon-reload']])
     expect([...t.panes]).toEqual([['%1', check.newTag], ['%2', check.newTag], ['%3', OTHER_TAG]])
 
+    // With this boot's id, where /proc has one (bridge.ts writeBridge).
+    const boot = bootId()
     expect(readBridge(plan.state)).toEqual({
       version: 1, movedAt: PROC_NOW, oldHome: t.legacy, oldDataDir: join(t.legacy, 'cli', 'data'), oldTag: check.oldTag, newTag: check.newTag, panes: ['%1', '%2'],
+      ...(boot ? { boot: { id: boot, uptime: expect.any(Number) } } : {}),
     })
     expect(readMoveRecord(t.home, t.env)).toEqual({ version: 1, state: 'bridged', entries: ENTRIES, bytesCopied: 0, panes: 2, oldProcesses: 0, at: NOW })
     // The journal and the staging folders are gone.
