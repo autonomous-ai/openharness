@@ -191,6 +191,24 @@ describe('packaged required session storage', () => {
     const id = created.agent.id as string
     const row = async () => ((await client.request('agents_list', { includeStopped: true }, 30_000)).agents as Array<Record<string, any>>)
       .find(value => value.id === id)
+    const turn = async (content: string, observedLaunch: unknown) => {
+      const phase = ['starting', 'held', 'ready', 'failed'].includes(String(observedLaunch)) ? String(observedLaunch) : 'absent'
+      const ended = client.next(frame => frame.agentId === id && (frame.type === 'turn_ended' || frame.type === 'error'),
+        45_000, 'offline imported Grid input outcome')
+      client.send('message', { agentId: id, content })
+      const outcome = await ended
+      if (outcome.type === 'error') {
+        // Error frames are public text, but the fixture records only fixed categories, never arbitrary payloads.
+        const categories = new Map([
+          ['This agent process is no longer running.', 'runtime_gone'],
+          ['This harness is no longer available.', 'agent_gone'],
+          ['This harness is held until the daemon restarts.', 'held'],
+          ['The message delivery could not be confirmed. Check the agent before trying again.', 'unconfirmed'],
+          ['The agent did not accept the message. Please try again.', 'not_accepted'],
+        ])
+        throw new Error(`Offline Grid input failed: ${categories.get(String(outcome.payload?.message)) ?? 'unclassified'}; launch=${phase}`)
+      }
+    }
     const first = await until('imported Grid conversation ready', async () => {
       const value = await row(); return value?.status === 'active' && value.sessionId ? value : null
     }, 60_000, 250)
@@ -200,24 +218,20 @@ describe('packaged required session storage', () => {
     client.close(); await daemon.stop(); await daemon.tmux.run('kill-server')
     await daemon.start()
     client = await LocalClient.connect(daemon); clients.push(client)
-    await until('offline imported Grid restored', async () => {
+    const restored = await until('offline imported Grid restored', async () => {
       const value = await row(); return value?.status === 'active' && value.sessionId === first.sessionId ? value : null
     }, 90_000, 250)
-    const ended = client.next(frame => frame.type === 'turn_ended' && frame.agentId === id, 45_000, 'offline imported Grid turn')
-    client.send('message', { agentId: id, content: 'offline imported fixture' })
-    await ended
+    await turn('offline imported fixture', restored.launch?.state)
     const active = await row()
     expect((await client.request('agent_close', { agentId: id, sessionId: active!.sessionId,
       createdAt: active!.createdAt, mode: 'now' }, 90_000)).closed).toBe(true)
     await until('imported Grid archived', async () => (await row())?.status === 'stopped' || null, 45_000, 250)
     expect(readFileSync(join(daemon.dataDir, 'stopped-agents', `${id}.json`), 'utf8').includes(key)).toBe(true)
     expect((await client.request('agent_resume', { agentId: id }, 90_000)).error).toBeUndefined()
-    await until('offline archived Grid resumed', async () => {
+    const resumed = await until('offline archived Grid resumed', async () => {
       const value = await row(); return value?.status === 'active' && value.sessionId === first.sessionId ? value : null
     }, 60_000, 250)
-    const resumed = client.next(frame => frame.type === 'turn_ended' && frame.agentId === id, 45_000, 'offline resumed Grid turn')
-    client.send('message', { agentId: id, content: 'offline resumed fixture' })
-    await resumed
+    await turn('offline resumed fixture', resumed.launch?.state)
     expect(daemon.log().includes(key)).toBe(false)
     expect(readFileSync(join(daemon.dataDir, 'registry.json'), 'utf8').includes(key)).toBe(true)
   })
