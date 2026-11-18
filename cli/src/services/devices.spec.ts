@@ -6603,6 +6603,27 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       expect(hc.pressed).toEqual([])
     })
 
+    // The route is chosen at the down; hc's word that it asks, heard mid-stroke, still stops its keys.
+    it('a Claude Code terminal that begins to ask mid-stroke takes no key from then on, and the stroke keeps its route', async () => {
+      const { core, hc, changed } = inHerdr({ terminals: [terminal('t7', { status: 'working' })] })
+      shows(await listedId())
+      host().scrolled('down', 0, 0)
+      await vi.waitFor(() => expect(orcaRuns).toEqual([STATUS]))
+      host().scrolled('move', 64, 0)
+      host().scrolled('move', 64, 0)
+      await vi.waitFor(() => expect(hc.pressed).toEqual([['t7', ['pageup'], 2_000]]))
+      changed({ status: 'blocked' })
+      for (const dy of [64, 64, 64, 64]) {
+        await vi.advanceTimersByTimeAsync(50)
+        host().scrolled('move', dy, 0)
+      }
+      host().scrolled('up', 0, 0)
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(hc.pressed).toEqual([['t7', ['pageup'], 2_000]])
+      expect(dialScrolls(core)).toEqual([])
+      expect(drained()).toEqual(['[herdr-app] scroll · 20 lines · 1 runs · 40 failed'])
+    })
+
     it('the Wi-Fi device\'s stroke takes the same route', async () => {
       const { core, port } = inHerdr()
       shows(await listedId())

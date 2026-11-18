@@ -802,6 +802,25 @@ describe.skipIf(process.platform === 'win32')('the hc source (docs/plans/2026-11
     expect(statuses()).toEqual(addresses.map(() => undefined))
   })
 
+  // A drop keeps the rows for the retry, but hc may have changed a status meanwhile: a Claude Code that began to ask
+  // must not take the dial's keys on a status heard before the drop (herdrApp.ts).
+  it('statusOf is none from a drop until the next snapshot, which tells it again; kindOf is kept', async () => {
+    server.terminals = [agent('t7', status('working'))]
+    const s = setup()
+    await live(s)
+    expect(s.source.statusOf('t7')).toBe('working')
+    server.drop()
+    await s.until(() => s.log.at(-1) === '[herdr-app] retry · 1')
+    expect(s.source.shows('t7')).toBe(true)
+    expect(s.source.kindOf('t7')).toBe('claude')
+    expect(s.source.statusOf('t7')).toBeUndefined()
+
+    // It asked while nothing was subscribed: the next snapshot says so.
+    server.terminals[0].status = { state: 'blocked', app: 'claude-code' }
+    s.advance(1000)
+    await s.until(() => s.source.statusOf('t7') === 'blocked')
+  })
+
   it('paneOf answers a listed agent\'s terminal, and none for another id or one that left', async () => {
     server.terminals = [agent('t7'), agent('t8')]
     const s = setup()

@@ -682,9 +682,9 @@ describe('the Herdr adapter', () => {
     // Claude Code draws on the alternate screen, where Herdr's view has no history: its own page keys move it
     // (docs/plans/2026-11-17-dial-herdr-scroll-design.md §3).
     describe('a Claude Code terminal', () => {
-      /** The recorder with Claude Code in t7 and Codex in t8: each key call is recorded in `pressed`, and answers true,
-       *  or when `held` waits until the test answers it. */
-      const claudeCode = (held = false) => {
+      /** The recorder with Claude Code in t7 and Codex in t8, and the rest of [over]: each key call is recorded in
+       *  `pressed`, and answers true, or when `held` waits until the test answers it. */
+      const claudeCode = (held = false, over: Partial<HerdrAppDeps> = {}) => {
         const pressed: Array<[string, string[], number]> = []
         const waiting: Array<(pressed: boolean) => void> = []
         const rest = recorder({
@@ -696,6 +696,7 @@ describe('the Herdr adapter', () => {
               return held ? new Promise<boolean>((resolve) => waiting.push(resolve)) : true
             },
           },
+          ...over,
         })
         /** Answers the oldest key call still held, and lets what follows it run. */
         const answer = async (ok: boolean) => {
@@ -707,14 +708,62 @@ describe('the Herdr adapter', () => {
       const press = (key: 'pageup' | 'pagedown', count: number): [string, string[], number] =>
         ['t7', Array<string>(count).fill(key), 2_000]
 
-      it('canScroll is false while it asks; working, idle, done and no status take the stroke, as another app\'s does whatever its status', () => {
+      it('canScroll is false while it asks, or while hc tells no status it knows; working, idle, done and error take the stroke, as another app\'s does whatever its status', () => {
         const can = (kind: string, status?: HcStatus) =>
           recorder({ kindOf: () => kind, statusOf: () => status }).adapter.canScroll(pane('t7'))
         expect(can('claude', 'blocked')).toBe(false)
+        // A state hc adds later, or none heard since the subscription dropped (hcSource.ts statusOf), may be a question.
+        expect(can('claude', undefined)).toBe(false)
         // hc presses at once while the program writes (measured 2026-11-18): a stroke over a working Claude Code is
         // not late.
-        for (const status of ['working', 'idle', 'done', 'error', undefined] as const) expect(can('claude', status), status).toBe(true)
-        for (const status of ['blocked', 'working'] as const) expect(can('codex', status), status).toBe(true)
+        for (const status of ['working', 'idle', 'done', 'error'] as const) expect(can('claude', status), status).toBe(true)
+        for (const status of ['blocked', 'working', undefined] as const) expect(can('codex', status), status).toBe(true)
+      })
+
+      // canScroll is asked at the stroke's down only: a question that comes up mid-stroke must stop its keys too.
+      it('a Claude Code that begins to ask mid-stroke takes no key from then on: the lines that wait are dropped and counted failed', async () => {
+        let state: HcStatus | undefined = 'working'
+        const { pressed, log, adapter, answer } = claudeCode(true, { statusOf: () => state })
+        adapter.scroll(pane('t7'), -20)
+        adapter.scroll(pane('t7'), -40)
+        expect(pressed).toEqual([press('pageup', 1)])
+        // It asks while the first call is under way: the 40 lines that wait press nothing.
+        state = 'blocked'
+        await answer(true)
+        await vi.advanceTimersByTimeAsync(50)
+        expect(pressed).toEqual([press('pageup', 1)])
+        // The rest of the stroke, and lines once hc tells no status it knows, press nothing either.
+        adapter.scroll(pane('t7'), 60)
+        await vi.advanceTimersByTimeAsync(50)
+        state = undefined
+        adapter.scroll(pane('t7'), 20)
+        await vi.advanceTimersByTimeAsync(50)
+        expect(pressed).toEqual([press('pageup', 1)])
+        await vi.advanceTimersByTimeAsync(1_000)
+        // Not a failure of hc's: no failed line, only the tally's count.
+        expect(log).toEqual([drained(20, 1, 120)])
+
+        // Answered, it takes the keys of a new stroke.
+        state = 'working'
+        adapter.scroll(pane('t7'), 20)
+        await turn()
+        expect(pressed).toEqual([press('pageup', 1), press('pagedown', 1)])
+      })
+
+      it('the check is made again right before each call: a page that waited for the gap is not pressed once it asks', async () => {
+        let state: HcStatus = 'idle'
+        const { pressed, log, adapter } = claudeCode(false, { statusOf: () => state })
+        adapter.scroll(pane('t7'), 20)
+        await turn()
+        expect(pressed).toEqual([press('pagedown', 1)])
+        // Held for the gap, then it asks before the gap ends.
+        adapter.scroll(pane('t7'), 20)
+        await turn()
+        state = 'blocked'
+        await vi.advanceTimersByTimeAsync(50)
+        expect(pressed).toEqual([press('pagedown', 1)])
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(log).toEqual([drained(20, 1, 20)])
       })
 
       it('its lines press pageup or pagedown through hc, one a 20 lines, within 2 s, and run no herdr-app; Codex\'s run terminal.scroll', async () => {
