@@ -374,7 +374,7 @@ describe('connect', () => {
     }
   })
 
-  it('past its deadline it is timeout', async () => {
+  it('past its deadline, with a list past its own, it is timeout, all within the app\'s 120 s', async () => {
     const given: { timeoutMs: number; maxBytes: number }[] = []
     const { deps } = setup({
       run: async (_file, _args, opts) => {
@@ -384,7 +384,57 @@ describe('connect', () => {
       },
     })
     expect(await orcaConnect(deps)).toStrictEqual({ connect: 'failed', error: 'timeout' })
-    expect(given.slice(3)).toEqual([{ timeoutMs: 60_000, maxBytes: 262_144 }])
+    expect(given.slice(3)).toEqual([{ timeoutMs: 60_000, maxBytes: 262_144 }, { timeoutMs: 10_000, maxBytes: 262_144 }])
+    expect(given.reduce((total, { timeoutMs }) => total + timeoutMs, 0)).toBeLessThan(120_000)
+  })
+
+  /** [deps] whose install, update or enable passes its deadline while Orca goes on and then lists [after]; the deadlines
+   *  of what runs after it. */
+  function late(deps: OrcaPluginDeps, after: unknown[] | string) {
+    let past = false
+    const given: number[] = []
+    const run: OrcaPluginDeps['run'] = async (file, args, opts) => {
+      if (past) given.push(opts.timeoutMs)
+      if (!['install', 'update', 'enable'].includes(args[1]!)) return deps.run(file, args, opts)
+      past = true
+      orca.answer('plugin list', typeof after === 'string' ? after : list(after))
+      return { code: null, stdout: '', timedOut: true }
+    }
+    return { deps: { ...deps, run }, given }
+  }
+
+  it('past its deadline, Orca listing the plugin as asked is done', async () => {
+    const asked: [string, (folder: string) => unknown[], string?][] = [
+      ['an install', () => []],
+      ['an install with the fingerprint', () => [], FINGERPRINT],
+      ['an update', (f) => [entry(f, { version: '1.2.2' })]],
+      ['an enable with the fingerprint', (f) => [entry(f, { status: 'pending' })], FINGERPRINT],
+    ]
+    for (const [name, before, approve] of asked) {
+      const { deps, folder, calls } = setup()
+      up(before(folder))
+      const { deps: slow, given } = late(deps, [entry(folder, { status: 'idle' })])
+      expect({ name, ...await orcaConnect(slow, approve) }).toStrictEqual({ name, connect: 'done' })
+      expect(calls()).toEqual(['status --json', `plugin inspect ${folder} --json`, 'plugin list --json', 'plugin list --json'])
+      expect(given).toEqual([10_000])
+    }
+  })
+
+  it('past its deadline, Orca listing anything else is timeout', async () => {
+    const others: [string, (folder: string) => unknown[] | string][] = [
+      ['no entry', () => []],
+      ['pending', (f) => [entry(f, { status: 'pending' })]],
+      ['needing consent again', (f) => [entry(f, { needsReconsent: true })]],
+      ['the version before', (f) => [entry(f, { version: '1.2.2' })]],
+      ['another folder', () => [entry('/checkout/plugins/harness-device-orca')]],
+      ['a list that cannot be read', () => '{"ok": tr'],
+    ]
+    for (const [name, after] of others) {
+      const { deps, folder } = setup()
+      up([])
+      const { deps: slow } = late(deps, after(folder))
+      expect({ name, ...await orcaConnect(slow, FINGERPRINT) }).toStrictEqual({ name, connect: 'failed', error: 'timeout' })
+    }
   })
 
   it('a fingerprint off the pattern, from Orca or from the caller, is failed', async () => {
