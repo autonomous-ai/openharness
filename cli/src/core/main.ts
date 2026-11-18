@@ -1692,8 +1692,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // while the master restarted the viewers (core/serviceLinks.ts `waitsThroughRestart`). So does an engine probe
     // asked while the edge host is restarting: the core's own probe always answered while it ran in this process. One
     // in flight as the host goes is still answered unavailable, which its callers read as not checked, never as no
-    // engine installed.
-    waitsThroughRestart: new Set(['store', 'engineProbe', 'engineSetup']),
+    // engine installed. Wi-Fi readiness also waits for the devices host to return: the gateway holds an
+    // unsent hello during that restart. Work already sent to the old service is still never replayed.
+    waitsThroughRestart: new Set(['store', 'engineProbe', 'engineSetup', 'wifi']),
     // Claude Code's and Codex's readers may take longer to start: a person's first message waits for them (core/input.ts).
     startWaits: Object.fromEntries([...Object.values(READER_SERVICES), OTHER_ENGINES_SERVICE].map(service => [service, READER_START_MS])),
     want: (service) => experimentHooks.want(service),

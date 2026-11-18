@@ -274,7 +274,7 @@ describe('the Wi-Fi device with the dials', () => {
     await connect(device)
     for (const pid of devicesPids(machine.daemon)) process.kill(pid, 'SIGKILL')
     await until('the core to see the service go', () => log().includes('[services] wifi disconnected') || null, 15_000, 50)
-    // One hello, no retry: held by the core while the process starts, handed on once its service is resumed.
+    // One hello, no retry: held by the gateway while the process starts, handed on once its service is resumed.
     const hello = await device.hello()
     expect(hello).toMatchObject({ type: 'hello_result', proto: 1, machineId: machine.machineId })
     expect(wifiConnections(world!)).toBe(2)

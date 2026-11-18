@@ -943,3 +943,21 @@ the process composition omitted the event observer's actual daemon address; its 
 facade's unknown port. A separate correction is under failure-first validation; no native pass is claimed.
 The test now propagates daemon cleanup failures and checks master exit zero, actual close, both output
 EOFs and private-root removal. All six cases completed those cleanup checks, including the four failures.
+
+The observer correction at `54726a9dbd` passed its 43-case, 100%-per-file gate and types. Rerunning only
+the four failed packaged cases passed ordinary supervised operation, full process recovery and combined
+dials/Wi-Fi operation. The single-hello restart case failed immediately: the stateless core readiness call
+returned unavailable between the old service disconnect and its supervised restart. Receipt
+`.harness/validation/20261118T034300.591601Z-15895/receipt.json` retains that three-pass/one-fail result.
+
+Wi-Fi now joins the existing bounded `waitsThroughRestart` service policy. Only unsent service requests wait;
+in-flight requests still fail on their original connection's loss and are never replayed. The gateway remains
+the sole owner of held device payloads and its 15-second readiness deadline. No new core state or retry loop
+is added. The existing packaged failure is the behavioral RED for this composition change.
+
+The single-hello case and deliberately unavailable-service control both pass after the correction, with actual
+master exit zero, close, both output EOFs and private-root removal. Selected transport, gateway and architecture
+checks pass 125 cases and types pass. Receipt
+`.harness/validation/20261118T035120.257717Z-27952/receipt.json` is overall passed (native check 51.1 seconds).
+The six packaged scenarios are covered across these source-scoped receipts, not by a new full-file run.
+Native Windows remains deferred; combined hot-path cost and remaining feature doors remain open.

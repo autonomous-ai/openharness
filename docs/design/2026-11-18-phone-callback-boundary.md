@@ -154,3 +154,8 @@ the existing `LocalClient.turn` helper to require that exact prompt's start and 
 changed. Only the failed supervised case was rerun: actual exit zero in 32.6 seconds, with master exit/close,
 output EOF and private-root removal asserted by the test. Receipt:
 `.harness/validation/20261118T032650.855175Z-86544/receipt.json`.
+
+Independent source review of the boundary integrated at `df7ca82e23` found no concrete correctness or
+security blocker: peer/pane guards, callback bounds and physical-close custody, redirects, content-free logs,
+first-input facts, cleanup replay and combined setup reconnect safety were reviewed. That review ran no
+additional tests and does not establish native Windows or whole-daemon performance acceptance.
