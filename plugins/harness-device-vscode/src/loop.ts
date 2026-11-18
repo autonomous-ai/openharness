@@ -39,17 +39,15 @@ const COUNTS_MS = 60_000
 const SCROLL_MAX = 100
 // The lines one page key stands for: Herdr's SCROLL_PAGE_LINES (cli/src/cable/hosts/herdrApp.ts), where a Claude Code
 // page moved 19 lines at 46 rows. A constant of its own: the extension is bundled alone and imports nothing of the CLI.
+// With SCROLL_MAX, one line makes at most 5 keys.
 const PAGE_LINES = 20
-// SCROLL_MAX / PAGE_LINES: no more keys run from one line, or from what waits.
-const PAGE_KEYS_MAX = 5
 // A shell's page remainder is forgotten once no page line came for this long.
 const PAGE_IDLE_MS = 1_000
 
 type Link = { ready: false; socket?: string } | { ready: true; socket: string }
 type Counts = { shows: number; notFound: number; skipped: number; sent: number; notSent: number; pageKeys: number; scrollLines: number; dropped: number }
-/** Whole lines and page keys for the terminal of the shell `pid`, from `from` scroll lines of the stream. `keys` has a
- *  sign of its own: below zero is PageUp. */
-type Scroll = { pid: number; n: number; keys: number; from: number }
+/** Whole lines for the terminal of the shell `pid`, from `from` scroll lines of the stream that have done nothing yet. */
+type Scroll = { pid: number; n: number; from: number }
 /** The page keys a scroll line of `n` lines for the shell `pid` makes: none unless it is a page line. */
 type Pages = (pid: number, n: number, page: boolean) => number
 
@@ -108,41 +106,48 @@ export function startLoop(
     })
   }
 
-  // Lines and keys for the shell that waits are added to it, each to its own bound; lines for another shell replace it,
-  // and what it held ran nothing.
-  function scroll(next: Scroll): void {
+  // VS Code's scroll commands act on the active terminal, so lines run only while it is the one they name: asked before
+  // each line, since a click or a show can make another one active mid-run. A key goes to its own terminal, yet only
+  // while that one is active, as a line.
+  function active(pid: number): boolean {
+    return !stopped && window.state().active === pid
+  }
+
+  // A line's keys (below zero PageUp) go at once, never behind a run: fullscreen's move does not wait on host scrolls
+  // that do nothing on its alternate screen, and no key is left to follow a later line with no page. Its lines for the
+  // shell that waits are added to it, to their bound; lines for another shell replace it, and what it held ran nothing.
+  function scroll(pid: number, n: number, keys: number): void {
+    let pressed = 0
+    try {
+      for (; pressed < Math.abs(keys) && active(pid) && window.pageKey(pid, keys < 0); pressed += 1) count('pageKeys')
+    } catch {
+      // VS Code refused a key: the rest would be refused as well.
+    }
+    // A line whose keys went is no drop, whatever comes of its lines.
+    const next = { pid, n, from: pressed > 0 ? 0 : 1 }
     if (!scrolling) return void run(next)
-    if (waiting?.pid === next.pid) {
-      const n = held(waiting.n + next.n, SCROLL_MAX)
-      waiting = { pid: next.pid, n, keys: held(waiting.keys + next.keys, PAGE_KEYS_MAX), from: waiting.from + next.from }
-    } else {
+    if (waiting?.pid === pid) waiting = { pid, n: held(waiting.n + n, SCROLL_MAX), from: waiting.from + next.from }
+    else {
       if (waiting) count('dropped', waiting.from)
       waiting = next
     }
   }
 
-  // VS Code's scroll commands act on the active terminal, so lines run only while it is the one they name: asked before
-  // each line, since a click or a show can make another one active mid-run. A key goes to its own terminal, yet only
-  // while that one is shown, as a line.
   async function run(first: Scroll): Promise<void> {
     scrolling = true
     for (let next: Scroll | null = first; next; next = waiting) {
       waiting = null
-      const { pid } = next
-      const shown = () => !stopped && window.state().active === pid
-      let pressed = 0
+      const { pid, n } = next
       let ran = 0
       try {
-        // Keys first: fullscreen's move does not wait behind host scrolls that do nothing on its alternate screen.
-        for (; pressed < Math.abs(next.keys) && shown() && window.pageKey(pid, next.keys < 0); pressed += 1) count('pageKeys')
-        for (; ran < Math.abs(next.n) && shown(); ran += 1) {
-          await window.scrollLine(next.n < 0)
+        for (; ran < Math.abs(n) && active(pid); ran += 1) {
+          await window.scrollLine(n < 0)
           count('scrollLines')
         }
       } catch {
-        // VS Code refused a command or a key: the rest of the run would be refused as well.
+        // VS Code refused a command: the rest of the run would be refused as well.
       }
-      if (ran === 0 && pressed === 0) count('dropped', next.from)
+      if (ran === 0) count('dropped', next.from)
     }
     scrolling = false
   }
@@ -303,7 +308,7 @@ export function startLoop(
       const pid = value.pid as number
       const n = held(value.scroll as number, SCROLL_MAX)
       // Only true makes a page line: an older or newer devices' other value scrolls as a plain line.
-      scroll({ pid, n, keys: pages(pid, n, value.page === true), from: 1 })
+      scroll(pid, n, pages(pid, n, value.page === true))
     } else count('skipped')
     return true
   }
