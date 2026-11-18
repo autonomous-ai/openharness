@@ -22,19 +22,20 @@ const thisProcess: LockDeps = {
   watch: (folder, onChange) => watch(folder, onChange).on('error', onChange),
 }
 
-/** Beside the state root, outside both trees: the move renames the trees, never its own lock. */
-export function moveLockPath(stateRoot: string): string {
-  return `${stateRoot}.move-lock`
+/**
+ * Beside ~/.harness, outside both trees: the move renames the trees, never its own lock. Every start takes this one,
+ * whatever XDG_STATE_HOME it reads, so two that read different roots never move at once.
+ */
+export function moveLockPath(legacy: string): string {
+  return `${legacy}.move-lock`
 }
 
 /**
  * Runs [run] while this process holds the move lock: a folder holding `owner`, this process's pid and start time. A
  * lock another live process holds is waited for, LOCK_WAIT_MS at most; one whose owner is gone is taken over.
  */
-export async function withMoveLock<T>(stateRoot: string, run: () => Promise<T>, deps: LockDeps = thisProcess): Promise<{ held: true; value: T } | { held: false }> {
-  const lock = moveLockPath(stateRoot)
-  // The XDG base may not be there yet: made owner-only, as the XDG spec asks.
-  mkdirSync(dirname(lock), { recursive: true, mode: 0o700 })
+export async function withMoveLock<T>(legacy: string, run: () => Promise<T>, deps: LockDeps = thisProcess): Promise<{ held: true; value: T } | { held: false }> {
+  const lock = moveLockPath(legacy)
   const me = JSON.stringify({ pid: deps.pid, start: deps.startTime(deps.pid) })
   if (!take(lock, deps.pid, me) && !await waitFor(lock, deps, me)) return { held: false }
   try {

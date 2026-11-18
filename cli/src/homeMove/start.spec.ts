@@ -114,7 +114,7 @@ function logOf(t: Home, env: NodeJS.ProcessEnv = {}): string[] {
 
 /** A lock on the move another live start holds, and the fake process table and watch this start waits with. */
 function heldByAnother(t: Home): { lock: LockDeps; release(): void } {
-  const path = moveLockPath(t.state)
+  const path = moveLockPath(t.legacy)
   put(join(path, 'owner'), JSON.stringify({ pid: OTHER, start: 7 }))
   let wake = (): void => {}
   return {

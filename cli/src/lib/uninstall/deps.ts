@@ -3,7 +3,7 @@ import { existsSync, rmSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { env } from '../../config/env.js'
-import { HARNESS_ENTRIES, harnessPath, harnessRoot, harnessRoots, xdgRoots } from '../../config/harnessHome.js'
+import { HARNESS_ENTRIES, harnessPath, harnessRoot, harnessRoots, legacyHarnessHome } from '../../config/harnessHome.js'
 import { openDaemon, whereFor } from '../../agentClient/daemon.js'
 import { readBridge, removeBridge } from '../../homeMove/bridge.js'
 import { moveLockPath } from '../../homeMove/lock.js'
@@ -123,8 +123,8 @@ export async function uninstallDeps(options: { tildify: (path: string) => string
     },
     listEntries,
     exists: existsSync,
-    // A start takes the move's lock beside the XDG state root before it knows whether it moves (homeMove/lock.ts).
-    move: process.platform === 'linux' ? { lock: moveLockPath(xdgRoots(home, process.env).state), readBridge, removeBridge, remove: removePath } : null,
+    // A start takes the move's lock beside ~/.harness before it knows whether it moves (homeMove/lock.ts).
+    move: process.platform === 'linux' ? { lock: moveLockPath(legacyHarnessHome(home, 'linux')), readBridge, removeBridge, remove: removePath } : null,
     // On Windows with the temp folder the last step runs from, which must not be in the root.
     checkRemovable: (plan) => { checkRemovable(plan, process.platform === 'win32' ? { tempDir: finalRemovalDeps().tempDir } : {}) },
     removeNow: (plan) => removeNow(plan),

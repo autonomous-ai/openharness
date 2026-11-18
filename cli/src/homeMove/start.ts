@@ -98,7 +98,7 @@ export function reexecTarget(plan: Roots, execPath: string, argv: readonly strin
  * still holds after its wait (this start then goes on, unmoved).
  */
 async function moveOrHold(explicit: boolean, env: NodeJS.ProcessEnv, environment: NodeJS.ProcessEnv, roots: Roots, deps: StartDeps, moveDeps: MoveDeps, lines: string[]): Promise<MoveOutcome | null> {
-  const locked = await withMoveLock(roots.state, async () => {
+  const locked = await withMoveLock(roots.legacy, async () => {
     const recovered = await recoverMove(deps.home, environment, moveDeps)
     if (recovered && recovered.state !== 'rolled-back') return recovered
     // At once when a person typed harness start; else an hour after the last try.
