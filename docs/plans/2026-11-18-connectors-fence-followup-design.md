@@ -62,9 +62,10 @@ the path by name after the check.
    the path as given after `~` expansion, so a `..` after a link goes where the kernel takes it.
 2. Suffix check on that path (string only), so nothing that is not a media file or document is opened.
 3. Open it read-only (`O_NONBLOCK` on posix, so a FIFO never blocks the open); `fstat` the descriptor (bigint). Not a
-   regular file, or `nlink > 1`: refused.
+   regular file: refused.
 4. `realpathSync.native` of the path; a share result (a mapped drive resolves to one) is refused; the suffix check
-   again on the result; `stat(real)` must have the descriptor's `dev`+`ino`, else refused (the path moved).
+   again on the result; `stat(real)` must have the descriptor's `dev`+`ino`, else refused (the path moved), and one
+   link, else refused (a hard link made after the open may be the name `realpath` took).
 5. Walk `real`'s ancestors upward (`stat`, bigint). An ancestor whose identity is a forbidden folder's: refused. The
    temporary folder's identity reached first: stop, allowed (the rule #4442 set: inside Windows' temporary folder,
    only a forbidden folder inside it fences the file).

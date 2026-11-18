@@ -7,7 +7,7 @@
  * unusable credential · 4 host not allowed for this connector. On any failure nothing is written to
  * stdout, so a following `| jq` sees empty input instead of an error body it could mistake for a result.
  */
-import { closeSync, constants, fstatSync, openSync, readFileSync, realpathSync, statSync } from 'node:fs'
+import { closeSync, constants, fstatSync, openSync, readFileSync, realpathSync, statSync, type BigIntStats } from 'node:fs'
 import { homedir, userInfo } from 'node:os'
 import platformPath, { type PlatformPath } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -156,8 +156,7 @@ export function uploadFile(raw: string, env: NodeJS.ProcessEnv = process.env, wa
   const fd = read(() => openSync(given, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0)))
   try {
     const open = read(() => fstatSync(fd, { bigint: true }))
-    // A hard link's other names, which may be inside a forbidden folder, are found by no path the fence can check.
-    if (!open.isFile() || open.nlink > 1n) throw refused()
+    if (!open.isFile()) throw refused()
     // Links followed, so the walk climbs the folders that hold the file, not a link's. The file system's own answer
     // (`native`) is where it found the file: on Windows a mapped drive resolves to its share.
     const real = read(() => realpathSync.native(given))
@@ -165,8 +164,11 @@ export function uploadFile(raw: string, env: NodeJS.ProcessEnv = process.env, wa
     if (unc(real)) throw refused()
     media(real)
     // The path names another file than the open one: it moved after the open, and the walk would check the wrong one.
-    const named = identity(real)
-    if (!named || named.dev !== open.dev || named.ino !== open.ino) throw refused()
+    // A hard link's other names, which may be inside a forbidden folder, are found by no path the fence can check. They
+    // are counted here, after realpath: one made since the open may be the name realpath took, outside that folder.
+    let named: BigIntStats | undefined
+    try { named = statSync(real, { bigint: true }) } catch { named = undefined }
+    if (!named || named.dev !== open.dev || named.ino !== open.ino || named.nlink > 1n) throw refused()
     const account = accountHome()
     // Asked only now, so a path refused by its own checks starts no process. A failed read refuses nothing: the AppData
     // under each home stays fenced, and the line says a moved one may not be.
