@@ -10,7 +10,7 @@ import { CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DialLog } from './dialLog.js'
 import { DialVerdicts } from './dialPortVerdicts.js'
 import { completeFlash } from '../lib/flashRecovery.js'
-import { SerialToolTimeoutError, createDarwinDialFinder, parseDarwinDialPorts, portInUse, type DialPort } from './serial.js'
+import { createDarwinDialFinder, parseDarwinDialPorts, portInUse, type DialPort } from './serial.js'
 
 // Run the same two-device scenarios against the staged helper before deployment.
 const CableFleet: typeof SourceFleet = process.env.HARNESS_TEST_USB_FLEET
@@ -100,7 +100,7 @@ describe('one dial failing', () => {
       // Every greeting the faulty dial sends fails in its session, as its firmware greets on a cadence.
       for (let i = 0; i < 5; i++) faulty.say({ t: 'hello', product: 'harness', mac: faulty.path, fw: 'fixture', proto: 3 })
       await vi.waitFor(() => expect(faulty.isOpen).toBe(false))
-      expect(f.host.log).toHaveBeenCalledWith(expect.stringMatching(/cable: \/dev\/tim dropped \(5 faults in a minute: injected fault: dial\.AA:01\) — this dial alone; its port is looked at again in 0 s \[usb AA:01\]/))
+      expect(f.host.log).toHaveBeenCalledWith(expect.stringMatching(/cable: \/dev\/tim dropped \(5 faults in a minute: Error\) — this dial alone; its port is looked at again in 0 s \[usb AA:01\]/))
       // The other dial is untouched: still attached, still told the desk's work.
       expect(healthy.isOpen).toBe(true)
       healthy.sent.length = 0
@@ -171,7 +171,7 @@ describe('one dial failing', () => {
       const [noisy, quiet] = f.ports
       for (let i = 0; i < 5; i++) noisy.raw(Buffer.from(encodeCableFrame(CableType.Log, Buffer.from('I (12) boot: line'))))
       await vi.waitFor(() => expect(noisy.isOpen).toBe(false))
-      expect(f.host.log).toHaveBeenCalledWith(expect.stringContaining('cable: fault · the log could not be written'))
+      expect(f.host.log).toHaveBeenCalledWith(expect.stringContaining('cable: fault · Error'))
       expect(quiet.isOpen).toBe(true)
     } finally { await f.fleet.stop() }
   })
@@ -394,7 +394,7 @@ describe('USB dial fleet', () => {
     try {
       f.fleet.start()
       await vi.advanceTimersByTimeAsync(5_000)
-      expect(f.host.log).toHaveBeenCalledWith(`cable: USB discovery failed: ${String(new SerialToolTimeoutError('ioreg'))}`)
+      expect(f.host.log).toHaveBeenCalledWith('cable: USB discovery failed: SerialToolTimeoutError')
       expect(f.ports).toHaveLength(0)
       await f.fleet['scan']()
       expect(runIoreg).toHaveBeenCalledTimes(2)

@@ -197,13 +197,13 @@ describe('ObservedSource states', () => {
     expect(src.list()[0].lastAnswer).toBe(`${'a'.repeat(298)}😀…`)
   })
 
-  it('a read that fails logs a count and no error text: it can hold a path', async () => {
+  it('a read that fails logs its kind and no error text: it can hold a path', async () => {
     const { src, ev, logs } = setup({ lastAnswer: async () => { throw new Error('EACCES /Users/someone/.claude/projects/x.jsonl') } })
     src.ingest(ev('turn-stop', { transcriptPath: '/t/s.jsonl' }))
     await graced()
     expect(src.list()[0]).toMatchObject({ state: 'done', unseenDone: true })
     expect(src.list()[0].lastAnswer).toBeUndefined()
-    expect(logs).toEqual(['[observed] last answer · not read'])
+    expect(logs).toEqual(['[observed] last answer · not read · Error'])
   })
 
   it('does not read a transcript for other engines', async () => {
@@ -883,7 +883,7 @@ describe('ObservedSource and the app the scan learns', () => {
     found(s, 'b', 12)
     await s.src.scanOpen()
     expect(s.src.list().map((a) => [a.sessionId, a.app, a.appPending])).toEqual([['a', 'terminal', true], ['b', 'terminal', true]])
-    expect(s.logs).toContain('[observed] scan · apps not read')
+    expect(s.logs).toContain('[observed] scan · apps not read · Error')
     // No error text: a path holds the account's name.
     expect(s.logs.join('\n')).not.toContain('someone')
   })
@@ -2786,7 +2786,7 @@ describe('ObservedSource and the app a hook\'s caller runs in', () => {
     await s.walks[1].answer()
     await s.walks[2].fail()
     expect([s.agent('a').app, s.agent('b').app]).toEqual(['terminal', 'terminal'])
-    expect(s.logs).toContain('[observed] app · not read')
+    expect(s.logs).toContain('[observed] app · not read · Error')
     expect(s.logs.join('\n')).not.toContain('someone')
   })
 
@@ -3572,7 +3572,7 @@ describe('ObservedSource tabs', () => {
     await t.reads[0].fail()
     await t.reads[1].answer(undefined)
     expect(t.src.hasPane(t.agent())).toBe(false)
-    expect(t.logs).toEqual(['[observed] tty · not read'])
+    expect(t.logs).toEqual(['[observed] tty · not read · Error'])
     // Under load each `ps` may time out: no pid is asked more often than once every 10 s.
     t.clock.t += 9_999
     t.src.ingest(t.ev('turn-start', inTerminal))
