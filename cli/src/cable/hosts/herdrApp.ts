@@ -20,8 +20,10 @@
  * Claude Code 2.1.327 draws on the alternate screen, where Herdr's view has no history: `terminal.scroll` moved
  * nothing on Diego's second check (2026-11-18). Its own `pageup` and `pagedown` move its transcript a page, so a Claude
  * Code terminal's lines press those, one per page of lines, through hc's socket on the same queue, and none while it
- * asks: a key would move its question's highlighted choice, and the person's Enter would pick it. hc presses at once
- * while a program writes (about 35 ms a key, measured 2026-11-18), so a working Claude Code takes them too.
+ * asks: a key would move its question's highlighted choice, and the person's Enter would pick it. That is asked at the
+ * stroke's down and again right before each call, as hc tells it then: a question can come up mid-stroke. A status hc
+ * has not told (a word it adds later, or none heard since its subscription dropped) may be a question too. hc presses
+ * at once while a program writes (about 35 ms a key, measured 2026-11-18), so a working Claude Code takes them too.
  *
  * Which terminal is on screen is the window's alone: hc's terminal facts have no focus or viewer. So a stroke asks
  * `herdr-app status` (one run took 0.04 s) and reads its `tab` alone, the tab on screen, which it matches with the
@@ -153,8 +155,11 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
 
   const within = (value: number, most: number): number => Math.max(-most, Math.min(most, value))
   const byKeys = (address: string): boolean => deps.kindOf(address) === CLAUDE_CODE
-  // hc's `blocked` is a question on Claude Code's screen.
-  const asks = (address: string): boolean => byKeys(address) && deps.statusOf(address) === 'blocked'
+  // hc's `blocked` is a question on Claude Code's screen, and a status it has not told may be one.
+  const asks = (address: string): boolean => {
+    const status = deps.statusOf(address)
+    return byKeys(address) && (status === undefined || status === 'blocked')
+  }
 
   // Nobody awaits a scroll, so a run that rejects is a failed run: a rejection left unhandled would end the devices. A
   // Claude Code terminal's run is a call to hc's socket, and needs no `herdr-app`.
@@ -194,6 +199,13 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
       if (queue.gap) {
         await queue.gap
         continue
+      }
+      // Right before the call, as hc tells it now: a Claude Code that began to ask since the stroke's down takes none of
+      // its keys, and what waits is dropped. Not a failure of hc's: the tally counts it, and no failed line is said.
+      if (asks(address)) {
+        queue.failed += Math.abs(queue.pending)
+        queue.pending = 0
+        break
       }
       queue.pending = within(queue.pending - lines, SCROLL_PENDING_MAX)
       if (!(await scrollRun(address, lines, keys, queue))) {

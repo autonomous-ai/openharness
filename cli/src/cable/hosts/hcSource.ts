@@ -77,6 +77,8 @@ export class HcSource implements HostSource {
   /** The pid of the program each live terminal runs now (hc's foreground), shown or not, which the devices ask after
    *  (terminalOf). It holds the client's 1,024 at most. */
   private readonly foregrounds = new Map<string, number>()
+  /** A subscription's snapshot came, and it has not ended since: only then is a status in `shown` hc's now. */
+  private following = false
   private running = false
   private subscription: { close(): void } | undefined
   /** The count of listed agents last said, and of those left out. */
@@ -188,13 +190,14 @@ export class HcSource implements HostSource {
   }
 
   /** The kind and hc's status of the agent in a terminal the window shows, as hc tells them now: a stroke presses a
-   *  Claude Code terminal's own page keys, and none while it asks (herdrApp.ts). */
+   *  Claude Code terminal's own page keys, and none while it asks (herdrApp.ts). A drop keeps the rows for the retry,
+   *  but no status: hc may have changed it meanwhile, so none is told until the next snapshot. */
   kindOf(address: string): string | undefined {
     return this.shown.get(address)?.kind
   }
 
   statusOf(address: string): HcStatus | undefined {
-    return this.shown.get(address)?.status
+    return this.following ? this.shown.get(address)?.status : undefined
   }
 
   /** Whether hc reports an agent's status for that live terminal, shown or not: a hidden worker's hooked copy takes
@@ -258,12 +261,14 @@ export class HcSource implements HostSource {
    *  `closed ·`. */
   private closed(listed: boolean, reason: SocketFault): void {
     this.subscription = undefined
+    this.following = false
     this.attempts.failed(!listed && (reason === 'rejected' || reason === 'bad_answer') ? 'list' : 'closed', reason)
   }
 
   private close(): void {
     this.subscription?.close()
     this.subscription = undefined
+    this.following = false
   }
 
   private clear(): void {
@@ -283,6 +288,7 @@ export class HcSource implements HostSource {
   private snapshot(terminals: readonly HcTerminal[]): void {
     const before = JSON.stringify(this.list())
     const foregrounds = new Map(this.foregrounds)
+    this.following = true
     this.shown.clear()
     this.reported.clear()
     this.foregrounds.clear()
