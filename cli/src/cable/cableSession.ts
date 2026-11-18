@@ -3431,6 +3431,11 @@ export class CableSession {
     if (this.questionInbox.read(agentId).ok && (this.greeting || !this.questionInbox.ask(agentId, id))) return
     await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions })
   }
+  /** A question the dial reads when its row is opened and is never asked: a notice restored after the devices process
+   *  restarted rang before it (cable/notices.ts, harness-pm 2026-11-18). */
+  async hold(agentId: string, id: string, questions: unknown): Promise<void> {
+    this.questionInbox.set(agentId, id, questions, true)
+  }
   /** What this dial would be asked again had it lost its questions, by the same rule: for a dial plugged in beside this
    *  one, which nothing else asks. */
   owedQuestions(): ReturnType<QuestionInbox['open']> {
