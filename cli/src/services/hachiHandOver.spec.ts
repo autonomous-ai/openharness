@@ -31,11 +31,11 @@ describe('handing what Hachi started to the person', () => {
     await Promise.all([first, second])
     expect(tell).toHaveBeenCalledOnce()
     expect(t.count).toHaveBeenCalledOnce()
-    // A harness with no name is said by its id's start.
+    // A harness is said by its id's start.
     expect(t.log).toHaveBeenCalledWith('[hachi] handed far to the person: Hachi closed.')
   })
 
-  it('says a machine that could not be asked, whatever it threw, by the harness\'s id when it has no name', async () => {
+  it('says a machine that could not be asked, whatever it threw, by the harness\'s id', async () => {
     const t = setup(async () => { throw 'asleep' })
     start(t.ledger, 'far-away-harness', 'm2', '')
     await t.hand.over('hachi')

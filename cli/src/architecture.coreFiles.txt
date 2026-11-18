@@ -439,7 +439,6 @@ lib/publishedGridConfig.ts
 lib/purgeAgentService.ts
 lib/questionController.ts
 lib/recapReads.ts
-lib/redactSecrets.ts
 lib/registry.ts
 lib/registryPersistence.ts
 lib/relayFrames.ts

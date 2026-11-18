@@ -9,7 +9,7 @@
  */
 import { AskQuestionController, QuestionWatcher, type QuestionAnswerPayload, type QuestionAnswerResult } from '../lib/questionController.js'
 import type { AutonomousDeviceInput } from './deviceInput.js'
-import { preview, sid } from '../lib/log.js'
+import { sid } from '../lib/log.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { TerminalControl } from './terminals/control.js'
 
@@ -129,7 +129,7 @@ export function createQuestions({
       clients.sendRemote(asked)
       openQuestions.set(sessionId, asked)
       askedRemotely.set(sessionId, asked)
-      console.log(`[question] ${sid(sessionId)} asking the user · "${preview(shaped[0]?.q ?? '')}" · req=${requestId}`)
+      console.log(`[question] ${sid(sessionId)} asking the user · question ${(shaped[0]?.q ?? '').length} chars · req=${requestId}`)
     },
     // Answered somewhere else — the app, or the pane by hand. Every client drawing it is told to stop
     // waiting, down the SAME path the question itself took, so the dial and the WiFi device cannot
