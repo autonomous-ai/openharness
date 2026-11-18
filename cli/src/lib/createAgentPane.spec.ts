@@ -241,9 +241,9 @@ describe('createAndRegisterPane', () => {
       expect(await registry.resumePendingAgent(saved, [{ backend: 'tmux', paneId: '%5' }])).toBeNull()
       // A retried create logged only "failed", and nothing said why its first pane was not admitted (CI, 2026-11-19).
       expect(said.mock.calls.map(([line]) => String(line)).filter(line => / admission failed/.test(line))).toEqual([
-        '[registry] pending admission failed · RegistryPersistenceUnavailable', '[registry] pending admission failed · Error EBUSY',
+        '[registry] pending admission failed · RegistryPersistenceUnavailable ENOSPC', '[registry] pending admission failed · EBUSY',
         '[registry] pending admission failed · Error', '[registry] pending admission failed · Error',
-        '[registry] resume admission failed · Error EBUSY',
+        '[registry] resume admission failed · EBUSY',
       ])
     } finally {
       said.mockRestore()

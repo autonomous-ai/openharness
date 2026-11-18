@@ -10,6 +10,7 @@ import { insideWindowsRoots, requireWindowsStateFile, syncStateDirectory, window
 import { lockStartMarker, processExists } from './processLiveness.js'
 import { psEnv } from './childLocale.js'
 import { ownProcessGroup } from './windows/noWindow.js'
+import { errorKind } from './log.js'
 
 const REQUEST_MS = 5_000
 const LOCK_MS = 2_000
@@ -29,7 +30,11 @@ function measure(phase: PersistencePhase, started: number, depth = 0): void {
 }
 
 export class RegistryPersistenceUnavailable extends Error {
-  constructor(reason: string) { super(`Registry persistence unavailable: ${reason}`); this.name = 'RegistryPersistenceUnavailable' }
+  // The disk's code rides on `cause` for the log line (errorKind), not as `code`: readers of `code` answer clients.
+  constructor(reason: string, disk?: string) {
+    super(`Registry persistence unavailable: ${reason}`, disk === undefined ? undefined : { cause: { code: disk } })
+    this.name = 'RegistryPersistenceUnavailable'
+  }
 }
 
 export interface RegistryWriteDeadline {
@@ -97,7 +102,7 @@ export class RegistryWriteQueue {
           clearTimeout(timer)
           // The durable result is already known. Cleanup still owns admission,
           // and its rejection is observed without replacing that result.
-          await cleanup?.catch(() => console.warn('[registry] write cleanup failed'))
+          await cleanup?.catch((error) => console.warn(`[registry] write cleanup failed · ${errorKind(error)}`))
         }
       }
       this.waiting.push(run)
@@ -363,7 +368,7 @@ export async function registryFileLock<T>(directory: string, deadline: RegistryW
         if (stat.ino !== identity.ino || stat.dev !== identity.dev) return
         const owner = await readOwner(ownerFile)
         if (owner?.token === token && owner.pid === process.pid) removeLockNow(lock, identity, owner)
-      } catch { console.warn('[registry] lock cleanup refused an unsafe owner') }
+      } catch (error) { console.warn(`[registry] lock cleanup refused an unsafe owner · ${errorKind(error)}`) }
     }
     try {
       await fs.mkdir(lock, { mode: 0o700 })
