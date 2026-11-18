@@ -116,7 +116,7 @@ separately), every `speech.*` and the speech PCM frame (`0x05`), `models`, `noti
 The Pro does use: `welcome`, `ping`, `agents.*`, `agent.updated`, `machines.*`, `swarms`, `focus`,
 `turn.started/activity/done/error`, `summary`, `question`, `question.close`, `player.library`, `voice.transcript`,
 `voice.error`; and sends `hello`, `machines.list`, `agents.list`, `player.library.get`, `agent.open`, `scroll`,
-`pong`, the voice stream and `voice.cancel`.
+`pong`, the voice stream and `voice.abort` (why "discarded").
 
 ## 6. Open points
 
