@@ -1,16 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import type { NoticeAsk } from '../lib/dialNotice.js'
-import { type NoticeCaller, noticeKeys, Notices } from './notices.js'
+import { type NoticeCaller, noticeKeys, Notices, type StoredNotice } from './notices.js'
 
-type Call = ['ask', string, string, unknown] | ['close', string, string]
+type Call = ['ask', string, string, unknown] | ['close', string, string] | ['hold', string, string, unknown]
 
 function desk(opts: {
   connected?: boolean; host?: string; hosts?: Record<string, string>; who?: NoticeCaller['who']
-  keys?: Record<string, string[]>; clock?: number
+  keys?: Record<string, string[]>; clock?: number; restored?: StoredNotice[]
 } = {}) {
-  const state = { connected: opts.connected ?? true, at: 0, clock: opts.clock ?? 0, ids: 0, resolved: 0, changes: 0, held: new Set<string>() }
+  const state = {
+    connected: opts.connected ?? true, at: 0, clock: opts.clock ?? 0, ids: 0, resolved: 0, changes: 0, redraws: 0, held: new Set<string>(),
+  }
   const calls: Call[] = []
   const counted: Array<[string, string]> = []
+  const logs: string[] = []
   const notices = new Notices({
     connected: () => state.connected,
     resolve: (ask) => {
@@ -26,8 +29,12 @@ function desk(opts: {
     clock: () => state.clock,
     changed: () => { state.changes += 1 },
     count: (engine, result) => counted.push([engine, result]),
+    restored: opts.restored ?? [],
+    log: (line) => logs.push(line),
+    redraw: () => { state.redraws += 1 },
+    hold: (agentId, id, questions) => calls.push(['hold', agentId, id, questions]),
   })
-  return { notices, state, calls, counted, asks: () => calls.filter((c) => c[0] === 'ask') }
+  return { notices, state, calls, counted, logs, asks: () => calls.filter((c) => c[0] === 'ask') }
 }
 
 const VPN = 'Connect the VPN so I can run the staging tests'
@@ -278,5 +285,111 @@ describe('Notices', () => {
     const { notices, asks } = desk({ host: '' })
     notices.notify(notice(VPN))
     expect(asks()[0][3]).toEqual([{ key: 'notice', q: VPN, options: ['In Terminal'] }])
+  })
+})
+
+describe('Notices after a restart', () => {
+  const NOW = 1_800_000_000_000
+  const DAY = 24 * 3_600_000
+  const WHO = { name: 'api', engine: 'codex', machine: 'Mac mini' }
+  const kept = (over: Partial<StoredNotice> = {}): StoredNotice =>
+    ({ agentId: 'a1', keys: ['claude:s1'], id: 'shown:k1', line: VPN, host: 'orca', at: NOW - 60_000, ...over })
+  const asWho = kept({ agentId: 'w1', id: 'shown:k2', keys: [], host: '', who: WHO })
+  const asked = (host: string) => [{ key: 'notice', q: VPN, options: [`In ${host}`] }]
+  const back = (cards: StoredNotice[], over: Parameters<typeof desk>[0] = {}) => desk({ restored: cards, clock: NOW, ...over })
+
+  it('a card of the file is pending again under its id, and nothing is asked', () => {
+    const { notices, state, calls } = back([kept()])
+    expect(calls).toEqual([])
+    expect(notices.pending('a1')).toBe(true)
+    expect(notices.stored()).toEqual([kept()])
+    // It waits for its agent to be listed.
+    notices.attached()
+    notices.reask('a1')
+    expect(calls).toEqual([])
+    expect(state.redraws).toBe(0)
+  })
+
+  it('a restored card of a caller no list holds is a drawer row at once; any other waits for its agent', () => {
+    const { notices } = back([kept(), asWho])
+    expect(notices.rows('m')).toEqual([{ agentId: 'w1', machineId: 'm', question: true, text: VPN }])
+    expect(notices.from('w1')).toEqual(WHO)
+  })
+
+  it('a restored row\'s question is held as a dial attaches, never asked, so opening the row reads its line', () => {
+    const { notices, state, calls } = back([kept(), asWho])
+    notices.attached()
+    expect(calls).toEqual([['hold', 'w1', 'shown:k2', asked('Terminal')]])
+    expect(state.redraws).toBe(0)
+  })
+
+  it('a card older than 24 hours is dropped, one of exactly 24 hours is kept, and one ahead of the clock too', () => {
+    const cards = [kept({ at: NOW - DAY - 1 }), kept({ agentId: 'a2', id: 'shown:k2', at: NOW - DAY }),
+      kept({ agentId: 'a3', id: 'shown:k3', at: NOW + 60_000 })]
+    const { notices, calls } = back(cards)
+    expect(notices.stored()).toEqual(cards.slice(1))
+    expect(calls).toEqual([])
+  })
+
+  it('the start says the counts in one line, and tells the file when a card aged out', () => {
+    const aged = back([kept({ at: NOW - DAY - 1 }), kept({ agentId: 'a2', id: 'shown:k2' }), asWho])
+    expect(aged.logs).toEqual(['[device] notices · restored 2 · aged out 1'])
+    expect(aged.state.changes).toBe(1)
+    const fresh = back([kept()])
+    expect(fresh.logs).toEqual(['[device] notices · restored 1 · aged out 0'])
+    expect(fresh.state.changes).toBe(0)
+    expect(back([]).logs).toEqual([])
+    expect([...aged.logs, ...fresh.logs].filter((line) => [VPN, 'a1', 'claude:s1'].some((secret) => line.includes(secret)))).toEqual([])
+  })
+
+  it('a restored row another question covered comes back held, by a drawer replace, never an ask', () => {
+    const { notices, state, calls } = back([kept(), asWho])
+    state.held.add('w1')
+    expect(notices.rows('m')).toEqual([])
+    notices.attached()
+    notices.reask('w1')
+    expect(calls).toEqual([])
+    expect(state.redraws).toBe(0)
+    state.held.delete('w1')
+    notices.reask('w1')
+    expect(calls).toEqual([['hold', 'w1', 'shown:k2', asked('Terminal')]])
+    expect(state.redraws).toBe(1)
+    notices.reask('a1')
+    expect(calls).toHaveLength(1)
+    expect(state.redraws).toBe(1)
+  })
+
+  it('a restored card ends as any card: closed under its id, once', () => {
+    const { notices, state, calls } = back([kept(), asWho])
+    notices.ended('w1')
+    expect(calls).toEqual([['close', 'w1', 'shown:k2']])
+    expect(state.changes).toBe(1)
+    notices.ended('w1')
+    expect(calls).toHaveLength(1)
+    expect(state.changes).toBe(1)
+  })
+
+  it('a new notice of its agent rings and takes its place', () => {
+    const { notices, calls } = back([kept()])
+    expect(notices.notify(notice(VPN, 'a1'))).toBe('shown')
+    expect(calls.map((c) => [c[0], c[2]])).toEqual([['close', 'shown:k1'], ['ask', 'shown:u1']])
+    calls.length = 0
+    notices.attached()
+    expect(calls).toEqual([['ask', 'a1', 'shown:u1', asked('Orca')]])
+  })
+
+  it('restored cards count toward the twenty, waiting or not', () => {
+    const cards = Array.from({ length: 20 }, (_, i) => kept({ agentId: `a${i + 1}`, id: `shown:k${i + 1}`, keys: [`claude:s${i + 1}`] }))
+    const { notices, calls } = back(cards)
+    expect(notices.notify(notice(VPN, 'a21'))).toBe('shown')
+    expect(calls[0]).toEqual(['close', 'a1', 'shown:k1'])
+    expect(notices.stored()).toHaveLength(20)
+  })
+
+  it('the last dial going ends a restored Harness card and leaves the others', () => {
+    const { notices, calls } = back([kept({ agentId: 'h1', host: 'harness' }), asWho])
+    notices.detached()
+    expect(calls).toEqual([['close', 'h1', 'shown:k1']])
+    expect(notices.pending('w1')).toBe(true)
   })
 })

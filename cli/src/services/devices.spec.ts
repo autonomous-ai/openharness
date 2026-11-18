@@ -85,6 +85,7 @@ vi.mock('../cable/cableFleet.js', async (real) => {
     agentSeen = recorder('agentSeen')
     question = recorder('question')
     questionClose = recorder('questionClose')
+    hold = recorder('hold')
     turnStarted = recorder('turnStarted')
     turnStep = recorder('turnStep')
     turnReply = recorder('turnReply')
@@ -6134,6 +6135,78 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       vi.advanceTimersByTime(1_000)
       expect(logs).toContain('[device] notices · not saved · EISDIR')
       expect(logs.filter((line) => ['dial-notices', 'VPN', 'sess-1'].some((secret) => line.includes(secret)))).toEqual([])
+    })
+
+    /** The devices again, on the same data folder: the first one's later stop (onTestFinished) writes nothing, its file is closed. */
+    const again = async (first: ReturnType<typeof devices>, over: Parameters<typeof devices>[0] = {}) => {
+      await first.port.stop()
+      return devices(over)
+    }
+    const ringing = () => seen.cable.calls.filter(([name]) => name === 'question' || name === 'summary' || name === 'turnError')
+    const CALLER = observedAgentId('codex', 't-9')
+    /** A caller no list holds rings, and the devices restart with its card pending. */
+    const restartWithCaller = async () => {
+      const first = devices()
+      expect(first.listener.notice({ text: LINE, engine: 'codex', sessionId: 't-9', folder: 'api' })).toEqual({ result: 'shown' })
+      const [restored] = ids()
+      return { ...await again(first), restored }
+    }
+
+    // harness-pm's required test: it rang before the restart, so it comes back silent and opens to its line.
+    it('a restart puts the row of a caller no list holds back in the drawer, with no question and no alert, and holds the question its row opens to', async () => {
+      const { port, restored } = await restartWithCaller()
+      seen.host.watching!(true)
+      port.unread([])
+      expect(calls('replaceNotifications').at(-1)).toEqual([[{ agentId: CALLER, machineId: 'machine-1', question: true, text: LINE }]])
+      expect(ringing()).toEqual([])
+      expect(calls('hold')).toEqual([[CALLER, restored, [{ key: 'notice', q: LINE, options: ['In Terminal'] }]]])
+      expect(host().describe(CALLER)).toEqual({ name: 'api', engine: 'codex', machine: 'This machine' })
+      expect(logs).toContain('[device] notices · restored 1 · aged out 0')
+    })
+
+    it('a card older than 24 hours is not restored, and leaves the file', () => {
+      writeFileSync(FILE(), JSON.stringify({ v: 1, cards: [{ agentId: CALLER, keys: [], id: 'shown:k1', line: LINE, host: '',
+        who: { name: 'api', engine: 'codex', machine: 'This machine' }, at: T - 24 * 3_600_000 - 1 }] }))
+      devices()
+      expect(host().listUnread()).toEqual([])
+      expect(logs).toContain('[device] notices · restored 0 · aged out 1')
+      vi.advanceTimersByTime(1_000)
+      expect(saved().cards).toEqual([])
+    })
+
+    it('a bad file never stops the devices: one line, and the next notice replaces it', () => {
+      writeFileSync(FILE(), '{not json')
+      const { port, listener } = devices()
+      expect(logs).toContain('[device] notices · file dropped · json')
+      port.observed(hook('session-start'))
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+      vi.advanceTimersByTime(1_000)
+      expect(saved().cards).toHaveLength(1)
+    })
+
+    it('only a new notice of that agent rings again, at once, and takes the restored card\'s place', async () => {
+      const { listener, restored } = await restartWithCaller()
+      // The limits start fresh: the same line again is not limited.
+      expect(listener.notice({ text: LINE, engine: 'codex', sessionId: 't-9', folder: 'api' })).toEqual({ result: 'shown' })
+      expect(calls('questionClose')).toEqual([[CALLER, restored]])
+      expect(calls('question')).toEqual([[CALLER, expect.stringMatching(/^shown:/), card('Terminal')]])
+      expect(ids()[0]).not.toBe(restored)
+    })
+
+    it('a restored row comes back by a drawer replace as the wait that covered it closes', async () => {
+      // No hook of sess-1 before its notice: a caller no list holds, under its session's id.
+      const first = devices()
+      expect(first.listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+      const [restored] = ids()
+      const { port } = await again(first)
+      port.observed(hook('needs-input'))
+      port.observed({ engine: 'claude', sessionId: 'sess-1', event: 'asked', tool: 'Bash', summary: 'npm test', cwd: '/work/api' })
+      port.observed(hook('turn-stop'))
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+      expect(calls('replaceNotifications').at(-1)?.[0]).toContainEqual({ agentId: ID, machineId: 'machine-1', question: true, text: LINE })
+      // Held again: the wait's own question took its place in the session.
+      expect(calls('hold').at(-1)).toEqual([ID, restored, card('Terminal')])
+      expect(calls('question').filter(([, id]) => id === restored)).toEqual([])
     })
   })
 })
