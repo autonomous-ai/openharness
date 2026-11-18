@@ -88,14 +88,15 @@ harness_roots() {
   HARNESS_DATA_ROOT="$HOME/.harness"
   HARNESS_STATE_ROOT="$HOME/.harness"
   [ "$(uname -s)" = Linux ] || return 0
-  # Only an absolute path counts, as the XDG spec says. A trailing / is dropped so the paths written
-  # into the launcher and current-node are spelled as the CLI's own join spells them.
+  # Only an absolute path counts, as the XDG spec says. A run of / is squeezed to one and a trailing
+  # one dropped, so the paths written into the launcher and current-node are spelled as the CLI's own
+  # join spells them.
   case "${XDG_DATA_HOME:-}" in
-    /*) _xdg_data="${XDG_DATA_HOME%/}/harness" ;;
+    /*) _xdg_data="$(printf '%s' "$XDG_DATA_HOME" | tr -s /)"; _xdg_data="${_xdg_data%/}/harness" ;;
     *)  _xdg_data="$HOME/.local/share/harness" ;;
   esac
   case "${XDG_STATE_HOME:-}" in
-    /*) _xdg_state="${XDG_STATE_HOME%/}/harness" ;;
+    /*) _xdg_state="$(printf '%s' "$XDG_STATE_HOME" | tr -s /)"; _xdg_state="${_xdg_state%/}/harness" ;;
     *)  _xdg_state="$HOME/.local/state/harness" ;;
   esac
   if [ -e "$_xdg_data" ] || [ ! -e "$HOME/.harness" ]; then
