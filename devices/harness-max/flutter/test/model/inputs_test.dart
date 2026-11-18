@@ -335,4 +335,24 @@ void main() {
     m.onToast('');
     expect(m.toast, isNull);
   });
+
+  test('the computer turning the bar to another app says so, as the mockup; a pick on the bar or the first apps do not',
+      () {
+    final b = TestBar(), m = b.model;
+    m.onLink(true, computer: 'MacBook Pro');
+    const both = [AppInfo(id: 'orca', name: 'Orca', count: 5), AppInfo(id: 'harness', name: 'Harness', count: 3)];
+    m.onApps('orca', both);
+    m.onAgents(rows(abcde));
+    expect(m.toast, isNull, reason: 'the first app shown is no news');
+    m.onApps('orca', both);
+    expect(m.toast, isNull, reason: 'the same app again is no change');
+    m.onApps('harness', both);
+    expect(m.toast?.text, 'Following Harness on your Mac');
+
+    m.toast = null;
+    m.openApps();
+    m.pickApp('orca');
+    m.onApps('orca', both);
+    expect(m.toast, isNull, reason: 'the person picked it on the bar');
+  });
 }

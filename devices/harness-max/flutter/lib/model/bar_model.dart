@@ -343,6 +343,13 @@ class BarModel extends ChangeNotifier {
     }
     if (shown != shownApp) cellPage = 0; // another app's agents: from their first page
     if (!appsKnown || shown != shownApp || !same) _dirty = true;
+    // The computer turned the bar to the app in front, as the mockup's follow() tells it; never the first app shown,
+    // never the app the person just picked here, never over a person talking.
+    if (appsKnown && shown.isNotEmpty && shown != shownApp) {
+      final name = list.where((a) => a.id == shown).map((a) => a.name).firstOrNull ?? shown;
+      if (shown != _picked && talk != TalkPhase.listening) _notice('Following $name on your Mac');
+      _picked = '';
+    }
     apps
       ..clear()
       ..addAll(list);
@@ -807,6 +814,7 @@ class BarModel extends ChangeNotifier {
     // A card acts only while Apps is up: a tap can land between a change and the redraw.
     if (_sendsFirst() || page != BarPage.apps || !apps.any((a) => a.id == appId)) return;
     _show(BarPage.overview); // the daemon turns to it, and its next `apps` names it shown
+    _picked = appId;
     link.pickApp(appId);
     _publish();
   }
@@ -1236,6 +1244,9 @@ class BarModel extends ChangeNotifier {
       _dirty = true;
     }
   }
+
+  /// The app the person picked on Apps, until the daemon turns to it: that turn is theirs, not news.
+  String _picked = '';
 
   void _notice(String text) {
     toast = Toast(text, until: now().add(kNoticeFor));
