@@ -4,7 +4,7 @@
  * the code used before the module: a `.harness` segment joined onto a home, `.harness` straight after home text, and a
  * pattern that matches a home path. A project's or workspace's `.harness/` and `.harness-<name>` files are not the home.
  */
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
@@ -65,16 +65,6 @@ const ALLOWED: { files: string[], text: (text: string) => boolean, why: string }
 
 const allowed = (hit: Hit): boolean => ALLOWED.some((entry) => entry.files.includes(hit.file) && entry.text(hit.text))
 
-// The callers not moved yet, one list per caller task; Task 21 of docs/plans/2026-11-18-harness-paths-plan.md deletes
-// this and the lists once every caller is moved.
-const NOT_MOVED = join(__dirname, 'harnessHome.notMoved')
-const notMovedLists = (): { list: string, line: string }[] => existsSync(NOT_MOVED)
-  ? readdirSync(NOT_MOVED).flatMap((list) =>
-    readFileSync(join(NOT_MOVED, list), 'utf8').split(/\r?\n/).filter((line) => line !== '').map((line) => ({ list, line })))
-  : []
-const left = (hits: Hit[], notMoved: string[]): Hit[] =>
-  hits.filter((hit) => !allowed(hit) && !notMoved.includes(printed(hit)))
-
 /** Every hit in cli/src and cli/hook but tests, fixtures, generated code and the module itself. */
 function treeHits(): Hit[] {
   const hits: Hit[] = []
@@ -124,27 +114,14 @@ describe('no hand-built home .harness path outside config/harnessHome.ts', () =>
     expect(hitsIn('lib/planted.ts', planted)).toEqual([])
   })
 
-  it('a not-moved line excuses only its own hit', () => {
-    const hits = hitsIn('lib/planted.ts', 'const a = join(homedir(), \'.harness\')\nconst b = "$HOME/.harness/run"')
-    expect(hits).toHaveLength(2)
-    expect(left(hits, [printed(hits[0]!)])).toEqual([hits[1]])
-    expect(left(hits, [printed({ ...hits[0]!, line: 7 })])).toEqual(hits)
-  })
-
-  it('cli/src and cli/hook hold none but the allowlisted and the not moved yet', () => {
-    const hits = left(treeHits(), notMovedLists().map(({ line }) => line))
+  it('cli/src and cli/hook hold none but the allowlisted', () => {
+    const hits = treeHits().filter((hit) => !allowed(hit))
     expect(hits.map(printed), 'Build the path with harnessPath() from config/harnessHome.ts.').toEqual([])
   })
 
   it('every allowlist entry still matches a hit', () => {
     const hits = treeHits()
     const stale = ALLOWED.flatMap(({ files, text }) => files.filter((file) => !hits.some((hit) => hit.file === file && text(hit.text))))
-    expect(stale).toEqual([])
-  })
-
-  it('every not-moved line still matches a hit', () => {
-    const hits = treeHits().map(printed)
-    const stale = notMovedLists().filter(({ line }) => !hits.includes(line)).map(({ list, line }) => `${list}: ${line}`)
     expect(stale).toEqual([])
   })
 })
