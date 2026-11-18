@@ -1,8 +1,9 @@
 /**
- * `harness device claude …`, `codex …` and `vscode …` as a person, the plugin's hook and its mod run them: a
- * fake `claude` (a ClaudeRun that answers from a table), Claude Code's settings in a throwaway CLAUDE_CONFIG_DIR, Codex's
- * home a throwaway folder, VS Code a fake one under a throwaway home, and a daemon and the devices' listener on sockets
- * in a throwaway folder. The real `claude`, `code`, ~/.claude, ~/.codex, ~/.vscode and the daemon are never touched.
+ * `harness device claude …`, `codex …` and `vscode …` as a person, the plugin's hook and its mod run them, and
+ * `orca status|connect` as the Harness app runs them: a fake `claude` (a ClaudeRun that answers from a table), Claude
+ * Code's settings in a throwaway CLAUDE_CONFIG_DIR, Codex's home a throwaway folder, VS Code a fake one under a throwaway
+ * home, a fake `orca` (testing/fakeOrcaCli.ts), and a daemon and the devices' listener on sockets in a throwaway folder.
+ * The real `claude`, `code`, `orca`, ~/.claude, ~/.codex, ~/.vscode and the daemon are never touched.
  */
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
@@ -10,15 +11,22 @@ import { Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DIAL_SKILL } from '../devices/dialSkill.js'
-import { readPluginHomes, readRemoved, writeRemoved } from '../devices/dialSkillFiles.js'
+import { readOrcaConnected, readPluginHomes, readRemoved, writeRemoved } from '../devices/dialSkillFiles.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
 import { listenLocalSocket, unixSocketPath } from '../lib/localSocket.js'
 import { socketIsPrivate } from '../lib/localTransport.js'
 import { DEVICE_USAGE, runDeviceCommand, takesConnect, type DeviceDeps } from './command.js'
 import type { ClaudeRun } from '../devices/claudePlugin.js'
 import { VSCODE_EXTENSION_ID, type VscodeExtensionDeps } from '../devices/vscodeExtension.js'
+import { orcaPluginRun, type OrcaPluginFiles, type OrcaPluginRun } from '../devices/orcaPlugin.js'
+import { fakeOrcaCli, type FakeOrcaCli } from '../testing/fakeOrcaCli.js'
+
+// @ts-expect-error — plain ESM with no declaration file
+const { readOrcaPluginBundle } = await import('../../scripts/lib/orcaPluginBundle.mjs') as {
+  readOrcaPluginBundle: (version: string) => string
+}
 
 const SRC = fileURLToPath(new URL('..', import.meta.url))
 /** Names the daemon's socket only: the daemon here listens on a socket in a throwaway folder. */
@@ -114,6 +122,7 @@ async function device(argv: string[], deps: Partial<DeviceDeps> = {}) {
     defaultClaudeHome: claudeHome,
     codexHome: folder(), codex: () => true, env: {}, cwd: '/',
     vscode: () => { throw new Error('only the vscode words ask for VS Code') },
+    orca: () => { throw new Error('only orca status and connect ask for Orca') },
     out: (line) => { out.push(line) }, err: (line) => { err.push(line) },
     ...deps,
   })
@@ -1063,6 +1072,193 @@ describe('harness device orca link and vscode link', () => {
       expect(await device(argv), argv.join(' ')).toEqual({ code: 1, out: [], err: [DEVICE_USAGE] })
     }
     expect(DEVICE_USAGE).not.toMatch(new RegExp(`${host} link`))
+  })
+})
+
+describe('harness device orca status and connect', () => {
+  const KEY = 'local.harness-device'
+  const FP = 'ap1-0123456789abcdef0123456789abcdef'
+  const EXECUTION = 'Runs its own code in a separate Node.js process on the Orca host, with your user account’s access to that machine.'
+  const WORKSPACE_READ = 'Read your projects and workspaces (names, branches, paths and agent status) and the terminals in them, and get notified when they change'
+  const FAILED_LINE = '{"connect":"failed","error":"failed"}'
+  /** The plugin as a build carries it: a manifest at 1.2.3 and one source. */
+  const FILES: OrcaPluginFiles = {
+    'orca-plugin.json': `${JSON.stringify({ manifestVersion: 2, id: 'harness-device', name: 'Harness Device', version: '1.2.3', engines: { orca: '>=1.4.248' }, main: 'src/worker.ts' }, null, 2)}\n`,
+    'src/worker.ts': 'export const worker = true\n',
+  }
+
+  // One fake for the file: macOS scans a new executable at its first run, about half a second each. Each case sets every
+  // answer it reads, and reads the calls made after its own start.
+  let orcaDir: string
+  let fake: FakeOrcaCli
+  beforeAll(() => {
+    orcaDir = mkdtempSync(join(tmpdir(), 'dc-orca-'))
+    fake = fakeOrcaCli(orcaDir)
+  })
+  afterAll(() => rmSync(orcaDir, { recursive: true, force: true }))
+
+  /** Orca's CLI as `harness device` is handed it: the fake `orca`, run through the real `run`. */
+  const orcaRun = (files: OrcaPluginFiles = FILES): OrcaPluginRun =>
+    ({ platform: 'darwin', orca: () => fake.bin, run: orcaPluginRun().run, files: () => files })
+
+  /** An Orca that is running, at a version the plugin takes, and lists no plugin; the fake's calls from now on. */
+  function up(): () => string[] {
+    fake.answer('status', { id: 'req-1', ok: true, result: { app: { running: true }, runtime: { reachable: true, appVersion: '1.4.262' } } })
+    fake.answer('plugin inspect', { id: 'req-2', ok: true, result: { plugin: { pluginKey: KEY } } })
+    fake.answer('plugin list', { id: 'req-3', ok: true, result: { plugins: [] } })
+    const before = fake.calls().length
+    return () => fake.calls().slice(before)
+  }
+  /** Orca's refusal to install without the fingerprint (exit 3). */
+  const approvalRequired = () => fake.answer('plugin install', {
+    id: 'req-4', ok: false,
+    error: {
+      code: 'approval_required', message: `${KEY} 1.2.3 needs approval before it can run.\nFingerprint: ${FP}`,
+      data: {
+        pluginKey: KEY, name: 'Harness Device', version: '1.2.3', approvalFingerprint: FP,
+        grants: { executionDescription: EXECUTION, capabilities: [{ kind: 'workspace:read', description: WORKSPACE_READ }] },
+      },
+    },
+  }, 3)
+  const installs = () => fake.answer('plugin install', { id: 'req-5', ok: true, result: { pluginKey: KEY, version: '1.2.3' } })
+
+  /** VS Code not on this computer: its disable only marks the removal, a rewrite of dial-skill.json. */
+  const noVscode = (): VscodeExtensionDeps => ({
+    platform: 'darwin', home: folder(), pathVar: '', exists: () => false, executable: () => false, read: () => null,
+    run: async () => ({ code: 1, timedOut: false }), files: () => null, tempDir: folder, write: () => {}, remove: () => {},
+  })
+
+  it('status --json prints one line and exits 0; without --json the same fields, indented', async () => {
+    up()
+    expect(await device(['orca', 'status', '--json'], { orca: orcaRun })).toEqual({ code: 0, err: [], out: ['{"orca":"offer"}'] })
+    expect(await device(['orca', 'status'], { orca: orcaRun }))
+      .toEqual({ code: 0, err: [], out: [JSON.stringify({ orca: 'offer' }, null, 2)] })
+  })
+
+  it('connect --json prints what Orca lists, installs nothing and records nothing', async () => {
+    const dataDir = folder()
+    const calls = up()
+    approvalRequired()
+    const { code, out, err } = await device(['orca', 'connect', '--json'], { dataDir, orca: orcaRun })
+    expect({ code, err, lines: out.length }).toEqual({ code: 0, err: [], lines: 1 })
+    expect(JSON.parse(out[0]!)).toStrictEqual({
+      connect: 'approve', name: 'Harness Device', version: '1.2.3', fingerprint: FP, grants: [EXECUTION, WORKSPACE_READ], update: false,
+    })
+    expect(calls().at(-1)).toBe(`plugin install ${join(dataDir, 'orca-plugin')} --json`)
+    expect(existsSync(join(dataDir, 'dial-skill.json'))).toBe(false)
+  })
+
+  it('connect --approve prints done and records it; then status is off and connect installs nothing', async () => {
+    const dataDir = folder()
+    up()
+    installs()
+    expect(await device(['orca', 'connect', '--approve', FP, '--json'], { dataDir, orca: orcaRun }))
+      .toEqual({ code: 0, err: [], out: ['{"connect":"done"}'] })
+    expect(answers(dataDir)).toEqual({ orcaConnected: true })
+    // The person removed the plugin in Orca: it is gone from the list.
+    const calls = up()
+    expect(await device(['orca', 'status', '--json'], { dataDir, orca: orcaRun })).toEqual({ code: 0, err: [], out: ['{"orca":"off"}'] })
+    expect(await device(['orca', 'connect', '--json'], { dataDir, orca: orcaRun }))
+      .toEqual({ code: 1, err: [], out: ['{"connect":"failed","error":"off"}'] })
+    expect(calls().filter((call) => call.startsWith('plugin install'))).toEqual([])
+  })
+
+  it('harness device vscode disable keeps the record', async () => {
+    const dataDir = folder()
+    up()
+    installs()
+    await device(['orca', 'connect', '--approve', FP, '--json'], { dataDir, orca: orcaRun })
+    expect(await device(['vscode', 'disable'], { dataDir, vscode: noVscode })).toEqual({ code: 0, err: [], out: ['{"vscode":"absent"}'] })
+    expect(answers(dataDir)).toEqual({ removed: { vscode: true }, orcaConnected: true })
+    expect(await device(['orca', 'status', '--json'], { dataDir, orca: orcaRun })).toEqual({ code: 0, err: [], out: ['{"orca":"off"}'] })
+  })
+
+  it('--approve takes the next word, wherever --json is', async () => {
+    for (const argv of [['orca', 'connect', '--approve', FP, '--json'], ['orca', 'connect', '--json', '--approve', FP]]) {
+      const calls = up()
+      installs()
+      expect(await device(argv, { orca: orcaRun }), argv.join(' ')).toEqual({ code: 0, err: [], out: ['{"connect":"done"}'] })
+      expect(calls().at(-1)).toMatch(new RegExp(`^plugin install \\S+ --approve ${FP} --json$`))
+    }
+  })
+
+  it('anything else after --approve is failed before Orca is run', async () => {
+    const orca = vi.fn(orcaRun)
+    for (const args of [
+      ['--approve'], ['--approve', '--json'], ['--approve', FP.toUpperCase()], ['--approve', FP.slice(0, -1)], ['--approve', `${FP}0`],
+      ['--approve', FP, '--approve', FP], ['--approve', FP, 'now'], ['now'], ['--yes'],
+    ]) {
+      const argv = ['orca', 'connect', ...args, '--json']
+      expect(await device(argv, { orca }), argv.join(' ')).toEqual({ code: 1, err: [], out: [FAILED_LINE] })
+    }
+    expect(orca).not.toHaveBeenCalled()
+  })
+
+  it('a record that cannot be saved is said, and the line stays done', async () => {
+    const dataDir = folder()
+    up()
+    // The plugin's folder is written first: a data folder that cannot be written would leave Orca nothing to install.
+    expect(await device(['orca', 'status', '--json'], { dataDir, orca: orcaRun })).toEqual({ code: 0, err: [], out: ['{"orca":"offer"}'] })
+    readOnly(dataDir)
+    installs()
+    expect(await device(['orca', 'connect', '--approve', FP, '--json'], { dataDir, orca: orcaRun }))
+      .toEqual({ code: 0, out: ['{"connect":"done"}'], err: ['Could not save the dial setting.'] })
+    expect(readOrcaConnected(dataDir)).toEqual({ connected: false })
+  })
+
+  it('what the build carries is what the folder holds', async () => {
+    const dataDir = folder()
+    const calls = up()
+    const files = JSON.parse(readOrcaPluginBundle('1.2.3')) as OrcaPluginFiles
+    expect(await device(['orca', 'status', '--json'], { dataDir, orca: () => orcaRun(files) }))
+      .toEqual({ code: 0, err: [], out: ['{"orca":"offer"}'] })
+    const plugin = join(dataDir, 'orca-plugin')
+    for (const [path, text] of Object.entries(files)) expect(readFileSync(join(plugin, path), 'utf8'), path).toBe(text)
+    expect(JSON.parse(readFileSync(join(plugin, 'orca-plugin.json'), 'utf8'))).toMatchObject({ version: '1.2.3' })
+    expect(calls()).toContain(`plugin inspect ${plugin} --json`)
+  })
+
+  it('status with another word prints the usage and exits 1', async () => {
+    const orca = vi.fn(orcaRun)
+    for (const argv of [['orca', 'status', 'now'], ['orca', 'status', '--json', 'now'], ['orca', 'status', '--approve', FP]]) {
+      expect(await device(argv, { orca }), argv.join(' ')).toEqual({ code: 1, out: [], err: [DEVICE_USAGE] })
+    }
+    expect(orca).not.toHaveBeenCalled()
+  })
+
+  it('link, claude, codex, vscode and notify never ask for the Orca dependencies, and orca link prints what it printed', async () => {
+    const orca = vi.fn(orcaRun)
+    for (const argv of [['vscode', 'link'], ['claude', 'status'], ['codex', 'status'], ['vscode', 'status'], ['notify', 'Connect the VPN'], ['orca']]) {
+      await device(argv, { orca, vscode: noVscode })
+    }
+    const dataDir = folder()
+    expect(await device(['orca', 'link'], { dataDir, orca })).toEqual({
+      code: 0, err: [], out: [JSON.stringify({ daemon: false, devicesSocket: devicesListenerPath(dataDir), devicesReady: false })],
+    })
+    expect(orca).not.toHaveBeenCalled()
+  })
+
+  it('the usage names neither word', () => {
+    expect(DEVICE_USAGE).not.toMatch(/orca (status|connect)|--approve/)
+  })
+
+  it('no file under core/, services/ or cable/ imports devices/orcaPlugin or devices/orcaPluginFolder', () => {
+    const importsOrca = /(?:from|import\s*\()\s*['"][^'"]*devices\/orcaPlugin(?:Folder)?\.js['"]/
+    // The pattern catches a static and a dynamic import of each, or an empty list would prove nothing.
+    expect(["import { orcaStatus } from '../devices/orcaPlugin.js'", "await import('../../devices/orcaPluginFolder.js')"]
+      .every((line) => importsOrca.test(line))).toBe(true)
+    const importers = ['core', 'services', 'cable'].flatMap((dir) =>
+      readdirSync(join(SRC, dir), { recursive: true, encoding: 'utf8' })
+        .filter((name) => name.endsWith('.ts'))
+        .map((name) => join(dir, name))
+        .filter((file) => importsOrca.test(readFileSync(join(SRC, file), 'utf8'))))
+    expect(importers).toEqual([])
+  })
+
+  it('neither module names the home folder', () => {
+    for (const module of ['devices/orcaPlugin.ts', 'devices/orcaPluginFolder.ts']) {
+      expect(readFileSync(join(SRC, module), 'utf8'), module).not.toMatch(/homedir/)
+    }
   })
 })
 
