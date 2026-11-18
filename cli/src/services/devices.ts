@@ -29,6 +29,7 @@ import { cableEventFor, cableStepFor, cableQuestionCloseFor, cableQuestionFor, D
 import { CableSession, SHOWN_ONLY_PREFIX, type DialStatus, type FollowCause } from '../cable/cableSession.js'
 import type { HostAdapter, Pane } from '../cable/hosts/adapter.js'
 import { createClaudeAppAdapter } from '../cable/hosts/claudeApp.js'
+import { readFullscreen } from '../cable/hosts/claudeRenderer.js'
 import { cmuxClientDeps, cmuxStoreDir, cmuxStores, createCmuxClient, type CmuxClient } from '../cable/hosts/cmuxCli.js'
 import { createCmuxAppAdapter } from '../cable/hosts/cmuxApp.js'
 import { CmuxSource } from '../cable/hosts/cmuxSource.js'
@@ -58,7 +59,7 @@ import { createTmuxAdapter } from '../cable/hosts/tmux.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { watchSocket } from '../cable/hosts/unixSocket.js'
 import { createVscodeAdapter, termPid } from '../cable/hosts/vscode.js'
-import { readProcessParents, vscodeStreams, type VscodeTerminalsDeps } from '../cable/hosts/vscodeTerminals.js'
+import { readForeground, readProcessParents, vscodeStreams, type VscodeTerminalsDeps } from '../cable/hosts/vscodeTerminals.js'
 import { createWeztermAdapter } from '../cable/hosts/wezterm.js'
 import { createEngineTally } from '../cable/engineTally.js'
 import { createVscodeExtensionSetup } from '../cable/vscodeExtensionSetup.js'
@@ -149,6 +150,12 @@ export interface DevicesDeps {
   /** For this service's tests: the process table VS Code's terminals are matched by; `ps` by default
    *  (cable/hosts/vscodeTerminals.ts). */
   processParents?: VscodeTerminalsDeps['processes']
+  /** For this service's tests: whether a Claude Code session's settings draw it fullscreen; its settings files by default
+   *  (cable/hosts/claudeRenderer.ts readFullscreen). */
+  claudeFullscreen?: VscodeTerminalsDeps['fullscreen']
+  /** For this service's tests: how an agent's process group and its tty's foreground group are read; `ps` by default
+   *  (cable/hosts/vscodeTerminals.ts readForeground). */
+  processGroups?: VscodeTerminalsDeps['foreground']
   /** For this service's tests: how Claude Code is found for a Claude Code home; the daemon's own lookup by default
    *  (devices/claudePlugin.ts claudeFound). */
   claude?: (home: string, shell: boolean) => Promise<ClaudeRun | null>
@@ -386,6 +393,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // terminal found or lost tells the dials to look again.
   const vscode = vscodeStreams({
     processes: deps.processParents ?? readProcessParents,
+    fullscreen: deps.claudeFullscreen
+      ?? ((cwd, transcriptPath) => readFullscreen(cwd, transcriptPath, { defaultHome: dirname(env.CLAUDE_PROJECTS_DIR), platform: apps.platform })),
+    foreground: deps.processGroups ?? readForeground,
     changed: () => part.call('dial', () => cable.syncAgents()),
     now: monotonic,
     after: timerIn('vscode'),

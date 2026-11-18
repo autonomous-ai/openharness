@@ -13,7 +13,14 @@
  * A page line's lines also press Claude Code's page keys in the extension
  * (docs/plans/2026-11-18-dial-vscode-claude-fullscreen-scroll-design.md), a plain line's do not: lines that wait keep
  * their kind, as two runs, so a stroke's guard decides its own lines alone and never turns another's into keys.
+ *
+ * The guard lets a stroke carry those keys only while Claude Code draws fullscreen and is its terminal's foreground
+ * program: a key written while a shell or another program holds the terminal is typed there. It reads two things, one
+ * after the other, both within VSCODE_GUARD_MS: the `tui` key alone of the session's settings (claudeRenderer.ts), then,
+ * only when that says fullscreen, two numbers from `ps -o pgid=,tpgid= -p <pid>`. Never a name, an environment or
+ * arguments.
  */
+import { isAbsolute } from 'node:path'
 import { REFUSED, type ListenerHandler, type ListenerStream, type ListenerStreamHandler } from '../../services/devicesListener.js'
 import { execText, parentChain, PS_MAX_BYTES, PS_TIMEOUT_MS, type Exec, type ProcessName } from './scannedApp.js'
 
@@ -31,11 +38,17 @@ export const VSCODE_STATE_PER_SECOND = 8
 export const VSCODE_SCROLL_MAX = 100
 /** An agent whose read failed is not asked again sooner: one whose pid no table holds costs a read no more often. */
 export const CHAIN_RETRY_MS = 5_000
+/** The longest a stroke waits on its guard, of wall time: then its lines go out plain. */
+export const VSCODE_GUARD_MS = 500
+/** The read prints two numbers of at most 10 digits. */
+export const GROUPS_MAX_BYTES = 64
 
 const WINDOW_ID = /^[A-Za-z0-9-]{8,36}$/
 const PID_MAX = 2 ** 31 - 1
 const MINUTE_MS = 60_000
 const PARENT_ROW = /^\s*(\d+)\s+(\d+)\s*$/
+/** A tty's foreground group is -1 on Linux for a process with no terminal. */
+const GROUPS_ROW = /^(\d+) +(-?\d+)$/
 
 type ProcessParent = Pick<ProcessName, 'pid' | 'ppid'>
 
@@ -53,6 +66,20 @@ export async function readProcessParents(exec: Exec = execText): Promise<Process
   return rows
 }
 
+export interface ProcessGroups { pgid: number; tpgid: number }
+
+/** One process's group and its tty's foreground group, from `ps -o pgid=,tpgid= -p <pid>` through scannedApp.ts's
+ *  patient exec. None when `ps` failed, the process is gone, or it printed anything but one row of two numbers. */
+export async function readForeground(pid: number, exec: Exec = execText): Promise<ProcessGroups | undefined> {
+  const out = await exec('ps', ['-o', 'pgid=,tpgid=', '-p', String(pid)], { timeout: PS_TIMEOUT_MS, maxBuffer: GROUPS_MAX_BYTES })
+  const row = GROUPS_ROW.exec((out ?? '').trim())
+  return row ? { pgid: Number(row[1]), tpgid: Number(row[2]) } : undefined
+}
+
+/** What the guard knows of the agent: whether it waits on the person, its folder, and its transcript path as its hook
+ *  or the scan gave it (the user settings' home: claudeRenderer.ts). */
+export interface PageAgent { asking: boolean; cwd?: string; transcriptPath?: string }
+
 /** A terminal of an open window: the window's id and its shell's pid. */
 export interface VscodeTerminal { window: string; shell: number }
 
@@ -68,11 +95,21 @@ export interface VscodeTerminals {
   /** Adds whole lines for that terminal; false when its window's stream is gone. `page`: they are written with
    *  `"page":true`, and the extension presses Claude Code's page keys beside them. */
   scroll(terminal: VscodeTerminal, lines: number, page?: boolean): boolean
+  /** Whether a stroke on the terminal of the agent with that pid may carry page keys. `false` at once, with nothing read,
+   *  when the agent asks or has no absolute folder; else a promise, never rejected, settled within VSCODE_GUARD_MS: true
+   *  when its settings say fullscreen and its process is in its tty's foreground group. Every answer is counted in the
+   *  minute's line. */
+  pageKeys(agentPid: number, agent: PageAgent): false | Promise<boolean>
 }
 
 export interface VscodeTerminalsDeps {
   /** One read of every process's pid and parent; rejects when `ps` could not be read. */
   processes(): Promise<readonly ProcessParent[]>
+  /** Whether Claude Code's settings for that absolute folder, and the home its transcript path names, draw it fullscreen
+   *  (claudeRenderer.ts readFullscreen). */
+  fullscreen(cwd: string, transcriptPath: string | undefined): Promise<boolean>
+  /** One process's group and its tty's foreground group (readForeground). */
+  foreground(pid: number): Promise<ProcessGroups | undefined>
   /** Which agents have a terminal changed. */
   changed(): void
   /** Monotonic milliseconds. */
@@ -94,9 +131,16 @@ interface Window {
 
 interface Run { shell: number; lines: number; page: boolean }
 
+/** A guard's read: a page stroke, or the reason it refused. */
+type Verdict = 'pages' | 'renderer' | 'background' | 'ps'
+
 /** `failed` counts each `ps` read that failed, of `reads`; `scrolls` each scroll line written; `dropped` each run of
- *  waiting lines replaced by lines for another shell. */
-const NONE_COUNTED = { shows: 0, taps: 0, refused: 0, reads: 0, failed: 0, scrolls: 0, dropped: 0 }
+ *  waiting lines replaced by lines for another shell; `pages` each ask whose guard passed, and the five after it each one
+ *  refused, by its reason. */
+const NONE_COUNTED = {
+  shows: 0, taps: 0, refused: 0, reads: 0, failed: 0, scrolls: 0, dropped: 0,
+  pages: 0, renderer: 0, asking: 0, background: 0, ps: 0, slow: 0,
+}
 
 const held = (lines: number): number => Math.max(-VSCODE_SCROLL_MAX, Math.min(VSCODE_SCROLL_MAX, lines))
 
@@ -124,6 +168,8 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
   let again = false
   /** Each listed agent's terminal, as the devices were last told. */
   let told = new Map<number, string>()
+  /** Each agent's guard still reading, by its pid: an ask meanwhile joins it rather than reading again. */
+  const guards = new Map<number, Promise<Verdict>>()
   let counted = { ...NONE_COUNTED }
   let minute = false
 
@@ -133,7 +179,7 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
     minute = true
     deps.after(MINUTE_MS, () => {
       minute = false
-      deps.log(`[devices] vscode · in the last minute: ${counted.shows} shows, ${counted.taps} taps, ${counted.refused} refused states, ${counted.reads} ps reads, ${counted.failed} failed, ${counted.scrolls} scroll lines, ${counted.dropped} dropped`)
+      deps.log(`[devices] vscode · in the last minute: ${counted.shows} shows, ${counted.taps} taps, ${counted.refused} refused states, ${counted.reads} ps reads, ${counted.failed} failed, ${counted.scrolls} scroll lines, ${counted.dropped} dropped, ${counted.pages} page strokes, guard refused: ${counted.renderer} renderer, ${counted.asking} asking, ${counted.background} background, ${counted.ps} ps, ${counted.slow} slow`)
       counted = { ...NONE_COUNTED }
     })
   }
@@ -202,6 +248,23 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
     if (!again) return
     again = false
     ask()
+  }
+
+  /** The agent's guard still reading, or a new one. The settings first, and `ps` only when they say fullscreen: most
+   *  sessions draw the default renderer and cost no `ps`. Never rejects. */
+  const guardOf = (pid: number, cwd: string, transcriptPath: string | undefined): Promise<Verdict> => {
+    const reading = guards.get(pid)
+    if (reading) return reading
+    const verdict = (async (): Promise<Verdict> => {
+      if (!(await deps.fullscreen(cwd, transcriptPath).catch(() => false))) return 'renderer'
+      const groups = await deps.foreground(pid).catch(() => undefined)
+      // No terminal: macOS prints a foreground group of 0, Linux -1.
+      if (!groups || groups.tpgid <= 0) return 'ps'
+      return groups.pgid === groups.tpgid ? 'pages' : 'background'
+    })()
+    guards.set(pid, verdict)
+    void verdict.then(() => guards.delete(pid))
+    return verdict
   }
 
   /** One line at a time: the show first, then up to VSCODE_SCROLL_MAX of what waits to scroll. */
@@ -308,6 +371,29 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
       if (!run.lines) window.scroll.splice(window.scroll.indexOf(run), 1)
       write(window)
       return true
+    },
+    pageKeys: (agentPid, { asking, cwd, transcriptPath }) => {
+      // With no absolute folder, the project's settings, which outrank the user's, cannot be found.
+      if (asking || cwd === undefined || !isAbsolute(cwd)) {
+        count(asking ? 'asking' : 'renderer')
+        return false
+      }
+      const verdict = guardOf(agentPid, cwd, transcriptPath)
+      return new Promise((resolve) => {
+        let answered = false
+        const answer = (reason: Verdict | 'slow'): void => {
+          if (answered) return
+          answered = true
+          count(reason)
+          resolve(reason === 'pages')
+        }
+        // Wall time, each ask its own: a read that lands later answers nothing for this ask.
+        const cancel = deps.after(VSCODE_GUARD_MS, () => answer('slow'))
+        void verdict.then((reason) => {
+          cancel()
+          answer(reason)
+        })
+      })
     },
   }
 }

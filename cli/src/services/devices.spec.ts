@@ -361,6 +361,18 @@ function fakeOrcaHomes(homes: OrcaHomes = { claude: [], codex: [] }) {
 /** The process table VS Code's windows match their agents by (services/devices.ts processParents): the spec's own, empty
  *  unless a spec sets it, and each read counted, so no spec reads this machine's processes. */
 const processTable = { rows: [] as Array<{ pid: number; ppid: number }>, reads: 0 }
+/** Whether a session's settings draw it fullscreen (services/devices.ts claudeFullscreen): the spec's own, fullscreen
+ *  unless a spec sets it, each read's folder and transcript path kept, so no spec reads this machine's settings. */
+const claudeSettings = { fullscreen: true, reads: [] as Array<[string, string | undefined]> }
+/** An agent's process group and its tty's foreground group (services/devices.ts processGroups): the spec's own, the
+ *  agent in front unless a spec sets it, each read's pid kept, and held while `held` until the spec lands it, so no
+ *  spec runs this machine's ps. */
+const processGroups = {
+  answer: { pgid: 4242, tpgid: 4242 } as { pgid: number; tpgid: number } | undefined,
+  reads: [] as number[],
+  held: false,
+  land: [] as Array<() => void>,
+}
 
 /** VS Code and Harness's extension as the devices see them (services/devices.ts vscodeExtension): the spec's own, absent
  *  unless the spec says its [app] is there or names the version [installed], each `code` run kept, so no spec runs the
@@ -412,6 +424,12 @@ beforeEach(() => {
   readers.processes.mockResolvedValue([])
   processTable.rows = []
   processTable.reads = 0
+  claudeSettings.fullscreen = true
+  claudeSettings.reads = []
+  processGroups.answer = { pgid: 4242, tpgid: 4242 }
+  processGroups.reads = []
+  processGroups.held = false
+  processGroups.land = []
 })
 afterEach(() => {
   rmSync(dataDir, { recursive: true, force: true })
@@ -459,6 +477,15 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     processParents: async () => {
       processTable.reads++
       return processTable.rows
+    },
+    claudeFullscreen: async (cwd, transcriptPath) => {
+      claudeSettings.reads.push([cwd, transcriptPath])
+      return claudeSettings.fullscreen
+    },
+    processGroups: async (pid) => {
+      processGroups.reads.push(pid)
+      if (processGroups.held) await new Promise<void>((resolve) => { processGroups.land.push(resolve) })
+      return processGroups.answer
     },
   })
   const port = ports.devices as DevicesPort
