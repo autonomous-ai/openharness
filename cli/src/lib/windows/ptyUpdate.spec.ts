@@ -147,9 +147,9 @@ describe('startPtyUpdater', () => {
 
   it('a transient failure is retried next check with no back-off', async () => {
     let prepared = 0
-    const h = harness({ prepare: async (entry) => { prepared++; if (prepared === 1) throw new Error('ECONNRESET'); return stagingFor(entry.version) } })
+    const h = harness({ prepare: async (entry) => { prepared++; if (prepared === 1) throw Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }); return stagingFor(entry.version) } })
     await vi.waitFor(() => expect(h.staged).toEqual(['0.11.0']), { timeout: 2_000 })
-    expect(h.lines.some((l) => l.includes('check failed') && l.includes('ECONNRESET'))).toBe(true)
+    expect(h.lines.filter((l) => l.includes('check failed'))).toEqual(['[update] terminal host check failed (will retry): ECONNRESET'])
     expect(h.lines.some((l) => l.includes('not trying it again'))).toBe(false)
   })
 
@@ -192,7 +192,8 @@ describe('startPtyUpdater', () => {
     await vi.waitFor(() => expect(h.staged).toEqual(['0.11.0']), { timeout: 2_000 })
     expect(busy).toBe(2)
     expect(h.events.filter((e) => e.startsWith('prepare'))).toHaveLength(1)
-    expect(h.lines.filter((l) => l.includes('terminal host 0.11.0 is ready but the daemon spawn lock is'))).toHaveLength(1)
+    expect(h.lines.filter((l) => l.includes('terminal host 0.11.0 is ready but the daemon spawn lock is')))
+      .toEqual(['[update] terminal host 0.11.0 is ready but the daemon spawn lock is held (SpawnLockBusyError) — trying again next check'])
   })
 
   it('readyToStage installs a prepared payload, and returns null when there is none', async () => {
@@ -232,11 +233,11 @@ describe('startPtyUpdater', () => {
   it('readyToStage never holds the CLI up: an install that fails is said and is null', async () => {
     const h = harness({
       withLock: async () => { throw new SpawnLockBusyError(null) },
-      deps: { install: () => { throw new Error('EIO: disk gone') } },
+      deps: { install: () => { throw Object.assign(new Error('EIO: disk gone'), { code: 'EIO' }) } },
     })
     await vi.waitFor(() => expect(h.events).toContain('prepare 0.11.0 unlocked'), { timeout: 2_000 })
     expect(await h.poller.readyToStage()).toBeNull()
-    expect(h.lines.some((l) => l.includes('terminal host 0.11.0') && l.includes('EIO: disk gone'))).toBe(true)
+    expect(h.lines).toContain('[update] terminal host 0.11.0 could not be installed (EIO) — trying again next check')
   })
 
   it('a host on probation is nothing to do: no download, no back-off', async () => {
@@ -445,7 +446,7 @@ describe('the start sweep', () => {
     sweepPtyLeftovers(root, (line) => failed.push(line), fs)
     expect(existsSync(join(bin, 'harness-launch.exe.old-1-1'))).toBe(true)
     expect(existsSync(join(bin, 'harness.exe.old-1-1'))).toBe(true)
-    expect(failed).toEqual(['[update] bin\\harness.exe is missing and harness.exe.old-1-1 could not be put back (held) — nothing is swept until it is'])
+    expect(failed).toEqual(['[update] bin\\harness.exe is missing and harness.exe.old-1-1 could not be put back (EBUSY) — nothing is swept until it is'])
   })
 })
 
@@ -497,7 +498,7 @@ describe("the master's rollback and keep", () => {
   it('says a host it could not keep, whose marker then holds host updates back until a start judges it again', () => {
     onProbation()
     const lines: string[] = []
-    keepStaged({ confirmCli: () => {}, ptyRoot: root, log: (l) => lines.push(l), confirmPty: () => { throw new Error('EPERM') } })
+    keepStaged({ confirmCli: () => {}, ptyRoot: root, log: (l) => lines.push(l), confirmPty: () => { throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' }) } })
     expect(lines).toEqual(['[harnessd] could not keep terminal host 0.11.0 (EPERM) — judged again at the next start'])
     expect(ptyOnProbation(root)).toBe('terminal host 0.11.0')
   })

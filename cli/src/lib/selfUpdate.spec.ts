@@ -525,7 +525,7 @@ describe('the updater when things go wrong', () => {
     serve(Buffer.from('#!/usr/bin/env node\nconsole.log("9.9.9")\n'), () => { downloads++ })
     const logs: string[] = []
     vi.spyOn(console, 'log').mockImplementation((line: string) => { logs.push(String(line)) })
-    vi.spyOn(console, 'error').mockImplementation((line: string) => { logs.push(String(line)) })
+    vi.spyOn(console, 'error').mockImplementation((...parts: unknown[]) => { logs.push(parts.join(' ')) })
     let attempts = 0
     const staged: string[] = []
     startSelfUpdater({
@@ -542,8 +542,8 @@ describe('the updater when things go wrong', () => {
     // Staging stops the updater for good, so nothing is left running.
     await vi.waitFor(() => expect(staged).toEqual(['9.9.9']), { timeout: 5_000 })
     expect(downloads, 'downloaded once: later checks reuse the bytes already verified').toBe(2)
-    expect(logs).toContain('[update] 9.9.9 is ready but the daemon spawn lock is held by an unknown process — trying again next check')
-    expect(logs.filter((line) => line === '[update] check failed (will retry):')).toHaveLength(2)
+    expect(logs).toContain('[update] 9.9.9 is ready but the daemon spawn lock is held (SpawnLockBusyError) — trying again next check')
+    expect(logs.filter((line) => line.startsWith('[update] check failed'))).toEqual(['[update] check failed (will retry): Error', '[update] check failed (will retry): string'])
   })
 })
 
@@ -1017,7 +1017,7 @@ describe('a build that fails on its own merits (e2e/updateHostile.e2e.ts)', () =
     try {
       await vi.waitFor(() => expect(staged).toEqual(['9.9.9']), { timeout: 5_000 })
       expect(attempts).toBe(3)
-      expect(errors).toEqual(['[update] check failed (will retry): terminated', '[update] check failed (will retry): terminated'])
+      expect(errors).toEqual(['[update] check failed (will retry): TypeError', '[update] check failed (will retry): TypeError'])
     } finally { poller.stop() }
   })
 
@@ -1271,7 +1271,7 @@ describe('a link that stalls without dropping (e2e/updateHostile.e2e.ts)', () =>
     try {
       await vi.waitFor(() => expect(staged).toEqual(['9.9.9']), { timeout: 5_000 })
       expect(attempts).toBe(2)
-      expect(errors).toEqual(['[update] check failed (will retry): https://updates.test/cli.js sent nothing for 50 ms'])
+      expect(errors).toEqual(['[update] check failed (will retry): TransferStalledError'])
     } finally { poller.stop() }
     expect(MANIFEST_LIMITS.deadlineMs).toBeLessThan(DOWNLOAD_LIMITS.deadlineMs)
   })
@@ -1654,7 +1654,8 @@ console.log(process.execPath.includes('node-v24.') ? (named.includes('node-v24.'
       await vi.waitFor(() => expect(events).toHaveLength(2), { timeout: 10_000 })
     } finally { poller.stop(); rmSync(`${currentNode}.tmp`, { recursive: true, force: true }) }
     expect(events).toEqual([`ensure on ${v22}`, `staged with ${v22}`])
-    expect(said.mock.calls.flat().join('\n')).toContain(`could not name ${v24} in current-node`)
+    expect(said.mock.calls.flat().join('\n')).toContain('[update] could not name the new Node in current-node (')
+    expect(said.mock.calls.flat().join('\n'), 'no path on the line').not.toContain(v24)
     expect(nodeMigration(dir)).toBe('cannot-switch')
     // Node 24 did not fail here: the next update may move to it.
     expect(failedNode(dir)).toBeNull()
