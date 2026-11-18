@@ -3,6 +3,8 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { SessionStorage } from './sessionStorage.js'
+import type { ChildProcess } from 'node:child_process'
 import type { RegisteredSession, registry as Registry } from './registry.js'
 import { createAndRegisterPane } from './createAgentPane.js'
 
@@ -49,7 +51,8 @@ const oldProcess = { pid: 6101, executable: '/fixture/claude', startMarker: 'old
 const newProcess = { pid: 6103, executable: '/fixture/claude', startMarker: 'new' }
 const plan = { id: '12345678-1234-1234-1234-123456789012', identity: 'fixture-owner',
   requestedAt: 1790900000000, state: 'waiting' as const }
-let root: string, registry: typeof Registry
+let root: string, registry: typeof Registry, storage: SessionStorage
+let expectedCleanupFailure = false
 let release: (() => void) | undefined
 const accepted: Promise<unknown>[] = []
 const deferred = () => { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done }); return { promise, resolve } }
@@ -74,7 +77,7 @@ function hold(name = 'registry.json') {
 beforeEach(async () => {
   vi.resetModules()
   io.file = ''; io.renamed = false; io.publications = 0; io.syncs = 0; io.fail = 0; io.wait = undefined; io.preparing = undefined
-  accepted.length = 0; release = undefined
+  accepted.length = 0; release = undefined; expectedCleanupFailure = false
   root = mkdtempSync(join(tmpdir(), 'registry-directory-durability-'))
   for (const name of ['home', 'data', 'runtime', 'codex']) mkdirSync(join(root, name), { mode: 0o700 })
   for (const [key, value] of Object.entries({ HOME: join(root, 'home'), USERPROFILE: join(root, 'home'),
@@ -82,6 +85,7 @@ beforeEach(async () => {
     CLAUDE_CONFIG_DIR: join(root, 'home', '.claude'), CLAUDE_PROJECTS_DIR: join(root, 'home', '.claude', 'projects'),
   })) vi.stubEnv(key, value)
   writeFileSync(join(root, 'data', 'engine-homes.json'), '{}', { mode: 0o600 })
+  storage = (await import('./sessionStorage.js')).sessionStorage
   registry = (await import('./registry.js')).registry
   await registry.load()
   for (const [index, agentId] of [A, B].entries()) {
@@ -97,6 +101,13 @@ afterEach(async () => {
     await Promise.allSettled(accepted)
     // finish() rejects only after its owned writer/cleanup has settled.
     await registry.flush({ exiting: true }).catch(() => {})
+    const child = (storage as unknown as { child?: ChildProcess }).child
+    const closed = child ? new Promise<void>(resolve => child.once('close', () => resolve())) : Promise.resolve()
+    const result = await storage.close().catch(error => error)
+    await closed
+    if (child) expect(() => process.kill(child.pid!, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }))
+    if (expectedCleanupFailure) expect(result).toMatchObject({ code: 'cleanup-unconfirmed' })
+    else expect(result).toBeUndefined()
     settled = true
   } finally {
     vi.restoreAllMocks(); vi.unstubAllEnvs()
@@ -231,6 +242,7 @@ it.skipIf(process.platform === 'win32')('rejects a replacement data directory wi
   const held = hold(), first = track(registry.setClosePlan(A, plan)).catch(error => error)
   await held.entered(first)
   const directory = join(root, 'data'), previous = join(root, 'previous-data')
+  expectedCleanupFailure = true
   renameSync(directory, previous); mkdirSync(directory, { mode: 0o700 })
   held.release()
   try {
@@ -275,6 +287,7 @@ it.skipIf(process.platform === 'win32')('never retries an I/O failure into a rep
   await held.entered(first)
   const directory = join(root, 'data'), previous = join(root, 'previous-data')
   const candidate = readFileSync(join(directory, 'registry.json'), 'utf8')
+  expectedCleanupFailure = true
   renameSync(directory, previous); mkdirSync(directory, { mode: 0o700 })
   writeFileSync(join(directory, 'registry.json'), candidate, { mode: 0o600 })
   io.fail = 1
@@ -412,4 +425,21 @@ it.skipIf(process.platform === 'win32').each(['deadline', 'token'] as const)(
     expect(launch).not.toHaveBeenCalled()
     expect(registry.byAgent(row.agentId)).toBeDefined()
   } finally { controller.stop() }
+})
+
+it.skipIf(process.platform === 'win32')('keeps a renamed name uncertain when its directory cleanup loses the original container', async () => {
+  const original = registry.displayName(registry.byAgent(A)!), held = hold('agent-names.json')
+  const pending = track(registry.rename(A, 'Unadmitted name')).catch(error => error)
+  await held.entered(pending)
+  const directory = join(root, 'data'), previous = join(root, 'previous-data')
+  expectedCleanupFailure = true
+  renameSync(directory, previous); mkdirSync(directory, { mode: 0o700 })
+  held.release()
+  try {
+    expect((await pending).constructor.name).toBe('AtomicWriteUnconfirmed')
+    expect(await pending).toMatchObject({ retryable: false })
+    expect(registry.displayName(registry.byAgent(A)!)).toBe(original)
+    expect(io.publications).toBe(1)
+    expect(JSON.parse(readFileSync(join(previous, 'agent-names.json'), 'utf8'))[A]).toBe('Unadmitted name')
+  } finally { rmSync(directory, { recursive: true }); renameSync(previous, directory) }
 })

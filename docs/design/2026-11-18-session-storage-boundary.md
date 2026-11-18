@@ -788,3 +788,43 @@ owned process group was absent; each caller fixture closes its actual storage ow
 The earlier failed result is retained, not described as an uninterrupted full gate.
 TypeScript passes at the final source/test shape:
 `/tmp/core-grid-storage-source-normalization-types2-20261118.log`.
+
+## Publication cleanup classification (18 November, wider source gate)
+
+The wider combined Registry gate at b842194716 timed out after 300 seconds with 18
+named failures; that packet is not a pass. Focused real Registry tests confirmed a
+runtime fault: after rename, a displaced parent directory makes temporary cleanup
+throw. That last error escaped as ordinary RegistryPersistenceUnavailable, hiding
+that the image was already visible and its admission remained unconfirmed. A real
+names write has the same fault. No cleanup failure is treated as permission to delete
+through a replacement directory.
+
+Design: the existing RegistryWriteQueue already owns the published/admitted phase.
+Its final rejection boundary now preserves every existing AtomicWriteUnconfirmed
+instance, including its retry flag and finite disk cause. Any other escaping error
+while published but not admitted becomes AtomicWriteUnconfirmed with retryable=false.
+Before publication and after admission the original error is unchanged. The queue
+still runs all original cleanup and retains failed-close custody; this classification
+does not suppress discard errors, retry a publication, or change disk formats.
+
+Evidence in /tmp (all one worker, actual exit and process group absence recorded):
+
+- core-grid-storage-publication-cleanup-red1-20261118.log: two existing real Registry
+  cases failed with ordinary refusal instead of AtomicWriteUnconfirmed.
+- core-grid-storage-publication-cleanup-names-red1-20261118.log: the equivalent names
+  case failed; on-disk rename remains visible and the old in-memory name must remain.
+- core-grid-storage-publication-cleanup-red2-20261118.log: direct published-phase
+  rejection failed; prepublication/admitted controls and existing Atomic cause passed.
+  This packet also contains a separate source-descriptor shutdown RED tracked below.
+- core-grid-storage-publication-cleanup-green1-20261118.log: all seven selected real
+  Registry/names and direct phase cases passed. Their fixtures explicitly close the
+  real storage child and assert expected retained-cleanup failure independently.
+- core-grid-storage-custody-runtime-gate1-20261118.log: 91 tests in four files passed
+  (storage process, publication, write queue and full-disk behavior), actual 0, group
+  absent. The requested nonexistent sessionStorage.coverage.spec.ts path collected no
+  tests; this run is behavioral coverage, not the explicit transport coverage gate.
+- core-grid-storage-custody-runtime-types1-20261118.log: TypeScript passed on this
+  runtime and initial regression fixtures; later fixture additions need final types.
+
+The frozen b842 full/lean artifact predates this correction and is only interim
+build evidence. Smoke/timing and final combined acceptance remain blocked.

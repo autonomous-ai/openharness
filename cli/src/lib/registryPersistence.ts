@@ -118,7 +118,11 @@ export class RegistryWriteQueue {
           if (this.failedClose) throw failure('directory close failed; restart required')
           resolve(result)
         }
-        catch (error) { reject(error) }
+        catch (error) {
+          // A cleanup failure cannot undo an already visible, unadmitted rename.
+          // Keep the caller's uncertain result even when discard or source release is what failed last.
+          reject(published && !(error instanceof AtomicWriteUnconfirmed) ? new AtomicWriteUnconfirmed(error, false) : error)
+        }
         finally {
           clearTimeout(timer)
           // A thrown close cannot establish descriptor ownership. Never admit another write or a clean handoff.

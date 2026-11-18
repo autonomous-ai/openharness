@@ -45,7 +45,7 @@ vi.mock('node:fs/promises', async original => {
   }
 })
 
-import { RegistryWriteQueue, registryFileLock } from './registryPersistence.js'
+import { AtomicWriteUnconfirmed, RegistryWriteQueue, registryFileLock } from './registryPersistence.js'
 let directory: string, lock: string, owner: string
 const deferred = () => {
   let resolve!: () => void
@@ -236,4 +236,33 @@ it('includes late owner publication in the two-second acquisition budget', async
   expect(await result).toMatchObject({ message: expect.stringContaining('registry lock is busy') })
   expect(apply).not.toHaveBeenCalled()
   expect(existsSync(lock)).toBe(false)
+})
+
+// Cleanup can fail after the image became visible; that cannot turn uncertainty into a proven refusal.
+it.each(['prepare', 'published', 'admitted'] as const)('classifies an escaping cleanup failure at %s without releasing its writer early', async phase => {
+  const queue = new RegistryWriteQueue(), cleanup = deferred(), entered = deferred()
+  const failure = new Error('fixture cleanup refused')
+  const result = queue.run(async deadline => {
+    if (phase !== 'prepare') deadline.markPublished()
+    if (phase === 'admitted') deadline.markAdmitted()
+    entered.resolve()
+    await cleanup.promise
+    throw failure
+  }).catch(error => error)
+  await entered.promise
+  const next = vi.fn(async () => 'next'), following = queue.run(next)
+  expect(next).not.toHaveBeenCalled()
+  cleanup.resolve()
+  const error = await result
+  if (phase === 'published') {
+    expect(error).toBeInstanceOf(AtomicWriteUnconfirmed)
+    expect(error).toMatchObject({ cause: failure, retryable: false })
+  } else expect(error).toBe(failure)
+  expect(await following).toBe('next')
+})
+
+it('preserves an existing uncertain publication and its finite disk cause', async () => {
+  const queue = new RegistryWriteQueue()
+  const error = new AtomicWriteUnconfirmed(Object.assign(new Error('fixture full disk'), { code: 'ENOSPC' }), true)
+  await expect(queue.run(async deadline => { deadline.markPublished(); throw error })).rejects.toBe(error)
 })
