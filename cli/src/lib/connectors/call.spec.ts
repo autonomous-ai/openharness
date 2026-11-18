@@ -1,8 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, posix, win32, type PlatformPath } from 'node:path'
-import { CallFailure, expandHome, fenced, forbiddenDirs, inside, tempDir, unc, uploadPath } from './call.js'
+import { CallFailure, expandHome, forbiddenDirs, identities, identity, tempDir, unc, uploadPath, walk, type Identity, type Verdict } from './call.js'
+
+// The file system calls the upload check makes. A test that sets `disk.hooks.<name>` is handed the real call and its
+// arguments, and answers for it; unset, the real call runs.
+type Hook = (real: (...args: never[]) => unknown, ...args: never[]) => unknown
+const disk = vi.hoisted(() => ({ hooks: {} as Record<string, Hook | undefined> }))
+vi.mock('node:fs', async importOriginal => {
+  const fs = await importOriginal<typeof import('node:fs')>()
+  const hooked = (name: 'openSync' | 'fstatSync' | 'statSync' | 'readFileSync' | 'closeSync') => (...args: never[]): unknown => {
+    const real = fs[name] as (...args: never[]) => unknown
+    return disk.hooks[name] ? disk.hooks[name]!(real, ...args) : real(...args)
+  }
+  return { ...fs, openSync: hooked('openSync'), fstatSync: hooked('fstatSync'), statSync: hooked('statSync'), readFileSync: hooked('readFileSync'), closeSync: hooked('closeSync') }
+})
 
 // The account's own home, which a test that needs one points at a folder of its own: no test writes in the real one.
 const account = vi.hoisted(() => ({ home: undefined as string | undefined }))
@@ -18,23 +31,69 @@ vi.mock('node:path', async importOriginal => {
   return { ...path, default: new Proxy(path.default, { get: (own, key) => Reflect.get(platform.windows ? path.win32 : own, key) }) }
 })
 
-describe('inside', () => {
-  it('fences a Windows folder however its path is spelled', () => {
-    expect(inside('C:\\Users\\a\\.ssh', 'C:\\Users\\a\\.ssh\\id.txt', win32)).toBe(true)
-    expect(inside('C:\\Users\\a\\.ssh', 'c:\\users\\A\\.SSH\\x.txt', win32)).toBe(true)
-    expect(inside('C:\\Users\\a\\.ssh', 'C:\\Users\\a\\.ssh', win32)).toBe(true)
-    expect(inside('C:\\Users\\a\\.ssh', 'C:\\Users\\a\\.ssh\\..notes.txt', win32)).toBe(true)
-    expect(inside('C:\\Users\\a\\.ssh', 'C:\\Users\\a\\.sshx\\f.txt', win32)).toBe(false)
-    expect(inside('C:\\Users\\a\\.ssh', 'D:\\Users\\a\\.ssh\\f.txt', win32)).toBe(false)
-    expect(inside('C:\\Users\\a\\.ssh', 'C:\\Users\\a\\f.txt', win32)).toBe(false)
+/** A disk for the walk: every path is a folder of its own; `same` lists spellings of one folder, `unread` paths that cannot be read. */
+function tree(same: string[][] = [], unread: string[] = []): (path: string) => Identity | undefined {
+  const numbers = new Map<string, bigint>()
+  const folder = (path: string): string => same.find(spellings => spellings.includes(path))?.[0] ?? path
+  return path => {
+    if (unread.includes(path)) return undefined
+    if (!numbers.has(folder(path))) numbers.set(folder(path), BigInt(numbers.size + 1))
+    return { dev: 1n, ino: numbers.get(folder(path))! }
+  }
+}
+
+describe('walk', () => {
+  const a = 'C:\\Users\\a'
+  const temp = `${a}\\AppData\\Local\\Temp`
+  const appData = [`${a}\\AppData`, `${a}\\AppData\\Roaming`, `${a}\\AppData\\Local`]
+  const verdict = (file: string, forbidden: string[], temps: string[] = [], on = tree()): Verdict =>
+    walk(file, on, forbidden.map(dir => on(dir)!), temps.map(dir => on(dir)!), win32)
+
+  it('fences a file under a forbidden folder, at any depth, and the folder itself', () => {
+    for (const file of [`${a}\\.ssh\\id.txt`, `${a}\\.ssh\\keys\\old\\id.txt`, `${a}\\.ssh`]) expect(verdict(file, [`${a}\\.ssh`]), file).toBe('fenced')
+    for (const file of [`${a}\\.sshx\\f.txt`, `${a}\\f.txt`, 'C:\\f.txt', 'D:\\Users\\a\\.ssh\\f.txt']) expect(verdict(file, [`${a}\\.ssh`]), file).toBe('open')
   })
 
-  it('fences a posix folder', () => {
-    expect(inside('/home/a/.ssh', '/home/a/.ssh/id.txt', posix)).toBe(true)
-    expect(inside('/home/a/.ssh', '/home/a/.ssh', posix)).toBe(true)
-    expect(inside('/home/a/.ssh', '/home/a/.ssh/..notes.txt', posix)).toBe(true)
-    expect(inside('/home/a/.ssh', '/home/a/.sshx/f.txt', posix)).toBe(false)
-    expect(inside('/home/a/.ssh', '/home/a/f.txt', posix)).toBe(false)
+  it('fences by the folder, not by how its path is spelled', () => {
+    const on = tree([[`${a}\\.ssh`, `${a}\\.SSH`, `${a}\\SSH~1`, 'X:\\.ssh', `\\\\?\\${a}\\.ssh`]])
+    for (const file of [`${a}\\.SSH\\id.txt`, `${a}\\SSH~1\\id.txt`, 'X:\\.ssh\\id.txt', `\\\\?\\${a}\\.ssh\\id.txt`]) expect(verdict(file, [`${a}\\.ssh`], [], on), file).toBe('fenced')
+  })
+
+  it('tells two folders with one number apart by their device', () => {
+    const on = (path: string): Identity => ({ dev: path.startsWith('D:') ? 2n : 1n, ino: 7n })
+    expect(walk('C:\\x\\f.txt', on, [{ dev: 1n, ino: 7n }], [], win32)).toBe('fenced')
+    expect(walk('D:\\x\\f.txt', on, [{ dev: 1n, ino: 7n }], [], win32)).toBe('open')
+  })
+
+  it('leaves the temporary folder open under AppData, but for a forbidden folder inside it or one that is it', () => {
+    for (const file of [`${temp}\\x.txt`, `${temp}\\docs\\x.txt`]) expect(verdict(file, appData, [temp]), file).toBe('open')
+    for (const file of [`${a}\\AppData\\Roaming\\x.txt`, `${a}\\AppData\\Local\\Foo\\x.txt`, `${a}\\AppData\\LocalLow\\Temp\\x.txt`, `${a}\\AppData\\Local\\Tempx\\x.txt`]) {
+      expect(verdict(file, appData, [temp]), file).toBe('fenced')
+    }
+    expect(verdict(`${temp}\\h\\.ssh\\id.txt`, [...appData, `${temp}\\h\\.ssh`], [temp])).toBe('fenced')
+    expect(verdict(`${temp}\\h\\AppData\\Roaming\\x.txt`, [...appData, `${temp}\\h\\AppData`], [temp])).toBe('fenced')
+    expect(verdict(`${temp}\\x.txt`, [...appData, temp], [temp])).toBe('fenced')
+  })
+
+  it('cannot tell under a folder it cannot read or one with no number, the file\'s own too', () => {
+    expect(walk('/home/a/docs/x.txt', tree([], ['/home']), [], [], posix)).toBe('unknown')
+    for (const numberless of ['/home/a/docs/x.txt', '/home/a', '/']) {
+      expect(walk('/home/a/docs/x.txt', path => ({ dev: 1n, ino: path === numberless ? 0n : 9n }), [], [], posix), numberless).toBe('unknown')
+    }
+  })
+
+  it('walks a posix path to the root', () => {
+    const on = tree()
+    const ssh = [on('/home/a/.ssh')!]
+    expect(walk('/home/a/.ssh/id.txt', on, ssh, [], posix)).toBe('fenced')
+    for (const file of ['/home/a/docs/x.txt', '/x.txt']) expect(walk(file, on, ssh, [], posix), file).toBe('open')
+  })
+})
+
+describe('identities', () => {
+  it('is each folder\'s identity, without the ones not named or not there', () => {
+    const on = (path: string): Identity | undefined => path === '/missing' ? undefined : { dev: 1n, ino: BigInt(path.length) }
+    expect(identities(['/a', undefined, '/missing', '/bcd'], on)).toEqual([{ dev: 1n, ino: 2n }, { dev: 1n, ino: 4n }])
   })
 })
 
@@ -103,46 +162,11 @@ describe('forbiddenDirs', () => {
   })
 })
 
-describe('fenced', () => {
-  const home = 'C:\\Users\\a'
-  const refuses = (file: string, env: NodeJS.ProcessEnv = { USERPROFILE: home }): boolean =>
-    fenced(file, forbiddenDirs(env, [home], win32), tempDir(home, win32), win32)
-
-  it('refuses a file in AppData on Windows', () => {
-    expect(refuses('C:\\Users\\a\\AppData\\Roaming\\x.txt')).toBe(true)
-    expect(refuses('C:\\Users\\a\\AppData\\Local\\Foo\\x.txt')).toBe(true)
-    expect(refuses('C:\\Users\\a\\AppData\\LocalLow\\Foo\\x.txt')).toBe(true)
-  })
-
-  it('allows a file in the home\'s own AppData\\Local\\Temp', () => {
-    expect(refuses('C:\\Users\\a\\AppData\\Local\\Temp\\x.txt')).toBe(false)
-    expect(refuses('C:\\Users\\a\\AppData\\Local\\Temp\\docs\\x.txt')).toBe(false)
-  })
-
-  it('allows only Temp with APPDATA and LOCALAPPDATA where Windows puts them', () => {
-    const env = { USERPROFILE: home, APPDATA: 'C:\\Users\\a\\AppData\\Roaming', LOCALAPPDATA: 'C:\\Users\\a\\AppData\\Local' }
-    expect(refuses('C:\\Users\\a\\AppData\\Local\\Temp\\x.txt', env)).toBe(false)
-    expect(refuses('C:\\Users\\a\\AppData\\Local\\Tempx\\x.txt', env)).toBe(true)
-    expect(refuses('C:\\Users\\a\\AppData\\LocalLow\\Temp\\x.txt', env)).toBe(true)
-  })
-
-  it('opens no folder TEMP or TMP names, which are the caller\'s to set', () => {
-    const env = { USERPROFILE: home, TEMP: 'C:\\Users\\a\\AppData\\Roaming', TMP: 'C:\\Users\\a\\AppData\\Local\\Foo' }
-    expect(refuses('C:\\Users\\a\\AppData\\Roaming\\x.txt', env)).toBe(true)
-    expect(refuses('C:\\Users\\a\\AppData\\Local\\Foo\\x.txt', env)).toBe(true)
-  })
-
-  it('refuses a file in AppData\\Local\\Temp that another forbidden folder holds', () => {
-    const env = { HOME: 'C:\\Users\\a\\AppData\\Local\\Temp\\h' }
-    expect(refuses('C:\\Users\\a\\AppData\\Local\\Temp\\h\\.ssh\\id.txt', env)).toBe(true)
-    expect(refuses('C:\\Users\\a\\AppData\\Local\\Temp\\h\\AppData\\Roaming\\x.txt', env)).toBe(true)
-  })
-
-  it('fences posix folders as before, with no temporary folder', () => {
-    const forbidden = forbiddenDirs({ HOME: '/home/a' }, [], posix)
+describe('tempDir', () => {
+  it('is the account\'s own AppData\\Local\\Temp on Windows, none on posix or with no home', () => {
+    expect(tempDir('C:\\Users\\a', win32)).toBe('C:\\Users\\a\\AppData\\Local\\Temp')
     expect(tempDir('/home/a', posix)).toBeUndefined()
-    expect(fenced('/home/a/.ssh/id.txt', forbidden, undefined, posix)).toBe(true)
-    expect(fenced('/home/a/docs/x.txt', forbidden, undefined, posix)).toBe(false)
+    expect(tempDir(undefined, win32)).toBeUndefined()
   })
 })
 
@@ -157,6 +181,7 @@ describe('uploadPath', () => {
   afterEach(() => {
     account.home = undefined
     platform.windows = false
+    disk.hooks = {}
     vi.restoreAllMocks()
     rmSync(home, { recursive: true, force: true })
   })
@@ -184,6 +209,31 @@ describe('uploadPath', () => {
     // and Windows' \\?\ prefix. A spelling this file system does not read as the file is not one to fence.
     const spellings = [join(home, '.SSH', 'note.txt'), join(tmpdir(), basename(home), '.ssh', 'note.txt'), `\\\\?\\${file}`]
     for (const spelling of spellings.filter(spelling => existsSync(spelling))) expectFenced(spelling)
+  })
+
+  it('reads a folder\'s identity from the disk, through a link too', () => {
+    const ssh = statSync(join(home, '.ssh'), { bigint: true })
+    expect(identity(join(home, '.ssh'))).toEqual({ dev: ssh.dev, ino: ssh.ino })
+    expect(identity(join(home, 'none'))).toBeUndefined()
+    symlinkSync(join(home, '.ssh'), join(home, 'keys'), 'junction')
+    expect(identity(join(home, 'keys'))).toEqual(identity(join(home, '.ssh')))
+  })
+
+  // Linux keeps the spelling given in a case-folded folder. Here realpath is made to, on a disk that folds case.
+  it('refuses it in a folder whose spelling the file system did not correct, as a case-folded folder on Linux', ctx => {
+    if (!existsSync(join(home, '.SSH', 'note.txt'))) ctx.skip()
+    vi.spyOn(realpathSync, 'native').mockImplementation(path => String(path))
+    expectFenced(join(home, '.SSH', 'note.txt'))
+  })
+
+  it('cannot check an upload under a folder with no number', () => {
+    disk.hooks.statSync = (real, ...args) => {
+      const [path, options] = args as unknown as [string, { bigint?: boolean } | undefined]
+      const stat = real(...args) as { dev: bigint, ino: bigint }
+      return path === home && options?.bigint ? { dev: stat.dev, ino: 0n } : stat
+    }
+    const file = join(home, 'docs', 'note.txt')
+    expect(refused(file)).toMatchObject({ code: 2, message: `cannot check upload ${file}` })
   })
 
   it('refuses a hard link, whose other names may be inside such a folder', () => {
