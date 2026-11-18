@@ -50,12 +50,13 @@ describe('the core API services stand on', () => {
     expect(route('GET', '/api/pairs')!.waitMs).toBe(30_000)
   })
   it('sends a window\'s ⌘K and its answer to a spoken task to the devices, as a request they declare', () => {
-    expect(SERVICE_WS_FRAMES.map((each) => [each.frame, each.type, each.result])).toEqual([
+    const frames = SERVICE_WS_FRAMES.filter(each => each.type === 'devices_ws')
+    expect(frames.map((each) => [each.frame, each.type, each.result])).toEqual([
       ['route_task', 'devices_ws', 'route_result'], ['route_send', 'devices_ws', 'route_send_result'], ['voice_route_reply', 'devices_ws', undefined]])
-    for (const each of SERVICE_WS_FRAMES) expect((DEVICES_REQUESTS as readonly string[]).includes(each.type)).toBe(true)
+    for (const each of frames) expect((DEVICES_REQUESTS as readonly string[]).includes(each.type)).toBe(true)
     const reason = 'the devices service is unavailable'
-    expect(SERVICE_WS_FRAMES[0].unanswered).toEqual({ agentId: '', machineId: '', name: '', confidence: 0, reason, candidates: [], weighed: 0, machines: 0, via: '' })
-    expect(SERVICE_WS_FRAMES[1].unanswered).toEqual({ ok: false, machine: '', reason })
+    expect(frames[0].unanswered).toEqual({ agentId: '', machineId: '', name: '', confidence: 0, reason, candidates: [], weighed: 0, machines: 0, via: '' })
+    expect(frames[1].unanswered).toEqual({ ok: false, machine: '', reason })
   })
   it('gives a service with no lane of the core\'s nothing to seal with, and never its frame back in the clear', async () => {
     await expect(LANE_OFF.hello('m', 'pub')).rejects.toThrow(/no E2EE identity/)

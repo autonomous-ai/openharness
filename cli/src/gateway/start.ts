@@ -25,7 +25,10 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { createProductUsage } from './productUsage.js'
 import { env } from '../config/env.js'
-import type { GatewayAccount, GatewayEvents, GatewayOps, HttpAnswer, ServiceRequests, WindowRelay } from '../core/api.js'
+import type { CoreApi, GatewayAccount, GatewayEvents, GatewayOps, HttpAnswer, ServiceRequests, WindowRelay } from '../core/api.js'
+import { isLocalClientId } from '../lib/relayFrames.js'
+import { createBrowser } from './browser.js'
+import { createCallbackReplay } from './callbackReplay.js'
 import { AutonomousDeviceDirect } from '../lib/autonomous-device/direct.js'
 import { deviceRefusal, deviceRoutes } from '../lib/autonomous-device/localHttp.js'
 import { startDevicePart } from '../lib/autonomous-device/parts.js'
@@ -63,6 +66,9 @@ import type { VaultAccount } from '../lib/connectors/vaultOps.js'
 
 /** What the gateway needs of the core, in whichever process it runs. */
 export interface GatewayHost {
+  agents?: Pick<CoreApi['agents'], 'ofPane' | 'follow'>
+  /** Process-owned physical request credit survives replacement of the gateway instance. */
+  callbackReplay?: ReturnType<typeof createCallbackReplay>
   connectorStore?: VaultStore
   peer?: { composition: 'inline' | 'services'; port: number; token?: string }
   events: GatewayEvents
@@ -668,8 +674,20 @@ export function startGateway(given: GatewayHost): StartedGateway {
   })
   // The keys' (gateway/keyRoutes.ts), and the account's (gateway/accountRoutes.ts), through `ops.backend`: a choice written
   // there is read again at once.
+  const callbackReplay = given.callbackReplay ?? createCallbackReplay()
+  const browser = createBrowser({
+    follow: given.agents?.follow,
+    agentOfPane: async pane => (await given.agents?.ofPane?.(pane))?.agentId,
+    sendTo: (connection, type, payload) => gateway.target(connection, type, payload),
+    isLocal: isLocalClientId,
+    who: connection => gateway.peerIdentity(connection),
+    replay: callbackReplay.run,
+    now: Date.now,
+    log: line => console.log(line),
+  })
   const requests: ServiceRequests = {
     gateway_http: gatewayHttp(deviceHttp, keyRoutes(keyOps), accountRoutes((method, path, body) => ops.backend(method, path, body))),
+    gateway_ws: browser.request,
   }
 
   return {
@@ -679,6 +697,8 @@ export function startGateway(given: GatewayHost): StartedGateway {
     windowRelay,
     requests,
     stop: async () => {
+      browser.stop()
+      const callbacksStopped = given.callbackReplay ? Promise.resolve(null) : callbackReplay.stop().then(() => null, () => new Error('CALLBACK_CLOSE_TIMEOUT'))
       // Shutdown never waits for the optional disk queue. The stopped collector cannot upload. Its final, clean
       // state is on disk when stop() returns (written synchronously), so a process that exits next keeps it. A write
       // already on its way can still rename an older snapshot over it and put the final state back after: waited for
@@ -700,6 +720,8 @@ export function startGateway(given: GatewayHost): StartedGateway {
         await Promise.race([usageStopped.catch(() => false),
           new Promise<void>(resolve => { setTimeout(resolve, 500).unref?.() })])
       }
+      const callbackFailure = await callbacksStopped
+      if (callbackFailure) throw callbackFailure
     },
   }
 }

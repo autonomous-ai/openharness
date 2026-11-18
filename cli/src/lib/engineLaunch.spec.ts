@@ -49,7 +49,7 @@ import { ENGINES, type AgentEngine } from '../engines/types.js'
 import { engineBin } from './engineBin.js'
 import { engineInstallRecipe, type EngineInstallRecipe } from './engineInstall.js'
 import { MIN_OPEN_FILES, RAISE_OPEN_FILES_SH } from './openFiles.js'
-import { browserPrelude } from './browserShim.js'
+import { browserPrelude } from './browserPrelude.js'
 import { DSH_SESSION_ENV, harnessEnvToClear } from '../dsh/launch.js'
 import { launchScriptOf } from '../testing/launchScript.js'
 import { buildGridEngineLaunch, gridConflictingEnvToClear } from './gridLaunch.js'
@@ -80,7 +80,7 @@ afterAll(() => {
  *  alone and only grid's update check is turned off. */
 const GRID_PRELUDE = gridPanePrelude('grid')
 const NO_DEVTOOLS = noDevtoolsPrelude()
-// Every pane's BROWSER is the daemon's script (lib/browserShim.ts): a page a program opens can go to the phone typing there.
+// Every pane's BROWSER is the daemon's script (services/browserShim.ts): a page a program opens can go to the phone typing there.
 const BROWSER = browserPrelude()
 /** The engine-in-a-shell wrapper every launch carries, for the shell each case names — see
  *  `engineFallbackPrelude`. `null` tmux: the suite must not depend on what this machine has. */

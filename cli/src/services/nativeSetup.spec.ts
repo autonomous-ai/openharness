@@ -14,7 +14,9 @@ import { env } from '../config/env.js'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import * as windows from '../engines/kit/windowsFiles.js'
+import { writeBrowserShim } from './browserShim.js'
 
+vi.mock('./browserShim.js', () => ({ writeBrowserShim: vi.fn(() => true) }))
 vi.mock('../engines/kit/launchExecutable.js', () => ({ captureLaunchExecutable: vi.fn() }))
 vi.mock('../engines/kit/downloadMarker.js', () => ({ engineDownloading: vi.fn(() => false) }))
 vi.mock('../engines/kit/nativeInstall.js', () => ({ createNativeInstallations: vi.fn(() => ({ status: vi.fn(async () => null), ensure: vi.fn(async () => ({ complete: true })) })) }))
@@ -25,6 +27,16 @@ vi.mock('../engines/hermesRecord.js', () => ({ hermesKeepsRecord: vi.fn(() => tr
 vi.mock('../engines/opencode/version.js', () => ({ opencodeMajorVersion: vi.fn(() => 2) }))
 afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
 const executable = { command: '/fixture/engine', identity: 'fixture', current: () => true }, environment = { HOME: '/fixture' }
+
+it('prepares the same optional browser shim in inline composition and reports a write failure', () => {
+  const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  createLocalNativeSetup('/fixture/data/native-installations', undefined, { command: 'fixture-cli' })
+  expect(writeBrowserShim).toHaveBeenCalledWith('fixture-cli', '/fixture/data/bin/harness-browser')
+  expect(warning).not.toHaveBeenCalled()
+  vi.mocked(writeBrowserShim).mockReturnValueOnce(false)
+  createLocalNativeSetup('/fixture/data/native-installations', undefined, { command: 'fixture-cli' })
+  expect(warning).toHaveBeenCalledExactlyOnceWith('[engine-setup] BROWSER_SHIM_UNAVAILABLE')
+})
 
 it('composes bounded file rendering without loading installers or publishing native files', async () => {
   vi.spyOn(windows, 'hostPlatform').mockReturnValue('linux')

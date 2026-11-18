@@ -135,9 +135,6 @@ import { SHELL_REQUESTS } from '../lib/shellProtocol.js'
 import { answerShellQuery } from './shellQueries.js'
 import { createTerminalControl } from './terminals/control.js'
 import { createTerminalRequests } from './terminals/requests.js'
-import { createBrowser } from './terminals/browser.js'
-import { loopbackAnswer } from '../lib/loopbackGet.js'
-import { writeBrowserShim } from '../lib/browserShim.js'
 import { backgroundCommands } from '../lib/backgroundCommands.js'
 import { createAgentEvents } from './agents/events.js'
 import { createSessionNormalizers } from './transcripts/normalizers.js'
@@ -1192,6 +1189,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     wifiServing,
   }) : null
   const inlineGateway = gatewayLink ? null : inline!.startGateway({
+    agents: coreApi.agents,
     events: backend.fromGateway, machineId: backend.machineId, computerId: computerId(), autonomousEnv,
     peer: { composition: 'inline', port: env.PORT },
     signedIn: !!session?.machineId, account: account(), machineName: terminalHintMachineName(), hostname: hostname(),
@@ -1238,20 +1236,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const deviceIsWatching = (): boolean => backend.hasCommander() || cableWatchingLocal()
   /** Actual app/tool observation scopes, plus the existing commander and cable audiences. */
   const questionObserved = (agentId: string): boolean => backend.hasCommander() || cableWatchingLocal() || backend.questionsObserved(agentId)
-  // A page a program in a harness's pane opens (Claude Code's `/login`) goes to the phone typing there, and the
-  // sign-in the phone catches comes back to the program (core/terminals/browser.ts, lib/browserShim.ts).
-  const browser = createBrowser({
-    agentOfPane: (pane) => registry.list().find((session) => session.tmuxPane === pane)?.agentId,
-    sendTo: (connId, type, payload) => backend.sendTargetFrame(connId, type, payload),
-    isLocal: isLocalClientId,
-    who: (connId) => backend.remoteClient(connId)?.identity ?? connId,
-    replay: (url) => loopbackAnswer(url),
-    now: Date.now,
-    log: (line) => console.log(line),
-  })
-  backend.browserProvider = { open: browser.open, callback: browser.callback }
-  // The script every pane's BROWSER names asks this daemon first; rewritten as it starts (the CLI may have moved).
-  writeBrowserShim(daemonCommand())
   const terminalStreams = new TerminalStreamManager({
     terminals,
     resolveAgent: (agentId) => registry.resolve(agentId),
@@ -1274,14 +1258,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The keystroke prewarm (grid-reads-without-waking issue 03): typing into a pane whose agent runs on
     // a sleeping grid starts that grid while the person types. Here, in the daemon's own input path, so
     // an older desktop and typing from a phone get it too; an agent on its own login has no `grid`.
-    onInput: (agentId, typed, from) => {
+    onInput: (agentId, typed) => {
       // What the person typed restarts the agent's quiet period: one in use is not moved to another host.
       if (typed) hostQuiet?.noteInput(agentId)
-      if (typed) browser.typed(agentId, from)
       const grid = registry.resolve(agentId)?.grid
       if (grid) ports.models?.prewarm(grid)
-      // The person typing into a harness another agent started makes it theirs (services/agentCleanup.ts).
-      if (typed) ports.agentCleanup?.typed(agentId)
+    },
+    onInputSource: (agentId, source) => {
+      const session = registry.resolve(agentId)
+      if (session) agentLife.input(session, source)
     },
     moveGate,
   })
@@ -1502,7 +1487,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (session.sessionId) questionWatcher.notePrompt(session.sessionId, capture, screen.question)
     },
     // The person sent a harness text from a window or the phone (services/agentCleanup.ts).
-    typed: (id) => ports.agentCleanup?.typed(id),
+    typed: id => { const session = registry.resolve(id); if (session) agentLife.input(session) },
     moveGate,
     // Its waitingFor changed: every window gets the agent's frame again.
     sync: (id) => { const session = registry.resolve(id); if (session) syncSession(session) },
@@ -1696,7 +1681,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const recapsLink = createRecapsLink({ notify: (frame, opts) => serviceLinks.notify('recaps', frame, opts), buffered: () => serviceLinks.buffered('recaps'),
     call: (type, payload) => serviceLinks.call('recaps', type, payload), clients: coreApi.clients, lastTurn: coreApi.transcripts.lastTurn })
   // What the core tells the agent cleanup in its own process, and answers it (core/agentCleanupLink.ts).
-  const agentCleanupLink = createAgentCleanupLink(coreApi, (frame, opts) => serviceLinks.notify('agentCleanup', frame, opts),
+  const agentCleanupLink = createAgentCleanupLink(coreApi,
     (type, payload, waitMs) => serviceLinks.call('agentCleanup', type, payload, waitMs))
   const usageLink = createUsageLink({ call: payload => ports.usage?.read(payload.target as AgentUsageTarget) ?? Promise.resolve({}), changed: agentEvents.onTokenUsageChanged })
   coreApi.usage = target => usageLink.readSnapshot(target, coreApi.agents.all())
@@ -1728,7 +1713,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The gateway's first: its `backend` reads (the device key log) were refused below as NOT_AN_EXPERIMENT.
     answer: async (service, query, payload, authority) => (query === 'count' && authority.current?.() === true
       ? answerAgentQuery(coreApi, query, payload, { service, report: backend.reportUsage }) : null)
-      ?? (query === 'client_streams' && streamEndpoints.has(service) && authority.current?.() === true ? { ok: clientStreams.serving(service) } : null) ?? frameParts.answer(service, query, payload, () => authority.current?.() === true) ?? await questionControls.answer(service, query, payload) ?? await modelControls.answer(service, query, payload) ?? await nativeControls.answer(service, query, payload) ?? engineReaders.answer(service) ?? (service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : null) ?? deliveries.answer(service, query, payload, authority)
+      ?? (query === 'client_streams' && streamEndpoints.has(service) && authority.current?.() === true ? { ok: clientStreams.serving(service) } : null) ?? frameParts.answer(service, query, payload, () => authority.current?.() === true) ?? await questionControls.answer(service, query, payload) ?? await modelControls.answer(service, query, payload) ?? await nativeControls.answer(service, query, payload) ?? engineReaders.answer(service) ?? (service === 'gateway' && gatewayLink
+        ? query === 'follow_agents' ? agentLife.followed(service, payload)
+          : query === 'agent_of_pane' ? answerAgentQuery(coreApi, query, payload)
+          : gatewayLink.answer(query, payload)
+        : null) ?? deliveries.answer(service, query, payload, authority)
       // Agent Messages is answered what it uses and nothing more, never what an experiment may ask (core/messagesLink.ts).
       ?? (service === 'messages' ? await messagesLink.answer(query, payload) : null)
       // What happens to agents, for a service that follows them (core/agentLife.ts): the live agents' rows, which only a
@@ -2532,7 +2521,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // A failed advertised worker never selects the inline implementation.
   const nativeSetup = outOfProcess.has('engineSetup')
     ? createNativeSetupLink((type, payload, waitMs) => serviceLinks.call('engineSetup', type, payload, waitMs))
-    : inline!.createLocalNativeSetup(join(env.ADAPTER_DATA_DIR, 'native-installations'))
+    : inline!.createLocalNativeSetup(join(env.ADAPTER_DATA_DIR, 'native-installations'), undefined, coreApi.daemon)
   hookSetup = nativeSetup
   const prepareFolderTrust = createFolderTrustPreparation(nativeSetup)
   const prepareNativeLaunch = createNativeLaunchPreparer({

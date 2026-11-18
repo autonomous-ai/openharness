@@ -40,6 +40,14 @@ describe('declared service frames over owner RPC', () => {
     return { taken, answer }
   }
 
+  it('enforces declared local-only RPC provenance before waking a component', async () => {
+    const linked = router(['thing_ws'], () => ({ handled: true }))
+    const doors = createServiceRoutes({ routes: [], linked, frames: [{ frame: 'local_action', type: 'thing_ws', rpc: 'local', waitMs: 1000 }] })
+    expect(await rpc(doors, 'local_action', { local: true }).answer).toEqual({ error: 'LOCAL_ONLY' })
+    expect(linked.route).not.toHaveBeenCalled()
+    expect(await rpc(doors, 'local_action', {}, { ...owner, local: true }).answer).toEqual({ handled: true })
+  })
+
   it('keeps the authenticated asker, wrapper and service reply, including declared command errors', async () => {
     let result: Record<string, unknown> = { chosen: 'agent' }
     const linked = router(['thing_ws'], () => result)

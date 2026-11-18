@@ -27,6 +27,8 @@ import { sharedPeers } from './sharedTrust.js'
 import { env } from '../config/env.js'
 import { VaultStore } from '../lib/connectors/vaultStore.js'
 import { connectorsDir } from '../lib/connectors/store.js'
+import { followLink } from '../services/followLink.js'
+import { createCallbackReplay } from './callbackReplay.js'
 
 type Payload = Record<string, unknown>
 
@@ -49,6 +51,8 @@ const record = (value: unknown): Payload => (value && typeof value === 'object' 
 export function runGatewayService(options: GatewayServiceOptions): ServiceProcess {
   let core: CoreConnection | null = null
   let running: StartedGateway | null = null
+  const follow = followLink({})
+  const callbackReplay = createCallbackReplay()
   /** The windows on the core's side working on other machines through this gateway, by the core's id. */
   const windows = new Map<string, WindowRelaySession>()
 
@@ -86,6 +90,7 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
    *  on the link (a new `start`) must not wait for the old link's goodbye. The process's own stop waits for it. */
   let pendingStart: Payload | null = null
   const stop = (): Promise<void> => {
+    follow.disconnected()
     pendingStart = null
     const was = running
     running = null
@@ -98,7 +103,16 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     void stop()
     const original = core
     const started = (options.start ?? startGateway)({
-      events, connectorStore,
+      events, connectorStore, callbackReplay,
+      agents: {
+        follow: follow.follow,
+        ofPane: async pane => {
+          if (!original || core !== original || running !== started) return null
+          const answer = await original.query('agent_of_pane', { pane }).catch(() => null)
+          return core === original && running === started && typeof answer?.agentId === 'string'
+            ? { agentId: answer.agentId, guest: answer.guest === true } : null
+        },
+      },
       peer: { composition: 'services', port: env.PORT, token: options.token },
       machineId: text(payload.machineId),
       computerId: text(payload.computerId),
@@ -116,6 +130,7 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
       },
     })
     running = started
+    if (original) void follow.connected((query, payload) => original.query(query, payload))
     // Held first, so that nothing the link brings in is answered before the core is ready.
     if (payload.requestsOpen === false) started.port.holdRequests()
     started.port.localClients(localWindowsOf(payload.localClients))
@@ -162,6 +177,7 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
    * overtake it. What takes time (a window's dial) runs on, and says when it is done.
    */
   const onEvent = (payload: Payload): void => {
+    if (follow.heard(payload)) return
     const kind = text(payload.kind)
     // The core says start as it takes the link, a frame before it says `connected`: started then, the first
     // dial would ask the core for a token on a link this process does not know is up yet, and wait a second
@@ -242,6 +258,8 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
       if (!running) throw new Error('the gateway has not started')
       return running.requests.gateway_http!(p, asker)
     },
+    gateway_ws: (p: Payload, asker: Asker, closed?: AbortSignal) =>
+      running?.requests.gateway_ws?.(p, asker, closed) ?? { error: 'SERVICE_UNAVAILABLE' },
     // The fleet's lane's sessions (gateway/lane.ts). Each is answered from what it holds at once, so they
     // are taken in the order the core sent them.
     [GATEWAY_CALLS.lane]: async (p: Payload): Promise<Payload> => {
@@ -331,8 +349,11 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     // (health_cli_unclean_restart, 69 to 170 on 2026-10-16, production counters).
     stop: async () => {
       const stopping = stop()
+      const callbacksStopped = callbackReplay.stop().then(() => null, () => new Error('CALLBACK_CLOSE_TIMEOUT'))
       await service.stop()
       await stopping
+      const callbackFailure = await callbacksStopped
+      if (callbackFailure) throw callbackFailure
     },
   }
 }

@@ -412,6 +412,9 @@ export class RelayGateway implements GatewayPort {
     return peer?.shared ? (peer.sharedWith ?? '') : undefined
   }
 
+  /** Stable identity of a current authenticated peer, for gateway-owned one-use callbacks. */
+  peerIdentity(connId: string): string | null { return this.e2ee.sessionIdentity(connId) ?? null }
+
   /** A DEVICE-audience frame (commanderEligible, not web). User/data frames are group-encrypted (E2EE)
    *  here so the backend relays only ciphertext; system/presence frames pass through. */
   commander(frame: Frame): void {

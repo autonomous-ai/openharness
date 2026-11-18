@@ -1,4 +1,7 @@
 import type { execFile } from 'node:child_process'
+import { dirname, join } from 'node:path'
+import { writeBrowserShim } from './browserShim.js'
+import type { DaemonAddress } from '../core/api.js'
 import { OPENCODE_VERSION } from '../engines/opencode/contract.js'
 import { nativeProcessEnvironment } from '../engines/kit/nativeLocations.js'
 /** The local implementation is loaded by setup, or the explicit old-master/debug inline door. */
@@ -42,7 +45,10 @@ function setupProbes(execute?: typeof execFile, alongsideProbe?: () => void): Na
 
 export const nativeSetupProbes = setupProbes()
 
-export function createLocalNativeSetup(directory: string, execute?: typeof execFile): NativeSetup {
+export function createLocalNativeSetup(directory: string, execute?: typeof execFile, daemon?: Pick<DaemonAddress, 'command'>): NativeSetup {
+  if (daemon && !writeBrowserShim(daemon.command, join(dirname(directory), 'bin', 'harness-browser'))) {
+    console.warn('[engine-setup] BROWSER_SHIM_UNAVAILABLE')
+  }
   const windows = process.platform === 'win32'
   let loading: Promise<NativeSetup['installations']> | undefined
   const installations = () => loading ??= (windows

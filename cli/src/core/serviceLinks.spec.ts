@@ -661,6 +661,32 @@ describe('service links', () => {
     expect(search.sent[0]).toEqual({ type: 'service_event', payload: { n: 5 } })
   })
 
+  it('replaces a held observation without evicting another agent or moving it behind a later stop', () => {
+    const links = make()
+    const frame = (kind: string, agentId: string, connection = '') => ({ type: 'service_event', payload: { kind, agentId, connection } })
+    links.notify('search', frame('input', 'joined'), { untilDelivered: true, replaceKey: 'input:joined' })
+    links.notify('search', frame('input', 'reopened', 'first'), { untilDelivered: true, replaceKey: 'input:reopened' })
+    links.notify('search', frame('stopped', 'parent'), { untilDelivered: true })
+    for (let n = 0; n <= HELD_MAX; n++) links.notify('search', frame('input', 'reopened', `connection-${n}`),
+      { untilDelivered: true, replaceKey: 'input:reopened' })
+    const search = sink()
+    links.accept('search', TOKEN, search, vi.fn())
+    expect(search.sent).toEqual([frame('input', 'joined'), frame('input', 'reopened', `connection-${HELD_MAX}`), frame('stopped', 'parent')])
+  })
+
+  it('forgets an older held observation when its replacement is delivered on the current connection', () => {
+    const links = make()
+    const search = sink()
+    const first = links.accept('search', TOKEN, search, vi.fn())!
+    search.sendFrame.mockReturnValueOnce(false)
+    links.notify('search', { type: 'service_event', payload: { n: 1 } }, { untilDelivered: true, replaceKey: 'current' })
+    links.notify('search', { type: 'service_event', payload: { n: 2 } }, { untilDelivered: true, replaceKey: 'current' })
+    first.closed()
+    const next = sink()
+    links.accept('search', TOKEN, next, vi.fn())
+    expect(next.sent).toEqual([])
+  })
+
   it('works with its own clock, ids and log by default', () => {
     vi.useRealTimers()
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})

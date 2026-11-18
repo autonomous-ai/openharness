@@ -1035,14 +1035,11 @@ export const RECAPS_FALLBACKS: PortFallbacks<RecapsPort> = { lifecycle: undefine
 
 /**
  * The core's calls into the agent cleanup (services/agentCleanup.ts): what happens to the harnesses agents start.
- * `typed` is a notice: the core never waits for it, and one the cleanup misses leaves a harness open, as before it. A
+ * Accepted person input is shared through AgentLife; the cleanup retains joined protection in its own process. A
  * harness closed or stopped it hears as every service that follows agents does (`AgentLife` `stopped`), and closes
  * the harnesses that one started.
  */
 export interface AgentCleanupPort {
-  /** The person typed or pasted into a harness, from a window or the phone (an agent id or a session id): one another
-   *  agent started is the person's from then on. */
-  typed(id: string): void
   /** A harness is being deleted: the agent ledger's lines that keep the opening words of what it was told
    *  (`harness tell`) are erased. The one answer a delete waits for here, and for a bounded time: false when they were
    *  not erased, which refuses the delete. The ledger is the agent clients' file, read and locked by the cleanup and
@@ -1052,7 +1049,7 @@ export interface AgentCleanupPort {
 }
 /** What the core gets when the cleanup fails: nothing told, every harness left open, as before it, and no delete of a
  *  harness whose told lines it could not erase. */
-export const AGENT_CLEANUP_FALLBACKS: PortFallbacks<AgentCleanupPort> = { typed: undefined, forgetTold: later(false), stop: undefined }
+export const AGENT_CLEANUP_FALLBACKS: PortFallbacks<AgentCleanupPort> = { forgetTold: later(false), stop: undefined }
 
 /**
  * What happens to agents, as the core tells the services that follow them (core/agentLife.ts, `CoreApi.agents.follow`):
@@ -1065,6 +1062,8 @@ export type AgentLife =
   /** It stopped running here: a stop or any other forget, or its engine's own exit. Told to a follower that was told it
    *  running. */
   | { kind: 'ended'; agentId: string }
+  /** First accepted person input on a controlling terminal stream; a takeover/reopen supplies a new source. */
+  | { kind: 'input'; agentId: string; startedByAgent: boolean; source?: { connection: string; clientKind: string | null } }
   /** A person or an agent stopped it (`agent_close`, Stop Harness, `harness close`, a purge), told once the stop is done,
    *  never while it can still fail. */
   | { kind: 'stopped'; agentId: string }
@@ -1840,7 +1839,7 @@ export interface ServiceHttpRoute {
 }
 
 /** The gateway's routes of the door (gateway/start.ts): one request, by path. */
-export const GATEWAY_REQUESTS = ['gateway_http'] as const
+export const GATEWAY_REQUESTS = ['gateway_http', 'gateway_ws'] as const
 
 const deviceDown = (status: number, code: string, message: string): HttpAnswer => ({ status, body: { error: { code, message } } })
 const DEVICE_LINK_DOWN = deviceDown(503, 'UNAVAILABLE', 'The Wi-Fi device link is not reachable on this computer right now. Try again.')
@@ -1944,7 +1943,7 @@ export interface ServiceWsFrame {
   frame: string
   type: string
   /** Also accepted through the authenticated owner RPC router, with its original Asker and RPC result type. */
-  rpc?: 'owner'
+  rpc?: 'owner' | 'local'
   /** The frame its answer goes back as; none for a frame the window tells, which nothing answers. */
   result?: string
   waitMs: number
@@ -1956,6 +1955,8 @@ export interface ServiceWsFrame {
  *  says what was sent back before it left the core's process, word for word, while its service is down
  *  (e2e/keyRoutes.e2e.ts). */
 export const SERVICE_WS_FRAMES: readonly ServiceWsFrame[] = [
+  { frame: 'browser_open', type: 'gateway_ws', rpc: 'local', result: 'browser_open_result', waitMs: 5_000, unanswered: { handled: false } },
+  { frame: 'browser_callback', type: 'gateway_ws', rpc: 'owner', result: 'browser_callback_result', waitMs: 35_000, unanswered: { error: 'UNSUPPORTED' } },
   // ⌘K: which agent a typed task belongs to, on any of the owner's machines; the classifier has 20 s (services/fleet.ts).
   { frame: 'route_task', type: 'devices_ws', rpc: 'owner', result: 'route_result', waitMs: 25_000, unanswered: { ...UNROUTED } },
   // ⌘K's send, through the fleet's router: the turn delivered on the agent's own machine, or refused with why.

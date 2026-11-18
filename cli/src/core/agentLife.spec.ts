@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { createAgentLife, FOLLOWER_FAILURES_MAX, followOptions, PURGED_SESSIONS_MAX, TOLD_PRUNE_AT } from './agentLife.js'
-import { FOLLOW_HAVING_MAX, VIEWERS_FOLLOW, type AgentLife } from './api.js'
+import { FOLLOW_HAVING_MAX, VIEWERS_FOLLOW, type AgentLife, type HeldAgentLife } from './api.js'
 
 const agent = (agentId: string, over: Partial<RegisteredSession> = {}) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', ...over }) as RegisteredSession
 
-function setup(live: RegisteredSession[] = [], hears: Record<string, Array<'stopped' | 'purged' | 'taken'>> = {}) {
+function setup(live: RegisteredSession[] = [], hears: Record<string, HeldAgentLife[]> = {}) {
   const notify = vi.fn((_service: string, _frame: unknown, _opts?: { untilDelivered?: boolean }) => true)
   const log = vi.fn()
   const hub = createAgentLife({ live: () => live, notify, hears, log })
@@ -24,6 +24,41 @@ const toldTo = (notify: ReturnType<typeof setup>['notify'], service: string) =>
 
 describe('what happens to agents, for the services that follow them', () => {
   afterEach(() => vi.restoreAllMocks())
+
+  it('bounds frame epochs to live bindings and gives a reclaimed binding a new epoch', () => {
+    const live = Array.from({ length: TOLD_PRUNE_AT }, (_, n) => agent(`a${n}`))
+    const { hub, log } = setup(live)
+    hub.followed('viewer', { frames: true })
+    const original = hub.frameEpoch('a0')
+    expect(original).toEqual(expect.any(String))
+    hub.running(agent('overflow'))
+    expect(hub.frameEpoch('overflow')).toBeUndefined()
+    expect(log).toHaveBeenCalledWith('[frames] FRAME_PART_LIMIT')
+    live.shift()
+    hub.running(agent('replacement'))
+    expect(hub.frameEpoch('a0')).toBeUndefined()
+    expect(hub.frameEpoch('replacement')).toEqual(expect.any(String))
+    hub.ended('replacement')
+    hub.running(agent('replacement'))
+    expect(hub.frameEpoch('replacement')).not.toBe(original)
+  })
+
+  it('shares an accepted person input source with inline followers and both declared process consumers', () => {
+    const { hub, follower, notify } = setup([], { gateway: ['input'], agentCleanup: ['input'], search: ['purged'] })
+    const inline = follower({ running: false })
+    const row = agent('joined', { startedBy: 'agent' })
+    hub.input(row, { connId: 'phone', kind: 'phone' })
+    hub.input(agent('own'), { connId: 'desktop', kind: null })
+    const events = [
+      { kind: 'input', agentId: 'joined', source: { connection: 'phone', clientKind: 'phone' }, startedByAgent: true },
+      { kind: 'input', agentId: 'own', source: { connection: 'desktop', clientKind: null }, startedByAgent: false },
+    ]
+    expect(inline.heard).toEqual(events)
+    for (const name of ['gateway', 'agentCleanup']) expect(toldTo(notify, name)).toEqual(events.map(event => ({
+      type: 'service_event', payload: { kind: 'agent', event }, opts: { untilDelivered: true, replaceKey: `input:${event.agentId}` },
+    })))
+    expect(toldTo(notify, 'search')).toEqual([])
+  })
 
   it.each(['inline', 'process'] as const)('keeps credentials out of %s catch-up and running notifications, including retained rows', (mode) => {
     const override = { networkId: 'fixture', networkName: 'Fixture', baseUrl: 'https://fixture.invalid/v1', apiKey: 'synthetic-lifecycle-canary' }

@@ -42,7 +42,7 @@ export interface ServiceSpec {
 
 /** The kinds of what happens to an agent that a service in its own process can be held (core/api.ts `AgentLife`): a stop
  *  a person or an agent made, a purge, and a new agent in the pane one ended in. */
-export type HeldAgentLife = 'stopped' | 'purged' | 'taken'
+export type HeldAgentLife = 'stopped' | 'purged' | 'taken' | 'input'
 
 /** A process the services run in: the services it hosts, and its memory budget. */
 export type ServiceHostSpec = Omit<ServiceSpec, 'name'>
@@ -99,7 +99,7 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // a probe starts, four at once, are processes of their own, outside this budget.
   // A harness stopped while the host is down still closes the harnesses it started: held for the cleanup.
   edge: { services: ['workspaces', 'usage', 'monitor', 'projects', 'handoff', 'recaps', 'windowNames', 'shell', 'connectors', 'sharedMachines', 'agentCleanup', 'messages', 'osDevice', 'goals', 'hachi', 'engineProbe'], heapLimitMiB: 384, rssLimitMiB: 768,
-    hears: { agentCleanup: ['stopped'] }, frameParts: { workspaces: { fields: ['project', 'gitContext'] } } },
+    hears: { agentCleanup: ['stopped', 'input'] }, frameParts: { workspaces: { fields: ['project', 'gitContext'] } } },
   // The orchestrator (services/orchestratorProcess.ts), an experiment: started only once it is on, for a
   // saved project or a request (core/api.ts `EXPERIMENTS`). Its projects' files and the frames of their
   // Directors; the agents it runs are the core's.
@@ -123,7 +123,7 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // Started as the core starts when it is signed in or anything is paired here, and otherwise by the first
   // thing that needs it (core/gatewayWake.ts): about 75 MiB at idle a computer signed out with nothing
   // paired never pays.
-  gateway: { services: ['gateway'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 4 },
+  gateway: { services: ['gateway'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 4, hears: { gateway: ['input', 'purged'] } },
   // Grid's pictures, the Model Manager's catalog and the models found on this machine. Its downloads, model
   // servers and `grid` commands run in processes of their own, outside this budget. Started only once grid is
   // in use here or a request needs it (core/modelsWake.ts): about 70 MiB at idle, which a computer that uses

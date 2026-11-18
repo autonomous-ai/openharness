@@ -3,7 +3,8 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { browserPrelude, browserShimPath, browserShimScript, writeBrowserShim } from './browserShim.js'
+import { browserShimScript, writeBrowserShim } from './browserShim.js'
+import { browserPrelude, browserShimPath } from '../lib/browserPrelude.js'
 
 /** A pane's `BROWSER`: the daemon first, then the person's own browser, then the system's. Run for real in /bin/sh
  *  with stand-ins for the daemon's command and the browsers, each recording what it was given. */

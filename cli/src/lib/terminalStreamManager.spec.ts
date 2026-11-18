@@ -321,8 +321,60 @@ describe('TerminalStreamManager', () => {
     await manager.handleBinary('web-1', { kind: TerminalBinaryKind.input, streamId: controller, seq: 1, compressed: false, bytes: Buffer.from('\x1b[I\x1b[?1;2c') })
     expect(typed).toEqual(['agent-1', 'agent-1', 'agent-1'])
     expect(person).toEqual([true, true, false])
-    // Who typed: the controller's connection (core/terminals/browser.ts sends a page to the phone typing).
+    // Who typed: the controller's connection (gateway/browser.ts sends a page to the phone typing).
     expect(from[0]?.connId).toBe('web-1')
+  })
+
+  it('observes the first accepted person input of each controlling stream without per-keystroke source traffic', async () => {
+    const onInputSource = vi.fn()
+    await manager.stop()
+    manager = newManager({ onInputSource })
+    const open = async (connection: string, takeover = true): Promise<string> => {
+      await manager.handleFrame(connection, 'terminal_open', {
+        requestId: connection, protocolVersion: 3, agentId: 'agent-1', cols: 120, rows: 40, takeover,
+      })
+      return sent.filter(frame => frame.type === 'terminal_ready' && frame.connId === connection).at(-1)!.payload.streamId as string
+    }
+    const input = (connection: string, streamId: string, seq: number, value: string) => manager.handleBinary(connection, {
+      kind: TerminalBinaryKind.input, streamId, seq, compressed: false, bytes: Buffer.from(value),
+    })
+    const first = await open('phone')
+    const watcher = await open('watcher', false)
+    await input('watcher', watcher, 0, 'refused watcher')
+    await input('phone', first, 3, 'held out of order')
+    await input('phone', first, 0, '\x1b[I\x1b[?1;2c')
+    expect(onInputSource).not.toHaveBeenCalled()
+    await input('phone', first, 1, 'x')
+    await input('phone', first, 2, 'y')
+    expect(onInputSource).toHaveBeenCalledExactlyOnceWith('agent-1', { connId: 'phone', kind: null })
+
+    const second = await open('desktop')
+    await input('phone', first, 4, 'old controller')
+    expect(onInputSource).toHaveBeenCalledTimes(1)
+    await input('desktop', second, 0, 'new controller')
+    expect(onInputSource).toHaveBeenLastCalledWith('agent-1', { connId: 'desktop', kind: null })
+    const reopened = await open('phone')
+    await manager.handleBinary('phone', { kind: TerminalBinaryKind.paste, streamId: reopened, seq: 0,
+      compressed: false, bytes: Buffer.from('pasted after takeover') })
+    expect(onInputSource).toHaveBeenCalledTimes(3)
+    expect(onInputSource).toHaveBeenLastCalledWith('agent-1', { connId: 'phone', kind: null })
+  })
+
+  it('keeps input flowing after a source observer throws and retries its first-person notification', async () => {
+    const onInputSource = vi.fn().mockImplementationOnce(() => { throw new Error('observer failed') })
+    const diagnostic = vi.fn()
+    await manager.stop()
+    manager = newManager({ onInputSource, diagnostic })
+    await manager.handleFrame('phone', 'terminal_open', {
+      requestId: 'open', protocolVersion: 3, agentId: 'agent-1', cols: 120, rows: 40,
+    })
+    const streamId = sent.find(frame => frame.type === 'terminal_ready')!.payload.streamId as string
+    for (let seq = 0; seq < 3; seq++) await manager.handleBinary('phone', {
+      kind: TerminalBinaryKind.input, streamId, seq, compressed: false, bytes: Buffer.from('x'),
+    })
+    expect(stream.writes).toHaveLength(3)
+    expect(onInputSource).toHaveBeenCalledTimes(2)
+    expect(diagnostic).toHaveBeenCalledWith('input_source_listener_failed', expect.any(Object))
   })
 
   it('opens with a keyframe, streams coalesced output, and writes ordered raw input', async () => {

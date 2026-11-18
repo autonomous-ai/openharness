@@ -2,12 +2,8 @@
  * The agent cleanup in its own process, as the core sees it (services/agentCleanupProcess.ts; in the edge host by
  * default).
  *
- * The core tells the process what happens and goes on: the person typing into a harness another agent started
- * (`typed`), held until the process hears it, as one it missed while down would close one the person joined. `typed`
- * comes with every keystroke a window sends: it is said once a harness, and only for a harness another agent started,
- * so the person's typing costs two map lookups and never a frame to another process. A harness stopped it hears as
- * every service that follows agents does (core/agentLife.ts `stopped`), held for it the same way
- * (harnessd/services.ts `hears`).
+ * Stops and accepted person input are shared AgentLife observations (core/agentLife.ts).
+ * Joined protection belongs to the cleanup process; core retains no per-agent feature history.
  *
  * One thing the core asks and waits for, for a bounded time: that what a harness being deleted was told is erased
  * (`forgetTold`). The agent ledger is the process's to read and lock, never the core's, and a delete whose erase is
@@ -19,7 +15,6 @@
  */
 import { answerAgentQuery } from './agentQueries.js'
 import type { AgentCleanupPort, CoreApi } from './api.js'
-import type { ServiceFrame } from './serviceLinks.js'
 
 type Payload = Record<string, unknown>
 
@@ -29,17 +24,9 @@ type Payload = Record<string, unknown>
 export const FORGET_TOLD_MS = 10_000
 
 /** [call]: ask the cleanup's process for an answer (core/serviceLinks.ts `call`, for `agentCleanup`): never rejects. */
-export function createAgentCleanupLink(core: Pick<CoreApi, 'agents' | 'usage' | 'count' | 'clients'>, notify: (frame: ServiceFrame, opts?: { untilDelivered?: boolean }) => boolean,
+export function createAgentCleanupLink(core: Pick<CoreApi, 'agents' | 'usage' | 'count' | 'clients'>,
   call: (type: string, payload: Payload, waitMs: number) => Promise<Payload>) {
-  /** The harnesses the process was told the person joined: it keeps them itself (services/agentCleanup.ts). */
-  const told = new Set<string>()
   const port: AgentCleanupPort = {
-    typed: (id) => {
-      const session = core.agents.resolve(id)
-      if (session?.startedBy !== 'agent' || told.has(session.agentId)) return
-      told.add(session.agentId)
-      notify({ type: 'service_event', payload: { kind: 'typed', agentId: session.agentId } }, { untilDelivered: true })
-    },
     // Anything but its word that it erased them (the process down or slow, the ledger's lock held, a file it could
     // not write) is not erased, and the delete is refused.
     forgetTold: async (agentId) => (await call('forgetTold', { agentId }, FORGET_TOLD_MS)).ok === true,

@@ -366,12 +366,6 @@ export class BackendSocket {
   /** Answers `theme_set` with the whole reply: the desktop's pane colours, to become this machine's tmux
    *  `window-style` (cli.ts binds core/terminals/requests.ts). Null answers UNSUPPORTED. */
   themeProvider: ((payload: Record<string, unknown>) => Record<string, unknown>) | null = null
-  /** A page a program in a harness's pane opens, and the sign-in a phone brings back from it
-   *  (core/terminals/browser.ts, bound by core/main.ts). Null answers UNSUPPORTED. */
-  browserProvider: {
-    open: (payload: Record<string, unknown>) => Record<string, unknown>
-    callback: (payload: Record<string, unknown>, connId: string) => Promise<Record<string, unknown>>
-  } | null = null
   tokenUsageProvider: ((session: RegisteredSession) => AgentTokenUsage | null) | null = null
   runtimeDisplayProvider: ((session: RegisteredSession) => RuntimeDisplay) | null = null
   /** Backend-resolved machine id, persisted by the SSO login preflight. */
@@ -1457,21 +1451,6 @@ export class BackendSocket {
         case 'agent_fork':
           if (this.forkProvider) await this.forkProvider(payload, answer)
           else answer({ error: 'UNSUPPORTED_ON_REMOTE' })
-          return
-
-        // What a harness's pane runs and where (core/terminals/requests.ts, bound by cli.ts).
-        // The `BROWSER` shim in a harness's pane, asking whether a phone takes the page. A process on this
-        // computer only: from anywhere else it would be a way to put a page on someone's phone.
-        case 'browser_open':
-          if (!local) { answer({ error: 'LOCAL_ONLY' }); return }
-          answer(this.browserProvider ? this.browserProvider.open(payload) : { handled: false })
-          return
-
-        // The redirect a phone caught for that page, replayed to the program waiting on this computer.
-        case 'browser_callback':
-          if (!owner) { answer({ error: 'OWNER_REQUIRED' }); return }
-          if (!this.browserProvider) { answer({ error: 'UNSUPPORTED' }); return }
-          answer(await this.browserProvider.callback(payload, connId))
           return
 
         case 'terminal_info':

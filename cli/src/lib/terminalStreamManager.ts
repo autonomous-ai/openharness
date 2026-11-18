@@ -161,6 +161,8 @@ interface ActiveStream {
   lastSyncAt: number
   nextSeq: number
   lastInputSeq: number
+  /** One source observation per controlling stream; takeover/reopen creates a fresh stream. */
+  inputSourceSent?: boolean
   /** Keystrokes that came ahead of one still on its way, by their seq — see `input`. */
   heldInput: Map<number, Uint8Array>
   heldInputBytes: number
@@ -226,9 +228,11 @@ export interface TerminalStreamManagerDeps {
    * holds what the person typed or pasted, not only what the terminal sends by itself (lib/typedInput.ts), which the
    * agent cleanup reads as the person joining a harness another agent started (services/agentCleanup.ts).
    * `from`: the stream's connection and what its client said it is on `terminal_open`, so a page a program in the
-   * pane opens can go to the phone the person is typing on (core/terminals/browser.ts).
+   * pane opens can go to the phone the person is typing on (gateway/browser.ts).
    */
   onInput?: (agentId: string, typed: boolean, from: { connId: string, kind: string | null }) => void
+  /** First accepted person input on this controlling stream: shared lifecycle fact, without keystroke traffic. */
+  onInputSource?: (agentId: string, from: { connId: string, kind: string | null }) => void
   /** While an agent changes host, every write to its terminal waits here, and goes to the pane it ends on;
    *  its streams follow it through `retarget`. Absent: nothing is ever held. */
   moveGate?: MoveGate
@@ -935,8 +939,17 @@ export class TerminalStreamManager {
 
   /** See `TerminalStreamManagerDeps.onInput`. A listener's failure is its own: input is never held by it. */
   private tookInput(state: ActiveStream, typed: boolean): void {
-    try { this.deps.onInput?.(state.agentId, typed, { connId: state.connId, kind: state.client?.kind ?? null }) } catch (error) {
+    const source = { connId: state.connId, kind: state.client?.kind ?? null }
+    try { this.deps.onInput?.(state.agentId, typed, source) } catch (error) {
       this.diagnostic(state, 'input_listener_failed', { reason: error instanceof Error ? error.message : String(error) })
+    }
+    if (!typed || state.inputSourceSent || !this.deps.onInputSource) return
+    const agentId = state.agentId
+    state.inputSourceSent = true
+    try { this.deps.onInputSource(agentId, source) } catch {
+      // A failed observer never holds input. Permit the next real input to report its source again.
+      state.inputSourceSent = undefined
+      this.diagnostic(state, 'input_source_listener_failed', {})
     }
   }
 

@@ -69,7 +69,10 @@ function stubGateway() {
       return session
     }),
   } satisfies WindowRelay
-  const requests = { gateway_http: vi.fn(async (payload: Record<string, unknown>) => ({ status: 200, body: { devices: [], asked: payload.target } })) }
+  const requests = {
+    gateway_http: vi.fn(async (payload: Record<string, unknown>) => ({ status: 200, body: { devices: [], asked: payload.target } })),
+    gateway_ws: vi.fn(async () => ({ handled: false })),
+  }
   return { port, ops, legacyConnectorVault, windowRelay, requests, sessions, stop: vi.fn(async () => {}) }
 }
 
@@ -111,10 +114,67 @@ function wire() {
   }
   const connect = () => { options.onConnected!(core); link.connected() }
   const disconnect = () => { options.onDisconnected!(); link.disconnected() }
-  return { link, heard, gateways, hosts, connect, disconnect, tokens, backend, wifiServing, options: () => options, service, linkStop }
+  return { link, heard, gateways, hosts, core, connect, disconnect, tokens, backend, wifiServing, options: () => options, service, linkStop }
 }
 
 describe('the gateway\'s process, spoken to by the core', () => {
+  it('binds pane answers to the original core and gateway while keeping physical callback credit process-owned', async () => {
+    const w = wire()
+    const query = vi.spyOn(w.core, 'query')
+    query.mockImplementation(async name => name === 'follow_agents' ? { agents: [] } : { agentId: 'a1', guest: true })
+    w.connect()
+    const first = w.hosts[0]
+    expect(await first.agents!.ofPane!('%1')).toEqual({ agentId: 'a1', guest: true })
+    let answer!: (value: Record<string, unknown>) => void
+    query.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    const pending = first.agents!.ofPane!('%1')
+    w.disconnect()
+    w.connect()
+    answer({ agentId: 'stale-agent' })
+    expect(await pending).toBeNull()
+    const calls = query.mock.calls.length
+    expect(await first.agents!.ofPane!('%1')).toBeNull()
+    expect(query).toHaveBeenCalledTimes(calls)
+    expect(w.hosts[1].callbackReplay).toBe(first.callbackReplay)
+    expect(await w.hosts[1].agents!.ofPane!('%1')).toEqual({ agentId: 'a1', guest: true })
+    await w.service.stop()
+  })
+
+  it('passes browser provenance and cancellation intact, and returns unavailable after gateway loss', async () => {
+    const w = wire()
+    const request = w.options().requests.gateway_ws!
+    const frame = { frame: 'browser_callback', payload: { url: 'http://localhost:1/callback' } }
+    const asker = { local: false, owner: true, connection: 'phone-1' }
+    const closed = new AbortController().signal
+    expect(await request(frame, asker, closed)).toEqual({ error: 'SERVICE_UNAVAILABLE' })
+    w.connect()
+    expect(await request(frame, asker, closed)).toEqual({ handled: false })
+    expect(w.gateways[0].requests.gateway_ws).toHaveBeenCalledWith(frame, asker, closed)
+    w.disconnect()
+    expect(await request(frame, asker, closed)).toEqual({ error: 'SERVICE_UNAVAILABLE' })
+    await w.service.stop()
+  })
+
+  it('delivers current input facts without replaying an old source to a replacement gateway', async () => {
+    const w = wire()
+    vi.spyOn(w.core, 'query').mockResolvedValue({ agents: [] })
+    w.connect()
+    const first = vi.fn(), second = vi.fn()
+    const unfollow = w.hosts[0].agents!.follow!(first)
+    const fact = { kind: 'input', agentId: 'a1', startedByAgent: false, source: { connection: 'phone-1', clientKind: 'phone' } }
+    w.options().onEvent!({ kind: 'agent', event: fact })
+    expect(first).toHaveBeenCalledWith(fact)
+    unfollow()
+    w.disconnect()
+    w.connect()
+    w.hosts[1].agents!.follow!(second)
+    expect(second).not.toHaveBeenCalled()
+    w.options().onEvent!({ kind: 'agent', event: { ...fact, source: { connection: 'phone-2', clientKind: 'phone' } } })
+    expect(first).toHaveBeenCalledOnce()
+    expect(second).toHaveBeenCalledOnce()
+    await w.service.stop()
+  })
+
   it('keeps service counters under recorder admission even when provenance is malformed', () => {
     const w = wire(), counted: string[] = []
     w.connect()

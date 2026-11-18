@@ -16,6 +16,7 @@ import { WebSocket } from 'ws'
 import { wrapPayload, type Identity } from '../../src/lib/e2ee/core.js'
 import { RelaySessionCrypto } from '../../src/lib/e2ee/relayClient.js'
 import type { FakeBackend } from './fakeBackend.js'
+import type { TerminalBinaryClear } from '../../src/lib/terminalBinary.js'
 
 export type PhoneFrame = { type: string; payload?: Record<string, any>; agentId?: string; replay?: boolean; [key: string]: unknown }
 
@@ -149,6 +150,15 @@ export class RelayPhone {
     const sealed = (always ? this.sealAlways({ type, payload }) : this.crypto!.wrapOutgoing({ type, payload })) as PhoneFrame
     this.sealed.push(sealed)
     this.ws!.send(JSON.stringify(sealed))
+    return true
+  }
+
+  /** The phone's ordinary encrypted terminal input, on the same authenticated session as its frames. */
+  sendBinary(frame: TerminalBinaryClear): boolean {
+    if (!this.ready) return false
+    const sealed = this.crypto!.encryptTerminal(frame)
+    if (!sealed) return false
+    this.ws!.send(sealed)
     return true
   }
 

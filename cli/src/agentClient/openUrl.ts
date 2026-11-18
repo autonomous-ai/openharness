@@ -1,6 +1,6 @@
 /**
- * `harness open-url <url>`: what a pane's BROWSER script runs first (lib/browserShim.ts). It asks the daemon that
- * owns the pane whether a phone takes the page (core/terminals/browser.ts). Exit 0: it did. Anything else, from
+ * `harness open-url <url>`: what a pane's BROWSER script runs first (services/browserShim.ts). It asks the daemon that
+ * owns the pane whether a phone takes the page (gateway/browser.ts). Exit 0: it did. Anything else, from
  * any failure: the script opens the page on this computer instead. Prints nothing; not for people.
  */
 import { openDaemon, whereFor, type Daemon, type Where } from './daemon.js'

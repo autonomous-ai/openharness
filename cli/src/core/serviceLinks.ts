@@ -173,7 +173,7 @@ export function createServiceLinks(options: ServiceLinksOptions) {
   const waitingCounts = new Map<string, number>()
   /** What a service must hear even if it is down when it is said (a purge's forgetting), delivered on
    *  its next connection; bounded, the oldest dropped first. */
-  const held = new Map<string, ServiceFrame[]>()
+  const held = new Map<string, Map<string | symbol, ServiceFrame>>()
   const unavailable = (service: string) => ({ error: 'SERVICE_UNAVAILABLE', service, retryable: true })
 
   const tokenMatches = (offered: string): boolean => {
@@ -254,9 +254,9 @@ export function createServiceLinks(options: ServiceLinksOptions) {
       // Found by QA on a quiet machine: a cold Share received its request before `connected`, so it
       // read agents without a core connection and answered HARNESS_NOT_FOUND. Welcome it first.
       accepted?.()
-      const owed = held.get(service) ?? []
+      const owed = held.get(service)
       held.delete(service)
-      for (const frame of owed) sink.sendFrame(frame)
+      for (const frame of owed?.values() ?? []) sink.sendFrame(frame)
       // What the core tells it as it connects comes before the requests that woke it: the gateway answers
       // nothing until it is told what to start from (core/gatewayLink.ts `connected`).
       options.connected?.(service)
@@ -364,13 +364,17 @@ export function createServiceLinks(options: ServiceLinksOptions) {
     },
 
     /** Tell a service something it needs to know; false when it is not connected to hear it. With
-     *  `untilDelivered`, what it misses is said again when it next connects. */
-    notify(service: string, frame: ServiceFrame, opts: { untilDelivered?: boolean; quota?: ClientStreamQuota } = {}): boolean {
-      if (links.get(service)?.sink.sendFrame(frame, opts.quota)) return true
+     *  `untilDelivered`, what it misses is said again when it next connects. `replaceKey` replaces an older
+     *  observation in its original position, so repeated observations cannot evict other agents' notices. */
+    notify(service: string, frame: ServiceFrame, opts: { untilDelivered?: boolean; replaceKey?: string; quota?: ClientStreamQuota } = {}): boolean {
+      if (links.get(service)?.sink.sendFrame(frame, opts.quota)) {
+        if (opts.replaceKey !== undefined) held.get(service)?.delete(opts.replaceKey)
+        return true
+      }
       if (opts.untilDelivered && Object.hasOwn(options.owned, service)) {
-        const owed = held.get(service) ?? []
-        owed.push(frame)
-        if (owed.length > HELD_MAX) owed.shift()
+        const owed = held.get(service) ?? new Map<string | symbol, ServiceFrame>()
+        owed.set(opts.replaceKey ?? Symbol(), frame)
+        if (owed.size > HELD_MAX) owed.delete(owed.keys().next().value!)
         held.set(service, owed)
       }
       return false

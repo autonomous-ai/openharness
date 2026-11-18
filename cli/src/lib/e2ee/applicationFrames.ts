@@ -48,7 +48,7 @@ const MACHINE_REQUESTS = new Set([...SHELL_REQUESTS, 'agent_purge', 'agent_workt
   // agent's own commands (`agent_browser_run`) are answered to a local asker only, so they are on no list here.
   'agent_browser_available', 'agent_browser_retry', 'agent_browser_settings', 'agent_browser_settings_save', 'agent_browser_proxy_test',
   'agent_browser_start', 'agent_browser_stop', 'agent_browser_window',
-  // A sign-in a phone caught for a page a harness's program opened (core/terminals/browser.ts): it holds the code.
+  // A sign-in a phone caught for a page a harness's program opened (gateway/browser.ts): it holds the code.
   'browser_callback',
   // Another of the owner's machines following harnesses here (gateway/harnessWatch.ts): their ids and what they do.
   'harness_watch', ...ROUTE_COMMAND_TYPES])

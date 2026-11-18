@@ -49,7 +49,7 @@ export interface AgentLifeDeps {
   /** The live agents, as the registry holds them now. */
   live(): RegisteredSession[]
   /** Tell a service in its own process (core/serviceLinks.ts `notify`), held until it hears it with `untilDelivered`. */
-  notify(service: string, frame: ServiceFrame, opts?: { untilDelivered?: boolean }): boolean
+  notify(service: string, frame: ServiceFrame, opts?: { untilDelivered?: boolean; replaceKey?: string }): boolean
   /** The services in their own processes that hear these kinds even while down (harnessd/services.ts `hears`). */
   hears: Readonly<Record<string, readonly HeldAgentLife[]>>
   log?: (line: string) => void
@@ -107,7 +107,9 @@ export function createAgentLife(deps: AgentLifeDeps) {
   const tellAll = (event: AgentLife & { kind: HeldAgentLife }): void => {
     for (const follower of listeners) follower.tell(event)
     for (const [service, kinds] of Object.entries(deps.hears)) {
-      if (kinds.includes(event.kind)) deps.notify(service, frameOf(event), { untilDelivered: true })
+      if (kinds.includes(event.kind)) deps.notify(service, frameOf(event), {
+        untilDelivered: true, ...(event.kind === 'input' ? { replaceKey: `input:${event.agentId}` } : {}),
+      })
     }
   }
   const told = (follower: Follower, agentId: string): void => {
@@ -147,6 +149,11 @@ export function createAgentLife(deps: AgentLifeDeps) {
     },
     /** A person or an agent stopped it, and the stop is done. */
     stopped(agentId: string): void { tellAll({ kind: 'stopped', agentId }) },
+    /** Terminal authority has accepted a person's first input on this controlling stream. */
+    input(session: RegisteredSession, source?: { connId: string; kind: string | null }): void {
+      tellAll({ kind: 'input', agentId: session.agentId, startedByAgent: session.startedBy === 'agent',
+        ...(source ? { source: { connection: source.connId, clientKind: source.kind } } : {}) })
+    },
     /** Deleted for good, with [sessionIds], every conversation it had. */
     purged(agentId: string, sessionIds: readonly string[]): void {
       frameEpochs.delete(agentId)

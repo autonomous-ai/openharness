@@ -56,7 +56,7 @@ export function daemonAddress(core: Pick<CoreApi, 'daemon'>): Payload {
  *  (services/machineAddonsProcess.ts), for the account's machine id; Hachi's service (services/hachi.ts), which follows
  *  harnesses here and on the owner's other machines as a tool does; and the agent cleanup, which hands what Hachi
  *  started on another machine to the person there (services/hachiHandOver.ts). */
-const DAEMON_ASKERS: ReadonlySet<string> = new Set(['machineAddons', 'hachi', 'agentCleanup'])
+const DAEMON_ASKERS: ReadonlySet<string> = new Set(['machineAddons', 'hachi', 'agentCleanup', 'engineSetup'])
 
 /** This daemon's address, to those services. Answered before the experiments' check, which would refuse it as
  *  NOT_AN_EXPERIMENT; any other query of theirs is not answered here. */

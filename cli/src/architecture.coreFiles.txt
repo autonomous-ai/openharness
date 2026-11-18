@@ -117,7 +117,6 @@ core/stopDeadline.ts
 core/stopReasons.ts
 core/storeLink.ts
 core/terminalWatch.ts
-core/terminals/browser.ts
 core/terminals/control.ts
 core/terminals/open.ts
 core/terminals/requests.ts
@@ -290,7 +289,7 @@ lib/authSession.ts
 lib/backgroundCommands.ts
 lib/binaryOnPath.ts
 lib/bootId.ts
-lib/browserShim.ts
+lib/browserPrelude.ts
 lib/captureResumeIdentity.ts
 lib/cardUpdate.ts
 lib/checkpointStages.ts
@@ -367,7 +366,6 @@ lib/localJsonLimit.ts
 lib/localSocket.ts
 lib/log.ts
 lib/loginShellEnv.ts
-lib/loopbackGet.ts
 lib/loopbackRequest.ts
 lib/machineListReply.ts
 lib/machineMcp.ts

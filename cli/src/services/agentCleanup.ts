@@ -240,26 +240,28 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
     void look().catch((error: unknown) => log(`[agent-cleanup] a look failed: ${reason(error)}`))
   })
 
+  const typed = (id: string): void => {
+    const s = core.agents.resolve(id)
+    // The person's own harness has nothing to keep; one not known here is the core's word (it sends only these).
+    if (s && s.startedBy !== 'agent') return
+    const agentId = s?.agentId ?? id
+    if (joined.has(agentId)) return
+    joined.set(agentId, now())
+    for (const oldest of joined.keys()) {
+      if (joined.size <= JOINED_MAX) break
+      joined.delete(oldest)
+    }
+    save()
+  }
+
   // A harness closed or stopped (`agent_close`, Stop Harness, a purge): the harnesses it started close too. It follows no
   // agent as it runs: the looks above ask for the live ones.
   const unfollow = core.agents.follow?.((event) => {
+    if (event.kind === 'input' && event.startedByAgent) typed(event.agentId)
     if (event.kind !== 'stopped') return
     void closeStartedBy(event.agentId).catch((error: unknown) => log(`[agent-cleanup] could not close what ${event.agentId.slice(0, 8)} started: ${reason(error)}`))
   }, { running: false })
   const port: AgentCleanupPort = {
-    typed: (id) => {
-      const s = core.agents.resolve(id)
-      // The person's own harness has nothing to keep; one not known here is the core's word (it sends only these).
-      if (s && s.startedBy !== 'agent') return
-      const agentId = s?.agentId ?? id
-      if (joined.has(agentId)) return
-      joined.set(agentId, now())
-      for (const oldest of joined.keys()) {
-        if (joined.size <= JOINED_MAX) break
-        joined.delete(oldest)
-      }
-      save()
-    },
     forgetTold: async (agentId) => {
       try {
         new Ledger(ledgerPath(core.dataDir), deps.forgetLockWaitMs ?? FORGET_LOCK_WAIT_MS).forgetTold(agentId)
@@ -276,7 +278,7 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
       unfollow?.()
     },
   }
-  return { port, look, closeStartedBy }
+  return { port, typed, look, closeStartedBy }
 }
 
 export function startAgentCleanup(core: CoreApi, ports: CorePorts): void {

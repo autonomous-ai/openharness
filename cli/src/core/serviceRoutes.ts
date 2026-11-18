@@ -106,6 +106,7 @@ export function createServiceRoutes(deps: ServiceRoutesDeps) {
     route(type: string, payload: Record<string, unknown>, asker: Asker, reply: (result: Record<string, unknown>) => void): boolean {
       const route = requests.get(type)
       if (!route) return false
+      if (route.rpc === 'local' && !asker.local) { reply({ error: 'LOCAL_ONLY' }); return true }
       if (!asker.owner || asker.guest !== undefined) { reply({ error: 'OWNER_REQUIRED' }); return true }
       void ask(route.type, route.waitMs, { frame: type, payload }, { ...asker, rpcRoute: true }).then(answer => {
         // Expected command refusals belong to the service. Only a failed transport/host uses the old route fallback.

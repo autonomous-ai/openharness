@@ -26,7 +26,7 @@ import { managedNodePath } from './nodeRuntime.js'
 import { RAISE_OPEN_FILES_SH } from './openFiles.js'
 import { ENGINE_EXIT_PANE_OPTION } from './engineExitOption.js'
 import { shellSingleQuote } from './shellQuote.js'
-import { browserPrelude } from './browserShim.js'
+import { browserPrelude } from './browserPrelude.js'
 import { currentUserShell } from './userShell.js'
 import { harnessPaneOwner } from './harnessSessionLabel.js'
 
