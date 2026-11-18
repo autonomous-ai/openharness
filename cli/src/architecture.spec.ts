@@ -750,6 +750,27 @@ describe('the daemon\'s shape', () => {
     expect(readFileSync(join(SRC, CORE_FILES), 'utf8').split('\n')).not.toContain('lib/computerName.ts')
   })
 
+  it('Change agent loads its publication transaction only through its exact conversation door', () => {
+    const handoff = ['core/handoffDependencies.ts', 'core/handoffPublication.ts', 'lib/handoffDiscovery.ts',
+      'lib/handoffFiles.ts', 'lib/handoffGit.ts', 'lib/handoffPublication.ts', 'lib/handoffValidation.ts', 'lib/subagentTranscript.ts']
+    const cold = closureOf('core/main.ts'), warm = new Map([...cold, ...closureOf('core/handoffDependencies.ts')])
+    expect([...warm.keys()].filter(file => !cold.has(file)).sort()).toEqual([...handoff].sort())
+    for (const file of handoff) {
+      expect(cold.has(file), `${file} must stay out while Change agent is unused`).toBe(false)
+      expect(warm.has(file), `${file} remains in the warmed authority boundary`).toBe(true)
+    }
+    expect(importsFor('core/conversationQueries.ts', readFileSync(join(SRC, 'core/conversationQueries.ts'), 'utf8'))
+      .filter(({ dynamic }) => dynamic)).toEqual([{ from: './handoffDependencies.js', dynamic: true }])
+    expect(followed('core/conversationQueries.ts', 'core/handoffDependencies.ts', true)).toBe(false)
+    expect(followed('core/main.ts', 'core/handoffDependencies.ts', true)).toBe(true)
+    expect(followed('core/conversationQueries.ts', 'core/handoffDependencies.ts', false)).toBe(true)
+    expect(followed('core/conversationQueries.ts', 'lib/handoffPublication.ts', true)).toBe(true)
+    console.info('[architecture] handoff loading (informational):', JSON.stringify({
+      coldFiles: cold.size, coldLines: [...cold.values()].reduce((sum, count) => sum + count, 0),
+      warmFiles: warm.size, warmLines: [...warm.values()].reduce((sum, count) => sum + count, 0),
+    }))
+  }, WALK_TIMEOUT_MS)
+
   // The core meets the outside least (cli/AGENTS.md, Protect the core, rule 4). Its one call to another host was the
   // sign-in's renewal, which the gateway's process makes now (the core audit of 2026-11-12, decision 4). Whatever can
   // open a connection, a network module imported for its code (not its types) or a `fetch`, is in one of these files,
