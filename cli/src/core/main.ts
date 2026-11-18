@@ -2937,7 +2937,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
 
   // The receipts of creates asked with a creationId: the launches write them, a purge scrubs a deleted harness's request.
-  const receipts = new AgentCreationReceipts(join(env.ADAPTER_DATA_DIR, 'agent-creations'))
+  const receipts = new AgentCreationReceipts(join(env.ADAPTER_DATA_DIR, 'agent-creations'), sessionStorage.creations.ensure)
   // Stopping, purging and resuming an agent (core/agents/lifecycle.ts).
   const lifecycle = createAgentLifecycle({
     paneInfo: (runtime) => terminals.backendFor(runtime)?.paneInfo(runtime) ?? Promise.resolve(null),
@@ -3136,6 +3136,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The requests that start an agent's process, and the receipts of those asked with a creationId
   // (core/agents/launches.ts). The orchestrator and the cable create and fork through the socket's slots.
   const launches = createLaunchRequests({
+    discovery: sessionStorage.creations,
     describeDsh: dshLaunch.describe,
     prepareFolderTrust,
     claudeHomeListed: (home) => claudeHomeListed(home, machineIdNow()),

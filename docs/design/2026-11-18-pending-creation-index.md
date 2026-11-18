@@ -8,7 +8,7 @@ receipts still increase core work. Receipt IDs cannot expire: an old client retr
 The required session-storage child being introduced for Registry and stopped sessions supplies the process owner
 for compatibility discovery. This work does not introduce another process or make durable creation optional.
 
-This is a design checkpoint before implementation. No runtime or performance acceptance is claimed.
+Implementation is in progress. No runtime or performance acceptance is claimed.
 
 ## Design
 
@@ -40,12 +40,17 @@ this is private daemon storage and the original receipt formats remain authorita
 ### Process boundary and concurrency
 
 Use the existing process-owned `SessionStorage` singleton and admitted child entry. Add fixed operations for this
-one existing data family: ensure marker, read the next discovery page, and retire a terminal marker. The root and
+one existing data family: ensure marker, read the next discovery page, and close that scan. Terminal markers are
+retired by the child while it classifies their original receipts; a separate retirement RPC is unnecessary. The root and
 `agent-creations` destination are constructor-owned; callers cannot supply arbitrary directories or write contents.
 Each operation validates IDs and returns bounded metadata. No callback, shell command or publication destination
 crosses the boundary.
 
-Core owns only its existing 128-ID retry window, four actual preparation slots and current scan cursor token.
+Core owns its existing 128-ID retry window, four actual preparation slots and current scan cursor token.
+At most 64 marker admissions occupy the existing in-flight receipt map while the storage queue settles. Each retains
+one original receipt-directory descriptor and at most one already size-checked request snapshot (262,144 serialized
+bytes); this is at most 16 MiB of serialized requests, not a claim about JavaScript object overhead. No second map is
+added for admission. An uncertain close retains its ownership and blocks further private-state acquisition.
 The child owns the directory handles and private receipt classification. It retains at most one index iterator
 and one legacy iterator per scan generation, with bounded scratch state. A page examines at most 64 entries and
 obeys the existing 20 ms cooperative work budget; a slow filesystem remains subject to the storage transport's
@@ -114,5 +119,42 @@ Desktop protocols and publishing are unchanged.
 - Selected storage/core coverage and types; packaged private-daemon recovery with injected child loss; matched
   current/10x historical workload and idle measurements with verified process/descriptor cleanup.
 
-Implementation waits for the required storage boundary's stable interface, then this design and the actual caller
-changes receive independent review. The existing required storage extraction remains its original separate task.
+The caller, index and storage transport changes receive independent review together before integration. The required
+storage extraction remains its original separate task; this index uses its shared descriptor-custody guard.
+
+### Admission and scan review corrections
+
+`runIntent` first honors its existing in-flight operation, fingerprint and terminal receipt. Returning a completed,
+cancelled, failed or unconfirmed outcome never depends on the derived index being writable. Only a new or still
+recoverable intent needs marker admission. Its existing in-flight map coalesces duplicates before the first await.
+The request and initial hold are captured before that await; an existing pending checksum and original open
+directory identity remain its authority. After admission a private continuation reads the primary again: cancellation
+or terminal completion may return its current outcome, but a missing/replaced pending image cannot be adopted.
+The original directory owner transfers to preparation; cleanup compares the exact in-flight entry so a five-second
+reply cannot release an ongoing preparation. Typed asynchronous storage/conflict refusals remain visible to callers.
+
+Every uncached marker is opened without following links, checked and flushed through that exact descriptor. The final
+pathname must match the descriptor proof after directory flushes. A maximum-128 cache records only those exact
+marker/directory proofs; eviction permits more flush work, never less authority. The child checks original directory
+identities again immediately after each asynchronous directory read and before any marker mutation. A mid-page error
+closes that original scan; an obsolete cursor cannot close a newer one. Shared private-state helper close uncertainty
+is preserved as `cleanup-unconfirmed`, never treated as an ordinary damaged receipt.
+
+Every directory flush also checks its opened descriptor against the original directory proof before and after fsync.
+Checking the pathname only afterwards is insufficient: it could temporarily name a replacement during the open.
+The configured root may itself be an alias; its resolved directory is pinned by the same proof, while receipt and
+index directories beneath that root reject aliases. Terminal retirement checks directory and marker identity again
+after reading the receipt evidence, before unlinking the marker.
+
+### Matched history-cost validation plan
+
+The integration owner runs this after review, on the same pinned runtime and build inputs for baseline and candidate.
+Use isolated roots with 1,000 and 10,000 completed receipts (the latter is the 10x history case), half legacy version 1
+and half claimed version 2, and the same pending intents before and after that history. Include a supported legacy
+writer adding a pending intent after the first completed scan; keep its directory timestamp unchanged. Measure cold
+recovery and the next recurring pass separately, then empty idle and a fresh modern admission. Record physical child
+PID/exit and open-descriptor cleanup, core and storage-child CPU/RSS, core event-loop delay, total receipt opens/read
+bytes, time to prepare the first/last pending intent, and median/p95 fresh admission latency. Alternate baseline and
+candidate order with the same fixture snapshots and host-load observations. Core may read selected pending receipts;
+historical primary JSON must be opened only by the storage child. Do not infer speed or memory improvement from source
+size or a passing unit suite. This task prepares the plan; root owns execution and acceptance with the final build.

@@ -1,3 +1,4 @@
+import { sessionStorage } from '../lib/sessionStorage.js'
 import { opencodeMajorVersion } from '../engines/opencode/version.js'
 /**
  * The core's requests answered the way the daemon answers them, for a socket a spec builds on its own.
@@ -152,9 +153,10 @@ export function bindLaunchRequests(socket: BackendSocket, over: Partial<Launcher
     launcher = state
     launchers.set(socket, state)
     const launches = createLaunchRequests({
+      discovery: sessionStorage.creations,
       describeDsh: (dsh, engine) => state.describeDsh?.(dsh, engine) ?? STORE_OFF.dshDescribe({ dsh, engine }),
       opencodeMajor: opencodeMajorVersion,
-      receipts: new AgentCreationReceipts(join(env.ADAPTER_DATA_DIR, 'agent-creations')),
+      receipts: new AgentCreationReceipts(join(env.ADAPTER_DATA_DIR, 'agent-creations'), sessionStorage.creations.ensure),
       createAgent: () => socket.onCreateAgent, forkAgent: () => socket.onForkAgent,
       resumeAgent: () => state.resume, restartAgent: () => state.restart,
       byAgent: (id) => registry.byAgent(id), stoppedAgent: async id => await stoppedAgents.get(id) ?? undefined, toProject: (s) => socket.toProject(s),

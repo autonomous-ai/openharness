@@ -1,3 +1,4 @@
+import { localPendingCreationDiscovery } from '../testing/pendingCreation.js'
 /**
  * How the core asks which OpenCode is installed when an agent is asked for as a named agent, recorded from main
  * before OpenCode's version probe left the core's static imports (docs/design/2026-10-08-other-engines-out-of-
@@ -68,9 +69,11 @@ describe('which OpenCode the core asks for, for a named agent', () => {
       const { AgentCreationReceipts } = await import('../lib/agentCreationReceipt.js')
       const asked: unknown[] = []
       const { opencodeMajorVersion } = await import('./opencode/version.js')
+      const receiptDirectory = join(root, 'data', `receipts-${++receipts}`)
+      const discovery = localPendingCreationDiscovery(receiptDirectory)
       const requests = createLaunchRequests({
-        opencodeMajor: opencodeMajorVersion,
-        receipts: new AgentCreationReceipts(join(root, 'data', `receipts-${++receipts}`)),
+        discovery, opencodeMajor: opencodeMajorVersion,
+        receipts: new AgentCreationReceipts(receiptDirectory, discovery.ensure),
         createAgent: () => async (request) => {
           asked.push({ engine: request.engine, agent: request.agent, name: request.name })
           return { ok: false, error: 'RECORDED' }

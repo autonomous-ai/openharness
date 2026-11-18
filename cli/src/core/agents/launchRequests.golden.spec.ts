@@ -1,3 +1,4 @@
+import { localPendingCreationDiscovery } from '../../testing/pendingCreation.js'
 /** Public launch receipts and dispatch inputs, recorded from main before durable retry changes. */
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -59,8 +60,9 @@ it.each(['linux', 'darwin'])('preserves healthy launch requests and durable rece
         await new Promise<void>(done => { finish = done })
         return { ok: true as const, session, level: 'native' as const, resumed: operation === 'resume' }
       }
+      const discovery = localPendingCreationDiscovery(directory)
       const deps: LaunchRequestDeps = {
-        receipts: new AgentCreationReceipts(directory),
+        receipts: new AgentCreationReceipts(directory, discovery.ensure), discovery,
         createAgent: () => input => dispatch('create', input),
         forkAgent: () => input => dispatch('fork', input),
         resumeAgent: () => (agentId, permissionMode) => dispatch('resume', { agentId, permissionMode }),
@@ -99,7 +101,7 @@ it.each(['linux', 'darwin'])('preserves healthy launch requests and durable rece
       await vi.waitFor(() => expect(replies).toHaveLength(3))
       await invoke() // A duplicate after completion only returns the receipt.
       await vi.waitFor(() => expect(replies).toHaveLength(4))
-      const recovered = createLaunchRequests({ ...deps, receipts: new AgentCreationReceipts(directory) })
+      const recovered = createLaunchRequests({ ...deps, receipts: new AgentCreationReceipts(directory, discovery.ensure) })
       await recovered.createStatus({ creationId }, { local: true }, reply)
       expect(fixture.events.filter(value => Array.isArray(value) && value[0] === 'dispatch')).toHaveLength(1)
       const key = `${platform}:${kind}`

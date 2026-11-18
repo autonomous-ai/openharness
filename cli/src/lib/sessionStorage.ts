@@ -19,6 +19,7 @@ import { SESSION_STORAGE_QUEUE, SESSION_STORAGE_REQUEST_MS,
   type SessionStorageOperation, type StoredGridLaunch } from './sessionStorageWire.js'
 import type { GridLaunchOverride } from './gridLaunchWire.js'
 import { StateFileCleanupUnconfirmed, stateFileCustodyHealthy } from './secureState.js'
+import type { PendingCreationDiscovery, PendingCreationPage } from './pendingCreationWire.js'
 
 const sessionSourceIdentity = sessionFileIdentity
 type OwnedReservation = Pick<SessionImageReservation, 'temporary'> & {
@@ -71,6 +72,35 @@ export class SessionStorage {
   private writeWaiting = 0
   private readonly descriptorOperations = new Set<Promise<unknown>>()
   private closing: Promise<void> | undefined
+
+  readonly creations: PendingCreationDiscovery = {
+    ensure: id => typeof id === 'string' && /^[a-zA-Z0-9_-]{16,96}$/.test(id)
+      ? this.request({ kind: 'creation-ensure', id }) : Promise.reject(new SessionStorageUnavailable('invalid')),
+    scan: () => this.pendingCreations(),
+  }
+
+  private async *pendingCreations(): AsyncGenerator<string | null> {
+    let cursor: string | null = null
+    let warned = false
+    try {
+      for (;;) {
+        const page: PendingCreationPage = await this.request({ kind: 'creation-page', cursor })
+        if (!page || typeof page.cursor !== 'string' || !(page.cursor === '' && page.done === true || /^[a-f0-9-]{36}$/.test(page.cursor))
+          || !Array.isArray(page.ids) || page.ids.length > 64 || page.ids.some(id => typeof id !== 'string' || !/^[a-zA-Z0-9_-]{16,96}$/.test(id))
+          || cursor !== null && page.cursor !== cursor
+          || typeof page.done !== 'boolean' || !Number.isSafeInteger(page.damaged) || page.damaged < 0 || page.damaged > 64) {
+          throw new SessionStorageUnavailable('invalid')
+        }
+        cursor = page.cursor
+        if (page.damaged && !warned) { warned = true; console.warn('[creation] CREATION_EVIDENCE_UNAVAILABLE') }
+        for (const id of page.ids) yield id
+        if (page.done) { cursor = null; return }
+        if (!page.ids.length) yield null
+      }
+    } finally {
+      if (cursor && this.child && this.frames) await this.request({ kind: 'creation-close', cursor })
+    }
+  }
 
   constructor(readonly root: string, private readonly entry?: () => SessionStorageChildEntry,
     private readonly stoppedLeaf = 'stopped-agents') {

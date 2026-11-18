@@ -1,3 +1,4 @@
+import type { PendingCreationDiscovery } from '../../lib/pendingCreationWire.js'
 /**
  * The requests that start an agent's process: `agent_create`, `agent_fork`, `agent_resume` and
  * `agent_restart`, and `agent_create_status`, which asks what became of one. A client that names its
@@ -58,10 +59,11 @@ export type RestartAgent = (agentId: string, launchArgs?: string[]) => Promise<
 export type ResumeAgent = (agentId: string, permissionMode?: string, launchArgs?: string[]) => ReturnType<RestartAgent>
 
 export interface LaunchRequestDeps {
+  discovery: PendingCreationDiscovery
   /** Bounded facts from the Store; never the installed index in core. */
   describeDsh?: (dsh: string, engine: CreateInput['engine']) => Promise<DshDescribeAnswer>
   /** The receipts of launches asked for with a `creationId`. */
-  receipts: Pick<AgentCreationReceipts, 'run' | 'status' | 'createdLaunchModel' | 'creator' | 'has' | 'runIntent' | 'pendingIntents' | 'pendingIntent' | 'cancelIntent'>
+  receipts: Pick<AgentCreationReceipts, 'run' | 'status' | 'createdLaunchModel' | 'creator' | 'has' | 'runIntent' | 'pendingIntent' | 'cancelIntent'>
   /** Each launch, read when a request comes in: null on a machine that cannot launch agents. */
   createAgent: () => CreateAgent | null
   prepareCreate?: (input: Parameters<CreateAgent>[0], authority: LaunchAuthority,
@@ -106,7 +108,7 @@ export const WORKSPACES_WAIT_MS = 10 * 60_000
 const WORKSPACES_GONE = { state: 'failed' as const, error: 'SERVICE_UNAVAILABLE',
   detail: 'Could not make the project folder: Harness\'s workspaces service was not available for 10 minutes. Try again, or restart Harness.' }
 
-export function createLaunchRequests({ describeDsh = async id => dshUnavailable(id), receipts, createAgent, prepareCreate, prepareEngine, opencodeMajor, forkAgent, resumeAgent, restartAgent, byAgent, stoppedAgent, toProject, modelTarget, guestCreate, claudeHomeListed, workspaces, prepareFolderTrust, probeLaunchModel }: LaunchRequestDeps) {
+export function createLaunchRequests({ describeDsh = async id => dshUnavailable(id), receipts, discovery, createAgent, prepareCreate, prepareEngine, opencodeMajor, forkAgent, resumeAgent, restartAgent, byAgent, stoppedAgent, toProject, modelTarget, guestCreate, claudeHomeListed, workspaces, prepareFolderTrust, probeLaunchModel }: LaunchRequestDeps) {
   /** Since when each create has waited for workspaces, by its creation id: in memory, as its hold is retried in this
    *  core. An entry lasts only while its create waits: it goes when the create goes on, gives up or is cancelled. */
   const waitingSince = new Map<string, number>()
@@ -221,7 +223,7 @@ export function createLaunchRequests({ describeDsh = async id => dshUnavailable(
 
   const modelHold = { service: 'models', detail: 'Waiting for the selected model. This request is saved and will continue when it is available.' }
   const launchHold = { service: 'launch', detail: 'Waiting for launch preparation. This request is saved and will continue when its dependencies are available.' }
-  const pending = createPendingLaunches({ receipts, prepare: async (saved, authority) => {
+  const pending = createPendingLaunches({ receipts, discovery, prepare: async (saved, authority) => {
     if (saved.kind === 'native-create-v1') {
       if (!prepareCreate || typeof saved.local !== 'boolean' || !saved.input || typeof saved.input !== 'object'
         || typeof saved.label !== 'string' || !/^harness-[a-z0-9-]+$/.test(saved.label)) return null
@@ -607,7 +609,7 @@ export function createLaunchRequests({ describeDsh = async id => dshUnavailable(
           : receipts.run(creationId, fingerprint, () => executeCreate(input, projectFolder, asker.local, create, true, undefined, undefined, installed?.ok ? installed : undefined))
         void operation.then(async (status) => {
           reply({ creationId, ...await creationStatusPayload(status) })
-        }).catch(() => reply({ error: 'INTERNAL' }))
+        }).catch(error => reply({ error: error instanceof AgentCreationReceiptError ? error.code : 'INTERNAL' }))
       } catch (error) {
         reply({ error: error instanceof AgentCreationReceiptError ? error.code : 'INTERNAL' })
       }

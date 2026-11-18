@@ -1,10 +1,11 @@
 /** An inherited IPC child; no listener, caller-selected paths, Registry or session lifecycle. */
-import { isAbsolute } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { sessionStorageFrames } from '../lib/sessionStorageFrames.js'
 import { SESSION_STORAGE_REQUEST_MS, SessionStorageUnavailable, sessionImageProof, type SessionStorageOperation } from '../lib/sessionStorageWire.js'
 import { createSessionImageCodec, type RetainedSessionImage } from './sessionImage.js'
 import { StateFileCleanupUnconfirmed, stateFileCustodyHealthy } from '../lib/secureState.js'
+import { createPendingCreationIndex } from './pendingCreations.js'
 
 /** Parent owns the original deadline; a child never compares another process's wall clock. */
 export function sessionStorageDeadline(remainingMs: unknown): number {
@@ -37,6 +38,7 @@ export function runSessionStorage(): void {
         return { fd: 4 + index, proof: source.proof, lease: source.lease }
       })
       const codec = createSessionImageCodec(init.root, inherited, init.stoppedLeaf)
+      const creations = createPendingCreationIndex(join(init.root, 'agent-creations'))
       initialized = true
       frames = sessionStorageFrames(init.incarnation, write, (id, message) => {
         if (busy) { stop(); return }
@@ -49,6 +51,9 @@ export function runSessionStorage(): void {
             const operation = request.operation
             let value: unknown
             switch (operation?.kind) {
+              case 'creation-ensure': creations.ensure(operation.id); value = null; break
+              case 'creation-page': value = await creations.page(operation.cursor, expires); break
+              case 'creation-close': await creations.close(operation.cursor); value = null; break
               case 'stopped-query': value = await codec.queryStopped(operation.query, expires); break
               case 'read': value = await codec.read(operation.document, operation.retain); break
               case 'equal': value = await codec.equal(operation.proof); break

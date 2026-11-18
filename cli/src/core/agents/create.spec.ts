@@ -1,3 +1,4 @@
+import { localPendingCreationDiscovery } from '../../testing/pendingCreation.js'
 import { gridLaunchInProcess } from '../../testing/gridLaunchInProcess.js'
 import { chmodSync, mkdirSync, mkdtempSync, opendirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
@@ -317,14 +318,15 @@ describe('creating an agent', () => {
     it.each(['replay', 'cancel'] as const)('preserves original durable request authority across credential refresh: %s', async mode => {
       const run = savedApi()
       const receiptDirectory = folder()
-      const receipts = new AgentCreationReceipts(receiptDirectory)
+      const discovery = localPendingCreationDiscovery(receiptDirectory)
+      const receipts = new AgentCreationReceipts(receiptDirectory, discovery.ensure)
       let enter!: () => void, release!: () => void
       const entered = new Promise<void>(resolve => { enter = resolve })
       const gate = new Promise<void>(resolve => { release = resolve })
       const answer = run.models.getMockImplementation()!
       run.models.mockImplementationOnce(async input => { enter(); await gate; return answer(input) })
       const requests = createLaunchRequests({
-        receipts, createAgent: () => run.create, prepareCreate: run.create.prepare,
+        receipts, discovery, createAgent: () => run.create, prepareCreate: run.create.prepare,
         forkAgent: () => null, resumeAgent: () => null, restartAgent: () => null,
         byAgent: id => id === pending.agentId ? pending : undefined, stoppedAgent: async () => undefined,
         toProject: async row => ({ id: row.agentId }) as never,

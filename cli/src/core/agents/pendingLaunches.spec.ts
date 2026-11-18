@@ -1,9 +1,12 @@
+import { localPendingCreationDiscovery } from '../../testing/pendingCreation.js'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
-import { AgentCreationReceipts, creationFingerprint } from '../../lib/agentCreationReceipt.js'
+import { AgentCreationReceipts, creationFingerprint, type PendingCreationIntent } from '../../lib/agentCreationReceipt.js'
 import { createPendingLaunches, type IntentReceipts, type PreparedCreation } from './pendingLaunches.js'
+
+type RecoveryFixtureReceipts = IntentReceipts & { pendingIntents(): AsyncGenerator<PendingCreationIntent | null> }
 
 const roots: string[] = []
 const stops: Array<() => void> = []
@@ -18,13 +21,57 @@ afterEach(() => {
   vi.restoreAllMocks()
   roots.splice(0).forEach(root => rmSync(root, { recursive: true, force: true }))
 })
-function setup(prepare = vi.fn<Parameters<typeof createPendingLaunches>[0]['prepare']>(), receipts?: IntentReceipts) {
+function setup(prepare = vi.fn<Parameters<typeof createPendingLaunches>[0]['prepare']>(), receipts?: RecoveryFixtureReceipts) {
   const root = mkdtempSync(join(tmpdir(), 'pending-launches-')); roots.push(root)
-  const store = new AgentCreationReceipts(join(root, 'receipts'))
-  const pending = createPendingLaunches({ receipts: receipts ?? store, prepare })
+  const discovery = receipts ? { ensure: async () => {}, scan: async function* () {
+    for await (const row of receipts.pendingIntents()) yield row?.id ?? null
+  } } : localPendingCreationDiscovery(join(root, 'receipts'))
+  const store = new AgentCreationReceipts(join(root, 'receipts'), discovery.ensure)
+  const pending = createPendingLaunches({ receipts: receipts ?? store, prepare, discovery })
   stops.push(pending.stop)
   return { pending, store, prepare }
 }
+
+it('discovers only bounded child-selected IDs without scanning historical receipt contents in core', async () => {
+  const { store } = setup()
+  await store.runIntent(id(0), fingerprint, request, held, async () => null)
+  const history = vi.fn(async function* () { throw new Error('core scanned historical receipts') })
+  Object.assign(store, { pendingIntents: history })
+  const discovery = {
+    ensure: vi.fn(async () => {}),
+    scan: vi.fn(async function* () { yield id(0) }),
+  }
+  const effect = vi.fn(async () => created)
+  const pending = createPendingLaunches({ receipts: store, prepare: async () => effect, discovery } as Parameters<typeof createPendingLaunches>[0])
+  stops.push(pending.stop)
+  pending.open()
+  await pending.recover()
+  expect(discovery.scan).toHaveBeenCalledOnce()
+  expect(history).not.toHaveBeenCalled()
+  await vi.waitFor(() => expect(effect).toHaveBeenCalledOnce())
+  expect(store.status(id(0))).toEqual(created)
+})
+
+it('makes the pending marker durable before primary publication or preparation', async () => {
+  let release!: () => void
+  const marker = new Promise<void>(resolve => { release = resolve })
+  const discovery = { ensure: vi.fn(() => marker), scan: async function* () {} }
+  const root = mkdtempSync(join(tmpdir(), 'pending-marker-')); roots.push(root)
+  const store = new AgentCreationReceipts(join(root, 'receipts'), discovery.ensure)
+  const run = vi.spyOn(store, 'runIntent')
+  const effect = vi.fn(async () => created)
+  const pending = createPendingLaunches({ receipts: store, prepare: async () => effect, discovery } as Parameters<typeof createPendingLaunches>[0])
+  stops.push(pending.stop)
+  const answer = pending.start(id(1), fingerprint, request, held)
+  try {
+    await vi.waitFor(() => expect(discovery.ensure).toHaveBeenCalledExactlyOnceWith(id(1)))
+    expect(effect).not.toHaveBeenCalled()
+    expect(store.status(id(1))).toEqual({ state: 'missing' })
+  } finally { release() }
+  expect(await answer).toEqual(created)
+  expect(run).toHaveBeenCalledOnce()
+  expect(effect).toHaveBeenCalledOnce()
+})
 
 it('cannot replace a saved hold after the core has revoked its preparation', async () => {
   let finish!: (value: PreparedCreation) => void
@@ -135,7 +182,7 @@ it('runs a streaming recovery four at a time and isolates a failed journal or re
 it('does not claim work yielded after shutdown or execute work stopped just after preparation', async () => {
   let yielded!: () => void
   const waiting = new Promise<void>(resolve => { yielded = resolve })
-  const receipts: IntentReceipts = { runIntent: vi.fn(), cancelIntent: vi.fn(), pendingIntent: vi.fn(() => ({ id: id(9), fingerprint, request, held })), pendingIntents: async function* () {
+  const receipts: RecoveryFixtureReceipts = { runIntent: vi.fn(), cancelIntent: vi.fn(), pendingIntent: vi.fn(() => ({ id: id(9), fingerprint, request, held })), pendingIntents: async function* () {
     await waiting
     yield { id: id(0), fingerprint, request, held }
   } }
@@ -179,7 +226,7 @@ it('bounds a large history per event-loop turn and does not keep retrying comple
   vi.spyOn(performance, 'now').mockReturnValue(0)
   let examined = 0
   const intent = { id: id(0), fingerprint, request, held }
-  const receipts: IntentReceipts = {
+  const receipts: RecoveryFixtureReceipts = {
     runIntent: vi.fn().mockRejectedValueOnce(new Error('storage unavailable')).mockResolvedValue({ state: 'pending', held }),
     cancelIntent: vi.fn(), pendingIntent: vi.fn(() => intent),
     pendingIntents: async function* () {
@@ -204,7 +251,7 @@ it('bounds a large history per event-loop turn and does not keep retrying comple
 it('contains a directory-close error on shutdown', async () => {
   const scan = (async function* () { for (;;) yield null })()
   vi.spyOn(scan, 'return').mockRejectedValueOnce(new Error('directory closed'))
-  const receipts: IntentReceipts = { runIntent: vi.fn(), cancelIntent: vi.fn(), pendingIntent: vi.fn(), pendingIntents: () => scan }
+  const receipts: RecoveryFixtureReceipts = { runIntent: vi.fn(), cancelIntent: vi.fn(), pendingIntent: vi.fn(), pendingIntents: () => scan }
   const { pending } = setup(vi.fn(), receipts)
   pending.open()
   await pending.recover()
@@ -220,7 +267,7 @@ it('bounds the retry window and visits the backlog beyond permanently held or da
   const attempted = new Set<string>()
   let scanned = 0
   let largestBacklog = 0
-  const receipts: IntentReceipts = {
+  const receipts: RecoveryFixtureReceipts = {
     runIntent: vi.fn(async () => ({ state: 'pending' as const, held })), cancelIntent: vi.fn(),
     pendingIntent: vi.fn(key => {
       attempted.add(key)
@@ -248,7 +295,7 @@ it('bounds the retry window and visits the backlog beyond permanently held or da
 it('includes synchronous retry reads in the event-loop work budget', async () => {
   let work = 0
   vi.spyOn(performance, 'now').mockImplementation(() => work)
-  const receipts: IntentReceipts = {
+  const receipts: RecoveryFixtureReceipts = {
     runIntent: vi.fn(async () => ({ state: 'pending' as const, held })), cancelIntent: vi.fn(),
     pendingIntent: vi.fn(key => { work += 21; return { id: key, fingerprint, request, held } }),
     pendingIntents: async function* () { for (let n = 0; n < 5; n++) yield { id: id(n), fingerprint, request, held } },
@@ -257,6 +304,20 @@ it('includes synchronous retry reads in the event-loop work budget', async () =>
   pending.open(); await pending.recover()
   await pending.recover()
   expect(receipts.pendingIntent).toHaveBeenCalledOnce()
+})
+
+it('gives a failed marker admission its window slot back so more than 128 durable intents get a turn', async () => {
+  vi.useFakeTimers()
+  const attempted = new Set<string>()
+  const receipts: RecoveryFixtureReceipts = {
+    runIntent: vi.fn(async key => { attempted.add(key); throw new Error('marker unavailable') }), cancelIntent: vi.fn(),
+    pendingIntent: vi.fn(key => ({ id: key, fingerprint, request, held })),
+    pendingIntents: async function* () { for (let n = 0; n < 260; n++) yield { id: id(n), fingerprint, request, held } },
+  }
+  const { pending, prepare } = setup(vi.fn(), receipts)
+  pending.open()
+  await vi.advanceTimersByTimeAsync(20_000)
+  expect(attempted.size).toBe(260); expect(prepare).not.toHaveBeenCalled()
 })
 
 it('wakes only for what is pending: a held launch retries at 2 s, and with nothing pending only the rescan wakes it', async () => {

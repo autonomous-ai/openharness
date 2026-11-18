@@ -1,3 +1,4 @@
+import { localPendingCreationDiscovery } from '../../testing/pendingCreation.js'
 /** The real receipt → create → native hook proof → trust composition, with no real pane. */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -95,8 +96,9 @@ it.each([
     dshLaunch: { describe: async () => { throw Error('unused') }, launch: async () => { throw Error('unexpected DSH') }, materialize: async () => { throw Error('unexpected DSH') } },
     syncProfileHome: async () => [],
   })
-  const receipts = new AgentCreationReceipts(join(root, 'receipts'))
-  const requests = createLaunchRequests({ receipts, createAgent: () => creator, prepareCreate: creator.prepare,
+  const discovery = localPendingCreationDiscovery(join(root, 'receipts'))
+  const receipts = new AgentCreationReceipts(join(root, 'receipts'), discovery.ensure)
+  const requests = createLaunchRequests({ receipts, discovery, createAgent: () => creator, prepareCreate: creator.prepare,
     forkAgent: () => null, resumeAgent: () => null, restartAgent: () => null,
     byAgent: () => pending, stoppedAgent: async () => undefined, toProject: async () => ({ agentId: pending.agentId }) as never, modelTarget: async () => null,
     workspaces: () => null, prepareFolderTrust })
@@ -121,7 +123,8 @@ it.each([
   }
   const settled = await vi.waitFor(async () => {
     const answer = await status()
-    expect(answer.state).not.toBe('pending')
+    // Before marker admission finishes, there is deliberately no primary receipt yet.
+    expect(['missing', 'pending']).not.toContain(answer.state)
     return answer
   }, { timeout: 40_000, interval: 200 })
   // Receipt handling maps dispatch errors to unconfirmed; keep a failed pane-fixture assertion visible here.

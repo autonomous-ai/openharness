@@ -1,12 +1,14 @@
-import type { AgentCreationOutcome, AgentCreationReceipts, CreationAuthority, CreationHold, PendingCreationIntent } from '../../lib/agentCreationReceipt.js'
+import type { AgentCreationOutcome, AgentCreationReceipts, CreationAuthority, CreationHold } from '../../lib/agentCreationReceipt.js'
+import type { PendingCreationDiscovery } from '../../lib/pendingCreationWire.js'
 
 export type PreparedCreation = (() => Promise<AgentCreationOutcome>) | null
-export type IntentReceipts = Pick<AgentCreationReceipts, 'runIntent' | 'pendingIntents' | 'pendingIntent' | 'cancelIntent'>
+export type IntentReceipts = Pick<AgentCreationReceipts, 'runIntent' | 'pendingIntent' | 'cancelIntent'>
 
 /** Core owns dependency retries. It opens after readiness, bounds stalled
  * service calls and never replays an effect whose durable claim already exists. */
-export function createPendingLaunches({ receipts, prepare }: {
+export function createPendingLaunches({ receipts, prepare, discovery }: {
   receipts: IntentReceipts
+  discovery: PendingCreationDiscovery
   prepare: (request: Record<string, unknown>, authority: CreationAuthority) => Promise<PreparedCreation>
 }) {
   let stopped = false
@@ -15,7 +17,7 @@ export function createPendingLaunches({ receipts, prepare }: {
   let timer: ReturnType<typeof setTimeout> | undefined
   let continuation: ReturnType<typeof setImmediate> | undefined
   let recovering: Promise<void> | undefined
-  let scan: AsyncGenerator<PendingCreationIntent | null> | undefined
+  let scan: AsyncGenerator<string | null> | undefined
   let scanAt = 0
   let crowded = false
   let startAfter = 0
@@ -115,16 +117,19 @@ export function createPendingLaunches({ receipts, prepare }: {
       // corrupt records. Bound work per pass; a large history cannot monopolize
       // session control. A background rescan finds intents another core saved.
       try {
-        if (!scan && Date.now() >= scanAt) scan = receipts.pendingIntents()
+        if (!scan && Date.now() >= scanAt) scan = discovery.scan()
         if (scan) {
           for (let n = 0; n < 64 && !stopped && performance.now() - began < 20; n++) {
             if (pending.size >= windowSize) { crowded = true; break }
             const entry = await scan.next()
             if (entry.done) { scan = undefined; crowded = false; scanAt = Date.now() + 60_000; break }
-            if (entry.value && !pending.has(entry.value.id)) remember(entry.value.id, 0)
+            if (entry.value && !pending.has(entry.value)) remember(entry.value, 0)
           }
         }
-      } catch { scan = undefined; scanAt = Date.now() + 2_000 }
+      } catch {
+        console.warn('[creation] CREATION_DISCOVERY_UNAVAILABLE')
+        scan = undefined; scanAt = Date.now() + 2_000
+      }
       // Receipt replies have their own deadline. Neither they nor a stalled
       // dependency delay the next bounded scan or another session's retry.
     })().finally(() => {

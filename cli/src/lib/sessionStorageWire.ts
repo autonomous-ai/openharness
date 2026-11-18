@@ -66,6 +66,9 @@ export type StoppedArchiveQuery =
 export interface StoppedArchiveAnswer { witness: string; matches: boolean[]; selected?: SessionImage[] }
 
 export type SessionStorageOperation =
+  | { kind: 'creation-ensure'; id: string }
+  | { kind: 'creation-page'; cursor: string | null }
+  | { kind: 'creation-close'; cursor: string }
   | { kind: 'stopped-query'; query: StoppedArchiveQuery }
   | { kind: 'read'; document: SessionDocument; retain?: string }
   | { kind: 'equal'; proof: SessionImageProof }
