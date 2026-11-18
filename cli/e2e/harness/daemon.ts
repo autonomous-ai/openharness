@@ -554,7 +554,10 @@ export class IsolatedDaemon {
     const from = this.output.length
     // A test's own bundle (an old release), the run's bundle (`E2E_BUNDLE`, see bundle.ts), or the sources.
     const bundle = this.options.scriptPath ?? process.env.E2E_BUNDLE_PATH
-    const script = bundle ? [bundle] : ['--import', 'tsx', 'src/cli.ts']
+    // From the sources on macOS, the helper a release embeds comes in by a preload (processImages.ts): without it the
+    // daemon held every Codex read for good. The master passes its flags on to the core and the services.
+    const preload = process.env.E2E_PROCESS_IMAGES_PRELOAD
+    const script = bundle ? [bundle] : [...(preload ? ['--import', preload] : []), '--import', 'tsx', 'src/cli.ts']
     // A process group of its own, which the core and the services join: one signal reaches all of them, whether or
     // not the master is still there, and the worker's reaper (reaper.ts) ends it should the worker go without closing it.
     const env = this.options.foreground ? await this.shellEnv() : this.env
