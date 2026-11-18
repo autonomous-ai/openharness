@@ -6326,10 +6326,10 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       host().scrolled('down', 0, 0)
       await vi.waitFor(() => expect(orcaRuns).toEqual([STATUS]))
       // 20 px toward older lines twice (one line each, 8 px kept), then 60 px toward newer: 52 px, three lines.
-      // The dial's pace: each move's run ends before the next move.
+      // Each move 50 ms after the last, the gap between two runs of a terminal: each move's lines run on their own.
       for (const dy of [8, 8, -24]) {
         host().scrolled('move', dy, 0)
-        await vi.advanceTimersByTimeAsync(32)
+        await vi.advanceTimersByTimeAsync(50)
       }
       host().scrolled('up', 0, 0)
       expect(orcaRuns).toEqual([STATUS, scrolled('t7', -1), scrolled('t7', -1), scrolled('t7', 3)])

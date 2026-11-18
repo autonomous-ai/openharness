@@ -391,6 +391,8 @@ describe('the Herdr adapter', () => {
       adapter.scroll(pane('t7'), -3)
       await turn()
       expect(calls).toEqual([scrollCall('t7', -3)])
+      // Past the gap since that run started.
+      vi.advanceTimersByTime(50)
       adapter.scroll(pane('t7'), 2)
       await turn()
       expect(calls).toEqual([scrollCall('t7', -3), scrollCall('t7', 2)])
@@ -407,6 +409,10 @@ describe('the Herdr adapter', () => {
       adapter.scroll(pane('t7'), -4)
       await turn()
       expect(calls).toEqual([scrollCall('t7', -3)])
+      // Past the gap, the run under way still holds the next.
+      vi.advanceTimersByTime(50)
+      await turn()
+      expect(calls).toEqual([scrollCall('t7', -3)])
       await answer(0)
       expect(calls).toEqual([scrollCall('t7', -3), scrollCall('t7', -6)])
       await answer(0)
@@ -418,6 +424,7 @@ describe('the Herdr adapter', () => {
       adapter.scroll(pane('t7'), sign)
       adapter.scroll(pane('t7'), 60 * sign)
       adapter.scroll(pane('t7'), 60 * sign)
+      vi.advanceTimersByTime(50)
       await answer(0)
       expect(calls).toEqual([scrollCall('t7', sign), scrollCall('t7', 100 * sign)])
     })
@@ -443,6 +450,36 @@ describe('the Herdr adapter', () => {
       expect(calls).toEqual([scrollCall('t7', -1), scrollCall('t8', -1)])
     })
 
+    // Diego's first check (2026-11-18) logged 109 runs for 161 lines in about 3 s: about 40 processes a second, each
+    // carrying a line or two.
+    it('lines every 10 ms start a run at most every 50 ms, each carrying the lines of its gap; a stroke\'s first starts at once', async () => {
+      const { calls, adapter } = recorder()
+      const runs: number[] = []
+      for (let line = 0; line < 10; line++) {
+        adapter.scroll(pane('t7'), -1)
+        runs.push(calls.length)
+        await vi.advanceTimersByTimeAsync(10)
+      }
+      // Runs at 0, 50 and 100 ms: the first line's at once, then each gap's lines summed.
+      expect(runs).toEqual([1, 1, 1, 1, 1, 2, 2, 2, 2, 2])
+      expect(calls).toEqual([scrollCall('t7', -1), scrollCall('t7', -4), scrollCall('t7', -5)])
+      // The next stroke's first run starts at once too.
+      await vi.advanceTimersByTimeAsync(1_000)
+      adapter.scroll(pane('t7'), 2)
+      expect(calls).toEqual([scrollCall('t7', -1), scrollCall('t7', -4), scrollCall('t7', -5), scrollCall('t7', 2)])
+    })
+
+    it('another terminal does not wait for a terminal\'s gap', async () => {
+      const { calls, adapter } = recorder()
+      adapter.scroll(pane('t7'), -1)
+      await turn()
+      adapter.scroll(pane('t7'), -1)
+      adapter.scroll(pane('t8'), -1)
+      expect(calls).toEqual([scrollCall('t7', -1), scrollCall('t8', -1)])
+      await vi.advanceTimersByTimeAsync(50)
+      expect(calls).toEqual([scrollCall('t7', -1), scrollCall('t8', -1), scrollCall('t7', -1)])
+    })
+
     // A scroll that joined the focus run would lose its lines.
     it('a scroll during a focus of the same terminal runs on its own', async () => {
       const { calls, adapter, answer } = holding()
@@ -464,12 +501,16 @@ describe('the Herdr adapter', () => {
       await answer(code)
       expect(calls).toEqual([scrollCall('t7', -3)])
       expect(scrollFailures(log)).toBe(1)
+      // Each line past the gap since the run before started.
+      vi.advanceTimersByTime(50)
       adapter.scroll(pane('t7'), -1)
       await answer(code)
       expect(calls).toEqual([scrollCall('t7', -3), scrollCall('t7', -1)])
       expect(scrollFailures(log)).toBe(1)
+      vi.advanceTimersByTime(50)
       adapter.scroll(pane('t7'), -1)
       await answer(0)
+      vi.advanceTimersByTime(50)
       adapter.scroll(pane('t7'), -1)
       await answer(code)
       expect(calls).toEqual([scrollCall('t7', -3), scrollCall('t7', -1), scrollCall('t7', -1), scrollCall('t7', -1)])
@@ -524,6 +565,7 @@ describe('the Herdr adapter', () => {
       const carried = holding()
       carried.adapter.scroll(pane('t7'), -3)
       carried.adapter.scroll(pane('t7'), -6)
+      vi.advanceTimersByTime(50)
       await carried.answer(0)
       await carried.answer(0)
       vi.advanceTimersByTime(1_000)
@@ -545,17 +587,18 @@ describe('the Herdr adapter', () => {
       for (const line of [...one.log, ...carried.log, ...failing.log, ...none.log]) expect(line).not.toContain('t7')
     })
 
-    // Final review: a run is faster than the dial's ~32 ms a line, so a queue drains after almost every line, and a line
-    // said at each drain would be up to ~30 a second while scrolling.
+    // Final review: a run is faster than the dial's line, so a queue drains after almost every line it runs, and a line
+    // said at each drain would be up to 20 a second while scrolling.
     it('the drain line waits for the terminal\'s quiet second: a stroke that drains after every line says one', async () => {
       const { calls, log, adapter } = recorder()
+      // A line each 50 ms, the gap between two runs: each runs on its own.
       for (let move = 0; move < 30; move++) {
         adapter.scroll(pane('t7'), -1)
         await turn()
-        vi.advanceTimersByTime(32)
+        vi.advanceTimersByTime(50)
       }
       expect(calls).toHaveLength(30)
-      vi.advanceTimersByTime(1_000 - 32 - 1)
+      vi.advanceTimersByTime(1_000 - 50 - 1)
       expect(log).toEqual([])
       vi.advanceTimersByTime(1)
       expect(log).toEqual([drained(30, 30, 0)])
