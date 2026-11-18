@@ -438,7 +438,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; claudeFullscreen?: null } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; claudeFullscreen?: null; claudeManagedSettings?: string } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   // None, and no read under way, unless the spec gives its own; null leaves the devices to read this computer's.
   const orcaHomes = over.orcaHomes ?? fakeOrcaHomes()
@@ -483,6 +483,7 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
       claudeSettings.reads.push([cwd, transcriptPath])
       return claudeSettings.fullscreen
     },
+    claudeManagedSettings: over.claudeManagedSettings,
     processGroups: async (agent, shell) => {
       processGroups.reads.push([agent, shell])
       if (processGroups.held) await new Promise<void>((resolve) => { processGroups.land.push(resolve) })
@@ -3753,15 +3754,21 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     ])
   })
 
-  it("with no reader of its own, the devices read the session's settings: those of the home its transcript path names", async () => {
-    // A home of its own, never the person's: its settings.json says fullscreen, and the folder has no .claude. This
-    // computer's managed file, if any, is read and outranks it.
+  it("with no reader of its own, the devices read the session's settings: those of the home its transcript path names, under the managed file", async () => {
+    // A home of its own, never the person's: its settings.json says fullscreen, and the folder has no .claude. The
+    // managed file is the test's own too, never this computer's.
     const home = mkdtempSync(join(tmpdir(), 'claude-home-'))
     onTestFinished(() => { rmSync(home, { recursive: true, force: true }) })
     writeFileSync(join(home, 'settings.json'), '{"tui":"fullscreen"}')
-    const { window } = await shown({ claudeFullscreen: null }, { cwd: join(home, 'api'), transcriptPath: join(home, 'projects', '-api', 'sess-1.jsonl') })
+    const managed = join(home, 'managed-settings.json')
+    const { window } = await shown({ claudeFullscreen: null, claudeManagedSettings: managed },
+      { cwd: join(home, 'api'), transcriptPath: join(home, 'projects', '-api', 'sess-1.jsonl') })
     stroke([8, 8])
     await vi.waitFor(() => expect(window.lines).toEqual([page(-2)]))
+    // The managed file outranks the user's.
+    writeFileSync(managed, '{"tui":"default"}')
+    stroke([8, 8])
+    await vi.waitFor(() => expect(window.lines).toEqual([page(-2), plain(-2)]))
   })
 
   it('no swipe line carries a handle, a session or an agent', async () => {

@@ -29,7 +29,7 @@ import { cableEventFor, cableStepFor, cableQuestionCloseFor, cableQuestionFor, D
 import { CableSession, SHOWN_ONLY_PREFIX, type DialStatus, type FollowCause } from '../cable/cableSession.js'
 import type { HostAdapter, Pane } from '../cable/hosts/adapter.js'
 import { createClaudeAppAdapter } from '../cable/hosts/claudeApp.js'
-import { readFullscreen } from '../cable/hosts/claudeRenderer.js'
+import { MANAGED_SETTINGS, readFullscreen } from '../cable/hosts/claudeRenderer.js'
 import { cmuxClientDeps, cmuxStoreDir, cmuxStores, createCmuxClient, type CmuxClient } from '../cable/hosts/cmuxCli.js'
 import { createCmuxAppAdapter } from '../cable/hosts/cmuxApp.js'
 import { CmuxSource } from '../cable/hosts/cmuxSource.js'
@@ -153,6 +153,9 @@ export interface DevicesDeps {
   /** For this service's tests: whether a Claude Code session's settings draw it fullscreen; its settings files by default
    *  (cable/hosts/claudeRenderer.ts readFullscreen). */
   claudeFullscreen?: VscodeTerminalsDeps['fullscreen']
+  /** For this service's tests: Claude Code's managed settings file, which outranks a session's own; this platform's by
+   *  default (cable/hosts/claudeRenderer.ts MANAGED_SETTINGS). */
+  claudeManagedSettings?: string
   /** For this service's tests: how an agent's process group and its VS Code terminal's foreground group, through that
    *  terminal's shell, are read; `ps` by default (cable/hosts/vscodeTerminals.ts readForeground). */
   processGroups?: VscodeTerminalsDeps['foreground']
@@ -391,10 +394,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // The streams Harness's own VS Code extension holds open, one a window, and the terminal each VS Code agent runs in
   // (docs/plans/2026-11-17-dial-vscode-extension-design.md). An adapter's capabilities are read at each look, so a
   // terminal found or lost tells the dials to look again.
+  const renderer = {
+    defaultHome: dirname(env.CLAUDE_PROJECTS_DIR), managed: deps.claudeManagedSettings ?? MANAGED_SETTINGS[apps.platform],
+  }
   const vscode = vscodeStreams({
     processes: deps.processParents ?? readProcessParents,
-    fullscreen: deps.claudeFullscreen
-      ?? ((cwd, transcriptPath) => readFullscreen(cwd, transcriptPath, { defaultHome: dirname(env.CLAUDE_PROJECTS_DIR), platform: apps.platform })),
+    fullscreen: deps.claudeFullscreen ?? ((cwd, transcriptPath) => readFullscreen(cwd, transcriptPath, renderer)),
     foreground: deps.processGroups ?? readForeground,
     changed: () => part.call('dial', () => cable.syncAgents()),
     now: monotonic,

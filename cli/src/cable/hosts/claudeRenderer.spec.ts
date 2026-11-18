@@ -7,10 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readFullscreen, readSettings, settingsFiles, SETTINGS_MAX_BYTES, type SettingsFs } from './claudeRenderer.js'
 
 // No test here reads a real settings file: readFullscreen's read is a fake keyed by path, or its files are under dir.
-const opts = { defaultHome: '/h/.claude', platform: 'darwin' as const }
+const MANAGED = '/Library/Application Support/ClaudeCode/managed-settings.json'
+const opts = { defaultHome: '/h/.claude', managed: MANAGED }
 /** A session of an Orca account, whose Claude Code home is its own. */
 const ORCA_TRANSCRIPT = '/o/claude-profiles/acct/home/projects/-work-api/s1.jsonl'
-const MANAGED = '/Library/Application Support/ClaudeCode/managed-settings.json'
 const LOCAL = '/work/api/.claude/settings.local.json'
 const PROJECT = '/work/api/.claude/settings.json'
 const USER = '/h/.claude/settings.json'
@@ -25,8 +25,7 @@ const reading = (files: Record<string, string>) => vi.fn(async (path: string) =>
 describe('settingsFiles', () => {
   it('the four files, highest first', () => {
     expect(settingsFiles('/work/api', undefined, opts)).toEqual([MANAGED, LOCAL, PROJECT, USER])
-    expect(settingsFiles('/work/api', undefined, { ...opts, platform: 'linux' })[0]).toBe('/etc/claude-code/managed-settings.json')
-    expect(settingsFiles('/work/api', undefined, { ...opts, platform: 'win32' })).toEqual([LOCAL, PROJECT, USER])
+    expect(settingsFiles('/work/api', undefined, { ...opts, managed: undefined })).toEqual([LOCAL, PROJECT, USER])
   })
 
   it.each<[string, string | undefined, string]>([
@@ -88,11 +87,11 @@ describe('readFullscreen', () => {
   })
 
   it("reads the session's real files by default", async () => {
-    // win32 has no managed file, so nothing outside dir is opened.
+    // No managed file, so nothing outside dir is opened.
     const project = join(dir, 'api')
     mkdirSync(join(project, '.claude'), { recursive: true })
     writeFileSync(join(project, '.claude', 'settings.json'), '{"tui":"fullscreen"}')
-    const local = { defaultHome: join(dir, 'home'), platform: 'win32' as const }
+    const local = { defaultHome: join(dir, 'home'), managed: undefined }
     expect(await readFullscreen(project, undefined, local)).toBe(true)
     writeFileSync(join(project, '.claude', 'settings.local.json'), '{"tui":"default"}')
     expect(await readFullscreen(project, undefined, local)).toBe(false)

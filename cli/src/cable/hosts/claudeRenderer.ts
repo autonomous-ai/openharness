@@ -35,7 +35,8 @@ export interface RendererOptions {
   /** The devices' default Claude Code home, dirname(CLAUDE_PROJECTS_DIR): the user file's home for a session whose
    *  transcript path names none. */
   defaultHome: string
-  platform: NodeJS.Platform
+  /** The managed file, the platform's MANAGED_SETTINGS; none where the platform has none. */
+  managed: string | undefined
 }
 
 /** `<home>` of a transcript path `<home>/projects/<slug>/<id>.jsonl`, from its shape alone. A path spelled any other
@@ -47,14 +48,13 @@ function homeOf(transcriptPath: string | undefined): string | undefined {
   return basename(projects) === 'projects' ? dirname(projects) : undefined
 }
 
-/** The four files, highest precedence first: managed (where the platform has one), project local, project, user.
+/** The four files, highest precedence first: managed (where there is one), project local, project, user.
  *  `cwd` is absolute. The user file is `settings.json` in the session's own Claude Code home, `<home>` of its
  *  `transcriptPath` `<home>/projects/<slug>/<id>.jsonl`; in `opts.defaultHome` when there is none or it has another
  *  shape. From the path alone: no environment is read. */
 export function settingsFiles(cwd: string, transcriptPath: string | undefined, opts: RendererOptions): string[] {
-  const managed = MANAGED_SETTINGS[opts.platform]
   return [
-    ...(managed ? [managed] : []),
+    ...(opts.managed ? [opts.managed] : []),
     join(cwd, '.claude', 'settings.local.json'),
     join(cwd, '.claude', 'settings.json'),
     join(homeOf(transcriptPath) ?? opts.defaultHome, 'settings.json'),
