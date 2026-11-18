@@ -35,6 +35,13 @@ export interface NoticesDeps {
   changed(): void
   /** Each answer, by the caller's engine (`agent` when it names none), for the day's tally. */
   count(engine: 'claude' | 'codex' | 'agent', result: NoticeResult): void
+  /** The file's cards at the start (noticeFile.ts). */
+  restored: readonly StoredNotice[]
+  log(line: string): void
+  /** A row changed with no question frame to carry it: the dial's drawer is replaced. */
+  redraw(): void
+  /** The card's question to every dial, held for its row to open, never asked. */
+  hold(agentId: string, id: string, questions: unknown): void
 }
 
 export const NOTICES_PENDING_MAX = 20
@@ -45,6 +52,8 @@ export const NOTICE_LINE_MAX_BYTES = 239
  *  stays small. */
 export const NOTICE_KEYS_MAX = 4
 export const NOTICE_KEY_MAX_CHARS = 160
+/** A card of the file older than this is not restored: what it asked for is a day old. */
+export const NOTICE_RESTORE_MAX_MS = 24 * 3_600_000
 
 /** A pending card as `dial-notices.json` keeps it; `at` is the wall-clock ms it was shown. */
 export interface StoredNotice {
@@ -68,8 +77,17 @@ const fitBytes = (line: string): string => Buffer.byteLength(line) <= NOTICE_LIN
   ? line
   : `${truncateUtf8(line, NOTICE_LINE_MAX_BYTES - Buffer.byteLength('…'))}…`
 
+/** A card's question, the same for a live card and one rebuilt from its file, which keeps only the line and host. */
+const noticeQuestions = (line: string, host: string): unknown =>
+  [{ key: 'notice', q: line, options: [`In ${hostDisplayName(host)}`] }]
+
 interface Pending {
   id: string; line: string; questions: unknown; host: string; who?: NoticeCaller['who']; keys: readonly string[]; at: number
+  /** Back from the file: a drawer row whose question is held, never asked, for it rang before the restart
+   *  (harness-pm, 2026-11-18). */
+  restored?: true
+  /** Restored, and no row until its agent is listed: a card no list holds (`who`) never waits. */
+  waiting?: true
 }
 
 export class Notices {
@@ -79,6 +97,15 @@ export class Notices {
 
   constructor(private readonly deps: NoticesDeps) {
     this.limits = new NoticeLimits(deps.now)
+    const now = deps.clock()
+    let aged = 0
+    for (const { agentId, keys, id, line, host, who, at } of deps.restored) {
+      if (now - at > NOTICE_RESTORE_MAX_MS) { aged += 1; continue }
+      this.cards.set(agentId,
+        { id, line, questions: noticeQuestions(line, host), host, who, keys, at, restored: true, ...(!who && { waiting: true as const }) })
+    }
+    if (deps.restored.length > 0) deps.log(`[device] notices · restored ${deps.restored.length - aged} · aged out ${aged}`)
+    if (aged > 0) deps.changed()
   }
 
   notify(ask: NoticeAsk): NoticeResult {
@@ -95,9 +122,9 @@ export class Notices {
     if (this.cards.size >= NOTICES_PENDING_MAX) this.ended(this.cards.keys().next().value!)
     const id = SHOWN_ONLY_PREFIX + this.deps.uuid()
     const line = fitBytes(roundDrawable(ask.text))
-    const questions = [{ key: 'notice', q: line, options: [`In ${hostDisplayName(caller.host)}`] }]
-    this.cards.set(caller.agentId,
-      { id, line, questions, host: caller.host, who: caller.who, keys: caller.keys, at: this.deps.clock() })
+    this.cards.set(caller.agentId, {
+      id, line, questions: noticeQuestions(line, caller.host), host: caller.host, who: caller.who, keys: caller.keys, at: this.deps.clock(),
+    })
     this.deps.changed()
     this.reask(caller.agentId)
     return answer('shown')
@@ -113,15 +140,29 @@ export class Notices {
   }
 
   /** Another question of that agent closed, which took the card's place on the dial or held it back: the card is asked,
-   *  under its id, unless one is still open. Nothing for an agent with none. */
+   *  under its id, unless one is still open. Nothing for an agent with none. A restored row comes back by a drawer
+   *  replace, as no question frame carries it. */
   reask(agentId: string): void {
-    const card = this.cards.get(agentId)
-    if (card && !this.deps.held(agentId)) this.deps.ask(agentId, card.id, card.questions)
+    if (this.send(agentId)) this.deps.redraw()
   }
 
-  /** A dial attached: each pending card is asked again, under its id. */
+  /** A dial attached: each pending card is asked again, under its id. No redraw: the attach's greeting replaces the
+   *  drawer itself. */
   attached(): void {
-    for (const agentId of this.cards.keys()) this.reask(agentId)
+    for (const agentId of this.cards.keys()) this.send(agentId)
+  }
+
+  /** The card to every dial: a live one asked, a restored one held. Nothing for one waiting for its agent or covered by
+   *  another question of it. Whether a restored one was held. */
+  private send(agentId: string): boolean {
+    const card = this.cards.get(agentId)
+    if (!card || card.waiting || this.deps.held(agentId)) return false
+    if (card.restored) {
+      this.deps.hold(agentId, card.id, card.questions)
+      return true
+    }
+    this.deps.ask(agentId, card.id, card.questions)
+    return false
   }
 
   /** The last dial went. A Harness agent's next turn is told to the devices only while a dial listens
@@ -133,7 +174,7 @@ export class Notices {
 
   /** Each pending card the dial shows as a row of its drawer, newest first: a drawer replaced whole must keep them. */
   rows(machineId: string): UnreadNotification[] {
-    return [...this.cards].reverse().filter(([agentId]) => !this.deps.held(agentId))
+    return [...this.cards].reverse().filter(([agentId, card]) => !card.waiting && !this.deps.held(agentId))
       .map(([agentId, card]) => ({ agentId, machineId, question: true, text: card.line }))
   }
 

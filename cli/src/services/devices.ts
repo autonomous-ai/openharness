@@ -1210,6 +1210,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     clock: Date.now,
     changed: () => noticeFile.changed(),
     count: createEngineTally('[device] notify', ['claude', 'codex', 'agent'], ['shown', 'no dial', 'limited'], log),
+    restored: noticeFile.load(),
+    log,
+    redraw: () => { void cable.replaceNotifications(cableHost.listUnread()) },
+    // In its agent's order, as an ask is.
+    hold: (agentId, id, questions) => inOrder(agentId, () => { void cable.hold(agentId, id, questions) }),
   })
   /** That agent's next turn started, a tap opened it, or it left: its card goes. */
   const endNotice = (agentId: string): void => part.call('notices', () => notices.ended(agentId))
