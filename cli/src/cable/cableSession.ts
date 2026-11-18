@@ -170,6 +170,8 @@ export interface ActivitySnapshot {
 
 /** The device keeps 192 B of the agent's latest sentence (cable.md); a longer one is cut on a character boundary. */
 const ACTION_MAX_BYTES = 188
+/** A drawer row's words on the device (cable_notif_t summary, 240 B with its end): eight rows stay one frame. */
+const NOTICE_SUMMARY_MAX = 239
 
 /** What the Pro's firmware holds of a swarms frame: 24 tabs, 24 ids each, and 512 JSON tokens (480 here). */
 const SWARMS_MAX = 24
@@ -2810,8 +2812,8 @@ export class CableSession {
     }
     await this.pushRestores()
     // …and the drawer, which is the one thing a dial that has just greeted us is KNOWN to have lost:
-    // its rows live in RAM. Last, because it names agents the pushes above put on the carousel. It asks again the
-    // questions it does not carry.
+    // its rows live in RAM. Last, because it names agents the pushes above put on the carousel. Its questions with it:
+    // see replaceNotifications.
     await this.replaceNotifications(this.host.listUnread())
   }
 
@@ -2834,8 +2836,9 @@ export class CableSession {
 
   /**
    * A Pro saw a hole in `seq` (or a frame that failed its CRC): resend what a lost frame could have carried. The attach
-   * push minus the history replay, plus the open questions — a replayed `summary` is heavy, and a second burst on a link
-   * that just dropped bytes is what the rate limit (once per 2 s, here and on the device) is there to avoid.
+   * push minus the history replay, its drawer carrying the open questions — a replayed `summary` is heavy, and a second
+   * burst on a link that just dropped bytes is what the rate limit (once per 2 s, here and on the device) is there to
+   * avoid.
    */
   private async resync(): Promise<void> {
     const now = Date.now()
@@ -3253,14 +3256,26 @@ export class CableSession {
     if (this.link !== link || this.stopped) return
     // Reading clears the notice, not the underlying question. Versioned clears
     // cannot eat a newer turn whose history happened to take longer to load.
-    const drawer = rows.filter(row =>
+    const listed = rows.filter(row =>
       (row.question || !replay.seen.has(row.agentId)) && !replay.seen.has(`${row.agentId}\0${row.readToken}`))
-    // The dial keeps a question as a row of this drawer: one the new drawer does not carry is gone from it. Before the
-    // frame, so an ask that overtakes it stays marked.
+    // The dial keeps a question as a row of this drawer, and the drawer replaces them all. A live dial was asked its
+    // questions already: one the window's list leaves out (its mark turned into news, the person looked, the eight-row
+    // cap) goes back on it as a row, first, in place of that agent's news (2026-11-18). An ask would beep and wake it
+    // at every change of that list. A greeting dial lost them with its RAM, and its push asks them after this drawer.
+    const carried = new Set(listed.filter((row) => row.question).map((row) => row.agentId))
+    const open = this.greeting ? [] : this.owedQuestions().filter(({ agentId }) => !carried.has(agentId))
+    const back = new Set(open.map(({ agentId }) => agentId))
+    const drawer = [
+      ...open.map(({ agentId, questions }) => {
+        const who = this.whoIs(agentId)
+        return { agentId, name: who.name, machine: who.machine, summary: clipUtf8(questions[0].q, NOTICE_SUMMARY_MAX), question: true }
+      }),
+      ...listed.filter((row) => !back.has(row.agentId)),
+    ].slice(0, 8)
+    // Before the frame, so an ask that overtakes it stays marked.
     this.questionInbox.forget(new Set(drawer.filter((row) => row.question).map((row) => row.agentId)))
     await this.send({ t: 'notif.replace', items: drawer })
-    // Asked again now: on the window's unread list nothing else asks it, and the window's mark for that agent turning
-    // into news left the dial without its question (2026-11-18). A greeting asks them as its push ends.
+    // One the eight rows could not hold is asked now. A greeting asks them as its push ends.
     if (!this.greeting) await this.resendQuestions()
   }
 

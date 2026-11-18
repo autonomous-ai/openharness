@@ -3668,7 +3668,7 @@ describe('hello capabilities', () => {
       port.sent.length = 0
       await session.replaceNotifications([{ agentId: 'b', machineId: 'm1', question: false, text: 'The build passed, all green.' }])
       expect(port.types()).toEqual(['notif.replace', 'question'])
-      expect(ofType(port, 'notif.replace')[0].items.map((row: { agentId: string }) => row.agentId))
+      expect((ofType(port, 'notif.replace')[0].items as Array<{ agentId: string }>).map((row) => row.agentId))
         .toEqual(['q0', 'q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'q7'])
       expect(ofType(port, 'question')).toMatchObject([{ agentId: 'q8', id: 'id8' }])
     } finally { await session.stop() }
