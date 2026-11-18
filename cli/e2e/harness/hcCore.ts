@@ -16,7 +16,8 @@
  * is given, Claude Code (`claude-code`) unless told another, once it listens on a socket of its own under the root, and
  * then each word written to that socket as its next status. It reads its terminal raw, as Claude Code does, so a key
  * that is no text reaches it as its bytes: it prints `fake> `, then `KEY[<the key, its ESC written ^[>]` for each such
- * key (`KEY[^[[5~]`, pageup) and `GOT[<line>]` for each line it reads.
+ * key (`KEY[^[[5~]`, pageup), echoes the text it reads as a cooked terminal would, and prints `GOT[<line>]` on a line of
+ * its own for each line it reads.
  *
  * Given a Claude Code session, it is Claude Code as hc runs it, before any dial is plugged and so with no hook heard by
  * the devices: before it reports `idle` it writes what Claude Code leaves on disk, its process record and a transcript
@@ -96,14 +97,17 @@ let line = ''
 process.stdin.setRawMode(true)
 process.stdin.setEncoding('utf8')
 process.stdin.on('data', (chunk) => {
-  line += chunk.replace(/\\x1b\\[[0-9;]*~/g, (key) => {
+  const text = chunk.replace(/\\x1b\\[[0-9;]*~/g, (key) => {
     process.stdout.write('KEY[^[' + key.slice(1) + ']\\n')
     return ''
   })
+  // Raw, its terminal echoes nothing: it echoes the text itself, so words typed with no Enter still show.
+  process.stdout.write(text.replace(/[\\r\\n]/g, ''))
+  line += text
   for (let newline = line.search(/[\\r\\n]/); newline !== -1; newline = line.search(/[\\r\\n]/)) {
     const got = line.slice(0, newline)
     line = line.slice(newline + 1)
-    process.stdout.write('GOT[' + got + ']\\nfake> ')
+    process.stdout.write('\\nGOT[' + got + ']\\nfake> ')
   }
 })
 // Its terminal gone, it goes too: its socket's server would keep it running.
