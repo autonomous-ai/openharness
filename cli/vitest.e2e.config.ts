@@ -22,6 +22,9 @@ import { defineConfig } from 'vitest/config'
  * Every daemon runs on a copy of the worker's Node made for the run, alone in its folder (e2e/harness/testNode.ts), so
  * it finds no engine beside its Node. A Node that Rosetta runs stops the run before any test, by name: run the tests
  * with an arm64 Node.
+ *
+ * On macOS every daemon has the native process-image helper a release ships (e2e/harness/processImages.ts), built once
+ * for the run when HARNESS_PROCESS_IMAGES_ARTIFACT names none: that needs Xcode's command line tools.
  */
 const workers = Math.max(1, Number(process.env.E2E_WORKERS ?? 1) || 1)
 
@@ -29,7 +32,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     setupFiles: ['./vitest.setup.ts', './e2e/harness/artifacts.ts'],
-    globalSetup: ['./e2e/harness/socketRoom.ts', './e2e/harness/testNode.ts', './e2e/harness/bundle.ts'],
+    globalSetup: ['./e2e/harness/socketRoom.ts', './e2e/harness/testNode.ts', './e2e/harness/processImages.ts', './e2e/harness/bundle.ts'],
     include: ['e2e/**/*.e2e.ts'],
     testTimeout: 180_000,
     hookTimeout: 180_000,
