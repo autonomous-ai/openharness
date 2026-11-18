@@ -438,6 +438,63 @@ describe('cable session', () => {
     } finally { await session.stop() }
   })
 
+  describe('an answer to a question with half an emoji, which the dial read as ?', () => {
+    async function asked(questions: unknown, over: Partial<CableHost> = {}) {
+      const c = await connect(makeHost(over))
+      c.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(c.port.types()).toContain('agents.end'))
+      await c.session.question('a1', 'q1', questions)
+      return c
+    }
+
+    it('reaches the host in the words it was asked with, and typed words as typed', async () => {
+      // '?yes' matched no row of the dialog, which typed it into its free-text row instead of choosing the option.
+      const { session, port, host } = await asked([
+        { key: 'Ship \ud83d it?', q: 'Ship \ud83d it?', options: ['\ud83dyes', 'no'] },
+        { key: 'Why?', q: 'Why?', options: ['tests'] },
+      ])
+      try {
+        port.say({ t: 'answer', agentId: 'a1', requestId: 'q1', answers: { 'Ship ? it?': '?yes', 'Why?': 'see ?' } })
+        await vi.waitFor(() => expect(host.answer).toHaveBeenCalled())
+        expect(host.answer).toHaveBeenCalledWith('a1', 'q1', { 'Ship \ud83d it?': '\ud83dyes', 'Why?': 'see ?' })
+      } finally { await session.stop() }
+    })
+
+    it('reaches the host in the words it was asked with when several options are chosen', async () => {
+      const { session, port, host } = await asked([{ key: 'k', q: 'Which?', options: ['\ud83da', 'b', 'c'], multi: true }])
+      try {
+        port.say({ t: 'answer', agentId: 'a1', requestId: 'q1', answers: { k: '?a, b' } })
+        await vi.waitFor(() => expect(host.answer).toHaveBeenCalled())
+        expect(host.answer).toHaveBeenCalledWith('a1', 'q1', { k: '\ud83da, b' })
+      } finally { await session.stop() }
+    })
+
+    it('is refused when two options read the same on the dial', async () => {
+      const { session, port, host } = await asked([{ key: 'k', q: 'Which?', options: ['\ud83dyes', '\udc00yes'] }])
+      try {
+        port.say({ t: 'answer', agentId: 'a1', requestId: 'q1', answers: { k: '?yes' } })
+        await vi.waitFor(() => expect(port.types()).toContain('toast'))
+        expect(host.answer).not.toHaveBeenCalled()
+      } finally { await session.stop() }
+    })
+
+    it('reviewed, reaches the host in the words it was asked with', async () => {
+      const answerReviewed = vi.fn<NonNullable<CableHost['answerReviewed']>>(async () => ({ ok: true }))
+      const { session, port } = await asked([{ key: 'Ship \ud83d it?', q: 'Ship \ud83d it?', options: ['\ud83dyes', 'no'] }],
+        { answerReviewed })
+      try {
+        port.say({ t: 'question.read', agentId: 'a1', requestId: 'read-1' })
+        await vi.waitFor(() => expect(port.types()).toContain('question.state'))
+        const { token } = port.sent.find((m) => m.t === 'question.state')!
+        port.say({ t: 'answer.reviewed', agentId: 'a1', requestId: 'send-1', token, choices: [1] })
+        await vi.waitFor(() => expect(port.types()).toContain('answer.receipt'))
+        expect(port.sent.find((m) => m.t === 'answer.receipt')).toMatchObject({ ok: true })
+        expect(answerReviewed).toHaveBeenCalledWith(expect.objectContaining({
+          answers: { 'Ship \ud83d it?': '\ud83dyes' }, selections: { 'Ship \ud83d it?': ['\ud83dyes'] } }))
+      } finally { await session.stop() }
+    })
+  })
+
   it('keeps the leading drawer rows that fit one frame', () => {
     const rows = Array.from({ length: 8 }, (_, i) => ({ agentId: `a${i}`, summary: 'x'.repeat(2000) }))
     const kept = fitDrawer(rows)
