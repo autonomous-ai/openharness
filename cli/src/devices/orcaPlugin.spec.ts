@@ -361,10 +361,12 @@ describe('connect', () => {
       ['invalid', { id: 'req-4', ok: false, error: { code: 'plugin_invalid', message: `${folder}/orca-plugin.json: bad`, data: { pluginKey: KEY } } }, 2],
       ['not JSON', `Error: could not reach ${folder}\n`, 1],
       ['no code', { id: 'req-4', ok: false, error: { message: `Something failed in ${folder}` } }, 1],
+      ["another code with an approval's data", { ...approval('approval_required'), error: { ...approval('approval_required').error, code: 'plugin_blocked' } }, 1],
+      ['ok with an exit that is not 0', installed(folder), 1],
     ]
-    for (const [name, answer, code] of errors) {
+    for (const [label, answer, code] of errors) {
       orca.answer('plugin install', answer, code)
-      expect({ name, ...await orcaConnect(deps) }).toStrictEqual({ name, ...FAILED })
+      expect({ case: label, ...await orcaConnect(deps) }).toStrictEqual({ case: label, ...FAILED })
     }
   })
 
@@ -497,8 +499,8 @@ describe('connect', () => {
       ['a name with a line break', { data: { name: 'Harness\nDevice' } }],
       ['a name past 300 characters', { data: { name: 'x'.repeat(301) } }],
     ]
-    for (const [name, over] of past) {
-      expect({ name, ...await ask(over) }).toStrictEqual({ name, ...FAILED })
+    for (const [label, over] of past) {
+      expect({ case: label, ...await ask(over) }).toStrictEqual({ case: label, ...FAILED })
     }
   })
 
@@ -510,9 +512,9 @@ describe('connect', () => {
       ['no execution sentence and no capability', { grants: { execution: 'trusted-worker', capabilities: [], contributions: [] } }],
       ['only empty and blank strings', { grants: { execution: 'trusted-worker', executionDescription: '', capabilities: [{ kind: 'workspace:read', description: '  ' }], contributions: [] } }],
     ]
-    for (const [name, data] of empty) {
+    for (const [label, data] of empty) {
       orca.answer('plugin install', approval('approval_required', { data }), 3)
-      expect({ name, ...await orcaConnect(deps) }).toStrictEqual({ name, ...FAILED })
+      expect({ case: label, ...await orcaConnect(deps) }).toStrictEqual({ case: label, ...FAILED })
     }
   })
 
