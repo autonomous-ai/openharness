@@ -1067,8 +1067,8 @@ describe('binding a running process to its session', () => {
       expect(run.deps.attachSession).toHaveBeenCalledExactlyOnceWith(confirmed, false, false, false)
     })
 
-    it.each(['the resume\'s, of the binding before it', 'one of the confirmed binding'] as const)(
-      'reads a confirmed Hermes resume once, while %s still reads', async (reading) => {
+    it.each([["the resume's, of the row before it", true], ["a hook's, of the row it confirmed", false]] as const)(
+      'reads a confirmed Hermes resume once, while an attach still reads: %s', async (_reading, resumed) => {
         const { run, entry } = withRecord({ sessionId: 'S', resumeOnly: true, lastHookAt: 0, boundAt: null })
         const confirmed = agent({ ...entry, boundAt: 1, lastHookAt: 1 })
         // Two attaches of one session as attach.ts runs them: one read at a time (lib/attachTracker.ts), a plain attach
@@ -1077,19 +1077,19 @@ describe('binding a running process to its session', () => {
         const reads: string[] = []
         let finish!: () => void
         const held = new Promise<void>(resolve => { finish = resolve })
-        vi.mocked(run.deps.attachSession).mockImplementation((session) => {
+        vi.mocked(run.deps.attachSession).mockImplementation((session, reset = false) => {
           const identity = paneReadIdentity(session)
-          return tracker.attach(session, false, async () => {
+          return tracker.attach(session, reset, async () => {
             reads.push(identity)
             await held
             return paneReadIdentity(run.deps.registry.byAgent(session.agentId)) === identity
           }, identity)
         })
-        if (reading.startsWith('the resume')) void run.deps.attachSession(entry)
+        if (resumed) void run.deps.attachSession(entry)
         vi.mocked(run.deps.registry.register).mockImplementation(async () => {
           run.byAgent.set(entry.agentId, confirmed)
           // A hook's re-register of the same binding, attaching it as the commit lands.
-          if (!reading.startsWith('the resume')) void run.deps.attachSession(confirmed)
+          if (!resumed) void run.deps.attachSession(confirmed)
           return { entry: confirmed, ...meta() } as never
         })
         follow.mockResolvedValue({ sessionId: 'S' })
@@ -1099,8 +1099,8 @@ describe('binding a running process to its session', () => {
         expect(reads).toHaveLength(1)
         finish()
         const attached = await Promise.all(vi.mocked(run.deps.attachSession).mock.results.map(result => result.value))
-        expect(attached).toEqual(reading.startsWith('the resume') ? [false, true] : [true, true])
-        expect(reads).toEqual([...reading.startsWith('the resume') ? [paneReadIdentity(entry)] : [], paneReadIdentity(confirmed)])
+        expect(attached).toEqual(resumed ? [false, true] : [true, true])
+        expect(reads).toEqual([...resumed ? [paneReadIdentity(entry)] : [], paneReadIdentity(confirmed)])
       },
     )
 
