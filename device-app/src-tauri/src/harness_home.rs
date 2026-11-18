@@ -1,9 +1,12 @@
 //! Harness's folders under the person's home, built in one place. The CLI's `config/harnessHome.ts` holds the whole
 //! table; this crate declares only the entries it uses. A test below fails on a home `.harness` path built elsewhere.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 const HARNESS_DIR: &str = ".harness";
+/// Each root's name under its XDG base on Linux.
+const XDG_DIR: &str = "harness";
 
 /// What the person made or set (data), and what can be built again (state).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,23 +38,57 @@ impl Entry {
     }
 }
 
-/// Both roots are `<home>/.harness` today.
+/// What the rule reads: whether it runs (Linux), the environment, and whether a folder is there.
+pub struct Look<'a> {
+    pub linux: bool,
+    pub env: &'a dyn Fn(&str) -> Option<OsString>,
+    pub exists: &'a dyn Fn(&Path) -> bool,
+}
+
+/// The root, by the rule, looked up again at each call so a move during the app's life is followed.
 pub fn harness_root(home: &Path, root: Root) -> PathBuf {
+    let env = |name: &str| std::env::var_os(name);
+    let exists = |path: &Path| path.exists();
+    harness_root_with(home, root, &Look { linux: cfg!(target_os = "linux"), env: &env, exists: &exists })
+}
+
+/// The entry's folder under its root, by the rule.
+pub fn harness_path(home: &Path, entry: Entry) -> PathBuf {
+    harness_root(home, entry.root()).join(entry.name())
+}
+
+/// On Linux: the XDG roots once the data root exists, else `<home>/.harness` while that exists (not moved yet), else
+/// the XDG roots. The data root alone decides, so the bridge left at `~/.harness` never flips a moved machine back.
+/// Elsewhere both roots are `<home>/.harness`.
+pub fn harness_root_with(home: &Path, root: Root, look: &Look) -> PathBuf {
+    let legacy = home.join(HARNESS_DIR);
+    if !look.linux {
+        return legacy;
+    }
+    let data = xdg_root(home, "XDG_DATA_HOME", "share", look);
+    if !(look.exists)(&data) && (look.exists)(&legacy) {
+        return legacy;
+    }
     match root {
-        Root::Data | Root::State => home.join(HARNESS_DIR),
+        Root::Data => data,
+        Root::State => xdg_root(home, "XDG_STATE_HOME", "state", look),
     }
 }
 
-/// `<home>/.harness/<entry>`.
-pub fn harness_path(home: &Path, entry: Entry) -> PathBuf {
-    harness_root(home, entry.root()).join(entry.name())
+/// `harness_path`, with the look given.
+pub fn harness_path_with(home: &Path, entry: Entry, look: &Look) -> PathBuf {
+    harness_root_with(home, entry.root(), look).join(entry.name())
+}
+
+/// `$<var>/harness` when the variable is an absolute path, else `<home>/.local/<fallback>/harness`.
+fn xdg_root(home: &Path, var: &str, fallback: &str, look: &Look) -> PathBuf {
+    let base = (look.env)(var).map(PathBuf::from).filter(|base| base.is_absolute());
+    base.unwrap_or_else(|| home.join(".local").join(fallback)).join(XDG_DIR)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use std::ffi::OsString;
 
     const HOME: &str = "/h";
 
@@ -80,7 +117,7 @@ mod tests {
     #[test]
     fn legacy_linux_is_dot_harness() {
         let legacy = path(&[".harness"]);
-        assert_eq!(roots(&[], &[legacy.clone()]), (legacy.clone(), legacy));
+        assert_eq!(roots(&[], &[path(&[".harness"])]), (legacy.clone(), legacy));
     }
 
     #[test]
