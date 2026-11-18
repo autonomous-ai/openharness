@@ -228,3 +228,34 @@ describe('UpstreamLink reconnect backoff', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 })
+
+describe('UpstreamLink socket errors', () => {
+  it('the socket\'s error line names its kind and the status, never the host', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const originalUrl = env.BACKEND_WS_URL
+    const server = await backend()
+    env.BACKEND_WS_URL = server.url
+    const { link, signals } = upstream(token)
+    try {
+      const up = once(signals, 'up')
+      link.connect()
+      await up
+      const ws = (link as unknown as { ws: WebSocket }).ws
+      ws.emit('error', new Error('Unexpected server response: 401'))
+      ws.emit('error', Object.assign(new Error('getaddrinfo ENOTFOUND api.example.test'), { code: 'ENOTFOUND' }))
+
+      expect(error.mock.calls).toEqual([
+        ['[backend] socket error: Error · Unexpected server response: 401'],
+        ['[backend] socket error: ENOTFOUND'],
+      ])
+      expect(JSON.stringify([...log.mock.calls, ...error.mock.calls])).not.toContain('api.example.test')
+    } finally {
+      link.stop()
+      env.BACKEND_WS_URL = originalUrl
+      for (const client of server.wss.clients) client.terminate()
+      await new Promise((resolve) => server.wss.close(resolve))
+      vi.restoreAllMocks()
+    }
+  })
+})

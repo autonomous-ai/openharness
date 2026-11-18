@@ -1,6 +1,0 @@
-gateway/accountRoutes.ts 2
-gateway/gateway.ts 5
-gateway/gatewayProcess.ts 1
-gateway/keyRoutes.ts 1
-gateway/start.ts 1
-gateway/upstream.ts 4

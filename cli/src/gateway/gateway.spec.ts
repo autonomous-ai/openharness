@@ -885,8 +885,8 @@ describe('a client\'s terminal bytes, on their way to the core', () => {
     into.bytes(phone.sealBinary(key(3)))
     expect(core).toHaveBeenCalledTimes(3)
     await vi.waitFor(() => expect(error.mock.calls).toEqual([
-      ['[backend] binary terminal dispatch failed:', 'core threw'],
-      ['[backend] binary terminal dispatch failed:', 'core gone'],
+      ['[backend] binary terminal dispatch failed:', 'Error'],
+      ['[backend] binary terminal dispatch failed:', 'Error'],
     ]))
     await socket.stop()
   })

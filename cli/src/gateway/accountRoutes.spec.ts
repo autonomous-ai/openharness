@@ -109,7 +109,7 @@ describe('the account\'s routes, answered by the gateway', () => {
     // What threw in the door's own code is the 500 its catch-all answered, said in the log.
     expect(await routes('PATCH', '/api/machines/m1', 'null')).toEqual({ status: 500, body: { error: 'INTERNAL' } })
     expect(await routes('PATCH', '/api/machines/%E0%A4%A', '{"name":"Studio"}')).toEqual({ status: 500, body: { error: 'INTERNAL' } })
-    expect(log).toHaveBeenLastCalledWith('[gateway] PATCH /api/machines/%E0%A4%A failed: URI malformed')
+    expect(log).toHaveBeenLastCalledWith('[gateway] PATCH failed: URIError')
   })
 
   it('forwards the Store\'s ratings and reviews by their path and query, and refuses any other path or method', async () => {
@@ -137,13 +137,13 @@ describe('the account\'s routes, answered by the gateway', () => {
     const log = vi.fn()
     const routes = accountRoutes(async () => { throw new TypeError('fetch failed') }, log)
     expect(await routes('GET', '/api/desk')).toEqual({ status: 502, body: { success: false, error: { code: 'PROXY_FAILED', message: 'fetch failed' } } })
-    expect(log).toHaveBeenCalledWith('[gateway] GET /api/desk failed: fetch failed')
+    expect(log).toHaveBeenCalledWith('[gateway] GET failed: TypeError')
     const odd = accountRoutes(async () => { throw 'odd' as unknown as Error }, log)
     expect(await odd('GET', '/api/desk')).toEqual({ status: 502, body: { success: false, error: { code: 'PROXY_FAILED', message: 'INTERNAL' } } })
-    expect(log).toHaveBeenLastCalledWith('[gateway] GET /api/desk failed: odd')
+    expect(log).toHaveBeenLastCalledWith('[gateway] GET failed: string')
     const silent = vi.spyOn(console, 'error').mockImplementation(() => {})
     expect(await accountRoutes(echo())('PATCH', '/api/machines/%E0', '{}')).toEqual({ status: 500, body: { error: 'INTERNAL' } })
-    expect(silent).toHaveBeenCalledWith('[gateway] PATCH /api/machines/%E0 failed: URI malformed')
+    expect(silent).toHaveBeenCalledWith('[gateway] PATCH failed: URIError')
     silent.mockRestore()
   })
 })
