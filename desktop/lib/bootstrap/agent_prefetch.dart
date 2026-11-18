@@ -1,4 +1,5 @@
 import '../core/runtime_platform.dart';
+import '../core/harness_home.dart';
 import '../core/home_dir.dart';
 
 import 'dart:async';
@@ -63,7 +64,12 @@ class AgentPrefetch {
        _shell = shell,
        _markerDir =
            markerDir ??
-           (() => kUnderTest || _home == null ? null : '$_home/.harness/run'),
+           (() => kUnderTest || _home == null
+               ? null
+               : HarnessHome.of(
+                   _home!,
+                   join: separatorJoin('/'),
+                 ).path(HarnessEntry.run)),
        _start =
            start ??
            ((executable, arguments) => Process.start(executable, arguments)),
@@ -444,9 +450,9 @@ class AgentPrefetch {
     final home = _home;
     if (home == null) return null;
     try {
-      final node = File('$home/.harness/runtime/current-node')
-          .readAsStringSync()
-          .trim();
+      final node = File(
+        '${HarnessHome.of(home, join: separatorJoin('/')).path(HarnessEntry.runtime)}/current-node',
+      ).readAsStringSync().trim();
       return node.isNotEmpty && File(node).existsSync() ? node : null;
     } on FileSystemException {
       return null;
@@ -472,7 +478,7 @@ class AgentPrefetch {
       ],
     ];
     return [
-      '$home/.harness/cli',
+      HarnessHome.of(home, join: separatorJoin('/')).path(HarnessEntry.cli),
       '$home/.claude',
       '$home/.codex',
       '$home/.claude/local/claude',

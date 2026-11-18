@@ -16,6 +16,7 @@ import { readdirSync, realpathSync, statSync } from 'fs'
 import { homedir } from 'os'
 import { basename, join, resolve, sep } from 'path'
 import { env } from '../config/env.js'
+import { harnessPath } from '../config/harnessHome.js'
 import { homeIsAbsolute } from '../engines/kit/homeAdoption.js'
 import { readPrivateStateFile } from './secureState.js'
 
@@ -42,7 +43,7 @@ export function profileId(machineId: string, engine: 'claude' | 'codex', realpat
 }
 
 function harnessFolder(home: string): string {
-  return join(home, '.harness', 'claude-profiles') + sep
+  return harnessPath('claude-profiles', home) + sep
 }
 
 /** The folder's name, never the account's: Harness reads no sign-in (loginReads.spec.ts), so not the account's name either. */
@@ -109,7 +110,7 @@ function discover(home: string, environment: NodeJS.ProcessEnv): string[] {
   const orca = join(home, 'Library', 'Application Support', 'orca', 'claude-profiles')
   found.push(...entries(orca).map((e) => join(e, 'home')))
   // Where Desktop's "Add Claude account…" puts the folders it creates.
-  found.push(...entries(join(home, '.harness', 'claude-profiles')))
+  found.push(...entries(harnessPath('claude-profiles', home)))
   return found.filter(holdsProfile)
 }
 
@@ -147,7 +148,7 @@ export function listClaudeProfiles(
 export function claudeHomeListed(
   claudeHome: string, machineId: string, options: { home?: string; environment?: NodeJS.ProcessEnv } = {},
 ): boolean {
-  const own = join(options.home ?? homedir(), '.harness', 'claude-profiles') + sep
+  const own = harnessPath('claude-profiles', options.home ?? homedir()) + sep
   if (resolve(claudeHome) === claudeHome && claudeHome.startsWith(own)) return true
   return listClaudeProfiles([], { ...options, machineId }).some((p) => !p.default && p.path === claudeHome)
 }

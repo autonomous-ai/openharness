@@ -11,13 +11,16 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:harness/core/harness_home.dart';
+
 const _protocol = 1;
 const _givesUpAfter = Duration(seconds: 20);
 
 Future<void> main(List<String> args) async {
   final rounds = args.isEmpty ? 1 : int.parse(args.first);
   final home = Platform.environment['HOME']!;
-  final socket = '$home/.harness/cli/data/daemon-18473.sock';
+  final socket =
+      '${HarnessHome.of(home, join: separatorJoin('/')).path(HarnessEntry.cli)}/data/daemon-18473.sock';
   HttpClient client() => HttpClient()
     ..connectionFactory = (uri, proxyHost, proxyPort) => Socket.startConnect(
       InternetAddress(socket, type: InternetAddressType.unix),

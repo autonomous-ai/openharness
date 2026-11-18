@@ -9,6 +9,7 @@ import { homedir } from 'node:os'
 import { isAbsolute, basename, dirname, join } from 'node:path'
 import { baseNode } from '../harnessd/baseNode.js'
 import { env } from '../config/env.js'
+import { harnessPathText } from '../config/harnessHome.js'
 import { launchContract, launchField } from '../engines/launches.js'
 import { startupFunctions, startupNeedsScript, startupRuns } from '../engines/kit/launchStartup.js'
 import { screenArgs, screenEnvPrefix, screenPrelude, screenVariables } from '../engines/kit/launchScreen.js'
@@ -1336,7 +1337,7 @@ function installIfMissingScript(recipe: EngineInstallRecipe, runtimeNode: string
     // minutes) while the download still runs ends the pane rather than starting a second install.
     ...(downloadEngine ? [
       'harness_wait_download() {',
-      '  harness_dl_pid=$(cat "$HOME/.harness/run/downloading-$1" 2>/dev/null) || return 0',
+      `  harness_dl_pid=$(cat "${harnessPathText('run')}/downloading-$1" 2>/dev/null) || return 0`,
       "  case \"$harness_dl_pid\" in ''|*[!0-9]*) return 0 ;; esac",
       '  kill -0 "$harness_dl_pid" 2>/dev/null || return 0',
       '  ps -p "$harness_dl_pid" -o command= 2>/dev/null | grep -q harness-download || return 0',
@@ -1353,10 +1354,10 @@ function installIfMissingScript(recipe: EngineInstallRecipe, runtimeNode: string
     ] : []),
     'harness_quiet=0',
     ...(friendly ? [
-      'harness_install_log="$HOME/.harness/logs/install-' + friendly.engine.replace(/[^a-z0-9-]/g, '') + '.log"',
+      'harness_install_log="' + harnessPathText('logs') + '/install-' + friendly.engine.replace(/[^a-z0-9-]/g, '') + '.log"',
       // Beside the log rather than in a temporary folder: nothing machine-specific in the script.
-      'harness_install_rc="$HOME/.harness/logs/install-' + friendly.engine.replace(/[^a-z0-9-]/g, '') + '-$$.rc"',
-      `[ -x ${shellSingleQuote(runtimeNode)} ] && mkdir -p "$HOME/.harness/logs" 2>/dev/null && harness_quiet=1`,
+      'harness_install_rc="' + harnessPathText('logs') + '/install-' + friendly.engine.replace(/[^a-z0-9-]/g, '') + '-$$.rc"',
+      `[ -x ${shellSingleQuote(runtimeNode)} ] && mkdir -p "${harnessPathText('logs')}" 2>/dev/null && harness_quiet=1`,
     ] : []),
     ...(downloadEngine ? [`harness_find_engine "$1" || harness_wait_download ${shellSingleQuote(downloadEngine.replace(/[^a-z0-9-]/g, ''))}`] : []),
     'if ! harness_find_engine "$1"; then',

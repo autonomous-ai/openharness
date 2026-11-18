@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
 
+import '../core/harness_home.dart';
 import '../core/home_dir.dart';
 
 /// The daemon's Windows pipe, as the core records it, and the token that
@@ -57,7 +58,11 @@ String? defaultDaemonDataDir({
   if (override != null && override.isNotEmpty) return override;
   final home = maybeHomeDir(environment: env, isWindows: windows);
   if (home == null) return null;
-  return (windows ? p.windows : p.posix).join(home, '.harness', 'cli', 'data');
+  final context = windows ? p.windows : p.posix;
+  return context.join(
+    HarnessHome.of(home, join: context.join).path(HarnessEntry.cli),
+    'data',
+  );
 }
 
 /// The pipe and token of the daemon on [port] in [dataDir], or null when there

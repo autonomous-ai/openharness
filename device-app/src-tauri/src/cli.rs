@@ -1,5 +1,6 @@
 //! Find the `harness` CLI and run it: deadlines, NDJSON lines.
 
+use crate::harness_home::{Entry, harness_path};
 use crate::types::{Log, Output};
 use std::collections::VecDeque;
 use std::env;
@@ -83,9 +84,8 @@ pub fn find_cli(home: &Path, path_var: Option<&OsStr>, over: Option<&Path>) -> O
 }
 
 fn installed(home: &Path, path_var: Option<&OsStr>) -> Option<(PathBuf, Vec<OsString>)> {
-    let harness = home.join(".harness");
-    let cli_js = harness.join("cli").join("cli.js");
-    if let Some(node) = managed_node(&harness.join("runtime")).filter(|_| cli_js.is_file()) {
+    let cli_js = harness_path(home, Entry::Cli).join("cli.js");
+    if let Some(node) = managed_node(&harness_path(home, Entry::Runtime)).filter(|_| cli_js.is_file()) {
         return Some((node, vec![cli_js.into_os_string()]));
     }
     let launcher = home.join(".local").join("bin").join("harness");

@@ -3,6 +3,7 @@ import 'dart:developer' as developer;
 import 'dart:io';
 
 import '../core/harness_file_store.dart';
+import '../core/harness_home.dart';
 import 'log_append.dart';
 
 /// Best-effort append-only diagnostic log split into one file per calendar day
@@ -48,8 +49,9 @@ class DailyLogFile {
   /// Through [HarnessFileStore.defaultDirectoryPath] rather than a second path
   /// helper: one place already knows how to find `~/.harness` on every platform
   /// this ships to, including the Windows fallbacks.
-  static Directory get defaultDirectory =>
-      Directory(HarnessFileStore.defaultDirectoryPath(name: 'logs'));
+  static Directory get defaultDirectory => Directory(
+    HarnessFileStore.defaultDirectoryPath(entry: HarnessEntry.logs),
+  );
 
   /// Directory holding the dated files. Created on demand.
   final Directory directory;
