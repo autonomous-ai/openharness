@@ -1,3 +1,4 @@
+import { closeSessionStorageFixture } from '../testing/sessionStorageFixture.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   chmodSync, fsync, fsyncSync, mkdirSync, mkdtempSync, readFileSync, renameSync,
@@ -20,24 +21,15 @@ vi.mock('node:fs/promises', async original => {
   return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
     const handle = await actual.open(...args), sync = handle.sync.bind(handle)
     handle.sync = () => asyncSync(sync)
-    if (args[0] === file) {
-      const read = handle.readFile.bind(handle)
-      handle.readFile = (async (...readArgs: Parameters<typeof read>) => {
-        const result = await read(...readArgs)
-        const afterRead = reads.afterRegistryRead
-        reads.afterRegistryRead = undefined
-        afterRead?.()
-        return result
-      }) as typeof handle.readFile
-    }
     return handle
   } }
 })
-const fsyncs = () => vi.mocked(fsyncSync).mock.calls.length + vi.mocked(fsync).mock.calls.length + asyncSync.mock.calls.length
+const fsyncs = () => vi.mocked(fsyncSync).mock.calls.length + vi.mocked(fsync).mock.calls.length + asyncSync.mock.calls.length + preparedSyncs
 
 let directory: string
 let file: string
-let registry: typeof Registry
+let registry: typeof Registry, storage: typeof import('./sessionStorage.js')['sessionStorage']
+let preparedSyncs = 0
 const input = {
   agentId: 'observed-agent', engine: 'claude' as const, tmuxPane: '%31', cwd: '/fixture/project',
   processIdentity: { pid: 1031, executable: '/fixture/claude', startMarker: 'fixture-1031' },
@@ -47,7 +39,7 @@ const plan = {
   requestedAt: 1790900000000, state: 'waiting' as const,
 }
 const readRows = () => JSON.parse(readFileSync(file, 'utf8'))
-const clearCounts = () => vi.clearAllMocks()
+const clearCounts = () => { vi.clearAllMocks(); preparedSyncs = 0 }
 const registryWrites = () => vi.mocked(renameSync).mock.calls.filter(([, target]) => target === file).length
 const lockAttempts = () => vi.mocked(mkdirSync).mock.calls.filter(([target]) => target === `${file}.lock`).length
 
@@ -66,6 +58,21 @@ beforeEach(async () => {
   directory = mkdtempSync(join(tmpdir(), 'registry-observation-'))
   file = join(directory, 'registry.json')
   for (const key of ['ADAPTER_DATA_DIR', 'CLAUDE_PROJECTS_DIR', 'CODEX_HOME', 'CURSOR_HOME']) vi.stubEnv(key, directory)
+  storage = (await import('./sessionStorage.js')).sessionStorage
+  const equal = storage.equal.bind(storage), prepare = storage.prepare.bind(storage)
+  vi.spyOn(storage, 'equal').mockImplementation(async proof => {
+    const value = await equal(proof)
+    const afterRead = reads.afterRegistryRead
+    reads.afterRegistryRead = undefined
+    afterRead?.()
+    return value
+  })
+  vi.spyOn(storage, 'prepare').mockImplementation(async (...args) => {
+    const value = await prepare(...args)
+    // The real child acknowledges only after its exact image is flushed; locks/directory sync stay local.
+    preparedSyncs++
+    return value
+  })
   registry = (await import('./registry.js')).registry
   await registry.load()
   expect((await registry.openProcessAgent(input))).not.toBeNull()
@@ -80,7 +87,8 @@ afterEach(async () => {
   vi.mocked(fsync).mockReset()
   asyncSync.mockReset()
   // Failure tests deliberately leave unsafe or corrupt state; settle the final barrier before cleanup.
-  await registry.flush().catch(() => {})
+  try { await registry.flush({ exiting: true }).catch(() => {}) }
+  finally { await closeSessionStorageFixture(storage) }
   vi.useRealTimers()
   vi.unstubAllEnvs()
   vi.restoreAllMocks()

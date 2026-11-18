@@ -1,4 +1,5 @@
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'fs'
+import { closeSessionStorageFixture } from '../testing/sessionStorageFixture.js'
+import { rmSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -18,6 +19,8 @@ vi.mock('fs', async (real) => {
 })
 
 let dataDir = ''
+const stores = new Set<typeof import('./sessionStorage.js')['sessionStorage']>()
+const registries = new Set<typeof import('./registry.js')['registry']>()
 const processIdentity = (pid: number) => ({ pid, executable: 'claude', startMarker: `Mon Aug 10 10:00:${String(pid % 60).padStart(2, '0')} 2026` })
 
 async function loadRegistry() {
@@ -26,7 +29,10 @@ async function loadRegistry() {
   process.env.CLAUDE_PROJECTS_DIR = dataDir
   process.env.CODEX_HOME = dataDir
   process.env.CURSOR_HOME = dataDir
-  return (await import('./registry.js')).registry
+  stores.add((await import('./sessionStorage.js')).sessionStorage)
+  const registry = (await import('./registry.js')).registry
+  registries.add(registry)
+  return registry
 }
 
 describe('a registry no version can load', () => {
@@ -36,7 +42,16 @@ describe('a registry no version can load', () => {
     rename.fails = false
     error = vi.spyOn(console, 'error').mockImplementation(() => {})
   })
-  afterEach(() => { vi.restoreAllMocks() })
+  afterEach(async () => {
+    await Promise.allSettled([...registries].map(registry => registry.flush({ exiting: true })))
+    registries.clear()
+    const closed = await Promise.allSettled([...stores].map(closeSessionStorageFixture))
+    stores.clear(); vi.restoreAllMocks()
+    const failures = closed.filter(result => result.status === 'rejected').map(result => result.reason)
+    if (failures.length) throw new AggregateError(failures, 'quarantine fixture cleanup failed')
+    rmSync(dataDir, { recursive: true, force: true })
+    for (const name of ['ADAPTER_DATA_DIR', 'CLAUDE_PROJECTS_DIR', 'CODEX_HOME', 'CURSOR_HOME']) delete process.env[name]
+  })
 
   it.each([false, 'error'] as const)('does not log malformed Registry content when quarantine fails=%s', async fails => {
     const content = 'secret123'

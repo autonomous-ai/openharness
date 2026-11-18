@@ -1,3 +1,4 @@
+import { closeSessionStorageFixture } from '../testing/sessionStorageFixture.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -22,17 +23,6 @@ vi.mock('node:fs', async original => {
     },
   }
 })
-vi.mock('node:fs/promises', async original => {
-  const actual = await original<typeof import('node:fs/promises')>()
-  return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
-    const handle = await actual.open(...args), sync = handle.sync.bind(handle)
-    handle.sync = async () => {
-      await sync()
-      if (preparation.phase === 'prepare' && String(args[0]).includes('registry.json.') && String(args[0]).endsWith('.tmp')) await preparation.wait?.()
-    }
-    return handle
-  } }
-})
 vi.mock('./bootId.js', async original => ({ ...await original<object>(), currentBootId: () => 'fixture-boot', bootChanged: () => false }))
 const deferred = () => {
   let resolve!: () => void
@@ -40,7 +30,7 @@ const deferred = () => {
   return { promise, resolve }
 }
 let root: string, server: Server | undefined, release: (() => void) | undefined
-let registry: typeof import('./registry.js')['registry'], source: string
+let registry: typeof import('./registry.js')['registry'], storage: typeof import('./sessionStorage.js')['sessionStorage'], source: string
 let started: Awaited<ReturnType<typeof import('../hookServer.js')['startHookServer']>>
 let prompts: string[], registered: ReturnType<typeof vi.fn<() => void>>
 const stopJobs = new Map<string, Promise<void>>()
@@ -52,6 +42,15 @@ beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), 'registry-hook-persistence-'))
   vi.stubEnv('ADAPTER_DATA_DIR', root)
   vi.stubEnv('CLAUDE_PROJECTS_DIR', root)
+  storage = (await import('./sessionStorage.js')).sessionStorage
+  const prepare = storage.prepare.bind(storage)
+  vi.spyOn(storage, 'prepare').mockImplementation(async (...args) => {
+    const prepared = await prepare(...args)
+    try {
+      if (args[0].kind === 'registry' && preparation.phase === 'prepare') await preparation.wait?.()
+      return prepared
+    } catch (error) { await storage.discard(prepared); throw error }
+  })
   ;({ registry } = await import('./registry.js'))
   source = (await registry.openProcessAgent({ engine: 'claude', tmuxPane: '%1', cwd: root,
     processIdentity: { pid: 5101, startMarker: 'fixture-start', executable: '<claude>' } }))!.entry.agentId
@@ -60,7 +59,7 @@ beforeEach(async () => {
   prompts = []; registered = vi.fn(); stopJobs.clear(); limit = grace = undefined
   const actualTimeout = globalThis.setTimeout
   vi.spyOn(globalThis, 'setTimeout').mockImplementation(((callback: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) => {
-    if (ms !== undefined && ms > 4_500 && ms <= 5_000) limit = () => callback(...args)
+    if (ms !== undefined && ms > 4_500 && ms <= 5_000) limit ??= () => callback(...args)
     if (ms === 250) grace = () => callback(...args)
     return actualTimeout(callback, ms, ...args)
   }) as typeof setTimeout)
@@ -73,9 +72,11 @@ beforeEach(async () => {
 afterEach(async () => {
   preparation.wait = undefined
   release?.(); release = undefined
-  if (server) await new Promise<void>(done => server!.close(() => done()))
-  server = undefined
-  await registry.flush().catch(() => {})
+  try {
+    if (server) await new Promise<void>(done => server!.close(() => done()))
+    server = undefined
+    await registry.flush({ exiting: true }).catch(() => {})
+  } finally { await closeSessionStorageFixture(storage) }
   vi.restoreAllMocks(); vi.unstubAllEnvs()
   rmSync(root, { recursive: true, force: true })
 })

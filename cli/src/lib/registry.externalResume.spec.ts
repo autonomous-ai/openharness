@@ -1,4 +1,5 @@
 import { releaseRegistryEngine, removeRegistryAgent } from '../testing/registryFixtures.js'
+import { closeSessionStorageFixture } from '../testing/sessionStorageFixture.js'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -10,6 +11,7 @@ import { stopExternalOwner } from '../core/agents/externalOwner.js'
 vi.mock('./bootId.js', async original => ({ ...await original<object>(), currentBootId: () => 'linux:12345678-1234-1234-1234-123456789012' }))
 
 const instances = new Set<typeof import('./registry.js')['registry']>()
+const stores = new Set<typeof import('./sessionStorage.js')['sessionStorage']>()
 let root: string
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'registry-adoption-'))
@@ -18,13 +20,21 @@ beforeEach(() => {
   writeFileSync(join(root, 'record.jsonl'), '{}\n')
   vi.spyOn(console, 'error').mockImplementation(() => {})
 })
-afterEach(async () => { for (const instance of instances) await instance.flush({ exiting: true }).catch(() => {}); instances.clear(); vi.restoreAllMocks(); vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }) })
+afterEach(async () => {
+  for (const instance of instances) await instance.flush({ exiting: true }).catch(() => {})
+  instances.clear()
+  const closed = await Promise.allSettled([...stores].map(closeSessionStorageFixture))
+  stores.clear(); vi.restoreAllMocks(); vi.unstubAllEnvs()
+  const failures = closed.filter(result => result.status === 'rejected').map(result => result.reason)
+  if (failures.length) throw new AggregateError(failures, 'external resume fixture cleanup failed')
+  rmSync(root, { recursive: true, force: true })
+})
 const intent = (extra: Partial<ExternalResumeIntent> = {}): ExternalResumeIntent => ({
   token: '12345678-1234-1234-1234-123456789012', request: { engine: 'claude', sessionId: 'alias' }, takeOver: null, phase: 'waiting', ...extra,
 })
 const fact = () => ({ engine: 'claude' as const, sessionId: 'canonical', aliases: ['alias', 'other-alias'], cwd: root,
   origin: 'terminal' as const, title: 'Saved conversation', mtime: 1, transcriptPath: join(root, 'record.jsonl') })
-async function load() { vi.resetModules(); const mod = await import('./registry.js'); instances.add(mod.registry); await mod.registry.load(); return mod.registry }
+async function load() { vi.resetModules(); stores.add((await import('./sessionStorage.js')).sessionStorage); const mod = await import('./registry.js'); instances.add(mod.registry); await mod.registry.load(); return mod.registry }
 const disk = (): RegisteredSession[] => JSON.parse(readFileSync(join(root, 'registry.json'), 'utf8'))
 const write = (rows: RegisteredSession[]) => writeFileSync(join(root, 'registry.json'), JSON.stringify(rows), { mode: 0o600 })
 const pending = async (extra: Partial<ExternalResumeIntent> = {}) => {

@@ -1,4 +1,5 @@
 import { releaseRegistryEngine, removeRegistryAgent, removeRegistrySession, unbindRegistrySession } from '../testing/registryFixtures.js'
+import { closeSessionStorageFixture } from '../testing/sessionStorageFixture.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
@@ -10,9 +11,14 @@ import type { ProcessIdentity, RegisteredSession, RegisterInput } from './regist
 
 let dataDir = ''
 const registryInstances = new Set<typeof import('./registry.js')['registry']>()
+const storageInstances = new Set<typeof import('./sessionStorage.js')['sessionStorage']>()
 async function settleRegistries() {
   for (const registry of registryInstances) await registry.flush({ exiting: true }).catch(() => {})
   registryInstances.clear()
+  const closed = await Promise.allSettled([...storageInstances].map(closeSessionStorageFixture))
+  storageInstances.clear()
+  const failures = closed.filter(result => result.status === 'rejected').map(result => result.reason)
+  if (failures.length) throw new AggregateError(failures, 'registry fixture cleanup failed')
 }
 
 const processIdentity = (pid: number) => ({
@@ -67,6 +73,7 @@ async function loadRegistryModule() {
   process.env.CLAUDE_PROJECTS_DIR = dataDir
   process.env.CODEX_HOME = dataDir
   process.env.CURSOR_HOME = dataDir
+  storageInstances.add((await import('./sessionStorage.js')).sessionStorage)
   const loaded = await import('./registry.js')
   registryInstances.add(loaded.registry)
   return loaded
@@ -461,7 +468,7 @@ describe('registry remote display names', () => {
     expect(aside).toHaveLength(1)
     expect(readFileSync(join(dataDir, aside[0]), 'utf8')).toBe(bytes)
     expect(statSync(join(dataDir, aside[0])).mode & 0o777).toBe(0o600)
-    expect(error).toHaveBeenCalledWith(expect.stringMatching(/^\[registry\] registry .*; moved it aside to .*registry\.json\.corrupt-.* and started empty$/))
+    expect(error).toHaveBeenCalledWith(expect.stringMatching(/^\[registry\] registry .*; moved it aside and started empty$/))
     ;(await registry.openProcessAgent({
       agentId: 'after-the-move',
       engine: 'claude',
@@ -2195,6 +2202,16 @@ describe('registry across a reboot and pane loss', () => {
     model: 'gpt-5',
   }
 
+  async function expectGridLaunch(row: RegisteredSession) {
+    expect(row.gridLaunch != null).toBe(true)
+    expect(Object.hasOwn(row.gridLaunch!, 'apiKey')).toBe(false)
+    expect(row.gridLaunch!.credential.row).toEqual({ agentId: row.agentId, registeredAt: row.registeredAt })
+    const storage = (await import('./sessionStorage.js')).sessionStorage
+    const resolved = await storage.resolveSelected(row.gridLaunch!)
+    expect(Object.keys(resolved).sort()).toEqual(Object.keys(GRID_LAUNCH).sort())
+    expect(Object.entries(GRID_LAUNCH).every(([name, value]) => resolved[name as keyof typeof resolved] === value)).toBe(true)
+  }
+
   it('carries the grid — launch, key and observed assignment — through the first hook bind', async () => {
     // The first SessionStart hook rebuilds the row. Before this, it rebuilt it without `grid`, so the
     // agent was announced as "on no grid" until the next scan re-read the process; and without
@@ -2211,7 +2228,7 @@ describe('registry across a reboot and pane loss', () => {
       grid: { baseUrl: GRID_LAUNCH.baseUrl, model: 'gpt-5' },
       gridLaunchRecord: { override: GRID_LAUNCH, webSearch: 'on' },
     }))!
-    expect(pending.gridLaunch).toEqual(GRID_LAUNCH)
+    await expectGridLaunch(pending)
     expect(pending.gridWebSearch).toBe('on')
     expect(pending.launch).toEqual({ state: 'starting' })
 
@@ -2219,17 +2236,17 @@ describe('registry across a reboot and pane loss', () => {
     expect(bound?.entry.agentId).toBe(pending.agentId)
     expect(bound?.entry).toMatchObject({
       grid: { baseUrl: GRID_LAUNCH.baseUrl, model: 'gpt-5' },
-      gridLaunch: GRID_LAUNCH,
       gridWebSearch: 'on',
       gateway: null,
     })
+    await expectGridLaunch(bound!.entry)
     // The hook is the engine reporting in: the launch is over and the frame reads ready.
     expect(bound?.entry.launch).toBeUndefined()
 
     // Moved back to the engine's own login: the launch is gone, and a bind keeps it gone.
-    expect(registry.setGridLaunch(pending.agentId, null)).toBe(true)
+    expect(await registry.setGridLaunch(pending.agentId, null)).toBe(true)
     expect((await registry.register({ sessionId: 'session-g', transcriptPath, tmuxPane: '%9', cwd: '/tmp/demo' }))?.entry.gridLaunch).toBeNull()
-    expect(registry.setGridLaunch('nobody', null)).toBe(false)
+    expect(await registry.setGridLaunch('nobody', null)).toBe(false)
   })
 
   it('keeps the remembered subscription model across a reload', async () => {
@@ -2494,8 +2511,9 @@ describe('registry across a reboot and pane loss', () => {
     const { registry } = await loadRegistryModule()
     await registry.load()
     expect(registry.rebootedSinceLastRun).toBe(true)
-    // Kept verbatim: this is what restore relaunches the pane with.
-    expect(registry.byAgent('agent-a')).toMatchObject({ processIdentity: null, gridLaunch: GRID_LAUNCH })
+    // The selected launch resolves exactly the durable legacy override, including after reboot.
+    expect(registry.byAgent('agent-a')?.processIdentity).toBeNull()
+    await expectGridLaunch(registry.byAgent('agent-a')!)
     // A half-remembered launch is worse than none — it would look like a grid launch and fail like one.
     expect(registry.byAgent('agent-b')?.gridLaunch).toBeNull()
     // A row from before the field existed stays distinguishable from "vendor login".

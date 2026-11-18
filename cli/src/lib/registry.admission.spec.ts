@@ -4,6 +4,7 @@ import type { HookServerHandlers } from '../hookServer.js'
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { closeSessionStorageFixture } from '../testing/sessionStorageFixture.js'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { noOtherStreams } from '../testing/otherStreams.js'
 
@@ -44,7 +45,7 @@ function observeNativeProof(): void { vi.doMock('../engines/transcriptBindings.j
 const A = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', B = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb'
 let server: Server | undefined
 let root: string, home: string, file: string, transcript: string
-let registry: typeof import('./registry.js')['registry'], target: string, source: string
+let registry: typeof import('./registry.js')['registry'], storage: typeof import('./sessionStorage.js')['sessionStorage'], target: string, source: string
 const header = (id = A, delegated = false) => JSON.stringify({ type: 'session_meta', payload: {
   id, cwd: root, source: delegated ? { subagent: { thread_spawn: { parent_thread_id: B, depth: 1 } } } : 'cli',
 } }) + '\n'
@@ -67,7 +68,7 @@ beforeEach(async () => {
     AGY_HOME: join(root, 'agy'), COPILOT_HOME: join(root, 'copilot') })) vi.stubEnv(key, value)
   writeFileSync(join(root, 'data', 'engine-homes.json'), '{}')
   transcript = join(home, 'sessions', `rollout-${A}.jsonl`); writeFileSync(transcript, header())
-  vi.resetModules(); observeNativeProof(); ({ registry } = await import('./registry.js'))
+  vi.resetModules(); observeNativeProof(); storage = (await import('./sessionStorage.js')).sessionStorage; ({ registry } = await import('./registry.js'))
   target = (await registry.openProcessAgent({ engine: 'terminal', tmuxPane: '%1', cwd: root,
     processIdentity: { pid: 4101, startMarker: 'fixture-start', executable: '<shell>' } }))!.entry.agentId
   source = (await registry.openProcessAgent({ engine: 'codex', tmuxPane: '%2', cwd: root, processIdentity: input(A, transcript, '%2').processIdentity }))!.entry.agentId
@@ -77,7 +78,8 @@ afterEach(async () => {
   if (server) await new Promise<void>(resolve => server!.close(() => resolve()))
   server = undefined
   fault.rename = false; fault.directorySync = false; fault.renamed = false; fault.afterProof = undefined; fault.beforeVerify = undefined
-  await registry.flush().catch(() => {})
+  try { await registry.flush({ exiting: true }).catch(() => {}) }
+  finally { await closeSessionStorageFixture(storage) }
   vi.restoreAllMocks(); vi.doUnmock('../engines/transcriptBindings.js'); vi.unstubAllEnvs(); vi.resetModules(); rmSync(root, { recursive: true, force: true })
 })
 

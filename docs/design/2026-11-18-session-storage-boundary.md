@@ -911,3 +911,55 @@ core-grid-storage-absent-grid-green1-20261118.log (27 passed/3 files, actual 0, 
 absent); the reboot caller's reference-aware fixture is in the separate fixture
 checkpoint. registry-fixture-types1 passes on all current runtime and fixture bytes.
 No storage image schema, rollback floor or credential resolution policy changes.
+
+## Registry fixture composition after custody extraction (18 November)
+
+The root's b842 wider source packet timed out at 300 seconds (actual 143), with 18
+named failures and incomplete hook cases. It remains a failed packet. Two real
+post-rename classification faults, the safe malformed-JSON category and absent Grid
+field behavior were fixed in separate runtime commits above, not reclassified as
+fixture failures. The isolated remaining 16-failure packet is
+core-grid-storage-wider-registry-focused-red1-20261118.log. It prints Grid comparison
+results only as booleans so a failure does not dump keys or private references.
+
+Fixture-only changes preserve the caller assertions:
+
+- Observation revokes authority after the real storage equality read returns, replacing
+  its obsolete parent raw-read interception. Its three-flush assertion now includes the
+  real child's completed prepared-image acknowledgment alongside actual parent lock and
+  directory sync calls; no fake prepared bytes or reduced durability count.
+- Directory/hook holds pause the real prepared image before final parent publication,
+  and discard it on an injected wrapper failure. Parent directory-fsync holds remain.
+  The hook timer fixture retains its first Registry deadline, not a later storage RPC
+  timer; grace, pending reply, cancellation, Stop and late-settlement assertions remain.
+- Create's fixture composes createAgentPane in the same module generation as Registry,
+  and follows reviewed upstream c50947ccd7: one refused pane is closed and the caller
+  receives PERSISTENCE_UNCONFIRMED, without a retry. Product Create code is unchanged.
+- Grid hooks/reboot verify opaque exact row references, no retained apiKey, and real
+  selected resolution with the complete expected field set and values. Legacy disk
+  bytes, malformed-null and historical-absence assertions remain. Async setGridLaunch
+  is awaited. Quarantine still proves exact moved bytes and private mode; its log
+  expectation follows the existing fixed message without a path.
+- Every loaded module generation's storage singleton is owned through close. A shared
+  test helper awaits storage close and the owned child's actual close event, then checks
+  its PID absent. Multi-generation fixtures attempt all stores with allSettled before
+  reporting cleanup errors; directories are removed only after successful custody.
+  Binding/admission/fingerprint/quarantine get the same teardown even when their prior
+  assertions passed. No production API or test bypass is introduced.
+
+Complete affected-file results, all maxWorkers=1/cache=false with 150-second outer
+bounds, actual exit 0 and owned group absence (no forced group kill needed):
+
+| Packet under /tmp | Result |
+| --- | --- |
+| core-grid-storage-registry-fixture-gate1-20261118.log | 94 tests/5 files, 53.06s: directory durability, observation, persistence, external resume, hook persistence |
+| core-grid-storage-registry-fixture-gate2-20261118.log | 91 tests/4 files, 84.73s: admission, binding, fingerprint, quarantine |
+| core-grid-storage-registry-fixture-main1-20261118.log | 148 tests/1 file, 102.54s: complete Registry caller suite |
+| core-grid-storage-registry-fixture-grid-final-20261118.log | 2 selected Grid cases after adding exact resolved-field-set assertion, actual 0 |
+| core-grid-storage-registry-fixture-types1-20261118.log | TypeScript pass on all runtime/fixture changes before that final assertion-only addition |
+
+The first attempted corrected caller packet, wider-registry-focused-green1, retains
+25 passes and the one historical-absence failure that exposed the runtime bug; it is
+not called a passing gate. The complete 333-case results above and the focused final
+Grid assertion pass supersede that failed selection. They do not replace final
+combined core/harnessd/resume/storage coverage, native admission or matched cost gates.

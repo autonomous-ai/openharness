@@ -6,7 +6,6 @@ import { join } from 'node:path'
 import type { SessionStorage } from './sessionStorage.js'
 import type { ChildProcess } from 'node:child_process'
 import type { RegisteredSession, registry as Registry } from './registry.js'
-import { createAndRegisterPane } from './createAgentPane.js'
 
 const io = vi.hoisted(() => ({
   file: '', renamed: false, publications: 0, syncs: 0, fail: 0,
@@ -32,17 +31,6 @@ vi.mock('node:fs', async original => {
       })
     },
   }
-})
-vi.mock('node:fs/promises', async original => {
-  const actual = await original<typeof import('node:fs/promises')>()
-  return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
-    const handle = await actual.open(...args), sync = handle.sync.bind(handle)
-    handle.sync = async () => {
-      await sync()
-      if (String(args[0]).includes('registry.json.') && String(args[0]).endsWith('.tmp')) await io.preparing?.()
-    }
-    return handle
-  } }
 })
 vi.mock('./bootId.js', async original => ({ ...await original<object>(), currentBootId: () => 'fixture-boot', bootChanged: () => false }))
 
@@ -86,6 +74,14 @@ beforeEach(async () => {
   })) vi.stubEnv(key, value)
   writeFileSync(join(root, 'data', 'engine-homes.json'), '{}', { mode: 0o600 })
   storage = (await import('./sessionStorage.js')).sessionStorage
+  const prepare = storage.prepare.bind(storage)
+  vi.spyOn(storage, 'prepare').mockImplementation(async (...args) => {
+    const prepared = await prepare(...args)
+    try {
+      if (args[0].kind === 'registry') await io.preparing?.()
+      return prepared
+    } catch (error) { await storage.discard(prepared); throw error }
+  })
   registry = (await import('./registry.js')).registry
   await registry.load()
   for (const [index, agentId] of [A, B].entries()) {
@@ -189,21 +185,21 @@ it.skipIf(process.platform === 'win32')('rebases newer observations, nested edit
   expect(written()).not.toHaveProperty('bypassPermission')
 })
 
-it.skipIf(process.platform === 'win32')('propagates uncertain pending Create without killing its pane or spawning a retry', async () => {
+it.skipIf(process.platform === 'win32')('closes one uncertain pending Create pane and reports the refusal without a retry', async () => {
+  const { createAndRegisterPane } = await import('./createAgentPane.js')
   const held = hold(), create = vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const,
-    runtime: { backend: 'tmux' as const, paneId: '%7' } })), kill = vi.fn()
+    runtime: { backend: 'tmux' as const, paneId: '%7' } })), kill = vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const }))
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
   const first = track(createAndRegisterPane({ registry, tmuxBackend: { create, kill }, engine: 'claude',
     agentId: 'new-pending', cwd: root, sessionLabel: 'fixture', argv: ['fixture-engine'] })).catch(error => error)
   await held.entered(first)
   await vi.advanceTimersByTimeAsync(5_000)
-  expect((await first).constructor.name).toBe('AtomicWriteUnconfirmed')
-  expect(await first).toMatchObject({ retryable: false })
-  expect(create).toHaveBeenCalledOnce(); expect(kill).not.toHaveBeenCalled()
+  expect(await first).toMatchObject({ ok: false, error: 'PERSISTENCE_UNCONFIRMED' })
+  expect(create).toHaveBeenCalledOnce(); expect(kill).toHaveBeenCalledExactlyOnceWith({ backend: 'tmux', paneId: '%7' })
   held.release(); vi.useRealTimers()
   await registry.flush()
   expect(registry.byAgent('new-pending')).toBeUndefined()
-  expect(create).toHaveBeenCalledOnce(); expect(kill).not.toHaveBeenCalled()
+  expect(create).toHaveBeenCalledOnce(); expect(kill).toHaveBeenCalledOnce()
 })
 
 it.skipIf(process.platform === 'win32')('propagates uncertain pending Resume instead of returning a proven refusal', async () => {

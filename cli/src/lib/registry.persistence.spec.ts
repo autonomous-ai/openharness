@@ -1,4 +1,5 @@
 import { removeRegistryAgent } from '../testing/registryFixtures.js'
+import { closeSessionStorageFixture } from '../testing/sessionStorageFixture.js'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { fork, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
@@ -31,7 +32,7 @@ vi.mock('node:fs/promises', async original => {
 })
 
 let directory: string
-let registry: typeof Registry
+let registry: typeof Registry, storage: typeof import('./sessionStorage.js')['sessionStorage']
 let holder: ChildProcess | undefined
 let exitFlush: Promise<void> | undefined
 const input = { agentId: 'persisted-agent', engine: 'claude' as const, tmuxPane: '%1',
@@ -45,6 +46,7 @@ beforeEach(async () => {
   exitFlush = undefined
   directory = mkdtempSync(join(tmpdir(), 'registry-persistence-'))
   for (const key of ['ADAPTER_DATA_DIR', 'CLAUDE_PROJECTS_DIR', 'CODEX_HOME', 'CURSOR_HOME']) vi.stubEnv(key, directory)
+  storage = (await import('./sessionStorage.js')).sessionStorage
   registry = (await import('./registry.js')).registry
   await registry.load()
   ;(await registry.openProcessAgent(input))
@@ -59,7 +61,8 @@ afterEach(async () => {
   try {
     if (holder) await stopHolder(holder)
     holder = undefined
-    await bounded(Promise.resolve(exitFlush ?? registry?.flush()), 10_000, 'registry teardown flush')
+    try { await bounded(Promise.resolve(exitFlush ?? registry?.flush()), 10_000, 'registry teardown flush') }
+    finally { await closeSessionStorageFixture(storage) }
     settled = true
   } finally {
     vi.unstubAllEnvs()

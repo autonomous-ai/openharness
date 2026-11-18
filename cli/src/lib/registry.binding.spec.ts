@@ -1,3 +1,4 @@
+import { closeSessionStorageFixture } from '../testing/sessionStorageFixture.js'
 import { unbindRegistrySession } from '../testing/registryFixtures.js'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -10,6 +11,14 @@ vi.mock('./processLiveness.js', async original => ({ ...await original<object>()
   processLockIdentity: () => ({ startMarker: 'fixture-start', generationMarker: 'fixture-generation' }), lockOwnerAlive: () => true,
 }))
 let root: string, home: string, file: string, registry: typeof import('./registry.js')['registry']
+const stores = new Set<typeof import('./sessionStorage.js')['sessionStorage']>()
+const registries = new Set<typeof import('./registry.js')['registry']>()
+async function loadRegistry() {
+  vi.resetModules()
+  stores.add((await import('./sessionStorage.js')).sessionStorage)
+  ;({ registry } = await import('./registry.js'))
+  registries.add(registry)
+}
 const ids = ['aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb']
 const header = (id: string) => JSON.stringify({ type: 'session_meta', payload: { id, cwd: root, source: 'cli' } }) + '\n'
 const transcript = (index: number) => join(home, 'sessions', `rollout-${ids[index]}.jsonl`)
@@ -24,11 +33,20 @@ beforeEach(async () => {
       projectDir: 'fixture', cwd: root, processIdentity: null, registeredAt: 1, updatedAt: 1, lastHookAt: 1, lastTranscriptAt: 1 }
   })
   writeFileSync(file, JSON.stringify(rows), { mode: 0o600 })
-  vi.resetModules(); ({ registry } = await import('./registry.js'))
+  await loadRegistry()
   await registry.load()
   await registry.flush()
 })
-afterEach(async () => { await registry.flush().catch(() => {}); vi.restoreAllMocks(); vi.doUnmock('../engines/transcriptBindings.js'); vi.unstubAllEnvs(); vi.resetModules(); rmSync(root, { recursive: true, force: true }) })
+afterEach(async () => {
+  await Promise.allSettled([...registries].map(current => current.flush({ exiting: true })))
+  registries.clear()
+  const closed = await Promise.allSettled([...stores].map(closeSessionStorageFixture))
+  stores.clear()
+  vi.restoreAllMocks(); vi.doUnmock('../engines/transcriptBindings.js'); vi.unstubAllEnvs(); vi.resetModules()
+  const failures = closed.filter(result => result.status === 'rejected').map(result => result.reason)
+  if (failures.length) throw new AggregateError(failures, 'binding fixture cleanup failed')
+  rmSync(root, { recursive: true, force: true })
+})
 
 it.each(['', '{', 'wrong-id'])('holds a saved unreadable identity (%s), preserves its bytes, and retries without restarting', async text => {
   const before = readFileSync(file, 'utf8')
@@ -64,7 +82,7 @@ it('restores every affected staged row when the shared root changes after file v
       } }
     } }
   })
-  vi.resetModules(); ({ registry } = await import('./registry.js')); await registry.load()
+  await loadRegistry(); await registry.load()
   for (const [index, id] of ids.entries()) expect(registry.byAgent(`fixture-${index}`)).toMatchObject({ sessionId: id,
     transcriptPath: transcript(index), identityHold: expect.stringContaining('changed') })
   expect(readFileSync(file, 'utf8')).toBe(before)
@@ -80,7 +98,7 @@ it('rechecks a leaf changed after its private initialization commitment before g
       return proof
     } }
   })
-  vi.resetModules(); ({ registry } = await import('./registry.js')); await registry.load()
+  await loadRegistry(); await registry.load()
   expect(registry.byAgent('fixture-0')).toMatchObject({ sessionId: ids[0], transcriptPath: transcript(0) })
   await expect(registry.revalidateBinding('fixture-0')).rejects.toThrow('different conversation')
   expect(registry.byAgent('fixture-1')).not.toHaveProperty('identityHold')
@@ -162,7 +180,7 @@ it('rechecks native evidence while holding the registry write lock and publishes
       } }
     } }
   })
-  vi.resetModules(); ({ registry } = await import('./registry.js')); await registry.load()
+  await loadRegistry(); await registry.load()
   registry.setIdentityHold('fixture-0', 'waiting')
   const before = readFileSync(file, 'utf8')
   retry = true

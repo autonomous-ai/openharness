@@ -1,3 +1,4 @@
+import { closeSessionStorageFixture } from '../testing/sessionStorageFixture.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fsync, fsyncSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
@@ -16,6 +17,7 @@ let directory: string
 let file: string
 let registry: typeof Registry
 const loaded: Array<typeof Registry> = []
+const stores = new Set<typeof import('./sessionStorage.js')['sessionStorage']>()
 const input = {
   agentId: 'observed-agent', engine: 'claude' as const, tmuxPane: '%31', cwd: '/fixture/project',
   processIdentity: { pid: 1031, executable: '/fixture/claude', startMarker: 'fixture-1031' },
@@ -47,6 +49,7 @@ async function observe(on: typeof Registry = registry, identity: Row = { ...inpu
 
 async function freshRegistry(): Promise<typeof Registry> {
   vi.resetModules()
+  stores.add((await import('./sessionStorage.js')).sessionStorage)
   const next = (await import('./registry.js')).registry
   await next.load()
   loaded.push(next)
@@ -62,6 +65,7 @@ beforeEach(async () => {
   directory = mkdtempSync(join(tmpdir(), 'registry-fingerprint-'))
   file = join(directory, 'registry.json')
   for (const key of ['ADAPTER_DATA_DIR', 'CLAUDE_PROJECTS_DIR', 'CODEX_HOME', 'CURSOR_HOME']) vi.stubEnv(key, directory)
+  stores.add((await import('./sessionStorage.js')).sessionStorage)
   registry = (await import('./registry.js')).registry
   await registry.load()
   loaded.push(registry)
@@ -72,6 +76,10 @@ beforeEach(async () => {
 
 afterEach(async () => {
   const writes = await Promise.allSettled(loaded.map(current => current.flush({ exiting: true })))
+  const closed = await Promise.allSettled([...stores].map(closeSessionStorageFixture))
+  stores.clear()
+  const failures = closed.filter(result => result.status === 'rejected').map(result => result.reason)
+  if (failures.length) throw new AggregateError(failures, 'fingerprint fixture cleanup failed')
   vi.mocked(fsyncSync).mockReset()
   vi.mocked(fsync).mockReset()
   vi.useRealTimers()
