@@ -134,11 +134,13 @@ describe.skipIf(process.platform !== 'darwin')('the dial and the terminal apps f
   })
 
   it('a tty of no agent does not', async () => {
-    const { d, dial, run } = await fresh()
+    const { d, dial, a, run } = await fresh()
     const since = dial.messages.length
     run.tab(NO_AGENT_TTY)
     await said(d, '[device] tab · skipped · unknown agent')
-    expect(dial.messages.slice(since).filter((m) => m.t === 'focus')).toEqual([])
+    // The dial landed on A as it was listed, and each push re-asserts A, here or late from the list `fresh` waited on: a
+    // move would name another agent.
+    expect(dial.messages.slice(since).filter((m) => m.t === 'focus' && m.agentId !== a.id)).toEqual([])
   })
 
   it('a swipe that rests on an agent prints one select line after at least 395 ms, and the report that echoes it does not move the dial', async () => {

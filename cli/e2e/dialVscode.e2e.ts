@@ -13,7 +13,8 @@
  * loop finds the daemon through a launcher in the throwaway home alone, never this computer's own daemon or `harness`.
  *
  * The match follows the window's report and a `ps` read, and nothing says when it is done: the dial turns to the agent
- * again every 2 s until the window shows it. Every later wait is a frame or a line, never a fixed time.
+ * again every 2 s until the window shows it (`FakeDial.turnUntil`), which also outlasts the 750 ms after the dial's landing
+ * on A and each re-assert of it, when a turn is dropped. Every later wait is a frame or a line, never a fixed time.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
@@ -198,20 +199,6 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
       || line.includes('fullscreen'))
   }
 
-  /** [dial] turns to [agent], again every 2 s until [probe] gives a value; that value. */
-  const turned = <T>(dial: FakeDial, agent: Outside, what: string, probe: () => T | undefined): Promise<T> => {
-    let sent = 0
-    return until(what, () => {
-      const got = probe()
-      if (got !== undefined) return got
-      if (Date.now() - sent >= 2_000) {
-        dial.send({ t: 'focus', agentId: agent.id })
-        sent = Date.now()
-      }
-      return undefined
-    }, 60_000, 50)
-  }
-
   /** The `apps` frame after [since] that shows [app]'s ring. */
   const ring = (dial: FakeDial, app: string, since: number): Promise<DialMessage> =>
     dial.next((m) => m.t === 'apps' && m.shown === app, 45_000, `${app}'s ring`, since)
@@ -256,7 +243,7 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
     // 2. Swipe: with VS Code in front, a rest on A shows A's terminal, and raises no window.
     const front = watch(d)
     front(VSCODE)
-    await turned(dial, a, "A's terminal shown", () => window.shows[0])
+    await dial.turnUntil(a.id, "A's terminal shown", () => window.shows[0])
     expect(window.shows).toEqual([a.shellPid])
     expect(window.raised).toEqual([])
     await said(d, '[device] swipe · ok')
@@ -334,7 +321,7 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
     clients.push(harness)
     const front = watch(d)
     front(VSCODE)
-    await turned(dial, a, "A's terminal shown", () => window.shows[0])
+    await dial.turnUntil(a.id, "A's terminal shown", () => window.shows[0])
     const shown = [...window.shows]
 
     // A stroke toward older lines: each move's 8 is 20 px, one line of 16 (scrollLines.ts) and the rest kept; the up lifts
