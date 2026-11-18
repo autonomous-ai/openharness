@@ -5408,13 +5408,18 @@ describe('the app filter', () => {
       listSwarms: vi.spyOn(host, 'listSwarms'), capsOf: vi.spyOn(host, 'capsOf'), hostOf: vi.spyOn(host, 'hostOf'),
       appOf: vi.spyOn(host, 'appOf'), markSeen: vi.spyOn(host, 'markSeen'), appFocus: vi.spyOn(host, 'appFocus'),
     }
-    const c = await greeted(host, appFilter)
-    c.port.say({ t: 'focus', agentId: 'g1' })
-    c.port.say({ t: 'agent.open', agentId: 'g1' })
-    c.port.say({ t: 'turn.stop', agentId: 'g1' })
-    await vi.waitFor(() => expect(c.port.types()).toContain('toast'))
-    await settle()
-    return { ...c, state, spies }
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    try {
+      const c = await greeted(host, appFilter)
+      // Past the 750 ms after a landing on g1, so the turn to g1 is a hand's and not taken as the landing's echo.
+      vi.advanceTimersByTime(751)
+      c.port.say({ t: 'focus', agentId: 'g1' })
+      c.port.say({ t: 'agent.open', agentId: 'g1' })
+      c.port.say({ t: 'turn.stop', agentId: 'g1' })
+      await vi.waitFor(() => expect(c.port.types()).toContain('toast'))
+      await settle()
+      return { ...c, state, spies }
+    } finally { vi.useRealTimers() }
   }
   const askedAs = (spies: Record<string, { mock: { calls: unknown[][] } }>, apps: boolean) => {
     for (const [name, spy] of Object.entries(spies)) {
@@ -5591,10 +5596,13 @@ describe('the app filter', () => {
   })
 
   it("a window focus off the ring of a dial on an app's ring does not move it", async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
     const { host, state } = appHost()
     state.window = state.appView = true
     const { session, port } = await greeted(host)
     try {
+      // Past the 750 ms after the landing on g1, in which the dial's report of another agent is dropped.
+      vi.advanceTimersByTime(751)
       port.say({ t: 'focus', agentId: 'g2' })   // a hand put the dial on g2
       await vi.waitFor(() => expect(host.markSeen).toHaveBeenCalled())
       port.sent.length = 0
@@ -5606,7 +5614,7 @@ describe('the app filter', () => {
       expect(focuses(port)).toEqual([])
       await session.followLocal('g3', 'prompt')
       expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'g3' }])
-    } finally { await session.stop() }
+    } finally { await session.stop(); vi.useRealTimers() }
   })
 
   it('a window focus on that ring moves the dial', async () => {
@@ -5627,7 +5635,8 @@ describe('the app filter', () => {
     const { session, port } = await greeted(host)
     try {
       await settle()
-      expect(focuses(port)).toEqual([])
+      // Landed on its ring's first agent, never the window's.
+      expect(focuses(port)).toEqual([{ t: 'focus', agentId: 'g1' }])
     } finally { await session.stop() }
   })
 
@@ -5729,6 +5738,8 @@ describe('the app filter', () => {
     // Faked after the greeting, as `resting` does: vi.waitFor is not used while a rest is pending.
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
     try {
+      // Past the 750 ms after the landing on g1, in which the dial's report of another agent is dropped.
+      await vi.advanceTimersByTimeAsync(751)
       port.say({ t: 'focus', agentId: 'g2' })
       await vi.advanceTimersByTimeAsync(SWIPE_REST_MS)
       expect(swipeEnded.mock.calls).toEqual([['g2', 'rest']])
@@ -5742,7 +5753,8 @@ describe('the app filter', () => {
       port.say({ t: 'focus', agentId: 'g2' })
       await vi.advanceTimersByTimeAsync(SWIPE_REST_MS)
       expect(swipeEnded).toHaveBeenCalledTimes(1)
-      expect(dialShows.mock.calls.map(([, agent]) => agent)).toEqual([{ name: 'g2', app: 'Ghostty' }])
+      // The landing's g1, then the hand's g2: the reorder and its echo told the host no other agent.
+      expect(dialShows.mock.calls.map(([, agent]) => agent)).toEqual([{ name: 'g1', app: 'Ghostty' }, { name: 'g2', app: 'Ghostty' }])
     } finally { vi.useRealTimers(); await session.stop() }
   })
 })
@@ -6187,16 +6199,20 @@ describe('what the dial cannot do for an agent', () => {
       sendTurn: vi.fn(), stopTurn: vi.fn(), answer: vi.fn(), recent: () => [], recentAsks: () => [], log: vi.fn(),
     })
     host.setRegistry(new HostRegistry([host.harness]))
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
     const { session, port } = await connect(host)
     try {
       port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
       await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'agents.end', total: 1, tab: '', view: 'machine' }))
+      // Landed on h1. A turn to it within the next 750 ms would be taken as the landing's echo, not a hand's.
+      await vi.waitFor(() => expect(port.sent).toContainEqual({ t: 'focus', agentId: 'h1' }))
+      vi.advanceTimersByTime(751)
       host.harness.noteCard('h1', 'done')
       expect(host.harness.list()[0]).toMatchObject({ state: 'done', unseenDone: true })
       port.say({ t: 'focus', agentId: 'h1' })
       await vi.waitFor(() => expect(host.harness.list()[0]).toMatchObject({ state: 'done', unseenDone: false }))
       expect(toasts(port)).toEqual([])
-    } finally { await session.stop() }
+    } finally { await session.stop(); vi.useRealTimers() }
   })
 
   /** a1 and a3 have a pane a rest shows; a2 has none. The clock is faked after the greeting, so it holds only what a turn
@@ -6623,7 +6639,8 @@ describe('the agent the dial shows (docs/specs/2026-11-16-orca-device-plugin.md)
     const { session, port, told } = await greeted(appHost({ openAgent: vi.fn() }).host, { appFilter: 'v1' })
     try {
       port.say({ t: 'agent.open', agentId: 'v1' })
-      await vi.waitFor(() => expect(told()).toEqual([{ name: 'v1', app: 'VS Code' }]))
+      // The landing's g1; none while the tap's record names v1 before VS Code's ring is pushed; then v1.
+      await vi.waitFor(() => expect(told()).toEqual([{ name: 'g1', app: 'Ghostty' }, null, { name: 'v1', app: 'VS Code' }]))
     } finally { await session.stop() }
   })
 

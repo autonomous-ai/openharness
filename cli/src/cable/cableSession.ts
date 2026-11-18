@@ -1515,6 +1515,9 @@ export class CableSession {
       case 'pong':
         return
       case 'agents.list':
+        // A dial asks for the list only when it holds none (its 15 s silence rule empties it while the port stays
+        // open), so the answer is a push after an empty list. The record stays: one in the ring is re-asserted.
+        this.lastRing = []
         await this.pushAgents()
         return
       case 'agents.refresh':
@@ -2788,16 +2791,18 @@ export class CableSession {
     // A port that closed under the push holds no ring: kept, it would show the host an agent after the close said none,
     // and the re-assert and the restores below would read it.
     if (!await this.send({ t: 'agents.end', total, tab, ...(view ? { view } : {}) })) return
+    // Read before the ring takes this push's agents: whether the dial held none until this list.
+    const heldNone = this.lastRing.length === 0
     this.lastRing = agents.map(({ id, name, host }) => ({ id, name, host }))
     // A rename, or the shown agent leaving the ring, reaches the host with no move of the dial.
     this.reportShown()
 
     // The list just changed shape under the dial, so say again which agent both screens are on.
     //
-    // This is the ONLY thing the daemon re-asserts, and it is the current record rather than a second
-    // memory of it — see desiredFocus. A re-anchor after a push is silent by design (the dial reports
-    // nothing it did not do itself), so without this a dial that landed on the wrong tile would sit there
-    // with nobody to notice.
+    // The record is the only thing the daemon sends here, and it is the current record rather than a
+    // second memory of it — see desiredFocus. A re-anchor after a push is silent by design (the dial
+    // reports nothing it did not do itself), so without this a dial that landed on the wrong tile would
+    // sit there with nobody to notice. A dial that holds no agent has the record written first (below).
     //
     // Only for an agent the list just sent. The record can name one on another tab — the window focused
     // it there, then switched — and a focus the dial cannot land is a frame it holds for five seconds and
@@ -2806,6 +2811,18 @@ export class CableSession {
       this.expectedAppFocusEcho = this.desiredFocus
       this.expectedAppFocusEchoUntil = Date.now() + APP_FOCUS_SETTLE_MS
       await this.focusAgent(this.desiredFocus)
+    } else if (view === 'machine' && heldNone && agents.length > 0 && !this.appFocusUnsent) {
+      // A machine list that follows none (an attach, an emptied list, the dial's own agents.list) leaves the dial
+      // on no agent: the firmware adds a list's agents before it removes the old ones, so only a ring that replaces
+      // none leaves its face empty, and it lands a face only on a pick of another app, a focus or a swipe. Seen as
+      // "Choose a pane" on a ChatGPT dial after a reattach, with its app picked and nothing to land it
+      // (docs/plans/2026-11-18-dial-chatgpt-pick-and-voice-design.md). Its first agent goes on the face, as a picked
+      // app's does. Not while a follow is in flight: it wrote its record before this push and sends its own focus
+      // after it, and a landing first would step the dial through the first agent. A window's tab never lands: the
+      // window says where the dial goes.
+      this.expectedAppFocusEcho = agents[0].id
+      this.expectedAppFocusEchoUntil = Date.now() + APP_FOCUS_SETTLE_MS
+      await this.focusAgent(agents[0].id)
     }
 
     // A tile that has just appeared has no history on the dial. The usual case is a remote machine: its
