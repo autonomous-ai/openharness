@@ -119,6 +119,7 @@ const RUNTIME_HOMES=[
   {name:'a legacy Linux home',system:'Linux',make:['.harness'],runtime:'.harness/runtime'},
   {name:'a moved Linux home',system:'Linux',make:['.harness','.local/share/harness'],runtime:'.local/state/harness/runtime'},
   {name:'XDG bases set',system:'Linux',env:home=>({XDG_DATA_HOME:join(home,'d'),XDG_STATE_HOME:join(home,'s')}),make:['.harness','d/harness'],runtime:'s/harness/runtime'},
+  {name:'XDG bases with a trailing slash',system:'Linux',env:home=>({XDG_DATA_HOME:join(home,'d')+'/',XDG_STATE_HOME:join(home,'s')+'/'}),make:['.harness','d/harness'],runtime:'s/harness/runtime'},
   {name:'macOS',system:'Darwin',make:['.local/share/harness'],runtime:'.harness/runtime'},
 ];
 /** A home for `c`, with `grid(runtime)` recording there a grid that prints its own path; PATH holds only what the shell texts call. */

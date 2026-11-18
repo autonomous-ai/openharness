@@ -68,6 +68,8 @@ test('node.sh finds current-node by the rule', async t => {
     { name: 'a moved Linux home', system: 'Linux', make: ['.harness', '.local/share/harness'], runtime: '.local/state/harness/runtime' },
     { name: 'XDG bases set', system: 'Linux', env: home => ({ XDG_DATA_HOME: join(home, 'd'), XDG_STATE_HOME: join(home, 's') }),
       make: ['.harness', 'd/harness'], runtime: 's/harness/runtime' },
+    { name: 'XDG bases with a trailing slash', system: 'Linux', env: home => ({ XDG_DATA_HOME: join(home, 'd') + '/', XDG_STATE_HOME: join(home, 's') + '/' }),
+      make: ['.harness', 'd/harness'], runtime: 's/harness/runtime' },
     { name: 'relative XDG bases', system: 'Linux', env: () => ({ XDG_DATA_HOME: 'd', XDG_STATE_HOME: 's' }),
       make: ['.local/share/harness'], runtime: '.local/state/harness/runtime' },
     { name: 'ADAPTER_RUNTIME_DIR', system: 'Linux', env: home => ({ ADAPTER_RUNTIME_DIR: join(home, 'own') }),
@@ -88,9 +90,9 @@ test('node.sh finds current-node by the rule', async t => {
     await mkdir(join(runtime, 'node-22', 'bin'), { recursive: true });
     await symlink(process.execPath, node);
     await writeFile(join(runtime, 'current-node'), node);
-    const run = spawnSync('/bin/sh', ['-c', '. "$1" && printf %s "$LOCAL_AI_NODE"', 'sh', nodeSh], {
+    const run = spawnSync('/bin/sh', ['-c', '. "$1" && printf "%s\\n%s" "$LOCAL_AI_NODE" "$(local_ai_runtime_dir)"', 'sh', nodeSh], {
       encoding: 'utf8', env: { PATH: bin, HOME: home, ...c.env?.(home) },
     });
-    assert.equal(run.stdout, node, `${c.name}: ${run.stderr}`);
+    assert.equal(run.stdout, `${node}\n${runtime}`, `${c.name}: ${run.stderr}`);
   }
 });

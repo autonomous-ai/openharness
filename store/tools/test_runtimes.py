@@ -318,6 +318,12 @@ class RuntimeFolder(unittest.TestCase):
         (data / "harness").mkdir(parents=True)
         self.assertEqual(box.harness_runtime(XDG_DATA_HOME=str(data), XDG_STATE_HOME=str(state)), f"{state}/harness/runtime")
 
+    def test_xdg_with_a_trailing_slash_names_the_same_folders(self):
+        box = self.linux()
+        data, state = box.root / "xdg-data", box.root / "xdg-state"
+        (data / "harness").mkdir(parents=True)
+        self.assertEqual(box.harness_runtime(XDG_DATA_HOME=f"{data}/", XDG_STATE_HOME=f"{state}/"), f"{state}/harness/runtime")
+
     def test_darwin_keeps_dot_harness_whatever_exists(self):
         box = Box(self)
         self.assertEqual(box.harness_runtime(), str(box.runtime))
