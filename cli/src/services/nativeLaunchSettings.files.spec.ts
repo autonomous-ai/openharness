@@ -10,6 +10,7 @@ import { createLocalNativeSetup } from './nativeSetup.js'
 import { startEngineSetup } from './engineSetup.js'
 const effects = vi.hoisted(() => ({ flushes: 0, onSync: undefined as ((fd: number) => void) | undefined,
   onStat: undefined as ((file: string) => void) | undefined, afterRead: undefined as (() => void) | undefined,
+  afterProof: undefined as ((file: string) => void) | undefined,
   hold: undefined as ((fd: number, release: () => void) => void) | undefined,
   closed: undefined as ((fd: number) => void) | undefined,
   before: undefined as (() => void) | undefined, after: undefined as (() => void) | undefined }))
@@ -27,6 +28,7 @@ vi.mock('../engines/kit/nativeHookFiles.js', async original => {
     const observed = module.inspectHookFile(...args)
     return { ...observed, verify: (...verify: Parameters<typeof observed.verify>) => {
       observed.verify(...verify)
+      effects.afterProof?.(args[0])
       if (args[0].endsWith('statusline.mjs')) effects.afterRead?.()
     } }
   } }
@@ -46,15 +48,65 @@ beforeEach(() => {
   writeFileSync(source, bytes)
   writeFileSync(join(data, 'agent-settings.json'), '{"machineId":"machine","accountId":"account","agentsStartAgents":true}')
   effects.flushes = 0; effects.onSync = undefined; effects.before = undefined; effects.after = undefined; effects.hold = undefined; effects.closed = undefined
-  effects.onStat = undefined; effects.afterRead = undefined
+  effects.onStat = undefined; effects.afterRead = undefined; effects.afterProof = undefined
 })
-afterEach(() => { effects.onSync = undefined; effects.before = undefined; effects.after = undefined; effects.hold = undefined; effects.closed = undefined; effects.onStat = undefined; effects.afterRead = undefined; vi.useRealTimers(); vi.restoreAllMocks(); rmSync(root, { recursive: true, force: true }) })
+afterEach(() => { effects.onSync = undefined; effects.before = undefined; effects.after = undefined; effects.hold = undefined; effects.closed = undefined; effects.onStat = undefined; effects.afterRead = undefined; effects.afterProof = undefined; vi.useRealTimers(); vi.restoreAllMocks(); rmSync(root, { recursive: true, force: true }) })
 const input = (engine: 'claude' | 'codex' = 'claude', extra: Partial<LaunchSettingsInput> = {}): LaunchSettingsInput => ({
   purpose: 'launchSettings', version: 2, engine, environment: { HOME: home }, cwd: work, runtimeNode: process.execPath,
   platform: 'darwin', gitBash: null, owner: { machineId: 'machine', accountId: 'account' }, ...extra,
 })
 const prepare = (given = input(), current = () => true, commit?: () => Promise<boolean>) => prepareNativeLaunchSettings(given, data, current, commit)
 const existing = (text = statusLineScript()) => { mkdirSync(join(data, 'statusline')); writeFileSync(script, text) }
+
+it.each(['writable', 'read-only'] as const)('read-only checkpoint verifies sources once after commit for a %s artifact', async mode => {
+  existing(); if (mode === 'read-only') chmodSync(script, 0o400)
+  const checks: string[] = []
+  const result = await prepare(input(), () => true, async () => {
+    effects.afterProof = file => { if (file === source) checks.push('source'); else if (file === script) checks.push('output') }
+    return true
+  })
+  expect(result).not.toBeNull(); expect(effects.flushes).toBe(0)
+  expect(checks.filter(check => check === 'source')).toHaveLength(1)
+  expect(checks).toEqual(['output', 'source', 'output'])
+})
+it('read-only checkpoint refuses revoked admission before reading the output proof', async () => {
+  existing(); let current = true, outputRead = false
+  expect(await prepare(input(), () => current, async () => {
+    current = false; effects.afterRead = () => { outputRead = true }; return true
+  })).toBeNull()
+  expect(outputRead).toBe(false); expect(effects.flushes).toBe(0)
+})
+it.each(['source bytes', 'same-byte source', 'source ancestor'] as const)('read-only checkpoint rejects %s changed during its output check', async kind => {
+  existing(); let changed = false
+  expect(await prepare(input(), () => true, async () => {
+    effects.afterRead = () => {
+      effects.afterRead = undefined; changed = true
+      if (kind === 'source bytes') writeFileSync(source, '{}')
+      else if (kind === 'same-byte source') { const replacement = join(root, 'replacement'); writeFileSync(replacement, bytes); renameSync(replacement, source) }
+      else { renameSync(join(home, '.claude'), join(home, 'prior')); mkdirSync(join(home, '.claude')); writeFileSync(source, bytes) }
+    }
+    return true
+  })).toBeNull()
+  expect(changed).toBe(true); expect(effects.flushes).toBe(0)
+})
+it('read-only checkpoint rechecks admission after the output read', async () => {
+  existing(); let current = true
+  expect(await prepare(input(), () => current, async () => {
+    effects.afterRead = () => { effects.afterRead = undefined; current = false }; return true
+  })).toBeNull()
+  expect(current).toBe(false); expect(effects.flushes).toBe(0)
+})
+it.each(['missing', 'different'] as const)('read-only checkpoint retains full source proof before publishing a %s artifact', async kind => {
+  if (kind === 'different') existing('previous release')
+  let sourceChecks = 0, observedEffect = false
+  expect(await prepare(input(), () => true, async () => {
+    effects.afterProof = file => { if (file === source) sourceChecks++ }
+    effects.before = () => { observedEffect = true; expect(sourceChecks).toBe(1) }
+    return true
+  })).not.toBeNull()
+  expect(observedEffect).toBe(true); expect(effects.flushes).toBeGreaterThan(0)
+  expect(readFileSync(source, 'utf8')).toBe(bytes); expect(readFileSync(script, 'utf8')).toBe(statusLineScript())
+})
 
 it.each(['codex', 'claude'] as const)('retains %s instructions without a dummy output for settings-only behavior', async engine => {
   const result = await prepare(input(engine, { platform: 'win32' }))

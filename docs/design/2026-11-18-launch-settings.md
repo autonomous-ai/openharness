@@ -950,3 +950,29 @@ cold-start figure. Seven fsync calls and an inclusive publication span do not me
 Neither serialization nor the two-hop authority protocol is identified as a dominant safe optimization target.
 V9's baseline/cold/combined holds remain. A separate source-only proposal identifies the duplicated post-commit
 source pass on the worker's read-only branch; no runtime correction or new workload follows from this evidence alone.
+
+## Design: separate the worker's read-only checkpoint
+
+The coordinator reviewed the v3 attribution and approved a one-file correction with actual RED first. The static
+artifact's exact existing bytes need no write. After the existing commit wait, fresh worker live/generation/deadline
+admission must still precede its output proof, followed by the existing later full source/alias proof, final output
+proof and admission before any value leaves the component. Remove only the earlier duplicate full source pass on
+this read-only branch; retain the final pass in its original later position, including mutation during the output read.
+
+Missing/different artifacts retain full post-commit source/alias proof before the unchanged publisher and every staged
+file/directory/acknowledgement fence. No-output behavior keeps its existing checks. Static-script bytes may be read
+before choosing that branch; this is a read, and no publication is admitted before its full source proof. Required
+hook publisher code, source/path budgets, DTO/deadline, owner/account/environment/native proof and receipt/terminal
+factory ordering remain unchanged. There is no cache, preload, new publisher, stored record or protocol path.
+
+Selected REDs observe actual proof calls/order through wrappers that still execute every real check: writable and
+read-only exact artifacts must have one final source pass after commit, with output/source/output ordering. Behavioral
+cases retain revoked admission before/after output reads, source bytes/same-byte leaf/ancestor mutation at the output
+read, and full source proof before any missing/different publication. Existing commit, fsync/alias, final artifact,
+constructor/reconnect and protocol safety cases remain. GREEN selection is the three service settings suites with
+100% per-file coverage of the changed service helper, followed by TypeScript. No benchmark or profile is authorized
+by this implementation approval; the expected structural 19→15 warm file-proof reduction is not a measured latency claim.
+
+Actual RED: `/tmp/core-launch-settings-worker-readonly-red.log`, exit 1 in 1.183 s, empty owned process group.
+Both exact-artifact cases observe two source passes instead of one; all seven mutation/admission/cold-publication
+controls pass (nine selected cases, 35 unrelated cases skipped). No fixture correction or runtime edit preceded RED.
