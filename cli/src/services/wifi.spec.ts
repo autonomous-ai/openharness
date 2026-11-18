@@ -119,6 +119,17 @@ async function joinDevice(core: CoreApi, connId = 'c1'): Promise<void> {
 const KEY = Buffer.alloc(32, 7).toString('base64')
 
 describe('the Wi-Fi device, with the dials', () => {
+  it('uses the process-owned validated view source while keeping inline reads separate', async () => {
+    const core = fakeCore({ dataDir }), ports = emptyPorts()
+    const readView = vi.fn(async () => ({ agents: [], store: [], hasWindow: true }))
+    startWifi(core, ports, { readView })
+    await ports.wifi!.resume({ focus: null })
+    expect(readView).toHaveBeenCalledWith(expect.any(AbortSignal))
+    expect(core.agents.readSessions).not.toHaveBeenCalled()
+    const calls = readView.mock.calls.length
+    expect(await ports.wifi!.appFocus('machine-1', null, 'window')).toBeUndefined()
+    expect(readView).toHaveBeenCalledTimes(calls + 1)
+  })
   it('refuses an old relay request callback after disconnect or component stop', async () => {
     const relay = vi.spyOn(gatewayRelay, 'deviceRelayOverGateway')
     try {

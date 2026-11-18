@@ -1,4 +1,5 @@
-import { readCoreSessions } from './sessionSnapshot.js'
+import { readCoreSessionRecords } from './sessionSnapshot.js'
+import { readWifiView } from './wifiView.js'
 /**
  * The Wi-Fi device's service in the devices' process (`harness __service devices,wifi`, harnessd/services.ts),
  * on a link of its own to the core (core/wifiLink.ts; step 9, D3). Its sessions are the gateway's, its
@@ -179,27 +180,7 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
           const { requestId: _id, ...result } = await ask(owner, 'create', { ...request }, binding)
           return result as unknown as ForkResult
         },
-        readSessions: async (scope, receive, signal) => {
-        const binding = bindingFor(owner, 'the Wi-Fi device is not connected to the core')
-        try {
-          let hasWindow = false
-          await readCoreSessions(binding.origin, scope, (record, settled) => {
-            requireBinding(owner, binding)
-            if (record.type === 'begin') {
-              if (record.payload.header.machine.id !== owner.machineId) throw new Error('WIFI_IDENTITY_UNAVAILABLE')
-              hasWindow = record.payload.header.hasWindow
-            }
-            return receive(record, settled)
-          }, signal)
-          requireBinding(owner, binding)
-          lastView = { binding, hasWindow }
-        } catch (error) {
-          // A failed current read cannot keep permission from its previous view. An old owner cannot revoke a new one.
-          requireBinding(owner, binding)
-          lastView = null
-          throw error
-        }
-      }, follow: listener => {
+        follow: listener => {
         if (component !== owner || stopped) return () => {}
         return owner.following.follow(event => { if (currentBinding(owner, verified)) listener(event) })
       } },
@@ -240,6 +221,28 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
     let requests: ServiceRequests
     try {
       requests = (options.start ?? startWifi)(api(owner), ports, {
+        readView: async signal => {
+          const binding = bindingFor(owner, 'the Wi-Fi device is not connected to the core')
+          try {
+            let hasWindow = false
+            const view = await readWifiView((scope, receive, signal) => readCoreSessionRecords(binding.origin, scope, receive, signal),
+              machineId, signal, record => {
+                requireBinding(owner, binding)
+                if (record.type === 'begin') {
+                  if (record.payload.header.machine.id !== owner.machineId) throw new Error('WIFI_IDENTITY_UNAVAILABLE')
+                  hasWindow = record.payload.header.hasWindow
+                }
+              })
+            requireBinding(owner, binding)
+            lastView = { binding, hasWindow }
+            return view
+          } catch (error) {
+            // An old owner cannot revoke the replacement's view or carry its window permission forward.
+            requireBinding(owner, binding)
+            lastView = null
+            throw error
+          }
+        },
         submit: (...args) => submit(owner, ...args), cancel: deliveryId => cancel(owner, deliveryId), evidencePool, feedPool, focusWork,
         desk: { stepFocus: (direction, agentId, current) => stepFocus(owner, direction, agentId, current),
           scroll: (phase, dy, velocity, current) => scroll(owner, phase, dy, velocity, current) },

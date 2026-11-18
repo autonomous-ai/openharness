@@ -13,6 +13,12 @@ import type { ListenerHandler } from './devicesListener.js'
 import { runDevicesService, type DevicesServiceOptions } from './devicesProcess.js'
 import type { CoreConnection, ServiceProcessOptions } from './process.js'
 import { deviceDeskFor, type DeviceDesk } from './deviceDesk.js'
+import { boundedJsonBytes } from '../lib/boundedJsonBytes.js'
+
+vi.mock('../lib/boundedJsonBytes.js', async original => {
+  const actual = await original<typeof import('../lib/boundedJsonBytes.js')>()
+  return { ...actual, boundedJsonBytes: vi.fn(actual.boundedJsonBytes) }
+})
 
 // The real devices and the real link, as a process started by the master runs them: stood in for here.
 const real = vi.hoisted(() => ({ started: [] as unknown[], linked: [] as unknown[], listened: [] as unknown[] }))
@@ -87,6 +93,17 @@ function setup(over: { processEnv?: NodeJS.ProcessEnv; openListener?: DevicesSer
 afterEach(() => vi.restoreAllMocks())
 
 describe('the devices in their own process', () => {
+  it('validates each external record once in its actual advertised refresh', async () => {
+    const f = setup()
+    f.answer('session_read_advertised', snapshotFixture({ registered: [snapshotRow('once')] }))
+    vi.mocked(boundedJsonBytes).mockClear()
+    f.connect(); await f.deps().refresh!()
+    expect(f.api().agents.advertised().map(row => row.agentId)).toEqual(['once'])
+    const validations = vi.mocked(boundedJsonBytes).mock.calls.filter(([value]) => value && typeof value === 'object'
+      && ['begin', 'row', 'end'].includes((value as { type?: string }).type ?? ''))
+    expect(validations).toHaveLength(3)
+    await f.service.stop()
+  })
   it.each(['row', 'completion'] as const)('drops an old read at its %s seam after reconnecting the same wrapper', async seam => {
     const f = setup()
     f.answer('session_read_advertised', snapshotFixture({ registered: [snapshotRow('fresh')] }))

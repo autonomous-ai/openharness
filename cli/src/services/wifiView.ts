@@ -1,7 +1,7 @@
 /** Wi-Fi presentation and Store preparation policy live with their component, outside the session owner. */
 import { realpathSync } from 'node:fs'
-import type { CoreApi, SessionReadHeader } from '../core/api.js'
-import { readSessionView, type SessionProjection } from './sessionSnapshot.js'
+import type { SessionReadHeader } from '../core/api.js'
+import { readSessionView, type SessionProjection, type SessionRecordObserver, type SessionRecordSource } from './sessionSnapshot.js'
 import type { AutonomousDeviceAgent } from '../lib/autonomous-device/service.js'
 import type { StoreAgent } from '../lib/autonomous-device/store.js'
 
@@ -11,11 +11,11 @@ const canonicalPath = (path: string | null): string | null => {
   try { return realpathSync(path) } catch { return path }
 }
 
-export function readWifiView(read: CoreApi['agents']['readSessions'], machineId: string, signal?: AbortSignal): Promise<WifiView> {
+export function readWifiView(read: SessionRecordSource, machineId: string, signal?: AbortSignal, observe?: SessionRecordObserver): Promise<WifiView> {
   return readSessionView(read, 'registered', header => {
     if (header.machine.id !== machineId) throw new Error('CORE_VIEW_UNAVAILABLE')
     return wifiProjection(header)
-  }, signal)
+  }, signal, observe)
 }
 
 export function wifiProjection(header: SessionReadHeader): SessionProjection<WifiView> {

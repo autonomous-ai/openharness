@@ -28,7 +28,7 @@ import { accountLink } from './accountLink.js'
 import { startDevices, type DevicesDeps, type DevicesCore, type DeviceSession } from './devices.js'
 import { openDevicesListener } from './devicesListener.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess, type ServiceProcessOptions } from './process.js'
-import { readCoreSessions, readSessionView } from './sessionSnapshot.js'
+import { readCoreSessionRecords, readSessionView } from './sessionSnapshot.js'
 import { processCoreApi, UNASKED } from './processCoreApi.js'
 import { harnessdEnv } from '../lib/harnessdEnv.js'
 import { publishDeviceDesk, type DeviceDesk } from './deviceDesk.js'
@@ -113,7 +113,7 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     if (!core) return Promise.resolve()
     const origin = core, epoch = generation
     const pending = { generation: epoch, promise: Promise.resolve(), closed: new AbortController() }
-    pending.promise = readSessionView((scope, receive, signal) => readCoreSessions(origin, scope, receive, signal), 'advertised', header => {
+    pending.promise = readSessionView((scope, receive, signal) => readCoreSessionRecords(origin, scope, receive, signal), 'advertised', header => {
       const agents: Viewed[] = []
       return { row: (member, retain) => {
         if (stopped || generation !== epoch || core !== origin) throw new Error('SESSION_READ_UNAVAILABLE')

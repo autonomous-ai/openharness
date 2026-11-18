@@ -43,6 +43,8 @@ const inlineFeedPool = new DeviceFeedPool()
 const inlineAnswerWork = new DeviceWorkBudget()
 
 export interface WifiDeps {
+  /** Process-owned source and binding checks composed with the same validated projection used inline. */
+  readView?: (signal?: AbortSignal) => Promise<WifiView>
   /** Same-worker desk calls carry this component's lifetime without adding a core API rule. */
   desk?: import('./deviceDesk.js').DeviceDeskClient
   /** Explicit composition: an absent service token never silently creates an unrelated peer authority. */
@@ -82,7 +84,8 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
     }
     const epoch = coreEpoch, revision = notices
     const pending = { epoch, promise: Promise.resolve(), closed: new AbortController() }
-    pending.promise = readWifiView(core.agents.readSessions, machineId, pending.closed.signal).then(next => {
+    pending.promise = (deps.readView ? deps.readView(pending.closed.signal)
+      : readWifiView(core.agents.readSessions, machineId, pending.closed.signal)).then(next => {
       if (stopped || !coreConnected || coreEpoch !== epoch) throw new Error('CORE_VIEW_UNAVAILABLE')
       view = next; applied = revision
     }).catch(error => {
