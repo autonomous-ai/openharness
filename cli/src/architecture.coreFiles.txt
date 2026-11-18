@@ -99,6 +99,7 @@ core/modelsWake.ts
 core/monitorLink.ts
 core/observedHook.ts
 core/orchestratorLink.ts
+core/pasteLink.ts
 core/questionObservation.ts
 core/questions.ts
 core/recapsLink.ts
@@ -378,9 +379,8 @@ lib/offThreadExec.ts
 lib/openFiles.ts
 lib/openTabProtection.ts
 lib/openclawStore.ts
-lib/osClipboard.ts
 lib/paneEngineProcess.ts
-lib/pasteDropFiles.ts
+lib/pasteArtifact.ts
 lib/pasteOnScreen.ts
 lib/pasteText.ts
 lib/pathContainment.ts

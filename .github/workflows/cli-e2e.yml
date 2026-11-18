@@ -67,10 +67,10 @@ jobs:
           node-version: ${{ env.CLI_NODE_VERSION }}
           cache: npm
           cache-dependency-path: cli/package-lock.json
-      - name: Install tmux, the shells the tests launch through, and lsof
+      - name: Install tmux, test shells, and private clipboard test tools
         run: |
           # Through a mirror outage: one DNS outage failed every shard here before any test ran (#4186).
-          sudo bash ../scripts/apt-install.sh tmux zsh tcsh dash lsof
+          sudo bash ../scripts/apt-install.sh tmux zsh tcsh dash lsof xvfb xclip
           # Every daemon watches its data folder and the engines' transcript folders, and a file
           # starts dozens of daemons one after another; the runner's default instance limit is 128.
           sudo sysctl -w fs.inotify.max_user_instances=1024 fs.inotify.max_user_watches=524288

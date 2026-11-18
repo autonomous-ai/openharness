@@ -16,6 +16,17 @@ describe('child code admission before runtime effects', () => {
     expect(WORKER_CONTRACT).toBe(7)
   })
 
+  it('refuses mixed paste-host plans while admitting either complete cohort', () => {
+    const previousPlan = '025db0d70a1bf79ed16dd31bc0aef1caaf3040cb4009d9f8c19387924fc8d911'
+    const previous = { contract: WORKER_CONTRACT, plan: previousPlan }
+    const previousEnvironment = { ...env, [WORKER_COHORT_ENV]: `42:${WORKER_CONTRACT}:${previousPlan}:${disk}` }
+    expect(WORKER_PLAN).not.toBe(previousPlan)
+    expect(childAdmissionFailure(previousEnvironment, 42, '/previous.js', () => disk, previous)).toBeNull()
+    expect(childAdmissionFailure(env, 42, '/current.js', () => disk)).toBeNull()
+    expect(childAdmissionFailure(previousEnvironment, 42, '/current.js', () => disk)).toContain('executed worker contract')
+    expect(childAdmissionFailure(env, 42, '/previous.js', () => disk, previous)).toContain('executed worker contract')
+  })
+
   it('leaves a deliberate standalone process alone without reading any file', () => {
     const read = vi.fn()
     expect(childAdmissionFailure({}, 42, undefined, read)).toBeNull()

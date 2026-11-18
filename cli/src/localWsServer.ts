@@ -843,7 +843,9 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
           const bytes = binaryBytes(raw)
           const frame = clientStreamLocalFrame(bytes) ?? decodeTerminalLocal(bytes)
           if (!frame) { close(4400, 'invalid terminal frame'); return }
-          return options.backend.handleLocalBinary(connId, frame, bytes)
+          // Terminal input keeps its bounded per-stream lane. A slow paste must not hold Cancel or another pane.
+          void options.backend.handleLocalBinary(connId, frame, bytes).catch(() => close(1011, 'local dispatch failed'))
+          return
         }
         if (!parsed) { close(4400, 'invalid json frame'); return }
         options.backend.handleLocalFrame(connId, parsed)

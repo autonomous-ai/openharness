@@ -106,7 +106,7 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // The engine probe (services/engineProbe.ts) holds this process's login-shell environment, read once; the shells
   // a probe starts, four at once, are processes of their own, outside this budget.
   // A harness stopped while the host is down still closes the harnesses it started: held for the cleanup.
-  edge: { services: ['workspaces', 'usage', 'monitor', 'projects', 'handoff', 'recaps', 'windowNames', 'shell', 'connectors', 'sharedMachines', 'agentCleanup', 'messages', 'osDevice', 'goals', 'hachi', 'engineProbe'], heapLimitMiB: 384, rssLimitMiB: 768,
+  edge: { services: ['workspaces', 'usage', 'monitor', 'paste', 'projects', 'handoff', 'recaps', 'windowNames', 'shell', 'connectors', 'sharedMachines', 'agentCleanup', 'messages', 'osDevice', 'goals', 'hachi', 'engineProbe'], heapLimitMiB: 384, rssLimitMiB: 768,
     hears: { agentCleanup: ['stopped', 'input'] }, frameParts: { workspaces: { fields: ['project', 'gitContext'] } } },
   // The orchestrator (services/orchestratorProcess.ts), an experiment: started only once it is on, for a
   // saved project or a request (core/api.ts `EXPERIMENTS`). Its projects' files and the frames of their

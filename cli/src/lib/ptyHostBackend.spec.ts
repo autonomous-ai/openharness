@@ -445,6 +445,17 @@ describe('PtyHostBackend input', () => {
     expect(calls).toEqual([])
   })
 
+  it('dispatches a held row paste before awaiting its acknowledgement, without a load-buffer gap', async () => {
+    let acknowledge!: (reply: unknown) => void
+    const reply = new Promise((resolve) => { acknowledge = resolve })
+    const { backend, calls } = await ready({ paste: () => reply })
+    const pasted = backend.pasteInput(PANE, '/private-fixture/prepared-file')
+    // The manager's final generation/file check and this client call share one synchronous turn.
+    expect(calls).toEqual([{ op: 'paste', pane: '%1', text: '/private-fixture/prepared-file', bracketed: true }])
+    acknowledge({ state: 'ok', value: {} })
+    expect(await pasted).toEqual({ state: 'succeeded', dispatch: 'executed' })
+  })
+
   it('sendKey sends the tmux name of the key', async () => {
     const { backend, calls } = await ready()
     await backend.sendKey(PANE, 'backtab')

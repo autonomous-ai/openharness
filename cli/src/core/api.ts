@@ -1240,6 +1240,40 @@ export const MONITOR_OFF: MonitorPort = {
   storage: async () => new Map(),
 }
 
+/** Upload preparation only. The stream keeps terminal authority; the worker owns bodies and clipboard work. */
+export interface PasteUpload {
+  generation: string
+  connection: string
+  streamId: string
+}
+export interface PasteBegin extends PasteUpload { kind?: 'image' | 'file'; filename: string; totalBytes: number }
+export type PasteArtifact = { name: string; version: string }
+export interface PasteClipboardRequest extends PasteUpload { artifact: PasteArtifact; corePid?: number }
+export type PasteClipboardResult = { state: 'written' } | { state: 'failed' | 'unavailable'; reason: string }
+export type PasteResult = { error: string } | { ignored: true }
+  | { bytesWritten: number; totalBytes: number; artifact?: PasteArtifact }
+export interface PastePort {
+  begin(request: PasteBegin): Promise<{ accepted: true } | { error: string }>
+  chunk(request: PasteUpload & { seq: number }, bytes: Uint8Array): Promise<PasteResult>
+  clipboard(request: PasteClipboardRequest): Promise<PasteClipboardResult>
+  releaseClipboard(generation: string, corePid?: number): void
+  cancel(generation: string | null): void
+  stop(): void | Promise<void>
+}
+export const PASTE_REQUESTS = [] as const
+export const PASTE_OFF: PastePort = {
+  begin: async () => ({ error: 'PASTE_UNAVAILABLE' }),
+  chunk: async () => ({ error: 'PASTE_UNAVAILABLE' }),
+  clipboard: async () => ({ state: 'unavailable', reason: 'PASTE_UNAVAILABLE' }),
+  releaseClipboard: () => {},
+  cancel: () => {}, stop: () => {},
+}
+export const PASTE_FALLBACKS: PortFallbacks<PastePort> = {
+  begin: later({ error: 'PASTE_UNAVAILABLE' }), chunk: later({ error: 'PASTE_UNAVAILABLE' }),
+  clipboard: later({ state: 'unavailable', reason: 'PASTE_UNAVAILABLE' }), releaseClipboard: undefined,
+  cancel: undefined, stop: undefined,
+}
+
 /** The core's call into connected services (services/connectors.ts), as an agent launches on a profile home (a Claude
  *  profile or Codex profile other than the default): that agent reads that home's MCP config, not the default's, so the
  *  connections' entries are written there first (lib/connectors/agents.ts `syncProfileHome`). The edge host does it, so
@@ -2032,6 +2066,7 @@ export interface CorePorts {
   devices: DevicesPort | null
   wifi: WifiPort | null
   monitor: MonitorPort | null
+  paste: PastePort | null
   connectors: ConnectorsPort | null
   orchestrator: OrchestratorPort | null
   sharing: SharingPort | null
@@ -2042,7 +2077,7 @@ export interface CorePorts {
 }
 
 export function emptyPorts(): CorePorts {
-  return { usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, messages: null, devices: null, wifi: null, monitor: null, connectors: null, orchestrator: null, sharing: null, recaps: null, agentCleanup: null, cloud: null, sharedMachines: null }
+  return { usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, messages: null, devices: null, wifi: null, monitor: null, paste: null, connectors: null, orchestrator: null, sharing: null, recaps: null, agentCleanup: null, cloud: null, sharedMachines: null }
 }
 
 export interface CoreApiDeps {

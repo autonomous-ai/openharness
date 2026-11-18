@@ -4,7 +4,7 @@ import { OWNER_DOWN as CLOUD_DOWN, OWNER_REPLY_DOWN as CLOUD_REPLY_DOWN, OWNER_A
 import { SERVICE_HOSTS } from '../harnessd/services.js'
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { readSessions, SESSION_READ_HEADER_BYTES, SESSION_READ_MEMBERS_BYTES, AGENT_BROWSER_REQUESTS, OWNER_FALLBACKS, CONNECTOR_SYNC_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, sendLocalWindow, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, GATEWAY_REQUESTS, LANE_OFF, MACHINE_ADDON_REQUESTS, PAIR_WAIT_MS, SERVICE_HTTP_ROUTES, SERVICE_WS_FRAMES, WIFI_REQUESTS, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, WIFI_FALLBACKS, WORKSPACES_FALLBACKS, WORKSPACES_OFF, WORKSPACES_UNAVAILABLE, type CoreApiDeps } from './api.js'
+import { readSessions, SESSION_READ_HEADER_BYTES, SESSION_READ_MEMBERS_BYTES, AGENT_BROWSER_REQUESTS, OWNER_FALLBACKS, CONNECTOR_SYNC_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, sendLocalWindow, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, GATEWAY_REQUESTS, LANE_OFF, MACHINE_ADDON_REQUESTS, PASTE_FALLBACKS, PASTE_OFF, PAIR_WAIT_MS, SERVICE_HTTP_ROUTES, SERVICE_WS_FRAMES, WIFI_REQUESTS, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, WIFI_FALLBACKS, WORKSPACES_FALLBACKS, WORKSPACES_OFF, WORKSPACES_UNAVAILABLE, type CoreApiDeps } from './api.js'
 import { FAIL, readFallback } from './serviceHost.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
 import { answerAgentQuery } from './agentQueries.js'
@@ -806,8 +806,28 @@ describe('the core API services stand on', () => {
     expect(CLOUD_DOWN.detail).toContain('Agents are not running here')
   })
 
+  it('refuses uploads while paste is unavailable and still accepts cancellation, clipboard release and stop', async () => {
+    const upload = { generation: 'g', connection: 'c', streamId: 's' }
+    const unavailable = { error: 'PASTE_UNAVAILABLE' }
+    expect(await PASTE_OFF.begin({ ...upload, filename: 'file.txt', totalBytes: 3 })).toEqual(unavailable)
+    expect(await PASTE_OFF.chunk({ ...upload, seq: 0 }, Buffer.from('abc'))).toEqual(unavailable)
+    expect(await PASTE_OFF.clipboard({ ...upload, artifact: { name: 'image.png', version: 'fixture' } }))
+      .toEqual({ state: 'unavailable', reason: 'PASTE_UNAVAILABLE' })
+    expect(PASTE_OFF.releaseClipboard(upload.generation)).toBeUndefined()
+    expect(PASTE_OFF.cancel(upload.generation)).toBeUndefined()
+    expect(PASTE_OFF.cancel(null)).toBeUndefined()
+    expect(await PASTE_OFF.stop()).toBeUndefined()
+    for (const fallback of [PASTE_FALLBACKS.begin, PASTE_FALLBACKS.chunk]) {
+      expect(readFallback(fallback)).toEqual({ deferred: true, value: unavailable })
+    }
+    expect(readFallback(PASTE_FALLBACKS.cancel)).toEqual({ deferred: false, value: undefined })
+    expect(readFallback(PASTE_FALLBACKS.stop)).toEqual({ deferred: false, value: undefined })
+    expect(readFallback(PASTE_FALLBACKS.releaseClipboard)).toEqual({ deferred: false, value: undefined })
+    expect(readFallback(PASTE_FALLBACKS.clipboard)).toEqual({ deferred: true, value: { state: 'unavailable', reason: 'PASTE_UNAVAILABLE' } })
+  })
+
   it('starts with every port empty: a service fills its own when it starts', () => {
-    expect(emptyPorts()).toEqual({ usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, messages: null, devices: null, wifi: null, monitor: null, connectors: null, orchestrator: null, sharing: null, recaps: null, agentCleanup: null, cloud: null, sharedMachines: null })
+    expect(emptyPorts()).toEqual({ usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, messages: null, devices: null, wifi: null, monitor: null, paste: null, connectors: null, orchestrator: null, sharing: null, recaps: null, agentCleanup: null, cloud: null, sharedMachines: null })
     expect(emptyPorts()).not.toBe(emptyPorts())
   })
 

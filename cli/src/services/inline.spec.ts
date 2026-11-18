@@ -32,6 +32,7 @@ import { startModels } from './models.js'
 import { createLocalNativeSetup } from './nativeSetup.js'
 import { startMessagesInCore } from './messages.js'
 import { startMonitor } from './monitor.js'
+import { startPaste } from './paste.js'
 import { startOrchestrator } from './orchestrator.js'
 import { startOsDevice } from './osDevice.js'
 import { startMachineAddons } from './machineAddons.js'
@@ -53,6 +54,6 @@ import { startWorkspaces } from './workspaces.js'
 
 describe('the services the core runs in its own process only when they do not run in theirs', () => {
   it('are their own starts, unchanged: the same services either way', () => {
-    expect({ ...inline }).toEqual({ RuntimeProfileState, preloadEngine, hermesBackground, exportDatabase, otherEngineRequests, createInlineHistory, createServiceHost, inlineSharedMachinesPort, databaseHistory, liveFor, runtimeFor, screenFor, terminalScreen, submissionFor, nativeControlFor, backgroundJobFor, providerMoveFor, prepareResume, modelControlFor, questionControlFor, createLocalNativeSetup, startInlineClientStreams, startAgentCleanup, startCloud, startConnectors, startDevices, startEngineProbe, startGoals, startHachiInCore, startHandoff, startGateway, startMemory, startModels, startMonitor, startOrchestrator, startOsDevice, startMachineAddons, startProjects, startRecaps, startRouter, startSearch, startSharedMachines, startSharing, startShell, startStoreInCore, startMessagesInCore, startUsageInCore, startWifi, startWindowNames, startWorkspaces })
+    expect({ ...inline }).toEqual({ RuntimeProfileState, preloadEngine, hermesBackground, exportDatabase, otherEngineRequests, createInlineHistory, createServiceHost, inlineSharedMachinesPort, databaseHistory, liveFor, runtimeFor, screenFor, terminalScreen, submissionFor, nativeControlFor, backgroundJobFor, providerMoveFor, prepareResume, modelControlFor, questionControlFor, createLocalNativeSetup, startInlineClientStreams, startAgentCleanup, startCloud, startConnectors, startDevices, startEngineProbe, startGoals, startHachiInCore, startHandoff, startGateway, startMemory, startModels, startMonitor, startPaste, startOrchestrator, startOsDevice, startMachineAddons, startProjects, startRecaps, startRouter, startSearch, startSharedMachines, startSharing, startShell, startStoreInCore, startMessagesInCore, startUsageInCore, startWifi, startWindowNames, startWorkspaces })
   })
 })

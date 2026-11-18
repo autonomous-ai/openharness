@@ -205,6 +205,8 @@ import { CLIENT_STREAMS, type ClientStreamEndpoint, type ClientStreamSink } from
 import { createViewersLink } from './viewersLink.js'
 import { createWorkspacesLink, prepareWorkspaceInstructions } from './workspacesLink.js'
 import { createMonitorLink } from './monitorLink.js'
+import { createPasteLink } from './pasteLink.js'
+import { PASTE_FALLBACKS, PASTE_REQUESTS } from './api.js'
 import { createConnectorsLink } from './connectorsLink.js'
 import { createSharedMachinesLink } from './sharedMachinesLink.js'
 import { createGuestCreate } from './agents/guestCreate.js'
@@ -1227,6 +1229,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   /** Actual app/tool observation scopes, plus the existing commander and cable audiences. */
   const questionObserved = (agentId: string): boolean => backend.hasCommander() || cableWatchingLocal() || backend.questionsObserved(agentId)
   const terminalStreams = new TerminalStreamManager({
+    paste: () => ports.paste,
     terminals,
     resolveAgent: (agentId) => registry.resolve(agentId),
     sendTarget: (connId, type, payload) => backend.sendTerminalTo(connId, type, payload),
@@ -1599,6 +1602,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // The requests each service that can run in its own process answers, as core/api.ts declares them.
   const requestsOf: Record<string, readonly string[]> = {
+    paste: PASTE_REQUESTS,
     gateway: GATEWAY_REQUESTS, wifi: WIFI_REQUESTS, search: SEARCH_REQUESTS, store: STORE_REQUESTS, usage: USAGE_REQUESTS, monitor: MONITOR_REQUESTS, projects: PROJECTS_REQUESTS, models: MODELS_REQUESTS, handoff: HANDOFF_REQUESTS, connectors: CONNECTORS_REQUESTS, sharedMachines: SHARED_MACHINES_REQUESTS,
     devices: DEVICES_REQUESTS, windowNames: WINDOW_NAMES_REQUESTS, engineProbe: ENGINE_PROBE_REQUESTS, engineSetup: [], goals: GOALS_REQUESTS, shell: SHELL_REQUESTS, messages: MESSAGES_REQUESTS, osDevice: OS_DEVICE_REQUESTS, machineAddons: MACHINE_ADDON_REQUESTS,
     agentBrowser: AGENT_BROWSER_REQUESTS,
@@ -1886,6 +1890,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // in this process, or in the edge host (services/monitorProcess.ts), asked through its port (core/monitorLink.ts).
   if (outOfProcess.has('monitor')) ports.monitor = createMonitorLink((type, payload) => serviceLinks.call('monitor', type, payload))
   else serviceHost!.start('monitor', inline!.startMonitor, coreApi, MONITOR_FALLBACKS, MONITOR_REQUESTS)
+  if (outOfProcess.has('paste')) ports.paste = createPasteLink(serviceLinks)
+  else serviceHost!.start('paste', inline!.startPaste, coreApi, PASTE_FALLBACKS, PASTE_REQUESTS)
   // An agent's branch and pull request, a project's repository and preview, a folder's subfolders and a
   // media file from an agent's project (services/projects.ts), and a window's name (services/windowNames.ts):
   // in this process, or in the edge host.

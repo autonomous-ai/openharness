@@ -44,7 +44,7 @@ import { createUsageOutcomes } from './core/usageOutcomes.js'
 import type { AgentTokenUsage } from './lib/agentUsageWire.js'
 import { terminalHandoffRequest } from './lib/terminalHandoff.js'
 import { ROUTE_COMMAND_TYPES } from './lib/relayFrames.js'
-import type { TerminalStreamManager } from './lib/terminalStreamManager.js'
+import type { TerminalInputAdmission, TerminalStreamManager } from './lib/terminalStreamManager.js'
 import { decodeTerminalLocal, encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } from './lib/terminalBinary.js'
 import { BACKEND_ONLY_DOWN_TYPES, GATEWAY_REQUEST_TYPES, isLocalClientId, logSafeType, PAIR_REQUESTS, PLATE_REQUEST, rpcResultType, type DownTransport } from './lib/relayFrames.js'
 import { sid, logFrame } from './lib/log.js'
@@ -68,7 +68,7 @@ const HISTORY_WAIT_MS = 60_000
 const SHARES_NOTICE_SPREAD_MS = 10_000
 /** A terminal stream's bookkeeping, handled as it arrives rather than in its connection's line — see `enqueueDown`. */
 const TERMINAL_BOOKKEEPING_TYPES: ReadonlySet<string> = new Set(['terminal_ack', 'terminal_alive'])
-/** An upload's control frames, which go in line with its chunks — see `enqueueDown`. */
+/** Upload control is admitted synchronously; generation-captured chunks keep their existing input lane. */
 const TERMINAL_UPLOAD_CONTROL_TYPES: ReadonlySet<string> = new Set(['terminal_chunked_upload_begin', 'terminal_chunked_upload_cancel'])
 /** Agent Messages' requests, which the frame log leaves out: they carry what agents say to each other. */
 const MESSAGE_REQUESTS: ReadonlySet<string> = new Set(MESSAGES_REQUESTS)
@@ -85,6 +85,13 @@ const logged = (frame: Frame): boolean => env.LOG_FRAMES && !String(frame.type).
 export type Frame = Record<string, unknown>
 
 export type LocalSendQuota = ClientStreamQuota | { kind: 'questions' | 'events' | 'records' }
+interface StreamLane {
+  tail?: Promise<void>
+  frames: number
+  bytes: number
+  uploads: number
+}
+
 export interface LocalClientSink {
   sendFrame(frame: Frame, quota?: ClientStreamQuota): boolean
   /** Snapshot progress follows physical question-send settlement, including socket close. */
@@ -120,7 +127,10 @@ export class BackendSocket {
   private readonly downChains = new Map<string, Promise<void>>()
   private historyRequests = 0
   /** A remote client's terminal bytes, per connection and stream — see `enqueueTerminalBinary`. */
-  private readonly streamLanes = new Map<string, Promise<void>>()
+  private readonly streamLanes = new Map<string, StreamLane>()
+  private inputAdmissions = 0
+  private inputAdmissionBytes = 0
+  private uploadAdmissions = 0
   /**
    * Requests wait here until the daemon is ready (`openRequests`), each in its connection's own order.
    * The port answers long before start-up has wired every handler and confirmed the agents it
@@ -1011,7 +1021,7 @@ export class BackendSocket {
   async handleLocalBinary(connId: string, frame: TerminalBinaryClear, raw?: Uint8Array): Promise<void> {
     if (!this.localClients.has(connId)) return
     if (raw && this.clientStreams?.binary(connId, raw)) return
-    await this.terminalStreams?.handleBinary(connId, frame)
+    await this.enqueueTerminalBinary(connId, frame)
   }
 
   /** Hold requests at the gate until `openRequests`. The daemon calls this the moment it builds this
@@ -1058,12 +1068,12 @@ export class BackendSocket {
         console.error('[backend] down-frame dispatch failed:', err instanceof Error ? err.message : err)
       })
     }
-    // An upload's begin and cancel go in line with its chunks, which ride the stream's input lane: a cancel
-    // and a new begin let through while the old upload's chunks still waited there would have taken those
-    // chunks into the new upload.
-    const streamId = (frame.payload as { streamId?: unknown } | undefined)?.streamId
-    if (transport !== 'local' && typeof type === 'string' && TERMINAL_UPLOAD_CONTROL_TYPES.has(type) && typeof streamId === 'string') {
-      return this.inStreamLane(connId, streamId, () => this.dispatchDown(frame, connId, transport, role), 'down-frame')
+    // Cancel must reach a held upload. The manager captures each chunk's generation before lane admission,
+    // so immediate cancellation/new begin cannot relabel bytes already waiting there.
+    if (this.requestsOpen && typeof type === 'string' && TERMINAL_UPLOAD_CONTROL_TYPES.has(type)) {
+      return this.dispatchDown(frame, connId, transport, role).catch((err) => {
+        console.error('[backend] upload control dispatch failed:', err instanceof Error ? err.message : err)
+      })
     }
     const previous = this.downChains.get(key) ?? Promise.resolve()
     const next = previous
@@ -1087,34 +1097,66 @@ export class BackendSocket {
    * `agents_list` (1–2s with ~250 agents), a `session_get` (up to 5s for a cold engine reader), another
    * pane's keyframe (Codex: ~200ms and ~166KB at the median, daemon log 2026-10-13..15). Its own pane's
    * keyframe still holds the echo, as it holds all of that pane's output, but no longer the keystroke. A
-   * window on this computer never waited (its bytes go straight to the streams, `handleLocalBinary`); a
-   * phone now does not either. A paste still holds the keystrokes typed after it, and an upload's chunks
-   * stay in line with its begin and cancel.
+   * window on this computer uses this same lane. A paste still holds the keystrokes typed after it;
+   * Cancel can revoke a chunk whose captured generation is waiting for preparation.
    */
   private enqueueTerminalBinary(connId: string, clear: TerminalBinaryClear, raw?: Uint8Array): Promise<void> {
     // A viewer's keys and mouse, written at once in the order they came: the stream's exec waits on nothing else.
     if (raw && this.clientStreams?.binary(connId, raw)) return Promise.resolve()
     const traced = env.TYPING_TRACE && clear.kind === TerminalBinaryKind.input
     const queuedAt = traced ? performance.now() : 0
-    return this.inStreamLane(connId, clear.streamId, async () => {
+    const admission = this.inputAdmission(connId, clear.streamId, clear.bytes.byteLength,
+      clear.kind === TerminalBinaryKind.imagePaste || clear.kind === TerminalBinaryKind.pasteFile)
+    const dispatched = this.terminalStreams?.handleBinary(connId, clear, (run, refused) => admission(async (retain) => {
       if (traced) console.log(`[typing] lane conn=${sid(connId)} stream=${sid(clear.streamId)} seq=${clear.seq} waited ${Math.round(performance.now() - queuedAt)}ms`)
-      await this.terminalStreams?.handleBinary(connId, clear)
-    }, 'binary terminal')
+      await run(retain)
+    }, refused)) ?? Promise.resolve()
+    return dispatched.catch((err) => {
+      console.error('[backend] binary terminal dispatch failed:', err instanceof Error ? err.message : err)
+    })
   }
 
-  private inStreamLane(connId: string, streamId: string, task: () => Promise<void>, what: string): Promise<void> {
+  /** Called only after the manager's stream authority check. Reuse the lane; retain no second queue. */
+  private inputAdmission(connId: string, streamId: string, bytes: number, upload: boolean, ordered = true): TerminalInputAdmission {
+    return (run, refused) => this.inStreamLane(connId, streamId, bytes, upload, ordered, run, refused)
+  }
+
+  private inStreamLane(connId: string, streamId: string, bytes: number, upload: boolean, ordered: boolean,
+    run: Parameters<TerminalInputAdmission>[0], refused: () => void): Promise<void> {
     const key = `${connId || '__backend__'}\0${streamId}`
-    const previous = this.streamLanes.get(key) ?? Promise.resolve()
-    const next = previous
-      .catch(() => { /* prior failure is already logged */ })
-      .then(task)
-      .catch((err) => {
-        console.error(`[backend] ${what} dispatch failed:`, err instanceof Error ? err.message : err)
-      })
-      .finally(() => {
-        if (this.streamLanes.get(key) === next) this.streamLanes.delete(key)
-      })
-    this.streamLanes.set(key, next)
+    const lane = this.streamLanes.get(key) ?? { frames: 0, bytes: 0, uploads: 0 }
+    if (lane.frames >= 64 || lane.bytes + bytes > 8 * 1024 * 1024 || this.inputAdmissions >= 512
+      || this.inputAdmissionBytes + bytes > 64 * 1024 * 1024
+      || upload && (lane.uploads >= 4 || this.uploadAdmissions >= 128)) {
+      refused(); return Promise.resolve()
+    }
+    this.streamLanes.set(key, lane)
+    lane.frames++; lane.bytes += bytes; this.inputAdmissions++; this.inputAdmissionBytes += bytes
+    if (upload) { lane.uploads++; this.uploadAdmissions++ }
+    const cleanup = () => {
+      if (!lane.tail && !lane.frames && this.streamLanes.get(key) === lane) this.streamLanes.delete(key)
+    }
+    let owners = 1
+    const release = () => {
+      if (--owners) return
+      lane.frames--; lane.bytes -= bytes; this.inputAdmissions--; this.inputAdmissionBytes -= bytes
+      if (upload) { lane.uploads--; this.uploadAdmissions-- }
+      cleanup()
+    }
+    const dispatch = async () => {
+      try {
+        await run((settled) => { owners++; void settled.then(release, release) })
+      } catch (err) {
+        console.error('[backend] binary terminal dispatch failed:', err instanceof Error ? err.message : err)
+      } finally { release() }
+    }
+    // Begin assigns its generation now, but keeps its charge until worker admission actually settles.
+    if (!ordered) return dispatch()
+    const next = (lane.tail ?? Promise.resolve()).then(dispatch).finally(() => {
+      if (lane.tail === next) lane.tail = undefined
+      cleanup()
+    })
+    lane.tail = next
     return next
   }
 
@@ -1251,7 +1293,9 @@ export class BackendSocket {
     // Which of a remote client's terminal streams ride its P2P channel is the gateway's, which noted this
     // frame's route as it opened it.
     if (type.startsWith('terminal_')) {
-      const taken = this.terminalStreams ? await this.terminalStreams.handleFrame(connId, type, payload) : false
+      const admission = type === 'terminal_chunked_upload_begin' && typeof payload.streamId === 'string'
+        ? this.inputAdmission(connId, payload.streamId, Buffer.byteLength(JSON.stringify(payload)), true, false) : undefined
+      const taken = this.terminalStreams ? await this.terminalStreams.handleFrame(connId, type, payload, admission) : false
       // `terminal_info` (what a pane runs and where, which hn asks) is not a stream's: the streams pass
       // it over, and it is answered below. From hn's first release it stopped here unanswered
       // (e2e/compat.e2e.ts found it), and hn waited out its three seconds each time.
