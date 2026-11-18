@@ -14,16 +14,23 @@ const spawned = vi.hoisted(() => vi.fn((_command: string, args: readonly string[
     : args[0] === 'list-panes' ? { status: 0, stdout: '%1|0123456789abcdef\n' } : { status: 0, stdout: '' }))
 vi.mock('node:child_process', async (original) => ({ ...await original<typeof import('node:child_process')>(), spawnSync: spawned }))
 
-/** A tmux that lists [panes] as given, sets a tag on any pane but the [gone] ones, and records every call. */
-function fakeTmux({ version = 'tmux 3.4', panes = '', gone = [] as string[], installed = true, server = true } = {}) {
+/**
+ * A tmux that lists [panes] as given, sets a tag on any pane but the [gone] ones, which it refuses, and the [closed] ones,
+ * which closed after the listing and are no longer listed by id, and records every call.
+ */
+function fakeTmux({ version = 'tmux 3.4', panes = '', gone = [] as string[], closed = [] as string[], installed = true, server = true } = {}) {
   const calls: string[][] = []
   const run = (args: string[]): { status: number | null; stdout: string } => {
     calls.push(args)
     if (!installed) return { status: null, stdout: '' }
     if (args[0] === '-V') return { status: 0, stdout: `${version}\n` }
     if (!server) return { status: 1, stdout: '' }
+    if (args[0] === 'list-panes' && args[3] === '#{pane_id}') {
+      const ids = panes.split('\n').filter(Boolean).map((line) => line.split('|')[0])
+      return { status: 0, stdout: ids.filter((id) => !closed.includes(id)).map((id) => `${id}\n`).join('') }
+    }
     if (args[0] === 'list-panes') return { status: 0, stdout: panes }
-    if (args[0] === 'set-option') return { status: gone.includes(args[3]) ? 1 : 0, stdout: '' }
+    if (args[0] === 'set-option') return { status: gone.includes(args[3]) || closed.includes(args[3]) ? 1 : 0, stdout: '' }
     return { status: 1, stdout: '' }
   }
   return { calls, run }
@@ -79,6 +86,15 @@ describe('the move retags Harness\'s panes', () => {
     const steps = journal()
     expect(() => defaultTmux(tmux.run).retag(OLD, NEW, steps)).toThrow(/%1/)
     expect(steps.done).toEqual([{ did: 'pane', id: '%1' }])
+  })
+
+  it('a pane that closed between the listing and its retag is passed over, and the others are retagged', () => {
+    const tmux = fakeTmux({ panes: `%1|${OLD}\n%2|${OLD}\n`, closed: ['%1'] })
+    const steps = journal()
+    expect(defaultTmux(tmux.run).retag(OLD, NEW, steps)).toEqual(['%2'])
+    expect(tmux.calls.filter((args) => args[0] === 'set-option')).toEqual([setTag('%1', NEW), setTag('%2', NEW)])
+    // In the journal as it was tried: a rollback's tag() passes over a pane that is gone.
+    expect(steps.done).toEqual([{ did: 'pane', id: '%1' }, { did: 'pane', id: '%2' }])
   })
 
   it('before tmux 3.0 nothing is retagged: a pane has no options there', () => {
