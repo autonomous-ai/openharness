@@ -768,11 +768,10 @@ theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
 - Geometry: dialog content inset 24; group / control gap 16 / 8; buttons are
   capsules, 32 high at least, trailing: secondary first, primary last, as the
   desktop's dialogs. The spinner stands still under Reduce Motion.
-- The menu-bar icon is the Harness symbol (`HarnessStatusIcon.svg`), 17 points
-  in a 28-point width, a template image (`device-app/src-tauri/icons/tray.png`):
-  black on a light bar, white on a dark one. A dark bar shows the dark artwork
-  (`HarnessStatusIconDark.svg`, `tray-dark.png`), a solid tile with the face cut
-  out, as the desktop app's status icon does. The app icon is the desktop app's.
+- The menu-bar icon is the Pixel H, a 7x7-pixel H, a template image 18 points
+  square (`device-app/src-tauri/icons/tray.png`): black on a light bar, white on
+  a dark one. The app icon is the Pixel H: a black pixel H on the Harness green
+  tile.
 - An on/off setting in the menu is one native check item: one row, its state in
   the check, a label that never changes. Sound is the first.
 - A choice among named options in the menu is one native submenu of check items,

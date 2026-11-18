@@ -40,13 +40,12 @@ function theme(name: 'light' | 'dark'): HTMLElement {
   section.className = 'theme'
   section.dataset.theme = name
 
-  // The menu bar draws the tray icon as a template: black on a light bar, white on a dark one (gallery.html). A dark
-  // bar shows the dark artwork, as Desktop's status icon does.
+  // The menu bar draws the tray icon as a template: black on a light bar, white on a dark one (gallery.html).
   const bar = document.createElement('div')
   bar.className = 'bar'
   const tray = document.createElement('img')
   tray.className = 'tray'
-  tray.src = name === 'dark' ? '../src-tauri/icons/tray-dark.png' : '../src-tauri/icons/tray.png'
+  tray.src = '../src-tauri/icons/tray.png'
   tray.alt = 'Harness'
   bar.append(tray)
 

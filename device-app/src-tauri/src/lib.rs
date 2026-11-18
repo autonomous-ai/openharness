@@ -20,8 +20,6 @@ pub mod state;
 pub mod tabs;
 #[cfg(target_os = "macos")]
 pub mod tabs_macos;
-#[cfg(target_os = "macos")]
-pub mod tray_macos;
 pub mod types;
 pub mod update;
 pub mod watch;
