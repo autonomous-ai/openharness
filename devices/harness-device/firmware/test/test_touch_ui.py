@@ -1096,6 +1096,24 @@ static void inbox_full_checks(void) {
     s.offset=0; COPY(oldest,s.notice[NOTICES-2].agent_id);
     ui_notify_task_done("new","New pane","M2","Another result arrived.");
     assert(s.notice_count==NOTICES && notice_has("held",true) && notice_has("new",false) && !notice_has(oldest,false));
+    // A full snapshot without the message being read: the oldest message makes room for it, no question goes.
+    cable_notif_t read={.agent_id="held",.name="Release",.summary="Published.",.read_token="t"};
+    for(int i=0;i<NOTICES;i++) {
+        memset(&rows[i],0,sizeof rows[i]);
+        snprintf(rows[i].agent_id,sizeof rows[i].agent_id,i<4 ? "q-%d" : "m-%d",i);
+        COPY(rows[i].summary,"Done."); rows[i].question=i<4;
+    }
+    reset(); ui_notif_replace(&read,1); ui_notif_open(); notice_mark_read(&s.notice[s.offset]);
+    ui_notif_replace(rows,NOTICES);
+    assert(s.notice_count==NOTICES && s.view==INBOX && !strcmp(s.notice[s.offset].agent_id,"held") && !s.notice[s.offset].question);
+    for(int i=0;i<4;i++) { snprintf(id,sizeof id,"q-%d",i); assert(notice_has(id,true)); }
+    snprintf(id,sizeof id,"m-%d",NOTICES-1); assert(!notice_has(id,false));
+    // 24 questions: none gives way to the message being read, which goes.
+    for(int i=0;i<NOTICES;i++) { snprintf(rows[i].agent_id,sizeof rows[i].agent_id,"q-%d",i); rows[i].question=true; }
+    reset(); ui_notif_replace(&read,1); ui_notif_open(); notice_mark_read(&s.notice[s.offset]);
+    ui_notif_replace(rows,NOTICES);
+    assert(s.notice_count==NOTICES && !notice_has("held",false));
+    for(int i=0;i<NOTICES;i++) { snprintf(id,sizeof id,"q-%d",i); assert(notice_has(id,true)); }
     puts("inbox full: a message never takes a question's place; the oldest message, or the oldest question for a question, goes PASS");
     reset();
 }
