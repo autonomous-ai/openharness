@@ -1,5 +1,6 @@
 import type { ChildProcess } from 'node:child_process'
 import * as fs from 'node:fs'
+import * as asyncFs from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -14,6 +15,7 @@ import { ownSessionStorage } from '../harnessd/sessionStorageOwner.js'
 import type { ExecutionArtifact } from '../harnessd/executionArtifacts.js'
 
 vi.mock('node:fs', async original => ({ ...await original<object>() }))
+vi.mock('node:fs/promises', async original => ({ ...await original<object>() }))
 
 let root: string
 let storage: SessionStorage
@@ -217,6 +219,106 @@ describe('required session storage process', () => {
       rmSync(root, { recursive: true, force: true })
       renameSync(moved, root)
     }
+  })
+
+  it('closes other owned source descriptors when its temporary directory cannot be cleaned at shutdown', async () => {
+    writeFileSync(join(root, 'registry.json'), JSON.stringify([row()]), { mode: 0o600 })
+    const source = await storage.retain({ kind: 'registry' })
+    if (source.image.state !== 'image' || !source.image.json) throw new Error('fixture source missing')
+    await storage.prepare({ kind: 'registry' }, source.image.proof, source.image.value)
+    const owner = storage as unknown as { retained: Map<string, { fd: number }>; child: ChildProcess }
+    const fd = [...owner.retained.values()][0].fd, child = owner.child
+    const exited = new Promise<void>(resolve => child.once('exit', () => resolve()))
+    const closed = new Promise<void>(resolve => child.once('close', () => resolve()))
+    const disconnected = new Promise<void>(resolve => child.once('disconnect', () => resolve()))
+    const moved = `${root}-displaced`
+    renameSync(root, moved); mkdirSync(root, { mode: 0o700 }); expectedCloseFailure = true
+    try {
+      await expect(storage.close()).rejects.toMatchObject({ code: 'cleanup-unconfirmed' })
+      await Promise.all([exited, closed, disconnected])
+      expect(() => process.kill(child.pid!, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }))
+      expect(readdirSync(moved).some(name => name.endsWith('.tmp'))).toBe(true)
+      expect(() => fs.fstatSync(fd)).toThrow(expect.objectContaining({ code: 'EBADF' }))
+    } finally {
+      // RED cleanup still owns the exact retained descriptor; do not leave it to the worker's exit.
+      try { fs.fstatSync(fd); fs.closeSync(fd) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EBADF') throw error }
+      rmSync(root, { recursive: true, force: true }); renameSync(moved, root)
+    }
+  })
+
+  it('attempts the remaining source descriptor when one close is unconfirmed', async () => {
+    writeFileSync(join(root, 'registry.json'), JSON.stringify([row()]), { mode: 0o600 })
+    writeFileSync(join(root, 'agent-names.json'), '{}', { mode: 0o600 })
+    const first = await storage.retain({ kind: 'registry' }), second = await storage.retain({ kind: 'names' })
+    const owner = storage as unknown as { retained: Map<string, { fd: number }>; child: ChildProcess }
+    const fd = owner.retained.get(first.lease)!.fd, next = owner.retained.get(second.lease)!.fd
+    const child = owner.child, closed = new Promise<void>(resolve => child.once('close', () => resolve()))
+    const close = fs.closeSync
+    const closeAttempt = vi.spyOn(fs, 'closeSync').mockImplementation(descriptor => {
+      close(descriptor)
+      if (descriptor === fd) throw new Error('fixture ambiguous source close')
+    })
+    expectedCloseFailure = true
+    try {
+      await expect(storage.close()).rejects.toMatchObject({ code: 'cleanup-unconfirmed' })
+      await closed
+      expect(closeAttempt.mock.calls.filter(([descriptor]) => descriptor === fd)).toHaveLength(1)
+      expect(() => fs.fstatSync(next)).toThrow(expect.objectContaining({ code: 'EBADF' }))
+      expect(owner.retained.has(first.lease)).toBe(true)
+      expect(owner.retained.has(second.lease)).toBe(false)
+      expect(() => process.kill(child.pid!, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }))
+    } finally {
+      closeAttempt.mockRestore()
+      try { fs.fstatSync(next); close(next) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EBADF') throw error }
+    }
+  })
+
+  it('rejects queued preparation at close without releasing a displaced reservation to another writer', async () => {
+    await storage.prepare({ kind: 'registry' }, null, [])
+    const owner = storage as unknown as { preparation: { reservation: object; release(): void } | undefined }
+    const reservation = owner.preparation!
+    let settled = 0
+    const queued = [0, 1].map(() => storage.prepare({ kind: 'registry' }, null, []).then(
+      () => { throw new Error('closed storage admitted preparation') }, error => { settled++; return error }))
+    const moved = `${root}-displaced`
+    renameSync(root, moved); mkdirSync(root, { mode: 0o700 }); expectedCloseFailure = true
+    try {
+      await expect(storage.close()).rejects.toMatchObject({ code: 'cleanup-unconfirmed' })
+      await new Promise<void>(resolve => setImmediate(resolve))
+      expect(settled).toBe(2)
+      expect(owner.preparation).toBe(reservation)
+      expect(readdirSync(root).filter(name => name.endsWith('.tmp'))).toEqual([])
+      expect(readdirSync(moved).filter(name => name.endsWith('.tmp'))).toHaveLength(1)
+      for (const error of await Promise.all(queued)) expect(error).toMatchObject({ code: 'disconnected' })
+    } finally {
+      // Only RED needs to wake the unimplemented close signal; storage is permanently closed.
+      reservation.release(); await Promise.all(queued)
+      rmSync(root, { recursive: true, force: true }); renameSync(moved, root)
+    }
+  })
+
+  it('revokes a preparation awaiting directory admission before its exclusive file open', async () => {
+    let enter!: () => void, release!: () => void
+    const entered = new Promise<void>(resolve => { enter = resolve }), waiting = new Promise<void>(resolve => { release = resolve })
+    const mkdir = asyncFs.mkdir, open = fs.open
+    vi.spyOn(asyncFs, 'mkdir').mockImplementation((async (...args: Parameters<typeof mkdir>) => {
+      const result = await mkdir(...args)
+      if (args[0] === root) { enter(); await waiting }
+      return result
+    }) as typeof mkdir)
+    const opens: string[] = []
+    vi.spyOn(fs, 'open').mockImplementation(((...args: Parameters<typeof open>) => {
+      if (String(args[0]).endsWith('.tmp')) opens.push(String(args[0]))
+      return open(...args)
+    }) as typeof open)
+    const preparing = storage.prepare({ kind: 'registry' }, null, []).catch(error => error)
+    await entered
+    const closing = storage.close()
+    release()
+    await closing
+    expect(await preparing).toMatchObject({ code: 'disconnected' })
+    expect(opens).toEqual([])
+    expect(readdirSync(root).some(name => name.endsWith('.tmp'))).toBe(false)
   })
 
   it.each(['changed', 'missing'] as const)('refuses a %s selected payload before reading an image', async state => {

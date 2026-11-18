@@ -439,7 +439,7 @@ it('closes queued preparation ownership when storage closes during its preceding
   const second = storage.prepare({ kind: 'registry' }, null, []).catch(error => error)
   await storage.close()
   expect(await first).toMatchObject({ code: 'disconnected' })
-  expect(await second).toMatchObject({ code: 'expired' })
+  expect(await second).toMatchObject({ code: 'disconnected' })
   expect(nativeFs.readdirSync(storage.root)).toEqual([])
 })
 

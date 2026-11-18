@@ -828,3 +828,46 @@ Evidence in /tmp (all one worker, actual exit and process group absence recorded
 
 The frozen b842 full/lean artifact predates this correction and is only interim
 build evidence. Smoke/timing and final combined acceptance remain blocked.
+
+## Shutdown attempts every owned descriptor (18 November)
+
+Design: a failed temporary-directory cleanup must keep that reservation owned, while
+shutdown still attempts independent retained source descriptors after actual child
+exit. Closing permanently revokes admission. At most the existing bounded preparation
+waiters receive a close-only rejection; each callback removes itself when its wait
+settles. An unresolved failed reservation is not released to a new writer. A queued
+operation's catch may clear only its own exact reservation, never its predecessor's.
+Preparation rechecks close/failure/deadline after awaited directory admission and
+before O_EXCL. No new raw bytes, persistence, process, polling or retry is introduced.
+
+Shutdown first reaps its child, attempts the current temporary, waits accepted parent
+open operations, and attempts any newly acquired reservation. Every retained source
+FD is then closed independently; successfully closed records are removed, failed ones
+stay owned. Every failure remains sticky and close rejects with cleanup-unconfirmed
+after the other custody attempts. Failed temporary cleanup does not authorize deleting
+in a moved directory. This is a runtime correction, not only test teardown repair.
+
+Failure-first evidence (all groups absent, no forced group kill needed):
+
+- core-grid-storage-publication-cleanup-red2-20261118.log: actual child exit, close and
+  IPC disconnect completed, yet fstat still succeeded on the retained parent source FD.
+- core-grid-storage-shutdown-custody-red1-20261118.log: both queued prepare promises
+  remained unsettled after close; an accepted preparation opened its temporary after
+  close while it had been waiting for directory admission. Two actual failures.
+- core-grid-storage-shutdown-custody-green1-20261118.log: nine targeted new/existing
+  cases passed, including EPERM/EINVAL/ENOSYS kill custody and an outstanding source open.
+- core-grid-storage-shutdown-custody-coverage1-20261118.log: 108 pass/one old fixture
+  category failure. Close now rejects a queued waiter as disconnected immediately;
+  the old fixture expected expired after its predecessor settled. Only that expected
+  fixed category changed; no timeout was relaxed.
+- core-grid-storage-shutdown-custody-coverage2-20261118.log: 115 tests passed, coverage
+  failed because the selected files omitted existing source-entry/equality/resolution
+  callers. The failed coverage packet is retained.
+- core-grid-storage-shutdown-custody-coverage3-20261118.log: 162 tests/six files passed;
+  sessionStorage.ts has 100% statements (511), branches (335), functions (83), lines
+  (382). This includes exact selected credentials, source equality, malformed replies,
+  pending creation operations and bounded lists. A failed first source close also
+  proves the second source closes, with the failed record retained and no close retry.
+- core-grid-storage-custody-runtime-types2-20261118.log: TypeScript passed on the final
+  runtime and all current fixture changes. These are macOS/source checks; final combined
+  native/coverage/cost gates remain pending, Windows native remains deferred.

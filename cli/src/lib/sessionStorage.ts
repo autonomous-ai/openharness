@@ -67,6 +67,7 @@ export class SessionStorage {
   private exiting: Promise<void> | undefined
   private preparationTail: Promise<void> = Promise.resolve()
   private preparationWaiting = 0
+  private readonly preparationWaiters = new Set<() => void>()
   private preparation: { reservation: OwnedReservation; child?: ChildProcess; writtenIdentity?: string; release(): void } | undefined
   private writeTail: Promise<void> = Promise.resolve()
   private writeWaiting = 0
@@ -403,13 +404,28 @@ export class SessionStorage {
     let release!: () => void
     this.preparationTail = new Promise(resolve => { release = resolve })
     this.preparationWaiting++
-    await previous
-    this.preparationWaiting--
     let reservation: OwnedReservation | undefined
+    const check = () => {
+      if (this.closed || this.closeFailed) throw new SessionStorageUnavailable('disconnected')
+      if (performance.now() >= expires) throw new SessionStorageUnavailable('expired')
+    }
     try {
-      if (this.closed || performance.now() >= expires) throw new SessionStorageUnavailable('expired')
+      await new Promise<void>((resolve, reject) => {
+        let settled = false
+        const finish = (closed: boolean) => {
+          if (settled) return
+          settled = true
+          this.preparationWaiters.delete(cancel)
+          closed ? reject(new SessionStorageUnavailable('disconnected')) : resolve()
+        }
+        const cancel = () => finish(true)
+        this.preparationWaiters.add(cancel)
+        void previous.then(() => finish(false))
+      }).finally(() => { this.preparationWaiting-- })
+      check()
       const target = this.path(document)
       await privateRegistryDirectory(dirname(target))
+      check()
       const directoryIdentity = sessionSourceIdentity(lstatSync(dirname(target), { bigint: true }))
       const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`
       stateFileCustodyHealthy()
@@ -438,8 +454,10 @@ export class SessionStorage {
       return result
     } catch (error) {
       if (error instanceof StateFileCleanupUnconfirmed) this.closeFailed = true
-      if (reservation) this.removeTemporary(reservation)
-      this.preparation = undefined
+      if (reservation) {
+        this.removeTemporary(reservation)
+        if (this.preparation?.reservation === reservation) this.preparation = undefined
+      }
       release()
       throw error instanceof StateFileCleanupUnconfirmed ? new SessionStorageUnavailable('cleanup-unconfirmed') : error
     }
@@ -574,24 +592,38 @@ export class SessionStorage {
   close(): Promise<void> {
     if (this.closing) return this.closing
     this.closed = true
+    for (const cancel of this.preparationWaiters) cancel()
     return this.closing = (async () => {
       for (const waiting of this.queue.splice(0)) waiting.reject(new SessionStorageUnavailable('disconnected'))
       this.terminate()
       await this.exiting
-      if (this.preparation) {
-        this.removeTemporary(this.preparation.reservation)
-        this.preparation.release()
-        this.preparation = undefined
+      let failed = false
+      const attempt = (apply: () => void) => { try { apply() } catch { failed = true } }
+      let attempted: typeof this.preparation
+      const cleanPreparation = () => {
+        const owner = this.preparation
+        if (!owner || owner === attempted) return
+        attempted = owner
+        attempt(() => {
+          this.removeTemporary(owner.reservation)
+          owner.release()
+          if (this.preparation === owner) this.preparation = undefined
+        })
       }
-      // A source/temporary open may have reached the OS before close, without returning its FD yet.
-      // Reaping the child alone does not settle those parent operations or their write authority.
+      cleanPreparation()
+      // Already accepted opens must settle; close-only wakeups reject queued preparation without
+      // handing a failed reservation to another writer. No wake listener survives a settled wait.
       await Promise.allSettled([...this.descriptorOperations])
+      cleanPreparation()
       await this.writeTail
       await this.listSettlement
-      for (const source of this.retained.values()) this.closeDescriptor(source.fd)
-      this.retained.clear()
-      stoppedAuthorityHealthy()
-      stateFileCustodyHealthy()
+      for (const [lease, source] of this.retained) attempt(() => {
+        this.closeDescriptor(source.fd)
+        this.retained.delete(lease)
+      })
+      attempt(stoppedAuthorityHealthy)
+      attempt(stateFileCustodyHealthy)
+      if (failed) this.closeFailed = true
       if (this.closeFailed) throw new SessionStorageUnavailable('cleanup-unconfirmed')
     })()
   }
