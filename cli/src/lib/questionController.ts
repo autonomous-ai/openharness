@@ -67,45 +67,50 @@ export function matchRow(rows: QuestionRow[], answer: string): QuestionRow | nul
 }
 
 /**
- * Read a multi-choice answer as the rows whose labels spell it, comma by comma. Senders join the chosen labels
- * with ", " and a label may hold a comma itself, so the answer is split only where every piece is a whole label
- * (exactly, as matchRow's first test) or blank. Of several readings the fewest pieces wins; on a tie, the longest
- * first piece, then the same rule on the rest. Null when no reading spells the whole answer.
+ * Read an answer of texts joined with ", " as the texts that spell it, by index. A text may hold a comma itself, so
+ * the answer is split only where every piece, trimmed, is a whole text (`key` of each the same) or blank. Of several
+ * readings the fewest pieces wins; on a tie, the longest first piece, then the same rule on the rest. Null when no
+ * reading spells the whole answer.
  *
  * The answer is outside text read in the core's own loop, so the work grows with its length alone: a piece holds
- * as many commas as the label it spells, never more than the label with the most. Trying every run of pieces
+ * as many commas as the text it spells, never more than the text with the most. Trying every run of pieces
  * held the core 12 s on a 3 KB answer (2026-11-18).
  */
-export function partitionLabels(rows: QuestionRow[], answer: string): QuestionRow[] | null {
-  // The first row of each label, as matchRow's find takes it; norm keeps every comma.
-  const byLabel = new Map<string, QuestionRow>()
+export function partitionTexts(texts: string[], answer: string, key: (text: string) => string): number[] | null {
+  // The first text of each key, as a find takes it; the key keeps every comma.
+  const byKey = new Map<string, number>()
   let widest = 1
-  for (const row of rows) {
-    const label = norm(row.label)
-    if (!label || byLabel.has(label)) continue
-    byLabel.set(label, row)
-    widest = Math.max(widest, label.split(',').length)
-  }
+  texts.forEach((text, index) => {
+    const k = key(text)
+    if (!k || byKey.has(k)) return
+    byKey.set(k, index)
+    widest = Math.max(widest, k.split(',').length)
+  })
   const parts = answer.split(',')
-  // count[i]: the fewest rows that spell parts[i..], the first of them first[i], the rest from parts[next[i]].
+  // count[i]: the fewest texts that spell parts[i..], the first of them first[i], the rest from parts[next[i]].
   const count = Array<number>(parts.length + 1).fill(Infinity)
-  const first = Array<QuestionRow | undefined>(parts.length), next = Array<number>(parts.length)
+  const first = Array<number | undefined>(parts.length), next = Array<number>(parts.length)
   count[parts.length] = 0
   for (let i = parts.length - 1; i >= 0; i--) {
     // A blank piece (a stray or trailing comma) spells nothing, as the loose reading drops it: refusing it would
-    // send a comma label back to that reading.
-    if (!norm(parts[i].trim())) { count[i] = count[i + 1]; next[i] = i + 1; continue }
+    // send a comma text back to that reading.
+    if (!key(parts[i].trim())) { count[i] = count[i + 1]; next[i] = i + 1; continue }
     // Longest piece first, so a tie keeps it. Trimmed first, as the loose reading's pieces: norm drops a trailing
     // full stop before it trims, so " No. " would read "no.".
     for (let j = Math.min(parts.length, i + widest); j > i; j--) {
-      const row = byLabel.get(norm(parts.slice(i, j).join(',').trim()))
-      if (row && count[j] + 1 < count[i]) { count[i] = count[j] + 1; first[i] = row; next[i] = j }
+      const index = byKey.get(key(parts.slice(i, j).join(',').trim()))
+      if (index !== undefined && count[j] + 1 < count[i]) { count[i] = count[j] + 1; first[i] = index; next[i] = j }
     }
   }
   if (count[0] === Infinity) return null
-  const spelled: QuestionRow[] = []
-  for (let i = 0; i < parts.length; i = next[i]) if (first[i]) spelled.push(first[i]!)
+  const spelled: number[] = []
+  for (let i = 0; i < parts.length; i = next[i]) if (first[i] !== undefined) spelled.push(first[i]!)
   return spelled
+}
+
+/** A multi-choice answer as the rows whose labels spell it (partitionTexts), each label read as matchRow's first test. */
+export function partitionLabels(rows: QuestionRow[], answer: string): QuestionRow[] | null {
+  return partitionTexts(rows.map((row) => row.label), answer, norm)?.map((index) => rows[index]) ?? null
 }
 
 /**
