@@ -7,7 +7,7 @@ type Container = { value: object; array: unknown[] | null; keys: Iterator<string
 function* ownKeys(value: object): Generator<string> {
   for (const key in value) if (Object.hasOwn(value, key)) yield key
 }
-function descriptor(value: object, key: string): PropertyDescriptor | undefined {
+function descriptor(value: object | null, key: string | number): PropertyDescriptor | undefined {
   for (let owner: object | null = value; owner !== null; owner = Object.getPrototypeOf(owner)) {
     const found = Object.getOwnPropertyDescriptor(owner, key)
     if (found) return found
@@ -49,10 +49,10 @@ export function boundedJsonBytes(value: unknown, limit: number): number | null {
       let found = false
       while (stack.length) {
         const held = stack[stack.length - 1]!
-        let key: string
+        let key: string | number
         if (held.array) {
           if (held.index === held.array.length) { ancestors.delete(held.value); stack.pop(); continue }
-          key = String(held.index++)
+          key = held.index++
         } else {
           const next = held.keys!.next()
           if (next.done) { ancestors.delete(held.value); stack.pop(); continue }
@@ -60,7 +60,8 @@ export function boundedJsonBytes(value: unknown, limit: number): number | null {
         }
         // Omitted undefined properties still consume work. They cannot walk an unlimited zero-byte record.
         if (++visits > limit) return null
-        const entry = held.array ? descriptor(held.value, key) : Object.getOwnPropertyDescriptor(held.value, key)
+        const entry = Object.getOwnPropertyDescriptor(held.value, key)
+          ?? (held.array ? descriptor(Object.getPrototypeOf(held.value), key) : undefined)
         if (entry && !('value' in entry)) return null
         item = entry?.value
         if (item === undefined) {
@@ -69,7 +70,7 @@ export function boundedJsonBytes(value: unknown, limit: number): number | null {
         }
         if (!held.first && ++bytes > limit) return null
         held.first = false
-        if (!held.array) {
+        if (typeof key === 'string') {
           const size = jsonStringBytes(key, limit - bytes)
           if (size === null || (bytes += size + 1) > limit) return null
         }
