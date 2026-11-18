@@ -61,11 +61,17 @@ describe('the definition for this install', () => {
     expect(CARRIED_ENV).toContain('HARNESS_AUTH_DIR')
   })
 
-  it('carries XDG_DATA_HOME and XDG_STATE_HOME when they are set', () => {
-    expect(serviceDefinition({ logFile: '/data/harness.log', source: { XDG_DATA_HOME: '/d', XDG_STATE_HOME: '/s' } }).env)
-      .toEqual({ XDG_DATA_HOME: '/d', XDG_STATE_HOME: '/s' })
-    expect(serviceDefinition({ logFile: '/data/harness.log', source: { XDG_DATA_HOME: '' } }).env).toEqual({})
-    expect(serviceDefinition({ logFile: '/data/harness.log', source: {} }).env).toEqual({})
+  // They place Harness's folders on Linux only: carried elsewhere they would rewrite a launchd definition, or warn on
+  // Windows, for nothing.
+  it('carries XDG_DATA_HOME and XDG_STATE_HOME on Linux when they are set, and nowhere else', () => {
+    const at = (platform: NodeJS.Platform, source: NodeJS.ProcessEnv) =>
+      serviceDefinition({ logFile: '/data/harness.log', source, platform, scriptPath: '/c.js', launcherPath: '/l' }).env
+    expect(at('linux', { XDG_DATA_HOME: '/d', XDG_STATE_HOME: '/s' })).toEqual({ XDG_DATA_HOME: '/d', XDG_STATE_HOME: '/s' })
+    expect(at('linux', { XDG_DATA_HOME: '' })).toEqual({})
+    expect(at('linux', {})).toEqual({})
+    for (const platform of ['darwin', 'win32'] as const) {
+      expect(at(platform, { XDG_DATA_HOME: '/d', XDG_STATE_HOME: '/s', ADAPTER_DATA_DIR: '/data' })).toEqual({ ADAPTER_DATA_DIR: '/data' })
+    }
   })
 
   it('runs the managed Node and the installed bundle from this home by default', () => {
