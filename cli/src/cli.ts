@@ -50,6 +50,8 @@ import { isInstalledCopy } from './lib/installedCopy.js'
 import { askRuntimePort, readCgroup, takeRuntimeBack } from './lib/osUnitTakeover.js'
 import { serviceCommand, serviceCommandDeps } from './lib/serviceCommand.js'
 import { infoBlockFooter } from './lib/infoBlockFooter.js'
+import { readMoveRecord } from './homeMove/record.js'
+import { moveStatusLine } from './homeMove/statusLine.js'
 import { flashCommand } from './lib/flash.js'
 import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE, type LoginCallbackParams } from './lib/loginCallback.js'
 import { ancestorsOnce, removeSignIn, SIGN_OUT_BUTTON_FLAG, signOutAsked, type Asker, type SignOutAsked } from './lib/signOut.js'
@@ -2748,6 +2750,9 @@ async function status(): Promise<void> {
       authDir: alive ? daemonStatus?.authDir ?? null : AUTH_DIR,
     },
   })
+  // Only Linux moves ~/.harness; a move that is held or failed says what to do.
+  const moveLine = process.platform === 'linux' ? moveStatusLine(readMoveRecord(homedir(), process.env)) : null
+  if (moveLine) console.log(`  ${moveLine}\n`)
   process.exit(0)
 }
 
