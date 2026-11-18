@@ -222,6 +222,32 @@ void main() {
       expect(File(path!).existsSync(), isFalse);
     });
 
+    test('the data folder and the short one come from one look, even while the folder moves', () {
+      // The data root is there at the first look and gone at the next.
+      var asked = 0;
+      final dataRoot = '/${'d' * 80}/harness';
+      final path = defaultDaemonSocketPath(
+        1,
+        environment: {'HOME': '/h', 'XDG_DATA_HOME': '/${'d' * 80}', 'XDG_STATE_HOME': '/s'},
+        isWindows: false,
+        look: HomeLook(
+          linux: true,
+          environment: {'XDG_DATA_HOME': '/${'d' * 80}', 'XDG_STATE_HOME': '/s'},
+          exists: (path) => path == dataRoot ? ++asked == 1 : path == '/h/.harness',
+        ),
+      );
+      expect(path, matches(RegExp(r'^/s/harness/s/[0-9a-f]{16}/daemon-1\.sock$')));
+    });
+
+    test('the socket is looked for again at each use, so a move is followed', () {
+      var where = '/a/daemon-1.sock';
+      final transport = LocalDaemonTransport(candidate: () => where)..useSocket();
+      expect(transport.socketPath, '/a/daemon-1.sock');
+      where = '/b/daemon-1.sock';
+      transport.useSocket();
+      expect(transport.socketPath, '/b/daemon-1.sock');
+    });
+
     test('is never looked for under flutter test', () {
       expect(
         LocalDaemonTransport.detect(Uri.parse('http://127.0.0.1:18473')).candidate,
@@ -254,7 +280,7 @@ void main() {
       final tcp = await start(_Daemon.tcp());
       final unix = await start(_Daemon.unix(socketPath));
       final transport = LocalDaemonTransport(
-        candidate: socketPath,
+        candidate: () => socketPath,
         credential: () => credential,
       )..useSocket();
       final api = ApiClient(
@@ -290,7 +316,7 @@ void main() {
 
     test('is not offered to a port while a socket can exist', () {
       final transport = LocalDaemonTransport(
-        candidate: socketPath,
+        candidate: () => socketPath,
         credential: () => credential,
       );
       expect(transport.portAllowed, isFalse);
@@ -327,7 +353,7 @@ void main() {
     test('asks the socket first and keeps the port untouched', () async {
       final tcp = await start(_Daemon.tcp());
       await start(_Daemon.unix(socketPath));
-      final transport = LocalDaemonTransport(candidate: socketPath);
+      final transport = LocalDaemonTransport(candidate: () => socketPath);
       final endpoint = await LocalCliDiscovery(
         config: configFor(tcp),
         identity: LocalMachineIdentity(computerIdFile: identityFile),
@@ -345,7 +371,7 @@ void main() {
       // The port's listener stands for another account: after a reboot it holds the
       // port until this user logs in, and could answer anything (audit H1).
       final tcp = await start(_Daemon.tcp());
-      final transport = LocalDaemonTransport(candidate: socketPath)..useSocket();
+      final transport = LocalDaemonTransport(candidate: () => socketPath)..useSocket();
       final endpoint = await LocalCliDiscovery(
         config: configFor(tcp),
         identity: LocalMachineIdentity(computerIdFile: identityFile),
@@ -376,7 +402,7 @@ void main() {
     test('goes over the socket, and fails as a daemon that is down once it is gone', () async {
       final tcp = await start(_Daemon.tcp());
       final unix = await start(_Daemon.unix(socketPath));
-      final transport = LocalDaemonTransport(candidate: socketPath)..useSocket();
+      final transport = LocalDaemonTransport(candidate: () => socketPath)..useSocket();
       final api = ApiClient(
         config: configFor(tcp),
         session: AuthSession(),
@@ -431,7 +457,7 @@ void main() {
           socket.destroy();
         });
       });
-      final transport = LocalDaemonTransport(candidate: socketPath)..useSocket();
+      final transport = LocalDaemonTransport(candidate: () => socketPath)..useSocket();
       final api = ApiClient(
         config: configFor(tcp),
         session: AuthSession(),
@@ -449,7 +475,7 @@ void main() {
       final tcp = await start(_Daemon.tcp());
       final other = await start(_Daemon.tcp());
       final unix = await start(_Daemon.unix(socketPath));
-      final transport = LocalDaemonTransport(candidate: socketPath)..useSocket();
+      final transport = LocalDaemonTransport(candidate: () => socketPath)..useSocket();
       final dio = Dio()
         ..httpClientAdapter = LocalDaemonHttpAdapter(
           transport,
@@ -488,7 +514,7 @@ void main() {
     test('dials the socket when discovery chose it', () async {
       final tcp = await start(_Daemon.tcp());
       final unix = await start(_Daemon.unix(socketPath));
-      final conn = connFor(tcp, LocalDaemonTransport(candidate: socketPath)..useSocket());
+      final conn = connFor(tcp, LocalDaemonTransport(candidate: () => socketPath)..useSocket());
       addTearDown(conn.close);
       await conn.connect();
       await until(() => unix.selects > 0);
@@ -503,7 +529,7 @@ void main() {
       // port; the next connect must still find the socket the new daemon made.
       final tcp = await start(_Daemon.tcp());
       final unix = await start(_Daemon.unix(socketPath));
-      final transport = LocalDaemonTransport(candidate: socketPath)..useTcp();
+      final transport = LocalDaemonTransport(candidate: () => socketPath)..useTcp();
       final conn = connFor(tcp, transport);
       addTearDown(conn.close);
       await conn.connect();
@@ -515,7 +541,7 @@ void main() {
 
     test('never dials the port when the socket is not there', () async {
       final tcp = await start(_Daemon.tcp());
-      final transport = LocalDaemonTransport(candidate: socketPath)..useSocket();
+      final transport = LocalDaemonTransport(candidate: () => socketPath)..useSocket();
       final conn = connFor(tcp, transport);
       addTearDown(conn.close);
       await conn.connect();
