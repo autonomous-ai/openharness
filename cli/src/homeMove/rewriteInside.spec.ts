@@ -27,7 +27,7 @@ function staged(names = ['cli', 'dsh', 'claude-profiles', 'runtime']) {
   const at = (entry: string, ...rest: string[]): string => join(plan.entries.find((each) => each.name === entry)!.staged, ...rest)
   const dataDir = at('cli', 'data')
   mkdirSync(dataDir, { recursive: true, mode: 0o700 })
-  return { home, plan, at, dataDir, old: (...rest: string[]): string => join(plan.legacy, ...rest) }
+  return { home, plan, at, dataDir, folders: { dataDir, dshDir: at('dsh') }, old: (...rest: string[]): string => join(plan.legacy, ...rest) }
 }
 
 /** Writes [value] (JSON, or a string as it is) at [path]; returns the journal line its rewrite must leave. */
@@ -98,7 +98,7 @@ describe('the move rewrites what names the old tree, inside it', () => {
     ]
     const system = put(t.at('runtime', 'current-other'), '/usr/bin/tmux\n')
     const steps = journal()
-    expect(rewriteInside(t.plan, t.dataDir, steps)).toEqual({ files: 3, left: [] })
+    expect(rewriteInside(t.plan, t.folders, steps)).toEqual({ files: 3, left: [] })
     expect(pointers.map((pointer) => readFileSync(pointer.path, 'utf8'))).toEqual([
       `${t.plan.state}/runtime/node-v24.11.0-linux-x64/bin/node\n`,
       `${t.plan.state}/runtime/grid-b7/bin/grid\n`,
@@ -122,7 +122,7 @@ describe('the move rewrites what names the old tree, inside it', () => {
     const registry = put(join(t.dataDir, 'registry.json'), [row])
     const stopped = put(join(t.dataDir, 'stopped-agents', 'a1.json'), { version: 1, session: row })
     const steps = journal()
-    expect(rewriteInside(t.plan, t.dataDir, steps)).toEqual({ files: 2, left: [] })
+    expect(rewriteInside(t.plan, t.folders, steps)).toEqual({ files: 2, left: [] })
     expect(json(registry.path)).toEqual([moved])
     expect(json(stopped.path)).toEqual({ version: 1, session: moved })
     expect(steps.done).toEqual([registry, stopped])
@@ -140,7 +140,7 @@ describe('the move rewrites what names the old tree, inside it', () => {
       put(t.at('cli', 'node-migration.json'), { reason: 'rolled-back', at: 1, node: t.old('runtime', 'node-v24.11.0-linux-x64', 'bin', 'node') }),
     ]
     const steps = journal()
-    expect(rewriteInside(t.plan, t.dataDir, steps)).toEqual({ files: 5, left: [] })
+    expect(rewriteInside(t.plan, t.folders, steps)).toEqual({ files: 5, left: [] })
     expect(records.map((record) => json(record.path))).toEqual([
       [movedWork, '/h2/.claude-personal'],
       [`${t.plan.data}/claude-profiles/codex-work`],
@@ -161,7 +161,7 @@ describe('the move rewrites what names the old tree, inside it', () => {
     const dev = { id: 'me/dev', dir: t.old('dsh', 'me', 'dev'), source: '/src/dev', ref: null, commit: null, linked: true, installedAt: 3 }
     const index = put(t.at('dsh', 'installed.json'), [godogen, score, dev])
     const steps = journal()
-    expect(rewriteInside(t.plan, t.dataDir, steps)).toEqual({ files: 1, left: [] })
+    expect(rewriteInside(t.plan, t.folders, steps)).toEqual({ files: 1, left: [] })
     expect(json(index.path)).toEqual([
       { ...godogen, dir: `${t.plan.data}/dsh/autonomous/godogen`, setup: 'pending' },
       { ...score, dir: `${t.plan.data}/dsh/autonomous/score`, setup: 'pending' },
@@ -175,7 +175,7 @@ describe('the move rewrites what names the old tree, inside it', () => {
     const godogen = { id: 'autonomous/godogen', dir: t.old('dsh', 'autonomous', 'godogen'), source: 'https://example.com/godogen.git', ref: 'main', commit: 'abc', linked: false, installedAt: 1 }
     const dev = { id: 'me/dev', dir: t.old('dsh', 'me', 'dev'), source: '/src/dev', ref: null, commit: null, linked: true, installedAt: 3 }
     const index = put(t.at('dsh', 'installed.json'), [godogen, dev])
-    expect(rewriteInside(t.plan, t.dataDir, journal())).toEqual({ files: 1, left: [] })
+    expect(rewriteInside(t.plan, t.folders, journal())).toEqual({ files: 1, left: [] })
     expect(json(index.path)).toEqual([
       { ...godogen, dir: `${t.plan.data}/dsh/autonomous/godogen`, setup: 'pending' },
       { ...dev, dir: `${t.plan.data}/dsh/me/dev` },
@@ -187,7 +187,7 @@ describe('the move rewrites what names the old tree, inside it', () => {
     const { file, catalog, homes: before, moved } = sealedJournal(t)
     const pool = Object.fromEntries(POOL.map((name) => [name, tree(`${file}${name}`)]))
     const steps = journal()
-    expect(rewriteInside(t.plan, t.dataDir, steps)).toEqual({ files: 1, left: [] })
+    expect(rewriteInside(t.plan, t.folders, steps)).toEqual({ files: 1, left: [] })
     expect(sets(readAdoptedHomes(file).homes)).toEqual(sets(moved))
     expect(sets(before)).not.toEqual(sets(moved))
     expect(json(file)).toEqual({ claude: [`${t.plan.data}/claude-profiles/work`], codex: [] })
@@ -206,7 +206,7 @@ describe('the move rewrites what names the old tree, inside it', () => {
     const file = join(t.dataDir, 'engine-homes.json')
     const catalog = put(file, { claude: [t.old('claude-profiles', 'work'), '/h2/.claude-personal'], codex: [] })
     const steps = journal()
-    expect(rewriteInside(t.plan, t.dataDir, steps)).toEqual({ files: 1, left: [] })
+    expect(rewriteInside(t.plan, t.folders, steps)).toEqual({ files: 1, left: [] })
     expect(json(file)).toEqual({ claude: [`${t.plan.data}/claude-profiles/work`, '/h2/.claude-personal'], codex: [] })
     expect(readdirSync(t.dataDir)).toEqual(['engine-homes.json'])
     expect(steps.done).toEqual([catalog])
@@ -217,7 +217,7 @@ describe('the move rewrites what names the old tree, inside it', () => {
     const { file, homes: before } = sealedJournal(t)
     const was = tree(t.dataDir)
     const steps = journal()
-    rewriteInside(t.plan, t.dataDir, steps)
+    rewriteInside(t.plan, t.folders, steps)
     for (const step of [...steps.done].reverse()) {
       if (step.did === 'file') restoreFile(step)
       if (step.did === 'aside') restoreAside(step)
@@ -242,7 +242,7 @@ describe('the move rewrites what names the old tree, inside it', () => {
     expect(() => readAdoptedHomes(file)).toThrow()
     const was = tree(t.dataDir)
     const steps = journal()
-    expect(rewriteInside(t.plan, t.dataDir, steps)).toEqual({ files: 0, left: [file] })
+    expect(rewriteInside(t.plan, t.folders, steps)).toEqual({ files: 0, left: [file] })
     // Nothing of it is renamed, nor its catalog rewritten.
     expect(tree(t.dataDir)).toEqual(was)
     expect(steps.done).toEqual([])
@@ -258,7 +258,7 @@ describe('the move rewrites what names the old tree, inside it', () => {
       put(t.at('claude-profiles', profile, 'plugins', 'known_marketplaces.json'), marketplace(t.old('claude-profiles', profile))),
     ])
     const steps = journal()
-    expect(rewriteInside(t.plan, t.dataDir, steps)).toEqual({ files: 4, left: [] })
+    expect(rewriteInside(t.plan, t.folders, steps)).toEqual({ files: 4, left: [] })
     expect(records.map((record) => json(record.path))).toEqual(profiles.flatMap((profile) => [
       plugin(`${t.plan.data}/claude-profiles/${profile}`), marketplace(`${t.plan.data}/claude-profiles/${profile}`),
     ]))
@@ -274,7 +274,7 @@ describe('the move rewrites what names the old tree, inside it', () => {
       + `  "entry": ${JSON.stringify(t.old('dsh'))}, "below":${JSON.stringify(t.old('dsh', 'a'))} }`
     const registry = put(join(t.dataDir, 'registry.json'), text)
     const steps = journal()
-    expect(rewriteInside(t.plan, t.dataDir, steps)).toEqual({ files: 1, left: [] })
+    expect(rewriteInside(t.plan, t.folders, steps)).toEqual({ files: 1, left: [] })
     expect(readFileSync(registry.path, 'utf8')).toBe(text
       .replace(`"entry": ${JSON.stringify(t.old('dsh'))}`, `"entry": ${JSON.stringify(`${t.plan.data}/dsh`)}`)
       .replace(`"below":${JSON.stringify(t.old('dsh', 'a'))}`, `"below":${JSON.stringify(`${t.plan.data}/dsh/a`)}`))
@@ -291,7 +291,7 @@ describe('the move rewrites what names the old tree, inside it', () => {
     createHomeAdopter(file).adopt({ claude: [], codex: ['/h2/.codex'] })
     const was = tree(t.home, true)
     const steps = journal()
-    expect(rewriteInside(t.plan, t.dataDir, steps)).toEqual({ files: 0, left: [] })
+    expect(rewriteInside(t.plan, t.folders, steps)).toEqual({ files: 0, left: [] })
     expect(tree(t.home, true)).toEqual(was)
     expect(steps.done).toEqual([])
   })
@@ -302,7 +302,7 @@ describe('the move rewrites what names the old tree, inside it', () => {
     const registry = put(join(t.dataDir, 'registry.json'), cut)
     const profiles = put(join(t.dataDir, 'claude-profiles.json'), [t.old('claude-profiles', 'work')])
     const steps = journal()
-    expect(rewriteInside(t.plan, t.dataDir, steps)).toEqual({ files: 1, left: [registry.path] })
+    expect(rewriteInside(t.plan, t.folders, steps)).toEqual({ files: 1, left: [registry.path] })
     expect(readFileSync(registry.path, 'utf8')).toBe(cut)
     expect(steps.done).toEqual([profiles])
   })
@@ -311,7 +311,7 @@ describe('the move rewrites what names the old tree, inside it', () => {
     const t = staged()
     const registry = put(join(t.dataDir, 'registry.json'), [{ cwd: t.old('community', 'k', 'project') }], 0o600)
     const plugins = put(t.at('claude-profiles', 'work', 'plugins', 'installed_plugins.json'), { installPath: t.old('claude-profiles', 'work', 'plugins', 'cache') }, 0o644)
-    expect(rewriteInside(t.plan, t.dataDir, journal())).toEqual({ files: 2, left: [] })
+    expect(rewriteInside(t.plan, t.folders, journal())).toEqual({ files: 2, left: [] })
     expect(statSync(registry.path).mode & 0o7777).toBe(0o600)
     expect(statSync(plugins.path).mode & 0o7777).toBe(0o644)
   })
@@ -321,7 +321,7 @@ describe('the move rewrites what names the old tree, inside it', () => {
     const kept = join(t.home, 'kept', 'data')
     const registry = put(join(kept, 'registry.json'), [{ claudeHome: t.old('claude-profiles', 'work') }])
     const steps = journal()
-    expect(rewriteInside(t.plan, kept, steps)).toEqual({ files: 1, left: [] })
+    expect(rewriteInside(t.plan, { ...t.folders, dataDir: kept }, steps)).toEqual({ files: 1, left: [] })
     expect(json(registry.path)).toEqual([{ claudeHome: `${t.plan.data}/claude-profiles/work` }])
     expect(steps.done).toEqual([registry])
   })
@@ -330,7 +330,7 @@ describe('the move rewrites what names the old tree, inside it', () => {
     const t = staged()
     const registry = put(join(t.dataDir, 'registry.json'), `[ {"cwd" : ${JSON.stringify(t.old('community', 'k'))},\t"n": 1.50} ]\n`, 0o640)
     const steps = journal()
-    rewriteInside(t.plan, t.dataDir, steps)
+    rewriteInside(t.plan, t.folders, steps)
     expect(readFileSync(registry.path).toString('base64')).not.toBe(registry.before)
     restoreFile(registry)
     expect(readFileSync(registry.path).toString('base64')).toBe(registry.before)

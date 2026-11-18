@@ -47,8 +47,9 @@ export async function runMove(check: Extract<MoveCheck, { move: true }>, env: No
       },
     }
     for (const entry of plan.entries) bytesCopied += stage(entry, plan, steps, deps, begun.startedAt)
-    // The data folder as staged, or where an override keeps it.
-    left = rewriteInside(plan, rebase(oldDataDir, plan.entries.map((entry) => [entry.from, entry.staged])), steps, io).left
+    // The data folder and the Store's as staged, or where an override keeps them.
+    const staged = (path: string): string => rebase(path, plan.entries.map((entry) => [entry.from, entry.staged]))
+    left = rewriteInside(plan, { dataDir: staged(oldDataDir), dshDir: staged(dshDirOf(plan, env)) }, steps, io).left
     rewriteOutside(plan, outside(plan.home, env, oldDataDir), steps, deps.run)
     // A data folder an override keeps out of the tree keeps its tag, and its panes theirs.
     if (newTag !== oldTag) deps.tmux.retag(oldTag, newTag, steps)
@@ -205,6 +206,9 @@ const recordKind = (path: string): string => basename(dirname(path)) === 'stoppe
 
 /** The daemon's data folder before the move: an override's, or the tree's own. */
 const dataDirOf = (plan: MovePlan, env: NodeJS.ProcessEnv): string => resolve(env.ADAPTER_DATA_DIR || join(plan.legacy, 'cli', 'data'))
+
+/** The Store's folder before the move (config/env.ts DSH_DIR): an override's, or the tree's own. */
+const dshDirOf = (plan: MovePlan, env: NodeJS.ProcessEnv): string => resolve(env.DSH_DIR || join(plan.legacy, 'dsh'))
 
 /** [path], under the first `from` of [places] it is in, spelled under that place's `to`; a path in none as it is. */
 function rebase(path: string, places: readonly (readonly [from: string, to: string])[]): string {

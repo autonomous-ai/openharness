@@ -25,11 +25,13 @@ const ASIDE = '.before-move'
 const STRING = /"(?:\\.|[^"\\])*"(\s*:)?/g
 
 /**
- * Rewrites each record in the staged trees, and in the data folder [dataDir] wherever an override keeps it, that stores a
- * path in the old tree, so it names that entry's place after the commit. A file's previous bytes are in [journal] before
- * it changes. [left] names the files that could not be read as JSON, and the engine-home journal when it is refused.
+ * Rewrites each record in the staged trees, and in the data folder and the Store's folder wherever an override keeps
+ * them ([folders], as staged when in the tree), that stores a path in the old tree, so it names that entry's place after
+ * the commit. A file's previous bytes are in [journal] before it changes. [left] names the files that could not be read
+ * as JSON, and the engine-home journal when it is refused.
  */
-export function rewriteInside(plan: MovePlan, dataDir: string, journal: Journal, io: RewriteIo = NODE_FS): { files: number; left: string[] } {
+export function rewriteInside(plan: MovePlan, folders: { dataDir: string; dshDir: string }, journal: Journal, io: RewriteIo = NODE_FS): { files: number; left: string[] } {
+  const { dataDir, dshDir } = folders
   const left: string[] = []
   let files = 0
   const rewrite: Rewrite = (path, change) => {
@@ -61,10 +63,9 @@ export function rewriteInside(plan: MovePlan, dataDir: string, journal: Journal,
   // lib/nodeMigration.ts keeps it in the CLI folder.
   const cli = staged('cli')
   if (cli) rewrite(join(cli, 'node-migration.json'), move)
-  const dsh = staged('dsh')
   // Every name of the table is in the plan, there or not (plan.ts): only a runtime there moves Harness's Python.
   const runtimeMoved = plan.entries.some((entry) => entry.name === 'runtime' && entry.present)
-  if (dsh) rewrite(join(dsh, 'installed.json'), (text) => markPending(move(text), runtimeMoved))
+  rewrite(join(dshDir, 'installed.json'), (text) => markPending(move(text), runtimeMoved))
   const profiles = staged('claude-profiles')
   if (profiles) {
     for (const profile of entriesOf(profiles, io)) {
