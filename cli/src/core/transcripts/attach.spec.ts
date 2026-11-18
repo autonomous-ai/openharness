@@ -996,6 +996,20 @@ describe('attaching a session', () => {
       },
     )
 
+    it('leaves its agy stream to the next attach when the binding moves on while its pane is read', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const run = setup(), row = session('agy', transcript([{ events: [started()], open: true }]), { boundAt: null })
+      vi.mocked(run.deps.captureTerminal).mockImplementationOnce(async () => { bindings.set(row.agentId, { ...row, boundAt: 1 }); return 'pane' })
+      expect(await run.attach.attachSession(row)).toBe(false)
+      expect(run.normalizers.hasState(row.sessionId)).toBe(false)
+      expect(await run.attach.attachSession(bindings.get(row.agentId)!)).toBe(true)
+      // The next attach read the conversation itself.
+      expect(made('agy')).toHaveLength(2)
+      expect(log.mock.calls.some(([line]) => String(line).includes('attached · engine=agy'))).toBe(true)
+      run.attach.forget(row.sessionId)
+    })
+
     it('tells the recaps when the last turn was already over at attach, never for one open or killed', async () => {
       vi.spyOn(console, 'log').mockImplementation(() => {})
       const settled = vi.fn()
