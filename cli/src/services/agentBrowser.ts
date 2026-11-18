@@ -42,6 +42,7 @@ import { join, resolve } from 'node:path'
 import { harnessPath, legacyHarnessPath, type HomeLook } from '../config/harnessHome.js'
 import { AGENT_BROWSER_REQUESTS, mayOpenBrowser, type AgentLife, type AgentView, type Asker, type CoreApi, type CorePorts, type ServiceRequests } from '../core/api.js'
 import { sweepAgentTmpWhenDue } from '../lib/agentTmp.js'
+import { errorKind } from '../lib/log.js'
 import { browserTools } from '../lib/browserToolsAsset.js'
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
 import { BROWSER_CHUNK_BYTES, encodeTerminalLocal } from '../lib/terminalBinary.js'
@@ -278,7 +279,7 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
       })
     } catch (error) {
       // The next time it runs, it is taken in then.
-      log(`agent browser ${session.agentId}: its Browser flag was not taken in: ${(error as Error).message}`)
+      log(`agent browser ${session.agentId}: its Browser flag was not taken in · ${errorKind(error)}`)
     }
   }
   /** Its browser, started: once each time it runs here, and not for a guest's (the machine's Podman, memory and network
@@ -558,7 +559,7 @@ export function startAgentBrowser(core: CoreApi, ports: Pick<CorePorts, 'agentBr
       // state file does not take still stops the browser, and starts it again at its agent's next run: said here.
       let changed = false
       try { changed = setOn(agentId, false) } catch (error) {
-        log(`agent browser ${agentId}: its Stop was not kept: ${(error as Error).message}`)
+        log(`agent browser ${agentId}: its Stop was not kept · ${errorKind(error)}`)
       }
       if (attached.delete(agentId) || browsers.state(agentId) || browsers.pending(agentId)) void browsers.stop(agentId)
       if (changed) count('agent_browser_stopped')
