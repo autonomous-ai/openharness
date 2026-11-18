@@ -247,10 +247,10 @@ impl Runner {
                 Ok(()) => Event::UpdateInstalled,
                 Err(failure) => Event::UpdateFailed(failure),
             }),
-            Effect::RunOrcaConnect(approve) => {
-                shared.with_cli(move |cli| Event::OrcaConnect(orca_cli::connect(cli, approve.as_ref())))
+            Effect::RunOrcaConnect(run, approve) => {
+                shared.with_cli(move |cli| Event::OrcaConnect(run, orca_cli::connect(cli, approve.as_ref())))
             }
-            Effect::RunOrcaStatus => shared.with_cli(|cli| Event::OrcaStatus(orca_cli::status(cli))),
+            Effect::RunOrcaStatus(run) => shared.with_cli(move |cli| Event::OrcaStatus(run, orca_cli::status(cli))),
             // Not with_cli: its Cli(false) would leave the row waiting for an answer that never comes.
             Effect::ExportLogs => match shared.cli() {
                 Some(cli) => {
@@ -1078,11 +1078,12 @@ mod tests {
         let approved = format!("device orca connect --approve {} --json", fingerprint.as_str());
         w.fake.script("device orca connect --json", &[&approve]);
         w.fake.script(&approved, &[r#"{"connect":"done"}"#]);
+        // Each answer carries its run's number back.
         assert_eq!(
-            w.answer(Effect::RunOrcaConnect(None)),
-            Event::OrcaConnect(OrcaAnswer::Approve { fingerprint: fingerprint.clone(), grants, update: false })
+            w.answer(Effect::RunOrcaConnect(1, None)),
+            Event::OrcaConnect(1, OrcaAnswer::Approve { fingerprint: fingerprint.clone(), grants, update: false })
         );
-        assert_eq!(w.answer(Effect::RunOrcaConnect(Some(fingerprint))), Event::OrcaConnect(OrcaAnswer::Done));
+        assert_eq!(w.answer(Effect::RunOrcaConnect(2, Some(fingerprint))), Event::OrcaConnect(2, OrcaAnswer::Done));
         assert_eq!(w.fake.calls(), ["device orca connect --json", approved.as_str()]);
     }
 
@@ -1092,7 +1093,7 @@ mod tests {
         let w = world();
         assert!(w.runner.find_cli());
         w.fake.script("device orca status --json", &[r#"{"orca":"offer"}"#]);
-        assert_eq!(w.answer(Effect::RunOrcaStatus), Event::OrcaStatus(Some(OrcaStatus::Offer)));
+        assert_eq!(w.answer(Effect::RunOrcaStatus(3)), Event::OrcaStatus(3, Some(OrcaStatus::Offer)));
         assert_eq!(w.fake.calls(), ["device orca status --json"]);
     }
 
@@ -1550,7 +1551,7 @@ mod tests {
             auth |= event == Event::Auth(Some(true));
             version |= event == Event::CliVersion(Some("0.6.58".into()));
             // A CLI with no `device orca` prints its usage: no row, and Orca is asked nothing more.
-            orca |= event == Event::OrcaStatus(None);
+            orca |= matches!(event, Event::OrcaStatus(_, None));
             effects = app.handle(event);
         }
         let device: Vec<String> = w.fake.calls().into_iter().filter(|call| call.starts_with("device ")).collect();

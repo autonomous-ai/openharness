@@ -243,8 +243,8 @@ pub enum OrcaAnswer {
 }
 
 /// What happened. WatchExit(None): ended by a signal. UpdateChecked(Some): a strictly newer release. InstallStep:
-/// `'static`, so only the step table's fixed copy can be one, never a line of the script's. OrcaStatus(None): the CLI
-/// could not say.
+/// `'static`, so only the step table's fixed copy can be one, never a line of the script's. OrcaConnect and OrcaStatus:
+/// the number of the run that answers, then its answer. OrcaStatus(_, None): the CLI could not say.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
     Tick { now: u64, desktop_running: bool },
@@ -266,13 +266,14 @@ pub enum Event {
     UpdateInstalled,
     UpdateFailed(UpdateFailure),
     LogsExported(Result<Exported, ExportFailure>),
-    OrcaConnect(OrcaAnswer),
-    OrcaStatus(Option<OrcaStatus>),
+    OrcaConnect(u64, OrcaAnswer),
+    OrcaStatus(u64, Option<OrcaStatus>),
 }
 
 /// What to do about it. Show(None) hides the window. ShowAbout: the About panel, with its credits line. Menu, Show,
-/// ShowAbout, Quit and Relaunch are the binary's. RunOrcaConnect(Some): only from the Connect click, with the
-/// fingerprint of the access the window showed.
+/// ShowAbout, Quit and Relaunch are the binary's. RunOrcaConnect and RunOrcaStatus: the run's number first, which its
+/// answer carries back. RunOrcaConnect(_, Some): only from the Connect click, with the fingerprint of the access the
+/// window showed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
     FindCli,
@@ -294,8 +295,8 @@ pub enum Effect {
     Log(String),
     CheckUpdate,
     InstallUpdate,
-    RunOrcaConnect(Option<Fingerprint>),
-    RunOrcaStatus,
+    RunOrcaConnect(u64, Option<Fingerprint>),
+    RunOrcaStatus(u64),
     Menu(Vec<MenuItem>),
     Show(Option<View>),
     ShowAbout(Option<String>),
