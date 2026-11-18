@@ -45,39 +45,41 @@ pub struct Look<'a> {
     pub exists: &'a dyn Fn(&Path) -> bool,
 }
 
-/// The root, by the rule, looked up again at each call so a move during the app's life is followed.
-pub fn harness_root(home: &Path, root: Root) -> PathBuf {
-    let env = |name: &str| std::env::var_os(name);
-    let exists = |path: &Path| path.exists();
-    harness_root_with(home, root, &Look { linux: cfg!(target_os = "linux"), env: &env, exists: &exists })
+/// Both roots, from one look: two entries a caller pairs never come from two layouts, even while Harness's folder
+/// moves.
+pub struct Roots {
+    data: PathBuf,
+    state: PathBuf,
 }
 
-/// The entry's folder under its root, by the rule.
-pub fn harness_path(home: &Path, entry: Entry) -> PathBuf {
-    harness_root(home, entry.root()).join(entry.name())
+impl Roots {
+    pub fn root(&self, root: Root) -> &Path {
+        match root {
+            Root::Data => &self.data,
+            Root::State => &self.state,
+        }
+    }
+
+    /// The entry's folder under its root.
+    pub fn path(&self, entry: Entry) -> PathBuf {
+        self.root(entry.root()).join(entry.name())
+    }
 }
 
 /// On Linux: the XDG roots once the data root exists, else `<home>/.harness` while that exists (not moved yet), else
 /// the XDG roots. The data root alone decides, so the bridge left at `~/.harness` never flips a moved machine back.
-/// Elsewhere both roots are `<home>/.harness`.
-pub fn harness_root_with(home: &Path, root: Root, look: &Look) -> PathBuf {
+/// Elsewhere both roots are `<home>/.harness`. A caller looks again at each lookup, so a move during the app's life is
+/// followed.
+pub fn harness_roots_with(home: &Path, look: &Look) -> Roots {
     let legacy = home.join(HARNESS_DIR);
     if !look.linux {
-        return legacy;
+        return Roots { data: legacy.clone(), state: legacy };
     }
     let data = xdg_root(home, "XDG_DATA_HOME", "share", look);
     if !(look.exists)(&data) && (look.exists)(&legacy) {
-        return legacy;
+        return Roots { data: legacy.clone(), state: legacy };
     }
-    match root {
-        Root::Data => data,
-        Root::State => xdg_root(home, "XDG_STATE_HOME", "state", look),
-    }
-}
-
-/// `harness_path`, with the look given.
-pub fn harness_path_with(home: &Path, entry: Entry, look: &Look) -> PathBuf {
-    harness_root_with(home, entry.root(), look).join(entry.name())
+    Roots { data, state: xdg_root(home, "XDG_STATE_HOME", "state", look) }
 }
 
 /// `$<var>/harness` when the variable is an absolute path, else `<home>/.local/<fallback>/harness`.
@@ -101,8 +103,8 @@ mod tests {
         let env = |name: &str| vars.iter().find(|(key, _)| *key == name).map(|(_, value)| OsString::from(value));
         let exists = |path: &Path| there.iter().any(|folder| folder == path);
         let look = Look { linux: true, env: &env, exists: &exists };
-        let home = Path::new(HOME);
-        (harness_root_with(home, Root::Data, &look), harness_root_with(home, Root::State, &look))
+        let roots = harness_roots_with(Path::new(HOME), &look);
+        (roots.root(Root::Data).to_path_buf(), roots.root(Root::State).to_path_buf())
     }
 
     fn xdg() -> (PathBuf, PathBuf) {
@@ -156,12 +158,12 @@ mod tests {
         let env = |_: &str| -> Option<OsString> { panic!("read the environment") };
         let exists = |_: &Path| -> bool { panic!("looked for a folder") };
         let look = Look { linux: false, env: &env, exists: &exists };
-        let home = Path::new(HOME);
+        let roots = harness_roots_with(Path::new(HOME), &look);
         let legacy = path(&[".harness"]);
-        assert_eq!(harness_root_with(home, Root::Data, &look), legacy);
-        assert_eq!(harness_root_with(home, Root::State, &look), legacy);
-        assert_eq!(harness_path_with(home, Entry::Cli, &look), legacy.join("cli"));
-        assert_eq!(harness_path_with(home, Entry::Runtime, &look), legacy.join("runtime"));
+        assert_eq!(roots.root(Root::Data), legacy);
+        assert_eq!(roots.root(Root::State), legacy);
+        assert_eq!(roots.path(Entry::Cli), legacy.join("cli"));
+        assert_eq!(roots.path(Entry::Runtime), legacy.join("runtime"));
     }
 
     #[test]
@@ -169,10 +171,10 @@ mod tests {
         let env = |_: &str| None;
         let exists = |_: &Path| false;
         let look = Look { linux: true, env: &env, exists: &exists };
-        let home = Path::new(HOME);
+        let roots = harness_roots_with(Path::new(HOME), &look);
         let (data, state) = xdg();
-        assert_eq!(harness_path_with(home, Entry::Cli, &look), data.join("cli"));
-        assert_eq!(harness_path_with(home, Entry::Runtime, &look), state.join("runtime"));
+        assert_eq!(roots.path(Entry::Cli), data.join("cli"));
+        assert_eq!(roots.path(Entry::Runtime), state.join("runtime"));
     }
 
     /// A hit the guard keeps on purpose: its file, the text it matched, and why. Each excuses exactly one hit.
