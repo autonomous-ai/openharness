@@ -357,9 +357,9 @@ most 15 rows (`--all` shows every one).
 A harness waiting on a question or a permission is shown as `needs the person` (JSON keeps `needs-input` and adds
 `needsPerson: true`). An agent Harness cannot follow until the person acts is shown as `held`, with what to do
 (`namedState`; JSON adds `needsPerson: true`): `wait` ends on it with exit 3. A named state Harness recovers from by
-itself does not end `wait`: `show` prints it, and so does `wait` when its time is up. A refusal (`SPAWN_LIMIT`, `TURNED_OFF`, `NOT_YOURS`) exits 5, with `code`, `reason` and
-`next` in its JSON. `harness help agents` prints the commands, states, exit codes and rules on one screen, and
-`harness --help` starts with it when an agent runs it.
+itself does not end `wait`: `show` prints it, and so does `wait` when its time is up. A refusal (`SPAWN_LIMIT`,
+`TURNED_OFF`, `NOT_YOURS`) exits 5, with `code`, `reason` and `next` in its JSON. `harness help agents` prints the
+commands, states, exit codes and rules on one screen, and `harness --help` starts with it when an agent runs it.
 
 ## Your devices
 
