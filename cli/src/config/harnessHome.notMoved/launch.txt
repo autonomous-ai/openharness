@@ -1,0 +1,4 @@
+lib/engineLaunch.ts:1339: $HOME/.harness
+lib/engineLaunch.ts:1356: $HOME/.harness
+lib/engineLaunch.ts:1358: $HOME/.harness
+lib/engineLaunch.ts:1359: $HOME/.harness
