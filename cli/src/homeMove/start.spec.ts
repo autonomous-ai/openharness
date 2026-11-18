@@ -356,7 +356,7 @@ describe('the move at a start', () => {
     t.clock.now += MINUTE
     await moveHomeAtStart(argvOf(t, '__harnessd'), {}, t.deps())
     expect(readJournal(t.legacy)).toBeNull()
-    expect(readBridge(t.state)).toMatchObject({ oldHome: t.legacy, movedAt: PROC_NOW })
+    expect(readBridge(t.state)).toMatchObject({ oldHome: t.legacy })
     expect(readMoveRecord(t.home, {})).toMatchObject({ state: 'bridged' })
     expect(logOf(t)).toEqual([moved(t)])
     expect(t.execs).toHaveLength(2)

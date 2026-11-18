@@ -15,8 +15,12 @@ export const REAL_ENTRIES = ['hook-routes', 'connections'] as const
 /** A boot of this computer (/proc/sys/kernel/random/boot_id) and how long it had run at the move, in seconds. */
 export interface Boot { id: string; uptime: number }
 
-/** `boot`: the boot the move ran in, when it was written; none where /proc has none, as no move is. */
-export interface BridgeRecord { version: 1; movedAt: number; oldHome: string; oldDataDir: string; oldTag: string; newTag: string; panes: string[]; boot?: Boot }
+/**
+ * `newTag`: the tag the move gave its daemon's panes. `boot`: the boot the move ran in, and the move's time on its clock;
+ * none where /proc has none, as no move is. A record from before also holds `movedAt`, `oldTag` and `panes`, which
+ * nothing reads.
+ */
+export interface BridgeRecord { version: 1; oldHome: string; oldDataDir: string; newTag: string; boot?: Boot }
 
 /**
  * What the bridge serves, from the daemon's own paths. `routes`: its data folder and port. `sockets`: each socket an old
@@ -51,12 +55,12 @@ const readText = (path: string): string => readFileSync(path, 'utf8')
 /**
  * Whole or not at all, and owner only: it names the old home. With the boot it is written in, read from /proc through
  * [read], and the move's time on that boot's clock, the one /proc start times count on, which no step of the wall clock
- * moves: `movedAt` less the boot's time, as procNow added them, in the hundredths /proc counts. One move is written the
- * same, however late.
+ * moves: [movedAt] (procNow's) less the boot's time, as procNow added them, in the hundredths /proc counts. One move is
+ * written the same, however late.
  */
-export function writeBridge(stateRoot: string, record: Omit<BridgeRecord, 'boot'>, read: (path: string) => string = readText): void {
+export function writeBridge(stateRoot: string, record: Omit<BridgeRecord, 'boot'>, movedAt: number, read: (path: string) => string = readText): void {
   const id = bootId(read)
-  const boot = id === null ? null : { id, uptime: Math.round((record.movedAt - bootedAt(read)) * 100) / 100 }
+  const boot = id === null ? null : { id, uptime: Math.round((movedAt - bootedAt(read)) * 100) / 100 }
   const file = join(stateRoot, BRIDGE_FILE), temporary = `${file}.${process.pid}.tmp`
   try {
     writeFileSync(temporary, `${JSON.stringify(boot ? { ...record, boot } : record)}\n`, { mode: 0o600 })

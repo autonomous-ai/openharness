@@ -70,11 +70,8 @@ function movedHome() {
   const connections = join(data, 'connections')
   writeFileSync(join(connections, 'bridge.sock'), '')
   writeFileSync(join(connections, 'mcp-shim.mjs'), '// the shim')
-  const bridge: BridgeRecord = {
-    version: 1, movedAt: MOVED_AT, oldHome, oldDataDir: join(oldHome, 'cli', LONG),
-    oldTag: '0123456789abcdef', newTag: harnessPaneOwner(dataDir), panes: ['%1'],
-  }
-  writeBridge(state, bridge, (path) => PROC[path])
+  const bridge: BridgeRecord = { version: 1, oldHome, oldDataDir: join(oldHome, 'cli', LONG), newTag: harnessPaneOwner(dataDir) }
+  writeBridge(state, bridge, MOVED_AT, (path) => PROC[path])
   writeMoveRecord(state, BRIDGED)
   return { home, oldHome, data, state, dataDir, socket, connections, bridge }
 }
@@ -167,7 +164,7 @@ describe('the home bridge service', () => {
     const other = join(h.home, 'projects')
     mkdirSync(join(other, 'hook-routes'), { recursive: true })
     symlinkSync(h.data, join(other, 'data'))
-    writeBridge(h.state, { ...h.bridge, oldHome: other, oldDataDir: join(other, 'data') }, (path) => PROC[path])
+    writeBridge(h.state, { ...h.bridge, oldHome: other, oldDataDir: join(other, 'data') }, MOVED_AT, (path) => PROC[path])
     const rows = vi.fn((): ProcRow[] => [])
     const { log } = start(h, { rows })
     await settle()

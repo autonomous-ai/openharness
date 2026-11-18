@@ -10,8 +10,7 @@ import { oldUsers, procRows, type OldUserFacts, type ProcRow } from './oldUsers.
 const BOOT = 'c2a9e1d8-55a4-4c3e-9b8f-0f6d2d1e7a11'
 /** The move ran 50 000 s into this boot; its wall-clock time says nothing a step of the clock since cannot change. */
 const BRIDGE: BridgeRecord = {
-  version: 1, movedAt: 1_700_001_234.56, oldHome: '/h/.harness', oldDataDir: '/h/.harness/cli/data',
-  oldTag: '0123456789abcdef', newTag: 'fedcba9876543210', panes: ['%1'], boot: { id: BOOT, uptime: 50_000 },
+  version: 1, oldHome: '/h/.harness', oldDataDir: '/h/.harness/cli/data', newTag: 'fedcba9876543210', boot: { id: BOOT, uptime: 50_000 },
 }
 const DATA = '/h/.local/share/harness', STATE = '/h/.local/state/harness'
 const ME = 1000, SERVICE = 4000, MASTER = 3000

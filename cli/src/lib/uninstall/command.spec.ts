@@ -533,7 +533,7 @@ function movedHome() {
   makeRealFolders(oldHome)
   linkSync(join(data, 'connections', 'mcp-shim.mjs'), join(oldHome, 'connections', 'mcp-shim.mjs'))
   writeFileSync(join(oldHome, 'hook-routes', 'route.json'), '{}')
-  writeBridge(state, { version: 1, movedAt: 1, oldHome, oldDataDir: join(oldHome, 'cli', 'data'), oldTag: '0'.repeat(16), newTag: '1'.repeat(16), panes: [] })
+  writeBridge(state, { version: 1, oldHome, oldDataDir: join(oldHome, 'cli', 'data'), newTag: '1'.repeat(16) }, 1)
   return { home, oldHome, data, state, kept, program }
 }
 
@@ -603,7 +603,7 @@ describe('harness uninstall on Linux\'s two roots', () => {
       writeFileSync(join(other, name, 'mine.txt'), 'mine')
     }
     symlinkSync(join(m.home, 'code'), join(other, 'code'))
-    writeBridge(m.state, { ...readBridge(m.state)!, oldHome: other, oldDataDir: join(other, 'cli', 'data') })
+    writeBridge(m.state, { ...readBridge(m.state)!, oldHome: other, oldDataDir: join(other, 'cli', 'data') }, 1)
     const t = fake(movedDisk(m))
     expect(await uninstallCommand(['--yes', '--keep-data'], t.deps)).toBe(1)
     expect(readdirSync(other).sort()).toEqual(['code', 'connections', 'hook-routes'])

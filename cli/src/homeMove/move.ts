@@ -115,7 +115,7 @@ function complete(journal: Journal, steps: Steps, oldDataDir: string, run: { byt
   try {
     const panes = done.flatMap((step) => step.did === 'pane' ? [step.id] : [])
     if (!done.some((step) => step.did === 'bridge')) {
-      writeBridge(plan.state, { version: 1, movedAt: deps.procNow(), oldHome: plan.legacy, oldDataDir, oldTag: journal.oldTag, newTag: journal.newTag, panes })
+      writeBridge(plan.state, { version: 1, oldHome: plan.legacy, oldDataDir, newTag: journal.newTag }, deps.procNow())
       makeRealFolders(plan.legacy)
       steps.add({ did: 'bridge' })
     }

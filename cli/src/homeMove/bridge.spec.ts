@@ -92,10 +92,7 @@ async function movedHome(layout: Layout = 'beside') {
   const connections = join(data, 'connections'), bridgeSocket = socketOf(state, connections, 'bridge.sock'), shim = join(connections, 'mcp-shim.mjs')
   writeFileSync(shim, MCP_SHIM_SOURCE, { mode: 0o600 })
   const tools = await listening(bridgeSocket, toolsAnswer)
-  const bridge: BridgeRecord = {
-    version: 1, movedAt: 1_700_001_234.56, oldHome, oldDataDir: join(oldHome, 'cli', dataName),
-    oldTag: '0123456789abcdef', newTag: harnessPaneOwner(dataDir), panes: ['%7'],
-  }
+  const bridge: BridgeRecord = { version: 1, oldHome, oldDataDir: join(oldHome, 'cli', dataName), newTag: harnessPaneOwner(dataDir) }
   const served: Served = {
     routes: { dataDir, port: PORT },
     sockets: [
@@ -291,15 +288,14 @@ describe('the bridge\'s record', () => {
   const proc = (path: string): string => ({
     '/proc/sys/kernel/random/boot_id': `${BOOT_ID}\n`, '/proc/stat': 'cpu  1 2 3\nbtime 1700000000\nprocesses 9\n', '/proc/uptime': '1234.56 999.00\n',
   } as Record<string, string>)[path] ?? missing(path)
-  const record: BridgeRecord = {
-    version: 1, movedAt: 1_700_001_234.56, oldHome: '/h/.harness', oldDataDir: '/h/.harness/cli/data',
-    oldTag: '0123456789abcdef', newTag: 'fedcba9876543210', panes: ['%1', '%2'],
-  }
+  const record: BridgeRecord = { version: 1, oldHome: '/h/.harness', oldDataDir: '/h/.harness/cli/data', newTag: 'fedcba9876543210' }
+  /** The move's time, as procNow reads it from the /proc above. */
+  const MOVED_AT = 1_700_001_234.56
 
   it('is read back as it was written, with the boot the move ran in, owner only; none without one', () => {
     const state = shortFolder()
     expect(readBridge(state)).toBeNull()
-    writeBridge(state, record, proc)
+    writeBridge(state, record, MOVED_AT, proc)
     expect(readBridge(state)).toEqual({ ...record, boot: { id: BOOT_ID, uptime: 1234.56 } })
     expect(statSync(join(state, BRIDGE_FILE)).mode & 0o777).toBe(0o600)
     expect(readdirSync(state)).toEqual([BRIDGE_FILE])
@@ -309,9 +305,9 @@ describe('the bridge\'s record', () => {
     let uptime = 1234.56
     const later = (path: string): string => path === '/proc/uptime' ? `${(uptime += 7).toFixed(2)} 999.00\n` : proc(path)
     const state = shortFolder()
-    writeBridge(state, record, later)
+    writeBridge(state, record, MOVED_AT, later)
     const first = readFileSync(join(state, BRIDGE_FILE), 'utf8')
-    writeBridge(state, record, later)
+    writeBridge(state, record, MOVED_AT, later)
     expect(readFileSync(join(state, BRIDGE_FILE), 'utf8')).toBe(first)
     expect(readBridge(state)!.boot).toEqual({ id: BOOT_ID, uptime: 1234.56 })
   })
@@ -321,10 +317,16 @@ describe('the bridge\'s record', () => {
     expect(bootId(missing)).toBeNull()
     // A /proc that names no boot, or no boot time, is not one to count on.
     expect(() => bootId(() => '\n')).toThrow()
-    expect(() => writeBridge(shortFolder(), record, (path) => path === '/proc/stat' ? 'cpu  1 2 3\n' : proc(path))).toThrow()
+    expect(() => writeBridge(shortFolder(), record, MOVED_AT, (path) => path === '/proc/stat' ? 'cpu  1 2 3\n' : proc(path))).toThrow()
     const state = shortFolder()
-    writeBridge(state, record, missing)
+    writeBridge(state, record, MOVED_AT, missing)
     expect(readBridge(state)).toEqual(record)
+  })
+
+  it('a record from before, with fields nothing reads, reads with every field its readers use', () => {
+    const state = shortFolder(), boot = { id: BOOT_ID, uptime: 1234.56 }
+    writeFileSync(join(state, BRIDGE_FILE), JSON.stringify({ ...record, movedAt: MOVED_AT, oldTag: '0123456789abcdef', panes: ['%1'], boot }))
+    expect(readBridge(state)).toMatchObject({ ...record, boot })
   })
 
   it.runIf(process.platform === 'linux')('reads this boot from the real /proc', () => {
