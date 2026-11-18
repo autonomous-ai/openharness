@@ -15,7 +15,7 @@ them.
 
 Out of scope: question rows dropped on a drawer replace (`cableSession.replaceNotifications`, firmware `notice_add`)
 are fixed by a separate pull request from dial-notice-loss; this branch does not touch them. The drawer replaces
-this branch adds (a restored row shown or back) are accepted with that bug until then (harness-pm): this pull request
+this branch adds (a restored row shown or back) are accepted with that bug until then (the PM): this pull request
 merges on its own, and whichever of the two merges second rebases and keeps both fixes.
 
 ## Intent
@@ -27,9 +27,9 @@ its agent is still there and has not started another turn. It must not come back
 
 - Goal: a pending notice's row is back in the dial's drawer after the devices process restarts, under the same card
   id, silently.
-- Goal: a restored card never rings again (harness-pm): it rang before the restart, so it comes back as a silent
+- Goal: a restored card never rings again (the PM): it rang before the restart, so it comes back as a silent
   drawer row only. Opening that row reads the notice's line, never "No readable question. Check the terminal."
-  (harness-pm). A restored card whose agent is gone or has started another turn is not shown at all.
+  (the PM). A restored card whose agent is gone or has started another turn is not shown at all.
 - Goal: it works for every host a notice can come from: Harness, observed sessions, herdr, Herdr, cmux, opencode.
 - Goal: no restored card is older than 24 hours.
 - Non-goal: the core changes nothing (AGENTS.md, the daemon core: it grows no rule or record for this).
@@ -37,7 +37,7 @@ its agent is still there and has not started another turn. It must not come back
 - Non-goal: the per-agent and per-computer limits (`NoticeLimits`) are not kept across a restart; they start fresh.
 - Anti-goal: a write storm, or a devices process that fails to start because of this file.
 
-## Approaches (decided by harness-pm, 2026-11-18)
+## Approaches (decided by the PM, 2026-11-18)
 
 - **A. Rebuild from the agent's transcript.** In the agent's last turn, find `harness device notify "<text>"` that
   answered `shown` with no prompt after it. Stores nothing, sees a new turn on its own. Not taken: it parses shell
@@ -70,10 +70,10 @@ its agent is still there and has not started another turn. It must not come back
   (`port.stop()` calls `dialAttached(false)`, which ends every Harness agent's card) changes memory only; the file
   keeps what was pending before the stop began. Otherwise every CLI update would save an empty set for Harness agents,
   the cards people use most.
-- **Coalesced (harness-pm):** changes that come close together give one write: a write is scheduled on the first
+- **Coalesced (the PM):** changes that come close together give one write: a write is scheduled on the first
   change and carries every change made until it runs (a short window, the builder's call, about 1 s). Pending
   changes are written when the devices process stops normally.
-- **Read once, at the devices' start, bounded (harness-pm):** at most 32 KiB read (one byte more tells a longer file).
+- **Read once, at the devices' start, bounded (the PM):** at most 32 KiB read (one byte more tells a longer file).
   A missing file starts empty with no log. A file that is longer, not JSON, not `v: 1`, or has a card that fails its
   shape is dropped whole: start empty, one log line (`[device] notices · file dropped · <reason>`, the reason a fixed
   word, never the path or the content), and the next write replaces it. Nothing in it can stop the devices process
@@ -86,13 +86,13 @@ At the start, each card in the file:
 - otherwise is pending again under its own id, marked **restored**.
 
 A restored card differs from a live one in three ways:
-0. **Silent, for good (harness-pm).** A restored card is never asked as a question (`cable.question`), so it never
+0. **Silent, for good (the PM).** A restored card is never asked as a question (`cable.question`), so it never
    beeps, wakes or lights the dial: it is only a row of the dial's drawer (`Notices.rows`, carried by the drawer
    replace `cable.replaceNotifications(cableHost.listUnread())`). That holds for its whole life: a later attach, or
    another question of its agent closing (`reask`), puts the row back, never a question. Its endings close it as a
    live card's do (the row goes with the next drawer replace; the builder checks what the dial needs to drop it). Only
    a new notice from that agent rings again, and it replaces the restored card as any new notice replaces a card.
-   **Its question view (harness-pm).** Opening the row on the dial sends `question.read`, which the dial's cable
+   **Its question view (the PM).** Opening the row on the dial sends `question.read`, which the dial's cable
    session answers from its inbox (`QuestionInbox.read`). So each dial's cable session holds a shown restored card's
    question (the line and "In <app>", as a live card's) without asking it (`CableSession.hold`): it sends no frame, is
    never asked later (not at a greeting, a drawer replace or a resync, not by `ask`), and a dial plugged in later holds
@@ -102,7 +102,7 @@ A restored card differs from a live one in three ways:
 1. **Held until its agent is listed.** It is not a drawer row until its agent is on one of the lists the devices
    hold: a Harness agent among the core's advertised agents, an outside agent on any outside source's list
    (`outsideEntries()`), found by its id or by one of its `keys`: an agent that names a session is found by its
-   session alone, and a pane key finds only an agent that names none (harness-pm), so a card never moves to another
+   session alone, and a pane key finds only an agent that names none (the PM), so a card never moves to another
    session in the same pane. Found by a key, the card takes the agent's new id (in memory and in the file). The moment it is first seen there (a list change, an attach), its row is put on the
    dial (a drawer replace). An agent that never comes back is never shown, and its card goes at the 24-hour cap. A
    card with `who` (its caller was on no list when it asked) is not held: its row is shown at once. Held cards count
@@ -120,7 +120,7 @@ A restored card differs from a live one in three ways:
 The age cap is checked on restore only: a live card in memory still waits for its agent's next turn however long that
 takes (the notify design, unchanged).
 
-### Known gap (accepted by harness-pm)
+### Known gap (accepted by the PM)
 
 A turn that both starts and ends while the devices process is down is not seen: its card comes back and stays until
 the agent's next turn, a tap, or the 24-hour cap. Likewise, a notice whose own turn is still running when the devices
@@ -147,7 +147,7 @@ next card ends it (rule 2).
   cap, silence, coalesced writes, a bad file), `cable/questionInbox.spec.ts`, `cableSession.spec.ts` and
   `cableFleet.spec.ts` for the hold (read, never asked, on every dial), `services/devices.spec.ts` for the wiring (a
   restart with a pending card puts its row back on attach, with no question and no alert, and holds the question its
-  row opens to (harness-pm); a restored card of a working observed agent is not shown), and end to end that opening
+  row opens to (the PM); a restored card of a working observed agent is not shown), and end to end that opening
   the restored row reads its line. Each red first.
 
 ## Design (docs/feature-design-rules.md)
