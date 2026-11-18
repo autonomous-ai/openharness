@@ -6208,6 +6208,108 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       expect(calls('hold').at(-1)).toEqual([ID, restored, card('Terminal')])
       expect(calls('question').filter(([, id]) => id === restored)).toEqual([])
     })
+
+    /** An observed agent of sess-1 rings, and the devices restart with its card pending. */
+    const restartWithObserved = async (between: () => void = () => {}) => {
+      const first = devices()
+      first.port.observed(hook('session-start'))
+      expect(first.listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+      const [restored] = ids()
+      between()
+      return { ...await again(first), restored }
+    }
+
+    it('a restart with a pending card puts its row back as its agent is listed, with no question and no alert', async () => {
+      const { port, restored } = await restartWithObserved()
+      seen.host.watching!(true)
+      // Not listed yet: no row.
+      expect(host().listUnread()).toEqual([])
+      port.observed(hook('session-start'))
+      expect(calls('replaceNotifications').at(-1)).toEqual([[{ agentId: ID, machineId: 'machine-1', question: true, text: LINE }]])
+      expect(calls('hold')).toEqual([[ID, restored, card('Orca')]])
+      expect(ringing()).toEqual([])
+    })
+
+    // Most likely a turn after the notice: the card it rang for is over.
+    it('a restored card of an observed agent the scan finds working is not shown', async () => {
+      const { port, restored } = await restartWithObserved(() => {
+        // An open session the scan finds; with no idle record it reads as in a turn.
+        readers.known.set('sess-1', 'terminal')
+        readers.owners.set('sess-1', { engine: 'claude', pid: 4242 })
+        readers.rows.set('sess-1', { cwd: '/work/api', transcriptPath: null })
+      })
+      seen.host.watching!(true)
+      port.swarms(null)
+      await vi.waitFor(async () => expect((await host().listAgentSnapshot()).agents.map((agent) => agent.id)).toContain(ID))
+      expect(host().listUnread()).toEqual([])
+      expect(calls('replaceNotifications').filter(([rows]) => (rows as Array<{ agentId: string }>).some((row) => row.agentId === ID))).toEqual([])
+      expect(calls('questionClose')).toEqual([[ID, restored]])
+      vi.advanceTimersByTime(1_000)
+      expect(saved().cards).toEqual([])
+    })
+
+    const H1 = [{ agentId: 'h1', registeredAt: 1, engine: 'claude', sessionId: 's-h1' }] as RegisteredSession[]
+    /** h1 rings, and the devices restart with its card pending, on a core whose agents are read only by a refresh, after
+     *  the dial attached: as a devices process that just started and has not read the core's agents yet. */
+    const restartWithHarness = async () => {
+      const first = devices({ core: bound() })
+      expect(first.listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })).toEqual({ result: 'shown' })
+      const [restored] = ids()
+      let view: RegisteredSession[] = []
+      const core = fakeCore({ dataDir, agents: { advertised: vi.fn(() => view) } })
+      const second = await again(first, { core, refresh: async () => { view = H1 } })
+      seen.host.watching!(true)
+      expect(host().listUnread()).toEqual([])
+      second.port.swarms(null)
+      await host().listAgentSnapshot()
+      return { ...second, restored }
+    }
+
+    it('a Harness agent\'s restored row comes with the list that first names it, though the dial attached first', async () => {
+      const { restored } = await restartWithHarness()
+      expect(calls('replaceNotifications').at(-1)).toEqual([[{ agentId: 'h1', machineId: 'machine-1', question: true, text: LINE }]])
+      expect(calls('hold')).toEqual([['h1', restored, card('Harness')]])
+      expect(ringing()).toEqual([])
+    })
+
+    it('a card of a running turn ends a Harness agent\'s restored row', async () => {
+      const { port, restored } = await restartWithHarness()
+      port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'processing', text: 'Working' } })
+      expect(calls('questionClose')).toEqual([['h1', restored]])
+    })
+
+    it('an agent herdr lists under a new id is found by its session, and the file takes the new id', async () => {
+      const subs: HerdrSubscriber[] = []
+      let list: Promise<HerdrAnswer> | undefined
+      const agent = { pane_id: 'w1:p1', agent: 'claude', agent_status: 'idle', cwd: '/work/api', agent_session: { kind: 'id', agent: 'claude', value: 'sess-h' } }
+      const client: HerdrClient = {
+        request: () => (list = Promise.resolve<HerdrAnswer>({ ok: true, result: { type: 'agent_list', agents: [agent] } })),
+        subscribe: (_entries, to) => { subs.push(to); return { close: () => {} } },
+        prompt: async () => ({ outcome: 'sent' }),
+        socketStamp: () => '1:1',
+      }
+      const onMac = { ...orca, platform: 'darwin' as const, onPath: (name: string) => `/opt/${name}/bin/${name}` }
+      const withHerdr = { herdr: client, orca: onMac, tty: async () => undefined }
+      /** The dial attached, and the id herdr's agent is listed under. */
+      const listedId = async (port: DevicesPort): Promise<string> => {
+        seen.host.watching!(true)
+        port.swarms(null)
+        subs.at(-1)!.started()
+        await list
+        const [{ id }] = (await host().listAgentSnapshot()).agents
+        return id
+      }
+      const first = devices(withHerdr)
+      const firstId = await listedId(first.port)
+      expect(first.listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-h' })).toEqual({ result: 'shown' })
+      const { port } = await again(first, withHerdr)
+      const second = await listedId(port)
+      expect(second).not.toBe(firstId)
+      expect(calls('replaceNotifications').at(-1)).toEqual([[{ agentId: second, machineId: 'machine-1', question: true, text: LINE }]])
+      expect(ringing()).toEqual([])
+      vi.advanceTimersByTime(1_000)
+      expect(saved().cards[0].agentId).toBe(second)
+    })
   })
 })
 

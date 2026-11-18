@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { NoticeAsk } from '../lib/dialNotice.js'
-import { type NoticeCaller, noticeKeys, Notices, type StoredNotice } from './notices.js'
+import { type ListedAgent, listedAgent, type NoticeCaller, noticeKeys, Notices, type StoredNotice } from './notices.js'
 
 type Call = ['ask', string, string, unknown] | ['close', string, string] | ['hold', string, string, unknown]
 
@@ -391,5 +391,142 @@ describe('Notices after a restart', () => {
     notices.detached()
     expect(calls).toEqual([['close', 'h1', 'shown:k1']])
     expect(notices.pending('w1')).toBe(true)
+  })
+
+  describe('a restored card finds its agent', () => {
+    const agent = (agentId: string, over: Partial<ListedAgent> = {}): ListedAgent => ({ agentId, panes: [], busy: false, ...over })
+    /** The lists a look is given, and how many times it read them. */
+    const lists = (...agents: ListedAgent[]) => {
+      const read = Object.assign(() => { read.reads += 1; return agents }, { reads: 0 })
+      return read
+    }
+    const row = (agentId: string) => ({ agentId, machineId: 'm', question: true, text: VPN })
+
+    it('found by its id, its row is in the drawer by one drawer replace, and its question is held, never asked', () => {
+      const { notices, state, calls } = back([kept()])
+      notices.look(false, lists(agent('a1')))
+      expect(notices.rows('m')).toEqual([row('a1')])
+      expect(state.redraws).toBe(1)
+      expect(calls).toEqual([['hold', 'a1', 'shown:k1', asked('Orca')]])
+      expect(state.changes).toBe(0)
+      // Another question of that agent covers it: found all the same, and nothing held or shown under it.
+      const covered = back([kept()])
+      covered.state.held.add('a1')
+      covered.notices.look(false, lists(agent('a1')))
+      const again = lists(agent('a1'))
+      covered.notices.look(false, again)
+      expect(again.reads).toBe(0)
+      expect(covered.calls).toEqual([])
+      expect(covered.notices.rows('m')).toEqual([])
+    })
+
+    it('found by its session under a new id, it takes that id in its place, and the file is told', () => {
+      const { notices, state, calls } = back([kept({ agentId: 'old' }), asWho])
+      notices.look(false, lists(agent('new', { session: 'claude:s1' })))
+      expect(notices.stored().map((card) => card.agentId)).toEqual(['new', 'w1'])
+      expect(notices.pending('old')).toBe(false)
+      expect(state.changes).toBe(1)
+      expect(calls).toEqual([['hold', 'new', 'shown:k1', asked('Orca')]])
+      notices.ended('new')
+      expect(calls.at(-1)).toEqual(['close', 'new', 'shown:k1'])
+    })
+
+    it('found by a pane when the agent names no session', () => {
+      const { notices } = back([kept({ agentId: 'old', keys: ['claude:s1', 'herdr:w1:p1'] })])
+      notices.look(false, lists(agent('new', { panes: ['herdr:w1:p1'] })))
+      expect(notices.rows('m')).toEqual([row('new')])
+    })
+
+    // A /clear, or another agent started in that pane before the list came back: its session names it, not the pane.
+    it('another session in the same pane is not its agent', () => {
+      const { notices, state } = back([kept({ agentId: 'old', keys: ['claude:s1', 'herdr:w1:p1'] })])
+      notices.look(false, lists(agent('new', { session: 'claude:s2', panes: ['herdr:w1:p1'] })))
+      expect(notices.rows('m')).toEqual([])
+      expect(state.redraws).toBe(0)
+      expect(notices.pending('old')).toBe(true)
+    })
+
+    it('a Harness card looks among Harness agents alone, any other among the outside lists alone', () => {
+      const own = back([kept({ host: 'harness' })])
+      const outside = lists(agent('a1'))
+      own.notices.look(false, outside)
+      expect(outside.reads).toBe(0)
+      expect(own.notices.rows('m')).toEqual([])
+      own.notices.look(true, lists(agent('a1')))
+      expect(own.notices.rows('m')).toEqual([row('a1')])
+      const other = back([kept()])
+      const harness = lists(agent('a1'))
+      other.notices.look(true, harness)
+      expect(harness.reads).toBe(0)
+      expect(other.notices.rows('m')).toEqual([])
+      other.notices.look(false, lists(agent('a1')))
+      expect(other.notices.rows('m')).toEqual([row('a1')])
+    })
+
+    it('first seen in a turn, it ends and is never shown', () => {
+      const { notices, state, calls } = back([kept()])
+      notices.look(false, lists(agent('a1', { busy: true })))
+      expect(calls).toEqual([['close', 'a1', 'shown:k1']])
+      expect(notices.rows('m')).toEqual([])
+      expect(state.redraws).toBe(0)
+      expect(state.changes).toBe(1)
+    })
+
+    it('not listed, it waits; with none waiting the lists are not read', () => {
+      const { notices, state, calls } = back([kept()])
+      const none = lists()
+      notices.look(false, none)
+      expect(none.reads).toBe(1)
+      expect(calls).toEqual([])
+      expect(state.changes).toBe(0)
+      expect(state.redraws).toBe(0)
+      expect(notices.pending('a1')).toBe(true)
+      notices.look(false, lists(agent('a1')))
+      const after = lists(agent('a1'))
+      notices.look(false, after)
+      expect(after.reads).toBe(0)
+    })
+
+    it('found once, it is looked for no more', () => {
+      const { notices } = back([kept()])
+      notices.look(false, lists(agent('a1')))
+      notices.look(false, lists(agent('a1', { busy: true })))
+      expect(notices.pending('a1')).toBe(true)
+    })
+
+    it('a new notice from an agent whose restored card waits under another id ends that card', () => {
+      const { notices, calls } = back([kept({ agentId: 'old' })], { keys: { new: ['claude:s1'] } })
+      expect(notices.notify(notice(VPN, 'new'))).toBe('shown')
+      expect(calls.map((c) => [c[0], c[1], c[2]])).toEqual([['close', 'old', 'shown:k1'], ['ask', 'new', 'shown:u1']])
+      expect(notices.stored()).toHaveLength(1)
+    })
+
+    it('a card whose agent already has one ends', () => {
+      const { notices, calls } = back([kept({ agentId: 'x1' }), kept({ agentId: 'x2', id: 'shown:k2' })])
+      notices.look(false, lists(agent('new', { session: 'claude:s1' })))
+      expect(notices.stored().map((card) => [card.agentId, card.id])).toEqual([['new', 'shown:k1']])
+      expect(calls).toEqual([['hold', 'new', 'shown:k1', asked('Orca')], ['close', 'x2', 'shown:k2']])
+    })
+
+    it('working ends a restored card, waiting or shown, and leaves a live one', () => {
+      const { notices, calls } = back([kept(), asWho])
+      notices.working('a1')
+      notices.working('w1')
+      expect(calls).toEqual([['close', 'a1', 'shown:k1'], ['close', 'w1', 'shown:k2']])
+      const live = desk()
+      live.notices.notify(notice(VPN))
+      live.notices.working('a1')
+      live.notices.working('a2')
+      expect(live.calls.map((c) => c[0])).toEqual(['ask'])
+      expect(live.notices.pending('a1')).toBe(true)
+    })
+
+    it('listedAgent and noticeKeys name a session the same way', () => {
+      const named = { engine: 'claude', sessionId: 's1', paneKeys: ['herdr:p'] }
+      const listed = listedAgent('x', named, true)
+      expect(listed).toEqual({ agentId: 'x', session: 'claude:s1', panes: ['herdr:p'], busy: true })
+      expect(listed.session).toBe(noticeKeys(named)[0])
+      expect(listedAgent('x', { engine: 'claude' }, false).session).toBeUndefined()
+    })
   })
 })
