@@ -15,6 +15,7 @@ import { platformDaemonDeps } from '../platformDaemon.js'
 import { runPowershell } from '../windows/powershell.js'
 import { stopEveryAgent } from './agents.js'
 import { labelHookRemoval, lockHolder, UninstallLockBusy, type UninstallDeps } from './command.js'
+import { UNINSTALL_MARKER } from './marker.js'
 import { endPtyHosts, ptyHostsDeps } from './ptyHosts.js'
 import { filesWithHarnessPathLines, removeHarnessPathLines } from './rcFiles.js'
 import { checkRemovable, finalRemovalDeps, listEntries, removeNow, scheduleFinalRemoval } from './removal.js'
@@ -38,7 +39,7 @@ export async function uninstallDeps(options: { tildify: (path: string) => string
   const platform = platformDaemonDeps()
   const service = platform.service
   const out = (text: string) => line(1, text)
-  const marker = harnessPath('uninstalling', home)
+  const marker = harnessPath(UNINSTALL_MARKER, home)
   return {
     platform: process.platform, cwd: process.cwd(), home, roots, binDir,
     cliDir: env.ADAPTER_CLI_DIR, dataDir: env.ADAPTER_DATA_DIR, authDir: AUTH_DIR,
