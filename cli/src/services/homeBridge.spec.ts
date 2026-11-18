@@ -517,6 +517,43 @@ describe('the home bridge service', () => {
     bridge.stop()
   })
 
+  it('a tmux with no server has no panes, as tmux itself says it', async () => {
+    const tmux = await isolatedTmux()
+    restore.push(() => tmux.close())
+    vi.stubEnv('TMUX', undefined)
+    vi.stubEnv('TMUX_PANE', undefined)
+    vi.stubEnv('TMUX_TMPDIR', tmux.root)
+    const h = movedHome()
+    const { log } = start(h, { tmux: undefined })
+    await settle()
+    expect(existsSync(join(h.state, BRIDGE_FILE))).toBe(false)
+    expect(log.mock.calls).toEqual([['home bridge: removed']])
+  })
+
+  const missing = (code: string) => Object.assign(new Error(`spawnSync tmux ${code}`), { code })
+  it.each<[string, ReturnType<HomeBridgeDeps['tmux']>]>([
+    ['is not installed', { status: null, stdout: '', stderr: '', error: missing('ENOENT') }],
+    ['has no server', { status: 1, stdout: '', stderr: 'no server running on /tmp/tmux-1000/default\n' }],
+    ['has no socket', { status: 1, stdout: '', stderr: 'error connecting to /tmp/tmux-1000/default (No such file or directory)\n' }],
+  ])('a tmux that %s has no panes', async (_, answer) => {
+    const h = movedHome()
+    start(h, { tmux: () => answer })
+    await settle()
+    expect(existsSync(join(h.state, BRIDGE_FILE))).toBe(false)
+  })
+
+  it.each<[string, ReturnType<HomeBridgeDeps['tmux']>, string]>([
+    ['did not answer in time', { status: null, stdout: '', stderr: '', error: missing('ETIMEDOUT') }, 'ETIMEDOUT'],
+    ['is not its server\'s version', { status: 1, stdout: '', stderr: 'protocol version mismatch (client 8, server 7)\n' }, 'protocol version mismatch (client 8, server 7)'],
+  ])('a tmux that %s says nothing of the panes: the check fails, and the bridge stays', async (_, answer, why) => {
+    const h = movedHome()
+    const { bridge, log } = start(h, { tmux: () => answer })
+    await settle()
+    expect(existsSync(join(h.state, BRIDGE_FILE))).toBe(true)
+    expect(log.mock.calls).toEqual([[`home bridge: a check failed: tmux could not list its panes: ${why} · tried again in 10 minutes`]])
+    bridge.stop()
+  })
+
   it('in the core\'s process it is the same service, which the apps ask nothing', () => {
     // This test's home has no bridge: nothing starts.
     expect(startHomeBridgeInCore(fakeCore())).toEqual({})
