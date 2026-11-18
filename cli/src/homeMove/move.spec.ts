@@ -410,6 +410,15 @@ describe('the move', () => {
     expect(readFileSync(join(t.binDir, 'harness'), 'utf8')).toContain(`'${t.plan.data}/cli/cli.js'`)
   })
 
+  it('a Store index a DSH_DIR override keeps elsewhere is marked to be set up again where it is: what its setups built runs on the moved runtime', async () => {
+    const t = await legacyHome({ env: (root) => ({ DSH_DIR: join(root, 'elsewhere', 'dsh') }) })
+    const notes = { id: 'acme/notes', dir: join(t.env.DSH_DIR!, 'acme', 'notes'), linked: false }
+    const index = join(t.env.DSH_DIR!, 'installed.json')
+    put(index, JSON.stringify([notes]))
+    expect(await runMove(t.check, t.env, t.deps())).toMatchObject({ state: 'bridged' })
+    expect(json(index)).toEqual([{ ...notes, setup: 'pending' }])
+  })
+
   it('a run after success does nothing', async () => {
     const t = await legacyHome()
     await runMove(t.check, t.env, t.deps())
