@@ -2,8 +2,9 @@ import { describe, expect, it, vi } from 'vitest'
 import { REFUSED, type ListenerStream, type StreamEnd } from '../../services/devicesListener.js'
 import { PS_MAX_BYTES, PS_TIMEOUT_MS, type Exec } from './scannedApp.js'
 import {
-  CHAIN_RETRY_MS, readProcessParents, VSCODE_OPEN_MAX_BYTES, VSCODE_OPEN_PER_SECOND, VSCODE_SCROLL_MAX, VSCODE_STATE_MAX_BYTES,
-  VSCODE_STATE_PER_SECOND, VSCODE_TERMINALS, VSCODE_WINDOWS, vscodeStreams, type VscodeTerminalsDeps,
+  CHAIN_RETRY_MS, GROUPS_MAX_BYTES, readForeground, readProcessParents, VSCODE_GUARD_MS, VSCODE_OPEN_MAX_BYTES, VSCODE_OPEN_PER_SECOND,
+  VSCODE_SCROLL_MAX, VSCODE_STATE_MAX_BYTES, VSCODE_STATE_PER_SECOND, VSCODE_TERMINALS, VSCODE_WINDOWS, vscodeStreams,
+  type PageAgent, type ProcessGroups, type VscodeTerminalsDeps,
 } from './vscodeTerminals.js'
 
 const W1 = 'window-1'
@@ -12,6 +13,8 @@ const W2 = 'window-2'
 const TREE: ReadonlyArray<readonly [number, number]> = [[600, 1], [700, 600], [800, 700], [900, 800]]
 /** A second terminal's shell 710 under the same helper, and its agent 910. */
 const SECOND: ReadonlyArray<readonly [number, number]> = [[710, 600], [910, 710]]
+/** A Claude Code agent the page guard is asked of: not asking, in its own folder. */
+const AGENT: PageAgent = { asking: false, cwd: '/work/api' }
 
 /** A stream as the listener hands one to open: it takes no line until the listener says it is ready, then one at a
  *  time, each in flight until the test drains it. */
@@ -41,22 +44,29 @@ function fakeStream() {
   }
 }
 
-/** The windows, with a `ps` that answers only when the test says, from a table the test sets; a clock the test moves;
- *  each minute's timer kept to be run by hand; and every line logged. */
+/** The windows, with a `ps` that answers only when the test says, from a table the test sets; settings that draw every
+ *  folder fullscreen unless the test says otherwise; a foreground read that answers only when the test says; a clock the
+ *  test moves; each timer kept, and whether it was cancelled, to be run by hand; and every line logged. */
 function harness(table: ReadonlyArray<readonly [number, number]> = TREE) {
   let at = 0
   const reads: Array<{ resolve(rows: Array<{ pid: number; ppid: number }>): void; reject(error: Error): void }> = []
-  const timers: Array<{ ms: number; run: () => void }> = []
+  const groupReads: Array<{ resolve(groups: ProcessGroups | undefined): void; reject(error: Error): void }> = []
+  const timers: Array<{ ms: number; run: () => void; cancelled: boolean }> = []
   const logged: string[] = []
   const processes = vi.fn<VscodeTerminalsDeps['processes']>(() => new Promise((resolve, reject) => { reads.push({ resolve, reject }) }))
   const changed = vi.fn<VscodeTerminalsDeps['changed']>()
+  const fullscreen = vi.fn<VscodeTerminalsDeps['fullscreen']>(async () => true)
+  const foreground = vi.fn<VscodeTerminalsDeps['foreground']>(() => new Promise((resolve, reject) => { groupReads.push({ resolve, reject }) }))
   const terminals = vscodeStreams({
     processes,
     changed,
+    fullscreen,
+    foreground,
     now: () => at,
     after: (ms, run) => {
-      timers.push({ ms, run })
-      return () => {}
+      const timer = { ms, run, cancelled: false }
+      timers.push(timer)
+      return () => { timer.cancelled = true }
     },
     log: (line) => { logged.push(line) },
   })
@@ -67,8 +77,11 @@ function harness(table: ReadonlyArray<readonly [number, number]> = TREE) {
     terminals,
     processes,
     changed,
+    fullscreen,
+    foreground,
     timers,
     logged,
+    landed,
     tick: (ms: number) => { at += ms },
     /** A window's stream opened, as the listener opens it: then ready for a line. */
     open: (window: string) => {
@@ -86,6 +99,22 @@ function harness(table: ReadonlyArray<readonly [number, number]> = TREE) {
     fail: async () => {
       reads.shift()!.reject(new Error('process table not read'))
       await landed()
+    },
+    /** The oldest foreground read in flight, landed with that answer. */
+    groups: async (groups: ProcessGroups | undefined) => {
+      groupReads.shift()!.resolve(groups)
+      await landed()
+    },
+    groupsFail: async () => {
+      groupReads.shift()!.reject(new Error('ps not read'))
+      await landed()
+    },
+    /** An ask's own deadline, the `nth` armed: the latest unless the test says. */
+    deadline: (nth = -1) => timers.filter(({ ms }) => ms === VSCODE_GUARD_MS).at(nth)!,
+    /** The guard's counts in the minute's line, its timer run by hand. */
+    guardCounts: () => {
+      timers.find(({ ms }) => ms === 60_000)!.run()
+      return logged.at(-1)!.split(' dropped, ')[1]
     },
   }
 }
@@ -142,7 +171,7 @@ describe('VS Code\'s windows', () => {
     expect(h.processes).not.toHaveBeenCalled()
     expect(h.timers.map(({ ms }) => ms)).toEqual([60_000])
     h.timers[0]!.run()
-    expect(h.logged.at(-1)).toBe('[devices] vscode · in the last minute: 0 shows, 0 taps, 1 refused states, 0 ps reads, 0 failed, 0 scroll lines, 0 dropped')
+    expect(h.logged.at(-1)).toBe('[devices] vscode · in the last minute: 0 shows, 0 taps, 1 refused states, 0 ps reads, 0 failed, 0 scroll lines, 0 dropped, 0 page strokes, guard refused: 0 renderer, 0 asking, 0 background, 0 ps, 0 slow')
     // The same state in its form is taken.
     expect(h.state(W1, [700])).toBeUndefined()
     expect(h.processes).toHaveBeenCalledTimes(1)
@@ -476,7 +505,7 @@ describe('VS Code\'s windows', () => {
     one.drain()
     expect(h.timers.map(({ ms }) => ms)).toEqual([60_000])
     h.timers[0]!.run()
-    expect(h.logged.at(-1)).toBe('[devices] vscode · in the last minute: 0 shows, 0 taps, 0 refused states, 0 ps reads, 0 failed, 3 scroll lines, 1 dropped')
+    expect(h.logged.at(-1)).toBe('[devices] vscode · in the last minute: 0 shows, 0 taps, 0 refused states, 0 ps reads, 0 failed, 3 scroll lines, 1 dropped, 0 page strokes, guard refused: 0 renderer, 0 asking, 0 background, 0 ps, 0 slow')
   })
 
   it('page lines are written with "page":true, and plain lines carry no page', () => {
@@ -571,13 +600,175 @@ describe('VS Code\'s windows', () => {
     newer.end('gone')
     expect(h.logged).toEqual([
       '[devices] vscode stream · open · windows 1',
-      '[devices] vscode · in the last minute: 1 shows, 1 taps, 1 refused states, 1 ps reads, 0 failed, 0 scroll lines, 0 dropped',
+      '[devices] vscode · in the last minute: 1 shows, 1 taps, 1 refused states, 1 ps reads, 0 failed, 0 scroll lines, 0 dropped, 0 page strokes, guard refused: 0 renderer, 0 asking, 0 background, 0 ps, 0 slow',
       '[devices] vscode stream · open · windows 1',
       '[devices] vscode stream · ended · replaced · windows 1',
-      '[devices] vscode · in the last minute: 1 shows, 0 taps, 0 refused states, 1 ps reads, 1 failed, 0 scroll lines, 0 dropped',
+      '[devices] vscode · in the last minute: 1 shows, 0 taps, 0 refused states, 1 ps reads, 1 failed, 0 scroll lines, 0 dropped, 0 page strokes, guard refused: 0 renderer, 0 asking, 0 background, 0 ps, 0 slow',
       '[devices] vscode stream · ended · gone · windows 0',
     ])
     for (const line of h.logged) expect(line).not.toMatch(/900|910|700|710|5f3a|process table/)
+  })
+
+  it('a fullscreen agent in its tty\'s foreground group may take page keys: its folder read, then one ps, for its pid', async () => {
+    const h = harness()
+    const answer = h.terminals.pageKeys(900, AGENT)
+    expect(h.fullscreen.mock.calls).toEqual([['/work/api', undefined]])
+    // The ps waits on the settings: a session they do not draw fullscreen costs none.
+    expect(h.foreground).not.toHaveBeenCalled()
+    await h.landed()
+    expect(h.foreground.mock.calls).toEqual([[900]])
+    await h.groups({ pgid: 900, tpgid: 900 })
+    expect(await answer).toBe(true)
+    expect(h.guardCounts()).toBe('1 page strokes, guard refused: 0 renderer, 0 asking, 0 background, 0 ps, 0 slow')
+  })
+
+  it('the agent\'s transcript path goes to the renderer read with its folder, as given', () => {
+    const h = harness()
+    void h.terminals.pageKeys(900, { ...AGENT, transcriptPath: '/o/home/projects/-work-api/s1.jsonl' })
+    // Its shape is claudeRenderer.ts's to judge, not the guard's.
+    expect(h.fullscreen.mock.calls).toEqual([['/work/api', '/o/home/projects/-work-api/s1.jsonl']])
+  })
+
+  it('an agent that asks is refused at once, with nothing read', () => {
+    const h = harness()
+    expect(h.terminals.pageKeys(900, { ...AGENT, asking: true })).toBe(false)
+    expect([h.fullscreen.mock.calls, h.foreground.mock.calls]).toEqual([[], []])
+    // No deadline is armed: only the minute's timer.
+    expect(h.timers.map(({ ms }) => ms)).toEqual([60_000])
+    expect(h.guardCounts()).toBe('0 page strokes, guard refused: 0 renderer, 1 asking, 0 background, 0 ps, 0 slow')
+  })
+
+  it.each([undefined, 'work/api'])('a folder of %s is refused renderer at once, with nothing read', (cwd) => {
+    const h = harness()
+    // The project's settings, which outrank the user's, cannot be found.
+    expect(h.terminals.pageKeys(900, { asking: false, ...(cwd === undefined ? {} : { cwd }) })).toBe(false)
+    expect([h.fullscreen.mock.calls, h.foreground.mock.calls]).toEqual([[], []])
+    expect(h.timers.map(({ ms }) => ms)).toEqual([60_000])
+    expect(h.guardCounts()).toBe('0 page strokes, guard refused: 1 renderer, 0 asking, 0 background, 0 ps, 0 slow')
+  })
+
+  it('settings that do not say fullscreen are refused renderer, and ps is not run', async () => {
+    const h = harness()
+    h.fullscreen.mockResolvedValue(false)
+    expect(await h.terminals.pageKeys(900, AGENT)).toBe(false)
+    expect(h.foreground).not.toHaveBeenCalled()
+    expect(h.guardCounts()).toBe('0 page strokes, guard refused: 1 renderer, 0 asking, 0 background, 0 ps, 0 slow')
+  })
+
+  it('a renderer read that rejects is refused renderer, and nothing rejects', async () => {
+    const h = harness()
+    h.fullscreen.mockRejectedValue(new Error('settings not read'))
+    expect(await h.terminals.pageKeys(900, AGENT)).toBe(false)
+    expect(h.foreground).not.toHaveBeenCalled()
+    expect(h.guardCounts()).toBe('0 page strokes, guard refused: 1 renderer, 0 asking, 0 background, 0 ps, 0 slow')
+  })
+
+  it('another group in front is refused', async () => {
+    const h = harness()
+    const answer = h.terminals.pageKeys(900, AGENT)
+    await h.landed()
+    // The shell, or another of its jobs, holds the terminal: a key would be typed there.
+    await h.groups({ pgid: 900, tpgid: 700 })
+    expect(await answer).toBe(false)
+    expect(h.guardCounts()).toBe('0 page strokes, guard refused: 0 renderer, 0 asking, 1 background, 0 ps, 0 slow')
+  })
+
+  it.each<[string, ProcessGroups | undefined]>([
+    ['none', undefined],
+    ['macOS, no terminal', { pgid: 900, tpgid: 0 }],
+    ['Linux, no terminal', { pgid: 900, tpgid: -1 }],
+    ['no terminal, in a group of the same number', { pgid: 0, tpgid: 0 }],
+  ])('a read of %s is refused', async (_, groups) => {
+    const h = harness()
+    const answer = h.terminals.pageKeys(900, AGENT)
+    await h.landed()
+    await h.groups(groups)
+    expect(await answer).toBe(false)
+    expect(h.guardCounts()).toBe('0 page strokes, guard refused: 0 renderer, 0 asking, 0 background, 1 ps, 0 slow')
+  })
+
+  it('a ps read that rejects is refused, and nothing rejects', async () => {
+    const h = harness()
+    const answer = h.terminals.pageKeys(900, AGENT)
+    await h.landed()
+    await h.groupsFail()
+    expect(await answer).toBe(false)
+    expect(h.guardCounts()).toBe('0 page strokes, guard refused: 0 renderer, 0 asking, 0 background, 1 ps, 0 slow')
+  })
+
+  it('no answer in 500 ms is refused, and the answer that lands later counts nothing', async () => {
+    expect(VSCODE_GUARD_MS).toBe(500)
+    const h = harness()
+    const answer = h.terminals.pageKeys(900, AGENT)
+    await h.landed()
+    h.deadline().run()
+    expect(await answer).toBe(false)
+    await h.groups({ pgid: 900, tpgid: 900 })
+    expect(h.guardCounts()).toBe('0 page strokes, guard refused: 0 renderer, 0 asking, 0 background, 0 ps, 1 slow')
+  })
+
+  it('an answer in time cancels its 500 ms', async () => {
+    const h = harness()
+    const answer = h.terminals.pageKeys(900, AGENT)
+    expect(h.deadline().cancelled).toBe(false)
+    await h.landed()
+    await h.groups({ pgid: 900, tpgid: 900 })
+    expect(await answer).toBe(true)
+    expect(h.deadline().cancelled).toBe(true)
+  })
+
+  it('an ask while that agent\'s guard is in flight joins it: one renderer read, one ps, and each ask is answered and counted', async () => {
+    const h = harness()
+    const first = h.terminals.pageKeys(900, AGENT)
+    await h.landed()
+    const second = h.terminals.pageKeys(900, AGENT)
+    expect([h.fullscreen.mock.calls.length, h.foreground.mock.calls.length]).toEqual([1, 1])
+    // Each with a deadline of its own: the first's passing leaves the second waiting.
+    h.deadline(0).run()
+    expect(await first).toBe(false)
+    await h.groups({ pgid: 900, tpgid: 900 })
+    expect(await second).toBe(true)
+    // Once it has answered, the next ask reads anew.
+    const third = h.terminals.pageKeys(900, AGENT)
+    expect(h.fullscreen).toHaveBeenCalledTimes(2)
+    await h.landed()
+    await h.groups({ pgid: 900, tpgid: 700 })
+    expect(await third).toBe(false)
+    expect(h.guardCounts()).toBe('1 page strokes, guard refused: 0 renderer, 0 asking, 1 background, 0 ps, 1 slow')
+  })
+
+  it('another agent\'s ask is a guard of its own', async () => {
+    const h = harness()
+    const one = h.terminals.pageKeys(900, AGENT)
+    const other = h.terminals.pageKeys(910, AGENT)
+    await h.landed()
+    expect(h.foreground.mock.calls).toEqual([[900], [910]])
+    await h.groups({ pgid: 900, tpgid: 900 })
+    await h.groups({ pgid: 910, tpgid: 700 })
+    expect([await one, await other]).toEqual([true, false])
+  })
+
+  it('the minute\'s line counts page strokes and each refusal by its reason', async () => {
+    const h = harness()
+    expect(h.terminals.pageKeys(900, { ...AGENT, asking: true })).toBe(false)
+    expect(h.terminals.pageKeys(900, { asking: false })).toBe(false)
+    for (const groups of [{ pgid: 900, tpgid: 900 }, { pgid: 900, tpgid: 700 }, undefined]) {
+      const answer = h.terminals.pageKeys(900, AGENT)
+      await h.landed()
+      await h.groups(groups)
+      await answer
+    }
+    const failed = h.terminals.pageKeys(900, AGENT)
+    await h.landed()
+    await h.groupsFail()
+    await failed
+    const slow = h.terminals.pageKeys(900, AGENT)
+    h.deadline().run()
+    await slow
+    h.timers.find(({ ms }) => ms === 60_000)!.run()
+    expect(h.logged).toEqual([
+      '[devices] vscode · in the last minute: 0 shows, 0 taps, 0 refused states, 0 ps reads, 0 failed, 0 scroll lines, 0 dropped, 1 page strokes, guard refused: 1 renderer, 1 asking, 1 background, 2 ps, 1 slow',
+    ])
   })
 })
 
@@ -596,5 +787,26 @@ describe('the process table the match reads', () => {
 
   it.skipIf(process.platform === 'win32')('this machine\'s holds this process under its parent', async () => {
     expect(await readProcessParents()).toContainEqual({ pid: process.pid, ppid: process.ppid })
+  })
+})
+
+describe('the foreground group the page guard reads', () => {
+  it('is one process\'s group and its tty\'s foreground group alone, from one ps read within its bounds', async () => {
+    expect(GROUPS_MAX_BYTES).toBe(64)
+    const exec = vi.fn<Exec>(async () => ' 4242  4242\n')
+    expect(await readForeground(4242, exec)).toEqual({ pgid: 4242, tpgid: 4242 })
+    expect(exec.mock.calls).toEqual([['ps', ['-o', 'pgid=,tpgid=', '-p', '4242'], { timeout: PS_TIMEOUT_MS, maxBuffer: GROUPS_MAX_BYTES }]])
+  })
+
+  it('reads the -1 Linux prints for a process with no terminal', async () => {
+    expect(await readForeground(4242, async () => ' 4242    -1\n')).toEqual({ pgid: 4242, tpgid: -1 })
+  })
+
+  it.each([null, '', 'SECRET-TOKEN rotate the key\n', ' 1 1\n 2 2\n', ' 4242\n'])('a ps that failed, or printed anything but one row, is none: %j', async (out) => {
+    expect(await readForeground(4242, async () => out)).toBeUndefined()
+  })
+
+  it.skipIf(process.platform === 'win32')('this machine\'s: this process has a group', async () => {
+    expect(await readForeground(process.pid)).toEqual({ pgid: expect.any(Number), tpgid: expect.any(Number) })
   })
 })
