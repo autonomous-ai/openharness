@@ -21,7 +21,6 @@ import { OWN_FILES } from '../homeMove/plan.js'
 import { readMoveRecord, writeMoveRecord, type MoveRecord } from '../homeMove/record.js'
 import { connectorsDir } from '../lib/connectors/store.js'
 import { savedDaemonPort } from '../lib/daemonRecord.js'
-import { ENGINE_CLI_ALIASES, ENGINE_CLI_COMMANDS } from '../lib/engineBin.js'
 import { HARNESS_OWNER_OPTION } from '../lib/harnessSessionLabel.js'
 import { publishHookRoute } from '../lib/hookRoutes.js'
 import { socketPathIn, unixSocketPath } from '../lib/localSocket.js'
@@ -30,8 +29,15 @@ import { socketPathIn, unixSocketPath } from '../lib/localSocket.js'
 export const CHECK_MS = 600_000
 const TMUX_LIMIT_MS = 5_000
 
-/** The engines Harness installs hooks for, by every name their command goes by. */
-const ENGINES: ReadonlySet<string> = new Set([...Object.values(ENGINE_CLI_COMMANDS), ...Object.values(ENGINE_CLI_ALIASES).flat()].filter(Boolean))
+/**
+ * The engines Harness installs hooks for (engines/hooks.ts, engines/nativeHooks.ts), by the names their processes run as.
+ * Not Pi's `pi`, Amp's `amp`, Command Code's `cmd` or Cursor's and Grok's `agent`: other programs go by those, and one
+ * would hold the bridge for good. A session of those that Harness started is a pane's, which counts by its pane.
+ */
+const ENGINES: ReadonlySet<string> = new Set([
+  'claude', 'codex', 'cursor-agent', 'opencode', 'hermes', 'hermes-agent', 'command-code', 'commandcode', 'devin', 'kilo',
+  'kilocode', 'grok', 'agy', 'copilot',
+])
 /** Desktop's executable (an AppImage's mount's too) and the Device app's: they opened their stores and logs through the old paths. */
 const APPS: ReadonlySet<string> = new Set(['harness', 'harness-device'])
 
