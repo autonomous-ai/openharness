@@ -3,6 +3,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:pat
 import { parseEnv } from 'node:util'
 import { legacyHarnessHome, xdgRoots } from '../config/harnessHome.js'
 import { harnessPaneOwner } from '../lib/harnessSessionLabel.js'
+import { isBridge } from './bridge.js'
 import { movedPath, planMove, type MovePlan } from './plan.js'
 
 /** Why a move waits, or did not finish. */
@@ -25,8 +26,6 @@ export const OVERRIDE_NAMES: readonly string[] = [
   'HARNESS_DEVICES_DIR', 'HARNESS_AGENT_MESSAGES_DIR', 'HARNESS_FLASHER_CACHE',
 ]
 
-// What the bridge keeps as real folders, because an old reader refuses a link there.
-const BRIDGE_FOLDERS = ['hook-routes', 'connections']
 // The daemon's socket names (lib/localSocket.ts).
 const SOCKET = /^daemon-\d+\.sock$/
 const ANSWER_LIMIT_MS = 1_000
@@ -42,10 +41,9 @@ export async function checkMove(deps: ConditionDeps): Promise<MoveCheck> {
   if (deps.platform !== 'linux' || !fs.existsSync(legacy)) return NO_HOLD
   const env = withEnvFile(deps)
   if (fs.existsSync(xdgRoots(home, env).data)) return NO_HOLD
-  // A person who linked ~/.harness chose its place: nothing under it is read.
-  if (fs.lstatSync(legacy).isSymbolicLink()) return skipped('~/.harness')
-  const names = fs.readdirSync(legacy)
-  if (names.length > 0 && names.every((name) => BRIDGE_FOLDERS.includes(name) || fs.lstatSync(join(legacy, name)).isSymbolicLink())) return NO_HOLD
+  // A person who linked ~/.harness chose its place: nothing under it is read. Its name is the one a person reads.
+  if (fs.lstatSync(legacy).isSymbolicLink()) return skipped(legacyHarnessHome('~', 'linux'))
+  if (isBridge(legacy)) return NO_HOLD
   // The process that moved starts itself again from the new paths: one that cannot would run on the old ones.
   if (!deps.hasExecve) return NO_HOLD
   const dataDir = env.ADAPTER_DATA_DIR || join(legacy, 'cli', 'data')
@@ -64,7 +62,7 @@ export async function checkMove(deps: ConditionDeps): Promise<MoveCheck> {
   if (beforePaneOptions(deps.tmux.version()) && deps.tmux.tags(false).includes(oldTag)) return waiting('old-tmux')
   // A PTY host keeps its panes' tags inside it.
   if (deps.ptyHostRuns(env.HARNESS_PTY_DIR || join(legacy, 'pty'))) return waiting('pty-host')
-  const plan = planMove(home, env, names)
+  const plan = planMove(home, env, fs.readdirSync(legacy))
   // The data folder as it really is: one a link keeps out of the tree stays where it is, and keeps its tag.
   const newTag = harnessPaneOwner(movedPath({ ...plan, legacy: realLegacy }, realPath(deps, resolve(dataDir))))
   return { move: true, plan, oldTag, newTag }

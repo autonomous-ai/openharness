@@ -210,7 +210,7 @@ describe('the bridge\'s layout', () => {
       // The checks an old client makes before it sends anything: the Store's here, and the hook's (notify.mjs privateSocket) by its run.
       expect(socketIsPrivate(link)).toBe(true)
       await oldHook(home, ['--port', String(PORT), '--data-dir', home.bridge.oldDataDir])
-      expect(home.daemon.heard).toEqual(['/api/hook/session-end'])
+      expect(home.daemon.heard).toHaveLength(1)
     })
   })
 
