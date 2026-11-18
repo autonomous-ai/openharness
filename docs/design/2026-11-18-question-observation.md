@@ -355,3 +355,25 @@ The canonical core selection's 17 question tests independently retains 100% stat
 functions and lines; TypeScript passes. A test-only payload assertion was narrowed after the first type
 check reported `unknown`; no emitted behavior changed. Native restart acceptance remains pending on
 the integrated fix and its separately frozen one-case packet.
+
+The corrected restart case passed once on clean integration `8d897e78f9`, built from that exact source,
+in 43.379 seconds on macOS x64. Both nonfocused questions returned after the devices process restarted
+on its original encrypted session; both answers reached their panes and emitted the correct closes.
+The real core input and three-agent listing completed within the shared 15-second budget while devices
+were absent, with the same core PID. The previous receipt and a new device turn also passed. This is
+functional proof, not a latency comparison.
+
+Actual outer, test runner and master exits were zero. Independent verification found all 19 exact owned
+PIDs and eight process groups gone, with close/EOF/reap and guardian proof. Fixture/setup roots and copied
+Node/bundle artifacts were removed, the temporary root was empty, all 6,408 frozen input hashes matched,
+and the integration source stayed clean and unchanged. The frozen packet is `/tmp/core-question-native-v2`
+(manifest `5ffdebf5101830b32491f00609b20e45ccf4354316283732926977df2ec42bca`); the actual tool
+receipt, test result and independent custody proof remain in `/tmp/qn2-8d897ea1`.
+
+The two ordinary/inline native cases passed previously on `1c3373ef61`; those results are reused only
+for unchanged behavior. The later Wi-Fi peer cutover must rerun its affected native cases on its own
+source. Full component disable remains outside this native fixture, with teardown checked at the
+owning component's `stop` layer. Native Windows/Linux acceptance and release-wide gates are separate.
+The maximum escaped-input cost remains explicit: the bounded observer adds 23.370 ms median synchronous
+work against the same `7aa0903a8b` legacy route, with a 72.810 ms worst measured loop hold. This functional
+pass does not turn that cost into a performance acceptance claim or make legacy replay bounded.
