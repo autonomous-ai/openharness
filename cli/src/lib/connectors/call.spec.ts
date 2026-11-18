@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { tmpdir, userInfo } from 'node:os'
 import { basename, dirname, join, posix, win32, type PlatformPath } from 'node:path'
 import { call, CallFailure, expandHome, forbiddenDirs, identities, identity, tempDirs, unc, uploadFile, walk, type Identity, type Verdict } from './call.js'
 import type { Store } from './store.js'
@@ -498,14 +498,14 @@ describe('uploadFile', () => {
       expect(said(join(home, 'docs', 'note.txt'))).toBe('sent')
     })
 
+    // The account's real home: on Windows its AppData\Local\Temp, which holds `home`, is open only for that account.
     it('reads the registry with the account\'s home, and only once the file passed its own checks', () => {
-      account.home = home
       linkSync(join(home, '.ssh', 'note.txt'), join(home, 'docs', 'link.txt'))
       writeFileSync(join(home, 'docs', 'note.exe'), 'x')
       for (const file of ['docs/note.exe', 'docs/none.txt', 'docs/link.txt']) expect(said(join(home, file)), file).not.toBe('sent')
       expect(registry.reads).toEqual([])
       expect(said(join(home, 'docs', 'note.txt'), { HOME: join(home, 'docs') })).toBe('sent')
-      expect(registry.reads).toEqual([home])
+      expect(registry.reads).toEqual([userInfo().homedir])
     })
 
     it('says a failed read as one line on stderr, and still uploads', async () => {
