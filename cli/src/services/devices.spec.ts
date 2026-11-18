@@ -260,6 +260,7 @@ const codexRuns: Array<[string, string[], { cwd: string; env: NodeJS.ProcessEnv;
 const codex: NonNullable<DevicesDeps['codex']> = {
   run: async (file, args, options) => { codexRuns.push([file, args, options]); return 0 },
   binary: () => '/opt/codex/bin/codex',
+  appBinary: () => null,
   parentEnv: () => ({ PATH: '/usr/bin' }),
   // Never the developer's own shell: a spec reads when it would have been read.
   readLoginShell: vi.fn(),
@@ -4063,6 +4064,8 @@ describe('codex queue, for Codex outside a pane (docs/specs/2026-11-15-device-co
   const THREAD = '01a1de76-a3b7-7270-b39e-1245893274c1'
   const ID = observedAgentId('codex', THREAD)
   const HANDLE = 'term_0123abcd-0000-4000-8000-0123456789ab'
+  /** The ChatGPT app's own Codex CLI, where the real look finds it. */
+  const APP = '/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex'
   /** Its rollout, in Harness's own Codex home. */
   const transcriptPath = join(env.CODEX_HOME, 'sessions', '2026', '11', '15', `rollout-2026-11-15T16-07-59-${THREAD}.jsonl`)
   const hook = (event: ObservedHookEvent['event'], over: Partial<ObservedHookEvent> = {}): ObservedHookEvent => ({
@@ -4107,6 +4110,21 @@ describe('codex queue, for Codex outside a pane (docs/specs/2026-11-15-device-co
     port.observed(hook('session-start'))
     for (let i = 0; i < 3; i++) expect(await listed()).toContainEqual({ id: ID, name: 'api', caps: 'sv' })
     expect(codex.readLoginShell).toHaveBeenCalledTimes(1)
+  })
+
+  it('a ChatGPT app session on macOS runs the app\'s own codex', async () => {
+    started({ codex: { ...codex, platform: 'darwin', appBinary: () => APP }, orca: { ...orca, platform: 'darwin' } }, { hostHints: { __CFBundleIdentifier: 'com.openai.codex' } })
+    expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
+    expect(codexRuns.map(([file]) => file)).toEqual([APP])
+    expect(said()).toEqual(['[device] voice · codex'])
+    expect(logs.filter((line) => line.includes(APP))).toEqual([])
+  })
+
+  // On macOS a tap opens the app's session by its thread's link (codexApp.ts): f.
+  it('with no codex but the app\'s, an app session lists sv', async () => {
+    started({ codex: { ...codex, platform: 'darwin', appBinary: () => APP, binary: () => null }, orca: { ...orca, platform: 'darwin' } },
+      { hostHints: { __CFBundleIdentifier: 'com.openai.codex' } })
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
   })
 
   it('a Codex app session\'s words still go through codex queue, and nothing is opened', async () => {

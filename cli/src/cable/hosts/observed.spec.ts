@@ -1391,8 +1391,8 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
     tabSelect: vi.fn((_app: TabApp, _tty: string, _raise: boolean): PaneSwitch => 'ok'),
     // Codex is there, and queues every message.
     codexQueue: {
-      can: vi.fn(() => true),
-      send: vi.fn(async (_threadId: string, _text: string): Promise<CodexQueueResult> => ({ outcome: 'queued' })),
+      can: vi.fn((_isApp: boolean) => true),
+      send: vi.fn(async (_threadId: string, _text: string, _isApp: boolean): Promise<CodexQueueResult> => ({ outcome: 'queued' })),
     },
     codexHome: '/home/u/.codex',
     count: vi.fn((_what: Parameters<ObservedActions['count']>[0]) => {}),
@@ -2261,7 +2261,7 @@ describe('ObservedSource and a Claude app session the scan found (docs/plans/202
 })
 
 const THREAD = '01a1de76-a3b7-7270-b39e-1245893274c1'
-const FAILED: CodexQueueResult = { outcome: 'failed', reason: 'exit 1' }
+const FAILED: CodexQueueResult = { outcome: 'failed', reason: 'exit 1', ran: 'path' }
 
 // Codex outside Harness takes the dial's words through its own queue, in every state: a queued message types nothing and
 // answers no approval (docs/specs/2026-11-15-device-codex.md).
@@ -2334,7 +2334,7 @@ describe('ObservedSource and codex queue', () => {
         const { src, actions } = given(session, state)
         expect(src.list()[0].state).toBe(state)
         expect(await src.send(src.list()[0], 'next')).toEqual({ ok: true })
-        expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next']])
+        expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', false]])
         expect(actions.orcaSend).not.toHaveBeenCalled()
         expect(actions.toMod).not.toHaveBeenCalled()
         expect(actions.count.mock.calls).toEqual([['codex']])
@@ -2378,7 +2378,7 @@ describe('ObservedSource and codex queue', () => {
   it('a failure is counted with its reason', async () => {
     for (const reason of ['no binary', 'refused'] as const) {
       const { src, actions } = given(cx)
-      actions.codexQueue.send.mockResolvedValue({ outcome: 'failed', reason })
+      actions.codexQueue.send.mockResolvedValue(reason === 'refused' ? { outcome: 'failed', reason } : { outcome: 'failed', reason, ran: 'path' })
       expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
       expect(actions.count.mock.calls).toEqual([[`codex-failed (${reason})`], ['no-answer']])
     }
@@ -2463,7 +2463,7 @@ describe('ObservedSource and codex queue', () => {
     await src.scanOpen()
     expect(src.capabilities(src.list()[0])).toMatchObject({ voice: true })
     expect(await src.send(src.list()[0], 'next')).toEqual({ ok: true })
-    expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next']])
+    expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', false]])
   })
 
   it('a text over 2000 characters is refused before the queue', async () => {
@@ -2536,10 +2536,44 @@ describe('ObservedSource and the Codex app', () => {
       const agent = src.list()[0]
       expect(src.capabilities(agent)).toMatchObject({ voice: true })
       expect(await src.send(agent, 'next')).toEqual({ ok: true })
-      expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next']])
+      expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', true]])
       expect(counted(actions.count).at(-1)).toBe('codex')
       expect(ran).not.toHaveBeenCalled()
     }
+  })
+
+  // The ChatGPT app's own codex queues into its threads (codexQueue.ts): the queue is told which sessions are the app's.
+  it('a Codex app session asks the queue as the app\'s, and a Codex in Ghostty does not', async () => {
+    for (const [session, isApp] of [[{ ...inApp, transcriptPath: rollout }, true],
+      [{ ...inApp, transcriptPath: rollout, hostHints: { TERM_PROGRAM: 'ghostty' } }, false]] as const) {
+      const { src, actions } = hooked(session)
+      const agent = src.list()[0]
+      src.capabilities(agent)
+      expect(await src.send(agent, 'next')).toEqual({ ok: true })
+      expect(actions.codexQueue.can.mock.calls.length).toBeGreaterThan(0)
+      expect(new Set(actions.codexQueue.can.mock.calls.map(([asked]) => asked))).toEqual(new Set([isApp]))
+      expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', isApp]])
+    }
+  })
+
+  it('with only the app\'s codex there, an app session lists voice and a Codex in Ghostty does not', () => {
+    for (const [session, voice] of [[{ ...inApp, transcriptPath: rollout }, true],
+      [{ ...inApp, transcriptPath: rollout, hostHints: { TERM_PROGRAM: 'ghostty' } }, false]] as const) {
+      const { src, actions } = hooked(session)
+      actions.codexQueue.can.mockImplementation((isApp) => isApp)
+      expect(src.capabilities(src.list()[0]).voice).toBe(voice)
+    }
+  })
+
+  // Its app is learned from its next hook: until then it takes the other codex.
+  it('a session whose app is not known yet is not the app\'s', async () => {
+    const { src, actions } = await scanned(new Map())
+    const agent = src.list()[0]
+    expect(src.capabilities(agent)).toMatchObject({ voice: true })
+    expect(await src.send(agent, 'next')).toEqual({ ok: true })
+    expect(actions.codexQueue.can.mock.calls.length).toBeGreaterThan(0)
+    expect(new Set(actions.codexQueue.can.mock.calls.map(([asked]) => asked))).toEqual(new Set([false]))
+    expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', false]])
   })
 
   it('a Codex session in Ghostty has no Codex pane', async () => {
