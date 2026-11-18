@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {releaseFor,probeLilypond,findLilypond,ensureLilypond,resolveLilypond,VERSION} from '../skills/score/scripts/lilypond.mjs';
+import {releaseFor,probeLilypond,findLilypond,ensureLilypond,resolveLilypond,runtimeRoot,VERSION} from '../skills/score/scripts/lilypond.mjs';
 
 async function fixture(t){
   const root=await mkdtemp(join(tmpdir(),'score-install-'));t.after(()=>rm(root,{recursive:true,force:true}));
@@ -42,4 +42,17 @@ test('an existing system install needs no download, and unsupported machines get
   let downloaded=false;const result=await ensureLilypond({env:{LILYPOND_BIN:''},platform:'linux',arch:'arm64',probe:bin=>bin==='lilypond'?{bin,version:VERSION}:null,download:async()=>{downloaded=true;}});
   assert.equal(result.bin,'lilypond');assert.equal(downloaded,false);
   await assert.rejects(ensureLilypond({env:{LILYPOND_BIN:''},platform:'linux',arch:'arm64',probe:()=>null}),/linux\/arm64/);
+});
+test('runtimeRoot follows the rule',()=>{
+  const home='/home/ada',env={HOME:home},legacy=join(home,'.harness'),data=join(home,'.local/share/harness');
+  const state=join(home,'.local/state/harness','runtime','score'),old=join(legacy,'runtime','score');
+  const existing=(...paths)=>path=>paths.includes(path);
+  assert.equal(runtimeRoot(env,'linux',existing()),state);
+  assert.equal(runtimeRoot(env,'linux',existing(data,legacy)),state);
+  assert.equal(runtimeRoot(env,'linux',existing(legacy)),old);
+  assert.equal(runtimeRoot(env,'darwin',existing(data)),old);
+  assert.equal(runtimeRoot({...env,XDG_DATA_HOME:'/x/data',XDG_STATE_HOME:'/x/state'},'linux',existing(legacy,'/x/data/harness')),'/x/state/harness/runtime/score');
+  assert.equal(runtimeRoot({...env,XDG_STATE_HOME:'relative'},'linux',existing()),state);
+  assert.equal(runtimeRoot({...env,ADAPTER_RUNTIME_DIR:'/r'},'linux',existing()),'/r/score');
+  assert.equal(runtimeRoot({...env,ADAPTER_RUNTIME_DIR:'/r',SCORE_RUNTIME_DIR:'/s'},'linux',existing()),'/s');
 });
