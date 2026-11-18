@@ -14,24 +14,20 @@
 
 **Spec:** `docs/plans/2026-11-19-atomic-state-writes-design.md`. Read it with this plan, the root `AGENTS.md`, `cli/AGENTS.md` (Protect the core) and `cli/src/harnessd/AGENTS.md`.
 
-## Draft: five questions are open
-
-The plan is complete on its defaults. Each default is marked **(Q1)** to **(Q5)** where it is used; the questions are at the end, under [Open questions](#open-questions).
-
 ## Base
 
-- Branch `fix/atomic-state-writes`, at `e948919b33`, worktree `/Users/nqhieu84/orca/workspaces/openharness/atomic-writes`.
+- Branch `fix/atomic-state-writes`, at `0323a0b812` (the spec and this plan, on `e948919b33`), worktree `/Users/nqhieu84/orca/workspaces/openharness/atomic-writes`.
 - **Before the first task, once:** `cd cli && npm ci --no-audit --no-fund` (this worktree's `cli/` has no `node_modules`). One process runs it, never two tasks at once.
 - The tasks name functions, never lines. Line numbers in the tables are the audit's, at the base. If a name differs, the implementer follows the code and says so in its report.
 - `feat/linux-xdg-paths` (PR #4469) touches some of the same files; whichever merges second rebases.
-- The spec and this plan are untracked. The main session commits them; no task does.
+- The spec and this plan are committed. A change to either is the main session's to commit; no task commits one.
 - Fault injection in tests wraps `node:fs` with pass-through functions and hoisted flags, as `cli/src/lib/registry.persistenceCost.spec.ts` and `registry.diskFailure.spec.ts` do. No fixed sleeps.
 
 ## Tasks at a glance
 
 | Task | Files (specs beside them) | Depends on | Effort | Test that fails first |
 |---|---|---|---|---|
-| **Part 1: the prefix (pull request 1 when the diff is split)** | | | | |
+| **Part 1: the prefix (pull request 1)** | | | | |
 | 1 The helper moves and grows | `lib/secureState.ts`, `lib/registry.ts`, `lib/registryPersistence.ts`, their importers, `.github/workflows/windows.yml` | none | xhigh | `lib/secureState.spec.ts` |
 | 2 The reader | `lib/secureState.ts` | 1 | xhigh | `lib/secureState.spec.ts` |
 | 3 Pinned machines | `lib/e2ee/machinePeers.ts`, `lib/remoteRelay.ts` | 2 | xhigh | `machinePeers.spec.ts`, `remoteRelay.spec.ts` |
@@ -39,10 +35,10 @@ The plan is complete on its defaults. Each default is marked **(Q1)** to **(Q5)*
 | 5 Identity, paired clients, remote password | `lib/e2ee/store.ts`, `lib/e2ee/manager.ts` | 2 | xhigh | `store.spec.ts`, `manager.test.ts` |
 | 6 The device key log | `lib/e2ee/deviceLogStore.ts`, `lib/e2ee/deviceLogSyncer.ts` | 2 | xhigh | `deviceLogStore.spec.ts`, `deviceLogSyncer.spec.ts` |
 | 7 Per-account trust | `lib/e2ee/accountTrust.ts` | 2 | xhigh | `accountTrust.spec.ts` |
-| 8 The auth session | `lib/authSession.ts` | 2 | xhigh | `authSession.spec.ts` |
+| 8 The auth session | `lib/authSession.ts`, `cli.ts` (the two sign-in writes), `authCommand.spec.ts` | 2 | xhigh | `authSession.spec.ts`, `authCommand.spec.ts` |
 | 9 `harness status` names an unreadable trust file | `lib/trustFiles.ts` (new), `cli.ts`, `lib/daemonState.ts`, `cli/e2e/stateFiles.e2e.ts` (new), `docs/cli.md` | 3, 4, 5, 6, 7, 8 | high | `lib/trustFiles.spec.ts`, `cli/e2e/stateFiles.e2e.ts` |
 | 10 The guard, part 1 | `lib/stateWrites.guard.spec.ts` (new), `cli/AGENTS.md` | 3, 4, 5, 6, 7, 8 | high | `lib/stateWrites.guard.spec.ts` |
-| **Part 2: the rest of the spec** | | | | |
+| **Part 2: the rest of the spec (pull request 2)** | | | | |
 | 11 The hook credential | `lib/hookAuth.ts`, `lib/trustFiles.ts` | 9, 10 | xhigh | `hookAuth.spec.ts` |
 | 12 The recap files, and the save's cost | `lib/commander.ts`, `lib/commander.saveCost.spec.ts` (new) | 9, 10 | high | `commander.spec.ts` |
 | 13 The pid file: three answers, one writer | `lib/daemonState.ts`, `lib/unreachable.ts`, `lib/programDaemon.ts`, `testing/spawnedRuns.ts` | 9, 10 | xhigh | `daemonState.pidFile.spec.ts` |
@@ -52,24 +48,25 @@ The plan is complete on its defaults. Each default is marked **(Q1)** to **(Q5)*
 | 17 Pointers, markers and the computer id | `lib/runtimeInstall.ts`, `lib/uninstall/deps.ts`, `lib/computerIdentity.ts` | 9, 10 | high | `runtimeInstall.spec.ts`, `computerIdentity.spec.ts`, `uninstall/command.spec.ts` |
 | 18 JSON caches | `device/machineList.ts`, `lib/hostTheme.ts`, `lib/codexProfiles.ts` | 9, 10 | high | `machineList.spec.ts`, `hostTheme.spec.ts`, `codexProfiles.test.ts` |
 | 19 The guard, part 2 | `lib/stateWrites.guard.spec.ts` | 11, 12, 14, 15, 16, 17, 18 | medium | none (a list grows, one commit) |
-| **Part 3: what the sweep found (Q1)** | | | | |
-| 20 to 30 Writers found by the sweep, by area | see [Part 3](#part-3-the-writers-the-sweep-found-q1) | 19 | high each | each module's spec |
-| 31 The guard, part 3 | `lib/stateWrites.guard.spec.ts` | 20 to 30 | medium | none (a list grows, one commit) |
+| **Part 3: what the sweep found (pull request 3)** | | | | |
+| 20 to 30 Writers found by the sweep, and their readers, by area | see [Part 3](#part-3-the-writers-the-sweep-found-and-their-readers) | 19 | high each | each module's spec |
+| 31 The profile lists and the dial skill record: readers | `lib/codexProfiles.ts`, `lib/claudeHomes.ts`, `devices/dialSkillFiles.ts` | 19 | high | `codexProfiles.test.ts`, `claudeProfiles.test.ts`, `dialSkillFiles.spec.ts` |
+| 32 The guard, part 3 | `lib/stateWrites.guard.spec.ts` | 20 to 30 | medium | none (a list grows, one commit) |
 
 All paths are under `cli/src/` unless they start with `cli/`, `docs/` or `.github/`.
 
-Longest chain: 1 → 2 → 3 → 9 → 13 → 15 → 19 → 20 → 31, nine tasks.
+Longest chain: 1 → 2 → 3 → 9 → 13 → 15 → 19 → 20 → 32, nine tasks.
 
 - **Tasks 3 to 8 share no file** and start together once Task 2 is done; so do 9 and 10 after them, and 11, 12, 13, 16, 17, 18 after those.
-- **"9, 10" is the delivery order the brief asks for:** Part 1 must stand alone as a prefix of the branch, so no Part 2 commit lands before both. Tasks 11 and 15 also extend Task 9's files. Tasks 15 and 17 both change `lib/uninstall/deps.ts`, so they never run together; neither needs the other.
-- **Part 3 waits for Task 19** so Part 2 is a prefix too. If the answer to Q1 puts Part 3 in the same pull request as Part 2, Tasks 20 to 30 depend on Task 10 alone.
-- The diff will pass 1,500 changed lines: plan on Part 1 as pull request 1, stacked under the rest.
+- **"9, 10" is the delivery order the brief asks for:** Part 1 must stand alone as a prefix of the branch, so no Part 2 commit lands before both. Tasks 9 and 15 also extend `cli.ts` after Task 8; Tasks 11 and 15 extend Task 9's files. Tasks 15 and 17 both change `lib/uninstall/deps.ts`, so they never run together; neither needs the other.
+- **Part 3 waits for Task 19** so Part 2 is a prefix too (Decision 10). Task 31 changes `lib/codexProfiles.ts` after Task 18, which Task 19 already orders. Tasks 20 to 31 share no file.
+- **Three pull requests, stacked and merged in order** (Decision 10): Part 1 (the helper, the reader, the e2ee stores and the auth session), Part 2, Part 3.
 
 ## Layers and gates
 
 | Files | Process | Gate |
 |---|---|---|
-| `lib/secureState.ts`, `lib/daemonState.ts`, `lib/registry.ts`, `lib/hookAuth.ts`, `lib/engineLaunch.ts`, `lib/browserShim.ts`, `lib/hostTheme.ts`, `lib/computerIdentity.ts`, `lib/windows/hermesLaunch.ts`, `core/main.ts` | the core's (and others') | their specs in PR CI `cli-tests`; `src/architecture.spec.ts` (no new line in `architecture.coreFiles.txt`); `core/main.ts` by the end-to-end suite |
+| `lib/secureState.ts`, `lib/daemonState.ts`, `lib/registry.ts`, `lib/hookAuth.ts`, `lib/engineLaunch.ts`, `lib/browserShim.ts`, `lib/hostTheme.ts`, `lib/computerIdentity.ts`, `lib/windows/hermesLaunch.ts`, `lib/claudeHomes.ts`, `lib/nodeMigration.ts`, `core/main.ts` | the core's (and others') | their specs in PR CI `cli-tests`; `src/architecture.spec.ts` (no new line in `architecture.coreFiles.txt`); `core/main.ts` by the end-to-end suite |
 | `lib/e2ee/*`, `lib/remoteRelay.ts` | the gateway, the fleet, the CLI | their specs (PR CI) |
 | `lib/commander.ts` | the edge host (recaps) | its specs (PR CI) |
 | `harnessd/master.ts` | the master | 100% per file, `npm run test:harnessd` (local) |
@@ -88,7 +85,7 @@ Not changed, and a diff in any is a finding: `cli/src/architecture.coreFiles.txt
 - **Same bytes as today.** `atomicWriteJson` only where today's bytes are `JSON.stringify(value, null, 2)`; every other site passes its exact string to `atomicWriteFile`.
 - **Trust files:** `e2e/identity.json`, `e2e/paired.json`, `e2e/remotePassword.json`, `e2e/group.json`, `e2e/group-blocked.json`, `e2e/machinePeers.json`, `e2e/machinePeers-gone.json`, `e2e/devlog.json`, `e2e/devlog.archive.json`, the copies under `e2e/accounts/<account>/`, `auth/session.json`, `hook-credential`, `hook-token`. Everything else in the spec is a cache file.
 - **Unreadable** means: a read error other than `ENOENT`, text that is not valid JSON, or a top-level value of the wrong type (an array where an object is expected, and the reverse). A well-formed file of a shape or version this build does not know reads as it does today. Missing is missing, never an error.
-- **Trust, unreadable:** the file's bytes do not change; reads give the fail-closed value named in the store's task; every write that would replace it throws `StateFileUnreadable`; the next read tries again.
+- **Trust, unreadable:** the file's bytes do not change; reads give the fail-closed value named in the store's task; every write that would replace it throws `StateFileUnreadable`; the next read tries again. One exception: `harness login`, `harness logout` and `harness reset` set an unreadable `session.json` aside (Decision 8).
 - **Cache, unreadable:** renamed to `<name>.unreadable` (one copy: a newer one replaces the older), then read as missing.
 - **Read retry before either:** `READ_TRIES = 5` reads, `READ_WAIT_MS = 20` apart.
 - **Windows rename retry:** `RENAME_TRIES = 10`, `RENAME_WAIT_MS = 100` apart, on `EPERM`, `EACCES`, `EBUSY` only, on `win32` only; then it throws.
@@ -104,7 +101,9 @@ Not changed, and a diff in any is a finding: `cli/src/architecture.coreFiles.txt
 - **Out of scope:** a lost update between two processes that read, modify and write the same file.
 - **Platforms:** macOS, Linux, Windows.
 
-## Decisions made here (the builder's calls)
+## Decisions
+
+1 to 7 and 14 to 15 are the builder's calls. 8 to 13 are the orchestrator's answers to the draft's questions (2026-11-19).
 
 1. **`kind` is a required argument** of both writers. The callers that exist today (the registry's files, checkpoints, stopped agents, the safe-mode marker) pass `'trust'`, which is exactly what they do today: the existing target's owner and mode are checked. Their readers are not touched.
 2. **The reader is the gate.** A trust store's write path reads first (`requireState`), or carries a flag from its last load and reads again before it writes. The writer does not parse.
@@ -113,8 +112,14 @@ Not changed, and a diff in any is a finding: `cli/src/architecture.coreFiles.txt
 5. **The device key log has no safe empty value,** so its reads throw `StateFileUnreadable` instead of answering one.
 6. **A pairing that cannot be saved fails as `TIMEOUT`,** the existing code that does not count as a wrong guess. No new code on the wire.
 7. **The master is handed its pid writer** (`MasterConfig.writePidFile`), as it is handed everything else that touches the system: `src/harnessd/` cannot import the helper.
-8. **`harness login` over an unparsable `session.json` fails** with the trust line, as the spec's rule says; `harness logout` (a person's act) still removes the file.
-9. **Part 3 moves writers only.** A reader outside the spec's lists that still turns a parse error into empty is listed, not changed **(Q2)**.
+8. **`harness login` over an unparsable `session.json` does not fail.** The person is signing in again on purpose: login sets the file aside to `session.json.unreadable` and writes a fresh session. `harness logout` sets it aside the same way, where it removed it (and so does `harness reset`, the other door onto the same removal, `removeSignIn`). Every other reader and writer of `session.json` stays fail closed. This is the spec's "Fail-closed details for the trust stores".
+9. **Part 3 fixes the readers too (was Q2; changed from the draft's default).** Every Part 3 file marked `E` in Table B, and `codex-profiles.json`, `claude-profiles.json` and `dial-skill.json` (with `dial-setup.json`, which shares its reader), reads through the shared reader as a **cache** file: set aside to `<name>.unreadable`, logged, carried on as missing. Each with its red test, in the task that owns its module (Tasks 20 to 31).
+10. **Part 3 ships as a third stacked pull request, after Part 2 (was Q1).** Pull request 1 is Part 1, the e2ee stores first. Tasks 20 to 31 depend on Task 19.
+11. **The pid file when nobody answers and another process holds the spawn lock (was Q3, default kept):** the file is left, that one read has no pid (`busy`), and a command that changes the daemon settles again under its own lock. `harness status` prints what it prints today during a start.
+12. **Table B's "not here" rows stay for the follow-up (was Q4, default kept):** the four `src/harnessd/` writers (its import rule stays: no `../lib/secureState.js`), the folder and binary swaps, the files of an engine or the person, and the inbox file. Only the master's pid writer is injected (Decision 7).
+13. **A full recap history for the measurement is 200 sessions, measured on the developer's Mac only (was Q5, default kept).**
+14. **Part 3's async readers call the synchronous `readState`.** Each reads one small file once per load (the largest is bounded at 512 KiB, `session-git-history`), and the retry's wait is paid only for a file that cannot be parsed, once, since the file is then set aside. One reader, not a second async one.
+15. **A reader that bounds its read keeps its bound** (`cable/noticeFile.ts`, `devices/dialSkillFiles.ts`): a file within the bound that is not valid JSON or not a JSON object is handed to `readState(file, 'cache', jsonObject)`, which reads it again with the retry, sets it aside and logs the cache line; its answer is used. A file past the bound reads as today: the bound is what keeps the read small.
 
 ## The sweep
 
@@ -144,12 +149,12 @@ About 300 `writeFile*` calls in `cli/src`. The 201 write sites outside specs and
 
 ### Table B: renamed into place, but no `fsync` or a fixed temporary name
 
-`F` = no `fsync`. `N` = the temporary name is fixed or the pid alone. `E` = the reader turns a parse error into empty and a later write keeps it (not changed here, **Q2**).
+`F` = no `fsync`. `N` = the temporary name is fixed or the pid alone. `E` = the reader turns a parse error into empty and a later write keeps it (its reader is fixed here as a cache file, Decision 9).
 
 | Site | File | Gap | Decision |
 |---|---|---|---|
 | `lib/e2ee/deviceLogStore.ts`, `accountTrust.ts`, `lib/authSession.ts` | the spec's three | F N E | Tasks 6, 7, 8 (readers too) |
-| `lib/codexProfiles.ts:49` | `codex-profiles.json` (the duplicate `atomicWriteJson`) | E | Task 18 (the writer; its reader checks the file's owner as it reads, and stays) |
+| `lib/codexProfiles.ts:49` | `codex-profiles.json` (the duplicate `atomicWriteJson`) | E | Task 18 (the writer), Task 31 (the reader) |
 | `lib/appModels.ts:356` | `local-models/app-engines.json` | F N E | Task 20 |
 | `lib/localModels.ts:617,714,760` | `<grid>.known.json` (E), `<grid>.json`, `app-models.json` | F | Task 20 |
 | `lib/gridModels.ts:710`, `lib/agentTokenUsage.ts:362` | `grid-pictures/*.json`, `agent-token-usage/*.json` | F | Task 20 |
@@ -169,18 +174,18 @@ About 300 `writeFile*` calls in `cli/src`. The 201 write sites outside specs and
 | `dsh/installed.ts:87`, `viewerLedger.ts:123` | `installed.json`, `viewers.json` | F (N) E | Task 27 |
 | `dsh/catalog.ts:130` | `.catalog/*.json` | F | Task 27 |
 | `cable/notifyMode.ts:53` | `dial-notify.json` | F N | Task 28 |
-| `cable/noticeFile.ts:137`, `dialPortVerdicts.ts:81`, `pets/store.ts:245` | `dial-notices.json`, `dial-ports.json`, `pets/*` (text and images) | F N E | Task 28 |
+| `cable/noticeFile.ts:137`, `dialPortVerdicts.ts:81`, `pets/store.ts:245` | `dial-notices.json`, `dial-ports.json`, `pets/*` (text and images; `E`: `pets.json`) | F N E | Task 28. A pack's `<id>.json` is written once with the pack, never from a read: its readers stay |
 | `engines/cursor/pendingTasks.ts:67` | `cursor-pending-tasks.json` | F N E | Task 29 |
 | `engines/kit/windowsInstall.ts:114`, `messagesHook.ts:134`, `statusLine.ts:49`, `hookSettings.ts:216` | `native-installations/<engine>.json`, `hook.mjs`, `statusline.mjs`, `$CODEX_HOME/rules/harness.rules` | F N | Task 29 |
-| `agentClient/program.ts:150`, `ledger.ts:265` | `program-harnesses.json`, the ledger's rewrite | F N E | Task 30 |
+| `agentClient/program.ts:150`, `ledger.ts:265` | `program-harnesses.json` (E), the ledger's rewrite | F N | Task 30. The ledger is not `E`: it is read line by line, a line it cannot parse is skipped and its rewrite keeps that line byte for byte, so its reader stays |
 | `gateway/productUsage.ts:231,249` | `product-usage/*.json` | F N E | Task 30 |
 | `lib/autonomous-device/direct.ts:45` | `autonomous-device-connections.json` | F | Task 30 |
-| `harnessd/master.ts:186`, `reexec.ts:118,168`, `platform.ts:434` | `harnessd-status.json`, `harnessd-reexec.json`, the handover claim, the service definitions | F N | not here **(Q4)**: `src/harnessd/` may not import the helper. Each is read as "none" when torn and nothing is written back |
-| `harnessd/leanBundle.ts:186`, `dsh/builtins.ts:98`, `lib/windows/cliVersions.ts:53`, `devices/orcaPluginFolder.ts:137`, `lib/selfUpdate.ts:406` | a folder of files staged and swapped in | F N | not here **(Q4)**: a folder swap with its own check or rollback, not one file's text |
-| `lib/windows/ptyInstall.ts:183`, `tui/install.ts:105` | executables copied or downloaded, then swapped | F | not here **(Q4)**: a binary swap; each is checked before it is used |
-| `engines/kit/folderTrust.ts:66`, `inheritedMcp.ts:61`, `lib/connectors/agents.ts:176`, `agentClient/computerUse.ts:139` | `~/.claude.json`, `config.toml`, `opencode.json`, `.claude/settings.local.json` | F N | not here **(Q4)**: another program's file. It keeps the target's mode and link, and is written beside the engine's own writes |
-| `lib/uninstall/rcFiles.ts:104` | the person's shell startup files | F | not here **(Q4)**: the person's file, same reason |
-| `messages/inbox.ts:98` | `inbox/<pane>/<key>.json` | F N | not here **(Q4)**: its temporary file is kept outside the folder the hook lists, on purpose |
+| `harnessd/master.ts:186`, `reexec.ts:118,168`, `platform.ts:434` | `harnessd-status.json`, `harnessd-reexec.json`, the handover claim, the service definitions | F N | not here (Decision 12): `src/harnessd/` may not import the helper. Each is read as "none" when torn and nothing is written back |
+| `harnessd/leanBundle.ts:186`, `dsh/builtins.ts:98`, `lib/windows/cliVersions.ts:53`, `devices/orcaPluginFolder.ts:137`, `lib/selfUpdate.ts:406` | a folder of files staged and swapped in | F N | not here (Decision 12): a folder swap with its own check or rollback, not one file's text |
+| `lib/windows/ptyInstall.ts:183`, `tui/install.ts:105` | executables copied or downloaded, then swapped | F | not here (Decision 12): a binary swap; each is checked before it is used |
+| `engines/kit/folderTrust.ts:66`, `inheritedMcp.ts:61`, `lib/connectors/agents.ts:176`, `agentClient/computerUse.ts:139` | `~/.claude.json`, `config.toml`, `opencode.json`, `.claude/settings.local.json` | F N | not here (Decision 12): another program's file. It keeps the target's mode and link, and is written beside the engine's own writes |
+| `lib/uninstall/rcFiles.ts:104` | the person's shell startup files | F | not here (Decision 12): the person's file, same reason |
+| `messages/inbox.ts:98` | `inbox/<pane>/<key>.json` | F N | not here (Decision 12): its temporary file is kept outside the folder the hook lists, on purpose |
 | `lib/shellContextReply.ts:36`, `lib/windows/guestSetupClient.ts:55` | a one-shot reply, a one-shot request | F | not here: read once by the process that waits for it; a crash loses the request either way |
 | `lib/__fixtures__/fakeGrid.ts:91` | a test fixture | F N | not here |
 
@@ -188,7 +193,7 @@ About 300 `writeFile*` calls in `cli/src`. The 201 write sites outside specs and
 
 Unique temporary name, `fsync`, rename or `link`. They stay; a follow-up moves them to the helper.
 
-`lib/harnessRuntimeIgnore.ts:35` · `lib/handoffPublication.ts:77` · `lib/claudeProfiles.ts:24` (its reader still turns a parse error into empty, **Q2**) · `lib/apiConnections.ts:102` · `lib/agentCreationReceipt.ts:441,468` and `:571` when not exclusive · `lib/connectors/store.ts:117` · `lib/autonomous-device/resultJournal.ts:32` · `lib/autonomous-device/store.ts:107` when not exclusive · `lib/windows/pipeAuth.ts:192` · `dsh/preparation.ts:26` · `dsh/runtime.ts:59` · `engines/resumeTranscript.ts:94` · `engines/kit/nativeHookFiles.ts:220` · `engines/kit/nativeInstall.ts:120` · `engines/kit/homeAdoption.ts:264` · `devices/dialSkill.ts:120` · `devices/dialSkillFiles.ts:95` (its reader, **Q2**) · `lib/registryPersistence.ts` (out of scope by the spec).
+`lib/harnessRuntimeIgnore.ts:35` · `lib/handoffPublication.ts:77` · `lib/claudeProfiles.ts:24` (its reader, `readLinkedPaths` in `lib/claudeHomes.ts`, is fixed in Task 31) · `lib/apiConnections.ts:102` · `lib/agentCreationReceipt.ts:441,468` and `:571` when not exclusive · `lib/connectors/store.ts:117` · `lib/autonomous-device/resultJournal.ts:32` · `lib/autonomous-device/store.ts:107` when not exclusive · `lib/windows/pipeAuth.ts:192` · `dsh/preparation.ts:26` · `dsh/runtime.ts:59` · `engines/resumeTranscript.ts:94` · `engines/kit/nativeHookFiles.ts:220` · `engines/kit/nativeInstall.ts:120` · `engines/kit/homeAdoption.ts:264` · `devices/dialSkill.ts:120` · `devices/dialSkillFiles.ts:95` (its reader is fixed in Task 31) · `lib/registryPersistence.ts` (out of scope by the spec).
 
 ## The guard's module list
 
@@ -196,8 +201,8 @@ Unique temporary name, `fsync`, rename or `link`. They stay; a follow-up moves t
 
 - **Part 1 (Task 10):** `lib/registry.ts`, `lib/e2ee/store.ts`, `lib/e2ee/machinePeers.ts`, `lib/e2ee/trustGroup.ts`, `lib/e2ee/deviceLogStore.ts`, `lib/e2ee/accountTrust.ts`, `lib/authSession.ts`.
 - **Part 2 (Task 19):** `lib/hookAuth.ts`, `lib/commander.ts`, `lib/daemonState.ts`, `core/main.ts`, `harnessd/master.ts`, `masterProcess.ts`, `device/machineList.ts`, `lib/runtimeInstall.ts`, `lib/engineLaunch.ts`, `lib/windows/hermesLaunch.ts`, `lib/browserShim.ts`, `lib/uninstall/deps.ts`, `lib/hostTheme.ts`, `lib/computerIdentity.ts`, `lib/codexProfiles.ts`.
-- **Part 3 (Task 31):** every module of Tasks 20 to 30.
-- **Marked calls:** `lib/runtimeInstall.ts` (the archive), `lib/engineLaunch.ts` (the launch script), `harnessd/master.ts` (the status file, Q4), and in Part 3 whatever a module writes that Table A leaves.
+- **Part 3 (Task 32):** every module of Tasks 20 to 30. Task 31's modules: `lib/codexProfiles.ts` is listed since Part 2; `lib/claudeHomes.ts` writes nothing; `lib/claudeProfiles.ts` and `devices/dialSkillFiles.ts` keep their already-correct writers until the follow-up, so they are not listed.
+- **Marked calls:** `lib/runtimeInstall.ts` (the archive), `lib/engineLaunch.ts` (the launch script), `harnessd/master.ts` (the status file, Decision 12), and in Part 3 whatever a module writes that Table A leaves.
 
 ## Who reads the pid file
 
@@ -503,23 +508,30 @@ it('a torn log is not an empty log', () => {
 
 **Depends on:** 2. **Effort:** `xhigh` (a credential).
 
-**Files:** Modify `cli/src/lib/authSession.ts`, `authSession.spec.ts`.
+**Files:** Modify `cli/src/lib/authSession.ts`, `authSession.spec.ts`, `cli/src/cli.ts` (`saveSignIn` and `browserSignIn`: one call each), `cli/src/authCommand.spec.ts`.
 
 **Interfaces:**
 - Produces: `export function authSessionFiles(): TrustFile[]` (`session.json` with `jsonObject`).
 - `readStored` reads with `readState(AUTH_SESSION_FILE, 'trust', jsonObject)`: unreadable is `null` (not signed in). A JSON object of another version or shape is `null` as today, and can be replaced as today.
-- `writeAuthSession` throws `StateFileUnreadable` when the file on disk is unreadable, else writes `atomicWriteFile(AUTH_SESSION_FILE, JSON.stringify(session) + '\n', 'trust')`. `clearAuthSession` is unchanged.
+- `writeAuthSession` throws `StateFileUnreadable` when the file on disk is unreadable (`requireState`), else writes `atomicWriteFile(AUTH_SESSION_FILE, JSON.stringify(session) + '\n', 'trust')`. Every writer but the two below goes through it and stays fail closed: `updateAuthSession`, `ensureSignInEpoch`, `markSignedOut(Held)`, the refresh's writes (`lib/authRefresh.ts`).
+- Produces: `export function setAsideUnreadableSession(): void`: `readState(AUTH_SESSION_FILE, 'cache', jsonObject)`, whose answer is dropped. An unreadable file is renamed to `session.json.unreadable` with the cache line; a good or missing one is untouched. It is what a person replacing the session on purpose does first (Decision 8).
+- Produces: `export function writeSignIn(session: AuthSession): void`: `setAsideUnreadableSession()`, then `writeAuthSession(session)`. `cli.ts` `saveSignIn` (QR and ticket) and `browserSignIn` (SSO) call it in place of `writeAuthSession`. If the set-aside itself fails (it logs `could not be set aside`), the write throws `StateFileUnreadable` as any other write would.
+- `clearAuthSession`: `setAsideUnreadableSession()`, then removes the file as today. Its one product caller is `lib/signOut.ts` `removeSignIn` (`harness logout`, `harness reset`).
 
 **Tests that fail first:**
-- `a torn session is signed out, and a sign-in does not replace it`: `readAuthSession()` is `null`; `writeAuthSession(next)` throws `StateFileUnreadable`; bytes unchanged. Today it is replaced.
+- `a torn session is signed out, and only a sign-in by hand replaces it`: `session.json` holds `{"version":1,"accessTok`; `readAuthSession()` is `null`; `writeAuthSession(next)` and `updateAuthSession(() => next)` throw `StateFileUnreadable` (the second rejects) and the bytes are unchanged. Today `writeAuthSession` replaces it.
+- `a sign-in by hand sets a torn session aside and writes the new one`: same file; `writeSignIn(next)` does not throw; `readAuthSession()` equals `next`; `session.json.unreadable` holds the torn bytes; the line is `[state] session.json could not be read (not valid JSON); kept as session.json.unreadable, starting empty.` Fails today: no `writeSignIn`.
+- `a sign-in over a good session replaces it and sets nothing aside`.
+- `clearAuthSession sets a torn session aside`: `session.json` is gone and `session.json.unreadable` holds its bytes; with a good session, it is removed and no `.unreadable` is made. Fails today: the torn bytes are deleted.
 - `a session of another version is replaced as before`.
 - `a write that fails part way leaves the old session`; `the session is flushed before it is renamed`.
-- `clearAuthSession removes a torn session`.
+- `authCommand.spec.ts`, under `signing out takes a person`: `logout over a session that cannot be read sets it aside`: `session.json` torn; `runSync(root, ['logout', '--from-sign-out-button'])` exits 0; `session.json` is gone; `session.json.unreadable` holds the bytes. Fails today: no `.unreadable`.
+- `authCommand.spec.ts`, under `harness login --json`: `a login over a session that cannot be read signs in`: `session.json` torn; a sign-in driven against `fakeBackend` as that block's tests drive one ends with `{ type: 'result', status: 'success' }` and exit 0; `session.json` holds the new session and `session.json.unreadable` the torn bytes. Fails today: no `.unreadable`.
 
-- [ ] Write the tests; run `npx vitest run src/lib/authSession.spec.ts`: the first fails with the file replaced. Commit `test(state): a session that cannot be read is not replaced (red)`.
+- [ ] Write the tests; run `npx vitest run src/lib/authSession.spec.ts src/authCommand.spec.ts`: the first fails with the file replaced, the set-aside cases with no `.unreadable`. Commit `test(state): a session that cannot be read is replaced only by a sign-in by hand (red)`.
 - [ ] Implement.
-- [ ] Run the spec, `src/authCommand.spec.ts`, `src/loginReads.spec.ts`, and `npm run typecheck`: green.
-- [ ] Commit `Sign-in: the session is written whole, and one that cannot be read is left for the person`.
+- [ ] Run the two specs, `src/loginReads.spec.ts`, `src/loginForceRace.spec.ts`, `src/lib/signOut.spec.ts`, and `npm run typecheck`: green.
+- [ ] Commit `Sign-in: the session is written whole; one that cannot be read is left, and set aside only by a login or a logout`.
 
 ### Task 9: `harness status` names an unreadable trust file
 
@@ -606,7 +618,7 @@ it('a torn log is not an empty log', () => {
 - `a save that fails part way leaves the four files whole`: the timer path's save meets a write that throws; each file still parses and holds what it held. Today the file being written is empty.
 - `the timer's save and the strict save write the same bytes`.
 
-**The measurement** (`commander.saveCost.spec.ts`, runs only with `RECAP_SAVE_COST=1`): a full history **(Q5)** is 200 sessions, each with a latest summary, 3 history entries of 400 characters, 3 full answers of 8,192 bytes (`FULL_TEXT_MAX_BYTES`) and 3 questions of 1,000 characters (`ASK_MAX_CHARS`), written as the four files and loaded by the constructor. It times 30 saves as the 200 ms timer makes them, prints `recap save · 200 sessions · <bytes> bytes · median <ms> ms · p95 <ms> ms`, and asserts only that the four files parse. It sets no limit.
+**The measurement** (`commander.saveCost.spec.ts`, runs only with `RECAP_SAVE_COST=1`): a full history (Decision 13) is 200 sessions, each with a latest summary, 3 history entries of 400 characters, 3 full answers of 8,192 bytes (`FULL_TEXT_MAX_BYTES`) and 3 questions of 1,000 characters (`ASK_MAX_CHARS`), written as the four files and loaded by the constructor. It times 30 saves as the 200 ms timer makes them, prints `recap save · 200 sessions · <bytes> bytes · median <ms> ms · p95 <ms> ms`, and asserts only that the four files parse. It sets no limit.
 
 - [ ] Write the tests and the measurement; run `npx vitest run src/lib/commander.spec.ts`: the two torn cases fail. Run `RECAP_SAVE_COST=1 npx vitest run src/lib/commander.saveCost.spec.ts` three times on a quiet machine and keep the lines: **before**. Commit `test(state): the recap files are never written over or left half-written (red)`.
 - [ ] Implement.
@@ -656,7 +668,7 @@ export function pidFileWrittenMs(): number | null
 - `MasterConfig` gains two required members: `writePidFile(pid: number): void` and `readPidFile(): number | null`. `runMaster` uses them where it wrote and parsed `config.pidFile`; `pidFile` stays for the remove. `masterProcess.ts` passes `(pid) => writePidFile(pid)` and `() => { const read = readPidFile(); return read.state === 'pid' ? read.pid : null }`.
 - `readHandoverPid` keeps its answers and parses with `parsePid`.
 - `core/main.ts`: `startMasterHere` and the no-master branch call `writePidFile`; `onMachineMeta` writes `atomicWriteFile(MACHINE_NAME_FILE, name + '\n', 'cache')`.
-- `harnessd/master.ts`'s status file write gets `// not a state file: the master imports no helper (follow-up)` (Q4).
+- `harnessd/master.ts`'s status file write gets `// not a state file: the master imports no helper (follow-up)` (Decision 12).
 
 **Tests that fail first:**
 - `master.spec.ts`: `the master claims the pid file through the writer it is given`: the injected writer is called with the master's pid at the claim, and with `from` at the hand-back in `takeOver`; a writer that throws is logged as today. `a pid file it cannot read is neither rewritten nor removed`.
@@ -692,7 +704,7 @@ export type Settled = { state: 'pid'; pid: number; from: 'file' | 'daemon' } | {
 export function processSettleDeps(): SettleDeps
 export async function settlePidFile(deps?: SettleDeps): Promise<Settled>
 ```
-- The rule: a pid or a missing file takes the answered pid back and is returned. An unreadable file asks `status()`; a safe integer `pid` above 0 in the answer is recorded (`answer`) and returned as `from: 'daemon'`. No answer and `lockFree()`: `read()` once more, and only if it is still unreadable `setAside()`, then `missing`. No answer and the lock held elsewhere: the file is left, the answered pid is taken back, and the result is `busy` **(Q3)**: this read has no pid, and a command that changes the daemon settles again under its own lock.
+- The rule: a pid or a missing file takes the answered pid back and is returned. An unreadable file asks `status()`; a safe integer `pid` above 0 in the answer is recorded (`answer`) and returned as `from: 'daemon'`. No answer and `lockFree()`: `read()` once more, and only if it is still unreadable `setAside()`, then `missing`. No answer and the lock held elsewhere: the file is left, the answered pid is taken back, and the result is `busy` (Decision 11): this read has no pid, and a command that changes the daemon settles again under its own lock.
 - `StopDeps`, `IfDownDeps`, `ServiceCommandDeps` and the uninstall's deps each gain `settlePid(): Promise<unknown>`, called where [Who reads the pid file](#who-reads-the-pid-file) says. The two inline `statSync(PID_FILE).mtimeMs` (`daemonStop.ts`, `startIfDown.ts`) become `pidFileWrittenMs()`.
 
 **Tests that fail first:**
@@ -755,7 +767,7 @@ export async function settlePidFile(deps?: SettleDeps): Promise<Settled>
 **Interfaces:**
 - `MachineListCache`: `loadCache` through `readState(path, 'cache', jsonObject)`; `saveCache` through `atomicWriteFile(path, <today's string>, 'cache')`, still best effort.
 - `loadHostTheme` through `readState(file, 'cache', jsonObject)` then `parseHostTheme`; `saveHostTheme` through `atomicWriteFile(file, JSON.stringify(theme, null, 2) + '\n', 'cache')`.
-- `codexProfiles.ts`: its own `atomicWriteJson` goes; `writeLinkedPaths` calls the helper's with `'trust'`, which is the owner and mode check it makes today. `readLinkedPaths` is not changed: it reads through `readPrivateStateFile`, which checks the file's owner, and it is on Q2's list.
+- `codexProfiles.ts`: its own `atomicWriteJson` goes; `writeLinkedPaths` calls the helper's with `'trust'`, which is the owner and mode check it makes today. `readLinkedPaths` is not changed here: Task 31 fixes it, in Part 3.
 
 **Tests that fail first:** for the machine list and the theme, `a torn file is set aside, not written over` (`<name>.unreadable` holds the bytes after the next save; today they are gone) and `a save that fails part way leaves the old file`. For the Codex profiles, `the list is written by the shared helper`: the folder is flushed after the rename (today's copy never flushes it), and a group-writable old file is still refused.
 
@@ -775,34 +787,58 @@ export async function settlePidFile(deps?: SettleDeps): Promise<Settled>
 
 ---
 
-## Part 3: the writers the sweep found (Q1)
+## Part 3: the writers the sweep found, and their readers
 
-Table B's writers that are one file's text under a Harness folder, and Table A's three, by area. **Each task depends on Task 19; effort `high`; files are the modules named and their specs.**
+Pull request 3, stacked on Part 2 (Decision 10). Table B's writers that are one file's text under a Harness folder, Table A's three, and the readers of the Part 3 files marked `E` (Decision 9), by area. **Each of Tasks 20 to 30 depends on Task 19; effort `high`; files are the modules named and their specs** (a module with none gets one beside it: `engines/cursor/pendingTasks.spec.ts`).
 
-**The recipe, for every site:** the hand-written temporary file and rename (or the write in place) is deleted and replaced by one call: `atomicWriteJson(file, value, 'cache')` where today's bytes are `JSON.stringify(value, null, 2)`, else `atomicWriteFile(file, <today's exact bytes>, 'cache', { mode })`. `mode` is what the site passes today, `0600` when it passes none; a script keeps its `0700` or `0755`. A site that checks the old file with `hardenPrivateStateFileIfPresent` today passes `'trust'` and drops its own call. Folder creation, locks and readers do not change (Decision 9).
+**The writer recipe, for every site:** the hand-written temporary file and rename (or the write in place) is deleted and replaced by one call: `atomicWriteJson(file, value, 'cache')` where today's bytes are `JSON.stringify(value, null, 2)`, else `atomicWriteFile(file, <today's exact bytes>, 'cache', { mode })`. `mode` is what the site passes today, `0600` when it passes none; a script keeps its `0700` or `0755`. A site that checks the old file with `hardenPrivateStateFileIfPresent` today passes `'trust'` and drops its own call. Folder creation and locks do not change.
+
+**The reader recipe, for each reader the table names (Decision 9):** it reads through `readState(file, 'cache', parse)`, `parse` being the table's `jsonArray` or `jsonObject`. Today's per-row checks and defaults run on an `ok` value unchanged; `missing` answers what a missing file answers today. A check today's reader makes before it parses stays before `readState` (a size bound, an `existsSync`). The reader's own catch-all for a parse error goes, and so does its own line for one (`[goals] goals.json unreadable`): the cache line says it. An async reader calls `readState` as it is (Decision 14). A well-formed file of another version or shape reads as today. Every other reader in these modules stays.
 
 **The tests that fail first, in each module's spec:**
 1. `the file is flushed before it is renamed`: with `node:fs` wrapped, an `fsyncSync` of the temporary file comes before the `renameSync` onto the target. Fails today: no `fsync`.
 2. For a site marked `N`: `a file at the old temporary name is left alone`: a file planted at today's temporary path still holds its bytes after a save.
 3. For a write in place: `a write that fails part way leaves the old file`.
+4. For each file in the readers column: `a torn <file> is set aside, not written over`: the file holds truncated JSON (`[{"` for a list, `{"` for an object); the module loads it, then saves through its own writer; `<file>.unreadable` holds the torn bytes, the file holds the save, and the line is `[state] <base> could not be read (not valid JSON); kept as <base>.unreadable, starting empty.` Fails today: the torn bytes are gone after the save, and no `.unreadable`.
 
-| Task | Modules | Notes |
-|---|---|---|
-| 20 Models and usage | `lib/appModels.ts`, `lib/localModels.ts`, `lib/gridModels.ts`, `lib/agentTokenUsage.ts`, `lib/sessionGitHistory.ts` | `npm run test:local-models` stays at 100% |
-| 21 Records the core reads | `lib/agentSettings.ts`, `lib/daemonRecord.ts`, `lib/hookRoutes.ts`, `lib/machineMcp.ts`, `lib/nodeMigration.ts`, `lib/gridConfigDir.ts`, `lib/apiInstructions.ts` | all already in the core's process; `apiInstructions` keeps the file's own mode, else `0644` |
-| 22 Update records, launchers, scripts | `lib/selfUpdate.ts` (`writeWhole` only), `lib/signOut.ts`, `lib/launchers.ts`, `tui/launcher.ts`, `lib/flash.ts`, `lib/connectors/agents.ts` (`mcp-shim.mjs` only) | `hn` is created with `{ exclusive: true, mode: 0o755 }`; the bundle swap and the engines' config files stay (Table B) |
-| 23 Windows pointers and records | `lib/windows/installLayout.ts`, `lib/windows/ptyInstall.ts` (`pty-*.json` only), `lib/windows/ptyUpdate.ts`, `lib/windows/cliVersions.ts` (`replaceFile` only) | runs on Windows in `windows.yml` (`src/lib/windows` is in its list) |
-| 24 Services | `services/windowNames.ts`, `services/agentCleanup.ts`, `services/sharedMachines.ts`, `services/goals.ts`, `services/agentBrowser/stateFile.ts` | `npm run test:core` stays at 100% |
-| 25 Agent Messages | `messages/requestStore.ts`, `consentStore.ts`, `noticeStore.ts`, `rosterStore.ts`, `store.ts` | each keeps its own move-aside and alert |
-| 26 Sharing, projects, cloud | `sharing/collaboration.ts`, `sharing/grants.ts`, `orchestrator/service.ts` (the run file only), `cloud/service.ts` (the list only) | `test:sharing` and `test:orchestrator` stay at 100% |
-| 27 The Store | `dsh/installed.ts`, `dsh/viewerLedger.ts`, `dsh/catalog.ts` | `test:portability` |
-| 28 The dial | `cable/noticeFile.ts`, `cable/notifyMode.ts`, `cable/dialPortVerdicts.ts`, `cable/pets/store.ts` | the pets' images are bytes: `atomicWriteFile` takes them |
-| 29 Engines | `engines/cursor/pendingTasks.ts`, `engines/kit/windowsInstall.ts`, `engines/kit/messagesHook.ts`, `engines/kit/statusLine.ts`, `engines/kit/hookSettings.ts` (`harness.rules` only) | `hook.mjs` keeps `0700` |
-| 30 Agent client, usage, the Wi-Fi device | `agentClient/program.ts` (the list only), `agentClient/ledger.ts` (the rewrite only), `gateway/productUsage.ts`, `lib/autonomous-device/direct.ts` | the lock files stay (Table A) |
+| Task | Modules | Readers set aside (file, `parse`) | Notes |
+|---|---|---|---|
+| 20 Models and usage | `lib/appModels.ts`, `lib/localModels.ts`, `lib/gridModels.ts`, `lib/agentTokenUsage.ts`, `lib/sessionGitHistory.ts` | `readAppRecords` (`app-engines.json`, `jsonArray`); `readKnown` (`<grid>.known.json`, `jsonArray`); the entry's load in `sessionGitHistory.ts` (`session-git-history/<key>.json`, `jsonObject`, after its 512 KiB check) | `npm run test:local-models` stays at 100% |
+| 21 Records the core reads | `lib/agentSettings.ts`, `lib/daemonRecord.ts`, `lib/hookRoutes.ts`, `lib/machineMcp.ts`, `lib/nodeMigration.ts`, `lib/gridConfigDir.ts`, `lib/apiInstructions.ts` | `readRecord` (`node-migration.json`, `jsonObject`) | all already in the core's process; `apiInstructions` keeps the file's own mode, else `0644` |
+| 22 Update records, launchers, scripts | `lib/selfUpdate.ts` (`writeWhole` and `rejectedVersions` only), `lib/signOut.ts`, `lib/launchers.ts`, `tui/launcher.ts`, `lib/flash.ts`, `lib/connectors/agents.ts` (`mcp-shim.mjs` only) | `rejectedVersions` (`update-rejected.json`, `jsonArray`); `update-pending.json`'s reader stays | `hn` is created with `{ exclusive: true, mode: 0o755 }`; the bundle swap and the engines' config files stay (Table B) |
+| 23 Windows pointers and records | `lib/windows/installLayout.ts`, `lib/windows/ptyInstall.ts` (`pty-*.json` only), `lib/windows/ptyUpdate.ts`, `lib/windows/cliVersions.ts` (`replaceFile` only) | `rejectedPtyVersions` in `ptyInstall.ts` (`pty-rejected.json`, `jsonArray`) | runs on Windows in `windows.yml` (`src/lib/windows` is in its list) |
+| 24 Services | `services/windowNames.ts`, `services/agentCleanup.ts`, `services/sharedMachines.ts`, `services/goals.ts`, `services/agentBrowser/stateFile.ts` | `readJoined` (`agent-cleanup.json`, `jsonObject`); `readPolicy` (`shared-machines.json`, `jsonObject`; missing is `OFF`); `startGoals`'s `read` (`hachi/goals.json`, `jsonObject`) | `npm run test:core` stays at 100% |
+| 25 Agent Messages | `messages/requestStore.ts`, `consentStore.ts`, `noticeStore.ts`, `rosterStore.ts`, `store.ts` | none: each already moves a broken file aside, with its own alert | each keeps its own move-aside and alert |
+| 26 Sharing, projects, cloud | `sharing/collaboration.ts`, `sharing/grants.ts`, `orchestrator/service.ts` (the run file only), `cloud/service.ts` (the list only) | the start's load of `cloud/harnesses.json` (`jsonObject`) | `test:sharing` and `test:orchestrator` stay at 100% |
+| 27 The Store | `dsh/installed.ts`, `dsh/viewerLedger.ts`, `dsh/catalog.ts` | `readInstalledIndex` (`installed.json`, `jsonArray`); `ViewerLedger.read` (`viewers.json`, `jsonArray`) | `test:portability` |
+| 28 The dial | `cable/noticeFile.ts`, `cable/notifyMode.ts`, `cable/dialPortVerdicts.ts`, `cable/pets/store.ts` | `NoticeFile.load` (`dial-notices.json`, Decision 15: a `read` answer of `'json'` or `'unreadable'`, or a top-level value that is not an object, goes to `readState(file, 'cache', jsonObject)`; an `ok` answer is read again through `read`; `'long'`, `'version'` and `'shape'` are dropped as today, with today's line); `DialVerdicts`' constructor (`dial-ports.json`, `jsonObject`, after its `existsSync`); `loadMapping` (`pets.json`, `jsonObject`) | the pets' images are bytes: `atomicWriteFile` takes them |
+| 29 Engines | `engines/cursor/pendingTasks.ts`, `engines/kit/windowsInstall.ts`, `engines/kit/messagesHook.ts`, `engines/kit/statusLine.ts`, `engines/kit/hookSettings.ts` (`harness.rules` only) | `read` in `pendingTasks.ts` (`cursor-pending-tasks.json`, `jsonArray`, under its lock as today) | `hook.mjs` keeps `0700` |
+| 30 Agent client, usage, the Wi-Fi device | `agentClient/program.ts` (the list only), `agentClient/ledger.ts` (the rewrite only), `gateway/productUsage.ts`, `lib/autonomous-device/direct.ts` | `ProgramRecords.all` (`program-harnesses.json`, `jsonObject`); the collector's load in `productUsage.ts` (`product-usage/*.json`, `jsonObject`, after its `MAX_QUEUE_BYTES` check); the ledger's readers stay (Table B) | the lock files stay (Table A) |
 
-Each task's steps: write the recipe's tests for its modules and see them fail; commit `test(state): <area> files are flushed and written whole (red)`; apply the recipe; run the modules' specs and `npm run typecheck`; commit `<Area>: state files are written through the helper`.
+Each task's steps: write the recipe's tests for its modules and see them fail; commit `test(state): <area> files are flushed, written whole and never written over (red)`; apply both recipes; run the modules' specs and `npm run typecheck`; commit `<Area>: state files are written through the helper, and one that cannot be read is set aside`.
 
-### Task 31: The guard, part 3
+### Task 31: The profile lists and the dial skill record: readers
+
+**Depends on:** 19. **Effort:** `high`.
+
+**Files:** Modify `cli/src/lib/codexProfiles.ts`, `codexProfiles.test.ts`, `cli/src/lib/claudeHomes.ts`, `cli/src/lib/claudeProfiles.test.ts`, `cli/src/devices/dialSkillFiles.ts`, `dialSkillFiles.spec.ts`.
+
+**Interfaces:**
+- `readLinkedPaths` in `codexProfiles.ts` (`codex-profiles.json`) and in `claudeHomes.ts` (`claude-profiles.json`): the owner check stays first, `hardenPrivateStateFileIfPresent(file, 1024 * 1024)` (owner, mode, size, no link, as `readPrivateStateFile` checks today); a throw from it is no list, as today, and nothing is set aside: a file another account could write is not this reader's to move, and the writer refuses it too. Then `readState(file, 'cache', jsonArray)`; an `ok` value is filtered as today; `missing` is the empty set.
+- `dialSkillFiles.ts` `readJson` (`dial-skill.json` and `dial-setup.json`, Decision 15): within the bound, text that is not valid JSON or not a JSON object goes to `readState(file, 'cache', jsonObject)`, and its answer is used (`ok`: the value; else `undefined`). Past the bound, and a read error (`orUnread`'s `unread`: nothing is written from that read), as today.
+- The writers do not change: `codexProfiles.ts`'s is Task 18's; `claudeProfiles.ts` and `dialSkillFiles.ts` keep their already-correct writers until the follow-up.
+
+**Tests that fail first:**
+- `codexProfiles.test.ts`: `a torn profile list is set aside, not written over`: `codex-profiles.json` holds `["/a`; `linkCodexProfile(folder)` succeeds; `codex-profiles.json.unreadable` holds the torn bytes and the list holds `folder`. Fails today: the torn bytes are gone. `a list another account could write is not set aside` (POSIX): mode `0o664`; the list reads as empty, no `.unreadable`, and the link is still refused as today.
+- `claudeProfiles.test.ts`: the same two, with `claude-profiles.json` and `linkClaudeProfile`.
+- `dialSkillFiles.spec.ts`: `a torn dial-skill.json is set aside, not written over`: the file holds `{"homes":`; `writePluginHomes(dir, [home])` answers `undefined`; `dial-skill.json.unreadable` holds the torn bytes; `readPluginHomes(dir)` is `{ homes: [home] }`. The same for `dial-setup.json` with `writeSetup`. `a file past the bound reads as today`: no `.unreadable`.
+
+- [ ] Write the tests; run `npx vitest run src/lib/codexProfiles.test.ts src/lib/claudeProfiles.test.ts src/devices/dialSkillFiles.spec.ts`: the torn cases fail with the bytes gone. Commit `test(state): the profile lists and the dial skill record are never written over (red)`.
+- [ ] Implement.
+- [ ] Run the three specs, `src/devices/dialSkill.spec.ts`, `npx vitest run src/lib/stateWrites.guard.spec.ts`, and `npm run typecheck`: green.
+- [ ] Commit `Profile lists, dial skill record: a file that cannot be read is set aside, not written over`.
+
+### Task 32: The guard, part 3
 
 **Depends on:** 20 to 30. **Effort:** `medium`. **No red test:** a list grows; one commit.
 
@@ -824,11 +860,3 @@ No check runs against production, and none needs a sign-in: the end-to-end suite
 6. **PR CI** (automatic, once the pull request is ready): `cli-typecheck`, `cli-tests`, `pty-checks`, `companions`; the workflow file change reruns every component once.
 
 Nothing here needs the user's own login or eye. Each pull request names macOS, Linux and Windows, and carries its red-then-green commits, the recap numbers, the receipts, the two run links and the already-correct list.
-
-## Open questions
-
-1. **Part 3's size and where it ships.** The spec folds in "any other hand-written atomic writer that lacks `fsync` or uses a fixed temporary name". The sweep found 53 of them that are one file's text, plus 3 writes in place, in 52 modules (Tasks 20 to 31). The plan's default is a third stacked pull request after Part 2. Should Part 3 ship that way, ship inside pull request 2, or move to the follow-up with the already-correct writers?
-2. **Readers outside the spec's lists.** 21 files in Table B (marked `E`, `codex-profiles.json` among them) and two in the already-correct list (`claude-profiles.json`, `dial-skill.json`) still read a parse error as empty and keep it at the next write. The spec fixes that for the files it names. The default leaves these readers for the follow-up: once their writers are durable, a file they cannot parse can only come from outside Harness. Fix them here instead, as cache files?
-3. **The pid file when nobody answers and another process holds the spawn lock** (a start, a stop or an update under way). The spec covers "a daemon answers" and "no answer and a free lock". The default: the file is left, that one read has no pid, and a command that changes the daemon settles again under its own lock; `harness status` prints what it prints today during a start. Is that right, or should `status` say the daemon is being started or stopped?
-4. **Table B's "not here" rows.** 17 weak writers do not fit a helper that writes one file's text: four in `src/harnessd/` (its import rule), seven folder or binary swaps, five files that belong to an engine or the person, and one inbox file. The default leaves them for the follow-up, and injects only the master's pid writer. Confirm, or allow `../lib/secureState.js` in the master's import list now (an architecture decision)?
-5. **What a "full history" is for the measurement.** The recap store caps each session (3 turns, 8,192 bytes an answer) but not the number of sessions. The plan measures 200 sessions (about 5 MB), on the developer's Mac only. Another count, or a Linux number too?
