@@ -96,6 +96,27 @@ export class FakeDial {
   }
 
   /**
+   * A person's turn to [agentId], again every 2 s until [probe] gives a value, polling every 50 ms; that value. The daemon
+   * drops a dial's `focus` for 750 ms after a focus of its own (a landing, a re-assert, a follow) until it hears that one
+   * echoed (cableSession.ts, `expectedAppFocusEcho`), and this dial echoes none: a turn that falls in that time is lost,
+   * so it is made again, as a person turns again.
+   */
+  async turnUntil<T>(agentId: string, what: string, probe: () => T | undefined, ms = 60_000): Promise<T> {
+    const deadline = Date.now() + ms
+    let sentAt = 0
+    for (;;) {
+      const got = probe()
+      if (got !== undefined) return got
+      if (Date.now() > deadline) throw new Error(`the dial's turn to ${agentId} never gave ${what} in ${ms}ms`)
+      if (Date.now() - sentAt >= 2_000) {
+        this.send({ t: 'focus', agentId })
+        sentAt = Date.now()
+      }
+      await new Promise((done) => setTimeout(done, 50))
+    }
+  }
+
+  /**
    * Greet the daemon as the firmware does, again and again until it answers: the daemon opens the port
    * on its own scan, and a greeting sent before then lands on nobody.
    */

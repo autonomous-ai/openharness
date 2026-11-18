@@ -97,11 +97,12 @@ describe("the dial follows Orca's focus and tabs", () => {
     await dial.next((m) => m.t === 'focus' && m.agentId === claude.id, 30_000, "the prompt's agent's focus", since)
   }
 
-  /** Two sessions in Orca terminals, listed, and the dial turned to the first by hand, its rest over. */
+  /** Two sessions in Orca terminals, listed, and the dial turned to the first by hand, its rest over. The dial landed on
+   *  the first as it was listed, and a turn to it within 750 ms of the second's re-assert is taken as that focus's echo:
+   *  the turn is made again until it swipes. */
   const turnedToFirst = async (d: IsolatedDaemon, dial: FakeDial, first: InOrca, second: InOrca): Promise<void> => {
     await listed(dial, first, second)
-    dial.send({ t: 'focus', agentId: first.id })
-    await said(d, '[device] swipe · ok')
+    await dial.turnUntil(first.id, 'the swipe', () => (d.log().includes('[device] swipe · ok') || undefined))
   }
 
   /** The dial's latest list: the `agent` frames between its last `agents.begin` and `agents.end`, and where that end is. */
