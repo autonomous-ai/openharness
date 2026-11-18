@@ -7,6 +7,7 @@ import { readdirSync, readFileSync, readlinkSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import type { BridgeRecord } from './bridge.js'
 
+/** `startedAt`: in seconds since the boot. */
 export interface ProcRow { pid: number; uid: number; startedAt: number; name: string; exe: string | null; parent: number }
 
 type ProcFs = Pick<typeof import('node:fs'), 'readdirSync' | 'readFileSync' | 'readlinkSync'>
@@ -14,11 +15,8 @@ type ProcFs = Pick<typeof import('node:fs'), 'readdirSync' | 'readFileSync' | 'r
 /** /proc/<pid>/stat counts a start time in clock ticks, USER_HZ a second: 100 on every Linux ABI. */
 const TICKS_PER_SECOND = 100
 
-/** Every process's row, from /proc/<pid>/status (Uid), /proc/<pid>/stat (comm, ppid, starttime), the exe link, and btime of /proc/stat. */
+/** Every process's row, from /proc/<pid>/status (Uid), /proc/<pid>/stat (comm, ppid, starttime) and the exe link. */
 export function procRows(fs: ProcFs = { readdirSync, readFileSync, readlinkSync }): ProcRow[] {
-  const bootedAt = Number(/^btime (\d+)$/m.exec(fs.readFileSync('/proc/stat', 'utf8'))?.[1])
-  // A time that is not one would count no process as started before the move, and the bridge would go under them.
-  if (!Number.isFinite(bootedAt)) throw new Error('/proc/stat gives no boot time')
   const rows: ProcRow[] = []
   for (const name of fs.readdirSync('/proc')) {
     if (!/^\d+$/.test(name)) continue
@@ -31,7 +29,7 @@ export function procRows(fs: ProcFs = { readdirSync, readFileSync, readlinkSync 
       // `pid (comm) S ppid …`: comm may hold spaces and brackets, so it ends at the last `)` and the fields count from there.
       const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ')
       rows.push({
-        pid: Number(name), uid, startedAt: bootedAt + Number(fields[19]) / TICKS_PER_SECOND,
+        pid: Number(name), uid, startedAt: Number(fields[19]) / TICKS_PER_SECOND,
         name: stat.slice(stat.indexOf('(') + 1, stat.lastIndexOf(')')), exe, parent: Number(fields[1]),
       })
     } catch {
@@ -43,13 +41,15 @@ export function procRows(fs: ProcFs = { readdirSync, readFileSync, readlinkSync 
 
 /**
  * What the check knows of this computer. `master`: the daemon's first process, harnessd's master, or the core where it
- * runs alone. `roots`: where the old tree's entries moved. `engines`: the names of the engines Harness installs hooks
- * for. `apps`: Desktop's and the Device app's executable names. `panePids`: the processes of the panes the move retagged.
+ * runs alone. `bootId`: this boot's. `roots`: where the old tree's entries moved. `engines`: the names of the engines
+ * Harness installs hooks for. `apps`: Desktop's and the Device app's executable names. `panePids`: the processes of the
+ * panes the move retagged.
  */
-export interface OldUserFacts { uid: number; master: number; roots: readonly string[]; engines: ReadonlySet<string>; apps: ReadonlySet<string>; panePids: readonly number[] }
+export interface OldUserFacts { uid: number; master: number; bootId: string; roots: readonly string[]; engines: ReadonlySet<string>; apps: ReadonlySet<string>; panePids: readonly number[] }
 
 /**
- * How many of [rows] can still use an old path: this account's processes that started before the move and are an engine
+ * How many of [rows] can still use an old path: this account's processes that started before the move, on the clock of
+ * the boot it ran in (in another boot every process started after it), and are an engine
  * by name, run an executable in the old tree or the roots it moved to (the kernel names a moved executable at its new
  * place), are Desktop or the Device app, or are a retagged pane's process or one of its descendants. The daemon's own
  * are not, all of them the master's: the master and its ancestors, as a master that moved re-executed in place, keeping
@@ -57,13 +57,14 @@ export interface OldUserFacts { uid: number; master: number; roots: readonly str
  * it started from the new paths, some in the move's own second.
  */
 export function oldUsers(bridge: BridgeRecord, rows: readonly ProcRow[], facts: OldUserFacts): number {
+  // A bridge with no boot was written where /proc has none, as no move is.
+  if (bridge.boot?.id !== facts.bootId) return 0
+  const movedAt = bridge.boot.uptime
   const parents = new Map(rows.map(({ pid, parent }) => [pid, parent]))
   const own = new Set([...lineage(facts.master, parents), ...descendants(facts.master, rows)])
   const panes = new Set(facts.panePids)
   const trees = [bridge.oldHome, ...facts.roots]
-  // btime is a whole second, and moves as the clock is slewed: a start in the move's own second may be one from before it.
-  const movedBy = Math.floor(bridge.movedAt) + 1
-  const old = ({ pid, uid, startedAt, name, exe }: ProcRow): boolean => uid === facts.uid && startedAt < movedBy && !own.has(pid) && (
+  const old = ({ pid, uid, startedAt, name, exe }: ProcRow): boolean => uid === facts.uid && startedAt <= movedAt && !own.has(pid) && (
     facts.engines.has(name)
     || (exe !== null && (facts.engines.has(basename(exe)) || facts.apps.has(basename(exe)) || trees.some((root) => exe.startsWith(`${root}/`))))
     || lineage(pid, parents).some((at) => panes.has(at)))

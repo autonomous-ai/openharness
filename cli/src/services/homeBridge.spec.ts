@@ -469,12 +469,12 @@ describe('the home bridge service', () => {
   it('a check that throws is logged and tried again at the next one', async () => {
     fakeInterval()
     const h = movedHome()
-    const rows = vi.fn((): ProcRow[] => { throw new Error('/proc/stat gives no boot time') })
+    const rows = vi.fn((): ProcRow[] => { throw new Error('EACCES: /proc') })
     // Whatever the Store's count rejects with is said too.
     const setupsPending = vi.fn(async () => 0).mockRejectedValueOnce('the index is busy')
     const { log } = start(h, { rows, setupsPending })
     await settle()
-    expect(log.mock.calls).toEqual([['home bridge: a check failed: /proc/stat gives no boot time · tried again in 10 minutes']])
+    expect(log.mock.calls).toEqual([['home bridge: a check failed: EACCES: /proc · tried again in 10 minutes']])
     expect(existsSync(join(h.state, BRIDGE_FILE))).toBe(true)
     rows.mockReturnValue([])
     await vi.advanceTimersByTimeAsync(CHECK_MS)

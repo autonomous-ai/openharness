@@ -15,7 +15,7 @@ import { env } from '../config/env.js'
 import { harnessRoot, harnessRoots, legacyHarnessHome } from '../config/harnessHome.js'
 import { openDaemon, whereFor, type Daemon } from '../agentClient/daemon.js'
 import type { CoreApi, ServiceRequests } from '../core/api.js'
-import { BRIDGE_FILE, readBridge, removeBridge, serveOldPaths, type Served } from '../homeMove/bridge.js'
+import { bootNow, BRIDGE_FILE, readBridge, removeBridge, serveOldPaths, type Boot, type Served } from '../homeMove/bridge.js'
 import { oldUsers, procRows, type ProcRow } from '../homeMove/oldUsers.js'
 import { readMoveRecord, writeMoveRecord, type MoveRecord } from '../homeMove/record.js'
 import { connectorsDir } from '../lib/connectors/store.js'
@@ -42,6 +42,8 @@ export interface HomeBridgeDeps {
   socket: string | null
   /** The daemon's first process, all the daemon's own processes under it: harnessd's master, this one's parent. */
   master: number
+  /** This boot (homeMove/bridge.ts bootNow). */
+  boot(): Boot | null
   rows(): ProcRow[]
   /** Every pane on tmux's default server, each its process and its tag. */
   tmux(): { status: number | null; stdout: string }
@@ -96,7 +98,7 @@ export function startHomeBridgeInCore(core: CoreApi, given: Partial<HomeBridgeDe
 export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = {}): { stop(): void; connected(): void } {
   const deps: HomeBridgeDeps = {
     platform: process.platform, home: homedir(), environment: process.env, socket: unixSocketPath(core.dataDir, env.PORT),
-    master: process.ppid, rows: procRows, tmux: listPanes, setupsPending: pendingSetups, askForStore, log: console.log, ...given,
+    master: process.ppid, boot: bootNow, rows: procRows, tmux: listPanes, setupsPending: pendingSetups, askForStore, log: console.log, ...given,
   }
   // Nothing moves off Linux, and with no bridge.json there is no bridge to keep.
   if (deps.platform !== 'linux') return IDLE
@@ -150,7 +152,11 @@ export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = 
     try {
       serve()
       if (again) return
-      const count = oldUsers(bridge, deps.rows(), { uid: process.getuid!(), master: deps.master, roots, engines: ENGINES, apps: APPS, panePids: panePids() })
+      const boot = deps.boot()
+      // Without it no start time can be placed before or after the move.
+      if (!boot) throw new Error('/proc gives no boot id')
+      const facts = { uid: process.getuid!(), master: deps.master, bootId: boot.id, roots, engines: ENGINES, apps: APPS, panePids: panePids() }
+      const count = oldUsers(bridge, deps.rows(), facts)
       note('bridged', count)
       // A harness set up before the move runs from the old paths until its setup has run again, which the Store does as it
       // starts: woken now, while old users run too, so the setups do not wait for them. One whose setup failed is marked
@@ -165,7 +171,7 @@ export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = 
       deps.log(outcome === 'removed' ? 'home bridge: removed' : `home bridge: removed · ${legacyHarnessHome('~', 'linux')} holds something else, so it stays`)
       stop()
     } catch (error) {
-      // /proc with no boot time, a file it could not remove: the bridge stays until a check gets through.
+      // /proc with no boot id, a file it could not remove: the bridge stays until a check gets through.
       deps.log(`home bridge: a check failed: ${said(error)} · tried again in 10 minutes`)
     } finally {
       if (!again) checking = false

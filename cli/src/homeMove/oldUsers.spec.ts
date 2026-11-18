@@ -15,10 +15,10 @@ const BRIDGE: BridgeRecord = {
 }
 const DATA = '/h/.local/share/harness', STATE = '/h/.local/state/harness'
 const ME = 1000, SERVICE = 4000, MASTER = 3000
-const FACTS = {
+const FACTS: OldUserFacts = {
   uid: ME, master: MASTER, bootId: BOOT, roots: [DATA, STATE], engines: new Set(['claude', 'codex']),
   apps: new Set(['harness', 'harness-device']), panePids: [],
-} as OldUserFacts
+}
 /** A minute before the move, and a minute after it, in seconds since the boot. */
 const OLD = 50_000 - 60, NEW = 50_000 + 60
 
@@ -100,10 +100,10 @@ describe('not an old user', () => {
   it('a process of another boot, of any kind: this computer started again since the move', () => {
     const rows = [row({ name: 'claude', startedAt: 30 }), row({ name: 'harness', exe: '/opt/harness/harness', startedAt: 30 })]
     expect(count(rows)).toBe(2)
-    expect(count(rows, { bootId: 'another' } as Partial<OldUserFacts>)).toBe(0)
+    expect(count(rows, { bootId: 'another' })).toBe(0)
     // A bridge.json with no boot was written where /proc has none, as no move is.
     const { boot: _boot, ...unbooted } = BRIDGE
-    expect(oldUsers(unbooted as BridgeRecord, rows, FACTS)).toBe(0)
+    expect(oldUsers(unbooted, rows, FACTS)).toBe(0)
   })
 
   it('another account\'s process', () => {
