@@ -883,6 +883,21 @@ describe('TerminalStreamManager', () => {
       expect(JSON.stringify(lines)).not.toMatch(/SECRET-NAME-MARKER/i)
     })
 
+    // A 7-10 letter "extension" can itself be the person's words, so only 1-6 characters are kept.
+    it('logs a long extension as other and keeps a short one', async () => {
+      const lines: { event: string; fields: Record<string, unknown> }[] = []
+      manager = newManager({ diagnostic: (event, fields) => lines.push({ event, fields }) })
+      const streamId = await openStream()
+      for (const filename of ['a.diaryentry', 'x.docx', 'b.tar.gz']) {
+        await begin(streamId, { uploadKind: 'file', filename, totalBytes: fileContent.length })
+        await manager.handleFrame('web-1', 'terminal_chunked_upload_cancel', { streamId })
+      }
+
+      const exts = lines.filter((l) => l.event === 'chunked_upload_begin').map((l) => l.fields.ext)
+      expect(exts).toEqual(['other', 'docx', 'gz'])
+      expect(JSON.stringify(lines)).not.toMatch(/diaryentry/i)
+    })
+
     it('rejects a second begin while one upload is already in progress on the same pane', async () => {
       const streamId = await openStream()
       await begin(streamId, { uploadKind: 'image', totalBytes: pngBytes.length })
