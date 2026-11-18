@@ -5,6 +5,8 @@
 import { PTY_HOST_PANE } from '../lib/ptyHost/instance.js'
 import type { AgentLaunch } from '../lib/registry.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
+import { MISSING_HELPER, REPLACED_PROGRAM } from '../engines/kit/identityScan.js'
+import { isOpenclawLocalStopped, OPENCLAW_STATES } from '../engines/openclaw/contract.js'
 import { engineName } from '../messages/model.js'
 import type { Ledger, LedgerMember } from './ledger.js'
 
@@ -17,6 +19,8 @@ export interface Frame {
   engine?: string
   status?: string
   activity?: { state?: string } | null
+  /** The daemon's sentence for a state it names (lib/agentFrame.ts): a hold, or a reader rebuilding. */
+  namedState?: string
   /** Its launch; `failed`, live or stopped, is one that started nothing, with its code and words. */
   launch?: AgentLaunch | null
   tmuxPane?: string | null
@@ -57,8 +61,9 @@ export interface Caller extends LedgerMember {
   hachi?: true
 }
 
-/** `installing`, `starting`, `failed`: a harness asked for that has not started (commands.ts `Asked`). */
-export type State = 'working' | 'idle' | 'needs-input' | 'stopped' | 'offline' | 'unknown' | 'installing' | 'starting' | 'failed'
+/** `installing`, `starting`, `failed`: a harness asked for that has not started (commands.ts `Asked`). `held`: one
+ *  Harness cannot follow until the person acts (`namedStateOf`). */
+export type State = 'working' | 'idle' | 'needs-input' | 'held' | 'stopped' | 'offline' | 'unknown' | 'installing' | 'starting' | 'failed'
 
 export interface Row {
   name: string
@@ -130,6 +135,19 @@ export function stateOf(frame: Frame): State {
   return state === 'working' ? 'working' : state === 'idle' ? 'idle' : 'unknown'
 }
 
+/** The sentences only the person can clear. Any other is a state Harness recovers from by itself: a sentence from a
+ *  newer daemon is one too, so a client never tells the person to fix what it does not know. */
+const HELD: ReadonlySet<string> = new Set<string>([...Object.values(OPENCLAW_STATES), MISSING_HELPER, REPLACED_PROGRAM])
+
+/** [frame]'s named state and whether it is held, or nothing: a stopped, offline or cloud harness is never held, and a
+ *  sentence that is not a non-empty string (an older or malformed frame) is no sentence. */
+export function namedStateOf(frame: Frame): { sentence: string; held: boolean } | null {
+  const sentence = frame.namedState
+  if (frame.status === 'stopped' || frame.status === 'offline' || frame.location === 'cloud') return null
+  if (typeof sentence !== 'string' || !sentence) return null
+  return { sentence, held: HELD.has(sentence) || isOpenclawLocalStopped(sentence) }
+}
+
 /**
  * The harness on [pane] in [frames], when it is an agent: who is calling. Null only for a person: a terminal's pane,
  * or one Harness does not know. Matching active harnesses only made an agent the person, with the person's right to
@@ -192,7 +210,8 @@ export function rowsOf(frames: Frame[], ctx: RowContext): Row[] {
   const rows: Row[] = []
   for (const frame of frames) {
     if (!isAgent(frame)) continue
-    const state = stateOf(frame)
+    // Held over what its screen shows: it waits on the person whatever it last drew.
+    const state = namedStateOf(frame)?.held ? 'held' : stateOf(frame)
     const last = frame.updatedAt ? Date.parse(frame.updatedAt) : NaN
     if (state === 'stopped' && (!ctx.all || !(ctx.now - last < STOPPED_WITHIN_MS))) continue
     const cloud = cloudMeta(frame)
@@ -217,8 +236,8 @@ export function rowsOf(frames: Frame[], ctx: RowContext): Row[] {
       ...(failure ? { failure } : {}),
     })
   }
-  // Working first, then by last activity: what an agent choosing where work goes looks at first.
-  const rank = (r: Row): number => (r.state === 'working' || r.state === 'needs-input' ? 0 : r.state === 'idle' || r.state === 'unknown' ? 1 : 2)
+  // Working or waiting on the person first, then by last activity: what an agent choosing where work goes looks at first.
+  const rank = (r: Row): number => (r.state === 'working' || r.state === 'needs-input' || r.state === 'held' ? 0 : r.state === 'idle' || r.state === 'unknown' ? 1 : 2)
   return rows.sort((a, b) => rank(a) - rank(b) || (b.lastActive ?? '').localeCompare(a.lastActive ?? ''))
 }
 
@@ -227,7 +246,7 @@ export const AGENT_ROWS = 15
 
 /** An agent's `ps`: its own first, then those working or waiting on the person, then the rest; [max] at most. */
 export function forAgent(rows: readonly Row[], max = AGENT_ROWS): { shown: Row[]; more: number } {
-  const busy = (r: Row) => r.state === 'working' || r.state === 'needs-input'
+  const busy = (r: Row) => r.state === 'working' || r.state === 'needs-input' || r.state === 'held'
   const ordered = [...rows.filter((r) => r.yours), ...rows.filter((r) => !r.yours && busy(r)), ...rows.filter((r) => !r.yours && !busy(r))]
   return { shown: ordered.slice(0, max), more: Math.max(0, ordered.length - max) }
 }
