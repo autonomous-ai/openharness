@@ -129,6 +129,38 @@ describe('QuestionInbox', () => {
     expect(fresh.close('a', 'shown:n1')).toBe(true)
     expect(fresh.read('a').ok).toBe(false)
   })
+  it('remembers what the dial was told, by a ring or a drawer row, until the dial loses everything', () => {
+    const inbox = new QuestionInbox()
+    for (const agent of ['a', 'b', 'c']) inbox.set(agent, `q${agent}`, question())
+    expect(inbox.told('a', 'qa')).toBe(false)
+    expect(inbox.refile('a', 'qa')).toBe(false)   // never told: it is rung, not filed
+    expect(inbox.ask('a', 'qa')).toBe(true)       // a ring tells it
+    expect(inbox.told('a', 'qa')).toBe(true)
+    expect(inbox.told('a', 'old')).toBe(false)    // not the open one
+    expect(inbox.refile('a', 'qa')).toBe(false)   // the dial holds it
+    inbox.forget(new Set(['b']))                  // a drawer that carries b's row and not a's
+    expect(inbox.told('b', 'qb')).toBe(true)      // shown as a row: told, with no ring
+    expect(inbox.refile('b', 'qb')).toBe(false)   // and the dial holds it
+    expect(inbox.told('a', 'qa')).toBe(true)      // a replace never clears it
+    expect(inbox.told('c', 'qc')).toBe(false)
+    expect(inbox.refile('a', 'old')).toBe(false)
+    expect(inbox.refile('a', 'qa')).toBe(true)    // back on the dial as a row
+    expect(inbox.refile('a', 'qa')).toBe(false)
+    expect(inbox.ask('a', 'qa')).toBe(false)
+    inbox.forget()                                // a greeting: its RAM is gone
+    expect(['a', 'b', 'c'].map((agent) => inbox.told(agent, `q${agent}`))).toEqual([false, false, false])
+    expect(['a', 'b', 'c'].map((agent) => inbox.ask(agent, `q${agent}`))).toEqual([true, true, true])
+    inbox.set('a', 'qa2', question())             // a new question id: a new entry, neither mark
+    expect(inbox.told('a', 'qa2')).toBe(false)
+    expect(inbox.ask('a', 'qa2')).toBe(true)
+  })
+  it('a held question was told, as it rang before: it goes back on the dial as a row, never as a ring', () => {
+    const inbox = new QuestionInbox()
+    inbox.set('a', 'shown:n1', notice, true)
+    expect(inbox.told('a', 'shown:n1')).toBe(true)
+    expect(inbox.ask('a', 'shown:n1')).toBe(false)
+    expect(inbox.refile('a', 'shown:n1')).toBe(true)
+  })
 })
 
 describe('spoken answer drafts', () => {
