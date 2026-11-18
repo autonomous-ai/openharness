@@ -6251,15 +6251,16 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     const H1 = [{ agentId: 'h1', registeredAt: 1, engine: 'claude', sessionId: 's-h1' }] as RegisteredSession[]
     /** h1 rings, and the devices restart with its card pending, on a core whose agents are read only by a refresh, after
      *  the dial attached: as a devices process that just started and has not read the core's agents yet. */
-    const restartWithHarness = async () => {
+    const restartWithHarness = async (over: Parameters<typeof devices>[0] = {}, before: (port: DevicesPort) => void = () => {}) => {
       const first = devices({ core: bound() })
       expect(first.listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })).toEqual({ result: 'shown' })
       const [restored] = ids()
       let view: RegisteredSession[] = []
       const core = fakeCore({ dataDir, agents: { advertised: vi.fn(() => view) } })
-      const second = await again(first, { core, refresh: async () => { view = H1 } })
+      const second = await again(first, { core, refresh: async () => { view = H1 }, ...over })
       seen.host.watching!(true)
       expect(host().listUnread()).toEqual([])
+      before(second.port)
       second.port.swarms(null)
       await host().listAgentSnapshot()
       return { ...second, restored }
@@ -6270,6 +6271,53 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       expect(calls('replaceNotifications').at(-1)).toEqual([[{ agentId: 'h1', machineId: 'machine-1', question: true, text: LINE }]])
       expect(calls('hold')).toEqual([['h1', restored, card('Harness')]])
       expect(ringing()).toEqual([])
+    })
+
+    // The dial's question close drops its agent's row: a drawer replace that put the restored row back ahead of a close
+    // still queued behind the agent's earlier cards would lose it.
+    describe('its row put back reaches the dial after what its agent\'s order already holds', () => {
+      /** A failed turn's summary rings even with a notice pending, and waits on the decider: h1's order is busy. */
+      const busy = () => {
+        let decide!: () => void
+        const decideTier = vi.fn(() => new Promise<{ tier: 'alert'; by: string; detail: string; ms: number }>((resolve) => {
+          decide = () => resolve({ tier: 'alert', by: 'test', detail: '', ms: 0 })
+        }))
+        return { decideTier, decide: () => decide() }
+      }
+      const QUESTIONS = [{ key: 'go', q: 'Deploy now?', options: ['Yes', 'No'] }]
+      const coverAndClose = (port: DevicesPort) => {
+        port.card({ type: 'commander_event', agentId: 'h1', payload: { kind: 'summary', text: 'done', recap: 'Built.', failed: true } })
+        port.card({ type: 'commander_question', agentId: 'h1', payload: { requestId: 'r1', questions: QUESTIONS } })
+        port.card({ type: 'commander_question_close', agentId: 'h1', payload: { requestId: 'r1' } })
+      }
+      const sent = (from: number) => seen.cable.calls.slice(from).map(([name]) => name)
+        .filter((name) => ['question', 'questionClose', 'hold', 'replaceNotifications'].includes(name))
+      const ROW = { agentId: 'h1', machineId: 'machine-1', question: true, text: LINE }
+
+      it('as the question that covered it closes', async () => {
+        const { decideTier, decide } = busy()
+        const { port, restored } = await restartWithHarness({ decideTier })
+        const from = seen.cable.calls.length
+        coverAndClose(port)
+        decide()
+        await vi.waitFor(() => expect(calls('questionClose')).toHaveLength(1))
+        await vi.waitFor(() => expect(sent(from)).toEqual(['question', 'questionClose', 'hold', 'replaceNotifications']))
+        expect(calls('hold').at(-1)).toEqual(['h1', restored, card('Harness')])
+        expect(calls('replaceNotifications').at(-1)).toEqual([[ROW]])
+      })
+
+      it('as the list that first names its agent comes', async () => {
+        const { decideTier, decide } = busy()
+        let from = 0
+        const { restored } = await restartWithHarness({ decideTier }, (port) => {
+          from = seen.cable.calls.length
+          coverAndClose(port)
+        })
+        decide()
+        await vi.waitFor(() => expect(sent(from)).toEqual(['question', 'questionClose', 'hold', 'replaceNotifications']))
+        expect(calls('hold')).toEqual([['h1', restored, card('Harness')]])
+        expect(calls('replaceNotifications').at(-1)).toEqual([[ROW]])
+      })
     })
 
     it('a card of a running turn ends a Harness agent\'s restored row', async () => {

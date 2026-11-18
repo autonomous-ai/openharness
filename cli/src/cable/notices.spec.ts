@@ -9,7 +9,7 @@ function desk(opts: {
   keys?: Record<string, string[]>; clock?: number; restored?: StoredNotice[]
 } = {}) {
   const state = {
-    connected: opts.connected ?? true, at: 0, clock: opts.clock ?? 0, ids: 0, resolved: 0, changes: 0, redraws: 0, held: new Set<string>(),
+    connected: opts.connected ?? true, at: 0, clock: opts.clock ?? 0, ids: 0, resolved: 0, changes: 0, redraws: [] as string[][], held: new Set<string>(),
   }
   const calls: Call[] = []
   const counted: Array<[string, string]> = []
@@ -31,7 +31,7 @@ function desk(opts: {
     count: (engine, result) => counted.push([engine, result]),
     restored: opts.restored ?? [],
     log: (line) => logs.push(line),
-    redraw: () => { state.redraws += 1 },
+    redraw: (agentIds) => { state.redraws.push([...agentIds]) },
     hold: (agentId, id, questions) => calls.push(['hold', agentId, id, questions]),
   })
   return { notices, state, calls, counted, logs, asks: () => calls.filter((c) => c[0] === 'ask') }
@@ -307,7 +307,7 @@ describe('Notices after a restart', () => {
     notices.attached()
     notices.reask('a1')
     expect(calls).toEqual([])
-    expect(state.redraws).toBe(0)
+    expect(state.redraws).toEqual([])
   })
 
   it('a restored card of a caller no list holds is a drawer row at once; any other waits for its agent', () => {
@@ -316,11 +316,13 @@ describe('Notices after a restart', () => {
     expect(notices.from('w1')).toEqual(WHO)
   })
 
+  // The attach's greeting draws the row, but ahead of a close still queued in its agent's order, which drops it: a
+  // drawer replace behind that order puts it back.
   it('a restored row\'s question is held as a dial attaches, never asked, so opening the row reads its line', () => {
     const { notices, state, calls } = back([kept(), asWho])
     notices.attached()
     expect(calls).toEqual([['hold', 'w1', 'shown:k2', asked('Terminal')]])
-    expect(state.redraws).toBe(0)
+    expect(state.redraws).toEqual([['w1']])
   })
 
   it('a card older than 24 hours is dropped, one of exactly 24 hours is kept, and one ahead of the clock too', () => {
@@ -349,14 +351,14 @@ describe('Notices after a restart', () => {
     notices.attached()
     notices.reask('w1')
     expect(calls).toEqual([])
-    expect(state.redraws).toBe(0)
+    expect(state.redraws).toEqual([])
     state.held.delete('w1')
     notices.reask('w1')
     expect(calls).toEqual([['hold', 'w1', 'shown:k2', asked('Terminal')]])
-    expect(state.redraws).toBe(1)
+    expect(state.redraws).toEqual([['w1']])
     notices.reask('a1')
     expect(calls).toHaveLength(1)
-    expect(state.redraws).toBe(1)
+    expect(state.redraws).toEqual([['w1']])
   })
 
   it('a restored card ends as any card: closed under its id, once', () => {
@@ -406,7 +408,7 @@ describe('Notices after a restart', () => {
       const { notices, state, calls } = back([kept()])
       notices.look(false, lists(agent('a1')))
       expect(notices.rows('m')).toEqual([row('a1')])
-      expect(state.redraws).toBe(1)
+      expect(state.redraws).toEqual([['a1']])
       expect(calls).toEqual([['hold', 'a1', 'shown:k1', asked('Orca')]])
       expect(state.changes).toBe(0)
       // Another question of that agent covers it: found all the same, and nothing held or shown under it.
@@ -418,6 +420,12 @@ describe('Notices after a restart', () => {
       expect(again.reads).toBe(0)
       expect(covered.calls).toEqual([])
       expect(covered.notices.rows('m')).toEqual([])
+    })
+
+    it('several found in one look are one drawer replace, behind each one\'s order', () => {
+      const { notices, state } = back([kept(), kept({ agentId: 'a2', id: 'shown:k2', keys: ['claude:s2'] })])
+      notices.look(false, lists(agent('a1'), agent('a2')))
+      expect(state.redraws).toEqual([['a1', 'a2']])
     })
 
     it('found by its session under a new id, it takes that id in its place, and the file is told', () => {
@@ -442,7 +450,7 @@ describe('Notices after a restart', () => {
       const { notices, state } = back([kept({ agentId: 'old', keys: ['claude:s1', 'herdr:w1:p1'] })])
       notices.look(false, lists(agent('new', { session: 'claude:s2', panes: ['herdr:w1:p1'] })))
       expect(notices.rows('m')).toEqual([])
-      expect(state.redraws).toBe(0)
+      expect(state.redraws).toEqual([])
       expect(notices.pending('old')).toBe(true)
     })
 
@@ -468,7 +476,7 @@ describe('Notices after a restart', () => {
       notices.look(false, lists(agent('a1', { busy: true })))
       expect(calls).toEqual([['close', 'a1', 'shown:k1']])
       expect(notices.rows('m')).toEqual([])
-      expect(state.redraws).toBe(0)
+      expect(state.redraws).toEqual([])
       expect(state.changes).toBe(1)
     })
 
@@ -479,7 +487,7 @@ describe('Notices after a restart', () => {
       expect(none.reads).toBe(1)
       expect(calls).toEqual([])
       expect(state.changes).toBe(0)
-      expect(state.redraws).toBe(0)
+      expect(state.redraws).toEqual([])
       expect(notices.pending('a1')).toBe(true)
       notices.look(false, lists(agent('a1')))
       const after = lists(agent('a1'))
