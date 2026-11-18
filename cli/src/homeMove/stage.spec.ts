@@ -9,6 +9,7 @@ import { commitRoot, dropOriginals, mergeRecreated, stageEntry, uncommitRoot, un
 const NODE_FS: StageIo = {
   renameSync: fs.renameSync, symlinkSync: fs.symlinkSync, mkdirSync: fs.mkdirSync, rmSync: fs.rmSync, unlinkSync: fs.unlinkSync,
   lstatSync: fs.lstatSync, readdirSync: fs.readdirSync, cpSync: fs.cpSync, chmodSync: fs.chmodSync, utimesSync: fs.utimesSync,
+  openSync: fs.openSync, fsyncSync: fs.fsyncSync, closeSync: fs.closeSync,
 }
 
 // A time in whole seconds long before any test runs: a time kept is told from one the move made, and a copy keeps it exactly.

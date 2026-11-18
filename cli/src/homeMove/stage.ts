@@ -3,7 +3,9 @@ import { dirname, join } from 'node:path'
 import type { HarnessRootKind } from '../config/harnessHome.js'
 import { OWN_FILES, type MoveEntry, type MovePlan } from './plan.js'
 
-export interface StageIo extends Pick<typeof import('node:fs'), 'renameSync' | 'symlinkSync' | 'mkdirSync' | 'rmSync' | 'unlinkSync' | 'lstatSync' | 'readdirSync' | 'cpSync' | 'chmodSync' | 'utimesSync'> {}
+export interface StageIo extends Pick<typeof import('node:fs'),
+  'renameSync' | 'symlinkSync' | 'mkdirSync' | 'rmSync' | 'unlinkSync' | 'lstatSync' | 'readdirSync' | 'cpSync' | 'chmodSync' | 'utimesSync'
+  | 'openSync' | 'fsyncSync' | 'closeSync'> {}
 
 /** Where an entry copied across filesystems keeps its original, in ~/.harness, until the finish drops it. */
 const keptOf = (entry: MoveEntry): string => join(dirname(entry.from), OWN_FILES.kept, entry.name)
@@ -156,6 +158,32 @@ export function commitRoot(plan: MovePlan, root: HarnessRootKind, io: StageIo): 
 /** Puts a committed root back in its staging folder. One there already is left. */
 export function uncommitRoot(plan: MovePlan, root: HarnessRootKind, io: StageIo): void {
   if (lstatOf(plan[root], io)) io.renameSync(plan[root], stagingOf(plan, root))
+}
+
+/**
+ * Before the finish drops anything: each of [written], every file and folder under it, then ~/.harness, each root and
+ * the folder it was renamed in, flushed to the device. A copy's writes and a rename may still sit in memory, and the
+ * originals and the journal are what a power cut would leave to put them back.
+ */
+export function syncMoved(plan: MovePlan, written: readonly string[], io: StageIo): void {
+  for (const path of written) syncTree(path, io)
+  for (const folder of [plan.legacy, plan.state, dirname(plan.state), plan.data, dirname(plan.data)]) syncPath(folder, io)
+}
+
+function syncTree(path: string, io: StageIo): void {
+  const st = lstatOf(path, io)
+  if (st?.isDirectory()) for (const name of io.readdirSync(path)) syncTree(join(path, name), io)
+  // A link holds no bytes of its own, and nothing else is copied.
+  if (st?.isDirectory() || st?.isFile()) syncPath(path, io)
+}
+
+function syncPath(path: string, io: StageIo): void {
+  const file = io.openSync(path, 'r')
+  try {
+    io.fsyncSync(file)
+  } finally {
+    io.closeSync(file)
+  }
 }
 
 /** The finish: the originals of entries copied across filesystems go. */

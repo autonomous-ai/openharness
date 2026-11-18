@@ -5,7 +5,7 @@
  */
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { legacyHarnessHome, type HarnessRootKind } from '../config/harnessHome.js'
-import { makeRealFolders, writeBridge } from './bridge.js'
+import { BRIDGE_FILE, makeRealFolders, writeBridge } from './bridge.js'
 import type { MoveCheck, Reason } from './conditions.js'
 import { forgetJournal, openJournal, readJournal, type Done, type Journal } from './journal.js'
 import type { Tmux } from './panes.js'
@@ -13,7 +13,7 @@ import { draftOf, OWN_FILES, type MoveEntry, type MovePlan } from './plan.js'
 import { writeMoveRecord } from './record.js'
 import { dropAside, restoreAside, restoreFile, rewriteInside, type RewriteIo } from './rewriteInside.js'
 import { restoreOutside, rewriteOutside } from './rewriteOutside.js'
-import { commitRoot, dropOriginals, mergeRecreated, stageEntry, uncommitRoot, unstageEntry, type StageIo } from './stage.js'
+import { commitRoot, dropOriginals, mergeRecreated, stageEntry, syncMoved, uncommitRoot, unstageEntry, type StageIo } from './stage.js'
 
 export interface MoveDeps { io: StageIo & RewriteIo; tmux: Tmux; run(command: string, args: string[]): { status: number | null }; now(): number; procNow(): number; log(line: string): void }
 export type MoveOutcome = { state: 'bridged'; entries: number; bytesCopied: number; panes: number } | { state: 'failed'; reason: Reason }
@@ -118,6 +118,9 @@ function complete(journal: Journal, steps: Steps, oldDataDir: string, run: { byt
     // They still name the old tree, which the bridge's links serve while it lasts.
     const { left } = run
     if (left.length > 0) deps.log(`home move: ${left.length} record${left.length === 1 ? '' : 's'} left unchanged · ${[...new Set(left.map(recordKind))].sort().join(', ')}`)
+    // Each entry by its last stage line: copied across filesystems or not.
+    const copied = new Map(done.flatMap((step) => step.did === 'stage' ? [[step.entry, step.copied] as const] : []))
+    syncMoved(plan, [...plan.entries.filter((entry) => copied.get(entry.name)).map((entry) => entry.to), join(plan.state, BRIDGE_FILE)], io)
     dropOriginals(plan, io)
     // Set aside while staged: in its root now.
     const roots = ROOTS.map((root) => [stagingOf(plan, root), plan[root]] as const)
