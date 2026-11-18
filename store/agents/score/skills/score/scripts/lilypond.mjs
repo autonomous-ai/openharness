@@ -3,7 +3,8 @@ import { access,mkdir,mkdtemp,readFile,rename,rm } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { createHash,randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
-import { join,resolve } from 'node:path';
+import { existsSync } from 'node:fs';
+import { isAbsolute,join,resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const VERSION='2.26.0';
@@ -19,7 +20,15 @@ export function releaseFor(platform=process.platform,arch=process.arch){
   const name=`lilypond-${VERSION}-${release.asset}`;
   return {...release,name,url:`https://gitlab.com/api/v4/projects/lilypond%2Flilypond/packages/generic/lilypond/${VERSION}/${name}.tar.gz`};
 }
-export function runtimeRoot(env=process.env){return env.SCORE_RUNTIME_DIR||join(env.ADAPTER_RUNTIME_DIR||join(homedir(),'.harness','runtime'),'score');}
+// Harness's state root by its rule, inline because this package installs alone: on Linux the XDG root once the data root
+// exists or ~/.harness does not; ~/.harness otherwise and off Linux. A relative or empty XDG variable is ignored.
+function harnessStateRoot(env,platform,exists){
+  const home=platform==='win32'?homedir():env.HOME||homedir(),legacy=join(home,'.harness');
+  if(platform!=='linux')return legacy;
+  const base=(name,...fallback)=>isAbsolute(env[name]??'')?env[name]:join(home,...fallback);
+  return exists(join(base('XDG_DATA_HOME','.local','share'),'harness'))||!exists(legacy)?join(base('XDG_STATE_HOME','.local','state'),'harness'):legacy;
+}
+export function runtimeRoot(env=process.env,platform=process.platform,exists=existsSync){return env.SCORE_RUNTIME_DIR||join(env.ADAPTER_RUNTIME_DIR||join(harnessStateRoot(env,platform,exists),'runtime'),'score');}
 export function probeLilypond(bin,env=process.env){
   const result=spawnSync(bin,['--version'],{env,encoding:'utf8',timeout:10000,maxBuffer:256*1024});
   const line=(result.stdout||'').split('\n')[0],match=line.match(/^GNU LilyPond (\d+)\.(\d+)\.(\d+)/);
