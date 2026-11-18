@@ -82,3 +82,17 @@ on coverage overhead. Production deadlines stay unchanged. Separate native evide
 attempt/file tests retain expiration, cumulative work/probe limits, joined deadlines, retained
 descriptors and reservations, and the final post-filesystem deadline fence. The fixed test still
 requires a green gate; no new execution has been used to claim that result.
+
+## Corrected source gate
+
+At clean `c5bacf5c67`, the selected gate passes all 17 files and 398 cases (28.9 seconds), including
+all 25 new batching controls; TypeScript passes (7.5 seconds). Receipt:
+`.harness/validation/20261118T205442.958559Z-43010/receipt.json`, actual exit 0 and unchanged source.
+`nativeHookFiles.ts` coverage is 313/324 lines (96.6%), 425/467 statements (91%), 207/248 branches
+(83.46%) and 74/74 functions. All 15 statements starting on added runtime lines are exercised,
+including completed-proof success and refusal. Coverage is retained under
+`/tmp/core-native-route-batch-coverage`; no full-file 100% claim is made for this engine helper.
+
+Actual caller common-directory reads now meet 4/8/8 instead of 6/12/12, with unchanged fresh final
+proofs and alias/cap/overlap controls. A matched actual Create comparison and the final combined
+launch/Resume cost gate are still pending; this source gate does not clear the original V5 hold.
