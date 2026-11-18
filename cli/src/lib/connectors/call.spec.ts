@@ -60,12 +60,17 @@ describe('unc', () => {
 
   it('is a share however its separators or device prefix are spelled', () => {
     const shares = ['\\\\host\\share\\x.txt', '//host/share/x.txt', '\\/host\\share\\x.txt', '\\\\?\\UNC\\host\\share\\x.txt',
-      '\\\\.\\UNC\\host\\share\\x.txt', '\\\\localhost\\C$\\x.txt']
+      '\\\\.\\UNC\\host\\share\\x.txt', '\\\\localhost\\C$\\x.txt', '\\??\\UNC\\host\\share\\x.txt']
     for (const path of shares) expect(unc(path, win32), path).toBe(true)
   })
 
-  it('is no local drive\'s path, nor its device path', () => {
-    for (const path of ['\\\\?\\C:\\Users\\a\\x.txt', '\\\\.\\c:\\x.txt', 'C:\\x.txt']) expect(unc(path, win32), path).toBe(false)
+  // Windows takes `..` in a \\.\ path back to the prefix, out of the drive, so only \\?\, which it never normalizes, is local.
+  it('is a share a drive\'s \\\\.\\ path climbs to', () => {
+    for (const path of ['\\\\.\\C:\\..\\UNC\\host\\share\\x.txt', '\\\\.\\c:\\x\\../../UNC/host/share/x.txt']) expect(unc(path, win32), path).toBe(true)
+  })
+
+  it('is no local drive\'s path, nor its \\\\?\\ path', () => {
+    for (const path of ['\\\\?\\C:\\Users\\a\\x.txt', '\\\\?\\c:\\x.txt', 'C:\\x.txt']) expect(unc(path, win32), path).toBe(false)
   })
 
   it('is never a posix path', () => {
@@ -191,7 +196,8 @@ describe('uploadPath', () => {
   it('refuses a share path on Windows before it resolves it, one ~ names too', () => {
     platform.windows = true
     const realpath = vi.spyOn(realpathSync, 'native').mockImplementation(() => { throw new Error('opened') })
-    for (const raw of ['\\\\host\\share\\x.txt', '//host/share/x.txt', '\\\\?\\UNC\\host\\share\\x.txt', '\\\\.\\UNC\\host\\share\\x.txt']) expectFenced(raw)
+    for (const raw of ['\\\\host\\share\\x.txt', '//host/share/x.txt', '\\\\?\\UNC\\host\\share\\x.txt', '\\\\.\\UNC\\host\\share\\x.txt',
+      '\\\\.\\C:\\..\\UNC\\host\\share\\x.txt', '\\??\\UNC\\host\\share\\x.txt']) expectFenced(raw)
     expect(() => uploadPath('~\\x.txt', { HOME: '\\\\host\\share' })).toThrow(/not a media file/)
     expect(realpath).not.toHaveBeenCalled()
   })
