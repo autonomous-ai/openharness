@@ -4023,10 +4023,11 @@ bool ui_notify_summary(const char *id, const char *name, const char *machine, co
     display_lock();
     bool face = on_face(id);
     notice_forget_read(id, false); // A fresh completion is new even if its words repeat.
-    notice_add(id, name, machine, recap, false, false);
+    // A full inbox of open questions refuses the row: with nothing to read, nothing rings, wakes or celebrates.
+    bool filed = notice_add(id, name, machine, recap, false, false) != NULL;
     if (face) notice_read_now(id);
     s.notice_sequence++;
-    bool alert = level == 2 && !face;
+    bool alert = filed && level == 2 && !face;
     uint32_t now = ms();
     if (alert && !waiting() && !s.nap && !s.quiet && (!s.last_celebration || now - s.last_celebration >= 20000)) {
         s.pet_pose = 3;
@@ -4046,7 +4047,8 @@ bool ui_turn_error(const char *id, const char *message)
     bool face = on_face(id);
     int known = find(id);
     notice_forget_read(id, false);
-    notice_add(id, known >= 0 ? s.agents[known].name : NULL, NULL, message, false, true);
+    // A row refused by a full inbox of open questions leaves the toast, as an error about no agent has, and no ring.
+    bool ring = notice_add(id, known >= 0 ? s.agents[known].name : NULL, NULL, message, false, true) && !face;
     if (face) notice_read_now(id);
     s.notice_sequence++;
     // Like any toast, never over a live recording or the person's own question; the drawer row still keeps the failure.
@@ -4057,9 +4059,9 @@ bool ui_turn_error(const char *id, const char *message)
         if (s.view == MESSAGE) { s.error_until = ms() + ERROR_VIEW_MS; if (!s.error_until) s.error_until = 1; }
     }
     change();
-    if (!face) display_wake();
+    if (ring) display_wake();
     display_unlock();
-    return !face;
+    return ring;
 }
 void ui_notif_seen(const char *id)
 {
