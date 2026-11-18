@@ -1,6 +1,6 @@
 // The loop behind the extension: it asks `harness device vscode link` where the devices' socket is, holds this window's
 // `vscode` stream open on it, reports the window's shells on connections of their own, and shows or scrolls the terminal
-// a line names, raising the window for a tap's show. Nothing of `vscode` is loaded here: the end to end test runs this
+// a line names, or presses its page keys, raising the window for a tap's show. Nothing of `vscode` is loaded here: the end to end test runs this
 // file outside VS Code.
 import { basename, delimiter, dirname, isAbsolute } from 'node:path'
 import { MISSING, type LoopInputs, type Ran } from './inputs'

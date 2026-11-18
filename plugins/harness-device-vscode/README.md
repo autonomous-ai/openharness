@@ -8,17 +8,17 @@ Lets the Harness dial reach Claude Code and Codex running in VS Code's integrate
   it. On VS Code before 1.128, a window behind another shows its terminal without coming forward.
 - **Swipe** and rest on a session while VS Code is in front: VS Code switches to that terminal.
 - **Scroll** on the dial while VS Code is in front: that terminal scrolls, line by line. With `"tui": "fullscreen"` in
-  Claude Code's settings, its view moves a page for each 20 lines; fullscreen set only by `CLAUDE_CODE_NO_FLICKER=1`
-  scrolls line by line.
+  Claude Code's settings, its view moves a page for each 20 lines. Fullscreen set only by `CLAUDE_CODE_NO_FLICKER=1`
+  does not move: set `"tui": "fullscreen"`.
 
 Each window tells the devices process on this computer which shells its terminals run, and shows or scrolls the
-terminal the devices process names, raising itself when the show is a tap's. It asks `harness device vscode link` (`~/.local/bin/harness`, then `harness` in an absolute `PATH` folder) where
+terminal the devices process names, or presses its page keys, raising itself when the show is a tap's. It asks `harness device vscode link` (`~/.local/bin/harness`, then `harness` in an absolute `PATH` folder) where
 that process listens.
 
 ## What it never does
 
-- It reads nothing from a terminal. It types only the PageUp and PageDown keys, and only where Claude Code's fullscreen
-  view is in front and not asking.
+- It reads nothing from a terminal. It types only PageUp and PageDown, never Enter or other text, and only into a
+  terminal where Harness found Claude Code's fullscreen view running at the stroke's start.
 - It starts nothing but `harness device vscode link`.
 - It shows no panel, status bar item, notification or command of its own.
 - Nothing leaves the computer: it talks only to the Harness daemon's devices process on it, and sends only its
