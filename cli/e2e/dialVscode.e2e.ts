@@ -476,6 +476,12 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
       && (m.apps as Array<{ id: string; count: number }>).some((app) => app.id === 'cursor' && app.count === 1)
       && (m.apps as Array<{ id: string; count: number }>).some((app) => app.id === 'ghostty' && app.count === 1), 45_000, 'Cursor 1 and Ghostty 1')
     expect(a.shellPid).not.toBe(a.pid)
+    // Cursor in front shows Cursor's ring, whose agents alone the dial is sent. With one agent each the two apps tie, and
+    // the dial keeps the first it showed, by which agent it knew of first or a draw (appFilter.ts): Ghostty's, on Linux
+    // CI, held back A's frames.
+    const front = watch(d)
+    front(CURSOR)
+    await ring(dial, 'cursor', 0)
 
     // 2. The window holds A's terminal, active.
     const window = vscodeWindow(d)
@@ -486,8 +492,6 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
     if (!mac) await dial.next((m) => m.t === 'agent' && m.id === a.id && String(m.caps).includes('f'), 45_000, 'its terminal found')
 
     // 3. Swipe: with Cursor in front, a rest on A shows A's terminal, and raises no window.
-    const front = watch(d)
-    front(CURSOR)
     await dial.turnUntil(a.id, "A's terminal shown", () => window.shows[0])
     expect(window.shows).toEqual([a.shellPid])
     expect(window.raised).toEqual([])
