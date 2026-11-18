@@ -57,10 +57,12 @@ export function expandHome(raw: string, home: string, p: PlatformPath = platform
 export function uploadPath(raw: string, env: NodeJS.ProcessEnv = process.env): string {
   const home = env.HOME || homedir()
   const path = expandHome(raw, home)
+  // The file system's own spelling (`native`): the JS realpath only follows links and keeps the spelling given, so
+  // ~/.SSH on macOS, and SSH~1 (an 8.3 short name) or a \\?\ prefix on Windows, read ~/.ssh outside the fence.
   let real: string
-  try { real = realpathSync(path) } catch { throw new CallFailure(2, `cannot read upload ${raw}`) }
+  try { real = realpathSync.native(path) } catch { throw new CallFailure(2, `cannot read upload ${raw}`) }
   const forbidden = [connectorsDir(env), join(home, '.ssh'), join(home, '.gnupg'), join(home, '.config'), join(home, '.local/share'),
-    join(home, '.harness'), join(home, '.codex'), join(home, '.claude'), '/etc', '/proc', '/sys'].map(dir => { try { return realpathSync(dir) } catch { return resolve(dir) } })
+    join(home, '.harness'), join(home, '.codex'), join(home, '.claude'), '/etc', '/proc', '/sys'].map(dir => { try { return realpathSync.native(dir) } catch { return resolve(dir) } })
   if (forbidden.some(dir => inside(dir, real)) || !statSync(real).isFile()) {
     throw new CallFailure(2, `refusing to upload ${raw}: not a media file the helper may send`)
   }
