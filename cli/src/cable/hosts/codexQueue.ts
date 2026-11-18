@@ -122,11 +122,12 @@ export function codexQueueDeps(): Omit<CodexQueueDeps, 'home' | 'cwd'> {
     // A file there that cannot run is passed over: it would not start.
     appBinary: () => held('app', () => appCodexCandidates(process.env.HARNESS_CODEX_APP_BIN, homedir()).find((path) => binaryOnPath(path)) ?? null),
     // PATH in the order codex was looked for. An empty segment is the folder the program runs in, the home folder, where
-    // `env` would look for `node`: a side that has none adds none, and with neither there is no PATH, so the system's
-    // default is searched.
+    // `env` would look for `node`: none is kept, from a side that has no PATH or from inside one, and with no segment
+    // left there is no PATH, so the system's default is searched.
     parentEnv: () => ({
       ...oneShotParentEnv(),
-      PATH: [loginShellEnvironment().PATH, process.env.PATH].filter(Boolean).join(delimiter) || undefined,
+      PATH: [loginShellEnvironment().PATH, process.env.PATH].flatMap((path) => (path ?? '').split(delimiter))
+        .filter(Boolean).join(delimiter) || undefined,
     }),
     // A look taken before the read saw the daemon's PATH alone: it holds only until the read ends, and the app's with it,
     // so every look after the read is a fresh one. The read answers {} on every failure and never rejects.
