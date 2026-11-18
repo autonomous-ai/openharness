@@ -59,6 +59,8 @@ interface Home {
   clock: { now: number }
   /** Every execve, as asked. */
   execs: { file: string; args: string[]; env: NodeJS.ProcessEnv }[]
+  /** Every exit, by its code. */
+  exits: number[]
   /** The processes the fake lock knows to run, by pid, with the clock tick each started at. */
   procs: Map<number, number>
   /** The fake lock of the start that runs as [pid]: its watch wakes at wake(). */
@@ -81,13 +83,13 @@ function legacyHome({ unknown = false }: { unknown?: boolean } = {}): Home {
   put(join(legacy, 'computer-id'), 'c0ffee-machine')
   if (unknown) put(join(legacy, 'notes', 'keep'), 'notes\n')
   const panes = new Map([['%1', harnessPaneOwner(join(legacy, 'cli', 'data'))]])
-  const execs: Home['execs'] = []
+  const execs: Home['execs'] = [], exits: number[] = []
   const clock = { now: NOW }
   const procs = new Map([[SELF, 3]])
   const watchers = new Set<() => void>()
   const t: Home = {
     root, home, legacy, data: join(home, '.local', 'share', 'harness'), state: join(home, '.local', 'state', 'harness'),
-    tmuxVersion: 'tmux 3.4', clock, execs, procs,
+    tmuxVersion: 'tmux 3.4', clock, execs, exits, procs,
     lockAs: (pid) => ({
       pid, startTime: (other) => procs.get(other) ?? null,
       watch: (_folder, onChange) => {
@@ -109,7 +111,8 @@ function legacyHome({ unknown = false }: { unknown?: boolean } = {}): Home {
     deps: (over = {}) => ({
       platform: 'linux', home, io: disk, tmux: t.tmux, run: () => ({ status: 0 }), now: () => clock.now, procNow: () => PROC_NOW,
       alive: () => false, answers: async () => false, ptyHostRuns: () => false,
-      execve: (file, args, env) => { execs.push({ file, args, env }) }, execPath: join(legacy, NODE), execArgv: [], print: null, lock: t.lockAs(SELF), ...over,
+      execve: (file, args, env) => { execs.push({ file, args, env }) }, execPath: join(legacy, NODE), execArgv: [], print: null, lock: t.lockAs(SELF),
+      exit: (code) => { exits.push(code) }, ...over,
     }),
   }
   return t
@@ -258,6 +261,33 @@ describe('the move at a start', () => {
     expect(readdirSync(base)).toEqual([])
   })
 
+  it('a move whose rollback fails says the next start puts ~/.harness back, and the start ends there: nothing runs on a tree half moved', async () => {
+    const t = legacyHome()
+    let failing = true
+    const io: StartDeps['io'] = {
+      ...disk,
+      renameSync: (from, to) => {
+        // The data root's commit fails, then the rollback cannot put auth back.
+        if (failing && (from === `${t.data}.moving` || to === join(t.legacy, 'auth'))) {
+          failing = to !== join(t.legacy, 'auth')
+          throw Object.assign(new Error('i/o error'), { code: 'EIO' })
+        }
+        fs.renameSync(from, to)
+      },
+    }
+    await moveHomeAtStart(argvOf(t, 'start'), {}, t.deps({ io }))
+    expect(logOf(t)).toEqual(['home move: failed io · the next start puts ~/.harness back'])
+    expect([t.exits, t.execs]).toEqual([[1], []])
+    // The next start puts it back, says so, and goes on.
+    t.clock.now += MINUTE
+    await moveHomeAtStart(argvOf(t, '__harnessd'), {}, t.deps())
+    expect(readJournal(t.legacy)).toBeNull()
+    expect(readFileSync(join(t.legacy, 'auth', 'session.json'), 'utf8')).toBe('{"token":"t-1"}')
+    expect(logOf(t)).toEqual(['home move: failed io · the next start puts ~/.harness back', 'home move: failed io · ~/.harness is as it was'])
+    expect(readMoveRecord(t.home, {})).toMatchObject({ state: 'failed', reason: 'io', failedAt: NOW + MINUTE })
+    expect(t.exits).toEqual([1])
+  })
+
   it('a failure after the data root\'s commit runs from the new folders, and does not say ~/.harness is as it was', async () => {
     const t = legacyHome()
     const noProc = (): number => { throw Object.assign(new Error('no /proc'), { code: 'EIO' }) }
@@ -388,9 +418,9 @@ describe('the move at a start', () => {
   })
 
   it.each([
-    ['before the data root\'s commit', (t: Home) => (from: string) => from === join(t.legacy, 'auth')],
-    ['after it', (t: Home) => (from: string) => from === `${t.data}.moving`],
-  ])('a start killed %s leaves its journal and its lock: the next start takes the lock over, recovers, and goes on', async (_, at) => {
+    ['before the data root\'s commit', (t: Home) => (from: string) => from === join(t.legacy, 'auth'), () => ['home move: failed io · ~/.harness is as it was']],
+    ['after it', (t: Home) => (from: string) => from === `${t.data}.moving`, (t: Home) => [moved(t)]],
+  ])('a start killed %s leaves its journal and its lock: the next start takes the lock over, recovers, and goes on', async (_, at, said) => {
     const t = legacyHome()
     const killedAt = at(t), image = `${t.root}.killed`
     roots.push(image)
@@ -415,7 +445,9 @@ describe('the move at a start', () => {
     await moveHomeAtStart(argvOf(t, '__harnessd'), {}, t.deps({ lock: t.lockAs(OTHER) }))
     expect([readJournal(t.legacy), existsSync(moveLockPath(t.legacy))]).toEqual([null, false])
     expect(readFileSync(join(t.legacy, 'auth', 'session.json'), 'utf8')).toBe('{"token":"t-1"}')
+    expect(logOf(t)).toEqual(said(t))
     expect(t.execs).toHaveLength(existsSync(t.data) ? 1 : 0)
+    expect(t.exits).toEqual([])
   })
 
   it('a ~/.harness beside the data root that is not the bridge is said once, and nothing in it is deleted', async () => {

@@ -437,9 +437,10 @@ describe('a failed move', () => {
     t.fail.reloads = 2
     expect(await runMove(t.check, t.env, t.deps())).toEqual({ state: 'failed', reason: 'io' })
     expect(readJournal(t.legacy)).not.toBeNull()
-    expect(await recoverMove(t.home, t.env, t.deps())).toEqual({ state: 'rolled-back' })
+    // A move undone is a move failed: recorded at the try that undid it.
+    expect(await recoverMove(t.home, t.env, t.deps({ now: () => NOW + 1 }))).toEqual({ state: 'failed', reason: 'io' })
     expect(t.systemctl).toHaveLength(3)
-    expect(failedRecord(t)).toMatchObject({ state: 'failed', reason: 'io' })
+    expect(failedRecord(t)).toMatchObject({ state: 'failed', reason: 'io', failedAt: NOW + 1 })
     expect(snapshot(t)).toEqual(before)
   })
 
@@ -460,7 +461,7 @@ describe('a failed move', () => {
     } finally {
       chmodSync(back, 0o700)
     }
-    expect(await recoverMove(t.home, t.env, t.deps())).toEqual({ state: 'rolled-back' })
+    expect(await recoverMove(t.home, t.env, t.deps())).toEqual({ state: 'failed', reason: 'io' })
     expect(failedRecord(t)).toMatchObject({ state: 'failed', reason: 'io' })
     expect(snapshot(t)).toEqual(before)
   })
@@ -537,7 +538,8 @@ describe('across filesystems', () => {
     }
     await runMove(t.check, t.env, t.deps({ io }))
     restore()
-    expect(await recoverMove(t.home, t.env, t.deps())).toEqual({ state: 'rolled-back' })
+    expect(await recoverMove(t.home, t.env, t.deps())).toEqual({ state: 'failed', reason: 'io' })
+    expect(failedRecord(t)).toMatchObject({ state: 'failed', reason: 'io', failedAt: NOW })
     expect(snapshot(t)).toEqual(before)
   })
 })
@@ -557,7 +559,8 @@ describe('recovery after a crash', () => {
       const journal = await crashAfter(t, (write) => write === k)
       const step = `a crash after ${JSON.stringify(journal?.done.at(-1) ?? 'the journal')}`
       const committed = existsSync(t.plan.data)
-      expect(await recoverMove(t.home, t.env, t.deps()), step).toEqual(committed ? moved : { state: 'rolled-back' })
+      expect(await recoverMove(t.home, t.env, t.deps()), step).toEqual(committed ? moved : { state: 'failed', reason: 'io' })
+      if (!committed) expect(failedRecord(t), step).toMatchObject({ state: 'failed', reason: 'io', failedAt: NOW })
       expect(snapshot(t), step).toEqual(committed ? after : before)
       expect(await recoverMove(t.home, t.env, t.deps()), step).toBeNull()
       expect(snapshot(t), step).toEqual(committed ? after : before)
@@ -572,7 +575,8 @@ describe('recovery after a crash', () => {
     const before = snapshot(t)
     await crashAfter(t, () => existsSync(t.plan.state) && !existsSync(t.plan.data))
     expect([existsSync(t.plan.state), existsSync(t.plan.data)]).toEqual([true, false])
-    expect(await recoverMove(t.home, t.env, t.deps())).toEqual({ state: 'rolled-back' })
+    expect(await recoverMove(t.home, t.env, t.deps())).toEqual({ state: 'failed', reason: 'io' })
+    expect(failedRecord(t)).toMatchObject({ state: 'failed', reason: 'io' })
     expect(snapshot(t)).toEqual(before)
   })
 })
