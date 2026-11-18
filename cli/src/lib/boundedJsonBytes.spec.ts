@@ -11,7 +11,7 @@ describe('bounded JSON admission', () => {
     const values = [null, true, false, 0, -0, 1e100, '', 'a', shared.same, [], {},
       [undefined, , 1], { absent: undefined, present: [shared, shared] },
       Object.assign(Object.create(null), { field: 'value' }), Object.setPrototypeOf([1], null),
-      { toJSON: 'ordinary data' }]
+      { toJSON: 'ordinary data' }, { 0: 'quoted numeric key', '-0': 'separate key' }]
     for (const value of values) {
       const expected = Buffer.byteLength(JSON.stringify(value))
       expect(boundedJsonBytes(value, expected)).toBe(expected)
@@ -55,10 +55,13 @@ describe('bounded JSON admission', () => {
   it('keeps JSON array-hole lookup semantics without invoking inherited accessors', () => {
     const original = Object.getOwnPropertyDescriptor(Array.prototype, '100')
     const array = new Array(101), invoked = vi.fn(() => 'private')
-    let inherited: number | null = null, refused: number | null = 0
+    let inherited: number | null = null, ownUndefined: number | null = null, refused: number | null = 0
     try {
       Object.defineProperty(Array.prototype, '100', { configurable: true, value: 'inherited' })
       inherited = boundedJsonBytes(array, 1_000)
+      Object.defineProperty(array, '100', { configurable: true, value: undefined })
+      ownUndefined = boundedJsonBytes(array, 1_000)
+      Reflect.deleteProperty(array, '100')
       Object.defineProperty(Array.prototype, '100', { configurable: true, get: invoked })
       refused = boundedJsonBytes(array, 1_000)
     } finally {
@@ -66,6 +69,7 @@ describe('bounded JSON admission', () => {
       else Reflect.deleteProperty(Array.prototype, '100')
     }
     expect(inherited).toBe(1 + 100 * 5 + Buffer.byteLength('"inherited"') + 1)
+    expect(ownUndefined).toBe(1 + 101 * 4 + 100 + 1)
     expect(refused).toBeNull(); expect(invoked).not.toHaveBeenCalled()
   })
 
@@ -96,13 +100,13 @@ describe('bounded JSON admission', () => {
     expect(boundedJsonBytes(value, 100)).toBe(Buffer.byteLength(JSON.stringify(value)))
   })
 
-  it('allocates no named helper functions for a count in the release transform', () => {
+  it('avoids per-count function creation and redundant index conversions in the release transform', () => {
     // V12 sampled the three per-call function-name writes; use the real release transform,
     // not a wall-clock assertion or a synthetic alternative to the byte counter.
     const built = buildSync({ entryPoints: [fileURLToPath(new URL('./boundedJsonBytes.ts', import.meta.url))],
       bundle: true, write: false, platform: 'node', format: 'cjs', target: 'node20',
       minify: true, keepNames: true, logLevel: 'silent' })
-    let counting = false, writes = 0
+    let counting = false, writes = 0, numericConversions = 0
     const object = new Proxy(Object, { get(target, key, receiver) {
       if (key !== 'defineProperty') return Reflect.get(target, key, receiver)
       return (value: object, property: PropertyKey, descriptor: PropertyDescriptor) => {
@@ -110,9 +114,13 @@ describe('bounded JSON admission', () => {
         return Object.defineProperty(value, property, descriptor)
       }
     } })
+    const string = new Proxy(String, { apply(target, receiver, args) {
+      if (counting && typeof args[0] === 'number') numericConversions++
+      return Reflect.apply(target, receiver, args)
+    } })
     const module = { exports: {} as { boundedJsonBytes: typeof boundedJsonBytes } }
     runInNewContext(built.outputFiles[0].text, { module, exports: module.exports, require: createRequire(import.meta.url),
-      Object: object, Array, Buffer }, { timeout: 1_000 })
+      Object: object, Array, String: string, Buffer }, { timeout: 1_000 })
     const value = { type: 'row', payload: { index: 0, value: ['registered', 'agent', 'session', 'claude',
       1, null, 0, true, '/synthetic/work', false, ['failed', 'FAILED', false], 'Name', true, null, false, false] } }
     const expected = Buffer.byteLength(JSON.stringify(value))
@@ -120,5 +128,7 @@ describe('bounded JSON admission', () => {
     for (let n = 0; n < 64; n++) expect(module.exports.boundedJsonBytes(value, 16 * 1024 * 1024)).toBe(expected)
     counting = false
     expect(writes).toBe(0)
+    // The record has three numeric values. Array property indices reach reflection directly.
+    expect(numericConversions).toBe(3 * 64)
   })
 })

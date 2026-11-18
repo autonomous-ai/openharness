@@ -81,3 +81,37 @@ dependency. These are code and deterministic-work results only. The V12
 complete-refresh performance hold remains until a separately approved fixed
 comparison measures the new source. Final combined core and Linux checks remain
 with the integration owner; native Windows remains user-deferred.
+
+## Numeric array indices
+
+The fixed V13 comparison passes all semantic and custody controls but retains
+the complete-refresh performance hold: at 1,600 sessions, core-only CPU is
+54.219→12.988 ms; complete-refresh wall is 53.688→80.568 ms and CPU is
+53.744→85.185 ms. The existing V12 profile's 60.917 ms descriptor-function self
+occupancy contains mandatory native descriptor reads as well as removable
+function calls; it is not an estimate of the benefit below.
+
+For an array element, ask `Object.getOwnPropertyDescriptor` directly using the
+numeric index and traverse prototypes only when the own descriptor is absent.
+The intrinsic converts its property key; an extra JavaScript `String(index)`
+call is unnecessary. This removes that call and the generic descriptor-loop
+invocation for present slots, preserving the exact descriptor/prototype access
+order after the same visit bound. An own `undefined` entry still masks an
+inherited entry, holes still read inherited data, and accessors are refused
+without invocation. Object keys remain quoted strings, even numeric-looking
+ones. Every other byte, visit, depth, proxy and `toJSON` check stays unchanged.
+
+The Design points above still apply: no cache, trusted-row bypass, new core file,
+wire/schema change, authority change or quota increase. Source is 82→83 lines.
+The compiled cost control keeps the original 64 row calls and checks exactly
+three necessary numeric-value string conversions per row. The unchanged V13
+helper performs 1,408 explicit numeric conversions; the intended result is 192.
+This counts calls, not allocations or elapsed time, and promises no complete
+performance closure. Existing semantic controls add numeric-looking object keys
+and own-undefined-over-inherited array values before the runtime change.
+
+Run that deterministic control RED on unchanged V13 source, then the exact
+reviewed runtime, the affected caller/helper coverage gate, TypeScript and
+architecture checks with one test worker. No additional diagnostic or timing
+round is authorized by this follow-up; source and gates return to the
+integration owner first. The earlier 798ceec399/V13 worktree stays frozen.
