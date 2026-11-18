@@ -106,3 +106,22 @@ test('without a readable credential nothing is sent, and the refusal is named as
   await assert.rejects(listAgents('m', { env, timeoutMs: 2000 }), /refused this process's local credential/)
   assert.ok(bridge.seen.length > 0 && bridge.seen.every((header) => header === undefined))
 })
+
+test("the credential is read from the daemon's data folder", (t) => {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')
+  Object.defineProperty(process, 'platform', { value: 'linux' })
+  t.after(() => Object.defineProperty(process, 'platform', platform))
+  // A home too long for a socket under either root: the one case that reads the credential.
+  const home = join(mkdtempSync(join(tmpdir(), 'hps-home-')), 'home-'.padEnd(120, 'x'))
+  const credentialIn = (credential, ...folder) => {
+    const dir = join(home, ...folder)
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
+    chmodSync(dir, 0o700)
+    writeFileSync(join(dir, 'hook-credential'), `${credential}\n`, { mode: 0o600 })
+  }
+  const OTHER = `test-moved-credential-${'b'.repeat(21)}`
+  credentialIn(CREDENTIAL, '.harness', 'cli', 'data')
+  assert.deepEqual(localCredentialHeaders({ HOME: home }), { 'X-Harness-Local': CREDENTIAL }, 'a Linux home not moved yet')
+  credentialIn(OTHER, '.local', 'share', 'harness', 'cli', 'data')
+  assert.deepEqual(localCredentialHeaders({ HOME: home }), { 'X-Harness-Local': OTHER }, 'a Linux home moved to the XDG data root')
+})

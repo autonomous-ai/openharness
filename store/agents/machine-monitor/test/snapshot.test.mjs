@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
-import { createCollector, machineName, projectKey, projectsOf } from '../lib/snapshot.mjs';
+import { createCollector, localTotals, machineName, projectKey, projectsOf } from '../lib/snapshot.mjs';
 import { fakeReads, OWNER_MACHINES, RACK_ROSTER, STUDIO_ROSTER } from './fixtures.mjs';
 
 const A = 'a'.repeat(32), B = 'b'.repeat(32), C = 'c'.repeat(32), D = 'd'.repeat(32), E = 'e'.repeat(32);
@@ -104,4 +107,27 @@ test('a signed-out computer is said so, with no machines invented', async () => 
   assert.equal(snapshot.status, 'signed-out');
   assert.deepEqual(snapshot.machines, []);
   assert.match(snapshot.message, /harness login/);
+});
+
+test("the app's stats are read from <data>/desktop-app-v2, HARNESS_APP_DIR first", async (t) => {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+  t.after(() => Object.defineProperty(process, 'platform', platform));
+  const home = mkdtempSync(join(tmpdir(), 'mm-home-'));
+  const stats = (turns, ...folder) => {
+    const dir = join(...folder);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'harness-stats.json'), JSON.stringify({ turns }));
+    return dir;
+  };
+  const turns = async env => (await localTotals(env))?.turns;
+  stats(1, home, '.harness', 'desktop-app-v2');
+
+  Object.defineProperty(process, 'platform', { value: 'linux' });
+  assert.equal(await turns({ HOME: home }), 1, 'a Linux home not moved yet');
+  stats(2, home, '.local', 'share', 'harness', 'desktop-app-v2');
+  assert.equal(await turns({ HOME: home }), 2, 'a Linux home moved to the XDG data root');
+  assert.equal(await turns({ HOME: home, HARNESS_APP_DIR: stats(3, home, 'app') }), 3);
+
+  Object.defineProperty(process, 'platform', { value: 'darwin' });
+  assert.equal(await turns({ HOME: home }), 1, 'macOS keeps ~/.harness');
 });

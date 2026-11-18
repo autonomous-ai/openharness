@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
-import { bridgeUrl, closeSessions, daemonBase, listHarnesses } from '../lib/daemon.mjs';
+import { bridgeUrl, closeSessions, daemonBase, dataDir, listHarnesses } from '../lib/daemon.mjs';
 
 test('the daemon address must be loopback http, and the bridge follows it', () => {
   assert.equal(daemonBase({}).href, 'http://127.0.0.1:18473/');
@@ -9,6 +12,22 @@ test('the daemon address must be loopback http, and the bridge follows it', () =
   for (const bad of ['https://127.0.0.1:18473/', 'http://example.com/', 'http://user:pw@127.0.0.1/', 'http://127.0.0.1/?x=1']) {
     assert.throws(() => daemonBase({ HARNESS_MACHINES_DAEMON: bad }), /loopback/, bad);
   }
+});
+
+test("the data folder is the daemon's, ADAPTER_DATA_DIR first", (t) => {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+  t.after(() => Object.defineProperty(process, 'platform', platform));
+  const home = mkdtempSync(join(tmpdir(), 'mm-home-'));
+  mkdirSync(join(home, '.harness'));
+
+  Object.defineProperty(process, 'platform', { value: 'linux' });
+  assert.equal(dataDir({ HOME: home }), join(home, '.harness', 'cli', 'data'), 'a Linux home not moved yet');
+  mkdirSync(join(home, '.local', 'share', 'harness'), { recursive: true });
+  assert.equal(dataDir({ HOME: home }), join(home, '.local', 'share', 'harness', 'cli', 'data'), 'a Linux home moved to the XDG data root');
+  assert.equal(dataDir({ HOME: home, ADAPTER_DATA_DIR: '/d' }), '/d');
+
+  Object.defineProperty(process, 'platform', { value: 'darwin' });
+  assert.equal(dataDir({ HOME: home }), join(home, '.harness', 'cli', 'data'), 'macOS keeps ~/.harness');
 });
 
 /** A WebSocket that plays one scripted exchange, so the roster read is testable without a daemon. */
