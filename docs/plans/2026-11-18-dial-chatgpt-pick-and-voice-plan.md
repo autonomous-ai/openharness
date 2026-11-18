@@ -5,7 +5,7 @@
 **Goal:** A dial whose list was empty is put on the first agent of the machine list it is sent, and the dial's words for a Codex session run through a `codex` that can start: the ChatGPT app's own CLI for a session in that app (macOS), else the `codex` a launch would run, under the person's login-shell environment.
 
 **Architecture:**
-- **A, the landing** (`cli/src/cable/cableSession.ts`, `syncAgentsNow`): after `agents.end` of a machine list, when the ring sent before had no agents, the record names none of the list and no follow is in flight, the record becomes the list's first agent and its `focus` is sent, with the echo guard the re-assert sets.
+- **A, the landing** (`cli/src/cable/cableSession.ts`, `syncAgentsNow`): after `agents.end` of a machine list, when the ring sent before had no agents, the record names none of the list and no follow is in flight, the record becomes the list's first agent and its `focus` is sent, with the echo guard the re-assert sets. The dial's own `agents.list` empties `lastRing` before the push that answers it: a dial asks only when it holds none.
 - **B, the queue** (`cli/src/cable/hosts/codexQueue.ts`): which `codex` runs and the environment it gets. `observed.ts` says whether the session is the ChatGPT app's, and words the person can act on after a definite failure. `services/devices.ts` only passes the dependencies on.
 - Devices process only. Nothing in `cli/src/core`, nothing stored or synced, no new log line: one line gains a word.
 
@@ -18,7 +18,7 @@
 - Branch `fix/dial-chatgpt-pick-and-voice`, at `76f9a82582`, worktree `/Users/duynguyen/orca/workspaces/autonomous-harness/dial-chatgpt-user`. Nothing else has to merge first.
 - **Before the first task, once:** `cd cli && npm ci --no-audit --no-fund` (this worktree's `cli/` has no `node_modules`). One process runs it, never two tasks at once.
 - Names at the base (the tasks name functions, never lines):
-  - `cableSession.ts`: `syncAgentsNow`, `lastRing`, `desiredFocus` (its setter calls `reportShown`), `appFocusUnsent`, `expectedAppFocusEcho`, `expectedAppFocusEchoUntil`, `APP_FOCUS_SETTLE_MS` (750), `AGENTS_PUSH_GAP_MS`, `focusAgent`, `follow`, `followApp`, `pushAgents`, the `'focus'` and `'app.pick'` cases.
+  - `cableSession.ts`: `syncAgentsNow`, `pushAgents`, the `'agents.list'` case (it calls `pushAgents()`), `lastRing`, `desiredFocus` (its setter calls `reportShown`), `appFocusUnsent`, `expectedAppFocusEcho`, `expectedAppFocusEchoUntil`, `APP_FOCUS_SETTLE_MS` (750), `AGENTS_PUSH_GAP_MS`, `focusAgent`, `follow`, `followApp`, `pushAgents`, the `'focus'` and `'app.pick'` cases.
   - `cableSession.spec.ts`: `connect`, `makeHost`, `LoopbackPort` (`say`, `sent`, `types`, `close`), `AGENTS`, `row`, `appHost`, `settle`; the replug pattern in `a dial that comes back on its port is reported again once its ring is pushed`.
   - `codexQueue.ts`: `createCodexQueue`, `codexQueueDeps`, `CodexQueueDeps`, `CodexQueue`, `CodexQueueResult`, `CodexQueueFailure`, `CodexRunEnd`, `BINARY_LOOK_MS`, `QUEUE_TIMEOUT_MS`, `CODEX_THREAD`. Its spec: `recorder`, `held`, `realQueue`, `fakeCodex`, `executable`, `options`, `THREAD`, `FAKE_CODEX`.
   - `observed.ts`: `ObservedActions` (`codexQueue`, `count`), `countWord`, `queueable`, `send`, `first`, `words`. Its spec: `fakeActions`, `setup`, `counted`, `FAILED`, and in `describe('ObservedSource and codex queue')` `cx`, `inOrca`, `given`; in `describe('ObservedSource and the Codex app')` `inApp`, `hooked`, `scanned`, `rollout`.
@@ -26,7 +26,7 @@
   - `lib/loginShellEnv.ts`: `loginShellEnvironment`, `warmLoginShellEnvironment`, `oneShotParentEnv`. `lib/engineBin.ts`: `engineBin`. `lib/binaryOnPath.ts`: `resolveBinaryOnPath`.
   - End to end: `harness/daemon.ts` `IsolatedDaemon` (`create`, `env`, `root`, `engineConfig`, `opens`, `log`), `fakeEngineShim`, `until`; `harness/fakeDial.ts` `FakeDial` (`send`, `next`, `messages`); `harness/codexOutside.ts` `CodexOutside`; `harness/hungCodex.ts` `writeHungCodex` (the way to write over a daemon's `codex`); `dialStream.e2e.ts` `turned`; `dialAppFilter.e2e.ts` `fresh`, `plugged`, `startFirst`, `startOutside`, `shows`, `FILTER`, `GHOSTTY`.
 - If a name differs at the base, the implementer follows the code and says so in its report.
-- The spec and this plan are untracked. The main session commits them; no task does.
+- The spec and this plan were committed at `f17f6a82c7`. The main session commits their later updates; no task does.
 
 ## Tasks at a glance
 
@@ -65,6 +65,8 @@ Not changed, and a diff in any is a finding: anything under `cli/src/core/`, `cl
 **A, the landing (spec, "A")**
 - Only after `agents.end` of a list with `view: 'machine'`, with or without `appFilter`. A window's tab (no `view`) never lands.
 - All four hold: the list has agents; `lastRing` had none before this push; the record names none of the list's agents; `appFocusUnsent` is false.
+- The `'agents.list'` case empties `lastRing` before its `pushAgents()` (PM, 2026-11-18): a dial asks for the list only when it holds none, for example after its 15 s silence rule while the port stays open. The record is kept, so a record in the ring is re-asserted. A greeting (`hello`) is unchanged.
+- A daemon or devices process that restarts behind a plugged dial lands it on the first agent (PM, 2026-11-18).
 - A record in the list is re-asserted as today. A ring that replaces a ring with agents sends no landing.
 - The landing sets the expected echo for `APP_FOCUS_SETTLE_MS` (750 ms) and goes through `focusAgent`, so the host hears `dialShows`. It calls no `host.focus` and brings nothing forward.
 - `same` on `app.pick` still sends nothing. No new log line.
@@ -86,7 +88,7 @@ Not changed, and a diff in any is a finding: anything under `cli/src/core/`, `cl
 - The end-to-end harness names it for every daemon, inside the daemon's own root and missing until a test writes it, so no daemon under test runs the developer's ChatGPT app (Task 5).
 
 **What the landing changes for a test (Tasks 1 to 4)**
-- M1: a `focus` on the ring's first agent follows the first machine list with agents, and each one after an empty list.
+- M1: a `focus` on the ring's first agent follows the first machine list with agents, each one after an empty list, and each one that answers the dial's `agents.list` while the record names none of its agents.
 - M2: the record names that agent. Each later ring push re-asserts it. A follow to it sends nothing (the dial is there). The host's shown agent is that agent, not none.
 - M3: for 750 ms after the landing and after each re-assert, a dial's `focus` on another agent is dropped, and one on that agent is taken as its echo: no `host.focus`, no rest, no switch.
 
@@ -119,7 +121,7 @@ Not changed, and a diff in any is a finding: anything under `cli/src/core/`, `cl
 **Red tests:** `cli/src/cable/cableSession.spec.ts`, `cli/e2e/dialAppFilter.e2e.ts`.
 
 **Files:**
-- Modify: `cli/src/cable/cableSession.ts` (`syncAgentsNow` only)
+- Modify: `cli/src/cable/cableSession.ts` (`syncAgentsNow` and the `'agents.list'` case only)
 - Test: `cli/src/cable/cableSession.spec.ts`
 - Test: `cli/e2e/dialAppFilter.e2e.ts`
 
@@ -139,6 +141,17 @@ if (this.desiredFocus && agents.some((a) => a.id === this.desiredFocus)) {
 }
 ```
 
+- Produces, in the message switch:
+
+```ts
+case 'agents.list':
+  // A dial asks for the list only when it holds none (its 15 s silence rule empties it while the port stays open),
+  // so the answer is a push after an empty list. The record stays: one in the ring is re-asserted.
+  this.lastRing = []
+  await this.pushAgents()
+  return
+```
+
 - The comment says why, from the spec: the firmware adds a list's agents before it removes the old ones, so only a list that follows none leaves its face on no agent; a follow writes its record before its push and sends its own focus after it. The sentence "This is the ONLY thing the daemon re-asserts" is reworded: the record is still the only thing sent, and the landing writes it first.
 
 Fixtures for the new tests, in `describe('a machine list lands a dial that holds no agent (docs/plans/2026-11-18-dial-chatgpt-pick-and-voice-design.md)')`, after `appHost`: `RING = [row('o1', 'ghostty'), row('h1', 'harness', 'svfa')]`; `machine = (agents: CableAgent[]) => ({ agents, tab: '', total: agents.length, view: 'machine' as const })`; `WINDOW = { agents: AGENTS, tab: 't1', total: 2 }`; `landed(snapshot, over = {})`: `connect(makeHost({ dialShows: vi.fn(), listAgentSnapshot: async () => snapshot(), ...over }))`, the hello `{ t: 'hello', product: 'harness', mac: 'aa:bb' }`, then wait for `agents.end`; `focuses = (port) => port.sent.filter((m) => m.t === 'focus')`. Tests that move time use `vi.useFakeTimers({ toFake: ['Date', 'performance'] })`.
@@ -153,11 +166,12 @@ Fixtures for the new tests, in `describe('a machine list lands a dial that holds
   - `a reattach whose record names an agent of another ring lands on the first agent`: the same, with the list `[row('x1', 'ghostty'), row('x2', 'ghostty')]` at the second hello: `[{ t: 'focus', agentId: 'x1' }]`.
   - `a follow in flight lands only its own agent`: an empty list at the hello; advance 1,100 ms; then the list becomes `RING` and `followApp` is called in the same synchronous step, so the session's own tick cannot push the list first. (a) `session.followApp('mac-local', 'h1')`: at least one `focus`, every one on `h1`. (b) in a session of its own, `session.followApp('mac-local', 'zz')`: `focuses` equals `[{ t: 'focus', agentId: 'zz' }]`, none on `o1`.
   - `a window's tab with no record sends no focus`: greeted on `WINDOW`: no `focus`.
+  - `a dial that asks agents.list while its port stays open is landed on the first agent, or has its record re-asserted` (PM, 2026-11-18): (a) landed on `o1`; advance 751 ms; the dial says `focus` `h1`; advance 1,100 ms; the list becomes `[row('x1', 'ghostty'), row('x2', 'ghostty')]`, `syncAgents()`: no `focus` (a ring that replaces a ring with agents). Clear `port.sent`; the dial says `{ t: 'agents.list' }`; wait for `agents.end`: `focuses` equals `[{ t: 'focus', agentId: 'x1' }]`, after that `agents.end`. (b) in a session of its own: landed on `o1`; advance 751 ms; the dial says `focus` `h1`; clear `port.sent`; the dial says `agents.list`; wait for `agents.end`: `focuses` equals `[{ t: 'focus', agentId: 'h1' }]`. The port never closes in either.
   - `in the 750 ms after the landing a swipe is dropped, and the first swipe after them moves the dial` (Review Focus 5): landed on `o1`; the dial says `focus` `h1`: `host.focus` not called, `dialShows`' last agent still `o1`; advance 751 ms; the dial says `focus` `h1` again: `host.focus` called with `'h1'`, `dialShows`' last call names `h1`. In a session of its own: the dial says `focus` `o1` within the 750 ms: `host.focus` and `host.turned` not called (the landing's echo is no hand's move).
 - [ ] **Step 2: Write the end-to-end test in `e2e/dialAppFilter.e2e.ts`:** `a dial plugged in over an app's ring is sent a focus on its first agent, after its list, and nothing is brought forward`. `fresh()`, `plugged(desk)`, `a1 = startFirst(d, first, 'ghostty', 'a1', GHOSTTY)`, `a2 = startOutside(d, 'a2', GHOSTTY)`, `shows(first, 'ghostty', [a1, a2])`. The first dial, whose list went from none to `a1`, hears `focus` on `a1.id` (`first.next`, 30 s). Note `d.opens().length`. Plug a second dial: `plugged(desk, FILTER, 'E2E-B', 'e2:e0:00:00:00:0b')`, `shows(second, 'ghostty', [a1, a2])`. The first `focus` the second dial hears (`second.next((m) => m.t === 'focus', 30_000, 'the focus after the list')`) names `a1.id`, and its index in `second.messages` is after the `agents.end` of the list that holds both. `d.opens().length` is unchanged.
-- [ ] **Step 3: Run** `cd cli && npx vitest run src/cable/cableSession.spec.ts`, then `npx vitest run --config vitest.e2e.config.ts e2e/dialAppFilter.e2e.ts -t "plugged in over an app's ring"`. Expected: FAIL in the tests that expect a landing (no `focus` is sent; the end-to-end test fails waiting for the first dial's `focus`). The tests that expect no `focus` may already pass.
+- [ ] **Step 3: Run** `cd cli && npx vitest run src/cable/cableSession.spec.ts`, then `npx vitest run --config vitest.e2e.config.ts e2e/dialAppFilter.e2e.ts -t "plugged in over an app's ring"`. Expected: FAIL in the tests that expect a landing (no `focus` is sent; the end-to-end test fails waiting for the first dial's `focus`), the `agents.list` test's (a) included. The tests that expect no `focus`, and the `agents.list` test's (b) (today's re-assert), may already pass.
 - [ ] **Step 4: Commit** `test(dial): a machine list lands a dial that holds no agent (red)`.
-- [ ] **Step 5: Implement** the landing (Interfaces above).
+- [ ] **Step 5: Implement** the landing and the `'agents.list'` case (Interfaces above).
 - [ ] **Step 6: Adapt the tests the landing changes,** in `cableSession.spec.ts` and `e2e/dialAppFilter.e2e.ts` only, by Global Constraints ("What the landing changes for a test", "Adapting a test to the landing"). In the unit spec a hand's turn right after a machine list either moves fake time 751 ms first or has the dial say the landing's echo first, as an older firmware does. The report lists each changed test with M1, M2 or M3.
 - [ ] **Step 7: Run** `cd cli && npx vitest run src/cable && npm run typecheck`, then `npx vitest run --config vitest.e2e.config.ts e2e/dialAppFilter.e2e.ts` twice. Expected: PASS both times.
 - [ ] **Step 8: Commit** `dial: a machine list lands a dial that holds no agent on its first agent`.
@@ -406,7 +420,7 @@ vi.mock('../../lib/loginShellEnv.js', async (original) => ({
   - "What it logs": `codex-failed (exit N · app)`, `(exit N · path)`, `(no binary · app)`, `(no binary · path)`, `(refused)`.
   - Failure cases: "No `codex` on `PATH`" becomes no `codex` anywhere (an app session still queues through the app's CLI); new rows for a failed app session and a failed session elsewhere, with their sentences and lines. Measures: the same forms.
   - Tests: the list gains what Tasks 6 to 8 added, in one line each.
-- [ ] **Step 2: `docs/specs/2026-11-14-dial-app-filter.md`,** one line beside "Picking returns to the face, on the first agent of the new ring.": a dial whose list was empty (an attach, or a list that emptied and filled again) is put on the new ring's first agent by the daemon's `focus` (2026-11-18, the design's link).
+- [ ] **Step 2: `docs/specs/2026-11-14-dial-app-filter.md`,** one line beside "Picking returns to the face, on the first agent of the new ring.": a dial whose list was empty (an attach, or a list that emptied and filled again) is put on the new ring's first agent by the daemon's `focus` (2026-11-18, the design's link). The line also names the list the dial asks for itself (`agents.list`, as after its 15 s silence rule): the daemon answers it as a list after an empty one, so the dial lands on the first agent unless its record is in the ring (PM, 2026-11-18).
 - [ ] **Step 3: `cli/AGENTS.md`,** in the `devices` row, the clause on `codex queue`: it runs the ChatGPT app's own Codex CLI for a session in that app on macOS, else the `codex` a launch would run, under the person's login-shell environment, read once at the first Codex session it is asked about (`cable/hosts/codexQueue.ts`).
 - [ ] **Step 4: Check** every link added opens a file that exists (`ls` the targets), and `git diff --stat` names only the three files.
 - [ ] **Step 5: Commit** `docs: codex queue's codex and environment, and the dial's landing`.
@@ -421,7 +435,7 @@ vi.mock('../../lib/loginShellEnv.js', async (original) => ({
    - Run, in `cli/`, with an arm64 Node: `E2E_BUNDLE=1 E2E_WORKERS=4 npx vitest run --config vitest.e2e.config.ts e2e/dialAppFilter.e2e.ts e2e/deviceCodex.e2e.ts e2e/developerState.e2e.ts` and every file of Tasks 2, 3 and 4. About ten minutes. If the run stops on a TMPDIR too long for a socket, run it again with `TMPDIR=/tmp`.
    - Isolated by the suite's own harness (`cli/AGENTS.md`, rule 6; `e2e/harness/daemon.ts`): each daemon has a throwaway home and data folder, a private tmux server, a port of its own, fake Claude Code and Codex, a fake `open`, a stub `orca`, no VS Code, and after Task 5 no ChatGPT app but a test's own. The backend is a fake on `127.0.0.1`; the machine a test signs in as is made up.
    - A person should see: every file passed; `deviceCodex.e2e.ts` 2 passed and 0 skipped; `dialAppFilter.e2e.ts`'s `plugged in over an app's ring` passed; no test skipped that ran at the base.
-2. **The whole end-to-end suite on Linux**, the repo's own workflow, by hand, once: Actions → CLI end to end → Run workflow on the branch (`gh workflow run cli-e2e.yml --ref fix/dial-chatgpt-pick-and-voice`). Eight shards and `e2e-summary` green. It is advisory and never runs on the pull request; its run link goes in the pull request. `deviceCodex.e2e.ts`'s new test is skipped there (macOS only).
+2. **The whole end-to-end suite on Linux**, the repo's own workflow, by hand, once: Actions → CLI end to end → Run workflow on the branch (`gh workflow run cli-e2e.yml --ref fix/dial-chatgpt-pick-and-voice`). Eight shards and `e2e-summary` green. It is advisory and never runs on the pull request; its run link goes in the pull request. `deviceCodex.e2e.ts`'s new test is skipped there (macOS only). **Starting this run needs the PM's turn when phase 4 reaches it** (PM, 2026-11-18): the tester asks through the main session and starts nothing before the answer.
 
 **No temporary workflow.** The long check, the whole suite, has the repo's own by-hand workflow. The macOS run is about ten minutes at four workers and needs this Mac. Proposal for the maintainers, not this branch: a macOS job in CLI end to end for the dial files that run on macOS only.
 
@@ -437,16 +451,16 @@ vi.mock('../../lib/loginShellEnv.js', async (original) => ({
 
 **Never touched by a tester or a test:** the real ChatGPT app and its CLI, `/Applications`, `~/.codex`, `~/.claude`, the developer's daemon (port 18473) and `~/.harness`, the developer's login shell in a unit test, Diego's dial, any backend but the fake, production.
 
-**Diego's own check** (his dial, his ChatGPT app, his everyday daemon, his eye; no tester or agent runs it), on the merged build:
+**Diego's own check** (his dial, his ChatGPT app, his everyday daemon, his eye; no tester or agent runs it), after the merge, on the merged build (PM, 2026-11-18):
 - With ChatGPT shown on the dial, unplug it and plug it in again: the face shows a ChatGPT agent, not "Choose a pane".
 - Speak to a ChatGPT agent: its thread takes the words, and the daemon's log has `[device] voice · codex` with no `codex-failed`. If one comes, its `· app` or `· path` says which `codex` ran.
 
 **Against production:** none.
 
-## Questions
+## Decisions (PM, 2026-11-18)
 
-1. **A dial that drops its own session while the daemon's port stays open.** The firmware empties its list on its 15 s silence rule too (`session_down("silence")`, `cable_client.c`), greets again, and asks `agents.list`. The daemon reads that greeting as a keepalive and answers the request with `pushAgents`, a forced push ("(requested)" in the log) with `lastRing` still holding the ring. By the spec's rule no landing is sent there, and when the record names no agent of the ring (after a pick on the dial, which the firmware lands itself without telling the daemon) the face stays on "Choose a pane". The log's `agents → 6 of 6 (requested)` fits this path as well as a port that reopened; the spec's second open item asks the person for the lines that tell them apart. **Draft:** the spec's rule as written. **The other way:** `pushAgents` (a new greeting, and the dial's `agents.list`) empties `lastRing` before its list push, since a dial that asks for everything holds nothing: one line and one test more in Task 1. The planner recommends the other way.
-2. **A daemon or a devices process that restarts behind a dial that kept its ring.** The new process opens the port with no record, so its first machine list lands the dial on the first agent, wherever the person had left it. **Draft:** accepted, as the rule says ("the first push since the port opened"); the firmware does not say which agent it shows at an attach.
-3. **The log's word when no `codex` ran.** A send that finds no `codex` at all says `(no binary · path)`: the last place looked. A send the queue refused (an empty text, a NUL) says `(refused)` with no suffix and keeps `<name> did not answer.`. **Draft:** as planned (Tasks 7 and 8). The other way: `(no binary)` with no suffix.
-4. **Diego's own check: before or after the merge?** **Draft:** after the merge, as for today's other dial work.
-5. **The spec's two open items** are still with the person. Neither blocks a task: the first (which `codex` exits 127) changes nothing here, since Tasks 6 and 7 cover both answers; the second is question 1.
+1. **A dial that asks `agents.list` while the port stays open:** `lastRing` is emptied before the push that answers it, since a dial asks only when it holds none (its 15 s silence rule). A record named in the ring is re-asserted; else the dial lands on the first agent. In Task 1: the `'agents.list'` case, its interface sketch and one more red unit test; Task 9's landing line names this case.
+2. **A daemon or devices process that restarts behind a plugged dial** lands it on the first agent. Accepted (spec updated).
+3. **The log's word when no `codex` ran:** as drafted. `(no binary · path)` when none was found; `(refused)` with no suffix.
+4. **Diego's own check** on his dial and the ChatGPT app is after the merge.
+5. **The CLI end-to-end workflow on GitHub** (Verification, check 2) needs the PM's turn when phase 4 reaches it.
