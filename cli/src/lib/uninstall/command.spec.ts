@@ -594,6 +594,25 @@ describe('harness uninstall on Linux\'s two roots', () => {
     expect(t.out.at(-1)).toBe('Harness is uninstalled. Your sign-in and history are kept for the next install.')
   })
 
+  // Only ~/.harness is the move's: a record naming any other folder would have the uninstall empty it.
+  it.runIf(process.platform !== 'win32')('a bridge.json that names a folder other than ~/.harness is refused: nothing in that folder is removed, and that is said', async () => {
+    const m = movedHome()
+    const other = join(m.home, 'projects')
+    for (const name of ['connections', 'hook-routes']) {
+      mkdirSync(join(other, name), { recursive: true })
+      writeFileSync(join(other, name, 'mine.txt'), 'mine')
+    }
+    symlinkSync(join(m.home, 'code'), join(other, 'code'))
+    writeBridge(m.state, { ...readBridge(m.state)!, oldHome: other, oldDataDir: join(other, 'cli', 'data') })
+    const t = fake(movedDisk(m))
+    expect(await uninstallCommand(['--yes', '--keep-data'], t.deps)).toBe(1)
+    expect(readdirSync(other).sort()).toEqual(['code', 'connections', 'hook-routes'])
+    for (const name of ['connections', 'hook-routes']) expect(readFileSync(join(other, name, 'mine.txt'), 'utf8')).toBe('mine')
+    expect(t.err).toEqual(['✗ Harness is uninstalled, except:', '  · ~/.local/state/harness/bridge.json names a folder other than ~/.harness: nothing in that folder was removed'])
+    // The record itself goes, with the move's own.
+    expect(existsSync(join(m.state, BRIDGE_FILE))).toBe(false)
+  })
+
   it('its lines name both folders', async () => {
     const asked = fake({ ...xdg, isTTY: true })
     expect(await uninstallCommand([], asked.deps)).toBe(1)
