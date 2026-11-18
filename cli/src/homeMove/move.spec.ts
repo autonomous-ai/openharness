@@ -6,7 +6,7 @@ import * as fs from 'node:fs'
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { HARNESS_ENTRIES } from '../config/harnessHome.js'
 import { createHomeAdopter, readAdoptedHomes } from '../engines/kit/homeAdoption.js'
 import { systemdUnit } from '../harnessd/platform.js'
@@ -643,31 +643,46 @@ describe('across filesystems', () => {
   })
 })
 
+/**
+ * A move run to its end once, on a home kept as it was before it: each crash case starts from that home, and is finished
+ * to what the move made or rolled back to what was. Run while the file loads, as each journal write is a case of its own:
+ * all in one case, a crash at every write went past the case's time limit on a loaded machine.
+ */
+async function movedOnce() {
+  const t = await legacyHome()
+  // Kept for every case, past the cleanup after each.
+  roots.splice(roots.indexOf(t.root), 1)
+  const pristine = imageOf(t, 'pristine')
+  const before = snapshot(t)
+  // Whether the data root was committed at each journal write: a crash there is finished, or else rolled back.
+  const committedAt: boolean[] = []
+  const moved = await runMove(t.check, t.env, t.deps({ io: journalWrites(t, disk, () => { committedAt.push(existsSync(t.plan.data)) }) }))
+  return { t, pristine, before, after: snapshot(t), moved, committedAt }
+}
+const once = await movedOnce()
+
 describe('recovery after a crash', () => {
-  it('a crash at each step is finished or rolled back by the next start, and recovery run twice does its work once', async () => {
-    const t = await legacyHome()
-    const pristine = imageOf(t, 'pristine')
-    const before = snapshot(t)
-    let writes = 0
-    const counting = journalWrites(t, disk, () => { writes += 1 })
-    const moved = await runMove(t.check, t.env, t.deps({ io: counting }))
-    const after = snapshot(t)
-    const seen = { finished: 0, rolledBack: 0 }
-    for (let k = 0; k < writes; k++) {
-      pristine()
+  afterAll(() => { for (const image of ['', '.crash', '.pristine']) rmSync(`${once.t.root}${image}`, { recursive: true, force: true }) })
+
+  it('crashes fall on both sides of the commit, more of them before it', () => {
+    const finished = once.committedAt.filter(Boolean).length
+    expect(finished).toBeGreaterThan(0)
+    expect(once.committedAt.length - finished).toBeGreaterThan(finished)
+  })
+
+  it.each(once.committedAt.map((committed, k) => [k, committed ? 'finished' : 'rolled back', committed] as const))(
+    'a crash after journal write %i is %s by the next start, and recovery run twice does its work once', async (k, _, committed) => {
+      const { t, before, after, moved } = once
+      once.pristine()
       const journal = await crashAfter(t, (write) => write === k)
       const step = `a crash after ${JSON.stringify(journal?.done.at(-1) ?? 'the journal')}`
-      const committed = existsSync(t.plan.data)
+      expect(existsSync(t.plan.data), step).toBe(committed)
       expect(await recoverMove(t.home, t.env, t.deps()), step).toEqual(committed ? moved : { state: 'failed', reason: 'io' })
       if (!committed) expect(failedRecord(t), step).toMatchObject({ state: 'failed', reason: 'io', failedAt: NOW })
       expect(snapshot(t), step).toEqual(committed ? after : before)
       expect(await recoverMove(t.home, t.env, t.deps()), step).toBeNull()
       expect(snapshot(t), step).toEqual(committed ? after : before)
-      seen[committed ? 'finished' : 'rolledBack'] += 1
-    }
-    expect(seen.finished).toBeGreaterThan(0)
-    expect(seen.rolledBack).toBeGreaterThan(seen.finished)
-  })
+    })
 
   it('a crash after the state root\'s rename rolls back', async () => {
     const t = await legacyHome()
