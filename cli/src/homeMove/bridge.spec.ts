@@ -286,8 +286,10 @@ describe('the bridge\'s layout', () => {
 describe('the bridge\'s record', () => {
   const BOOT_ID = 'c2a9e1d8-55a4-4c3e-9b8f-0f6d2d1e7a11'
   const missing = (path: string): never => { throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' }) }
-  /** A /proc that says this boot's id and how long it has run. */
-  const proc = (path: string): string => ({ '/proc/sys/kernel/random/boot_id': `${BOOT_ID}\n`, '/proc/uptime': '1234.56 999.00\n' } as Record<string, string>)[path] ?? missing(path)
+  /** A /proc that says this boot's id, when it started and how long it has run. */
+  const proc = (path: string): string => ({
+    '/proc/sys/kernel/random/boot_id': `${BOOT_ID}\n`, '/proc/stat': 'cpu  1 2 3\nbtime 1700000000\nprocesses 9\n', '/proc/uptime': '1234.56 999.00\n',
+  } as Record<string, string>)[path] ?? missing(path)
   const record: BridgeRecord = {
     version: 1, movedAt: 1_700_001_234.56, oldHome: '/h/.harness', oldDataDir: '/h/.harness/cli/data',
     oldTag: '0123456789abcdef', newTag: 'fedcba9876543210', panes: ['%1', '%2'],
@@ -300,6 +302,17 @@ describe('the bridge\'s record', () => {
     expect(readBridge(state)).toEqual({ ...record, boot: { id: BOOT_ID, uptime: 1234.56 } })
     expect(statSync(join(state, BRIDGE_FILE)).mode & 0o777).toBe(0o600)
     expect(readdirSync(state)).toEqual([BRIDGE_FILE])
+  })
+
+  it('the move\'s time on the boot\'s clock is its time less the boot\'s: one move is written the same, however late', () => {
+    let uptime = 1234.56
+    const later = (path: string): string => path === '/proc/uptime' ? `${(uptime += 7).toFixed(2)} 999.00\n` : proc(path)
+    const state = shortFolder()
+    writeBridge(state, record, later)
+    const first = readFileSync(join(state, BRIDGE_FILE), 'utf8')
+    writeBridge(state, record, later)
+    expect(readFileSync(join(state, BRIDGE_FILE), 'utf8')).toBe(first)
+    expect(readBridge(state)!.boot).toEqual({ id: BOOT_ID, uptime: 1234.56 })
   })
 
   it('the boot is /proc\'s boot id and uptime, the clock /proc start times count on: none where /proc has neither, off Linux', () => {
