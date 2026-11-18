@@ -63,12 +63,8 @@ describe('QuestionInbox', () => {
     expect((await queued).ok).toBe(false)
     expect(send).toHaveBeenCalledTimes(1)
   })
-  it('refuses oversized or ambiguous catalogs and bounds the pending set', () => {
+  it('bounds the pending set', () => {
     const inbox = new QuestionInbox()
-    inbox.set('a', 'q', [...question(), ...question()])
-    expect(inbox.read('a').ok).toBe(false)
-    inbox.set('a', 'q', [{ ...question()[0], q: 'x'.repeat(7000) }])
-    expect(inbox.read('a').ok).toBe(false)
     for (let i = 0; i < 65; i++) inbox.set(`agent-${i}`, 'q', question())
     expect(inbox.read('agent-0').ok).toBe(false)
     expect(inbox.read('agent-64').ok).toBe(true)
@@ -160,6 +156,82 @@ describe('QuestionInbox', () => {
     expect(inbox.told('a', 'shown:n1')).toBe(true)
     expect(inbox.ask('a', 'shown:n1')).toBe(false)
     expect(inbox.refile('a', 'shown:n1')).toBe(true)
+  })
+})
+
+describe('a question the dial cannot answer', () => {
+  const one = question()[0]
+  const summaryOnly = (q: string) => [{ key: '', q, options: [], multi: false }]
+
+  it('is kept as its summary, whatever made the inbox refuse it', () => {
+    const refused: Array<[string, unknown, string]> = [
+      ['five questions', Array.from({ length: 5 }, (_, i) => ({ ...one, key: `k${i}` })), 'Which scope?'],
+      ['seven options', [{ ...one, options: ['1', '2', '3', '4', '5', '6', '7'] }], 'Which scope?'],
+      ['no options', [{ ...one, options: [] }], 'Which scope?'],
+      ['a duplicate key', [one, one], 'Which scope?'],
+      ['over 6500 bytes', [{ ...one, q: `Approve  this\n\nplan? ${'x'.repeat(7000)}` }], `Approve this plan? ${'x'.repeat(220)}`],
+      ['a BigInt beside its words', [{ ...one, options: [], size: BigInt(1) }], 'Which scope?'],
+      ['a BigInt for text', [{ ...one, q: BigInt(7), options: [] }], 'Needs your answer'],
+      ['no words', [{ ...one, q: ' \n ', options: [] }], 'Needs your answer'],
+      ['no text', [{ key: 'k' }], 'Needs your answer'],
+      ['a number for text', [{ ...one, q: 7, options: [] }], 'Needs your answer'],
+      ['an empty list', [], 'Needs your answer'],
+      ['not a list', 'approve?', 'Needs your answer'],
+      ['a null question', [null], 'Needs your answer'],
+    ]
+    for (const [why, raw, words] of refused) {
+      const inbox = new QuestionInbox()
+      expect(inbox.set('a', 'q', raw), why).toBe(false)
+      expect(read(inbox).questions, why).toEqual(summaryOnly(words))
+      expect(inbox.open(), why).toEqual([{ agentId: 'a', id: 'q', questions: summaryOnly(words) }])
+    }
+  })
+
+  it('is readable and refuses every answer', async () => {
+    const inbox = new QuestionInbox(), send = vi.fn(async () => ({ ok: true as const }))
+    inbox.set('a', 'q', [{ ...one, options: [] }])
+    const { token } = read(inbox), pin = { agentId: 'a', token, index: 0 }
+    for (const [masks, drafts] of [[[1], undefined], [[0], undefined], [[0], ['draft']], [[], undefined]] as const)
+      expect((await inbox.submit('a', token, masks, send, drafts)).ok).toBe(false)
+    expect(inbox.canSpeak(pin)).toBe(false)
+    expect(inbox.draft(pin, 'Yes').ok).toBe(false)
+    expect(send).not.toHaveBeenCalled()
+  })
+
+  it('is the same entry when delivered again or as its own summary, and is replaced or closed like any other', () => {
+    const inbox = new QuestionInbox(), plan = [{ ...one, q: `Approve? ${'x'.repeat(7000)}` }]
+    expect(inbox.set('a', 'q', plan)).toBe(false)
+    const first = read(inbox)
+    expect(inbox.ask('a', 'q')).toBe(true)
+    expect(inbox.set('a', 'q', plan)).toBe(false)
+    expect(inbox.set('a', 'q', first.questions)).toBe(false)   // the fleet hands a dial beside this one `open()`'s questions
+    expect(read(inbox).token).toBe(first.token)
+    expect(inbox.ask('a', 'q')).toBe(false)                    // the same entry, still asked
+    expect(inbox.set('a', 'q', question())).toBe(true)         // the same id, answerable now: a new entry
+    expect(read(inbox).token).not.toBe(first.token)
+    expect(inbox.set('a', 'q', question())).toBe(true)         // unchanged: still as it came
+    expect(inbox.set('a', 'q2', plan)).toBe(false)
+    expect(inbox.close('a', 'q')).toBe(false)
+    expect(inbox.close('a', 'q2')).toBe(true)
+    expect(inbox.open()).toEqual([])
+  })
+
+  it('counts against the 64 entries, and an empty agent or id keeps, evicts and changes nothing', () => {
+    const inbox = new QuestionInbox()
+    inbox.set('a', 'q', question())
+    const before = inbox.open()
+    for (const [agent, id] of [['', 'q'], ['a', ''], ['', '']]) expect(inbox.set(agent, id, question())).toBe(false)
+    expect(inbox.set('a', '', [])).toBe(false)
+    expect(inbox.open()).toEqual(before)                       // a's open question is as it was
+    expect(inbox.asked('a', 'q')).toEqual(question())          // and so are the words it was asked in
+    expect(inbox.close('a', 'q')).toBe(true)
+    for (let i = 0; i < 65; i++) inbox.set(`agent-${i}`, 'q', [])
+    expect(inbox.read('agent-0').ok).toBe(false)
+    expect(inbox.open()).toHaveLength(64)
+    const full = new QuestionInbox()
+    for (let i = 0; i < 64; i++) full.set(`agent-${i}`, 'q', question())
+    expect(full.set('', 'q', question())).toBe(false)
+    expect(full.read('agent-0').ok).toBe(true)                 // not evicted for a question nobody can close
   })
 })
 

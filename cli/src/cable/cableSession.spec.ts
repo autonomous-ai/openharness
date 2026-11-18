@@ -2427,7 +2427,8 @@ describe('cable session', () => {
 
     expect(port.sent.find((m) => m.t === 'summary' && m.agentId === 'a2'))
       .toMatchObject({ name: 'Device firmware voice', engine: 'codex', machine: '' })
-    expect(port.sent.find((m) => m.t === 'question')).toMatchObject({ name: 'Fix login screen', engine: 'claude', id: 'q1' })
+    await vi.waitFor(() =>
+      expect(port.sent.find((m) => m.t === 'question')).toMatchObject({ name: 'Fix login screen', engine: 'claude', id: 'q1' }))
     expect(port.sent.find((m) => m.t === 'summary' && m.agentId === 'ghost')).toMatchObject({ name: '', engine: '' })
     await session.stop()
   })
