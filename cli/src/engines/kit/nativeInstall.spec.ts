@@ -340,7 +340,7 @@ it('logs why a failed check holds, which the person never sees', async () => {
   unlinkSync(`${directory}.00000000.dispatch`)
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
   expect(await controller().status('codex', 'other', () => true)).toEqual({ complete: false, detail: 'Waiting to confirm durable engine installation ownership.' })
-  expect(warn).toHaveBeenCalledWith('[native-install] codex held:', 'Missing installation dispatch witness')
+  expect(warn).toHaveBeenCalledWith('[native-install] codex held:', 'Error')
 })
 
 it('confirms a readable result durably before crediting it or dispatching its successor', async () => {

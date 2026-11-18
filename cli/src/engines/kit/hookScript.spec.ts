@@ -56,7 +56,7 @@ it.each(['linux', 'darwin', 'win32'] as const)('installs no Codex hook naming a 
   const home = join(root, 'codex')
   expect(await installHookSettings('codex', codex.settings, 19473, home, {}, platform)).toBe(false)
   expect(fs.existsSync(join(home, codex.settings.file))).toBe(false)
-  expect(said.mock.calls).toEqual([[`[hooks] Codex hooks are not installed: notify.mjs is missing (${HOOK_SCRIPT}), so no hook of Harness's could run`]])
+  expect(said.mock.calls).toEqual([['[hooks] Codex hooks are not installed · HookScriptMissing']])
 })
 
 it('installs no native hook naming a missing notify.mjs, and says why in one line', async () => {
@@ -64,14 +64,14 @@ it('installs no native hook naming a missing notify.mjs, and says why in one lin
   const file = join(root, 'grok', 'hooks', 'harness.json')
   expect(await installNativeHookSettings({ ...GROK_HOOK_SETTINGS, file }, 19473, {}, 'linux')).toBe(false)
   expect(fs.existsSync(file)).toBe(false)
-  expect(said.mock.calls).toEqual([[expect.stringMatching(/^\[hooks\] .+ hooks are not installed: notify\.mjs is missing/)]])
+  expect(said.mock.calls).toEqual([[expect.stringMatching(/^\[hooks\] .+ hooks are not installed · HookScriptMissing$/)]])
 })
 
 it('installs no Hermes hook naming a missing notify.mjs: one line, and false rather than a rejection', async () => {
   const said = vi.spyOn(console, 'error').mockImplementation(() => {})
   expect(await installHermesHooks(19473, join(root, 'hermes'), {}, 'linux')).toBe(false)
   expect(fs.existsSync(join(root, 'hermes', 'config.yaml'))).toBe(false)
-  expect(said.mock.calls).toEqual([[`[hooks] Hermes hooks are not installed: notify.mjs is missing (${HOOK_SCRIPT}), so no hook of Harness's could run`]])
+  expect(said.mock.calls).toEqual([['[hooks] Hermes hooks are not installed · HookScriptMissing']])
 })
 
 // Review of #3954: installHookSettings asked for notify.mjs before the Windows runner, installNativeHookSettings after. An
@@ -96,5 +96,5 @@ it('says why a Hermes install stopped on any error of the notify.mjs check, not 
   const error = new Error('fixture')
   vi.mocked(notifyHooks.requireHookScript).mockImplementationOnce(() => { throw error })
   expect(await installHermesHooks(19473, join(root, 'hermes'), {}, 'linux')).toBe(false)
-  expect(said.mock.calls).toEqual([['[hooks] failed to write Hermes config.yaml:', error]])
+  expect(said.mock.calls).toEqual([['[hooks] failed to write Hermes config.yaml:', 'Error']])
 })

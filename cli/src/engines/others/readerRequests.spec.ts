@@ -142,10 +142,10 @@ describe('the other engines\' readers in their worker', () => {
     const t = setup()
     t.reader.historyPage.mockRejectedValueOnce(new Error('PRIVATE_TRANSCRIPT_TOKEN:/home/person/session'))
     expect(await t.read()).toEqual(failed('ENGINE_UNAVAILABLE'))
-    expect(t.log).toHaveBeenLastCalledWith('[engine pi] HISTORY_READ_FAILED')
+    expect(t.log).toHaveBeenLastCalledWith('[engine pi] HISTORY_READ_FAILED · Error')
     t.reader.lastTurnText.mockRejectedValueOnce('PRIVATE_TRANSCRIPT_TOKEN:/home/person/session')
     expect(await t.requests[READER_LAST_TURN]({ version: 1, session }, asker)).toEqual(failed('ENGINE_UNAVAILABLE'))
-    expect(t.log).toHaveBeenLastCalledWith('[engine pi] LAST_TURN_READ_FAILED')
+    expect(t.log).toHaveBeenLastCalledWith('[engine pi] LAST_TURN_READ_FAILED · string')
     expect(await t.read()).toEqual({ version: 1, answer: page })
   })
 

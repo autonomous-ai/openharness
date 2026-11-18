@@ -387,7 +387,7 @@ it('allows the agent commands where an engine has no inbox, and holds nothing wh
     return path === file && ++calls === 3 ? { ...observed, content: JSON.stringify({ hooks: [] }) } : observed
   })
   expect(await installHookSettings('claude', settings, 19473, home)).toBe(true)
-  expect(warn.mock.calls.map(call => call[0])).toEqual([`[hooks] could not allow Harness's agent commands in ${file} (the engine asks before each one):`])
+  expect(warn.mock.calls.map(call => call[0])).toEqual(["[hooks] could not allow Harness's agent commands (the engine asks before each one):"])
 })
 
 it('launches Codex when its rules file cannot be written, and says so', async () => {
@@ -395,7 +395,7 @@ it('launches Codex when its rules file cannot be written, and says so', async ()
   const home = join(root, 'codex'); mkdirSync(home)
   writeFileSync(join(home, 'rules'), 'a file where the folder goes')
   expect(await installHookSettings('codex', codex.settings, 19473, home)).toBe(true)
-  expect(warn).toHaveBeenCalledWith(`[hooks] could not allow Harness's agent commands in ${join(home, 'rules', 'harness.rules')} (the engine asks before each one):`, expect.any(String))
+  expect(warn).toHaveBeenCalledWith("[hooks] could not allow Harness's agent commands (the engine asks before each one):", expect.stringMatching(/^[A-Za-z_$][\w$]*( [A-Z][A-Z0-9_]+)?$/))
   expect(JSON.parse(readFileSync(join(home, 'hooks.json'), 'utf8')).hooks.PostToolUse[0].hooks[0].command).toBe(messagesCommand(env.HARNESS_AGENT_MESSAGES_DIR))
 })
 
@@ -408,7 +408,7 @@ it.skipIf(process.getuid?.() === 0)('says only the allowance failed when a read-
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
   try {
     expect(await installHookSettings('claude', claude.settings, 19473, home)).toBe(true)
-    expect(warn.mock.calls.map(call => call[0])).toEqual([`[hooks] could not allow Harness's agent commands in ${file} (the engine asks before each one):`])
+    expect(warn.mock.calls.map(call => call[0])).toEqual(["[hooks] could not allow Harness's agent commands (the engine asks before each one):"])
     expect(existsSync(join(env.HARNESS_AGENT_MESSAGES_DIR, 'hook.mjs'))).toBe(true)
   } finally { chmodSync(file, 0o644) }
 })
