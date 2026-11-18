@@ -3689,7 +3689,7 @@ describe('hello capabilities', () => {
     } finally { await session.stop() }
   })
 
-  it('an open question whose id the dial cannot keep is not carried as a row', async () => {
+  it('an open question whose id the dial cannot keep is not carried as a row, nor asked again at each replace', async () => {
     const { session, port } = await connect(richHost())
     try {
       port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' })
@@ -3697,6 +3697,9 @@ describe('hello capabilities', () => {
       await session.question('x'.repeat(48), 'q1', [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }])
       port.sent.length = 0
       await session.replaceNotifications([])
+      await session.replaceNotifications([])
+      // The dial drops a question frame of that id: asking it again sent one for nothing at every change of the list.
+      expect(port.types()).toEqual(['notif.replace', 'notif.replace'])
       expect(ofType(port, 'notif.replace')[0].items).toEqual([])
     } finally { await session.stop() }
   })
