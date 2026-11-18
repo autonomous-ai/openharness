@@ -149,6 +149,22 @@ void main() {
     );
   });
 
+  test('a Windows profile keeps the .harness layout on a Linux host', () {
+    expect(
+      EnvironmentProvisioner(
+        look: HomeLook(
+          linux: true,
+          environment: const {},
+          exists: (path) => throw StateError('looked at $path for Windows'),
+        ),
+        isMacOS: false,
+        isLinux: false,
+        isWindows: true,
+      ).harnessHome.path,
+      '${EnvironmentProvisioner.userHome()}${Platform.pathSeparator}.harness',
+    );
+  });
+
   test(
     'launch pre-flight is read-only when required tools are missing',
     () async {

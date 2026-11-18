@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/cli_link.dart';
 import 'package:harness/core/harness_cli_runner.dart';
 import 'package:harness/core/harness_home.dart';
+import 'package:path/path.dart' as p;
 
 void main() {
   late Directory scratch;
@@ -185,6 +186,21 @@ void main() {
       Platform.isLinux ? '/x/harness' : '/home/t/.harness',
     );
   }, skip: Platform.isWindows);
+
+  test('a Windows profile keeps the .harness layout on a Linux host', () {
+    expect(
+      HarnessCliRunner(
+        look: HomeLook(
+          linux: true,
+          environment: const {},
+          exists: (path) => throw StateError('looked at $path for Windows'),
+        ),
+        environment: const {'USERPROFILE': r'C:\Users\me'},
+        isWindows: true,
+      ).harnessHome.path,
+      p.join(r'C:\Users\me', '.harness'),
+    );
+  });
 
   group('on Linux', () {
     late Directory home;
