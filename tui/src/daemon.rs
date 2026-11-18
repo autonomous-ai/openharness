@@ -48,7 +48,27 @@ type Pending = Arc<Mutex<HashMap<String, (String, oneshot::Sender<(String, Value
 pub fn socket_path(port: u16) -> PathBuf {
     let dir = std::env::var_os("ADAPTER_DATA_DIR").filter(|s| !s.is_empty()).map(PathBuf::from)
         .unwrap_or_else(default_data_dir);
-    dir.join(format!("daemon-{port}.sock"))
+    socket_in(&dir, port, || {
+        crate::harness_home::harness_path(std::env::var_os("HOME").unwrap_or_default(), crate::harness_home::Entry::S)
+    })
+}
+
+/// The longest socket path the daemon opens (cli/src/lib/localSocket.ts MAX_SOCKET_PATH_BYTES).
+const MAX_SOCKET_PATH_BYTES: usize = 96;
+
+/// `daemon-<port>.sock` where the CLI's `socketPathIn` (cli/src/lib/localSocket.ts) puts it: in [dir], or, when that
+/// path is too long for a socket, in `<sockets>/<the first 16 hex of sha256(dir)>`. Windows keeps it in [dir], where
+/// the pipe's record is read from.
+fn socket_in(dir: &Path, port: u16, sockets: impl FnOnce() -> PathBuf) -> PathBuf {
+    use sha2::{Digest, Sha256};
+    let name = format!("daemon-{port}.sock");
+    let beside = dir.join(&name);
+    if cfg!(windows) || beside.as_os_str().len() <= MAX_SOCKET_PATH_BYTES {
+        return beside;
+    }
+    let hash = Sha256::digest(dir.as_os_str().as_encoded_bytes());
+    let folder: String = hash[..8].iter().map(|byte| format!("{byte:02x}")).collect();
+    sockets().join(folder).join(name)
 }
 
 /// The CLI's data folder when ADAPTER_DATA_DIR is unset: on Linux where the XDG rule puts it.

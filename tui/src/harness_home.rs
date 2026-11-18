@@ -12,7 +12,7 @@ const HARNESS_DIR: &str = ".harness";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Root { Data, State }
 
-/// What hn builds through the helper: tui and cli (Data), shell-requests (State).
+/// What hn builds through the helper: tui and cli (Data), shell-requests and s, the short socket folders (State).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Entry {
     Tui,
@@ -22,6 +22,7 @@ pub enum Entry {
     // Its callers are Unix only: a Windows hn has no Harness shell yet.
     #[cfg_attr(windows, allow(dead_code))]
     ShellRequests,
+    S,
 }
 
 impl Entry {
@@ -30,13 +31,14 @@ impl Entry {
             Entry::Tui => "tui",
             Entry::Cli => "cli",
             Entry::ShellRequests => "shell-requests",
+            Entry::S => "s",
         }
     }
 
     pub fn root(self) -> Root {
         match self {
             Entry::Tui | Entry::Cli => Root::Data,
-            Entry::ShellRequests => Root::State,
+            Entry::ShellRequests | Entry::S => Root::State,
         }
     }
 }
