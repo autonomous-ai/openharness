@@ -81,13 +81,14 @@ function ensureRuntimeDir(workspace: string, dir: string): void {
 
 /**
  * [path] at the dsh folder's new place when it names the old one: on Linux Harness's folder moves from `~/.harness` to the
- * XDG places, and a workspace's saved runtime and skill links still name the old folder. Only the default folder moves; a
- * DSH_DIR the person named is theirs.
+ * XDG places, and a workspace's saved runtime and skill links still name the old folder, by the home's real path too. Only
+ * the default folder moves; a DSH_DIR the person named is theirs.
  */
 function movedDshPath(path: string): string {
-  const legacy = legacyHarnessPath('dsh')
-  if (!path.startsWith(legacy + sep) || config.DSH_DIR === legacy || config.DSH_DIR !== harnessPath('dsh')) return path
-  return config.DSH_DIR + path.slice(legacy.length)
+  const now = harnessPath('dsh')
+  if (config.DSH_DIR !== now || now === legacyHarnessPath('dsh')) return path
+  const legacy = homeSpellings().map(home => legacyHarnessPath('dsh', home)).find(old => path.startsWith(old + sep))
+  return legacy ? now + path.slice(legacy.length) : path
 }
 
 function movedSnapshot(data: RuntimeSnapshot): RuntimeSnapshot {
