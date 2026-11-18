@@ -2,9 +2,9 @@
  * Who still uses the bridge (docs/plans/2026-11-18-linux-xdg-paths-design.md, The bridge service): one case per kind of
  * old user, the processes that are not one, and what the check reads of /proc, on a /proc written out here.
  */
-import { realpathSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { bootNow, type BridgeRecord } from './bridge.js'
+import type { BridgeRecord } from './bridge.js'
 import { oldUsers, procRows, type OldUserFacts, type ProcRow } from './oldUsers.js'
 
 const BOOT = 'c2a9e1d8-55a4-4c3e-9b8f-0f6d2d1e7a11'
@@ -213,6 +213,6 @@ describe('procRows', () => {
     const me = procRows().find(({ pid }) => pid === process.pid)
     expect(me).toMatchObject({ uid: process.getuid!(), parent: process.ppid, exe: realpathSync(process.execPath) })
     // A start time counts in ticks of a hundredth: it is that close to the one this process counts.
-    expect(Math.abs(me!.startedAt - (bootNow()!.uptime - process.uptime()))).toBeLessThan(0.5)
+    expect(Math.abs(me!.startedAt - (Number.parseFloat(readFileSync('/proc/uptime', 'utf8')) - process.uptime()))).toBeLessThan(0.5)
   })
 })

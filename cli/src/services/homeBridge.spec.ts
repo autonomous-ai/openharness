@@ -17,10 +17,10 @@ import { fakeCore } from '../testing/fakeCore.js'
 import { isolatedTmux } from '../testing/isolatedTmux.js'
 import { askForStore, CHECK_MS, startHomeBridge, startHomeBridgeInCore, type HomeBridgeDeps } from './homeBridge.js'
 
-const MOVED_AT = 1_700_001_234.56
-/** The boot the move ran in, 50 000 s into it, as /proc says it. */
-const BOOT = 'c2a9e1d8-55a4-4c3e-9b8f-0f6d2d1e7a11', MOVED_UPTIME = 50_000
-const PROC: Record<string, string> = { '/proc/sys/kernel/random/boot_id': `${BOOT}\n`, '/proc/uptime': `${MOVED_UPTIME}.00 999.00\n` }
+/** The move, 50 000 s into the boot it ran in, as /proc says them. */
+const BOOT = 'c2a9e1d8-55a4-4c3e-9b8f-0f6d2d1e7a11', BOOTED_AT = 1_700_000_000, MOVED_UPTIME = 50_000
+const MOVED_AT = BOOTED_AT + MOVED_UPTIME
+const PROC: Record<string, string> = { '/proc/sys/kernel/random/boot_id': `${BOOT}\n`, '/proc/stat': `cpu  1 2 3\nbtime ${BOOTED_AT}\n` }
 /** A minute before the move, in seconds since the boot. */
 const OLD = MOVED_UPTIME - 60
 /** tmux's answer with no server to list. */
@@ -89,7 +89,7 @@ let pids = 100
 const row = (over: Partial<ProcRow>): ProcRow => ({ pid: pids++, uid: ME, startedAt: OLD, name: 'bash', exe: '/usr/bin/bash', parent: 1, ...over })
 
 /**
- * What the service is handed on [h]: Linux, ten minutes later in the move's boot, no old user, no pane and no harness to
+ * What the service is handed on [h]: Linux, in the move's boot, no old user, no pane and no harness to
  * set up, unless [over] says otherwise. A member [over] sets to undefined is the service's own. The connections folder is
  * named: off Linux its default is ~/.harness's (lib/connectors/store.ts).
  */
@@ -97,7 +97,7 @@ function handed(h: Home, over: Partial<HomeBridgeDeps> = {}) {
   const log = vi.fn()
   const deps: Partial<HomeBridgeDeps> = {
     platform: 'linux', home: h.home, environment: { HOME: h.home, HARNESS_CONNECTIONS_DIR: h.connections }, socket: h.socket,
-    boot: () => ({ id: BOOT, uptime: MOVED_UPTIME + 600 }), rows: () => [], tmux: () => NO_SERVER,
+    bootId: () => BOOT, rows: () => [], tmux: () => NO_SERVER,
     setupsPending: async () => 0, askForStore: async () => {}, log, ...over,
   }
   return { log, given: Object.fromEntries(Object.entries(deps).filter(([, value]) => value !== undefined)) as Partial<HomeBridgeDeps> }
@@ -379,7 +379,7 @@ describe('the home bridge service', () => {
     await settle()
     expect(record(h)).toMatchObject({ state: 'bridged', oldProcesses: 2 })
     // Started again: whatever runs started after the move.
-    const { log } = start(h, { boot: () => ({ id: 'e5b0c3a1-0000-4000-8000-000000000000', uptime: 30 }), rows: () => users.map((each) => ({ ...each, startedAt: 10 })) })
+    const { log } = start(h, { bootId: () => 'e5b0c3a1-0000-4000-8000-000000000000', rows: () => users.map((each) => ({ ...each, startedAt: 10 })) })
     await settle()
     expect(existsSync(join(h.state, BRIDGE_FILE))).toBe(false)
     expect(log.mock.calls).toEqual([['home bridge: removed']])
@@ -387,7 +387,7 @@ describe('the home bridge service', () => {
 
   it('a /proc that names no boot fails the check, and the bridge stays', async () => {
     const h = movedHome()
-    const { bridge, log } = start(h, { boot: () => null })
+    const { bridge, log } = start(h, { bootId: () => null })
     await settle()
     expect(log.mock.calls).toEqual([['home bridge: a check failed: /proc gives no boot id · tried again in 10 minutes']])
     expect(existsSync(join(h.state, BRIDGE_FILE))).toBe(true)

@@ -15,7 +15,7 @@ import { openDaemon, whereFor, type Daemon } from '../agentClient/daemon.js'
 import { env } from '../config/env.js'
 import { harnessPath, harnessRoot, harnessRoots, legacyHarnessHome } from '../config/harnessHome.js'
 import type { CoreApi, ServiceRequests } from '../core/api.js'
-import { bootNow, BRIDGE_FILE, readBridge, removeBridge, serveOldPaths, type Boot, type Served } from '../homeMove/bridge.js'
+import { bootId, BRIDGE_FILE, readBridge, removeBridge, serveOldPaths, type Served } from '../homeMove/bridge.js'
 import { oldUsers, procRows, type ProcRow } from '../homeMove/oldUsers.js'
 import { OWN_FILES } from '../homeMove/plan.js'
 import { readMoveRecord, writeMoveRecord, type MoveRecord } from '../homeMove/record.js'
@@ -49,8 +49,8 @@ export interface HomeBridgeDeps {
   socket: string | null
   /** The daemon's first process, all the daemon's own processes under it: harnessd's master, this one's parent. */
   master: number
-  /** This boot (homeMove/bridge.ts bootNow). */
-  boot(): Boot | null
+  /** This boot's id (homeMove/bridge.ts). */
+  bootId(): string | null
   rows(): ProcRow[]
   /** Every pane on tmux's default server, each its process and its tag, as spawnSync gives tmux's answer. */
   tmux(): TmuxAnswer
@@ -110,7 +110,7 @@ export function startHomeBridgeInCore(core: CoreApi, given: Partial<HomeBridgeDe
 export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = {}): { stop(): void; connected(): void } {
   const deps: HomeBridgeDeps = {
     platform: process.platform, home: homedir(), environment: process.env, socket: unixSocketPath(core.dataDir, env.PORT),
-    master: process.ppid, boot: bootNow, rows: procRows, tmux: listPanes, setupsPending: pendingSetups, askForStore,
+    master: process.ppid, bootId, rows: procRows, tmux: listPanes, setupsPending: pendingSetups, askForStore,
     log: console.log, ...given,
   }
   // Nothing moves off Linux, and with no bridge.json there is no bridge to keep.
@@ -174,10 +174,10 @@ export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = 
 
   /** Who still uses the bridge, and the harnesses to set up again: once neither is left, the bridge goes. */
   const removeWhenUnused = async (): Promise<void> => {
-    const boot = deps.boot()
+    const boot = deps.bootId()
     // Without it no start time can be placed before or after the move.
     if (!boot) throw new Error('/proc gives no boot id')
-    const facts = { uid: process.getuid!(), master: deps.master, bootId: boot.id, roots, engines: ENGINES, apps: APPS, panePids: panePids() }
+    const facts = { uid: process.getuid!(), master: deps.master, bootId: boot, roots, engines: ENGINES, apps: APPS, panePids: panePids() }
     const count = oldUsers(bridge, deps.rows(), facts)
     note('bridged', count)
     // A harness set up before the move runs from the old paths until its setup has run again, which the Store does as it

@@ -12,7 +12,7 @@ export const BRIDGE_FILE = 'bridge.json'
 /** The entries the bridge keeps as real folders, because an old reader refuses a link there. */
 export const REAL_ENTRIES = ['hook-routes', 'connections'] as const
 
-/** A boot of this computer (/proc/sys/kernel/random/boot_id) and how long it had run, in seconds (/proc/uptime). */
+/** A boot of this computer (/proc/sys/kernel/random/boot_id) and how long it had run at the move, in seconds. */
 export interface Boot { id: string; uptime: number }
 
 /** `boot`: the boot the move ran in, when it was written; none where /proc has none, as no move is. */
@@ -43,10 +43,13 @@ const readText = (path: string): string => readFileSync(path, 'utf8')
 
 /**
  * Whole or not at all, and owner only: it names the old home. With the boot it is written in, read from /proc through
- * [read]: the old users are counted on that boot's clock.
+ * [read], and the move's time on that boot's clock, the one /proc start times count on, which no step of the wall clock
+ * moves: `movedAt` less the boot's time, as procNow added them, in the hundredths /proc counts. One move is written the
+ * same, however late.
  */
 export function writeBridge(stateRoot: string, record: Omit<BridgeRecord, 'boot'>, read: (path: string) => string = readText): void {
-  const boot = bootNow(read)
+  const id = bootId(read)
+  const boot = id === null ? null : { id, uptime: Math.round((record.movedAt - bootedAt(read)) * 100) / 100 }
   const file = join(stateRoot, BRIDGE_FILE), temporary = `${file}.${process.pid}.tmp`
   try {
     writeFileSync(temporary, `${JSON.stringify(boot ? { ...record, boot } : record)}\n`, { mode: 0o600 })
@@ -56,27 +59,30 @@ export function writeBridge(stateRoot: string, record: Omit<BridgeRecord, 'boot'
   }
 }
 
-/**
- * This boot, and how long it has run: the clock /proc's start times count on, which no step of the wall clock moves.
- * Null where /proc has neither file, off Linux, where nothing moves.
- */
-export function bootNow(read: (path: string) => string = readText): Boot | null {
-  let id: string, uptime: number
+/** This boot's id; null where /proc has none, off Linux, where nothing moves. */
+export function bootId(read: (path: string) => string = readText): string | null {
+  let id: string
   try {
     id = read('/proc/sys/kernel/random/boot_id').trim()
-    uptime = Number.parseFloat(read('/proc/uptime'))
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
     throw error
   }
-  if (!id || !Number.isFinite(uptime)) throw new Error('/proc gives no boot id or uptime')
-  return { id, uptime }
+  if (!id) throw new Error('/proc gives no boot id')
+  return id
+}
+
+/** When this boot started, in seconds since the epoch: btime of /proc/stat, which a step of the wall clock moves. */
+function bootedAt(read: (path: string) => string): number {
+  const btime = Number(/^btime (\d+)$/m.exec(read('/proc/stat'))?.[1])
+  if (!Number.isFinite(btime)) throw new Error('/proc gives no boot time')
+  return btime
 }
 
 /** The move's time in seconds since the epoch, as /proc reckons it: btime of /proc/stat plus /proc/uptime. */
 export function procNow(read: (path: string) => string = readText): number {
-  const now = Number(/^btime (\d+)$/m.exec(read('/proc/stat'))?.[1]) + Number.parseFloat(read('/proc/uptime'))
-  if (!Number.isFinite(now)) throw new Error('/proc gives no boot time or uptime')
+  const now = bootedAt(read) + Number.parseFloat(read('/proc/uptime'))
+  if (!Number.isFinite(now)) throw new Error('/proc gives no uptime')
   return now
 }
 
