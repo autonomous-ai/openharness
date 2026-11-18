@@ -259,8 +259,17 @@ AppNotifier fixture(
   String sourceEngine = 'codex',
   String? claudeHome,
   String? codexHome,
+  HomeLook? homeLook,
 }) {
-  final app = createApp(connectionForTest: (_) => connection, connected: true);
+  final app = createApp(connectionForTest: (_) => connection, connected: true)
+    // macOS unless a test says otherwise: the folders it pins are ~/.harness's.
+    ..homeLook =
+        homeLook ??
+        HomeLook(
+          linux: false,
+          environment: const {},
+          exists: (path) => throw StateError('looked at $path off Linux'),
+        );
   connection.app = app;
   final source = Agent(
     id: 'a0',
@@ -1749,12 +1758,7 @@ void main() {
       expect(claudeReads(), 12);
     });
 
-    // The listed home's profiles folder by this computer's rule, as Desktop
-    // finds it: the layout is not what these tests are about.
-    final profiles = HarnessHome.of(
-      '/home/me',
-      join: separatorJoin('/'),
-    ).path(HarnessEntry.claudeProfiles);
+    const profiles = '/home/me/.harness/claude-profiles';
 
     test('Add Claude account… skips folders that are listed or used by an agent, and a double click adds one', () async {
       final connection = ProfileConnection();
@@ -1804,6 +1808,29 @@ void main() {
         expect(notice, 'Run /login, then pick it again');
       },
     );
+
+    test('on Linux, Add Claude account… opens Claude in the data root\'s claude-profiles', () async {
+      final connection = ProfileConnection();
+      final app = fixture(
+        connection,
+        sourceEngine: 'codex',
+        homeLook: HomeLook(
+          linux: true,
+          environment: const {},
+          exists: (path) => false,
+        ),
+      );
+      app.stateOf('m')!.localOnly = true;
+      addTearDown(app.dispose);
+      expect(await app.addClaudeAccount('m', 'a0'), isNull);
+      expect(
+        connection.creations.single,
+        containsPair(
+          'claudeHome',
+          '/home/me/.local/share/harness/claude-profiles/1',
+        ),
+      );
+    });
     test(
       'a remote machine is never asked for accounts and offers none',
       () async {

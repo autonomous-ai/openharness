@@ -47,9 +47,12 @@ class HarnessFileStore implements BatchLocalKeyValueStore {
     : directory = directory ?? Directory(defaultDirectoryPath());
 
   /// [entry] names the sibling under `~/.harness`; it defaults to this store's own.
+  /// [look] is for tests: Harness's folders are found by it, by this computer's
+  /// look at [environment] by default.
   static String defaultDirectoryPath({
     Map<String, String>? environment,
     HarnessEntry? entry,
+    HomeLook? look,
   }) {
     final home = maybeHomeDir(environment: environment);
     if (home == null) {
@@ -58,7 +61,7 @@ class HarnessFileStore implements BatchLocalKeyValueStore {
     return HarnessHome.of(
       home,
       join: _join,
-      look: platformHomeLook(environment: environment),
+      look: look ?? platformHomeLook(environment: environment),
     ).path(entry ?? _ownEntry);
   }
 

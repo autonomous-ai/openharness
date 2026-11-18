@@ -517,11 +517,16 @@ void main() {
   });
 
   test('forks are kept in the community folder under Harness home', () {
-    final importer = ForkProjectImporter();
-    expect(
-      importer.root.path,
-      HarnessHome.of(homeDir()).path(HarnessEntry.community),
+    final importer = ForkProjectImporter(
+      cli: HarnessCliRunner(
+        look: HomeLook(
+          linux: false,
+          environment: const {},
+          exists: (path) => throw StateError('looked at $path off Linux'),
+        ),
+      ),
     );
+    expect(importer.root.path, p.join(homeDir(), '.harness', 'community'));
   });
 
   test('godogen links the modules its store entry installed', () async {

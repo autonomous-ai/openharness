@@ -120,6 +120,11 @@ void main() {
   });
 
   group('this computer\'s look', () {
+    // The tests above pass a look; this one is what the app runs with.
+    test('runs the Linux rule on Linux only', () {
+      expect(platformHomeLook().linux, Platform.isLinux);
+    });
+
     test('reads the environment its caller hands it', () {
       const environment = {'HOME': '/home/t', 'XDG_DATA_HOME': '/x'};
       expect(
@@ -185,17 +190,22 @@ void main() {
       );
     });
 
-    test('an XDG variable\'s trailing slashes are dropped, as the CLI drops them', () {
-      expectRoots(
-        HarnessHome.of(
-          '/h',
-          join: separatorJoin('/'),
-          look: linux(environment: {'XDG_DATA_HOME': '/x/', 'XDG_STATE_HOME': '/y//'}),
-        ),
-        '/x/harness',
-        '/y/harness',
-      );
-    });
+    test(
+      'an XDG variable\'s trailing slashes are dropped, as the CLI drops them',
+      () {
+        expectRoots(
+          HarnessHome.of(
+            '/h',
+            join: separatorJoin('/'),
+            look: linux(
+              environment: {'XDG_DATA_HOME': '/x/', 'XDG_STATE_HOME': '/y//'},
+            ),
+          ),
+          '/x/harness',
+          '/y/harness',
+        );
+      },
+    );
 
     test('every entry goes to the root its label names', () {
       final home = of(linux());

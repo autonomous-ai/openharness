@@ -74,16 +74,16 @@ pub fn harness_root_with(home: &Path, root: Root, look: &Look) -> PathBuf {
     }
 }
 
-/// [harness_root_with] for this process, looked at again on each call so a move is followed.
-pub fn harness_root(home: impl AsRef<Path>, root: Root) -> PathBuf {
-    let env = |variable: &str| std::env::var_os(variable);
-    let look = Look { linux: cfg!(target_os = "linux"), env: &env, exists: &Path::exists };
-    harness_root_with(home.as_ref(), root, &look)
+/// `<its root>/<entry>`, by [harness_root_with].
+pub fn harness_path_with(home: &Path, entry: Entry, look: &Look) -> PathBuf {
+    harness_root_with(home, entry.root(), look).join(entry.name())
 }
 
-/// `<its root>/<entry>`.
+/// [harness_path_with] for this process, looked at again on each call so a move is followed.
 pub fn harness_path(home: impl AsRef<Path>, entry: Entry) -> PathBuf {
-    harness_root(home, entry.root()).join(entry.name())
+    let env = |variable: &str| std::env::var_os(variable);
+    let look = Look { linux: cfg!(target_os = "linux"), env: &env, exists: &Path::exists };
+    harness_path_with(home.as_ref(), entry, &look)
 }
 
 #[cfg(test)]
@@ -166,10 +166,16 @@ mod tests {
 
     #[test]
     fn every_entry_is_under_its_root() {
-        let entries = [(Entry::Tui, "tui", Root::Data), (Entry::Cli, "cli", Root::Data), (Entry::ShellRequests, "shell-requests", Root::State), (Entry::S, "s", Root::State)];
-        for (entry, name, root) in entries {
-            assert_eq!(entry.root(), root);
-            assert_eq!(harness_path("/h", entry), harness_root("/h", root).join(name));
+        let fresh_linux = Look { linux: true, env: &|_| None, exists: &|_| false };
+        let entries = [
+            (Entry::Tui, "/h/.harness/tui", "/h/.local/share/harness/tui"),
+            (Entry::Cli, "/h/.harness/cli", "/h/.local/share/harness/cli"),
+            (Entry::ShellRequests, "/h/.harness/shell-requests", "/h/.local/state/harness/shell-requests"),
+            (Entry::S, "/h/.harness/s", "/h/.local/state/harness/s"),
+        ];
+        for (entry, off_linux, linux) in entries {
+            assert_eq!(harness_path_with(Path::new("/h"), entry, &OFF_LINUX), PathBuf::from(off_linux));
+            assert_eq!(harness_path_with(Path::new("/h"), entry, &fresh_linux), PathBuf::from(linux));
         }
     }
 

@@ -11,7 +11,6 @@ import 'package:harness/ws/daemon_pipe_record.dart' show defaultDaemonDataDir;
 import 'package:harness/ws/local_cli_discovery.dart';
 import 'package:harness/ws/local_daemon_transport.dart';
 import 'package:harness/ws/ws_conn.dart';
-import 'package:path/path.dart' as p;
 
 const _computerId = '0123456789abcdef0123456789abcdef';
 
@@ -119,13 +118,12 @@ void main() {
   );
 
   group('defaultDaemonSocketPath', () {
-    // These homes' roots by this computer's rule, as the app finds them.
-    String cliOf(String home, HarnessJoin join) =>
-        HarnessHome.of(home, join: join).path(HarnessEntry.cli);
-    final shortSockets = HarnessHome.of(
-      '/h',
-      join: separatorJoin('/'),
-    ).path(HarnessEntry.s);
+    /// macOS: the rule must not look.
+    final offLinux = HomeLook(
+      linux: false,
+      environment: const {},
+      exists: (path) => throw StateError('looked at $path off Linux'),
+    );
 
     test('uses USERPROFILE when a Windows shell also sets HOME', () {
       expect(
@@ -139,8 +137,8 @@ void main() {
 
     test('is the socket for the daemon\'s port in the CLI data directory', () {
       expect(
-        defaultDaemonSocketPath(18473, environment: {'HOME': '/Users/me'}, isWindows: false),
-        '${cliOf('/Users/me', p.posix.join)}/data/daemon-18473.sock',
+        defaultDaemonSocketPath(18473, environment: {'HOME': '/Users/me'}, isWindows: false, look: offLinux),
+        '/Users/me/.harness/cli/data/daemon-18473.sock',
       );
       // Another port, another daemon, another socket.
       expect(
@@ -159,10 +157,9 @@ void main() {
           18473,
           environment: {'HOME': '/h', 'ADAPTER_DATA_DIR': '/${'x' * 100}'},
           isWindows: false,
+          look: offLinux,
         ),
-        matches(
-          RegExp('^${RegExp.escape(shortSockets)}/[0-9a-f]{16}/daemon-18473\\.sock\$'),
-        ),
+        matches(RegExp(r'^/h/\.harness/s/[0-9a-f]{16}/daemon-18473\.sock$')),
       );
       expect(
         defaultDaemonSocketPath(18473, environment: {'HOME': '/${'x' * 100}'}, isWindows: false),
@@ -177,8 +174,9 @@ void main() {
           1,
           environment: {'HOME': '/h', 'ADAPTER_DATA_DIR': '/${'x' * 100}'},
           isWindows: false,
+          look: offLinux,
         ),
-        '$shortSockets/e50e7828cbafcbee/daemon-1.sock',
+        '/h/.harness/s/e50e7828cbafcbee/daemon-1.sock',
       );
     });
 
@@ -211,22 +209,6 @@ void main() {
           ),
         ),
         '/h/.local/share/harness/cli/data/daemon-1.sock',
-      );
-    });
-
-    test('on macOS the short socket folder is under ~/.harness', () {
-      expect(
-        defaultDaemonSocketPath(
-          1,
-          environment: {'HOME': '/h', 'ADAPTER_DATA_DIR': '/${'x' * 100}'},
-          isWindows: false,
-          look: HomeLook(
-            linux: false,
-            environment: const {},
-            exists: (path) => throw StateError('looked at $path off Linux'),
-          ),
-        ),
-        '/h/.harness/s/e50e7828cbafcbee/daemon-1.sock',
       );
     });
 

@@ -5,7 +5,6 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/harness_home.dart';
 import 'package:harness/ws/daemon_pipe_record.dart';
-import 'package:path/path.dart' as p;
 
 const _id = '0123456789abcdef0123456789abcdef';
 const _pipe = r'\\.\pipe\harness-' + _id;
@@ -38,20 +37,35 @@ void main() {
           ),
           r'C:\Users\Nguyễn Văn A\.harness\cli\data',
         );
-        // Elsewhere HOME's CLI folder by this computer's rule.
         expect(
           defaultDaemonDataDir(
             environment: {'HOME': '/Users/me'},
             isWindows: false,
+            look: HomeLook(
+              linux: false,
+              environment: const {},
+              exists: (path) => throw StateError('looked at $path off Linux'),
+            ),
           ),
-          p.posix.join(
-            HarnessHome.of('/Users/me', join: p.posix.join)
-                .path(HarnessEntry.cli),
-            'data',
-          ),
+          '/Users/me/.harness/cli/data',
         );
       },
     );
+
+    test('on a fresh Linux home it is in the XDG data root', () {
+      expect(
+        defaultDaemonDataDir(
+          environment: {'HOME': '/home/me'},
+          isWindows: false,
+          look: HomeLook(
+            linux: true,
+            environment: const {},
+            exists: (path) => false,
+          ),
+        ),
+        '/home/me/.local/share/harness/cli/data',
+      );
+    });
 
     test('reads the XDG variables of the environment it is handed', () {
       expect(

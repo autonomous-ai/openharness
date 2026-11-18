@@ -4555,6 +4555,11 @@ class AppNotifier extends ChangeNotifier {
   /// The first workspace on a computer new to Harness opens with agents already in it.
   final FirstArrival firstArrival;
 
+  /// How this app finds Harness's folders: this computer's look, or a test's,
+  /// so a folder a test pins does not depend on the computer running it.
+  @visibleForTesting
+  HomeLook? homeLook;
+
   /// Whether this computer had the Harness CLI before this launch's setup: `~/.harness/cli`
   /// exists. Tests answer no, as on a fresh computer.
   @visibleForTesting
@@ -14888,7 +14893,7 @@ class AppNotifier extends ChangeNotifier {
         for (final a in stateOf(machineId)?.agents ?? const <Agent>[])
           a.claudeHome,
       };
-      final path = newClaudeAccountFolder(home, taken);
+      final path = newClaudeAccountFolder(home, taken, look: homeLook);
       // The folder only exists once Claude has signed in there; the machine finds it by itself then.
       final error = await createAgent(
         machineId,

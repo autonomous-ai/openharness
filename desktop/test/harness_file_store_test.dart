@@ -12,8 +12,20 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   late Directory scratch;
   late Directory dataDirectory;
-  // The tester's Harness home by this computer's rule, as the store finds it.
-  final tester = HarnessHome.of('/Users/tester', join: separatorJoin('/'));
+
+  /// macOS or Windows: the rule must not look.
+  final offLinux = HomeLook(
+    linux: false,
+    environment: const {},
+    exists: (path) => throw StateError('looked at $path off Linux'),
+  );
+
+  /// A fresh Linux home: no Harness folder yet.
+  final freshLinux = HomeLook(
+    linux: true,
+    environment: const {},
+    exists: (path) => false,
+  );
 
   setUp(() async {
     scratch = await Directory.systemTemp.createTemp('desktop-file-store-test-');
@@ -29,22 +41,38 @@ void main() {
   test('defaults to the Desktop directory beneath Harness home', () {
     final path = HarnessFileStore.defaultDirectoryPath(
       environment: {'HOME': '/Users/tester'},
+      look: offLinux,
     );
 
-    expect(path, tester.path(HarnessEntry.desktopApp));
+    expect(path, '/Users/tester/.harness/desktop-app-v2');
   }, skip: Platform.isWindows);
 
   test('names a sibling under Harness home', () {
     String sibling(HarnessEntry entry) => HarnessFileStore.defaultDirectoryPath(
       environment: {'HOME': '/Users/tester'},
       entry: entry,
+      look: offLinux,
     );
 
-    expect(sibling(HarnessEntry.logs), tester.path(HarnessEntry.logs));
-    expect(sibling(HarnessEntry.flasher), tester.path(HarnessEntry.flasher));
+    expect(sibling(HarnessEntry.logs), '/Users/tester/.harness/logs');
+    expect(sibling(HarnessEntry.flasher), '/Users/tester/.harness/flasher');
     expect(
       sibling(HarnessEntry.uninstalling),
-      tester.path(HarnessEntry.uninstalling),
+      '/Users/tester/.harness/uninstalling',
+    );
+  }, skip: Platform.isWindows);
+
+  test('on Linux the store is in the data root and a state sibling in the state root', () {
+    String path({HarnessEntry? entry}) => HarnessFileStore.defaultDirectoryPath(
+      environment: {'HOME': '/home/tester'},
+      entry: entry,
+      look: freshLinux,
+    );
+
+    expect(path(), '/home/tester/.local/share/harness/desktop-app-v2');
+    expect(
+      path(entry: HarnessEntry.logs),
+      '/home/tester/.local/state/harness/logs',
     );
   }, skip: Platform.isWindows);
 
