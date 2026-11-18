@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmdirSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join, posix } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -142,6 +142,10 @@ describe('Harness\'s home folder', () => {
       process.env.XDG_DATA_HOME = posix.join(home, 'data')
       mkdirSync(join(home, 'data', 'harness'), { recursive: true })
       expect(harnessRoot('data', home, 'linux')).toBe(posix.join(home, '.harness'))
+      // The marker is a file, as the installers, Desktop and hn look for it: a folder of its name is none.
+      mkdirSync(join(home, 'data', 'harness', '.harness-root'))
+      expect(harnessRoot('data', home, 'linux')).toBe(posix.join(home, '.harness'))
+      rmdirSync(join(home, 'data', 'harness', '.harness-root'))
       writeFileSync(join(home, 'data', 'harness', '.harness-root'), '1\n')
       expect(harnessRoot('data', home, 'linux')).toBe(posix.join(home, 'data', 'harness'))
     } finally {

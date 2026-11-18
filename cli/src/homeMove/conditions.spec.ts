@@ -68,6 +68,12 @@ describe('whether the move runs: the first condition that holds decides', () => 
     expect(await checkMove(deps(home))).toMatchObject({ move: true })
   })
 
+  it('a folder named as the marker is none → the move runs', async () => {
+    const { home } = legacyHome()
+    mkdirSync(join(home, '.local', 'share', 'harness', '.harness-root'), { recursive: true })
+    expect(await checkMove(deps(home))).toMatchObject({ move: true })
+  })
+
   it('no ~/.harness → no hold', async () => {
     expect(await checkMove(deps(folder()))).toEqual(NONE)
   })

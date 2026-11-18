@@ -126,7 +126,7 @@ const markerOf = (t: Home): string => join(t.data, '.harness-root')
 
 /** The lines of harness.log in the data folder where it is now: an override's, the XDG one once moved, else ~/.harness's. */
 function logOf(t: Home, env: NodeJS.ProcessEnv = {}): string[] {
-  const folder = env.ADAPTER_DATA_DIR ?? join(existsSync(markerOf(t)) ? t.data : t.legacy, 'cli', 'data')
+  const folder = env.ADAPTER_DATA_DIR ?? join(statSync(markerOf(t), { throwIfNoEntry: false })?.isFile() ? t.data : t.legacy, 'cli', 'data')
   try {
     return readFileSync(join(folder, 'harness.log'), 'utf8').split('\n').filter(Boolean)
   } catch {
@@ -262,6 +262,17 @@ describe('the move at a start', () => {
     expect(readFileSync(join(t.legacy, 'auth', 'session.json'), 'utf8')).toBe('{"token":"t-1"}')
     expect(readdirSync(t.data)).toEqual(['theirs.txt'])
     expect(existsSync(t.state)).toBe(false)
+    expect(t.execs).toEqual([])
+  })
+
+  it('a folder named as the marker is none: the move refuses the data root with target-exists, and ~/.harness is as it was', async () => {
+    const t = legacyHome()
+    mkdirSync(markerOf(t), { recursive: true })
+    await moveHomeAtStart(argvOf(t, 'start'), {}, t.deps())
+    expect(logOf(t)).toEqual(['home move: failed target-exists · ~/.harness is as it was'])
+    expect(readMoveRecord(t.home, {})).toMatchObject({ state: 'failed', reason: 'target-exists' })
+    expect(readFileSync(join(t.legacy, 'auth', 'session.json'), 'utf8')).toBe('{"token":"t-1"}')
+    expect(readdirSync(t.data)).toEqual(['.harness-root'])
     expect(t.execs).toEqual([])
   })
 

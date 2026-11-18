@@ -2,6 +2,9 @@
  * Harness's two roots as the companions find them: the CLI's rule (cli/src/config/harnessHome.ts), written again
  * here because the package ships alone. Each case passes its platform and existence check, so it runs anywhere.
  */
+import { mkdirSync, mkdtempSync, rmdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, posix } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { harnessRoots } from './harnessRoots.js'
 
@@ -38,6 +41,21 @@ describe('harnessRoots', () => {
     expect(harnessRoots('/h', env, 'linux', existing())).toEqual({ data: '/d/harness', state: '/s/harness' })
     expect(harnessRoots('/h', env, 'linux', existing('/h/.harness', marker('/d/harness')))).toEqual({ data: '/d/harness', state: '/s/harness' })
     expect(harnessRoots('/h', env, 'linux', existing('/h/.harness', marker(XDG.data)))).toEqual({ data: '/h/.harness', state: '/h/.harness' })
+  })
+
+  it('on disk the marker is a file, as the installers, Desktop and hn look for it: a folder of its name is none', () => {
+    const home = mkdtempSync(join(tmpdir(), 'companion-roots-'))
+    try {
+      const data = posix.join(home, '.local', 'share', 'harness'), legacy = posix.join(home, '.harness')
+      mkdirSync(legacy)
+      mkdirSync(marker(data), { recursive: true })
+      expect(harnessRoots(home, {}, 'linux')).toEqual({ data: legacy, state: legacy })
+      rmdirSync(marker(data))
+      writeFileSync(marker(data), '1\n')
+      expect(harnessRoots(home, {}, 'linux')).toEqual({ data, state: posix.join(home, '.local', 'state', 'harness') })
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
   })
 
   it('macOS and Windows never run the rule', () => {

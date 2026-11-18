@@ -2182,6 +2182,8 @@ describe('the hook finds Harness\'s folders by the rule', () => {
     ['a legacy Linux home', 'linux', ['.harness']],
     // Made by something else: the machine stays where its files are.
     ['a Linux home with a data root that holds no marker', 'linux', ['.harness', '.local/share/harness']],
+    // The marker is a file: a folder of its name is none.
+    ['a Linux home with a folder named as the marker', 'linux', ['.harness', '.local/share/harness/.harness-root']],
     ['macOS', 'darwin', ['.harness', '.local/share/harness']],
   ] as const)('on %s the fallbacks are under ~/.harness, as before', async (_name, platform, folders) => {
     const home = homeWith(...folders)
