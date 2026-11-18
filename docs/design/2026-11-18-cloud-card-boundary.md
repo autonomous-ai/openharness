@@ -2,50 +2,28 @@
 
 ## Design
 
-The Cloud service already renders the last answer. Move its transition policy and
-last-notified-answer map out of `core/agents/cloud.ts` too. The existing private
-Cloud publication carries the complete harness list and zero or one prepared card
-per harness in the same message. Core validates that every card belongs to a
-published Cloud harness before forwarding it; terminal/session ownership and
-question answer authority remain unchanged. No new process, broker, listener or
-core-side feature cache is introduced.
+Cloud owns its transition policy, accepted transition checkpoint, durable publication intent and bounded ordered
+output queue. Core keeps only its existing accepted Cloud owner rows. A private publication contains the complete
+normalized owner image and at most one prepared card per owner; core admits the entire batch, acknowledges it and
+emits each changed row with its card before deletions. Malformed rows, duplicate normalized owners and invalid cards
+leave accepted state unchanged. Core has no new receipt, deduplication or feature-history map.
 
-The component suppresses old answers on its first publication, emits working
-cards for busy harnesses, and preserves the existing working/done/error/summary
-transitions thereafter. A reconnect republishes working cards so a replacement
-core can restore existing observers. A surviving core can receive the same
-working card again; these cards have no completion notification and overwrite the
-same tile. Completion summaries are never replayed merely by reconnecting.
+The component writes an accepted/pending checkpoint beside the existing provider state before sending output.
+Only acknowledgement or recovery readback advances its notification history. On a physical reconnect, a fingerprint
+of core's existing accepted rows identifies whether pending output was applied. Matching accepted/pending images
+retain completion history; verified empty core authority initializes quietly from saved provider sessions. An
+unprovable journal holds Cloud visibly until the operator explicitly restarts Harness. No automatic core restart or
+fallback core renderer is added. Full details, bounds, failure states and data compatibility are below.
 
-Growth: the component retains one busy bit and notified-answer string per Cloud
-harness, deleting both when that harness disappears. Core loses its separate
-notified-answer map. Existing Cloud list growth is unchanged; this increment does
-not establish a bound for the persistent Cloud catalogue. Each publication has at
-most one card per row and remains subject to the existing private IPC frame bound.
+Normal publication has no new core read. The recovery-only fingerprint reads the existing core map; journal I/O,
+transition calculation, output serialization and backpressure belong to Cloud's component. Provider sessions and the
+saved `harnesses` array keep their existing format; optional checked `publication` metadata is additive. Public app
+frames retain existing normalization. Rollback uses a whole private worker cohort; contract 2 retains its original
+implementation, and this extraction belongs to the unreleased contract 3 cohort.
 
-Concurrency: publication and card calculation are synchronous in the Cloud
-component, and list/card admission and emission are synchronous in core. There is
-no await between selecting a published owner and emitting its card. Existing
-per-harness service queues and question-before-list ordering remain in force.
-
-Read cost: no filesystem or network read is added. Only transitions produce cards in the component; no extra timer or polling loop is added. Measure the same fixed
-publication workload before/after at current and 10x row counts, including IPC
-bytes and core/worker CPU separately. Catalogue growth remains a separate limit.
-
-Compatibility: this is private worker protocol under the already-unreleased
-contract 3 cohort. Contract 2 cohorts run their original complete implementation;
-the supervisor reaps workers before changing cohorts. Public app frames, stored
-Cloud data and the last 30 days of client contracts are unchanged. The service
-still computes cards for legacy stored rows before publication. Removing core's
-pre-13-November missing-card renderer does not change whole-build rollback.
-
-Migration/rollback: no stored format changes or migration. Roll back the complete
-cohort; never mix private worker implementations. Audience: only the authenticated
-Cloud service can publish, and a card can name only a Cloud row in that publication.
-Identity: no login or launch authority moves. Failure: malformed card batches are
-refused with a fixed log code, without content; an unavailable Cloud process costs
-its cards, not terminal agents. Platforms: portable TypeScript on macOS/Linux;
-Windows execution is deferred by the owner.
+Only the authenticated current Cloud connection can read or publish these owners or ask/close their questions. No
+login or launch authority moves. Windows execution remains deferred by the owner; the implementation is portable
+TypeScript. Packaged process/cohort proof and matched cost acceptance remain open holds after source validation.
 
 ## Validation selected before implementation
 
@@ -61,7 +39,7 @@ matched publication costs remain required before acceptance.
 Question construction, Cloud agent-list presentation and other feature routes
 remain explicit residuals; moving transitions alone does not finish all extraction.
 
-## Source checkpoint
+## Initial volatile checkpoint (superseded)
 
 The original code fails both behavioral REDs: the real Cloud service supplies no
 prepared card, and core synthesizes cards when no component card was supplied
@@ -81,9 +59,9 @@ The final fixed-source receipt `20261118T051021.783039Z-35208` exits 0: 130 case
 across nine suites, architecture included, and types. All four selected runtime
 files have 100% statements, branches, functions and lines (334/332/149/255).
 
-## Independent review hold
+## Independent review of the initial candidate (corrected below)
 
-This candidate is not integrated. Independent review reproduced a lost completion
+The initial candidate was held out of integration. Independent review reproduced a lost completion
 when the service link drops, its provider finishes, and the same core receives the
 reconnected idle publication. The previous implementation emits the completion;
 this candidate clears component history and emits none. The actual red receipt is
@@ -215,3 +193,20 @@ Private owner batches are admitted whole: a non-list, malformed row or duplicate
 `CLOUD_PUBLICATION_INVALID` before any accepted row or client output changes. The component enforces the same
 rule before preparing a snapshot, so normalization never silently withdraws an invalid provider row. Normalizing
 valid fields retains the existing public frames. This is a boundary validation change, with no new core state.
+
+
+## Final source checkpoint
+
+Runtime checkpoint `2afeaeb15e` passes types and 237 cases across 15 selected suites. The final receipt is
+`20261118T070057.161740Z-75066`; it includes verified owned-process cleanup. All six selected files reach 100%
+statements, branches, functions and lines (621/521/196/428): core owner admission, the experiment dispatcher,
+processCoreApi, cloudProcess, the component card producer and its publication journal. The preceding receipt
+`20261118T065807.118285Z-72550` retains its `cleanup_failed` status: checks exited zero, but sandbox policy blocked
+the wrapper's `ps` inspection. The single permitted repeat completed that required cleanup check.
+
+The real-service cases cover retained/replaced core, component restart, a lost acknowledgement followed by rename,
+optimistic-state crashes before/after apply, failed intent writes, missing/corrupt/damaged/unmatched journals,
+provider-data preservation and capacity reservation before provider effects. Ordered-output tests cover repeated
+working/completion cycles, row/card/deletion/question order, same-image and empty-image recovery, final physical
+connection fencing, deadlines, and count/byte/catalog/wire limits. Real-dispatcher REDs prove whole-batch rejection.
+This is source acceptance only. No cost measurement or packaged restart/cohort execution is claimed by this receipt.
