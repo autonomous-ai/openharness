@@ -746,12 +746,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (route.page && observed?.byPane(route.adapter.id, route.pane.id)?.state === 'needs-you') route.page = false
     route.adapter.scroll!(route.pane, route.lines.take(phase, dy), route.page)
   }
-  /** What a stroke on that target waits on at its down: Herdr's whether its pane is on screen (its lines, or no pane:
+  /** What a stroke on that target waits on at its down: Herdr's whether its pane is on screen (its lines, or off screen:
    *  the stroke's `otherwise`), or whether the shown Claude Code takes its page keys (page, or lines). None when the
    *  stroke is lines at once: any other engine, or a guard that refused with nothing read. A refused guard is the pane's
    *  lines, never the windows: the person looks at that terminal, and its line scroll is what moved it before. */
-  const routeOf = ({ adapter, pane }: ScrollTarget): Promise<'page' | 'lines' | 'windows'> | undefined => {
-    if (adapter.onScreen) return adapter.onScreen(pane).then((visible) => (visible ? 'lines' : 'windows'))
+  const routeOf = ({ adapter, pane }: ScrollTarget): Promise<'page' | 'lines' | 'offScreen'> | undefined => {
+    if (adapter.onScreen) return adapter.onScreen(pane).then((visible) => (visible ? 'lines' : 'offScreen'))
     const agent = observed?.byPane(adapter.id, pane.id)
     if (agent?.engine !== 'claude') return undefined
     const keys = adapter.pageKeys?.(pane, {
@@ -759,14 +759,14 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     })
     return keys ? keys.then((page) => (page ? 'page' : 'lines')) : undefined
   }
-  /** The app's answer, page, lines or no pane (the stroke's `otherwise`), for the stroke that asked it alone: one left
+  /** The app's answer, page, lines or off screen (the stroke's `otherwise`), for the stroke that asked it alone: one left
    *  behind by a newer stroke, or one that lands once the devices began to stop (the dial still sends while the stop
    *  awaits its listener), is dropped, so nothing of that stroke is sent anywhere. A stroke already decided keeps its
    *  route through the stop: a window that heard its down hears its up. */
-  const decided = (asked: { deciding: ScrollTarget; held: Held; otherwise: OffPane }, to: 'page' | 'lines' | 'windows'): void => {
+  const decided = (asked: { deciding: ScrollTarget; held: Held; otherwise: OffPane }, to: 'page' | 'lines' | 'offScreen'): void => {
     if (stopped || stroke !== asked) return
     const { deciding: { adapter, pane }, held } = asked
-    if (to !== 'windows') {
+    if (to !== 'offScreen') {
       // The travel held meanwhile goes as lines at once; what follows goes line by line.
       const route = { adapter, pane, lines: createScrollLines(), page: to === 'page' }
       stroke = held.up === undefined ? route : undefined
@@ -787,7 +787,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // A held up ended its stroke too: a frame after it begins a new one, and the older answer is stale.
     if (phase === 'down' || !route || (typeof route === 'object' && 'held' in route && route.held.up !== undefined)) {
       // An older stroke held for its page guard is its pane's lines whatever the answer (routeOf): what it held goes out
-      // now, with no page, as the answer it waited on is left behind. One held for Herdr's on screen may be the windows'.
+      // now, with no page, as the answer it waited on is left behind. One held for Herdr's on screen may be off screen.
       if (typeof route === 'object' && 'held' in route && !route.deciding.adapter.onScreen && !stopped) {
         toPane({ ...route.deciding, lines: createScrollLines(), page: false }, 'move', route.held.dy)
       }

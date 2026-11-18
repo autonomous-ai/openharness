@@ -6904,7 +6904,8 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
   })
 
   // A stroke scrolls Herdr's view of the shown agent's terminal while Herdr is in front and its window shows that terminal
-  // on screen; any other stroke goes to Harness's windows as before.
+  // on screen; any other stroke goes to Harness's windows only while the dial holds the window's tab or shows a Harness
+  // agent, and nowhere otherwise (docs/plans/2026-11-18-dial-pick-focus-back-design.md).
   describe('a stroke on the dial scrolls Herdr (docs/plans/2026-11-17-dial-herdr-scroll-design.md)', () => {
     const DIAL = {}
     /** The agent the dial shows, as its cable session tells the host; null for none. */
