@@ -1040,3 +1040,40 @@ coverage for the missing branches remains acceptance work. Exact receipts:
 `/tmp/core-grid-storage-create-admitted-phase-final1-20261118.*`,
 `/tmp/core-grid-storage-resume-followup-types2-20261118.*`, and
 `/tmp/core-grid-storage-resume-followup-full-gate1-20261118.*`.
+
+## Resume acceptance: archive authority coverage
+
+The remaining coverage adds behavior checks without changing production code. A held
+archive read cannot launch after its selection is cancelled. A keep action creates its
+private container explicitly; ordinary listing remains read-only. Selected replies must
+name a valid stopped image and the requested conversation, and only the exact returned
+object receives its final image proof. Missing or unrelated list images cannot become
+archives; a fatal decoder failure rejects the whole listing instead of returning peers
+as a partial success.
+
+Real child-prepared images exercise source and live-authority loss before rename, with
+unchanged original bytes and a successful subsequent save. After actual rename and
+directory synchronization, ordinary errors and revoked live authority remain atomic
+uncertainty; an existing atomic error is preserved. A separate directory fsync fault
+retains the visible archive. Remove and supersede both refuse a revoked owner or an
+archive replaced after selection, preserving its replacement and resume reservation.
+The fixture attempts child cleanup even after Registry cleanup fails, and proves actual
+close and PID absence before deleting private data.
+
+The scoped selection passes 136 assertions and TypeScript. Its actual exit is 1 only
+because `StoppedAgentStore.close()` is exercised by the wider resume selection rather
+than these two files; every other branch is covered, and `resumeStoppedAgent` is 100%
+in all four metrics. This partial coverage result is preserved as
+`/tmp/core-grid-storage-resume-missing-authority-coverage1-20261118.*`; types are
+`/tmp/core-grid-storage-resume-missing-authority-types1-20261118.*`. Both owned groups
+settled without timeout or cleanup signal.
+
+The complete unchanged resume gate now passes: **615 tests in ten files**, with **100%
+statements, branches, functions and lines in each of its six required files**. Actual
+exit is 0 after 159.04 seconds; owned PID/group 50558 is absent, with no timeout or
+cleanup signal. The receipt and exact coverage output are
+`/tmp/core-grid-storage-resume-followup-full-gate2-20261118.*` and
+`/tmp/core-grid-storage-resume-followup-coverage2-20261118/coverage-final.json`.
+Production bytes remain those of the reviewed publication-phase checkpoint. This
+passes resume source acceptance, not the still-pending combined artifact, native
+admission and matched performance acceptance.

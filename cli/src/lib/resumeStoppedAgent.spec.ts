@@ -19,6 +19,22 @@ function fixture() {
 }
 
 describe('Enter resumes stopped work', () => {
+  it('refuses a selection cancelled while its saved archive is being read', async () => {
+    const deps = fixture()
+    let release!: (row: RegisteredSession) => void
+    deps.saved.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    const opening = resumeStoppedAgent(deps)
+    expect(deps.saved).toHaveBeenCalledOnce()
+    deps.current.mockReturnValue(false)
+    release(saved)
+    await expect(opening).resolves.toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
+    expect(deps.live).not.toHaveBeenCalled()
+    expect(deps.checkLive).not.toHaveBeenCalled()
+    expect(deps.retain).not.toHaveBeenCalled()
+    expect(deps.canLaunch).not.toHaveBeenCalled()
+    expect(deps.launch).not.toHaveBeenCalled()
+  })
+
   it('attaches an already live harness without launching or stopping it', async () => {
     const deps = fixture()
     deps.live.mockReturnValue(saved)

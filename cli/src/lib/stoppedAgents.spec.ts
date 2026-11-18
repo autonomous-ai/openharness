@@ -1,13 +1,14 @@
 import { releaseRegistryEngine, removeRegistryAgent } from '../testing/registryFixtures.js'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { chmodSync, constants, openSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, constants, existsSync, fstatSync, fsync, openSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createHash, randomUUID } from 'node:crypto'
 import type { RegisteredSession } from './registry.js'
 import type { ChildProcess } from 'node:child_process'
+import { closeSessionStorageFixture } from '../testing/sessionStorageFixture.js'
 
-vi.mock('node:fs', async original => { const fs = await original<typeof import('node:fs')>(); return { ...fs, openSync: vi.fn(fs.openSync), readFileSync: vi.fn(fs.readFileSync) } })
+vi.mock('node:fs', async original => { const fs = await original<typeof import('node:fs')>(); return { ...fs, openSync: vi.fn(fs.openSync), readFileSync: vi.fn(fs.readFileSync), fsync: vi.fn(fs.fsync) } })
 
 let directory = ''
 // The first import compiles registry.js's whole module graph: seconds on a loaded Mac. Paid once here, it stays out of the
@@ -21,15 +22,103 @@ beforeEach(() => {
   vi.stubEnv('ADAPTER_DATA_DIR', directory)
 })
 afterEach(async () => {
-  await (await import('./registry.js')).registry.flush()
-  await (await import('./sessionStorage.js')).sessionStorage.close()
   vi.mocked(openSync).mockRestore()
   vi.mocked(readFileSync).mockRestore()
+  vi.mocked(fsync).mockRestore()
+  const outcomes = await Promise.allSettled([(await import('./registry.js')).registry.flush()])
+  outcomes.push(...await Promise.allSettled([closeSessionStorageFixture((await import('./sessionStorage.js')).sessionStorage)]))
   vi.unstubAllEnvs()
+  const failures = outcomes.filter(result => result.status === 'rejected').map(result => result.reason)
+  if (failures.length) throw new AggregateError(failures, 'stopped fixture cleanup failed')
   rmSync(directory, { recursive: true, force: true })
 })
 
 describe('saved catalog reads', () => {
+  it('creates the private archive container only for the keep action and refuses an unsafe replacement', async () => {
+    const { store } = await fixture()
+    const folder = join(directory, 'stopped-agents')
+    expect(await store.list()).toEqual([])
+    expect(existsSync(folder)).toBe(false)
+    store.prepareSave()
+    expect(statSync(folder).mode & 0o777).toBe(0o700)
+    renameSync(folder, `${folder}-previous`)
+    symlinkSync(`${folder}-previous`, folder)
+    expect(() => store.prepareSave()).toThrow()
+    rmSync(folder)
+    renameSync(`${folder}-previous`, folder)
+    chmodSync(folder, 0o777)
+    expect(() => store.prepareSave()).toThrow()
+  })
+
+  it('rejects selected replies without an exact stopped image or the requested conversation', async () => {
+    const { saved, store } = await fixture()
+    const { conversationKey } = await import('./conversationIdentity.js')
+    const { sessionStorage } = await import('./sessionStorage.js')
+    await store.save(saved)
+    const image = await sessionStorage.read({ kind: 'stopped', agentId: saved.agentId })
+    if (image.state !== 'image' || !image.json) throw new Error('fixture image missing')
+    const key = conversationKey(saved)!
+    const answer = await store.query({ kind: 'owners', keys: [key], defaultCodexHome: saved.codexHome! })
+    const malformed = [
+      { state: 'missing' as const },
+      { ...image, proof: { ...image.proof, identity: 'invalid' } },
+      { ...image, proof: { ...image.proof, document: { kind: 'registry' as const } } },
+      { ...image, value: { version: 1, session: {} } },
+      { ...image, value: { version: 1, session: { ...saved, sessionId: 'not-requested' } } },
+    ]
+    const query = vi.spyOn(store, 'query')
+    try {
+      for (const wrong of malformed) {
+        query.mockResolvedValueOnce({ ...answer, selected: [wrong] })
+        await expect(store.selectConversations([key])).rejects.toMatchObject({ code: 'invalid' })
+      }
+    } finally { query.mockRestore() }
+    expect((await store.selectConversations([key])).map(row => row.agentId)).toEqual([saved.agentId])
+  })
+
+  it('grants final authority only to the exact read object while its file and container remain present', async () => {
+    const { saved, store } = await fixture()
+    await store.save(saved)
+    const selected = (await store.get(saved.agentId))!
+    expect(store.current(selected)).toBe(true)
+    expect(store.current({ ...selected })).toBe(false)
+    const file = join(directory, 'stopped-agents', `${saved.agentId}.json`)
+    rmSync(file)
+    expect(store.current(selected)).toBe(false)
+    await store.save(saved)
+    const fresh = (await store.get(saved.agentId))!
+    chmodSync(join(directory, 'stopped-agents'), 0o777)
+    expect(store.current(fresh)).toBe(false)
+  })
+
+  it('ignores missing and unrelated images without accepting them as archive rows', async () => {
+    const { saved, store } = await fixture()
+    await store.save(saved)
+    const { sessionStorage } = await import('./sessionStorage.js')
+    const image = await sessionStorage.read({ kind: 'stopped', agentId: saved.agentId })
+    if (image.state !== 'image') throw new Error('fixture image missing')
+    const listing = vi.spyOn(sessionStorage, 'stoppedList').mockImplementationOnce(async accept => {
+      accept({ state: 'missing' })
+      accept({ ...image, proof: { ...image.proof, document: { kind: 'registry' } } })
+      accept(image)
+    })
+    try { expect((await store.list()).map(row => row.agentId)).toEqual([saved.agentId]) }
+    finally { listing.mockRestore() }
+  })
+
+  it.each(['disconnected', 'unexpected'] as const)('fails the whole listing when row decoding reports %s', async kind => {
+    const { saved, store } = await fixture()
+    await store.save(saved)
+    await store.save({ ...saved, agentId: 'peer' })
+    const registryModule = await import('./registry.js')
+    const { SessionStorageUnavailable } = await import('./sessionStorageWire.js')
+    const failure = kind === 'disconnected' ? new SessionStorageUnavailable('disconnected') : new Error('fixture decoder failed')
+    const decode = vi.spyOn(registryModule, 'strictPersistedRow').mockImplementationOnce(() => { throw failure })
+    try { await expect(store.list()).rejects.toBe(failure) }
+    finally { decode.mockRestore() }
+    expect(await store.list()).toHaveLength(2)
+  })
+
   it('lists every archive in bounded pages instead of one storage request per file', async () => {
     const { saved, store } = await fixture()
     await store.save(saved)
@@ -263,6 +352,136 @@ describe('saved catalog reads', () => {
   })
 
 
+})
+
+describe('saved archive final authority', () => {
+  it.each(['owner', 'source'] as const)('refuses a save when its %s changes while storage prepares the image', async authority => {
+    const { saved, store } = await fixture()
+    await store.save(saved)
+    const file = join(directory, 'stopped-agents', `${saved.agentId}.json`)
+    const before = readFileSync(file, 'utf8')
+    const { sessionStorage } = await import('./sessionStorage.js')
+    const { RegistryPersistenceUnavailable, AtomicWriteUnconfirmed } = await import('./registryPersistence.js')
+    const prepare = sessionStorage.prepare.bind(sessionStorage)
+    let current = true
+    const paused = vi.spyOn(sessionStorage, 'prepare').mockImplementationOnce(async (...args) => {
+      const prepared = await prepare(...args)
+      current = false
+      return prepared
+    })
+    const valid = () => current
+    try {
+      const error = await store.save({ ...saved, title: 'Must not publish' },
+        authority === 'owner' ? valid : () => true, authority === 'source' ? valid : undefined).catch(error => error)
+      expect(error).toBeInstanceOf(RegistryPersistenceUnavailable)
+      expect(error).not.toBeInstanceOf(AtomicWriteUnconfirmed)
+      expect(readFileSync(file, 'utf8')).toBe(before)
+    } finally { paused.mockRestore() }
+    await store.save({ ...saved, title: 'Fresh authority' })
+    expect((await store.get(saved.agentId))?.title).toBe('Fresh authority')
+  })
+
+  it('keeps a prepublication preparation error definite and releases its source for the next save', async () => {
+    const { saved, store } = await fixture()
+    await store.save(saved)
+    const file = join(directory, 'stopped-agents', `${saved.agentId}.json`), before = readFileSync(file, 'utf8')
+    const { sessionStorage } = await import('./sessionStorage.js')
+    const failure = new Error('fixture preparation refused')
+    const prepare = vi.spyOn(sessionStorage, 'prepare').mockRejectedValueOnce(failure)
+    try {
+      await expect(store.save({ ...saved, title: 'Not published' })).rejects.toBe(failure)
+      expect(readFileSync(file, 'utf8')).toBe(before)
+    } finally { prepare.mockRestore() }
+    await store.save({ ...saved, title: 'Next write' })
+    expect((await store.get(saved.agentId))?.title).toBe('Next write')
+  })
+
+  it.each(['ordinary', 'atomic', 'owner'] as const)('preserves publication uncertainty after directory durability: %s', async failureKind => {
+    const { saved, store } = await fixture()
+    await store.save(saved)
+    const publication = await import('./sessionPublication.js')
+    const { AtomicWriteUnconfirmed, RegistryPersistenceUnavailable } = await import('./registryPersistence.js')
+    const failure = failureKind === 'atomic' ? new AtomicWriteUnconfirmed(new Error('fixture sync failed'))
+      : new Error('fixture after-sync failure')
+    const prepare = publication.prepareSessionPublication
+    let current = true
+    const paused = vi.spyOn(publication, 'prepareSessionPublication').mockImplementationOnce(async (...args) => {
+      const prepared = await prepare(...args), sync = prepared.sync.bind(prepared)
+      prepared.sync = async () => {
+        await sync()
+        if (failureKind === 'owner') current = false
+        else throw failure
+      }
+      return prepared
+    })
+    try {
+      const error = await store.save({ ...saved, title: 'Published but not admitted' }, () => current).catch(error => error)
+      expect(error).toBeInstanceOf(AtomicWriteUnconfirmed)
+      if (failureKind === 'atomic') expect(error).toBe(failure)
+      else {
+        expect(error.retryable).toBe(false)
+        if (failureKind === 'owner') expect(error.cause).toBeInstanceOf(RegistryPersistenceUnavailable)
+        else expect(error.cause).toBe(failure)
+      }
+      expect((await store.get(saved.agentId))?.title).toBe('Published but not admitted')
+    } finally { paused.mockRestore() }
+    await store.save({ ...saved, title: 'Confirmed successor' })
+    expect((await store.get(saved.agentId))?.title).toBe('Confirmed successor')
+  })
+
+  it('retains the archive when its directory fsync reports an uncertain write', async () => {
+    const { saved, store } = await fixture()
+    await store.save(saved)
+    const folder = join(directory, 'stopped-agents'), inode = statSync(folder).ino
+    const real = await vi.importActual<typeof import('node:fs')>('node:fs')
+    const { AtomicWriteUnconfirmed } = await import('./registryPersistence.js')
+    let failed = false
+    vi.mocked(fsync).mockImplementation((fd, callback) => {
+      if (!failed && fstatSync(fd).ino === inode) {
+        failed = true
+        queueMicrotask(() => callback(Object.assign(new Error('fixture disk failure'), { code: 'EIO' })))
+      } else real.fsync(fd, callback)
+    })
+    try {
+      await expect(store.save({ ...saved, title: 'Visible after rename' })).rejects.toBeInstanceOf(AtomicWriteUnconfirmed)
+      expect(failed).toBe(true)
+      expect((await store.get(saved.agentId))?.title).toBe('Visible after rename')
+    } finally { vi.mocked(fsync).mockRestore() }
+  })
+
+  it.each(['remove', 'supersede'] as const)('%s refuses a revoked owner or a replaced selected archive', async action => {
+    const { saved, store } = await fixture()
+    await store.save(saved)
+    const file = join(directory, 'stopped-agents', `${saved.agentId}.json`)
+    const before = readFileSync(file, 'utf8')
+    store.beginResume(saved.agentId)
+    const { RegistryPersistenceUnavailable } = await import('./registryPersistence.js')
+    await expect(store[action](saved.agentId, () => false)).rejects.toBeInstanceOf(RegistryPersistenceUnavailable)
+    expect(readFileSync(file, 'utf8')).toBe(before)
+    expect(store.resumeReservedAt(saved.agentId)).not.toBeNull()
+    const get = store.get.bind(store)
+    const selected = vi.spyOn(store, 'get').mockImplementationOnce(async id => {
+      const result = await get(id)
+      const replacement = JSON.parse(before)
+      replacement.session.title = 'Replacement archive'
+      writeFileSync(`${file}.replacement`, JSON.stringify(replacement), { mode: 0o600 })
+      renameSync(`${file}.replacement`, file)
+      return result
+    })
+    try { await expect(store[action](saved.agentId)).rejects.toBeInstanceOf(RegistryPersistenceUnavailable) }
+    finally { selected.mockRestore() }
+    expect((await store.get(saved.agentId))?.title).toBe('Replacement archive')
+    expect(store.resumeReservedAt(saved.agentId)).not.toBeNull()
+    expect(existsSync(join(directory, 'stopped-agents', 'superseded', `${saved.agentId}.json`))).toBe(false)
+  })
+
+  it('does not patch an unsafe archive identity', async () => {
+    const { saved, store } = await fixture()
+    await store.save(saved)
+    const before = (await store.get(saved.agentId))!
+    expect(await store.patch('../escape', { cwd: '/must-not-write' })).toBe(false)
+    expect(await store.get(saved.agentId)).toEqual(before)
+  })
 })
 
 async function fixture() {
