@@ -96,7 +96,7 @@ export async function prepareNativeLaunchSettings(input: LaunchSettingsInput, da
     if (!candidate) return null
     verify()
     if (!await commit()) return null
-    verify()
+    if (!active()) throw new HookPreparationHeld('the optional preparation was revoked')
     let outputCurrent: (() => boolean) | undefined
     if (candidate.values.settings !== null) {
       const content = statusLineScript()
@@ -105,6 +105,8 @@ export async function prepareNativeLaunchSettings(input: LaunchSettingsInput, da
         output!.verify()
         outputCurrent = () => { try { output!.verify(); return true } catch { return false } }
       } else {
+        // Publication needs a fresh source proof before its first effect; read-only reuse has the final proof below.
+        verify()
         let published: HookPreparationProof | undefined
         const written = await publishNativeFiles([{ file: destination!, mode: 0o600, parentMode: 0o700 }], async files => {
           if (files[0].content !== content) output!.verify()
@@ -114,7 +116,7 @@ export async function prepareNativeLaunchSettings(input: LaunchSettingsInput, da
         if (!written || !published) return null
         outputCurrent = published.current
       }
-    }
+    } else verify()
     verify()
     return (!outputCurrent || outputCurrent()) && active() ? candidate : null
   } catch {

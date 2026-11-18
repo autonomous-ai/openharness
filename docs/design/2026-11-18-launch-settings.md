@@ -976,3 +976,11 @@ by this implementation approval; the expected structural 19→15 warm file-proof
 Actual RED: `/tmp/core-launch-settings-worker-readonly-red.log`, exit 1 in 1.183 s, empty owned process group.
 Both exact-artifact cases observe two source passes instead of one; all seven mutation/admission/cold-publication
 controls pass (nine selected cases, 35 unrelated cases skipped). No fixture correction or runtime edit preceded RED.
+
+The runtime change is confined to `services/nativeLaunchSettings.ts`: fresh admission replaces the unconditional
+post-commit source pass; missing/different publication and no-output branches retain that full pass. The later source,
+output and admission checks are unchanged. The three selected suites pass 58/58 cases, actual exit 0 in 2.784 s,
+with 100% per-file coverage (107 statements, 86 branches, 14 functions, 76 lines). TypeScript passes actual exit 0 in
+7.307 s. Both owned process groups are empty; receipts are `/tmp/core-launch-settings-worker-readonly-green-receipt.json`
+and `-types-receipt.json`, with coverage under `/tmp/core-launch-settings-worker-readonly-coverage`.
+No new cost run was made. The v9 baseline, cold and combined-process performance holds remain open.
