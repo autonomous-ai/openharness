@@ -96,7 +96,8 @@ describe('owned packaged child execution', { timeout: 15_000 }, () => {
         expect(record.cli).toBe(selected)
       }
       expect(artifacts.releases).toEqual([])
-      expect(master.supervisor.status().state).toBe('running')
+      // The child writes its record before the parent's IPC handler observes readiness.
+      await vi.waitFor(() => expect(master.supervisor.status().state).toBe('running'))
     } finally { await master.stop() }
     expect(artifacts.releases).toEqual([1])
   })
@@ -144,7 +145,7 @@ describe('owned packaged child execution', { timeout: 15_000 }, () => {
       await vi.waitFor(() => expect(records().filter(record => record.role === 'search')).toHaveLength(2), { timeout: 5_000 })
       expect(records().filter(record => record.role === 'search').map(record => record.script)).toEqual([worker.script, worker.script])
       expect(artifacts.prepare).toHaveBeenCalledTimes(1)
-      expect(master.supervisor.status().state).toBe('running')
+      await vi.waitFor(() => expect(master.supervisor.status().state).toBe('running'))
     } finally { await master.stop() }
   })
 
