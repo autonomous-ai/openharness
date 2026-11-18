@@ -114,34 +114,48 @@ export function startSettledRecords<Row, Frame>(deps: {
     finish('cancelled')
     return false
   }
-  const send = (frame: Frame, ended = false): void => {
-    if (!current()) return
-    let settled = false
+  const send = (frame: Frame, ended = false): boolean => {
+    if (!current()) return false
+    let settled = false, sending = true, synchronousResult = false
     const done = (sent: boolean): void => {
       if (settled) return
       settled = true
+      // A callback cannot override a refusal or advance before the physical send returns.
+      if (sending) { synchronousResult = sent; return }
       if (!current()) return
       if (!sent) { finish('unavailable'); return }
       if (ended) { finish(null); return }
-      // A synchronously settling sink cannot recursively walk the whole source on this stack.
       next = setImmediate(advance)
     }
-    try { if (!deps.send(frame, done)) done(false) } catch { done(false) }
+    let accepted = false
+    try { accepted = deps.send(frame, done) } catch { /* a throwing transport refused this send */ }
+    sending = false
+    if (!current()) return false
+    if (!accepted || settled && !synchronousResult) { finish('unavailable'); return false }
+    if (!settled) return false
+    if (ended) { finish(null); return false }
+    return true
   }
   const advance = (): void => {
     next = undefined
-    if (!current()) return
-    try {
-      const row = deps.rows.next()
-      if (row.done) send(deps.end, true)
-      else {
+    const started = performance.now()
+    let count = 0
+    while (current()) {
+      try {
+        const row = deps.rows.next()
+        if (row.done) { send(deps.end, true); return }
         const frame = deps.row(row.value)
-        if (frame === null) next = setImmediate(advance)
-        else send(frame)
+        if (frame !== null && !send(frame)) return
+      } catch { finish('unavailable'); return }
+      // The V11 profile found one event-loop turn per synchronous record. Share a bounded slice,
+      // including filtered rows, without batching frames or borrowing the next physical credit.
+      if (++count >= 32 || performance.now() - started >= 2) {
+        if (current()) next = setImmediate(advance)
+        return
       }
-    } catch { finish('unavailable') }
+    }
   }
-  send(deps.begin)
+  if (send(deps.begin)) next = setImmediate(advance)
   return { cancel: () => finish('cancelled') }
 }
 

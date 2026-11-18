@@ -8,7 +8,7 @@ import type { StoreAgent } from '../lib/autonomous-device/store.js'
 export interface WifiView { agents: AutonomousDeviceAgent[]; store: StoreAgent[]; hasWindow: boolean }
 const canonicalPath = (path: string | null): string | null => {
   if (!path) return null
-  try { return realpathSync(path) } catch { return path }
+  try { return realpathSync.native(path) } catch { return path }
 }
 
 export function readWifiView(read: SessionRecordSource, machineId: string, signal?: AbortSignal, observe?: SessionRecordObserver): Promise<WifiView> {

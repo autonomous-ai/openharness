@@ -2,8 +2,8 @@
 
 ## Design (docs/feature-design-rules.md)
 
-Reviewed base: `ae9ec8a816d2bb1b3383e804af09e5de8a83349c`. Status: proposed for root review;
-source tests prepared, not executed. This continues the existing Wi-Fi extraction cost correction.
+Reviewed base: `ae9ec8a816d2bb1b3383e804af09e5de8a83349c`. Status: Design, RED tests and exact two-file runtime patch reviewed by root;
+approved focused RED/GREEN complete. This continues the existing Wi-Fi extraction cost correction.
 Only `core/questionObservation.ts` and `services/wifiView.ts` runtime change.
 
 ### Evidence and callers
@@ -100,3 +100,25 @@ After review, select questionObservation/sessionRead/agentQueries, actual Backen
 Wi-Fi view and authenticated process.pipe callers; cover both changed runtime files to 100%, run
 architecture and CLI types. Bounded workers only after root's quiet release. No broad repeat, build,
 native or timing now. Contract-6 packaged five-case acceptance remains pending independently.
+
+
+### Focused source evidence
+
+Test/Design commit `5ed3a41795` retains the unchanged ae9 runtime. Receipt
+`.harness/validation/20261118T211839.954868Z-68724/receipt.json`: actual exit 1,
+14 intended failures / 2 passing controls / 76 skipped. Failures expose the missing native reader,
+one-row scheduling and ignored contradictory send refusal in actual question/session callers.
+No fixture or environment failure was reclassified as a product RED.
+
+Applied only the reviewed two-file runtime patch (proposal SHA
+`f71bc789a2c0c2b12b917baa0590cf7544bc5d83a80a9675a1efb03755fac2e8`). The same 16-case
+selection then passed actual exit 0 in 2.4 s, receipt
+`.harness/validation/20261118T211859.455665Z-69135/receipt.json`. Its reused plan/check label
+remains `settled-read-red`; the receipt's dirty source hash binds the GREEN runtime and the log
+records 16 passed / 76 skipped. This label is not evidence of unchanged runtime.
+
+The reviewed final plan is `/tmp/core-wifi-bounded-pump-final-plan-20261119.json`: twelve selected
+caller/authority/architecture suites with one Vitest worker, 100% on the two changed runtime files,
+and types. It runs from the next clean runtime/evidence checkpoint. Final results are reported
+with its source-bound receipt, not inferred here. V11 performance HOLD and contract-6 native
+five-case acceptance remain open; no new benchmark, native run or build is part of this gate.
