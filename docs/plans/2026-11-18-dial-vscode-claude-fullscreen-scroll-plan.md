@@ -861,12 +861,12 @@ background(): Promise<void>
   1. A in a VS Code terminal, its project file `{"tui":"fullscreen"}`, the window connected, VS Code in
      front, the dial on A, A's shell active.
   2. **Fullscreen, foreground:** `down`, one `move` of `dy: 128` (320 px: 20 lines of 16), `up`. The window prints 20
-     `up` scrolls and one `up` key.
+     `up` scrolls and two `up` keys.
   3. **Default renderer:** the project file becomes `{"tui":"default"}`, the same stroke. The window prints 20 more
-     scrolls; its keys are still one. The loop sends a line's keys before its lines (Task 5), so the lines printed
+     scrolls; its keys are still two. The loop sends a line's keys before its lines (Task 5), so the lines printed
      mean no key came.
   4. **Background:** the project file back to `{"tui":"fullscreen"}`, `await a.background()` (Ctrl+Z), the same stroke. 20 more
-     scrolls; the keys are still one.
+     scrolls; the keys are still two.
   5. The devices' minute lines, summed (a stroke may fall either side of a minute): 1 page stroke, 1 refused
      `renderer`, 1 refused `background`.
   6. No `vscode` line holds a pid, a window id, the root's path or the word `fullscreen`, as the file's first case

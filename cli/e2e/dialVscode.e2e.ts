@@ -421,7 +421,7 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
     front(VSCODE)
     await turned(dial, a, "A's terminal shown", () => window.shows[0])
 
-    // A stroke toward older lines: 128 is 320 px, 20 lines of 16 (scrollLines.ts), one page. The loop presses a line's
+    // A stroke toward older lines: 128 is 320 px, 20 lines of 16 (scrollLines.ts), two pages of 8. The loop presses a line's
     // keys before it scrolls its lines, so once the window scrolled the stroke's 20 lines, any key of it came.
     let strokes = 0
     const stroke = async (): Promise<void> => {
@@ -432,20 +432,20 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
       await until(`stroke ${strokes}'s lines scrolled`, () => window.scrolls.length >= 20 * strokes, 30_000, 50)
     }
 
-    // 2. Fullscreen, its terminal's foreground program: one PageUp, in A's terminal.
+    // 2. Fullscreen, its terminal's foreground program: two PageUps, in A's terminal.
     await stroke()
-    expect(window.keys).toEqual([{ key: 'up', pid: a.shellPid }])
+    expect(window.keys).toEqual([{ key: 'up', pid: a.shellPid }, { key: 'up', pid: a.shellPid }])
 
     // 3. The default renderer: lines alone.
     tui('default')
     await stroke()
-    expect(window.keys).toHaveLength(1)
+    expect(window.keys).toHaveLength(2)
 
     // 4. Fullscreen again, suspended with Ctrl+Z, its shell in front of it in its terminal: lines alone.
     tui('fullscreen')
     await a.background()
     await stroke()
-    expect(window.keys).toHaveLength(1)
+    expect(window.keys).toHaveLength(2)
     expect(window.scrolls).toEqual(Array(60).fill('up'))
 
     // 5. The devices counted one page stroke, and a refusal for each other reason.
