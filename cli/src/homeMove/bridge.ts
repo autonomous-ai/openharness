@@ -21,9 +21,16 @@ export interface BridgeRecord { version: 1; movedAt: number; oldHome: string; ol
 /**
  * What the bridge serves, from the daemon's own paths. `routes`: its data folder and port. `sockets`: each socket an old
  * client looks for, by the folder it names (`oldFolder`), with the folder the socket is in now. `files`: what the real
- * `connections` holds for an old agent's MCP shim, by its name there.
+ * `connections` holds for an old agent's MCP shim, by its name there. `runtime`: the account's runtime folder's short
+ * root (lib/localSocket.ts runtimeShortRoot), where today's hook script looks for an old folder's socket too; null when
+ * the account has none.
  */
-export interface Served { routes: { dataDir: string; port: number }; sockets: { oldFolder: string; folder: string; name: string }[]; files: { from: string; name: string }[] }
+export interface Served {
+  routes: { dataDir: string; port: number }
+  sockets: { oldFolder: string; folder: string; name: string }[]
+  files: { from: string; name: string }[]
+  runtime: string | null
+}
 
 /** sockaddr_un's room, as lib/localSocket.ts MAX_SOCKET_PATH_BYTES counts it. */
 const MAX_SOCKET_PATH_BYTES = 96
@@ -104,21 +111,20 @@ export function serveOldPaths(bridge: BridgeRecord, served: Served, publish: (da
     if (place === null || !hardLink(source, place)) unlinked.push(name)
   }
   for (const { oldFolder, folder, name } of served.sockets) {
-    const looked = oldSocketPath(oldHome, oldFolder, name)
     // An old client with no socket path in reach takes TCP: nothing to serve it here.
-    if (looked) serve(join(folder, name), throughBridge(oldHome, looked), name)
+    for (const looked of oldSocketPaths(oldHome, oldFolder, name, served.runtime)) serve(join(folder, name), throughBridge(oldHome, looked), name)
   }
   for (const { from, name } of served.files) serve(from, throughBridge(oldHome, join(oldHome, 'connections', name)), name)
-  return unlinked
+  return [...new Set(unlinked)]
 }
 
-/** Links, the real folders, the socket links, then ~/.harness. 'left' when something else is in it. */
-export function removeBridge(bridge: BridgeRecord, stateRoot: string): 'removed' | 'left' {
+/** Links, the real folders, the socket links (in [runtime] too, as Served names it), then ~/.harness. 'left' when something else is in it. */
+export function removeBridge(bridge: BridgeRecord, stateRoot: string, runtime: string | null): 'removed' | 'left' {
   const { oldHome } = bridge
   // Found first: the links say where the old folders went.
   const socketLinks = [bridge.oldDataDir, join(oldHome, 'connections')]
     .filter((folder) => folder.startsWith(`${oldHome}/`))
-    .flatMap((folder) => socketLinksOf(oldHome, folder, stateRoot))
+    .flatMap((folder) => socketLinksOf(oldHome, folder, stateRoot, runtime))
   let left = false
   for (const name of list(oldHome)) {
     const part = bridgePart(oldHome, name)
@@ -164,12 +170,16 @@ function throughBridge(oldHome: string, path: string): string | null {
   }
 }
 
-/** Where an old client looks for socket [name] of [oldFolder] (lib/localSocket.ts socketPathIn, its short folders in the old home); null where it takes TCP. */
-function oldSocketPath(oldHome: string, oldFolder: string, name: string): string | null {
+/**
+ * Where a client looks for socket [name] of [oldFolder] (lib/localSocket.ts socketPathIn): beside it, else its short
+ * folder, in the old home for an old client and in [runtime] for today's when the account has one; none where it takes TCP.
+ */
+function oldSocketPaths(oldHome: string, oldFolder: string, name: string, runtime: string | null): string[] {
   const beside = join(oldFolder, name)
-  if (Buffer.byteLength(beside) <= MAX_SOCKET_PATH_BYTES) return beside
-  const short = join(oldHome, 's', shortFolderName(oldFolder), name)
-  return Buffer.byteLength(short) <= MAX_SOCKET_PATH_BYTES ? short : null
+  if (Buffer.byteLength(beside) <= MAX_SOCKET_PATH_BYTES) return [beside]
+  const short = shortFolderName(oldFolder)
+  return [join(oldHome, 's', short, name), ...(runtime ? [join(runtime, short, name)] : [])]
+    .filter((path) => Buffer.byteLength(path) <= MAX_SOCKET_PATH_BYTES)
 }
 
 const shortFolderName = (folder: string): string => createHash('sha256').update(folder).digest('hex').slice(0, 16)
@@ -194,17 +204,18 @@ function hardLink(source: string, place: string): boolean {
 }
 
 /**
- * The hard links serveOldPaths can have made for [oldFolder]'s sockets. Its short folder in the state root, named for a path
- * only old clients use. And beside the folder's new place, a socket at a path too long for a daemon to bind, where an old
- * client's shorter path still reached it. In a real folder of the bridge they go with that folder.
+ * The hard links serveOldPaths can have made for [oldFolder]'s sockets. Its short folders in the state root and in
+ * [runtime], named for a path only old clients use. And beside the folder's new place, a socket at a path too long for a
+ * daemon to bind, where an old client's shorter path still reached it. In a real folder of the bridge they go with that folder.
  */
-function socketLinksOf(oldHome: string, oldFolder: string, stateRoot: string): string[] {
-  const short = join(stateRoot, 's', shortFolderName(oldFolder))
+function socketLinksOf(oldHome: string, oldFolder: string, stateRoot: string, runtime: string | null): string[] {
+  const name = shortFolderName(oldFolder)
+  const short = [join(stateRoot, 's', name), ...(runtime ? [join(runtime, name)] : [])]
   const folder = throughBridge(oldHome, oldFolder)
-  if (folder === null || folder === oldFolder) return [short]
+  if (folder === null || folder === oldFolder) return short
   const beside = list(folder).filter((name) => Buffer.byteLength(join(oldFolder, name)) <= MAX_SOCKET_PATH_BYTES
     && Buffer.byteLength(join(folder, name)) > MAX_SOCKET_PATH_BYTES && lstatOrNull(join(folder, name))?.isSocket())
-  return [short, ...beside.map((name) => join(folder, name))]
+  return [...short, ...beside.map((name) => join(folder, name))]
 }
 
 function lstatOrNull(path: string): Stats | null {

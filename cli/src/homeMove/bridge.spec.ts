@@ -103,6 +103,7 @@ async function movedHome(layout: Layout = 'beside') {
       { oldFolder: join(oldHome, 'connections'), folder: dirname(bridgeSocket), name: 'bridge.sock' },
     ],
     files: [{ from: shim, name: 'mcp-shim.mjs' }],
+    runtime: null,
   }
   const env = { HOME: home, XDG_DATA_HOME: base, XDG_STATE_HOME: join(home, 't') }
   return { home, oldHome, data, state, dataDir, socket, daemon, bridgeSocket, shim, tools, bridge, served, env }
@@ -255,7 +256,7 @@ describe('the bridge\'s layout', () => {
     writeFileSync(join(home.state, 'logs', 'harness.log'), 'started\n')
     expect(serveOldPaths(home.bridge, home.served, publishHookRoute)).toEqual([])
     const before = contents(home.data, home.state)
-    expect(removeBridge(home.bridge, home.state)).toBe('removed')
+    expect(removeBridge(home.bridge, home.state, null)).toBe('removed')
     expect(existsSync(home.oldHome)).toBe(false)
     expect(contents(home.data, home.state)).toEqual(before)
     // Every hard link it made is gone: each socket and the shim has one name again.
@@ -268,7 +269,7 @@ describe('the bridge\'s layout', () => {
     makeRealFolders(home.oldHome)
     serveOldPaths(home.bridge, home.served, publishHookRoute)
     writeFileSync(join(home.oldHome, 'notes.txt'), 'mine')
-    expect(removeBridge(home.bridge, home.state)).toBe('left')
+    expect(removeBridge(home.bridge, home.state, null)).toBe('left')
     expect(readdirSync(home.oldHome)).toEqual(['notes.txt'])
     expect(readFileSync(join(home.oldHome, 'notes.txt'), 'utf8')).toBe('mine')
   })

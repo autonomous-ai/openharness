@@ -13,6 +13,7 @@ import { SpawnLockBusyError, withSpawnLock } from '../daemonSpawnLock.js'
 import { stopDaemonProcess } from '../daemonStop.js'
 import { gridCredentialsPath, gridCredentialsExist } from '../gridCredentials.js'
 import { ownedBinEntries } from '../launchers.js'
+import { runtimeShortRoot } from '../localSocket.js'
 import { platformDaemonDeps } from '../platformDaemon.js'
 import { removePath } from '../removePath.js'
 import { runPowershell } from '../windows/powershell.js'
@@ -124,7 +125,9 @@ export async function uninstallDeps(options: { tildify: (path: string) => string
     listEntries,
     exists: existsSync,
     // A start takes the move's lock beside ~/.harness before it knows whether it moves (homeMove/lock.ts).
-    move: process.platform === 'linux' ? { lock: moveLockPath(legacyHarnessHome(home, 'linux')), readBridge, removeBridge, remove: removePath } : null,
+    move: process.platform === 'linux'
+      ? { lock: moveLockPath(legacyHarnessHome(home, 'linux')), readBridge, removeBridge: (bridge, state) => removeBridge(bridge, state, runtimeShortRoot()), remove: removePath }
+      : null,
     // On Windows with the temp folder the last step runs from, which must not be in the root.
     checkRemovable: (plan) => { checkRemovable(plan, process.platform === 'win32' ? { tempDir: finalRemovalDeps().tempDir } : {}) },
     removeNow: (plan) => removeNow(plan),

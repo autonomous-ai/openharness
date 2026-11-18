@@ -23,7 +23,7 @@ import { connectorsDir } from '../lib/connectors/store.js'
 import { savedDaemonPort } from '../lib/daemonRecord.js'
 import { HARNESS_OWNER_OPTION } from '../lib/harnessSessionLabel.js'
 import { publishHookRoute } from '../lib/hookRoutes.js'
-import { socketPathIn, unixSocketPath } from '../lib/localSocket.js'
+import { runtimeShortRoot, socketPathIn, unixSocketPath } from '../lib/localSocket.js'
 
 /** How often it looks for a process that could still use an old path. */
 export const CHECK_MS = 600_000
@@ -143,6 +143,7 @@ export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = 
       routes: { dataDir: core.dataDir, port: savedDaemonPort(core.dataDir, env.PORT) },
       sockets: sockets.flatMap(([oldFolder, path]) => (path ? [{ oldFolder, folder: dirname(path), name: basename(path) }] : [])),
       files: connectionsMoved ? [{ from: join(connections, 'mcp-shim.mjs'), name: 'mcp-shim.mjs' }] : [],
+      runtime: runtimeShortRoot(deps.environment),
     }
     const unlinked = serveOldPaths(bridge, served, publishHookRoute).filter((name) => !unlinkedSaid.has(name))
     if (!unlinked.length) return
@@ -188,7 +189,7 @@ export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = 
     if (count > 0 || pending > 0) return
     // A move a start has yet to finish keeps its journal in ~/.harness (homeMove/plan.ts), and finishes through the links.
     if (existsSync(join(bridge.oldHome, OWN_FILES.journal))) return
-    const outcome = removeBridge(bridge, stateRoot)
+    const outcome = removeBridge(bridge, stateRoot, runtimeShortRoot(deps.environment))
     // The record before bridge.json: a crash between the two leaves a bridge.json, and the next start finishes.
     note('moved', 0)
     rmSync(join(stateRoot, BRIDGE_FILE), { force: true })

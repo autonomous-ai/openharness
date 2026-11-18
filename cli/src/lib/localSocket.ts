@@ -61,8 +61,8 @@ const SHORT_NAME = /^[0-9a-f]{16}$/
  * an absolute path to a real folder, not a link, of this account's, mode 0700. Null otherwise. Read at each call, as the
  * roots are.
  */
-function runtimeShortRoot(): string | null {
-  const dir = process.env.XDG_RUNTIME_DIR
+export function runtimeShortRoot(environment: NodeJS.ProcessEnv = process.env): string | null {
+  const dir = environment.XDG_RUNTIME_DIR
   if (!dir || !isAbsolute(dir)) return null
   try {
     const seen = lstatSync(dir)

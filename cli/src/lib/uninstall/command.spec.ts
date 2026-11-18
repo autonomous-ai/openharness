@@ -2,7 +2,7 @@ import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { BRIDGE_FILE, makeRealFolders, readBridge, removeBridge, writeBridge } from '../../homeMove/bridge.js'
+import { BRIDGE_FILE, makeRealFolders, readBridge, removeBridge, writeBridge, type BridgeRecord } from '../../homeMove/bridge.js'
 import { moveLockPath } from '../../homeMove/lock.js'
 import { removePath } from '../removePath.js'
 import { labelHookRemoval, lockHolder, UNINSTALL_USAGE, uninstallCommand, UninstallLockBusy, type UninstallDeps } from './command.js'
@@ -543,7 +543,7 @@ const onDisk = (home: string, roots: string[], lock: string) => ({
   listEntries, exists: existsSync,
   checkRemovable: (plan: Parameters<UninstallDeps['checkRemovable']>[0]) => { checkRemovable(plan, { platform: 'linux', home }) },
   removeNow: (plan: Parameters<UninstallDeps['removeNow']>[0]) => removeNow(plan, { platform: 'linux', home }),
-  move: { lock, readBridge, removeBridge, remove: removePath },
+  move: { lock, readBridge, removeBridge: (bridge: BridgeRecord, state: string) => removeBridge(bridge, state, null), remove: removePath },
   tildify: (path: string) => path.replace(home, '~'),
 })
 const movedDisk = (m: ReturnType<typeof movedHome>) => onDisk(m.home, [m.data, m.state], moveLockPath(m.oldHome))
