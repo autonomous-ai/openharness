@@ -1,14 +1,16 @@
-// Harness's VS Code extension, set up from the devices' own process once a computer, as Claude Code's plugin is
-// (dialPluginSetup.ts): installed the first time a pass finds VS Code after a dial has attached here, brought current
-// after each CLI update, and never installed again. One the person uninstalled in VS Code is theirs: the record says it
-// was set up, so it is left removed; one `harness device vscode disable` removed is left alone too. A pass runs at the
-// service's start, at each attach and an hour after a failed one (docs/plans/2026-11-17-dial-vscode-extension-design.md,
-// "Set up once a computer"). VS Code's own record says whether the extension is on.
+// Harness's VS Code extension, set up from the devices' own process once a computer and once an editor (VS Code,
+// Cursor), as Claude Code's plugin is (dialPluginSetup.ts): installed the first time a pass finds the editor after a dial
+// has attached here, brought current after each CLI update, and never installed again. One the person uninstalled in the
+// editor is theirs: the record says it was set up, so it is left removed; one `harness device vscode|cursor disable`
+// removed is left alone too. Each editor's setup reads only its own removal, so one editor's never holds the other's. A
+// pass runs at the service's start, at each attach and an hour after a failed one
+// (docs/plans/2026-11-17-dial-vscode-extension-design.md, "Set up once a computer"). The editor's own record says
+// whether the extension is on.
 import type { DialRemoved, Read, SetupCount } from '../devices/dialSkillFiles.js'
 import { buildVersion, vscodeDisable, vscodeEnable, vscodeStatus, type VscodeExtensionDeps } from '../devices/vscodeExtension.js'
 
 export interface VscodeExtensionSetupDeps {
-  /** VS Code as this computer has it, and its own `code`. */
+  /** The editor as this computer has it, and its own CLI. */
   vscode: VscodeExtensionDeps
   /** dial-skill.json's removals, read anew at each call. */
   removed(): Read<DialRemoved>
@@ -66,7 +68,7 @@ export function createVscodeExtensionSetup(deps: VscodeExtensionSetupDeps): Vsco
     // recorded. One not known is neither: a moment's read error never uninstalls an extension the person keeps, and the
     // next pass finds it current and records it.
     const removed = deps.removed()
-    if (removed.vscode) return undo()
+    if (removed[deps.vscode.editor]) return undo()
     if (!removed.unread) recordAs(version, kind)
   }
 
@@ -82,7 +84,7 @@ export function createVscodeExtensionSetup(deps: VscodeExtensionSetupDeps): Vsco
         const removed = deps.removed()
         const recorded = deps.recorded()
         if (version === null || removed.unread || recorded === undefined) return
-        if (removed.vscode) {
+        if (removed[deps.vscode.editor]) {
           if (undoOwed) await undo()
           return
         }
