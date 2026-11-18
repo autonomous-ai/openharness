@@ -56,3 +56,28 @@ Root runs the final combined core gate. Only after source and gates are accepted
 may the unchanged fixed Wi-Fi comparison be run on a new frozen candidate.
 Preserve the original V12 packet and every failed gate. No new diagnostic,
 warmup or additional timing arm is authorized by this design.
+
+## Recorded evidence
+
+- Clean test baseline `49159bd4e0a7879760d5cca8659f747fd2b3c5c3`: four semantic
+  controls passed and the cost control failed with exactly 192 function-name
+  writes for 64 calls, against zero expected. Receipt
+  `.harness/validation/20261118T222930.691245Z-61248/receipt.json` retains that RED.
+- Runtime `e467510b8d73b9a90a9c46f6cb07b34aedb5dbd7`: all 249 caller tests in
+  11 files passed, including zero function-name writes for the same 64 calls.
+  TypeScript and architecture passed. The combined receipt
+  `.harness/validation/20261118T223059.473167Z-62833/receipt.json` remains failed
+  because helper coverage was 96.59% statements, 96.47% branches, 100% functions
+  and 98.21% lines; it is not represented as an entirely passing gate.
+- Two added controls cover inherited enumerable-key omission, comma/key byte
+  exhaustion and a failed reflection operation. They change no runtime source.
+  On clean `feacfc33a4f4cdc73022923e3beb42799f6ab335`, all 13 direct/peer JSON
+  tests pass and helper coverage is 88/88 statements, 85/85 branches,
+  3/3 functions and 56/56 lines. TypeScript passes. Receipt
+  `.harness/validation/20261118T223239.497409Z-64683/receipt.json` is passed.
+
+The helper is 76→82 source lines; its core import closure gains no file or
+dependency. These are code and deterministic-work results only. The V12
+complete-refresh performance hold remains until a separately approved fixed
+comparison measures the new source. Final combined core and Linux checks remain
+with the integration owner; native Windows remains user-deferred.
