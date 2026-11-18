@@ -726,6 +726,11 @@ export class DaemonCableHost implements CableHost {
     return session && this.wiring.sessions().some((s) => s.sessionId === session) ? undefined : held
   }
 
+  /** Whether the dial's id is another app's agent: the test `focus`, a tap and a swipe already make. */
+  isOutside(agentId: string): boolean {
+    return this.outsideEntry(agentId) !== undefined
+  }
+
   capsOf(agentId: string, opts: { apps?: boolean } = {}): string | undefined {
     const on = this.onMachine(agentId, opts)
     return on && capsLetters(on.source.capabilities(on.agent))

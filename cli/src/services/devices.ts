@@ -693,6 +693,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     const entry = outside(agentId)
     return entry ? waiting(entry) : null
   }
+  /** A window is open (its tabs, not null). */
+  let windowOpen = false
+  /** The dials hold the window's tab, as before there were agents outside a pane, and hear nothing of them: on the tab, or
+   *  on an app's ring that no connected dial shows (an older dial or Harness Pro alone holds the tab). What they do is still
+   *  noted, so that only a later change is told once the gate opens. */
+  const heldOnTab = (): boolean => windowOpen && (cableHost.holdsTab() || !cable.wantsApps())
   interface ScrollTarget { adapter: HostAdapter; pane: Pane }
   /** What a stroke did while its route was asked, in a fixed size. */
   interface Held { down: boolean; dy: number; velocity: number; up?: number }
@@ -713,14 +719,24 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** A stroke that goes to its app's pane, line by line. `page`: its guard said the program there takes its own page
    *  keys, so its lines carry them too. */
   type ToPane = ScrollTarget & { lines: ReturnType<typeof createScrollLines>; page: boolean }
+  /** Where a stroke no app's pane takes goes. Harness's windows only while the dial holds the window's tab or shows a
+   *  Harness agent: they do not show another app's agent, and Desktop raises its window on a stroke's `down`, so a stroke
+   *  there on another app's agent brought Harness forward over that app
+   *  (docs/plans/2026-11-18-dial-pick-focus-back-design.md). */
+  type OffPane = 'windows' | 'nowhere'
+  const offPane = (): OffPane => {
+    const shown = cableHost.shownAgentId()
+    return heldOnTab() || (shown !== undefined && !cableHost.isOutside(shown)) ? 'windows' : 'nowhere'
+  }
   /** The route the stroke on the glass took at its `down`, kept to its `up`: Harness's windows are never left holding a
-   *  drag whose `up` went to an app. A `move` or an `up` with no `down` before it chooses then. While its app is asked
+   *  drag whose `up` went elsewhere. A `move` or an `up` with no `down` before it chooses then. While its app is asked
    *  whether the pane is on screen, or whether Claude Code there takes its page keys, the stroke is held: only the
-   *  window knows which terminal it shows, and Herdr's answer took 0.04 s; the page guard answers within 500 ms. */
+   *  window knows which terminal it shows, and Herdr's answer took 0.04 s; the page guard answers within 500 ms.
+   *  `otherwise` is where it goes if its pane is not on screen, read at its `down` as the rest of its route. */
   let stroke:
     | ToPane
-    | { deciding: ScrollTarget; held: Held }
-    | 'windows'
+    | { deciding: ScrollTarget; held: Held; otherwise: OffPane }
+    | OffPane
     | undefined
   const toWindows = (phase: 'down' | 'move' | 'up', dy: number, velocity: number): void =>
     core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity } })
@@ -730,10 +746,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (route.page && observed?.byPane(route.adapter.id, route.pane.id)?.state === 'needs-you') route.page = false
     route.adapter.scroll!(route.pane, route.lines.take(phase, dy), route.page)
   }
-  /** What a stroke on that target waits on at its down: Herdr's whether its pane is on screen (its lines, or Harness's
-   *  windows), or whether the shown Claude Code takes its page keys (page, or lines). None when the stroke is lines at
-   *  once: any other engine, or a guard that refused with nothing read. A refused guard is the pane's lines, never the
-   *  windows: the person looks at that terminal, and its line scroll is what moved it before. */
+  /** What a stroke on that target waits on at its down: Herdr's whether its pane is on screen (its lines, or no pane:
+   *  the stroke's `otherwise`), or whether the shown Claude Code takes its page keys (page, or lines). None when the
+   *  stroke is lines at once: any other engine, or a guard that refused with nothing read. A refused guard is the pane's
+   *  lines, never the windows: the person looks at that terminal, and its line scroll is what moved it before. */
   const routeOf = ({ adapter, pane }: ScrollTarget): Promise<'page' | 'lines' | 'windows'> | undefined => {
     if (adapter.onScreen) return adapter.onScreen(pane).then((visible) => (visible ? 'lines' : 'windows'))
     const agent = observed?.byPane(adapter.id, pane.id)
@@ -743,11 +759,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     })
     return keys ? keys.then((page) => (page ? 'page' : 'lines')) : undefined
   }
-  /** The app's answer, page, lines or Harness's windows, for the stroke that asked it alone: one left behind by a newer
-   *  stroke, or one that lands once the devices began to stop (the dial still sends while the stop awaits its
-   *  listener), is dropped, so nothing of that stroke is sent anywhere. A stroke already decided keeps its route
-   *  through the stop: a window that heard its down hears its up. */
-  const decided = (asked: { deciding: ScrollTarget; held: Held }, to: 'page' | 'lines' | 'windows'): void => {
+  /** The app's answer, page, lines or no pane (the stroke's `otherwise`), for the stroke that asked it alone: one left
+   *  behind by a newer stroke, or one that lands once the devices began to stop (the dial still sends while the stop
+   *  awaits its listener), is dropped, so nothing of that stroke is sent anywhere. A stroke already decided keeps its
+   *  route through the stop: a window that heard its down hears its up. */
+  const decided = (asked: { deciding: ScrollTarget; held: Held; otherwise: OffPane }, to: 'page' | 'lines' | 'windows'): void => {
     if (stopped || stroke !== asked) return
     const { deciding: { adapter, pane }, held } = asked
     if (to !== 'windows') {
@@ -757,9 +773,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       toPane(route, 'move', held.dy)
       return
     }
-    // A hand's pace, and no address: once per stroke the windows took because its pane was not on screen.
+    // A hand's pace, and no address: once per stroke whose pane was not on screen.
     log(`[device] scroll · ${adapter.id} · not on screen`)
-    stroke = held.up === undefined ? 'windows' : undefined
+    stroke = held.up === undefined ? asked.otherwise : undefined
+    if (asked.otherwise === 'nowhere') return
     if (held.down) toWindows('down', 0, 0)
     if (held.dy !== 0) toWindows('move', held.dy, held.velocity)
     if (held.up !== undefined) toWindows('up', 0, held.up)
@@ -768,22 +785,22 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     let route = stroke
     let answer: Promise<void> | undefined
     // A held up ended its stroke too: a frame after it begins a new one, and the older answer is stale.
-    if (phase === 'down' || !route || (route !== 'windows' && 'held' in route && route.held.up !== undefined)) {
+    if (phase === 'down' || !route || (typeof route === 'object' && 'held' in route && route.held.up !== undefined)) {
       // An older stroke held for its page guard is its pane's lines whatever the answer (routeOf): what it held goes out
       // now, with no page, as the answer it waited on is left behind. One held for Herdr's on screen may be the windows'.
-      if (route && route !== 'windows' && 'held' in route && !route.deciding.adapter.onScreen && !stopped) {
+      if (typeof route === 'object' && 'held' in route && !route.deciding.adapter.onScreen && !stopped) {
         toPane({ ...route.deciding, lines: createScrollLines(), page: false }, 'move', route.held.dy)
       }
-      // Once the devices began to stop, no app is asked or run: a stroke then is the windows', as before this route.
+      // Once the devices began to stop, no app is asked or run: a stroke then takes no pane.
       const target = stopped ? undefined : scrollTarget()
       const to = target && routeOf(target)
       if (to) {
-        const asked = { deciding: target!, held: { down: false, dy: 0, velocity: 0 } }
+        const asked = { deciding: target!, held: { down: false, dy: 0, velocity: 0 }, otherwise: offPane() }
         route = stroke = asked
         answer = to.then((answered) => decided(asked, answered))
-      } else route = stroke = target ? { ...target, lines: createScrollLines(), page: false } : 'windows'
+      } else route = stroke = target ? { ...target, lines: createScrollLines(), page: false } : offPane()
     }
-    if (route !== 'windows' && 'held' in route) {
+    if (typeof route === 'object' && 'held' in route) {
       route.held.dy += dy
       if (phase === 'down') route.held.down = true
       if (phase === 'move') route.held.velocity = velocity
@@ -795,7 +812,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (route === 'windows') toWindows(phase, dy, velocity)
     // Whole lines, and an up's velocity is not played: the scroll stops where the finger stops. An app that went takes
     // nothing more of the stroke, which never turns to Harness's windows midway, and none once the devices began to stop.
-    else if (!stopped) toPane(route, phase, dy)
+    else if (route !== 'nowhere' && !stopped) toPane(route, phase, dy)
   }
 
   const cableHost = new DaemonCableHost({
@@ -1138,12 +1155,6 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const busy = ({ agent }: HostEntry): boolean => busyState(agent.state)
   /** Its turn, with the waiting line: the session's activity read right after it (`activityText` above) repeats the line. */
   const started = (entry: HostEntry): DialEvent => ({ kind: 'processing', agentId: entry.agent.id, text: waiting(entry) ?? '', recap: '', subagent: false })
-  /** A window is open (its tabs, not null). */
-  let windowOpen = false
-  /** The dials hold the window's tab, as before there were agents outside a pane, and hear nothing of them: on the tab, or
-   *  on an app's ring that no connected dial shows (an older dial or Harness Pro alone holds the tab). What they do is still
-   *  noted, so that only a later change is told once the gate opens. */
-  const heldOnTab = (): boolean => windowOpen && (cableHost.holdsTab() || !cable.wantsApps())
   const tell = (event: DialEvent): void => { if (!heldOnTab()) toDial(event) }
   /**
    * The prompt an agent waits on, once its hook said what it asks, is also a question for the dial, which the dial only
