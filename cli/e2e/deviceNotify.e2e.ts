@@ -121,14 +121,16 @@ describe('harness device notify', () => {
     expect(await notify(d, caller, cwd)).toMatchObject({ code: 0, out: 'limited' })
 
     // Opening the alert to read it leaves the card. The list asked after it is the barrier: the daemon has handled the
-    // read, and whatever it sent for it, by the time the list sends the questions still open again, after its end.
+    // read, and whatever it sent for it, by the time the list's drawer is sent. A drawer carries the dial's open
+    // questions as rows instead of asking them again (#4445): the card is one of them.
     let since = dial.messages.length
     dial.send({ t: 'question.read', agentId: engine.id, requestId: 'read-1' })
     const state = await dial.next((m) => m.t === 'question.state' && m.requestId === 'read-1', 45_000, 'the card read', since)
     expect(state).toMatchObject({ ok: true, id: question.id, questions: card('Ghostty') })
     since = dial.messages.length
     dial.send({ t: 'agents.list' })
-    await dial.next((m) => m.t === 'question' && m.agentId === engine.id, 45_000, 'the card sent again with the list', since)
+    const drawer = await dial.next((m) => m.t === 'notif.replace', 45_000, 'the drawer sent with the list', since)
+    expect(drawer.items).toContainEqual(expect.objectContaining({ agentId: engine.id, name: 'fix-login', summary: LINE, question: true }))
     // The same card each time it is sent, never a second one, and never closed.
     expect([...new Set(questions(dial, engine.id).map((m) => m.id))]).toEqual([question.id])
     const prompted = dial.messages.length
