@@ -218,7 +218,6 @@ static EXT_RAM_BSS_ATTR struct {
     uint8_t notice_read_next;
     uint32_t notice_revision, notice_frame;
     int notice_count;
-    uint32_t notice_sequence;
     uint32_t error_until;   // when the turn-error view clears itself (ms() clock), 0 = not a timed one
     question_t q;
     char message[256], title[80], pending_focus[ID_MAX], opening_notice[ID_MAX];
@@ -351,7 +350,8 @@ static void change(void)
     habitat_render_notify();
 }
 /*
- * What the bell counts: unread notices about any agent EXCEPT the one on the face.
+ * What the bell counts: agents with an unread notice, EXCEPT the one on the face. An agent's question and its news are
+ * two rows but one agent, so they count one, as the window counts them.
  *
  * That agent's news is already on the glass — its recap, or its question in the recap's place — so
  * counting it too told a person something else had happened, somewhere else (owner, 2026-09-30:
@@ -361,8 +361,14 @@ static void change(void)
 static unsigned notice_unread(const char *except)
 {
     unsigned count = 0;
-    for (int i = 0; i < s.notice_count; i++)
-        count += !s.notice[i].read_on_dial && !(except && !strcmp(s.notice[i].agent_id, except));
+    for (int i = 0; i < s.notice_count; i++) {
+        if (s.notice[i].read_on_dial || (except && !strcmp(s.notice[i].agent_id, except))) continue;
+        // Counted at the agent's first unread row; NOTICES bounds this pairwise check.
+        bool counted = false;
+        for (int j = 0; j < i && !counted; j++)
+            counted = !s.notice[j].read_on_dial && !strcmp(s.notice[j].agent_id, s.notice[i].agent_id);
+        count += !counted;
+    }
     return count;
 }
 static bool notice_was_read(const cable_notif_t *n)
@@ -3936,6 +3942,21 @@ static void notice_restore_selection(const char *id, bool question)
     }
     if (at >= 0) s.offset = at;
 }
+// Makes room in a full inbox for a row, false when there is none. A question waits on the person, so it never gives
+// way to a message: the oldest message goes, else the oldest question for a question. The card being read (`kept`)
+// stays, and arrival never moves it. Rows run newest first, a held card last.
+static bool notice_make_room(bool question, const char *kept, bool kept_question)
+{
+    if (s.notice_count < NOTICES) return true;
+    for (int pass = 0; pass < (question ? 2 : 1); pass++)
+        for (int i = s.notice_count - 1; i >= 0; i--)
+            if (s.notice[i].question == (pass == 1) &&
+                !(!strcmp(kept, s.notice[i].agent_id) && s.notice[i].question == kept_question)) {
+                notice_drop(i);
+                return true;
+            }
+    return false;
+}
 // The row added, or NULL when the id is refused.
 static cable_notif_t *notice_add(const char *id, const char *name, const char *machine, const char *recap,
                                  bool question, bool failed)
@@ -3945,15 +3966,7 @@ static cable_notif_t *notice_add(const char *id, const char *name, const char *m
     // News replaces that agent's news and leaves its open question beside it: a turn's summary or failure arriving
     // while it waits took the question off the dial (2026-11-18). A question replaces both, as it is the newer state.
     notice_remove(id, question);
-    if (s.notice_count == NOTICES) {
-        // Keep a message being read even when the bounded inbox fills. The
-        // oldest other message gives way; arrival never moves the current card.
-        int drop = s.notice_count - 1;
-        if (!strcmp(selected, s.notice[drop].agent_id) && s.notice[drop].question == selected_question) drop--;
-        memmove(&s.notice[drop], &s.notice[drop + 1],
-                (size_t)(s.notice_count - drop - 1) * sizeof(cable_notif_t));
-        s.notice_count--;
-    }
+    if (!notice_make_room(question, selected, selected_question)) return NULL;
     int pos = 0;
     if (!question)
         while (pos < s.notice_count && s.notice[pos].question)
@@ -4013,10 +4026,10 @@ bool ui_notify_summary(const char *id, const char *name, const char *machine, co
     display_lock();
     bool face = on_face(id);
     notice_forget_read(id, false); // A fresh completion is new even if its words repeat.
-    notice_add(id, name, machine, recap, false, false);
+    // A full inbox of open questions refuses the row: with nothing to read, nothing rings, wakes or celebrates.
+    bool filed = notice_add(id, name, machine, recap, false, false) != NULL;
     if (face) notice_read_now(id);
-    s.notice_sequence++;
-    bool alert = level == 2 && !face;
+    bool alert = filed && level == 2 && !face;
     uint32_t now = ms();
     if (alert && !waiting() && !s.nap && !s.quiet && (!s.last_celebration || now - s.last_celebration >= 20000)) {
         s.pet_pose = 3;
@@ -4036,9 +4049,9 @@ bool ui_turn_error(const char *id, const char *message)
     bool face = on_face(id);
     int known = find(id);
     notice_forget_read(id, false);
-    notice_add(id, known >= 0 ? s.agents[known].name : NULL, NULL, message, false, true);
+    // A row refused by a full inbox of open questions leaves the toast, as an error about no agent has, and no ring.
+    bool ring = notice_add(id, known >= 0 ? s.agents[known].name : NULL, NULL, message, false, true) && !face;
     if (face) notice_read_now(id);
-    s.notice_sequence++;
     // Like any toast, never over a live recording or the person's own question; the drawer row still keeps the failure.
     if (!s.voice_open && !question_view(s.view)) {
         COPY(s.title, "Harness");
@@ -4047,9 +4060,9 @@ bool ui_turn_error(const char *id, const char *message)
         if (s.view == MESSAGE) { s.error_until = ms() + ERROR_VIEW_MS; if (!s.error_until) s.error_until = 1; }
     }
     change();
-    if (!face) display_wake();
+    if (ring) display_wake();
     display_unlock();
-    return !face;
+    return ring;
 }
 void ui_notif_seen(const char *id)
 {
@@ -4118,9 +4131,8 @@ void ui_notif_replace(const cable_notif_t *rows, int count)
     bool retained = false;
     for (int i = 0; i < s.notice_count; i++)
         if (!strcmp(s.notice[i].agent_id, selected) && s.notice[i].question == selected_question) retained = true;
-    if (held.agent_id[0] && !retained && s.notice_count < NOTICES) {
+    if (held.agent_id[0] && !retained && notice_make_room(held.question, "", false))
         s.notice[s.notice_count++] = held;
-    }
     notice_restore_selection(selected, selected_question);
     notice_sync_view();
     change();
@@ -4167,7 +4179,6 @@ bool ui_question_show(const char *id, const char *name, const char *machine, con
     notice_forget_read(id, true);
     notice_add(id,name,machine,cJSON_IsString(prompt) ? prompt->valuestring : "Needs your answer",true,false);
     if (face) notice_read_now(id);   // already on the glass: shown in place, read at once
-    s.notice_sequence++;
     // A different agent's alert cannot replace the question being read.
     if (s.q.valid && !strcmp(s.q.agent,id) && strcmp(s.q.request,request)) {
         s.q.valid=false; s.q.pending=false; s.q.revision++;

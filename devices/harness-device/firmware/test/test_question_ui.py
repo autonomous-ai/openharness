@@ -50,7 +50,7 @@ static cJSON object(cJSON *children,int n) {
     for (int i=0;i<n;i++) children[i].next=i+1<n ? &children[i+1] : NULL;
     return (cJSON){.type=JOBJECT,.child=n ? children : NULL};
 }
-static struct { question_t q; bool voice_open,voice_waiting,touch_down; uint32_t voice_question_revision,notice_sequence; int voice_question_index; view_t voice_return; char title[80],message[256]; view_t view; int offset,pressed,hit_count,active,notice_count; char pending_focus[ID_MAX],opening_notice[ID_MAX]; bool connected; hit_t hits[24]; } s;
+static struct { question_t q; bool voice_open,voice_waiting,touch_down; uint32_t voice_question_revision; int voice_question_index; view_t voice_return; char title[80],message[256]; view_t view; int offset,pressed,hit_count,active,notice_count; char pending_focus[ID_MAX],opening_notice[ID_MAX]; bool connected; hit_t hits[24]; } s;
 typedef struct { char id[64],name[96]; } agent_t;
 static agent_t agents[2]={{.id="a",.name="Research helper"},{.id="b",.name="Remote helper"}};
 static bool b_known;

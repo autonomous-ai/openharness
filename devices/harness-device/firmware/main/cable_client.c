@@ -1328,7 +1328,7 @@ static void handle_message(const cJSON *root)
     }
     if (strcmp(t, "turn.error") == 0) {
         if (agent_id) ui_project_emit(agent_id, "", "done", "", NULL);
-        // A failure is an alert: it beeps (coalesced) unless that pane is already on the glass.
+        // A failure is an alert: it beeps (coalesced) unless its pane is on the glass or the drawer refused it.
         if (agent_id ? ui_turn_error(agent_id, str_of(p, "message")) : (ui_cable_toast(str_of(p, "message")), false))
             audio_notify_done();
         return;

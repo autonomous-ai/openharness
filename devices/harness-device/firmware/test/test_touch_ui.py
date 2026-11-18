@@ -77,7 +77,7 @@ static struct {
     int draft_drag, tab_drag, start_x, start_y, last_x, last_y, tab_count, machine_count, model_count, notice_count, pet_pose;
     int touch_far2;
     uint32_t touch_started, coast_until, character_activity, pet_until, nap_until, last_celebration;
-    uint32_t notice_sequence, voice_retry_until, error_until;
+    uint32_t voice_retry_until, error_until;
     char hint[40];
     bool machine_view;
     cable_app_t apps[CABLE_MAX_APPS];
@@ -237,7 +237,7 @@ for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notic
 code += function('render_settings') + function('ui_visit_state')
 code += function('ui_project_known') + function('ui_focus_project') + function('ui_apply_pending_focus')
 code += function('focus_centred') + function('focus_spaced') + function('focus_header') + function('focus_switch') + function('focus_clipped') + function('tabs_move') + function('tab_split') + function('tab_fade') + function('tab_neighbour') + function('focus_carousel') + function('tab_label') + function('render_focus_tabs') + function('app_label') + function('app_under') + function('render_apps') + function('pane_label') + function('render_agents') + function('render_tabs') + function('page_controls') + function('css_line') + function('inbox_line') + function('inbox_page') + function('render_focus_inbox') + function('render_list')
-for name in ['notice_drop', 'notice_remove', 'notice_remove_question', 'notice_sync_view', 'notice_selection', 'notice_restore_selection', 'notice_add', 'notice_expire', 'on_face', 'notice_read_now', 'ui_notify_summary', 'ui_turn_error', 'ui_notif_seen', 'ui_notif_read', 'ui_notif_replace', 'ui_notif_open', 'ui_question_close', 'ui_answer_receipt']:
+for name in ['notice_drop', 'notice_remove', 'notice_remove_question', 'notice_sync_view', 'notice_selection', 'notice_restore_selection', 'notice_make_room', 'notice_add', 'notice_expire', 'on_face', 'notice_read_now', 'ui_notify_summary', 'ui_turn_error', 'ui_notif_seen', 'ui_notif_read', 'ui_notif_replace', 'ui_notif_open', 'ui_question_close', 'ui_answer_receipt']:
     code += function(name)
 code += '#define ui_notify_task_done(a,b,c,d) ui_notify_summary(a,b,c,d,"alert",false,false)\n'
 for name in ['ui_project_set_host_caps', 'ui_fleet_set_view', 'ui_apps_replace', 'ui_apps_forget', 'event', 'ui_project_emit', 'ui_project_restore_event', 'ui_project_clear_event', 'ui_project_set_name', 'ui_project_remove', 'ui_project_clear_all', 'ui_project_apply_order']:
@@ -1028,6 +1028,100 @@ static void bell_checks(const char *dir) {
     reset(); scene_take();
     assert(!blue_bell_drawn() && !action_enabled(A_INBOX));   // an empty inbox has no bell
     puts("bell/inbox: an empty inbox draws no bell PASS");
+    // The bell counts agents, like the window: "b"'s unread question and its unread news are one.
+    // Snapshot rows run newest first, and a newer question replaces the news: the news here is the newer row.
+    cable_notif_t both[2]={
+        {.agent_id="b",.name="Release",.summary="The release notes are ready."},
+        {.agent_id="b",.name="Release",.summary="May I publish this release?",.question=true}};
+    reset(); ui_notif_replace(both,2); scene_take();
+    assert(s.notice_count==2 && s.notice[0].question && !s.notice[1].question);
+    assert(notice_unread(NULL)==1 && notice_unread("a")==1 && status_is(HT_BELL " 1"));
+    // A read row does not hide its agent's unread one: the question read, the news still counts.
+    notice_mark_read(&s.notice[0]); assert(notice_unread(NULL)==1);
+    puts("bell/inbox: an agent's unread question and news count one PASS");
+    reset();
+}
+static bool notice_has(const char *id, bool question) {
+    for(int i=0;i<s.notice_count;i++)
+        if(!strcmp(s.notice[i].agent_id,id) && s.notice[i].question==question) return true;
+    return false;
+}
+// A full inbox never gives up a question for a message.
+static void inbox_full_checks(void) {
+    cable_notif_t rows[NOTICES]={0};
+    char id[ID_MAX];
+    // 23 questions and the message being read: a new message has nothing to take the place of. The oldest question is
+    // the read message's agent's own: the card being read is that row, not its agent.
+    for(int i=0;i<NOTICES-2;i++) {
+        snprintf(rows[i].agent_id,sizeof rows[i].agent_id,"q-%d",i);
+        COPY(rows[i].summary,"May I go on?"); rows[i].question=true;
+    }
+    strcpy(rows[NOTICES-2].agent_id,"read"); COPY(rows[NOTICES-2].summary,"The build passed.");
+    strcpy(rows[NOTICES-1].agent_id,"read"); COPY(rows[NOTICES-1].summary,"May I ship?"); rows[NOTICES-1].question=true;
+    reset(); ui_notif_replace(rows,NOTICES); ui_notif_open();
+    s.offset=NOTICES-1; assert(!strcmp(s.notice[s.offset].agent_id,"read") && !s.notice[s.offset].question);
+    ui_notify_task_done("new","New pane","M2","Another result arrived.");
+    assert(s.notice_count==NOTICES && s.view==INBOX && !strcmp(s.notice[s.offset].agent_id,"read"));
+    for(int i=0;i<NOTICES-2;i++) { snprintf(id,sizeof id,"q-%d",i); assert(notice_has(id,true)); }
+    assert(notice_has("read",true));
+    assert(notice_add("q-new","New pane","M2","May I go on?",true,false));
+    snprintf(id,sizeof id,"q-%d",NOTICES-3);
+    assert(!notice_has("read",true) && notice_has(id,true));
+    assert(!strcmp(s.notice[s.offset].agent_id,"read") && !s.notice[s.offset].question);
+    // 24 questions: a message is refused; a question takes the oldest question's place but the one being read.
+    for(int i=0;i<NOTICES;i++) {
+        snprintf(rows[i].agent_id,sizeof rows[i].agent_id,"q-%d",i);
+        COPY(rows[i].summary,"May I go on?"); rows[i].question=true;
+    }
+    reset(); ui_notif_replace(rows,NOTICES); wakes=0;
+    // With no row to read, nothing rings, wakes or celebrates; a failure still shows as an error about no agent does.
+    assert(!ui_notify_task_done("new","New pane","M2","Another result arrived.") && !wakes && !s.pet_pose);
+    assert(!ui_turn_error("new","The build crashed.") && !wakes && s.view==MESSAGE);
+    assert(s.notice_count==NOTICES && !notice_has("new",false));
+    for(int i=0;i<NOTICES;i++) { snprintf(id,sizeof id,"q-%d",i); assert(notice_has(id,true)); }
+    ui_notif_open(); s.offset=NOTICES-1; char oldest[ID_MAX]; COPY(oldest,s.notice[s.offset].agent_id);
+    char next[ID_MAX]; COPY(next,s.notice[NOTICES-2].agent_id);
+    assert(notice_add("q-new","New pane","M2","May I go on?",true,false));
+    assert(s.notice_count==NOTICES && notice_has("q-new",true) && notice_has(oldest,true) && !notice_has(next,true));
+    assert(!strcmp(s.notice[s.offset].agent_id,oldest));
+    // Messages and a question kept at the end while it was read: the oldest message gives way, not the question.
+    cable_notif_t held={.agent_id="held",.name="Release",.summary="May I publish?",.question=true,.read_token="t"};
+    reset(); ui_notif_replace(&held,1); ui_notif_open(); notice_mark_read(&s.notice[s.offset]);
+    for(int i=0;i<NOTICES-1;i++) {
+        memset(&rows[i],0,sizeof rows[i]);
+        snprintf(rows[i].agent_id,sizeof rows[i].agent_id,"m-%d",i); COPY(rows[i].summary,"Done.");
+    }
+    ui_notif_replace(rows,NOTICES-1);
+    assert(s.notice_count==NOTICES && s.notice[NOTICES-1].question && !strcmp(s.notice[NOTICES-1].agent_id,"held"));
+    s.offset=0; COPY(oldest,s.notice[NOTICES-2].agent_id);
+    ui_notify_task_done("new","New pane","M2","Another result arrived.");
+    assert(s.notice_count==NOTICES && notice_has("held",true) && notice_has("new",false) && !notice_has(oldest,false));
+    // A full snapshot without the message being read: the oldest message makes room for it, no question goes.
+    cable_notif_t read={.agent_id="held",.name="Release",.summary="Published.",.read_token="t"};
+    for(int i=0;i<NOTICES;i++) {
+        memset(&rows[i],0,sizeof rows[i]);
+        snprintf(rows[i].agent_id,sizeof rows[i].agent_id,i<4 ? "q-%d" : "m-%d",i);
+        COPY(rows[i].summary,"Done."); rows[i].question=i<4;
+    }
+    reset(); ui_notif_replace(&read,1); ui_notif_open(); notice_mark_read(&s.notice[s.offset]);
+    ui_notif_replace(rows,NOTICES);
+    assert(s.notice_count==NOTICES && s.view==INBOX && !strcmp(s.notice[s.offset].agent_id,"held") && !s.notice[s.offset].question);
+    for(int i=0;i<4;i++) { snprintf(id,sizeof id,"q-%d",i); assert(notice_has(id,true)); }
+    snprintf(id,sizeof id,"m-%d",NOTICES-1); assert(!notice_has(id,false));
+    // 24 questions: none gives way to the message being read, which goes.
+    for(int i=0;i<NOTICES;i++) { snprintf(rows[i].agent_id,sizeof rows[i].agent_id,"q-%d",i); rows[i].question=true; }
+    reset(); ui_notif_replace(&read,1); ui_notif_open(); notice_mark_read(&s.notice[s.offset]);
+    ui_notif_replace(rows,NOTICES);
+    assert(s.notice_count==NOTICES && !notice_has("held",false));
+    for(int i=0;i<NOTICES;i++) { snprintf(id,sizeof id,"q-%d",i); assert(notice_has(id,true)); }
+    // The question being read stays in its place: the oldest question gives way to it.
+    read.question=true;
+    reset(); ui_notif_replace(&read,1); ui_notif_open(); notice_mark_read(&s.notice[s.offset]);
+    ui_notif_replace(rows,NOTICES);
+    assert(s.notice_count==NOTICES && s.view==INBOX && !strcmp(s.notice[s.offset].agent_id,"held") && s.notice[s.offset].question);
+    snprintf(id,sizeof id,"q-%d",NOTICES-1); assert(!notice_has(id,true));
+    for(int i=0;i<NOTICES-1;i++) { snprintf(id,sizeof id,"q-%d",i); assert(notice_has(id,true)); }
+    puts("inbox full: a message never takes a question's place; the oldest message, or the oldest question for a question, goes PASS");
     reset();
 }
 
@@ -1613,6 +1707,7 @@ int main(int argc, char **argv) {
     test_character = HT_CHARACTER_FOCUS;
     notification_read_checks(argc>1 ? argv[1] : NULL);
     bell_checks(argc>1 ? argv[1] : NULL);
+    inbox_full_checks();
     // The companion screen is gone: character, edge text and still-character are the app's now
     // (Settings > Autonomous robots). What the glass kept is actions, and Nap is the one that moved
     // off that screen into the controls list.
