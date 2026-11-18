@@ -725,16 +725,41 @@ test('a send that fails is sent once more 1 s later; if that fails too it is log
   assert.equal(w.logs.some((line) => line.includes('term_')), false)
 })
 
-test('after a logged failure the same ids are sent again at the next front()', async () => {
-  const { w } = await streaming()
-  w.replies.push(500, 500)
+test('after a logged failure the same ids post nothing, as a tab renamed gives them; other ids post, and so does the next open', async () => {
+  const { socket, opened } = await devices()
+  const w = world([ready(socket), ready(socket)])
+  const stream = await opened
+  w.replies.push(404, 404)
   w.dial.front([H(1)])
   await w.until(() => w.due().includes(1_000))
   w.to(1_000)
-  await w.until(() => w.logs.length > 0)
+  await w.until(() => w.logs.length === 1)
+  // A tab renamed in the worktree on screen: the same ids, which a daemon from before orcaFront would refuse each time.
   w.dial.front([H(1)])
+  w.dial.front([H(1)])
+  await answered()
+  assert.deepEqual([bodies(w), w.logs, w.timers.size], [[fronted(H(1)), fronted(H(1))], ['dial: front not sent'], 0])
+
+  // Another worktree, and back: each a change.
+  w.dial.front([H(2)])
   await w.until(() => w.posts.length === 3)
-  assert.deepEqual(bodies(w), [fronted(H(1)), fronted(H(1)), fronted(H(1))])
+  await answered()
+  w.dial.front([H(1)])
+  await w.until(() => w.posts.length === 4)
+  await answered()
+  assert.deepEqual(bodies(w).slice(2), [fronted(H(2)), fronted(H(1))])
+
+  // Refused twice again, then the stream ends: the next one is offered the latest.
+  w.replies.push(404, 404)
+  w.dial.front([H(3)])
+  await w.until(() => w.due().includes(2_000))
+  w.to(2_000)
+  await w.until(() => w.logs.length === 2)
+  stream.res.end()
+  await w.until(() => w.due().includes(3_000))
+  w.to(3_000)
+  await w.until(() => w.posts.length === 7)
+  assert.deepEqual(bodies(w).slice(4), [fronted(H(3)), fronted(H(3)), fronted(H(3))])
 })
 
 test("a newer front() during the wait is sent at once, and the older one's retry is not", async () => {
