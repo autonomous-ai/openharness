@@ -261,3 +261,34 @@ Plans are `/tmp/core-session-read-compact-final-corrected-plan-20261119.json` an
 already-passing architecture command. The separate runtime review packet contains exactly api.ts,
 sessionSnapshot.ts, wifiView.ts, devicesProcess.ts and workerContract.ts. No build, native fixture,
 new diagnostic, smoke or timing run has been made for this correction.
+
+## Actual authenticated socket supplement
+
+`services/process.pipe.spec.ts` adds two fixed reads through the real authenticated local socket,
+localWsServer, serviceLinks, createCoreApi/readSessions, answerSessionRead, settled-record pump,
+readCoreSessionRecords, WiFi projection, and actual Devices advertised refresh. The registry members
+and hardware port are synthetic; the row producer, scopes, transport, validator and projections are
+production code. One case has 4097 registered members; the other has 1600 members and two equal
+stored/published 1,600,000-byte strings admitted through real frameParts, one advertised at index 0
+and one hidden at index 8. Both cases include a Cloud row, hidden/inactive occupancy, exact launch
+forms, names/model/transcript fields, and absent/empty stored values. Both services first refuse the
+other service's scope, then complete their valid reads on the healthy connection. Whole consumer
+values are checked, not just row counts; cleanup stops the services and awaits local server/pipe close
+before removing the owned endpoint root.
+
+The focused five-test pipe selection (the two new cases plus its three existing authentication and
+reconnect controls) and fixture types passed in
+`.harness/validation/20261118T202140.520104Z-95943/receipt.json`, actual 0 for both checks. Source stayed
+at a08a5fd9c3706cc4432874da205040e9b5801d97 with dirty test hash
+`0d44b9602e5d94466d9e02839114924e3bbee12ad7e5ef57bf7733d9355608a4` throughout. The selected plan is
+`/tmp/core-session-read-compact-transport-plan-20261119.json`. This is source-level real socket
+acceptance on macOS; it does not claim separate production processes, Windows named-pipe execution,
+real hardware, native packaged cohort acceptance, or performance. No runtime code changed.
+
+The next V11 comparison is prepared source-only from V10 with the identical nine scenarios, 18 smoke
+and 36 fixed timing arms, both old readers, operation bodies and custody. Only the candidate pin,
+versioned paths, independent compact-row byte model, and untimed row-body byte checks change.
+Manifest preparation waits for the reviewed clean combined candidate. The later native gate retains
+the existing five supported packaged WiFi cases; it adds no inverse host selector and must use the
+matched contract6 artifact. Both execution releases and complete-path performance acceptance remain
+open.
