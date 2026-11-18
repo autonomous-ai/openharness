@@ -664,6 +664,12 @@ static void app_pick(int i)
     COPY(a.id, s.apps[i].id);
     if (!queue(a)) return;
     if (strcmp(a.id, s.app_shown)) COPY(s.app_landing, a.id);
+    // A pick from the switch leaves the window's tab, so a tab a swipe is still opening is no longer waited for: its
+    // roster never comes, and the view's turn, which sends no tabs, would read as that tab gone.
+    if (workspace.phase != HT_WORKSPACE_IDLE) {
+        ht_workspace_cancel_request(&workspace);
+        s.loading = false;
+    }
     view(HOME);
 }
 static void workspace_failed(const char *message)
