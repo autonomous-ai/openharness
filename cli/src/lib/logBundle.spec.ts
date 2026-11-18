@@ -259,6 +259,25 @@ describe('buildLogBundle', () => {
     expect([...files].filter(([, bytes]) => bytes.includes('NEVER-IN-THE-BUNDLE')).map(([name]) => name)).toEqual([])
   })
 
+  it('never follows a link from the logs folders to a file outside them', () => {
+    // Only the folders' own files are read: a link named like a log could point at any file of the person's.
+    const root = mkdtempSync(join(tmpdir(), 'bundle-'))
+    const logs = join(root, 'logs'), device = join(logs, 'usb-AA'), data = join(root, 'data'), outside = join(root, 'outside')
+    for (const dir of [device, data, outside]) mkdirSync(dir, { recursive: true })
+    writeFileSync(join(root, 'elsewhere'), 'NEVER-IN-THE-BUNDLE\n')
+    writeFileSync(join(outside, 'dial-20260915.log'), 'NEVER-IN-THE-BUNDLE\n')
+    writeFileSync(join(logs, 'app-20260915.log'), 'the desktop app\n')
+    symlinkSync(join(root, 'elsewhere'), join(logs, 'cli-20260915.log'))
+    symlinkSync(join(root, 'elsewhere'), join(device, 'dial-20260915.log'))
+    symlinkSync(outside, join(logs, 'usb-BB'))
+    symlinkSync(join(root, 'elsewhere'), join(data, 'harness.log'))
+    symlinkSync(join(root, 'elsewhere'), join(data, REMOVALS_FILE))
+    const { zip } = buildLogBundle({ logsDir: logs, dataDir: data, now: new Date(2026, 8, 15, 10, 30), version: '0', home: '/Users/nobody', redact: (t) => t })
+    const files = readZip(zip)
+    expect([...files.keys()]).toEqual(['README.txt', 'logs/app-20260915.log'])
+    expect([...files].filter(([, bytes]) => bytes.includes('NEVER-IN-THE-BUNDLE')).map(([name]) => name)).toEqual([])
+  })
+
   it('status.txt holds what it is given, blanked, right after the README', () => {
     const root = mkdtempSync(join(tmpdir(), 'bundle-'))
     writeFileSync(join(root, 'app-20260915.log'), 'the desktop app\n')
