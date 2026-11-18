@@ -36,7 +36,7 @@ export function rewriteInside(plan: MovePlan, dataDir: string, journal: Journal,
     const info = io.lstatSync(path, { throwIfNoEntry: false })
     if (!info) return
     const bytes = info.isFile() ? io.readFileSync(path) : null
-    // restoreFile writes the saved bytes back as text: only a file whose bytes are its text is touched.
+    // The rewrite writes text: only a file whose bytes are its text is touched.
     const text = bytes && Buffer.from(bytes.toString()).equals(bytes) ? bytes.toString() : null
     const next = text === null ? null : unlessNotJson(() => change(text))
     if (text === null || next === null) {
@@ -83,7 +83,7 @@ export function restoreFile(done: Extract<Done, { did: 'file' }>): void {
     return
   }
   const mode = lstatSync(done.path, { throwIfNoEntry: false })?.mode
-  writeWhole(done.path, Buffer.from(done.before, 'base64').toString())
+  writeWhole(done.path, Buffer.from(done.before, 'base64'))
   if (mode !== undefined) chmodSync(done.path, mode & 0o7777)
 }
 

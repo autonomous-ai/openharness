@@ -81,13 +81,13 @@ export function forgetJournal(legacy: string, io: JournalIo = NODE_FS): void {
 }
 
 /**
- * Writes [text] to [path] owner-only and whole: to its draft, synced, then renamed into place, the rename synced in its
+ * Writes [data] to [path] owner-only and whole: to its draft, synced, then renamed into place, the rename synced in its
  * folder. A crash leaves the file as it was before, or as it is after.
  */
-export function writeWhole(path: string, text: string, io: JournalIo = NODE_FS): void {
+export function writeWhole(path: string, data: string | Buffer, io: JournalIo = NODE_FS): void {
   const draft = draftOf(path)
   try {
-    writeSynced(draft, text, io)
+    writeSynced(draft, data, io)
     io.renameSync(draft, path)
   } catch (error) {
     io.rmSync(draft, { force: true })
