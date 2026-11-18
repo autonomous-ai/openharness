@@ -1124,7 +1124,8 @@ describe('harness device orca status and connect', () => {
 
   /** VS Code not on this computer: its disable only marks the removal, a rewrite of dial-skill.json. */
   const noVscode = (): VscodeExtensionDeps => ({
-    platform: 'darwin', home: folder(), pathVar: '', exists: () => false, executable: () => false, read: () => null,
+    editor: 'vscode', real: (path) => path, platform: 'darwin', home: folder(), pathVar: '',
+    exists: () => false, executable: () => false, read: () => null,
     run: async () => ({ code: 1, timedOut: false }), files: () => null, tempDir: folder, write: () => {}, remove: () => {},
   })
 
@@ -1297,7 +1298,7 @@ describe('harness device vscode', () => {
     list(options.version)
     const runs: string[][] = []
     const deps: VscodeExtensionDeps = {
-      platform: 'darwin', home, pathVar: '',
+      editor: 'vscode', real: (path) => path, platform: 'darwin', home, pathVar: '',
       exists: (path) => disk.has(path),
       executable: (path) => disk.has(path),
       read: (path) => disk.get(path) ?? null,

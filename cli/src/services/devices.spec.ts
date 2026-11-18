@@ -386,6 +386,8 @@ function fakeVscode({ installed = null, app = installed !== null }: { installed?
   const runs: string[][] = []
   let version = installed
   const deps: VscodeExtensionDeps = {
+    editor: 'vscode',
+    real: (path) => path,
     platform: 'darwin',
     home: '/nowhere',
     pathVar: '',
@@ -8365,11 +8367,11 @@ describe('Harness\'s VS Code extension, set up once a computer from the devices\
     const vscode = fakeVscode({ app: true })
     const inApplications = (path: string) => path.startsWith('/Applications/')
     const own = vi.spyOn(vscodeExtension, 'vscodeExtensionDeps')
-      .mockImplementation((given) => ({ ...vscode.deps, exists: inApplications, executable: inApplications, bin: given }))
+      .mockImplementation((editor, given) => ({ ...vscode.deps, editor, exists: inApplications, executable: inApplications, bin: given }))
     start({ faults: ['fleet'], listen: fakeListener().listen, vscodeExtension: null })
     seen.host.watching!(true)
     await settled()
-    expect(own.mock.calls).toEqual([[bin]])
+    expect(own.mock.calls).toEqual([['vscode', bin]])
     expect(flags(vscode)).toEqual(runs)
     expect(readSetup(dataDir).vscode).toBe(runs.length ? '9.9.9' : undefined)
   })

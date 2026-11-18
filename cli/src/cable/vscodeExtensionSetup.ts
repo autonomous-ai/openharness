@@ -89,8 +89,8 @@ export function createVscodeExtensionSetup(deps: VscodeExtensionSetupDeps): Vsco
         if (recorded.version === version) return
         const status = vscodeStatus(deps.vscode)
         // Not on this computer yet: looked for again at the next start or attach, with nothing recorded.
-        if (status.vscode === 'absent') return
-        if (status.vscode === 'on') {
+        if (status.state === 'absent') return
+        if (status.state === 'on') {
           if (status.version === version) recordAs(version)
           else await install(version, 'updated')
           return

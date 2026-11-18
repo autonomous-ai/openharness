@@ -539,7 +539,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // so a daemon under test finds none of this computer's own (devices/vscodeExtension.ts).
   const vscodeCount = createEngineTally('[device] vscode extension', ['vscode'], SETUP_COUNTS, log)
   const vscodeSetup = skill ? createVscodeExtensionSetup({
-    vscode: deps.vscodeExtension ?? vscodeExtensionDeps(process.env.HARNESS_VSCODE_BIN),
+    vscode: deps.vscodeExtension ?? vscodeExtensionDeps('vscode', process.env.HARNESS_VSCODE_BIN),
     removed: () => readRemoved(core.dataDir),
     recorded: () => skill.vscode(),
     record: (version) => skill.recordVscode(version),

@@ -42,6 +42,8 @@ function rig({ platform = 'darwin', app = true, dial = true, installed, build = 
   const counted: Array<[SetupCount] | [SetupCount, string]> = []
   const timers: Array<{ ms: number; run: () => void }> = []
   const vscode: VscodeExtensionDeps = {
+    editor: 'vscode',
+    real: (path) => path,
     platform,
     home: '/Users/someone',
     pathVar: '',

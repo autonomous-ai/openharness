@@ -32,7 +32,7 @@ import { listable, MAX_HOMES, readRemoved, readSetup, readWritten, writeOrcaConn
 import { devicesListenerPath } from '../devices/listenerPath.js'
 import { NOTICE_USAGE, runNotice } from '../devices/notice.js'
 import { ORCA_FINGERPRINT, orcaConnect, type OrcaPluginDeps, type OrcaPluginRun, orcaStatus } from '../devices/orcaPlugin.js'
-import { vscodeDisable, vscodeEnable, vscodeStatus, type VscodeExtensionDeps } from '../devices/vscodeExtension.js'
+import { vscodeDisable, vscodeEnable, vscodeStatus, type VscodeChange, type VscodeEditor, type VscodeExtensionDeps } from '../devices/vscodeExtension.js'
 import { localSocketRoute, socketIsPrivate } from '../lib/localTransport.js'
 import { daemonPost, runAsked } from './asked.js'
 import { claudePluginOn, claudeSettingsPath } from './plugin.js'
@@ -72,7 +72,7 @@ export interface DeviceDeps {
   /** Whether Codex is on this computer: looked for only by `codex status` and `codex enable`. */
   codex(): boolean
   /** What VS Code's words read and run: asked for only by `vscode status`, `enable` and `disable`. */
-  vscode(): VscodeExtensionDeps
+  vscode(editor: VscodeEditor): VscodeExtensionDeps
   /** Orca's CLI and the plugin's files cli.js carries: asked for only by `orca status` and `orca connect`. */
   orca(): OrcaPluginRun
   /** The command's own environment and folder: `notify` reads its caller from them. */
@@ -174,12 +174,15 @@ async function codexCommand(verb: string, json: boolean, deps: DeviceDeps): Prom
   }
 }
 
+/** An editor's answer as its command prints it: the state under the editor's own key, as `vscode`'s always was. */
+const printed = (editor: VscodeEditor, { state, ...rest }: VscodeChange): Record<string, unknown> => ({ [editor]: state, ...rest })
+
 /** Each answer of VS Code's is one JSON line on stdout, failures too, with the word that says why. The removal's mark is
  *  Harness's own setting: one not saved is said on stderr, as the engines' words say it. */
 async function vscodeCommand(verb: string, json: boolean, deps: DeviceDeps): Promise<number> {
   switch (verb) {
     case 'status': {
-      const status = vscodeStatus(deps.vscode())
+      const status = printed('vscode', vscodeStatus(deps.vscode('vscode')))
       deps.out(json ? JSON.stringify(status) : JSON.stringify(status, null, 2))
       return 0
     }
@@ -189,16 +192,16 @@ async function vscodeCommand(verb: string, json: boolean, deps: DeviceDeps): Pro
         deps.err(SAVE_FAILED)
         return 1
       }
-      const result = await vscodeEnable(deps.vscode())
-      deps.out(JSON.stringify(result))
-      return result.vscode === 'on' ? 0 : 1
+      const result = await vscodeEnable(deps.vscode('vscode'))
+      deps.out(JSON.stringify(printed('vscode', result)))
+      return result.state === 'on' ? 0 : 1
     }
     case 'disable': {
       // Marked first, so a pass of the devices service that installs meanwhile takes it out again; the uninstall runs
       // whatever the save did.
       const saved = writeRemoved(deps.dataDir, 'vscode', true) === undefined
-      const result = await vscodeDisable(deps.vscode())
-      deps.out(JSON.stringify(result))
+      const result = await vscodeDisable(deps.vscode('vscode'))
+      deps.out(JSON.stringify(printed('vscode', result)))
       if (!saved) deps.err(SAVE_FAILED)
       return 'error' in result || !saved ? 1 : 0
     }
