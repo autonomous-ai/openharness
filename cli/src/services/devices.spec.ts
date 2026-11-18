@@ -364,12 +364,12 @@ const processTable = { rows: [] as Array<{ pid: number; ppid: number }>, reads: 
 /** Whether a session's settings draw it fullscreen (services/devices.ts claudeFullscreen): the spec's own, fullscreen
  *  unless a spec sets it, each read's folder and transcript path kept, so no spec reads this machine's settings. */
 const claudeSettings = { fullscreen: true, reads: [] as Array<[string, string | undefined]> }
-/** An agent's process group and its tty's foreground group (services/devices.ts processGroups): the spec's own, the
- *  agent in front unless a spec sets it, each read's pid kept, and held while `held` until the spec lands it, so no
- *  spec runs this machine's ps. */
+/** An agent's process group and its VS Code terminal's foreground group (services/devices.ts processGroups): the spec's
+ *  own, the agent in front unless a spec sets it, each read's agent and shell pids kept, and held while `held` until the
+ *  spec lands it, so no spec runs this machine's ps. */
 const processGroups = {
   answer: { pgid: 4242, tpgid: 4242 } as { pgid: number; tpgid: number } | undefined,
-  reads: [] as number[],
+  reads: [] as Array<[number, number]>,
   held: false,
   land: [] as Array<() => void>,
 }
@@ -483,8 +483,8 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
       claudeSettings.reads.push([cwd, transcriptPath])
       return claudeSettings.fullscreen
     },
-    processGroups: async (pid) => {
-      processGroups.reads.push(pid)
+    processGroups: async (agent, shell) => {
+      processGroups.reads.push([agent, shell])
       if (processGroups.held) await new Promise<void>((resolve) => { processGroups.land.push(resolve) })
       return processGroups.answer
     },
@@ -3579,7 +3579,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     host().scrolled('down', 0, 0)
     host().scrolled('move', 8, 0)
     host().scrolled('move', 8, 0)
-    await vi.waitFor(() => expect(processGroups.reads).toEqual([4242]))
+    await vi.waitFor(() => expect(processGroups.reads).toEqual([[4242, SHELL]]))
     // The hook's own folder and transcript path.
     expect([claudeSettings.reads, window.lines]).toEqual([[['/work/api', '/t/sess-1.jsonl']], []])
     processGroups.land.shift()!()
@@ -3659,7 +3659,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     processGroups.land.shift()!()
     await vi.waitFor(() => expect(window.lines).toEqual([page(-1)]))
     // The newer down joined the read in flight.
-    expect([claudeSettings.reads, processGroups.reads]).toEqual([[['/work/api', '/t/sess-1.jsonl']], [4242]])
+    expect([claudeSettings.reads, processGroups.reads]).toEqual([[['/work/api', '/t/sess-1.jsonl']], [[4242, SHELL]]])
   })
 
   it('the answer lands after the up: the whole stroke goes out with page', async () => {
