@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { existsSync, linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join, posix, win32 } from 'node:path'
-import { CallFailure, expandHome, forbiddenDirs, inside, unc, uploadPath } from './call.js'
+import { CallFailure, expandHome, fenced, forbiddenDirs, inside, tempDir, unc, uploadPath } from './call.js'
 
 describe('inside', () => {
   it('fences a Windows folder however its path is spelled', () => {
@@ -60,6 +60,52 @@ describe('forbiddenDirs', () => {
     expect(forbiddenDirs({ HOME: 'C:\\h', USERPROFILE: 'C:\\Users\\a' }, ['C:\\Users\\b'], win32)).toEqual(expect.arrayContaining(
       ['C:\\h\\.ssh', 'C:\\Users\\a\\.ssh', 'C:\\Users\\b\\.ssh', 'C:\\Users\\b\\.local\\share']))
   })
+
+  it('fences AppData under every home on Windows, and the folders APPDATA and LOCALAPPDATA name', () => {
+    expect(forbiddenDirs({ HOME: 'C:\\h', APPDATA: 'D:\\roaming', LOCALAPPDATA: 'D:\\local' }, ['C:\\Users\\a'], win32)).toEqual(expect.arrayContaining(
+      ['C:\\h\\AppData\\Roaming', 'C:\\h\\AppData\\Local', 'C:\\Users\\a\\AppData\\Roaming', 'C:\\Users\\a\\AppData\\Local', 'D:\\roaming', 'D:\\local']))
+  })
+
+  it('fences no AppData on posix', () => {
+    const env = { HOME: '/tmp/h', HARNESS_CONNECTIONS_DIR: '/tmp/c', APPDATA: '/tmp/roaming', LOCALAPPDATA: '/tmp/local' }
+    expect(forbiddenDirs(env, [], posix)).toEqual(['/tmp/c', '/tmp/h/.ssh', '/tmp/h/.gnupg', '/tmp/h/.config', '/tmp/h/.local/share',
+      '/tmp/h/.harness', '/tmp/h/.codex', '/tmp/h/.claude', '/etc', '/proc', '/sys'])
+  })
+})
+
+describe('fenced', () => {
+  const home = 'C:\\Users\\a'
+  const refuses = (file: string, env: NodeJS.ProcessEnv = { USERPROFILE: home }): boolean =>
+    fenced(file, forbiddenDirs(env, [home], win32), tempDir(home, win32), win32)
+
+  it('refuses a file in AppData on Windows', () => {
+    expect(refuses('C:\\Users\\a\\AppData\\Roaming\\x.txt')).toBe(true)
+    expect(refuses('C:\\Users\\a\\AppData\\Local\\Foo\\x.txt')).toBe(true)
+  })
+
+  it('allows a file in the home\'s own AppData\\Local\\Temp', () => {
+    expect(refuses('C:\\Users\\a\\AppData\\Local\\Temp\\x.txt')).toBe(false)
+    expect(refuses('C:\\Users\\a\\AppData\\Local\\Temp\\docs\\x.txt')).toBe(false)
+  })
+
+  it('opens no folder TEMP or TMP names, which are the caller\'s to set', () => {
+    const env = { USERPROFILE: home, TEMP: 'C:\\Users\\a\\AppData\\Roaming', TMP: 'C:\\Users\\a\\AppData\\Local\\Foo' }
+    expect(refuses('C:\\Users\\a\\AppData\\Roaming\\x.txt', env)).toBe(true)
+    expect(refuses('C:\\Users\\a\\AppData\\Local\\Foo\\x.txt', env)).toBe(true)
+  })
+
+  it('refuses a file in AppData\\Local\\Temp that another forbidden folder holds', () => {
+    const env = { HOME: 'C:\\Users\\a\\AppData\\Local\\Temp\\h' }
+    expect(refuses('C:\\Users\\a\\AppData\\Local\\Temp\\h\\.ssh\\id.txt', env)).toBe(true)
+    expect(refuses('C:\\Users\\a\\AppData\\Local\\Temp\\h\\AppData\\Roaming\\x.txt', env)).toBe(true)
+  })
+
+  it('fences posix folders as before, with no temporary folder', () => {
+    const forbidden = forbiddenDirs({ HOME: '/home/a' }, [], posix)
+    expect(tempDir('/home/a', posix)).toBeUndefined()
+    expect(fenced('/home/a/.ssh/id.txt', forbidden, undefined, posix)).toBe(true)
+    expect(fenced('/home/a/docs/x.txt', forbidden, undefined, posix)).toBe(false)
+  })
 })
 
 describe('uploadPath', () => {
@@ -104,6 +150,17 @@ describe('uploadPath', () => {
     expectFenced(share)
   })
 
+  // A junction needs no admin rights, but only Windows has one, and only there is AppData fenced. On Windows CI `home`
+  // is in the account's own AppData\Local\Temp, so the junction is inside the one folder of AppData left open.
+  it.skipIf(process.platform !== 'win32')('refuses a file reached through a junction to AppData\\Roaming, from the temporary folder too', () => {
+    const app = join(home, 'AppData', 'Roaming', 'app')
+    mkdirSync(app, { recursive: true })
+    writeFileSync(join(app, 'note.txt'), 'x')
+    symlinkSync(app, join(home, 'docs', 'app'), 'junction')
+    expectFenced(join(home, 'docs', 'app', 'note.txt'))
+  })
+
+  // On Windows the temporary folder holding `home` is the account's AppData\Local\Temp, inside the fenced AppData\Local.
   it('allows a document elsewhere, also written from ~/', () => {
     expect(uploadPath(join(home, 'docs', 'note.txt'), { HOME: home })).toBe(join(home, 'docs', 'note.txt'))
     expect(uploadPath('~/docs/note.txt', { HOME: home })).toBe(join(home, 'docs', 'note.txt'))
