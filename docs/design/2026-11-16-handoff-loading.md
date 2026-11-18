@@ -158,3 +158,23 @@ The current caller RED at `98c52eb9f1` fails all 20 new cases before runtime edi
 wiring as already-constructed dependencies; optional reads return their fallback and required
 reads reject, with no lazy initialization. This is a recorded behavior failure, not a typecheck
 or setup failure. The current port preserves `agentView` and the existing service lifetime fence.
+
+### Shared resolver isolation, independent review
+
+Review of `fc3132121b` found that `resolve` is also the existing read used before ordinary Wi-Fi
+input and Stop, routed for `TURN_DELIVERERS` in `main.ts`. Sending it through the handoff loading
+door would activate Change agent code during ordinary input and could make an import failure stop
+unrelated work. The first current port is therefore not accepted despite its selected tests.
+
+Keep shared `resolve` eager as the existing `registry.resolve(id) ?? stopped.get(id)` read, followed
+by `agentView` redaction. It has no discovery witness side effect. Only the seven handoff-specific
+methods participate in the deferred dependency construction and warm installation. Internal discovery
+still uses the raw authoritative record through the same dependency instance; the public shared
+resolver never acquires that instance or depends on its availability. The existing single-agent
+identifier bound and post-await physical service connection check remain at the answering boundary.
+
+Record a fresh RED with the actual shared `answerConversationQuery` caller and a failing handoff
+initializer. Live, stopped and missing resolution must remain available and credential-free without
+loading handoff. A stopped read resolved after disconnection must still refuse. First shared resolve
+is no longer a proxy for first handoff activation: cost preparation must measure actual discovery or
+publication separately, retaining the original shared-resolve work as its own control.

@@ -154,3 +154,44 @@ it('keeps the originating request check live while the first import waits', asyn
     agentId: row.agentId, changeId: '1'.repeat(32), targetEngine: 'claude',
   })
 })
+
+
+it('keeps shared live and stopped resolution independent of unavailable handoff code', async () => {
+  loading.create.mockImplementation(() => { throw new Error('handoff component unavailable') })
+  const live = { ...row, gridLaunch: { credential: 'synthetic-live-canary' } } as unknown as RegisteredSession
+  const stopped = { ...row, agentId: 'stopped', gridLaunch: { credential: 'synthetic-stopped-canary' } } as unknown as RegisteredSession
+  const shared = { registry: { resolve: (id: string) => id === row.agentId ? live : null },
+    stopped: { get: async (id: string) => id === 'stopped' ? stopped : null } } as HandoffWiring
+  const { conversationReads, answerConversationQuery } = await import('./conversationQueries.js')
+  const reads = conversationReads(shared, directory), core = fakeCore({ conversations: reads })
+  const authority = { current: () => true, ownsRequest: () => false }
+  for (const original of [live, stopped]) {
+    const reply = await answerConversationQuery(core, 'resolve', { id: original.agentId }, authority)
+    expect(reply.value).toEqual({ agentId: original.agentId, sessionId: original.sessionId, engine: original.engine })
+    expect(reply.value).not.toBe(original)
+    expect(Object.hasOwn(reply.value as object, 'gridLaunch')).toBe(false)
+    expect(original.gridLaunch).toBeDefined()
+  }
+  expect(await answerConversationQuery(core, 'resolve', { id: 'missing' }, authority)).toEqual({ value: null })
+  expect(loading.evaluated).not.toHaveBeenCalled()
+  expect(loading.create).not.toHaveBeenCalled()
+})
+
+it('keeps shared stopped resolution fenced to the requesting connection without opening handoff', async () => {
+  loading.create.mockImplementation(() => { throw new Error('handoff component unavailable') })
+  let finish!: (value: RegisteredSession) => void
+  let connected = true
+  const shared = { registry: { resolve: () => null },
+    stopped: { get: () => new Promise<RegisteredSession>(resolve => { finish = resolve }) } } as HandoffWiring
+  const { conversationReads, answerConversationQuery } = await import('./conversationQueries.js')
+  const core = fakeCore({ conversations: conversationReads(shared, directory) })
+  const pending = answerConversationQuery(core, 'resolve', { id: row.agentId },
+    { current: () => connected, ownsRequest: () => false })
+  // Observe rejection too: the old lazy wiring fails before it can start the shared archive read.
+  const settled = pending.then(value => ({ value }), error => ({ error }))
+  await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+  connected = false; finish(row)
+  expect(await settled).toEqual({ value: { error: 'SERVICE_UNAVAILABLE' } })
+  expect(loading.evaluated).not.toHaveBeenCalled()
+  expect(loading.create).not.toHaveBeenCalled()
+})
