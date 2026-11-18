@@ -61,6 +61,56 @@ function replaceBetweenWitnesses(): void {
   storage = new SessionStorage(root, () => ({ file, sha256: fingerprint(file)!, execArgv: ['--import', import.meta.resolve('tsx')] }))
 }
 
+function rewriteBeforeImageRead(): void {
+  const file = join(root, 'storage-authority-before-read.mjs')
+  const processModule = new URL('../storage/process.ts', import.meta.url).href
+  const admissionModule = new URL('../harnessd/childAdmission.ts', import.meta.url).href
+  const replacement = JSON.stringify({ version: 1, session: { schemaVersion: 2, agentId: 'fixture', registeredAt: 1,
+    engine: 'claude', sessionId: 'asked', title: 'Latest' } })
+  // The real child reads the rewritten bytes and both final witnesses run against this latest graph.
+  writeFileSync(file, `
+    import fs from 'node:fs/promises';
+    import syncFs from 'node:fs';
+    import { syncBuiltinESMExports } from 'node:module';
+    import { childAdmissionFailure } from ${JSON.stringify(admissionModule)};
+    if (childAdmissionFailure(process.env, process.ppid, process.argv[1])) process.exit(2);
+    const open = fs.opendir;
+    let injected = false;
+    fs.opendir = async (...args) => {
+      const handle = await open(...args);
+      if (args[0] === ${JSON.stringify(directory)}) {
+        const read = handle.read.bind(handle);
+        handle.read = async () => {
+          const entry = await read();
+          if (entry?.name === 'fixture.json' && !injected) {
+            injected = true;
+            syncFs.writeFileSync(${JSON.stringify(join(directory, 'fixture.json'))}, ${JSON.stringify(replacement)}, { mode: 0o600 });
+          }
+          return entry;
+        };
+      }
+      return handle;
+    };
+    syncBuiltinESMExports();
+    (await import(${JSON.stringify(processModule)})).runSessionStorage();
+  `, { mode: 0o600 })
+  storage = new SessionStorage(root, () => ({ file, sha256: fingerprint(file)!, execArgv: ['--import', import.meta.resolve('tsx')] }))
+}
+
+it.each(['absence', 'selected'] as const)('uses the latest complete %s graph when a rewrite finishes before its byte read', async purpose => {
+  write(directory, 'fixture', 'other')
+  rewriteBeforeImageRead()
+  const query: StoppedArchiveQuery = purpose === 'absence'
+    ? { kind: 'conversations', ids: ['asked'], reservations: false }
+    : { kind: 'owners', keys: ['claude\0\0\0asked'], defaultCodexHome: join(root, 'codex') }
+  const outcome = await storage.stoppedQuery(query).then(answer => ({
+    accepted: true, current: answer.current(), matching: answer.matches[0],
+    latestSelected: answer.selected?.some(image => image.state === 'image' && image.json
+      && (image.value as { session: { title: string } }).session.title === 'Latest') ?? false,
+  }), error => ({ accepted: false, code: error.code }))
+  expect(outcome).toEqual({ accepted: true, current: true, matching: true, latestSelected: purpose === 'selected' })
+})
+
 it.each(['absence', 'selected'] as const)('refuses %s authority from a replaced directory restored after its page closes', async purpose => {
   write(directory, 'fixture', 'asked')
   write(replacement, 'fixture', purpose === 'absence' ? 'other' : 'asked', 'Replacement')
