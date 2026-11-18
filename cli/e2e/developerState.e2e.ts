@@ -369,6 +369,20 @@ process.stdin.resume()`
     expect(spawnSync('lsof', nobody, { env: d.env }).status).toBe(1)
   })
 
+  // A process's folder is not a file it holds. Adoption reads it, on macOS through lsof (support.ts `processCwds`), to
+  // tell an engine process with no record far from the conversation from one that may hold it, and a folder it cannot
+  // read counts as near (services/externalSessions.ts): hidden, any `claude` the daemon has no record of, another
+  // test's or the developer's, made every Claude Code adoption unavailable on a Mac, and on Linux, which reads /proc, none.
+  it.skipIf(process.platform === 'win32')('its lsof shows a process\'s folder outside its root as the system\'s does', async () => {
+    const d = daemon = await IsolatedDaemon.create()
+    // This worker's, outside the root. Compared, never printed: the folder is the developer's.
+    const folder = (lsof: string, env: NodeJS.ProcessEnv): string =>
+      spawnSync(lsof, ['-n', '-P', '-a', '-d', 'cwd', '-Fpn', '-p', String(process.pid)], { env, encoding: 'utf8' }).stdout
+    const system = folder(SYSTEM_LSOF!, process.env)
+    expect(system.includes(`\nn${realpathSync(process.cwd())}\n`), 'the system\'s lsof shows the folder').toBe(true)
+    expect(folder('lsof', d.env) === system, 'the daemon\'s lsof shows it as the system\'s does').toBe(true)
+  })
+
   // A shell script: Windows has no `open` to stand in for.
   it.skipIf(process.platform === 'win32')('opens nothing of the developer\'s: its open is a fake in its own root that records what it is asked and exits 0', async () => {
     const d = daemon = await IsolatedDaemon.create()
