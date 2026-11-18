@@ -64,7 +64,7 @@ in its own app.
 ```
 dial voice ──▶ devices: ObservedSource.send(agent, text)
    engine codex, live, transcript under env.CODEX_HOME/sessions
-     └─ codexQueue.send(threadId, text)
+     └─ codexQueue.send(threadId, text, isApp)
           execFile(codex, ['queue', '--thread', id, `--message=${text}`])   no shell, cwd = homedir, 10 s
           ├─ exit 0 ─────────────▶ { ok: true }                          count 'codex'
           ├─ timeout ────────────▶ "<name> did not answer."               count 'codex-timeout' (no fallback: it may be queued)
@@ -82,11 +82,13 @@ dial voice ──▶ devices: ObservedSource.send(agent, text)
 
 ### `cli/src/cable/hosts/codexQueue.ts` (new, in the devices process)
 
-- `createCodexQueue(deps)` returns `{ can(): boolean; send(threadId, text): Promise<CodexQueueResult> }`, where a
-  result is `queued`, `timeout`, `busy`, or `failed` with its reason (the exit code, or `no binary` when it could not
-  start), so the one log line can name it.
+- `createCodexQueue(deps)` returns `{ can(isApp): boolean; send(threadId, text, isApp): Promise<CodexQueueResult> }`,
+  where `isApp` says the session is the ChatGPT app's and a result is `queued`, `timeout`, `busy`, or `failed` with its
+  reason (the exit code, or `no binary` when it could not start) and which `codex` ran (`app` or `path`), so the one log
+  line can name it.
 - `deps`: `run(file, args, { cwd, env, timeoutMs })` (execFile, `killSignal: 'SIGKILL'`, a deadline that answers by itself,
-  as `orca.ts` does), the binary, `home` (`env.CODEX_HOME`), `cwd` (`homedir()`).
+  as `orca.ts` does), the binary, the app's CLI, the run's environment, the read of the login shell, the platform,
+  `home` (`env.CODEX_HOME`), `cwd` (`homedir()`).
 - **The binary.** (Changed 2026-11-18, [design](../plans/2026-11-18-dial-chatgpt-pick-and-voice-design.md).)
   - For a session in the ChatGPT app (`agent.app === 'codex'` and `agent.engine === 'codex'`), the app's own CLI: the
     first of `/Applications/ChatGPT.app` and `~/Applications/ChatGPT.app` whose
@@ -118,7 +120,7 @@ dial voice ──▶ devices: ObservedSource.send(agent, text)
 - `ObservedActions` gains `codexQueue: Pick<CodexQueue, 'can' | 'send'>` and `codexHome: string`, and `count` gains
   `'codex' | 'codex-failed' | 'codex-timeout'`.
 - **Queue-able:** `engine === 'codex'`, the session is live, its transcript path is within `<codexHome>/sessions`
-  (`within`, as the scan uses), its session id is a UUID, and `codexQueue.can()`. A Codex hook's `session_id` is the
+  (`within`, as the scan uses), its session id is a UUID, and `codexQueue.can(isApp)`. A Codex hook's `session_id` is the
   thread id `codex queue` takes (the rollout's file name ends with it; Harness resumes Codex by the same id).
   A session with no transcript path yet is not queue-able.
 - **`capabilities`:** `voice` is `live && (queue-able || handle || mod ready)`. A Codex session in a terminal Harness
@@ -127,6 +129,8 @@ dial voice ──▶ devices: ObservedSource.send(agent, text)
   refused. On `failed`, the code goes on to today's checks with today's sentences (PM, 2026-11-15): ended or no
   handle is "<name> did not answer.", `needs-you` is "<name> is waiting for your answer in <Host>.", working or idle
   not known is "<name> is busy. Say it when it is done.", and only an idle agent at its Orca handle is typed into.
+  A definite failure (an exit code or `no binary`) with no pane to type into answers the failure's sentence instead
+  of "did not answer." (Changed 2026-11-18, see Data flow.)
 - **The dial's own words do not turn the dial** (PM, 2026-11-15): as the pane-follow rule says for a turn the dial's
   words started, the turn a queued message starts is the dial's own. The mark is set before the command runs and kept
   only when the result is `queued`. Whether Codex runs its prompt hook for a queued message is checked by the
@@ -152,7 +156,7 @@ dial voice ──▶ devices: ObservedSource.send(agent, text)
 |---|---|---|
 | No `codex` anywhere: no app CLI, none on the login shell's or the daemon's `PATH` (Changed 2026-11-18) | Voice only where Orca can type, as today. With no `codex` on any `PATH`, a session in the ChatGPT app still queues through the app's CLI | `voice · orca` or the refusal |
 | An old Codex with no `queue`, or a thread not in the home | Today's checks and sentences: typed into Orca when idle at a handle | `voice · codex-failed (exit N · app)` or `(exit N · path)` |
-| A session in the ChatGPT app whose queue failed, no pane to type into (Changed 2026-11-18) | "Update ChatGPT, then try again." | `voice · codex-failed (exit N · app)`, `(exit N · path)` or `(no binary · path)` |
+| A session in the ChatGPT app whose queue failed, no pane to type into (Changed 2026-11-18) | "Update ChatGPT, then try again." | `voice · codex-failed (exit N · app)`, `(no binary · app)`, `(exit N · path)` or `(no binary · path)` |
 | Another session whose queue failed, no pane to type into (Changed 2026-11-18) | "Codex could not take it. Try again." | `voice · codex-failed (exit N · path)` or `(no binary · path)` |
 | `codex queue` hangs past 10 s | "<name> did not answer." (it may still have queued, so nothing is typed) | `voice · codex-timeout` |
 | A second transcript while the first is queueing | "<name> has not taken your last words yet." | `voice · pending` |
