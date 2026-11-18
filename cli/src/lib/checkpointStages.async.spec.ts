@@ -9,6 +9,7 @@ const disk = vi.hoisted(() => ({
   paths: new Map<number, string>(), openings: new Map<number, number>(), nextOpen: 0, held: new Map<number, { release(error?: NodeJS.ErrnoException): Promise<void> }>(),
   history: [] as Promise<void>[],
   beforeHistoryClose: undefined as ((path: string) => Promise<void>) | undefined,
+  afterLstat: undefined as ((path: string) => Promise<void>) | undefined,
   closeFailure: undefined as string | undefined,
   target: undefined as ((path: string) => boolean) | undefined,
   entered: undefined as ((fd: number) => void) | undefined,
@@ -47,7 +48,9 @@ vi.mock('node:fs', async original => {
 })
 vi.mock('node:fs/promises', async original => {
   const fs = await original<typeof import('node:fs/promises')>()
-  return { ...fs, open: async (...args: Parameters<typeof fs.open>) => {
+  return { ...fs, lstat: async (...args: Parameters<typeof fs.lstat>) => {
+    const found = await fs.lstat(...args); await disk.afterLstat?.(String(args[0])); return found
+  }, open: async (...args: Parameters<typeof fs.open>) => {
     const handle = await fs.open(...args)
     if (/[\\/]history\.tmp$/.test(String(args[0]))) {
       const close = handle.close.bind(handle)
@@ -64,11 +67,11 @@ const leases: CheckpointStage[] = []
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'checkpoint-journal-'))
   vi.stubEnv('ADAPTER_DATA_DIR', root)
-  disk.trap = false; disk.target = undefined; disk.entered = undefined; disk.closed.length = 0; disk.history.length = 0; disk.closeFailure = undefined; disk.beforeHistoryClose = undefined
+  disk.trap = false; disk.target = undefined; disk.entered = undefined; disk.closed.length = 0; disk.history.length = 0; disk.closeFailure = undefined; disk.beforeHistoryClose = undefined; disk.afterLstat = undefined
   vi.spyOn(console, 'error').mockImplementation(() => {})
 })
 afterEach(async () => {
-  disk.trap = false; disk.target = undefined; disk.entered = undefined
+  disk.trap = false; disk.target = undefined; disk.entered = undefined; disk.afterLstat = undefined
   for (const held of [...disk.held.values()]) await held.release()
   for (const lease of leases.splice(0)) await lease.close()
   await Promise.all(disk.history); await turn()
@@ -233,6 +236,54 @@ it('keeps the first destination intent exclusive while its actual history descri
   expect(await readFile(firstTarget, 'utf8')).toBe('history')
   await expect(stat(secondTarget)).rejects.toMatchObject({ code: 'ENOENT' })
   await writeFile(join(root, `${'a'.repeat(64)}.json`), JSON.stringify({ version: 1, file: basename(firstTarget) }), { mode: 0o600 })
+})
+
+it.each(['same', 'different'] as const)('refuses a later %s destination without rewriting a successful publication intent', async kind => {
+  const lease = await acquire(); await ready(lease)
+  const firstTarget = destination()
+  await lease.publish(firstTarget, () => {})
+  const ownerBefore = await readFile(record(lease), 'utf8'), openingsBefore = disk.nextOpen
+  const secondTarget = kind === 'same' ? firstTarget : join(root, `${'a'.repeat(64)}-${'c'.repeat(36)}.history`)
+  const allowed = vi.fn()
+  const outcome = await lease.publish(secondTarget, allowed).then(() => null, error => error)
+  expect(outcome).toBeInstanceOf(Error)
+  expect(await readFile(record(lease), 'utf8')).toBe(ownerBefore)
+  expect(disk.nextOpen).toBe(openingsBefore)
+  expect((outcome as Error).message).toBe('checkpoint stage unconfirmed')
+  expect(allowed).not.toHaveBeenCalled()
+  expect(await readFile(firstTarget, 'utf8')).toBe('history')
+  if (kind === 'different') await expect(stat(secondTarget)).rejects.toMatchObject({ code: 'ENOENT' })
+  await lease.close()
+  await expect(stat(firstTarget)).rejects.toMatchObject({ code: 'ENOENT' })
+})
+
+it('refuses publication while a second actual verification still holds an earlier completed proof', async () => {
+  const lease = await acquire(); await ready(lease)
+  let entered!: () => void, releaseCheck!: () => void
+  const held = new Promise<void>(resolve => { entered = resolve })
+  const gate = new Promise<void>(resolve => { releaseCheck = resolve })
+  disk.afterLstat = async path => {
+    if (path !== lease.stage.path) return
+    disk.afterLstat = undefined; entered(); await gate
+  }
+  const checking = lease.verify({ bytes: 7, sha256: createHash('sha256').update('history').digest('hex') })
+  const settled = checking.then(() => null, error => error)
+  await held
+  const ownerBefore = await readFile(record(lease), 'utf8'), openingsBefore = disk.nextOpen
+  const allowed = vi.fn()
+  try {
+    const outcome = await lease.publish(destination(), allowed).then(() => null, error => error)
+    expect(outcome).toBeInstanceOf(Error)
+    expect((outcome as Error).message).toBe('checkpoint stage unconfirmed')
+    expect(await readFile(record(lease), 'utf8')).toBe(ownerBefore)
+    expect(disk.nextOpen).toBe(openingsBefore)
+    expect(allowed).not.toHaveBeenCalled()
+    await expect(stat(destination())).rejects.toMatchObject({ code: 'ENOENT' })
+  } finally { releaseCheck(); await settled }
+  await checking
+  await lease.publish(destination(), allowed)
+  expect(allowed).toHaveBeenCalledOnce()
+  expect(await readFile(destination(), 'utf8')).toBe('history')
 })
 
 // An uncertain close deliberately poisons this module instance; keep that terminal failure last.

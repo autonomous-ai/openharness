@@ -243,3 +243,26 @@ guaranteed CPU or caller-latency reduction. Raw review is retained at
 parent-slot, cleanup and manifest flushes are unchanged. No broad follow-on async rewrite or extra
 measurement follows from these four arms. The independent full V5 and final integrated input/Resume
 acceptance remain separate.
+
+
+## Design: one completed publication per stage
+
+A source review found an inherited internal API edge: after a successful publish(A), another call can
+rewrite durable intent to B before failing because history.tmp was consumed. SessionCheckpointStore
+is the only product consumer; it acquires a local stage per save, awaits verification, publishes once,
+and closes in finally. That call chain cannot reach this edge. It adds no native performance hold.
+
+Complete the existing two-way operation exclusion by refusing publish while verification is pending.
+Consume the verified proof synchronously after rename succeeds. Both changes are needed: a second
+verification using an earlier completed proof could otherwise finish after publish and restore it.
+There is no new state, queue, callback, process, API or disk format. Failed flush/authority/rename
+attempts retain explicit retry; successful publication cannot rewrite its destination intent.
+The four physical slots and existing deadline/descriptor custody remain unchanged on every platform.
+Rollback restores the prior API behavior; no data migration or stored-field change is required.
+
+Three exact API REDs cover same/different repeated destinations and a held actual second verification
+while an earlier proof exists. Each must refuse before another journal open or authority callback;
+the original intent remains and removes the correct uncommitted orphan. The held verification is
+released and drained before cleanup, then ordinary publication must still succeed. Existing actual
+failed-flush retry and held-close overlap controls follow in GREEN, then the three stage suites.
+No broader filesystem rewrite, timeout change or extra performance measurement is part of this fix.
