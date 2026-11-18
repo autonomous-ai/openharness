@@ -409,6 +409,22 @@ describe('cable session', () => {
     } finally { await session.stop() }
   })
 
+  it('writes half an emoji in any frame as the dial writes a byte it cannot read, so the dial can parse the frame', async () => {
+    // JSON escapes a lone surrogate as \ud83d, and the dial's parser refuses the whole frame for it: the agent list and
+    // the question never reached the dial.
+    const agents = [{ id: 'a1', name: 'Fix \ud83d', engine: 'claude' }]
+    const { session, port } = await connect(makeHost({ listAgents: async () => agents, describe: () => ({ name: 'Fix \ud83d', engine: 'claude', machine: '' }) }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+      await session.question('a1', 'q1', [{ key: 'k', q: 'Ship \ud83d it? 😀', options: ['\udc00yes', 'no'] }])
+      for (const frame of port.frames) expect(Buffer.from(frame).toString('utf8')).not.toMatch(/\\ud[89a-f]/i)
+      expect(port.sent.find((m) => m.t === 'agent')).toMatchObject({ name: 'Fix ?' })
+      expect(port.sent.find((m) => m.t === 'question'))
+        .toMatchObject({ name: 'Fix ?', questions: [{ q: 'Ship ? it? 😀', options: ['?yes', 'no'] }] })
+    } finally { await session.stop() }
+  })
+
   it('keeps the leading drawer rows that fit one frame', () => {
     const rows = Array.from({ length: 8 }, (_, i) => ({ agentId: `a${i}`, summary: 'x'.repeat(2000) }))
     const kept = fitDrawer(rows)
