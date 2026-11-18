@@ -61,6 +61,29 @@ describe('a Linux account whose roots moved to XDG', () => {
   })
 })
 
+// A ~/.harness beside the moved roots is a stray an old build made after the move: what it holds is still the account's.
+// Linux is named, so this runs on any computer.
+describe('a Linux account with a ~/.harness beside its moved roots', () => {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', platform)
+    vi.unstubAllEnvs()
+  })
+
+  it('a folder in that ~/.harness is the account\'s', () => {
+    Object.defineProperty(process, 'platform', { ...platform, value: 'linux' })
+    vi.stubEnv('XDG_DATA_HOME', '')
+    const base = mkdtempSync(join(tmpdir(), 'home-data-folder-'))
+    try {
+      const account = join(base, 'account')
+      mkdirSync(join(account, '.local', 'share', 'harness'), { recursive: true })
+      const stray = join(account, '.harness', 'cli', 'data')
+      mkdirSync(stray, { recursive: true })
+      expect(inheritedAccountDataFolder({ HOME: join(base, 'throwaway'), ADAPTER_DATA_DIR: stray }, account)).toBe(true)
+    } finally { rmSync(base, { recursive: true, force: true }) }
+  })
+})
+
 describe('a ~/.harness that is itself a link', () => {
   it('is judged by where it leads: the folder it leads to is the account\'s', () => {
     const base = mkdtempSync(join(tmpdir(), 'home-data-folder-'))

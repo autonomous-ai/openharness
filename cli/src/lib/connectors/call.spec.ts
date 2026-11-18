@@ -3,7 +3,6 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir, userInfo } from 'node:os'
 import { basename, dirname, join, posix, win32, type PlatformPath } from 'node:path'
-import { harnessRoots } from '../../config/harnessHome.js'
 import { call, CallFailure, expandHome, forbiddenDirs, identities, identity, tempDirs, unc, uploadFile, walk, type Identity, type Verdict } from './call.js'
 import type { Store } from './store.js'
 
@@ -186,6 +185,10 @@ describe('unc', () => {
 })
 
 describe('forbiddenDirs', () => {
+  // The Linux roots below are the XDG defaults, whatever this computer's variables say.
+  beforeEach(() => { vi.stubEnv('XDG_DATA_HOME', ''); vi.stubEnv('XDG_STATE_HOME', '') })
+  afterEach(() => vi.unstubAllEnvs())
+
   it('fences the folders under every home, once each', () => {
     const dirs = forbiddenDirs({ HOME: '/tmp/h' }, ['/home/a', '/tmp/h'], posix)
     expect(dirs).toEqual(expect.arrayContaining(['/tmp/h/.ssh', '/home/a/.ssh', '/home/a/.local/share', '/home/a/.claude']))
@@ -205,7 +208,7 @@ describe('forbiddenDirs', () => {
   it('fences no AppData on posix', () => {
     const env = { HOME: '/tmp/h', HARNESS_CONNECTIONS_DIR: '/tmp/c', APPDATA: '/tmp/roaming', LOCALAPPDATA: '/tmp/local' }
     expect(forbiddenDirs(env, [], posix, 'linux')).toEqual(['/tmp/c', '/tmp/h/.ssh', '/tmp/h/.gnupg', '/tmp/h/.config', '/tmp/h/.local/share',
-      '/tmp/h/.codex', '/tmp/h/.claude', ...harnessRoots('/tmp/h', 'linux'), '/etc', '/proc', '/sys'])
+      '/tmp/h/.codex', '/tmp/h/.claude', '/tmp/h/.local/share/harness', '/tmp/h/.local/state/harness', '/tmp/h/.harness', '/etc', '/proc', '/sys'])
   })
 
   describe('with the XDG data root in the home', () => {
@@ -223,9 +226,10 @@ describe('forbiddenDirs', () => {
         ['/tmp/c', ...names(home), posix.join(home, '.harness'), '/etc', '/proc', '/sys'])
     })
 
-    it('fences the rule\'s roots on Linux', () => {
-      expect(forbiddenDirs({ HOME: home, HARNESS_CONNECTIONS_DIR: '/tmp/c' }, [], posix, 'linux')).toEqual(
-        ['/tmp/c', ...names(home), ...harnessRoots(home, 'linux'), '/etc', '/proc', '/sys'])
+    // A ~/.harness beside them is a stray an old build made after the move, holding what it wrote there: a sign-in too.
+    it('fences the rule\'s roots on Linux, and a ~/.harness beside them', () => {
+      expect(forbiddenDirs({ HOME: home, HARNESS_CONNECTIONS_DIR: '/tmp/c' }, [], posix, 'linux')).toEqual(['/tmp/c', ...names(home),
+        posix.join(home, '.local/share/harness'), posix.join(home, '.local/state/harness'), posix.join(home, '.harness'), '/etc', '/proc', '/sys'])
     })
   })
 
