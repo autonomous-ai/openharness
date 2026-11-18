@@ -54,16 +54,23 @@ class Box:
             (self.bin / name).symlink_to(found)
         self.platform("Darwin", "arm64")
 
-    def stub(self, name: str, body: str = "", where: Path | None = None) -> Path:
+    def stub(self, name: str, body: str = "", where: Path | None = None, log: bool = True) -> Path:
         path = (where or self.bin) / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.unlink(missing_ok=True)  # never write through a link to a real command
-        path.write_text(f'#!/bin/bash\necho "{name} $*" >> "$CALLS"\n{body}\n')
+        logline = f'echo "{name} $*" >> "$CALLS"\n' if log else ""
+        path.write_text(f'#!/bin/bash\n{logline}{body}\n')
         path.chmod(0o755)
         return path
 
     def platform(self, system: str, machine: str):
-        self.stub("uname", f'case "$1" in -s) echo {system} ;; -m) echo {machine} ;; esac')
+        # Not logged: sourcing the helper asks `uname -s` for the runtime folder, before any call a test counts.
+        self.stub("uname", f'case "$1" in -s) echo {system} ;; -m) echo {machine} ;; esac', log=False)
+
+    def harness_runtime(self, **env: str) -> str:
+        r = self.run('echo "$HARNESS_RUNTIME"', **env)
+        assert r.returncode == 0, r.stderr
+        return r.stdout.strip()
 
     def serve(self, body: bytes, name: str = "download"):
         """curl hands back this file for any URL (a `-o DEST URL` call)."""
@@ -250,6 +257,16 @@ class Node(unittest.TestCase):
         self.assertEqual(lines(r)[-1], "rc=1")
         self.assertIn("Harness's own Node is not in", r.stdout)
 
+    def test_harness_node_reads_current_node_from_the_state_root(self):
+        box = Box(self)
+        box.platform("Linux", "x86_64")
+        state = box.home / ".local" / "state" / "harness" / "runtime"
+        node = box.stub("node", NODE.replace("$NODE_VERSION", "22.23.2"), where=box.root / "harness-node" / "bin")
+        state.mkdir(parents=True)
+        (state / "current-node").write_text(f"{node}\n")
+        r = box.run('harness_node 18 && command -v node')
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, str(node)), r.stderr)
+
     @unittest.skipUnless(Path.home().joinpath(".harness/runtime/current-node").exists(), "no real Harness node to run the probe on")
     def test_the_probe_itself_on_a_real_node(self):
         real = Path(Path.home().joinpath(".harness/runtime/current-node").read_text().strip())
@@ -261,6 +278,58 @@ class Node(unittest.TestCase):
         self.assertEqual(box.run(f'_harness_node_at_least {major + 1} || echo "rc=$?"').stdout.strip(), "rc=1")
         self.assertEqual(box.run(f'_harness_node_at_least {major}.999 || echo "rc=$?"').stdout.strip(), "rc=1")
         self.assertEqual(box.run(f"_harness_node_at_least {major - 1}.999").returncode, 0)
+
+
+class RuntimeFolder(unittest.TestCase):
+    """Off Linux the runtime is in ~/.harness; on Linux in the XDG state folder, unless the home is still on
+    ~/.harness (no XDG data folder, and ~/.harness there)."""
+
+    def linux(self) -> Box:
+        box = Box(self)
+        box.platform("Linux", "x86_64")
+        return box
+
+    def test_linux_fresh_home_puts_the_runtime_in_the_state_root(self):
+        box = self.linux()
+        self.assertEqual(box.harness_runtime(), f"{box.home}/.local/state/harness/runtime")
+
+    def test_linux_home_still_on_dot_harness_keeps_it(self):
+        box = self.linux()
+        (box.home / ".harness").mkdir()
+        self.assertEqual(box.harness_runtime(), str(box.runtime))
+
+    def test_linux_moved_home_uses_the_state_root_with_a_bridge_there(self):
+        box = self.linux()
+        (box.home / ".harness").mkdir()
+        (box.home / ".local" / "share" / "harness").mkdir(parents=True)
+        self.assertEqual(box.harness_runtime(), f"{box.home}/.local/state/harness/runtime")
+
+    def test_xdg_unset_empty_or_relative_is_ignored_absolute_is_used(self):
+        box = self.linux()
+        (box.home / ".harness").mkdir()
+        (box.home / ".local" / "share" / "harness").mkdir(parents=True)
+        for value in ("", "relative/xdg"):
+            with self.subTest(value=value):
+                self.assertEqual(box.harness_runtime(XDG_DATA_HOME=value, XDG_STATE_HOME=value),
+                                 f"{box.home}/.local/state/harness/runtime")
+        data, state = box.root / "xdg-data", box.root / "xdg-state"
+        self.assertEqual(box.harness_runtime(XDG_DATA_HOME=str(data), XDG_STATE_HOME=str(state)), str(box.runtime),
+                         "the data folder looked for is the one XDG_DATA_HOME names")
+        (data / "harness").mkdir(parents=True)
+        self.assertEqual(box.harness_runtime(XDG_DATA_HOME=str(data), XDG_STATE_HOME=str(state)), f"{state}/harness/runtime")
+
+    def test_darwin_keeps_dot_harness_whatever_exists(self):
+        box = Box(self)
+        self.assertEqual(box.harness_runtime(), str(box.runtime))
+        (box.home / ".local" / "share" / "harness").mkdir(parents=True)
+        data = box.root / "xdg-data"
+        (data / "harness").mkdir(parents=True)
+        self.assertEqual(box.harness_runtime(), str(box.runtime))
+        self.assertEqual(box.harness_runtime(XDG_DATA_HOME=str(data), XDG_STATE_HOME=str(box.root / "xdg-state")), str(box.runtime))
+
+    def test_adapter_runtime_dir_still_wins(self):
+        box = self.linux()
+        self.assertEqual(box.harness_runtime(ADAPTER_RUNTIME_DIR="/opt/rt"), "/opt/rt")
 
 
 class PythonInstallDir(unittest.TestCase):
@@ -302,6 +371,7 @@ class Uv(unittest.TestCase):
             with self.subTest(asset=asset):
                 box = Box(self)
                 box.platform(system, machine)
+                (box.home / ".harness").mkdir()  # still on ~/.harness, so Linux's runtime is box.runtime too
                 box.serve(box.uv_tarball(asset))
                 box.checksum(pin)
                 r = box.run('harness_uv && command -v uv && uv --version')
@@ -408,6 +478,40 @@ esac''')
                 self.assertEqual(box.logged(), ["uv venv --quiet --seed --python 3.12 --python-preference only-managed .venv", "python --version"])
                 self.assertNotIn("exec /usr/bin/python3", (box.root / ".venv" / "bin" / "python").read_text(), "the old venv went first")
 
+    def venv_naming(self, box: Box, where: str, python_home: str):
+        """A venv whose Python answers in range, with pyvenv.cfg or bin/pip naming the Python at python_home."""
+        box.stub("python", 'case "$1" in --version) echo "Python 3.12.7" ;; esac', where=box.root / ".venv" / "bin")
+        cfg_home = python_home if where == "pyvenv.cfg" else "/opt/python/bin"
+        (box.root / ".venv" / "pyvenv.cfg").write_text(f"home = {cfg_home}\nversion_info = 3.12.7\n")
+        if where == "bin/pip":
+            (box.root / ".venv" / "bin" / "pip").write_text(f"#!{python_home}/python3.12\nimport pip\n")
+
+    def test_a_venv_on_the_old_trees_python_is_made_again(self):
+        for where in ("pyvenv.cfg", "bin/pip"):
+            for moved in (True, False):
+                with self.subTest(where=where, moved=moved):
+                    box = Box(self)
+                    box.platform("Linux", "x86_64")
+                    (box.home / ".harness").mkdir()
+                    if moved:
+                        (box.home / ".local" / "share" / "harness").mkdir(parents=True)
+                    self.uv(box)
+                    self.venv_naming(box, where, f"{box.home}/.harness/runtime/python/cpython-3.12.7/bin")
+                    r = box.run('harness_venv .venv 3.12')
+                    self.assertEqual(r.returncode, 0, r.stderr)
+                    made = "uv venv --quiet --seed --python 3.12 --python-preference only-managed .venv" in box.logged()
+                    self.assertEqual(made, moved, "made again only once the runtime has left ~/.harness")
+
+    def test_a_venv_on_another_python_is_kept_after_the_move(self):
+        box = Box(self)
+        box.platform("Linux", "x86_64")
+        (box.home / ".harness").mkdir()
+        (box.home / ".local" / "share" / "harness").mkdir(parents=True)
+        self.uv(box)
+        self.venv_naming(box, "pyvenv.cfg", "/opt/python/bin")
+        r = box.run('harness_venv .venv 3.12')
+        self.assertEqual((r.returncode, lines(r)), (0, ["ok   Python 3.12.7 in .venv"]), r.stderr)
+
     def test_no_venv_makes_one_at_the_version_asked(self):
         box = Box(self)
         self.uv(box)
@@ -458,6 +562,7 @@ class Micromamba(unittest.TestCase):
             with self.subTest(asset=asset):
                 box = Box(self)
                 box.platform(system, machine)
+                (box.home / ".harness").mkdir()  # still on ~/.harness, so Linux's runtime is box.runtime too
                 box.serve(b"#!/bin/bash\necho micromamba\n")
                 box.checksum(pin)
                 r = box.run('harness_micromamba && "$HARNESS_MICROMAMBA"')
