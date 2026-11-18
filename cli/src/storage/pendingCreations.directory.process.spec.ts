@@ -1,5 +1,5 @@
 import type { ChildProcess } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -147,9 +147,9 @@ it.skipIf(process.platform === 'win32').each(['primary', 'marker'] as const)('op
   writeFileSync(join(directory, '.pending-v1', id), '', { mode: 0o600 })
   const evidence = fixture(`${which}-iterator`)
   expect(await found()).toEqual([id])
-  expect(evidence()).toMatchObject({ swapped: true, restored: true, changes: 1 })
   expect(evidence().entries).toContainEqual({ which, name: which === 'primary' ? `${id}.json` : id })
   expect(evidence().closed).toEqual(expect.arrayContaining(['primary', 'marker']))
+  expect(evidence()).toMatchObject({ swapped: true, restored: true, changes: 1 })
 })
 
 it.skipIf(process.platform === 'win32').each(['claim', 'result', 'hold'] as const)('keeps %s classification evidence in the pinned directory', async part => {
@@ -169,9 +169,9 @@ it.skipIf(process.platform === 'win32').each(['claim', 'result', 'hold'] as cons
   const page = await operation<PendingCreationPage>({ kind: 'creation-page', cursor: null })
   expect(page.damaged).toBe(0)
   expect(page.ids).toEqual(part === 'result' ? [] : [id])
-  expect(evidence()).toMatchObject({ swapped: true, restored: true, changes: 1 })
   expect(evidence().reads).toContainEqual({ part, from: part === 'claim' ? 'original-missing' : 'original' })
   expect(evidence().reads).not.toContainEqual({ part, from: 'alternate' })
+  expect(evidence()).toMatchObject({ swapped: true, restored: true, changes: 1 })
   await operation({ kind: 'creation-close', cursor: page.cursor })
 })
 
@@ -247,7 +247,7 @@ it.skipIf(process.platform === 'win32').each(['bind-replaced', 'cwd-lost'] as co
 })
 
 it.each([false, true])('preserves a legacy relative cwd after binding, realpath target exists: %s', async exists => {
-  const originalCwd = join(root, 'launch'), project = join(originalCwd, 'project')
+  const originalCwd = join(realpathSync.native(root), 'launch'), project = join(originalCwd, 'project')
   mkdirSync(originalCwd, { mode: 0o700 }); if (exists) mkdirSync(project, { mode: 0o700 })
   seed(); fixture('none', originalCwd)
   mkdirSync(join(root, 'stopped-agents'), { mode: 0o700 })
@@ -260,8 +260,8 @@ it.each([false, true])('preserves a legacy relative cwd after binding, realpath 
   expect((await storage.stoppedQuery(query)).matches).toEqual([true])
 })
 
-it.each([false, true])('preserves Codex home comparison and the original nondefault profile string after binding, relative default: %s', async relativeDefault => {
-  const originalCwd = join(root, 'launch'); mkdirSync(originalCwd, { mode: 0o700 })
+it.each([false, true])('preserves Codex home comparison and original profile strings, refuses relative default: %s', async relativeDefault => {
+  const originalCwd = join(realpathSync.native(root), 'launch'); mkdirSync(originalCwd, { mode: 0o700 })
   seed(); fixture('none', originalCwd)
   mkdirSync(join(root, 'stopped-agents'), { mode: 0o700 })
   for (const [agentId, codexHome] of [['default-profile', relativeDefault ? join(originalCwd, 'codex') : 'codex'], ['other-profile', './other-codex']]) {
@@ -271,7 +271,9 @@ it.each([false, true])('preserves Codex home comparison and the original nondefa
   }
   const query = { kind: 'owners' as const, keys: ['codex\0\0\0default-profile', 'codex\0./other-codex\0\0other-profile'],
     defaultCodexHome: relativeDefault ? 'codex' : join(originalCwd, 'codex') }
-  expect((await storage.stoppedQuery(query)).matches).toEqual([true, true])
+  if (relativeDefault) await expect(storage.stoppedQuery(query)).rejects.toMatchObject({ code: 'invalid' })
+  else expect((await storage.stoppedQuery(query)).matches).toEqual([true, true])
   expect(await found()).toEqual([id])
-  expect((await storage.stoppedQuery(query)).matches).toEqual([true, true])
+  if (relativeDefault) await expect(storage.stoppedQuery(query)).rejects.toMatchObject({ code: 'invalid' })
+  else expect((await storage.stoppedQuery(query)).matches).toEqual([true, true])
 })
