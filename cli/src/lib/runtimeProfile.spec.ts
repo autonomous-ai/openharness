@@ -622,6 +622,48 @@ describe('RuntimeProfileManager', () => {
   })
 })
 
+// The engine-claude worker must answer within its 5 s deadline, and a Claude Code that is slow to list its models
+// made it miss that and restart (#4413): models() waits for the list at most 1 s, then answers the aliases.
+describe('Claude Code\'s own model list, waited for at most 1 s', () => {
+  afterEach(() => { vi.useRealTimers() })
+
+  const aliases = ['default', 'opus', 'fable', 'sonnet', 'haiku']
+  const offeredModels = (options: Awaited<ReturnType<RuntimeProfileManager['modelsForSession']>>) =>
+    [...new Set(options.map((option) => parseRuntimeProfile(option.id)?.model))]
+
+  it('answers the aliases when Claude Code has not listed its models within the second', { timeout: 5_000 }, async () => {
+    vi.useFakeTimers()
+    vi.mocked(listClaudeModels).mockReturnValueOnce(new Promise(() => {}))
+    const pending = new RuntimeProfileManager().modelsForSession(session('claude'))
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(offeredModels(await pending)).toEqual(aliases)
+  })
+
+  it('offers Claude Code\'s own list when it answers within the second, and leaves no timer', { timeout: 5_000 }, async () => {
+    vi.useFakeTimers()
+    const opusRow = { value: 'opus', displayName: 'Opus 5.5', description: 'For complex work', efforts: ['low', 'high'] }
+    const haikuRow = { value: 'haiku', displayName: 'Haiku 4.5', description: 'Fastest', efforts: [] }
+    vi.mocked(listClaudeModels).mockReturnValueOnce(new Promise((resolve) => setTimeout(() => resolve([opusRow, haikuRow]), 999)))
+    const pending = new RuntimeProfileManager().modelsForSession(session('claude'))
+
+    await vi.advanceTimersByTimeAsync(999)
+    expect(offeredModels(await pending)).toEqual(['opus', 'haiku'])
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it.each([100, 1_500])('answers the aliases when the list read fails after %i ms, and the failure stays handled', { timeout: 5_000 }, async (ms) => {
+    vi.useFakeTimers()
+    vi.mocked(listClaudeModels).mockReturnValueOnce(new Promise((_, reject) => setTimeout(() => reject(new Error('claude exited')), ms)))
+    const pending = new RuntimeProfileManager().modelsForSession(session('claude'))
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(offeredModels(await pending)).toEqual(aliases)
+    // The late rejection lands inside the test, where Vitest would fail the run on it if it went unhandled.
+    await vi.advanceTimersByTimeAsync(1_000)
+  })
+})
+
 describe('RuntimeProfileManager.transcriptFields', () => {
   const codexLine = (type: string, payload: Record<string, unknown>) => JSON.stringify({ type, payload })
 

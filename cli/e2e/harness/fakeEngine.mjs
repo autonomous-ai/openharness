@@ -7,6 +7,8 @@
 //     thread's rollout is in its CODEX_HOME, else exits 1 having noted nothing, as 0.167 does;
 //   - as `claude plugin …`, adds, installs, turns on and off, uninstalls and lists the harness-device plugin as 2.1.326
 //     does, noting each call in `claude-plugin-calls` under the test's root (`claudePlugin`);
+//   - as `claude -p … --input-format stream-json`, answers the `initialize` control request with its `/model` and `/`
+//     lists as 2.1.x does on a subscription, and ends when its stdin ends (`answerClaudeLists`);
 //   - runs the hooks its own settings carry, as the real CLIs run them: the commands the daemon
 //     installed (lib/hooks.ts), through a shell, from inside the pane, with the event on stdin, killed at
 //     their timeout and waited for. So the real `hook/notify.mjs` is what reaches the daemon, with its
@@ -100,6 +102,7 @@ import { randomUUID } from 'node:crypto'
 import { appendFileSync, closeSync, constants, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { createInterface } from 'node:readline'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 /**
@@ -186,6 +189,38 @@ function holdUnreadableDescriptor(config, ms) {
     fd = openSync(link, constants.O_RDONLY | constants.O_SYMLINK)
   } else fd = openSync('/proc/self/ns/net', 'r')
   setTimeout(() => closeSync(fd), ms).unref()
+}
+
+const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
+/**
+ * Claude Code 2.1.x's `/model` rows on a subscription: bare aliases, Haiku with no effort. Opus and Sonnet take the
+ * efforts the daemon's alias list offers them, so a test that picks one sees the same choices whether its first ask is
+ * answered from the aliases or from this list (the aliases give `default` no effort, and add `fable`).
+ */
+const CLAUDE_LISTED_MODELS = [
+  { value: 'default', displayName: 'Default (recommended)', description: 'Opus for complex work', supportsEffort: true, supportedEffortLevels: CLAUDE_EFFORTS },
+  { value: 'opus', displayName: 'Opus', description: 'For complex work and everyday tasks', supportsEffort: true, supportedEffortLevels: CLAUDE_EFFORTS },
+  { value: 'sonnet', displayName: 'Sonnet', description: 'For everyday tasks', supportsEffort: true, supportedEffortLevels: CLAUDE_EFFORTS },
+  { value: 'haiku', displayName: 'Haiku', description: 'Fastest for quick answers' },
+]
+const CLAUDE_LISTED_COMMANDS = [
+  { name: 'compact', description: 'Clear history but keep a summary', argumentHint: '[instructions]' },
+  { name: 'review', description: 'Review a pull request', argumentHint: '' },
+]
+
+/**
+ * `claude -p … --input-format stream-json` as engines/claude/lists.ts reads it: each `initialize` control request on
+ * stdin is answered with the models and commands; nothing is launched, written or hooked, and it ends with its stdin.
+ */
+function answerClaudeLists() {
+  createInterface({ input: process.stdin }).on('line', (line) => {
+    let message
+    try { message = JSON.parse(line) } catch { return }
+    if (message?.type !== 'control_request' || message.request?.subtype !== 'initialize') return
+    process.stdout.write(`${JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id,
+      response: { models: CLAUDE_LISTED_MODELS, commands: CLAUDE_LISTED_COMMANDS } } })}\n`)
+  })
+  process.stdin.on('end', () => process.exit(0))
 }
 
 /** The one marketplace the fake knows, and the plugin in it: what devices/claudePlugin.ts adds and installs. */
@@ -376,6 +411,13 @@ export async function run(engine, config = {}, { native = false } = {}) {
   // `claude plugin …` changes or lists plugins and starts no session: no launch, kept out of the launch-argv ledger.
   if (engine === 'claude' && args[0] === 'plugin') {
     claudePlugin(config, args)
+    return
+  }
+  // Since #4413 the daemon asks Claude Code its `/model` list this way (engines/claude/lists.ts), and Claude Code started
+  // so runs no hook and keeps no session. The fake used to take it for a launch (a launch-argv line, a session, hooks)
+  // and never answered, so every Claude models_list waited out the engine worker's 5 s deadline.
+  if (engine === 'claude' && args[0] === '-p' && args[args.indexOf('--input-format') + 1] === 'stream-json') {
+    answerClaudeLists()
     return
   }
   // Every launch's argv, for a test to read what an agent was started with.
