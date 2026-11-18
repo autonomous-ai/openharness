@@ -441,3 +441,29 @@ admission, child replacement and uncertain close custody. Final coverage, packag
 and cost acceptance must be on the corrected combined source; earlier passing gates do not
 establish this correction's performance or final release acceptance.
 
+
+## Design: exact metadata comparison and prepared lean entry
+
+The fixed child profiles identify repeated `sessionFileIdentity` formatting as another cost:
+intermediate read fences formatted the same ten BigInt stat fields four times before the final
+proof was formatted. The replacement compares exactly dev, ino, size, mtimeNs, ctimeNs,
+birthtimeNs, mode, uid, gid and nlink directly. The final canonical identity string and every
+persisted/source proof remain unchanged. Tests mutate every field at the after-read and final
+pathname checks, prove actual descriptor close, and compare all operand orderings against the
+original string equality. Atime remains outside the identity contract.
+
+A non-admitted no-master entry already prepares and adopts a claimed immutable execution
+artifact, proving its original full entry, complete cohort and optional lean core hashes. Storage
+now selects the paired leanCoreScript/leanCoreFingerprint from that same artifact when both
+exist. With no complete lean pair it selects the existing full pair before any child starts.
+After selection, a missing or altered lean entry is refusal; it never falls back to the full or
+canonical script. The original admitted supervised entry and explicit source graph are unchanged.
+Every replacement child still rehashes its selected entry. The existing artifact claim remains
+held until actual storage cleanup, including when cleanup cannot confirm settlement.
+
+The separate RED receipt `/tmp/core-grid-storage-equality-lean-red-20261118.log` records both
+expected failures: four intermediate string conversions instead of zero, and full selection
+despite an available proved lean pair. The focused current-source follow-up has132 passing
+checks across eight files; typechecking passes. The original instrumented RSS difference is
+attribution only. No new performance acceptance is asserted until the combined corrected
+artifact is built and measured under a reviewed fixed workload.

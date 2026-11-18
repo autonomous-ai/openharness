@@ -17,7 +17,8 @@ export async function ownSessionStorage(deps: StorageOwnerDeps): Promise<{ close
   if (selected.admitted) deps.configure(selected.file, selected.sha256)
   else {
     artifact = await deps.prepare(selected.file, selected.sha256)
-    deps.configure(artifact.fullScript, artifact.fullFingerprint)
+    if (artifact.leanCoreScript && artifact.leanCoreFingerprint) deps.configure(artifact.leanCoreScript, artifact.leanCoreFingerprint)
+    else deps.configure(artifact.fullScript, artifact.fullFingerprint)
   }
   let closing: Promise<void> | undefined
   return { close() {

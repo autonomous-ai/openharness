@@ -12,6 +12,13 @@ export function sessionFileIdentity(stat: BigIntStats): string {
     stat.mode, stat.uid, stat.gid, stat.nlink].join(':')
 }
 
+/** Intermediate read fences compare the same fields without repeatedly formatting ten big integers. */
+export function sameSessionFileIdentity(left: BigIntStats, right: BigIntStats): boolean {
+  return left.dev === right.dev && left.ino === right.ino && left.size === right.size
+    && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs && left.birthtimeNs === right.birthtimeNs
+    && left.mode === right.mode && left.uid === right.uid && left.gid === right.gid && left.nlink === right.nlink
+}
+
 export type SessionDocument = { kind: 'registry' } | { kind: 'legacy-registry' } | { kind: 'names' }
   | { kind: 'stopped' | 'superseded'; agentId: string }
 

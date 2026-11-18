@@ -3,7 +3,7 @@ import { constants, type BigIntStats } from 'node:fs'
 import * as fs from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { requireWindowsStateFile, secureStateDirectory, StateFileCleanupUnconfirmed } from '../lib/secureState.js'
-import { sessionFileIdentity, SessionStorageUnavailable } from '../lib/sessionStorageWire.js'
+import { sameSessionFileIdentity, SessionStorageUnavailable } from '../lib/sessionStorageWire.js'
 
 // A failed close is deliberately never retried; the child must exit before its parent releases custody.
 const uncertain = new Set<fs.FileHandle>()
@@ -44,7 +44,7 @@ export async function readPrivateImage(file: string, maxBytes: number): Promise<
       bytes = bytes.subarray(0, offset)
     }
     const after = await handle.stat({ bigint: true }), path = await fs.lstat(file, { bigint: true })
-    if (sessionFileIdentity(before) !== sessionFileIdentity(after) || sessionFileIdentity(after) !== sessionFileIdentity(path)) {
+    if (!sameSessionFileIdentity(before, after) || !sameSessionFileIdentity(after, path)) {
       throw new SessionStorageUnavailable('changed')
     }
     return { bytes, stat: after }

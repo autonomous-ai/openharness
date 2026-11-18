@@ -9,6 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fingerprint } from '../harnessd/bundleFingerprint.js'
 import { SessionStorage } from './sessionStorage.js'
 import { sessionFileIdentity } from './sessionStorageWire.js'
+import { ownSessionStorage } from '../harnessd/sessionStorageOwner.js'
+import type { ExecutionArtifact } from '../harnessd/executionArtifacts.js'
 
 vi.mock('node:fs', async original => ({ ...await original<object>() }))
 
@@ -71,6 +73,28 @@ function faultChild(fault: 'after-sync' | 'replace-before-open' | 'directory-clo
 }
 
 describe('required session storage process', () => {
+  it.each(['missing', 'changed'])('refuses a %s selected prepared lean entry without using its full fallback', async kind => {
+    const full = join(root, 'cohort.mjs'), lean = join(root, 'core.mjs')
+    writeFileSync(full, 'throw new Error("full fallback must not run")', { mode: 0o600 })
+    writeFileSync(lean, 'throw new Error("lean fixture must not run")', { mode: 0o600 })
+    const release = vi.fn(), configure = vi.fn((file: string, hash: string) => storage.configureEntry(file, hash))
+    const prepared = await ownSessionStorage({
+      entry: () => ({ file: full, sha256: fingerprint(full)!, admitted: false }),
+      prepare: async () => ({ fullScript: full, fullFingerprint: fingerprint(full)!, leanCoreScript: lean,
+        leanCoreFingerprint: fingerprint(lean)!, release }) as unknown as ExecutionArtifact,
+      configure, close: () => storage.close(),
+    })
+    if (kind === 'missing') rmSync(lean)
+    else writeFileSync(lean, 'throw new Error("changed lean must not run")')
+    await expect(storage.read({ kind: 'registry' })).rejects.toMatchObject({ code: 'disconnected' })
+    expect(configure).toHaveBeenCalledOnce()
+    expect(configure.mock.calls[0][0]).toBe(lean)
+    expect((storage as unknown as { child?: ChildProcess }).child).toBeUndefined()
+    expect(release).not.toHaveBeenCalled()
+    await prepared.close()
+    expect(release).toHaveBeenCalledOnce()
+  })
+
   it('reaps the storage child after a shared directory-helper close fails', async () => {
     faultChild('directory-close')
     writeFileSync(join(root, 'registry.json'), JSON.stringify([row()]), { mode: 0o600 })

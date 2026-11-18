@@ -17,6 +17,32 @@ function fixture(admitted: boolean) {
 }
 
 describe('session storage execution ownership', () => {
+  it('selects the already verified lean core in a prepared no-master cohort', async () => {
+    const deps = fixture(false)
+    deps.prepare.mockResolvedValue({ fullScript: '/immutable/cohort.mjs', fullFingerprint: 'b'.repeat(64),
+      leanCoreScript: '/immutable/core.mjs', leanCoreFingerprint: 'c'.repeat(64), release: deps.release } as unknown as ExecutionArtifact)
+    let settle!: () => void
+    deps.close.mockImplementation(() => new Promise(resolve => { settle = resolve }))
+    const owner = await ownSessionStorage(deps)
+    expect(deps.configure).toHaveBeenCalledWith('/immutable/core.mjs', 'c'.repeat(64))
+    expect(deps.release).not.toHaveBeenCalled()
+    const closing = owner.close()
+    expect(deps.release).not.toHaveBeenCalled()
+    settle(); await closing
+    expect(deps.release).toHaveBeenCalledOnce()
+  })
+
+  it.each(['leanCoreScript', 'leanCoreFingerprint'] as const)('uses the full pair only before selection when %s is absent', async absent => {
+    const deps = fixture(false)
+    const artifact = { fullScript: '/immutable/cohort.mjs', fullFingerprint: 'b'.repeat(64),
+      leanCoreScript: '/immutable/core.mjs', leanCoreFingerprint: 'c'.repeat(64), release: deps.release }
+    delete (artifact as Partial<typeof artifact>)[absent]
+    deps.prepare.mockResolvedValue(artifact as unknown as ExecutionArtifact)
+    const owner = await ownSessionStorage(deps)
+    expect(deps.configure).toHaveBeenCalledWith('/immutable/cohort.mjs', 'b'.repeat(64))
+    await owner.close()
+  })
+
   it('reuses the admitted executed entry without selecting the mutable canonical CLI', async () => {
     const deps = fixture(true)
     const owner = await ownSessionStorage(deps)
