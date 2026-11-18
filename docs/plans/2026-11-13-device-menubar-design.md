@@ -214,10 +214,8 @@ Firmware update shows "Updating to X" with no percent (a percent is a later cabl
 
 ### Claude Code and Codex
 
-The menu has no row for them and the app runs no `harness device` word for an agent: the devices service sets them up
-once a dial has attached ([dial agents always on](2026-11-17-dial-agents-always-on-design.md)). It runs two, both VS
-Code's: `harness device vscode status --json` and `harness device vscode enable`, for the one item **Turn on VS Code**
-([dial in VS Code](2026-11-17-dial-vscode-extension-design.md#6-harness-devices-menu)).
+The menu has no row for them and the app runs no `harness device` command: the devices service sets them up once a
+dial has attached ([dial agents always on](2026-11-17-dial-agents-always-on-design.md)).
 
 ### Menu
 
@@ -234,7 +232,6 @@ while the desktop app runs (it has its own `HarnessStatusMenu`).
 | **Notifications** (submenu) | **All** and **Needs you**, the one in force checked; only while Harness runs and the dial is attached and not updating ([design](2026-11-16-dial-agent-notify-design.md)) |
 | "Updating Harness Device…" (disabled) | while the app installs its own update ([design](2026-11-16-device-app-release-design.md)) |
 | **Update X…** | when the app cannot replace its bundle; opens `harness.autonomous.ai/device` ([design](2026-11-16-device-app-release-design.md)) |
-| **Turn on VS Code** | when the CLI is installed and `harness device vscode status --json` last said `off` (read at start, when the menu opens at most once a minute, and after a click); its click runs `harness device vscode enable` (90 s), and the item is hidden while it runs. It goes once the extension is on ([design](2026-11-17-dial-vscode-extension-design.md#6-harness-devices-menu)) |
 | separator | |
 | **Open Harness** | when the desktop app is installed (`open -b ai.autonomous.harness`) |
 | **About** | macOS's standard About panel, brought to the front: the app's name and version, and one credits line `Dial 0.1.0 · Harness 0.6.58` (`harness --version`, read when the menu opens, at most once a minute), a version the app does not know left out |

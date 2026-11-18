@@ -10,7 +10,6 @@ use crate::state::StateFile;
 use crate::tabs::{Out, POLL_EVERY, Select, TabApp, TabFollow, TabScripts};
 use crate::types::{Effect, Event, Log, LoginEvent};
 use crate::update::AppUpdater;
-use crate::vscode;
 use crate::watch::{self, Watch};
 use std::ffi::OsString;
 use std::io;
@@ -200,8 +199,6 @@ impl Runner {
             }
             Effect::ReadAuth => shared.with_cli(|cli| Event::Auth(account::auth_status(cli))),
             Effect::ReadVersion => shared.with_cli(|cli| Event::CliVersion(cli::version(cli))),
-            Effect::ReadVscode => shared.with_cli(|cli| Event::Vscode(vscode::status(cli))),
-            Effect::TurnOnVscode => shared.with_cli(|cli| Event::VscodeTurnedOn(vscode::turn_on(cli))),
             Effect::RunLogin => shared.run_login(),
             Effect::CancelLogin => {
                 let login = shared.login.lock().unwrap().take();
@@ -452,9 +449,7 @@ mod tests {
     use crate::state::StateFile;
     use crate::tabs::{NoTabs, Selected, TabApp, TabError, TabScripts};
     use crate::testing::{Fake, alive, fake_harness, wait_gone};
-    use crate::types::{
-        DialStatus, Effect, Event, LoginEvent, MenuItem, NotifyMode, Output, Saved, UpdateFailure, Vscode,
-    };
+    use crate::types::{DialStatus, Effect, Event, LoginEvent, MenuItem, NotifyMode, Output, Saved, UpdateFailure};
     use crate::update::AppUpdater;
     use std::collections::VecDeque;
     use std::fs;
@@ -850,10 +845,6 @@ mod tests {
         assert_eq!(w.answer(Effect::ReadAuth), Event::Auth(Some(false)));
         w.fake.script("--version", &["0.6.58"]);
         assert_eq!(w.answer(Effect::ReadVersion), Event::CliVersion(Some("0.6.58".into())));
-        w.fake.script("device vscode status --json", &[r#"{"vscode":"off"}"#]);
-        assert_eq!(w.answer(Effect::ReadVscode), Event::Vscode(Some(Vscode::Off)));
-        w.fake.script("device vscode enable", &[r#"{"vscode":"on","version":"0.6.60"}"#]);
-        assert_eq!(w.answer(Effect::TurnOnVscode), Event::VscodeTurnedOn(Ok(())));
         w.fake.script("login --json", &[URL, SUCCESS]);
         assert_eq!(w.answer(Effect::RunLogin), browser());
         assert_eq!(w.next(), sign_in(LoginEvent::Done(Ok(()))));
@@ -866,15 +857,7 @@ mod tests {
         assert!(w.logged("menu: No dial | Quit"));
         assert_eq!(
             w.fake.calls(),
-            [
-                "start --if-down",
-                "start --if-down",
-                "auth status --json",
-                "--version",
-                "device vscode status --json",
-                "device vscode enable",
-                "login --json"
-            ]
+            ["start --if-down", "start --if-down", "auth status --json", "--version", "login --json"]
         );
     }
 
@@ -915,15 +898,7 @@ mod tests {
     fn without_a_cli_what_needs_one_says_so() {
         let w = world_where(|doors| doors.cli_override = None);
         assert!(!w.runner.find_cli());
-        let needs_one = [
-            Effect::SpawnWatch,
-            Effect::RunStart,
-            Effect::ReadAuth,
-            Effect::ReadVersion,
-            Effect::ReadVscode,
-            Effect::TurnOnVscode,
-            Effect::RunLogin,
-        ];
+        let needs_one = [Effect::SpawnWatch, Effect::RunStart, Effect::ReadAuth, Effect::ReadVersion, Effect::RunLogin];
         for effect in needs_one {
             assert_eq!(w.answer(effect.clone()), Event::Cli(false), "{effect:?}");
         }
@@ -1005,8 +980,6 @@ mod tests {
             Effect::RunInstall,
             Effect::ReadAuth,
             Effect::ReadVersion,
-            Effect::ReadVscode,
-            Effect::TurnOnVscode,
             Effect::RunLogin,
             Effect::CancelLogin,
             Effect::SetSound(true),
@@ -1462,27 +1435,25 @@ mod tests {
         w.fake.script("--version", &["0.6.58"]);
         let (mut app, mut effects) = App::new(Saved::default(), w.runner.find_cli(), false, B);
         let connected = MenuItem::Text("Device ready".into());
-        let (mut dial, mut auth, mut version, mut vscode) = (false, false, false, false);
+        let (mut dial, mut auth, mut version) = (false, false, false);
         loop {
             for effect in effects {
                 if let Some(Effect::Menu(items)) = w.runner.run(effect) {
                     dial |= items.first() == Some(&connected);
                 }
             }
-            if dial && auth && version && vscode {
+            if dial && auth && version {
                 break;
             }
             let event = w.next();
             auth |= event == Event::Auth(Some(true));
             version |= event == Event::CliVersion(Some("0.6.58".into()));
-            // The fake has no such word: as an older CLI's, its status is None.
-            vscode |= event == Event::Vscode(None);
             effects = app.handle(event);
         }
-        // The one `device` word at start is VS Code's status: none is an agent's.
+        assert!(w.fake.calls().iter().all(|call| !call.starts_with("device ")), "{:?}", w.fake.calls());
         let mut calls = w.fake.calls();
         calls.sort();
-        assert_eq!(calls, ["--version", "auth status --json", "device vscode status --json", "hardware watch --json"]);
+        assert_eq!(calls, ["--version", "auth status --json", "hardware watch --json"]);
     }
 
     #[cfg(unix)]

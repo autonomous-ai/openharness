@@ -114,7 +114,6 @@ pub enum MenuAction {
     NotifyFull,
     NotifyYou,
     Update,
-    TurnOnVscode,
     OpenHarness,
     About,
     Quit,
@@ -141,32 +140,6 @@ pub enum UpdateFailure {
     NotWritable,
 }
 
-/// What `harness device vscode status --json` said. Absent: no VS Code on this computer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Vscode {
-    Absent,
-    Off,
-    On,
-}
-
-/// Why a turn-on did not happen: the CLI's own word.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum VscodeFailure {
-    NoCode,
-    Timeout,
-    Failed,
-}
-
-impl VscodeFailure {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            VscodeFailure::NoCode => "no-code",
-            VscodeFailure::Timeout => "timeout",
-            VscodeFailure::Failed => "failed",
-        }
-    }
-}
-
 /// The app's own update, as the menu shows it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum AppUpdate {
@@ -188,10 +161,6 @@ pub struct AppState {
     pub app_update: AppUpdate,
     /// What `harness --version` printed, for the About panel.
     pub cli_version: Option<String>,
-    /// None: not read yet, or a CLI with no such word.
-    pub vscode: Option<Vscode>,
-    /// The click's `enable` has not answered.
-    pub vscode_busy: bool,
 }
 
 /// AuthorizeUrl holds an `https:` URL only (account.rs lets no other through).
@@ -224,8 +193,6 @@ pub enum Event {
     UpdateChecked(Option<String>),
     UpdateInstalled,
     UpdateFailed(UpdateFailure),
-    Vscode(Option<Vscode>),
-    VscodeTurnedOn(Result<(), VscodeFailure>),
 }
 
 /// What to do about it. Show(None) hides the window. ShowAbout: the About panel, with its credits line. Menu, Show,
@@ -251,8 +218,6 @@ pub enum Effect {
     Log(String),
     CheckUpdate,
     InstallUpdate,
-    ReadVscode,
-    TurnOnVscode,
     Menu(Vec<MenuItem>),
     Show(Option<View>),
     ShowAbout(Option<String>),

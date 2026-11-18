@@ -2,13 +2,13 @@
 
 use crate::install::GETTING_READY;
 use crate::keepalive::{Keep, KeepAlive};
-use crate::model::{about_credits, due, menu, menu_log, offers_vscode};
+use crate::model::{about_credits, due, menu, menu_log};
 use crate::types::{
     Action, AppState, AppUpdate, CliState, Daemon, Effect, Event, LoginEvent, MenuAction, MenuItem, NotifyMode, Phase,
-    Saved, Screen, UpdateFailure, View, Vscode,
+    Saved, Screen, UpdateFailure, View,
 };
 
-/// The menu reads the account, the CLI's version and VS Code's status again at most this often.
+/// The menu reads the account and the CLI's version again at most this often.
 const READ_EVERY_SECS: u64 = 60;
 
 /// The app asks for its own update at most this often: as often as the CLI's updater.
@@ -71,8 +71,6 @@ impl App {
             saved,
             app_update: AppUpdate::None,
             cli_version: None,
-            vscode: None,
-            vscode_busy: false,
         };
         let mut app = App {
             state,
@@ -172,8 +170,6 @@ impl App {
                 }
                 self.state.signed_in = None;
                 self.state.cli_version = None;
-                self.state.vscode = None;
-                self.state.vscode_busy = false;
                 self.awaiting_account = false;
                 if self.window.is_some() {
                     self.show(None, effects);
@@ -231,19 +227,8 @@ impl App {
             Event::CliVersion(version) if self.state.cli == CliState::Found => {
                 self.state.cli_version = version.or(self.state.cli_version.take());
             }
-            // A CLI with no such word answers None: the item is not offered.
-            Event::Vscode(vscode) if self.state.cli == CliState::Found => self.state.vscode = vscode,
-            Event::VscodeTurnedOn(result) if self.state.cli == CliState::Found => {
-                self.state.vscode_busy = false;
-                match result {
-                    // The CLI said on: the item stays hidden until the read below says otherwise.
-                    Ok(()) => self.state.vscode = Some(Vscode::On),
-                    Err(failure) => effects.push(Effect::Log(format!("vscode: not turned on · {}", failure.as_str()))),
-                }
-                effects.push(Effect::ReadVscode);
-            }
             // A read of a CLI that went away answers late: nothing reads it.
-            Event::Auth(_) | Event::CliVersion(_) | Event::Vscode(_) | Event::VscodeTurnedOn(_) => {}
+            Event::Auth(_) | Event::CliVersion(_) => {}
             Event::Login(event) => self.login_event(event, effects),
             // A failure is tried again at the next start.
             Event::LoginItem(registered) => {
@@ -267,13 +252,6 @@ impl App {
                     effects.push(Effect::Menu(self.menu.clone()));
                 }
                 MenuAction::Update => effects.push(Effect::OpenUrl(DEVICE_PAGE.into())),
-                // Only while the item shows: a click of a menu drawn before the run started does nothing.
-                MenuAction::TurnOnVscode => {
-                    if offers_vscode(&self.state) {
-                        self.state.vscode_busy = true;
-                        effects.push(Effect::TurnOnVscode);
-                    }
-                }
                 MenuAction::OpenHarness => effects.push(Effect::OpenDesktop),
                 MenuAction::About => effects.push(Effect::ShowAbout(about_credits(&self.state))),
                 MenuAction::Quit => {
@@ -369,10 +347,9 @@ impl App {
     }
 
     /// The relaunch would also cut short a daemon start or what the window shows, so it waits for them too; a check
-    /// does not, as the first launch's window is open right after the CLI install. A VS Code turn-on runs at most 90 s:
-    /// relaunched under it, its result is never logged and the new instance may start a second one.
+    /// does not, as the first launch's window is open right after the CLI install.
     fn relaunch_waits(&self) -> bool {
-        self.running() || self.keep.starting() || self.window.is_some() || self.state.vscode_busy
+        self.running() || self.keep.starting() || self.window.is_some()
     }
 
     /// Only a button the window shows does something, so a second click on one that started a run does nothing.
@@ -470,7 +447,7 @@ impl App {
     }
 
     fn read(&mut self, effects: &mut Vec<Effect>) {
-        effects.extend([Effect::ReadAuth, Effect::ReadVersion, Effect::ReadVscode]);
+        effects.extend([Effect::ReadAuth, Effect::ReadVersion]);
         self.last_read = self.now;
     }
 
@@ -557,7 +534,7 @@ mod tests {
     use crate::install::{DOWNLOADING_HARNESS, GETTING_READY, INSTALLING_TMUX};
     use crate::types::{
         Action, DialStatus, Effect, Event, LoginEvent, MenuAction, MenuItem, NotifyMode, Phase, Saved, Screen,
-        UpdateFailure, View, Vscode, VscodeFailure,
+        UpdateFailure, View,
     };
 
     /// Second 0 of a minute.
@@ -675,14 +652,8 @@ mod tests {
     fn a_found_cli_is_watched_and_read() {
         let (app, effects) = App::new(Saved::default(), true, false, B);
         let seen = Saved { cli_seen: true, ..Saved::default() };
-        let asked = [
-            Effect::SpawnWatch,
-            Effect::ReadAuth,
-            Effect::ReadVersion,
-            Effect::ReadVscode,
-            Effect::Save(seen),
-            Effect::RegisterLoginItem,
-        ];
+        let asked =
+            [Effect::SpawnWatch, Effect::ReadAuth, Effect::ReadVersion, Effect::Save(seen), Effect::RegisterLoginItem];
         for effect in asked {
             assert!(has(&effects, &effect), "{effect:?}");
         }
@@ -942,20 +913,18 @@ mod tests {
 
     #[test]
     fn the_menu_reads_again_at_most_once_a_minute() {
-        let reads = |effects: &[Effect]| {
-            [Effect::ReadAuth, Effect::ReadVersion, Effect::ReadVscode].map(|read| has(effects, &read))
-        };
+        let reads = |effects: &[Effect]| [Effect::ReadAuth, Effect::ReadVersion].map(|read| has(effects, &read));
         let opened = |now: u64, desktop_installed: bool| Event::MenuOpened { now, desktop_installed };
         let mut app = found();
-        assert_eq!(reads(&app.handle(opened(B + 10, false))), [false; 3]);
-        assert_eq!(reads(&app.handle(opened(B + 60, false))), [true; 3]);
-        assert_eq!(reads(&app.handle(opened(B + 70, false))), [false; 3]);
+        assert_eq!(reads(&app.handle(opened(B + 10, false))), [false; 2]);
+        assert_eq!(reads(&app.handle(opened(B + 60, false))), [true; 2]);
+        assert_eq!(reads(&app.handle(opened(B + 70, false))), [false; 2]);
 
         let effects = app.handle(opened(B + 80, true));
         assert_eq!(rows(&effects), ["Starting Harness", "Open Harness", "About", "Quit"]);
         assert_eq!(rows(&app.handle(opened(B + 90, false))), ["Starting Harness", "About", "Quit"]);
 
-        assert_eq!(reads(&removed().handle(opened(B + 120, false))), [false; 3]);
+        assert_eq!(reads(&removed().handle(opened(B + 120, false))), [false; 2]);
     }
 
     #[test]
@@ -1180,7 +1149,7 @@ mod tests {
         let mut app = removed();
         assert_eq!(app.handle(tick(B + 5)), [Effect::FindCli, Effect::CheckUpdate]);
         let effects = app.handle(Event::Cli(true));
-        for effect in [Effect::SpawnWatch, Effect::ReadAuth, Effect::ReadVersion, Effect::ReadVscode] {
+        for effect in [Effect::SpawnWatch, Effect::ReadAuth, Effect::ReadVersion] {
             assert!(has(&effects, &effect), "{effect:?}");
         }
         assert_eq!(rows(&effects), ["Starting Harness", "About", "Quit"]);
@@ -1206,95 +1175,6 @@ mod tests {
 
         // A button the window does not show does nothing.
         assert!(found().handle(Event::Act(Action::SignIn)).is_empty());
-    }
-
-    const TURN_ON: &str = "Turn on VS Code";
-
-    /// Found, and VS Code's status says the extension is off: the menu offers it.
-    fn vscode_off() -> App {
-        let mut app = found();
-        assert!(rows(&app.handle(Event::Vscode(Some(Vscode::Off)))).contains(&TURN_ON.to_string()));
-        app
-    }
-
-    /// Whether a menu sent offers the item.
-    fn offers(effects: &[Effect]) -> bool {
-        let item = MenuItem::Action(MenuAction::TurnOnVscode, TURN_ON.into());
-        effects.iter().any(|effect| matches!(effect, Effect::Menu(items) if items.contains(&item)))
-    }
-
-    #[test]
-    fn the_status_is_read_at_start_when_the_menu_opens_and_after_a_click() {
-        let (_, effects) = App::new(SEEN, true, false, B);
-        assert_eq!(count(&effects, &Effect::ReadVscode), 1);
-        assert!(!has(&App::new(SEEN, false, false, B).1, &Effect::ReadVscode));
-
-        let mut app = vscode_off();
-        let opened = |now: u64| Event::MenuOpened { now, desktop_installed: false };
-        assert!(!has(&app.handle(opened(B + 10)), &Effect::ReadVscode));
-        assert!(has(&app.handle(opened(B + 60)), &Effect::ReadVscode));
-        app.handle(Event::Menu(MenuAction::TurnOnVscode));
-        assert!(has(&app.handle(Event::VscodeTurnedOn(Ok(()))), &Effect::ReadVscode));
-    }
-
-    #[test]
-    fn a_click_turns_it_on_once_and_the_item_hides_while_it_runs() {
-        let mut app = vscode_off();
-        let mut effects = app.handle(Event::Menu(MenuAction::TurnOnVscode));
-        assert!(!rows(&effects).contains(&TURN_ON.to_string()));
-        effects.extend(app.handle(Event::Menu(MenuAction::TurnOnVscode)));
-        // A status read while it runs keeps the item hidden.
-        assert!(app.handle(Event::Vscode(Some(Vscode::Off))).iter().all(|effect| !matches!(effect, Effect::Menu(_))));
-        effects.extend(app.handle(Event::Menu(MenuAction::TurnOnVscode)));
-        assert_eq!(count(&effects, &Effect::TurnOnVscode), 1);
-
-        // On, as the CLI said: the item stays hidden, and the status read after it confirms.
-        let effects = app.handle(Event::VscodeTurnedOn(Ok(())));
-        assert!(logs(&effects).is_empty());
-        assert!(!offers(&effects));
-        assert!(!offers(&app.handle(Event::Vscode(Some(Vscode::On)))));
-        assert!(!has(&app.handle(Event::Menu(MenuAction::TurnOnVscode)), &Effect::TurnOnVscode));
-
-        // A click of an item the menu does not show does nothing.
-        for vscode in [None, Some(Vscode::Absent), Some(Vscode::On)] {
-            let mut app = found();
-            app.handle(Event::Vscode(vscode));
-            assert!(!has(&app.handle(Event::Menu(MenuAction::TurnOnVscode)), &Effect::TurnOnVscode), "{vscode:?}");
-        }
-    }
-
-    #[test]
-    fn a_failed_turn_on_logs_its_word_and_reads_the_status_again() {
-        for (failure, word) in
-            [(VscodeFailure::NoCode, "no-code"), (VscodeFailure::Timeout, "timeout"), (VscodeFailure::Failed, "failed")]
-        {
-            let mut app = vscode_off();
-            app.handle(Event::Menu(MenuAction::TurnOnVscode));
-            let effects = app.handle(Event::VscodeTurnedOn(Err(failure)));
-            assert_eq!(logs(&effects), [format!("vscode: not turned on · {word}")]);
-            assert!(has(&effects, &Effect::ReadVscode));
-            // Still off: the item is back, and a click tries again.
-            assert!(rows(&effects).contains(&TURN_ON.to_string()));
-            assert!(has(&app.handle(Event::Menu(MenuAction::TurnOnVscode)), &Effect::TurnOnVscode));
-        }
-    }
-
-    #[test]
-    fn a_status_that_answers_after_the_cli_went_away_is_not_heard() {
-        let mut app = found();
-        let mut effects = app.handle(Event::Cli(false));
-        effects.extend(app.handle(Event::Vscode(Some(Vscode::Off))));
-        assert_eq!(rows(&effects), ["Harness removed", "Install", "About", "Quit"]);
-
-        // Gone with a turn-on under way: a CLI that comes back shows the item only once its status has said off.
-        let mut app = vscode_off();
-        app.handle(Event::Menu(MenuAction::TurnOnVscode));
-        app.handle(Event::Cli(false));
-        assert!(!has(&app.handle(Event::VscodeTurnedOn(Err(VscodeFailure::Failed))), &Effect::ReadVscode));
-        let effects = app.handle(Event::Cli(true));
-        assert!(has(&effects, &Effect::ReadVscode));
-        assert!(!rows(&effects).contains(&TURN_ON.to_string()));
-        assert!(rows(&app.handle(Event::Vscode(Some(Vscode::Off)))).contains(&TURN_ON.to_string()));
     }
 
     #[test]
@@ -1452,16 +1332,6 @@ mod tests {
         installed(&mut app);
         assert!(!has(&app.handle(tick(B + 10)), &Effect::Relaunch));
         app.handle(Event::WindowClosed);
-        assert!(app.handle(tick(B + 15)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
-    }
-
-    #[test]
-    fn a_turn_on_of_vs_code_delays_the_relaunch() {
-        let mut app = vscode_off();
-        app.handle(Event::Menu(MenuAction::TurnOnVscode));
-        app.handle(Event::UpdateInstalled);
-        assert!(!has(&app.handle(tick(B + 10)), &Effect::Relaunch));
-        app.handle(Event::VscodeTurnedOn(Ok(())));
         assert!(app.handle(tick(B + 15)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
     }
 
