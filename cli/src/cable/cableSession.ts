@@ -172,6 +172,8 @@ export interface ActivitySnapshot {
 const ACTION_MAX_BYTES = 188
 /** A drawer row's words on the device (cable_notif_t summary, 240 B with its end): eight rows stay one frame. */
 const NOTICE_SUMMARY_MAX = 239
+/** A drawer row's name and machine on the device (CABLE_NAME_MAX, 40 B with its end). */
+const NOTICE_NAME_MAX = 39
 
 /** What the Pro's firmware holds of a swarms frame: 24 tabs, 24 ids each, and 512 JSON tokens (480 here). */
 const SWARMS_MAX = 24
@@ -202,24 +204,42 @@ function clipUtf8(text: string, max: number): string {
 }
 
 /**
- * A drawer row's words as the dial keeps them (firmware recap_preview): whitespace folded to one space, cut on a whole
- * character at 239 bytes, no ellipsis. The dial matches a read row by its words, so a question asked whole and then
- * carried in a drawer stays read; and a window's question text, a plan of kilobytes, made the drawer frame too big to
- * send, every question it carried with it (2026-11-18).
+ * A drawer row's text as the dial keeps it (firmware recap_preview): whitespace and control characters folded to one
+ * space, cut on a whole character at `max` bytes, no ellipsis. The dial matches a read row by its words, so a question
+ * asked whole and then carried in a drawer stays read; and a window's question text, a plan of kilobytes, made the
+ * drawer frame too big to send, every question it carried with it (2026-11-18). A control character is folded because
+ * JSON writes it six bytes wide, and eight rows of them passed the frame cap as well.
  */
-function noticeSummary(text: string): string {
+function dialText(text: string, max: number): string {
   let out = ''
   let bytes = 0
   let space = false
   for (const ch of text) {
-    if (ch === ' ' || (ch >= '\t' && ch <= '\r')) { space = bytes > 0; continue }
+    if (ch <= ' ' || ch === '\u007f') { space = bytes > 0; continue }
     const size = Buffer.byteLength(ch, 'utf8') + (space ? 1 : 0)
-    if (bytes + size > NOTICE_SUMMARY_MAX) break
+    if (bytes + size > max) break
     out += space ? ` ${ch}` : ch
     bytes += size
     space = false
   }
   return out
+}
+
+/** Whether the dial keeps a drawer row of this agent: it skips an id of ID_MAX (48 B) or more, and one with a control
+ *  character could never be matched back to an agent. */
+function dialKeepsId(agentId: string): boolean {
+  return Buffer.byteLength(agentId, 'utf8') < 48 && !/[\u0000-\u001f\u007f]/.test(agentId)
+}
+
+/**
+ * The leading drawer rows that fit one frame. Every field is bounded, so eight rows fit today; this guards a field added
+ * later without a bound, whose frame `send` would refuse, leaving the dial without its drawer. A question row cut here
+ * stays owed and is asked again.
+ */
+export function fitDrawer<T>(rows: T[]): T[] {
+  const kept = [...rows]
+  while (kept.length > 0 && !fitsFrame({ t: 'notif.replace', items: kept })) kept.pop()
+  return kept
 }
 
 export interface CableAgent {
@@ -3257,7 +3277,7 @@ export class CableSession {
     const replay = { seen: new Set<string>() }
     this.notificationReplay = replay
     const link = this.link
-    const rows = await Promise.all(items.slice(0, 8).map(async (item) => {
+    const rows = await Promise.all(items.filter((item) => dialKeepsId(item.agentId)).slice(0, 8).map(async (item) => {
       const who = this.whoIs(item.agentId)
       // A QUESTION BRINGS ITS OWN WORDS; a finished turn takes the recap this daemon summarised. The
       // dial cannot supply either after a reboot, and a row with neither renders as the word its type
@@ -3269,7 +3289,8 @@ export class CableSession {
           summary = summary ? extendShortRecap(summary, saved?.text ?? '') : saved?.recap ?? ''
         } catch { /* keep the supplied text if history cannot be read */ }
       }
-      return { agentId: item.agentId, name: who.name, machine: who.machine, summary: noticeSummary(summary), question: item.question,
+      return { agentId: item.agentId, name: dialText(who.name, NOTICE_NAME_MAX), machine: dialText(who.machine, NOTICE_NAME_MAX),
+        summary: dialText(summary, NOTICE_SUMMARY_MAX), question: item.question,
         ...(notificationReadToken(item.readToken) ? { readToken: item.readToken } : {}) }
     }))
     if (this.notificationReplay !== replay) return
@@ -3284,18 +3305,21 @@ export class CableSession {
     // cap) goes back on it as a row, first, in place of that agent's news (2026-11-18). An ask would beep and wake it
     // at every change of that list. A greeting dial lost them with its RAM, and its push asks them after this drawer.
     const carried = new Set(listed.filter((row) => row.question).map((row) => row.agentId))
-    const open = this.greeting ? [] : this.owedQuestions().filter(({ agentId }) => !carried.has(agentId))
+    const open = this.greeting ? [] : this.owedQuestions().filter(({ agentId }) => !carried.has(agentId) && dialKeepsId(agentId))
     const back = new Set(open.map(({ agentId }) => agentId))
     const rest = listed.filter((row) => !back.has(row.agentId))
     // Questions before news within the eight: a question cut for a news row was asked again, a beep, at every change.
-    const drawer = [
+    const eight = [
       ...open.map(({ agentId, questions }) => {
         const who = this.whoIs(agentId)
-        return { agentId, name: who.name, machine: who.machine, summary: noticeSummary(questions[0].q), question: true }
+        return { agentId, name: dialText(who.name, NOTICE_NAME_MAX), machine: dialText(who.machine, NOTICE_NAME_MAX),
+          summary: dialText(questions[0].q, NOTICE_SUMMARY_MAX), question: true }
       }),
       ...rest.filter((row) => row.question),
       ...rest.filter((row) => !row.question),
     ].slice(0, 8)
+    const drawer = fitDrawer(eight)
+    if (drawer.length < eight.length) this.log(`cable: notif.replace over the cap, dropped ${eight.length - drawer.length} rows`)
     // Before the frame, so an ask that overtakes it stays marked.
     this.questionInbox.forget(new Set(drawer.filter((row) => row.question).map((row) => row.agentId)))
     await this.send({ t: 'notif.replace', items: drawer })
