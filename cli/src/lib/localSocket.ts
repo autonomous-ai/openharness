@@ -119,10 +119,13 @@ export interface LocalSocketServer {
   closeSync: () => void
 }
 
-/** A short folder (shortSocketFolder) is made here, and it and its parent are this account's real folders, owner only, before a socket goes in. */
+/**
+ * A short folder (shortSocketFolder) is made here, and it and its parent are this account's real folders, owner only, before a socket goes in.
+ * Its `s` is in `~/.harness`, or on Linux in the state root, named `harness` (config/harnessHome.ts).
+ */
 function prepareShortFolder(path: string): void {
   const folder = dirname(path)
-  if (!/[\\/]\.harness[\\/]s[\\/][0-9a-f]{16}$/.test(folder)) return
+  if (!/[\\/]\.?harness[\\/]s[\\/][0-9a-f]{16}$/.test(folder)) return
   mkdirSync(folder, { recursive: true, mode: 0o700 })
   for (const each of [dirname(folder), folder]) {
     const seen = lstatSync(each), uid = process.getuid?.()
