@@ -24,6 +24,17 @@ describe('the move record', () => {
     expect(onDisk(dir)).toEqual({ ...WAITING, state: 'failed', reason: 'pty-host' })
   })
 
+  it('written when the count of old processes changes, not again', () => {
+    const dir = folder(), file = join(dir, 'home-move.json')
+    const bridged: MoveRecord = { ...MOVED, state: 'bridged', oldProcesses: 3 }
+    expect(writeMoveRecord(dir, bridged)).toBe(true)
+    utimesSync(file, 1_000, 1_000)
+    expect(writeMoveRecord(dir, { ...bridged, at: bridged.at + 600_000 })).toBe(false)
+    expect(statSync(file).mtimeMs).toBe(1_000_000)
+    expect(writeMoveRecord(dir, { ...bridged, oldProcesses: 1 })).toBe(true)
+    expect(onDisk(dir)).toEqual({ ...bridged, oldProcesses: 1 })
+  })
+
   it('a stray ~/.harness is said once', () => {
     const dir = folder()
     expect(writeMoveRecord(dir, MOVED)).toBe(true)
