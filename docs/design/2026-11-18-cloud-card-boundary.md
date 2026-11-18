@@ -80,3 +80,23 @@ still outstanding; this source checkpoint is not release acceptance.
 The final fixed-source receipt `20261118T051021.783039Z-35208` exits 0: 130 cases
 across nine suites, architecture included, and types. All four selected runtime
 files have 100% statements, branches, functions and lines (334/332/149/255).
+
+## Independent review hold
+
+This candidate is not integrated. Independent review reproduced a lost completion
+when the service link drops, its provider finishes, and the same core receives the
+reconnected idle publication. The previous implementation emits the completion;
+this candidate clears component history and emits none. The actual red receipt is
+`/tmp/core-cloud-cards-independent-delivery-red.log` (baseline control passes,
+candidate fails). A simple whole-row replay fence is insufficient: a rename after
+a lost acknowledgment changes the row without making its completion new. A
+replacement component also loses memory-only transition history. Reliable
+publication must be designed and checked before this extraction can ship.
+
+The existing packaged Devin flow is prepared to observe negotiated session cards,
+verify one completion, kill only its verified Cloud child, and check that the core
+survives without repeating that completion. No packaged execution has occurred.
+Fixture types pass in `20261118T053949.693304Z-81640`; the earlier type attempt
+failed on optional frame payloads, an existing private fixture field, and an
+incorrect DOM library selection. Those fixture issues are corrected; that failed
+receipt remains recorded. These prepared tests do not resolve the delivery hold.
