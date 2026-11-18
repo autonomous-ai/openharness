@@ -53,7 +53,7 @@ export async function checkMove(deps: ConditionDeps): Promise<MoveCheck> {
   if (!deps.hasExecve) return NO_HOLD
   const dataDir = env.ADAPTER_DATA_DIR || join(legacy, 'cli', 'data')
   // A start that finds a daemon starts nothing.
-  if (await daemonRuns(deps, legacy, dataDir)) return NO_HOLD
+  if (await daemonRuns(deps, env, legacy, dataDir)) return NO_HOLD
   // A rollback would run the previous build against moved folders.
   if (fs.existsSync(join(env.ADAPTER_CLI_DIR || join(legacy, 'cli'), 'update-pending.json'))) return waiting('update-pending')
   const realLegacy = fs.realpathSync(legacy)
@@ -80,13 +80,16 @@ export function withEnvFile({ fs, env }: Pick<ConditionDeps, 'fs' | 'env'>): Nod
 }
 
 /** A live pid in adapter.pid, a spawn lock whose owner lives, or a socket that answers within a second, asked once each. */
-async function daemonRuns(deps: ConditionDeps, legacy: string, dataDir: string): Promise<boolean> {
+async function daemonRuns(deps: ConditionDeps, env: NodeJS.ProcessEnv, legacy: string, dataDir: string): Promise<boolean> {
   const live = (pid: unknown): boolean => Number.isSafeInteger(pid) && (pid as number) > 0 && deps.alive(pid as number)
   if (live(Number(readText(deps, join(dataDir, 'adapter.pid'))?.trim()))) return true
   if (live(lockOwner(readText(deps, join(dataDir, 'adapter.spawn.lock', 'owner.json'))))) return true
-  // A data folder too long for a socket keeps it in its short folder (lib/localSocket.ts), under ~/.harness until the move.
-  const short = join(legacy, 's', createHash('sha256').update(dataDir).digest('hex').slice(0, 16))
-  for (const folder of [dataDir, short]) {
+  // A data folder too long for a socket keeps it in its short folder (lib/localSocket.ts): under ~/.harness until the
+  // move, or under the account's runtime folder for a daemon that has one. Only asked here: whether the runtime folder
+  // is the account's own is the daemon's to check before it binds.
+  const name = createHash('sha256').update(dataDir).digest('hex').slice(0, 16)
+  const runtime = env.XDG_RUNTIME_DIR && isAbsolute(env.XDG_RUNTIME_DIR) ? [join(env.XDG_RUNTIME_DIR, 'harness', name)] : []
+  for (const folder of [dataDir, join(legacy, 's', name), ...runtime]) {
     for (const name of list(deps, folder)) {
       if (SOCKET.test(name) && await withinLimit(deps.answers(join(folder, name)))) return true
     }

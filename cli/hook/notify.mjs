@@ -332,8 +332,24 @@ function privateSocket(file) {
 function socketIn(dataDir, port) {
   const beside = join(dataDir, `daemon-${port}.sock`)
   if (Buffer.byteLength(beside) <= MAX_SOCKET_PATH_BYTES) return beside
-  const short = join(harnessRoots().state, 's', createHash('sha256').update(dataDir).digest('hex').slice(0, 16), `daemon-${port}.sock`)
+  const root = runtimeShortRoot() ?? join(harnessRoots().state, 's')
+  const short = join(root, createHash('sha256').update(dataDir).digest('hex').slice(0, 16), `daemon-${port}.sock`)
   return Buffer.byteLength(short) <= MAX_SOCKET_PATH_BYTES ? short : null
+}
+
+/**
+ * Where short folders go on Linux when the account has its own runtime folder, as src/lib/localSocket.ts finds it:
+ * `$XDG_RUNTIME_DIR/harness` when the variable names an absolute path to a real folder, not a link, of this account's,
+ * mode 0700. Null otherwise.
+ */
+function runtimeShortRoot() {
+  const dir = process.env.XDG_RUNTIME_DIR
+  if (process.platform !== 'linux' || !dir || !isAbsolute(dir)) return null
+  try {
+    const seen = lstatSync(dir)
+    const uid = typeof process.getuid === 'function' ? process.getuid() : null
+    return seen.isDirectory() && seen.uid === uid && (seen.mode & 0o7777) === 0o700 ? join(dir, 'harness') : null
+  } catch { return null }
 }
 
 function daemonSocket(port, dataDir) {
