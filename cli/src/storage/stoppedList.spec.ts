@@ -129,3 +129,23 @@ describe('child-owned stopped list pages', () => {
     expect((await listing.page(null, deadline())).images).toHaveLength(2)
   })
 })
+
+
+it.each(['busy', 'expired', 'disconnected', 'cleanup-unconfirmed'] as const)(
+  'keeps %s fatal after a readable archive instead of returning a partial catalog', async code => {
+    write('a'); write('b')
+    const { listing, read, codec } = fixture()
+    read.mockImplementationOnce(document => codec.read(document)).mockRejectedValueOnce(new SessionStorageUnavailable(code))
+    await expect(listing.page(null, deadline())).rejects.toMatchObject({ code })
+    expect((await listing.page(null, deadline())).images).toHaveLength(2)
+  })
+
+it.each(['ENOSPC', 'EDQUOT', 'EROFS', 'EACCES', 'EPERM'] as const)(
+  'skips only the individual %s archive read and keeps exact cursor progress', async code => {
+    write('a'); write('b')
+    const { listing, read } = fixture()
+    read.mockRejectedValueOnce(new SessionStorageUnavailable(code))
+    const page = await listing.page(null, deadline())
+    expect(page).toMatchObject({ next: 2, total: 2, done: true })
+    expect(ids(page.images)).toEqual(['b'])
+  })

@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { readdir } from 'node:fs/promises'
 import { performance } from 'node:perf_hooks'
 import { secureStateDirectory, stateFileCustodyHealthy } from '../lib/secureState.js'
-import { SessionStorageUnavailable, STOPPED_LIST_BYTES, STOPPED_LIST_ROWS,
+import { SessionStorageUnavailable, SESSION_STORAGE_SYSTEM_FAILURES, STOPPED_LIST_BYTES, STOPPED_LIST_ROWS,
   type SessionDocument, type SessionImage, type StoppedListPage } from '../lib/sessionStorageWire.js'
 
 const token = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9-]{36}$/.test(value)
@@ -44,7 +44,7 @@ export function createStoppedList(directory: string, read: (document: SessionDoc
             if (image.state === 'missing') { own.next++; continue }
             own.held = { image, bytes: Buffer.byteLength(JSON.stringify(image)) }
           } catch (error) {
-            if (!(error instanceof SessionStorageUnavailable) || !['unsafe', 'invalid', 'missing', 'changed'].includes(error.code)) throw error
+            if (!(error instanceof SessionStorageUnavailable) || ![...SESSION_STORAGE_SYSTEM_FAILURES, 'unsafe', 'invalid', 'missing', 'changed'].includes(error.code)) throw error
             own.next++; continue
           }
         }

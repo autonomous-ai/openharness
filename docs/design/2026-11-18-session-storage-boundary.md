@@ -564,3 +564,25 @@ including temporary open/write/chmod/sync failures; reader and wire retain all f
 metrics at 100% (`/tmp/core-grid-storage-disk-code-coverage2-20261118.log`). These use combined
 main `86558dafad` dependencies, lock SHA256
 `a578fb81a3757cfd14de2c687dfe9b7f687d56f8c0112082edf640245995ea61`.
+
+## Compatibility correction: unreadable archive peers remain visible
+
+Preserving finite system codes for Registry must not change stopped-list filtering. Before that
+correction, an archive's ENOSPC/EDQUOT/EROFS/EACCES/EPERM read failure became `unsafe`, and the
+child skipped that individual unreadable record. The same five fixed codes now join only that
+per-record skip set. Container failures, invalid cursor state, expired/busy/disconnected service
+and cleanup-unconfirmed remain fatal, with zero partial successful listing. Selected get and
+authority queries retain their precise named failure; they never infer absence from it.
+No parent cache, alternate reader, publication change or new compatibility exception is added.
+
+Five actual child-to-StoppedAgentStore.list regressions failed first at frozen d038 in
+`/tmp/core-grid-storage-unreadable-archive-red1-20261118.log`. Each seeds an unreadable archive
+and a readable peer, injects only that exact child's file read, and requires the peer to remain
+visible; selected get/query still reject by the same finite code. Removing the fixture fault
+must expose both rows with fresh proofs. The previous d038 timing/source/artifact remain frozen.
+
+The correction passes 33 cases across the real caller, child paging and Registry disk categories;
+changed stoppedList has 100% statements/branches/functions/lines. TypeScript also passes.
+Receipts: `/tmp/core-grid-storage-unreadable-archive-green1-20261118.log` and
+`/tmp/core-grid-storage-unreadable-archive-types1-20261118.log`. Tests retain fatal busy, expired,
+disconnected and cleanup-unconfirmed replies after a readable record, with no partial catalog.
