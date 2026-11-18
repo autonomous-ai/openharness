@@ -201,7 +201,10 @@ describe('createAndRegisterPane', () => {
       stuck.kill.mockResolvedValueOnce({ state: 'failed', dispatch: 'rejected', reason: 'tmux pane close' })
       await create(stuck)
       // The pane left open is one the person sees with no harness in it: the line must not say it closed.
-      expect(said()).toEqual(['[agent] create claude not saved · pane %1 closed', '[agent] create claude not saved · pane %2 close failed'])
+      expect(said()).toEqual([
+        '[agent] create claude not saved · pane %1 closed · RegistryPersistenceUnavailable',
+        '[agent] create claude not saved · pane %2 close failed · RegistryPersistenceUnavailable',
+      ])
     } finally {
       warn.mockRestore()
     }

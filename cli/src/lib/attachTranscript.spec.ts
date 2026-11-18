@@ -545,7 +545,7 @@ describe('the review of the first cut', () => {
       const fold = (line: string) => { if (line.includes('SECRET')) JSON.parse('SECRET-LINE-MARKER') }
       await attachTranscript(file, codexAttachRules(() => []), { profile: () => {}, fold })
       expect(warn).toHaveBeenCalledOnce()
-      expect(warn.mock.calls[0][0]).toBe(`[attach] ${file}: 1 record(s) could not be taken in: SyntaxError`)
+      expect(warn.mock.calls[0][0]).toBe('[attach] 1 record(s) could not be taken in: SyntaxError')
       expect(warn.mock.calls[0][0]).not.toContain('SECRET')
     } finally { warn.mockRestore() }
   })
