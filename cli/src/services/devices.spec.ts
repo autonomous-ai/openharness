@@ -4474,7 +4474,7 @@ describe('the session the Claude app shows turns the dial (docs/specs/2026-11-15
     readers.owners.set(S, { engine: 'claude', pid: 4300, record: '/s/4300.json' })
     readers.rows.set(S, { cwd: '/work/api', transcriptPath: null })
     readers.working.set('/s/4300.json', false)
-    readers.apps.mockResolvedValue(new Map([[4300, 'claude']]))
+    readers.apps.mockResolvedValueOnce(new Map([[4300, 'claude']]))
     readers.record.mockResolvedValue({ hostSession: LOCAL })
     seen.host.watching!(true)
     port.swarms(null)
