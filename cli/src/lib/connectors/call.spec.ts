@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join, posix, win32 } from 'node:path'
 import { CallFailure, expandHome, forbiddenDirs, inside, uploadPath } from './call.js'
@@ -78,6 +78,11 @@ describe('uploadPath', () => {
     // and Windows' \\?\ prefix. A spelling this file system does not read as the file is not one to fence.
     const spellings = [join(home, '.SSH', 'note.txt'), join(tmpdir(), basename(home), '.ssh', 'note.txt'), `\\\\?\\${file}`]
     for (const spelling of spellings.filter(spelling => existsSync(spelling))) expectFenced(spelling)
+  })
+
+  it('refuses a hard link, whose other names may be inside such a folder', () => {
+    linkSync(join(home, '.ssh', 'note.txt'), join(home, 'docs', 'link.txt'))
+    expectFenced(join(home, 'docs', 'link.txt'))
   })
 
   it('allows a document elsewhere, also written from ~/', () => {
