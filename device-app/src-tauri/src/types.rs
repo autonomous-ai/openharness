@@ -76,8 +76,10 @@ impl Default for Saved {
 pub enum Screen {
     Install,
     SignIn,
+    Orca,
 }
 
+/// Asking, Approve and Done are the Orca screen's, with its Failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Phase {
@@ -85,6 +87,9 @@ pub enum Phase {
     Working,
     Browser,
     Failed,
+    Asking,
+    Approve,
+    Done,
 }
 
 /// What the window draws: `{"screen":"sign_in","phase":"browser","lines":["…"]}`.
@@ -93,9 +98,13 @@ pub struct View {
     pub screen: Screen,
     pub phase: Phase,
     pub lines: Vec<String>,
+    /// The Orca screen of an update. In the JSON only when true, so no other screen's JSON changes.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub update: bool,
 }
 
-/// What the window may ask: `"retry" | "sign_in" | "later" | "cancel"`. Anything else is refused.
+/// What the window may ask: `"retry" | "sign_in" | "later" | "cancel" | "connect_orca"`. Anything else is refused.
+/// Connect carries no fingerprint: Rust keeps the one of the access the window shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Action {
@@ -103,12 +112,15 @@ pub enum Action {
     SignIn,
     Later,
     Cancel,
+    ConnectOrca,
 }
 
+/// Orca: `Connect Orca…`, or `Update Orca connection…`; one action, two labels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuAction {
     Install,
     SignIn,
+    Orca,
     SoundOn,
     SoundOff,
     NotifyFull,
@@ -243,10 +255,12 @@ pub enum Event {
     UpdateInstalled,
     UpdateFailed(UpdateFailure),
     LogsExported(Result<Exported, ExportFailure>),
+    OrcaConnect(OrcaAnswer),
 }
 
 /// What to do about it. Show(None) hides the window. ShowAbout: the About panel, with its credits line. Menu, Show,
-/// ShowAbout, Quit and Relaunch are the binary's.
+/// ShowAbout, Quit and Relaunch are the binary's. RunOrcaConnect(Some): only from the Connect click, with the
+/// fingerprint of the access the window showed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
     FindCli,
@@ -268,6 +282,7 @@ pub enum Effect {
     Log(String),
     CheckUpdate,
     InstallUpdate,
+    RunOrcaConnect(Option<Fingerprint>),
     Menu(Vec<MenuItem>),
     Show(Option<View>),
     ShowAbout(Option<String>),

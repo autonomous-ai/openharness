@@ -5,8 +5,8 @@ use crate::keepalive::{Keep, KeepAlive};
 use crate::logs::reason;
 use crate::model::{about_credits, due, menu, menu_log};
 use crate::types::{
-    Action, AppState, AppUpdate, CliState, Daemon, Effect, Event, LoginEvent, LogsExport, MenuAction, MenuItem,
-    NotifyMode, Phase, Saved, Screen, UpdateFailure, View,
+    Action, AppState, AppUpdate, CliState, Daemon, Effect, Event, Fingerprint, LoginEvent, LogsExport, MenuAction,
+    MenuItem, NotifyMode, OrcaAnswer, OrcaError, Phase, Saved, Screen, UpdateFailure, View,
 };
 
 /// The menu reads the account and the CLI's version again at most this often.
@@ -23,6 +23,11 @@ const DEVICE_PAGE: &str = "https://harness.autonomous.ai/device";
 
 /// A start left to the desktop app, which supervises its own daemon.
 const DESKTOP_RUNS: &str = "keep-alive: the desktop app runs; not starting";
+
+/// The Orca screen's lines Rust sends; the window has the rest of its copy.
+const ASKING_ORCA: &str = "Asking Orca…";
+const ORCA_NOT_RUNNING: &str = "Orca isn't running.";
+const ORCA_FAILED: &str = "Couldn't connect Orca.";
 
 pub struct App {
     state: AppState,
@@ -58,6 +63,11 @@ pub struct App {
     failed: Option<Failed>,
     /// An update is installed: the app relaunches on the first tick with nothing running.
     relaunch: bool,
+    /// A `harness device orca connect` runs: only its answer is heard, and the row's click waits for it.
+    connecting: bool,
+    /// The fingerprint of the access the window shows. Only the Connect click takes it, and a window that leaves that
+    /// access drops it, so nothing is approved but what the person sees.
+    approval: Option<Fingerprint>,
 }
 
 impl App {
@@ -92,6 +102,8 @@ impl App {
             skipped: None,
             failed: None,
             relaunch: false,
+            connecting: false,
+            approval: None,
         };
         let mut effects = Vec::new();
         // A CLI seen once and gone now was removed on purpose: it stays Removed, never installed on its own.
@@ -173,6 +185,7 @@ impl App {
                 self.state.signed_in = None;
                 self.state.cli_version = None;
                 self.awaiting_account = false;
+                self.connecting = false;
                 if self.window.is_some() {
                     self.show(None, effects);
                 }
@@ -241,6 +254,14 @@ impl App {
             Event::Menu(action) => match action {
                 MenuAction::Install => self.install(effects),
                 MenuAction::SignIn => self.show(Some(self.view_of(Screen::SignIn)), effects),
+                // Never with a fingerprint: the window shows Orca's access first.
+                MenuAction::Orca if self.state.cli == CliState::Found => {
+                    if !self.connecting {
+                        self.connect_orca(None, effects);
+                    }
+                    self.show(Some(self.view_of(Screen::Orca)), effects);
+                }
+                MenuAction::Orca => {}
                 MenuAction::SoundOn | MenuAction::SoundOff => {
                     effects.push(Effect::SetSound(action == MenuAction::SoundOn));
                     // A native check item flips its own check when clicked: the menu drawn again puts it back
@@ -325,7 +346,36 @@ impl App {
                 self.state.logs = LogsExport::Failed(failure);
                 effects.push(Effect::Log(format!("logs: export failed: {}", reason(failure))));
             }
+            Event::OrcaConnect(answer) if self.connecting => self.orca_answered(answer, effects),
+            // A second answer to one run, or a run of a CLI that went away: nothing waits for it.
+            Event::OrcaConnect(_) => {}
         }
+    }
+
+    /// Logged in any case; drawn only in a window that shows the Orca screen, so a closed window stays closed.
+    fn orca_answered(&mut self, answer: OrcaAnswer, effects: &mut Vec<Effect>) {
+        self.connecting = false;
+        effects.push(Effect::Log(format!("orca connect: {}", orca_said(&answer))));
+        let Some(shown) = self.window.as_ref().filter(|shown| shown.screen == Screen::Orca) else { return };
+        // An update keeps its words to the end; the access Orca lists says itself whether it is an update.
+        let update = shown.update;
+        let view = match answer {
+            OrcaAnswer::Done => orca_at(Phase::Done, Vec::new(), update),
+            OrcaAnswer::Approve { fingerprint, grants, update: listed } => {
+                self.approval = Some(fingerprint);
+                orca_at(Phase::Approve, grants, listed)
+            }
+            OrcaAnswer::Failed(error) => {
+                let line = if error == OrcaError::NotRunning { ORCA_NOT_RUNNING } else { ORCA_FAILED };
+                orca_at(Phase::Failed, vec![line.into()], update)
+            }
+        };
+        self.show(Some(view), effects);
+    }
+
+    fn connect_orca(&mut self, approve: Option<Fingerprint>, effects: &mut Vec<Effect>) {
+        self.connecting = true;
+        effects.push(Effect::RunOrcaConnect(approve));
     }
 
     /// A failure changes nothing on disk: the next check tries again.
@@ -391,6 +441,16 @@ impl App {
                 effects.push(Effect::CancelLogin);
                 self.show(Some(screen_at(Screen::SignIn, Phase::Offer, Vec::new())), effects);
             }
+            // The window asks Orca again from here, with no button: a second click runs nothing.
+            (Screen::Orca, Phase::Approve, Action::ConnectOrca) => {
+                let update = shown.update;
+                if let Some(fingerprint) = self.approval.take() {
+                    self.connect_orca(Some(fingerprint), effects);
+                    self.show(Some(orca_at(Phase::Asking, vec![ASKING_ORCA.into()], update)), effects);
+                }
+            }
+            // Cancel, Done and Close: the window closes, and Orca is asked nothing.
+            (Screen::Orca, Phase::Approve | Phase::Done | Phase::Failed, Action::Cancel) => self.show(None, effects),
             _ => {}
         }
     }
@@ -496,6 +556,8 @@ impl App {
         match screen {
             Screen::Install => screen_at(screen, Phase::Working, vec![self.step.to_string()]),
             Screen::SignIn => self.login.clone().unwrap_or_else(|| screen_at(screen, Phase::Offer, Vec::new())),
+            // Opened from the menu, it asks Orca.
+            Screen::Orca => orca_at(Phase::Asking, vec![ASKING_ORCA.into()], false),
         }
     }
 
@@ -511,6 +573,10 @@ impl App {
     }
 
     fn show(&mut self, view: Option<View>, effects: &mut Vec<Effect>) {
+        // Cancel, a close, another screen or the CLI gone: the access shown is no longer, and its fingerprint goes.
+        if !view.as_ref().is_some_and(|view| view.screen == Screen::Orca && view.phase == Phase::Approve) {
+            self.approval = None;
+        }
         self.window = view.clone();
         effects.push(Effect::Show(view));
     }
@@ -544,7 +610,24 @@ struct Failed {
 }
 
 fn screen_at(screen: Screen, phase: Phase, lines: Vec<String>) -> View {
-    View { screen, phase, lines }
+    View { screen, phase, lines, update: false }
+}
+
+fn orca_at(phase: Phase, lines: Vec<String>, update: bool) -> View {
+    View { screen: Screen::Orca, phase, lines, update }
+}
+
+/// What the log says of an answer: its kind and code, never what Orca listed.
+fn orca_said(answer: &OrcaAnswer) -> &'static str {
+    match answer {
+        OrcaAnswer::Done => "done",
+        OrcaAnswer::Approve { .. } => "approve",
+        OrcaAnswer::Failed(OrcaError::NotRunning) => "failed not-running",
+        OrcaAnswer::Failed(OrcaError::NoPlugin) => "failed no-plugin",
+        OrcaAnswer::Failed(OrcaError::Off) => "failed off",
+        OrcaAnswer::Failed(OrcaError::Timeout) => "failed timeout",
+        OrcaAnswer::Failed(OrcaError::Failed) => "failed failed",
+    }
 }
 
 #[cfg(test)]

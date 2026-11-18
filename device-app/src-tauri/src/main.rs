@@ -36,7 +36,7 @@ fn view(shared: tauri::State<Shared>) -> Option<View> {
     shared.view.lock().unwrap().clone()
 }
 
-/// An action that is not one of the six never gets here: its JSON does not parse.
+/// An action that is not one of the five never gets here: its JSON does not parse.
 #[tauri::command]
 fn act(action: Action, shared: tauri::State<Shared>) {
     let _ = shared.events.send(Event::Act(action));
@@ -286,6 +286,7 @@ fn menu_id(action: MenuAction) -> &'static str {
     match action {
         MenuAction::Install => "install",
         MenuAction::SignIn => "sign_in",
+        MenuAction::Orca => "orca",
         MenuAction::SoundOn => "sound_on",
         MenuAction::SoundOff => "sound_off",
         MenuAction::NotifyFull => "notify_full",
@@ -300,7 +301,7 @@ fn menu_id(action: MenuAction) -> &'static str {
 
 fn menu_action(id: &str) -> Option<MenuAction> {
     use MenuAction::*;
-    [Install, SignIn, SoundOn, SoundOff, NotifyFull, NotifyYou, Update, OpenHarness, About, Quit, ExportLogs]
+    [Install, SignIn, Orca, SoundOn, SoundOff, NotifyFull, NotifyYou, Update, OpenHarness, About, Quit, ExportLogs]
         .into_iter()
         .find(|action| menu_id(*action) == id)
 }

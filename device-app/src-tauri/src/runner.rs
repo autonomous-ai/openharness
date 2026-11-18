@@ -7,6 +7,7 @@ use crate::front::{FrontFeed, FrontSource};
 use crate::install::{self, NOT_SUPPORTED, Shell};
 use crate::loginitem::LoginItem;
 use crate::logs;
+use crate::orca_cli;
 use crate::state::StateFile;
 use crate::tabs::{Out, POLL_EVERY, Select, TabApp, TabFollow, TabScripts};
 use crate::types::{Effect, Event, ExportFailure, Log, LoginEvent};
@@ -246,6 +247,9 @@ impl Runner {
                 Ok(()) => Event::UpdateInstalled,
                 Err(failure) => Event::UpdateFailed(failure),
             }),
+            Effect::RunOrcaConnect(approve) => {
+                shared.with_cli(move |cli| Event::OrcaConnect(orca_cli::connect(cli, approve.as_ref())))
+            }
             // Not with_cli: its Cli(false) would leave the row waiting for an answer that never comes.
             Effect::ExportLogs => match shared.cli() {
                 Some(cli) => {
