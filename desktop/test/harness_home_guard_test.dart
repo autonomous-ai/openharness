@@ -9,16 +9,17 @@ import 'package:path/path.dart' as p;
 final _segment = RegExp(r'''(['"])\.harness(?:[\\/][^'"\n]*)?\1''');
 
 /// A home (any name with `home` in it, HOME, USERPROFILE or a profile), on the literal's line or one of
-/// the two lines above it: [_segment] is a hit only with one.
+/// the two lines above it: [_segment] and [_inline] are hits only with one.
 final _home = RegExp(
   r'[A-Za-z_]*[Hh]ome\w*|\bHOME\b|\bUSERPROFILE\b|\bprofile\b',
 );
 
-/// `.harness` straight after home text in one literal: $home/.harness, ${x}.harness, $sep.harness,
-/// ~/.harness, %USERPROFILE%\.harness.
-final _inline = RegExp(
-  r'(?:\$[A-Za-z_]\w*|\}|~|%USERPROFILE%)[\\/]*\.harness(?![\w-])',
-);
+/// `.harness` straight after an interpolation: $home/.harness, ${x}.harness, $sep.harness. A hit only
+/// with a [_home] near, since `${workspace.path}/.harness` is a project's folder.
+final _inline = RegExp(r'(?:\$[A-Za-z_]\w*|\})[\\/]*\.harness(?![\w-])');
+
+/// `.harness` as a person types the home: ~/.harness, %USERPROFILE%\.harness. Always a hit.
+final _typed = RegExp(r'(?:~|%USERPROFILE%)[\\/]*\.harness(?![\w-])');
 
 /// A line comment: `//` or `///` at the start of a line or after whitespace.
 final _lineComment = RegExp(r'(?:^|\s)//');
@@ -60,9 +61,10 @@ List<_Hit> _scan(String file, String source) {
   return [
     for (var i = 0; i < lines.length; i++) ...[
       if (lines.sublist(max(0, i - 2), i + 1).any(_home.hasMatch))
-        for (final match in _segment.allMatches(lines[i]))
-          (file: file, line: i + 1, text: match[0]!),
-      for (final match in _inline.allMatches(lines[i]))
+        for (final pattern in [_segment, _inline])
+          for (final match in pattern.allMatches(lines[i]))
+            (file: file, line: i + 1, text: match[0]!),
+      for (final match in _typed.allMatches(lines[i]))
         (file: file, line: i + 1, text: match[0]!),
     ],
   ];
