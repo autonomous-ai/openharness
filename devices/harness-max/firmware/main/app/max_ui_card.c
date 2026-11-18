@@ -3,6 +3,7 @@
 // question, the command in mono or the summary. When the bar takes its answers, the options as buttons (a permission
 // prompt's Allow and Deny) and Say it; when it does not, where to answer it. A tap outside the buttons brings the agent
 // up on the computer. New Harness over the whole glass, in the same look.
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -197,6 +198,19 @@ void max_draw_attention(ht_scene_t *s, const max_agent_t *a, uint32_t now_ms)
         const char *app = k && k->app[0] ? k->app : max_app_of(a);
         snprintf(where, sizeof where, "Answer it %s%s", app[0] ? "in " : "on the computer", app);
         hint = where;
+    }
+    // The daemon's line for a wait the bar only shows ends in " · answer in <App>" (devices.ts showWaits), which the hint
+    // under it already says: not twice on one glass.
+    char line[MAX_QUESTION_BYTES];
+    if (hint && say) {
+        static const char TAIL[] = " \xc2\xb7 answer in ";
+        const char *cut = NULL;
+        for (const char *at = strstr(say, TAIL); at; at = strstr(at + 1, TAIL)) cut = at;
+        if (cut && cut > say) {
+            max_copy(line, sizeof line, say);
+            line[cut - say < (ptrdiff_t)sizeof line ? cut - say : (ptrdiff_t)sizeof line - 1] = 0;
+            say = line;
+        }
     }
     // Rows of words: three alone, two over a row of buttons, one over two.
     char text[3][ROW_BYTES];

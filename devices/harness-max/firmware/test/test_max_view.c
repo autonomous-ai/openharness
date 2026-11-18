@@ -479,6 +479,14 @@ static void test_attention(void)
     render_at(T0);
     CHECK(HITS_ARE(MAX_HIT_AWAY) && word("Answer it in Harness") && !word("Dev"));
     attention_words();
+    // A wait the bar only shows: the daemon's line ends in " · answer in <App>", which the hint under it says already.
+    static const pro_ask_item_t WAIT = {"prompt", "Keep the video? \xc2\xb7 answer in Orca", {"In Orca"}, 1, false, true};
+    max_ui_question("e", "shown:w1", WAIT.q, &WAIT, 1, false, true, T0);
+    attention("e", MAX_ATTN_ASK, T0);
+    render_at(T0);
+    CHECK(word("Keep the video?") && word("Answer it in Orca"));
+    for (int i = 0; i < S.count; i++) CHECK(S.runs[i].pro_kind != K_TEXT || !strstr(S.runs[i].text, "answer in Orca"));
+    attention_words();
     // Done and failed: the summary, the failure; nothing to answer.
     ring(NULL);
     attention("c", MAX_ATTN_DONE, T0);
