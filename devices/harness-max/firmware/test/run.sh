@@ -37,7 +37,7 @@ for h in ${MAX_HEIGHTS:-480 415}; do
     glass "$h"
     objs=()
     build_obj "$h" 1024 "$fw"/main/app/max_ui_{model,touch,ask,form,nav}.c
-    build_obj "$h" 4096 "$fw"/main/app/max_ui_{view,card,pet}.c "$pro/main/pod/pod_pet.c"
+    build_obj "$h" 4096 "$fw"/main/app/max_ui_{view,card,pet,overview,agent,lists}.c "$pro/main/pod/pod_pet.c"
     build_obj "$h" 100000 "$pro/main/display/terminal.c" "$pro/main/display/pro_canvas.c" "$pro/main/pod/pod_draw.c" \
         "$pro"/main/pod/{pets,pets_ask,pets_codex,engine_logos}.c "$out/pro_fonts.c"
 

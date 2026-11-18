@@ -1,10 +1,11 @@
-// The screen (max_ui.h), 1920 x 480 (or 415) in the Pro's dark Pets look: the room (one agent, large: max_ui_card.c),
-// the other agents as lanes on their engine's gradient, and the side column: the pager over New Harness. Over the lanes
-// the toast of a question that waits and the notice line. New Harness covers the room and the lanes. While a person
-// talks, everything but the room rests: dimmed, and nothing to tap. Inter faces (gen_fonts.py ph_*): at the Max's
-// 225 ppi they come out a little larger than on the Pro's 258.
+// The screen (max_ui.h), 1920 x 480 (or 415): one of Demo V2's pages over the whole glass (max_m.view), in the dial's
+// look; New Harness over it while it is up, the update screen instead of it. Over the page the toast of a question that
+// came while a person talks, and the notice pill. Here too what the page files share: text, shapes, icons, buttons and
+// what moves by the clock. Inter faces (gen_fonts.py ph_*): at the Max's 225 ppi they come out a little larger than
+// on the Pro's 258.
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 
 #include "max_ui_draw.h"
 #include "max_ui_motion.h"
@@ -56,19 +57,12 @@ void max_cut(char out[ROW_BYTES], const char *t, const ht_pro_font_t *f, int wid
     memcpy(out, t, n);
     memcpy(out + n, ELLIPSIS, sizeof ELLIPSIS);
 }
-void max_line(ht_scene_t *s, int x, int top, int w, const ht_pro_font_t *f, unsigned rgb, const char *t, bool words)
-{
-    char row[ROW_BYTES];
-    if (!t || !t[0] || w <= 0) return;
-    max_cut(row, t, f, w, words);
-    ht_pro_text(s, x, top, w, f, C(rgb), row);
-}
 // The cell's baseline sits at 1/1.375 of its height.
 int max_top_of(const ht_pro_font_t *f, int cy) { return cy - f->height * 15 / 32; }
 int max_text(ht_scene_t *s, int x, int cy, int w, const ht_pro_font_t *f, unsigned rgb, const char *t)
 {
     char row[ROW_BYTES];
-    if (!t || !t[0] || w <= 0) return 0;
+    if (!t || !t[0] || w <= 0 || x >= HT_WIDTH) return 0;   // past the glass (a card it cuts): not a run spent
     max_cut(row, t, f, w, false);
     const int tw = ht_pro_width(f, row);
     ht_pro_text(s, x, max_top_of(f, cy), tw, f, C(rgb), row);
@@ -86,12 +80,15 @@ int max_text_right(ht_scene_t *s, int x, int cy, int w, const ht_pro_font_t *f, 
 void max_text_centered(ht_scene_t *s, int cx, int cy, int w, const ht_pro_font_t *f, unsigned rgb, const char *t)
 {
     char row[ROW_BYTES];
-    if (!t || !t[0]) return;
+    if (!t || !t[0] || w <= 0) return;
     max_cut(row, t, f, w, false);
     const int tw = ht_pro_width(f, row);
     ht_pro_text(s, cx - tw / 2, max_top_of(f, cy), tw, f, C(rgb), row);
 }
-void max_dot(ht_scene_t *s, int x, int cy, int d, unsigned rgb) { ht_pro_rect_aa(s, x, cy - d / 2, d, d, d / 2, C(rgb)); }
+void max_dot(ht_scene_t *s, int x, int cy, int d, unsigned rgb)
+{
+    if (x < HT_WIDTH) ht_pro_rect_aa(s, x, cy - d / 2, d, d, d / 2, C(rgb));
+}
 
 // The bytes of t that fill a row of `width` px, ending at a word; a first word wider than the row is cut by letters.
 size_t max_fit(const char *t, const ht_pro_font_t *f, int width)
@@ -144,8 +141,66 @@ int max_paragraph(ht_scene_t *s, int x, int y, int w, const ht_pro_font_t *f, un
 {
     char rows[MAX_ROWS][ROW_BYTES];
     const int n = max_wrap(rows, max_rows, t, f, w);
-    for (int i = 0; i < n; i++) ht_pro_text(s, x, y + i * f->height, w, f, C(rgb), rows[i]);
+    for (int i = 0; i < n && x < HT_WIDTH; i++) ht_pro_text(s, x, y + i * f->height, w, f, C(rgb), rows[i]);
     return y + n * f->height;
+}
+
+bool max_big_can_draw(const char *t)
+{
+    for (const char *p = t; *p; p++) {
+        const unsigned char c = (unsigned char)*p;
+        if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || strchr(".-+_% ", c)) continue;
+        if (!strncmp(p, ELLIPSIS, sizeof ELLIPSIS - 1)) {
+            p += sizeof ELLIPSIS - 2;
+            continue;
+        }
+        return false;
+    }
+    return true;
+}
+
+// The colon of a clock: two dots d across, in a slot three dots wide.
+static int colon_d(const ht_pro_font_t *f) { return f->height / 12 > 2 ? f->height / 12 : 2; }
+int max_clock_w(const ht_pro_font_t *f, const char *t)
+{
+    char part[16];
+    int w = 0;
+    while (*t) {
+        const char *colon = strchr(t, ':');
+        const size_t n = colon ? (size_t)(colon - t) : strlen(t);
+        snprintf(part, sizeof part, "%.*s", (int)n, t);
+        w += ht_pro_width(f, part) + (colon ? 3 * colon_d(f) : 0);
+        t += n + (colon ? 1 : 0);
+    }
+    return w;
+}
+void max_clock(ht_scene_t *s, int x, int cy, const ht_pro_font_t *f, unsigned rgb, const char *t)
+{
+    char part[16];
+    const int d = colon_d(f), off = f->height * 11 / 100;   // the dots sit either side of the digits' middle
+    while (*t) {
+        const char *colon = strchr(t, ':');
+        const size_t n = colon ? (size_t)(colon - t) : strlen(t);
+        snprintf(part, sizeof part, "%.*s", (int)n, t);
+        const int pw = ht_pro_width(f, part);
+        if (pw) ht_pro_text(s, x, max_top_of(f, cy), pw, f, C(rgb), part);
+        x += pw;
+        if (colon) {
+            ht_pro_rect_aa(s, x + d, cy - off - d / 2, d, d, d / 2, C(rgb));
+            ht_pro_rect_aa(s, x + d, cy + off - d / 2, d, d, d / 2, C(rgb));
+            x += 3 * d;
+        }
+        t += n + (colon ? 1 : 0);
+    }
+}
+
+void max_ago(char *out, size_t cap, uint32_t at, uint32_t now_ms)
+{
+    const uint32_t secs = (now_ms - at) / 1000u;
+    if (secs < 60) snprintf(out, cap, "just now");
+    else if (secs < 3600) snprintf(out, cap, "%u min ago", (unsigned)(secs / 60));
+    else if (secs < 86400) snprintf(out, cap, "%u h ago", (unsigned)(secs / 3600));
+    else snprintf(out, cap, "%u d ago", (unsigned)(secs / 86400));
 }
 
 // ---- shapes ----
@@ -156,7 +211,21 @@ void max_box(ht_scene_t *s, int x, int y, int w, int h, int r, int line, unsigne
         ht_pro_rect_aa(s, x, y, w, h, r, C(edge));
         x += line, y += line, w -= 2 * line, h -= 2 * line, r -= line;
     }
-    ht_pro_rect_aa(s, x, y, w, h, r, C(fill));
+    ht_pro_rect_aa(s, x, y, w, h, r > 0 ? r : 0, C(fill));
+}
+void max_round(ht_scene_t *s, int cx, int cy, int d)
+{
+    ht_pro_rect_aa_stroke(s, cx - d / 2, cy - d / 2, d, d, d / 2, C(RIM), C(CARD));
+}
+void max_stroke16(ht_scene_t *s, int x0, int y0, int x1, int y1, int w, unsigned rgb)
+{
+    const int dx = x1 - x0, dy = y1 - y0, len = (int)ht_pro_isqrt((unsigned)(dx * dx + dy * dy));
+    if (!len) return;
+    // Half the width across the line, and half along it at each end: the mockup's round caps, squared.
+    const int px = -dy * w / (2 * len), py = dx * w / (2 * len), ex = dx * w / (2 * len), ey = dy * w / (2 * len);
+    x0 -= ex, y0 -= ey, x1 += ex, y1 += ey;
+    pod_tri_inner(s, x0 + px, y0 + py, x1 + px, y1 + py, x1 - px, y1 - py, C(rgb), 1u << 2);
+    pod_tri_inner(s, x0 + px, y0 + py, x1 - px, y1 - py, x0 - px, y0 - py, C(rgb), 1u << 0);
 }
 unsigned max_mix(unsigned a, unsigned b, unsigned pct)
 {
@@ -170,56 +239,138 @@ void max_hit(int x, int y, int w, int h, max_hit_kind_t kind, int arg)
     max_m.hits[max_m.hit_count++] = (max_hit_t){(int16_t)x, (int16_t)y, (int16_t)w, (int16_t)h, (uint8_t)kind, (int8_t)arg};
 }
 
-// ---- bubbles: ph_bubble.c's papers, at the prototype's sizes ----
+// ---- icons: the mockup's 24-unit SVG strokes (1.8 units wide) ----
 
-static const struct { unsigned fill, ink; } PAPERS[] = {
-    [BUBBLE_SPEECH] = {PAPER, PAPER_INK}, [BUBBLE_BAD] = {BAD, BAD_INK}, [BUBBLE_LETTER] = {LETTER, LETTER_INK},
-    [BUBBLE_YOU] = {YOU, YOU_INK}, [BUBBLE_THOUGHT] = {RAISED, INK},
-};
-int max_bubble_h(const max_bubble_style_t *st, int n) { return 2 * st->pad_y + n * st->f->height; }
-
-// A thought's trail: a circle d across in the thought's fill inside its edge.
-static void puff(ht_scene_t *s, int cx, int cy, int d) { max_box(s, cx - d / 2, cy - d / 2, d, d, d / 2, LINE_W, EDGE, RAISED); }
-static void tri(ht_scene_t *s, int x0, int y0, int x1, int y1, int x2, int y2, unsigned rgb)
+// A point of the 24-unit grid, given in half units, in sixteenths of a px of an icon `size` px from `origin`.
+static int at16(int origin, int size, int half_units) { return origin * 16 + half_units * size / 3; }
+static void line24(ht_scene_t *s, int x, int y, int size, int x0, int y0, int x1, int y1, unsigned rgb)
 {
-    pod_tri(s, x0 * 16, y0 * 16, x1 * 16, y1 * 16, x2 * 16, y2 * 16, C(rgb));
+    max_stroke16(s, at16(x, size, x0), at16(y, size, y0), at16(x, size, x1), at16(y, size, y1), size * 6 / 5, rgb);
 }
-void max_bubble(ht_scene_t *s, max_bubble_kind_t kind, const max_bubble_style_t *st, int x, int y, int w,
-                char rows[][ROW_BYTES], int n)
+void max_icon_back(ht_scene_t *s, int x, int y, int size, unsigned rgb)
 {
-    const int h = max_bubble_h(st, n), bottom = y + h, cx = x + w / 2;
-    const unsigned fill = PAPERS[kind].fill;
-    // The tail towards the pet: from the left edge 34 px over the bottom (the room's), or down from the middle (a lane's).
-    // A thought trails two puffs instead.
-    if (kind == BUBBLE_THOUGHT && st->tail == TAIL_LEFT) puff(s, x - 14, bottom - 38, 24), puff(s, x - 36, bottom - 22, 15);
-    else if (kind == BUBBLE_THOUGHT) puff(s, cx, bottom + 18, 24), puff(s, cx + 14, bottom + 38, 15);
-    else if (st->tail == TAIL_LEFT) tri(s, x + 1, bottom - 46, x + 1, bottom - 22, x - 15, bottom - 34, fill);
-    else tri(s, cx - 14, bottom - 1, cx + 14, bottom - 1, cx, bottom + 16, fill);
-    max_box(s, x, y, w, h, st->radius, kind == BUBBLE_THOUGHT ? LINE_W : 0, EDGE, fill);
-    for (int i = 0; i < n; i++) {
-        const int tw = ht_pro_width(st->f, rows[i]), top = y + st->pad_y + i * st->f->height;
-        ht_pro_text(s, st->tail == TAIL_DOWN ? cx - tw / 2 : x + st->pad_x, top, tw, st->f, C(PAPERS[kind].ink), rows[i]);
-    }
+    line24(s, x, y, size, 30, 12, 18, 24, rgb);   // m15 6-6 6 6 6
+    line24(s, x, y, size, 18, 24, 30, 36, rgb);
+}
+void max_icon_x(ht_scene_t *s, int x, int y, int size, unsigned rgb)
+{
+    line24(s, x, y, size, 12, 12, 36, 36, rgb);
+    line24(s, x, y, size, 36, 12, 12, 36, rgb);
+}
+void max_icon_bell(ht_scene_t *s, int x, int y, int size, unsigned rgb)
+{
+    // M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15zM10 20.5h4: the dome, its sides, the flared rim and the clapper.
+    pod_arc(s, at16(x, size, 24), at16(y, size, 22), 6 * size * 2 / 3, size * 6 / 5, 90, 90, C(rgb));
+    line24(s, x, y, size, 12, 22, 12, 32, rgb);
+    line24(s, x, y, size, 36, 22, 36, 32, rgb);
+    line24(s, x, y, size, 12, 32, 9, 36, rgb);
+    line24(s, x, y, size, 36, 32, 39, 36, rgb);
+    line24(s, x, y, size, 9, 36, 39, 36, rgb);
+    line24(s, x, y, size, 20, 41, 28, 41, rgb);
+}
+void max_icon_grid(ht_scene_t *s, int x, int y, int size, unsigned rgb)
+{
+    const int side = size * 6 / 24 + 1, line = size > 24 ? 2 : 1;
+    for (int i = 0; i < 4; i++)
+        max_box(s, x + (i % 2 ? 14 : 4) * size / 24, y + (i / 2 ? 14 : 4) * size / 24, side, side, side / 4 + 1, line, rgb,
+                GROUND);
+}
+void max_icon_mic(ht_scene_t *s, int x, int y, int size, unsigned rgb)
+{
+    // rect x9 y3 6x11 rx3, M5 11a7 7 0 0 0 14 0, M12 18v3: the capsule (filled), its cradle and its stand.
+    ht_pro_rect_aa(s, x + 9 * size / 24, y + 3 * size / 24, 6 * size / 24 + 1, 11 * size / 24, 3 * size / 24, C(rgb));
+    pod_arc(s, at16(x, size, 24), at16(y, size, 22), 7 * size * 2 / 3, size * 6 / 5, 270, 90, C(rgb));
+    line24(s, x, y, size, 24, 36, 24, 42, rgb);
 }
 
-// ---- the state line ----
+// The colour of an app's icon by its id or name: the mockup's Harness "H", Orca's black, VS Code's blue, else grey.
+static unsigned app_tint(const char *app)
+{
+    if (!strcasecmp(app, "harness")) return 0xD97757;
+    if (!strcasecmp(app, "orca")) return 0x111114;
+    if (!strcasecmp(app, "vscode") || !strcasecmp(app, "vs code") || !strcasecmp(app, "visual studio code")) return 0x007ACC;
+    return 0x3A3B45;
+}
+void max_app_icon(ht_scene_t *s, int x, int y, int size, const char *app, const char *name)
+{
+    if (x >= HT_WIDTH) return;
+    const unsigned tint = app_tint(app);
+    max_box(s, x, y, size, size, size * 14 / 60, tint == 0x111114 ? 1 : 0, TRACK, tint);
+    const char *from = name && name[0] ? name : app;
+    char initial[5] = "";
+    size_t n = 1;
+    while (((unsigned char)from[n] & 0xc0) == 0x80 && n < 4) n++;
+    memcpy(initial, from, from[0] ? n : 0);
+    initial[from[0] ? n : 0] = 0;
+    if (initial[0] >= 'a' && initial[0] <= 'z') initial[0] = (char)(initial[0] - 'a' + 'A');
+    const ht_pro_font_t *f = size >= 90 && max_big_can_draw(initial) ? &ph_sb_48 : size >= 66 ? &ph_sb_34
+                           : size >= 44 ? &ph_sb_26 : &ph_sb_22;
+    max_text_centered(s, x + size / 2, y + size / 2, size, f, 0xFFFFFF, initial);
+}
 
-const char *max_state_word(const max_agent_t *a)
+// ---- what an agent's state looks like ----
+
+unsigned max_state_ink(const max_agent_t *a)
 {
     switch (a->state) {
-    case MAX_WORKING: return a->verb[0] ? a->verb : "Working";
-    case MAX_ASKING: return "Asks";
-    case MAX_DONE: return "Done";
-    case MAX_FAILED: return "Failed";
-    default: return "Idle";
+    case MAX_WORKING: return ACCENT;
+    case MAX_ASKING: return WAIT;
+    case MAX_DONE: return DONE;
+    case MAX_FAILED: return FAIL;
+    default: return FAINT;
     }
 }
-void max_state_line(char *out, size_t cap, const max_agent_t *a, const char *word, uint32_t now_ms)
+unsigned max_rail_ink(const max_agent_t *a)
 {
-    const bool running = a->state == MAX_WORKING || a->state == MAX_ASKING;
-    char clock[24];
-    max_fmt_elapsed(clock, sizeof clock, running ? max_secs(a, now_ms) : -1);
-    snprintf(out, cap, "%s%s%s%s", word, a->state == MAX_WORKING ? ELLIPSIS : "", clock[0] ? " " : "", clock);
+    return a->state == MAX_FAILED ? FAIL_RAIL : a->state == MAX_IDLE ? IDLE_RAIL : max_state_ink(a);
+}
+unsigned max_kind_ink(max_attn_t kind) { return kind == MAX_ATTN_ASK ? WAIT : kind == MAX_ATTN_DONE ? DONE : FAIL; }
+const char *max_engine_label(char *out, size_t cap, const char *engine)
+{
+    if (!strcmp(engine, "claude")) snprintf(out, cap, "Claude Code");
+    else snprintf(out, cap, "%s", engine);
+    if (out[0] >= 'a' && out[0] <= 'z') out[0] = (char)(out[0] - 'a' + 'A');   // "codex": "Codex"
+    return out;
+}
+unsigned max_engine_ink(const char *engine)
+{
+    return !strcmp(engine, "claude") ? CLAUDE : !strcmp(engine, "codex") ? CODEX : !strcmp(engine, "muse") ? MUSE : REST;
+}
+
+// ---- buttons ----
+
+enum { LABEL_PAD = 14, MIC_GAP = DX(10) };
+#define MIC_SIZE DY(22)
+static const struct { unsigned fill, edge, ink; int line; } LOOKS[] = {
+    [STYLE_PLAIN] = {CARD, RIM, FG, 1},           // an answer, Say it, the form's own
+    [STYLE_CHOSEN] = {CARD, DONE, FG, 2},         // one of several, chosen
+    [STYLE_PRIMARY] = {DONE, DONE, ALLOW_INK, 0}, // Allow, Send, the form's action
+    [STYLE_REJECT] = {CARD, DENY_RIM, DENY_INK, 2},   // Deny
+    [STYLE_GHOST] = {GROUND, RIM, FG, 1},         // Back, Reload
+    [STYLE_OFF] = {CARD, RIM, FAINT, 1},          // nothing to press now
+};
+
+int max_button_w(const char *label, bool mic, int pad)
+{
+    return ht_pro_width(&ph_sb_26, label) + 2 * pad + (mic ? MIC_SIZE + MIC_GAP : 0);
+}
+void max_button(ht_scene_t *s, int x, int y, int w, int h, max_style_t style, const char *label, bool mic)
+{
+    max_box(s, x, y, w, h, BUTTON_R, LOOKS[style].line, LOOKS[style].edge, LOOKS[style].fill);
+    const unsigned ink = LOOKS[style].ink;
+    const int icon = mic ? MIC_SIZE + MIC_GAP : 0, inner = w - 2 * LABEL_PAD - icon, cy = y + h / 2;
+    if (ht_pro_width(&ph_sb_26, label) <= inner) {
+        const int tw = ht_pro_width(&ph_sb_26, label), left = x + (w - tw - icon) / 2;
+        if (mic) max_icon_mic(s, left, cy - MIC_SIZE / 2, MIC_SIZE, ink);
+        max_text(s, left + icon, cy, tw, &ph_sb_26, ink, label);
+        return;
+    }
+    char rows[2][ROW_BYTES];
+    const int n = max_wrap(rows, 2, label, &ph_sb_22, inner);
+    if (mic) max_icon_mic(s, x + LABEL_PAD, cy - MIC_SIZE / 2, MIC_SIZE, ink);
+    for (int i = 0; i < n; i++)
+        max_text_centered(s, x + (w + icon) / 2, cy + (2 * i - (n - 1)) * ph_sb_22.height * 2 / 5, inner, &ph_sb_22, ink,
+                          rows[i]);
 }
 
 // ---- what moves by the clock ----
@@ -239,180 +390,49 @@ uint32_t max_motion_ms(uint32_t now_ms)
     return left > 0 ? (uint32_t)left : 0;
 }
 
-// ---- the side column: the pager over New Harness ----
+// ---- over the page: the toast of a question that came while a person talks, and the notice pill ----
 
-enum { SIDE_R = 28, SIDE_GAP = 14, NEW_H = MAX_Y(104), BADGE = 16 };
+enum { TOAST_W = DX(760), TOAST_H = DY(52), TOAST_Y = DY(6), PILL_PAD = DX(22), PILL_DOT = DY(8) };
 
-// The page of lanes shown, "n/m" over the arrow to the next, all of it one tap. Greyed and no tap while there is no
-// other page, or New Harness covers the lanes. A peach badge in its corner while an agent on another page asks. No
-// lanes, no pager.
-static void pager(ht_scene_t *s, int h, bool live)
-{
-    const int pages = max_pages(), x = MAX_SIDE_X, y = MAX_CARD_Y, w = MAX_SIDE_W, cx = x + w / 2, cy = y + h / 2;
-    if (!pages) return;
-    const bool turns = pages > 1 && !max_form_open();
-    char at[16];
-    snprintf(at, sizeof at, "%d/%d", max_m.page + 1, pages);
-    max_box(s, x, y, w, h, SIDE_R, LINE_W, EDGE, RAISED);
-    max_text_centered(s, cx, cy - 18, w - 16, &ph_sb_26, turns ? INK : MUTED, at);
-    max_text_centered(s, cx, cy + 22, w - 16, &ph_sb_26, turns ? INK : MUTED, "\xe2\x86\x92");
-    if (max_asks_off_page()) max_dot(s, x + w - 16 - BADGE, y + 16 + BADGE / 2, BADGE, PEACH);
-    if (turns && live) max_hit(x, y, w, h, MAX_HIT_PAGE, 0);
-}
-
-// New Harness, at the foot of the column: always in reach, whatever the room shows. Outlined in ink while it is up.
-static void new_button(ht_scene_t *s, bool live)
-{
-    const int x = MAX_SIDE_X, y = MAX_CARD_Y + MAX_CARD_H - NEW_H, w = MAX_SIDE_W, cx = x + w / 2;
-    const bool open = max_form_open();
-    max_box(s, x, y, w, NEW_H, SIDE_R, LINE_W, open ? INK : EDGE, GROUND);
-    max_text_centered(s, cx, y + MAX_Y(35), w - 16, &ph_sb_48, INK, "+");
-    max_text_centered(s, cx, y + MAX_Y(70), w - 16, &ph_sb_22, INK, "New");
-    if (!open && live) max_hit(x, y, w, NEW_H, MAX_HIT_NEW, 0);
-}
-
-// New only while the computer is there to offer it; the pager takes the rest of the column.
-static void side_column(ht_scene_t *s, bool live)
-{
-    const bool add = max_m.link && max_m.offers_form;
-    pager(s, MAX_CARD_H - (add ? NEW_H + SIDE_GAP : 0), live);
-    if (add) new_button(s, live);
-}
-
-// ---- a lane: the agent on its engine's gradient, a short bubble, its pet and its state ----
-
-enum {
-    LANE_PAD = 14, RING = 4,
-    LANE_NAME_CY = MAX_CARD_Y + 36, LANE_META_CY = LANE_NAME_CY + 28, LANE_BUBBLE_Y = LANE_META_CY + 29,
-    LANE_STATE_CY = MAX_CARD_Y + MAX_CARD_H - 31, LANE_FOOT = LANE_STATE_CY - 27,
-    LANE_ROWS = 3, LANE_PET_MIN = MAX_Y(80), LANE_PET_MAX = MAX_Y(130),
-    TAIL_H = 16, PUFFS_H = 46,   // under a speech bubble, under a thought
-};
-static const max_bubble_style_t LANE_SAY = {&ph_sb_22, 14, 10, 16, TAIL_DOWN};
-static const max_bubble_style_t LANE_THINK = {&ph_sb_22, 12, 10, 22, TAIL_DOWN};
-
-// The engine's card colours, as the Pro's ph_engine_tint (PH_TINT_*): the gradient's top and bottom.
-static void tint(const char *engine, unsigned *top, unsigned *bottom)
-{
-    static const struct { const char *engine; unsigned top, bottom; } TINTS[] = {
-        {"codex", 0x4F6CF2, 0x1C2A78}, {"claude", 0xE0805A, 0x7A3420}, {"muse", 0xC2A684, 0x56442F},
-        {"kilo", 0x8F8A2A, 0x2C2A0C}};
-    *top = 0x55555C, *bottom = 0x1D1D21;   // PH_TINT_OTHER
-    for (size_t i = 0; i < sizeof TINTS / sizeof TINTS[0]; i++)
-        if (!strcmp(engine, TINTS[i].engine)) *top = TINTS[i].top, *bottom = TINTS[i].bottom;
-}
-
-static void lane(ht_scene_t *s, int x, int w, const max_agent_t *a, uint32_t now_ms)
-{
-    unsigned top, bottom;
-    tint(a->engine, &top, &bottom);
-    const int y = MAX_CARD_Y, h = MAX_CARD_H, cx = x + w / 2, tw = w - 2 * LANE_PAD;
-    const bool asks = a->state == MAX_ASKING;
-    if (asks) {   // a peach ring: it waits for a person
-        ht_pro_rect_aa(s, x, y, w, h, CARD_R, C(PEACH));
-        pod_grad_aa_dither(s, x + RING, y + RING, w - 2 * RING, h - 2 * RING, CARD_R - RING, C(top), C(bottom));
-    } else {
-        pod_grad_aa_dither(s, x, y, w, h, CARD_R, C(top), C(bottom));
-    }
-    max_text_centered(s, cx, LANE_NAME_CY, tw, &ph_sb_26, LANE_INK, a->name);
-    max_text_centered(s, cx, LANE_META_CY, tw, &ph_sb_22, max_mix(LANE_INK, top, 78), a->machine);
-
-    const max_ask_t *k = asks ? max_ask_of(a->id) : NULL;
-    char line[MAX_VERB_BYTES + 32];
-    const char *word = k && k->permission ? "Permission" : max_state_word(a);
-    max_state_line(line, sizeof line, a, word, now_ms);
-    // Too wide with its clock (a long spinner word in a narrow lane): the word alone, rather than cut after it.
-    if (ht_pro_width(&ph_sb_22, line) > tw)
-        snprintf(line, sizeof line, "%s%s", word, a->state == MAX_WORKING ? ELLIPSIS : "");
-    const unsigned ink = asks ? PEACH : a->state == MAX_WORKING ? MINT : a->state == MAX_FAILED ? LANE_FAIL
-                       : max_mix(LANE_INK, bottom, 80);
-    max_text_centered(s, cx, LANE_STATE_CY, tw, &ph_sb_22, ink, line);
-
-    // What it says: the question on paper, what it does in a thought, a failure or a summary; rows while the pet keeps
-    // its least height.
-    max_bubble_kind_t kind = BUBBLE_SPEECH;
-    const char *say = NULL;
-    if (asks) say = a->question;
-    else if (a->state == MAX_WORKING) kind = BUBBLE_THOUGHT, say = a->activity[0] ? a->activity : max_state_word(a);
-    else if (a->state == MAX_FAILED) kind = BUBBLE_BAD, say = a->note[0] ? a->note : "Failed";
-    else if (a->state == MAX_DONE && max_note_shown(a, now_ms)) kind = BUBBLE_LETTER, say = a->note;
-    const max_bubble_style_t *st = kind == BUBBLE_THOUGHT ? &LANE_THINK : &LANE_SAY;
-    const int under = kind == BUBBLE_THOUGHT ? PUFFS_H : TAIL_H;
-    const int room = LANE_FOOT - LANE_PET_MIN - 8 - under - LANE_BUBBLE_Y - 2 * st->pad_y;
-    int rows = room / st->f->height;
-    if (rows > LANE_ROWS) rows = LANE_ROWS;
-    char text[LANE_ROWS][ROW_BYTES];
-    const int n = say && rows > 0 ? max_wrap(text, rows, say, st->f, tw - 2 * st->pad_x) : 0;
-    int pet_top = LANE_BUBBLE_Y;
-    if (n) {
-        max_bubble(s, kind, st, x + LANE_PAD, LANE_BUBBLE_Y, tw, text, n);
-        pet_top += max_bubble_h(st, n) + under + 8;
-    }
-    int max_h = LANE_FOOT - pet_top;
-    if (max_h > LANE_PET_MAX) max_h = LANE_PET_MAX;
-    // On the gradient's colour at the pet's middle: the player keeps one frame drawn on one colour.
-    const int mid = LANE_FOOT - max_h / 2 - y;
-    max_pet(s, a, max_pet_scene(a, false), cx, LANE_FOOT, (w - 2 * LANE_PAD) / 2, max_h,
-            max_mix(top, bottom, (unsigned)(100 - mid * 100 / (h - 1))), now_ms, true);
-}
-
-// The lanes of the page, sharing its width. `live`: their boxes go to the finger.
-static void lanes(ht_scene_t *s, uint32_t now_ms, bool live)
-{
-    int v[MAX_LANES];
-    const int n = max_visible(v);
-    if (!n) return;
-    // Across pages every lane keeps a full page's width: a lane does not change size as the page turns.
-    const int slots = max_pages() > 1 ? MAX_LANES : n, w = (MAX_LANES_W - (slots - 1) * MAX_LANE_GAP) / slots;
-    for (int i = 0; i < n; i++) {
-        const int x = MAX_LANE_X + i * (w + MAX_LANE_GAP);
-        lane(s, x, w, &max_m.agents[v[i]], now_ms);
-        if (!live) continue;
-        max_m.lane_box[i] = (max_box_t){(int16_t)x, MAX_CARD_Y, (int16_t)w, MAX_CARD_H};
-        max_copy(max_m.lane_id[i], sizeof max_m.lane_id[i], max_m.agents[v[i]].id);
-        max_m.lane_hits = i + 1;
-    }
-}
-
-// ---- over the lanes: the toast of a question that waits, and the notice line, on the Pro's toast navy ----
-
-enum { TOAST_W = 680, TOAST_X = MAX_LANE_X + MAX_LANES_W - TOAST_W, TOAST_Y = 12, TOAST_H = 104, TOAST_R = 26,
-       TOAST_PAD = 24, TOAST_STEP_MS = 100, BAR_H = 5, NOTICE_H = 60 };
-
-// The toast's place: at the top right over the lanes; while New Harness is up, left of its Close and centred in the
-// band above its choices, so it covers none of the form's buttons.
+// The toast's place: top centre, over the strip of the agent page; while New Harness is up, in its title row left of
+// Close, so it covers none of the form's buttons.
 static max_box_t toast_box(bool form)
 {
-    if (!form) return (max_box_t){TOAST_X, TOAST_Y, TOAST_W, TOAST_H};
-    return (max_box_t){FORM_CLOSE_X - 16 - TOAST_W, (FORM_CHOICES_Y - TOAST_H) / 2, TOAST_W, TOAST_H};
+    if (!form) return (max_box_t){(HT_WIDTH - TOAST_W) / 2, TOAST_Y, TOAST_W, TOAST_H};
+    return (max_box_t){FORM_CLOSE_X - 16 - TOAST_W, FORM_HEAD_Y + (MAX_BUTTON_H - TOAST_H) / 2, TOAST_W, TOAST_H};
 }
 
-static void toast(ht_scene_t *s, max_box_t t, uint32_t now_ms)
+// Who needs the person, in its kind's colour, and what for, on one row: its question, or its turn's summary or failure.
+// The toast holds only while its agent still is what it announced (max_toast_shown), so its state says which.
+static void toast(ht_scene_t *s, max_box_t t)
 {
     const max_agent_t *a = max_find(max_m.toast_id);
-    max_box(s, t.x, t.y, t.w, t.h, TOAST_R, LINE_W, NAVY_EDGE, NAVY);
-    const int tx = t.x + TOAST_PAD, tw = t.w - 2 * TOAST_PAD, name_cy = t.y + 30;
-    const int hint = max_text_right(s, tx + tw, name_cy, tw / 3, &ph_sb_22, NAVY_MUTED, "Tap to open");
-    char who[CABLE_NAME_MAX + 8];
-    snprintf(who, sizeof who, "%s asks", a->name);
-    max_text(s, tx, name_cy, tw - hint - 24, &ph_sb_22, NAVY_NAME, who);
-    max_text(s, tx, t.y + 64, tw, &ph_sb_26, NAVY_INK, a->question);
-    // The bar runs out with the toast, a step every TOAST_STEP_MS.
-    const uint32_t age = now_ms - max_m.toast_from, steps = (MAX_TOAST_MS - age + TOAST_STEP_MS - 1) / TOAST_STEP_MS;
-    const int bw = (int)((uint32_t)tw * steps * TOAST_STEP_MS / MAX_TOAST_MS);
-    if (bw > 0) ht_pro_rect_aa(s, tx, t.y + t.h - 9 - BAR_H, bw, BAR_H, BAR_H / 2, C(NAVY_BAR));
-    max_motion(now_ms, TOAST_STEP_MS - age % TOAST_STEP_MS);
+    const max_attn_t kind = a->state == MAX_DONE ? MAX_ATTN_DONE : a->state == MAX_FAILED ? MAX_ATTN_FAIL : MAX_ATTN_ASK;
+    const unsigned ink = max_kind_ink(kind);
+    max_box(s, t.x, t.y, t.w, t.h, t.h / 2, 1, RIM, CARD);
+    const int cy = t.y + t.h / 2, dot = DY(10), x = t.x + DX(24), right = t.x + t.w - DX(24);
+    max_dot(s, x, cy, dot, ink);
+    char who[CABLE_NAME_MAX + 12];
+    snprintf(who, sizeof who, "%s %s", a->name,
+             kind == MAX_ATTN_DONE ? "is done" : kind == MAX_ATTN_FAIL ? "failed" : "asks");
+    const int tx = x + dot + DX(12), nw = max_text(s, tx, cy, (right - tx) / 2, &ph_sb_22, ink, who);
+    max_text(s, tx + nw + DX(14), cy, right - tx - nw - DX(14), &ph_rg_24, FG,
+             kind == MAX_ATTN_ASK ? a->question : a->note);
 }
 
-// The notice ending at `right`, from y down.
-static void notice(ht_scene_t *s, int right, int y)
+// The notice at the bottom centre after a green dot; while New Harness is up, in its title row left of the toast's place.
+static void notice(ht_scene_t *s, bool form, max_box_t toast_at, bool toasting)
 {
-    const ht_pro_font_t *f = &ph_sb_26;
+    const ht_pro_font_t *f = &ph_rg_24;
     char row[ROW_BYTES];
-    max_cut(row, max_m.notice, f, TOAST_W - 2 * TOAST_PAD, false);
-    const int tw = ht_pro_width(f, row), w = tw + 2 * TOAST_PAD, x = right - w;
-    max_box(s, x, y, w, NOTICE_H, TOAST_R, LINE_W, NAVY_EDGE, NAVY);
-    ht_pro_text(s, x + TOAST_PAD, max_top_of(f, y + NOTICE_H / 2), tw, f, C(NAVY_INK), row);
+    max_cut(row, max_m.notice, f, DX(900), false);
+    const int tw = ht_pro_width(f, row), w = 2 * PILL_PAD + PILL_DOT + DX(10) + tw, h = NOTICE_H;
+    const int right = toasting ? toast_at.x - 12 : FORM_CLOSE_X - 16;
+    const int x = form ? right - w : (HT_WIDTH - w) / 2;
+    const int y = form ? FORM_HEAD_Y + (MAX_BUTTON_H - h) / 2 : HT_HEIGHT - DY(22) - h;
+    max_box(s, x, y, w, h, h / 2, 1, RIM, CARD);
+    max_dot(s, x + PILL_PAD, y + h / 2, PILL_DOT, DONE);
+    ht_pro_text(s, x + PILL_PAD + PILL_DOT + DX(10), max_top_of(f, y + h / 2), tw, f, C(FG), row);
 }
 
 // ---- the whole screen ----
@@ -422,28 +442,33 @@ static void update_screen(ht_scene_t *s)
     const int cx = HT_WIDTH / 2, bar_w = 800;
     char pct[16], version[MAX_VERSION_BYTES + 8];
     snprintf(pct, sizeof pct, "%d%%", max_m.update_pct);
-    max_text_centered(s, cx, MAX_Y(140), 600, &ph_sb_34, INK, "Updating");
-    max_text_centered(s, cx, MAX_Y(214), 400, &ph_sb_48, INK, pct);
+    max_text_centered(s, cx, MAX_Y(140), 600, &ph_sb_34, FG, "Updating");
+    max_text_centered(s, cx, MAX_Y(214), 400, &ph_sb_48, FG, pct);
     ht_pro_rect_aa(s, cx - bar_w / 2, MAX_Y(276), bar_w, 14, 7, C(TRACK));
     if (max_m.update_pct > 0)
-        ht_pro_rect_aa(s, cx - bar_w / 2, MAX_Y(276), bar_w * max_m.update_pct / 100, 14, 7, C(GREEN));
+        ht_pro_rect_aa(s, cx - bar_w / 2, MAX_Y(276), bar_w * max_m.update_pct / 100, 14, 7, C(DONE));
     if (max_m.update_to[0]) {
         snprintf(version, sizeof version, "Version %s", max_m.update_to);
-        max_text_centered(s, cx, MAX_Y(334), 600, &ph_sb_22, MUTED, version);
+        max_text_centered(s, cx, MAX_Y(334), 600, &ph_sb_22, REST, version);
     }
 }
 
-// A veil over what rests while a person talks: 65 % of the way to the ground.
-static void dim(ht_scene_t *s, int x, int y, int w, int h)
+// The page the model shows. One that names an agent no longer in the ring shows Overview instead.
+static void page(ht_scene_t *s, uint32_t now_ms)
 {
-    const uint16_t g = C(GROUND);
-    pod_veil(s, x, y, w, h, x, false, y, h, g, g, g, DIM_K);
+    const max_agent_t *agent = max_find(max_m.selected), *attn = max_find(max_m.attn_id);
+    if (max_m.view == MAX_VIEW_AGENT && agent) max_draw_agent(s, agent, now_ms);
+    else if (max_m.view == MAX_VIEW_ATTENTION && attn) max_draw_attention(s, attn, now_ms);
+    else if (max_m.view == MAX_VIEW_INBOX) max_draw_inbox(s, now_ms);
+    else if (max_m.view == MAX_VIEW_APPS) max_draw_apps(s);
+    else if (max_m.view == MAX_VIEW_AMBIENT) max_draw_ambient(s);
+    else max_draw_overview(s, now_ms);
 }
 
 void max_ui_render(ht_scene_t *s, uint32_t now_ms)
 {
     s->background = C(GROUND);
-    max_m.lane_hits = 0;
+    max_m.cell_hits = 0;
     max_m.hit_count = 0;
     max_m.card_id[0] = 0;
     max_m.dirty = false;
@@ -451,29 +476,13 @@ void max_ui_render(ht_scene_t *s, uint32_t now_ms)
     if (max_m.update_pct >= 0) {
         update_screen(s);
     } else {
-        // While a person talks the rest of the screen holds still under a veil: nothing there can change who listens.
-        const bool live = max_m.talk == MAX_TALK_IDLE, form = max_form_open();
-        const bool toasting = max_m.link && max_toast_shown(now_ms);
+        const bool form = max_form_open(), toasting = max_m.link && max_toast_shown(now_ms);
         const max_box_t t = toast_box(form);
-        if (toasting && live) max_hit(t.x, t.y, t.w, t.h, MAX_HIT_TOAST, 0);   // first: never dropped past MAX_HITS
-        side_column(s, live);
-        if (form) {
-            max_draw_form(s);
-        } else {
-            max_draw_room(s, max_m.link ? max_find(max_m.selected) : NULL, now_ms);
-            if (max_m.link) lanes(s, now_ms, live);
-        }
-        if (toasting) toast(s, t, now_ms);
-        if (!live) {   // what rests: everything right of the room; over the form, the side column and the toast
-            const int from = form ? MAX_SIDE_X : MAX_LANE_X;
-            dim(s, from - 4, 0, HT_WIDTH - from + 4, HT_HEIGHT);
-            if (form && toasting) dim(s, t.x, t.y, t.w, t.h);
-        }
-        if (max_notice_shown(now_ms)) {
-            // In the toast's place, or under it; while the form is up, in the band above its choices, left of the toast.
-            if (!form) notice(s, t.x + t.w, toasting ? t.y + t.h + 10 : t.y);
-            else notice(s, toasting ? t.x - 10 : t.x + t.w, t.y + (t.h - NOTICE_H) / 2);
-        }
+        if (toasting) max_hit(t.x, t.y, t.w, t.h, MAX_HIT_TOAST, 0);   // first: it lies over the page's own
+        if (form) max_draw_form(s);
+        else page(s, now_ms);
+        if (toasting) toast(s, t);
+        if (max_notice_shown(now_ms)) notice(s, form, t, toasting);
     }
     max_m.drawn_key = max_time_key(now_ms);
 }
