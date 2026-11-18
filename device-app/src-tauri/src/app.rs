@@ -426,6 +426,10 @@ impl App {
         if row == OrcaState::Update && self.silent == Silent::Ran {
             self.silent = Silent::Approve;
         }
+        // Orca was not running, or did not answer in time: the update is due again, and the next Behind runs it.
+        if matches!(answer, OrcaAnswer::Failed(OrcaError::NotRunning | OrcaError::Timeout)) {
+            self.silent = Silent::Due;
+        }
         self.orca_row(row, effects);
     }
 

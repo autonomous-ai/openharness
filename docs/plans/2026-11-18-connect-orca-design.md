@@ -140,7 +140,8 @@ One JSON line. It writes only the plugin's folder. It asks Orca at most `status`
   `connect` goes before a waiting `status`. Deadlines: 30 s for `status`, 120 s for `connect`.
 - **Silent update.** On `behind`, it runs `connect` without `--approve`, once per CLI version while the app runs (an app
   restart may run it once more, which asks nothing). `done` sets `None`; `approve` sets `Update`; `failed` leaves `None`
-  and logs the code.
+  and logs the code. A `not-running` or `timeout` failure is tried again at the next `status` that says `behind`, still
+  without `--approve`.
 - **The menu.** `Connect Orca…` (`Offer`) or `Update Orca connection…` (`Update`), one action each, below the sign-in
   row and above Sound. Each click opens the window on the new screen.
 - **The screen, `Screen::Orca`.** The view carries the phase, the grants and whether it is an update. On open it runs
