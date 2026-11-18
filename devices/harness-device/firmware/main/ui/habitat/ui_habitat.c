@@ -3943,6 +3943,21 @@ static void notice_restore_selection(const char *id, bool question)
     }
     if (at >= 0) s.offset = at;
 }
+// Makes room in a full inbox for a row, false when there is none. A question waits on the person, so it never gives
+// way to a message: the oldest message goes, else the oldest question for a question. The card being read (`kept`)
+// stays, and arrival never moves it. Rows run newest first, a held card last.
+static bool notice_make_room(bool question, const char *kept, bool kept_question)
+{
+    if (s.notice_count < NOTICES) return true;
+    for (int pass = 0; pass < (question ? 2 : 1); pass++)
+        for (int i = s.notice_count - 1; i >= 0; i--)
+            if (s.notice[i].question == (pass == 1) &&
+                !(!strcmp(kept, s.notice[i].agent_id) && s.notice[i].question == kept_question)) {
+                notice_drop(i);
+                return true;
+            }
+    return false;
+}
 // The row added, or NULL when the id is refused.
 static cable_notif_t *notice_add(const char *id, const char *name, const char *machine, const char *recap,
                                  bool question, bool failed)
@@ -3952,18 +3967,7 @@ static cable_notif_t *notice_add(const char *id, const char *name, const char *m
     // News replaces that agent's news and leaves its open question beside it: a turn's summary or failure arriving
     // while it waits took the question off the dial (2026-11-18). A question replaces both, as it is the newer state.
     notice_remove(id, question);
-    if (s.notice_count == NOTICES) {
-        // The bounded inbox is full. A question waits on the person, so it never gives way to a message: the oldest
-        // message goes, else the oldest question for a new question, else the new row is refused. The card being
-        // read stays either way, and arrival never moves it. Rows run newest first, a held card last.
-        int drop = -1;
-        for (int pass = 0; pass < (question ? 2 : 1) && drop < 0; pass++)
-            for (int i = s.notice_count - 1; i >= 0 && drop < 0; i--)
-                if (s.notice[i].question == (pass == 1) &&
-                    !(!strcmp(selected, s.notice[i].agent_id) && s.notice[i].question == selected_question)) drop = i;
-        if (drop < 0) return NULL;
-        notice_drop(drop);
-    }
+    if (!notice_make_room(question, selected, selected_question)) return NULL;
     int pos = 0;
     if (!question)
         while (pos < s.notice_count && s.notice[pos].question)
@@ -4130,9 +4134,8 @@ void ui_notif_replace(const cable_notif_t *rows, int count)
     bool retained = false;
     for (int i = 0; i < s.notice_count; i++)
         if (!strcmp(s.notice[i].agent_id, selected) && s.notice[i].question == selected_question) retained = true;
-    if (held.agent_id[0] && !retained && s.notice_count < NOTICES) {
+    if (held.agent_id[0] && !retained && notice_make_room(held.question, "", false))
         s.notice[s.notice_count++] = held;
-    }
     notice_restore_selection(selected, selected_question);
     notice_sync_view();
     change();
