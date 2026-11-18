@@ -133,7 +133,7 @@ function complete(journal: Journal, steps: Steps, oldDataDir: string, run: { byt
     const record = join(plan.legacy, OWN_FILES.record)
     for (const path of [draftOf(record), record]) io.rmSync(path, { force: true })
     const outcome = { state: 'bridged', entries: plan.entries.filter((entry) => entry.present).length, bytesCopied: run.bytesCopied, panes: panes.length } as const
-    writeMoveRecord(plan.state, { version: 1, ...outcome, oldProcesses: 0, at: deps.now() })
+    writeMoveRecord(plan.state, { version: 1, ...outcome, left: left.length, oldProcesses: 0, at: deps.now() })
     forgetJournal(plan.legacy, io)
     return outcome
   } catch (error) {

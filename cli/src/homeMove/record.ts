@@ -8,11 +8,13 @@ import { OWN_FILES } from './plan.js'
 /** Where the move stands, for `harness status` and the fleet scan: counts and times, no path and no name. */
 export interface MoveRecord { version: 1; state: 'moved' | 'bridged' | 'waiting' | 'failed' | 'skipped-override'; reason?: Reason
   entries: number; bytesCopied: number; panes: number; oldProcesses: number; at: number; failedAt?: number
+  /** The records the move left unchanged, still naming the old tree (move.ts): written by the move that bridged. */
+  left?: number
   /** A ~/.harness that is not the bridge sits beside the data root: said once, when this is first written. */
   stray?: true }
 
 // Every field, and only these: whatever else a caller's object carries stays out of the file.
-const FIELDS: (keyof MoveRecord)[] = ['version', 'state', 'reason', 'entries', 'bytesCopied', 'panes', 'oldProcesses', 'at', 'failedAt', 'stray']
+const FIELDS: (keyof MoveRecord)[] = ['version', 'state', 'reason', 'entries', 'bytesCopied', 'panes', 'left', 'oldProcesses', 'at', 'failedAt', 'stray']
 
 /** The record in the state root the rule reads: the XDG one once moved, ~/.harness before. */
 export function readMoveRecord(home: string, env: NodeJS.ProcessEnv): MoveRecord | null {
