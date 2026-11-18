@@ -234,6 +234,21 @@ pub struct Output {
     pub stderr: String,
 }
 
+/// Why an export gave no zip.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExportFailure {
+    TimedOut,
+    NoAnswer,
+    NoFile,
+}
+
+/// The zip an export wrote, and how the menu names it: the home folder as `~`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Exported {
+    pub zip: std::path::PathBuf,
+    pub shown: String,
+}
+
 pub trait Clock: Send + Sync {
     /// Unix seconds.
     fn now(&self) -> u64;
