@@ -782,6 +782,11 @@ theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
   while the firmware updates. **About** opens macOS's standard About panel,
   brought to the front, with the app's name and version and one credits line,
   `Device 0.1.0 · Harness 0.6.58`, a version the app does not know left out.
+- **Export logs** is there while Harness is installed. While it runs the row
+  is the disabled `Exporting logs…`. Then Finder shows the zip, and a disabled
+  line under the row reads `Saved to ~/Desktop/harness-logs-YYYYMMDD-HHMM.zip`,
+  or `Export failed:` and `timed out`, `Harness did not answer` or `no file`.
+  The line stays until the next export or the app quits.
 
 The menu, top to bottom:
 
@@ -792,6 +797,8 @@ The menu, top to bottom:
   Notifications ▸
 ──────────
   Open Harness
+  Export logs
+  Saved to ~/Desktop/harness-logs-20261118-1030.zip
   About
   Quit
 ```
