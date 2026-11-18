@@ -1333,7 +1333,7 @@ static void focus_header(ht_scene_t *f, const char *title)
  * 168 x 36 pill at y 58 split into two 84 px cells; the selected cell is filled #1e1e1e, a 81 x 30 box inset 3 px. The
  * words keep the title's Inter 20 letter-spaced 2 (59 px each), centred in their cells: the mockup's Inter 17 is no
  * font on the dial, and a font for two words is flash spent. Each half of the band above the pages (y 30 to 108) is
- * the other cell's target, generous for a thumb; the selected cell's does nothing.
+ * its cell's target, generous for a thumb; the selected cell's does nothing.
  */
 static void focus_switch(ht_scene_t *f, bool apps)
 {

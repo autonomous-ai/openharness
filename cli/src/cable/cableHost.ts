@@ -272,10 +272,10 @@ export class DaemonCableHost implements CableHost {
     this.filter = new AppFilter({
       after: wiring.appTimer ?? unrefAfter,
       random: wiring.appRandom ?? Math.random,
-      // The registry's agents at each call, not the rings' last update: only a read of the machine list updates the
-      // rings, so a settle with the dials on a window's tab or unplugged, or a pick just after an app's last agent ended,
-      // would count the past. Harness's own agents still count as that read left them: the list read feeds their source
-      // (machineSnapshot).
+      // The registry's agents at each call, not the rings' last update: only a list read updates the rings (the machine
+      // list's, or the tab's for a dial that says `appFilter`), so a settle between two reads or with the dials
+      // unplugged, or a pick just after an app's last agent ended, would count the past. Harness's own agents still
+      // count as the last machine list left them: that read feeds their source (machineSnapshot).
       counts: () => this.counts(),
       switched: (cause) => wiring.appSwitched?.(cause),
       settled: (app) => {
