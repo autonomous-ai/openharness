@@ -1036,6 +1036,8 @@ static void bell_checks(const char *dir) {
     reset(); ui_notif_replace(both,2); scene_take();
     assert(s.notice_count==2 && s.notice[0].question && !s.notice[1].question);
     assert(notice_unread(NULL)==1 && notice_unread("a")==1 && status_is(HT_BELL " 1"));
+    // A read row does not hide its agent's unread one: the question read, the news still counts.
+    notice_mark_read(&s.notice[0]); assert(notice_unread(NULL)==1);
     puts("bell/inbox: an agent's unread question and news count one PASS");
     reset();
 }
@@ -1048,17 +1050,24 @@ static bool notice_has(const char *id, bool question) {
 static void inbox_full_checks(void) {
     cable_notif_t rows[NOTICES]={0};
     char id[ID_MAX];
-    // 23 questions and the message being read: a new message has nothing to take the place of.
-    for(int i=0;i<NOTICES-1;i++) {
+    // 23 questions and the message being read: a new message has nothing to take the place of. The oldest question is
+    // the read message's agent's own: the card being read is that row, not its agent.
+    for(int i=0;i<NOTICES-2;i++) {
         snprintf(rows[i].agent_id,sizeof rows[i].agent_id,"q-%d",i);
         COPY(rows[i].summary,"May I go on?"); rows[i].question=true;
     }
-    strcpy(rows[NOTICES-1].agent_id,"read"); COPY(rows[NOTICES-1].summary,"The build passed.");
+    strcpy(rows[NOTICES-2].agent_id,"read"); COPY(rows[NOTICES-2].summary,"The build passed.");
+    strcpy(rows[NOTICES-1].agent_id,"read"); COPY(rows[NOTICES-1].summary,"May I ship?"); rows[NOTICES-1].question=true;
     reset(); ui_notif_replace(rows,NOTICES); ui_notif_open();
-    s.offset=NOTICES-1; assert(!strcmp(s.notice[s.offset].agent_id,"read"));
+    s.offset=NOTICES-1; assert(!strcmp(s.notice[s.offset].agent_id,"read") && !s.notice[s.offset].question);
     ui_notify_task_done("new","New pane","M2","Another result arrived.");
     assert(s.notice_count==NOTICES && s.view==INBOX && !strcmp(s.notice[s.offset].agent_id,"read"));
-    for(int i=0;i<NOTICES-1;i++) { snprintf(id,sizeof id,"q-%d",i); assert(notice_has(id,true)); }
+    for(int i=0;i<NOTICES-2;i++) { snprintf(id,sizeof id,"q-%d",i); assert(notice_has(id,true)); }
+    assert(notice_has("read",true));
+    assert(notice_add("q-new","New pane","M2","May I go on?",true,false));
+    snprintf(id,sizeof id,"q-%d",NOTICES-3);
+    assert(!notice_has("read",true) && notice_has(id,true));
+    assert(!strcmp(s.notice[s.offset].agent_id,"read") && !s.notice[s.offset].question);
     // 24 questions: a message is refused; a question takes the oldest question's place but the one being read.
     for(int i=0;i<NOTICES;i++) {
         snprintf(rows[i].agent_id,sizeof rows[i].agent_id,"q-%d",i);
