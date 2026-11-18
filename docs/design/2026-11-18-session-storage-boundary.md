@@ -409,7 +409,9 @@ until delivery, so the final `done` cannot omit it.
 
 The parent verifies cursor identity, contiguous offsets, stable total, positive progress,
 the 64-name limit and exact selected image proof shapes. It runs the same strict row decoder
-and retains each returned row's exact WeakMap proof. No success is returned until all pages
+and retains each returned row's exact WeakMap proof. A request-scoped set rejects repeated
+agent IDs within or across pages, adding O(returned-row-count) identifier metadata only until
+listing settlement; it is not a retained cache or authority table. No success is returned until all pages
 complete. Individual damaged records still cannot hide their peers; worker loss, expiration
 and uncertain cleanup fail the entire listing. Names and at most one projected page/lookahead
 stay in the child. The API's complete returned row array remains in core; child names storage

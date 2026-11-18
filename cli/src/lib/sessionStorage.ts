@@ -334,6 +334,7 @@ export class SessionStorage {
     const release = await this.acquireListing()
     let cursor: string | null = null, next = 0, total: number | undefined
     let owner: ChildProcess | undefined, uncertain = false
+    const delivered = new Set<string>()
     try {
       for (;;) {
         const page: StoppedListPage = await this.request({ kind: 'stopped-list-page', cursor })
@@ -353,7 +354,15 @@ export class SessionStorage {
         cursor = page.cursor
         next = page.next
         total = page.total
-        for (const image of page.images) accept(image)
+        for (const image of page.images) {
+          const id = (image as Extract<SessionImage, { state: 'image' }>).proof.document as { agentId: string }
+          if (delivered.has(id.agentId)) {
+            uncertain = true
+            throw new SessionStorageUnavailable('invalid')
+          }
+          delivered.add(id.agentId)
+          accept(image)
+        }
         if (page.done) { cursor = null; return }
       }
     } finally {

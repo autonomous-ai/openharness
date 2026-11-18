@@ -41,6 +41,23 @@ function holdFirstPage() {
 }
 
 describe('stopped listing transport ownership', () => {
+  it.each(['same-page', 'later-page'])('rejects a duplicate selected image in the %s before returning a catalog', async kind => {
+    const selected = await storage.read({ kind: 'stopped', agentId: 'row-000' })
+    const request = owner().request.bind(storage)
+    vi.spyOn(owner(), 'request').mockImplementation(async operation => {
+      const reply = await request(operation)
+      if (operation.kind !== 'stopped-list-page') return reply
+      const page = reply as StoppedListPage
+      if (kind === 'same-page' && operation.cursor === null) return { ...page, images: [selected, selected] }
+      if (kind === 'later-page' && operation.cursor !== null) return { ...page, images: [selected] }
+      return reply
+    })
+    await expect(collect()).rejects.toMatchObject({ code: 'invalid' })
+    expect(owner().child).toBeUndefined()
+    vi.restoreAllMocks()
+    expect(await collect()).toHaveLength(65)
+  })
+
   it('serializes complete fresh listings while unrelated storage requests continue between pages', async () => {
     const hold = holdFirstPage()
     const first = collect()
