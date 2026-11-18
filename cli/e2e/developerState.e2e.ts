@@ -372,7 +372,8 @@ process.stdin.resume()`
   // A process's folder is not a file it holds. Adoption reads it, on macOS through lsof (support.ts `processCwds`), to
   // tell an engine process with no record far from the conversation from one that may hold it, and a folder it cannot
   // read counts as near (services/externalSessions.ts): hidden, any `claude` the daemon has no record of, another
-  // test's or the developer's, made every Claude Code adoption unavailable on a Mac, and on Linux, which reads /proc, none.
+  // test's or the developer's, would make every Claude Code adoption unavailable on a Mac, and on Linux, which reads
+  // /proc, none.
   it.skipIf(process.platform === 'win32')('its lsof shows a process\'s folder outside its root as the system\'s does', async () => {
     const d = daemon = await IsolatedDaemon.create()
     // This worker's, outside the root. Compared, never printed: the folder is the developer's.
