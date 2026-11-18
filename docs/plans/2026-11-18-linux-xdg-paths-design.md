@@ -463,3 +463,35 @@ needs opening again for shell context, and agents in a forked community project 
 - How each app re-checks the rule at each look without a hot-path cost.
 - Whether `harnessd/platform.ts`'s fallback carries the rule inline or takes the data folder from its caller.
 - Whether the bridge service runs in the edge host or alone.
+
+## Changes after the final review (harness-pm, 2026-11-18)
+
+These replace the text above where they differ.
+
+- **The switch is a marker, not a folder.** The rule's step 2 reads "if the data root holds Harness's marker". The
+  marker is written at the move's commit (into the staged data root, so it appears with the rename), by the installers
+  on a fresh install, and by a start that resolves the XDG roots on a fresh machine. A `~/.local/share/harness` made by
+  anything else, or by Desktop before the CLI is installed, switches nothing: with a `~/.harness` beside it the machine
+  stays on `~/.harness`, and the move refuses with `target-exists` and a clear record, never losing `~/.harness`.
+- **Sockets.** When the socket beside the data folder would be over 96 bytes, it goes to `$XDG_RUNTIME_DIR/harness/<hash>/`
+  when that variable names an absolute folder owned by the account with mode 0700, else to `<state root>/s/<hash>/`.
+  No home is left with TCP only.
+- **The move lock** is `~/.harness.move-lock`, whatever the XDG variables say. A start waits while the holder (pid and
+  start time) is alive and the data root has not appeared, logging one line; it never starts on a half-moved tree. A
+  dead holder's lock is taken over, its journal finished or rolled back, and the start goes on. A rollback that cannot
+  finish exits the start without starting a daemon.
+- **The journal** appends one line per step; previous file bytes live in `~/.harness/.move-before/`. Copies across
+  filesystems are flushed to disk before the originals and the journal go.
+- **Overrides that hold the move** include `HARNESS_ENV_FILE` and `DOTENV_CONFIG_PATH`; the systemd unit's carried
+  `Environment=` values inside the old tree are respelled to their new places. `XDG_DATA_HOME`/`XDG_STATE_HOME` are
+  carried into the service definition on Linux only.
+- **The Store is woken by the bridge service**, not the core: while harnesses wait to be set up again, the service asks
+  for the Store through what the core offers every service. The core grows nothing.
+- **A failed move is retried at once only for a person's `harness start` on a terminal**; Desktop's and systemd's
+  starts wait an hour from the latest try.
+- **A harness launched in the home folder** keeps its workspace runtime under `<state root>/runtime/<hash>` on a moved
+  Linux machine.
+- **Release order:** Desktop with or before the CLI; Desktop writes nothing that switches the rule before the CLI is
+  installed.
+- **Accepted, in the pull request:** Harness OS keeps the default folders (its daemon does not read the person's
+  `XDG_*`); a linked DSH package whose venv uses uv's managed Python breaks once the bridge goes (developers only).
