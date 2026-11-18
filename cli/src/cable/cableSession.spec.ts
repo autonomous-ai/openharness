@@ -4521,7 +4521,9 @@ describe('hello capabilities', () => {
       } finally { vi.useRealTimers(); await session.stop() }
       const [line] = linkLines(log)
       expect(line).toMatch(/\] link · tx \d+ B in \d+ frames · rx \d+ B in 1 frames/)
-      expect(line).toMatch(/ · non-frame text 500 chars$/)
+      // The last few bytes may still wait in the decoder for a header: what it stepped over is counted.
+      expect(line).toMatch(/ · discarded (\d+) B · non-frame text \1 chars$/)
+      expect(line).not.toContain('xxxx')
     })
   })
 })

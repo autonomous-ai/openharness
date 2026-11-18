@@ -50,8 +50,7 @@ const PING_EVERY_MS = 5_000
 const SILENCE_MS = 20_000
 /** How often a connected port's traffic counters go to the dial's log. */
 const LINK_LOG_MS = 60_000
-/** Non-frame text kept per logging interval, and the shortest printable run worth keeping. */
-const NOISE_MAX = 200
+/** The shortest printable run of non-frame bytes counted as text. */
 const NOISE_RUN_MIN = 4
 const REOPEN_EVERY_MS = 2_000
 // How long one attempt at opening the port may take before it is abandoned.
@@ -747,7 +746,7 @@ export class CableSession {
   private link: CablePort | null = null
   private decoder = new CableDecoder()
   /** This port's traffic since it opened, logged once a minute and when it closes (see logLink). */
-  private traffic = { at: 0, tx: 0, txFrames: 0, rx: 0, rxFrames: 0, corrupt: 0, discarded: 0, run: '', noise: '' }
+  private traffic = { at: 0, tx: 0, txFrames: 0, rx: 0, rxFrames: 0, corrupt: 0, discarded: 0, run: 0, noise: 0 }
   private timer: NodeJS.Timeout | null = null
   private greetedMac: string | null = null
   /** This session has spoken with a real dial at least once. Never reset: a port that has been a dial
@@ -1188,7 +1187,7 @@ export class CableSession {
     this.framesSinceOpen = 0
     this.traffic = {
       at: Date.now(), tx: 0, txFrames: 0, rx: 0, rxFrames: 0,
-      corrupt: this.decoder.corruptFrames, discarded: this.decoder.discardedBytes, run: '', noise: '',
+      corrupt: this.decoder.corruptFrames, discarded: this.decoder.discardedBytes, run: 0, noise: 0,
     }
     this.link = opened
     // Leftover bytes belong to a session that has ended; carrying them across would put a stale
@@ -1291,30 +1290,29 @@ export class CableSession {
 
   /**
    * This port's counters in the dial's log, to read beside the firmware's own `alive` line: a gap between
-   * what one side wrote and the other decoded is the lossy link. Plus the printable runs of the bytes the
-   * decoder stepped over (at most NOISE_MAX characters a minute), so a device panic's text is kept.
+   * what one side wrote and the other decoded is the lossy link. Plus how much of what the decoder stepped
+   * over was text (a boot or a panic), never the text: a frame of the dial's that arrives broken is stepped
+   * over too, and its words are the person's.
    */
   private logLink(label: string): void {
     const t = this.traffic
     this.keepRun()
-    this.log(`cable: ${label} · tx ${t.tx} B in ${t.txFrames} frames · rx ${t.rx} B in ${t.rxFrames} frames · corrupt ${this.decoder.corruptFrames - t.corrupt} · discarded ${this.decoder.discardedBytes - t.discarded} B${t.noise ? ` · non-frame text: ${t.noise}` : ''}`)
+    this.log(`cable: ${label} · tx ${t.tx} B in ${t.txFrames} frames · rx ${t.rx} B in ${t.rxFrames} frames · corrupt ${this.decoder.corruptFrames - t.corrupt} · discarded ${this.decoder.discardedBytes - t.discarded} B${t.noise ? ` · non-frame text ${t.noise} chars` : ''}`)
     t.at = Date.now()
-    t.noise = ''
+    t.noise = 0
   }
 
-  /** Close the current run of printable discarded bytes into the minute's text, if it is long enough to read. */
+  /** Count the current run of printable discarded bytes into the minute's text, if it is long enough to read. */
   private keepRun(): void {
     const t = this.traffic
-    if (t.run.length >= NOISE_RUN_MIN && t.noise.length < NOISE_MAX) {
-      t.noise = `${t.noise}${t.noise ? ' | ' : ''}${t.run}`.slice(0, NOISE_MAX)
-    }
-    t.run = ''
+    if (t.run >= NOISE_RUN_MIN) t.noise += t.run
+    t.run = 0
   }
 
   private noted = (bytes: Uint8Array): void => {
     for (const b of bytes) {
       if (b >= 0x20 && b < 0x7f) {
-        if (this.traffic.run.length < NOISE_MAX) this.traffic.run += String.fromCharCode(b)
+        this.traffic.run++
       } else this.keepRun()
     }
   }
