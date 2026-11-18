@@ -15,7 +15,8 @@ import { pidAlive } from '../lib/processProof.js'
 /** A folder's entries by name: a folder's own, or a file's bytes. */
 type Tree = Map<string, Tree | Buffer>
 
-/** A key's segment: a plain name, so no key reaches outside the folder. */
+/** A key's segment: a plain name, so no key reaches outside the folder. The build holds the plugin's names to the same
+ *  pattern (scripts/lib/orcaPluginBundle.mjs). */
 const SEGMENT = /^[A-Za-z0-9._-]+$/
 const PID = /^[0-9]+$/
 
