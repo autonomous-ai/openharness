@@ -67,6 +67,50 @@ describe('ServiceSupervisor', () => {
   })
   afterEach(() => vi.useRealTimers())
 
+  it('starts a declared peer once for the current component host without waiting for core binding', () => {
+    const edge: ServiceSpec & { wakes: readonly string[] } = { name: 'edge', services: ['componentStartup'], wakes: ['devices'], heapLimitMiB: 128, rssLimitMiB: 256 }
+    const supervisor = make([edge, { ...devices, onDemand: true }])
+    supervisor.start()
+    const sender = latest('edge')
+    sender.say({ type: 'harnessd:want', service: 'devices' })
+    sender.say({ type: 'harnessd:want', service: 'devices' })
+    expect(children.map(child => child.spec.name)).toEqual(['edge', 'devices'])
+    expect(supervisor.status().find(status => status.name === 'devices')?.state).toBe('starting')
+  })
+
+  it('does not let undeclared, replaced or ending component hosts start peers', () => {
+    const edge: ServiceSpec & { wakes: readonly string[] } = { name: 'edge', services: ['componentStartup'], wakes: ['devices'], heapLimitMiB: 128, rssLimitMiB: 256 }
+    const supervisor = make([edge, { ...devices, onDemand: true }, { ...search, onDemand: true }])
+    supervisor.start()
+    const previous = latest('edge')
+    previous.say({ type: 'harnessd:want', service: 'search' })
+    previous.say({ type: 'harnessd:want', service: '' })
+    previous.exit(1)
+    vi.advanceTimersByTime(options.initialBackoffMs)
+    previous.say({ type: 'harnessd:want', service: 'devices' })
+    expect(children.map(child => child.spec.name)).toEqual(['edge', 'edge'])
+    const current = latest('edge')
+    supervisor.stop(() => {})
+    current.say({ type: 'harnessd:want', service: 'devices' })
+    expect(children.map(child => child.spec.name)).toEqual(['edge', 'edge'])
+  })
+
+  it('tells a component host which declared peers are already started and which start later', () => {
+    const edge: ServiceSpec & { wakes: readonly string[] } = { name: 'edge', services: ['componentStartup'], wakes: ['devices'], heapLimitMiB: 128, rssLimitMiB: 256 }
+    const supervisor = make([edge, { ...devices, onDemand: true }, search])
+    supervisor.start()
+    const previous = latest('edge')
+    expect(previous.sent).toEqual([])
+    supervisor.want('devices')
+    expect(previous.sent).toEqual([{ type: 'harnessd:peer-started', service: 'devices' }])
+    previous.exit(1)
+    vi.advanceTimersByTime(options.initialBackoffMs)
+    const current = latest('edge')
+    expect(current).not.toBe(previous)
+    expect(current.sent).toEqual([{ type: 'harnessd:peer-started', service: 'devices' }])
+    expect(previous.sent).toEqual([{ type: 'harnessd:peer-started', service: 'devices' }])
+  })
+
   it('backs off a refused spawn without inventing a child and stops its pending retry', () => {
     const spawnService = vi.fn(() => null)
     const supervisor = make([search], {}, {}, true, { spawnService })
