@@ -100,6 +100,20 @@ describe('bounded JSON admission', () => {
     expect(boundedJsonBytes(value, 100)).toBe(Buffer.byteLength(JSON.stringify(value)))
   })
 
+  it('omits an object key that disappears before its own descriptor is inspected', () => {
+    const value: Record<string, unknown> = { a: 0 }, original = Object.getOwnPropertyDescriptor
+    const spy = vi.spyOn(Object, 'getOwnPropertyDescriptor').mockImplementation((target, key) => {
+      if (target === value && key === 'a') delete value.a
+      return original(target, key)
+    })
+    let actual: number | null = null
+    try { actual = boundedJsonBytes(value, 100) } finally { spy.mockRestore() }
+    expect(actual).toBe(Buffer.byteLength(JSON.stringify(value)))
+    expect(value).toEqual({})
+    value.a = 1
+    expect(boundedJsonBytes(value, 100)).toBe(Buffer.byteLength(JSON.stringify(value)))
+  })
+
   it('avoids per-count function creation and redundant index conversions in the release transform', () => {
     // V12 sampled the three per-call function-name writes; use the real release transform,
     // not a wall-clock assertion or a synthetic alternative to the byte counter.
