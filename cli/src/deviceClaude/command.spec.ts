@@ -1256,8 +1256,9 @@ describe('harness device orca status and connect', () => {
   })
 
   it('neither module names the home folder', () => {
-    for (const module of ['devices/orcaPlugin.ts', 'devices/orcaPluginFolder.ts']) {
-      expect(readFileSync(join(SRC, module), 'utf8'), module).not.toMatch(/homedir/)
+    // The folder is joined apart from each name: scripts/ci-plan.py reads a quoted `devices/…` as the top-level devices/.
+    for (const name of ['orcaPlugin.ts', 'orcaPluginFolder.ts']) {
+      expect(readFileSync(join(SRC, 'devices', name), 'utf8'), name).not.toMatch(/homedir/)
     }
   })
 })
