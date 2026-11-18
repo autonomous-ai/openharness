@@ -1,0 +1,9 @@
+{
+ "ChatGPT": "assets/apps/chatgpt.png",
+ "Claude": "assets/apps/claude.png",
+ "Cursor": "assets/apps/cursor.png",
+ "Herdr": "assets/apps/herdr.png",
+ "Orca": "assets/apps/orca.png",
+ "Terminal": "assets/apps/terminal.png",
+ "Visual Studio Code": "assets/apps/visual-studio-code.png"
+}
