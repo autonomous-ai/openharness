@@ -18,6 +18,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readlinkSync } from 'node:fs'
 import { userInfo } from 'node:os'
 import { basename, join, win32 } from 'node:path'
+import { harnessPath } from '../config/harnessHome.js'
 import { ptyHostBinary } from './ptyHost/launch.js'
 import type { ProcessRow } from './processTable.js'
 import { managedTmuxPath, tmuxInstallDirectories } from './tmuxOnPath.js'
@@ -44,7 +45,7 @@ interface RunningPane { pane?: string; refused?: string; ancestors?: number[] }
 /** The process table, from the PTY host this account installed: never one a command names (`HARNESS_PTY_BIN`, or a data folder
  *  in its environment), which could answer with any parents it likes. As `ps` and tmux are never run from PATH. */
 const readWindowsProcesses = (): Promise<ProcessRow[] | null> => windowsProcessRows(null, {
-  binary: () => ptyHostBinary({ env: {}, runtimeDir: join(accountHome(), '.harness', 'runtime') }),
+  binary: () => ptyHostBinary({ env: {}, runtimeDir: harnessPath('runtime', accountHome()) }),
 })
 
 /** When a process started, from its `w:<FILETIME>` marker (pty/src/ps.rs), or null when it does not say. */
@@ -143,7 +144,7 @@ export const processProbe = (env: NodeJS.ProcessEnv = process.env, platform: Nod
   panes: server => {
     let binary: string | undefined
     if (platform === 'linux' && server.pid > 0) { try { binary = readlinkSync(`/proc/${server.pid}/exe`) } catch { /* below */ } }
-    binary ??= managedTmuxPath(options.runtimeDir ?? join(accountHome(), '.harness', 'runtime'))
+    binary ??= managedTmuxPath(options.runtimeDir ?? harnessPath('runtime', accountHome()))
       ?? firstOf(options.systemTmux ?? systemTmuxPaths(platform, accountHome()))
     const out = binary ? read(binary, ['list-panes', '-a', '-F', '#{pane_id} #{pane_pid}'], env) : null
     if (out === null) return null

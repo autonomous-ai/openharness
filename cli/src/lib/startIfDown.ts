@@ -12,8 +12,8 @@
  * this scheduled task or the Harness Device app.
  */
 import { readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { harnessPath } from '../config/harnessHome.js'
 import { PID_FILE, isAlive, readPid } from './daemonState.js'
 import { FLASHER_DIR } from './flasherDir.js'
 import { UNINSTALL_MARKER } from './uninstall/marker.js'
@@ -149,7 +149,7 @@ function defaultIfDownIo(): IfDownIo {
     forgetStop: () => clearTaskStopped(),
     flashing: () => flashHolds(FLASHER_DIR),
     // lib/uninstall/deps.ts writes it in the product root, which no setting moves.
-    uninstalling: () => freshMarker(join(homedir(), '.harness', UNINSTALL_MARKER)),
+    uninstalling: () => freshMarker(harnessPath(UNINSTALL_MARKER)),
   }
 }
 

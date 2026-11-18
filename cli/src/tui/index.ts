@@ -13,8 +13,8 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
-import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { harnessPath } from '../config/harnessHome.js'
 
 import { installedTuiPath, installTui } from './install.js'
 import { installManagedTui } from './manage.js'
@@ -121,7 +121,7 @@ export async function tuiCommand(
     try { await installManagedTui(process.argv[1] ?? '', (line) => console.log(line)); return 0 } catch (error) { console.error(`  ✗ ${(error as Error).message}`); return 1 }
   }
   const port = clientPort(argv, opts.port)
-  const dataDir = opts.dataDir ?? process.env.ADAPTER_DATA_DIR ?? resolve(homedir(), '.harness', 'cli', 'data')
+  const dataDir = opts.dataDir ?? process.env.ADAPTER_DATA_DIR ?? resolve(harnessPath('cli'), 'data')
   if (port !== null && !(await ensureDaemon(port, dataDir, opts.identity))) {
     console.log('  Opening a local shell; Harness will reconnect when available.')
   }
