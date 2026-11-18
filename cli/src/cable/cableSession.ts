@@ -2944,9 +2944,12 @@ export class CableSession {
     // The dial drops a frame of an id it cannot keep: a question never on it is neither asked nor told.
     if (!dialKeepsId(agentId)) return
     const inbox = this.questionInbox
-    const { name, machine } = this.whoIs(agentId)
-    const send = (tier: Record<string, unknown>) => this.send({ t: 'question', agentId, name, machine, id, ...tier,
-      questions: [{ key: '', q: noticeSummary(words), options: [] }] })
+    // Read only for a frame: every drawer change walks each open question here, and most send nothing.
+    const send = (tier: Record<string, unknown>) => {
+      const { name, machine } = this.whoIs(agentId)
+      return this.send({ t: 'question', agentId, name, machine, id, ...tier,
+        questions: [{ key: '', q: noticeSummary(words), options: [] }] })
+    }
     if (!inbox.told(agentId, id)) {
       if (inbox.ask(agentId, id)) await send({})
     } else if ((this.questionTier || (this.seqOn && !inbox.held(agentId, id))) && inbox.refile(agentId, id)) {
@@ -3338,7 +3341,7 @@ export class CableSession {
   }
 
   /**
-   * The name, engine and machine that ride on every `summary` and `question`.
+   * The name, engine and machine that ride on every `summary`, and the name and machine on every `question`.
    *
    * The dial holds ONE TAB's agents, and a turn can finish on any of them — the drawer row and the
    * question card for an agent off this tab have nobody to ask but the frame. Sent on every card rather
