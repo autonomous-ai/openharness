@@ -47,8 +47,8 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
   let linked!: () => void
   let link = new Promise<void>((resolve) => { linked = resolve })
   let built: { machineId: string; port: WifiPort; requests: ServiceRequests } | null = null
-  /** What the core last listed: whether a window is there to show the device's choice. */
-  let lastView: WifiView = { agents: [], store: [], hasWindow: false }
+  /** A window in a previous core's view cannot authorize a notice to its replacement. */
+  let lastView: { origin: CoreConnection; view: WifiView } | null = null
   const contracts = new WeakMap<CoreConnection, Promise<void>>()
   let sharedCore: CoreConnection | null = null
   const inputContract = (origin: CoreConnection): Promise<void> => {
@@ -97,10 +97,16 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
   }
 
   const ask = async (query: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
-    if (!core) throw new Error('the Wi-Fi device is not connected to the core')
-    return core.query(query, payload)
+    const origin = core
+    if (!origin) throw new Error('the Wi-Fi device is not connected to the core')
+    const answer = await origin.query(query, payload)
+    if (core !== origin) throw new Error('the original core connection ended')
+    return answer
   }
-  const tell = (kind: string, payload: Record<string, unknown> = {}): void => { core?.notice?.(kind, payload) }
+  const tell = (kind: string, payload: Record<string, unknown>): void => {
+    const origin = lastView?.origin
+    if (origin && core === origin) origin.notice?.(kind, payload)
+  }
 
   const api = (machineId: string): CoreApi => {
     const unasked = processCoreApi(options.dataDir, 'wifi')
@@ -125,8 +131,9 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
           if (!origin) throw new Error('CORE_VIEW_UNAVAILABLE')
           const answer = await origin.query('view', {})
           if (core !== origin) throw new Error('CORE_VIEW_UNAVAILABLE')
-          lastView = { agents: list(answer.agents), store: list(answer.store), hasWindow: answer.hasWindow === true }
-          return lastView
+          const view: WifiView = { agents: list(answer.agents), store: list(answer.store), hasWindow: answer.hasWindow === true }
+          lastView = { origin, view }
+          return view
         },
         stop: async (agentId) => (await ask('stop', { agentId })).ok === true,
         create: async (packageId, engine, cwd) => {
@@ -140,12 +147,12 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
         },
         // Read against the view the request being answered just asked for, as the core read its own sockets.
         scroll: (phase, dy, velocity) => {
-          if (!lastView.hasWindow) return false
+          if (!lastView?.view.hasWindow) return false
           tell('scroll', { phase, dy, velocity })
           return true
         },
         focusApp: (agentId, expiresAt, focusRevision) => {
-          if (!lastView.hasWindow) return false
+          if (!lastView?.view.hasWindow) return false
           tell('focusApp', { agentId, expiresAt, focusRevision })
           return true
         },
@@ -193,7 +200,7 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
   let heardSoFar: Promise<unknown> = Promise.resolve()
   const disconnect = (): void => {
     // Revoke before waking a pre-connect resume or invoking a component callback.
-    noticeEpoch++; noticesAvailable = false; core = null; sharedCore = null
+    noticeEpoch++; noticesAvailable = false; core = null; sharedCore = null; lastView = null
     lost(); linked()
     link = new Promise<void>(resolve => { linked = resolve })
     following.disconnected()

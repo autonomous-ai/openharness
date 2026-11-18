@@ -81,6 +81,47 @@ function setup(over: { startThrows?: boolean; leavesOff?: boolean; dataDir?: str
 afterEach(() => vi.restoreAllMocks())
 
 describe('the Wi-Fi device in the devices\' process', () => {
+  it.each(['recent', 'stop', 'create', 'stepFocus'] as const)('rejects a late %s completion when the same connection facade reconnects', async operation => {
+    const f = setup(), asker = { local: true, owner: true }
+    f.connect(); f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, asker)
+    let release!: (answer: Record<string, unknown>) => void
+    vi.mocked(f.connection.query).mockClear().mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    const api = f.api()
+    const request = operation === 'recent' ? api.turns.recent('a', 1)
+      : operation === 'stop' ? api.wifi.stop('a')
+      : operation === 'create' ? api.wifi.create('package', 'claude', '/workspace')
+      : api.wifi.stepFocus('next', 'a')
+    const rejected = expect(request).rejects.toThrow('the original core connection ended')
+    // The socket read the reply before closing, but its continuation has not run yet.
+    release({ ok: true, agentId: 'created', machineId: 'machine-1', turns: [{ recap: 'old' }] })
+    f.disconnect(); f.connect()
+    await rejected
+    expect(f.connection.query).toHaveBeenCalledTimes(1)
+    await f.service.stop()
+  })
+
+  it('revokes cached window notices until a fresh view on the replacement connection', async () => {
+    const f = setup(), asker = { local: true, owner: true }
+    f.connect(); f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, asker)
+    f.answer('view', { agents: [], store: [], hasWindow: true })
+    const wifi = f.api().wifi
+    await wifi.view()
+    f.disconnect()
+    for (const reconnect of [false, true]) {
+      if (reconnect) f.connect() // runServiceProcess reuses this same facade.
+      expect(wifi.scroll('move', 2, 3)).toBe(false)
+      expect(wifi.focusApp('a', 9, 'revision')).toBe(false)
+      wifi.reveal('old-operation', 'a')
+      expect(f.notices).toEqual([])
+    }
+    await wifi.view()
+    expect(wifi.scroll('move', 2, 3)).toBe(true)
+    expect(wifi.focusApp('a', 9, 'revision')).toBe(true)
+    wifi.reveal('durable-operation', 'a')
+    expect(f.notices.map(([kind]) => kind)).toEqual(['scroll', 'focusApp', 'reveal'])
+    await f.service.stop()
+  })
+
   it('refuses a resolved evidence read after its captured core is replaced', async () => {
     const f = setup(), asker = { local: true, owner: true }
     f.connect(); f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, asker)
