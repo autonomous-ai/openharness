@@ -61,9 +61,15 @@ export interface HostAdapter {
   /** Whether the pane is the one its app shows on screen now, asked of the app once a stroke, after `canScroll`. False on
    *  any failure or past its deadline; never throws. An adapter that knows it from `canScroll` alone has none. */
   onScreen?(pane: Pane): Promise<boolean>
+  /** Whether the program in the pane takes its own page keys now: Claude Code's fullscreen view keeps no history for its
+   *  app to scroll. Asked at a stroke's down, after `canScroll`, only for an agent whose engine has such keys, with
+   *  whether it waits on the person, its folder and its transcript path. `false` at once when no key may go and nothing
+   *  was read; else a promise, never rejected, settled within the adapter's own deadline. */
+  pageKeys?(pane: Pane, agent: { asking: boolean; cwd?: string; transcriptPath?: string }): false | Promise<boolean>
   /** Scrolls the app's view of the pane's history by whole lines, n < 0 toward older lines. Fire and forget: a line it
-   *  could not send is never retried into the program. */
-  scroll?(pane: Pane, lines: number): void
+   *  could not send is never retried into the program. `page`: this stroke's `pageKeys` said yes, and the lines may
+   *  carry those keys too. */
+  scroll?(pane: Pane, lines: number, page?: boolean): void
   /** The key a source that lists this app's agents knows the same pane by (registry.ts). Only an app with such a
    *  source has one. */
   paneKey?(pane: Pane): string
