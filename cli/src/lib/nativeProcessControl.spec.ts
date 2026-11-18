@@ -10,7 +10,10 @@ import { env } from '../config/env.js'
 
 const host = vi.hoisted(() => ({ root: '', exec: vi.fn(), helper: vi.fn(), before: undefined as undefined | ((operation: string, path: string) => void),
   // A filesystem lists a directory in its own order (a tmpfs, ext4's hash): CI listed task 99 before 42.
-  listDescending: false }))
+  listDescending: false,
+  // Entries a case writes, 64 at most: on a Mac flushing its drive for other tests each waited 12-25 ms, and a case
+  // writing 4,097 descriptor links took 50-77 s, past its 30 s, and removing them past afterEach's 10 s (2026-11-19).
+  writes: 0 }))
 vi.mock('node:os', async original => ({ ...await original<object>(), platform: () => process.platform }))
 vi.mock('node:child_process', async original => ({ ...await original<object>(), execFile: host.exec }))
 vi.mock('./nativeProcessImages.js', async original => ({ ...await original<object>(), bundledProcessImageHelper: host.helper }))
@@ -18,6 +21,9 @@ vi.mock('node:fs', async original => {
   const fs = await original<typeof import('node:fs')>()
   const mapped = (path: unknown) => String(path).startsWith('/proc/') ? join(host.root, String(path).slice(1)) : path
   const result = { ...fs }
+  for (const method of ['mkdirSync', 'writeFileSync', 'symlinkSync'] as const) {
+    result[method] = ((...args: unknown[]) => { host.writes++; return Reflect.apply(fs[method], fs, args) }) as never
+  }
   for (const method of ['openSync', 'opendirSync', 'readlinkSync', 'statSync'] as const) {
     result[method] = ((path: unknown, ...args: unknown[]) => {
       host.before?.(method, String(path))
@@ -56,11 +62,14 @@ function processRow(pid = 42, parent = 1, command = 'codex', ticks = 100) {
 }
 beforeEach(() => {
   host.root = realpathSync(mkdtempSync(join(tmpdir(), 'native-control-')))
-  host.before = undefined; host.exec.mockReset(); host.helper.mockReset().mockResolvedValue({ path: '/fixture/native-helper', key: 'fixture' })
+  host.before = undefined; host.writes = 0; host.exec.mockReset(); host.helper.mockReset().mockResolvedValue({ path: '/fixture/native-helper', key: 'fixture' })
   Object.defineProperty(process, 'platform', { ...platform, value: 'darwin' })
   host.exec.mockImplementation((_path, _args, _options, callback) => callback(null, Buffer.from(output()), Buffer.alloc(0)))
 })
-afterEach(() => { Object.defineProperty(process, 'platform', platform); env.ADAPTER_RUNTIME_DIR = originalRuntime; vi.restoreAllMocks(); vi.unstubAllGlobals(); rmSync(host.root, { recursive: true, force: true }) })
+afterEach(() => {
+  Object.defineProperty(process, 'platform', platform); env.ADAPTER_RUNTIME_DIR = originalRuntime; vi.restoreAllMocks(); vi.unstubAllGlobals(); rmSync(host.root, { recursive: true, force: true })
+  expect(host.writes).toBeLessThanOrEqual(64)
+})
 
 describe('strict Darwin control protocol', () => {
   it('retains exact birth, image, command digest and lossless file keys without argv/environment text', () => {
