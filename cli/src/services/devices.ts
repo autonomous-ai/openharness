@@ -153,8 +153,8 @@ export interface DevicesDeps {
   /** For this service's tests: whether a Claude Code session's settings draw it fullscreen; its settings files by default
    *  (cable/hosts/claudeRenderer.ts readFullscreen). */
   claudeFullscreen?: VscodeTerminalsDeps['fullscreen']
-  /** For this service's tests: how an agent's process group and its tty's foreground group are read; `ps` by default
-   *  (cable/hosts/vscodeTerminals.ts readForeground). */
+  /** For this service's tests: how an agent's process group and its VS Code terminal's foreground group, through that
+   *  terminal's shell, are read; `ps` by default (cable/hosts/vscodeTerminals.ts readForeground). */
   processGroups?: VscodeTerminalsDeps['foreground']
   /** For this service's tests: how Claude Code is found for a Claude Code home; the daemon's own lookup by default
    *  (devices/claudePlugin.ts claudeFound). */

@@ -14,11 +14,13 @@
  * (docs/plans/2026-11-18-dial-vscode-claude-fullscreen-scroll-design.md), a plain line's do not: lines that wait keep
  * their kind, as two runs, so a stroke's guard decides its own lines alone and never turns another's into keys.
  *
- * The guard lets a stroke carry those keys only while Claude Code draws fullscreen and is its terminal's foreground
- * program: a key written while a shell or another program holds the terminal is typed there. It reads two things, one
- * after the other, both within VSCODE_GUARD_MS: the `tui` key alone of the session's settings (claudeRenderer.ts), then,
- * only when that says fullscreen, two numbers from `ps -o pgid=,tpgid= -p <pid>`. Never a name, an environment or
- * arguments.
+ * The guard lets a stroke carry those keys only while Claude Code draws fullscreen and is its VS Code terminal's
+ * foreground program: a key written while a shell or another program holds the terminal is typed there. It reads two
+ * things, one after the other, both within VSCODE_GUARD_MS: the `tui` key alone of the session's settings
+ * (claudeRenderer.ts), then, only when that says fullscreen, numbers from `ps -o pid=,pgid=,tpgid= -p <agent>,<shell>`.
+ * The foreground is the shell's tpgid, never the agent's own: under screen, script, asciinema or sudo's use_pty the
+ * agent leads a pseudo-terminal of its own and is always in front there, while the VS Code terminal shows that program.
+ * Never a name, an environment or arguments.
  */
 import { isAbsolute } from 'node:path'
 import { REFUSED, type ListenerHandler, type ListenerStream, type ListenerStreamHandler } from '../../services/devicesListener.js'
@@ -40,15 +42,15 @@ export const VSCODE_SCROLL_MAX = 100
 export const CHAIN_RETRY_MS = 5_000
 /** The longest a stroke waits on its guard, of wall time: then its lines go out plain. */
 export const VSCODE_GUARD_MS = 500
-/** The read prints two numbers of at most 10 digits. */
-export const GROUPS_MAX_BYTES = 64
+/** The read prints two rows of three numbers of at most 10 digits and a sign, with ps's padding. */
+export const GROUPS_MAX_BYTES = 128
 
 const WINDOW_ID = /^[A-Za-z0-9-]{8,36}$/
 const PID_MAX = 2 ** 31 - 1
 const MINUTE_MS = 60_000
 const PARENT_ROW = /^\s*(\d+)\s+(\d+)\s*$/
 /** A tty's foreground group is -1 on Linux for a process with no terminal. */
-const GROUPS_ROW = /^(\d+) +(-?\d+)$/
+const GROUPS_ROW = /^ *(\d+) +(\d+) +(-?\d+) *$/
 
 type ProcessParent = Pick<ProcessName, 'pid' | 'ppid'>
 
@@ -68,12 +70,23 @@ export async function readProcessParents(exec: Exec = execText): Promise<Process
 
 export interface ProcessGroups { pgid: number; tpgid: number }
 
-/** One process's group and its tty's foreground group, from `ps -o pgid=,tpgid= -p <pid>` through scannedApp.ts's
- *  patient exec. None when `ps` failed, the process is gone, or it printed anything but one row of two numbers. */
-export async function readForeground(pid: number, exec: Exec = execText): Promise<ProcessGroups | undefined> {
-  const out = await exec('ps', ['-o', 'pgid=,tpgid=', '-p', String(pid)], { timeout: PS_TIMEOUT_MS, maxBuffer: GROUPS_MAX_BYTES })
-  const row = GROUPS_ROW.exec((out ?? '').trim())
-  return row ? { pgid: Number(row[1]), tpgid: Number(row[2]) } : undefined
+/** The agent's group and its VS Code terminal's foreground group, the tpgid of the shell VS Code started there, from
+ *  one `ps -o pid=,pgid=,tpgid= -p <agent>,<shell>` through scannedApp.ts's patient exec. None when `ps` failed, either
+ *  process is gone, or it printed anything but one row of three numbers for each. */
+export async function readForeground(agent: number, shell: number, exec: Exec = execText): Promise<ProcessGroups | undefined> {
+  // An agent that is its terminal's own process is named once: ps lists a process once however often it is named.
+  const pids = [...new Set([agent, shell])]
+  const out = await exec('ps', ['-o', 'pid=,pgid=,tpgid=', '-p', pids.join(',')], { timeout: PS_TIMEOUT_MS, maxBuffer: GROUPS_MAX_BYTES })
+  const lines = (out ?? '').trimEnd().split('\n')
+  const rows = new Map<number, ProcessGroups>()
+  for (const line of lines) {
+    const row = GROUPS_ROW.exec(line)
+    if (!row) return undefined
+    rows.set(Number(row[1]), { pgid: Number(row[2]), tpgid: Number(row[3]) })
+  }
+  const ofAgent = rows.get(agent)
+  const ofShell = rows.get(shell)
+  return lines.length === pids.length && ofAgent && ofShell ? { pgid: ofAgent.pgid, tpgid: ofShell.tpgid } : undefined
 }
 
 /** What the guard knows of the agent: whether it waits on the person, its folder, and its transcript path as its hook
@@ -97,8 +110,8 @@ export interface VscodeTerminals {
   scroll(terminal: VscodeTerminal, lines: number, page?: boolean): boolean
   /** Whether a stroke on the terminal of the agent with that pid may carry page keys. `false` at once, with nothing read,
    *  when the agent asks or has no absolute folder; else a promise, never rejected, settled within VSCODE_GUARD_MS: true
-   *  when its settings say fullscreen and its process is in its tty's foreground group. Every answer is counted in the
-   *  minute's line. */
+   *  when its settings say fullscreen and its process group is its VS Code terminal's foreground group. Every answer is
+   *  counted in the minute's line. */
   pageKeys(agentPid: number, agent: PageAgent): false | Promise<boolean>
 }
 
@@ -108,8 +121,8 @@ export interface VscodeTerminalsDeps {
   /** Whether Claude Code's settings for that absolute folder, and the home its transcript path names, draw it fullscreen
    *  (claudeRenderer.ts readFullscreen). */
   fullscreen(cwd: string, transcriptPath: string | undefined): Promise<boolean>
-  /** One process's group and its tty's foreground group (readForeground). */
-  foreground(pid: number): Promise<ProcessGroups | undefined>
+  /** The agent's process group and the foreground group of the terminal whose shell has that pid (readForeground). */
+  foreground(agent: number, shell: number): Promise<ProcessGroups | undefined>
   /** Which agents have a terminal changed. */
   changed(): void
   /** Monotonic milliseconds. */
@@ -257,7 +270,10 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
     if (reading) return reading
     const verdict = (async (): Promise<Verdict> => {
       if (!(await deps.fullscreen(cwd, transcriptPath).catch(() => false))) return 'renderer'
-      const groups = await deps.foreground(pid).catch(() => undefined)
+      // Its terminal now: a window that went meanwhile leaves no shell whose foreground could be read.
+      const terminal = terminalOf(pid)
+      if (!terminal) return 'ps'
+      const groups = await deps.foreground(pid, terminal.shell).catch(() => undefined)
       // No terminal: macOS prints a foreground group of 0, Linux -1.
       if (!groups || groups.tpgid <= 0) return 'ps'
       return groups.pgid === groups.tpgid ? 'pages' : 'background'

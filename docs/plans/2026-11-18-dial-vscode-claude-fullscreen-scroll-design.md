@@ -101,13 +101,18 @@ and the asked app's answer decides the route. This work:
   `needs-you` at `down`, its pane is a VS Code terminal, and its settings say `"tui": "fullscreen"` (decision 7; read
   at `down`, together with the foreground read). Every other VS Code stroke is decided at once as `lines`,
   as now.
-- **Reads the foreground through a new `vscodeTerminals.ts` dep, `foreground(pid)`, beside `processes`:**
-  - `pid` is the agent's pane pid, `termPid(observed.paneOf(id, 'vscode'))`: the engine (or its caller) that the
+- **Reads the foreground through a new `vscodeTerminals.ts` dep, `foreground(agent, shell)`, beside `processes`:**
+  - `agent` is the agent's pane pid, `termPid(observed.paneOf(id, 'vscode'))`: the engine (or its caller) that the
     terminal was matched by. Not `entry.pid`, which goes stale after a resume.
-  - It runs `ps -o pgid=,tpgid= -p <pid>` through `execText` (`scannedApp.ts`). This adds columns to the `ps` reads
-    PR A allowed (`ps -axo pid=,ppid=`), as the PM's decision 2 needs.
-  - It passes when `pgid` equals `tpgid` and `tpgid` is not 0: the process is in its tty's foreground group (a wrapper
-    script that starts the engine still passes). An exit or a failed read is refused, reason `ps`.
+  - `shell` is the VS Code terminal's shell pid, the one its window reported, as `terminalOf(agent)` gives it at the
+    read.
+  - It runs one `ps -o pid=,pgid=,tpgid= -p <agent>,<shell>` through `execText` (`scannedApp.ts`). This adds columns
+    to the `ps` reads PR A allowed (`ps -axo pid=,ppid=`), as the PM's decision 2 needs.
+  - It passes when the agent's `pgid` equals the **shell's** `tpgid` and that is above 0: the agent's group is the
+    VS Code terminal's foreground group (a wrapper script that starts the engine still passes). Never the agent's own
+    `tpgid`: under `screen`, `script`, `asciinema` or sudo's `use_pty` the agent leads a pseudo-terminal of its own and
+    is always in front there, while the VS Code terminal's foreground is that program. An exit, a terminal gone or a
+    failed read is refused, reason `ps`.
 - **Bounds the wait:** a stroke is held at most 500 ms of wall time. With no answer by then, its held travel goes out
   as `lines` and the stroke stays `lines`. A newer `down` drops an older answer, as Herdr's `stroke !== asked` does.
 - **Checks the state again at each move** of a `page` stroke in `routeScroll`. A `needs-you` that the devices learn
