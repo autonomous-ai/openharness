@@ -3,10 +3,11 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { RegisteredSession, registry as Registry } from './registry.js'
+import type { SessionStorage } from './sessionStorage.js'
 
 type Row = Record<string, unknown>
 const io = vi.hoisted(() => ({ file: '', published: false, failDirectorySync: false,
-  durable: [] as Row[][], prepare: undefined as undefined | (() => Promise<void>) }))
+  durable: [] as Row[][], prepared: [] as Row[][], prepare: undefined as undefined | (() => Promise<void>) }))
 vi.mock('node:fs', async original => {
   const actual = await original<typeof import('node:fs')>()
   const record = () => {
@@ -34,17 +35,6 @@ vi.mock('node:fs', async original => {
     },
   }
 })
-vi.mock('node:fs/promises', async original => {
-  const actual = await original<typeof import('node:fs/promises')>()
-  return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
-    const handle = await actual.open(...args), sync = handle.sync.bind(handle)
-    handle.sync = async () => {
-      await sync()
-      if (String(args[0]).startsWith(io.file + '.') && String(args[0]).endsWith('.tmp')) await io.prepare?.()
-    }
-    return handle
-  } }
-})
 vi.mock('./bootId.js', async original => ({ ...await original<object>(),
   currentBootId: () => 'fixture-boot', bootChanged: () => false,
 }))
@@ -54,6 +44,7 @@ const plan = { id: '12345678-1234-1234-1234-123456789012', identity: 'fixture-ow
   requestedAt: 1790900000000, state: 'waiting' as const }
 let root = ''
 let registry: typeof Registry | undefined, release: (() => void) | undefined
+let storage: SessionStorage | undefined
 const accepted: Promise<unknown>[] = []
 const disk = (): Row[] => JSON.parse(readFileSync(io.file, 'utf8')) as Row[]
 const row = (rows: Row[], id = A) => rows.find(value => value.agentId === id)!
@@ -87,8 +78,8 @@ function holdPreparation() {
 
 beforeEach(async () => {
   vi.resetModules()
-  registry = undefined; release = undefined; accepted.length = 0
-  io.published = false; io.failDirectorySync = false; io.durable = []; io.prepare = undefined
+  registry = undefined; storage = undefined; release = undefined; accepted.length = 0
+  io.published = false; io.failDirectorySync = false; io.durable = []; io.prepared = []; io.prepare = undefined
   root = mkdtempSync(join(tmpdir(), 'registry-persistence-cost-'))
   for (const folder of ['home', 'data', 'runtime']) mkdirSync(join(root, folder), { mode: 0o700 })
   for (const [key, value] of Object.entries({ HOME: join(root, 'home'), USERPROFILE: join(root, 'home'),
@@ -97,6 +88,19 @@ beforeEach(async () => {
     CODEX_HOME: join(root, 'home', '.codex'), CURSOR_HOME: join(root, 'home', '.cursor') })) vi.stubEnv(key, value)
   io.file = join(root, 'data', 'registry.json')
   writeFileSync(join(root, 'data', 'engine-homes.json'), '{}', { mode: 0o600 })
+  storage = (await import('./sessionStorage.js')).sessionStorage
+  const owned = storage, prepare = owned.prepare.bind(owned)
+  vi.spyOn(owned, 'prepare').mockImplementation(async (...args) => {
+    // The child owns encoding and file sync. Hold its actual image before parent publication.
+    const prepared = await prepare(...args)
+    try {
+      if (args[0].kind === 'registry') {
+        io.prepared.push(JSON.parse(readFileSync(join(owned.root, prepared.temporary), 'utf8')) as Row[])
+        await io.prepare?.()
+      }
+      return prepared
+    } catch (error) { await owned.discard(prepared); throw error }
+  })
   registry = (await import('./registry.js')).registry
   await registry.load()
   for (const [index, agentId] of [A, B].entries()) {
@@ -107,7 +111,7 @@ beforeEach(async () => {
   const live = registry.byAgent(A)!
   live.launchArgs = ['--before']; live.browser = true
   await registry.flush()
-  io.durable = []
+  io.durable = []; io.prepared = []
 })
 
 afterEach(async () => {
@@ -115,8 +119,11 @@ afterEach(async () => {
   io.failDirectorySync = false
   let settled = false
   try {
-    await within(Promise.allSettled(accepted), 'accepted caller cleanup', 10_000)
-    if (registry) await within(registry.flush({ exiting: true }), 'registry cleanup', 10_000)
+    const failures: unknown[] = []
+    try { await within(Promise.allSettled(accepted), 'accepted caller cleanup', 10_000) } catch (error) { failures.push(error) }
+    try { if (registry) await within(registry.flush({ exiting: true }), 'registry cleanup', 10_000) } catch (error) { failures.push(error) }
+    try { if (storage) await within(storage.close(), 'storage cleanup', 10_000) } catch (error) { failures.push(error) }
+    if (failures.length) throw new AggregateError(failures, 'persistence fixture cleanup failed')
     settled = true
   } finally {
     vi.restoreAllMocks(); vi.unstubAllEnvs()
@@ -146,15 +153,13 @@ it('avoids repeated row comparisons and unused owner captures in a changed save 
   await registry!.flush()
   const fingerprints = stringify.mock.calls.filter(([value, replacer]) => isPersistedRow(value) && typeof replacer === 'function').length
   const owners = stringify.mock.calls.filter(([value, replacer]) => isOwnershipRecord(value) && typeof replacer === 'function').length
-  const images = stringify.mock.calls.filter(([value, replacer, space]) => Array.isArray(value)
-    && value.length > 0 && value.every(isPersistedRow) && replacer === null && space === 2).length
   stringify.mockRestore()
   expect(registry!.byAgent(A)).toBe(live)
   expect(registry!.byProcess('claude', live.processIdentity!)).toBe(live)
   expect(row(disk())).toMatchObject({ cwd: '/fixture/changed', launchArgs: ['--before'] })
   expect(row(disk(), B)).toEqual(peer)
   expect(io.durable).toHaveLength(1)
-  expect(images).toBe(1)
+  expect(io.prepared).toEqual(io.durable)
   expect(fingerprints).toBeLessThanOrEqual(12)
   expect(owners).toBe(0)
 })
@@ -412,6 +417,17 @@ it('copies only the two pre-await row images for a changed observation and its p
   expect(row(disk(), B)).toEqual(peer)
   expect(io.durable).toHaveLength(1)
   expect(rowsCopied).toBeLessThanOrEqual(4)
+})
+
+it('keeps installed rows independent after copying a shared mutable Grid assignment', async () => {
+  const first = registry!.byAgent(A)!, second = registry!.byAgent(B)!
+  first.grid = second.grid = { baseUrl: 'https://grid.example.test/v1', model: 'captured' }
+  await registry!.flush()
+  expect(row(disk(), A).grid).toEqual(row(disk(), B).grid)
+  expect(first.grid).not.toBe(second.grid)
+  first.grid!.model = 'first-only'
+  expect(second.grid!.model).toBe('captured')
+  expect(row(disk(), A).grid).toEqual({ baseUrl: 'https://grid.example.test/v1', model: 'captured' })
 })
 
 it('keeps the captured strict image immutable and durably rebases nested alias edits and deletion', async () => {

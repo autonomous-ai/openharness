@@ -84,7 +84,7 @@ beforeEach(async () => {
 })
 afterEach(async () => {
   io.fail = false; io.wait = undefined; release?.(); release = undefined
-  try { await registry.flush(); await storage.close() }
+  try { try { await registry.flush() } finally { await storage.close() } }
   finally { vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }) }
 })
 
@@ -107,33 +107,34 @@ it('recovers the prior key after child loss and a different-target commit, retai
 })
 
 it('keeps owned nested metadata across awaited preparation and rebases later live changes', async () => {
-  const live = registry.byAgent('first')!
-  live.launchArgs = ['--captured']
+  const live = registry.byAgent('first')!, peer = registry.byAgent('second')!
+  live.launchArgs = peer.launchArgs = ['--captured']
   const prepare = storage.prepare.bind(storage)
   let entered!: () => void, captured: unknown, encoded: unknown
   const reached = new Promise<void>(resolve => { entered = resolve })
   const waiting = new Promise<void>(resolve => { release = resolve })
   const paused = vi.spyOn(storage, 'prepare').mockImplementationOnce(async (...args) => {
     const rows = args[2] as Array<{ agentId: string; launchArgs: string[] }>
-    captured = rows.find(row => row.agentId === 'first')!.launchArgs
+    captured = rows.map(row => row.launchArgs)
     entered(); await waiting
     const prepared = await prepare(...args)
     encoded = JSON.parse(readFileSync(join(root, 'data', prepared.temporary), 'utf8'))
-      .find((row: { agentId: string }) => row.agentId === 'first').launchArgs
+      .map((row: { launchArgs: string[] }) => row.launchArgs)
     return prepared
   })
   const saving = registry.flush()
   try {
     await reached
     live.launchArgs.push('--later')
-    expect(captured).toEqual(['--captured'])
-    expect(captured).not.toBe(live.launchArgs)
+    expect(captured).toEqual([['--captured'], ['--captured']])
+    for (const args of captured as string[][]) expect(args).not.toBe(live.launchArgs)
     release!(); await saving
-    expect(encoded).toEqual(['--captured'])
+    expect(encoded).toEqual([['--captured'], ['--captured']])
     expect(registry.byAgent('first')!.launchArgs).toEqual(['--captured', '--later'])
+    expect(registry.byAgent('second')!.launchArgs).toEqual(['--captured', '--later'])
     await registry.flush()
-    expect(JSON.parse(readFileSync(io.file, 'utf8')).find((row: { agentId: string }) => row.agentId === 'first').launchArgs)
-      .toEqual(['--captured', '--later'])
+    expect(JSON.parse(readFileSync(io.file, 'utf8')).map((row: { launchArgs: string[] }) => row.launchArgs))
+      .toEqual([['--captured', '--later'], ['--captured', '--later']])
   } finally { release!(); await saving; paused.mockRestore() }
 })
 
@@ -159,6 +160,8 @@ it('rekeys an intentionally copied credential for its new row and shares the fin
   registry.byAgent('second')!.gridLaunch = original
   await registry.flush()
   const copied = registry.byAgent('second')!.gridLaunch!
+  expect(copied).not.toBe(registry.byAgent('first')!.gridLaunch)
+  expect(copied.credential).not.toBe(registry.byAgent('first')!.gridLaunch!.credential)
   expect(copied.credential.row).toEqual({ agentId: 'second', registeredAt: registry.byAgent('second')!.registeredAt })
   expect(copied.credential.binding === original.credential.binding).toBe(false)
   expect(diskKeyMatches('first', first) && diskKeyMatches('second', first)).toBe(true)
