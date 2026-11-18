@@ -2,11 +2,12 @@
 // The small WebSocket and fetch every Store package reaches the daemon with, against raw frames on a real Unix socket.
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { chmodSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
-import { DaemonWebSocket, daemonFetch, daemonSocketPath, socketIsPrivate } from './local-daemon.mjs'
+import { DaemonWebSocket, daemonDataDir, daemonFetch, daemonSocketPath, harnessRoots, socketIsPrivate } from './local-daemon.mjs'
 import { removeTempFolders, tempFolder } from './test-folders.mjs'
 
 const closers = []
@@ -183,11 +184,67 @@ test('fetch: a request and its body over the socket; the timeout reads as a time
   await assert.rejects(daemonFetch(`${base}/api/x`, { env: { ADAPTER_DATA_DIR: dir } }), /not private/)
 })
 
-test('a long folder has a socket under the home folder; Windows, and a home too long as well, have none', () => {
+test('a long folder\'s socket is under <state>/s; Windows, and a home too long as well, have none', () => {
   const long = `/${'x'.repeat(100)}`
   assert.equal(daemonSocketPath(PORT, { ADAPTER_DATA_DIR: '/d' }, 'win32'), null)
   assert.equal(daemonSocketPath(PORT, { ADAPTER_DATA_DIR: '/d' }, 'linux'), `/d/daemon-${PORT}.sock`)
   const hash = createHash('sha256').update(long).digest('hex').slice(0, 16)
-  assert.equal(daemonSocketPath(PORT, { ADAPTER_DATA_DIR: long, HOME: '/h' }, 'linux'), `/h/.harness/s/${hash}/daemon-${PORT}.sock`)
+  assert.equal(daemonSocketPath(PORT, { ADAPTER_DATA_DIR: long, HOME: '/h' }, 'linux'), `/h/.local/state/harness/s/${hash}/daemon-${PORT}.sock`)
+  assert.equal(daemonSocketPath(PORT, { ADAPTER_DATA_DIR: long, HOME: '/h', XDG_STATE_HOME: '/st' }, 'linux'), `/st/harness/s/${hash}/daemon-${PORT}.sock`)
   assert.equal(daemonSocketPath(PORT, { ADAPTER_DATA_DIR: long, HOME: `/${'h'.repeat(100)}` }, 'linux'), null)
+})
+
+/** An existence check that holds for [paths] only. */
+const existing = (...paths) => (path) => paths.includes(path)
+const never = () => { throw new Error('the rule ran') }
+
+test('fresh: neither folder exists, so the XDG roots', () => {
+  assert.deepEqual(harnessRoots({ HOME: '/h' }, 'linux', existing()), { data: '/h/.local/share/harness', state: '/h/.local/state/harness' })
+})
+
+test('legacy only: both roots are ~/.harness', () => {
+  assert.deepEqual(harnessRoots({ HOME: '/h' }, 'linux', existing('/h/.harness')), { data: '/h/.harness', state: '/h/.harness' })
+})
+
+test('the data root exists: the XDG roots, whatever is at ~/.harness', () => {
+  assert.deepEqual(harnessRoots({ HOME: '/h' }, 'linux', existing('/h/.harness', '/h/.local/share/harness')),
+    { data: '/h/.local/share/harness', state: '/h/.local/state/harness' })
+})
+
+test('an XDG variable that is unset, empty or relative is ignored', () => {
+  for (const value of [undefined, '', 'share']) {
+    assert.deepEqual(harnessRoots({ HOME: '/h', XDG_DATA_HOME: value, XDG_STATE_HOME: value }, 'linux', existing()),
+      { data: '/h/.local/share/harness', state: '/h/.local/state/harness' }, String(value))
+  }
+})
+
+test('an absolute XDG variable names its root, and the data root is looked for there', () => {
+  const env = { HOME: '/h', XDG_DATA_HOME: '/d', XDG_STATE_HOME: '/s' }
+  assert.deepEqual(harnessRoots(env, 'linux', existing()), { data: '/d/harness', state: '/s/harness' })
+  assert.deepEqual(harnessRoots(env, 'linux', existing('/h/.harness')), { data: '/h/.harness', state: '/h/.harness' })
+  assert.deepEqual(harnessRoots(env, 'linux', existing('/h/.harness', '/d/harness')), { data: '/d/harness', state: '/s/harness' })
+})
+
+test('Windows never runs the rule: both roots are the profile\'s .harness', () => {
+  assert.deepEqual(harnessRoots({ HOME: '/h', XDG_DATA_HOME: '/d' }, 'win32', never), { data: join(homedir(), '.harness'), state: join(homedir(), '.harness') })
+})
+
+test('on macOS both are under ~/.harness', () => {
+  assert.deepEqual(harnessRoots({ HOME: '/h', XDG_DATA_HOME: '/d', XDG_STATE_HOME: '/s' }, 'darwin', never), { data: '/h/.harness', state: '/h/.harness' })
+  const long = `/${'x'.repeat(100)}`, hash = createHash('sha256').update(long).digest('hex').slice(0, 16)
+  assert.equal(daemonSocketPath(PORT, { ADAPTER_DATA_DIR: long, HOME: '/h', XDG_STATE_HOME: '/s' }, 'darwin'), `/h/.harness/s/${hash}/daemon-${PORT}.sock`)
+})
+
+test('the data folder is <data>/cli/data, and ADAPTER_DATA_DIR still wins', (t) => {
+  // daemonDataDir reads the platform it runs on: these are Linux's answers on any computer.
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')
+  Object.defineProperty(process, 'platform', { value: 'linux' })
+  t.after(() => Object.defineProperty(process, 'platform', platform))
+  const home = tempFolder('ld-home-')
+  assert.equal(daemonDataDir({ HOME: home }), join(home, '.local', 'share', 'harness', 'cli', 'data'))
+  mkdirSync(join(home, '.harness'))
+  assert.equal(daemonDataDir({ HOME: home }), join(home, '.harness', 'cli', 'data'))
+  mkdirSync(join(home, '.local', 'share', 'harness'), { recursive: true })
+  assert.equal(daemonDataDir({ HOME: home }), join(home, '.local', 'share', 'harness', 'cli', 'data'))
+  assert.equal(daemonDataDir({ HOME: home, ADAPTER_DATA_DIR: '/d' }), '/d')
 })

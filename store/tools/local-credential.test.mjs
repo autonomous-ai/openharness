@@ -33,6 +33,25 @@ test('the local credential is read the way the CLI reads it, and only then', () 
   assert.deepEqual(localCredentialHeaders({ ADAPTER_DATA_DIR: dataDir({ credential: 'too-short' }) }), {})
 })
 
+test('with no ADAPTER_DATA_DIR the credential is read from the data root the rule finds', (t) => {
+  // These are Linux's answers on any computer.
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')
+  Object.defineProperty(process, 'platform', { value: 'linux' })
+  t.after(() => Object.defineProperty(process, 'platform', platform))
+  // Too long for a socket under its state root, so the port and its credential are the way.
+  const home = join(tempFolder('store-tools-home-'), 'home-'.padEnd(60, 'x'))
+  const credentialIn = (root, credential) => {
+    const dir = join(home, ...root, 'cli', 'data')
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
+    writeFileSync(join(dir, 'hook-credential'), `${credential}\n`, { mode: 0o600 })
+  }
+  const legacy = `legacy-local-credential-${'b'.repeat(19)}`
+  credentialIn(['.harness'], legacy)
+  assert.deepEqual(localCredentialHeaders({ HOME: home }), { 'X-Harness-Local': legacy }, 'not moved: ~/.harness')
+  credentialIn(['.local', 'share', 'harness'], CREDENTIAL)
+  assert.deepEqual(localCredentialHeaders({ HOME: home }), { 'X-Harness-Local': CREDENTIAL }, 'moved: the XDG data root')
+})
+
 // On Windows the credential never goes to the port, whose holder may be another account's: the Team account's daemon
 // starts at boot, before the owner's (audit W1). The package reaches the daemon over its proven pipe instead (localDaemon.mjs).
 test('on Windows no credential is read: it never goes to the port', (t) => {
