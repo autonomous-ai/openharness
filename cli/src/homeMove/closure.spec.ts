@@ -78,7 +78,7 @@ describe('what the move loads', () => {
     for (const file of master) expect(named(file).filter(({ from }) => target(file, from).startsWith('homeMove/')).map(({ from }) => from), file).toEqual([])
   })
 
-  it('entry.ts loads it with import() for start and __harnessd alone, before anything of the daemon', () => {
+  it('entry.ts loads it with import() for start and __harnessd on Linux alone, before anything of the daemon', () => {
     const imports = named('entry.ts')
     const move = imports.filter(({ from }) => target('entry.ts', from).startsWith('homeMove/'))
     expect(move.map(({ from, dynamic }) => ({ from, dynamic }))).toEqual([{ from: './homeMove/start.js', dynamic: true }])
@@ -88,12 +88,14 @@ describe('what the move loads', () => {
     }
     let guard: ts.Node | undefined = move[0].node
     while (guard && !ts.isIfStatement(guard)) guard = guard.parent
-    const commands: string[] = []
+    const words: string[] = []
     const collect = (node: ts.Node): void => {
-      if (ts.isStringLiteral(node)) commands.push(node.text)
+      if (ts.isStringLiteral(node)) words.push(node.text)
+      else if (ts.isPropertyAccessExpression(node)) words.push(node.getText())
       ts.forEachChild(node, collect)
     }
     if (guard && ts.isIfStatement(guard)) collect(guard.expression)
-    expect(commands.sort()).toEqual(['__harnessd', 'start'])
+    // macOS and Windows never move: they load none of it.
+    expect(words.sort()).toEqual(['__harnessd', 'linux', 'process.platform', 'start'])
   })
 })
