@@ -224,7 +224,9 @@ Orca CLI runs of about 0.3 s each; while Orca is not running, `orca status` alon
 ## Platforms
 
 macOS (the Harness app and the CLI). Linux: the CLI commands work where `orca` is on `PATH`; the Harness app's Linux
-build gets the same row. Windows: `status` is `absent`.
+build gets the same row, but Tauri sends no tray click there, so `status` runs only when the CLI is found and on a CLI
+version change seen at start, never on a menu open. The Harness app ships no Linux build today
+([device-app/RELEASE.md](../../device-app/RELEASE.md)). Windows: `status` is `absent`.
 
 ## Release
 
