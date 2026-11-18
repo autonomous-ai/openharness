@@ -3,10 +3,12 @@ import * as fs from 'node:fs'
 import { mkdtempSync, lstatSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { stoppedArchiveWitness } from './stoppedAuthorityMetadata.js'
+import { observeStoppedArchive, stoppedArchiveWitness, stoppedAuthorityHealthy } from './stoppedAuthorityMetadata.js'
 import { sessionFileIdentity } from './sessionStorageWire.js'
+import * as custody from './secureState.js'
 
 vi.mock('node:fs', async original => ({ ...await original<object>() }))
+vi.mock('./secureState.js', async original => ({ ...await original<object>() }))
 
 const roots: string[] = []
 afterEach(() => { vi.restoreAllMocks(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
@@ -19,6 +21,17 @@ const fixture = () => {
 }
 
 describe('stopped archive authority metadata', () => {
+  it('binds observed image identities to the proved directory and original complete witness', () => {
+    const directory = fixture(), first = join(directory, 'first.json'), second = join(directory, 'second.json')
+    writeFileSync(first, '{}', { mode: 0o600 }); writeFileSync(second, '{}', { mode: 0o600 })
+    const observed = observeStoppedArchive(directory)!
+    expect(observed.digest() === observed.witness).toBe(false)
+    observed.add('second.json', sessionFileIdentity(lstatSync(second, { bigint: true })))
+    observed.add('first.json', sessionFileIdentity(lstatSync(first, { bigint: true })))
+    expect(observed.digest() === observed.witness).toBe(true)
+    expect(observed.digest() === stoppedArchiveWitness(directory)).toBe(true)
+    expect(observeStoppedArchive(join(directory, 'missing'))).toBeNull()
+  })
   it('detects a nonmatching archive changed in place without a directory version change', async () => {
     const directory = fixture(), file = join(directory, 'other.json')
     writeFileSync(file, JSON.stringify({ sessionId: 'other' }), { mode: 0o600 })
@@ -79,6 +92,21 @@ describe('stopped archive authority metadata', () => {
     expect(() => stoppedArchiveWitness(directory)).toThrow()
   })
 
+  it('withholds the proved directory observation when its version changes at the final scan boundary', () => {
+    const directory = fixture(), open = fs.opendirSync
+    writeFileSync(join(directory, 'one.json'), '{}', { mode: 0o600 })
+    vi.spyOn(fs, 'opendirSync').mockImplementation((...args) => {
+      const handle = open(...args), read = handle.readSync.bind(handle)
+      handle.readSync = () => {
+        const entry = read()
+        if (!entry) writeFileSync(join(directory, 'late.tmp'), '', { mode: 0o600 })
+        return entry
+      }
+      return handle
+    })
+    expect(() => observeStoppedArchive(directory)).toThrow('changed')
+  })
+
   it('refuses excessive work and elapsed budget without a partial authority answer', () => {
     const directory = fixture()
     writeFileSync(join(directory, 'one.json'), '{}', { mode: 0o600 })
@@ -86,5 +114,28 @@ describe('stopped archive authority metadata', () => {
     let tick = 0
     expect(() => stoppedArchiveWitness(directory, { milliseconds: 1, now: () => tick++ })).toThrow('expired')
     expect(stoppedArchiveWitness(directory)).toMatch(/^[a-f0-9]{64}$/)
+  })
+
+  it('preserves shared close uncertainty and normalizes other failed metadata reads', () => {
+    const directory = fixture()
+    const secure = vi.spyOn(custody, 'secureStateDirectory').mockImplementationOnce(() => { throw new custody.StateFileCleanupUnconfirmed() })
+    expect(() => observeStoppedArchive(directory)).toThrow('cleanup-unconfirmed')
+    secure.mockRestore()
+    vi.spyOn(fs, 'opendirSync').mockImplementationOnce(() => { throw new Error('fixture private directory error') })
+    expect(() => observeStoppedArchive(directory)).toThrow('Session storage unavailable: unsafe')
+  })
+
+  it('withholds an observation after an uncertain iterator close and keeps further authority closed', () => {
+    const directory = fixture(), open = fs.opendirSync
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(fs, 'opendirSync').mockImplementation((...args) => {
+      const handle = open(...args), close = handle.closeSync.bind(handle)
+      handle.closeSync = () => { close(); throw new Error('fixture close uncertain after physical settlement') }
+      return handle
+    })
+    expect(() => observeStoppedArchive(directory)).toThrow('cleanup-unconfirmed')
+    expect(() => stoppedAuthorityHealthy()).toThrow('cleanup-unconfirmed')
+    expect(() => stoppedArchiveWitness(directory)).toThrow('cleanup-unconfirmed')
+    expect(logged).toHaveBeenCalledWith('[session-storage] authority descriptor close failed; restart required')
   })
 })

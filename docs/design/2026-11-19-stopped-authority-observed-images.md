@@ -118,3 +118,20 @@ The original witness is restored in both failures. PID/process group 29326 settl
 cleanup signal; each real storage child was closed before its private root was removed. Runtime remained
 unchanged at `b8b29dee43`. The coordinator reviewed this Design and approved the correctness-only fix,
 retaining the initial scan; performance changes remain separate.
+
+## Correctness checkpoint
+
+Both real caller REDs are GREEN with the original and final scans retained. The final selected gate
+passed 119 tests across seven files; types passed. `stoppedAuthorityMetadata.ts` has 100% statements,
+branches, functions and lines. The changed codec statements are 16/16 and changed branches 14/14;
+the whole existing codec in this selected gate is 73.83% statements, 60.47% branches, 82.92% functions
+and 82.71% lines, so this does not claim complete legacy-codec coverage. Tests also cover changes before
+and after byte reads, excluded metadata, incomplete iteration, removal/rename, unchanged non-JSON
+writes, total considered-entry and time bounds, directory replacement/version changes and close refusal.
+
+All owned source-gate groups settled without timeout or cleanup signal. The immutable evidence index is
+`/tmp/core-grid-storage-authority-evidence-20261119.json`, SHA-256
+`e2e54799de7e9e126e6a5e5e7b22123e3f60ff359fc7dae1d5588bfd41800302`.
+The runtime matches the independently reviewed two-file diff, SHA-256
+`090027b671b2825c4266347ff68ea864dfe66a75f3a1e9d388bf23d42cd82e32`.
+No build, native or performance acceptance follows from these correctness checks.

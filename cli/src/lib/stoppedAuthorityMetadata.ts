@@ -16,15 +16,28 @@ export function stoppedAuthorityHealthy(): void {
 }
 
 /** A commutative digest avoids retaining or sorting the directory's complete path/stat table. */
-export function stoppedArchiveWitness(directory: string, options: { entries?: number; now?: () => number; milliseconds?: number } = {}): string {
+function archiveDigest(identity: string) {
+  let images = 0, sum = 0n
+  return {
+    add(name: string, image: string): void {
+      images++
+      sum = (sum + BigInt(`0x${createHash('sha256').update(name).update('\0').update(image).digest('hex')}`)) & MASK
+    },
+    digest: () => createHash('sha256').update(identity).update(`:${images}:${sum.toString(16)}`).digest('hex'),
+  }
+}
+
+type ScanOptions = { entries?: number; now?: () => number; milliseconds?: number }
+function scanArchive(directory: string, options: ScanOptions = {}): { witness: string; identity: string } | null {
   stoppedAuthorityHealthy()
   const now = options.now ?? (() => performance.now()), expires = now() + (options.milliseconds ?? STOPPED_AUTHORITY_MS)
   const limit = options.entries ?? STOPPED_AUTHORITY_ENTRIES
-  let dir: Dir | undefined, count = 0, images = 0, sum = 0n
+  let dir: Dir | undefined, count = 0
   try {
     secureStateDirectory(directory, false)
     const stat = lstatSync(directory, { bigint: true }), before = sessionFileIdentity(stat)
     const identity = [stat.dev, stat.ino, stat.birthtimeNs, stat.mode, stat.uid, stat.gid].join(':')
+    const observed = archiveDigest(identity)
     dir = opendirSync(directory, { bufferSize: 32 })
     for (;;) {
       if (now() >= expires) throw new SessionStorageUnavailable('expired')
@@ -32,16 +45,14 @@ export function stoppedArchiveWitness(directory: string, options: { entries?: nu
       if (!entry) break
       if (++count > limit) throw new SessionStorageUnavailable('expired')
       if (!entry.name.endsWith('.json')) continue
-      images++
-      const identity = sessionFileIdentity(lstatSync(join(directory, entry.name), { bigint: true }))
-      sum = (sum + BigInt(`0x${createHash('sha256').update(entry.name).update('\0').update(identity).digest('hex')}`)) & MASK
+      observed.add(entry.name, sessionFileIdentity(lstatSync(join(directory, entry.name), { bigint: true })))
     }
     const after = sessionFileIdentity(lstatSync(directory, { bigint: true }))
     if (before !== after) throw new SessionStorageUnavailable('changed')
-    return createHash('sha256').update(identity).update(`:${images}:${sum.toString(16)}`).digest('hex')
+    return { witness: observed.digest(), identity }
   } catch (error) {
     if (error instanceof StateFileCleanupUnconfirmed) throw new SessionStorageUnavailable('cleanup-unconfirmed')
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT' && !dir) return 'missing'
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT' && !dir) return null
     if (error instanceof SessionStorageUnavailable) throw error
     throw new SessionStorageUnavailable('unsafe')
   } finally {
@@ -50,4 +61,14 @@ export function stoppedArchiveWitness(directory: string, options: { entries?: nu
       catch { uncertain.add(dir); console.error('[session-storage] authority descriptor close failed; restart required'); throw new SessionStorageUnavailable('cleanup-unconfirmed') }
     }
   }
+}
+
+export function stoppedArchiveWitness(directory: string, options: ScanOptions = {}): string {
+  return scanArchive(directory, options)?.witness ?? 'missing'
+}
+
+/** Bind parsed query rows to the same directory observation as their original metadata witness. */
+export function observeStoppedArchive(directory: string) {
+  const source = scanArchive(directory)
+  return source ? { witness: source.witness, ...archiveDigest(source.identity) } : null
 }
