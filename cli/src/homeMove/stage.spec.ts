@@ -155,6 +155,53 @@ describe('staging an entry', () => {
     expect(readFileSync(join(auth.staged, 'session.json'), 'utf8')).toBe('changed during the copy')
   })
 
+  it('across filesystems what was deleted during the copy is not in the copy', () => {
+    const plan = legacyHome(['logs'])
+    const logs = entryOf(plan, 'logs')
+    stageEntry(logs, plan, acrossDisks(logs, () => fs.rmSync(join(logs.from, 'inner', 'a.log'))), Date.now())
+    expect(existsSync(join(logs.staged, 'inner', 'a.log'))).toBe(false)
+    expect(snapshot(logs.staged)).toEqual(snapshot(join(plan.legacy, '.move-old', 'logs')))
+  })
+
+  it('across filesystems a folder made again at the old path during the copy is merged, not taken for deleted', () => {
+    const plan = legacyHome(['logs'])
+    const logs = entryOf(plan, 'logs')
+    const across = acrossDisks(logs)
+    const io: StageIo = {
+      ...across,
+      renameSync: (from, to) => {
+        across.renameSync(from, to)
+        // A hook that ran once the original was set aside wrote its event offline, where the folder was.
+        if (to !== join(plan.legacy, '.move-old', 'logs')) return
+        mkdirSync(logs.from)
+        writeFileSync(join(logs.from, 'offline.json'), '{"event":1}')
+      },
+    }
+    stageEntry(logs, plan, io, Date.now())
+    expect([readFileSync(join(logs.staged, 'offline.json'), 'utf8'), readlinkSync(logs.from)]).toEqual(['{"event":1}', logs.to])
+  })
+
+  it('in auth and computer-id the one moved wins over a newer one a late writer made: who this computer and its person are', () => {
+    const plan = legacyHome(['auth', 'computer-id'])
+    const auth = entryOf(plan, 'auth'), id = entryOf(plan, 'computer-id'), made = new Set<unknown>()
+    const io: StageIo = {
+      ...NODE_FS,
+      renameSync: (from, to) => {
+        fs.renameSync(from, to)
+        // Between the rename and the link, an old process that found neither made its own, once.
+        if (made.has(from)) return
+        made.add(from)
+        if (from === auth.from) {
+          mkdirSync(auth.from)
+          writeFileSync(join(auth.from, 'session.json'), '{"of":"a late writer"}')
+        } else if (from === id.from) writeFileSync(id.from, 'beefcafe')
+      },
+    }
+    for (const entry of [auth, id]) stageEntry(entry, plan, io, Date.now())
+    expect([readFileSync(join(auth.staged, 'session.json'), 'utf8'), readFileSync(id.staged, 'utf8')]).toEqual(['{"of":"auth"}', 'c0ffee'])
+    expect([readlinkSync(auth.from), readlinkSync(id.from)]).toEqual([auth.to, id.to])
+  })
+
   it.each([
     ['its link cannot go in, as a hook made the folder again', (): StageIo => ({
       ...NODE_FS,
