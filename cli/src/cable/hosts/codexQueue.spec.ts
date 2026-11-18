@@ -399,6 +399,10 @@ describe('codex queue', () => {
     // Neither: no PATH at all, so the system's default is searched, never the folder.
     shell.env = { PATH: '' }
     expect(parentEnv().PATH).toBeUndefined()
+    // Nor one inside a side: a profile's `PATH="$PATH:"` leaves one at its end, a doubled colon one in its middle.
+    shell.env = { PATH: `/login/bin${delimiter}` }
+    vi.stubEnv('PATH', `${delimiter}/daemon/a${delimiter}${delimiter}/daemon/b`)
+    expect(parentEnv().PATH).toBe(['/login/bin', '/daemon/a', '/daemon/b'].join(delimiter))
   })
 
   // The interactive shell can take its 5 s: a computer whose dial never meets a Codex session never starts it.
