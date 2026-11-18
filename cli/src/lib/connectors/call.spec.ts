@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { existsSync, linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join, posix, win32 } from 'node:path'
-import { CallFailure, expandHome, forbiddenDirs, inside, uploadPath } from './call.js'
+import { CallFailure, expandHome, forbiddenDirs, inside, unc, uploadPath } from './call.js'
 
 describe('inside', () => {
   it('fences a Windows folder however its path is spelled', () => {
@@ -34,6 +34,18 @@ describe('expandHome', () => {
     expect(expandHome('~\\.ssh', '/home/a', posix)).toBe('~\\.ssh')
     expect(expandHome('~/.ssh', '/home/a', posix)).toBe('/home/a/.ssh')
     expect(expandHome('~', '/home/a', posix)).toBe('/home/a')
+  })
+})
+
+describe('unc', () => {
+  it('is a Windows path through a share, the local disk\'s admin share too', () => {
+    expect(unc('\\\\localhost\\C$\\Users\\a\\x.txt', win32)).toBe(true)
+    expect(unc('\\\\server\\share\\x.txt', win32)).toBe(true)
+    expect(unc('C:\\Users\\a\\Pictures\\x.png', win32)).toBe(false)
+  })
+
+  it('is never a posix path', () => {
+    expect(unc('//server/share/x.txt', posix)).toBe(false)
   })
 })
 
@@ -83,6 +95,13 @@ describe('uploadPath', () => {
   it('refuses a hard link, whose other names may be inside such a folder', () => {
     linkSync(join(home, '.ssh', 'note.txt'), join(home, 'docs', 'link.txt'))
     expectFenced(join(home, 'docs', 'link.txt'))
+  })
+
+  // A UNC path exists only on Windows, and only where this account reaches the local disk's admin share.
+  it.skipIf(process.platform !== 'win32')('refuses a file through a share on Windows, even one allowed by its local path', ctx => {
+    const share = `\\\\localhost\\${home[0]}$${home.slice(2)}\\docs\\note.txt`
+    if (!existsSync(share)) ctx.skip()
+    expectFenced(share)
   })
 
   it('allows a document elsewhere, also written from ~/', () => {
