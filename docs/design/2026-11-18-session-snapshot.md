@@ -104,3 +104,19 @@ branches, functions and lines (3135/2065/1076/2285). The three-file worker gate 
 services/workerContract at 100%; actual app formatter, CableHost, Store and architecture pass 277 tests
 in four files. CLI types pass. This documentation-only evidence update follows those frozen runtime
 checks; no runtime source changed afterward. Coordinated cost/native evidence remains pending.
+
+### Final producer and unrelated-query review
+
+Coordinator review found a final producer fence gap. `/tmp/core-wifi-snapshot-final-facts-red.log`
+records three actual REDs: replacement/removal during the last facts call returned stale success,
+and an invalid null producer returned a raw TypeError. The final registry identity check now runs
+immediately after that producer, before detachment; no provider follows the parts read. The declared
+producer and actual `agentFacts` never return null, but a malformed runtime return also gets the fixed
+unavailable error. No retained revision or new authority map is added.
+
+Receipt `.harness/validation/20261118T071640.418077Z-90249/receipt.json` passes 122 selected tests in
+seven files, core/api.ts at 100% (305 statements, 162 branches, 128 functions, 253 lines), and types.
+The shared query await in main is also guarded by the exact query name, so unrelated dispatch retains
+its existing microtask path. Wiring/architecture/query checks and types pass in
+`.harness/validation/20261118T071936.868357Z-92994/receipt.json`. The earlier broader checks apply to
+unchanged component runtime. The cost recipe includes ordinary-query and app controls; none has run yet.

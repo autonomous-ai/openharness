@@ -2189,6 +2189,7 @@ export function captureSessionSnapshot(deps: Pick<CoreApiDeps, 'registry' | 'clo
     }
     // Same app fact producer, read last after synchronous providers as well as any earlier caller await.
     const captured = deps.facts(row)
+    if (!captured || deps.registry.byAgent(session.agentId) !== row) return fail('SESSION_SNAPSHOT_UNAVAILABLE')
     const facts = { displayName: captured.displayName, terminalAvailable: captured.terminalAvailable,
       parts: typeof captured.parts.dsh === 'string' ? { dsh: captured.parts.dsh } : {} }
     value.registered.push(detached({ session, selectedModel, turnRunning, facts }, value.registered.length > 0))

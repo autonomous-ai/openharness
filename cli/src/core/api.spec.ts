@@ -204,6 +204,21 @@ describe('the core API services stand on', () => {
     expect((await createCoreApi(deps).agents.snapshot()).cloud[0]).toMatchObject({ displayName: '', selectedModel: null })
   })
 
+  it.each(['replaced', 'removed', 'unavailable'] as const)('refuses a session whose final facts provider makes it %s before detachment', async change => {
+    const original = { ...row('live'), registeredAt: 1, lastHookAt: 0, transcriptPath: null, active: true }
+    let current: RegisteredSession | undefined = original
+    const deps = coreDeps()
+    deps.registry.list = () => [original]; deps.registry.byAgent = () => current
+    deps.turns.running = () => false
+    deps.facts = () => {
+      if (change === 'unavailable') return null as unknown as ReturnType<NonNullable<CoreApiDeps['facts']>>
+      current = change === 'removed' ? undefined : { ...original, cwd: '/replacement' }
+      return { displayName: 'old name', terminalAvailable: true, parts: { dsh: 'old/package' } }
+    }
+    await expect(createCoreApi(deps).agents.snapshot()).rejects.toThrow('SESSION_SNAPSHOT_UNAVAILABLE')
+    expect(deps.log).toHaveBeenCalledExactlyOnceWith('[sessions] SESSION_SNAPSHOT_UNAVAILABLE')
+  })
+
   it('refuses unavailable authority and bounds complete captures before copying rows or reading later providers', async () => {
     const live = { ...row('live'), registeredAt: 1, lastHookAt: 0, transcriptPath: null, active: true }
     const deps = coreDeps()

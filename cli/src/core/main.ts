@@ -1732,7 +1732,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       ?? (query === 'follow_agents' ? agentLife.followed(service, payload) : null)
       ?? await answerConnectorsQuery(coreApi, service, query, payload)
       ?? await answerSharedMachinesQuery(sharedMachinesAccount, service, query, payload)
-      ?? await answerSessionSnapshot(coreApi, service, query, authority)
+      ?? (query === 'session_snapshot' ? await answerSessionSnapshot(coreApi, service, query, authority) : null)
       ?? answerDaemonQuery(coreApi, service, query)
       ?? await answerExperimentQuery(coreApi, experiments, service, query, payload, undefined, authority)
       ?? await terminalWatch.answer(service, query, payload)
