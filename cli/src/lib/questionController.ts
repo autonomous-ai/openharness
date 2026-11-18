@@ -94,10 +94,11 @@ export function partitionLabels(rows: QuestionRow[], answer: string): QuestionRo
   for (let i = parts.length - 1; i >= 0; i--) {
     // A blank piece (a stray or trailing comma) spells nothing, as the loose reading drops it: refusing it would
     // send a comma label back to that reading.
-    if (!norm(parts[i])) { count[i] = count[i + 1]; next[i] = i + 1; continue }
-    // Longest piece first, so a tie keeps it.
+    if (!norm(parts[i].trim())) { count[i] = count[i + 1]; next[i] = i + 1; continue }
+    // Longest piece first, so a tie keeps it. Trimmed first, as the loose reading's pieces: norm drops a trailing
+    // full stop before it trims, so " No. " would read "no.".
     for (let j = Math.min(parts.length, i + widest); j > i; j--) {
-      const row = byLabel.get(norm(parts.slice(i, j).join(',')))
+      const row = byLabel.get(norm(parts.slice(i, j).join(',').trim()))
       if (row && count[j] + 1 < count[i]) { count[i] = count[j] + 1; first[i] = row; next[i] = j }
     }
   }
@@ -413,7 +414,7 @@ export class AskQuestionController {
         if (reviewed && (!labels.length || labels.some(label => !view.rows.some(row => row.label === label)))) return failed('That answer matches no option.')
         // Core chooses the exact approved set; the engine owns toggling and advancing its UI.
         const rows = reviewed ? view.rows.filter(row => row.checked !== labels.includes(row.label))
-          : (partitionLabels(view.rows, picked.value) ?? picked.value.split(',').map(label => matchRow(view.rows, label)))
+          : (partitionLabels(view.rows, picked.value) ?? picked.value.split(',').map(label => matchRow(view.rows, label.trim())))
             .filter((row): row is QuestionRow => !!row && !row.checked)
         const freeText = !reviewed && !rows.length && view.typeRow ? { row: view.typeRow, text: picked.value } : undefined
         const toggled = notEntered(await apply({ kind: 'multiple', rows, ...(freeText ? { freeText } : {}) }))
