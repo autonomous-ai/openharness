@@ -1720,7 +1720,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       ?? await answerConnectorsQuery(coreApi, service, query, payload)
       ?? await answerSharedMachinesQuery(sharedMachinesAccount, service, query, payload)
       ?? answerDaemonQuery(coreApi, service, query)
-      ?? await answerExperimentQuery(coreApi, experiments, service, query, payload)
+      ?? await answerExperimentQuery(coreApi, experiments, service, query, payload, undefined, authority)
       ?? await terminalWatch.answer(service, query, payload)
       ?? (service === 'orchestrator' ? orchestratorLink.answer(query, payload) : null)
       ?? (service === 'viewers' ? viewersLink.answer(query, payload)

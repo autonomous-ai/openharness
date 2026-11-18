@@ -26,6 +26,7 @@
 import type { BackendSocket } from '../backendSocket.js'
 import { experimentBackendAllowed, type AgentCreateRequest, type CoreApi } from './api.js'
 import { agentDshContext } from '../lib/agentFrame.js'
+import type { ServiceQueryAuthority } from './serviceLinks.js'
 
 type Payload = Record<string, unknown>
 type Core = Pick<CoreApi, 'agents' | 'turns' | 'clients' | 'daemon' | 'account' | 'cloud'>
@@ -101,7 +102,7 @@ export const routeRefused = createRouteRefusals()
 
 /** The answer to an experiment's query, or null when it is not one of these. */
 export async function answerExperimentQuery(core: Core, experiments: ReadonlySet<string>, service: string, query: string, payload: Payload,
-  refused: ReturnType<typeof createRouteRefusals> = routeRefused): Promise<Payload | null> {
+  refused: ReturnType<typeof createRouteRefusals> = routeRefused, authority?: ServiceQueryAuthority): Promise<Payload | null> {
   if (!QUERIES.has(query)) return null
   // `account` is also what models asks for the account's grid name, of its own link (core/modelsLink.ts): only
   // Share's is answered here. Seen 2026-10-18: since #1376 models got NOT_AN_EXPERIMENT back instead, so the backend's grid
@@ -151,6 +152,8 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
     case 'cloud_ask':
     case 'cloud_unask': {
       if (service !== 'cloud' || !core.cloud) return { error: 'NOT_CLOUD' }
+      // Earlier asynchronous handlers can outlive this service connection; check at the effect itself.
+      if (authority?.current?.() !== true) return { error: 'SERVICE_UNAVAILABLE' }
       if (query === 'cloud_publish') core.cloud.publish(Array.isArray(payload.harnesses) ? payload.harnesses : [])
       else if (query === 'cloud_ask') core.cloud.ask(text(payload.agentId), text(payload.questionId), (payload.question ?? {}) as { text: string; choices: string[] })
       else core.cloud.unask(text(payload.agentId), text(payload.questionId))
