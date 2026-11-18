@@ -6586,7 +6586,7 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       shows(await listedId())
       // 128 px toward older lines: 320 px of travel, twenty lines, a page.
       stroke([64, 64])
-      await vi.waitFor(() => expect(hc.pressed).toEqual([['t7', ['pageup'], 2_000]]))
+      await vi.waitFor(() => expect(hc.pressed).toEqual([['t7', ['pageup'], 5_000]]))
       expect(orcaRuns).toEqual([STATUS])
       expect(dialScrolls(core)).toEqual([])
       await vi.advanceTimersByTimeAsync(1_000)
@@ -6611,7 +6611,7 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       await vi.waitFor(() => expect(orcaRuns).toEqual([STATUS]))
       host().scrolled('move', 64, 0)
       host().scrolled('move', 64, 0)
-      await vi.waitFor(() => expect(hc.pressed).toEqual([['t7', ['pageup'], 2_000]]))
+      await vi.waitFor(() => expect(hc.pressed).toEqual([['t7', ['pageup'], 5_000]]))
       changed({ status: 'blocked' })
       for (const dy of [64, 64, 64, 64]) {
         await vi.advanceTimersByTimeAsync(50)
@@ -6619,7 +6619,7 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       }
       host().scrolled('up', 0, 0)
       await vi.advanceTimersByTimeAsync(1_000)
-      expect(hc.pressed).toEqual([['t7', ['pageup'], 2_000]])
+      expect(hc.pressed).toEqual([['t7', ['pageup'], 5_000]])
       expect(dialScrolls(core)).toEqual([])
       expect(drained()).toEqual(['[herdr-app] scroll · 20 lines · 1 runs · 40 failed'])
     })

@@ -705,8 +705,10 @@ describe('the Herdr adapter', () => {
         }
         return { ...rest, pressed, answer }
       }
+      /** A call of [count] keys, with 5 s: hc holds keys until 3 s after the person's own last key in Herdr's window,
+       *  and presses them then even once their call was given up (measured 2026-11-18). */
       const press = (key: 'pageup' | 'pagedown', count: number): [string, string[], number] =>
-        ['t7', Array<string>(count).fill(key), 2_000]
+        ['t7', Array<string>(count).fill(key), 5_000]
 
       it('canScroll is false while it asks, or while hc tells no status it knows; working, idle, done and error take the stroke, as another app\'s does whatever its status', () => {
         const can = (kind: string, status?: HcStatus) =>
@@ -766,7 +768,7 @@ describe('the Herdr adapter', () => {
         expect(log).toEqual([drained(20, 1, 20)])
       })
 
-      it('its lines press pageup or pagedown through hc, one a 20 lines, within 2 s, and run no herdr-app; Codex\'s run terminal.scroll', async () => {
+      it('its lines press pageup or pagedown through hc, one a 20 lines, within 5 s, past hc\'s hold, and run no herdr-app; Codex\'s run terminal.scroll', async () => {
         const { calls, pressed, adapter } = claudeCode()
         adapter.scroll(pane('t7'), -20)
         await turn()
