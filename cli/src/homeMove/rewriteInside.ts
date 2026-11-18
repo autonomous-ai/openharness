@@ -62,7 +62,7 @@ export function rewriteInside(plan: MovePlan, dataDir: string, journal: Journal,
   const cli = staged('cli')
   if (cli) rewrite(join(cli, 'node-migration.json'), move)
   const dsh = staged('dsh')
-  if (dsh) rewrite(join(dsh, 'installed.json'), (text) => markPending(move(text)))
+  if (dsh) rewrite(join(dsh, 'installed.json'), (text) => markPending(move(text), !!runtime))
   const profiles = staged('claude-profiles')
   if (profiles) {
     for (const profile of entriesOf(profiles, io)) {
@@ -145,14 +145,15 @@ function movePointer(plan: MovePlan, text: string): string {
 }
 
 /**
- * dsh/installed.json, its paths moved: what a package's setup built (venvs, launchers) names its old folder, so each one
- * that is not linked (a checkout outside the tree) is marked to be set up again by the Store (dsh/setupAgain.ts).
+ * dsh/installed.json, its paths moved: what a package's setup built (venvs, launchers) names its old folder, and runs on
+ * Harness's Python under `runtime`. So each package is marked to be set up again by the Store (dsh/setupAgain.ts): one
+ * linked to a checkout outside the tree only when [runtimeMoved], as its own files stay where they are.
  */
-function markPending(text: string): string {
+function markPending(text: string, runtimeMoved: boolean): string {
   const records = JSON.parse(text) as unknown
   if (!Array.isArray(records)) return text
   // dsh/installed.ts writeInstalledIndex's spelling: an index with nothing to mark comes out as it was, and is not written.
-  return `${JSON.stringify(records.map((record) => record?.linked === true ? record : { ...record, setup: 'pending' }), null, 2)}\n`
+  return `${JSON.stringify(records.map((record) => record?.linked === true && !runtimeMoved ? record : { ...record, setup: 'pending' }), null, 2)}\n`
 }
 
 function unlessNotJson(change: () => string): string | null {

@@ -104,11 +104,11 @@ export function upsertInstalledRecord(record: InstalledDshRecord): void {
 }
 
 /**
- * A package whose setup has yet to run again after the move. A linked one is a checkout the move leaves where it is,
- * so nothing sets it up again and it never waits.
+ * A package whose setup has yet to run again after the move. A linked one too: the move leaves its checkout where it is,
+ * but what its setup built there runs on Harness's Python, which moved.
  */
 export function awaitsSetup(record: InstalledDshRecord): boolean {
-  return record.setup === 'pending' && !record.linked
+  return record.setup === 'pending'
 }
 
 /** Packages whose setup has yet to run again after the move. 'needs-setup' does not count. */
