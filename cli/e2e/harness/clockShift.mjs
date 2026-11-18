@@ -37,7 +37,7 @@ globalThis.Date = new Proxy(RealDate, {
   },
 })
 
-// A process's start on the wall clock moves with it too: one started after a jump reads the moved clock. The hook
-// says when its engine ran it from this (hook/notify.mjs FIRED_AT), against turn times taken with the shifted `Date`.
-const realOrigin = performance.timeOrigin
-Object.defineProperty(performance, 'timeOrigin', { get: () => realOrigin + shift() })
+// A process's start on the wall clock is read once, as it starts: one started after a jump reads the moved clock, one
+// started before keeps its own. The hook says when its engine ran it from this (hook/notify.mjs FIRED_AT), against
+// turn times taken with the shifted `Date`.
+Object.defineProperty(performance, 'timeOrigin', { value: performance.timeOrigin + shift() })
