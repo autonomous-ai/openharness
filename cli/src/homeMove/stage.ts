@@ -16,6 +16,8 @@ const COPY = { recursive: true, preserveTimestamps: true, verbatimSymlinks: true
 // A file's times come from the kernel's coarse clock, up to a tick behind the one the move's start was read from: the
 // margin copies again what changed just before the move began, and never misses what changed during the copy.
 const CLOCK_MARGIN_MS = 1_000
+// Who this computer and its person are: what a late writer made in their place never replaces the ones moved.
+const IDENTITY: readonly string[] = ['auth', 'computer-id']
 
 const lstatOf = (path: string, io: StageIo): Stats | undefined => io.lstatSync(path, { throwIfNoEntry: false })
 const codeOf = (error: unknown): unknown => (error as NodeJS.ErrnoException).code
@@ -58,21 +60,23 @@ function undoing<T>(entry: MoveEntry, copied: boolean, io: StageIo, run: () => T
   }
 }
 
-/** The copy, its swap for the link, then a second pass over what changed meanwhile; returns the bytes of the entry. */
+/** The copy, a second pass over what changed meanwhile, then its link; returns the bytes of the entry. */
 function copyAcross(entry: MoveEntry, io: StageIo, startedAt: number): number {
   io.cpSync(entry.from, entry.staged, COPY)
   const kept = keptOf(entry)
   io.mkdirSync(dirname(kept), { recursive: true, mode: 0o700 })
   io.renameSync(entry.from, kept)
+  // Nothing writes to the original once it is set aside: what it holds now is final. Before the merge, so what a late
+  // writer made at the old path is not taken for something deleted.
+  const bytes = copyChanged(kept, entry.staged, startedAt - CLOCK_MARGIN_MS, io)
   mergeRecreated(entry, io)
-  // Nothing writes to the original once its link is in: what it holds now is final.
-  return copyChanged(kept, entry.staged, startedAt - CLOCK_MARGIN_MS, io)
+  return bytes
 }
 
 /**
  * Copies from [src] into [dest] each file or link changed since [since] that [dest] does not hold newer, and each one
- * [dest] lacks; a folder takes [src]'s mode and times, which a copy does not keep (an owner-only one stays so). Returns
- * the bytes of [src]'s files.
+ * [dest] lacks, and removes from [dest] what [src] no longer holds; a folder takes [src]'s mode and times, which a copy
+ * does not keep (an owner-only one stays so). Returns the bytes of [src]'s files.
  */
 function copyChanged(src: string, dest: string, since: number, io: StageIo): number {
   const st = io.lstatSync(src), there = lstatOf(dest, io)
@@ -81,7 +85,10 @@ function copyChanged(src: string, dest: string, since: number, io: StageIo): num
     return st.isFile() ? st.size : 0
   }
   if (!there?.isDirectory()) replace(src, dest, io)
-  const bytes = io.readdirSync(src).reduce((sum, name) => sum + copyChanged(join(src, name), join(dest, name), since, io), 0)
+  const names = io.readdirSync(src)
+  // Deleted during the copy.
+  for (const name of io.readdirSync(dest)) if (!names.includes(name)) remove(join(dest, name), io)
+  const bytes = names.reduce((sum, name) => sum + copyChanged(join(src, name), join(dest, name), since, io), 0)
   // Last, so a folder without write permission is filled first.
   io.chmodSync(dest, st.mode & 0o7777)
   io.utimesSync(dest, st.atimeMs / 1000, st.mtimeMs / 1000)
@@ -100,20 +107,23 @@ function replace(src: string, dest: string, io: StageIo): void {
 export function mergeRecreated(entry: MoveEntry, io: StageIo): number {
   const there = lstatOf(entry.from, io)
   if (there?.isSymbolicLink()) return 0
-  const merged = there ? mergeInto(entry.from, entry.staged, io) : 0
+  const merged = there ? mergeInto(entry.from, entry.staged, io, IDENTITY.includes(entry.name)) : 0
   io.symlinkSync(entry.to, entry.from)
   return merged
 }
 
-/** Puts [src] into [dest], the newer of a file both hold winning, and removes [src]. Returns how many paths it put in. */
-function mergeInto(src: string, dest: string, io: StageIo): number {
+/**
+ * Puts [src] into [dest], the newer of a file both hold winning, or [dest]'s whenever [destWins], and removes [src].
+ * Returns how many paths it put in.
+ */
+function mergeInto(src: string, dest: string, io: StageIo, destWins = false): number {
   const st = io.lstatSync(src), there = lstatOf(dest, io)
   if (st.isDirectory() && there?.isDirectory()) {
-    const merged = io.readdirSync(src).reduce((sum, name) => sum + mergeInto(join(src, name), join(dest, name), io), 0)
+    const merged = io.readdirSync(src).reduce((sum, name) => sum + mergeInto(join(src, name), join(dest, name), io, destWins), 0)
     remove(src, io)
     return merged
   }
-  if (there && there.mtimeMs >= st.mtimeMs) {
+  if (there && (destWins || there.mtimeMs >= st.mtimeMs)) {
     remove(src, io)
     return 0
   }
@@ -141,7 +151,7 @@ export function unstageEntry(entry: MoveEntry, copied: boolean, io: StageIo): vo
     const there = lstatOf(entry.from, io)
     if (there?.isSymbolicLink()) io.unlinkSync(entry.from)
     // Made again before its link went in: what was written there stays.
-    else if (there) mergeInto(entry.from, original, io)
+    else if (there) mergeInto(entry.from, original, io, IDENTITY.includes(entry.name))
     io.renameSync(original, entry.from)
   }
   if (!copied) return
