@@ -131,6 +131,30 @@ describe('what disable removed', () => {
     writeRemoved(dataDir, 'vscode', false)
     expect(file()).toEqual({})
   })
+
+  it('removed.cursor: only true is a removal, and alone it still keeps removed in the file', () => {
+    const dataDir = aDataDir()
+    const file = (): unknown => JSON.parse(readFileSync(join(dataDir, DIAL_SKILL_FILE), 'utf8'))
+    writeFileSync(join(dataDir, DIAL_SKILL_FILE), '{"removed":{"cursor":1}}')
+    expect(readRemoved(dataDir)).toEqual({})
+    expect(writeRemoved(dataDir, 'cursor', true)).toBeUndefined()
+    expect(file()).toEqual({ removed: { cursor: true } })
+    expect(writeRemoved(dataDir, 'vscode', true)).toBeUndefined()
+    expect(readRemoved(dataDir)).toEqual({ vscode: true, cursor: true })
+    writeRemoved(dataDir, 'cursor', false)
+    expect(file()).toEqual({ removed: { vscode: true } })
+  })
+
+  it('a removal of Cursor writes no skills folder, as VS Code\'s writes none', () => {
+    const dataDir = aDataDir()
+    const file = (): unknown => JSON.parse(readFileSync(join(dataDir, DIAL_SKILL_FILE), 'utf8'))
+    expect(writeRemoved(dataDir, 'cursor', true, ['/a/skills'])).toBeUndefined()
+    expect(readWritten(dataDir)).toEqual({ claude: [], codex: [] })
+    // With an engine's folders in the file, the homes it holds are still the engines' alone.
+    writeRemoved(dataDir, 'claude', true, ['/b/skills'])
+    expect(writeRemoved(dataDir, 'cursor', true, ['/a/skills'])).toBeUndefined()
+    expect(file()).toEqual({ removed: { claude: true, cursor: true }, homes: { claude: ['/b/skills'], codex: [] } })
+  })
 })
 
 describe('the devices\' record of a dial\'s setup', () => {
@@ -187,6 +211,21 @@ describe('the devices\' record of a dial\'s setup', () => {
     for (const vscode of [true, 660, '', '../x', '0.6.60 beta', 'v'.repeat(65)]) {
       writeFileSync(join(dataDir, DIAL_SETUP_FILE), JSON.stringify({ dial: true, vscode }))
       expect(readSetup(dataDir), String(vscode)).toEqual({ dial: true, homes, pluginHomes: [] })
+    }
+  })
+
+  it('dial-setup.json keeps cursor as it keeps vscode: a version, or nothing', () => {
+    const dataDir = aDataDir()
+    const homes = { claude: [], codex: [] }
+    expect(writeSetup(dataDir, { dial: true, vscode: '0.6.60', cursor: '0.6.60-dev.g0123', homes, pluginHomes: [] })).toBeUndefined()
+    expect(readSetup(dataDir)).toEqual({ dial: true, vscode: '0.6.60', cursor: '0.6.60-dev.g0123', homes, pluginHomes: [] })
+    const record = readFileSync(join(dataDir, DIAL_SETUP_FILE), 'utf8')
+    // Saved, the extension would read as never set up in Cursor, and be installed again.
+    expect(writeSetup(dataDir, { dial: true, cursor: '0.6.60 beta', homes, pluginHomes: [] })).toBe('EINVAL')
+    expect(readFileSync(join(dataDir, DIAL_SETUP_FILE), 'utf8')).toBe(record)
+    for (const cursor of [true, 660, '', '../x', '0.6.60 beta', 'v'.repeat(65)]) {
+      writeFileSync(join(dataDir, DIAL_SETUP_FILE), JSON.stringify({ dial: true, cursor }))
+      expect(readSetup(dataDir), String(cursor)).toEqual({ dial: true, homes, pluginHomes: [] })
     }
   })
 
