@@ -92,6 +92,10 @@ void main() {
         "final root = homeDir(environment: environment);\n"
             "final windows = Platform.isWindows;\n"
             "final harness = p.join(root, '.harness',",
+        "final root = p.join(homeFolder, '.harness');",
+        "final root = p.join(homePath, '.harness');",
+        "final root = p.join(userHome, '.harness');",
+        "final root = p.join(profile, '.harness');",
         r"final run = '$home/.harness/run';",
         r"final root = '$home${Platform.pathSeparator}.harness';",
         r"final auth = '$home$sep.harness${sep}auth';",
