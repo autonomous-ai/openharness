@@ -252,11 +252,18 @@ function publishOnce(temporary: string, file: string): boolean {
   }
   try {
     copyFileSync(temporary, file, constants.COPYFILE_EXCL)
-    return true
   } catch (error) {
     if (errorCode(error) === 'EEXIST') return false
     throw error
   }
+  // A copy is a new file, which the temporary's flush did not cover. Windows flushes only a handle open for writing.
+  try {
+    const fd = openSync(file, constants.O_RDWR | constants.O_NOFOLLOW)
+    try { fsyncSync(fd) } finally { closeSync(fd) }
+  } catch (error) {
+    throw new AtomicWriteUnconfirmed(error)
+  }
+  return true
 }
 
 /**
