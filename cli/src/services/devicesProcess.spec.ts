@@ -10,6 +10,7 @@ import type { DevicesDeps } from './devices.js'
 import type { ListenerHandler } from './devicesListener.js'
 import { runDevicesService, type DevicesServiceOptions } from './devicesProcess.js'
 import type { CoreConnection, ServiceProcessOptions } from './process.js'
+import { deviceDeskFor, type DeviceDesk } from './deviceDesk.js'
 
 // The real devices and the real link, as a process started by the master runs them: stood in for here.
 const real = vi.hoisted(() => ({ started: [] as unknown[], linked: [] as unknown[], listened: [] as unknown[] }))
@@ -153,6 +154,83 @@ describe('the devices in their own process', () => {
 
 describe('the core\'s view, read in line by the dial', () => {
   const agent = { agentId: 'a1', sessionId: 's1', engine: 'claude', displayName: 'api', runtimeProfile: 'runtime-v1:s1:claude:opus@high' }
+
+  it('publishes a desk only after a verified view and keeps its in-flight effects on that exact connection', async () => {
+    const f = setup(), effects: string[] = []
+    let release!: () => void
+    const desk: DeviceDesk = {
+      stepFocus: async (_direction, _agent, current) => {
+        await new Promise<void>(resolve => { release = resolve })
+        if (current()) { effects.push('focus'); f.api().clients.sendLocal({ type: 'dial_focus', payload: {} }) }
+        return { machineId: 'machine-1', agentId: 'a1' }
+      },
+      scroll: (_phase, _dy, _velocity, current) => { if (current()) effects.push('scroll') },
+    }
+    f.deps().onDesk!(desk)
+    expect(deviceDeskFor('/data', 'machine-1')).toBeNull()
+    f.answer('view', { agents: [agent], machine: { id: 'machine-1', computerId: 'computer-9' }, hasWindow: true })
+    f.connect(); await f.deps().refresh!()
+    const peer = deviceDeskFor('/data', 'machine-1')!
+    const first = peer.stepFocus('next', 'a0', () => true)
+    // The step's list refresh must not revoke its own component endpoint.
+    await f.deps().refresh!(); release()
+    expect(await first).toEqual({ machineId: 'machine-1', agentId: 'a1' })
+    const old = peer.stepFocus('next', 'a0', () => true)
+    f.options().onDisconnected!()
+    expect(deviceDeskFor('/data', 'machine-1')).toBeNull()
+    f.connect(); await f.deps().refresh!()
+    release()
+    expect(await old).toBe('no_agents')
+    expect(effects).toEqual(['focus'])
+    expect(f.notices).toHaveLength(1)
+    expect(deviceDeskFor('/data', 'machine-1')!.scroll('move', 2, 3, () => true)).toBe(true)
+    expect(effects).toEqual(['focus', 'scroll'])
+    f.answer('view', { agents: [], machine: { id: 'machine-2', computerId: 'not-this-computer' } })
+    await f.deps().refresh!()
+    expect(deviceDeskFor('/data', 'machine-2')).toBeNull()
+    await f.service.stop()
+    expect(deviceDeskFor('/data', 'machine-1')).toBeNull()
+  })
+
+  it.each(['disconnect', 'replacement'] as const)('reads a fresh view after same-facade %s without waiting for or adopting the old reply', async ending => {
+    const f = setup()
+    let release!: (answer: Record<string, unknown>) => void
+    vi.mocked(f.connection.query).mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    f.connect()
+    const old = f.deps().refresh!()
+    if (ending === 'disconnect') f.options().onDisconnected!()
+    f.answer('view', { agents: [{ ...agent, agentId: 'fresh' }], machine: { id: 'machine-2' }, hasWindow: true })
+    f.connect()
+    expect(f.connection.query).toHaveBeenCalledTimes(2)
+    await f.deps().refresh!()
+    expect(f.api().agents.live().map(row => row.agentId)).toEqual(['fresh'])
+    release({ agents: [agent], machine: { id: 'machine-1' }, hasWindow: false })
+    await old
+    expect(f.api().agents.live().map(row => row.agentId)).toEqual(['fresh'])
+    expect(f.api().machine.id()).toBe('machine-2')
+    expect(f.api().clients.hasWindow()).toBe(true)
+    await f.service.stop()
+    const queries = vi.mocked(f.connection.query).mock.calls.length
+    f.connect()
+    expect(f.connection.query).toHaveBeenCalledTimes(queries)
+  })
+
+  it('revokes the cached window and agents before disconnect callbacks or stop can act', async () => {
+    const f = setup()
+    f.answer('view', { agents: [agent], machine: { id: 'machine-1' }, hasWindow: true })
+    f.connect(); await f.deps().refresh!()
+    const gone = vi.fn(() => {
+      expect(f.api().clients.hasWindow()).toBe(false)
+      expect(f.api().agents.live()).toEqual([])
+    })
+    f.deps().onCoreGone!(gone)
+    f.options().onDisconnected!()
+    expect(gone).toHaveBeenCalledOnce()
+    f.connect(); await f.deps().refresh!()
+    await f.service.stop()
+    expect(f.api().clients.hasWindow()).toBe(false)
+    expect(f.api().agents.live()).toEqual([])
+  })
 
   it('is nothing but this computer\'s id before the core is asked', async () => {
     const f = setup()

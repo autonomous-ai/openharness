@@ -31,6 +31,7 @@ import { openDevicesListener } from './devicesListener.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess, type ServiceProcessOptions } from './process.js'
 import { processCoreApi, UNASKED } from './processCoreApi.js'
 import { harnessdEnv } from '../lib/harnessdEnv.js'
+import { publishDeviceDesk, type DeviceDesk } from './deviceDesk.js'
 
 /** An agent as the core lists it for the dial: with the name the apps show and the model it runs. */
 type Viewed = RegisteredSession & { displayName?: string; runtimeProfile?: string | null }
@@ -79,20 +80,41 @@ function faultsOf(value: string | undefined): ReadonlySet<string> {
 
 export function runDevicesService(options: DevicesServiceOptions): ServiceProcess {
   const processEnv = options.processEnv ?? harnessdEnv()
+  const faults = faultsOf(processEnv.HARNESSD_TEST_FAULTS)
   let core: CoreConnection | null = null
+  let generation = 0, stopped = false
+  let desk: DeviceDesk | undefined
+  let deskOwner: { generation: number; machineId: string; revoke(): void } | null = null
   /** Whether a dial watches, as the cable last said: told again to every core this process connects to.
    *  A dial says hello as soon as its port opens, which is often before a core that just started has
    *  this process connected (2026-10-09, a user's log: hello 14:22:54.141, connected 14:22:54.525). Told
    *  only then, the notice was lost: the core made no cards for the dial, which showed Working for turns
    *  that had ended, and no recaps, until the next restart. */
   let dialWatching = false
-  let view: View = { agents: [], machine: { id: '', computerId: options.machineId, name: 'This machine' }, signedIn: false, environment: '', hasWindow: false }
+  const emptyView = (): View => ({ agents: [], machine: { id: '', computerId: options.machineId, name: 'This machine' }, signedIn: false, environment: '', hasWindow: false })
+  let view = emptyView()
+  const publishDesk = (): void => {
+    if (!core || !desk || !view.machine.id || view.machine.computerId !== options.machineId) {
+      deskOwner?.revoke(); deskOwner = null
+      return
+    }
+    if (deskOwner?.generation === generation && deskOwner.machineId === view.machine.id) return
+    deskOwner?.revoke()
+    const origin = core, epoch = generation, machineId = view.machine.id
+    deskOwner = { generation: epoch, machineId, revoke: publishDeviceDesk({ dataDir: options.dataDir, machineId, desk, faults,
+      current: () => !stopped && generation === epoch && core === origin && view.machine.id === machineId,
+      hasWindow: () => view.hasWindow,
+    }) }
+  }
   /** One ask of the core's view at a time: the dial's tick and ⌘K asking together share it. */
-  let viewing: Promise<void> | null = null
+  let viewing: { generation: number; promise: Promise<void> } | null = null
   const refresh = (): Promise<void> => {
-    if (viewing) return viewing
+    if (viewing?.generation === generation) return viewing.promise
     if (!core) return Promise.resolve()
-    const asking = core.query('view').then((answer) => {
+    const origin = core, epoch = generation
+    const pending = { generation: epoch, promise: Promise.resolve() }
+    pending.promise = origin.query('view').then((answer) => {
+      if (stopped || generation !== epoch || core !== origin) return
       if (!Array.isArray(answer.agents)) return
       const machine = object(answer.machine)
       view = {
@@ -102,12 +124,18 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
         environment: text(answer.environment),
         hasWindow: answer.hasWindow === true,
       }
-    }).catch(() => { /* the core went away; its next connection is asked again */ }).finally(() => { viewing = null })
-    viewing = asking
-    return asking
+      publishDesk()
+    }).catch(() => { /* the core went away; its next connection is asked again */ }).finally(() => { if (viewing === pending) viewing = null })
+    viewing = pending
+    return pending.promise
   }
   /** What the devices end for a core that goes (services/devices.ts `onCoreGone`). */
   let coreGone: (() => void) | undefined
+  const disconnect = (): void => {
+    deskOwner?.revoke(); deskOwner = null
+    generation++; core = null; viewing = null; view = emptyView()
+    coreGone?.()
+  }
   const ask = async (query: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
     if (!core) throw new Error('the devices are not connected to the core')
     return core.query(query, payload)
@@ -215,8 +243,9 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     dialSerials: processEnv.HARNESS_DIAL_SERIALS?.split(',').map((serial) => serial.trim()).filter(Boolean),
     testDialPort: processEnv.HARNESSD_TEST_DIAL_PORT,
     cableDisabled: env.CABLE_DISABLE,
-    faults: faultsOf(processEnv.HARNESSD_TEST_FAULTS),
+    faults,
     refresh,
+    onDesk: direct => { deskOwner?.revoke(); deskOwner = null; desk = direct; publishDesk() },
     onCoreGone: (run) => { coreGone = run },
     onLegacyCommands: handlers => { legacyCommands = handlers },
     // Their own listener, in this process alone: the devices started inside the core's process are given none.
@@ -288,17 +317,17 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
       if (Object.hasOwn(heard, kind)) heard[kind](payload)
     },
     onConnected: (connection) => {
-      core = connection
+      if (stopped) return
+      if (core) disconnect()
+      generation++; core = { ...connection }
       if (dialWatching) tell('dialWatching', { watching: true })
       void refresh()
     },
-    onDisconnected: () => {
-      core = null
-      coreGone?.()
-    },
+    onDisconnected: disconnect,
   })
   return {
     stop: async () => {
+      stopped = true; disconnect()
       service.stop()
       // The serial ports first and on the way out: a port this process still held would make the next
       // devices process, and esptool, fail as if the hardware had died.

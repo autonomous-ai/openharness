@@ -41,6 +41,8 @@ const inlineFeedPool = new DeviceFeedPool()
 const inlineAnswerWork = new DeviceWorkBudget()
 
 export interface WifiDeps {
+  /** Same-worker desk calls carry this component's lifetime without adding a core API rule. */
+  desk?: import('./deviceDesk.js').DeviceDeskClient
   /** Explicit composition: an absent service token never silently creates an unrelated peer authority. */
   peer?: { composition: 'inline' | 'services'; port: number; token?: string }
   /** Swapped in tests, to reach what the service and the Store are given. */
@@ -111,8 +113,27 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
     resultJournal: new DeviceResultJournal(join(core.dataDir, 'device-results.json')),
     machineId,
     requestAppFocus: (agentId, expiresAt, focusRevision) => core.wifi.focusApp(agentId, expiresAt, focusRevision),
-    stepFocus: (direction, currentAgentId) => core.wifi.stepFocus(direction, currentAgentId),
-    scroll: (phase, dy, velocity) => core.wifi.scroll(phase, dy, velocity),
+    stepFocus: async (direction, currentAgentId) => {
+      const epoch = coreEpoch, current = () => !stopped && coreConnected && coreEpoch === epoch
+      if (!current()) return 'no_agents'
+      if (deps.desk) {
+        const result = await deps.desk.stepFocus(direction, currentAgentId, current)
+        return current() ? result : 'no_agents'
+      }
+      // Explicit inline mode uses the existing guarded devices port; mixed hosts keep the core route.
+      if (ports.devices && !view.hasWindow) return 'no_app'
+      const result = await (ports.devices?.stepFocus(direction, currentAgentId) ?? core.wifi.stepFocus(direction, currentAgentId))
+      return current() ? result : 'no_agents'
+    },
+    scroll: (phase, dy, velocity) => {
+      const current = () => !stopped && coreConnected
+      if (!current()) return false
+      if (deps.desk) return deps.desk.scroll(phase, dy, velocity, current)
+      if (!ports.devices) return core.wifi.scroll(phase, dy, velocity)
+      if (!view.hasWindow) return false
+      ports.devices.scroll(phase, dy, velocity)
+      return true
+    },
     agents: () => view.agents,
     submit: async (agentId, text, deliveryId) => {
       const epoch = coreEpoch

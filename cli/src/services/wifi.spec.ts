@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { emptyPorts, type CoreApi, type RemoteClient, type WifiPort } from '../core/api.js'
+import { emptyPorts, type CoreApi, type CorePorts, type RemoteClient, type WifiPort } from '../core/api.js'
 import { AutonomousDeviceService } from '../lib/autonomous-device/service.js'
 import { createDeviceStore } from '../lib/autonomous-device/storeRuntime.js'
 import type { LiveEvent } from '../lib/normalize.js'
@@ -103,6 +103,55 @@ async function joinDevice(core: CoreApi, connId = 'c1'): Promise<void> {
 const KEY = Buffer.alloc(32, 7).toString('base64')
 
 describe('the Wi-Fi device, with the dials', () => {
+  it('binds a cohost gesture to this component until its result settles', async () => {
+    const core = fakeCore({ dataDir, wifi: { view: vi.fn(async () => ({ agents: [agent], store: [], hasWindow: true })) } })
+    const ports = emptyPorts()
+    let given!: ConstructorParameters<typeof AutonomousDeviceService>[0], current!: () => boolean
+    let release!: (value: { machineId: string; agentId: string }) => void
+    const stepFocus = vi.fn<NonNullable<WifiDeps['desk']>['stepFocus']>((_direction, _agent, active) => {
+      current = active; return new Promise<{ machineId: string; agentId: string }>(resolve => { release = resolve })
+    })
+    const scroll = vi.fn<NonNullable<WifiDeps['desk']>['scroll']>((_phase, _dy, _velocity, active) => active())
+    startWifi(core, ports, { service: options => { given = options; return new AutonomousDeviceService(options) }, desk: { stepFocus, scroll } })
+    await joinDevice(core)
+    expect(given.scroll!('move', 2, 3)).toBe(true)
+    stepFocus.mockResolvedValueOnce({ machineId: core.machine.id(), agentId: 'next' })
+    expect(await given.stepFocus!('next', 'agent')).toEqual({ machineId: core.machine.id(), agentId: 'next' })
+    const step = given.stepFocus!('next', 'agent')
+    expect(current()).toBe(true)
+    ports.wifi!.disconnected()
+    expect(current()).toBe(false)
+    release({ machineId: core.machine.id(), agentId: 'next' })
+    expect(await step).toBe('no_agents')
+    expect(given.scroll!('move', 2, 3)).toBe(false)
+    expect(await given.stepFocus!('next', 'agent')).toBe('no_agents')
+    expect(core.wifi.stepFocus).not.toHaveBeenCalled()
+    expect(core.wifi.scroll).not.toHaveBeenCalled()
+  })
+
+  it('uses the supplied guarded devices port inline with a current window and withdraws late results', async () => {
+    let hasWindow = false
+    const core = fakeCore({ dataDir, wifi: { view: vi.fn(async () => ({ agents: [agent], store: [], hasWindow })) } })
+    const ports = emptyPorts(), scroll = vi.fn(), stepFocus = vi.fn(async () => ({ machineId: core.machine.id(), agentId: 'next' }))
+    ports.devices = { stepFocus, scroll } as unknown as NonNullable<CorePorts['devices']>
+    let given!: ConstructorParameters<typeof AutonomousDeviceService>[0]
+    startWifi(core, ports, { service: options => { given = options; return new AutonomousDeviceService(options) } })
+    await joinDevice(core)
+    expect(await given.stepFocus!('next', 'agent')).toBe('no_app')
+    expect(given.scroll!('move', 2, 3)).toBe(false)
+    expect(stepFocus).not.toHaveBeenCalled(); expect(scroll).not.toHaveBeenCalled()
+    hasWindow = true; await ports.wifi!.resume({ focus: null })
+    expect(await given.stepFocus!('next', 'agent')).toEqual({ machineId: core.machine.id(), agentId: 'next' })
+    expect(given.scroll!('move', 2, 3)).toBe(true)
+    let release!: (value: { machineId: string; agentId: string }) => void
+    stepFocus.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    const pending = given.stepFocus!('next', 'agent')
+    ports.wifi!.disconnected(); release({ machineId: core.machine.id(), agentId: 'next' })
+    expect(await pending).toBe('no_agents')
+    expect(core.wifi.stepFocus).not.toHaveBeenCalled()
+    expect(core.wifi.scroll).not.toHaveBeenCalled()
+  })
+
   it('answers on its existing owner-tool question socket with the question id and no permission authority', async () => {
     const actual = await vi.importActual<typeof import('../agentClient/questions.js')>('../agentClient/questions.js')
     const socket = new EventEmitter() as EventEmitter & ClientSocket

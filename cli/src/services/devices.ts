@@ -90,6 +90,8 @@ export { DEVICES_REQUESTS }
 
 /** What the devices need that is not the core's to give. */
 export interface DevicesDeps {
+  /** Direct gestures for the Wi-Fi component in this worker; no core callback or socket hop. */
+  onDesk?: (desk: import('./deviceDesk.js').DeviceDesk) => void
   /** Where each dial keeps its log, one file a day (cable/dialLog.ts). */
   logsDir: string
   /** Where custom pets are kept; `<HARNESS_DEVICES_DIR>/pets` when unset. */
@@ -1679,7 +1681,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       windowSelection.focusChanged()
     }),
     // The Wi-Fi device borrows the dial's walk along the desk and its stroke, until it is one of the devices.
-    stepFocus: (direction, currentAgentId) => cableHost.stepFocus(direction, currentAgentId),
+    stepFocus: (direction, currentAgentId) => cableHost.stepFocus(direction, currentAgentId, () => !stopped),
     scroll: (phase, dy, velocity) => cableHost.scrolled(phase, dy, velocity),
     // The voice router warms a worker on an engine the machine runs, while a device is watching.
     engines: (engines) => setVoiceRouterSessions(engines.map((engine) => ({ engine }))),
@@ -1708,6 +1710,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     },
   }
   ports.devices = port
+  deps.onDesk?.({
+    stepFocus: (direction, currentAgentId, current) => cableHost.stepFocus(direction, currentAgentId, () => !stopped && current()),
+    scroll: (phase, dy, velocity, current) => { if (!stopped && current()) cableHost.scrolled(phase, dy, velocity) },
+  })
 
   // The Devices tab: physical devices belong to this machine, and only its owner may manage them.
   const tab = {

@@ -17,6 +17,7 @@ import { WebSocketServer, type WebSocket } from 'ws'
 import { unixSocketPath } from '../lib/localSocket.js'
 import { DeviceFeedPool, type DeviceSessionFeed } from '../lib/autonomous-device/sessionFeed.js'
 import { AutonomousDeviceStore, type StoreAgent } from '../lib/autonomous-device/store.js'
+import { publishDeviceDesk } from './deviceDesk.js'
 
 // The real service and the real link, as a process started by the master runs them: stood in for here.
 const real = vi.hoisted(() => ({ started: 0, options: null as ServiceProcessOptions | null }))
@@ -82,6 +83,58 @@ function setup(over: { startThrows?: boolean; leavesOff?: boolean; dataDir?: str
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
 
 describe('the Wi-Fi device in the devices\' process', () => {
+  it('calls its same-machine cohost desk directly and never falls back after direct dispatch', async () => {
+    const f = setup(), asker = { local: true, owner: true }
+    f.connect(); f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, asker)
+    f.answer('view', { agents: [], store: [], hasWindow: true }); await f.api().wifi.view()
+    const stepFocus = vi.fn(async () => ({ machineId: 'machine-1', agentId: 'next' })), scroll = vi.fn()
+    const revoke = publishDeviceDesk({ dataDir: '/data', machineId: 'machine-1', current: () => true, hasWindow: () => true,
+      desk: { stepFocus, scroll } })
+    try {
+      vi.mocked(f.connection.query).mockClear()
+      expect(await f.api().wifi.stepFocus('next', 'a')).toEqual({ machineId: 'machine-1', agentId: 'next' })
+      expect(f.api().wifi.scroll('move', 2, 3)).toBe(true)
+      expect(stepFocus).toHaveBeenCalledWith('next', 'a', expect.any(Function))
+      expect(scroll).toHaveBeenCalledWith('move', 2, 3, expect.any(Function))
+      expect(f.connection.query).not.toHaveBeenCalled()
+      expect(f.notices).toEqual([])
+      expect(await f.adapter().desk!.stepFocus('next', 'a', () => false)).toBe('no_agents')
+      expect(f.adapter().desk!.scroll('move', 2, 3, () => false)).toBe(false)
+      expect(await f.adapter().desk!.stepFocus('next', 'a', () => true)).toEqual({ machineId: 'machine-1', agentId: 'next' })
+      expect(f.adapter().desk!.scroll('move', 2, 3, () => true)).toBe(true)
+      f.answer('view', { agents: [], store: [], hasWindow: false }); await f.api().wifi.view()
+      expect(await f.api().wifi.stepFocus('next', 'a')).toBe('no_app')
+      f.answer('view', { agents: [], store: [], hasWindow: true }); await f.api().wifi.view()
+      vi.mocked(f.connection.query).mockClear()
+      stepFocus.mockRejectedValueOnce(new Error('private content must not be logged'))
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      expect(await f.api().wifi.stepFocus('next', 'a')).toBe('no_agents')
+      expect(warn).toHaveBeenCalledWith('[devices] DESK_FAILED')
+      expect(f.connection.query).not.toHaveBeenCalled()
+    } finally { revoke(); await f.service.stop() }
+  })
+
+  it('uses the explicit mixed-host fallback once and does not confirm it after its caller departs', async () => {
+    const f = setup(), asker = { local: true, owner: true }
+    f.connect(); f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, asker)
+    f.answer('view', { agents: [], store: [], hasWindow: true }); await f.api().wifi.view()
+    const foreign = vi.fn(async () => ({ machineId: 'other-machine', agentId: 'private' }))
+    const revoke = publishDeviceDesk({ dataDir: '/data', machineId: 'other-machine', current: () => true, hasWindow: () => true,
+      desk: { stepFocus: foreign, scroll: () => {} } })
+    try {
+      let release!: (answer: Record<string, unknown>) => void, current = true
+      vi.mocked(f.connection.query).mockClear().mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+      const step = f.adapter().desk!.stepFocus('next', 'a', () => current)
+      expect(f.connection.query).toHaveBeenCalledExactlyOnceWith('stepFocus', { direction: 'next', currentAgentId: 'a' })
+      current = false; release({ machineId: 'machine-1', agentId: 'next' })
+      expect(await step).toBe('no_agents')
+      expect(foreign).not.toHaveBeenCalled()
+      expect(f.connection.query).toHaveBeenCalledOnce()
+      expect(f.api().wifi.scroll('move', 2, 3)).toBe(true)
+      expect(f.notices).toEqual([['scroll', { phase: 'move', dy: 2, velocity: 3 }]])
+    } finally { revoke(); await f.service.stop() }
+  })
+
   it('revokes every old component API and input callback after machine rebinding', async () => {
     const f = setup(), asker = { local: true, owner: true }
     const drain = () => f.options().requests!.wifi_http({}, asker)

@@ -1167,13 +1167,16 @@ export class DaemonCableHost implements CableHost {
    * forward to the app. With no current agent on the tab the walk starts at its first (next) or last
    * (previous) tile.
    */
-  async stepFocus(direction: 'next' | 'previous', currentAgentId?: string): Promise<{ machineId: string; agentId: string } | 'no_agents'> {
+  async stepFocus(direction: 'next' | 'previous', currentAgentId?: string, current: () => boolean = () => true): Promise<{ machineId: string; agentId: string } | 'no_agents'> {
+    if (!current()) return 'no_agents'
     const walk = (await this.listAgents()).map((a) => a.id)
     if (walk.length === 0) return 'no_agents'
     const at = currentAgentId ? walk.indexOf(currentAgentId) : -1
     const agentId = at < 0
       ? walk[direction === 'next' ? 0 : walk.length - 1]
       : walk[(at + (direction === 'next' ? 1 : walk.length - 1)) % walk.length]
+    // The list may await a core refresh or another machine. A departed caller must move nothing.
+    if (!current()) return 'no_agents'
     this.focus(agentId)
     return { machineId: this.machineOf(agentId), agentId }
   }

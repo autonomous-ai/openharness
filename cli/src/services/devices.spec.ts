@@ -359,7 +359,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; onDesk?: DevicesDeps['onDesk']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   const ports: CorePorts = emptyPorts()
   const onExit = vi.fn()
@@ -374,6 +374,7 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     readUsage: over.readUsage,
     now: over.now,
     refresh: over.refresh,
+    onDesk: over.onDesk,
     orca: over.orca ?? orca,
     orcaReads: over.orcaReads ?? inertOrcaReads,
     codex: over.codex ?? codex,
@@ -1555,6 +1556,27 @@ describe('⌘K, the Wi-Fi device\'s borrowed walk, the voice router and stopping
     expect(await port.stepFocus('next', 'a1')).toEqual(expect.objectContaining({ agentId: 'a2' }))
     port.scroll('down', 0, 0)
     expect(vi.mocked(core.clients.sendLocal).mock.calls.map(([frame]) => frame.type)).toEqual(['dial_focus', 'dial_scroll'])
+  })
+
+  it('keeps the component-only desk endpoint bound to its caller and stops it before late gestures', async () => {
+    let desk!: Parameters<NonNullable<DevicesDeps['onDesk']>>[0]
+    const { core, port } = start({ onDesk: direct => { desk = direct } })
+    port.desk(['a1'], true)
+    port.swarms({ active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds: ['a1'], panes: 1 }], tiles: [] })
+    vi.mocked(core.agents.advertised).mockReturnValue([{ agentId: 'a1', registeredAt: 1, engine: 'claude' }] as RegisteredSession[])
+    seen.fleet!.fail = true
+    expect(await desk.stepFocus('next', undefined, () => false)).toBe('no_agents')
+    desk.scroll('move', 2, 3, () => false)
+    expect(core.clients.sendLocal).not.toHaveBeenCalled()
+    expect(await desk.stepFocus('next', undefined, () => true)).toMatchObject({ agentId: 'a1' })
+    desk.scroll('move', 2, 3, () => true)
+    expect(vi.mocked(core.clients.sendLocal).mock.calls.map(([frame]) => frame.type)).toEqual(['dial_focus', 'dial_scroll'])
+    await port.stop()
+    vi.mocked(core.clients.sendLocal).mockClear()
+    expect(await desk.stepFocus('next', undefined, () => true)).toBe('no_agents')
+    expect(await port.stepFocus('next', undefined)).toBe('no_agents')
+    desk.scroll('move', 2, 3, () => true)
+    expect(core.clients.sendLocal).not.toHaveBeenCalled()
   })
 
   it('walk the cloud harnesses on the desk too, where the core offers them', async () => {
