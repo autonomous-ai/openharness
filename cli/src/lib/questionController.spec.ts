@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { screenFor } from '../engines/screens.js'
 import type { PaneView } from '../engines/facets/screen.js'
 import type { RegisteredSession } from './registry.js'
-import { AskQuestionController, QuestionWatcher } from './questionController.js'
+import { AskQuestionController, QuestionWatcher, partitionLabels } from './questionController.js'
 
 const capture = readFileSync(new URL('./__fixtures__/permission-claude.txt', import.meta.url), 'utf8')
 const view = screenFor('claude').inspect(capture).question
@@ -140,6 +140,16 @@ describe('asynchronous question evidence', () => {
 
     it('matches each piece loosely, as before, when no labels spell the answer', async () => {
       expect(await toggled(['Tea', 'Coffee', 'Milk'], 'tea, coff')).toEqual(['Tea', 'Coffee'])
+    })
+
+    it('reads a long answer in time that grows with its length', () => {
+      // The answer is outside text and the core reads it in line: trying every run of pieces as a label held the
+      // core 12 s on this 3 KB answer, its time growing with the cube of the pieces (2026-11-18).
+      const rows = ['Yes, continue', 'No', 'A'].map((label, i) => ({ number: String(i + 1), label, checked: false }))
+      const ms = (answer: string) => { const start = performance.now(); partitionLabels(rows, answer); return performance.now() - start }
+      expect(ms(Array(1000).fill('x').join(', '))).toBeLessThan(50)
+      expect(ms(Array(1000).fill('A').join(', '))).toBeLessThan(50)
+      expect(partitionLabels(rows, Array(1000).fill('A').join(', '))).toHaveLength(1000)
     })
   })
 
