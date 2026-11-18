@@ -41,6 +41,7 @@ import {
 import { gridModelsPayload } from '../lib/gridModelsPayload.js'
 import { resolveGridTarget } from '../lib/gridTarget.js'
 import { LocalModels } from '../lib/localModels.js'
+import { errorKind } from '../lib/log.js'
 import { nvidiaComputeApps } from '../lib/gpuProcesses.js'
 import type { NewAgentModel } from '../lib/newAgentModel.js'
 import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
@@ -356,7 +357,7 @@ function modelsRequests(core: CoreApi, grid: GridSetUp, privateGridName: () => P
         }
       } catch (error) {
         // Logged and answered as the socket did while this was a case of its own.
-        console.error('[backend] dispatch models_list failed:', error)
+        console.error('[backend] dispatch models_list failed:', errorKind(error))
         return { error: 'INTERNAL' }
       }
     },

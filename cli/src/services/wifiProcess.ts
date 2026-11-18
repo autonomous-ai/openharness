@@ -11,6 +11,7 @@
 import type { RecentTurn } from '../cable/cableHost.js'
 import { emptyPorts, type CoreApi, type CorePorts, type ForkResult, type RemoteClient, type ServiceRequests, type WifiPort, type WifiResume, type WifiView } from '../core/api.js'
 import type { AutonomousDeviceDelivery } from '../lib/autonomous-device/service.js'
+import { errorKind } from '../lib/log.js'
 import type { LiveEvent } from '../lib/normalize.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess, type ServiceProcessOptions } from './process.js'
 import { processCoreApi } from './processCoreApi.js'
@@ -108,7 +109,7 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
     try {
       requests = (options.start ?? startWifi)(api(machineId), ports)
     } catch (error) {
-      console.warn(`[wifi] did not start · ${error instanceof Error ? error.message : String(error)}`)
+      console.warn(`[wifi] did not start · ${errorKind(error)}`)
       return null
     }
     built = ports.wifi ? { machineId, port: ports.wifi, requests } : null
@@ -139,7 +140,7 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
    *  and the service resumed (each against the agents as the core lists them then) before what came after. */
   let heardSoFar: Promise<unknown> = Promise.resolve()
   const inOrder = (run: () => unknown): void => {
-    heardSoFar = heardSoFar.then(run).catch((error: unknown) => console.warn(`[wifi] ${error instanceof Error ? error.message : String(error)}`))
+    heardSoFar = heardSoFar.then(run).catch((error: unknown) => console.warn(`[wifi] ${errorKind(error)}`))
   }
   /** The core's first word on each connection: which machine this is, then what it holds for the service. */
   const connected = async (state: Record<string, unknown>): Promise<void> => {

@@ -13,6 +13,7 @@
  * - A new core under another machine (a sign-in since) starts Share again: its saved shares are that machine's.
  */
 import { emptyPorts, SHARE_REQUESTS, type DaemonAddress, type ServiceRequests, type SharingPort } from '../core/api.js'
+import { errorKind } from '../lib/log.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
 import { agentsIn, daemonIn, processCoreApi, type ShownAgent } from './processCoreApi.js'
 import { startSharing } from './sharing.js'
@@ -86,7 +87,7 @@ export function runSharingService(options: SharingServiceOptions): ServiceProces
     const turn = (inLine.get(connId) ?? Promise.resolve())
       .then(() => ready())
       .then(() => current().port.observer(connId, type, payload))
-      .catch((error: unknown) => console.warn(`[service sharing] an observer's frame failed · ${error instanceof Error ? error.message : String(error)}`))
+      .catch((error: unknown) => console.warn(`[service sharing] an observer's frame failed · ${errorKind(error)}`))
       .finally(() => { if (inLine.get(connId) === turn) inLine.delete(connId) })
     inLine.set(connId, turn)
     return turn

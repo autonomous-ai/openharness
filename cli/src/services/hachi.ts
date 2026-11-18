@@ -23,6 +23,7 @@ import { Ledger, ledgerPath, type Started } from '../agentClient/ledger.js'
 import type { CoreApi, ServiceRequests } from '../core/api.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
 import { agentSettingsPath, readAgentSettings } from '../lib/agentSettings.js'
+import { errorKind } from '../lib/log.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { watchSettingFile } from '../messages/settingWatch.js'
 import { createHachiWakes, type HeardState, type WakeChild } from './hachiWakes.js'
@@ -50,8 +51,6 @@ export interface HachiDeps {
 
 /** A line and what it follows: the ids it named, and when another machine's lease is due again. */
 interface Following { line: Daemon; ids: string; renewAt: number }
-
-const said = (error: unknown): string => (error instanceof Error ? error.message : String(error))
 
 /** What a pushed event says a harness is doing, from the closed list; null for what changes nothing. */
 function stateOf(event: PushedEvent): HeardState | null {
@@ -168,7 +167,7 @@ export function startHachi(core: CoreApi, given: Partial<HachiDeps> = {}): { sto
       current.ids = named
       current.renewAt = deps.now() + RENEW_MS
     } catch (error) {
-      deps.log(`[hachi] could not follow what Hachi started on ${names(machineId, core.daemon.machineId())}: ${said(error)}. Asked again at the next look.`)
+      deps.log(`[hachi] could not follow what Hachi started on ${names(machineId, core.daemon.machineId())}: ${errorKind(error)}. Asked again at the next look.`)
       unfollow(key)
     }
   }
@@ -203,7 +202,7 @@ export function startHachi(core: CoreApi, given: Partial<HachiDeps> = {}): { sto
         ? '[hachi] Hachi is off: closed Hachi. It had not started a conversation, so none was kept.'
         : '[hachi] Hachi is off: closed Hachi, its conversation kept.')
     } catch (error) {
-      deps.log(`[hachi] Hachi is off, but Hachi could not be closed: ${said(error)}`)
+      deps.log(`[hachi] Hachi is off, but Hachi could not be closed: ${errorKind(error)}`)
     } finally { line?.close() }
   }
 
@@ -252,7 +251,7 @@ export function startHachi(core: CoreApi, given: Partial<HachiDeps> = {}): { sto
     looking = (async () => {
       do {
         again = false
-        try { await look() } catch (error) { deps.log(`[hachi] a look failed: ${said(error)}`) }
+        try { await look() } catch (error) { deps.log(`[hachi] a look failed: ${errorKind(error)}`) }
       } while (again && !stopped)
     })().finally(() => { looking = null })
   }

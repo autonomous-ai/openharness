@@ -31,6 +31,7 @@ import { readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import type { CoreApi, CorePorts, GuestLaunchInput, ServiceRequests } from '../core/api.js'
 import { createGuestAccounts, guestHomeRoot, guestWorkspaceFor, type SharedFolder } from '../lib/guestAccounts.js'
 import { guestHelperStatus, installGuestHelper, type GuestHelperInstallResult, type GuestHelperState } from '../lib/guestHelperInstall.js'
+import { errorKind } from '../lib/log.js'
 import { createWindowsGuestAccounts } from '../lib/windows/windowsGuestAccounts.js'
 import { failed, type PortFailure, type ShareMember, type SharedMachinesPort, type SharePolicy,
   type SharedTrustPeer } from '../lib/sharedMachinesPort.js'
@@ -263,7 +264,7 @@ export function startSharedMachines(core: CoreApi, overrides: Partial<SharedMach
     reading = (async () => {
       do {
         again = false
-        await refresh(port).catch((error: unknown) => deps.log(`read failed: ${error instanceof Error ? error.message : String(error)}`))
+        await refresh(port).catch((error: unknown) => deps.log(`read failed: ${errorKind(error)}`))
       } while (again)
     })().finally(() => {
       reading = null
