@@ -89,10 +89,18 @@ export function identity(path: string): Identity | undefined {
   } catch { return undefined }
 }
 
-/** Each folder's identity; one not named, or that cannot be read, is skipped. */
-export function identities(dirs: (string | undefined)[], identify: (path: string) => Identity | undefined = identity): Identity[] {
+/**
+ * Each folder's identity, read by its absolute path; one on a share is dropped unread, one not named or not there
+ * skipped. Reading a folder on a share connects to it and may wait on the network. A relative name is read from the
+ * working folder, which may be on a share, so its absolute path is the one checked and read; the name as given is
+ * checked too, as `resolve()` turns `\??\UNC\…` into a path on the working drive.
+ */
+export function identities(dirs: (string | undefined)[], identify: (path: string) => Identity | undefined = identity,
+  p: PlatformPath = platformPath): Identity[] {
   return dirs.flatMap(dir => {
-    const id = dir ? identify(dir) : undefined
+    if (!dir) return []
+    const path = p.resolve(dir)
+    const id = unc(dir, p) || unc(path, p) ? undefined : identify(path)
     return id ? [id] : []
   })
 }
@@ -134,8 +142,11 @@ export function uploadFile(raw: string, env: NodeJS.ProcessEnv = process.env): {
   }
   const read = <T>(step: () => T): T => { try { return step() } catch { throw new CallFailure(2, `cannot read upload ${raw}`) } }
   const given = expandHome(raw, env.HOME || homedir())
-  // Windows opens a share to resolve a path through it. The resolved path is checked again below: a link may lead there.
-  if (unc(given)) throw refused()
+  // Windows opens a share to resolve a path through it. A relative path is on a share when the working folder is, so its
+  // absolute form is checked too; the text as given as well, as `resolve()` turns `\??\UNC\…` into a path on the working
+  // drive. The resolved path is checked again below: a link may lead there. Only this check reads the absolute form: the
+  // file is opened by the path as given, where a `..` after a link climbs from the link's target, as the kernel reads it.
+  if (unc(given) || unc(platformPath.resolve(given))) throw refused()
   // Nothing is opened that is not named as media or a document.
   media(given)
   // An open for reading waits for a FIFO's writer; O_NONBLOCK returns at once. Windows has no such flag.
