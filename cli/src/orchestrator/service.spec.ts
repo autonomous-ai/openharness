@@ -298,6 +298,16 @@ describe('durable orchestrator lifecycle', () => {
     expect(warn).toHaveBeenCalledWith(`[orchestrator] could not read ${id}.json: it is not JSON`)
     expect(warn.mock.calls.flat().join('\n')).not.toContain('SECRET')
   })
+  it('says a project that is JSON but not a project by its schema error, which names fields, never their values', async () => {
+    mkdirSync(deps.stateDir, { recursive: true })
+    const file = join(deps.stateDir, `${id}.json`)
+    writeFileSync(file, JSON.stringify({ id, prompt: 'SECRET-TASK-MARKER', state: 'SECRET-STATE-MARKER', engine: 'SECRET-ENGINE-MARKER' }))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(service.list()).toEqual([])
+    await expect(start()).rejects.toMatchObject({ code: 'CORRUPT_STATE' })
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`^\\[orchestrator\\] could not read ${id}\\.json: .*"path"`, 's')))
+    expect(warn.mock.calls.flat().join('\n')).not.toContain('SECRET')
+  })
   it('recovers interrupted director and worker launches conservatively', async () => {
     await start(); await active(); service.plan(id, [task('a')]); await running('a'); service.stop()
     const file = join(deps.stateDir, `${id}.json`), saved = JSON.parse(readFileSync(file, 'utf8'))
