@@ -25,7 +25,7 @@ import type { NativeLaunch } from '../engines/nativeLaunch.js'
 import type { TerminalInventoryResult } from './terminalTypes.js'
 import { WindowsBatchLaunchRefused } from './windows/launch.js'
 import { NATIVE_LAUNCH_MARKER } from './nativePaneHold.js'
-import { AtomicWriteUnconfirmed } from './registryPersistence.js'
+import { AtomicWriteUnconfirmed } from './secureState.js'
 
 const publication = vi.hoisted(() => ({
   agent: '', wait: undefined as undefined | (() => Promise<void>), release: undefined as undefined | (() => void),

@@ -1,18 +1,24 @@
 import {
   closeSync,
   constants,
+  copyFileSync,
   fchmodSync,
   fstatSync,
   fsyncSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
   realpathSync,
+  renameSync,
+  rmSync,
   statSync,
+  writeFileSync,
 } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
-import { win32 } from 'node:path'
+import { dirname, win32 } from 'node:path'
 
 const PRIVATE_DIRECTORY_MODE = 0o700
 const PRIVATE_FILE_MODE = 0o600
@@ -188,4 +194,111 @@ export function hardenPrivateStateFileIfPresent(
   } finally {
     closeSync(fd)
   }
+}
+
+/**
+ * What a state file is to its reader. `'trust'`: keys, pins, credentials, and the registry's own files; a write
+ * refuses a target another account could have rewritten (`hardenPrivateStateFileIfPresent`). `'cache'`: anything
+ * that can be rebuilt, replaced whatever its mode.
+ */
+export type StateKind = 'trust' | 'cache'
+
+/** `mode` is the new file's (0o600 unless given). `exclusive` publishes only when the file is not there yet. */
+export interface AtomicWriteOptions { mode?: number; exclusive?: boolean }
+
+export const RENAME_TRIES = 10
+export const RENAME_WAIT_MS = 100
+// Windows refuses a rename over a file another process holds open (a scanner, a reader), for a moment.
+const RENAME_BUSY = new Set(['EPERM', 'EACCES', 'EBUSY'])
+// A file system without hard links (FAT, some network shares) refuses `link` with one of these.
+const LINK_REFUSED = new Set(['EPERM', 'ENOTSUP', 'EXDEV', 'ENOSYS'])
+
+/** The new file is in place, but its folder has not confirmed it is durable. */
+export class AtomicWriteUnconfirmed extends Error {
+  constructor(cause: unknown) { super(cause instanceof Error ? cause.message : String(cause), { cause }) }
+}
+
+const pauseCell = new Int32Array(new SharedArrayBuffer(4))
+/** A blocking wait, for the retries here and in a store that waits on another process's write. */
+export function pauseSync(ms: number): void {
+  Atomics.wait(pauseCell, 0, 0, ms)
+}
+
+function errorCode(error: unknown): string {
+  return (error as NodeJS.ErrnoException | null)?.code ?? ''
+}
+
+function renameOver(temporary: string, file: string): void {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      renameSync(temporary, file)
+      return
+    } catch (error) {
+      if (process.platform !== 'win32' || attempt >= RENAME_TRIES || !RENAME_BUSY.has(errorCode(error))) throw error
+    }
+    pauseSync(RENAME_WAIT_MS)
+  }
+}
+
+/** Puts the complete [temporary] at [file] unless a file is there: false when one is (another creator won). */
+function publishOnce(temporary: string, file: string): boolean {
+  try {
+    linkSync(temporary, file)
+    return true
+  } catch (error) {
+    if (errorCode(error) === 'EEXIST') return false
+    if (!LINK_REFUSED.has(errorCode(error))) throw error
+  }
+  try {
+    copyFileSync(temporary, file, constants.COPYFILE_EXCL)
+    return true
+  } catch (error) {
+    if (errorCode(error) === 'EEXIST') return false
+    throw error
+  }
+}
+
+/**
+ * Writes [file] whole or not at all: a reader in any process sees the old complete file or the new one. A temporary
+ * file in the same folder is written, flushed and renamed over it (linked, for `exclusive`), then the folder is
+ * flushed. True when written. False only for `exclusive`, when the file is already there.
+ */
+export function atomicWriteFile(
+  file: string,
+  data: string | Uint8Array,
+  kind: StateKind,
+  options: AtomicWriteOptions = {},
+): boolean {
+  if (kind === 'trust') hardenPrivateStateFileIfPresent(file)
+  const mode = options.mode ?? PRIVATE_FILE_MODE
+  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
+  let published = false
+  try {
+    const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, mode)
+    try {
+      writeFileSync(fd, data)
+      // open's mode is narrowed by the umask: the file gets exactly its own.
+      fchmodSync(fd, mode)
+      fsyncSync(fd)
+    } finally { closeSync(fd) }
+    if (options.exclusive) {
+      if (!publishOnce(temporary, file)) return false
+    } else {
+      renameOver(temporary, file)
+    }
+    published = true
+    syncStateDirectory(dirname(file))
+    return true
+  } catch (error) {
+    if (published) throw new AtomicWriteUnconfirmed(error)
+    throw error
+  } finally {
+    // A link or a copy leaves the temporary file's own name behind.
+    if (options.exclusive || !published) rmSync(temporary, { force: true })
+  }
+}
+
+/** `atomicWriteFile` of `JSON.stringify(value, null, 2)`. */
+export function atomicWriteJson(file: string, value: unknown, kind: StateKind, options?: AtomicWriteOptions): boolean {
+  return atomicWriteFile(file, JSON.stringify(value, null, 2), kind, options)
 }

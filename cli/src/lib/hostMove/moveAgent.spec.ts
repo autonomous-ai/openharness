@@ -4,7 +4,7 @@ import type { TerminalBackend } from '../terminalBackend.js'
 import type { ProcessIdentity, TerminalInventoryResult, TerminalRuntimeRef } from '../terminalTypes.js'
 import { terminalRouteKey } from '../terminalRuntime.js'
 import { MoveGate } from './gate.js'
-import { AtomicWriteUnconfirmed } from '../registryPersistence.js'
+import { AtomicWriteUnconfirmed } from '../secureState.js'
 import { MOVE_MARKER_ENV, MOVE_STEP_TIMEOUT_MS, moveAgent, moveCreateRequest, removeOrphanMovePanes, type MoveAgentDeps, type MoveOutcome } from './moveAgent.js'
 
 const OLD: TerminalRuntimeRef = { backend: 'ptyhost', instance: 'p2', paneId: '%1' }

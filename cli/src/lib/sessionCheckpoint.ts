@@ -4,11 +4,11 @@ import { lstat, open, rename, rm, type FileHandle } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { env } from '../config/env.js'
-import { atomicWriteJson, engineKeepsTranscriptFile, type RegisteredSession } from './registry.js'
+import { engineKeepsTranscriptFile, type RegisteredSession } from './registry.js'
 import { controlTranscriptEvidence } from '../engines/transcriptBindings.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 import { nativeFileKey } from '../engines/kit/nativePaths.js'
-import { readPrivateStateFile, secureStateDirectory } from './secureState.js'
+import { atomicWriteJson, readPrivateStateFile, secureStateDirectory } from './secureState.js'
 import { readStorePages, utf8Bytes, type PageColumn } from './sqlitePage.js'
 import { sqliteReadAll, type SqliteRow } from './sqliteRead.js'
 import { hermesDbPath } from '../engines/hermes/contract.js'
@@ -164,7 +164,7 @@ export class SessionCheckpointStore {
         // Save even when the native transcript is unchanged: a newly typed draft
         // belongs to the terminal, not to that transcript. Never submit it.
         atomicWriteJson(join(this.directory, `${key}.screen.json`), { version: 1, agentId: s.agentId,
-          sessionId: s.sessionId, savedAt: Date.now(), screen: options.screen })
+          sessionId: s.sessionId, savedAt: Date.now(), screen: options.screen }, 'trust')
       } }
       const checkpoint: Checkpoint = { version: 1, agentId: s.agentId, sessionId: s.sessionId,
         engine: s.engine, codexHome: s.codexHome ?? null, savedAt: Date.now(), source: null, file, bytes: 0 }
@@ -183,7 +183,7 @@ export class SessionCheckpointStore {
           throw new SessionCheckpointError('Could not save this terminal before closing it. Keep it open and try again.')
         }
         atomicWriteJson(temporary, { version: 1, agentId: s.agentId, sessionId: s.sessionId, engine: s.engine, cwd: s.cwd,
-          savedAt: checkpoint.savedAt, screen: options.screen })
+          savedAt: checkpoint.savedAt, screen: options.screen }, 'trust')
       } else if (engineKeepsTranscriptFile(s.engine)) {
         if (!source) {
           throw new SessionCheckpointError('The conversation file is unavailable. The session has not been closed.')
@@ -242,7 +242,7 @@ export class SessionCheckpointStore {
       authority?.verify()
       saveScreen()
       // Publish only after data is durable. A failed save keeps the preceding checkpoint intact.
-      atomicWriteJson(manifest, checkpoint)
+      atomicWriteJson(manifest, checkpoint, 'trust')
       committed = true
       if (previous?.file && previous.file !== file && previousFileSafe(previous.file)) {
         await rm(join(this.directory, previous.file), { force: true }).catch(() => {})

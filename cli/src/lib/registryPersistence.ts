@@ -6,7 +6,7 @@ import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { performance } from 'node:perf_hooks'
-import { insideWindowsRoots, requireWindowsStateFile, syncStateDirectory, windowsStateRoots } from './secureState.js'
+import { AtomicWriteUnconfirmed, insideWindowsRoots, requireWindowsStateFile, syncStateDirectory, windowsStateRoots } from './secureState.js'
 import { lockStartMarker, processExists } from './processLiveness.js'
 import { psEnv } from './childLocale.js'
 import { ownProcessGroup } from './windows/noWindow.js'
@@ -187,10 +187,6 @@ async function harden(file: string): Promise<void> {
     const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0))
     try { await privateDescriptor(handle, false) } finally { await handle.close() }
   } catch (error) { if (!missing(error)) throw error }
-}
-
-export class AtomicWriteUnconfirmed extends Error {
-  constructor(cause: unknown) { super(cause instanceof Error ? cause.message : String(cause), { cause }) }
 }
 
 export async function prepareRegistryImage(file: string, contents: string, deadline: RegistryWriteDeadline) {

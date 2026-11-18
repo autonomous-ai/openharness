@@ -25,7 +25,7 @@ import type { LastTurnText, LiveEvent } from './normalize.js'
 import { AgentNotifications } from './agentNotifications.js'
 import { deriveTurnSummary } from './deviceRecap.js'
 import { RECENT_TURNS, lastFullText, recentAsks, recentRecaps, splitSummary, type RecentRecap, type SessionRecaps } from './recapReads.js'
-import { atomicWriteJson } from './registry.js'
+import { atomicWriteJson } from './secureState.js'
 import { fallbackTier, type Tier, type TierInput } from './notifyTier.js'
 import { TurnStats } from '../cable/turnStats.js'
 import { errorKind } from './log.js'
@@ -1231,10 +1231,10 @@ export class CommanderMirror {
       if (strict) {
         // Cleanup is often requested on a full disk. Never truncate other sessions' shared
         // history while rewriting these files; failed atomic writes remain safely retryable.
-        atomicWriteJson(this.file, Object.fromEntries(this.summaries))
-        atomicWriteJson(this.historyFile, Object.fromEntries(this.history))
-        atomicWriteJson(this.fullTextFile, Object.fromEntries(this.fullTexts))
-        atomicWriteJson(this.askFile, Object.fromEntries(this.asks))
+        atomicWriteJson(this.file, Object.fromEntries(this.summaries), 'trust')
+        atomicWriteJson(this.historyFile, Object.fromEntries(this.history), 'trust')
+        atomicWriteJson(this.fullTextFile, Object.fromEntries(this.fullTexts), 'trust')
+        atomicWriteJson(this.askFile, Object.fromEntries(this.asks), 'trust')
         return
       }
       writeFileSync(this.file, JSON.stringify(Object.fromEntries(this.summaries), null, 2))
