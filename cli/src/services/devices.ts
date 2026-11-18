@@ -49,7 +49,7 @@ import { createOpenActions } from '../cable/hosts/open.js'
 import { createOpencodeClient, opencodeClientDeps, opencodeMessageId, type OpencodeClient } from '../cable/hosts/opencodeClient.js'
 import { OpencodeSource } from '../cable/hosts/opencodeSource.js'
 import { createOrcaAdapter, createOrcaReads, orcaDeps, type OrcaFocusWatch, type OrcaReadDeps, type OrcaReads, type OrcaTerminal } from '../cable/hosts/orca.js'
-import { readRecordName } from '../cable/hosts/recordName.js'
+import { readRecord } from '../cable/hosts/record.js'
 import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
 import { learnApps, readProcessNames } from '../cable/hosts/scannedApp.js'
 import { createScrollLines } from '../cable/hosts/scrollLines.js'
@@ -233,7 +233,7 @@ function observedSource(
     actions,
     apps: learnApps,
     // Asked for Claude Code's sessions alone (observed.ts), and read only inside its own records folders.
-    recordName: (owner) => readRecordName(owner, { records: places.claude.records() }),
+    record: (owner) => readRecord(owner, { records: places.claude.records() }),
     tty,
     scanned,
     herdrTerminal,
