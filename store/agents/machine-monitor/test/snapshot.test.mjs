@@ -125,6 +125,8 @@ test("the app's stats are read from <data>/desktop-app-v2, HARNESS_APP_DIR first
   Object.defineProperty(process, 'platform', { value: 'linux' });
   assert.equal(await turns({ HOME: home }), 1, 'a Linux home not moved yet');
   stats(2, home, '.local', 'share', 'harness', 'desktop-app-v2');
+  assert.equal(await turns({ HOME: home }), 1, 'a data root without the marker');
+  writeFileSync(join(home, '.local', 'share', 'harness', '.harness-root'), '1\n', { mode: 0o600 });
   assert.equal(await turns({ HOME: home }), 2, 'a Linux home moved to the XDG data root');
   assert.equal(await turns({ HOME: home, HARNESS_APP_DIR: stats(3, home, 'app') }), 3);
 

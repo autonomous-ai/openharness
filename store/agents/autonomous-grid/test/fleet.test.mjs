@@ -112,15 +112,16 @@ test('the name is read live for the machine the command targets',()=>{
   for(const name of ['--all','a\nb','  '])assert.equal(harnessNameFor({id:'local',transport:'local'},[{current:true,name}]),null);
 });
 
-// Where a machine keeps the managed Grid follows Harness's rule: on Linux the runtime is in the XDG state root unless only
-// ~/.harness exists. Each home has a fake uname, so every platform's answer runs on any machine.
+// Where a machine keeps the managed Grid follows Harness's rule: on Linux the runtime is in the XDG state root unless
+// ~/.harness exists and the XDG data root holds no marker (`marker`: the folder given one). Each home has a fake uname, so every platform's answer runs on any machine.
 const RUNTIME_HOMES=[
   {name:'a fresh Linux home',system:'Linux',runtime:'.local/state/harness/runtime'},
   {name:'a legacy Linux home',system:'Linux',make:['.harness'],runtime:'.harness/runtime'},
-  {name:'a moved Linux home',system:'Linux',make:['.harness','.local/share/harness'],runtime:'.local/state/harness/runtime'},
-  {name:'XDG bases set',system:'Linux',env:home=>({XDG_DATA_HOME:join(home,'d'),XDG_STATE_HOME:join(home,'s')}),make:['.harness','d/harness'],runtime:'s/harness/runtime'},
-  {name:'XDG bases with a trailing slash',system:'Linux',env:home=>({XDG_DATA_HOME:join(home,'d')+'/',XDG_STATE_HOME:join(home,'s')+'/'}),make:['.harness','d/harness'],runtime:'s/harness/runtime'},
-  {name:'macOS',system:'Darwin',make:['.local/share/harness'],runtime:'.harness/runtime'},
+  {name:'a moved Linux home',system:'Linux',make:['.harness'],marker:'.local/share/harness',runtime:'.local/state/harness/runtime'},
+  {name:'a data root without the marker',system:'Linux',make:['.harness','.local/share/harness'],runtime:'.harness/runtime'},
+  {name:'XDG bases set',system:'Linux',env:home=>({XDG_DATA_HOME:join(home,'d'),XDG_STATE_HOME:join(home,'s')}),make:['.harness'],marker:'d/harness',runtime:'s/harness/runtime'},
+  {name:'XDG bases with a trailing slash',system:'Linux',env:home=>({XDG_DATA_HOME:join(home,'d')+'/',XDG_STATE_HOME:join(home,'s')+'/'}),make:['.harness'],marker:'d/harness',runtime:'s/harness/runtime'},
+  {name:'macOS',system:'Darwin',make:['.harness'],marker:'.local/share/harness',runtime:'.harness/runtime'},
 ];
 /** A home for `c`, with `grid(runtime)` recording there a grid that prints its own path; PATH holds only what the shell texts call. */
 async function gridHome(t,c){
@@ -129,6 +130,7 @@ async function gridHome(t,c){
   for(const tool of ['cat','dirname'])await symlink(['/bin','/usr/bin'].map(dir=>join(dir,tool)).find(existsSync),join(bin,tool));
   await writeFile(join(bin,'uname'),`#!/bin/sh\necho ${c.system}\n`,{mode:0o755});
   for(const folder of c.make??[])await mkdir(join(home,folder),{recursive:true});
+  if(c.marker){await mkdir(join(home,c.marker),{recursive:true});await writeFile(join(home,c.marker,'.harness-root'),'1\n',{mode:0o600});}
   const grid=async runtime=>{
     const file=join(runtime,'grid-1','grid');
     await mkdir(join(runtime,'grid-1'),{recursive:true});await writeFile(file,'#!/bin/sh\nprintf %s "$0"\n',{mode:0o755});

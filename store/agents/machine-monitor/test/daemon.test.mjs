@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -23,6 +23,8 @@ test("the data folder is the daemon's, ADAPTER_DATA_DIR first", (t) => {
   Object.defineProperty(process, 'platform', { value: 'linux' });
   assert.equal(dataDir({ HOME: home }), join(home, '.harness', 'cli', 'data'), 'a Linux home not moved yet');
   mkdirSync(join(home, '.local', 'share', 'harness'), { recursive: true });
+  assert.equal(dataDir({ HOME: home }), join(home, '.harness', 'cli', 'data'), 'a data root without the marker');
+  writeFileSync(join(home, '.local', 'share', 'harness', '.harness-root'), '1\n', { mode: 0o600 });
   assert.equal(dataDir({ HOME: home }), join(home, '.local', 'share', 'harness', 'cli', 'data'), 'a Linux home moved to the XDG data root');
   assert.equal(dataDir({ HOME: home, ADAPTER_DATA_DIR: '/d' }), '/d');
 

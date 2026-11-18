@@ -123,5 +123,7 @@ test("the credential is read from the daemon's data folder", (t) => {
   credentialIn(CREDENTIAL, '.harness', 'cli', 'data')
   assert.deepEqual(localCredentialHeaders({ HOME: home }), { 'X-Harness-Local': CREDENTIAL }, 'a Linux home not moved yet')
   credentialIn(OTHER, '.local', 'share', 'harness', 'cli', 'data')
+  assert.deepEqual(localCredentialHeaders({ HOME: home }), { 'X-Harness-Local': CREDENTIAL }, 'a data root without the marker')
+  writeFileSync(join(home, '.local', 'share', 'harness', '.harness-root'), '1\n', { mode: 0o600 })
   assert.deepEqual(localCredentialHeaders({ HOME: home }), { 'X-Harness-Local': OTHER }, 'a Linux home moved to the XDG data root')
 })

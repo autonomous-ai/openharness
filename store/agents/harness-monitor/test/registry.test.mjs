@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -14,6 +14,8 @@ test("the registry is read from the daemon's data folder, HPS_REGISTRY and HARNE
   Object.defineProperty(process, 'platform', { value: 'linux' })
   assert.equal(registryPath({ HOME: home }), join(home, '.harness', 'cli', 'data', 'registry.json'), 'a Linux home not moved yet')
   mkdirSync(join(home, '.local', 'share', 'harness'), { recursive: true })
+  assert.equal(registryPath({ HOME: home }), join(home, '.harness', 'cli', 'data', 'registry.json'), 'a data root without the marker')
+  writeFileSync(join(home, '.local', 'share', 'harness', '.harness-root'), '1\n', { mode: 0o600 })
   assert.equal(registryPath({ HOME: home }), join(home, '.local', 'share', 'harness', 'cli', 'data', 'registry.json'), 'a Linux home moved')
   assert.equal(registryPath({ HOME: home, ADAPTER_DATA_DIR: '/d' }), join('/d', 'registry.json'))
   assert.equal(registryPath({ HOME: home, ADAPTER_DATA_DIR: '/d', HARNESS_HOME: '/h' }), join('/h', 'cli', 'data', 'registry.json'))

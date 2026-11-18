@@ -120,6 +120,8 @@ test('the fleet\'s defaults are in <data>/grid-fleet, and GRID_FLEET_DEFAULTS st
   await mkdir(join(home,'.harness'));
   assert.equal(defaultsPath(env),under('.harness'),'a Linux home not moved yet');
   await mkdir(join(home,'.local','share','harness'),{recursive:true});
+  assert.equal(defaultsPath(env),under('.harness'),'a data root without the marker');
+  await writeFile(join(home,'.local','share','harness','.harness-root'),'1\n',{mode:0o600});
   assert.equal(defaultsPath(env),under('.local','share','harness'),'a moved Linux home');
   assert.equal(defaultsPath({...env,GRID_FLEET_DEFAULTS:'/own/default.json'}),'/own/default.json');
   Object.defineProperty(process,'platform',{value:'darwin'});

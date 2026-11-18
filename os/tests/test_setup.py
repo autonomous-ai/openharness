@@ -305,8 +305,8 @@ class SignedIn(unittest.TestCase):
 
 
 class DataRoot(unittest.TestCase):
-    """The CLI's data root on Linux (cli config/harnessHome.ts): XDG once it exists, ~/.harness while
-    only that does, XDG on a fresh image."""
+    """The CLI's data root on Linux (cli config/harnessHome.ts): XDG once it holds Harness's marker,
+    else ~/.harness while that exists, else XDG (a fresh image)."""
 
     def read(self, home, root):
         (home / root / 'auth').mkdir(parents=True)
@@ -315,15 +315,24 @@ class DataRoot(unittest.TestCase):
         with patch.object(setup, 'HOME', home):
             return setup.signed_in(), setup.signed_in_account(), setup.computer_id()
 
-    def test_the_session_and_the_computer_id_are_read_from_the_data_root_once_it_exists(self):
+    def test_the_session_and_the_computer_id_are_read_from_the_data_root_once_it_holds_the_marker(self):
         with tempfile.TemporaryDirectory() as folder:
             home = Path(folder)
             # A ~/.harness left beside the moved root is not read.
             (home / '.harness/auth').mkdir(parents=True)
             (home / '.harness/auth/session.json').write_text(json.dumps(dict(signedOut=dict(reason='old'))))
             (home / '.harness/computer-id').write_text('old\n')
+            (home / '.local/share/harness').mkdir(parents=True)
+            (home / '.local/share/harness/.harness-root').write_text('1\n')
             self.assertEqual(self.read(home, '.local/share/harness'),
                              (True, 'u-1', '601cb0af-9a2d-44cf-8381-df989bf4a192'))
+
+    def test_a_data_root_without_the_marker_switches_nothing(self):
+        with tempfile.TemporaryDirectory() as folder:
+            home = Path(folder)
+            (home / '.harness').mkdir()
+            (home / '.local/share/harness/.harness-root').mkdir(parents=True)
+            self.assertEqual(setup.harness_data_root(home, {}), home / '.harness', 'a folder is no marker')
 
     def test_from_harness_while_only_that_exists(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -341,12 +350,16 @@ class DataRoot(unittest.TestCase):
             (home / '.harness').mkdir()
             self.assertEqual(setup.harness_data_root(home, dict(XDG_DATA_HOME='/data')), home / '.harness')
             (home / 'data/harness').mkdir(parents=True)
+            (home / 'data/harness/.harness-root').write_text('1\n')
             self.assertEqual(setup.harness_data_root(home, dict(XDG_DATA_HOME=str(home / 'data'))),
+                             home / 'data/harness')
+            self.assertEqual(setup.harness_data_root(home, dict(XDG_DATA_HOME=f"{home / 'data'}/")),
                              home / 'data/harness')
             # Empty or relative: as unset.
             for value in ['', 'data']:
                 self.assertEqual(setup.harness_data_root(home, dict(XDG_DATA_HOME=value)), home / '.harness', value)
             (home / '.local/share/harness').mkdir(parents=True)
+            (home / '.local/share/harness/.harness-root').write_text('1\n')
             self.assertEqual(setup.harness_data_root(home, dict(XDG_DATA_HOME='data')), home / '.local/share/harness')
 
 

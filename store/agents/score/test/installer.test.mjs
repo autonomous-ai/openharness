@@ -44,15 +44,18 @@ test('an existing system install needs no download, and unsupported machines get
   await assert.rejects(ensureLilypond({env:{LILYPOND_BIN:''},platform:'linux',arch:'arm64',probe:()=>null}),/linux\/arm64/);
 });
 test('runtimeRoot follows the rule',()=>{
-  const home='/home/ada',env={HOME:home},legacy=join(home,'.harness'),data=join(home,'.local/share/harness');
+  const home='/home/ada',env={HOME:home},legacy=join(home,'.harness'),data=join(home,'.local/share/harness'),marker=join(data,'.harness-root');
   const state=join(home,'.local/state/harness','runtime','score'),old=join(legacy,'runtime','score');
-  const existing=(...paths)=>path=>paths.includes(path);
-  assert.equal(runtimeRoot(env,'linux',existing()),state);
-  assert.equal(runtimeRoot(env,'linux',existing(data,legacy)),state);
-  assert.equal(runtimeRoot(env,'linux',existing(legacy)),old);
-  assert.equal(runtimeRoot(env,'darwin',existing(data)),old);
-  assert.equal(runtimeRoot({...env,XDG_DATA_HOME:'/x/data',XDG_STATE_HOME:'/x/state'},'linux',existing(legacy,'/x/data/harness')),'/x/state/harness/runtime/score');
-  assert.equal(runtimeRoot({...env,XDG_STATE_HOME:'relative'},'linux',existing()),state);
-  assert.equal(runtimeRoot({...env,ADAPTER_RUNTIME_DIR:'/r'},'linux',existing()),'/r/score');
-  assert.equal(runtimeRoot({...env,ADAPTER_RUNTIME_DIR:'/r',SCORE_RUNTIME_DIR:'/s'},'linux',existing()),'/s');
+  // Only [paths] are there, as folders or files.
+  const root=(env,platform,...paths)=>runtimeRoot(env,platform,path=>paths.includes(path),path=>paths.includes(path));
+  assert.equal(root(env,'linux'),state);
+  assert.equal(root(env,'linux',data,marker,legacy),state);
+  assert.equal(root(env,'linux',data,legacy),old,'a data root without the marker');
+  assert.equal(root(env,'linux',data),state);
+  assert.equal(root(env,'linux',legacy),old);
+  assert.equal(root(env,'darwin',data,marker),old);
+  assert.equal(root({...env,XDG_DATA_HOME:'/x/data/',XDG_STATE_HOME:'/x/state'},'linux',legacy,'/x/data/harness/.harness-root'),'/x/state/harness/runtime/score');
+  assert.equal(root({...env,XDG_STATE_HOME:'relative'},'linux'),state);
+  assert.equal(root({...env,ADAPTER_RUNTIME_DIR:'/r'},'linux'),'/r/score');
+  assert.equal(root({...env,ADAPTER_RUNTIME_DIR:'/r',SCORE_RUNTIME_DIR:'/s'},'linux'),'/s');
 });

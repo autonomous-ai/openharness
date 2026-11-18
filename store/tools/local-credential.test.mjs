@@ -49,6 +49,8 @@ test('with no ADAPTER_DATA_DIR the credential is read from the data root the rul
   credentialIn(['.harness'], legacy)
   assert.deepEqual(localCredentialHeaders({ HOME: home }), { 'X-Harness-Local': legacy }, 'not moved: ~/.harness')
   credentialIn(['.local', 'share', 'harness'], CREDENTIAL)
+  assert.deepEqual(localCredentialHeaders({ HOME: home }), { 'X-Harness-Local': legacy }, 'a data root without the marker: ~/.harness')
+  writeFileSync(join(home, '.local', 'share', 'harness', '.harness-root'), '1\n', { mode: 0o600 })
   assert.deepEqual(localCredentialHeaders({ HOME: home }), { 'X-Harness-Local': CREDENTIAL }, 'moved: the XDG data root')
 })
 

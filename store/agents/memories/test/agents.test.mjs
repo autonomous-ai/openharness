@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -22,6 +22,8 @@ test('About You is in <data>/memory, MEMORIES_HOME first', () => {
 
 test('the session index is read from the daemon\'s data folder', () => {
   const moved = homeWith(['.local', 'share', 'harness'], ['.harness'])
+  assert.equal(homes({}, moved, 'linux').harnessData, join(moved, '.harness', 'cli', 'data'), 'a data root without the marker')
+  writeFileSync(join(moved, '.local', 'share', 'harness', '.harness-root'), '1\n', { mode: 0o600 })
   assert.equal(homes({}, moved, 'linux').harnessData, join(moved, '.local', 'share', 'harness', 'cli', 'data'))
   assert.equal(homes({ ADAPTER_DATA_DIR: '/elsewhere/data' }, moved, 'linux').harnessData, '/elsewhere/data')
 })

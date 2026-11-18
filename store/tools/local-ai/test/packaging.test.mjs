@@ -54,7 +54,8 @@ for (const [name, icon] of [['ollama', 'ollama'], ['mlx-lm', 'mlx'], ['vllm', 'v
 }
 
 // node.sh runs where no Node is on PATH: it must find the runtime folder the
-// daemon resolved, which on Linux follows the XDG rule. A fake uname picks the
+// daemon resolved, which on Linux follows the XDG rule (`marker`: the data root
+// given Harness's marker). A fake uname picks the
 // platform so every case runs on any machine.
 test('node.sh finds current-node by the rule', async t => {
   const nodeSh = fileURLToPath(new URL('../toolchain/node.sh', import.meta.url));
@@ -65,16 +66,17 @@ test('node.sh finds current-node by the rule', async t => {
   const cases = [
     { name: 'a fresh Linux home', system: 'Linux', runtime: '.local/state/harness/runtime' },
     { name: 'a legacy Linux home', system: 'Linux', make: ['.harness'], runtime: '.harness/runtime' },
-    { name: 'a moved Linux home', system: 'Linux', make: ['.harness', '.local/share/harness'], runtime: '.local/state/harness/runtime' },
+    { name: 'a moved Linux home', system: 'Linux', make: ['.harness'], marker: '.local/share/harness', runtime: '.local/state/harness/runtime' },
+    { name: 'a data root without the marker', system: 'Linux', make: ['.harness', '.local/share/harness'], runtime: '.harness/runtime' },
     { name: 'XDG bases set', system: 'Linux', env: home => ({ XDG_DATA_HOME: join(home, 'd'), XDG_STATE_HOME: join(home, 's') }),
-      make: ['.harness', 'd/harness'], runtime: 's/harness/runtime' },
+      make: ['.harness'], marker: 'd/harness', runtime: 's/harness/runtime' },
     { name: 'XDG bases with a trailing slash', system: 'Linux', env: home => ({ XDG_DATA_HOME: join(home, 'd') + '/', XDG_STATE_HOME: join(home, 's') + '/' }),
-      make: ['.harness', 'd/harness'], runtime: 's/harness/runtime' },
+      make: ['.harness'], marker: 'd/harness', runtime: 's/harness/runtime' },
     { name: 'relative XDG bases', system: 'Linux', env: () => ({ XDG_DATA_HOME: 'd', XDG_STATE_HOME: 's' }),
       make: ['.local/share/harness'], runtime: '.local/state/harness/runtime' },
     { name: 'ADAPTER_RUNTIME_DIR', system: 'Linux', env: home => ({ ADAPTER_RUNTIME_DIR: join(home, 'own') }),
       make: ['.local/share/harness'], runtime: 'own' },
-    { name: 'macOS', system: 'Darwin', make: ['.local/share/harness'], runtime: '.harness/runtime' },
+    { name: 'macOS', system: 'Darwin', make: ['.harness'], marker: '.local/share/harness', runtime: '.harness/runtime' },
   ];
   for (const c of cases) {
     const home = await mkdtemp(join(tmpdir(), 'local-ai-node-'));
@@ -85,6 +87,10 @@ test('node.sh finds current-node by the rule', async t => {
     await writeFile(join(bin, 'uname'), `#!/bin/sh\necho ${c.system}\n`);
     await chmod(join(bin, 'uname'), 0o755);
     for (const folder of c.make ?? []) await mkdir(join(home, folder), { recursive: true });
+    if (c.marker) {
+      await mkdir(join(home, c.marker), { recursive: true });
+      await writeFile(join(home, c.marker, '.harness-root'), '1\n', { mode: 0o600 });
+    }
     const runtime = join(home, c.runtime);
     const node = join(runtime, 'node-22', 'bin', 'node');
     await mkdir(join(runtime, 'node-22', 'bin'), { recursive: true });

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdirSync, mkdtempSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -68,6 +68,8 @@ test('its state is in <state>/monitor, HARNESS_MONITOR_STATE first', (t) => {
   mkdirSync(join(home, '.harness'))
   assert.equal(stateDir({ HOME: home }), join(home, '.harness', 'monitor'), 'a Linux home not moved yet')
   mkdirSync(join(home, '.local', 'share', 'harness'), { recursive: true })
+  assert.equal(stateDir({ HOME: home }), join(home, '.harness', 'monitor'), 'a data root without the marker')
+  writeFileSync(join(home, '.local', 'share', 'harness', '.harness-root'), '1\n', { mode: 0o600 })
   assert.equal(stateDir({ HOME: home }), join(home, '.local', 'state', 'harness', 'monitor'), 'a Linux home moved')
   assert.equal(stateDir({ HOME: home, HARNESS_MONITOR_STATE: '/m' }), '/m')
 

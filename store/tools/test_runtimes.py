@@ -67,6 +67,11 @@ class Box:
         # Not logged: sourcing the helper asks `uname -s` for the runtime folder, before any call a test counts.
         self.stub("uname", f'case "$1" in -s) echo {system} ;; -m) echo {machine} ;; esac', log=False)
 
+    def mark(self, root: Path):
+        """The data root [root] with Harness's marker: the switch to the XDG folders on Linux."""
+        root.mkdir(parents=True, exist_ok=True)
+        (root / ".harness-root").write_text("1\n")
+
     def harness_runtime(self, **env: str) -> str:
         r = self.run('echo "$HARNESS_RUNTIME"', **env)
         assert r.returncode == 0, r.stderr
@@ -282,7 +287,7 @@ class Node(unittest.TestCase):
 
 class RuntimeFolder(unittest.TestCase):
     """Off Linux the runtime is in ~/.harness; on Linux in the XDG state folder, unless the home is still on
-    ~/.harness (no XDG data folder, and ~/.harness there)."""
+    ~/.harness (no marker in the XDG data folder, and ~/.harness there)."""
 
     def linux(self) -> Box:
         box = Box(self)
@@ -301,13 +306,19 @@ class RuntimeFolder(unittest.TestCase):
     def test_linux_moved_home_uses_the_state_root_with_a_bridge_there(self):
         box = self.linux()
         (box.home / ".harness").mkdir()
-        (box.home / ".local" / "share" / "harness").mkdir(parents=True)
+        box.mark(box.home / ".local" / "share" / "harness")
         self.assertEqual(box.harness_runtime(), f"{box.home}/.local/state/harness/runtime")
+
+    def test_linux_data_root_without_the_marker_keeps_dot_harness(self):
+        box = self.linux()
+        (box.home / ".harness").mkdir()
+        (box.home / ".local" / "share" / "harness" / ".harness-root").mkdir(parents=True)
+        self.assertEqual(box.harness_runtime(), str(box.runtime), "a folder is no marker")
 
     def test_xdg_unset_empty_or_relative_is_ignored_absolute_is_used(self):
         box = self.linux()
         (box.home / ".harness").mkdir()
-        (box.home / ".local" / "share" / "harness").mkdir(parents=True)
+        box.mark(box.home / ".local" / "share" / "harness")
         for value in ("", "relative/xdg"):
             with self.subTest(value=value):
                 self.assertEqual(box.harness_runtime(XDG_DATA_HOME=value, XDG_STATE_HOME=value),
@@ -315,21 +326,22 @@ class RuntimeFolder(unittest.TestCase):
         data, state = box.root / "xdg-data", box.root / "xdg-state"
         self.assertEqual(box.harness_runtime(XDG_DATA_HOME=str(data), XDG_STATE_HOME=str(state)), str(box.runtime),
                          "the data folder looked for is the one XDG_DATA_HOME names")
-        (data / "harness").mkdir(parents=True)
+        box.mark(data / "harness")
         self.assertEqual(box.harness_runtime(XDG_DATA_HOME=str(data), XDG_STATE_HOME=str(state)), f"{state}/harness/runtime")
 
     def test_xdg_with_a_trailing_slash_names_the_same_folders(self):
         box = self.linux()
         data, state = box.root / "xdg-data", box.root / "xdg-state"
-        (data / "harness").mkdir(parents=True)
+        (box.home / ".harness").mkdir()
+        box.mark(data / "harness")
         self.assertEqual(box.harness_runtime(XDG_DATA_HOME=f"{data}/", XDG_STATE_HOME=f"{state}/"), f"{state}/harness/runtime")
 
     def test_darwin_keeps_dot_harness_whatever_exists(self):
         box = Box(self)
         self.assertEqual(box.harness_runtime(), str(box.runtime))
-        (box.home / ".local" / "share" / "harness").mkdir(parents=True)
+        box.mark(box.home / ".local" / "share" / "harness")
         data = box.root / "xdg-data"
-        (data / "harness").mkdir(parents=True)
+        box.mark(data / "harness")
         self.assertEqual(box.harness_runtime(), str(box.runtime))
         self.assertEqual(box.harness_runtime(XDG_DATA_HOME=str(data), XDG_STATE_HOME=str(box.root / "xdg-state")), str(box.runtime))
 
@@ -500,7 +512,7 @@ esac''')
                     box.platform("Linux", "x86_64")
                     (box.home / ".harness").mkdir()
                     if moved:
-                        (box.home / ".local" / "share" / "harness").mkdir(parents=True)
+                        box.mark(box.home / ".local" / "share" / "harness")
                     self.uv(box)
                     self.venv_naming(box, where, f"{box.home}/.harness/runtime/python/cpython-3.12.7/bin")
                     r = box.run('harness_venv .venv 3.12')
@@ -512,7 +524,7 @@ esac''')
         box = Box(self)
         box.platform("Linux", "x86_64")
         (box.home / ".harness").mkdir()
-        (box.home / ".local" / "share" / "harness").mkdir(parents=True)
+        box.mark(box.home / ".local" / "share" / "harness")
         self.uv(box)
         self.venv_naming(box, "pyvenv.cfg", "/opt/python/bin")
         r = box.run('harness_venv .venv 3.12')
