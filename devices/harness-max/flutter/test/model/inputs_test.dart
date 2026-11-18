@@ -355,4 +355,24 @@ void main() {
     m.onApps('orca', both);
     expect(m.toast, isNull, reason: 'the person picked it on the bar');
   });
+
+  test('restNow: Ambient at once when the bar may rest, as after a quiet minute; never over work', () {
+    final b = linked(abcde), m = b.model;
+    expect(m.page, BarPage.overview);
+    m.restNow();
+    expect([m.page, m.mood], [BarPage.ambient, AmbientMood.quiet]);
+    m.wake();
+    expect(m.page, BarPage.overview);
+    b.at(59999);
+    m.tick();
+    expect(m.page, BarPage.overview);
+    b.at(60000);
+    m.tick();
+    expect(m.page, BarPage.ambient, reason: 'then a quiet minute as always');
+
+    m.wake();
+    m.onTurn('a', 'started', '');
+    m.restNow();
+    expect(m.page, BarPage.overview, reason: 'an agent at work keeps Overview up');
+  });
 }

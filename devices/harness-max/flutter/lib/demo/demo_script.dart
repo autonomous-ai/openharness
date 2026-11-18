@@ -109,8 +109,8 @@ const List<Beat> _heroImage = [
 ];
 
 /// Orca's landing-hero asks what only Orca can answer: the bar shows it, and says where.
-const List<Beat> heroAsk = [
-  Beat.start(0, 'Working…'),
+const List<Beat> heroAsk = [Beat.start(0, 'Working…'), ..._heroAskWork];
+const List<Beat> _heroAskWork = [
   Beat.act(10, 'Reading', "Looking at the landing page's hero section."),
   Beat.step(10, 'Read · Hero.tsx'),
   Beat.step(15, 'Bash · ls public/hero'),
@@ -134,8 +134,8 @@ const List<Beat> e2eFix = [
 ];
 
 /// Orca's rate-limiter: a test run that fails, then the fix.
-const List<Beat> rateLimit = [
-  Beat.start(0, 'Working…'),
+const List<Beat> rateLimit = [Beat.start(0, 'Working…'), ..._rateLimitWork];
+const List<Beat> _rateLimitWork = [
   Beat.act(10, 'Reading', 'Adding a sliding-window limit to the public API.'),
   Beat.step(10, 'Read · limiter.ts'),
   Beat.step(15, 'Edit · limiter.ts'),
@@ -171,8 +171,8 @@ const List<Beat> _cliKeep = [
 ];
 
 /// Harness's harness-cli asks what the bar answers.
-const List<Beat> cliProto = [
-  Beat.start(0, 'Working…'),
+const List<Beat> cliProto = [Beat.start(0, 'Working…'), ..._cliProtoWork];
+const List<Beat> _cliProtoWork = [
   Beat.act(10, 'Reading', "Reading the cable session and the dial's hello for the new app list."),
   Beat.step(10, 'Read · cableSession.ts'),
   Beat.step(15, 'Read · cable.md'),
@@ -194,8 +194,8 @@ const List<Beat> _fwStop = [
 ];
 
 /// Harness's firmware-max needs a person's yes to flash the bar: the permission prompt.
-const List<Beat> fwFlash = [
-  Beat.start(0, 'Working…'),
+const List<Beat> fwFlash = [Beat.start(0, 'Working…'), ..._fwFlashWork];
+const List<Beat> _fwFlashWork = [
   Beat.act(10, 'Building', 'Building the Max firmware with the new app picker.'),
   Beat.step(10, 'Bash · idf.py build'),
   Beat.timer(25, 'Building'),
@@ -268,16 +268,6 @@ const List<({int at, int agent, List<Beat> turn})> kStory = [
   (at: 75000, agent: _fw, turn: fwFlash),
   (at: 80000, agent: _docs, turn: docsPage),
   (at: 135000, agent: _auth, turn: authFollow),
-];
-
-/// The demo a person drives (DemoLink.manual): the work standing when it starts, each turn played at once up to beat
-/// [hold] (null: until it asks) and held there until a person talks to its agent. Then nothing moves by itself.
-const List<({int agent, List<Beat> turn, int? hold})> kStage = [
-  (agent: _auth, turn: authSplit, hold: 5),
-  (agent: _hero, turn: heroAsk, hold: null),
-  (agent: _rate, turn: rateLimit, hold: 6),
-  (agent: _fw, turn: fwFlash, hold: 4),
-  (agent: _cli, turn: cliProto, hold: null),
 ];
 
 /// The app in front on the computer: the person works in Orca, moves to Harness for the protocol and the flash, and
@@ -367,6 +357,19 @@ const Spoken kSayElse = Spoken('Run the suite again before you push', [
   Beat.done(15, SummaryTier.alert, 'The whole suite passes',
       'Ran the whole suite again and every test passes. Nothing is pushed yet: say when.'),
 ]);
+
+/// The demo a person drives (DemoLink.manual): the agents whose words, every other time, start their case instead of
+/// their [kSay] line (first the case, then the line, then the case again), so each case can be played again.
+const Map<String, Spoken> kCase = {
+  // A test run that fails: Attention in the failure's red.
+  'rate-limiter': Spoken('Add a sliding-window limit to the public API', _rateLimitWork),
+  // A question only Orca can answer: the bar shows it, and says where.
+  'landing-hero': Spoken('Freshen up the landing hero', _heroAskWork),
+  // The permission prompt: Allow / Deny.
+  'firmware-max': Spoken('Build the firmware with the app picker', _fwFlashWork),
+  // A question the bar answers, by a tap or by words.
+  'harness-cli': Spoken('Put the app list on the cable', _cliProtoWork),
+};
 
 /// New Harness: the projects a new agent is started on, in turn (max_demo.c PROJECTS). Its agents run in Harness.
 const List<String> kProjects = ['harness-web', 'harness-cli', 'infra'];

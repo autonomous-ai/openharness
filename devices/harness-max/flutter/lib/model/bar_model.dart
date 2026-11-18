@@ -849,6 +849,15 @@ class BarModel extends ChangeNotifier {
     _publish();
   }
 
+  /// Ambient now, as a quiet minute would bring it, when the bar may rest (Overview, the mic closed, nothing at work):
+  /// the demo a person drives opens on it rather than a minute later. Over work it does nothing.
+  void restNow() {
+    if (!_ambientWaits()) return;
+    _show(BarPage.ambient);
+    _settle();
+    _publish();
+  }
+
   /// A tap on a finished turn's note: its agent's page to read what it did (the mic closed), its notice read. Words
   /// being said go first, as a strip segment sends them; an agent gone from the ring leaves Inbox, where it still is.
   void tapDoneNote() {

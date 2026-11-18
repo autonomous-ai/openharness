@@ -65,7 +65,7 @@ void main() {
     expect(model.agentById('ag-docs')!.state, AgentState.working);
   });
 
-  test('the manual demo on the real model: the states stand, and a tap on rate-limiter then words make it fail',
+  test('the manual demo on the real model: it opens at rest, a tap wakes it, words to rate-limiter make it fail',
       () async {
     final clock = ManualDemoClock();
     final wall = DateTime(2026, 11, 18, 14, 32);
@@ -82,24 +82,22 @@ void main() {
 
     await demo.start();
     runFor(500);
-    final state = {for (final a in model.agents) a.name: a.state};
-    expect(state['auth-refactor'], AgentState.working);
-    expect(state['landing-hero'], AgentState.asking);
-    expect(state['rate-limiter'], AgentState.working);
-    expect(model.page, BarPage.attention, reason: 'the open question takes the glass, as on any computer that asks');
-    expect(model.attention!.agentId, 'ag-hero');
-
-    model.away();
+    expect([model.page, model.mood], [BarPage.ambient, AmbientMood.quiet]);
+    model.wake();
     runFor(500);
     expect(model.page, BarPage.overview);
-    runFor(70000);
-    expect(model.agents.firstWhere((a) => a.name == 'rate-limiter').state, AgentState.working,
-        reason: 'nothing moves by itself');
 
     model.tapCell('ag-rate');
     runFor(3000); // the made-up speech, then its quiet sends it
-    runFor(8000);
-    expect(model.agents.firstWhere((a) => a.name == 'rate-limiter').state, AgentState.failed);
-    expect(model.attention?.kind, AttnKind.failed);
+    final rate = model.agents.firstWhere((a) => a.name == 'rate-limiter');
+    for (var waited = 0; waited < 20000 && rate.state != AgentState.failed; waited += 100) {
+      runFor(100);
+    }
+    expect(rate.state, AgentState.failed);
+    expect([model.page, model.attention?.kind], [BarPage.attention, AttnKind.failed]);
+    runFor(10000);
+    expect(model.page, BarPage.overview, reason: 'a failure\'s page goes after 8 s');
+    runFor(60000);
+    expect(model.page, BarPage.ambient, reason: 'nothing at work: a quiet minute rests it again');
   });
 }

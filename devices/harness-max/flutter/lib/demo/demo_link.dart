@@ -81,8 +81,8 @@ class _Agent {
   Spoken? said;
   int saidAt = 0;
 
-  /// The manual demo's standing work: the turn waits before this beat until a person talks to the agent.
-  int? hold;
+  /// The manual demo: words that started a turn, so an agent with a case ([kCase]) knows which comes next.
+  int talks = 0;
 
   bool get idle => turn == null && ask == _Ask.none && said == null;
   DemoApp get home => kApps[app];
@@ -100,8 +100,9 @@ class DemoLink implements BarLink {
   final Mic? mic;
   final DemoClock clock;
 
-  /// A person drives it: the work in [kStage] stands from the start, and nothing happens by itself after (no story,
-  /// no front change, no answer for the person, no telling again). Every case comes from what is done at the bar.
+  /// A person drives it: every agent rests at the start, the bar on Ambient, and nothing happens by itself (no story,
+  /// no front change, no answer for the person, no telling again). Every case comes from words said at the bar
+  /// ([kCase]).
   final bool manual;
 
   /// In the daemon's list order: the cast first (they never move), then the agents New Harness made.
@@ -159,7 +160,8 @@ class DemoLink implements BarLink {
     model.onLink(true, computer: kComputer, offersNew: true);
     _ringOwed = true;
     _tick();
-    if (manual) _stage();
+    // All quiet on the person's demo from the first moment, not a quiet minute later.
+    if (manual) model.restNow();
   }
 
   @override
@@ -363,7 +365,7 @@ class DemoLink implements BarLink {
     for (final a in _agents) {
       if (a.ask == _Ask.taken) {
         soon(a.closeAt);
-      } else if (a.turn != null && a.ask == _Ask.none && !_held(a)) {
+      } else if (a.turn != null && a.ask == _Ask.none) {
         soon(a.beatAt);
       } else if (a.turn == null && a.said != null) {
         soon(a.saidAt);
@@ -455,7 +457,6 @@ class DemoLink implements BarLink {
 
   void _endTurn(_Agent a) {
     a.turn = null;
-    a.hold = null;
     a.question = null;
     a.ask = _Ask.none;
     // Words said while it was busy go next, after a breath.
@@ -470,7 +471,7 @@ class DemoLink implements BarLink {
     }
     if (a.ask == _Ask.taken && now >= a.closeAt) _takeAnswer(a);
     // Bounded: beats with no wait between them all go now, and the guard stops a list that never waits.
-    for (var guard = 0; guard < 16 && a.turn != null && a.ask == _Ask.none && !_held(a) && now >= a.beatAt; guard++) {
+    for (var guard = 0; guard < 16 && a.turn != null && a.ask == _Ask.none && now >= a.beatAt; guard++) {
       _play(a, now);
     }
   }
@@ -515,22 +516,6 @@ class DemoLink implements BarLink {
     } else {
       _endTurn(a);
     }
-  }
-
-  bool _held(_Agent a) => a.hold != null && a.beat >= a.hold!;
-
-  /// The manual demo's opening: each standing turn played at once to its hold, or to its question.
-  void _stage() {
-    final now = _now;
-    for (final s in kStage) {
-      final a = _agents[s.agent];
-      _startTurn(a, s.turn, 0);
-      a.hold = s.hold;
-      for (var guard = 0; guard < 32 && a.turn != null && a.ask == _Ask.none && !_held(a); guard++) {
-        _play(a, now);
-      }
-    }
-    _soon();
   }
 
   // ---- questions ----
@@ -758,19 +743,23 @@ class DemoLink implements BarLink {
   /// The words reach the agent: the mockup's line for it. Said to a question the bar answers, they are its answer
   /// (never a permission prompt's, which takes Allow or Deny only); otherwise the agent works on them when it is free.
   void _take(_Agent a) {
-    if (a.hold != null) {
-      // Standing work in the manual demo: the words let it go on, a second later, and queue nothing of their own.
-      a.hold = null;
-      a.beatAt = _now + 1000;
-      return;
-    }
-    final spoken = kSay[a.name] ?? kSayElse;
     final q = a.question;
     if (a.ask == _Ask.open && q != null && a.can('a') && !q.permission) {
+      final spoken = kSay[a.name] ?? kSayElse;
       _taken(a, spoken.option < q.options.length ? spoken.option : 0, kCloseMs);
       return;
     }
-    a.said = spoken;
+    a.said = _words(a);
     a.saidAt = _now;
+  }
+
+  /// The words for a new turn. In the manual demo an agent with a case says it and its [kSay] line by turns, the case
+  /// first, so a person can play each case again.
+  Spoken _words(_Agent a) {
+    final kase = manual ? kCase[a.name] : null;
+    if (kase == null) return kSay[a.name] ?? kSayElse;
+    final first = a.talks.isEven;
+    a.talks++;
+    return first ? kase : kSay[a.name] ?? kSayElse;
   }
 }
