@@ -99,9 +99,22 @@ describe('walk', () => {
 })
 
 describe('identities', () => {
+  afterEach(() => { vi.restoreAllMocks() })
+
   it('is each folder\'s identity, without the ones not named or not there', () => {
     const on = (path: string): Identity | undefined => path === '/missing' ? undefined : { dev: 1n, ino: BigInt(path.length) }
-    expect(identities(['/a', undefined, '/missing', '/bcd'], on)).toEqual([{ dev: 1n, ino: 2n }, { dev: 1n, ino: 4n }])
+    expect(identities(['/a', undefined, '/missing', '/bcd'], on, posix)).toEqual([{ dev: 1n, ino: 2n }, { dev: 1n, ino: 4n }])
+  })
+
+  it('reads no folder on a share, nor one a working folder on a share makes of a relative name', () => {
+    const asked: string[] = []
+    const on = (path: string): Identity => { asked.push(path); return { dev: 1n, ino: 1n } }
+    const shares = ['\\\\host\\share\\h\\.ssh', '//host/share/roaming', '\\\\?\\UNC\\host\\share\\c', '\\\\.\\UNC\\host\\share\\d', '\\??\\UNC\\host\\share\\e']
+    expect(identities([...shares, 'C:\\Users\\a\\.ssh', undefined], on, win32)).toEqual([{ dev: 1n, ino: 1n }])
+    expect(asked).toEqual(['C:\\Users\\a\\.ssh'])
+    vi.spyOn(process, 'cwd').mockReturnValue('\\\\host\\share\\work')
+    expect(identities(['connections', '/etc'], on, win32)).toEqual([])
+    expect(asked).toEqual(['C:\\Users\\a\\.ssh'])
   })
 })
 
@@ -279,6 +292,49 @@ describe('uploadFile', () => {
     expect(() => uploadFile('~\\x.txt', { HOME: '\\\\host\\share' })).toThrow(/not a media file/)
     expect(realpath).not.toHaveBeenCalled()
     expect(tried).toEqual([])
+  })
+
+  it('refuses a relative path from a working folder on a share before it opens it', () => {
+    platform.windows = true
+    vi.spyOn(process, 'cwd').mockReturnValue('\\\\host\\share\\work')
+    const realpath = vi.spyOn(realpathSync, 'native')
+    const { tried } = descriptors()
+    for (const raw of ['x.txt', 'docs\\x.txt', '/x.txt']) expectFenced(raw)
+    expect(tried).toEqual([])
+    expect(realpath).not.toHaveBeenCalled()
+  })
+
+  // The file is opened by the path as given: a `..` after a link goes up from the link's target, as the kernel goes.
+  // `resolve()` would drop the link and name docs/note.txt. Windows itself takes `..` off the text before it opens.
+  it.skipIf(!CAN_LINK || process.platform === 'win32')('opens the file the kernel reaches through a link, not the one its text names', () => {
+    mkdirSync(join(home, 'other', 'inner'), { recursive: true })
+    writeFileSync(join(home, 'other', 'note.txt'), 'through the link')
+    symlinkSync(join(home, 'other', 'inner'), join(home, 'docs', 'jump'))
+    expect(uploadFile(`${home}/docs/jump/../note.txt`, { HOME: home })).toEqual({ name: 'note.txt', content: Buffer.from('through the link') })
+  })
+
+  // A name that is never looked up: reading a folder there would wait on the network, and a real share would be connected to.
+  it.skipIf(process.platform !== 'win32')('reads no forbidden folder on a share', () => {
+    const asked: string[] = []
+    disk.hooks.statSync = (real, ...args) => { asked.push(String((args as unknown[])[0])); return real(...args) }
+    const realpath = vi.spyOn(realpathSync, 'native')
+    const share = '\\\\harness-no-such-host.invalid\\share'
+    const env = { HOME: home, USERPROFILE: `${share}\\profile`, APPDATA: `${share}\\Roaming`, LOCALAPPDATA: `${share}\\Local`, HARNESS_CONNECTIONS_DIR: `${share}\\connections` }
+    expect(uploadFile(join(home, 'docs', 'note.txt'), env).content.toString()).toBe('x')
+    for (const path of [...asked, ...realpath.mock.calls.map(call => String(call[0]))]) expect(unc(path), path).toBe(false)
+  })
+
+  // `subst` makes a drive of a folder, with no rights: another name for .ssh that only the file system knows.
+  it.skipIf(process.platform !== 'win32')('refuses a file in .ssh reached through a subst drive, and takes a document through it', ctx => {
+    const letter = [...'ZYXWVUTSRQP'].find(letter => !existsSync(`${letter}:\\`))
+    if (!letter) ctx.skip()
+    execFileSync('subst', [`${letter}:`, home])
+    try {
+      expectFenced(`${letter}:\\.ssh\\note.txt`)
+      expect(uploadFile(`${letter}:\\docs\\note.txt`, { HOME: home })).toEqual({ name: 'note.txt', content: Buffer.from('x') })
+      // A forbidden folder named through the drive fences the folder itself.
+      expect(() => uploadFile(join(home, '.harness', 'note.txt'), { HOME: `${letter}:\\` })).toThrow(/not a media file/)
+    } finally { execFileSync('subst', [`${letter}:`, '/d']) }
   })
 
   // A UNC path exists only on Windows, and only where this account reaches the local disk's admin share.
