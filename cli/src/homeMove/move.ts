@@ -64,15 +64,15 @@ export async function runMove(check: Extract<MoveCheck, { move: true }>, env: No
   return complete({ ...begun, done }, steps, oldDataDir, bytesCopied, deps)
 }
 
-/** A journal an earlier move left: finished when the data root is committed, rolled back when not. Null with no journal. */
-export async function recoverMove(home: string, env: NodeJS.ProcessEnv, deps: MoveDeps): Promise<MoveOutcome | { state: 'rolled-back' } | null> {
+/**
+ * A journal an earlier move left: finished when the data root is committed, rolled back when not, which is a move failed
+ * and recorded as one. Null with no journal.
+ */
+export async function recoverMove(home: string, env: NodeJS.ProcessEnv, deps: MoveDeps): Promise<MoveOutcome | null> {
   const journal = readJournal(legacyHarnessHome(home, 'linux'))
   if (!journal) return null
   const { plan } = journal
-  if (!committed(plan, deps.io)) {
-    const failure = rollBack(journal, deps)
-    return failure === null ? { state: 'rolled-back' } : failed(plan.legacy, failure, deps)
-  }
+  if (!committed(plan, deps.io)) return failed(plan.legacy, rollBack(journal, deps) ?? new Error('a move was cut short before its commit'), deps)
   // What it copied is not in the journal: a move finished here counts no bytes.
   return complete(journal, openJournal(journal, deps.io), dataDirOf(plan, env), 0, deps)
 }

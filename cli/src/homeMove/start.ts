@@ -33,6 +33,8 @@ export interface StartDeps extends Omit<MoveDeps, 'io' | 'log'>, Pick<ConditionD
   execArgv: readonly string[]
   /** Prints a line on this start's terminal; null when its output is not one. */
   print: ((line: string) => void) | null
+  /** Ends this process: a start on a tree half moved runs nothing. */
+  exit(code: number): void
   lock?: LockDeps
 }
 
@@ -49,7 +51,8 @@ const UNDER_WAY = 'home move: under way · waiting'
 
 /**
  * Moves ~/.harness at a start command, says how it went in the data folder's harness.log (and on a terminal), and starts
- * this process again from the new paths when the roots moved under it. Whatever happens, the start goes on.
+ * this process again from the new paths when the roots moved under it. Whatever happens the start goes on, but on a
+ * tree half moved, a journal left with the data root not there: it ends, and the next start puts ~/.harness back.
  */
 export async function moveHomeAtStart(argv: readonly string[], env: NodeJS.ProcessEnv, deps: StartDeps = thisStart()): Promise<void> {
   const [, , command, ...flags] = argv
@@ -78,11 +81,19 @@ export async function moveHomeAtStart(argv: readonly string[], env: NodeJS.Proce
     outcome = failure(error, environment, deps, moveDeps)
   }
   const movedNow = fs.existsSync(roots.data)
+  // A rollback that could not undo every step keeps its journal for the next start.
+  const halfMoved = !movedNow && readJournal(roots.legacy) !== null
   if (outcome?.state === 'bridged') lines.push(`home move: moved · data ${roots.data} · state ${roots.state}`)
-  if (outcome?.state === 'failed') lines.push(`home move: failed ${outcome.reason} · ${movedNow ? 'the next start finishes it' : `${OLD_HOME} is as it was`}`)
+  if (outcome?.state === 'failed') lines.push(`home move: failed ${outcome.reason} · ${afterFailure(movedNow, halfMoved)}`)
   say(lines, environment, deps)
+  if (halfMoved) return deps.exit(1)
   // Moved during this start, by it or by the start it waited for, or finished now: it runs from the old paths.
   if (movedNow && (!movedBefore || outcome?.state === 'bridged')) startAgain(roots, argv, env, deps)
+}
+
+function afterFailure(movedNow: boolean, halfMoved: boolean): string {
+  if (movedNow) return 'the next start finishes it'
+  return halfMoved ? `the next start puts ${OLD_HOME} back` : `${OLD_HOME} is as it was`
 }
 
 /** This process's Node and cli.js at their places after the move, with Node's options and the arguments; null when neither was in ~/.harness. */
@@ -103,7 +114,7 @@ async function moveOrHold(explicit: boolean, env: NodeJS.ProcessEnv, environment
   const wait = { committed: () => fs.existsSync(roots.data), long: () => say([UNDER_WAY], environment, deps) }
   const locked = await withMoveLock(roots.legacy, async () => {
     const recovered = await recoverMove(deps.home, environment, moveDeps)
-    if (recovered && recovered.state !== 'rolled-back') return recovered
+    if (recovered) return recovered
     // At once when a person typed harness start; else an hour after the last try.
     const record = readMoveRecord(deps.home, environment)
     if (!explicit && record?.state === 'failed' && deps.now() - (record.failedAt ?? record.at) < RETRY_MS) return null
@@ -233,6 +244,6 @@ function thisStart(): StartDeps {
     platform: process.platform, home: homedir(), io: fs, tmux: defaultTmux(), run: runCommand, now: Date.now, procNow,
     alive: processRuns, answers, ptyHostRuns,
     execve: (process as NodeJS.Process & { execve?: Execve }).execve?.bind(process), execPath: process.execPath, execArgv: process.execArgv,
-    print: process.stdout.isTTY ? (line) => console.log(line) : null,
+    print: process.stdout.isTTY ? (line) => console.log(line) : null, exit: (code) => process.exit(code),
   }
 }
