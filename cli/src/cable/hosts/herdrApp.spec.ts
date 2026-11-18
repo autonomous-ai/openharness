@@ -10,13 +10,16 @@ const FAKE_PATH_HERDR_APP = '/fake/bin/herdr-app'
 const APP_BINARY = '/Applications/Herdr.app/Contents/MacOS/Herdr'
 /** Addresses a hook or a forged hint could send that are no terminal of this machine's. */
 const FORGED = ['vps/t7', 'T7', 't', ' t7', 't7\n', '--help', 't7; rm -rf /', `t${'1'.repeat(17)}`]
+/** The tab of Herdr's window that holds each terminal, as its `herdr.tab` label in hc says (hcSource.ts tabOf). */
+const TABS = new Map([['t7', 'tbaaaa'], ['t8', 'tbbbbb']])
 
 interface Call { file: string; args: string[]; timeoutMs: number }
 
 /** A recording runner that runs nothing, so no spec opens Herdr or moves its window: each call answers the next of
  *  [codes], then exit 0, with [stdout] (what `herdr-app status` printed). Beside it a recording client that opens no
  *  socket (its `prompt` answers `sent` unless the test sets another answer), Herdr in front, every terminal shown and
- *  reporting an agent, and the default hc session followed unless the test says otherwise, and the log's lines kept. */
+ *  reporting an agent, t7 and t8 in the tabs of TABS, and the default hc session followed unless the test says
+ *  otherwise, and the log's lines kept. */
 function recorder(over: Partial<HerdrAppDeps> = {}, codes: Array<number | null> = [], stdout = '') {
   const calls: Call[] = []
   const log: string[] = []
@@ -32,6 +35,7 @@ function recorder(over: Partial<HerdrAppDeps> = {}, codes: Array<number | null> 
     client: { prompt },
     inFront: () => true,
     shows: () => true,
+    tabOf: (address) => TABS.get(address),
     reports: () => true,
     hookIds: true,
     log: (line) => log.push(line),
@@ -609,21 +613,33 @@ describe('the Herdr adapter', () => {
   })
 
   describe('onScreen', () => {
-    it('onScreen runs herdr-app status within 2 s, and is true when its agent is the pane\'s terminal', async () => {
-      const { calls, log, adapter } = recorder({}, [], herdrAppStatus('t7'))
+    it('onScreen runs herdr-app status within 2 s, and is true when its tab is the one that holds the pane\'s terminal', async () => {
+      const { calls, log, adapter } = recorder({}, [], herdrAppStatus('tbaaaa'))
       expect(await adapter.onScreen(pane('t7'))).toBe(true)
       expect(calls).toEqual([statusCall])
       expect(log).toEqual([])
     })
 
-    // A layout with no agent block has no agent; another address is another terminal on screen.
+    // Diego's first check (2026-11-18): with another tab shown, status's agent still named the agent of the tab before,
+    // and a stroke ran 175 scrolls on a terminal nobody saw.
+    it('a status whose agent is the pane\'s terminal but whose tab is another is false', async () => {
+      const { calls, log, adapter } = recorder({}, [], herdrAppStatus('tbbbbb', 't7'))
+      expect(await adapter.onScreen(pane('t7'))).toBe(false)
+      expect(calls).toEqual([statusCall])
+      expect(log).toEqual([])
+    })
+
+    // A layout with no tab block has no tab; a terminal hc labels with no tab is in none the window shows.
     it.each([
-      ['another terminal', herdrAppStatus('t8')],
-      ['a null agent', herdrAppStatus(null)],
-      ['no agent', herdrAppStatus()],
-      ['an agent that is no string', statusWith({ agent: 7 })],
-    ])('%s is false, with one run and no line', async (_, stdout) => {
-      const { calls, log, adapter } = recorder({}, [], stdout)
+      ['another tab', {}, herdrAppStatus('tbbbbb')],
+      ['a null tab', {}, herdrAppStatus(null)],
+      ['no tab', {}, herdrAppStatus()],
+      ['a tab that is no string', {}, statusWith({ tab: 7 })],
+      ['an empty tab, as the terminal\'s label', { tabOf: () => '' }, herdrAppStatus('')],
+      ['a terminal with no herdr.tab label', { tabOf: () => undefined }, herdrAppStatus('tbaaaa')],
+      ['a terminal with no herdr.tab label, and no tab', { tabOf: () => undefined }, herdrAppStatus()],
+    ] as Array<[string, Partial<HerdrAppDeps>, string]>)('%s is false, with one run and no line', async (_, over, stdout) => {
+      const { calls, log, adapter } = recorder(over, [], stdout)
       expect(await adapter.onScreen(pane('t7'))).toBe(false)
       expect(calls).toEqual([statusCall])
       expect(log).toEqual([])
@@ -634,10 +650,10 @@ describe('the Herdr adapter', () => {
       ['a stdout that is no JSON', {}, [], 'not json', 1],
       ['an array', {}, [], '[]', 1],
       ['null', {}, [], 'null', 1],
-      ['a string', {}, [], '"t7"', 1],
-      ['exit 1', {}, [1], herdrAppStatus('t7'), 1],
-      ['no exit code', {}, [null], herdrAppStatus('t7'), 1],
-      ['no binary', { onPath: () => null }, [], herdrAppStatus('t7'), 0],
+      ['a string', {}, [], '"tbaaaa"', 1],
+      ['exit 1', {}, [1], herdrAppStatus('tbaaaa'), 1],
+      ['no exit code', {}, [null], herdrAppStatus('tbaaaa'), 1],
+      ['no binary', { onPath: () => null }, [], herdrAppStatus('tbaaaa'), 0],
     ] as Array<[string, Partial<HerdrAppDeps>, Array<number | null>, string, number]>)('%s is false, with the failed line', async (_, over, codes, stdout, runs) => {
       const { calls, log, adapter } = recorder(over, codes, stdout)
       expect(await adapter.onScreen(pane('t7'))).toBe(false)
@@ -646,7 +662,7 @@ describe('the Herdr adapter', () => {
     })
 
     it('status · failed is said once until a read succeeds', async () => {
-      const { log, adapter } = recorder({}, [1, 1, 0, 1], herdrAppStatus('t7'))
+      const { log, adapter } = recorder({}, [1, 1, 0, 1], herdrAppStatus('tbaaaa'))
       expect(await adapter.onScreen(pane('t7'))).toBe(false)
       expect(await adapter.onScreen(pane('t7'))).toBe(false)
       expect(log).toEqual([STATUS_FAILED])
@@ -655,11 +671,11 @@ describe('the Herdr adapter', () => {
       expect(log).toEqual([STATUS_FAILED, STATUS_FAILED])
     })
 
-    // The rest names the person's spaces and layouts.
-    it('nothing but agent is read', async () => {
-      const others = { space: 7, layout: null, overlays: 'x' }
-      expect(await recorder({}, [], statusWith({ ...others, agent: 't7' })).adapter.onScreen(pane('t7'))).toBe(true)
-      const { log, adapter } = recorder({}, [], statusWith({ ...others, agent: 't8' }))
+    // The rest names the person's spaces and layouts, and its agent is not what is on screen.
+    it('nothing but tab is read', async () => {
+      const others = { space: 7, layout: null, overlays: 'x', agent: 't7' }
+      expect(await recorder({}, [], statusWith({ ...others, tab: 'tbaaaa' })).adapter.onScreen(pane('t7'))).toBe(true)
+      const { log, adapter } = recorder({}, [], statusWith({ ...others, tab: 'tbbbbb' }))
       expect(await adapter.onScreen(pane('t7'))).toBe(false)
       expect(log).toEqual([])
     })
@@ -671,13 +687,13 @@ describe('the Herdr adapter', () => {
       const eight = adapter.onScreen(pane('t8'))
       await turn()
       expect(calls).toEqual([statusCall])
-      await answer(0, herdrAppStatus('t7'))
+      await answer(0, herdrAppStatus('tbaaaa'))
       expect(await seven).toBe(true)
       expect(await eight).toBe(false)
       const again = adapter.onScreen(pane('t8'))
       await turn()
       expect(calls).toEqual([statusCall, statusCall])
-      await answer(0, herdrAppStatus('t8'))
+      await answer(0, herdrAppStatus('tbbbbb'))
       expect(await again).toBe(true)
     })
 
@@ -697,12 +713,12 @@ describe('the Herdr adapter', () => {
     })
 
     it('a bad id asks nothing; off macOS nothing is asked', async () => {
-      const { calls, log, adapter } = recorder({}, [], herdrAppStatus('t7'))
+      const { calls, log, adapter } = recorder({}, [], herdrAppStatus('tbaaaa'))
       for (const id of FORGED) expect(await adapter.onScreen(pane(id)), id).toBe(false)
       expect(calls).toEqual([])
       expect(log).toEqual([])
       for (const platform of ['linux', 'win32'] as const) {
-        const other = recorder({ platform }, [], herdrAppStatus('t7'))
+        const other = recorder({ platform }, [], herdrAppStatus('tbaaaa'))
         expect(await other.adapter.onScreen(pane('t7')), platform).toBe(false)
         expect(other.calls, platform).toEqual([])
         expect(other.log, platform).toEqual([])

@@ -743,6 +743,34 @@ describe.skipIf(process.platform === 'win32')('the hc source (docs/plans/2026-11
     expect(s.source.terminalOf(4242)).toBeUndefined()
   })
 
+  it('tabOf: the herdr.tab label of each terminal shows covers, listed or past the 64, as it changes; none for any other', async () => {
+    const tab = (id: string) => ({ labels: { 'herdr.space': 'sp0123', 'herdr.tab': id } })
+    server.terminals = [
+      agent('t7', tab('tbaaaa')),
+      agent('t8', { ...tab('tbbbbb'), status: null }),
+      // A hidden worker: the window does not show it.
+      agent('t9', { labels: { 'herdr.tab': 'tbcccc' } }),
+      // Shown, with no tab of its own.
+      agent('t10'),
+      agent('t11', { ...tab('tbdddd'), state: 'finished' }),
+      // With t7 and t10, 66 listable: t76 is past the 64.
+      ...Array.from({ length: 64 }, (_, at) => agent(`t${at + 13}`, tab('tbeeee'))),
+    ]
+    const s = setup()
+    await live(s)
+    const addresses = ['t7', 't8', 't9', 't10', 't11', 't76', 't99']
+    const tabs = () => addresses.map((address) => s.source.tabOf(address))
+    expect(tabs()).toEqual(['tbaaaa', 'tbbbbb', undefined, undefined, undefined, 'tbeeee', undefined])
+
+    // A terminal moved to another tab is matched there; one the window no longer shows has none.
+    server.change('t7', tab('tbffff'))
+    server.change('t8', { labels: { 'herdr.tab': 'tbbbbb' } })
+    await vi.waitFor(() => expect(tabs()).toEqual(['tbffff', undefined, undefined, undefined, undefined, 'tbeeee', undefined]))
+
+    s.source.stop()
+    expect(tabs()).toEqual(addresses.map(() => undefined))
+  })
+
   it('paneOf answers a listed agent\'s terminal, and none for another id or one that left', async () => {
     server.terminals = [agent('t7'), agent('t8')]
     const s = setup()

@@ -174,6 +174,15 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
     expect(hcTerminal({ address: 't7', state: 'live', ...fields })).not.toHaveProperty('foregroundPid')
   })
 
+  // Herdr's window labels each terminal it holds with its tab, the id `herdr-app status` names for the tab on screen.
+  it('hcTerminal reads the herdr.tab label as its tab; a missing, empty or other label is none', () => {
+    const labeled = (labels: unknown) => hcTerminal({ address: 't7', state: 'live', labels })
+    expect(labeled({ 'herdr.space': 'sp0123', 'herdr.tab': 'tbaaaa' })).toEqual({ address: 't7', live: true, space: true, tab: 'tbaaaa' })
+    for (const labels of [{ 'herdr.space': 'sp0123' }, { 'herdr.tab': '' }, { 'herdr.tab': 7 }, { 'herdr.tab': null }, 'tbaaaa', null]) {
+      expect(labeled(labels), JSON.stringify(labels)).not.toHaveProperty('tab')
+    }
+  })
+
   it('request writes one JSON-RPC line and answers the result under its own id', async () => {
     server.terminals = [{ address: 't7', cwd: '/work/api' }]
     expect(await client().request('terminal.get', { terminal: 't7' }))
@@ -409,6 +418,28 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
     expect(calls.slice(1)).toEqual([
       ['changed', { address: 't7', live: true, space: true, status: 'working', kind: 'claude', cwd: '/work/api', turn: 0, foregroundPid: 4242 }],
       ['changed', { address: 't7', live: true, space: false, status: 'working', kind: 'claude', cwd: '/work/api', turn: 0, foregroundPid: 4242 }],
+    ])
+  })
+
+  // A terminal moved to another tab is matched there (dial-herdr-scroll-design.md §3).
+  it('the herdr.tab label is kept, and a labels event that changes it alone tells the terminal', async () => {
+    const labels = (tab?: string) => ({ 'herdr.space': 'sp0123', ...(tab ? { 'herdr.tab': tab } : {}) })
+    server.terminals = [{ address: 't7', cwd: '/work/api', labels: labels('tbaaaa') }]
+    const { calls, to, told } = subscriber()
+    const subscription = client().subscribe(to)
+    await told(1)
+    server.change('t7', { labels: labels('tbbbbb') })
+    server.change('t7', { labels: labels() })
+    // A change every build tells, so the test ends on what was told of those before it.
+    server.change('t7', { status: { state: 'working', app: 'claude-code' } })
+    await vi.waitFor(() => expect(calls.at(-1)).toEqual(['changed', expect.objectContaining({ status: 'working' })]))
+    subscription.close()
+    const t7 = { address: 't7', live: true, space: true, status: 'idle', kind: 'claude', cwd: '/work/api', turn: 0, foregroundPid: 4242 }
+    expect(calls).toEqual([
+      ['snapshot', [{ ...t7, tab: 'tbaaaa' }]],
+      ['changed', { ...t7, tab: 'tbbbbb' }],
+      ['changed', t7],
+      ['changed', { ...t7, status: 'working' }],
     ])
   })
 

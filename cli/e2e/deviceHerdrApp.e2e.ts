@@ -4,11 +4,12 @@
  * Claude Code, and a fake dial on the desk lists it with no hook, follows its state, speaks to it, and switches Herdr's
  * window to it with a swipe and a tap. A core started after the dial comes with no daemon restart, and goes when it stops.
  * A Claude Code session the scan finds in a Herdr terminal is paired with it, and listed once there, with its last answer.
- * With Herdr in front, a stroke scrolls Herdr's view of the shown agent's terminal while Herdr shows it on screen
+ * With Herdr in front, a stroke scrolls Herdr's view of the shown agent's terminal while Herdr shows its tab on screen
  * (docs/plans/2026-11-17-dial-herdr-scroll-design.md), and goes to Harness's windows otherwise.
  *
  * Herdr's real window is never driven. The daemon's `herdr-app` is a fake first on its PATH that records its arguments
- * and answers `status` with the terminal the test put on its screen (`herdr-app.screen`), or none; its `open` is the
+ * and answers `status` with the tab the test put on its screen and the terminal it names as its agent
+ * (`herdr-app.screen`), or none; its `open` is the
  * harness's fake (HARNESS_OPEN_BIN, harness/daemon.ts): each is checked to be the one the daemon finds before anything
  * runs, since with no `herdr-app` on PATH it would run Herdr.app's own binary. The daemon finds the private core's socket
  * as hcClient.ts does, from the HC_SOCKET and XDG_RUNTIME_DIR it is given, both in the core's root: it inherits no HC_*
@@ -106,17 +107,19 @@ describe.skipIf(!hcBinary)("Herdr's agents on the dial, from a private Herdr Cor
     daemon = d
     // Before anything runs: with no herdr-app on its PATH the daemon runs Herdr.app's own, which drives the real window.
     const fake = join(dirname(d.env.CLAUDE_PATH!), 'herdr-app')
-    // `status` prints what Herdr 0.1.16 prints, its `agent` the screen file's address. Shell built-ins alone, so the
-    // daemon's PATH is not relied on; `read` answers false for a line with no newline.
-    const [head, tail] = herdrAppStatus('@').split('"@"')
+    // `status` prints what Herdr 0.1.16 prints, its `tab` and its `agent` the screen file's two words: the tab on screen,
+    // and the terminal it names, which is not what is on screen (Diego's first check, 2026-11-18). Shell built-ins
+    // alone, so the daemon's PATH is not relied on; `read` answers false for a line with no newline.
+    const [head, rest] = herdrAppStatus('@tab', '@agent').split('"@tab"')
+    const [between, tail] = rest.split('"@agent"')
     const screen = join(d.root, 'herdr-app.screen')
     writeFileSync(fake, [
       '#!/bin/sh',
       `printf '%s\\n' "$*" >> '${join(d.root, 'herdr-app.log')}'`,
       '[ "$1" = status ] || exit 0',
-      'agent=null',
-      `[ -s '${screen}' ] && IFS= read -r address < '${screen}' && agent="\\"$address\\""`,
-      `printf '%s%s%s\\n' '${head}' "$agent" '${tail}'`,
+      'tab=null agent=null',
+      `[ -s '${screen}' ] && read -r shown address < '${screen}' && tab="\\"$shown\\"" agent="\\"$address\\""`,
+      `printf '%s%s%s%s%s\\n' '${head}' "$tab" '${between}' "$agent" '${tail}'`,
     ].join('\n') + '\n', { mode: 0o755 })
     expect(resolveBinaryOnPath('herdr-app', d.env)).toBe(fake)
     const file = join(d.root, 'dials.json')
@@ -334,7 +337,6 @@ describe.skipIf(!hcBinary)("Herdr's agents on the dial, from a private Herdr Cor
     const { d, desk } = await fresh(planned)
     const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a', FILTER)
     await dial.next((m) => m.t === 'agents.end', 45_000, 'the first list')
-    const onScreen = (address: string) => writeFileSync(join(d.root, 'herdr-app.screen'), `${address}\n`)
 
     // 1. As the swipe's case: Orca holds more agents than Herdr, so each change of the app in front is seen as a ring.
     for (const folder of ['a', 'b']) {
@@ -346,11 +348,17 @@ describe.skipIf(!hcBinary)("Herdr's agents on the dial, from a private Herdr Cor
     let since = dial.messages.length
     const hc = await coreFor(planned)
     const t = await hc.agent('api')
+    // Herdr's window labels each terminal it holds with its tab, the id its `status` names for the tab on screen. hc tells
+    // a change within a few milliseconds (F5), long before the first stroke, which waits on Herdr's ring and a swipe.
+    const TAB = 'tbaaaa'
+    await hc.rpc('terminal.label', { terminal: t, labels: { 'herdr.tab': TAB } })
+    /** Herdr shows that tab, and its `status` names t as its agent whatever the tab. */
+    const shown = (tab: string) => writeFileSync(join(d.root, 'herdr-app.screen'), `${tab} ${t}\n`)
     await dial.next((m) => m.t === 'apps' && m.shown === 'orca'
       && (m.apps as Array<{ id: string; count: number }>).some((app) => app.id === 'herdr' && app.count === 1), 45_000, 'Herdr counted', since)
     const window = await LocalClient.connect(d, { machineId: ME.machineId })
     clients.push(window)
-    onScreen(t)
+    shown(TAB)
 
     // 2. Herdr in front, and the dial on its agent.
     const watch = spawn(process.execPath, [...CLI_ENTRY, 'hardware', 'watch', '--json'], {
@@ -394,14 +402,15 @@ describe.skipIf(!hcBinary)("Herdr's agents on the dial, from a private Herdr Cor
     await until('the queue drained', () => sum(drained().map((tally) => tally.lines)) === 3, 30_000, 50)
     const firstRuns = scrolls()
 
-    // 4. Herdr shows another terminal: the whole stroke goes to the windows, and herdr-app scrolls nothing.
-    onScreen('t9999')
+    // 4. Herdr shows another tab, its status still naming t as its agent: the whole stroke goes to the windows, and
+    // herdr-app scrolls nothing.
+    shown('tbzzzz')
     await stroke()
     await said(d, '[device] scroll · herdr-app · not on screen')
     await window.waitFor((f) => f.type === 'dial_scroll' && f.payload?.phase === 'up', 30_000, "stroke 2's up in Harness's window")
 
     // 5. Orca in front: the stroke goes to the windows as it came, and herdr-app is not asked.
-    onScreen(t)
+    shown(TAB)
     since = dial.messages.length
     watch.stdin!.write(`${JSON.stringify({ front: ORCA })}\n`)
     await dial.next((m) => m.t === 'apps' && m.shown === 'orca', 45_000, "Orca's ring", since)
