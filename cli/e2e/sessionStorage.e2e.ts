@@ -219,7 +219,9 @@ describe('packaged required session storage', () => {
     await daemon.start()
     client = await LocalClient.connect(daemon); clients.push(client)
     const restored = await until('offline imported Grid restored', async () => {
-      const value = await row(); return value?.status === 'active' && value.sessionId === first.sessionId ? value : null
+      // Restore publishes the saved conversation before its replacement process can accept input.
+      const value = await row(); return value?.status === 'active' && value.sessionId === first.sessionId
+        && value.launch?.state === 'ready' ? value : null
     }, 90_000, 250)
     await turn('offline imported fixture', restored.launch?.state)
     const active = await row()
@@ -229,7 +231,8 @@ describe('packaged required session storage', () => {
     expect(readFileSync(join(daemon.dataDir, 'stopped-agents', `${id}.json`), 'utf8').includes(key)).toBe(true)
     expect((await client.request('agent_resume', { agentId: id }, 90_000)).error).toBeUndefined()
     const resumed = await until('offline archived Grid resumed', async () => {
-      const value = await row(); return value?.status === 'active' && value.sessionId === first.sessionId ? value : null
+      const value = await row(); return value?.status === 'active' && value.sessionId === first.sessionId
+        && value.launch?.state === 'ready' ? value : null
     }, 60_000, 250)
     await turn('offline resumed fixture', resumed.launch?.state)
     expect(daemon.log().includes(key)).toBe(false)
