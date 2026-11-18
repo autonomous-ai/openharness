@@ -60,7 +60,9 @@ the path by name after the check.
 1. Expand `~`. A share path (`unc` on that path, or on its `resolve()` against the working folder) is refused here,
    before anything is opened. `resolve()` serves this check only, and only Windows has shares: every later step uses
    the path as given after `~` expansion, so a `..` after a link goes where the kernel takes it.
-2. Suffix check on that path (string only), so nothing that is not a media file or document is opened.
+2. Suffix check on that path (string only), so nothing that is not a media file or document is opened. On Windows a
+   reserved device name (`CON`, `NUL`, `COM1`… with any extension) is refused too: before Windows 11 `COM1.txt` is the
+   serial port, and a `stat` opens it. The same checks run again on `realpath`'s answer (step 4).
 3. `stat` the path, following links. Not a regular file: refused before it is opened, as opening a device acts on it
    (a serial port's DTR line toggles and resets the board behind it). Open it read-only (`O_NONBLOCK` on posix, so a
    FIFO put there since the `stat` never blocks the open); `fstat` the descriptor (bigint). Not a regular file:

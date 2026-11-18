@@ -144,6 +144,9 @@ export function uploadFile(raw: string, env: NodeJS.ProcessEnv = process.env, wa
   const refused = (): CallFailure => new CallFailure(2, `refusing to upload ${raw}: not a media file the helper may send`)
   const media = (path: string): void => {
     if (!UPLOAD_SUFFIXES.includes(platformPath.extname(path).toLowerCase())) throw new CallFailure(2, `refusing to upload ${raw}: only ${UPLOAD_SUFFIXES.join(', ')} files`)
+    // Before Windows 11 a reserved name is the device whatever its extension or folder (COM1.txt is the serial port), and
+    // a stat opens it as an open does.
+    if (platformPath.sep === '\\' && /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³]|conin\$|conout\$) *(\.|:|$)/i.test(platformPath.basename(path))) throw refused()
   }
   const read = <T>(step: () => T): T => { try { return step() } catch { throw new CallFailure(2, `cannot read upload ${raw}`) } }
   const given = expandHome(raw, env.HOME || homedir())
