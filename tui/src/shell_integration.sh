@@ -5,7 +5,8 @@
 # not; elsewhere ~/.harness. An unset, empty or relative XDG variable is ignored.
 _hn_state_root() (
     _hn_legacy="$HOME/.harness"
-    if [ "$(uname -s)" != Linux ]; then
+    # `command`: a shell function or alias named uname never decides the folder.
+    if [ "$(command uname -s)" != Linux ]; then
         printf '%s\n' "$_hn_legacy"
         exit
     fi

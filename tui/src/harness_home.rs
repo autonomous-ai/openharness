@@ -191,10 +191,16 @@ mod tests {
         let script = include_str!("shell_integration.sh");
         let start = script.find("# >>> harness state root\n").expect("the start marker");
         let end = script.find("# <<< harness state root\n").expect("the end marker");
-        // A function named uname stands in for the command, so both branches run on any computer.
-        let text = format!("uname() {{ printf '%s\\n' {uname}; }}\n{}_hn_state_root", &script[start..end]);
+        // A `uname` first on PATH stands in for the command, so both branches run on any computer.
+        let bin = home.join(format!("bin-{uname}"));
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("uname"), format!("#!/bin/sh\necho {uname}\n")).unwrap();
+        let executable = <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755);
+        std::fs::set_permissions(bin.join("uname"), executable).unwrap();
+        let text = format!("{}_hn_state_root", &script[start..end]);
+        let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default());
         let mut sh = std::process::Command::new("sh");
-        sh.arg("-c").arg(text).env("HOME", home).env_remove("XDG_DATA_HOME").env_remove("XDG_STATE_HOME");
+        sh.arg("-c").arg(text).env("HOME", home).env("PATH", path).env_remove("XDG_DATA_HOME").env_remove("XDG_STATE_HOME");
         let out = sh.envs(env.iter().copied()).output().unwrap();
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
         String::from_utf8(out.stdout).unwrap().trim_end_matches('\n').to_string()
