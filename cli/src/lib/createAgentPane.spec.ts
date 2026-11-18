@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'fs'
+import { existsSync, mkdtempSync, rmSync } from 'fs'
 import { homedir, tmpdir } from 'os'
 import { join } from 'path'
-import type { TerminalActionResult, TerminalCreateResult, TmuxRuntimeRef } from './terminalTypes.js'
+import type { TerminalActionResult, TerminalCreateRequest, TerminalCreateResult, TmuxRuntimeRef } from './terminalTypes.js'
 import { createAndRegisterPane } from './createAgentPane.js'
 
 // A full disk, for the registry's own files only: the save's temporary file cannot be created.
@@ -116,6 +116,32 @@ describe('createAndRegisterPane', () => {
     expect(tmuxBackend.create).toHaveBeenNthCalledWith(2, expect.objectContaining({ label: 'harness-claude-1-r2' }))
     expect(tmuxBackend.kill).toHaveBeenCalledTimes(1)
     expect(tmuxBackend.kill).toHaveBeenCalledWith({ backend: 'tmux', paneId: '%1' })
+  })
+
+  it('gives the retry pane a launch file of its own, as the first pane\'s shell removed its file on reading it', async () => {
+    const { registry } = await loadRegistryModule()
+    // Loaded after the reset, so its one-time launch files land in this test's data folder.
+    const { buildEngineLaunchArgv } = await import('./engineLaunch.js')
+    registry.load()
+    ;(await registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%1' }], cwd: '/tmp/other' }))
+    const panes = fakeTmux([succeeded('%1'), succeeded('%2')])
+    // Each pane's POSIX shell sources its launch file, whose first line removes it (engineLaunch.ts `sourcedOnce`). The
+    // retry once got the same file and its shell said "no such file or directory" (CI, cli/e2e/scale.e2e.ts, 2026-11-19).
+    const sourced: boolean[] = []
+    const tmuxBackend = { ...panes, create: async (request: TerminalCreateRequest) => {
+      const file = request.command?.map(arg => /^\. '(.+)'$/s.exec(arg)?.[1]).find(Boolean)
+      sourced.push(!!file && existsSync(file))
+      if (file) rmSync(file, { force: true })
+      return panes.create()
+    } }
+
+    const result = await createAndRegisterPane({
+      tmuxBackend, registry, engine: 'codex', cwd: '/tmp/demo', sessionLabel: 'harness-codex-1',
+      argv: () => buildEngineLaunchArgv('codex', { cwd: '/tmp/demo' }, '/bin/sh', undefined, 'grid', null),
+    })
+
+    expect(result.ok && result.spawned.runtime.paneId).toBe('%2')
+    expect(sourced).toEqual([true, true])
   })
 
   it('gives up with REGISTRATION_FAILED after 3 attempts when every pane collides', async () => {
