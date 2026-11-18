@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync, openSync, readSync, closeSync } from 'node:fs'
+import { readdirSync, readFileSync, lstatSync, statSync, openSync, readSync, closeSync, type Stats } from 'node:fs'
 import { basename, join } from 'node:path'
 import { REMOVALS_FILE } from './signOut.js'
 import { writeZip, type ZipEntry } from './zipWriter.js'
@@ -94,12 +94,19 @@ export function bundleFileName(now: Date): string {
   return `harness-logs-${ymd(now)}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}.zip`
 }
 
+/** A file's own stats, or a throw for anything else: a link could point at any file of the person's. */
+function regularFile(path: string): Stats {
+  const stats = lstatSync(path)
+  if (!stats.isFile()) throw new Error(`${path} is not a regular file`)
+  return stats
+}
+
 /**
  * At most the last `bytes` of a file, in whole lines: the line the cut lands in is dropped, since a token or the home
  * cut short is no longer what the blanking knows it by.
  */
 function readTail(path: string, bytes: number): Buffer {
-  const size = statSync(path).size
+  const size = regularFile(path).size
   // From one byte before the cut, so a line that starts at the cut is kept.
   const from = Math.max(0, size - bytes - 1)
   const fd = openSync(path, 'r')
@@ -129,13 +136,20 @@ export function buildLogBundle(opts: LogBundleOptions): { zip: Buffer; included:
     included.push('status.txt')
   }
 
+  // Only files and device folders, never a link: it could point at any file of the person's.
   let names: string[] = []
-  try { names = readdirSync(opts.logsDir).sort() } catch { /* no logs directory yet */ }
+  try {
+    names = readdirSync(opts.logsDir, { withFileTypes: true })
+      .filter((f) => f.isFile() || (f.isDirectory() && DEVICE_DIR.test(f.name))).map((f) => f.name).sort()
+  } catch { /* no logs directory yet */ }
   // Each device's dial logs are in a folder of their own, `usb-<serial>/` (cableFleet.ts). Reading only the top
   // level left a user's Harness Pro console out of the bundle sent about it stuck silent (20-26 Oct).
   names = names.flatMap((name) => {
     if (!DEVICE_DIR.test(name)) return [name]
-    try { return readdirSync(join(opts.logsDir, name)).sort().filter((f) => f.startsWith('dial-')).map((f) => `${name}/${f}`) } catch { return [] }
+    try {
+      return readdirSync(join(opts.logsDir, name), { withFileTypes: true })
+        .filter((f) => f.isFile() && f.name.startsWith('dial-')).map((f) => `${name}/${f.name}`).sort()
+    } catch { return [] }
   })
   // A device's day may be 20 MB (dialLog.ts) and a desk may hold several, so their logs share one cap. Every device keeps
   // its newest day, as its tail when that does not fit: counting whole files once left out every device's logs when one
@@ -201,7 +215,8 @@ export function buildLogBundle(opts: LogBundleOptions): { zip: Buffer; included:
   // Kept apart because harness.log's trim can take its line (anh Dee's Mac, 2026-11-12): small and whole.
   const removals = join(opts.dataDir, REMOVALS_FILE)
   try {
-    entries.push({ name: REMOVALS_FILE, data: Buffer.from(blank(readFileSync(removals, 'utf8'))), mtime: statSync(removals).mtime })
+    const { mtime } = regularFile(removals)
+    entries.push({ name: REMOVALS_FILE, data: Buffer.from(blank(readFileSync(removals, 'utf8'))), mtime })
     included.push(REMOVALS_FILE)
   } catch { /* no removal yet */ }
 
