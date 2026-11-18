@@ -316,13 +316,13 @@ describe('Notices after a restart', () => {
     expect(notices.from('w1')).toEqual(WHO)
   })
 
-  // The attach's greeting draws the row, but ahead of a close still queued in its agent's order, which drops it: a
-  // drawer replace behind that order puts it back.
+  // No redraw: the attach's greeting replaces the drawer after its carousel push, and a close still queued in the
+  // agent's order came with its own reask, whose redraw waits behind it.
   it('a restored row\'s question is held as a dial attaches, never asked, so opening the row reads its line', () => {
     const { notices, state, calls } = back([kept(), asWho])
     notices.attached()
     expect(calls).toEqual([['hold', 'w1', 'shown:k2', asked('Terminal')]])
-    expect(state.redraws).toEqual([['w1']])
+    expect(state.redraws).toEqual([])
   })
 
   it('a card older than 24 hours is dropped, one of exactly 24 hours is kept, and one ahead of the clock too', () => {

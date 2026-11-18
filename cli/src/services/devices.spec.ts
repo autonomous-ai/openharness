@@ -6156,6 +6156,8 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     it('a restart puts the row of a caller no list holds back in the drawer, with no question and no alert, and holds the question its row opens to', async () => {
       const { port, restored } = await restartWithCaller()
       seen.host.watching!(true)
+      // The greeting draws it, after the carousel push its rows name: no drawer of the attach's own goes ahead of that.
+      expect(calls('replaceNotifications')).toEqual([])
       port.unread([])
       expect(calls('replaceNotifications').at(-1)).toEqual([[{ agentId: CALLER, machineId: 'machine-1', question: true, text: LINE }]])
       expect(ringing()).toEqual([])
