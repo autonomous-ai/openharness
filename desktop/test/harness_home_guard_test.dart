@@ -26,8 +26,8 @@ final _lineComment = RegExp(r'(?:^|\s)//');
 
 /// Setup copy a person reads names the folder as they would type it.
 const _copy = {
-  'bootstrap/environment_provisioner.dart',
-  'widgets/environment_setup_screen.dart',
+  'lib/bootstrap/environment_provisioner.dart',
+  'lib/widgets/environment_setup_screen.dart',
 };
 
 typedef _Hit = ({String file, int line, String text});
@@ -70,23 +70,21 @@ List<_Hit> _scan(String file, String source) {
   ];
 }
 
-/// Every Dart source under lib/ but the module, as (path relative to lib/ with forward slashes, text).
-List<(String, String)> _libSources() => [
-  for (final file
-      in Directory('lib')
-          .listSync(recursive: true)
-          .whereType<File>()
-          .where((f) => f.path.endsWith('.dart')))
-    (
-      p.split(p.relative(file.path, from: 'lib')).join('/'),
-      file.readAsStringSync(),
-    ),
-].where((source) => source.$1 != 'core/harness_home.dart').toList();
+/// Every Dart source under lib/ and tool/ but the module, as (path with forward slashes, text).
+List<(String, String)> _sources() => [
+  for (final folder in ['lib', 'tool'])
+    for (final file
+        in Directory(folder)
+            .listSync(recursive: true)
+            .whereType<File>()
+            .where((f) => f.path.endsWith('.dart')))
+      (p.split(file.path).join('/'), file.readAsStringSync()),
+].where((source) => source.$1 != 'lib/core/harness_home.dart').toList();
 
 void main() {
   group('no hand-built home .harness path outside core/harness_home.dart', () {
     late final List<_Hit> hits = [
-      for (final (file, source) in _libSources()) ..._scan(file, source),
+      for (final (file, source) in _sources()) ..._scan(file, source),
     ];
 
     test('finds each shape in a planted line', () {
@@ -125,9 +123,9 @@ void main() {
       }
     });
 
-    test('lib/ holds none but the allowlisted copy', () {
+    test('lib/ and tool/ hold none but the allowlisted copy', () {
       expect(
-        _libSources().length,
+        _sources().length,
         greaterThan(500),
         reason: 'the scan found almost nothing; run it from desktop/',
       );
