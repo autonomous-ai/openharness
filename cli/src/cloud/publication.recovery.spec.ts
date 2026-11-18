@@ -7,10 +7,11 @@ import { createCloudAgents } from '../core/agents/cloud.js'
 import type { CloudCore } from '../core/api.js'
 import type { CloudAdapter } from './types.js'
 
-const diskFault = vi.hoisted(() => ({ pending: false, hits: 0 }))
+const diskFault = vi.hoisted(() => ({ pending: false, hits: 0, writes: 0 }))
 vi.mock('node:fs', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs')>()
   return { ...actual, writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+    if (String(args[0]).endsWith('.tmp')) diskFault.writes++
     if (diskFault.pending && String(args[0]).endsWith('.tmp') && typeof args[1] === 'string') {
       const saved = JSON.parse(args[1])
       if (saved.publication?.pending?.owners.some((owner: { busy: boolean }) => !owner.busy)) {
@@ -26,12 +27,13 @@ function fixture() {
   const dataDir = mkdtempSync(join(tmpdir(), 'cloud-publication-'))
   const clients = { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }
   const freshCore = () => createCloudAgents({ port: () => null, clients, openQuestions: new Map(), log: () => {} })
-  let core = freshCore(), disconnected = false, lostAck = false
+  let core = freshCore(), disconnected = false, lostAck = false, publicationCalls = 0
   let poll: (() => void) | undefined
   const rejected = () => { const result = Promise.reject(new Error('fixture disconnect')); void result.catch(() => {}); return result }
   const doors: CloudCore = {
     checkpoint: () => disconnected ? rejected() : core.doors.checkpoint(),
     publish: (rows, cards) => {
+      publicationCalls++
       if (disconnected) return rejected()
       const result = core.doors.publish(rows, cards)
       return lostAck ? rejected() : result
@@ -52,7 +54,7 @@ function fixture() {
   let service = makeService()
   const completions = () => clients.sendCommander.mock.calls.map(([frame]) => frame)
     .filter(frame => frame.type === 'commander_event' && frame.payload.notification?.kind === 'done')
-  return { dataDir, clients, completions, adapter, get core() { return core }, get service() { return service },
+  return { dataDir, clients, completions, adapter, publicationCalls: () => publicationCalls, poll: () => poll!(), get core() { return core }, get service() { return service },
     async create() {
       service.republish()
       expect((await service.port.create({ engine: 'devin-cloud', prompt: 'fixture' })).ok).toBe(true)
@@ -65,7 +67,7 @@ function fixture() {
     },
     disconnect() { disconnected = true },
     dropAck() { lostAck = true },
-    reconnect() { disconnected = lostAck = false; service.republish() },
+    reconnect() { disconnected = lostAck = false; return service.republish() },
     restartComponent() { service.stop(); service = makeService() },
     restartDaemon() { service.stop(); core = freshCore(); service = makeService() },
     replaceCoreImage() { const saved = JSON.parse(readFileSync(join(dataDir, 'cloud/harnesses.json'), 'utf8')); core.doors.publish([{ ...saved.harnesses[0].harness, agentId: 'cloud_other' }]) },
@@ -190,4 +192,71 @@ it('recovers a saved provider completion after its pending-intent write fails be
     await vi.waitFor(() => expect(f.core.frames()[0]?.cloud.state).toBe('idle'))
     expect(f.completions()).toHaveLength(1)
   } finally { diskFault.pending = false; f.close() }
+})
+
+
+it.each(['accepted', 'pending'] as const)('skips redundant writes/publications after an intact %s match, including another restart', async match => {
+  const f = fixture()
+  try {
+    const id = await f.create(), file = join(f.dataDir, 'cloud/harnesses.json')
+    if (match === 'accepted') await f.service.port.rename(id, f.core.frames()[0].name)
+    const saved = JSON.parse(readFileSync(file, 'utf8'))
+    expect(saved.publication[match].fingerprint).toBe(await f.core.doors.checkpoint())
+    if (match === 'accepted') expect(saved.publication.pending).toBeNull()
+    else expect(saved.publication.accepted.fingerprint).not.toBe(saved.publication.pending.fingerprint)
+    const before = { writes: diskFault.writes, publications: f.publicationCalls(), bytes: readFileSync(file, 'utf8') }
+    for (let restart = 0; restart < 2; restart++) {
+      f.restartComponent(); await f.reconnect()
+      expect(f.publicationCalls()).toBe(before.publications)
+      expect(diskFault.writes).toBe(before.writes)
+      expect(readFileSync(file, 'utf8')).toBe(before.bytes)
+    }
+    await f.complete()
+    await vi.waitFor(() => expect(f.completions()).toHaveLength(1))
+    expect(f.completions()[0].agentId).toBe(id)
+  } finally { f.close() }
+})
+
+it('replays the current question without republishing its already-proven owner image', async () => {
+  const f = fixture()
+  try {
+    await f.create()
+    f.adapter.poll.mockResolvedValueOnce({ state: 'needs_input', messages: [{ id: 'question', text: 'Which branch?', at: 'x' }],
+      question: { text: 'Which branch?', choices: ['main', 'dev'] } } as never)
+    f.poll()
+    await vi.waitFor(() => expect(f.core.frames()[0]?.cloud.state).toBe('needs_input'))
+    const question = f.clients.sendLocal.mock.calls.at(-1)![0]
+    expect(question.type).toBe('commander_question')
+    const before = { writes: diskFault.writes, publications: f.publicationCalls(), questions: f.clients.sendLocal.mock.calls.length }
+    f.disconnect(); f.service.disconnected(); await f.reconnect()
+    await vi.waitFor(() => expect(f.clients.sendLocal.mock.calls.length).toBe(before.questions + 1))
+    expect(f.clients.sendLocal).toHaveBeenLastCalledWith(question)
+    expect(f.publicationCalls()).toBe(before.publications)
+    expect(diskFault.writes).toBe(before.writes)
+  } finally { f.close() }
+})
+
+it('reconstructs a question only on the next provider look after a component restart', async () => {
+  const f = fixture()
+  try {
+    const update = { state: 'needs_input', messages: [{ id: 'question', text: 'Which branch?', at: 'x' }],
+      question: { text: 'Which branch?', choices: ['main', 'dev'] } }
+    await f.create(); f.adapter.poll.mockResolvedValueOnce(update as never); f.poll()
+    await vi.waitFor(() => expect(f.core.frames()[0]?.cloud.state).toBe('needs_input'))
+    const first = f.clients.sendLocal.mock.calls.at(-1)![0]
+    expect(first.type).toBe('commander_question')
+    const before = { writes: diskFault.writes, publications: f.publicationCalls(), questions: f.clients.sendLocal.mock.calls.length }
+    f.restartComponent(); await f.reconnect()
+    expect(f.clients.sendLocal.mock.calls).toHaveLength(before.questions)
+    expect(f.publicationCalls()).toBe(before.publications)
+    expect(diskFault.writes).toBe(before.writes)
+    f.adapter.poll.mockResolvedValueOnce(update as never); f.poll()
+    await vi.waitFor(() => expect(f.clients.sendLocal.mock.calls.length).toBe(before.questions + 2))
+    const next = f.clients.sendLocal.mock.calls.at(-1)![0]
+    expect(next).toMatchObject({ type: 'commander_question', agentId: first.agentId,
+      payload: { questions: first.payload.questions, notification: { kind: 'needsYou', id: next.payload.requestId } } })
+    expect(next.payload.requestId).not.toBe(first.payload.requestId)
+    expect(f.clients.sendLocal.mock.calls.at(-2)![0]).toMatchObject({ type: 'commander_question_close', payload: { requestId: first.payload.requestId } })
+    expect(f.completions()).toEqual([])
+  } finally { f.close() }
 })

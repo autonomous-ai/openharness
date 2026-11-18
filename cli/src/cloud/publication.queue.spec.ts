@@ -1,7 +1,9 @@
+import { createHash } from 'node:crypto'
 import { expect, it, vi } from 'vitest'
 import type { CloudCore } from '../core/api.js'
 import { createCloudAgents } from '../core/agents/cloud.js'
 import { cloudHarnessIn, type CloudHarness } from '../lib/cloudAgents.js'
+import { prepareCloudCards } from './cards.js'
 import { CLOUD_OUTPUT_BYTES, createCloudPublication, type CloudJournal } from './publication.js'
 
 const row = (id = 'cloud_a', over: Partial<CloudHarness> = {}): CloudHarness => ({ agentId: id, agent: 'fo', name: id,
@@ -22,8 +24,9 @@ function setup() {
   let publication = make()
   return { core, doors, events, log, get publication() { return publication }, get saved() { return saved },
     rows(rows: CloudHarness[]) { snapshot = rows; publication.publish(rows) },
+    snapshot(rows: CloudHarness[]) { snapshot = rows },
     async connect() { await publication.connect(); await vi.waitFor(() => expect(publication.state().pending).toBeNull()) },
-    restart() { publication.stop(); publication = make() },
+    restart(legacy = saved) { publication.stop(); saved = legacy; publication = make() },
     close() { publication.stop() },
   }
 }
@@ -51,20 +54,29 @@ it('holds every healthy-link transition and question behind an unknown acknowled
   } finally { f.close() }
 })
 
-it('proves same-image recovery has identical transition state, then preserves a later rename', async () => {
+it('recovers a legacy same-image accepted/pending journal, then preserves add, rename and deletion', async () => {
   const f = setup()
   try {
     await f.connect(); f.rows([row()]); await vi.waitFor(() => expect(f.publication.state().pending).toBeNull())
     f.rows([done()]); await vi.waitFor(() => expect(f.publication.state().pending).toBeNull())
+    const accepted = f.publication.state().accepted
+    const replay = prepareCloudCards([cloudHarnessIn(done())!], accepted)
+    // Older components wrote this intent on every physical reconnect, including unchanged images.
+    // Real card preparation proves either match has the same transition history in this ambiguous case.
+    expect(replay.next).toEqual(accepted)
+    expect(replay.cards).toEqual([])
+    const body = { version: 1 as const, accepted, pending: replay.next }
+    const legacy = { ...body, checksum: createHash('sha256').update(JSON.stringify(body)).digest('hex') }
     f.events.length = 0
-    const send = f.doors.publish
-    f.doors.publish = (rows, cards) => { send(rows, cards); return new Promise(() => {}) }
-    await f.publication.connect()
-    expect(f.saved!.pending!.fingerprint).toBe(f.saved!.accepted.fingerprint)
-    expect(f.saved!.pending).toEqual(f.saved!.accepted)
-    f.restart(); f.doors.publish = send; await f.connect()
-    f.rows([done('cloud_a', 'First'), row('cloud_b')])
+    f.restart(legacy); await f.connect()
+    expect(f.saved).toEqual(legacy)
+    expect(f.publication.state().accepted).toEqual(accepted)
+    expect(f.events).toEqual([])
+    f.rows([{ ...done(), name: 'Renamed' }, row('cloud_b')])
     await vi.waitFor(() => expect(f.events).toContain('processing:cloud_b'))
+    expect(f.core.frames()[0].name).toBe('Renamed')
+    f.rows([row('cloud_b')]); await vi.waitFor(() => expect(f.events.at(-1)).toBe('delete:cloud_a'))
+    expect(f.core.frames().map(frame => frame.id)).toEqual(['cloud_b'])
     expect(f.events.filter(event => event.startsWith('summary:'))).toEqual([])
   } finally { f.close() }
 })
@@ -195,6 +207,7 @@ it('reports a sustained connection failure once and sends nothing after stopping
     expect(f.log).toHaveBeenCalledTimes(1)
     expect(f.log).toHaveBeenCalledWith('[cloud] CLOUD_PUBLICATION_UNAVAILABLE')
     f.close()
+    await f.publication.connect()
     f.publication.ask({ agentId: 'cloud_a', requestId: 'cloud_q_stopped', question: { text: 'Stopped', choices: [] } })
     f.publication.unask('cloud_a', 'cloud_q_stopped')
     expect(f.events).toEqual([])
@@ -337,5 +350,57 @@ it('does not hold valid output when an owner withdrawal is followed by its alrea
     await vi.waitFor(() => expect(f.core.owns('cloud_b')).toBe(true))
     expect(f.publication.status()).toBeNull()
     expect(f.events.filter(event => event === 'commander_question_close')).toHaveLength(1)
+  } finally { f.close() }
+})
+
+it.each(['malformed', 'duplicate', 'non-list', 'row bytes', 'catalogue bytes'] as const)(
+  'validates %s snapshots before skipping a proven retained publication', async bad => {
+    const f = setup()
+    try {
+      await f.connect(); f.rows([row()]); await vi.waitFor(() => expect(f.publication.state().pending).toBeNull())
+      const before = structuredClone(f.saved)
+      const rows = bad === 'non-list' ? 'invalid' as never : bad === 'duplicate' ? [row(), row()]
+        : bad === 'malformed' ? [row(), { ...row('cloud_bad'), state: 'unknown' } as never]
+          : bad === 'row bytes' ? [row('cloud_a', { createdAt: `Wed Nov 18 2026 00:00:00 GMT+0000${' '.repeat(200_000)}` })]
+            : Array.from({ length: 60 }, (_, index) => heavy(`cloud_${index}`))
+      f.snapshot(rows); f.events.length = 0
+      await f.publication.connect()
+      expect(f.publication.status()).toBe(bad.endsWith('bytes') ? 'CLOUD_PUBLICATION_LIMIT' : 'CLOUD_PUBLICATION_INVALID')
+      expect(f.core.frames().map(frame => frame.id)).toEqual(['cloud_a'])
+      expect(f.events).toEqual([])
+      expect(f.saved).toEqual(before)
+    } finally { f.close() }
+  })
+
+it('retains full-image reservation accounting after skipping an unchanged catalogue', async () => {
+  const f = setup()
+  try {
+    await f.connect()
+    const size = Buffer.byteLength(JSON.stringify(cloudHarnessIn(heavy('cloud_fixture'))))
+    const count = Math.floor((CLOUD_OUTPUT_BYTES - 4096) / size) - 1
+    f.rows(Array.from({ length: count }, (_, index) => heavy(`cloud_${index}`)))
+    await vi.waitFor(() => expect(f.publication.state().pending).toBeNull())
+    expect(f.core.frames()).toHaveLength(count)
+    expect(f.publication.reserve()).toBeNull()
+    const saved = structuredClone(f.saved)
+    f.restart(); f.events.length = 0; await f.connect()
+    expect(f.saved).toEqual(saved)
+    expect(f.events).toEqual([])
+    expect(f.publication.reserve()).toBeNull()
+  } finally { f.close() }
+})
+
+it('revokes a publication acknowledgement that resolved just before its async continuation', async () => {
+  const f = setup()
+  try {
+    await f.connect()
+    f.rows([row()])
+    await Promise.resolve()
+    f.publication.disconnect()
+    await f.connect()
+    expect(f.publication.state().accepted.fingerprint).toBe(await f.core.doors.checkpoint())
+    f.rows([done()]); await vi.waitFor(() => expect(f.publication.state().pending).toBeNull())
+    expect(f.events.filter(event => event === 'summary:cloud_a')).toHaveLength(1)
+    expect(f.publication.status()).toBeNull()
   } finally { f.close() }
 })

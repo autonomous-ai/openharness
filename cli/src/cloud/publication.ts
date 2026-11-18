@@ -80,7 +80,11 @@ export function createCloudPublication(options: {
     Promise.resolve(work).then(value => finish(() => resolve(value)), () => finish(() => reject(new Error('CLOUD_PUBLICATION_UNAVAILABLE'))))
   })
   const cancel = (): void => { for (const stop of cancellations) stop() }
-  const persist = (): void => { options.persist(state()); journal = state() }
+  const persist = (): void => {
+    const value = state()
+    options.persist(value)
+    journal = value
+  }
   const pump = (): void => {
     if (running || !connected || stopped || recovering || hold || unavailable || !queue.length) return
     running = true
@@ -136,7 +140,7 @@ export function createCloudPublication(options: {
     queue.push({ action, bytes: size }); bytes += size
     pump()
   }
-  const publish = (list: CloudHarness[], reservation?: CloudReservation, force = false): void => {
+  const publish = (list: CloudHarness[], reservation?: CloudReservation, force = false, provenImage?: string): void => {
     if (recovering || stopped || hold) return
     if (!Array.isArray(list)) { fail('CLOUD_PUBLICATION_INVALID', true); throw new Error('CLOUD_PUBLICATION_INVALID') }
     const rows = new Map<string, CloudHarness>()
@@ -147,11 +151,16 @@ export function createCloudPublication(options: {
       if (raw.card && JSON.stringify(raw.card) === JSON.stringify(row.card)) row.card = raw.card
       rows.set(row.agentId, row)
     }
-    imageBytes = Buffer.byteLength(JSON.stringify([...rows.values()]))
+    const encoded = JSON.stringify([...rows.values()])
+    imageBytes = Buffer.byteLength(encoded)
     if (imageBytes > CLOUD_OUTPUT_BYTES - 4096) {
       fail('CLOUD_PUBLICATION_LIMIT', true); throw new Error('CLOUD_PUBLICATION_LIMIT')
     }
-    if (force) { wire = rows; projected = rows }
+    if (force) {
+      wire = rows; projected = rows
+      // Recovery already proved this exact nonempty image against an intact durable journal.
+      if (provenImage && createHash('sha256').update(encoded).digest('hex') === provenImage) return
+    }
     const changed = [...rows.values()].filter(row => JSON.stringify(projected.get(row.agentId)) !== JSON.stringify(row))
     const removed = [...projected.keys()].filter(id => !rows.has(id))
     if (!force && !changed.length && !removed.length) return
@@ -174,7 +183,7 @@ export function createCloudPublication(options: {
       reservedActions -= reservation.actions; reservedBytes -= reservation.bytes; reservedImageBytes -= 2 * ROW_BYTES
       reservation.released = true
     },
-    publish,
+    publish: (list: CloudHarness[], reservation?: CloudReservation): void => publish(list, reservation),
     ask(value: Question, reservation?: CloudReservation): void { if (!recovering && !hold) append({ kind: 'ask', value: { ...value, question: prepareCloudQuestion(value.agentId, value.requestId, value.question) } }, reservation) },
     unask(agentId: string, requestId: string, reservation?: CloudReservation): void { if (!recovering && !hold) append({ kind: 'unask', agentId, requestId, close: cloudQuestionClose(agentId, requestId) }, reservation) },
     async connect(): Promise<void> {
@@ -186,13 +195,14 @@ export function createCloudPublication(options: {
         const image = await within(options.core.checkpoint())
         if (generation !== epoch) return
         // Empty authority is a fresh core, including an explicit operator restart after a journal hold.
-        if (image === emptyPresentation().fingerprint) accepted = emptyPresentation()
+        const empty = emptyPresentation(), retained = image !== empty.fingerprint
+        if (!retained) accepted = empty
         else if (journal && image === journal.accepted.fingerprint) accepted = journal.accepted
         else if (journal?.pending && image === journal.pending.fingerprint) accepted = journal.pending
         else { fail('CLOUD_PUBLICATION_RECOVERY_REQUIRED', true); return }
         pending = null; hold = null; unavailable = false; recovering = false
         // Unsent history follows the previous reconnect contract: the provider's current state and questions.
-        publish(options.snapshot(), undefined, true)
+        publish(options.snapshot(), undefined, true, retained ? image : undefined)
         for (const value of options.questions()) append({ kind: 'ask', value: { ...value, question: prepareCloudQuestion(value.agentId, value.requestId, value.question) } })
       } catch { if (generation === epoch) fail('CLOUD_PUBLICATION_UNAVAILABLE') }
       finally { if (generation === epoch) recovering = false }
