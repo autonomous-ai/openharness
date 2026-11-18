@@ -1,6 +1,6 @@
 /** Required session storage reuses this core's admitted payload, never its canonical helper path. */
 import { join } from 'node:path'
-import { executedEntry, SESSION_STORAGE_ENTRY_ENV, SESSION_STORAGE_HASH_ENV, type ExecutedEntry } from './executedEntry.js'
+import { executedEntry, type ExecutedEntry } from './executedEntry.js'
 import type { ExecutionArtifact } from './executionArtifacts.js'
 
 interface StorageOwnerDeps {
@@ -28,7 +28,8 @@ export async function ownSessionStorage(deps: StorageOwnerDeps): Promise<{ close
   } }
 }
 
-export async function ownProcessSessionStorage(directory: string, close: () => Promise<void>): Promise<{ close(): Promise<void> }> {
+export async function ownProcessSessionStorage(directory: string, close: () => Promise<void>,
+  configure: (file: string, hash: string) => void): Promise<{ close(): Promise<void> }> {
   const entry = executedEntry()
   // Source execution has a dedicated explicit entry; it cannot execute a copied .ts file without its source graph.
   if (entry?.file.endsWith('.ts')) return { close }
@@ -38,10 +39,7 @@ export async function ownProcessSessionStorage(directory: string, close: () => P
       const { createArtifactPreparation } = await import('./executionArtifactProcess.js')
       return createArtifactPreparation({ directory: join(directory, 'lean'), node: process.execPath }).prepare(file, hash).result
     },
-    configure: (file, hash) => {
-      process.env[SESSION_STORAGE_ENTRY_ENV] = file
-      process.env[SESSION_STORAGE_HASH_ENV] = hash
-    },
+    configure,
     close,
   })
 }

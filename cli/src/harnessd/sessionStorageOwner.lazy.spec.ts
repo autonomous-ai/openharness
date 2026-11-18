@@ -17,14 +17,15 @@ it('loads standalone preparation only when an unadmitted packaged entry needs it
   const { ownProcessSessionStorage } = await import('./sessionStorageOwner.js')
   expect(state.loads).toBe(0)
   const close = vi.fn(async () => {})
+  const configure = vi.fn()
   state.selected = { file: '/source/entry.ts', sha256: 'a'.repeat(64), admitted: false }
-  await (await ownProcessSessionStorage('/fixture', close)).close()
+  await (await ownProcessSessionStorage('/fixture', close, configure)).close()
   expect(state.loads).toBe(0)
   state.selected = { file: '/immutable/core.mjs', sha256: 'a'.repeat(64), admitted: true }
-  await (await ownProcessSessionStorage('/fixture', close)).close()
+  await (await ownProcessSessionStorage('/fixture', close, configure)).close()
   expect(state.loads).toBe(0)
   state.selected = { file: '/explicit/core.mjs', sha256: 'a'.repeat(64), admitted: false }
-  const owner = await ownProcessSessionStorage('/fixture', close)
+  const owner = await ownProcessSessionStorage('/fixture', close, configure)
   expect(state.loads).toBe(1)
   expect(state.release).not.toHaveBeenCalled()
   await owner.close()

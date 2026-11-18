@@ -6,7 +6,6 @@ export const SESSION_STORAGE_FRAME_BYTES = 1024 * 1024
 export const SESSION_STORAGE_PAGE_CHARS = 64 * 1024
 export const SESSION_STORAGE_QUEUE = 64
 export const SESSION_STORAGE_REQUEST_MS = 5_000
-export { SESSION_STORAGE_ENTRY_ENV, SESSION_STORAGE_HASH_ENV } from '../harnessd/executedEntry.js'
 
 export function sessionFileIdentity(stat: BigIntStats): string {
   return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs, stat.birthtimeNs,

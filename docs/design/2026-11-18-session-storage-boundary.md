@@ -348,12 +348,28 @@ the deferred argv factory. Historical script differences from the earlier native
 for explicit review; no expected output is accepted merely because current code produced it.
 
 The first full core gate preserved 54 failures (5,794 passing, 43 skipped); fixture corrections and the newly
-exposed archive/forget authority gaps are tracked separately, not treated as an initial pass. The current focused
-authority suite passes 33 tests, including displaced-directory cleanup, post-sync target replacement, archive
-conflicts during preparation and offline durable selected Grid resolution. The harnessd gate passes 551 tests
-(one skipped) with 100% statements, branches, functions and lines per file. Type checking passes. The rerun of
-the full core gate, compiled admission checks, remaining relevant coverage and coordinated measurements are
-still acceptance work; these results alone do not establish release readiness or a bounded whole-image design.
+exposed archive/forget authority gaps are tracked separately, not treated as an initial pass. Its next full run
+passed all 285 test files (5,851 tests, 43 skipped), but **exited 1** for uncovered branches/functions in twelve
+changed files. Focused authority tests now exercise those paths; that coverage failure remains open until the
+current full gate passes. The harnessd gate after lazy entry preparation passed 552 tests (one skipped), with
+100% statements, branches, functions and lines per file. Type checking passes. Compiled admission, the final
+current-source gates and coordinated measurements remain acceptance work; these results alone do not establish
+release readiness or a bounded whole-image design.
+
+Review failure injection found and fixed four custody boundaries. Parent preparation records its exclusive
+temporary and descriptor immediately after successful open, before chmod/stat can fail. A failed helper close
+has the shared fixed `StateFileCleanupUnconfirmed` identity, retains the original handle, refuses another open,
+and remains visible through directory, owner-read, lock-fence and lock-cleanup wrappers. Other already-owned
+handles may still close; an uncertain close is never retried. A storage child with uncertain helper cleanup must
+actually exit before its caller releases custody. A failed kill marks termination before signaling, never
+recurses/retries or releases the slot, and emits one fixed failure line while waiting for actual exit. Finally,
+the selected storage entry/hash lives in the process-local transport owner and is passed explicitly by bootstrap;
+neither value is placed back in the ordinary process environment after harnessd environment capture.
+
+The four-fix focused run passes 47 tests. The shared helper/lock/storage suite passes 60 tests (two skipped),
+including five additional failure-first lock propagation cases. A sandbox-constrained attempt was stopped with
+exit 130 after process-generation execution returned EPERM; the selected run outside that constraint exited 0.
+Synthetic credential checks use booleans and never emit their random values.
 
 The coordinator reviewed the exact launch matrix categories before recording expected bytes. Grid changes cover
 204 of 364 cases (66 creates and 138 relaunches), with 32 to 44 scripts because relaunch now records its actual

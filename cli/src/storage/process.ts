@@ -4,6 +4,7 @@ import { performance } from 'node:perf_hooks'
 import { sessionStorageFrames } from '../lib/sessionStorageFrames.js'
 import { SESSION_STORAGE_REQUEST_MS, SessionStorageUnavailable, sessionImageProof, type SessionStorageOperation } from '../lib/sessionStorageWire.js'
 import { createSessionImageCodec, type RetainedSessionImage } from './sessionImage.js'
+import { StateFileCleanupUnconfirmed, stateFileCustodyHealthy } from '../lib/secureState.js'
 
 /** Parent owns the original deadline; a child never compares another process's wall clock. */
 export function sessionStorageDeadline(remainingMs: unknown): number {
@@ -43,6 +44,7 @@ export function runSessionStorage(): void {
         void (async () => {
           const request = message as { remainingMs?: unknown; operation?: SessionStorageOperation }
           try {
+            stateFileCustodyHealthy()
             const expires = sessionStorageDeadline(request?.remainingMs)
             const operation = request.operation
             let value: unknown
@@ -60,7 +62,8 @@ export function runSessionStorage(): void {
             if (performance.now() >= expires) throw new SessionStorageUnavailable('expired')
             await frames!.send(id, { ok: true, value })
           } catch (error) {
-            const code = error instanceof SessionStorageUnavailable ? error.code : 'unsafe'
+            const code = error instanceof StateFileCleanupUnconfirmed ? 'cleanup-unconfirmed'
+              : error instanceof SessionStorageUnavailable ? error.code : 'unsafe'
             await frames!.send(id, { ok: false, code })
             if (code === 'cleanup-unconfirmed') stop()
           } finally { busy = false }

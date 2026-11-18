@@ -1,12 +1,13 @@
 /** Directory durability may wait; publication and final admission each keep their own no-yield fence. */
-import { closeSync, constants, fstatSync, lstatSync, openSync, opendirSync, readSync, rmdirSync, unlinkSync } from 'node:fs'
+import { constants, fstatSync, lstatSync, openSync, opendirSync, readSync, rmdirSync, unlinkSync } from 'node:fs'
 import * as fs from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
-import { insideWindowsRoots, requireWindowsStateFile, windowsStateRoots } from './secureState.js'
+import { closeStateDirectoryIterator, closeStateFileDescriptor, closeStateFileHandle, insideWindowsRoots,
+  requireWindowsStateFile, StateFileCleanupUnconfirmed, stateFileCustodyHealthy, windowsStateRoots } from './secureState.js'
 import { lockStartMarker, processExists } from './processLiveness.js'
 import { psEnv } from './childLocale.js'
 import { ownProcessGroup } from './windows/noWindow.js'
@@ -54,6 +55,7 @@ export class RegistryWriteQueue {
   private readonly waiting: Array<() => Promise<void>> = []
 
   assertOpen(): void {
+    stateFileCustodyHealthy()
     if (this.failedClose) throw new RegistryPersistenceUnavailable('directory close failed; restart required')
     if (this.closed) throw new RegistryPersistenceUnavailable('registry is closing')
   }
@@ -123,7 +125,13 @@ export class RegistryWriteQueue {
           if (this.failedClose) await new Promise<void>(() => {})
           // The durable result is already known. Cleanup still owns admission,
           // and its rejection is observed without replacing that result.
-          await cleanup?.catch(() => console.warn('[registry] write cleanup failed'))
+          await cleanup?.catch(async error => {
+            console.warn('[registry] write cleanup failed')
+            if (error instanceof StateFileCleanupUnconfirmed) {
+              this.failedClose = true
+              await new Promise<void>(() => {})
+            }
+          })
         }
       }
       this.waiting.push(run)
@@ -166,19 +174,23 @@ async function privateDescriptor(handle: FileHandle, directory: boolean, maxByte
 }
 
 export async function privateRegistryDirectory(directory: string): Promise<void> {
+  stateFileCustodyHealthy()
   await fs.mkdir(directory, { recursive: true, mode: 0o700 })
   if (process.platform === 'win32') {
     if (!(await fs.stat(directory)).isDirectory()) throw new Error('state directory has unsafe owner or type')
     await windowsRoot(directory)
     return
   }
+  stateFileCustodyHealthy()
   const handle = await fs.open(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
-  try { await privateDescriptor(handle, true) } finally { await handle.close() }
+  try { await privateDescriptor(handle, true) } finally { await closeStateFileHandle(handle) }
 }
 
 export async function readPrivateRegistryOwner(file: string, maxBytes = OWNER_BYTES): Promise<string> {
+  stateFileCustodyHealthy()
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > OWNER_BYTES) throw new Error('invalid owner read limit')
   if (process.platform === 'win32') await windowsRoot(file)
+  stateFileCustodyHealthy()
   const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0))
   try {
     const size = await privateDescriptor(handle, false, maxBytes)
@@ -199,7 +211,7 @@ export async function readPrivateRegistryOwner(file: string, maxBytes = OWNER_BY
     if (offset > maxBytes) throw new Error('state file exceeds its size limit')
     return bytes.toString('utf8', 0, offset)
   }
-  finally { await handle.close() }
+  finally { await closeStateFileHandle(handle) }
 }
 
 export class AtomicWriteUnconfirmed extends Error {
@@ -241,6 +253,7 @@ function parseOwner(contents: string): Owner | null {
 async function readOwner(file: string): Promise<Owner | null> {
   try { return parseOwner(await readPrivateRegistryOwner(file)) }
   catch (error) {
+    if (error instanceof StateFileCleanupUnconfirmed) throw error
     if (missing(error)) return null
     throw new RegistryPersistenceUnavailable('registry lock owner could not be read safely')
   }
@@ -248,6 +261,7 @@ async function readOwner(file: string): Promise<Owner | null> {
 
 /** This bounded read and the following removal/publication are one no-yield ownership fence. */
 function readOwnerNow(file: string): { owner: Owner | null; modified: number } {
+  stateFileCustodyHealthy()
   try {
     if (process.platform === 'win32') requireWindowsStateFile(file)
     const handle = openSync(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0))
@@ -265,8 +279,9 @@ function readOwnerNow(file: string): { owner: Owner | null; modified: number } {
       }
       if (offset > OWNER_BYTES) throw new Error('oversized owner file')
       return { owner: parseOwner(bytes.toString('utf8', 0, offset)), modified: stat.mtimeMs }
-    } finally { closeSync(handle) }
+    } finally { closeStateFileDescriptor(handle) }
   } catch (error) {
+    if (error instanceof StateFileCleanupUnconfirmed) throw error
     if (missing(error)) return { owner: null, modified: 0 }
     throw new RegistryPersistenceUnavailable('registry lock owner could not be read safely')
   }
@@ -292,6 +307,7 @@ function removeLockNow(lock: string, identity: { ino: number; dev: number }, exp
       || Date.now() - Math.max(stat.mtimeMs, current.modified) <= OWNERLESS_MS) return false
   // A protocol lock contains at most one file. Read at most two entries;
   // unexpected state must never turn core cleanup into a recursive walk.
+  stateFileCustodyHealthy()
   const directory = opendirSync(lock, { bufferSize: 1 })
   try {
     const first = directory.readSync()
@@ -299,7 +315,7 @@ function removeLockNow(lock: string, identity: { ino: number; dev: number }, exp
       console.warn('[registry] lock cleanup refused unexpected contents')
       return false
     }
-  } finally { directory.closeSync() }
+  } finally { closeStateDirectoryIterator(directory) }
   if (!lockNow(lock, identity)) return false
   const final = readOwnerNow(join(lock, 'owner.json'))
   if (expected ? !final.owner || !sameOwner(final.owner, expected)
@@ -349,7 +365,10 @@ export async function registryFileLock<T>(directory: string,
         if (stat.ino !== identity.ino || stat.dev !== identity.dev) return
         const owner = await readOwner(ownerFile)
         if (owner?.token === token && owner.pid === process.pid) removeLockNow(lock, identity, owner)
-      } catch { console.warn('[registry] lock cleanup refused an unsafe owner') }
+      } catch (error) {
+        if (error instanceof StateFileCleanupUnconfirmed) throw error
+        console.warn('[registry] lock cleanup refused an unsafe owner')
+      }
     }
     try {
       await fs.mkdir(lock, { mode: 0o700 })
@@ -357,6 +376,7 @@ export async function registryFileLock<T>(directory: string,
       check()
       identity = await fs.lstat(lock)
       check()
+      stateFileCustodyHealthy()
       const handle = await fs.open(ownerFile, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600)
       try {
         check()
@@ -365,7 +385,7 @@ export async function registryFileLock<T>(directory: string,
         check()
         await handle.sync()
         check()
-      } finally { await handle.close() }
+      } finally { await closeStateFileHandle(handle) }
       check()
       checkOwner()
       entered = true
@@ -404,7 +424,7 @@ export async function registryFileLock<T>(directory: string,
         if (!ownerStat.isFile() || ownerStat.isSymbolicLink() || (ownerUid !== null && ownerStat.uid !== ownerUid)
           || (process.platform !== 'win32' && (ownerStat.mode & 0o777) !== 0o600)) throw new RegistryPersistenceUnavailable('registry lock owner has unsafe owner, mode, or type')
         owner = await readOwner(ownerFile) ?? undefined
-      } catch (error) { if (error instanceof RegistryPersistenceUnavailable) throw error }
+      } catch (error) { if (error instanceof RegistryPersistenceUnavailable || error instanceof StateFileCleanupUnconfirmed) throw error }
       check()
       if (!(Number(owner?.pid) > 0 && owner?.token)) {
         if (Date.now() - since > OWNERLESS_MS && lockIdentity) {
@@ -420,7 +440,7 @@ export async function registryFileLock<T>(directory: string,
             check()
             if (lockIdentity && removeLockNow(lock, lockIdentity, current)) continue
           }
-        } catch (error) { if (error instanceof RegistryPersistenceUnavailable) throw error }
+        } catch (error) { if (error instanceof RegistryPersistenceUnavailable || error instanceof StateFileCleanupUnconfirmed) throw error }
       }
       check()
       await new Promise(resolve => setTimeout(resolve, Math.min(WAIT_MS, Math.max(1, expires - performance.now()))))

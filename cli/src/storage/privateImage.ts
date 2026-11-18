@@ -2,7 +2,7 @@
 import { constants, type BigIntStats } from 'node:fs'
 import * as fs from 'node:fs/promises'
 import { dirname } from 'node:path'
-import { requireWindowsStateFile, secureStateDirectory } from '../lib/secureState.js'
+import { requireWindowsStateFile, secureStateDirectory, StateFileCleanupUnconfirmed } from '../lib/secureState.js'
 import { sessionFileIdentity, SessionStorageUnavailable } from '../lib/sessionStorageWire.js'
 
 // A failed close is deliberately never retried; the child must exit before its parent releases custody.
@@ -49,6 +49,7 @@ export async function readPrivateImage(file: string, maxBytes: number): Promise<
     }
     return { bytes, stat: after }
   } catch (error) {
+    if (error instanceof StateFileCleanupUnconfirmed) throw new SessionStorageUnavailable('cleanup-unconfirmed')
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
     if (error instanceof SessionStorageUnavailable) throw error
     throw new SessionStorageUnavailable('unsafe')

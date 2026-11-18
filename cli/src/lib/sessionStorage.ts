@@ -13,14 +13,20 @@ import { stoppedArchiveWitness, stoppedAuthorityHealthy } from './stoppedAuthori
 import type { StoppedArchiveAnswer, StoppedArchiveQuery } from './sessionStorageWire.js'
 import { sessionStorageFrames } from './sessionStorageFrames.js'
 import { privateRegistryDirectory } from './registryPersistence.js'
-import { SESSION_STORAGE_ENTRY_ENV, SESSION_STORAGE_HASH_ENV, SESSION_STORAGE_QUEUE, SESSION_STORAGE_REQUEST_MS,
+import { SESSION_STORAGE_QUEUE, SESSION_STORAGE_REQUEST_MS,
   SessionStorageUnavailable, type CredentialRow, type SessionDocument, type SessionImage, type SessionImageProof,
   storedGridLaunch, sessionDocument, sessionFileIdentity, type SessionImageReservation, type SessionPreparedImage, type SessionStorageFailure,
   type SessionStorageOperation, type StoredGridLaunch } from './sessionStorageWire.js'
 import type { GridLaunchOverride } from './gridLaunchWire.js'
+import { StateFileCleanupUnconfirmed, stateFileCustodyHealthy } from './secureState.js'
 
 const sessionSourceIdentity = sessionFileIdentity
-type OwnedReservation = SessionImageReservation & { directoryIdentity: string }
+type OwnedReservation = Pick<SessionImageReservation, 'temporary'> & {
+  directoryIdentity: string
+  identity?: string
+  descriptor?: number
+  closeUnconfirmed?: boolean
+}
 
 export interface SessionImageSource {
   readonly image: SessionImage
@@ -45,6 +51,9 @@ const failures = new Set<SessionStorageFailure>(['missing', 'unsafe', 'changed',
 
 export class SessionStorage {
   private child: ChildProcess | undefined
+  private terminating: ChildProcess | undefined
+  private terminationReported = false
+  private selectedEntry: SessionStorageChildEntry | undefined
   private frames: ReturnType<typeof sessionStorageFrames> | undefined
   private ready: Promise<void> | undefined
   private active: Pending | undefined
@@ -63,17 +72,29 @@ export class SessionStorage {
   private readonly descriptorOperations = new Set<Promise<unknown>>()
   private closing: Promise<void> | undefined
 
-  constructor(readonly root: string, private readonly entry: () => SessionStorageChildEntry = () => {
-    const file = process.env[SESSION_STORAGE_ENTRY_ENV], sha256 = process.env[SESSION_STORAGE_HASH_ENV]
-    if ((!file || !sha256) && import.meta.url.endsWith('.ts')) {
-      const source = fileURLToPath(new URL('../storage/entry.ts', import.meta.url)), expected = fingerprint(source)
-      if (!expected) throw new SessionStorageUnavailable('disconnected')
-      return { file: source, sha256: expected, execArgv: ['--import', import.meta.resolve('tsx')] }
-    }
-    if (!file || !sha256) throw new SessionStorageUnavailable('disconnected')
-    return { file, sha256 }
-  }, private readonly stoppedLeaf = 'stopped-agents') {
+  constructor(readonly root: string, private readonly entry?: () => SessionStorageChildEntry,
+    private readonly stoppedLeaf = 'stopped-agents') {
     if (!/^[a-zA-Z0-9_-]{1,128}$/.test(stoppedLeaf)) throw new SessionStorageUnavailable('invalid')
+  }
+
+  /** The required bootstrap gives this owner its immutable payload directly, never through a child environment. */
+  configureEntry(file: string, sha256: string): void {
+    if (this.selectedEntry && (this.selectedEntry.file !== file || this.selectedEntry.sha256 !== sha256)) {
+      throw new SessionStorageUnavailable('changed')
+    }
+    this.selectedEntry ??= Object.freeze({ file, sha256 })
+  }
+
+  private executionEntry(): SessionStorageChildEntry {
+    if (this.selectedEntry) return this.selectedEntry
+    let selected = this.entry?.()
+    if (!selected && import.meta.url.endsWith('.ts')) {
+      const file = fileURLToPath(new URL('../storage/entry.ts', import.meta.url)), sha256 = fingerprint(file)
+      if (!sha256) throw new SessionStorageUnavailable('disconnected')
+      selected = { file, sha256, execArgv: ['--import', import.meta.resolve('tsx')] }
+    }
+    if (!selected) throw new SessionStorageUnavailable('disconnected')
+    return this.selectedEntry = Object.freeze({ ...selected, ...(selected.execArgv ? { execArgv: [...selected.execArgv] } : {}) })
   }
 
   path(document: SessionDocument): string {
@@ -86,7 +107,7 @@ export class SessionStorage {
   private start(): Promise<void> {
     if (this.ready) return this.ready
     if (this.closed || this.closeFailed) return Promise.reject(new SessionStorageUnavailable('disconnected'))
-    const selected = this.entry()
+    const selected = this.executionEntry()
     if (fingerprint(selected.file) !== selected.sha256) return Promise.reject(new SessionStorageUnavailable('changed'))
     const incarnation = randomUUID(), held = [...this.retained.values()]
     const inherited = Object.fromEntries(['PATH', 'HOME', 'TMPDIR', 'USERPROFILE', 'SYSTEMROOT', 'TEMP', 'TMP', 'APPDATA', 'LOCALAPPDATA']
@@ -99,6 +120,8 @@ export class SessionStorage {
       windowsHide: true,
     })
     this.child = child
+    this.terminating = undefined
+    this.terminationReported = false
     let ready = false
     let rejectReady: (error: Error) => void
     const started = new Promise<void>((resolve, reject) => {
@@ -162,7 +185,10 @@ export class SessionStorage {
         // A running child's failed send or signal is not its exit. Its inherited descriptors
         // stay owned until exit; only a spawn failure has no process to reap.
         if (child.pid === undefined) finish()
-        else if (this.child === child) this.terminate()
+        else if (this.child === child) {
+          if (this.terminating === child) this.reportTerminationFailure()
+          else this.terminate()
+        }
       })
       child.once('exit', finish)
     })
@@ -174,11 +200,23 @@ export class SessionStorage {
 
   private terminate(): void {
     // A reply is not settlement. The active caller is released only when this child has actually exited.
-    this.child?.kill('SIGKILL')
+    const child = this.child
+    if (!child || this.terminating === child) return
+    this.terminating = child
+    try { if (!child.kill('SIGKILL')) this.reportTerminationFailure() }
+    catch { this.reportTerminationFailure() }
+  }
+
+  private reportTerminationFailure(): void {
+    if (this.terminationReported) return
+    this.terminationReported = true
+    console.error('[session-storage] termination failed; waiting for owned child exit')
   }
 
   private request<T>(operation: SessionStorageOperation): Promise<T> {
     if (this.closed || this.closeFailed) return Promise.reject(new SessionStorageUnavailable('disconnected'))
+    try { stateFileCustodyHealthy() }
+    catch { this.closeFailed = true; return Promise.reject(new SessionStorageUnavailable('cleanup-unconfirmed')) }
     if (this.queue.length >= SESSION_STORAGE_QUEUE) return Promise.reject(new SessionStorageUnavailable('busy'))
     return new Promise<T>((resolve, reject) => {
       this.queue.push({ id: this.nextId++, expires: performance.now() + SESSION_STORAGE_REQUEST_MS, operation,
@@ -256,14 +294,17 @@ export class SessionStorage {
       await privateRegistryDirectory(dirname(target))
       const directoryIdentity = sessionSourceIdentity(lstatSync(dirname(target), { bigint: true }))
       const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`
+      stateFileCustodyHealthy()
       const fd = await new Promise<number>((resolve, reject) => open(temporary,
         constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600,
         (error, descriptor) => error ? reject(error) : resolve(descriptor)))
-      try {
-        fchmodSync(fd, 0o600)
-        reservation = { temporary: relative(this.root, temporary), identity: sessionSourceIdentity(fstatSync(fd, { bigint: true })), directoryIdentity }
-      } finally { this.closeDescriptor(fd) }
+      // O_EXCL already created a file and returned a descriptor. Own both before any later metadata call can fail.
+      reservation = { temporary: relative(this.root, temporary), directoryIdentity, descriptor: fd }
       this.preparation = { reservation, release }
+      reservation.identity = sessionSourceIdentity(fstatSync(fd, { bigint: true }))
+      fchmodSync(fd, 0o600)
+      reservation.identity = sessionSourceIdentity(fstatSync(fd, { bigint: true }))
+      this.closeReservationDescriptor(reservation)
       const pending = this.request<SessionPreparedImage>({ kind: 'prepare', document, source, value,
         reservation: { temporary: reservation.temporary, identity: reservation.identity }, ...(rawSource ? { rawSource } : {}) })
       this.preparation.child = this.child
@@ -274,10 +315,11 @@ export class SessionStorage {
       this.preparation.writtenIdentity = result.proof.identity
       return result
     } catch (error) {
+      if (error instanceof StateFileCleanupUnconfirmed) this.closeFailed = true
       if (reservation) this.removeTemporary(reservation)
       this.preparation = undefined
       release()
-      throw error
+      throw error instanceof StateFileCleanupUnconfirmed ? new SessionStorageUnavailable('cleanup-unconfirmed') : error
     }
   }
   async discard(prepared: SessionPreparedImage): Promise<void> {
@@ -311,6 +353,14 @@ export class SessionStorage {
   }
 
   private removeTemporary(reservation: OwnedReservation): void {
+    if (reservation.closeUnconfirmed) throw new SessionStorageUnavailable('cleanup-unconfirmed')
+    if (reservation.descriptor !== undefined) {
+      // A failed first fstat left the original open descriptor owned. One cleanup attempt can prove that inode.
+      try { reservation.identity ??= sessionSourceIdentity(fstatSync(reservation.descriptor, { bigint: true })) }
+      catch { this.closeFailed = true; throw new SessionStorageUnavailable('cleanup-unconfirmed') }
+      this.closeReservationDescriptor(reservation)
+    }
+    if (!reservation.identity) { this.closeFailed = true; throw new SessionStorageUnavailable('cleanup-unconfirmed') }
     const file = join(this.root, reservation.temporary)
     try {
       const directory = lstatSync(dirname(file), { bigint: true })
@@ -331,12 +381,20 @@ export class SessionStorage {
     }
   }
 
+  private closeReservationDescriptor(reservation: OwnedReservation): void {
+    if (reservation.descriptor === undefined) return
+    try { this.closeDescriptor(reservation.descriptor) }
+    catch { reservation.closeUnconfirmed = true; throw new SessionStorageUnavailable('cleanup-unconfirmed') }
+    delete reservation.descriptor
+  }
+
   retain(document: SessionDocument): Promise<SessionImageSource> {
     return this.ownDescriptors(() => this.retainImage(document))
   }
 
   private async retainImage(document: SessionDocument): Promise<SessionImageSource> {
     if (this.closed || this.closeFailed) throw new SessionStorageUnavailable('disconnected')
+    stateFileCustodyHealthy()
     if (this.retained.size >= 2) throw new SessionStorageUnavailable('busy')
     const lease = randomUUID()
     let fd: number | undefined
@@ -410,6 +468,7 @@ export class SessionStorage {
       for (const source of this.retained.values()) this.closeDescriptor(source.fd)
       this.retained.clear()
       stoppedAuthorityHealthy()
+      stateFileCustodyHealthy()
       if (this.closeFailed) throw new SessionStorageUnavailable('cleanup-unconfirmed')
     })()
   }

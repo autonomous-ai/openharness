@@ -592,7 +592,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const prepareInstructions = (cwd: string | null | undefined, engine: string): Promise<void> =>
     prepareWorkspaceInstructions(ports.workspaces, cwd, engine)
 
-  const storageOwner = await ownProcessSessionStorage(env.ADAPTER_DATA_DIR, () => sessionStorage.close())
+  const storageOwner = await ownProcessSessionStorage(env.ADAPTER_DATA_DIR, () => sessionStorage.close(), (file, hash) => sessionStorage.configureEntry(file, hash))
   await registry.load()
   // Persisted locators are hints until this process has observed their terminal root and PID/start marker.
   // Mark them dormant before the backend socket can publish anything; the first authoritative reconcile

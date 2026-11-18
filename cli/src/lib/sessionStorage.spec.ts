@@ -32,16 +32,25 @@ const override = () => ({ networkId: 'fixture', networkName: 'Fixture', baseUrl:
 const row = () => ({ agentId: 'fixture-agent', registeredAt: 1, title: 'fixture', gridLaunch: override() })
 const containsKey = (value: unknown) => JSON.stringify(value).includes(key)
 
-function faultChild(fault: 'after-sync' | 'replace-before-open'): void {
+function faultChild(fault: 'after-sync' | 'replace-before-open' | 'directory-close'): void {
   const file = join(root, 'storage-fixture.mjs')
   const processModule = new URL('../storage/process.ts', import.meta.url).href
   const admissionModule = new URL('../harnessd/childAdmission.ts', import.meta.url).href
   // The real child/codec runs. Only this fixture's filesystem prefix injects a deterministic failure.
   writeFileSync(file, `
     import fs from 'node:fs/promises';
+    import syncFs from 'node:fs';
     import { syncBuiltinESMExports } from 'node:module';
     import { childAdmissionFailure } from ${JSON.stringify(admissionModule)};
     if (childAdmissionFailure(process.env, process.ppid, process.argv[1])) process.exit(2);
+    const closeSync = syncFs.closeSync;
+    let directoryFault = false;
+    syncFs.closeSync = fd => {
+      if (${JSON.stringify(fault)} === 'directory-close' && !directoryFault && syncFs.fstatSync(fd).isDirectory()) {
+        directoryFault = true; throw new Error('fixture directory close failure');
+      }
+      return closeSync(fd);
+    };
     const open = fs.open;
     fs.open = async (...args) => {
       if (String(args[0]).endsWith('.tmp') && ${JSON.stringify(fault)} === 'replace-before-open') {
@@ -62,6 +71,50 @@ function faultChild(fault: 'after-sync' | 'replace-before-open'): void {
 }
 
 describe('required session storage process', () => {
+  it('reaps the storage child after a shared directory-helper close fails', async () => {
+    faultChild('directory-close')
+    writeFileSync(join(root, 'registry.json'), JSON.stringify([row()]), { mode: 0o600 })
+    const reading = storage.read({ kind: 'registry' })
+    const child = (storage as unknown as { child: ChildProcess }).child
+    let exited = false
+    child.once('exit', () => { exited = true })
+    await expect(reading).rejects.toMatchObject({ code: 'disconnected' })
+    expect(exited).toBe(true)
+    expect((storage as unknown as { child?: ChildProcess }).child).toBeUndefined()
+  })
+
+  it('keeps its first immutable child selection through replacement and refuses later reconfiguration', async () => {
+    const file = fileURLToPath(new URL('../storage/entry.ts', import.meta.url)), sha256 = fingerprint(file)!
+    let selected = { file, sha256, execArgv: ['--import', import.meta.resolve('tsx')] }
+    storage = new SessionStorage(root, () => selected)
+    await storage.read({ kind: 'registry' })
+    const child = (storage as unknown as { child: ChildProcess }).child
+    const exited = new Promise<void>(resolve => child.once('exit', () => resolve()))
+    child.kill('SIGKILL'); await exited
+    selected = { ...selected, file: join(root, 'missing.mjs') }
+    expect(() => storage.configureEntry(selected.file, sha256)).toThrow('changed')
+    storage.configureEntry(file, sha256)
+    expect(await storage.read({ kind: 'registry' })).toEqual({ state: 'missing' })
+  })
+
+  it.each(['fchmodSync', 'fstatSync'] as const)('owns its exclusive temporary before a failed %s', async operation => {
+    vi.spyOn(fs, operation).mockImplementationOnce(() => { throw Object.assign(new Error('fixture metadata failure'), { code: 'EIO' }) })
+    await expect(storage.prepare({ kind: 'registry' }, null, [])).rejects.toThrow()
+    expect(readdirSync(root).filter(name => name.endsWith('.tmp'))).toEqual([])
+  })
+
+  it('keeps its descriptor and preparation slot while the exclusive inode cannot be proved', async () => {
+    const fault = vi.spyOn(fs, 'fstatSync').mockImplementation(() => { throw Object.assign(new Error('fixture stat failure'), { code: 'EIO' }) })
+    expectedCloseFailure = true
+    await expect(storage.prepare({ kind: 'registry' }, null, [])).rejects.toMatchObject({ code: 'cleanup-unconfirmed' })
+    const owner = storage as unknown as { preparation?: { reservation: { descriptor?: number } } }
+    expect(typeof owner.preparation?.reservation.descriptor).toBe('number')
+    await expect(storage.prepare({ kind: 'registry' }, null, [])).rejects.toMatchObject({ code: 'disconnected' })
+    fault.mockRestore()
+    await expect(storage.close()).rejects.toMatchObject({ code: 'cleanup-unconfirmed' })
+    expect(readdirSync(root).filter(name => name.endsWith('.tmp'))).toEqual([])
+  })
+
   it('keeps its request deadline independent of a caller wall-clock change', async () => {
     writeFileSync(join(root, 'registry.json'), JSON.stringify([row()]), { mode: 0o600 })
     vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2026, 8, 26, 9, 30))
@@ -210,22 +263,31 @@ describe('required session storage process', () => {
     await prior.release()
   })
 
-  it('retains descriptor custody after a child error until its actual exit', async () => {
+  it.each(['accepted', 'EPERM', 'EINVAL', 'ENOSYS'] as const)('retains descriptor custody until actual exit when termination is %s', async failure => {
     writeFileSync(join(root, 'registry.json'), JSON.stringify([row()]), { mode: 0o600 })
     const source = await storage.retain({ kind: 'registry' })
     const child = (storage as unknown as { child: ChildProcess }).child
     const kill = child.kill.bind(child)
     const exited = new Promise<void>(resolve => child.once('exit', () => resolve()))
     // A failed signal or IPC send reports error without proving that a running child exited.
-    child.kill = () => true
-    child.emit('error', new Error('fixture child transport failure'))
+    let attempts = 0
+    const warn = vi.spyOn(console, 'error').mockImplementation(() => {})
+    child.kill = () => {
+      attempts++
+      if (attempts > 2) throw new Error('fixture prevents recursive signal failure')
+      if (failure === 'EPERM') { child.emit('error', Object.assign(new Error('fixture refused signal'), { code: failure })); return false }
+      if (failure !== 'accepted') throw Object.assign(new Error('fixture unsupported signal'), { code: failure })
+      return true
+    }
     let closed = false
-    const closing = storage.close().then(() => { closed = true })
+    const closing = storage.close().then(() => { closed = true }, () => { closed = true })
     try {
       await Promise.resolve()
       await Promise.resolve()
       expect(closed).toBe(false)
+      expect(attempts).toBe(1)
       expect(() => source.check()).not.toThrow()
+      expect(warn).toHaveBeenCalledTimes(failure === 'accepted' ? 0 : 1)
     } finally {
       kill('SIGKILL')
       await exited

@@ -10,12 +10,44 @@ import {
   readFileSync,
   realpathSync,
   statSync,
+  type Dir,
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { win32 } from 'node:path'
+import type { FileHandle } from 'node:fs/promises'
 
 const PRIVATE_DIRECTORY_MODE = 0o700
 const PRIVATE_FILE_MODE = 0o600
+const uncertainStateFiles = new Set<number | FileHandle | Dir>()
+
+export class StateFileCleanupUnconfirmed extends Error {
+  readonly code = 'STATE_FILE_CLEANUP_UNCONFIRMED'
+  constructor() { super('State file cleanup unconfirmed; restart required'); this.name = 'StateFileCleanupUnconfirmed' }
+}
+
+export function stateFileCustodyHealthy(): void {
+  if (uncertainStateFiles.size) throw new StateFileCleanupUnconfirmed()
+}
+
+/** Never retry an uncertain close: the descriptor could already have been reused. */
+export function closeStateFileDescriptor(fd: number): void {
+  if (uncertainStateFiles.has(fd)) throw new StateFileCleanupUnconfirmed()
+  try { closeSync(fd) }
+  catch { uncertainStateFiles.add(fd); throw new StateFileCleanupUnconfirmed() }
+}
+
+/** Already-owned handles may still settle after another close failed. */
+export async function closeStateFileHandle(handle: FileHandle): Promise<void> {
+  if (uncertainStateFiles.has(handle)) throw new StateFileCleanupUnconfirmed()
+  try { await handle.close() }
+  catch { uncertainStateFiles.add(handle); throw new StateFileCleanupUnconfirmed() }
+}
+
+export function closeStateDirectoryIterator(directory: Dir): void {
+  if (uncertainStateFiles.has(directory)) throw new StateFileCleanupUnconfirmed()
+  try { directory.closeSync() }
+  catch { uncertainStateFiles.add(directory); throw new StateFileCleanupUnconfirmed() }
+}
 
 function ownerUid(): number | null {
   return typeof process.getuid === 'function' ? process.getuid() : null
@@ -80,9 +112,10 @@ export function requireWindowsStateFile(file: string): void {
  * save failed after its rename. NTFS journals the rename itself; the file's data was flushed before it.
  */
 export function syncStateDirectory(directory: string, flags: number | string = 'r'): void {
+  stateFileCustodyHealthy()
   if (!directorySyncSupported()) return
   const fd = openSync(directory, flags)
-  try { fsyncSync(fd) } finally { closeSync(fd) }
+  try { fsyncSync(fd) } finally { closeStateFileDescriptor(fd) }
 }
 
 /**
@@ -100,6 +133,7 @@ function secureWindowsStateDirectory(directory: string, create: boolean): void {
 }
 
 export function secureStateDirectory(directory: string, create = true): void {
+  stateFileCustodyHealthy()
   if (process.platform === 'win32') {
     secureWindowsStateDirectory(directory, create)
     return
@@ -134,7 +168,7 @@ export function secureStateDirectory(directory: string, create = true): void {
       }
     }
   } finally {
-    closeSync(fd)
+    closeStateFileDescriptor(fd)
   }
 }
 
@@ -160,13 +194,14 @@ function inspectPrivateStateFile(fd: number, maxBytes: number): void {
 }
 
 export function readPrivateStateFile(file: string, maxBytes = Number.MAX_SAFE_INTEGER): string {
+  stateFileCustodyHealthy()
   if (process.platform === 'win32') requireInsideWindowsRoots(file, 'file')
   const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
   try {
     inspectPrivateStateFile(fd, maxBytes)
     return readFileSync(fd, 'utf8')
   } finally {
-    closeSync(fd)
+    closeStateFileDescriptor(fd)
   }
 }
 
@@ -174,6 +209,7 @@ export function hardenPrivateStateFileIfPresent(
   file: string,
   maxBytes = Number.MAX_SAFE_INTEGER,
 ): boolean {
+  stateFileCustodyHealthy()
   let fd: number
   try {
     if (process.platform === 'win32') requireInsideWindowsRoots(file, 'file')
@@ -186,6 +222,6 @@ export function hardenPrivateStateFileIfPresent(
     inspectPrivateStateFile(fd, maxBytes)
     return true
   } finally {
-    closeSync(fd)
+    closeStateFileDescriptor(fd)
   }
 }

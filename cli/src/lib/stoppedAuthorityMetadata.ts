@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { lstatSync, opendirSync, type Dir } from 'node:fs'
 import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
-import { secureStateDirectory } from './secureState.js'
+import { secureStateDirectory, StateFileCleanupUnconfirmed } from './secureState.js'
 import { sessionFileIdentity, SessionStorageUnavailable } from './sessionStorageWire.js'
 
 export const STOPPED_AUTHORITY_ENTRIES = 16_384
@@ -40,6 +40,7 @@ export function stoppedArchiveWitness(directory: string, options: { entries?: nu
     if (before !== after) throw new SessionStorageUnavailable('changed')
     return createHash('sha256').update(identity).update(`:${images}:${sum.toString(16)}`).digest('hex')
   } catch (error) {
+    if (error instanceof StateFileCleanupUnconfirmed) throw new SessionStorageUnavailable('cleanup-unconfirmed')
     if ((error as NodeJS.ErrnoException).code === 'ENOENT' && !dir) return 'missing'
     if (error instanceof SessionStorageUnavailable) throw error
     throw new SessionStorageUnavailable('unsafe')
