@@ -4002,6 +4002,24 @@ describe('hello capabilities', () => {
     }
   })
 
+  it('the close of a question whose id no frame could carry is not sent', async () => {
+    const log = vi.fn()
+    const { session, port } = await connect(richHost({ log }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0', questionTier: 'v1' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      await session.question('a1', 'q1', [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }])
+      const big = 'x'.repeat(9000)
+      await session.question('a1', big, [{ key: 'k', q: 'Approve this plan?', options: [] }])
+      port.sent.length = 0
+      await session.questionClose('a1', big)
+      expect(port.sent).toEqual([])
+      expect(log.mock.calls.map(([line]) => String(line)).filter((line) => line.includes('dropped'))).toEqual([])
+      await session.questionClose('a1', big)
+      expect(port.sent).toEqual([])
+    } finally { await session.stop() }
+  })
+
   it('a question delivered again while its row is being written is sent once', async () => {
     const { session, port } = await connect(richHost())
     const ask = [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }]
