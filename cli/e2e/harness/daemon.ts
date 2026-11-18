@@ -452,10 +452,12 @@ export class IsolatedDaemon {
       HARNESS_GRID_BIN: '',
       HARNESS_OPEN_BIN: fakeOpen,
       HARNESS_ORCA_APP_BIN: orcaLauncher,
-      // Nor does a fake dial's attach install Harness's VS Code extension into the developer's VS Code
+      // Nor does a fake dial's attach install Harness's VS Code extension into the developer's VS Code or Cursor
       // (cable/vscodeExtensionSetup.ts): /Applications is the computer's, whatever the home, so the devices look for VS
-      // Code's `code` here alone, in place of /Applications, ~/Applications and PATH. Missing until a test writes its own.
+      // Code's `code` and Cursor's `cursor` here alone, in place of /Applications, ~/Applications and PATH. Missing
+      // until a test writes its own.
       HARNESS_VSCODE_BIN: join(own, 'vscode', 'code'),
+      HARNESS_CURSOR_BIN: join(own, 'cursor', 'cursor'),
       // Nor does a word to a ChatGPT app session reach the developer's ChatGPT app (cable/hosts/codexQueue.ts):
       // /Applications is the computer's, whatever the home, so the devices look for the app's own Codex CLI here alone,
       // in place of /Applications and ~/Applications. Missing until a test writes its own (harness/codexAppCli.ts).

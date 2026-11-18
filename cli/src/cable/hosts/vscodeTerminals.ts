@@ -3,6 +3,8 @@
  * (docs/plans/2026-11-17-dial-vscode-extension-design.md): each window holds one `vscode` stream on the devices'
  * listener, keyed by the window's id, and reports its shells' pids on `vscode-state`. This module owns the open windows,
  * each one's latest state, each VS Code agent's parent chain, the match of the two, and the lines written to a window.
+ * Cursor's windows, which run the same extension, hold the same streams: one pool serves both editors, and an agent is
+ * the VS Code adapter's or Cursor's by its hook's bundle id (vscode.ts, docs/plans/2026-11-18-dial-cursor-design.md §1).
  *
  * The match is the process tree: an agent runs under the shell VS Code started for its terminal, or is that terminal's
  * own process, so the window that lists a pid of its chain holds it. A process's name is outside text (a process can
@@ -95,7 +97,7 @@ export interface VscodeTerminal { window: string; shell: number }
 
 export interface VscodeTerminals {
   handlers: { vscode: ListenerStreamHandler; 'vscode-state': ListenerHandler }
-  /** The pids of the VS Code agents listed now (at most observed.ts's 50). A new one may ask for a read; one that is gone drops its chain. */
+  /** The pids of the VS Code and Cursor agents listed now (at most observed.ts's 50). A new one may ask for a read; one that is gone drops its chain. */
   agents(pids: readonly number[]): void
   /** The window and shell that hold the agent with that pid, from its kept chain; none while unknown. */
   terminalOf(agentPid: number): VscodeTerminal | undefined

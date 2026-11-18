@@ -1,16 +1,17 @@
 /**
- * A rest shows a Claude Code session in the VS Code extension's tab (docs/plans/2026-11-17-dial-vscode-follow-design.md),
- * on the real daemon: two sessions whose hooks name the extension (`CLAUDE_CODE_ENTRYPOINT=claude-vscode`, VS Code's bundle
- * id), and a fake dial on the desk resting on each while VS Code is in front, run each one's own link once, sent to VS Code
- * alone; with another app in front, a rest runs nothing. The app in front is a line on the stdin of the real `harness
- * hardware watch --json`, as the Harness Device app writes it.
+ * A rest shows a Claude Code session in the extension's tab, in VS Code and in Cursor
+ * (docs/plans/2026-11-17-dial-vscode-follow-design.md, docs/plans/2026-11-18-dial-cursor-design.md), on the real daemon:
+ * two sessions whose hooks name the extension (`CLAUDE_CODE_ENTRYPOINT=claude-vscode`, the editor's bundle id), and a fake
+ * dial on the desk resting on each while that editor is in front, run each one's own link once (`vscode://` or
+ * `cursor://`), sent to that editor alone; with another app in front, a rest runs nothing. The app in front is a line on
+ * the stdin of the real `harness hardware watch --json`, as the Harness Device app writes it.
  *
- * The real VS Code and `/usr/bin/open` never run: the daemon's `open` is the harness's fake (HARNESS_OPEN_BIN,
+ * The real VS Code, Cursor and `/usr/bin/open` never run: the daemon's `open` is the harness's fake (HARNESS_OPEN_BIN,
  * harness/daemon.ts), checked to be inside the test's own root before anything rests. Skipped off macOS: the link is
  * macOS's, so there no rest exists.
  *
- * Orca holds more agents than VS Code until VS Code settles in front, so the dial's switch to VS Code's ring is the
- * settle: nothing waits a fixed second.
+ * Orca holds more agents than the editor until the editor settles in front, so the dial's switch to the editor's ring is
+ * the settle: nothing waits a fixed second.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -29,9 +30,11 @@ const CLI_ENTRY = process.env.E2E_BUNDLE_PATH ? [process.env.E2E_BUNDLE_PATH] : 
 const FILTER = { appFilter: 'v1' }
 const ORCA = 'com.stablyai.orca'
 const VSCODE = 'com.microsoft.VSCode'
-const link = (session: string) => `vscode://anthropic.claude-code/open?session=${session}`
+const CURSOR = 'com.todesktop.230313mzl4w4u92'
+/** The extension's link in an editor: its scheme is the editor's id on the dial. */
+const link = (app: string, session: string) => `${app}://anthropic.claude-code/open?session=${session}`
 
-describe.skipIf(process.platform !== 'darwin')("a rest shows a session in the VS Code extension's tab", () => {
+describe.skipIf(process.platform !== 'darwin')("a rest shows a session in the Claude Code extension's tab", () => {
   let daemon: IsolatedDaemon | undefined
   let desk: Desk | undefined
   const children: ChildProcess[] = []
@@ -73,68 +76,70 @@ describe.skipIf(process.platform !== 'darwin')("a rest shows a session in the VS
   const swiped = (d: IsolatedDaemon, n: number) =>
     until(`swipe line ${n}`, () => swipes(d).length >= n ? swipes(d) : undefined, 30_000, 50)
 
-  it('with VS Code in front, a rest on each extension session runs its own link once; with another app in front, none', async () => {
-    const { d, dial } = await fresh()
-    // The open the daemon runs is the harness's fake in its root, never the real one.
-    const open = d.env.HARNESS_OPEN_BIN ?? ''
-    expect(isAbsolute(open), open).toBe(true)
-    expect(relative(d.root, open).startsWith('..'), open).toBe(false)
+  it.each([['VS Code', 'vscode', VSCODE], ['Cursor', 'cursor', CURSOR]])(
+    'with %s in front, a rest on each extension session runs its own link once; with another app in front, none',
+    async (_name, app, bundle) => {
+      const { d, dial } = await fresh()
+      // The open the daemon runs is the harness's fake in its root, never the real one.
+      const open = d.env.HARNESS_OPEN_BIN ?? ''
+      expect(isAbsolute(open), open).toBe(true)
+      expect(relative(d.root, open).startsWith('..'), open).toBe(false)
 
-    // 1. Orca holds more agents than VS Code until VS Code settles in front, so the ring's switch to VS Code is the settle.
-    for (const folder of ['a', 'b', 'c']) {
-      const session = new InOrca(d, folder, children, { ORCA_TERMINAL_HANDLE: `term_${randomUUID()}`, __CFBundleIdentifier: ORCA })
-      const since = dial.messages.length
-      await session.hook('SessionStart', { source: 'startup' })
-      await dial.next((m) => m.t === 'agent' && m.id === session.id, 45_000, `${folder} listed`, since)
-    }
+      // 1. Orca holds more agents than the editor until it settles in front, so the ring's switch to the editor is the settle.
+      for (const folder of ['a', 'b', 'c']) {
+        const session = new InOrca(d, folder, children, { ORCA_TERMINAL_HANDLE: `term_${randomUUID()}`, __CFBundleIdentifier: ORCA })
+        const since = dial.messages.length
+        await session.hook('SessionStart', { source: 'startup' })
+        await dial.next((m) => m.t === 'agent' && m.id === session.id, 45_000, `${folder} listed`, since)
+      }
 
-    // 2. Two sessions in the VS Code extension's panel, counted behind Orca's ring.
-    const inVscode = (folder: string) => new InOrca(d, folder, children,
-      { __CFBundleIdentifier: VSCODE, CLAUDE_CODE_ENTRYPOINT: 'claude-vscode', ORCA_AGENT_SESSION_ID: '' })
-    const v1 = inVscode('v1')
-    const v2 = inVscode('v2')
-    let since = dial.messages.length
-    await v1.hook('SessionStart', { source: 'startup' })
-    await v2.hook('SessionStart', { source: 'startup' })
-    await dial.next((m) => m.t === 'apps' && m.shown === 'orca'
-      && (m.apps as Array<{ id: string; count: number }>).some((app) => app.id === 'vscode' && app.count === 2), 45_000, 'VS Code counted', since)
+      // 2. Two sessions in the extension's panel, counted behind Orca's ring.
+      const inEditor = (folder: string) => new InOrca(d, folder, children,
+        { __CFBundleIdentifier: bundle, CLAUDE_CODE_ENTRYPOINT: 'claude-vscode', ORCA_AGENT_SESSION_ID: '' })
+      const v1 = inEditor('v1')
+      const v2 = inEditor('v2')
+      let since = dial.messages.length
+      await v1.hook('SessionStart', { source: 'startup' })
+      await v2.hook('SessionStart', { source: 'startup' })
+      await dial.next((m) => m.t === 'apps' && m.shown === 'orca'
+        && (m.apps as Array<{ id: string; count: number }>).some((a) => a.id === app && a.count === 2), 45_000, 'the editor counted', since)
 
-    // 3. VS Code in front, as the Harness Device app's watch says it: its ring, with both rows.
-    const front = watch(d)
-    since = dial.messages.length
-    front(VSCODE)
-    const ring = dial.messages.indexOf(await dial.next((m) => m.t === 'apps' && m.shown === 'vscode', 45_000, "VS Code's ring", since))
-    for (const session of [v1, v2]) await dial.next((m) => m.t === 'agent' && m.id === session.id, 45_000, 'listed in VS Code\'s ring', ring)
+      // 3. The editor in front, as the Harness Device app's watch says it: its ring, with both rows.
+      const front = watch(d)
+      since = dial.messages.length
+      front(bundle)
+      const ring = dial.messages.indexOf(await dial.next((m) => m.t === 'apps' && m.shown === app, 45_000, "the editor's ring", since))
+      for (const session of [v1, v2]) await dial.next((m) => m.t === 'agent' && m.id === session.id, 45_000, "listed in the editor's ring", ring)
 
-    // 4. A rest on each: its own session's link, sent to VS Code alone, once.
-    dial.send({ t: 'focus', agentId: v2.id })
-    expect(await swiped(d, 1)).toEqual(['[device] swipe · ok'])
-    expect(d.opens()).toEqual([['-b', VSCODE, link(v2.sessionId)]])
-    dial.send({ t: 'focus', agentId: v1.id })
-    expect(await swiped(d, 2)).toEqual(['[device] swipe · ok', '[device] swipe · ok'])
-    expect(d.opens()).toEqual([['-b', VSCODE, link(v2.sessionId)], ['-b', VSCODE, link(v1.sessionId)]])
+      // 4. A rest on each: its own session's link, sent to the editor alone, once.
+      dial.send({ t: 'focus', agentId: v2.id })
+      expect(await swiped(d, 1)).toEqual(['[device] swipe · ok'])
+      expect(d.opens()).toEqual([['-b', bundle, link(app, v2.sessionId)]])
+      dial.send({ t: 'focus', agentId: v1.id })
+      expect(await swiped(d, 2)).toEqual(['[device] swipe · ok', '[device] swipe · ok'])
+      expect(d.opens()).toEqual([['-b', bundle, link(app, v2.sessionId)], ['-b', bundle, link(app, v1.sessionId)]])
 
-    // 5. Another app in front: a rest runs nothing. VS Code's settle back (a second) outlasts a rest (400 ms), so its
-    // ring shown again means the rest had its chance.
-    since = dial.messages.length
-    front(ORCA)
-    await dial.next((m) => m.t === 'apps' && m.shown === 'orca', 45_000, "Orca's ring", since)
-    dial.send({ t: 'focus', agentId: v2.id })
-    // The dial's frames (its pty bridge) and the watch's line (its own process) race to the daemon: VS Code's front landing
-    // first would let this focus rest. The dial's next list is answered after its focus was taken, with Orca in front.
-    since = dial.messages.length
-    dial.send({ t: 'agents.list' })
-    await dial.next((m) => m.t === 'agents.end', 45_000, 'the list asked for after the focus', since)
-    since = dial.messages.length
-    front(VSCODE)
-    await dial.next((m) => m.t === 'apps' && m.shown === 'vscode', 45_000, "VS Code's ring again", since)
-    expect(d.opens()).toEqual([['-b', VSCODE, link(v2.sessionId)], ['-b', VSCODE, link(v1.sessionId)]])
-    expect(swipes(d)).toEqual(['[device] swipe · ok', '[device] swipe · ok'])
+      // 5. Another app in front: a rest runs nothing. The editor's settle back (a second) outlasts a rest (400 ms), so its
+      // ring shown again means the rest had its chance.
+      since = dial.messages.length
+      front(ORCA)
+      await dial.next((m) => m.t === 'apps' && m.shown === 'orca', 45_000, "Orca's ring", since)
+      dial.send({ t: 'focus', agentId: v2.id })
+      // The dial's frames (its pty bridge) and the watch's line (its own process) race to the daemon: the editor's front
+      // landing first would let this focus rest. The dial's next list is answered after its focus was taken, with Orca in front.
+      since = dial.messages.length
+      dial.send({ t: 'agents.list' })
+      await dial.next((m) => m.t === 'agents.end', 45_000, 'the list asked for after the focus', since)
+      since = dial.messages.length
+      front(bundle)
+      await dial.next((m) => m.t === 'apps' && m.shown === app, 45_000, "the editor's ring again", since)
+      expect(d.opens()).toEqual([['-b', bundle, link(app, v2.sessionId)], ['-b', bundle, link(app, v1.sessionId)]])
+      expect(swipes(d)).toEqual(['[device] swipe · ok', '[device] swipe · ok'])
 
-    // 6. Every rest above was taken as a hand's, none dropped; no line names a session or its link, and no link failed back
-    // to opening VS Code alone.
-    const log = d.log()
-    expect(log).not.toContain('cable: dropped dial focus')
-    for (const secret of [v1.sessionId, v2.sessionId, 'vscode://', '[device] open · vscode · fallback']) expect(log).not.toContain(secret)
-  })
+      // 6. Every rest above was taken as a hand's, none dropped; no line names a session or its link, and no link failed back
+      // to opening the editor alone.
+      const log = d.log()
+      expect(log).not.toContain('cable: dropped dial focus')
+      for (const secret of [v1.sessionId, v2.sessionId, `${app}://`, `[device] open · ${app} · fallback`]) expect(log).not.toContain(secret)
+    })
 })

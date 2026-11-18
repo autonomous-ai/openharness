@@ -42,6 +42,7 @@ describe('statusText', () => {
       'device claude status --json': ok('{"enabled":true}\n'),
       'device codex status --json': { code: 1, stdout: 'half', timedOut: false },
       'device vscode status --json': { code: null, stdout: '', timedOut: true },
+      'device cursor status --json': ok('{"cursor":"on","version":"0.6.60"}\n'),
     }
     const { run, calls } = recording((call) => answers[words(call)])
 
@@ -58,6 +59,9 @@ describe('statusText', () => {
       '$ harness device vscode status --json',
       '(no answer: timed out after 10 s)',
       '',
+      '$ harness device cursor status --json',
+      '{"cursor":"on","version":"0.6.60"}',
+      '',
     ].join('\n'))
     expect(calls).toEqual(Object.keys(answers).map((command) => (
       { file: '/node', args: ['--flag', '/cli.js', ...command.split(' ')], timeoutMs: 10_000 })))
@@ -70,6 +74,7 @@ describe('statusText', () => {
       if (n === 1) return Promise.resolve({ code: null, stdout: '', timedOut: false })
       if (n === 2) return Promise.reject(new Error('spawn failed'))
       if (n === 3) throw new Error('threw')
+      if (n === 4) return Promise.resolve({ code: null, stdout: '', timedOut: false })
       return Promise.resolve(ok('  \n'))
     }
 
@@ -77,16 +82,17 @@ describe('statusText', () => {
       '$ harness status', '(no answer)', '',
       '$ harness device claude status --json', '(no answer)', '',
       '$ harness device codex status --json', '(no answer)', '',
-      '$ harness device vscode status --json', '(no output)', '',
+      '$ harness device vscode status --json', '(no answer)', '',
+      '$ harness device cursor status --json', '(no output)', '',
     ].join('\n'))
   })
 
-  // Four commands of 10 s each, one after another, would outlast the desktop app's 30 s wait for the export.
-  it('all four start before any answers', async () => {
+  // Five commands of 10 s each, one after another, would outlast the desktop app's 30 s wait for the export.
+  it('all five start before any answers', async () => {
     const { run, calls, answerAll } = waiting()
 
     const text = statusText(SELF, run)
-    expect(calls).toHaveLength(4)
+    expect(calls).toHaveLength(5)
     answerAll(ok('x\n'))
     await text
   })
@@ -178,7 +184,7 @@ describe('collectBundleFacts', () => {
       self: SELF, platform: 'darwin', home: HOME, env: {}, nodeVersion: 'v24.22.2', osRelease: '25.6.0',
       exists: () => false, run,
     })
-    expect(calls.map((call) => call.file)).toEqual(['/node', '/node', '/node', '/node', '/usr/bin/sw_vers'])
+    expect(calls.map((call) => call.file)).toEqual(['/node', '/node', '/node', '/node', '/node', '/usr/bin/sw_vers'])
     answerAll(ok('26.0.1\n'))
 
     expect(await facts).toEqual({

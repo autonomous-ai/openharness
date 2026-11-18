@@ -33,6 +33,7 @@ import { MANAGED_SETTINGS, readFullscreen } from '../cable/hosts/claudeRenderer.
 import { cmuxClientDeps, cmuxStoreDir, cmuxStores, createCmuxClient, type CmuxClient } from '../cable/hosts/cmuxCli.js'
 import { createCmuxAppAdapter } from '../cable/hosts/cmuxApp.js'
 import { CmuxSource } from '../cable/hosts/cmuxSource.js'
+import { createCursorFolderAdapter, isFolder } from '../cable/hosts/cursorFolder.js'
 import { watchNearest } from '../cable/hosts/folderWatch.js'
 import { createCodexAppAdapter } from '../cable/hosts/codexApp.js'
 import { codexQueueDeps, createCodexQueue, type CodexQueueDeps } from '../cable/hosts/codexQueue.js'
@@ -169,6 +170,9 @@ export interface DevicesDeps {
   /** For this service's tests: how VS Code and Harness's extension in it are found and `code` is run; the real ones by
    *  default (devices/vscodeExtension.ts). */
   vscodeExtension?: VscodeExtensionDeps
+  /** For this service's tests: how Cursor and Harness's extension in it are found and `cursor` is run; the real ones by
+   *  default. */
+  cursorExtension?: VscodeExtensionDeps
 }
 
 /** ⌘K's answer while the fleet is not running: it never started, so there is no list to weigh. */
@@ -399,7 +403,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const dial = dialStream({ log, after: timerIn('dialStream'), ended: () => part.call('orca', () => orcaFronted(null)) })
   // The streams Harness's own VS Code extension holds open, one a window, and the terminal each VS Code agent runs in
   // (docs/plans/2026-11-17-dial-vscode-extension-design.md). An adapter's capabilities are read at each look, so a
-  // terminal found or lost tells the dials to look again.
+  // terminal found or lost tells the dials to look again. Cursor's windows hold the same stream, with no word of which
+  // editor they are: a window reports shells by pid, and an agent's pid is placed in one editor alone by its hook's bundle
+  // id (vscode.ts paneOf), so each editor's adapter finds only its own agents' terminals in the one pool.
   const renderer = {
     defaultHome: dirname(env.CLAUDE_PROJECTS_DIR), managed: deps.claudeManagedSettings ?? MANAGED_SETTINGS[apps.platform],
   }
@@ -481,7 +487,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // No echo to guard: the Codex app sends no attach for the follow to take as a person's.
     createCodexAppAdapter({ ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'codex', log }),
     // No echo to guard: VS Code sends no attach for the follow to take as a person's.
-    createVscodeAdapter({ ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'vscode', terminals: vscode }),
+    createVscodeAdapter('vscode', { ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'vscode', terminals: vscode }),
+    createVscodeAdapter('cursor', { ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'cursor', terminals: vscode }),
+    // After Cursor's terminals and tabs: whatever agent in Cursor they do not reach opens its folder's window.
+    createCursorFolderAdapter({ run: apps.run, platform: apps.platform, bin: openBin, isFolder }),
     createTabsAdapter({
       isOpen: () => tabs.isOpen(),
       select: (tab, raise) => {
@@ -533,18 +542,28 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const skillPass = (): void => {
     if (skill && !stopped) part.call('skill', () => skill.started())
   }
-  // Harness's VS Code extension, set up once a computer through the dial setup's record (cable/vscodeExtensionSetup.ts),
-  // in the devices' own process alone, as the dial setup: inside the core's the core would run VS Code's `code`. A part
-  // of its own, so a throw in VS Code's files is never the dial's. `HARNESS_VSCODE_BIN`: the end-to-end tests' VS Code,
-  // so a daemon under test finds none of this computer's own (devices/vscodeExtension.ts).
-  const vscodeCount = createEngineTally('[device] vscode extension', ['vscode'], SETUP_COUNTS, log)
+  // Harness's VS Code extension, set up once a computer in VS Code and once in Cursor through the dial setup's record
+  // (cable/vscodeExtensionSetup.ts), in the devices' own process alone, as the dial setup: inside the core's the core
+  // would run the editor's `code` or `cursor`. Each editor's setup a part of its own, so a throw in one editor's files is
+  // never the dial's, and a fault or a failed pass's hour in one never holds the other. `HARNESS_VSCODE_BIN` and
+  // `HARNESS_CURSOR_BIN`: the end-to-end tests' VS Code and Cursor, so a daemon under test finds none of this computer's
+  // own (devices/vscodeExtension.ts).
+  const extensionCount = createEngineTally('[device] vscode extension', ['vscode', 'cursor'], SETUP_COUNTS, log)
   const vscodeSetup = skill ? createVscodeExtensionSetup({
-    vscode: deps.vscodeExtension ?? vscodeExtensionDeps(process.env.HARNESS_VSCODE_BIN),
+    vscode: deps.vscodeExtension ?? vscodeExtensionDeps('vscode', process.env.HARNESS_VSCODE_BIN),
     removed: () => readRemoved(core.dataDir),
     recorded: () => skill.vscode(),
     record: (version) => skill.recordVscode(version),
     after: timerIn('vscodeExtension'),
-    count: (kind, reason) => vscodeCount('vscode', kind, reason),
+    count: (kind, reason) => extensionCount('vscode', kind, reason),
+  }) : null
+  const cursorSetup = skill ? createVscodeExtensionSetup({
+    vscode: deps.cursorExtension ?? vscodeExtensionDeps('cursor', process.env.HARNESS_CURSOR_BIN),
+    removed: () => readRemoved(core.dataDir),
+    recorded: () => skill.cursor(),
+    record: (version) => skill.recordCursor(version),
+    after: timerIn('cursorExtension'),
+    count: (kind, reason) => extensionCount('cursor', kind, reason),
   }) : null
   const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, orcaHomes, {
     adapters,
@@ -569,8 +588,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // that read (at most its 5 s), so an Orca home gets the skill with the default one.
   if (skill || observed) void orcaHomes.refresh().then(() => {
     skillPass()
-    // After the dial setup's start pass, which reads the record VS Code's goes by (dialHomeSetup.ts vscode()).
+    // After the dial setup's start pass, which reads the record each editor's goes by (dialHomeSetup.ts vscode(),
+    // cursor()).
     if (vscodeSetup && !stopped) part.call('vscodeExtension', () => vscodeSetup.pass())
+    if (cursorSetup && !stopped) part.call('cursorExtension', () => cursorSetup.pass())
   })
   /** An open scan, once Orca's homes are read again where the last read is old (at most its 5 s): a session in an account
    *  added since is found by this scan. */
@@ -844,9 +865,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     environment: () => core.account.environment(),
     watching: (on) => {
       core.clients.dialWatching(on)
-      // Before the scan the attach starts, so that scan finds the dial recorded; and before VS Code's pass, which reads it.
+      // Before the scan the attach starts, so that scan finds the dial recorded; and before each editor's pass, which
+      // reads it.
       if (on && skill) part.call('skill', () => skill.attached())
       if (on && vscodeSetup) part.call('vscodeExtension', () => vscodeSetup.pass())
+      if (on && cursorSetup) part.call('cursorExtension', () => cursorSetup.pass())
       dialAttached(on)
       part.call('dialStream', () => dial.attached(on))
     },
@@ -1454,12 +1477,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     return readOrcaOrder(source)
   }
   if (observed) observed.onChange(() => part.call('orca', () => orcaMembers(observed)))
-  // Each change tells VS Code's windows which agents run in one of its terminals, by their panes: only theirs may cost a
-  // read of the process table. A part of its own, so a throw there is never the dial's.
-  if (observed) observed.onChange(() => part.call('vscode', () => vscode.agents(observed.list().flatMap(({ id }) => {
-    const pid = termPid(observed.paneOf(id, 'vscode') ?? '')
-    return pid === undefined ? [] : [pid]
-  }))))
+  // Each change tells VS Code's and Cursor's windows which agents run in one of their terminals, by their panes: only
+  // theirs may cost a read of the process table. A part of its own, so a throw there is never the dial's.
+  if (observed) observed.onChange(() => part.call('vscode', () => vscode.agents(observed.list().flatMap(({ id }) =>
+    (['vscode', 'cursor'] as const).flatMap((editor) => {
+      const pid = termPid(observed.paneOf(id, editor) ?? '')
+      return pid === undefined ? [] : [pid]
+    })))))
 
   /**
    * The open scan's copy of a session cmux lists, placed at that row's cmux pane

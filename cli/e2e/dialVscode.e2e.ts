@@ -8,7 +8,11 @@
  * a fake dial on the desk taps, rests and scrolls. The app in front is a line on the stdin of the real `harness hardware watch --json`, as the Harness
  * Device app writes it.
  *
- * The real VS Code, its `code` and `/usr/bin/open` never run: the daemon's `open` is the harness's fake
+ * In Cursor too (docs/plans/2026-11-18-dial-cursor-design.md): one session runs under a fake Cursor, a bundle under the
+ * throwaway home that carries Cursor's id, the same loop's window shows, raises and scrolls its terminal, and once the
+ * window goes a tap opens Cursor's window for the session's folder.
+ *
+ * The real VS Code and Cursor, their CLIs and `/usr/bin/open` never run: the daemon's `open` is the harness's fake
  * (HARNESS_OPEN_BIN, harness/daemon.ts), checked to be inside the test's own root before anything is tapped, and the
  * loop finds the daemon through a launcher in the throwaway home alone, never this computer's own daemon or `harness`.
  *
@@ -17,7 +21,7 @@
  * on A and each re-assert of it, when a turn is dropped. Every later wait is a frame or a line, never a fixed time.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, sep } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { MANAGED_SETTINGS, readSettings } from '../src/cable/hosts/claudeRenderer.js'
@@ -40,6 +44,13 @@ const GHOSTTY = 'com.mitchellh.ghostty'
 const mac = process.platform === 'darwin'
 /** What VS Code's integrated terminal gives the processes in it, as Claude Code's hook reads them. */
 const IN_VSCODE: Record<string, string> = { TERM_PROGRAM: 'vscode', ...(mac ? { __CFBundleIdentifier: VSCODE } : {}) }
+const CURSOR = 'com.todesktop.230313mzl4w4u92'
+/** What Cursor's integrated terminal gives the processes in it. Its bundle id on every platform: only that names Cursor,
+ *  a VS Code fork that says TERM_PROGRAM=vscode too. No Cursor off macOS sets it, so there the case checks the code path,
+ *  not a Linux Cursor. */
+const IN_CURSOR: Record<string, string> = { TERM_PROGRAM: 'vscode', __CFBundleIdentifier: CURSOR }
+/** A Cursor session's folder's name: the person's own path, which no line of the devices may hold (#4458). */
+const FOLDER_MARKER = 'SECRET-FOLDER-MARKER'
 /** The everyday daemon's port: a `link` under test that reached it would hand the loop this computer's devices' socket. */
 const EVERYDAY_PORT = '18473'
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/
@@ -66,7 +77,7 @@ interface Window {
   stop(): Promise<number | null>
 }
 
-describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach an agent in VS Code's terminal", () => {
+describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach an agent in VS Code's or Cursor's terminal", () => {
   let daemon: IsolatedDaemon | undefined
   let desk: Desk | undefined
   const children: ChildProcess[] = []
@@ -185,18 +196,32 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
     }
   }
 
-  /** The daemon's lines that hold [word], each from its tag on. */
-  const linesWith = (d: IsolatedDaemon, word: string): string[] =>
-    d.log().split('\n').filter((line) => line.includes(word)).map((line) => line.slice(line.indexOf('[')))
+  /** The daemon's lines that hold any of [words], each from its tag on. */
+  const linesWith = (d: IsolatedDaemon, ...words: string[]): string[] =>
+    d.log().split('\n').filter((line) => words.some((word) => line.includes(word))).map((line) => line.slice(line.indexOf('[')))
   const swipes = (d: IsolatedDaemon): string[] => linesWith(d, '[device] swipe ·')
   const said = (d: IsolatedDaemon, line: string): Promise<true> =>
     until(`"${line}" in the daemon's log`, () => d.log().includes(line), 30_000, 50)
-  /** The daemon's lines about VS Code that hold a shell's or an engine's pid of [agents], a window's id, the root's path
-   *  or the word `fullscreen`: each a leak. */
+  /** The daemon's lines about VS Code or Cursor (Cursor's adapters' ids and its tally say `cursor`) that hold a shell's or
+   *  an engine's pid of [agents], a window's id, the root's path or the word `fullscreen`, and the devices' own lines that
+   *  hold a folder's marker: each a leak. */
   const leaks = (d: IsolatedDaemon, agents: Outside[]): string[] => {
     const pids = agents.flatMap((agent) => [agent.shellPid!, agent.pid]).map((pid) => new RegExp(`\\b${pid}\\b`))
-    return linesWith(d, 'vscode').filter((line) => pids.some((pid) => pid.test(line)) || UUID.test(line) || line.includes(d.root)
-      || line.includes('fullscreen'))
+    return [
+      ...linesWith(d, 'vscode', 'cursor').filter((line) => pids.some((pid) => pid.test(line)) || UUID.test(line)
+        || line.includes(d.root) || line.includes('fullscreen')),
+      ...linesWith(d, '[device', '[observed]').filter((line) => line.includes(FOLDER_MARKER)),
+    ]
+  }
+
+  /** A stroke toward older lines: each move's 8 is 20 px, one line of 16 (scrollLines.ts) and the rest kept; the up lifts
+   *  the finger with too little left for a line. It is taken once the devices logged its up. */
+  const stroke = async (d: IsolatedDaemon, dial: FakeDial): Promise<void> => {
+    const taken = linesWith(d, 'cable: scroll ↑').length
+    dial.send({ t: 'scroll', phase: 'down', dy: 0, v: 0 })
+    for (let move = 0; move < 3; move++) dial.send({ t: 'scroll', phase: 'move', dy: 8, v: 0 })
+    dial.send({ t: 'scroll', phase: 'up', dy: 0, v: 0 })
+    await until('the stroke taken to its up', () => linesWith(d, 'cable: scroll ↑').length === taken + 1, 30_000, 50)
   }
 
   /** The `apps` frame after [since] that shows [app]'s ring. */
@@ -324,25 +349,14 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
     await dial.turnUntil(a.id, "A's terminal shown", () => window.shows[0])
     const shown = [...window.shows]
 
-    // A stroke toward older lines: each move's 8 is 20 px, one line of 16 (scrollLines.ts) and the rest kept; the up lifts
-    // the finger with too little left for a line. It is taken once the devices logged its up.
-    let strokes = 0
-    const stroke = async (): Promise<void> => {
-      dial.send({ t: 'scroll', phase: 'down', dy: 0, v: 0 })
-      for (let move = 0; move < 3; move++) dial.send({ t: 'scroll', phase: 'move', dy: 8, v: 0 })
-      dial.send({ t: 'scroll', phase: 'up', dy: 0, v: 0 })
-      strokes += 1
-      await until('the stroke taken to its up', () => linesWith(d, 'cable: scroll ↑').length === strokes, 30_000, 50)
-    }
-
     // 1. On A, its terminal active: three lines toward older ones.
-    await stroke()
+    await stroke(d, dial)
     await until('three lines scrolled', () => window.scrolls.length === 3, 30_000, 50)
 
     // 2. B's terminal active: the lines for A's run nothing, and the loop's minute line counts them dropped.
     window.set({ active: b.shellPid! })
     await until("B's terminal active", () => window.took.at(-1)?.active === b.shellPid, 10_000, 50)
-    await stroke()
+    await stroke(d, dial)
     const counted = await until('the stroke counted dropped', () => {
       const counts = scrollCounts(window)
       return counts.dropped > 0 && counts
@@ -355,7 +369,7 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
     const since = dial.messages.length
     front(GHOSTTY)
     await ring(dial, 'ghostty', since)
-    await stroke()
+    await stroke(d, dial)
     // Harness's window hears the devices' frames in order, so a tab the dial picks after the stroke, heard there, comes
     // after any dial_scroll of the three strokes. Resent until the devices hold the window's tab.
     harness.send('app_swarms', { active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds: [], panes: 0 }], tiles: [] })
@@ -449,5 +463,73 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
 
     // 6. No line about VS Code holds a pid, a window's id, the root's path or the renderer's name.
     expect(leaks(d, [a, b])).toEqual([])
+  }, 300_000)
+
+  it('in Cursor: a rest shows its terminal, a tap raises its window and brings Cursor, a stroke scrolls it, and once the window goes a tap opens its folder', async () => {
+    // 1. A in a Cursor terminal, its folder named by the marker, and W in Ghostty.
+    const { d, dial } = await fresh()
+    const a = await Outside.start(d, FOLDER_MARKER, IN_CURSOR, 'cursor', { shell: true })
+    outside.push(a)
+    const w = new InOrca(d, 'w', children, { TERM_PROGRAM: 'ghostty' })
+    await w.hook('SessionStart', { source: 'startup' })
+    await dial.next((m) => m.t === 'apps'
+      && (m.apps as Array<{ id: string; count: number }>).some((app) => app.id === 'cursor' && app.count === 1)
+      && (m.apps as Array<{ id: string; count: number }>).some((app) => app.id === 'ghostty' && app.count === 1), 45_000, 'Cursor 1 and Ghostty 1')
+    expect(a.shellPid).not.toBe(a.pid)
+
+    // 2. The window holds A's terminal, active.
+    const window = vscodeWindow(d)
+    window.set({ terminals: [a.shellPid!], active: a.shellPid!, focused: true })
+    await until('the window connected', () => window.states.at(-1) === 'connected', 60_000)
+    await said(d, '[devices] vscode stream · open · windows 1')
+    // Elsewhere a tap has no other way in: the terminal is what gives A its f.
+    if (!mac) await dial.next((m) => m.t === 'agent' && m.id === a.id && String(m.caps).includes('f'), 45_000, 'its terminal found')
+
+    // 3. Swipe: with Cursor in front, a rest on A shows A's terminal, and raises no window.
+    const front = watch(d)
+    front(CURSOR)
+    await dial.turnUntil(a.id, "A's terminal shown", () => window.shows[0])
+    expect(window.shows).toEqual([a.shellPid])
+    expect(window.raised).toEqual([])
+    await said(d, '[device] swipe · ok')
+
+    // 4. Tap: A's terminal is shown, then its window raised, and on macOS Cursor is brought forward by its own open, once;
+    // elsewhere none runs.
+    dial.send({ t: 'agent.open', agentId: a.id })
+    await until("A's window raised", () => window.raised.length === 1, 30_000, 50)
+    expect(window.shows).toEqual([a.shellPid, a.shellPid])
+    expect(window.raised).toEqual([2])
+    if (mac) await until('Cursor brought forward', () => d.opens().length === 1, 30_000, 50)
+    expect(d.opens()).toEqual(mac ? [['-b', CURSOR]] : [])
+    expect(d.log()).not.toContain('[device] open · cursor · fallback')
+
+    // 5. A stroke: three lines toward older ones, in A's terminal.
+    await stroke(d, dial)
+    await until('three lines scrolled', () => window.scrolls.length === 3, 30_000, 50)
+    expect(window.scrolls).toEqual(['up', 'up', 'up'])
+
+    // 6. The window goes: its loop ends by itself once its stdin ends, and the daemon says the stream ended.
+    const since = dial.messages.length
+    expect(await window.stop()).toBe(0)
+    await said(d, '[devices] vscode stream · ended · gone · windows 0')
+
+    if (mac) {
+      // 7. A tap on A, whose terminal is gone, opens Cursor's window for its folder, the path one argument.
+      dial.send({ t: 'agent.open', agentId: a.id })
+      await until("A's folder opened", () => d.opens().length === 2, 30_000, 50)
+      const [brought, opened] = d.opens()
+      expect(brought).toEqual(['-b', CURSOR])
+      expect(opened.slice(0, 2)).toEqual(['-b', CURSOR])
+      // opens() splits each run's line on its spaces: joined back, the folder as `open` was given it.
+      expect(realpathSync(opened.slice(2).join(' '))).toBe(realpathSync(join(d.projectsDir, FOLDER_MARKER)))
+    } else {
+      // 7. A's tap is gone with its terminal: no folder window opens off macOS.
+      await dial.next((m) => m.t === 'agent' && m.id === a.id && !String(m.caps).includes('f'), 45_000, "A's f gone", since)
+      expect(d.opens()).toEqual([])
+    }
+
+    // 8. No line about VS Code or Cursor holds a pid, the window's id or a path under the root, which A's folder is, and no
+    // line of the devices holds the folder's name.
+    expect(leaks(d, [a])).toEqual([])
   }, 300_000)
 })

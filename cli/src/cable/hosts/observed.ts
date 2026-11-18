@@ -453,7 +453,7 @@ export class ObservedSource implements HostSource {
   private locate(entry: Entry): void {
     const hints = entry.paired ? { HC_TERMINAL_ID: entry.paired.address } : entry.hints
     const place = { host: entry.agent.host, app: entry.agent.app, hints, tty: entry.tty, hostSession: entry.hostSession,
-      pid: entry.caller ?? entry.pid, sessionId: entry.agent.sessionId, engine: entry.agent.engine }
+      pid: entry.caller ?? entry.pid, sessionId: entry.agent.sessionId, engine: entry.agent.engine, cwd: entry.agent.cwd }
     entry.panes = (this.deps.actions?.adapters ?? []).flatMap((adapter) => {
       const pane = adapter.paneOf(place)
       return pane ? [{ adapter, pane }] : []
@@ -646,12 +646,14 @@ export class ObservedSource implements HostSource {
     // Every event's own: a session resumed elsewhere must not be typed into the terminal it left.
     entry.hints = e.hostHints
     entry.caller = e.callerPid
-    this.locate(entry)
-    entry.bundle = bundleOf(a.host, e.hostHints)
+    // Before locate: learnTty returns early for a caller it already read, so nothing places the session again at this
+    // hook, and a pane by folder must see the one this hook names.
     if (e.cwd) {
       a.cwd = e.cwd
       entry.startedIn ??= e.cwd
     }
+    this.locate(entry)
+    entry.bundle = bundleOf(a.host, e.hostHints)
     if (e.event === 'session-start' || e.event === 'turn-start') {
       if (e.title !== undefined) entry.title = e.title
       else if (e.engine === 'claude') entry.title = undefined

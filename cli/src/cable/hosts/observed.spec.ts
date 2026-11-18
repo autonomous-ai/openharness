@@ -1419,7 +1419,7 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
     { ...orca, type: (pane, text) => fake.orcaSend(pane.id, text), show: (pane) => fake.orcaSwitch(pane.id) },
     { ...claude, show: (pane, agentId) => fake.claudeShow(agentId, pane.id) },
     createCodexAppAdapter({ ...deps, inFront: () => fake.codexInFront(), log: () => {} }),
-    createVscodeAdapter({ ...deps, inFront: () => true, terminals: {
+    createVscodeAdapter('vscode', { ...deps, inFront: () => true, terminals: {
       terminalOf: () => undefined, show: () => false, scroll: () => false, pageKeys: () => false } }),
     createTabsAdapter({ isOpen: () => fake.tabsOpen(), select: (tab, raise) => fake.tabSelect(tab.app, tab.tty, raise) === 'ok' }),
   ]
@@ -1429,6 +1429,31 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
 describe('ObservedSource actions', () => {
   afterEach(() => { vi.useRealTimers() })
   const withHandle = { hostHints: { ORCA_AGENT_SESSION_ID: 'x', ORCA_TERMINAL_HANDLE: HANDLE } }
+  /** An adapter whose pane is the place's folder, as Cursor's folder window's is (cursorFolder.ts). */
+  const byFolder: HostAdapter = { id: 'by-folder', tap: 'instead', canFocus: () => true, focus: async () => true,
+    paneOf: (place) => (place.cwd ? { adapter: 'by-folder', id: place.cwd } : undefined) }
+
+  it('a place carries the folder of the hook that placed it: a session that moved is placed there at that hook', () => {
+    const { src, ev } = setup({ actions: { ...fakeActions().actions, adapters: [byFolder] } })
+    src.ingest(ev('session-start', { cwd: '/work/one' }))
+    const { id } = src.list()[0]
+    expect(src.paneOf(id, 'by-folder')).toBe('/work/one')
+    // The same caller: no tty read places it a second time, so the place must be right at this hook's own look.
+    src.ingest(ev('turn-start', { cwd: '/work/two' }))
+    expect(src.paneOf(id, 'by-folder')).toBe('/work/two')
+    // A hook cut to its bound names no folder: the last one stands.
+    src.ingest(ev('turn-stop', { cwd: undefined }))
+    expect(src.paneOf(id, 'by-folder')).toBe('/work/two')
+  })
+
+  it('a session the scan found is placed at its row\'s folder', async () => {
+    const { src, open, owners, externals } = setup({ actions: { ...fakeActions().actions, adapters: [byFolder] } })
+    open.set('s9', 'terminal')
+    owners.set('s9', { pid: 77, engine: 'claude' })
+    externals.set('s9', { cwd: '/work/scan', transcriptPath: '/t/s9.jsonl' })
+    await src.scanOpen()
+    expect(src.paneOf(observedAgentId('claude', 's9'), 'by-folder')).toBe('/work/scan')
+  })
 
   it('keeps a handle that is term_<uuid> and ignores any other', () => {
     const { actions } = fakeActions()
@@ -3044,7 +3069,8 @@ describe('ObservedSource panes', () => {
 
     const adapter = madeUp()
     const a = first(adapter, both)
-    expect(adapter.paneOf).toHaveBeenLastCalledWith({ host: 'terminal', app: 'terminal', hints: both, pid: 100, sessionId: 's1', engine: 'claude' })
+    expect(adapter.paneOf).toHaveBeenLastCalledWith({ host: 'terminal', app: 'terminal', hints: both, pid: 100, sessionId: 's1', engine: 'claude',
+      cwd: '/work/proj' })
     expect(a.src.capabilities(a.agent)).toMatchObject({ voice: true })
     expect(await a.src.send(a.agent, 'next')).toEqual({ ok: true })
     expect(adapter.type.mock.calls).toEqual([[PANE, 'next', 'claude']])

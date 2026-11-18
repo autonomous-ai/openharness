@@ -20,6 +20,7 @@ export interface Place {
   pid?: number                                  // its process: that event's caller
   sessionId?: string                            // the engine's own id of the session: the VS Code extension's link names it
   engine?: string                               // whose session it is: that link names Claude Code's alone
+  cwd?: string                                  // the folder its latest event named, else its scan row's: Cursor's folder window opens it
   /** The Claude app's own id of a session the open scan found, from the session's record (record.ts), until its first
    *  hook; only the Claude app's adapter reads it. */
   hostSession?: string

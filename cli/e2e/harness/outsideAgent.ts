@@ -64,6 +64,7 @@ while read -r _; do :; done`
 const FAKE_APPS = {
   ghostty: { bundle: 'Ghostty', id: 'com.mitchellh.ghostty', exe: 'ghostty' },
   vscode: { bundle: 'Visual Studio Code', id: 'com.microsoft.VSCode', exe: 'code' },
+  cursor: { bundle: 'Cursor', id: 'com.todesktop.230313mzl4w4u92', exe: 'cursor' },
 } as const
 export type FakeApp = keyof typeof FAKE_APPS
 

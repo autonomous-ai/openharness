@@ -129,6 +129,16 @@ describe('a daemon under test knows nothing of the developer\'s own state', () =
     expect(existsSync(bin), bin).toBe(false)
   })
 
+  // The same attach installs it into the Cursor they find, as into VS Code: they look for Cursor's `cursor` in the
+  // daemon's own root alone, where there is none.
+  it('finds none of the developer\'s Cursor: its devices look for Cursor\'s cursor only in its own root, where there is none', async () => {
+    const d = daemon = await IsolatedDaemon.create()
+    const bin = d.env.HARNESS_CURSOR_BIN ?? ''
+    expect(isAbsolute(bin), bin).toBe(true)
+    expect(relative(d.root, bin).startsWith('..'), bin).toBe(false)
+    expect(existsSync(bin), bin).toBe(false)
+  })
+
   // A word to a Codex session of the ChatGPT app goes to the app's own CLI (cable/hosts/codexQueue.ts): /Applications is
   // the computer's, whatever the home, so the devices look for it in the daemon's own root alone, where there is none.
   it('finds none of the developer\'s ChatGPT app: its devices look for the app\'s own codex only in its own root, where there is none', async () => {

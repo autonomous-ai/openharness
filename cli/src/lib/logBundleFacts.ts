@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process'
 import { isAbsolute, join } from 'node:path'
 
 /**
- * What `harness logs export` learns by running programs, for the bundle (logBundle.ts) to write: `status.txt` (four
+ * What `harness logs export` learns by running programs, for the bundle (logBundle.ts) to write: `status.txt` (five
  * status commands of this same CLI), the versions in the README (Node, the OS, the Mac apps the dial follows), and where
  * the Harness menu-bar app keeps its log. Runs in the `harness` command's own process, never in the core's. Every
  * program is run through an injected `Run`, so its specs start nothing of the computer they run on.
@@ -17,12 +17,13 @@ export const VERSION_TIMEOUT_MS = 2_000
 /** A status or version answer is a few lines; past this the output is not ours to read. */
 export const FACT_OUTPUT_MAX_BYTES = 256 * 1024
 
-/** `status`, then `device claude|codex|vscode status --json`. */
+/** `status`, then `device claude|codex|vscode|cursor status --json`. */
 export const STATUS_COMMANDS: readonly (readonly string[])[] = [
   ['status'],
   ['device', 'claude', 'status', '--json'],
   ['device', 'codex', 'status', '--json'],
   ['device', 'vscode', 'status', '--json'],
+  ['device', 'cursor', 'status', '--json'],
 ]
 
 /** Harness, Harness Device, Orca, Visual Studio Code, ChatGPT, Claude, Herdr. */
@@ -81,7 +82,7 @@ function statusAnswer(result: RunResult | null): string {
   return '(no answer)'
 }
 
-/** `status.txt`: each of STATUS_COMMANDS under `$ harness <its words>`. All four run at once: one after another, four
+/** `status.txt`: each of STATUS_COMMANDS under `$ harness <its words>`. All five run at once: one after another, five
  *  timeouts would outlast the desktop app's 30 s wait for the export. */
 export async function statusText(self: readonly string[], run: Run): Promise<string> {
   const [file, ...prefix] = self
