@@ -98,7 +98,7 @@ const ENGINE_LOCATIONS: Partial<Record<string, readonly string[]>> = {
 
 /** Probe only. No settings, workspace, model or process mutation occurs here. */
 export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLaunchSource = {},
-  deps: { setup?: NativeSetupProbes & Pick<NativeSetup, 'prepareFiles'>; confirmHome?: (engine: 'claude' | 'codex', home: string) => void } = {},
+  deps: { setup?: NativeSetupProbes & Pick<NativeSetup, 'prepareFiles' | 'prepareSettings'>; confirmHome?: (engine: 'claude' | 'codex', home: string) => void } = {},
 ): Promise<NativeLaunchResult> {
   if (isTerminalEngine(engine)) return { ok: true, launch: { ...noNative, environment: {}, proofs: [] } }
   source = { ...source }
@@ -204,7 +204,7 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
       const optionalCurrent = () => valid && !preparing && selectedRevision === revision && selected === selectedEnvironment
         && ownerCurrent() && JSON.stringify(identity()) === ownerKey
       return prepareLaunchSettings(engine, selected, cwd, setup, {
-        dataDir: env.ADAPTER_DATA_DIR, runtimeNode: managedNodePath(),
+        runtimeNode: managedNodePath(),
         platform: process.platform as 'darwin' | 'linux' | 'win32',
         gitBash: process.platform === 'win32' ? claudeCodeGitBash({ env: selected }) : null,
         owner, current: optionalCurrent, nativeCurrent: current,

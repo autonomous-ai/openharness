@@ -29,6 +29,7 @@ function locations(value: unknown): Record<string, string> | null {
     && JSON.stringify(value).length <= 65_536 ? value as Record<string, string> : null
 }
 
+/** The process and inline callers pass <data root>/native-installations, including every reconnect. */
 export function startEngineSetup(directory: string, given?: NativeSetup) {
   const probes = given ? undefined : createSetupProbeExecutor()
   let setup = given ?? createLocalNativeSetup(directory, probes!.execute), stopped = false
@@ -98,7 +99,7 @@ export function startEngineSetup(directory: string, given?: NativeSetup) {
       const { kind: _kind, request: _request, requestId: _transport, ...settingsPayload } = payload
       const settingsInput = kind === 'settings' && boundedLaunchSettingsInput(settingsPayload) ? settingsPayload : null
       if (kind === 'trust' ? !setup.prepareTrust || !boundedTrustInput(trustInput)
-        : kind === 'settings' ? !setup.prepareFiles || !settingsInput
+        : kind === 'settings' ? !setup.prepareSettings || !settingsInput
         : payload.purpose !== undefined ? true
         : kind === 'files' ? !setup.prepareFiles || !boundedHookInput(input) : !recipe) return unavailable()
       for (const [token, entry] of prepared) if (entry.finished) { clearTimeout(entry.timer); prepared.delete(token) }
@@ -118,18 +119,22 @@ export function startEngineSetup(directory: string, given?: NativeSetup) {
       entry.timer.unref?.()
       prepared.set(token, entry)
       const current = () => entry.live && Date.now() < entry.expiresAt && !closed?.aborted
-      entry.result = (kind !== 'installation'
-        ? (kind === 'trust' ? setup.prepareTrust!(trustInput, request, current)
-          : settingsInput ? setup.prepareFiles!(settingsInput, request, current)
-          : setup.prepareFiles!(input, request, current)).then(async candidate => {
-          const files = settingsInput ? launchSettingsCandidate(candidate, settingsInput) : hookCandidate(candidate, input.files.length)
-          if (!files || !current()) return { files: null }
-          ready({ preparation: token })
-          return { files: await decision && current() ? files : null }
-        })
-        : setup.installations.ensure(engine, recipe!, Object.freeze({ ...environment }), request, current,
-          () => { if (!current()) return Promise.resolve(false); ready({ preparation: token }); return decision })
-          .then(installation => ({ installation })))
+      entry.result = (settingsInput
+        ? setup.prepareSettings!(settingsInput, request, current, () => {
+          if (!current()) return Promise.resolve(false)
+          ready({ preparation: token }); return decision
+        }).then(candidate => ({ files: current() ? launchSettingsCandidate(candidate, settingsInput) : null }))
+        : kind !== 'installation'
+          ? (kind === 'trust' ? setup.prepareTrust!(trustInput, request, current)
+            : setup.prepareFiles!(input, request, current)).then(async candidate => {
+            const files = hookCandidate(candidate, input.files.length)
+            if (!files || !current()) return { files: null }
+            ready({ preparation: token })
+            return { files: await decision && current() ? files : null }
+          })
+          : setup.installations.ensure(engine, recipe!, Object.freeze({ ...environment }), request, current,
+            () => { if (!current()) return Promise.resolve(false); ready({ preparation: token }); return decision })
+            .then(installation => ({ installation })))
         .catch(error => {
           if (kind === 'files' && error instanceof HookScriptMissing) {
             console.warn('[engine-setup] HOOK_SCRIPT_MISSING'); return { files: null, error: 'HOOK_SCRIPT_MISSING' }
@@ -143,7 +148,7 @@ export function startEngineSetup(directory: string, given?: NativeSetup) {
       const kind = payload.kind === 'trust' ? 'trust' : payload.kind === 'files'
         ? payload.purpose === 'launchSettings' ? 'settings' : 'files' : 'installation'
       const unavailable = () => kind !== 'installation' ? { files: null } : { installation: held() }
-      if (payload.purpose !== undefined && kind !== 'settings') return unavailable()
+      if (payload.purpose !== undefined && kind !== 'settings' || kind === 'settings' && payload.version !== 2) return unavailable()
       const entry = typeof payload.preparation === 'string' ? prepared.get(payload.preparation) : undefined
       if (!entry || !entry.live || entry.kind !== kind || entry.engine !== payload.engine || entry.request !== payload.request) return unavailable()
       if (Date.now() >= entry.expiresAt) {

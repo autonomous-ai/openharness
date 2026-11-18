@@ -40,7 +40,7 @@ import { GRID_CONFLICTING_ENV_VARS, type GridLaunchOverride } from '../lib/gridL
 import { buildLaunchOverrides, type LaunchOverridesDeps, type LaunchSource } from '../lib/launchOverrides.js'
 import { ENGINES, type AgentEngine } from './types.js'
 import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
-import { prepareNativeLaunchSettings } from '../services/nativeLaunchSettings.js'
+import { renderLaunchSettings } from '../services/nativeLaunchSettings.js'
 import { launchSettingsArgs } from './kit/launchValues.js'
 import { LAUNCH_LOCATION_VARIABLES, nativeHookLocations } from './kit/nativeLocations.js'
 import { launchContract } from './launches.js'
@@ -432,11 +432,11 @@ async function overridesCases(): Promise<Record<string, unknown>> {
       const rule = launchContract(engine)?.statusLine
       const paths = [join(dataDir, 'agent-settings.json'), ...(rule ? [join(homes.CLAUDE_HOME, rule.file),
         ...(source.cwd ? rule.folder.map(file => join(source.cwd!, file)) : [])] : [])]
-      const prepared = await prepareNativeLaunchSettings({ purpose: 'launchSettings', engine, environment,
-        cwd: source.cwd ?? null, dataDir, runtimeNode: baseNode(process.execPath), platform: process.platform as 'darwin' | 'linux',
-        gitBash: null, owner: null, sources: paths.map(file => ({ file, content: settingsSources[file] ?? null })),
-        files: rule ? [{ file: join(dataDir, 'statusline/statusline.mjs'), directory: join(dataDir, 'statusline'), content: null }] : [],
-      }, () => true)
+      const captured = new Map(paths.map(file => [file, settingsSources[file] ?? null]))
+      const prepared = renderLaunchSettings({ purpose: 'launchSettings', version: 2, engine, environment,
+        cwd: source.cwd ?? null, runtimeNode: baseNode(process.execPath), platform: process.platform as 'darwin' | 'linux',
+        gitBash: null, owner: null,
+      }, dataDir, file => captured.get(file) ?? null)
       expect(prepared).not.toBeNull()
       result.overrides.extraArgs = launchSettingsArgs(engine, result.overrides.extraArgs, { values: prepared!.values, current: () => true })
     }

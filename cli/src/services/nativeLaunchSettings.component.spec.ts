@@ -70,3 +70,21 @@ it('explicitly refuses an old captured-source optional request on the new worker
     expect(reply).toEqual({ files: null })
   } finally { service.stop() }
 })
+
+it('uses the exact process data root in default setup construction', async () => {
+  const f = fixture(), service = startEngineSetup(join(f.data, 'native-installations'))
+  const owner = { local: true, owner: true }
+  try {
+    const prepared = await service.requests.setup_files_prepare!({ ...f.input, request: 'default-constructor' }, owner)
+    expect(prepared.preparation).toBeTypeOf('string')
+    const result = await service.requests.setup_files_commit!({ ...prepared, purpose: 'launchSettings', version: 2,
+      engine: 'claude', request: 'default-constructor', allowed: true }, owner)
+    expect(result).toMatchObject({ files: { version: 2, values: { settings: expect.stringContaining(f.data) } } })
+    expect(readFileSync(f.script, 'utf8')).toContain('rate_limits')
+    expect(existsSync(join(f.root, 'statusline'))).toBe(false)
+    service.disconnect()
+    const next = await service.requests.setup_files_prepare!({ ...f.input, request: 'reconnected-constructor' }, owner)
+    expect(await service.requests.setup_files_commit!({ ...next, purpose: 'launchSettings', version: 2,
+      engine: 'claude', request: 'reconnected-constructor', allowed: true }, owner)).toEqual(result)
+  } finally { service.stop() }
+})

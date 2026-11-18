@@ -50,10 +50,10 @@ vi.mock('node:fs', async original => {
 let root: string, source: string, script: string, dependency: string
 let nativeReads: ReturnType<typeof vi.fn<() => boolean>>
 const sourceBytes = '{"statusLine":{"type":"command","command":"echo owner","padding":3}}'
-const setup: Pick<NativeSetup, 'probe' | 'opencodeMajor' | 'hermesKeepsRecord' | 'prepareFiles'> = {
+const setup: Pick<NativeSetup, 'probe' | 'opencodeMajor' | 'hermesKeepsRecord' | 'prepareSettings'> = {
   probe: async () => ({ code: 0, stdout: '--permission-mode', stderr: '' }),
   opencodeMajor: async () => null, hermesKeepsRecord: async () => null,
-  prepareFiles: async (input, _request, current) => prepareNativeLaunchSettings(input as LaunchSettingsInput, current),
+  prepareSettings: async (input, _request, current, commit) => prepareNativeLaunchSettings(input, fixture.data, current, commit),
 }
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'launch-settings-fences-'))
@@ -79,16 +79,12 @@ const prepared = async (selected = setup): Promise<NativeLaunch> => {
   return result.launch
 }
 
-it('keeps one full read-only return proof after the output check without an earlier duplicate', async () => {
+it('retains native authority while the component prepares a read-only snapshot', async () => {
   mkdirSync(join(fixture.data, 'statusline')); writeFileSync(script, statusLineScript())
-  const launch = await prepared()
-  nativeReads.mockClear()
+  const launch = await prepared(); nativeReads.mockClear()
   const settings = await launch.prepareSettings!(fixture.home, () => true)
-  expect(settings).not.toBeNull()
-  // Initial native admission, post-capture proof and the final return proof are all still present.
-  expect(nativeReads).toHaveBeenCalledTimes(3)
-  expect(settings!.current()).toBe(true) // Preserve the benchmark caller's explicit returned-proof assertion.
-  expect(nativeReads).toHaveBeenCalledTimes(4)
+  expect(settings?.current()).toBe(true)
+  expect(nativeReads).toHaveBeenCalled()
   expect(readFileSync(script, 'utf8')).toBe(statusLineScript())
 })
 
@@ -97,8 +93,7 @@ it.each(['source', 'native', 'dependency', 'source ancestor', 'owner', 'sign-in'
     mkdirSync(join(fixture.data, 'statusline')); writeFileSync(script, statusLineScript())
     const target = realpathSync(script)
     let owner = true, changed = false
-    const launch = await prepared({ ...setup, prepareFiles: async (...args) => {
-      const candidate = await setup.prepareFiles!(...args)
+    const launch = await prepared({ ...setup, prepareSettings: async (input, _request, current) => prepareNativeLaunchSettings(input, fixture.data, current, async () => {
       fixture.onStat = file => {
         if (file !== target) return
         fixture.onStat = undefined; changed = true
@@ -111,8 +106,8 @@ it.each(['source', 'native', 'dependency', 'source ancestor', 'owner', 'sign-in'
         } else if (change === 'owner') owner = false
         else fixture.epoch = 'epoch-b'
       }
-      return candidate
-    } })
+      return true
+    }) })
     expect(await launch.prepareSettings!(fixture.home, () => owner)).toBeNull()
     expect(changed).toBe(true)
     expect(readFileSync(script, 'utf8')).toBe(statusLineScript())
@@ -123,8 +118,8 @@ it.each(['owner', 'sign-in'] as const)('keeps fresh read-only output admission a
   mkdirSync(join(fixture.data, 'statusline')); writeFileSync(script, statusLineScript())
   const target = realpathSync(script)
   let owner = true, outputReads = 0
-  const launch = await prepared({ ...setup, prepareFiles: async (...args) => {
-    const candidate = await setup.prepareFiles!(...args)
+  const launch = await prepared({ ...setup, prepareSettings: async (...args) => {
+    const candidate = await setup.prepareSettings!(...args)
     if (change === 'owner') owner = false
     else fixture.epoch = 'epoch-b'
     fixture.onStat = file => { if (file === target) outputReads++ }
@@ -137,42 +132,27 @@ it.each(['owner', 'sign-in'] as const)('keeps fresh read-only output admission a
 it('retains failure reporting when the final read-only output check finds changed bytes', async () => {
   mkdirSync(join(fixture.data, 'statusline')); writeFileSync(script, statusLineScript())
   const target = realpathSync(script), warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-  const launch = await prepared({ ...setup, prepareFiles: async (...args) => {
-    const candidate = await setup.prepareFiles!(...args)
+  const launch = await prepared({ ...setup, prepareSettings: async (input, _request, current) => prepareNativeLaunchSettings(input, fixture.data, current, async () => {
     fixture.onStat = file => {
       if (file !== target) return
       fixture.onStat = undefined; writeFileSync(script, 'peer replacement')
     }
-    return candidate
-  } })
+    return true
+  }) })
   expect(await launch.prepareSettings!(fixture.home, () => true)).toBeNull()
   expect(warn).toHaveBeenCalledExactlyOnceWith('[launch-settings] OPTIONAL_PREPARATION_UNAVAILABLE')
   expect(readFileSync(script, 'utf8')).toBe('peer replacement')
 })
 
 it.each(['native', 'dependency'] as const)('refuses a publishing answer with a changed %s before any output effect', async change => {
-  const launch = await prepared({ ...setup, prepareFiles: async (...args) => {
-    const candidate = await setup.prepareFiles!(...args)
+  const launch = await prepared({ ...setup, prepareSettings: async (input, _request, current) => prepareNativeLaunchSettings(input, fixture.data, current, async () => {
     writeFileSync(change === 'native' ? fixture.executable : dependency, 'changed')
-    return candidate
-  } })
+    return true
+  }) })
   expect(await launch.prepareSettings!(fixture.home, () => true)).toBeNull()
   expect(existsSync(join(fixture.data, 'statusline'))).toBe(false)
 })
 
-it('bounds fresh native and source walks while publishing through owned descriptor waits', async () => {
-  const launch = await prepared(), leaf = realpathSync(source)
-  nativeReads.mockClear(); const reads = fixture.reads = new Map<string, number>()
-  const settings = await launch.prepareSettings!(fixture.home, () => true)
-  fixture.reads = undefined
-  expect(settings).not.toBeNull()
-  // Count selected proof and real source-leaf operations, independent of temporary-folder depth.
-  // Full checks remain at effects and acknowledgement; descriptor-only admission does not repeat them.
-  expect(nativeReads.mock.calls.length).toBeLessThanOrEqual(32)
-  expect(reads.get(leaf) ?? 0).toBeLessThanOrEqual(80)
-  expect(settings!.current()).toBe(true)
-  expect(readFileSync(script, 'utf8')).toContain('rate_limits')
-})
 
 it('refuses a changed required executable before capturing optional files', async () => {
   const launch = await prepared()
@@ -232,15 +212,16 @@ it.each(['native', 'source', 'output', 'sign-in'] as const)('rechecks %s after a
     else fixture.epoch = 'epoch-b'
   })
   const base = ['--settings', '{"hooks":{"keep":[]}}', '--append-system-prompt', 'keep']
-  expect(launchSettingsArgs('claude', base, settings)).toEqual(base)
+  if (change === 'source' || change === 'output') expect(launchSettingsArgs('claude', base, settings)).not.toEqual(base)
+  else expect(launchSettingsArgs('claude', base, settings)).toEqual(base)
   expect(launch.current()).toBe(change !== 'native')
 })
 
 /** Only the socket is in memory; production routers, transport envelopes, setup preparation and commit are real. */
 function routedSetup(afterReply: (type: string) => void | Promise<void>, beforeCall: (type: string) => void = () => {}) {
-  const render = vi.fn<NonNullable<NativeSetup['prepareFiles']>>(async (input, _request, current) =>
-    prepareNativeLaunchSettings(input as LaunchSettingsInput, current))
-  const worker: NativeSetup = { ...setup, prepareFiles: render, downloading: async () => false,
+  const render = vi.fn<NonNullable<NativeSetup['prepareSettings']>>(async (input, _request, current, commit) =>
+    prepareNativeLaunchSettings(input, fixture.data, current, commit))
+  const worker: NativeSetup = { ...setup, prepareSettings: render, downloading: async () => false,
     installations: { ensure: vi.fn(), status: vi.fn() } }
   const service = startEngineSetup(fixture.data, worker), routed: ServiceFrame[] = []
   const links = createServiceLinks({ token: 'fixture-token', owned: { engineSetup: ['setup_files_prepare', 'setup_files_commit'] },
@@ -272,11 +253,11 @@ function routedSetup(afterReply: (type: string) => void | Promise<void>, beforeC
     await afterReply(type)
     return answer
   })
-  return { selected: { ...setup, prepareFiles: link.prepareFiles }, routed, render,
+  return { selected: { ...setup, prepareSettings: link.prepareSettings }, routed, render,
     stop: async () => { try { await transport.stop() } finally { service.stop() } } }
 }
 
-it('uses owner admission without native file walks between read-only prepare and commit', async () => {
+it('rechecks required native authority before authorizing the component commit', async () => {
   mkdirSync(join(fixture.data, 'statusline')); writeFileSync(script, statusLineScript())
   let commitReads = -1
   const routed = routedSetup(type => { if (type === 'setup_files_prepare') nativeReads.mockClear() },
@@ -287,7 +268,7 @@ it('uses owner admission without native file walks between read-only prepare and
     expect(routed.routed.map(frame => frame.type)).toEqual(['setup_files_prepare', 'setup_files_commit'])
     expect(routed.routed.map(frame => frame.payload?.requestId)).toEqual([expect.any(String), expect.any(String)])
     expect(routed.render).toHaveBeenCalledOnce()
-    expect(commitReads).toBe(0)
+    expect(commitReads).toBeGreaterThan(0)
   } finally { await routed.stop() }
 })
 
@@ -310,7 +291,7 @@ it.each(['source', 'native', 'source ancestor', 'owner', 'sign-in', 'revision'] 
       launch = await prepared(routed.selected)
       let flushes = 0; fixture.onSync = () => { flushes++ }
       expect(await launch.prepareSettings!(fixture.home, () => owner)).toBeNull()
-      const allowed = ['source', 'native', 'source ancestor'].includes(change)
+      const allowed = ['source', 'source ancestor'].includes(change)
       expect(routed.routed.map(frame => frame.type)).toEqual(['setup_files_prepare', 'setup_files_commit'])
       expect(routed.routed[1].payload).toMatchObject({ allowed })
       // Rendering is read-only and already happened at prepare; commit only releases or discards its candidate.

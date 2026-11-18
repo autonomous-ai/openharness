@@ -763,3 +763,77 @@ empty. Eight intended failures cover the missing component operation, pre-commit
 optional DTO still being accepted, core source reading, final source invalidation rather than the approved snapshot,
 and core filesystem imports. The two existing owner/native final-revocation cases pass. No runtime edit or fixture
 correction preceded this receipt. The exact tests and approved Design are committed separately before implementation.
+
+## Component implementation and constructor proof
+
+The implemented version-2 wire carries only selected launch context and returns the same two bounded values.
+`NativeSetup.prepareSettings` replaces the optional overload of `prepareFiles`; required hook/trust operations keep
+their original DTOs and publisher. The service performs capture, rendering, commit-gated artifact publication and
+final source/output checks. The core helper has no filesystem/path/publication imports and retains only the strict
+reply plus owner/native predicate. The existing terminal command factory and all final launch callsites are unchanged.
+The pure renderer is shared with the unchanged-byte golden fixture; it is not a second publication path.
+
+The constructor's first argument has always been the installation journal directory. Its parent supplies the exact
+owning data root; this is not a request-selected directory. The complete caller audit is:
+
+| Constructor path | Source of the data root |
+| --- | --- |
+| Normal `engineSetupProcess` | `join(options.dataDir, 'native-installations')` passed to `startEngineSetup` |
+| Explicit inline/no-master `core/main` | `join(env.ADAPTER_DATA_DIR, 'native-installations')` passed to `createLocalNativeSetup` |
+| `startEngineSetup` initial/default and reconnect | The exact constructor directory is forwarded unchanged to `createLocalNativeSetup` |
+| Shared `testing/nativeSetupInProcess` | Its isolated `env.ADAPTER_DATA_DIR` is supplied directly to the service helper |
+| Component/publication fixtures | Private `<data>/native-installations`; real default and reconnect preparations check the exact output root |
+| Other standalone/test constructors | `/fixture` or isolated roots exercise required installers/hooks/probes only, or supply a complete mock setup; none invokes optional settings against a differently interpreted directory |
+
+`engineSetupProcess.spec.ts` checks the process argument and disconnect forwarding; the real default/reconnect
+component case publishes beneath the supplied data root and proves its parent's `statusline` directory stays absent.
+There is no additional production standalone constructor. Tests cover absent, changed and correct read-only artifacts;
+folder/leaf aliases present initially or inserted during staged fsync cannot redirect publication into source files.
+Configured data-root aliases remain valid. Generic nativeHookPublication/nativeHookFiles/nativePaths runtime is unchanged.
+
+The old external-source DTO's missing-reader guard was removed: source paths now originate locally from exactly the
+same declared contract used by the renderer, and the complete derived set is captured before rendering. Source count,
+aggregate bytes and path identity bounds remain enforced. No external list can omit one renderer input.
+
+An unsettled filesystem callback remains owned by the unchanged publisher after its bounded reply deadline. The new
+regression holds the actual staged fsync callback, expires the optional request, proves required setup admission and
+no duplicate publication flush, then releases it and observes descriptor/temp cleanup. It uses explicit barriers and
+fake deadline timers, never a fixed sleep. No new publisher custody API or durability rule was introduced.
+
+## Component validation receipts
+
+All commands used pinned Node 24.22.2, isolated fixtures, one Vitest worker and a fixed 180-second outer bound; each
+receipt records the actual child exit and an empty owned process group. No installed daemon or personal home was used.
+
+- Initial GREEN: `/tmp/core-launch-settings-component-green1.log`, 10/10 across two files, actual 0, 1.256 s.
+- Migrated affected cases: `/tmp/core-launch-settings-component-affected1.log`, 138/138 across ten files, actual 0,
+  5.833 s. This includes the original provisional-directory/retained-source tests moved to the generic verifier's
+  test file, and optional mutation tests moved to the component; final owner/native tests remain at the caller.
+- First types: `component-types1`, actual 2, 39.133 s. Two widened fixture version literals and the old fixture's
+  optional `prepareFiles` overload were corrected. This failure is retained.
+- First coverage: `component-coverage1`, 218/218 tests across 14 files, actual 1, 8.319 s solely for five statement/
+  branch gaps. Meaningful token, late-commit, admission and final-output mutation cases cover four; the now-unreachable
+  external-source-list guard was removed as explained above.
+- Second coverage: `component-coverage2`, 226 pass/one new fixture failure, actual 1, 7.379 s. Its lstat observer
+  compared `/tmp` to the canonical `/private/tmp` spelling. Only the fixture changed to the source's realpath and an
+  explicit observation assertion; its single-case check passes actual 0, 0.954 s.
+- Final selected coverage: `/tmp/core-launch-settings-component-coverage3`, 227/227 across 14 files, actual 0,
+  8.627 s. Each of `nativeLaunchSettings` (core and service), `launchSettingsWire`, `nativeSetupLink`, `engineSetup`
+  and service `nativeSetup` has 100% statements/branches/functions/lines: 435/435, 488/488, 97/97, 298/298 in total.
+  This is the six-file selected gate, not a claim that the whole core suite ran here.
+- Caller/architecture/golden selection: `component-callers`, 275 pass/six nativeCreate fixture failures across ten
+  files, actual 1, 35.587 s. The nine other files pass, including architecture and unchanged launch-byte/native
+  compatibility goldens. No golden bytes were re-recorded. The nativeCreate mock still treated the already-integrated
+  lazy TerminalCommand as a string array. Its first correction then incorrectly looked for the positional prompt
+  in the sourced script; `component-nativecreate` and the two one-case `component-nativecreate-cause*` receipts retain
+  those failures. The final fixture resolves the command once, checks current before/after and asserts the exact
+  positional prompt; it exposes caught mock errors after receipt settlement. `component-nativecreate2` passes all
+  seven cases, actual 0, 9.467 s. Together these cover the 281 selected caller cases without repeating the nine passing
+  files. No product behavior or timeout changed for this fixture correction.
+- Final types after that fixture correction: `/tmp/core-launch-settings-component-types3.log`, actual 0, 6.347 s.
+  The preceding types2 also passed (34.882 s). `git diff --check` passes.
+
+Mac filesystem/runtime and portable simulated Windows value cases are covered. Native Windows remains deferred,
+and no Linux/native-terminal or whole-daemon acceptance is claimed by these unit gates. The coordinator owns combined
+integration/release gates. V8's cold/warm performance hold remains; the proposed v9 uses the identical A/workload/custody
+with only the reviewed B source changed, and requires a separate frozen-packet review, semantic smoke and quiet grant.

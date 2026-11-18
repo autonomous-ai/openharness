@@ -45,6 +45,7 @@ function setupProbes(execute?: typeof execFile, alongsideProbe?: () => void): Na
 
 export const nativeSetupProbes = setupProbes()
 
+/** directory is the installation journal directory; its parent is the owning service's data root. */
 export function createLocalNativeSetup(directory: string, execute?: typeof execFile, daemon?: Pick<DaemonAddress, 'command'>): NativeSetup {
   if (daemon && !writeBrowserShim(daemon.command, join(dirname(directory), 'bin', 'harness-browser'))) {
     console.warn('[engine-setup] BROWSER_SHIM_UNAVAILABLE')
@@ -58,9 +59,10 @@ export function createLocalNativeSetup(directory: string, execute?: typeof execF
   // Load code while the child probes, without inspecting, reserving or dispatching an installation.
   const preload = () => { void installations().catch(() => {}) }
   return { ...setupProbes(execute, preload), downloading: engine => engineDownloading(engine, undefined, undefined, execute),
-    prepareFiles: async (input, _request, current) => 'purpose' in input
-      ? (await import('./nativeLaunchSettings.js')).prepareNativeLaunchSettings(input, current)
-      : (await import('./nativeSetupFiles.js')).prepareNativeHookFiles(input, current),
+    prepareSettings: async (input, _request, current, commit) =>
+      (await import('./nativeLaunchSettings.js')).prepareNativeLaunchSettings(input, dirname(directory), current, commit),
+    prepareFiles: async (input, _request, current) =>
+      (await import('./nativeSetupFiles.js')).prepareNativeHookFiles(input, current),
     prepareTrust: async (input, _request, current) => (await import('./nativeSetupTrust.js')).prepareNativeTrust(input, current),
     installations: {
       ensure: async (...args) => (await installations()).ensure(...args),

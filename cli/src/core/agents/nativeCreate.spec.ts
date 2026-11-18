@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { CreateAgentDeps } from './create.js'
 import type { RegisteredSession } from '../../lib/registry.js'
+import type { TerminalCommand } from '../../lib/terminalTypes.js'
 
 const spawn = vi.hoisted(() => vi.fn())
 vi.mock('../../lib/createAgentPane.js', () => ({ createAndRegisterPane: spawn }))
@@ -68,10 +69,12 @@ it.each([
   const cwd = join(projectsRoot(), 'workspace'); mkdirSync(cwd, { recursive: true })
   const config = join(process.env.CODEX_HOME!, 'config.toml')
   const pending = { agentId: 'fixture-agent', engine: 'codex', cwd, sessionId: '', runtimes: [] } as unknown as RegisteredSession
-  spawn.mockImplementation(async (options: { current(): boolean; argv: string[] }) => {
+  spawn.mockImplementation(async (options: { current(): boolean; argv: TerminalCommand }) => {
     expect(options.current()).toBe(true)
     expect(readFileSync(config, 'utf8').includes('trust_level = "trusted"')).toBe((local || project) && trust === 'ready')
-    expect(options.argv.join(' ')).toContain('original prompt')
+    const argv = typeof options.argv === 'function' ? options.argv() : options.argv
+    expect(options.current()).toBe(true)
+    expect(argv).toContain('original prompt')
     return { ok: true, pending, spawned: { runtime: { backend: 'tmux', paneId: '%fixture' } } }
   })
   const prepare = createFolderTrustPreparation({ prepareTrust: async (input, _request, current) => prepareNativeTrust(input, current) })
@@ -121,6 +124,8 @@ it.each([
     expect(answer.state).not.toBe('pending')
     return answer
   }, { timeout: 40_000, interval: 200 })
+  // Receipt handling maps dispatch errors to unconfirmed; keep a failed pane-fixture assertion visible here.
+  if (spawn.mock.results[0]?.type === 'return') await spawn.mock.results[0].value
   expect(settled).toMatchObject({ state: 'created' })
   await vi.waitFor(() => expect(['created', 'pending']).toContain(replies[0]?.state))
   expect(spawn).toHaveBeenCalledOnce()

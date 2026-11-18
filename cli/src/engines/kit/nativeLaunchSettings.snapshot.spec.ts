@@ -12,13 +12,13 @@ function fixture() {
   const dataDir = join(root, 'data'); mkdirSync(dataDir); mkdirSync(join(root, '.codex'))
   const source = join(root, '.codex', 'config.toml'); writeFileSync(source, 'developer_instructions = "before"\n')
   const values = { instructions: 'before plus optional', settings: null }
-  const prepareSettings = vi.fn(async () => ({ version: 2, values }))
+  const prepareSettings = vi.fn(async () => ({ version: 2 as const, values }))
   const setup = { prepareSettings, prepareFiles: vi.fn(async () => ({ version: 1, values, files: [] })) }
   let owner = true, native = true
   return { root, dataDir, source, setup, prepareSettings,
     revokeOwner: () => { owner = false }, revokeNative: () => { native = false },
     prepare: () => prepareLaunchSettings('codex', { HOME: root }, root, setup,
-      { dataDir, runtimeNode: process.execPath, platform: 'darwin', gitBash: null, owner: null,
+      { runtimeNode: process.execPath, platform: 'darwin', gitBash: null, owner: null,
         current: () => owner, nativeCurrent: () => native }) }
 }
 
