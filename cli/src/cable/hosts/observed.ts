@@ -464,6 +464,11 @@ export class ObservedSource implements HostSource {
     return e && this.live(e) ? e.panes.find(({ pane }) => pane.adapter === adapter)?.pane.id : undefined
   }
 
+  /** The pane its caller last placed it at in that adapter (setPaneNames), as shownOnly reads it; never one of its panes. */
+  placedAt(agentId: string, adapter: string): string | undefined {
+    return this.paneNames.get(adapter)?.placed.get(agentId)
+  }
+
   /**
    * Its tty, read once per process in the background: a session resumed in another tab runs in a process of its own, and
    * the old tab holds something else now, so its tty goes at once. An answer lands only on its own entry, and only while
