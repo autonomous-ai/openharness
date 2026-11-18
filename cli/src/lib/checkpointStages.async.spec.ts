@@ -8,6 +8,7 @@ import { CheckpointStages, type CheckpointStage } from './checkpointStages.js'
 const disk = vi.hoisted(() => ({
   paths: new Map<number, string>(), held: new Map<number, { release(error?: NodeJS.ErrnoException): Promise<void> }>(),
   history: [] as Promise<void>[],
+  beforeHistoryClose: undefined as ((path: string) => Promise<void>) | undefined,
   closeFailure: undefined as string | undefined,
   target: undefined as ((path: string) => boolean) | undefined,
   entered: undefined as ((fd: number) => void) | undefined,
@@ -52,7 +53,7 @@ vi.mock('node:fs/promises', async original => {
       const close = handle.close.bind(handle)
       let done!: () => void
       disk.history.push(new Promise<void>(resolve => { done = resolve }))
-      handle.close = async () => { await close(); done() }
+      handle.close = async () => { await disk.beforeHistoryClose?.(String(args[0])); await close(); done() }
     }
     return handle
   } }
@@ -63,7 +64,7 @@ const leases: CheckpointStage[] = []
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'checkpoint-journal-'))
   vi.stubEnv('ADAPTER_DATA_DIR', root)
-  disk.trap = false; disk.target = undefined; disk.entered = undefined; disk.closed.length = 0; disk.history.length = 0; disk.closeFailure = undefined
+  disk.trap = false; disk.target = undefined; disk.entered = undefined; disk.closed.length = 0; disk.history.length = 0; disk.closeFailure = undefined; disk.beforeHistoryClose = undefined
   vi.spyOn(console, 'error').mockImplementation(() => {})
 })
 afterEach(async () => {
@@ -124,6 +125,8 @@ it.each(['writer', 'settled', 'destination'] as const)('keeps %s durability pend
     expect(fs.fstatSync(fd).isFile()).toBe(true)
     expect(disk.closed.slice(closesBefore)).not.toContain(fd)
     await expect(lease.writer(process.pid)).rejects.toThrow()
+    await expect(lease.settled()).rejects.toThrow(/busy/)
+    await expect(lease.verify({ bytes: 7, sha256: 'a'.repeat(64) })).rejects.toThrow(/busy/)
     await expect(stat(destination())).rejects.toMatchObject({ code: 'ENOENT' })
   } finally { await release(fd) }
   await work
@@ -207,6 +210,29 @@ it('a failed actual destination flush cannot rename, and an explicit later retry
   expect(allowed).toHaveBeenCalledOnce()
   expect(await readFile(destination(), 'utf8')).toBe('history')
   await writeFile(join(root, `${'a'.repeat(64)}.json`), JSON.stringify({ version: 1, file: basename(destination()) }), { mode: 0o600 })
+})
+
+it('keeps the first destination intent exclusive while its actual history descriptor close is held', async () => {
+  const lease = await acquire(); await ready(lease)
+  let opened!: () => void, releaseClose!: () => void
+  const waiting = new Promise<void>(resolve => { opened = resolve })
+  const held = new Promise<void>(resolve => { releaseClose = resolve })
+  disk.beforeHistoryClose = async () => { disk.beforeHistoryClose = undefined; opened(); await held }
+  const firstTarget = destination(), secondTarget = join(root, `${'a'.repeat(64)}-${'c'.repeat(36)}.history`)
+  const first = lease.publish(firstTarget, () => {})
+  await waiting
+  let secondResult: unknown
+  const second = lease.publish(secondTarget, () => {}).then(() => { secondResult = 'published' }, error => { secondResult = error })
+  try {
+    await turn()
+    expect(secondResult).toBeInstanceOf(Error)
+    expect((secondResult as Error).message).toMatch(/busy/)
+    expect(JSON.parse(await readFile(record(lease), 'utf8')).destination).toBe(basename(firstTarget))
+  } finally { releaseClose(); await Promise.allSettled([first, second]) }
+  await first
+  expect(await readFile(firstTarget, 'utf8')).toBe('history')
+  await expect(stat(secondTarget)).rejects.toMatchObject({ code: 'ENOENT' })
+  await writeFile(join(root, `${'a'.repeat(64)}.json`), JSON.stringify({ version: 1, file: basename(firstTarget) }), { mode: 0o600 })
 })
 
 // An uncertain close deliberately poisons this module instance; keep that terminal failure last.

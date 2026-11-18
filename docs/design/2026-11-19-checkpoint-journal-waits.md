@@ -126,3 +126,15 @@ only after release, with no late publication or deletion of a live writer's stag
 Planned first RED executes only five main-loop/caller durability cases and the two storage settlement
 cases. No test, build or benchmark for this checkpoint patch has been run yet. Full source and runtime
 review precede the exclusive execution release; no source gate or performance acceptance is claimed.
+
+## Destination overlap fence
+
+Review found that a completed destination journal write alone is not the whole publication: the
+history descriptor may still be closing. A second publish must not change the durable destination
+while the first operation can still rename. Retain one raw publication promise through owner write,
+actual descriptor close and rename; reject overlap without a queue. Writer, settled and verification
+admissions also refuse while publication owns that transition. Clear the fence only when the actual
+work settles, so an explicit retry after a completed callback failure still performs the entire write.
+Close drains that promise too. Its descriptor-close dependency never calls stage.close, so the wait
+graph remains acyclic. A new held-history-close RED demands second-publication refusal and the first
+intent remaining unchanged; it will fail on the original runtime before correction.
