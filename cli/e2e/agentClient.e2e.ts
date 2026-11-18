@@ -302,9 +302,10 @@ describe('Harness for agents, end to end', () => {
     await until('left to close with lead2', async () => (await stateOf(left)) === 'stopped' || null, 60_000, 500)
     expect(await stateOf(joined)).toBe('active')
     // One line for each close.
-    expect(d.log()).toMatch(/\[agent-cleanup\] closed kid \(\w+\): the harness that started it was closed\. Its conversation is kept\./)
-    expect(d.log()).toMatch(/\[agent-cleanup\] closed left \(\w+\): the harness that started it was closed\./)
-    expect(d.log()).not.toMatch(/\[agent-cleanup\] closed joined/)
+    // The log names each by its id's start, as names hold the person's words.
+    expect(d.log()).toContain(`[agent-cleanup] closed ${kid.id.slice(0, 8)}: the harness that started it was closed. Its conversation is kept.`)
+    expect(d.log()).toContain(`[agent-cleanup] closed ${left.id.slice(0, 8)}: the harness that started it was closed.`)
+    expect(d.log()).not.toContain(`[agent-cleanup] closed ${joined.id.slice(0, 8)}`)
     client.close()
   })
 

@@ -164,9 +164,10 @@ describe('background commands an idle harness still runs, end to end', () => {
       const shown = await fromLead('show', 'kid', '--json')
       return shown.code === 0 && JSON.parse(shown.out).backgroundCommands === 1
     }, 90_000, 1_000)
+    const kid = (await named(client, 'kid'))!.id.slice(0, 8)
 
     // The first look after kid appeared only records it; three moves of 31 minutes stay under the ceiling.
-    const left = /\[agent-cleanup\] left kid \(\w+\) open: 1 background command running/
+    const left = new RegExp(`\\[agent-cleanup\\] left ${kid} open: 1 background command running`)
     for (let attempt = 1; !left.test(d.log()); attempt++) {
       expect(attempt, 'the cleanup never left kid open').toBeLessThanOrEqual(3)
       move(31)
@@ -176,7 +177,7 @@ describe('background commands an idle harness still runs, end to end', () => {
 
     move(125)
     await until('kid to be closed at its ceiling', async () => (await named(client, 'kid'))?.status === 'stopped', 70_000, 500)
-    expect(d.log()).toMatch(/\[agent-cleanup\] closed kid \(\w+\): another agent started it, and it has sat idle \d+ minutes, with 1 background command running\. Its conversation is kept\./)
+    expect(d.log()).toMatch(new RegExp(`\\[agent-cleanup\\] closed ${kid}: another agent started it, and it has sat idle \\d+ minutes, with 1 background command running\\. Its conversation is kept\\.`))
     client.close()
   }, 420_000)
 
