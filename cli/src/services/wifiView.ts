@@ -20,7 +20,7 @@ export function readWifiView(read: SessionRecordSource, machineId: string, signa
 
 export function wifiProjection(header: SessionReadHeader): SessionProjection<WifiView> {
   const agents: AutonomousDeviceAgent[] = [], store: StoreAgent[] = []
-  return { row: (member, retain) => {
+  return { row: (member, budget) => {
     if ('gone' in member || member.source !== 'registered') return
     const { session: row, facts, turnRunning } = member.row
     const entry: StoreAgent = { agentId: row.agentId, machineId: header.machine.id,
@@ -30,11 +30,12 @@ export function wifiProjection(header: SessionReadHeader): SessionProjection<Wif
         : row.launch?.state === 'starting' ? 'starting' : row.active
           ? (row.launch?.state === 'ready' || row.sessionId || row.engine === 'terminal' ? 'ready' : 'starting') : 'unavailable',
       ...(row.launch?.state === 'failed' ? { error: row.launch.detail ?? row.launch.error } : {}) }
-    retain(entry); store.push(entry)
+    // These closed primitive projections were built from the checked record; only their exact encoded size is needed.
+    budget.retain(Buffer.byteLength(JSON.stringify(entry))); store.push(entry)
     if (facts.terminalAvailable) {
       const agent: AutonomousDeviceAgent = { agentId: row.agentId, name: facts.displayName, engine: row.engine,
       packageId: entry.packageId, workspace: entry.workspace ?? row.cwd, runtime: entry.runtime, state: turnRunning ? 'running' : 'idle' }
-      retain(agent); agents.push(agent)
+      budget.retain(Buffer.byteLength(JSON.stringify(agent))); agents.push(agent)
     }
   }, value: () => ({ agents, store, hasWindow: header.hasWindow }) }
 }

@@ -2,11 +2,47 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import type { SessionSnapshotRow } from '../core/api.js'
+import { SESSION_READ_VIEW_BYTES, type SessionSnapshotRow } from '../core/api.js'
 import { snapshotFixture, snapshotRow, snapshotReader } from '../testing/sessionSnapshot.js'
-import { readWifiView } from './wifiView.js'
+import * as jsonBudget from '../lib/boundedJsonBytes.js'
+import { readWifiView, wifiProjection } from './wifiView.js'
 
 describe('Wi-Fi presentation outside core', () => {
+  it('sizes its closed projections without repeating unknown-object validation', async () => {
+    const checked = vi.spyOn(jsonBudget, 'boundedJsonBytes')
+    try {
+      const view = await readWifiView(snapshotReader(() => snapshotFixture({ registered: [snapshotRow()] })), 'machine-1')
+      expect(view.store).toHaveLength(1); expect(view.agents).toHaveLength(1)
+      expect(checked.mock.calls.filter(([value]) => value === view.store[0] || value === view.agents[0])).toHaveLength(0)
+      expect(checked.mock.calls.filter(([value]) => ['begin', 'row', 'end'].includes((value as { type?: string })?.type ?? ''))).toHaveLength(3)
+    } finally { checked.mockRestore() }
+  })
+  it.each(['plain', 'quote"slash\\control\n\t\u0000', 'Tiếng Việt 😀', '\ud800', '\udfff', ''])('preserves exact UTF-8 projection sizes for %j', async text => {
+    const row = snapshotRow('agent')
+    row.session.cwd = null
+    row.session.dsh = text
+    row.session.launch = { state: 'failed', error: 'failure', detail: text }
+    row.facts.displayName = text
+    const header = snapshotFixture(), bytes: Array<number | null> = []
+    const projection = wifiProjection(header)
+    projection.row({ source: 'registered', row }, { remaining: SESSION_READ_VIEW_BYTES, retain: value => { bytes.push(value) } })
+    const expected = projection.value()
+    const actual = await readWifiView(snapshotReader(() => snapshotFixture({ registered: [row] })), header.machine.id)
+    expect(actual).toEqual(expected)
+    expect(bytes).toEqual([...actual.store, ...actual.agents].map(value => jsonBudget.boundedJsonBytes(value, SESSION_READ_VIEW_BYTES)))
+    expect(actual.store[0]).toMatchObject({ packageId: text, workspace: null, error: text })
+  })
+  it.each(['membership', 'aggregate bytes'])('preserves complete Wi-Fi output beyond the former %s limit', async kind => {
+    const registered = Array.from({ length: kind === 'membership' ? 4097 : 1600 }, (_, i) => snapshotRow(`a-${i}`))
+    if (kind === 'aggregate bytes') for (const i of [8, 9]) registered[i].session.dsh = registered[i].facts.parts.dsh = 'p'.repeat(1_600_000)
+    const view = await readWifiView(snapshotReader(() => snapshotFixture({ registered })), 'machine-1')
+    expect(view.store.map(row => row.agentId)).toEqual(registered.map(row => row.session.agentId))
+    expect(view.agents.map(row => row.agentId)).toEqual(registered.map(row => row.session.agentId))
+    if (kind === 'aggregate bytes') for (const i of [8, 9]) {
+      expect(view.store[i].packageId).toBe(registered[i].facts.parts.dsh)
+      expect(view.agents[i].packageId).toBe(registered[i].facts.parts.dsh)
+    }
+  })
   it('preserves all registered workspace evidence and only advertises terminal membership', async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'wifi-view-')))
     try {

@@ -95,13 +95,18 @@ afterEach(() => vi.restoreAllMocks())
 describe('the devices in their own process', () => {
   it('validates each external record once in its actual advertised refresh', async () => {
     const f = setup()
-    f.answer('session_read_advertised', snapshotFixture({ registered: [snapshotRow('once')] }))
+    const row = snapshotRow('once')
+    Object.assign(row.session, { extra: { nested: ['kept', null, 3] } })
+    f.answer('session_read_advertised', snapshotFixture({ registered: [row] }))
     vi.mocked(boundedJsonBytes).mockClear()
     f.connect(); await f.deps().refresh!()
     expect(f.api().agents.advertised().map(row => row.agentId)).toEqual(['once'])
     const validations = vi.mocked(boundedJsonBytes).mock.calls.filter(([value]) => value && typeof value === 'object'
       && ['begin', 'row', 'end'].includes((value as { type?: string }).type ?? ''))
     expect(validations).toHaveLength(3)
+    const retained = f.api().agents.advertised()[0]
+    expect(retained).toMatchObject({ extra: { nested: ['kept', null, 3] } })
+    expect(vi.mocked(boundedJsonBytes).mock.calls.some(([value]) => value === retained)).toBe(true)
     await f.service.stop()
   })
   it.each(['row', 'completion'] as const)('drops an old read at its %s seam after reconnecting the same wrapper', async seam => {

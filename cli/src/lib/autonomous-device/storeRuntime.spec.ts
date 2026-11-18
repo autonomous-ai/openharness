@@ -8,7 +8,7 @@ import type { DshRegistryEntry } from '../../dsh/registry.js'
 const state = vi.hoisted(() => ({ agents: [] as RegisteredSession[], catalog: [] as DshRegistryEntry[] }))
 const deviceStoreAgents = (machineId: string) => {
   const projection = wifiProjection(snapshotFixture({ machine: { id: machineId, computerId: 'computer', name: 'Fixture' } }))
-  for (const row of state.agents) projection.row({ source: 'registered', row: snapshotRow(row.agentId, { session: { ...snapshotRow(row.agentId).session, ...row } }) }, () => {})
+  for (const row of state.agents) projection.row({ source: 'registered', row: snapshotRow(row.agentId, { session: { ...snapshotRow(row.agentId).session, ...row } }) }, { remaining: Infinity, retain: () => {} })
   return projection.value().store
 }
 vi.mock('../../dsh/catalog.js', () => ({ refreshDshRegistry: async () => state.catalog, catalogEntry: (id: string) => state.catalog.find(e => e.id === id) }))

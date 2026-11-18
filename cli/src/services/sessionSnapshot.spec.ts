@@ -2,12 +2,13 @@ import { describe, expect, it, vi } from 'vitest'
 import { SESSION_READ_HEADER_BYTES, SESSION_READ_VIEW_BYTES, type CoreApi, type ReadRecord, type SessionReadHeader, type SessionReadValue } from '../core/api.js'
 import { snapshotFixture, snapshotRow, snapshotReader, snapshotRecords, type SessionSnapshot } from '../testing/sessionSnapshot.js'
 import { readCoreSessionRecords, readSessionView, type SessionRecordSource } from './sessionSnapshot.js'
+import { boundedJsonBytes } from '../lib/boundedJsonBytes.js'
 
 const collect = (read: SessionRecordSource) => readSessionView(read, 'registered', header => {
   const result: SessionSnapshot = { ...header, registered: [], cloud: [] }
-  return { row: (member, retain) => {
+  return { row: (member, budget) => {
     if ('gone' in member) return
-    retain(member.row)
+    budget.retain(boundedJsonBytes(member.row, budget.remaining))
     if (member.source === 'registered') result.registered.push(member.row)
     else result.cloud.push(member.row)
   }, value: () => result }
@@ -123,7 +124,7 @@ describe('complete shared session facts at the component boundary', async () => 
     await expect(readSessionView(records(incomplete), 'registered', () => ({ row: value => { held.push(value) }, value: commit }))).rejects.toThrow('SESSION_READ_UNAVAILABLE')
     expect(held).toHaveLength(2); expect(commit).not.toHaveBeenCalled()
     await expect(readSessionView(records(snapshotRecords(complete())), 'registered', () => ({
-      row: (_value, retain) => retain('x'.repeat(SESSION_READ_VIEW_BYTES)), value: commit,
+      row: (_value, budget) => budget.retain(SESSION_READ_VIEW_BYTES), value: commit,
     }))).rejects.toThrow('SESSION_READ_TOO_LARGE')
     expect(commit).not.toHaveBeenCalled()
     const failure = records(snapshotRecords(complete()))
@@ -147,6 +148,42 @@ describe('complete shared session facts at the component boundary', async () => 
     }
     read.mockImplementationOnce(async (_query, _payload, receive) => receive({ type: 'begin', payload: {} }))
     await expect(collect((scope, receive, signal) => readCoreSessionRecords(core, scope, receive, signal))).rejects.toThrow('SESSION_READ_UNAVAILABLE')
+  })
+
+  it('keeps exact aggregate capacity and object overhead when admitting projection bytes', async () => {
+    const snapshot = snapshotFixture({ registered: [snapshotRow('one')] }), input = snapshotRecords(snapshot)
+    const headerBytes = boundedJsonBytes((input[0] as { payload: { header: unknown } }).payload.header, SESSION_READ_VIEW_BYTES)!
+    const expected = SESSION_READ_VIEW_BYTES - headerBytes - 48 - 48 - 2 * 'one'.length - 48
+    for (const extra of [0, 1]) {
+      const commit = vi.fn(() => 'complete'), retained: number[] = []
+      const result = readSessionView(records(input), 'registered', () => ({ row: (_member, budget) => {
+        expect(budget.remaining).toBe(expected)
+        budget.retain(expected + extra)
+        retained.push(expected + extra)
+        expect(budget.remaining).toBe(-48)
+      }, value: commit }))
+      if (extra) {
+        await expect(result).rejects.toThrow('SESSION_READ_TOO_LARGE')
+        expect(retained).toEqual([]); expect(commit).not.toHaveBeenCalled()
+      } else {
+        await expect(result).resolves.toBe('complete')
+        expect(retained).toEqual([expected]); expect(commit).toHaveBeenCalledOnce()
+      }
+    }
+    const commit = vi.fn()
+    await expect(readSessionView(records(input), 'registered', () => ({ row: (_member, budget) => {
+      budget.retain(budget.remaining)
+      budget.retain(0)
+    }, value: commit }))).rejects.toThrow('SESSION_READ_TOO_LARGE')
+    expect(commit).not.toHaveBeenCalled()
+  })
+
+  it.each([null, -1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])('refuses invalid projection byte admission %s', async bytes => {
+    const commit = vi.fn()
+    await expect(readSessionView(records(snapshotRecords(snapshotFixture({ registered: [snapshotRow()] }))), 'registered', () => ({
+      row: (_member, budget) => budget.retain(bytes), value: commit,
+    }))).rejects.toThrow('SESSION_READ_TOO_LARGE')
+    expect(commit).not.toHaveBeenCalled()
   })
 
   it('bounds membership retained by the component even when every member is gone', async () => {

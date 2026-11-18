@@ -65,18 +65,24 @@ export async function readCoreSessionRecords(core: CoreConnection, scope: Sessio
 }
 
 export interface SessionProjection<T> {
-  row(value: SessionReadValue, retain: (value: unknown) => void): void
+  row(value: SessionReadValue, budget: SessionProjectionBudget): void
   value(): T
+}
+export interface SessionProjectionBudget {
+  readonly remaining: number
+  retain(bytes: number | null): void
 }
 
 /** Commit only after exact end and successful read settlement. No aggregate raw row array is retained. */
 export async function readSessionView<T>(read: SessionRecordSource, scope: SessionReadScope, build: (header: SessionReadHeader) => SessionProjection<T>, signal?: AbortSignal, observe?: SessionRecordObserver): Promise<T> {
   const ids = new Set<string>()
   let projection: SessionProjection<T> | undefined, expected: number | undefined, index = 0, ended = false, bytes = 0
-  const retain = (value: unknown): void => {
-    const length = boundedJsonBytes(value, SESSION_READ_VIEW_BYTES - bytes - 48)
-    if (length === null) throw new Error('SESSION_READ_TOO_LARGE')
-    bytes += length + 48
+  const budget: SessionProjectionBudget = {
+    get remaining() { return SESSION_READ_VIEW_BYTES - bytes - 48 },
+    retain(length) {
+      if (length === null || !Number.isSafeInteger(length) || length < 0 || length > budget.remaining) throw new Error('SESSION_READ_TOO_LARGE')
+      bytes += length + 48
+    },
   }
   try {
     await read(scope, (raw, settled) => {
@@ -85,7 +91,7 @@ export async function readSessionView<T>(read: SessionRecordSource, scope: Sessi
       observe?.(value)
       if (value.type === 'begin') {
         if (projection) return invalid()
-        retain(value.payload.header)
+        budget.retain(boundedJsonBytes(value.payload.header, budget.remaining))
         projection = build(value.payload.header); expected = value.payload.count
       } else if (value.type === 'row') {
         if (!projection || value.payload.index !== index || index >= expected!) return invalid()
@@ -95,7 +101,7 @@ export async function readSessionView<T>(read: SessionRecordSource, scope: Sessi
         if (bytes + 48 + 2 * id.length > SESSION_READ_VIEW_BYTES) throw new Error('SESSION_READ_TOO_LARGE')
         bytes += 48 + 2 * id.length
         ids.add(id); index++
-        projection.row(member, retain)
+        projection.row(member, budget)
       } else {
         if (!projection || value.payload.count !== expected || index !== expected) return invalid()
         ended = true

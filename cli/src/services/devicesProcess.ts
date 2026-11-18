@@ -29,6 +29,7 @@ import { startDevices, type DevicesDeps, type DevicesCore, type DeviceSession } 
 import { openDevicesListener } from './devicesListener.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess, type ServiceProcessOptions } from './process.js'
 import { readCoreSessionRecords, readSessionView } from './sessionSnapshot.js'
+import { boundedJsonBytes } from '../lib/boundedJsonBytes.js'
 import { processCoreApi, UNASKED } from './processCoreApi.js'
 import { harnessdEnv } from '../lib/harnessdEnv.js'
 import { publishDeviceDesk, type DeviceDesk } from './deviceDesk.js'
@@ -115,14 +116,14 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     const pending = { generation: epoch, promise: Promise.resolve(), closed: new AbortController() }
     pending.promise = readSessionView((scope, receive, signal) => readCoreSessionRecords(origin, scope, receive, signal), 'advertised', header => {
       const agents: Viewed[] = []
-      return { row: (member, retain) => {
+      return { row: (member, budget) => {
         if (stopped || generation !== epoch || core !== origin) throw new Error('SESSION_READ_UNAVAILABLE')
         if ('gone' in member) return
         if (member.source === 'registered' && !member.row.facts.terminalAvailable) return
         const row = member.source === 'registered' ? { ...member.row.session,
           displayName: member.row.facts.displayName, runtimeProfile: member.row.selectedModel }
           : { ...member.row, runtimeProfile: member.row.selectedModel }
-        retain(row); agents.push(row)
+        budget.retain(boundedJsonBytes(row, budget.remaining)); agents.push(row)
       }, value: (): View => ({ agents,
         machine: { ...header.machine, computerId: header.machine.computerId || options.machineId, name: header.machine.name || 'This machine' },
         signedIn: header.signedIn, environment: header.environment, hasWindow: header.hasWindow,
