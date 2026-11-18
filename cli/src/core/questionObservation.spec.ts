@@ -343,6 +343,38 @@ describe('bounded settled read slices', () => {
     } finally { snapshot.cancel() }
   })
 
+  it('closes once when a physically held send later settles unavailable', async () => {
+    const close = vi.fn(), next = vi.fn(), returned = vi.fn(() => ({ done: true as const, value: undefined }))
+    let settled!: (ok: boolean) => void
+    const snapshot = startQuestionSnapshot({ generation: 'g', rows: { next, return: returned }, current: () => true, close,
+      send: (_frame, done) => { settled = done; return true } })
+    try {
+      expect(next).not.toHaveBeenCalled()
+      settled(false); settled(true); settled(false)
+      await controlTurn()
+      expect(close).toHaveBeenCalledExactlyOnceWith('QUESTION_OBSERVATION_UNAVAILABLE')
+      expect(next).not.toHaveBeenCalled()
+      expect(returned).toHaveBeenCalledOnce()
+    } finally { snapshot.cancel() }
+  })
+
+  it('revokes a read replaced while its last filtered row is classified at the slice boundary', async () => {
+    vi.spyOn(performance, 'now').mockReturnValue(0)
+    let current = true, filtered = 0
+    const close = vi.fn(), returned = vi.fn(() => ({ done: true as const, value: undefined }))
+    const next = vi.fn(() => ({ done: false as const, value: {} }))
+    const snapshot = startQuestionSnapshot({ generation: 'g', rows: { next, return: returned }, current: () => current, close,
+      accepts: () => { if (++filtered === 32) current = false; return false },
+      send: (_frame, done) => { done(true); return true } })
+    try {
+      await controlTurn(); await controlTurn()
+      expect(filtered).toBe(32)
+      expect(next).toHaveBeenCalledTimes(32)
+      expect(returned).toHaveBeenCalledOnce()
+      expect(close).not.toHaveBeenCalled()
+    } finally { snapshot.cancel() }
+  })
+
   it.each(['cancel', 'replace'] as const)('rechecks %s after a synchronous completion before reading another row', async mode => {
     vi.spyOn(performance, 'now').mockReturnValue(0)
     let current = true

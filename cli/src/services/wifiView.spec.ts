@@ -140,3 +140,9 @@ it('uses fresh native workspace resolution for aliases, missing paths and every 
     expect(native.mock.calls.map(args => args[0])).toEqual(Array(6).fill(alias))
   } finally { native.mockRestore(); rmSync(root, { recursive: true, force: true }) }
 })
+
+
+it('refuses a complete view addressed to a replacement machine before retaining its rows', async () => {
+  const read = snapshotReader(() => snapshotFixture({ machine: { id: 'replacement', computerId: 'computer', name: 'Other' }, registered: [snapshotRow()] }))
+  await expect(readWifiView(read, 'machine-1')).rejects.toThrow('CORE_VIEW_UNAVAILABLE')
+})

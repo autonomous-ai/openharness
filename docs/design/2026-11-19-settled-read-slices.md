@@ -122,3 +122,13 @@ caller/authority/architecture suites with one Vitest worker, 100% on the two cha
 and types. It runs from the next clean runtime/evidence checkpoint. Final results are reported
 with its source-bound receipt, not inferred here. V11 performance HOLD and contract-6 native
 five-case acceptance remain open; no new benchmark, native run or build is part of this gate.
+
+
+The first final gate ran on clean `125becb83d`, receipt
+`.harness/validation/20261118T212005.082712Z-70310/receipt.json`, and exited 1: all 341 tests
+across twelve suites (including architecture) and types passed, but required coverage failed.
+`questionObservation.ts` lacked async negative settlement and current-owner loss at a filtered
+slice boundary; `wifiView.ts` lacked mismatched-machine refusal. This gate is not called passing.
+Three actual caller controls cover those reachable paths without changing runtime. The follow-up
+plan `/tmp/core-wifi-bounded-pump-supplement-plan-20261119.json` selects only the two affected
+suites and types; unchanged 341-test/architecture evidence is complementary, not rerun wholesale.
