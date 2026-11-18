@@ -12,6 +12,7 @@ import 'package:harness/community/fork_controller.dart';
 import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/core/dsh_catalog.dart';
 import 'package:harness/core/harness_cli_runner.dart';
+import 'package:harness/core/harness_home.dart';
 import 'package:harness/core/home_dir.dart';
 import 'package:harness/state/app_state.dart';
 
@@ -554,4 +555,93 @@ void main() {
       await temp.delete(recursive: true);
     }
   });
+
+  group('on Linux', () {
+    late Directory temp;
+    late String home, data, legacy;
+    late Directory game;
+
+    setUp(() async {
+      temp = await Directory.systemTemp.createTemp('community-linux');
+      home = p.join(temp.path, 'home');
+      data = p.join(home, '.local', 'share', 'harness');
+      legacy = p.join(home, '.harness');
+      game = await Directory(p.join(temp.path, 'game')).create();
+    });
+    tearDown(() => temp.delete(recursive: true));
+
+    ForkProjectImporter importer() => ForkProjectImporter(
+      cli: HarnessCliRunner(
+        look: HomeLook(
+          linux: true,
+          environment: const {},
+          exists: (path) =>
+              FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound,
+        ),
+        environment: {'HOME': home},
+        isWindows: false,
+      ),
+    );
+
+    String modulesUnder(String root) =>
+        p.join(root, 'dsh', 'autonomous', 'godogen', 'node_modules');
+
+    Future<void> prepareRuntime() => importer().prepareRuntime(
+      ForkProject(
+        folder: game.path,
+        package: '',
+        title: 'Godogen',
+        engine: 'codex',
+        dsh: 'autonomous/godogen',
+      ),
+    );
+
+    Link modules() => Link(p.join(game.path, 'node_modules'));
+
+    test('a fork\'s project is under the data root\'s community folder', () {
+      Directory(data).createSync(recursive: true);
+      expect(importer().root.path, p.join(data, 'community'));
+    });
+
+    test('a node_modules link into the old dsh folder is replaced with one to the new place', () async {
+      await Directory(modulesUnder(data)).create(recursive: true);
+      await modules().create(modulesUnder(legacy));
+
+      await prepareRuntime();
+
+      expect(modules().targetSync(), modulesUnder(data));
+    });
+
+    test('a link elsewhere, or a real folder, is kept', () async {
+      await Directory(modulesUnder(data)).create(recursive: true);
+      final elsewhere = p.join(temp.path, 'elsewhere', 'node_modules');
+      await modules().create(elsewhere);
+
+      await prepareRuntime();
+
+      expect(modules().targetSync(), elsewhere);
+
+      await modules().delete();
+      final kept = File(p.join(game.path, 'node_modules', 'kept.js'))
+        ..createSync(recursive: true)
+        ..writeAsStringSync('kept');
+
+      await prepareRuntime();
+
+      expect(
+        FileSystemEntity.typeSync(modules().path, followLinks: false),
+        FileSystemEntityType.directory,
+      );
+      expect(kept.readAsStringSync(), 'kept');
+    });
+
+    test('on a legacy home the link is kept', () async {
+      await Directory(modulesUnder(legacy)).create(recursive: true);
+      await modules().create(modulesUnder(legacy));
+
+      await prepareRuntime();
+
+      expect(modules().targetSync(), modulesUnder(legacy));
+    });
+  }, skip: Platform.isWindows);
 }

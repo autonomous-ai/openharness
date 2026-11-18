@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/bootstrap/environment_provisioner.dart';
+import 'package:harness/core/harness_home.dart';
 
 ProcessResult result(int exitCode, {String stdout = '', String stderr = ''}) =>
     ProcessResult(1, exitCode, stdout, stderr);
@@ -1006,6 +1007,45 @@ void main() {
     expect(calls.any((line) => line.contains('for c in tar')), isFalse);
     expect(calls.any((line) => line.contains('command -v apt-get')), isFalse);
   });
+
+  test(
+    'the provisioner reports Harness installed from the two roots',
+    () async {
+      final data = '${scratch.path}/data/harness';
+      final state = '${scratch.path}/state/harness';
+      managedNode = File('$state/runtime/node-v24.22.2/bin/node')
+        ..createSync(recursive: true);
+      File('$state/runtime/current-node').writeAsStringSync(managedNode.path);
+      File('$data/cli/cli.js').createSync(recursive: true);
+      final provisioner = EnvironmentProvisioner(
+        look: HomeLook(
+          linux: true,
+          environment: {
+            'XDG_DATA_HOME': '${scratch.path}/data',
+            'XDG_STATE_HOME': '${scratch.path}/state',
+          },
+          exists: (path) =>
+              FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound,
+        ),
+        isMacOS: false,
+        isLinux: true,
+        isWindows: false,
+        platformEnvironment: const {},
+        run: runner(tmuxPresent: () => true),
+      );
+
+      final readiness = await provisioner.ensureReady(
+        onProgress: (_) {},
+        install: false,
+      );
+
+      expect(
+        readiness.steps[EnvironmentStep.harness],
+        EnvironmentStepStatus.ready,
+        reason: readiness.output.join('\n'),
+      );
+    },
+  );
 
   test('a missing ps joins tmux in the one apt transaction', () async {
     await createManagedHarness();
