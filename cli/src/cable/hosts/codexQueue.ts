@@ -51,6 +51,7 @@ export type CodexQueueResult =
 export type CodexRunEnd = number | 'not-started' | 'unknown'
 
 export interface CodexQueueDeps {
+  /** [env] is the run's whole environment: `parentEnv()` already holds the daemon's. */
   run(file: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number }): Promise<CodexRunEnd>
   /** The Codex Harness launches, where it is; null when it is not there. */
   binary(): string | null
@@ -98,7 +99,7 @@ export function codexQueueDeps(): Omit<CodexQueueDeps, 'home' | 'cwd'> {
       const deadline = setTimeout(() => resolve('unknown'), timeoutMs)
       const end = (how: CodexRunEnd) => { clearTimeout(deadline); resolve(how) }
       try {
-        const child = execFile(file, args, { cwd, env: { ...process.env, ...env }, timeout: timeoutMs, killSignal: 'SIGKILL' }, (error) => {
+        const child = execFile(file, args, { cwd, env, timeout: timeoutMs, killSignal: 'SIGKILL' }, (error) => {
           if (error === null) end(0)
           else if (typeof error.code === 'number') end(error.code)
           // No pid: it never started (ENOENT, EACCES). With one, a signal or too much output ended it, maybe after it

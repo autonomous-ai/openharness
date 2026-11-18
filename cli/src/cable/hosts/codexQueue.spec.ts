@@ -121,7 +121,7 @@ function realQueue(file: string, over: Partial<CodexQueueDeps> = {}) {
 }
 
 /** What a real run is asked for, in the test's folder. */
-const options = () => ({ cwd: dir, env: {}, timeoutMs: 10_000 })
+const options = () => ({ cwd: dir, env: process.env, timeoutMs: 10_000 })
 
 describe('codex queue', () => {
   it('send runs codex queue with the thread and the text joined to its flag, in the home directory, under the Codex home, for 10 s', async () => {
