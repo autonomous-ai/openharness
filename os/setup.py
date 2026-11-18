@@ -113,12 +113,13 @@ def log(message):
 
 
 def harness_data_root(home, environ):
-    """The CLI's data root on Linux (cli config/harnessHome.ts): XDG once it exists, ~/.harness while
-    only that does, XDG on a fresh image. An XDG_DATA_HOME that is not an absolute path counts as unset."""
+    """The CLI's data root on Linux (cli config/harnessHome.ts): XDG once it holds Harness's marker
+    (.harness-root, which the CLI writes; this only reads it), else ~/.harness while that exists, else XDG
+    (a fresh image). An XDG_DATA_HOME that is not an absolute path counts as unset."""
     base = Path(environ.get('XDG_DATA_HOME', ''))
     data = (base if base.is_absolute() else home / '.local/share') / 'harness'
     legacy = home / '.harness'
-    return legacy if not data.exists() and legacy.exists() else data
+    return legacy if not (data / '.harness-root').is_file() and legacy.exists() else data
 
 
 def data_root():

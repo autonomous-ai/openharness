@@ -9,7 +9,7 @@
  * (store/tools/port-holder.test.mjs pins the copies). The rules are the CLI's: cli/src/lib/localSocket.ts.
  */
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
-import { closeSync, existsSync, fstatSync, lstatSync, openSync, readdirSync, readFileSync, realpathSync } from 'node:fs'
+import { closeSync, existsSync, fstatSync, lstatSync, openSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { request } from 'node:http'
 import { homedir } from 'node:os'
 import { isAbsolute, join, win32 } from 'node:path'
@@ -21,34 +21,48 @@ const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 const MAX_MESSAGE_BYTES = 64 * 1024 * 1024
 const CLOSE_WAIT_MS = 2000
 
+/** A regular file at `path`; a folder, or nothing, is none. */
+const isRegularFile = (path) => statSync(path, { throwIfNoEntry: false })?.isFile() ?? false
+
 /**
- * Harness's two roots, by the CLI's rule (cli/src/config/harnessHome.ts). On Linux: the XDG roots when the data root exists, else
- * `~/.harness` when that exists (not moved yet), else the XDG roots (a fresh install). Elsewhere both are `~/.harness`.
+ * Harness's two roots, by the CLI's rule (cli/src/config/harnessHome.ts). On Linux: the XDG roots when the data root holds Harness's
+ * marker, `.harness-root` (written by the move, the installers and a fresh start); else `~/.harness` when that exists (not moved yet);
+ * else the XDG roots (a fresh install). A data root anything else made switches nothing. Elsewhere both are `~/.harness`.
  */
-export function harnessRoots(env = process.env, platform = process.platform, exists = existsSync) {
+export function harnessRoots(env = process.env, platform = process.platform, exists = existsSync, isFile = isRegularFile) {
   // Windows keeps the profile folder, whatever HOME a Unix-like shell set.
   const home = platform === 'win32' ? homedir() : env.HOME || homedir(), legacy = join(home, '.harness')
   if (platform !== 'linux') return { data: legacy, state: legacy }
   // A variable that is unset, empty or relative is ignored, as the XDG spec says.
   const base = (name, ...fallback) => isAbsolute(env[name] ?? '') ? env[name] : join(home, ...fallback)
   const xdg = { data: join(base('XDG_DATA_HOME', '.local', 'share'), 'harness'), state: join(base('XDG_STATE_HOME', '.local', 'state'), 'harness') }
-  return exists(xdg.data) || !exists(legacy) ? xdg : { data: legacy, state: legacy }
+  return isFile(join(xdg.data, '.harness-root')) || !exists(legacy) ? xdg : { data: legacy, state: legacy }
 }
 
 export function daemonDataDir(env = process.env) {
   return env.ADAPTER_DATA_DIR || join(harnessRoots(env).data, 'cli', 'data')
 }
 
+/** XDG_RUNTIME_DIR when it is this account's alone: an absolute path to a folder of this uid's with mode 0700. Null otherwise. */
+function privateRuntimeDir(env) {
+  const dir = env.XDG_RUNTIME_DIR
+  if (!dir || !isAbsolute(dir)) return null
+  const stat = statSync(dir, { throwIfNoEntry: false })
+  return stat?.isDirectory() && (stat.mode & 0o777) === 0o700 && stat.uid === process.getuid?.() ? dir : null
+}
+
 /**
- * The daemon's socket for `port`: in its data folder, or where that path is too long for a socket, in a 0700 folder under the state root
- * named by the folder's hash (the CLI's `socketPathIn`). Null where it can have none: Windows, or a state root too long as well.
+ * The daemon's socket for `port`: in its data folder, or where that path is too long for a socket, in a 0700 folder named by the
+ * folder's hash (the CLI's `socketPathIn`): on Linux under a private XDG_RUNTIME_DIR, else under the state root. Null where it can
+ * have none: Windows, or a state root too long as well.
  */
 export function daemonSocketPath(port, env = process.env, platform = process.platform) {
   if (platform === 'win32') return null
   const folder = daemonDataDir(env), name = `daemon-${port}.sock`, beside = join(folder, name)
   if (Buffer.byteLength(beside) <= MAX_SOCKET_PATH_BYTES) return beside
   const hash = createHash('sha256').update(folder).digest('hex').slice(0, 16)
-  const short = join(harnessRoots(env, platform).state, 's', hash, name)
+  const runtime = platform === 'linux' ? privateRuntimeDir(env) : null
+  const short = runtime ? join(runtime, 'harness', hash, name) : join(harnessRoots(env, platform).state, 's', hash, name)
   return Buffer.byteLength(short) <= MAX_SOCKET_PATH_BYTES ? short : null
 }
 

@@ -29,8 +29,8 @@
 # `node store/tools/sync-runtimes.mjs` rewrites them and the CLI's store spec fails when one drifts.
 
 # Harness's state folder, by the CLI's rule: ~/.harness off Linux. On Linux the XDG state folder, unless
-# this home is still on ~/.harness (no XDG data folder yet, ~/.harness there); once moved, ~/.harness
-# is a bridge that removes itself. An XDG variable that is not an absolute path is ignored, and a trailing
+# this home is still on ~/.harness (no marker, .harness-root, in the XDG data folder, and ~/.harness
+# there); once moved, ~/.harness is a bridge that removes itself. An XDG variable that is not an absolute path is ignored, and a trailing
 # slash dropped, so the paths match the daemon's. A setup's output carries what this prints, so a PATH
 # without uname reads as off Linux, silently.
 _harness_state_root() {
@@ -39,7 +39,7 @@ _harness_state_root() {
   if [ "$(uname -s 2>/dev/null)" != Linux ]; then echo "${HOME:-}/.harness"; return; fi
   case "$data" in /*) ;; *) data="${HOME:-}/.local/share" ;; esac
   case "$state" in /*) ;; *) state="${HOME:-}/.local/state" ;; esac
-  if [ ! -e "$data/harness" ] && [ -e "${HOME:-}/.harness" ]; then echo "${HOME:-}/.harness"; return; fi
+  if [ ! -f "$data/harness/.harness-root" ] && [ -e "${HOME:-}/.harness" ]; then echo "${HOME:-}/.harness"; return; fi
   echo "$state/harness"
 }
 
