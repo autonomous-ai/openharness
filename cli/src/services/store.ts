@@ -44,8 +44,9 @@ export function startStore(core: CoreApi, deps: StoreDeps = DEFAULTS): ServiceRe
   let hachi = hachiOn()
   deps.prepare({ hachi })
   // After Harness's folder moved, each harness's setup runs again at its new folder, once the built-ins are in place.
-  // It takes minutes, and no request waits for it.
-  void deps.setupAgain().catch((error: unknown) => console.warn(`[dsh] setting harnesses up again stopped · ${String(error)}`))
+  // It takes minutes, and no request waits for it. Said by its code: what was thrown names a path in the person's home.
+  void deps.setupAgain().catch((error: unknown) => console.warn(`[dsh] setting harnesses up again stopped · ${
+    (error as NodeJS.ErrnoException | null)?.code ?? (error instanceof Error ? error.name : 'unknown')}`))
   // Hachi turned on while the Store runs is put in place at once: the person's first ⇧⌘H creates it and must not wait
   // for the Store's next start. Only the turn from off to on prepares: the file is written for every setting, and the
   // watch says it may have changed once more as it starts. Turned off, an installed Hachi stays, with its goals and
