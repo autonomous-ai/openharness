@@ -35,6 +35,20 @@ describe('writeExecutable', () => {
     expect({ status, stdout }).toEqual({ status: 7, stdout: 'marker now\n' })
   })
 
+  // gitProject.spec.ts takes this Mac for Windows before it writes its taskkill, which this Mac then runs.
+  it.skipIf(process.platform === 'win32')('runs the file once while a test takes this machine for Windows', () => {
+    const file = join(dir, 'taskkill')
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+    try {
+      writeExecutable(file, '#!/bin/sh\nexit 1\n')
+    } finally {
+      Object.defineProperty(process, 'platform', platform)
+    }
+
+    expect(vi.mocked(spawnSync).mock.calls.map(([command]) => command)).toEqual([file])
+  })
+
   it('on Windows only writes the file: there is no /bin/sh to run it', () => {
     const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
     Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
