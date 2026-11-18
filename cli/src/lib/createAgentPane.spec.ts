@@ -216,6 +216,25 @@ describe('createAndRegisterPane', () => {
       .rejects.toThrow('registry storage has no available space (ENOSPC)')
   })
 
+  it('a pending admission that fails says what kind of error it was, and nothing the error carries', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const said = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      refuse.code = 'ENOSPC'
+      await expect(registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%1' }] })).rejects.toThrow()
+      refuse.code = undefined
+      vi.spyOn(registry as unknown as { automaticName(): string }, 'automaticName')
+        .mockImplementation(() => { throw Object.assign(new Error('/Users/someone/secret'), { code: 'EBUSY' }) })
+      expect(await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%2' }] })).toBeNull()
+      // A retried create logged only "failed", and nothing said why its first pane was not admitted (CI, 2026-11-19).
+      expect(said.mock.calls.map(([line]) => String(line)).filter(line => line.startsWith('[registry] pending admission failed')))
+        .toEqual(['[registry] pending admission failed · RegistryPersistenceUnavailable', '[registry] pending admission failed · Error EBUSY'])
+    } finally {
+      said.mockRestore()
+    }
+  })
+
   it('records the named agent and the requested name on the row it opens', async () => {
     const { registry } = await loadRegistryModule()
     registry.load()
