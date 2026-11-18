@@ -9,10 +9,12 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { transformSync } from 'esbuild'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // The end-to-end harness is outside tsconfig's rootDir (src), so it is loaded untyped, as testNode.spec.ts loads its setup.
-const setup = (await import('../../e2e/harness/processImages.js' as string) as { default: () => (() => void) | undefined }).default
+const { default: setup, bundledProcessImages } = await import('../../e2e/harness/processImages.js' as string) as {
+  default: () => (() => void) | undefined, bundledProcessImages: (bundle: string) => string | undefined }
 
 const CLI_ROOT = fileURLToPath(new URL('../..', import.meta.url))
 const sha256 = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex')
@@ -63,5 +65,22 @@ describe.runIf(process.platform === 'darwin')('the helper of the daemons under t
     vi.stubEnv('HARNESS_PROCESS_IMAGES_ARTIFACT', given)
     expect(() => setup()).toThrow(/^HARNESS_PROCESS_IMAGES_ARTIFACT names a helper this checkout cannot use: /)
     expect([readdirSync(tmp), process.env.E2E_PROCESS_IMAGES_PRELOAD]).toEqual([[], undefined])
+  })
+})
+
+// The perf report names the helper of the bundle it measured (e2e/perf.e2e.ts). Before, it named the helper the run
+// was given, and a baseline from a release, whose helper another toolchain built, read as carrying none.
+describe('the helper a bundle carries', () => {
+  // As build-bundle.mjs defines it, through the same printer.
+  const bundle = (define: string) => transformSync('export const images = __DARWIN_PROCESS_IMAGES__',
+    { define: { __DARWIN_PROCESS_IMAGES__: define }, format: 'esm', minify: true }).code
+
+  it('is the one embedded, whichever it is', () => {
+    const embedded = JSON.stringify({ schema: 1, size: HELPER.length, sha256: sha256(HELPER), base64: HELPER.toString('base64') })
+    expect(bundledProcessImages(bundle(JSON.stringify(embedded)))).toBe(sha256(HELPER))
+  })
+
+  it('is none in a bundle built without one', () => {
+    expect(bundledProcessImages(bundle('undefined'))).toBeUndefined()
   })
 })
