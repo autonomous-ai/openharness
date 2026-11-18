@@ -38,7 +38,7 @@ export interface StartDeps extends Omit<MoveDeps, 'io' | 'log'>, Pick<ConditionD
   lock?: LockDeps
 }
 
-// A start no person typed (systemd's, the sign-in task's) tries a failed move again an hour after the last try.
+// A start no person typed (systemd's, the sign-in task's, Desktop's) tries a failed move again an hour after the last try.
 const RETRY_MS = 3_600_000
 // `systemctl --user daemon-reload` answers within a second: one that does not fails its step, which is rolled back.
 const SYSTEMCTL_LIMIT_MS = 30_000
@@ -73,7 +73,9 @@ export async function moveHomeAtStart(argv: readonly string[], env: NodeJS.Proce
   try {
     // A journal is finished, or undone, before anything else: a crash after the data root's commit left one beside it.
     if (movedBefore ? readJournal(roots.legacy) : fs.existsSync(roots.legacy)) {
-      outcome = await moveOrHold(command === 'start' && !flags.includes('--if-down'), env, environment, roots, deps, moveDeps, lines)
+      // A person typed it: a harness start on a terminal. Desktop starts the daemon the same way, with no terminal.
+      const explicit = command === 'start' && !flags.includes('--if-down') && deps.print !== null
+      outcome = await moveOrHold(explicit, env, environment, roots, deps, moveDeps, lines)
     } else if (movedBefore) {
       noteStray(roots, environment, deps, lines)
     }
