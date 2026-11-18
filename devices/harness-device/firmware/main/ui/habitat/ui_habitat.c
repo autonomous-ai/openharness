@@ -374,10 +374,12 @@ static bool notice_was_read(const cable_notif_t *n)
     }
     return false;
 }
-static void notice_forget_read(const char *id)
+// That agent's news receipt, and its question's too when `questions_too`: news leaves the question row beside it.
+static void notice_forget_read(const char *id, bool questions_too)
 {
     for (int i = 0; i < NOTICES; i++)
-        if (!strcmp(s.notice_reads[i].id, id)) s.notice_reads[i].id[0] = 0;
+        if (!strcmp(s.notice_reads[i].id, id) && (questions_too || !s.notice_reads[i].question))
+            s.notice_reads[i].id[0] = 0;
 }
 static void notice_flush_reads(uint32_t now)
 {
@@ -3830,16 +3832,23 @@ void ui_notif_open(void)
     notice_open();
     display_unlock();
 }
+static void notice_drop(int i)
+{
+    memmove(&s.notice[i], &s.notice[i + 1], (size_t)(s.notice_count - i - 1) * sizeof(cable_notif_t));
+    s.notice_count--;
+    if (s.view == INBOX && i < s.offset) s.offset--;
+}
 static void notice_remove(const char *id, bool questions_too)
 {
     if (!id) return;
     for (int i = s.notice_count - 1; i >= 0; i--)
-        if (!strcmp(s.notice[i].agent_id, id) && (questions_too || !s.notice[i].question)) {
-            memmove(&s.notice[i], &s.notice[i + 1],
-                    (size_t)(s.notice_count - i - 1) * sizeof(cable_notif_t));
-            s.notice_count--;
-            if (s.view == INBOX && i < s.offset) s.offset--;
-        }
+        if (!strcmp(s.notice[i].agent_id, id) && (questions_too || !s.notice[i].question)) notice_drop(i);
+}
+// An answered or closed question goes alone: the news beside it stays.
+static void notice_remove_question(const char *id)
+{
+    for (int i = s.notice_count - 1; i >= 0; i--)
+        if (s.notice[i].question && !strcmp(s.notice[i].agent_id, id)) notice_drop(i);
 }
 static void notice_sync_view(void)
 {
@@ -3946,7 +3955,7 @@ bool ui_notify_summary(const char *id, const char *name, const char *machine, co
     if (!level) return false;
     display_lock();
     bool face = on_face(id);
-    notice_forget_read(id); // A fresh completion is new even if its words repeat.
+    notice_forget_read(id, false); // A fresh completion is new even if its words repeat.
     notice_add(id, name, machine, recap, false, false);
     if (face) notice_read_now(id);
     s.notice_sequence++;
@@ -3969,7 +3978,7 @@ bool ui_turn_error(const char *id, const char *message)
     display_lock();
     bool face = on_face(id);
     int known = find(id);
-    notice_forget_read(id);
+    notice_forget_read(id, false);
     notice_add(id, known >= 0 ? s.agents[known].name : NULL, NULL, message, false, true);
     if (face) notice_read_now(id);
     s.notice_sequence++;
@@ -4013,8 +4022,8 @@ void ui_notif_read(const char *id, const char *token)
         n->read_on_dial = true;
         opened = !strcmp(s.opening_notice, id);
         if (s.view != INBOX || i != s.offset || opened) {
-            // A read news row goes alone, leaving that agent's open question.
-            notice_remove(id, n->question); notice_sync_view();
+            // A read row goes alone: an agent's news and its open question are two rows.
+            notice_drop(i); notice_sync_view();
         }
         change(); break;
     }
@@ -4098,7 +4107,7 @@ bool ui_question_show(const char *id, const char *name, const char *machine, con
     bool face = on_face(id);
     const cJSON *first=cJSON_GetArrayItem(questions,0);
     const cJSON *prompt=cJSON_GetObjectItemCaseSensitive(first,"q");
-    notice_forget_read(id);
+    notice_forget_read(id, true);
     notice_add(id,name,machine,cJSON_IsString(prompt) ? prompt->valuestring : "Needs your answer",true,false);
     if (face) notice_read_now(id);   // already on the glass: shown in place, read at once
     s.notice_sequence++;
@@ -4153,7 +4162,7 @@ void ui_answer_receipt(const cJSON *p)
         !strcmp(s.q.token,token->valuestring)) {
         if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p,"ok"))) {
             if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p,"pending"))) { display_unlock(); return; }
-            s.q.valid=s.q.pending=false; s.q.revision++; notice_remove(s.q.agent,true);
+            s.q.valid=s.q.pending=false; s.q.revision++; notice_remove_question(s.q.agent);
             if (question_view(s.view)) view(HOME);
             notice_sync_view();
         } else {
@@ -4171,8 +4180,8 @@ void ui_question_close(const char *id, const char *request)
     if (!strcmp(s.q.agent,id) && !strcmp(s.q.request,request)) {
         s.q.valid=s.q.pending=s.q.loading=false; s.q.revision++;
         if (question_view(s.view)) view(HOME);
-        notice_remove(id,true);
-    } else if (strcmp(s.q.agent,id)) notice_remove(id,true);
+        notice_remove_question(id);
+    } else if (strcmp(s.q.agent,id)) notice_remove_question(id);
     notice_sync_view();
     change(); display_unlock();
 }
