@@ -451,6 +451,17 @@ describe('after Harness\'s folder moved', () => {
     expect(readdirSync(join(home, '.harness'))).toEqual(['runtime'])
   })
 
+  // What a migration of old instructions keeps of the home's AGENTS.md goes beside those runtimes, never into the bridge.
+  it('old instructions taken out of the home\'s AGENTS.md are kept in the state root\'s runtime folder', () => {
+    move()
+    const before = `# Mine\n\n<!-- harness:dsh ${pkg.id} -->\n${readFileSync(join(pkg.realDir, 'AGENTS.md'), 'utf8').trim()}\n`
+    write(join(home, 'AGENTS.md'), before)
+    migrateHarnessInstructions(home, pkg)
+    expect(readFileSync(join(home, 'AGENTS.md'), 'utf8')).toBe('# Mine\n\n')
+    expect(readFileSync(join(home, '.local', 'state', 'harness', 'runtime', 'legacy-AGENTS.md'), 'utf8')).toBe(before)
+    expect(readdirSync(join(home, '.harness'))).toEqual([])
+  })
+
   it('off Linux the home keeps its runtime in its .harness, even beside an XDG folder', () => {
     move()
     on('darwin')
