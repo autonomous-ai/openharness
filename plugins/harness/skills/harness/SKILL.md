@@ -86,9 +86,9 @@ harness close <name> [--now]                        # when you are done with one
   rather than a folder of your own: Claude Code and Codex ask the person to trust a folder Harness did not make.
 - Put the whole task in `-- <task>`: what to do, where, what done looks like, and what to answer with. A task
   holds 2,000 characters; for a longer one, write it to a file and name the file in the task.
-- `wait` exits 0 when it is idle (or you closed it), 3 when it needs the person (a question or a permission:
-  only the person answers those, so tell them), 4 when it stopped or is gone, 124 on timeout. `--timeout 0`
-  waits as long as it takes.
+- `wait` exits 0 when it is idle (or you closed it), 3 when it needs the person (a question, a permission, or a
+  problem only they can fix: only the person answers those, so tell them), 4 when it stopped or is gone, 124 on
+  timeout. `--timeout 0` waits as long as it takes.
 - Read the result with `show` instead of asking for a summary.
 - `close` what you started once you have its answer. It keeps the conversation; the person can resume it.
   It refuses while the harness is working, unless `--now`. One closed while still starting may have no
@@ -96,6 +96,7 @@ harness close <name> [--now]                        # when you are done with one
 - Every verb ends with `Next:`, the command to run next: follow it. `--json` gives it as `next`. Every error
   says what to run next.
 - A harness waiting on a question or a permission is shown as `needs the person`: tell the person.
+- An agent Harness cannot follow until the person acts shows as `held`, with what to do: tell the person.
 - Exit 5 means refused (your limits, the person's setting, or a harness you did not start): do not retry it;
   tell the person, or do the work yourself.
 - `harness help agents` prints the commands, states, exit codes and rules on one screen.
