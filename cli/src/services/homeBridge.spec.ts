@@ -221,6 +221,19 @@ describe('the home bridge service', () => {
     bridge.stop()
   })
 
+  it('a connections folder a setting keeps outside Harness\'s folders was never in ~/.harness: nothing of it is linked there', async () => {
+    const h = movedHome()
+    const outside = join(h.home, 'connections-elsewhere')
+    mkdirSync(outside)
+    for (const name of ['bridge.sock', 'mcp-shim.mjs']) writeFileSync(join(outside, name), '')
+    const { bridge } = start(h, { environment: { HOME: h.home, HARNESS_CONNECTIONS_DIR: outside }, rows: () => [row({ name: 'claude' })] })
+    await settle()
+    expect(readdirSync(join(h.oldHome, 'connections'))).toEqual([])
+    // The daemon's own socket and route are served all the same.
+    expect(sameFile(oldSocketLink(h), h.socket)).toBe(true)
+    bridge.stop()
+  })
+
   it('with no socket path it serves the route and the connections, and no socket link', () => {
     const h = movedHome()
     const { bridge } = start(h, { socket: null, rows: () => [row({ name: 'claude' })] })
