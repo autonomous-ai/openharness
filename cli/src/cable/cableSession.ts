@@ -2958,9 +2958,10 @@ export class CableSession {
   }
 
   /** Whether this dial keeps a question: its agent's drawer row (dialKeepsId), and on a Pro its id, which the Pro
-   *  closes nothing by from 64 bytes on (pro_cable.c handle_question_close): one rung with it rang for good. */
+   *  closes nothing by when its strlen is 0 or 64 bytes on (pro_cable.c handle_question_close): one rung with it rang
+   *  until its agent's next turn. cJSON keeps a `\u0000`, so strlen stops there, and an id with one is not sent. */
   private dialKeeps(agentId: string, id: string): boolean {
-    return dialKeepsId(agentId) && (!this.seqOn || Buffer.byteLength(id, 'utf8') < 64)
+    return dialKeepsId(agentId) && (!this.seqOn || (Buffer.byteLength(id, 'utf8') < 64 && !id.includes('\u0000')))
   }
 
   /** Whether a dial that lost its questions is asked this one again. A real question whose turn moved on without a close
