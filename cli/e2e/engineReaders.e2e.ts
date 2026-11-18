@@ -2,6 +2,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
+import { TerminalBinaryKind } from '../src/lib/terminalBinary.js'
 import { LocalClient } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { alive, harnessdProcesses } from './harness/endurance.js'
@@ -191,37 +192,50 @@ describe('Claude Code and Codex readers in their own processes', () => {
     expect(d.coresStarted()).toBe(1)
   })
 
-  it.skipIf(process.platform === 'win32').each(['worker', 'inline'] as const)('terminal screen %s preserves shell input and failure isolation', async mode => {
+  it.skipIf(process.platform === 'win32').each(['worker', 'inline'] as const)('terminal screen %s preserves inspection and terminal input isolation', async mode => {
     const { d, c } = await fresh({ SHELL: '/bin/bash', HARNESSD_SERVICE_HEARTBEAT_TIMEOUT_MS: '60000',
       ...(mode === 'inline' ? { HARNESSD_SERVICES: 'none' } : {}) })
     const cwd = join(d.projectsDir, 'terminal-screen'); mkdirSync(cwd)
     const opened = await c.request('agent_create', { engine: 'terminal', cwd }, 60_000)
     expect(opened.error, JSON.stringify(opened)).toBeUndefined()
     const agentId = opened.agent.id
+    const requestId = 'terminal-screen-input'
+    const attached = c.next(frame => ['terminal_ready', 'terminal_error'].includes(frame.type)
+      && frame.payload?.requestId === requestId, 30_000, 'terminal input stream')
+    c.send('terminal_open', { requestId, protocolVersion: 3, agentId, cols: 100, rows: 30 })
+    const ready = await attached
+    expect(ready.type, JSON.stringify(ready)).toBe('terminal_ready')
+    let sequence = 0
     const write = async (name: string) => {
-      c.send('message', { agentId, content: `printf verified > ${name}.txt` })
+      // Shell keystrokes use the existing terminal stream. Agent messages require an engine process.
+      c.sendBinary({ kind: TerminalBinaryKind.input, streamId: ready.payload!.streamId, seq: sequence++, compressed: false,
+        bytes: Buffer.from(`printf '1 background task\\n'; printf verified > ${name}.txt\r`) })
       await until('the shell command to complete', () => {
         const path = join(cwd, `${name}.txt`)
         return existsSync(path) && readFileSync(path, 'utf8') === 'verified' || null
       }, 30_000, 50)
       expect(readFileSync(join(cwd, `${name}.txt`), 'utf8')).toBe('verified')
     }
+    // Close inspection actually reads the terminal screen; it never writes or closes the pane in inspect mode.
+    const inspect = () => c.request('agent_close', { agentId, sessionId: opened.agent.sessionId,
+      createdAt: opened.agent.createdAt, mode: 'inspect' }, 25_000)
     await write('before')
+    expect(await inspect()).toMatchObject({ activity: 'working' })
     const worker = harnessdProcesses(d).get('engine-others'), core = d.corePid()
     if (mode === 'worker') {
       expect(worker).toBeDefined()
       process.kill(worker!, 'SIGSTOP')
       try {
-        const refused = c.next(frame => frame.type === 'error' && frame.agentId === agentId, 25_000, 'unavailable terminal screen')
-        c.send('message', { agentId, content: 'printf forbidden > blocked.txt' })
-        expect((await refused).payload?.message).toContain('screen could not be read')
-        expect(existsSync(join(cwd, 'blocked.txt'))).toBe(false)
+        const reading = inspect()
+        void reading.catch(() => {})
+        await write('during-reader-outage')
+        expect(await reading).toMatchObject({ activity: 'unknown' })
         expect((await rows(c)).some(row => row.id === agentId)).toBe(true)
         expect(d.corePid()).toBe(core)
       } finally { process.kill(worker!, 'SIGCONT') }
     } else expect(worker).toBeUndefined()
     await write('after')
-    expect(existsSync(join(cwd, 'blocked.txt'))).toBe(false)
+    expect(await inspect()).toMatchObject({ activity: 'working' })
     expect(d.corePid()).toBe(core)
     expect(d.coresStarted()).toBe(1)
   })
