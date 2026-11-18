@@ -425,6 +425,19 @@ describe('cable session', () => {
     } finally { await session.stop() }
   })
 
+  it('keeps words that only read like half an emoji after a backslash', async () => {
+    // JSON writes a backslash as \\: the `\ud83d` of a path is words, and half an emoji after a backslash is still half.
+    const names = ['C:\\ud83d\\udc00', 'C:\\\\ud83d', 'C:\\\ud83d', 'C:\\\\\ud83d']
+    const agents = names.map((name, i) => ({ id: `a${i}`, name, engine: 'claude' }))
+    const { session, port } = await connect(makeHost({ listAgents: async () => agents }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+      expect(port.sent.filter((m) => m.t === 'agent').map((m) => m.name))
+        .toEqual(['C:\\ud83d\\udc00', 'C:\\\\ud83d', 'C:\\?', 'C:\\\\?'])
+    } finally { await session.stop() }
+  })
+
   it('keeps the leading drawer rows that fit one frame', () => {
     const rows = Array.from({ length: 8 }, (_, i) => ({ agentId: `a${i}`, summary: 'x'.repeat(2000) }))
     const kept = fitDrawer(rows)
