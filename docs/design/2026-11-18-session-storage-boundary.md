@@ -695,3 +695,76 @@ custody and unreadable-peer compatibility, with both reader and list files at
 `/tmp/core-grid-storage-directory-page-sticky-types1-20261118.log`. The preceding
 coverage attempt exposed a fixture injection placed before directory admission;
 its corrected injection now targets that check and preserves the actual failure.
+
+## Design: reuse exact normalized rows from the locked source image
+
+The 160-row count-only diagnostic on 8765 prepares one Registry image. Before
+preparation, normalizedRuntimes's exact validTerminalRuntime filter runs 483 times
+on 160 unique arrays (323 repeated calls). Both fresh live rebases fingerprint 160
+distinct rows exactly once and perform no runtime normalization. This is source
+attribution, not latency/CPU acceptance. The diagnostic receipt verifies 9,688
+inputs, actual child exit/close/disconnect and PID/group/root cleanup.
+
+### Narrow correction
+
+In the existing locked source-read block, `validatedRows(v2Rows)` already produces
+complete normalized source rows and checks global identity invariants. Its result
+is currently discarded. Preserve that result in a transaction-local Map keyed by
+the exact original raw row object, paired by the validator's unchanged input order.
+Only this successful source validation populates the Map, and only for rows with
+numeric registeredAt, lastHookAt and lastTranscriptAt plus numeric touchedAt or
+legacy updatedAt. Rows requiring Date.now defaults retain their existing calls.
+Never key by row id,
+runtime array, digest or public identity; different raw objects always validate
+independently. Invalid/legacy/non-source rows use strictPersistedRow as today.
+
+Use a local `normalizeSourceRow` function which returns that exact cached result
+only for a Map hit and otherwise calls strictPersistedRow. Thread it through the
+initial MergeIdentities construction/put and pre-prepare mergedForSave validation,
+then final pre-prepare validatedRows. Existing optional helper defaults stay
+strictPersistedRow, so both fresh live rebases and all other callers remain fresh.
+The global final validation still scans every resulting row and checks all agent,
+process, conversation/provisional reservation and runtime identities.
+
+Clear the Map immediately before `await prepareSessionPublication`. No cached
+normalization is used across an await after source validation; no cache crosses
+transactions, no mutable live row enters it, and no new normalization authority
+survives preparation. The normalized rows already chosen for preparation remain
+the owned metadata graph, as under the current reference-only receipt contract.
+
+Remove the existing unnecessary await around its synchronous validation IIFE.
+Clear the Map on failure before asynchronous source cleanup as well.
+The source rows are the required child's private fresh JSON projection. Validation,
+reconciliation and initial merge run without yielding after the retained-source
+read. Reconciliation replaces Map entries/root objects, while threeWayRow and
+withIntended copy roots. They do not mutate nested source fields. The cache cannot
+substitute a normalized source row for a changed candidate merely because their
+runtime arrays or agent ids agree. Credential receipt replacement and final witness
+updates happen after the cache is cleared. Per-row structuredClone, owner captures,
+global validation, locks, deadlines, peer conflict handling, source FD/temporary
+custody, cancellation and both final fresh-live rebases remain unchanged.
+
+### Tests and scope
+
+Failure-first count at the real Registry caller: its existing three-row admission
+fixture performs 15 runtime normalizations; require at most 11 while preserving
+literal durable rows, independently owned receipt/live nested fields, and the
+existing prepared-row reuse. This targets two repeated passes over the two exact
+source rows, not fewer global identity checks. Add a source-row normalization count
+alongside a field-changed candidate to prove the candidate is independently parsed.
+
+Run the actual held-child-preparation invalid-live-row and nested mutation cases,
+peer-recovered owner/close intent/cancellation/unknown-publication tests, final
+installed Grid alias protection, Grid copied-reference rekey/final-witness resolution
+and malformed source/global identity rejection. Changes during awaited preparation
+must still be seen by the fresh rebase. Prior tests, failures and diagnostic inputs
+stay frozen. No private field values, row ids or digests enter diagnostic output.
+
+This adds only a transient pointer Map for already retained live-session metadata;
+it removes duplicate normalized graphs and is cleared before preparation. Whole
+Registry image/metadata growth remains a residual. Fingerprinting, initial capture
+callback delay and every-transaction durable I/O remain measured costs, not solved
+by this correction. A later matched comparison must decide actual performance.
+
+Actual RED: `/tmp/core-grid-storage-source-normalization-red1-20261118.log` fails
+15 > 11 after the original literal durable and receipt assertions pass.

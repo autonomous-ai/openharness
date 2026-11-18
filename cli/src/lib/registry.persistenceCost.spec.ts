@@ -236,8 +236,8 @@ it('reuses private normalization across admission checks and unchanged prepared 
   expect(saved.slice(0, 2)).toEqual(previous)
   expect(saved[2]).toEqual(opened!.entry)
   expect(io.durable).toEqual([saved])
-  // Eighteen before prepared-row reuse: all three unchanged prepared rows were parsed again.
-  expect(normalizations).toBeLessThanOrEqual(15)
+  // Fifteen after prepared-row reuse: both source rows were still normalized for the index and merge.
+  expect(normalizations).toBeLessThanOrEqual(11)
 })
 
 it('rejects a live row made invalid after preparation instead of reusing its earlier normalized owner', async () => {
