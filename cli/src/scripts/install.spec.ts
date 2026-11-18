@@ -122,13 +122,20 @@ const managedNode = (runtime: string) => {
   return join(bin, "node");
 };
 
-// Where Harness goes, by the home it finds: the folders that exist, the system, the managed Node's runtime folder
-// and the cli folder the launcher must name.
-const LAYOUTS: { home: string; os: string; made: string[]; runtime: string; cli: string }[] = [
-  { home: "a fresh Linux home", os: "Linux", made: [], runtime: ".local/state/harness/runtime", cli: ".local/share/harness/cli" },
-  { home: "a Linux home still on ~/.harness", os: "Linux", made: [".harness"], runtime: ".harness/runtime", cli: ".harness/cli" },
-  { home: "a Mac", os: "Darwin", made: [".local/share/harness"], runtime: ".harness/runtime", cli: ".harness/cli" },
+// Where Harness goes, by the home it finds: the folders that exist, the system, the managed Node's runtime folder,
+// the cli folder the launcher must name, and whether the install marks the data root Harness's (a fresh XDG install).
+const LAYOUTS: { home: string; os: string; made: string[]; runtime: string; cli: string; marked: boolean }[] = [
+  { home: "a fresh Linux home", os: "Linux", made: [], runtime: ".local/state/harness/runtime", cli: ".local/share/harness/cli", marked: true },
+  { home: "a Linux home still on ~/.harness", os: "Linux", made: [".harness"], runtime: ".harness/runtime", cli: ".harness/cli", marked: false },
+  { home: "a Mac", os: "Darwin", made: [".local/share/harness"], runtime: ".harness/runtime", cli: ".harness/cli", marked: false },
 ];
+
+/** The marker a fresh XDG install writes in the data root (cli/src/config/harnessHome.ts): its bytes and mode, or null. */
+const markerIn = (home: string) => {
+  const path = join(home, ".local", "share", "harness", ".harness-root");
+  return existsSync(path) ? { text: readFileSync(path, "utf8"), mode: statSync(path).mode & 0o777 } : null;
+};
+const MARKER = { text: "1\n", mode: 0o600 };
 
 // The constants, from the manifest URLs through the first-run check: every step reads them.
 const constantsOf = (source: string) =>
@@ -1737,7 +1744,11 @@ describe.each([["install.sh", installer], ["install-cli.sh", installCli]])("scri
     const scratch = mkdtempSync(join(tmpdir(), "harness-roots-"));
     try {
       const home = join(scratch, "home");
-      for (const folder of ["", ...made]) mkdirSync(join(home, folder), { recursive: true });
+      // A `.harness-root` is the data root's marker, a file; the rest are folders.
+      for (const folder of ["", ...made]) {
+        if (folder.endsWith(".harness-root")) writeFileSync(join(home, folder), "1\n");
+        else mkdirSync(join(home, folder), { recursive: true });
+      }
       writeUname(scratch, os);
       const vars = Object.fromEntries(Object.entries(xdg).map(([key, value]) => [key, value.replace(/^~/, home)]));
       const result = spawnSync("/bin/sh", ["-c", `${fn}harness_roots\nprintf '%s\\n' "$HARNESS_DATA_ROOT" "$HARNESS_STATE_ROOT"`], {
@@ -1761,8 +1772,13 @@ describe.each([["install.sh", installer], ["install-cli.sh", installCli]])("scri
     expect(roots("Linux", [".harness"])).toEqual(LEGACY);
   });
 
-  it("Linux, the data root exists → XDG, whatever is at ~/.harness", () => {
-    expect(roots("Linux", [".harness", ".local/share/harness"])).toEqual(XDG);
+  it("Linux, the data root holds the marker → XDG, whatever is at ~/.harness", () => {
+    expect(roots("Linux", [".harness", ".local/share/harness", ".local/share/harness/.harness-root"])).toEqual(XDG);
+  });
+
+  it("Linux, a data root without the marker beside ~/.harness → ~/.harness", () => {
+    expect(roots("Linux", [".harness", ".local/share/harness"])).toEqual(LEGACY);
+    expect(roots("Linux", [".local/share/harness"])).toEqual(XDG);
   });
 
   it("Linux, the state root alone switches nothing", () => {
@@ -1788,8 +1804,9 @@ describe.each([["install.sh", installer], ["install-cli.sh", installCli]])("scri
     expect(roots("Linux", [], { XDG_DATA_HOME: "/a//b/", XDG_STATE_HOME: "/" })).toEqual(["/a/b/harness", "/harness"]);
   });
 
-  it("Linux, a data root of the person's own XDG_DATA_HOME is the switch", () => {
-    expect(roots("Linux", [".harness", "data/harness"], { XDG_DATA_HOME: "~/data" })).toEqual(["~/data/harness", "~/.local/state/harness"]);
+  it("Linux, the marker in a data root of the person's own XDG_DATA_HOME is the switch", () => {
+    expect(roots("Linux", [".harness", "data/harness", "data/harness/.harness-root"], { XDG_DATA_HOME: "~/data" })).toEqual(["~/data/harness", "~/.local/state/harness"]);
+    expect(roots("Linux", [".harness", ".local/share/harness", ".local/share/harness/.harness-root"], { XDG_DATA_HOME: "~/data" })).toEqual(LEGACY);
   });
 
   it("Darwin → ~/.harness whatever exists", () => {
@@ -1843,7 +1860,7 @@ describe("scripts/install.sh: where it lays Harness", () => {
     ]);
   });
 
-  it.each(LAYOUTS)("on $home, the launcher names the managed Node and the cli.js the roots give", async ({ os, made, runtime, cli }) => {
+  it.each(LAYOUTS)("on $home, the launcher names the managed Node and the cli.js the roots give", async ({ os, made, runtime, cli, marked }) => {
     const scratch = mkdtempSync(join(tmpdir(), "harness-launcher-"));
     try {
       const home = join(scratch, "home");
@@ -1853,6 +1870,7 @@ describe("scripts/install.sh: where it lays Harness", () => {
       expect(code, out).toBe(0);
       expect(readFileSync(join(home, ".local", "bin", "harness"), "utf8")).toBe(`#!/bin/sh\nexec '${node}' '${join(home, cli, "cli.js")}' "$@"\n`);
       expect(readFileSync(join(home, cli, "cli.js"), "utf8")).toBe("console.log('cli')\n");
+      expect(markerIn(home)).toEqual(marked ? MARKER : null);
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }
@@ -1894,7 +1912,7 @@ describe("scripts/install-cli.sh: where it lays Harness", () => {
     });
   };
 
-  it.each(LAYOUTS)("on $home, the launcher names the managed Node and the cli.js the roots give", ({ os, made, runtime, cli }) => {
+  it.each(LAYOUTS)("on $home, the launcher names the managed Node and the cli.js the roots give", ({ os, made, runtime, cli, marked }) => {
     const scratch = mkdtempSync(join(tmpdir(), "harness-install-cli-"));
     try {
       const home = join(scratch, "home");
@@ -1904,6 +1922,7 @@ describe("scripts/install-cli.sh: where it lays Harness", () => {
       expect(result.status, result.stderr).toBe(0);
       expect(readFileSync(join(home, ".local", "bin", "harness"), "utf8")).toBe(`#!/bin/sh\nexec "${node}" "${join(home, cli, "cli.js")}" "$@"\n`);
       expect(readdirSync(join(home, cli)).sort()).toEqual(["cli.js", "notify.mjs", "package.json"]);
+      expect(markerIn(home)).toEqual(marked ? MARKER : null);
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }

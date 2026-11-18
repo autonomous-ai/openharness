@@ -121,9 +121,12 @@ function legacyHome({ unknown = false }: { unknown?: boolean } = {}): Home {
 /** process.argv for `harness <args>` run from the old tree's Node and cli.js. */
 const argvOf = (t: Home, ...args: string[]): string[] => [join(t.legacy, NODE), join(t.legacy, 'cli', 'cli.js'), ...args]
 
+/** The marker that makes the data root Harness's (config/harnessHome.ts). */
+const markerOf = (t: Home): string => join(t.data, '.harness-root')
+
 /** The lines of harness.log in the data folder where it is now: an override's, the XDG one once moved, else ~/.harness's. */
 function logOf(t: Home, env: NodeJS.ProcessEnv = {}): string[] {
-  const folder = env.ADAPTER_DATA_DIR ?? join(existsSync(t.data) ? t.data : t.legacy, 'cli', 'data')
+  const folder = env.ADAPTER_DATA_DIR ?? join(existsSync(markerOf(t)) ? t.data : t.legacy, 'cli', 'data')
   try {
     return readFileSync(join(folder, 'harness.log'), 'utf8').split('\n').filter(Boolean)
   } catch {
@@ -244,6 +247,35 @@ describe('the move at a start', () => {
     expect(readMoveRecord(t.home, {})).toMatchObject({ state: 'failed', reason: 'target-exists', failedAt: NOW })
     expect(existsSync(t.data)).toBe(false)
     expect(t.execs).toEqual([])
+  })
+
+  // Somebody else's folder, or one Desktop made before the CLI: the machine stays on ~/.harness, and neither is touched.
+  it('a data root that holds no marker beside ~/.harness: the move refuses it with target-exists, and touches neither', async () => {
+    const t = legacyHome()
+    put(join(t.data, 'theirs.txt'), 'theirs')
+    const files = (): string[] => readdirSync(t.legacy, { recursive: true, encoding: 'utf8' }).filter((path) => path !== 'home-move.json' && path !== join('cli', 'data', 'harness.log')).sort()
+    const before = files()
+    await moveHomeAtStart(argvOf(t, 'start'), {}, t.deps())
+    expect(logOf(t)).toEqual(['home move: failed target-exists · ~/.harness is as it was'])
+    expect(readMoveRecord(t.home, {})).toMatchObject({ state: 'failed', reason: 'target-exists' })
+    expect(files()).toEqual(before)
+    expect(readFileSync(join(t.legacy, 'auth', 'session.json'), 'utf8')).toBe('{"token":"t-1"}')
+    expect(readdirSync(t.data)).toEqual(['theirs.txt'])
+    expect(existsSync(t.state)).toBe(false)
+    expect(t.execs).toEqual([])
+  })
+
+  it('a start on a fresh computer marks the data root Harness\'s, and says nothing', async () => {
+    for (const made of [[], ['.local/share/harness']]) {
+      const t = legacyHome()
+      rmSync(t.legacy, { recursive: true })
+      for (const folder of made) mkdirSync(join(t.home, folder), { recursive: true })
+      await moveHomeAtStart(['/usr/bin/node', '/usr/lib/harness/cli.mjs', 'start'], {}, t.deps({ execPath: '/usr/bin/node' }))
+      expect([readFileSync(markerOf(t), 'utf8'), statSync(markerOf(t)).mode & 0o777], made.join()).toEqual(['1\n', 0o600])
+      expect(logOf(t)).toEqual([])
+      expect(existsSync(t.legacy)).toBe(false)
+      expect(t.execs).toEqual([])
+    }
   })
 
   it.skipIf(asRoot)('an XDG state base this account cannot write fails with permission, and ~/.harness is as it was', async () => {
@@ -439,6 +471,7 @@ describe('the move at a start', () => {
     heldByAnother(t)
     // The other start committed and still finishes: its journal is there.
     mkdirSync(join(t.data, 'cli', 'data'), { recursive: true })
+    writeFileSync(markerOf(t), '1\n')
     openJournal({ version: 1, startedAt: NOW, plan: { home: t.home, legacy: t.legacy, data: t.data, state: t.state, entries: [] }, oldTag: 'a', newTag: 'b', done: [] }, disk)
     const start = moveHomeAtStart(argvOf(t, '__harnessd'), {}, t.deps())
     expect(await Promise.race([start.then(() => 'went on'), new Promise((done) => setImmediate(done, 'waits'))])).toBe('went on')
@@ -482,6 +515,7 @@ describe('the move at a start', () => {
   it('a ~/.harness beside the data root that is not the bridge is said once, and nothing in it is deleted', async () => {
     const t = legacyHome()
     mkdirSync(join(t.data, 'cli', 'data'), { recursive: true })
+    writeFileSync(markerOf(t), '1\n')
     mkdirSync(t.state, { recursive: true })
     const before = readdirSync(t.legacy, { recursive: true }).sort()
     await moveHomeAtStart(argvOf(t, '__harnessd'), {}, t.deps())

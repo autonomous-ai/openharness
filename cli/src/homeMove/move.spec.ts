@@ -289,6 +289,8 @@ describe('the move', () => {
     expect([mode(join(plan.data, 'auth')), mode(join(plan.data, 'auth', 'session.json')), mode(join(plan.data, 'computer-id'))]).toEqual([0o700, 0o600, 0o600])
     // XDG bases that were not there are made owner-only.
     expect([mode(join(t.home, '.local', 'share')), mode(join(t.home, '.local', 'state')), mode(plan.data), mode(plan.state)]).toEqual([0o700, 0o700, 0o700, 0o700])
+    // The data root is Harness's: its marker came with the commit.
+    expect([readFileSync(join(plan.data, '.harness-root'), 'utf8'), mode(join(plan.data, '.harness-root'))]).toEqual(['1\n', 0o600])
 
     // What named the old tree names the new one, inside and out.
     expect(readFileSync(join(plan.state, 'runtime', 'current-node'), 'utf8')).toBe(`${plan.state}/${NODE}\n`)
@@ -458,6 +460,26 @@ describe('a failed move', () => {
     expect(failedRecord(t)).toMatchObject({ state: 'failed', reason, failedAt: NOW })
     // The tree, the launcher and the unit, and the panes' tags, as they were.
     expect(snapshot(t)).toEqual(before)
+  })
+
+  // Written in the staged data root, the marker appears with the data root's rename and never before it.
+  it('the marker is staged with the data root, and a rollback takes it away', async () => {
+    const t = await legacyHome()
+    const staged = join(`${t.plan.data}.moving`, '.harness-root')
+    let atCommit: string | null = null
+    const io: Io = {
+      ...disk,
+      renameSync: (from, to) => {
+        if (from === `${t.plan.data}.moving`) {
+          atCommit = existsSync(staged) ? readFileSync(staged, 'utf8') : null
+          throw failure('EIO')
+        }
+        fs.renameSync(from, to)
+      },
+    }
+    expect(await runMove(t.check, t.env, t.deps({ io }))).toEqual({ state: 'failed', reason: 'io' })
+    expect(atCommit).toBe('1\n')
+    expect([existsSync(staged), existsSync(t.plan.data)]).toEqual([false, false])
   })
 
   it('a rollback that cannot undo a step keeps its journal, and the next start undoes the rest', async () => {

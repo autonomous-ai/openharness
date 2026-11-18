@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join, posix } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -40,10 +40,12 @@ const TABLE: Record<string, 'data' | 'state'> = {
 }
 const ENTRIES = Object.keys(TABLE) as HarnessEntry[]
 
-/** A computer that has these folders and these variables, and nothing else. */
+/** A computer that has these folders and files and these variables, and nothing else. */
 const look = (folders: string[] = [], env: Record<string, string | undefined> = {}): HomeLook => ({ env, exists: (path) => folders.includes(path) })
 
 const FRESH = { data: '/h/.local/share/harness', state: '/h/.local/state/harness' }
+/** The file that makes a data root Harness's: the move's commit, a fresh install and a fresh start write it. */
+const marker = (dataRoot: string): string => `${dataRoot}/.harness-root`
 
 describe('Harness\'s home folder', () => {
   it('the table is the spec\'s', () => {
@@ -65,11 +67,19 @@ describe('Harness\'s home folder', () => {
   })
 
   // The bridge the move leaves at ~/.harness, or one something old made again, never flips a moved machine back.
-  it('the data root exists → XDG, whatever is at ~/.harness', () => {
-    const moved = look([FRESH.data, '/h/.harness'])
+  it('the data root holds the marker → XDG, whatever is at ~/.harness', () => {
+    const moved = look([FRESH.data, marker(FRESH.data), '/h/.harness'])
     expect(harnessRoot('data', '/h', 'linux', moved)).toBe(FRESH.data)
     expect(harnessRoot('state', '/h', 'linux', moved)).toBe(FRESH.state)
     expect(harnessRoots('/h', 'linux', moved)).toEqual([FRESH.data, FRESH.state])
+  })
+
+  // Made by anything else (another program, Desktop before the CLI): the machine stays where its files are.
+  it('a data root without the marker beside ~/.harness → ~/.harness', () => {
+    const stray = look([FRESH.data, '/h/.harness'])
+    expect(harnessRoots('/h', 'linux', stray)).toEqual(['/h/.harness'])
+    // With no ~/.harness it is a fresh computer's.
+    expect(harnessRoots('/h', 'linux', look([FRESH.data]))).toEqual([FRESH.data, FRESH.state])
   })
 
   it('an XDG variable that is unset, empty or relative is ignored', () => {
@@ -81,8 +91,9 @@ describe('Harness\'s home folder', () => {
     const env = { XDG_DATA_HOME: '/d', XDG_STATE_HOME: '/s' }
     expect(xdgRoots('/h', env)).toEqual({ data: '/d/harness', state: '/s/harness' })
     expect(harnessRoots('/h', 'linux', look([], env))).toEqual(['/d/harness', '/s/harness'])
-    // Its data root is the switch: the default's existing says nothing about a machine that set its own.
-    expect(harnessRoots('/h', 'linux', look([FRESH.data, '/h/.harness'], env))).toEqual(['/h/.harness'])
+    // Its data root's marker is the switch: the default's says nothing about a machine that set its own.
+    expect(harnessRoots('/h', 'linux', look([marker(FRESH.data), '/h/.harness'], env))).toEqual(['/h/.harness'])
+    expect(harnessRoots('/h', 'linux', look([marker('/d/harness'), '/h/.harness'], env))).toEqual(['/d/harness', '/s/harness'])
   })
 
   it('every entry goes to the root its label names', () => {
@@ -130,6 +141,8 @@ describe('Harness\'s home folder', () => {
       expect(harnessRoot('data', home, 'linux')).toBe(posix.join(home, '.harness'))
       process.env.XDG_DATA_HOME = posix.join(home, 'data')
       mkdirSync(join(home, 'data', 'harness'), { recursive: true })
+      expect(harnessRoot('data', home, 'linux')).toBe(posix.join(home, '.harness'))
+      writeFileSync(join(home, 'data', 'harness', '.harness-root'), '1\n')
       expect(harnessRoot('data', home, 'linux')).toBe(posix.join(home, 'data', 'harness'))
     } finally {
       delete process.env.XDG_DATA_HOME
@@ -141,7 +154,7 @@ describe('Harness\'s home folder', () => {
   it('the prelude\'s text', () => {
     const home = homedir()
     expect(harnessPathText('run', '$HOME', 'linux', look([posix.join(home, '.harness')]))).toBe('$HOME/.harness/run')
-    expect(harnessPathText('run', '$HOME', 'linux', look([posix.join(home, '.local', 'share', 'harness')]))).toBe('$HOME/.local/state/harness/run')
+    expect(harnessPathText('run', '$HOME', 'linux', look([posix.join(home, '.harness'), marker(posix.join(home, '.local', 'share', 'harness'))]))).toBe('$HOME/.local/state/harness/run')
     expect(harnessPathText('run', '$HOME', 'darwin', look())).toBe('$HOME/.harness/run')
   })
 

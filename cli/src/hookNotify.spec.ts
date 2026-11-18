@@ -2107,6 +2107,13 @@ describe('the hook finds Harness\'s folders by the rule', () => {
     return home
   }
 
+  /** A moved home: ~/.harness (the bridge) and the data root [dataRoot] with the marker the move's commit writes in it. */
+  function movedHome(dataRoot = '.local/share/harness'): string {
+    const home = homeWith('.harness', dataRoot)
+    writeFileSync(join(home, dataRoot, '.harness-root'), '1\n', { mode: 0o600 })
+    return home
+  }
+
   /** The hook's environment as on [platform], in [home], naming no data or routes folder. */
   function asOn(platform: NodeJS.Platform, home: string, env: Record<string, string> = {}): Record<string, string> {
     const preload = join(home, 'platform.mjs')
@@ -2163,13 +2170,15 @@ describe('the hook finds Harness\'s folders by the rule', () => {
   const xdgDefaults = (home: string) => ({ data: join(home, '.local', 'share', 'harness'), state: join(home, '.local', 'state', 'harness') })
 
   it('on a moved Linux home the fallbacks are under the XDG roots', async () => {
-    // ~/.harness is the bridge the move leaves: the XDG data folder is what decides.
-    const home = homeWith('.harness', '.local/share/harness')
+    // ~/.harness is the bridge the move leaves: the XDG data folder's marker is what decides.
+    const home = movedHome()
     expect(await fallbacks(home, asOn('linux', home), xdgDefaults(home))).toEqual(everyFallback)
   })
 
   it.each([
     ['a legacy Linux home', 'linux', ['.harness']],
+    // Made by something else: the machine stays where its files are.
+    ['a Linux home with a data root that holds no marker', 'linux', ['.harness', '.local/share/harness']],
     ['macOS', 'darwin', ['.harness', '.local/share/harness']],
   ] as const)('on %s the fallbacks are under ~/.harness, as before', async (_name, platform, folders) => {
     const home = homeWith(...folders)
@@ -2179,11 +2188,11 @@ describe('the hook finds Harness\'s folders by the rule', () => {
 
   it('takes XDG_DATA_HOME and XDG_STATE_HOME only when each is an absolute path', async () => {
     for (const value of ['', 'xdg']) {
-      const home = homeWith('.harness', '.local/share/harness')
+      const home = movedHome()
       const env = asOn('linux', home, { XDG_DATA_HOME: value, XDG_STATE_HOME: value })
       expect(await fallbacks(home, env, xdgDefaults(home)), `XDG_*_HOME=${JSON.stringify(value)}`).toEqual(everyFallback)
     }
-    const home = homeWith('.harness', 'xd/harness')
+    const home = movedHome('xd/harness')
     const env = asOn('linux', home, { XDG_DATA_HOME: join(home, 'xd'), XDG_STATE_HOME: join(home, 'xs') })
     expect(await fallbacks(home, env, { data: join(home, 'xd', 'harness'), state: join(home, 'xs', 'harness') })).toEqual(everyFallback)
   })
@@ -2191,7 +2200,7 @@ describe('the hook finds Harness\'s folders by the rule', () => {
   // An agent from before the move runs the command it started with: --data-dir ~/.harness/cli/data, which the bridge's
   // `cli` link turns into the moved folder, and in a pane the move retagged with that folder's tag.
   it('an old command reaches a moved daemon', async () => {
-    const home = homeWith('.harness', '.local/share/harness')
+    const home = movedHome()
     const moved = join(xdgDefaults(home).data, 'cli', 'data')
     const daemon = await daemonIn(moved)
     symlinkSync(join(xdgDefaults(home).data, 'cli'), join(home, '.harness', 'cli'))
@@ -2214,7 +2223,7 @@ describe('the hook finds Harness\'s folders by the rule', () => {
   })
 
   it('HARNESS_HOOK_ROUTES_DIR and ADAPTER_DATA_DIR still win on a moved home', async () => {
-    const home = homeWith('.harness', '.local/share/harness')
+    const home = movedHome()
     const env = asOn('linux', home, { ADAPTER_DATA_DIR: join(home, 'mine', 'data'), HARNESS_HOOK_ROUTES_DIR: join(home, 'mine', 'routes') })
     expect(await reachesData(join(home, 'mine', 'data'), env)).toBe(true)
     expect(await followsRoute(join(home, 'mine', 'routes'), home, env)).toBe(true)

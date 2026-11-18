@@ -52,11 +52,20 @@ describe('whether the move runs: the first condition that holds decides', () => 
     expect(await checkMove(deps(home, { platform: 'darwin' }))).toEqual(NONE)
   })
 
-  it('the data root exists → no hold', async () => {
+  it('the data root holds the marker → no hold', async () => {
     const { home, cliDir } = legacyHome()
     pending(cliDir)
-    mkdirSync(join(home, '.local', 'share', 'harness'), { recursive: true })
+    const data = join(home, '.local', 'share', 'harness')
+    mkdirSync(data, { recursive: true })
+    writeFileSync(join(data, '.harness-root'), '1\n')
     expect(await checkMove(deps(home))).toEqual(NONE)
+  })
+
+  // Somebody else's folder where the data root goes is no move done: the move runs, and refuses it (move.ts, target-exists).
+  it('a data root without the marker → the move runs', async () => {
+    const { home } = legacyHome()
+    mkdirSync(join(home, '.local', 'share', 'harness'), { recursive: true })
+    expect(await checkMove(deps(home))).toMatchObject({ move: true })
   })
 
   it('no ~/.harness → no hold', async () => {
