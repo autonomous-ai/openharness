@@ -172,8 +172,8 @@ export interface ActivitySnapshot {
 const ACTION_MAX_BYTES = 188
 /** A drawer row's words on the device (cable_notif_t summary, 240 B with its end): eight rows stay one frame. */
 const NOTICE_SUMMARY_MAX = 239
-/** A drawer row's name and machine on the device (CABLE_NAME_MAX, 40 B with its end). */
-const NOTICE_NAME_MAX = 39
+/** An agent's name and machine on the device (CABLE_NAME_MAX, 40 B with its end). */
+const NAME_MAX = 39
 
 /** What the Pro's firmware holds of a swarms frame: 24 tabs, 24 ids each, and 512 JSON tokens (480 here). */
 const SWARMS_MAX = 24
@@ -2879,8 +2879,10 @@ export class CableSession {
   }
 
   /** Whether a dial that lost its questions is asked this one again. A real question whose turn moved on without a close
-   *  is not. A notice or a wait is: its owner closes it, and it stays on the dial after its turn ends. One whose id the
-   *  dial cannot keep is not either: the dial drops it, and it was sent again for nothing at each drawer. */
+   *  is not. A notice or a wait is: its owner closes it, and it stays on the dial after its turn ends. One whose id no
+   *  drawer row carries is not either (dialKeepsId), and it was sent again for nothing at each drawer: the dial drops an
+   *  id of 48 B or more and refuses a frame with half an emoji, and a control character, six bytes of JSON, is left out
+   *  here. */
   private owed(agentId: string, id: string): boolean {
     return dialKeepsId(agentId) && (id.startsWith(SHOWN_ONLY_PREFIX) || this.liveTurns.get(agentId) === 'question')
   }
@@ -3266,9 +3268,14 @@ export class CableSession {
    * question card for an agent off this tab have nobody to ask but the frame. Sent on every card rather
    * than only the off-tab ones: the dial then has one path, and a tab switch mid-flight cannot strand a
    * card with an id and no name.
+   *
+   * Name and machine are cut to what the dial keeps: they are the host's words, of any length, and a frame of a few KB
+   * of them passed the cable cap and was dropped, the card with it.
    */
   private whoIs(agentId: string): { name: string; engine: string; machine: string } {
-    return this.host.describe(agentId) ?? { name: '', engine: '', machine: '' }
+    const who = this.host.describe(agentId)
+    if (!who) return { name: '', engine: '', machine: '' }
+    return { name: dialText(who.name, NAME_MAX), engine: who.engine, machine: dialText(who.machine, NAME_MAX) }
   }
   /**
    * Replace the dial's whole drawer with what the window still has unread.
@@ -3299,9 +3306,8 @@ export class CableSession {
           summary = summary ? extendShortRecap(summary, saved?.text ?? '') : saved?.recap ?? ''
         } catch { /* keep the supplied text if history cannot be read */ }
       }
-      return { agentId: item.agentId, name: dialText(who.name, NOTICE_NAME_MAX), machine: dialText(who.machine, NOTICE_NAME_MAX),
-        summary: dialText(summary, NOTICE_SUMMARY_MAX), question: item.question,
-        ...(notificationReadToken(item.readToken) ? { readToken: item.readToken } : {}) }
+      return { agentId: item.agentId, name: who.name, machine: who.machine, summary: dialText(summary, NOTICE_SUMMARY_MAX),
+        question: item.question, ...(notificationReadToken(item.readToken) ? { readToken: item.readToken } : {}) }
     }))
     if (this.notificationReplay !== replay) return
     this.notificationReplay = undefined
@@ -3321,9 +3327,8 @@ export class CableSession {
     // Questions before news within the eight: a question cut for a news row was asked again, a beep, at every change.
     const eight = [
       ...open.map(({ agentId, questions }) => {
-        const who = this.whoIs(agentId)
-        return { agentId, name: dialText(who.name, NOTICE_NAME_MAX), machine: dialText(who.machine, NOTICE_NAME_MAX),
-          summary: dialText(questions[0].q, NOTICE_SUMMARY_MAX), question: true }
+        const { name, machine } = this.whoIs(agentId)
+        return { agentId, name, machine, summary: dialText(questions[0].q, NOTICE_SUMMARY_MAX), question: true }
       }),
       ...rest.filter((row) => row.question),
       ...rest.filter((row) => !row.question),
