@@ -1,11 +1,13 @@
 // Private e2e fault: deny only complete native descriptor reads while a fixture flag exists.
 // An independent optional-discovery fault checks that its cooldown cannot gate control.
-import childProcess from 'node:child_process'
-import { EventEmitter } from 'node:events'
-import fs from 'node:fs'
-import promises from 'node:fs/promises'
-import { syncBuiltinESMExports } from 'node:module'
-import { promisify } from 'node:util'
+// Preloaded with --require: unlike --import, it also runs in the eval workers where the core's probes run. CommonJS,
+// since a daemon run from the sources has tsx's loader hooks, under which Node cannot require() an ES module.
+const childProcess = require('node:child_process')
+const { EventEmitter } = require('node:events')
+const fs = require('node:fs')
+const promises = require('node:fs/promises')
+const { syncBuiltinESMExports } = require('node:module')
+const { promisify } = require('node:util')
 
 const blocked = () => !!process.env.HARNESS_DESCRIPTOR_FAULT_FILE && fs.existsSync(process.env.HARNESS_DESCRIPTOR_FAULT_FILE)
 const denied = () => Object.assign(new Error('fixture: native descriptor evidence is unavailable'), { code: 'EACCES' })

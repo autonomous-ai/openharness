@@ -605,7 +605,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     const fault = join(d.root, 'optional-native-discovery-unavailable')
     writeFileSync(fault, 'hold', { mode: 0o600 })
     d.env.HARNESS_NATIVE_DISCOVERY_FAULT_FILE = fault
-    d.env.NODE_OPTIONS = `--import=${pathToFileURL(join(CLI_ROOT, 'e2e/harness/nativeDescriptorFault.mjs')).href}`
+    d.env.NODE_OPTIONS = `--require=${JSON.stringify(join(CLI_ROOT, 'e2e/harness/nativeDescriptorFault.cjs'))}`
     await d.start()
     const client = await LocalClient.connect(d)
     const opened = await client.request('agent_create', { engine: 'terminal', cwd: d.projectsDir }, 60_000)
@@ -629,7 +629,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
     const fault = join(d.root, 'native-descriptors-unavailable')
     d.env.HARNESS_DESCRIPTOR_FAULT_FILE = fault
-    d.env.NODE_OPTIONS = `--import=${pathToFileURL(join(CLI_ROOT, 'e2e/harness/nativeDescriptorFault.mjs')).href}`
+    d.env.NODE_OPTIONS = `--require=${JSON.stringify(join(CLI_ROOT, 'e2e/harness/nativeDescriptorFault.cjs'))}`
     await d.start()
     let client = await LocalClient.connect(d)
     const opened = await client.request('agent_create', { engine: 'terminal', cwd: d.projectsDir }, 60_000)
