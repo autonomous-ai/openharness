@@ -1,13 +1,12 @@
 import type { Stats } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { HarnessRootKind } from '../config/harnessHome.js'
-import type { MoveEntry, MovePlan } from './plan.js'
+import { OWN_FILES, type MoveEntry, type MovePlan } from './plan.js'
 
 export interface StageIo extends Pick<typeof import('node:fs'), 'renameSync' | 'symlinkSync' | 'mkdirSync' | 'rmSync' | 'unlinkSync' | 'lstatSync' | 'readdirSync' | 'cpSync' | 'chmodSync' | 'utimesSync'> {}
 
 /** Where an entry copied across filesystems keeps its original, in ~/.harness, until the finish drops it. */
-const KEPT = '.move-old'
-const keptOf = (entry: MoveEntry): string => join(dirname(entry.from), KEPT, entry.name)
+const keptOf = (entry: MoveEntry): string => join(dirname(entry.from), OWN_FILES.kept, entry.name)
 const stagingOf = (plan: MovePlan, root: HarnessRootKind): string => `${plan[root]}.moving`
 
 // A copy keeps modes, a file's times and each link's own text.
@@ -151,5 +150,5 @@ export function uncommitRoot(plan: MovePlan, root: HarnessRootKind, io: StageIo)
 
 /** The finish: the originals of entries copied across filesystems go. */
 export function dropOriginals(plan: MovePlan, io: StageIo): void {
-  io.rmSync(join(plan.legacy, KEPT), { recursive: true, force: true })
+  io.rmSync(join(plan.legacy, OWN_FILES.kept), { recursive: true, force: true })
 }

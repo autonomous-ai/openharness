@@ -180,7 +180,7 @@ function forget(legacy: string, io: Io): void {
 }
 
 /** The outcome of a move that did not finish, and its record in the state root the rule reads now. */
-function failed(folder: string, error: unknown, deps: MoveDeps): MoveOutcome {
+export function failed(folder: string, error: unknown, deps: MoveDeps): MoveOutcome {
   const reason = reasonOf(error), at = deps.now()
   writeMoveRecord(folder, { version: 1, state: 'failed', reason, entries: 0, bytesCopied: 0, panes: 0, oldProcesses: 0, at, failedAt: at })
   return { state: 'failed', reason }

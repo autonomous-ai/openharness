@@ -70,7 +70,7 @@ export async function checkMove(deps: ConditionDeps): Promise<MoveCheck> {
 }
 
 /** The environment the daemon runs with: config/loadEnv.ts reads its file after the move would run, and a name set already wins. */
-function withEnvFile({ fs, env }: ConditionDeps): NodeJS.ProcessEnv {
+export function withEnvFile({ fs, env }: Pick<ConditionDeps, 'fs' | 'env'>): NodeJS.ProcessEnv {
   const file = env.HARNESS_ENV_FILE?.trim() || env.DOTENV_CONFIG_PATH?.trim()
   return file ? { ...parseEnv(fs.readFileSync(resolve(file), 'utf8')), ...env } : env
 }
