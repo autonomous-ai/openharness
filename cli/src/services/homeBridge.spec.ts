@@ -516,6 +516,25 @@ describe('the home bridge service', () => {
     expect(existsSync(join(h.state, BRIDGE_FILE))).toBe(false)
   })
 
+  it('a failure that lasts is logged once, not every 10 minutes; another is logged as it comes', async () => {
+    fakeInterval()
+    const h = movedHome()
+    let why = 'EACCES: /proc'
+    const { bridge, log } = start(h, { rows: () => { throw new Error(why) } })
+    await settle()
+    for (let check = 0; check < 3; check++) {
+      await vi.advanceTimersByTimeAsync(CHECK_MS)
+      await settle()
+    }
+    expect(log.mock.calls).toEqual([['home bridge: a check failed: EACCES: /proc · tried again in 10 minutes']])
+    why = 'EMFILE: /proc'
+    await vi.advanceTimersByTimeAsync(CHECK_MS)
+    await settle()
+    expect(log.mock.calls.at(-1)).toEqual(['home bridge: a check failed: EMFILE: /proc · tried again in 10 minutes'])
+    expect(log).toHaveBeenCalledTimes(2)
+    bridge.stop()
+  })
+
   it('stop() clears the timer, and a connection after it serves nothing', async () => {
     fakeInterval()
     const h = movedHome()
