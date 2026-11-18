@@ -34,6 +34,45 @@ afterEach(async () => {
 })
 
 describe('saved catalog reads', () => {
+  it('keeps the actual stopped public frame while display rows grant neither current authority nor a credential', async () => {
+    const { saved, store, registry } = await fixture()
+    await store.save(saved)
+    await removeRegistryAgent(registry, saved.agentId)
+    const key = randomUUID()
+    const file = join(directory, 'stopped-agents', `${saved.agentId}.json`)
+    const raw = JSON.parse(readFileSync(file, 'utf8'))
+    const grid = { baseUrl: 'https://grid.example.test/v1', model: 'fixture-model' }
+    writeFileSync(file, JSON.stringify({ ...raw, session: { ...raw.session, grid, gridWebSearch: 'on',
+      gridLaunch: { ...grid, networkId: 'fixture', networkName: 'Display Grid', apiKey: key } } }), { mode: 0o600 })
+    const { BackendSocket } = await import('../backendSocket.js')
+    const { createAgentList } = await import('../core/agents/list.js')
+    const socket = new BackendSocket('catalog-fixture')
+    const selected = (await store.get(saved.agentId))!
+    const expected = await socket.toStoppedProject(selected)
+    expect(expected).toMatchObject({ status: 'stopped', forkable: false, grid: { ...grid, webSearch: 'on' },
+      terminal: { available: false, primary: '', runtimes: [] } })
+    expect(JSON.stringify(expected).includes(key)).toBe(false)
+    const shown: RegisteredSession[] = [], replies: Record<string, unknown>[] = []
+    const list = createAgentList({
+      deviceFactory: () => false, registry, stoppedAgents: store,
+      toProject: session => socket.toProject(session),
+      toStoppedProject: session => { shown.push(session); return socket.toStoppedProject(session) },
+      harnessResourcesReader: async () => ({ agents: [], sampledAt: '2026-11-18T00:00:00.000Z', shared: [] }),
+      harnessStorageReader: async () => new Map(), monitorActivityProvider: null, monitorCompletions: { state: () => 'idle' },
+    })
+    await list.agentsList({ includeStopped: true }, () => 'web', reply => { replies.push(reply) })
+    await list.agentsList({ includeStopped: true }, () => 'web', reply => { replies.push(reply) })
+    expect(replies).toEqual([{ agents: [expected] }, { agents: [expected] }])
+    expect(shown).toHaveLength(2)
+    // Only booleans reach failure output; credential material and private references never do.
+    expect(shown.map(row => ({ current: store.current(row), credential: Object.hasOwn(row, 'gridLaunch') })))
+      .toEqual([{ current: false, credential: false }, { current: false, credential: false }])
+    const { sessionStorage } = await import('./sessionStorage.js')
+    for (const row of shown) await expect(sessionStorage.resolveSelected(row.gridLaunch!)).rejects.toMatchObject({ code: 'invalid' })
+    expect(store.current(selected)).toBe(true)
+    expect((await sessionStorage.resolveSelected(selected.gridLaunch!)).apiKey === key).toBe(true)
+  }, 20_000)
+
   it('creates the private archive container only for the keep action and refuses an unsafe replacement', async () => {
     const { store } = await fixture()
     const folder = join(directory, 'stopped-agents')
@@ -221,12 +260,17 @@ describe('saved catalog reads', () => {
     expect((await store.get(saved.agentId))).not.toHaveProperty('identityHold')
   })
 
-  it('reads every fresh catalog through storage without reading its content in core', async () => {
+  it('keeps repeated display catalogs out of core image reads while selected reads stay fresh', async () => {
     const { saved, store } = await fixture()
     ;(await store.save(saved))
     const first = (await store.list())
     vi.mocked(readFileSync).mockClear()
-    for (let i = 0; i < 20; i++) expect((await store.available([]))).toEqual(first)
+    const display = first.map(({ gridLaunch: _launch, ...row }) => row)
+    for (let i = 0; i < 20; i++) {
+      const shown = await store.available([])
+      expect(shown).toEqual(display)
+      expect(shown.every(row => !store.current(row))).toBe(true)
+    }
     expect(readFileSync).not.toHaveBeenCalled()
     expect((await store.get(saved.agentId))).toEqual(first[0])
     expect(readFileSync).not.toHaveBeenCalled()

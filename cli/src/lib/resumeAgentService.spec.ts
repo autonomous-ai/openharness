@@ -1,7 +1,8 @@
 import { removeRegistryAgent } from '../testing/registryFixtures.js'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { createResumeAgentService, type ResumeAgentServiceDeps } from './resumeAgentService.js'
 import { RESUME_READINESS_BUDGET_MS, resumeChanged, waitForResumedAgent } from './resumeStoppedAgent.js'
@@ -27,6 +28,8 @@ import { WindowsBatchLaunchRefused } from './windows/launch.js'
 import { NATIVE_LAUNCH_MARKER } from './nativePaneHold.js'
 import { AtomicWriteUnconfirmed } from './registryPersistence.js'
 import type { GridLaunchOverride } from './gridLaunchWire.js'
+import { sessionStorage } from './sessionStorage.js'
+import { closeSessionStorageFixture } from '../testing/sessionStorageFixture.js'
 
 const publication = vi.hoisted(() => ({
   agent: '', wait: undefined as undefined | (() => Promise<void>), release: undefined as undefined | (() => void),
@@ -359,6 +362,13 @@ beforeEach(async () => {
 })
 afterEach(async () => { publication.wait = undefined; publication.release?.(); publication.release = undefined; publication.agent = ''; publication.temporary = ''; publication.published = false; publication.failSync = 0; publication.cleanupWait = undefined; publication.retire = false; publication.pending = false; publication.directoryWait = undefined; vi.useRealTimers(); for (const row of registry.list()) (await removeRegistryAgent(registry, row.agentId)); await registry.flush(); await deps.stoppedAgents.close(); rmSync(join(env.ADAPTER_DATA_DIR, 'stopped-agents'), { recursive: true, force: true }); rmSync(dir, { recursive: true, force: true }) })
 
+afterAll(async () => {
+  const outcomes = await Promise.allSettled([registry.flush()])
+  outcomes.push(...await Promise.allSettled([closeSessionStorageFixture(sessionStorage)]))
+  const failures = outcomes.filter(result => result.status === 'rejected').map(result => result.reason)
+  if (failures.length) throw new AggregateError(failures, 'resume catalog fixture cleanup failed')
+})
+
 it.each(['stop', 'binding'] as const)('keeps the terminal hold when %s revokes Resume during backend release', async change => {
   const entered = deferred<void>(), waiting = deferred<void>()
   let released = false
@@ -453,6 +463,31 @@ describe('resuming a stopped harness with new launch words', () => {
 })
 
 describe('the grid a resumed harness is on', () => {
+  it('resumes from a fresh exact credential after the displayed stopped catalog becomes old', async () => {
+    const previousKey = randomUUID(), currentKey = randomUUID()
+    const grid = { baseUrl: 'https://grid.example.test/v1', model: 'fixture-model' }
+    const launch = { ...grid, networkId: 'fixture', networkName: 'Display Grid' }
+    await rewrite({ grid, gridLaunch: { ...launch, apiKey: previousKey } })
+    const displayed = (await deps.stoppedAgents.available([]))[0]
+    const displayGrant = { current: deps.stoppedAgents.current(displayed), credential: Object.hasOwn(displayed, 'gridLaunch') }
+    const file = join(env.ADAPTER_DATA_DIR, 'stopped-agents', `${saved.agentId}.json`)
+    const raw = JSON.parse(readFileSync(file, 'utf8'))
+    writeFileSync(file, JSON.stringify({ ...raw, session: { ...raw.session, title: 'Current archive',
+      gridLaunch: { ...launch, apiKey: currentKey } } }), { mode: 0o600 })
+    vi.mocked(deps.relaunchOverrides).mockImplementationOnce(async (_row, source, current) => {
+      expect(current()).toBe(true)
+      expect(source.title).toBe('Current archive')
+      const resolved = await sessionStorage.resolveSelected(source.gridLaunch!)
+      expect(resolved.apiKey === currentKey && resolved.apiKey !== previousKey).toBe(true)
+      expect(current()).toBe(true)
+      return { ok: true, overrides: { env: { GRID_API_KEY: resolved.apiKey }, extraArgs: [], clearEnv: [] } }
+    })
+    expect(await start()).toMatchObject({ ok: true })
+    expect(create.mock.calls.some(([request]) => request.env?.GRID_API_KEY === currentKey)).toBe(true)
+    expect(create.mock.calls.some(([request]) => request.env?.GRID_API_KEY === previousKey)).toBe(false)
+    expect(displayGrant).toEqual({ current: false, credential: false })
+  })
+
   // The saved API's endpoint as saved now: the record a relaunch refreshes (apiModels.ts `refreshApiLaunch`).
   const override = { networkId: 'api', networkName: 'Saved', baseUrl: 'https://saved.example/now/v1', apiKey: 'k', model: 'm' }
   const savedOnGrid = async () => (await rewrite({ grid: { baseUrl: 'https://saved.example/then/v1', model: 'm' },

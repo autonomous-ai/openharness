@@ -40,7 +40,7 @@ export function runSessionStorage(): void {
       })
       const codec = createSessionImageCodec(init.root, inherited, init.stoppedLeaf)
       const creations = createPendingCreationIndex(join(init.root, 'agent-creations'))
-      const stopped = createStoppedList(join(init.root, init.stoppedLeaf), codec.readStoppedPage)
+      const stopped = createStoppedList(join(init.root, init.stoppedLeaf), codec.readStoppedPage, codec.readStoppedCatalogPage)
       initialized = true
       frames = sessionStorageFrames(init.incarnation, write, (id, message) => {
         if (busy) { stop(); return }
@@ -54,6 +54,7 @@ export function runSessionStorage(): void {
             let value: unknown
             switch (operation?.kind) {
               case 'stopped-list-page': value = await stopped.page(operation.cursor, expires); break
+              case 'stopped-catalog-page': value = await stopped.page(operation.cursor, expires, true); break
               case 'stopped-list-close': stopped.close(operation.cursor); value = null; break
               case 'creation-ensure': creations.ensure(operation.id); value = null; break
               case 'creation-page': value = await creations.page(operation.cursor, expires); break

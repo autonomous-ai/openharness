@@ -31,6 +31,58 @@ const fixture = () => {
 }
 const ids = (images: SessionImage[]) => images.map(image => image.state === 'image' && image.proof.document.kind === 'stopped' ? image.proof.document.agentId : '')
 
+describe('display catalog page purpose', () => {
+  it('refuses an unavailable catalog and binds a shared cursor to its original read purpose', async () => {
+    for (let index = 0; index < 65; index++) write(`row-${index}`)
+    const { listing: fresh } = fixture()
+    await expect(fresh.page(null, deadline(), true)).rejects.toMatchObject({ code: 'invalid' })
+    const codec = createSessionImageCodec(root)
+    const listing = createStoppedList(directory, codec.readStoppedPage, codec.readStoppedCatalogPage)
+    const first = await listing.page(null, deadline(), true)
+    await expect(listing.page(first.cursor, deadline())).rejects.toMatchObject({ code: 'changed' })
+    await expect(listing.page(null, deadline())).rejects.toMatchObject({ code: 'busy' })
+    const last = await listing.page(first.cursor, deadline(), true)
+    expect(new Set(ids([...first.images, ...last.images])).size).toBe(65)
+    const selected = await listing.page(null, deadline())
+    await expect(listing.page(selected.cursor, deadline(), true)).rejects.toMatchObject({ code: 'changed' })
+    listing.close(selected.cursor)
+    expect((await listing.page(null, deadline(), true)).images).toHaveLength(64)
+  })
+
+  it('keeps supported lookahead rows visible and observes mutation or removal on the next catalog', async () => {
+    write('a', { title: 'a'.repeat(180_000) }); write('b', { title: 'b'.repeat(300_000) }); write('c')
+    const codec = createSessionImageCodec(root)
+    const listing = createStoppedList(directory, codec.readStoppedPage, codec.readStoppedCatalogPage)
+    const first = await listing.page(null, deadline(), true)
+    expect(first).toMatchObject({ next: 1, total: 3, done: false })
+    const second = await listing.page(first.cursor, deadline(), true)
+    expect(second).toMatchObject({ offset: 1, next: 2, done: false })
+    expect(ids(second.images)).toEqual(['b'])
+    rmSync(join(directory, 'c.json'))
+    expect(await listing.page(first.cursor, deadline(), true)).toMatchObject({ next: 3, done: true, images: [] })
+    write('a', { title: 'Changed display' })
+    const changed = await listing.page(null, deadline(), true)
+    expect(changed.images[0]).toMatchObject({ value: { session: { title: 'Changed display' } } })
+    listing.close(changed.cursor)
+  })
+
+  it.skipIf(process.platform === 'win32')('fails the whole warmed catalog if a caught directory refusal is restored during a page', async () => {
+    write('a'); write('b')
+    const codec = createSessionImageCodec(root)
+    let sabotage = false
+    const listing = createStoppedList(directory, codec.readStoppedPage, work => codec.readStoppedCatalogPage(read => work(async document => {
+      if (!sabotage) return read(document)
+      sabotage = false
+      chmodSync(directory, 0o777)
+      try { return await read(document) } finally { chmodSync(directory, 0o700) }
+    })))
+    expect((await listing.page(null, deadline(), true)).images).toHaveLength(2)
+    sabotage = true
+    await expect(listing.page(null, deadline(), true)).rejects.toMatchObject({ code: 'unsafe' })
+    expect((await listing.page(null, deadline(), true)).images).toHaveLength(2)
+  })
+})
+
 describe('child-owned stopped list pages', () => {
   it.skipIf(process.platform === 'win32')('reuses directory opens within a page while reading every exact image', async () => {
     for (let index = 0; index < 64; index++) write(`row-${index}`)

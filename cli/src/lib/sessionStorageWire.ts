@@ -92,7 +92,7 @@ export interface StoppedListPage {
 }
 
 export type SessionStorageOperation =
-  | { kind: 'stopped-list-page'; cursor: string | null }
+  | { kind: 'stopped-list-page' | 'stopped-catalog-page'; cursor: string | null }
   | { kind: 'stopped-list-close'; cursor: string }
   | { kind: 'creation-ensure'; id: string }
   | { kind: 'creation-page'; cursor: string | null }

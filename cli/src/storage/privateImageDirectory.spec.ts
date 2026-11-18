@@ -39,6 +39,36 @@ it('rejects foreign paths and a reader retained after its directory owner closes
   await expect(retained(file, 1024)).rejects.toMatchObject({ code: 'invalid' })
 })
 
+it('bounds metadata probes to the active directory and preserves missing or refused file outcomes', async () => {
+  let retained!: (file: string) => fs.BigIntStats | null
+  await withPrivateImageDirectory(directory, async (_read, inspect) => {
+    retained = inspect
+    expect(inspect(file)?.isFile()).toBe(true)
+    expect(inspect(join(directory, 'missing.json'))).toBeNull()
+    expect(() => inspect(join(root, 'foreign.json'))).toThrow(expect.objectContaining({ code: 'invalid' }))
+    const stat = fs.lstatSync
+    vi.spyOn(fs, 'lstatSync').mockImplementation(((...args: Parameters<typeof stat>) => {
+      if (args[0] === file) throw Object.assign(new Error('fixture private metadata'), { code: 'EACCES' })
+      return stat(...args)
+    }) as typeof stat)
+    expect(() => inspect(file)).toThrow(expect.objectContaining({ code: 'EACCES', message: 'Session storage unavailable: EACCES' }))
+  })
+  expect(() => retained(file)).toThrow(expect.objectContaining({ code: 'invalid' }))
+})
+
+it.skipIf(process.platform === 'win32')('keeps a caught directory failure sticky through metadata-only hits and closes the page', async () => {
+  const open = vi.spyOn(fs, 'openSync')
+  await expect(withPrivateImageDirectory(directory, async (_read, inspect) => {
+    expect(inspect(file)?.isFile()).toBe(true)
+    fs.chmodSync(directory, 0o777)
+    expect(() => inspect(file)).toThrow(expect.objectContaining({ code: 'unsafe' }))
+    fs.chmodSync(directory, 0o700)
+  })).rejects.toMatchObject({ code: 'unsafe' })
+  for (const result of open.mock.results) if (result.type === 'return') {
+    expect(() => fs.fstatSync(result.value)).toThrow(expect.objectContaining({ code: 'EBADF' }))
+  }
+})
+
 it('keeps unrelated temporary and JSON entry writes compatible within a page', async () => {
   await withPrivateImageDirectory(directory, async read => {
     const before = (await read(file, 1024))!
@@ -167,8 +197,13 @@ it('retains per-file Windows authority and permits an unavailable POSIX uid', as
     const check = vi.spyOn(custody, 'secureStateDirectory').mockImplementation(() => {})
     const fileCheck = vi.spyOn(custody, 'requireWindowsStateFile').mockImplementation(() => {})
     Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
-    await withPrivateImageDirectory(directory, async read => { await read(file, 1024); await read(file, 1024) })
-    expect(check).toHaveBeenCalledTimes(3); expect(fileCheck).toHaveBeenCalledTimes(2)
+    await withPrivateImageDirectory(directory, async (read, inspect) => {
+      await read(file, 1024); await read(file, 1024)
+      expect(inspect(file)?.isFile()).toBe(true)
+      fileCheck.mockImplementationOnce(() => { throw new Error('fixture Windows file authority refused') })
+      expect(() => inspect(file)).toThrow(expect.objectContaining({ code: 'unsafe' }))
+    })
+    expect(check).toHaveBeenCalledTimes(5); expect(fileCheck).toHaveBeenCalledTimes(4)
   } finally {
     Object.defineProperty(process, 'platform', platform)
     if (uid) Object.defineProperty(process, 'getuid', uid); else delete (process as { getuid?: unknown }).getuid

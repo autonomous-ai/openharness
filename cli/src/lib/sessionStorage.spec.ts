@@ -81,7 +81,7 @@ function faultChild(fault: 'after-sync' | 'replace-before-open' | 'directory-clo
 }
 
 describe('required session storage process', () => {
-  it.skipIf(process.platform === 'win32')('reaps actual page-directory close uncertainty before returning any catalog', async () => {
+  it.skipIf(process.platform === 'win32').each([false, true])('reaps actual page-directory close uncertainty before returning any catalog (display=%s)', async catalog => {
     mkdirSync(join(root, 'stopped-agents'), { mode: 0o700 })
     writeFileSync(join(root, 'stopped-agents', 'fixture-agent.json'), JSON.stringify({ version: 1, session: row() }), { mode: 0o600 })
     faultChild('page-close')
@@ -91,7 +91,7 @@ describe('required session storage process', () => {
     const close = new Promise<void>(resolve => child.once('close', () => resolve()))
     const disconnect = new Promise<void>(resolve => child.once('disconnect', () => resolve()))
     const received = vi.fn()
-    await expect(storage.stoppedList(received)).rejects.toMatchObject({ code: 'disconnected' })
+    await expect((catalog ? storage.stoppedCatalog.bind(storage) : storage.stoppedList.bind(storage))(received)).rejects.toMatchObject({ code: 'disconnected' })
     await Promise.all([exit, close, disconnect])
     expect(received).not.toHaveBeenCalled()
     expect(() => process.kill(child.pid!, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }))

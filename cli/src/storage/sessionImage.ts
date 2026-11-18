@@ -11,6 +11,7 @@ import { sessionStorageFailureCode, SessionStorageUnavailable, sessionDocument, 
   STOPPED_LIST_ROWS, type SessionImageProof, type SessionImageReservation, type SessionPreparedImage, type StoredGridLaunch } from '../lib/sessionStorageWire.js'
 import { readPrivateImage, withPrivateImageDirectory, type PrivateImageReader } from './privateImage.js'
 import type { StoppedPageRead } from './stoppedList.js'
+import { createStoppedCatalog } from './stoppedCatalog.js'
 import { stoppedArchiveWitness, STOPPED_AUTHORITY_ENTRIES } from '../lib/stoppedAuthorityMetadata.js'
 import { externalReservations, parseExternalResume } from '../lib/externalResume.js'
 import type { StoppedArchiveAnswer, StoppedArchiveQuery } from '../lib/sessionStorageWire.js'
@@ -53,10 +54,11 @@ function rows(document: SessionDocument, value: unknown): unknown[] {
   return object(value) ? [value.session] : []
 }
 
-function projectValue(document: SessionDocument, value: unknown, proof: SessionImageProof): unknown {
+function projectValue(document: SessionDocument, value: unknown, proof: SessionImageProof, catalog = false): unknown {
   const row = (value: unknown): unknown => {
     // Malformed rows are rejected by core; they cannot smuggle raw credential fields through an error path.
     if (!object(value)) return null
+    if (catalog) { const { gridLaunch: _launch, ...display } = value; return display }
     if (!Object.hasOwn(value, 'gridLaunch')) return value
     const parsed = parseGridLaunchOverride(value.gridLaunch)
     return { ...value, gridLaunch: parsed.state === 'ok'
@@ -181,7 +183,7 @@ export function createSessionImageCodec(root: string, retained: readonly Retaine
     return override
   }
 
-  async function read(document: SessionDocument, retain?: string, readImage?: PrivateImageReader): Promise<SessionImage> {
+  async function read(document: SessionDocument, retain?: string, readImage?: PrivateImageReader, catalog = false): Promise<SessionImage> {
     if (retain && (images.size >= 2 || !/^[a-f0-9-]{36}$/.test(retain))) throw new SessionStorageUnavailable('busy')
     const image = await privateImage(document, readImage)
     if (!image) return { state: 'missing' }
@@ -189,11 +191,18 @@ export function createSessionImageCodec(root: string, retained: readonly Retaine
     let value: unknown
     try { value = JSON.parse(image.contents) }
     catch { return { state: 'image', proof: image.proof, json: false } }
-    return { state: 'image', proof: image.proof, json: true, value: projectValue(document, value, image.proof) }
+    return { state: 'image', proof: image.proof, json: true, value: projectValue(document, value, image.proof, catalog) }
   }
 
   const readStoppedPage: StoppedPageRead = work => withPrivateImageDirectory(join(root, stoppedLeaf),
     reader => work(document => read(document, undefined, reader)))
+  const catalog = createStoppedCatalog()
+  const readStoppedCatalogPage: StoppedPageRead = work => withPrivateImageDirectory(join(root, stoppedLeaf),
+    (reader, inspect) => work(document => {
+      if (document.kind !== 'stopped') throw new SessionStorageUnavailable('invalid')
+      const path = file(document)
+      return catalog(document.agentId, () => inspect(path), () => read(document, undefined, reader, true))
+    }))
 
   async function equal(proof: SessionImageProof): Promise<SessionImageProof | null> {
     const current = await privateImage(proof.document)
@@ -348,7 +357,7 @@ export function createSessionImageCodec(root: string, retained: readonly Retaine
     return { witness: before, matches, ...(query.kind === 'owners' ? { selected } : {}) }
   }
 
-  return { read, readStoppedPage, equal, prepare, discard, resolve, queryStopped,
+  return { read, readStoppedPage, readStoppedCatalogPage, equal, prepare, discard, resolve, queryStopped,
     import(lease: string, row: CredentialRow, override: GridLaunchOverride): StoredGridLaunch {
       if (!/^[a-f0-9-]{36}$/.test(lease) || imports.has(lease) || imports.size >= 64) throw new SessionStorageUnavailable('busy')
       const parsed = parseGridLaunchOverride(override)

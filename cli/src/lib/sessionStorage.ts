@@ -331,14 +331,17 @@ export class SessionStorage {
   }
 
   /** One names snapshot in the child; bounded pages preserve the complete visible-list contract. */
-  async stoppedList(accept: (image: SessionImage) => void): Promise<void> {
+  stoppedList(accept: (image: SessionImage) => void): Promise<void> { return this.stoppedPages('stopped-list-page', accept) }
+  stoppedCatalog(accept: (image: SessionImage) => void): Promise<void> { return this.stoppedPages('stopped-catalog-page', accept) }
+
+  private async stoppedPages(kind: 'stopped-list-page' | 'stopped-catalog-page', accept: (image: SessionImage) => void): Promise<void> {
     const release = await this.acquireListing()
     let cursor: string | null = null, next = 0, total: number | undefined
     let owner: ChildProcess | undefined, uncertain = false
     const delivered = new Set<string>()
     try {
       for (;;) {
-        const page: StoppedListPage = await this.request({ kind: 'stopped-list-page', cursor })
+        const page: StoppedListPage = await this.request({ kind, cursor })
         owner ??= this.child
         if (!page || typeof page.cursor !== 'string' || !(page.cursor === '' && page.done === true && page.total === 0 || /^[a-f0-9-]{36}$/.test(page.cursor))
           || cursor !== null && page.cursor !== cursor || owner !== this.child
@@ -348,7 +351,10 @@ export class SessionStorage {
           || typeof page.done !== 'boolean' || page.done !== (page.next === page.total) || !page.done && page.next === next
           || !Array.isArray(page.images) || page.images.length > page.next - next
           || page.images.some(image => !image || image.state !== 'image' || typeof image.json !== 'boolean'
-            || !sessionImageProof(image.proof) || image.proof.document.kind !== 'stopped')) {
+            || !sessionImageProof(image.proof) || image.proof.document.kind !== 'stopped'
+            || kind === 'stopped-catalog-page' && image.json && !!image.value && typeof image.value === 'object'
+              && 'session' in image.value && !!image.value.session && typeof image.value.session === 'object'
+              && Object.hasOwn(image.value.session, 'gridLaunch'))) {
           uncertain = true
           throw new SessionStorageUnavailable('invalid')
         }

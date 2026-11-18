@@ -24,14 +24,14 @@ export class StoppedAgentStore {
       : new SessionStorage(dirname(directory), undefined, basename(directory))
   }
 
-  private decode(agentId: string, image: SessionImage): RegisteredSession | null {
+  private decode(agentId: string, image: SessionImage, selected = true): RegisteredSession | null {
     if (image.state === 'missing') return null
     if (!image.json || !image.value || typeof image.value !== 'object') throw new SessionStorageUnavailable('invalid')
     const raw = image.value as { version?: unknown; session?: unknown }
     if (raw.version !== 1) return null
     const session = strictPersistedRow(raw.session)
     if (!session || session.agentId !== agentId) return null
-    this.proofs.set(session, image.proof)
+    if (selected) this.proofs.set(session, image.proof)
     return session
   }
 
@@ -88,13 +88,16 @@ export class StoppedAgentStore {
     }
   }
 
-  async list(): Promise<RegisteredSession[]> {
+  list(): Promise<RegisteredSession[]> { return this.listRows(false) }
+
+  private async listRows(catalog: boolean): Promise<RegisteredSession[]> {
     try { secureStateDirectory(this.directory, false) }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error }
     const rows: RegisteredSession[] = []
-    await this.storage.stoppedList(image => {
+    const read = catalog ? this.storage.stoppedCatalog.bind(this.storage) : this.storage.stoppedList.bind(this.storage)
+    await read(image => {
       try {
-        const saved = this.decode(image.state === 'image' && image.proof.document.kind === 'stopped' ? image.proof.document.agentId : '', image)
+        const saved = this.decode(image.state === 'image' && image.proof.document.kind === 'stopped' ? image.proof.document.agentId : '', image, !catalog)
         if (saved) rows.push(saved)
       } catch (error) {
         // A bad archive cannot hide its peers. A missing worker is a failed listing, never an empty catalog.
@@ -295,7 +298,7 @@ export class StoppedAgentStore {
   async available(live: readonly RegisteredSession[]): Promise<RegisteredSession[]> {
     const ids = new Set(live.map(session => session.agentId))
     const conversations = new Set(live.map(conversationKey))
-    return (await this.list()).filter(session => {
+    return (await this.listRows(true)).filter(session => {
       const key = conversationKey(session)
       return !ids.has(session.agentId) && (key === null || !conversations.has(key))
     })

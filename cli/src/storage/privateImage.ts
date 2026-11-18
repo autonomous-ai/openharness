@@ -10,7 +10,7 @@ export const readPrivateImage: PrivateImageReader = (file, maxBytes) => readImag
   () => secureStateDirectory(dirname(file), false))
 
 /** Keep every directory admission check; a bounded page needs only one retained open/close pair. */
-export async function withPrivateImageDirectory<T>(directory: string, work: (read: PrivateImageReader) => Promise<T>): Promise<T> {
+export async function withPrivateImageDirectory<T>(directory: string, work: (read: PrivateImageReader, inspect: (file: string) => BigIntStats | null) => Promise<T>): Promise<T> {
   let fd: number | undefined, active = true
   try {
     stateFileCustodyHealthy()
@@ -52,10 +52,20 @@ export async function withPrivateImageDirectory<T>(directory: string, work: (rea
         throw directoryFailure
       }
     }
-    const value = await work((file, maxBytes) => readImage(file, maxBytes, () => {
+    const admit = (file: string) => {
       if (!active || dirname(file) !== directory) throw new SessionStorageUnavailable('invalid')
       check()
-    }))
+    }
+    const value = await work((file, maxBytes) => readImage(file, maxBytes, () => admit(file)), file => {
+      admit(file)
+      try {
+        if (process.platform === 'win32') requireWindowsStateFile(file)
+        return lstatSync(file, { bigint: true })
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+        throw new SessionStorageUnavailable(sessionStorageFailureCode(error))
+      }
+    })
     check()
     return value
   } catch (error) {

@@ -11,14 +11,15 @@ const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'E
 
 export type StoppedPageRead = <T>(work: (read: (document: SessionDocument) => Promise<SessionImage>) => Promise<T>) => Promise<T>
 
-export function createStoppedList(directory: string, readPage: StoppedPageRead) {
-  let scan: { token: string; names: string[]; next: number; held?: { image: SessionImage; bytes: number } } | undefined
+export function createStoppedList(directory: string, readPage: StoppedPageRead, readCatalogPage?: StoppedPageRead) {
+  let scan: { token: string; names: string[]; next: number; catalog: boolean; held?: { image: SessionImage; bytes: number } } | undefined
   const close = (cursor: string): void => {
     if (!token(cursor)) throw new SessionStorageUnavailable('invalid')
     if (scan?.token === cursor) scan = undefined
   }
-  const page = async (cursor: string | null, deadline: number): Promise<StoppedListPage> => {
+  const page = async (cursor: string | null, deadline: number, catalog = false): Promise<StoppedListPage> => {
     stateFileCustodyHealthy()
+    if (catalog && !readCatalogPage) throw new SessionStorageUnavailable('invalid')
     if (cursor !== null && !token(cursor)) throw new SessionStorageUnavailable('invalid')
     const check = () => { if (performance.now() >= deadline) throw new SessionStorageUnavailable('expired') }
     check()
@@ -26,16 +27,16 @@ export function createStoppedList(directory: string, readPage: StoppedPageRead) 
       if (scan) throw new SessionStorageUnavailable('busy')
       try {
         secureStateDirectory(directory, false)
-        scan = { token: randomUUID(), names: (await readdir(directory)).filter(name => name.endsWith('.json')), next: 0 }
+        scan = { token: randomUUID(), names: (await readdir(directory)).filter(name => name.endsWith('.json')), next: 0, catalog }
       } catch (error) {
         if (missing(error)) return { cursor: '', offset: 0, next: 0, total: 0, images: [], done: true }
         throw error
       }
-    } else if (scan?.token !== cursor) throw new SessionStorageUnavailable('changed')
+    } else if (scan?.token !== cursor || scan.catalog !== catalog) throw new SessionStorageUnavailable('changed')
     const own = scan!, images: SessionImage[] = [], offset = own.next
     let bytes = 0
     try {
-      return await readPage(async read => {
+      return await (catalog ? readCatalogPage! : readPage)(async read => {
         while (own.next < own.names.length && own.next - offset < STOPPED_LIST_ROWS) {
           check()
           if (!own.held) {
