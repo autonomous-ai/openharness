@@ -251,11 +251,12 @@ void ui_voice_error(const char *msg);
 // `name`, `machine` and `recap` come from the frame: the dial holds one tab, and the agent may be on
 // another — the row has nobody else to ask. Any may be NULL; a held tile's own model wins when present.
 // A live `summary`. TIER is the wire's "alert" | "list" | "silent"; NULL or unknown falls back to the old
-// flags (silent, then quiet, else alert). Returns true when the caller should beep: an alert, and not
-// for the pane already on the face. A list entry is a drawer row only; silent files nothing.
+// flags (silent, then quiet, else alert). Returns true when the caller should beep: an alert the drawer
+// took, and not for the pane already on the face. A list entry is a drawer row only; silent files nothing.
 bool ui_notify_summary(const char *project_id, const char *name, const char *machine, const char *recap,
                        const char *tier, bool quiet, bool silent);
-// A failed turn: an alert. Files a drawer row, shows the error for 8 s. True when the caller should beep.
+// A failed turn: an alert. Files a drawer row, shows the error for 8 s. True when the caller should beep: the
+// drawer took the row and the pane is not on the face.
 bool ui_turn_error(const char *project_id, const char *message);
 // The WINDOW looked at this agent → drop its FINISHED-turn row here, as a tap on that row does.
 //
