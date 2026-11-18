@@ -518,6 +518,19 @@ esac''')
         r = box.run('harness_venv .venv 3.12')
         self.assertEqual((r.returncode, lines(r)), (0, ["ok   Python 3.12.7 in .venv"]), r.stderr)
 
+    def test_a_runtime_set_elsewhere_is_not_a_move(self):
+        """ADAPTER_RUNTIME_DIR outside ~/.harness on a Mac, or on a Linux home not moved yet: ~/.harness stays, and
+        so does a venv on its Python."""
+        for system, machine in (("Darwin", "arm64"), ("Linux", "x86_64")):
+            with self.subTest(system=system):
+                box = Box(self)
+                box.platform(system, machine)
+                (box.home / ".harness").mkdir()
+                self.uv(box)
+                self.venv_naming(box, "pyvenv.cfg", f"{box.home}/.harness/runtime/python/cpython-3.12.7/bin")
+                r = box.run('harness_venv .venv 3.12', ADAPTER_RUNTIME_DIR=str(box.root / "runtime"))
+                self.assertEqual((r.returncode, lines(r)), (0, ["ok   Python 3.12.7 in .venv"]), r.stderr)
+
     def test_no_venv_makes_one_at_the_version_asked(self):
         box = Box(self)
         self.uv(box)
