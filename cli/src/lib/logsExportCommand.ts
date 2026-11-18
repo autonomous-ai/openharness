@@ -47,8 +47,9 @@ export async function logsExportCommand(deps: LogsExportDeps): Promise<void> {
   writeFileSync(path, zip)
   if (deps.args.includes('--json')) deps.out(JSON.stringify({ path, included, bytes: zip.length }))
   else {
-    // From the home it was handed, as the bundle's blanking is: `tildify` reads this computer's.
-    const shown = path.startsWith(deps.home + sep) ? join('~', relative(deps.home, path)) : path
+    // From the home it was handed, as the bundle's blanking is: `tildify` reads this computer's. An empty home (HOME set
+    // empty) would begin every path, and `relative` would measure from the working folder.
+    const shown = deps.home && path.startsWith(deps.home + sep) ? join('~', relative(deps.home, path)) : path
     deps.out(`wrote ${shown} (${Math.round(zip.length / 1024)} KB)`)
     for (const name of included) deps.out(`  ${name}`)
     if (!included.length) deps.out('  (no logs found)')
