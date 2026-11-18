@@ -68,6 +68,7 @@ these hold:
 - the focus record names none of the list's agents (a record in the list is re-asserted as today);
 - no follow is in flight (`appFocusUnsent` is false). A follow writes its record before its push and sends its own
   focus after it (`cableSession.ts` `follow`), and landing on the first agent first would step the dial through it.
+  A port that closes ends a follow before its focus, so the close clears the mark.
 
 Notes:
 
@@ -104,6 +105,7 @@ Notes:
 3. **Its environment.** `oneShotParentEnv()` (the login shell's environment with the daemon's on top, the documented
    safety rule in `loginShellEnv.ts`), with two overrides. PATH becomes the login shell's PATH followed by the daemon's,
    the same order the `codex` was found in, so the `node` an npm `codex` asks for comes from where `codex` came from.
+   An empty segment is the home folder the run starts in, so none is kept, and with no segment left there is no PATH.
    `CODEX_HOME` is the daemon's Codex home, as now. The devices process reads the login shell's environment
    (`warmLoginShellEnvironment`) on the first `can()` or `send()` on macOS or Linux, never on Windows, and not at
    start: a computer whose dial never meets a Codex session never pays for the interactive shell. Until it has been
