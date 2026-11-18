@@ -47,8 +47,21 @@ type Pending = Arc<Mutex<HashMap<String, (String, oneshot::Sender<(String, Value
 /// by every OS user, so the process holding a port may belong to a completely different account.
 pub fn socket_path(port: u16) -> PathBuf {
     let dir = std::env::var_os("ADAPTER_DATA_DIR").filter(|s| !s.is_empty()).map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".harness/cli/data"));
+        .unwrap_or_else(default_data_dir);
     dir.join(format!("daemon-{port}.sock"))
+}
+
+/// The CLI's data folder when ADAPTER_DATA_DIR is unset: on Linux where the XDG rule puts it.
+#[cfg(target_os = "linux")]
+fn default_data_dir() -> PathBuf {
+    let home = std::env::var_os("HOME").unwrap_or_default();
+    crate::harness_home::harness_path(home, crate::harness_home::Entry::Cli).join("data")
+}
+
+/// Elsewhere joined in one piece, so its Windows text stays today's.
+#[cfg(not(target_os = "linux"))]
+fn default_data_dir() -> PathBuf {
+    PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".harness/cli/data")
 }
 
 /// What a request on the daemon's socket proves, and what it asks the answer to prove: nothing on a socket only its owner

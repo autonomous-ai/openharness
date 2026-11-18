@@ -1,19 +1,24 @@
-//! hn's one way to name a folder under the account's ~/.harness. The table here holds only what hn
-//! uses; the full one is in cli/src/config/harnessHome.ts and desktop/lib/core/harness_home.dart.
+//! hn's one way to name a folder Harness keeps: the account's ~/.harness, or on Linux the XDG data and state
+//! folders by the rule below. The table here holds only what hn uses; the full one is in
+//! cli/src/config/harnessHome.ts and desktop/lib/core/harness_home.dart.
 //! The guard below fails on a .harness path built by hand anywhere else in src.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 const HARNESS_DIR: &str = ".harness";
 
-/// Data is what a person would miss, state what Harness rebuilds. Both are one folder today.
+/// Data is what a person would miss, state what Harness rebuilds. Off Linux both are ~/.harness.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Root { Data, State }
 
-/// What hn builds through the helper: tui (Data), shell-requests (State).
+/// What hn builds through the helper: tui and cli (Data), shell-requests (State).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Entry {
     Tui,
+    // Only Linux finds the daemon's socket through it; elsewhere daemon.rs keeps its own text.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    Cli,
     // Its callers are Unix only: a Windows hn has no Harness shell yet.
     #[cfg_attr(windows, allow(dead_code))]
     ShellRequests,
@@ -23,27 +28,58 @@ impl Entry {
     pub fn name(self) -> &'static str {
         match self {
             Entry::Tui => "tui",
+            Entry::Cli => "cli",
             Entry::ShellRequests => "shell-requests",
         }
     }
 
     pub fn root(self) -> Root {
         match self {
-            Entry::Tui => Root::Data,
+            Entry::Tui | Entry::Cli => Root::Data,
             Entry::ShellRequests => Root::State,
         }
     }
 }
 
-/// `<home>/.harness` for either root, as the callers joined it before. An empty home (HOME unset)
-/// gives today's relative `.harness`.
-pub fn harness_root(home: impl AsRef<Path>, root: Root) -> PathBuf {
+/// What the rule reads of this computer: whether it is Linux, its environment and one existence check.
+pub struct Look<'a> {
+    pub linux: bool,
+    pub env: &'a dyn Fn(&str) -> Option<OsString>,
+    pub exists: &'a dyn Fn(&Path) -> bool,
+}
+
+/// `<base>/harness` for an XDG base folder, or for `<home>/<default>` when the variable is unset, empty or relative.
+fn xdg_root(home: &Path, look: &Look, variable: &str, default: &str) -> PathBuf {
+    let base = (look.env)(variable).map(PathBuf::from).filter(|base| base.is_absolute());
+    base.unwrap_or_else(|| home.join(default)).join("harness")
+}
+
+/// The rule every Harness app follows: on Linux the XDG roots, but `~/.harness` for both while it exists and the
+/// XDG data root does not (a home from before the move). Off Linux both are `~/.harness`. An empty home (HOME
+/// unset) gives relative folders, as the callers joined them before.
+pub fn harness_root_with(home: &Path, root: Root, look: &Look) -> PathBuf {
+    let legacy = home.join(HARNESS_DIR);
+    if !look.linux {
+        return legacy;
+    }
+    let data = xdg_root(home, look, "XDG_DATA_HOME", ".local/share");
+    if !(look.exists)(&data) && (look.exists)(&legacy) {
+        return legacy;
+    }
     match root {
-        Root::Data | Root::State => home.as_ref().join(HARNESS_DIR),
+        Root::Data => data,
+        Root::State => xdg_root(home, look, "XDG_STATE_HOME", ".local/state"),
     }
 }
 
-/// `<home>/.harness/<entry>`: `home.join(".harness").join(name)`.
+/// [harness_root_with] for this process, looked at again on each call so a move is followed.
+pub fn harness_root(home: impl AsRef<Path>, root: Root) -> PathBuf {
+    let env = |variable: &str| std::env::var_os(variable);
+    let look = Look { linux: cfg!(target_os = "linux"), env: &env, exists: &Path::exists };
+    harness_root_with(home.as_ref(), root, &look)
+}
+
+/// `<its root>/<entry>`.
 pub fn harness_path(home: impl AsRef<Path>, entry: Entry) -> PathBuf {
     harness_root(home, entry.root()).join(entry.name())
 }
@@ -175,8 +211,8 @@ mod tests {
 
     /// A hit the guard keeps on purpose: its file, the text it matched, and why. Each excuses exactly one hit.
     const ALLOWED: &[(&str, &str, &str)] = &[
-        ("shell_integration.sh", "$HOME/.harness", "sourced by a shell, which cannot call the helper"),
-        ("daemon.rs", "\".harness/cli/data\"", "joined in one piece its Windows text is today's …\\.harness/cli/data; PR 2 moves it"),
+        ("shell_integration.sh", "$HOME/.harness", "_hn_state_root: the rule for a shell, which cannot call the helper"),
+        ("daemon.rs", "\".harness/cli/data\"", "off Linux, joined in one piece so its Windows text stays …\\.harness/cli/data"),
     ];
 
     // The guard: no home `.harness` path built by hand in src but this file. Each Rust crate's harness_home.rs holds
