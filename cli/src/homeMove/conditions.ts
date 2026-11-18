@@ -4,6 +4,7 @@ import { parseEnv } from 'node:util'
 import { legacyHarnessHome, xdgRoots } from '../config/harnessHome.js'
 import { harnessPaneOwner } from '../lib/harnessSessionLabel.js'
 import { isBridge } from './bridge.js'
+import { hasPaneOptions } from './panes.js'
 import { movedPath, planMove, type MovePlan } from './plan.js'
 
 /** Why a move waits, or did not finish. */
@@ -59,7 +60,7 @@ export async function checkMove(deps: ConditionDeps): Promise<MoveCheck> {
   if (override) return skipped(override)
   // Before 3.0 a pane's tag is in its start command, which nothing can change.
   const oldTag = harnessPaneOwner(dataDir)
-  if (beforePaneOptions(deps.tmux.version()) && deps.tmux.tags(false).includes(oldTag)) return waiting('old-tmux')
+  if (!hasPaneOptions(deps.tmux.version()) && deps.tmux.tags(false).includes(oldTag)) return waiting('old-tmux')
   // A PTY host keeps its panes' tags inside it.
   if (deps.ptyHostRuns(env.HARNESS_PTY_DIR || join(legacy, 'pty'))) return waiting('pty-host')
   const plan = planMove(home, env, fs.readdirSync(legacy))
@@ -121,10 +122,4 @@ function realPath({ fs }: ConditionDeps, path: string): string {
     if (dirname(at) === at) return path
     missing.push(basename(at))
   }
-}
-
-/** tmux before 3.0, which has no pane options. A version it cannot read is new, as lib/tmuxVersion.ts reads it. */
-function beforePaneOptions(version: string | null): boolean {
-  const major = /(\d+)\.\d+/.exec(version ?? '')?.[1]
-  return major !== undefined && Number(major) < 3
 }
