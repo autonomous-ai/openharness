@@ -24,4 +24,3 @@ export function isApprovalDialog(view: QuestionView): boolean {
   const text = view.dialog ?? view.question
   return /(^|\n)\s*\$ /.test(text) || /would you like to (run|make|apply|execute|edit|write)/i.test(text)
 }
-
