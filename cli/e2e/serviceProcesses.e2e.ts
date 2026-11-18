@@ -633,16 +633,19 @@ describe('models in its own process', () => {
       client.close()
     } finally {
       try {
-        const table = processTable()
-        let added: boolean
-        do {
-          added = false
-          for (const row of table) if (ownedPids.has(row.ppid) && !ownedPids.has(row.pid)) {
-            ownedPids.add(row.pid); added = true
-          }
-        } while (added)
+        const errors: unknown[] = []
+        try {
+          const table = processTable()
+          let added: boolean
+          do {
+            added = false
+            for (const row of table) if (ownedPids.has(row.ppid) && !ownedPids.has(row.pid)) {
+              ownedPids.add(row.pid); added = true
+            }
+          } while (added)
+        } catch (error) { errors.push(error) }
         const cleanup = await Promise.allSettled([daemon?.close(), ...settled])
-        const errors = cleanup.flatMap(value => value.status === 'rejected' ? [value.reason] : [])
+        errors.push(...cleanup.flatMap(value => value.status === 'rejected' ? [value.reason] : []))
         if (errors.length) throw new AggregateError(errors, 'Pending intent fixture cleanup failed')
         const after = processTable()
         expect(after.filter(row => ownedPids.has(row.pid) || ownedGroups.has(row.pgid))).toEqual([])

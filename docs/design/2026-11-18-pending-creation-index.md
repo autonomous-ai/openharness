@@ -191,3 +191,33 @@ The fixed selection is `/tmp/core-pending-index-native-plan.json`: three cases, 
 720 seconds for the outer validation check. It disables implicit builds and requires root to supply the exact
 `E2E_BUNDLE_PATH` after the combined artifact is frozen. No optional native process-image artifact is assumed. The
 fixture type check passes; no packaged execution or timing result is claimed by this preparation.
+
+### Frozen cost fixture preparation (not executed)
+
+Both history-cost sources will include the final required-storage correction; the baseline omits only this pending
+index change. Source heads/trees, lockfile, pinned Node, loader, compiled entry and runner/worker/probe hashes must be
+recorded and unchanged. Both roles use the same full or lean entry kind. The required storage child is prewarmed
+before the initial receipt recovery window, matching a daemon whose required storage already runs; this is not a
+claim about cold artifact startup or whole-core totals. The parent measurement process runs the exact receipt and
+pending-launch coordinator source, with a compiled storage child.
+
+The prepared worker/runner under `/tmp/core-pending-index-cost-*.mjs` fixes 1,000 and 10,000 completed records, half
+version 1 and half claimed/result version 2, two pending records, one later legacy admission with exact restored
+mtime, five new-admission warmups and 50 measured admissions. Initial recovery, a recurring full scan, later legacy
+discovery/dispatch, admission batch, terminal-marker retirement and ten seconds of empty idle are separate phases.
+Each arm is bounded to 120 seconds and must prove exactly 58 effects, terminal replay without another effect,
+later legacy discovery and zero leftover private processes/descriptors/iterators. The two initially pending records
+are inserted before/after the completed history; diagnostic counters record their actual directory iterator ordinals
+rather than assuming filesystem order from their names.
+
+Timing uses eight arms: before/after/after/before at each size. It loads no child instrumentation. Storage CPU/RSS use
+passive `ps` snapshots outside the operation (CPU has the platform's reported precision); the owner records CPU/RSS,
+queued-callback delay and sampled event-loop delay. The loop sampler is disabled for empty idle. Diagnostic runs are
+separate: a two-arm 1,000-row smoke, then two 10,000-row arms. They instrument receipt opens/bytes/fsyncs and iterator
+custody in each process, plus a child-loop probe using fixture-only signals and private watched files. They add no
+storage-protocol operation or inherited descriptor. Their CPU/latency values are diagnostic, never acceptance timing.
+
+The runner checks exact parent/group ownership, storage child exit/close/IPC settlement and owner exit/close/both
+stream EOFs/IPC settlement, then PID/group absence before removing each root. On failure it stops the sequence and
+can kill only the arm's newly detached, verified process group. No daemon, real home, credential or global tmux is
+used. Root still owns artifact selection, review, quiet coordination and acceptance; no execution is claimed here.
