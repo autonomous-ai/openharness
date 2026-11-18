@@ -163,11 +163,11 @@ export class Notices {
     if (this.send(agentId)) this.deps.redraw([agentId])
   }
 
-  /** A dial attached: each pending card is sent again, under its id, a live one asked and a restored one held. The
-   *  attach's greeting draws a restored row, but ahead of a close still in its agent's order: a redraw puts it back. */
+  /** A dial attached: each pending card is sent again, under its id, a live one asked and a restored one held. No
+   *  redraw: the attach's greeting replaces the drawer after its carousel push, and a close still in an agent's order
+   *  came with its own reask, whose redraw waits behind it. */
   attached(): void {
-    const held = [...this.cards.keys()].filter((agentId) => this.send(agentId))
-    if (held.length > 0) this.deps.redraw(held)
+    for (const agentId of this.cards.keys()) this.send(agentId)
   }
 
   /** One kind of list as it is now: the core's Harness agents (`harness`), or the outside sources'. Each restored card of
