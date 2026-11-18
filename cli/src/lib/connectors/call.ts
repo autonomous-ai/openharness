@@ -8,8 +8,8 @@
  * stdout, so a following `| jq` sees empty input instead of an error body it could mistake for a result.
  */
 import { readFileSync, realpathSync, statSync } from 'node:fs'
-import { homedir } from 'node:os'
-import platformPath, { basename, extname, join, resolve, type PlatformPath } from 'node:path'
+import { homedir, userInfo } from 'node:os'
+import platformPath, { basename, extname, resolve, type PlatformPath } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { bearer, connectorsDir, ConnectorError, type Store, type Token } from './store.js'
 import { ready } from './renew.js'
@@ -53,16 +53,29 @@ export function expandHome(raw: string, home: string, p: PlatformPath = platform
   return raw.replace(p.sep === '\\' ? /^~(?=$|[\\/])/ : /^~(?=$|\/)/, home)
 }
 
+/**
+ * Where credentials or configs live, under each home: HOME and USERPROFILE (Windows' HOME) are the caller's to set, so
+ * `homes` brings the ones no variable moves.
+ */
+export function forbiddenDirs(env: NodeJS.ProcessEnv, homes: (string | undefined)[], p: PlatformPath = platformPath): string[] {
+  const all = [env.HOME, env.USERPROFILE, ...homes].filter((home): home is string => !!home)
+  const dirs = all.flatMap(home => ['.ssh', '.gnupg', '.config', '.local/share', '.harness', '.codex', '.claude'].map(dir => p.join(home, dir)))
+  return [...new Set([connectorsDir(env), ...dirs, '/etc', '/proc', '/sys'])]
+}
+
+/** The account's own home; an account with no passwd entry (a container's bare uid) has none, and `userInfo` throws. */
+function accountHome(): string | undefined {
+  try { return userInfo().homedir } catch { return undefined }
+}
+
 /** An `@path` upload: plain media or a document, never from where credentials or configs live. */
 export function uploadPath(raw: string, env: NodeJS.ProcessEnv = process.env): string {
-  const home = env.HOME || homedir()
-  const path = expandHome(raw, home)
+  const path = expandHome(raw, env.HOME || homedir())
   // The file system's own spelling (`native`): the JS realpath only follows links and keeps the spelling given, so
   // ~/.SSH on macOS, and SSH~1 (an 8.3 short name) or a \\?\ prefix on Windows, read ~/.ssh outside the fence.
   let real: string
   try { real = realpathSync.native(path) } catch { throw new CallFailure(2, `cannot read upload ${raw}`) }
-  const forbidden = [connectorsDir(env), join(home, '.ssh'), join(home, '.gnupg'), join(home, '.config'), join(home, '.local/share'),
-    join(home, '.harness'), join(home, '.codex'), join(home, '.claude'), '/etc', '/proc', '/sys'].map(dir => { try { return realpathSync.native(dir) } catch { return resolve(dir) } })
+  const forbidden = forbiddenDirs(env, [homedir(), accountHome()]).map(dir => { try { return realpathSync.native(dir) } catch { return resolve(dir) } })
   if (forbidden.some(dir => inside(dir, real)) || !statSync(real).isFile()) {
     throw new CallFailure(2, `refusing to upload ${raw}: not a media file the helper may send`)
   }
