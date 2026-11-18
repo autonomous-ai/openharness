@@ -154,7 +154,11 @@ export function uploadFile(raw: string, env: NodeJS.ProcessEnv = process.env, wa
   if (unc(given) || unc(platformPath.resolve(given))) throw refused()
   // Nothing is opened that is not named as media or a document.
   media(given)
-  // An open for reading waits for a FIFO's writer; O_NONBLOCK returns at once. Windows has no such flag.
+  // Nor what is not a file, links followed: opening a device acts on it, as a serial port's DTR line toggles and resets
+  // the board behind it.
+  if (!read(() => statSync(given)).isFile()) throw refused()
+  // An open for reading waits for a FIFO's writer, one put here since the stat too; O_NONBLOCK returns at once. Windows
+  // has no such flag.
   const fd = read(() => openSync(given, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0)))
   try {
     const open = read(() => fstatSync(fd, { bigint: true }))

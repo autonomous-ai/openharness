@@ -61,8 +61,10 @@ the path by name after the check.
    before anything is opened. `resolve()` serves this check only, and only Windows has shares: every later step uses
    the path as given after `~` expansion, so a `..` after a link goes where the kernel takes it.
 2. Suffix check on that path (string only), so nothing that is not a media file or document is opened.
-3. Open it read-only (`O_NONBLOCK` on posix, so a FIFO never blocks the open); `fstat` the descriptor (bigint). Not a
-   regular file: refused.
+3. `stat` the path, following links. Not a regular file: refused before it is opened, as opening a device acts on it
+   (a serial port's DTR line toggles and resets the board behind it). Open it read-only (`O_NONBLOCK` on posix, so a
+   FIFO put there since the `stat` never blocks the open); `fstat` the descriptor (bigint). Not a regular file:
+   refused.
 4. `realpathSync.native` of the path; a share result (a mapped drive resolves to one) is refused; the suffix check
    again on the result; `stat(real)` must have the descriptor's `dev`+`ino`, else refused (the path moved), and one
    link, else refused (a hard link made after the open may be the name `realpath` took).
