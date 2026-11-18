@@ -46,8 +46,9 @@ nothing.
 6. **`ps` reads `pgid` and `tpgid` too.** PR A allowed only `ps -axo pid=,ppid=`. Decision 2 needs to know whether
    Claude Code is the terminal's foreground program. The parent chain cannot tell that: a shell's child stays its
    child after the job is stopped or put in the background. Only the process group against its tty's foreground group
-   can. The devices still never read another process's environment or arguments: `ps -o pgid=,tpgid= -p <pid>`
-   prints two numbers.
+   can. The devices still never read another process's environment or arguments:
+   `ps -o pid=,pgid=,tpgid= -p <agent>,<shell>` prints two rows of three numbers (the agent and its VS Code terminal's
+   shell, so a wrapper with its own pty, such as `screen`, is never mistaken for that terminal's foreground).
 7. **Page keys only for a session known to draw fullscreen (PM, 2026-11-18).** VS Code's `sendText` scrolls the
    terminal to the bottom after each write (`terminalInstance.ts`, `scrollToBottom()`). Under Claude Code's default
    renderer a page key would therefore pull the view back down after each 20 lines up, which is worse than today. So
