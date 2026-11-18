@@ -57,7 +57,11 @@ export function openJournal(journal: Journal, io: OpenIo = NODE_FS): { add(done:
   }
 }
 
-/** The journal on disk, null when there is none: its head, and each step whose line is whole, a line cut short skipped. */
+/**
+ * The journal on disk, null when there is none: its head, and each step whose line is whole, a line cut short skipped.
+ * A step's previous bytes are on disk before its line, so one gone means a forget began, which only a move that ended
+ * starts: it is finished here, and the journal is none.
+ */
 export function readJournal(legacy: string): Journal | null {
   try {
     const [first, ...lines] = readFileSync(journalPath(legacy), 'utf8').split('\n')
@@ -68,10 +72,20 @@ export function readJournal(legacy: string): Journal | null {
       return line ? [stepOf(line, legacy)] : []
     })
     return { ...head, done }
-  } catch {
+  } catch (error) {
+    if (error instanceof ForgetCutShort) {
+      try {
+        forgetJournal(legacy)
+      } catch {
+        // Tried again at the next read.
+      }
+    }
     return null
   }
 }
+
+/** A step's previous bytes not there: forgetJournal removed them, and was stopped before the journal. */
+class ForgetCutShort extends Error {}
 
 /** The journal goes last, its previous bytes and its draft (a crash mid-write) just before: any would keep ~/.harness from reading as the bridge. */
 export function forgetJournal(legacy: string, io: JournalIo = NODE_FS): void {
@@ -106,8 +120,12 @@ function parsed(text: string): Line | null {
 
 function stepOf(line: Line, legacy: string): Done {
   if (line.did !== 'file') return line
-  const before = line.kept === null ? null : readFileSync(join(beforeFolder(legacy), String(line.kept))).toString('base64')
-  return { did: 'file', path: line.path, before }
+  if (line.kept === null) return { did: 'file', path: line.path, before: null }
+  try {
+    return { did: 'file', path: line.path, before: readFileSync(join(beforeFolder(legacy), String(line.kept))).toString('base64') }
+  } catch (error) {
+    throw (error as NodeJS.ErrnoException).code === 'ENOENT' ? new ForgetCutShort() : error
+  }
 }
 
 function writeSynced(path: string, data: string | Buffer, io: JournalIo): void {

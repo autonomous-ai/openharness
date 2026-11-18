@@ -11,7 +11,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
-import { openDaemon, whereFor, type Daemon } from '../agentClient/daemon.js'
+import { DEFAULT_TIMEOUT_MS, openDaemon, whereFor, type Daemon } from '../agentClient/daemon.js'
 import { env } from '../config/env.js'
 import { harnessPath, harnessRoot, harnessRoots, legacyHarnessHome, thisComputer } from '../config/harnessHome.js'
 import type { CoreApi, ServiceRequests } from '../core/api.js'
@@ -28,6 +28,8 @@ import { runtimeShortRoot, socketPathIn, unixSocketPath } from '../lib/localSock
 /** How often it looks for a process that could still use an old path. */
 export const CHECK_MS = 600_000
 const TMUX_LIMIT_MS = 5_000
+/** How long the Store's request waits for the core to open its line: as long as a request waits for its answer. */
+export const STORE_ASK_MS = DEFAULT_TIMEOUT_MS
 
 /**
  * The engines Harness installs hooks for (engines/hooks.ts, engines/nativeHooks.ts), by the names their processes run as.
@@ -86,7 +88,20 @@ async function pendingSetups(): Promise<number> {
  * changed (services/store.ts).
  */
 export async function askForStore(open: () => Promise<Daemon> = () => openDaemon(whereFor(undefined))): Promise<void> {
-  const daemon = await open()
+  // The request has its own limit, the line's opening none: one that never opens would hold every check after it.
+  const opening = open()
+  let timer: NodeJS.Timeout | undefined
+  const late = new Promise<never>((_, fail) => { timer = setTimeout(() => fail(new Error('the core did not open a line in time')), STORE_ASK_MS) })
+  let daemon: Daemon
+  try {
+    daemon = await Promise.race([opening, late])
+  } catch (error) {
+    // A line that opens after all is closed at once.
+    opening.then((line) => line.close(), () => {})
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
   try {
     await daemon.request('dsh_update', {})
   } finally {
