@@ -104,7 +104,7 @@ static void run_case(const char *name, int kind)
         } else if (kind == 2) {
             char req[32];
             snprintf(req, sizeof(req), "perf-q-%d", i);
-            ui_question_show("perf-0", "Welcome screen", "M2", req, qs);
+            ui_question_show("perf-0", "Welcome screen", "M2", req, qs, false);
         } else {
             ui_projects_bulk_begin();
             for (int j = 0; j < 16; j++) {

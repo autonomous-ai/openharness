@@ -289,8 +289,10 @@ void ui_project_clear_event(const char *project_id);
 // Also records it behind the bell: a blocked agent is counted, and stays counted until the question is
 // ANSWERED rather than until somebody looks at it. Not gated on the window having the agent on screen —
 // showing a question asks the window to bring it forward, so that gate could never open.
-// True when the caller should beep: not for the pane already on the face.
-bool ui_question_show(const char *project_id, const char *agent_name, const char *machine, const char *request_id, const struct cJSON *questions);
+// `list`: a question the dial was told before, back on the daemon's drawer. Its row is filed with no wake and no
+// beep, and stays read when the dial already read that agent's question in the same words.
+// True when the caller should beep: never for `list`, nor for the pane already on the face.
+bool ui_question_show(const char *project_id, const char *agent_name, const char *machine, const char *request_id, const struct cJSON *questions, bool list);
 // That question was answered somewhere else (the app, or the pane by hand) — leave the screen instead of
 // waiting for an answer that can no longer be delivered. No-op unless THIS request is the one on screen.
 void ui_question_close(const char *project_id, const char *request_id);

@@ -34,6 +34,7 @@ import { SerialLink, findDialPort } from './serial.js'
 import { PLAYER_PAGE_SIZE, playerPage, type PlayerSession } from './playerLibrary.js'
 import { PassageCarry, withCarriedPassage, type CarryRead } from './passageCarry.js'
 import { VoiceDraft, type DraftPin } from './voiceDraft.js'
+import { dialText, noticeSummary } from './dialText.js'
 import { QuestionInbox, type ReviewedAnswer, type AnswerReceipt, type QuestionSpeech } from './questionInbox.js'
 import { notificationReadToken, type UnreadNotification } from '../lib/notificationRead.js'
 import { partitionTexts } from '../lib/questionController.js'
@@ -170,8 +171,6 @@ export interface ActivitySnapshot {
 
 /** The device keeps 192 B of the agent's latest sentence (cable.md); a longer one is cut on a character boundary. */
 const ACTION_MAX_BYTES = 188
-/** A drawer row's words on the device (cable_notif_t summary, 240 B with its end): eight rows stay one frame. */
-const NOTICE_SUMMARY_MAX = 239
 /** An agent's name and machine on the device (CABLE_NAME_MAX, 40 B with its end). */
 const NAME_MAX = 39
 
@@ -249,36 +248,6 @@ function clipUtf8(text: string, max: number): string {
   return `${decoded.replace(/\uFFFD+$/, '')}\u2026`
 }
 
-/**
- * A drawer row's text as the dial keeps it (firmware recap_preview): whitespace folded to one space, cut on a whole
- * character at `max` bytes, no ellipsis. The dial matches a read row by its words, so a question asked whole and then
- * carried in a drawer stays read; and a window's question text, a plan of kilobytes, made the drawer frame too big to
- * send, every question it carried with it (2026-11-18). It is cut sooner where its JSON passes twice `max`, a field of
- * quotes: JSON writes a control character six bytes wide, and eight rows of them passed the frame cap. Folding them
- * instead changed the words of a question the dial had filed with them, and a read question came back unread. Half an
- * emoji is written '?' here as `send` writes it for the dial: counted as the three bytes UTF-8 gives it, the cut fell
- * short of the dial's own and a read question came back unread.
- */
-function dialText(text: string, max: number): string {
-  let out = ''
-  let bytes = 0
-  let width = 0
-  let space = false
-  for (const char of text) {
-    if (char === ' ' || (char >= '\t' && char <= '\r')) { space = bytes > 0; continue }
-    const ch = /[\ud800-\udfff]/u.test(char) ? '?' : char
-    const gap = space ? 1 : 0
-    const size = Buffer.byteLength(ch, 'utf8')
-    const wide = ch === '"' || ch === '\\' ? 2 : ch < ' ' ? 6 : size
-    if (bytes + gap + size > max || width + gap + wide > 2 * max) break
-    out += space ? ` ${ch}` : ch
-    bytes += gap + size
-    width += gap + wide
-    space = false
-  }
-  return out
-}
-
 /** Whether the dial keeps a drawer row of this agent: it skips an id of ID_MAX (48 B) or more. One with a control
  *  character or half an emoji is left out too: JSON writes the first six bytes wide, past the room eight rows have,
  *  and the dial gets the second as '?', an id no agent has. No agent's id holds either. */
@@ -289,7 +258,9 @@ function dialKeepsId(agentId: string): boolean {
 /**
  * The leading drawer rows that fit one frame. Every field is bounded, so eight rows fit today; this guards a field added
  * later without a bound, whose frame `send` would refuse, leaving the dial without its drawer. A question row cut here
- * stays owed and is asked again.
+ * is not on the dial: the forget that follows takes the drawer after this cut, so the question keeps told and loses
+ * asked, and comes back by giveQuestion's rule (a silent row, the Pro's plain frame, or nothing on an older dial), never
+ * as a second ring.
  */
 export function fitDrawer<T>(rows: T[]): T[] {
   const kept = [...rows]
@@ -790,6 +761,10 @@ export class CableSession {
   /** `appFilter: 'v1'` (the round dial, spec 2026-11-14-dial-app-filter): with no window, or a window and the app in
    *  front, it holds one app's ring, is sent `apps` and picks with `app.pick`. Any other device gets the single ring. */
   private appFilter = false
+  /** `questionTier: 'v1'` (the round dial): it files a `question` sent with `tier: 'list'` as a silent row. A question it
+   *  was told and no longer holds goes back on it that way, since a ring at every change of the window's list was a beep
+   *  for nothing new (2026-11-18); a round dial that does not say it would beep, so it is sent nothing (giveQuestion). */
+  private questionTier = false
   private playerOffset = 0
   private playerRequest = 0
   private playerLibraryKey = ''
@@ -806,13 +781,14 @@ export class CableSession {
 
   /** For the greeting's log line: which capabilities this hello named, or nothing. */
   private capabilitiesNamed(): string {
-    const named = [this.swarmMembers && 'swarms', this.longRecap && 'recap', this.stepsActivity && 'activity', this.statsTurn && 'stats', this.playerCapable && 'player', this.appFilter && 'appFilter']
+    const named = [this.swarmMembers && 'swarms', this.longRecap && 'recap', this.stepsActivity && 'activity', this.statsTurn && 'stats', this.playerCapable && 'player', this.appFilter && 'appFilter', this.questionTier && 'questionTier']
       .filter(Boolean)
     return named.length ? ` caps ${named.join(',')}` : ''
   }
 
   private resetCapabilities(): void {
     this.swarmMembers = this.longRecap = this.stepsActivity = this.statsTurn = this.playerCapable = this.appFilter = false
+    this.questionTier = false
     this.seqOn = false
     this.seq = 0
     this.resyncAt = 0
@@ -1420,6 +1396,7 @@ export class CableSession {
         this.statsTurn = str('stats') === 'turn-v1'
         this.playerCapable = str('player') === 'library-v1'
         this.appFilter = str('appFilter') === 'v1'
+        this.questionTier = str('questionTier') === 'v1'
         this.seqOn = str('board') === 'pro'
         this.seq = 0
         const mac = str('mac') ?? ''
@@ -1450,6 +1427,9 @@ export class CableSession {
             // The dial shows its TABS | APPS switch only when told, so a list kept from an earlier machine view
             // never becomes a control nothing answers.
             ...(this.appFilter && this.host.pickApp ? ['apps.switch'] : []),
+            // The dial files a `tier: 'list'` question silently only when told, so a daemon that does not name it never
+            // mutes a ring: such a frame stays an alert.
+            ...(this.questionTier ? ['question.tier'] : []),
             // The desktop will carry this device's preferences. A device that does not see this keeps
             // its own settings screens and never reports.
             'settings',
@@ -2938,14 +2918,32 @@ export class CableSession {
     await this.replaceNotifications(this.host.listUnread())
   }
 
-  /** Every question still open that the dial does not hold, asked of it: each once, here or by an ask that overtakes
-   *  this walk. */
+  /** Every open, owed question the dial does not hold, given to it by giveQuestion's rule: rung if it was never told,
+   *  else back as a row with no ring. Each once, here or by an ask that overtakes this walk. */
   private async resendQuestions(): Promise<void> {
     this.greeting = false
     for (const { agentId, id, questions } of this.questionInbox.open()) {
-      if (this.owed(agentId, id) && this.questionInbox.ask(agentId, id)) {
-        await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions })
-      }
+      if (this.owed(agentId, id)) await this.giveQuestion(agentId, id, questions, questions[0].q)
+    }
+  }
+
+  /**
+   * The one rule for a question the dial does not hold. One it was never told is rung, in `questions`. One it was told
+   * since it last lost everything (a drawer cut its row, its turn moved on) is never rung again: a ring at every change
+   * of the window's list was a beep for nothing new (2026-11-18). It goes back as a silent `tier: 'list'` row of `words`
+   * to a dial that says questionTier, as the plain frame to a Pro (it mutes a question sent again by its id and words),
+   * and not at all to an older round dial, which would beep, nor for an id the dial cannot keep. A held one is never
+   * given to a Pro: it mutes a repeat only by a hash in its RAM, and the restart that held it may have cleared that too.
+   * Each mark is set before its frame is written, so two paths cannot both send it.
+   */
+  private async giveQuestion(agentId: string, id: string, questions: unknown, words: string): Promise<void> {
+    const inbox = this.questionInbox
+    const send = (rest: Record<string, unknown>) => this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, ...rest })
+    if (!inbox.told(agentId, id)) {
+      if (inbox.ask(agentId, id)) await send({ questions })
+    } else if (dialKeepsId(agentId) && (this.questionTier || (this.seqOn && !inbox.held(agentId, id))) &&
+        inbox.refile(agentId, id)) {
+      await send(this.questionTier ? { tier: 'list', questions: [{ key: '', q: noticeSummary(words), options: [] }] } : { questions })
     }
   }
 
@@ -3377,7 +3375,7 @@ export class CableSession {
           summary = summary ? extendShortRecap(summary, saved?.text ?? '') : saved?.recap ?? ''
         } catch { /* keep the supplied text if history cannot be read */ }
       }
-      return { agentId: item.agentId, name: who.name, machine: who.machine, summary: dialText(summary, NOTICE_SUMMARY_MAX),
+      return { agentId: item.agentId, name: who.name, machine: who.machine, summary: noticeSummary(summary),
         question: item.question, ...(notificationReadToken(item.readToken) ? { readToken: item.readToken } : {}) }
     }))
     if (this.notificationReplay !== replay) return
@@ -3399,7 +3397,7 @@ export class CableSession {
     const eight = [
       ...open.map(({ agentId, questions }) => {
         const { name, machine } = this.whoIs(agentId)
-        return { agentId, name, machine, summary: dialText(questions[0].q, NOTICE_SUMMARY_MAX), question: true }
+        return { agentId, name, machine, summary: noticeSummary(questions[0].q), question: true }
       }),
       ...rest.filter((row) => row.question),
       ...rest.filter((row) => !row.question),
@@ -3409,7 +3407,7 @@ export class CableSession {
     // Before the frame, so an ask that overtakes it stays marked.
     this.questionInbox.forget(new Set(drawer.filter((row) => row.question).map((row) => row.agentId)))
     await this.send({ t: 'notif.replace', items: drawer })
-    // One the eight rows could not hold is asked now. A greeting asks them as its push ends.
+    // One the eight rows could not hold is given back now, by giveQuestion's rule. A greeting gives them as its push ends.
     if (!this.greeting) await this.resendQuestions()
   }
 
@@ -3448,12 +3446,17 @@ export class CableSession {
    * came through quiet, no row was ever recorded, and looking away later left nothing behind.
    */
   async question(agentId: string, id: string, questions: unknown): Promise<void> {
-    this.questionInbox.set(agentId, id, questions)
+    // Nobody could close it: it would stay on the dial for good.
+    if (!agentId || !id) return
+    const whole = this.questionInbox.set(agentId, id, questions)
     this.liveTurns.set(agentId, 'question')
     // The dial beeps at each ask, and the devices and the core ask again what a dial should hold as it arrives or they
-    // reconnect: one the inbox holds is asked once until the dial loses it. One it cannot hold is sent as it comes.
-    if (this.questionInbox.read(agentId).ok && (this.greeting || !this.questionInbox.ask(agentId, id))) return
-    await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions })
+    // reconnect: it goes by giveQuestion's rule, rung once and never again after the dial was told it, and during a
+    // greeting it waits for the walk. One the inbox cannot hold whole is kept and sent as its summary, never as it came:
+    // a plan of kilobytes passed the frame cap and never reached the dial (2026-11-18).
+    const open = this.questionInbox.read(agentId)
+    if (!open.ok || this.greeting) return
+    await this.giveQuestion(agentId, id, whole ? questions : open.questions, open.questions[0].q)
   }
   /** A question the dial reads when its row is opened and is never asked: a notice restored after the devices process
    *  restarted rang before it (cable/notices.ts). */
@@ -3481,7 +3484,10 @@ export class CableSession {
     if (!this.questionInbox.close(agentId, id)) return
     // Answered: the turn goes on (its end clears it).
     if (this.liveTurns.get(agentId) === 'question') this.liveTurns.set(agentId, 'working')
-    await this.send({ t: 'question.close', agentId, id })
+    // A close that does not fit a frame names a question no frame carried (a question's is the larger): the dial never
+    // had it, and send would drop it as this side's bug. The inbox keeps no id past 6500 bytes; the close came anyway.
+    const close = { t: 'question.close', agentId, id }
+    if (fitsFrame(close)) await this.send(close)
   }
 
   async focusAgent(agentId: string): Promise<void> {

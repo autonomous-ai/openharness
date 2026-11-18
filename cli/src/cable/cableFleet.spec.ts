@@ -514,6 +514,19 @@ describe('a dial plugged in beside one already attached', () => {
       for (const port of f.ports) expect(questions(port)).toEqual(['a q1'])
     } finally { await f.fleet.stop() }
   })
+
+  it('is given a question the dial cannot answer, once, and the first dial is not asked again', async () => {
+    const f = await firstAlone()
+    try {
+      await f.fleet.question('a', 'q1', [{ key: 'plan', q: `Approve? ${'x'.repeat(9000)}`, options: ['Approve', 'Keep planning'] }])
+      expect(questions(f.ports[0])).toEqual(['a q1'])
+      await plugSecond(f)
+      await vi.waitFor(() => expect(questions(f.ports[1])).toEqual(['a q1']))
+      await flush()
+      expect(questions(f.ports[1])).toEqual(['a q1'])
+      expect(questions(f.ports[0])).toEqual(['a q1'])
+    } finally { await f.fleet.stop() }
+  })
 })
 
 describe('a board that is not a dial', () => {

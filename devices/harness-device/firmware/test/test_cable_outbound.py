@@ -157,7 +157,9 @@ int main(void) {
     send_hello();assert(sends==1);sends=0;
     { cJSON *hello=cJSON_Parse(wire);assert(hello);
       const cJSON *filter=cJSON_GetObjectItemCaseSensitive(hello,"appFilter");
-      assert(cJSON_IsString(filter)&&!strcmp(filter->valuestring,"v1"));cJSON_Delete(hello); }
+      assert(cJSON_IsString(filter)&&!strcmp(filter->valuestring,"v1"));
+      const cJSON *tier=cJSON_GetObjectItemCaseSensitive(hello,"questionTier");
+      assert(cJSON_IsString(tier)&&!strcmp(tier->valuestring,"v1"));cJSON_Delete(hello); }
     fail_send=true;assert(!send_json(msg("ping")));assert(live==retained);
     fail_send=false;
     // The shipping bridge has agents.list but ignores agents.refresh. Core tab

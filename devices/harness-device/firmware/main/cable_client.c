@@ -256,6 +256,9 @@ static void send_hello(void)
     // With no window, one app's agents at a time (spec 2026-11-14-dial-app-filter): `apps` in (handle_apps), `app.pick`
     // back. Older daemons ignore it and send the single ring.
     msg_string(&root, "appFilter", "v1");
+    // This dial files a `question` with `tier: "list"` as a silent row once the welcome lists `question.tier`. An
+    // older daemon ignores the field and never sends the tier.
+    msg_string(&root, "questionTier", "v1");
     // Which of the two dials this is (board.h) — informational, so a log or a bug report can say. A
     // daemon that predates the field ignores it.
     msg_string(&root, "hw", board()->name);
@@ -845,15 +848,19 @@ static void handle_apps(const cJSON *p)
     ui_apps_replace(rows, n, shown && strlen(shown) < CABLE_APP_ID_MAX ? shown : "");
 }
 
-// `question` {agentId, id, questions}.
+// `question` {agentId, id, questions, tier?}. `tier: "list"` is a question the dial was told before, back on the
+// daemon's drawer, and is silent only when this session's welcome listed `question.tier`; any other tier, or none,
+// or a daemon that did not list it, is an alert, so nothing this build cannot vouch for mutes a ring.
 static void handle_question(const cJSON *p, const char *agent_id)
 {
     const cJSON *questions = cJSON_GetObjectItemCaseSensitive(p, "questions");
+    const char *tier = str_of(p, "tier");
     // The name rides on the frame for the same reason as on `summary`: the asker may be off this tab.
     if (agent_id && questions) {
         // A question is an alert: pinned row, wake and a (coalesced) beep, all but the beep inside
-        // ui_question_show, which stays quiet for the pane already on the glass.
-        if (ui_question_show(agent_id, str_of(p, "name"), str_of(p, "machine"), str_of(p, "id"), questions))
+        // ui_question_show, which stays quiet for the pane already on the glass and for a list row.
+        if (ui_question_show(agent_id, str_of(p, "name"), str_of(p, "machine"), str_of(p, "id"), questions,
+                             cable_client_supports(CABLE_FEATURE_QUESTION_TIER) && tier && !strcmp(tier, "list")))
             audio_notify_done();
     }
 }
@@ -1095,15 +1102,17 @@ static void handle_notifications(const cJSON *p)
         if (n >= (int)(sizeof(rows) / sizeof(rows[0]))) break;
         const char *aid = str_of(it, "agentId");
         if (!aid || !aid[0] || strlen(aid) >= sizeof rows[n].agent_id) continue;
-        bool duplicate = false;
-        for (int i = 0; i < n; i++) if (!strcmp(rows[i].agent_id, aid)) duplicate = true;
+        // Since #4445 the drawer keeps an agent's question and its news as two rows; one row an agent here dropped
+        // the second. A row carries no question id, so the agent and the kind are the whole key.
+        bool question = bool_of(it, "question"), duplicate = false;
+        for (int i = 0; i < n; i++) if (!strcmp(rows[i].agent_id, aid) && rows[i].question == question) duplicate = true;
         if (duplicate) continue;
         memset(&rows[n], 0, sizeof(rows[n]));
         snprintf(rows[n].agent_id, sizeof(rows[n].agent_id), "%s", aid);
         snprintf(rows[n].name, sizeof(rows[n].name), "%s", str_of(it, "name") ? str_of(it, "name") : "");
         snprintf(rows[n].machine, sizeof(rows[n].machine), "%s", str_of(it, "machine") ? str_of(it, "machine") : "");
         snprintf(rows[n].summary, sizeof(rows[n].summary), "%s", str_of(it, "summary") ? str_of(it, "summary") : "");
-        rows[n].question = bool_of(it, "question");
+        rows[n].question = question;
         rows[n].failed = bool_of(it, "failed");
         const char *token = str_of(it, "readToken");
         if (token && token[0] && strlen(token) < sizeof rows[n].read_token)

@@ -381,6 +381,16 @@ static bool notice_was_read(const cable_notif_t *n)
     }
     return false;
 }
+// A question filed again from the drawer comes without the drawer row's token, so the words decide: a receipt for
+// that agent's question in the same words means the person already read it here.
+static bool notice_question_read(const cable_notif_t *n)
+{
+    for (int i = 0; i < NOTICES; i++) {
+        const notice_receipt_t *r = &s.notice_reads[i];
+        if (r->question && !strcmp(r->id, n->agent_id) && !strcmp(r->summary, n->summary)) return true;
+    }
+    return false;
+}
 // That agent's news receipt, and its question's too when `questions_too`: news leaves the question row beside it.
 static void notice_forget_read(const char *id, bool questions_too)
 {
@@ -1443,8 +1453,12 @@ static void render_question(ht_scene_t *f)
         return;
     }
     if (s.q.error[0] || !s.q.valid || !s.q.supported) {
-        ui_wrap(f, FACE_CX(336), 173, 336, 5, 0, UI_FONT, DIM,
-            s.q.error[0] ? s.q.error : !s.q.valid ? "Answered elsewhere." : "This question needs the desktop.");
+        // A plan to approve, or a shape the inbox refused, opens to what is asked instead of a sentence that names
+        // nothing (2026-11-18). Only words Inter draws in full: a missing letter would read as a different question.
+        const char *prompt = s.q.item[0].prompt;
+        bool words = !s.q.error[0] && s.q.valid && prompt[0] && ui_can_display(prompt, UI_FONT, 336, INT_MAX);
+        ui_wrap(f, FACE_CX(336), 173, 336, 5, 0, UI_FONT, words ? FG : DIM,
+            words ? prompt : s.q.error[0] ? s.q.error : !s.q.valid ? "Answered elsewhere." : "This question needs the desktop.");
         control(f, 116, 346, 238, "[ on desktop ]", A_DESKTOP, 1, s.connected);
         return;
     }
@@ -4169,15 +4183,17 @@ static void question_load(const cJSON *questions)
     s.q.valid=s.q.count>0;
 }
 bool ui_question_show(const char *id, const char *name, const char *machine, const char *request,
-                      const cJSON *questions)
+                      const cJSON *questions, bool list)
 {
     if (!id || !request) return false;
     display_lock();
     bool face = on_face(id);
     const cJSON *first=cJSON_GetArrayItem(questions,0);
     const cJSON *prompt=cJSON_GetObjectItemCaseSensitive(first,"q");
-    notice_forget_read(id, true);
-    notice_add(id,name,machine,cJSON_IsString(prompt) ? prompt->valuestring : "Needs your answer",true,false);
+    // A list row was rung before: its receipt is kept, so a question already read here stays read.
+    if (!list) notice_forget_read(id, true);
+    cable_notif_t *n = notice_add(id,name,machine,cJSON_IsString(prompt) ? prompt->valuestring : "Needs your answer",true,false);
+    if (list && n && notice_question_read(n)) n->read_on_dial = true;
     if (face) notice_read_now(id);   // already on the glass: shown in place, read at once
     // A different agent's alert cannot replace the question being read.
     if (s.q.valid && !strcmp(s.q.agent,id) && strcmp(s.q.request,request)) {
@@ -4185,11 +4201,12 @@ bool ui_question_show(const char *id, const char *name, const char *machine, con
         if (question_view(s.view)) { COPY(s.q.error,"The question changed. Open the alert again."); view(QUESTION); }
     }
     // The question is shown on the home face, in the recap's place (render_home): no screen opens
-    // for it. The display wakes so a person glancing over sees it.
+    // for it. The display wakes so a person glancing over sees it; a list row does not, as it rang before.
     change();
-    if (!face) display_wake();
+    bool ring = !face && !list;
+    if (ring) display_wake();
     display_unlock();
-    return !face;
+    return ring;
 }
 void ui_question_state(const cJSON *p)
 {
