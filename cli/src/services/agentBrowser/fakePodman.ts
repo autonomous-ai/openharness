@@ -81,6 +81,12 @@ setTimeout(() => {
 }, reply.hangMs || 0)
 `
 
+/** The lines a running fake has finished writing to [file]. Its append creates the file before it writes, and a line
+ *  without its newline is still being written: read then, an empty file threw in a spec (2026-11-19). */
+function wholeLines(file: string): string[] {
+  return readFileSync(file, 'utf8').split('\n').slice(0, -1)
+}
+
 export function fakePodman(): FakePodman {
   if (!realSpawnSync) throw new Error('fakePodman needs trackingFakes as the spec\'s node:child_process')
   const dir = mkdtempSync(join(tmpdir(), 'fake-podman-'))
@@ -106,9 +112,9 @@ export function fakePodman(): FakePodman {
     calls() {
       const log = join(dir, 'calls.jsonl')
       if (!existsSync(log)) return []
-      return readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line) as FakeCall)
+      return wholeLines(log).map(line => JSON.parse(line) as FakeCall)
     },
-    pids: () => readFileSync(join(dir, 'pids.log'), 'utf8').split('\n').filter(Boolean).map(Number),
+    pids: () => wholeLines(join(dir, 'pids.log')).map(Number),
     async remove() {
       fake.removed = true
       await Promise.all([...fake.running].map(child => new Promise(done => child.once('exit', done))))
