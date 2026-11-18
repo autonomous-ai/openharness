@@ -11,7 +11,7 @@ function fake(overrides: Partial<UninstallDeps> = {}) {
   const after = (what: string) => marks.push(calls.length ? `${what} after ${calls.at(-1)}` : `${what} first`)
   let running = true
   const deps: UninstallDeps = {
-    platform: 'darwin', cwd: '/Users/u/code', root: '/Users/u/.harness', home: '/Users/u',
+    platform: 'darwin', cwd: '/Users/u/code', roots: ['/Users/u/.harness'], home: '/Users/u',
     cliDir: '/Users/u/.harness/cli', dataDir: '/Users/u/.harness/cli/data', authDir: '/Users/u/.harness/auth',
     isTTY: false, harnessOs: false, pane: null,
     markUninstalling: () => { after('mark') },
@@ -43,7 +43,7 @@ function fake(overrides: Partial<UninstallDeps> = {}) {
 
 /** This computer's Windows layout, as the fakes above see it. */
 const win = {
-  platform: 'win32' as const, cwd: 'C:\\Users\\u', root: 'C:\\Users\\u\\.harness', home: 'C:\\Users\\u', cliDir: 'C:\\Users\\u\\.harness\\cli',
+  platform: 'win32' as const, cwd: 'C:\\Users\\u', roots: ['C:\\Users\\u\\.harness'], home: 'C:\\Users\\u', cliDir: 'C:\\Users\\u\\.harness\\cli',
   dataDir: 'C:\\Users\\u\\.harness\\cli\\data', authDir: 'C:\\Users\\u\\.harness\\auth', service: { name: 'Task Scheduler', present: () => true, unregister: () => ({ ok: true as const }) },
   removePathEntry: () => ({ kind: 'windows' as const, result: { state: 'removed' as const, folder: 'C:\\Users\\u\\.harness\\bin' } }),
   listEntries: (dir: string) => (dir === 'C:\\Users\\u\\.harness' ? [{ name: 'bin', dir: true }, { name: 'cli', dir: true }] : []),
@@ -190,7 +190,7 @@ describe('harness uninstall', () => {
 
   it('uninstalls a half install: no daemon, no task, no terminal host, no cli\\current, only bin\\ and runtime\\', async () => {
     const half = {
-      platform: 'win32' as const, cwd: 'C:\\Users\\u', root: 'C:\\Users\\u\\.harness', home: 'C:\\Users\\u',
+      platform: 'win32' as const, cwd: 'C:\\Users\\u', roots: ['C:\\Users\\u\\.harness'], home: 'C:\\Users\\u',
       cliDir: 'C:\\Users\\u\\.harness\\cli', dataDir: 'C:\\Users\\u\\.harness\\cli\\data', authDir: 'C:\\Users\\u\\.harness\\auth',
       daemonPid: () => null, alive: () => false,
       service: { name: 'Task Scheduler', present: () => false, unregister: () => { throw new Error('there is no task to unregister') } },
@@ -379,6 +379,33 @@ describe('harness uninstall', () => {
       '  · Windows did not start the step that removes Harness\'s files once this command has ended. (Win32_Process.Create returned 2) When this command has finished, delete these yourself:\n      C:\\Users\\u\\.harness\\bin\n      C:\\Users\\u\\.harness\\cli',
     ])
   })
+
+  // Data and state may get roots of their own (config/harnessHome.ts): the uninstall covers each, and checks all first.
+  it('with two roots, every step runs for each', async () => {
+    const roots = ['/Users/u/.harness', '/Users/u/state/.harness']
+    const listEntries = (dir: string) => (dir === roots[0] ? [{ name: 'auth', dir: true }, { name: 'cli', dir: true }] : dir === roots[1] ? [{ name: 'logs', dir: true }, { name: 'runtime', dir: true }] : [])
+    const t = fake({ roots, listEntries, dataDir: '/Users/u/state/.harness/data' })
+    t.deps.checkRemovable = (plan) => { t.calls.push(`check ${plan.root}`) }
+    t.deps.removeNow = (plan) => { t.calls.push(`files ${plan.root}`); return [] }
+    expect(await uninstallCommand(['--yes'], t.deps)).toBe(0)
+    expect(t.calls).toEqual([`check ${roots[0]}`, `check ${roots[1]}`, 'agents', 'lock', 'service', 'stop', 'pty', 'hooks', 'launchers', 'path', `files ${roots[0]}`, `files ${roots[1]}`, 'afterword'])
+    expect(t.out).toContain('✓ removed ~/.harness')
+    expect(t.out).toContain('✓ removed ~/state/.harness')
+    // The data folder is in the second root: not a folder left outside Harness's.
+    expect(t.out.some((line) => line.startsWith('· left'))).toBe(false)
+    // The second root's refusal comes before anything is stopped or removed, the first root's files included.
+    const refused = fake({
+      roots, listEntries,
+      checkRemovable: (plan) => { if (plan.root === roots[1]) throw new RemovalRefused(`Harness will not remove "${roots[1]}": it is a link to another folder.`) },
+    })
+    expect(await uninstallCommand(['--yes'], refused.deps)).toBe(1)
+    expect(refused.calls).toEqual([])
+    expect(refused.err).toEqual(['✗ Harness will not remove "~/state/.harness": it is a link to another folder. Nothing was removed. Remove the link yourself, and the folder it points to if it is Harness\'s.'])
+    const inState = fake({ ...win, roots: ['C:\\Users\\u\\.harness', 'C:\\Users\\u\\state\\.harness'], cwd: 'C:\\Users\\u\\state\\.harness\\logs' })
+    expect(await uninstallCommand(['--yes'], inState.deps)).toBe(1)
+    expect(inState.calls).toEqual([])
+    expect(inState.err[0]).toMatch(/^✗ This terminal is in ~\\state\\\.harness\\logs, which the uninstall removes/)
+  })
 })
 
 describe('harness uninstall, review round 1', () => {
@@ -390,7 +417,7 @@ describe('harness uninstall, review round 1', () => {
     expect(t.out).toEqual([])
     expect(t.err).toEqual(['✗ Harness will not remove "~/.harness": it is a link to another folder. Nothing was removed. Remove the link yourself, and the folder it points to if it is Harness\'s.'])
     // The plan itself refused (a root that is not a .harness folder) is refused the same way, as early.
-    const odd = fake({ root: '/Users/u/harness' })
+    const odd = fake({ roots: ['/Users/u/harness'] })
     expect(await uninstallCommand(['--yes'], odd.deps)).toBe(1)
     expect(odd.calls).toEqual([])
     expect(odd.err).toEqual(['✗ Harness will not remove "~/harness": it is not a folder named .harness. Nothing was removed.'])
