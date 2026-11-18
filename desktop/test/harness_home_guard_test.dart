@@ -80,30 +80,6 @@ List<(String, String)> _libSources() => [
     ),
 ].where((source) => source.$1 != 'core/harness_home.dart').toList();
 
-// The not-moved lists: today's hits that a caller task of the harness-paths plan moves, one file per
-// task. Task 22 deletes this code and its two cases once every caller task has deleted its list.
-
-/// Each `test/harness_home_not_moved/<task>.txt` → its lines, each one hit as [_printed] prints it.
-Map<String, List<String>> _notMovedLists() {
-  final folder = Directory(p.join('test', 'harness_home_not_moved'));
-  if (!folder.existsSync()) return const {};
-  return {
-    for (final file in folder.listSync().whereType<File>().where(
-      (f) => f.path.endsWith('.txt'),
-    ))
-      p.basename(file.path): [
-        for (final line in file.readAsLinesSync())
-          if (line.trim().isNotEmpty) line.trim(),
-      ],
-  };
-}
-
-/// The [hits] no line of [notMoved] excuses: only a line equal to a hit's printed form does.
-List<String> _notListed(Iterable<String> hits, Set<String> notMoved) => [
-  for (final hit in hits)
-    if (!notMoved.contains(hit)) hit,
-];
-
 void main() {
   group('no hand-built home .harness path outside core/harness_home.dart', () {
     late final List<_Hit> hits = [
@@ -140,30 +116,13 @@ void main() {
       }
     });
 
-    test('a not-moved line excuses only its own hit', () {
-      final planted = _scan(
-        'core/planted.dart',
-        "final a = p.join(home, '.harness');\n"
-            r"final b = '$home/.harness/run';",
-      ).map(_printed).toList();
-      expect(planted, hasLength(2));
-      expect(_notListed(planted, {planted.first}), [planted.last]);
-      expect(
-        _notListed(planted, {planted.first.replaceFirst(':1:', ':7:')}),
-        planted,
-      );
-    });
-
-    test('lib/ holds none but the allowlisted copy and the not moved yet', () {
+    test('lib/ holds none but the allowlisted copy', () {
       expect(
         _libSources().length,
         greaterThan(500),
         reason: 'the scan found almost nothing; run it from desktop/',
       );
-      final left = _notListed(
-        hits.where((hit) => !_allowed(hit)).map(_printed),
-        {for (final lines in _notMovedLists().values) ...lines},
-      );
+      final left = hits.where((hit) => !_allowed(hit)).map(_printed).toList();
       expect(
         left,
         isEmpty,
@@ -178,17 +137,6 @@ void main() {
         for (final file in _copy)
           if (!hits.any((hit) => hit.file == file && _allowed(hit))) file,
       };
-      expect(stale, isEmpty);
-    });
-
-    test('every not-moved line still matches a hit', () {
-      final printed = hits.map(_printed).toSet();
-      final stale = [
-        for (final MapEntry(key: list, value: lines)
-            in _notMovedLists().entries)
-          for (final line in lines)
-            if (!printed.contains(line)) '$list: $line',
-      ];
       expect(stale, isEmpty);
     });
   });
