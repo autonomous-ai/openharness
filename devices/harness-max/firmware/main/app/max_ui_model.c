@@ -508,6 +508,13 @@ static bool turn(max_agent_t *a, const char *kind, const char *text, int elapsed
 {
     const bool said = text && text[0];
     if (!strcmp(kind, "started")) {
+        // An agent in another app waiting on its app's prompt: the daemon shows the wait as a question (shown only) and
+        // as this start's line (devices.ts showWaits). The same wait, so it keeps its question; the close ends it.
+        const max_ask_t *k = a->state == MAX_ASKING ? max_ask_of(a->id) : NULL;
+        if (k && k->path == MAX_PATH_SHOWN) {
+            max_copy(a->activity, sizeof a->activity, text);
+            return true;
+        }
         max_set_state(a, MAX_WORKING, now_ms);
         a->clock = true;
         a->clock_s = 0;

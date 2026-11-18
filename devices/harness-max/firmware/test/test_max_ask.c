@@ -290,6 +290,26 @@ static void test_what_ends_a_question(void)
     CHECK(take(100000) == 0);
 }
 
+// An agent in another app waits on its app's prompt: the daemon shows its question only (a `shown:` id) and tells the
+// wait as the line of a turn that starts (devices.ts showWaits, then `processing`). That start is the same wait, so the
+// question and its Attention stay; the daemon's close ends them.
+static void test_a_shown_wait_survives_its_line(void)
+{
+    linked(ABC, 3);
+    static const pro_ask_item_t SHOWN = {"prompt", "npm test \xc2\xb7 answer in Orca", {"In Orca"}, 1, false, true};
+    CHECK(max_ui_question("b", "shown:w1", SHOWN.q, &SHOWN, 1, false, true, 0));
+    CHECK(max_m.view == MAX_VIEW_ATTENTION && !strcmp(max_m.attn_id, "b"));
+    max_ui_turn("b", "started", "npm test \xc2\xb7 answer in Orca", 0, 10);
+    CHECK(ask("b") && ask("b")->path == MAX_PATH_SHOWN && max_find("b")->state == MAX_ASKING);
+    CHECK(max_m.view == MAX_VIEW_ATTENTION && !strcmp(max_m.attn_id, "b"));
+    // A Harness question is still dropped by a turn that starts: its answer moved the agent on.
+    max_ui_question("a", "toolu_9", "Which?", &DB, 1, false, true, 20);
+    max_ui_turn("a", "started", "", 0, 30);
+    CHECK(!ask("a") && max_find("a")->state == MAX_WORKING);
+    max_ui_question_close("b");
+    CHECK(!ask("b") && max_find("b")->state != MAX_ASKING);
+}
+
 // An answer from Attention on its way: Attention moves on to the question waiting longest; with none waiting,
 // Overview. A step on is no answer; an answer that found no room in the outbox did not go, and the page stays.
 static void test_answered_attention_moves_on(void)
@@ -351,6 +371,7 @@ int main(void)
     test_only_ready_cards_answer();
     test_outbox_full();
     test_what_ends_a_question();
+    test_a_shown_wait_survives_its_line();
     test_answered_attention_moves_on();
     test_cards();
     printf("test_max_ask: %d checks passed\n", checks);
