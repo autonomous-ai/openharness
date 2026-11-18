@@ -1,3 +1,4 @@
+import { cloudQuestionClose, prepareCloudQuestion } from '../cloud/questions.js'
 import { describe, expect, it, vi } from 'vitest'
 import { TAB_KEY_OFF, TAB_RELAY_OFF } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
@@ -203,14 +204,19 @@ describe('the core API a light service runs on in its own process', () => {
     await expect(doors.checkpoint()).rejects.toThrow('CLOUD_PUBLICATION_UNAVAILABLE')
     ask.mockRejectedValueOnce(new Error('gone'))
     await expect(doors.publish([])).rejects.toThrow('gone')
-    await doors.ask('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] })
-    await doors.unask('cloud_1', 'cloud_q_1')
+    await doors.ask('cloud_1', 'cloud_q_1', prepareCloudQuestion('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] }))
+    await doors.unask('cloud_1', 'cloud_q_1', cloudQuestionClose('cloud_1', 'cloud_q_1'))
     ask.mockResolvedValueOnce({ error: 'SERVICE_UNAVAILABLE' })
-    await expect(doors.ask('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] })).rejects.toThrow('CLOUD_PUBLICATION_UNAVAILABLE')
+    await expect(doors.ask('cloud_1', 'cloud_q_1', prepareCloudQuestion('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] }))).rejects.toThrow('CLOUD_PUBLICATION_UNAVAILABLE')
     ask.mockResolvedValueOnce({ error: 'SERVICE_UNAVAILABLE' })
-    await expect(doors.unask('cloud_1', 'cloud_q_1')).rejects.toThrow('CLOUD_PUBLICATION_UNAVAILABLE')
+    await expect(doors.unask('cloud_1', 'cloud_q_1', cloudQuestionClose('cloud_1', 'cloud_q_1'))).rejects.toThrow('CLOUD_PUBLICATION_UNAVAILABLE')
+    for (const method of ['ask', 'unask'] as const) {
+      ask.mockResolvedValueOnce({ ok: false, error: 'CLOUD_QUESTION_INVALID' })
+      const value = method === 'ask' ? prepareCloudQuestion('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] }) : cloudQuestionClose('cloud_1', 'cloud_q_1')
+      expect(await doors[method]('cloud_1', 'cloud_q_1', value as never)).toEqual({ ok: false, error: 'CLOUD_QUESTION_INVALID' })
+    }
     expect(ask.mock.calls.map(([query]) => query)).toEqual(['cloud_publish', 'cloud_publish', 'cloud_publish',
-      'cloud_checkpoint', 'cloud_checkpoint', 'cloud_publish', 'cloud_ask', 'cloud_unask', 'cloud_ask', 'cloud_unask'])
+      'cloud_checkpoint', 'cloud_checkpoint', 'cloud_publish', 'cloud_ask', 'cloud_unask', 'cloud_ask', 'cloud_unask', 'cloud_ask', 'cloud_unask'])
   })
 
   it('acts on the core for an experiment: agents made, turns stopped and delivered, windows told, each asked', async () => {

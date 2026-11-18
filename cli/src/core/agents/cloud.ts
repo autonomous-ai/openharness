@@ -8,7 +8,7 @@
  *
  * The Cloud component prepares its cards. Core admits them against the published owners and forwards them.
  */
-import type { CloudCore, CloudPort, CloudResult, TurnCardFrame } from '../api.js'
+import type { CloudCore, CloudPort, CloudResult, CloudQuestionClose, CloudQuestionPresentation, TurnCardFrame } from '../api.js'
 import { CLOUD_DOWN } from '../api.js'
 import { cloudAgentFrame, cloudFingerprint, cloudHarnessIn, isCloudAgent, type CloudAgentFrame, type CloudHarness } from '../../lib/cloudAgents.js'
 import type { QuestionAnswerResult } from '../../lib/questionController.js'
@@ -43,12 +43,44 @@ function admittedCards(value: unknown, owners: ReadonlyMap<string, CloudHarness>
   })
 }
 
+const fields = (value: unknown, keys: string[]): value is Record<string, unknown> => !!value && typeof value === 'object'
+  && !Array.isArray(value) && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key))
+function admittedClose(value: unknown, agentId: string, requestId: string): value is CloudQuestionClose {
+  if (!fields(value, ['type', 'agentId', 'dbSessionId', 'payload']) || value.type !== 'commander_question_close'
+    || value.agentId !== agentId || value.dbSessionId !== agentId || !fields(value.payload, ['requestId'])
+    || value.payload.requestId !== requestId) return false
+  return Buffer.byteLength(JSON.stringify(value)) <= 1024
+}
+function admittedQuestion(value: unknown, agentId: string, requestId: string): value is CloudQuestionPresentation {
+  if (!fields(value, ['frame', 'close', 'dial']) || typeof value.dial !== 'boolean' || !admittedClose(value.close, agentId, requestId)) return false
+  const frame = value.frame
+  if (!fields(frame, ['type', 'agentId', 'dbSessionId', 'payload']) || frame.type !== 'commander_question'
+    || frame.agentId !== agentId || frame.dbSessionId !== agentId || !fields(frame.payload, ['requestId', 'questions', 'notification'])
+    || frame.payload.requestId !== requestId || !fields(frame.payload.notification, ['id', 'kind'])
+    || frame.payload.notification.id !== requestId || frame.payload.notification.kind !== 'needsYou'
+    || !Array.isArray(frame.payload.questions) || frame.payload.questions.length !== 1) return false
+  const question = frame.payload.questions[0]
+  if (!fields(question, ['key', 'q', 'options', 'multi', 'canText']) || question.key !== 'answer'
+    || typeof question.q !== 'string' || question.q.length > 500 || question.multi !== false || question.canText !== true
+    || !Array.isArray(question.options) || question.options.length > 6
+    || !Array.from(question.options).every(option => typeof option === 'string' && option.length > 0 && option.length <= 500)
+    || value.dial && !question.options.length) return false
+  return Buffer.byteLength(JSON.stringify(value)) <= 22 * 1024
+}
+
 export function createCloudAgents({ port, clients, openQuestions, log = (line) => console.log(line) }: CloudAgentsDeps) {
   let harnesses = new Map<string, CloudHarness>()
-  /** Each open question's agent, by request id: an answer to one of these goes to the service. */
-  const asked = new Map<string, string>()
-  /** The questions the dial was shown: only those with choices, since its question screen takes no words. */
-  const onDial = new Set<string>()
+  /** One accepted request per owner; its original close destination survives reconnects and replacement. */
+  const asked = new Map<string, { agentId: string; close: CloudQuestionClose; dial: boolean }>()
+  const retire = (requestId: string): void => {
+    const prior = asked.get(requestId)!
+    asked.delete(requestId)
+    if (prior.dial) clients.sendCommander(prior.close)
+    clients.sendLocal(prior.close)
+    if ((openQuestions.get(prior.agentId)?.payload as { requestId?: unknown } | undefined)?.requestId === requestId) openQuestions.delete(prior.agentId)
+  }
+  const currentRequest = (agentId: string): string | undefined => (openQuestions.get(agentId)?.payload as { requestId?: string } | undefined)?.requestId
+  const invalidQuestion = () => { log('[cloud] CLOUD_QUESTION_INVALID'); return { ok: false, error: 'CLOUD_QUESTION_INVALID' } as const }
 
   const sync = (harness: CloudHarness): void => {
     const frame: Frame = { type: 'agent_synced', payload: { agent: cloudAgentFrame(harness) } }
@@ -85,34 +117,38 @@ export function createCloudAgents({ port, clients, openQuestions, log = (line) =
         if (frame) clients.sendCommander({ type: frame.type, agentId: frame.agentId,
           dbSessionId: frame.dbSessionId, ...(frame.name !== undefined ? { name: frame.name } : {}), payload: frame.payload })
       }
-      for (const agentId of before.keys()) if (!next.has(agentId)) gone(agentId)
+      for (const agentId of before.keys()) if (!next.has(agentId)) {
+        const requestId = currentRequest(agentId)
+        if (requestId && asked.has(requestId)) retire(requestId)
+        gone(agentId)
+      }
       return { ok: true }
     },
     ask(agentId, requestId, question) {
-      if (!harnesses.has(agentId) || typeof requestId !== 'string' || !requestId.startsWith('cloud_q_') || typeof question?.text !== 'string') return
-      const choices = (Array.isArray(question.choices) ? question.choices : []).filter((choice): choice is string => typeof choice === 'string' && !!choice).slice(0, 6)
-      asked.set(requestId, agentId)
-      const frame: Frame = {
-        type: 'commander_question', agentId, dbSessionId: agentId,
-        // As a terminal agent's question (core/questions.ts): one key, its choices, and free text, which the
-        // windows take and the dial does not.
-        payload: { requestId, questions: [{ key: 'answer', q: question.text.slice(0, 500), options: choices, multi: false, canText: true }], notification: { id: requestId, kind: 'needsYou' } },
-      }
-      if (choices.length) {
-        onDial.add(requestId)
-        clients.sendCommander(frame)
-      }
-      clients.sendLocal(frame)
-      openQuestions.set(agentId, frame)
-      log(`[cloud] ${agentId} asking the person · req=${requestId}`)
+      if (!harnesses.has(agentId) || typeof requestId !== 'string' || !requestId.startsWith('cloud_q_') || requestId.length > 80
+        || !admittedQuestion(question, agentId, requestId)) return invalidQuestion()
+      const prior = asked.get(requestId)
+      if (prior && (prior.agentId !== agentId || question.dial && !prior.dial
+        || JSON.stringify(openQuestions.get(agentId)) !== JSON.stringify(question.frame))) return invalidQuestion()
+      // Inline callers retain their own objects. Keep only admitted immutable wire bytes, as IPC already does.
+      const presentation: CloudQuestionPresentation = JSON.parse(JSON.stringify(question))
+      const oldRequest = currentRequest(agentId)
+      if (oldRequest && oldRequest !== requestId && asked.has(oldRequest)) retire(oldRequest)
+      asked.set(requestId, prior ?? { agentId, close: presentation.close, dial: presentation.dial })
+      if (presentation.dial) clients.sendCommander(presentation.frame)
+      clients.sendLocal(presentation.frame)
+      openQuestions.set(agentId, presentation.frame as unknown as Record<string, unknown>)
+      log('[cloud] question accepted')
+      return { ok: true }
     },
-    unask(agentId, requestId) {
-      if (asked.get(requestId) !== agentId) return
-      asked.delete(requestId)
-      const frame: Frame = { type: 'commander_question_close', agentId, dbSessionId: agentId, payload: { requestId } }
-      if (onDial.delete(requestId)) clients.sendCommander(frame)
-      clients.sendLocal(frame)
-      openQuestions.delete(agentId)
+    unask(agentId, requestId, close) {
+      if (typeof agentId !== 'string' || !agentId.startsWith('cloud_') || agentId.length > 80 || typeof requestId !== 'string' || !requestId.startsWith('cloud_q_') || requestId.length > 80
+        || !admittedClose(close, agentId, requestId)) return invalidQuestion()
+      const prior = asked.get(requestId)
+      if (!prior) return { ok: true }
+      if (prior.agentId !== agentId || !harnesses.has(agentId)) return invalidQuestion()
+      retire(requestId)
+      return { ok: true }
     },
   }
 
@@ -167,8 +203,8 @@ export function createCloudAgents({ port, clients, openQuestions, log = (line) =
     /** `question_response` to a cloud harness's question, answered as a terminal agent's is; null when it is not one. */
     answer(payload: { requestId?: unknown; answers?: unknown }): Promise<QuestionAnswerResult> | null {
       const requestId = typeof payload.requestId === 'string' ? payload.requestId : ''
-      const agentId = asked.get(requestId)
-      if (!agentId) return null
+      const agentId = asked.get(requestId)?.agentId
+      if (!agentId || !harnesses.has(agentId) || currentRequest(agentId) !== requestId) return null
       const answers = Object.fromEntries(Object.entries(payload.answers && typeof payload.answers === 'object' ? payload.answers : {})
         .filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
       return call((cloud) => cloud.answer(agentId, requestId, answers), DOWN)

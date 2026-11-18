@@ -235,11 +235,15 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
         },
         ask: async (agentId, requestId, question) => {
           const result = await ask('cloud_ask', { agentId, questionId: requestId, question })
-          if (result.error) throw new Error('CLOUD_PUBLICATION_UNAVAILABLE')
+          if (result.ok === true) return { ok: true }
+          if (result.ok === false && result.error === 'CLOUD_QUESTION_INVALID') return { ok: false, error: 'CLOUD_QUESTION_INVALID' }
+          throw new Error('CLOUD_PUBLICATION_UNAVAILABLE')
         },
-        unask: async (agentId, requestId) => {
-          const result = await ask('cloud_unask', { agentId, questionId: requestId })
-          if (result.error) throw new Error('CLOUD_PUBLICATION_UNAVAILABLE')
+        unask: async (agentId, requestId, close) => {
+          const result = await ask('cloud_unask', { agentId, questionId: requestId, close })
+          if (result.ok === true) return { ok: true }
+          if (result.ok === false && result.error === 'CLOUD_QUESTION_INVALID') return { ok: false, error: 'CLOUD_QUESTION_INVALID' }
+          throw new Error('CLOUD_PUBLICATION_UNAVAILABLE')
         },
       } satisfies CloudCore,
     } : {}),

@@ -1,13 +1,15 @@
 /** The Cloud component's bounded output owner. Core retains no receipts or notification history. */
 import { createHash } from 'node:crypto'
-import type { CloudCore } from '../core/api.js'
+import type { CloudCore, CloudQuestionClose, CloudQuestionPresentation } from '../core/api.js'
 import { cloudHarnessIn, type CloudHarness } from '../lib/cloudAgents.js'
+import { cloudQuestionClose, prepareCloudQuestion } from './questions.js'
 import { emptyPresentation, prepareCloudCards, type CloudPresentation } from './cards.js'
 
 export interface CloudJournal { version: 1; accepted: CloudPresentation; pending: CloudPresentation | null; checksum: string }
 type Question = { agentId: string; requestId: string; question: { text: string; choices: string[] } }
 type Action = { kind: 'publish'; changed: CloudHarness[]; removed: string[] }
-  | { kind: 'ask'; value: Question } | { kind: 'unask'; agentId: string; requestId: string }
+  | { kind: 'ask'; value: { agentId: string; requestId: string; question: CloudQuestionPresentation } }
+  | { kind: 'unask'; agentId: string; requestId: string; close: CloudQuestionClose }
 interface Queued { action: Action; bytes: number }
 export interface CloudReservation { actions: number; bytes: number; released: boolean }
 export const CLOUD_OUTPUT_ACTIONS = 64
@@ -15,7 +17,8 @@ export const CLOUD_OUTPUT_BYTES = 6 * 1024 * 1024
 // A normalized row has at most eight links, 4,000 answer characters and two 2,000-character card parts.
 // JSON escapes may cost six bytes per character. An operation emits at most two rows and three questions.
 const ROW_BYTES = 192 * 1024
-const RESERVATION_BYTES = 448 * 1024
+// Two maximal rows plus three prepared question/close pairs and their queue envelopes.
+const RESERVATION_BYTES = 512 * 1024
 const RESERVATION_ACTIONS = 6
 const WAIT_MS = 10_000
 const checksum = ({ version, accepted, pending }: Omit<CloudJournal, 'checksum'>): string =>
@@ -103,9 +106,14 @@ export function createCloudPublication(options: {
             pending = null
           } else if (item.action.kind === 'ask') {
             const { agentId, requestId, question } = item.action.value
-            await within(options.core.ask(agentId, requestId, question))
-          } else await within(options.core.unask(item.action.agentId, item.action.requestId))
-          if (generation !== epoch) return
+            const result = await within(options.core.ask(agentId, requestId, question))
+            if (generation !== epoch) return
+            if (!result.ok) { fail('CLOUD_QUESTION_INVALID', true); return }
+          } else {
+            const result = await within(options.core.unask(item.action.agentId, item.action.requestId, item.action.close))
+            if (generation !== epoch) return
+            if (!result.ok) { fail('CLOUD_QUESTION_INVALID', true); return }
+          }
           queue.shift(); bytes -= item.bytes
         }
       } catch { if (generation === epoch) fail('CLOUD_PUBLICATION_UNAVAILABLE') }
@@ -167,8 +175,8 @@ export function createCloudPublication(options: {
       reservation.released = true
     },
     publish,
-    ask(value: Question, reservation?: CloudReservation): void { if (!recovering && !hold) append({ kind: 'ask', value }, reservation) },
-    unask(agentId: string, requestId: string, reservation?: CloudReservation): void { if (!recovering && !hold) append({ kind: 'unask', agentId, requestId }, reservation) },
+    ask(value: Question, reservation?: CloudReservation): void { if (!recovering && !hold) append({ kind: 'ask', value: { ...value, question: prepareCloudQuestion(value.agentId, value.requestId, value.question) } }, reservation) },
+    unask(agentId: string, requestId: string, reservation?: CloudReservation): void { if (!recovering && !hold) append({ kind: 'unask', agentId, requestId, close: cloudQuestionClose(agentId, requestId) }, reservation) },
     async connect(): Promise<void> {
       if (stopped) return
       const generation = ++epoch
@@ -185,7 +193,7 @@ export function createCloudPublication(options: {
         pending = null; hold = null; unavailable = false; recovering = false
         // Unsent history follows the previous reconnect contract: the provider's current state and questions.
         publish(options.snapshot(), undefined, true)
-        for (const value of options.questions()) append({ kind: 'ask', value })
+        for (const value of options.questions()) append({ kind: 'ask', value: { ...value, question: prepareCloudQuestion(value.agentId, value.requestId, value.question) } })
       } catch { if (generation === epoch) fail('CLOUD_PUBLICATION_UNAVAILABLE') }
       finally { if (generation === epoch) recovering = false }
     },

@@ -906,8 +906,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const cloudDoors: CloudCore = {
     publish: (harnesses, cards) => cloudAgents?.doors.publish(harnesses, cards) ?? { ok: false, error: 'CLOUD_PUBLICATION_INVALID' },
     checkpoint: () => { if (!cloudAgents) throw new Error('CLOUD_PUBLICATION_UNAVAILABLE'); return cloudAgents.doors.checkpoint() },
-    ask: (agentId, requestId, question) => cloudAgents?.doors.ask(agentId, requestId, question),
-    unask: (agentId, requestId) => cloudAgents?.doors.unask(agentId, requestId),
+    ask: (agentId, requestId, question) => cloudAgents?.doors.ask(agentId, requestId, question) ?? { ok: false, error: 'CLOUD_QUESTION_INVALID' },
+    unask: (agentId, requestId, close) => cloudAgents?.doors.unask(agentId, requestId, close) ?? { ok: false, error: 'CLOUD_QUESTION_INVALID' },
   }
   // Shared tabs' relay, a socket per shared tab held by the gateway (gateway/tabRelay.ts), and which of them the core saw
   // opened: opened again after a gateway-only restart, closed when Agent Messages' process goes (core/gatewayLink.ts).

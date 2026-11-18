@@ -1329,15 +1329,31 @@ export const MESSAGES_FALLBACKS: PortFallbacks<MessagesPort> = { canWrite: false
  */
 export type CloudPublicationResult = { ok: true } | { ok: false; error: 'CLOUD_PUBLICATION_INVALID' }
 
+/** Component-prepared public question bytes, admitted only for its current accepted owner. */
+export interface CloudQuestionFrame {
+  type: 'commander_question'
+  agentId: string
+  dbSessionId: string
+  payload: { requestId: string; questions: [{ key: 'answer'; q: string; options: string[]; multi: false; canText: true }]; notification: { id: string; kind: 'needsYou' } }
+}
+export interface CloudQuestionClose {
+  type: 'commander_question_close'
+  agentId: string
+  dbSessionId: string
+  payload: { requestId: string }
+}
+export interface CloudQuestionPresentation { frame: CloudQuestionFrame; close: CloudQuestionClose; dial: boolean }
+export type CloudQuestionResult = { ok: true } | { ok: false; error: 'CLOUD_QUESTION_INVALID' }
+
 export interface CloudCore {
   /** Every cloud harness and its component-prepared cards, admitted together under the private worker cohort. */
   publish(harnesses: CloudHarness[], cards?: TurnCardFrame[]): CloudPublicationResult | Promise<CloudPublicationResult>
   /** Recovery only: fingerprint the current accepted owner rows; no publication history is retained here. */
   checkpoint(): string | Promise<string>
   /** One waits on the person: shown wherever questions show; the answer comes back through `CloudPort.answer`. */
-  ask(agentId: string, requestId: string, question: { text: string; choices: string[] }): void
+  ask(agentId: string, requestId: string, question: CloudQuestionPresentation): CloudQuestionResult | Promise<CloudQuestionResult>
   /** That question is no longer asked. */
-  unask(agentId: string, requestId: string): void
+  unask(agentId: string, requestId: string, close: CloudQuestionClose): CloudQuestionResult | Promise<CloudQuestionResult>
 }
 
 /** What the cloud service answers the core: done, or why not, in words a person reads. */

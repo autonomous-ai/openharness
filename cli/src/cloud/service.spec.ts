@@ -1,3 +1,4 @@
+import { cloudQuestionClose, prepareCloudQuestion } from './questions.js'
 /**
  * The cloud service against scripted makers: never a real Fo, Devin or Cursor, and a throwaway data folder.
  */
@@ -24,7 +25,7 @@ beforeEach(() => {
   clock = Date.parse('2026-10-11T10:00:00Z')
   timers = new Map()
   nextTimer = 1
-  doors = { checkpoint: vi.fn(() => cloudFingerprint([])), publish: vi.fn(() => ({ ok: true as const })), ask: vi.fn(), unask: vi.fn() }
+  doors = { checkpoint: vi.fn(() => cloudFingerprint([])), publish: vi.fn(() => ({ ok: true as const })), ask: vi.fn(() => ({ ok: true as const })), unask: vi.fn(() => ({ ok: true as const })) }
 })
 afterEach(() => rmSync(dataDir, { recursive: true, force: true }))
 
@@ -143,7 +144,7 @@ describe('a cloud harness', () => {
     )
     await tick()
     expect(published()[0]).toMatchObject({ state: 'needs_input', activity: 'Reading code', messages: 3 })
-    expect(doors.ask).toHaveBeenCalledWith(agentId, expect.stringMatching(/^cloud_q_/), { text: 'Which branch?', choices: ['main', 'dev'] })
+    expect(doors.ask).toHaveBeenCalledWith(agentId, expect.stringMatching(/^cloud_q_/), prepareCloudQuestion(agentId, doors.ask.mock.calls[0][1] as string, { text: 'Which branch?', choices: ['main', 'dev'] }))
     const requestId = doors.ask.mock.calls[0][1] as string
     // A waiting harness is looked at less often.
     expect([...timers.values()].at(-1)?.ms).toBe(30_000)
@@ -151,7 +152,7 @@ describe('a cloud harness', () => {
     expect(await service.port.answer(agentId, 'cloud_q_stale', { answer: 'main' })).toMatchObject({ ok: false, error: 'STALE_QUESTION' })
     expect(await service.port.answer(agentId, requestId, { answer: 'main' })).toEqual({ ok: true })
     expect(devin.send).toHaveBeenCalledWith({ id: 'devin-1' }, 'main')
-    expect(doors.unask).toHaveBeenCalledWith(agentId, requestId)
+    expect(doors.unask).toHaveBeenCalledWith(agentId, requestId, cloudQuestionClose(agentId, requestId))
     expect(published()[0]).toMatchObject({ state: 'working', messages: 4 })
 
     devin.looks.push({ messages: [{ id: 'm3', text: 'Opened #42.', at: '2026-10-11T10:05:00Z' }], state: 'idle', links: [{ label: 'Pull request #42', url: 'https://github.com/acme/api/pull/42' }], branch: 'devin/fix' })
@@ -297,7 +298,7 @@ describe('a cloud harness', () => {
     expect([...timers.values()][0].ms).toBe(1_000)
     await tick()
     expect(doors.ask).toHaveBeenCalledTimes(1)
-    expect(doors.ask.mock.calls[0][2]).toEqual({ text: 'Devin Cloud is waiting for you.', choices: [] })
+    expect(doors.ask.mock.calls[0][2]).toEqual(prepareCloudQuestion(doors.ask.mock.calls.at(-1)![0] as string, doors.ask.mock.calls.at(-1)![1] as string, { text: 'Devin Cloud is waiting for you.', choices: [] }))
     await second.republish()
     expect(doors.publish).toHaveBeenCalled()
     await vi.waitFor(() => expect(doors.ask).toHaveBeenCalledTimes(2))
@@ -326,7 +327,7 @@ describe('a cloud harness', () => {
     for (const [, timer] of timers) timer.fn()
     await new Promise((resolve) => setTimeout(resolve, 0))
     await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(doors.ask.mock.calls.at(-1)![2]).toEqual({ text: 'Shall I also update the docs?', choices: [] })
+    expect(doors.ask.mock.calls.at(-1)![2]).toEqual(prepareCloudQuestion(doors.ask.mock.calls.at(-1)![0] as string, doors.ask.mock.calls.at(-1)![1] as string, { text: 'Shall I also update the docs?', choices: [] }))
     service.stop()
   })
 
@@ -500,8 +501,33 @@ describe('what the review found', () => {
     const again = doors.ask.mock.calls.at(-1)![1] as string
     devin.send = vi.fn(async () => { throw new CloudError('BUSY', 'Devin Cloud is still working.') })
     expect(await service.port.answer(agentId, again, { answer: 'yes' })).toMatchObject({ ok: false, error: 'BUSY' })
-    expect(doors.ask.mock.calls.at(-1)![2]).toEqual({ text: 'And the tests?', choices: [] })
+    expect(doors.ask.mock.calls.at(-1)![2]).toEqual(prepareCloudQuestion(agentId, doors.ask.mock.calls.at(-1)![1] as string, { text: 'And the tests?', choices: [] }))
     service.stop()
+  })
+
+  it('keeps a newer provider question when an older answer finishes after a queued look', async () => {
+    const devin = maker(), service = start({ 'devin-cloud': devin })
+    try {
+      await service.port.create({ engine: 'devin-cloud', prompt: 'fix it', repository: 'acme/api' })
+      const agentId = published()[0].agentId
+      devin.looks.push({ messages: [{ id: 'old', text: 'Old?', at: 'x' }], state: 'needs_input', question: { text: 'Old?', choices: ['Yes'] } })
+      await tick()
+      const oldRequest = doors.ask.mock.calls.at(-1)![1] as string
+      let entered!: () => void, reject!: (error: Error) => void
+      const started = new Promise<void>(resolve => { entered = resolve })
+      devin.send = vi.fn(() => { entered(); return new Promise<void>((_resolve, no) => { reject = no }) })
+      const answering = service.port.answer(agentId, oldRequest, { answer: 'Yes' })
+      await started
+      devin.looks.push({ messages: [{ id: 'new', text: 'New?', at: 'x' }], state: 'needs_input', question: { text: 'New?', choices: ['No'] } })
+      const due = [...timers.values()]; timers.clear(); for (const timer of due) timer.fn()
+      reject(new CloudError('BUSY', 'Fixture provider busy'))
+      expect(await answering).toMatchObject({ ok: false, error: 'BUSY' })
+      await vi.waitFor(() => expect(doors.ask.mock.calls.at(-1)![2].frame.payload.questions[0].q).toBe('New?'))
+      const newRequest = doors.ask.mock.calls.at(-1)![1] as string
+      expect(newRequest).not.toBe(oldRequest)
+      expect(await service.port.answer(agentId, oldRequest, { answer: 'Yes' })).toMatchObject({ ok: false, error: 'STALE_QUESTION' })
+      expect(doors.unask.mock.calls.filter(([, request]) => request === newRequest)).toEqual([])
+    } finally { service.stop() }
   })
 
   it('does not ask again the wait the person just answered', async () => {

@@ -13,7 +13,7 @@ const experiments = new Set(['orchestrator'])
 
 describe('the cloud agents\' doors', () => {
   it('are the cloud service\'s alone, and carry its harnesses and questions to the core', async () => {
-    const cloud = { checkpoint: vi.fn(() => 'a'.repeat(64)), publish: vi.fn(() => ({ ok: true as const })), ask: vi.fn(), unask: vi.fn() }
+    const cloud = { checkpoint: vi.fn(() => 'a'.repeat(64)), publish: vi.fn(() => ({ ok: true as const })), ask: vi.fn(() => ({ ok: true as const })), unask: vi.fn(() => ({ ok: true as const })) }
     const core = fakeCore({ cloud })
     const both = new Set(['orchestrator', 'cloud'])
     const ask = (query: string, payload: Record<string, unknown>) => answerExperimentQuery(core, both, 'cloud', query, payload,
@@ -26,9 +26,9 @@ describe('the cloud agents\' doors', () => {
     await ask('cloud_ask', { agentId: 'cloud_1', questionId: 'cloud_q_1', requestId: 'the-link-s-own', question: { text: 'Which?', choices: [] } })
     expect(cloud.ask).toHaveBeenCalledWith('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] })
     await ask('cloud_ask', {})
-    expect(cloud.ask).toHaveBeenLastCalledWith('', '', {})
+    expect(cloud.ask).toHaveBeenLastCalledWith('', '', undefined)
     await ask('cloud_unask', { agentId: 'cloud_1', questionId: 'cloud_q_1' })
-    expect(cloud.unask).toHaveBeenCalledWith('cloud_1', 'cloud_q_1')
+    expect(cloud.unask).toHaveBeenCalledWith('cloud_1', 'cloud_q_1', undefined)
     expect(await answerExperimentQuery(core, both, 'orchestrator', 'cloud_publish', {})).toEqual({ error: 'NOT_CLOUD' })
     expect(await answerExperimentQuery(fakeCore(), both, 'cloud', 'cloud_publish', {})).toEqual({ error: 'NOT_CLOUD' })
   })

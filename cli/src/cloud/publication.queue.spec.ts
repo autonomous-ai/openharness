@@ -296,3 +296,46 @@ it('revokes a question acknowledgement that resolved just before its async conti
     expect(f.events.filter(event => event === 'summary:cloud_a')).toHaveLength(1)
   } finally { f.close() }
 })
+
+it.each(['ask', 'unask'] as const)('holds a refused %s with a named visible failure instead of acknowledging it', async kind => {
+  const f = setup()
+  try {
+    await f.connect(); f.rows([row()]); await vi.waitFor(() => expect(f.publication.state().pending).toBeNull())
+    f.doors[kind] = () => ({ ok: false, error: 'CLOUD_QUESTION_INVALID' })
+    if (kind === 'ask') f.publication.ask({ agentId: 'cloud_a', requestId: 'cloud_q_refused', question: { text: 'Choice', choices: ['Yes'] } })
+    else f.publication.unask('cloud_a', 'cloud_q_refused')
+    await vi.waitFor(() => expect(f.publication.status()).toBe('CLOUD_QUESTION_INVALID'))
+    expect(f.publication.reserve()).toBeNull()
+    expect(f.log).toHaveBeenCalledWith('[cloud] CLOUD_QUESTION_INVALID')
+  } finally { f.close() }
+})
+it('revokes a close acknowledgement that resolved just before its async continuation', async () => {
+  const f = setup()
+  try {
+    await f.connect(); f.rows([row()]); await vi.waitFor(() => expect(f.publication.state().pending).toBeNull())
+    f.publication.unask('cloud_a', 'cloud_q_race')
+    await Promise.resolve()
+    await f.connect()
+    f.rows([done()]); await vi.waitFor(() => expect(f.publication.state().pending).toBeNull())
+    expect(f.events.filter(event => event === 'summary:cloud_a')).toHaveLength(1)
+  } finally { f.close() }
+})
+
+it('does not hold valid output when an owner withdrawal is followed by its already-retired close', async () => {
+  const f = setup()
+  try {
+    await f.connect(); f.rows([row()]); await vi.waitFor(() => expect(f.publication.state().pending).toBeNull())
+    f.publication.ask({ agentId: 'cloud_a', requestId: 'cloud_q_removed', question: { text: 'Choose', choices: ['Yes'] } })
+    await vi.waitFor(() => expect(f.events.at(-1)).toBe('commander_question'))
+    let observed!: (value: unknown) => void
+    const closed = new Promise(resolve => { observed = resolve }), unask = f.doors.unask
+    f.doors.unask = (...args) => { const result = unask(...args); observed(result); return result }
+    f.rows([])
+    f.publication.unask('cloud_a', 'cloud_q_removed')
+    f.rows([row('cloud_b')])
+    expect(await closed).toEqual({ ok: true })
+    await vi.waitFor(() => expect(f.core.owns('cloud_b')).toBe(true))
+    expect(f.publication.status()).toBeNull()
+    expect(f.events.filter(event => event === 'commander_question_close')).toHaveLength(1)
+  } finally { f.close() }
+})

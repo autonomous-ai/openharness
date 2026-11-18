@@ -1,3 +1,4 @@
+import { cloudQuestionClose, prepareCloudQuestion } from '../cloud/questions.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { runServiceProcess, type CoreConnection, type ServiceProcessOptions } from './process.js'
 import { runCloudService } from './cloudProcess.js'
@@ -38,11 +39,11 @@ describe('cloud agents in their own process', () => {
     options!.onConnected!({ query } as unknown as CoreConnection)
     expect(republish).toHaveBeenCalled()
     await core!.cloud!.publish([])
-    core!.cloud!.ask('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] })
-    core!.cloud!.unask('cloud_1', 'cloud_q_1')
+    await core!.cloud!.ask('cloud_1', 'cloud_q_1', prepareCloudQuestion('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] }))
+    await core!.cloud!.unask('cloud_1', 'cloud_q_1', cloudQuestionClose('cloud_1', 'cloud_q_1'))
     expect(query.mock.calls).toEqual([
-      ['cloud_publish', { harnesses: [], cards: [] }], ['cloud_ask', { agentId: 'cloud_1', questionId: 'cloud_q_1', question: { text: 'Which?', choices: [] } }],
-      ['cloud_unask', { agentId: 'cloud_1', questionId: 'cloud_q_1' }],
+      ['cloud_publish', { harnesses: [], cards: [] }], ['cloud_ask', { agentId: 'cloud_1', questionId: 'cloud_q_1', question: prepareCloudQuestion('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] }) }],
+      ['cloud_unask', { agentId: 'cloud_1', questionId: 'cloud_q_1', close: cloudQuestionClose('cloud_1', 'cloud_q_1') }],
     ])
     options!.onDisconnected!()
     expect(disconnected).toHaveBeenCalledOnce()

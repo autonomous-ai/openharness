@@ -79,6 +79,7 @@ const OUTPUT_DETAILS: Readonly<Record<string, string>> = {
   CLOUD_PUBLICATION_UNAVAILABLE: 'Cloud output is waiting for a new connection. If it stays unavailable, run harness start --restart.',
   CLOUD_PUBLICATION_BUSY: 'Cloud output is busy. Try again after pending work completes.',
   CLOUD_PUBLICATION_LIMIT: 'Cloud output reached its limit. Restart Harness; if it remains unavailable, keep its Cloud data and contact support.',
+  CLOUD_QUESTION_INVALID: 'Cloud question output was refused. Restart Harness; if it happens again, contact support.',
   CLOUD_PUBLICATION_INVALID: 'Cloud output was refused. Restart Harness; if it happens again, contact support.',
   CLOUD_STATE_UNAVAILABLE: 'Cloud saved data could not be read. Keep the files and restore a known-good backup or contact support.',
 }
