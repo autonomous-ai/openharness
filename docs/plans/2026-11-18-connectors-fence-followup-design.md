@@ -68,7 +68,7 @@ the path by name after the check.
    link, else refused (a hard link made after the open may be the name `realpath` took).
 5. Walk `real`'s ancestors upward (`stat`, bigint). An ancestor whose identity is a forbidden folder's: refused. The
    temporary folder's identity reached first: stop, allowed (the rule #4442 set: inside Windows' temporary folder,
-   only a forbidden folder inside it fences the file).
+   only a forbidden folder inside it fences the file). An `ino` of `0` refuses below the root only (see the calls).
 6. Read the content from the descriptor; close it in every case.
 
 Forbidden folders: as today (`forbiddenDirs`: HOME, USERPROFILE, `os.homedir()` and the account's home from
@@ -136,8 +136,10 @@ N/A: nothing is stored, synced or exposed; the change narrows what an existing c
   drive, exists only if someone made it, and a mapped drive's connection is already open. A file reached that way is
   refused at step 4 (its resolved path is a share); a forbidden folder reached that way is `stat`ed like any other.
 - **Identity where `ino` is unreliable.** `dev`+`ino` is trusted as Windows, git and Node trust it. An `ino` of `0`
-  on the file or on any ancestor (some FUSE and network file systems) refuses the upload ("cannot check upload"): no
-  string fallback.
+  on the file or on any ancestor below the root (some FUSE and network file systems) refuses the upload ("cannot check
+  upload"): no string fallback. The root is the exception: Windows' FAT driver gives a drive's root (a USB stick's, an
+  SD card's) file ID `0`, so the root is still compared by `dev`+`ino` but not refused for it. The file is checked
+  first, so a file system that gives every file `0` is still refused.
 - **Temporary folder.** The temporary folders are `<account home>\AppData\Local\Temp` (as today) and, when it exists,
   `Temp` under every registry `Local AppData` that is fenced (both keys'); the walk stops allowed at the first of
   them.

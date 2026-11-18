@@ -114,14 +114,16 @@ export function identities(dirs: (string | undefined)[], identify: (path: string
  * folder on Linux each spell one folder in a way a compare of paths reads as another. Inside a temporary folder only a
  * forbidden folder inside it fences the file: AppData, which holds Windows' own, does not. So each folder is asked
  * "forbidden?" before "temporary?", and a forbidden folder that is a temporary one still fences. A folder that cannot be
- * read, or has the number 0 some file systems give every file, cannot be told from a forbidden one.
+ * read, or has the number 0 some file systems give every file, cannot be told from a forbidden one. The root is the
+ * exception: Windows' FAT driver gives a drive's root the number 0 and every other folder its own, so the root is told
+ * apart by its device. The file itself comes first, so a file system with no numbers is still refused.
  */
 export function walk(real: string, identify: (path: string) => Identity | undefined, forbidden: Identity[], temps: Identity[],
   p: PlatformPath = platformPath): Verdict {
   const among = (ids: Identity[], id: Identity): boolean => ids.some(other => other.dev === id.dev && other.ino === id.ino)
   for (let path = real; ; path = p.dirname(path)) {
     const id = identify(path)
-    if (!id || id.ino === 0n) return 'unknown'
+    if (!id || (id.ino === 0n && p.dirname(path) !== path)) return 'unknown'
     if (among(forbidden, id)) return 'fenced'
     if (among(temps, id) || p.dirname(path) === path) return 'open'
   }
