@@ -187,6 +187,22 @@ describe('a question the dial cannot answer', () => {
     }
   })
 
+  it('is kept under the bound an answerable one has: an id past it keeps nothing, not even the summary', () => {
+    // 8 kB of id; and 1400 control characters, 1.4 kB as they came but 8.4 kB as JSON writes them, past a frame.
+    for (const id of ['x'.repeat(8000), '\u0001'.repeat(1400)]) {
+      const inbox = new QuestionInbox()
+      expect(inbox.set('a', 'q', question())).toBe(true)
+      for (const raw of [[{ ...one, options: [] }], question()]) {
+        expect(inbox.set('a', id, raw)).toBe(false)
+        expect(inbox.read('a').ok).toBe(false)              // the earlier question is replaced, by nothing
+        expect(inbox.open()).toEqual([])
+      }
+      expect(inbox.set('a', id, [{ ...one, options: [] }], true)).toBe(false)
+      expect(inbox.open()).toEqual([])
+      expect(inbox.close('a', id)).toBe(true)
+    }
+  })
+
   it('is readable and refuses every answer', async () => {
     const inbox = new QuestionInbox(), send = vi.fn(async () => ({ ok: true as const }))
     inbox.set('a', 'q', [{ ...one, options: [] }])

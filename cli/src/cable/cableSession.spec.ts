@@ -3958,6 +3958,25 @@ describe('hello capabilities', () => {
     }
   })
 
+  it('a refused question whose id is past the bound an answerable one has is not sent, nor filed as a row', async () => {
+    const plan = [{ key: 'k', q: 'Approve this plan?', options: [] }]
+    for (const hello of [{ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0', questionTier: 'v1' }, { ...PRO_HELLO }]) {
+      const log = vi.fn()
+      const { session, port } = await connect(richHost({ log }))
+      try {
+        port.say(hello)
+        await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+        port.sent.length = 0
+        await session.question('a1', 'x'.repeat(8000), plan)
+        await session.replaceNotifications([])
+        await session.replaceNotifications([])
+        expect(port.types()).toEqual(['notif.replace', 'notif.replace'])
+        for (const drawer of ofType(port, 'notif.replace')) expect(drawer.items).toEqual([])
+        expect(log.mock.calls.map(([line]) => String(line)).filter((line) => line.includes('dropped'))).toEqual([])
+      } finally { await session.stop() }
+    }
+  })
+
   it('a question delivered again while its row is being written is sent once', async () => {
     const { session, port } = await connect(richHost())
     const ask = [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }]
