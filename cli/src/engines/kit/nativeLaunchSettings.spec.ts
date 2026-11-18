@@ -31,7 +31,7 @@ beforeEach(() => {
 })
 afterEach(() => { effects.active = false; rmSync(root, { recursive: true, force: true }) })
 const options = () => ({ dataDir, runtimeNode: process.execPath, platform: 'darwin' as const, gitBash: null,
-  owner: { machineId: 'machine', accountId: 'account' }, current: () => true })
+  owner: { machineId: 'machine', accountId: 'account' }, current: () => true, nativeCurrent: () => true })
 const setup: Pick<NativeSetup, 'prepareFiles'> = { prepareFiles: async (input, _request, current) => prepareNativeLaunchSettings(input as LaunchSettingsInput, current) }
 
 it('returns Codex instructions with no publication file and preserves the owner value', async () => {

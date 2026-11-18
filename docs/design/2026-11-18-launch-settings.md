@@ -315,3 +315,85 @@ The same ten selected cases pass after the correction, actual 0, 1.341 s
 38.195 s (`/tmp/core-launch-settings-existing-types.log`). Every command has an actual-exit receipt and an empty
 owned process group. No required hook implementation or caller changes were made. Corrected-source cost remains
 unmeasured until a fresh matched packet is frozen and reviewed.
+
+
+### Frozen v5 result: warm improvement, cost acceptance still held
+
+The matched packet retains baseline 9a2ae217cf and changes only candidate source to e4739a1ed7. Its workload,
+fixture, worker and custody helpers are byte-identical to v4; frozen manifest SHA256 is
+`33febf07c8b7becf60b5639cea06537ee8bd33c86bcc1ae71d2dcace73249353` (791 inputs, all eight arms).
+The one semantic smoke passes, outer actual 0, 12.131 s. The approved unchanged two-cycle ABBA completes once,
+outer actual 0, 44.003 s. No sample was dropped or retried. Each arm again completes first publication, five warmups
+and fifty measured operations; all 448 normalized command/frame/script checks match. No unused script remains,
+and candidate factories run exactly 56 times per child. Sample/worker/capture actual exits and both EOFs are recorded;
+all 32 PIDs, eight groups and sockets, sixteen private roots, and the outer group are independently checked clear.
+Every arm rechecks the frozen hashes. Full receipts and all raw arms remain at
+`/tmp/core-launch-settings-cost-v5-abba/manifest.json`; outer receipt is
+`/tmp/core-launch-settings-cost-v5-abba-outer-receipt.json`. The unchanged v4 summarizer produces
+`/tmp/core-launch-settings-cost-v5-summary.json`, including every arm, range and all four paired deltas.
+
+| Arm | First publication ms | Warm p50 ms | Warm p95 ms | Core CPU ms/op | Worker CPU ms/op | Combined CPU ms/op |
+|---|---:|---:|---:|---:|---:|---:|
+| 0-A | 3.914 | 0.835 | 0.967 | 0.941 | 0.236 | 1.177 |
+| 1-B | 104.502 | 5.482 | 6.891 | 6.043 | 0.959 | 7.003 |
+| 2-B | 105.756 | 5.378 | 7.341 | 5.749 | 0.993 | 6.742 |
+| 3-A | 3.954 | 0.854 | 0.985 | 0.951 | 0.240 | 1.191 |
+| 4-A | 3.854 | 0.853 | 0.978 | 0.953 | 0.238 | 1.191 |
+| 5-B | 126.325 | 5.340 | 6.835 | 5.613 | 0.992 | 6.605 |
+| 6-B | 111.972 | 5.732 | 6.845 | 5.837 | 1.008 | 6.845 |
+| 7-A | 3.992 | 0.919 | 1.456 | 1.040 | 0.242 | 1.282 |
+
+Mean warm p50 is 0.865 versus 5.483 ms, p95 1.096 versus 6.978 ms, core CPU 0.971 versus 5.811 ms/op,
+and combined CPU 1.210 versus 6.799 ms/op. Candidate warm latency and CPU improve substantially from v4, but
+remain above the unchanged baseline in every pair. First publication remains 3.929 versus 112.139 ms; its
+mean core CPU is 4.244 versus 61.368 ms. Post-batch core RSS differs by 8.271 MiB and worker RSS by 4.195 MiB;
+core retained heap growth is 0.179 versus 0.212 MiB and worker growth -0.015 versus 0.104 MiB.
+
+This accepts the read-existing correction as a scoped warm improvement, not the extraction's cost. Cold publication
+and overall cost acceptance remain held. The same workload exclusions and process-memory scope as v4 apply.
+Existing diagnostics already counted the unchanged first-publication path: 83 native-current calls, 82 source
+verifications, 5,296 lstatSync calls and seven fsync calls in optional preparation. The next source proposal separates
+owner/revision admission from full file freshness at effects, acknowledgement and final dispatch; no cache or generic
+required-hook algorithm change is proposed, and no additional cold profile is needed before that review.
+
+
+### Separate optional admission from fresh file evidence
+
+Approved next correction, with RED before runtime changes: only nativeLaunch.ts and nativeLaunchSettings.ts change.
+The helper receives the unchanged NativeLaunch.current separately as nativeCurrent. Its current callback retains
+valid/not-preparing state, the exact captured preparation revision and environment object, original caller owner,
+and freshly read account/sign-in identity. Resume's original owner still verifies its transcript; this admission is
+cheaper, not universally filesystem-free. An initial nativeCurrent check precedes optional source capture. Full
+verification is owner admission, native proof, every captured source proof, then owner admission again.
+
+First commit: the cold publisher receives admission as current and full verification as verify. The existing hook
+publisher, flush implementation, deadlines, required hooks and output proof remain unchanged. Full attempt.verify
+still fences directory creation, publication, post-staging/pre-rename, every existing rename retry, post-directory
+durability, both sides of proof capture and acknowledgement. A file changing while an owned descriptor flushes may
+finish that harmless flush; it cannot authorize the next rename or a successful optional result. A post-rename
+change may leave the optional artifact but cannot acknowledge stale values. Final PreparedLaunchSettings.current
+still verifies native/source/output and owner proof; the final command factory and backend checks are unchanged.
+
+Separate second commit: optional worker prepare/commit receives admission, since it only returns bounded declarative
+candidates and writes no owner files. Complete file verification remains after capture and after the full awaited
+worker result, before any publication/returned values, and at final argv. Source/native changes between prepare and
+commit discard the candidate before effects. Owner/revision/account changes still send allowed=false. No link,
+protocol, reservation, timeout, required native proof, cache or generic publication algorithm changes.
+
+Selected acceptance checks: real NativeLaunch composition with counted native/source-leaf operations; real staged
+and directory fsync callbacks mutating source, native executable, retained dependency, ancestor, owner and account;
+initial native refusal before capture; full proof after a receipt wait; real routed prepare/commit mutation cases;
+existing same-byte/read-only/missing/changed outputs and A→B→A revision tests. Each source change gets its selected
+RED/GREEN and affected types; cold and warm commits stay separate. One matched benchmark follows final source review.
+
+Cold RED: 1 intended failure and 17 safety passes, actual 1, 2.354 s. The unchanged implementation performs 91
+selected-native proof calls in the fixed real-file test, above the bound of 32
+(`/tmp/core-launch-settings-fences-cold-red.log`). After the two-file admission/full-proof split, all 39 cases in the
+three selected settings suites pass, actual 0, 3.032 s. The seven affected launch/native-file/publication/value suites
+pass 176/176 with coverage, actual 0, 10.182 s (`/tmp/core-launch-settings-fences-cold-coverage.log`).
+nativeLaunch.ts coverage is 94% statements, 92% branches, 88.88% functions, 96.99% lines;
+nativeLaunchSettings.ts is 93.75% statements, 85.29% branches, 100% functions and lines. These are scoped engine-suite
+measurements, not a claim of complete coverage. Initial types found an inferred literal-true type in the new test
+fixture (actual 2); after its explicit boolean annotation, final types pass actual 0, 6.413 s
+(`/tmp/core-launch-settings-fences-cold-types2.log`). All actual-exit receipts show empty owned process groups.
+Warm transport admission has not changed in this commit; no new cost measurement has run.

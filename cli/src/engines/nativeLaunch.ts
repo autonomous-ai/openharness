@@ -201,13 +201,13 @@ export async function inspectNativeLaunch(engine: AgentEngine, source: NativeLau
       }
       const owner = identity(), ownerKey = JSON.stringify(owner)
       // Required native proof can recover after another hook preparation; optional values from that old revision cannot.
-      const optionalCurrent = () => selectedRevision === revision && selected === selectedEnvironment && current()
+      const optionalCurrent = () => valid && !preparing && selectedRevision === revision && selected === selectedEnvironment
         && ownerCurrent() && JSON.stringify(identity()) === ownerKey
       return prepareLaunchSettings(engine, selected, cwd, setup, {
         dataDir: env.ADAPTER_DATA_DIR, runtimeNode: managedNodePath(),
         platform: process.platform as 'darwin' | 'linux' | 'win32',
         gitBash: process.platform === 'win32' ? claudeCodeGitBash({ env: selected }) : null,
-        owner, current: optionalCurrent,
+        owner, current: optionalCurrent, nativeCurrent: current,
       })
     },
     retain(proof) {

@@ -21,12 +21,14 @@ export interface LaunchSettingsOptions {
   platform: LaunchSettingsInput['platform']
   gitBash: string | null
   owner: LaunchSettingsInput['owner']
+  /** Owner/revision admission; file freshness is checked separately at effects and final use. */
   current(): boolean
+  nativeCurrent(): boolean
 }
 
 export async function prepareLaunchSettings(engine: string, environment: Readonly<Record<string, string>>, cwd: string | null,
   setup: Pick<NativeSetup, 'prepareFiles'>, options: LaunchSettingsOptions): Promise<PreparedLaunchSettings | null> {
-  if ((engine !== 'claude' && engine !== 'codex') || !setup.prepareFiles || !options.current()) return null
+  if ((engine !== 'claude' && engine !== 'codex') || !setup.prepareFiles || !options.current() || !options.nativeCurrent()) return null
   try {
     const launch = launchContract(engine)!, homes = nativeHookLocations(environment)
     const paths = new Set([join(options.dataDir, 'agent-settings.json')])
@@ -56,7 +58,9 @@ export async function prepareLaunchSettings(engine: string, environment: Readonl
     })
     const verify = () => {
       if (!options.current()) throw new HookPreparationHeld('the optional launch owner changed')
+      if (!options.nativeCurrent()) throw new HookPreparationHeld('the native launch proof changed')
       for (const source of observations) source.observed.verify()
+      if (!options.current()) throw new HookPreparationHeld('the optional launch owner changed')
     }
     const current = () => { try { verify(); return true } catch { return false } }
     const destination = engine === 'claude' ? join(options.dataDir, 'statusline', 'statusline.mjs') : null
@@ -84,7 +88,7 @@ export async function prepareLaunchSettings(engine: string, environment: Readonl
         const written = await publishNativeFiles([{ file: destination!, mode: 0o600, parentMode: 0o700 }], async files => {
           if (files[0].content !== content) output!.verify()
           return { version: 1, files: [{ index: 0, content }] }
-        }, { current, verify, confirmed: proof => { published = proof }, identity: content })
+        }, { current: options.current, verify, confirmed: proof => { published = proof }, identity: content })
         if (!written || !published) return null
         outputCurrent = published.current
       }

@@ -10,7 +10,8 @@ vi.mock('./kit/launchExecutable.js', () => ({ captureLaunchExecutable: async () 
   environment: { HOME: '/fixture/home', CODEX_HOME: '/fixture/a', PATH: '/fixture/bin' },
 }) }))
 vi.mock('./kit/nativeLaunchSettings.js', async original => ({ ...await original<typeof import('./kit/nativeLaunchSettings.js')>(),
-  prepareLaunchSettings: vi.fn(async (_engine, _env, _cwd, _setup, options) => ({ values: { instructions: 'optional', settings: null }, current: options.current })),
+  prepareLaunchSettings: vi.fn(async (_engine, _env, _cwd, _setup, options) => ({ values: { instructions: 'optional', settings: null },
+    current: () => options.current() && options.nativeCurrent() })),
 }))
 vi.mock('../lib/authSession.js', async original => ({ ...await original<typeof import('../lib/authSession.js')>(),
   readAuthSession: () => ({ machineId: 'machine', signInAcct: fixture.accountId, signInEpoch: fixture.epoch }),
