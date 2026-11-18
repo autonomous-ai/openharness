@@ -63,7 +63,7 @@ describe('forbiddenDirs', () => {
 
   it('fences AppData under every home on Windows, and the folders APPDATA and LOCALAPPDATA name', () => {
     expect(forbiddenDirs({ HOME: 'C:\\h', APPDATA: 'D:\\roaming', LOCALAPPDATA: 'D:\\local' }, ['C:\\Users\\a'], win32)).toEqual(expect.arrayContaining(
-      ['C:\\h\\AppData\\Roaming', 'C:\\h\\AppData\\Local', 'C:\\Users\\a\\AppData\\Roaming', 'C:\\Users\\a\\AppData\\Local', 'D:\\roaming', 'D:\\local']))
+      ['C:\\h\\AppData', 'C:\\Users\\a\\AppData', 'D:\\roaming', 'D:\\local']))
   })
 
   it('fences no AppData on posix', () => {
@@ -161,7 +161,7 @@ describe('uploadPath', () => {
     expectFenced(join(home, 'docs', 'app', 'note.txt'))
   })
 
-  // On Windows the temporary folder holding `home` is the account's AppData\Local\Temp, inside the fenced AppData\Local.
+  // On Windows the temporary folder holding `home` is the account's AppData\Local\Temp, inside the fenced AppData.
   it('allows a document elsewhere, also written from ~/', () => {
     expect(uploadPath(join(home, 'docs', 'note.txt'), { HOME: home })).toBe(join(home, 'docs', 'note.txt'))
     expect(uploadPath('~/docs/note.txt', { HOME: home })).toBe(join(home, 'docs', 'note.txt'))

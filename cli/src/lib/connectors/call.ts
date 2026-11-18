@@ -68,7 +68,7 @@ export function unc(path: string, p: PlatformPath = platformPath): boolean {
 export function forbiddenDirs(env: NodeJS.ProcessEnv, homes: (string | undefined)[], p: PlatformPath = platformPath): string[] {
   const windows = p.sep === '\\'
   const all = [env.HOME, env.USERPROFILE, ...homes].filter((home): home is string => !!home)
-  const names = ['.ssh', '.gnupg', '.config', '.local/share', '.harness', '.codex', '.claude', ...(windows ? ['AppData/Roaming', 'AppData/Local'] : [])]
+  const names = ['.ssh', '.gnupg', '.config', '.local/share', '.harness', '.codex', '.claude', ...(windows ? ['AppData'] : [])]
   const appData = windows ? [env.APPDATA, env.LOCALAPPDATA].filter((dir): dir is string => !!dir) : []
   return [...new Set([connectorsDir(env), ...all.flatMap(home => names.map(dir => p.join(home, dir))), ...appData, '/etc', '/proc', '/sys'])]
 }
@@ -83,7 +83,7 @@ export function tempDir(home: string | undefined, p: PlatformPath = platformPath
 
 /**
  * Whether a folder of `forbidden` holds `file`, all three resolved. Inside the temporary folder only a forbidden folder
- * inside it fences the file: AppData\Local, which holds it, does not.
+ * inside it fences the file: AppData, which holds it, does not.
  */
 export function fenced(file: string, forbidden: string[], temp: string | undefined, p: PlatformPath = platformPath): boolean {
   const inTemp = !!temp && inside(temp, file, p)
