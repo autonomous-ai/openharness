@@ -490,6 +490,30 @@ describe('a dial plugged in beside one already attached', () => {
       expect(questions(f.ports[1])).toEqual([`b ${noticeId}`])
     } finally { await f.fleet.stop() }
   })
+
+  it('holds a held question on every dial, one plugged in later too, and asks it of none', async () => {
+    const f = await firstAlone()
+    const reads = (peer: Peer) => peer.sent.filter(m => m.t === 'question.state')
+    const readOn = async (peer: Peer, agentId: string) => {
+      const before = reads(peer).length
+      peer.say({ t: 'question.read', agentId, requestId: 'r' })
+      await vi.waitFor(() => expect(reads(peer)).toHaveLength(before + 1))
+      return reads(peer)[before]
+    }
+    try {
+      await f.fleet.hold('b', noticeId, notice)
+      await f.fleet.question('a', 'q1', asked)
+      await plugSecond(f)
+      await vi.waitFor(() => expect(questions(f.ports[1])).toEqual(['a q1']))
+      await flush()
+      expect(questions(f.ports[1])).toEqual(['a q1'])
+      expect(questions(f.ports[0])).toEqual(['a q1'])
+      for (const port of f.ports) expect(await readOn(port, 'b')).toMatchObject({ ok: true, id: noticeId })
+      await f.fleet.hold('c', `${SHOWN_ONLY_PREFIX}n2`, notice)
+      for (const port of f.ports) expect(await readOn(port, 'c')).toMatchObject({ ok: true })
+      for (const port of f.ports) expect(questions(port)).toEqual(['a q1'])
+    } finally { await f.fleet.stop() }
+  })
 })
 
 describe('a board that is not a dial', () => {
