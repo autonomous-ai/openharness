@@ -17,6 +17,7 @@ import { readOrcaConnected, readPluginHomes, readRemoved, writeRemoved } from '.
 import { devicesListenerPath } from '../devices/listenerPath.js'
 import { listenLocalSocket, unixSocketPath } from '../lib/localSocket.js'
 import { socketIsPrivate } from '../lib/localTransport.js'
+import { harnessPath } from '../config/harnessHome.js'
 import { DEVICE_USAGE, runDeviceCommand, takesConnect, type DeviceDeps } from './command.js'
 import type { ClaudeRun } from '../devices/claudePlugin.js'
 import { VSCODE_EXTENSION_ID, type VscodeEditor, type VscodeExtensionDeps } from '../devices/vscodeExtension.js'
@@ -1152,7 +1153,7 @@ describe('harness device orca status and connect', () => {
     expect(JSON.parse(out[0]!)).toStrictEqual({
       connect: 'approve', name: 'Harness Device', version: '1.2.3', fingerprint: FP, grants: [EXECUTION, WORKSPACE_READ], update: false,
     })
-    expect(calls().at(-1)).toBe(`plugin install ${join(home, '.harness', 'orca-plugin')} --json`)
+    expect(calls().at(-1)).toBe(`plugin install ${harnessPath('orca-plugin', home)} --json`)
     expect(existsSync(join(dataDir, 'dial-skill.json'))).toBe(false)
   })
 
@@ -1205,7 +1206,7 @@ describe('harness device orca status and connect', () => {
   it('a record that cannot be saved is said, and the line stays done', async () => {
     const dataDir = folder()
     up()
-    // The plugin's folder is in the home's .harness, so a data folder that cannot be written still leaves Orca it to install.
+    // The plugin's folder is in Harness's data root, so a data folder that cannot be written still leaves Orca it to install.
     readOnly(dataDir)
     installs()
     expect(await device(['orca', 'connect', '--approve', FP, '--json'], { dataDir, orca: orcaRun }))
@@ -1224,13 +1225,13 @@ describe('harness device orca status and connect', () => {
     expect(calls().filter((call) => call.startsWith('plugin install'))).toEqual([])
   })
 
-  it('what the build carries is what the folder holds, in the home\'s .harness', async () => {
+  it('what the build carries is what the folder holds, in Harness\'s data root', async () => {
     const home = folder()
     const calls = up()
     const files = JSON.parse(readOrcaPluginBundle('1.2.3')) as OrcaPluginFiles
     expect(await device(['orca', 'status', '--json'], { home, orca: () => orcaRun(files) }))
       .toEqual({ code: 0, err: [], out: ['{"orca":"offer"}'] })
-    const plugin = join(home, '.harness', 'orca-plugin')
+    const plugin = harnessPath('orca-plugin', home)
     for (const [path, text] of Object.entries(files)) expect(readFileSync(join(plugin, path), 'utf8'), path).toBe(text)
     expect(JSON.parse(readFileSync(join(plugin, 'orca-plugin.json'), 'utf8'))).toMatchObject({ version: '1.2.3' })
     expect(calls()).toContain(`plugin inspect ${plugin} --json`)

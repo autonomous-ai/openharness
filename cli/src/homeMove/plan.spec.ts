@@ -11,7 +11,7 @@ describe('the move\'s plan', () => {
     const names = Object.keys(HARNESS_ENTRIES)
     const plan = planMove('/h', {}, names)
     expect(plan).toMatchObject({ home: '/h', legacy: '/h/.harness', data: DATA, state: STATE })
-    expect(plan.entries).toHaveLength(26)
+    expect(plan.entries).toHaveLength(27)
     for (const [name, kind] of Object.entries(HARNESS_ENTRIES)) {
       expect(plan.entries.find((entry) => entry.name === name)).toEqual({
         name, kind, known: true, present: true, from: `/h/.harness/${name}`, staged: `${ROOT[kind]}.moving/${name}`, to: `${ROOT[kind]}/${name}`,
