@@ -19,10 +19,10 @@ import { readProcessImageBundle } from '../../scripts/lib/processImageBundle.mjs
 export default function setup(): (() => void) | undefined {
   if (process.platform !== 'darwin') return undefined
   const dir = mkdtempSync(join(tmpdir(), 'harness-e2e-process-images-'))
+  const given = process.env.HARNESS_PROCESS_IMAGES_ARTIFACT
   try {
-    let artifact = process.env.HARNESS_PROCESS_IMAGES_ARTIFACT
-    if (!artifact) {
-      artifact = join(dir, 'process-images.json')
+    const artifact = given || join(dir, 'process-images.json')
+    if (!given) {
       writeFileSync(artifact, darwinProcessImages())
       process.env.HARNESS_PROCESS_IMAGES_ARTIFACT = artifact
     }
@@ -32,6 +32,9 @@ export default function setup(): (() => void) | undefined {
     process.env.E2E_PROCESS_IMAGES_PRELOAD = preload
   } catch (error) {
     rmSync(dir, { recursive: true, force: true })
+    // Named, so it can be unset: an exported one outlives the checkout it was built from, and the checker's own words
+    // ("build inputs do not match", or an ENOENT) say nothing of where the helper came from.
+    if (given) throw new Error(`HARNESS_PROCESS_IMAGES_ARTIFACT names a helper this checkout cannot use: ${(error as Error).message}`)
     throw error
   }
   return () => rmSync(dir, { recursive: true, force: true })
