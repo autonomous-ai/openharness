@@ -20,8 +20,8 @@ import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 
 /** The longest folder path a tap opens: Linux's PATH_MAX, above macOS's 1024. */
 export const CURSOR_FOLDER_MAX = 4096
-// No `g` flag: a test keeps no position between paths.
-const CONTROL = /[\u0000-\u001f\u007f]/
+// Every control character, C0, DEL and C1 (Unicode's Cc). No `g` flag: a test keeps no position between paths.
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/
 
 export interface CursorFolderDeps {
   run: OrcaDeps['run']
