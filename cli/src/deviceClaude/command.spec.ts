@@ -1,8 +1,8 @@
 /**
- * `harness device claude …` and `harness device codex …` as a person, the plugin's hook and its mod run them: a
+ * `harness device claude …`, `codex …` and `vscode …` as a person, the plugin's hook and its mod run them: a
  * fake `claude` (a ClaudeRun that answers from a table), Claude Code's settings in a throwaway CLAUDE_CONFIG_DIR, Codex's
- * home a throwaway folder, and a daemon and the devices' listener on sockets in a throwaway folder. The real `claude`,
- * ~/.claude, ~/.codex and the daemon are never touched.
+ * home a throwaway folder, VS Code a fake one under a throwaway home, and a daemon and the devices' listener on sockets
+ * in a throwaway folder. The real `claude`, `code`, ~/.claude, ~/.codex, ~/.vscode and the daemon are never touched.
  */
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
@@ -12,11 +12,13 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DIAL_SKILL } from '../devices/dialSkill.js'
+import { readPluginHomes, readRemoved, writeRemoved } from '../devices/dialSkillFiles.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
 import { listenLocalSocket, unixSocketPath } from '../lib/localSocket.js'
 import { socketIsPrivate } from '../lib/localTransport.js'
 import { DEVICE_USAGE, runDeviceCommand, takesConnect, type DeviceDeps } from './command.js'
 import type { ClaudeRun } from '../devices/claudePlugin.js'
+import { VSCODE_EXTENSION_ID, type VscodeExtensionDeps } from '../devices/vscodeExtension.js'
 
 const SRC = fileURLToPath(new URL('..', import.meta.url))
 /** Names the daemon's socket only: the daemon here listens on a socket in a throwaway folder. */
@@ -87,8 +89,10 @@ async function devicesAt(dataDir: string): Promise<string> {
   return path
 }
 
+type Answers = Record<string, { code: number; stdout?: string; stderr?: string }>
+
 /** A `claude` 2.1.287 with nothing installed, whose calls answer from [answers] by their arguments. */
-function fakeClaude(answers: Record<string, { code: number; stdout?: string; stderr?: string }> = {}): ClaudeRun {
+function fakeClaude(answers: Answers = {}): ClaudeRun {
   const table: typeof answers = { '--version': { code: 0, stdout: '2.1.287 (Claude Code)\n' }, 'plugin list --json': { code: 0, stdout: '[]' }, ...answers }
   return async (args) => {
     const answer = table[args.join(' ')] ?? { code: 0 }
@@ -105,7 +109,11 @@ async function device(argv: string[], deps: Partial<DeviceDeps> = {}) {
   const err: string[] = []
   const code = await runDeviceCommand(argv, {
     dataDir: folder(), port: PORT, platform: 'darwin', stdin: chunks(), claude: () => fakeClaude(),
+    orcaHomes: async () => [], claudeIn: () => null,
+    // The command's own: CLAUDE_CONFIG_DIR stands for ~/.claude unless a spec runs it in an Orca terminal.
+    defaultClaudeHome: claudeHome,
     codexHome: folder(), codex: () => true, env: {}, cwd: '/',
+    vscode: () => { throw new Error('only the vscode words ask for VS Code') },
     out: (line) => { out.push(line) }, err: (line) => { err.push(line) },
     ...deps,
   })
@@ -306,15 +314,17 @@ describe('harness device claude', () => {
     expect(DEVICE_USAGE).not.toMatch(/asked|approve|link|answers/)
   })
 
-  it('the usage says a dial sets the agents up, and that disable is a removal Harness leaves alone', () => {
+  it('the usage says a dial sets the agents and VS Code up, and that disable is a removal Harness leaves alone', () => {
     for (const line of [
-      'Harness device (with a dial plugged in, Claude Code and Codex are set up to ring it; disable takes that away, enable brings it back):',
+      'Harness device (with a dial plugged in, Claude Code and Codex are set up to ring it, and VS Code to follow it; disable takes that away, enable brings it back):',
       'harness device claude status [--json]  whether the dial is on for Claude Code (its harness-device plugin on, and not removed), and its version',
-      'harness device claude enable           set Claude Code up again: the plugin and the dial skill (Claude Code 2.1.287 or later)',
-      'harness device claude disable          remove the plugin and the dial skill; Harness leaves them removed',
+      'harness device claude enable           set Claude Code up again: the plugin and the dial skill (Claude Code 2.1.287 or later), in each Orca account too',
+      'harness device claude disable          remove the plugin and the dial skill, in each Orca account too; Harness leaves them removed',
       'harness device codex status [--json]   whether the dial is on for Codex',
       'harness device codex enable            set Codex up again: the dial skill in its homes',
       'harness device codex disable           remove the dial skill Harness wrote; Harness leaves it removed',
+      'harness device vscode enable           set VS Code up again: Harness\'s extension in it',
+      'harness device vscode disable          remove Harness\'s extension; Harness leaves it removed',
     ]) expect(DEVICE_USAGE.split('\n').map((usage) => usage.trim())).toContain(line)
   })
 
@@ -634,6 +644,279 @@ describe('the dial skill', () => {
   })
 })
 
+describe('Orca\'s Claude Code homes', () => {
+  const ENABLE = 'plugin enable harness-device@openharness --scope user'
+  const DISABLE = 'plugin disable harness-device@openharness --scope user'
+  const ON_FAILED = 'Could not turn on Claude Code in one Orca account.'
+  const OFF_FAILED = 'Could not turn off Claude Code in one Orca account.'
+  const ok = { code: 0, out: [], err: [] }
+
+  /** The plugin as an Orca home lists it: installed, since its `plugins/` is the default home's, and on or off there. */
+  const listed = (enabled: boolean): Answers =>
+    ({ 'plugin list --json': { code: 0, stdout: JSON.stringify([{ id: 'harness-device@openharness', scope: 'user', enabled }]) } })
+
+  /** The command's `claude` (home null) and Claude Code pointed at an Orca home, each answering from [answersOf] its home;
+   *  every call is kept in order with the home it ran in. */
+  function claudes(answersOf: (home: string | null) => Answers) {
+    const calls: Array<{ home: string | null; args: string }> = []
+    const at = (home: string | null): ClaudeRun => {
+      const run = fakeClaude(answersOf(home))
+      return async (args, timeoutMs) => {
+        calls.push({ home, args: args.join(' ') })
+        return run(args, timeoutMs)
+      }
+    }
+    return { calls, claude: () => at(null), claudeIn: (home: string) => at(home) }
+  }
+
+  /** [claudeIn], with [first] run once, before an Orca home's first call. */
+  function before(claudeIn: (home: string) => ClaudeRun, first: () => void): (home: string) => ClaudeRun {
+    let ran = false
+    return (home) => {
+      const run = claudeIn(home)
+      return async (args, timeoutMs) => {
+        if (!ran) first()
+        ran = true
+        return run(args, timeoutMs)
+      }
+    }
+  }
+
+  it('enable turns the plugin on in each Orca home after the default home', async () => {
+    const dataDir = folder()
+    const homes = [folder(), folder()]
+    const real = homes.map((home) => realpathSync(home))
+    const { calls, claude, claudeIn } = claudes((home) => home === null ? {} : listed(false))
+    let atFirst: unknown
+    const watched = before(claudeIn, () => { atFirst = { answers: answers(dataDir), skill: existsSync(skillAt(claudeHome)) } })
+    expect(await device(['claude', 'enable'], { dataDir, claude, claudeIn: watched, orcaHomes: async () => homes })).toEqual(ok)
+    // The default home whole first: its plugin, its removal cleared and its skill.
+    expect(atFirst).toEqual({ answers: { homes: { claude: [realpathSync(join(claudeHome, 'skills'))], codex: [] } }, skill: true })
+    const first = calls.findIndex((call) => call.home !== null)
+    expect(calls.slice(0, first).map((call) => call.home)).toEqual(Array(first).fill(null))
+    expect(calls.slice(0, first).map((call) => call.args)).toContain('plugin install harness-device@openharness --scope user')
+    // Each by its real path, turned on alone: its files are the default home's.
+    expect(calls.slice(first)).toEqual(real.flatMap((home) => [
+      { home, args: '--version' }, { home, args: 'plugin list --json' }, { home, args: ENABLE },
+    ]))
+    expect(process.env.CLAUDE_CONFIG_DIR).toBe(claudeHome)
+    expect(readPluginHomes(dataDir)).toEqual({ homes: real })
+    // The devices' record has one writer, the devices service.
+    expect(existsSync(join(dataDir, 'dial-setup.json'))).toBe(false)
+  })
+
+  it('an Orca home already on is recorded with no enable', async () => {
+    const dataDir = folder()
+    const home = folder()
+    const { calls, claude, claudeIn } = claudes((at) => at === null ? {} : listed(true))
+    expect(await device(['claude', 'enable'], { dataDir, claude, claudeIn, orcaHomes: async () => [home] })).toEqual(ok)
+    expect(calls.filter((call) => call.home !== null).map((call) => call.args)).toEqual(['--version', 'plugin list --json'])
+    expect(readPluginHomes(dataDir)).toEqual({ homes: [realpathSync(home)] })
+  })
+
+  it('a home that fails to turn on prints one line and the command still exits 0', async () => {
+    const dataDir = folder()
+    const [failing, next] = [folder(), folder()]
+    const { calls, claude, claudeIn } = claudes((home) => home === null ? {}
+      : home === realpathSync(failing) ? { ...listed(false), [ENABLE]: { code: 1, stderr: `Could not write ${failing}/settings.json\n` } }
+      : listed(false))
+    // Claude Code's own line names the account's folder: only the fixed line is said.
+    expect(await device(['claude', 'enable'], { dataDir, claude, claudeIn, orcaHomes: async () => [failing, next] }))
+      .toEqual({ code: 0, out: [], err: [ON_FAILED] })
+    expect(calls).toContainEqual({ home: realpathSync(next), args: ENABLE })
+    expect(readPluginHomes(dataDir)).toEqual({ homes: [realpathSync(next)] })
+
+    // No Claude Code there either is that home's failure.
+    expect(await device(['claude', 'enable'], { dataDir, claude, claudeIn: () => null, orcaHomes: async () => [next] }))
+      .toEqual({ code: 0, out: [], err: [ON_FAILED] })
+    expect(readPluginHomes(dataDir)).toEqual({ homes: [] })
+  })
+
+  it('a home whose real path no record could hold is turned on and not recorded', async () => {
+    const dataDir = folder()
+    // U+0085 is a control character the record refuses; the home Orca names links to it.
+    const odd = join(realpathSync(folder()), 'or\u0085ca')
+    mkdirSync(odd)
+    const named = join(folder(), 'home')
+    symlinkSync(odd, named)
+    const other = folder()
+    const { calls, claude, claudeIn } = claudes((home) => home === null ? {} : listed(false))
+    expect(await device(['claude', 'enable'], { dataDir, claude, claudeIn, orcaHomes: async () => [named, other] })).toEqual(ok)
+    expect(calls).toContainEqual({ home: odd, args: ENABLE })
+    expect(readPluginHomes(dataDir)).toEqual({ homes: [realpathSync(other)] })
+  })
+
+  it('an enable that fails in the default home asks Orca nothing', async () => {
+    const failedInstall = fakeClaude({ 'plugin install harness-device@openharness --scope user': { code: 1, stderr: 'Plugin not found' } })
+    let asked = 0
+    const orca: Partial<DeviceDeps> = {
+      orcaHomes: async () => { asked++; return [folder()] },
+      claudeIn: () => { asked++; return fakeClaude(listed(false)) },
+    }
+    expect(await device(['claude', 'enable'], { claude: () => failedInstall, ...orca })).toEqual({ code: 1, out: [], err: ['Plugin not found'] })
+    const locked = folder()
+    readOnly(locked)
+    expect(await device(['claude', 'enable'], { dataDir: locked, ...orca })).toEqual({ code: 1, out: [], err: ['Could not save the dial setting.'] })
+    expect(asked).toBe(0)
+  })
+
+  it('an Orca record that cannot be saved says so and exits 1', async () => {
+    const dataDir = folder()
+    const { claude, claudeIn } = claudes((home) => home === null ? {} : listed(false))
+    // The data folder shut after the default home was set up, before the Orca homes are recorded.
+    const shutting = before(claudeIn, () => readOnly(dataDir))
+    expect(await device(['claude', 'enable'], { dataDir, claude, claudeIn: shutting, orcaHomes: async () => [folder()] }))
+      .toEqual({ code: 1, out: [], err: ['Could not save the dial setting.'] })
+  })
+
+  /** Claude Code's default home in a throwaway folder, its plugin on there. [shared]: the command's own home (its
+   *  CLAUDE_CONFIG_DIR) links its `plugins/` to this one's, as Orca links each account's: the command run in an Orca
+   *  terminal. Otherwise each holds its own, as in a home the person moved. */
+  function defaultHomeOn(shared = true): string {
+    const home = join(folder(), '.claude')
+    mkdirSync(join(home, 'plugins'), { recursive: true })
+    writeFileSync(join(home, 'settings.json'), JSON.stringify({ enabledPlugins: { 'harness-device@openharness': true } }))
+    if (shared) symlinkSync(join(home, 'plugins'), join(claudeHome, 'plugins'))
+    else mkdirSync(join(claudeHome, 'plugins'))
+    return home
+  }
+
+  // The command's own uninstall takes nothing ~/.claude names there: its plugin is none of the command's.
+  it('a default home with plugins of its own is left alone', async () => {
+    const defaultHome = defaultHomeOn(false)
+    for (const verb of ['enable', 'disable']) {
+      const { calls, claude, claudeIn } = claudes((home) => home === null ? INSTALLED : listed(true))
+      expect(await device(['claude', verb], { claude, claudeIn, defaultClaudeHome: defaultHome }), verb).toEqual(ok)
+      expect(calls.filter((call) => call.home !== null), verb).toEqual([])
+    }
+  })
+
+  it('the command\'s own home is not run twice', async () => {
+    const dataDir = folder()
+    const home = folder()
+    const links = folder()
+    const defaultHome = defaultHomeOn()
+    symlinkSync(claudeHome, join(links, 'own'))
+    symlinkSync(home, join(links, 'home'))
+    // The command run in an Orca terminal: its own home is one Orca lists, as itself and through a link. Another home is
+    // listed twice and through a link.
+    const listing = async () => [claudeHome, join(links, 'own'), home, join(links, 'home'), home]
+    for (const [verb, on] of [['enable', false], ['disable', true]] as const) {
+      const { calls, claude, claudeIn } = claudes((at) => at === null ? INSTALLED : listed(on))
+      expect(await device(['claude', verb], { dataDir, claude, claudeIn, orcaHomes: listing, defaultClaudeHome: defaultHome }), verb).toEqual(ok)
+      expect(new Set(calls.map((call) => call.home)), verb).toEqual(new Set([null, defaultHome, realpathSync(home)]))
+      const turned = on ? DISABLE : ENABLE
+      expect(calls.filter((call) => call.args === turned), verb).toEqual([{ home: defaultHome, args: turned }, { home: realpathSync(home), args: turned }])
+    }
+    // The default home is no Orca account's.
+    expect(readPluginHomes(dataDir)).toEqual({ homes: [realpathSync(home)] })
+  })
+
+  // An uninstall in the command's own home takes the files the default home names: its entry would stay on, with nothing
+  // left to turn off.
+  it('disable in an Orca terminal turns the default home off before the uninstall', async () => {
+    const defaultHome = defaultHomeOn()
+    const other = folder()
+    const { calls, claude, claudeIn } = claudes((home) => home === null ? INSTALLED : listed(true))
+    expect(await device(['claude', 'disable'], { claude, claudeIn, orcaHomes: async () => [claudeHome, other], defaultClaudeHome: defaultHome })).toEqual(ok)
+    expect(calls).toEqual([
+      { home: defaultHome, args: 'plugin list --json' }, { home: defaultHome, args: DISABLE },
+      { home: realpathSync(other), args: 'plugin list --json' }, { home: realpathSync(other), args: DISABLE },
+      { home: null, args: 'plugin list --json' }, { home: null, args: UNINSTALL },
+    ])
+  })
+
+  // Off there, plain sessions would never ring, and the devices turn on no Orca home while it reads off.
+  it('enable after a disable in an Orca terminal turns the default home on after the install', async () => {
+    const dataDir = folder()
+    const defaultHome = defaultHomeOn()
+    const listing = async () => [claudeHome]
+    const off = claudes((home) => home === null ? INSTALLED : listed(true))
+    expect(await device(['claude', 'disable'], { dataDir, claude: off.claude, claudeIn: off.claudeIn, orcaHomes: listing, defaultClaudeHome: defaultHome })).toEqual(ok)
+    // Uninstalled, and off in the default home.
+    const { calls, claude, claudeIn } = claudes((home) => home === null ? {} : listed(false))
+    expect(await device(['claude', 'enable'], { dataDir, claude, claudeIn, orcaHomes: listing, defaultClaudeHome: defaultHome })).toEqual(ok)
+    const install = calls.findIndex((call) => call.args === 'plugin install harness-device@openharness --scope user')
+    expect(install).toBeGreaterThan(-1)
+    expect(calls.slice(install + 1)).toEqual([
+      { home: defaultHome, args: '--version' }, { home: defaultHome, args: 'plugin list --json' }, { home: defaultHome, args: ENABLE },
+    ])
+    expect(readPluginHomes(dataDir)).toEqual({ homes: [] })
+  })
+
+  it('disable turns off each Orca home first, then the default home', async () => {
+    const dataDir = folder()
+    skillIn(claudeHome)
+    const homes = [folder(), folder()]
+    const real = homes.map((home) => realpathSync(home))
+    const { calls, claude, claudeIn } = claudes((home) => home === null ? INSTALLED : listed(true))
+    let atFirst: unknown
+    const watched = before(claudeIn, () => { atFirst = answers(dataDir) })
+    expect(await device(['claude', 'disable'], { dataDir, claude, claudeIn: watched, orcaHomes: async () => homes })).toEqual(ok)
+    expect(atFirst).toEqual({ removed: { claude: true } })
+    // Never an uninstall in an Orca home: it would take the files every home names. The default home's comes last.
+    expect(calls).toEqual([
+      ...real.flatMap((home) => [{ home, args: 'plugin list --json' }, { home, args: DISABLE }]),
+      { home: null, args: 'plugin list --json' }, { home: null, args: UNINSTALL },
+    ])
+    expect(existsSync(skillAt(claudeHome))).toBe(false)
+  })
+
+  // The uninstall would take the shared files that home still names: a second disable could then never turn it off there.
+  it('a home that fails to turn off prints one line, keeps the plugin installed and exits 1; the next disable finishes', async () => {
+    const dataDir = folder()
+    skillIn(claudeHome)
+    const [failing, next] = [folder(), folder()]
+    const homes = async () => [failing, next]
+    const refused = { ...listed(true), [DISABLE]: { code: 1, stderr: `${failing}/settings.json: denied` } }
+    const first = claudes((home) => home === null ? INSTALLED : home === realpathSync(failing) ? refused : listed(true))
+    expect(await device(['claude', 'disable'], { dataDir, claude: first.claude, claudeIn: first.claudeIn, orcaHomes: homes }))
+      .toEqual({ code: 1, out: [], err: [OFF_FAILED] })
+    expect(first.calls).toContainEqual({ home: realpathSync(next), args: DISABLE })
+    expect(first.calls.filter((call) => call.home === null)).toEqual([])
+    // The rest is done: the removal recorded, so the devices turn nothing on again, and the skill removed.
+    expect(existsSync(skillAt(claudeHome))).toBe(false)
+    expect(answers(dataDir)).toEqual({ removed: { claude: true } })
+
+    // That home turns off now, and the other is off already.
+    const second = claudes((home) => home === null ? INSTALLED : listed(home === realpathSync(failing)))
+    expect(await device(['claude', 'disable'], { dataDir, claude: second.claude, claudeIn: second.claudeIn, orcaHomes: homes })).toEqual(ok)
+    expect(second.calls).toContainEqual({ home: realpathSync(failing), args: DISABLE })
+    expect(second.calls.at(-1)).toEqual({ home: null, args: UNINSTALL })
+  })
+
+  it('with no claude and an Orca home\'s settings on, disable says that home failed', async () => {
+    pluginOn(false)
+    const [on, off, none] = [folder(), folder(), folder()]
+    writeFileSync(join(on, 'settings.json'), JSON.stringify({ enabledPlugins: { 'harness-device@openharness': true } }))
+    writeFileSync(join(off, 'settings.json'), JSON.stringify({ enabledPlugins: { 'harness-device@openharness': false } }))
+    expect(await device(['claude', 'disable'], { claude: () => null, claudeIn: () => null, orcaHomes: async () => [on, off, none] }))
+      .toEqual({ code: 1, out: [], err: [OFF_FAILED] })
+  })
+
+  it('with no Orca home, or Orca not read, enable and disable are as before', async () => {
+    const dataDir = folder()
+    const { calls, claude, claudeIn } = claudes(() => INSTALLED)
+    expect(await device(['claude', 'enable'], { dataDir, claude, claudeIn, orcaHomes: async () => [] })).toEqual(ok)
+    expect(answers(dataDir)).toEqual({ homes: { claude: [realpathSync(join(claudeHome, 'skills'))], codex: [] } })
+    expect(await device(['claude', 'disable'], { dataDir, claude, claudeIn, orcaHomes: async () => [] })).toEqual(ok)
+    expect(answers(dataDir)).toEqual({ removed: { claude: true } })
+    expect(calls.every((call) => call.home === null)).toBe(true)
+  })
+
+  it('status and Codex\'s verbs ask Orca nothing', async () => {
+    let asked = 0
+    const orca: Partial<DeviceDeps> = {
+      orcaHomes: async () => { asked++; return [folder()] },
+      claudeIn: () => { asked++; return fakeClaude(listed(true)) },
+    }
+    for (const argv of [['claude', 'status', '--json'], ['codex', 'status', '--json'], ['codex', 'enable'], ['codex', 'disable']]) {
+      expect((await device(argv, orca)).code, argv.join(' ')).toBe(0)
+    }
+    expect(asked).toBe(0)
+  })
+})
+
 describe('harness device codex', () => {
   it('status without --json prints the same fields, indented', async () => {
     expect(await device(['codex', 'status'], { codex: () => false }))
@@ -683,94 +966,235 @@ describe('harness device notify', () => {
   })
 })
 
-describe('harness device orca link', () => {
+describe('harness device orca link and vscode link', () => {
   const link = (dataDir: string, ready: boolean, daemon = false) =>
     ({ code: 0, err: [], out: [JSON.stringify({ daemon, devicesSocket: devicesListenerPath(dataDir), devicesReady: ready })] })
 
-  it('with no daemon and no dial it prints daemon false, the devices\' path and devicesReady false, and exits 0', async () => {
+  it.each(['orca', 'vscode'])('%s link: with no daemon and no dial it prints daemon false, the devices\' path and devicesReady false, and exits 0', async (host) => {
     const dataDir = folder()
-    expect(await device(['orca', 'link'], { dataDir })).toEqual(link(dataDir, false))
+    expect(await device([host, 'link'], { dataDir })).toEqual(link(dataDir, false))
   })
 
-  it('daemon is true once the daemon\'s socket is there, this account\'s own, and takes a connect', async () => {
+  it.each(['orca', 'vscode'])('%s link: daemon is true once the daemon\'s socket is there, this account\'s own, and takes a connect', async (host) => {
     const dataDir = folder()
     await ownDaemonAt(dataDir)
-    expect(await device(['orca', 'link'], { dataDir })).toEqual(link(dataDir, false, true))
+    expect(await device([host, 'link'], { dataDir })).toEqual(link(dataDir, false, true))
   })
 
-  it('the connect asks the daemon nothing', async () => {
+  it.each(['orca', 'vscode'])('%s link: the connect asks the daemon nothing', async (host) => {
     const dataDir = folder()
     const { seen } = await ownDaemonAt(dataDir)
-    expect(await device(['orca', 'link'], { dataDir })).toEqual(link(dataDir, false, true))
+    expect(await device([host, 'link'], { dataDir })).toEqual(link(dataDir, false, true))
     await vi.waitFor(() => expect(seen).toEqual({ connections: 1, closed: 1, requests: 0 }))
   })
 
-  it('a socket a crashed daemon left behind is daemon false', async () => {
+  it.each(['orca', 'vscode'])('%s link: a socket a crashed daemon left behind is daemon false', async (host) => {
     const dataDir = folder()
     const crashed = await listenLocalSocket((_req, res) => res.end(), unixSocketPath(dataDir, PORT)!)
     crashed.server.close()
     // Still there and still this account's own: only the connect tells it from a live one.
     expect(socketIsPrivate(crashed.path)).toBe(true)
-    expect(await device(['orca', 'link'], { dataDir })).toEqual(link(dataDir, false))
+    expect(await device([host, 'link'], { dataDir })).toEqual(link(dataDir, false))
   })
 
-  it('a daemon\'s socket that is not private is daemon false, and is not connected to', async () => {
+  it.each(['orca', 'vscode'])('%s link: a daemon\'s socket that is not private is daemon false, and is not connected to', async (host) => {
     const dataDir = folder()
     const { path, seen } = await ownDaemonAt(dataDir)
     chmodSync(path, 0o666)
-    expect(await device(['orca', 'link'], { dataDir })).toEqual(link(dataDir, false))
+    expect(await device([host, 'link'], { dataDir })).toEqual(link(dataDir, false))
     // A connect of the test's own, once it has closed, is the only one the server took: `link`'s would have come first.
     expect(await takesConnect(path)).toBe(true)
     await vi.waitFor(() => expect(seen.closed).toBe(1))
     expect(seen.connections).toBe(1)
   })
 
-  it('devicesReady is true once the devices\' socket is there and this account\'s own', async () => {
+  it.each(['orca', 'vscode'])('%s link: devicesReady is true once the devices\' socket is there and this account\'s own', async (host) => {
     const dataDir = folder()
     await devicesAt(dataDir)
-    expect(await device(['orca', 'link'], { dataDir })).toEqual(link(dataDir, true))
+    expect(await device([host, 'link'], { dataDir })).toEqual(link(dataDir, true))
   })
 
-  it('a devices\' socket nothing listens on is still devicesReady true', async () => {
+  it.each(['orca', 'vscode'])('%s link: a devices\' socket nothing listens on is still devicesReady true', async (host) => {
     const dataDir = folder()
     const crashed = await listenLocalSocket((_req, res) => res.end(), devicesListenerPath(dataDir)!)
     crashed.server.close()
-    expect(await device(['orca', 'link'], { dataDir })).toEqual(link(dataDir, true))
+    expect(await device([host, 'link'], { dataDir })).toEqual(link(dataDir, true))
   })
 
-  it('a devices\' socket that is not private is devicesReady false, its path still printed', async () => {
+  it.each(['orca', 'vscode'])('%s link: a devices\' socket that is not private is devicesReady false, its path still printed', async (host) => {
     const open = folder()
     chmodSync(await devicesAt(open), 0o666)
-    expect(await device(['orca', 'link'], { dataDir: open })).toEqual(link(open, false))
+    expect(await device([host, 'link'], { dataDir: open })).toEqual(link(open, false))
     const shared = folder()
     await devicesAt(shared)
     chmodSync(shared, 0o777)
-    expect(await device(['orca', 'link'], { dataDir: shared })).toEqual(link(shared, false))
+    expect(await device([host, 'link'], { dataDir: shared })).toEqual(link(shared, false))
     const plain = folder()
     writeFileSync(devicesListenerPath(plain)!, '', { mode: 0o600 })
-    expect(await device(['orca', 'link'], { dataDir: plain })).toEqual(link(plain, false))
+    expect(await device([host, 'link'], { dataDir: plain })).toEqual(link(plain, false))
   })
 
-  it('on Windows it prints {"daemon":false,"devicesReady":false} and exits 0', async () => {
-    expect(await device(['orca', 'link'], { platform: 'win32' })).toEqual({ code: 0, err: [], out: ['{"daemon":false,"devicesReady":false}'] })
+  it.each(['orca', 'vscode'])('%s link: on Windows it prints {"daemon":false,"devicesReady":false} and exits 0', async (host) => {
+    expect(await device([host, 'link'], { platform: 'win32' })).toEqual({ code: 0, err: [], out: ['{"daemon":false,"devicesReady":false}'] })
   })
 
-  it('with the harness-device plugin off in Claude Code it prints the same', async () => {
+  it.each(['orca', 'vscode'])('%s link: with the harness-device plugin off in Claude Code it prints the same', async (host) => {
     const dataDir = folder()
     pluginOn(false)
-    expect(await device(['orca', 'link'], { dataDir })).toEqual(link(dataDir, false))
+    expect(await device([host, 'link'], { dataDir })).toEqual(link(dataDir, false))
   })
 
-  it('it never looks for claude', async () => {
+  it.each(['orca', 'vscode'])('%s link: it never looks for claude', async (host) => {
     const dataDir = folder()
-    expect(await device(['orca', 'link'], { dataDir, claude: () => { throw new Error('never') } })).toEqual(link(dataDir, false))
+    expect(await device([host, 'link'], { dataDir, claude: () => { throw new Error('never') } })).toEqual(link(dataDir, false))
   })
 
-  it('orca with no verb, another verb or an extra word prints the usage and exits 1', async () => {
-    for (const argv of [['orca'], ['orca', 'status'], ['orca', 'link', 'extra']]) {
+  it('vscode link prints what orca link prints', async () => {
+    const dataDir = folder()
+    await ownDaemonAt(dataDir)
+    await devicesAt(dataDir)
+    const orca = await device(['orca', 'link'], { dataDir })
+    expect(orca).toEqual(link(dataDir, true, true))
+    expect(await device(['vscode', 'link'], { dataDir })).toEqual(orca)
+  })
+
+  it.each(['orca', 'vscode'])('%s with no verb, another verb or an extra word prints the usage and exits 1', async (host) => {
+    for (const argv of [[host], [host, 'install'], [host, 'link', 'extra']]) {
       expect(await device(argv), argv.join(' ')).toEqual({ code: 1, out: [], err: [DEVICE_USAGE] })
     }
-    expect(DEVICE_USAGE).not.toMatch(/orca/i)
+    expect(DEVICE_USAGE).not.toMatch(new RegExp(`${host} link`))
+  })
+})
+
+describe('harness device vscode', () => {
+  const OK = { code: 0, timedOut: false }
+
+  /**
+   * VS Code on a Mac as the command sees it, all fake: its app in a throwaway home's Applications, its record of
+   * extensions in memory, and a `code` that records each run and answers [answer]; a run that exits 0 leaves the record
+   * listing [installed] after an install, and nothing after an uninstall; [onRun] sees each run before it answers. The
+   * real VS Code, /Applications and ~/.vscode are never looked at.
+   */
+  function fakeVscode(options: { app?: boolean; cli?: boolean; version?: string; answer?: { code: number | null; timedOut: boolean }; installed?: string; onRun?: () => void } = {}) {
+    const home = folder()
+    const app = join(home, 'Applications', 'Visual Studio Code.app')
+    const record = join(home, '.vscode', 'extensions', 'extensions.json')
+    const disk = new Map<string, string>()
+    if (options.app !== false) disk.set(app, '')
+    if (options.app !== false && options.cli !== false) disk.set(join(app, 'Contents', 'Resources', 'app', 'bin', 'code'), '')
+    const list = (version: string | undefined) => {
+      if (version === undefined) disk.delete(record)
+      else disk.set(record, JSON.stringify([{ identifier: { id: VSCODE_EXTENSION_ID }, version }]))
+    }
+    list(options.version)
+    const runs: string[][] = []
+    const deps: VscodeExtensionDeps = {
+      platform: 'darwin', home, pathVar: '',
+      exists: (path) => disk.has(path),
+      executable: (path) => disk.has(path),
+      read: (path) => disk.get(path) ?? null,
+      run: async (_file, args) => {
+        runs.push([...args])
+        options.onRun?.()
+        const answer = options.answer ?? OK
+        if (answer.code === 0) list(args[0] === '--install-extension' ? options.installed : undefined)
+        return answer
+      },
+      files: () => ({
+        manifest: JSON.stringify({ name: 'harness-device', displayName: 'Harness Device', description: 'The dial.', version: '0.6.60', publisher: 'autonomous-ai', engines: { vscode: '^1.75.0' } }),
+        main: '',
+      }),
+      tempDir: () => folder(),
+      write: (path, data) => writeFileSync(path, data, { mode: 0o600 }),
+      remove: (path) => rmSync(path, { recursive: true, force: true }),
+    }
+    return { vscode: () => deps, runs }
+  }
+
+  it('status --json prints one line: absent, off, or on with its version', async () => {
+    expect(await device(['vscode', 'status', '--json'], fakeVscode({ app: false }))).toEqual({ code: 0, err: [], out: ['{"vscode":"absent"}'] })
+    expect(await device(['vscode', 'status', '--json'], fakeVscode())).toEqual({ code: 0, err: [], out: ['{"vscode":"off"}'] })
+    const on = fakeVscode({ version: '0.6.60' })
+    expect(await device(['vscode', 'status', '--json'], on)).toEqual({ code: 0, err: [], out: ['{"vscode":"on","version":"0.6.60"}'] })
+    expect(on.runs).toEqual([])
+  })
+
+  it('status without --json prints the same fields, indented', async () => {
+    expect(await device(['vscode', 'status'], fakeVscode({ version: '0.6.60' })))
+      .toEqual({ code: 0, err: [], out: [JSON.stringify({ vscode: 'on', version: '0.6.60' }, null, 2)] })
+  })
+
+  it('enable prints the status and exits 0 once it is on', async () => {
+    const vscode = fakeVscode({ installed: '0.6.60' })
+    expect(await device(['vscode', 'enable'], vscode)).toEqual({ code: 0, err: [], out: ['{"vscode":"on","version":"0.6.60"}'] })
+    expect(vscode.runs.map((args) => [args[0], args[2]])).toEqual([['--install-extension', '--force']])
+  })
+
+  it.each([
+    ['no-code', { cli: false }],
+    ['timeout', { answer: { code: null, timedOut: true } }],
+    ['failed', { answer: { code: 1, timedOut: false } }],
+  ] as const)('enable that fails prints {"vscode":"off","error":"%s"} and exits 1', async (error, options) => {
+    expect(await device(['vscode', 'enable'], fakeVscode({ ...options, installed: '0.6.60' })))
+      .toEqual({ code: 1, err: [], out: [JSON.stringify({ vscode: 'off', error })] })
+  })
+
+  it('disable uninstalls and exits 0; one that fails exits 1 with its word', async () => {
+    const on = fakeVscode({ version: '0.6.60' })
+    expect(await device(['vscode', 'disable'], on)).toEqual({ code: 0, err: [], out: ['{"vscode":"off"}'] })
+    expect(on.runs).toEqual([['--uninstall-extension', VSCODE_EXTENSION_ID]])
+    expect(await device(['vscode', 'disable'], fakeVscode({ version: '0.6.60', answer: { code: 1, timedOut: false } })))
+      .toEqual({ code: 1, err: [], out: ['{"vscode":"on","version":"0.6.60","error":"failed"}'] })
+  })
+
+  it('enable clears the removal before it installs; the engines\' removals stay', async () => {
+    const dataDir = folder()
+    writeRemoved(dataDir, 'codex', true)
+    writeRemoved(dataDir, 'vscode', true)
+    const atInstall: unknown[] = []
+    const vscode = fakeVscode({ installed: '0.6.60', onRun: () => atInstall.push(readRemoved(dataDir)) })
+    expect(await device(['vscode', 'enable'], { ...vscode, dataDir })).toEqual({ code: 0, err: [], out: ['{"vscode":"on","version":"0.6.60"}'] })
+    expect(atInstall).toEqual([{ codex: true }])
+    expect(answers(dataDir)).toEqual({ removed: { codex: true } })
+  })
+
+  it('disable marks it removed before it uninstalls, and the mark stays when the uninstall fails', async () => {
+    const dataDir = folder()
+    const atUninstall: unknown[] = []
+    const on = fakeVscode({ version: '0.6.60', onRun: () => atUninstall.push(readRemoved(dataDir)) })
+    expect(await device(['vscode', 'disable'], { ...on, dataDir })).toEqual({ code: 0, err: [], out: ['{"vscode":"off"}'] })
+    expect(atUninstall).toEqual([{ vscode: true }])
+    expect(answers(dataDir)).toEqual({ removed: { vscode: true } })
+
+    const failing = folder()
+    await device(['vscode', 'disable'], { ...fakeVscode({ version: '0.6.60', answer: { code: 1, timedOut: false } }), dataDir: failing })
+    expect(readRemoved(failing)).toEqual({ vscode: true })
+  })
+
+  it('a mark that cannot be saved is said and exits 1: enable then installs nothing, and disable still uninstalls', async () => {
+    const dataDir = folder()
+    readOnly(dataDir)
+    const vscode = fakeVscode({ installed: '0.6.60' })
+    expect(await device(['vscode', 'enable'], { ...vscode, dataDir })).toEqual({ code: 1, out: [], err: ['Could not save the dial setting.'] })
+    expect(vscode.runs).toEqual([])
+    const on = fakeVscode({ version: '0.6.60' })
+    expect(await device(['vscode', 'disable'], { ...on, dataDir })).toEqual({ code: 1, out: ['{"vscode":"off"}'], err: ['Could not save the dial setting.'] })
+    expect(on.runs).toEqual([['--uninstall-extension', VSCODE_EXTENSION_ID]])
+  })
+
+  it('the usage names enable and disable, as claude\'s, and neither status nor link; an unknown vscode word prints it', async () => {
+    expect(DEVICE_USAGE).toMatch(/^ {2}harness device vscode enable {2,}\S/m)
+    expect(DEVICE_USAGE).toMatch(/^ {2}harness device vscode disable {2,}\S/m)
+    expect(DEVICE_USAGE).not.toMatch(/vscode (status|link)/)
+    for (const argv of [['vscode', 'install'], ['vscode', 'enable', 'extra'], ['vscode']]) {
+      expect(await device(argv), argv.join(' ')).toEqual({ code: 1, out: [], err: [DEVICE_USAGE] })
+    }
+  })
+
+  it('link, claude and codex words never ask for the vscode dependencies', async () => {
+    const vscode = vi.fn(fakeVscode().vscode)
+    for (const argv of [['vscode', 'link'], ['orca', 'link'], ['claude', 'status'], ['codex', 'status'], ['link']]) await device(argv, { vscode })
+    expect(vscode).not.toHaveBeenCalled()
   })
 })
 

@@ -22,6 +22,17 @@ export interface HookTurnContext {
   noteEngineStopped(sessionId: string): void
   emit(sessionId: string, events: LiveEvent[]): void
   graceMs: number
+  /** The turn whose end the transcript has read and core holds for its Stop. */
+  heldEnd(sessionId: string): { identity?: string; openedAt?: number } | undefined
+  /** A Stop came before its turn's end: the end of this open turn (its identity), or, when no turn of it was read yet,
+   *  of the turn opened by the time the Stop ran (its `firedAt`), goes on as it is read, not held. */
+  awaitEnd(sessionId: string, turn: string | number): void
+  /** The held end goes to the funnel. False when none is held. */
+  deliverHeldEnd(sessionId: string): boolean
+  /** Subagents of the session run: a Stop leaves its turn open. */
+  subagentsRun(sessionId: string): boolean
+  /** The held end was read before an earlier hook of its turn: what the lead wrote since lands after this Stop. */
+  heldBeforeHook: boolean
 }
 
 export type HookAdmission = { accepted: true } | { accepted: false; reason: string }
@@ -40,7 +51,7 @@ export interface HookSettings {
   /** The settings file, in that home. */
   file: string
   /** One block of ours per event, in this order, with a matcher only where the engine honours one. */
-  events: ReadonlyArray<{ event: string; matcher?: string }>
+  events: ReadonlyArray<{ event: string; matcher?: string; /** Seconds, where this event's own differs from `timeout`. */ timeout?: number }>
   /** Seconds the engine gives the hook. */
   timeout: number
   /**

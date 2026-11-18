@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { env } from '../config/env.js'
-import { registry, type RegisteredSession } from './registry.js'
+import { registry, RegistryOwnershipChanged, type RegisteredSession } from './registry.js'
 import { commitRelaunchedEngine } from '../core/agents/restart.js'
 import { createAgentRetargeter, type RetargetDeps } from '../core/agents/retarget.js'
 import { createPaneWatcher } from '../core/agents/newPane.js'
@@ -149,6 +149,59 @@ it.each(['owner', 'observation', 'cancel'] as const)('never converts uncertain l
   // The visible rename may name the destination. A failed recovery cannot publish the old route over it.
   expect(persisted().find(entry => entry.agentId === row.agentId)).toMatchObject({ processIdentity: newProcess, runtimes: [destination] })
 })
+
+it.each([['the same', 'confirmed', newProcess], ['another', 'refused', { ...newProcess, pid: 7003, startMarker: 'other' }]] as const)(
+  'a launch discovery confirmed first with %s process, while this confirmation waited behind it, is %s', async (_which, outcome, peerProcess) => {
+    // A resumed row: no process yet, its launch starting (registry.ts `resumePendingAgent`).
+    registry.clearProcessIdentity(row.agentId)
+    registry.setLaunch(row.agentId, { state: 'starting', nativeToken: startingToken })
+    await registry.flush()
+    const held = holdImage(rows => rows.some(entry => entry.agentId === row.agentId && entry.processIdentity?.pid === peerProcess.pid))
+    // Discovery's pass over the pane confirms its engine first (discovery.ts `onObserved`)...
+    const peer = registry.confirmLaunch(row.agentId, { processIdentity: peerProcess, runtimes: [runtime] })
+    await held.entered
+    // ...while the resume that launched it confirms the process it verified, behind that write (resumeAgentService.ts).
+    const own = registry.confirmLaunch(row.agentId, { processIdentity: newProcess, launchArgs: ['--fixture'] }).catch(error => error)
+    held.release()
+    expect(await peer).toMatchObject({ state: 'confirmed' })
+    if (outcome === 'confirmed') {
+      expect(await own).toMatchObject({ state: 'confirmed', entry: { processIdentity: newProcess, launch: { state: 'ready' }, launchArgs: ['--fixture'] } })
+    } else expect(await own).toBeInstanceOf(RegistryOwnershipChanged)
+  })
+
+it('a starting launch discovery marked dormant, then confirmed first with the same process, is confirmed', async () => {
+  // A resumed row whose engine was not yet in its pane at discovery's last pass (discovery.ts `onDormant`).
+  registry.clearProcessIdentity(row.agentId)
+  registry.setLaunch(row.agentId, { state: 'starting', nativeToken: startingToken })
+  registry.setActive(row.agentId, false)
+  await registry.flush()
+  const held = holdImage(rows => rows.some(entry => entry.agentId === row.agentId && entry.processIdentity?.pid === newProcess.pid))
+  const peer = registry.confirmLaunch(row.agentId, { processIdentity: newProcess, runtimes: [runtime] })
+  await held.entered
+  const own = registry.confirmLaunch(row.agentId, { processIdentity: newProcess }).catch(error => error)
+  held.release()
+  expect(await peer).toMatchObject({ state: 'confirmed' })
+  expect(await own).toMatchObject({ state: 'confirmed', entry: { processIdentity: newProcess, active: true, launch: { state: 'ready' } } })
+})
+
+it.each([['the grid it was relaunched on', 'confirmed', 'https://fixture.invalid/v1'], ['another grid', 'refused', 'https://other.invalid/v1']] as const)(
+  'a relaunch whose process discovery recorded first with %s is %s', async (_which, outcome, peerUrl) => {
+    // A running agent moved to a grid (retarget.ts): its row ready, on its old process and no grid.
+    registry.setLaunch(row.agentId, { state: 'ready' })
+    await registry.flush()
+    const grid = { baseUrl: 'https://fixture.invalid/v1', model: 'fixture-model' }
+    const held = holdImage(rows => rows.some(entry => entry.agentId === row.agentId && entry.bypassPermission === true))
+    registry.setBypassPermission(row.agentId, true)
+    await held.entered
+    // The retarget confirms its engine behind that save...
+    const own = registry.confirmLaunch(row.agentId, { processIdentity: newProcess, grid }).catch(error => error)
+    // ...while discovery's pass records the relaunched engine and the grid its argv names (discovery.ts
+    // `updateProcessIdentity`, a Codex's or Pi's).
+    registry.updateProcessIdentity(row.agentId, newProcess, undefined, { ...grid, baseUrl: peerUrl })
+    held.release()
+    if (outcome === 'confirmed') expect(await own).toMatchObject({ state: 'confirmed', entry: { processIdentity: newProcess, grid } })
+    else expect(await own).toBeInstanceOf(RegistryOwnershipChanged)
+  })
 
 it('retarget keeps provider success and terminal release behind the complete durable launch', async () => {
   const held = holdImage(rows => rows.some(entry => entry.agentId === row.agentId && entry.processIdentity?.pid === newProcess.pid))
@@ -303,7 +356,7 @@ it('binding revalidation cannot change Stop evidence while its prepared image wa
   const nativeEntered = deferred(), nativeDone = deferred(), deleted = vi.fn()
   const stop = createStopAgentService({ registry, stoppedAgents: store, restartJobs: new AgentRestartCoordinator(), stopJobs: jobs,
     backendFor: () => ({ kill: async () => ({ state: 'succeeded', dispatch: 'executed' }) }),
-    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: async () => {} },
+    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), nudge: () => {} },
     forgetSession: async (_id, options) => { await registry.confirmEngineExit(row.agentId, 'remove', options?.authority); deleted() },
     markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative: async () => { nativeEntered.resolve(); await nativeDone.promise } })
   const held = holdImage(rows => rows.some(entry => entry.agentId === row.agentId && entry.title === row.title))
@@ -336,7 +389,7 @@ it('Stop keeps its reply, deletion and resume reservation pending until removal 
     ended: vi.fn(), mirror: { forget: vi.fn() }, clients: { send, sendCommander: vi.fn() } })
   const stop = createStopAgentService({ registry, stoppedAgents: store, restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(),
     backendFor: () => ({ kill: async () => ({ state: 'succeeded', dispatch: 'executed' }) }),
-    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: async () => {} },
+    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), nudge: () => {} },
     forgetSession, markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative: async () => {} })
   const held = holdImage(rows => !rows.some(entry => entry.agentId === row.agentId))
   let replied = false
@@ -366,7 +419,7 @@ it.each(['prepare', 'directory sync'] as const)('Stop keeps a failed %s removal 
     ended: vi.fn(), mirror: { forget: vi.fn() }, clients: { send, sendCommander: vi.fn() } })
   const stop = createStopAgentService({ registry, stoppedAgents: store, restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(),
     backendFor: () => ({ kill: async () => ({ state: 'succeeded', dispatch: 'executed' }) }),
-    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: async () => {} },
+    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), nudge: () => {} },
     forgetSession, markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative: async () => {} })
   if (phase === 'prepare') {
     image.match = rows => !rows.some(entry => entry.agentId === row.agentId)
@@ -564,7 +617,7 @@ it.each([false, true])('restore shell fallback revalidates engine absence after 
   expect(releaseHold).not.toHaveBeenCalled()
 })
 
-it('restore keeps the settled process held until readiness publication completes', async () => {
+it('restore keeps the probed process held until its publication completes', async () => {
   registry.clearProcessIdentity(row.agentId)
   registry.setLaunch(row.agentId, { state: 'starting', nativeToken: startingToken })
   await registry.flush()

@@ -17,6 +17,7 @@ describe('gallery', () => {
   it('the gallery draws every state in both themes', () => {
     expect(STATES).toHaveLength(8)
     expect(new Set(STATES.map(({ view }) => `${view.screen}.${view.phase}`))).toEqual(new Set(CONTRACT_PAIRS))
+    expect(STATES.find((state) => state.name === 'Install · working')?.view.lines).toEqual(['Installing tmux…'])
 
     const root = document.createElement('div')
     draw(root)

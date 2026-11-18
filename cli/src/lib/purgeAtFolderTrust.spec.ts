@@ -34,7 +34,7 @@ const purge = () => new PurgeAgentService({
   live: id => registry.byAgent(id), sessions: () => [...registry.list(), ...stopped.list()], stopped, worktrees: () => WORKSPACES_OFF,
   checkpoints: new SessionCheckpointStore(join(root, 'checkpoints')), restarting: () => false, deleted: vi.fn(), atFolderTrust, atEmptyComposer,
   stop: createStopAgentService({ registry, stoppedAgents: stopped, restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(),
-    backendFor: () => ({ kill }), agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn(async () => {}) },
+    backendFor: () => ({ kill }), agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), nudge: vi.fn() },
     forgetSession: async (id, options) => { await registry.confirmEngineExit(id, 'remove', options.authority) }, markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative }),
 })
 const target = () => ({ agentId: row.agentId, sessionId: null, createdAt: row.registeredAt })

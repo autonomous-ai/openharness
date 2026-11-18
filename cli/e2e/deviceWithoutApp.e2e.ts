@@ -6,7 +6,9 @@
  * - the agent outside a pane goes idle, working, done with its answer, and waits for the person;
  * - the machine list keeps its order while an agent works, and a new agent comes last;
  * - it goes when its process does, and one already running when the dial is plugged in is listed;
- * - one the scan finds reads the name the person gave it in its own record, and its folder for a name Claude Code made up;
+ * - one that answered before the dial is restored with its last answer, as history: nothing is told as done;
+ * - one the scan finds reads the name the person gave it in its own record, the Claude app's own title, and its folder
+ *   for a name Claude Code made up;
  * - a window brings back its tab's list, and closing it the machine's;
  * - talking to it is refused kindly, and `HARNESS_DEVICE_OBSERVED=off` leaves only the Harness agent;
  * - Claude Code in a tmux session the person opened (harness/ownTmux.ts) is listed with host tmux, takes the dial's words
@@ -220,25 +222,50 @@ describe('the device without the app', () => {
     expect(roster.rows.find((r) => r.id === engine.id)).toMatchObject({ name: 'in-ghostty', engine: 'claude', host: 'terminal', caps: 's' })
   })
 
-  it('an agent found by the scan reads the name the person gave it in its own record, one Claude Code made up reads its folder, and no log holds either', async () => {
+  it('an agent answered before the dial connects is restored with its last answer, and nothing is told as done', async () => {
+    const { d, desk } = await fresh()
+    // No device yet, so no devices process: its hooks reach nobody, and only the scan can find its answer.
+    const engine = await startOutside(d, 'in-ghostty', { TERM_PROGRAM: 'ghostty' })
+    engine.type('before the dial')
+    await until('its Stop hook to run', () => engine.ran(d, 'Stop'), 30_000, 100)
+    await engine.idle(d)
+    const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')
+    const restored = await heard(dial, (m) => m.t === 'summary' && m.agentId === engine.id && m.restore === true,
+      'its last answer restored', 0, 15_000)
+    expect(String(restored.text)).toContain('answer 1: before the dial')
+    // History, not news: no turn ended, and no answer told as new.
+    expect(dial.messages.filter((m) => m.agentId === engine.id && (m.t === 'turn.done' || (m.t === 'summary' && m.restore !== true))))
+      .toEqual([])
+    // A count, and no answer.
+    expect(d.log()).toMatch(/\[observed\] scan · 1 found · \d+ app known · 0 named · 1 answered · \d+ ms/)
+    expect(d.log()).not.toContain('answer 1')
+  })
+
+  it('an agent found by the scan reads the name the person gave it in its own record, the Claude app\'s own title names it, one Claude Code made up reads its folder, and no log holds any', async () => {
     const { d, desk } = await fresh()
     // No device yet, so no devices process: their hooks reach nobody. A turn each, so their conversations are on disk.
     const mine = await startOutside(d, 'scratch-2016a', { TERM_PROGRAM: 'ghostty' })
     const made = await startOutside(d, 'scratch-2016b', { TERM_PROGRAM: 'ghostty' })
-    for (const engine of [mine, made]) {
+    const app = await startOutside(d, 'scratch-2016c', { TERM_PROGRAM: 'ghostty' })
+    for (const engine of [mine, made, app]) {
       engine.type('before the dial')
       await until('its Stop hook to run', () => engine.ran(d, 'Stop'), 30_000, 100)
     }
-    mine.named(d, 'Tho 7f3a91c2', 'user')
-    made.named(d, 'Fix login 5d2e8c41', 'derived')
+    await mine.named(d, 'Tho 7f3a91c2', { nameSource: 'user' })
+    await made.named(d, 'Fix login 5d2e8c41', { nameSource: 'derived' })
+    // The Claude app's record: its title, with no nameSource.
+    await app.named(d, 'Plan 9c4e1b07', { entrypoint: 'claude-desktop' })
     const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')
-    const roster = await showing(dial, 'both agents already running listed', (r) => ids(r).includes(mine.id) && ids(r).includes(made.id), 0, 15_000)
+    const roster = await showing(dial, 'the three agents already running listed',
+      (r) => ids(r).includes(mine.id) && ids(r).includes(made.id) && ids(r).includes(app.id), 0, 15_000)
     expect(roster.rows.find((r) => r.id === mine.id)).toMatchObject({ name: 'Tho 7f3a91c2' })
     expect(roster.rows.find((r) => r.id === made.id)).toMatchObject({ name: 'scratch-2016b' })
-    // A count, and neither name.
-    expect(d.log()).toMatch(/\[observed\] scan · 2 found · \d+ app known · 1 named · \d+ ms/)
+    expect(roster.rows.find((r) => r.id === app.id)).toMatchObject({ name: 'Plan 9c4e1b07' })
+    // A count, and no name.
+    expect(d.log()).toMatch(/\[observed\] scan · 3 found · \d+ app known · 2 named · \d+ answered · \d+ ms/)
     expect(d.log()).not.toContain('7f3a91c2')
     expect(d.log()).not.toContain('5d2e8c41')
+    expect(d.log()).not.toContain('9c4e1b07')
     // Its next prompt's hook says no name: the hook has the last word.
     const since = dial.messages.length
     mine.type('again')

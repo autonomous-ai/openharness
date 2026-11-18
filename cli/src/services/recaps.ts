@@ -63,8 +63,10 @@ export function createRecaps(core: CoreApi, options: RecapsOptions = {}): Recaps
   const mirror = new CommanderMirror({
     notifications,
     notifyWithoutDevice: true,
-    // Presentation lease only: the heartbeat's own reading of the turn, as the core said it with the beat.
-    verifiedWorking: (sessionId) => working.get(sessionId) === true,
+    // Presentation lease only: the heartbeat's own reading of the turn, as the core said it with the beat. A question
+    // waiting on the person keeps the card busy: the core withdraws Working while it waits (core/turns/turnHooks.ts),
+    // and the dial keeps its tile working under the question (core/questions.ts).
+    verifiedWorking: (sessionId) => working.get(sessionId) === true || notifications.asking(sessionId),
     send: (frame) => core.clients.turnCard(frame),
     // turn_summary_pending / turn_summary → the web indicator.
     sendWeb: (frame) => core.clients.turnSummary(frame as Parameters<CoreApi['clients']['turnSummary']>[0]),

@@ -165,6 +165,22 @@ describe('fakeOpencode', () => {
     })
   })
 
+  it('each time it stamps is later than the last, so the list is in the order of the calls within one millisecond', async () => {
+    const server = await start()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const ids = async () =>
+      ((await (await get(server, '/api/session?order=desc')).json()) as { data: Array<{ id: string }> }).data.map(({ id }) => id)
+    server.session({ id: 'ses_a1' })
+    server.session({ id: 'ses_b1' })
+    expect(await ids()).toEqual(['ses_b1', 'ses_a1'])
+    server.start('ses_a1')
+    expect(await ids()).toEqual(['ses_a1', 'ses_b1'])
+    server.start('ses_b1')
+    expect(await ids()).toEqual(['ses_b1', 'ses_a1'])
+    server.end('ses_a1', 'succeeded')
+    expect(await ids()).toEqual(['ses_a1', 'ses_b1'])
+  })
+
   it('a permission asked is pending and told; replied, it is gone and told', async () => {
     const server = await start()
     server.session({ id: 'ses_a1' })

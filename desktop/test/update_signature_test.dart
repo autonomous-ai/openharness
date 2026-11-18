@@ -101,25 +101,39 @@ void main() {
       expect(() => parseMacSigner(''), throwsA(isA<UpdateRefused>()));
     });
 
+    test("the updater's requirement is unchanged", () {
+      final signer = parseMacSigner(_released)!;
+      expect(
+        macUpdateRequirement(team: signer.team, identifier: signer.identifier),
+        'anchor apple generic'
+        ' and certificate 1[field.1.2.840.113635.100.6.2.6]'
+        ' and certificate leaf[field.1.2.840.113635.100.6.1.13]'
+        ' and certificate leaf[subject.OU] = "54DJVWMJCC"'
+        ' and identifier "ai.autonomous.harness"'
+        ' and notarized',
+      );
+    });
+
     test(
-      'the requirement pins Developer ID, the team, the app and notarization',
+      "Harness Device's requirement carries the team, its identifier and notarization",
       () {
-        final requirement = macUpdateRequirement(parseMacSigner(_released)!);
-        expect(requirement, startsWith('anchor apple generic'));
-        expect(
-          requirement,
-          contains('certificate 1[field.1.2.840.113635.100.6.2.6]'),
-        );
-        expect(
-          requirement,
-          contains('certificate leaf[field.1.2.840.113635.100.6.1.13]'),
+        final requirement = macUpdateRequirement(
+          team: '54DJVWMJCC',
+          identifier: 'ai.autonomous.harness.device',
         );
         expect(
           requirement,
           contains('certificate leaf[subject.OU] = "54DJVWMJCC"'),
         );
-        expect(requirement, contains('identifier "ai.autonomous.harness"'));
-        expect(requirement, endsWith('and notarized'));
+        expect(
+          requirement,
+          contains('identifier "ai.autonomous.harness.device"'),
+        );
+        expect(
+          requirement,
+          isNot(contains('identifier "ai.autonomous.harness" ')),
+        );
+        expect(requirement, endsWith(' and notarized'));
       },
     );
   });

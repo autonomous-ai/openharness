@@ -463,7 +463,7 @@ it.each(['Stop', 'checkpointed Stop', 'unknown process', 'unknown descriptors', 
   const deps: StopAgentServiceDeps = {
     registry: { resolve: () => row }, stoppedAgents: { save } as unknown as StopAgentServiceDeps['stoppedAgents'],
     restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(), backendFor: () => ({ kill }),
-    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn() },
+    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), nudge: vi.fn() },
     forgetSession: vi.fn(), markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative: vi.fn(),
   }
   await expect(createStopAgentService(deps)(row.agentId, action === 'checkpointed Stop' ? { checkpoint } : {}))

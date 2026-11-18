@@ -293,7 +293,7 @@ The gallery (`test/elements_gallery_test.dart`) draws these elements in light
 and dark, each section against its own images,
 `test/goldens/elements/<section>-{light,dark}.png`, so a pull request that
 changes one element changes only its section's images: `browser-setup`,
-`browser-settings`, `browser-pane` and `hachi-tab`. Words are left out of the
+`browser-settings`, `browser-pane`, `hachi-tab` and `device-app`. Words are left out of the
 comparison, since macOS and Linux smooth their edges differently; outside them
 at most 38 pixels of a section's image may differ, so a lost element fails. A
 new or changed element updates this document and the gallery, with its
@@ -476,6 +476,44 @@ with macOS's window out of sight, and nothing closed it). Once it has run, the
 footer shows "Removed." or the CLI's own reason in the danger color, with
 Close and Retry. Cancelled or failed, the next launch asks again.
 `test/old_team_account_test.dart` clicks through it.
+
+**Menu-bar app offer** (`widgets/device_app_band.dart`,
+`devices/device_app_row.dart`; gallery `device-app`) — shown on macOS 13 or
+later while a dial is plugged in to this computer and the Harness menu-bar app
+is not installed; Linux, Windows, the web and macOS 12 show nothing. The band
+is a window band, last of the device bands, drawn as the others: a 10% amber
+(`AppPalette.warn`) tint over the window, a 28% bottom rule, a 16-point
+`AppIcons.arrowDownToLine` (`triangleAlert` on a failure), body text of at most
+two lines, then the quiet `Not now` first and `Install` last. Both are off
+while it reads `Installing…`. A failure replaces the sentence with its line and
+`Install` with `Retry`. `Not now` hides the band for good on this computer. The
+row is a setting row at the top of the Devices tab's settings column, for a
+dial on this computer: one button (`Install`, `Installing…`, `Retry`, `Open`),
+a failure line under its detail in the danger color, announced as a live
+region, and no row once the app is installed and running. `Not now` on the band
+leaves the row. Installed but not opened, `Retry` and `Open` only open it. The
+copy, exact: the band's `Your dial follows apps and terminal tabs with the
+Harness menu-bar app.`; the row's `Menu-bar app` and `Follows the app and
+terminal tab in front.`; the failure lines `Couldn’t download the app.`,
+`Couldn’t verify the download.`, `Couldn’t install the app.` and `Installed.
+Couldn’t open it.`
+
+```text
+ ↓  Your dial follows apps and terminal tabs with the Harness menu-bar app.       Not now  [ Install ]
+ ↓  Your dial follows apps and terminal tabs with the Harness menu-bar app.       Not now  [ Installing… ]
+ ⚠  Couldn’t download the app.                                                    Not now  [ Retry ]
+
+┌────────────────────────────────────────────────────────────┐   ┌───────────────────────────────────────────────┐
+│ Menu-bar app                                   [ Install ] │   │ Menu-bar app                        [ Retry ] │
+│ Follows the app and terminal tab in front.                 │   │ Follows the app and terminal tab in front.    │
+└────────────────────────────────────────────────────────────┘   │ Couldn’t verify the download.                 │
+                                                                 └───────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────┐   ┌───────────────────────────────────────────────┐
+│ Menu-bar app                                      [ Open ] │   │ Menu-bar app                         [ Open ] │
+│ Follows the app and terminal tab in front.                 │   │ Follows the app and terminal tab in front.    │
+└────────────────────────────────────────────────────────────┘   │ Installed. Couldn’t open it.                  │
+                                                                 └───────────────────────────────────────────────┘
+```
 
 **Pickers** — the same frame and header, inset result rows and a quiet footer
 with relevant keyboard hints. Move Pane uses a tab icon, destination name,
@@ -700,7 +738,8 @@ Harness Device is the menu-bar app for the dial (`device-app/`), named
 `Harness Device.app`. It sets up
 Harness, keeps it running and shows the dial's state; sign-in is the one
 thing it offers. Claude Code and Codex need no setting: Harness sets them up
-once a dial is plugged in.
+once a dial is plugged in. The desktop app offers and installs it
+([Surface families](#surface-families), Menu-bar app offer).
 
 Its menu is the native menu; a row with nothing to say is absent. Its window
 has two screens, Install and Sign in,
@@ -723,6 +762,9 @@ theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
 
 - Type: dialog heading 17 semibold, 1.3; body 13, 1.45; control 13 medium,
   1.25; metadata 12, 1.35; monospace for the install's last lines.
+- Install, working: the spinner, and under it one muted body line, the step:
+  `Getting ready…`, `Installing tmux…` or `Downloading Harness…`. The step is
+  fixed copy, never the script's text.
 - Geometry: dialog content inset 24; group / control gap 16 / 8; buttons are
   capsules, 32 high at least, trailing: secondary first, primary last, as the
   desktop's dialogs. The spinner stands still under Reduce Motion.
@@ -737,15 +779,15 @@ theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
   the one in force checked. Notifications is the first.
 - A menu action that asks for more before it is done ends in `…`; one that acts at
   once has none.
-- The dial line names no firmware version: only `Updating to <version>`
-  while the dial updates. **About** opens macOS's standard About panel,
+- The dial line names no firmware version: it reads `Updating device…`
+  while the firmware updates. **About** opens macOS's standard About panel,
   brought to the front, with the app's name and version and one credits line,
-  `Dial 0.1.0 · Harness 0.6.58`, a version the app does not know left out.
+  `Device 0.1.0 · Harness 0.6.58`, a version the app does not know left out.
 
 The menu, top to bottom:
 
 ```text
-  Dial connected
+  Device ready
   Signed in
 ✓ Sound
   Notifications ▸

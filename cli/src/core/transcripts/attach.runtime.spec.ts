@@ -30,7 +30,7 @@ function setup(replyEffort?: string) {
   profiles.hydrate(session, [])
   profiles.confirmEffort(session.sessionId, 'high')
   const before = profiles.getState(session.sessionId)
-  const normalizers = createSessionNormalizers(noOtherStreams())
+  const normalizers = createSessionNormalizers(noOtherStreams(), { held: () => false, closed: () => {}, forget: () => {} })
   const oldParser = liveFor('claude')!.create(session)
   normalizers.liveParsers.set(session.sessionId, oldParser)
   const hold = { offset: statSync(path).size, expired: false, release: vi.fn() }

@@ -10,16 +10,19 @@ function others(entries: Record<string, OtherStream> = {}) {
   return { get: (id: string) => entries[id], has: (id: string) => id in entries, forget: vi.fn(), stop: vi.fn() }
 }
 
+/** Turn hooks that hold no end. */
+const noTurns = { held: () => false, closed: vi.fn(), forget: vi.fn() }
+
 describe('the session normalizer table', () => {
   it('has state for a session with a live parser or another engine\'s stream, and none for one with neither', () => {
-    expect(createSessionNormalizers(others()).hasState('s')).toBe(false)
-    const table = createSessionNormalizers(others({ o: stream() }))
+    expect(createSessionNormalizers(others(), noTurns).hasState('s')).toBe(false)
+    const table = createSessionNormalizers(others({ o: stream() }), noTurns)
     table.liveParsers.set('p', parser())
     expect([table.hasState('p'), table.hasState('o'), table.hasState('none')]).toEqual([true, true, false])
   })
 
   it('reads whether a turn is open from the parser, else the stream, the parser first', () => {
-    const table = createSessionNormalizers(others({ s: stream(true), o: stream(true) }))
+    const table = createSessionNormalizers(others({ s: stream(true), o: stream(true) }), noTurns)
     expect(table.sessionTurnState('none')).toBeUndefined()
     expect(table.sessionTurnOpen('none')).toBe(false)
     expect(table.sessionTurnState('o')).toBe(true)
@@ -31,7 +34,7 @@ describe('the session normalizer table', () => {
 
   it('forgets a session\'s parser and its stream, and leaves other sessions alone', () => {
     const streams = others({ s: stream() })
-    const table = createSessionNormalizers(streams)
+    const table = createSessionNormalizers(streams, noTurns)
     table.liveParsers.set('s', parser())
     table.liveParsers.set('keep', parser())
     table.forget('s')
@@ -42,7 +45,7 @@ describe('the session normalizer table', () => {
 
   it('closes a cancelled turn in the parser and the stream, as a cancel', () => {
     const live = parser(true), other = stream(true)
-    const table = createSessionNormalizers(others({ s: other }))
+    const table = createSessionNormalizers(others({ s: other }), noTurns)
     table.liveParsers.set('s', live)
     table.closeTurns('s')
     expect(live.closeTurn).toHaveBeenCalledWith('cancel')
@@ -50,9 +53,26 @@ describe('the session normalizer table', () => {
     expect(() => table.closeTurns('never-seen')).not.toThrow()
   })
 
+  it('reads a turn as open while its end is held, whatever the parser says', () => {
+    const turns = { held: (id: string) => id === 'held', closed: vi.fn(), forget: vi.fn() }
+    const table = createSessionNormalizers(others({ other: stream(false) }), turns)
+    table.liveParsers.set('held', parser(false))
+    table.liveParsers.set('closed', parser(false))
+    expect(['held', 'closed', 'other', 'none'].map(table.sessionTurnState)).toEqual([true, false, false, undefined])
+  })
+
+  it('a cancel tells the turn hooks it closed; forgetting a session forgets its record', () => {
+    const turns = { held: () => false, closed: vi.fn(), forget: vi.fn() }
+    const table = createSessionNormalizers(others(), turns)
+    table.closeTurns('s')
+    expect(turns.closed).toHaveBeenCalledWith('s')
+    table.forget('s')
+    expect(turns.forget).toHaveBeenCalledWith('s')
+  })
+
   it('stops following every other engine\'s stream on shutdown', () => {
     const streams = others()
-    createSessionNormalizers(streams).stopPollers()
+    createSessionNormalizers(streams, noTurns).stopPollers()
     expect(streams.stop).toHaveBeenCalledOnce()
   })
 })

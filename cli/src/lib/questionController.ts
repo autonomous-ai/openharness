@@ -453,6 +453,8 @@ export interface QuestionWatcherDeps {
 
   /** True while that session's dialog is being keyed by an answer already in flight. */
   isDriving?: (sessionId: string) => boolean
+  /** A hook said this session waits (`awaitDialog`), and two polls in a row since found no dialog: nothing is asked there. */
+  onClear?: (sessionId: string) => void
 }
 
 const POLL_MS = 1500
@@ -497,6 +499,8 @@ export class QuestionWatcher {
   private last = new Map<string, string>() // sessionId → fingerprint of the announced question
   private lastId = new Map<string, string>()  // sessionId → requestId of the announced question
   private misses = new Map<string, number>()  // sessionId → consecutive polls with no dialog
+  /** Watched sessions a hook said wait, with no dialog of this turn read since. */
+  private readonly told = new Set<string>()
   private readonly blocked = new Map<string, string>()
   /** sessionId → the dialog that was ALREADY on the pane when this turn began. */
   private readonly preTurn = new Map<string, string>()
@@ -597,6 +601,15 @@ export class QuestionWatcher {
   }
 
   /**
+   * A hook said a dialog is coming. Reads nothing now: the engine draws its dialog after the hook returns, so
+   * a read now finds nothing, and the next poll reads the pane, as every poll does. A session not watched has
+   * no poll to tell, so nothing is kept for it.
+   */
+  awaitDialog(sessionId: string): void {
+    if (this.watching.has(sessionId)) this.told.add(sessionId)
+  }
+
+  /**
    * Stop polling — and CLOSE any question still outstanding on this session.
    *
    * ⚠️ THIS IS THE COMMON CASE, NOT THE EDGE ONE, and leaving it out made the whole close mechanism look
@@ -613,6 +626,7 @@ export class QuestionWatcher {
     this.cancelPending(sessionId)
     this.preTurn.delete(sessionId)
     this.blocked.delete(sessionId)
+    this.told.delete(sessionId)
     this.watching.delete(sessionId)
     if (!this.watching.size && this.timer) { clearInterval(this.timer); this.timer = undefined }
     const requestId = this.lastId.get(sessionId)
@@ -630,6 +644,7 @@ export class QuestionWatcher {
     this.preTurn.clear()
     this.beforePrompt.clear()
     this.blocked.clear()
+    this.told.clear()
     this.last.clear()
     this.lastId.clear()
     this.misses.clear()
@@ -657,18 +672,25 @@ export class QuestionWatcher {
 
   /**
    * A poll found no dialog. Announce the close once the miss is CONFIRMED, and only if we announced the
-   * question in the first place — a session nobody was told about has nothing to take back.
+   * question in the first place — a session nobody was told about has nothing to take back. A session a hook
+   * said waits, with no question announced, is told clear on the same confirmed miss: a dialog answered
+   * before any poll found it (a fast key, the dial's own hook) leaves nothing else to end that wait.
    */
   private noteGone(sessionId: string): void {
     this.last.delete(sessionId)   // unchanged: a dialog that comes back announces fresh
     const requestId = this.lastId.get(sessionId)
-    if (!requestId) return
+    if (!requestId && !this.told.has(sessionId)) return
     const misses = (this.misses.get(sessionId) ?? 0) + 1
     this.misses.set(sessionId, misses)
     if (misses < GONE_TICKS) return
-    this.lastId.delete(sessionId)
     this.misses.delete(sessionId)
-    this.deps.onQuestionGone?.(sessionId, requestId)
+    if (requestId) {
+      this.lastId.delete(sessionId)
+      this.deps.onQuestionGone?.(sessionId, requestId)
+      return
+    }
+    this.told.delete(sessionId)
+    this.deps.onClear?.(sessionId)
   }
 
 
@@ -725,6 +747,8 @@ export class QuestionWatcher {
     // before, and has been answered. Say nothing until it changes or leaves.
     if (this.preTurn.get(sessionId) === fingerprint) return
     this.preTurn.delete(sessionId)
+    // This turn's dialog is on screen: its close is told as a question's (onQuestionGone), not as clear.
+    this.told.delete(sessionId)
     if (this.last.get(sessionId) === fingerprint) return
     this.last.set(sessionId, fingerprint)
 

@@ -104,6 +104,21 @@ describe('engine live checkpoints', () => {
     expect(end.cursor.turn.turnOpen).toBe(false)
   })
 
+  // The core's turn rules read both (core/turns/turnHooks.ts): the record's own time, and an end no Stop follows.
+  it('a frame carries its record\'s at, and over when the engine said so', async () => {
+    const t = await setup('claude')
+    await t.page()
+    const at = (line: string, timestamp: string) => JSON.stringify({ ...JSON.parse(line), timestamp }) + '\n'
+    const continued = JSON.stringify({ type: 'attachment', attachment: { type: 'goal_status', met: false, condition: 'finish' } })
+    const over = JSON.stringify({ type: 'system', subtype: 'turn_duration', durationMs: 1 })
+    await appendFile(t.file, at(prompt('claude', 'go'), '2026-11-17T01:00:00.000Z') + done('claude')
+      + at(continued, '2026-11-17T01:00:01.000Z') + at(over, '2026-11-17T01:00:02.000Z'))
+    const frames = (await t.page()).frames
+    expect(frames.map(frame => [frame.at, frame.over])).toEqual([[Date.parse('2026-11-17T01:00:00.000Z'), undefined], [undefined, undefined],
+      [Date.parse('2026-11-17T01:00:01.000Z'), undefined], [Date.parse('2026-11-17T01:00:02.000Z'), true]])
+    expect(frames.map(frame => 'at' in frame || 'over' in frame)).toEqual([true, false, true, true])
+  })
+
   it('returns the exact unacknowledged page on a retry, even after new file content arrives', async () => {
     const t = await setup('claude', prompt('claude', 'first'))
     t.payload.fromStart = true; t.payload.replay = true

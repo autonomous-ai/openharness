@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { correlateAgentEvent } from '../../lib/agentEvent.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { ActivityFrame } from '../../lib/turnActivity.js'
 import { createHeartbeats, type HeartbeatDeps } from './heartbeats.js'
@@ -16,6 +17,7 @@ function setup(over: Partial<HeartbeatDeps> = {}) {
     turnActivity: { check: vi.fn(async () => {}), snapshot: vi.fn(() => activity), forget: vi.fn() },
     mirror: { heartbeat: vi.fn(() => deviceBusy) },
     clients: { send: vi.fn() },
+    turns: { beat: vi.fn() },
     ...over,
   }
   return {
@@ -105,6 +107,21 @@ describe('turn heartbeats', () => {
     expect(deps.runtimeActivity.forget).toHaveBeenCalledWith('s1')
   })
 
+  // A turn whose Stop never came ends at a beat (core/turns/turnHooks.ts, R6): the turn it closes is not checked.
+  it('each beat of an active session tells the turn hooks first', async () => {
+    const run = setup()
+    vi.mocked(run.deps.turns.beat).mockImplementation(() => run.set({ turnOpen: false }))
+    run.beats.startHeartbeat('s1')
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(run.deps.turns.beat).toHaveBeenCalledExactlyOnceWith('s1')
+    expect(run.deps.turnActivity.check).not.toHaveBeenCalled()
+    expect(run.beats.heartbeats.has('s1')).toBe(false)
+    run.beats.startHeartbeat('s1')
+    run.set({ active: false })
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(run.deps.turns.beat).toHaveBeenCalledOnce()
+  })
+
   it('stops for a session that is no longer active, and forgets its activity', async () => {
     const { deps, beats, set } = setup()
     beats.startHeartbeat('s1')
@@ -136,5 +153,17 @@ describe('turn heartbeats', () => {
     expect(error).toHaveBeenCalledWith('[activity] probe failed:', 'Error: pane gone')
     beats.stopHeartbeat('s1')
     beats.stopHeartbeat('never-started')
+  })
+
+  // A cancel and a wait on the person (core/turns/cancel.ts, core/turns/turnHooks.ts): told now, with or without a beat.
+  it('tells every window the activity as it reads now, and nothing for an agent the lease no longer knows', () => {
+    const { deps, beats, set } = setup()
+    const activity = { state: 'idle' } as ActivityFrame
+    set({ activity })
+    beats.tell('s1')
+    expect(deps.clients.send).toHaveBeenCalledExactlyOnceWith(correlateAgentEvent({ type: 'agent_activity', payload: { activity } }, 's1', 'a1'))
+    set({ activity: undefined })
+    beats.tell('s1')
+    expect(deps.clients.send).toHaveBeenCalledOnce()
   })
 })

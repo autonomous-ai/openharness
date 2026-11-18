@@ -165,8 +165,10 @@ describe('workspaces in their own process', () => {
     await d.start()
     const client = await LocalClient.connect(d)
     const cwd = worktree(d, repository(d), 'brave-otter', true)
-    const agent = await create(d, client, cwd)
+    // Parked first. A start that lived long enough to reach the core reported this agent's Git facts, and a frame
+    // keeps the last ones reported (docs/design/2026-11-16-frame-parts.md): then a service had observed it.
     await until('the master to park workspaces', () => d.log().includes('[harnessd] service edge ended 3 times') || null, 60_000, 250)
+    const agent = await create(d, client, cwd)
     await turn(client, agent.id, 'workspaces is parked and nothing else cares')
     // No service has observed this agent: Git facts must not be fabricated by the core.
     const frame = await row(client, agent.id)

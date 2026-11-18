@@ -107,7 +107,7 @@ function attachTo(db: string, row: RegisteredSession, emit: AttachDeps['emit']) 
   let ingest!: ReturnType<typeof createIngest>
   const others = inProcessOtherStreams({ bySession, frame: (session, frame) => ingest.acceptStreamFrame(session, frame) })
   stops.push(others.stop)
-  const normalizers = createSessionNormalizers(others.streams)
+  const normalizers = createSessionNormalizers(others.streams, { held: () => false, closed: () => {}, forget: () => {} })
   ingest = createIngest({ liveFor, has: () => true, bySession, tokenUsage: { changed: vi.fn() }, device: () => undefined,
     runtimeProfiles: runtimeProfiles as never, normalizers, announceTurnAborted, emit: emit as never, attachSession: vi.fn(async () => true),
     setIdentityHold, announceSession })

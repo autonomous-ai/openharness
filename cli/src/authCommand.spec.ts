@@ -6,11 +6,13 @@ import { join } from 'path'
 import { fileURLToPath } from 'url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { useBundledCli } from './__fixtures__/bundledCli.js'
+import { FAKE_COMPUTER_NAME } from './__fixtures__/computerNameFake.js'
 import { b64d, b64e, fingerprint, newIdentity } from './lib/e2ee/core.js'
 import { listenLocalSocket, localSocketPath } from './lib/localSocket.js'
 
 const CLI_ROOT = fileURLToPath(new URL('..', import.meta.url))
-const cli = useBundledCli()
+// The computer's name is macOS's to give, which a test cannot set: the bundle names it with a fake.
+const cli = useBundledCli({ stubs: { 'lib/computerName.ts': fileURLToPath(new URL('./__fixtures__/computerNameFake.ts', import.meta.url)) } })
 const FP = /^[0-9A-F]{4}(·[0-9A-F]{4}){3}$/
 const dirs: string[] = []
 const servers: Server[] = []
@@ -541,6 +543,16 @@ describe('harness login --json', () => {
     expect(calls).toContainEqual({ url: '/api/auth/qr/cancel', body: { pollToken: 'hnp_poll' } })
   }, 30_000)
 
+  it('a QR sign-in names the computer as its person named it', async () => {
+    const root = tempRoot()
+    const { base, calls } = await fakeBackend({ routes: pendingQr() })
+    const login = jsonChild(root, base, ['login', '--force', '--qr', '--json'])
+    expect(await login.next()).toMatchObject({ type: 'qr' })
+    login.child.kill('SIGTERM')
+    await login.exit
+    expect(calls.find((c) => c.url === '/api/auth/qr/start')?.body).toMatchObject({ label: FAKE_COMPUTER_NAME })
+  }, 30_000)
+
   it('a QR sign-in stopped by SIGTERM while it waits on the phone takes its code back', async () => {
     // The app's Cancel and its quit both send SIGTERM; the code must not outlive either.
     const root = tempRoot()
@@ -790,6 +802,17 @@ describe('harness login --ticket', () => {
     expect(JSON.parse(readFileSync(join(root, 'auth', 'session.json'), 'utf8'))).toMatchObject({ accessToken: 'tok_box', method: 'qr', machineId: 'm_box', signInAcct: 'acct_box' })
   }, 30_000)
 
+  it('resolving the machine names the computer as its person named it', async () => {
+    const root = tempRoot()
+    const { base, calls } = await fakeBackend({
+      routes: { '/api/auth/qr/claim': claimed, '/api/auth/me': () => ({ user: { id: 'acct_box' } }) },
+      resolveComputer: () => ({ machine: { machineId: 'm_box' } }),
+    })
+    const result = await runAsync(root, ['login', '--ticket=hnp_ticket', '--json'], base)
+    expect(result.status, result.stderr).toBe(0)
+    expect(calls.find((c) => c.url === '/api/machines/resolve-computer')?.body).toMatchObject({ label: FAKE_COMPUTER_NAME })
+  }, 30_000)
+
   it('refuses on a computer that is already signed in, even with --force, and leaves the ticket unspent', async () => {
     const root = tempRoot()
     seedSession(root)
@@ -884,7 +907,7 @@ describe('a Harness session in place of SSO tokens', () => {
     expect(JSON.parse(result.stdout.trim())).toMatchObject({ loggedIn: true, machineId: 'm_seeded' })
     expect(authCalls(backend.calls)).toEqual([{ url: '/api/auth/refresh', body: {
       refreshToken: 'refresh_seeded', autonomousEnv: 'prod', clientId: 'harness-desktop',
-      harnessSession: { kind: 'computer', label: expect.any(String) },
+      harnessSession: { kind: 'computer', label: FAKE_COMPUTER_NAME },
     } }])
     // The same sign-in, now holding the Harness session's tokens; nothing else about it changed.
     expect(sessionOnDisk(root)).toMatchObject({
@@ -919,7 +942,7 @@ describe('a Harness session in place of SSO tokens', () => {
     await fetch(`${redirectUri}?code=code_123&state=state_456`)
     expect(await login.next()).toMatchObject({ type: 'result', status: 'success' })
     await login.exit
-    expect(exchanged).toMatchObject({ code: 'code_123', harnessSession: { kind: 'computer', label: expect.any(String) } })
+    expect(exchanged).toMatchObject({ code: 'code_123', harnessSession: { kind: 'computer', label: FAKE_COMPUTER_NAME } })
     expect(sessionOnDisk(root)).toMatchObject({ accessToken: HNA, refreshToken: HNR, machineId: 'm_new' })
   }, 30_000)
 

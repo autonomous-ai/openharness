@@ -107,6 +107,10 @@ const writeCommand = (directory: string, name: string, lines: string[]) => {
   chmodSync(path, 0o700);
 };
 
+// A `brew` that writes down any call to it, so a test can say Homebrew was never run.
+const writeRecordingBrew = (directory: string, record: string) =>
+  writeCommand(directory, "brew", [`printf '%s\\n' "$*" >> '${record}'`, "exit 99"]);
+
 // What the CLI runs on Linux besides tmux — the only other command step 1 asks about.
 const writeLinuxHostCommands = (directory: string) => {
   writeCommand(directory, "ps", ["exit 0"]);
@@ -131,16 +135,126 @@ const finaleOf = (source: string) =>
   source.slice(source.indexOf('METADATA_URL="${HARNESS_METADATA_URL'), source.indexOf("# Shared by every download")) +
   source.slice(source.indexOf("# 5. Final verification"));
 
+// A fake's first line when it reads its stdin to the end, as `brew` read the piped script on
+// 2026-11-17. By its full path: some tests' PATH holds only the fakes.
+const DRAIN = "/bin/cat >/dev/null";
+const drained = (drain: boolean, lines: string[]) => (drain ? [DRAIN, ...lines] : lines);
+
 // A ~/.local/bin with a launcher that answers `version`, plus the node and tmux the verification runs.
-const installedFixture = (scratch: string) => {
+const installedFixture = (scratch: string, drain = false) => {
   const home = join(scratch, "home");
   const bin = join(home, ".local", "bin");
   mkdirSync(bin, { recursive: true });
-  writeCommand(bin, "harness", ['[ "$1" = version ] && echo 0.2.60', "exit 0"]);
-  writeCommand(scratch, "node", ["exit 0"]);
-  writeCommand(scratch, "tmux", ['echo "tmux 3.7"']);
+  writeCommand(bin, "harness", drained(drain, ['[ "$1" = version ] && echo 0.2.60', "exit 0"]));
+  writeCommand(scratch, "node", drained(drain, ["exit 0"]));
+  writeCommand(scratch, "tmux", drained(drain, ['echo "tmux 3.7"']));
   return { home, node: join(scratch, "node") };
 };
+
+// A fake CDN: `curl -o` writes the archive, plain `curl` prints the manifest. The archive wraps a
+// fake tmux so the whole managed path — fetch, verify, unpack, record, link — runs for real.
+const managedFixture = (scratch: string, tamperSha = false, drain = false) => {
+  const home = join(scratch, "home");
+  const root = "tmux-9.9-darwin-arm64";
+  const stage = join(scratch, "stage", root, "bin");
+  mkdirSync(stage, { recursive: true });
+  writeCommand(stage, "tmux", drained(drain, ["printf 'tmux 9.9\\n'"]));
+  const archive = join(scratch, `${root}.tar.gz`);
+  spawnSync("tar", ["-czf", archive, "-C", join(scratch, "stage"), root]);
+  const sha = spawnSync("shasum", ["-a", "256", archive], { encoding: "utf8" }).stdout.split(" ")[0];
+  const manifest = JSON.stringify({
+    tmux: {
+      "darwin-arm64": {
+        version: "9.9",
+        url: "https://cdn.example/tmux.tar.gz",
+        sha256: tamperSha ? "0".repeat(64) : sha,
+        size: 1,
+        archiveRoot: root,
+      },
+    },
+  }, null, 2);
+  writeFileSync(join(scratch, "manifest.json"), manifest);
+  // The ladder's first rung is `command -v tmux && tmux -V`, and PATH below still includes /usr/bin
+  // — where ubuntu-latest (CI) ships a real tmux 3.4, so on that runner the script found it, said
+  // "tmux ready (tmux 3.4)" and never took the managed path these tests exist for. A broken tmux
+  // in the fixture dir (first on PATH) fails that rung everywhere; once the managed build is
+  // linked, the script puts BIN_DIR ahead of PATH, so the 9.9 fake wins from then on.
+  writeCommand(scratch, "tmux", ["exit 127"]);
+  writeCommand(scratch, "curl", [
+    `printf '%s\\n' "$*" >> '${join(scratch, "curl-invocations")}'`,
+    `case "$*" in *"-o "*) cp '${archive}' "$4" ;; *) cat '${join(scratch, "manifest.json")}' ;; esac`,
+  ]);
+  writeCommand(scratch, "uname", [`if [ "$1" = "-m" ]; then printf 'arm64\\n'; else printf 'Darwin\\n'; fi`]);
+  mkdirSync(home, { recursive: true });
+  return { home, root };
+};
+
+// The helpers plus the grid step alone, as one runnable unit.
+const gridStepOf = (source: string) =>
+  source.slice(source.indexOf('METADATA_URL="${HARNESS_METADATA_URL'), source.indexOf("# 1. Host requirements")) +
+  source.slice(source.indexOf("# 3b. The managed grid"), source.indexOf("# 3c. hn's binary"));
+
+const gridFixture = (scratch: string, tamperSha = false, drain = false) => {
+  const home = join(scratch, "home");
+  const root = "grid-9.9-darwin-arm64";
+  const stage = join(scratch, "stage", root, "bin");
+  mkdirSync(stage, { recursive: true });
+  writeCommand(stage, "grid", drained(drain, ["printf 'grid 9.9\\n'"]));
+  const archive = join(scratch, `${root}.tar.gz`);
+  spawnSync("tar", ["-czf", archive, "-C", join(scratch, "stage"), root]);
+  const sha = spawnSync("shasum", ["-a", "256", archive], { encoding: "utf8" }).stdout.split(" ")[0];
+  writeFileSync(join(scratch, "manifest.json"), JSON.stringify({
+    grid: {
+      "darwin-arm64": {
+        version: "9.9",
+        url: "https://cdn.example/grid.tar.gz",
+        sha256: tamperSha ? "0".repeat(64) : sha,
+        size: 1,
+        archiveRoot: root,
+      },
+    },
+  }, null, 2));
+  writeCommand(scratch, "curl", [
+    `printf '%s\\n' "$*" >> '${join(scratch, "curl-invocations")}'`,
+    `case "$*" in *"-o "*) cp '${archive}' "$4" ;; *) cat '${join(scratch, "manifest.json")}' ;; esac`,
+  ]);
+  writeCommand(scratch, "uname", [`if [ "$1" = "-m" ]; then printf 'arm64\\n'; else printf 'Darwin\\n'; fi`]);
+  mkdirSync(home, { recursive: true });
+  return { home, root };
+};
+
+// The constants and helpers (install_hn among them), then step 3c alone.
+const hnStepOf = (source: string) =>
+  source.slice(source.indexOf('METADATA_URL="${HARNESS_METADATA_URL'), source.indexOf("# 1. Host requirements")) +
+  source.slice(source.indexOf("# 3c. hn's binary"), source.indexOf("# 4. Ensure ~/.local/bin"));
+
+const hnFixture = (scratch: string, { tamper = false, runs = true, drain = false } = {}) => {
+  const home = join(scratch, "home");
+  mkdirSync(home, { recursive: true });
+  const binary = join(scratch, "harness-tui-darwin-arm64");
+  writeFileSync(binary, ["#!/bin/sh", ...drained(drain, [runs ? "echo 'hn 0.1.0 (tmux 3.5a)'" : "exit 1"]), ""].join("\n"));
+  chmodSync(binary, 0o755);
+  const sha = spawnSync("shasum", ["-a", "256", binary], { encoding: "utf8" }).stdout.split(" ")[0];
+  // As release-tui.yml writes it: jq's pretty print, one build per platform.
+  writeFileSync(join(scratch, "manifest.json"), JSON.stringify({
+    version: "0.1.0",
+    builds: {
+      "darwin-x64": { url: "https://cdn.example/harness-tui-darwin-x64", sha256: "1".repeat(64) },
+      "darwin-arm64": { url: "https://cdn.example/harness-tui-darwin-arm64", sha256: tamper ? "0".repeat(64) : sha },
+    },
+  }, null, 2));
+  writeCommand(scratch, "curl", [
+    `printf '%s\\n' "$*" >> '${join(scratch, "curl-invocations")}'`,
+    `case "$*" in *"-o "*) cp '${binary}' "$4" ;; *) cat '${join(scratch, "manifest.json")}' ;; esac`,
+  ]);
+  writeCommand(scratch, "uname", [`if [ "$1" = "-m" ]; then printf 'arm64\\n'; else printf 'Darwin\\n'; fi`]);
+  return { home, tui: join(home, ".harness", "bin", "harness-tui") };
+};
+
+// Step 2's choice of a Node, up to the download, with RUNTIME_DIR at `runtime`.
+const nodeSelectionOf = (source: string, runtime: string) =>
+  `RUNTIME_DIR='${runtime}'; CURRENT_NODE_FILE="$RUNTIME_DIR/current-node"; ` +
+  source.slice(source.indexOf("# Prints the major version"), source.indexOf('if [ -z "$NODE_BIN" ]; then\n  # Fetch'));
 
 /** What tells the installer an agent ran it: removed from this test's own environment, which may be an agent's. */
 const AGENT_KEYS = ["CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "AI_AGENT", "HARNESS_AGENT_SESSION"];
@@ -319,8 +433,7 @@ describe("scripts/install.sh command contract", () => {
       mkdirSync(join(runtime, `node-v${major}`, "bin"), { recursive: true });
       writeCommand(join(runtime, `node-v${major}`, "bin"), "node", [`printf ${major}`, "echo"]);
       writeFileSync(join(runtime, "current-node"), `${node}\n`);
-      const script = source.slice(source.indexOf("# Prints the major version"), source.indexOf("if [ -z \"$NODE_BIN\" ]; then\n  # Fetch"));
-      const out = spawnSync("/bin/sh", ["-c", `RUNTIME_DIR='${runtime}'; CURRENT_NODE_FILE="$RUNTIME_DIR/current-node"; ${script}\nprintf '[%s]' "$NODE_BIN"`], {
+      const out = spawnSync("/bin/sh", ["-c", `${nodeSelectionOf(source, runtime)}\nprintf '[%s]' "$NODE_BIN"`], {
         encoding: "utf8",
         env: { PATH: "/usr/bin:/bin", HOME: scratch },
       });
@@ -357,7 +470,6 @@ describe("scripts/install.sh command contract", () => {
     expect(tmuxStep).toBeGreaterThan(-1);
     expect(nodeStep).toBeGreaterThan(tmuxStep);
     expect(cliStep).toBeGreaterThan(nodeStep);
-    expect(source).toContain("brew install tmux");
     expect(source).toContain("install_managed_tmux");
     expect(source).toContain("install_with_apt $missing_host_packages");
     expect(source).toContain('if [ "$(id -u)" -eq 0 ]; then');
@@ -373,19 +485,22 @@ describe("scripts/install.sh command contract", () => {
     expect(source).not.toContain("exit 21");
   });
 
-  // The ladder, in source order: tmux is asked about first, Homebrew used only when tmux is missing
-  // and Homebrew is already there, the managed build for everything else.
-  it("asks about Homebrew only without tmux, and downloads the managed build without Homebrew", () => {
+  // The ladder, in source order: tmux is asked about first, a Homebrew prefix's bin only when tmux is
+  // missing, the managed build for everything else. Homebrew itself is never run.
+  it("looks in the Homebrew prefixes only without tmux, then downloads the managed build", () => {
     const source = readFileSync(installer, "utf8");
     const hostStep = source.slice(source.indexOf("# 1. Host requirements"));
     const darwin = hostStep.slice(hostStep.indexOf("  Darwin)"), hostStep.indexOf("  Linux)"));
 
     const tmuxCheck = darwin.indexOf("if tmux_runs; then");
-    const brewCheck = darwin.indexOf("if command -v brew >/dev/null 2>&1; then");
-    const managed = darwin.indexOf("tmux_runs || install_managed_tmux");
+    const prefixes = darwin.indexOf("for brew_prefix in ${HARNESS_HOMEBREW_PREFIXES:-/opt/homebrew /usr/local}; do");
+    const managed = darwin.indexOf("install_managed_tmux");
     expect(tmuxCheck).toBeGreaterThan(-1);
-    expect(brewCheck).toBeGreaterThan(tmuxCheck);
-    expect(managed).toBeGreaterThan(brewCheck);
+    expect(prefixes).toBeGreaterThan(tmuxCheck);
+    expect(managed).toBeGreaterThan(prefixes);
+    for (const brewRun of ["command -v brew", "brew shellenv", "brew install --force-bottle", "Installing tmux via Homebrew"]) {
+      expect(source).not.toContain(brewRun);
+    }
     // The managed archive is checksum-pinned by the manifest and recorded for the daemon.
     expect(source).toContain("harness/runtime/tmux/metadata.json");
     expect(source).toContain('CURRENT_TMUX_FILE="$RUNTIME_DIR/current-tmux"');
@@ -420,38 +535,70 @@ describe("scripts/install.sh command contract", () => {
     }
   });
 
-  it("installs tmux with an existing Homebrew and never fetches the managed build", () => {
-    const source = readFileSync(installer, "utf8");
-    const hostSetup = hostSetupOf(source);
-    const scratch = mkdtempSync(join(tmpdir(), "harness-mac-brew-"));
-    const invocations = join(scratch, "brew-invocations");
-    const fetched = join(scratch, "curl-invoked");
-    const fakeTmux = join(scratch, "tmux");
+  // A Mac whose Homebrew is not on this shell's PATH (a Finder launch has launchd's bare one) and with
+  // nothing to download from: only the prefixes can answer. The tmux first on PATH does not run,
+  // because ubuntu-latest (CI) has a real one in /usr/bin.
+  const prefixMac = (scratch: string) => {
+    const home = join(scratch, "home");
+    mkdirSync(home);
+    writeCommand(scratch, "uname", ["printf 'Darwin\\n'"]);
+    writeCommand(scratch, "tmux", ["exit 127"]);
+    writeCommand(scratch, "curl", [`: > '${join(scratch, "curl-invoked")}'`, "exit 99"]);
+    return home;
+  };
+  const prefixWith = (scratch: string, name: string, tmux?: string) => {
+    const bin = join(scratch, name, "bin");
+    mkdirSync(bin, { recursive: true });
+    writeRecordingBrew(bin, join(scratch, "brew-invocations"));
+    if (tmux) writeCommand(bin, "tmux", [tmux]);
+    return join(scratch, name);
+  };
 
+  it("uses a tmux in a Homebrew prefix that is not on PATH, downloads nothing and runs no Homebrew", () => {
+    const scratch = mkdtempSync(join(tmpdir(), "harness-mac-prefix-"));
     try {
-      writeCommand(scratch, "uname", ["printf 'Darwin\\n'"]);
-      writeCommand(scratch, "brew", [
-        `printf '%s\\n' "$*" >> '${invocations}'`,
-        `if [ "$1" = "shellenv" ]; then exit 0; fi`,
-        `printf '%s\\n' '#!/bin/sh' 'printf "tmux 3.7c\\\\n"' > '${fakeTmux}'`,
-        `/bin/chmod 700 '${fakeTmux}'`,
-      ]);
-      writeCommand(scratch, "curl", [`: > '${fetched}'`, "exit 99"]);
-
-      const result = spawnSync("/bin/sh", ["-c", hostSetup], {
+      const home = prefixMac(scratch);
+      const prefix = prefixWith(scratch, "homebrew", "printf 'tmux 3.7c\\n'");
+      const result = spawnSync("/bin/sh", ["-c", hostSetupOf(readFileSync(installer, "utf8"))], {
         encoding: "utf8",
         env: {
-          ...process.env,
-          INSTALL_MODE: "standalone",
-          PATH: scratch,
-          HARNESS_HOMEBREW_PREFIXES: join(scratch, "no-homebrew"),
+          ...process.env, HOME: home, INSTALL_MODE: "standalone",
+          PATH: `${scratch}:/usr/bin:/bin`, HARNESS_HOMEBREW_PREFIXES: prefix,
         },
       });
 
-      expect(result.status).toBe(0);
-      expect(readFileSync(invocations, "utf8")).toContain("install --force-bottle tmux\n");
-      expect(result.stdout).not.toContain("managed");
-      expect(() => readFileSync(fetched, "utf8")).toThrow();
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("tmux ready (tmux 3.7c)");
+      expect(existsSync(join(home, ".harness", "runtime", "current-tmux"))).toBe(false);
+      expect(existsSync(join(home, ".local", "bin", "tmux"))).toBe(false);
+      expect(existsSync(join(scratch, "curl-invoked"))).toBe(false);
+      expect(existsSync(join(scratch, "brew-invocations"))).toBe(false);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
+  it("takes the first prefix whose tmux runs", () => {
+    const scratch = mkdtempSync(join(tmpdir(), "harness-mac-prefixes-"));
+    try {
+      const home = prefixMac(scratch);
+      const prefixes = [
+        prefixWith(scratch, "no-tmux"),
+        prefixWith(scratch, "homebrew", "printf 'tmux 3.7c\\n'"),
+        prefixWith(scratch, "later", "printf 'tmux 3.8\\n'"),
+      ];
+      const result = spawnSync("/bin/sh", ["-c", hostSetupOf(readFileSync(installer, "utf8"))], {
+        encoding: "utf8",
+        env: {
+          ...process.env, HOME: home, INSTALL_MODE: "standalone",
+          PATH: `${scratch}:/usr/bin:/bin`, HARNESS_HOMEBREW_PREFIXES: prefixes.join(" "),
+        },
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("tmux ready (tmux 3.7c)");
+      expect(existsSync(join(scratch, "curl-invoked"))).toBe(false);
+      expect(existsSync(join(scratch, "brew-invocations"))).toBe(false);
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }
@@ -468,10 +615,7 @@ describe("scripts/install.sh command contract", () => {
       mkdirSync(bin, { recursive: true });
       try {
         writeCommand(scratch, "uname", ["printf 'Darwin\\n'"]);
-        writeCommand(bin, "brew", [
-          `if [ "$1" = shellenv ]; then printf 'export PATH="${bin}:$PATH"\\n'; fi`,
-          "exit 0",
-        ]);
+        writeRecordingBrew(bin, join(scratch, "brew-invocations"));
         writeCommand(bin, "tmux", [
           'case "$1" in -V) printf "tmux 3.7c\\n" ;; new-session) printf "%%0\\n" ;; esac',
         ]);
@@ -482,6 +626,7 @@ describe("scripts/install.sh command contract", () => {
         expect(installed.status, installed.stderr).toBe(0);
         expect(installed.stdout).toContain("tmux ready (tmux 3.7c)");
         expect(existsSync(join(home, ".harness/runtime/current-tmux"))).toBe(false);
+        expect(existsSync(join(scratch, "brew-invocations"))).toBe(false);
 
         // Found by QA on a quiet machine: a timed-out probe must not change later fixtures' PATH.
         // This is the daemon's environment after the installer exits, so give it its own process.
@@ -519,44 +664,6 @@ describe("scripts/install.sh command contract", () => {
       expect(process.env.PATH).toBe(workerPath);
     } finally { await pending; }
   });
-
-  // A fake CDN: `curl -o` writes the archive, plain `curl` prints the manifest. The archive wraps a
-  // fake tmux so the whole managed path — fetch, verify, unpack, record, link — runs for real.
-  const managedFixture = (scratch: string, tamperSha = false) => {
-    const home = join(scratch, "home");
-    const root = "tmux-9.9-darwin-arm64";
-    const stage = join(scratch, "stage", root, "bin");
-    mkdirSync(stage, { recursive: true });
-    writeCommand(stage, "tmux", ["printf 'tmux 9.9\\n'"]);
-    const archive = join(scratch, `${root}.tar.gz`);
-    spawnSync("tar", ["-czf", archive, "-C", join(scratch, "stage"), root]);
-    const sha = spawnSync("shasum", ["-a", "256", archive], { encoding: "utf8" }).stdout.split(" ")[0];
-    const manifest = JSON.stringify({
-      tmux: {
-        "darwin-arm64": {
-          version: "9.9",
-          url: "https://cdn.example/tmux.tar.gz",
-          sha256: tamperSha ? "0".repeat(64) : sha,
-          size: 1,
-          archiveRoot: root,
-        },
-      },
-    }, null, 2);
-    writeFileSync(join(scratch, "manifest.json"), manifest);
-    // The ladder's first rung is `command -v tmux && tmux -V`, and PATH below still includes /usr/bin
-    // — where ubuntu-latest (CI) ships a real tmux 3.4, so on that runner the script found it, said
-    // "tmux ready (tmux 3.4)" and never took the managed path these tests exist for. A broken tmux
-    // in the fixture dir (first on PATH) fails that rung everywhere; once the managed build is
-    // linked, the script puts BIN_DIR ahead of PATH, so the 9.9 fake wins from then on.
-    writeCommand(scratch, "tmux", ["exit 127"]);
-    writeCommand(scratch, "curl", [
-      `printf '%s\\n' "$*" >> '${join(scratch, "curl-invocations")}'`,
-      `case "$*" in *"-o "*) cp '${archive}' "$4" ;; *) cat '${join(scratch, "manifest.json")}' ;; esac`,
-    ]);
-    writeCommand(scratch, "uname", [`if [ "$1" = "-m" ]; then printf 'arm64\\n'; else printf 'Darwin\\n'; fi`]);
-    mkdirSync(home, { recursive: true });
-    return { home, root };
-  };
 
   it("downloads, verifies and links the managed tmux when there is no Homebrew", () => {
     const source = readFileSync(installer, "utf8");
@@ -618,15 +725,17 @@ describe("scripts/install.sh command contract", () => {
     }
   }, 20_000);
 
-  it("falls back to the managed build when Homebrew cannot install tmux", () => {
-    const source = readFileSync(installer, "utf8");
-    const hostSetup = hostSetupOf(source);
-    const scratch = mkdtempSync(join(tmpdir(), "harness-mac-brew-broken-"));
+  it("installs the managed tmux on a Mac with no tmux, and never runs Homebrew", () => {
+    const scratch = mkdtempSync(join(tmpdir(), "harness-mac-no-brew-run-"));
+    const invocations = join(scratch, "brew-invocations");
 
     try {
       const { home, root } = managedFixture(scratch);
-      writeCommand(scratch, "brew", [`if [ "$1" = "shellenv" ]; then exit 0; fi`, "exit 1"]);
-      const result = spawnSync("/bin/sh", ["-c", hostSetup], {
+      const prefix = join(scratch, "homebrew");
+      mkdirSync(join(prefix, "bin"), { recursive: true });
+      writeRecordingBrew(scratch, invocations);
+      writeRecordingBrew(join(prefix, "bin"), invocations);
+      const result = spawnSync("/bin/sh", ["-c", hostSetupOf(readFileSync(installer, "utf8"))], {
         encoding: "utf8",
         env: {
           ...process.env,
@@ -634,17 +743,66 @@ describe("scripts/install.sh command contract", () => {
           INSTALL_MODE: "standalone",
           PATH: `${scratch}:/usr/bin:/bin`,
           HARNESS_TMUX_METADATA_URL: "https://cdn.example/manifest.json",
-          HARNESS_HOMEBREW_PREFIXES: join(scratch, "no-homebrew"),
+          HARNESS_HOMEBREW_PREFIXES: prefix,
         },
       });
 
-      expect(result.status).toBe(0);
-      expect(result.stdout).toContain("No Homebrew tmux bottle for this Mac; using the managed build instead.");
-      expect(readlinkSync(join(home, ".local", "bin", "tmux"))).toContain(root);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("downloading tmux 9.9 (darwin-arm64)");
+      expect(result.stdout).toContain("tmux ready (tmux 9.9)");
+      expect(result.stdout).not.toContain("Homebrew");
+      expect(readlinkSync(join(home, ".local", "bin", "tmux"))).toBe(join(home, ".harness", "runtime", root, "bin", "tmux"));
+      expect(existsSync(invocations)).toBe(false);
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }
-  }, 20_000);
+  });
+
+  it("passes a Homebrew tmux that does not run and installs the managed build", () => {
+    const scratch = mkdtempSync(join(tmpdir(), "harness-mac-brew-tmux-broken-"));
+    const invocations = join(scratch, "brew-invocations");
+
+    try {
+      const { home, root } = managedFixture(scratch);
+      const prefix = join(scratch, "homebrew");
+      mkdirSync(join(prefix, "bin"), { recursive: true });
+      writeCommand(join(prefix, "bin"), "tmux", ["exit 127"]);
+      writeRecordingBrew(join(prefix, "bin"), invocations);
+      const result = spawnSync("/bin/sh", ["-c", hostSetupOf(readFileSync(installer, "utf8"))], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: home,
+          INSTALL_MODE: "standalone",
+          PATH: `${scratch}:/usr/bin:/bin`,
+          HARNESS_TMUX_METADATA_URL: "https://cdn.example/manifest.json",
+          HARNESS_HOMEBREW_PREFIXES: prefix,
+        },
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("tmux ready (tmux 9.9)");
+      expect(readlinkSync(join(home, ".local", "bin", "tmux"))).toBe(join(home, ".harness", "runtime", root, "bin", "tmux"));
+      expect(existsSync(invocations)).toBe(false);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
+  // Harness Device turns these lines into its install step's copy by how they start (its fixed table in
+  // the app's Rust): a change to one of them is a change there too.
+  it("keeps the step lines Harness Device names", () => {
+    const source = readFileSync(installer, "utf8");
+    for (const line of [
+      'echo "▸ Installing the managed tmux into',
+      'echo "  ▸ downloading tmux ',
+      'echo "▸ Installing the Harness Node runtime into',
+      'echo "  ▸ downloading Node ',
+      'echo "▸ Installing harness from',
+    ]) {
+      expect(source).toContain(line);
+    }
+  });
 
   it("host mode puts ~/.local/bin on PATH for new shells", () => {
     const source = readFileSync(installer, "utf8");
@@ -968,11 +1126,6 @@ describe("scripts/install.sh command contract", () => {
   // the install still succeeds. And never linked into ~/.local/bin: that path is grid's own
   // installer's (uv's, on a Mac); the daemon puts the managed grid on an agent pane's PATH itself.
 
-  // The helpers plus the grid step alone, as one runnable unit.
-  const gridStepOf = (source: string) =>
-    source.slice(source.indexOf('METADATA_URL="${HARNESS_METADATA_URL'), source.indexOf("# 1. Host requirements")) +
-    source.slice(source.indexOf("# 3b. The managed grid"), source.indexOf("# 3c. hn's binary"));
-
   it("installs the managed grid after the CLI and before PATH, as a step the install can survive", () => {
     const source = readFileSync(installer, "utf8");
     const cliStep = source.indexOf("# 3. Fetch manifest");
@@ -989,35 +1142,6 @@ describe("scripts/install.sh command contract", () => {
     expect(fn).not.toContain("exit ");
     expect(fn).not.toContain("ln -s");
   });
-
-  const gridFixture = (scratch: string, tamperSha = false) => {
-    const home = join(scratch, "home");
-    const root = "grid-9.9-darwin-arm64";
-    const stage = join(scratch, "stage", root, "bin");
-    mkdirSync(stage, { recursive: true });
-    writeCommand(stage, "grid", ["printf 'grid 9.9\\n'"]);
-    const archive = join(scratch, `${root}.tar.gz`);
-    spawnSync("tar", ["-czf", archive, "-C", join(scratch, "stage"), root]);
-    const sha = spawnSync("shasum", ["-a", "256", archive], { encoding: "utf8" }).stdout.split(" ")[0];
-    writeFileSync(join(scratch, "manifest.json"), JSON.stringify({
-      grid: {
-        "darwin-arm64": {
-          version: "9.9",
-          url: "https://cdn.example/grid.tar.gz",
-          sha256: tamperSha ? "0".repeat(64) : sha,
-          size: 1,
-          archiveRoot: root,
-        },
-      },
-    }, null, 2));
-    writeCommand(scratch, "curl", [
-      `printf '%s\\n' "$*" >> '${join(scratch, "curl-invocations")}'`,
-      `case "$*" in *"-o "*) cp '${archive}' "$4" ;; *) cat '${join(scratch, "manifest.json")}' ;; esac`,
-    ]);
-    writeCommand(scratch, "uname", [`if [ "$1" = "-m" ]; then printf 'arm64\\n'; else printf 'Darwin\\n'; fi`]);
-    mkdirSync(home, { recursive: true });
-    return { home, root };
-  };
 
   const runGridStep = (scratch: string, home: string, mode: string) =>
     spawnSync("/bin/sh", ["-c", gridStepOf(readFileSync(installer, "utf8"))], {
@@ -1139,11 +1263,6 @@ describe("scripts/install.sh command contract", () => {
 });
 
 describe("scripts/install.sh: hn", () => {
-  // The constants and helpers (install_hn among them), then step 3c alone.
-  const hnStepOf = (source: string) =>
-    source.slice(source.indexOf('METADATA_URL="${HARNESS_METADATA_URL'), source.indexOf("# 1. Host requirements")) +
-    source.slice(source.indexOf("# 3c. hn's binary"), source.indexOf("# 4. Ensure ~/.local/bin"));
-
   it("installs hn after the grid and before PATH, as a step the install can survive", () => {
     const source = readFileSync(installer, "utf8");
     const grid = source.indexOf("# 3b. The managed grid");
@@ -1158,29 +1277,6 @@ describe("scripts/install.sh: hn", () => {
     expect(source).toContain('TUI_BIN="$HOME/.harness/bin/harness-tui"');
     expect(source).toContain("harness/tui/metadata.json");
   });
-
-  const hnFixture = (scratch: string, { tamper = false, runs = true } = {}) => {
-    const home = join(scratch, "home");
-    mkdirSync(home, { recursive: true });
-    const binary = join(scratch, "harness-tui-darwin-arm64");
-    writeFileSync(binary, runs ? "#!/bin/sh\necho 'hn 0.1.0 (tmux 3.5a)'\n" : "#!/bin/sh\nexit 1\n");
-    chmodSync(binary, 0o755);
-    const sha = spawnSync("shasum", ["-a", "256", binary], { encoding: "utf8" }).stdout.split(" ")[0];
-    // As release-tui.yml writes it: jq's pretty print, one build per platform.
-    writeFileSync(join(scratch, "manifest.json"), JSON.stringify({
-      version: "0.1.0",
-      builds: {
-        "darwin-x64": { url: "https://cdn.example/harness-tui-darwin-x64", sha256: "1".repeat(64) },
-        "darwin-arm64": { url: "https://cdn.example/harness-tui-darwin-arm64", sha256: tamper ? "0".repeat(64) : sha },
-      },
-    }, null, 2));
-    writeCommand(scratch, "curl", [
-      `printf '%s\\n' "$*" >> '${join(scratch, "curl-invocations")}'`,
-      `case "$*" in *"-o "*) cp '${binary}' "$4" ;; *) cat '${join(scratch, "manifest.json")}' ;; esac`,
-    ]);
-    writeCommand(scratch, "uname", [`if [ "$1" = "-m" ]; then printf 'arm64\\n'; else printf 'Darwin\\n'; fi`]);
-    return { home, tui: join(home, ".harness", "bin", "harness-tui") };
-  };
 
   const runHnStep = (scratch: string, home: string, mode: string) =>
     spawnSync("/bin/sh", ["-c", hnStepOf(readFileSync(installer, "utf8"))], {
@@ -1405,4 +1501,167 @@ describe("scripts/install.sh: OpenCode for hn's first window", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("OpenCode will be installed when hn first starts it");
   }, 20_000);
+});
+
+describe("scripts/install.sh: no child reads the script", () => {
+  // Under `curl … | sh -s` the script is sh's stdin, and every program it starts inherits it: one that
+  // reads its stdin eats the rest of the script, and the install stops there without a word.
+  const sh = (input: string, env: NodeJS.ProcessEnv, args: string[] = []) => {
+    const home = mkdtempSync(join(tmpdir(), "harness-piped-home-"));
+    try {
+      // Host mode, and step 4 of the others, write the PATH line into the shell's rc file.
+      return spawnSync("/bin/sh", ["-s", ...args], { encoding: "utf8", input, env: { ...process.env, HOME: home, SHELL: "/bin/zsh", ...env } });
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  };
+  // 24 KiB of comments before the marker: CI's /bin/sh is dash, which reads 8 KiB ahead, so a marker
+  // close behind the call would already be in its buffer, and a child that read the rest would miss it.
+  const PADDING = `# ${"-".repeat(77)}\n`.repeat(320);
+  const piped = (slice: string, env: NodeJS.ProcessEnv) => sh(`${slice}\n${PADDING}echo REACHED-THE-END\n`, env);
+  const source = () => readFileSync(installer, "utf8");
+
+  const withScratch = <T>(name: string, run: (scratch: string) => T): T => {
+    const scratch = mkdtempSync(join(tmpdir(), `harness-piped-${name}-`));
+    try {
+      return run(scratch);
+    } finally {
+      // The managed grid's bin/ is laid down read-only.
+      try { chmodSync(join(scratch, "home", ".harness", "runtime", "grid-9.9-darwin-arm64", "bin"), 0o755); } catch { /* none */ }
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  };
+
+  it("tmux -V and the ready line (a Mac's tmux)", () => withScratch("tmux", (scratch) => {
+    writeCommand(scratch, "uname", ["printf 'Darwin\\n'"]);
+    writeCommand(scratch, "tmux", [DRAIN, "printf 'tmux 3.6\\n'"]);
+    const result = piped(hostSetupOf(source()), { INSTALL_MODE: "standalone", PATH: `${scratch}:/usr/bin:/bin` });
+    expect(result.stdout, result.stderr).toContain("REACHED-THE-END");
+  }));
+
+  it("the managed tmux's -V", () => withScratch("managed-tmux", (scratch) => {
+    const { home } = managedFixture(scratch, false, true);
+    const result = piped(hostSetupOf(source()), {
+      HOME: home, INSTALL_MODE: "standalone", PATH: `${scratch}:/usr/bin:/bin`,
+      HARNESS_TMUX_METADATA_URL: "https://cdn.example/manifest.json", HARNESS_HOMEBREW_PREFIXES: join(scratch, "no-homebrew"),
+    });
+    expect(result.stdout, result.stderr).toContain("tmux ready (tmux 9.9)");
+    expect(result.stdout).toContain("REACHED-THE-END");
+  }));
+
+  // On Linux, apt-get as root and through sudo; sudo asks for a password on the tty, not on stdin.
+  const linuxApt = (scratch: string, uid: string) => {
+    writeLinuxHostCommands(scratch);
+    writeCommand(scratch, "uname", ["printf 'Linux\\n'"]);
+    writeCommand(scratch, "id", [`printf '${uid}\\n'`]);
+    writeCommand(scratch, "sudo", ['exec "$@"']);
+    writeCommand(scratch, "apt-get", [
+      DRAIN,
+      `printf '%s\\n' '#!/bin/sh' 'printf "tmux 3.6\\\\n"' > '${join(scratch, "tmux")}'`,
+      `/bin/chmod 700 '${join(scratch, "tmux")}'`,
+    ]);
+    // Only the fakes on PATH: ubuntu-latest (CI) has a real tmux in /usr/bin.
+    return piped(hostSetupOf(source()), { INSTALL_MODE: "standalone", DISPLAY: "", WAYLAND_DISPLAY: "", PATH: scratch });
+  };
+
+  it("apt-get as root", () => withScratch("apt-root", (scratch) => {
+    const result = linuxApt(scratch, "0");
+    expect(result.stdout, result.stderr).toContain("tmux ready (tmux 3.6)");
+    expect(result.stdout).toContain("REACHED-THE-END");
+  }));
+
+  it("apt-get through sudo", () => withScratch("apt-sudo", (scratch) => {
+    const result = linuxApt(scratch, "1000");
+    expect(result.stdout, result.stderr).toContain("tmux ready (tmux 3.6)");
+    expect(result.stdout).toContain("REACHED-THE-END");
+  }));
+
+  it("the managed Node's -e and -v", () => withScratch("node", (scratch) => {
+    const runtime = join(scratch, "runtime");
+    const bin = join(runtime, "node-v24", "bin");
+    mkdirSync(bin, { recursive: true });
+    writeCommand(bin, "node", [DRAIN, "printf 24"]);
+    writeFileSync(join(runtime, "current-node"), `${join(bin, "node")}\n`);
+    const result = piped(nodeSelectionOf(source(), runtime), { PATH: "/usr/bin:/bin", HARNESS_NODE_BINARY: "" });
+    expect(result.stdout, result.stderr).toContain("Using the managed Node runtime already installed (24)");
+    expect(result.stdout).toContain("REACHED-THE-END");
+  }));
+
+  it("dsh builtins", () => withScratch("dsh", (scratch) => {
+    writeCommand(scratch, "node", [DRAIN, "exit 0"]);
+    const result = piped(gridStepOf(source()), { INSTALL_MODE: "desktop", NODE_BIN: join(scratch, "node"), PATH: `${scratch}:/usr/bin:/bin` });
+    expect(result.stdout, result.stderr).toContain("REACHED-THE-END");
+  }));
+
+  it("the managed grid's --version", () => withScratch("grid", (scratch) => {
+    const { home } = gridFixture(scratch, false, true);
+    writeCommand(scratch, "node", ["exit 0"]);
+    const result = piped(gridStepOf(source()), {
+      HOME: home, INSTALL_MODE: "standalone", NODE_BIN: join(scratch, "node"), PATH: `${scratch}:/usr/bin:/bin`,
+      HARNESS_GRID_METADATA_URL: "https://cdn.example/manifest.json",
+    });
+    expect(result.stdout, result.stderr).toContain("installed grid 9.9");
+    expect(result.stdout).toContain("REACHED-THE-END");
+  }));
+
+  it("hn's --version before it is installed", () => withScratch("hn", (scratch) => {
+    const { home } = hnFixture(scratch, { drain: true });
+    const result = piped(hnStepOf(source()), {
+      HOME: home, INSTALL_MODE: "standalone", PATH: `${scratch}:/usr/bin:/bin`, HARNESS_TUI_MANIFEST_URL: "https://cdn.example/manifest.json",
+    });
+    expect(result.stdout, result.stderr).toContain("installed hn 0.1.0");
+    expect(result.stdout).toContain("REACHED-THE-END");
+  }));
+
+  it.each(["standalone", "desktop"])("the final checks and the versions it prints (%s)", (mode) => withScratch("finale", (scratch) => {
+    const { home, node } = installedFixture(scratch, true);
+    mkdirSync(join(home, ".harness", "bin"), { recursive: true });
+    writeCommand(join(home, ".harness", "bin"), "harness-tui", [DRAIN, "echo 'hn 0.1.0 (tmux 3.5a)'"]);
+    const result = piped(finaleOf(source()), { HOME: home, INSTALL_MODE: mode, NODE_BIN: node, PATH: `${scratch}:/usr/bin:/bin` });
+    expect(result.stdout, result.stderr).toContain("harness 0.2.60 installed.");
+    if (mode === "standalone") expect(result.stdout).toContain("✓ hn 0.1.0 installed.");
+    expect(result.stdout).toContain("REACHED-THE-END");
+  }));
+
+  it("the whole script piped into sh -s -- --host still says it is ready", () => withScratch("host", (scratch) => {
+    writeCommand(scratch, "uname", ["printf 'Darwin\\n'"]);
+    writeCommand(scratch, "tmux", [DRAIN, "printf 'tmux 3.6\\n'"]);
+    const result = sh(source(), { PATH: `${scratch}:/usr/bin:/bin`, HARNESS_HOMEBREW_PREFIXES: join(scratch, "no-homebrew") }, ["--", "--host"]);
+    expect(result.stdout, result.stderr).toMatch(/✓ Host requirements ready\.\n$/);
+  }));
+
+  it("the whole script piped into sh -s -- --desktop still says it is installed", () => withScratch("desktop", (scratch) => {
+    // A Node that answers `-e` with 24, writes a launcher when it runs step 3 (no arguments, the code
+    // on stdin), and does nothing otherwise; it and the launcher read their stdin to the end.
+    const launcher = ["#!/bin/sh", DRAIN, '[ "$1" = version ] && echo 0.2.60', "exit 0", ""].join("\n");
+    writeCommand(scratch, "node", [
+      DRAIN,
+      'case "$#:${1:-}" in',
+      "  1:-e|2:-e) printf 24 ;;",
+      `  0:) mkdir -p "$HOME/.local/bin" && printf '%s' '${launcher}' > "$HOME/.local/bin/harness" && chmod 755 "$HOME/.local/bin/harness" ;;`,
+      "esac",
+      "exit 0",
+    ]);
+    const result = sh(source(), { PATH: `${scratch}:/usr/bin:/bin`, HARNESS_NODE_BINARY: join(scratch, "node") }, ["--", "--desktop"]);
+    expect(result.stdout, result.stderr).toContain("harness 0.2.60 installed.");
+  }));
+
+  // Rows 9 (the override's error, printed as the script exits) and 12 (a background list, which already
+  // reads /dev/null) cannot be told apart by a run: the source says it for them, and for the rest.
+  it("every call in the list carries the redirect", () => {
+    const calls = [
+      '"$tui_staging" --version', '"$grid_target/bin/grid" --version', 'apt-get "$@"', "tmux -V",
+      '"$tmux_target/bin/tmux" -V', "-e 'process.stdout.write", '"$NODE_BIN" -v', "dsh builtins",
+      "bash -s -- --no-modify-path", 'opencode" --version', '"$NODE_BIN" --version', '"$LAUNCHER" version',
+      '"$TUI_BIN" --version',
+    ];
+    const lines = source().split("\n").filter((line) => !line.trimStart().startsWith("#"));
+    const found = calls.flatMap((call) => {
+      const at = lines.filter((line) => line.includes(call));
+      expect(at, call).not.toEqual([]);
+      return at;
+    });
+    expect(found).toHaveLength(18);
+    expect(found.filter((line) => !line.includes("</dev/null"))).toEqual([]);
+  });
 });

@@ -20,6 +20,9 @@ export interface Place {
   pid?: number                                  // its process: that event's caller
   sessionId?: string                            // the engine's own id of the session: the VS Code extension's link names it
   engine?: string                               // whose session it is: that link names Claude Code's alone
+  /** The Claude app's own id of a session the open scan found, from the session's record (record.ts), until its first
+   *  hook; only the Claude app's adapter reads it. */
+  hostSession?: string
 }
 
 /** One adapter's own handle on one agent: an Orca terminal, a Claude app session, a tab's tty, a pane id. */
@@ -52,6 +55,15 @@ export interface HostAdapter {
   /** Whether `type` can reach the pane now (its app's socket there): asked at each look. One that cannot leaves the words
    *  to the agent's next pane whose app types. */
   canType?(pane: Pane): boolean
+  /** Whether a stroke on the dial may scroll that pane's view now, as far as the adapter knows without asking its app:
+   *  its app in front and the pane in its window. */
+  canScroll?(pane: Pane): boolean
+  /** Whether the pane is the one its app shows on screen now, asked of the app once a stroke, after `canScroll`. False on
+   *  any failure or past its deadline; never throws. An adapter that knows it from `canScroll` alone has none. */
+  onScreen?(pane: Pane): Promise<boolean>
+  /** Scrolls the app's view of the pane's history by whole lines, n < 0 toward older lines. Fire and forget: a line it
+   *  could not send is never retried into the program. */
+  scroll?(pane: Pane, lines: number): void
   /** The key a source that lists this app's agents knows the same pane by (registry.ts). Only an app with such a
    *  source has one. */
   paneKey?(pane: Pane): string
@@ -60,6 +72,7 @@ export interface HostAdapter {
    *  (a tab is selected once its app is in front). A pane that comes after its app is raised only when it is the pane a
    *  rest would show, so an adapter with `tap: 'after'` needs `show`: without it, its `focus` never runs from a tap. */
   readonly tap: 'before' | 'instead' | 'after'
-  /** Its app's macOS bundle id, for a tap on a pane its caller placed an agent at whose hook never named its app. */
+  /** Its app's macOS bundle id: a tap brings that app forward for an agent at one of its panes whose app no hook named,
+   *  one its caller placed there or the scan found (observed.ts target()). */
   readonly bundle?: string
 }

@@ -191,4 +191,47 @@ void main() {
       _refusedWith('not signed by Autonomous Inc.'),
     );
   }, skip: noSigned);
+
+  test('verifyMacBundle refuses an ad-hoc bundle', () async {
+    expect(
+      await verifyMacBundle(
+        bundle: _adHocBundle(scratch.path, 'Harness Device.app'),
+        team: '54DJVWMJCC',
+        identifier: 'ai.autonomous.harness.device',
+      ),
+      isFalse,
+    );
+  }, skip: _macOnly);
+
+  test(
+    'verifyMacBundle accepts a notarized bundle of that team and identifier',
+    () async {
+      expect(
+        await verifyMacBundle(
+          bundle: _clone(signed!, scratch.path, 'Harness.app'),
+          team: '54DJVWMJCC',
+          identifier: 'ai.autonomous.harness',
+        ),
+        isTrue,
+      );
+    },
+    skip: noSigned,
+  );
+
+  // One team signs both apps, so the identifier alone keeps Harness Desktop
+  // from passing as Harness Device.
+  test(
+    'verifyMacBundle refuses a notarized bundle with another identifier',
+    () async {
+      expect(
+        await verifyMacBundle(
+          bundle: _clone(signed!, scratch.path, 'Harness.app'),
+          team: '54DJVWMJCC',
+          identifier: 'ai.autonomous.harness.device',
+        ),
+        isFalse,
+      );
+    },
+    skip: noSigned,
+  );
 }

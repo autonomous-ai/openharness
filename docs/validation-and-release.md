@@ -73,7 +73,7 @@ beside the CLI's own suite); the CLI reads `pty/`, `tui/` and `store/`, Desktop 
 
 | Changed directory | PR check | Typical time |
 | --- | --- | --- |
-| `cli/`, `tests/` | `cli-typecheck` and `cli-tests` (default Vitest suite, four shards) | 3–5 min |
+| `cli/`, `tests/`, `plugins/harness-device-vscode/` (the CLI's build carries it and its Vitest runs its tests) | `cli-typecheck` and `cli-tests` (default Vitest suite, four shards) | 3–5 min |
 | `desktop/` | `desktop-tests` (VM suite, four Linux shards); a change to a desktop file the phone's tests read (`PR_READS` in `scripts/ci-plan.py`) also runs `mobile-checks` | 5–7 min |
 | `tui/`, `term/` (the TUI builds on it) | `tui-test` (`cargo test`) | a few minutes |
 | `pty/`, `term/`, `tui/vendor/`, `cli/` (the ptyhost contract imports the CLI's code) | `pty-checks` (`cargo test` for `term` and `pty`, then the ptyhost terminal contract against the built host) | a few minutes |
@@ -181,6 +181,7 @@ the planner, refuses a receipt whose members differ from the head's merges.
 | CLI end to end (`cli/e2e`) | nightly and **Actions → CLI end to end → Run workflow** | for user-facing CLI flows; start one run on the branch |
 | A guest's harness against an owner's (`npm run test:guest-real`) | nowhere automatically: it needs a Mac with guest access on and a guest user | when you change guest sharing, a guest's launch or environment, Stop, or how pane titles name harnesses: the guest runs as another OS user with `env -i`, and each difference has broken something only a shared Mac showed |
 | Desktop tests on macOS | nowhere automatically | when you change macOS-specific Desktop code; `make desktop-test` on a Mac |
+| The Harness Device VS Code extension in a real VS Code (`npm run test:vscode` in `cli/`) | nowhere automatically | when you change `plugins/harness-device-vscode/`, the `.vsix`'s packing or the record's reader (`cli/src/devices/vscodeExtension.ts`, `cli/scripts/lib/vscodeExtensionBundle.mjs`). It downloads a VS Code into a temporary folder and runs it with its own user data, extensions and home; a window opens for up to about three minutes, as the gate waits for the extension's minute counts. On a Mac the copy gets a bundle id of its own (`ai.autonomous.harness.vscode-gate`) before it runs. After the run the gate removes that id's preferences and leaves nothing under it in LaunchServices, and the run fails if `~/Library/Preferences/com.microsoft.VSCode.plist` changed |
 | Harness Device on macOS (PR CI compiles only its Linux code) | nowhere automatically | when you change `device-app/`; `cargo test --locked` in `device-app/src-tauri` on a Mac |
 | TUI native fixtures and connected shells | the TUI release (`release-tui.yml`) | optional locally: `scripts/validate-tui-native.py` |
 | Experience, authoring, Home Assistant and Desktop logging browser checks | **Run workflow** on their own workflows | when you change their area |

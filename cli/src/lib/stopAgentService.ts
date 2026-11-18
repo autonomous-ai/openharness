@@ -28,7 +28,7 @@ export interface StopAgentServiceDeps {
     suppress(session: RegisteredSession): void
     holdRoute(route: string): void
     releaseRoute(route: string): void
-    trigger(): Promise<unknown>
+    nudge(): void
   }
   forgetSession(agentId: string, options: { force: true; captured?: RegisteredSession; authority?: RegistryAuthority }): Promise<void>
   markDeleted(agentId: string): void
@@ -258,7 +258,7 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
         clearDeleted(sessionId)
         if (s.sessionId) clearDeleted(s.sessionId)
         for (const route of routes) agentReconciler.releaseRoute(route)
-        void agentReconciler.trigger()
+        agentReconciler.nudge()
       }
     }).finally(() => {
       if (stopJobs.get(sessionId) === job) stopJobs.delete(sessionId)

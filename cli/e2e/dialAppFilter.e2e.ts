@@ -460,7 +460,7 @@ describe('the dial\'s app filter', () => {
       same(counts(apps), { ghostty: 3, vscode: 2 }) && apps.shown === 'vscode' && same(ids(roster).sort(), idsOf(vscode).sort()))
     // The five were never on Other's page: the scan knew each one's app.
     expect(appsFrames(dial).filter((apps) => apps.apps.some((a) => a.id === 'terminal'))).toEqual([])
-    expect(d.log()).toMatch(/\[observed\] scan · 5 found · 5 app known · 0 named · \d+ ms/)
+    expect(d.log()).toMatch(/\[observed\] scan · 5 found · 5 app known · 0 named · \d+ answered · \d+ ms/)
   })
 
   // The same, with the five known only by the hooks of prompts typed once the dial is in: the shape that flaked (Review

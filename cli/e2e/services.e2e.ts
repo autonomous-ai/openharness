@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { SERVICE_HOSTS } from '../src/harnessd/services.js'
+import { DONE_QUIET_MS } from '../src/lib/agentNotifications.js'
 
 const row = async (client: LocalClient, agentId: string) =>
   ((await client.request<{ agents: Array<Record<string, any>> }>('agents_list', { includeStopped: true })).agents)
@@ -159,8 +160,8 @@ describe('a failing service never takes the core down', () => {
     const client = await LocalClient.connect(daemon)
     const agentId = await boundAgent(daemon, client, 'no-services')
     await turn(client, agentId, 'first, with no services')
-    // With the recaps off a turn has no recap, and ends all the same.
-    await new Promise((done) => setTimeout(done, 1_000))
+    // With the recaps off a turn has no recap, and ends all the same: read past the quiet window a recap would wait out.
+    await new Promise((done) => setTimeout(done, 1_000 + DONE_QUIET_MS))
     expect(client.frames.filter((frame) => frame.type === 'turn_summary')).toEqual([])
     // Off, never UNSUPPORTED: the apps read that as "update the CLI".
     expect(await client.request('session_search', { query: 'first' })).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: false })

@@ -1,7 +1,7 @@
 // The worker wired to Orca's test kit: a mock host, and a loop on inputs of this file's own (the last case's own home
 // and PATH hold no launcher), so no case reaches the developer's own harness, daemon or dial.
 import { afterEach, assert, beforeEach, hostError, mockHost, mountWorker, test } from 'orca/testing'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import type { DialInputs, Ran } from './inputs'
 import * as main from './worker'
 
@@ -10,6 +10,7 @@ const HIDDEN = { id: 'dial', visible: false }
 const UNPLUGGED = '{"attached":false}\n'
 const ATTACHED = '{"attached":true,"agent":null}\n'
 const AGENT = '{"attached":true,"agent":{"name":"api","app":"Orca"}}\n'
+const H = (n: number) => `term_00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
 
 let dir = ''
 const checks = new Set<() => void>()
@@ -50,13 +51,14 @@ const REFUSE = () => {
 }
 
 /** `answer` is each status bar update's: a result, or a throw of hostError. */
-function host(answer: () => unknown = ACCEPT) {
+function host(answer: () => unknown = ACCEPT, results: Record<string, unknown> = {}) {
   return mockHost({
     results: {
       'statusBar.update': () => {
         updated()
         return answer()
       },
+      ...results,
     },
   })
 }
@@ -104,6 +106,7 @@ function inputs(over: Partial<DialInputs>): DialInputs {
     path: '/usr/bin:/bin',
     run: pending,
     connect: () => Promise.resolve(null),
+    post: () => Promise.resolve(null),
     watch: () => () => {},
     now: () => 0,
     after: () => () => {},
@@ -140,8 +143,8 @@ function feed() {
   }
 }
 
-/** The worker on `over`'s inputs, as Orca mounts it. */
-async function mounted(over: Partial<DialInputs>, answer = ACCEPT) {
+/** The worker on `over`'s inputs, as Orca mounts it; `results` adds the mock host's answers. */
+async function mounted(over: Partial<DialInputs>, answer = ACCEPT, results: Record<string, unknown> = {}) {
   let stop = async () => {}
   const worker = await mountWorker(
     {
@@ -150,18 +153,24 @@ async function mounted(over: Partial<DialInputs>, answer = ACCEPT) {
       },
       deactivate: () => stop(),
     },
-    { host: host(answer) }
+    { host: host(answer, results) }
   )
   const changes = () => worker.posts.filter((post) => post.event === 'dial.changed').map((post) => post.payload)
   const updates = () => worker.host.callsOf('statusBar.update')
   return { worker, changes, updates }
 }
 
-/** A worker whose link says ready, and the stream it holds. */
-async function streaming(answer = ACCEPT, over: Partial<DialInputs> = {}) {
+/** A worker whose link says ready, the stream it holds, and each body it posts to the devices (answered 204). */
+async function streaming(answer = ACCEPT, over: Partial<DialInputs> = {}, results: Record<string, unknown> = {}) {
   const stream = feed()
-  const m = await mounted({ run: () => Promise.resolve(READY), connect: stream.connect, ...over }, answer)
-  return { ...m, stream }
+  const bodies: string[] = []
+  const post = (_socket: string, body: string) => {
+    bodies.push(body)
+    updated()
+    return Promise.resolve(204)
+  }
+  const m = await mounted({ run: () => Promise.resolve(READY), connect: stream.connect, post, ...over }, answer, results)
+  return { ...m, stream, bodies }
 }
 
 test('before the first pass dial.get says checking, and the status bar item is hidden', async () => {
@@ -290,6 +299,80 @@ test('deactivate stops the loop: nothing is posted or updated after it', async (
   // A turn for a line the loop should no longer read.
   await new Promise((done) => setImmediate(done))
   assert.deepEqual([worker.posts.length, updates().length], seen)
+})
+
+test('the manifest asks for workspace:read and workspace.changed, at 0.2.0', () => {
+  const manifest = JSON.parse(readFileSync(new URL('../orca-plugin.json', import.meta.url), 'utf8'))
+  assert.equal(manifest.version, '0.2.0')
+  assert.deepEqual(manifest.capabilities, [{ kind: 'workspace:read' }])
+  assert.deepEqual(manifest.contributes.events, [{ on: 'workspace.changed' }])
+  assert.equal(manifest.engines.orca, '>=1.4.248')
+})
+
+const front = (terminals: string[] | null) => JSON.stringify({ type: 'orcaFront', terminals })
+
+// A bounded number of turns, for a post the worker makes or should not: the cases below never wait on a post that may
+// not come.
+async function turns(): Promise<void> {
+  for (let i = 0; i < 5; i++) await new Promise((done) => setImmediate(done))
+}
+
+/** A worker whose dial stream is open (a line of it is the state), on the mock host's `results`. */
+async function open(results: Record<string, unknown> = {}) {
+  const m = await streaming(ACCEPT, {}, results)
+  m.stream.send(ATTACHED)
+  await until(() => m.changes().length === 1)
+  return m
+}
+
+test('each workspace.changed hands its terminal ids to the devices, and nothing else of it', async () => {
+  const { worker, bodies } = await open()
+  try {
+    await worker.emit('workspace.changed', {
+      context: { workspaceId: '/Users/someone/secret-wt', branch: 'payroll', displayName: 'Payroll', terminals: [{ id: H(1), title: 'PM' }, { id: H(2) }] },
+    })
+    await turns()
+  } finally {
+    await worker.deactivate()
+  }
+  assert.equal(bodies.at(-1), front([H(1), H(2)]))
+  const seen = [...bodies, ...worker.logs].join('\n')
+  for (const word of ['secret-wt', 'payroll', 'Payroll', 'PM']) assert.ok(!seen.includes(word), word)
+  assert.deepEqual(worker.refusals, [])
+})
+
+test('the context Orca gives a new subscriber is sent as the stream opens', async () => {
+  const { worker, bodies } = await open({ 'workspace.readContext': { branch: 'main', displayName: 'main', terminals: [{ id: H(3) }] } })
+  try {
+    await turns()
+  } finally {
+    await worker.deactivate()
+  }
+  assert.equal(bodies[0], front([H(3)]))
+  assert.deepEqual(worker.refusals, [])
+})
+
+test('no focused workspace is "terminals":null', async () => {
+  const { worker, bodies } = await open()
+  try {
+    await worker.emit('workspace.changed', { context: { branch: 'main', displayName: 'main', terminals: [{ id: H(1) }] } })
+    await turns()
+    await worker.emit('workspace.changed', { context: null })
+    await turns()
+  } finally {
+    await worker.deactivate()
+  }
+  assert.deepEqual(bodies.slice(-2), [front([H(1)]), front(null)])
+  assert.deepEqual(worker.refusals, [])
+})
+
+test('deactivate ends it: a context after it posts nothing', async () => {
+  const { worker, bodies } = await open()
+  await worker.deactivate()
+  const sent = bodies.length
+  await worker.emit('workspace.changed', { context: { branch: 'main', displayName: 'main', terminals: [{ id: H(4) }] } })
+  await turns()
+  assert.equal(bodies.length, sent)
 })
 
 test('the real worker, with a home and a PATH that hold no launcher, says noHarness', async () => {

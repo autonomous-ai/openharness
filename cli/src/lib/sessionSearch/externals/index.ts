@@ -12,6 +12,7 @@ import { isAbsolute, join } from 'node:path'
 import { cursorConfigDir, cursorDataDir } from '../../../engines/cursor/contract.js'
 import { env } from '../../../config/env.js'
 import { adoptionProviderOf } from '../../../engines/adoptions.js'
+import type { AdoptionPlaces } from '../../../engines/kit/adoption.js'
 import { loadEngine, type InProcessModules, type OtherEngine } from '../../../engines/inProcess.js'
 import { claudeProjectsRoots, codexHomeRoots } from '../../engineHomes.js'
 import type { ExternalEngine, ExternalProvider } from './types.js'
@@ -99,15 +100,21 @@ function loaded<Name extends OtherEngine>(engine: ExternalEngine, name: Name, bu
   }
 }
 
-/** One provider per engine that keeps its conversations on this machine's disk. */
-export function externalProviders(paths: ExternalPaths = externalPaths()): ExternalProvider[] {
+/**
+ * One provider per engine that keeps its conversations on this machine's disk. `places` replaces Claude Code's or
+ * Codex's own: the devices process also looks in homes this process does not know, such as Orca's accounts.
+ */
+export function externalProviders(
+  paths: ExternalPaths = externalPaths(),
+  places: { claude?: AdoptionPlaces; codex?: AdoptionPlaces } = {},
+): ExternalProvider[] {
   return [
     // QA found search's separate process started before the core adopted the shell's homes.
     // Resolve roots on each scan, retaining the default and previously adopted conversations.
     // Claude Code's and Codex's are declared (engines/adoptions.ts): Claude Code's listed from each sessions
     // folder, its process records beside each; Codex's from each home.
-    adoptionProviderOf('claude', { roots: () => claudeProjectsRoots(paths.claudeProjectsDir) }),
-    adoptionProviderOf('codex', { roots: () => codexHomeRoots(paths.codexHome) }),
+    adoptionProviderOf('claude', places.claude ?? { roots: () => claudeProjectsRoots(paths.claudeProjectsDir) }),
+    adoptionProviderOf('codex', places.codex ?? { roots: () => codexHomeRoots(paths.codexHome) }),
     loaded('cursor', 'cursor', (code) => code.cursorProvider({ configDir: paths.cursorConfigDir, dataDir: paths.cursorDataDir })),
     loaded('grok', 'grok', (code) => code.grokProvider({ home: paths.grokHome })),
     loaded('copilot', 'copilot', (code) => code.copilotProvider({ home: paths.copilotHome })),
