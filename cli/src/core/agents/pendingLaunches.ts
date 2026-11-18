@@ -85,7 +85,13 @@ export function createPendingLaunches({ receipts, prepare, discovery }: {
     // disk entry. The cursor finishes that pass before revisiting earlier IDs;
     // permanently unavailable choices cannot starve the tail of the directory.
     const release = () => { if (crowded) pending.delete(id) }
-    void result.then(status => { if (status.state !== 'pending') pending.delete(id); else release() }, release).then(arm)
+    void result.then(status => {
+      if (status.state !== 'pending') pending.delete(id)
+      else if (crowded) release()
+      // A marker admission may outlast the first retry, before a primary exists.
+      // Restore that ID when its durable hold arrives, without resetting retries already remembered.
+      else if (!pending.has(id)) remember(id, Date.now() + 2_000)
+    }, release).then(arm)
     return result
   }
 

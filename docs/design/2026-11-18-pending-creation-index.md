@@ -146,6 +146,16 @@ The configured root may itself be an alias; its resolved directory is pinned by 
 index directories beneath that root reject aliases. Terminal retirement checks directory and marker identity again
 after reading the receipt evidence, before unlinking the marker.
 
+Independent final review reproduced one recovery gap: a marker admission lasting three seconds let the
+two-second retry remove its ID before the primary existed. A later pending result then waited for the minute
+scan. The result now restores a missing ID at the normal two-second retry only when the retry window is not
+crowded; existing retry times and crowded-window slot release stay unchanged. The independent RED had one
+failure and one immediate-admission control (`/tmp/core-pending-index-final-review-red.log`). The exact regression
+case and existing fairness controls pass: 17 tests, with all four coverage measures at 100% for
+`pendingLaunches.ts`, plus types. Receipt `20261118T050806.406538Z-31358` records actual cleanup. The first
+restricted attempt also passed those checks, but its receipt `20261118T050709.911651Z-29807` is failed because the
+sandbox denied `ps` inspection; it is not counted as a passing validation receipt.
+
 ### Matched history-cost validation plan
 
 The integration owner runs this after review, on the same pinned runtime and build inputs for baseline and candidate.
