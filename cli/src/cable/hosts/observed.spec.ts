@@ -1409,14 +1409,17 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
     } }),
     createTmuxAdapter({ run: ran, processes: async () => [], log: () => {} }),
     // As devices.ts takes it where the hook's addresses are hc's own session's.
-    createHerdrAppAdapter({ ...deps, client: { prompt: (address, kind, text) => fake.hcPrompt(address, kind, text) },
+    createHerdrAppAdapter({ ...deps,
+      client: { prompt: (address, kind, text) => fake.hcPrompt(address, kind, text), keys: async () => false },
       hookIds: true, inFront: () => fake.herdrInFront(), shows: (address) => fake.hcShows(address),
+      // No stroke reaches it here: only the dial's scroll asks a terminal's tab, kind and status, and presses keys.
+      tabOf: () => undefined, kindOf: () => undefined, statusOf: () => undefined,
       reports: (address) => fake.hcReports(address), log: () => {} }),
     createWeztermAdapter(deps),
     { ...orca, type: (pane, text) => fake.orcaSend(pane.id, text), show: (pane) => fake.orcaSwitch(pane.id) },
     { ...claude, show: (pane, agentId) => fake.claudeShow(agentId, pane.id) },
     createCodexAppAdapter({ ...deps, inFront: () => fake.codexInFront(), log: () => {} }),
-    createVscodeAdapter({ ...deps, inFront: () => true, terminals: { terminalOf: () => undefined, show: () => false } }),
+    createVscodeAdapter({ ...deps, inFront: () => true, terminals: { terminalOf: () => undefined, show: () => false, scroll: () => false } }),
     createTabsAdapter({ isOpen: () => fake.tabsOpen(), select: (tab, raise) => fake.tabSelect(tab.app, tab.tty, raise) === 'ok' }),
   ]
   return { actions: { ...fake, adapters }, ready, ran }

@@ -13,7 +13,9 @@
  * a `{"show":<shell pid>}` line (vscodeTerminals.ts), a tap's with `"raise":true` so that window comes in front of
  * VS Code's others. The terminal is asked for again at each verb, since a window comes and goes between looks. The
  * adapter's one `tap` is `'instead'`, for the tab's link, so a terminal's tap runs VS Code's own `open -b` itself once
- * its line is queued; off macOS the line alone is the tap.
+ * its line is queued; off macOS the line alone is the tap. The dial's scroll sends that window the stroke's lines on a
+ * `{"scroll":<lines>,"pid":<shell>}` line while VS Code is in front (§4): the extension runs them only while that
+ * terminal is the active one, so the adapter has no `onScreen`.
  */
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { createAppLink, type AppLinkDeps } from './appLink.js'
@@ -34,7 +36,7 @@ export function termPid(paneId: string): number | undefined {
 }
 
 export function createVscodeAdapter(
-  deps: AppLinkDeps & { terminals: Pick<VscodeTerminals, 'terminalOf' | 'show'> },
+  deps: AppLinkDeps & { terminals: Pick<VscodeTerminals, 'terminalOf' | 'show' | 'scroll'> },
 ): HostAdapter & Required<Pick<HostAdapter, 'canShow' | 'show'>> {
   const mac = deps.platform === 'darwin'
   const openBin = openPath(deps.bin)
@@ -90,6 +92,16 @@ export function createVscodeAdapter(
       if (pid === undefined) return tab.show(pane, agentId)
       const terminal = deps.terminals.terminalOf(pid)
       return terminal && deps.terminals.show(terminal, false) ? 'ok' : 'failed'
+    },
+    canScroll(pane) {
+      const pid = termPid(pane.id)
+      // A terminal's pane alone: the tab has no window stream. VS Code in front first: with it behind, no window is asked.
+      return pid !== undefined && deps.inFront() && !!deps.terminals.terminalOf(pid)
+    },
+    scroll(pane, lines) {
+      const pid = termPid(pane.id)
+      const terminal = pid === undefined ? undefined : deps.terminals.terminalOf(pid)
+      if (terminal) deps.terminals.scroll(terminal, lines)
     },
   }
 }

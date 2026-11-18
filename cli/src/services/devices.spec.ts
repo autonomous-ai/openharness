@@ -37,6 +37,7 @@ import type { TierInput } from '../lib/notifyTier.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCmux, touchStore } from '../testing/fakeCmux.js'
 import { fakeCore } from '../testing/fakeCore.js'
+import { herdrAppStatus } from '../testing/herdrAppStatus.js'
 import type { Fleet, FleetDeps } from './fleet.js'
 import type { DevicesDeps } from './devices.js'
 import {
@@ -286,6 +287,7 @@ const hc: HcClient = {
     return { close: () => {} }
   },
   prompt: async (address, kind, text) => { hcCalls.push(['prompt', address, kind, text]); return { outcome: 'sent' } },
+  keys: async (address, keys) => { hcCalls.push(['keys', address, keys]); return false },
   socketStamp: () => undefined,
 }
 /** cmux as every spec but cmux's own has it: not installed, so no spec runs the developer's own cmux. */
@@ -5781,9 +5783,9 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
 
 describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-design.md)', () => {
   const ID = observedAgentId('claude', 'sess-1')
-  /** A terminal Herdr's window shows, as the hc client tells it: Claude Code at its prompt in /work/api. */
+  /** A terminal Herdr's window shows, as the hc client tells it: Claude Code at its prompt in /work/api, in tab tbaaaa. */
   const terminal = (address: string, over: Partial<HcTerminal> = {}): HcTerminal =>
-    ({ address, live: true, space: true, status: 'idle', kind: 'claude', cwd: '/work/api', ...over })
+    ({ address, live: true, space: true, tab: 'tbaaaa', status: 'idle', kind: 'claude', cwd: '/work/api', ...over })
   /** Claude Code's hook from inside an hc terminal: hc gives its programs TERM_PROGRAM=ghostty. */
   const hook = (event: ObservedHookEvent['event'], address = 't7'): ObservedHookEvent => ({
     engine: 'claude', sessionId: 'sess-1', event, cwd: '/work/api', callerPid: 4242, transcriptPath: '/t/sess-1.jsonl',
@@ -5817,11 +5819,12 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
   /**
    * The devices with a Herdr Core the test drives, the dial not attached yet. Its socket is there (`stamp`). Each
    * subscription keeps its subscriber and whether it was closed; a prompt is recorded and answers the next of `prompts`,
-   * else sent. `live` attaches the dial and tells the first subscription's snapshot; `changed` tells one change of t7.
+   * else sent; keys are recorded in `pressed` and pressed. `live` attaches the dial and tells the first subscription's
+   * snapshot; `changed` tells one change of t7.
    */
   const withHc = (over: Parameters<typeof start>[0] = {}) => {
     const subs: Array<{ to: HcSubscriber; closed: boolean }> = []
-    const hc = { stamp: '1:1' as string | undefined, subs, prompted: [] as unknown[][], prompts: [] as HcPrompt[] }
+    const hc = { stamp: '1:1' as string | undefined, subs, prompted: [] as unknown[][], prompts: [] as HcPrompt[], pressed: [] as unknown[][] }
     const client: HcClient = {
       request: async () => ({ ok: false, fault: 'no_socket' }),
       subscribe: (to) => {
@@ -5832,6 +5835,10 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       prompt: async (...args) => {
         hc.prompted.push(args)
         return hc.prompts.shift() ?? { outcome: 'sent' }
+      },
+      keys: async (...args) => {
+        hc.pressed.push(args)
+        return true
       },
       socketStamp: () => hc.stamp,
     }
@@ -6260,6 +6267,475 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       '[herdr-app] closed · ended', '[herdr-app] retry · 1']))
     const secrets = ['t7q4', 'Nebula', 'secret-folder', 'secret tests']
     expect(logs.filter((line) => secrets.some((word) => line.includes(word)))).toEqual([])
+  })
+
+  // A stroke scrolls Herdr's view of the shown agent's terminal while Herdr is in front and its window shows that terminal
+  // on screen; any other stroke goes to Harness's windows as before.
+  describe('a stroke on the dial scrolls Herdr (docs/plans/2026-11-17-dial-herdr-scroll-design.md)', () => {
+    const DIAL = {}
+    /** The agent the dial shows, as its cable session tells the host; null for none. */
+    const shows = (agentId: string | null) => host().dialShows(DIAL, agentId ? { name: 'api', app: 'herdr' } : null, agentId)
+    /** A finger on the glass: a down, its moves, and an up that leaves at that velocity. */
+    const stroke = (moves: number[], velocity = 0) => {
+      host().scrolled('down', 0, 0)
+      for (const dy of moves) host().scrolled('move', dy, 0)
+      host().scrolled('up', 0, velocity)
+    }
+    const dialScrolls = (core: CoreApi) => vi.mocked(core.clients.sendLocal).mock.calls.map(([frame]) => frame)
+      .filter(({ type }) => type === 'dial_scroll')
+    const toWindows = (phase: string, dy: number, velocity: number) => ({ type: 'dial_scroll', payload: { phase, dy, velocity } })
+    const STATUS: [string, string[], number] = ['/opt/herdr-app/bin/herdr-app', ['status'], 2_000]
+    const scrolled = (address: string, lines: number): [string, string[], number] =>
+      ['/opt/herdr-app/bin/herdr-app', ['do', 'terminal.scroll', '--terminal', address, '--lines', String(lines)], 2_000]
+    const NOT_ON_SCREEN = '[device] scroll · herdr-app · not on screen'
+    /** What the devices said of a scroll. */
+    const scrollSaid = () => logs.filter((line) => line.startsWith('[device] scroll'))
+    /** herdr-app's scroll queues that drained, a line each (herdrApp.ts). */
+    const drained = () => logs.filter((line) => /^\[herdr-app\] scroll · \d+ lines/.test(line))
+    /** The id the dial holds for the one agent hc lists. */
+    const listedId = async () => (await listed())[0].id
+
+    /** Codex draws on the main screen, whose history Herdr's view scrolls; Claude Code's own keys move it. */
+    const CODEX: Partial<HcTerminal> = { kind: 'codex' }
+
+    /**
+     * The devices with Herdr Core listing `terminals` (Codex in t7 alone by default), the hook `hooked` heard first,
+     * the dial attached and Herdr in front. Every herdr-app run is recorded in `orcaRuns`: its `status` exits
+     * `screen.code` and prints `screen.tab` as the tab on screen (t7's own by default), held while `screen.held` until
+     * `answer` names the tab. Its `agent` names t7 whatever the tab, as Herdr's did on Diego's first check (2026-11-18).
+     */
+    const inHerdr = (over: Parameters<typeof start>[0] & { hooked?: ObservedHookEvent; terminals?: HcTerminal[] } = {}) => {
+      const screen = { tab: 'tbaaaa', code: 0 as number | null, held: false }
+      const waiting: Array<() => void> = []
+      const run = async (file: string, args: string[], timeoutMs: number) => {
+        orcaRuns.push([file, args, timeoutMs])
+        if (args[0] !== 'status') return { code: 0, stdout: '' }
+        if (screen.held) await new Promise<void>((resolve) => { waiting.push(resolve) })
+        return { code: screen.code, stdout: herdrAppStatus(screen.tab, 't7') }
+      }
+      const started = withHc({ ...over, orca: { ...onMac, ...over.orca, run } })
+      if (over.hooked) started.port.observed(over.hooked)
+      attach(started.port)
+      // None off macOS or with the observed agents off: hc is not followed there.
+      started.hc.subs[0]?.to.snapshot(over.terminals ?? [terminal('t7', CODEX)])
+      host().front('herdr')
+      const answer = (tab: string) => {
+        screen.tab = tab
+        screen.held = false
+        for (const release of waiting.splice(0)) release()
+      }
+      return { ...started, screen, answer }
+    }
+
+    /** A stroke on t7, each move's lines a run of their own: `status` at the down, then the lines. */
+    const strokeOnT7 = async (core: CoreApi) => {
+      host().scrolled('down', 0, 0)
+      await vi.waitFor(() => expect(orcaRuns).toEqual([STATUS]))
+      // 20 px toward older lines twice (one line each, 8 px kept), then 60 px toward newer: 52 px, three lines.
+      // Each move 50 ms after the last, the gap between two runs of a terminal: each move's lines run on their own.
+      for (const dy of [8, 8, -24]) {
+        host().scrolled('move', dy, 0)
+        await vi.advanceTimersByTimeAsync(50)
+      }
+      host().scrolled('up', 0, 0)
+      expect(orcaRuns).toEqual([STATUS, scrolled('t7', -1), scrolled('t7', -1), scrolled('t7', 3)])
+      expect(dialScrolls(core)).toEqual([])
+      // One tally for the stroke, once its terminal has been quiet for 1 s.
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(drained()).toEqual(['[herdr-app] scroll · 5 lines · 3 runs · 0 failed'])
+    }
+
+    it('with Herdr in front, the dial on an agent hc lists and its terminal on screen, a stroke\'s lines go to herdr-app and the windows hear no dial_scroll', async () => {
+      const { core } = inHerdr()
+      shows(await listedId())
+      await strokeOnT7(core)
+    })
+
+    it('a hooked agent in a Herdr terminal scrolls by its hook\'s address', async () => {
+      const { core } = inHerdr({ hooked: hook('session-start') })
+      shows(ID)
+      await strokeOnT7(core)
+    })
+
+    it.each<[string, () => Promise<CoreApi>]>([
+      ['another app in front', async () => {
+        const { core } = inHerdr()
+        host().front('ghostty')
+        shows(await listedId())
+        return core
+      }],
+      ['a Harness agent shown', async () => {
+        const { core } = inHerdr({ core: harnessAgent() })
+        shows('h1')
+        return core
+      }],
+      ['no agent shown', async () => {
+        const { core } = inHerdr()
+        shows(await listedId())
+        shows(null)
+        return core
+      }],
+      ['a hooked agent whose terminal Herdr\'s window does not show', async () => {
+        const { core } = inHerdr({ hooked: hook('session-start', 't8'), terminals: [terminal('t7'), terminal('t8', { space: false })] })
+        shows(ID)
+        return core
+      }],
+      ['a hooked agent while the devices follow another hc session', async () => {
+        vi.stubEnv('HC_SESSION', 'other')
+        const { core } = inHerdr({ hooked: hook('session-start') })
+        shows(ID)
+        return core
+      }],
+      ['a hooked agent in Ghostty', async () => {
+        const { core } = inHerdr({ hooked: { ...hook('session-start'), hostHints: { TERM_PROGRAM: 'ghostty' } } })
+        shows(ID)
+        return core
+      }],
+      ['HARNESS_DEVICE_OBSERVED off', async () => {
+        const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
+        switched.HARNESS_DEVICE_OBSERVED = false
+        onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
+        const { core } = inHerdr({ hooked: hook('session-start') })
+        shows(ID)
+        return core
+      }],
+      ['Linux', async () => {
+        const { core } = inHerdr({ orca: { ...onMac, platform: 'linux' }, hooked: hook('session-start') })
+        shows(ID)
+        return core
+      }],
+    ])('with %s the stroke goes to the windows as before, velocity and all, and herdr-app is not asked', async (_, situation) => {
+      const core = await situation()
+      stroke([8], 300)
+      expect(dialScrolls(core)).toEqual([toWindows('down', 0, 0), toWindows('move', 8, 0), toWindows('up', 0, 300)])
+      expect(orcaRuns.filter(([, args]) => args[0] === 'status' || args[1] === 'terminal.scroll')).toEqual([])
+    })
+
+    it('the route holds from down to up', async () => {
+      const { core } = inHerdr()
+      const id = await listedId()
+      shows(id)
+      // Herdr leaves the front after the down, and the dial moves to another agent: the stroke still scrolls t7.
+      host().scrolled('down', 0, 0)
+      host().front('ghostty')
+      shows('h1')
+      host().scrolled('move', 8, 0)
+      await vi.advanceTimersByTimeAsync(32)
+      host().scrolled('move', 8, 0)
+      await vi.advanceTimersByTimeAsync(32)
+      host().scrolled('up', 0, 0)
+      expect(orcaRuns).toEqual([STATUS, scrolled('t7', -1), scrolled('t7', -1)])
+      expect(dialScrolls(core)).toEqual([])
+      // A stroke that began on the windows stays there when Herdr comes in front.
+      shows(id)
+      host().scrolled('down', 0, 0)
+      host().front('herdr')
+      host().scrolled('move', 8, 0)
+      host().scrolled('up', 0, 120)
+      expect(dialScrolls(core)).toEqual([toWindows('down', 0, 0), toWindows('move', 8, 0), toWindows('up', 0, 120)])
+      // The up ended that stroke: a move with no down before it chooses by what it finds.
+      host().scrolled('move', 8, 0)
+      await vi.waitFor(() => expect(orcaRuns).toEqual([STATUS, scrolled('t7', -1), scrolled('t7', -1), STATUS, scrolled('t7', -1)]))
+      expect(dialScrolls(core)).toHaveLength(3)
+    })
+
+    // The PM's third condition (2026-11-17): a terminal in Herdr's window but not the one on screen is not scrolled. It is
+    // matched by tab (2026-11-18): status's agent still named t7 on Diego's first check with another tab shown.
+    it('status names another tab than the terminal\'s: the whole stroke goes to the windows as a down, one summed move and the up, no terminal.scroll runs, and the line is said once', async () => {
+      const { core, screen } = inHerdr()
+      screen.tab = 'tbzzzz'
+      shows(await listedId())
+      stroke([8, 8, -24], 300)
+      await vi.waitFor(() => expect(dialScrolls(core)).toEqual([toWindows('down', 0, 0), toWindows('move', -8, 0), toWindows('up', 0, 300)]))
+      expect(orcaRuns).toEqual([STATUS])
+      expect(scrollSaid()).toEqual([NOT_ON_SCREEN])
+    })
+
+    // The terminal's tab is the one hc's herdr.tab label names now.
+    it.each<[string, Partial<HcTerminal>]>([
+      ['moved to another tab', { tab: 'tbbbbb' }],
+      ['with no herdr.tab label', { tab: undefined }],
+    ])('a terminal hc tells %s is not on screen', async (_, change) => {
+      const { core, changed } = inHerdr()
+      shows(await listedId())
+      changed({ ...CODEX, ...change })
+      stroke([8], 300)
+      await vi.waitFor(() => expect(dialScrolls(core)).toEqual([toWindows('down', 0, 0), toWindows('move', 8, 0), toWindows('up', 0, 300)]))
+      expect(orcaRuns).toEqual([STATUS])
+      expect(scrollSaid()).toEqual([NOT_ON_SCREEN])
+    })
+
+    it('a status that fails is not on screen', async () => {
+      const { core, screen } = inHerdr()
+      screen.code = 1
+      shows(await listedId())
+      stroke([8, 8, -24], 300)
+      await vi.waitFor(() => expect(dialScrolls(core)).toEqual([toWindows('down', 0, 0), toWindows('move', -8, 0), toWindows('up', 0, 300)]))
+      expect(orcaRuns).toEqual([STATUS])
+      expect(scrollSaid()).toEqual([NOT_ON_SCREEN])
+      expect(logs).toContain('[herdr-app] status · failed')
+    })
+
+    it('frames that come before the answer are taken as lines at once; those after go line by line', async () => {
+      const { screen, answer } = inHerdr()
+      screen.held = true
+      shows(await listedId())
+      host().scrolled('down', 0, 0)
+      host().scrolled('move', 8, 0)
+      host().scrolled('move', 8, 0)
+      answer('tbaaaa')
+      await vi.advanceTimersByTimeAsync(32)
+      expect(orcaRuns).toEqual([STATUS, scrolled('t7', -2)])
+      host().scrolled('move', 8, 0)
+      await vi.advanceTimersByTimeAsync(32)
+      expect(orcaRuns).toEqual([STATUS, scrolled('t7', -2), scrolled('t7', -1)])
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(drained()).toEqual(['[herdr-app] scroll · 3 lines · 2 runs · 0 failed'])
+    })
+
+    it.each([
+      ['on screen', 'tbaaaa', [scrolled('t7', 1)], []],
+      ['not on screen', 'tbzzzz', [], [toWindows('down', 0, 0), toWindows('move', -8, 0), toWindows('up', 0, 0)]],
+    ])('an answer after the up decides the whole stroke: %s', async (_, tab, runs, frames) => {
+      const { core, screen, answer } = inHerdr()
+      screen.held = true
+      shows(await listedId())
+      stroke([8, 8, -24])
+      answer(tab)
+      await vi.waitFor(() => {
+        expect(orcaRuns).toEqual([STATUS, ...runs])
+        expect(dialScrolls(core)).toEqual(frames)
+      })
+      // The up ended the stroke: the next move asks again.
+      host().scrolled('move', 8, 0)
+      await vi.waitFor(() => expect(orcaRuns.filter(([, args]) => args[0] === 'status')).toHaveLength(2))
+    })
+
+    // A dial may send down after down faster than status answers: one read, and nothing of the stroke left behind sent.
+    it.each([
+      ['on screen', 'tbaaaa', [STATUS, scrolled('t7', 1)], [], []],
+      ['not on screen', 'tbzzzz', [STATUS], [toWindows('down', 0, 0), toWindows('move', -8, 0), toWindows('up', 0, 0)], [NOT_ON_SCREEN]],
+    ])('a newer down before the answer drops the stale one: %s', async (_, tab, runs, frames, lines) => {
+      const { core, screen, answer } = inHerdr()
+      screen.held = true
+      shows(await listedId())
+      host().scrolled('down', 0, 0)
+      host().scrolled('move', 8, 0)
+      stroke([-8])
+      answer(tab)
+      await vi.waitFor(() => {
+        expect(orcaRuns).toEqual(runs)
+        expect(dialScrolls(core)).toEqual(frames)
+      })
+      expect(scrollSaid()).toEqual(lines)
+    })
+
+    it('a frame after a held up begins a stroke of its own, and the older answer is dropped', async () => {
+      const { core, screen, answer } = inHerdr()
+      screen.held = true
+      shows(await listedId())
+      stroke([-8])
+      host().scrolled('move', 8, 0)
+      answer('tbaaaa')
+      await vi.waitFor(() => expect(orcaRuns).toEqual([STATUS, scrolled('t7', -1)]))
+      expect(dialScrolls(core)).toEqual([])
+    })
+
+    it.each<[string, Array<['down' | 'move' | 'up', number, number]>, unknown[]]>([
+      ['a stroke with no travel replays its down and its up alone', [['down', 0, 0], ['up', 0, 0]], [toWindows('down', 0, 0), toWindows('up', 0, 0)]],
+      ['a stroke that begins with a move replays no down', [['move', 8, 0], ['up', 0, 0]], [toWindows('move', 8, 0), toWindows('up', 0, 0)]],
+    ])('%s', async (_, frames, replayed) => {
+      const { core, screen } = inHerdr()
+      screen.tab = 'tbzzzz'
+      shows(await listedId())
+      for (const [phase, dy, velocity] of frames) host().scrolled(phase, dy, velocity)
+      await vi.waitFor(() => expect(dialScrolls(core)).toEqual(replayed))
+      expect(orcaRuns).toEqual([STATUS])
+    })
+
+    it('the held move carries the last move\'s velocity, and a frame after the answer goes as it came', async () => {
+      const { core, screen } = inHerdr()
+      screen.tab = 'tbzzzz'
+      shows(await listedId())
+      host().scrolled('down', 0, 0)
+      host().scrolled('move', 4, 50)
+      host().scrolled('move', 4, 120)
+      await vi.waitFor(() => expect(dialScrolls(core)).toEqual([toWindows('down', 0, 0), toWindows('move', 8, 120)]))
+      host().scrolled('up', 0, 300)
+      expect(dialScrolls(core)).toEqual([toWindows('down', 0, 0), toWindows('move', 8, 120), toWindows('up', 0, 300)])
+    })
+
+    it('a fling is not played', async () => {
+      const { core } = inHerdr()
+      shows(await listedId())
+      host().scrolled('down', 0, 0)
+      await vi.waitFor(() => expect(orcaRuns).toEqual([STATUS]))
+      host().scrolled('up', 8, 900)
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(orcaRuns).toEqual([STATUS, scrolled('t7', -1)])
+      expect(dialScrolls(core)).toEqual([])
+      expect(drained()).toEqual(['[herdr-app] scroll · 1 lines · 1 runs · 0 failed'])
+    })
+
+    // Claude Code draws on the alternate screen, where Herdr's view has no history (design §3).
+    it('a Claude Code terminal\'s stroke presses its page keys through hc, and herdr-app scrolls nothing', async () => {
+      const { core, hc } = inHerdr({ terminals: [terminal('t7')] })
+      shows(await listedId())
+      // 128 px toward older lines: 320 px of travel, twenty lines, a page.
+      stroke([64, 64])
+      await vi.waitFor(() => expect(hc.pressed).toEqual([['t7', ['pageup'], 5_000]]))
+      expect(orcaRuns).toEqual([STATUS])
+      expect(dialScrolls(core)).toEqual([])
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(drained()).toEqual(['[herdr-app] scroll · 20 lines · 1 runs · 0 failed'])
+    })
+
+    // A key could move the highlighted choice of its question, and the person's Enter would pick it.
+    it('a Claude Code terminal that asks takes no key: the stroke goes to the windows, and herdr-app is not asked', async () => {
+      const { core, hc } = inHerdr({ terminals: [terminal('t7', { status: 'blocked' })] })
+      shows(await listedId())
+      stroke([64, 64], 300)
+      expect(dialScrolls(core)).toEqual([toWindows('down', 0, 0), toWindows('move', 64, 0), toWindows('move', 64, 0), toWindows('up', 0, 300)])
+      expect(orcaRuns).toEqual([])
+      expect(hc.pressed).toEqual([])
+    })
+
+    // The route is chosen at the down; hc's word that it asks, heard mid-stroke, still stops its keys.
+    it('a Claude Code terminal that begins to ask mid-stroke takes no key from then on, and the stroke keeps its route', async () => {
+      const { core, hc, changed } = inHerdr({ terminals: [terminal('t7', { status: 'working' })] })
+      shows(await listedId())
+      host().scrolled('down', 0, 0)
+      await vi.waitFor(() => expect(orcaRuns).toEqual([STATUS]))
+      host().scrolled('move', 64, 0)
+      host().scrolled('move', 64, 0)
+      await vi.waitFor(() => expect(hc.pressed).toEqual([['t7', ['pageup'], 5_000]]))
+      changed({ status: 'blocked' })
+      for (const dy of [64, 64, 64, 64]) {
+        await vi.advanceTimersByTimeAsync(50)
+        host().scrolled('move', dy, 0)
+      }
+      host().scrolled('up', 0, 0)
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(hc.pressed).toEqual([['t7', ['pageup'], 5_000]])
+      expect(dialScrolls(core)).toEqual([])
+      expect(drained()).toEqual(['[herdr-app] scroll · 20 lines · 1 runs · 40 failed'])
+    })
+
+    it('the Wi-Fi device\'s stroke takes the same route', async () => {
+      const { core, port } = inHerdr()
+      shows(await listedId())
+      port.scroll('down', 0, 0)
+      port.scroll('move', 8, 0)
+      port.scroll('up', 0, 0)
+      await vi.waitFor(() => expect(orcaRuns).toEqual([STATUS, scrolled('t7', -1)]))
+      expect(dialScrolls(core)).toEqual([])
+    })
+
+    it('a throw on the scroll path is the part\'s, not the dial\'s', () => {
+      const { core } = inHerdr()
+      vi.mocked(core.clients.sendLocal).mockImplementation(() => { throw new Error('send broken') })
+      expect(() => host().scrolled('move', 8, 0)).not.toThrow()
+      expect(logs).toContain('[devices] dial failed · send broken')
+    })
+
+    it('a throw after the answer is the part\'s', async () => {
+      const { core, screen } = inHerdr()
+      screen.tab = 'tbzzzz'
+      shows(await listedId())
+      vi.mocked(core.clients.sendLocal).mockImplementation(() => { throw new Error('send broken') })
+      stroke([8])
+      await vi.waitFor(() => expect(logs).toContain('[devices] dial failed · send broken'))
+      expect(scrollSaid()).toEqual([NOT_ON_SCREEN])
+    })
+
+    it.each(['tbaaaa', 'tbzzzz'])('the devices stopping drops a stroke still being decided: answered %s', async (tab) => {
+      const { core, port, screen, answer } = inHerdr()
+      screen.held = true
+      shows(await listedId())
+      host().scrolled('down', 0, 0)
+      host().scrolled('move', 8, 0)
+      await port.stop()
+      answer(tab)
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(orcaRuns).toEqual([STATUS])
+      expect(dialScrolls(core)).toEqual([])
+      expect(scrollSaid()).toEqual([])
+    })
+
+    // The stop awaits its listener's close before the cable stops, and the dial still sends frames meanwhile.
+    it('a stroke begun while the devices stop goes to the windows, and herdr-app is not asked', async () => {
+      const { core, port } = inHerdr()
+      shows(await listedId())
+      const stopping = port.stop()
+      host().scrolled('down', 0, 0)
+      host().scrolled('move', 8, 0)
+      await stopping
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(orcaRuns).toEqual([])
+      expect(dialScrolls(core)).toEqual([toWindows('down', 0, 0), toWindows('move', 8, 0)])
+      expect(scrollSaid()).toEqual([])
+    })
+
+    it('a stroke Herdr took before the stop runs nothing more once the stop began', async () => {
+      const { core, port } = inHerdr()
+      shows(await listedId())
+      host().scrolled('down', 0, 0)
+      host().scrolled('move', 8, 0)
+      await vi.advanceTimersByTimeAsync(32)
+      expect(orcaRuns).toEqual([STATUS, scrolled('t7', -1)])
+      const stopping = port.stop()
+      host().scrolled('move', 24, 0)
+      host().scrolled('up', 0, 0)
+      await stopping
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(orcaRuns).toEqual([STATUS, scrolled('t7', -1)])
+      expect(dialScrolls(core)).toEqual([])
+    })
+
+    // The lines of a run's 50 ms gap wait in the adapter's queue, past the routing's own check.
+    it('the lines Herdr holds for a run\'s gap at the stop never run', async () => {
+      const { core, port } = inHerdr()
+      shows(await listedId())
+      host().scrolled('down', 0, 0)
+      host().scrolled('move', 8, 0)
+      await vi.advanceTimersByTimeAsync(10)
+      host().scrolled('move', 16, 0)
+      expect(orcaRuns).toEqual([STATUS, scrolled('t7', -1)])
+      await port.stop()
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(orcaRuns).toEqual([STATUS, scrolled('t7', -1)])
+      expect(dialScrolls(core)).toEqual([])
+    })
+
+    // A window that heard the down before the stop hears the up during it: it never holds a drag.
+    it('a stroke the windows took before the stop keeps its route to its up', async () => {
+      const { core, port } = inHerdr()
+      const id = await listedId()
+      // No agent shown at the down: the stroke is the windows'. The dial then moves to Herdr's agent.
+      host().scrolled('down', 0, 0)
+      shows(id)
+      const stopping = port.stop()
+      host().scrolled('up', 0, 0)
+      await stopping
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(dialScrolls(core)).toEqual([toWindows('down', 0, 0), toWindows('up', 0, 0)])
+      expect(orcaRuns).toEqual([])
+    })
+
+    it('no line about a scroll holds the terminal\'s address', async () => {
+      const { screen } = inHerdr()
+      shows(await listedId())
+      stroke([8, 8])
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(drained()).toEqual(['[herdr-app] scroll · 2 lines · 1 runs · 0 failed'])
+      screen.tab = 'tbzzzz'
+      stroke([8])
+      await vi.waitFor(() => expect(scrollSaid()).toEqual([NOT_ON_SCREEN]))
+      screen.code = 1
+      stroke([8])
+      await vi.waitFor(() => expect(logs).toContain('[herdr-app] status · failed'))
+      expect(logs.filter((line) => /scroll|status/.test(line) && line.includes('t7'))).toEqual([])
+    })
   })
 })
 

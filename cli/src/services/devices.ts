@@ -58,7 +58,7 @@ import { createTmuxAdapter } from '../cable/hosts/tmux.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { watchSocket } from '../cable/hosts/unixSocket.js'
 import { createVscodeAdapter, termPid } from '../cable/hosts/vscode.js'
-import { readProcessParents, vscodeStreams, type VscodeTerminal, type VscodeTerminalsDeps } from '../cable/hosts/vscodeTerminals.js'
+import { readProcessParents, vscodeStreams, type VscodeTerminalsDeps } from '../cable/hosts/vscodeTerminals.js'
 import { createWeztermAdapter } from '../cable/hosts/wezterm.js'
 import { createEngineTally } from '../cable/engineTally.js'
 import { createVscodeExtensionSetup } from '../cable/vscodeExtensionSetup.js'
@@ -361,7 +361,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const hookIds = hcAt.socketPath === hcSocketPath({ ...process.env, HC_SESSION: undefined, HC_SOCKET: undefined }, hcAt.home)
   const herdrApp = createHerdrAppAdapter({ ...apps, client: hcClient, log, bin: openBin, hookIds,
     inFront: () => cableHost.latestFront() === 'herdr', shows: (address) => hcSource?.shows(address) === true,
-    reports: (address) => hcSource?.reports(address) === true })
+    tabOf: (address) => hcSource?.tabOf(address), kindOf: (address) => hcSource?.kindOf(address),
+    statusOf: (address) => hcSource?.statusOf(address), reports: (address) => hcSource?.reports(address) === true })
   const hcPane = (address: string): Pane => ({ adapter: herdrApp.id, id: address })
   const cmuxClient = deps.cmux ?? createCmuxClient({ ...cmuxClientDeps(), platform: apps.platform })
   /** cmux is installed, as the last attach found it: only then are a hooked agent's words offered to it. */
@@ -672,27 +673,81 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     const entry = outside(agentId)
     return entry ? waiting(entry) : null
   }
-  /** The terminal the dial's scroll goes to: the shown agent's, while VS Code is in front (the rule a swipe uses) and a
-   *  window holds it (docs/plans/2026-11-17-dial-vscode-extension-design.md, §4). */
-  const scrollTerminal = (): VscodeTerminal | undefined => {
-    const agentId = cableHost.latestFront() === 'vscode' ? cableHost.shownAgentId() : undefined
-    const pid = agentId === undefined ? undefined : termPid(observed?.paneOf(agentId, 'vscode') ?? '')
-    return pid === undefined ? undefined : vscode.terminalOf(pid)
+  interface ScrollTarget { adapter: HostAdapter; pane: Pane }
+  /** What a stroke did while its route was asked, in a fixed size. */
+  interface Held { down: boolean; dy: number; velocity: number; up?: number }
+  /** Where the dial's scroll goes: the shown agent's pane in the first adapter that can scroll it now
+   *  (docs/plans/2026-11-17-dial-herdr-scroll-design.md, §4). A hooked agent's panes first: its copy wins the registry's
+   *  dedupe, so the dial holds its id. Then the terminal of one the hc source alone lists, whose row's id the dial holds. */
+  const scrollTarget = (): ScrollTarget | undefined => {
+    const agentId = cableHost.shownAgentId()
+    if (agentId === undefined) return undefined
+    const targets = adapters.flatMap((adapter): ScrollTarget[] => {
+      const id = adapter.scroll && observed?.paneOf(agentId, adapter.id)
+      return id ? [{ adapter, pane: { adapter: adapter.id, id } }] : []
+    })
+    const address = hcSource?.paneOf(agentId)
+    if (address !== undefined) targets.push({ adapter: herdrAppNoted, pane: hcPane(address) })
+    return targets.find(({ adapter, pane }) => adapter.canScroll?.(pane))
   }
   /** The route the stroke on the glass took at its `down`, kept to its `up`: Harness's windows are never left holding a
-   *  drag whose `up` went to VS Code. A `move` or an `up` with no `down` before it chooses then. */
-  let stroke: { terminal: VscodeTerminal; lines: ReturnType<typeof createScrollLines> } | 'windows' | undefined
-  const routeScroll = (phase: 'down' | 'move' | 'up', dy: number, velocity: number): void => {
-    let route = stroke
-    if (phase === 'down' || !route) {
-      const terminal = scrollTerminal()
-      route = terminal ? { terminal, lines: createScrollLines() } : 'windows'
+   *  drag whose `up` went to an app. A `move` or an `up` with no `down` before it chooses then. While its app is asked
+   *  whether the pane is on screen, the stroke is held: only the window knows which terminal it shows, and Herdr's answer
+   *  took 0.04 s. */
+  let stroke:
+    | (ScrollTarget & { lines: ReturnType<typeof createScrollLines> })
+    | { deciding: ScrollTarget; held: Held }
+    | 'windows'
+    | undefined
+  const toWindows = (phase: 'down' | 'move' | 'up', dy: number, velocity: number): void =>
+    core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity } })
+  /** The app's answer, for the stroke that asked it alone: one left behind by a newer stroke, or one that lands once the
+   *  devices began to stop (the dial still sends while the stop awaits its listener), is dropped, so nothing of that
+   *  stroke is sent anywhere. A stroke already decided keeps its route through the stop: a window that heard its down
+   *  hears its up. */
+  const decided = (asked: { deciding: ScrollTarget; held: Held }, visible: boolean): void => {
+    if (stopped || stroke !== asked) return
+    const { deciding: { adapter, pane }, held } = asked
+    if (visible) {
+      // The travel held meanwhile goes as lines at once; what follows goes line by line.
+      const lines = createScrollLines()
+      stroke = held.up === undefined ? { adapter, pane, lines } : undefined
+      adapter.scroll!(pane, lines.take('move', held.dy))
+      return
     }
-    stroke = phase === 'up' ? undefined : route
-    if (route === 'windows') core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity } })
-    // Whole lines, and an up's velocity is not played: the scroll stops where the finger stops. A window that went takes
-    // nothing more of the stroke, which never turns to Harness's windows midway.
-    else vscode.scroll(route.terminal, route.lines.take(phase, dy))
+    // A hand's pace, and no address: once per stroke the windows took because its pane was not on screen.
+    log(`[device] scroll · ${adapter.id} · not on screen`)
+    stroke = held.up === undefined ? 'windows' : undefined
+    if (held.down) toWindows('down', 0, 0)
+    if (held.dy !== 0) toWindows('move', held.dy, held.velocity)
+    if (held.up !== undefined) toWindows('up', 0, held.up)
+  }
+  const routeScroll = (phase: 'down' | 'move' | 'up', dy: number, velocity: number): void | Promise<void> => {
+    let route = stroke
+    let answer: Promise<void> | undefined
+    // A held up ended its stroke too: a frame after it begins a new one, and the older answer is stale.
+    if (phase === 'down' || !route || (route !== 'windows' && 'held' in route && route.held.up !== undefined)) {
+      // Once the devices began to stop, no app is asked or run: a stroke then is the windows', as before this route.
+      const target = stopped ? undefined : scrollTarget()
+      if (target?.adapter.onScreen) {
+        const asked = { deciding: target, held: { down: false, dy: 0, velocity: 0 } }
+        route = stroke = asked
+        answer = target.adapter.onScreen(target.pane).then((visible) => decided(asked, visible))
+      } else route = stroke = target ? { ...target, lines: createScrollLines() } : 'windows'
+    }
+    if (route !== 'windows' && 'held' in route) {
+      route.held.dy += dy
+      if (phase === 'down') route.held.down = true
+      if (phase === 'move') route.held.velocity = velocity
+      if (phase === 'up') route.held.up = velocity
+      // The answer's chain, so a throw on its path is the part's too.
+      return answer
+    }
+    if (phase === 'up') stroke = undefined
+    if (route === 'windows') toWindows(phase, dy, velocity)
+    // Whole lines, and an up's velocity is not played: the scroll stops where the finger stops. An app that went takes
+    // nothing more of the stroke, which never turns to Harness's windows midway, and none once the devices began to stop.
+    else if (!stopped) route.adapter.scroll!(route.pane, route.lines.take(phase, dy))
   }
 
   const cableHost = new DaemonCableHost({
@@ -1802,8 +1857,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     inboxGone: (pollId) => inboxCalls?.inboxGone(pollId),
     // The serial ports first: a port left held makes esptool fail in a way that reads like dead hardware.
     stop: async () => {
-      // A cable still waiting on the listener never starts.
+      // A cable still waiting on the listener never starts, and a stroke's answer landing from here on sends nothing.
       stopped = true
+      herdrApp.stop()
       // The listener before anything, once it has opened: no front reaches a stopped cable or sets a timer after the
       // timers below are cleared.
       await (await listening)?.close()

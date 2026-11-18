@@ -17,12 +17,13 @@ interface Terminal { window: string; shell: number }
 
 /** A recording runner that runs nothing, so no spec opens the developer's own VS Code: each call answers the next of
  *  [codes], then exit 0. VS Code is in front unless told. The opener holds this adapter alone. No window holds a
- *  terminal until a test sets `windows.held`; each show is recorded, and `asked` keeps the order of the terminal's looks
- *  beside a test's own. */
+ *  terminal until a test sets `windows.held`; each show and scroll is recorded, and `asked` keeps the order of the
+ *  terminal's looks beside a test's own. */
 function recorder(over: Partial<Deps> = {}, codes: Array<number | null> = []) {
   const calls: Call[] = []
   const logs: string[] = []
-  const windows = { held: undefined as Terminal | undefined, writes: true, shows: [] as Array<{ terminal: Terminal; tap: boolean }> }
+  const windows = { held: undefined as Terminal | undefined, writes: true, shows: [] as Array<{ terminal: Terminal; tap: boolean }>,
+    scrolls: [] as Array<{ terminal: Terminal; lines: number }> }
   const asked: string[] = []
   const deps: Deps = {
     run: async (file, args, timeoutMs) => {
@@ -34,6 +35,7 @@ function recorder(over: Partial<Deps> = {}, codes: Array<number | null> = []) {
     terminals: {
       terminalOf: () => { asked.push('terminalOf'); return windows.held },
       show: (terminal, tap) => { windows.shows.push({ terminal, tap }); return windows.writes },
+      scroll: (terminal, lines) => { windows.scrolls.push({ terminal, lines }); return windows.writes },
     },
     ...over,
   }
@@ -324,6 +326,35 @@ describe('an agent in VS Code\'s integrated terminal (docs/plans/2026-11-17-dial
     expect(termPid('term:2')).toBe(2)
     expect(termPid(`term:${2 ** 31 - 1}`)).toBe(2 ** 31 - 1)
     expect(termPid(UUID)).toBeUndefined()
+  })
+
+  // The dial's scroll (docs/plans/2026-11-17-dial-vscode-extension-design.md, §4), on the scroll route every app shares
+  // (docs/plans/2026-11-17-dial-herdr-scroll-design.md, §4).
+  it('a stroke may scroll the terminal only while VS Code is in front and a window holds it, and its lines go there', () => {
+    let front = false
+    const r: ReturnType<typeof recorder> = recorder({ inFront: () => { r.asked.push('inFront'); return front } })
+    r.windows.held = HELD
+    expect(r.adapter.canScroll!(pane())).toBe(false)
+    expect(r.asked).toEqual(['inFront'])
+    front = true
+    expect(r.adapter.canScroll!(pane())).toBe(true)
+    expect(r.asked).toEqual(['inFront', 'inFront', 'terminalOf'])
+    r.adapter.scroll!(pane(), -3)
+    expect(r.windows.scrolls).toEqual([{ terminal: HELD, lines: -3 }])
+    expect(r.calls).toEqual([])
+    r.windows.held = undefined
+    expect(r.adapter.canScroll!(pane())).toBe(false)
+  })
+
+  it('lines for a terminal no window holds go nowhere, and the panel\'s pane or a term id out of form never scrolls', () => {
+    const { adapter, windows } = recorder()
+    adapter.scroll!(pane(), 2)
+    windows.held = HELD
+    for (const id of [UUID, 'term:1', 'term:x']) {
+      expect(adapter.canScroll!(pane(id)), id).toBe(false)
+      adapter.scroll!(pane(id), 2)
+    }
+    expect(windows.scrolls).toEqual([])
   })
 
   it('it declares VS Code\'s bundle', () => {

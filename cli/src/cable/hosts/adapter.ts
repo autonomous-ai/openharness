@@ -52,6 +52,15 @@ export interface HostAdapter {
   /** Whether `type` can reach the pane now (its app's socket there): asked at each look. One that cannot leaves the words
    *  to the agent's next pane whose app types. */
   canType?(pane: Pane): boolean
+  /** Whether a stroke on the dial may scroll that pane's view now, as far as the adapter knows without asking its app:
+   *  its app in front and the pane in its window. */
+  canScroll?(pane: Pane): boolean
+  /** Whether the pane is the one its app shows on screen now, asked of the app once a stroke, after `canScroll`. False on
+   *  any failure or past its deadline; never throws. An adapter that knows it from `canScroll` alone has none. */
+  onScreen?(pane: Pane): Promise<boolean>
+  /** Scrolls the app's view of the pane's history by whole lines, n < 0 toward older lines. Fire and forget: a line it
+   *  could not send is never retried into the program. */
+  scroll?(pane: Pane, lines: number): void
   /** The key a source that lists this app's agents knows the same pane by (registry.ts). Only an app with such a
    *  source has one. */
   paneKey?(pane: Pane): string
