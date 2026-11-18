@@ -258,7 +258,11 @@ async function installNotifyHooks(settings: HookSettings, port: number, home: st
       if (!sameHook(existingHook)) { changed = true; updated = true }
       if (settings.upToDate.matcher && existing.matcher !== matcher) changed = true
     }
-    current.hooks[event] = [...foreign, { ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: entry.command, ...(entry.args ? { args: entry.args } : {}), timeout: timeout ?? settings.timeout }] }]
+    // Ours where ours was, after what is left of a block it shared, else last: Codex keys a hook's review by its place, so
+    // ours moved after the person's hooks would move theirs, and Codex would ask for their review again. Every block
+    // before the first of ours is foreign.
+    const at = existing ? blocks.indexOf(existing) + (existing.hooks.some((hook) => !isOurs({ hooks: [hook] })) ? 1 : 0) : foreign.length
+    current.hooks[event] = [...foreign.slice(0, at), { ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: entry.command, ...(entry.args ? { args: entry.args } : {}), timeout: timeout ?? settings.timeout }] }, ...foreign.slice(at)]
   }
   // Ours out of every event this release does not declare: one it dropped, or one a newer release added before a
   // rollback. Everyone else's blocks stay, Agent Messages' too. The lists as they were find the review records by place.
