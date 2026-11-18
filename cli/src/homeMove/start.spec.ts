@@ -311,25 +311,28 @@ describe('the move at a start', () => {
     expect(t.execs).toHaveLength(2)
   })
 
-  it('a failed move is tried again at once by harness start, and by __harnessd and --if-down an hour after the last try', async () => {
+  it('a failed move is tried again at once by harness start on a terminal, and by any other start an hour after the last try', async () => {
     const t = legacyHome()
     mkdirSync(t.state, { recursive: true })
-    /** Whether a start at [minutes] tried the move: each try that fails logs its line. */
-    const tries = async (minutes: number, ...args: string[]): Promise<boolean> => {
+    /** Whether a start at [minutes], on a terminal or not, tried the move: each try that fails logs its line. */
+    const tries = async (minutes: number, args: string[], terminal = false): Promise<boolean> => {
       t.clock.now = NOW + minutes * MINUTE
       const before = logOf(t).length
-      await moveHomeAtStart(argvOf(t, ...args), {}, t.deps())
+      await moveHomeAtStart(argvOf(t, ...args), {}, t.deps({ print: terminal ? () => {} : null }))
       return logOf(t).length > before
     }
-    expect(await tries(0, '__harnessd')).toBe(true)
-    expect(await tries(59, '__harnessd')).toBe(false)
-    expect(await tries(59, 'start', '--if-down')).toBe(false)
-    expect(await tries(59, 'start')).toBe(true)
-    expect(await tries(60, 'start', '-f')).toBe(true)
+    expect(await tries(0, ['__harnessd'])).toBe(true)
+    expect(await tries(59, ['__harnessd'])).toBe(false)
+    expect(await tries(59, ['start', '--if-down'], true)).toBe(false)
+    // Desktop's own harness start has no terminal: no person typed it.
+    expect(await tries(59, ['start'])).toBe(false)
+    expect(await tries(59, ['start'], true)).toBe(true)
+    expect(await tries(60, ['start', '-f'], true)).toBe(true)
     expect(readMoveRecord(t.home, {})).toMatchObject({ state: 'failed', failedAt: NOW + 60 * MINUTE })
     // The hour counts from the last try, not the first.
-    expect(await tries(119, '__harnessd')).toBe(false)
-    expect(await tries(121, 'start', '--if-down')).toBe(true)
+    expect(await tries(119, ['__harnessd'])).toBe(false)
+    expect(await tries(119, ['start'])).toBe(false)
+    expect(await tries(121, ['start', '--if-down'])).toBe(true)
     expect(existsSync(t.data)).toBe(false)
   })
 
