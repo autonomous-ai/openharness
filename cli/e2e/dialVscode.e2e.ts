@@ -362,20 +362,25 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
     }, 150_000, 200)
     expect(counted.scrollLines).toBe(3)
 
-    // 3. A's terminal active again, and Ghostty in front: the stroke goes to Harness's windows.
+    // 3. A's terminal active again, and Ghostty in front: A is another app's agent, so the stroke goes nowhere.
     window.set({ active: a.shellPid! })
     await until("A's terminal active again", () => window.took.at(-1)?.active === a.shellPid, 10_000, 50)
     const since = dial.messages.length
     front(GHOSTTY)
     await ring(dial, 'ghostty', since)
     await stroke()
-    await harness.waitFor((f) => f.type === 'dial_scroll' && f.payload?.phase === 'up', 30_000, "the stroke's up in Harness's window")
+    // Harness's window hears the devices' frames in order, so a tab the dial picks after the stroke, heard there, comes
+    // after any dial_scroll of the three strokes. Resent until the devices hold the window's tab.
+    harness.send('app_swarms', { active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds: [], panes: 0 }], tiles: [] })
+    await until('the tab the dial picked, in Harness\'s window', () => {
+      dial.send({ t: 'swarm.select', swarmId: 't1' })
+      return harness.frames.some((f) => f.type === 'dial_swarm')
+    }, 30_000, 200)
 
-    // The window scrolled the first stroke's three lines alone and showed nothing more. Harness's window hears the devices'
-    // frames in order, so a dial_scroll from either stroke on VS Code would come before the last stroke's.
+    // The window scrolled the first stroke's three lines alone and showed nothing more, and Harness's window heard none.
     expect(window.scrolls).toEqual(['up', 'up', 'up'])
     expect(window.shows).toEqual(shown)
-    expect(harness.frames.filter((f) => f.type === 'dial_scroll').map((f) => f.payload?.phase)).toEqual(['down', 'move', 'move', 'move', 'up'])
+    expect(harness.frames.filter((f) => f.type === 'dial_scroll')).toEqual([])
   }, 300_000)
 
   /** The devices' minute lines' page strokes and guard refusals, summed: a stroke may fall either side of a minute. */

@@ -2477,6 +2477,16 @@ describe('the dial reaches the fleet through the core\'s port', () => {
       expect(JSON.stringify(heard())).not.toContain('o1')
     })
 
+    it('isOutside: an agent of another source is, a Harness agent, an unknown id and a session moved into a Harness pane are not', () => {
+      const { host, w } = setup()
+      expect(host.isOutside('o1')).toBe(true)
+      expect(host.isOutside('h-unknown')).toBe(false)
+      const advertised = w.sessions
+      w.sessions = () => [...advertised(), { agentId: 'r1', sessionId: 's-o1' } as unknown as RegisteredSession]
+      expect(host.isOutside('o1')).toBe(false)
+      expect(host.isOutside('r1')).toBe(false)
+    })
+
     // The dial only shows a waiting prompt (docs/specs/2026-11-13-device-claude-orca.md): an answer for an agent outside
     // Harness, whatever its id, approves nothing, and the fleet never hears of it.
     it('an answer or a reviewed answer for an agent outside Harness, an approval\'s id or not, reaches nothing', async () => {

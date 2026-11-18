@@ -185,7 +185,8 @@ name and an app only, so `CableSession.reportShown` also passes the shown agent'
 `CableHost` keeps it and exposes `shownAgentId()`; the `dial` stream keeps writing name and app only. `scrolled` reads
 `cableHost.shownAgentId()`, then that agent's `vscode` pane (`observed.ts` `paneOf`), then `vscodeTerminals`: when the
 agent has a terminal in an open window and `cableHost.latestFront() === 'vscode'` (the rule the swipe uses), the scroll
-goes to that window and not to Harness's windows. Otherwise it goes as today.
+goes to that window and not to Harness's windows. Otherwise it goes nowhere, unless the dial holds the window's tab or
+shows a Harness agent (`2026-11-18-dial-pick-focus-back-design.md`).
 
 The devices turn travel into lines with Harness's own numbers (`tui/src/dial.rs`: remainder += −dy × 2.5, a 16 px
 line, whole lines spent, n < 0 toward older lines; `down` resets the remainder), and write

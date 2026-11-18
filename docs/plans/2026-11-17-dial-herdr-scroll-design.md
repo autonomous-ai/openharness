@@ -52,7 +52,9 @@ built the way the VS Code branch (`feat/dial-vscode-extension`, `docs/plans/2026
   3. that terminal is **in the tab Herdr shows on screen**: `herdr-app status`'s `tab` equals the terminal's
      `herdr.tab` label in hc (PM, 2026-11-18; `status`'s `agent` is not what is on screen, see below).
   Harness's windows then hear none of that stroke.
-- Otherwise the stroke goes to Harness's windows as today (`dial_scroll`), so no terminal nobody sees is scrolled.
+- Otherwise the stroke goes nowhere, so no terminal nobody sees is scrolled. Harness's windows (`dial_scroll`) take a
+  stroke only while the dial holds the window's tab or shows a Harness agent: they do not show a Herdr agent, and Desktop
+  raises its window on a stroke's `down` (`2026-11-18-dial-pick-focus-back-design.md`).
 - The route is chosen at a stroke's `down` and kept to its `up`, as on the VS Code branch: Harness's windows are never
   left holding a drag whose `up` went to Herdr. A `move` or `up` with no `down` before it chooses then.
 - A Claude Code terminal is moved by its own `pageup`/`pagedown` keys, half a screen a key, since it draws on the
@@ -151,7 +153,7 @@ VS Code needs no `onScreen`: its extension already drops a line for a terminal t
   own, `SCROLL_KEYS_TIMEOUT_MS = 5_000`, past hc's hold after the person's own key (below).
 - **No key while Claude Code asks.** `canScroll` is false for a `claude-code` terminal whose hc status state is
   `blocked`, the dial's `needs-you` (a key could move the highlighted choice of a question, and the person's Enter would
-  pick it); the stroke then goes to Harness's windows as today. The same test is made again right before each key
+  pick it); the stroke then goes nowhere. The same test is made again right before each key
   call, as hc tells it then: a question that comes up mid-stroke stops its keys, and the lines that wait are dropped,
   counted dropped in the tally with no failed line (review, 2026-11-18). A status hc has not told counts as asking: a
   word a later hc adds, or none heard since the subscription dropped (the hc source keeps its rows through a drop for
@@ -193,11 +195,12 @@ let stroke:
   `stroke = { deciding: target, held }`, where `held` keeps what the stroke has done meanwhile in a fixed size: that a
   `down` came, the summed `dy` of its `move`s and the last velocity, and whether its `up` came (with its velocity). On
   the answer, if that stroke is still the current one: true makes it a Herdr route (`createScrollLines()`, the held
-  travel taken as one `move`), false makes it `'windows'` and replays the held stroke to the windows as a `down`, one
-  `move` with the summed `dy` (when any), and the `up` (when it came). A newer `down` before the answer makes the old
+  travel taken as one `move`), false sends nothing of it; only a stroke whose fallback is the windows (the dial holds
+  the window's tab) becomes `'windows'` and replays the held stroke to them as a `down`, one `move` with the summed
+  `dy` (when any), and the `up` (when it came). A newer `down` before the answer makes the old
   answer stale: it is dropped, and nothing of the old stroke was sent anywhere. No target, or one with no `onScreen`,
   decides at once as before.
-- A stroke that went to the windows only because `onScreen` said false is counted; the devices log
+- A stroke whose pane `onScreen` said is not on screen is counted; the devices log
   `[device] scroll · herdr-app · not on screen` once per such stroke (a hand's pace, and no address).
 - `scrolled` is guarded as on the VS Code branch: `part.call('dial', () => routeScroll(...))`.
 - The Wi-Fi device's strokes reach the same `cableHost.scrolled` (`devices.ts` `scroll:`), so they share `stroke` and
@@ -221,22 +224,22 @@ stroke's `down`, else `dial_scroll`. The stop's guards now hold for VS Code's te
 
 | Case | What happens | What the person sees |
 |---|---|---|
-| Herdr not in front, or the shown agent has no terminal Herdr's window shows | the stroke goes to Harness's windows | as today |
+| Herdr not in front, or the shown agent has no terminal Herdr's window shows | the stroke goes nowhere | nothing scrolls, and Harness stays where it is |
 | `herdr-app` missing or failing | lines dropped, counted, one log line | nothing scrolls in Herdr |
 | A run hangs | `SCROLL_TIMEOUT_MS` (2 s) ends it; lines pending meanwhile are dropped with it | the scroll stops for up to 2 s |
-| The shown agent's terminal is in Herdr's window but not in the tab on screen (the person clicked another, or the rest's switch failed) | `herdr-app status`'s `tab` at the stroke's `down` is another tab than the terminal's `herdr.tab`: no `terminal.scroll` runs, and the whole stroke goes to Harness's windows (PM, 2026-11-17; matched by tab, PM 2026-11-18) | as today |
+| The shown agent's terminal is in Herdr's window but not in the tab on screen (the person clicked another, or the rest's switch failed) | `herdr-app status`'s `tab` at the stroke's `down` is another tab than the terminal's `herdr.tab`: no `terminal.scroll` runs, and the whole stroke goes nowhere (PM, 2026-11-17; matched by tab, PM 2026-11-18) | nothing scrolls |
 | `status`'s `agent` names the shown agent while another tab is on screen (Diego's first check, 2026-11-18: 175 runs, nothing seen) | `agent` is not read; only `tab` decides | — |
-| `herdr-app status` fails or takes over 2 s | the stroke goes to Harness's windows | as today |
-| `status` has no `tab`, or the terminal has no `herdr.tab` label | not on screen as far as the devices can tell: the stroke goes to Harness's windows | as today |
+| `herdr-app status` fails or takes over 2 s | the stroke goes nowhere | nothing scrolls |
+| `status` has no `tab`, or the terminal has no `herdr.tab` label | not on screen as far as the devices can tell: the stroke goes nowhere | nothing scrolls |
 | A fast stroke | at most one `terminal.scroll` run per terminal every 50 ms; the lines of the gap are summed into the next run | at most 20 processes a second |
 | `status` is under way when the finger moves | the stroke is held in a fixed size and replayed on the answer | the first lines arrive about 0.04 s later |
-| Herdr Core is not on its default session (`hookIds` false) and the dial shows the hooked copy | that copy has no Herdr pane | the stroke goes to Harness's windows |
+| Herdr Core is not on its default session (`hookIds` false) and the dial shows the hooked copy | that copy has no Herdr pane | the stroke goes nowhere |
 | The terminal is on the alternate screen and is not Claude Code | Herdr has no history to move | nothing scrolls |
 | A Claude Code terminal | `pageup`/`pagedown` through hc, one per 8 lines, one a call every 100 ms at most, ±32 lines waiting; the lines short of a key are dropped at the quiet second, counted in the tally; Herdr's view is not asked to move | the transcript moves half a screen per 8 lines of travel, and stops with the finger |
-| A Claude Code terminal that asks (hc's `blocked`, the dial's `needs-you`) | no key is pressed; the stroke goes to Harness's windows | as today |
+| A Claude Code terminal that asks (hc's `blocked`, the dial's `needs-you`) | no key is pressed; the stroke goes nowhere | nothing scrolls |
 | A Claude Code terminal that works (`working`) | its keys are pressed at once, as hc does while a program writes | the transcript moves while it works |
 | A Claude Code terminal begins to ask mid-stroke | the next key call is not made; the lines that wait are dropped, counted in the tally | the transcript stops where it was |
-| hc's subscription dropped, or hc tells a status it did not have before | a Claude Code terminal takes no key until a snapshot tells its status: the stroke goes to Harness's windows | as today |
+| hc's subscription dropped, or hc tells a status it did not have before | a Claude Code terminal takes no key until a snapshot tells its status: the stroke goes nowhere | nothing scrolls |
 | hc refuses or times out a key call (5 s) | its lines are dropped, `[herdr-app] scroll · failed` once | nothing scrolls |
 | The person typed in Herdr's window less than 3 s before a Claude Code stroke | hc holds that call's keys until 3 s after their key; the queue waits for it, then checks again before the next call | the transcript moves up to 3 s late; a question that came up meanwhile can take the held call's key, open until hc refuses a blocked program |
 | Herdr leaves the front mid-stroke | the stroke keeps its route to its `up` | the rest of that stroke scrolls Herdr's view behind |
@@ -245,7 +248,7 @@ stroke's `down`, else `dial_scroll`. The stop's guards now hold for VS Code's te
 ## Platforms
 
 macOS only: Herdr.app and the hc source run there alone. Linux and Windows are unchanged (no Herdr adapter verb runs;
-every stroke goes to Harness's windows).
+a stroke on an agent of another source goes nowhere, as on macOS).
 
 ## Tests
 
@@ -278,10 +281,11 @@ every stroke goes to Harness's windows).
   - `hcSource.spec.ts`: `paneOf(agentId)` answers a listed row's address and none for another id; `tabOf(address)`
     answers a shown terminal's tab and none for a terminal it does not show.
   - `devices.spec.ts`: a stroke with Herdr in front and a shown Herdr agent goes to the adapter and sends no
-    `dial_scroll`, both for a hooked agent (observed pane) and one the hc source alone lists; any other case sends
-    `dial_scroll` as today; the route holds from `down` to `up`. The hooked path is tested here only (the e2e sets
-    `HC_SOCKET`, so `hookIds` is false there). Deciding (PM's third condition): `onScreen` false sends the held stroke
-    to the windows as `down`, one summed `move` and `up`, runs no `scroll`, and logs `not on screen` once; true takes
+    `dial_scroll`, both for a hooked agent (observed pane) and one the hc source alone lists; a Harness agent shown
+    sends `dial_scroll` as today, any other case nothing; the route holds from `down` to `up`. The hooked path is tested here only (the e2e sets
+    `HC_SOCKET`, so `hookIds` is false there). Deciding (PM's third condition): `onScreen` false sends nothing, runs no
+    `scroll`, and logs `not on screen` once; on the window's tab it replays the held stroke to the windows as `down`,
+    one summed `move` and `up`; true takes
     the held travel as lines; an answer after the `up` replays or scrolls the whole stroke; a newer `down` before the
     answer drops the stale answer and sends nothing of the old stroke. A Claude Code terminal that hc tells `blocked`
     mid-stroke takes no key from then on, and the stroke keeps its route.

@@ -6,7 +6,7 @@
  * A Claude Code session the scan finds in a Herdr terminal is paired with it, and listed once there, with its last answer.
  * With Herdr in front, a stroke scrolls Herdr's view of the shown agent's terminal while Herdr shows its tab on screen
  * (docs/plans/2026-11-17-dial-herdr-scroll-design.md), or over Claude Code, which draws on the alternate screen,
- * presses its own page keys through hc; it goes to Harness's windows otherwise.
+ * presses its own page keys through hc; it goes nowhere otherwise.
  *
  * Herdr's real window is never driven. The daemon's `herdr-app` is a fake first on its PATH that records its arguments
  * and answers `status` with the tab the test put on its screen and the terminal it names as its agent
@@ -413,34 +413,28 @@ describe.skipIf(!hcBinary)("Herdr's agents on the dial, from a private Herdr Cor
     await until('the queue drained', () => sum(drained(d).map((tally) => tally.lines)) === 3, 30_000, 50)
     const firstRuns = scrolls()
 
-    // 4. Herdr shows another tab, its status still naming t as its agent: the whole stroke goes to the windows, and
-    // herdr-app scrolls nothing.
+    // 4. Herdr shows another tab, its status still naming t as its agent: Herdr's agent is another app's, so the whole
+    // stroke goes nowhere, and herdr-app scrolls nothing.
     shown('tbzzzz')
     await stroke([8, 8, 8])
     await said(d, '[device] scroll · herdr-app · not on screen')
-    await window.waitFor((f) => f.type === 'dial_scroll' && f.payload?.phase === 'up', 30_000, "stroke 2's up in Harness's window")
 
-    // 5. Orca in front: the stroke goes to the windows as it came, and herdr-app is not asked.
+    // 5. Orca in front: the stroke goes nowhere, and herdr-app is not asked.
     shown(TAB)
     const since = dial.messages.length
     watch.stdin!.write(`${JSON.stringify({ front: ORCA })}\n`)
     await dial.next((m) => m.t === 'apps' && m.shown === 'orca', 45_000, "Orca's ring", since)
-    const before = dialScrolls().length
     await stroke([8, 8, 8])
-    await until("stroke 3's up in Harness's window", () => dialScrolls().slice(before).some((f) => f.phase === 'up'), 30_000, 50)
 
-    // 6. Harness's window hears the devices' frames in order: stroke 1 reached none of it, stroke 2 came as its down, its
-    // held travel and its up, stroke 3 as it came.
-    const heard = dialScrolls()
-    const second = heard.slice(0, heard.findIndex((f) => f.phase === 'up') + 1)
-    expect(second[0].phase).toBe('down')
-    expect(second.at(-1)!.phase).toBe('up')
-    const moves = second.slice(1, -1)
-    expect(moves.length).toBeGreaterThanOrEqual(1)
-    expect(moves.length).toBeLessThanOrEqual(3)
-    expect(moves.every((f) => f.phase === 'move')).toBe(true)
-    expect(sum(moves.map((f) => f.dy))).toBe(24)
-    expect(heard.slice(second.length).map((f) => f.phase)).toEqual(['down', 'move', 'move', 'move', 'up'])
+    // 6. Harness's window hears the devices' frames in order, so a tab the dial picks after the strokes, heard there, comes
+    // after any dial_scroll of them. Resent until the devices hold the window's tab, whose id is no hc terminal's: the log
+    // names it, and is checked below to name none.
+    window.send('app_swarms', { active: 'w1', swarms: [{ id: 'w1', name: 'Tab', agentIds: [], panes: 0 }], tiles: [] })
+    await until('the tab the dial picked, in Harness\'s window', () => {
+      dial.send({ t: 'swarm.select', swarmId: 'w1' })
+      return window.frames.some((f) => f.type === 'dial_swarm')
+    }, 30_000, 200)
+    expect(dialScrolls()).toEqual([])
     expect(scrolls()).toEqual(firstRuns)
     expect(statuses()).toBe(2)
     const tallies = drained(d)
