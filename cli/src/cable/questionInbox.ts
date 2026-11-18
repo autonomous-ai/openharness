@@ -82,6 +82,11 @@ export class QuestionInbox {
     const whole = !!reviewable && Buffer.byteLength(JSON.stringify([id, reviewable]), 'utf8') <= 6500
     const questions = whole ? reviewable! : summaryOnly(raw)
     const signature = JSON.stringify([id, questions])
+    // A summary is small, but its id is not bounded by it: an id of kilobytes, or of control characters six bytes each
+    // as JSON, made every frame of it too big, sent and dropped at each drawer. Its own signature is held to the 6500
+    // bytes an answerable one is, which keeps its frame under the cap; past them it replaces the agent's last question
+    // with nothing, as a refused one did before it was kept.
+    if (Buffer.byteLength(signature, 'utf8') > 6500) { this.entries.delete(agentId); return false }
     if (this.entries.get(agentId)?.signature === signature) return whole
     if (this.entries.size >= 64 && !this.entries.has(agentId)) this.entries.delete(this.entries.keys().next().value!)
     for (const question of questions) { Object.freeze(question.options); Object.freeze(question) }
