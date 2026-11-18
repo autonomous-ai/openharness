@@ -17,7 +17,8 @@ const ASKER = { local: true, owner: true }
 function setup(over: Partial<StoreDeps> = {}, dataDir = '/data') {
   const deps: StoreDeps = {
     prepare: vi.fn(() => true),
-    refresh: vi.fn(async () => [{ id: 'acme/thing' }] as never),
+    setupAgain: vi.fn(async () => ({ done: 0, needsSetup: 0, busy: 0 })),
+    refresh:vi.fn(async () => [{ id: 'acme/thing' }] as never),
     rows: vi.fn((_installed, catalog) => (catalog ?? []).map((entry: { id: string }) => ({ id: entry.id, installed: false }))),
     remove: vi.fn(() => ({ ok: true as const })),
     mutate: vi.fn(async ({ id }: { id?: string }) => ({ ok: true as const, id: id ?? 'acme/from-url' })),
@@ -32,6 +33,29 @@ describe('the store service', () => {
   it('prepares the release-owned harnesses before answering requests', () => {
     const { deps } = setup()
     expect(deps.prepare).toHaveBeenCalledExactlyOnceWith({ hachi: false })
+  })
+  it('sets up again what the move left, after it puts the built-ins in place', () => {
+    const order: string[] = []
+    setup({
+      prepare: vi.fn(() => { order.push('prepare'); return true }),
+      setupAgain: vi.fn(async () => { order.push('setupAgain'); return { done: 1, needsSetup: 0, busy: 0 } }),
+    })
+    expect(order).toEqual(['prepare', 'setupAgain'])
+  })
+  it('its requests do not wait for it', async () => {
+    const { requests, deps } = setup({ setupAgain: vi.fn(() => new Promise<never>(() => {})) })
+    expect(deps.setupAgain).toHaveBeenCalledOnce()
+    expect(await requests.dsh_list({}, ASKER)).toEqual({ dsh: [{ id: 'acme/thing', installed: false }] })
+  })
+  it('says when setting them up again stops, and answers on', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { requests } = setup({ setupAgain: vi.fn(async () => { throw new Error('EACCES: permission denied') }) })
+      // The rejection is handled within the turn it happens in; setImmediate runs after it.
+      await new Promise((done) => setImmediate(done))
+      expect(warn).toHaveBeenCalledExactlyOnceWith('[dsh] setting harnesses up again stopped · Error: EACCES: permission denied')
+      expect(await requests.dsh_list({}, ASKER)).toEqual({ dsh: [{ id: 'acme/thing', installed: false }] })
+    } finally { warn.mockRestore() }
   })
   it('puts Hachi in place when its switch turns on while it runs, and generates nothing of it while off', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'store-hachi-'))
