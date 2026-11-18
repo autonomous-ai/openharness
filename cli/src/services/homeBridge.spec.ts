@@ -23,6 +23,8 @@ const BOOT = 'c2a9e1d8-55a4-4c3e-9b8f-0f6d2d1e7a11', MOVED_UPTIME = 50_000
 const PROC: Record<string, string> = { '/proc/sys/kernel/random/boot_id': `${BOOT}\n`, '/proc/uptime': `${MOVED_UPTIME}.00 999.00\n` }
 /** A minute before the move, in seconds since the boot. */
 const OLD = MOVED_UPTIME - 60
+/** tmux's answer with no server to list. */
+const NO_SERVER = { status: 1, stdout: '', stderr: 'no server running on /tmp/tmux-1000/default\n' }
 const ME = process.getuid!()
 /** A data folder name that puts its socket past sockaddr_un's room (lib/localSocket.ts, 96 bytes): it is in the short folder. */
 const LONG = 'x'.repeat(60)
@@ -95,7 +97,7 @@ function handed(h: Home, over: Partial<HomeBridgeDeps> = {}) {
   const log = vi.fn()
   const deps: Partial<HomeBridgeDeps> = {
     platform: 'linux', home: h.home, environment: { HOME: h.home, HARNESS_CONNECTIONS_DIR: h.connections }, socket: h.socket,
-    boot: () => ({ id: BOOT, uptime: MOVED_UPTIME + 600 }), rows: () => [], tmux: () => ({ status: 1, stdout: '' }),
+    boot: () => ({ id: BOOT, uptime: MOVED_UPTIME + 600 }), rows: () => [], tmux: () => NO_SERVER,
     setupsPending: async () => 0, askForStore: async () => {}, log, ...over,
   }
   return { log, given: Object.fromEntries(Object.entries(deps).filter(([, value]) => value !== undefined)) as Partial<HomeBridgeDeps> }

@@ -45,8 +45,8 @@ export interface HomeBridgeDeps {
   /** This boot (homeMove/bridge.ts bootNow). */
   boot(): Boot | null
   rows(): ProcRow[]
-  /** Every pane on tmux's default server, each its process and its tag. */
-  tmux(): { status: number | null; stdout: string }
+  /** Every pane on tmux's default server, each its process and its tag, as spawnSync gives tmux's answer. */
+  tmux(): TmuxAnswer
   /** The harnesses whose setup has yet to run again after the move. */
   setupsPending(): Promise<number>
   /** Wakes the Store's process, which sets them up again as it starts. */
@@ -54,10 +54,15 @@ export interface HomeBridgeDeps {
   log(line: string): void
 }
 
+type TmuxAnswer = { status: number | null; stdout: string; stderr?: string; error?: NodeJS.ErrnoException }
+
 const IDLE = { stop: () => {}, connected: () => {} }
 
+/** What tmux says with no server to list: none was ever started, or the last one ended (client.c). */
+const NO_SERVER = /^no server running on |^error connecting to .* \(No such file or directory\)$/m
+
 /** The default server is where the daemon makes its panes (homeMove/panes.ts); the daemon never inherits a TMUX naming another. */
-function listPanes(): { status: number | null; stdout: string } {
+function listPanes(): TmuxAnswer {
   return spawnSync('tmux', ['list-panes', '-a', '-F', `#{pane_pid} #{${HARNESS_OWNER_OPTION}}`], { encoding: 'utf8', timeout: TMUX_LIMIT_MS })
 }
 
@@ -129,9 +134,13 @@ export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = 
 
   /** The processes of the panes the move retagged: they carry the new tag. A pane made since started after the move, and does not count. */
   const panePids = (): number[] => {
-    const { status, stdout } = deps.tmux()
-    // A tmux that is missing, or has no server, has no pane.
-    if (status !== 0) return []
+    const { status, stdout, stderr = '', error } = deps.tmux()
+    if (status !== 0) {
+      // A tmux that is missing, or has no server, has no pane. Any other failure, a timeout or another version's server,
+      // says nothing of them: the check is tried again.
+      if (error?.code === 'ENOENT' || NO_SERVER.test(stderr)) return []
+      throw new Error(`tmux could not list its panes: ${error?.code ?? (stderr.trim().split('\n')[0] || `status ${status}`)}`)
+    }
     return stdout.split('\n').flatMap((line) => {
       const [pid, tag] = line.split(' ')
       return tag === bridge.newTag ? [Number(pid)] : []
