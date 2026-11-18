@@ -11,7 +11,7 @@ import { closeSync, constants, fstatSync, openSync, readFileSync, realpathSync, 
 import { homedir, userInfo } from 'node:os'
 import platformPath, { type PlatformPath } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { harnessRoots } from '../../config/harnessHome.js'
+import { harnessRoots, legacyHarnessHome } from '../../config/harnessHome.js'
 import { bearer, connectorsDir, ConnectorError, type Store, type Token } from './store.js'
 import { ready } from './renew.js'
 import { appDataFolders } from '../windows/knownFolders.js'
@@ -67,7 +67,9 @@ export function forbiddenDirs(env: NodeJS.ProcessEnv, homes: (string | undefined
   const all = [env.HOME, env.USERPROFILE, ...homes].filter((home): home is string => !!home)
   const names = ['.ssh', '.gnupg', '.config', '.local/share', '.codex', '.claude', ...(windows ? ['AppData'] : [])]
   // Windows' path module gets Windows' roots on any platform; elsewhere the platform's own rule, so Linux's never runs on macOS.
-  const harness = (home: string): string[] => harnessRoots(home, windows ? 'win32' : platform)
+  // A ~/.harness beside the moved Linux roots too: a stray an old build made after the move holds what it wrote there.
+  const os = windows ? 'win32' : platform
+  const harness = (home: string): string[] => [...harnessRoots(home, os), legacyHarnessHome(home, os)]
   const appData = windows ? [env.APPDATA, env.LOCALAPPDATA].filter((dir): dir is string => !!dir) : []
   return [...new Set([connectorsDir(env), ...all.flatMap(home => [...names.map(dir => p.join(home, dir)), ...harness(home)]), ...appData, '/etc', '/proc', '/sys'])]
 }
