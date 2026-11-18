@@ -31,6 +31,11 @@ STATE_ENTRIES=" logs runtime hook-routes s run shell-requests pty uninstalling f
 
 say() { printf '\n== %s\n' "$*"; }
 fail() { echo "FAIL: $*" >&2; exit 1; }
+# The data root [1] holds Harness's marker (cli/src/config/harnessHome.ts): a file, `1`, owner only.
+marked() {
+  [ -f "$1/.harness-root" ] && [ "$(cat "$1/.harness-root")" = 1 ] && [ "$(stat -c %a "$1/.harness-root")" = 600 ] \
+    || fail "$1 holds no marker: a file .harness-root, 1, mode 600"
+}
 
 # [home]'s commands, with nothing of this shell's environment but what they need.
 in_home() {
@@ -108,6 +113,7 @@ started=$(date +%s%N)
 in_home "$FIRST" harness start
 took_ms=$(( ($(date +%s%N) - started) / 1000000 ))
 [ -d "$DATA" ] && [ -d "$STATE" ] || fail "no XDG roots after the start"
+marked "$DATA"
 grep -F "home move: moved · data $DATA · state $STATE" "$DATA/cli/data/harness.log" || fail "harness.log says no move"
 
 checked=0
@@ -175,7 +181,8 @@ in_home "$FRESH" bash "$CLI/scripts/install-cli.sh" --no-build --no-updates
 in_home "$FRESH" harness start
 [ ! -e "$FRESH/.harness" ] || fail "a fresh install wrote $FRESH/.harness: $(find "$FRESH/.harness" -mindepth 1 -maxdepth 1 -printf '%f ')"
 [ -d "$FRESH/.local/share/harness/cli" ] || fail "a fresh install is not in the data root"
-echo "a fresh home has no .harness ($FRESH)"
+marked "$FRESH/.local/share/harness"
+echo "a fresh home has no .harness, and its data root its marker ($FRESH)"
 in_home "$FRESH" harness stop
 
 say "this checkout's install.sh, whole, in a third empty home, from a manifest serving this build"
@@ -207,5 +214,6 @@ in_home "$INSTALLED" harness start
 for folder in "$INSTALLED/.local/share/harness/cli" "$INSTALLED/.local/share/harness/bin" "$INSTALLED/.local/state/harness/runtime"; do
   [ -d "$folder" ] || fail "install.sh left no $folder"
 done
-echo "install.sh: cli and bin in the data root, runtime in the state root, no .harness ($INSTALLED)"
+marked "$INSTALLED/.local/share/harness"
+echo "install.sh: cli and bin in the data root with its marker, runtime in the state root, no .harness ($INSTALLED)"
 in_home "$INSTALLED" harness stop
