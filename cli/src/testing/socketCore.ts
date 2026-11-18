@@ -1,4 +1,4 @@
-import { nativeFactory } from './sessionFactories.js'
+import { deviceFactory, nativeFactory } from './sessionFactories.js'
 import { sessionStorage } from '../lib/sessionStorage.js'
 import { opencodeMajorVersion } from '../engines/opencode/version.js'
 /**
@@ -64,6 +64,7 @@ function monitorOf(socket: BackendSocket): Pick<AgentListDeps, 'harnessResources
  *  unless a spec says what it is. */
 export function bindAgentList(socket: BackendSocket, over: Partial<AgentListDeps> = {}): void {
   socket.agentsProvider = createAgentList({
+    deviceFactory,
     registry,
     stoppedAgents,
     toProject: (s) => socket.toProject(s),

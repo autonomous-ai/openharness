@@ -10,7 +10,7 @@
  */
 import type { CloudCore, CloudPort, CloudResult, CloudQuestionClose, CloudQuestionPresentation, TurnCardFrame } from '../api.js'
 import { CLOUD_DOWN, CLOUD_REPLY_DOWN, CLOUD_ANSWER_DOWN } from '../api.js'
-import { cloudAgentFrame, cloudFingerprint, cloudHarnessIn, isCloudAgent, type CloudAgentFrame, type CloudHarness } from '../../lib/cloudAgents.js'
+import { cloudAgentFrame, cloudFingerprint, cloudHarnessIn, type CloudAgentFrame, type CloudHarness } from '../../lib/cloudAgents.js'
 import { boundedJsonBytes } from '../../lib/boundedJsonBytes.js'
 import type { QuestionAnswerResult } from '../../lib/questionController.js'
 
@@ -75,9 +75,6 @@ function admittedQuestion(value: unknown, agentId: string, requestId: string): v
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
 const refusal = (value: unknown): boolean => record(value) && typeof value.error === 'string' && !!value.error
   && (value.detail === undefined || typeof value.detail === 'string') && Object.keys(value).every(key => key === 'error' || key === 'detail')
-const agentReply = (value: unknown): value is CloudAgentFrame => record(value) && typeof value.id === 'string'
-  && value.id.startsWith('cloud_') && value.id.length <= 80 && value.sessionId === value.id && isCloudAgent(value.engine)
-  && value.location === 'cloud' && typeof value.name === 'string' && value.name.length <= 120 && typeof value.createdAt === 'string'
 const answerReply = (value: unknown): boolean => fields(value, ['ok']) && value.ok === true
   || fields(value, ['ok', 'error', 'detail']) && value.ok === false
     && (value.error === 'STALE_QUESTION' || value.error === 'ANSWER_FAILED') && typeof value.detail === 'string'
@@ -85,6 +82,9 @@ const stopReply = (value: unknown): boolean => refusal(value) || record(value) &
   && (value.detail === undefined || typeof value.detail === 'string') && Object.keys(value).every(key => key === 'deleted' || key === 'detail')
 
 export function createCloudAgents({ ownsFactory, port, whenStarting, clients, openQuestions, log = (line) => console.log(line) }: CloudAgentsDeps) {
+  const agentReply = (value: unknown): value is CloudAgentFrame => record(value) && typeof value.id === 'string'
+    && value.id.startsWith('cloud_') && value.id.length <= 80 && value.sessionId === value.id && ownsFactory(value.engine)
+    && value.location === 'cloud' && typeof value.name === 'string' && value.name.length <= 120 && typeof value.createdAt === 'string'
   let harnesses = new Map<string, CloudHarness>()
   /** One accepted request per owner; its original close destination survives reconnects and replacement. */
   const asked = new Map<string, { agentId: string; close: CloudQuestionClose; dial: boolean }>()

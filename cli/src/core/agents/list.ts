@@ -7,9 +7,9 @@
  * Moved verbatim out of the socket's request switch (docs/design/2026-10-03-harnessd.md), with the
  * device trimming it alone used.
  */
-import { isTerminalEngine, PROCESS_ENGINES, type ProcessEngine } from '../../engines/types.js'
+import { isTerminalEngine } from '../../engines/types.js'
 import type { AgentFrame } from '../../lib/agentFrame.js'
-import { isCloudAgent, type CloudAgentFrame, type CloudAgentId } from '../../lib/cloudAgents.js'
+import type { CloudAgentFrame } from '../../lib/cloudAgents.js'
 import type { MonitorActivity, MonitorCompletions } from '../../lib/harnessMonitor.js'
 import type { createHarnessResourcesReader } from '../../lib/harnessResources.js'
 import type { createHarnessStorageReader } from '../../lib/harnessTelemetry.js'
@@ -39,13 +39,12 @@ function clipDeviceAgentName(input: string): string {
 
 export function deviceAgentListItem(
   raw: unknown,
-): { id: unknown; name?: string; engine?: ProcessEngine | CloudAgentId; selectedModel?: string | null } {
+  deviceFactory: (value: unknown) => boolean,
+): { id: unknown; name?: string; engine?: string; selectedModel?: string | null } {
   const o = (raw ?? {}) as Record<string, unknown>
-  const item: { id: unknown; name?: string; engine?: ProcessEngine | CloudAgentId; selectedModel?: string | null } = { id: o.id }
+  const item: { id: unknown; name?: string; engine?: string; selectedModel?: string | null } = { id: o.id }
   if (typeof o.name === 'string') item.name = clipDeviceAgentName(o.name)
-  // The dial only ever meets process engines and cloud agents — a terminal never reaches it (see
-  // `deviceAgentRow`), and the union here says so rather than repeating fourteen string literals.
-  if (typeof o.engine === 'string' && ((PROCESS_ENGINES as readonly string[]).includes(o.engine) || isCloudAgent(o.engine))) item.engine = o.engine as ProcessEngine | CloudAgentId
+  if (typeof o.engine === 'string' && deviceFactory(o.engine)) item.engine = o.engine
   // Runtime model/effort profile (opaque runtime-v1:...) — lets the device render + change model/effort.
   if (typeof o.selectedModel === 'string' || o.selectedModel === null) item.selectedModel = o.selectedModel
   return item
@@ -63,6 +62,8 @@ export function deviceAgentRow(raw: unknown): boolean {
 }
 
 export interface AgentListDeps {
+  /** Selected build factories the device can drive, excluding a bare terminal. */
+  deviceFactory(value: unknown): boolean
   registry: Pick<typeof registry, 'advertised'>
   /** The saved conversations of stopped agents, less those running again. */
   stoppedAgents: Pick<typeof stoppedAgents, 'available'>
@@ -81,7 +82,7 @@ export interface AgentListDeps {
 }
 
 export function createAgentList({
-  registry, stoppedAgents, toProject, toStoppedProject, harnessResourcesReader, harnessStorageReader,
+  deviceFactory, registry, stoppedAgents, toProject, toStoppedProject, harnessResourcesReader, harnessStorageReader,
   monitorActivityProvider, monitorCompletions, cloudFrames = () => [],
 }: AgentListDeps) {
   /**
@@ -119,7 +120,7 @@ export function createAgentList({
     // sorts by the same rule; the two must stay identical.
     projects.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id.localeCompare(b.id))
     if (sessionRole() === 'device') {
-      reply({ agents: projects.filter(deviceAgentRow).slice(0, DEVICE_AGENT_LIST_LIMIT).map(deviceAgentListItem) })
+      reply({ agents: projects.filter(deviceAgentRow).slice(0, DEVICE_AGENT_LIST_LIMIT).map(frame => deviceAgentListItem(frame, deviceFactory)) })
       return
     }
     if (payload.monitor === true) {

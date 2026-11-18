@@ -13,7 +13,8 @@ import { fileURLToPath } from 'url'
 import { BackendSocket } from './backendSocket.js'
 import { dispatchDown, gatewayOf, relaySocket, upstreamOf } from './testing/relaySocket.js'
 import { AGENT_OPENED_THROTTLE_MS } from './core/agents/update.js'
-import { deviceAgentListItem, deviceAgentRow } from './core/agents/list.js'
+import { deviceAgentListItem as projectDeviceAgent, deviceAgentRow } from './core/agents/list.js'
+import { deviceFactory } from './testing/sessionFactories.js'
 import { wholeHistoryPage } from './engines/others/transcripts.js'
 import { grokMessagesToEvents } from './engines/grok/normalizer.js'
 import { bindAgentList, bindAgentUpdate, bindCancelRequest, bindLaunchRequests, bindCloseRequests, bindMessageRequest, bindPurgeRequest, bindQuestionResponse, bindStopRequest, bindTerminalRequests, prepared, preparingWorkspaces } from './testing/socketCore.js'
@@ -56,6 +57,8 @@ import { env } from './config/env.js'
 import * as builtins from './dsh/builtins.js'
 import * as transcriptActivity from './lib/transcriptActivity.js'
 import { createFrameParts } from './core/frameParts.js'
+
+const deviceAgentListItem = (value: unknown) => projectDeviceAgent(value, deviceFactory)
 
 describe('safe session close RPC', () => {
   it('seals cleanup previews and passes the open-tab condition to Close', async () => {

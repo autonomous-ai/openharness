@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
+import { ENGINES, isTerminalEngine } from '../../engines/types.js'
+import { SERVICE_HOSTS, sessionFactoryOwners } from '../../harnessd/services.js'
+import { deviceFactory } from '../../testing/sessionFactories.js'
 import type { AgentFrame } from '../../lib/agentFrame.js'
 import type { RegisteredSession } from '../../lib/registry.js'
-import { createAgentList, deviceAgentListItem, deviceAgentRow, type AgentListDeps } from './list.js'
+import { createAgentList, deviceAgentListItem as projectDeviceAgent, deviceAgentRow, type AgentListDeps } from './list.js'
+
+const deviceAgentListItem = (value: unknown) => projectDeviceAgent(value, deviceFactory)
 
 /**
  * `agents_list`, answered by the core: the frames the socket builds, in one order every surface shares,
@@ -17,6 +22,7 @@ const frame = (s: RegisteredSession, createdAt: string, status = 'active') =>
 function setup(live: RegisteredSession[], saved: RegisteredSession[] = [], over: Partial<AgentListDeps> = {}) {
   const created = new Map<string, string>()
   const deps: AgentListDeps = {
+    deviceFactory,
     registry: { advertised: vi.fn(() => live) },
     stoppedAgents: { available: vi.fn(async () => saved) },
     toProject: vi.fn(async (s) => frame(s, created.get(s.agentId) ?? '2026-10-05T10:00:00.000Z')),
@@ -97,6 +103,24 @@ describe('the cloud harnesses', () => {
 })
 
 describe('the agents a device asks for', () => {
+  it('uses the selected native and service factory declarations without changing rows, order or terminal exclusion', async () => {
+    const { cloud: _cloud, ...withoutCloud } = SERVICE_HOSTS
+    const owners = sessionFactoryOwners(ENGINES.filter(engine => engine !== 'codex'), withoutCloud)
+    const deviceFactory = (value: unknown) => typeof value === 'string' && !isTerminalEngine(value) && owners(value) !== undefined
+    const cloud = { id: 'cloud_1', name: 'Cloud', engine: 'fo', createdAt: '2026-10-05T09:00:00.000Z',
+      status: 'active', selectedModel: null, location: 'cloud' } as never
+    const { replies, ask } = setup([session('native'), session('excluded', { engine: 'codex' }),
+      session('unknown', { engine: 'unknown' as never }), session('shell', { engine: 'terminal' })], [],
+    { deviceFactory, cloudFrames: () => [cloud] })
+    await ask({}, 'device')
+    expect(JSON.stringify(replies)).toBe(JSON.stringify([{ agents: [
+      { id: 'cloud_1', name: 'Cloud', selectedModel: null },
+      { id: 'excluded', name: 'excluded name', selectedModel: null },
+      { id: 'native', name: 'native name', engine: 'claude', selectedModel: null },
+      { id: 'unknown', name: 'unknown name', selectedModel: null },
+    ] }]))
+  })
+
   it('only the rows it drives, at most a hundred, each with only what its firmware reads, and never a stopped one', async () => {
     const live = [session('shell', { engine: 'terminal' }), ...Array.from({ length: 105 }, (_, i) => session(`agent-${String(i).padStart(3, '0')}`))]
     const { replies, ask, deps } = setup(live, [session('saved')])
@@ -196,6 +220,15 @@ describe('the monitor\'s readings', () => {
 })
 
 describe('the device\'s rows', () => {
+  it('preserves exact public bytes for every declared native and service engine', () => {
+    const factories = [...ENGINES.filter(engine => !isTerminalEngine(engine)),
+      ...Object.values(SERVICE_HOSTS).flatMap(host => Object.values(host.factories ?? {}).flat())]
+    for (const engine of factories) {
+      expect(JSON.stringify(deviceAgentListItem({ id: 'fixture', name: 'Name', engine, selectedModel: null })))
+        .toBe(JSON.stringify({ id: 'fixture', name: 'Name', engine, selectedModel: null }))
+    }
+  })
+
   it('a name the firmware cannot hold is clipped, by characters and by bytes, with an ellipsis', () => {
     expect(deviceAgentListItem({ id: 'a', name: 'Short name' }).name).toBe('Short name')
     expect(deviceAgentListItem({ id: 'a', name: 'A name far too long for the dial' }).name).toBe('A name far too …')

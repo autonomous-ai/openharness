@@ -1,4 +1,6 @@
 import { cloudFactory } from '../../testing/sessionFactories.js'
+import { ENGINES } from '../../engines/types.js'
+import { SERVICE_HOSTS, sessionFactoryOwners } from '../../harnessd/services.js'
 import { describe, expect, it, vi } from 'vitest'
 import { CLOUD_DOWN, type CloudPort } from '../api.js'
 import { cloudAgentFrame, type CloudHarness } from '../../lib/cloudAgents.js'
@@ -45,15 +47,28 @@ describe('prepared Cloud operation responses', () => {
   })
 })
 
-function immediate(value: unknown, starting?: () => Promise<boolean> | null) {
+function immediate(value: unknown, starting?: () => Promise<boolean> | null, ownsFactory = cloudFactory) {
   const call = vi.fn(async () => value)
   let port = { create: call, deliver: call, answer: call, rename: call, stopHarness: call } as unknown as CloudPort
   const clients = { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }, log = vi.fn()
-  const cloud = createCloudAgents({ ownsFactory: cloudFactory, port: () => port, whenStarting: starting, clients, openQuestions: new Map(), log })
+  const cloud = createCloudAgents({ ownsFactory, port: () => port, whenStarting: starting, clients, openQuestions: new Map(), log })
   cloud.doors.publish([owner]); cloud.doors.ask(owner.agentId, 'cloud_q_1', prepareCloudQuestion(owner.agentId, 'cloud_q_1', { text: 'Which?', choices: [] }))
   clients.send.mockClear(); clients.sendCommander.mockClear()
   return { cloud, call, clients, log, replace: () => { port = { ...port } } }
 }
+
+it('admits a prepared reply only for this selected build owner, rather than a second feature roster', async () => {
+  const { cloud: _cloud, ...withoutCloud } = SERVICE_HOSTS
+  const owners = sessionFactoryOwners(ENGINES, withoutCloud)
+  const t = immediate(prepared(), undefined, value => {
+    const selected = owners(value)
+    return selected?.kind === 'service' && selected.service === 'cloud'
+  })
+  expect(await t.cloud.update({ agentId: owner.agentId, name: 'Renamed' })).toMatchObject({ error: 'SERVICE_UNAVAILABLE' })
+  expect(t.clients.send).not.toHaveBeenCalled()
+  expect(t.clients.sendCommander).not.toHaveBeenCalled()
+  expect(t.log).toHaveBeenLastCalledWith('[cloud] CLOUD_RESPONSE_INVALID')
+})
 
 it('captures the first physical port after readiness, and refuses a failed start without invoking it', async () => {
   let up!: (value: boolean) => void

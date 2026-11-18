@@ -1561,6 +1561,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const openQuestions = asking.openQuestions
   // The agents on this machine (core/agents/list.ts), in the socket's frames, with its monitor readings.
   backend.agentsProvider = createAgentList({
+    deviceFactory: value => typeof value === 'string' && !isTerminalEngine(value) && factoryOwner(value) !== undefined,
     registry, stoppedAgents, monitorActivityProvider: asking.monitorActivity, monitorCompletions: backend.monitorCompletions,
     toProject: (s) => backend.toProject(s), toStoppedProject: (s) => backend.toStoppedProject(s),
     // The monitor's readings, through its port (services/monitor.ts): none while it is off.
