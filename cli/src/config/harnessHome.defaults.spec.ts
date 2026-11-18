@@ -1,11 +1,11 @@
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
-import { harnessPath } from './harnessHome.js'
+import { harnessPath, thisComputer } from './harnessHome.js'
 
 // Pins the folders today's code resolves under the home, so moving each caller onto the module changes none of them.
 // These modules read the environment and the home once, as they load: each case is a process of its own, in a
@@ -130,7 +130,7 @@ describe('the default folders, as today', () => {
   // finds it for an environment with no XDG variable, as the child's is.
   const account = accountHome()
   it.skipIf(process.platform === 'win32' || !account)('a HOME that is not the account\'s is told its data folder', () => {
-    const dataDir = join(harnessPath('cli', account!, process.platform, { env: {}, exists: existsSync }), 'data')
+    const dataDir = join(harnessPath('cli', account!, process.platform, thisComputer({})), 'data')
     const child = run(`process.argv[2] = 'status'; import(${JSON.stringify(source('./startHome.ts'))})`, { ADAPTER_DATA_DIR: dataDir })
     expect(child.status, child.stderr).toBe(0)
     const cli = process.platform === 'linux' ? join(child.home, '.local', 'share', 'harness', 'cli') : join(child.home, '.harness', 'cli')

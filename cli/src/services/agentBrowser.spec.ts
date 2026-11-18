@@ -244,8 +244,8 @@ async function lookupProxy(answer: Record<string, unknown> = { status: 'success'
 
 describe('the daemon\'s label on its containers', () => {
   const labelOf = (path: string) => createHash('sha256').update(path).digest('hex').slice(0, 16)
-  const moved = { env: {}, exists: (path: string) => path === '/h/.local/share/harness' }
-  const notMoved = { env: {}, exists: (path: string) => path === '/h/.harness' }
+  const moved = { env: {}, exists: (path: string) => path === '/h/.local/share/harness', isFile: (path: string) => path === '/h/.local/share/harness/.harness-root' }
+  const notMoved = { env: {}, exists: (path: string) => path === '/h/.harness', isFile: () => false }
 
   it('the label is the folder\'s old spelling when the data folder is the default one under the XDG roots', () => {
     expect(daemonIdOf('/h/.local/share/harness/cli/data', '/h', 'linux', moved)).toBe(labelOf('/h/.harness/cli/data'))

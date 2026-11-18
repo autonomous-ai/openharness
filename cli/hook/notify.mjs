@@ -145,15 +145,20 @@ function agyStopStatus(input) {
 
 /**
  * Harness's data and state folders, by the rule of src/config/harnessHome.ts: on Linux the XDG ones once the data one
- * holds its marker (`.harness-root`), else ~/.harness while that exists, else the XDG ones (a variable counts only as an
- * absolute path); ~/.harness elsewhere.
+ * holds its marker (`.harness-root`, a file: a folder of its name is none), else ~/.harness while that exists, else the
+ * XDG ones (a variable counts only as an absolute path); ~/.harness elsewhere.
  */
 function harnessRoots() {
   const legacy = join(homedir(), '.harness')
   if (process.platform !== 'linux') return { data: legacy, state: legacy }
   const base = (name, ...fallback) => isAbsolute(process.env[name] || '') ? process.env[name] : join(homedir(), ...fallback)
   const xdg = { data: join(base('XDG_DATA_HOME', '.local', 'share'), 'harness'), state: join(base('XDG_STATE_HOME', '.local', 'state'), 'harness') }
-  return existsSync(join(xdg.data, '.harness-root')) || !existsSync(legacy) ? xdg : { data: legacy, state: legacy }
+  return isRegularFile(join(xdg.data, '.harness-root')) || !existsSync(legacy) ? xdg : { data: legacy, state: legacy }
+}
+
+/** A regular file, through a link as the installers' `test -f` looks; a folder, or nothing, is none. */
+function isRegularFile(path) {
+  try { return statSync(path).isFile() } catch { return false }
 }
 
 function paths() {

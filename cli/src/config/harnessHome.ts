@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { posix, win32 } from 'node:path'
 
@@ -47,11 +47,25 @@ export type HarnessEntry = keyof typeof HARNESS_ENTRIES
  */
 export const HARNESS_ROOT_MARKER = '.harness-root'
 
-/** What the rule reads of this computer: the XDG variables and one existence check. */
-export interface HomeLook { env: Readonly<Record<string, string | undefined>>; exists(path: string): boolean }
+/** What the rule reads of this computer: the XDG variables, whether ~/.harness exists, and whether the marker is a file. */
+export interface HomeLook { env: Readonly<Record<string, string | undefined>>; exists(path: string): boolean; isFile(path: string): boolean }
 
-// Read at each call, never cached: a move is followed by the next process that resolves its paths.
-const thisComputer = (): HomeLook => ({ env: process.env, exists: existsSync })
+/** A regular file, through a link as the installers' `test -f` looks; a folder, or nothing, is none. */
+function isRegularFile(path: string): boolean {
+  try {
+    return statSync(path).isFile()
+  } catch {
+    return false
+  }
+}
+
+/** Whether [dataRoot] holds Harness's marker, a file: a folder of its name is no marker. */
+export function holdsMarker(dataRoot: string, isFile: HomeLook['isFile'] = isRegularFile): boolean {
+  return isFile(posix.join(dataRoot, HARNESS_ROOT_MARKER))
+}
+
+/** This computer, under [env]. Read at each call, never cached: a move is followed by the next process that resolves its paths. */
+export const thisComputer = (env: HomeLook['env'] = process.env): HomeLook => ({ env, exists: existsSync, isFile: isRegularFile })
 
 // A parameter, not node:path's own join, so one platform can build (and test) the other's paths.
 const joinFor = (platform: NodeJS.Platform) => (platform === 'win32' ? win32 : posix).join
@@ -82,7 +96,7 @@ function roots(home: string, platform: NodeJS.Platform, look: HomeLook): Record<
   const legacy = legacyHarnessHome(home, platform)
   if (platform !== 'linux') return { data: legacy, state: legacy }
   const xdg = xdgRoots(home, look.env)
-  return !look.exists(posix.join(xdg.data, HARNESS_ROOT_MARKER)) && look.exists(legacy) ? { data: legacy, state: legacy } : xdg
+  return !holdsMarker(xdg.data, look.isFile) && look.exists(legacy) ? { data: legacy, state: legacy } : xdg
 }
 
 export function harnessRoot(kind: HarnessRootKind, home = homedir(), platform = process.platform, look = thisComputer()): string {

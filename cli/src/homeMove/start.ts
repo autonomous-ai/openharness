@@ -9,7 +9,7 @@ import * as fs from 'node:fs'
 import { createConnection } from 'node:net'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { HARNESS_ROOT_MARKER, harnessRoot, legacyHarnessHome, xdgRoots } from '../config/harnessHome.js'
+import { HARNESS_ROOT_MARKER, harnessRoot, holdsMarker, legacyHarnessHome, thisComputer, xdgRoots } from '../config/harnessHome.js'
 import { isBridge, procNow } from './bridge.js'
 import { checkMove, withEnvFile, type ConditionDeps, type Hold } from './conditions.js'
 import { readJournal } from './journal.js'
@@ -99,7 +99,7 @@ export async function moveHomeAtStart(argv: readonly string[], env: NodeJS.Proce
 }
 
 /** Whether the data root is Harness's: the move's commit puts the marker in it, and a folder without one is somebody else's. */
-const marked = (roots: Roots): boolean => fs.existsSync(join(roots.data, HARNESS_ROOT_MARKER))
+const marked = (roots: Roots): boolean => holdsMarker(roots.data)
 
 function afterFailure(movedNow: boolean, halfMoved: boolean): string {
   if (movedNow) return 'the next start finishes it'
@@ -178,7 +178,7 @@ function noteStray(roots: Roots, environment: NodeJS.ProcessEnv, deps: StartDeps
 /** What the move threw, recorded in the state root the rule reads now, as the move's own failures are. */
 function failure(error: unknown, environment: NodeJS.ProcessEnv, deps: StartDeps, moveDeps: MoveDeps): MoveOutcome {
   try {
-    return failed(harnessRoot('state', deps.home, 'linux', { env: environment, exists: fs.existsSync }), error, moveDeps)
+    return failed(harnessRoot('state', deps.home, 'linux', thisComputer(environment)), error, moveDeps)
   } catch {
     // Nowhere to record it: the line still says it.
     return { state: 'failed', reason: 'io' }
@@ -192,7 +192,7 @@ function say(lines: readonly string[], environment: NodeJS.ProcessEnv, deps: Sta
   try {
     const folder = environment.ADAPTER_DATA_DIR
       ? resolve(environment.ADAPTER_DATA_DIR)
-      : join(harnessRoot('data', deps.home, 'linux', { env: environment, exists: fs.existsSync }), 'cli', 'data')
+      : join(harnessRoot('data', deps.home, 'linux', thisComputer(environment)), 'cli', 'data')
     fs.mkdirSync(folder, { recursive: true, mode: 0o700 })
     fs.appendFileSync(join(folder, 'harness.log'), lines.map((line) => `${line}\n`).join(''), { mode: 0o600 })
   } catch {

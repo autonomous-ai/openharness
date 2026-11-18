@@ -1,6 +1,6 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { harnessRoot } from '../config/harnessHome.js'
+import { harnessRoot, thisComputer } from '../config/harnessHome.js'
 import type { Reason } from './conditions.js'
 import { writeWhole } from './journal.js'
 import { OWN_FILES } from './plan.js'
@@ -16,7 +16,7 @@ const FIELDS: (keyof MoveRecord)[] = ['version', 'state', 'reason', 'entries', '
 
 /** The record in the state root the rule reads: the XDG one once moved, ~/.harness before. */
 export function readMoveRecord(home: string, env: NodeJS.ProcessEnv): MoveRecord | null {
-  return readRecord(join(harnessRoot('state', home, 'linux', { env, exists: existsSync }), OWN_FILES.record))
+  return readRecord(join(harnessRoot('state', home, 'linux', thisComputer(env)), OWN_FILES.record))
 }
 
 /**

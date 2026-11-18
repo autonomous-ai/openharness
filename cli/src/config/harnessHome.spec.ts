@@ -41,7 +41,7 @@ const TABLE: Record<string, 'data' | 'state'> = {
 const ENTRIES = Object.keys(TABLE) as HarnessEntry[]
 
 /** A computer that has these folders and files and these variables, and nothing else. */
-const look = (folders: string[] = [], env: Record<string, string | undefined> = {}): HomeLook => ({ env, exists: (path) => folders.includes(path) })
+const look = (folders: string[] = [], env: Record<string, string | undefined> = {}): HomeLook => ({ env, exists: (path) => folders.includes(path), isFile: (path) => folders.includes(path) })
 
 const FRESH = { data: '/h/.local/share/harness', state: '/h/.local/state/harness' }
 /** The file that makes a data root Harness's: the move's commit, a fresh install and a fresh start write it. */
@@ -101,7 +101,8 @@ describe('Harness\'s home folder', () => {
   })
 
   it('macOS and Windows never run the rule', () => {
-    const asks: HomeLook = { env: {}, exists: () => { throw new Error('the rule ran') } }
+    const ran = (): never => { throw new Error('the rule ran') }
+    const asks: HomeLook = { env: {}, exists: ran, isFile: ran }
     for (const entry of ENTRIES) {
       expect(harnessPath(entry, '/Users/me', 'darwin', asks)).toBe('/Users/me/.harness/' + entry)
       expect(harnessPath(entry, 'C:\\Users\\me', 'win32', asks)).toBe('C:\\Users\\me\\.harness\\' + entry)

@@ -230,7 +230,7 @@ describe('profileHome', () => {
 // The id hashes the folder's real path, so a profile moved with Harness's folder takes its new folder's id; nothing stores
 // one (the move rewrites the folders), and Desktop's swarmProfileId computes the same from the folder the daemon reports.
 describe('profile ids after Harness\'s folder moves', () => {
-  const moved = { env: {}, exists: (path: string) => path === '/h/.local/share/harness' }
+  const moved = { env: {}, exists: (path: string) => path === '/h/.local/share/harness', isFile: (path: string) => path === '/h/.local/share/harness/.harness-root' }
 
   it('a profile in the moved folder takes the id of its new folder', async () => {
     const { profileFor, profileId } = await loadModule()

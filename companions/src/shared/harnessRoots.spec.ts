@@ -9,38 +9,39 @@ import { describe, expect, it } from 'vitest'
 import { harnessRoots } from './harnessRoots.js'
 
 const XDG = { data: '/h/.local/share/harness', state: '/h/.local/state/harness' }
-const existing = (...paths: string[]) => (path: string) => paths.includes(path)
+/** A computer with [paths] there, as folders or files: the existence check and the file check. */
+const on = (...paths: string[]) => [(path: string) => paths.includes(path), (path: string) => paths.includes(path)] as const
 /** The file that makes a data root Harness's (cli/src/config/harnessHome.ts). */
 const marker = (dataRoot: string) => `${dataRoot}/.harness-root`
 
 describe('harnessRoots', () => {
   it('fresh: neither folder exists → the XDG roots', () => {
-    expect(harnessRoots('/h', {}, 'linux', existing())).toEqual(XDG)
+    expect(harnessRoots('/h', {}, 'linux', ...on())).toEqual(XDG)
   })
 
   it('legacy only → both roots are ~/.harness', () => {
-    expect(harnessRoots('/h', {}, 'linux', existing('/h/.harness'))).toEqual({ data: '/h/.harness', state: '/h/.harness' })
+    expect(harnessRoots('/h', {}, 'linux', ...on('/h/.harness'))).toEqual({ data: '/h/.harness', state: '/h/.harness' })
   })
 
   it('the data root holds the marker → XDG, whatever is at ~/.harness', () => {
-    expect(harnessRoots('/h', {}, 'linux', existing('/h/.harness', XDG.data, marker(XDG.data)))).toEqual(XDG)
+    expect(harnessRoots('/h', {}, 'linux', ...on('/h/.harness', XDG.data, marker(XDG.data)))).toEqual(XDG)
   })
 
   it('a data root without the marker beside ~/.harness → ~/.harness', () => {
-    expect(harnessRoots('/h', {}, 'linux', existing('/h/.harness', XDG.data))).toEqual({ data: '/h/.harness', state: '/h/.harness' })
+    expect(harnessRoots('/h', {}, 'linux', ...on('/h/.harness', XDG.data))).toEqual({ data: '/h/.harness', state: '/h/.harness' })
   })
 
   it('an XDG variable that is unset, empty or relative is ignored', () => {
     for (const value of [undefined, '', 'share']) {
-      expect(harnessRoots('/h', { XDG_DATA_HOME: value, XDG_STATE_HOME: value }, 'linux', existing())).toEqual(XDG)
+      expect(harnessRoots('/h', { XDG_DATA_HOME: value, XDG_STATE_HOME: value }, 'linux', ...on())).toEqual(XDG)
     }
   })
 
   it('absolute XDG variables name the roots, and the data one\'s marker is what is looked for', () => {
     const env = { XDG_DATA_HOME: '/d', XDG_STATE_HOME: '/s' }
-    expect(harnessRoots('/h', env, 'linux', existing())).toEqual({ data: '/d/harness', state: '/s/harness' })
-    expect(harnessRoots('/h', env, 'linux', existing('/h/.harness', marker('/d/harness')))).toEqual({ data: '/d/harness', state: '/s/harness' })
-    expect(harnessRoots('/h', env, 'linux', existing('/h/.harness', marker(XDG.data)))).toEqual({ data: '/h/.harness', state: '/h/.harness' })
+    expect(harnessRoots('/h', env, 'linux', ...on())).toEqual({ data: '/d/harness', state: '/s/harness' })
+    expect(harnessRoots('/h', env, 'linux', ...on('/h/.harness', marker('/d/harness')))).toEqual({ data: '/d/harness', state: '/s/harness' })
+    expect(harnessRoots('/h', env, 'linux', ...on('/h/.harness', marker(XDG.data)))).toEqual({ data: '/h/.harness', state: '/h/.harness' })
   })
 
   it('on disk the marker is a file, as the installers, Desktop and hn look for it: a folder of its name is none', () => {
