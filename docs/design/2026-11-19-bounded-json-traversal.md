@@ -1,0 +1,58 @@
+# Bounded JSON traversal without per-call functions
+
+## Design
+
+The V12 Wi-Fi source comparison reduced core-only CPU for 1,600 sessions from
+55.915 ms to 14.356 ms, while complete refresh CPU remained 53.636→93.266 ms.
+The approved two-arm V12 diagnostic attributes 208.214 ms of sampled occupancy
+across its fixed 24 operations to the shared byte walker: 119.409 ms at the
+producer and 88.805 ms at the consumer. Its exact generated source creates three
+named functions (`add`, `string`, `enter`) on every call. Generated name setup
+accounts for 34.826 ms inclusive occupancy; descriptor lookup accounts for
+60.917 ms self occupancy. These are sample occupancy, not function CPU, and the
+diagnostic's fixture paths differ in length from the uninstrumented comparison.
+
+Replace only the walker's per-call helper functions with one iterative walk.
+This removes three function allocations and the production `keepNames` build's
+three `Object.defineProperty` calls per invocation. It retains the same complete
+traversal, descriptor reads, exact string counting, array-hole behavior,
+ancestor-cycle detection, depth limit, work limit and rejection of proxies,
+accessors and callable `toJSON`. There is no trusted-input bypass, new cache,
+new file in the core's import closure, authority change or quota increase.
+This small correction does not claim to close the whole refresh regression.
+
+1. Growth: no persistent data. The existing stack and ancestor set live for one
+   call and remain bounded by 4,096 levels; work remains bounded by the byte limit.
+2. Concurrency: synchronous local state only; no locks or shared mutable cache.
+3. Read cost: the same fields are examined with the same descriptor semantics.
+   No getter, proxy trap, `toJSON` or complete-object serialization is invoked.
+4. Scale: limits remain unchanged. Fixed before/after workload CPU, latency and
+   memory remain the performance evidence; deterministic compiled-code controls
+   separately show that per-call function-name writes go from three to zero.
+5. Compatibility: the same byte count or `null` is returned to every caller.
+   Public/private wire formats and reader admission rules do not change.
+6. Migration and rollback: no stored schema, deployment ordering or migration.
+   Reverting this function restores the old cost without changing accepted data.
+7. Audience: existing callers enforce it; this pure counter grants no access.
+8. Identity: no process, login, credential or external work is involved.
+9. Failure: existing callers keep their typed refusals when this returns `null`.
+   No new logging or content is exposed.
+10. Platforms: shared TypeScript on macOS, Linux and Windows. Local validation is
+    macOS; Linux follows final PR validation. Native Windows is user-deferred.
+
+## Validation plan
+
+Before the runtime edit, run the new direct semantic controls and deterministic
+compiled-code cost control. The latter bundles this actual helper with the
+release's `minify: true`, `keepNames: true`, Node20 target and invokes the caller
+through its export while counting function-name property writes. It must fail
+on the existing three allocations per call, without a wall-clock assertion.
+The same semantic controls then pass with no runtime function-name writes.
+
+Run the existing peer JSON, pending work, evidence reader, session snapshot,
+Wi-Fi view, Wi-Fi process, Devices process and core session-read controls;
+measure helper coverage explicitly, and run TypeScript and architecture checks.
+Root runs the final combined core gate. Only after source and gates are accepted
+may the unchanged fixed Wi-Fi comparison be run on a new frozen candidate.
+Preserve the original V12 packet and every failed gate. No new diagnostic,
+warmup or additional timing arm is authorized by this design.
