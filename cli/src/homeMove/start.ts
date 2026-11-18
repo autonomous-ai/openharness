@@ -68,15 +68,15 @@ export async function moveHomeAtStart(argv: readonly string[], env: NodeJS.Proce
   const roots: Roots = { legacy: legacyHarnessHome(deps.home, 'linux'), ...xdgRoots(deps.home, environment) }
   const lines: string[] = []
   const moveDeps: MoveDeps = { ...deps, log: (line) => lines.push(line) }
-  const movedBefore = fs.existsSync(roots.data)
+  const moved = fs.existsSync(roots.data)
   let outcome: MoveOutcome | null = null
   try {
     // A journal is finished, or undone, before anything else: a crash after the data root's commit left one beside it.
-    if (movedBefore ? readJournal(roots.legacy) : fs.existsSync(roots.legacy)) {
+    if (moved ? readJournal(roots.legacy) : fs.existsSync(roots.legacy)) {
       // A person typed it: a harness start on a terminal. Desktop starts the daemon the same way, with no terminal.
       const explicit = command === 'start' && !flags.includes('--if-down') && deps.print !== null
       outcome = await moveOrHold(explicit, env, environment, roots, deps, moveDeps, lines)
-    } else if (movedBefore) {
+    } else if (moved) {
       noteStray(roots, environment, deps, lines)
     }
   } catch (error) {
@@ -89,8 +89,8 @@ export async function moveHomeAtStart(argv: readonly string[], env: NodeJS.Proce
   if (outcome?.state === 'failed') lines.push(`home move: failed ${outcome.reason} · ${afterFailure(movedNow, halfMoved)}`)
   say(lines, environment, deps)
   if (halfMoved) return deps.exit(1)
-  // Moved during this start, by it or by the start it waited for, or finished now: it runs from the old paths.
-  if (movedNow && (!movedBefore || outcome?.state === 'bridged')) startAgain(roots, argv, env, deps)
+  // Moved, by this start, another, or long ago: one run from ~/.harness runs from the new paths.
+  if (movedNow) startAgain(roots, argv, env, deps)
 }
 
 function afterFailure(movedNow: boolean, halfMoved: boolean): string {
