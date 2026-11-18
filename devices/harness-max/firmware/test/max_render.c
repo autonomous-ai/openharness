@@ -95,8 +95,10 @@ static void harness(void)
                    POD_TIER_ALERT, T0 - 300000);
     ago("docs", 300);
 }
+// n unread notices, in place of what the model put in Inbox.
 static void unread(int n)
 {
+    max_m.inbox_count = 0;
     for (int i = 0; i < n && i < MAX_INBOX; i++) {
         max_inbox_t *e = &max_m.inbox[max_m.inbox_count++];
         snprintf(e->id, sizeof e->id, "n%d", i);
@@ -161,6 +163,7 @@ static void s_overview_pages(void)
     memcpy(rows + 5, more, sizeof more);
     max_ui_agents(rows, 8, T0);
     work("bill", "Reading", "the invoices schema", 97, NULL, 0);
+    unread(2);
     show(MAX_VIEW_OVERVIEW, NULL);
     max_m.cell_page = 1;
 }
@@ -316,6 +319,7 @@ static void s_inbox(void)
              "to the product photo?", 60, true},
             {"api-docs", "codex", "VS Code", MAX_ATTN_FAIL, "The docs build failed: 3 broken links.", 540, false}};
     orca();
+    max_m.inbox_count = 0;
     for (size_t i = 0; i < sizeof NOTES / sizeof NOTES[0]; i++) {
         max_inbox_t *e = &max_m.inbox[max_m.inbox_count++];
         snprintf(e->id, sizeof e->id, "n%d", (int)i);
@@ -330,7 +334,12 @@ static void s_inbox(void)
     show(MAX_VIEW_INBOX, NULL);
     max_ui_notice("Following Harness on your Mac", 3000, T0);
 }
-static void s_inbox_empty(void) { orca(); show(MAX_VIEW_INBOX, NULL); }
+static void s_inbox_empty(void)
+{
+    orca();
+    max_m.inbox_count = 0;
+    show(MAX_VIEW_INBOX, NULL);
+}
 static void s_apps(void) { orca(); show(MAX_VIEW_APPS, NULL); }
 static void s_ambient(void)
 {

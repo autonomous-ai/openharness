@@ -221,10 +221,11 @@ static void ring(const char *caps)
     max_ui_turn("e", "started", "", 0, T0 - 60000);
     asked("e", &DB, 1, false);
 }
-// A full Inbox: every kind, read and unread, long names and words.
+// An Inbox of n notices in place of what the model put there: every kind, read and unread, long names and words.
 static void inbox(int n)
 {
     static const max_attn_t KINDS[] = {MAX_ATTN_ASK, MAX_ATTN_DONE, MAX_ATTN_FAIL};
+    max_m.inbox_count = 0;
     for (int i = 0; i < n && i < MAX_INBOX; i++) {
         max_inbox_t *e = &max_m.inbox[max_m.inbox_count++];
         snprintf(e->id, sizeof e->id, "n%d", i);
