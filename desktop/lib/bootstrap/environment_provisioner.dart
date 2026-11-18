@@ -544,26 +544,30 @@ class EnvironmentProvisioner {
        _windowsInstallScriptUrl =
            windowsInstallScriptUrl ?? harnessInstallScriptUrl();
 
-  /// The current user's home: USERPROFILE on Windows, HOME elsewhere.
-  /// A launch from Explorer has no HOME at all.
-  static String? userHome() => maybeHomeDir();
-
   /// Harness's roots: the folder a test handed in, or this computer's by the
   /// rule, looked up again at each use so a move during setup is followed.
   HarnessHome get _roots {
     final join = separatorJoin(Platform.pathSeparator);
     final fixed = _fixedHome;
     if (fixed != null) return HarnessHome.at(fixed.path, join: join);
-    final home = userHome();
-    if (home == null) {
-      throw StateError('Could not resolve the current user home directory');
-    }
+    // The home and the XDG variables of the one environment this provisioner
+    // reads, so one a test hands in never meets the computer's own home.
+    // USERPROFILE on Windows, HOME elsewhere; a launch from Explorer has no
+    // HOME at all.
+    final home = homeDir(
+      environment: _platformEnvironment,
+      isWindows: _isWindows,
+    );
     // The Linux rule never runs for a Windows profile, whatever the host: no
     // Windows profile has the XDG roots.
     if (_isWindows) {
       return HarnessHome.at(join(home, harnessHomeName), join: join);
     }
-    return HarnessHome.of(home, join: join, look: _look);
+    return HarnessHome.of(
+      home,
+      join: join,
+      look: _look ?? platformHomeLook(environment: _platformEnvironment),
+    );
   }
 
   /// The data root; the one `.harness` folder on macOS and Windows, whose

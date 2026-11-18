@@ -146,8 +146,9 @@ void main() {
           environment: const {},
           exists: (path) => throw StateError('looked at $path off Linux'),
         ),
+        platformEnvironment: const {'HOME': '/Users/me'},
       ).harnessHome.path,
-      '${EnvironmentProvisioner.userHome()}${Platform.pathSeparator}.harness',
+      '/Users/me${Platform.pathSeparator}.harness',
     );
   });
 
@@ -162,8 +163,9 @@ void main() {
         isMacOS: false,
         isLinux: false,
         isWindows: true,
+        platformEnvironment: const {'USERPROFILE': r'C:\Users\me'},
       ).harnessHome.path,
-      '${EnvironmentProvisioner.userHome()}${Platform.pathSeparator}.harness',
+      '${r'C:\Users\me'}${Platform.pathSeparator}.harness',
     );
   });
 
