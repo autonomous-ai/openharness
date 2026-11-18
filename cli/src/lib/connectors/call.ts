@@ -9,7 +9,7 @@
  */
 import { readFileSync, realpathSync, statSync } from 'node:fs'
 import { homedir, userInfo } from 'node:os'
-import platformPath, { basename, extname, resolve, type PlatformPath } from 'node:path'
+import platformPath, { basename, extname, type PlatformPath } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { harnessRoots } from '../../config/harnessHome.js'
 import { bearer, connectorsDir, ConnectorError, type Store, type Token } from './store.js'
@@ -38,15 +38,6 @@ export interface Output { out: (text: string) => void, err: (text: string) => vo
 
 export function hostAllowed(code: string, host: string): boolean {
   return (OFFICIAL_HOSTS[code] ?? []).some(allowed => host === allowed || host.endsWith('.' + allowed))
-}
-
-/**
- * Whether `file` is `dir` or inside it, by path segments: a prefix check on `dir + '/'` misses Windows' backslashes
- * and its case-insensitive names. `relative` is absolute when the two are on different drives.
- */
-export function inside(dir: string, file: string, p: PlatformPath = platformPath): boolean {
-  const rel = p.relative(dir, file)
-  return rel === '' || !(rel === '..' || rel.startsWith('..' + p.sep) || p.isAbsolute(rel))
 }
 
 /** `~` before a separator is home; on posix a backslash is part of a name, so only Windows takes `~\`. */
@@ -87,13 +78,42 @@ export function tempDir(home: string | undefined, p: PlatformPath = platformPath
   return home && p.sep === '\\' ? p.join(home, 'AppData', 'Local', 'Temp') : undefined
 }
 
+export interface Identity { dev: bigint, ino: bigint }
+export type Verdict = 'open' | 'fenced' | 'unknown'
+
+/** `statSync(path, { bigint: true })`'s dev and ino, following links; undefined when it cannot be read. */
+export function identity(path: string): Identity | undefined {
+  try {
+    const { dev, ino } = statSync(path, { bigint: true })
+    return { dev, ino }
+  } catch { return undefined }
+}
+
+/** Each folder's identity; one not named, or that cannot be read, is skipped. */
+export function identities(dirs: (string | undefined)[], identify: (path: string) => Identity | undefined = identity): Identity[] {
+  return dirs.flatMap(dir => {
+    const id = dir ? identify(dir) : undefined
+    return id ? [id] : []
+  })
+}
+
 /**
- * Whether a folder of `forbidden` holds `file`, all three resolved. Inside the temporary folder only a forbidden folder
- * inside it fences the file: AppData, which holds it, does not.
+ * Whether a folder of `forbidden` holds `real`, walked from the file itself up to the root. Folders are told apart by
+ * identity, never by path: another case, an 8.3 short name, a `\\?\` prefix, a `subst` drive, a link and a case-folded
+ * folder on Linux each spell one folder in a way a compare of paths reads as another. Inside a temporary folder only a
+ * forbidden folder inside it fences the file: AppData, which holds Windows' own, does not. So each folder is asked
+ * "forbidden?" before "temporary?", and a forbidden folder that is a temporary one still fences. A folder that cannot be
+ * read, or has the number 0 some file systems give every file, cannot be told from a forbidden one.
  */
-export function fenced(file: string, forbidden: string[], temp: string | undefined, p: PlatformPath = platformPath): boolean {
-  const inTemp = !!temp && inside(temp, file, p)
-  return forbidden.some(dir => inside(dir, file, p) && (!inTemp || inside(temp, dir, p)))
+export function walk(real: string, identify: (path: string) => Identity | undefined, forbidden: Identity[], temps: Identity[],
+  p: PlatformPath = platformPath): Verdict {
+  const among = (ids: Identity[], id: Identity): boolean => ids.some(other => other.dev === id.dev && other.ino === id.ino)
+  for (let path = real; ; path = p.dirname(path)) {
+    const id = identify(path)
+    if (!id || id.ino === 0n) return 'unknown'
+    if (among(forbidden, id)) return 'fenced'
+    if (among(temps, id) || p.dirname(path) === path) return 'open'
+  }
 }
 
 /** The account's own home; an account with no passwd entry (a container's bare uid) has none, and `userInfo` throws. */
@@ -106,18 +126,18 @@ export function uploadPath(raw: string, env: NodeJS.ProcessEnv = process.env): s
   const path = expandHome(raw, env.HOME || homedir())
   // Windows opens a share to resolve a path through it. The resolved path is checked again below: a link may lead there.
   if (unc(path)) throw new CallFailure(2, `refusing to upload ${raw}: not a media file the helper may send`)
-  // The file system's own spelling (`native`): the JS realpath only follows links and keeps the spelling given, so
-  // ~/.SSH on macOS, and SSH~1 (an 8.3 short name) or a \\?\ prefix on Windows, read ~/.ssh outside the fence.
+  // Links followed, so the walk climbs the folders that hold the file, not a link's. The file system's own answer
+  // (`native`) is where it found the file: on Windows a mapped drive resolves to its share.
   let real: string
   try { real = realpathSync.native(path) } catch { throw new CallFailure(2, `cannot read upload ${raw}`) }
-  const native = (dir: string): string => { try { return realpathSync.native(dir) } catch { return resolve(dir) } }
+  // Refused before the walk, which reads each folder above the file: nothing on a share is read.
+  if (unc(real)) throw new CallFailure(2, `refusing to upload ${raw}: not a media file the helper may send`)
   const account = accountHome()
-  const forbidden = forbiddenDirs(env, [homedir(), account]).map(native)
-  // Resolved as the file is, so both compare in the file system's own spelling, through any link on the profile's path.
-  const temp = tempDir(account)
+  const verdict = walk(real, identity, identities(forbiddenDirs(env, [homedir(), account])), identities([tempDir(account)]))
+  if (verdict === 'unknown') throw new CallFailure(2, `cannot check upload ${raw}`)
   const stat = statSync(real)
   // A hard link's other names, which may be inside a forbidden folder, are found by no path the fence can check.
-  if (unc(real) || fenced(real, forbidden, temp && native(temp)) || !stat.isFile() || stat.nlink > 1) {
+  if (verdict === 'fenced' || !stat.isFile() || stat.nlink > 1) {
     throw new CallFailure(2, `refusing to upload ${raw}: not a media file the helper may send`)
   }
   if (!UPLOAD_SUFFIXES.includes(extname(real).toLowerCase()) || !UPLOAD_SUFFIXES.includes(extname(path).toLowerCase())) {
