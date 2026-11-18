@@ -419,6 +419,39 @@ void main() {
     expect(calls[harnessInstall], contains('/bin/sh -s -- --desktop'));
   });
 
+  test('on a fresh Linux home setup installs Harness, then verifies it in the same home', () async {
+    final data = '${scratch.path}/.local/share/harness';
+    final state = '${scratch.path}/.local/state/harness';
+    managedNode = File('$state/runtime/node-v24.22.2/bin/node');
+    Future<void> install() async {
+      managedNode.createSync(recursive: true);
+      File('$state/runtime/current-node').writeAsStringSync(managedNode.path);
+      File('$data/cli/cli.js').createSync(recursive: true);
+      File('$data/.harness-root').writeAsStringSync('1\n');
+    }
+
+    final provisioner = EnvironmentProvisioner(
+      look: scratchHomeLook(scratch.path),
+      isMacOS: false,
+      isLinux: true,
+      isWindows: false,
+      platformEnvironment: {'HOME': scratch.path},
+      run: runner(tmuxPresent: () => true, installHarness: install),
+    );
+
+    final readiness = await provisioner.ensureReady(
+      onProgress: (_) {},
+      install: true,
+      mode: EnvironmentSetupMode.automatic,
+    );
+
+    expect(
+      readiness.steps[EnvironmentStep.harness],
+      EnvironmentStepStatus.ready,
+      reason: readiness.output.join('\n'),
+    );
+  });
+
   test('missing tmux opens a real terminal before the CLI installer', () async {
     String? terminalScript;
     final calls = <String>[];
