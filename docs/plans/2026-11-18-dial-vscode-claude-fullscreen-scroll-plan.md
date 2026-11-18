@@ -4,10 +4,10 @@
 > checkbox (`- [ ]`) syntax for tracking.
 
 **Status:** updated after the PM's four answers and the answer on the user settings file (option b, 2026-11-18). No
-question remains.
+question remains. Since the PM's (a) on 2026-11-18, one page key is 8 lines, Herdr's since #4436 (it was 20).
 
 **Goal:** With Claude Code's `"tui": "fullscreen"` in a VS Code terminal, a stroke on the dial moves the transcript a
-page for each 20 lines of travel, and only while Claude Code is that terminal's foreground program and is not asking.
+page for each 8 lines of travel, and only while Claude Code is that terminal's foreground program and is not asking.
 
 **Architecture:**
 - **The devices process** asks two more things at a stroke's `down`, one after the other, within 500 ms in all:
@@ -17,7 +17,7 @@ page for each 20 lines of travel, and only while Claude Code is that terminal's 
   answer becomes `page`, `lines` or `windows`. A `page` stroke's lines go to the window as
   `{"scroll":n,"pid":shell,"page":true}`.
 - **Harness's VS Code extension** runs a page line's host scroll as today and also presses PageUp or PageDown in that
-  terminal, one key per 20 lines, through `terminal.sendText(seq, false)`.
+  terminal, one key per 8 lines, through `terminal.sendText(seq, false)`.
 - **Nothing in the daemon core.** Every file is the devices process's, the extension's or a test's.
 
 **Tech Stack:** TypeScript (Node, vitest 4) in `cli/` and `plugins/harness-device-vscode/`; Python 3 for the end-to-end
@@ -81,7 +81,8 @@ Nothing under `cli/src/core/` or `cli/src/harnessd/` changes; `cli/src/architect
 - **The pid** is the pane's: `termPid(observed.paneOf(id, 'vscode'))`. Never `entry.pid`.
 - **A refused guard is `lines`**, the VS Code terminal's line scroll as today, never Harness's windows.
 - **A stroke is held at most 500 ms** of wall time, then goes out as lines and stays lines.
-- **20 dial lines are one page key.** At most 100 lines and 5 keys from one line.
+- **8 dial lines are one page key.** At most 100 lines and 5 keys from one line; what is left past the 5 keys is
+  clipped to under one key.
 - **The wire:** `{"scroll":n,"pid":shell,"page":true}`. The devices write `page` only when it is true; the extension
   reads it only when it is `true`. Both sides ignore it when missing or unknown.
 - **The page remainder** is per shell and resets on a line for another shell, on a line with no `page`, after 1 s with
@@ -123,7 +124,7 @@ Nothing under `cli/src/core/` or `cli/src/harnessd/` changes; `cli/src/architect
     line's end (`…, N scroll lines, N dropped`), and both keep working at every commit.
 13. **One constant each.** Herdr's `SCROLL_PAGE_LINES` is private to `herdrApp.ts` in the devices process, and the
     devices never need the number here: the extension does the page math, and it is bundled alone and imports nothing
-    of the CLI. `loop.ts` gets `PAGE_LINES = 20` with that reason in its comment.
+    of the CLI. `loop.ts` gets `PAGE_LINES = 8` with that reason in its comment.
 14. **A `needs-you` learnt mid-stroke is not counted as a refusal:** that stroke's guard passed.
 15. **The end-to-end job control** is a second process in the fake engine's session: only a member of a session may
     move its terminal's foreground group, and the session's leader (the engine) cannot leave its own group.
@@ -585,10 +586,10 @@ it('nothing but pageKey writes to a terminal', async () => {
 **Produces** (in `loop.ts`):
 
 ```ts
-// The lines one page key stands for: Herdr's SCROLL_PAGE_LINES (cli/src/cable/hosts/herdrApp.ts), where a Claude Code
-// page moved 19 lines at 46 rows. A constant of its own: the extension is bundled alone and imports nothing of the CLI.
-const PAGE_LINES = 20
-// SCROLL_MAX / PAGE_LINES: no more keys run from one line, or from what waits.
+// The lines one page key stands for: Herdr's 8 since #4436 (SCROLL_PAGE_LINES, cli/src/cable/hosts/herdrApp.ts). A
+// constant of its own: the extension is bundled alone and imports nothing of the CLI.
+const PAGE_LINES = 8
+// No more keys run from one line, or from what waits.
 const PAGE_KEYS_MAX = 5
 // A shell's page remainder is forgotten once no page line came for this long.
 const PAGE_IDLE_MS = 1_000
@@ -600,7 +601,8 @@ type Scroll = { pid: number; n: number; keys: number; from: number }
 - **Reading the line:** a scroll line is a page line only when `value.page === true`.
 - **The remainder:** `{ pid, lines, at }` or none. A page line starts from 0 when there is none, when it is for another
   pid, or when `inputs.now() - at >= PAGE_IDLE_MS`. It adds the line's count as the loop runs it (`held(n)`), takes
-  `keys = Math.trunc(lines / PAGE_LINES)`, keeps the rest and stamps `at`. A scroll line with no `page`, for any shell,
+  `keys = Math.trunc(lines / PAGE_LINES)` held to ±`PAGE_KEYS_MAX`, keeps `lines % PAGE_LINES` (what is past the 5
+  keys is clipped) and stamps `at`. A scroll line with no `page`, for any shell,
   forgets it.
 - **It lives in `follow`, one per stream,** so a stream's end forgets it with no code of its own. No test can tell that
   from the 1 s rule (a stream reopens no sooner than 1 s after it ended, the loop's first backoff), so none is written.
@@ -613,34 +615,34 @@ type Scroll = { pid: number; n: number; keys: number; from: number }
 - **The minute's line, exact:**
 
 ```
-in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 2 page keys, 45 scroll lines, 0 dropped
+in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 2 page keys, 16 scroll lines, 0 dropped
 ```
 
 - [ ] **Step 1: Write the failing tests.**
 
 ```ts
-it('a page line of 45 sends 2 keys and keeps 5; the next page line for that shell adds to them', async () => {
+it('a page line of 21 sends 2 keys and keeps 5; the next page line for that shell adds to them', async () => {
   const win = fakeWindow({ terminals: [101], active: 101 })
   const { w, stream } = await connected(win)
-  stream.send('{"scroll":-45,"pid":101,"page":true}\n')
-  await w.until(() => win.scrolls.length === 45)
+  stream.send('{"scroll":-21,"pid":101,"page":true}\n')
+  await w.until(() => win.scrolls.length === 21)
   expect(win.pageKeys).toEqual([{ pid: 101, up: true }, { pid: 101, up: true }])
-  stream.send('{"scroll":-15,"pid":101,"page":true}\n')
-  await w.until(() => win.scrolls.length === 60)
+  stream.send('{"scroll":-3,"pid":101,"page":true}\n')
+  await w.until(() => win.scrolls.length === 24)
   expect(win.pageKeys).toHaveLength(3)
 })
 
-it('toward newer lines the key is PageDown', …)                       // {"scroll":20,"pid":101,"page":true} → [{ pid: 101, up: false }]
+it('toward newer lines the key is PageDown', …)                       // {"scroll":8,"pid":101,"page":true} → [{ pid: 101, up: false }]
 it("a line's keys go before its lines", …)                            // the first scrollLine held: pageKeys already has both keys
 it.each([
   ['1 s with no page line', …],                                       // await w.to(1_000)
-  ['a page line for another shell', …],                               // {"scroll":-15,"pid":202,"page":true}
+  ['a page line for another shell', …],                               // {"scroll":-5,"pid":202,"page":true}
   ['a line with no page', …],                                         // {"scroll":-1,"pid":101}
-])('the remainder is forgotten after %s', …)                          // -15 page, the event, -15 page: no key
-it('999 ms with no page line keeps the remainder', …)                 // -15 page, w.to(999), -15 page: one key
+])('the remainder is forgotten after %s', …)                          // -5 page, the event, -5 page: no key
+it('999 ms with no page line keeps the remainder', …)                 // -5 page, w.to(999), -3 page: one key
 it('a terminal that is not the active one gets no key', …)            // active 202, a page line of -45 for 101: no key, no line, 1 dropped
 it.each(['1', '"true"', 'false', 'null'])('a page of %s is no page: its lines run and no key is sent', …)
-it('at most 5 keys from one line, and from what waits', …)            // -250 → 100 lines, 5 keys; two page lines of -100 during a held run → one run of 100 lines, 5 keys
+it('at most 5 keys from one line, and from what waits', …)            // -250 → 100 lines, 5 keys, 4 kept; two page lines of -100 during a held run → one run of 100 lines, 5 keys
 it("the minute's line counts the page keys sent", …)                  // the exact line above
 it('stop ends a run: what waited sends no key', …)
 ```
@@ -903,8 +905,8 @@ minute line (Task 5).
      so the clean-up kills it; wait for a state that lists it.
   2. `streams.show({ window, shell: app }, false)`; wait until the last state's `active` is the app.
   3. `streams.scroll({ window, shell: app }, -45, true)`.
-  4. Wait until the extension's minute lines sum to 2 page keys (`MINUTE_LINE` and `scrollCounts` gain the count).
-  5. `expect(readFileSync(record)).toEqual(Buffer.from('\x1b[5~\x1b[5~'))`: one PageUp per page and nothing else. No
+  4. Wait until the extension's minute lines sum to 5 page keys (`MINUTE_LINE` and `scrollCounts` gain the count).
+  5. `expect(readFileSync(record)).toEqual(Buffer.from('\x1b[5~'.repeat(5)))`: one PageUp per page and nothing else. No
      `ESC[200~`, so VS Code did not wrap a key as a paste, and no byte from the 45 host scroll commands.
 - The gate's `vscodeStreams({ … })` gains `fullscreen: () => Promise.resolve(false)` and
   `foreground: () => Promise.resolve(undefined)` (Task 3's deps): no stroke is guarded here, and nothing of this
@@ -932,9 +934,9 @@ minute line (Task 5).
   `cable/hosts/claudeRenderer.ts`), that is its terminal's foreground program (its group is the foreground group of
   the shell VS Code started in that terminal, one `ps -o pid=,pgid=,tpgid= -p <agent>,<shell>` read a stroke; both
   waited for at most 500 ms) and is not waiting on the person, the extension also presses PageUp or
-  PageDown there, one key per 20 lines, which moves Claude Code's fullscreen view".
+  PageDown there, one key per 8 lines, which moves Claude Code's fullscreen view".
 - `README.md`, "What it does", the Scroll line: "**Scroll** on the dial while VS Code is in front: that terminal
-  scrolls, line by line. With `"tui": "fullscreen"` in Claude Code's settings, its view moves a page for each 20
+  scrolls, line by line. With `"tui": "fullscreen"` in Claude Code's settings, its view moves a page for each 8
   lines; fullscreen set only by `CLAUDE_CODE_NO_FLICKER=1` scrolls line by line."
 - `README.md`, "What it never does", the first line: "It reads nothing from a terminal. It types only the PageUp and
   PageDown keys, and only where Claude Code's fullscreen view is in front and not asking."
@@ -955,9 +957,9 @@ extension's tests among them), the suites that read `cli/`, and `process-checks`
 | 1 | **Unit:** `cd cli && npx vitest run src/cable/hosts src/services/devices.spec.ts ../plugins/harness-device-vscode/src src/devices/vscodeExtensionTypes.spec.ts src/devices/vscodeExtensionBundle.spec.ts src/architecture.spec.ts src/architecture.environment.spec.ts && npx tsc --noEmit` | this Mac; PR CI on Linux | fakes only: a fake `ps`, fake settings reads, a fake window, a fake VS Code API; `claudeRenderer.spec.ts` reads files under its own temporary folder | all pass; each behavior's test was committed red before its code |
 | 2 | **CLI end to end, the file:** `cd cli && TMPDIR=/tmp npx vitest run --config vitest.e2e.config.ts e2e/dialVscode.e2e.ts` | this Mac | the repo's own (cli/AGENTS.md rule 6): a daemon under a throwaway root and home on a port of its own (never 18473), a fake dial, the fake engine in a pseudo-terminal under a fake `code`, in a throwaway folder whose `.claude/settings.json` the case writes, the user file in the throwaway Claude home its transcript names; the extension's real loop over a fake window in a process of its own; the real `ps` reads only the test's own processes; the machine's managed settings file is read, and the case fails at once if it sets a `tui`; no VS Code, no `claude` | three cases pass; the new one prints one `up` key for fullscreen in front, and none for the default renderer or after `background()` |
 | 3 | **CLI end to end on Linux, the whole suite once at the final head, when the PM gives the turn:** `gh workflow run cli-e2e.yml --ref fix/dial-vscode-claude-fullscreen-scroll` (Actions → CLI end to end → Run workflow). | GitHub, Linux runners | each daemon under a throwaway root, fake dials, fake engines; no `/etc/claude-code` on the runner | every shard green, `e2e/dialVscode.e2e.ts` among them. Linux is where `ps` prints -1, the managed path differs, and the Python job control differs most from a Mac |
-| 4 | **The extension in a real VS Code:** `cd cli && npm run test:vscode` | this Mac, in a desktop session (it opens a window) | a VS Code downloaded into a temporary folder, with its own user data, extensions, home and bundle id, all removed at the end; a fake alt-screen app, never `claude`; never the installed VS Code, its settings or `~/.vscode` | a VS Code window opens and closes by itself; every case passes; the record holds exactly `ESC[5~` twice |
+| 4 | **The extension in a real VS Code:** `cd cli && npm run test:vscode` | this Mac, in a desktop session (it opens a window) | a VS Code downloaded into a temporary folder, with its own user data, extensions, home and bundle id, all removed at the end; a fake alt-screen app, never `claude`; never the installed VS Code, its settings or `~/.vscode` | a VS Code window opens and closes by itself; every case passes; the record holds exactly `ESC[5~` five times |
 | 5 | **Local gates' receipt:** `python3 scripts/local-checks.py --run` from a clean tree at the final commit. The change touches `cli/src/services/*`, so it runs `cli-core` (`npm run test:core`: `devices.ts` at 100%). Its output goes in the pull request body before the push that carries that head. | this Mac | the unit suites' own | one `harness-local-checks` fence, `cli-core` passed |
-| 6 | **By a person, after merge. Needs Diego himself** (his Claude Code login, his dial, his eye). Not run by an agent. | Diego's Mac | his own VS Code and Claude Code: a check only he can do | (a) with `"tui": "fullscreen"` in his settings: a stroke moves the transcript a page for each 20 lines, both ways, and text typed in the prompt is unchanged; (b) with that line removed: line by line, as today, and nothing is typed; (c) while Claude Code asks, or at a shell prompt: line scroll only, and nothing is typed; (d) a Claude Code of an Orca account, in a VS Code terminal, with `"tui": "fullscreen"` only in that account's own `settings.json`: pages, as (a) |
+| 6 | **By a person, after merge. Needs Diego himself** (his Claude Code login, his dial, his eye). Not run by an agent. | Diego's Mac | his own VS Code and Claude Code: a check only he can do | (a) with `"tui": "fullscreen"` in his settings: a stroke moves the transcript a page for each 8 lines, both ways, and text typed in the prompt is unchanged; (b) with that line removed: line by line, as today, and nothing is typed; (c) while Claude Code asks, or at a shell prompt: line scroll only, and nothing is typed; (d) a Claude Code of an Orca account, in a VS Code terminal, with `"tui": "fullscreen"` only in that account's own `settings.json`: pages, as (a) |
 
 **No temporary workflow.** The one long check, the end-to-end suite, has its own workflow, started by hand once when
 the PM gives the turn (check 3); the new case then runs in it every night with no further change. The real-VS Code

@@ -37,10 +37,12 @@ const COUNTS_MS = 60_000
 // The devices write at most this many lines in one scroll line (VSCODE_SCROLL_MAX): no more runs from one, or from what
 // waits.
 const SCROLL_MAX = 100
-// The lines one page key stands for: Herdr's SCROLL_PAGE_LINES (cli/src/cable/hosts/herdrApp.ts), where a Claude Code
-// page moved 19 lines at 46 rows. A constant of its own: the extension is bundled alone and imports nothing of the CLI.
-// With SCROLL_MAX, one line makes at most 5 keys.
-const PAGE_LINES = 20
+// The lines one page key stands for: Herdr's 8 since #4436 (SCROLL_PAGE_LINES, cli/src/cable/hosts/herdrApp.ts), so
+// about half a screen follows about 8 lines of the finger. A constant of its own: the extension is bundled alone and
+// imports nothing of the CLI.
+const PAGE_LINES = 8
+// The most keys one line makes: a fling stops when the finger stops, not pages later.
+const LINE_KEYS_MAX = 5
 // A shell's page remainder is forgotten once no page line came for this long.
 const PAGE_IDLE_MS = 1_000
 
@@ -164,9 +166,9 @@ export function startLoop(
       const now = inputs.now()
       // A page line for another shell, or one after a pause, starts from 0.
       const lines = n + (left?.pid === pid && now - left.at < PAGE_IDLE_MS ? left.lines : 0)
-      const keys = Math.trunc(lines / PAGE_LINES)
-      left = { pid, lines: lines - keys * PAGE_LINES, at: now }
-      return keys
+      // Past the keys' bound, what is left of the line's travel is clipped: under one key carries on.
+      left = { pid, lines: lines % PAGE_LINES, at: now }
+      return held(Math.trunc(lines / PAGE_LINES), LINE_KEYS_MAX)
     }
   }
 

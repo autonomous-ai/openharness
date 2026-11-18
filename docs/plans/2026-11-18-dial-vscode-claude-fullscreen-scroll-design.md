@@ -40,7 +40,9 @@ nothing.
 3. A red test first. A check on a throwaway terminal with a fake alt-screen app: never a real `claude`, which writes
    its trust record into the person's `~/.claude.json`.
 4. Herdr fixed the same gap on its own branch with its own guard (hc's app kind and `blocked` state). One page is the
-   same travel on both: `SCROLL_PAGE_LINES = 20` dial lines (Herdr measured a page at about 19 lines).
+   same travel on both: 8 dial lines, Herdr's `SCROLL_PAGE_LINES` since #4436. Herdr measured a page at about 19
+   lines, but at 20 lines a key, a stroke under 20 lines pressed nothing; the PM chose (a) on 2026-11-18: VS Code
+   follows Herdr's 8, at most 5 keys from one line.
 5. **Order:** this branch is built on #4425 (`feat/dial-herdr-scroll`) and merges after it. The plan is written
    against #4425's head.
 6. **`ps` reads `pgid` and `tpgid` too.** PR A allowed only `ps -axo pid=,ppid=`. Decision 2 needs to know whether
@@ -51,7 +53,7 @@ nothing.
    shell, so a wrapper with its own pty, such as `screen`, is never mistaken for that terminal's foreground).
 7. **Page keys only for a session known to draw fullscreen (PM, 2026-11-18).** VS Code's `sendText` scrolls the
    terminal to the bottom after each write (`terminalInstance.ts`, `scrollToBottom()`). Under Claude Code's default
-   renderer a page key would therefore pull the view back down after each 20 lines up, which is worse than today. So
+   renderer a page key would therefore pull the view back down after each 8 lines up, which is worse than today. So
    the devices read **only the `tui` key** of Claude Code's settings files for the session, and send page keys only
    when it says `"fullscreen"`. Every other session scrolls line by line, as today.
    - **The files, highest precedence first:**
@@ -75,7 +77,7 @@ nothing.
 
 Claude Code in a VS Code terminal, VS Code in front, the dial showing that agent. A finger on the glass:
 
-- **`"tui": "fullscreen"` in its settings:** the transcript moves a page, about half a view, for each 20 lines of the
+- **`"tui": "fullscreen"` in its settings:** the transcript moves a page, about half a view, for each 8 lines of the
   dial's travel.
 - **Any other session** (the default renderer, or fullscreen from `CLAUDE_CODE_NO_FLICKER=1`): line by line, as today.
 
@@ -86,7 +88,7 @@ the host's line scroll runs, as today. Codex is unchanged: only the host's line 
 
 ```
 dial ─▶ devices: stroke down ─▶ guard (claude? not needs-you? in the tty's foreground group?)
-                                  ├─ page   ─▶ {"scroll":n,"pid":shell,"page":true}   ─▶ extension: host lines + a page key per 20 lines
+                                  ├─ page   ─▶ {"scroll":n,"pid":shell,"page":true}   ─▶ extension: host lines + a page key per 8 lines
                                   └─ lines  ─▶ {"scroll":n,"pid":shell}                ─▶ extension: host lines (as today)
 ```
 
@@ -137,12 +139,13 @@ What `needs-you` covers, and what it does not:
 - **The page remainder:** for a page line, the line's signed count is added to a remainder kept for its shell. The
   remainder resets on a line for another shell, on a line with no `page`, after 1 s with no page line, and when the
   stream ends.
-- **The keys:** each time the remainder reaches ±20, one page key is pressed. It is `\x1b[5~` toward older lines
+- **The keys:** each time the remainder reaches ±8, one page key is pressed. It is `\x1b[5~` toward older lines
   (n < 0) or `\x1b[6~` toward newer lines.
 - **When they go:** a line's keys are pressed as soon as the line arrives, while that shell's terminal is active and the
   loop runs, never behind a run of host scroll lines (which move nothing on the alternate screen), so no key can follow
-  a later line with no `page`. Only the host scroll lines wait, merged as today: at most 100 lines a line, so at most 5
-  keys a line.
+  a later line with no `page`. Only the host scroll lines wait, merged as today: at most 100 lines a line.
+- **At most 5 keys a line:** what is left of a line's travel past them is clipped, so the remainder stays under one key
+  and a fling stops when the finger stops.
 - **The facade:** gains `pageKey(pid, up)`. It finds the terminal by its shell pid and calls `terminal.sendText(seq,
   false)` with one of the two fixed sequences. It cannot write any other text.
 - **The types:** `ApiTerminal` gains `sendText(text: string, addNewLine?: boolean): void`. `WindowFacade`, the tests'
@@ -213,12 +216,13 @@ its foreground is read at the start. What can land is bounded:
     - `needs-you` learned mid-stroke: the rest is `lines`.
     - The accumulator never merges page and non-page lines.
   - **The extension:**
-    - A page line of 45 lines sends 2 keys and keeps 5. The next page line for the same shell adds to the 5.
+    - A page line of 21 lines sends 2 keys and keeps 5. The next page line for the same shell adds to the 5.
+    - Two page lines of 5 lines for one shell send one key.
     - The remainder resets after 1 s with no page line, on another shell, and on a line with no `page`.
     - Toward newer lines it sends `\x1b[6~`.
     - An inactive terminal gets no key.
     - A `page` other than `true` is ignored.
-    - At most 5 keys from one line.
+    - At most 5 keys from one line: a page line of 100 sends 5 and keeps 4.
     - `sendText` only ever gets the two sequences, always with `false`.
 - **End to end (`cli/e2e`, isolated):** `dialVscode.e2e.ts` gains a case. The e2e pty is Python's `pty.fork`
   (`cli/e2e/harness/outsideAgent.ts`), where the fake engine leads its session, so the foreground case is the default.
@@ -232,7 +236,8 @@ its foreground is read at the start. What can land is bounded:
     binary with `ELECTRON_RUN_AS_NODE=1`). It enters the alternate screen, turns on SGR mouse and bracketed paste
     (`ESC[?2004h`), and writes each byte it receives to a file in the gate's root.
   - **The check:** the gate sends a page line through `streams.scroll` with the new `page` argument. The file must hold
-    exactly one `\x1b[5~` per page, and no `ESC[200~`, so VS Code did not wrap the key as a paste.
+    exactly one `\x1b[5~` per page (a page line of 45: 5 keys), and no `ESC[200~`, so VS Code did not wrap the key
+    as a paste.
   - **Never:** the gate never starts `claude`.
 - **Local gates:** `npm run test:core` (devices). The local-checks receipt in the PR.
 - **By a person, after merge:** Diego's Claude Code with `"tui": "fullscreen"`: the dial's scroll moves the transcript.
