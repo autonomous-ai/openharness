@@ -66,3 +66,19 @@ in 41.688 seconds. The failed suite produces no coverage report. The retained re
 `.harness/validation/20261118T203835.915627Z-26155/receipt.json`; source stays clean and unchanged.
 The test now includes only error name/message as assertion context so the failure's reason is visible.
 The next diagnostic compares unchanged and batched routes on this case; no timeout is relaxed.
+
+## Inherited coverage failure isolated
+
+The same existing case fails once on unchanged routes at `b1706dd080` (7.038 seconds) and once
+on batching at `1d294e775a` (6.87 seconds). Both report the native evidence deadline followed by
+the preparation deadline. Receipts are retained in the before worktree at
+`.harness/validation/20261118T205019.987417Z-38448/receipt.json` and this worktree at
+`.harness/validation/20261118T205037.104314Z-38630/receipt.json`. Those single-case coverage reports
+are diagnostic only and do not replace the failed 17-file gate or claim complete coverage.
+
+The valid-large-file test now controls its own performance clock and timeout timers. It exercises
+the same 6,000 lines, real parser, filesystem and publication, without making acceptance depend
+on coverage overhead. Production deadlines stay unchanged. Separate native evidence and hook
+attempt/file tests retain expiration, cumulative work/probe limits, joined deadlines, retained
+descriptors and reservations, and the final post-filesystem deadline fence. The fixed test still
+requires a green gate; no new execution has been used to claim that result.

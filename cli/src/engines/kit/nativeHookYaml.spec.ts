@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { performance } from 'node:perf_hooks'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { HERMES_HOOK_SETTINGS } from '../hermes/setup.js'
 import { editPassthrough, installNativeYamlHooks, removeNativeYamlHooks } from './nativeHookYaml.js'
@@ -46,11 +47,16 @@ describe('a large settings file', () => {
 
   it('takes the hooks when it is as long as Hermes\'s own, which held every Hermes agent', async () => {
     writeFileSync(join(home, 'config.yaml'), lines(6_000))
-    const installed = await installNativeYamlHooks(rule(), command)
-    const refusals = vi.mocked(console.error).mock.calls.flatMap(args => args
-      .filter((value): value is Error => value instanceof Error).map(error => `${error.name}: ${error.message}`))
-    expect(installed, refusals.join('\n')).toBe(true)
-    expect(readFileSync(join(home, 'config.yaml'), 'utf8')).toContain(`--hermes-home ${home}`)
+    // This checks valid YAML size; coverage overhead must not consume the separate evidence/preparation deadlines.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(0)
+    try {
+      const installed = await installNativeYamlHooks(rule(), command)
+      const refusals = vi.mocked(console.error).mock.calls.flatMap(args => args
+        .filter((value): value is Error => value instanceof Error).map(error => `${error.name}: ${error.message}`))
+      expect(installed, refusals.join('\n')).toBe(true)
+      expect(readFileSync(join(home, 'config.yaml'), 'utf8')).toContain(`--hermes-home ${home}`)
+    } finally { clock.mockRestore(); vi.useRealTimers() }
   })
 
   // Hermes writes config.yaml with CRLF on Windows (measured 2026-11-09, DESKTOP-0TFH0OJ). Every line then ends with
