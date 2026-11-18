@@ -837,3 +837,60 @@ Mac filesystem/runtime and portable simulated Windows value cases are covered. N
 and no Linux/native-terminal or whole-daemon acceptance is claimed by these unit gates. The coordinator owns combined
 integration/release gates. V8's cold/warm performance hold remains; the proposed v9 uses the identical A/workload/custody
 with only the reviewed B source changed, and requires a separate frozen-packet review, semantic smoke and quiet grant.
+
+## Fixed v9 comparison: core work reduced, cost hold remains
+
+The coordinator reviewed the complete component boundary and froze B at `ebb65bce189be4c01f38b949fc4a8d61b60dcd43`
+in `/tmp/harness-core-launch-settings-cost-b8`. A remains `9a2ae217cf`. Packet
+`/tmp/core-launch-settings-cost-v9/frozen.json` has SHA256
+`368627593e74048dd23fb453394a3ce85e5258516c2005276dcb11b6c8ab514f`, with 791 independently verified inputs
+and all eight arms fixed beforehand. Caller, worker, fixture, normalization/assertions, response framing and all three
+custody helpers are byte-identical to v8. Only B's seven executable closure inputs and run/freeze B path plus PLAN
+change; both closure file lists remain unchanged. The real native.prepareSettings and setup worker already exercise
+the new protocol, so no workload adaptation was necessary. Exact deltas are retained in
+`/tmp/core-launch-settings-cost-v9-harness.diff` and `-semantic-diff.json`.
+
+One approved smoke passed actual outer 0 in 13.131 s: both three-operation variants exactly match each other and v8
+argv/script semantics, with zero unused scripts and three B factories. All eight PIDs/two groups/two sockets/four
+private roots and outer were gone, with actual sample/worker/capture exits 0 and EOF/close receipts. The independent
+read-only checker initially used Python 3.9's unsupported `zip(strict=...)`; correcting that checker did not rerun
+the workload or alter frozen inputs. Smoke custody is `-smoke-custody.json` beside the packet.
+
+After all workers positively reported idle and the exact quiet marker was granted, one fixed A/B/B/A/A/B/B/A run
+passed actual outer 0 in 43.187 s. Each child kept its 120-second total work bound; the outer bound remained 1200 s.
+All 448 operations passed, each B factory ran 56 times, no launch script was left unused, and every semantic result
+equals v8. All 32 sample/worker/capture/guardian PIDs, eight groups, eight sockets, 16 private roots and outer were
+independently gone; exits/EOF/close and every frozen hash/head/tree were checked. The coordinator released quiet only
+after this settlement. Raw data/custody are `/tmp/core-launch-settings-cost-v9-abba/manifest.json`,
+`-abba-outer-receipt.json` and `-abba-custody.json`. No rerun, omitted arm or adaptive sample was used.
+
+The unchanged v4 summarizer ran once, actual 0 in 0.082 s, and retained every arm and paired metric in
+`/tmp/core-launch-settings-cost-v9-summary.json`. Times below are milliseconds; CPU columns are per warm operation.
+
+| Arm | First publication | Warm p50 | Warm p95 | Core CPU | Worker CPU | Combined CPU |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 A | 3.895002 | 0.848302 | 0.962079 | 0.94612 | 0.23454 | 1.18066 |
+| 1 B | 99.911087 | 3.655430 | 4.820662 | 1.58290 | 3.09606 | 4.67896 |
+| 2 B | 99.365044 | 3.657584 | 4.583107 | 1.61422 | 3.02290 | 4.63712 |
+| 3 A | 3.834364 | 0.845813 | 0.980128 | 0.94638 | 0.24268 | 1.18906 |
+| 4 A | 5.062060 | 0.846003 | 0.982242 | 0.95032 | 0.23962 | 1.18994 |
+| 5 B | 99.109859 | 3.807255 | 4.616762 | 1.67790 | 3.16134 | 4.83924 |
+| 6 B | 97.872022 | 3.735313 | 4.710492 | 1.62526 | 3.13882 | 4.76408 |
+| 7 A | 4.030168 | 0.863399 | 1.013684 | 0.96772 | 0.26528 | 1.23300 |
+
+A→B means: first publication 4.205399→99.064503 ms, warm p50 0.850879→3.713896 and p95 0.984533→4.682756.
+Warm core CPU is 0.952635→1.625070 ms/op, worker 0.245530→3.104780, combined 1.198165→4.729850.
+First core CPU is 4.529750→5.654750 ms and first worker CPU 12.253750→69.737000. B first-use range is
+97.872022–99.911087 ms; all paired warm-p50 deltas remain positive: +2.807128, +2.811771, +2.961252, +2.871914.
+
+Against v8 B, core warm CPU drops 4.783110→1.625070 ms/op (about 66%), p50 4.557222→3.713896 and combined
+CPU 5.738000→4.729850. Cold latency increases 88.391468→99.064503 ms. This demonstrates the scoped core work
+reduction and transfer into its component; it does not close the original baseline, cold or combined-cost hold.
+
+Core retained-heap growth A→B is 0.146477→0.214476 MiB; worker -0.014610→0.133032 MiB. Post-batch core RSS
+is 125.174805→124.716797 MiB (B range 119.863281–127.332031), worker 97.968750→107.453125 MiB (B range
+106.531250–108.566406). Per-arm before/after/lifetime-max RSS and paired memory values remain in the JSON.
+These are process measurements, not whole-daemon totals. Worker CPU includes its ending GC snapshot and common
+semantic assertions are inside operation latency. Permission-probe runtime/cost, extra model capture, cold service
+startup, real terminal I/O and native Windows/Linux remain excluded. No next diagnostic, runtime correction or
+performance acceptance is inferred from these results.
