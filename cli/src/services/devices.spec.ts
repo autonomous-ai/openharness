@@ -3599,6 +3599,15 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     await vi.waitFor(() => expect(window.lines).toEqual([page(-1)]))
   })
 
+  it("a later hook from a folder below the session's: the renderer read gets the folder it started in, whose project settings Claude Code reads", async () => {
+    const { port, window } = await shown()
+    // Its Bash moved into packages/web: each hook from now on names that folder.
+    port.observed(hook('turn-start', { cwd: '/work/api/packages/web', hostHints: { TERM_PROGRAM: 'vscode' } }))
+    stroke([8])
+    expect(claudeSettings.reads).toEqual([['/work/api', '/t/sess-1.jsonl']])
+    await vi.waitFor(() => expect(window.lines).toEqual([page(-1)]))
+  })
+
   it.each([
     ['Codex', IN_CODEX, false],
     ['an agent that asks at the down', {}, true],

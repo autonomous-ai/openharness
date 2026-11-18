@@ -3900,6 +3900,27 @@ describe('ObservedSource and a waiting prompt', () => {
     expect(src.transcriptOf(observedAgentId('claude', 'unknown'))).toBeUndefined()
   })
 
+  it('startedIn is the folder of the first hook that gave one, kept when a later hook names another, and none for an agent it does not list', () => {
+    const { src, ev } = setup()
+    src.ingest(ev('session-start', { cwd: undefined }))
+    src.ingest(ev('turn-start'))
+    // Its Bash moved into a folder below: Claude Code still reads the project's settings from where it started.
+    src.ingest(ev('turn-stop', { cwd: '/work/proj/packages/web' }))
+    expect(src.list()[0].cwd).toBe('/work/proj/packages/web')
+    expect(src.startedIn(src.list()[0].id)).toBe('/work/proj')
+    expect(src.startedIn(observedAgentId('claude', 'unknown'))).toBeUndefined()
+  })
+
+  it('startedIn of a session the scan found is the folder its row gave, kept when its hooks name another', async () => {
+    const { src, open, owners, externals, ev } = setup()
+    open.set('s1', 'terminal')
+    owners.set('s1', { pid: 100, engine: 'claude' })
+    externals.set('s1', { cwd: '/work/proj', transcriptPath: '/t/s1.jsonl' })
+    await src.scanOpen()
+    src.ingest(ev('turn-start', { cwd: '/work/proj/packages/web' }))
+    expect(src.startedIn(src.list()[0].id)).toBe('/work/proj')
+  })
+
   it('asked for a session no hook listed lists nothing: the plugin\'s hook runs in a Harness pane too', () => {
     const { src, changes } = setup()
     src.ingest(asked({ sessionId: 'in-a-pane' }))
