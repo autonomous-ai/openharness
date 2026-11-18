@@ -146,11 +146,12 @@ harness_uv() {
   PATH="$dir:$PATH"; export PATH
 }
 
-# True when the venv DIR names ~/.harness (its Python, or pip's) while the runtime has left it: that
-# venv runs only through the bridge the move leaves there, and the bridge goes.
+# True when the venv DIR names ~/.harness (its Python, or pip's) while this home has moved off it: that
+# venv runs only through the bridge the move leaves there, and the bridge goes. The state root says
+# whether it moved; a runtime set elsewhere (ADAPTER_RUNTIME_DIR) leaves ~/.harness where it is.
 _harness_venv_on_old_tree() {
   local old="${HOME:-}/.harness/" cfg pip=""
-  case "$HARNESS_RUNTIME/" in "$old"*) return 1 ;; esac
+  case "$(_harness_state_root)/" in "$old"*) return 1 ;; esac
   cfg="$(cat "$1/pyvenv.cfg" 2>/dev/null || true)"
   [ -r "$1/bin/pip" ] && IFS= read -r pip < "$1/bin/pip"
   case "$cfg
