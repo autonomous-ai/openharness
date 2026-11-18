@@ -646,4 +646,57 @@ The one-file correction passes all 81 cases in the three affected settings suite
 branches (70/70), functions (10/10) and lines (52/52); full maps are in
 `/tmp/core-launch-settings-readonly-phase-coverage/`. TypeScript passes actual 0 in 7.464 s
 (`/tmp/core-launch-settings-readonly-phase-types.log`). Both owned groups are empty and diff check passes. These
-are functional and structural-count results only; no further profile or timing run has executed for this change.
+are functional and structural-count results only; at this checkpoint no profile or timing run had executed for
+this change.
+
+### Matched read-only-phase cost result (v8; acceptance still held)
+
+The separately reviewed v8 packet freezes candidate 2a662840e9 against unchanged A 9a2ae217cf, manifest
+`54c694fdbaa389384d0d431a10072d1da993f549b38f412213a001052bcab779` at
+`/tmp/core-launch-settings-cost-v8/frozen.json`. All 791 input hashes are independently checked. Relative to v7,
+only B's nativeLaunchSettings.ts, the run/freeze candidate path and PLAN provenance differ. The caller, worker,
+fixture, framing, recording responses, common semantic assertions and three custody helpers are byte-identical;
+the exact closure file lists, eight arms and fixed deadlines remain unchanged. The semantic-diff record and
+harness diff are `/tmp/core-launch-settings-cost-v8-semantic-diff.json` and
+`/tmp/core-launch-settings-cost-v8-harness.diff`.
+
+One approved semantic smoke completes actual outer 0 in 11.973 s. Both three-operation outputs exactly match v7,
+with three final factories in B and no unused launch script. Every sample/worker/capture exit is zero with close
+and both EOFs; eight PIDs, two groups/sockets, four private roots and the outer are gone. The manifest, outer
+receipt and independent custody record are `/tmp/core-launch-settings-cost-v8-smoke/manifest.json`,
+`/tmp/core-launch-settings-cost-v8-smoke-outer-receipt.json` and
+`/tmp/core-launch-settings-cost-v8-smoke-custody.json`.
+
+The single separately approved fixed ABBA completes actual outer 0 in 43.606 s. All eight arms and 448 operations
+are retained, with exact v7 semantics, 56 candidate factories per arm and no unused script. Every sample, worker
+and capture child has actual zero exit, close and both EOFs. Independent custody checks all 32 PIDs, eight groups
+and sockets, sixteen private roots and the outer gone, and all 791 hashes unchanged. Raw samples, actual outer
+receipt and independent custody are `/tmp/core-launch-settings-cost-v8-abba/manifest.json`,
+`/tmp/core-launch-settings-cost-v8-abba-outer-receipt.json` and
+`/tmp/core-launch-settings-cost-v8-abba-custody.json`. The unchanged v4 summarizer records every arm, range and
+paired delta in `/tmp/core-launch-settings-cost-v8-summary.json`; there is no retry or adaptation.
+
+| Arm | First publication ms | Warm p50 ms | Warm p95 ms | Core CPU ms/op | Worker CPU ms/op | Combined CPU ms/op |
+|---|---:|---:|---:|---:|---:|---:|
+| 0-A | 3.954 | 0.879 | 1.077 | 0.987 | 0.245 | 1.232 |
+| 1-B | 86.878 | 4.708 | 5.717 | 4.908 | 0.975 | 5.882 |
+| 2-B | 86.505 | 4.518 | 5.664 | 4.820 | 0.960 | 5.780 |
+| 3-A | 3.912 | 0.870 | 1.055 | 0.969 | 0.252 | 1.221 |
+| 4-A | 3.906 | 0.850 | 0.974 | 0.948 | 0.240 | 1.187 |
+| 5-B | 91.459 | 4.537 | 5.360 | 4.709 | 0.949 | 5.658 |
+| 6-B | 88.724 | 4.466 | 5.377 | 4.696 | 0.937 | 5.633 |
+| 7-A | 5.627 | 0.843 | 0.979 | 0.946 | 0.237 | 1.182 |
+
+Mean A→B first publication is 4.350→88.391 ms (B range 86.505–91.459), warm p50 0.860→4.557 ms and p95
+1.021→5.529 ms. Core CPU is 0.963→4.783 ms/op, worker 0.243→0.955 and combined 1.206→5.738. The four paired
+p50 deltas are +3.828, +3.649, +3.687 and +3.624 ms. First core CPU is 4.698→42.082 ms and worker
+11.606→25.075 ms. The previous v7 candidate's p50 was 4.823 ms and core CPU 5.007 ms/op: this is a modest scoped
+warm improvement, with no cold improvement or closure of the material baseline gap. Performance acceptance remains
+held.
+
+Core retained-heap growth is 0.180→0.202 MiB and worker -0.0147→0.1048 MiB. Post-batch core RSS is
+124.557→125.896 MiB (B range 120.574–136.371), worker 97.610→101.522 MiB. These remain process measurements,
+not whole-daemon totals. Common semantic checks are inside operation latency, worker CPU includes its ending GC
+snapshot, and permission probing, extra model capture, cold service startup, real terminal I/O and native
+Windows/Linux acceptance remain excluded. No additional profile, timing or runtime correction is inferred from
+this result.
