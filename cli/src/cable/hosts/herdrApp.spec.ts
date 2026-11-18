@@ -480,6 +480,28 @@ describe('the Herdr adapter', () => {
       expect(calls).toEqual([scrollCall('t7', -1), scrollCall('t8', -1), scrollCall('t7', -1)])
     })
 
+    // The devices stopping (devices.ts stop): a stroke Herdr took runs nothing more, whatever its queue holds then.
+    it('once stopped, no run starts: neither the lines held for a gap, nor those behind a run under way, nor a new scroll\'s', async () => {
+      const gap = recorder()
+      gap.adapter.scroll(pane('t7'), -1)
+      await turn()
+      gap.adapter.scroll(pane('t7'), -2)
+      gap.adapter.stop()
+      await vi.advanceTimersByTimeAsync(5_000)
+      gap.adapter.scroll(pane('t8'), -1)
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(gap.calls).toEqual([scrollCall('t7', -1)])
+
+      const under = holding()
+      under.adapter.scroll(pane('t7'), -1)
+      under.adapter.scroll(pane('t7'), -2)
+      await vi.advanceTimersByTimeAsync(50)
+      under.adapter.stop()
+      await under.answer(0)
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(under.calls).toEqual([scrollCall('t7', -1)])
+    })
+
     // A scroll that joined the focus run would lose its lines.
     it('a scroll during a focus of the same terminal runs on its own', async () => {
       const { calls, adapter, answer } = holding()

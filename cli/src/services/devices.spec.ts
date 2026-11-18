@@ -6656,6 +6656,21 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       expect(dialScrolls(core)).toEqual([])
     })
 
+    // The lines of a run's 50 ms gap wait in the adapter's queue, past the routing's own check.
+    it('the lines Herdr holds for a run\'s gap at the stop never run', async () => {
+      const { core, port } = inHerdr()
+      shows(await listedId())
+      host().scrolled('down', 0, 0)
+      host().scrolled('move', 8, 0)
+      await vi.advanceTimersByTimeAsync(10)
+      host().scrolled('move', 16, 0)
+      expect(orcaRuns).toEqual([STATUS, scrolled('t7', -1)])
+      await port.stop()
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(orcaRuns).toEqual([STATUS, scrolled('t7', -1)])
+      expect(dialScrolls(core)).toEqual([])
+    })
+
     // A window that heard the down before the stop hears the up during it: it never holds a drag.
     it('a stroke the windows took before the stop keeps its route to its up', async () => {
       const { core, port } = inHerdr()
