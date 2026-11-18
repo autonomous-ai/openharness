@@ -42,9 +42,8 @@ describe('gallery', () => {
 
       const trays = root.querySelectorAll<HTMLImageElement>(`[data-theme="${theme}"] .bar img.tray`)
       expect(trays).toHaveLength(1)
-      // Desktop's status icon has a dark artwork, a solid tile with the face cut out: a dark bar shows it.
-      const icon = theme === 'dark' ? 'tray-dark.png' : 'tray.png'
-      expect(trays[0].getAttribute('src')).toBe(`../src-tauri/icons/${icon}`)
+      // A template image: the menu bar tints it for each theme.
+      expect(trays[0].getAttribute('src')).toBe('../src-tauri/icons/tray.png')
     }
     expect(root.querySelectorAll('img.tray')).toHaveLength(2)
   })

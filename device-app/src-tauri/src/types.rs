@@ -415,14 +415,16 @@ mod tests {
         assert_eq!(strings, "CFBundleName = \"Harness\";\nCFBundleDisplayName = \"Harness\";\n");
     }
 
+    /// A template image 18 points square at two pixels a point: macOS keeps only its alpha, so it tints it for a light
+    /// bar and a dark one.
     #[test]
-    fn the_tray_has_a_dark_artwork_the_size_of_the_light_one() {
+    fn the_tray_is_a_36_pixel_template() {
+        let png = include_bytes!("../icons/tray.png");
         // A PNG's width and height are the big-endian u32s at bytes 16..24, in its IHDR chunk.
-        let size = |name: &str| {
-            let png = std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("icons").join(name)).unwrap();
-            png[16..24].to_vec()
-        };
-        assert_eq!(size("tray-dark.png"), size("tray.png"));
+        assert_eq!(png[16..24], [0, 0, 0, 36, 0, 0, 0, 36]);
+        let image = tauri::image::Image::from_bytes(png).unwrap();
+        assert!(image.rgba().chunks(4).all(|pixel| pixel[..3] == [0, 0, 0]), "a pixel is not black");
+        assert!(image.rgba().chunks(4).any(|pixel| pixel[3] == 255), "no pixel is opaque");
     }
 
     #[test]
