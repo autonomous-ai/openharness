@@ -1246,6 +1246,9 @@ export class CableSession {
     this.greetedMac = null
     this.greetedFw = null
     this.appFocusGeneration += 1
+    // The generation above ends a follow in flight before its focus, and nothing else would clear its mark: kept, the next
+    // attach would read a follow still in flight and land nothing, leaving the dial on "Choose a pane" (syncAgentsNow).
+    this.appFocusUnsent = false
     this.expectedAppFocusEcho = ''
     this.expectedAppFocusEchoUntil = 0
     this.endRest()
