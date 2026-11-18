@@ -475,3 +475,99 @@ operation latency; worker CPU includes its ending GC snapshot; permission-probe 
 capture, cold service startup, real terminal I/O, full-daemon phases and native Windows/Linux validation are outside
 this packet. Existing final authority and file proofs remain intact. No further run or optimization is authorized by
 these numbers alone.
+
+### Profile v2: fresh source walks dominate the remaining warm cost
+
+The approved two-child attribution freezes untouched a56e694ca1 for CPU sampling and a separate diagnostic-only
+ee4c9fb968 for twelve counters. Manifest SHA256 is
+`5ba311c9db2529e2442e6410bfe8f7310117b85cf0c4e1c3927dc8792ff1e5df` (804 inputs). The same 56 operations,
+worker, fixture and custody helpers remain fixed. Separate 500 microsecond CPU windows cover the first operation
+and fifty measured operations; five warmups are unprofiled. One run completes actual 0 in 13.173 s. Both roles
+have equal v6 semantics, 56 command factories, zero unused scripts, actual zero sample/worker/capture exits and
+closed output streams. Independent custody verifies all eight PIDs, two groups/sockets, four private roots and the
+outer group are gone and all 804 hashes unchanged. Evidence is in `/tmp/core-launch-settings-profile-v2-output/`,
+with outer and independent receipts `/tmp/core-launch-settings-profile-v2-outer-receipt.json` and
+`/tmp/core-launch-settings-profile-v2-custody.json`.
+
+The count role records Node API calls, not kernel syscalls. One warm operation has 512 lstatSync calls, 34 file
+verifications and 11 native-current calls. Settings preparation accounts for 385 lstatSync, 24 file verifications,
+five native-current calls and four full settings verifications, with zero fsync. Command preflight and the final
+command factory each add 63 lstatSync calls. One of the four settings verifications is the fixture's explicit
+returned-proof assertion; it remains part of the unchanged workload. First preparation has 2,346 lstatSync calls,
+121 file verifications, 24 native-current calls, 23 full settings verifications and seven fsync calls. Nineteen of
+those full verifications come from the publisher: nine attempt verifications each bracket their route/observation
+work, then the publication acknowledgement adds one. None of these fences is removed by the following correction.
+
+The warm CPU window attributes 64.975 ms of sampled self time to lstat across fifty operations; overlapping inclusive
+stacks include resolveSync, path snapshot and inspectHookFile. This is attribution, not a fresh timing comparison.
+The profiler itself accounts for 29.602 ms in the first window and 23.966 ms in the warm window, and those costs
+are excluded from product conclusions. Cold sampling has only 130 samples; idle time includes both IPC and disk
+durability and cannot all be assigned to fsync. The v6 performance hold remains.
+
+### Design: one synchronous provisional directory-read pass
+
+Only the initial source path walks share ordinary-directory metadata, in a local map bounded to 256 entries.
+`verifyHookFiles` creates that map for one synchronous pass through concrete captured file verifiers and drops it
+on return or throw. It reaches neither owner callbacks nor awaits/effects, and a nested call creates its own map.
+`NativePaths.resolveSync` may reuse ordinary-directory stats for that provisional walk; aliases, absent locations,
+regular files and readlink results remain uncached. Every path step still charges its existing evidence budget.
+At capacity, additional directories use ordinary fresh reads, without changing the valid source limit.
+
+Each file's existing snapshot verification, retained identity/alias comparison and exact final leaf-version read
+remain fresh. The full optional proof is still owner → unchanged native proof → source pass → owner, followed by
+the separate output proof. No map survives into another proof, publication checkpoint, worker reply, dispatch or
+phase. Replacing a cached directory must fail the later file's uncached snapshot before that proof succeeds. The
+generic hook publisher, required hook proof, flushes and all cold fences stay unchanged. In particular the first
+beforeRename check is required: renameReplacing only invokes its supplied callback after a Windows retry wait.
+
+Selected checks are the new real-file common-ancestor, same-byte-leaf, inserted-alias, independent nested-pass and
+bounded-map fallback cases; existing staged/directory-fsync, prepare/commit and final argv invalidation cases; the
+native path, hook file/attempt/publication and settings suites; affected runtime per-file coverage and TypeScript.
+Native Windows execution remains deferred; portable simulated Windows rules remain selected. No new cost run is
+authorized until the resulting source and validation evidence are reviewed.
+
+RED: three intended failures and five safety passes, actual 1, 1.128 s, with an empty owned group
+(`/tmp/core-launch-settings-directory-pass-red2.log`). Each ordinary or nested pass reads the selected shared
+ancestor six times rather than four. The first receipt also contains a fixture failure from using internal
+CLAUDE_HOME instead of the public CLAUDE_CONFIG_DIR environment key; the fixture was corrected before runtime
+changes, with the failed receipt retained. All ancestor/alias/same-byte mutation checks already refuse correctly.
+
+The first three-suite GREEN passes 66/66, actual 0 in 3.531 s
+(`/tmp/core-launch-settings-directory-pass-green.log`). Follow-up cases verify existing aliases are always reread,
+portable Windows reparse refusal and fresh snapshot checks, unchanged per-step work accounting, and refusal at
+both an exhausted operation budget and deadline even when provisional directories are available. TypeScript
+passes actual 0 in 36.597 s (`/tmp/core-launch-settings-directory-pass-types.log`).
+
+The initial affected 16-file coverage selection has 353 passes and one failure, actual 1 in 37.764 s
+(`/tmp/core-launch-settings-directory-pass-coverage.log`). Its existing 6,000-line Hermes YAML case returns false;
+that failure is retained. An isolated candidate run without coverage passes in 2.224 s, which is only evidence
+under that condition. A controlled single-case comparison then runs the prior ed36010b9f runtime and the exact
+three-file candidate diff under identical V8 coverage, pinned Node and no concurrent typecheck. Both fail:
+prior actual 1 in 8.191 s, candidate actual 1 in 7.960 s. Test-only diagnostics report the same native-evidence
+deadline refusal followed by preparation expiry. No timeout, input, parser or required-hook behavior is changed.
+`/tmp/core-launch-settings-yaml-diagnostic/manifest.json` pins the source and identical diagnostic-test hashes;
+`/tmp/core-launch-settings-yaml-prior.log` and `...-candidate.log` retain the actual reasons. This demonstrates an
+existing failure under coverage instrumentation, not a fix or a passing replacement for the original gate.
+
+The reduced nine-file path/file/settings coverage selection passes all 210 cases, actual 1 only because whole-file
+coverage thresholds are unmet, in 7.155 s (`/tmp/core-launch-settings-directory-pass-coverage2.log`).
+nativeLaunchSettings.ts is 100% in all four metrics and every added map/helper branch is covered.
+Existing nativeHookFiles.ts is 90.30% statements, 82.25% branches, 100% functions and 96.51% lines;
+nativePaths.ts is 78.82%, 79.31%, 90% and 84.55%. Exact unchanged gaps, including async path/retention callers and
+publication failure branches, are recorded in `/tmp/core-launch-settings-directory-pass-coverage-gaps.txt`, with
+complete JSON maps at `/tmp/core-launch-settings-directory-pass-coverage2/`. These are scoped results, not a claim
+of complete per-file coverage. Every recorded validation and diagnostic process group is empty. No new timing
+comparison has run for the directory-read correction.
+
+The three additional existing callers (nativeConversation, transcriptBindings and publishedGridConfig) pass
+107/107, actual 0 in 6.153 s (`/tmp/core-launch-settings-directory-pass-callers.log`), with an empty owned group.
+Their coverage is merged with the preserved 210-case maps after asserting identical statement/function/branch
+maps; the passing set is not rerun. The combined 317 cases across twelve files cover all changed executable
+statements, functions and branch outcomes. `/tmp/core-launch-settings-directory-pass-merged/changed-coverage.json`
+records each changed line's counts and pins both input maps and all three runtime file hashes.
+
+Historical whole-file gaps remain explicit: nativeHookFiles.ts reaches 90.73% statements, 83.06% branches, 100%
+functions and 96.51% lines; nativePaths.ts reaches 88.23%, 85.51%, 100% and 95.93%. nativeLaunchSettings.ts remains
+100% in all metrics. The merged full maps and summary are in `/tmp/core-launch-settings-directory-pass-merged/`.
+This incremental coverage result neither fixes the reproduced Hermes coverage deadline failure nor claims those
+historical whole files have complete coverage. No unrelated fault cases or timeout changes are added.

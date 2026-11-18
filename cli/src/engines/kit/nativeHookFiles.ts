@@ -168,12 +168,12 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
   }
   const retained = facts.filter(fact => fact.identity !== null)
   const knownAliases = new Set(facts.filter(fact => fact.alias).map(fact => fact.path))
-  const verify = () => {
+  const verify = (directories?: Map<string, BigIntStats>) => {
     // Another destination in the same preparation may have created a shared
     // absent directory. New ordinary directories are fine; a newly inserted
     // alias is not authority to write at a different location.
     const fresh = new NativePaths(new NativeEvidenceBudget())
-    fresh.resolveSync(file, true)
+    fresh.resolveSync(file, true, directories)
     const snapshot = fresh.snapshot()
     verifyRetainedPathSnapshot(retained, snapshot)
     if (snapshot.some(fact => fact.alias && !knownAliases.has(fact.path))) {
@@ -306,6 +306,13 @@ export function inspectHookFile(file: string, defaultMode = 0o666) {
       return { verify: removed.verify }
     },
   }
+}
+
+/** The measured optional-source proof repeatedly walks common ancestors. Share only provisional directory reads
+ * inside this synchronous pass; every observation's snapshot and final leaf proof remain fresh. */
+export function verifyHookFiles(files: readonly { observed: ReturnType<typeof inspectHookFile> }[]): void {
+  const directories = new Map<string, BigIntStats>()
+  for (const file of files) file.observed.verify(directories)
 }
 
 

@@ -5,7 +5,7 @@ import { dirname, join, parse, resolve } from 'node:path'
 import { launchContract } from '../launches.js'
 import type { NativeSetup } from './nativeSetup.js'
 import { nativeHookLocations } from './nativeLocations.js'
-import { HookPreparationHeld, inspectHookFile, type HookPreparationProof } from './nativeHookFiles.js'
+import { HookPreparationHeld, inspectHookFile, verifyHookFiles, type HookPreparationProof } from './nativeHookFiles.js'
 import { publishNativeFiles } from './nativeHookPublication.js'
 import { HOOK_TOTAL_LIMIT } from './nativeHookWire.js'
 import { boundedLaunchSettingsInput, launchSettingsCandidate, LAUNCH_SOURCE_LIMIT, type LaunchSettingsInput } from './launchSettingsWire.js'
@@ -59,7 +59,7 @@ export async function prepareLaunchSettings(engine: string, environment: Readonl
     const verify = () => {
       if (!options.current()) throw new HookPreparationHeld('the optional launch owner changed')
       if (!options.nativeCurrent()) throw new HookPreparationHeld('the native launch proof changed')
-      for (const source of observations) source.observed.verify()
+      verifyHookFiles(observations)
       if (!options.current()) throw new HookPreparationHeld('the optional launch owner changed')
     }
     const current = () => { try { verify(); return true } catch { return false } }

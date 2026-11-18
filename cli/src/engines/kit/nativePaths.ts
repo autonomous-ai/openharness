@@ -66,13 +66,15 @@ export class NativePaths {
   }
 
   /** Eager binding and hook admission share exactly the same bounded ancestry rules. */
-  resolveSync(path: string, missingOkay = false): Location {
+  resolveSync(path: string, missingOkay = false, directories?: Map<string, BigIntStats>): Location {
     const steps = this.walk(path, missingOkay)
     let next = steps.next()
     while (!next.done) {
       let proof: Part
       try {
-        const info = lstatSync(next.value, { bigint: true })
+        // A source pass shares only provisional directory reads; snapshot()/verify() still read every fact afresh.
+        const info = directories?.get(next.value) ?? lstatSync(next.value, { bigint: true })
+        if (directories && directories.size < 256 && info.isDirectory()) directories.set(next.value, info)
         proof = { info, ...(info.isSymbolicLink() ? { target: readlinkSync(next.value) } : {}) }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') proof = { info: null }
