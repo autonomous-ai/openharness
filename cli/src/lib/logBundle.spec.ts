@@ -48,7 +48,7 @@ describe('buildLogBundle', () => {
     writeFileSync(join(logs, 'app-20260908.log'), 'too old\n')
     writeFileSync(join(logs, 'cli-20260915.log'), 'Bearer abcdefghijklmnop\n')
     writeFileSync(join(logs, 'unrelated.txt'), 'no\n')
-    writeFileSync(join(data, 'harness.log'), 'x'.repeat(100) + 'THE END\n')
+    writeFileSync(join(data, 'harness.log'), 'x'.repeat(100) + '\nTHE END\n')
     const { zip, included } = buildLogBundle({
       logsDir: logs, dataDir: data, now, version: '0.2.21', home: '/Users/nobody', redact: redactSecretsInText,
       harnessLogTailBytes: 8, notes: ['app: 1.1.22'],
@@ -100,20 +100,45 @@ describe('buildLogBundle', () => {
     const logs = join(root, 'logs'), big = join(logs, 'usb-AA'), small = join(logs, 'usb-BB')
     mkdirSync(big, { recursive: true }); mkdirSync(small)
     const cap = 20 * 1024 * 1024
-    writeFileSync(join(big, 'dial-20260915.log'), 'x'.repeat(cap) + 'y'.repeat(89) + '\n')
+    writeFileSync(join(big, 'dial-20260915.log'), ('x'.repeat(1023) + '\n').repeat(cap / 1024) + 'y'.repeat(89) + '\n')
     writeFileSync(join(big, 'dial-20260914.log'), 'o'.repeat(1024))
     writeFileSync(join(small, 'dial-20260913.log'), 'the other device\n')
     const { zip, included } = buildLogBundle({ logsDir: logs, dataDir: root, now: new Date(2026, 8, 15, 10, 30), version: '0', home: '/Users/nobody', redact: (t) => t })
     const files = readZip(zip)
     expect([...files.keys()]).toEqual(['README.txt', 'logs/usb-AA/dial-20260915.log', 'logs/usb-BB/dial-20260913.log'])
     const newest = files.get('logs/usb-AA/dial-20260915.log')!
-    expect(newest.length).toBe(cap - 17)
+    // Its last cap - 17 bytes, less the rest of the line the cut lands in.
+    expect(newest.length).toBe(cap - 17 - 917)
     expect(newest.toString().endsWith('y'.repeat(89) + '\n')).toBe(true)
     expect(files.get('logs/usb-BB/dial-20260913.log')?.toString()).toBe('the other device\n')
     expect(included).toEqual(expect.arrayContaining([
-      `usb-AA/dial-20260915.log (last ${Math.round((cap - 17) / 1024)} KB)`,
+      `usb-AA/dial-20260915.log (last ${Math.round((cap - 17 - 917) / 1024)} KB)`,
       'usb-AA/dial-20260914.log (left out to keep the bundle small)',
     ]))
+  })
+
+  it('drops the line a tail\'s cut lands in, so no part of a token or the home is left unblanked', () => {
+    // Cut mid-line, a token or a home loses its start, and with it what the blanking knows it by.
+    const root = mkdtempSync(join(tmpdir(), 'bundle-'))
+    const logs = join(root, 'logs'), data = join(root, 'data')
+    mkdirSync(join(logs, 'usb-AA'), { recursive: true }); mkdirSync(data)
+    writeFileSync(join(data, 'harness.log'), 'Bearer abcdefghijklmnop\nthe daemon\n')
+    writeFileSync(join(logs, 'usb-AA', 'dial-20260915.log'), 'in /Users/somebody/project\nthe dial\n')
+    const { zip } = buildLogBundle({
+      logsDir: logs, dataDir: data, now: new Date(2026, 8, 15, 10, 30), version: '0', home: '/Users/somebody', redact: redactSecretsInText,
+      harnessLogTailBytes: 'the daemon\n'.length + 8, deviceLogCapBytes: 'the dial\n'.length + 'mebody/project\n'.length,
+    })
+    const files = readZip(zip)
+    expect(files.get('harness.log')?.toString()).toBe('the daemon\n')
+    expect(files.get('logs/usb-AA/dial-20260915.log')?.toString()).toBe('the dial\n')
+  })
+
+  it('a tail with no line break in it keeps nothing', () => {
+    const root = mkdtempSync(join(tmpdir(), 'bundle-'))
+    writeFileSync(join(root, 'harness.log'), 'Bearer abcdefghijklmnop')
+    const { zip, included } = buildLogBundle({ logsDir: root, dataDir: root, version: '0', home: '/Users/nobody', redact: redactSecretsInText, harnessLogTailBytes: 8 })
+    expect(readZip(zip).get('harness.log')?.toString()).toBe('')
+    expect(included).toEqual(['harness.log (last 0 KB)'])
   })
 
   it('still produces a bundle with a README when there is nothing to include', () => {
