@@ -700,29 +700,51 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (address !== undefined) targets.push({ adapter: herdrAppNoted, pane: hcPane(address) })
     return targets.find(({ adapter, pane }) => adapter.canScroll?.(pane))
   }
+  /** A stroke that goes to its app's pane, line by line. `page`: its guard said the program there takes its own page
+   *  keys, so its lines carry them too. */
+  type ToPane = ScrollTarget & { lines: ReturnType<typeof createScrollLines>; page: boolean }
   /** The route the stroke on the glass took at its `down`, kept to its `up`: Harness's windows are never left holding a
    *  drag whose `up` went to an app. A `move` or an `up` with no `down` before it chooses then. While its app is asked
-   *  whether the pane is on screen, the stroke is held: only the window knows which terminal it shows, and Herdr's answer
-   *  took 0.04 s. */
+   *  whether the pane is on screen, or whether Claude Code there takes its page keys, the stroke is held: only the
+   *  window knows which terminal it shows, and Herdr's answer took 0.04 s; the page guard answers within 500 ms. */
   let stroke:
-    | (ScrollTarget & { lines: ReturnType<typeof createScrollLines> })
+    | ToPane
     | { deciding: ScrollTarget; held: Held }
     | 'windows'
     | undefined
   const toWindows = (phase: 'down' | 'move' | 'up', dy: number, velocity: number): void =>
     core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity } })
-  /** The app's answer, for the stroke that asked it alone: one left behind by a newer stroke, or one that lands once the
-   *  devices began to stop (the dial still sends while the stop awaits its listener), is dropped, so nothing of that
-   *  stroke is sent anywhere. A stroke already decided keeps its route through the stop: a window that heard its down
-   *  hears its up. */
-  const decided = (asked: { deciding: ScrollTarget; held: Held }, visible: boolean): void => {
+  /** Lines to the stroke's pane. A page stroke reads its agent again first: once it waits on the person a key could
+   *  land in the prompt, so the rest of the stroke is lines alone. */
+  const toPane = (route: ToPane, phase: 'down' | 'move' | 'up', dy: number): void => {
+    if (route.page && observed?.byPane(route.adapter.id, route.pane.id)?.state === 'needs-you') route.page = false
+    route.adapter.scroll!(route.pane, route.lines.take(phase, dy), route.page)
+  }
+  /** What a stroke on that target waits on at its down: Herdr's whether its pane is on screen (its lines, or Harness's
+   *  windows), or whether the shown Claude Code takes its page keys (page, or lines). None when the stroke is lines at
+   *  once: any other engine, or a guard that refused with nothing read. A refused guard is the pane's lines, never the
+   *  windows: the person looks at that terminal, and its line scroll is what moved it before. */
+  const routeOf = ({ adapter, pane }: ScrollTarget): Promise<'page' | 'lines' | 'windows'> | undefined => {
+    if (adapter.onScreen) return adapter.onScreen(pane).then((visible) => (visible ? 'lines' : 'windows'))
+    const agent = observed?.byPane(adapter.id, pane.id)
+    if (agent?.engine !== 'claude') return undefined
+    const keys = adapter.pageKeys?.(pane, {
+      asking: agent.state === 'needs-you', cwd: agent.cwd, transcriptPath: observed?.transcriptOf(agent.id),
+    })
+    return keys ? keys.then((page) => (page ? 'page' : 'lines')) : undefined
+  }
+  /** The app's answer, page, lines or Harness's windows, for the stroke that asked it alone: one left behind by a newer
+   *  stroke, or one that lands once the devices began to stop (the dial still sends while the stop awaits its
+   *  listener), is dropped, so nothing of that stroke is sent anywhere. A stroke already decided keeps its route
+   *  through the stop: a window that heard its down hears its up. */
+  const decided = (asked: { deciding: ScrollTarget; held: Held }, to: 'page' | 'lines' | 'windows'): void => {
     if (stopped || stroke !== asked) return
     const { deciding: { adapter, pane }, held } = asked
-    if (visible) {
+    if (to !== 'windows') {
       // The travel held meanwhile goes as lines at once; what follows goes line by line.
-      const lines = createScrollLines()
-      stroke = held.up === undefined ? { adapter, pane, lines } : undefined
-      adapter.scroll!(pane, lines.take('move', held.dy))
+      const route = { adapter, pane, lines: createScrollLines(), page: to === 'page' }
+      stroke = held.up === undefined ? route : undefined
+      toPane(route, 'move', held.dy)
       return
     }
     // A hand's pace, and no address: once per stroke the windows took because its pane was not on screen.
@@ -739,11 +761,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (phase === 'down' || !route || (route !== 'windows' && 'held' in route && route.held.up !== undefined)) {
       // Once the devices began to stop, no app is asked or run: a stroke then is the windows', as before this route.
       const target = stopped ? undefined : scrollTarget()
-      if (target?.adapter.onScreen) {
-        const asked = { deciding: target, held: { down: false, dy: 0, velocity: 0 } }
+      const to = target && routeOf(target)
+      if (to) {
+        const asked = { deciding: target!, held: { down: false, dy: 0, velocity: 0 } }
         route = stroke = asked
-        answer = target.adapter.onScreen(target.pane).then((visible) => decided(asked, visible))
-      } else route = stroke = target ? { ...target, lines: createScrollLines() } : 'windows'
+        answer = to.then((answered) => decided(asked, answered))
+      } else route = stroke = target ? { ...target, lines: createScrollLines(), page: false } : 'windows'
     }
     if (route !== 'windows' && 'held' in route) {
       route.held.dy += dy
@@ -757,7 +780,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (route === 'windows') toWindows(phase, dy, velocity)
     // Whole lines, and an up's velocity is not played: the scroll stops where the finger stops. An app that went takes
     // nothing more of the stroke, which never turns to Harness's windows midway, and none once the devices began to stop.
-    else if (!stopped) route.adapter.scroll!(route.pane, route.lines.take(phase, dy))
+    else if (!stopped) toPane(route, phase, dy)
   }
 
   const cableHost = new DaemonCableHost({

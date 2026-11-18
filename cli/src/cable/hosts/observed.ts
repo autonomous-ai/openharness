@@ -581,6 +581,12 @@ export class ObservedSource implements HostSource {
     return this.entries.get(agentId)?.asked
   }
 
+  /** The transcript path the agent's latest hook or the scan gave, as given; none when neither gave one. Its user
+   *  settings' home for the page guard (claudeRenderer.ts judges the path). */
+  transcriptOf(agentId: string): string | undefined {
+    return this.entries.get(agentId)?.transcriptPath
+  }
+
   /** Takes the event; for a turn's start of a session it lists, answers what started it. */
   ingest(e: ObservedEvent): PromptSource | undefined {
     if (e.event === 'asked') {
