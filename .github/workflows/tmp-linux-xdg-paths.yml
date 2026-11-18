@@ -1,0 +1,138 @@
+name: tmp linux-xdg-paths
+
+# TEMPORARY: removed before the merge (docs/plans/2026-11-18-linux-xdg-paths-plan.md, Task 48).
+# A Mac cannot run the Linux root rule: the existing CLI, Desktop, hn and Device app tests that read a default path, and
+# hn's native fixtures (PR CI runs its unit tests only), run here on Linux. No secret, no cache write, nothing published
+# or written outside the run.
+on:
+  push:
+    branches: [feat/linux-xdg-paths]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tmp-linux-xdg-paths
+  cancel-in-progress: true
+
+jobs:
+  units:
+    name: units (${{ matrix.leg }})
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { leg: cli-1, shard: 1, timeout: 15 }
+          - { leg: cli-2, shard: 2, timeout: 15 }
+          - { leg: cli-3, shard: 3, timeout: 15 }
+          - { leg: cli-4, shard: 4, timeout: 15 }
+          # The whole Desktop suite in one leg: ci.yml's six shards take about 6 minutes each.
+          - { leg: desktop, timeout: 75 }
+          - { leg: tui, timeout: 20 }
+          # apt-install.sh can take about 19.5 minutes to give up in a mirror outage, and a cold Tauri compile follows.
+          - { leg: device-app, timeout: 40 }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        if: matrix.shard || matrix.leg == 'device-app'
+        with:
+          # The same pin as release-tui.yml and windows.yml.
+          node-version: 24.22.2
+
+      - name: CLI install
+        if: matrix.shard
+        working-directory: cli
+        run: npm ci --no-audit --no-fund
+      - name: CLI shard
+        if: matrix.shard
+        working-directory: cli
+        run: |
+          mkdir -p "$RUNNER_TEMP/report"
+          npx vitest run --config vitest.ci.config.ts --shard=${{ matrix.shard }}/4 --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/report/cli-${{ matrix.shard }}.json"
+
+      - id: flutter
+        if: matrix.leg == 'desktop'
+        run: |
+          version="$(sed -n "s/^  FLUTTER_VERSION: '\([^']*\)'.*/\1/p" .github/workflows/release-desktop.yml)"
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      # Restores the shared caches only: save-cache stays false.
+      - uses: ./.github/actions/desktop-flutter
+        if: matrix.leg == 'desktop'
+        with:
+          version: ${{ steps.flutter.outputs.version }}
+      - name: Desktop tests
+        if: matrix.leg == 'desktop'
+        run: python3 scripts/test-desktop.py --workers 4 --timeout 3600
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: matrix.leg == 'tui' || matrix.leg == 'device-app'
+      - name: hn tests
+        if: matrix.leg == 'tui'
+        working-directory: tui
+        env:
+          TERM: xterm-256color
+          COLORTERM: truecolor
+        run: |
+          set -o pipefail
+          sudo apt-get update && sudo apt-get install -y tmux zsh
+          mkdir -p "$RUNNER_TEMP/report"
+          env -u NO_COLOR cargo test --locked 2>&1 | tee "$RUNNER_TEMP/report/tui.log"
+
+      # Tauri's Linux packages, as ci.yml installs them; the binary embeds ui/dist, so the bundle is built first.
+      - name: Device app tests
+        if: matrix.leg == 'device-app'
+        run: |
+          set -o pipefail
+          sudo bash scripts/apt-install.sh libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+          (cd device-app/ui && npm ci --no-audit --no-fund && npm run build)
+          mkdir -p "$RUNNER_TEMP/report"
+          cargo test --locked --manifest-path device-app/src-tauri/Cargo.toml 2>&1 | tee "$RUNNER_TEMP/report/device-app.log"
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: tmp-linux-xdg-paths-${{ matrix.leg }}
+          path: |
+            ${{ runner.temp }}/report/
+            .harness/validation/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
+
+  tui-native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v7
+        with:
+          # The same pin as release-tui.yml.
+          node-version: 24.22.2
+      - name: Install native test dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y tmux zsh
+          npm ci --prefix cli --no-audit --no-fund
+      - name: Build hn
+        working-directory: tui
+        run: cargo build --locked --release
+      - name: Build native comparison reference
+        id: reference-tmux
+        uses: ./.github/actions/reference-tmux
+      - name: The native fixtures
+        env:
+          REFERENCE_TMUX_BIN: ${{ steps.reference-tmux.outputs.bin }}
+          TERM: xterm-256color
+          COLORTERM: truecolor
+        run: PATH="$REFERENCE_TMUX_BIN:$PATH" python3 scripts/validate-tui-native.py tui/target/release/harness-tui
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tmp-linux-xdg-paths-tui-native
+          path: .harness/validation/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
