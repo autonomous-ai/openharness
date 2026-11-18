@@ -13,7 +13,7 @@ import { ensureUtf8Locale } from './lib/childLocale.js'
 import { harnessdEnv, holdHarnessdEnv } from './lib/harnessdEnv.js'
 import { readOrMintComputerId } from './lib/computerIdentity.js'
 import { unixSocketPath } from './lib/localSocket.js'
-import { ignoreLogWriteErrors, installTimestampedConsole } from './lib/log.js'
+import { errorKind, ignoreLogWriteErrors, installTimestampedConsole } from './lib/log.js'
 import { hostServices, type ServiceHost, type ServiceHostOptions, type ServiceProcess } from './services/process.js'
 
 export interface ServiceProcessOptions {
@@ -75,8 +75,6 @@ export interface ServiceProcessDeps {
   exit?: (code: number) => never
 }
 
-const describe = (error: unknown): string => (error instanceof Error ? error.message : String(error))
-
 /**
  * Run the services [named] (`search`, or `workspaces,usage`) until the master stops them; exits 2 for a
  * name this build does not know. Throws when none of them starts, as a lone service whose start throws
@@ -130,7 +128,7 @@ export async function startServiceProcess(named: string | undefined, deps: Servi
       // requests SERVICE_UNAVAILABLE, as for any service that is down. In-process, the core's host does
       // the same with a start that throws (core/serviceHost.ts).
       failure ??= error
-      console.error(`[service ${name}] did not start · ${describe(error)}`)
+      console.error(`[service ${name}] did not start · ${errorKind(error)}`)
     }
   }
   if (!running.length) throw failure

@@ -19,7 +19,7 @@ import { paneReadIdentity } from './core/transcripts/readIdentity.js'
 import { processIdentityKey } from './lib/terminalRuntime.js'
 import { isRecentlyDeleted } from './lib/deletedSessions.js'
 import { registry, type RegisterInput, type RegisteredSession } from './lib/registry.js'
-import { sid } from './lib/log.js'
+import { errorKind, sid } from './lib/log.js'
 import { VERSION } from './version.js'
 import { env } from './config/env.js'
 import { hookCredentialMatches, loadOrCreateHookCredential, loadOrCreateHookToken } from './lib/hookAuth.js'
@@ -399,7 +399,7 @@ async function hermesCreationPane(sessionId: string, capture?: (verify: () => vo
     return found.length === 1 ? clientEnvPane(found[0].row.client_env) : null
   } catch (error) {
     if (!(error instanceof IdentityReadUnavailable)) throw error
-    console.log(`[hooks] ${sid(sessionId)} hermes session pane unreadable · ${error.message}`)
+    console.log(`[hooks] ${sid(sessionId)} hermes session pane unreadable · ${errorKind(error)}`)
     return null
   }
 }
@@ -505,7 +505,7 @@ export function startHookServer(
       const proxied = async (call: () => Promise<{ status: number; body: unknown }>): Promise<void> => {
         try { const out = await call(); json(out.status, out.body) }
         catch (e) {
-          console.error(`[hook] ${req.method} ${url} failed:`, e instanceof Error ? e.message : e)
+          console.error(`[hook] ${req.method} failed:`, errorKind(e))
           json(502, { success: false, error: { code: 'PROXY_FAILED', message: e instanceof Error ? e.message : 'INTERNAL' } })
         }
       }
@@ -736,7 +736,7 @@ export function startHookServer(
         const publishHold = () => {
           const reason = [...admissionHolds.get(processAgent.agentId)?.values() ?? []].at(-1)
           try { handlers.onAdmissionHeld?.(processAgent.agentId, reason) }
-          catch (error) { console.warn('[hooks] admission status notification failed', error) }
+          catch (error) { console.warn('[hooks] admission status notification failed', errorKind(error)) }
         }
         const held = (reason: string) => {
           clearTimeout(replyTimer)
@@ -883,8 +883,8 @@ export function startHookServer(
           console.log(`[hooks] ${sid(result.entry.sessionId)} ${body.hookEvent ?? 'session-start'} · engine=${result.entry.engine} · isNew=${result.isNew}`
             + (engine === 'hermes' ? ` · after a source check${result.entry.hermesHome ? ` · home=${result.entry.hermesHome}` : ''}` : ''))
           const optional = (call: () => void | Promise<void>) => {
-            try { void Promise.resolve(call()).catch(error => console.warn('[hooks] committed admission notification failed', error)) }
-            catch (error) { console.warn('[hooks] committed admission notification failed', error) }
+            try { void Promise.resolve(call()).catch(error => console.warn('[hooks] committed admission notification failed', errorKind(error))) }
+            catch (error) { console.warn('[hooks] committed admission notification failed', errorKind(error)) }
           }
           // Native prompt credit follows the durable bind, never an attempted one.
           if (body.hookEvent === 'UserPromptSubmit') {
@@ -1140,7 +1140,7 @@ export function startHookServer(
     })().catch((error: unknown) => {
       // Whatever a handler throws, the request is answered: an engine's hook that waits on this server
       // holds up that engine's turn until its own timeout, and the desktop waits out thirty seconds.
-      console.error(`[hooks] ${req.method} ${(req.url ?? '').split('?')[0].slice(0, 80)} failed:`, error instanceof Error ? error.message : error)
+      console.error(`[hooks] ${req.method} failed:`, errorKind(error))
       if (!res.headersSent) {
         res.writeHead(500, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ error: 'INTERNAL' }))
@@ -1164,7 +1164,7 @@ export function startHookServer(
         console.error(`[hooks] 127.0.0.1:${port} is already in use — another adapter is probably running.`)
         console.error('        Use a different PORT; no other user\'s daemon was stopped.')
       } else {
-        console.error('[hooks] listen failed:', err)
+        console.error('[hooks] listen failed:', errorKind(err))
       }
       reject(err)
     }
@@ -1195,7 +1195,7 @@ export function startHookServer(
             reject(error)
             return
           }
-          console.warn(`[hooks] local socket unavailable (${socketPath}): ${error instanceof Error ? error.message : error}`)
+          console.warn(`[hooks] local socket unavailable · ${errorKind(error)}`)
           tcpOnly()
         },
       )

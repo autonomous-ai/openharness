@@ -29,7 +29,7 @@ import { MINIMUM_NODE_MAJOR, managedNodePath, nodeMajorOf } from './lib/nodeRunt
 import { currentCli, harnessLaunchPath } from './lib/windows/installLayout.js'
 import { launchDetached } from './lib/windows/launcher.js'
 import { leanFingerprint, readLeanBundle, releaseLeanClaim, writeLeanBundle, type LeanBundle } from './harnessd/leanBundle.js'
-import { ts } from './lib/log.js'
+import { errorKind, ts } from './lib/log.js'
 import { confirm as confirmUpdate, pendingVersion, putNodeBack, restore as restoreUpdate, unjudgedUpdate } from './lib/selfUpdate.js'
 import { keepStaged, ptyUnjudged, rollBackStaged } from './lib/windows/ptyUpdate.js'
 import { VERSION } from './version.js'
@@ -201,7 +201,7 @@ export function windowsMaster(scriptPath: string, deps: WindowsMasterDeps = proc
       output = deps.openLog()
     } catch (error) {
       // A log it cannot open (a full disk, a file held by a scan) costs the master its lines, never the daemon.
-      console.error(`${ts()} [harnessd] could not open the daemon log (${error instanceof Error ? error.message : String(error)}) — running without it`)
+      console.error(`${ts()} [harnessd] could not open the daemon log (${errorKind(error)}) — running without it`)
     }
     if (output !== undefined) {
       deps.redirect(output)
