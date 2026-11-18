@@ -612,6 +612,15 @@ function sourcedOnce(script: string): string {
 }
 
 /**
+ * A pane's command for each attempt of its create (createAgentPane.ts `argv`): [first], built before the pane, then a
+ * launch built again ([build]) for each retry, with a one-time file of its own: the shell of the pane before it removed
+ * its file as it read it, and a retry handed that argv ran a file already gone (CI, cli/e2e/scale.e2e.ts, 2026-11-19).
+ */
+export function launchAttempts(first: string[], build: () => string[]): (attempt: number) => string[] {
+  return (attempt) => attempt === 1 ? first : build()
+}
+
+/**
  * Full argv for a fresh tmux pane. `exec` replaces the shell with the engine,
  * preserving process discovery while loading the same startup files a user
  * gets in Terminal/iTerm/Ubuntu Terminal. Arguments are positional, not a
