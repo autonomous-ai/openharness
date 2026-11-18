@@ -96,6 +96,13 @@ describe('fenced', () => {
     expect(refuses('C:\\Users\\a\\AppData\\Local\\Temp\\docs\\x.txt')).toBe(false)
   })
 
+  it('allows only Temp with APPDATA and LOCALAPPDATA where Windows puts them', () => {
+    const env = { USERPROFILE: home, APPDATA: 'C:\\Users\\a\\AppData\\Roaming', LOCALAPPDATA: 'C:\\Users\\a\\AppData\\Local' }
+    expect(refuses('C:\\Users\\a\\AppData\\Local\\Temp\\x.txt', env)).toBe(false)
+    expect(refuses('C:\\Users\\a\\AppData\\Local\\Tempx\\x.txt', env)).toBe(true)
+    expect(refuses('C:\\Users\\a\\AppData\\LocalLow\\Temp\\x.txt', env)).toBe(true)
+  })
+
   it('opens no folder TEMP or TMP names, which are the caller\'s to set', () => {
     const env = { USERPROFILE: home, TEMP: 'C:\\Users\\a\\AppData\\Roaming', TMP: 'C:\\Users\\a\\AppData\\Local\\Foo' }
     expect(refuses('C:\\Users\\a\\AppData\\Roaming\\x.txt', env)).toBe(true)
