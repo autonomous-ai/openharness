@@ -226,14 +226,16 @@ export class AskQuestionController {
     const remembered = this.pending.get(requestId)
     const sessionId = payload.sessionId || payload.agentId || remembered || ''
     const answers = payload.answers && typeof payload.answers === 'object' ? structuredClone(payload.answers) : null
-    if (!sessionId || !answers || Object.keys(answers).length === 0) {
+    // A value that is not text has no option to name, and reading one threw in the core's loop with the terminal held.
+    if (!sessionId || !answers || Object.keys(answers).length === 0 ||
+        Object.values(answers).some((value) => typeof value !== 'string')) {
       console.warn(`[question] ignoring answer with no session/answers (req=${requestId})`)
       return failed('The answer named no agent or carried no choice.')
     }
     // A dialog asks at most 4 questions in Claude Code and 3 in Codex; opencode and Kilo set no limit, but the drive keys
     // one question a step, so more than MAX_STEPS answers could never all go in.
     const values = Object.values(answers)
-    const longest = values.reduce((max: number, value) => typeof value === 'string' ? Math.max(max, Buffer.byteLength(value, 'utf8')) : max, 0)
+    const longest = values.reduce((max, value) => Math.max(max, Buffer.byteLength(value, 'utf8')), 0)
     if (values.length > MAX_STEPS || longest > ANSWER_BYTES_MAX) {
       console.warn(`[question] answer refused · ${values.length} answers, longest ${longest} bytes`)
       return failed('The answer is too long. Answer it in the terminal.')
