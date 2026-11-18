@@ -3891,6 +3891,15 @@ describe('ObservedSource and a waiting prompt', () => {
     expect(changes).toHaveBeenCalledTimes(1)
   })
 
+  it('transcriptOf is the path the agent\'s latest hook gave, kept when a later hook gives none, and none for an agent it does not list', () => {
+    const { src, ev } = setup()
+    src.ingest(ev('session-start', { transcriptPath: '/o/home/projects/-work-proj/s0.jsonl' }))
+    src.ingest(ev('turn-start', { transcriptPath: '/o/home/projects/-work-proj/s1.jsonl' }))
+    src.ingest(ev('turn-stop'))
+    expect(src.transcriptOf(src.list()[0].id)).toBe('/o/home/projects/-work-proj/s1.jsonl')
+    expect(src.transcriptOf(observedAgentId('claude', 'unknown'))).toBeUndefined()
+  })
+
   it('asked for a session no hook listed lists nothing: the plugin\'s hook runs in a Harness pane too', () => {
     const { src, changes } = setup()
     src.ingest(asked({ sessionId: 'in-a-pane' }))
