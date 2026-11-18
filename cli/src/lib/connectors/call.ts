@@ -56,10 +56,12 @@ export function expandHome(raw: string, home: string, p: PlatformPath = platform
 /**
  * A Windows path through a share, as given or resolved: the fence compares local folders, and a share may be any of
  * them, as the local disk's admin share (`\\localhost\C$`) is. Two separators of either kind start a share or a device
- * path, and of those only a drive's own (`\\?\C:\`, `\\.\C:\`) is local. On posix, realpath reads `//` as `/`.
+ * path, and Windows passes `\??\` on as the NT path it is. Of those only a drive's `\\?\C:\` is local: Windows takes a
+ * `..` in `\\.\C:\..\UNC\host\share` back to the `\\.\` prefix, but never normalizes `\\?\`. On posix, realpath reads
+ * `//` as `/`.
  */
 export function unc(path: string, p: PlatformPath = platformPath): boolean {
-  return p.sep === '\\' && /^[\\/]{2}/.test(path) && !/^\\\\[?.]\\[a-z]:\\/i.test(path)
+  return p.sep === '\\' && /^[\\/]([\\/]|\?\?[\\/])/.test(path) && !/^\\\\\?\\[a-z]:\\/i.test(path)
 }
 
 /**
