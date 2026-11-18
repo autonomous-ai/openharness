@@ -36,6 +36,19 @@ describe('deleteOpenclawSession', () => {
     expect(run).not.toHaveBeenCalled()
   })
 
+  it('asks once more when the first call fails, as a busy Gateway finishes a delete after the call gave up', async () => {
+    const late = (second: Record<string, unknown>) => {
+      const run = vi.fn<RunCommand>()
+      run.mockResolvedValueOnce({ code: 1, stdout: '', stderr: 'Gateway call failed: timeout\n' })
+      run.mockResolvedValueOnce({ code: 0, stdout: JSON.stringify(second), stderr: '' })
+      return run
+    }
+    const gone = late({ ok: true, deleted: false })
+    expect(await deleteOpenclawSession(KEY, gone)).toEqual({ key: KEY, state: 'deleted', detail: 'OpenClaw\'s Gateway answered late; asked again, it no longer holds the session' })
+    expect(gone).toHaveBeenLastCalledWith('openclaw', ['gateway', 'call', 'sessions.delete', '--params', JSON.stringify({ key: KEY, deleteTranscript: true }), '--json', '--timeout', '30000'])
+    expect(await deleteOpenclawSession(KEY, late({ ok: true, deleted: true }))).toEqual({ key: KEY, state: 'deleted' })
+  })
+
   it('keeps it, saying why, when the Gateway refused or did not answer', async () => {
     const said = async (ran: Awaited<ReturnType<RunCommand>>) => (await deleteOpenclawSession(KEY, async () => ran)).detail
     expect(await said({ code: 1, stdout: '', stderr: '\x1b[31mGateway call failed: Error: gateway closed (1006).\x1b[0m\n' }))

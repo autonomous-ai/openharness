@@ -74,6 +74,11 @@ export function inspectCloseActivity(session: CloseSession, screen: ScreenReadin
   return 'idle'
 }
 
+/** No conversation was ever bound to [s]: no id, no transcript, no binding. */
+function neverBound(s: Pick<RegisteredSession, 'sessionId' | 'transcriptPath' | 'boundAt'>): boolean {
+  return !s.sessionId && !s.transcriptPath && s.boundAt == null
+}
+
 function identity(s: RegisteredSession): string {
   return JSON.stringify([s.agentId, s.sessionId, s.engine, s.registeredAt, s.processIdentity?.pid,
     s.processIdentity?.startMarker, s.processIdentity?.executable, s.runtimes.map(terminalRouteKey).sort()])
@@ -230,6 +235,14 @@ export class CloseAgentService {
       && unusedChat(asked) && await this.deps.atStartupQuestion?.(asked) === true) {
       const latest = this.deps.registry.byAgent(request.agentId)
       if (latest && identity(latest) === target && unusedChat(latest)) return this.attempt(request, target, revision, true)
+    }
+    // A program's forget of a harness that never bound a conversation (a Hermes never given words, #4393): it has none
+    // to lose, so it is stopped without one rather than refused for good. A forget's close once idle is checked idle as
+    // any other. Read again before the stop: one that bound meanwhile keeps the guard.
+    if (!result.closed && request.ifNoHistory && (request.mode === 'now' || request.mode === 'idle')
+      && result.error === 'IDENTITY_UNAVAILABLE' && asked && identity(asked) === target && neverBound(asked)) {
+      const latest = this.deps.registry.byAgent(request.agentId)
+      if (latest && identity(latest) === target && neverBound(latest)) return this.attempt(request, target, revision, true)
     }
     if (result.closed || (request.mode !== 'now' && request.mode !== 'idle') || !starting) return result
     return this.whileStarting(request, starting, target, revision, askedAt + CLOSE_BIND_WAIT_MS, result)

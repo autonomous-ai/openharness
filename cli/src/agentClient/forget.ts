@@ -25,6 +25,7 @@ export type RunCommand = (command: string, args: string[]) => Promise<{ code: nu
 
 /** How long the Gateway is given to answer, and a process to end. */
 const GATEWAY_MS = 10_000
+const RETRY_MS = 30_000
 const PROCESS_MS = 20_000
 
 /** [command] from the caller's PATH, as the person runs it; never a shell. [timeoutMs] is for tests. */
@@ -67,13 +68,26 @@ export async function deleteOpenclawSession(key: string, run: RunCommand = runCo
   if (!/^agent:[^:\s]+:\S+$/.test(key) || /^agent:[^:]+:main$/.test(key)) {
     return { key, state: 'kept', detail: `${key} is not a session Harness started, so it was not deleted` }
   }
-  const ran = await run('openclaw', ['gateway', 'call', 'sessions.delete', '--params', JSON.stringify({ key, deleteTranscript: true }), '--json', '--timeout', String(GATEWAY_MS)])
-  const answer = ran.code === 0 ? answerOf(ran.stdout) : null
+  const call = (ms: number) => run('openclaw', ['gateway', 'call', 'sessions.delete', '--params', JSON.stringify({ key, deleteTranscript: true }), '--json', '--timeout', String(ms)])
+  const ran = await call(GATEWAY_MS)
+  let answer = ran.code === 0 ? answerOf(ran.stdout) : null
+  // A busy Gateway can finish the delete after the call gave up (18.5 s on a loaded Mac, #4393): asked once more, with
+  // longer to answer, before saying it was kept. Holding no such session then, the first call deleted it.
+  let late = false
   if (!answer || answer.ok !== true) {
-    const why = said(ran.stderr) || said(ran.stdout) || (ran.code === null ? 'openclaw could not be run' : `openclaw exited with status ${ran.code}`)
-    return { key, state: 'kept', detail: `OpenClaw's Gateway did not delete it (${why})` }
+    const again = await call(RETRY_MS)
+    const second = again.code === 0 ? answerOf(again.stdout) : null
+    if (!second || second.ok !== true) {
+      const why = said(ran.stderr) || said(ran.stdout) || (ran.code === null ? 'openclaw could not be run' : `openclaw exited with status ${ran.code}`)
+      return { key, state: 'kept', detail: `OpenClaw's Gateway did not delete it (${why})` }
+    }
+    answer = second
+    late = true
   }
-  if (answer.deleted !== true) return { key, state: 'none', detail: 'OpenClaw\'s Gateway had no such session' }
+  if (answer.deleted !== true) {
+    return late ? { key, state: 'deleted', detail: 'OpenClaw\'s Gateway answered late; asked again, it no longer holds the session' }
+      : { key, state: 'none', detail: 'OpenClaw\'s Gateway had no such session' }
+  }
   const archived = Array.isArray(answer.archived) ? answer.archived.length : 0
   return { key, state: 'deleted', ...(archived ? { detail: 'OpenClaw keeps its transcript in its own archive of deleted sessions' } : {}) }
 }
