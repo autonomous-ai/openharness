@@ -14,6 +14,7 @@ import { randomUUID } from 'node:crypto'
 import { harnessRoots } from '../../config/harnessHome.js'
 import { bearer, connectorsDir, ConnectorError, type Store, type Token } from './store.js'
 import { ready } from './renew.js'
+import { appDataFolders } from '../windows/knownFolders.js'
 
 const TIMEOUT_MS = 60_000
 export const MAX_RESPONSE_BYTES = 8 * 1024 * 1024
@@ -71,11 +72,13 @@ export function forbiddenDirs(env: NodeJS.ProcessEnv, homes: (string | undefined
 }
 
 /**
- * The account's own temporary folder on Windows, inside AppData\Local, where downloads and agents' files land. Never
- * TEMP or TMP, nor one under HOME or USERPROFILE: the caller sets those, and so could make the folder a link into AppData.
+ * The temporary folders left open inside the fenced AppData, where downloads and agents' files land: the account's own on
+ * Windows, and `Temp` under each Local AppData the registry names, as AppData moved elsewhere keeps its own. Never TEMP or
+ * TMP, nor one under HOME or USERPROFILE: the caller sets those, and so could make the folder a link into AppData. The
+ * registry is not the caller's to shape.
  */
-export function tempDir(home: string | undefined, p: PlatformPath = platformPath): string | undefined {
-  return home && p.sep === '\\' ? p.join(home, 'AppData', 'Local', 'Temp') : undefined
+export function tempDirs(home: string | undefined, local: string[], p: PlatformPath = platformPath): string[] {
+  return [...(home && p.sep === '\\' ? [p.join(home, 'AppData', 'Local', 'Temp')] : []), ...local.map(dir => p.join(dir, 'Temp'))]
 }
 
 export interface Identity { dev: bigint, ino: bigint }
@@ -135,7 +138,7 @@ function accountHome(): string | undefined {
  * that file. A writer that renames the forbidden folders themselves while this runs is not kept out: it could copy the
  * file out of them anyway.
  */
-export function uploadFile(raw: string, env: NodeJS.ProcessEnv = process.env): { name: string, content: Buffer } {
+export function uploadFile(raw: string, env: NodeJS.ProcessEnv = process.env, warn: (line: string) => void = () => undefined): { name: string, content: Buffer } {
   const refused = (): CallFailure => new CallFailure(2, `refusing to upload ${raw}: not a media file the helper may send`)
   const media = (path: string): void => {
     if (!UPLOAD_SUFFIXES.includes(platformPath.extname(path).toLowerCase())) throw new CallFailure(2, `refusing to upload ${raw}: only ${UPLOAD_SUFFIXES.join(', ')} files`)
@@ -165,7 +168,11 @@ export function uploadFile(raw: string, env: NodeJS.ProcessEnv = process.env): {
     const named = identity(real)
     if (!named || named.dev !== open.dev || named.ino !== open.ino) throw refused()
     const account = accountHome()
-    const verdict = walk(real, identity, identities(forbiddenDirs(env, [homedir(), account])), identities([tempDir(account)]))
+    // Asked only now, so a path refused by its own checks starts no process. A failed read refuses nothing: the AppData
+    // under each home stays fenced, and the line says a moved one may not be.
+    const known = appDataFolders(account, failure => warn(`upload check: ${failure}; a moved AppData folder may not be fenced`))
+    const forbidden = identities([...forbiddenDirs(env, [homedir(), account]), ...known.roaming, ...known.local])
+    const verdict = walk(real, identity, forbidden, identities(tempDirs(account, known.local)))
     if (verdict === 'unknown') throw new CallFailure(2, `cannot check upload ${raw}`)
     if (verdict === 'fenced') throw refused()
     return { name: platformPath.basename(real), content: read(() => readFileSync(fd)) }
@@ -197,14 +204,14 @@ export function parseCallArgs(args: string[], stdin: () => string): Options {
   return options
 }
 
-function multipart(fields: [string, string][], env: NodeJS.ProcessEnv): { body: Buffer, type: string } {
+function multipart(fields: [string, string][], env: NodeJS.ProcessEnv, warn: (line: string) => void): { body: Buffer, type: string } {
   const boundary = randomUUID().replace(/-/g, '')
   const chunks: Buffer[] = []
   for (const [key, value] of fields) {
     let head = `--${boundary}\r\nContent-Disposition: form-data; name="${key}"`
     let content: Buffer
     if (value.startsWith('@')) {
-      const file = uploadFile(value.slice(1), env)
+      const file = uploadFile(value.slice(1), env, warn)
       content = file.content
       head += `; filename="${file.name}"\r\nContent-Type: application/octet-stream`
     } else content = Buffer.from(value)
@@ -244,7 +251,7 @@ export async function call(vault: Store, code: string, method: string, url: stri
   let body: Buffer | string | undefined
   if (options.json !== null) { body = options.json; headers['Content-Type'] ??= 'application/json' }
   else if (options.data.length) { body = new URLSearchParams(options.data).toString(); headers['Content-Type'] ??= 'application/x-www-form-urlencoded' }
-  else if (options.form.length) { const form = multipart(options.form, env); body = form.body; headers['Content-Type'] = form.type }
+  else if (options.form.length) { const form = multipart(options.form, env, io.err); body = form.body; headers['Content-Type'] = form.type }
   let response: Response
   try {
     response = await fetch(parsed, { method: method.toUpperCase(), headers, body, redirect: 'manual', signal: AbortSignal.timeout(TIMEOUT_MS) })
