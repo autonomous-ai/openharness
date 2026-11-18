@@ -1599,6 +1599,8 @@ it.skipIf(process.platform === 'win32')('keeps the actual pending Resume pane an
   expect(deps.announceSession).not.toHaveBeenCalled()
   expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).not.toBeNull()
   await vi.advanceTimersByTimeAsync(5_000)
+  await result
+  expect(kill).not.toHaveBeenCalled()
   expect((await result).constructor.name).toBe('AtomicWriteUnconfirmed')
   expect(await result).toMatchObject({ retryable: false })
   held.resolve(); vi.useRealTimers()
@@ -1608,4 +1610,32 @@ it.skipIf(process.platform === 'win32')('keeps the actual pending Resume pane an
   expect(releaseHold).not.toHaveBeenCalled()
   expect(deps.announceSession).not.toHaveBeenCalled()
   expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).not.toBeNull()
+})
+
+it('keeps an admitted Resume pane and reservation when source cleanup fails before launch completion', async () => {
+  const { sessionStorage } = await import('./sessionStorage.js')
+  const retain = sessionStorage.retain.bind(sessionStorage)
+  let failed = false
+  const intercept = vi.spyOn(sessionStorage, 'retain').mockImplementation(async document => {
+    const source = await retain(document)
+    return { ...source, release: async () => {
+      await source.release()
+      if (!failed && document.kind === 'registry' && registry.byAgent(saved.agentId)?.launch?.state === 'starting') {
+        failed = true
+        throw Error('fixture admitted source cleanup failed')
+      }
+    } }
+  })
+  try {
+    const error = await start().catch(error => error)
+    expect(failed).toBe(true)
+    expect(kill).not.toHaveBeenCalled()
+    expect(error.constructor.name).toBe('RegistryCleanupUnavailable')
+    expect(error).not.toBeInstanceOf(AtomicWriteUnconfirmed)
+    expect(registry.byAgent(saved.agentId)?.runtimes).toEqual([{ backend: 'tmux', paneId: pane }])
+    expect(deps.stoppedAgents.resumeReservedAt(saved.agentId)).not.toBeNull()
+    expect(releaseHold).not.toHaveBeenCalled()
+    expect(deps.announceSession).not.toHaveBeenCalled()
+    expect(create).toHaveBeenCalledOnce()
+  } finally { intercept.mockRestore() }
 })

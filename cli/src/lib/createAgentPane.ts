@@ -10,7 +10,8 @@
  * always lands on an unclaimed route without needing to wait for anything. A tmux spawn failure
  * (`SPAWN_FAILED`/`TMUX_UNAVAILABLE`) is a different, not-obviously-transient problem and is
  * returned immediately — only the registration race is retried. A storage refusal is neither a taken route nor tmux's:
- * its one pane is closed and it is answered at once as `PERSISTENCE_UNCONFIRMED`.
+ * its one pane is closed and it is answered at once as `PERSISTENCE_UNCONFIRMED`. An already-renamed,
+ * unconfirmed row keeps its pane and propagates uncertainty to the launch receipt instead.
  */
 import { homedir } from 'node:os'
 import type { AgentEngine } from '../engines/types.js'
@@ -20,7 +21,7 @@ import type { ForkOrigin, RegisteredSession } from './registry.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import type { TerminalCreateResult, TerminalRuntimeRef, TerminalDispatchControl, TerminalCommand } from './terminalTypes.js'
 import { terminalRouteKey } from './terminalRuntime.js'
-import { AtomicWriteUnconfirmed, RegistryPersistenceUnavailable } from './registryPersistence.js'
+import { AtomicWriteUnconfirmed, RegistryCleanupUnavailable, RegistryPersistenceUnavailable } from './registryPersistence.js'
 import type { ExternalResumeIntent } from './externalResume.js'
 import type { WindowsPaneLaunch } from './windows/engineStart.js'
 import type { StartedBy } from './agentAttribution.js'
@@ -185,8 +186,11 @@ export async function createAndRegisterPane<Ref extends TerminalRuntimeRef = Ter
         ...(deps.openclawLocal ? { openclawLocal: deps.openclawLocal } : {}),
       })
     } catch (error) {
+      // A visible pending row may still own this pane. Killing it does not durably undo that
+      // publication, and returning a refusal would mark Create's receipt failed instead of unconfirmed.
+      if (error instanceof AtomicWriteUnconfirmed || error instanceof RegistryCleanupUnavailable) throw error
       const closed = await deps.tmuxBackend.kill(spawned.runtime)
-      if (!(error instanceof RegistryPersistenceUnavailable || error instanceof AtomicWriteUnconfirmed)) throw error
+      if (!(error instanceof RegistryPersistenceUnavailable)) throw error
       console.warn(`[agent] create ${deps.engine} not saved · pane ${spawned.runtime.paneId} `
         + (closed?.state === 'succeeded' ? 'closed' : `close ${closed?.state ?? 'unknown'}`))
       return { ok: false, error: 'PERSISTENCE_UNCONFIRMED', detail: error.message }

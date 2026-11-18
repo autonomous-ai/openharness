@@ -59,7 +59,7 @@ import { copilotTranscriptPath } from '../engines/copilot/contract.js'
 import { OPENCLAW_KEY } from '../engines/openclaw/contract.js'
 import { bootChanged, currentBootId } from './bootId.js'
 import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
-import { AtomicWriteUnconfirmed, RegistryPersistenceUnavailable, RegistryWriteQueue, privateRegistryDirectory, registryFileLock, type RegistryWriteDeadline } from './registryPersistence.js'
+import { AtomicWriteUnconfirmed, RegistryCleanupUnavailable, RegistryPersistenceUnavailable, RegistryWriteQueue, privateRegistryDirectory, registryFileLock, type RegistryWriteDeadline } from './registryPersistence.js'
 import { mergeTerminalRuntimes, primaryRuntime, processIdentityKey, sameProcessIdentity, terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
 import type { HookTerminalHint, ProcessIdentity, TerminalRuntimeRef } from './terminalTypes.js'
 import { externalReservations, externalResumePending, externalResumeIds, parseExternalResume, type ExternalResumeIntent } from './externalResume.js'
@@ -2104,7 +2104,7 @@ class Registry {
       return structuredClone(committed)
     }).catch(error => {
       console.error('[registry] resume admission failed')
-      if (error instanceof AtomicWriteUnconfirmed) throw error
+      if (error instanceof AtomicWriteUnconfirmed || error instanceof RegistryCleanupUnavailable) throw error
       return null
     })
   }
@@ -3452,6 +3452,7 @@ class Registry {
     bindingCommit?: { agentId: string; candidate: RegisteredSession | null; verify: () => void; refresh?: () => Promise<void>; replaceLive?: boolean;
       displaced?: Array<{ agentId: string; candidate: RegisteredSession | null }>; allowTransaction?: boolean; resumed?: boolean; metadata?: 'closePlan' },
     mutationAgentId = externalAgentId ?? bindingCommit?.agentId): Promise<string | undefined> {
+    deadline.beginPublication()
     // Discovery batches observations, but a recovered binding must be durable before interpretation
     // resumes. Commit a complete batch now; an incomplete batch remains held and retries next pass.
     if (this.transactionDepth > 0 && !exiting && !bindingCommit?.allowTransaction) {
@@ -3516,7 +3517,7 @@ class Registry {
       // made to look valid by evicting its other owner. Its last durable snapshot remains untouched.
       if (exiting && !validatedRows([...currentRows.values()])) throw new Error('Cannot flush an incomplete registry transaction at exit')
       if (bindingCommit && !validatedRows([...currentRows.values()])) throw new IdentityReadUnavailable('the registry observation batch is incomplete')
-      if (this.namesUnsaved) await this.persistNames(deadline)
+      if (this.namesUnsaved) { await this.persistNames(deadline); deadline.beginPublication() }
       await privateRegistryDirectory(env.ADAPTER_DATA_DIR)
       deadline.check()
       // Discovery still calls save on an unchanged observation so a daemon-down hook's commit is
@@ -3871,6 +3872,7 @@ class Registry {
 
   private async persistNames(deadline: RegistryWriteDeadline, intent?: { key: string; value: string; verify: () => void }): Promise<void> {
     try {
+      deadline.beginPublication()
       await sessionStorage.withWrite(deadline.expires, async () => {
       const revision = this.namesRevision
       const names = Object.fromEntries(NAME_OVERRIDES)

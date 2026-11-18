@@ -27,7 +27,7 @@ beforeEach(() => {
   })
   discard = vi.fn(async () => { rmSync(temporary, { force: true }) })
   storage = { root, path: () => target, prepare, discard } as unknown as SessionStorage
-  deadline = { expires: Infinity, check: vi.fn(), markPublished: vi.fn(), markAdmitted: vi.fn(), failedClose: false,
+  deadline = { expires: Infinity, check: vi.fn(), beginPublication: vi.fn(), markPublished: vi.fn(), markAdmitted: vi.fn(), failedClose: false,
     failClosed: vi.fn(() => { throw new Error('fixture close unconfirmed') }) }
 })
 afterEach(() => { vi.restoreAllMocks(); rmSync(root, { recursive: true, force: true }) })

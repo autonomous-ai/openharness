@@ -4,20 +4,24 @@ import { homedir, tmpdir } from 'os'
 import { join } from 'path'
 import type { TerminalActionResult, TerminalCreateResult, TmuxRuntimeRef } from './terminalTypes.js'
 import { createAndRegisterPane } from './createAgentPane.js'
+import { closeSessionStorageFixture } from '../testing/sessionStorageFixture.js'
 
 // A full disk, for the registry's own files only: the save's temporary file cannot be created.
 const refuse = vi.hoisted(() => ({ code: undefined as string | undefined }))
-vi.mock('node:fs/promises', async original => {
-  const actual = await original<typeof import('node:fs/promises')>()
-  return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual, open: (...args: Parameters<typeof actual.open>) => {
     if (refuse.code && /\/registry\.json\..*\.tmp$/.test(String(args[0]))) {
-      throw Object.assign(new Error(`${refuse.code}: fixture, open '${String(args[0])}'`), { code: refuse.code })
+      const error = Object.assign(new Error('fixture temporary reservation failed'), { code: refuse.code })
+      queueMicrotask(() => args[args.length - 1] instanceof Function && (args[args.length - 1] as (error: Error) => void)(error))
+      return
     }
     return actual.open(...args)
   } }
 })
 
 let dataDir = ''
+const modules: Array<{ registry: typeof import('./registry.js')['registry']; storage: import('./sessionStorage.js').SessionStorage }> = []
 
 // Mirrors lib/registry.spec.ts's loadRegistryModule(): a fresh registry module per test, backed by
 // its own temp state dir, so pre-seeded runtimeIndex collisions never leak between tests.
@@ -27,7 +31,9 @@ async function loadRegistryModule() {
   process.env.CLAUDE_PROJECTS_DIR = dataDir
   process.env.CODEX_HOME = dataDir
   process.env.CURSOR_HOME = dataDir
-  return import('./registry.js')
+  const loaded = await import('./registry.js')
+  modules.push({ registry: loaded.registry, storage: (await import('./sessionStorage.js')).sessionStorage })
+  return loaded
 }
 
 const succeeded = (paneId: string): TerminalCreateResult<TmuxRuntimeRef> =>
@@ -47,13 +53,18 @@ describe('createAndRegisterPane', () => {
     dataDir = mkdtempSync(join(tmpdir(), 'adapter-registry-'))
   })
 
-  afterEach(() => {
+  afterEach(async () => {
     refuse.code = undefined
-    rmSync(dataDir, { recursive: true, force: true })
+    const owned = modules.splice(0)
+    const flushed = await Promise.allSettled(owned.map(({ registry }) => registry.flush({ exiting: true })))
+    const closed = await Promise.allSettled(owned.map(({ storage }) => closeSessionStorageFixture(storage)))
     delete process.env.ADAPTER_DATA_DIR
     delete process.env.CLAUDE_PROJECTS_DIR
     delete process.env.CODEX_HOME
     delete process.env.CURSOR_HOME
+    const errors = [...flushed, ...closed].filter(value => value.status === 'rejected').map(value => value.reason)
+    if (errors.length) throw new AggregateError(errors, 'create fixture cleanup failed')
+    rmSync(dataDir, { recursive: true, force: true })
   })
 
   it('registers on the first attempt when the pane is unclaimed', async () => {
@@ -143,7 +154,7 @@ describe('createAndRegisterPane', () => {
     const { registry } = await loadRegistryModule()
     // Loaded after the reset, so it tells a storage refusal by the registry's own copy of the error classes.
     const { createAndRegisterPane } = await import('./createAgentPane.js')
-    registry.load()
+    await registry.load()
     refuse.code = 'ENOSPC'
     const tmuxBackend = fakeTmux([succeeded('%1'), succeeded('%2'), succeeded('%3')])
 
@@ -161,7 +172,7 @@ describe('createAndRegisterPane', () => {
   it('a create whose pending row cannot be saved says whether its pane closed', async () => {
     const { registry } = await loadRegistryModule()
     const { createAndRegisterPane } = await import('./createAgentPane.js')
-    registry.load()
+    await registry.load()
     refuse.code = 'ENOSPC'
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const said = () => warn.mock.calls.map(([line]) => String(line)).filter(line => line.startsWith('[agent] create claude not saved'))
@@ -182,7 +193,7 @@ describe('createAndRegisterPane', () => {
 
   it('a pending admission the storage refuses rejects with the storage category, and a taken route still answers null', async () => {
     const { registry } = await loadRegistryModule()
-    registry.load()
+    await registry.load()
     expect(await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%1' }], cwd: '/tmp/other' })).not.toBeNull()
     expect(await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%1' }] })).toBeNull()
     refuse.code = 'ENOSPC'

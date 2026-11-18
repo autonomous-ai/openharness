@@ -983,3 +983,60 @@ Receipts are `/tmp/core-grid-storage-control-transcript-fixture-green{1,2}-20261
 The distinct pending Resume publication failure remains a runtime investigation and is
 not claimed fixed by this fixture checkpoint. The full failed resume receipt remains
 `/tmp/core-grid-storage-final-source-0bcfb5c678/test-resume-cli-correction1.receipt.json`.
+
+## Design: launch outcomes after publication and cleanup
+
+The final resume gate also exposed a runtime collision with upstream `c50947ccd7`.
+That change correctly stopped retrying a full-disk pending Create refusal and closed its
+single allocated pane. Its shared catch also closed a pane when the row had already
+been renamed but had not been admitted. The actual Resume test now observes that kill
+before checking the error. The actual Create request and durable receipt likewise
+reported `failed`, despite a visible pending row. A successful backend kill does not
+prove that row was rolled back.
+
+The existing queue now preserves three internal phases. Before publication, ordinary
+`RegistryPersistenceUnavailable` retains the upstream one-pane cleanup and named refusal.
+A visible unadmitted rename propagates `AtomicWriteUnconfirmed` before any pane kill.
+After durable row installation, failed cleanup propagates the distinct fixed
+`RegistryCleanupUnavailable`; it does not relabel that confirmed Registry publication
+as atomic uncertainty. The overall launch is still incomplete, so its existing creation
+receipt records `unconfirmed` and never replays the effect. Resume retains its exact
+reservation and pane. Both phase errors preserve cleanup custody; neither grants a
+successful launch, releases the terminal hold, or starts a second allocation.
+
+`beginPublication()` is an internal deadline fence before the next phase's metadata or
+file preparation. It clears a completed admission, refuses to clear an unadmitted
+publication, and is repeated after names repair before row work. Thus a completed names
+phase cannot turn a later prepublication row error into a cleanup error, while failed
+names cleanup prevents the row phase from starting. No storage format, public protocol,
+credential retention or rollback policy changes. Error messages contain only fixed
+categories; private causes are retained for internal diagnosis.
+
+Failure-first packets preserve the actual effects: pending Resume killed `%99`;
+pending Create returned `failed` instead of `unconfirmed`; and admitted Create installed
+its exact row in memory and on disk but still returned `failed` after source release
+failed. Separate admitted Resume evidence also observed a kill. They are
+`/tmp/core-grid-storage-resume-pane-custody-red1-20261118.*`,
+`/tmp/core-grid-storage-create-receipt-custody-red1-20261118.*`,
+`/tmp/core-grid-storage-create-admitted-cleanup-red1-20261118.*`, and
+`/tmp/core-grid-storage-resume-admitted-cleanup-red1-20261118.*`.
+
+The original full-disk assertions remain literal. Their fixture now awaits Registry
+initialization, injects the finite errno at the actual parent O_EXCL reservation and
+closes each module generation's real child before deleting its data. The first attempt
+failed during unawaited initialization and needed owned-group cleanup; the second
+isolated the obsolete write hook (three failures). The corrected complete Create file
+passes 14 tests with actual exit 0 and no cleanup kill. These fixture failures remain
+alongside the runtime REDs, not counted as passing evidence.
+
+On the final phase bytes, the complete queue, directory-publication, Create-pane and
+session-publication files pass 89 tests (29.83 seconds); types pass (40.70 seconds).
+The full resume selection passes all 598 tests in ten files, but **exits 1 for coverage**:
+`resumeStoppedAgent` is 98.59% statements/98.64% branches, and `stoppedAgents` is 92.57%
+statements/89.55% branches/97.61% functions/96.57% lines. The remaining four covered files
+are 100% in every metric. The actual run took 162.91 seconds; its owned PID/group was
+absent with no timeout or cleanup kill. This is not a passing resume gate; meaningful
+coverage for the missing branches remains acceptance work. Exact receipts:
+`/tmp/core-grid-storage-create-admitted-phase-final1-20261118.*`,
+`/tmp/core-grid-storage-resume-followup-types2-20261118.*`, and
+`/tmp/core-grid-storage-resume-followup-full-gate1-20261118.*`.

@@ -257,6 +257,11 @@ it.each(['prepare', 'published', 'admitted'] as const)('classifies an escaping c
   if (phase === 'published') {
     expect(error).toBeInstanceOf(AtomicWriteUnconfirmed)
     expect(error).toMatchObject({ cause: failure, retryable: false })
+  } else if (phase === 'admitted') {
+    expect(error.constructor.name).toBe('RegistryCleanupUnavailable')
+    expect(error.cause).toBe(failure)
+    expect(error).not.toBeInstanceOf(AtomicWriteUnconfirmed)
+    expect(error.message).toBe('Registry persistence unavailable: admitted write cleanup failed; restart required')
   } else expect(error).toBe(failure)
   expect(await following).toBe('next')
 })
@@ -265,4 +270,52 @@ it('preserves an existing uncertain publication and its finite disk cause', asyn
   const queue = new RegistryWriteQueue()
   const error = new AtomicWriteUnconfirmed(Object.assign(new Error('fixture full disk'), { code: 'ENOSPC' }), true)
   await expect(queue.run(async deadline => { deadline.markPublished(); throw error })).rejects.toBe(error)
+})
+
+it('begins a new publication only after the prior phase was admitted', async () => {
+  const queue = new RegistryWriteQueue(), failure = new Error('fixture next preparation failed')
+  await expect(queue.run(async deadline => {
+    deadline.beginPublication(); deadline.beginPublication()
+    deadline.markAdmitted() // No publication yet: a duplicate completion cannot invent admission.
+    deadline.markPublished(); deadline.markPublished()
+    expect(() => deadline.beginPublication()).toThrow(AtomicWriteUnconfirmed)
+    deadline.markAdmitted(); deadline.markAdmitted()
+    deadline.beginPublication(); deadline.beginPublication()
+    throw failure
+  })).rejects.toBe(failure)
+})
+
+it('does not invent admitted state from completion before any publication', async () => {
+  const queue = new RegistryWriteQueue(), failure = new Error('fixture preparation failed')
+  await expect(queue.run(async deadline => {
+    deadline.beginPublication(); deadline.markAdmitted(); deadline.markAdmitted()
+    throw failure
+  })).rejects.toBe(failure)
+})
+
+it('keeps a new unadmitted publication uncertain after an earlier admitted phase', async () => {
+  const queue = new RegistryWriteQueue(), failure = new Error('fixture second publication failed')
+  const error = await queue.run(async deadline => {
+    deadline.markPublished(); deadline.markAdmitted()
+    deadline.markPublished()
+    throw failure
+  }).catch(error => error)
+  expect(error).toBeInstanceOf(AtomicWriteUnconfirmed)
+  expect(error).toMatchObject({ cause: failure, retryable: false })
+})
+
+it('names an admitted cleanup deadline without changing the admitted row into publication uncertainty', async () => {
+  const queue = new RegistryWriteQueue(), entered = deferred(), cleanup = deferred()
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  const result = queue.run(async deadline => {
+    deadline.markPublished(); deadline.markAdmitted()
+    entered.resolve(); await cleanup.promise
+    deadline.check()
+  }).catch(error => error)
+  try {
+    await entered.promise
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect((await result).constructor.name).toBe('RegistryCleanupUnavailable')
+    expect(await result).not.toBeInstanceOf(AtomicWriteUnconfirmed)
+  } finally { cleanup.resolve(); vi.useRealTimers(); await queue.finish(async () => {}) }
 })

@@ -185,7 +185,7 @@ it.skipIf(process.platform === 'win32')('rebases newer observations, nested edit
   expect(written()).not.toHaveProperty('bypassPermission')
 })
 
-it.skipIf(process.platform === 'win32')('closes one uncertain pending Create pane and reports the refusal without a retry', async () => {
+it.skipIf(process.platform === 'win32')('retains an uncertain pending Create pane without retrying its allocation', async () => {
   const { createAndRegisterPane } = await import('./createAgentPane.js')
   const held = hold(), create = vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const,
     runtime: { backend: 'tmux' as const, paneId: '%7' } })), kill = vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const }))
@@ -194,12 +194,88 @@ it.skipIf(process.platform === 'win32')('closes one uncertain pending Create pan
     agentId: 'new-pending', cwd: root, sessionLabel: 'fixture', argv: ['fixture-engine'] })).catch(error => error)
   await held.entered(first)
   await vi.advanceTimersByTimeAsync(5_000)
-  expect(await first).toMatchObject({ ok: false, error: 'PERSISTENCE_UNCONFIRMED' })
-  expect(create).toHaveBeenCalledOnce(); expect(kill).toHaveBeenCalledExactlyOnceWith({ backend: 'tmux', paneId: '%7' })
+  expect((await first).constructor.name).toBe('AtomicWriteUnconfirmed')
+  expect(await first).toMatchObject({ retryable: false })
+  expect(create).toHaveBeenCalledOnce(); expect(kill).not.toHaveBeenCalled()
   held.release(); vi.useRealTimers()
   await registry.flush()
   expect(registry.byAgent('new-pending')).toBeUndefined()
-  expect(create).toHaveBeenCalledOnce(); expect(kill).toHaveBeenCalledOnce()
+  expect(create).toHaveBeenCalledOnce(); expect(kill).not.toHaveBeenCalled()
+})
+
+async function receiptCreate() {
+  const { createAndRegisterPane } = await import('./createAgentPane.js')
+  const { createLaunchRequests } = await import('../core/agents/launches.js')
+  const { AgentCreationReceipts } = await import('./agentCreationReceipt.js')
+  const { localPendingCreationDiscovery } = await import('../testing/pendingCreation.js')
+  const directory = join(root, 'receipts'), discovery = localPendingCreationDiscovery(directory)
+  const receipts = new AgentCreationReceipts(directory, discovery.ensure)
+  const create = vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const,
+    runtime: { backend: 'tmux' as const, paneId: '%7' } }))
+  const kill = vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const }))
+  const requests = createLaunchRequests({ receipts, discovery,
+    createAgent: () => async () => {
+      const result = await createAndRegisterPane({ registry, tmuxBackend: { create, kill }, engine: 'claude',
+        agentId: 'receipt-pending', cwd: root, sessionLabel: 'fixture', argv: ['fixture-engine'] })
+      return result.ok ? { ok: true, session: result.pending } : result
+    },
+    forkAgent: () => null, resumeAgent: () => null, restartAgent: () => null,
+    byAgent: id => registry.byAgent(id), stoppedAgent: async () => undefined,
+    toProject: async () => { throw Error('an unconfirmed creation has no admitted frame') },
+    modelTarget: async () => null, workspaces: () => null,
+  })
+  const payload = { creationId: 'creation-uncertain-fixture', engine: 'claude', cwd: root }
+  const ask = () => new Promise<Record<string, unknown>>((resolve, reject) => {
+    void requests.create(payload, { local: true }, resolve).catch(reject)
+  })
+  return { receipts, create, kill, requests, payload, ask }
+}
+
+it.skipIf(process.platform === 'win32')('keeps the actual Create receipt unconfirmed after pending publication expires', async () => {
+  const { receipts, create, kill, requests, payload, ask } = await receiptCreate()
+  const held = hold()
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  try {
+    const first = track(ask())
+    await held.entered(first)
+    expect(written('receipt-pending')?.runtimes).toEqual([{ backend: 'tmux', paneId: '%7' }])
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(await first).toEqual({ creationId: payload.creationId, state: 'unconfirmed' })
+    expect(receipts.status(payload.creationId)).toEqual({ state: 'unconfirmed' })
+    expect(await ask()).toEqual({ creationId: payload.creationId, state: 'unconfirmed' })
+    expect(create).toHaveBeenCalledOnce(); expect(kill).not.toHaveBeenCalled()
+    held.release(); vi.useRealTimers(); await registry.flush()
+    expect(receipts.status(payload.creationId)).toEqual({ state: 'unconfirmed' })
+    expect(await ask()).toEqual({ creationId: payload.creationId, state: 'unconfirmed' })
+    expect(create).toHaveBeenCalledOnce(); expect(kill).not.toHaveBeenCalled()
+  } finally { held.release(); vi.useRealTimers(); requests.stop() }
+})
+
+it('does not claim a proven Create refusal after admitted publication cleanup fails', async () => {
+  const { receipts, create, kill, requests, payload, ask } = await receiptCreate()
+  const retain = storage.retain.bind(storage)
+  let failed = false
+  vi.spyOn(storage, 'retain').mockImplementation(async document => {
+    const source = await retain(document)
+    return { ...source, release: async () => {
+      await source.release()
+      if (!failed && document.kind === 'registry' && registry.byAgent('receipt-pending')) {
+        failed = true
+        throw Error('fixture admitted source release failed')
+      }
+    } }
+  })
+  try {
+    const result = await ask()
+    expect(failed).toBe(true)
+    expect(written('receipt-pending')?.runtimes).toEqual([{ backend: 'tmux', paneId: '%7' }])
+    expect(registry.byAgent('receipt-pending')?.runtimes).toEqual([{ backend: 'tmux', paneId: '%7' }])
+    expect(result).toEqual({ creationId: payload.creationId, state: 'unconfirmed' })
+    expect(kill).not.toHaveBeenCalled()
+    expect(await ask()).toEqual(result)
+    expect(receipts.status(payload.creationId)).toEqual({ state: 'unconfirmed' })
+    expect(create).toHaveBeenCalledOnce()
+  } finally { requests.stop() }
 })
 
 it.skipIf(process.platform === 'win32')('propagates uncertain pending Resume instead of returning a proven refusal', async () => {
@@ -355,6 +431,27 @@ it.skipIf(process.platform === 'win32')('resets the completed names stage before
   held.resolve(); vi.useRealTimers()
   await registry.flush()
   expect(written(B)?.closePlan).toBeUndefined()
+})
+
+it.skipIf(process.platform === 'win32')('does not begin the row publication after admitted names cleanup fails', async () => {
+  const names = hold('agent-names.json'), failedName = track(registry.rename(A, 'Kept name')).catch(error => error)
+  await names.entered(failedName); io.fail = 1; names.release()
+  expect((await failedName).constructor.name).toBe('AtomicWriteUnconfirmed')
+  const retain = storage.retain.bind(storage), prepareRow = vi.fn()
+  io.preparing = async () => { prepareRow() }
+  let failed = false
+  vi.spyOn(storage, 'retain').mockImplementation(async document => {
+    const source = await retain(document)
+    return { ...source, release: async () => {
+      await source.release()
+      if (!failed && document.kind === 'names') { failed = true; throw Error('fixture admitted name cleanup failed') }
+    } }
+  })
+  const error = await registry.setClosePlan(B, plan).catch(error => error)
+  expect(error.constructor.name).toBe('RegistryCleanupUnavailable')
+  expect(JSON.parse(readFileSync(join(root, 'data', 'agent-names.json'), 'utf8'))[A]).toBe('Kept name')
+  expect(written(B)?.closePlan).toBeUndefined()
+  expect(prepareRow).not.toHaveBeenCalled()
 })
 
 it.skipIf(process.platform === 'win32').each(['removed', 'replaced'] as const)(

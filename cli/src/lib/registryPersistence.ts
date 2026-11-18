@@ -33,9 +33,18 @@ export class RegistryPersistenceUnavailable extends Error {
   constructor(reason: string) { super(`Registry persistence unavailable: ${reason}`); this.name = 'RegistryPersistenceUnavailable' }
 }
 
+/** The row is admitted; its caller must not undo the launch as if publication were refused. */
+export class RegistryCleanupUnavailable extends RegistryPersistenceUnavailable {
+  constructor(override readonly cause: unknown) {
+    super('admitted write cleanup failed; restart required')
+    this.name = 'RegistryCleanupUnavailable'
+  }
+}
+
 export interface RegistryWriteDeadline {
   readonly expires: number
   check(): void
+  beginPublication(): void
   markPublished(): void
   markAdmitted(): void
   /** An uncertain close owns at most this one descriptor and writer until the process exits. */
@@ -80,7 +89,7 @@ export class RegistryWriteQueue {
   private enqueue<T>(apply: (deadline: RegistryWriteDeadline) => Promise<T>, expires: number): Promise<T> {
     if (this.waiting.length >= CAPACITY) return Promise.reject(new RegistryPersistenceUnavailable('write queue is full'))
     return new Promise<T>((resolve, reject) => {
-      let expired = false, running = false, published = false
+      let expired = false, running = false, published = false, admitted = false
       let cleanup: Promise<void> | undefined
       const retain = (pending: Promise<void>) => {
         if (cleanup) throw new RegistryPersistenceUnavailable('duplicate write cleanup')
@@ -88,7 +97,7 @@ export class RegistryWriteQueue {
       }
       const failure = (reason: string) => published
         ? new AtomicWriteUnconfirmed(new RegistryPersistenceUnavailable(reason), false)
-        : new RegistryPersistenceUnavailable(reason)
+        : admitted ? new RegistryCleanupUnavailable(new RegistryPersistenceUnavailable(reason)) : new RegistryPersistenceUnavailable(reason)
       const check = () => {
         if (expired || performance.now() >= expires) throw failure('write deadline exceeded')
       }
@@ -112,7 +121,13 @@ export class RegistryWriteQueue {
         try {
           check()
           const result = await apply({ expires, check, retain, failClosed,
-            markPublished: () => { published = true }, markAdmitted: () => { published = false },
+            beginPublication: () => {
+              if (published) throw failure('previous publication remains unconfirmed')
+              admitted = false
+              check()
+            },
+            markPublished: () => { published = true; admitted = false },
+            markAdmitted: () => { if (published) admitted = true; published = false },
             get failedClose() { return queue.failedClose },
           })
           if (this.failedClose) throw failure('directory close failed; restart required')
@@ -121,7 +136,8 @@ export class RegistryWriteQueue {
         catch (error) {
           // A cleanup failure cannot undo an already visible, unadmitted rename.
           // Keep the caller's uncertain result even when discard or source release is what failed last.
-          reject(published && !(error instanceof AtomicWriteUnconfirmed) ? new AtomicWriteUnconfirmed(error, false) : error)
+          reject(published && !(error instanceof AtomicWriteUnconfirmed) ? new AtomicWriteUnconfirmed(error, false)
+            : admitted && !(error instanceof RegistryCleanupUnavailable) ? new RegistryCleanupUnavailable(error) : error)
         }
         finally {
           clearTimeout(timer)
