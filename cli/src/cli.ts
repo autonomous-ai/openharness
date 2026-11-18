@@ -19,13 +19,13 @@ import { fingerprint as e2eeCoreFingerprint, b64d as e2eeCoreDecode } from './li
  * and the backend socket (events up / chat + RPCs down).
  */
 
-import { readFileSync, readdirSync, writeFileSync, writeSync, mkdirSync, openSync, existsSync, rmSync, statSync } from 'fs'
+import { readFileSync, readdirSync, writeSync, mkdirSync, openSync, existsSync, rmSync, statSync } from 'fs'
 import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { spawn } from 'child_process'
 import { createServer } from 'http'
 import { createInterface, emitKeypressEvents } from 'readline'
-import { homedir, hostname } from 'os'
+import { homedir, hostname, release } from 'os'
 import { env } from './config/env.js'
 import { VERSION } from './version.js'
 import { runCoreInForeground } from './core/main.js'
@@ -36,8 +36,8 @@ import { LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabe
 import { daemonUnreachableText, sandboxed, startRefusalText } from './lib/unreachable.js'
 import { BIND_WAIT_MS, connectFailure, daemonSpawnOptions, defaultLaunchDeps, waitForBind } from './lib/daemonLaunch.js'
 import { ensureUtf8Locale } from './lib/childLocale.js'
-import { buildLogBundle, bundleFileName } from './lib/logBundle.js'
-import { redactSecretsInText } from './lib/redactSecrets.js'
+import { collectBundleFacts, runCommand } from './lib/logBundleFacts.js'
+import { logsExportCommand } from './lib/logsExportCommand.js'
 
 import { machineListCachePath } from './device/machineList.js'
 import { registry } from './lib/registry.js'
@@ -2750,37 +2750,6 @@ async function status(): Promise<void> {
   process.exit(0)
 }
 
-/**
- * `harness logs export [--to <dir>] [--days N] [--json]` — the last week of every log this product
- * writes, zipped to the Desktop (or `--to`), secrets blanked. The file a bug report is made of; the
- * desktop app's Settings ▸ Debug ▸ Export logs runs this same command.
- */
-async function logsExportCommand(json: boolean): Promise<void> {
-  const flagValue = (name: string): string | undefined => {
-    const at = process.argv.indexOf(name)
-    return at >= 0 ? process.argv[at + 1] : undefined
-  }
-  const days = Math.max(1, Number(flagValue('--days') ?? 7) || 7)
-  const desktop = join(homedir(), 'Desktop')
-  const to = flagValue('--to') ?? (existsSync(desktop) ? desktop : process.cwd())
-  const now = new Date()
-  const notes = [`machine: ${readAuthSession()?.machineId ?? 'not signed in'}`]
-  const { zip, included } = buildLogBundle({
-    logsDir: env.HARNESS_LOGS_DIR, dataDir: env.ADAPTER_DATA_DIR, days, now, version: VERSION, notes,
-    redact: redactSecretsInText,
-  })
-  mkdirSync(to, { recursive: true })
-  const path = join(to, bundleFileName(now))
-  writeFileSync(path, zip)
-  if (json) console.log(JSON.stringify({ path, included, bytes: zip.length }))
-  else {
-    console.log(`wrote ${tildify(path)} (${Math.round(zip.length / 1024)} KB)`)
-    for (const name of included) console.log(`  ${name}`)
-    if (!included.length) console.log('  (no logs found)')
-  }
-  process.exit(0)
-}
-
 import { orchestratorCommand } from './orchestrator/command.js'
 import { paneOwner, sendCommand, sendPane } from './messages/command.js'
 import { ensureCommand } from './agentClient/ensure.js'
@@ -3199,8 +3168,17 @@ switch (cmd) {
     status().catch(onError)
     break
   case 'logs':
-    if (args[0] === 'export') logsExportCommand(flags.includes('--json')).catch(onError)
-    else { console.error(`Unknown command: logs ${args[0] ?? ''}`); usage(1) }
+    if (args[0] === 'export') {
+      logsExportCommand({
+        args: rest, logsDir: env.HARNESS_LOGS_DIR, dataDir: env.ADAPTER_DATA_DIR, version: VERSION, home: homedir(),
+        cwd: process.cwd(), now: new Date(), machineId: readAuthSession()?.machineId,
+        facts: () => collectBundleFacts({
+          self: [process.execPath, ...process.execArgv, process.argv[1]], platform: process.platform, home: homedir(),
+          env: process.env, nodeVersion: process.version, osRelease: release(), exists: existsSync, run: runCommand,
+        }),
+        out: (line) => console.log(line),
+      }).then(() => process.exit(0)).catch(onError)
+    } else { console.error(`Unknown command: logs ${args[0] ?? ''}`); usage(1) }
     break
   case 'update':
     updateCommand(flags.includes('--force')).catch(onError)

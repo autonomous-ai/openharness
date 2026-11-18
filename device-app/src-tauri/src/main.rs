@@ -294,12 +294,13 @@ fn menu_id(action: MenuAction) -> &'static str {
         MenuAction::OpenHarness => "open_harness",
         MenuAction::About => "about",
         MenuAction::Quit => "quit",
+        MenuAction::ExportLogs => "export_logs",
     }
 }
 
 fn menu_action(id: &str) -> Option<MenuAction> {
     use MenuAction::*;
-    [Install, SignIn, SoundOn, SoundOff, NotifyFull, NotifyYou, Update, OpenHarness, About, Quit]
+    [Install, SignIn, SoundOn, SoundOff, NotifyFull, NotifyYou, Update, OpenHarness, About, Quit, ExportLogs]
         .into_iter()
         .find(|action| menu_id(*action) == id)
 }
@@ -316,13 +317,15 @@ mod tests {
     #[test]
     fn every_menu_action_has_its_own_id() {
         use MenuAction::*;
-        let actions = [Install, SignIn, SoundOn, SoundOff, NotifyFull, NotifyYou, Update, OpenHarness, About, Quit];
+        let actions =
+            [Install, SignIn, SoundOn, SoundOff, NotifyFull, NotifyYou, Update, OpenHarness, About, Quit, ExportLogs];
         for action in actions {
             assert_eq!(menu_action(menu_id(action)), Some(action));
         }
         let ids: std::collections::HashSet<_> = actions.into_iter().map(menu_id).collect();
-        assert_eq!(ids.len(), 10);
+        assert_eq!(ids.len(), 11);
         assert_eq!(menu_id(About), "about");
+        assert_eq!(menu_id(ExportLogs), "export_logs");
         assert_eq!(menu_id(NotifyFull), "notify_full");
         assert_eq!(menu_id(NotifyYou), "notify_you");
         assert_eq!(menu_action("sound"), None);

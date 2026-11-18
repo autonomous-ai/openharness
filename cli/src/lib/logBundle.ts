@@ -1,21 +1,23 @@
-import { readdirSync, readFileSync, statSync, openSync, readSync, closeSync } from 'node:fs'
+import { readdirSync, lstatSync, statSync, openSync, fstatSync, readSync, closeSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { REMOVALS_FILE } from './signOut.js'
 import { writeZip, type ZipEntry } from './zipWriter.js'
 
 /**
  * The file a person sends when the dial got stuck: the last week of every log this product writes, in
- * one zip, secrets blanked.
+ * one zip, secrets, email addresses and the home folder blanked.
  *
  *   app-YYYYMMDD.log, cli-YYYYMMDD.log   the desktop app's own log and its CLI transcript
  *   dial-YYYYMMDD.log                    the dial's console + the daemon's cable events (dialLog.ts),
  *                                        and usb-<serial>/dial-YYYYMMDD.log, one folder per device
+ *   harness-device/app-YYYYMMDD.log      the Harness menu-bar app's own log
  *   harness.log (tail)                   the daemon's console — the last few MB, which is where today is
  *   sign-in-removals.log                 the last 20 sign-in removals, kept apart from harness.log (signOut.ts)
- *   README.txt                           when, which version, what was included
+ *   status.txt                           what the status commands printed, as the caller ran them
+ *   README.txt                           when, which versions, what was included
  *
- * Shared by `harness logs export` and the desktop app's Settings ▸ Debug button, so the two produce
- * the same bundle; the app runs this through the CLI rather than carrying a second copy.
+ * Shared by `harness logs export`, the desktop app's Settings ▸ Debug button and the menu-bar app's Export logs,
+ * so the three produce the same bundle; both apps run this through the CLI rather than carrying a second copy.
  */
 export interface LogBundleOptions {
   /** `~/.harness/logs` — the dated files. */
@@ -32,12 +34,56 @@ export interface LogBundleOptions {
   version: string
   /** Free text for the README — `harness status` output, the app's version, anything else known. */
   notes?: string[]
-  /** Runs over every text file before it is written. */
+  /** Runs over every text file but the README before it is written, then `blankPersonal`. */
   redact: (text: string) => string
+  /** The person's home folder (`os.homedir()`): written `~` in every text file of the bundle, the README too. */
+  home: string
+  /** The menu-bar app's log folder. Only its `app-YYYYMMDD.log` files in the window are read. */
+  deviceAppLogsDir?: string
+  /** The text of `status.txt`. No file without it. */
+  status?: string
 }
 
 const DATED = /^(app|cli|dial)-(\d{8})\.log$/
 const DEVICE_DIR = /^usb-[A-Za-z0-9_-]+$/
+const DEVICE_APP_LOG = /^app-(\d{8})\.log$/
+const LOCAL_CHAR = /[A-Za-z0-9._%+-]/
+const DOMAIN = /[A-Za-z0-9.-]+\.[A-Za-z]{2,}/y
+
+/**
+ * Blanks what the menu-bar app's own rule for an email address matches (`log.rs`), its local part held to the 64
+ * characters an address allows: `/[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g`, with the same output.
+ * That regex in JavaScript tries every start of a run against it: unbounded, 100 KB of base64 or hex took 20 s; held to
+ * 64, a 20 MB run (a device's day) took 4.4 s, and 9.3 s with an `@` before a 20 MB domain. So each `@` is found once,
+ * its local part read back at most 64 characters and its domain matched once: 20 MB in under 0.2 s.
+ */
+function blankEmails(text: string): string {
+  let out = '', from = 0
+  for (let at = text.indexOf('@'); at >= 0; at = text.indexOf('@', at + 1)) {
+    let start = at
+    while (start > Math.max(from, at - 64) && LOCAL_CHAR.test(text[start - 1])) start--
+    if (start === at) continue
+    DOMAIN.lastIndex = at + 1
+    if (!DOMAIN.test(text)) continue
+    out += text.slice(from, start) + '<email>'
+    from = DOMAIN.lastIndex
+  }
+  return out + text.slice(from)
+}
+
+/** Steps 2 and 3 of the bundle's blanking, after `redact`: email addresses, then the home folder. */
+export function blankPersonal(text: string, home: string): string {
+  const emailsBlanked = blankEmails(text)
+  const folder = home.replace(/[\\/]+$/, '')
+  // A root holds every path: it names no one, and blanking it would hide where each file is.
+  if (!folder || /^[A-Za-z]:$/.test(folder)) return emailsBlanked
+  // A log written as JSON doubles each `\` of a Windows home.
+  const spellings = [...new Set([folder.replaceAll('\\', '\\\\'), folder])]
+  const literal = spellings.map((spelling) => spelling.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')
+  // The home as a whole folder, as `home_rule` in the menu-bar app's `log.rs`: `/Users/al` leaves `/Users/alice` alone.
+  // It ends where a character no folder name holds follows, or the text ends, after any dots that end a sentence.
+  return emailsBlanked.replace(new RegExp(`(?:${literal})(?=\\.*(?:[^A-Za-z0-9_.-]|$))`, 'g'), '~')
+}
 
 function ymd(d: Date): string {
   return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
@@ -48,14 +94,29 @@ export function bundleFileName(now: Date): string {
   return `harness-logs-${ymd(now)}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}.zip`
 }
 
-function readTail(path: string, bytes: number): Buffer {
-  const size = statSync(path).size
-  const from = Math.max(0, size - bytes)
+/**
+ * A log, read only as a file of its own: a link could point at any file of the person's. The file opened must be the
+ * one looked at, so a log swapped for a link in between is not followed either.
+ * With `tailBytes`, at most its last that many, in whole lines (`cut`): the line the cut lands in is dropped, since a
+ * token or the home cut short is no longer what the blanking knows it by.
+ */
+function readLog(path: string, tailBytes = Infinity): { data: Buffer; mtime: Date; cut: boolean } {
+  const seen = lstatSync(path)
+  if (!seen.isFile()) throw new Error(`${path} is not a regular file`)
   const fd = openSync(path, 'r')
   try {
+    const opened = fstatSync(fd)
+    if (opened.dev !== seen.dev || opened.ino !== seen.ino) throw new Error(`${path} changed while it was read`)
+    const { size, mtime } = opened
+    // From one byte before the cut, so a line that starts at the cut is kept.
+    const from = Math.max(0, size - tailBytes - 1)
     const out = Buffer.alloc(size - from)
-    readSync(fd, out, 0, out.length, from)
-    return out
+    // A log trimmed meanwhile reads short: only what was read is kept, never the zeros after it.
+    const data = out.subarray(0, readSync(fd, out, 0, out.length, from))
+    if (size <= tailBytes) return { data, mtime, cut: false }
+    // No line break: all of it is the line the cut lands in.
+    const lineEnd = data.indexOf(0x0a)
+    return { data: lineEnd < 0 ? Buffer.alloc(0) : data.subarray(lineEnd + 1), mtime, cut: true }
   } finally {
     closeSync(fd)
   }
@@ -68,14 +129,27 @@ export function buildLogBundle(opts: LogBundleOptions): { zip: Buffer; included:
   const cutoff = ymd(new Date(now.getTime() - (days - 1) * 86_400_000))
   const entries: ZipEntry[] = []
   const included: string[] = []
+  const blank = (text: string) => blankPersonal(opts.redact(text), opts.home)
 
+  if (opts.status !== undefined) {
+    entries.push({ name: 'status.txt', data: Buffer.from(blank(opts.status)), mtime: now })
+    included.push('status.txt')
+  }
+
+  // Only files and device folders, never a link: it could point at any file of the person's.
   let names: string[] = []
-  try { names = readdirSync(opts.logsDir).sort() } catch { /* no logs directory yet */ }
+  try {
+    names = readdirSync(opts.logsDir, { withFileTypes: true })
+      .filter((f) => f.isFile() || (f.isDirectory() && DEVICE_DIR.test(f.name))).map((f) => f.name).sort()
+  } catch { /* no logs directory yet */ }
   // Each device's dial logs are in a folder of their own, `usb-<serial>/` (cableFleet.ts). Reading only the top
   // level left a user's Harness Pro console out of the bundle sent about it stuck silent (20-26 Oct).
   names = names.flatMap((name) => {
     if (!DEVICE_DIR.test(name)) return [name]
-    try { return readdirSync(join(opts.logsDir, name)).sort().filter((f) => f.startsWith('dial-')).map((f) => `${name}/${f}`) } catch { return [] }
+    try {
+      return readdirSync(join(opts.logsDir, name), { withFileTypes: true })
+        .filter((f) => f.isFile() && f.name.startsWith('dial-')).map((f) => `${name}/${f.name}`).sort()
+    } catch { return [] }
   })
   // A device's day may be 20 MB (dialLog.ts) and a desk may hold several, so their logs share one cap. Every device keeps
   // its newest day, as its tail when that does not fit: counting whole files once left out every device's logs when one
@@ -105,27 +179,39 @@ export function buildLogBundle(opts: LogBundleOptions): { zip: Buffer; included:
     if (!m || m[2] < cutoff) continue
     const bytes = take.get(name)
     if (bytes === 0) { included.push(`${name} (left out to keep the bundle small)`); continue }
-    const path = join(opts.logsDir, name)
     try {
-      const whole = bytes === undefined || bytes >= statSync(path).size
-      const text = whole ? readFileSync(path, 'utf8') : readTail(path, bytes).toString('utf8')
-      entries.push({ name: `logs/${name}`, data: Buffer.from(opts.redact(text)), mtime: statSync(path).mtime })
-      included.push(whole ? name : `${name} (last ${Math.round(bytes / 1024)} KB)`)
+      const { data, mtime, cut } = readLog(join(opts.logsDir, name), bytes)
+      entries.push({ name: `logs/${name}`, data: Buffer.from(blank(data.toString('utf8'))), mtime })
+      included.push(cut ? `${name} (last ${Math.round(data.length / 1024)} KB)` : name)
     } catch { /* unreadable: skipped, said in the README below */ }
   }
 
-  const harnessLog = join(opts.dataDir, 'harness.log')
+  // Only the app's dated logs, and only files: its folder also holds what the app keeps, and a link could point anywhere.
+  const appDir = opts.deviceAppLogsDir
+  if (appDir) {
+    let files: string[] = []
+    try { files = readdirSync(appDir, { withFileTypes: true }).filter((f) => f.isFile()).map((f) => f.name).sort() } catch { /* the menu-bar app never ran here */ }
+    for (const file of files) {
+      const m = DEVICE_APP_LOG.exec(file)
+      if (!m || m[1] < cutoff) continue
+      try {
+        const { data, mtime } = readLog(join(appDir, file))
+        entries.push({ name: `logs/harness-device/${file}`, data: Buffer.from(blank(data.toString('utf8'))), mtime })
+        included.push(`harness-device/${file}`)
+      } catch { /* unreadable: skipped, said in the README below */ }
+    }
+  }
+
   try {
-    const tail = readTail(harnessLog, opts.harnessLogTailBytes ?? 5 * 1024 * 1024)
-    const text = tail.toString('utf8')
-    entries.push({ name: 'harness.log', data: Buffer.from(opts.redact(text)), mtime: statSync(harnessLog).mtime })
-    included.push(`harness.log (last ${Math.round(tail.length / 1024)} KB)`)
+    const { data, mtime } = readLog(join(opts.dataDir, 'harness.log'), opts.harnessLogTailBytes ?? 5 * 1024 * 1024)
+    entries.push({ name: 'harness.log', data: Buffer.from(blank(data.toString('utf8'))), mtime })
+    included.push(`harness.log (last ${Math.round(data.length / 1024)} KB)`)
   } catch { /* no daemon log */ }
 
   // Kept apart because harness.log's trim can take its line (anh Dee's Mac, 2026-11-12): small and whole.
-  const removals = join(opts.dataDir, REMOVALS_FILE)
   try {
-    entries.push({ name: REMOVALS_FILE, data: Buffer.from(opts.redact(readFileSync(removals, 'utf8'))), mtime: statSync(removals).mtime })
+    const { data, mtime } = readLog(join(opts.dataDir, REMOVALS_FILE))
+    entries.push({ name: REMOVALS_FILE, data: Buffer.from(blank(data.toString('utf8'))), mtime })
     included.push(REMOVALS_FILE)
   } catch { /* no removal yet */ }
 
@@ -139,13 +225,17 @@ export function buildLogBundle(opts: LogBundleOptions): { zip: Buffer; included:
     `included:`,
     ...(included.length ? included.map((n) => `  ${n}`) : ['  (nothing — no logs were found)']),
     ``,
-    `Secrets (tokens, keys, passwords, signed URLs) were blanked before writing.`,
+    `Blanked before writing: secrets (tokens, keys, passwords, signed URLs), email addresses (<email>) and the home folder (~).`,
+    `Never included: conversations and transcripts, prompts, voice, tokens, keys, passwords and sign-in files, any process's environment, project files.`,
+    'status.txt: what `harness status` and `harness device claude|codex|vscode status --json` printed.',
+    `logs/harness-device/: the Harness menu-bar app's own log.`,
+    'The dial\'s firmware version is in harness.log: the `fw` on the `cable: dial … on fw …` line of each dial greeting.',
     `dial-*.log: the dial's own console (I/W/E lines, ticks since boot) interleaved with the daemon's`,
     `[daemon] cable events. 'alive up=' once a minute is the UI task's heartbeat; a gap in it while`,
     `[daemon] lines continue is a wedged UI task. 'boot: reset reason' after a session-up says why the`,
     `dial last rebooted; 'last:' lines are its log from just before a crash.`,
   ].join('\n')
-  entries.unshift({ name: 'README.txt', data: Buffer.from(readme + '\n'), mtime: now })
+  entries.unshift({ name: 'README.txt', data: Buffer.from(blankPersonal(readme, opts.home) + '\n'), mtime: now })
 
   return { zip: writeZip(entries), included }
 }

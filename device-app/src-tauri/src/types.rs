@@ -117,6 +117,7 @@ pub enum MenuAction {
     OpenHarness,
     About,
     Quit,
+    ExportLogs,
 }
 
 /// Text is a disabled line. Check: the action a click does, the label, whether it is checked. Submenu: its label and
@@ -161,6 +162,7 @@ pub struct AppState {
     pub app_update: AppUpdate,
     /// What `harness --version` printed, for the About panel.
     pub cli_version: Option<String>,
+    pub logs: LogsExport,
 }
 
 /// AuthorizeUrl holds an `https:` URL only (account.rs lets no other through).
@@ -193,6 +195,7 @@ pub enum Event {
     UpdateChecked(Option<String>),
     UpdateInstalled,
     UpdateFailed(UpdateFailure),
+    LogsExported(Result<Exported, ExportFailure>),
 }
 
 /// What to do about it. Show(None) hides the window. ShowAbout: the About panel, with its credits line. Menu, Show,
@@ -223,6 +226,9 @@ pub enum Effect {
     ShowAbout(Option<String>),
     Quit,
     Relaunch,
+    ExportLogs,
+    /// Shows the zip an export wrote.
+    Reveal(std::path::PathBuf),
 }
 
 /// A finished run.
@@ -232,6 +238,31 @@ pub struct Output {
     pub timed_out: bool,
     pub stdout: String,
     pub stderr: String,
+}
+
+/// Why an export gave no zip.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExportFailure {
+    TimedOut,
+    NoAnswer,
+    NoFile,
+}
+
+/// The zip an export wrote, and how the menu names it: the home folder as `~`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Exported {
+    pub zip: std::path::PathBuf,
+    pub shown: String,
+}
+
+/// The export of logs, as the menu shows it. Saved: the zip with the home as `~`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum LogsExport {
+    #[default]
+    Idle,
+    Running,
+    Saved(String),
+    Failed(ExportFailure),
 }
 
 pub trait Clock: Send + Sync {
