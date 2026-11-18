@@ -42,7 +42,8 @@ const joinFor = (platform: NodeJS.Platform) => (platform === 'win32' ? win32 : p
 
 const homeFolder = (home: string, platform: NodeJS.Platform) => joinFor(platform)(home, HARNESS_HOME_NAME)
 
-// Both kinds share ~/.harness today; giving each its own folder changes only this record.
+// Both kinds share ~/.harness today. Giving each its own folder changes this record, and also harnessPathText below
+// (its `/.harness/` text) and lib/uninstall/removal.ts, which refuses a root not named HARNESS_HOME_NAME.
 const ROOTS: Record<HarnessRootKind, typeof homeFolder> = { data: homeFolder, state: homeFolder }
 
 export function harnessRoot(kind: HarnessRootKind, home = homedir(), platform = process.platform): string {
