@@ -71,7 +71,7 @@ export async function deleteOpenclawSession(key: string, run: RunCommand = runCo
   const call = (ms: number) => run('openclaw', ['gateway', 'call', 'sessions.delete', '--params', JSON.stringify({ key, deleteTranscript: true }), '--json', '--timeout', String(ms)])
   const ran = await call(GATEWAY_MS)
   let answer = ran.code === 0 ? answerOf(ran.stdout) : null
-  // A busy Gateway can finish the delete after the call gave up (18.5 s on a loaded Mac, #4393): asked once more, with
+  // A busy Gateway can finish the delete after the call gave up (past 10 s on a lamp, #4393): asked once more, with
   // longer to answer, before saying it was kept. Holding no such session then, the first call deleted it.
   let late = false
   if (!answer || answer.ok !== true) {
