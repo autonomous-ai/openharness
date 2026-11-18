@@ -181,3 +181,11 @@ public view. It will retain provider card state in the component and use the lat
 with no premature completion notification. This is an explicit event-count difference to explain in matched cost
 comparison, not permission to change public absence/null/empty values or meaningful event ordering. No extra core
 raw-row hash, duplicate record or component signal will be retained solely to reproduce those redundant syncs.
+
+The next pre-implementation selection adds one core import-closure RED and one real publication/public-reader RED
+for that intentional redundant-sync suppression. Seven actual rename-caller preservation cases cover eleven
+requests: four lifecycle cases each use exact 192 KiB normalized rows with created/updated date padding, maximally
+escaped bounded fields and a longer 120-unit name; three held replies cover advancing provider facts, replaced
+owner, replaced physical port and mutation of the caller's source object. They pass through the actual core update,
+component response preparer and core reply guard, asserting 512 KiB captured input, 256 KiB complete reply and the
+reviewed additive `R + 32 KiB` bound. No model, larger quota or product runtime edit belongs to this selection.

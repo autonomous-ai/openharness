@@ -475,3 +475,31 @@ it('revokes a publication acknowledgement that resolved just before its async co
     expect(f.publication.status()).toBeNull()
   } finally { f.close() }
 })
+
+it('omits redundant sync for hidden card changes and completes with the latest component card', async () => {
+  const f = setup()
+  try {
+    await f.connect()
+    const owner = row('cloud_hidden', { state: 'idle', said: null })
+    f.rows([owner]); await vi.waitFor(() => expect(f.publication.state().pending).toBeNull())
+    const visible = () => ({ frames: f.core.frames(), recent: f.core.recent(owner.agentId), said: f.core.said(owner.agentId),
+      activity: f.core.activity(owner.agentId), cards: f.core.liveCards(), rows: f.core.dialRows() })
+    const before = structuredClone(visible())
+    const latest = { recap: 'Latest recap', text: 'Latest detail' }
+    f.events.length = 0
+    for (const card of [null, { recap: 'Earlier recap', text: 'Earlier detail' }, latest]) {
+      f.rows([{ ...owner, card }]); await vi.waitFor(() => expect(f.publication.state().pending).toBeNull())
+      expect(visible()).toEqual(before)
+      expect(f.events.filter(event => !event.startsWith('row:'))).toEqual([])
+    }
+    const hiddenEvents = [...f.events]
+    f.events.length = 0
+    f.rows([{ ...owner, said: 'The completed answer.', card: latest }])
+    await vi.waitFor(() => expect(f.publication.state().pending).toBeNull())
+    expect(f.core.recent(owner.agentId)).toEqual([{ kind: 'summary', ...latest, fullText: 'The completed answer.' }])
+    expect(f.events).toEqual(['row:cloud_hidden', 'summary:cloud_hidden'])
+    // Deliberate migration change: a raw-only card update no longer syncs an identical complete public view.
+    // The current implementation fails here; all latest-card and no-false-completion assertions run first.
+    expect(hiddenEvents).toEqual([])
+  } finally { f.close() }
+})

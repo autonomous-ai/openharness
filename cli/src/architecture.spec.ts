@@ -363,6 +363,11 @@ describe('the daemon\'s shape', () => {
     expect(closureOf('lib/engineProbe.ts').has('engines/kit/interactiveProbe.ts')).toBe(true)
   })
 
+  it('keeps Cloud provider normalization and presentation policy outside the core process', () => {
+    expect(closureOf('core/main.ts').has('lib/cloudAgents.ts')).toBe(false)
+    expect(closureOf('cloud/service.ts').has('lib/cloudAgents.ts')).toBe(true)
+  })
+
   it('keeps inline hosting, history paging and shared-machine reply parsing outside the default core', () => {
     const loaded = closureOf('core/main.ts')
     for (const file of ['services/inlineHost.ts', 'lib/transcriptPages.ts', 'lib/sharedMachinesPort.ts', 'harnessd/servicePlan.ts']) {
