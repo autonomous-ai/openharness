@@ -9,7 +9,8 @@
  * that ended without theirs (Ctrl+C).
  *
  * The driver (driver/run.cjs) runs as VS Code's extension tests and is the gate's hands: it makes the terminals and says
- * which is active. What the extension reports, and what it does with a `show`, is read at the listener.
+ * which is active. What the extension reports, and what it does with a `show`, is read at the listener. A page key's
+ * bytes are read from a fake alt-screen app's record (driver/altScreenApp.cjs): never Claude Code itself.
  */
 import { downloadAndUnzipVSCode, resolveCliPathFromVSCodeExecutablePath, runTests } from '@vscode/test-electron'
 import { execFile } from 'node:child_process'
@@ -113,17 +114,17 @@ function until<T>(what: string, found: () => T | undefined): Promise<T> {
 }
 
 /** One line to the driver, and its answer within UNTIL_MS: a failed ask, or the driver's connection closing, rejects it. */
-function ask(what: 'terminals' | 'active'): Promise<Record<string, unknown>> {
+function ask(what: 'terminals' | 'active' | 'app', args: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
   const answer = new Promise<Record<string, unknown>>((resolve, reject) => {
     answers.push({ resolve, reject })
-    driver!.write(`${JSON.stringify({ ask: what })}\n`)
+    driver!.write(`${JSON.stringify({ ask: what, ...args })}\n`)
   })
   return within(answer, UNTIL_MS, `the driver's answer to ${what}`)
 }
 
 const inside = (path: string): boolean => !relative(root, path).startsWith('..')
 
-const MINUTE_LINE = /in the last minute: .*, (\d+) scroll lines, (\d+) dropped$/gm
+const MINUTE_LINE = /in the last minute: .*, (\d+) page keys, (\d+) scroll lines, (\d+) dropped$/gm
 
 /** The extension's output channel, which VS Code writes to a file under the user data's logs. */
 function channelFile(): string {
@@ -134,10 +135,11 @@ function channelFile(): string {
 }
 
 /** The extension's own counts, summed over every minute line of its output channel. */
-function scrollCounts(file: string): { lines: number; dropped: number } {
-  const sums = { lines: 0, dropped: 0 }
+function scrollCounts(file: string): { keys: number; lines: number; dropped: number } {
+  const sums = { keys: 0, lines: 0, dropped: 0 }
   const text = readFileSync(file, 'utf8')
-  for (const [, lines, dropped] of text.matchAll(MINUTE_LINE)) {
+  for (const [, keys, lines, dropped] of text.matchAll(MINUTE_LINE)) {
+    sums.keys += Number(keys)
     sums.lines += Number(lines)
     sums.dropped += Number(dropped)
   }
@@ -240,6 +242,9 @@ describe('the extension in a real, throwaway VS Code', () => {
         return () => clearTimeout(timer)
       },
       log: (line) => log.push(line),
+      // No stroke is guarded here, and nothing of this machine is read: the gate sends its page line itself.
+      fullscreen: () => Promise.resolve(false),
+      foreground: () => Promise.resolve(undefined),
     })
     const { vscode, 'vscode-state': state } = streams.handlers
     const socket = join(root, 'h', 'devices.sock')
@@ -357,6 +362,24 @@ describe('the extension in a real, throwaway VS Code', () => {
     // After the first line ran: the devices replace a line that waits with one for another shell.
     expect(streams.scroll({ window: opened[0]!.window, shell: inactive }, 2)).toBe(true)
     await until('3 scroll lines and 1 dropped', () => counted(3, 1))
+  })
+
+  // Claude Code's fullscreen view moves on PageUp and PageDown: a page line must reach a terminal as those keys' bytes
+  // alone, never wrapped as a paste (ESC[200~), which the app turned on as Claude Code does.
+  it('a page line presses one PageUp per page in the active terminal, and nothing else reaches it', async () => {
+    const window = opened[0]!.window
+    const record = join(root, 'app.bin')
+    expect(inside(record)).toBe(true)
+    writeFileSync(record, '')
+    const app = (await ask('app', { node: process.execPath, script: fileURLToPath(new URL('driver/altScreenApp.cjs', import.meta.url)), record })).app as number
+    const started = startedAt(app)
+    if (started !== undefined) shellStarts.set(app, started)
+    await until('a state listing the app', () => (states.some(({ terminals }) => terminals.includes(app)) ? true : undefined))
+    expect(streams.show({ window, shell: app }, false)).toBe(true)
+    await until('a state whose active is the app', () => (states.at(-1)?.active === app ? true : undefined))
+    expect(streams.scroll({ window, shell: app }, -45, true)).toBe(true)
+    await until('2 page keys', () => (scrollCounts(channelFile()).keys === 2 ? true : undefined))
+    expect(readFileSync(record)).toEqual(Buffer.from('\x1b[5~\x1b[5~'))
   })
 
   it('VS Code exits with code 0, and the stream ends gone', async () => {
