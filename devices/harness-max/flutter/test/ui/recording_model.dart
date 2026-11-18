@@ -48,6 +48,10 @@ class RecordingModel extends BarModel {
   void tapBody() => calls.add('tapBody');
   @override
   void cancelTalk() => calls.add('cancelTalk');
+  @override
+  void closeAgent() => calls.add('closeAgent');
+  @override
+  void tapSliver(String agentId) => calls.add('tapSliver $agentId');
 }
 
 /// Decodes every Image on the glass (the app icons) for real, then draws again: flutter test's fake clock never lets

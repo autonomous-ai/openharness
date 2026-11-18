@@ -1,53 +1,317 @@
-// Overview: the app column, up to five agent cells, the bell; dots page the cells. As the mockup's renderOverview.
+// App Detail (the owner's call, 18 Nov): the app column, every agent of the ring in a row that scrolls sideways three
+// cells to the glass, and the bell. A tap opens an agent across the row and the others shrink to dimmed slivers beside
+// it; opening and closing are this page's own motion (the mockup's Bar.openAt and close), not a change of page.
+import 'dart:math' as math;
+import 'dart:ui' show lerpDouble;
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
 import '../../model/bar_model.dart';
 import '../../model/types.dart';
 import '../app_icon.dart';
-import '../overview/cell.dart';
+import '../lists/snap_physics.dart';
 import '../overview/bits.dart';
+import '../overview/cell.dart';
+import '../overview/chip.dart';
 import '../overview/motion.dart';
+import '../overview/open_agent.dart';
 import '../overview/rail.dart';
 import '../overview/touch.dart';
 import '../tokens.dart';
 
-class OverviewPage extends StatelessWidget {
+class OverviewPage extends StatefulWidget {
   const OverviewPage({super.key, required this.model});
   final BarModel model;
 
   @override
+  State<OverviewPage> createState() => _OverviewPageState();
+}
+
+class _OverviewPageState extends State<OverviewPage> with SingleTickerProviderStateMixin {
+  /// The cells' widths, from where they stood to where they go, by agent id.
+  late final AnimationController _move = AnimationController(vsync: this, duration: kRowMove)
+    ..value = 1
+    ..addListener(_follow)
+    ..addStatusListener(_settled);
+  Map<String, double> _from = const {}, _to = const {};
+
+  /// The open agent as the row lays it out, null while none is.
+  String? _open;
+  late final ScrollController _scroll;
+
+  /// Opening: the row's scroll, carried along with the widths so it never runs past the narrowing row's end.
+  ({double from, double to})? _carry;
+
+  /// Closing: where the row scrolls once its cells have their widths again (before, the row is too short to reach).
+  double? _back;
+
+  BarModel get model => widget.model;
+
+  @override
+  void initState() {
+    super.initState();
+    _open = _openOf();
+    _from = _to = _targets(_open);
+    // Built open (from Attention, Inbox, the done note): the row is there at once, one sliver before the open agent.
+    _scroll = ScrollController(initialScrollOffset: _open == null ? 0 : _openScroll(_open!));
+    model.addListener(_changed);
+  }
+
+  @override
+  void didUpdateWidget(OverviewPage old) {
+    super.didUpdateWidget(old);
+    if (old.model != model) {
+      old.model.removeListener(_changed);
+      model.addListener(_changed);
+      _changed();
+    }
+  }
+
+  @override
+  void dispose() {
+    model.removeListener(_changed);
+    _move.dispose();
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  String? _openOf() => model.page == BarPage.agent ? model.selected?.id : null;
+
+  Map<String, double> _targets(String? open) => {
+        for (final a in model.agents) a.id: open == null ? kCellW : (a.id == open ? kOpenW : kSliverW),
+      };
+
+  double _width(String id) {
+    final to = _to[id] ?? kCellW;
+    return lerpDouble(_from[id] ?? to, to, kRowEase.transform(_move.value))!;
+  }
+
+  double get _pixels => _scroll.hasClients ? _scroll.offset : _scroll.initialScrollOffset;
+
+  /// Where the row rests with [id] open: one sliver before it where there is one.
+  double _openScroll(String id) {
+    final n = model.agents.length, i = model.agents.indexWhere((a) => a.id == id);
+    final end = math.max(0.0, kOpenW + (n - 1) * kSliverW - kRowW);
+    return ((i - 1) * kSliverW).clamp(0.0, end);
+  }
+
+  void _changed() {
+    // Fading out under another page, the row stays as it stood.
+    if (model.page != BarPage.overview && model.page != BarPage.agent) return;
+    final open = _openOf(), to = _targets(open);
+    if (!mapEquals(to, _to)) {
+      // From where each cell stands now, as a CSS transition restarts from its current value.
+      _from = {for (final id in to.keys) id: _to.containsKey(id) ? _width(id) : to[id]!};
+      _to = to;
+      _move.forward(from: 0);
+      if (open != null) {
+        _carry = (from: _pixels, to: _openScroll(open));
+        _back = null;
+      }
+    }
+    if (open == null && _open != null) {
+      final n = model.agents.length, i = model.agents.indexWhere((a) => a.id == _open);
+      _carry = null;
+      _back = i < 0 ? null : ((i - 1) * kCellW).clamp(0.0, math.max(0.0, (n - 3) * kCellW));
+    }
+    setState(() => _open = open);
+  }
+
+  void _follow() {
+    final c = _carry;
+    if (c != null && _scroll.hasClients) _scroll.jumpTo(lerpDouble(c.from, c.to, kRowEase.transform(_move.value))!);
+  }
+
+  void _settled(AnimationStatus s) {
+    if (s != AnimationStatus.completed) return;
+    _carry = null;
+    final back = _back;
+    if (back == null) return;
+    // Scrolling first, so the snapping row the rebuild brings takes over this scroll rather than snapping on its own.
+    if (_scroll.hasClients) _scroll.animateTo(back, duration: kRowMove, curve: kRowEase);
+    setState(() => _back = null);
+  }
+
+  /// A finger takes the row: the page stops moving it.
+  bool _dragged(ScrollStartNotification n) {
+    if (n.dragDetails == null) return false;
+    _carry = null;
+    if (_back != null) setState(() => _back = null);
+    return false;
+  }
+
+  /// Each agent's cell is at least half on the glass.
+  List<bool> _seen() {
+    var left = -_pixels;
+    final seen = <bool>[];
+    for (final a in model.agents) {
+      final w = _width(a.id);
+      seen.add(math.min(left + w, kRowW) - math.max(left, 0) >= w / 2);
+      left += w;
+    }
+    return seen;
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final cells = model.cells;
+    final agents = model.agents;
+    final talk = model.talk;
     return DefaultTextHeightBehavior(
       textHeightBehavior: kEvenLeading,
       child: Motion(
-        // the working rails sweep, the waiting ones and their glow pulse; nothing else on the page needs frames
-        on: cells.any((a) => a.state == AgentState.working || a.state == AgentState.asking),
+        // the working rails sweep, the waiting ones and their glow pulse, the open agent's band moves while it records
+        on: talk == TalkPhase.listening ||
+            talk == TalkPhase.sending ||
+            agents.any((a) => a.state == AgentState.working || a.state == AgentState.asking),
+        // The open agent's X and body are Taps, which this area hears; a swipe here means nothing, the row scrolls.
         child: SwipeArea(
-          onSwipe: (dir) {
-            model.touched();
-            model.swipeCells(dir);
-          },
+          onSwipe: (_) {},
           child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            SizedBox(width: 196, child: _AppColumn(model: model)),
-            Expanded(child: _Cells(model: model, cells: cells)),
+            SizedBox(width: 196, child: _AppColumn(model: model, dots: _dots())),
+            Expanded(child: agents.isEmpty ? _none() : _row()),
             SizedBox(width: 112, child: _BellColumn(model: model)),
           ]),
         ),
       ),
     );
   }
+
+  Widget _none() => Center(
+        child: Text(model.connected ? 'No agents yet' : 'Not connected', style: Face.s(28, color: Ink.rest)),
+      );
+
+  /// One dot per agent in its state's colour, lit while its cell is on the glass; only when the row scrolls.
+  Widget? _dots() {
+    final agents = model.agents;
+    if (agents.length <= 3) return null;
+    return ListenableBuilder(
+      listenable: Listenable.merge([_scroll, _move]),
+      builder: (context, _) {
+        final seen = _seen();
+        return SizedBox(
+          height: 10,
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            for (var i = 0; i < agents.length; i++) ...[
+              if (i > 0) const SizedBox(width: 7),
+              AnimatedOpacity(
+                key: ValueKey('dot$i'),
+                opacity: seen[i] ? 1 : .28,
+                duration: const Duration(milliseconds: 250),
+                curve: Curves.ease,
+                child: Container(
+                  width: 9,
+                  height: 9,
+                  decoration: BoxDecoration(color: chipInk(agents[i].state), shape: BoxShape.circle),
+                ),
+              ),
+            ],
+          ]),
+        );
+      },
+    );
+  }
+
+  Widget _row() {
+    final open = _open;
+    final row = SingleChildScrollView(
+      controller: _scroll,
+      scrollDirection: Axis.horizontal,
+      // Closed, the row comes to rest on a cell's edge; open, and while it scrolls back, it rests where it is let go.
+      physics: open == null && _back == null
+          ? const SnapPhysics(origin: 0, extent: kCellW, parent: ClampingScrollPhysics())
+          : const ClampingScrollPhysics(),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        for (final a in model.agents)
+          ListenableBuilder(
+            key: ValueKey(a.id),
+            listenable: _move,
+            builder: (context, cell) => SizedBox(width: _width(a.id), child: cell),
+            child: _cell(a, open),
+          ),
+      ]),
+    );
+    return NotificationListener<ScrollStartNotification>(
+      onNotification: _dragged,
+      child: Stack(fit: StackFit.expand, children: [
+        row,
+        ListenableBuilder(
+          listenable: Listenable.merge([_scroll, _move]),
+          builder: (context, _) {
+            final x = _pixels, end = model.agents.fold(0.0, (w, a) => w + _width(a.id)) - kRowW;
+            return Stack(fit: StackFit.expand, children: [
+              _Fade(left: true, on: x > 4),
+              _Fade(left: false, on: x < end - 4),
+            ]);
+          },
+        ),
+      ]),
+    );
+  }
+
+  Widget _cell(Agent a, String? open) {
+    final word = model.statusWord(a);
+    if (open == null) {
+      return AgentCell(agent: a, word: word, onTap: () {
+        model.touched();
+        model.tapCell(a.id);
+      });
+    }
+    if (a.id == open) {
+      return AgentCell(agent: a, word: word, look: CellLook.open, open: OpenAgent(model: model, agent: a));
+    }
+    return AgentCell(agent: a, word: word, look: CellLook.sliver, onTap: () {
+      model.touched();
+      model.tapSliver(a.id);
+    });
+  }
 }
 
-/// The shown app's icon and name, and the grid glyph when another app can be picked (a tap opens Apps).
+/// The row's faded edge (.cellwrap::before / ::after): 64 px from black .9 to clear, while more of the row lies that
+/// way; under the rails.
+class _Fade extends StatelessWidget {
+  const _Fade({required this.left, required this.on});
+  final bool left, on;
+
+  @override
+  Widget build(BuildContext context) => Positioned(
+        left: left ? 0 : null,
+        right: left ? null : 0,
+        top: 5,
+        bottom: 0,
+        width: 64,
+        child: IgnorePointer(
+          child: AnimatedOpacity(
+            key: ValueKey(left ? 'fade-left' : 'fade-right'),
+            opacity: on ? 1 : 0,
+            duration: const Duration(milliseconds: 250),
+            curve: Curves.ease,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: left ? Alignment.centerLeft : Alignment.centerRight,
+                  end: left ? Alignment.centerRight : Alignment.centerLeft,
+                  colors: const [Color.fromRGBO(0, 0, 0, .9), Color(0x00000000)],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+}
+
+/// The shown app's icon and name, the grid glyph when another app can be picked (a tap opens Apps), how many agents
+/// it has, and the row's dots.
 class _AppColumn extends StatelessWidget {
-  const _AppColumn({required this.model});
+  const _AppColumn({required this.model, required this.dots});
   final BarModel model;
+  final Widget? dots;
 
   @override
   Widget build(BuildContext context) {
     final app = model.shown?.id ?? '';
     final apps = model.hasOtherApps;
+    final n = model.agents.length;
     return Tap(
       onTap: apps
           ? () {
@@ -76,6 +340,12 @@ class _AppColumn extends StatelessWidget {
                   ),
                   if (apps) ...[const SizedBox(width: 8), const GlyphIcon(Glyph.grid, size: 20, color: Ink.dim)],
                 ]),
+                // The row says when there are none.
+                if (n > 0) ...[
+                  const SizedBox(height: 6),
+                  Text(n == 1 ? '1 agent' : '$n agents', style: Face.s(16, color: Ink.rest)),
+                ],
+                if (dots != null) ...[const SizedBox(height: 12), dots!],
               ],
             ),
           ),
@@ -83,65 +353,6 @@ class _AppColumn extends StatelessWidget {
       ),
     );
   }
-}
-
-/// The page's cells, the page dots under them, or why there are none.
-class _Cells extends StatelessWidget {
-  const _Cells({required this.model, required this.cells});
-  final BarModel model;
-  final List<Agent> cells;
-
-  @override
-  Widget build(BuildContext context) {
-    if (cells.isEmpty) {
-      return Center(
-        child: Text(model.connected ? 'No agents yet' : 'Not connected', style: Face.s(28, color: Ink.rest)),
-      );
-    }
-    final pages = model.cellPages;
-    // Across pages every cell keeps a full page's width: a cell does not change size as the page turns.
-    final slots = pages > 1 ? kCells : cells.length;
-    return Stack(fit: StackFit.expand, children: [
-      Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        for (final a in cells)
-          Expanded(
-            child: AgentCell(
-              key: ValueKey(a.id),
-              agent: a,
-              word: model.statusWord(a),
-              onTap: () {
-                model.touched();
-                model.tapCell(a.id);
-              },
-            ),
-          ),
-        if (slots > cells.length) Spacer(flex: slots - cells.length),
-      ]),
-      if (pages > 1) Positioned(left: 0, right: 0, bottom: 14, height: 8, child: _Dots(model: model, pages: pages)),
-    ]);
-  }
-}
-
-/// One dot per page of cells: the page shown long and bright, a page where an agent waits in yellow.
-class _Dots extends StatelessWidget {
-  const _Dots({required this.model, required this.pages});
-  final BarModel model;
-  final int pages;
-
-  @override
-  Widget build(BuildContext context) => Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-        for (var p = 0; p < pages; p++) ...[
-          if (p > 0) const SizedBox(width: 10),
-          Container(
-            key: ValueKey('dot$p'),
-            width: p == model.cellPage ? 16 : 8,
-            decoration: BoxDecoration(
-              color: model.pageWaits(p) ? Ink.ask : (p == model.cellPage ? Ink.fg : Ink.faint),
-              borderRadius: BorderRadius.circular(4),
-            ),
-          ),
-        ],
-      ]);
 }
 
 /// The bell in its round button, and the unread count on a yellow badge. The whole column is the tap.

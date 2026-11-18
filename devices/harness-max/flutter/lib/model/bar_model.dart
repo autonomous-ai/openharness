@@ -128,6 +128,9 @@ class BarModel extends ChangeNotifier {
   /// The agent the open recording is for (C talk_id): its "Sent to", and its question the words answer.
   String? _talkId;
 
+  /// The agent the recording listening or being sent is for: the open agent's band shows it only when it is that one.
+  String? get talkingTo => _talkId;
+
   /// The last speech heard: the quiet before the automatic send counts from it.
   DateTime? _quietFrom;
 
@@ -728,6 +731,29 @@ class BarModel extends ChangeNotifier {
       link.openAgent(a.id); // the bar cannot listen for it now: "Talk to it in <App>"
     }
     _publish();
+  }
+
+  /// The open agent's X (App Detail, 18 Nov): the recording is dropped, nothing sent, and the row of cells comes back.
+  void closeAgent() {
+    touched();
+    if (talk == TalkPhase.listening) {
+      if (heard) _notice('Cancelled, nothing sent');
+      _setTalk(TalkPhase.off);
+      link.cancelTalk();
+    }
+    _show(BarPage.overview);
+    _publish();
+  }
+
+  /// A dimmed agent beside the open one: what was being said is settled first (sent when something was heard, else
+  /// dropped), then that agent opens as a cell's tap opens it, the mic on when it is free.
+  void tapSliver(String agentId) {
+    if (page != BarPage.agent || agentById(agentId) == null) {
+      touched();
+      return;
+    }
+    if (talk == TalkPhase.listening) _settleTalk()();
+    tapCell(agentId);
   }
 
   /// The band's X: stop and send nothing.
@@ -1425,7 +1451,7 @@ class BarModel extends ChangeNotifier {
     }
     final from = talkStarted ?? t;
     if (t.isBefore(from.add(kHearTimeout))) return null;
-    _notice('Mic closed · tap to talk');
+    // The open agent's band says "Mic closed · tap to talk": no toast over it.
     _setTalk(TalkPhase.closed);
     return () => link.cancelTalk();
   }

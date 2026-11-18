@@ -5,8 +5,10 @@ import 'package:harness_max_bar/model/bar_model.dart';
 import 'package:harness_max_bar/model/types.dart';
 import 'package:harness_max_bar/ui/bar_frame.dart';
 import 'package:harness_max_bar/ui/overview/cell.dart';
+import 'package:harness_max_bar/ui/overview/open_agent.dart';
 import 'package:harness_max_bar/ui/pages/overview_page.dart';
 import 'package:harness_max_bar/ui/pet.dart';
+import 'package:harness_max_bar/ui/tokens.dart';
 
 import '../support/bar_test.dart';
 import 'recording_model.dart';
@@ -17,18 +19,42 @@ Future<void> _show(WidgetTester tester, BarModel model) async {
   await settleImages(tester);
 }
 
+/// The Orca fixture with [id] open, as a cell's tap leaves it (the mic off).
+BarModel _opened(String id) => mockupModel()
+  ..page = BarPage.agent
+  ..selectedId = id;
+
+/// Lets a fling, a snap or the row's own motion run out (the page's clock never stops, so no pumpAndSettle).
+Future<void> _rest(WidgetTester tester) async {
+  for (var i = 0; i < 12; i++) {
+    await tester.pump(const Duration(milliseconds: 100));
+  }
+}
+
+double _scrolled(WidgetTester tester) => tester.state<ScrollableState>(find.byType(Scrollable)).position.pixels;
+
+double _width(WidgetTester tester, String id) => tester.getSize(find.byKey(ValueKey(id))).width;
+
+double _dot(WidgetTester tester, int i) => tester.widget<AnimatedOpacity>(find.byKey(ValueKey('dot$i'))).opacity;
+
 void main() {
   setUpAll(loadBarFaces);
 
   group('looks as the mockup', () {
-    testWidgets('Orca: five cells, the bell with two unread', (tester) async {
+    testWidgets('Orca: the first three of five cells, the right edge faded, the dots, the bell with two unread',
+        (tester) async {
       await _show(tester, mockupModel());
       await expectLater(find.byType(BarFrame), matchesGoldenFile('goldens/overview.png'));
     });
 
-    testWidgets('Harness: three cells', (tester) async {
+    testWidgets('Harness: three cells fill the row, no dots', (tester) async {
       await _show(tester, mockupModel(app: 'harness'));
       await expectLater(find.byType(BarFrame), matchesGoldenFile('goldens/overview_harness.png'));
+    });
+
+    testWidgets('Orca with flaky-e2e open: a sliver either side of it', (tester) async {
+      await _show(tester, _opened('flaky-e2e'));
+      await expectLater(find.byType(BarFrame), matchesGoldenFile('goldens/overview_open.png'));
     });
   });
 
@@ -43,32 +69,47 @@ void main() {
     testWidgets('a tap anywhere in a cell counts, even on its rail or below its words', (tester) async {
       final m = RecordingModel(mockupModel());
       await _show(tester, m);
-      // auth-refactor's cell is x 196..430 (five cells across 1172 px)
+      // auth-refactor's cell is x 196..587 (a third of the 1172 px row)
       await tester.tapAt(const Offset(300, 3));
       await tester.tapAt(const Offset(300, 310));
       expect(m.calls, ['touched', 'tapCell auth-refactor', 'touched', 'tapCell auth-refactor']);
     });
 
-    testWidgets('a tap that slides a little is still a tap', (tester) async {
+    testWidgets('a sideways drag scrolls the row, taps nothing, and comes to rest on a cell\'s edge', (tester) async {
       final m = RecordingModel(mockupModel());
       await _show(tester, m);
-      await tester.dragFrom(const Offset(780, 160), const Offset(-60, 10));
-      expect(m.calls, ['touched', 'tapCell flaky-e2e']);
+      // past half a cell (the row takes the drag from where it beat the touch slop): the next cell's edge
+      await tester.dragFrom(const Offset(900, 160), const Offset(-260, 0));
+      await _rest(tester);
+      expect(m.calls, isEmpty);
+      expect(_scrolled(tester), closeTo(kCellW, .01));
+      expect(tester.getTopLeft(find.byKey(const ValueKey('landing-hero'))).dx, closeTo(196, .01));
     });
 
-    testWidgets('a swipe to the left shows the next page, to the right the previous', (tester) async {
-      final m = RecordingModel(mockupModel());
+    testWidgets('a tap on a sliver beside the open agent is a touch, then that agent', (tester) async {
+      final m = RecordingModel(_opened('flaky-e2e'));
       await _show(tester, m);
-      await tester.dragFrom(const Offset(900, 160), const Offset(-200, 0));
-      await tester.dragFrom(const Offset(500, 160), const Offset(200, 10));
-      expect(m.calls, ['touched', 'swipeCells 1', 'touched', 'swipeCells -1']);
+      // one sliver before the open agent: landing-hero at x 196..332, rate-limiter at x 1232..1368
+      await tester.tapAt(const Offset(264, 160));
+      await tester.tapAt(const Offset(1300, 160));
+      expect(m.calls, ['touched', 'tapSliver landing-hero', 'touched', 'tapSliver rate-limiter']);
     });
 
-    testWidgets('a drag more down than sideways is no swipe', (tester) async {
-      final m = RecordingModel(mockupModel());
+    testWidgets('the open agent takes its own taps: its X closes it, and no cell opens under it', (tester) async {
+      final m = RecordingModel(_opened('flaky-e2e'));
       await _show(tester, m);
-      await tester.dragFrom(const Offset(780, 40), const Offset(-90, 200));
-      expect(m.calls, ['touched', 'tapCell flaky-e2e']);
+      await tester.tapAt(const Offset(700, 160));
+      await tester.tap(find.byKey(const ValueKey('close')));
+      expect(m.calls.where((c) => c.startsWith('tapCell') || c.startsWith('tapSliver')), isEmpty);
+      expect(m.calls, contains('closeAgent'));
+    });
+
+    testWidgets('a finger sliding on the open agent does not move the row under it', (tester) async {
+      final m = RecordingModel(_opened('flaky-e2e'));
+      await _show(tester, m);
+      await tester.dragFrom(const Offset(700, 160), const Offset(-200, 0));
+      await _rest(tester);
+      expect(_scrolled(tester), closeTo(kSliverW, .01));
     });
 
     testWidgets('the app column opens Apps when there is another app', (tester) async {
@@ -98,12 +139,28 @@ void main() {
   });
 
   group('words', () {
-    testWidgets('each cell has its name and status word; the badge counts the unread', (tester) async {
+    testWidgets('each cell has its name, its task and its state chip; the app has its count; the badge the unread',
+        (tester) async {
       await _show(tester, mockupModel());
-      for (final w in ['auth-refactor', 'Editing', 'landing-hero', 'Needs you', 'flaky-e2e', 'Done', 'rate-limiter',
-          'Planning', 'docs-sweep', 'Resting', 'Orca', '2']) {
+      for (final w in [
+        'auth-refactor', 'session.ts', 'Editing', //
+        'landing-hero', 'Both hero versions build. Keep the dark gradient, or switch to the product photo?',
+        'Needs you', 'flaky-e2e', 'Done', 'rate-limiter', '4 steps, starting with the middleware', 'Planning',
+        'docs-sweep', 'Resting', 'Orca', '5 agents', '2',
+      ]) {
         expect(find.text(w), findsOneWidget, reason: w);
       }
+    });
+
+    testWidgets('an agent with no task yet says so, faint', (tester) async {
+      await _show(tester, mockupModel());
+      expect(tester.widget<Text>(find.text('No task yet')).style!.color, Ink.faint);
+    });
+
+    testWidgets('one agent is "1 agent"', (tester) async {
+      final m = mockupModel()..agents.removeRange(1, 5);
+      await _show(tester, m);
+      expect(find.text('1 agent'), findsOneWidget);
     });
 
     testWidgets('no unread notice: no badge', (tester) async {
@@ -119,47 +176,115 @@ void main() {
       final m = mockupModel()..agents.clear();
       await _show(tester, m);
       expect(find.text('No agents yet'), findsOneWidget);
+      expect(find.text('0 agents'), findsNothing);
       m
         ..connected = false
         ..changed();
-      await pumpOnBar(tester, OverviewPage(model: m));
+      await tester.pump();
       expect(find.text('Not connected'), findsOneWidget);
     });
   });
 
-  group('pages of cells', () {
-    BarModel seven() {
-      final m = mockupModel();
-      m.agents.addAll([
-        Agent(id: 'billing-export', name: 'billing-export', engine: 'muse', state: AgentState.working, verb: 'Reading'),
-        Agent(id: 'release-notes', name: 'release-notes', engine: 'claude', state: AgentState.done),
-      ]);
-      return m;
-    }
-
-    testWidgets('one dot per page; the page with a waiting agent is yellow', (tester) async {
-      final m = seven();
-      await _show(tester, m);
-      expect(find.byKey(const ValueKey('dot0')), findsOneWidget);
-      expect(find.byKey(const ValueKey('dot1')), findsOneWidget);
-      final dot0 = tester.widget<Container>(find.byKey(const ValueKey('dot0')));
-      final dot1 = tester.widget<Container>(find.byKey(const ValueKey('dot1')));
-      expect((dot0.decoration! as BoxDecoration).color, const Color(0xFFE5E510));
-      expect((dot1.decoration! as BoxDecoration).color, const Color(0xFF585863));
-      expect(tester.getSize(find.byKey(const ValueKey('dot0'))).width, 16);
-    });
-
-    testWidgets('the last page keeps a full page\'s cell width', (tester) async {
-      final m = seven()..cellPage = 1;
-      await _show(tester, m);
-      expect(find.text('billing-export'), findsOneWidget);
-      expect(find.text('auth-refactor'), findsNothing);
-      expect(tester.getSize(find.byType(AgentCell).first).width, closeTo(1172 / 5, .01));
-    });
-
-    testWidgets('a single page has no dots', (tester) async {
+  group('dots', () {
+    testWidgets('one per agent in its state\'s colour; the three cells on the glass lit', (tester) async {
       await _show(tester, mockupModel());
-      expect(find.byKey(const ValueKey('dot0')), findsNothing);
+      expect([for (var i = 0; i < 5; i++) _dot(tester, i)], [1, 1, 1, .28, .28]);
+      final waiting = tester.widget<Container>(
+          find.descendant(of: find.byKey(const ValueKey('dot1')), matching: find.byType(Container)));
+      expect((waiting.decoration! as BoxDecoration).color, Ink.ask);
     });
+
+    testWidgets('scrolled to the end, the last three are lit and the left edge fades', (tester) async {
+      await _show(tester, mockupModel());
+      await tester.dragFrom(const Offset(1300, 160), const Offset(-1000, 0));
+      await _rest(tester);
+      expect(_scrolled(tester), closeTo(2 * kCellW, .01));
+      expect([for (var i = 0; i < 5; i++) _dot(tester, i)], [.28, .28, 1, 1, 1]);
+      expect(tester.widget<AnimatedOpacity>(find.byKey(const ValueKey('fade-left'))).opacity, 1);
+      expect(tester.widget<AnimatedOpacity>(find.byKey(const ValueKey('fade-right'))).opacity, 0);
+    });
+
+    testWidgets('three agents: no dots, no faded edge', (tester) async {
+      await _show(tester, mockupModel(app: 'harness'));
+      expect(find.byKey(const ValueKey('dot0')), findsNothing);
+      expect(tester.widget<AnimatedOpacity>(find.byKey(const ValueKey('fade-left'))).opacity, 0);
+      expect(tester.widget<AnimatedOpacity>(find.byKey(const ValueKey('fade-right'))).opacity, 0);
+    });
+  });
+
+  group('open', () {
+    testWidgets('built open: the agent across the row, every other a sliver, one sliver before it', (tester) async {
+      await _show(tester, _opened('flaky-e2e'));
+      expect(_width(tester, 'flaky-e2e'), kOpenW);
+      for (final id in ['auth-refactor', 'landing-hero', 'rate-limiter', 'docs-sweep']) {
+        expect(_width(tester, id), kSliverW, reason: id);
+      }
+      expect(_scrolled(tester), kSliverW);
+      expect(find.byType(OpenAgent), findsOneWidget);
+    });
+
+    testWidgets('built open on the last agent: the row as far as it goes', (tester) async {
+      await _show(tester, _opened('docs-sweep'));
+      // 900 + 4 slivers less the row's 1172
+      expect(_scrolled(tester), 272);
+    });
+
+    testWidgets('opening widens the cell as the row scrolls with it; closing narrows it, then scrolls back',
+        (tester) async {
+      final m = mockupModel();
+      await _show(tester, m);
+      m
+        ..page = BarPage.agent
+        ..selectedId = 'flaky-e2e'
+        ..changed();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      final w = _width(tester, 'flaky-e2e');
+      expect(w, greaterThan(kCellW));
+      expect(w, lessThan(kOpenW));
+      expect(_scrolled(tester), greaterThan(0));
+      expect(_scrolled(tester), lessThan(kSliverW));
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(_width(tester, 'flaky-e2e'), kOpenW);
+      expect(_width(tester, 'landing-hero'), kSliverW);
+      expect(_scrolled(tester), kSliverW);
+
+      m
+        ..page = BarPage.overview
+        ..changed();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 430));
+      expect(_width(tester, 'flaky-e2e'), kCellW);
+      // the widths first, the row where it was; then it comes back with flaky-e2e in the middle
+      expect(_scrolled(tester), kSliverW);
+      await _rest(tester);
+      expect(_scrolled(tester), closeTo(kCellW, .01));
+      expect([for (var i = 0; i < 5; i++) _dot(tester, i)], [.28, 1, 1, 1, .28]);
+    });
+
+    testWidgets('a sliver\'s face moves to its middle and its words go; the open agent\'s face gives way',
+        (tester) async {
+      await _show(tester, _opened('flaky-e2e'));
+      final name = find.text('landing-hero');
+      expect(tester.widget<AnimatedOpacity>(find.ancestor(of: name, matching: find.byType(AnimatedOpacity)).first).opacity,
+          0);
+      // the sliver is x 196..332
+      expect(tester.getCenter(name).dx, closeTo(264, .01));
+      // flaky-e2e's name twice: its face's (first, faded for the open agent) and the open agent's
+      expect(find.text('flaky-e2e'), findsNWidgets(2));
+      final face = find.ancestor(of: find.text('flaky-e2e').first, matching: find.byType(AnimatedOpacity));
+      expect(tester.widgetList<AnimatedOpacity>(face).map((o) => o.opacity), contains(0));
+    });
+  });
+
+  test('a sliver\'s colour matrix: none at rest, brightness .42 and opacity .42 when dimmed', () {
+    expect(dimMatrix(0),
+        [1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0].map((v) => closeTo(v, 1e-9)).toList());
+    final m = dimMatrix(1);
+    // white stays grey (saturation keeps a grey grey) at .42; alpha .42
+    for (final row in [0, 1, 2]) {
+      expect(m[row * 5] + m[row * 5 + 1] + m[row * 5 + 2], closeTo(.42, 1e-9));
+    }
+    expect(m[18], closeTo(.42, 1e-9));
   });
 }

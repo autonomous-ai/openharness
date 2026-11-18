@@ -108,8 +108,8 @@ void main() {
     b.at(9000);
     m.tick();
     expect(b.sent(), ['cancel']);
-    expect([m.talk, m.toast!.text, m.page, m.selectedId],
-        [TalkPhase.closed, 'Mic closed · tap to talk', BarPage.agent, 'a']);
+    // The open agent's band says it; a toast would sit over the band.
+    expect([m.talk, m.toast?.text, m.page, m.selectedId], [TalkPhase.closed, null, BarPage.agent, 'a']);
     m.onTalkLink(TalkLink.idle);
     expect(m.talk, TalkPhase.closed, reason: 'the pipeline going idle keeps the page saying why');
     b.at(9500);
@@ -355,5 +355,51 @@ void main() {
     b.at(99999);
     m.tick();
     expect(b.sent(), isEmpty);
+  });
+
+  test('X on the open agent (App Detail): the recording is dropped, nothing sent, and the row comes back', () {
+    final b = linked(abcde), m = b.model;
+    m.tapCell('a');
+    b.sent();
+    m.onLevel(0.9);
+    m.closeAgent();
+    expect(b.sent(), ['cancel']);
+    expect([m.page, m.talk, m.toast?.text], [BarPage.overview, TalkPhase.off, 'Cancelled, nothing sent']);
+
+    // Nothing heard: no toast. The mic closed: nothing to drop.
+    m.tapCell('b');
+    b.sent();
+    m.closeAgent();
+    expect(b.sent(), ['cancel']);
+    expect([m.page, m.talk], [BarPage.overview, TalkPhase.off]);
+    b.at(1000);
+    m.tapCell('c');
+    b.sent();
+    b.at(5000);
+    m.tick();
+    b.sent();
+    expect(m.talk, TalkPhase.closed);
+    m.closeAgent();
+    expect(b.sent(), isEmpty);
+    expect([m.page, m.talk], [BarPage.overview, TalkPhase.off]);
+  });
+
+  test('another agent beside the open one: none heard, the mic moves to it; words heard are sent first', () {
+    final b = linked(abcde), m = b.model;
+    m.tapSliver('b');
+    expect([b.sent(), m.page], [isEmpty, BarPage.overview], reason: 'only beside an open agent');
+    m.tapCell('a');
+    b.sent();
+    m.tapSliver('b');
+    expect(b.sent(), ['cancel', 'open b', 'talk b']);
+    expect([m.page, m.selectedId, m.talk, m.talkingTo], [BarPage.agent, 'b', TalkPhase.listening, 'b']);
+    m.onLevel(0.9);
+    m.tapSliver('c');
+    expect(b.sent(), ['send', 'open c']);
+    expect([m.page, m.selectedId, m.talk, m.talkingTo, m.toast?.text],
+        [BarPage.agent, 'c', TalkPhase.sending, 'b', 'Sent to b'],
+        reason: "b's words go; c opens with the mic off until they are through");
+    m.tapSliver('gone');
+    expect([b.sent(), m.selectedId], [isEmpty, 'c']);
   });
 }
