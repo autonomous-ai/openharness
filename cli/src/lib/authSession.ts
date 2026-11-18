@@ -1,7 +1,7 @@
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'fs'
-import { homedir } from 'os'
 import { join } from 'path'
 import { randomBytes } from 'node:crypto'
+import { harnessPath } from '../config/harnessHome.js'
 
 export interface AuthSession {
   version: 1
@@ -73,7 +73,7 @@ export function tokenOf(answer: Record<string, unknown>, unreachable: string): s
 }
 
 // HARNESS_AUTH_DIR exists for isolated test processes. Product installs always use ~/.harness/auth.
-export const AUTH_DIR = process.env.HARNESS_AUTH_DIR?.trim() || join(homedir(), '.harness', 'auth')
+export const AUTH_DIR = process.env.HARNESS_AUTH_DIR?.trim() || harnessPath('auth')
 export const AUTH_SESSION_FILE = join(AUTH_DIR, 'session.json')
 const LOCK_FILE = join(AUTH_DIR, 'session.lock')
 const LOCK_STALE_MS = 30_000
