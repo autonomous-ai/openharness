@@ -38,6 +38,7 @@ import { dialText, noticeSummary } from './dialText.js'
 import { QuestionInbox, type ReviewedAnswer, type AnswerReceipt, type QuestionSpeech } from './questionInbox.js'
 import { notificationReadToken, type UnreadNotification } from '../lib/notificationRead.js'
 import { partitionTexts } from '../lib/questionController.js'
+import { errorKind } from '../lib/log.js'
 
 /** Bumped when the VOCABULARY changes. Separate from the frame version, which is the envelope. */
 export const CABLE_PROTO_VERSION = 3   // 3: + question.close (a question answered on another client)
@@ -1000,10 +1001,11 @@ export class CableSession {
     void this.tick().catch((error: unknown) => this.fault(error))
   }
 
-  /** This dial's fault, told to whoever owns the session (CableHost.onFault). */
-  private fault(error: unknown, hostile = false): void {
-    this.log(`cable: ${hostile ? 'flooded' : 'fault'} · ${error instanceof Error ? error.message : String(error)}`)
-    this.host.onFault?.(error, hostile)
+  /** This dial's fault, told to whoever owns the session (CableHost.onFault). A flood is said in our own counts, which
+   *  tell the budget it broke; any other fault by its kind alone. */
+  private fault(error: unknown, flood?: string): void {
+    this.log(flood ? `cable: flooded · ${flood}` : `cable: fault · ${errorKind(error)}`)
+    this.host.onFault?.(error, flood !== undefined)
   }
 
   // ── port lifecycle ────────────────────────────────────────────────────────────────────────────────
@@ -1146,7 +1148,7 @@ export class CableSession {
     } catch (err) {
       // A port that another process holds is the ordinary case, not a fault: esptool, a serial monitor,
       // or a second daemon. Say so and try again on the next tick.
-      this.log(`cable: cannot open the dial: ${(err as Error).message}`)
+      this.log(`cable: cannot open the dial: ${errorKind(err)}`)
       return
     } finally {
       this.opening = false
@@ -1324,7 +1326,8 @@ export class CableSession {
       : this.budget.ms > CableSession.BUDGET.decodeMs ? `${Math.round(this.budget.ms)} ms of decoding` : ''
     if (over) {
       this.budget = { since: now, garbage: 0, frames: 0, ms: 0 }
-      this.fault(new Error(`${over} in a second, more than a dial sends`), true)
+      const flood = `${over} in a second, more than a dial sends`
+      this.fault(new Error(flood), flood)
     }
   }
 
@@ -1534,7 +1537,7 @@ export class CableSession {
           try {
             items = await this.host.listModels(agentId)
           } catch (err) {
-            this.log(`cable: models for ${agentId} failed (${(err as Error).message})`)
+            this.log(`cable: models for ${agentId} failed (${errorKind(err)})`)
           }
         }
         // Answered either way. An empty catalog closes the dial's picker cleanly; silence strands it on a
@@ -1654,7 +1657,7 @@ export class CableSession {
           // Another app moves no window, so no window focus will bring the dial to this agent's face: the tap's own
           // open says it. The dial does not answer a focus with one, and its echo of a swipe only marks the agent seen.
           if (!reason && this.outsideHarness(agentId)) return this.focusAgent(agentId)
-        }).catch(() => this.log('cable: agent.open → failed'))
+        }).catch((error) => this.log(`cable: agent.open → failed · ${errorKind(error)}`))
         return
       }
       case 'agent.fork': {
@@ -1743,7 +1746,7 @@ export class CableSession {
       case 'turn.send':
         // Not awaited: the dial asks for no answer, and a send that waits on its agent must not hold the next frame.
         if (str('agentId') && str('text')) void Promise.resolve(this.host.sendTurn(str('agentId')!, str('text')!))
-          .catch(() => this.log('cable: turn.send → failed'))
+          .catch((error) => this.log(`cable: turn.send → failed · ${errorKind(error)}`))
         return
       case 'turn.stop': {
         const agentId = str('agentId')
@@ -2221,7 +2224,7 @@ export class CableSession {
     const next = this.petChain.then(() => this.runPetSync())
     this.petChain = next.catch(() => {})
     // A failed sync is this dial's log line, never a failed hello.
-    return next.catch((error: unknown) => this.log(`cable: pet sync failed: ${error instanceof Error ? error.message : String(error)}`))
+    return next.catch((error: unknown) => this.log(`cable: pet sync failed: ${errorKind(error)}`))
   }
 
   private async runPetSync(): Promise<void> {
@@ -2245,7 +2248,7 @@ export class CableSession {
       if (this.petErrors.has(id)) continue
       // The newest version both sides know: a dial that says pets:1 gets the version 1 pack of the very same id.
       const pack = await store.pack(id, Math.min(this.petDialMax, PACK_VERSION)).catch((error: unknown) => {
-        this.log(`cable: pet ${id} unreadable: ${error instanceof Error ? error.message : String(error)}`)
+        this.log(`cable: pet ${id} unreadable: ${errorKind(error)}`)
         this.petErrors.set(id, 'unreadable')
         return null
       })
@@ -2629,7 +2632,7 @@ export class CableSession {
       const framed = this.seqOn ? { ...msg, seq: this.seq } : msg
       frame = encodeCableFrame(CableType.Json, Buffer.from(dialJson(framed), 'utf8'))
     } catch (err) {
-      this.log(`cable: dropped a ${String(msg.t)} frame (${(err as Error).message})`)
+      this.log(`cable: dropped a ${String(msg.t)} frame (${errorKind(err)})`)
       return false
     }
     if (this.seqOn) this.seq++
@@ -2637,7 +2640,7 @@ export class CableSession {
       await this.put(this.link, frame)
       return true
     } catch (err) {
-      this.log(`cable: write failed (${(err as Error).message})`)
+      this.log(`cable: write failed (${errorKind(err)})`)
       await this.link.close('write failed')
       return false
     }
@@ -2886,7 +2889,7 @@ export class CableSession {
     this.restoring = true
     this.restoreAgain = false
     void this.pushRestores()
-      .catch((err) => this.log(`cable: restores failed (${(err as Error).message})`))
+      .catch((err) => this.log(`cable: restores failed (${errorKind(err)})`))
       .finally(() => {
         this.restoring = false
         if (this.restoreAgain) this.restoreInBackground()
@@ -3591,7 +3594,7 @@ export class CableSession {
     // fire-and-forgets followApp, so the session log is the only place an unexpected rejection would
     // otherwise be visible; consume it here rather than creating an unhandled rejection.
     const focused = this.appFocusTail = task.catch((err) => {
-      this.log(`cable: could not follow app focus (${(err as Error).message})`)
+      this.log(`cable: could not follow app focus (${errorKind(err)})`)
     })
     const machineTask = this.appMachineTail.then(async () => {
       await focused
@@ -3608,7 +3611,7 @@ export class CableSession {
       await this.selectMachine(machineId, isCurrent)
     })
     const selected = this.appMachineTail = machineTask.catch((err) => {
-      this.log(`cable: could not follow app machine (${(err as Error).message})`)
+      this.log(`cable: could not follow app machine (${errorKind(err)})`)
     })
     await Promise.all([focused, selected])
   }

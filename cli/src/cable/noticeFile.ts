@@ -3,6 +3,7 @@
 // It is this computer's, so it lives in the daemon's data folder beside dial-notify.json. One writer: the devices'
 // process.
 import { closeSync, openSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { errorKind } from '../lib/log.js'
 import { SHOWN_ONLY_PREFIX } from './cableSession.js'
 import {
   NOTICE_KEY_MAX_CHARS, NOTICE_KEYS_MAX, NOTICE_LINE_MAX_BYTES, NOTICES_PENDING_MAX, type StoredNotice,
@@ -138,8 +139,8 @@ export class NoticeFile {
       renameSync(temporary, this.deps.file)
     } catch (error) {
       rmSync(temporary, { force: true })
-      // The code alone, never the message, which names the path. Memory stays the truth; the next change tries again.
-      this.deps.log(`[device] notices · not saved · ${(error as NodeJS.ErrnoException).code ?? 'FAILED'}`)
+      // Its kind, never the message, which names the path. Memory stays the truth; the next change tries again.
+      this.deps.log(`[device] notices · not saved · ${errorKind(error)}`)
     }
   }
 }

@@ -6,6 +6,7 @@ import { resetBoard } from './boardReset.js'
 import { DialVerdicts } from './dialPortVerdicts.js'
 import { findDialPorts, portInUse, SerialLink, type DialPort } from './serial.js'
 import { isUsbConsoleUser } from './usbConsoleUser.js'
+import { errorKind } from '../lib/log.js'
 import type { CableSession, CableHost, CablePort, DialStatus, PortOpener } from './cableSession.js'
 import type { DialLog } from './dialLog.js'
 
@@ -147,7 +148,7 @@ export class CableFleet {
     if (this.stopped) return Promise.resolve()
     if (this.scanTask) return this.scanTask
     this.scanTask = this.reconcile().catch(error => {
-      this.host.log(`cable: USB discovery failed: ${String(error)}`)
+      this.host.log(`cable: USB discovery failed: ${errorKind(error)}`)
     }).finally(() => { this.scanTask = undefined })
     return this.scanTask
   }
@@ -238,7 +239,7 @@ export class CableFleet {
         if (!sibling) { this.host.onDialAttached?.(); return }
         // The host asks again only as the first dial arrives, so this one is given what its sibling would be asked again.
         // Mid-greeting: the session only takes them in here, and asks each once as its greeting's push ends.
-        const failed = (error: unknown) => this.host.log(`cable: ${port.path} open questions: ${String(error)} [usb ${id}]`)
+        const failed = (error: unknown) => this.host.log(`cable: ${port.path} open questions: ${errorKind(error)} [usb ${id}]`)
         // One its sibling holds rang before the devices restarted: held here too, never asked.
         for (const open of sibling.session.owedQuestions()) (open.held
           ? entry.session.hold(open.agentId, open.id, open.questions)
@@ -365,7 +366,7 @@ export class CableFleet {
     const first = this.options.dropBackoffMs ?? DROP_BACKOFF_MS
     const backoffMs = !last || now - last.at > DROP_FORGIVEN_MS ? first : Math.min(last.backoffMs * 2, DROP_BACKOFF_MAX_MS)
     this.dropped.set(id, { until: now + backoffMs, backoffMs, at: now })
-    this.host.log(`cable: ${entry.port.path} dropped (${hostile ? 'flooding the port' : `${entry.faults.length} faults in a minute`}: ${String(error instanceof Error ? error.message : error)}) — this dial alone; its port is looked at again in ${Math.round(backoffMs / 1000)} s [usb ${id}]`)
+    this.host.log(`cable: ${entry.port.path} dropped (${hostile ? 'flooding the port' : `${entry.faults.length} faults in a minute`}: ${errorKind(error)}) — this dial alone; its port is looked at again in ${Math.round(backoffMs / 1000)} s [usb ${id}]`)
     // Off this call stack: the session is in the middle of the call that failed, and stop() waits on it.
     setTimeout(() => {
       if (this.entries.get(id) !== entry) return
@@ -409,7 +410,7 @@ export class CableFleet {
       if (!await entry.session.setSettings(patch)) return { ok: false, error: 'The device did not take the change.' }
       return { ok: true }
     } catch (error) {
-      this.host.log(`cable: ${entry.port.path} settings: ${String(error)}`)
+      this.host.log(`cable: ${entry.port.path} settings: ${errorKind(error)}`)
       return { ok: false, error: 'The device did not take the change.' }
     }
   }
@@ -419,7 +420,7 @@ export class CableFleet {
       try {
         const method = entry.session[name] as (...args: unknown[]) => Promise<void>
         await method.apply(entry.session, args)
-      } catch (error) { this.host.log(`cable: ${entry.port.path} ${name}: ${String(error)}`) }
+      } catch (error) { this.host.log(`cable: ${entry.port.path} ${name}: ${errorKind(error)}`) }
     }))
   }
   syncAgents(...args: Parameters<Surface['syncAgents']>) { return this.send('syncAgents', ...args) }

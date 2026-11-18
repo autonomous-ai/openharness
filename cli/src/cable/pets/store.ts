@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, extname, join } from 'node:path'
+import { errorKind } from '../../lib/log.js'
 import { convertPet, type ConvertedPet } from './convert.js'
 import { PACK_VERSION, encodePack } from './pack.js'
 import { PET_ROWS, PET_STATES, PetSheetError, parsePetSheet, pickPetRows, readPetSource, resolvePetRows, type PetRows, type PetSheet } from './sheet.js'
@@ -97,7 +98,7 @@ export class PetStore {
           // The pack on disk still serves a dial that reads its version or newer; only an older dial than the file
           // has nothing to be given.
           if (pack[4] > version) throw err
-          console.error(`[pets] could not rebuild ${id} as version ${version}, using the stored version ${pack[4]}: ${err instanceof Error ? err.message : String(err)}`)
+          console.error(`[pets] could not rebuild ${id} as version ${version}, using the stored version ${pack[4]}: ${errorKind(err)}`)
         }
       }
     }
