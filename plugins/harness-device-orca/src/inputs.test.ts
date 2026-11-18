@@ -1,5 +1,6 @@
 // Node's real inputs, against scripts, sockets and folders this file makes under /tmp: never the developer's own.
 import { afterEach, assert, beforeEach, test } from 'orca/testing'
+import { spawnSync } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { MISSING, nodeInputs } from './inputs'
@@ -24,8 +25,13 @@ afterEach(async () => {
 
 function script(name: string, body: string): string {
   const file = `${dir}/${name}`
-  writeFileSync(file, `#!/bin/sh\n${body}\n`)
+  // A bare /bin/sh, run once to its exit, then the body into the same file: macOS checks a new file on its first run,
+  // queued machine-wide, and under load that alone passed the 5 s a run is given (cli/src/testing/executableFixture.ts,
+  // which this plugin, with no dependencies, cannot import).
+  writeFileSync(file, '#!/bin/sh\n')
   chmodSync(file, 0o755)
+  spawnSync(file)
+  writeFileSync(file, `#!/bin/sh\n${body}\n`)
   return file
 }
 
