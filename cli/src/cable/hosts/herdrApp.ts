@@ -113,7 +113,7 @@ interface Run { forward: boolean; switched: boolean }
 /** A terminal's scroll queue until it has been quiet for SCROLL_QUIET_MS: whether it is draining (a run under way, or the
  *  wait for the gap before one), the lines that wait (a Claude Code terminal's short of a key too), the gap since
  *  its last run started while it lasts, what it did since it started, for the line it says once quiet (`dropped`: the
- *  lines it did not scroll, whatever the reason; hc's failure has its own line), and the timer of that quiet. */
+ *  lines it did not scroll, whatever the reason; a failed run has its own line), and the timer of that quiet. */
 interface Scrolling {
   running: boolean
   pending: number
