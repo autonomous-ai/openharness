@@ -105,7 +105,7 @@ export function uploadPath(raw: string, env: NodeJS.ProcessEnv = process.env): s
   const native = (dir: string): string => { try { return realpathSync.native(dir) } catch { return resolve(dir) } }
   const account = accountHome()
   const forbidden = forbiddenDirs(env, [homedir(), account]).map(native)
-  // Resolved as the file is, so both are in the file system's own spelling: TEMP on Windows CI is C:\Users\RUNNER~1\...
+  // Resolved as the file is, so both compare in the file system's own spelling, through any link on the profile's path.
   const temp = tempDir(account)
   const stat = statSync(real)
   // A hard link's other names, which may be inside a forbidden folder, are found by no path the fence can check.
