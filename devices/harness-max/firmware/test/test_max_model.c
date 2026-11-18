@@ -53,12 +53,12 @@ static void test_roster_replace(void)
     linked(ABC, 3);
     CHECK(max_ui_focus("b"));
     max_ui_turn("b", "activity", "Editing touch.c", 12, 100);
-    const pro_agent_row_t same[] = {{"a", "a", "claude", "m1", "MacBook Pro"}, {"b", "b", "claude", "m1", "MacBook Pro"},
-                                    {"c", "c", "claude", "m1", "MacBook Pro"}};
+    const pro_agent_row_t same[] = {{"a", "a", "claude", "m1", "MacBook Pro", NULL, NULL}, {"b", "b", "claude", "m1", "MacBook Pro", NULL, NULL},
+                                    {"c", "c", "claude", "m1", "MacBook Pro", NULL, NULL}};
     CHECK(!max_ui_agents(same, 3, 200));
     // b stays (and keeps its turn), a goes, d comes: the selection stays on b.
-    const pro_agent_row_t next[] = {{"c", "c", "codex", "m1", "MacBook Pro"}, {"b", "backend", "claude", "m2", "Mac Studio"},
-                                    {"d", "d", "claude", "m1", "MacBook Pro"}};
+    const pro_agent_row_t next[] = {{"c", "c", "codex", "m1", "MacBook Pro", NULL, NULL}, {"b", "backend", "claude", "m2", "Mac Studio", NULL, NULL},
+                                    {"d", "d", "claude", "m1", "MacBook Pro", NULL, NULL}};
     CHECK(max_ui_agents(next, 3, 300));
     CHECK(max_m.count == 3);
     CHECK(!strcmp(max_m.agents[0].id, "c") && !strcmp(max_m.agents[0].engine, "codex"));
@@ -75,7 +75,7 @@ static void test_roster_replace(void)
     char ids[MAX_AGENTS + 3][8];
     for (int i = 0; i < MAX_AGENTS + 3; i++) {
         snprintf(ids[i], sizeof ids[i], "x%d", i);
-        many[i] = (pro_agent_row_t){ids[i], NULL, NULL, NULL, NULL};
+        many[i] = (pro_agent_row_t){ids[i], NULL, NULL, NULL, NULL, NULL, NULL};
     }
     many[1].id = "x0";
     CHECK(max_ui_agents(many, MAX_AGENTS + 3, 500));
@@ -367,12 +367,12 @@ static void test_a_person_at_the_bar_keeps_the_room(void)
     CHECK(!strcmp(max_ui_selected(), "c") && !max_toast_shown(30500));
     // A recording is a person at the bar, however long ago the last tap.
     max_ui_question_close("c");
-    max_ui_talk(MAX_TALK_RECORDING);
+    max_ui_talk(MAX_TALK_RECORDING, 0);
     max_ui_question("d", "r3", "Merge?", NULL, 0, false, false, 60000);
     CHECK(!strcmp(max_m.toast_id, "d"));
     max_ui_tick(90000);
     CHECK(!strcmp(max_ui_selected(), "c"));
-    max_ui_talk(MAX_TALK_IDLE);
+    max_ui_talk(MAX_TALK_IDLE, 0);
     max_ui_tick(90000);
     CHECK(!strcmp(max_ui_selected(), "d"));
     // So is the form, until it goes.
@@ -402,7 +402,7 @@ static void test_caps(void)
     char viet[301];
     for (int i = 0; i < 100; i++) memcpy(viet + i * 3, "\xe1\xba\xbf", 3);
     viet[300] = 0;
-    const pro_agent_row_t row = {"v", viet, "claude", "m1", "MacBook Pro"};
+    const pro_agent_row_t row = {"v", viet, "claude", "m1", "MacBook Pro", NULL, NULL};
     max_ui_agents(&row, 1, 0);
     max_agent_t *v = max_find("v");
     CHECK(strlen(v->name) == 39 && utf8_valid(v->name) && ends_cut(v->name));
@@ -420,7 +420,7 @@ static void test_caps(void)
     memset(odd, 'x', sizeof odd);
     memcpy(odd + CABLE_NAME_MAX - 2, "\xc3\xa9", 2);
     odd[sizeof odd - 1] = 0;
-    const pro_agent_row_t row2 = {"w", odd, "codex", "m1", "Mac\nStudio\t1"};
+    const pro_agent_row_t row2 = {"w", odd, "codex", "m1", "Mac\nStudio\t1", NULL, NULL};
     max_ui_agents(&row2, 1, 0);
     CHECK(strlen(max_find("w")->name) == CABLE_NAME_MAX - 1 && utf8_valid(max_find("w")->name) && ends_cut(max_find("w")->name));
     CHECK(!strcmp(max_find("w")->machine, "Mac Studio 1"));
@@ -428,10 +428,10 @@ static void test_caps(void)
     char fits[CABLE_NAME_MAX];
     memset(fits, 'y', sizeof fits - 1);
     fits[sizeof fits - 1] = 0;
-    const pro_agent_row_t row3 = {"y", fits, "codex", "m1", "Mac Studio"};
+    const pro_agent_row_t row3 = {"y", fits, "codex", "m1", "Mac Studio", NULL, NULL};
     max_ui_agents(&row3, 1, 0);
     CHECK(!strcmp(max_find("y")->name, fits));
-    const pro_agent_row_t row4 = {"z", "z", "codex", "m1", "A machine whose name is far longer than the cable allows"};
+    const pro_agent_row_t row4 = {"z", "z", "codex", "m1", "A machine whose name is far longer than the cable allows", NULL, NULL};
     max_ui_agents(&row4, 1, 0);
     CHECK(strlen(max_find("z")->machine) == CABLE_NAME_MAX - 1 && ends_cut(max_find("z")->machine));
     max_ui_notice("A notice far longer than the line it is shown on, which the model keeps only in part, "
@@ -444,7 +444,7 @@ static void test_no_talk_while_an_answer_waits(void)
 {
     max_ui_reset();
     max_ui_link(true, "Mac", 0);
-    const pro_agent_row_t row = {"a", "a", "claude", "m1", "Mac"};
+    const pro_agent_row_t row = {"a", "a", "claude", "m1", "Mac", NULL, NULL};
     max_ui_agents(&row, 1, 0);
     max_ui_question("a", "r1", "Which one?", NULL, 0, false, false, 0);
     max_agent_t *a = max_find("a");
@@ -480,8 +480,8 @@ static void test_app_state(void)
     CHECK(max_ui_notice(NULL, 0, 200));
     CHECK(!max_notice_shown(200));
     CHECK(!max_ui_notice("", 0, 300));
-    CHECK(max_ui_talk(MAX_TALK_RECORDING));
-    CHECK(!max_ui_talk(MAX_TALK_RECORDING));
+    CHECK(max_ui_talk(MAX_TALK_RECORDING, 0));
+    CHECK(!max_ui_talk(MAX_TALK_RECORDING, 0));
     CHECK(max_ui_update(40, "0.9.0"));
     CHECK(!max_ui_update(40, "0.9.0"));
     CHECK(max_ui_update(41, "0.9.0"));

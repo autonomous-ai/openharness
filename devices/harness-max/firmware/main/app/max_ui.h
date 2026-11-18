@@ -1,5 +1,5 @@
-// Harness Max's screen in pure C: the lanes model, fed from the cable's callbacks, drawn into a scene, and the finger
-// turned into what the app must do. No ESP-IDF and no lock: max_app.c holds its own lock around every call, so the host
+// Harness Max's screen in pure C: the pages model (docs/superpowers/specs/2026-11-18-harness-max-v2-design.md), fed from
+// the cable's callbacks, drawn into a scene, and the finger turned into what the app must do. No ESP-IDF and no lock: max_app.c holds its own lock around every call, so the host
 // tests drive it with a fake clock.
 //
 // The glass is 1920 x 480, landscape (HT_WIDTH x HT_HEIGHT; the 11.9" demo bar's 1480 x 320 is drawn at 1920 x 415 and
@@ -40,8 +40,10 @@ bool max_ui_answer_receipt(const char *id, const char *fetch, const char *token,
                            const char *error, uint32_t now_ms);
 bool max_ui_summary(const char *id, const char *text, const char *recap, bool restore, pod_tier_t tier,
                     uint32_t now_ms);
-// The computer's window moved to this agent: the room shows it. Not a person at the bar.
+// The computer's window moved to this agent. Not a person at the bar: the page shown stays.
 bool max_ui_focus(const char *id);
+// `apps` (pro_app_apps): the shown app and every app with agents. Before the ring it names.
+bool max_ui_apps(const char *shown, const pro_app_row_t *rows, int n, uint32_t now_ms);
 
 // ---- New Harness ----
 // The welcome offers `form`: New shows under the pager. Read on every tick: a daemon restarted inside a session
@@ -96,7 +98,11 @@ bool max_ui_unsent(const max_out_t *out, uint32_t now_ms);
 // The notice line, for `duration_ms`; NULL or "" clears it.
 bool max_ui_notice(const char *text, uint32_t duration_ms, uint32_t now_ms);
 typedef enum { MAX_TALK_IDLE, MAX_TALK_RECORDING, MAX_TALK_SENDING } max_talk_t;
-bool max_ui_talk(max_talk_t state);
+// The recorder's state, read by the app on every tick and after every voice call. Entering RECORDING starts the
+// recording's clock and its listening (max_ui_level).
+bool max_ui_talk(max_talk_t state, uint32_t now_ms);
+// The mic's envelope while recording, 0..4 (pro_rec_level), once a tick: the band's waveform and the listening.
+bool max_ui_level(unsigned level, uint32_t now_ms);
 // A firmware update in progress: pct 0..100, or -1 when there is none. `to` is the version being installed.
 bool max_ui_update(int pct, const char *to);
 
@@ -113,25 +119,33 @@ void max_ui_render(ht_scene_t *scene, uint32_t now_ms);
 // ---- the finger (touch task), landscape glass coordinates ----
 typedef enum {
     MAX_ACT_NONE,
-    MAX_ACT_OPEN,    // a lane was tapped: the room now shows it; send agent.open for agent_id
-    MAX_ACT_TALK,    // the room's pet was tapped: record for agent_id (the room's agent)
-    MAX_ACT_SEND,    // Send while recording: finish and send (agent_id: the recording's, "" for the form's)
-    MAX_ACT_NEW,     // New, under the pager: name a form and open it (max_ui_form_open)
-    MAX_ACT_SAY,     // the form's Say: record a spoken name for form_id at revision
-    MAX_ACT_CANCEL,  // Cancel while recording: stop and send nothing
+    MAX_ACT_OPEN,       // bring agent_id up on the computer: send agent.open (no recording)
+    MAX_ACT_TALK,       // record for agent_id (its page is up already)
+    MAX_ACT_SEND,       // finish the recording and send it (agent_id: the recording's, "" for the form's)
+    MAX_ACT_NEW,        // New Harness: name a form and open it (max_ui_form_open)
+    MAX_ACT_SAY,        // the form's Say: record a spoken name for form_id at revision
+    MAX_ACT_CANCEL,     // stop the recording and send nothing
+    MAX_ACT_OPEN_TALK,  // a cell's one tap: agent.open for agent_id, then record for it
+    MAX_ACT_PICK,       // an app was picked on Apps: send app.pick for `app`
 } max_act_kind_t;
 typedef struct {
     max_act_kind_t kind;
     char agent_id[ID_MAX];
     char form_id[MAX_FORM_ID_BYTES];
     int revision;
+    char app[PRO_APP_ID_BYTES];
 } max_act_t;
 // One contact at a time: down with the first point, then moves, then up (down false). A tap acts on the lift; a
-// sideways swipe turns the page of lanes, or moves the form. Returns what the app must do (most calls: MAX_ACT_NONE);
-// a tap on a card's button or the form queues its message in the outbox instead. While a recording is up only its Send
-// and Cancel act. Every lift is a person at the bar: for MAX_QUIET_MS no question takes the room.
+// sideways swipe pages the cells on Overview, browses the ring on the agent page, or moves the form. Returns what the
+// app must do (most calls: MAX_ACT_NONE); a tap on an answer or the form queues its message in the outbox instead.
+// Every lift is a person at the bar (touched_ms).
 max_act_t max_ui_touch(bool down, int x, int y, uint32_t now_ms);
 void max_ui_touch_cancel(void);
 
-// The room's agent's id, or NULL when there are no agents.
+// What the clock owes the recording (render task, every tick while recording): MAX_ACT_SEND after speech and then
+// MAX_SILENCE_MS of quiet; MAX_ACT_CANCEL when nothing was heard in MAX_HEAR_MS (the notice says the mic closed and the
+// page stays); else MAX_ACT_NONE. The app acts on it as on the finger's.
+max_act_t max_ui_talk_due(uint32_t now_ms);
+
+// The agent page's (or Attention's) agent id, or NULL when neither is up.
 const char *max_ui_selected(void);

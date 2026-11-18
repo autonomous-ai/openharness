@@ -514,6 +514,12 @@ void pro_app_summary(const char *id, const char *text, const char *recap, const 
     leave();
 }
 
+// The Pro does not say appFilter, so the daemon sends it no `apps`: the Max shows them.
+void pro_app_apps(const char *shown, const pro_app_row_t *rows, int n)
+{
+    (void)shown; (void)rows; (void)n;
+}
+
 void pro_app_notif_replace(const pro_notif_row_t *rows, int n)
 {
     pro_app_lock();

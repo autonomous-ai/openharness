@@ -38,6 +38,36 @@ enum {
     MAX_BUTTON_H = MAX_Y(80),                // a button: 80 px at 480 (9 mm), 69 at 415
 };
 
+// ---- Demo V2: the pages (docs/superpowers/specs/2026-11-18-harness-max-v2-design.md) ----
+typedef enum { MAX_VIEW_OVERVIEW, MAX_VIEW_AGENT, MAX_VIEW_ATTENTION, MAX_VIEW_INBOX, MAX_VIEW_APPS, MAX_VIEW_AMBIENT } max_view_t;
+// Why Attention is up: a question, or a turn that ended loud.
+typedef enum { MAX_ATTN_ASK, MAX_ATTN_DONE, MAX_ATTN_FAIL } max_attn_t;
+// pro_agent_row_t.caps as bits: no letters string (NULL) is all of them, as the dial reads it.
+enum { MAX_CAP_VOICE = 1, MAX_CAP_FOCUS = 2, MAX_CAP_ANSWER = 4, MAX_CAPS_ALL = 7 };
+#define MAX_CELLS 5                 // agents on one page of Overview
+#define MAX_SEGS 6                  // agents on the agent page's strip
+#define MAX_INBOX 12                // notices kept, newest first
+#define MAX_LEVELS 48               // the band's waveform: the mic's last levels, a tick each
+#define MAX_SPEECH_LEVEL 2          // a level at least this is speech (pro_rec_level: 0..4)
+#define MAX_HEAR_MS 4000u           // nothing heard this long after the mic opened: it closes
+#define MAX_SILENCE_MS 1600u        // quiet this long after speech: the recording is sent
+#define MAX_AMBIENT_MS 60000u       // nobody touched and nothing works or waits this long: Ambient
+#define MAX_ATTN_END_MS 8000u       // a done or failed turn's Attention goes back to Overview after this
+#define MAX_TALK_FRAME_MS 100u      // the band redraws this often while recording
+#define MAX_EDGE_FRAME_MS 83u       // the edge light moves this often while Attention is up
+typedef struct {
+    char id[PRO_APP_ID_BYTES], name[CABLE_NAME_MAX];
+    int count, waiting;
+} max_app_t;
+// A notice in Inbox: who, from which app, why, and its words, kept after the agent leaves the ring.
+typedef struct {
+    char id[ID_MAX], name[CABLE_NAME_MAX], engine[12], app[CABLE_NAME_MAX];
+    max_attn_t kind;
+    char text[MAX_QUESTION_BYTES];
+    uint32_t at;
+    bool unread;
+} max_inbox_t;
+
 // ---- a question being answered (max_ui_ask.c) ----
 // How it is answered: on the computer only (no questions the inbox holds, or words too long to echo), in the agent's
 // own app (a shown-only permission prompt), with a plain `answer`, or read whole and answered by reviewed choices.
@@ -111,13 +141,25 @@ typedef enum {
     MAX_HIT_TOAST,       // the toast: the room opens its agent (toast_id)
     MAX_HIT_FORM_SAY,    // the form's Say, while max_form_can_say(): a spoken name for its field
     MAX_HIT_PAGE,        // the pager: the next page of lanes, the first after the last
+    // Demo V2's pages:
+    MAX_HIT_BACK,        // the agent page's Back: to Overview (a recording with words is sent, else cancelled)
+    MAX_HIT_SEG,         // arg: a strip segment (seg_id): show that agent, mic closed (a recording as Back)
+    MAX_HIT_BODY,        // the agent page's body: record (mic closed), or send now (recording)
+    MAX_HIT_BELL,        // Overview's bell: Inbox
+    MAX_HIT_APPS,        // Overview's app column: Apps (only drawn as a hit when there is another app)
+    MAX_HIT_APP,         // arg: an app card on Apps (index in apps[]): pick it
+    MAX_HIT_NOTE,        // arg: an Inbox card (index in inbox[])
+    MAX_HIT_CLOSE,       // Inbox's or Apps' Close: Overview
+    MAX_HIT_SAY_IT,      // Attention's Say it: the agent page with the mic open
+    MAX_HIT_AWAY,        // Attention outside its buttons: bring the agent up on the computer, Overview
+    MAX_HIT_WAKE,        // Ambient: Overview
 } max_hit_kind_t;
 typedef struct {
     int16_t x, y, w, h;
     uint8_t kind;
     int8_t arg;
 } max_hit_t;
-#define MAX_HITS 16
+#define MAX_HITS 48
 
 typedef enum { MAX_IDLE, MAX_WORKING, MAX_ASKING, MAX_DONE, MAX_FAILED } max_state_t;
 
@@ -137,6 +179,9 @@ typedef struct {
     char note[MAX_NOTE_BYTES];       // FAILED: the error; DONE: the summary's text, shown until note_until
     uint32_t note_until;
     bool card;                       // a failure opens a card until dismissed; an alert's summary, until it runs out
+    char host[PRO_APP_ID_BYTES];     // its app ("" when the daemon sent none)
+    uint8_t caps;                    // MAX_CAP_* bits
+    uint32_t since_ms;               // its state's last change: the agent page's "· 2m ago"
 } max_agent_t;
 
 typedef struct {
@@ -168,7 +213,29 @@ typedef struct {
     char talk_id[ID_MAX];            // the agent the recording is for (set when the room's pet starts it; "": Say's)
     int update_pct;                  // -1: no update
     char update_to[MAX_VERSION_BYTES];
+    // Demo V2's pages.
+    max_view_t view;
+    char attn_id[ID_MAX];            // Attention's agent
+    max_attn_t attn;
+    uint32_t attn_from;              // when Attention came up: the edge light runs from here
+    max_app_t apps[PRO_APPS_MAX];    // the daemon's `apps`, its order
+    int app_count;
+    char shown[PRO_APP_ID_BYTES];    // the app whose agents the ring holds
+    bool apps_known;                 // an `apps` frame came: else the app column names the computer, and no Apps page
+    max_inbox_t inbox[MAX_INBOX];    // newest first
+    int inbox_count;
+    int cell_page;                   // Overview's page of cells, within max_cell_pages()
+    uint32_t talk_from;              // the recording's start (its clock)
+    bool talk_heard;                 // speech was heard in this recording
+    uint32_t talk_quiet_from;        // when the speech last stopped (the send ring fills from here)
+    uint8_t levels[MAX_LEVELS];      // the mic's levels, oldest first
+    int level_count;
+    uint32_t idle_from;              // since when nothing works or waits (Ambient)
     // What the last render drew, for the finger and the clock.
+    max_box_t cell_box[MAX_CELLS];
+    char cell_id[MAX_CELLS][ID_MAX];
+    int cell_hits;
+    char seg_id[MAX_SEGS][ID_MAX];   // MAX_HIT_SEG's arg names one
     max_box_t lane_box[MAX_LANES];
     char lane_id[MAX_LANES][ID_MAX];
     int lane_hits;
@@ -232,6 +299,32 @@ bool max_toast_shown(uint32_t now_ms);
 // The room's pet takes voice for this agent: the link is up, nothing is recorded or sent, no form is up, and the agent
 // is neither on a permission prompt (Yes or No only) nor waiting on an answer that is on its way or in.
 bool max_can_talk(const max_agent_t *);
+
+// ---- Demo V2: what the pages read (max_ui_nav.c) ----
+// Overview's cells on the page shown, as roster indices in roster order (the ring's own). Returns how many.
+int max_cells(int out[MAX_CELLS]);
+// Overview's pages of cells (0 with no agents).
+int max_cell_pages(void);
+// An agent on this page of cells waits on the person.
+bool max_page_waits(int page);
+// The agent page's strip: up to MAX_SEGS agents in roster order, a window that holds the selected one. Returns how many.
+int max_segs(int out[MAX_SEGS]);
+// Inbox's unread notices.
+int max_unread(void);
+// The shown app's entry, or NULL (no `apps` yet, or it lists no such app).
+const max_app_t *max_shown_app(void);
+// The app column's name: the shown app's, else the computer's, else "Harness".
+const char *max_app_label(void);
+// The app an agent of the ring is in, for "Answer it in <App>": the shown app's name, else its host's id, else "".
+const char *max_app_of(const max_agent_t *);
+// Whether the bar answers this agent's open question (caps a, and a question the inbox holds: a plain or reviewed path).
+bool max_takes_answers(const max_agent_t *);
+// Whether the bar records for this agent (caps v).
+bool max_takes_voice(const max_agent_t *);
+// The status word under a cell and on its segment: "Needs you", the spinner word, "Done", "Failed", "Resting".
+const char *max_status_word(const max_agent_t *);
+// The letters pro_agent_row_t.caps carries as MAX_CAP_* bits (NULL: all).
+uint8_t max_caps_of(const char *letters);
 
 // ---- questions (max_ui_ask.c) ----
 max_ask_t *max_ask_of(const char *agent);

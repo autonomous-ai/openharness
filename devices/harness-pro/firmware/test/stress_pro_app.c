@@ -154,7 +154,7 @@ static void send_swarms(int n, int sel, int tile_n, int base)
 
 static void send_agents(int a)
 {
-    pro_agent_row_t r = {agent_id[a], "", "claude", "mid", "Diego's Mac"};
+    pro_agent_row_t r = {agent_id[a], "", "claude", "mid", "Diego's Mac", NULL, NULL};
     pro_app_agents(&r, 1);
 }
 

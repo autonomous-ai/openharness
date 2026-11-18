@@ -14,6 +14,8 @@ void pro_cable_start(void);
 
 // ---- sends Pod uses ----
 bool pro_cable_send_open(const char *agent_id);    // agent.open: the person tapped an agent
+// app.pick {app}: the person picked this app on the device (the Max). False when it was not sent.
+bool pro_cable_app_pick(const char *app, bool wait);
 // notif.read: this notification was read on the Pro. The daemon ignores one without a valid token, so a bad one is not sent (false).
 bool pro_cable_send_notif_read(const char *agent_id, const char *read_token);
 typedef enum { PRO_SCROLL_DOWN = 0, PRO_SCROLL_MOVE = 1, PRO_SCROLL_UP = 2 } pro_scroll_phase_t;   // the wire order

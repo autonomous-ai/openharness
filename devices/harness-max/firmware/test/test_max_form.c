@@ -182,9 +182,9 @@ static void test_polls_wait_for_a_spoken_name(void)
 {
     opened(0);
     // The desktop takes one command at a time: no poll while a name is being said and sent.
-    max_ui_talk(MAX_TALK_RECORDING);
+    max_ui_talk(MAX_TALK_RECORDING, 0);
     CHECK(take(5 * MAX_FORM_POLL_MS) == 0);
-    max_ui_talk(MAX_TALK_IDLE);
+    max_ui_talk(MAX_TALK_IDLE, 0);
     CHECK(take(5 * MAX_FORM_POLL_MS) == 1 && OUT[0].op == MAX_FORM_STATE);
 }
 

@@ -193,6 +193,13 @@ void pro_app_agents(const pro_agent_row_t *rows, int n)
     leave();
 }
 
+void pro_app_apps(const char *shown, const pro_app_row_t *rows, int n)
+{
+    lock();
+    changed_if(max_ui_apps(shown, rows, n, ms()));
+    leave();
+}
+
 void pro_app_machines(const cable_machine_t *rows, int count, const char *selected)
 {
     lock();
@@ -367,7 +374,7 @@ void pro_app_notice(const char *text)
 // caller reads the recorder before taking the lock.
 static void talk_locked(bool open, bool waiting)
 {
-    changed_if(max_ui_talk(!open ? MAX_TALK_IDLE : waiting ? MAX_TALK_SENDING : MAX_TALK_RECORDING));
+    changed_if(max_ui_talk(!open ? MAX_TALK_IDLE : waiting ? MAX_TALK_SENDING : MAX_TALK_RECORDING, ms()));
 }
 
 static void talk_sync(void)
@@ -476,6 +483,12 @@ static void act(const max_act_t *a)
         talk_sync();
         break;
     case MAX_ACT_NEW: new_form(); break;
+    case MAX_ACT_OPEN_TALK:   // a cell's one tap: the computer opens the agent, and the bar listens for it
+        pro_cable_send_open(a->agent_id);
+        pro_cable_voice_form(NULL, 0);
+        talk_begin(a->agent_id);
+        break;
+    case MAX_ACT_PICK: pro_cable_app_pick(a->app, true); break;
     case MAX_ACT_NONE: break;
     }
 }

@@ -180,7 +180,7 @@ static void touch_at(uint32_t at)
 static void talk(const char *id, max_talk_t state)
 {
     max_copy(max_m.talk_id, sizeof max_m.talk_id, id);
-    max_ui_talk(state);
+    max_ui_talk(state, 0);
 }
 
 static const char *LONG_TEXT = "Editing the touch driver so that the panel and the finger agree on which way is up, "
@@ -218,7 +218,7 @@ static void test_budget(void)
     for (int i = 0; i < MAX_AGENTS; i++) {
         snprintf(ids[i], sizeof ids[i], "x%d", i);
         rows[i] = (pro_agent_row_t){ids[i], "an-agent-name-that-is-far-too-long-for-one", ENGINES[i % 4], "m1",
-                                    "Machine number 1 with a long name"};
+                                    "Machine number 1 with a long name", NULL, NULL};
     }
     max_ui_agents(rows, MAX_AGENTS, 0);
     for (int i = 1; i < 2 * MAX_LANES + 2; i++)
@@ -611,10 +611,10 @@ static void test_names_and_text_fit(void)
 {
     linked(NULL, 0);
     const pro_agent_row_t rows[] = {
-        {"a", "an-agent-name-that-is-far-too-long-for-one", "claude", "m1", "A machine with a long name"},
-        {"b", "Tr\xe1\xbb\xa3 l\xc3\xbd ti\xe1\xba\xbfng Vi\xe1\xbb\x87t", "codex", "m2", "M\xc3\xa1y ch\xe1\xbb\xa7"},
-        {"c", "another-agent-name-far-too-long-for-a-lane", "claude", "m1", "The build server down the hall, far away"},
-        {"d", "d", "claude", "m1", "MacBook Pro"}};
+        {"a", "an-agent-name-that-is-far-too-long-for-one", "claude", "m1", "A machine with a long name", NULL, NULL},
+        {"b", "Tr\xe1\xbb\xa3 l\xc3\xbd ti\xe1\xba\xbfng Vi\xe1\xbb\x87t", "codex", "m2", "M\xc3\xa1y ch\xe1\xbb\xa7", NULL, NULL},
+        {"c", "another-agent-name-far-too-long-for-a-lane", "claude", "m1", "The build server down the hall, far away", NULL, NULL},
+        {"d", "d", "claude", "m1", "MacBook Pro", NULL, NULL}};
     max_ui_agents(rows, 4, 0);
     working("a", LONG_TEXT, 0);
     working("b", VIET_TEXT, 0);
@@ -763,7 +763,7 @@ static void test_pager(void)
     char ids[MAX_AGENTS][8], most[16];
     for (int i = 0; i < MAX_AGENTS; i++) {
         snprintf(ids[i], sizeof ids[i], "x%d", i);
-        rows[i] = (pro_agent_row_t){ids[i], ids[i], "claude", "m1", "MacBook Pro"};
+        rows[i] = (pro_agent_row_t){ids[i], ids[i], "claude", "m1", "MacBook Pro", NULL, NULL};
     }
     max_ui_agents(rows, MAX_AGENTS, 0);
     max_m.page = max_pages() - 1;
@@ -807,8 +807,8 @@ static void test_motion(void)
     CHECK(step == max_pet_next_ms(a, max_pet_scene(a, true), 0) && step >= POD_PH_ANIM_MS && step < MAX_WAKE_MS);
     CHECK(max_motion_ms(step - 1) == 1 && max_motion_ms(step) == 0);
     // A logo in the room, pets in the lanes: nothing moves.
-    const pro_agent_row_t rows[] = {{"a", "a", "gemini", "m1", "MacBook Pro"}, {"b", "b", "claude", "m1", "MacBook Pro"},
-                                    {"c", "c", "codex", "m1", "MacBook Pro"}};
+    const pro_agent_row_t rows[] = {{"a", "a", "gemini", "m1", "MacBook Pro", NULL, NULL}, {"b", "b", "claude", "m1", "MacBook Pro", NULL, NULL},
+                                    {"c", "c", "codex", "m1", "MacBook Pro", NULL, NULL}};
     max_ui_agents(rows, 3, 0);
     working("b", "Editing", 0);
     max_ui_turn("c", "started", "", 0, 0);

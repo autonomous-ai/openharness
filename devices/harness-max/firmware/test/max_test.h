@@ -18,7 +18,7 @@ static ht_scene_t S;
 static inline void roster_of(const char *const ids[], int n, const char *engine)
 {
     pro_agent_row_t rows[MAX_AGENTS + 4];
-    for (int i = 0; i < n; i++) rows[i] = (pro_agent_row_t){ids[i], ids[i], engine, "m1", "MacBook Pro"};
+    for (int i = 0; i < n; i++) rows[i] = (pro_agent_row_t){ids[i], ids[i], engine, "m1", "MacBook Pro", NULL, NULL};
     max_ui_agents(rows, n, 0);
 }
 // Claude's, whose pet moves in the room; the cable is up.

@@ -94,6 +94,14 @@ bool pro_cable_send_open(const char *agent_id)
     return true;
 }
 void audio_beep(void) { CHECK(LOCK_DEPTH == 0); BEEPS++; }
+static char PICKED[PRO_APP_ID_BYTES];
+bool pro_cable_app_pick(const char *app, bool wait)
+{
+    (void)wait;
+    CHECK(LOCK_DEPTH == 0);
+    snprintf(PICKED, sizeof PICKED, "%s", app);
+    return true;
+}
 
 // What the bar sends besides agent.open: each recorded as one line ("form form-1 open 0 0"), the port refusing while
 // PORT_FULL. The welcome's features are FEATURES.
@@ -175,7 +183,7 @@ static void fresh(void)
     pro_app_link(false, NULL);
     pro_app_link(true, "MacBook Pro");
     pro_agent_row_t rows[AGENTS];
-    for (int i = 0; i < AGENTS; i++) rows[i] = (pro_agent_row_t){IDS[i], IDS[i], "claude", "m1", "MacBook Pro"};
+    for (int i = 0; i < AGENTS; i++) rows[i] = (pro_agent_row_t){IDS[i], IDS[i], "claude", "m1", "MacBook Pro", NULL, NULL};
     pro_app_agents(rows, AGENTS);
     render(now);
     NOTIFIES = 0;

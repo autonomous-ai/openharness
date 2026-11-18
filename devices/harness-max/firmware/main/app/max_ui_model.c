@@ -317,6 +317,8 @@ bool max_ui_agents(const pro_agent_row_t *rows, int n, uint32_t now_ms)
         max_copy(a->engine, sizeof a->engine, r->engine);
         max_copy(a->machine_id, sizeof a->machine_id, r->machine_id);
         max_copy_label(a->machine, sizeof a->machine, r->machine);
+        max_copy(a->host, sizeof a->host, r->host);
+        a->caps = max_caps_of(r->caps);
     }
     max_m.count = k;
     for (int i = 0; i < MAX_AGENTS; i++)   // a question goes with its agent
@@ -501,10 +503,67 @@ bool max_ui_notice(const char *text, uint32_t duration_ms, uint32_t now_ms)
     return true;
 }
 
-bool max_ui_talk(max_talk_t state)
+bool max_ui_talk(max_talk_t state, uint32_t now_ms)
 {
     const bool changed = max_m.talk != state;
+    if (changed && state == MAX_TALK_RECORDING) {   // a new recording: its clock, and nothing heard yet
+        max_m.talk_from = max_m.talk_quiet_from = now_ms;
+        max_m.talk_heard = false;
+        max_m.level_count = 0;
+    }
     max_m.talk = state;
+    return changed;
+}
+
+bool max_ui_level(unsigned level, uint32_t now_ms)
+{
+    if (max_m.talk != MAX_TALK_RECORDING) return false;
+    if (level > 4) level = 4;
+    if (max_m.level_count == MAX_LEVELS) memmove(max_m.levels, max_m.levels + 1, --max_m.level_count);
+    max_m.levels[max_m.level_count++] = (uint8_t)level;
+    if (level >= MAX_SPEECH_LEVEL) {
+        max_m.talk_heard = true;
+        max_m.talk_quiet_from = now_ms;
+    }
+    return true;   // the waveform moved
+}
+
+max_act_t max_ui_talk_due(uint32_t now_ms)
+{
+    max_act_t act = {MAX_ACT_NONE, "", "", 0, ""};
+    if (max_m.talk != MAX_TALK_RECORDING) return act;
+    const uint32_t quiet = now_ms - max_m.talk_quiet_from;
+    if (max_m.talk_heard && quiet >= MAX_SILENCE_MS) {
+        act.kind = MAX_ACT_SEND;
+        max_copy(act.agent_id, sizeof act.agent_id, max_m.talk_id);
+    } else if (!max_m.talk_heard && now_ms - max_m.talk_from >= MAX_HEAR_MS) {
+        act.kind = MAX_ACT_CANCEL;
+        max_notice_set("Mic closed \xc2\xb7 tap to talk", now_ms);
+    }
+    return act;
+}
+
+bool max_ui_apps(const char *shown, const pro_app_row_t *rows, int n, uint32_t now_ms)
+{
+    (void)now_ms;
+    if (n < 0) n = 0;
+    if (n > PRO_APPS_MAX) n = PRO_APPS_MAX;
+    static max_app_t apps[PRO_APPS_MAX];   // over the 1 KB frame budget of the cable_link task
+    memset(apps, 0, sizeof apps);
+    for (int i = 0; i < n; i++) {
+        max_copy(apps[i].id, sizeof apps[i].id, rows[i].id);
+        max_copy_label(apps[i].name, sizeof apps[i].name, rows[i].name && rows[i].name[0] ? rows[i].name : rows[i].id);
+        apps[i].count = rows[i].count < 0 ? 0 : rows[i].count;
+        apps[i].waiting = rows[i].waiting < 0 ? 0 : rows[i].waiting;
+    }
+    char id[PRO_APP_ID_BYTES];
+    max_copy(id, sizeof id, shown);
+    const bool changed = !max_m.apps_known || n != max_m.app_count || strcmp(id, max_m.shown) ||
+                         memcmp(apps, max_m.apps, sizeof apps);
+    memcpy(max_m.apps, apps, sizeof apps);
+    max_m.app_count = n;
+    memcpy(max_m.shown, id, sizeof id);
+    max_m.apps_known = true;
     return changed;
 }
 

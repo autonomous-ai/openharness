@@ -27,10 +27,22 @@
 void pro_app_link(bool up, const char *machine);
 
 // ---- roster ----
-typedef struct { const char *id, *name, *engine, *machine_id, *machine; } pro_agent_row_t;
+// `host` is the agent's nearest app ("harness", "orca", ...; NULL when the daemon sent none) and `caps` what the device
+// may do with it, the daemon's letters ("svfa": status, voice, focus, answer; "" none of them; NULL when left out,
+// which reads as all four).
+typedef struct { const char *id, *name, *engine, *machine_id, *machine, *host, *caps; } pro_agent_row_t;
 // The complete agent list of the window's tab, once per `agents.end`. Ids are unique and shorter than ID_MAX; at most
 // POD_AGENTS_MAX (32) rows; `name` falls back to the id. A list that ends without a begin is dropped.
 void pro_app_agents(const pro_agent_row_t *rows, int n);
+
+// ---- apps (the Max says appFilter "v1"; the Pro ignores these) ----
+#define PRO_APPS_MAX 16        // the daemon's fixed set of apps
+#define PRO_APP_ID_BYTES 17    // an app id: at most 16 bytes, as app.pick takes it
+// One app the daemon lists: its id ("orca"), its name ("Orca"), its agents and how many of them wait on the person.
+typedef struct { const char *id, *name; int count, waiting; } pro_app_row_t;
+// `apps`, sent before each ring to a device that says appFilter: the app whose agents the ring holds (`shown`, "" with
+// no agents) and every app with agents, at most PRO_APPS_MAX (extra ones are dropped).
+void pro_app_apps(const char *shown, const pro_app_row_t *rows, int n);
 
 // The tab list. `members` is NULL when no tab carried `agentIds` (an older daemon); otherwise members->count[i] and
 // ->id[i][k] belong to items[i], and ->meta[i][k].has says whether `members` described that id. At most SWARMS_MAX

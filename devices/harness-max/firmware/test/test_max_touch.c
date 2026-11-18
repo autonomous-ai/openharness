@@ -167,7 +167,7 @@ static void test_talk_from_the_room(void)
     CHECK(tap_on(&send).kind == MAX_ACT_NONE && tap_on(&cancel).kind == MAX_ACT_NONE);
     max_act_t act = tap_on(&pet);
     CHECK(act.kind == MAX_ACT_TALK && !strcmp(act.agent_id, "x0") && !strcmp(max_m.talk_id, "x0"));
-    max_ui_talk(MAX_TALK_RECORDING);
+    max_ui_talk(MAX_TALK_RECORDING, 0);
     // While it records everything else rests: the pet, the card's buttons, the toast, New, the pager, a lane, a swipe.
     max_ui_question("x1", "toolu_2", DB.q, &DB, 1, false, false, 10);
     CHECK(max_toast_shown(10) && tap_on(&toast).kind == MAX_ACT_NONE);
@@ -179,16 +179,16 @@ static void test_talk_from_the_room(void)
     CHECK(max_m.page == 0 && !strcmp(max_ui_selected(), "x0"));
     // Cancel stops it: nothing is sent.
     CHECK(tap_on(&cancel).kind == MAX_ACT_CANCEL && !strcmp(max_ui_selected(), "x0"));
-    max_ui_talk(MAX_TALK_IDLE);
+    max_ui_talk(MAX_TALK_IDLE, 0);
     max_ui_question_close("x1");
     // Send finishes the next for x0; while it is sent nothing acts, until the reply ends it.
     CHECK(tap_on(&pet).kind == MAX_ACT_TALK);
-    max_ui_talk(MAX_TALK_RECORDING);
+    max_ui_talk(MAX_TALK_RECORDING, 0);
     act = tap_on(&send);
     CHECK(act.kind == MAX_ACT_SEND && !strcmp(act.agent_id, "x0"));
-    max_ui_talk(MAX_TALK_SENDING);
+    max_ui_talk(MAX_TALK_SENDING, 0);
     CHECK(tap_on(&send).kind == MAX_ACT_NONE && tap_on(&cancel).kind == MAX_ACT_NONE);
-    max_ui_talk(MAX_TALK_IDLE);
+    max_ui_talk(MAX_TALK_IDLE, 0);
     // A permission prompt takes Yes or No only, and an answer on its way no voice either.
     max_ui_question("x0", "toolu_3", DEPLOY.q, &DEPLOY, 1, true, false, 20);
     CHECK(tap_on(&pet).kind == MAX_ACT_NONE);
@@ -211,24 +211,24 @@ static void test_spoken_answer_moves_the_room(void)
     render(0);
     const max_hit_t pet = *room_hit(MAX_HIT_TALK, 0), send = *room_hit(MAX_HIT_TALK_SEND, 0);
     CHECK(tap_on(&pet).kind == MAX_ACT_TALK);
-    max_ui_talk(MAX_TALK_RECORDING);
+    max_ui_talk(MAX_TALK_RECORDING, 0);
     max_act_t act = tap_on(&send);
     CHECK(act.kind == MAX_ACT_SEND && !strcmp(act.agent_id, "a") && !strcmp(max_ui_selected(), "c") && max_ui_tick(0));
-    max_ui_talk(MAX_TALK_IDLE);
+    max_ui_talk(MAX_TALK_IDLE, 0);
     max_ui_question_close("a");   // the daemon took it
     // c's question answered by voice, and none waits: the room stays to show c at work.
     act = tap_on(&pet);
     CHECK(act.kind == MAX_ACT_TALK && !strcmp(act.agent_id, "c"));
-    max_ui_talk(MAX_TALK_RECORDING);
+    max_ui_talk(MAX_TALK_RECORDING, 0);
     CHECK(tap_on(&send).kind == MAX_ACT_SEND && !strcmp(max_ui_selected(), "c"));
-    max_ui_talk(MAX_TALK_IDLE);
+    max_ui_talk(MAX_TALK_IDLE, 0);
     // c no longer asks: talking to it moves nothing, whatever waits.
     max_ui_question_close("c");
     max_ui_question("b", "toolu_3", DB.q, &DB, 1, false, false, 20);
     CHECK(tap_on(&pet).kind == MAX_ACT_TALK);
-    max_ui_talk(MAX_TALK_RECORDING);
+    max_ui_talk(MAX_TALK_RECORDING, 0);
     CHECK(tap_on(&send).kind == MAX_ACT_SEND && !strcmp(max_ui_selected(), "c"));
-    max_ui_talk(MAX_TALK_IDLE);
+    max_ui_talk(MAX_TALK_IDLE, 0);
 }
 
 // A question that came while a person was at the bar: a tap on its toast opens it; a lane tap puts the toast away.
@@ -384,10 +384,10 @@ static void test_new_harness(void)
     CHECK(tap_on(room_hit(MAX_HIT_TALK, 0)).kind == MAX_ACT_NONE);
     max_act_t act = tap_on(room_hit(MAX_HIT_FORM_SAY, 0));
     CHECK(act.kind == MAX_ACT_SAY && !strcmp(act.form_id, "form-1") && act.revision == 7 && max_m.talk_id[0] == 0);
-    max_ui_talk(MAX_TALK_RECORDING);
+    max_ui_talk(MAX_TALK_RECORDING, 0);
     act = tap_on(room_hit(MAX_HIT_TALK_SEND, 0));
     CHECK(act.kind == MAX_ACT_SEND && act.agent_id[0] == 0);
-    max_ui_talk(MAX_TALK_IDLE);
+    max_ui_talk(MAX_TALK_IDLE, 0);
     render(0);
     CHECK(press(MAX_HIT_FORM_PICK, 0).kind == MAX_ACT_NONE && take(0) == 1 && OUT[0].op == MAX_FORM_ACTIVATE);
     // A page that changed since it was drawn (here by a spoken name) takes no tap.

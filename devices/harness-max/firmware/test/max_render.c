@@ -17,11 +17,11 @@ static uint16_t px[HT_WIDTH * HT_HEIGHT];
 static const cable_machine_t MACHINES[] = {{.id = "m1", .name = "MacBook Pro", .state = "ready", .local = true},
                                            {.id = "m2", .name = "Mac Studio", .state = "ready"},
                                            {.id = "m3", .name = "Build server", .state = "offline"}};
-static const pro_agent_row_t AGENTS[] = {{"fw", "firmware-max", "claude", "m1", "MacBook Pro"},
-                                         {"be", "backend", "codex", "m2", "Mac Studio"},
-                                         {"web", "website", "claude", "m1", "MacBook Pro"},
-                                         {"docs", "docs", "codex", "m1", "MacBook Pro"},
-                                         {"cli", "harness-cli", "claude", "m2", "Mac Studio"}};
+static const pro_agent_row_t AGENTS[] = {{"fw", "firmware-max", "claude", "m1", "MacBook Pro", NULL, NULL},
+                                         {"be", "backend", "codex", "m2", "Mac Studio", NULL, NULL},
+                                         {"web", "website", "claude", "m1", "MacBook Pro", NULL, NULL},
+                                         {"docs", "docs", "codex", "m1", "MacBook Pro", NULL, NULL},
+                                         {"cli", "harness-cli", "claude", "m2", "Mac Studio", NULL, NULL}};
 
 // The daemon offers New Harness, as cableHost does.
 static void cable(int agents)
@@ -114,7 +114,7 @@ static void swipe_left(void)
 static void talk(const char *id, max_talk_t state)
 {
     max_copy(max_m.talk_id, sizeof max_m.talk_id, id);
-    max_ui_talk(state);
+    max_ui_talk(state, T0);
 }
 // A question that arrived while a person was at the bar: the toast, `age_ms` into its time.
 static void toast(const char *id, uint32_t age_ms)
@@ -165,9 +165,9 @@ static void s_update(void) { three_working(); max_ui_update(40, "0.9.0"); }
 static void s_long(void)
 {
     static const pro_agent_row_t rows[] = {
-        {"en", "an-agent-name-that-is-far-too-long-for-one-lane", "claude", "m1", "A MacBook Pro with a long name"},
-        {"vi", "Trợ lý viết tài liệu tiếng Việt cho nhóm", "codex", "m2", "Máy chủ ở văn phòng"},
-        {"vq", "Kiểm thử", "claude", "m1", "MacBook Pro"}};
+        {"en", "an-agent-name-that-is-far-too-long-for-one-lane", "claude", "m1", "A MacBook Pro with a long name", NULL, NULL},
+        {"vi", "Trợ lý viết tài liệu tiếng Việt cho nhóm", "codex", "m2", "Máy chủ ở văn phòng", NULL, NULL},
+        {"vq", "Kiểm thử", "claude", "m1", "MacBook Pro", NULL, NULL}};
     max_ui_reset();
     max_ui_link(true, "MacBook Pro của nhóm ở văn phòng", T0);
     max_ui_agents(rows, 3, T0);
@@ -183,10 +183,10 @@ static void s_notice(void) { three_working(); max_ui_focus("fw"); max_ui_notice(
 // More agents than a page of lanes holds: the pager beside them.
 static void s_pages(void)
 {
-    static const pro_agent_row_t more[] = {{"a1", "landing-page", "claude", "m1", "MacBook Pro"},
-                                           {"a2", "billing", "codex", "m2", "Mac Studio"},
-                                           {"a3", "search", "gemini", "m2", "Mac Studio"},
-                                           {"a4", "mobile", "muse", "m1", "MacBook Pro"}};
+    static const pro_agent_row_t more[] = {{"a1", "landing-page", "claude", "m1", "MacBook Pro", NULL, NULL},
+                                           {"a2", "billing", "codex", "m2", "Mac Studio", NULL, NULL},
+                                           {"a3", "search", "gemini", "m2", "Mac Studio", NULL, NULL},
+                                           {"a4", "mobile", "muse", "m1", "MacBook Pro", NULL, NULL}};
     pro_agent_row_t rows[9];
     memcpy(rows, AGENTS, sizeof AGENTS);
     memcpy(rows + 5, more, sizeof more);

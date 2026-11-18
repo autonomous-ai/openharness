@@ -11,7 +11,7 @@ static bool on_hit(const max_hit_t *h, int x, int y) { return x >= h->x && x < h
 
 static max_act_t act_for(max_act_kind_t kind, const char *id)
 {
-    max_act_t act = {kind, "", "", 0};
+    max_act_t act = {kind, "", "", 0, ""};
     max_copy(act.agent_id, sizeof act.agent_id, id);
     return act;
 }
