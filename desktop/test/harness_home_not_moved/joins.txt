@@ -1,0 +1,10 @@
+bootstrap/agent_prefetch.dart:66: $_home/.harness
+bootstrap/agent_prefetch.dart:447: $home/.harness
+bootstrap/agent_prefetch.dart:475: $home/.harness
+bootstrap/windows_git_setup.dart:81: '.harness'
+state/app_state.dart:4566: }.harness
+state/app_state.dart:4583: $sep.harness
+state/app_state.dart:14889: $home/.harness
+state/app_state.dart:14892: $home/.harness
+ws/daemon_pipe_record.dart:60: '.harness'
+ws/local_daemon_transport.dart:61: $home/.harness
