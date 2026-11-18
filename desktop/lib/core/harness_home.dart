@@ -132,6 +132,8 @@ final class HarnessHome {
 }
 
 /// The variable when it is an absolute path, else `<home>/.local/<fallback>`.
+/// Its trailing slashes go, as the CLI's `posix.join` drops them, so a string
+/// join names the folder the CLI uses, byte for byte.
 String _xdgBase(
   HomeLook look,
   String variable,
@@ -140,6 +142,8 @@ String _xdgBase(
   HarnessJoin join,
 ) {
   final value = look.environment[variable];
-  if (value != null && p.posix.isAbsolute(value)) return value;
+  if (value != null && p.posix.isAbsolute(value)) {
+    return value.replaceFirst(RegExp(r'/+$'), '');
+  }
   return join(join(home, '.local'), fallback);
 }

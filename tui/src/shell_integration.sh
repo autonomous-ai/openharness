@@ -9,12 +9,13 @@ _hn_state_root() (
         printf '%s\n' "$_hn_legacy"
         exit
     fi
+    # A trailing slash goes, so `$XDG_STATE_HOME/` names the folder hn uses.
     case "${XDG_DATA_HOME-}" in
-        /*) _hn_data="$XDG_DATA_HOME/harness" ;;
+        /*) _hn_data="${XDG_DATA_HOME%/}/harness" ;;
         *) _hn_data="$HOME/.local/share/harness" ;;
     esac
     case "${XDG_STATE_HOME-}" in
-        /*) _hn_state="$XDG_STATE_HOME/harness" ;;
+        /*) _hn_state="${XDG_STATE_HOME%/}/harness" ;;
         *) _hn_state="$HOME/.local/state/harness" ;;
     esac
     if [ ! -e "$_hn_data" ] && [ -e "$_hn_legacy" ]; then
