@@ -471,6 +471,23 @@ describe('uploadFile', () => {
     expect(tried).toEqual([])
   }, 5_000)
 
+  // Before Windows 11 a reserved name is the device whatever its extension or folder: COM1.txt is the serial port COM1,
+  // and a stat opens it as an open does. Neither the name given nor the one realpath answers is stat'ed or opened.
+  it('touches no device a Windows document name stands for, as COM1.txt does', () => {
+    platform.windows = true
+    const statted: unknown[] = []
+    disk.hooks.statSync = (real, ...args) => { statted.push((args as unknown[])[0]); return real(...args) }
+    const { tried } = descriptors()
+    for (const name of ['COM1.txt', 'com9.pdf', 'LPT1 .txt', 'aux.notes.md', 'NUL.txt', 'conout$.txt']) {
+      expect(said(join(home, 'docs', name)), name).toMatch(/not a media file/)
+    }
+    expect(statted).toEqual([])
+    expect(tried).toEqual([])
+    vi.spyOn(realpathSync, 'native').mockReturnValue(join(home, 'docs', 'COM1.txt'))
+    expect(said(join(home, 'docs', 'note.txt'))).toMatch(/not a media file/)
+    expect(statted).toEqual([join(home, 'docs', 'note.txt')])
+  })
+
   // A FIFO put in the document's place after its check: an open for reading waits for its writer; with O_NONBLOCK it
   // returns at once.
   it.skipIf(process.platform === 'win32')('never waits on a FIFO put in a document\'s place after its check', () => {
