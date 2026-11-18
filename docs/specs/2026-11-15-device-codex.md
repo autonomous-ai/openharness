@@ -65,14 +65,20 @@ in its own app.
 dial voice ──▶ devices: ObservedSource.send(agent, text)
    engine codex, live, transcript under env.CODEX_HOME/sessions
      └─ codexQueue.send(threadId, text)
-          execFile(codex, ['queue', '--thread', id, `--message=${text}`])   no shell, cwd = homedir,
-                                                                           CODEX_HOME = env.CODEX_HOME, 10 s
+          execFile(codex, ['queue', '--thread', id, `--message=${text}`])   no shell, cwd = homedir, 10 s
           ├─ exit 0 ─────────────▶ { ok: true }                          count 'codex'
           ├─ timeout ────────────▶ "<name> did not answer."               count 'codex-timeout' (no fallback: it may be queued)
-          └─ exit ≠ 0, no start ──▶ fallback: today's Orca route (idle + handle only), else "<name> did not answer."
+          └─ exit ≠ 0, no start ──▶ fallback: today's Orca route (idle + handle only), else the failure's sentence
                                                                           count 'codex-failed'
    anything else: today's route, unchanged (mod for Claude Code, Orca typing for an idle agent)
 ```
+
+- **Which `codex`, and its environment.** `codex` is the ChatGPT app's own Codex CLI for a session in that app
+  (macOS), else the `codex` a launch would run. Its environment is the login shell's with the daemon's on top: `PATH`
+  is the login shell's, then the daemon's, and `CODEX_HOME` is `env.CODEX_HOME`.
+  (Changed 2026-11-18, [design](../plans/2026-11-18-dial-chatgpt-pick-and-voice-design.md).)
+- **A failed queue with no pane to type into** answers `Update ChatGPT, then try again.` for a session in the ChatGPT
+  app, and `Codex could not take it. Try again.` for any other. (Changed 2026-11-18, [design](../plans/2026-11-18-dial-chatgpt-pick-and-voice-design.md).)
 
 ### `cli/src/cable/hosts/codexQueue.ts` (new, in the devices process)
 
@@ -81,19 +87,30 @@ dial voice ──▶ devices: ObservedSource.send(agent, text)
   start), so the one log line can name it.
 - `deps`: `run(file, args, { cwd, env, timeoutMs })` (execFile, `killSignal: 'SIGKILL'`, a deadline that answers by itself,
   as `orca.ts` does), the binary, `home` (`env.CODEX_HOME`), `cwd` (`homedir()`).
-- **The binary is the Codex Harness itself launches** (PM, 2026-11-15): `engineBin('codex')` (`lib/engineBin.ts`:
-  `CODEX_PATH`, else `codex`), resolved with `resolveBinaryOnPath` on the daemon's `PATH`. No login-shell probe: where
-  Harness can launch Codex, the queue finds it.
-- `can()`: that binary resolves. A look holds 30 s: the dial's list asks it for each Codex row every second while a
-  dial is connected, and a walk of `PATH` took 0.24 to 0.7 ms on this Mac (review, 2026-11-15).
+- **The binary.** (Changed 2026-11-18, [design](../plans/2026-11-18-dial-chatgpt-pick-and-voice-design.md).)
+  - For a session in the ChatGPT app (`agent.app === 'codex'` and `agent.engine === 'codex'`), the app's own CLI: the
+    first of `/Applications/ChatGPT.app` and `~/Applications/ChatGPT.app` whose
+    `Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex` is executable. macOS only, run directly, no shell.
+    When it fails, the words are not tried again through another `codex`: they must never run twice.
+  - Every other session, and an app session with no app CLI found: the `codex` a launch would run. `CODEX_PATH` when
+    set, else `codex` on the login shell's `PATH`, then on the daemon's.
+  - The login shell's environment is read once, lazily: at the first `can()` or `send()`, on macOS and Linux, never at
+    the process's start and never on Windows. Until then the daemon's environment is used. A computer whose dial never
+    meets a Codex session never starts the interactive shell.
+- `can()` takes whether the session is the app's: an app session can queue when the app's CLI or the other `codex`
+  is there. A look holds 30 s: the dial's list asks it for each Codex row every second while a dial is connected, and
+  a walk of `PATH` took 0.24 to 0.7 ms on this Mac (review, 2026-11-15). A look taken before the login shell was read
+  holds only until it is read.
 - `send` checks before it runs anything: the thread id is a UUID (`/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/`),
   the text is 1 to `MAX_TEXT` (2,000) characters. The text is passed as is (newlines stay: they do not submit anything
   in a queue), joined to its flag.
 - **One command at a time per thread:** a second send while one runs answers `busy` (the dial says "<name> has not taken
   your last words yet."), so two transcripts never race into the queue out of order.
 - **What it logs:** nothing itself; the observed source's one line per send names the route and, for a failure, its
-  reason: `[device] voice · codex-failed (exit N)`, `(no binary)`, or `(refused)` when the queue ran nothing because
-  the words themselves failed its checks (an empty text, a NUL) (PM, 2026-11-15).
+  reason and which `codex` ran: `[device] voice · codex-failed (exit N · app)` or `(exit N · path)`,
+  `(no binary · app)` or `(no binary · path)` (`path` when no `codex` was found at all), or `(refused)`, with no
+  suffix, when the queue ran nothing because the words themselves failed its checks (an empty text, a NUL)
+  (PM, 2026-11-15). (Changed 2026-11-18, [design](../plans/2026-11-18-dial-chatgpt-pick-and-voice-design.md).)
   Never the text, the thread id or a path: Codex's own error text names the thread and the home.
 
 ### `cli/src/cable/hosts/observed.ts`
@@ -133,8 +150,10 @@ dial voice ──▶ devices: ObservedSource.send(agent, text)
 
 | Case | What the person sees | Log |
 |---|---|---|
-| No `codex` on `PATH` | Voice only where Orca can type, as today | `voice · orca` or the refusal |
-| An old Codex with no `queue`, or a thread not in the home | Today's checks and sentences: typed into Orca when idle at a handle | `voice · codex-failed (exit N)` |
+| No `codex` anywhere: no app CLI, none on the login shell's or the daemon's `PATH` (Changed 2026-11-18) | Voice only where Orca can type, as today. With no `codex` on any `PATH`, a session in the ChatGPT app still queues through the app's CLI | `voice · orca` or the refusal |
+| An old Codex with no `queue`, or a thread not in the home | Today's checks and sentences: typed into Orca when idle at a handle | `voice · codex-failed (exit N · app)` or `(exit N · path)` |
+| A session in the ChatGPT app whose queue failed, no pane to type into (Changed 2026-11-18) | "Update ChatGPT, then try again." | `voice · codex-failed (exit N · app)`, `(exit N · path)` or `(no binary · path)` |
+| Another session whose queue failed, no pane to type into (Changed 2026-11-18) | "Codex could not take it. Try again." | `voice · codex-failed (exit N · path)` or `(no binary · path)` |
 | `codex queue` hangs past 10 s | "<name> did not answer." (it may still have queued, so nothing is typed) | `voice · codex-timeout` |
 | A second transcript while the first is queueing | "<name> has not taken your last words yet." | `voice · pending` |
 | The session ended just before | Sent; it runs at the thread's next resume | `voice · codex` |
@@ -157,7 +176,8 @@ devices process holds the text in memory for the length of one `codex queue` cal
 ### Measures
 
 The `[device] voice · <route>` log line the devices process writes today, with three new routes: `codex`,
-`codex-failed (exit N | no binary | refused)`, `codex-timeout`. Counts only.
+`codex-failed (exit N · app | exit N · path | no binary · app | no binary · path | refused)`, `codex-timeout`. Counts
+only. (Changed 2026-11-18, [design](../plans/2026-11-18-dial-chatgpt-pick-and-voice-design.md).)
 
 ## Tests
 
@@ -172,6 +192,19 @@ The `[device] voice · <route>` log line the devices process writes today, with 
   `PATH` that records its arguments and `CODEX_HOME`. A Codex session outside a pane (its hooks, a transcript under the
   test's Codex home) in a working state takes the dial's words, and the fake records one `queue` call with the thread
   and the words.
+- Added 2026-11-18 ([design](../plans/2026-11-18-dial-chatgpt-pick-and-voice-design.md)):
+  - `codexQueue.spec.ts`: an app session runs the app's CLI when it is there, else the other `codex`.
+  - `codexQueue.spec.ts`: `CODEX_PATH` comes before the login shell's `PATH`, which comes before the daemon's.
+  - `codexQueue.spec.ts`: `can()` is true for an app session with only the app's CLI.
+  - `codexQueue.spec.ts`: the run's environment is `oneShotParentEnv()` with `PATH` login-then-daemon and
+    `CODEX_HOME` the daemon's.
+  - `codexQueue.spec.ts`: the login shell is read on first use, never at creation and never on Windows.
+  - `observed.spec.ts`: a failed app session answers "Update ChatGPT, then try again.", another "Codex could not take
+    it. Try again.", and the log line names `app` or `path`.
+  - `devices.spec.ts`: the queue reads the login shell on first use, runs the app's CLI for an app session, and the
+    dial hears each failure's sentence.
+  - `deviceCodex.e2e.ts` (macOS only): a ChatGPT app session, with the `PATH` `codex` exiting 127, takes the dial's
+    words through a fake app CLI: one queue call, the right thread and words.
 
 ## Verification
 
