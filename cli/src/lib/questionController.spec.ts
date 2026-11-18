@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { screenFor } from '../engines/screens.js'
 import type { PaneView } from '../engines/facets/screen.js'
 import type { RegisteredSession } from './registry.js'
-import { AskQuestionController, QuestionWatcher, partitionLabels } from './questionController.js'
+import { AskQuestionController, QuestionWatcher, partitionLabels, partitionTexts } from './questionController.js'
 
 const capture = readFileSync(new URL('./__fixtures__/permission-claude.txt', import.meta.url), 'utf8')
 const view = screenFor('claude').inspect(capture).question
@@ -180,6 +180,15 @@ describe('asynchronous question evidence', () => {
       expect(ms(Array(1000).fill('x').join(', '))).toBeLessThan(50)
       expect(ms(Array(1000).fill('A').join(', '))).toBeLessThan(50)
       expect(partitionLabels(rows, Array(1000).fill('A').join(', '))).toHaveLength(1000)
+    })
+
+    it('reads a long answer in work that grows with its length times the labels\' length, however many commas they hold', () => {
+      // A label on screen may hold many commas: trying every run of pieces up to the label with the most held the core
+      // 16 s on a 4 KB answer against a label of 2,000 commas, its work growing with the square of them (2026-11-18).
+      const texts = [`${'a,'.repeat(300)}b`, 'x'], answer = `${'a,'.repeat(2047)}a`
+      let keyed = 0
+      partitionTexts(texts, answer, (text) => { keyed += text.length; return text.trim() })
+      expect(keyed).toBeLessThanOrEqual(answer.length * texts.reduce((sum, text) => sum + text.length, 0))
     })
   })
 
