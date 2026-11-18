@@ -66,3 +66,9 @@ This count is not performance acceptance.
 Two packaged terminal shell-input cases are prepared in `e2e/engineReaders.e2e.ts`: supervised
 worker freeze/refusal/recovery with the same live core, and explicit inline compatibility. They
 have not run yet. Native execution, matched costs and independent review remain required.
+
+Independent source review verified the exact 507-file eager closure, derived worker plan and
+text-identical approval classification, with no production correctness blocker found. Its native
+fixture review caught an existence-before-content race in shell redirection; the fixture now waits
+for the expected complete contents and checks absence of the refused write again after recovery.
+The packaged tests and matched cost gate remain unrun; review does not waive them.

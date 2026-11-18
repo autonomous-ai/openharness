@@ -200,7 +200,10 @@ describe('Claude Code and Codex readers in their own processes', () => {
     const agentId = opened.agent.id
     const write = async (name: string) => {
       c.send('message', { agentId, content: `printf verified > ${name}.txt` })
-      await until('the shell command to complete', () => existsSync(join(cwd, `${name}.txt`)) || null, 30_000, 50)
+      await until('the shell command to complete', () => {
+        const path = join(cwd, `${name}.txt`)
+        return existsSync(path) && readFileSync(path, 'utf8') === 'verified' || null
+      }, 30_000, 50)
       expect(readFileSync(join(cwd, `${name}.txt`), 'utf8')).toBe('verified')
     }
     await write('before')
@@ -218,6 +221,7 @@ describe('Claude Code and Codex readers in their own processes', () => {
       } finally { process.kill(worker!, 'SIGCONT') }
     } else expect(worker).toBeUndefined()
     await write('after')
+    expect(existsSync(join(cwd, 'blocked.txt'))).toBe(false)
     expect(d.corePid()).toBe(core)
     expect(d.coresStarted()).toBe(1)
   })
