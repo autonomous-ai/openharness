@@ -25,15 +25,18 @@ describe('moveStatusLine', () => {
     ]
     expect(lines).toEqual([
       'Harness\'s folders move after this update settles.',
-      'Harness\'s folders stay in ~/.harness until the agents close: close them, then run harness start.',
-      'Harness\'s folders stay in ~/.harness until the agents close: close them, then run harness start.',
-      'Moving Harness\'s folders failed: the new folders already exist; move them aside, then run harness start.',
+      // A PTY host holds Harness's terminals: they are closed too.
+      'Harness\'s folders stay in ~/.harness until its agents and terminals close: close them, then run harness start.',
+      'Harness\'s folders stay in ~/.harness until its agents and terminals close: close them, then run harness start.',
+      // The folders by their default names, whatever a setting named: a person finds them by those.
+      'Moving Harness\'s folders failed: ~/.local/share/harness or ~/.local/state/harness already exists; move it aside, then run harness start.',
       'Moving Harness\'s folders failed: free some disk space, then run harness start.',
-      'Moving Harness\'s folders failed: Harness cannot write where they go; make those folders yours, then run harness start.',
+      'Moving Harness\'s folders failed: Harness cannot write ~/.local/share/harness or ~/.local/state/harness; make the folders they are in yours, then run harness start.',
       'Moving Harness\'s folders failed: run harness start to try again.',
       'Harness\'s folders stay where a setting or a link keeps them.',
     ])
-    // ~/.harness is the one path a line may name, and no internal code shows.
-    for (const line of lines) expect(line?.replaceAll('~/.harness', '')).not.toMatch(/[\n/]|-(override|pending|tmux|host|exists|space)|\bio\b/)
+    // ~/.harness and the two folders it moves to are the paths a line may name, and no internal code shows.
+    const named = (line: string | null) => ['~/.harness', '~/.local/share/harness', '~/.local/state/harness'].reduce((rest, path) => rest?.replaceAll(path, '') ?? null, line)
+    for (const line of lines) expect(named(line)).not.toMatch(/[\n/]|-(override|pending|tmux|host|exists|space)|\bio\b/)
   })
 })
