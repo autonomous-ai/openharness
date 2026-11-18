@@ -2,7 +2,9 @@
 //
 // What it says, and in what order, is cableSession.ts's (cli/src/cable): the same messages and fields, so a bar showing
 // this story shows a real computer the same way. It leaves out what only a real computer has: firmware updates, pets,
-// apps and windows, model lists, drafts and passages.
+// windows and tabs, model lists, drafts and passages. One computer runs agents in three apps. A device that says
+// appFilter (the Max) is shown one app's agents at a time, as the daemon shows them
+// (docs/specs/2026-11-14-dial-app-filter.md); any other gets one ring of every agent.
 #include "demo/max_demo.h"
 
 #include <stdbool.h>
@@ -19,29 +21,37 @@ enum {
     RESYNC_GAP_MS = 2000,    // a device that lost its place is answered at most this often
     LIBRARY_MS = 10000,      // the library page is said again this often, as the daemon does
     QUIET_MS = 60000,        // a person's last touch holds the story this long
-    CYCLE_MS = 150000,       // one telling of the story
+    CYCLE_MS = 160000,       // one telling of the story
     STEP_CAP_MS = 10000,     // a host that stalled does not fast-forward the story through the stall
     THINK_MS = 1500,         // from the end of a recording to its words
     CLOSE_MS = 1000,         // from an answer's receipt to its question closing (the agent taking it)
+    OUTSIDE_MS = 6000,       // from a tap that brings up another app's question to the person answering it there
     VOICE_TURN_MS = 500,     // from the words to the agent starting on them
     CREATE_MS = 1500,        // New Harness starting an agent
     UNATTENDED_MS = 40000,   // story time an unanswered question waits before it is answered on the computer
     MIN_PCM = 3200,          // 0.1 s of 16 kHz, 16-bit audio: less is nothing said
     VOICE_MAX_BYTES = 10 * 60 * 32000,   // the daemon's ceiling on one recording
-    MAX_AGENTS = 8,
-    SCRIPTED = 5,
+    MAX_AGENTS = 12,
+    SCRIPTED = 9,
     PAGE_ROWS = 6,           // cableSession.ts: a library page
     DRAWER_ROWS = 8,
     ID_MAX = 64,             // the longest id the device may send that is said back
+    APP_ID_MAX = 16,         // cableSession.ts: a longer app.pick is dropped unanswered
 };
 
 static bool due(uint32_t now, uint32_t at) { return (int32_t)(now - at) >= 0; }
 
 // ── the cast ────────────────────────────────────────────────────────────────────────────────────────
 
-static const struct { const char *id, *name; } MACHINES[] = {
-    {"m-mbp", "MacBook Pro"}, {"m-studio", "Mac Studio"}, {"m-build", "Build server"}};
-enum { LOCAL = 0, N_MACHINES = 3 };   // the computer the cable is on
+// The one computer, the one the cable is on.
+#define MACHINE_ID "m-mbp"
+#define MACHINE_NAME "MacBook Pro"
+
+// The apps the agents run in, by hostDetect.ts's ids and names, in the order the daemon lists them, and what the
+// device may do with each one's agents (services/devices.ts): s show, v talk to, f bring forward, a answer.
+enum { APP_ORCA, APP_HARNESS, APP_VSCODE, N_APPS };
+static const struct { const char *id, *name, *caps; } APPS[N_APPS] = {
+    {"orca", "Orca", "sv"}, {"harness", "Harness", "svfa"}, {"vscode", "VS Code", "s"}};
 
 static const char *const ENGINES[] = {"claude", "codex"};
 static const char *const ENGINE_NAMES[] = {"Claude Code", "Codex"};
@@ -62,7 +72,9 @@ typedef struct {
 } beat_t;
 
 // One question with up to three options; each answer goes on with its own beats. A permission prompt is one of these,
-// sent with `permission: true` as the daemon marks one, so the bar draws it as approve/deny.
+// sent with `permission: true` as the daemon marks one, so the bar draws it as approve/deny. An agent the device may
+// not answer asks it shown-only: the bar draws the question and the app to answer it in, and the app answers with the
+// first option. The beats after an answer start with no turn.started: the turn goes on.
 struct question {
     const char *q;
     const char *options[3];
@@ -81,210 +93,224 @@ struct question {
 #define FAIL(w, m) {.kind = B_FAIL, .wait_ds = (w), .a = (m)}
 #define END {.kind = B_END}
 
-// harness-web: a spinner on the sign-in button. It asks where the spinner goes, and each answer ends its own way.
-static const beat_t WEB_INSIDE[] = {
+// Orca's auth-refactor: the session lookup out of the middleware, with spinner words and steps under them.
+static const beat_t AUTH_SPLIT[] = {
     START(0, "Working…"),
-    ACT(5, "Styling the button", "Putting the spinner inside the button; its width stays fixed so the label never jumps."),
-    STEP(10, "Edit · SignInButton.css"),
-    STEP(15, "Bash · npm test -- SignInButton"),
-    TIMER(20, "Running tests"),
-    STATS(25, 42, 0, 1, 31, 4),
-    DONE(0, TIER_ALERT, "Sign-in button shows a spinner",
-         "The sign-in button shows a spinner inside it while signing in, and stays disabled until it ends. 42/42 tests pass.",
-         "Added an isLoading prop to SignInButton, driven by useSignIn. While a sign-in is in flight the button is disabled "
-         "and shows a 16 px spinner in place of its label; its width is fixed so nothing shifts. 42/42 tests pass. "
-         "One commit: Show a spinner while signing in."),
+    ACT(10, "Planning", "Splitting the auth middleware: the session lookup moves out of the request handler."),
+    STEP(10, "Read · middleware.ts"),
+    STEP(15, "Read · session.ts"),
+    ACT(20, "Editing", "Moving the session lookup into its own module, with the cache beside it."),
+    STEP(10, "Edit · session.ts"),
+    STEP(20, "Edit · middleware.ts"),
+    STEP(20, "Bash · npm test -- auth"),
+    TIMER(30, "Running tests"),
+    TIMER(30, "Running tests"),
+    STATS(20, 64, 0, 1, 38, 6),
+    DONE(0, TIER_LIST, "Session lookup split out of the auth middleware",
+         "The session lookup lives in session.ts now and the middleware only calls it. 64/64 tests pass.",
+         "Moved the session lookup and its cache out of the auth middleware into session.ts. The middleware calls "
+         "getSession() and nothing else changed for callers. 64/64 tests pass. One commit: Split the session lookup."),
     END};
-static const beat_t WEB_NEXT[] = {
+// ...and later, small work nobody needs to hear about.
+static const beat_t AUTH_FOLLOW[] = {
     START(0, "Working…"),
-    ACT(5, "Styling the button", "Placing the spinner beside the button, aligned to its baseline."),
-    STEP(10, "Edit · SignInForm.css"),
-    STEP(15, "Bash · npm test -- SignInButton"),
+    ACT(10, "Cleaning up", "Removing the old session helpers nothing calls any more."),
+    STEP(10, "Edit · legacySession.ts"),
+    STEP(15, "Bash · npm test -- auth"),
     TIMER(20, "Running tests"),
-    STATS(25, 42, 0, 1, 29, 4),
-    DONE(0, TIER_ALERT, "Sign-in button shows a spinner",
-         "A spinner now sits next to the button while signing in, and the button stays disabled. 42/42 tests pass.",
-         "Added an isLoading prop to SignInButton, driven by useSignIn. While a sign-in is in flight the button is disabled "
-         "and a 16 px spinner sits next to the button, on its baseline. 42/42 tests pass. "
-         "One commit: Show a spinner while signing in."),
-    END};
-static const beat_t WEB_OVERLAY[] = {
-    START(0, "Working…"),
-    ACT(5, "Adding the overlay", "Covering the form with a dimmed overlay and a centered spinner while it signs in."),
-    STEP(10, "Edit · SignInForm.tsx"),
-    STEP(15, "Bash · npm test -- SignIn"),
-    TIMER(20, "Running tests"),
-    STATS(25, 42, 0, 1, 33, 5),
-    DONE(0, TIER_ALERT, "Sign-in shows a loading overlay",
-         "A full-screen overlay with a spinner now covers the form while signing in. 42/42 tests pass.",
-         "Added a LoadingOverlay over the sign-in form, shown while useSignIn is loading; it blocks input and centers a "
-         "spinner. 42/42 tests pass. One commit: Show an overlay while signing in."),
-    END};
-static const question_t Q_SPINNER = {
-    "Where should the spinner go?", {"Inside the button", "Next to the button", "Full-screen overlay"}, 3, false,
-    {WEB_INSIDE, WEB_NEXT, WEB_OVERLAY}};
-static const beat_t WEB_SPINNER[] = {
-    START(0, "Working…"),
-    ACT(10, "Reading the sign-in form", "Finding where the sign-in button handles its pending state."),
-    STEP(5, "Read · SignInButton.tsx"),
-    STEP(15, "Read · useSignIn.ts"),
-    ACT(15, "Thinking", "The button has no pending state; I'll drive one from useSignIn's isLoading."),
-    STEP(15, "Edit · SignInButton.tsx"),
-    ACT(20, "Choosing a layout", "Before I style it: where should the spinner sit?"),
-    ASK(10, Q_SPINNER),
+    STATS(15, 64, 0, 1, 9, 1),
+    DONE(0, TIER_SILENT, "Removed the unused session helpers", "Three helpers nothing called are gone. 64/64 tests pass.",
+         "Deleted legacySession.ts's three helpers, which nothing has called since the split. 64/64 tests pass. "
+         "One commit: Remove unused session helpers."),
     END};
 
-// harness-backend: a deploy to staging, which needs a person's yes.
-static const beat_t API_DEPLOY[] = {
-    START(0, "Working…"),
-    STEP(5, "Bash · npm run deploy:staging"),
-    TIMER(20, "Deploying"),
-    TIMER(20, "Deploying"),
-    ACT(15, "Checking health", "Deployed. Checking /health on staging."),
-    STEP(5, "Bash · curl -fsS https://staging.harness.dev/health"),
-    STATS(15, 128, 0, 0, 22, 4),
-    DONE(0, TIER_ALERT, "API is live on staging", "The API is deployed to staging and /health answers 200.",
-         "Built the API, ran its 128 tests (all pass), deployed it to staging with npm run deploy:staging and checked "
-         "/health, which answers 200. Nothing else changed."),
-    END};
-static const beat_t API_STOP[] = {
-    DONE(5, TIER_LIST, "Stopped before deploying to staging",
-         "You declined the deploy, so nothing was pushed. The build and its 128 tests are green.",
-         "Built the API and ran its 128 tests (all pass). The deploy was declined, so staging still runs yesterday's "
-         "build. Run npm run deploy:staging when you are ready."),
-    END};
-static const question_t Q_DEPLOY = {
-    "Approve Bash command: npm run deploy:staging", {"Yes", "Yes, and don't ask again for: npm run deploy:*", "No"}, 3, true,
-    {API_DEPLOY, API_DEPLOY, API_STOP}};
-static const beat_t API_PREPARE[] = {
-    START(0, "Working…"),
-    ACT(10, "Checking the branch", "Building the API and running its tests before the staging deploy."),
-    STEP(10, "Bash · npm run build"),
+// Orca's landing-hero asks what only Orca can answer: the bar shows it, and says where.
+static const beat_t HERO_IMAGE[] = {
+    ACT(5, "Editing", "Swapping the hero video for the new image, with a blurred placeholder while it loads."),
+    STEP(10, "Edit · Hero.tsx"),
+    STEP(15, "Bash · npm run build"),
     TIMER(20, "Building"),
+    STATS(15, 0, 0, 1, 21, 3),
+    DONE(0, TIER_LIST, "Hero uses the new image", "The landing hero shows the new image; the video is gone and the page is 2 MB lighter.",
+         "Replaced the hero video with hero.webp at three sizes, with a blurred placeholder while it loads. The page "
+         "weighs 2 MB less. One commit: Use the new hero image."),
+    END};
+static const question_t Q_HERO = {
+    "Use the new image in the hero, or keep the video?", {"Use the image"}, 1, false, {HERO_IMAGE}};
+static const beat_t HERO_ASK[] = {
+    START(0, "Working…"),
+    ACT(10, "Reading", "Looking at the landing page's hero section."),
+    STEP(10, "Read · Hero.tsx"),
+    STEP(15, "Bash · ls public/hero"),
+    ACT(15, "Thinking", "There is a new hero image in the design folder. Before I swap it in: image or video?"),
+    ASK(20, Q_HERO),
+    END};
+
+// Orca's flaky-e2e: a flake found and fixed, said out loud.
+static const beat_t E2E_FIX[] = {
+    START(0, "Working…"),
+    ACT(10, "Reproducing", "Running the checkout test 20 times to catch the flake."),
+    STEP(10, "Bash · npx playwright test checkout --repeat-each 20"),
+    TIMER(30, "Running tests"),
+    TIMER(30, "Running tests"),
+    ACT(20, "Thinking", "It fails when the cart request beats the page's hydration: the test clicks too early."),
+    STEP(15, "Edit · checkout.spec.ts"),
+    STEP(15, "Bash · npx playwright test checkout --repeat-each 50"),
+    TIMER(30, "Running tests"),
+    STATS(30, 50, 0, 1, 44, 7),
+    DONE(0, TIER_ALERT, "Checkout e2e is stable: 50/50 runs pass",
+         "The checkout test waited too little for the page. It now waits for the cart, and 50 runs in a row pass.",
+         "The checkout e2e clicked Pay before hydration finished whenever the cart request came back first. It now "
+         "waits for the cart's ready mark. 50/50 repeated runs pass. One commit: Wait for the cart in checkout e2e."),
+    END};
+
+// Orca's rate-limiter: a test run that fails, then the fix.
+static const beat_t RATE_LIMIT[] = {
+    START(0, "Working…"),
+    ACT(10, "Reading", "Adding a sliding-window limit to the public API."),
+    STEP(10, "Read · limiter.ts"),
+    STEP(15, "Edit · limiter.ts"),
     STEP(15, "Bash · npm test"),
-    TIMER(20, "Running tests"),
-    ACT(15, "Ready to deploy", "Build and tests are green. The deploy script needs your approval."),
-    ASK(10, Q_DEPLOY),
+    TIMER(25, "Running tests"),
+    FAIL(30, "npm test failed: 3 rate-limit tests time out"),
     END};
-
-// ios-release: a long build, with the footer's timer.
-static const beat_t IOS_SHIP[] = {
+static const beat_t RATE_FIX[] = {
     START(0, "Working…"),
-    ACT(10, "Bumping the build", "Bumping the build to 0.1.71 (212), then archiving the release."),
-    STEP(5, "Edit · pubspec.yaml"),
-    STEP(15, "Bash · flutter build ipa --release"),
-    TIMER(30, "Archiving"),
-    TIMER(40, "Archiving"),
-    TIMER(40, "Archiving"),
-    ACT(30, "Signing", "The archive is built. Signing it with the App Store profile."),
-    STEP(20, "Bash · xcrun altool --upload-app"),
-    TIMER(30, "Uploading"),
-    TIMER(40, "Uploading"),
-    ACT(30, "Processing", "Uploaded. Waiting for App Store Connect to finish processing."),
-    TIMER(40, "Processing"),
-    STATS(30, 0, 0, 1, 12, 2),
-    DONE(0, TIER_ALERT, "0.1.71 is on TestFlight",
-         "Build 0.1.71 (212) is uploaded and processed. Testers can install it from TestFlight now.",
-         "Bumped the version to 0.1.71 (212), archived and signed the release, uploaded it and waited for processing. "
-         "It is in TestFlight for the internal group. One commit: Release 0.1.71."),
-    END};
-
-// near-app: a test run that fails, then the fix.
-static const beat_t NEAR_CARDS[] = {
-    START(0, "Working…"),
-    ACT(10, "Updating the roster", "Moving the roster screen to the new card layout."),
-    STEP(5, "Edit · roster_card.dart"),
-    STEP(15, "Edit · roster_screen.dart"),
-    STEP(15, "Bash · flutter test test/roster"),
-    TIMER(15, "Running tests"),
-    FAIL(20, "flutter test failed: 2 golden snapshots out of date"),
-    END};
-static const beat_t NEAR_FIX[] = {
-    START(0, "Working…"),
-    ACT(10, "Updating goldens", "Both goldens changed on purpose with the new cards; updating them."),
-    STEP(5, "Bash · flutter test --update-goldens test/roster"),
-    TIMER(20, "Running tests"),
-    STEP(10, "Bash · flutter test"),
-    TIMER(20, "Running tests"),
-    STATS(10, 87, 0, 1, 14, 2),
-    DONE(0, TIER_LIST, "Roster goldens updated; 87/87 pass",
-         "The two roster goldens now match the new card layout. 87/87 tests pass.",
-         "The failures were the two roster goldens, which changed on purpose with the new cards. Regenerated them, "
-         "checked the images by eye and ran the whole suite: 87/87 pass. One commit: Update roster goldens."),
-    END};
-
-// docs-site: small work nobody needs to hear about.
-static const beat_t DOCS_LINKS[] = {
-    START(0, "Working…"),
-    ACT(10, "Checking links", "Scanning the docs for broken links."),
-    STEP(5, "Bash · npm run check-links"),
-    TIMER(20, "Checking links"),
-    STEP(15, "Edit · getting-started.md"),
-    STEP(10, "Edit · cable.md"),
-    STATS(15, 0, 0, 1, 8, 1),
-    DONE(0, TIER_SILENT, "Fixed 3 broken links in the docs", "Three links pointed at pages that moved; they point at the new ones.",
-         "check-links found three links to pages that moved in the last restructure, in getting-started.md and cable.md. "
-         "They now point at the new pages. One commit: Fix moved links."),
-    END};
-
-// harness-web again: the review on its pull request.
-static const beat_t WEB_REVIEW[] = {
-    START(0, "Working…"),
-    ACT(10, "Reading the review", "Going through the four review comments on the sign-in pull request."),
-    STEP(5, "Bash · gh pr view 412 --comments"),
-    STEP(15, "Edit · SignInButton.tsx"),
-    STEP(15, "Edit · useSignIn.ts"),
+    ACT(10, "Fixing", "The tests wait on the real clock; moving them to fake timers."),
+    STEP(10, "Edit · limiter.test.ts"),
     STEP(10, "Bash · npm test"),
     TIMER(20, "Running tests"),
-    STATS(15, 42, 0, 1, 26, 3),
-    DONE(0, TIER_LIST, "Review comments addressed on PR #412",
-         "All four review comments on the sign-in PR are addressed and pushed. 42/42 tests pass.",
-         "Renamed isLoading to pending, moved the spinner size into the theme, added an aria-busy attribute and a test "
-         "for a failed sign-in. 42/42 tests pass. Pushed to the PR; it is ready for another look."),
+    STATS(15, 112, 0, 1, 19, 3),
+    DONE(0, TIER_LIST, "Rate limiter in; its tests on fake timers",
+         "The public API allows 60 requests a minute per token. The three slow tests use fake timers. 112/112 pass.",
+         "Added a sliding-window limit of 60 requests a minute per token, with Retry-After on a 429. The three tests "
+         "that timed out waited on the real clock; they use fake timers now. 112/112 pass. One commit: Rate-limit the API."),
     END};
 
+// Harness's harness-cli asks what the bar answers.
+static const beat_t CLI_BUMP[] = {
+    ACT(5, "Editing", "Bumping the cable protocol to 4 and gating the app list on it."),
+    STEP(10, "Edit · cableSession.ts"),
+    STEP(15, "Bash · npm test -- cable"),
+    TIMER(20, "Running tests"),
+    STATS(15, 412, 0, 1, 52, 8),
+    DONE(0, TIER_ALERT, "Cable protocol bumped to 4",
+         "The daemon speaks proto 4 and sends the app list only to dials that say it. 412/412 tests pass.",
+         "Bumped the cable protocol to 4. The app list and app.pick are sent only to a dial whose hello says proto 4; "
+         "older dials get proto 3 as before. 412/412 tests pass. One commit: Cable protocol 4."),
+    END};
+static const beat_t CLI_KEEP[] = {
+    ACT(5, "Editing", "Keeping proto 3 and adding appFilter to the hello."),
+    STEP(10, "Edit · cableSession.ts"),
+    STEP(15, "Bash · npm test -- cable"),
+    TIMER(20, "Running tests"),
+    STATS(15, 410, 0, 1, 47, 7),
+    DONE(0, TIER_ALERT, "The app list rides on proto 3",
+         "The protocol stays at 3: a dial that says appFilter gets the app list, others nothing new. 410/410 tests pass.",
+         "Kept the cable protocol at 3 and added an optional appFilter field to the hello. Only a dial that sends it gets "
+         "apps and may send app.pick. 410/410 tests pass. One commit: Add appFilter to the hello."),
+    END};
+static const question_t Q_PROTO = {
+    "Bump the cable protocol to 4, or keep 3 and add a field?", {"Bump to 4", "Keep 3"}, 2, false, {CLI_BUMP, CLI_KEEP}};
+static const beat_t CLI_PROTO[] = {
+    START(0, "Working…"),
+    ACT(10, "Reading", "Reading the cable session and the dial's hello for the new app list."),
+    STEP(10, "Read · cableSession.ts"),
+    STEP(15, "Read · cable.md"),
+    ACT(15, "Thinking", "The app list is a new frame. Old dials ignore frames they do not know."),
+    ASK(15, Q_PROTO),
+    END};
+
+// Harness's firmware-max needs a person's yes to flash the bar.
+static const beat_t FW_DONE[] = {
+    ACT(5, "Flashing", "Writing the new image to the Max."),
+    STEP(5, "Bash · idf.py -p /dev/ttyACM0 flash"),
+    TIMER(25, "Flashing"),
+    STATS(20, 0, 0, 1, 18, 2),
+    DONE(0, TIER_ALERT, "The Max is flashed with the app picker",
+         "The new firmware is on the Max and it booted into the agents page. Hold a face to pick an app.",
+         "Built the firmware with the app picker, flashed it over /dev/ttyACM0 and watched it boot to the agents page. "
+         "One commit: Max app picker."),
+    END};
+static const beat_t FW_STOP[] = {
+    DONE(5, TIER_LIST, "Stopped before flashing",
+         "You declined the flash, so the Max still runs yesterday's image. The build is ready.",
+         "Built the firmware with the app picker. Flashing was declined, so the Max runs yesterday's image. Run "
+         "idf.py -p /dev/ttyACM0 flash when you are ready."),
+    END};
+static const question_t Q_FLASH = {"Bash: idf.py -p /dev/ttyACM0 flash", {"Allow", "Deny"}, 2, true, {FW_DONE, FW_STOP}};
+static const beat_t FW_FLASH[] = {
+    START(0, "Working…"),
+    ACT(10, "Building", "Building the Max firmware with the new app picker."),
+    STEP(10, "Bash · idf.py build"),
+    TIMER(25, "Building"),
+    TIMER(25, "Building"),
+    ACT(15, "Ready to flash", "Built. Flashing the Max needs your yes."),
+    ASK(5, Q_FLASH),
+    END};
+
+// Harness's docs finishes quietly.
+static const beat_t DOCS_PAGE[] = {
+    START(0, "Working…"),
+    ACT(10, "Writing", "Documenting the apps frame and app.pick on the cable page."),
+    STEP(10, "Edit · cable.md"),
+    STEP(20, "Edit · dial-app-filter.md"),
+    TIMER(20, "Writing"),
+    STATS(15, 0, 0, 1, 12, 2),
+    DONE(0, TIER_LIST, "Cable docs cover apps and app.pick",
+         "The cable page documents the apps frame, app.pick and the hello's appFilter.",
+         "Added the apps frame, app.pick and appFilter to the cable page, with an example of a pick and the ring that "
+         "follows it."),
+    END};
+
+enum { AUTH, HERO, E2E, RATE, SWEEP, FW, CLI, DOCS, API };
 static const struct { uint32_t at; uint8_t agent; const beat_t *turn; } STORY[] = {
-    {2000, 0, WEB_SPINNER}, {5000, 4, IOS_SHIP}, {9000, 2, API_PREPARE}, {30000, 1, NEAR_CARDS},
-    {58000, 1, NEAR_FIX}, {75000, 3, DOCS_LINKS}, {100000, 0, WEB_REVIEW}};
+    {1000, AUTH, AUTH_SPLIT}, {3000, HERO, HERO_ASK}, {6000, E2E, E2E_FIX}, {10000, RATE, RATE_LIMIT},
+    {40000, RATE, RATE_FIX}, {72000, CLI, CLI_PROTO}, {75000, FW, FW_FLASH}, {80000, DOCS, DOCS_PAGE},
+    {135000, AUTH, AUTH_FOLLOW}};
 enum { N_STORY = sizeof STORY / sizeof STORY[0] };
+// The app in front on the computer, each change at the end of the daemon's 1 s settle: the person works in Orca, moves
+// to Harness for the protocol and the flash, and comes back.
+static const struct { uint32_t at; uint8_t app; } FRONT[] = {{0, APP_ORCA}, {70000, APP_HARNESS}, {130000, APP_ORCA}};
+enum { N_FRONT = sizeof FRONT / sizeof FRONT[0] };
 
 // What a person says, in turn, and what the agent then does.
 static const beat_t SAID_RETRY[] = {
     START(0, "Working…"),
-    ACT(10, "Reading the upload client", "Adding a retry with backoff around the upload request."),
-    STEP(5, "Edit · uploadClient.ts"),
-    STEP(15, "Bash · npm test -- upload"),
+    ACT(10, "Reading the API client", "Adding a retry with backoff around the request."),
+    STEP(5, "Edit · apiClient.ts"),
+    STEP(15, "Bash · npm test -- apiClient"),
     TIMER(20, "Running tests"),
     STATS(15, 18, 0, 1, 16, 3),
-    DONE(0, TIER_ALERT, "Uploads retry 3 times with backoff",
-         "The upload client retries a failed upload 3 times, waiting 1, 2 and 4 s. 18/18 tests pass.",
-         "Wrapped the upload request in a retry: three tries on a network error or a 5xx, waiting 1, 2 and 4 seconds, "
-         "never on a 4xx. Added tests for each case; 18/18 pass. One commit: Retry failed uploads."),
+    DONE(0, TIER_ALERT, "Requests retry 3 times with backoff",
+         "The API client retries a failed request 3 times, waiting 1, 2 and 4 s. 18/18 tests pass.",
+         "Wrapped the request in a retry: three tries on a network error or a 5xx, waiting 1, 2 and 4 seconds, "
+         "never on a 4xx. Added tests for each case; 18/18 pass. One commit: Retry failed requests."),
     END};
 static const beat_t SAID_TEST[] = {
     START(0, "Working…"),
-    ACT(10, "Writing the test", "Adding a test that renders the roster with no agents."),
-    STEP(5, "Edit · roster_test.dart"),
-    STEP(15, "Bash · flutter test test/roster_test.dart"),
+    ACT(10, "Writing the test", "Adding a test that renders the cart with nothing in it."),
+    STEP(5, "Edit · cart.test.tsx"),
+    STEP(15, "Bash · npm test -- cart"),
     TIMER(20, "Running tests"),
     STATS(15, 88, 0, 1, 11, 2),
-    DONE(0, TIER_ALERT, "Added a test for the empty roster",
-         "A new test renders the roster with no agents and checks the empty state. 88/88 tests pass.",
-         "Added roster_test.dart: it renders the roster with no agents and checks the empty-state text and the New "
-         "Harness button. 88/88 tests pass. One commit: Test the empty roster."),
+    DONE(0, TIER_ALERT, "Added a test for the empty cart",
+         "A new test renders the cart with nothing in it and checks the empty state. 88/88 tests pass.",
+         "Added cart.test.tsx: it renders the cart with no items and checks the empty-state text and the Shop button. "
+         "88/88 tests pass. One commit: Test the empty cart."),
     END};
 static const beat_t SAID_RECAP[] = {
     START(0, "Working…"),
     STEP(10, "Bash · git log --since=8am --oneline"),
     ACT(15, "Reading the log", "Reading today's commits."),
-    DONE(20, TIER_ALERT, "Today: 4 commits, sign-in and uploads",
-         "Since this morning: a spinner on sign-in, review fixes, upload retries and a release bump.",
-         "Four commits since 8 am: a spinner on the sign-in button, the review fixes on PR #412, retries for failed "
-         "uploads and the 0.1.71 version bump. Nothing is waiting on you."),
+    DONE(20, TIER_ALERT, "Today: 5 commits, auth and checkout",
+         "Since this morning: the session split, a stable checkout test, the rate limiter and the new hero.",
+         "Five commits since 8 am: the session lookup out of the auth middleware, the checkout e2e fix, the rate "
+         "limiter with its tests on fake timers, the new hero image and the cable docs. Nothing is waiting on you."),
     END};
 static const struct { const char *said; const beat_t *turn; } SAID[] = {
-    {"Add a retry to the upload client", SAID_RETRY},
-    {"Write a test for the empty roster", SAID_TEST},
+    {"Add a retry to the API client", SAID_RETRY},
+    {"Write a test for the empty cart", SAID_TEST},
     {"What changed since this morning?", SAID_RECAP}};
 enum { N_SAID = sizeof SAID / sizeof SAID[0] };
 
@@ -300,38 +326,49 @@ static const beat_t SETUP[] = {
          "Ready for a first task."),
     END};
 
-// The five agents the story is about, and what each did last (the history a fresh attach restores).
+// The nine agents the story is about, in the daemon's list order, and what each did last (the history a ring restores).
 static const struct {
     const char *id, *name;
-    uint8_t engine, machine;
+    uint8_t engine, app;
     const char *recap, *text, *full;
 } CAST[SCRIPTED] = {
-    {"ag-web", "harness-web", 0, 0, "Login page on the new form layout",
-     "The login page uses the shared form layout; the old LoginCard is gone. 40/40 tests pass.",
-     "Moved the login page onto the shared FormLayout and deleted LoginCard and its styles. 40/40 tests pass."},
-    {"ag-near", "near-app", 1, 0, "Roster cards show each agent's machine",
-     "Each roster card shows the machine its agent runs on, under the name. 85/85 tests pass.",
-     "Added the machine name under each agent on the roster cards, from the agent list's machine field. 85/85 pass."},
-    {"ag-api", "harness-backend", 0, 1, "Rate limits on the public API",
-     "The public API allows 60 requests a minute per token and answers 429 past that. 126/126 tests pass.",
-     "Added a token-bucket limit of 60 requests a minute per token to the public API, with Retry-After on a 429. "
-     "126/126 tests pass."},
-    {"ag-docs", "docs-site", 1, 1, "Cable protocol page covers proto 3",
-     "The cable protocol page documents proto 3: seq, resync and the library page.",
-     "Documented proto 3 on the cable page: the seq counter, resync, and the player library page, with examples."},
-    {"ag-ios", "ios-release", 0, 2, "0.1.70 is on TestFlight",
-     "Build 0.1.70 (211) is uploaded and processed; testers have it.",
-     "Archived, signed and uploaded 0.1.70 (211). It is in TestFlight for the internal group."},
+    {"ag-auth", "auth-refactor", 0, APP_ORCA, "Sign-in posts to the new auth API",
+     "The sign-in form posts to /v2/auth and keeps the session in a cookie. 61/61 tests pass.",
+     "Moved the sign-in form to /v2/auth, which sets an httpOnly session cookie instead of a stored token. 61/61 pass."},
+    {"ag-hero", "landing-hero", 1, APP_ORCA, "Landing copy matches the new pricing",
+     "The landing page's headline and plan cards say the new prices.",
+     "Rewrote the landing headline and the three plan cards for the new pricing, and linked the FAQ from each card."},
+    {"ag-e2e", "flaky-e2e", 0, APP_ORCA, "Two flaky e2e tests found",
+     "Search and checkout fail about one run in ten. Both are on the list to fix.",
+     "Ran the e2e suite 30 times: search and checkout fail about one run in ten, each for a different reason."},
+    {"ag-rate", "rate-limiter", 1, APP_ORCA, "Read the API's request path",
+     "Every public route goes through one handler, so a limit there covers them all.",
+     "Traced the public API's request path: every route passes through handleRequest, the place for a rate limit."},
+    {"ag-sweep", "docs-sweep", 0, APP_ORCA, "Fixed 12 broken links in the docs",
+     "Twelve links pointed at pages that moved; they point at the new ones.",
+     "check-links found twelve links to pages that moved in the last restructure. They now point at the new pages."},
+    {"ag-fw", "firmware-max", 0, APP_HARNESS, "The Max boots to the agents page",
+     "The Max skips the splash and opens on the agents page in 2.1 s.",
+     "Dropped the boot splash and started the cable before the display, so the Max opens on its agents in 2.1 s."},
+    {"ag-cli", "harness-cli", 1, APP_HARNESS, "harness status names each agent's app",
+     "harness status shows which app each agent runs in, from the host detection.",
+     "Added an App column to harness status, filled from the host detection the devices already use."},
+    {"ag-docs", "docs", 0, APP_HARNESS, "Getting started covers the Max",
+     "The getting-started guide has a page for the Max: plugging it in and what it shows.",
+     "Wrote the Max page of the getting-started guide: the one cable, the agents page and the app picker."},
+    {"ag-api", "api-client", 0, APP_VSCODE, "API client regenerated from the spec",
+     "The typed client matches the OpenAPI spec again, with the two new billing routes.",
+     "Regenerated the typed API client from the OpenAPI spec: the two new billing routes and one renamed field."},
 };
 
-// New Harness: an engine and a project, then Start.
+// New Harness: an engine and a project, then Start. Its agents run in Harness.
 enum { ROW_AGENT, ROW_PROJECT, ROW_START, ROWS };
 static const char *const ROW_LABELS[] = {"Agent", "Project", "New Harness"};
-static const struct { const char *title, *detail; uint8_t machine; } PROJECTS[] = {
-    {"harness-web", "MacBook Pro", 0}, {"harness-backend", "Mac Studio", 1}, {"infra", "Build server", 2}};
+static const struct { const char *title, *detail; } PROJECTS[] = {
+    {"harness-web", "~/work/harness-web"}, {"harness-cli", "~/work/harness-cli"}, {"infra", "~/work/infra"}};
 static const char *const ENGINE_DETAILS[] = {"Anthropic", "OpenAI"};
 // What a person "says" into the Agent and the Project field, and the option it lands on.
-static const struct { const char *said; uint8_t pick; } HEARD[] = {{"Codex", 1}, {"harness-backend", 1}};
+static const struct { const char *said; uint8_t pick; } HEARD[] = {{"Codex", 1}, {"harness-cli", 1}};
 enum { N_PROJECTS = sizeof PROJECTS / sizeof PROJECTS[0] };
 
 // ── state ───────────────────────────────────────────────────────────────────────────────────────────
@@ -342,8 +379,9 @@ enum { ASK_NONE, ASK_OPEN, ASK_TAKEN };   // TAKEN: answered, closing in a momen
 
 typedef struct {
     bool used, made;             // made: by a person, with New Harness
+    bool restored;               // its history went to the device since the attach (cableSession.ts `restored`)
     char id[16], name[24];
-    uint8_t engine, machine;
+    uint8_t engine, app;
     const beat_t *turn;          // the beats playing; NULL between turns
     uint8_t beat, status;
     uint32_t beat_at, started_at;
@@ -362,24 +400,26 @@ enum { OWE_FULL = 1, OWE_MACHINES = 2, OWE_AGENTS = 4, OWE_SWARMS = 8, OWE_RESYN
 static struct {
     uint32_t now;                // the clock at the call in progress
     bool greeted, seq_on, long_recap, steps, stats, player;
+    bool app_filter;             // the device said appFilter "v1": it is shown one app's ring, after `apps`
     uint32_t seq;
     char mac[40], fw[40];
     uint32_t last_rx, last_ping, last_tick, resync_ok_at, library_at;
     char library_key[MAX_AGENTS + 1];
+    char apps_key[2 + 2 * N_APPS];   // the last `apps` sent, as apps_key() writes it
     int64_t library_request, library_offset;
     unsigned owed;               // pushes the next tick makes
     char focus[16];              // the agent both screens are on
-    uint8_t selected;            // machine
+    uint8_t shown, front;        // the app whose ring the device is shown; the app in front on the computer
     bool person;
     uint32_t person_at;
     uint32_t story_pos, story_total;
-    uint8_t next_entry;
+    uint8_t next_entry, next_front;
     uint32_t serial;             // questions, tokens, notices and form revisions: every number only goes up
     uint8_t said_next, made;
     uint32_t dropped;            // frames that did not fit: this module's bug, never the device's
 } s;
 
-static agent_t agents[MAX_AGENTS];   // in roster order, the scripted five first
+static agent_t agents[MAX_AGENTS];   // in the daemon's list order, the scripted nine first
 
 enum { V_AGENT, V_FORM, V_QUESTION, V_DRAFT, V_CARRY, V_SEARCH, V_SELECTION };
 static struct {
@@ -550,9 +590,41 @@ static uint8_t status_of(const agent_t *a)
     if (a->turn) return ST_WORKING;
     return a->status;
 }
+
+// What the device may do with an agent, by its app's letters; and whether the agent runs outside Harness.
+static bool lacks(const agent_t *a, char cap) { return !strchr(APPS[a->app].caps, cap); }
+static bool outside(const agent_t *a) { return a->app != APP_HARNESS; }
+// On the ring the device is shown: the shown app's agents for a device that says appFilter, every agent otherwise.
+static bool in_ring(const agent_t *a) { return !s.app_filter || a->app == s.shown; }
+static int find_app(const char *id)
+{
+    for (int i = 0; id && i < N_APPS; i++) if (!strcmp(APPS[i].id, id)) return i;
+    return -1;
+}
+// An app's agents, or those of them that need the person.
+static int app_agents(unsigned app, bool waiting)
+{
+    int n = 0;
+    for (int i = 0; i < MAX_AGENTS && agents[i].used; i++)
+        n += agents[i].app == app && (!waiting || agents[i].ask == ASK_OPEN);
+    return n;
+}
+
+// The daemon's line for an agent outside Harness: "<before><its app's name><after>". One at a time: the caller sends it
+// before asking for another.
+static const char *in_app(const agent_t *a, const char *before, const char *after)
+{
+    static char line[160];
+    const int n = snprintf(line, sizeof line, "%s%s%s", before, APPS[a->app].name, after);
+    if (n < 0 || (size_t)n >= sizeof line) line[0] = 0;
+    return line;
+}
+
 static void question_id(const agent_t *a, char *out, size_t cap)
 {
-    const int n = snprintf(out, cap, "q-%s-%lu", a->id, (unsigned long)a->serial);
+    // A question the device may only show carries the daemon's shown-only prefix (cableSession.ts SHOWN_ONLY_PREFIX).
+    const int n = lacks(a, 'a') ? snprintf(out, cap, "shown:%s-%lu", a->id, (unsigned long)a->serial)
+                                : snprintf(out, cap, "q-%s-%lu", a->id, (unsigned long)a->serial);
     if (n < 0 || (size_t)n >= cap) out[0] = 0;
 }
 // Names these exact contents: a new question is a new token, so an answer to the old one is refused.
@@ -576,7 +648,7 @@ static void who(const agent_t *a)
 {
     f_s("name", a ? a->name : "");
     f_s("engine", a ? ENGINES[a->engine] : "");
-    f_s("machine", a ? MACHINES[a->machine].name : "");
+    f_s("machine", a ? MACHINE_NAME : "");
 }
 
 static void send_welcome(void)
@@ -588,10 +660,10 @@ static void send_welcome(void)
     f_s("app", "harness");
     key("machine");
     put_c("{\"id\":");
-    put_str(MACHINES[LOCAL].id);
-    f_s("name", MACHINES[LOCAL].name);
+    put_str(MACHINE_ID);
+    f_s("name", MACHINE_NAME);
     put("}", 1);
-    f_s("selected", MACHINES[s.selected].id);
+    f_s("selected", MACHINE_ID);
     f_s("voiceLang", "en");
     key("features");
     put("[", 1);
@@ -612,16 +684,14 @@ static void push_machines(void)
 {
     f_begin("machines.begin");
     f_end();
-    for (unsigned m = 0; m < N_MACHINES; m++) {
-        f_begin("machine");
-        f_s("id", MACHINES[m].id);
-        f_s("name", MACHINES[m].name);
-        f_s("state", "ready");
-        f_b("local", m == LOCAL);
-        f_end();
-    }
+    f_begin("machine");
+    f_s("id", MACHINE_ID);
+    f_s("name", MACHINE_NAME);
+    f_s("state", "ready");
+    f_b("local", true);
+    f_end();
     f_begin("machines.end");
-    f_s("selected", MACHINES[s.selected].id);
+    f_s("selected", MACHINE_ID);
     f_s("source", "backend");
     f_end();
 }
@@ -644,33 +714,100 @@ static void send_focus(const agent_t *a)
     f_end();
 }
 
-static void push_agents(void)
+static void send_toast(const char *text)
 {
+    f_begin("toast");
+    f_s("text", text);
+    f_end();
+}
+
+// What `apps` says, as a short key: the shown app, then each app's count and waiting count.
+static void apps_key(char *out)
+{
+    size_t n = 0;
+    out[n++] = (char)('0' + s.shown);
+    for (unsigned i = 0; i < N_APPS; i++) {
+        out[n++] = (char)('A' + app_agents(i, false));
+        out[n++] = (char)('A' + app_agents(i, true));
+    }
+    out[n] = 0;
+}
+
+// The apps with agents on this computer, in the daemon's fixed order, and the one whose ring the device holds.
+static void push_apps(void)
+{
+    f_begin("apps");
+    f_s("shown", APPS[s.shown].id);
+    key("apps");
+    put("[", 1);
+    for (unsigned i = 0, rows = 0; i < N_APPS; i++) {
+        const int count = app_agents(i, false);
+        if (!count) continue;
+        if (rows++) put(",", 1);
+        put_c("{\"id\":");
+        put_str(APPS[i].id);
+        f_s("name", APPS[i].name);
+        f_i("count", count);
+        f_i("waiting", app_agents(i, true));
+        put("}", 1);
+    }
+    put("]", 1);
+    f_end();
+    apps_key(s.apps_key);
+}
+
+// History, not news: no tier, no beep (cableSession.ts pushRestores). Each agent's once per attach, when it is first on
+// the ring sent, so a ring the device is turned to later brings its agents' history with it.
+static void push_restores(void)
+{
+    for (int i = 0; i < MAX_AGENTS && agents[i].used; i++) {
+        agent_t *a = &agents[i];
+        if (!in_ring(a) || a->restored) continue;
+        a->restored = true;
+        if (!a->recap) continue;
+        f_begin("summary");
+        f_s("agentId", a->id);
+        f_s("recap", a->recap);
+        f_s("text", a->text);
+        if (s.long_recap && a->full) f_s("full", a->full);
+        f_b("restore", true);
+        f_end();
+    }
+}
+
+// The ring: the apps first for a device that says appFilter, which draws the ring under the app it names.
+static void push_agents(bool restore)
+{
+    if (s.app_filter) push_apps();
     f_begin("agents.begin");
     f_end();
-    const int n = agent_count();
-    for (int i = 0; i < n; i++) {
+    int total = 0;
+    for (int i = 0; i < MAX_AGENTS && agents[i].used; i++) {
         const agent_t *a = &agents[i];
+        if (!in_ring(a)) continue;
+        total++;
         f_begin("agent");
         f_s("id", a->id);
         f_s("name", a->name);
         f_s("engine", ENGINES[a->engine]);
         f_s("model", "");
         f_s("effort", "");
-        f_s("machineId", MACHINES[a->machine].id);
-        f_s("machine", MACHINES[a->machine].name);
-        f_s("host", "harness");
-        f_s("caps", "svfa");
+        f_s("machineId", MACHINE_ID);
+        f_s("machine", MACHINE_NAME);
+        f_s("host", APPS[a->app].id);
+        f_s("caps", APPS[a->app].caps);
         f_end();
     }
     f_begin("agents.end");
-    f_i("total", n);
+    f_i("total", total);
     f_s("tab", "");
     f_s("view", "machine");
     f_end();
-    // The list changed shape under the device: say again which agent both screens are on (the daemon's one re-assert).
+    // The list changed shape under the device: say again which agent both screens are on (the daemon's one re-assert),
+    // when the ring holds it.
     const int f = find_agent(s.focus);
-    if (f >= 0) send_focus(&agents[f]);
+    if (f >= 0 && in_ring(&agents[f])) send_focus(&agents[f]);
+    if (restore) push_restores();
 }
 
 static void library_key(char *out)
@@ -680,6 +817,7 @@ static void library_key(char *out)
     out[n] = 0;
 }
 
+// Every agent on the computer, whatever ring the device holds.
 static void push_library(void)
 {
     const int total = agent_count();
@@ -697,7 +835,7 @@ static void push_library(void)
         if (row) put(",", 1);
         put_c("{\"id\":");
         put_str(a->id);
-        f_s("machineId", MACHINES[a->machine].id);
+        f_s("machineId", MACHINE_ID);
         f_s("name", a->name);
         f_s("engine", ENGINES[a->engine]);
         f_s("status", STATUS[status_of(a)]);
@@ -705,29 +843,13 @@ static void push_library(void)
         put("}", 1);
     }
     put("]", 1);
-    f_i("machines", N_MACHINES);
+    f_i("machines", 1);
     f_end();
     library_key(s.library_key);
     s.library_at = s.now;
 }
 
-// History, not news: no tier, no beep (cableSession.ts pushRestores).
-static void push_restores(void)
-{
-    const int n = agent_count();
-    for (int i = 0; i < n; i++) {
-        const agent_t *a = &agents[i];
-        if (!a->recap) continue;
-        f_begin("summary");
-        f_s("agentId", a->id);
-        f_s("recap", a->recap);
-        f_s("text", a->text);
-        if (s.long_recap && a->full) f_s("full", a->full);
-        f_b("restore", true);
-        f_end();
-    }
-}
-
+// The bell and the inbox count every agent on this computer, not only the ring's.
 static void push_drawer(void)
 {
     f_begin("notif.replace");
@@ -742,7 +864,7 @@ static void push_drawer(void)
         put_c("{\"agentId\":");
         put_str(a->id);
         f_s("name", a->name);
-        f_s("machine", MACHINES[a->machine].name);
+        f_s("machine", MACHINE_NAME);
         f_s("summary", question ? a->q->q : a->recap);
         f_b("question", question);
         if (!question) {
@@ -756,22 +878,38 @@ static void push_drawer(void)
     f_end();
 }
 
-// The question as the inbox holds it; `state` adds what question.read adds: a remote agent takes no spoken answer.
+// The question as the inbox holds it; `state` adds what question.read adds: an agent outside Harness takes no spoken
+// answer. One the device may not answer is the daemon's shown-only question (hosts/observed.ts askedLine): one prompt
+// naming the app to answer it in, its one option that app.
 static void put_questions(const agent_t *a, bool state)
 {
     key("questions");
     put_c("[{\"key\":");
-    put_str(a->q->q);
-    f_s("q", a->q->q);
-    key("options");
-    put("[", 1);
-    for (unsigned o = 0; o < a->q->count; o++) {
-        if (o) put(",", 1);
-        put_str(a->q->options[o]);
+    if (lacks(a, 'a')) {
+        char line[160];
+        int n = snprintf(line, sizeof line, "%s \xc2\xb7 answer in %s", a->q->q, APPS[a->app].name);
+        if (n < 0 || (size_t)n >= sizeof line) line[0] = 0;
+        put_str("prompt");
+        f_s("q", line);
+        n = snprintf(line, sizeof line, "In %s", APPS[a->app].name);
+        if (n < 0 || (size_t)n >= sizeof line) line[0] = 0;
+        key("options");
+        put("[", 1);
+        put_str(line);
+        put("]", 1);
+    } else {
+        put_str(a->q->q);
+        f_s("q", a->q->q);
+        key("options");
+        put("[", 1);
+        for (unsigned o = 0; o < a->q->count; o++) {
+            if (o) put(",", 1);
+            put_str(a->q->options[o]);
+        }
+        put("]", 1);
     }
-    put("]", 1);
     f_b("multi", false);
-    if (state && a->machine != LOCAL) f_b("canText", false);
+    if (state && outside(a)) f_b("canText", false);
     put_c("}]");
 }
 
@@ -784,10 +922,12 @@ static void send_question(const agent_t *a)
     who(a);
     f_s("id", id);
     put_questions(a, false);
-    if (a->q->permission) f_b("permission", true);   // absent, not false, on a plain question: as the daemon sends it
+    // Absent, not false, on a plain question: as the daemon sends it. A shown-only one is never a permission.
+    if (a->q->permission && !lacks(a, 'a')) f_b("permission", true);
     f_end();
 }
 
+// Every open question, whichever ring its agent is on: each is a drawer row.
 static void push_questions(void)
 {
     const int n = agent_count();
@@ -797,9 +937,10 @@ static void push_questions(void)
 // Everything a device that has just greeted has lost, in the daemon's order (pushAgents).
 static void push_full(void)
 {
+    for (int i = 0; i < MAX_AGENTS; i++) agents[i].restored = false;   // a device that greets has no history at all
     push_machines();
     push_swarms();
-    push_agents();
+    push_agents(false);
     if (s.player) push_library();
     push_restores();
     push_drawer();
@@ -815,13 +956,13 @@ static void push_owed(void)
     if (owed & OWE_RESYNC) {
         push_machines();
         push_swarms();
-        push_agents();
+        push_agents(true);
         push_drawer();
         push_questions();
         return;
     }
     if (owed & OWE_SWARMS) push_swarms();
-    if (owed & OWE_AGENTS) push_agents();
+    if (owed & OWE_AGENTS) push_agents(true);
 }
 
 // ── turns ───────────────────────────────────────────────────────────────────────────────────────────
@@ -863,6 +1004,7 @@ static void send_stats(const agent_t *a, const beat_t *b)
     f_end();
 }
 
+// An agent's news goes to the device whichever ring it is on: the bell and the inbox count every agent.
 static void finish(agent_t *a, const beat_t *b)
 {
     f_begin("turn.done");
@@ -979,7 +1121,23 @@ static void run_agent(agent_t *a)
 
 static bool idle(const agent_t *a) { return !a->turn && a->ask == ASK_NONE && a->said < 0; }
 
-// The agents a person made leave when the story starts over, so the next person finds the same five.
+// The device is turned to an app's ring: `apps` and the ring follow (cableSession.ts syncAgents after a switch).
+static void show(uint8_t app)
+{
+    s.shown = app;
+    if (s.app_filter) s.owed |= OWE_AGENTS;
+}
+
+// The app in front changed and its settle is over (AppFilter step 2): it ends a pick on the device, and the device is
+// shown it when it has agents and is not shown already.
+static void to_front(uint8_t app)
+{
+    if (app == s.front) return;
+    s.front = app;
+    if (app != s.shown && app_agents(app, false)) show(app);
+}
+
+// The agents a person made leave when the story starts over, so the next person finds the same nine.
 static void forget_made(void)
 {
     for (int i = MAX_AGENTS - 1; i >= SCRIPTED; i--) {
@@ -999,12 +1157,14 @@ static void advance_story(uint32_t dt)
     s.story_pos += dt;
     for (;;) {
         for (; s.next_entry < N_STORY && s.story_pos >= STORY[s.next_entry].at; s.next_entry++) {
-            agent_t *a = &agents[STORY[s.next_entry].agent];   // the scripted five never move
+            agent_t *a = &agents[STORY[s.next_entry].agent];   // the scripted nine never move
             if (idle(a)) start_turn(a, STORY[s.next_entry].turn, 0);   // busy with a person's words: skipped this time
         }
+        for (; s.next_front < N_FRONT && s.story_pos >= FRONT[s.next_front].at; s.next_front++) to_front(FRONT[s.next_front].app);
         if (s.story_pos < CYCLE_MS) break;
         s.story_pos -= CYCLE_MS;
         s.next_entry = 0;
+        s.next_front = 0;
         forget_made();
     }
     // Nobody at the bar to answer: it is answered on the computer, with the first option.
@@ -1030,6 +1190,7 @@ static uint32_t story_wait(void)
 {
     uint32_t wait = CYCLE_MS - s.story_pos;
     if (s.next_entry < N_STORY && STORY[s.next_entry].at - s.story_pos < wait) wait = STORY[s.next_entry].at - s.story_pos;
+    if (s.next_front < N_FRONT && FRONT[s.next_front].at - s.story_pos < wait) wait = FRONT[s.next_front].at - s.story_pos;
     const int n = agent_count();
     for (int i = 0; i < n; i++) {
         const agent_t *a = &agents[i];
@@ -1046,7 +1207,7 @@ static uint32_t story_wait(void)
 static void end_session(void)
 {
     // The daemon closes the port on silence, and a new port is a new device: no greeting, no count, nothing owed.
-    s.greeted = s.seq_on = s.long_recap = s.steps = s.stats = s.player = false;
+    s.greeted = s.seq_on = s.long_recap = s.steps = s.stats = s.player = s.app_filter = false;
     s.seq = 0;
     s.mac[0] = s.fw[0] = 0;
     s.owed = 0;
@@ -1064,8 +1225,10 @@ static void on_hello(const cJSON *m)
     char mac_c[sizeof s.mac], fw_c[sizeof s.fw];
     copy(mac_c, sizeof mac_c, mac);
     copy(fw_c, sizeof fw_c, fw);
+    const char *filter = str_of(m, "appFilter");
+    const bool app_filter = filter && !strcmp(filter, "v1");
     // The same device on the same image is a keepalive: its welcome and nothing else.
-    const bool keepalive = s.greeted && !strcmp(mac_c, s.mac) && !strcmp(fw_c, s.fw);
+    const bool keepalive = s.greeted && !strcmp(mac_c, s.mac) && !strcmp(fw_c, s.fw) && app_filter == s.app_filter;
     // swarms:"members-v1" changes nothing here: the demo has no tabs to send members of.
     const char *recap = str_of(m, "recap"), *activity = str_of(m, "activity");
     const char *stats = str_of(m, "stats"), *player = str_of(m, "player");
@@ -1073,6 +1236,7 @@ static void on_hello(const cJSON *m)
     s.steps = activity && !strcmp(activity, "steps-v1");
     s.stats = stats && !strcmp(stats, "turn-v1");
     s.player = player && !strcmp(player, "library-v1");
+    s.app_filter = app_filter;
     s.seq_on = board && (!strcmp(board, "pro") || !strcmp(board, "max"));   // isP4Board
     s.seq = 0;
     s.greeted = true;
@@ -1083,6 +1247,18 @@ static void on_hello(const cJSON *m)
     s.owed = OWE_FULL;
     s.resync_ok_at = s.now;
     s.last_tick = s.now;   // the story counts from the greeting
+}
+
+// cableSession.ts app.pick: another app with agents is switched to; one with none, or none listed, is ignored and the
+// list told again; the app already shown changes nothing.
+static void on_app_pick(const cJSON *m)
+{
+    const char *app = str_of(m, "app");
+    if (!s.app_filter || !app || !app[0] || strlen(app) > APP_ID_MAX) return;
+    person();
+    const int i = find_app(app);
+    if (i < 0 || !app_agents((unsigned)i, false)) { push_apps(); return; }
+    if (i != s.shown) show((uint8_t)i);
 }
 
 static void on_agent_open(const cJSON *m)
@@ -1096,7 +1272,15 @@ static void on_agent_open(const cJSON *m)
     agent_t *a = &agents[i];
     copy(s.focus, sizeof s.focus, a->id);
     a->unread = false;
-    send_focus(a);
+    // Another app's agent turns the device to that app's ring, on it (decision 7 A): the push re-asserts the focus.
+    if (in_ring(a)) send_focus(a);
+    else show(a->app);
+    // Brought up in its own app, where the person answers what the device could only show.
+    if (a->ask == ASK_OPEN && lacks(a, 'a')) {
+        a->choice = 0;
+        a->ask = ASK_TAKEN;
+        a->close_at = s.now + OUTSIDE_MS;
+    }
 }
 
 static void voice_error(const char *message)
@@ -1145,6 +1329,17 @@ static const char *form_voice_refusal(void)
     return NULL;
 }
 
+// The agent unnamed words go to: the one the bar is on, else the first free one the device may talk to.
+static int voice_target(void)
+{
+    int target = find_agent(s.focus);
+    if (target >= 0 && lacks(&agents[target], 'v')) target = -1;
+    const int n = agent_count();
+    for (int i = 0; target < 0 && i < n; i++) if (idle(&agents[i]) && !lacks(&agents[i], 'v')) target = i;
+    for (int i = 0; target < 0 && i < n; i++) if (!lacks(&agents[i], 'v')) target = i;
+    return target < 0 ? 0 : target;
+}
+
 static void on_voice_end(const cJSON *m)
 {
     const char *upload = str_of(m, "uploadId");
@@ -1161,22 +1356,19 @@ static void on_voice_end(const cJSON *m)
     case V_FORM: refusal = form_voice_refusal(); break;
     default: break;
     }
+    // An agent whose terminal the device cannot type into: refused whatever was recorded, as the daemon keeps none of it.
+    const int named = v.kind == V_AGENT && v.named ? find_agent(v.agent) : -1;
+    if (!refusal && named >= 0 && lacks(&agents[named], 'v'))
+        refusal = in_app(&agents[named], "This agent is in ", ". Talking to it from the device comes in an update.");
     if (!refusal && v.bytes < MIN_PCM) refusal = "Didn't catch that";
-    if (!refusal && v.kind == V_AGENT && v.named && find_agent(v.agent) < 0)
+    if (!refusal && v.kind == V_AGENT && v.named && named < 0)
         refusal = "Could not reach that harness. Check its connection and try again.";
     if (refusal) {
         voice_error(refusal);
         memset(&v, 0, sizeof v);
         return;
     }
-    if (v.kind == V_AGENT && !v.named) {
-        // No agent named: the words go to the one the bar is on, else the first with nothing to do.
-        int target = find_agent(s.focus);
-        const int n = agent_count();
-        for (int i = 0; target < 0 && i < n; i++) if (idle(&agents[i])) target = i;
-        if (target < 0) target = 0;
-        copy(v.agent, sizeof v.agent, agents[target].id);
-    }
+    if (v.kind == V_AGENT && !v.named) copy(v.agent, sizeof v.agent, agents[voice_target()].id);
     v.said = s.said_next;
     if (v.kind == V_AGENT) s.said_next = (uint8_t)((s.said_next + 1) % N_SAID);
     v.thinking = true;
@@ -1334,14 +1526,15 @@ static void on_form(const cJSON *m)
     form_reply(request, id, true, NULL);
 }
 
-// New Harness's Start, a moment later: the agent arrives on the project's machine and the bar is turned to it.
+// New Harness's Start, a moment later: the agent arrives in Harness, whose window comes to the front, so the device is
+// turned to Harness's ring, on the new agent.
 static void create_agent(void)
 {
     form.busy = false;
     form.revision = ++s.serial;
     const int n = agent_count();
     if (n >= MAX_AGENTS) {
-        form.error = "The bar holds 8 agents. Wait for one to finish.";
+        form.error = "The bar holds 12 agents. Wait for one to finish.";
         return;
     }
     agent_t *a = &agents[n];
@@ -1349,7 +1542,7 @@ static void create_agent(void)
     a->used = a->made = true;
     a->said = -1;
     a->engine = form.engine;
-    a->machine = PROJECTS[form.project].machine;
+    a->app = APP_HARNESS;
     s.made = (uint8_t)(s.made + 1);
     int w = snprintf(a->id, sizeof a->id, "ag-new-%u", (unsigned)s.made);
     if (w < 0 || (size_t)w >= sizeof a->id) a->id[0] = 0;
@@ -1363,6 +1556,8 @@ static void create_agent(void)
         if (w < 0 || (size_t)w >= sizeof a->name) break;
     }
     copy(s.focus, sizeof s.focus, a->id);   // the push re-asserts it once the tile is there
+    s.front = APP_HARNESS;
+    s.shown = APP_HARNESS;
     s.owed |= OWE_AGENTS;
     form.active = false;
     form.closed = true;
@@ -1455,7 +1650,9 @@ static void on_answer_reviewed(const cJSON *m)
     agent_t *a = i >= 0 ? &agents[i] : NULL;
     char current[48] = "";
     if (a && a->ask != ASK_NONE) question_token(a, current, sizeof current);
-    const char *refusal = !current[0] || strcmp(current, token) ? "This question changed. Open it again."
+    // A shown-only question is refused before anything is taken: taken, it would read as sent on the device.
+    const char *refusal = current[0] && lacks(a, 'a') ? in_app(a, "Answer it in ", ".")
+                        : !current[0] || strcmp(current, token) ? "This question changed. Open it again."
                         : a->ask == ASK_TAKEN ? NULL   // sent twice, taken once: the same receipt again
                         : review_refusal(a, m);
     if (!refusal && a->ask == ASK_OPEN) {
@@ -1466,29 +1663,36 @@ static void on_answer_reviewed(const cJSON *m)
         a->ask = ASK_TAKEN;
         a->close_at = s.now + CLOSE_MS;
     }
+    // This computer takes it at once: never `pending`, which is another machine's.
     f_begin("answer.receipt");
     f_s("agentId", agent);
     f_s("token", token);
     f_s("requestId", request);
     f_b("ok", !refusal);
-    // Another machine takes it in its own time: the daemon says it was handed on, not that it landed.
-    if (!refusal && a->machine != LOCAL) f_b("pending", true);
     if (refusal) f_s("error", refusal);
     f_end();
 }
 
-// The older answer: the label chosen, by the key asked with, for the question named by requestId. No receipt.
+// The older answer: the label chosen, by the key asked with, for the question named by requestId. No receipt; an
+// agent the device may not answer gets the daemon's toast instead.
 static void on_answer(const cJSON *m)
 {
     const char *request = str_of(m, "requestId");
-    const int i = find_agent(str_of(m, "agentId"));
+    const cJSON *answers = cJSON_GetObjectItemCaseSensitive(m, "answers");
+    if (!str_of(m, "agentId") || !request || !cJSON_IsObject(answers)) return;
     person();
-    if (i < 0 || !request || agents[i].ask != ASK_OPEN) return;
+    const int i = find_agent(str_of(m, "agentId"));
+    if (i >= 0 && lacks(&agents[i], 'a')) {
+        send_toast(!strncmp(request, "shown:", 6) ? in_app(&agents[i], "Answer it in ", ".")
+                   : in_app(&agents[i], "This agent is in ", ". Answering it from the device comes in an update."));
+        return;
+    }
+    if (i < 0 || agents[i].ask != ASK_OPEN) return;
     agent_t *a = &agents[i];
     char id[40];
     question_id(a, id, sizeof id);
     if (strcmp(id, request)) return;
-    const char *label = str_of(cJSON_GetObjectItemCaseSensitive(m, "answers"), a->q->q);
+    const char *label = str_of(answers, a->q->q);
     for (uint8_t o = 0; label && o < a->q->count; o++) {
         if (strcmp(label, a->q->options[o])) continue;
         a->choice = o;
@@ -1503,9 +1707,7 @@ static void on_machine_select(const cJSON *m)
     const char *id = id_of(m, "machineId");
     if (!id) return;
     person();
-    for (uint8_t i = 0; i < N_MACHINES; i++) {
-        if (strcmp(id, MACHINES[i].id)) continue;
-        s.selected = i;
+    if (!strcmp(id, MACHINE_ID)) {
         f_begin("machine.selected");
         f_s("machineId", id);
         f_end();
@@ -1542,6 +1744,10 @@ static void on_turn_stop(const cJSON *m)
     if (i < 0) return;
     person();
     agent_t *a = &agents[i];
+    if (outside(a)) {
+        send_toast(in_app(a, "This agent is in ", ". Stopping it from the device comes in an update."));
+        return;
+    }
     if (!a->turn && a->ask == ASK_NONE) return;
     if (a->ask != ASK_NONE) {
         char id[40];
@@ -1582,6 +1788,7 @@ static void handle(const cJSON *m)
         s.owed |= OWE_RESYNC;
     }
     else if (!strcmp(t, "player.library.get")) on_library_get(m);
+    else if (!strcmp(t, "app.pick")) on_app_pick(m);
     else if (!strcmp(t, "agent.open")) on_agent_open(m);
     else if (!strcmp(t, "focus")) {
         person();
@@ -1613,13 +1820,17 @@ void max_demo_reset(uint32_t now_ms)
     q_used = 0;
     sink = NULL;
     s.now = s.last_rx = s.last_ping = s.last_tick = s.resync_ok_at = s.library_at = now_ms;
+    // The story opens with its first app in front, and shown: that entry is played. (Left due at story time 0, it
+    // would be due before the story has counted any time, which advances nothing.)
+    s.front = s.shown = FRONT[0].app;
+    s.next_front = 1;
     for (int i = 0; i < SCRIPTED; i++) {
         agent_t *a = &agents[i];
         a->used = true;
         copy(a->id, sizeof a->id, CAST[i].id);
         copy(a->name, sizeof a->name, CAST[i].name);
         a->engine = CAST[i].engine;
-        a->machine = CAST[i].machine;
+        a->app = CAST[i].app;
         a->recap = CAST[i].recap;
         a->text = CAST[i].text;
         a->full = CAST[i].full;
@@ -1690,9 +1901,15 @@ void max_demo_tick(uint32_t now_ms, max_demo_emit_fn emit, void *ctx)
     s.last_tick = now_ms;
     if (s.person && !person_here(now_ms)) s.person = false;
     for (int i = 0; i < MAX_AGENTS && agents[i].used; i++) run_agent(&agents[i]);
-    if (s.owed && s.greeted) push_owed();   // the story's own roster changes
+    if (s.owed && s.greeted) push_owed();   // the story's own roster changes, and the app in front
     s.owed = 0;
 
+    if (s.greeted && s.app_filter) {
+        // A count, a waiting count or the shown app changed with no ring to carry it: `apps` alone.
+        char k[sizeof s.apps_key];
+        apps_key(k);
+        if (strcmp(k, s.apps_key)) push_apps();
+    }
     if (s.greeted && s.player) {
         char k[MAX_AGENTS + 1];
         library_key(k);

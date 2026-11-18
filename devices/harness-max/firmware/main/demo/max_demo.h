@@ -1,9 +1,11 @@
 // A fake Harness daemon on the far side of the cable: the scripted demo. Frames are cable frames (type + payload).
 //
 // It speaks what cli/src/cable/cableSession.ts speaks, message for message, so the bar shows the same screens it shows
-// cabled to a real computer: a hello gets a welcome, the machines and the agents; a story of agents working on three
-// machines loops for ever on its own; a tap, a voice turn, an answer or New Harness gets the daemon's reply. A person
-// takes over the story while they use the bar, and it resumes after a quiet minute.
+// cabled to a real computer: a hello gets a welcome, the machine and the agents; a story of agents working in three
+// apps on one computer (Orca, Harness, VS Code) loops for ever on its own, the app in front moving between them; a
+// tap, a voice turn, an answer, an app pick or New Harness gets the daemon's reply. A device that says appFilter is
+// shown the shown app's agents, after `apps`; any other, every agent. A person takes over the story while they use the
+// bar, and it resumes after a quiet minute.
 //
 // Pure C11, no threads and no ESP-IDF. Its state is static. The one use of the heap is cJSON parsing a frame the device
 // sent, freed before max_demo_receive returns, and bounded by the firmware's own JSON guard (cable_json_guard.h).
