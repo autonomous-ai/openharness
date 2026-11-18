@@ -598,7 +598,7 @@ describe("the opencode source (docs/plans/2026-11-17-dial-opencode-design.md)", 
       const s = setup()
       await live(s, 6)
       expect(s.source.list().map(({ sessionId, state, unseenDone }) => [sessionId, state, unseenDone])).toEqual([
-        ['ses_run', 'working', false], ['ses_ask', 'needs-you', false], ['ses_done', 'done', true],
+        ['ses_ask', 'needs-you', false], ['ses_run', 'working', false], ['ses_done', 'done', true],
         ['ses_never', 'done', true], ['ses_seen', 'idle', false], ['ses_fresh', 'idle', false],
       ])
       expect(routes(server).filter((route) => route.endsWith('/permission')).sort()).toEqual([
