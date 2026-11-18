@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join, posix, win32 } from 'node:path'
-import { CallFailure, expandHome, inside, uploadPath } from './call.js'
+import { CallFailure, expandHome, forbiddenDirs, inside, uploadPath } from './call.js'
 
 describe('inside', () => {
   it('fences a Windows folder however its path is spelled', () => {
@@ -34,6 +34,19 @@ describe('expandHome', () => {
     expect(expandHome('~\\.ssh', '/home/a', posix)).toBe('~\\.ssh')
     expect(expandHome('~/.ssh', '/home/a', posix)).toBe('/home/a/.ssh')
     expect(expandHome('~', '/home/a', posix)).toBe('/home/a')
+  })
+})
+
+describe('forbiddenDirs', () => {
+  it('fences the folders under every home, once each', () => {
+    const dirs = forbiddenDirs({ HOME: '/tmp/h' }, ['/home/a', '/tmp/h'], posix)
+    expect(dirs).toEqual(expect.arrayContaining(['/tmp/h/.ssh', '/home/a/.ssh', '/home/a/.local/share', '/home/a/.claude']))
+    expect(new Set(dirs).size).toBe(dirs.length)
+  })
+
+  it('fences the folders under HOME, USERPROFILE and the account\'s own home on Windows', () => {
+    expect(forbiddenDirs({ HOME: 'C:\\h', USERPROFILE: 'C:\\Users\\a' }, ['C:\\Users\\b'], win32)).toEqual(expect.arrayContaining(
+      ['C:\\h\\.ssh', 'C:\\Users\\a\\.ssh', 'C:\\Users\\b\\.ssh', 'C:\\Users\\b\\.local\\share']))
   })
 })
 
