@@ -11,10 +11,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi, type Mock } from 'vitest'
 
-import { CABLE_MAX_FRAME, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
+import { CABLE_MAX_FRAME, CABLE_MAX_PAYLOAD, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DaemonCableHost } from './cableHost.js'
 import type { MachineFleet } from './machineFleet.js'
-import { CableSession, SHOWN_ONLY_PREFIX, SWIPE_REST_MS, type CableAgent, type CableHost, type CableMachine, type CablePort, type DialAgent, type SendOutcome } from './cableSession.js'
+import { CableSession, fitDrawer, SHOWN_ONLY_PREFIX, SWIPE_REST_MS, type CableAgent, type CableHost, type CableMachine, type CablePort, type DialAgent, type SendOutcome } from './cableSession.js'
 import { DialLog } from './dialLog.js'
 import type { PetStore } from './pets/store.js'
 import { HostRegistry } from './hosts/registry.js'
@@ -366,6 +366,48 @@ describe('cable session', () => {
       expect(readNotification).toHaveBeenCalledExactlyOnceWith('a1', 'question-2')
       expect(openAgent).not.toHaveBeenCalled()
     } finally { await session.stop() }
+  })
+
+  it('bounds every drawer field to what the dial keeps, so eight rows of the worst text stay one frame', async () => {
+    const control = /[\u0000-\u001f\u007f]/
+    const long = '\u0001"\u001f\u007f"'.repeat(200)
+    const { session, port } = await connect(makeHost({ describe: () => ({ name: long, engine: 'claude', machine: long }) }))
+    try {
+      // Every character of an id the dial keeps escaped to two bytes, every summary 1000+ characters of escapes.
+      await session.replaceNotifications(Array.from({ length: 8 }, (_, i) => ({
+        agentId: '"'.repeat(46) + i, machineId: 'mac-local', question: i % 2 === 0, text: '\u0001"\u007fé\u001f😀'.repeat(300) })))
+      const replace = port.sent.find((m) => m.t === 'notif.replace')
+      expect(replace).toBeDefined()
+      expect(Buffer.byteLength(JSON.stringify(replace), 'utf8')).toBeLessThanOrEqual(CABLE_MAX_PAYLOAD - 256)
+      const items = replace!.items as Array<{ name: string; machine: string; summary: string }>
+      expect(items).toHaveLength(8)
+      for (const { name, machine, summary } of items) {
+        for (const [text, max] of [[name, 39], [machine, 39], [summary, 239]] as const) {
+          expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(max)
+          expect(text).not.toMatch(control)
+        }
+      }
+      expect(port.isOpen).toBe(true)
+    } finally { await session.stop() }
+  })
+
+  it('leaves out a row whose id the dial cannot keep', async () => {
+    const { session, port } = await connect()
+    try {
+      await session.replaceNotifications(['x'.repeat(48), 'é'.repeat(24), 'a\u0001b', 'x'.repeat(47), 'a1'].map((agentId) => (
+        { agentId, machineId: 'mac-local', question: true, text: 'Which branch?' })))
+      expect((port.sent.at(-1)!.items as Array<{ agentId: string }>).map((row) => row.agentId)).toEqual(['x'.repeat(47), 'a1'])
+    } finally { await session.stop() }
+  })
+
+  it('keeps the leading drawer rows that fit one frame', () => {
+    const rows = Array.from({ length: 8 }, (_, i) => ({ agentId: `a${i}`, summary: 'x'.repeat(2000) }))
+    const kept = fitDrawer(rows)
+    expect(kept).toEqual(rows.slice(0, kept.length))
+    expect(kept.length).toBeGreaterThan(0)
+    expect(kept.length).toBeLessThan(8)
+    expect(Buffer.byteLength(JSON.stringify({ t: 'notif.replace', items: kept }), 'utf8')).toBeLessThanOrEqual(CABLE_MAX_PAYLOAD - 256)
+    expect(fitDrawer(rows.slice(0, 2))).toEqual(rows.slice(0, 2))
   })
 
   it.each(['turn-1', 'turn-2'])('a late read of %s cannot clear a newer snapshot occurrence', async readToken => {
@@ -3635,6 +3677,18 @@ describe('hello capabilities', () => {
       await session.question('a1', 'q1', ask)
       await session.question('a2', 'q2', ask)
       expect(port.types()).toEqual(['notif.replace'])
+    } finally { await session.stop() }
+  })
+
+  it('an open question whose id the dial cannot keep is not carried as a row', async () => {
+    const { session, port } = await connect(richHost())
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      await session.question('x'.repeat(48), 'q1', [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }])
+      port.sent.length = 0
+      await session.replaceNotifications([])
+      expect(ofType(port, 'notif.replace')[0].items).toEqual([])
     } finally { await session.stop() }
   })
 
