@@ -221,6 +221,18 @@ it('keeps a later repeated cancellation intent when an earlier commit finishes',
   expect(rows()[0]).not.toHaveProperty('closePlan')
 })
 
+it('starts a legacy lock holder while an earlier write is still releasing the lock', async () => {
+  // A write's result arrives before its lock cleanup; hold that cleanup so the lock is still taken.
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  cleanup.file = join(directory, 'registry.json'); cleanup.published = false
+  cleanup.wait = async () => { cleanup.wait = undefined; await held }
+  await registry.setClosePlan(input.agentId, plan)
+  const ready = locked()
+  holder!.on('message', message => { if (message === 'waiting') release() })
+  try { await ready } finally { release() }
+})
+
 it('owns its candidate values while preserving later edits through a live row alias', async () => {
   await locked()
   const candidate: NonNullable<ReturnType<typeof registry.byAgent>>['closePlan'] = { ...plan }
