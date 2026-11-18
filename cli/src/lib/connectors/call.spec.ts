@@ -1,8 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync, linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join, posix, win32 } from 'node:path'
 import { CallFailure, expandHome, fenced, forbiddenDirs, inside, tempDir, unc, uploadPath } from './call.js'
+
+// The account's own home, set by a test that needs one: a test never reads the real home's folders.
+const account = vi.hoisted(() => ({ home: undefined as string | undefined }))
+vi.mock('node:os', async importOriginal => {
+  const os = await importOriginal<typeof import('node:os')>()
+  return { ...os, userInfo: () => ({ ...os.userInfo(), homedir: account.home ?? os.userInfo().homedir }) }
+})
 
 describe('inside', () => {
   it('fences a Windows folder however its path is spelled', () => {
@@ -117,7 +124,10 @@ describe('uploadPath', () => {
     for (const dir of ['.ssh', '.harness', 'docs']) mkdirSync(join(home, dir))
     for (const dir of ['.ssh', '.harness', 'docs']) writeFileSync(join(home, dir, 'note.txt'), 'x')
   })
-  afterEach(() => rmSync(home, { recursive: true, force: true }))
+  afterEach(() => {
+    account.home = undefined
+    rmSync(home, { recursive: true, force: true })
+  })
 
   const refused = (raw: string): unknown => { try { uploadPath(raw, { HOME: home }); return null } catch (error) { return error } }
   const expectFenced = (raw: string): void => {
@@ -129,6 +139,11 @@ describe('uploadPath', () => {
 
   it('refuses a file inside a folder where credentials or configs live', () => {
     for (const dir of ['.ssh', '.harness']) expectFenced(join(home, dir, 'note.txt'))
+  })
+
+  it('refuses it under the account\'s own home, whatever home HOME names', () => {
+    account.home = home
+    expect(() => uploadPath(join(home, '.ssh', 'note.txt'), { HOME: join(home, 'docs') })).toThrow(/not a media file/)
   })
 
   it('refuses it however the path is spelled, where the file system reads the spelling as that folder', () => {
