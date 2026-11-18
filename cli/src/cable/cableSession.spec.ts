@@ -3674,6 +3674,49 @@ describe('hello capabilities', () => {
     } finally { await session.stop() }
   })
 
+  it('a drawer holds its questions before news: one it has room for is never asked again as the list changes', async () => {
+    const { session, port } = await connect(richHost())
+    const ask = [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }]
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      for (let i = 0; i < 8; i++) await session.question(`q${i}`, `id${i}`, ask)
+      port.sent.length = 0
+      // The window names q7's question after b's news: the eight rows hold the eight questions, and b's news gives way.
+      const list = [{ agentId: 'b', machineId: 'm1', question: false, text: 'The build passed, all green.' },
+        { agentId: 'q7', machineId: 'm1', question: true, text: 'Ship it?' }]
+      await session.replaceNotifications(list)
+      await session.replaceNotifications(list)
+      expect(port.types()).toEqual(['notif.replace', 'notif.replace'])
+      expect((ofType(port, 'notif.replace')[1].items as Array<{ agentId: string }>).map((row) => row.agentId))
+        .toEqual(['q0', 'q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'q7'])
+    } finally { await session.stop() }
+  })
+
+  it("a drawer row's words are the dial's own preview, so eight long rows stay one frame and a read row stays read", async () => {
+    const { session, port } = await connect(richHost())
+    const long = `Approve  this\n\nplan? ${'Étape très longue. '.repeat(300)}`
+    // What the dial keeps of it (recap_preview): whitespace folded to one space, cut on a whole character at 239 bytes.
+    let preview = ''
+    for (const ch of long.split(/[ \t-\r]+/).filter(Boolean).join(' ')) {
+      if (Buffer.byteLength(preview + ch, 'utf8') > 239) break
+      preview += ch
+    }
+    preview = preview.trimEnd()
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      await session.question('a0', 'id0', [{ key: 'k', q: long, options: ['yes', 'no'] }])
+      port.sent.length = 0
+      await session.replaceNotifications(Array.from({ length: 7 }, (_, i) =>
+        ({ agentId: `w${i}`, machineId: 'm1', question: true, text: long })))
+      expect(port.types()).toEqual(['notif.replace'])
+      const items = ofType(port, 'notif.replace')[0].items as Array<{ agentId: string; summary: string }>
+      expect(items.map((row) => row.agentId)).toEqual(['a0', 'w0', 'w1', 'w2', 'w3', 'w4', 'w5', 'w6'])
+      for (const row of items) expect(row.summary).toBe(preview)
+    } finally { await session.stop() }
+  })
+
   it('a replace overtaken by a newer one sends nothing: the newer carries each open question', async () => {
     let finish!: (value: Array<{ recap: string; text: string }>) => void
     const history = new Promise<Array<{ recap: string; text: string }>>(resolve => { finish = resolve })
