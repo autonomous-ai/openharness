@@ -135,7 +135,7 @@ impl Request {
     fn new(out: &mut File, kind: &str, query: &str) -> io::Result<Self> {
         let token = std::env::var("_HN_CONTEXT").unwrap_or_default();
         if uuid::Uuid::parse_str(&token).is_err() { return Err(io::Error::other("Open this picker from a Harness shell.")) }
-        let base = PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".harness/shell-requests");
+        let base = crate::harness_home::harness_path(std::env::var("HOME").unwrap_or_default(), crate::harness_home::Entry::ShellRequests);
         let dir = base.join(&token);
         for path in [&base, &dir] {
             if !path.exists() {
