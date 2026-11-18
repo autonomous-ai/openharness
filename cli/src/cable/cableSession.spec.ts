@@ -3891,6 +3891,31 @@ describe('hello capabilities', () => {
     expect(await afterDrawers({ ...PRO_HELLO })).toEqual([plain, plain])
   })
 
+  it('a held question past the drawer is never sent to a Pro, and goes back silent to a questionTier dial', async () => {
+    const ask = [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }]
+    const notice = [{ key: 'notice', q: 'Tests pass.', options: ['In Terminal'] }]
+    const NID = `${SHOWN_ONLY_PREFIX}n1`
+    const afterDrawers = async (hello: Record<string, unknown>) => {
+      const { session, port } = await connect(richHost())
+      try {
+        port.say(hello)
+        await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+        for (let i = 0; i < 8; i++) await session.question(`q${i}`, `id${i}`, ask)
+        await session.hold('h', NID, notice)          // restored after the devices process restarted: it rang before
+        port.sent.length = 0
+        await session.replaceNotifications([])
+        await session.replaceNotifications([])
+        for (const drawer of ofType(port, 'notif.replace'))
+          expect((drawer.items as Array<{ agentId: string }>).map((row) => row.agentId)).not.toContain('h')
+        return ofType(port, 'question').filter((m) => m.agentId === 'h')
+      } finally { await session.stop() }
+    }
+    // A Pro mutes a repeat only by a hash in its RAM, which a restart of the computer cleared: the frame would beep.
+    expect(await afterDrawers({ ...PRO_HELLO })).toEqual([])
+    expect(await afterDrawers({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0', questionTier: 'v1' }))
+      .toEqual([expect.objectContaining({ id: NID, tier: 'list' }), expect.objectContaining({ id: NID, tier: 'list' })])
+  })
+
   it("a question the greeting's drawer carried was told: a later drawer that cuts it does not ring", async () => {
     const host = richHost()
     const { session, port } = await connect(host)
