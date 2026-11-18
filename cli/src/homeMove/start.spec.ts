@@ -14,7 +14,7 @@ import { harnessPaneOwner } from '../lib/harnessSessionLabel.js'
 import { readBridge } from './bridge.js'
 import { checkMove } from './conditions.js'
 import { openJournal, readJournal } from './journal.js'
-import { LOCK_WAIT_MS, moveLockPath, type LockDeps } from './lock.js'
+import { LOCK_LOOK_MS, moveLockPath, type LockDeps } from './lock.js'
 import { runMove, type MoveDeps } from './move.js'
 import { defaultTmux, type Tmux } from './panes.js'
 import { readMoveRecord } from './record.js'
@@ -359,16 +359,16 @@ describe('the move at a start', () => {
     const other = heldByAnother(t)
     let settled = false
     const waiting = moveHomeAtStart(argvOf(t, 'start'), {}, t.deps()).finally(() => { settled = true })
-    await vi.advanceTimersByTimeAsync(LOCK_WAIT_MS)
+    await vi.advanceTimersByTimeAsync(LOCK_LOOK_MS)
     expect(logOf(t)).toEqual(['home move: under way · waiting'])
-    await vi.advanceTimersByTimeAsync(10 * LOCK_WAIT_MS)
+    await vi.advanceTimersByTimeAsync(10 * LOCK_LOOK_MS)
     // A tree half moved is never started on.
     expect(settled).toBe(false)
     expect(logOf(t)).toEqual(['home move: under way · waiting'])
     expect(t.execs).toEqual([])
     // Killed: the next look finds its owner gone.
     other.dies()
-    await vi.advanceTimersByTimeAsync(LOCK_WAIT_MS)
+    await vi.advanceTimersByTimeAsync(LOCK_LOOK_MS)
     await waiting
     expect(logOf(t)).toEqual(['home move: under way · waiting', moved(t)])
     expect(t.execs).toHaveLength(1)

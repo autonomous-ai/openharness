@@ -44,6 +44,8 @@ const SYSTEMCTL_LIMIT_MS = 30_000
 const PTY_HOST_FILE = /^pty-host-.+\.json$/
 const OLD_HOME = legacyHarnessHome('~', 'linux')
 const CLOSE_AGENTS = 'close the agents, then harness start'
+// Said once a start has waited LOCK_LOOK_MS for another start's move (lock.ts).
+const UNDER_WAY = 'home move: under way · waiting'
 
 /**
  * Moves ~/.harness at a start command, says how it went in the data folder's harness.log (and on a terminal), and starts
@@ -94,10 +96,11 @@ export function reexecTarget(plan: Roots, execPath: string, argv: readonly strin
 
 /**
  * Under the move lock: the journal an earlier move left, then the conditions, then the move, or the hold, recorded and
- * said. Null when there is nothing to say: no move to make, a failed one not yet due again, or a lock another start
- * still holds after its wait (this start then goes on, unmoved).
+ * said. Null when there is nothing to say: no move to make, a failed one not yet due again, or a move another start
+ * holds the lock for and has committed (this start then goes on from the new roots while that one finishes).
  */
 async function moveOrHold(explicit: boolean, env: NodeJS.ProcessEnv, environment: NodeJS.ProcessEnv, roots: Roots, deps: StartDeps, moveDeps: MoveDeps, lines: string[]): Promise<MoveOutcome | null> {
+  const wait = { committed: () => fs.existsSync(roots.data), long: () => say([UNDER_WAY], environment, deps) }
   const locked = await withMoveLock(roots.legacy, async () => {
     const recovered = await recoverMove(deps.home, environment, moveDeps)
     if (recovered && recovered.state !== 'rolled-back') return recovered
@@ -108,7 +111,7 @@ async function moveOrHold(explicit: boolean, env: NodeJS.ProcessEnv, environment
     if (check.move) return runMove(check, environment, moveDeps)
     if (check.hold) noteHold(check.hold, roots.legacy, deps.now(), lines)
     return null
-  }, deps.lock)
+  }, wait, deps.lock)
   return locked.held ? locked.value : null
 }
 

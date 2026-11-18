@@ -1,8 +1,19 @@
-import { linkSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, watch, writeFileSync } from 'node:fs'
+import { linkSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, watch, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
-/** How long a start waits for another start's move: one that takes longer is left to finish, and this start goes on. */
-export const LOCK_WAIT_MS = 30_000
+/**
+ * How often a start waiting for another start's move looks again: an owner killed changes nothing beside the lock, and
+ * the data root it commits is not beside it either. The first look this far into a wait also says the wait.
+ */
+export const LOCK_LOOK_MS = 30_000
+
+/** What a start that waits for the lock is told, and asks, besides the lock. */
+export interface LockWait {
+  /** Whether the move the lock is held for is committed: the start then goes on without the lock, while its owner finishes. */
+  committed(): boolean
+  /** Called once, LOCK_LOOK_MS into a wait. */
+  long(): void
+}
 
 /** What the lock reads of this computer. */
 export interface LockDeps {
@@ -18,7 +29,7 @@ const OWNER = 'owner'
 const thisProcess: LockDeps = {
   pid: process.pid,
   startTime: procStartTime,
-  // A watch that breaks wakes the waiter once; the limit bounds the rest of its wait.
+  // A watch that breaks wakes the waiter once; its looks go on.
   watch: (folder, onChange) => watch(folder, onChange).on('error', onChange),
 }
 
@@ -32,12 +43,16 @@ export function moveLockPath(legacy: string): string {
 
 /**
  * Runs [run] while this process holds the move lock: a folder holding `owner`, this process's pid and start time. A
- * lock another live process holds is waited for, LOCK_WAIT_MS at most; one whose owner is gone is taken over.
+ * lock another live process holds is waited for, with no limit while it lives and its move is not committed: a start
+ * never goes on on a tree half moved. One whose owner is gone is taken over. Not held: the move [wait] was for is committed.
  */
-export async function withMoveLock<T>(legacy: string, run: () => Promise<T>, deps: LockDeps = thisProcess): Promise<{ held: true; value: T } | { held: false }> {
+export async function withMoveLock<T>(legacy: string, run: () => Promise<T>, wait: LockWait, deps: LockDeps = thisProcess): Promise<{ held: true; value: T } | { held: false }> {
   const lock = moveLockPath(legacy)
-  const me = JSON.stringify({ pid: deps.pid, start: deps.startTime(deps.pid) })
-  if (!take(lock, deps.pid, me) && !await waitFor(lock, deps, me)) return { held: false }
+  const start = deps.startTime(deps.pid)
+  // An owner with no start time reads as gone to every other start, which would take the lock over while this one moves.
+  if (start === null) throw new Error('this process has no start time in /proc: the move lock is not taken')
+  const me = JSON.stringify({ pid: deps.pid, start })
+  if (!take(lock, deps.pid, me) && !await waitFor(lock, deps, me, wait)) return { held: false }
   try {
     return { held: true, value: await run() }
   } finally {
@@ -45,24 +60,31 @@ export async function withMoveLock<T>(legacy: string, run: () => Promise<T>, dep
   }
 }
 
-/** Takes the lock once its owner is gone or lets go, looking again at each change beside it; false after the limit. */
-async function waitFor(lock: string, deps: LockDeps, me: string): Promise<boolean> {
+/**
+ * Takes the lock once its owner is gone or lets go, looking again at each change beside it and every LOCK_LOOK_MS;
+ * false once the move it is held for is committed.
+ */
+async function waitFor(lock: string, deps: LockDeps, me: string, wait: LockWait): Promise<boolean> {
   let wake = (): void => {}
   const watcher = deps.watch(dirname(lock), () => wake())
   let timer: NodeJS.Timeout | undefined
-  const limit = new Promise<'late'>((done) => { timer = setTimeout(done, LOCK_WAIT_MS, 'late') })
+  const look = (): Promise<'look'> => new Promise((done) => { timer = setTimeout(done, LOCK_LOOK_MS, 'look') })
+  let next = look()
   try {
-    for (let late = false; ;) {
+    for (let said = false; ;) {
       // Looked at once the watch is on: a release before it is seen here, one after it wakes the wait below.
       if (take(lock, deps.pid, me)) return true
       const owner = ownerOf(lock)
       if (owner === null) continue
       if (!alive(owner, deps)) {
-        drop(lock, owner)
+        drop(lock, owner, deps.pid)
         continue
       }
-      if (late) return false
-      late = await Promise.race([new Promise<'changed'>((done) => { wake = () => done('changed') }), limit]) === 'late'
+      if (wait.committed()) return false
+      if (await Promise.race([new Promise<'changed'>((done) => { wake = () => done('changed') }), next]) === 'changed') continue
+      if (!said) wait.long()
+      said = true
+      next = look()
     }
   } finally {
     watcher.close()
@@ -114,9 +136,24 @@ function alive(owner: string, deps: LockDeps): boolean {
   }
 }
 
-/** Removes an owner that is gone, only while it is still the one judged: a lock that changed hands meanwhile stays. */
-function drop(lock: string, owner: string): void {
-  if (ownerOf(lock) === owner) rmSync(join(lock, OWNER), { force: true })
+/**
+ * Removes an owner that is gone, only while it is still the one judged: moved aside in one step, then read, so an owner
+ * that took the lock meanwhile is the one moved, and is put back.
+ */
+function drop(lock: string, owner: string, pid: number): void {
+  const aside = join(lock, `${OWNER}.gone.${pid}`)
+  try {
+    renameSync(join(lock, OWNER), aside)
+  } catch (error) {
+    // Another start dropped it first.
+    if (code(error) === 'ENOENT') return
+    throw error
+  }
+  try {
+    if (readFileSync(aside, 'utf8') !== owner) linkSync(aside, join(lock, OWNER))
+  } finally {
+    rmSync(aside, { force: true })
+  }
 }
 
 /** Lets go of a lock that is still this process's; the folder goes too, with any draft a crash left in it. */
