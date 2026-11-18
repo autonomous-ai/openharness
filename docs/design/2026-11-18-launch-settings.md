@@ -614,3 +614,36 @@ not a whole-daemon memory claim. The original exclusions remain: common semantic
 latency, worker CPU includes the ending GC snapshot, and permission probing, extra model capture, cold service
 startup, real terminal I/O and native Windows/Linux acceptance are outside this packet. No further optimization,
 profile or timing run follows from these results without review.
+
+### Design: keep the last full proof for read-only worker results
+
+The whole-source union proposal is not implemented: it would need new per-source traces, final-read ordering and
+budget accounting to preserve current contracts. Existing profile-v2 instead identifies a smaller duplicate phase.
+In a read-only result, the full post-worker source/native proof is followed only by the immediate output verification,
+closure assignment and another full final proof before return. The final proof remains in its original later
+position, so a source/native/account change during the output read is still rejected.
+
+For a validated candidate with no outputs or exact captured output bytes, use fresh owner/revision/account admission
+before the immediate output read, then the unchanged full finalCurrent before returning any values. For missing or
+different output bytes, retain the full post-worker proof before publication and every existing effect/flush/
+acknowledgement fence. Keep the immediate output read and its failure logging; do not replace the later full proof
+with an earlier verdict. No new helper, field, protocol, cache, flag, timeout, budget or generic publisher rule is
+introduced. The captured-byte comparison selects the branch without an effect or callback.
+
+Selected RED/GREEN cases count the actual NativeLaunch proof calls for unchanged output, reject source/native/
+dependency/ancestor/account mutation during the immediate output read, preserve fresh owner admission before that
+read and output failure logging, cover no-output Codex/PowerShell results, and refuse stale publishing answers
+before any output effect. Existing worker-commit, receipt/final-argv and staged/directory-fsync mutations stay
+selected. Run affected settings coverage and types. The fixture's returned-proof assertion and all final dispatch
+checks remain unchanged. This slice does not change the settings DTO or run another profile/benchmark; v7's
+performance hold remains pending a separately reviewed comparison.
+
+RED records three intended failures and eleven safety passes, actual 1 in 1.492 s
+(`/tmp/core-launch-settings-readonly-phase-red.log`): the unchanged warm Claude and both settings-only paths each
+perform four native proofs rather than three before return. No fixture correction or unrelated failure occurs.
+The one-file correction passes all 81 cases in the three affected settings suites, actual 0 in 3.893 s
+(`/tmp/core-launch-settings-readonly-phase-green.log`). nativeLaunchSettings.ts reaches 100% statements (79/79),
+branches (70/70), functions (10/10) and lines (52/52); full maps are in
+`/tmp/core-launch-settings-readonly-phase-coverage/`. TypeScript passes actual 0 in 7.464 s
+(`/tmp/core-launch-settings-readonly-phase-types.log`). Both owned groups are empty and diff check passes. These
+are functional and structural-count results only; no further profile or timing run has executed for this change.

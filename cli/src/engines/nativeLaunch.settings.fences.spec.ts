@@ -18,6 +18,7 @@ import { runServiceProcess } from '../services/process.js'
 
 const fixture = vi.hoisted(() => ({ home: '', data: '', executable: '', epoch: 'epoch-a',
   nativeCurrent: (): boolean => true, onSync: undefined as ((fd: number) => void) | undefined,
+  onStat: undefined as ((file: string) => void) | undefined,
   reads: undefined as Map<string, number> | undefined }))
 vi.mock('./kit/launchExecutable.js', () => ({ captureLaunchExecutable: async () => ({ state: 'ready',
   executable: { command: fixture.executable, identity: 'fixture', current: () => fixture.nativeCurrent() },
@@ -38,6 +39,7 @@ vi.mock('node:fs', async original => {
   return { ...fs, lstatSync: (...args: Parameters<typeof fs.lstatSync>) => {
     const file = String(args[0])
     if (fixture.reads) fixture.reads.set(file, (fixture.reads.get(file) ?? 0) + 1)
+    fixture.onStat?.(file)
     return fs.lstatSync(...args)
   }, fsync: (fd: number, callback: (error: Error | null) => void) => fs.fsync(fd, error => {
     try { fixture.onSync?.(fd) } catch (cause) { callback(cause as Error); return }
@@ -57,7 +59,7 @@ beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'launch-settings-fences-'))
   fixture.home = join(root, 'home'); fixture.data = join(root, 'data')
   fixture.executable = join(root, 'engine'); fixture.epoch = 'epoch-a'
-  fixture.onSync = undefined; fixture.reads = undefined
+  fixture.onSync = undefined; fixture.onStat = undefined; fixture.reads = undefined
   mkdirSync(fixture.home); mkdirSync(fixture.data); mkdirSync(join(fixture.home, '.claude'))
   source = join(fixture.home, '.claude', 'settings.json')
   script = join(fixture.data, 'statusline', 'statusline.mjs'); dependency = join(root, 'required-dependency')
@@ -67,7 +69,7 @@ beforeEach(() => {
   nativeReads = vi.fn(() => { try { native.verify(); return true } catch { return false } })
   fixture.nativeCurrent = nativeReads
 })
-afterEach(() => { fixture.onSync = undefined; fixture.reads = undefined; rmSync(root, { recursive: true, force: true }) })
+afterEach(() => { fixture.onSync = undefined; fixture.onStat = undefined; fixture.reads = undefined; vi.restoreAllMocks(); rmSync(root, { recursive: true, force: true }) })
 const prepared = async (selected = setup): Promise<NativeLaunch> => {
   const result = await inspectNativeLaunch('claude', {}, { setup: selected })
   if (!result.ok) throw Error('fixture native inspection held')
@@ -76,6 +78,87 @@ const prepared = async (selected = setup): Promise<NativeLaunch> => {
   expect(result.launch.retain!({ files: [], current: () => { try { proof.verify(); return true } catch { return false } } })).toBe(true)
   return result.launch
 }
+
+it('keeps one full read-only return proof after the output check without an earlier duplicate', async () => {
+  mkdirSync(join(fixture.data, 'statusline')); writeFileSync(script, statusLineScript())
+  const launch = await prepared()
+  nativeReads.mockClear()
+  const settings = await launch.prepareSettings!(fixture.home, () => true)
+  expect(settings).not.toBeNull()
+  // Initial native admission, post-capture proof and the final return proof are all still present.
+  expect(nativeReads).toHaveBeenCalledTimes(3)
+  expect(settings!.current()).toBe(true) // Preserve the benchmark caller's explicit returned-proof assertion.
+  expect(nativeReads).toHaveBeenCalledTimes(4)
+  expect(readFileSync(script, 'utf8')).toBe(statusLineScript())
+})
+
+it.each(['source', 'native', 'dependency', 'source ancestor', 'owner', 'sign-in'] as const)(
+  'keeps the full proof after the final read-only output check changes %s', async change => {
+    mkdirSync(join(fixture.data, 'statusline')); writeFileSync(script, statusLineScript())
+    const target = realpathSync(script)
+    let owner = true, changed = false
+    const launch = await prepared({ ...setup, prepareFiles: async (...args) => {
+      const candidate = await setup.prepareFiles!(...args)
+      fixture.onStat = file => {
+        if (file !== target) return
+        fixture.onStat = undefined; changed = true
+        if (change === 'source') writeFileSync(source, '{}')
+        else if (change === 'native') writeFileSync(fixture.executable, 'replacement executable')
+        else if (change === 'dependency') writeFileSync(dependency, 'replacement dependency')
+        else if (change === 'source ancestor') {
+          renameSync(join(fixture.home, '.claude'), join(fixture.home, 'displaced'))
+          mkdirSync(join(fixture.home, '.claude')); writeFileSync(source, sourceBytes)
+        } else if (change === 'owner') owner = false
+        else fixture.epoch = 'epoch-b'
+      }
+      return candidate
+    } })
+    expect(await launch.prepareSettings!(fixture.home, () => owner)).toBeNull()
+    expect(changed).toBe(true)
+    expect(readFileSync(script, 'utf8')).toBe(statusLineScript())
+  },
+)
+
+it.each(['owner', 'sign-in'] as const)('keeps fresh read-only output admission after %s revocation', async change => {
+  mkdirSync(join(fixture.data, 'statusline')); writeFileSync(script, statusLineScript())
+  const target = realpathSync(script)
+  let owner = true, outputReads = 0
+  const launch = await prepared({ ...setup, prepareFiles: async (...args) => {
+    const candidate = await setup.prepareFiles!(...args)
+    if (change === 'owner') owner = false
+    else fixture.epoch = 'epoch-b'
+    fixture.onStat = file => { if (file === target) outputReads++ }
+    return candidate
+  } })
+  expect(await launch.prepareSettings!(fixture.home, () => owner)).toBeNull()
+  expect(outputReads).toBe(0)
+})
+
+it('retains failure reporting when the final read-only output check finds changed bytes', async () => {
+  mkdirSync(join(fixture.data, 'statusline')); writeFileSync(script, statusLineScript())
+  const target = realpathSync(script), warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  const launch = await prepared({ ...setup, prepareFiles: async (...args) => {
+    const candidate = await setup.prepareFiles!(...args)
+    fixture.onStat = file => {
+      if (file !== target) return
+      fixture.onStat = undefined; writeFileSync(script, 'peer replacement')
+    }
+    return candidate
+  } })
+  expect(await launch.prepareSettings!(fixture.home, () => true)).toBeNull()
+  expect(warn).toHaveBeenCalledExactlyOnceWith('[launch-settings] OPTIONAL_PREPARATION_UNAVAILABLE')
+  expect(readFileSync(script, 'utf8')).toBe('peer replacement')
+})
+
+it.each(['native', 'dependency'] as const)('refuses a publishing answer with a changed %s before any output effect', async change => {
+  const launch = await prepared({ ...setup, prepareFiles: async (...args) => {
+    const candidate = await setup.prepareFiles!(...args)
+    writeFileSync(change === 'native' ? fixture.executable : dependency, 'changed')
+    return candidate
+  } })
+  expect(await launch.prepareSettings!(fixture.home, () => true)).toBeNull()
+  expect(existsSync(join(fixture.data, 'statusline'))).toBe(false)
+})
 
 it('bounds fresh native and source walks while publishing through owned descriptor waits', async () => {
   const launch = await prepared(), leaf = realpathSync(source)

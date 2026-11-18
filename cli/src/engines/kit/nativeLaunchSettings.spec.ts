@@ -48,6 +48,19 @@ const options = () => ({ dataDir, runtimeNode: process.execPath, platform: 'darw
   owner: { machineId: 'machine', accountId: 'account' }, current: () => true, nativeCurrent: () => true })
 const setup: Pick<NativeSetup, 'prepareFiles'> = { prepareFiles: async (input, _request, current) => prepareNativeLaunchSettings(input as LaunchSettingsInput, current) }
 
+it.each(['codex', 'claude'])('keeps one complete settings-only return proof for %s without a dummy output', async engine => {
+  if (engine === 'claude') writeFileSync(join(root, '.claude', 'settings.json'), JSON.stringify({ statusLine: { type: 'command', command: 'pwsh -File mine.ps1' } }))
+  const nativeCurrent = vi.fn(() => true)
+  const prepared = await prepareLaunchSettings(engine, { HOME: root }, cwd, setup,
+    { ...options(), platform: 'win32', nativeCurrent })
+  expect(prepared).not.toBeNull()
+  expect(prepared!.values.settings).toBeNull()
+  expect(nativeCurrent).toHaveBeenCalledTimes(3)
+  expect(prepared!.current()).toBe(true)
+  expect(nativeCurrent).toHaveBeenCalledTimes(4)
+  expect(existsSync(join(dataDir, 'statusline'))).toBe(false)
+})
+
 describe('one synchronous source-verification pass', () => {
   function sharedSources() {
     const shared = join(realpathSync(root), 'shared'), displaced = join(realpathSync(root), 'displaced')

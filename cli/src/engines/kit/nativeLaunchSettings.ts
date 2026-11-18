@@ -75,11 +75,14 @@ export async function prepareLaunchSettings(engine: string, environment: Readonl
     if (!boundedLaunchSettingsInput(input) || !current()) return null
     // Setup only renders captured bytes. Fresh file proof fences its answer before any owner-side effect.
     const candidate = launchSettingsCandidate(await setup.prepareFiles(input, randomUUID(), options.current), input)
-    if (!candidate || !current()) return null
+    if (!candidate) return null
+    const needsPublication = candidate.files.length > 0 && output!.content !== candidate.files[0].content
+    // Read-only answers have no effect before the full final proof below, after the output read.
+    if (!(needsPublication ? current() : options.current())) return null
     let outputCurrent: (() => boolean) | undefined
     if (candidate.files.length) {
       const content = candidate.files[0].content
-      if (output!.content === content) {
+      if (!needsPublication) {
         // Reading an existing optional artifact makes no publication or durability claim.
         output!.verify()
         outputCurrent = () => { try { output!.verify(); return true } catch { return false } }
