@@ -401,8 +401,31 @@ describe('who serves a data folder, over the Windows pipe', () => {
   })
 })
 
+/** Runs [run] with XDG_RUNTIME_DIR as given, unset for undefined: the short folder's place reads it at each call. */
+function withRuntimeDir<T>(value: string | undefined, run: () => T): T {
+  const before = process.env.XDG_RUNTIME_DIR
+  if (value === undefined) delete process.env.XDG_RUNTIME_DIR
+  else process.env.XDG_RUNTIME_DIR = value
+  try {
+    return run()
+  } finally {
+    if (before === undefined) delete process.env.XDG_RUNTIME_DIR
+    else process.env.XDG_RUNTIME_DIR = before
+  }
+}
+
 describe('a data folder too long to hold a socket', () => {
   const long = `/data/${'x'.repeat(120)}`
+  // The computer's own runtime folder would move these short folders: the cases that want one set it.
+  let runtimeBefore: string | undefined
+  beforeEach(() => {
+    runtimeBefore = process.env.XDG_RUNTIME_DIR
+    delete process.env.XDG_RUNTIME_DIR
+  })
+  afterEach(() => {
+    if (runtimeBefore === undefined) delete process.env.XDG_RUNTIME_DIR
+    else process.env.XDG_RUNTIME_DIR = runtimeBefore
+  })
 
   it('keeps a short folder\'s socket where it is', () => {
     expect(socketPathIn('/d', 'daemon-1.sock', '/h')).toBe('/d/daemon-1.sock')
@@ -486,6 +509,58 @@ describe('a data folder too long to hold a socket', () => {
         symlinkSync(elsewhere, join(home, root, 's'))
         await expect(listenLocalSocket(() => {}, join(home, root, 's', hash(long), 'daemon-1.sock')), root).rejects.toThrow(/not private/)
       }
+    })
+
+    it('under XDG_RUNTIME_DIR it makes harness and the short folder 0700, and the socket 0600', async () => {
+      const runtime = join(home, 'run')
+      mkdirSync(runtime, { mode: 0o700 })
+      process.env.XDG_RUNTIME_DIR = runtime
+      const path = socketPathIn(long, 'daemon-1.sock', '/h', 'linux')!
+      expect(path).toBe(join(runtime, 'harness', hash(long), 'daemon-1.sock'))
+      const listening = await listenLocalSocket(() => {}, path)
+      closers.push(listening.close)
+      expect([lstatSync(join(runtime, 'harness')).mode & 0o777, lstatSync(dirname(path)).mode & 0o777, lstatSync(path).mode & 0o777]).toEqual([0o700, 0o700, 0o600])
+    })
+  })
+
+  // The XDG Base Directory spec's runtime folder: the account's own, owner only, so a socket there needs no folder of
+  // Harness's in the home. Every client finds the same place (hook/notify.mjs, Desktop, hn, store/tools/local-daemon.mjs).
+  describe('on Linux, under XDG_RUNTIME_DIR when it is the account\'s own', () => {
+    let runtime: string
+    beforeEach(() => { runtime = mkdtempSync(join('/tmp', 'ls-run-')); chmodSync(runtime, 0o700) })
+    afterEach(() => rmSync(runtime, { recursive: true, force: true }))
+    const stateShort = (folder: string): string => join('/h', '.local', 'state', 'harness', 's', hash(folder), 'daemon-1.sock')
+
+    it('pins the example every client copies: $XDG_RUNTIME_DIR/harness/<hash>/daemon-<port>.sock', () => {
+      const dataDir = `/home/${'u'.repeat(80)}/.local/share/harness/cli/data`
+      expect(hash(dataDir)).toBe('410894cc1bc77e10')
+      expect(withRuntimeDir(runtime, () => unixSocketPath(dataDir, 18473, 'linux'))).toBe(join(runtime, 'harness', '410894cc1bc77e10', 'daemon-18473.sock'))
+      // A folder that holds its socket keeps it.
+      expect(withRuntimeDir(runtime, () => socketPathIn('/d', 'daemon-1.sock', '/h', 'linux'))).toBe('/d/daemon-1.sock')
+    })
+
+    it('one that is not owner only, not a folder, not absolute, or a link → the state root\'s s, as before', () => {
+      const looser = mkdtempSync(join('/tmp', 'ls-run-')), sticky = mkdtempSync(join('/tmp', 'ls-run-')), linked = `${runtime}-link`
+      try {
+        chmodSync(looser, 0o755)
+        chmodSync(sticky, 0o1700)
+        symlinkSync(runtime, linked)
+        writeFileSync(join(runtime, 'file'), '')
+        for (const value of [undefined, '', 'run/user/1000', looser, sticky, linked, join(runtime, 'file'), join(runtime, 'missing')]) {
+          expect(withRuntimeDir(value, () => socketPathIn(long, 'daemon-1.sock', '/h', 'linux')), String(value)).toBe(stateShort(long))
+        }
+      } finally {
+        for (const path of [looser, sticky, linked]) rmSync(path, { recursive: true, force: true })
+      }
+    })
+
+    // Another account's folder, owner only: root's home is one on most Linux systems.
+    it.runIf(process.getuid?.() !== 0 && existsSync('/root') && (statSync('/root').mode & 0o7777) === 0o700)('one another account owns → the state root\'s s', () => {
+      expect(withRuntimeDir('/root', () => socketPathIn(long, 'daemon-1.sock', '/h', 'linux'))).toBe(stateShort(long))
+    })
+
+    it('macOS keeps its short folders in ~/.harness/s, whatever XDG_RUNTIME_DIR says', () => {
+      expect(withRuntimeDir(runtime, () => socketPathIn(long, 'daemon-1.sock', '/h', 'darwin'))).toBe(join('/h', '.harness', 's', hash(long), 'daemon-1.sock'))
     })
   })
 })

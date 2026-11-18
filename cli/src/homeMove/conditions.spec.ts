@@ -122,6 +122,18 @@ describe('whether the move runs: the first condition that holds decides', () => 
     expect(await checkMove(deps(home))).toEqual(waiting('update-pending'))
   })
 
+  // A daemon of this build on a home too long for a socket beside its data, with an XDG_RUNTIME_DIR (lib/localSocket.ts).
+  it('a socket that answers in its short folder under XDG_RUNTIME_DIR → no hold', async () => {
+    const { home, cliDir, dataDir } = legacyHome()
+    pending(cliDir)
+    const runtime = folder()
+    const far = join(runtime, 'harness', createHash('sha256').update(dataDir).digest('hex').slice(0, 16), 'daemon-18474.sock')
+    mkdirSync(join(far, '..'), { recursive: true })
+    writeFileSync(far, '')
+    const answers = async (socket: string) => socket === far
+    expect(await checkMove(deps(home, { env: { XDG_RUNTIME_DIR: runtime }, answers }))).toEqual(NONE)
+  })
+
   it('a socket that has not answered in a second is no daemon', async () => {
     vi.useFakeTimers()
     try {

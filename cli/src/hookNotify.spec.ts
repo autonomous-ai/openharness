@@ -6,7 +6,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { observedTitle } from './cable/hosts/observedTitle.js'
 import { MAX_HINTS, MAX_TITLE, parseObservedHook } from './core/observedHook.js'
 import { ENGINES } from './engines/types.js'
@@ -2114,11 +2114,11 @@ describe('the hook finds Harness\'s folders by the rule', () => {
     return home
   }
 
-  /** The hook's environment as on [platform], in [home], naming no data or routes folder. */
+  /** The hook's environment as on [platform], in [home], naming no data or routes folder, nor this computer's runtime folder. */
   function asOn(platform: NodeJS.Platform, home: string, env: Record<string, string> = {}): Record<string, string> {
     const preload = join(home, 'platform.mjs')
     writeFileSync(preload, `Object.defineProperty(process, 'platform', { value: ${JSON.stringify(platform)} })\n`)
-    return { HOME: home, ADAPTER_DATA_DIR: '', HARNESS_HOOK_ROUTES_DIR: '', NODE_OPTIONS: `--import ${pathToFileURL(preload).href}`, ...env }
+    return { HOME: home, ADAPTER_DATA_DIR: '', HARNESS_HOOK_ROUTES_DIR: '', XDG_RUNTIME_DIR: '', NODE_OPTIONS: `--import ${pathToFileURL(preload).href}`, ...env }
   }
 
   /** A daemon serving [dataDir]: its credential there, its socket beside it or where [socketAt] puts it. */
@@ -2148,10 +2148,13 @@ describe('the hook finds Harness\'s folders by the rule', () => {
     return owner.requests.length === 1 && own.requests.length === 0
   }
 
+  /** A short folder's name: its data folder's hash (lib/localSocket.ts shortSocketFolder). */
+  const shortName = (dataDir: string): string => createHash('sha256').update(dataDir).digest('hex').slice(0, 16)
+
   /** A hook whose data folder is too long for a socket reaches its daemon through the short folder in [shortRoot]. */
   async function reachesShortSocket(shortRoot: string, home: string, env: Record<string, string>): Promise<boolean> {
     const dataDir = join(home, 'd'.repeat(100))
-    const short = join(shortRoot, createHash('sha256').update(dataDir).digest('hex').slice(0, 16))
+    const short = join(shortRoot, shortName(dataDir))
     const daemon = await daemonIn(dataDir, (port) => join(short, `daemon-${port}.sock`))
     // Named in args, not dataDir: runHook would put a socket where it thinks the short folder is.
     await runHook({ port: daemon.port, args: ['--data-dir', dataDir], tmuxPane: '%42', env })
@@ -2220,6 +2223,38 @@ describe('the hook finds Harness\'s folders by the rule', () => {
       input: { hook_event_name: 'SessionStart', session_id: 'session-old', transcript_path: transcriptPath, cwd: '/tmp/demo' },
     })
     expect(JSON.parse(readFileSync(join(moved, 'registry.json'), 'utf8'))).toMatchObject([{ sessionId: 'session-old' }])
+  })
+
+  // The account's own runtime folder (XDG Base Directory), as the daemon finds it (lib/localSocket.ts): a link there, or
+  // a folder another account could reach, is not one, and the short folder stays in the state root.
+  describe('a data folder too long for a socket', () => {
+    let runtime: string
+    beforeEach(() => { runtime = mkdtempSync('/tmp/hr-'); tmpDirs.push(runtime); chmodSync(runtime, 0o700) })
+
+    it('has its short folder under XDG_RUNTIME_DIR when that is the account\'s own', async () => {
+      // The example every client pins (lib/localSocket.spec.ts, Desktop, hn, the store's local-daemon.mjs).
+      expect(shortName(`/home/${'u'.repeat(80)}/.local/share/harness/cli/data`)).toBe('410894cc1bc77e10')
+      const home = movedHome()
+      expect(await reachesShortSocket(join(runtime, 'harness'), home, asOn('linux', home, { XDG_RUNTIME_DIR: runtime }))).toBe(true)
+    })
+
+    it('has it in the state root\'s s when XDG_RUNTIME_DIR is a link, open to others, or not absolute', async () => {
+      const linked = `${runtime}-link`
+      symlinkSync(runtime, linked)
+      tmpDirs.push(linked)
+      const looser = mkdtempSync('/tmp/hr-')
+      tmpDirs.push(looser)
+      chmodSync(looser, 0o755)
+      for (const value of [linked, looser, 'run/user']) {
+        const home = movedHome()
+        expect(await reachesShortSocket(join(xdgDefaults(home).state, 's'), home, asOn('linux', home, { XDG_RUNTIME_DIR: value })), value).toBe(true)
+      }
+    })
+
+    it('on macOS keeps it in ~/.harness/s, whatever XDG_RUNTIME_DIR says', async () => {
+      const home = homeWith('.harness')
+      expect(await reachesShortSocket(join(home, '.harness', 's'), home, asOn('darwin', home, { XDG_RUNTIME_DIR: runtime }))).toBe(true)
+    })
   })
 
   it('HARNESS_HOOK_ROUTES_DIR and ADAPTER_DATA_DIR still win on a moved home', async () => {
