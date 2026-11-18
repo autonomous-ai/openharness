@@ -209,3 +209,41 @@ not a single 58-case run. Final TypeScript and diff checks pass. The first selec
 retained one old result-shape assertion; it was adapted to the new internal snapshot/version reply,
 without weakening its publication assertion. Native platform proof, full gates and a new quiet cost
 comparison remain the coordinator's work. The earlier core idle CPU delta is still unexplained.
+
+### Metadata admission across synchronization owners — Design (18 November)
+
+Review found that the metadata check's admission belongs to `VaultSync`, while
+account changes and gateway restarts replace that owner. `settled()` waits for
+its exchange, not its metadata read. A held filesystem probe can therefore
+survive an owner replacement while the new owner starts another four probes.
+The shared `VaultStore` already survives those replacements to retain write
+ownership; metadata admission belongs to that same object.
+
+Keep one actual version read per shared store. Refuse another with the existing
+`STORE_BUSY` code before issuing any OS operation, and release the slot only
+after the directory read and all three document probes settle, including the
+existing `allSettled` path on failure. This adds no queue, waiter list, timer,
+cached version or new retry. A replacement owner may still synchronize through
+the existing separately bounded writer; its next ordinary metadata check can
+run once the old read actually finishes. Old results retain their existing
+generation/watermark checks and cannot acknowledge a new owner's files.
+
+- Growth/concurrency: one boolean on the shared store; at most one metadata
+  batch (one directory stat, then three document stats) across owner changes.
+  It is cleared only by that batch's `finally`, never by a timeout or stop.
+- Read cost/scale: unchanged normal reads and cadence. Repeated owners cannot
+  multiply a hung batch. The regression counts actual IO calls across stopped
+  and replacement sync owners and verifies recovery after settlement.
+- Compatibility/migration/rollback: no file, lock, wire or client contract
+  changes. Rolling back restores the unbounded owner-replacement behavior.
+- Audience/identity: unchanged gateway ownership and private-file checks; no
+  content, path or account identifier enters the fixed failure log.
+- Failure: existing metadata-unavailable reporting remains; uncertainty never
+  means absence or synchronized success. No descriptor is opened by this path.
+- Platforms: shared TypeScript on macOS, Linux and Windows. Local behavior
+  tests run on macOS; native platform and existing performance holds remain.
+
+Selected checks before runtime edits: a held metadata read across owner
+replacement fails first, then all existing observed-watermark and storage
+cases, gateway synchronization lifecycle cases and TypeScript. This bounded
+admission correction does not clear the earlier idle-cost hold.

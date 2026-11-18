@@ -254,6 +254,46 @@ it('keeps the metadata check charged until every probe settles after a sibling f
   }
 })
 
+it('keeps one actual metadata read across stopped and replacement sync owners', async () => {
+  await start()
+  const entered = deferred(), release = deferred()
+  const lstat = vi.mocked(fs.lstat).getMockImplementation()!
+  const version = writer.version.bind(writer), versions: Promise<string>[] = []
+  vi.spyOn(writer, 'version').mockImplementation(() => {
+    const pending = version()
+    versions.push(pending)
+    return pending
+  })
+  let calls = 0
+  vi.mocked(fs.lstat).mockImplementation((async (...args: Parameters<typeof fs.lstat>) => {
+    calls++
+    if (String(args[0]) === join(root, 'clients.json')) {
+      entered.resolve()
+      await release.promise
+    }
+    return lstat(args[0], args[1])
+  }) as typeof fs.lstat)
+  try {
+    await vi.advanceTimersByTimeAsync(5_000)
+    await entered.promise
+    sync.stop()
+    await sync.settled()
+    // Gateway/account replacement shares the storage owner, not the old sync's admission flag.
+    await start()
+    const outstanding = calls
+    await vi.advanceTimersByTimeAsync(5_000)
+    await new Promise<void>(resolve => setImmediate(resolve))
+    expect(calls).toBe(outstanding)
+    expect(logs).toContain('[connectors] synchronization STORE_UNAVAILABLE')
+  } finally {
+    release.resolve()
+    await Promise.allSettled(versions)
+  }
+  const after = calls
+  await expect(writer.version()).resolves.toEqual(expect.any(String))
+  expect(calls).toBe(after + 4)
+})
+
 it.skipIf(process.platform === 'win32')('refuses a directory alias even when it reaches the same document versions', async () => {
   await start(); await poll(); reads = 0
   const moved = join(home, 'moved'); renameSync(root, moved); symlinkSync(moved, root, 'dir')

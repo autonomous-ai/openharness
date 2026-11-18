@@ -59,6 +59,8 @@ function snapshot(documents: Map<string, Document>): Snapshot {
 /** One writer slot survives an expired reply until every accepted OS operation has actually settled. */
 export class VaultStore {
   private busy = false
+  /** Sync owners can be replaced while their metadata reads still belong to this store. */
+  private checkingVersion = false
   /** A failed close has unknown OS ownership. No later attempt may allocate another descriptor. */
   private readonly unclosed = new Set<FileHandle>()
   private needsDurability = true
@@ -68,6 +70,8 @@ export class VaultStore {
 
   /** The existing file check reads only bounded metadata; an unreadable path is never acknowledged as absent. */
   async version(): Promise<string> {
+    if (this.checkingVersion) throw new VaultStoreError('STORE_BUSY')
+    this.checkingVersion = true
     try {
       const directory = await this.io.lstat(this.root, { bigint: true })
       if (!directory.isDirectory() || directory.isSymbolicLink()
@@ -88,6 +92,7 @@ export class VaultStore {
       }
       return filesVersion(fileIdentity(directory), versions)
     } catch { throw new VaultStoreError('STORE_UNAVAILABLE') }
+    finally { this.checkingVersion = false }
   }
 
   private async close(handle: FileHandle): Promise<void> {
