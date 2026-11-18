@@ -9,6 +9,10 @@
  * write a prompt there) and its environment holds secrets (cli/AGENTS.md rule 4), so neither is read: one
  * `ps -axo pid=,ppid=` table gives pids and parents alone. A running pid's parents never change, so an agent's chain is
  * read once and kept until it leaves, and one read serves every agent that needs one.
+ *
+ * A page line's lines also press Claude Code's page keys in the extension
+ * (docs/plans/2026-11-18-dial-vscode-claude-fullscreen-scroll-design.md), a plain line's do not: lines that wait keep
+ * their kind, as two runs, so a stroke's guard decides its own lines alone and never turns another's into keys.
  */
 import { REFUSED, type ListenerHandler, type ListenerStream, type ListenerStreamHandler } from '../../services/devicesListener.js'
 import { execText, parentChain, PS_MAX_BYTES, PS_TIMEOUT_MS, type Exec, type ProcessName } from './scannedApp.js'
@@ -61,8 +65,9 @@ export interface VscodeTerminals {
   /** Queues `{"show":<shell>}` on the window's stream, the latest winning; false when that stream is gone. A tap's has
    *  `"raise":true`: the extension then brings its window forward, which an older one ignores. */
   show(terminal: VscodeTerminal, tap: boolean): boolean
-  /** Adds whole lines for that terminal; false when its window's stream is gone. */
-  scroll(terminal: VscodeTerminal, lines: number): boolean
+  /** Adds whole lines for that terminal; false when its window's stream is gone. `page`: they are written with
+   *  `"page":true`, and the extension presses Claude Code's page keys beside them. */
+  scroll(terminal: VscodeTerminal, lines: number, page?: boolean): boolean
 }
 
 export interface VscodeTerminalsDeps {
@@ -82,13 +87,18 @@ interface Window {
   shells?: ReadonlySet<number>
   /** A show its stream has not taken yet: the latest wins. */
   show?: { shell: number; raise: boolean }
-  /** Lines its stream has not taken yet, all for one shell: written after the show. */
-  scroll?: { shell: number; lines: number }
+  /** Lines its stream has not taken yet, all for one shell: at most one page run and one plain run, in the order they
+   *  began to wait, written after the show. */
+  scroll: Run[]
 }
 
-/** `failed` counts each `ps` read that failed, of `reads`; `scrolls` each scroll line written; `dropped` each wait of
- *  lines replaced by lines for another shell. */
+interface Run { shell: number; lines: number; page: boolean }
+
+/** `failed` counts each `ps` read that failed, of `reads`; `scrolls` each scroll line written; `dropped` each run of
+ *  waiting lines replaced by lines for another shell. */
 const NONE_COUNTED = { shows: 0, taps: 0, refused: 0, reads: 0, failed: 0, scrolls: 0, dropped: 0 }
+
+const held = (lines: number): number => Math.max(-VSCODE_SCROLL_MAX, Math.min(VSCODE_SCROLL_MAX, lines))
 
 const isWindowId = (window: unknown): window is string => typeof window === 'string' && WINDOW_ID.test(window)
 
@@ -201,13 +211,13 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
       if (!window.stream.write(raise ? { show: shell, raise } : { show: shell })) return
       window.show = undefined
     }
-    const waiting = window.scroll
+    const waiting = window.scroll[0]
     if (!waiting) return
-    const lines = Math.max(-VSCODE_SCROLL_MAX, Math.min(VSCODE_SCROLL_MAX, waiting.lines))
-    if (!window.stream.write({ scroll: lines, pid: waiting.shell })) return
+    const lines = held(waiting.lines)
+    if (!window.stream.write(waiting.page ? { scroll: lines, pid: waiting.shell, page: true } : { scroll: lines, pid: waiting.shell })) return
     count('scrolls')
     waiting.lines -= lines
-    if (!waiting.lines) window.scroll = undefined
+    if (!waiting.lines) window.scroll.shift()
   }
 
   return {
@@ -219,7 +229,7 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
         open: (message, stream) => {
           const id = message.window as string
           // A reused id's newer stream starts with no state: its extension sends one as it opens.
-          const window: Window = { stream }
+          const window: Window = { stream, scroll: [] }
           windows.set(id, window)
           reindex()
           deps.log(`[devices] vscode stream · open · windows ${windows.size}`)
@@ -280,18 +290,22 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
       count(tap ? 'taps' : 'shows')
       return true
     },
-    scroll: (terminal, lines) => {
+    scroll: (terminal, lines, page = false) => {
       const window = windows.get(terminal.window)
       if (!window) return false
       if (!lines) return true
-      if (window.scroll?.shell === terminal.shell) {
-        window.scroll.lines += lines
-        // Lines that cancel out leave nothing to write: no scroll line is 0.
-        if (!window.scroll.lines) window.scroll = undefined
-      } else {
-        if (window.scroll) count('dropped')
-        window.scroll = { shell: terminal.shell, lines }
+      if (window.scroll[0] && window.scroll[0].shell !== terminal.shell) {
+        window.scroll.forEach(() => count('dropped'))
+        window.scroll = []
       }
+      let run = window.scroll.find((waiting) => waiting.page === page)
+      if (!run) window.scroll.push(run = { shell: terminal.shell, lines: 0, page })
+      run.lines += lines
+      // Pages that piled up while the stream was busy wait as one line: at most its 5 keys once the stream frees, never
+      // a burst of them.
+      if (page) run.lines = held(run.lines)
+      // Lines that cancel out leave nothing to write: no scroll line is 0.
+      if (!run.lines) window.scroll.splice(window.scroll.indexOf(run), 1)
       write(window)
       return true
     },
