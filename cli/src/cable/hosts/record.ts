@@ -77,6 +77,6 @@ export async function readRecord(
   const shown = given ? observedTitle(name) : undefined
   return {
     ...(shown !== undefined && { name: shown }),
-    ...(app && typeof hostSessionId === 'string' && { hostSession: hostSessionId }),
+    ...(app && typeof hostSessionId === 'string' && hostSessionId !== '' && { hostSession: hostSessionId }),
   }
 }
