@@ -1,7 +1,7 @@
 import { removeRegistryAgent } from '../testing/registryFixtures.js'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { fork, type ChildProcess } from 'node:child_process'
-import { once } from 'node:events'
+import { on, once } from 'node:events'
 import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -92,11 +92,12 @@ async function holderMessage(label: string): Promise<unknown> {
   const controller = new AbortController()
   const options = { signal: controller.signal }
   try {
-    const [message] = await bounded(Promise.race([
-      once(child, 'message', options),
+    // A lock holder that finds the lock still taken reports 'waiting' first. Both messages
+    // can arrive in one read, so iterate the buffered stream rather than listening twice.
+    return await bounded(Promise.race([
+      (async () => { for await (const [message] of on(child, 'message', options)) if (message !== 'waiting') return message })(),
       once(child, 'exit', options).then(() => { throw new Error(label + ' exited before ready') }),
     ]), 10_000, label)
-    return message
   } finally { controller.abort() }
 }
 
@@ -219,6 +220,18 @@ it('keeps a later repeated cancellation intent when an earlier commit finishes',
   await registry.flush()
   expect(registry.byAgent(input.agentId)).not.toHaveProperty('closePlan')
   expect(rows()[0]).not.toHaveProperty('closePlan')
+})
+
+it('starts a legacy lock holder while an earlier write is still releasing the lock', async () => {
+  // A write's result arrives before its lock cleanup; hold that cleanup so the lock is still taken.
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  cleanup.file = join(directory, 'registry.json'); cleanup.published = false
+  cleanup.wait = async () => { cleanup.wait = undefined; await held }
+  await registry.setClosePlan(input.agentId, plan)
+  const ready = locked()
+  holder!.on('message', message => { if (message === 'waiting') release() })
+  try { await ready } finally { release() }
 })
 
 it('owns its candidate values while preserving later edits through a live row alias', async () => {
