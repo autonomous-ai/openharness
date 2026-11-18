@@ -14,6 +14,13 @@ import { AutonomousDeviceService } from '../lib/autonomous-device/service.js'
 import { observeQuestions } from '../agentClient/questions.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { startWifi } from './wifi.js'
+import { GatewayDeviceFixture } from '../testing/devicePeer.js'
+
+let peer: GatewayDeviceFixture
+vi.mock('../lib/autonomous-device/peerConnection.js', () => ({ devicePeerConnection: vi.fn(options => {
+  peer = new GatewayDeviceFixture(options)
+  return peer
+}) }))
 
 let server: http.Server | undefined, local: LocalWsServer | undefined, port: WifiPort | undefined, dataDir: string | undefined
 afterEach(async () => {
@@ -55,9 +62,10 @@ it('keeps all-agent questions working with only the real Wi-Fi tool connection, 
   })
   port = ports.wifi!
   const client = { role: 'device' as const, identity: 'fixture-device', direct: true, label: 'Fixture' }
-  port.session('device', client)
-  await port.request('device', { payload: { __e2e: true } }, { payload: { type: 'hello', proto: 1, requestId: 'hello' } })
-  await vi.waitFor(() => expect(vi.mocked(core.wifi.send).mock.calls.some(([, , , payload]) => payload.type === 'hello_result')).toBe(true))
+  await port.resume({ focus: null })
+  peer.session('device', client)
+  await peer.request('device', { type: 'hello', proto: 1, requestId: 'hello' })
+  await vi.waitFor(() => expect(peer.replies().some(payload => payload.type === 'hello_result')).toBe(true))
   expect(watcher.hasDevice('unfocused')).toBe(true)
   expect(watcher.hasDevice('agent')).toBe(true)
   expect(backend.hasLocalClient()).toBe(false)
@@ -71,10 +79,10 @@ it('keeps all-agent questions working with only the real Wi-Fi tool connection, 
   await vi.waitFor(() => expect(watcher.hasDevice('unfocused')).toBe(false))
   expect(await status('agent')).toMatchObject({ error: { code: 'QUESTION_STATE_UNAVAILABLE' } })
   watcher.onQuestionGone('unfocused', 'existing')
-  await port.resume({ sessions: [{ connId: 'device', client }], helloed: [{ connId: 'device', identity: client.identity }], focus: null })
-  expect(watcher.hasDevice('unfocused')).toBe(true)
+  await port.resume({ focus: null })
+  await vi.waitFor(() => expect(watcher.hasDevice('unfocused')).toBe(true))
   expect((await status('unfocused')).openQuestion).toBeNull()
   expect((await status('agent')).openQuestion).toMatchObject({ requestId: 'live' })
-  port.dropped('device')
+  peer.drop('device')
   await vi.waitFor(() => expect(watcher.hasDevice('agent')).toBe(false))
 })

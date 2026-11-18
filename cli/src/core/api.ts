@@ -392,18 +392,6 @@ export interface CoreApi {
     focusApp(agentId: string, expiresAt: number, focusRevision: string): boolean
     /** Ask the window to open the agent a Store preparation made (`device_prepare_open`). */
     reveal(operationId: string, agentId: string): void
-    /** An answer or event for one device session, sealed to it by the gateway, if the session is still
-     *  that identity's device. */
-    send(connId: string, identity: string, type: string, payload: Record<string, unknown>): void
-    /** Which identity's app said hello on a session (null: it left): the core counts it as watching. */
-    hello(connId: string, identity: string | null): void
-    /** A device said hello: what the agents are doing is sent again for it. */
-    joined(): void
-    /** It is built and serving: the gateway may connect the devices' direct links, which a service that
-     *  could not be built would leave unanswered. */
-    ready(): void
-    /** A device asked to be unpaired, over its session: its pairing goes. */
-    unpaired(identity: string): void
     /** The focus revision, as it changes: a window's stale selection is refused against it. */
     focus(revision: string): void
     /** It no longer reads this agent's transcript, as of the `seen`th prompt the core told it of. */
@@ -1051,10 +1039,11 @@ export interface RecapsPort {
   /** The cards of every turn still working or being recapped, for a dial that just attached: asked when it
    *  attaches and sent when they come, never waited for in line. */
   liveCards(): Promise<TurnCardFrame[]>
+  stop(): Promise<void>
 }
 
 /** What the core gets when the recaps fail: nothing told, no recap, and no live card. */
-export const RECAPS_FALLBACKS: PortFallbacks<RecapsPort> = { lifecycle: undefined, recaps: null, liveCards: later([]) }
+export const RECAPS_FALLBACKS: PortFallbacks<RecapsPort> = { lifecycle: undefined, recaps: null, liveCards: later([]), stop: later(undefined) }
 
 /**
  * The core's calls into the agent cleanup (services/agentCleanup.ts): what happens to the harnesses agents start.
@@ -1518,13 +1507,11 @@ export const DEVICES_FALLBACKS: PortFallbacks<DevicesPort> = {
  *  session the gateway holds, which of them said their app's hello (served on, told to resync, as after a
  *  daemon restart), and the window that has the person's attention. */
 export interface WifiResume {
-  sessions: Array<{ connId: string; client: RemoteClient }>
-  helloed: Array<{ connId: string; identity: string }>
   focus: { machineId: string; agentId: string; connId: string } | null
 }
 
 /** The Wi-Fi device's routes of the door (`SERVICE_HTTP_ROUTES`): `harness device receipt` and its add-ons. */
-export const WIFI_REQUESTS = ['wifi_http'] as const
+export const WIFI_REQUESTS = ['wifi_http', 'wifi_serving'] as const
 
 /** What the core lists for the Wi-Fi device, read in line while it answers a request: the agents as it
  *  shows them, the Store's evidence on each, and whether a window is attached to show one. */
@@ -1541,15 +1528,6 @@ export interface WifiView {
  * add-ons) are its routes (`SERVICE_HTTP_ROUTES`).
  */
 export interface WifiPort {
-  /** A device session the gateway holds, as it changes (null: it lost its session). */
-  session(connId: string, client: RemoteClient | null): void
-  /** A device's request, as it arrived sealed and as its session opened it (null: it would not open).
-   *  Settles once the service has taken it: what the core says after it is heard after it. */
-  request(connId: string, frame: Record<string, unknown>, opened: Record<string, unknown> | null): Promise<void>
-  /** A device's connection closed. */
-  dropped(connId: string): void
-  /** The owner unpaired a device here; its sessions are gone. */
-  revoked(identity: string): void
   /** What the core holds for it (`WifiResume`), as it starts. Settles once the sessions are served again. */
   resume(state: WifiResume): Promise<void>
   /** A frame bound for the devices, as it is sent, with the turn's whole answer for a summary. */
@@ -1579,7 +1557,7 @@ export const WIFI_OFF: CoreApi['wifi'] = {
   stop: async () => false, answer: async () => false,
   create: async () => ({ ok: false, error: 'UNSUPPORTED' }),
   stepFocus: async () => 'no_app', scroll: () => false, focusApp: () => false, reveal: () => {},
-  send: () => {}, hello: () => {}, joined: () => {}, ready: () => {}, unpaired: () => {}, focus: () => {},
+  focus: () => {},
   transcripts: () => {}, watching: () => {}, streams: () => {},
 }
 
@@ -1588,7 +1566,7 @@ export const WIFI_OFF: CoreApi['wifi'] = {
  * is unanswered, which they retry with the same key, as after a lost frame).
  */
 export const WIFI_FALLBACKS: PortFallbacks<WifiPort> = {
-  session: undefined, request: later(undefined), dropped: undefined, revoked: undefined, resume: later(undefined), card: undefined,
+  resume: later(undefined), card: undefined,
   turnEnded: undefined, stream: undefined, transcript: undefined, delivery: undefined,
   events: undefined, input: undefined, disconnected: undefined,
   agentGone: undefined, appFocus: later(undefined), revealed: undefined,
@@ -1734,12 +1712,6 @@ export interface GatewayPort {
   /** A local connection's request the gateway answers (the E2EE pairings), answered back to it through
    *  `GatewayEvents.toLocal`. */
   local(connId: string, frame: Record<string, unknown>): Promise<void>
-  /** The Wi-Fi device's answer or event for one of its sessions, sealed to it, over its direct link or the
-   *  relay; false when that session is gone. */
-  device(connId: string, type: string, payload: Record<string, unknown>): boolean
-  /** Which identity's app said hello on a Wi-Fi device session (null: it left), so that the gateway can
-   *  tell the device it was unpaired while its session still stands. */
-  deviceClient(connId: string, identity: string | null): void
   stop(): Promise<void>
 }
 
@@ -1779,11 +1751,6 @@ export interface GatewayEvents {
   revoked(): void
   /** Another computer holds this machine: stop for good, keeping the session. */
   busy(): void
-  /** A Wi-Fi device's request (`autonomous_device_request`), as it arrived sealed and as the session that
-   *  sealed it opened it (null when it could not be opened, or was not the device's to send). */
-  device(connId: string, frame: Record<string, unknown>, opened: Record<string, unknown> | null): Promise<void> | void
-  /** A paired identity was unpaired: the Wi-Fi device service forgets it. */
-  deviceRevoked(identity: string): void
   /** Something the windows on this computer show of the account's devices (the device key log's notices). */
   toWindows(frame: Record<string, unknown>): void
   /** What a shared tab's relay said (`GatewayOps.tabRelay`), for Agent Messages. */
@@ -2023,10 +1990,6 @@ export interface GatewayOps {
   machines(fallback?: boolean): Promise<HttpAnswer>
   mintGridName(): Promise<string | null>
   status(): Promise<GatewayStatus>
-  /** The Wi-Fi device service is up (its direct links start) or gone (they stop). */
-  wifiService(on: boolean): void
-  /** A Wi-Fi device asked to be unpaired, over its own authenticated session. */
-  revokeIdentity(identity: string): void
   /** The account's sign-in, as it is now (after start-up recorded which sign-in it is); the device key log
    *  registers this machine with it. */
   account(account: GatewayAccount): void

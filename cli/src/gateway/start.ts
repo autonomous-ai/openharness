@@ -53,9 +53,12 @@ import { shareWindows } from './share.js'
 import { createAccountHttp } from './accountHttp.js'
 import { accountRoutes, gatewayHttp } from './accountRoutes.js'
 import { keyRoutes, type KeyOps } from './keyRoutes.js'
+import { startGatewayDevicePeer } from './devicePeer.js'
+import { devicePeerKey } from '../lib/autonomous-device/peerEndpoint.js'
 
 /** What the gateway needs of the core, in whichever process it runs. */
 export interface GatewayHost {
+  peer?: { composition: 'inline' | 'services'; port: number; token?: string }
   events: GatewayEvents
   /** The id this daemon serves under: the account's machine id signed in, the computer's own signed out. */
   machineId: string
@@ -441,11 +444,19 @@ export function startGateway(given: GatewayHost): StartedGateway {
     if (!hit || !selector.trim()) return { ok: false, error: 'NOT_FOUND' }
     return { ok: true, pub: hit.pub, label: hit.label, fingerprint: hit.fingerprint }
   }
+  const devicePeer = startGatewayDevicePeer(gateway, {
+    dataDir: env.ADAPTER_DATA_DIR, port: host.peer?.port ?? env.PORT,
+    key: devicePeerKey(host.peer?.composition ?? 'services', host.peer?.token === undefined ? undefined : { HARNESSD_SERVICE_TOKEN: host.peer.token }),
+    wake: () => host.wifiServing?.() ?? Promise.resolve(false),
+    ready: startDirect,
+    unavailable: () => { direct?.stop(); direct = undefined },
+    failed: code => console.warn(`[gateway] ${code}`),
+  })
   const devicePairs = () => gateway.listPairs().filter((p) => p.role === 'device')
   /** The direct links, once the Wi-Fi device's service serves: a device they connected to a service that is not there
    *  would be answered by nothing. Waited for first, as the core asks for that service's process. */
   const directLink = async (): Promise<AutonomousDeviceDirect> => {
-    if (!direct) await host.wifiServing?.().catch(() => false)
+    if (!direct) await devicePeer.serving()
     if (!direct) throw deviceRefusal('UNAVAILABLE', 'The Wi-Fi device link is not running on this computer: its state could not be read. See the daemon\'s log.')
     return direct
   }
@@ -533,12 +544,6 @@ export function startGateway(given: GatewayHost): StartedGateway {
     machines: accountHttp.machines,
     mintGridName: accountHttp.mintGridName,
     status: async () => ({ fingerprint: gateway.fingerprint(), pairs: gateway.listPairs(), pending: gateway.pendingPair() as Record<string, unknown> | null }),
-    wifiService: (on) => {
-      if (on) { startDirect(); return }
-      direct?.stop()
-      direct = undefined
-    },
-    revokeIdentity: (identity) => { gateway.e2ee.revoke(fingerprint(b64d(identity))) },
     account: (next) => {
       // Tokens may change before this process restarts. Never send the previous account's queue
       // under a new sign-in, even when both accounts happen to have the same preference revision.
@@ -633,6 +638,7 @@ export function startGateway(given: GatewayHost): StartedGateway {
       clearInterval(devlogTimer)
       syncer.stop()
       direct?.stop()
+      await devicePeer.stop()
       relayPool.close()
       shareRelay.close()
       lane.clear()

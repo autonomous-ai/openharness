@@ -569,14 +569,29 @@ export class AutonomousDeviceService {
       && (cursor as number) >= (Number(this.events[0]?.eventId ?? this.sequence + 1) - 1) && (cursor as number) <= this.sequence,
     cursor: this.sequence }
   }
-  replay(resume: { serverInstanceId?: unknown; cursor?: unknown } | undefined, send: (frame: AutonomousDeviceFrame) => unknown): void {
-    if (!this.resume(resume).resumed) {
-      send({ type: 'resync', reason: resume?.serverInstanceId === this.serverInstanceId ? 'cursor_too_old' : 'instance_changed', serverInstanceId: this.serverInstanceId, cursor: this.sequence })
-      // Reconcile immutable retained results even when the ordinary event cursor expired.
-      for (const record of this.results.values()) if (record.at >= this.now() - TTL) send(this.retainEvent('turn.summary', record.agentId, structuredClone(record.payload)))
-      return
+  /** The internal writer borrows immutable retained references; public event callbacks still get clones.
+   * Admission does no I/O. Its returned callback starts drainage only after this source commits. */
+  replay(resume: { serverInstanceId?: unknown; cursor?: unknown } | undefined,
+    admit: (frames: readonly Readonly<AutonomousDeviceFrame>[]) => (() => void) | null): boolean {
+    const resumed = this.resume(resume).resumed
+    const frames: AutonomousDeviceFrame[] = []
+    if (!resumed) {
+      frames.push({ type: 'resync', reason: resume?.serverInstanceId === this.serverInstanceId ? 'cursor_too_old' : 'instance_changed', serverInstanceId: this.serverInstanceId, cursor: this.sequence })
+      // Candidate IDs and envelopes cost at most 513 references. Failed admission changes no source state.
+      for (const record of this.results.values()) if (record.at >= this.now() - TTL) frames.push({
+        type: 'event', eventId: this.sequence + frames.length, serverInstanceId: this.serverInstanceId,
+        machineId: this.options.machineId, ...(record.agentId ? { agentId: record.agentId } : {}), kind: 'turn.summary', payload: record.payload,
+      })
+    } else for (const event of this.events) if (Number(event.eventId) > Number(resume?.cursor)) frames.push(event)
+    const start = admit(frames)
+    if (!start) return false
+    if (!resumed) {
+      this.sequence += frames.length - 1
+      this.events.push(...frames.slice(1))
+      if (this.events.length > 500) this.events.splice(0, this.events.length - 500)
     }
-    for (const event of this.events) if (Number(event.eventId) > Number(resume?.cursor)) send(structuredClone(event))
+    start()
+    return true
   }
   turnStarted(agentId: string): void {
     this.openTurns.add(agentId)

@@ -19,12 +19,10 @@ vi.mock('../agentClient/questions.js', () => ({ observeQuestions: vi.fn(() => ({
 function wifiPort(machineId: string, log: string[]) {
   const record = (name: string) => (...args: unknown[]) => { log.push(`${machineId} ${name} ${JSON.stringify(args)}`) }
   const port: WifiPort = {
-    session: record('session'), dropped: record('dropped'), revoked: record('revoked'), card: record('card'),
+    card: record('card'),
     turnEnded: record('turnEnded'), stream: record('stream'), transcript: record('transcript'),
     delivery: record('delivery'), agentGone: record('agentGone'),
     revealed: record('revealed'), events: record('events'), input: record('input'), disconnected: vi.fn(),
-    // A request is taken only once the agents are listed: what the core says after it waits.
-    request: vi.fn(async (...args: unknown[]) => { await new Promise((resolve) => setTimeout(resolve, 5)); record('request')(...args) }),
     appFocus: vi.fn(async (...args: unknown[]) => { record('appFocus')(...args) }),
     resume: vi.fn(async (...args: unknown[]) => { record('resume')(...args) }),
     stop: vi.fn(async () => { log.push(`${machineId} stop`) }),
@@ -76,6 +74,37 @@ function setup(over: { startThrows?: boolean; leavesOff?: boolean } = {}) {
 afterEach(() => vi.restoreAllMocks())
 
 describe('the Wi-Fi device in the devices\' process', () => {
+  it('keeps a pending view bound to its original connection and refuses reads while disconnected', async () => {
+    const f = setup()
+    f.connect(); f.event({ kind: 'resume' })
+    await f.options().requests!.wifi_http({}, { local: true, owner: true })
+    let finish!: (view: Record<string, unknown>) => void
+    const query = vi.mocked(f.connection.query), original = query.getMockImplementation()!
+    query.mockImplementation((name, payload) => name === 'view' ? new Promise(resolve => { finish = resolve }) : original(name, payload))
+    const reading = f.api().wifi.view()
+    const failed = expect(reading).rejects.toThrow('CORE_VIEW_UNAVAILABLE')
+    f.disconnect(); f.connect()
+    finish({ agents: [{ agentId: 'stale' }], store: [], hasWindow: true })
+    await failed
+    expect(f.api().wifi.scroll('down', 0, 0)).toBe(false)
+    f.disconnect()
+    await expect(f.api().wifi.view()).rejects.toThrow('CORE_VIEW_UNAVAILABLE')
+  })
+
+  it('answers the bounded wake after ordered resume and as unavailable when there is no serving handler', async () => {
+    const f = setup()
+    const wake = f.options().requests!.wifi_serving
+    expect(await wake({}, { local: true, owner: true })).toEqual({ serving: false })
+    f.connect(); f.event({ kind: 'resume' })
+    expect(await wake({}, { local: true, owner: true })).toEqual({ serving: false })
+    const original = f.start.getMockImplementation()!
+    f.start.mockImplementationOnce((...args) => ({ ...original(...args), wifi_serving: () => ({ serving: true }) }))
+    f.answer('machine', { id: 'replacement' })
+    f.event({ kind: 'resume' })
+    expect(await wake({}, { local: true, owner: true })).toEqual({ serving: true })
+    await f.service.stop()
+  })
+
   it('opens the ordinary observation socket with the selected account machine and existing startup address', async () => {
     const f = setup()
     f.connect(); f.event({ kind: 'resume' })
@@ -295,12 +324,12 @@ describe('the Wi-Fi device in the devices\' process', () => {
     expect(f.api().machine.id()).toBe('machine-1')
     expect(f.api().machine.computerId()).toBe('computer-9')
     expect(f.api().machine.name()).toBe('')
-    expect(f.log).toEqual([`machine-1 resume [{"sessions":[{"connId":"c","client":{"role":"device"}}],"helloed":[],"focus":{"machineId":"m","agentId":"a","connId":"w"}}]`])
+    expect(f.log).toEqual([`machine-1 resume [{"focus":{"machineId":"m","agentId":"a","connId":"w"}}]`])
     // The same machine on the next connection: the same service, resumed.
     f.event({ kind: 'resume' })
     await f.settled()
     expect(f.start).toHaveBeenCalledTimes(1)
-    expect(f.log.at(-1)).toBe('machine-1 resume [{"sessions":[],"helloed":[],"focus":null}]')
+    expect(f.log.at(-1)).toBe('machine-1 resume [{"focus":null}]')
   })
 
   it('waits for its link to open before it answers the core\'s resume, which comes a moment before', async () => {
@@ -334,7 +363,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     expect(f.api().machine.id()).toBe('machine-2')
   })
 
-  it('hands everything the core says to the service in the order it was said, a request taken before what follows it', async () => {
+  it('hands the remaining session feed to its port in order and ignores obsolete relay notices', async () => {
     const f = setup()
     f.connect()
     f.event({ kind: 'resume' })
@@ -344,6 +373,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     f.event({ kind: 'request', connId: 'c', frame: 'x', opened: 'y' })
     f.event({ kind: 'card', frame: { type: 'commander_event' }, fullText: 'whole' })
     f.event({ kind: 'card', frame: { type: 'commander_event' }, fullText: 3 })
+    f.event({ kind: 'card', frame: null })
     f.event({ kind: 'turnStarted', agentId: 'a' })
     f.event({ kind: 'turnEnded', agentId: 'a', aborted: true })
     f.event({ kind: 'turnEnded', agentId: 'a' })
@@ -365,12 +395,9 @@ describe('the Wi-Fi device in the devices\' process', () => {
     f.event({})
     await f.settled()
     expect(f.log.slice(1)).toEqual([
-      'machine-1 session ["c",{"role":"device","identity":"i"}]',
-      'machine-1 session ["c",null]',
-      'machine-1 request ["c",{"type":"autonomous_device_request"},{"payload":{"type":"hello"}}]',
-      'machine-1 request ["c",{},null]',
       'machine-1 card [{"type":"commander_event"},"whole"]',
       'machine-1 card [{"type":"commander_event"},null]',
+      'machine-1 card [{},null]',
       'machine-1 turnEnded ["a",true]',
       'machine-1 turnEnded ["a",false]',
       'machine-1 stream ["a",[{"type":"text_delta"}]]',
@@ -382,8 +409,6 @@ describe('the Wi-Fi device in the devices\' process', () => {
       'machine-1 appFocus ["m","a","w"]',
       'machine-1 appFocus ["m",null,"w"]',
       'machine-1 revealed ["op","a"]',
-      'machine-1 dropped ["c"]',
-      'machine-1 revoked ["i"]',
     ])
   })
 
@@ -425,24 +450,17 @@ describe('the Wi-Fi device in the devices\' process', () => {
     f.adapter().cancel!('d')
     await Promise.resolve()
     wifi.reveal('op', 'a')
-    wifi.send('c', 'i', 'autonomous_device_result', { ok: true })
-    wifi.hello('c', 'i')
-    wifi.joined()
-    wifi.ready()
-    wifi.unpaired('i')
     wifi.focus('r')
     wifi.transcripts('a', 1)
     wifi.watching(['a'])
     wifi.streams(['a'])
-    expect(f.notices.map(([kind]) => kind)).toEqual(['scroll', 'focusApp', 'reveal', 'send', 'hello', 'joined',
-      'ready', 'unpaired', 'focus', 'transcripts', 'watching', 'streams'])
+    expect(f.notices.map(([kind]) => kind)).toEqual(['scroll', 'focusApp', 'reveal', 'focus', 'transcripts', 'watching', 'streams'])
     expect(f.notices[0][1]).toEqual({ phase: 'move', dy: 2, velocity: 3 })
-    expect(f.notices.find(([kind]) => kind === 'send')![1]).toEqual({ connId: 'c', identity: 'i', type: 'autonomous_device_result', payload: { ok: true } })
     // The core gone: asked, it says so; told, nothing goes.
     f.disconnect()
     await expect(wifi.stop('a')).rejects.toThrow('the Wi-Fi device is not connected to the core')
-    wifi.joined()
-    expect(f.notices).toHaveLength(12)
+    wifi.focus('after-disconnect')
+    expect(f.notices).toHaveLength(7)
   })
 
   it('answers its routes of the door once what the core said before is heard, and as down while it is not built', async () => {

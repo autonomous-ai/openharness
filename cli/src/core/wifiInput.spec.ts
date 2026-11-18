@@ -55,8 +55,7 @@ async function bridge() {
     },
   })
   const link = createWifiLink({ core, notify })
-  const wifi = createWifiCore({ port: () => link.port, doors: core.wifi, gateway: { device: vi.fn(), deviceClient: vi.fn(), revokeIdentity: vi.fn() },
-    remoteClient: () => null, fullText: () => undefined, joined: vi.fn(), ready: vi.fn(), want: () => false })
+  const wifi = createWifiCore({ port: () => link.port, doors: core.wifi, fullText: () => undefined })
   core.wifi = wifi.api
   const paste = vi.fn<InputDeps['terminal']['submitTerminalAction']>(async (_id, _text, effect) => {
     expect(wifi.feed.needsTranscript('agent', 'session', 'claude')).toBe(true)

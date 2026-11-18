@@ -2,11 +2,9 @@
  * The Wi-Fi device's service in the devices' process (services/wifiProcess.ts), as the core sees it: the
  * port the core calls (`WifiPort`) and what the core answers when the service asks (step 9, D3).
  *
- * Everything the core tells it is a notice on its link, in the order the core said it, so a request, the
- * prompt it sends and the transcript lines that prove it reach the service as they happened here; dropped
- * while it is down, as a frame lost on the way is, which its devices retry by the same key. What the
- * service needs to start over (the sessions, which of them said hello, the window's focus) the core keeps
- * and says again each time it connects (core/wifi.ts `started`). It asks it nothing: what a person asks of it
+ * The remaining input facts, transcript lines and normalized stream batches use this ordered link.
+ * On reconnection the core publishes only the current window focus; authenticated relay sessions and
+ * application hello state come from the gateway peer. What a person asks of it
  * (`harness device receipt`, its add-ons) are its routes of the door (core/serviceRoutes.ts).
  *
  * What it asks of the core is `CoreApi`'s Wi-Fi doors, as it would call them in the core's process:
@@ -34,10 +32,6 @@ export function createWifiLink(deps: WifiLinkDeps) {
   const event = (kind: string, payload: Record<string, unknown> = {}): void => { deps.notify({ type: 'service_event', payload: { ...payload, kind } }) }
 
   const port: WifiPort = {
-    session: (connId, client) => event('session', { connId, client }),
-    request: async (connId, frame, opened) => event('request', { connId, frame, opened }),
-    dropped: (connId) => event('dropped', { connId }),
-    revoked: (identity) => event('revoked', { identity }),
     resume: async (state) => event('resume', { ...state }),
     card: (frame, fullText) => event('card', { frame, ...(fullText === undefined ? {} : { fullText }) }),
     turnEnded: (agentId, aborted) => event('turnEnded', { agentId, aborted }),
@@ -78,11 +72,6 @@ export function createWifiLink(deps: WifiLinkDeps) {
     scroll: ({ phase, dy, velocity }) => { if (phase === 'down' || phase === 'move' || phase === 'up') core.wifi.scroll(phase, number(dy), number(velocity)) },
     focusApp: ({ agentId, expiresAt, focusRevision }) => { core.wifi.focusApp(text(agentId), number(expiresAt), text(focusRevision)) },
     reveal: ({ operationId, agentId }) => core.wifi.reveal(text(operationId), text(agentId)),
-    send: ({ connId, identity, type, payload }) => core.wifi.send(text(connId), text(identity), text(type), object(payload)),
-    hello: ({ connId, identity }) => core.wifi.hello(text(connId), typeof identity === 'string' ? identity : null),
-    joined: () => core.wifi.joined(),
-    ready: () => core.wifi.ready(),
-    unpaired: ({ identity }) => core.wifi.unpaired(text(identity)),
     focus: ({ revision }) => core.wifi.focus(text(revision)),
     transcripts: ({ agentId, seen }) => core.wifi.transcripts(text(agentId), number(seen)),
     watching: ({ agentIds }) => core.wifi.watching(strings(agentIds)),

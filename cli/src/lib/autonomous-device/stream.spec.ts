@@ -122,21 +122,22 @@ describe('agent.subscribe over the device RPC', () => {
   function fixture() {
     const identities: Record<string, string> = { a: 'device-a', b: 'device-b' }
     const send = vi.fn()
-    const crypto = { sessionRole: () => 'device' as const, sessionIdentity: (c: string) => identities[c] ?? null,
-      unwrapDown: (_c: string, frame: Record<string, unknown>) => ({ ...frame, payload: (frame.payload as { __e2e: unknown }).__e2e }),
-      wrapTarget: (_c: string, type: string, payload: Record<string, unknown>) => ({ type, payload: { __e2e: payload } }) }
+    const proof = (connId: string) => ({ identity: identities[connId], incarnation: 'session', peerEpoch: 'peer' })
     let relay: AutonomousDeviceRelay | undefined
     const service = new AutonomousDeviceService({ machineId: 'machine', agents: () => [{ agentId: 'agent', name: 'Agent', engine: 'codex', state: 'idle' }],
       submit: vi.fn(), cancelDelivery: () => true, stop: async () => true, answer: async () => true, recent: () => [],
       emit: (frame, deviceId) => relay?.emit(frame, deviceId) })
-    relay = new AutonomousDeviceRelay(crypto, send, service, 'machine')
+    relay = new AutonomousDeviceRelay(proof, send, service, 'machine', (connId, captured, frames, allowed, hello) => () => {
+      if (hello) send(connId, { type: 'autonomous_device_result', payload: hello }, captured)
+      for (const frame of frames) if (allowed(frame)) send(connId, { type: 'autonomous_device_event', payload: frame }, captured)
+    })
     const request = async (conn: string, payload: Record<string, unknown>) => {
       const requestId = randomUUID()
-      await relay!.handle(conn, { type: 'autonomous_device_request', payload: { __e2e: { requestId, ...payload } } })
-      return send.mock.calls.map(([, f]) => (f as { payload: { __e2e: Record<string, unknown> } }).payload.__e2e).find(r => r.requestId === requestId)!
+      await relay!.handle(conn, proof(conn), { requestId, ...payload })
+      return send.mock.calls.map(([, frame]) => frame.payload as Record<string, unknown>).find(reply => reply.requestId === requestId)!
     }
-    const streamFrames = (conn: string) => send.mock.calls.filter(([c, f]) => c === conn && typeof (f as { payload: { __e2e: { kind?: string } } }).payload.__e2e.kind === 'string'
-      && (f as { payload: { __e2e: { kind: string } } }).payload.__e2e.kind.startsWith('stream.')).map(([, f]) => (f as { payload: { __e2e: AutonomousDeviceFrame } }).payload.__e2e)
+    const streamFrames = (conn: string) => send.mock.calls.filter(([c, frame]) => c === conn &&
+      typeof frame.payload.kind === 'string' && frame.payload.kind.startsWith('stream.')).map(([, frame]) => frame.payload as AutonomousDeviceFrame)
     return { relay, service, request, streamFrames, send }
   }
   const target = { machineId: 'machine', agentId: 'agent' }
@@ -181,7 +182,7 @@ describe('agent.subscribe over the device RPC', () => {
     expect(await f.request('a', { type: 'agent.unsubscribe', subscriptionId: again.subscriptionId })).toMatchObject({ unsubscribed: true })
 
     await f.request('a', { type: 'agent.subscribe', ...target })
-    f.relay.drop('a')
+    f.relay.drop('a', 'session')
     f.service.stream('agent', [toolStart])
     expect(f.streamFrames('a').map(e => e.kind)).toEqual(['stream.end', 'stream.end'])
   })

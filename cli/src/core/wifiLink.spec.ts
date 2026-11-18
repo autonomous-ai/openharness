@@ -35,12 +35,7 @@ describe('the Wi-Fi device in the devices\' process, as the core sees it', () =>
 
   it('tells it everything as notices, in the order the core said it', async () => {
     const { wifi, sent, kinds } = link()
-    const client = { role: 'device' as const, label: 'Desk', identity: 'id', direct: false }
-    wifi.port.session('c', client)
-    await wifi.port.request('c', { type: 'autonomous_device_request' }, { payload: { type: 'hello' } })
-    wifi.port.dropped('c')
-    wifi.port.revoked('id')
-    await wifi.port.resume({ sessions: [{ connId: 'c', client }], helloed: [], focus: null })
+    await wifi.port.resume({ focus: null })
     wifi.port.card({ type: 'commander_event' })
     wifi.port.card({ type: 'commander_event' }, 'whole')
     wifi.port.turnEnded('a', true)
@@ -51,12 +46,12 @@ describe('the Wi-Fi device in the devices\' process, as the core sees it', () =>
     await wifi.port.appFocus('m', null, 'w')
     wifi.port.revealed('op', 'a')
     await wifi.port.stop()
-    expect(kinds()).toEqual(['session', 'request', 'dropped', 'revoked', 'resume', 'card', 'card', 'turnEnded', 'stream',
+    expect(kinds()).toEqual(['resume', 'card', 'card', 'turnEnded', 'stream',
       'transcript', 'delivery', 'agentGone', 'appFocus', 'revealed'])
-    expect(sent[0].payload).toEqual({ kind: 'session', connId: 'c', client })
-    expect(sent[5].payload).toEqual({ kind: 'card', frame: { type: 'commander_event' } })
-    expect(sent[6].payload).toEqual({ kind: 'card', frame: { type: 'commander_event' }, fullText: 'whole' })
-    expect(sent[9].payload).toEqual({ kind: 'transcript', agentId: 'a', sessionId: 's', engine: 'claude', line: 'line' })
+    expect(sent[0].payload).toEqual({ kind: 'resume', focus: null })
+    expect(sent[1].payload).toEqual({ kind: 'card', frame: { type: 'commander_event' } })
+    expect(sent[2].payload).toEqual({ kind: 'card', frame: { type: 'commander_event' }, fullText: 'whole' })
+    expect(sent[5].payload).toEqual({ kind: 'transcript', agentId: 'a', sessionId: 's', engine: 'claude', line: 'line' })
   })
 
   it('answers what it asks through the core\'s Wi-Fi doors', async () => {
@@ -109,12 +104,7 @@ describe('the Wi-Fi device in the devices\' process, as the core sees it', () =>
     expect(core.wifi.scroll).toHaveBeenLastCalledWith('up', 0, 0)
     expect(core.wifi.focusApp).toHaveBeenCalledWith('a', 5, 'r')
     expect(core.wifi.reveal).toHaveBeenCalledWith('op', 'a')
-    expect(core.wifi.send).toHaveBeenCalledWith('c', 'id', 'autonomous_device_result', { ok: true })
-    expect(core.wifi.hello).toHaveBeenCalledWith('c', 'id')
-    expect(core.wifi.hello).toHaveBeenLastCalledWith('c', null)
-    expect(core.wifi.joined).toHaveBeenCalled()
-    expect(core.wifi.ready).toHaveBeenCalled()
-    expect(core.wifi.unpaired).toHaveBeenCalledWith('id')
+    for (const kind of ['send', 'hello', 'joined', 'ready', 'unpaired']) expect(log).toHaveBeenCalledWith(`[services] wifi said ${kind}, which the core does not hear`)
     expect(core.wifi.focus).toHaveBeenCalledWith('r')
     expect(core.wifi.transcripts).toHaveBeenCalledWith('a', 2)
     expect(core.wifi.watching).toHaveBeenCalledWith(['a'])

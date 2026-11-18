@@ -12,7 +12,6 @@ import { countWindows } from './lib/windowSurfaces.js'
 import type { ClientStreams } from './core/clientStreams.js'
 import type { ActivityFrame } from './lib/turnActivity.js'
 import { MonitorCompletions } from './lib/harnessMonitor.js'
-import type { WifiCore } from './core/wifi.js'
 /**
  * BackendSocket — the clients' hub and the request dispatch: the windows and tools on this computer
  * (localWsServer.ts), and the remote clients the gateway hands on (gateway/gateway.ts), each in its own
@@ -463,7 +462,6 @@ export class BackendSocket {
     frame: (connId, frame, transport, role) => this.enqueueDown(frame, connId, transport, role),
     binary: (connId, clear, raw) => this.enqueueTerminalBinary(connId, clear, raw),
     client: (connId, client) => {
-      this.wifi?.session(connId, client)
       if (client) {
         const joined = client.role === 'web' && this.remoteClients.get(connId)?.role !== 'web'
         this.remoteClients.set(connId, client)
@@ -479,7 +477,6 @@ export class BackendSocket {
       this.clientStreams?.closed(connId); this.ownerCommands.closeConnection(connId); this.onConnectionClosed?.(connId)
     },
     disconnected: async (connId) => {
-      this.wifi?.dropped(connId)
       this.remoteClients.delete(connId)
       this.clientStreams?.closed(connId); this.ownerCommands.closeConnection(connId); this.onConnectionClosed?.(connId)
       await this.terminalStreams?.closeConnection(
@@ -532,8 +529,6 @@ export class BackendSocket {
     },
     revoked: () => this.onRevoked?.(),
     busy: () => this.onBusy?.(),
-    device: (connId, frame, opened) => this.wifi?.request(connId, frame, opened),
-    deviceRevoked: (identity) => this.wifi?.revoked(identity),
     toWindows: (frame) => this.sendLocal(frame),
     tabFrame: (event) => this.onTabFrame?.(event),
     streamControl: (service, streamId, payload) => {
@@ -541,17 +536,6 @@ export class BackendSocket {
       else this.clientStreams?.controlStream('gateway', streamId, payload)
     },
   }
-
-  /** The Wi-Fi device's sessions and requests, as the gateway hands them on, for its service with the
-   *  devices (core/wifi.ts, services/wifi.ts). */
-  private wifi?: WifiCore['fromGateway']
-  useWifi(wifi: WifiCore['fromGateway']): void { this.wifi = wifi }
-  /** The Wi-Fi device's answers and events, sealed to one session; and which identity's app said hello on
-   *  one. Through the gateway, guarded as every frame of the core's is. */
-  deviceFrame(connId: string, type: string, payload: Record<string, unknown>): void {
-    this.throughGateway('device', (gateway) => gateway.device(connId, type, payload), false)
-  }
-  deviceClient(connId: string, identity: string | null): void { this.toGateway('device', (gateway) => gateway.deviceClient(connId, identity)) }
 
   setTerminalStreamManager(manager: TerminalStreamManager): void {
     this.terminalStreams = manager

@@ -217,14 +217,15 @@ master too old to run it starts it beside itself, still in its own process (`src
   a program with no pane to bring forward is a source with no adapter (opencode);
   a hooked copy and a listed copy of one agent are one row (src/cable/hosts/registry.ts). Claude Code's mod and
   `codex queue` are not adapters: they are the source's routes at the agent's own layer, asked before any pane.
-  The Wi-Fi device runs beside them on a link of its own
-  (src/services/wifiProcess.ts, src/core/wifiLink.ts): its sessions are the gateway's, so the core hands
-  their requests on in order and checks where each answer goes, and keeps what it reads in line of the
-  service (who said hello, which transcripts and streams it follows, the focus revision) from what the
-  service tells it (src/core/wifi.ts). `e2e/wifiDevice.e2e.ts` proves it, with a fake device on the relay.
+  The Wi-Fi device runs beside them (src/services/wifiProcess.ts). Its authenticated private peer talks
+  directly to the gateway, which owns encrypted sessions, bounded held requests and final reply sealing;
+  the devices process owns hello state, business admission and replay. The recaps process hears presence
+  directly from that gateway peer. The remaining transcript and stream interest and focus revision still
+  cross src/core/wifiLink.ts and src/core/wifi.ts, pending extraction. `e2e/wifiDevice.e2e.ts` proves the
+  device path with a fake device on the relay.
   Their process runs only once there is a device (`onDemand`, asked for since protocol 4): a dial's port in
   /dev, a paired Wi-Fi device or its session, or a request for them (src/core/devicesWake.ts);
-  what a Wi-Fi device sends while it starts is held by the core. `e2e/devicesOnDemand.e2e.ts` proves it.
+  what a Wi-Fi device sends while it starts is held by the gateway. `e2e/devicesOnDemand.e2e.ts` proves it.
   The mod's inbox poll reaches the devices as a request with a deadline (src/core/deviceHookCalls.ts).
   The core asks only while a dial watches, so a poll never starts their process; a client that goes
   first is told as a notice. What a local tool tells the devices (first the app in front, from `harness hardware

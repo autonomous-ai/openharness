@@ -44,6 +44,61 @@ function startSearch(h: ReturnType<typeof host>, port: Partial<TestPort> = new F
 describe('hosting services so one that fails cannot take the core down', () => {
   afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
 
+  describe('bounded inline calls', () => {
+    const asker = { local: true, owner: true }
+    it('answers unavailable and failed calls without leaving a deadline', async () => {
+      vi.useFakeTimers()
+      const h = host()
+      expect(await h.services.call('missing', {}, asker, 15_000)).toMatchObject({ error: 'SERVICE_UNAVAILABLE' })
+      h.services.serve('broken', () => ({ broken: () => { throw new Error('failed') } }), fakeCore(), ['broken'])
+      expect(await h.services.call('broken', {}, asker, 15_000)).toMatchObject({ error: 'SERVICE_FAILED' })
+      expect(vi.getTimerCount()).toBe(0)
+    })
+
+    it.each(['resolve', 'reject'])('revokes a timed-out reply but keeps actual handler admission until late %s', async late => {
+      vi.useFakeTimers()
+      const h = host(), requests: Array<{ signal: AbortSignal; finish(value: Record<string, unknown>): void; fail(error: Error): void }> = []
+      const handler = vi.fn((_payload, _asker, signal?: AbortSignal) => new Promise<Record<string, unknown>>((finish, fail) => requests.push({ signal: signal!, finish, fail })))
+      h.services.serve('wake', () => ({ wifi_serving: handler, wifi_other: () => ({ ok: true }) }), fakeCore(), ['wifi_serving', 'wifi_other'])
+      const answer = h.services.call('wifi_serving', {}, asker, 15_000)
+      await vi.advanceTimersByTimeAsync(15_000)
+      expect(await answer).toMatchObject({ error: 'SERVICE_UNAVAILABLE', retryable: true })
+      expect(requests[0].signal.aborted).toBe(true)
+      expect(h.lines).toContain('[services] wake.wifi_serving timed out · SERVICE_DEADLINE')
+      for (let n = 0; n < 20; n++) expect(await h.services.call('wifi_serving', {}, asker, 15_000)).toMatchObject({ error: 'SERVICE_UNAVAILABLE' })
+      expect(handler).toHaveBeenCalledOnce()
+      expect(await h.services.call('wifi_other', {}, asker, 15_000)).toEqual({ ok: true })
+      h.services.closeConnection('old-gateway')
+      expect(await h.services.call('wifi_serving', {}, { ...asker, connection: 'replacement-gateway' }, 15_000)).toMatchObject({ error: 'SERVICE_UNAVAILABLE' })
+      if (late === 'resolve') requests[0].finish({ serving: true })
+      else requests[0].fail(new Error('late handler failure'))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(h.lines).toEqual(['[services] wake.wifi_serving timed out · SERVICE_DEADLINE'])
+      expect(await answer).toMatchObject({ error: 'SERVICE_UNAVAILABLE' })
+      const next = h.services.call('wifi_serving', {}, asker, 15_000)
+      expect(handler).toHaveBeenCalledTimes(2)
+      requests[1].finish({ serving: true })
+      expect(await next).toEqual({ serving: true })
+      expect(vi.getTimerCount()).toBe(0)
+    })
+
+    it('preserves concurrent in-deadline calls and keeps each deadline and reply separate', async () => {
+      vi.useFakeTimers()
+      const h = host(), finish: Array<(value: Record<string, unknown>) => void> = []
+      h.services.serve('roster', () => ({ sharing_roster: () => new Promise<Record<string, unknown>>(resolve => finish.push(resolve)) }), fakeCore(), ['sharing_roster'])
+      const first = h.services.call('sharing_roster', {}, asker, 100)
+      const second = h.services.call('sharing_roster', {}, asker, 200)
+      expect(finish).toHaveLength(2)
+      await vi.advanceTimersByTimeAsync(100)
+      expect(await first).toMatchObject({ error: 'SERVICE_UNAVAILABLE' })
+      finish[1]({ roster: [] })
+      expect(await second).toEqual({ roster: [] })
+      finish[0]({ roster: ['late'] })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(vi.getTimerCount()).toBe(0)
+    })
+  })
+
   describe('starting', () => {
     it('installs the port a service fills, guarded, with every call reaching it as made', async () => {
       const h = host()

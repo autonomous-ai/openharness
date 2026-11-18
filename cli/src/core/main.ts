@@ -238,7 +238,7 @@ import { writeDaemonRecord } from '../lib/daemonRecord.js'
 import { publishHookRoute } from '../lib/hookRoutes.js'
 import { BackendSocket, isLocalClientId } from '../backendSocket.js'
 import { createGatewayLink, laneOf, tabKeyOf, tabRelayOf } from './gatewayLink.js'
-import { createWifiCore, WIFI_START_MS } from './wifi.js'
+import { createWifiCore } from './wifi.js'
 import { createDevicesWake, DEVICES_ON_DEMAND } from './devicesWake.js'
 import { wakeModels } from './modelsWake.js'
 import { wakeGateway } from './gatewayWake.js'
@@ -899,24 +899,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     notify: (service, frame, opts) => serviceLinksRef?.notify(service, frame, opts) ?? false,
     hears: heldAgentLife(outOfProcess),
   })
-  // The Wi-Fi device's service runs with the dials (services/wifi.ts); what the core reads in line of it
-  // (who is watching, which transcripts and streams it follows, the focus revision) and the check on every
-  // answer it sends a device are here (core/wifi.ts). Its doors are the calls it made when it ran here.
+  // The remaining Wi-Fi transcript/stream interests and final window focus revision fence live here.
+  // Device relay sessions and presence are owned by the gateway and devices components.
   const machineIdNow = (): string => backendRef?.machineId ?? ''
   const wifiCore = createWifiCore({
     port: () => ports.wifi,
-    gateway: {
-      device: (connId, type, payload) => backendRef?.deviceFrame(connId, type, payload),
-      deviceClient: (connId, identity) => backendRef?.deviceClient(connId, identity),
-      revokeIdentity: (identity) => gatewayOps.revokeIdentity(identity),
-    },
-    remoteClient: (connId) => backendRef?.remoteClient(connId) ?? null,
     fullText: (agentId) => mirror.lastFullText(registry.byAgent(agentId)?.sessionId ?? agentId),
-    joined: () => backendRef?.onCommanderJoin?.(),
-    // Its direct links are the gateway's, started only once it serves: a device they connected to a service
-    // that could not be built would be answered by nothing.
-    ready: () => gatewayOps.wifiService(true),
-    want: () => devicesWake.ask('wifi', 'a Wi-Fi device'),
     doors: wifiDoors({
       registry, machineId: machineIdNow, packageId: session => { const id = frameParts.read(session.agentId).dsh; return typeof id === 'string' ? id : session.dsh ?? null }, displayName: projectDisplayName, running: (sessionId) => turnStartedAt.has(sessionId),
       socket: () => backendRef ?? null, answer: (request) => cloudAgents?.answer(request) ?? questions.answer(request),
@@ -1174,6 +1162,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const liveTransport = createLiveTransport({
     call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
   })
+  const wifiServing = async (): Promise<boolean> => {
+    const answer = outOfProcess.has('wifi')
+      ? await serviceLinksRef?.call('wifi', 'wifi_serving', {}, 15_000)
+      : await serviceHost?.call('wifi_serving', {}, { local: true, owner: true }, 15_000)
+    return answer?.serving === true
+  }
   const gatewayLink = outOfProcess.has('gateway') ? createGatewayLink({
     events: backend.fromGateway,
     notify: (frame, quota) => serviceLinksRef?.notify('gateway', frame, { quota }) ?? false,
@@ -1183,19 +1177,19 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     start: () => ({ machineId: backend.machineId, computerId: computerId(), autonomousEnv, signedIn: !!session?.machineId, account: account(), machineName: terminalHintMachineName(), hostname: hostname() }),
     backend: (method, path) => proxyBackend(method, path), want: () => coreLink.want('gateway'),
     machines: ({ body }) => ports.models?.machines(body, computerId()),
-    wifiServing: () => wifiCore.serving(WIFI_START_MS),
+    wifiServing,
   }) : null
   const inlineGateway = gatewayLink ? null : inline!.startGateway({
     events: backend.fromGateway, machineId: backend.machineId, computerId: computerId(), autonomousEnv,
+    peer: { composition: 'inline', port: env.PORT },
     signedIn: !!session?.machineId, account: account(), machineName: terminalHintMachineName(), hostname: hostname(),
     machines: ({ body }) => ports.models?.machines(body, computerId()),
-    wifiServing: () => wifiCore.serving(WIFI_START_MS),
+    wifiServing,
   })
   const gateway = gatewayLink ?? inlineGateway!
   // Its routes of the door, in this process; in its own, its link takes them (core/serviceRoutes.ts).
   if (inlineGateway) serviceHost!.serve('gateway', () => inlineGateway.requests, coreApi, GATEWAY_REQUESTS)
   backend.useGateway(gateway.port)
-  backend.useWifi(wifiCore.fromGateway)
   const gatewayOps = gateway.ops
   gatewayOpsRef = gatewayOps
   daemonBoot.openRequests = () => backend.openRequests()
@@ -1229,7 +1223,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    *  the cards are made for it in line, without asking the devices, which may be in another process. */
   const cableWatchingLocal = (): boolean => dialWatching
 
-  const deviceIsWatching = (): boolean => backend.hasCommander() || cableWatchingLocal() || wifiCore.connected()
+  const deviceIsWatching = (): boolean => backend.hasCommander() || cableWatchingLocal()
   /** Actual app/tool observation scopes, plus the existing commander and cable audiences. */
   const questionObserved = (agentId: string): boolean => backend.hasCommander() || cableWatchingLocal() || backend.questionsObserved(agentId)
   // A page a program in a harness's pane opens (Claude Code's `/login`) goes to the phone typing there, and the
@@ -1632,7 +1626,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // handler in this one.
   const messagesLink = createMessagesLink({ core: coreApi, notify: (frame) => serviceLinks.notify('messages', frame),
     share: (type, payload) => outOfProcess.has('sharing') ? serviceLinks.call('sharing', type, payload)
-      : new Promise((resolve) => { if (!serviceHost?.route(type, payload, { local: true, owner: true }, resolve)) resolve({ error: 'SERVICE_UNAVAILABLE' }) }) })
+      : serviceHost?.call(type, payload, { local: true, owner: true }, 30_000) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }) })
   // An experiment asked for, and the account's notices for those that hear them (core/experiments.ts).
   const experimentHooks = createExperimentHooks({ want: (service) => coreLink.want(service), notify: (service, frame) => serviceLinks.notify(service, frame),
     outOfProcess, experiments })
@@ -1681,8 +1675,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     state: () => ({ desk: appPaneAgents, foreground: appWindowForeground, swarms: appSwarmsLatest, unread: appUnreadLatest,
       focus: windowFocus(), engines: registry.active().map((agent) => agent.engine), commanders: backend.hasCommander() }),
   })
-  // The Wi-Fi device in the devices' process (core/wifiLink.ts): its sessions' requests and what the agents do,
-  // in order; on each connection, what the core holds for it (core/wifi.ts).
+  // The remaining Wi-Fi feed and final focus fence use the ordered core link (core/wifiLink.ts).
   const wifiLink = createWifiLink({
     core: coreApi,
     notify: (frame) => serviceLinks.notify('wifi', frame),
@@ -3415,7 +3408,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The Wi-Fi device (services/wifi.ts), with the dials: in their process by default (core/wifiLink.ts,
   // resumed there as its link connects), or here.
   if (!outOfProcess.has('wifi')) {
-    serviceHost!.start('wifi', inline!.startWifi, coreApi, WIFI_FALLBACKS, WIFI_REQUESTS)
+    serviceHost!.start('wifi', (core, started) => inline!.startWifi(core, started, { peer: { composition: 'inline', port: env.PORT } }), coreApi, WIFI_FALLBACKS, WIFI_REQUESTS)
     if (ports.wifi) wifiCore.started(appVoiceFocus ?? null)
   }
 

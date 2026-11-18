@@ -85,7 +85,7 @@ describe('Device result membership from captured engine evidence', () => {
     f.service.commander({ type: 'commander_event', agentId: 'agent', payload: { kind: 'summary', text: 'unrelated latest recap' } })
     expect(f.results()).toEqual([original])
     const replay: any[] = []
-    f.service.replay({ serverInstanceId: 'instance', cursor: 0 }, e => replay.push(e))
+    f.service.replay({ serverInstanceId: 'instance', cursor: 0 }, frames => () => { replay.push(...structuredClone(frames)) })
     expect(replay.find(e => e.kind === 'turn.summary')).toEqual(original)
     await f.send('B', capture.inputs[1]) // lost RPC acknowledgment
     expect(f.submit).toHaveBeenCalledTimes(3)
@@ -164,7 +164,7 @@ describe('result persistence, opt-in and authorization', () => {
     await restarted.send('C', 'unresolved')
     expect(restarted.submit).not.toHaveBeenCalled()
     const replay: any[] = []
-    restarted.service.replay({ serverInstanceId: 'instance', cursor: 0 }, e => replay.push(e))
+    restarted.service.replay({ serverInstanceId: 'instance', cursor: 0 }, frames => () => { replay.push(...structuredClone(frames)) })
     expect(replay[0]).toMatchObject({ type: 'resync', reason: 'instance_changed' })
     expect(replay.find(e => e.kind === 'turn.summary')).toMatchObject({ serverInstanceId: 'new-instance', payload })
     const event = replay.find(e => e.kind === 'turn.summary')
@@ -279,7 +279,7 @@ it('retains the committed result when transport emission loses its acknowledgmen
   const before = f.service.resume().cursor
   expect(() => f.ingest(claude.records.at(-1))).toThrow('socket closed')
   const replay: any[] = []
-  f.service.replay({ serverInstanceId: 'instance', cursor: before }, e => replay.push(e))
+  f.service.replay({ serverInstanceId: 'instance', cursor: before }, frames => () => { replay.push(...structuredClone(frames)) })
   expect(replay.filter(e => e.kind === 'turn.summary')).toHaveLength(1)
   expect(f.service.receipt('owner', 'B')?.state).toBe('completed')
 })

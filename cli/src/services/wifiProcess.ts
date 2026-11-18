@@ -1,7 +1,7 @@
 /**
  * The Wi-Fi device's service in the devices' process (`harness __service devices,wifi`, harnessd/services.ts),
  * on a link of its own to the core (core/wifiLink.ts; step 9, D3). Its sessions are the gateway's, its
- * requests and every answer to them pass through the core, which checks where each answer goes.
+ * requests and answers use its authenticated peer with the gateway, which checks the final E2EE session.
  *
  * It is built on its first connection, once the core has said which machine this is (the account's id,
  * which every frame it sends a device carries), and built again if a later core says another: a sign-in
@@ -9,7 +9,7 @@
  * whichever devices the new core's gateway brings.
  */
 import type { RecentTurn } from '../cable/cableHost.js'
-import { emptyPorts, type AgentView, type CoreApi, type CorePorts, type ForkResult, type RemoteClient, type ServiceRequests, type WifiPort, type WifiResume, type WifiView } from '../core/api.js'
+import { emptyPorts, type AgentView, type CoreApi, type CorePorts, type ForkResult, type ServiceRequests, type WifiPort, type WifiResume, type WifiView } from '../core/api.js'
 import type { AutonomousDeviceDelivery } from '../lib/autonomous-device/service.js'
 import type { LiveEvent } from '../lib/normalize.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess, type ServiceProcessOptions } from './process.js'
@@ -106,7 +106,10 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
       turns: { ...unasked.turns, recent: async (agentId, n) => list<RecentTurn>((await ask('recent', { agentId, n })).turns) },
       wifi: {
         view: async () => {
-          const answer = await ask('view')
+          const origin = core
+          if (!origin) throw new Error('CORE_VIEW_UNAVAILABLE')
+          const answer = await origin.query('view', {})
+          if (core !== origin) throw new Error('CORE_VIEW_UNAVAILABLE')
           lastView = { agents: list(answer.agents), store: list(answer.store), hasWindow: answer.hasWindow === true }
           return lastView
         },
@@ -134,11 +137,6 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
           return true
         },
         reveal: (operationId, agentId) => tell('reveal', { operationId, agentId }),
-        send: (connId, identity, type, payload) => tell('send', { connId, identity, type, payload }),
-        hello: (connId, identity) => tell('hello', { connId, identity }),
-        joined: () => tell('joined'),
-        ready: () => tell('ready'),
-        unpaired: (identity) => tell('unpaired', { identity }),
         focus: (revision) => tell('focus', { revision }),
         transcripts: (agentId, seen) => tell('transcripts', { agentId, seen }),
         watching: (agentIds) => tell('watching', { agentIds }),
@@ -156,6 +154,7 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
     let requests: ServiceRequests
     try {
       requests = (options.start ?? startWifi)(api(machineId), ports, { submit, cancel,
+        peer: { composition: 'services', port: env.PORT, token: options.token },
         observeQuestions: listener => observeQuestions({ dataDir: options.dataDir, port: env.PORT, machineId }, listener),
       })
     } catch (error) {
@@ -168,10 +167,6 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
 
   /** What the core tells the service (`service_event`), by kind: the port's own calls, across the link. */
   const heard: Record<string, (port: WifiPort, payload: Record<string, unknown>) => unknown> = {
-    session: (port, { connId, client }) => port.session(text(connId), client && typeof client === 'object' ? client as RemoteClient : null),
-    request: (port, { connId, frame, opened }) => port.request(text(connId), object(frame), opened && typeof opened === 'object' ? opened as Record<string, unknown> : null),
-    dropped: (port, { connId }) => port.dropped(text(connId)),
-    revoked: (port, { identity }) => port.revoked(text(identity)),
     card: (port, { frame, fullText }) => port.card(object(frame), typeof fullText === 'string' ? fullText : undefined),
     turnEnded: (port, { agentId, aborted }) => port.turnEnded(text(agentId), aborted === true),
     stream: (port, { agentId, events }) => port.stream(text(agentId), list<LiveEvent>(events)),
@@ -202,8 +197,6 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
     if (core === sharedCore) await following.connected((query, payload) => origin.query(query, payload))
     if (core !== origin) return
     await port?.resume({
-      sessions: list<WifiResume['sessions'][number]>(state.sessions),
-      helloed: list<WifiResume['helloed'][number]>(state.helloed),
       focus: state.focus && typeof state.focus === 'object' ? state.focus as WifiResume['focus'] : null,
     })
   }
@@ -214,6 +207,10 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
     machineId: options.machineId,
     token: options.token,
     requests: {
+      wifi_serving: async (payload, asker, closed) => {
+        await heardSoFar
+        return built?.requests.wifi_serving?.(payload, asker, closed) ?? { serving: false }
+      },
       // Its routes of the door (`harness device receipt`, the add-ons), handed on by the core as they came: answered
       // once what the core said before is heard, and, while the service could not be built, as one that is down.
       wifi_http: async (payload, asker, closed) => {

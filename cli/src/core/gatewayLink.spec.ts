@@ -14,7 +14,7 @@ function events(): { [K in keyof GatewayEvents]: ReturnType<typeof vi.fn> } {
   return {
     frame: vi.fn(), binary: vi.fn(), client: vi.fn(), disconnected: vi.fn(), observer: vi.fn(), toLocal: vi.fn(), status: vi.fn(),
     linkDown: vi.fn(), commanders: vi.fn(), commanderJoined: vi.fn(), meta: vi.fn(), notice: vi.fn(), revoked: vi.fn(), busy: vi.fn(),
-    device: vi.fn(), deviceRevoked: vi.fn(), toWindows: vi.fn(), tabFrame: vi.fn(),
+    toWindows: vi.fn(), tabFrame: vi.fn(),
     streamControl: vi.fn(),
   }
 }
@@ -61,7 +61,6 @@ describe('the gateway in its own process, as the core sees it', () => {
     link.port.connect()
     link.port.holdRequests()
     link.port.localClients({ desktop: 1, tui: 1 })
-    link.ops.wifiService(true)
     link.ops.account({ machineId: 'm1', signIn: null })
     link.ops.reachable(['m2'])
     expect(sent).toEqual([])
@@ -69,7 +68,7 @@ describe('the gateway in its own process, as the core sees it', () => {
     expect(kinds()).toEqual(['start'])
     expect(sent[0]).toEqual({
       kind: 'start', machineId: 'm1', computerId: 'c1', autonomousEnv: 'prod', signedIn: true,
-      requestsOpen: false, dial: 'connect', localClients: { desktop: 1, tui: 1 }, wifiService: true, reachable: ['m2'],
+      requestsOpen: false, dial: 'connect', localClients: { desktop: 1, tui: 1 }, reachable: ['m2'],
     })
     link.port.openRequests()
     link.port.serveThisComputerOnly()
@@ -85,7 +84,6 @@ describe('the gateway in its own process, as the core sees it', () => {
     expect(link.port.terminal('phone-1', 'terminal_ready', {})).toBe(false)
     expect(link.port.terminalBinary('phone-1', encodeTerminalLocal(bytesOf('hi'))!)).toBe(false)
     expect(link.port.observer('observer:1', 'observer_frame', {})).toBe(false)
-    expect(link.port.device('dial-1', 'autonomous_device_event', {})).toBe(false)
     link.notice({ kind: 'status', connected: true })
     register(link, 'phone-1')
     expect(link.port.connected()).toBe(true)
@@ -96,8 +94,6 @@ describe('the gateway in its own process, as the core sees it', () => {
     expect(link.port.target('phone-1', 'viewer_data', { a: 1 })).toBe(true)
     expect(link.port.terminal('phone-1', 'terminal_ready', { streamId: STREAM })).toBe(true)
     expect(link.port.observer('observer:1', 'observer_frame', { b: 2 })).toBe(true)
-    expect(link.port.device('phone-1', 'autonomous_device_result', { c: 3 })).toBe(true)
-    link.port.deviceClient('phone-1', 'PUB')
     link.port.windowOpened('tui')
     link.port.usageCounter?.('create_requests')
     link.port.usage?.({ kind: 'observed', payload: { measure: 'collector_days' } })
@@ -106,7 +102,7 @@ describe('the gateway in its own process, as the core sees it', () => {
     // An id the binary frame cannot carry: refused, never sent half-framed.
     register(link, 'x'.repeat(300))
     expect(link.port.terminalBinary('x'.repeat(300), encodeTerminalLocal(bytesOf('hi'))!)).toBe(false)
-    expect(kinds().slice(1)).toEqual(['broadcast', 'commander', 'user', 'reply', 'target', 'terminal', 'observer', 'device', 'deviceClient', 'windowOpened', 'usageCounter', 'usage', 'localFrame'])
+    expect(kinds().slice(1)).toEqual(['broadcast', 'commander', 'user', 'reply', 'target', 'terminal', 'observer', 'windowOpened', 'usageCounter', 'usage', 'localFrame'])
     expect(sent[4]).toEqual({ kind: 'reply', connId: 'phone-1', type: 'agents_list', requestId: 'r-1', payload: { agents: [] } })
     const framed = decodeGatewayBinary(binary[0])!
     expect(framed).toMatchObject({ kind: GatewayBinary.remote, id: 'phone-1' })
@@ -225,8 +221,6 @@ describe('the gateway in its own process, as the core sees it', () => {
     expect(heard.notice).toHaveBeenCalledWith({ type: 'desk_changed', revision: 3 })
     expect(heard.revoked).toHaveBeenCalled()
     expect(heard.busy).toHaveBeenCalled()
-    expect(heard.device.mock.calls).toEqual([['dial-1', { type: 'autonomous_device_request' }, { type: 'hello' }], ['dial-1', { type: 'autonomous_device_request' }, null]])
-    expect(heard.deviceRevoked).toHaveBeenCalledWith('PUB')
     expect(heard.toWindows).toHaveBeenCalledWith({ type: 'device_key_added' })
     // What a shared tab's relay said, read as the shape it must be; one that names no tab is not handed on.
     expect(heard.tabFrame.mock.calls).toEqual([[{ sharedTabId: 'a1b2c3d4e5f6a1b2c3d4e5f6', from: { machineId: 'alice-mac', userId: 'u' }, payload: { a: 1 } }]])
@@ -301,14 +295,12 @@ describe('the gateway in its own process, as the core sees it', () => {
     const { link, sent, kinds, want } = setup()
     // What only says how things stand asks for nothing: it is told in the start.
     link.port.localClients({ desktop: 1, tui: 0 })
-    link.ops.wifiService(false)
     expect(want).not.toHaveBeenCalled()
     // A window's E2EE request: asked for, and held.
     void link.port.local('conn-1', { type: 'e2ee_pairings_list', payload: { requestId: 'r1' } })
     expect(want).toHaveBeenCalledTimes(1)
     void link.port.local('conn-2', { type: 'phone_pair', payload: { requestId: 'r2' } })
     link.port.connect()
-    link.ops.wifiService(true)
     expect(want).toHaveBeenCalledTimes(1)
     expect(sent).toEqual([])
     link.connected()
@@ -323,14 +315,10 @@ describe('the gateway in its own process, as the core sees it', () => {
     expect(want).toHaveBeenCalledTimes(1)
   })
 
-  it('is asked for by a sign-in\'s dial and by the Wi-Fi device\'s service, each once', () => {
+  it('is asked for by a sign-in\'s dial once', () => {
     const dialed = setup()
     dialed.link.port.connect()
     expect(dialed.want).toHaveBeenCalledTimes(1)
-    const wifi = setup()
-    wifi.link.ops.wifiService(true)
-    wifi.link.port.connect()
-    expect(wifi.want).toHaveBeenCalledTimes(1)
   })
 
   it('lets go of what waited when it does not start in time, the oldest first when too much waits', async () => {
@@ -614,9 +602,8 @@ describe('the gateway in its own process, as the core sees it', () => {
   it('tells the gateway what the core learns for it', () => {
     const { link, sent } = setup()
     link.connected()
-    link.ops.revokeIdentity('PUB')
     link.ops.reachable(null)
-    expect(sent.slice(1)).toEqual([{ kind: 'revokeIdentity', identity: 'PUB' }, { kind: 'reachable', machineIds: null }])
+    expect(sent.slice(1)).toEqual([{ kind: 'reachable', machineIds: null }])
   })
 
   // The core audit of 2026-11-12, decision 4: the gateway renews the sign-in, and the core, which calls no other host,

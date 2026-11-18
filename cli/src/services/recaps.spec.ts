@@ -9,6 +9,11 @@ import { deriveTurnSummary } from '../lib/deviceRecap.js'
 import type { LiveEvent } from '../lib/normalize.js'
 import type { TierDecision, TierInput } from '../lib/notifyTier.js'
 import { fakeCore } from '../testing/fakeCore.js'
+import { devicePeerPresence } from '../lib/autonomous-device/peerPresence.js'
+
+vi.mock('../lib/autonomous-device/peerPresence.js', () => ({ devicePeerPresence: vi.fn(options => ({
+  start: vi.fn(), stop: vi.fn(async () => options.changed(false, false)),
+})) }))
 
 const { createRecaps, startRecaps } = await import('./recaps.js')
 
@@ -41,10 +46,43 @@ describe('the recaps', () => {
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
   })
 
-  it('starts in the core\'s process behind its port', () => {
+  it('starts in the core\'s process behind its port', async () => {
     const ports = emptyPorts()
     startRecaps(fakeCore({ dataDir: temp() }), ports)
     expect(ports.recaps?.recaps('nobody')).toBeNull()
+    const peer = vi.mocked(devicePeerPresence).mock.results.at(-1)!.value
+    expect(peer.start).toHaveBeenCalledOnce()
+    await ports.recaps?.stop()
+    expect(peer.stop).toHaveBeenCalledOnce()
+  })
+
+  it('owns Wi-Fi presence separately from core watchers and releases it on disable/re-enable', async () => {
+    const f = setup({ peer: { composition: 'services', port: 23456, token: 't'.repeat(32) } })
+    const options = vi.mocked(devicePeerPresence).mock.calls.at(-1)![0]
+    const peer = vi.mocked(devicePeerPresence).mock.results.at(-1)!.value
+    const replay = vi.spyOn(f.recaps.mirror, 'replayAll')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    options.failed('PEER_UNAVAILABLE')
+    expect(warn).toHaveBeenCalledExactlyOnceWith('[recaps] PEER_UNAVAILABLE')
+    f.tell({ kind: 'beat', session: s1, working: false }, nobody)
+    expect(f.opts.hasDevice()).toBe(false)
+    f.recaps.connected()
+    options.changed(true, true)
+    expect(f.opts.hasDevice()).toBe(true)
+    expect(replay).toHaveBeenCalledOnce()
+    f.tell({ kind: 'beat', session: s1, working: false }, nobody)
+    expect(f.opts.hasDevice()).toBe(true)
+    options.changed(true, false)
+    expect(replay).toHaveBeenCalledOnce()
+    await f.recaps.port.stop()
+    expect(f.opts.hasDevice()).toBe(false)
+    f.recaps.connected()
+    expect(peer.start).toHaveBeenCalledTimes(2)
+    options.changed(true, true)
+    expect(replay).toHaveBeenCalledTimes(2)
+    f.tell({ kind: 'beat', session: s1, working: false }, watching)
+    await f.recaps.port.stop()
+    expect(f.opts.hasDevice()).toBe(true)
   })
 
   it('cuts a turn\'s recap from its final answer, sends the card and the apps\' recap, and keeps it for the core to read', async () => {

@@ -1,34 +1,35 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
-import { AutonomousDeviceRelay } from './relay.js'
+import { AutonomousDeviceRelay, type DeviceRelayReplay } from './relay.js'
 import { AutonomousDeviceService } from './service.js'
 import { randomUUID } from 'node:crypto'
-function fixture(store?: import('./store.js').AutonomousDeviceStore) {
-  let role = 'device', identity: string | null = 'trusted-device'
-  const submit = vi.fn(), cancel = vi.fn(() => true), send = vi.fn()
-  const crypto = { sessionRole: () => role as 'device' | 'web', sessionIdentity: () => identity,
-    unwrapDown: (_c: string, frame: Record<string, unknown>) => ({ ...frame, payload: (frame.payload as { __e2e: unknown }).__e2e }),
-    wrapTarget: (_c: string, type: string, payload: Record<string, unknown>) => ({ type, payload: { __e2e: payload } }) }
-  const service = new AutonomousDeviceService({ store, now: () => 0, machineId: 'machine', agents: () => [{ agentId: 'agent', name: 'Agent', engine: 'codex', state: 'idle' }], submit, cancelDelivery: cancel, stop: async () => true, answer: async () => true, recent: () => [] })
-  const remoteRevoke = vi.fn()
-  const relay = new AutonomousDeviceRelay(crypto, send, service, 'machine', undefined, remoteRevoke)
-  const request = (payload: Record<string, unknown>) => relay.handle('conn', { type: 'autonomous_device_request', payload: { __e2e: payload } })
-  return { relay, request, send, submit, service, cancel, remoteRevoke, setRole: (r: string) => { role = r }, setIdentity: (id: string) => { identity = id }, revoke: () => { identity = null } }
+
+function replayTo(send: ConstructorParameters<typeof AutonomousDeviceRelay>[1]): DeviceRelayReplay {
+  return (connId, proof, frames, allowed, hello) => () => {
+    if (hello) send(connId, { type: 'autonomous_device_result', payload: structuredClone(hello) }, proof)
+    for (const frame of frames) if (allowed(frame)) send(connId, { type: 'autonomous_device_event', payload: structuredClone(frame) }, proof)
+  }
 }
-describe('Autonomous device existing E2EE relay seam', () => {
-  it('holds one hello per actual client until observation is ready, replies first and fences a replaced identity', async () => {
-    const f = fixture()
-    let identity = 'trusted-device'
+function fixture(store?: import('./store.js').AutonomousDeviceStore, beforeReady?: () => Promise<void>) {
+  let identity: string | null = 'trusted-device'
+  const submit = vi.fn(), cancel = vi.fn(() => true), send = vi.fn(), remoteRevoke = vi.fn(), clients = vi.fn()
+  const proof = () => ({ identity: identity ?? 'revoked', incarnation: `session:${identity}`, peerEpoch: 'peer' })
+  const service = new AutonomousDeviceService({ store, now: () => 0, machineId: 'machine', agents: () => [{ agentId: 'agent', name: 'Agent', engine: 'codex', state: 'idle' }], submit, cancelDelivery: cancel, stop: async () => true, answer: async () => true, recent: () => [] })
+  const relay = new AutonomousDeviceRelay(() => identity ? proof() : null, send, service, 'machine', replayTo(send), undefined, remoteRevoke, clients, beforeReady)
+  const request = (payload: Record<string, unknown>) => relay.handle('conn', proof(), payload)
+  return { relay, request, proof, send, submit, service, cancel, clients, remoteRevoke,
+    setIdentity: (id: string) => { identity = id }, revoke: () => { identity = null } }
+}
+describe('application relay over authenticated opened device requests', () => {
+  it('holds one hello until questions are ready, replies first and fences a replaced identity', async () => {
     let ready!: () => void
     const prepare = vi.fn(() => new Promise<void>(resolve => { ready = resolve }))
-    const relay = new AutonomousDeviceRelay({ sessionRole: () => 'device', sessionIdentity: () => identity,
-      unwrapDown: (_id, frame) => ({ payload: (frame.payload as { __e2e: Record<string, unknown> }).__e2e }),
-      wrapTarget: (_id, type, payload) => ({ type, payload }) }, f.send, f.service, 'machine', undefined, undefined, undefined, prepare)
-    const request = (id: string) => relay.handle('conn', { payload: { __e2e: { type: 'hello', proto: 1, requestId: id,
-      resume: { serverInstanceId: f.service.serverInstanceId, cursor: 0 } } } })
-    const first = request('first')
+    const f = fixture(undefined, prepare)
+    const hello = (id: string) => f.request({ type: 'hello', proto: 1, requestId: id,
+      resume: { serverInstanceId: f.service.serverInstanceId, cursor: 0 } })
+    const first = hello('first')
     expect(f.send).not.toHaveBeenCalled()
-    await request('duplicate')
+    await hello('duplicate')
     expect(f.send.mock.calls.at(-1)?.[1]).toMatchObject({ payload: { requestId: 'duplicate', error: { code: 'HELLO_PENDING' } } })
     expect(prepare).toHaveBeenCalledOnce()
     f.send.mockClear()
@@ -37,22 +38,12 @@ describe('Autonomous device existing E2EE relay seam', () => {
     expect(f.send.mock.calls[0][1]).toMatchObject({ type: 'autonomous_device_result', payload: { type: 'hello_result', requestId: 'first' } })
     expect(f.send.mock.calls[1][1]).toMatchObject({ type: 'autonomous_device_event', payload: { kind: 'question.open' } })
     f.send.mockClear()
-    const replaced = request('replaced')
-    identity = 'different-device'
-    ready(); await replaced
+    const replaced = hello('replaced')
+    f.setIdentity('replacement'); ready(); await replaced
     expect(f.send).not.toHaveBeenCalled()
   })
 
-  it('requires existing device-role trust and encrypted payload before calling the service', async () => {
-    const f = fixture(); f.setRole('web')
-    await f.request({ type: 'hello', proto: 1, requestId: randomUUID() })
-    expect(f.send).not.toHaveBeenCalled()
-    f.setRole('device'); await f.relay.handle('conn', { type: 'autonomous_device_request', payload: { type: 'hello' } })
-    expect(f.send).not.toHaveBeenCalled()
-    await f.request({ type: 'hello', proto: 1, requestId: randomUUID() })
-    expect(f.send.mock.calls[0][1]).toMatchObject({ type: 'autonomous_device_result', payload: { __e2e: { type: 'hello_result', proto: 1 } } })
-  })
-  it('uses pinned identity for dedupe and drops revoked queued work', async () => {
+  it('uses the captured paired identity for dedupe and removes revoked queued work', async () => {
     const f = fixture(); await f.request({ type: 'hello', proto: 1, requestId: randomUUID() })
     const req = { type: 'turn.send', requestId: randomUUID(), machineId: 'machine', agentId: 'agent', idempotencyKey: 'one', text: 'hello' }
     await f.request(req); await f.request({ ...req, requestId: randomUUID() })
@@ -63,56 +54,58 @@ describe('Autonomous device existing E2EE relay seam', () => {
     expect(f.service.receipt('trusted-device', 'one')).toBeNull()
     await f.request(req); expect(f.submit).toHaveBeenCalledTimes(1)
   })
-  it('removes a device pairing only after its authenticated revoke request', async () => {
-    const f = fixture(); await f.request({ type: 'hello', proto: 1, requestId: randomUUID() })
-    await f.request({ type: 'pair.revoke', requestId: randomUUID() })
-    expect(f.send.mock.calls.at(-1)?.[1]).toMatchObject({
-      type: 'autonomous_device_result', payload: { __e2e: { type: 'pair.revoke_result', revoked: true } },
-    })
-    expect(f.remoteRevoke).toHaveBeenCalledWith('trusted-device')
-  })
-  it('app-side revoke sends exactly one sealed pair.revoke to the connected device, then drops it', async () => {
-    const f = fixture(); await f.request({ type: 'hello', proto: 1, requestId: randomUUID() })
-    f.send.mockClear()
-    f.relay.revoke('trusted-device')
-    const revokes = f.send.mock.calls.filter(([, frame]) => (frame as { payload: { __e2e: { type: string } } }).payload.__e2e.type === 'pair.revoke')
-    expect(revokes).toHaveLength(1)
-    expect(revokes[0][1]).toEqual({ type: 'autonomous_device_event', payload: { __e2e: { type: 'pair.revoke', machineId: 'machine' } } })
-    // Client state is gone: the next request needs a fresh application hello.
-    await f.request({ type: 'turn.send', requestId: randomUUID() })
-    expect(f.send.mock.calls.at(-1)?.[1]).toMatchObject({ payload: { __e2e: { error: { code: 'HELLO_REQUIRED' } } } })
-  })
-  it('does not revoke when the request is malformed', async () => {
+
+  it('revokes only an authenticated application request, after its reply, and rejects malformed requests', async () => {
     const f = fixture(); await f.request({ type: 'hello', proto: 1, requestId: randomUUID() })
     await f.request({ type: 'pair.revoke', requestId: randomUUID(), extra: true })
     expect(f.remoteRevoke).not.toHaveBeenCalled()
+    await f.request({ type: 'pair.revoke', requestId: randomUUID() })
+    expect(f.send.mock.calls.at(-1)?.[1]).toMatchObject({ type: 'autonomous_device_result', payload: { type: 'pair.revoke_result', revoked: true } })
+    expect(f.remoteRevoke).toHaveBeenCalledExactlyOnceWith('conn', f.proof())
+  })
+
+  it('app-side revoke tells the current device once, then requires a fresh application hello', async () => {
+    const f = fixture(); await f.request({ type: 'hello', proto: 1, requestId: randomUUID() })
+    f.send.mockClear(); f.relay.revoke('trusted-device')
+    const revoked = f.send.mock.calls.filter(([, frame]) => frame.payload.type === 'pair.revoke')
+    expect(revoked).toHaveLength(1)
+    expect(revoked[0][1]).toEqual({ type: 'autonomous_device_event', payload: { type: 'pair.revoke', machineId: 'machine' } })
+    await f.request({ type: 'turn.send', requestId: randomUUID() })
+    expect(f.send.mock.calls.at(-1)?.[1]).toMatchObject({ payload: { error: { code: 'HELLO_REQUIRED' } } })
+  })
+
+  it('serves a still-current restored hello once and refuses a different identity', async () => {
+    const f = fixture()
+    f.relay.restore('conn', { ...f.proof(), identity: 'other' })
+    expect(f.send).not.toHaveBeenCalled()
+    f.relay.restore('conn', f.proof())
+    expect(f.relay.helloed()).toEqual(['conn'])
+    expect(f.clients).toHaveBeenCalledWith('conn', f.proof(), true)
+    expect(f.send.mock.calls[0][1]).toMatchObject({ payload: { type: 'resync', reason: 'instance_changed' } })
+    await f.request({ type: 'agents.list', requestId: randomUUID() })
+    expect(f.send.mock.calls.at(-1)?.[1]).toMatchObject({ payload: { type: 'agents.list_result' } })
+    f.send.mockClear(); f.relay.restore('conn', f.proof())
+    expect(f.send).not.toHaveBeenCalled()
   })
 })
 
-it('Store uses the same device-only encrypted hello gate and never exposes generic app operations', async () => {
+it('Store uses the application hello gate and never exposes generic app operations', async () => {
   const call = vi.fn(async (_identity: string, _req: Record<string, unknown>) => ({ packages: [], nextOffset: null, machineId: 'machine' }))
-  const store = { request: call } as unknown as import('./store.js').AutonomousDeviceStore
-  const f = fixture(store)
+  const f = fixture({ request: call } as unknown as import('./store.js').AutonomousDeviceStore)
   await f.request({ type: 'store.list', requestId: randomUUID() })
-  expect(f.send.mock.calls.at(-1)?.[1]).toMatchObject({ payload: { __e2e: { error: { code: 'HELLO_REQUIRED' } } } })
+  expect(f.send.mock.calls.at(-1)?.[1]).toMatchObject({ payload: { error: { code: 'HELLO_REQUIRED' } } })
   expect(call).not.toHaveBeenCalled()
-  f.setRole('web')
+  f.revoke(); await f.request({ type: 'hello', proto: 1, requestId: randomUUID() })
+  expect(call).not.toHaveBeenCalled()
+  f.setIdentity('trusted-device')
   await f.request({ type: 'hello', proto: 1, requestId: randomUUID() })
+  expect(f.send.mock.calls.some(([, frame]) => frame.payload.capabilities?.includes('agent.prepare'))).toBe(true)
   await f.request({ type: 'store.list', requestId: randomUUID() })
-  expect(call).not.toHaveBeenCalled()
-  f.setRole('device')
-  await f.relay.handle('conn', { type: 'autonomous_device_request', payload: { type: 'store.list' } })
-  expect(call).not.toHaveBeenCalled()
-  await f.request({ type: 'hello', proto: 1, requestId: randomUUID() })
-  expect(f.send.mock.calls.some(([, frame]) => frame.payload.__e2e.capabilities?.includes('agent.prepare'))).toBe(true)
-  await f.request({ type: 'store.list', requestId: randomUUID() })
-  expect(call).toHaveBeenCalledOnce()
-  expect(call.mock.calls[0]?.[0]).toBe('trusted-device')
+  expect(call).toHaveBeenCalledExactlyOnceWith('trusted-device', expect.objectContaining({ type: 'store.list' }))
   await f.request({ type: 'agent_create', requestId: randomUUID(), cwd: '/tmp', engine: 'claude' })
-  expect(f.send.mock.calls.at(-1)?.[1]).toMatchObject({ payload: { __e2e: { error: { code: 'UNSUPPORTED_CAPABILITY' } } } })
+  expect(f.send.mock.calls.at(-1)?.[1]).toMatchObject({ payload: { error: { code: 'UNSUPPORTED_CAPABILITY' } } })
   expect(call).toHaveBeenCalledOnce()
 })
-
 
 it('delivers correlated summaries by default only to the originating identity, including replay', async () => {
   const f = fixture()
@@ -124,10 +117,10 @@ it('delivers correlated summaries by default only to the originating identity, i
   }
   for (const row of capture.records) f.service.observeTranscript('agent', 'session', 'codex', JSON.stringify(row))
   const frames: any[] = []
-  f.service.replay(undefined, e => frames.push(e))
+  f.service.replay(undefined, retained => () => { frames.push(...structuredClone(retained)) })
   const result = frames.find(e => e.kind === 'turn.summary')
   expect(result).toBeDefined()
-  const results = () => f.send.mock.calls.map(([, frame]) => frame.payload.__e2e).filter(e => e.kind === 'turn.summary')
+  const results = () => f.send.mock.calls.map(([, frame]) => frame.payload).filter(e => e.kind === 'turn.summary')
   f.send.mockClear(); f.relay.emit(result)
   expect(results()).toHaveLength(1)
   f.send.mockClear()
@@ -138,39 +131,6 @@ it('delivers correlated summaries by default only to the originating identity, i
   f.relay.emit(result); expect(results()).toHaveLength(0)
 })
 
-describe('a session served on after the service restarted (services/wifi.ts)', () => {
-  it('is served without a new hello, told to resync, and said to have said hello', async () => {
-    const f = fixture()
-    const clients = vi.fn()
-    const relay = new AutonomousDeviceRelay({ sessionRole: () => 'device', sessionIdentity: () => 'trusted-device',
-      unwrapDown: (_c: string, frame: Record<string, unknown>) => ({ ...frame, payload: (frame.payload as { __e2e: unknown }).__e2e }),
-      wrapTarget: (_c: string, type: string, payload: Record<string, unknown>) => ({ type, payload: { __e2e: payload } }) },
-    f.send, f.service, 'machine', undefined, undefined, clients)
-    expect(relay.helloed()).toEqual([])
-    relay.restore('conn', 'trusted-device')
-    expect(relay.helloed()).toEqual(['conn'])
-    expect(clients).toHaveBeenCalledWith('conn', 'trusted-device')
-    expect(f.send.mock.calls.at(-1)?.[1]).toMatchObject({ type: 'autonomous_device_event', payload: { __e2e: { type: 'resync', reason: 'instance_changed' } } })
-    // Its requests are answered as after its hello.
-    await relay.handle('conn', { type: 'autonomous_device_request', payload: { __e2e: { type: 'agents.list', requestId: randomUUID() } } })
-    expect(f.send.mock.calls.at(-1)?.[1]).toMatchObject({ payload: { __e2e: { type: 'agents.list_result', machineId: 'machine' } } })
-    // Already served: nothing again.
-    f.send.mockClear()
-    relay.restore('conn', 'trusted-device')
-    expect(f.send).not.toHaveBeenCalled()
-  })
-
-  it('is not served when the session is no longer that identity\'s device', () => {
-    const f = fixture()
-    f.setRole('web')
-    f.relay.restore('conn', 'trusted-device')
-    f.setRole('device')
-    f.relay.restore('conn', 'another-device')
-    expect(f.relay.helloed()).toEqual([])
-    expect(f.send).not.toHaveBeenCalled()
-  })
-})
-
 describe('device add-ons over the E2EE relay', () => {
   it('advertises add-ons, keeps what the device publishes, and seals a proposal to that device alone', async () => {
     let crypto: { identity: string } = { identity: 'lamp' }
@@ -178,11 +138,10 @@ describe('device add-ons over the E2EE relay', () => {
     let relay: AutonomousDeviceRelay | undefined
     const service = new AutonomousDeviceService({ now: () => 0, machineId: 'machine', agents: () => [], submit: vi.fn(), cancelDelivery: () => true,
       stop: async () => true, answer: async () => true, recent: () => [], emit: (frame, deviceId) => relay?.emit(frame, deviceId) })
-    relay = new AutonomousDeviceRelay({ sessionRole: () => 'device', sessionIdentity: (connId) => connId === 'other' ? 'other-device' : crypto.identity,
-      unwrapDown: (_c, frame) => ({ ...frame, payload: (frame.payload as { __e2e: unknown }).__e2e }),
-      wrapTarget: (_c, type, payload) => ({ type, payload: { __e2e: payload } }) }, send, service, 'machine')
-    const request = (connId: string, payload: Record<string, unknown>) => relay!.handle(connId, { type: 'autonomous_device_request', payload: { __e2e: payload } })
-    const opened = (i: number) => (send.mock.calls[i][1] as { payload: { __e2e: Record<string, unknown> } }).payload.__e2e
+    const proof = (connId: string) => ({ identity: connId === 'other' ? 'other-device' : crypto.identity, incarnation: 'session', peerEpoch: 'peer' })
+    relay = new AutonomousDeviceRelay(proof, send, service, 'machine', replayTo(send))
+    const request = (connId: string, payload: Record<string, unknown>) => relay!.handle(connId, proof(connId), payload)
+    const opened = (i: number) => send.mock.calls[i][1].payload as Record<string, unknown>
 
     await request('conn', { type: 'hello', proto: 1, requestId: randomUUID() })
     expect(opened(0).capabilities).toEqual(expect.arrayContaining(['addon.publish', 'addon.decision']))
@@ -218,11 +177,11 @@ describe('device add-ons over the E2EE relay', () => {
     await request('conn', { type: 'addon.publish', requestId: randomUUID(), values: [{ topic: 'room/presence', value: { someone: false } }] })
     send.mockClear()
     // A restored session (the service restarted, no hello) is asked to publish again.
-    relay.drop('conn')
-    relay.restore('conn', 'lamp')
+    relay.drop('conn', 'session')
+    relay.restore('conn', proof('conn'))
     expect(send.mock.calls.map((_, i) => opened(i).kind)).toContain('addon.republish')
     // The device's last link closing marks it offline; unpairing forgets it.
-    relay.drop('conn')
+    relay.drop('conn', 'session')
     expect(service.addons.state('lamp')[0].online).toBe(false)
     relay.revoke('lamp')
     expect(service.addons.state('lamp')).toEqual([])

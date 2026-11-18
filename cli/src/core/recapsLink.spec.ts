@@ -21,6 +21,13 @@ function setup() {
 }
 
 describe('the recaps in their own process, as the core sees them', () => {
+  it('leaves external service shutdown with its master when an inline host stops its port', async () => {
+    const { deps, link } = setup()
+    await link.port.stop()
+    expect(deps.notify).not.toHaveBeenCalled()
+    expect(deps.call).not.toHaveBeenCalled()
+  })
+
   it('tells each lifecycle event as a notification it never waits on, holding a purge and a rebound until heard', () => {
     const { deps, link } = setup()
     link.port.lifecycle({ kind: 'events', session: s1, events: [], replay: false }, watchers)

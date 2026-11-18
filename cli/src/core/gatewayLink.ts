@@ -113,7 +113,6 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
   let requestsOpen = true
   let dial: 'connect' | 'local' | null = null
   let localClients: LocalWindows = { desktop: 0, tui: 0 }
-  let wifiService = false
   let reachable: string[] | null = null
   let machines: GatewayMachines | null = null
   /** The remote clients the gateway registered, to forget each when it goes. */
@@ -211,8 +210,6 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
     windowOpened: (surface) => { send('windowOpened', { surface }) },
     localClients: (windows) => { localClients = windows; send('localClients', { windows }) },
     local: async (connId, frame) => { if (up || seen) forwardLocal(connId, frame); else owe('localFrame', { connId, frame }) },
-    device: (connId, type, payload) => reachableClient(connId) && send('device', { connId, type, payload }),
-    deviceClient: (connId, identity) => { send('deviceClient', { connId, identity }) },
     stop: async () => { send('stop') },
   }
 
@@ -311,8 +308,6 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
         pending: answer.pending && typeof answer.pending === 'object' ? answer.pending as Record<string, unknown> : null,
       }
     },
-    wifiService: (on) => { wifiService = on; if (on) need(); send('wifiService', { on }) },
-    revokeIdentity: (identity) => { send('revokeIdentity', { identity }) },
     account: (next) => {
       if (machines && machines.owner !== next.machineId) {
         machines = null
@@ -452,12 +447,6 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
       case 'busy':
         events.busy()
         return
-      case 'device':
-        void events.device(connId, record(payload.frame), payload.opened ? record(payload.opened) : null)
-        return
-      case 'deviceRevoked':
-        events.deviceRevoked(text(payload.identity))
-        return
       case 'toWindows':
         events.toWindows(record(payload.frame))
         return
@@ -530,7 +519,7 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
       up = true
       seen = true
       // The account as the core reads it now (`start`), which is never older than the last one it said.
-      send('start', { requestsOpen, dial, localClients, wifiService, reachable, ...deps.start() })
+      send('start', { requestsOpen, dial, localClients, reachable, ...deps.start() })
       // Then what waited for its first start, in the order it came.
       if (owedTimer) clearTimeout(owedTimer)
       owedTimer = null

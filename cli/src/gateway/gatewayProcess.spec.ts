@@ -26,7 +26,7 @@ function stubGateway() {
     usage: vi.fn(), usageCounter: vi.fn(), connect: vi.fn(), serveThisComputerOnly: vi.fn(), holdRequests: vi.fn(), openRequests: vi.fn(), connected: vi.fn(() => true),
     broadcast: vi.fn(), commander: vi.fn(), user: vi.fn(), reply: vi.fn(), target: vi.fn(() => true), terminal: vi.fn(() => true),
     terminalBinary: vi.fn(() => true), observer: vi.fn(() => true), windowOpened: vi.fn(), localClients: vi.fn(), local: vi.fn(async () => {}),
-    device: vi.fn(() => true), deviceClient: vi.fn(), stop: vi.fn(async () => {}),
+    stop: vi.fn(async () => {}),
   } satisfies GatewayPort
   const answer = { status: 200, body: { ok: true } }
   const ops = {
@@ -34,7 +34,6 @@ function stubGateway() {
     backend: vi.fn(async (_method: string, _path: string, _body?: unknown) => answer),
     machines: vi.fn(async (_fallback?: boolean) => answer), mintGridName: vi.fn(async (): Promise<string | null> => 'private-grid'),
     status: vi.fn(async () => ({ fingerprint: 'AB12', pairs: [], pending: null })),
-    wifiService: vi.fn(), revokeIdentity: vi.fn(),
     account: vi.fn(), reachable: vi.fn(),
     lane: {
       hello: vi.fn(async (machineId: string) => ({ type: 'e2e_hello', machineId })), welcome: vi.fn(async () => true),
@@ -87,10 +86,11 @@ function wire() {
   const heard = {
     frame: vi.fn(), binary: vi.fn(), client: vi.fn(), disconnected: vi.fn(), observer: vi.fn(), toLocal: vi.fn(), status: vi.fn(),
     linkDown: vi.fn(), commanders: vi.fn(), commanderJoined: vi.fn(), meta: vi.fn(), notice: vi.fn(), revoked: vi.fn(), busy: vi.fn(),
-    device: vi.fn(), deviceRevoked: vi.fn(), toWindows: vi.fn(), tabFrame: vi.fn(),
+    toWindows: vi.fn(), tabFrame: vi.fn(),
     streamControl: vi.fn(),
   }
   const backend = vi.fn(async () => ({ status: 200, body: { data: { acct: 'a' } } }))
+  const wifiServing = vi.fn(async () => true)
   const link = createGatewayLink({
     events: heard as unknown as GatewayEvents,
     notify: (frame) => { options.onEvent!(frame.payload as Record<string, unknown>); return true },
@@ -100,7 +100,7 @@ function wire() {
       try { return { ...await options.requests[type](payload, { local: true, owner: true }) } } catch { return { error: 'SERVICE_FAILED' } }
     },
     start: () => ({ machineId: 'machine-1', computerId: 'computer-1', autonomousEnv: 'prod', signedIn: true, account: { machineId: 'machine-1', signIn: null } }),
-    backend, wifiServing: async () => true,
+    backend, wifiServing,
   })
   const core: CoreConnection = {
     query: (query, payload = {}) => link.answer(query, payload),
@@ -109,7 +109,7 @@ function wire() {
   }
   const connect = () => { options.onConnected!(core); link.connected() }
   const disconnect = () => { options.onDisconnected!(); link.disconnected() }
-  return { link, heard, gateways, hosts, connect, disconnect, tokens, backend, options: () => options, service, linkStop }
+  return { link, heard, gateways, hosts, connect, disconnect, tokens, backend, wifiServing, options: () => options, service, linkStop }
 }
 
 describe('the gateway\'s process, spoken to by the core', () => {
@@ -131,13 +131,29 @@ describe('the gateway\'s process, spoken to by the core', () => {
     expect(gateway.port.usageCounter).toHaveBeenCalledExactlyOnceWith('create_failed')
   })
 
+  it('binds wake admission and delayed readiness to the originating gateway and core connection', async () => {
+    const w = wire()
+    w.connect()
+    let finish!: (value: boolean) => void
+    w.wifiServing.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const old = w.hosts[0].wifiServing!()
+    expect(w.wifiServing).toHaveBeenCalledOnce()
+    w.disconnect(); w.connect()
+    finish(true)
+    expect(await old).toBe(false)
+    expect(await w.hosts[0].wifiServing!()).toBe(false)
+    expect(w.wifiServing).toHaveBeenCalledOnce()
+    expect(await w.hosts[1].wifiServing!()).toBe(true)
+    expect(w.wifiServing).toHaveBeenCalledTimes(2)
+    await w.service.stop()
+  })
+
   it('builds the gateway only when a core says start, with what the core holds, and again on each start', async () => {
     const w = wire()
     w.link.port.holdRequests()
     w.link.port.connect()
     w.link.port.localClients({ desktop: 1, tui: 2 })
     w.link.ops.reachable(['m2'])
-    w.link.ops.wifiService(true)
     expect(w.gateways).toHaveLength(0)
     w.connect()
     expect(w.gateways).toHaveLength(1)
@@ -146,7 +162,6 @@ describe('the gateway\'s process, spoken to by the core', () => {
     expect(gateway.port.holdRequests).toHaveBeenCalled()
     expect(gateway.port.localClients).toHaveBeenCalledWith({ desktop: 1, tui: 2 })
     expect(gateway.ops.reachable).toHaveBeenCalledWith(['m2'])
-    expect(gateway.ops.wifiService).toHaveBeenCalledWith(true)
     expect(gateway.port.connect).toHaveBeenCalled()
     w.link.port.usage?.({ kind: 'observed', payload: { measure: 'collector_days' } })
     expect(gateway.port.usage).toHaveBeenCalledWith({ kind: 'observed', payload: { measure: 'collector_days' } })
@@ -244,13 +259,8 @@ describe('the gateway\'s process, spoken to by the core', () => {
     w.link.port.observer('observer:1', 'observer_frame', { b: 2 })
     w.link.port.windowOpened('tui')
     await w.link.port.local('local:w', { type: 'e2ee_pairings_list', payload: {} })
-    w.link.port.device('phone-1', 'autonomous_device_result', { c: 3 })
-    w.link.port.deviceClient('phone-1', 'P')
-    w.link.port.deviceClient('phone-1', null)
-    w.link.ops.revokeIdentity('P')
     w.link.ops.account({ machineId: 'machine-1', signIn: { epoch: 'e', adopted: false, at: 1 } })
     w.link.ops.reachable(null)
-    w.link.ops.wifiService(false)
     await w.link.stop()
     expect(port.broadcast).toHaveBeenCalledWith({ type: 'turn_started' })
     expect(port.broadcast).toHaveBeenCalledWith({ type: 'turn_started', agentId: 'guests' }, 'kim@acme.io')
@@ -263,13 +273,9 @@ describe('the gateway\'s process, spoken to by the core', () => {
     expect(port.observer).toHaveBeenCalledWith('observer:1', 'observer_frame', { b: 2 })
     expect(port.windowOpened).toHaveBeenCalledWith('tui')
     expect(port.local).toHaveBeenCalledWith('local:w', { type: 'e2ee_pairings_list', payload: {} })
-    expect(port.device).toHaveBeenCalledWith('phone-1', 'autonomous_device_result', { c: 3 })
-    expect(port.deviceClient.mock.calls).toEqual([['phone-1', 'P'], ['phone-1', null]])
     const { ops } = w.gateways[0]
-    expect(ops.revokeIdentity).toHaveBeenCalledWith('P')
     expect(ops.account).toHaveBeenCalledWith({ machineId: 'machine-1', signIn: { epoch: 'e', adopted: false, at: 1 } })
     expect(ops.reachable).toHaveBeenCalledWith(null)
-    expect(ops.wifiService).toHaveBeenLastCalledWith(false)
     // Stopped: what the core says after is for no gateway, and is dropped.
     expect(w.gateways[0].stop).toHaveBeenCalled()
     w.link.port.broadcast({ type: 'after' })
@@ -295,8 +301,6 @@ describe('the gateway\'s process, spoken to by the core', () => {
     events.notice({ type: 'zoo_changed', revision: 4 })
     events.revoked()
     events.busy()
-    events.device('dial-1', { type: 'autonomous_device_request' }, { type: 'hello' })
-    events.deviceRevoked('P')
     events.toWindows({ type: 'device_keys_changed', payload: {} })
     events.tabFrame({ sharedTabId: 'a1b2c3d4e5f6a1b2c3d4e5f6', closed: { code: 4403, reason: 'Not in this shared tab' } })
     events.streamControl('agentBrowser', 's-1', { route: 'turn' })
@@ -317,8 +321,6 @@ describe('the gateway\'s process, spoken to by the core', () => {
     expect(heard.notice).toHaveBeenCalledWith({ type: 'zoo_changed', revision: 4 })
     expect(heard.revoked).toHaveBeenCalled()
     expect(heard.busy).toHaveBeenCalled()
-    expect(heard.device).toHaveBeenCalledWith('dial-1', { type: 'autonomous_device_request' }, { type: 'hello' })
-    expect(heard.deviceRevoked).toHaveBeenCalledWith('P')
     expect(heard.toWindows).toHaveBeenCalledWith({ type: 'device_keys_changed', payload: {} })
     expect(heard.tabFrame).toHaveBeenCalledWith({ sharedTabId: 'a1b2c3d4e5f6a1b2c3d4e5f6', closed: { code: 4403, reason: 'Not in this shared tab' } })
     expect(heard.streamControl).toHaveBeenCalledWith('agentBrowser', 's-1', { route: 'turn' })

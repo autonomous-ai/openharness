@@ -11,6 +11,9 @@ import { recapsCoreApi, runRecapsService } from './recapsProcess.js'
 
 // The real default reaches a real socket and this process's own channel: never in a test.
 vi.mock('./process.js', () => ({ runServiceProcess: vi.fn(() => ({ stop: vi.fn() })) }))
+vi.mock('../lib/autonomous-device/peerPresence.js', () => ({ devicePeerPresence: vi.fn(options => ({
+  start: vi.fn(), stop: vi.fn(async () => options.changed(false, false)),
+})) }))
 
 const dirs: string[] = []
 const temp = () => { const dir = mkdtempSync(join(tmpdir(), 'recaps-process-')); dirs.push(dir); return dir }
@@ -51,11 +54,12 @@ describe('the recaps in their own process', () => {
     return { options: options!, api: api!, service, handle }
   }
 
-  it('reaches the core as `recaps`, through the socket and token it was given, and answers the apps nothing', () => {
+  it('reaches the core as `recaps`, through the socket and token it was given, and answers the apps nothing', async () => {
     const { options, handle, service } = setup()
     expect(options).toMatchObject({ name: 'recaps', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
     expect(Object.keys(options.requests)).toEqual(['liveCards'])
-    expect(handle).toBe(service)
+    await handle.stop()
+    expect(service.stop).toHaveBeenCalledOnce()
   })
 
   it('cuts a turn\'s recap, sends its cards and recap as notices, and says what it now holds of the session', async () => {

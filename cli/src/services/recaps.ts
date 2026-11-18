@@ -22,8 +22,11 @@ import { AgentNotifications } from '../lib/agentNotifications.js'
 import { CommanderMirror, SUBAGENT_IDLE_MS } from '../lib/commander.js'
 import { deriveTurnSummary } from '../lib/deviceRecap.js'
 import { createTierDecider, type TierDecision, type TierInput } from '../lib/notifyTier.js'
+import { devicePeerPresence } from '../lib/autonomous-device/peerPresence.js'
+import { devicePeerKey } from '../lib/autonomous-device/peerEndpoint.js'
 
 export interface RecapsOptions {
+  peer?: { composition: 'inline' | 'services'; port: number; token?: string }
   /** What a session's recaps hold, or whether its card is busy, may have changed: the recaps' own process
    *  tells the core (services/recapsProcess.ts). */
   changed?: (sessionId: string) => void
@@ -39,11 +42,14 @@ export interface RecapsOptions {
 export interface Recaps {
   port: RecapsPort
   mirror: CommanderMirror
+  connected(): void
 }
 
 /** Start the recaps in the core's process: its port is the core's way in. */
 export function startRecaps(core: CoreApi, ports: CorePorts): void {
-  ports.recaps = createRecaps(core).port
+  const recaps = createRecaps(core, { peer: { composition: 'inline', port: core.daemon.port } })
+  ports.recaps = recaps.port
+  recaps.connected()
 }
 
 export function createRecaps(core: CoreApi, options: RecapsOptions = {}): Recaps {
@@ -52,6 +58,7 @@ export function createRecaps(core: CoreApi, options: RecapsOptions = {}): Recaps
   /** Whether each session's turn was verifiably working at the core's last heartbeat. */
   const working = new Map<string, boolean>()
   let watchers: RecapWatchers = { device: false, active: false }
+  let wifiWatching = false
   // Shared by the turns' ends and the questions put to the person: a turn waiting on an answer is not
   // announced as done (lib/agentNotifications.ts). The core tells this service both.
   const notifications = new AgentNotifications()
@@ -70,7 +77,7 @@ export function createRecaps(core: CoreApi, options: RecapsOptions = {}): Recaps
     send: (frame) => core.clients.turnCard(frame),
     // turn_summary_pending / turn_summary → the web indicator.
     sendWeb: (frame) => core.clients.turnSummary(frame as Parameters<CoreApi['clients']['turnSummary']>[0]),
-    hasDevice: () => watchers.device,
+    hasDevice: () => watchers.device || wifiWatching,
     // Live cards stream to whatever is actually rendering. The dial has one screen and it is always the
     // one in front of the user, so the core counts a cable session as active by construction.
     active: () => watchers.active,
@@ -103,13 +110,19 @@ export function createRecaps(core: CoreApi, options: RecapsOptions = {}): Recaps
     // Asked only while someone away from this desk can hear it — a device, or an app over the relay. The window
     // here does not read a tier, so with neither there is nothing to decide.
     decideTier: async (turn) => {
-      if (!watchers.device && !watchers.remote) return null
+      if (!watchers.device && !wifiWatching && !watchers.remote) return null
       const session = sessions.get(turn.sessionId)
       const decision = await tierOf({ engine: session?.engine ?? '', recap: turn.recap,
         durationS: turn.durationS, stats: turn.stats, subagent: false, onScreen: false, failed: false })
       return decision.tier
     },
   })
+
+  const presence = options.peer ? devicePeerPresence({ dataDir: core.dataDir, port: options.peer.port,
+    key: devicePeerKey(options.peer.composition, options.peer.token === undefined ? undefined : { HARNESSD_SERVICE_TOKEN: options.peer.token }),
+    changed: (watching, joined) => { wifiWatching = watching; if (watching && joined) mirror.replayAll() },
+    failed: code => console.warn(`[recaps] ${code}`),
+  }) : null
 
   const know = (session: RecapSession): string => {
     const subagent = session.subagent ?? sessions.get(session.sessionId)?.subagent ?? false
@@ -151,10 +164,12 @@ export function createRecaps(core: CoreApi, options: RecapsOptions = {}): Recaps
 
   return {
     port: {
+      stop: async () => { await presence?.stop() },
       lifecycle,
       recaps: (sessionId) => mirror.snapshot(sessionId),
       liveCards: async () => mirror.liveCards() as TurnCardFrame[],
     },
     mirror,
+    connected: () => presence?.start(),
   }
 }

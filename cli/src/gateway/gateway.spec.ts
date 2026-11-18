@@ -84,6 +84,11 @@ async function pairedClient(socket: BackendSocket, connId: string, opts: { role?
   let sentBinary = 0
   return {
     pub,
+    reopen: async () => {
+      const next = C.newEphemeral()
+      await dispatchDown(socket, { type: 'e2e_hello', payload: { identityPub: pub, ephPub: C.b64e(next.pub),
+        sig: C.b64e(C.helloSig(identity.priv, MACHINE, next.pub)) } }, connId)
+    },
     seal: (type: string, payload: Record<string, unknown>): Frame => ({ type, payload: C.wrapPayload(keys.c2s, 'p', sent++, type, undefined, payload) }),
     /** Terminal bytes, sealed as the app seals a keystroke. */
     sealBinary: (frame: TerminalBinaryClear): Uint8Array => sealTerminalBinary(deriveTerminalBinaryKey(keys.c2s), sentBinary++, frame)!,
@@ -896,15 +901,32 @@ describe('a client\'s terminal bytes, on their way to the core', () => {
 })
 
 describe('the Wi-Fi device, over the gateway\'s sessions', () => {
+  it('refuses an old captured incarnation at final sealing after the same identity reconnects', async () => {
+    const socket = relaySocket(MACHINE)
+    try {
+      const gateway = gatewayOf(socket)
+      const dial = await pairedClient(socket, 'reused-device', { role: 'device' })
+      const original = { identity: dial.pub, incarnation: gateway.e2ee.sessionIncarnation('reused-device')! }
+      await dial.reopen()
+      expect(gateway.e2ee.sessionIncarnation('reused-device')).not.toBe(original.incarnation)
+      const before = queuedFor(socket, 'reused-device').length
+      expect(gateway.device('reused-device', 'autonomous_device_result', { requestId: 'old' }, original)).toBe(false)
+      expect(queuedFor(socket, 'reused-device')).toHaveLength(before)
+      expect(gateway.device('reused-device', 'autonomous_device_result', { requestId: 'new' }, {
+        identity: dial.pub, incarnation: gateway.e2ee.sessionIncarnation('reused-device')!,
+      })).toBe(true)
+    } finally { await socket.stop() }
+  })
+
   it('an unpaired device is told so, sealed, while its session still stands, and the service forgets it after', async () => {
     // The device clears its own pin on this frame; told after its session is gone, it could not open it
     // and would show "paired, disconnected" for ever (lib/autonomous-device/relay.ts `revoke`).
     const socket = relaySocket(MACHINE)
     const gateway = gatewayOf(socket)
     const revoked = vi.fn()
-    socket.fromGateway.deviceRevoked = revoked
+    gateway.devicePeer = { session: vi.fn(), dropped: vi.fn(), request: vi.fn(), revoked }
     const dial = await pairedClient(socket, 'dial-1', { role: 'device', label: 'Desk dial' })
-    gateway.deviceClient('dial-1', dial.pub)
+    gateway.deviceClient('dial-1', { identity: dial.pub, incarnation: gateway.e2ee.sessionIncarnation('dial-1')! }, true)
     gateway.revoke(C.fingerprint(C.b64d(dial.pub)))
     const told = queuedFor(socket, 'dial-1').map((frame) => frame.type)
     expect(told.indexOf('autonomous_device_event')).toBeGreaterThanOrEqual(0)
@@ -924,39 +946,51 @@ describe('the Wi-Fi device, over the gateway\'s sessions', () => {
     const gateway = gatewayOf(socket)
     const dial = await pairedClient(socket, 'dial-1', { role: 'device', label: 'Desk dial' })
     const phone = await pairedClient(socket, 'phone-1')
-    gateway.deviceClient('dial-1', dial.pub)
+    const proof = { identity: dial.pub, incarnation: gateway.e2ee.sessionIncarnation('dial-1')! }
+    gateway.deviceClient('dial-1', proof, true)
     // Over the relay, not a direct link.
     expect(gateway.directDeviceSessions()).toBe(0)
     gateway.attachDirectDevice('dial-1', () => {})
     expect(gateway.directDeviceSessions()).toBe(1)
     // A hello said as another identity, or a phone's session, is not that device's.
-    gateway.deviceClient('dial-1', phone.pub)
+    expect(gateway.deviceClient('dial-1', { ...proof, identity: phone.pub }, true)).toBe(false)
     gateway.attachDirectDevice('phone-1', () => {})
-    gateway.deviceClient('phone-1', phone.pub)
+    expect(gateway.deviceClient('phone-1', { identity: phone.pub, incarnation: gateway.e2ee.sessionIncarnation('phone-1')! }, true)).toBe(false)
+    expect(gateway.directDeviceSessions()).toBe(1)
+    gateway.deviceClient('dial-1', proof, false)
     expect(gateway.directDeviceSessions()).toBe(0)
-    gateway.deviceClient('dial-1', null)
+    gateway.deviceClient('dial-1', proof, true)
+    await dial.reopen()
     expect(gateway.directDeviceSessions()).toBe(0)
+    expect(gateway.deviceClient('dial-1', proof, true)).toBe(false)
     await socket.stop()
   })
 
-  it('opens a device\'s request only when the relay would, and hands it on with the frame as it came', async () => {
+  it('opens each valid device request once and forwards only its body and captured proof', async () => {
     const socket = relaySocket(MACHINE)
     const heard = vi.fn()
-    socket.fromGateway.device = heard
+    const gateway = gatewayOf(socket)
+    gateway.devicePeer = { session: vi.fn(), dropped: vi.fn(), request: heard, revoked: vi.fn() }
     const dial = await pairedClient(socket, 'dial-1', { role: 'device', label: 'Desk dial' })
     const phone = await pairedClient(socket, 'phone-1')
     const sealed = dial.seal('autonomous_device_request', { type: 'hello', proto: 1, requestId: 'h' })
     await dispatchDown(socket, sealed, 'dial-1')
-    expect(heard).toHaveBeenLastCalledWith('dial-1', sealed, { type: 'autonomous_device_request', payload: { type: 'hello', proto: 1, requestId: 'h' } })
+    expect(heard).toHaveBeenLastCalledWith('dial-1', { identity: dial.pub, incarnation: gateway.e2ee.sessionIncarnation('dial-1') },
+      { payload: { type: 'hello', proto: 1, requestId: 'h' } })
+    await dispatchDown(socket, sealed, 'dial-1')
+    expect(heard).toHaveBeenCalledOnce()
     // A web session's, an unsealed one, or one beside a session id: never opened, as the relay never did.
     const fromPhone = phone.seal('autonomous_device_request', { type: 'hello' })
     await dispatchDown(socket, fromPhone, 'phone-1')
-    expect(heard).toHaveBeenLastCalledWith('phone-1', fromPhone, null)
+    expect(heard).toHaveBeenCalledOnce()
     await dispatchDown(socket, { type: 'autonomous_device_request', payload: { type: 'hello' } }, 'dial-1')
-    expect(heard.mock.lastCall?.[2]).toBeNull()
+    expect(heard).toHaveBeenCalledOnce()
     const withSession = { ...dial.seal('autonomous_device_request', { type: 'hello' }), dbSessionId: 's1' }
     await dispatchDown(socket, withSession, 'dial-1')
-    expect(heard.mock.lastCall?.[2]).toBeNull()
+    expect(heard).toHaveBeenCalledOnce()
+    // An unrelated frame type cannot smuggle an opened application request to the device component.
+    await dispatchDown(socket, dial.seal('autonomous_device_event', { type: 'hello' }), 'dial-1')
+    expect(heard).toHaveBeenCalledOnce()
     await socket.stop()
   })
 })

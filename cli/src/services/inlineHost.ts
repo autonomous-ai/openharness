@@ -56,7 +56,7 @@ export function createServiceHost(ports: CorePorts, options: ServiceHostOptions 
   /** The service that answers each request type, and its handler once it has started. */
   const owners = new Map<string, { service: string; answer: ServiceRequest | null }>()
   /** The requests still being answered, each with the connection that asked: what its closing aborts. */
-  const answering = new Map<AbortController, string | undefined>()
+  const answering = new Map<AbortController, { connection: string | undefined; type: string; expired: boolean }>()
 
   const inject = (target: string): void => {
     if (faults.has(target)) throw new Error(`injected fault: ${target}`)
@@ -139,6 +139,56 @@ export function createServiceHost(ports: CorePorts, options: ServiceHostOptions 
     log(`[services] ${name} did not start · ${describe(error)} · the core runs without it`)
   }
 
+  /** One execution owner for routed requests and bounded composition-root calls. */
+  const route = (type: string, payload: Record<string, unknown>, asker: Asker,
+    reply: (result: Record<string, unknown>) => void, waitMs?: number): boolean => {
+    const owner = owners.get(type)
+    if (!owner) return false
+    const { service, answer } = owner
+    if (off.has(service) || !answer) {
+      reply({ error: 'SERVICE_UNAVAILABLE', service, retryable: false })
+      return true
+    }
+    let replied = false, deadline: ReturnType<typeof setTimeout> | undefined
+    const replyOnce = (value: Record<string, unknown>): void => {
+      if (replied) return
+      replied = true
+      if (deadline) clearTimeout(deadline)
+      reply(value)
+    }
+    const failedWith = (error: unknown): void => {
+      if (replied) return
+      failed(service, type, error)
+      replyOnce({ error: 'SERVICE_FAILED', service })
+    }
+    // Aborted when its connection closes (`closeConnection`); a request with none is its own, never closed.
+    const closed = new AbortController()
+    const entry = { connection: asker.connection, type, expired: false }
+    answering.set(closed, entry)
+    const settled = (): void => { answering.delete(closed) }
+    if (waitMs !== undefined) deadline = setTimeout(() => {
+      entry.expired = true
+      log(`[services] ${service}.${type} timed out · SERVICE_DEADLINE`)
+      // Revoke reply authority before abort listeners can synchronously re-enter the host.
+      replyOnce({ error: 'SERVICE_UNAVAILABLE', service, retryable: true })
+      closed.abort()
+    }, waitMs).unref()
+    let result: ReturnType<ServiceRequest>
+    try {
+      inject(`${service}.${type}`)
+      result = answer(payload, asker, closed.signal)
+    } catch (error) {
+      settled()
+      failedWith(error)
+      return true
+    }
+    void Promise.resolve(result).then((value) => {
+      if (typeof value === 'object' && value !== null) replyOnce(value)
+      else failedWith(new Error(`${type} was answered with no reply`))
+    }, failedWith).finally(settled)
+    return true
+  }
+
   return {
     /** Guard a service-owned boundary without adding a component port to core. */
     guard,
@@ -195,44 +245,19 @@ export function createServiceHost(ports: CorePorts, options: ServiceHostOptions 
         didNotStart(name, error)
       }
     },
-    /**
-     * Answer a request a service in this process declared: false when none did, and the socket answers
-     * it. Never waits in line: the reply goes when the handler's promise settles.
-     */
-    route(type: string, payload: Record<string, unknown>, asker: Asker, reply: (result: Record<string, unknown>) => void): boolean {
-      const owner = owners.get(type)
-      if (!owner) return false
-      const { service, answer } = owner
-      if (off.has(service) || !answer) {
-        reply({ error: 'SERVICE_UNAVAILABLE', service, retryable: false })
-        return true
+    route,
+    /** A deadline ends the caller's wait, never the actual handler's admission charge. */
+    call(type: string, payload: Record<string, unknown>, asker: Asker, waitMs: number): Promise<Record<string, unknown>> {
+      for (const entry of answering.values()) if (entry.type === type && entry.expired) {
+        return Promise.resolve({ error: 'SERVICE_UNAVAILABLE', retryable: true })
       }
-      const failedWith = (error: unknown): void => {
-        failed(service, type, error)
-        reply({ error: 'SERVICE_FAILED', service })
-      }
-      // Aborted when its connection closes (`closeConnection`); a request with none is its own, never closed.
-      const closed = new AbortController()
-      answering.set(closed, asker.connection)
-      const settled = (): void => { answering.delete(closed) }
-      let result: ReturnType<ServiceRequest>
-      try {
-        inject(`${service}.${type}`)
-        result = answer(payload, asker, closed.signal)
-      } catch (error) {
-        settled()
-        failedWith(error)
-        return true
-      }
-      void Promise.resolve(result).then((value) => {
-        if (typeof value === 'object' && value !== null) reply(value)
-        else failedWith(new Error(`${type} was answered with no reply`))
-      }, failedWith).finally(settled)
-      return true
+      return new Promise(resolve => {
+        if (!route(type, payload, asker, resolve, waitMs)) resolve({ error: 'SERVICE_UNAVAILABLE', retryable: true })
+      })
     },
     /** A connection closed: abort what it asked that is still being answered. Its answers go nowhere. */
     closeConnection(connection: string): void {
-      for (const [closed, asked] of answering) if (asked === connection) closed.abort()
+      for (const [closed, entry] of answering) if (entry.connection === connection) closed.abort()
     },
     /** Run `handler` once, when `name` is switched off. */
     onOff(name: string, handler: () => void): void {

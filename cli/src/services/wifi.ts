@@ -7,18 +7,19 @@
  * What the service reads in line while it answers (the agents, the Store's evidence on them, whether a
  * window is there) is the core's answer to `view`, asked again before each request and each move of the
  * window's focus, so what it answers is as fresh as when it ran in the core. What the core reads in line
- * of it (which devices said hello, which transcripts and streams it follows, the focus revision) it is
- * told before anything that depends on it leaves here (core/wifi.ts).
+ * of it (transcript/stream interests and the focus revision) is acknowledged by the following ordered
+ * view query before a dependent direct reply leaves here. Relay sessions come from the gateway peer.
  *
  * What a person asks of it on this computer (`harness device receipt`, `harness autonomous-device addon`) comes as its
  * routes of the door, handed on by the core as they came (core/serviceRoutes.ts) and checked here
  * (lib/autonomous-device/localHttp.ts).
  */
 import { join } from 'node:path'
-import type { AgentView, CoreApi, CorePorts, RemoteClient, ServiceRequests, WifiPort, WifiView } from '../core/api.js'
+import type { AgentView, CoreApi, CorePorts, ServiceRequests, WifiPort, WifiView } from '../core/api.js'
 import { submissionPolicy } from '../engines/submissionPolicies.js'
 import { startDevicePart } from '../lib/autonomous-device/parts.js'
 import { deviceRelayOverGateway } from '../lib/autonomous-device/overGateway.js'
+import { devicePeerKey } from '../lib/autonomous-device/peerEndpoint.js'
 import { DeviceResultJournal } from '../lib/autonomous-device/resultJournal.js'
 import { AutonomousDeviceService, type AutonomousDeviceFrame } from '../lib/autonomous-device/service.js'
 import { deviceRefusal, deviceRoutes } from '../lib/autonomous-device/localHttp.js'
@@ -28,6 +29,8 @@ import { observeQuestions, type QuestionListener, type QuestionObservation } fro
 export { WIFI_FALLBACKS, WIFI_REQUESTS } from '../core/api.js'
 
 export interface WifiDeps {
+  /** Explicit composition: an absent service token never silently creates an unrelated peer authority. */
+  peer?: { composition: 'inline' | 'services'; port: number; token?: string }
   /** Swapped in tests, to reach what the service and the Store are given. */
   service?: (options: ConstructorParameters<typeof AutonomousDeviceService>[0]) => AutonomousDeviceService
   store?: typeof createDeviceStore
@@ -43,18 +46,36 @@ const same = (a: readonly string[], b: readonly string[]): boolean => a.length =
 export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}): ServiceRequests {
   const machineId = core.machine.id()
   let view: WifiView = { agents: [], store: [], hasWindow: false }
+  let stopped = false, coreConnected = true, coreEpoch = 0, notices = 0, applied = 0
   /** One ask of the core at a time: requests arriving together share it, and are answered in order. */
-  let viewing: Promise<void> | null = null
-  const refresh = (): Promise<void> => {
-    viewing ??= core.wifi.view()
-      .then((next) => { view = next })
-      .catch(() => { /* the core went away: the next ask is answered by its next connection */ })
-      .finally(() => { viewing = null })
-    return viewing
+  let viewing: { epoch: number; promise: Promise<void> } | null = null
+  const refresh = async (): Promise<void> => {
+    if (stopped || !coreConnected) throw new Error('CORE_VIEW_UNAVAILABLE')
+    if (viewing) {
+      const pending = viewing
+      try { await pending.promise } catch (error) { if (pending.epoch === coreEpoch) throw error }
+      if (pending.epoch !== coreEpoch || applied < notices) return refresh()
+      return
+    }
+    const epoch = coreEpoch, revision = notices
+    const pending = { epoch, promise: Promise.resolve() }
+    pending.promise = core.wifi.view().then(next => {
+      if (stopped || !coreConnected || coreEpoch !== epoch) throw new Error('CORE_VIEW_UNAVAILABLE')
+      view = next; applied = revision
+    }).catch(error => {
+      // Preserve the existing last-view read fallback only when no unapplied notice needs a barrier.
+      if (!stopped && coreConnected && coreEpoch === epoch && applied === notices) return
+      throw error
+    }).finally(() => { viewing = null })
+    viewing = pending
+    await pending.promise
+    if (applied < notices) return refresh()
+    relay.drain()
   }
-
-  /** The device sessions the gateway holds, as the core said. */
-  const sessions = new Map<string, RemoteClient>()
+  const changed = (): void => {
+    notices++
+    if (!viewing) void refresh().catch(() => { console.warn('[wifi] CORE_VIEW_UNAVAILABLE') })
+  }
   /** A summary card's whole answer, while the service reads it. */
   let fullText: string | undefined
   /** How many of an agent's prompts the core told of: the core stops sending its lines as of the count. */
@@ -105,7 +126,7 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
     emit: (frame, deviceId) => emit(frame, deviceId),
   }))
   if (!service) throw new Error('the Wi-Fi device service could not be started')
-  let stopped = false, coreConnected = true, questionEpoch = 0, retries = 0
+  let questionEpoch = 0, retries = 0
   let observation: QuestionObservation | null = null
   let reconnect: ReturnType<typeof setTimeout> | undefined
   const stopQuestions = (): void => {
@@ -134,7 +155,6 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
     }
   }
   const ensureQuestions = (): Promise<void> => {
-    if (stopped || !coreConnected) return Promise.reject(new Error('Question observation is unavailable'))
     if (observation) return observation.ready
     if (reconnect) clearTimeout(reconnect)
     reconnect = undefined
@@ -169,33 +189,28 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
     if (same(now, streamed)) return
     streamed = now
     core.wifi.streams(now)
+    changed()
   }
   const reportTranscript = (agentId: string): void => {
     if (!service.watchesTranscript(agentId)) core.wifi.transcripts(agentId, seen.get(agentId) ?? 0)
   }
 
   const relay = deviceRelayOverGateway({
-    client: (connId) => sessions.get(connId),
-    // Only to a session it found here (`client` above): the core checks it is still that identity's.
-    send: (connId, type, payload) => {
-      // A subscription's answer leaves after the core knows to send its agent's tool events.
-      reportStreams()
-      core.wifi.send(connId, sessions.get(connId)!.identity, type, payload)
-    },
+    dataDir: core.dataDir, port: deps.peer?.port ?? core.daemon.port,
+    key: devicePeerKey(deps.peer?.composition ?? 'services', deps.peer?.token === undefined ? undefined : { HARNESSD_SERVICE_TOKEN: deps.peer.token }),
     service, machineId,
-    onReady: () => core.wifi.joined(),
-    onRemoteRevoke: (identity) => core.wifi.unpaired(identity),
-    onClient: (connId, identity) => {
-      core.wifi.hello(connId, identity)
-      if (identity === null && !relay.connected()) stopQuestions()
-    },
+    beforeSend: reportStreams,
+    maySend: () => coreConnected && !stopped && applied === notices,
+    clientChanged: () => { if (!relay.connected()) stopQuestions() },
+    failed: code => console.warn(`[wifi] ${code}`),
     beforeReady: ensureQuestions,
+    beforeRequest: refresh,
   })
   function emit(frame: AutonomousDeviceFrame, deviceId?: string): void {
     // The revision a window's delayed selection is checked against, before anything that carries it.
     if (frame.kind === 'focus.changed') {
       const revision = (frame.payload as { focusRevision?: unknown } | undefined)?.focusRevision
-      if (typeof revision === 'string') core.wifi.focus(revision)
+      if (typeof revision === 'string') { core.wifi.focus(revision); changed() }
     }
     relay.emit(frame, deviceId)
   }
@@ -204,41 +219,19 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
   let focusing: Promise<void> = Promise.resolve()
 
   const port: WifiPort = {
-    session: (connId, client) => {
-      if (client) sessions.set(connId, client)
-      else { sessions.delete(connId); relay.drop(connId) }
-    },
-    // Answered against the agents as they are now; taken (the relay opens it before its first wait) before
-    // anything the core says after it, as it was in the core's process.
-    request: async (connId, frame, opened) => {
-      await refresh()
-      // Answered on its own time; one that fails is that request's, said, and the next is answered.
-      relay.handle(connId, frame, opened).catch((error: unknown) => {
-        console.warn(`[wifi] a device's request failed · ${error instanceof Error ? error.message : String(error)}`)
-      })
-    },
-    dropped: (connId) => relay.drop(connId),
-    revoked: (identity) => relay.revoke(identity),
-    resume: async ({ sessions: held, helloed, focus }) => {
+    resume: async ({ focus }) => {
       coreConnected = true
-      sessions.clear()
-      for (const { connId, client } of held) sessions.set(connId, client)
-      // A session this run served that the core no longer holds (the core restarted, and the relay with it).
-      const kept = new Set(helloed.map(({ connId }) => connId))
-      for (const connId of relay.helloed()) if (!kept.has(connId)) relay.drop(connId)
+      const epoch = ++coreEpoch
       // The core starts over from what this run follows (it has forgotten, or never knew).
       seen.clear()
       core.wifi.watching(service.transcriptWatches())
       streamed = service.streamedAgents().sort()
       core.wifi.streams(streamed)
       core.wifi.focus(service.focusSnapshot().focusRevision)
+      notices++
       if (focus) port.appFocus(focus.machineId, focus.agentId, focus.connId).catch(() => { /* said by the move itself */ })
       await refresh()
-      const returning = helloed.filter(({ connId, identity }) => sessions.get(connId)?.identity === identity && sessions.get(connId)?.role === 'device')
-      if (returning.length) await ensureQuestions()
-      for (const { connId, identity } of helloed) relay.restore(connId, identity)
-      if (helloed.length) core.wifi.joined()
-      core.wifi.ready()
+      if (!stopped && coreConnected && coreEpoch === epoch) relay.start()
     },
     card: (frame, text) => {
       if (frame.type === 'commander_question' || frame.type === 'commander_question_close') return
@@ -262,7 +255,7 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
       if (!deps.submit && !watching && service.watchesTranscript(event.agentId)) core.wifi.watching(service.transcriptWatches())
       reportTranscript(event.agentId)
     },
-    disconnected: () => { coreConnected = false; stopQuestions(); service.coreDisconnected() },
+    disconnected: () => { coreConnected = false; coreEpoch++; stopQuestions(); void relay.stop(); service.coreDisconnected() },
     stream: (agentId, events) => service.stream(agentId, events),
     transcript: (agentId, sessionId, engine, line) => {
       service.observeTranscript(agentId, sessionId, engine, line)
@@ -280,13 +273,14 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
       return moved
     },
     revealed: (operationId, agentId) => store.acknowledgeReveal(operationId, agentId),
-    stop: async () => { stopped = true; stopQuestions(); stopInput?.(); stopDelivery?.(); stopAgents?.(); store.stopUiDelivery() },
+    stop: async () => { stopped = true; coreEpoch++; stopQuestions(); stopInput?.(); stopDelivery?.(); stopAgents?.(); store.stopUiDelivery(); await relay.stop() },
   }
   store.startUiDelivery()
   ports.wifi = port
   // A refusal of the add-on layer is said under its own code (`DeviceAddonError`); any other failure fails the
   // request, which its route answers as for a service that is down, since what failed may have been done.
   return {
+    wifi_serving: () => ({ serving: !stopped && coreConnected }),
     wifi_http: deviceRoutes({
       receipt: ({ deviceId, idempotencyKey }) => ({ receipt: service.receipt(deviceId, idempotencyKey) }),
       addonState: ({ deviceId }) => ({ devices: service.addons.state(deviceId) }),

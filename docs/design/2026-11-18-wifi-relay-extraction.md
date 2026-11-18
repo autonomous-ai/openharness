@@ -2,7 +2,8 @@
 
 Status: coordinator approved the direct relay and following presence/replay slices on November 18,
 including the new explicit overload limit below. Feed, normalized streams and focus remain design-only.
-No runtime changes or workloads yet. Source is
+The transport/presence implementation and focused validation are now complete in the isolated worktree;
+combined integration, native acceptance and cost validation remain pending. Base source is
 `d7f502bf799e1b5734c55083fbcfe0beb100fd4e`. This updates the private November 17 proposal after
 shared question observation, Windows service transport and immutable worker admission joined the
 integration. It does not describe package 12 as complete.
@@ -53,8 +54,9 @@ follow-up contracts below before their runtime changes; deleting their old check
 ### Session identity and ordering
 
 An E2EE `Session` gets one nonsecret random incarnation at authenticated creation. It is stored on the
-existing session object, not in another authoritative session map. A new hello creates a new incarnation
-even when connId and paired identity are reused. The gateway's existing `deviceClients` hello index
+existing session object, not in another authoritative session map. A new authenticated E2EE handshake
+creates a new incarnation even when connId and paired identity are reused. An application `hello` on
+the same E2EE session does not. The gateway's existing `deviceClients` hello index
 records that incarnation alongside identity; drop/replacement invalidates hello immediately.
 
 `AutonomousDeviceRelay` currently captures identity only. Merely adding a gateway check against a
@@ -105,7 +107,9 @@ isolation against another compromised service. Role labels limit normal handlers
 No fallback to TCP, unauthenticated local sockets or a legacy core relay.
 
 One active devices peer and one active recap peer are allowed. Replacing one invalidates the old epoch
-before accepting new state. Handshake: 10 s; coalesced on-demand readiness: 15 s; physical write drain:
+before accepting new state. The record's boot epoch binds endpoint ownership; each accepted role gets
+a separate fresh peer epoch in its first snapshot/presence, echoed by replies. Both the originating
+channel object and this epoch must still be current. Handshake: 10 s; coalesced on-demand readiness: 15 s; physical write drain:
 2 s. Reconnection is bounded backoff, reset by a new service/core connection or endpoint-file change;
 no timer or listener remains when the component is stopped. Stop closes upgraded sockets explicitly,
 waits for actual close within a deadline, then removes only its own matching endpoint record/socket.
@@ -114,6 +118,9 @@ The listener's generic HTTP close alone does not close upgraded WebSockets.
 Gateway keeps its existing dependence on core connection lifetime: core loss stops that gateway
 instance, destroys E2EE sessions, closes peers and invalidates all device views. Devices loss keeps live
 gateway E2EE/hello state for bounded recovery; readiness and recap presence become false immediately.
+Established direct sockets also survive this transient loss, matching the previous crash behavior.
+Readiness gates accepting/forwarding work; it does not destroy encrypted sessions. First readiness
+starts direct networking; an explicit unavailable/disabled wake result or gateway/core stop closes it.
 Service disable prevents new wake requests and clears its moved transient queue. Ordinary core sessions
 continue when any optional process is absent, stalled or killed.
 
@@ -180,6 +187,67 @@ replacement/close. This is in-flight admission, not another retry queue. Busines
 active requests per session,64 pending hellos) precedes the shared view-refresh await; otherwise a hung
 refresh hides an unbounded Promise list before the rate limiter. Saturated admission refuses new work.
 
+Peer JSON traversal is iterative with at most 4,096 simultaneously nested containers. This is a private
+overload policy separate from question observation's depth eight: valid add-on values may contain
+about 2,045 nested arrays within their existing 4,096-byte value limit. Current Store responses are
+fixed-shape arrays/records of scalars; answers are string maps and observed questions already have the
+shared shallow contract. Arrays and plain records are accepted; cycles, proxies, accessors, callable
+`toJSON`, unsupported scalars and nonfinite numbers are refused before full serialization. Every examined
+entry also consumes a visit budget equal to the byte budget, including omitted `undefined` fields, so
+a formerly huge local undefined-only object can now be refused despite serializing to a tiny object.
+This does not tighten JSON-transport breadth: JSON cannot contain undefined and its entries consume bytes.
+Only the exact string-byte primitive is shared with questions; neither tree policy imports the other.
+
+#### Applied-state barrier and replay drainage
+
+The current `reportStreams`/focus revision notice and following device answer share one ordered core
+IPC lane. Direct replies cannot outrun those notices while feed/focus still live in core. After a
+changed notice, issue a fresh existing `core.wifi.view` query on that original connection and gate
+the component writer until it answers. This adds one existing-API round trip for a changed interest
+or revision, with per-peer/current fencing; it adds no core API, waiter set or device record. One
+unsettled query is coalesced, with a dirty marker for notices arriving after its request. It is deleted
+with the separately approved feed/focus extraction. The core's final window-revision check remains.
+
+`AutonomousDeviceService.replay` (`service.ts`) currently emits synchronously: either at most 500
+retained events, or a resync followed by at most 512 retained results with fresh global event IDs.
+The former "500 events plus 512 results" census conflated these branches. A 256-frame physical budget
+cannot accept that whole synchronous producer. Increasing the frame cap is not the solution.
+
+Use one component-owned outbound FIFO for ordinary frame jobs and lazy replay jobs. A replay source
+leases the exact immutable retained frames/payloads by reference; it does not make a full payload
+copy. Admission is synchronous and atomic before hello success or any fresh resync-ID/event-ring
+mutation. A refusal leaves no partial replay or allocated IDs. Every reference, including the same
+object referenced by multiple jobs, is counted and charged. Bounds: 64 active replay jobs; at most
+500 event references or 513 resync/result references per job; 32,832 references globally; the same
+16 MiB + 4 KiB outbound byte budget used by ordinary queued frames and physical writes. The physical
+frame cap remains 256. The FIFO separately bounds unsent ordinary jobs at 256; they reserve bytes,
+not physical slots, so frames behind a replay cannot occupy the slots its head needs. Together there
+are at most 320 unsent jobs, plus at most 256 physical writes. Each replay also owns at most three
+small greeting/join envelopes (192 across 64 jobs), charged to the same byte cap. At admission one
+candidate array holds at most 513 references before reservation; no payload is cloned into it.
+A result payload's existing bound is
+32 KiB; no large source clone precedes admission. The sole internal replay consumer borrows a readonly
+view of the private retained frames; it only counts and encodes them. Public event callbacks still
+receive clones. No new freeze or tree walk is added to every live event for a type guarantee.
+
+The writer takes replay frames lazily from its admitted lease. A frame's byte credit transfers from
+that lease to the physical write without a release/re-reserve gap; only its callback or physical close
+returns physical credit. Live and nonretained frames queue behind the replay job using that same FIFO
+and byte/frame admission, so they neither overtake the replay nor create a hidden queue. Original peer
+and E2EE proofs are rechecked at every physical send. Actual discard returns unsent credit; logical
+peer replacement never returns physical credit. Socket callbacks drive drainage. One fixed two-second
+deadline bounds the FIFO's unsent period (including waiting on an older socket's physical credit),
+and each physical channel retains its existing write deadline. There is no Promise chain or timer per
+frame. Expiry discards only the expired epoch before reporting failure, and closes only its captured
+channel; a reentrant replacement callback cannot lose new work. A peer that never drains fails visibly.
+
+A tempting cursor-only source with a 12-frame prefix is insufficient: a second client's ordinary
+512-result resync can evict the first job's unsent range before that client is slow. Deferring fresh
+ID assignment until drainage also puts later replay IDs before already queued lower-ID live frames.
+The atomically admitted immutable reference lease preserves both overlapping resyncs and public order.
+Regressions cover two overlapping 512-result resyncs with a concurrent nonretained event, admission
+failure without partial replay, blocked revoke/replacement, and callback/close settlement exactly once.
+
 No source-only number here is a heap/RSS claim. Fixed native/quiet measurements must report transient
 serialization copies, peak queues and whole-process memory, including devices and gateway.
 
@@ -198,6 +266,11 @@ invalidates any unsent joined transition. Recaps replays
 from its own existing `working`/mirror state on join; no all-agent snapshot is requested from core.
 Joining while recaps is down is covered by its next initial-present snapshot. Questions already have
 their bounded shared snapshot and no longer need the old global `questionWatcher.reset()` call.
+
+Unsent joins are markers on the existing bounded `deviceClients` hello entries, each fenced by the
+devices peer epoch and that entry's identity/incarnation. There is no second map or transition queue.
+If A joins, then B joins and leaves before a write, A's live marker still requests one coalesced replay.
+Marks clear on successful handoff, drop/revoke or peer loss; a last-audience removal leaves none.
 
 Cards still cross the pre-existing recap→core→device publication path until the follow-up shared event
 contract is approved. This slice removes core relay/presence state but does not claim all device feed
@@ -251,9 +324,12 @@ Worker rollback selects and reaps one matching historical immutable cohort. No n
 relay fallback exists. Public device v1 and representative journal readers must still work, including
 unresolved receipts staying unknown after process restart. No elapsed date alone retires a public
 compatibility contract. macOS/Linux use private sockets; Windows uses the existing authenticated named
-pipe semantics. Explicit inline/no-master composition uses the same component peer logic with an
-in-process adapter through the existing lazy inline door; it recreates no core session map and remains
-an explicitly nonisolated exception.
+pipe semantics. Explicit inline/no-master composition uses the same authenticated local socket
+transport through the existing lazy inline doors; it recreates no core session map and remains an
+explicitly nonisolated exception. Both inline component constructions share one lazy module-local
+random authority only when no master or external-service declaration exists. Supervised/mixed
+compositions require the inherited service token, including when one endpoint is inline: a missing
+token fails unavailable and never generates a substitute. The key is never written to discovery or logs.
 
 Named failures include peer-auth/version refusal, readiness deadline, snapshot invalidation, held queue
 capacity/expiry and write-drain deadline. Logs/metrics carry only fixed codes and numeric counters,
@@ -264,7 +340,8 @@ after uncertain handoff it never resends. Supervisor retains restart/backoff own
 
 First slice production files: `lib/e2ee/manager.ts` (incarnation only), `gateway/gateway.ts`,
 `gateway/start.ts`, `gateway/gatewayProcess.ts`; fixed-purpose `lib/autonomous-device/peerProtocol.ts`,
-`peerEndpoint.ts`, `gateway/devicePeer.ts`, `services/wifiPeer.ts`; `lib/autonomous-device/relay.ts`,
+`peerEndpoint.ts`, `peerConnection.ts`, `peerChannel.ts`, `peerWriter.ts`, `peerJson.ts`,
+`peerPresence.ts`, `gateway/devicePeer.ts`; `lib/autonomous-device/relay.ts`,
 `overGateway.ts`, `services/wifi.ts`, `wifiProcess.ts`; deletions from `core/wifi.ts`, `wifiLink.ts`,
 `gatewayLink.ts`, `backendSocket.ts`, `core/api.ts`, and wiring in `core/main.ts`/`services/inline.ts`.
 No new dependency, master feature or general service bus. Names may shrink when reuse makes a new
@@ -285,5 +362,65 @@ fixed request/payload/replay counts, same source-equivalent toolchain. Report co
 idle CPU/RSS, event-loop delay, input/request p50/p95, core vs peer IPC frames/bytes, queue peak and
 retained state after teardown. Record actual PID reaping, physical socket closure and artifact hashes.
 Linux and Windows runtime evidence, inline behavior, immutable-cohort upgrade/rollback admission and
-final combined gates remain publication requirements. No test/build/performance result is claimed by
-this source-only design.
+final combined gates remain publication requirements. The focused evidence below does not substitute for these combined publication checks.
+
+
+### Inline wake deadline and actual settlement
+
+The inline host's existing `answering` map remains the sole owner of executing handlers.
+A shared `call(type, payload, asker, waitMs)` uses that owner and replaces both composition-root
+route-to-Promise adapters (Wi-Fi wake and Agent Messages' sharing request). It adds no map or queue.
+Its deadline replies `SERVICE_UNAVAILABLE`, logs `SERVICE_DEADLINE`, and aborts the existing handler
+signal. Reply authority expires at the deadline, but the map entry remains until the actual handler
+settles. While a timed-out handler of that type remains unsettled, another shared call of that type
+is refused. Ordinary concurrent calls admitted before a deadline retain their existing behavior.
+No late reply can change the already-returned unavailable answer.
+
+The gateway retains its single wake invocation after its readiness deadline expires, until that
+invocation actually settles. Concurrent or repeated serving requests share its bounded answer;
+readiness from a current peer can still succeed independently. Stop revokes the result, and a late
+wake completion cannot enable or stop a replacement peer. This is component state only: the core
+bridge remains stateless. The host deadline does not claim to cancel a hung JavaScript handler.
+
+
+During initial snapshot restore, the current snapshot's hello routes count as pending observation
+audience before business clients are restored. A concurrent session replacement, drop, or revoke
+notifies the observer owner after the route mutation even if no business client existed yet. Removing
+one of two routes preserves observation; removing the last closes it. Restoring the original snapshot
+later still checks each route's current identity/incarnation and never revives a removed audience.
+
+
+The applied-view owner has one assignment while a query runs: every other caller awaits that exact
+promise, including across a core reconnect. Its own `finally` therefore clears the owner unconditionally;
+logical reconnect never releases the actual query charge. Question observation starts only from the
+current-peer hello/snapshot admission or the single reconnect timer that stop/disconnect cancels.
+The redundant initial stopped/core-connected check inside that already-fenced callback is removed.
+Current-peer admission, captured view generation, pending observation epoch and the final resume check
+after `await refresh()` remain authoritative; the last prevents a newer same-turn resume being replaced.
+
+
+## Transport slice evidence (2026-11-18)
+
+Behavioral RED receipts remain in the coordinator's local audit packet: incarnation replacement,
+pre-refresh four-request admission, final seal, raw byte bounds, publication failure with upgraded
+peers, replay atomic admission, reentrant drain failure, pending presence handoff, bounded inline wake
+and restored question-audience teardown. The latest focused RED is
+`/tmp/core-wifi-wake-observer-red.log`; every reported behavior has a passing regression now.
+
+- The selected core/service caller suite passes 267 tests with 100% per-file coverage for `wifi`,
+  `wifiLink`, `gatewayLink`, `recapsLink`, service `wifi`, `wifiProcess`, `recaps`, `recapsProcess`,
+  and `inlineHost` (`/tmp/core-wifi-cutover-coverage-third.log`).
+- The selected peer/E2EE suite passes 341 tests in 28 files, including real private Unix socket
+  authentication/publication cleanup and host-mocked Windows transport bounds
+  (`/tmp/core-wifi-peer-suite-final.log`).
+- The real local question observation socket test passes against the new peer fixture, including
+  no-window nonfocused questions, restored pending state and last-client teardown
+  (`/tmp/core-wifi-question-transport-first.log`).
+- TypeScript passes (`/tmp/core-wifi-cutover-types-final.log`), and architecture passes in the 75-test
+  API/architecture run. API-wide coverage is 100% with its existing consumer tests: 91 passing tests
+  (`/tmp/core-wifi-api-coverage-complete.log`). No unrelated fallback behavior or tests were changed.
+
+These are macOS focused results, with Windows transport behavior mocked where stated. They do not
+claim native Windows/Linux, process-tree cost, or final combined/native Wi-Fi acceptance. Feed,
+normalized streams and focus remain pending as described above; this is a reviewable transport slice,
+not completion of the whole core extraction.

@@ -115,9 +115,9 @@ The core stays small and secure, in the code and at run time: read
   (`core.account.accessToken`): the core calls no other host. `devicesLink.ts`: the devices in their own process (the dials, the window
   bridges, the fleet): what the core tells them, what it asks with a deadline and a fallback, and what it
   answers them. `observedHook.ts`: an agent outside a pane's hook event, checked, bounded and rate limited, then
-  handed to the devices and kept nowhere in the core. `wifi.ts`: the Wi-Fi device, as the core keeps it wherever its service runs (who said
-  hello, which transcripts and streams it follows, the focus revision, and the check on every answer it
-  sends a device); `wifiAgents.ts`: its doors into the core (the agents as it lists them, a prompt, an
+  handed to the devices and kept nowhere in the core. `wifi.ts`: the remaining Wi-Fi transcript and stream
+  interest and focus revision, pending extraction; relay sessions, hello state, held requests and presence
+  live in the gateway and devices processes. `wifiAgents.ts`: its doors into the core (the agents as it lists them, a prompt, an
   agent made for a Store harness); `wifiLink.ts`: its service in the devices' process. `devicesWake.ts`: when
   that process is asked for, once there is a device (a dial's port in /dev, a paired Wi-Fi device).
   `agentLife.ts`: what happens to agents (each look at a live one, its end, a stop, a purge, a pane's new agent), for the

@@ -62,6 +62,8 @@ export function createRecapsLink(deps: RecapsLinkDeps) {
   let saidAt = -Infinity
 
   const port: RecapsPort = {
+    // The master owns this process; inline components own their local transport cleanup.
+    stop: async () => {},
     lifecycle: (event, watchers) => {
       if (event.kind === 'purged') known.delete(event.sessionId)
       const held = event.kind === 'purged' || event.kind === 'rebound'

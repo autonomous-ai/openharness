@@ -24,6 +24,7 @@ import { backendHttpBase } from '../lib/backendHttpBase.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from '../services/process.js'
 import { startGateway, type StartedGateway } from './start.js'
 import { sharedPeers } from './sharedTrust.js'
+import { env } from '../config/env.js'
 
 type Payload = Record<string, unknown>
 
@@ -69,8 +70,6 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     notice: (backendNotice) => notice('notice', { notice: backendNotice }),
     revoked: () => notice('revoked'),
     busy: () => notice('busy'),
-    device: (connId, frame, opened) => notice('device', { connId, frame, opened }),
-    deviceRevoked: (identity) => notice('deviceRevoked', { identity }),
     toWindows: (frame) => notice('toWindows', { frame }),
     tabFrame: (event) => notice('tabFrame', { event }),
     streamControl: (service, streamId, payload) => notice('clientStreamControl', { service, streamId, payload }),
@@ -94,8 +93,10 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
 
   const begin = (payload: Payload): void => {
     void stop()
+    const original = core
     const started = (options.start ?? startGateway)({
       events,
+      peer: { composition: 'services', port: env.PORT, token: options.token },
       machineId: text(payload.machineId),
       computerId: text(payload.computerId),
       autonomousEnv: text(payload.autonomousEnv) || 'prod',
@@ -105,14 +106,17 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
       machines: (state) => notice('machines', { ...state }),
       account: (payload.account as GatewayAccount | null) ?? { machineId: null, signIn: null },
       // Only the core can ask for the Wi-Fi device's process (core/gatewayLink.ts `wifi_serving`).
-      wifiServing: async () => (await core?.query('wifi_serving').catch(() => null))?.serving === true,
+      wifiServing: async () => {
+        if (!original || core !== original || running !== started) return false
+        const answer = await original.query('wifi_serving').catch(() => null)
+        return core === original && running === started && answer?.serving === true
+      },
     })
     running = started
     // Held first, so that nothing the link brings in is answered before the core is ready.
     if (payload.requestsOpen === false) started.port.holdRequests()
     started.port.localClients(localWindowsOf(payload.localClients))
     if (Array.isArray(payload.reachable)) started.ops.reachable(payload.reachable as string[])
-    if (payload.wifiService === true) started.ops.wifiService(true)
     if (payload.dial === 'connect') started.port.connect()
     else if (payload.dial === 'local') started.port.serveThisComputerOnly()
   }
@@ -195,10 +199,6 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
       case 'windowOpened': port.windowOpened(windowSurfaceOf(payload.surface)); return
       case 'localClients': port.localClients(localWindowsOf(payload.windows)); return
       case 'localFrame': void port.local(connId, record(payload.frame)); return
-      case 'device': port.device(connId, text(payload.type), record(payload.payload)); return
-      case 'deviceClient': port.deviceClient(connId, typeof payload.identity === 'string' ? payload.identity : null); return
-      case 'wifiService': ops.wifiService(payload.on === true); return
-      case 'revokeIdentity': ops.revokeIdentity(text(payload.identity)); return
       case 'account': ops.account(payload.account as GatewayAccount); return
       case 'reachable': ops.reachable(Array.isArray(payload.machineIds) ? payload.machineIds as string[] : null); return
       case 'windowSend': void windows.get(text(payload.id))?.send(record(payload.frame)); return

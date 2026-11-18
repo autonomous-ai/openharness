@@ -69,6 +69,8 @@ export interface PendingPairInfo {
 }
 
 interface Session {
+  /** Public ephemeral key identifies this handshake, including a same-identity replacement. */
+  incarnation: string
   webIdentityPub: string // base64 — the pinned pin used for this session
   role: C.PairRole
   c2s: Uint8Array        // web → adapter (down message)
@@ -129,7 +131,7 @@ export interface E2eeManagerDeps {
   onIdentityPaired?: (connId: string, identityPub: string) => void
   onIdentityRevoked?: (identityPub: string) => void
   /** Release connection-scoped resources on revoke, eviction, replacement and disconnect. */
-  onSessionDropped?: (connId: string) => void
+  onSessionDropped?: (connId: string, incarnation: string, role: C.PairRole) => void
   /** A connection proved a paired identity with its hello: its session is open, under that identity's
    *  role. The gateway registers it with the core from this (gateway/gateway.ts). */
   onSessionOpened?: (connId: string, role: C.PairRole, identityPub: string) => void
@@ -232,6 +234,15 @@ export class E2eeManager {
   }
   hasSession(connId: string): boolean { return this.sessions.has(connId) }
   sessionIdentity(connId: string): string | null { return this.sessions.get(connId)?.webIdentityPub ?? null }
+  sessionIncarnation(connId: string): string | null { return this.sessions.get(connId)?.incarnation ?? null }
+  /** Public routing facts from the existing 64-session authority; no keys or second session index. */
+  deviceSessions(): Array<{ connId: string; identity: string; incarnation: string }> {
+    const devices: Array<{ connId: string; identity: string; incarnation: string }> = []
+    for (const [connId, session] of this.sessions) if (session.role === 'device') devices.push({
+      connId, identity: session.webIdentityPub, incarnation: session.incarnation,
+    })
+    return devices
+  }
   sessionRole(connId: string): C.PairRole | null { return this.sessions.get(connId)?.role ?? null }
   /** The label this connection's identity was paired under, or null for a session with none on file. */
   sessionLabel(connId: string): string | null {
@@ -921,6 +932,7 @@ export class E2eeManager {
     this.evictIfFull()
     this.dropSession(connId)
     this.sessions.set(connId, {
+      incarnation: C.b64e(eph.pub),
       webIdentityPub: identityPub,
       role,
       c2s: keys.c2s,
@@ -958,7 +970,8 @@ export class E2eeManager {
    *  a hello waiting on the device key log there, which would open a session for a connection gone. */
   dropSession(connId: string): void {
     this.helloWaits.delete(connId)
-    if (this.sessions.delete(connId)) this.deps.onSessionDropped?.(connId)
+    const previous = this.sessions.get(connId)
+    if (this.sessions.delete(connId)) this.deps.onSessionDropped?.(connId, previous!.incarnation, previous!.role)
     this.clearPwSlot(connId)
   }
 

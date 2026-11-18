@@ -85,7 +85,7 @@ export function fakeCore(over: Overrides = {}): CoreApi {
       stop: vi.fn(async () => true), answer: vi.fn(async () => true),
       create: vi.fn(async () => ({ ok: false as const, error: 'UNSUPPORTED' })),
       stepFocus: vi.fn(async () => 'no_agents' as const), scroll: vi.fn(() => true), focusApp: vi.fn(() => true), reveal: vi.fn(),
-      send: vi.fn(), hello: vi.fn(), joined: vi.fn(), ready: vi.fn(), unpaired: vi.fn(), focus: vi.fn(),
+      focus: vi.fn(),
       transcripts: vi.fn(), watching: vi.fn(), streams: vi.fn(),
       ...over.wifi,
     },
