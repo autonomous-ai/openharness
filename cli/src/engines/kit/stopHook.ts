@@ -41,9 +41,11 @@ export async function closeTurnOnStop(
   const arrived = turnState(sessionId), held = heldEnd(sessionId)
   const about = held ? held.identity : arrived?.turnOpen ? arrived.identity : null
   const ofIt = (st: Turn): boolean => !openedAfter(st) && (status === 'error' || st.identity === about)
-  /** Says so when the open turn's own opening time is what kept the hook from closing it. */
-  const leftAsLater = (st: LiveTurn | undefined): void => {
-    if (st?.turnOpen && !stale && openedAfter(st)) console.log(`[turn] ${sid(sessionId)} ${hook} ran before the open turn opened: left open`)
+  /** Says so when a turn's own opening time is what kept the hook from closing it: the open turn's, else the held
+   *  end's, which otherwise waits out the backstop with nothing in the log of why (CI 44381432197). */
+  const leftAsLater = (st: LiveTurn | undefined, end?: Turn): void => {
+    if (st?.turnOpen) { if (!stale && openedAfter(st)) console.log(`[turn] ${sid(sessionId)} ${hook} ran before the open turn opened: left open`) }
+    else if (end && openedAfter(end)) console.log(`[turn] ${sid(sessionId)} ${hook} ran before the held turn opened: left held`)
   }
   // None of its turn read yet (its tail lags, or an attach is reading the transcript): the turn opened by the time it
   // ran is its own, and that turn's end goes on as it is read, in the drain below or after it.
@@ -61,7 +63,7 @@ export async function closeTurnOnStop(
   const end = heldEnd(sessionId)
   if (end && ofIt(end) && deliverHeldEnd(sessionId)) return
   const open = turnState(sessionId)
-  if (!open?.turnOpen || stale || !ofIt(open)) { leftAsLater(open); return } // its end already went on → nothing to do
+  if (!open?.turnOpen || stale || !ofIt(open)) { leftAsLater(open, end); return } // its end already went on → nothing to do
   // Still open: the Stop hook beats the transcript's final text by about 200 ms (lib/commander.ts). Its end goes on
   // the moment it is read; none within the grace and a re-poll, and only then a force-close of a wedged turn, whose
   // assistant text is on disk by now.
