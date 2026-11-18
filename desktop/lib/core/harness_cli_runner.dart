@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 
 import '../logging/cli_transcript.dart';
+import 'harness_home.dart';
 import 'hidden_process.dart';
 import 'home_dir.dart';
 import 'test_run.dart';
@@ -81,10 +82,9 @@ class HarnessCliRunner {
        harnessHome =
            harnessHome ??
            Directory(
-             p.join(
+             HarnessHome.of(
                homeDir(environment: environment, isWindows: isWindows),
-               '.harness',
-             ),
+             ).root(HarnessRootKind.data),
            ),
        _runProcess = runProcess ?? runHidden,
        _startProcess = startProcess ?? startHidden,
@@ -108,14 +108,21 @@ class HarnessCliRunner {
     );
   }
 
+  /// The managed tier's folders, joined with the platform's separator as the
+  /// lookup always has, not normalized by `p.join`.
+  HarnessHome get _managedHome => HarnessHome.at(
+    harnessHome.path,
+    join: separatorJoin(Platform.pathSeparator),
+  );
+
   Directory get _runtimeDirectory =>
-      Directory('${harnessHome.path}${Platform.pathSeparator}runtime');
+      Directory(_managedHome.path(HarnessEntry.runtime));
 
   File get _currentNodeFile =>
       File('${_runtimeDirectory.path}${Platform.pathSeparator}current-node');
 
   File get _cliFile => File(
-    '${harnessHome.path}${Platform.pathSeparator}cli${Platform.pathSeparator}cli.js',
+    '${_managedHome.path(HarnessEntry.cli)}${Platform.pathSeparator}cli.js',
   );
 
   /// Builds the direct invocation used by [run] and [start]. Public for
@@ -167,7 +174,12 @@ class HarnessCliRunner {
         source: HarnessCliSource.managed,
       );
     }
-    final launcher = File(p.join(harnessHome.path, 'bin', 'harness.exe'));
+    final launcher = File(
+      p.join(
+        HarnessHome.at(harnessHome.path).path(HarnessEntry.bin),
+        'harness.exe',
+      ),
+    );
     if (await launcher.exists()) {
       return HarnessCliInvocation(
         executable: launcher.path,
@@ -274,7 +286,9 @@ class HarnessCliRunner {
   /// that `harness` names it: `~/.local/bin`, or on Windows `bin` in
   /// [harnessHome], where install.ps1 writes `harness.exe`.
   String? _launcherDirectory() {
-    if (_isWindows) return p.join(harnessHome.path, 'bin');
+    if (_isWindows) {
+      return HarnessHome.at(harnessHome.path).path(HarnessEntry.bin);
+    }
     final home = _home();
     return home == null || home.isEmpty
         ? null
