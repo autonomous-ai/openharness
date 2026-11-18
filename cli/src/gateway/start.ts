@@ -87,7 +87,8 @@ export interface GatewayHost {
 }
 
 export interface StartedGateway {
-  /** Old-core private RPC only; remove on/after 2026-12-16. Never exposed by the new CoreApi. */
+  /** Old-core private RPC only. Retain at least 30 days after the first published CLI release containing
+   * this adapter; record that release-derived retirement date before removal. Never exposed by the new CoreApi. */
   legacyConnectorVault: VaultAccount['connectorVault']
   port: RelayGateway
   ops: GatewayOps

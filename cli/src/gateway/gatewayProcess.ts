@@ -291,7 +291,8 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
           const answer = await ops().connectorSync(p.refresh)
           return { shared: answer.shared }
         }
-        // Old cores only, until 2026-12-16. The new core exposes no secret-bearing vault operation.
+        // Old-core compatibility: retain for at least 30 days after the first published CLI release containing
+        // this adapter; record that release-derived retirement date before removal. The new core has no vault operation.
         if (!running) return { error: 'CONNECTORS_SYNC_UNAVAILABLE' }
         const vault = running.legacyConnectorVault
         if (p.op === 'seal') return { envelope: await vault.seal(text(p.plaintext)) }
