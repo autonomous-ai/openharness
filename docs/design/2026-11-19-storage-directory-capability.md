@@ -164,7 +164,16 @@ accounting (implicit branch locations use their parent's location) is recorded s
 
 One new test-only control targets the remaining non-EEXIST mkdir error arm: remove the private data
 root immediately before creation-leaf mkdir and prove that refusal does not recreate the data root.
-It will run against the pre-runtime parent and the corrected runtime in a separate narrow window.
-The accepted 18-file outcome is not being repeated for this test-only addition. The added binding
-stats still need actual cost in the held pending-history workload; this checkpoint makes no performance
-or final-release claim.
+The identical test (SHA256 `d35b60028483449e9c9fc964c173824005dea0927ec0cee69898e23790c60d49`) failed
+against the isolated pre-runtime parent plus test, `6c5be263ac`: the data root incorrectly existed
+again after refusal. Actual exit 1 / 0.761 seconds. It passed against the corrected runtime plus the
+same test, `c5920481891c1e27b4a91c9b226014b36ef8ac1b`, actual exit 0 / 0.798 seconds. Both process groups
+were empty, with no timeout or cleanup signal. Logs and receipts are
+`/tmp/core-grid-storage-directory-capability-ancestor-{red1,green1}-20261119.*`; the focused GREEN V8
+report in `/tmp/core-storage-directory-capability-ancestor-coverage1` observes both line-91 statements
+and the previously missing non-EEXIST throw arm. The earlier 18-file run observes its EEXIST arm.
+
+The accepted 18-file and type outcomes remain attached to `ec89bfe2ab`; neither was repeated for this
+test-only addition. The child-only numerical coverage caveat remains. The added binding stats still
+need actual cost in the held pending-history workload; this checkpoint makes no performance or
+final-release claim. Root owns that remaining measurement and combined-source validation.
