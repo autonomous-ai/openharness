@@ -104,10 +104,10 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
     expect(devicesListenerPath(d.dataDir, process.platform, d.env.HOME)).toBe(join(d.dataDir, 'devices.sock'))
   }
 
-  /** Claude Code in a VS Code terminal: its shell under the fake VS Code, and the engine under the shell's tab. With
-   *  `jobs`, another job in its terminal can take the terminal's foreground from it (Outside.background). */
-  const inVscode = async (d: IsolatedDaemon, folder: string, jobs = false): Promise<Outside> => {
-    const engine = await Outside.start(d, folder, IN_VSCODE, 'vscode', { shell: true, jobs })
+  /** Claude Code in a VS Code terminal: its shell in the terminal under the fake VS Code, and the engine the shell's
+   *  foreground job. */
+  const inVscode = async (d: IsolatedDaemon, folder: string): Promise<Outside> => {
+    const engine = await Outside.start(d, folder, IN_VSCODE, 'vscode', { shell: true })
     outside.push(engine)
     return engine
   }
@@ -218,11 +218,10 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
 
   /**
    * A and B in VS Code's terminals, and W in Ghostty, so that Ghostty's ring tells Ghostty is in front: VS Code's ring is
-   * shown, with both. Then the window's loop connects and reports both shells, A's active. With `jobs`, A is started
-   * with another job in its terminal (inVscode).
+   * shown, with both. Then the window's loop connects and reports both shells, A's active.
    */
-  const twoTerminals = async (d: IsolatedDaemon, dial: FakeDial, { jobs = false } = {}): Promise<{ a: Outside; b: Outside; window: Window }> => {
-    const a = await inVscode(d, 'a', jobs)
+  const twoTerminals = async (d: IsolatedDaemon, dial: FakeDial): Promise<{ a: Outside; b: Outside; window: Window }> => {
+    const a = await inVscode(d, 'a')
     const b = await inVscode(d, 'b')
     const w = new InOrca(d, 'w', children, { TERM_PROGRAM: 'ghostty' })
     await w.hook('SessionStart', { source: 'startup' })
@@ -409,11 +408,10 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
     } catch { /* not a JSON object: it decides nothing */ }
     expect(managedTui, `${managed} sets a tui, which outranks this test's own settings`).toBe(false)
 
-    // 1. A in a VS Code terminal with another job beside it, its project's settings fullscreen, the window connected, VS
-    // Code in front, the dial on A and A's terminal active. Its user settings are in the throwaway Claude home its
-    // transcript names, which holds none.
+    // 1. A in a VS Code terminal, its project's settings fullscreen, the window connected, VS Code in front, the dial on
+    // A and A's terminal active. Its user settings are in the throwaway Claude home its transcript names, which holds none.
     const { d, dial } = await fresh()
-    const { a, b, window } = await twoTerminals(d, dial, { jobs: true })
+    const { a, b, window } = await twoTerminals(d, dial)
     const settings = join(d.projectsDir, a.folder, '.claude', 'settings.json')
     expect(settings.startsWith(d.root + sep)).toBe(true)
     mkdirSync(dirname(settings), { recursive: true })
@@ -443,7 +441,7 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
     await stroke()
     expect(window.keys).toHaveLength(1)
 
-    // 4. Fullscreen again, with another job in front of it in its terminal: lines alone.
+    // 4. Fullscreen again, suspended with Ctrl+Z, its shell in front of it in its terminal: lines alone.
     tui('fullscreen')
     await a.background()
     await stroke()
