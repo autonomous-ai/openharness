@@ -169,6 +169,15 @@ mod tests {
     }
 
     #[test]
+    fn a_linux_value_is_absolute_by_its_leading_slash_on_any_host() {
+        // A Windows host would call `/d` relative and `C:\d` absolute; Linux reads neither that way.
+        assert!(linux_absolute(OsStr::new("/d")));
+        for value in ["", "d", "\\d", "C:\\d"] {
+            assert!(!linux_absolute(OsStr::new(value)), "{value:?}");
+        }
+    }
+
+    #[test]
     fn a_variable_with_a_trailing_slash_names_the_same_folder() {
         // As text: a PathBuf compares by its parts, so it would let `/d//harness` pass.
         let (data, state) = linux_roots(&[("XDG_DATA_HOME", "/d/"), ("XDG_STATE_HOME", "/s/")], &[]);
