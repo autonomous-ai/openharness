@@ -246,7 +246,14 @@ export function createSessionImageCodec(root: string, retained: readonly Retaine
       catch { uncertainHandles.add(closing); throw new SessionStorageUnavailable('cleanup-unconfirmed') }
       const proof = { document, identity: sessionImageIdentity(stat), bytes: Buffer.byteLength(contents), sha256: digest(contents) }
       prepared.set(relative, proof.identity)
-      return { temporary: relative, proof, value: projectValue(document, raw, proof) }
+      if (document.kind === 'registry') {
+        const credentials: SessionCredentialReference[] = []
+        for (const row of raw as unknown[]) if (object(row) && row.gridLaunch != null) {
+          credentials.push(project(row.gridLaunch as GridLaunchOverride, rowIdentity(row), { kind: 'image', proof }).credential)
+        }
+        return { temporary: relative, proof, projection: 'registry-credentials', credentials }
+      }
+      return { temporary: relative, proof, projection: 'value', value: projectValue(document, raw, proof) }
     } catch (error) {
       if (handle) {
         const closing = handle

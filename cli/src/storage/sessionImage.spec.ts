@@ -20,6 +20,26 @@ beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'session-image-')); key = r
 afterEach(() => rmSync(root, { recursive: true, force: true }))
 
 describe('private session image projection', () => {
+  it('returns only prepared Registry credential references while preserving exact legacy metadata and key bytes', async () => {
+    const saved = { ...row(), title: 'large metadata '.repeat(1024), launchArgs: ['--fixture'], extra: { nested: ['owned'] } }
+    writeFileSync(join(root, 'registry.json'), JSON.stringify([saved]), { mode: 0o600 })
+    const codec = createSessionImageCodec(root), image = await codec.read({ kind: 'registry' })
+    if (image.state !== 'image' || !image.json) throw new Error('fixture image was not readable')
+    const prepared = await codec.prepare({ kind: 'registry' }, image.proof, image.value, reservation())
+    try {
+      const actual = JSON.parse(readFileSync(join(root, prepared.temporary), 'utf8'))
+      expect(actual[0].title).toBe(saved.title)
+      expect(actual[0].extra).toEqual(saved.extra)
+      expect(actual[0].launchArgs).toEqual(saved.launchArgs)
+      expect(actual[0].gridLaunch.apiKey === key).toBe(true)
+      expect(containsKey(prepared)).toBe(false)
+      expect(Object.hasOwn(prepared, 'value')).toBe(false)
+      expect(prepared).toMatchObject({ projection: 'registry-credentials', credentials: [
+        { row: { agentId: saved.agentId, registeredAt: 1 }, source: { kind: 'image', proof: prepared.proof } },
+      ] })
+    } finally { unlinkSync(join(root, prepared.temporary)); await codec.discard(prepared.temporary, prepared.proof.identity) }
+  })
+
   it('omits keys before bytes or parsed rows can cross the child boundary', async () => {
     writeFileSync(join(root, 'registry.json'), JSON.stringify([row()]), { mode: 0o600 })
     const codec = createSessionImageCodec(root)
@@ -27,6 +47,23 @@ describe('private session image projection', () => {
     expect(image.state === 'image' && image.json).toBe(true)
     expect(containsKey(image)).toBe(false)
     expect(containsKey(readFileSync(join(root, 'registry.json'), 'utf8'))).toBe(true)
+  })
+
+  it('keeps raw legacy backup projection independent of its placeholder input', async () => {
+    const saved = { ...row(), legacyField: { untouched: true } }
+    writeFileSync(join(root, 'registry.json'), JSON.stringify([saved]), { mode: 0o600 })
+    const codec = createSessionImageCodec(root), image = await codec.read({ kind: 'registry' })
+    if (image.state !== 'image' || !image.json) throw new Error('fixture image was not readable')
+    const temporary = `registry.pre-v2.json.${process.pid}.${randomUUID()}.tmp`
+    writeFileSync(join(root, temporary), '', { mode: 0o600, flag: 'wx' })
+    const prepared = await codec.prepare({ kind: 'legacy-registry' }, null, [],
+      { temporary, identity: sessionImageIdentity(lstatSync(join(root, temporary), { bigint: true })) }, image.proof)
+    try {
+      expect(prepared.projection).toBe('value')
+      expect(prepared.projection === 'value' && Array.isArray(prepared.value) && prepared.value.length === 1).toBe(true)
+      expect(JSON.parse(readFileSync(join(root, temporary), 'utf8'))[0].gridLaunch.apiKey === key).toBe(true)
+      expect(containsKey(prepared)).toBe(false)
+    } finally { unlinkSync(join(root, temporary)); await codec.discard(temporary, prepared.proof.identity) }
   })
 
   it('reconstructs the selected key in the sole old-readable prepared image', async () => {

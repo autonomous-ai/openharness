@@ -106,6 +106,101 @@ it('recovers the prior key after child loss and a different-target commit, retai
   expect(io.closed).toBeGreaterThanOrEqual(2)
 })
 
+it('keeps owned nested metadata across awaited preparation and rebases later live changes', async () => {
+  const live = registry.byAgent('first')!
+  live.launchArgs = ['--captured']
+  const prepare = storage.prepare.bind(storage)
+  let entered!: () => void, captured: unknown, encoded: unknown
+  const reached = new Promise<void>(resolve => { entered = resolve })
+  const waiting = new Promise<void>(resolve => { release = resolve })
+  const paused = vi.spyOn(storage, 'prepare').mockImplementationOnce(async (...args) => {
+    const rows = args[2] as Array<{ agentId: string; launchArgs: string[] }>
+    captured = rows.find(row => row.agentId === 'first')!.launchArgs
+    entered(); await waiting
+    const prepared = await prepare(...args)
+    encoded = JSON.parse(readFileSync(join(root, 'data', prepared.temporary), 'utf8'))
+      .find((row: { agentId: string }) => row.agentId === 'first').launchArgs
+    return prepared
+  })
+  const saving = registry.flush()
+  try {
+    await reached
+    live.launchArgs.push('--later')
+    expect(captured).toEqual(['--captured'])
+    expect(captured).not.toBe(live.launchArgs)
+    release!(); await saving
+    expect(encoded).toEqual(['--captured'])
+    expect(registry.byAgent('first')!.launchArgs).toEqual(['--captured', '--later'])
+    await registry.flush()
+    expect(JSON.parse(readFileSync(io.file, 'utf8')).find((row: { agentId: string }) => row.agentId === 'first').launchArgs)
+      .toEqual(['--captured', '--later'])
+  } finally { release!(); await saving; paused.mockRestore() }
+})
+
+it('does not recanonicalize a returned second Registry metadata image during preparation', async () => {
+  registry.byAgent('first')!.title = 'Changed metadata'
+  const stringify = JSON.stringify
+  let publicRowCopies = 0
+  const measure = vi.spyOn(JSON, 'stringify').mockImplementation(((value: unknown, ...args: unknown[]) => {
+    if (value && typeof value === 'object' && (value as { schemaVersion?: unknown }).schemaVersion === 2) {
+      const override = (value as { gridLaunch?: object }).gridLaunch
+      if (override && !Object.hasOwn(override, 'credential') && !Object.hasOwn(override, 'apiKey')) publicRowCopies++
+    }
+    return (stringify as (...args: unknown[]) => string)(value, ...args)
+  }) as typeof JSON.stringify)
+  try { await registry.flush() } finally { measure.mockRestore() }
+  expect(registry.byAgent('first')!.title).toBe('Changed metadata')
+  expect(diskKeyMatches('first', first)).toBe(true)
+  expect(publicRowCopies).toBe(0)
+})
+
+it('rekeys an intentionally copied credential for its new row and shares the final published witness', async () => {
+  const original = registry.byAgent('first')!.gridLaunch!
+  registry.byAgent('second')!.gridLaunch = original
+  await registry.flush()
+  const copied = registry.byAgent('second')!.gridLaunch!
+  expect(copied.credential.row).toEqual({ agentId: 'second', registeredAt: registry.byAgent('second')!.registeredAt })
+  expect(copied.credential.binding === original.credential.binding).toBe(false)
+  expect(diskKeyMatches('first', first) && diskKeyMatches('second', first)).toBe(true)
+  expect((await storage.resolveSelected(copied)).apiKey === first).toBe(true)
+  expect((await storage.resolveSelected(registry.byAgent('first')!.gridLaunch!)).apiKey === first).toBe(true)
+  expect(copied.credential.source.kind).toBe('image')
+})
+
+it.each(['missing', 'duplicate', 'extra', 'row', 'time', 'binding', 'proof', 'document', 'source', 'extra-field', 'projection', 'metadata'])(
+  'refuses a %s Registry credential receipt before rename and settles its owned temporary', async fault => {
+    const before = readFileSync(io.file, 'utf8'), prepare = storage.prepare.bind(storage)
+    const damaged = vi.spyOn(storage, 'prepare').mockImplementationOnce(async (...args) => {
+      const prepared = await prepare(...args)
+      if (prepared.projection !== 'registry-credentials') throw new Error('Expected Registry reference receipt')
+      const changed = prepared as unknown as { projection: string; credentials: any[]; value?: unknown }
+      switch (fault) {
+        case 'missing': changed.credentials.pop(); break
+        case 'duplicate': changed.credentials[1] = changed.credentials[0]; break
+        case 'extra': changed.credentials.push(changed.credentials[0]); break
+        case 'row': changed.credentials[0].row.agentId = 'foreign'; break
+        case 'time': changed.credentials[0].row.registeredAt++; break
+        case 'binding': changed.credentials[0].binding = '0'.repeat(64); break
+        case 'proof': changed.credentials[0].source.proof = { ...prepared.proof, sha256: '0'.repeat(64) }; break
+        case 'document': changed.credentials[0].source.proof = { ...prepared.proof, document: { kind: 'names' } }; break
+        case 'source': changed.credentials[0].source = { kind: 'import', lease: randomUUID() }; break
+        case 'extra-field': changed.credentials[0].unknown = true; break
+        case 'projection': changed.projection = 'value'; break
+        case 'metadata': changed.value = []; break
+      }
+      return prepared
+    })
+    try {
+      await expect(registry.setGridLaunch('first', record(randomUUID()))).rejects.toThrow('prepared session references changed')
+      expect(readFileSync(io.file, 'utf8') === before).toBe(true)
+      expect(diskKeyMatches('first', first)).toBe(true)
+    } finally { damaged.mockRestore() }
+    const next = randomUUID()
+    expect(await registry.setGridLaunch('first', record(next))).toBe(true)
+    expect(diskKeyMatches('first', next)).toBe(true)
+    expect((await storage.resolveSelected(registry.byAgent('first')!.gridLaunch!)).apiKey === next).toBe(true)
+  })
+
 it('serializes credential imports and admits neither key before its own directory settlement', async () => {
   const replacement = randomUUID(), peer = randomUUID(), reached = barrier()
   let firstAnswered = false, secondAnswered = false

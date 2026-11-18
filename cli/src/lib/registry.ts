@@ -3691,25 +3691,14 @@ class Registry {
           }
         }
         const merged = [...mergedForSave(latest, currentRows, this.persistedBaseline, capturedIntents, snapshotFingerprint, identities).values()]
-        let rows = validatedRows(merged)
+        const rows = validatedRows(merged)
         if (!rows) throw new Error('registry transaction would violate global identity invariants')
         const candidateRows = rows.map(row => persistedRow(row))
         const prepared = await prepareSessionPublication(sessionStorage, { kind: 'registry' }, source, candidateRows, deadline)
-        try {
-          const projected = Array.isArray(prepared.value) ? validatedRows(prepared.value) : null
-          if (!projected || projected.length !== candidateRows.length || projected.some((row, index) => {
-            const candidate = candidateRows[index]
-            const publicRow = (value: RegisteredSession | Omit<RegisteredSession, 'tmuxPane'>) => ({ ...value,
-              gridLaunch: value.gridLaunch ? (({ credential: _private, ...metadata }) => metadata)(value.gridLaunch) : value.gridLaunch })
-            if (rowFingerprint(publicRow(row)) !== rowFingerprint(publicRow(candidate))) return true
-            const before = candidate.gridLaunch, after = row.gridLaunch
-            if (!before || !after) return before !== after
-            if (after.credential.row.agentId !== row.agentId || after.credential.row.registeredAt !== row.registeredAt) return true
-            return before.credential.row.agentId === row.agentId && before.credential.row.registeredAt === row.registeredAt
-              && before.credential.binding !== after.credential.binding
-          })) throw new RegistryPersistenceUnavailable('prepared session metadata changed')
-          rows = projected
-        } catch (error) { await prepared.discard(); throw error }
+        // These graphs are private capture/merge results. Publication accepts only row-bound reference
+        // replacements, so a second child metadata image cannot replace or revalidate session authority.
+        const projected = prepared.value as Array<{ gridLaunch?: StoredGridLaunch | null }>
+        for (let index = 0; index < rows.length; index++) rows[index].gridLaunch = projected[index].gridLaunch
         // Exact prepared objects may survive the fresh live rebase unchanged; their normalized rows
         // are still private. Changed/live-derived objects must be parsed again after refresh.
         const preparedRows = new Map<object, RegisteredSession>()

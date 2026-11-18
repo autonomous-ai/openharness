@@ -58,11 +58,11 @@ export type SessionImage = { state: 'missing' }
   | { state: 'image'; proof: SessionImageProof; json: false }
   | { state: 'image'; proof: SessionImageProof; json: true; value: unknown }
 
-export interface SessionPreparedImage {
+export type SessionPreparedImage = {
   temporary: string
   proof: SessionImageProof
-  value: unknown
-}
+} & ({ projection: 'value'; value: unknown }
+  | { projection: 'registry-credentials'; credentials: SessionCredentialReference[] })
 
 export interface SessionImageReservation { temporary: string; identity: string }
 

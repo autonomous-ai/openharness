@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fingerprint } from '../harnessd/bundleFingerprint.js'
 import { SessionStorage } from './sessionStorage.js'
 import { sessionFileIdentity } from './sessionStorageWire.js'
+import type { SessionStorageOperation } from './sessionStorageWire.js'
 import { ownSessionStorage } from '../harnessd/sessionStorageOwner.js'
 import type { ExecutionArtifact } from '../harnessd/executionArtifacts.js'
 
@@ -74,6 +75,26 @@ function faultChild(fault: 'after-sync' | 'replace-before-open' | 'directory-clo
 }
 
 describe('required session storage process', () => {
+  it.each(['missing-result', 'missing-proof'])('reaps an unrecognizable %s preparation reply before releasing its slot', async fault => {
+    const owner = storage as unknown as { child?: ChildProcess; request(operation: SessionStorageOperation): Promise<unknown> }
+    const request = owner.request.bind(storage)
+    let exited = false
+    const damaged = vi.spyOn(owner, 'request').mockImplementation(async operation => {
+      const answer = await request(operation)
+      if (operation.kind !== 'prepare') return answer
+      owner.child!.once('exit', () => { exited = true })
+      return fault === 'missing-result' ? null : { ...answer as object, proof: null }
+    })
+    try {
+      await expect(storage.prepare({ kind: 'registry' }, null, [])).rejects.toMatchObject({ code: 'changed' })
+      expect(exited).toBe(true)
+      expect(owner.child).toBeUndefined()
+      expect(readdirSync(root).some(name => name.endsWith('.tmp'))).toBe(false)
+    } finally { damaged.mockRestore() }
+    const next = await storage.prepare({ kind: 'registry' }, null, [])
+    await storage.discard(next)
+  })
+
   it.each(['missing', 'changed'])('refuses a %s selected prepared lean entry without using its full fallback', async kind => {
     const full = join(root, 'cohort.mjs'), lean = join(root, 'core.mjs')
     writeFileSync(full, 'throw new Error("full fallback must not run")', { mode: 0o600 })

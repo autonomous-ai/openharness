@@ -427,7 +427,11 @@ export class SessionStorage {
         reservation: { temporary: reservation.temporary, identity: reservation.identity }, ...(rawSource ? { rawSource } : {}) })
       this.preparation.child = this.child
       const result = await pending
-      if (result.temporary !== reservation.temporary || !this.sameInode(result.proof.identity, reservation.identity)) {
+      if (!result || !sessionImageProof(result.proof) || result.temporary !== reservation.temporary
+        || !this.sameInode(result.proof.identity, reservation.identity)) {
+        // An unrecognizable reply cannot settle the child's prepared-image slot or its descriptor custody.
+        this.terminate()
+        await this.exiting
         throw new SessionStorageUnavailable('changed')
       }
       this.preparation.writtenIdentity = result.proof.identity

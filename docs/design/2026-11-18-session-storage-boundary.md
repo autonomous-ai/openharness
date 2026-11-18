@@ -492,3 +492,44 @@ matched comparison must use one frozen corrected source/artifact after all accep
 Tests cover actual bytes, unsafe/missing/symlink/type/mode cases, short/growing reads, every
 metadata-field mutation and actual child death after file/helper close uncertainty, in addition
 to the failure-first asynchronous-open counter. Windows native execution remains deferred.
+
+## Design: current Registry returns references only
+
+Current Registry preparation returns a discriminated `registry-credentials` receipt: exact
+row-bound credential references plus its existing temporary/proof, with no session metadata
+or metadata digest. Names, archives and raw legacy backup retain their actual `value`
+projection. Child restore changes only gridLaunch; resolve already requires canonical equality
+of requested public override metadata and the resolved override before encoding. No newly
+returned metadata can replace the parent's session authority.
+
+The parent owns Registry metadata before awaited preparation: live rows and binding candidates
+are deep-cloned; fresh decoded source and private recovery graphs belong to the serialized
+writer; intended-field sets supply names only. The merge's first validated rows and persisted
+candidates remain private. A real caller regression holds preparation, mutates live nested
+launch arguments, and proves the captured image is unchanged while the final fresh-live rebase
+preserves the newer observation. This prerequisite passed before replacing the second metadata
+validation.
+
+Publication requires the exact reply discriminator/document/proof, complete unique credential
+coverage by agentId and registeredAt, no extra fields or rows, and source witnesses matching
+the prepared image. An unchanged row identity must preserve its private binding. Intentional
+clone/rekey retains the existing resolution rule and receives its new exact row binding.
+Only accepted credential objects are substituted around the parent's captured metadata;
+the original graph is not mutated. Malformed receipts are refused and the owned temporary
+is discarded under existing actual child/descriptor custody before publication.
+
+Registry retains its first validated rows, replaces only their gridLaunch reference objects,
+and removes the second whole-image decode/validation and paired canonical metadata passes.
+Global identity validation, final fresh-live rebase, preparedRows/preparedImages reuse,
+locks/cancellation/directory settlement and unknown-outcome recovery remain. Publication
+updates the shared accepted credential witness after rename, so installed rows resolve
+against the actual final image. Legacy backup never substitutes its empty placeholder input
+for the original raw image. Receipt memory still scales with credential-bearing rows;
+whole-image metadata/RSS and authority-scan residuals remain explicit.
+
+The RED receipt `/tmp/core-grid-storage-reference-receipt-red-20261118.log` has the ownership
+prerequisite pass and two expected failures: metadata still returned across the private wire,
+and four redundant public-row canonical passes for the two-row caller. Acceptance additionally
+requires malformed/missing/duplicate/foreign references and wrong binding/proof refusal,
+clone/rekey success, actual raw legacy bytes, witness resolution after rename and existing
+child-loss/uncertain-publication recovery. Final gates and matched measurement remain pending.
