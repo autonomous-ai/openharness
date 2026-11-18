@@ -86,8 +86,9 @@ function copyChanged(src: string, dest: string, since: number, io: StageIo): num
   }
   if (!there?.isDirectory()) replace(src, dest, io)
   const names = io.readdirSync(src)
-  // Deleted during the copy.
-  for (const name of io.readdirSync(dest)) if (!names.includes(name)) remove(join(dest, name), io)
+  // Deleted during the copy. A set: a folder of many thousand files is looked up once per name, not once per pair.
+  const kept = new Set(names)
+  for (const name of io.readdirSync(dest)) if (!kept.has(name)) remove(join(dest, name), io)
   const bytes = names.reduce((sum, name) => sum + copyChanged(join(src, name), join(dest, name), since, io), 0)
   // Last, so a folder without write permission is filled first.
   io.chmodSync(dest, st.mode & 0o7777)
