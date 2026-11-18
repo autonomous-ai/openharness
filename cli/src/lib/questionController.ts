@@ -75,20 +75,17 @@ export function matchRow(rows: QuestionRow[], answer: string): QuestionRow | nul
  * readings the fewest pieces wins; on a tie, the longest first piece, then the same rule on the rest. Null when no
  * reading spells the whole answer.
  *
- * The answer is outside text read in the core's own loop, so the work grows with its length alone: a piece holds
- * as many commas as the text it spells, never more than the text with the most. Trying every run of pieces
- * held the core 12 s on a 3 KB answer (2026-11-18).
+ * The answer is outside text read in the core's own loop, so the work grows with its length times the texts' length:
+ * a piece holds as many commas as the text it spells, so only runs of as many pieces as some text has are tried.
+ * Trying every run of pieces held the core 12 s on a 3 KB answer; every run up to the text with the most commas,
+ * 16 s on a 4 KB answer against a text of 2,000 (2026-11-18).
  */
 export function partitionTexts(texts: string[], answer: string, key: (text: string) => string): number[] | null {
   // The first text of each key, as a find takes it; the key keeps every comma.
   const byKey = new Map<string, number>()
-  let widest = 1
-  texts.forEach((text, index) => {
-    const k = key(text)
-    if (!k || byKey.has(k)) return
-    byKey.set(k, index)
-    widest = Math.max(widest, k.split(',').length)
-  })
+  texts.forEach((text, index) => { const k = key(text); if (k && !byKey.has(k)) byKey.set(k, index) })
+  // How many pieces each text spans, most first, so a tie keeps the longest piece.
+  const spans = [...new Set([...byKey.keys()].map((k) => k.split(',').length))].sort((a, b) => b - a)
   const parts = answer.split(',')
   // count[i]: the fewest texts that spell parts[i..], the first of them first[i], the rest from parts[next[i]].
   const count = Array<number>(parts.length + 1).fill(Infinity)
@@ -98,9 +95,11 @@ export function partitionTexts(texts: string[], answer: string, key: (text: stri
     // A blank piece (a stray or trailing comma) spells nothing, as the loose reading drops it: refusing it would
     // send a comma text back to that reading.
     if (!key(parts[i].trim())) { count[i] = count[i + 1]; next[i] = i + 1; continue }
-    // Longest piece first, so a tie keeps it. Trimmed first, as the loose reading's pieces: norm drops a trailing
-    // full stop before it trims, so " No. " would read "no.".
-    for (let j = Math.min(parts.length, i + widest); j > i; j--) {
+    // Trimmed first, as the loose reading's pieces: norm drops a trailing full stop before it trims, so " No. " would
+    // read "no.".
+    for (const span of spans) {
+      const j = i + span
+      if (j > parts.length) continue
       const index = byKey.get(key(parts.slice(i, j).join(',').trim()))
       if (index !== undefined && count[j] + 1 < count[i]) { count[i] = count[j] + 1; first[i] = index; next[i] = j }
     }
