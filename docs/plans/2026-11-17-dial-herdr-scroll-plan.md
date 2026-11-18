@@ -486,11 +486,15 @@ Files: `cli/src/cable/hosts/hcClient.ts` (+spec), `cli/src/cable/hosts/hcSource.
 
 - First, a measure against a private hc core only (the e2e harness's), never the person's: does `terminal.keys` wait
   while a fake program keeps writing output? Time a `keys` call to a terminal printing a line every 100 ms, and to an
-  idle one. Record the numbers in the spec's finding and the PR. Never run the real `claude`.
+  idle one. Record the numbers in the spec's finding and the PR. Never run the real `claude`. Measured 2026-11-18: it
+  does not wait (a call answered in 32–45 ms, spec §3), so a `working` Claude Code takes keys.
 - Red: `herdrApp.spec.ts` and `hcClient.spec.ts` cases from the spec's Tests section (a `claude-code` terminal's stroke
   presses `pageup` through `keys` and runs no `herdr-app`; fails today: it runs `terminal.scroll`).
-- Green: as the spec's §3 "A Claude Code terminal is scrolled by keys" and "No key while Claude Code asks or works"
-  say. The adapter learns the terminal's app and state from the hc source (new deps, as `shows`/`tabOf`).
+- Green: as the spec's §3 "A Claude Code terminal is scrolled by keys" and "No key while Claude Code asks" say: no key
+  while hc's state is `blocked` or one it has not told, asked at the stroke's down and again right before each call;
+  `working` takes keys, as measured. A key call has 5 s, past hc's hold of 3 s after the person's own key (measured in
+  review). The adapter learns the terminal's app and state from the hc source (new deps, as `shows`/`tabOf`); its
+  status is none from a subscription's drop until the next snapshot.
 - e2e: a stroke over a private terminal whose fake program reports `claude-code` presses `pageup`/`pagedown`, seen
   in what the fake program reads (the keys' bytes), and runs no `terminal.scroll`; the existing case keeps
   `terminal.scroll` for another app.
