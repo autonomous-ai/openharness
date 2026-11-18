@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { fakeOrcaCli, type FakeOrcaCli } from '../testing/fakeOrcaCli.js'
 import { DIAL_SKILL_FILE, writeOrcaConnected } from './dialSkillFiles.js'
-import { type OrcaPluginDeps, type OrcaPluginFiles, orcaPluginRun, type OrcaPluginState, orcaStatus } from './orcaPlugin.js'
+import { orcaConnect, type OrcaPluginDeps, type OrcaPluginFiles, orcaPluginRun, type OrcaPluginState, orcaStatus } from './orcaPlugin.js'
 
 const KEY = 'local.harness-device'
 /** The plugin as a build carries it: a manifest at 1.2.3 and one source. */
@@ -270,5 +270,267 @@ describe('orcaStatus', () => {
 
   it('from the sources, the real files() is null', () => {
     expect(REAL.files()).toBeNull()
+  })
+})
+
+const FINGERPRINT = 'ap1-0123456789abcdef0123456789abcdef'
+/** Orca 1.4.262's words for a plugin that runs code, and for `workspace:read`. */
+const EXECUTION = 'Runs its own code in a separate Node.js process on the Orca host, with your user account’s access to that machine.'
+const WORKSPACE_READ = 'Read your projects and workspaces (names, branches, paths and agent status) and the terminals in them, and get notified when they change'
+
+/** Orca's refusal to install, update or enable without the fingerprint (exit 3), in Orca 1.4.262's whole shape. */
+function approval(code: 'approval_required' | 'approval_stale', over: { fingerprint?: string; grants?: Record<string, unknown>; data?: Record<string, unknown> } = {}) {
+  const fingerprint = over.fingerprint ?? FINGERPRINT
+  return {
+    id: 'req-4', ok: false,
+    error: {
+      code,
+      message: `${KEY} 1.2.3 needs approval before it can run.\nApproving Harness Device (${KEY} 1.2.3) grants:\n- ${EXECUTION}\n- ${WORKSPACE_READ}\nFingerprint: ${fingerprint}`,
+      data: {
+        pluginKey: KEY, name: 'Harness Device', version: '1.2.3', action: 'install', approvalFingerprint: fingerprint,
+        contentIdentity: 'c0ffee0123456789', isDev: false,
+        grants: {
+          execution: 'trusted-worker', executionDescription: EXECUTION,
+          capabilities: [{ kind: 'workspace:read', description: WORKSPACE_READ }],
+          contributions: [{ kind: 'panels', name: 'Harness Device' }, { kind: 'events', name: 'workspace.changed' }, { kind: 'statusBarItems', name: 'Dial' }],
+          ...over.grants,
+        },
+        why: 'It can run code or act in Orca, so Orca does not enable it without an explicit approval bound to exactly these files and this access.',
+        approveFlag: `--approve ${fingerprint}`,
+        nextSteps: [
+          'Approving grants the access listed above. Confirm with your user first unless they already asked for exactly this plugin and access.',
+          `To approve, run the same command again with --approve ${fingerprint}`,
+          'A different plugin, version, set of files, or more access gets a new fingerprint and needs a new approval.',
+        ],
+        ...over.data,
+      },
+    },
+  }
+}
+/** Orca's answer to an install, update or enable that went through. */
+const installed = (folder: string) => ({
+  id: 'req-5', ok: true,
+  result: { pluginKey: KEY, version: '1.2.3', previousVersion: null, contentHash: 'c0ffee0123456789', approval: 'approve-flag', source: { kind: 'local-path', reference: folder } },
+})
+const FAILED = { connect: 'failed', error: 'failed' }
+
+describe('connect', () => {
+  it('with no fingerprint it asks Orca and passes --approve to nobody', async () => {
+    const { deps, folder, calls } = setup()
+    up([])
+    orca.answer('plugin install', approval('approval_required'), 3)
+    expect(await orcaConnect(deps)).toStrictEqual({
+      connect: 'approve', name: 'Harness Device', version: '1.2.3', fingerprint: FINGERPRINT, grants: [EXECUTION, WORKSPACE_READ], update: false,
+    })
+    expect(calls()).toEqual(['status --json', `plugin inspect ${folder} --json`, 'plugin list --json', `plugin install ${folder} --json`])
+  })
+
+  it('with the fingerprint Orca installs', async () => {
+    const { deps, folder, calls } = setup()
+    up([])
+    orca.answer('plugin install', installed(folder))
+    expect(await orcaConnect(deps, FINGERPRINT)).toStrictEqual({ connect: 'done' })
+    expect(calls().slice(3)).toEqual([`plugin install ${folder} --approve ${FINGERPRINT} --json`])
+  })
+
+  it('a fingerprint that no longer matches shows the fresh grants', async () => {
+    const { deps } = setup()
+    up([])
+    const fresh = 'ap1-fedcba9876543210fedcba9876543210'
+    const capabilities = [{ kind: 'workspace:read', description: WORKSPACE_READ }, { kind: 'agent:read', description: 'Read your agents' }]
+    orca.answer('plugin install', approval('approval_stale', { fingerprint: fresh, grants: { capabilities } }), 3)
+    expect(await orcaConnect(deps, FINGERPRINT)).toStrictEqual({
+      connect: 'approve', name: 'Harness Device', version: '1.2.3', fingerprint: fresh, grants: [EXECUTION, WORKSPACE_READ, 'Read your agents'], update: false,
+    })
+  })
+
+  it('a replacement is worded as Orca words it, after the capabilities', async () => {
+    const { deps } = setup()
+    up([])
+    orca.answer('plugin install', approval('approval_required', { grants: { replacements: [{ command: 'Open file', action: 'file opener' }] } }), 3)
+    expect(await orcaConnect(deps)).toMatchObject({
+      connect: 'approve', grants: [EXECUTION, WORKSPACE_READ, 'Runs "Open file" instead of Orca\'s own file opener'],
+    })
+  })
+
+  it("Orca's errors are failed, and never its message", async () => {
+    const { deps, folder } = setup()
+    up([])
+    const errors: [string, unknown, number][] = [
+      ['install failed', { id: 'req-4', ok: false, error: { code: 'plugin_install_failed', message: `Could not copy ${folder}: EACCES`, data: { pluginKey: KEY } } }, 1],
+      ['invalid', { id: 'req-4', ok: false, error: { code: 'plugin_invalid', message: `${folder}/orca-plugin.json: bad`, data: { pluginKey: KEY } } }, 2],
+      ['not JSON', `Error: could not reach ${folder}\n`, 1],
+      ['no code', { id: 'req-4', ok: false, error: { message: `Something failed in ${folder}` } }, 1],
+    ]
+    for (const [name, answer, code] of errors) {
+      orca.answer('plugin install', answer, code)
+      expect({ name, ...await orcaConnect(deps) }).toStrictEqual({ name, ...FAILED })
+    }
+  })
+
+  it('past its deadline it is timeout', async () => {
+    const given: { timeoutMs: number; maxBytes: number }[] = []
+    const { deps } = setup({
+      run: async (_file, _args, opts) => {
+        const answers = [status(), inspect(), list([])]
+        const n = given.push(opts) - 1
+        return n < answers.length ? { code: 0, stdout: JSON.stringify(answers[n]), timedOut: false } : { code: null, stdout: '', timedOut: true }
+      },
+    })
+    expect(await orcaConnect(deps)).toStrictEqual({ connect: 'failed', error: 'timeout' })
+    expect(given.slice(3)).toEqual([{ timeoutMs: 60_000, maxBytes: 262_144 }])
+  })
+
+  it('a fingerprint off the pattern, from Orca or from the caller, is failed', async () => {
+    const { deps, calls } = setup()
+    up([])
+    const bad = ['AP1-0123456789abcdef0123456789abcdef', 'ap1-0123456789abcdef0123456789abcde', `${FINGERPRINT} `]
+    for (const fingerprint of bad) {
+      orca.answer('plugin install', approval('approval_required', { fingerprint }), 3)
+      expect({ fingerprint, ...await orcaConnect(deps) }).toStrictEqual({ fingerprint, ...FAILED })
+    }
+    const before = calls().length
+    for (const fingerprint of bad) {
+      expect({ fingerprint, ...await orcaConnect(deps, fingerprint) }).toStrictEqual({ fingerprint, ...FAILED })
+    }
+    expect(calls().slice(before)).toEqual([])
+  })
+
+  it('off installs nothing', async () => {
+    const disabled = setup()
+    up([entry(disabled.folder, { status: 'disabled' })])
+    expect(await orcaConnect(disabled.deps, FINGERPRINT)).toStrictEqual({ connect: 'failed', error: 'off' })
+    expect(disabled.calls()).toEqual(['status --json', `plugin inspect ${disabled.folder} --json`, 'plugin list --json'])
+    const removed = setup()
+    up([])
+    expect(writeOrcaConnected(removed.deps.dataDir)).toBeUndefined()
+    expect(await orcaConnect(removed.deps)).toStrictEqual({ connect: 'failed', error: 'off' })
+    expect(removed.calls()).toEqual(['status --json', `plugin inspect ${removed.folder} --json`, 'plugin list --json'])
+  })
+
+  it('Orca not running is not-running', async () => {
+    const { deps, calls } = setup()
+    up([])
+    orca.answer('status', status(null, false))
+    expect(await orcaConnect(deps)).toStrictEqual({ connect: 'failed', error: 'not-running' })
+    expect(calls()).toEqual(['status --json'])
+    for (const over of [{ orca: () => null }, { platform: 'win32' as const }]) {
+      expect(await orcaConnect(setup(over).deps)).toStrictEqual({ connect: 'failed', error: 'not-running' })
+    }
+  })
+
+  it('from the sources it is no-plugin', async () => {
+    const { deps, calls } = setup({ files: () => null })
+    up([])
+    expect(await orcaConnect(deps)).toStrictEqual({ connect: 'failed', error: 'no-plugin' })
+    expect(calls()).toEqual([])
+  })
+
+  it('an update that asks for nothing new goes through; one that asks for more is approve', async () => {
+    const { deps, folder, calls } = setup()
+    up([entry(folder, { version: '1.2.2' })])
+    orca.answer('plugin update', installed(folder))
+    expect(await orcaConnect(deps)).toStrictEqual({ connect: 'done' })
+    expect(calls().slice(3)).toEqual([`plugin update ${KEY} --json`])
+    const update = { fromVersion: '1.2.2', growth: { capabilities: ['agent:read'], contributions: [] } }
+    orca.answer('plugin update', approval('approval_required', { data: { action: 'update', update } }), 3)
+    expect(await orcaConnect(deps)).toStrictEqual({
+      connect: 'approve', name: 'Harness Device', version: '1.2.3', fingerprint: FINGERPRINT, grants: [EXECUTION, WORKSPACE_READ], update: true,
+    })
+    expect(calls().slice(7)).toEqual([`plugin update ${KEY} --json`])
+  })
+
+  it('a hand install from another folder is installed from ours', async () => {
+    const { deps, folder, calls } = setup()
+    up([entry('/checkout/plugins/harness-device-orca')])
+    orca.answer('plugin install', approval('approval_required'), 3)
+    expect(await orcaConnect(deps)).toMatchObject({ connect: 'approve', update: true })
+    expect(calls().slice(3)).toEqual([`plugin install ${folder} --json`])
+  })
+
+  it('a pending plugin is enabled', async () => {
+    const { deps, folder, calls } = setup()
+    up([entry(folder, { status: 'pending' })])
+    orca.answer('plugin enable', approval('approval_required', { data: { action: 'enable' } }), 3)
+    expect(await orcaConnect(deps)).toMatchObject({ connect: 'approve', fingerprint: FINGERPRINT, update: true })
+    orca.answer('plugin enable', installed(folder))
+    expect(await orcaConnect(deps, FINGERPRINT)).toStrictEqual({ connect: 'done' })
+    expect(calls().filter((call) => call.startsWith('plugin enable'))).toEqual([`plugin enable ${KEY} --json`, `plugin enable ${KEY} --approve ${FINGERPRINT} --json`])
+  })
+
+  it('a current plugin is done with nothing run after the list', async () => {
+    const { deps, folder, calls } = setup()
+    up([entry(folder)])
+    expect(await orcaConnect(deps, FINGERPRINT)).toStrictEqual({ connect: 'done' })
+    expect(calls()).toEqual(['status --json', `plugin inspect ${folder} --json`, 'plugin list --json'])
+  })
+
+  it("the grants' bounds", async () => {
+    const { deps } = setup()
+    up([])
+    const ask = async (over: Parameters<typeof approval>[1]) => {
+      orca.answer('plugin install', approval('approval_required', over), 3)
+      return orcaConnect(deps)
+    }
+    const capabilities = (descriptions: unknown[]) => descriptions.map((description) => ({ kind: 'workspace:read', description }))
+    const ten = Array.from({ length: 10 }, (_, i) => String(i).repeat(300))
+    expect(await ask({ grants: { executionDescription: ten[0], capabilities: capabilities(ten.slice(1)) } })).toMatchObject({ grants: ten })
+    // Each line is trimmed, then its characters are counted as the app counts them: a clef is one.
+    const clefs = '𝄞'.repeat(300)
+    expect(await ask({ grants: { executionDescription: `  ${'a'.repeat(300)}  `, capabilities: capabilities([clefs]) } })).toMatchObject({ grants: ['a'.repeat(300), clefs] })
+    // An empty or blank string is dropped, and is not one of the ten.
+    expect(await ask({ grants: { executionDescription: ten[0], capabilities: capabilities([...ten.slice(1), '', '   ']) } })).toMatchObject({ grants: ten })
+    const past: [string, Parameters<typeof approval>[1]][] = [
+      ['11 lines', { grants: { capabilities: capabilities(Array.from({ length: 10 }, (_, i) => `Capability ${i}`)) } }],
+      ['301 characters', { grants: { capabilities: capabilities(['x'.repeat(301)]) } }],
+      ['a line break', { grants: { capabilities: capabilities(['Read your\nprojects']) } }],
+      ['a tab', { grants: { capabilities: capabilities(['Read your\tprojects']) } }],
+      ['a bell', { grants: { executionDescription: 'Runs its own\u0007code' } }],
+      ['a line break at the end', { grants: { executionDescription: `${EXECUTION}\n` } }],
+      ['a replacement whose command holds a line break', { grants: { replacements: [{ command: 'Open\nfile', action: 'file opener' }] } }],
+      ['a replacement past 300 characters once worded', { grants: { replacements: [{ command: 'x'.repeat(270), action: 'file opener' }] } }],
+      ['a replacement with no action', { grants: { replacements: [{ command: 'Open file' }] } }],
+      ['a capability with no description', { grants: { capabilities: [{ kind: 'workspace:read' }] } }],
+      ['capabilities that are no list', { grants: { capabilities: { kind: 'workspace:read', description: WORKSPACE_READ } } }],
+      ['a name that is no string', { data: { name: 7 } }],
+      ['a version that is no string', { data: { version: null } }],
+      ['a name with a line break', { data: { name: 'Harness\nDevice' } }],
+      ['a name past 300 characters', { data: { name: 'x'.repeat(301) } }],
+    ]
+    for (const [name, over] of past) {
+      expect({ name, ...await ask(over) }).toStrictEqual({ name, ...FAILED })
+    }
+  })
+
+  it('an approval with no grant left is failed', async () => {
+    const { deps } = setup()
+    up([])
+    const empty: [string, Record<string, unknown>][] = [
+      ['no grants', { grants: undefined }],
+      ['no execution sentence and no capability', { grants: { execution: 'trusted-worker', capabilities: [], contributions: [] } }],
+      ['only empty and blank strings', { grants: { execution: 'trusted-worker', executionDescription: '', capabilities: [{ kind: 'workspace:read', description: '  ' }], contributions: [] } }],
+    ]
+    for (const [name, data] of empty) {
+      orca.answer('plugin install', approval('approval_required', { data }), 3)
+      expect({ name, ...await orcaConnect(deps) }).toStrictEqual({ name, ...FAILED })
+    }
+  })
+
+  it('a folder behind what cli.js carries is written before Orca is asked to install it', async () => {
+    const { deps, folder } = setup()
+    up([])
+    orca.answer('plugin install', approval('approval_required'), 3)
+    mkdirSync(folder)
+    writeFileSync(join(folder, 'orca-plugin.json'), '{"version":"1.2.2"}\n')
+    let shown: string[] | undefined
+    const watched: OrcaPluginDeps = {
+      ...deps,
+      run: (file, args, opts) => {
+        if (args[1] === 'install') shown = Object.keys(FILES).map((path) => readFileSync(join(folder, path), 'utf8'))
+        return deps.run(file, args, opts)
+      },
+    }
+    expect(await orcaConnect(watched)).toMatchObject({ connect: 'approve' })
+    expect(shown).toEqual(Object.values(FILES))
   })
 })
