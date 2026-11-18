@@ -515,7 +515,7 @@ describe('startLoop', () => {
     await w.until(() => win.shows.length === 2)
     expect(win.shows).toEqual([202, 303])
     await w.to(60_000)
-    expect(w.logs).toEqual(['state: connected', 'in the last minute: 1 shows, 1 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 scroll lines, 0 dropped'])
+    expect(w.logs).toEqual(['state: connected', 'in the last minute: 1 shows, 1 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 page keys, 0 scroll lines, 0 dropped'])
   })
 
   it('a show that asks for the window raises it after the terminal is shown; one that does not, does not', async () => {
@@ -527,7 +527,7 @@ describe('startLoop', () => {
     // The first only: "yes" is not true, and a show that found no terminal raises nothing.
     expect(win.raised).toEqual([1])
     await w.to(60_000)
-    expect(w.logs.at(-1)).toBe('in the last minute: 3 shows, 1 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 scroll lines, 0 dropped')
+    expect(w.logs.at(-1)).toBe('in the last minute: 3 shows, 1 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 page keys, 0 scroll lines, 0 dropped')
   })
 
   it('a line it does not know is skipped and counted', async () => {
@@ -538,7 +538,7 @@ describe('startLoop', () => {
     await w.until(() => win.shows.length === 1)
     expect(win.shows).toEqual([101])
     await w.to(60_000)
-    expect(w.logs.at(-1)).toBe('in the last minute: 1 shows, 0 not found, 8 lines skipped, 1 states sent, 0 not sent, 0 scroll lines, 0 dropped')
+    expect(w.logs.at(-1)).toBe('in the last minute: 1 shows, 0 not found, 8 lines skipped, 1 states sent, 0 not sent, 0 page keys, 0 scroll lines, 0 dropped')
     expect(stream.signal.aborted).toBe(false)
   })
 
@@ -576,7 +576,7 @@ describe('startLoop', () => {
     stream.send('{"scroll":-1,"pid":101}\n')
     await w.to(60_000)
     expect(win.scrolls).toEqual([])
-    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 2 states sent, 0 not sent, 0 scroll lines, 3 dropped')
+    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 2 states sent, 0 not sent, 0 page keys, 0 scroll lines, 3 dropped')
   })
 
   it('a run ends once its terminal is no longer the active one', async () => {
@@ -620,7 +620,7 @@ describe('startLoop', () => {
     win.release()
     await w.to(60_000)
     expect(win.scrolls).toHaveLength(102)
-    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 102 scroll lines, 2 dropped')
+    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 page keys, 102 scroll lines, 2 dropped')
   })
 
   it.each(['{"scroll":0,"pid":7}', '{"scroll":-0,"pid":7}', '{"scroll":1.5,"pid":7}', '{"scroll":2}', '{"scroll":"2","pid":7}', '{"scroll":2,"pid":7.5}'])(
@@ -631,7 +631,7 @@ describe('startLoop', () => {
       stream.send(`${line}\n`)
       await w.to(60_000)
       expect(win.scrolls).toEqual([])
-      expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 1 lines skipped, 1 states sent, 0 not sent, 0 scroll lines, 0 dropped')
+      expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 1 lines skipped, 1 states sent, 0 not sent, 0 page keys, 0 scroll lines, 0 dropped')
     }
   )
 
@@ -647,7 +647,7 @@ describe('startLoop', () => {
     stream.send('{"scroll":1,"pid":101}\n')
     await w.until(() => win.scrolls.length === 2)
     await w.to(60_000)
-    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 1 scroll lines, 1 dropped')
+    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 page keys, 1 scroll lines, 1 dropped')
   })
 
   it("the minute's line counts each scrollLine that resolved as a scroll line, and each line that ran nothing as dropped", async () => {
@@ -657,7 +657,7 @@ describe('startLoop', () => {
     await w.until(() => win.scrolls.length === 3)
     stream.send('{"scroll":-3,"pid":202}\n')
     await w.to(60_000)
-    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 3 scroll lines, 1 dropped')
+    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 page keys, 3 scroll lines, 1 dropped')
   })
 
   it('stop ends a scroll run: no scroll follows, and what waited never runs', async () => {
@@ -672,6 +672,157 @@ describe('startLoop', () => {
     win.release()
     await w.to(600_000)
     expect([win.scrolls.length, w.logs]).toEqual([1, ['state: connected']])
+  })
+
+  it('a page line of 45 sends 2 keys and keeps 5; the next page line for that shell adds to them', async () => {
+    const win = fakeWindow({ terminals: [101], active: 101 })
+    const { w, stream } = await connected(win)
+    stream.send('{"scroll":-45,"pid":101,"page":true}\n')
+    await w.until(() => win.scrolls.length === 45)
+    expect(win.pageKeys).toEqual([{ pid: 101, up: true }, { pid: 101, up: true }])
+    stream.send('{"scroll":-15,"pid":101,"page":true}\n')
+    await w.until(() => win.scrolls.length === 60)
+    await flush()
+    expect([win.pageKeys.length, win.scrolls.every((up) => up)]).toEqual([3, true])
+  })
+
+  it('toward newer lines the key is PageDown', async () => {
+    const win = fakeWindow({ terminals: [101], active: 101 })
+    const { w, stream } = await connected(win)
+    stream.send('{"scroll":20,"pid":101,"page":true}\n')
+    await w.until(() => win.scrolls.length === 20)
+    await flush()
+    expect([win.pageKeys, win.scrolls.every((up) => !up)]).toEqual([[{ pid: 101, up: false }], true])
+  })
+
+  it("a line's keys go before its lines", async () => {
+    const win = fakeWindow({ terminals: [101], active: 101 })
+    const { w, stream } = await connected(win)
+    win.scrollReplies.push('held')
+    stream.send('{"scroll":-40,"pid":101,"page":true}\n')
+    await w.until(() => win.scrolls.length === 1)
+    expect(win.pageKeys).toHaveLength(2)
+    win.release()
+  })
+
+  it.each([
+    ['1 s with no page line', null],
+    ['a page line for another shell', '{"scroll":-15,"pid":202,"page":true}'],
+    ['a line with no page', '{"scroll":-1,"pid":101}'],
+  ])('the remainder is forgotten after %s: the next page lines count from 0', async (_case, line) => {
+    const win = fakeWindow({ terminals: [101, 202], active: 101 })
+    const { w, stream } = await connected(win)
+    stream.send('{"scroll":-15,"pid":101,"page":true}\n')
+    await w.until(() => win.scrolls.length === 15)
+    if (line) stream.send(`${line}\n`)
+    else await w.to(1_000)
+    await flush()
+    const before = win.scrolls.length
+    stream.send('{"scroll":-15,"pid":101,"page":true}\n')
+    await w.until(() => win.scrolls.length === before + 15)
+    expect(win.pageKeys).toEqual([])
+    // These 15 and the next 5 are the first page.
+    stream.send('{"scroll":-5,"pid":101,"page":true}\n')
+    await w.until(() => win.scrolls.length === before + 20)
+    expect(win.pageKeys).toEqual([{ pid: 101, up: true }])
+  })
+
+  it('999 ms after the last page line keeps the remainder', async () => {
+    const win = fakeWindow({ terminals: [101], active: 101 })
+    const { w, stream } = await connected(win)
+    stream.send('{"scroll":-10,"pid":101,"page":true}\n')
+    await w.until(() => win.scrolls.length === 10)
+    await w.to(600)
+    stream.send('{"scroll":-5,"pid":101,"page":true}\n')
+    await w.until(() => win.scrolls.length === 15)
+    // 1.6 s after the first page line, 999 ms after the last.
+    await w.to(1_599)
+    stream.send('{"scroll":-5,"pid":101,"page":true}\n')
+    await w.until(() => win.scrolls.length === 20)
+    expect(win.pageKeys).toEqual([{ pid: 101, up: true }])
+  })
+
+  it('a terminal that is not the active one gets no key', async () => {
+    const win = fakeWindow({ terminals: [101, 202], active: 202 })
+    const { w, stream } = await connected(win)
+    stream.send('{"scroll":-45,"pid":101,"page":true}\n')
+    await w.to(60_000)
+    expect([win.pageKeys, win.scrolls]).toEqual([[], []])
+    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 page keys, 0 scroll lines, 1 dropped')
+  })
+
+  it("a key no terminal takes is not counted and ends that line's keys; its lines still run", async () => {
+    // Active, yet no terminal has that shell when its key is pressed.
+    const win = fakeWindow({ terminals: [], active: 101 })
+    const { w, stream } = await connected(win)
+    stream.send('{"scroll":-45,"pid":101,"page":true}\n')
+    await w.until(() => win.scrolls.length === 45)
+    await w.to(60_000)
+    expect(win.pageKeys).toEqual([{ pid: 101, up: true }])
+    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 page keys, 45 scroll lines, 0 dropped')
+  })
+
+  it('a page line whose keys ran is not dropped, though VS Code refuses its first scroll', async () => {
+    const win = fakeWindow({ terminals: [101], active: 101 })
+    const { w, stream } = await connected(win)
+    win.scrollReplies.push('rejected')
+    stream.send('{"scroll":-40,"pid":101,"page":true}\n')
+    await w.until(() => win.scrolls.length === 1)
+    await w.to(60_000)
+    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 2 page keys, 0 scroll lines, 0 dropped')
+  })
+
+  it.each(['1', '"true"', 'false', 'null'])('a page of %s is no page: its lines run and no key is sent', async (page) => {
+    const win = fakeWindow({ terminals: [101], active: 101 })
+    const { w, stream } = await connected(win)
+    stream.send(`{"scroll":-45,"pid":101,"page":${page}}\n`)
+    await w.until(() => win.scrolls.length === 45)
+    await w.to(60_000)
+    expect(win.pageKeys).toEqual([])
+    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 page keys, 45 scroll lines, 0 dropped')
+  })
+
+  it('at most 5 keys from one line, and from what waits', async () => {
+    const win = fakeWindow({ terminals: [101], active: 101 })
+    const { w, stream } = await connected(win)
+    stream.send('{"scroll":-250,"pid":101,"page":true}\n')
+    await w.until(() => win.scrolls.length === 100)
+    await flush()
+    expect(win.pageKeys).toHaveLength(5)
+    // Two page lines of 100 wait behind a held line: one run of 100 lines and 5 keys.
+    win.scrollReplies.push('held')
+    stream.send('{"scroll":-1,"pid":101}\n')
+    await w.until(() => win.scrolls.length === 101)
+    stream.send('{"scroll":-100,"pid":101,"page":true}\n{"scroll":-100,"pid":101,"page":true}\n')
+    await flush()
+    win.release()
+    await w.until(() => win.scrolls.length === 201)
+    await w.to(60_000)
+    expect([win.pageKeys.length, win.scrolls.length]).toEqual([10, 201])
+    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 10 page keys, 201 scroll lines, 0 dropped')
+  })
+
+  it("the minute's line counts the page keys sent", async () => {
+    const win = fakeWindow({ terminals: [101], active: 101 })
+    const { w, stream } = await connected(win)
+    stream.send('{"scroll":-45,"pid":101,"page":true}\n')
+    await w.until(() => win.scrolls.length === 45)
+    await w.to(60_000)
+    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 2 page keys, 45 scroll lines, 0 dropped')
+  })
+
+  it('stop ends a run: what waited sends no key', async () => {
+    const win = fakeWindow({ terminals: [101], active: 101 })
+    const { w, stream } = await connected(win)
+    win.scrollReplies.push('held')
+    stream.send('{"scroll":-40,"pid":101,"page":true}\n')
+    await w.until(() => win.scrolls.length === 1)
+    stream.send('{"scroll":-40,"pid":101,"page":true}\n')
+    await flush()
+    await w.loop!.stop()
+    win.release()
+    await w.to(600_000)
+    expect([win.pageKeys.length, win.scrolls.length, w.logs]).toEqual([2, 1, ['state: connected']])
   })
 
   it('a line split across two chunks is one line, and two lines in one chunk are two', async () => {
@@ -701,7 +852,7 @@ describe('startLoop', () => {
     await flush()
     expect(w.due()[0]).toBe(1_000)
     await w.to(60_000)
-    expect(w.logs.at(-1)).toBe('in the last minute: 1 shows, 0 not found, 1 lines skipped, 1 states sent, 0 not sent, 0 scroll lines, 0 dropped')
+    expect(w.logs.at(-1)).toBe('in the last minute: 1 shows, 0 not found, 1 lines skipped, 1 states sent, 0 not sent, 0 page keys, 0 scroll lines, 0 dropped')
   })
 
   it('replaced stops the loop: no pass follows, and nothing is logged', async () => {
@@ -733,7 +884,7 @@ describe('startLoop', () => {
     expect(w.logs).toEqual([
       'state: notRunning',
       'state: connected',
-      'in the last minute: 1 shows, 1 not found, 1 lines skipped, 2 states sent, 1 not sent, 0 scroll lines, 0 dropped',
+      'in the last minute: 1 shows, 1 not found, 1 lines skipped, 2 states sent, 1 not sent, 0 page keys, 0 scroll lines, 0 dropped',
     ])
     // A minute with nothing in it logs nothing; the next event starts the next minute.
     await w.to(200_000)
@@ -743,7 +894,7 @@ describe('startLoop', () => {
     await w.to(259_999)
     expect(w.logs).toHaveLength(3)
     await w.to(260_000)
-    expect(w.logs[3]).toBe('in the last minute: 1 shows, 0 not found, 0 lines skipped, 0 states sent, 0 not sent, 0 scroll lines, 0 dropped')
+    expect(w.logs[3]).toBe('in the last minute: 1 shows, 0 not found, 0 lines skipped, 0 states sent, 0 not sent, 0 page keys, 0 scroll lines, 0 dropped')
     expect(w.states).toEqual(['notRunning', 'connected'])
     expect(w.logs.filter((line) => /101|202|303/.test(line) || line.includes(ID))).toEqual([])
   })
