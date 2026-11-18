@@ -716,6 +716,23 @@ describe('VS Code\'s windows', () => {
     expect(h.guardCounts()).toBe('0 page strokes, guard refused: 0 renderer, 0 asking, 0 background, 1 ps, 0 slow')
   })
 
+  it.each<[string, 'fullscreen' | 'foreground', string]>([
+    ['renderer', 'fullscreen', '1 renderer, 0 asking, 0 background, 0 ps'],
+    ['ps', 'foreground', '0 renderer, 0 asking, 0 background, 1 ps'],
+  ])('a %s read that throws as it is asked is refused at once, nothing rejects, and the next ask reads again', async (_, read, refused) => {
+    const h = await placed()
+    h[read].mockImplementationOnce(() => { throw new Error('not read') })
+    const answer = h.terminals.pageKeys(900, AGENT)
+    await h.landed()
+    // Before its 500 ms: the throw is an answer.
+    expect(h.deadline().cancelled).toBe(true)
+    expect(await answer).toBe(false)
+    expect(h.guardCounts()).toBe(`0 page strokes, guard refused: ${refused}, 0 slow`)
+    void h.terminals.pageKeys(900, AGENT)
+    await h.landed()
+    expect(h[read]).toHaveBeenCalledTimes(2)
+  })
+
   it('no answer in 500 ms is refused, and the answer that lands later counts nothing', async () => {
     expect(VSCODE_GUARD_MS).toBe(500)
     const h = await placed()
