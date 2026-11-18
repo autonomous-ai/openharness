@@ -221,3 +221,97 @@ All three affected engineSetup suites pass 49/49, actual 0, 1.684 s; engineSetup
 (`/tmp/core-launch-settings-transport-coverage-run.log`, `/tmp/core-launch-settings-transport-coverage/`). Final types
 pass, actual 0, 7.243 s (`/tmp/core-launch-settings-transport-types.log`). Every command has a persisted receipt
 with actual exit and no remaining owned-group members. No new semantic smoke or timing has run on this correction.
+
+
+### Corrected real-process semantic validation
+
+The v4 packet freezes baseline 9a2ae217cf and corrected candidate b8ef4c2dd0 across 791 source/tool/fixture inputs
+and all eight declared ABBA arms: manifest SHA256
+`f4346e8bbf7a5978d4e1799e3dba862a4dc3e056a7587d4c0af8437cc37422cb`.
+Its single semantic smoke passes, outer actual 0, 12.115 s
+(`/tmp/core-launch-settings-cost-v4-smoke/manifest.json`, `/tmp/core-launch-settings-cost-v4-smoke-outer-receipt.json`).
+Both arms complete three operations with identical normalized final command, terminal frame and one-time script,
+and identical statusline bytes (`2c99b4365b491f013195f59f960c525128001322f973344d36dc510a80a7fb23`). Both leave
+zero unused launch scripts; the candidate invokes exactly three final factories. Both setup workers, environment
+capture children and sample processes exit 0 with close/stdout EOF/stderr EOF receipts; groups and guardians settle,
+both sockets and private roots/node copies are removed, and all frozen hashes are checked again. This is functional
+validation only; smoke latency is not performance acceptance. Permission-probe runtime and cold service startup stay
+outside this packet; optional settings preparation/commit crosses the actual worker socket and uses real indexed
+publication. Earlier failed packets remain unchanged.
+
+
+### Frozen v4 cost result — acceptance held
+
+The approved unchanged two-cycle ABBA completed once, outer actual 0, 53.024 s. Each of the eight children completed
+one first publication, five warmups and fifty measured sequential operations. All 448 final command/frame/script
+checks match, no unused launch script remains, and candidate factories ran exactly 56 times per child. Every sample,
+worker and capture child exited 0 with close and both EOF receipts. All 32 recorded sample/guardian/worker/capture
+PIDs, eight sample groups and sockets, and sixteen private home/Node roots were independently checked gone. The outer
+group is empty; every arm rechecked frozen input hashes. Results: `/tmp/core-launch-settings-cost-v4-abba/manifest.json`;
+outer receipt: `/tmp/core-launch-settings-cost-v4-abba-outer-receipt.json`; complete arm/range/paired summary:
+`/tmp/core-launch-settings-cost-v4-summary.json`. No samples were dropped or retried.
+
+| Arm | First publication ms | Warm p50 ms | Warm p95 ms | Core CPU ms/op | Worker CPU ms/op | Combined CPU ms/op |
+|---|---:|---:|---:|---:|---:|---:|
+| 0-A | 3.856 | 0.851 | 1.205 | 0.983 | 0.263 | 1.247 |
+| 1-B | 105.688 | 41.147 | 60.023 | 24.322 | 1.101 | 25.423 |
+| 2-B | 103.298 | 40.679 | 61.407 | 24.219 | 1.108 | 25.328 |
+| 3-A | 3.855 | 0.840 | 0.963 | 0.941 | 0.237 | 1.177 |
+| 4-A | 3.852 | 0.884 | 1.056 | 0.990 | 0.240 | 1.230 |
+| 5-B | 110.376 | 41.084 | 88.396 | 23.783 | 1.107 | 24.890 |
+| 6-B | 115.285 | 41.883 | 78.859 | 24.030 | 1.125 | 25.155 |
+| 7-A | 3.843 | 0.881 | 1.010 | 0.980 | 0.242 | 1.222 |
+
+Mean arm p50 increased from 0.864 to 41.198 ms; p95 from 1.058 to 72.171 ms. Core CPU increased from 0.973 to
+24.089 ms/op and combined core/worker CPU from 1.219 to 25.199 ms/op. All four paired deltas have the same direction.
+Mean post-batch core RSS increased by 16.235 MiB and worker RSS by 4.369 MiB. Retained core heap growth during the
+fifty-operation batch is similar (0.181 versus 0.177 MiB); worker retained growth changes from -0.015 to 0.104 MiB.
+These are this fixture's process measurements, not whole-daemon memory. Common semantic checks are included in both
+latencies; worker CPU includes its ending GC snapshot. First publication is separate and excludes cold worker startup.
+
+This material regression is not accepted. The next reviewed diagnostic separates an untouched-source CPU profile
+from exact proof/Node filesystem API-call counters on an instrumented copy, with the same workload and semantics.
+No runtime optimization or cache is justified by static suspicion alone; final owner authority, source freshness and
+indexed output proof must remain intact. The old caller-v3 results remain limited to their caller-only scope, and
+this packet still excludes slice1's extra model-preflight capture and full daemon/native launch cost.
+
+
+### Read an existing optional artifact without republishing it
+
+The fixed two-child diagnostic completed actual 0, 17.518 s, with all 56 operations and v4 semantics in each role,
+zero unused scripts, and all owned processes/groups/sockets/private roots removed. Frozen input SHA256 is
+`37b48692ce66fe0198e4866b914c66854021f078fae6390e115b53a1a92cf16d`; CPU profile SHA256 is
+`a96d40d6cbc551bcb7379d6ab089240a51b9cbacd7a39690768328fd8fb03862`. The untouched-source CPU role spends
+40.460 of 42.039 ms/op in optional preparation. The separate counting copy observes 4,091 lstatSync, 67 native
+current/optionalCurrent, 66 source verify, 286 file verify and seven fsync calls per warm preparation. These are exact
+named Node API calls, not a one-to-one claim about kernel syscalls. Repeated path walks dominate sampled active CPU;
+unchanged optional scripts unnecessarily enter the required-hook durable flush path.
+
+Approved narrow correction: after actual worker prepare/commit and source/owner validation, an already captured
+owner-selected output whose bytes equal the fully validated candidate is read, verified and retained through its
+real output.verify closure. No publication, flush, reservation or durability-success claim is made for this branch.
+It does not convert an uncertain publisher transaction into durable success, and it does not fabricate a
+HookPreparationProof. An existing optional artifact is usable while its captured file and route remain current, as
+an existing selected executable is; if it is missing on a later preparation, it is recreated normally.
+
+Absent or different output bytes still use the unchanged indexed publisher and durability path. Required native
+hooks and their unchanged-file flush rationale are untouched. There is no success cache or new core record. Final
+argv selection still checks the captured owner/revision/account, every source file/ancestor, and the exact output
+file/route. A same-byte replacement during the worker wait must invalidate the captured output and omit values.
+
+RED coverage will use real files and Node fsync/write wrappers: first publication followed by an unchanged launch
+performs no additional write or flush; a pre-existing read-only identical script also needs no publication; same-byte
+replacement while setup answers is refused; source/output/ancestor/owner changes invalidate final literal arguments;
+missing and different output are recreated/published through the existing path. No generic proof algorithm changes.
+Cold-path duplicate checks remain held for separate review after this narrowly measured correction.
+
+
+Read-existing RED: three intended failures, seven safety passes and nine skipped, actual 1, 2.270 s
+(`/tmp/core-launch-settings-existing-red.log`). The unchanged and read-only fixtures each performed nine unwanted
+flushes at their test-directory depth; same-byte replacement during the worker wait was incorrectly accepted.
+The same ten selected cases pass after the correction, actual 0, 1.341 s
+(`/tmp/core-launch-settings-existing-green.log`). Complete affected settings/value/native-owner/renderer checks pass
+34/34 across four files, actual 0, 2.246 s (`/tmp/core-launch-settings-existing-affected.log`). Types pass, actual 0,
+38.195 s (`/tmp/core-launch-settings-existing-types.log`). Every command has an actual-exit receipt and an empty
+owned process group. No required hook implementation or caller changes were made. Corrected-source cost remains
+unmeasured until a fresh matched packet is frozen and reviewed.

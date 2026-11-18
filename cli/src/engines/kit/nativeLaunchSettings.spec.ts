@@ -1,20 +1,35 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { prepareLaunchSettings } from './nativeLaunchSettings.js'
 import { prepareNativeLaunchSettings } from '../../services/nativeLaunchSettings.js'
 import type { LaunchSettingsInput } from './launchSettingsWire.js'
 import type { NativeSetup } from './nativeSetup.js'
+import { statusLineScript } from './statusLine.js'
+import { launchSettingsArgs } from './launchValues.js'
+
+const effects = vi.hoisted(() => ({ active: false, flushes: 0, writes: 0 }))
+vi.mock('node:fs', async original => {
+  const fs = await original<typeof import('node:fs')>()
+  return { ...fs, fsync: (...args: Parameters<typeof fs.fsync>) => {
+    if (effects.active) effects.flushes++
+    return fs.fsync(...args)
+  }, writeFileSync: (...args: Parameters<typeof fs.writeFileSync>) => {
+    if (effects.active) effects.writes++
+    return fs.writeFileSync(...args)
+  } }
+})
 
 let root: string, dataDir: string, cwd: string
 beforeEach(() => {
+  effects.active = false; effects.flushes = 0; effects.writes = 0
   root = mkdtempSync(join(tmpdir(), 'launch-settings-'))
   dataDir = join(root, 'data'); cwd = join(root, 'work')
   mkdirSync(dataDir); mkdirSync(cwd); mkdirSync(join(root, '.codex')); mkdirSync(join(root, '.claude'))
   writeFileSync(join(dataDir, 'agent-settings.json'), JSON.stringify({ machineId: 'machine', accountId: 'account', agentsStartAgents: true, pullRequestLine: true }))
 })
-afterEach(() => rmSync(root, { recursive: true, force: true }))
+afterEach(() => { effects.active = false; rmSync(root, { recursive: true, force: true }) })
 const options = () => ({ dataDir, runtimeNode: process.execPath, platform: 'darwin' as const, gitBash: null,
   owner: { machineId: 'machine', accountId: 'account' }, current: () => true })
 const setup: Pick<NativeSetup, 'prepareFiles'> = { prepareFiles: async (input, _request, current) => prepareNativeLaunchSettings(input as LaunchSettingsInput, current) }
@@ -91,4 +106,89 @@ it('does not overwrite a script whose captured bytes changed while setup was pre
   })
   expect(await prepareLaunchSettings('claude', { HOME: root }, cwd, { prepareFiles }, options())).toBeNull()
   expect(readFileSync(script, 'utf8')).toBe('new owner bytes')
+})
+
+
+describe('read-existing optional artifact', () => {
+  const existing = (content = statusLineScript()) => {
+    const directory = join(dataDir, 'statusline'), script = join(directory, 'statusline.mjs')
+    mkdirSync(directory); writeFileSync(script, content, { mode: 0o600 })
+    return script
+  }
+  const prepare = () => prepareLaunchSettings('claude', { HOME: root }, cwd, setup, options())
+
+  it('uses a freshly verified identical output without another publication or flush', async () => {
+    const first = await prepare()
+    expect(first?.current()).toBe(true)
+    effects.active = true
+    const second = await prepare()
+    effects.active = false
+    expect(second?.values).toEqual(first?.values)
+    expect(second?.current()).toBe(true)
+    expect(first?.current()).toBe(true)
+    expect(effects).toMatchObject({ writes: 0, flushes: 0 })
+  })
+
+  it('reads an identical pre-existing read-only script without claiming publication', async () => {
+    const script = existing(); chmodSync(script, 0o400)
+    effects.active = true
+    const prepared = await prepare()
+    effects.active = false
+    expect(prepared?.current()).toBe(true)
+    expect(readFileSync(script, 'utf8')).toBe(statusLineScript())
+    expect(effects).toMatchObject({ writes: 0, flushes: 0 })
+  })
+
+  it('omits values after a same-byte output replacement during the worker wait', async () => {
+    const script = existing(), replacement = join(dataDir, 'replacement.mjs')
+    const prepareFiles: NonNullable<NativeSetup['prepareFiles']> = async (input, request, current) => {
+      const candidate = await setup.prepareFiles!(input, request, current)
+      writeFileSync(replacement, statusLineScript(), { mode: 0o600 }); renameSync(replacement, script)
+      return candidate
+    }
+    expect(await prepareLaunchSettings('claude', { HOME: root }, cwd, { prepareFiles }, options())).toBeNull()
+    expect(readFileSync(script, 'utf8')).toBe(statusLineScript())
+  })
+
+  it.each(['source', 'output', 'same-byte output', 'ancestor', 'owner'] as const)(
+    'omits optional final arguments when the retained %s changes', async change => {
+      const script = existing(); let current = true
+      const prepared = await prepareLaunchSettings('claude', { HOME: root }, cwd, setup, { ...options(), current: () => current })
+      expect(prepared?.current()).toBe(true)
+      if (change === 'source') writeFileSync(join(dataDir, 'agent-settings.json'), '{}')
+      else if (change === 'output') writeFileSync(script, 'changed')
+      else if (change === 'same-byte output') {
+        const replacement = join(dataDir, 'replacement.mjs')
+        writeFileSync(replacement, statusLineScript()); renameSync(replacement, script)
+      } else if (change === 'ancestor') {
+        renameSync(join(dataDir, 'statusline'), join(dataDir, 'displaced')); existing()
+      } else current = false
+      expect(prepared?.current()).toBe(false)
+      const base = ['--settings', '{"hooks":{"keep":[]}}', '--append-system-prompt', 'keep']
+      expect(launchSettingsArgs('claude', base, prepared)).toEqual(base)
+    })
+
+  it('recreates a later missing script through durable indexed publication', async () => {
+    const script = existing(), retained = await prepare()
+    expect(retained?.current()).toBe(true)
+    rmSync(script); expect(retained?.current()).toBe(false)
+    effects.active = true
+    const recreated = await prepare()
+    effects.active = false
+    expect(recreated?.current()).toBe(true)
+    expect(readFileSync(script, 'utf8')).toBe(statusLineScript())
+    expect(effects.writes).toBeGreaterThan(0)
+    expect(effects.flushes).toBeGreaterThan(0)
+  })
+
+  it('publishes different captured bytes through the existing durable path', async () => {
+    const script = existing('old release')
+    effects.active = true
+    const prepared = await prepare()
+    effects.active = false
+    expect(prepared?.current()).toBe(true)
+    expect(readFileSync(script, 'utf8')).toBe(statusLineScript())
+    expect(effects.writes).toBeGreaterThan(0)
+    expect(effects.flushes).toBeGreaterThan(0)
+  })
 })

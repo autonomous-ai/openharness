@@ -71,17 +71,25 @@ export async function prepareLaunchSettings(engine: string, environment: Readonl
     if (!boundedLaunchSettingsInput(input) || !current()) return null
     const candidate = launchSettingsCandidate(await setup.prepareFiles(input, randomUUID(), current), input)
     if (!candidate || !current()) return null
-    let published: HookPreparationProof | undefined
+    let outputCurrent: (() => boolean) | undefined
     if (candidate.files.length) {
       const content = candidate.files[0].content
-      // This one artifact is itself the reservation owner. Required multi-file hook publication is unchanged.
-      const written = await publishNativeFiles([{ file: destination!, mode: 0o600, parentMode: 0o700 }], async files => {
-        if (files[0].content !== content) output!.verify()
-        return { version: 1, files: [{ index: 0, content }] }
-      }, { current, verify, confirmed: proof => { published = proof }, identity: content })
-      if (!written || !published) return null
+      if (output!.content === content) {
+        // Reading an existing optional artifact makes no publication or durability claim.
+        output!.verify()
+        outputCurrent = () => { try { output!.verify(); return true } catch { return false } }
+      } else {
+        let published: HookPreparationProof | undefined
+        // This one artifact is itself the reservation owner. Required multi-file hook publication is unchanged.
+        const written = await publishNativeFiles([{ file: destination!, mode: 0o600, parentMode: 0o700 }], async files => {
+          if (files[0].content !== content) output!.verify()
+          return { version: 1, files: [{ index: 0, content }] }
+        }, { current, verify, confirmed: proof => { published = proof }, identity: content })
+        if (!written || !published) return null
+        outputCurrent = published.current
+      }
     }
-    const finalCurrent = () => current() && (!published || published.current())
+    const finalCurrent = () => current() && (!outputCurrent || outputCurrent())
     return finalCurrent() ? { values: Object.freeze({ ...candidate.values }), current: finalCurrent } : null
   } catch {
     console.warn('[launch-settings] OPTIONAL_PREPARATION_UNAVAILABLE')
