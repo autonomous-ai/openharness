@@ -1,7 +1,7 @@
 /**
  * What Harness Device's plugin for Orca (plugins/harness-device-orca) is in Orca, from Orca's own CLI: `orca status`,
  * `orca plugin inspect` and `orca plugin list`, each with `--json`; and the connect that installs, updates or enables
- * it (`orca plugin install|update|enable`). Orca installs the plugin from a folder in the home's .harness that holds the
+ * it (`orca plugin install|update|enable`). Orca installs the plugin from a folder in Harness's data root that holds the
  * files cli.js carries (orcaPluginFolder.ts), written before Orca is asked about it; a folder that cannot be written is
  * said on stderr by its error's code. It runs in the `harness` command's own process (`harness device orca`), never in
  * the core's or the devices' process. Orca's answers are outside text: each is read up to ORCA_ANSWER_MAX_BYTES, only
