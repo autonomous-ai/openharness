@@ -226,12 +226,9 @@ mod tests {
     fn no_agent_rows_in_any_state() {
         for state in states() {
             let line = menu_log(&menu(&state));
-            for word in ["Claude Code", "Codex", "Turn off", "Turning"] {
+            for word in ["Claude Code", "Codex", "Turn on", "Turn off", "Turning"] {
                 assert!(!line.contains(word), "{line}");
             }
-            // "Turn on" names VS Code alone, an app and not an agent, and once at most.
-            assert_eq!(line.matches("Turn on").count(), line.matches("Turn on VS Code").count(), "{line}");
-            assert!(line.matches("Turn on VS Code").count() <= 1, "{line}");
         }
     }
 
