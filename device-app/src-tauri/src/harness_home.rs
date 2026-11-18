@@ -123,8 +123,21 @@ mod tests {
     }
 
     #[test]
-    fn the_data_root_wins_over_a_bridge() {
-        assert_eq!(roots(&[], &[path(&[".harness"]), xdg().0]), xdg());
+    fn the_marked_data_root_wins_over_a_bridge() {
+        let marker = xdg().0.join(".harness-root");
+        assert_eq!(roots(&[], &[path(&[".harness"]), xdg().0, marker]), xdg());
+    }
+
+    #[test]
+    fn a_data_root_without_the_marker_beside_dot_harness_stays_legacy() {
+        // Desktop's own store, or anything else, made it: it switches nothing.
+        let legacy = path(&[".harness"]);
+        assert_eq!(roots(&[], &[legacy.clone(), xdg().0]), (legacy.clone(), legacy));
+    }
+
+    #[test]
+    fn a_data_root_without_the_marker_and_no_dot_harness_is_xdg() {
+        assert_eq!(roots(&[], &[xdg().0]), xdg());
     }
 
     #[test]
@@ -140,10 +153,12 @@ mod tests {
         let vars = [("XDG_DATA_HOME", "/d"), ("XDG_STATE_HOME", "/s")];
         let custom = (PathBuf::from("/d").join("harness"), PathBuf::from("/s").join("harness"));
         assert_eq!(roots(&vars, &[]), custom);
-        // The custom data root, not the default one, is what wins over a `~/.harness`.
-        assert_eq!(roots(&vars, &[path(&[".harness"]), custom.0.clone()]), custom);
+        // The custom data root's marker, not the default one's, is what wins over a `~/.harness`.
+        let marked = [path(&[".harness"]), custom.0.clone(), custom.0.join(".harness-root")];
+        assert_eq!(roots(&vars, &marked), custom);
         let legacy = path(&[".harness"]);
-        assert_eq!(roots(&vars, &[legacy.clone(), xdg().0]), (legacy.clone(), legacy));
+        let default_marked = [legacy.clone(), xdg().0, xdg().0.join(".harness-root")];
+        assert_eq!(roots(&vars, &default_marked), (legacy.clone(), legacy));
     }
 
     #[test]

@@ -88,6 +88,33 @@ void main() {
     );
   }, skip: Platform.isWindows);
 
+  test(
+    'a data root Desktop\'s own store made before the CLI switches nothing',
+    () async {
+      final home = '${scratch.path}/home';
+      final look = HomeLook(
+        linux: true,
+        environment: const {},
+        exists: (path) =>
+            FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound,
+      );
+      String path() => HarnessFileStore.defaultDirectoryPath(
+        environment: {'HOME': home},
+        look: look,
+      );
+
+      // Desktop first, on a fresh machine: its store makes the data root.
+      final first = path();
+      expect(first, '$home/.local/share/harness/desktop-app-v2');
+      await HarnessFileStore(directory: Directory(first)).write('k', 'v');
+      // Then a CLI that keeps ~/.harness: the machine is on ~/.harness.
+      Directory('$home/.harness').createSync();
+
+      expect(path(), '$home/.harness/desktop-app-v2');
+    },
+    skip: Platform.isWindows,
+  );
+
   test('with no home', () {
     expect(
       () => HarnessFileStore.defaultDirectoryPath(environment: {}),

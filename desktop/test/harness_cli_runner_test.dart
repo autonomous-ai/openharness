@@ -265,6 +265,7 @@ void main() {
           node: '$legacy/runtime/node-v22/bin/node',
           cli: '$data/cli',
         );
+        File('$data/.harness-root').writeAsStringSync('1\n');
 
         final invocation = await runner().resolve(['version']);
 

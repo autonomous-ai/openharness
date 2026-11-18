@@ -116,6 +116,7 @@ mod tests {
 
     const XDG: (&str, &str) = ("/h/.local/share/harness", "/h/.local/state/harness");
     const LEGACY: (&str, &str) = ("/h/.harness", "/h/.harness");
+    const MARKER: &str = "/h/.local/share/harness/.harness-root";
 
     #[test]
     fn fresh_linux_is_xdg() {
@@ -128,8 +129,19 @@ mod tests {
     }
 
     #[test]
-    fn the_data_root_wins_over_a_bridge() {
-        assert_eq!(linux_roots(&[], &["/h/.harness", XDG.0]), pair(XDG.0, XDG.1));
+    fn the_marked_data_root_wins_over_a_bridge() {
+        assert_eq!(linux_roots(&[], &["/h/.harness", XDG.0, MARKER]), pair(XDG.0, XDG.1));
+    }
+
+    #[test]
+    fn a_data_root_without_the_marker_beside_dot_harness_stays_legacy() {
+        // Desktop's own store, or anything else, made it: it switches nothing.
+        assert_eq!(linux_roots(&[], &["/h/.harness", XDG.0]), pair(LEGACY.0, LEGACY.1));
+    }
+
+    #[test]
+    fn a_data_root_without_the_marker_and_no_dot_harness_is_xdg() {
+        assert_eq!(linux_roots(&[], &[XDG.0]), pair(XDG.0, XDG.1));
     }
 
     #[test]
@@ -137,7 +149,7 @@ mod tests {
         for value in ["", "share"] {
             let env = [("XDG_DATA_HOME", value), ("XDG_STATE_HOME", value)];
             assert_eq!(linux_roots(&env, &[]), pair(XDG.0, XDG.1), "{value:?}");
-            assert_eq!(linux_roots(&env, &["/h/.harness", XDG.0]), pair(XDG.0, XDG.1), "{value:?}");
+            assert_eq!(linux_roots(&env, &["/h/.harness", XDG.0, MARKER]), pair(XDG.0, XDG.1), "{value:?}");
         }
     }
 
@@ -146,8 +158,9 @@ mod tests {
         let env = [("XDG_DATA_HOME", "/d"), ("XDG_STATE_HOME", "/s")];
         assert_eq!(linux_roots(&env, &[]), pair("/d/harness", "/s/harness"));
         // The data root the rule looks for is the variable's, not the default.
-        assert_eq!(linux_roots(&env, &["/h/.harness", XDG.0]), pair(LEGACY.0, LEGACY.1));
-        assert_eq!(linux_roots(&env, &["/h/.harness", "/d/harness"]), pair("/d/harness", "/s/harness"));
+        assert_eq!(linux_roots(&env, &["/h/.harness", XDG.0, MARKER]), pair(LEGACY.0, LEGACY.1));
+        let custom = ["/h/.harness", "/d/harness", "/d/harness/.harness-root"];
+        assert_eq!(linux_roots(&env, &custom), pair("/d/harness", "/s/harness"));
     }
 
     #[test]
@@ -229,10 +242,26 @@ mod tests {
         let (slashed_data, slashed_state) = (format!("{}/", custom_data.display()), format!("{}/", custom_state.display()));
         let slashed_env = [("XDG_DATA_HOME", slashed_data.as_str()), ("XDG_STATE_HOME", slashed_state.as_str())];
         let envs: [&[(&str, &str)]; 4] = [&[], &[("XDG_DATA_HOME", ""), ("XDG_STATE_HOME", "share")], &custom_env, &slashed_env];
-        // Fresh, legacy, the default data root beside a bridge, then the custom data root too.
-        let steps = [home.clone(), home.join(".harness"), home.join(".local/share/harness"), custom_data.join("harness")];
-        for step in steps {
-            std::fs::create_dir_all(&step).unwrap();
+        // Fresh, legacy, each data root beside it unmarked, marked by a folder (no marker), then marked.
+        let (data, custom_root) = (home.join(".local/share/harness"), custom_data.join("harness"));
+        let steps = [
+            (home.clone(), false),
+            (home.join(".harness"), false),
+            (data.clone(), false),
+            (custom_root.clone(), false),
+            (data.join(".harness-root"), false),
+            (data.join(".harness-root"), true),
+            (custom_root.join(".harness-root"), true),
+        ];
+        for (step, marker) in steps {
+            if marker {
+                if step.is_dir() {
+                    std::fs::remove_dir(&step).unwrap();
+                }
+                std::fs::write(&step, "1\n").unwrap();
+            } else {
+                std::fs::create_dir_all(&step).unwrap();
+            }
             for env in envs {
                 let read = |name: &str| env.iter().find(|(key, _)| *key == name).map(|(_, value)| OsString::from(value));
                 for (uname, linux) in [("Linux", true), ("Darwin", false)] {

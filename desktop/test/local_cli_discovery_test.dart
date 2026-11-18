@@ -68,7 +68,10 @@ void main() {
         look: look(linux: true),
       );
       expect(await identity.computerId(), before);
+      // The move: the data root, with the marker its commit writes.
       write('${scratch.path}/.local/share/harness', after);
+      File('${scratch.path}/.local/share/harness/.harness-root')
+          .writeAsStringSync('1\n');
       expect(await identity.computerId(), after);
     });
 

@@ -653,11 +653,11 @@ mod tests {
         let node = put(legacy.join("runtime").join("node-v22").join("bin").join("node"));
         fs::write(legacy.join("runtime").join("current-node"), node.display().to_string()).unwrap();
         let cli_js = put(legacy.join("cli").join("cli.js"));
-        // The move lands between two looks: the XDG data root is there from the second one on.
-        let data = home.join(".local").join("share").join("harness");
+        // The move lands between two looks: the XDG data root's marker is there from the second one on.
+        let marker = home.join(".local").join("share").join("harness").join(".harness-root");
         let asked = Cell::new(0);
         let exists = |path: &Path| {
-            if path == data {
+            if path == marker {
                 asked.set(asked.get() + 1);
                 return asked.get() > 1;
             }

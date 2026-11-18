@@ -21,6 +21,7 @@ final offLinux = HomeLook(
 const data = '/h/.local/share/harness';
 const state = '/h/.local/state/harness';
 const legacy = '/h/.harness';
+const marker = '$data/.harness-root';
 
 void main() {
   group('HarnessHome', () {
@@ -152,8 +153,17 @@ void main() {
       expectRoots(of(linux(existing: {legacy})), legacy, legacy);
     });
 
-    test('the data root exists: XDG, whatever is at ~/.harness', () {
-      expectRoots(of(linux(existing: {data, legacy})), data, state);
+    test('the data root holds the marker: XDG, whatever is at ~/.harness', () {
+      expectRoots(of(linux(existing: {data, marker, legacy})), data, state);
+      expectRoots(of(linux(existing: {data, marker})), data, state);
+    });
+
+    test('a data root without the marker beside ~/.harness stays legacy', () {
+      // Desktop's own store, or anything else, made it: it switches nothing.
+      expectRoots(of(linux(existing: {data, legacy})), legacy, legacy);
+    });
+
+    test('a data root without the marker and no ~/.harness: XDG', () {
       expectRoots(of(linux(existing: {data})), data, state);
     });
 
@@ -179,12 +189,17 @@ void main() {
         '/s/harness',
       );
       expectRoots(
-        of(linux(environment: environment, existing: {data, legacy})),
+        of(linux(environment: environment, existing: {data, marker, legacy})),
         legacy,
         legacy,
       );
       expectRoots(
-        of(linux(environment: environment, existing: {'/d/harness', legacy})),
+        of(
+          linux(
+            environment: environment,
+            existing: {'/d/harness', '/d/harness/.harness-root', legacy},
+          ),
+        ),
         '/d/harness',
         '/s/harness',
       );

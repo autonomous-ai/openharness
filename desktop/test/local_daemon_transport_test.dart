@@ -196,6 +196,55 @@ void main() {
       );
     });
 
+    group('a long folder\'s socket on Linux', () {
+      late Directory scratch;
+      late String runtime;
+      final long = '/${'x' * 100}';
+
+      setUp(() {
+        // Short, so the socket under it fits.
+        scratch = Directory('/tmp').createTempSync('rt');
+        runtime = '${scratch.path}/run';
+        Directory(runtime).createSync();
+        Process.runSync('chmod', ['700', runtime]);
+      });
+      tearDown(() => scratch.deleteSync(recursive: true));
+
+      String? socket(String? runtimeDir, {bool linux = true}) =>
+          defaultDaemonSocketPath(
+            1,
+            environment: {'HOME': '/h', 'ADAPTER_DATA_DIR': long},
+            isWindows: false,
+            look: HomeLook(
+              linux: linux,
+              environment: {'XDG_RUNTIME_DIR': ?runtimeDir},
+              exists: (path) => false,
+            ),
+          );
+
+      test('is in XDG_RUNTIME_DIR, by the CLI\'s hash, while it is the account\'s own 0700 folder', () {
+        expect(socket(runtime), '$runtime/harness/e50e7828cbafcbee/daemon-1.sock');
+      });
+
+      test('is in the state root when XDG_RUNTIME_DIR is unset, relative, open to others or a link', () {
+        const state = '/h/.local/state/harness/s/e50e7828cbafcbee/daemon-1.sock';
+        expect(socket(null), state);
+        expect(socket('run'), state);
+        expect(socket('${scratch.path}/none'), state);
+        final link = Link('${scratch.path}/link')..createSync(runtime);
+        expect(socket(link.path), state);
+        Process.runSync('chmod', ['750', runtime]);
+        expect(socket(runtime), state);
+      });
+
+      test('is never there off Linux', () {
+        expect(
+          socket(runtime, linux: false),
+          '/h/.harness/s/e50e7828cbafcbee/daemon-1.sock',
+        );
+      });
+    }, skip: Platform.isWindows);
+
     test('the data folder is found by the same look as the short one', () {
       expect(
         defaultDaemonSocketPath(
@@ -233,7 +282,9 @@ void main() {
         look: HomeLook(
           linux: true,
           environment: {'XDG_DATA_HOME': '/${'d' * 80}', 'XDG_STATE_HOME': '/s'},
-          exists: (path) => path == dataRoot ? ++asked == 1 : path == '/h/.harness',
+          exists: (path) => path == '$dataRoot/.harness-root'
+              ? ++asked == 1
+              : path == '/h/.harness',
         ),
       );
       expect(path, matches(RegExp(r'^/s/harness/s/[0-9a-f]{16}/daemon-1\.sock$')));
