@@ -3895,7 +3895,7 @@ class Registry {
       const source = await sessionStorage.retain({ kind: 'names' })
       try {
       if (source.image.state === 'image') {
-        if (!source.image.json) throw new RegistryPersistenceUnavailable('names are not JSON')
+        if (!source.image.json) throw new SyntaxError('names are not JSON')
         const obj = source.image.value as Record<string, unknown>
         existing = Object.fromEntries(Object.entries(obj).filter(([, value]) => typeof value === 'string')) as Record<string, string>
       }

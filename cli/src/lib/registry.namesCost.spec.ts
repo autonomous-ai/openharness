@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { registry as Registry } from './registry.js'
+import type { SessionStorage } from './sessionStorage.js'
 
 const io = vi.hoisted(() => ({ file: '', namesPublished: false, failDirectorySync: false,
   publications: [] as string[], read: undefined as undefined | (() => Promise<void>),
@@ -33,27 +34,13 @@ vi.mock('node:fs', async original => {
     },
   }
 })
-vi.mock('node:fs/promises', async original => {
-  const actual = await original<typeof import('node:fs/promises')>()
-  return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
-    const handle = await actual.open(...args), close = handle.close.bind(handle), sync = handle.sync.bind(handle)
-    handle.close = async () => {
-      await close()
-      if (String(args[0]) === io.file) await io.read?.()
-    }
-    handle.sync = async () => {
-      await sync()
-      if (String(args[0]).startsWith(io.file + '.') && String(args[0]).endsWith('.tmp')) await io.prepare?.()
-    }
-    return handle
-  } }
-})
 vi.mock('./bootId.js', async original => ({ ...await original<object>(),
   currentBootId: () => 'fixture-boot', bootChanged: () => false,
 }))
 
 const ID = 'names-cost-agent', CHOSEN = 'Chosen name'
 let root = '', registry: typeof Registry | undefined, release: (() => void) | undefined
+let storage: SessionStorage | undefined
 const accepted: Promise<unknown>[] = []
 const names = (): Record<string, string> => JSON.parse(readFileSync(io.file, 'utf8'))
 function within<T>(pending: Promise<T>, name: string, ms = 5_000): Promise<T> {
@@ -82,7 +69,7 @@ function hold(boundary: 'read' | 'prepare') {
 
 beforeEach(async () => {
   vi.resetModules()
-  registry = undefined; release = undefined; accepted.length = 0
+  registry = undefined; storage = undefined; release = undefined; accepted.length = 0
   io.namesPublished = false; io.failDirectorySync = false; io.publications = []
   io.read = undefined; io.prepare = undefined
   root = mkdtempSync(join(tmpdir(), 'registry-names-cost-'))
@@ -93,6 +80,23 @@ beforeEach(async () => {
     CODEX_HOME: join(root, 'home', '.codex'), CURSOR_HOME: join(root, 'home', '.cursor') })) vi.stubEnv(key, value)
   io.file = join(root, 'data', 'agent-names.json')
   writeFileSync(join(root, 'data', 'engine-homes.json'), '{}', { mode: 0o600 })
+  storage = (await import('./sessionStorage.js')).sessionStorage
+  const owned = storage, retain = owned.retain.bind(owned), prepare = owned.prepare.bind(owned)
+  vi.spyOn(owned, 'retain').mockImplementation(async (...args) => {
+    const source = await retain(...args)
+    try {
+      if (args[0].kind === 'names') await io.read?.()
+      return source
+    } catch (error) { await source.release(); throw error }
+  })
+  vi.spyOn(owned, 'prepare').mockImplementation(async (...args) => {
+    // Hold the child's actual flushed image before Registry can publish it.
+    const prepared = await prepare(...args)
+    try {
+      if (args[0].kind === 'names') await io.prepare?.()
+      return prepared
+    } catch (error) { await owned.discard(prepared); throw error }
+  })
   registry = (await import('./registry.js')).registry
   await registry.load()
   expect(await registry.openProcessAgent({ agentId: ID, engine: 'claude', tmuxPane: '%1',
@@ -108,8 +112,11 @@ afterEach(async () => {
   io.failDirectorySync = false; io.namesPublished = false
   let settled = false
   try {
-    await within(Promise.allSettled(accepted), 'accepted names caller cleanup', 10_000)
-    if (registry) await within(registry.flush({ exiting: true }), 'registry cleanup', 10_000)
+    const failures: unknown[] = []
+    try { await within(Promise.allSettled(accepted), 'accepted names caller cleanup', 10_000) } catch (error) { failures.push(error) }
+    try { if (registry) await within(registry.flush({ exiting: true }), 'registry cleanup', 10_000) } catch (error) { failures.push(error) }
+    try { if (storage) await within(storage.close(), 'storage cleanup', 10_000) } catch (error) { failures.push(error) }
+    if (failures.length) throw new AggregateError(failures, 'names fixture cleanup failed')
     settled = true
   } finally {
     vi.restoreAllMocks(); vi.unstubAllEnvs()
