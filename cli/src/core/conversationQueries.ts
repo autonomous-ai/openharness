@@ -4,9 +4,43 @@ import type { ServiceQueryAuthority } from './serviceLinks.js'
  * in the edge host (quiet-machine QA, handoff extraction). No service receives the registry itself. */
 import { ENGINES, type AgentEngine } from '../engines/types.js'
 import type { HandoffDeps } from '../lib/agentHandoff.js'
+import type { HandoffWiring } from '../lib/handoffDiscovery.js'
 import { agentView, CONVERSATIONS_OFF, type ConversationReads, type CoreApi } from './api.js'
 
-export function conversationReads(deps: HandoffDeps): ConversationReads {
+/** Discovery and publication share one witness owner, including concurrent first queries. */
+export function conversationReads(wiring: HandoffWiring, directory: string, deadlineMs?: number): ConversationReads {
+  let pending: Promise<ConversationReads> | undefined
+  let ready: ConversationReads | undefined
+  const load = () => pending ??= import('./handoffDependencies.js')
+    .then(({ createHandoffDependencies }) => {
+      const bound = boundReads(createHandoffDependencies(wiring, directory, deadlineMs))
+      for (const key of Object.keys(cold) as (keyof ConversationReads)[]) {
+        // Preserve an owner's decorated method. A frozen facade keeps its working cold wrapper.
+        if (reads[key] === cold[key]) Reflect.defineProperty(reads, key, { value: bound[key] })
+      }
+      ready = bound
+      return bound
+    })
+    .catch(() => {
+      pending = undefined
+      console.error('[handoff] initialization failed: HANDOFF_UNAVAILABLE')
+      throw new HandoffError('HANDOFF_UNAVAILABLE')
+    })
+  const cold: ConversationReads = {
+    publish: async (prepared, permit) => (ready ?? await load()).publish(prepared, permit),
+    resolve: async id => (ready ?? await load()).resolve(id),
+    recentAsks: async (id, count) => (ready ?? await load()).recentAsks(id, count),
+    lastFullText: async id => (ready ?? await load()).lastFullText(id),
+    recaps: async (id, count) => (ready ?? await load()).recaps(id, count),
+    discover: async id => (ready ?? await load()).discover(id),
+    findTranscript: async (engine, id, options) => (ready ?? await load()).findTranscript(engine, id, options),
+    transcriptOk: async (engine, path, home) => (ready ?? await load()).transcriptOk(engine, path, home),
+  }
+  const reads = { ...cold }
+  return reads
+}
+
+function boundReads(deps: HandoffDeps): ConversationReads {
   return {
     publish: async (prepared, permit) => {
       if (!deps.publish) throw new HandoffError('HANDOFF_UNAVAILABLE')
@@ -21,7 +55,7 @@ export function conversationReads(deps: HandoffDeps): ConversationReads {
       const found = session && await deps.discoverSession?.(session)
       return found ? { engine: found.engine as AgentEngine, sessionId: found.sessionId, transcriptPath: found.transcriptPath ?? null } : null
     },
-    findTranscript: deps.findTranscript ?? CONVERSATIONS_OFF.findTranscript,
+    findTranscript: async (engine, id, options) => (deps.findTranscript ?? CONVERSATIONS_OFF.findTranscript)(engine, id, options),
     transcriptOk: async (engine, path, home) => (await deps.transcriptOk?.(engine, path, home)) ?? false,
   }
 }

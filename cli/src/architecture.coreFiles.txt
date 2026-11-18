@@ -91,8 +91,6 @@ core/frameParts.ts
 core/gatewayLink.ts
 core/gatewayWake.ts
 core/guestPolicy.ts
-core/handoffDependencies.ts
-core/handoffPublication.ts
 core/input.ts
 core/main.ts
 core/messagesLink.ts
@@ -337,11 +335,6 @@ lib/guestEngines.ts
 lib/guestLaunchWire.ts
 lib/guestUser.ts
 lib/handoffAuthority.ts
-lib/handoffDiscovery.ts
-lib/handoffFiles.ts
-lib/handoffGit.ts
-lib/handoffPublication.ts
-lib/handoffValidation.ts
 lib/harnessDefaults.ts
 lib/harnessMonitor.ts
 lib/harnessSessionLabel.ts
@@ -454,7 +447,6 @@ lib/sqliteThread.ts
 lib/stopAgentService.ts
 lib/stoppedAgents.ts
 lib/stoppedAuthorityMetadata.ts
-lib/subagentTranscript.ts
 lib/submitTiming.ts
 lib/subscriptionModel.ts
 lib/tabKeyWire.ts

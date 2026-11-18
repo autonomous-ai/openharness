@@ -82,7 +82,6 @@ import { clearDeleted, isRecentlyDeleted, markDeleted } from '../lib/deletedSess
 import { findLiveSession, findResumedTranscript } from '../lib/sessionRepair.js'
 import { openclawStateDir } from '../lib/openclawStore.js'
 import { processSessionOf } from '../engines/sessionStores.js'
-import { createHandoffDependencies } from './handoffDependencies.js'
 import { tmuxAvailableNow } from '../lib/tmuxOnPath.js'
 import { createTerminalBackendRecovery } from '../lib/terminalBackendRecovery.js'
 import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from '../lib/hostTheme.js'
@@ -1591,8 +1590,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.agentRecentProvider = recaps.agentRecent
 
   // Quiet-machine QA: the edge host renders Change agent's handoff from these conversation reads.
-  // Build discovery once to keep "one search per agent" across requests.
-  coreApi.conversations = conversationReads(createHandoffDependencies({
+  // The door constructs discovery and publication together on first use, preserving their witnesses.
+  coreApi.conversations = conversationReads({
     registry,
     stopped: {
       get: (id) => stoppedAgents.get(id),
@@ -1607,7 +1606,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     isRecentlyDeleted,
     findResumedTranscript,
     validTranscriptPath,
-  }, env.ADAPTER_DATA_DIR))
+  }, env.ADAPTER_DATA_DIR)
 
   // The requests each service that can run in its own process answers, as core/api.ts declares them.
   const requestsOf: Record<string, readonly string[]> = {

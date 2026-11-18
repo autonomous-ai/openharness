@@ -1,4 +1,4 @@
-/** Compose the eager publication authority beside core-owned discovery and conversation reads. */
+/** Compose the deferred publication authority beside core-owned discovery and conversation reads. */
 import { handoffProviderDeps, type HandoffWiring } from '../lib/handoffDiscovery.js'
 import { createHandoffPublisher } from './handoffPublication.js'
 

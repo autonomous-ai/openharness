@@ -152,3 +152,9 @@ initialization, then change the backing conversation before yielding. The saved 
 must observe the same original conversation and retain rejected-promise behavior. Measurements must
 separate import/construction, first query and warm dispatch and retain the old packets unchanged.
 No CPU or native acceptance is claimed by changing the dispatch shape.
+
+The current caller RED at `98c52eb9f1` fails all 20 new cases before runtime edits, in
+2.7 seconds (`20261118T185619.997988Z-31356`). The old facade treats the new composition
+wiring as already-constructed dependencies; optional reads return their fallback and required
+reads reject, with no lazy initialization. This is a recorded behavior failure, not a typecheck
+or setup failure. The current port preserves `agentView` and the existing service lifetime fence.

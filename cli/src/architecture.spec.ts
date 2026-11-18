@@ -144,7 +144,8 @@ function followed(importer: string, target: string, dynamic: boolean): boolean {
   return !dynamic || (target !== IN_PROCESS_ONLY && !LAZY_LOADERS.has(importer)
     && !(importer === PTY_HOST_DOOR.importer && target === PTY_HOST_DOOR.target)
     && !(importer === TMUX_BACKEND_DOOR.importer && target === TMUX_BACKEND_DOOR.target)
-    && !(importer === STORAGE_PREPARATION_DOOR.importer && target === STORAGE_PREPARATION_DOOR.target))
+    && !(importer === STORAGE_PREPARATION_DOOR.importer && target === STORAGE_PREPARATION_DOOR.target)
+    && !(importer === 'core/conversationQueries.ts' && target === 'core/handoffDependencies.ts'))
 }
 
 /** Each file read and parsed once, however many walks pass through it. */
