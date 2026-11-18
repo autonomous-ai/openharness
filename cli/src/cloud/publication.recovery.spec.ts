@@ -9,11 +9,14 @@ import { createCloudAgents } from '../core/agents/cloud.js'
 import type { CloudCore } from '../core/api.js'
 import type { CloudAdapter } from './types.js'
 
-const diskFault = vi.hoisted(() => ({ pending: false, hits: 0, writes: 0 }))
+const diskFault = vi.hoisted(() => ({ pending: false, intentRename: false, failWrites: 0, hits: 0, writes: 0 }))
 vi.mock('node:fs', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs')>()
   return { ...actual, writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
-    if (String(args[0]).endsWith('.tmp')) diskFault.writes++
+    if (String(args[0]).endsWith('.tmp')) {
+      diskFault.writes++
+      if (diskFault.failWrites > 0) { diskFault.failWrites--; diskFault.hits++; throw new Error('fixture provider write failed') }
+    }
     if (diskFault.pending && String(args[0]).endsWith('.tmp') && typeof args[1] === 'string') {
       const saved = JSON.parse(args[1])
       if (saved.publication?.pending?.owners.some((owner: { busy: boolean }) => !owner.busy)) {
@@ -22,6 +25,15 @@ vi.mock('node:fs', async importOriginal => {
       }
     }
     return actual.writeFileSync(...args)
+  }, renameSync: (...args: Parameters<typeof actual.renameSync>) => {
+    if (diskFault.intentRename && String(args[0]).endsWith('.tmp')) {
+      const saved = JSON.parse(actual.readFileSync(args[0], 'utf8'))
+      if (saved.publication?.pending?.owners.some((owner: { busy: boolean }) => !owner.busy)) {
+        diskFault.intentRename = false; diskFault.hits++
+        throw new Error('fixture intent rename failed')
+      }
+    }
+    return actual.renameSync(...args)
   } }
 })
 
@@ -30,7 +42,10 @@ function fixture() {
   const clients = { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }
   let service: ReturnType<typeof startCloudService>
   const freshCore = () => createCloudAgents({ ownsFactory: cloudFactory, port: () => service?.port ?? null, clients, questions: createQuestionPresentations(), log: () => {} })
-  let core = freshCore(), disconnected = false, lostAck = false, publicationCalls = 0
+  let core = freshCore(), disconnected = false, lostAck = false, publicationCalls = 0, holdAcks = false
+  const heldAcks: Array<() => void> = []
+  let heldQuestion: 'ask' | 'unask' | null = null
+  let beforePublish = () => {}
   let poll: (() => void) | undefined
   const rejected = () => { const result = Promise.reject(new Error('fixture disconnect')); void result.catch(() => {}); return result }
   const doors: CloudCore = {
@@ -38,10 +53,19 @@ function fixture() {
     publish: (rows, cards) => {
       publicationCalls++
       if (disconnected) return rejected()
+      beforePublish()
       const result = core.doors.publish(rows, cards)
+      if (holdAcks) return new Promise(resolve => { heldAcks.push(() => resolve(result)) })
       return lostAck ? rejected() : result
     },
-    ask: (...args) => core.doors.ask(...args), unask: (...args) => core.doors.unask(...args),
+    ask: (...args) => {
+      const result = core.doors.ask(...args)
+      return heldQuestion === 'ask' ? new Promise(resolve => { heldAcks.push(() => resolve(result)) }) : result
+    },
+    unask: (...args) => {
+      const result = core.doors.unask(...args)
+      return heldQuestion === 'unask' ? new Promise(resolve => { heldAcks.push(() => resolve(result)) }) : result
+    },
   }
   const adapter = { id: 'devin-cloud' as const,
     start: vi.fn(async () => ({ remote: { id: 'fixture' }, links: [] })),
@@ -68,6 +92,12 @@ function fixture() {
       poll!()
       await vi.waitFor(() => expect(JSON.parse(readFileSync(join(dataDir, 'cloud/harnesses.json'), 'utf8')).harnesses[0].harness.state).toBe('idle'))
     },
+    holdAcks() { holdAcks = true },
+    holdQuestion(kind: 'ask' | 'unask') { heldQuestion = kind },
+    observePublish(observer: () => void) { beforePublish = observer },
+    releaseAck() { const next = heldAcks.shift(); expect(next).toBeDefined(); next!() },
+    pendingAcks: () => heldAcks.length,
+    releaseAll() { holdAcks = false; heldQuestion = null; for (const release of heldAcks.splice(0)) release() },
     disconnect() { disconnected = true },
     dropAck() { lostAck = true },
     reconnect() { disconnected = lostAck = false; return service.republish() },
@@ -77,7 +107,7 @@ function fixture() {
     removeJournal() { const file = join(dataDir, 'cloud/harnesses.json'); const saved = JSON.parse(readFileSync(file, 'utf8')); delete saved.publication; writeFileSync(file, JSON.stringify(saved)) },
     damageCheckpoint() { const file = join(dataDir, 'cloud/harnesses.json'); const saved = JSON.parse(readFileSync(file, 'utf8')); saved.publication.pending.owners[0].told = 'Damaged checkpoint'; writeFileSync(file, JSON.stringify(saved)) },
     corruptJournal() { const file = join(dataDir, 'cloud/harnesses.json'); const saved = JSON.parse(readFileSync(file, 'utf8')); saved.publication = { corrupt: true }; writeFileSync(file, JSON.stringify(saved)) },
-    close() { service.stop(); rmSync(dataDir, { recursive: true, force: true }) },
+    close() { diskFault.pending = diskFault.intentRename = false; diskFault.failWrites = 0; service.stop(); rmSync(dataDir, { recursive: true, force: true }) },
   }
 }
 
@@ -283,5 +313,223 @@ it('accepts a real service answer that closes its question before the provider r
     finish()
     expect(await answering).toEqual({ ok: true })
     expect(f.adapter.send).toHaveBeenCalledExactlyOnceWith(expect.any(Object), 'main')
+  } finally { f.close() }
+})
+
+
+it('saves an idle changed rename and its publication intent in one synchronous write', async () => {
+  const f = fixture()
+  try {
+    const id = await f.create(); await f.reconnect()
+    const before = diskFault.writes
+    expect(await f.service.port.rename(id, 'Combined rename', f.row())).toHaveProperty('agent.name', 'Combined rename')
+    expect(diskFault.writes - before).toBe(1)
+    expect(f.row().name).toBe('Combined rename')
+    expect(f.core.frames()[0].name).toBe('Combined rename')
+  } finally { f.close() }
+})
+
+it('saves a settled provider completion and its intent in one synchronous write', async () => {
+  const f = fixture()
+  try {
+    await f.create(); await f.reconnect()
+    const before = diskFault.writes
+    await f.complete()
+    await vi.waitFor(() => expect(f.completions()).toHaveLength(1))
+    expect(diskFault.writes - before).toBe(1)
+    expect(f.row().state).toBe('idle')
+  } finally { f.close() }
+})
+
+it('keeps queued provider saves before their later intents and combines only the settled rename', async () => {
+  const f = fixture()
+  try {
+    const id = await f.create(); await f.complete(); await f.reconnect()
+    const before = diskFault.writes, publications = f.publicationCalls()
+    f.holdAcks()
+    expect(await f.service.port.deliver(id, 'Next work')).toEqual({ ok: true })
+    expect(f.publicationCalls() - publications).toBe(1)
+    expect(f.pendingAcks()).toBe(1)
+    expect(diskFault.writes - before).toBe(2) // optimistic intent, then immediate durable provider save
+    f.releaseAck()
+    await vi.waitFor(() => expect(f.publicationCalls() - publications).toBe(2))
+    f.adapter.poll.mockResolvedValueOnce({ state: 'idle', messages: [{ id: 'new-done', text: 'Finished new work.', at: 'x' }] } as never)
+    await f.complete()
+    expect(diskFault.writes - before).toBe(4) // second intent, then completion saved while its predecessor waits
+    expect(f.publicationCalls() - publications).toBe(2)
+    f.releaseAck()
+    await vi.waitFor(() => expect(f.publicationCalls() - publications).toBe(3))
+    expect(diskFault.writes - before).toBe(5)
+    f.releaseAll(); await new Promise<void>(resolve => setImmediate(resolve)) // same post-cycle quiesce as the frozen relay workload
+    expect(await f.service.port.rename(id, 'Settled rename', f.row())).toHaveProperty('agent.name', 'Settled rename')
+    expect(diskFault.writes - before).toBe(6) // six per cycle+rename means96 for the frozen16-cycle workload
+    expect(f.publicationCalls() - publications).toBe(4)
+  } finally { f.releaseAll(); f.close() }
+})
+
+it('commits the provider snapshot and pending intent before the first core effect', async () => {
+  const f = fixture()
+  try {
+    const id = await f.create(); await f.reconnect()
+    const before = diskFault.writes, observed: unknown[] = []
+    f.observePublish(() => {
+      const saved = JSON.parse(readFileSync(join(f.dataDir, 'cloud/harnesses.json'), 'utf8'))
+      observed.push({ writes: diskFault.writes - before, provider: saved.harnesses[0], journal: saved.publication })
+    })
+    await f.service.port.rename(id, 'Durable before send', f.row())
+    expect(observed).toEqual([expect.objectContaining({ writes: 1,
+      provider: expect.objectContaining({ harness: expect.objectContaining({ name: 'Durable before send' }), remote: { id: 'fixture' } }),
+      journal: expect.objectContaining({ pending: expect.objectContaining({ fingerprint: await f.core.doors.checkpoint() }) }),
+    })])
+  } finally { f.close() }
+})
+
+it.each(['temporary write', 'atomic rename'] as const)('saves the completed provider with the exact prior journal after an intent %s failure', async failure => {
+  const f = fixture()
+  try {
+    const id = await f.create(); await f.reconnect()
+    // A no-change save materializes the current accepted-only journal; ACK itself performs no write.
+    await f.service.port.rename(id, f.row().name, f.row())
+    const file = join(f.dataDir, 'cloud/harnesses.json'), prior = JSON.parse(readFileSync(file, 'utf8')).publication
+    const before = diskFault.writes, publications = f.publicationCalls(), hits = diskFault.hits
+    if (failure === 'temporary write') diskFault.pending = true; else diskFault.intentRename = true
+    await f.complete()
+    expect(diskFault.hits - hits).toBe(1)
+    expect(diskFault.writes - before).toBe(2)
+    const saved = JSON.parse(readFileSync(file, 'utf8'))
+    expect(saved.publication).toEqual(prior)
+    expect(saved.harnesses[0]).toMatchObject({ harness: { state: 'idle', said: 'Finished the requested work.' }, remote: { id: 'fixture' } })
+    expect(f.publicationCalls()).toBe(publications)
+    expect(await f.service.requests.cloud_agents({}, { owner: true, local: true })).toMatchObject({ error: 'CLOUD_PUBLICATION_UNAVAILABLE' })
+    f.restartComponent(); await f.reconnect()
+    await vi.waitFor(() => expect(f.completions()).toHaveLength(1))
+    expect(f.core.frames()[0].cloud.state).toBe('idle')
+    expect(f.adapter.start).toHaveBeenCalledOnce()
+    expect(f.adapter.send).not.toHaveBeenCalled()
+  } finally { f.close() }
+})
+
+it('keeps the prior atomic file and reports failure when both the intent and fallback writes fail', async () => {
+  const f = fixture()
+  try {
+    const id = await f.create(); await f.reconnect()
+    const file = join(f.dataDir, 'cloud/harnesses.json'), prior = readFileSync(file, 'utf8')
+    const before = diskFault.writes, publications = f.publicationCalls()
+    diskFault.failWrites = 2
+    await expect(f.service.port.rename(id, 'Not durable', f.row())).rejects.toThrow('fixture provider write failed')
+    expect(diskFault.writes - before).toBe(2)
+    expect(readFileSync(file, 'utf8')).toBe(prior)
+    expect(f.publicationCalls()).toBe(publications)
+    expect(await f.service.requests.cloud_agents({}, { owner: true, local: true })).toMatchObject({ error: 'CLOUD_PUBLICATION_UNAVAILABLE' })
+    f.restartComponent(); await f.reconnect()
+    expect(f.core.frames()[0].name).toBe(JSON.parse(prior).harnesses[0].harness.name)
+    expect(f.adapter.start).toHaveBeenCalledOnce()
+    expect(f.adapter.send).not.toHaveBeenCalled()
+  } finally { f.close() }
+})
+
+it('does not append a failed provider save behind an in-flight publication', async () => {
+  const f = fixture()
+  try {
+    const id = await f.create(); await f.complete(); await f.reconnect()
+    f.holdAcks()
+    expect(await f.service.port.deliver(id, 'Next queued work')).toEqual({ ok: true })
+    const publications = f.publicationCalls(), before = diskFault.writes, oldName = f.row().name
+    diskFault.failWrites = 1
+    await expect(f.service.port.rename(id, 'Never append', f.row())).rejects.toThrow('fixture provider write failed')
+    expect(diskFault.writes - before).toBe(1)
+    expect(f.row().name).toBe(oldName)
+    f.releaseAll(); await new Promise<void>(resolve => setImmediate(resolve))
+    expect(f.publicationCalls() - publications).toBe(1) // Only the previously accepted deliver snapshot remains queued.
+    expect(f.core.frames()[0].name).toBe(oldName)
+  } finally { f.releaseAll(); f.close() }
+})
+
+it.each(['disconnected', 'unavailable'] as const)('saves before append when publication is %s', async state => {
+  const f = fixture()
+  try {
+    const id = await f.create(); await f.reconnect()
+    if (state === 'disconnected') { f.disconnect(); f.service.disconnected() }
+    else {
+      f.dropAck(); await f.service.port.rename(id, 'Lost acknowledgement', f.row())
+      await vi.waitFor(async () => expect(await f.service.requests.cloud_agents({}, { owner: true, local: true })).toMatchObject({ error: 'CLOUD_PUBLICATION_UNAVAILABLE' }))
+    }
+    const publications = f.publicationCalls(), before = diskFault.writes
+    expect(await f.service.port.rename(id, 'Saved offline', f.row())).toHaveProperty('agent.name', 'Saved offline')
+    expect(diskFault.writes - before).toBe(1)
+    expect(f.publicationCalls()).toBe(publications)
+    expect(f.row().name).toBe('Saved offline')
+    await f.reconnect()
+    await vi.waitFor(() => expect(f.core.frames()[0].name).toBe('Saved offline'))
+  } finally { f.close() }
+})
+
+it('retains a no-change provider save without adding a publication', async () => {
+  const f = fixture()
+  try {
+    const id = await f.create(); await f.reconnect()
+    const before = diskFault.writes, publications = f.publicationCalls()
+    await f.service.port.rename(id, f.row().name, f.row())
+    expect(diskFault.writes - before).toBe(1)
+    expect(f.publicationCalls()).toBe(publications)
+    expect(JSON.parse(readFileSync(join(f.dataDir, 'cloud/harnesses.json'), 'utf8')).publication.pending).toBeNull()
+  } finally { f.close() }
+})
+
+it('saves provider output before surfacing an invalid presentation on the idle fast path', async () => {
+  const f = fixture()
+  try {
+    await f.reconnect()
+    f.adapter.start.mockResolvedValueOnce({ remote: { id: 'invalid-state' }, links: [], update: { state: 'invalid', messages: [] } } as never)
+    const before = diskFault.writes, publications = f.publicationCalls()
+    await expect(f.service.port.create({ engine: 'devin-cloud', prompt: 'Invalid provider result' })).rejects.toThrow('CLOUD_PUBLICATION_INVALID')
+    expect(diskFault.writes - before).toBe(1)
+    expect(f.publicationCalls()).toBe(publications)
+    const saved = JSON.parse(readFileSync(join(f.dataDir, 'cloud/harnesses.json'), 'utf8'))
+    expect(saved.harnesses[0]).toMatchObject({ harness: { state: 'invalid' }, remote: { id: 'invalid-state' } })
+    expect(saved.publication.pending).toBeNull()
+    expect(await f.service.requests.cloud_agents({}, { owner: true, local: true })).toMatchObject({ error: 'CLOUD_PUBLICATION_INVALID' })
+    expect(f.adapter.start).toHaveBeenCalledOnce()
+  } finally { f.close() }
+})
+
+it.each(['ask', 'unask'] as const)('does not append a failed provider save behind an in-flight %s', async kind => {
+  const f = fixture()
+  try {
+    const id = await f.create(); await f.reconnect()
+    if (kind === 'ask') f.holdQuestion(kind)
+    f.adapter.poll.mockResolvedValueOnce({ state: 'needs_input', messages: [{ id: 'held-question', text: 'Which branch?', at: 'x' }], question: { text: 'Which branch?', choices: ['main'] } } as never)
+    f.poll()
+    await vi.waitFor(() => expect(f.row().state).toBe('needs_input'))
+    if (kind === 'unask') {
+      await f.reconnect(); await new Promise<void>(resolve => setImmediate(resolve))
+      const requestId = f.clients.sendLocal.mock.calls.at(-1)![0].payload.requestId
+      f.holdQuestion(kind)
+      expect(await f.service.port.answer(id, requestId, { answer: 'main' })).toEqual({ ok: true })
+    }
+    expect(f.pendingAcks()).toBe(1)
+    const before = diskFault.writes, publications = f.publicationCalls(), oldName = f.row().name
+    diskFault.failWrites = 1
+    await expect(f.service.port.rename(id, 'Failed while question waits', f.row())).rejects.toThrow('fixture provider write failed')
+    expect(diskFault.writes - before).toBe(1)
+    expect(f.row().name).toBe(oldName)
+    f.releaseAll(); await new Promise<void>(resolve => setImmediate(resolve))
+    expect(f.publicationCalls() - publications).toBe(kind === 'ask' ? 1 : 2)
+    expect(f.core.frames()[0].name).toBe(oldName)
+  } finally { f.releaseAll(); f.close() }
+})
+
+it('saves changed provider-only metadata when its public presentation is unchanged', async () => {
+  const f = fixture()
+  try {
+    await f.create(); await f.reconnect()
+    const before = diskFault.writes, publications = f.publicationCalls(), file = join(f.dataDir, 'cloud/harnesses.json')
+    f.adapter.poll.mockResolvedValueOnce({ state: 'working', messages: [], remote: { run: 'new-provider-run' } } as never)
+    f.poll()
+    await vi.waitFor(() => expect(JSON.parse(readFileSync(file, 'utf8')).harnesses[0].remote).toEqual({ id: 'fixture', run: 'new-provider-run' }))
+    expect(diskFault.writes - before).toBe(1)
+    expect(f.publicationCalls()).toBe(publications)
+    f.restartComponent(); await f.reconnect()
+    expect(JSON.parse(readFileSync(file, 'utf8')).harnesses[0].remote).toEqual({ id: 'fixture', run: 'new-provider-run' })
   } finally { f.close() }
 })

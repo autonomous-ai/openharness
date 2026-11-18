@@ -146,11 +146,12 @@ export function startCloudService(options: CloudServiceOptions) {
     writeFileSync(temp, JSON.stringify({ harnesses: durable, publication: journal }), { mode: 0o600 })
     renameSync(temp, stateFile)
   }
+  // Another harness may finish while deliver awaits its maker. Its optimistic working state is not durable.
+  const captureProviderState = (): unknown[] => [...entries.values()].map(({ harness, remote, question, changedAt, creationId }) => ({
+    harness: { ...harness, ...optimistic.get(harness.agentId) }, remote: { ...remote }, question, changedAt, creationId,
+  }))
   const save = (): void => {
-    // Another harness may finish while deliver awaits its maker. Its optimistic working state is not durable.
-    durable = [...entries.values()].map(({ harness, remote, question, changedAt, creationId }) => ({
-      harness: { ...harness, ...optimistic.get(harness.agentId) }, remote: { ...remote }, question, changedAt, creationId,
-    }))
+    durable = captureProviderState()
     persist(publication.state())
   }
   const admitted = async <T>(work: (reservation: CloudReservation) => Promise<T>, existing?: CloudReservation): Promise<T | { ok: false; error: string; detail: string }> => {
@@ -190,12 +191,22 @@ export function startCloudService(options: CloudServiceOptions) {
   }
 
   const snapshot = (): CloudHarness[] => [...entries.values()].map(entry => ({ ...entry.harness, links: [...entry.harness.links], card: cardOf(entry) }))
-  const publish = (reservation: CloudReservation): void => { if (!stopped) publication.publish(snapshot(), reservation) }
+  const publish = (reservation: CloudReservation): boolean => !stopped && publication.publish(snapshot(), reservation)
+  const saveAndPublish = (reservation: CloudReservation): void => {
+    // Queued/offline output must save before append: a failed save may never leave work for a later ACK to send.
+    if (!publication.canStartPublication()) { save(); publish(reservation); return }
+    const before = publication.state()
+    durable = captureProviderState()
+    let written = false
+    try { written = publish(reservation) }
+    // Idle publication persists synchronously before its first await. No change or a failed intent still needs
+    // the provider save, with exactly the journal from before that attempt, not its uncommitted pending image.
+    finally { if (!written) persist(before) }
+  }
   const touched = (entry: Entry, reservation: CloudReservation): void => {
     entry.harness.updatedAt = new Date(now()).toISOString()
     entry.changedAt = now()
-    save()
-    publish(reservation)
+    saveAndPublish(reservation)
   }
   const serial = <T>(agentId: string, work: () => Promise<T>): Promise<T> => {
     const run = (queues.get(agentId) ?? Promise.resolve()).catch(() => {}).then(work)
@@ -402,8 +413,7 @@ export function startCloudService(options: CloudServiceOptions) {
     const trimmed = name.trim().slice(0, 120)
     if (!trimmed) return { ok: false, error: 'MISSING_NAME', detail: 'A harness needs a name.' }
     entry.harness.name = trimmed
-    save()
-    publish(reservation)
+    saveAndPublish(reservation)
     return { ok: true }
   })
 

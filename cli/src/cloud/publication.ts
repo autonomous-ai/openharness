@@ -85,8 +85,10 @@ export function createCloudPublication(options: {
     options.persist(value)
     journal = value
   }
-  const pump = (): void => {
-    if (running || !connected || stopped || recovering || hold || unavailable || !queue.length) return
+  const readyToPump = (): boolean => initialized && connected && !running && !stopped && !recovering && !hold && !unavailable
+  const pump = (): boolean => {
+    if (!readyToPump() || !queue.length) return false
+    let persisted = false
     running = true
     const generation = epoch
     void (async () => {
@@ -104,6 +106,7 @@ export function createCloudPublication(options: {
             }
             pending = prepared.next
             persist()
+            persisted = true
             const result = await within(options.core.publish(rows, prepared.cards))
             if (generation !== epoch) return
             if (!result.ok) { fail('CLOUD_PUBLICATION_INVALID', true); return }
@@ -124,9 +127,11 @@ export function createCloudPublication(options: {
       } catch { if (generation === epoch) fail('CLOUD_PUBLICATION_UNAVAILABLE') }
       finally { if (generation === epoch) running = false }
     })()
+    // Only this synchronous turn counts. A later queued intent cannot make an earlier provider save durable.
+    return persisted
   }
-  const append = (action: Action, reservation?: CloudReservation): void => {
-    if (stopped) return
+  const append = (action: Action, reservation?: CloudReservation): boolean => {
+    if (stopped) return false
     const size = Buffer.byteLength(JSON.stringify(action))
     if (reservation) {
       if (reservation.released || reservation.actions < 1 || reservation.bytes < size) {
@@ -139,10 +144,10 @@ export function createCloudPublication(options: {
       fail('CLOUD_PUBLICATION_LIMIT', true); throw new Error('CLOUD_PUBLICATION_LIMIT')
     }
     queue.push({ action, bytes: size }); bytes += size
-    pump()
+    return pump()
   }
-  const publish = (list: CloudHarness[], reservation?: CloudReservation, force = false, provenImage?: string): void => {
-    if (recovering || stopped || hold) return
+  const publish = (list: CloudHarness[], reservation?: CloudReservation, force = false, provenImage?: string): boolean => {
+    if (recovering || stopped || hold) return false
     if (!Array.isArray(list)) { fail('CLOUD_PUBLICATION_INVALID', true); throw new Error('CLOUD_PUBLICATION_INVALID') }
     const rows = new Map<string, CloudHarness>()
     for (const raw of list) {
@@ -160,13 +165,14 @@ export function createCloudPublication(options: {
     if (force) {
       wire = rows; projected = rows
       // Recovery already proved this exact nonempty image against an intact durable journal.
-      if (provenImage && createHash('sha256').update(encoded).digest('hex') === provenImage) return
+      if (provenImage && createHash('sha256').update(encoded).digest('hex') === provenImage) return false
     }
     const changed = [...rows.values()].filter(row => JSON.stringify(projected.get(row.agentId)) !== JSON.stringify(row))
     const removed = [...projected.keys()].filter(id => !rows.has(id))
-    if (!force && !changed.length && !removed.length) return
-    append({ kind: 'publish', changed, removed }, reservation)
+    if (!force && !changed.length && !removed.length) return false
+    const persisted = append({ kind: 'publish', changed, removed }, reservation)
     projected = rows
+    return persisted
   }
   return {
     state,
@@ -184,7 +190,8 @@ export function createCloudPublication(options: {
       reservedActions -= reservation.actions; reservedBytes -= reservation.bytes; reservedImageBytes -= 2 * ROW_BYTES
       reservation.released = true
     },
-    publish: (list: CloudHarness[], reservation?: CloudReservation): void => publish(list, reservation),
+    canStartPublication: (): boolean => readyToPump() && queue.length === 0,
+    publish: (list: CloudHarness[], reservation?: CloudReservation): boolean => publish(list, reservation),
     ask(value: Question, reservation?: CloudReservation): void { if (!recovering && !hold) append({ kind: 'ask', value: { ...value, question: prepareCloudQuestion(value.agentId, value.requestId, value.question) } }, reservation) },
     unask(agentId: string, requestId: string, reservation?: CloudReservation): void { if (!recovering && !hold) append({ kind: 'unask', agentId, requestId, close: cloudQuestionClose(agentId, requestId) }, reservation) },
     async connect(): Promise<void> {
