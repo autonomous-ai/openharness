@@ -4262,9 +4262,10 @@ void ui_question_close(const char *id, const char *request)
 {
     if (!id || !request) return;
     display_lock();
-    // A loading screen has no request id yet, so a close for its agent closes it; a close naming another question
-    // of the open agent leaves the screen alone.
-    if (!strcmp(s.q.agent,id) && (s.q.loading || !strcmp(s.q.request,request))) {
+    // A loading screen has no request id yet, and an error screen (did not arrive, changed, could not load) holds
+    // no live question, only "Open the alert again.", so a close for its agent closes either. A close naming
+    // another question of the open agent leaves a question being read alone.
+    if (!strcmp(s.q.agent,id) && (s.q.loading || !s.q.valid || !strcmp(s.q.request,request))) {
         s.q.valid=s.q.pending=s.q.loading=false; s.q.revision++;
         if (question_view(s.view)) view(HOME);
     }
