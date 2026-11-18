@@ -110,6 +110,8 @@ describe('no hand-built home .harness path outside config/harnessHome.ts', () =>
       String.raw`const dir = '%USERPROFILE%\\.harness'`,
       String.raw`const pattern = /\/\.harness\/cli/`,
       String.raw`const pattern = /[\\/]\.harness[\\/]s/`,
+      '/* a comment */ const dir = join(home, \'.harness\')',
+      'const url = \'http://x //y\'; const dir = join(home, \'.harness\')',
     ]) expect(hitsIn('lib/planted.ts', planted), planted).toHaveLength(1)
   })
 
