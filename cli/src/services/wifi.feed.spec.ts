@@ -59,7 +59,7 @@ async function fixture(over: { unbound?: boolean; actualFile?: boolean; arm?: Pr
   let nextReady = Promise.resolve()
   const observations: Array<{ options: DeviceSessionFeedOptions; feed: typeof feed }> = []
   const backend = new BackendSocket('machine-1')
-  backend.agentRecentProvider = () => ({ turns: [] })
+  backend.agentRecentProvider = async () => ({ turns: [] })
   const reader = {
     arm: vi.fn(async (_agent: AgentView, _deliveryId: string) => { await over.arm }),
     input: vi.fn(),
