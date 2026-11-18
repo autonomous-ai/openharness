@@ -55,7 +55,11 @@ class HarnessFileStore implements BatchLocalKeyValueStore {
     if (home == null) {
       throw StateError('Could not resolve the current user home directory');
     }
-    return HarnessHome.of(home, join: _join).path(entry ?? _ownEntry);
+    return HarnessHome.of(
+      home,
+      join: _join,
+      look: platformHomeLook(environment: environment),
+    ).path(entry ?? _ownEntry);
   }
 
   File get stateFile => File(_join(directory.path, fileName));

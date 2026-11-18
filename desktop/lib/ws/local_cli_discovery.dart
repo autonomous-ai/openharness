@@ -95,7 +95,7 @@ class LocalMachineIdentity {
     HomeLook? look,
   }) => HarnessHome.of(
     homeDir(environment: environment),
-    look: look,
+    look: look ?? platformHomeLook(environment: environment),
   ).path(HarnessEntry.computerId);
 
   Future<String?> computerId() async {

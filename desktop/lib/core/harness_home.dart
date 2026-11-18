@@ -5,6 +5,9 @@ import 'package:path/path.dart' as p;
 import 'harness_home_look_stub.dart'
     if (dart.library.io) 'harness_home_look_io.dart';
 
+export 'harness_home_look_stub.dart'
+    if (dart.library.io) 'harness_home_look_io.dart';
+
 /// The folder under the account's home that holds everything Harness keeps.
 const harnessHomeName = '.harness';
 

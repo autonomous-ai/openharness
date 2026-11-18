@@ -65,7 +65,11 @@ String? defaultDaemonDataDir({
   // Windows profile has the XDG roots.
   final harness = windows
       ? HarnessHome.at(context.join(home, harnessHomeName), join: context.join)
-      : HarnessHome.of(home, join: context.join, look: look);
+      : HarnessHome.of(
+          home,
+          join: context.join,
+          look: look ?? platformHomeLook(environment: env),
+        );
   return context.join(harness.path(HarnessEntry.cli), 'data');
 }
 

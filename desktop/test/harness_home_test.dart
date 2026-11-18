@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/harness_home.dart';
-import 'package:harness/core/harness_home_look_io.dart';
 import 'package:path/path.dart' as p;
 
 /// A Linux computer where only [existing] exists.

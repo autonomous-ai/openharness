@@ -464,10 +464,12 @@ class AgentPrefetch {
   /// yet. So Claude Code or Codex installed counts even if never signed in or run: their folders,
   /// their programs where their installers and Homebrew put them, and npm installs under nvm.
   /// OpenCode counts anywhere it installs to or has kept its data in. A false "new" costs a download,
-  /// so this errs towards skipping.
+  /// so this errs towards skipping. [look] is for tests: Harness's folder is
+  /// found by it, this computer's by default.
   static bool alreadyHasAnAgent(
     String? home, {
     List<String> prefixes = const ['/opt/homebrew/bin', '/usr/local/bin'],
+    HomeLook? look,
   }) {
     if (home == null) return true;
     final programs = [
@@ -478,7 +480,11 @@ class AgentPrefetch {
       ],
     ];
     return [
-      HarnessHome.of(home, join: separatorJoin('/')).path(HarnessEntry.cli),
+      HarnessHome.of(
+        home,
+        join: separatorJoin('/'),
+        look: look,
+      ).path(HarnessEntry.cli),
       '$home/.claude',
       '$home/.codex',
       '$home/.claude/local/claude',

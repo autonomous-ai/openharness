@@ -65,7 +65,7 @@ String? defaultDaemonSocketPath(
   final sockets = HarnessHome.of(
     home,
     join: separatorJoin('/'),
-    look: look,
+    look: look ?? platformHomeLook(environment: environment),
   ).path(HarnessEntry.s);
   final short = '$sockets/$hex/${daemonSocketName(port)}';
   return utf8.encode(short).length <= _maxSocketPathBytes ? short : null;

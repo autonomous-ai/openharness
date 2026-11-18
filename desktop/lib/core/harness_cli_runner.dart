@@ -118,7 +118,7 @@ class HarnessCliRunner {
       // homeDir, not HOME: Windows sets only USERPROFILE, and Git Bash's HOME is not where the
       // CLI lives.
       homeDir(environment: environment, isWindows: _isWindows),
-      look: _look,
+      look: _look ?? platformHomeLook(environment: environment),
     );
   }
 
