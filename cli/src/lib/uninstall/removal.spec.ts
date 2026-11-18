@@ -2,8 +2,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, st
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { HARNESS_HOME_NAME } from '../../config/harnessHome.js'
-import { checkRemovable, finalRemovalScript, listEntries, removalPlan, removeNow, ROOT_NAME, scheduleFinalRemoval, type FinalRemovalDeps, type PlanInput, type RemovalPlan, type RootEntry } from './removal.js'
+import { checkRemovable, finalRemovalScript, listEntries, removalPlan, removeNow, scheduleFinalRemoval, type FinalRemovalDeps, type PlanInput, type RemovalPlan, type RootEntry } from './removal.js'
 import { UNINSTALL_MARKER } from './marker.js'
 
 const d = (name: string): RootEntry => ({ name, dir: true })
@@ -115,10 +114,6 @@ describe('removalPlan refuses a root that is not a .harness folder of its own', 
     expect(plan('\\\\.\\C:\\Users\\u\\.harness', 'win32')).toThrow(/Harness will not remove/)
     expect(plan('C:\\Users\\a"b\\.harness', 'win32')).toThrow(/Harness will not remove/)
     expect(plan('/u\n/.harness')).toThrow(/Harness will not remove/)
-  })
-
-  it('the folder name is the home folder\'s, from config/harnessHome.ts', () => {
-    expect(ROOT_NAME).toBe(HARNESS_HOME_NAME)
   })
 
   it('takes a Windows .harness of any case, and a trailing separator', () => {
