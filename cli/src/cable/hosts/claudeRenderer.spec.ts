@@ -1,9 +1,10 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { constants, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { open as openFile, stat as statFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { readFullscreen, readSettings, settingsFiles, SETTINGS_MAX_BYTES } from './claudeRenderer.js'
+import { readFullscreen, readSettings, settingsFiles, SETTINGS_MAX_BYTES, type SettingsFs } from './claudeRenderer.js'
 
 // No test here reads a real settings file: readFullscreen's read is a fake keyed by path, or its files are under dir.
 const opts = { defaultHome: '/h/.claude', platform: 'darwin' as const }
@@ -130,5 +131,24 @@ describe('readSettings', () => {
   it.skipIf(process.platform === 'win32')('a link to /dev/zero is none', async () => {
     symlinkSync('/dev/zero', join(dir, 'settings.json'))
     expect(await readSettings(join(dir, 'settings.json'))).toBeUndefined()
+  })
+
+  it.each<[string, () => Promise<{ isFile(): boolean }>]>([
+    // A link to /dev/cu.* in a cloned project: opening a serial port toggles its DTR, which resets a board on it.
+    ['a device', async () => ({ isFile: () => false })],
+    ['a path that is not there', async () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) }],
+  ])('%s is none, and never opened', async (_, stat) => {
+    // A regular file is there: only the stat says otherwise, so a read that opened it anyway would give its text.
+    writeFileSync(join(dir, 'settings.json'), '{"tui":"fullscreen"}')
+    const open = vi.fn<SettingsFs['open']>((path, flags) => openFile(path, flags))
+    expect(await readSettings(join(dir, 'settings.json'), { stat, open })).toBeUndefined()
+    expect(open).not.toHaveBeenCalled()
+  })
+
+  it('a regular file is opened read-only, without waiting for a writer, and never as a controlling terminal', async () => {
+    writeFileSync(join(dir, 'settings.json'), '{"tui":"fullscreen"}')
+    const open = vi.fn<SettingsFs['open']>((path, flags) => openFile(path, flags))
+    expect(await readSettings(join(dir, 'settings.json'), { stat: statFile, open })).toBe('{"tui":"fullscreen"}')
+    expect(open.mock.calls).toEqual([[join(dir, 'settings.json'), constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOCTTY]])
   })
 })
