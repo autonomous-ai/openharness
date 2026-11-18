@@ -326,3 +326,32 @@ and independent absence checks passed, the private root was removed, and all 426
 report/evidence hashes matched. Receipts and both outcomes remain in
 `/tmp/core-question-final-boundary-results-20261118a`. The prepared native test remains a separate
 functional gate against the exact combined source and packaged build selected for that run.
+
+## Native restart close failure
+
+The first three-case native run on clean integration `1c3373ef61` passed both normal execution modes,
+but the restart case timed out waiting for the first restored question's close. Both pending questions
+were restored exactly, core input completed during the devices process's absence, and the retained
+engine pane showed the submitted answer. The core emitted no close: restoring the device calls the
+existing commander-join callback, whose watcher `reset()` clears `lastId` while `openQuestions` retains
+the question. An immediate answer pauses the next poll, then turn end calls `stop()` with no identity
+left to close. The other question was re-polled and re-announced, matching this ordering in the log.
+
+Reset should forget only announcement fingerprints and miss counts, allowing reannouncement while
+retaining each outstanding question's close identity until stop or confirmed disappearance. This adds
+no state or timer. Regression cases cover reset followed by stop, confirmed empty reads, same/changed
+question reannouncement, and the real core snapshot-to-close path. The failed native packet remains
+unchanged; another native run requires the integrated fix, a new packaged build and a new frozen packet.
+
+Its actual outer/test runner exits were one. All three masters exited zero, with complete owned-process,
+EOF and root-removal proof. A separate adapter check rejected the copied bundle's lexical `/tmp` path
+against its canonical `/private/tmp` prefix. Retrospective identity/canonical-path and no-open-file proof
+then permitted removing only that retained bundle; the original failed receipt remains unchanged.
+All 6,409 frozen inputs matched. Failure artifacts are retained at `/tmp/qn1-1c3373a1`.
+
+The three close regressions failed first with no close emitted; same/changed-ID reannouncement controls
+passed. Removing only `lastId.clear()` from `reset()` makes all 53 focused controller/core tests pass.
+The canonical core selection's 17 question tests independently retains 100% statements, branches,
+functions and lines; TypeScript passes. A test-only payload assertion was narrowed after the first type
+check reported `unknown`; no emitted behavior changed. Native restart acceptance remains pending on
+the integrated fix and its separately frozen one-case packet.

@@ -163,6 +163,39 @@ describe('questions', () => {
   })
 
   // A hook said the agent waits on the person (core/turns/turnHooks.ts): the watcher says when it no longer does.
+  it('a reconnect reset keeps the snapshot question closable before a driving answer can be polled again', async () => {
+    vi.useFakeTimers()
+    let observed = true
+    const { deps, asking } = setup({ observed: () => observed, readQuestion: async () => ({
+      kind: 'question', question: 'Drink?', multi: false, typeRow: null,
+      rows: [{ number: '1', label: 'Coffee', checked: false }],
+    }) })
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      asking.questionWatcher.start('s1')
+      await vi.advanceTimersByTimeAsync(1_500)
+      const [open] = [...asking.snapshot('local')]
+      expect(open).toMatchObject({ type: 'commander_question', agentId: 'a1', dbSessionId: 's1' })
+      observed = false
+      await vi.advanceTimersByTimeAsync(20_000)
+      asking.questionWatcher.reset()
+      expect([...asking.snapshot('local')]).toEqual([open])
+      observed = true
+      vi.spyOn(asking.questions, 'isDriving').mockReturnValue(true)
+      await vi.advanceTimersByTimeAsync(1_500)
+      asking.questionWatcher.stop('s1')
+      const closed = { type: 'commander_question_close', agentId: 'a1', dbSessionId: 's1', payload: { requestId: (open.payload as { requestId: string }).requestId } }
+      for (const send of [deps.clients.sendCommander, deps.clients.sendLocal, deps.clients.sendRemote]) {
+        expect(vi.mocked(send).mock.calls.filter(([frame]) => frame.type === 'commander_question_close')).toEqual([[closed]])
+      }
+      expect([...asking.snapshot('local')]).toEqual([])
+      expect(asking.pendingQuestion('s1')).toBeNull()
+      expect(deps.waitOver).toHaveBeenCalledExactlyOnceWith('s1')
+      asking.questionWatcher.stop('s1')
+      expect(deps.waitOver).toHaveBeenCalledOnce()
+    } finally { asking.questionWatcher.stopAll(); vi.useRealTimers() }
+  })
+
   it('tells the turn hooks when a question closes and when the pane reads clear', async () => {
     vi.useFakeTimers()
     try {

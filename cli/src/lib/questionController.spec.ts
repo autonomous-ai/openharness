@@ -153,6 +153,56 @@ describe('asynchronous question evidence', () => {
     expect(onQuestionGone).toHaveBeenCalledOnce()
     watcher.stopAll()
   })
+  it.each(['turn end', 'confirmed empty pane'] as const)('a reconnect reset retains the outstanding close identity through %s', async ending => {
+    vi.useFakeTimers()
+    const current = row(), onQuestion = vi.fn(), onQuestionGone = vi.fn()
+    let observed = true
+    const readQuestion = vi.fn(async (): Promise<PaneView> => view)
+    const watcher = new QuestionWatcher({ getSession: () => current, capture: async () => capture,
+      hasDevice: () => observed, readQuestion, onQuestion, onQuestionGone })
+    try {
+      watcher.start(current.sessionId)
+      await vi.advanceTimersByTimeAsync(1_500)
+      expect(onQuestion).toHaveBeenCalledOnce()
+      const requestId = onQuestion.mock.calls[0][1]
+      observed = false
+      await vi.advanceTimersByTimeAsync(20_000)
+      watcher.reset()
+      observed = true
+      if (ending === 'turn end') watcher.stop(current.sessionId)
+      else {
+        readQuestion.mockResolvedValue(null)
+        await vi.advanceTimersByTimeAsync(1_500)
+        expect(onQuestionGone).not.toHaveBeenCalled()
+        await vi.advanceTimersByTimeAsync(1_500)
+      }
+      expect(onQuestionGone).toHaveBeenCalledExactlyOnceWith(current.sessionId, requestId)
+      expect(onQuestion).toHaveBeenCalledOnce()
+      watcher.stop(current.sessionId)
+      expect(onQuestionGone).toHaveBeenCalledOnce()
+    } finally { watcher.stopAll() }
+  })
+  it.each(['same', 'changed'] as const)('a reconnect reset still reannounces the %s question and closes its current identity', async change => {
+    vi.useFakeTimers()
+    const current = row(), onQuestion = vi.fn(), onQuestionGone = vi.fn()
+    if (!view || view.kind !== 'question') throw new Error('missing recorded fixture')
+    const readQuestion = vi.fn(async (): Promise<PaneView> => view)
+    const watcher = new QuestionWatcher({ getSession: () => current, capture: async () => capture,
+      hasDevice: () => true, readQuestion, onQuestion, onQuestionGone })
+    try {
+      watcher.start(current.sessionId)
+      await vi.advanceTimersByTimeAsync(1_500)
+      const originalId = onQuestion.mock.calls[0][1]
+      watcher.reset()
+      if (change === 'changed') readQuestion.mockResolvedValue({ ...view, question: 'A different question?' })
+      await vi.advanceTimersByTimeAsync(1_500)
+      expect(onQuestion).toHaveBeenCalledTimes(2)
+      const currentId = onQuestion.mock.calls[1][1]
+      expect(currentId === originalId).toBe(change === 'same')
+      watcher.stop(current.sessionId)
+      expect(onQuestionGone).toHaveBeenCalledExactlyOnceWith(current.sessionId, currentId)
+    } finally { watcher.stopAll() }
+  })
   it.each(['replace', 'stop'] as const)('holds one pending interpretation and discards it after %s', async change => {
     vi.useFakeTimers()
     const current = row(), pending = deferred<PaneView>(), onQuestion = vi.fn()

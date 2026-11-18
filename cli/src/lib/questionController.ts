@@ -604,7 +604,7 @@ export class QuestionWatcher {
   /** A device (re)joined: forget what we announced so an open question is pushed again. */
   reset(): void {
     this.last.clear()
-    this.lastId.clear()
+    // A replay can be answered before the next poll. Keep its close identity until stop or confirmed disappearance.
     this.misses.clear()
   }
 
