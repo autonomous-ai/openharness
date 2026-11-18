@@ -117,11 +117,25 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
       const agents: Viewed[] = []
       return { row: (member, budget) => {
         if (stopped || generation !== epoch || core !== origin) throw new Error('SESSION_READ_UNAVAILABLE')
-        if ('gone' in member) return
-        if (member.source === 'registered' && !member.row.facts.terminalAvailable) return
-        const row = member.source === 'registered' ? { ...member.row.session,
-          displayName: member.row.facts.displayName, runtimeProfile: member.row.selectedModel }
-          : { ...member.row, runtimeProfile: member.row.selectedModel }
+        if (member[0] === 'gone') return
+        const [, agentId, sessionId, engine, registeredAt, transcriptPath, lastHookAt] = member
+        let row: Viewed
+        if (member[0] === 'registered') {
+          const [, , , , , , , active, cwd, storedDsh, launch, displayName, terminalAvailable, selectedModel] = member
+          if (!terminalAvailable) return
+          const [state, first, detail] = launch ?? []
+          const launching = state === undefined ? undefined : state === 'failed'
+            ? { state, error: first, ...(detail === false ? {} : { detail }) }
+            : state === 'held' ? { state, service: first, detail } : { state }
+          const session = { agentId, sessionId, engine, registeredAt, transcriptPath, lastHookAt,
+            active, cwd, ...(storedDsh === false ? {} : { dsh: storedDsh }), ...(launching ? { launch: launching } : {}),
+            displayName, runtimeProfile: selectedModel }
+          row = session
+        } else {
+          const [, , , , , , , displayName, selectedModel] = member
+          const session = { agentId, sessionId, engine, registeredAt, transcriptPath, lastHookAt, displayName, selectedModel, runtimeProfile: selectedModel }
+          row = session
+        }
         budget.retain(boundedJsonBytes(row, budget.remaining)); agents.push(row)
       }, value: (): View => ({ agents,
         machine: { ...header.machine, computerId: header.machine.computerId || options.machineId, name: header.machine.name || 'This machine' },

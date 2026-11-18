@@ -105,29 +105,26 @@ export function agentView(session: RegisteredSession): AgentView {
   return view
 }
 
-/** Registered session facts shared by the actual device readers; no credential or launch token crosses. */
-export type SessionRow = Pick<AgentView, 'agentId' | 'sessionId' | 'engine' | 'registeredAt' | 'transcriptPath' | 'lastHookAt' | 'active' | 'cwd' | 'dsh'> & {
-  launch?: { state: 'starting' | 'ready' | 'held' | 'failed'; error?: string; detail?: string; service?: string }
-}
-export interface SessionSnapshotRow {
-  session: SessionRow
-  facts: { displayName: string; terminalAvailable: boolean; parts: { dsh?: string } }
-  selectedModel: string | null
-  turnRunning: boolean
-}
-export interface SessionCloudRow {
-  agentId: string; sessionId: string; engine: string; registeredAt: number; transcriptPath: string | null; lastHookAt: number
-  displayName: string; selectedModel: string | null
-}
+/** Fixed private records avoid repeating property names and equal package strings for every member. */
+export type SessionReadLaunch = readonly [state: 'starting' | 'ready']
+  | readonly [state: 'failed', error: string, detail: string | false]
+  | readonly [state: 'held', service: string, detail: string]
+export type SessionReadRegistered = readonly [source: 'registered', agentId: string, sessionId: string, engine: string,
+  registeredAt: number, transcriptPath: string | null, lastHookAt: number, active: boolean, cwd: string | null,
+  storedDsh: string | null | false, launch: SessionReadLaunch | null, displayName: string, terminalAvailable: boolean,
+  selectedModel: string | null, turnRunning: boolean,
+  /** false: absent; true: exactly the stored string; otherwise the distinct published string. */ publishedDsh: string | boolean]
+export type SessionReadCloud = readonly [source: 'cloud', agentId: string, sessionId: string, engine: string,
+  registeredAt: number, transcriptPath: string | null, lastHookAt: number, displayName: string, selectedModel: string | null]
 export interface SessionReadHeader {
-  version: 1
+  version: 2
   machine: { id: string; computerId: string; name: string }
   signedIn: boolean
   environment: string
   hasWindow: boolean
 }
-export type SessionReadValue = { source: 'registered'; row: SessionSnapshotRow } | { source: 'cloud'; row: SessionCloudRow }
-  | { source: 'registered' | 'cloud'; gone: string }
+export type SessionReadValue = SessionReadRegistered | SessionReadCloud
+  | readonly [kind: 'gone', source: 'registered' | 'cloud', agentId: string]
 export type ReadRecord<Header = Record<string, unknown>, Row = Record<string, unknown>> =
   | { type: 'begin'; payload: { header: Header; count: number } }
   | { type: 'row'; payload: { index: number; value: Row } }
@@ -2206,7 +2203,7 @@ export function readSessions(deps: Pick<CoreApiDeps, 'registry' | 'cloudRead' | 
     }
     try {
       if (signal?.aborted || !deps.turns.running || !deps.facts) return finish('SESSION_READ_UNAVAILABLE')
-      const header: SessionReadHeader = { version: 1,
+      const header: SessionReadHeader = { version: 2,
         machine: { id: deps.machine.id(), computerId: deps.machine.computerId(), name: deps.machine.name() },
         signedIn: deps.signedIn(), environment: deps.environment(), hasWindow: deps.hasWindow() }
       if (!header.machine.id) return finish('SESSION_READ_UNAVAILABLE')
@@ -2229,33 +2226,28 @@ export function readSessions(deps: Pick<CoreApiDeps, 'registry' | 'cloudRead' | 
           const agentId = ids[index]
           if (index >= registeredCount) {
             const row = deps.cloudRead!.row(agentId) as (AgentView & { displayName?: unknown; runtimeProfile?: unknown }) | undefined
-            if (!row) { yield { source: 'cloud', gone: agentId }; continue }
-            yield { source: 'cloud', row: { agentId: row.agentId, sessionId: row.sessionId, engine: row.engine,
-              registeredAt: row.registeredAt, transcriptPath: row.transcriptPath, lastHookAt: row.lastHookAt,
-              displayName: typeof row.displayName === 'string' ? row.displayName : '',
-              selectedModel: typeof row.runtimeProfile === 'string' ? row.runtimeProfile : null } }
+            if (!row) { yield ['gone', 'cloud', agentId]; continue }
+            yield ['cloud', row.agentId, row.sessionId, row.engine, row.registeredAt, row.transcriptPath, row.lastHookAt,
+              typeof row.displayName === 'string' ? row.displayName : '', typeof row.runtimeProfile === 'string' ? row.runtimeProfile : null]
             continue
           }
           const row = deps.registry.byAgent(agentId)
-          if (!row) { yield { source: 'registered', gone: agentId }; continue }
+          if (!row) { yield ['gone', 'registered', agentId]; continue }
           const selectedModel = deps.runtimeProfile(row), turnRunning = deps.turns.running!(row.sessionId)
           if (deps.registry.byAgent(agentId) !== row) fail('SESSION_READ_UNAVAILABLE')
-          const session: SessionRow = { agentId: row.agentId, sessionId: row.sessionId, engine: row.engine,
-            registeredAt: row.registeredAt, transcriptPath: row.transcriptPath, lastHookAt: row.lastHookAt,
-            active: row.active, cwd: row.cwd, ...(row.dsh === undefined ? {} : { dsh: row.dsh }) }
-          if (row.launch) {
-            const launch = row.launch
-            session.launch = { state: launch.state,
-              ...(launch.state === 'failed' ? { error: launch.error, ...(launch.detail === undefined ? {} : { detail: launch.detail }) } : {}),
-              ...(launch.state === 'held' ? { service: launch.service, detail: launch.detail } : {}) }
-          }
+          const { agentId: currentId, sessionId, engine, registeredAt, transcriptPath, lastHookAt, active, cwd, dsh } = row
+          const state = row.launch
+          const launch: SessionReadLaunch | null = !state ? null : state.state === 'failed'
+            ? ['failed', state.error, state.detail === undefined ? false : state.detail]
+            : state.state === 'held' ? ['held', state.service, state.detail] : [state.state]
           // Shared app facts stay last. No provider is called after this final current-row check.
           const captured = deps.facts!(row)
           if (!captured || deps.registry.byAgent(agentId) !== row) fail('SESSION_READ_UNAVAILABLE')
-          if (scope === 'advertised' && !captured.terminalAvailable) { yield { source: 'registered', gone: agentId }; continue }
-          const facts = { displayName: captured.displayName, terminalAvailable: captured.terminalAvailable,
-            parts: typeof captured.parts.dsh === 'string' ? { dsh: captured.parts.dsh } : {} }
-          yield { source: 'registered', row: { session, selectedModel, turnRunning, facts } }
+          if (scope === 'advertised' && !captured.terminalAvailable) { yield ['gone', 'registered', agentId]; continue }
+          const publishedDsh = captured.parts.dsh
+          yield ['registered', currentId, sessionId, engine, registeredAt, transcriptPath, lastHookAt, active, cwd,
+            dsh === undefined ? false : dsh, launch, captured.displayName, captured.terminalAvailable, selectedModel, turnRunning,
+            typeof publishedDsh === 'string' ? publishedDsh === dsh ? true : publishedDsh : false]
         }
       }
       let index = 0

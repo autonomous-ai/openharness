@@ -288,7 +288,7 @@ describe('the Wi-Fi device, with the dials', () => {
       facts: { displayName: `Shown ${agentId}`, terminalAvailable, parts: { dsh: 'service-package' } },
       selectedModel: null, turnRunning: true,
     })
-    const snapshot = vi.fn(snapshotReader(async () => ({ version: 1, registered: [row('shown', true), row('hidden', false)], cloud: [],
+    const snapshot = vi.fn(snapshotReader(async () => ({ version: 2, registered: [row('shown', true), row('hidden', false)], cloud: [],
       machine: { id: 'machine-1', computerId: 'c1', name: 'Desk' }, signedIn: true, environment: 'prod', hasWindow: true })))
     const core = fakeCore({ dataDir })
     Object.assign(core.agents, { readSessions: snapshot })

@@ -8,7 +8,7 @@ import type { DshRegistryEntry } from '../../dsh/registry.js'
 const state = vi.hoisted(() => ({ agents: [] as RegisteredSession[], catalog: [] as DshRegistryEntry[] }))
 const deviceStoreAgents = (machineId: string) => {
   const projection = wifiProjection(snapshotFixture({ machine: { id: machineId, computerId: 'computer', name: 'Fixture' } }))
-  for (const row of state.agents) projection.row({ source: 'registered', row: snapshotRow(row.agentId, { session: { ...snapshotRow(row.agentId).session, ...row } }) }, { remaining: Infinity, retain: () => {} })
+  for (const row of state.agents) projection.row(snapshotValue(snapshotRow(row.agentId, { session: { ...snapshotRow(row.agentId).session, ...row } })), { remaining: Infinity, retain: () => {} })
   return projection.value().store
 }
 vi.mock('../../dsh/catalog.js', () => ({ refreshDshRegistry: async () => state.catalog, catalogEntry: (id: string) => state.catalog.find(e => e.id === id) }))
@@ -19,7 +19,7 @@ import { installedDsh, invalidateInstalledDsh } from '../../dsh/installed.js'
 import { materializeWorkspace } from '../../dsh/materialize.js'
 import { createDeviceStore, deviceStorePackages } from './storeRuntime.js'
 import { wifiProjection } from '../../services/wifiView.js'
-import { snapshotFixture, snapshotRow } from '../../testing/sessionSnapshot.js'
+import { snapshotFixture, snapshotRow, snapshotValue } from '../../testing/sessionSnapshot.js'
 import { createForExperiment } from '../../core/experimentQueries.js'
 import type { AgentCreateRequest } from '../../core/api.js'
 import { DeviceStoreResultSchema } from './storeContract.js'

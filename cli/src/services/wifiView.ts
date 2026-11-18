@@ -21,20 +21,21 @@ export function readWifiView(read: SessionRecordSource, machineId: string, signa
 export function wifiProjection(header: SessionReadHeader): SessionProjection<WifiView> {
   const agents: AutonomousDeviceAgent[] = [], store: StoreAgent[] = []
   return { row: (member, budget) => {
-    if ('gone' in member || member.source !== 'registered') return
-    const { session: row, facts, turnRunning } = member.row
-    const entry: StoreAgent = { agentId: row.agentId, machineId: header.machine.id,
-      packageId: typeof facts.parts.dsh === 'string' ? facts.parts.dsh : row.dsh ?? null,
-      engine: row.engine, workspace: canonicalPath(row.cwd), state: row.active ? 'active' : 'inactive',
-      runtime: !facts.terminalAvailable || row.launch?.state === 'failed' ? 'unavailable'
-        : row.launch?.state === 'starting' ? 'starting' : row.active
-          ? (row.launch?.state === 'ready' || row.sessionId || row.engine === 'terminal' ? 'ready' : 'starting') : 'unavailable',
-      ...(row.launch?.state === 'failed' ? { error: row.launch.detail ?? row.launch.error } : {}) }
+    if (member[0] !== 'registered') return
+    const [, agentId, sessionId, engine, , , , active, cwd, storedDsh, launch, displayName, terminalAvailable, , turnRunning, publishedDsh] = member
+    const [launchState, launchValue, launchDetail] = launch ?? []
+    const entry: StoreAgent = { agentId, machineId: header.machine.id,
+      packageId: typeof publishedDsh === 'string' ? publishedDsh : storedDsh === false ? null : storedDsh,
+      engine, workspace: canonicalPath(cwd), state: active ? 'active' : 'inactive',
+      runtime: !terminalAvailable || launchState === 'failed' ? 'unavailable'
+        : launchState === 'starting' ? 'starting' : active
+          ? (launchState === 'ready' || sessionId || engine === 'terminal' ? 'ready' : 'starting') : 'unavailable',
+      ...(launchState === 'failed' ? { error: launchDetail === false ? launchValue : launchDetail } : {}) }
     // These closed primitive projections were built from the checked record; only their exact encoded size is needed.
     budget.retain(Buffer.byteLength(JSON.stringify(entry))); store.push(entry)
-    if (facts.terminalAvailable) {
-      const agent: AutonomousDeviceAgent = { agentId: row.agentId, name: facts.displayName, engine: row.engine,
-      packageId: entry.packageId, workspace: entry.workspace ?? row.cwd, runtime: entry.runtime, state: turnRunning ? 'running' : 'idle' }
+    if (terminalAvailable) {
+      const agent: AutonomousDeviceAgent = { agentId, name: displayName, engine,
+      packageId: entry.packageId, workspace: entry.workspace ?? cwd, runtime: entry.runtime, state: turnRunning ? 'running' : 'idle' }
       budget.retain(Buffer.byteLength(JSON.stringify(agent))); agents.push(agent)
     }
   }, value: () => ({ agents, store, hasWindow: header.hasWindow }) }

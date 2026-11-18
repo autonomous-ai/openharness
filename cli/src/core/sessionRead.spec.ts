@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { readSessions, SESSION_READ_MEMBERS_BYTES, type CoreApiDeps, type ReadRecord, type SessionReadHeader, type SessionReadValue } from './api.js'
 import type { RegisteredSession } from '../lib/registry.js'
-import { snapshotRow } from '../testing/sessionSnapshot.js'
+import { snapshotRow, snapshotMember } from '../testing/sessionSnapshot.js'
 
 type Event = ReadRecord<SessionReadHeader, SessionReadValue>
+const legacy = (events: Event[]) => events.map(event => event.type === 'row'
+  ? { ...event, payload: { ...event.payload, value: snapshotMember(event.payload.value) } } : event)
 const row = (id: string) => ({ ...snapshotRow(id).session, defaultName: `Name ${id}` }) as RegisteredSession
 function fixture() {
   const members = new Map(['a', 'b', 'c'].map(id => [id, row(id)])), cloud = new Map<string, RegisteredSession>()
@@ -24,27 +26,67 @@ function fixture() {
 afterEach(() => vi.useRealTimers())
 
 describe('complete membership and current per-row facts', () => {
+  it.each([
+    [undefined, undefined, false, false], [null, undefined, null, false], ['stored', undefined, 'stored', false],
+    [undefined, 'published', false, 'published'], [null, 'published', null, 'published'],
+    ['same', 'same', 'same', true], ['', '', '', true], ['stored', 'published', 'stored', 'published'],
+  ] as const)('emits compact session facts with lossless DSH values %j / %j', async (stored, published, storedWire, publishedWire) => {
+    vi.useFakeTimers()
+    const t = fixture(); t.members.clear()
+    const current = row('compact')
+    if (stored === undefined) delete current.dsh
+    else current.dsh = stored
+    t.members.set(current.agentId, current)
+    t.facts.mockImplementation(value => ({ displayName: value.defaultName!, terminalAvailable: true,
+      parts: published === undefined ? {} : { dsh: published } }))
+    const pending = t.start()
+    await t.advance(); await t.advance(); await t.advance(); await pending
+    expect(t.events[1]).toEqual({ type: 'row', payload: { index: 0, value: [
+      'registered', 'compact', 's-compact', 'claude', 1, null, 0, true, null, storedWire, null,
+      'Name compact', true, null, false, publishedWire,
+    ] } })
+    expect(t.events[0]).toMatchObject({ type: 'begin', payload: { count: 1, header: { version: 2 } } })
+    expect(t.facts).toHaveBeenCalledOnce()
+  })
+
+  it('sends a compact session large package once while preserving its complete value', async () => {
+    vi.useFakeTimers()
+    const t = fixture(); t.members.clear()
+    const dsh = `package/${'x'.repeat(1_600_000)}`
+    t.members.set('large', { ...row('large'), dsh })
+    t.facts.mockImplementation(value => ({ displayName: value.defaultName!, terminalAvailable: true, parts: { dsh } }))
+    const pending = t.start()
+    await t.advance(); await t.advance(); await t.advance(); await pending
+    const wire = JSON.stringify(t.events[1])
+    expect(wire.split(dsh)).toHaveLength(2)
+    expect(Buffer.byteLength(wire)).toBeLessThan(Buffer.byteLength(dsh) + 512)
+    expect(t.events[1]).toMatchObject({ payload: { value: [
+      'registered', 'large', 's-large', 'claude', 1, null, 0, true, null, dsh, null,
+      'Name large', true, null, false, true,
+    ] } })
+  })
+
   it('captures no new members, emits gone, reads replacements, and keeps facts already emitted', async () => {
     vi.useFakeTimers()
     const t = fixture()
     t.members.get('a')!.launch = { state: 'held', service: 'engine', detail: 'Waiting' }
     const pending = t.start()
-    expect(t.events[0]).toMatchObject({ type: 'begin', payload: { count: 3 } })
+    expect(legacy(t.events)[0]).toMatchObject({ type: 'begin', payload: { count: 3 } })
     t.members.set('late', row('late')); t.members.delete('b')
     t.members.set('c', { ...row('c'), sessionId: 'replacement' })
     await t.advance()
-    expect(t.events[1]).toMatchObject({ type: 'row', payload: { index: 0, value: { source: 'registered', row: { facts: { displayName: 'Name a' } } } } })
+    expect(legacy(t.events)[1]).toMatchObject({ type: 'row', payload: { index: 0, value: { source: 'registered', row: { facts: { displayName: 'Name a' } } } } })
     t.members.get('a')!.defaultName = 'After emission'
     t.members.get('c')!.defaultName = 'Before emission'
     await t.advance()
-    expect(t.events[2]).toEqual({ type: 'row', payload: { index: 1, value: { source: 'registered', gone: 'b' } } })
+    expect(legacy(t.events)[2]).toEqual({ type: 'row', payload: { index: 1, value: { source: 'registered', gone: 'b' } } })
     await t.advance()
-    expect(t.events[3]).toMatchObject({ payload: { value: { row: { session: { sessionId: 'replacement' }, facts: { displayName: 'Before emission' } } } } })
-    await t.advance(); expect(t.events.at(-1)).toEqual({ type: 'end', payload: { count: 3 } })
+    expect(legacy(t.events)[3]).toMatchObject({ payload: { value: { row: { session: { sessionId: 'replacement' }, facts: { displayName: 'Before emission' } } } } })
+    await t.advance(); expect(legacy(t.events).at(-1)).toEqual({ type: 'end', payload: { count: 3 } })
     await t.advance(); await pending
-    expect(t.events[1]).toMatchObject({ payload: { value: { row: { facts: { displayName: 'Name a' } } } } })
+    expect(legacy(t.events)[1]).toMatchObject({ payload: { value: { row: { facts: { displayName: 'Name a' } } } } })
     expect(t.facts).toHaveBeenCalledTimes(2)
-    expect(t.events[1]).toMatchObject({ payload: { value: { row: { session: { launch: { state: 'held', service: 'engine', detail: 'Waiting' } } } } } })
+    expect(legacy(t.events)[1]).toMatchObject({ payload: { value: { row: { session: { launch: { state: 'held', service: 'engine', detail: 'Waiting' } } } } } })
   })
 
   it('reads a same-id re-add and current Cloud metadata without retaining old row objects', async () => {
@@ -56,9 +98,9 @@ describe('complete membership and current per-row facts', () => {
     t.cloud.set('late', row('late')); t.cloud.delete('cloud-a')
     t.cloud.set('cloud-b', { ...row('cloud-b'), sessionId: 'new-cloud', displayName: 'New Cloud', runtimeProfile: 'selected' } as RegisteredSession)
     await t.advance(); await t.advance(); await t.advance(); await t.advance(); await t.advance(); await pending
-    expect(t.events[1]).toMatchObject({ payload: { value: { row: { session: { sessionId: 'readded' } } } } })
-    expect(t.events[2]).toMatchObject({ payload: { value: { source: 'cloud', gone: 'cloud-a' } } })
-    expect(t.events[3]).toMatchObject({ payload: { value: { source: 'cloud', row: { sessionId: 'new-cloud', displayName: 'New Cloud', selectedModel: 'selected' } } } })
+    expect(legacy(t.events)[1]).toMatchObject({ payload: { value: { row: { session: { sessionId: 'readded' } } } } })
+    expect(legacy(t.events)[2]).toMatchObject({ payload: { value: { source: 'cloud', gone: 'cloud-a' } } })
+    expect(legacy(t.events)[3]).toMatchObject({ payload: { value: { source: 'cloud', row: { sessionId: 'new-cloud', displayName: 'New Cloud', selectedModel: 'selected' } } } })
   })
 
   it.each(['machine', 'computer', 'signedIn', 'environment'] as const)('refuses identity replacement in %s before another row', async key => {
@@ -67,7 +109,7 @@ describe('complete membership and current per-row facts', () => {
     if (key === 'signedIn') t.identity.signedIn = false
     else t.identity[key] = 'replacement'
     await t.advance(); await failed
-    expect(t.events).toHaveLength(1); expect(t.facts).not.toHaveBeenCalled()
+    expect(legacy(t.events)).toHaveLength(1); expect(t.facts).not.toHaveBeenCalled()
   })
 
   it('retains no logical read after abort, including a reentrant abort while begin is sent', async () => {
@@ -88,8 +130,8 @@ describe('complete membership and current per-row facts', () => {
     const t = fixture(); t.members.clear()
     const pending = t.start(), failed = expect(pending).rejects.toThrow('SESSION_READ_TIMEOUT')
     await vi.advanceTimersByTimeAsync(19_000)
-    expect(t.events).toHaveLength(1)
-    await t.advance(); expect(t.events.at(-1)?.type).toBe('end')
+    expect(legacy(t.events)).toHaveLength(1)
+    await t.advance(); expect(legacy(t.events).at(-1)?.type).toBe('end')
     await vi.advanceTimersByTimeAsync(1_000); await failed
     t.callbacks.shift()!(true)
     expect(vi.getTimerCount()).toBe(0)
@@ -99,11 +141,11 @@ describe('complete membership and current per-row facts', () => {
     const t = fixture()
     t.members.clear(); t.members.set('oversize', { ...row('oversize'), agentId: 'x'.repeat(SESSION_READ_MEMBERS_BYTES / 2) })
     await expect(t.start()).rejects.toThrow('SESSION_READ_TOO_LARGE')
-    expect(t.events).toHaveLength(0); expect(t.facts).not.toHaveBeenCalled()
+    expect(legacy(t.events)).toHaveLength(0); expect(t.facts).not.toHaveBeenCalled()
     t.members.clear(); t.members.set('a', row('a'))
     const now = vi.spyOn(performance, 'now').mockReturnValueOnce(0).mockReturnValue(20_000)
     try { await expect(t.start()).rejects.toThrow('SESSION_READ_TIMEOUT') } finally { now.mockRestore() }
-    expect(t.events).toHaveLength(0)
+    expect(legacy(t.events)).toHaveLength(0)
     t.deps.registry.rows = () => { throw 'private failure' }
     await expect(t.start()).rejects.toThrow('SESSION_READ_UNAVAILABLE')
     expect(JSON.stringify(t.deps.log.mock.calls)).not.toContain('private')
@@ -118,7 +160,7 @@ describe('complete membership and current per-row facts', () => {
     const pending = t.start(), failed = expect(pending).rejects.toThrow('SESSION_READ_UNAVAILABLE')
     t.facts.mockImplementationOnce(() => { throw 'PRIVATE' })
     await t.advance(); await failed
-    expect(t.events).toHaveLength(1)
+    expect(legacy(t.events)).toHaveLength(1)
     expect(JSON.stringify(t.deps.log.mock.calls)).not.toContain('PRIVATE')
   })
 

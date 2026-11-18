@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import { SESSION_READ_HEADER_BYTES, SESSION_READ_VIEW_BYTES, type CoreApi, type ReadRecord, type SessionReadHeader, type SessionReadValue } from '../core/api.js'
-import { snapshotFixture, snapshotRow, snapshotReader, snapshotRecords, type SessionSnapshot } from '../testing/sessionSnapshot.js'
+import { snapshotFixture, snapshotRow, snapshotReader, snapshotRecords, snapshotMember, type SessionSnapshot } from '../testing/sessionSnapshot.js'
 import { readCoreSessionRecords, readSessionView, type SessionRecordSource } from './sessionSnapshot.js'
 import { boundedJsonBytes } from '../lib/boundedJsonBytes.js'
 
 const collect = (read: SessionRecordSource) => readSessionView(read, 'registered', header => {
   const result: SessionSnapshot = { ...header, registered: [], cloud: [] }
-  return { row: (member, budget) => {
+  return { row: (value, budget) => {
+    const member = snapshotMember(value)
     if ('gone' in member) return
     budget.retain(boundedJsonBytes(member.row, budget.remaining))
     if (member.source === 'registered') result.registered.push(member.row)
@@ -20,6 +21,84 @@ const records = (values: unknown[]): CoreApi['agents']['readSessions'] => async 
 const complete = () => snapshotFixture({ registered: [snapshotRow()], cloud: [{ agentId: 'cloud', sessionId: 'remote', engine: 'fo',
   registeredAt: 1, transcriptPath: null, lastHookAt: 0, displayName: 'Remote', selectedModel: null }] })
 describe('complete shared session facts at the component boundary', async () => {
+  it('rejects malformed fixed member and launch tuples before projection or commit', async () => {
+    const ordinary = (): unknown[] => ['registered', 'agent', 'session', 'claude', 1, null, 0,
+      true, null, 'package', null, 'Name', true, null, false, true]
+    const cloud = (): unknown[] => ['cloud', 'remote', 'remote-session', 'fo', 2, null, 3, 'Cloud', null]
+    const source = (members: unknown[]) => records([
+      { type: 'begin', payload: { count: members.length, header: { version: 2,
+        machine: { id: 'machine', computerId: 'computer', name: 'Desk' }, signedIn: true, environment: 'prod', hasWindow: true } } },
+      ...members.map((value, index) => ({ type: 'row', payload: { index, value } })),
+      { type: 'end', payload: { count: members.length } },
+    ])
+    const project = vi.fn(), commit = vi.fn(() => 'complete'), observe = vi.fn()
+    const build = () => ({ row: project, value: commit })
+    await expect(readSessionView(source([ordinary(), cloud(), ['gone', 'registered', 'removed']]), 'registered', build))
+      .resolves.toBe('complete')
+    expect(project).toHaveBeenCalledTimes(3)
+    const malformed: unknown[] = [null, {}, [], ordinary().slice(0, -1), [...ordinary(), 'extra'], cloud().slice(0, -1), [...cloud(), 'extra'],
+      ['gone', 'other', 'removed'], ['gone', 'registered', ''], ['gone', 'cloud', 'removed', 'extra']]
+    for (const [index, value] of [[0, 'other'], [1, ''], [2, null], [3, ''], [4, Infinity], [5, 7], [6, '0'],
+      [7, 0], [8, false], [9, true], [9, 7], [11, 7], [12, 7], [13, 7], [14, null], [15, null], [15, 7]] as const) {
+      const member = ordinary(); member[index] = value; malformed.push(member)
+    }
+    for (const launch of [{ state: 'ready' }, [], ['unknown'], ['ready', 'extra'], ['starting', 'extra'],
+      ['failed'], ['failed', 7, false], ['failed', 'FAILED', 7], ['failed', 'FAILED', false, 'extra'],
+      ['held', 7, 'detail'], ['held', 'engine', 7], ['held', 'engine', 'detail', 'extra']]) {
+      const member = ordinary(); member[10] = launch; malformed.push(member)
+    }
+    for (const stored of [false, null]) {
+      const member = ordinary(); member[9] = stored; malformed.push(member)
+    }
+    for (const [index, value] of [[1, ''], [2, null], [3, ''], [4, Infinity], [5, 7], [6, '0'], [7, 7], [8, false]] as const) {
+      const member = cloud(); member[index] = value; malformed.push(member)
+    }
+    for (const member of malformed) {
+      project.mockClear(); commit.mockClear(); observe.mockClear()
+      await expect(readSessionView(source([member]), 'registered', build, undefined, observe)).rejects.toThrow('SESSION_READ_UNAVAILABLE')
+      expect(project).not.toHaveBeenCalled(); expect(commit).not.toHaveBeenCalled()
+      expect(observe).toHaveBeenCalledTimes(1)
+    }
+    project.mockClear(); commit.mockClear()
+    await expect(readSessionView(source([ordinary(), ['gone', 'registered', 'agent']]), 'registered', build)).rejects.toThrow('SESSION_READ_UNAVAILABLE')
+    expect(project).toHaveBeenCalledOnce(); expect(commit).not.toHaveBeenCalled()
+  })
+
+  it('refuses unsafe tuple iteration before any typed row observer or projection', async () => {
+    const ordinary = (): unknown[] => ['registered', 'agent', 'session', 'claude', 1, null, 0,
+      true, null, 'package', ['failed', 'FAILED', false], 'Name', true, null, false, true]
+    const source = (member: unknown) => records([
+      { type: 'begin', payload: { count: 1, header: { version: 2,
+        machine: { id: 'machine', computerId: 'computer', name: 'Desk' }, signedIn: true, environment: 'prod', hasWindow: true } } },
+      { type: 'row', payload: { index: 0, value: member } },
+      { type: 'end', payload: { count: 1 } },
+    ])
+    const project = vi.fn(), observe = vi.fn(), build = () => ({ row: project, value: () => 'complete' })
+    await expect(readSessionView(source(ordinary()), 'registered', build, undefined, observe)).resolves.toBe('complete')
+    expect(project).toHaveBeenCalledOnce(); expect(observe).toHaveBeenCalledTimes(3)
+    const invoked = vi.fn(() => { throw new Error('PRIVATE') })
+    const unsafe: unknown[][] = [Object.setPrototypeOf(ordinary(), null)]
+    for (const nested of [false, true]) {
+      for (const getter of [false, true]) {
+        const member = ordinary(), target = nested ? member[10] as unknown[] : member
+        Object.defineProperty(target, Symbol.iterator, getter ? { get: invoked } : { value: invoked })
+        unsafe.push(member)
+      }
+    }
+    const accessor = ordinary()
+    Object.defineProperty(accessor, '1', { enumerable: true, get: invoked }); unsafe.push(accessor)
+    const json = ordinary(); Object.defineProperty(json, 'toJSON', { get: invoked }); unsafe.push(json)
+    unsafe.push(new Proxy(ordinary(), { get: invoked }))
+    for (const member of unsafe) {
+      project.mockClear(); observe.mockClear()
+      await expect(readSessionView(source(member), 'registered', build, undefined, observe)).rejects.toThrow('SESSION_READ_UNAVAILABLE')
+      expect(project).not.toHaveBeenCalled()
+      expect(observe).toHaveBeenCalledTimes(1)
+      expect(observe.mock.calls[0][0].type).toBe('begin')
+    }
+    expect(invoked).not.toHaveBeenCalled()
+  })
+
   it('validates before typed observation and observes before provisional projection or acknowledgement', async () => {
     const order: string[] = [], snapshot = snapshotRecords(snapshotFixture({ registered: [snapshotRow()] }))
     const read: SessionRecordSource = async (_scope, receive) => {
@@ -64,23 +143,12 @@ describe('complete shared session facts at the component boundary', async () => 
   })
   it('refuses the whole reply for any malformed header or row instead of truncating occupancy', async () => {
     const changes: Array<(v: any) => unknown> = [
-      () => null, () => [], v => ({ ...v, version: 2 }), v => ({ ...v, registered: null }), v => ({ ...v, cloud: {} }),
+      () => null, () => [], v => ({ ...v, version: 1 }), v => ({ ...v, registered: null }), v => ({ ...v, cloud: {} }),
       v => ({ ...v, machine: null }), v => ({ ...v, machine: { ...v.machine, id: '' } }), v => ({ ...v, machine: { ...v.machine, id: 7 } }),
       v => ({ ...v, machine: { ...v.machine, computerId: null } }), v => ({ ...v, machine: { ...v.machine, name: false } }),
       v => ({ ...v, signedIn: 1 }), v => ({ ...v, environment: null }), v => ({ ...v, hasWindow: '' }),
       v => ({ ...v, registered: [null] }), v => ({ ...v, registered: [{ ...v.registered[0], session: null }] }),
     ]
-    for (const [key, value] of Object.entries({ agentId: '', sessionId: null, engine: '', registeredAt: Infinity, transcriptPath: 7, lastHookAt: '0', active: 0, cwd: false, dsh: 1 })) {
-      changes.push(v => { v.registered[0].session[key] = value; return v })
-    }
-    for (const launch of [null, { state: 'unknown' }, { state: 'failed', error: 7 }, { state: 'failed', error: 'E', detail: 7 },
-      { state: 'held', service: 7, detail: 'why' }, { state: 'held', service: 's', detail: 7 }]) {
-      changes.push(v => { v.registered[0].session.launch = launch; return v })
-    }
-    for (const facts of [null, { displayName: 7 }, { displayName: '', terminalAvailable: 7 }, { displayName: '', terminalAvailable: false, parts: [] },
-      { displayName: '', terminalAvailable: false, parts: { dsh: 7 } }]) changes.push(v => { v.registered[0].facts = facts; return v })
-    for (const [key, value] of [['selectedModel', 7], ['turnRunning', null]]) changes.push(v => { v.registered[0][key as string] = value; return v })
-    for (const cloud of [null, {}, { ...complete().cloud[0], displayName: 7 }, { ...complete().cloud[0], selectedModel: false }]) changes.push(v => ({ ...v, cloud: [cloud] }))
     for (const change of changes) await expect(sessionSnapshot(change(complete()))).rejects.toThrow('SESSION_READ_UNAVAILABLE')
     const duplicate = complete(); duplicate.registered.push(duplicate.registered[0])
     await expect(sessionSnapshot(duplicate)).rejects.toThrow('SESSION_READ_UNAVAILABLE')
@@ -111,7 +179,7 @@ describe('complete shared session facts at the component boundary', async () => 
       [{ type: 'begin', payload: { header: snapshotFixture(), count: 0 } }, valid[1]],
     ]
     for (const value of invalid) await expect(collect(records(value))).rejects.toThrow('SESSION_READ_UNAVAILABLE')
-    const gone = { type: 'row', payload: { index: 0, value: { source: 'registered', gone: 'deleted' } } }
+    const gone = { type: 'row', payload: { index: 0, value: ['gone', 'registered', 'deleted'] } }
     const value = await collect(records([{ ...begin, payload: { ...begin.payload, count: 1 } }, gone, { type: 'end', payload: { count: 1 } }]))
     expect(value.registered).toEqual([]); expect(value.cloud).toEqual([])
     const duplicateGone = { ...gone, payload: { ...gone.payload, index: 1 } }
@@ -188,7 +256,7 @@ describe('complete shared session facts at the component boundary', async () => 
 
   it('bounds membership retained by the component even when every member is gone', async () => {
     const commit = vi.fn(), id = 'x'.repeat(7 * 1024 * 1024)
-    const members = Array.from({ length: 5 }, (_, index) => ({ type: 'row', payload: { index, value: { source: 'registered', gone: `${index}${id}` } } }))
+    const members = Array.from({ length: 5 }, (_, index) => ({ type: 'row', payload: { index, value: ['gone', 'registered', `${index}${id}`] } }))
     await expect(readSessionView(records([{ type: 'begin', payload: { header: snapshotFixture(), count: 5 } }, ...members]), 'registered',
       () => ({ row: () => {}, value: commit }))).rejects.toThrow('SESSION_READ_TOO_LARGE')
     expect(commit).not.toHaveBeenCalled()

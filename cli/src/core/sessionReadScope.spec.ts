@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { readSessions, type CoreApiDeps, type ReadRecord, type SessionReadHeader, type SessionReadScope, type SessionReadValue } from './api.js'
 import type { RegisteredSession } from '../lib/registry.js'
-import { snapshotRow } from '../testing/sessionSnapshot.js'
+import { snapshotRow, snapshotMember } from '../testing/sessionSnapshot.js'
 
 type Event = ReadRecord<SessionReadHeader, SessionReadValue>
 const row = (id: string) => ({ ...snapshotRow(id).session, defaultName: id }) as RegisteredSession
@@ -59,14 +59,14 @@ describe('existing registered and advertised membership scopes', () => {
       t.members.set('late', row('late')); t.available.add('late')
     })
     expect(shown[0]).toMatchObject({ payload: { count: 4 } })
-    const values = shown.filter(event => event.type === 'row').map(event => event.payload.value)
+    const values = shown.filter(event => event.type === 'row').map(event => snapshotMember(event.payload.value))
     expect(values).toEqual([
       { source: 'registered', gone: 'a0' },
       expect.objectContaining({ source: 'registered', row: expect.objectContaining({ session: expect.objectContaining({ agentId: 'a1', sessionId: 'replacement' }) }) }),
       { source: 'registered', gone: 'a2' }, { source: 'registered', gone: 'a3' },
     ])
     const all = await t.capture('registered')
-    const occupancy = all.filter(event => event.type === 'row').map(event => event.payload.value)
+    const occupancy = all.filter(event => event.type === 'row').map(event => snapshotMember(event.payload.value))
     expect(occupancy).toHaveLength(5)
     expect(occupancy.filter(member => 'row' in member && member.source === 'registered' && !member.row.facts.terminalAvailable)).toHaveLength(2)
   })
@@ -79,7 +79,7 @@ describe('existing registered and advertised membership scopes', () => {
       t.cloud.set('remote-b', { ...row('remote-b'), sessionId: 'rebound', displayName: 'Current', runtimeProfile: 'model' } as RegisteredSession)
       t.cloud.set('remote-late', row('remote-late'))
     })
-    const values = events.filter(event => event.type === 'row').map(event => event.payload.value)
+    const values = events.filter(event => event.type === 'row').map(event => snapshotMember(event.payload.value))
     expect(values).toHaveLength(scope === 'registered' ? 4 : 3)
     expect(values.slice(-2)).toEqual([{ source: 'cloud', gone: 'remote-a' },
       { source: 'cloud', row: { agentId: 'remote-b', sessionId: 'rebound', engine: 'claude', registeredAt: 1,

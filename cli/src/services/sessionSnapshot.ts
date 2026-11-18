@@ -10,12 +10,18 @@ const string = (value: unknown): value is string => typeof value === 'string'
 const nullableString = (value: unknown): boolean => value === null || string(value)
 const number = (value: unknown): boolean => typeof value === 'number' && Number.isFinite(value)
 const count = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0
-const base = (row: Record<string, unknown>): boolean => string(row.agentId) && !!row.agentId && string(row.sessionId)
-  && string(row.engine) && !!row.engine && number(row.registeredAt) && nullableString(row.transcriptPath) && number(row.lastHookAt)
-const launch = (value: unknown): boolean => value === undefined || record(value) && (
-  value.state === 'starting' || value.state === 'ready'
-  || value.state === 'failed' && string(value.error) && (value.detail === undefined || string(value.detail))
-  || value.state === 'held' && string(value.service) && string(value.detail))
+// JSON arrays have their native iterator. An inline source must not inject code through destructuring.
+const tuple = (value: unknown): value is unknown[] => Array.isArray(value) && Object.getPrototypeOf(value) === Array.prototype
+  && !Object.hasOwn(value, Symbol.iterator)
+const base = (row: unknown[]): boolean => {
+  const [, agentId, sessionId, engine, registeredAt, transcriptPath, lastHookAt] = row
+  return string(agentId) && !!agentId && string(sessionId) && string(engine) && !!engine
+    && number(registeredAt) && nullableString(transcriptPath) && number(lastHookAt)
+}
+const launch = (value: unknown): boolean => value === null || tuple(value) && (
+  value.length === 1 && (value[0] === 'starting' || value[0] === 'ready')
+  || value.length === 3 && string(value[1]) && (
+    value[0] === 'failed' && (value[2] === false || string(value[2])) || value[0] === 'held' && string(value[2])))
 
 function checked(value: unknown): ReadRecord<SessionReadHeader, SessionReadValue> {
   if (!record(value) || boundedJsonBytes(value, RECORD_READ_BYTES) === null || !record(value.payload)) return invalid()
@@ -23,28 +29,25 @@ function checked(value: unknown): ReadRecord<SessionReadHeader, SessionReadValue
   if (value.type === 'begin') {
     const header = payload.header
     if (!count(payload.count) || !record(header) || boundedJsonBytes(header, SESSION_READ_HEADER_BYTES) === null
-      || header.version !== 1 || !record(header.machine) || !string(header.machine.id) || !header.machine.id
+      || header.version !== 2 || !record(header.machine) || !string(header.machine.id) || !header.machine.id
       || !string(header.machine.computerId) || !string(header.machine.name) || typeof header.signedIn !== 'boolean'
       || !string(header.environment) || typeof header.hasWindow !== 'boolean') return invalid()
   } else if (value.type === 'end') {
     if (!count(payload.count)) return invalid()
   } else if (value.type === 'row') {
     const member = payload.value
-    if (!count(payload.index) || !record(member) || (member.source !== 'registered' && member.source !== 'cloud')) return invalid()
-    if ('gone' in member) {
-      if (!string(member.gone) || !member.gone || 'row' in member) return invalid()
-    } else {
-      const entry = member.row
-      if (!record(entry)) return invalid()
-      if (member.source === 'registered') {
-        if (!record(entry.session) || !base(entry.session) || typeof entry.session.active !== 'boolean'
-          || !nullableString(entry.session.cwd) || (entry.session.dsh !== undefined && !nullableString(entry.session.dsh))
-          || !launch(entry.session.launch) || !record(entry.facts) || !string(entry.facts.displayName)
-          || typeof entry.facts.terminalAvailable !== 'boolean' || !record(entry.facts.parts)
-          || (entry.facts.parts.dsh !== undefined && !string(entry.facts.parts.dsh))
-          || !nullableString(entry.selectedModel) || typeof entry.turnRunning !== 'boolean') return invalid()
-      } else if (!base(entry) || !string(entry.displayName) || !nullableString(entry.selectedModel)) return invalid()
-    }
+    if (!count(payload.index) || !tuple(member)) return invalid()
+    if (member[0] === 'gone') {
+      if (member.length !== 3 || (member[1] !== 'registered' && member[1] !== 'cloud') || !string(member[2]) || !member[2]) return invalid()
+    } else if (member[0] === 'registered') {
+      const [, , , , , , , active, cwd, storedDsh, launching, displayName, terminalAvailable, selectedModel, turnRunning, publishedDsh] = member
+      if (member.length !== 16 || !base(member) || typeof active !== 'boolean' || !nullableString(cwd)
+        || !(storedDsh === false || nullableString(storedDsh)) || !launch(launching) || !string(displayName)
+        || typeof terminalAvailable !== 'boolean' || !nullableString(selectedModel) || typeof turnRunning !== 'boolean'
+        || !(publishedDsh === false || string(publishedDsh) || publishedDsh === true && string(storedDsh))) return invalid()
+    } else if (member[0] === 'cloud') {
+      if (member.length !== 9 || !base(member) || !string(member[7]) || !nullableString(member[8])) return invalid()
+    } else return invalid()
   } else return invalid()
   return value as ReadRecord<SessionReadHeader, SessionReadValue>
 }
@@ -96,7 +99,7 @@ export async function readSessionView<T>(read: SessionRecordSource, scope: Sessi
       } else if (value.type === 'row') {
         if (!projection || value.payload.index !== index || index >= expected!) return invalid()
         const member = value.payload.value
-        const id = 'gone' in member ? member.gone : member.source === 'registered' ? member.row.session.agentId : member.row.agentId
+        const id = member[0] === 'gone' ? member[2] : member[1]
         if (ids.has(id)) return invalid()
         if (bytes + 48 + 2 * id.length > SESSION_READ_VIEW_BYTES) throw new Error('SESSION_READ_TOO_LARGE')
         bytes += 48 + 2 * id.length

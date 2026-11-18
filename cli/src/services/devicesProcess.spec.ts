@@ -92,6 +92,53 @@ function setup(over: { processEnv?: NodeJS.ProcessEnv; openListener?: DevicesSer
 afterEach(() => vi.restoreAllMocks())
 
 describe('the devices in their own process', () => {
+  it('reads compact session records through the actual Devices refresh with every retained field', async () => {
+    const f = setup()
+    vi.mocked(f.connection.read!).mockImplementation(async (_query, _payload, receive) => {
+      receive({ type: 'begin', payload: { count: 2, header: { version: 2,
+        machine: { id: 'machine-1', computerId: 'computer-9', name: 'This machine' }, signedIn: true, environment: 'prod', hasWindow: true } } })
+      receive({ type: 'row', payload: { index: 0, value: ['registered', 'compact', 'session', 'claude', 7, '/history/transcript', 9,
+        true, '/work', 'stored', ['failed', 'FAILED', 'detail'], 'Current name', true, 'selected', false, 'published'] } })
+      receive({ type: 'row', payload: { index: 1, value: ['cloud', 'remote', 'remote-session', 'fo', 8, null, 10, 'Cloud name', 'remote-model'] } })
+      receive({ type: 'end', payload: { count: 2 } })
+    })
+    f.connect()
+    await expect(f.deps().refresh!()).resolves.toBe(true)
+    expect(f.api().agents.advertised()).toEqual([
+      { agentId: 'compact', sessionId: 'session', engine: 'claude', registeredAt: 7, transcriptPath: '/history/transcript', lastHookAt: 9,
+        active: true, cwd: '/work', dsh: 'stored', launch: { state: 'failed', error: 'FAILED', detail: 'detail' },
+        displayName: 'Current name', runtimeProfile: 'selected' },
+      { agentId: 'remote', sessionId: 'remote-session', engine: 'fo', registeredAt: 8, transcriptPath: null, lastHookAt: 10,
+        displayName: 'Cloud name', selectedModel: 'remote-model', runtimeProfile: 'remote-model' },
+    ])
+    expect(f.api().clients.hasWindow()).toBe(true)
+    await f.service.stop()
+  })
+
+  it.each([
+    { launch: null, stored: false, fields: {} },
+    { launch: ['starting'], stored: null, fields: { dsh: null, launch: { state: 'starting' } } },
+    { launch: ['ready'], stored: '', fields: { dsh: '', launch: { state: 'ready' } } },
+    { launch: ['failed', 'FAILED', false], stored: false, fields: { launch: { state: 'failed', error: 'FAILED' } } },
+    { launch: ['failed', 'FAILED', ''], stored: 'stored', fields: { dsh: 'stored', launch: { state: 'failed', error: 'FAILED', detail: '' } } },
+    { launch: ['held', 'engine', 'Wait'], stored: false, fields: { launch: { state: 'held', service: 'engine', detail: 'Wait' } } },
+  ])('preserves absent/empty stored fields and launch $launch through actual refresh', async ({ launch, stored, fields }) => {
+    const f = setup()
+    vi.mocked(f.connection.read!).mockImplementation(async (_query, _payload, receive) => {
+      receive({ type: 'begin', payload: { count: 1, header: { version: 2,
+        machine: { id: 'machine-1', computerId: 'computer-9', name: 'This machine' }, signedIn: true, environment: 'prod', hasWindow: true } } })
+      receive({ type: 'row', payload: { index: 0, value: ['registered', 'compact', 'session', 'claude', 7, '/history/transcript', 9,
+        true, '/work', stored, launch, 'Current name', true, 'selected', false, false] } })
+      receive({ type: 'end', payload: { count: 1 } })
+    })
+    f.connect(); await expect(f.deps().refresh!()).resolves.toBe(true)
+    expect(f.api().agents.advertised()).toStrictEqual([
+      { agentId: 'compact', sessionId: 'session', engine: 'claude', registeredAt: 7, transcriptPath: '/history/transcript', lastHookAt: 9,
+        active: true, cwd: '/work', ...fields, displayName: 'Current name', runtimeProfile: 'selected' },
+    ])
+    await f.service.stop()
+  })
+
   it('reports failed desk refresh without discarding the display and recovers on the same binding', async () => {
     const f = setup()
     f.answer('session_read_advertised', snapshotFixture({ registered: [snapshotRow('retained')] }))
@@ -123,7 +170,8 @@ describe('the devices in their own process', () => {
   it('validates each external record once in its actual advertised refresh', async () => {
     const f = setup()
     const row = snapshotRow('once')
-    Object.assign(row.session, { extra: { nested: ['kept', null, 3] } })
+    row.session.transcriptPath = '/history/retained'
+    row.session.launch = { state: 'held', service: 'engine', detail: 'Waiting' }
     f.answer('session_read_advertised', snapshotFixture({ registered: [row] }))
     vi.mocked(boundedJsonBytes).mockClear()
     f.connect(); await f.deps().refresh!()
@@ -132,7 +180,7 @@ describe('the devices in their own process', () => {
       && ['begin', 'row', 'end'].includes((value as { type?: string }).type ?? ''))
     expect(validations).toHaveLength(3)
     const retained = f.api().agents.advertised()[0]
-    expect(retained).toMatchObject({ extra: { nested: ['kept', null, 3] } })
+    expect(retained).toMatchObject({ transcriptPath: '/history/retained', launch: { state: 'held', service: 'engine', detail: 'Waiting' } })
     expect(vi.mocked(boundedJsonBytes).mock.calls.some(([value]) => value === retained)).toBe(true)
     await f.service.stop()
   })
@@ -158,7 +206,7 @@ describe('the devices in their own process', () => {
     const f = setup()
     vi.mocked(f.connection.read!).mockImplementationOnce(async (_query, _payload, receive) => {
       receive({ type: 'begin', payload: { header: snapshotFixture(), count: 1 } })
-      receive({ type: 'row', payload: { index: 0, value: { source: 'registered', gone: 'deleted' } } })
+      receive({ type: 'row', payload: { index: 0, value: ['gone', 'registered', 'deleted'] } })
       receive({ type: 'end', payload: { count: 1 } })
     })
     f.connect(); await f.deps().refresh!()
@@ -199,7 +247,7 @@ describe('the devices in their own process', () => {
         active: true, cwd: '/work', dsh: null },
       facts: { displayName: `Shown ${agentId}`, terminalAvailable: available, parts: {} }, selectedModel: 'runtime-v1:s:claude:opus', turnRunning: false,
     })
-    f.answer('session_read_advertised', { version: 1, registered: [row('hidden', false), row('shown', true)], cloud: [],
+    f.answer('session_read_advertised', { version: 2, registered: [row('hidden', false), row('shown', true)], cloud: [],
       machine: { id: 'm1', computerId: 'c1', name: 'Desk' }, signedIn: true, environment: 'prod', hasWindow: true })
     f.connect()
     await f.deps().refresh!()

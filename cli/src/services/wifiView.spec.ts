@@ -2,12 +2,40 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { SESSION_READ_VIEW_BYTES, type SessionSnapshotRow } from '../core/api.js'
-import { snapshotFixture, snapshotRow, snapshotReader } from '../testing/sessionSnapshot.js'
+import { SESSION_READ_VIEW_BYTES } from '../core/api.js'
+import { snapshotFixture, snapshotRow, snapshotReader, snapshotValue, type SessionSnapshotRow } from '../testing/sessionSnapshot.js'
 import * as jsonBudget from '../lib/boundedJsonBytes.js'
 import { readWifiView, wifiProjection } from './wifiView.js'
+import type { SessionRecordSource } from './sessionSnapshot.js'
 
 describe('Wi-Fi presentation outside core', () => {
+  it.each([
+    [false, false, null], [null, false, null], ['stored', false, 'stored'],
+    [false, 'published', 'published'], [null, 'published', 'published'],
+    ['same', true, 'same'], ['', true, ''], ['stored', 'published', 'published'],
+  ] as const)('projects compact session package values %j / %j without losing occupancy', async (stored, published, expected) => {
+    const read: SessionRecordSource = async (_scope, receive) => {
+      const records = [
+        { type: 'begin', payload: { count: 2, header: { version: 2,
+          machine: { id: 'machine-1', computerId: 'computer-9', name: 'This machine' }, signedIn: true, environment: 'prod', hasWindow: true } } },
+        { type: 'row', payload: { index: 0, value: ['registered', 'visible', 'session', 'claude', 1, null, 0,
+          true, null, stored, ['ready'], 'Name', true, 'chosen', true, published] } },
+        { type: 'row', payload: { index: 1, value: ['registered', 'hidden', '', 'claude', 2, null, 0,
+          false, null, stored, null, 'Hidden', false, null, false, published] } },
+        { type: 'end', payload: { count: 2 } },
+      ]
+      for (const record of records) expect(receive(record, ok => { expect(ok).toBe(true) })).toBe(true)
+    }
+    const view = await readWifiView(read, 'machine-1')
+    expect(view).toEqual({ hasWindow: true,
+      agents: [{ agentId: 'visible', name: 'Name', engine: 'claude', packageId: expected, workspace: null, runtime: 'ready', state: 'running' }],
+      store: [
+        { agentId: 'visible', machineId: 'machine-1', packageId: expected, engine: 'claude', workspace: null, state: 'active', runtime: 'ready' },
+        { agentId: 'hidden', machineId: 'machine-1', packageId: expected, engine: 'claude', workspace: null, state: 'inactive', runtime: 'unavailable' },
+      ],
+    })
+  })
+
   it('sizes its closed projections without repeating unknown-object validation', async () => {
     const checked = vi.spyOn(jsonBudget, 'boundedJsonBytes')
     try {
@@ -25,7 +53,7 @@ describe('Wi-Fi presentation outside core', () => {
     row.facts.displayName = text
     const header = snapshotFixture(), bytes: Array<number | null> = []
     const projection = wifiProjection(header)
-    projection.row({ source: 'registered', row }, { remaining: SESSION_READ_VIEW_BYTES, retain: value => { bytes.push(value) } })
+    projection.row(snapshotValue(row), { remaining: SESSION_READ_VIEW_BYTES, retain: value => { bytes.push(value) } })
     const expected = projection.value()
     const actual = await readWifiView(snapshotReader(() => snapshotFixture({ registered: [row] })), header.machine.id)
     expect(actual).toEqual(expected)

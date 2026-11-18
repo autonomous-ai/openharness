@@ -25,7 +25,7 @@ export function fakeCore(over: Overrides = {}): CoreApi {
       create: vi.fn(async () => ({ ok: false as const, error: 'UNSUPPORTED' })),
       all: vi.fn(async () => []),
       live: vi.fn(() => []),
-      readSessions: vi.fn(snapshotReader(async () => ({ version: 1 as const, registered: [], cloud: [],
+      readSessions: vi.fn(snapshotReader(async () => ({ version: 2 as const, registered: [], cloud: [],
         machine: { id: 'machine-1', computerId: 'computer-1', name: 'This machine' }, signedIn: true, environment: 'prod', hasWindow: true }))),
       facts: vi.fn(() => null),
       displayName: vi.fn(() => ''),
