@@ -6,7 +6,7 @@
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdtemp, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { homedir, tmpdir } from 'node:os'
+import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
@@ -18,6 +18,7 @@ import { EXTRACTION_PROMPT_VERSION } from '../src/memory/learner.js'
 import { MEMORY_CONTEXT_VERSION } from '../src/memory/context.js'
 import type { MemoryInferenceObservation, MemoryInferenceOptions } from '../src/memory/inferenceProcess.js'
 import { MemoryError, type RecallRequest } from '../src/memory/types.js'
+import { harnessRoots } from '../src/shared/harnessRoots.js'
 
 const exec = promisify(execFile)
 const cli = fileURLToPath(new URL('..', import.meta.url))
@@ -74,7 +75,7 @@ async function selection() {
   if (!result.ok || learning.state !== 'ready' || !['claude', 'codex'].includes(String(learning.engine))
     || typeof learning.agentId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(learning.agentId) || typeof learning.model !== 'string'
     || !['auto', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'ultracode'].includes(String(learning.effort))) throw new MemoryError('companion_not_ready')
-  const data = process.env.ADAPTER_DATA_DIR || join(homedir(), '.harness/cli/data')
+  const data = process.env.ADAPTER_DATA_DIR || join(harnessRoots().data, 'cli', 'data')
   const registry = await json(join(data, 'registry.json'))
   if (!Array.isArray(registry)) throw new MemoryError('unsupported_registry')
   const live = registry.find(row => object(row).agentId === learning.agentId)
