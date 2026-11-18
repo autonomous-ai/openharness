@@ -1,3 +1,4 @@
+import { Hash } from 'node:crypto'
 import { afterEach, expect, it, vi } from 'vitest'
 import { createSessionOwners } from './sessionOwners.js'
 import { createQuestionPresentations } from '../questions.js'
@@ -270,4 +271,32 @@ it('reads activity snapshots and processing cards from the same accepted owner a
   f.native.add('text'); f.owners.nativeEntered('text', '')
   expect(f.owners.activitySnapshot('text')).toBeNull()
   expect(f.owners.liveCards()).toEqual([{ ...card('snapshot'), payload: { kind: 'processing', text: '' } }])
+})
+
+
+it.each(['append', 'end'] as const)('refuses a stage that crosses its absolute deadline during %s hashing', phase => {
+  const clock = vi.spyOn(performance, 'now').mockReturnValue(100)
+  const update = Hash.prototype.update
+  let hashing: { mockRestore(): void } | undefined
+  try {
+    const f = fixture({ ...SESSION_OWNER_LIMITS, timeoutMs: 10 }), old = [row('old')], next = [row('new')]
+    expect(f.publish(old)).toEqual({ ok: true }); f.events.length = 0
+    const transfer = f.begin(next, image(old))
+    if (phase === 'end') expect(f.append(transfer, next, 0, [card('new')])).toEqual({ ok: true })
+    // Simulate elapsed CPU time after the real hash consumed its bytes. The event loop cannot deliver
+    // the expiry timer while synchronous validation/hashing is running; admission must check the clock itself.
+    hashing = vi.spyOn(Hash.prototype, 'update').mockImplementation(function (this: Hash, ...args: Parameters<Hash['update']>) {
+      const result = Reflect.apply(update, this, args) as Hash
+      clock.mockReturnValue(110)
+      return result
+    })
+    const result = phase === 'append' ? f.append(transfer, next, 0, [card('new')]) : f.doors.end(transfer)
+    hashing.mockRestore(); hashing = undefined
+    expect(result).toEqual({ ok: false, error: 'SESSION_OWNER_EXPIRED' })
+    expect(f.owners.frames()).toEqual(old.map(value => sessionFrame(value))); expect(f.events).toEqual([])
+    expect(f.doors.checkpoint('fixture')).toEqual({ fingerprint: image(old) })
+    clock.mockReturnValue(120)
+    expect(f.publish(next, image(old), [card('new')])).toEqual({ ok: true })
+    expect(f.events).toEqual(['row:new', 'card:new', 'delete:old'])
+  } finally { hashing?.mockRestore(); clock.mockRestore() }
 })

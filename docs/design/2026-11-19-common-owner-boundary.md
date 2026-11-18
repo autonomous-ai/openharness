@@ -181,3 +181,21 @@ current platform gate; Windows execution is deferred by the user and mobile is e
   immutable lookup, sole accepted-map owner and non-yielding validator cannot cause these states through
   an actual caller. Tests do not synthesize an nth-call authority flip merely to satisfy counters.
   The frozen merge inputs and uncovered statement/branch locations remain available for source review.
+
+## Absolute deadline follow-up (RED, before correction)
+
+Actual bound append/end checks in receipt `20261118T232823.566100Z-30527` both returned success after
+real hash work crossed the stage's monotonic expiry. The event loop cannot deliver an expiry timer
+while synchronous validation/hash work runs. Each test calls the original `Hash.update`, then advances
+only the clock to the deadline; it does not sleep, change hash output, or count authority calls.
+This is an actual deadline defect, not an unreachable coverage branch. Proposed correction reuses
+`active()` after chunk hashing and immediately before end commits, retaining exact physical-link,
+service/transfer, native incarnation and hash admission. Provider/pending journal/write ordering stays
+unchanged. The earlier complete source checkpoint's deadline acceptance is superseded by this RED.
+
+Source review proves accepted-map identity cannot change while a stage exists: its sole production
+owner installs a replacement only from `commit`, after the stager has called `drop`. Other services
+cannot begin while that stage exists, native claims only revoke existing private tokens, and the
+synchronous JSON validator rejects callbacks/accessors/proxies without running them. No artificial
+replacement `rows()` callback is used to reach this impossible branch. Any simplification remains
+subject to runtime review; current physical authority and native token fences are independent.
