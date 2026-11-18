@@ -4262,11 +4262,16 @@ void ui_question_close(const char *id, const char *request)
 {
     if (!id || !request) return;
     display_lock();
-    if (!strcmp(s.q.agent,id) && !strcmp(s.q.request,request)) {
+    // A loading screen has no request id yet, so a close for its agent closes it; a close naming another question
+    // of the open agent leaves the screen alone.
+    if (!strcmp(s.q.agent,id) && (s.q.loading || !strcmp(s.q.request,request))) {
         s.q.valid=s.q.pending=s.q.loading=false; s.q.revision++;
         if (question_view(s.view)) view(HOME);
-        notice_remove_question(id);
-    } else if (strcmp(s.q.agent,id)) notice_remove_question(id);
+    }
+    // A row keeps no question id, yet removing by agent is exact: the dial holds at most one question row per agent,
+    // and the daemon closes only the agent's current question, in order on the wire, so no late close for an older
+    // question arrives after a newer one.
+    notice_remove_question(id);
     notice_sync_view();
     change(); display_unlock();
 }
