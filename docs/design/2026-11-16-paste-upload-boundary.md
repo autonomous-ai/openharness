@@ -854,3 +854,14 @@ full core/harnessd, terminal contract, architecture/lean and private native chec
 source. No native, build or timed run is approved at this checkpoint. Historical V4 remains descriptive
 (two samples per side, 16 artifacts/186 chunks); it does not identify the remaining CPU cause or prove
 performance of this integration. Native Windows and mobile are explicitly deferred by the user.
+
+The unchanged integration source is committed as `c2c55f0bc3`. The current complete host catalogue
+first failed its literal-plan test and the added old/new paste-plan admission test (two REDs, 13 passed,
+`/tmp/paste-completion-plan-red-with-admission.log`); the replacement literal is
+`c0e779383f9daf58c0844778d2a2de8867acca3287ab6fb0958ebbe78fa429e5` with contract 6 unchanged.
+New caller tests then ran against the still-uncorrected helper/manager: six failed, one passed, 160
+unselected, 1.34 s (`/tmp/paste-completion-authority-red.log`, pinned Node 24.22.2, one worker).
+Three real-file cases falsely rejected healthy retained authority after 3001 ms of controlled time;
+the per-verification deadline control passed. The raw/text move-refusal test saw overflow instead of
+65 static refusals; both file/image held uploads failed to regain admission and current-generation
+availability. These are actual source REDs before the following narrow runtime corrections.

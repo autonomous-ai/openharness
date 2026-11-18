@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { randomUUID } from 'node:crypto'
+import { performance } from 'node:perf_hooks'
+import { NATIVE_EVIDENCE_MS } from '../engines/kit/nativeEvidence.js'
 import { chmod, link, lstat, mkdir, mkdtemp, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -24,7 +26,7 @@ async function artifact() {
   await writeFile(path, 'private fixture', { mode: 0o600 })
   return { root, directory, generation, name, path, version: pasteFileVersion(await lstat(path, { bigint: true })) }
 }
-afterEach(async () => { closeFault.fail = false; closeFault.calls = 0; for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
+afterEach(async () => { vi.restoreAllMocks(); closeFault.fail = false; closeFault.calls = 0; for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
 
 describe('prepared file authority', () => {
   it('names unconfirmed descriptor cleanup when validation fails before returning its proof', async () => {
@@ -43,6 +45,34 @@ describe('prepared file authority', () => {
     } else { proof.close(); proof.close() }
     expect(closeFault.calls).toBe(1)
     expect(proof.current()).toBe(false)
+  })
+
+  it.each(['unchanged', 'edited', 'ancestry'] as const)('rechecks retained authority after waiting beyond the initial budget: %s', async (change) => {
+    const file = await artifact()
+    let clock = 0
+    vi.spyOn(performance, 'now').mockImplementation(() => clock)
+    const proof = openPreparedPaste(file.generation, file, file.root)
+    try {
+      clock = NATIVE_EVIDENCE_MS + 1
+      expect(proof.current()).toBe(true)
+      if (change === 'edited') await writeFile(file.path, 'changed private fixture')
+      if (change === 'ancestry') {
+        await rename(file.directory, `${file.directory}-old`)
+        await mkdir(file.directory, { mode: 0o700 })
+      }
+      expect(proof.current()).toBe(change === 'unchanged')
+    } finally { proof.close() }
+  })
+
+  it('still refuses a final verification that exceeds its own fresh budget', async () => {
+    const file = await artifact()
+    let clock = 0
+    const now = vi.spyOn(performance, 'now').mockImplementation(() => clock)
+    const proof = openPreparedPaste(file.generation, file, file.root)
+    try {
+      now.mockImplementation(() => { clock += NATIVE_EVIDENCE_MS + 1; return clock })
+      expect(proof.current()).toBe(false)
+    } finally { proof.close() }
   })
 
   it('accepts only the selected generation and a bounded single path component', async () => {

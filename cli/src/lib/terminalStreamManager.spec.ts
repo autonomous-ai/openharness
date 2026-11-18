@@ -411,6 +411,51 @@ describe('TerminalStreamManager', () => {
       expect(beginAnswer().accepted).toBe(true)
     })
 
+    it('settles all held raw and text-paste charges when move ownership is refused', async () => {
+      const refused = new Set<string>()
+      moves = new MoveGate(id => refused.has(id), id => { refused.add(id) })
+      await manager.stop(); manager = newManager({ moveGate: moves }); backend.setTerminalStreamManager(manager)
+      const a = await open(), b = await open(2)
+      moves.hold(a.agentId)
+      for (let seq = 0; seq < 32; seq++) {
+        await binary(a.id, seq, TerminalBinaryKind.input, Buffer.from('K'))
+        await binary(a.id, 0, TerminalBinaryKind.paste, Buffer.from('P'))
+      }
+      await moves.refuse(a.agentId)
+      await binary(a.id, 32, TerminalBinaryKind.input, Buffer.from('late'))
+      await binary(b.id, 0, TerminalBinaryKind.input, Buffer.from('unrelated'))
+      expect(a.handle.order).toEqual([])
+      expect(b.handle.order).toEqual(['raw:unrelated'])
+      const errors = sent.filter(item => item.type === 'terminal_error' && item.payload.streamId === a.id)
+      expect(errors).toHaveLength(65)
+      expect(errors.every(item => item.payload.message === 'This harness is held until the daemon restarts.')).toBe(true)
+      expect(errors.some(item => item.payload.code === 'TERMINAL_INPUT_OVERFLOW')).toBe(false)
+    })
+
+    it.each(['file', 'image'] as const)('settles refused held %s charges and the current generation without reviving cancelled uploads', async (kind) => {
+      const refused = new Set<string>()
+      moves = new MoveGate(id => refused.has(id), id => { refused.add(id) })
+      await manager.stop(); manager = newManager({ moveGate: moves }); backend.setTerminalStreamManager(manager)
+      const a = await open(), b = await open(2)
+      moves.hold(a.agentId)
+      for (let index = 0; index < 4; index++) {
+        await frame('terminal_chunked_upload_begin', { streamId: a.id, uploadKind: kind, filename: 'file.txt', totalBytes: 1 })
+        expect(beginAnswer().accepted).toBe(true)
+        await binary(a.id, 0, kind === 'file' ? TerminalBinaryKind.pasteFile : TerminalBinaryKind.imagePaste, Uint8Array.of(1))
+        if (index < 3) await frame('terminal_chunked_upload_cancel', { streamId: a.id })
+      }
+      await moves.refuse(a.agentId)
+      await beginFile(a.id)
+      expect(beginAnswer().accepted).toBe(true)
+      await binary(b.id, 0, TerminalBinaryKind.input, Buffer.from('unrelated'))
+      expect(a.handle.order).toEqual([])
+      expect(b.handle.order).toEqual(['raw:unrelated'])
+      expect(writeImageToOsClipboard).not.toHaveBeenCalled()
+      const errors = sent.filter(item => item.type === 'terminal_error' && item.payload.streamId === a.id)
+      expect(errors).toHaveLength(1)
+      expect(errors[0].payload).toMatchObject({ code: 'TERMINAL_PASTE_FAILED', message: 'This harness is held until the daemon restarts.' })
+    })
+
     it('keeps MoveGate admission until callbacks finish while allowing later held keys into the same gate', async () => {
       const a = await open()
       moves.hold(a.agentId)
