@@ -40,14 +40,15 @@ export function stageSessionOwners(options: {
     hash: ReturnType<typeof sessionImageHash>; received: number; charge: SessionValueCharge; cardCharge: SessionValueCharge
     cards: Map<string, OwnerCard>; expires: number; timer: ReturnType<typeof setTimeout> }
   let stage: Stage | null = null
-  const serviceOf = (owner: Owner): string | undefined => {
-    const declared = factoryOwner(sessionOwnerFactory(owner))
-    return declared?.kind === 'service' ? declared.service : undefined
+  const serviceOf = (owner: Owner): string => {
+    // Every retained owner passed ownsFactory below; this build's factory lookup cannot change after admission.
+    return (factoryOwner(sessionOwnerFactory(owner)) as Extract<SessionFactoryOwner, { kind: 'service' }>).service
   }
   const ownsFactory = (service: string, factory: unknown): boolean => {
     const owner = factoryOwner(factory)
     return owner?.kind === 'service' && owner.service === service
   }
+  // Every cancellation/commit clears the current timer synchronously before another stage can begin.
   const drop = (): void => { if (stage) clearTimeout(stage.timer); stage = null }
   const fingerprint = (rows: Owners, service: string, requireCurrent: boolean): OwnerCheckpoint => {
     const digest = sessionImageHash()
@@ -64,7 +65,6 @@ export function stageSessionOwners(options: {
     if (!stage || stage.transfer !== transfer || stage.authority.identity !== authority.identity
       || stage.authority.service !== authority.service) return failure('SESSION_OWNER_EXPIRED')
     if (!stage.authority.current() || performance.now() >= stage.expires) { drop(); return failure('SESSION_OWNER_EXPIRED') }
-    if (options.rows() !== stage.before) { drop(); return failure('SESSION_OWNER_CONFLICT') }
     return stage
   }
   const add = (charge: SessionValueCharge, value: SessionValueCharge, ceiling: SessionValueCharge): void => {
@@ -116,7 +116,7 @@ export function stageSessionOwners(options: {
         if (input.count + next.size > limits.count) return failure('SESSION_OWNER_LIMIT')
         const value: Stage = { authority, transfer: input.transfer, before, after: input.after, count: input.count, next,
           hash: sessionImageHash(), received: 0, charge, cardCharge: freshCharge(), cards: new Map(),
-          expires: performance.now() + limits.timeoutMs, timer: setTimeout(() => { if (stage === value) drop() }, limits.timeoutMs).unref() }
+          expires: performance.now() + limits.timeoutMs, timer: setTimeout(drop, limits.timeoutMs).unref() }
         stage = value
         return { ok: true }
       })
@@ -162,8 +162,8 @@ export function stageSessionOwners(options: {
           value.hash.update(encoded)
           value.next.set(facts.id, owner)
         }
-        if (!authority.current() || !value.authority.current()) { drop(); return failure('SERVICE_UNAVAILABLE') }
-        return { ok: true }
+        const final = active(authority, input.transfer)
+        return 'ok' in final ? final : { ok: true }
       })
     },
     end(authority: OwnerAuthority, transfer: string): OwnerResult {
@@ -177,8 +177,8 @@ export function stageSessionOwners(options: {
           if (owner[ownerIncarnation].revoked || native(sessionOwnerId(owner))) { drop(); return failure('SESSION_OWNER_CONFLICT') }
         }
         // Revoked omitted rows can be dropped, but can never send a deletion or a stale card over a native owner.
-        if (!authority.current() || !value.authority.current()) { drop(); return failure('SERVICE_UNAVAILABLE') }
-        if (options.rows() !== value.before) { drop(); return failure('SESSION_OWNER_CONFLICT') }
+        const final = active(authority, transfer)
+        if ('ok' in final) return final
         drop()
         try { options.commit(value.next, value.before, value.cards, authority.service) }
         catch { return failure('SERVICE_UNAVAILABLE') }

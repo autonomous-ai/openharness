@@ -91,6 +91,7 @@ export function createSessionOwners({ factoryOwner, native, port, whenStarting, 
   }
   const staging = stageSessionOwners({ limits, factoryOwner, native, rows: () => owners,
     commit(next, before, cards, service) {
+      // The sole Map writer runs only after staging drops; an active stage always owns this exact before image.
       owners = next
       for (const [id, owner] of next) if (serviceFor(sessionOwnerFactory(owner)) === service) {
         const prior = before.get(id)
@@ -108,23 +109,25 @@ export function createSessionOwners({ factoryOwner, native, port, whenStarting, 
       }
     } })
   const invalidQuestion = (): OwnerResult => { log('[sessions] SESSION_OWNER_INVALID'); return { ok: false, error: 'SESSION_OWNER_INVALID' } }
-  const questionDoor = (authority: OwnerAuthority, work: () => OwnerResult): OwnerResult => {
+  const questionDoor = (authority: OwnerAuthority, input: unknown, bytes: number, work: (value: unknown) => OwnerResult): OwnerResult => {
+    let value: unknown
+    try { value = detached(input, bytes) }
+    catch { return authority.current() ? invalidQuestion() : { ok: false, error: 'SERVICE_UNAVAILABLE' } }
+    // Detached admission cannot call outside code; check authority once before synchronous owner lookup and effects.
     if (!authority.current()) return { ok: false, error: 'SERVICE_UNAVAILABLE' }
-    try { return work() } catch { return invalidQuestion() }
+    try { return work(value) } catch { return invalidQuestion() }
   }
   const bound = (authority: OwnerAuthority): SessionOwnerCore => ({
     begin: value => staging.begin(authority, value), append: value => staging.append(authority, value),
     end: transfer => staging.end(authority, transfer), cancel: transfer => staging.cancel(authority, transfer),
     checkpoint: factory => staging.checkpoint(authority, factory),
-    ask: (agentId, requestId, input) => questionDoor(authority, () => {
+    ask: (agentId, requestId, input) => questionDoor(authority, input, 22 * 1024, presentation => {
       const owner = owned(agentId)
       if (!owner || serviceFor(sessionOwnerFactory(owner)) !== authority.service || !identifier(requestId)) return invalidQuestion()
-      const presentation = detached(input, 22 * 1024)
       if (!admittedQuestion(presentation, agentId, requestId)) return invalidQuestion()
       const prior = questions.request(requestId)
       if (prior && (prior.owner !== questionOwner || prior.key !== agentId || presentation.dial && !prior.dial
         || JSON.stringify(prior.frame) !== JSON.stringify(presentation.frame))) return invalidQuestion()
-      if (!authority.current() || !current(owner)) return { ok: false, error: 'SERVICE_UNAVAILABLE' }
       const previous = questions.current(agentId), replacing = !!previous && previous.requestId !== requestId
       if (!prior && !questions.set(questionOwner, agentId, presentation.frame, { dial: presentation.dial, remote: false }, replacing)) return invalidQuestion()
       if (replacing) close(previous)
@@ -133,13 +136,12 @@ export function createSessionOwners({ factoryOwner, native, port, whenStarting, 
       log('[sessions] question accepted')
       return { ok: true }
     }),
-    unask: (agentId, requestId, input) => questionDoor(authority, () => {
-      if (!identifier(agentId) || !identifier(requestId) || !admittedClose(detached(input, 1024), agentId, requestId)) return invalidQuestion()
+    unask: (agentId, requestId, input) => questionDoor(authority, input, 1024, close => {
+      if (!identifier(agentId) || !identifier(requestId) || !admittedClose(close, agentId, requestId)) return invalidQuestion()
       const prior = questions.request(requestId)
       if (!prior) return { ok: true }
       const owner = owned(agentId)
       if (!owner || serviceFor(sessionOwnerFactory(owner)) !== authority.service || prior.owner !== questionOwner || prior.key !== agentId) return invalidQuestion()
-      if (!authority.current() || !current(owner)) return { ok: false, error: 'SERVICE_UNAVAILABLE' }
       retire(agentId)
       return { ok: true }
     }),

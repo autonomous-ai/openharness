@@ -199,3 +199,40 @@ cannot begin while that stage exists, native claims only revoke existing private
 synchronous JSON validator rejects callbacks/accessors/proxies without running them. No artificial
 replacement `rows()` callback is used to reach this impossible branch. Any simplification remains
 subject to runtime review; current physical authority and native token fences are independent.
+
+## Deadline correction and final source acceptance
+
+The reviewed correction now reuses `active()` after append hashing and before end commits. Expiry
+therefore drops the stage even when synchronous work prevented its timer from running. Final native
+incarnation and physical connection checks remain; async answer/rename/delivery result fences are
+unchanged. The two impossible accepted-map identity checks were removed under the sole-writer invariant.
+Question input is detached first, then one shared entry fence checks the physical connection before
+synchronous owner lookup and effects. A stale malformed request still receives `SERVICE_UNAVAILABLE`.
+
+The actual cancelled-stage/replacement control proves clearing the timer removes its old scheduled
+callback before another stage starts. The timer now calls `drop` directly. At the private `serviceOf`
+helper, the return type encodes the admitted service-owner invariant: every retained owner passed
+`ownsFactory` and the immutable build lookup cannot change. External factory/row admission is unchanged;
+no native record enters this Map and no extra retained field/cache was added.
+
+* RED receipt `20261118T232823.566100Z-30527`: exactly two genuine append/end expiry failures on the
+  unchanged prior runtime. Separate RED commit `983bd2d1e3` preserves tests and Design.
+* First correction receipt `20261118T233652.880388Z-39743`: 210 cases passed and 12 failed; types passed.
+  A mechanical signature replacement accidentally also changed `unask`'s callback name and byte bound.
+  That one line was corrected to its reviewed `1024, close` form. The failure is preserved, not counted
+  as a baseline RED. Deadline and actual timer lifecycle controls already passed in that receipt.
+* Corrected receipt `20261118T233830.105660Z-41631`: all 222 cases across nine files and full types passed.
+* Final admitted-helper/client-failure receipt `20261118T234045.446744Z-44071`: all 32 stage/publication
+  cases and types passed. It covers failed local question delivery followed by exact successful replay.
+* Final physical-link receipt `20261118T234230.491299Z-46085`: one named replacement-link control and
+  full types passed, proving a new physical begin drops its abandoned stage while stale append cannot
+  disturb the replacement. No broad suite was repeated to obtain this last source evidence.
+* Hash-pinned coverage merge `/tmp/core-cloud-common-owner-final-coverage-complete-20261119.json` now
+  passes all four metrics at 100% for all 15 scoped runtime files, with zero gaps. Changed-stage evidence
+  replaces its old report; only byte-identical runtime evidence is merged for the other files. This
+  supersedes the earlier open coverage findings without ignore markers or fabricated authority flips.
+
+All selected processes and private roots settled. Combined integration, packaged cohort/restart/rollback
+and final matched performance/actual allocation remain required; source coverage is not their substitute.
+The deadline correction changes no eager dependency edge and adds two net runtime source lines to the
+previously measured closure (+117 lines against the isolated branch baseline, still 502 files).

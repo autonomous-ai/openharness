@@ -19,7 +19,7 @@ const card = (id: string): OwnerCard => ({ type: 'commander_event', agentId: id,
   payload: { kind: 'processing', text: 'Working' } })
 const cleanups: Array<() => void> = []
 afterEach(() => { for (const stop of cleanups.splice(0)) stop(); vi.useRealTimers() })
-function fixture(limits: SessionOwnerLimits = SESSION_OWNER_LIMITS) {
+function fixture(limits: SessionOwnerLimits = SESSION_OWNER_LIMITS, onQuestion?: () => void) {
   const events: string[] = [], native = new Set<string>()
   let current = true, failBroadcast = false, ordinal = 0
   const authority = { service: 'component', identity: {}, current: () => current }
@@ -29,7 +29,7 @@ function fixture(limits: SessionOwnerLimits = SESSION_OWNER_LIMITS) {
     clients: { send(frame) {
       if (failBroadcast) throw new Error('synthetic client failure')
       events.push(frame.type === 'agent_synced' ? `row:${(frame.payload.agent as { id: string }).id}` : `delete:${frame.payload.agentId}`)
-    }, sendCommander(frame) { if (frame.type === 'commander_event') events.push(`card:${frame.agentId}`) }, sendLocal() {} } })
+    }, sendCommander(frame) { if (frame.type === 'commander_event') events.push(`card:${frame.agentId}`) }, sendLocal() { onQuestion?.() } } })
   cleanups.push(owners.stop)
   const doors = owners.bound(authority)
   const begin = (rows: SessionFacts[], before = emptySessionFingerprint(), after = image(rows)) => {
@@ -299,4 +299,56 @@ it.each(['append', 'end'] as const)('refuses a stage that crosses its absolute d
     expect(f.publish(next, image(old), [card('new')])).toEqual({ ok: true })
     expect(f.events).toEqual(['row:new', 'card:new', 'delete:old'])
   } finally { hashing?.mockRestore(); clock.mockRestore() }
+})
+
+it('clears a cancelled stage timer before replacement, so its old deadline cannot drop the new stage', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+  const f = fixture({ ...SESSION_OWNER_LIMITS, timeoutMs: 10 }), first = f.begin([row('first')])
+  expect(vi.getTimerCount()).toBe(1)
+  await vi.advanceTimersByTimeAsync(5)
+  expect(f.doors.cancel(first)).toEqual({ ok: true }); expect(vi.getTimerCount()).toBe(0)
+  const rows = [row('replacement')], replacement = f.begin(rows)
+  await vi.advanceTimersByTimeAsync(5)
+  expect(f.append(replacement, rows)).toEqual({ ok: true })
+  expect(f.doors.end(replacement)).toEqual({ ok: true }); expect(vi.getTimerCount()).toBe(0)
+  expect(f.owners.frames()).toEqual(rows.map(value => sessionFrame(value)))
+  f.begin([], image(rows)); f.owners.stop(); expect(vi.getTimerCount()).toBe(0)
+})
+
+it('refuses a stale malformed question door without invoking input accessors or emitting an effect', () => {
+  const f = fixture(), read = vi.fn(() => 'private canary')
+  expect(f.publish([row()])).toEqual({ ok: true }); f.events.length = 0
+  const malformed = Object.defineProperty({}, 'frame', { enumerable: true, get: read })
+  f.revoke()
+  expect(f.doors.ask('owned', 'q', malformed as never)).toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE' })
+  expect(f.doors.unask('owned', 'q', malformed as never)).toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE' })
+  expect(read).not.toHaveBeenCalled(); expect(f.events).toEqual([])
+})
+
+
+it('reports a failed question delivery and permits exact replay after the local client recovers', () => {
+  let unavailable = true
+  const f = fixture(undefined, () => { if (unavailable) throw new Error('private client detail') })
+  expect(f.publish([row()])).toEqual({ ok: true }); f.events.length = 0
+  const requestId = 'question', close = { type: 'commander_question_close' as const, agentId: 'owned', dbSessionId: 'owned', payload: { requestId } }
+  const question = { frame: { type: 'commander_question' as const, agentId: 'owned', dbSessionId: 'owned', payload: {
+    requestId, questions: [{ key: 'choice', q: 'Choose', options: ['Yes'], multi: false, canText: true }],
+    notification: { id: requestId, kind: 'needsYou' as const } } }, close, dial: false }
+  expect(f.doors.ask('owned', requestId, question)).toEqual({ ok: false, error: 'SESSION_OWNER_INVALID' })
+  expect(f.owners.frames()).toEqual([sessionFrame(row())]); expect(f.events).toEqual([])
+  unavailable = false
+  expect(f.doors.ask('owned', requestId, question)).toEqual({ ok: true })
+  expect(f.doors.unask('owned', requestId, close)).toEqual({ ok: true })
+})
+
+it('replaces an abandoned physical stage and refuses its old append without disturbing the new link', () => {
+  const f = fixture(), abandoned = f.begin([row('old')])
+  f.revoke()
+  const current = f.owners.bound({ service: 'component', identity: {}, current: () => true }), rows = [row('new')]
+  expect(current.begin({ format: SESSION_FACTS_FORMAT, transfer: 'replacement', factory: 'fixture',
+    before: image([]), after: image(rows), count: 1 })).toEqual({ ok: true })
+  expect(f.append(abandoned, [row('old')])).toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE' })
+  expect(current.append({ transfer: 'replacement', index: 0, rows: rows.map(facts => ({ facts })) })).toEqual({ ok: true })
+  expect(current.end('replacement')).toEqual({ ok: true })
+  expect(f.owners.frames()).toEqual(rows.map(value => sessionFrame(value))); expect(f.events).toEqual(['row:new'])
 })
