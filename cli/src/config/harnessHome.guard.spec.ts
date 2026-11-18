@@ -18,8 +18,10 @@ const SEGMENT = /(['"`])(?:\\\\|[\\/])?\.harness(?:[\\/][^'"`\n]*)?\1/g
  * (homedir(), userInfo().homedir, homeDir, ownerHome, HOME), USERPROFILE in any case, or an account.
  */
 const HOME = /home|userprofile|\baccount\b/i
-/** `.harness` straight after home text in one literal: $HOME/.harness, ~/.harness, %USERPROFILE%\.harness, ${x}/.harness. */
-const INLINE = /(?:\$HOME|~|%USERPROFILE%|\$env:USERPROFILE|\})[\\/]+\.harness(?![\w-])/g
+/** `.harness` straight after home text in one literal: $HOME/.harness, ~/.harness, %USERPROFILE%\.harness. */
+const INLINE = /(?:\$HOME|~|%USERPROFILE%|\$env:USERPROFILE)[\\/]+\.harness(?![\w-])/g
+/** `.harness` straight after an interpolation, ${x}/.harness: a hit only near a home, like SEGMENT, as ${workspace}/.harness is a project's. */
+const INTERPOLATED = /\}[\\/]+\.harness(?![\w-])/g
 /** A regular expression that matches a home path: \/\.harness, [\\/]\.harness. */
 const PATTERN = /(?:\\\/|\[\\\\\/\])\\\.harness(?![\w-])/g
 
@@ -32,7 +34,7 @@ function hitsIn(file: string, source: string): Hit[] {
   const lines = withoutComments(source.split('\n'), file.endsWith('.sh'))
   return lines.flatMap((code, index) => {
     const nearHome = lines.slice(Math.max(0, index - 2), index + 1).some((line) => HOME.test(line))
-    const texts = [...(nearHome ? code.matchAll(SEGMENT) : []), ...code.matchAll(INLINE), ...code.matchAll(PATTERN)]
+    const texts = [...(nearHome ? [...code.matchAll(SEGMENT), ...code.matchAll(INTERPOLATED)] : []), ...code.matchAll(INLINE), ...code.matchAll(PATTERN)]
     return texts.map(([text]) => ({ file, line: index + 1, text }))
   })
 }
