@@ -5,7 +5,7 @@ import { sessionStorageFrames } from '../lib/sessionStorageFrames.js'
 import { SESSION_STORAGE_REQUEST_MS, SessionStorageUnavailable, sessionStorageFailureCode, sessionImageProof, type SessionStorageOperation } from '../lib/sessionStorageWire.js'
 import { createSessionImageCodec, type RetainedSessionImage } from './sessionImage.js'
 import { StateFileCleanupUnconfirmed, stateFileCustodyHealthy } from '../lib/secureState.js'
-import { createPendingCreationIndex } from './pendingCreations.js'
+import { createPendingCreationDirectory, createPendingCreationIndex, PendingCreationDirectoryLost } from './pendingCreations.js'
 import { createStoppedList } from './stoppedList.js'
 
 /** Parent owns the original deadline; a child never compares another process's wall clock. */
@@ -17,6 +17,7 @@ export function sessionStorageDeadline(remainingMs: unknown): number {
 
 export function runSessionStorage(): void {
   if (!process.send || !process.connected) throw new Error('Session storage requires its parent link')
+  const originalCwd = process.cwd()
   let initialized = false, busy = false
   let frames: ReturnType<typeof sessionStorageFrames> | undefined
   const write = (value: unknown): Promise<void> => new Promise((resolve, reject) => {
@@ -38,8 +39,9 @@ export function runSessionStorage(): void {
         if (!sessionImageProof(source?.proof) || typeof source.lease !== 'string' || !/^[a-f0-9-]{36}$/.test(source.lease)) throw new Error()
         return { fd: 4 + index, proof: source.proof, lease: source.lease }
       })
-      const codec = createSessionImageCodec(init.root, inherited, init.stoppedLeaf)
-      const creations = createPendingCreationIndex(join(init.root, 'agent-creations'))
+      const codec = createSessionImageCodec(init.root, inherited, init.stoppedLeaf, originalCwd)
+      const creationDirectory = join(init.root, 'agent-creations')
+      const creations = createPendingCreationIndex(creationDirectory, createPendingCreationDirectory(creationDirectory))
       const stopped = createStoppedList(join(init.root, init.stoppedLeaf), codec.readStoppedPage, codec.readStoppedCatalogPage)
       initialized = true
       frames = sessionStorageFrames(init.incarnation, write, (id, message) => {
@@ -72,6 +74,8 @@ export function runSessionStorage(): void {
             if (performance.now() >= expires) throw new SessionStorageUnavailable('expired')
             await frames!.send(id, { ok: true, value })
           } catch (error) {
+            // The parent releases this request only after actual exit; no ordinary refusal can rebind cwd.
+            if (error instanceof PendingCreationDirectoryLost) { stop(); return }
             const code = error instanceof StateFileCleanupUnconfirmed ? 'cleanup-unconfirmed'
               : sessionStorageFailureCode(error)
             await frames!.send(id, { ok: false, code })

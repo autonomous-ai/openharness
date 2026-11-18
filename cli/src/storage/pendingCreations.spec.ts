@@ -4,7 +4,7 @@ import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AgentCreationReceipts, creationFingerprint } from '../lib/agentCreationReceipt.js'
-import { createPendingCreationIndex } from './pendingCreations.js'
+import { localPendingCreationIndex as createPendingCreationIndex } from '../testing/pendingCreation.js'
 import { directorySyncSupported } from '../lib/secureState.js'
 
 const faults = vi.hoisted(() => ({ afterClose: undefined as ((fd: number) => void) | undefined,

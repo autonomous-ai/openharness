@@ -1,6 +1,6 @@
 /** Historical receipt inspection belongs to the required storage child, never the core's loop. */
 import { randomUUID } from 'node:crypto'
-import { constants, fstatSync, fsyncSync, lstatSync, openSync, realpathSync, unlinkSync, type BigIntStats, type Dir } from 'node:fs'
+import { constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, realpathSync, unlinkSync, type BigIntStats, type Dir } from 'node:fs'
 import { opendir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { performance } from 'node:perf_hooks'
@@ -20,9 +20,43 @@ const directoryProof = (stat: BigIntStats): string => {
 }
 const identity = (file: string): string => directoryProof(lstatSync(file, { bigint: true }))
 
-export function createPendingCreationIndex(directory: string) {
+export interface PendingCreationDirectory {
+  readonly path: string
+  admit(expected: string): void
+  verify(): void
+}
+
+/** A lost cwd capability cannot be recovered by adopting a later pathname in the same child. */
+export class PendingCreationDirectoryLost extends Error {
+  constructor() { super('Pending creation directory binding lost'); this.name = 'PendingCreationDirectoryLost' }
+}
+
+/** Only the serialized storage child owns this lifetime cwd change. */
+export function createPendingCreationDirectory(directory: string): PendingCreationDirectory {
+  let pinned: string | undefined
+  const verify = () => {
+    if (pinned === undefined) return
+    try {
+      if (identity('.') === pinned && identity(directory) === pinned) return
+    } catch { /* Missing or unsafe authority is also a lost binding. */ }
+    throw new PendingCreationDirectoryLost()
+  }
+  return {
+    path: '.', verify,
+    admit(expected) {
+      if (pinned === undefined) {
+        process.chdir(directory)
+        pinned = expected
+      }
+      verify()
+      if (expected !== pinned) throw new PendingCreationDirectoryLost()
+    },
+  }
+}
+
+export function createPendingCreationIndex(directory: string, binding: PendingCreationDirectory) {
   const root = dirname(directory), markers = join(directory, '.pending-v1')
-  const receipts = new AgentCreationReceipts(directory)
+  const receipts = new AgentCreationReceipts(binding.path)
   const durable = new Map<string, string>()
   let scan: { token: string; parent: string; index: string | null; dirs: Array<Dir | null>; next: number } | undefined
 
@@ -46,16 +80,22 @@ export function createPendingCreationIndex(directory: string) {
   const markerIdentity = (id: string): string => markerProof(lstatSync(join(markers, id), { bigint: true }))
   const ensure = (id: string): void => {
     stateFileCustodyHealthy()
+    binding.verify()
     if (!validCreationId(id)) throw new SessionStorageUnavailable('invalid')
     // The configured data root may itself be an alias; directories below that root may not be.
     const resolvedRoot = realpathSync.native(root)
     secureStateDirectory(resolvedRoot, false)
     const rootProof = identity(resolvedRoot)
-    secureStateDirectory(directory)
+    // An ancestor disappearing must not cause recursive mkdir to recreate a different data root.
+    try { mkdirSync(directory, { mode: 0o700 }) }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+    secureStateDirectory(directory, false)
     const parent = identity(directory)
+    binding.admit(parent)
     secureStateDirectory(markers)
     const index = identity(markers)
     const verify = () => {
+      binding.verify()
       if (realpathSync.native(root) !== resolvedRoot || identity(resolvedRoot) !== rootProof
         || identity(directory) !== parent || identity(markers) !== index) {
         throw new SessionStorageUnavailable('changed')
@@ -100,15 +140,17 @@ export function createPendingCreationIndex(directory: string) {
   }
   const open = async (): Promise<void> => {
     if (scan) await close(scan.token)
+    binding.verify()
     let parent: string
-    try { secureStateDirectory(directory, false); parent = identity(directory) }
+    try { secureStateDirectory(directory, false); parent = identity(directory); binding.admit(parent) }
     catch (error) { if (missing(error)) return; throw error }
     const own: NonNullable<typeof scan> = { token: randomUUID(), parent, index: null, dirs: [null, null], next: 0 }
     scan = own
     try {
-      try { own.index = identity(markers); own.dirs[0] = await opendir(markers) }
+      try { own.index = identity(markers); own.dirs[0] = await opendir(`${binding.path}/.pending-v1`) }
       catch (error) { if (!missing(error)) throw error }
-      own.dirs[1] = await opendir(directory)
+      own.dirs[1] = await opendir(binding.path)
+      binding.verify()
       if (identity(directory) !== parent || own.index !== null && identity(markers) !== own.index) throw new SessionStorageUnavailable('changed')
     } catch (error) { closeOwn(own); throw error }
   }
@@ -125,6 +167,7 @@ export function createPendingCreationIndex(directory: string) {
       if (performance.now() >= deadline) throw new SessionStorageUnavailable('expired')
     }
     const verifyReceiptDirectory = () => {
+      binding.verify()
       if (identity(directory) !== own.parent) throw new SessionStorageUnavailable('changed')
     }
     const verify = () => {
@@ -132,7 +175,7 @@ export function createPendingCreationIndex(directory: string) {
       if (own.index !== null && identity(markers) !== own.index) throw new SessionStorageUnavailable('changed')
     }
     const damagedEntry = (error: unknown) => {
-      if (error instanceof StateFileCleanupUnconfirmed) throw error
+      if (error instanceof StateFileCleanupUnconfirmed || error instanceof PendingCreationDirectoryLost) throw error
       stateFileCustodyHealthy()
       verify()
       damaged++

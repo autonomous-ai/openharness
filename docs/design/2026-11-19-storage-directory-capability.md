@@ -62,6 +62,15 @@ the captured original cwd explicitly to the image codec. Resolve a relative stor
 before both realpath and fallback resolution. Pass it to `conversationKeyAtHome` for relative saved
 and default `codexHome` comparisons; retain the original profile string in the resulting key. Other
 callers retain their current default cwd behavior. Absolute image/list/archive paths are unchanged.
+The wire still requires an absolute default Codex home; its relative-default case is a refusal control,
+not permission to widen that protocol.
+
+Failure visibility already belongs to the callers. `core/agents/pendingLaunches.ts` logs the fixed
+`[creation] CREATION_DISCOVERY_UNAVAILABLE` when discovery rejects, keeps retained pending requests,
+and schedules its existing bounded retry. `AgentCreationReceipts.runIntent` translates failed marker
+admission to `CREATION_STORAGE_FAILED` before primary publication or preparation; launch handlers
+preserve that typed refusal. Existing caller tests cover those states, with an explicit fixed-log
+assertion added to the failed-journal recovery control. No shared parent diagnostic or wire field is added.
 
 On macOS/Linux, rename tests prove reads stay with the original directory and permanent displacement
 retires the child. Windows locks the current directory against rename/deletion; therefore tests close
@@ -120,3 +129,23 @@ gate is authorized by this preparation. Before/after archive performance remains
    Missing pre-bind storage stays empty; unsafe pre-bind storage does not disable unrelated reads.
 10. Platforms: storage runtime affects macOS/Linux/Windows. macOS private-child controls are planned;
     Windows cwd locking is documented and its native execution remains explicitly deferred.
+
+## Failure-first evidence
+
+Design/tests commit `6541152e56` preceded execution. The first invocation used an unsupported Vitest
+`--minWorkers` flag and stopped before loading tests; `directory-capability-red1` is a command failure,
+not behavior evidence. The corrected one-worker command ran all 20 cases. `red2` observed actual
+pending-primary and absent-claim omissions, result misclassification and replacement adoption, but
+also exposed four compatibility fixture errors (macOS path canonicalization and an already-invalid
+relative default-home query). Those fixtures were corrected in `b72c577c6b`, without runtime changes.
+
+`/tmp/core-grid-storage-directory-capability-red3-20261119.{log,receipt.json}` records the final unchanged
+runtime selection: 15 expected failures and five passing compatibility/stale-cursor controls, actual
+exit 1, 4.552 seconds, no timeout or cleanup signal, no process-group members left. Both primary and
+claim substitution return successful empty IDs; awaited iterator controls observe the wrong entries;
+permanent replacement page/ensure operations incorrectly succeed. Root reviewed the four-file runtime
+diff `a368fc1081186f1393ce86be50acccb03931c0b90b53f04f1fffc6e628cbcd4d` before the same 20 child cases
+passed in `/tmp/core-grid-storage-directory-capability-green1-20261119.{log,receipt.json}`: actual exit 0,
+4.853 seconds, no timeout, cleanup signal or surviving group. Selected caller/coverage and type gates
+are released next. Parent-process V8 coverage does not include the admitted child's code; actual-child
+behavior evidence and numerical in-process coverage are reported separately.

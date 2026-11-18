@@ -170,11 +170,13 @@ it('runs a streaming recovery four at a time and isolates a failed journal or re
   expect(prepare).toHaveBeenCalledTimes(6)
   await vi.waitFor(() => expect(store.status(id(5))).toEqual(created))
 
+  const warned = vi.spyOn(console, 'warn').mockImplementation(() => {})
   const refused = vi.fn(() => { throw new Error('disk failed') })
   const damaged = setup(vi.fn(), { runIntent: refused, cancelIntent: vi.fn(), pendingIntent: vi.fn(() => ({ id: id(9), fingerprint, request, held })),
     pendingIntents: async function* () { yield { id: id(9), fingerprint, request, held }; throw new Error('directory unavailable') } })
   damaged.pending.open()
   await damaged.pending.recover()
+  expect(warned).toHaveBeenCalledWith('[creation] CREATION_DISCOVERY_UNAVAILABLE')
   await vi.waitFor(() => expect(refused).toHaveBeenCalledOnce())
   damaged.pending.stop()
 })

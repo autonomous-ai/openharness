@@ -25,7 +25,7 @@ beforeEach(() => { vi.resetModules(); root = mkdtempSync(join(tmpdir(), 'pending
 afterEach(() => { fault.inode = undefined; fault.directory = ''; rmSync(root, { recursive: true, force: true }) })
 
 it.each(['receipt', 'iterator'] as const)('preserves uncertain %s custody instead of treating it as damaged evidence or retrying close', async kind => {
-  const { createPendingCreationIndex } = await import('./pendingCreations.js')
+  const { localPendingCreationIndex: createPendingCreationIndex } = await import('../testing/pendingCreation.js')
   const { StateFileCleanupUnconfirmed } = await import('../lib/secureState.js')
   const directory = join(root, 'agent-creations'), id = 'pending-custody-fixture'
   mkdirSync(directory, { mode: 0o700 })

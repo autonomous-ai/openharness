@@ -72,7 +72,7 @@ function projectValue(document: SessionDocument, value: unknown, proof: SessionI
 
 export interface RetainedSessionImage { fd: number; proof: SessionImageProof; lease: string }
 
-export function createSessionImageCodec(root: string, retained: readonly RetainedSessionImage[] = [], stoppedLeaf = 'stopped-agents') {
+export function createSessionImageCodec(root: string, retained: readonly RetainedSessionImage[] = [], stoppedLeaf = 'stopped-agents', originalCwd?: string) {
   if (!/^[a-zA-Z0-9_-]{1,128}$/.test(stoppedLeaf)) throw new SessionStorageUnavailable('invalid')
   const inherited = new Map(retained.map(source => [source.lease, source]))
   const imports = new Map<string, { row: CredentialRow; override: GridLaunchOverride }>()
@@ -341,7 +341,7 @@ export function createSessionImageCodec(root: string, retained: readonly Retaine
             if (query.kind === 'owners') {
               if (typeof row.engine !== 'string' || row.codexHome != null && typeof row.codexHome !== 'string'
                 || row.hermesHome != null && typeof row.hermesHome !== 'string') throw new SessionStorageUnavailable('invalid')
-              const key = conversationKeyAtHome(row as unknown as RegisteredSession, query.defaultCodexHome)
+              const key = conversationKeyAtHome(row as unknown as RegisteredSession, query.defaultCodexHome, originalCwd)
               const index = key === null ? -1 : query.keys.indexOf(key)
               if (index !== -1) {
                 matches[index] = true
@@ -355,7 +355,9 @@ export function createSessionImageCodec(root: string, retained: readonly Retaine
               for (let index = 0; index < query.ids.length; index++) if (agentId !== query.exceptAgentIds?.[index] && ids.includes(query.ids[index])) matches[index] = true
             } else if (row.cwd) {
               if (typeof row.cwd !== 'string') throw new SessionStorageUnavailable('invalid')
-              const cwd = await fs.realpath(row.cwd).catch(() => resolvePath(row.cwd as string))
+              // Receipt discovery pins the child's cwd; legacy rows keep the launch directory's meaning.
+              const path = originalCwd === undefined ? row.cwd : resolvePath(originalCwd, row.cwd)
+              const cwd = await fs.realpath(path).catch(() => resolvePath(path))
               if (cwd === query.root || cwd.startsWith(query.root + sep) || query.root.startsWith(cwd + sep)) matches[0] = true
             }
           }

@@ -2,8 +2,13 @@
 import { createPendingCreationIndex } from '../storage/pendingCreations.js'
 import type { PendingCreationDiscovery } from '../lib/pendingCreationWire.js'
 
+/** Scanner unit controls use explicit absolute paths; production cwd binding is tested in its child. */
+export function localPendingCreationIndex(directory: string) {
+  return createPendingCreationIndex(directory, { path: directory, admit: () => {}, verify: () => {} })
+}
+
 export function localPendingCreationDiscovery(directory: string): PendingCreationDiscovery {
-  const index = createPendingCreationIndex(directory)
+  const index = localPendingCreationIndex(directory)
   return {
     ensure: async id => index.ensure(id),
     async *scan() {
