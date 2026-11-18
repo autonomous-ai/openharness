@@ -116,6 +116,8 @@ export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = 
   const unlinkedSaid = new Set<string>()
   let running = true
   let checking = false
+  /** The last failure said, until a check gets through. */
+  let failure: string | null = null
 
   /** The route record, a hard link where an old client looks for a socket, and the shim's files: made again at each check,
    *  as the core and the connections bridge make their sockets again whenever they start. */
@@ -155,6 +157,30 @@ export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = 
     if (record) writeMoveRecord(stateRoot, { ...record, state: record.state === 'failed' ? record.state : state, oldProcesses, at: Date.now() })
   }
 
+  /** Who still uses the bridge, and the harnesses to set up again: once neither is left, the bridge goes. */
+  const removeWhenUnused = async (): Promise<void> => {
+    const boot = deps.boot()
+    // Without it no start time can be placed before or after the move.
+    if (!boot) throw new Error('/proc gives no boot id')
+    const facts = { uid: process.getuid!(), master: deps.master, bootId: boot.id, roots, engines: ENGINES, apps: APPS, panePids: panePids() }
+    const count = oldUsers(bridge, deps.rows(), facts)
+    note('bridged', count)
+    // A harness set up before the move runs from the old paths until its setup has run again, which the Store does as it
+    // starts: woken now, while old users run too, so the setups do not wait for them. One whose setup failed is marked
+    // needs-setup, and holds nothing.
+    const pending = await deps.setupsPending()
+    if (pending > 0) await deps.askForStore()
+    if (count > 0 || pending > 0) return
+    // A move a start has yet to finish keeps its journal in ~/.harness (homeMove/plan.ts), and finishes through the links.
+    if (existsSync(join(bridge.oldHome, OWN_FILES.journal))) return
+    const outcome = removeBridge(bridge, stateRoot)
+    // The record before bridge.json: a crash between the two leaves a bridge.json, and the next start finishes.
+    note('moved', 0)
+    rmSync(join(stateRoot, BRIDGE_FILE), { force: true })
+    deps.log(outcome === 'removed' ? 'home bridge: removed' : `home bridge: removed · ${legacyHarnessHome('~', 'linux')} holds something else, so it stays`)
+    stop()
+  }
+
   const check = async (): Promise<void> => {
     if (!running) return
     // One at a time: a connection while a check waits on the Store serves the old paths again, and leaves the rest to it.
@@ -163,29 +189,13 @@ export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = 
     try {
       serve()
       if (again) return
-      const boot = deps.boot()
-      // Without it no start time can be placed before or after the move.
-      if (!boot) throw new Error('/proc gives no boot id')
-      const facts = { uid: process.getuid!(), master: deps.master, bootId: boot.id, roots, engines: ENGINES, apps: APPS, panePids: panePids() }
-      const count = oldUsers(bridge, deps.rows(), facts)
-      note('bridged', count)
-      // A harness set up before the move runs from the old paths until its setup has run again, which the Store does as it
-      // starts: woken now, while old users run too, so the setups do not wait for them. One whose setup failed is marked
-      // needs-setup, and holds nothing.
-      const pending = await deps.setupsPending()
-      if (pending > 0) await deps.askForStore()
-      if (count > 0 || pending > 0) return
-      // A move a start has yet to finish keeps its journal in ~/.harness (homeMove/plan.ts), and finishes through the links.
-      if (existsSync(join(bridge.oldHome, OWN_FILES.journal))) return
-      const outcome = removeBridge(bridge, stateRoot)
-      // The record before bridge.json: a crash between the two leaves a bridge.json, and the next start finishes.
-      note('moved', 0)
-      rmSync(join(stateRoot, BRIDGE_FILE), { force: true })
-      deps.log(outcome === 'removed' ? 'home bridge: removed' : `home bridge: removed · ${legacyHarnessHome('~', 'linux')} holds something else, so it stays`)
-      stop()
+      await removeWhenUnused()
+      failure = null
     } catch (error) {
-      // /proc with no boot id, a file it could not remove: the bridge stays until a check gets through.
-      deps.log(`home bridge: a check failed: ${said(error)} · tried again in 10 minutes`)
+      // /proc with no boot id, a file it could not remove: the bridge stays until a check gets through. Said once while it
+      // lasts, not every 10 minutes.
+      if (said(error) !== failure) deps.log(`home bridge: a check failed: ${said(error)} · tried again in 10 minutes`)
+      failure = said(error)
     } finally {
       if (!again) checking = false
     }
