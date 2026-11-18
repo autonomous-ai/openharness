@@ -77,7 +77,7 @@ interface Window {
   stop(): Promise<number | null>
 }
 
-describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach an agent in VS Code's terminal", () => {
+describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach an agent in VS Code's or Cursor's terminal", () => {
   let daemon: IsolatedDaemon | undefined
   let desk: Desk | undefined
   const children: ChildProcess[] = []

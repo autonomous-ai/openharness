@@ -4,19 +4,19 @@
  * editor's id, its bundle id and its link's scheme (docs/plans/2026-11-18-dial-cursor-design.md, §1).
  *
  * The extension's tab (docs/plans/2026-11-17-dial-vscode-follow-design.md): a Claude Code session the extension
- * started opens on its tab by the extension's `vscode://anthropic.claude-code/open?session=<id>` link, sent to VS Code
- * alone by its bundle id (appLink.ts), on a tap and on a rest of the dial, a rest only while VS Code is in front. The link
- * was read in the extension's code, not in any document, and may change with any release. The link and `open` are
- * macOS's, so elsewhere nothing runs. Every value came from a hook, so each is checked against its form before it reaches
- * the link.
+ * started opens on its tab by the extension's `vscode://anthropic.claude-code/open?session=<id>` link (`cursor://` in
+ * Cursor), sent to that editor alone by its bundle id (appLink.ts), on a tap and on a rest of the dial, a rest only while
+ * that editor is in front. The link was read in the extension's code, not in any document, and may change with any
+ * release. The link and `open` are macOS's, so elsewhere nothing runs. Every value came from a hook, so each is checked
+ * against its form before it reaches the link.
  *
  * The integrated terminal (docs/plans/2026-11-17-dial-vscode-extension-design.md, §3): a Claude Code or Codex agent in a
  * terminal has the pane `term:<its pid>`, and Harness's own extension in the window that holds the terminal shows it on
  * a `{"show":<shell pid>}` line (vscodeTerminals.ts), a tap's with `"raise":true` so that window comes in front of
- * VS Code's others. The terminal is asked for again at each verb, since a window comes and goes between looks. The
- * adapter's one `tap` is `'instead'`, for the tab's link, so a terminal's tap runs VS Code's own `open -b` itself once
+ * the editor's others. The terminal is asked for again at each verb, since a window comes and goes between looks. The
+ * adapter's one `tap` is `'instead'`, for the tab's link, so a terminal's tap runs the editor's own `open -b` itself once
  * its line is queued; off macOS the line alone is the tap. The dial's scroll sends that window the stroke's lines on a
- * `{"scroll":<lines>,"pid":<shell>}` line while VS Code is in front (§4): the extension runs them only while that
+ * `{"scroll":<lines>,"pid":<shell>}` line while the editor is in front (§4): the extension runs them only while that
  * terminal is the active one, so the adapter has no `onScreen`. A stroke whose `pageKeys` passed carries `"page":true`,
  * and the extension also presses Claude Code's page keys in that terminal
  * (docs/plans/2026-11-18-dial-vscode-claude-fullscreen-scroll-design.md).

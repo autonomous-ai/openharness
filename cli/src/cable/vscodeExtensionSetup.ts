@@ -31,7 +31,7 @@ const RETRY_MS = 3_600_000
 
 export function createVscodeExtensionSetup(deps: VscodeExtensionSetupDeps): VscodeExtensionSetup {
   let running = false
-  /** A failed pass's hour: an attach within it runs no `code`, so a computer whose VS Code cannot install is not asked
+  /** A failed pass's hour: an attach within it runs no CLI, so a computer whose editor cannot install is not asked
    *  again at every replug. */
   let waiting = false
   /** An uninstall that failed: tried again at the passes after its hour while the extension is removed, as nothing else
@@ -77,8 +77,8 @@ export function createVscodeExtensionSetup(deps: VscodeExtensionSetupDeps): Vsco
       // The devices' listener, which the extension talks to, does not exist on Windows.
       if (deps.vscode.platform === 'win32' || running || waiting) return
       running = true
-      // Only a run of `code` is awaited: a pass that runs none ends at once, and does not turn away an attach's pass
-      // that follows it in the same moment.
+      // Only a run of the editor's CLI is awaited: a pass that runs none ends at once, and does not turn away an attach's
+      // pass that follows it in the same moment.
       try {
         const version = buildVersion(deps.vscode)
         const removed = deps.removed()

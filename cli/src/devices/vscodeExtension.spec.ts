@@ -1,8 +1,8 @@
 /**
- * Whether Harness's VS Code extension is on, and VS Code's own install and uninstall of it, against a computer of the
- * test's own: files from a table, a `code` that records each run and answers from a list, and temporary folders in the
- * test's scratch. The real dependencies are run only on that scratch and on fake `code` scripts in it: never an
- * installed VS Code, /Applications or ~/.vscode.
+ * Whether Harness's VS Code extension is on, and the editor's own install and uninstall of it, in VS Code or Cursor,
+ * against a computer of the test's own: files from a table, a CLI that records each run and answers from a list, and
+ * temporary folders in the test's scratch. The real dependencies are run only on that scratch and on fake `code` scripts
+ * in it: never an installed VS Code or Cursor, /Applications, ~/.vscode or ~/.cursor.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'

@@ -3,8 +3,8 @@
  * editor's own CLI (`code` or `cursor`, `--install-extension`, `--uninstall-extension`), for its default profile, in VS
  * Code or in Cursor, which runs VS Code's extensions. Harness never writes the editor's files itself: it reads the
  * editor's record of its extensions, and hands the editor a `.vsix` packed here from the extension cli.js carries. It
- * runs in the `harness` command's own process (`harness device vscode …`) and in the devices' process, which sets the
- * extension up once a computer (cable/vscodeExtensionSetup.ts); never in the core's.
+ * runs in the `harness` command's own process (`harness device vscode|cursor …`) and in the devices' process, which sets
+ * the extension up once a computer (cable/vscodeExtensionSetup.ts); never in the core's.
  */
 import { spawn } from 'node:child_process'
 import { accessSync, closeSync, constants, existsSync, fstatSync, mkdtempSync, openSync, readSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
@@ -62,7 +62,7 @@ const EDITORS: Record<VscodeEditor, { app: string; cli: string; folder: string; 
   cursor: { app: 'Cursor.app', cli: 'cursor', folder: '.cursor', shim: join('.local', 'bin', 'cursor') },
 }
 const VSIX = 'harness-device.vsix'
-/** What a version in VS Code's record may be before it is printed or compared: no path, no markup, no line. */
+/** What a version in the editor's record may be before it is printed or compared: no path, no markup, no line. */
 const VERSION = /^[0-9A-Za-z.+-]{1,64}$/
 const FAILED = { state: 'off', error: 'failed' } as const
 
