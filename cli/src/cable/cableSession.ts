@@ -204,22 +204,27 @@ function clipUtf8(text: string, max: number): string {
 }
 
 /**
- * A drawer row's text as the dial keeps it (firmware recap_preview): whitespace and control characters folded to one
- * space, cut on a whole character at `max` bytes, no ellipsis. The dial matches a read row by its words, so a question
- * asked whole and then carried in a drawer stays read; and a window's question text, a plan of kilobytes, made the
- * drawer frame too big to send, every question it carried with it (2026-11-18). A control character is folded because
- * JSON writes it six bytes wide, and eight rows of them passed the frame cap as well.
+ * A drawer row's text as the dial keeps it (firmware recap_preview): whitespace folded to one space, cut on a whole
+ * character at `max` bytes, no ellipsis. The dial matches a read row by its words, so a question asked whole and then
+ * carried in a drawer stays read; and a window's question text, a plan of kilobytes, made the drawer frame too big to
+ * send, every question it carried with it (2026-11-18). It is cut sooner where its JSON passes twice `max`, a field of
+ * quotes: JSON writes a control character six bytes wide, and eight rows of them passed the frame cap. Folding them
+ * instead changed the words of a question the dial had filed with them, and a read question came back unread.
  */
 function dialText(text: string, max: number): string {
   let out = ''
   let bytes = 0
+  let width = 0
   let space = false
   for (const ch of text) {
-    if (ch <= ' ' || ch === '\u007f') { space = bytes > 0; continue }
-    const size = Buffer.byteLength(ch, 'utf8') + (space ? 1 : 0)
-    if (bytes + size > max) break
+    if (ch === ' ' || (ch >= '\t' && ch <= '\r')) { space = bytes > 0; continue }
+    const gap = space ? 1 : 0
+    const size = Buffer.byteLength(ch, 'utf8')
+    const wide = ch === '"' || ch === '\\' ? 2 : ch < ' ' ? 6 : size
+    if (bytes + gap + size > max || width + gap + wide > 2 * max) break
     out += space ? ` ${ch}` : ch
-    bytes += size
+    bytes += gap + size
+    width += gap + wide
     space = false
   }
   return out
