@@ -98,6 +98,7 @@ describe('the store service', () => {
     expect(await ports.store!.dshContext({ dsh: 'test/draw', engine: 'claude' })).toEqual({ ok: true, account: { privateGrid: 'selected' } })
     const call = vi.mocked(storeLaunchContext).mock.calls.at(-1)!
     expect(call[0]).toEqual({ dataDir: core.dataDir, port: core.daemon.port, machineId: 'first' })
+    expect(await call[5]!()).toBe(await core.account.privateGridName())
     expect(call[2]()).toBe(true)
     machineId = 'second'; expect(call[2]()).toBe(false)
     await ports.store!.dshContext({ dsh: 'test/draw', engine: 'claude' })

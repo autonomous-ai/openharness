@@ -18,8 +18,10 @@ Models exposes an additive owner-only `grid_launch_context` request on the exist
 It accepts only the setup boolean. Setup uses the existing shared Grid access queue and eight-second
 bounded wait; it continues in models if that wait expires. The request then reads the backend-first
 private Grid name through models' existing implementation, without listing models or pushing picker
-events. A missing/unavailable models reply yields the existing empty account context, with a fixed
-diagnostic. No caller-supplied Grid name is accepted. Ordinary packages never trigger setup.
+events. Store first uses the existing non-secret account-name read for ordinary packages, so a known backend
+name does not start Models. After Model Manager setup, Models reads the current name; if Models is
+unavailable, Store retains the backend name and only falls back to null when that read has no name,
+with a fixed diagnostic. No caller-supplied Grid name is accepted. Ordinary packages never trigger setup.
 
 Store reaches this route as the local owner's tool through the authenticated socket/named pipe. Reuse
 the existing confirmed-cancel one-shot transport for this second real caller: exact machine/protocol
@@ -53,7 +55,7 @@ private Models `ensure` port, core Create callback and Model Manager id import a
 - Audience/identity: existing local owner authentication and current machine binding; no borrowed
   token, provider login or remote machine selection. A non-owner request performs no setup or read.
 - Failure: Store loss refuses package preparation; models loss retains the historical null-account
-  behavior and a fixed diagnostic. Setup timeout is reported by the component and continues only in
+  behavior when the backend also has no name, and a fixed diagnostic. Setup timeout is reported by the component and continues only in
   its existing setup queue. Unknown/replaced connections cannot supply context for workspace effects.
 - Platforms: TypeScript and existing local transport on macOS/Linux/Windows. No new process launch.
   Native Windows execution is deferred by the owner; mobile is out of scope.
@@ -100,3 +102,19 @@ runtime files at 100% in all four coverage metrics, full types, and syntax-only 
 native fixture. It includes the actual inline watch fix and the correct inline adapter suite. No native,
 end-to-end latency or matched package-create cost pass is claimed. Independent review and packaged
 failure/recovery/cost acceptance remain required before release.
+
+## Review corrections
+
+Review reproduced three more failing caller cases in `20261118T142424.654449Z-84149`: both ordinary
+and Model Manager packages lost a known backend name with Models off, and cancel returned an already
+settled success after authority changed before its new wrapper continuation. Both are corrected.
+Models and Store now share the existing non-secret account-name reader in `accountQueries.ts`; Store
+gains no token/lane access. Ordinary packages with a known backend name still skip Models entirely.
+Model Manager setup still precedes the final name read. Every awaited account/read fallback is bound
+to the same physical connection/current-machine predicate. Cancel rechecks current/abort after await.
+
+Corrected source receipt `20261118T142753.061594Z-91177` passes 496 tests in 19 files, full types, prepared
+native-fixture syntax, and all thirteen included runtime files at 100% statements/branches/functions/
+lines. It includes positive 100-request shared-lifetime capacity, exact account/no-credential answers,
+known-empty name behavior and connection replacement during backend fallback. Native, matched cost and
+independent final review remain open; the earlier source-only checkpoint is not the final correction.

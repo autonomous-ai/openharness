@@ -15,11 +15,30 @@ const budget = { reserve: () => {
 
 /** Models owns setup and account lookup; Store owns the decision to request setup. */
 export async function storeLaunchContext(where: Where, setup: boolean, current: () => boolean,
-  signal: AbortSignal, connect: Connect = connectSocket): Promise<DshAccount> {
+  signal: AbortSignal, connect: Connect = connectSocket, backendName?: () => Promise<unknown>): Promise<DshAccount> {
+  const check = () => { if (!current() || signal.aborted) throw new Error('Store context connection changed') }
+  const backendAccount = async (): Promise<DshAccount> => {
+    let name: unknown = null
+    try { name = await backendName?.() ?? null }
+    catch { console.warn('[store] LAUNCH_ACCOUNT_UNAVAILABLE') }
+    const account = dshAccountIn({ privateGrid: name })
+    if (!account) console.warn('[store] LAUNCH_ACCOUNT_INVALID')
+    return account ?? { privateGrid: null }
+  }
+  // Ordinary packages with a known account never needed Models to be running. A Model Manager
+  // still asks for setup first; if Models is off, its already known backend name remains usable.
+  if (!setup && backendName) {
+    const known = await backendAccount()
+    check()
+    if (typeof known.privateGrid === 'string') return known
+  }
   const answer = await requestOnce(where, 'grid_launch_context', { setup }, current, signal, budget, 130_000,
     code => console.warn(`[store] LAUNCH_CONTEXT_${code}`), connect)
-  if (!current() || signal.aborted) throw new Error('Store context connection changed')
+  check()
   const account = answer?.ok === true ? dshAccountIn(answer.account) : null
-  if (!account) console.warn('[store] LAUNCH_CONTEXT_UNAVAILABLE')
-  return account ?? { privateGrid: null }
+  if (account) return account
+  console.warn('[store] LAUNCH_CONTEXT_UNAVAILABLE')
+  const known = await backendAccount()
+  check()
+  return known
 }

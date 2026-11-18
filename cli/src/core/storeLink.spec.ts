@@ -34,6 +34,13 @@ describe('the Store in its own process, as the core hears it', () => {
     expect(core.clients.dshInstallStatus).not.toHaveBeenCalled()
     expect(link.answer('credentials', {})).toEqual({ error: 'UNKNOWN_QUERY' })
   })
+  it('reads existing account names without granting credentials or starting Models', async () => {
+    const core = fakeCore({ account: { privateGridName: async () => 'backend', machineName: () => 'Studio' } })
+    const link = createStoreLink(core)
+    expect(await link.answer('account', {})).toEqual({ gridName: 'backend', machineName: 'Studio' })
+    expect(link.answer('accessToken', {})).toEqual({ error: 'UNKNOWN_QUERY' })
+    expect(core.account.accessToken).not.toHaveBeenCalled()
+  })
 })
 
 describe('checked Store launch replies', () => {

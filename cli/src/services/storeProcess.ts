@@ -77,7 +77,8 @@ export function runStoreService(options: StoreServiceOptions): ServiceProcess {
     const where = daemonIn(await connection.query('daemon'))
     const current = () => core === connection && !signal.aborted
     if (!where || !current() || where.machineId() !== options.machineId) throw new Error('Store context connection changed')
-    return storeLaunchContext({ port: where.port, machineId: where.machineId(), dataDir: options.dataDir }, setup, current, signal)
+    return storeLaunchContext({ port: where.port, machineId: where.machineId(), dataDir: options.dataDir }, setup, current, signal,
+      undefined, async () => (await connection.query('account')).gridName)
   })
   /** Answered once the core has heard that what is installed changed: whatever it was, it may have. */
   const changing = (handle: ServiceRequest): ServiceRequest => async (payload, asker) => {

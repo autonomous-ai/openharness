@@ -35,6 +35,7 @@ import { join } from 'node:path'
 import { LAUNCH_CONTRIBUTION_LIMITS, launchContributionIn, launchText } from '../lib/launchContribution.js'
 import type { CoreApi, ModelsPort } from './api.js'
 import { ServiceUnavailableError } from './serviceHost.js'
+import { accountInfo } from './accountQueries.js'
 import type { ServiceFrame } from './serviceLinks.js'
 
 /** Ask models' process (core/serviceLinks.ts `call`, for `models`): never rejects. */
@@ -223,7 +224,7 @@ export function createModelsLink(core: Pick<CoreApi, 'agents' | 'account' | 'cli
     /** The core's answers to models' questions (core/serviceLinks.ts `answer`, for `models`). */
     async answer(query: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
       if (query === 'glances') return heard(payload)
-      if (query === 'account') return { gridName: await core.account.privateGridName(), machineName: core.account.machineName() }
+      if (query === 'account') return accountInfo(core.account)
       if (query === 'mintGridName') return { name: await core.account.mintGridName() }
       if (query === 'accessToken') return { token: await core.account.accessToken() }
       if (query === 'runtimeModels') {

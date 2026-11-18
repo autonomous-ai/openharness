@@ -10,5 +10,5 @@ export async function cancelTurn(where: Where, agentId: string, current: () => b
   const result = await requestOnce(where, 'cancel', { agentId }, current, signal, budget, 15_000,
     code => console.warn(`[wifi] CANCEL_${code}`), connect)
   if (result && result.ok !== true) console.warn('[wifi] CANCEL_UNAVAILABLE')
-  return result?.ok === true
+  return current() && !signal.aborted && result?.ok === true
 }

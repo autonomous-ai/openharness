@@ -14,6 +14,11 @@ import type { CoreApi } from './api.js'
 type Payload = Record<string, unknown>
 type Account = Pick<CoreApi['account'], 'accessToken' | 'lane'>
 
+/** Existing non-secret account facts shared by Models and Store; neither lookup grants a token. */
+export async function accountInfo(account: Pick<CoreApi['account'], 'privateGridName' | 'machineName'>): Promise<Payload> {
+  return { gridName: await account.privateGridName(), machineName: account.machineName() }
+}
+
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 const record = (value: unknown): Payload => (value && typeof value === 'object' && !Array.isArray(value) ? value as Payload : {})
 

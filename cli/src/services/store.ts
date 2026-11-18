@@ -106,7 +106,8 @@ export function startStoreInCore(core: CoreApi, ports: CorePorts, prepared?: () 
   const launch = storeLaunchPort(undefined, undefined, prepare, setup => {
     const machineId = core.daemon.machineId()
     return storeLaunchContext({ dataDir: core.dataDir, port: core.daemon.port, machineId }, setup,
-      () => !lifetime.signal.aborted && core.daemon.machineId() === machineId, lifetime.signal)
+      () => !lifetime.signal.aborted && core.daemon.machineId() === machineId, lifetime.signal,
+      undefined, () => core.account.privateGridName())
   })
   ports.store = {
     stop: () => lifetime.abort(),

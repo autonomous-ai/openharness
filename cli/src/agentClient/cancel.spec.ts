@@ -23,6 +23,14 @@ beforeEach(() => { vi.useFakeTimers(); vi.spyOn(console, 'warn').mockImplementat
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
 describe('one confirmed cancel on the owner socket', () => {
+  it.each(['current', 'abort'])('refuses %s revoked between socket settlement and the wrapper continuation', async how => {
+    let current = true
+    const run = start({ current: () => current })
+    await Promise.resolve(); run.socket.select(); run.socket.reply()
+    if (how === 'current') current = false; else run.controller.abort()
+    expect(await run.result).toBe(false)
+    run.socket.emit('close', 1000)
+  })
   it.each([true, false])('returns actual confirmation %s once and retains credit through physical close', async ok => {
     const f = start(); await Promise.resolve(); f.socket.select()
     expect(f.socket.sent[0]).toEqual({ type: 'machine_select', payload: { machineId: 'machine', localProtocolVersion: 1, tool: true, questionProtocol: 1 } })

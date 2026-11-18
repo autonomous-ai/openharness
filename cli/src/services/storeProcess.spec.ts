@@ -203,6 +203,9 @@ describe('Store context follows the physical core connection', () => {
     expect(await run.options.requests.dshContext!(request, ASKER)).toEqual({ ok: true, account: { privateGrid: 'selected' } })
     const first = vi.mocked(storeLaunchContext).mock.calls.at(-1)!
     expect(first[0]).toEqual({ dataDir: '/data', port: 18473, machineId: 'm' })
+    query.mockResolvedValueOnce({ gridName: 'backend' } as never)
+    expect(await first[5]!()).toBe('backend')
+    expect(query).toHaveBeenLastCalledWith('account')
     expect(first[1]).toBe(false); expect(first[2]()).toBe(true); expect(first[3].aborted).toBe(false)
     run.options.onConnected!({ query })
     expect(first[2]()).toBe(false); expect(first[3].aborted).toBe(true)

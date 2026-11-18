@@ -13,6 +13,7 @@ import { dshAccountIn } from '../dsh/launchWire.js'
 import type { DshContextAnswer, DshLaunchRequest, DshLaunchAnswer, DshMaterializeAnswer, DshRefusal, DshDescribeAnswer } from '../dsh/launchWire.js'
 import type { CoreApi, StorePort } from './api.js'
 import { ServiceUnavailableError } from './serviceHost.js'
+import { accountInfo } from './accountQueries.js'
 
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
 const text = (value: unknown): value is string => typeof value === 'string'
@@ -76,7 +77,7 @@ export function dshLaunchAnswerIn(value: unknown, request: DshLaunchRequest, ide
 
 type CallStore = (type: string, payload: Record<string, unknown>) => Promise<Record<string, unknown>>
 
-export function createStoreLink(core: Pick<CoreApi, 'clients'>,
+export function createStoreLink(core: Pick<CoreApi, 'clients' | 'account'>,
   call: CallStore = async () => ({ error: 'SERVICE_UNAVAILABLE' })) {
   const listeners = new Set<() => void>()
   const port: StorePort = {
@@ -103,7 +104,8 @@ export function createStoreLink(core: Pick<CoreApi, 'clients'>,
     /** Restore is already held in core; a Store notice only schedules another pass after core ready. */
     onReady(listener: () => void): () => void { listeners.add(listener); return () => { listeners.delete(listener) } },
     /** The core's answers to the Store's questions (core/serviceLinks.ts `answer`, for `store`). */
-    answer(query: string, payload: Record<string, unknown>): Record<string, unknown> {
+    answer(query: string, payload: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>> {
+      if (query === 'account') return accountInfo(core.account)
       if (query === 'installStatus') {
         const status = payload.status
         if (!status || typeof status !== 'object' || Array.isArray(status)) return { error: 'BAD_STATUS' }

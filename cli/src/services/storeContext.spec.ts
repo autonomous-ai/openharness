@@ -29,6 +29,36 @@ afterEach(() => {
 })
 
 describe('Store reads context from Models through the owner socket', () => {
+  it.each([true, false])('retains the known backend account when Models is off, setup=%s', async setup => {
+    const name = vi.fn(async () => 'backend-grid')
+    const connect = vi.fn(() => { throw Error('Models is off') })
+    expect(await storeLaunchContext(where, setup, () => true, new AbortController().signal, connect, name))
+      .toEqual({ privateGrid: 'backend-grid' })
+    if (setup) expect(connect.mock.invocationCallOrder[0]).toBeLessThan(name.mock.invocationCallOrder[0])
+    else expect(connect).not.toHaveBeenCalled()
+  })
+  it('does not wake Models for an already known empty backend name', async () => {
+    const connect = vi.fn(() => { throw Error('not needed') })
+    expect(await storeLaunchContext(where, false, () => true, new AbortController().signal, connect, async () => ''))
+      .toEqual({ privateGrid: '' })
+    expect(connect).not.toHaveBeenCalled()
+  })
+  it.each(['failure', 'invalid', 'unknown'] as const)('names a backend %s and keeps the null fallback when Models is off', async reason => {
+    const name = async () => {
+      if (reason === 'failure') throw Error('private account detail')
+      return reason === 'invalid' ? 7 : null
+    }
+    expect(await storeLaunchContext(where, false, () => true, new AbortController().signal,
+      () => { throw Error('private socket detail') }, name)).toEqual({ privateGrid: null })
+    if (reason !== 'unknown') expect(console.warn).toHaveBeenCalledWith(`[store] LAUNCH_ACCOUNT_${reason === 'failure' ? 'UNAVAILABLE' : 'INVALID'}`)
+    expect(vi.mocked(console.warn).mock.calls.flat().join(' ')).not.toContain('private')
+  })
+  it.each([true, false])('rejects a connection replaced during the backend read, setup=%s', async setup => {
+    let current = true
+    const connect = vi.fn(() => { throw Error('off') })
+    await expect(storeLaunchContext(where, setup, () => current, new AbortController().signal, connect,
+      async () => { current = false; return 'stale' })).rejects.toThrow('Store context connection changed')
+  })
   it('uses the existing authenticated local transport by default', async () => {
     const socket = new Socket()
     vi.mocked(connectSocket).mockResolvedValueOnce(socket)
