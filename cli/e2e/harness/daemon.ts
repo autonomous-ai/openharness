@@ -374,17 +374,20 @@ export class IsolatedDaemon {
     // helper (lib/guestAccounts.ts), which may be installed on the Mac the tests run on. Refused, as for an owner who
     // never turned guest access on.
     await writeFile(join(dirs.bin, 'sudo'), '#!/bin/sh\necho "sudo: a password is required" >&2\nexit 1\n', { mode: 0o755 })
-    // Nor does its open scan see a process outside its root. The scan reads every `codex` on the computer
+    // Nor does its open scan see a file held outside its root. The scan reads every `codex` on the computer
     // (sessionSearch/externals/support.ts) and the devices write the dial skill into each Codex home whose rollout one
     // holds: every daemon with a dial attached wrote it into another test's Codex homes, and deviceDialSkill.e2e.ts
     // failed whenever the other dial files ran beside it, and into the developer's real ones too (2026-11-19). Found by
-    // name, first on its PATH. Only the scan's own field output (-Fpn) loses the names outside the root: lsof's other
-    // callers (process images, held files) see the computer as it is. A computer with no lsof has no scan to hide.
-    // Admitted before the daemon runs it: the scan gives lsof 3 s, and macOS checks a new executable on its first exec.
-    // It exits with lsof's status, never awk's: the scan tells lsof's empty match (1, nothing said) from a failure.
+    // name, first on its PATH. Only the open files the scan reads (-Fpn) lose the names outside the root. A process's
+    // folder (-d cwd) is kept: adoption reads it to place an engine process with no record, and one it cannot read may
+    // hold any conversation. lsof's other callers (process images, held files) see the computer as it is. A computer
+    // with no lsof has no scan to hide. Admitted before the daemon runs it: the scan gives lsof 3 s, and macOS checks a
+    // new executable on its first exec. It exits with lsof's status, never awk's: the scan tells lsof's empty match (1,
+    // nothing said) from a failure.
     const lsof = SYSTEM_FOLDERS.map((folder) => join(folder, 'lsof')).find((file) => existsSync(file))
     if (lsof) writeExecutable(join(dirs.bin, 'lsof'), `#!/bin/sh
 case " $* " in
+  *" -d cwd "*) exec '${lsof}' "$@" ;;
   *" -Fpn "*)
     exec 4>&1
     status=$({ { '${lsof}' "$@" 3>&- 4>&-; echo $? >&3; } | awk -v root='${root}/' 'substr($0, 1, 1) != "n" || index($0, "n" root) == 1' >&4 3>&- 4>&-; } 3>&1)
