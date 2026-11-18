@@ -18,10 +18,9 @@ folder.
 - **The extension is set up in Cursor as in VS Code:** `vscodeExtension.ts` and `vscodeExtensionSetup.ts` take the
   editor, two setups run in the devices process, each with its own record and removal key, and
   `harness device cursor enable|disable` is the person's word.
-- **Nothing in the daemon core.** Every file is the devices process's, the `harness` command's, the extension's gate's
-  or a test's.
+- **Nothing in the daemon core.** Every file is the devices process's, the `harness` command's or a test's.
 
-**Tech Stack:** TypeScript (Node, vitest 4) in `cli/`; `@vscode/test-electron` 2.5.2 for the two local gates.
+**Tech Stack:** TypeScript (Node, vitest 4) in `cli/`.
 
 **Spec:** [docs/plans/2026-11-18-dial-cursor-design.md](2026-11-18-dial-cursor-design.md). Its "Decided (PM for Diego,
 2026-11-18)", 1 to 5, is not reopened here.
@@ -33,11 +32,9 @@ folder.
 - A task that names failing tests is two commits: the tests, red, then the change. The message given is the second's.
   A task marked "one commit" changes no product behavior and has no red test.
 - **Dependencies.** The worktree has no `cli/node_modules`: clone them from the main checkout, as the implementer's
-  definition says. On 2026-11-18 the main checkout's copy held no `@vscode/test-electron`: Tasks 13 and 14 check
-  `cli/node_modules/@vscode/test-electron/package.json` first and, if it is missing, run `npm ci` in their worktree's
-  `cli/` instead.
-- **Per task:** `cd cli && npx tsc --noEmit -p .` and only the Vitest files the task touches. No task but 13 and 14
-  starts a real app.
+  definition says.
+- **Per task:** `cd cli && npx tsc --noEmit -p .` and only the Vitest files the task touches. No task starts a real
+  app.
 
 ## File structure
 
@@ -55,9 +52,7 @@ folder.
 | `cli/src/lib/logBundleFacts.ts`, `cli/src/lib/logBundle.ts` | `device cursor status --json` in the support bundle |
 | `cli/e2e/harness/daemon.ts`, `cli/scripts/remote-viewers-stack.ts`, `local-stack-peer.ts`, `remote-viewer-peer.ts` | `HARNESS_CURSOR_BIN` beside `HARNESS_VSCODE_BIN` |
 | `cli/e2e/harness/outsideAgent.ts`, `cli/e2e/dialVscode.e2e.ts`, `cli/e2e/dialVscodeFollow.e2e.ts`, `cli/e2e/developerState.e2e.ts` | the fake Cursor; Cursor's cases |
-| `plugins/harness-device-vscode/gate/throwawayApp.ts`, `editorGate.ts` (new), `realVscode.gate.ts`, `realCursor.gate.ts` (new) | the gate's guards and its run, by editor |
-| `cli/vitest.vscode.config.ts`, `cli/vitest.cursor.config.ts` (new), `cli/package.json` | one config a gate; `npm run test:cursor` |
-| `plugins/harness-device-vscode/README.md`, `docs/cli.md`, `docs/validation-and-release.md`, `cli/AGENTS.md`, `cli/src/services/AGENTS.md`, `docs/plans/2026-11-17-dial-vscode-extension-design.md` | the docs the spec lists |
+| `plugins/harness-device-vscode/README.md`, `docs/cli.md`, `cli/AGENTS.md`, `cli/src/services/AGENTS.md`, `docs/plans/2026-11-17-dial-vscode-extension-design.md` | the docs the spec lists |
 
 Nothing under `cli/src/core/` or `cli/src/harnessd/` changes; `cli/src/architecture.coreFiles.txt` gains no line.
 `cli/src/cli.ts` and `plugins/harness-device-vscode/src/` are not edited.
@@ -94,11 +89,10 @@ Nothing under `cli/src/core/` or `cli/src/harnessd/` changes; `cli/src/architect
   person's value is a marker (`SECRET-FOLDER-MARKER`), and the whole of the test's log is searched for it. The
   checks to extend, not to write beside: `devices.spec.ts`'s `'no swipe line carries the VS Code session, the link or
   the bundle'` (its `logs.filter(…secret…)` line), `dialVscode.e2e.ts`'s `leaks()`, and `dialVscodeFollow.e2e.ts`'s
-  last step. The gate has none today: Task 14 gives the shared run one.
+  last step.
 - **Never the person's own apps or agents in a test or a check:** not their Cursor or VS Code, `~/.cursor`,
-  `~/.vscode`, `/Applications` (but the gate's read-only clone of `Cursor.app`), their daemon (port 18473), nor a real
-  `claude`, `codex` or `cursor-agent`. No screenshot is taken, in any task.
-- **The gate never opens a `cursor://` link** and never launches a copy that still carries Cursor's bundle id.
+  `~/.vscode`, `/Applications`, their daemon (port 18473), nor a real `claude`, `codex` or `cursor-agent`, and never a
+  real `open` of a `cursor://` or `vscode://` link. No screenshot is taken, in any task.
 - **Repo rules:** a test that fails first, at the layer where the behavior lives; no fixed sleeps; comments say why;
   names per `docs/naming-system.md` (**VS Code**, **Cursor**, **Claude Code**, **Codex** spelled so); English only;
   100% per file for `cli/src/services/` (`npm run test:core`, run in phase 4).
@@ -131,16 +125,6 @@ Nothing under `cli/src/core/` or `cli/src/harnessd/` changes; `cli/src/architect
 10. **The end-to-end cases join the two existing files.** Their hints carry Cursor's bundle id on every platform: only
     that names Cursor. On Linux, where no Cursor sets it, the case checks the code path, not a Linux Cursor.
 11. **`logBundle.ts`'s README line names `cursor` too:** it says what `status.txt` holds.
-12. **The gate's ids are pairs.** On this Mac (Cursor 3.20.21) `Cursor Helper (GPU|Plugin|Renderer).app` carry
-    `com.github.Electron.helper`, not Cursor's id: the copy's become `ai.autonomous.harness.cursor-gate.helper`.
-    VS Code's row keeps Microsoft's id alone. A run's root stays `harness-vscode-gate-<pid>-` for both: it names the
-    extension's gate, and one sweep clears either's leftovers.
-13. **The feasibility task carries the guards it launches behind** (`throwawayApp.ts` by editor): a copy must not
-    start under Cursor's id. Nothing else of the gate is built before the launch answers. If the PM then drops the
-    gate, Task 13's commits are reverted whole: they touch only gate files, two Vitest configs and one script line.
-14. **`docs/validation-and-release.md`'s row is Task 14's,** so no non-gate task depends on a gate task.
-15. **`vitest.cursor.config.ts` includes `realCursor.gate.ts` alone.** The guards' unit tests stay with VS Code's
-    config and the default suite.
 
 ## Design
 
@@ -179,12 +163,12 @@ The spec's Design section stands. Stored: two fields in files that exist. In mem
 | 14 | ~~Gate: the run for either editor~~ dropped (PM, 2026-11-19) | 13 | xhigh |
 | 15 | Docs | none | medium |
 
-**Longest chain:** 1 → 3 → 7 → 11 (four). Tasks 1, 4, 5, 9, 13 and 15 start at once; 2 as soon as no running task
+**Longest chain:** 1 → 3 → 7 → 11 (four). Tasks 1, 4, 5, 9 and 15 start at once; 2 as soon as no running task
 shares its files.
 
 **Tasks 13 and 14 are dropped (PM, 2026-11-19).** Task 13's one launch ran, but the throwaway Cursor's crash
 reporting wrote into the person's own `~/Library/Application Support/Cursor/` (spec §7). Nothing of either lands on
-this branch, and `npm run test:cursor` is never run. No other task depended on them.
+this branch. No other task depended on them.
 
 **Task 8 waits for Task 9** though they share no file: without `HARNESS_CURSOR_BIN` an end-to-end daemon on a Mac
 with Cursor would install Harness's extension into the developer's own Cursor.
@@ -194,7 +178,6 @@ with Cursor would install Harness's extension into the developer's own Cursor.
 - `cli/src/services/devices.ts`: 2, 4, 7, 8. `devices.spec.ts`: 4, 7, 8.
 - `cli/src/cable/vscodeExtensionSetup.ts` and its spec: 4, 6.
 - `cli/src/deviceClaude/command.ts` and its spec: 4, 10.
-- `plugins/harness-device-vscode/gate/`: 13, 14.
 
 ---
 
@@ -952,184 +935,10 @@ panel in Cursor opens by cursor://`): one commit, no red test.
   `[['-b', CURSOR, 'cursor://anthropic.claude-code/open?session=<v2>'], ['-b', CURSOR, 'cursor://…<v1>']]`.
 - [ ] **Step 3: Commit** `Dial: a rest opens Claude Code's panel session in Cursor by its link, end to end`.
 
-### Task 13 (dropped, spec §7): Gate feasibility: a throwaway Cursor under `runTests`
+### Tasks 13 and 14 (dropped, spec §7): a real-app gate in a throwaway Cursor
 
-**Depends on:** none. **Effort:** xhigh (it starts a copy of an app on the person's Mac). Run it in a desktop session
-on this Mac: a Cursor window opens for some seconds.
-
-**The question it answers:** does `@vscode/test-electron`'s `runTests` start a rebranded clone of
-`/Applications/Cursor.app`, with its own user data, extensions and home, far enough that the driver
-(`gate/driver/run.cjs`) connects and makes terminals: past Cursor's updater and its sign-in screen, with no click.
-
-**Files:**
-- Modify: `plugins/harness-device-vscode/gate/throwawayApp.ts`, `plugins/harness-device-vscode/gate/realVscode.gate.ts`
-  (its calls of the guards alone), `cli/vitest.vscode.config.ts`, `cli/package.json`
-- Create: `plugins/harness-device-vscode/gate/realCursor.gate.ts`, `cli/vitest.cursor.config.ts`
-- Test: `plugins/harness-device-vscode/gate/throwawayApp.test.ts`
-
-**Interfaces — Produces:**
-
-```ts
-// throwawayApp.ts
-export interface GateApp {
-  /** In messages: 'VS Code', 'Cursor'. */
-  name: string
-  /** The id its copy runs under. */
-  gateId: string
-  /** Each id of the original's bundles and what the copy's becomes: an id that starts with `from` gets `to` and the rest. */
-  ids: readonly (readonly [from: string, to: string])[]
-  /** The person's own preferences, checked unchanged. */
-  preferences: string
-  /** Its main process's name, for `pgrep -x`. */
-  process: string
-}
-export const GATE_APPS: Readonly<Record<'vscode' | 'cursor', GateApp>>
-//  vscode: 'VS Code', 'ai.autonomous.harness.vscode-gate', [['com.microsoft.VSCode', gateId]],
-//          ~/Library/Preferences/com.microsoft.VSCode.plist, 'Code'
-//  cursor: 'Cursor', 'ai.autonomous.harness.cursor-gate',
-//          [['com.todesktop.230313mzl4w4u92', gateId], ['com.github.Electron.helper', `${gateId}.helper`]],
-//          ~/Library/Preferences/com.todesktop.230313mzl4w4u92.plist, 'Cursor'
-export function rebrand(bundle: string, app: GateApp): void
-export function assertRebranded(bundle: string, app: GateApp): void
-export function forgetPreferences(app: GateApp, library?: string, defaults?: Run): void
-export function removeOwnFolders(app: GateApp, library?: string): void
-export function outside(app: GateApp, root: string): string          // was vscodeOutside
-export function assertUnchanged(path: string, before: Stamp, app: GateApp): void
-// GATE_ID and VSCODE_PREFERENCES go: their values are GATE_APPS.vscode's. The rest of the file is as it is.
-```
-
-- `cli/vitest.vscode.config.ts` includes `gate/realVscode.gate.ts` and `gate/**/*.test.ts`;
-  `cli/vitest.cursor.config.ts` is its copy with `gate/realCursor.gate.ts` alone and its own comment;
-  `cli/package.json` gains `"test:cursor": "vitest run --config vitest.cursor.config.ts"`.
-- **`realCursor.gate.ts`, for now one case.** Its scaffolding (`until`, `ask`, the control socket, the inherited
-  variables dropped, the clean-up's steps) is `realVscode.gate.ts`'s, copied: Task 14 makes the two one. It also drops
-  variables that start with `CURSOR_`.
-  - `beforeAll`: `stamp(GATE_APPS.cursor.preferences)`; the root (`mkdtempSync(join('/tmp', rootName(process.pid)))`);
-    `sweepLeftovers()`; **fail, not skip,** when `/Applications/Cursor.app` is not there
-    (`throw new Error('Cursor is not in /Applications: the Cursor gate clones it')`);
-    `execFileSync('/bin/cp', ['-c', '-R', '/Applications/Cursor.app', join(root, 'Cursor.app')])`;
-    `rebrand(app, GATE_APPS.cursor)`. Nothing is launched before `assertRebranded` passes.
-  - The case, `it('a throwaway Cursor starts under runTests, and its driver makes two terminals', …)`: `runTests` with
-    `vscodeExecutablePath: join(app, 'Contents', 'MacOS', 'Cursor')`, VS Code's gate's `launchArgs` plus
-    `--use-mock-keychain` (Chromium then never asks the login keychain for `Cursor Safe Storage`, the person's own
-    Cursor's item), and the same `extensionTestsEnv`. `runTests` itself already passes `--disable-updates`,
-    `--skip-welcome`, `--skip-release-notes` and `--disable-workspace-trust`. Then: the driver connects;
-    `ask('terminals')` answers two pids; `exit`; `runTests` resolves 0.
-  - `afterAll`: VS Code's gate's clean-up steps, for Cursor's app, ending with
-    `assertUnchanged(GATE_APPS.cursor.preferences, preferences, GATE_APPS.cursor)`.
-- **Bounded attempts,** each one run of `npm run test:cursor`, stopping at the first that passes:
-  1. as above;
-  2. plus `<userData>/User/settings.json`, written before the launch:
-     `{"update.mode":"none","telemetry.telemetryLevel":"off","workbench.startupEditor":"none"}`.
-  Nothing else: no click or keystroke sent to the window, no write into Cursor's state database, no sign-in, no
-  account, no network change, no screenshot.
-- **Reported either way:** which attempt; how far it got (a process of the copy ran; the driver connected; terminals
-  answered; exit 0); at most ten lines of the throwaway's own `logs/` that say why, if it stopped; and the stamps
-  before and after of the person's `~/Library/Preferences/com.todesktop.230313mzl4w4u92.plist` (asserted),
-  `~/.cursor/extensions/extensions.json` and `~/.cursor/argv.json` (reported: their own Cursor may be running).
-- **What the gate and its report say.** Its messages keep the guards' rule: a file is named from `~`, a process by its
-  name, never by its arguments, and a stamp is an mtime and a hash, never what the file holds. The report quotes no
-  line that holds the real home, the account's name or anything from the person's own Cursor.
-
-- [ ] **Step 1: Write the failing tests** in `throwawayApp.test.ts`. Its existing cases pass `GATE_APPS.vscode`.
-
-```ts
-function cursorApp(): { app: string; helper: string; renderer: string } {
-  const app = bundle(join(root, 'Cursor.app'), 'Cursor', 'com.todesktop.230313mzl4w4u92')
-  const helper = bundle(join(app, 'Contents', 'Frameworks', 'Cursor Helper.app'), 'Cursor Helper', 'com.todesktop.230313mzl4w4u92.helper')
-  const renderer = bundle(join(app, 'Contents', 'Frameworks', 'Cursor Helper (Renderer).app'), 'Cursor Helper (Renderer)', 'com.github.Electron.helper')
-  return { app, helper, renderer }
-}
-const GATE = 'ai.autonomous.harness.cursor-gate'
-
-it('Cursor\'s copy: the app and both kinds of helper get the gate\'s ids, and are signed with them', () => {
-  const { app, helper, renderer } = cursorApp()
-  rebrand(app, GATE_APPS.cursor)
-  expect([plistId(app), signedId(app)]).toEqual([GATE, GATE])
-  for (const path of [helper, renderer]) expect([plistId(path), signedId(path)]).toEqual([`${GATE}.helper`, `${GATE}.helper`])
-})
-it('refuses a Cursor copy in which a helper still carries Electron\'s id, or Cursor\'s', …)
-  // only the app's id replaced: assertRebranded(app, GATE_APPS.cursor) toThrow /Cursor Helper \(Renderer\)\.app.*com\.github\.Electron\.helper/
-it('drops the Cursor copy\'s claim on cursor:// links', …)                    // CFBundleURLSchemes ['cursor'] → claimed(app) toEqual []
-it('VS Code\'s copy leaves an id that is neither of its own alone', …)         // a helper 'com.github.Electron.helper' stays under GATE_APPS.vscode
-it('forgets the gate id\'s preferences and folders for the app it is given, and no other\'s', …)
-  // forgetPreferences(GATE_APPS.cursor, library, defaults): defaults ran ['delete', GATE]; <library>/Preferences/<GATE>.plist gone,
-  // ai.autonomous.harness.vscode-gate.plist beside it kept; removeOwnFolders(GATE_APPS.cursor, library) likewise for Caches
-it('a changed file is said to be the named app\'s', …)                         // assertUnchanged(path, before, GATE_APPS.cursor) toThrow /Cursor's preferences changed/
-```
-
-- [ ] **Step 2: Run** `cd cli && npx vitest run ../plugins/harness-device-vscode/gate/throwawayApp.test.ts`. Expected:
-  FAIL.
-- [ ] **Step 3: Implement** `throwawayApp.ts`, and bring `realVscode.gate.ts`'s calls to it.
-- [ ] **Step 4: Run** `cd cli && npx vitest run ../plugins/harness-device-vscode/gate`. Expected: PASS (the guards'
-  and the clean-up's unit tests; no app starts).
-- [ ] **Step 5: Write** `realCursor.gate.ts`, the two configs and the script. **Run** `cd cli && npm run test:cursor`,
-  through the attempts.
-- [ ] **Step 6: Commit** `Harness Device for VS Code: a throwaway Cursor starts under the gate's driver`. If no
-  attempt passed, commit the same files with `(feasibility: not passed)` at the message's end, and **stop: report to
-  the main session, which asks the PM.** Task 14 does not start. Do not try a third way.
-
-### Task 14 (dropped, spec §7): Gate: the run for either editor
-
-**Depends on:** 13 (passed). **Effort:** xhigh. A check and its tools, no product behavior: one commit, no red test.
-Run in a desktop session on this Mac.
-
-**Files:**
-- Create: `plugins/harness-device-vscode/gate/editorGate.ts`
-- Modify: `plugins/harness-device-vscode/gate/realVscode.gate.ts`, `plugins/harness-device-vscode/gate/realCursor.gate.ts`,
-  `docs/validation-and-release.md`
-
-**Interfaces — Consumes:** `GATE_APPS` and the guards (Task 13); the launch arguments Task 13 found.
-**Produces:**
-
-```ts
-// editorGate.ts
-export interface GateRun {
-  app: GateApp
-  /** The app put under the root, before any launch; its executable. VS Code's is downloaded, Cursor's cloned. */
-  obtain(root: string): Promise<string>
-  /** Its own CLI, from its executable. */
-  cli(executable: string): string
-  /** What its launch needs beside the arguments both share. */
-  launchArgs: readonly string[]
-}
-/** The gate's describe and its cases, for that editor. */
-export function editorGate(run: GateRun): void
-```
-
-- `editorGate.ts` is `realVscode.gate.ts`'s body: its cases, waits and clean-up as they are, with the app's name, its
-  guards' `GateApp` and the three members above in place of VS Code's. The launcher it writes still answers
-  `device vscode link` alone: the extension asks that word in either editor.
-- `realVscode.gate.ts` is `editorGate({ app: GATE_APPS.vscode, obtain: <the download, then macExecutable>, cli: resolveCliPathFromVSCodeExecutablePath, launchArgs: [] })`.
-- `realCursor.gate.ts` is `editorGate({ app: GATE_APPS.cursor, obtain: <Task 13's clone, failing when Cursor is not installed>, cli: (executable) => join(dirname(dirname(executable)), 'Resources', 'app', 'bin', 'cursor'), launchArgs: <Task 13's> })`.
-  Task 13's one case is gone: the run's second case is it.
-- So Cursor's gate checks what VS Code's does: the packed `.vsix` installs with the copy's own `cursor`, and its record
-  reads as status reads it; two shells on one `vscode` stream; a show; a scroll line and a dropped one; five page keys'
-  bytes; exit 0 and the stream gone. It opens no `cursor://` link. No raise case, as VS Code's gate has none (PM,
-  2026-11-18): the two-window raise is in Diego's morning check (Verification, check 7).
-- **The log, in the run's last case, for both editors** (the gate had no such check): of the lines the listener and
-  the pool logged during the run (the gate's `log`), none holds the root's path, the window's id or a shell's pid:
-
-```ts
-const pids = shells.map((pid) => new RegExp(`\\b${pid}\\b`))
-expect(log.filter((line) => line.includes(basename(root)) || line.includes(opened[0]!.window) || pids.some((pid) => pid.test(line)))).toEqual([])
-```
-
-- `docs/validation-and-release.md`, "What PR CI does not run", a row after VS Code's:
-  "| The Harness Device VS Code extension in a real Cursor (`npm run test:cursor` in `cli/`) | nowhere automatically |
-  when you change `plugins/harness-device-vscode/`, the `.vsix`'s packing or the record's reader
-  (`cli/src/devices/vscodeExtension.ts`). On a Mac with Cursor in `/Applications`; it fails without it. It clones
-  `Cursor.app` into a temporary folder (`cp -c`, no copy of its files), gives the clone a bundle id of its own
-  (`ai.autonomous.harness.cursor-gate`) and signs it ad hoc before it runs, with its own user data, extensions and
-  home; a window opens for up to about three minutes. After the run the gate removes that id's preferences and leaves
-  nothing under it in LaunchServices, and the run fails if
-  `~/Library/Preferences/com.todesktop.230313mzl4w4u92.plist` changed. It opens no `cursor://` link |"
-
-- [ ] **Step 1: Write** the module and the two files.
-- [ ] **Step 2: Run** `cd cli && npx vitest run ../plugins/harness-device-vscode/gate && npm run test:cursor && npm run test:vscode`.
-  Expected: PASS, six cases each; each run's clean-up leaves no root in `/tmp` and both apps' preferences as they
-  were (it asserts both). If a case passes in VS Code and fails in Cursor, stop and report: do not loosen the case.
-- [ ] **Step 3: Write** the docs row. **Commit** `Harness Device for VS Code: the gate runs in a real Cursor too`.
+Dropped (PM, 2026-11-19): a throwaway Cursor's crash reporting wrote into the person's own Cursor folder. Nothing of
+either lands on this branch. A Cursor gate is later work, on a VM or a machine with no person's Cursor on it.
 
 ### Task 15: Docs
 
