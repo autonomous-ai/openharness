@@ -47,22 +47,33 @@ export interface LogBundleOptions {
 const DATED = /^(app|cli|dial)-(\d{8})\.log$/
 const DEVICE_DIR = /^usb-[A-Za-z0-9_-]+$/
 const DEVICE_APP_LOG = /^app-(\d{8})\.log$/
+const LOCAL_CHAR = /[A-Za-z0-9._%+-]/
+const DOMAIN = /[A-Za-z0-9.-]+\.[A-Za-z]{2,}/y
+
 /**
- * The menu-bar app's own rule for an email address (`log.rs`), its local part held to the 64 characters an address
- * allows: unbounded, JavaScript's engine (unlike Rust's) tries each start of a long run (base64, hex) against its end,
- * and 100 KB took 20 s.
+ * Blanks what the menu-bar app's own rule for an email address matches (`log.rs`), its local part held to the 64
+ * characters an address allows: `/[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g`, with the same output.
+ * That regex in JavaScript tries every start of a run against it: unbounded, 100 KB of base64 or hex took 20 s; held to
+ * 64, a 20 MB run (a device's day) took 4.4 s, and 9.3 s with an `@` before a 20 MB domain. So each `@` is found once,
+ * its local part read back at most 64 characters and its domain matched once: 20 MB in under 0.2 s.
  */
-const EMAIL = /[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g
-/**
- * A whole run of the characters an address is made of, holding an `@`: the only text EMAIL can match, so it is tried on
- * these alone, with the same result. Tried on all of it, its 64 characters a start took 4.4 s on a 20 MB run of hex or
- * base64 (a device's day); found this way, 0.15 s. The lookbehind starts each run once.
- */
-const AT_RUN = /(?<![A-Za-z0-9._%+@-])[A-Za-z0-9._%+@-]*@[A-Za-z0-9._%+@-]*/g
+function blankEmails(text: string): string {
+  let out = '', from = 0
+  for (let at = text.indexOf('@'); at >= 0; at = text.indexOf('@', at + 1)) {
+    let start = at
+    while (start > Math.max(from, at - 64) && LOCAL_CHAR.test(text[start - 1])) start--
+    if (start === at) continue
+    DOMAIN.lastIndex = at + 1
+    if (!DOMAIN.test(text)) continue
+    out += text.slice(from, start) + '<email>'
+    from = DOMAIN.lastIndex
+  }
+  return out + text.slice(from)
+}
 
 /** Steps 2 and 3 of the bundle's blanking, after `redact`: email addresses, then the home folder. */
 export function blankPersonal(text: string, home: string): string {
-  const emailsBlanked = text.replace(AT_RUN, (run) => run.replace(EMAIL, '<email>'))
+  const emailsBlanked = blankEmails(text)
   const folder = home.replace(/[\\/]+$/, '')
   // A root holds every path: it names no one, and blanking it would hide where each file is.
   if (!folder || /^[A-Za-z]:$/.test(folder)) return emailsBlanked
