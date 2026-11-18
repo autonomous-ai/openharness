@@ -1134,7 +1134,7 @@ static void notification_read_checks(const char *dir) {
     assert(!ui_notify_summary("c","C","M2","x",NULL,true,true) && s.notice_count==1);
     assert(!ui_notify_summary("c","C","M2","x","bogus",true,false) && s.notice_count==2);
     assert(ui_notify_summary("d","D","M2","x",NULL,false,false) && s.notice_count==3 && wakes==1);
-    // One row per agent: the newest wins.
+    // One news row per agent: the newest wins.
     assert(ui_notify_summary("d","D","M2","newer","alert",false,false) && s.notice_count==3 && !strcmp(s.notice[0].summary,"newer"));
     // On the face: no beep, no wake, no celebration, and the row is read at once.
     reset(); fake_ms=5000; wakes=0;
@@ -1171,7 +1171,7 @@ static void notification_read_checks(const char *dir) {
     reset(); fake_ms=9000; ui_turn_error("b","");
     assert(!strcmp(s.notice[0].summary,"The turn failed") && !strcmp(s.message,"The turn failed"));
     ui_turn_error("c",NULL); assert(!strcmp(s.message,"The turn failed"));
-    puts("Notification tiers: alert/list/silent, old-daemon flags, face, one row per agent, 6 h expiry and 8 s error PASS");
+    puts("Notification tiers: alert/list/silent, old-daemon flags, face, one news row per agent, 6 h expiry and 8 s error PASS");
 
     // A question outlives news: a turn's summary, a failure or a drawer's news row about the same agent lands beside
     // its open question, never in its place, and each row keeps its own read token.

@@ -3645,7 +3645,7 @@ describe('hello capabilities', () => {
       await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
       await session.question('a1', 'q1', [{ key: 'k', q: 'Ship it?\nThe tests pass.', options: ['yes', 'no'] }])
       port.sent.length = 0
-      // The window's mark for a1 turned into news: the dial keeps one row an agent, and the open question is that row.
+      // The window's mark for a1 turned into news: a drawer carries one row an agent, and the open question is that row.
       await session.replaceNotifications([{ agentId: 'a1', machineId: 'm1', question: false, text: 'The build passed, all green.' }])
       expect(port.types()).toEqual(['notif.replace'])
       expect(ofType(port, 'notif.replace')[0].items).toEqual([

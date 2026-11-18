@@ -808,7 +808,7 @@ export class DaemonCableHost implements CableHost {
     this.unread = items
   }
 
-  /** What is unread, the devices' own questions first: the dial keeps one row an agent, and the first it is sent. */
+  /** What is unread, the devices' own questions first: a drawer carries one row an agent, the first the dial is sent. */
   listUnread(): UnreadNotification[] {
     const asked = this.wiring.noticeRows?.() ?? []
     const agents = new Set(asked.map((row) => row.agentId))
