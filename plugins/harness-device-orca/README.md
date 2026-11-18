@@ -28,6 +28,12 @@ While Orca is in front, a swipe on the dial stays among the agents of the worktr
 
 ## Install
 
+The Harness menu-bar app offers `Connect Orca…` while Orca runs without this plugin. It shows the access Orca lists, and
+installs the plugin when you click Connect. A later Harness CLI brings the plugin current by itself, and asks again only
+when Orca does.
+
+Without the app:
+
 ```
 orca plugin install <this repository>/plugins/harness-device-orca
 ```
