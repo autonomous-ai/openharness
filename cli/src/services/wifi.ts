@@ -16,7 +16,7 @@ import { readWifiView, type WifiView } from './wifiView.js'
  * (lib/autonomous-device/localHttp.ts).
  */
 import { join } from 'node:path'
-import type { AgentView, CoreApi, CorePorts, ServiceRequests, WifiPort } from '../core/api.js'
+import type { AgentCreateRequest, AgentView, CoreApi, CorePorts, ServiceRequests, WifiPort } from '../core/api.js'
 import { submissionPolicy } from '../engines/submissionPolicies.js'
 import { startDevicePart } from '../lib/autonomous-device/parts.js'
 import { deviceRelayOverGateway } from '../lib/autonomous-device/overGateway.js'
@@ -105,7 +105,8 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
   const store = (deps.store ?? createDeviceStore)({
     dataDir: core.dataDir, machineId,
     agents: () => view.store,
-    create: (packageId, engine, cwd) => core.wifi.create(packageId, engine, cwd),
+    create: (packageId, engine, cwd) => core.agents.create({ dsh: packageId, engine: engine as AgentCreateRequest['engine'], cwd,
+      prompt: null, name: null, bypassPermission: false, requireUnusedWorkspace: true }),
     reveal: (operationId, agentId) => { core.clients.sendWindow({ target: { kind: 'first' },
       frame: { type: 'device_prepare_open', payload: { operationId, machineId, agentId } } }) },
   })

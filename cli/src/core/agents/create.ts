@@ -101,6 +101,7 @@ export function createAgentCreator({
 }: CreateAgentDeps) {
   const prepare = async (input: Parameters<CreateAgent>[0], authority: LaunchAuthority,
     context?: { local: boolean; folderTrustAttempted?: true }): Promise<LaunchPreparation<Awaited<ReturnType<CreateAgent>>>> => {
+    const requireUnusedWorkspace = input.requireUnusedWorkspace === true
     if (input.resumeSessionId) return { ok: true, dispatch: () => externalResume(input) }
     const stale = () => ({ ok: false as const, error: 'LAUNCH_AUTHORITY_CHANGED', unavailable: 'launch', detail: 'Waiting for the original launch request’s authority.' })
     if (!authority.current()) return stale()
@@ -124,6 +125,26 @@ export function createAgentCreator({
     } catch {
       return { ok: false, error: 'CWD_NOT_FOUND' }
     }
+    const workspaceRefusal = (): { ok: false; error: string } | null => {
+      if (!requireUnusedWorkspace) return null
+      let target: ReturnType<typeof workspaceIdentity>
+      try { target = workspaceIdentity() } catch { return { ok: false, error: 'CWD_CHANGED' } }
+      if (target.identity !== originalWorkspace.identity) return { ok: false, error: 'CWD_CHANGED' }
+      // Repeated sessions in one folder need one filesystem lookup per synchronous scan. The
+      // scratch bound never limits membership: later distinct paths are still checked, uncached.
+      const seen = new Set<string>()
+      for (const row of registry.rows()) {
+        const path = row.cwd
+        if (!path || seen.has(path)) continue
+        if (seen.size < 1024) seen.add(path)
+        let canonical: string
+        try { canonical = realpathSync(path) } catch { canonical = path }
+        if (canonical === target.directory) return { ok: false, error: 'WORKSPACE_IN_USE' }
+      }
+      return null
+    }
+    const occupied = workspaceRefusal()
+    if (occupied) return occupied
     // The local Desktop already made this workspace. Observe emptiness before any
     // preparation writes, but grant trust only after its dependencies are ready.
     const trustEmptyProject = context?.local === true && !context.folderTrustAttempted && !dsh && dirname(cwd) === projectsRoot()
@@ -220,6 +241,8 @@ export function createAgentCreator({
         if (!current()) return stale()
         if (!context.ok) return context
         dshAccount = context.account
+        const occupied = workspaceRefusal()
+        if (occupied) return occupied
         const materialized = await dshLaunch.materialize({ dsh, workspace: cwd, account: dshAccount, engine, key: label })
         if (!current()) return stale()
         if (!materialized.ok) {
@@ -363,8 +386,14 @@ export function createAgentCreator({
       command = buildEngineCommandArgv(engine, selected)
       return buildEngineLaunchArgv(engine, selected)
     }
+    let dispatchRefusal: ReturnType<typeof workspaceRefusal> = null
     const result = await createAndRegisterPane({
       current, agentId, ...(native ? { nativeToken: native.token } : {}),
+      ...(requireUnusedWorkspace ? { onDispatch: () => {
+        // Synchronous: the backend does not yield between this scan and its final command send.
+        dispatchRefusal = workspaceRefusal()
+        if (dispatchRefusal) throw new Error(dispatchRefusal.error)
+      } } : {}),
       tmuxBackend: createBackend,
       registry,
       engine,
@@ -396,7 +425,7 @@ export function createAgentCreator({
       ...(firstTask ? { firstTask } : {}),
       ...(openclawLocal ? { openclawLocal } : {}),
     })
-    if (!result.ok) return { ok: false, error: result.error, detail: result.detail }
+    if (!result.ok) return result.notStarted && dispatchRefusal ? dispatchRefusal : { ok: false, error: result.error, detail: result.detail }
     const { spawned, pending } = result
     // A terminal is ready the moment its pane is: there is no engine process to wait for, and the
     // shell exiting is the person closing it — so `remain-on-exit` comes off now, and the pane going

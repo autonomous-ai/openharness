@@ -14,6 +14,7 @@
  */
 import type { CoreApi, WifiPort } from './api.js'
 import type { ServiceFrame } from './serviceLinks.js'
+import { parseAgentCreate } from './experimentQueries.js'
 
 export interface WifiLinkDeps {
   core: CoreApi
@@ -48,7 +49,6 @@ export function createWifiLink(deps: WifiLinkDeps) {
     // Asked, not told: the pane's lock says what became of the prompt as it takes it, and the device's reply
     // carries that, as it did when the service ran in the core's process.
     recent: async ({ agentId, n }) => ({ turns: await core.turns.recent(text(agentId), typeof n === 'number' ? n : 3) }),
-    create: async ({ packageId, engine, cwd }) => ({ ...await core.wifi.create(text(packageId), text(engine), text(cwd)) }),
     stepFocus: async ({ direction, currentAgentId }) => {
       const step = await core.wifi.stepFocus(direction === 'previous' ? 'previous' : 'next', typeof currentAgentId === 'string' ? currentAgentId : undefined)
       return typeof step === 'string' ? { step } : { ...step }
@@ -62,7 +62,15 @@ export function createWifiLink(deps: WifiLinkDeps) {
 
   return {
     port,
-    answer(query: string, payload: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>> {
+    answer(query: string, payload: Record<string, unknown>, current?: () => boolean): Record<string, unknown> | Promise<Record<string, unknown>> {
+      if (query === 'create') {
+        if (!current?.()) return { ok: false, error: 'SERVICE_UNAVAILABLE' }
+        const request = parseAgentCreate(payload)
+        // This existing service capability never grants a first task, permission bypass or another identity.
+        if (!request || payload.prompt !== null || payload.name !== null || payload.bypassPermission !== false
+          || request.requireUnusedWorkspace !== true) return { ok: false, error: 'INVALID_REQUEST' }
+        return core.agents.create(request)
+      }
       const ask = Object.hasOwn(queries, query) ? queries[query] : undefined
       return ask ? ask(payload) : { error: 'UNKNOWN_QUERY' }
     },

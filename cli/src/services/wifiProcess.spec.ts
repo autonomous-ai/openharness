@@ -3,7 +3,7 @@
 // door, which the core hands on.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { collectSessionRead, fixtureRead, snapshotRecords, snapshotFixture } from '../testing/sessionSnapshot.js'
-import type { CoreApi, CorePorts, ServiceRequests, WifiPort } from '../core/api.js'
+import type { AgentCreateRequest, CoreApi, CorePorts, ServiceRequests, WifiPort } from '../core/api.js'
 import type { CoreConnection, ServiceProcessOptions } from './process.js'
 import type { WifiDeps } from './wifi.js'
 import { runWifiService } from './wifiProcess.js'
@@ -20,6 +20,9 @@ import { unixSocketPath } from '../lib/localSocket.js'
 import { DeviceFeedPool, type DeviceSessionFeed } from '../lib/autonomous-device/sessionFeed.js'
 import { AutonomousDeviceStore, type StoreAgent } from '../lib/autonomous-device/store.js'
 import { publishDeviceDesk } from './deviceDesk.js'
+
+const createRequest = (dsh = 'package', cwd = '/workspace'): AgentCreateRequest => ({ dsh, cwd, engine: 'claude',
+  prompt: null, name: null, bypassPermission: false, requireUnusedWorkspace: true })
 
 // The real service and the real link, as a process started by the master runs them: stood in for here.
 const real = vi.hoisted(() => ({ started: 0, options: null as ServiceProcessOptions | null }))
@@ -205,7 +208,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     f.answer('machine', { id: 'machine-2' }); f.event({ kind: 'resume' }); await drain()
     f.answer('session_read_registered', snapshotFixture({ machine: { id: 'machine-2', computerId: 'computer-9', name: 'Desk' } })); await collectSessionRead(f.api().agents.readSessions)
     vi.mocked(f.connection.query).mockClear()
-    for (const read of [() => old.wifi.create('package', 'claude', '/workspace'),
+    for (const read of [() => old.agents.create(createRequest()),
       () => old.wifi.stepFocus('next', 'a'), () => old.turns.recent('a', 1),
       () => old.conversations.resolve('a'), () => collectSessionRead(old.agents.readSessions),
       () => adapter.submit!('a', 'old input', 'old-delivery', () => {})]) await expect(read()).rejects.toThrow()
@@ -221,7 +224,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     // Returning to the old identity makes a new component; it cannot revive the retained API.
     f.answer('machine', { id: 'machine-1' }); f.event({ kind: 'resume' }); await drain()
     vi.mocked(f.connection.query).mockClear()
-    await expect(old.wifi.create('package', 'claude', '/workspace')).rejects.toThrow()
+    await expect(old.agents.create(createRequest())).rejects.toThrow()
     expect(f.connection.query).not.toHaveBeenCalled()
     await f.service.stop()
   })
@@ -252,7 +255,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     f.disconnect(); f.connect() // No resume has arrived yet.
     vi.mocked(f.connection.query).mockClear()
     f.answer('create', { ok: true, agentId: 'created' })
-    const creating = old.wifi.create('package', 'claude', '/workspace')
+    const creating = old.agents.create(createRequest())
     const result = identity === 'same' ? expect(creating).resolves.toEqual({ ok: true, agentId: 'created' }) : expect(creating).rejects.toThrow()
     void result.catch(() => {}) // An earlier RED assertion must not leave its expected rejection unhandled.
     expect(f.connection.query).not.toHaveBeenCalled()
@@ -275,7 +278,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     const old = f.api()
     f.answer('create', { ok: true, agentId: 'created' })
     vi.mocked(f.ports[0].resume).mockImplementationOnce(async () => {
-      expect(await old.wifi.create('package', 'claude', '/workspace')).toEqual({ ok: true, agentId: 'created' })
+      expect(await old.agents.create(createRequest())).toEqual({ ok: true, agentId: 'created' })
     })
     f.disconnect(); f.connect(); f.event({ kind: 'resume' })
     await f.options().requests!.wifi_http({}, asker)
@@ -291,7 +294,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     try {
       f.disconnect(); f.connect()
       vi.mocked(f.connection.query).mockClear()
-      const creating = f.api().wifi.create('package', 'claude', '/workspace')
+      const creating = f.api().agents.create(createRequest())
       const refused = expect(creating).rejects.toThrow('WIFI_IDENTITY_UNAVAILABLE')
       if (end === 'timeout') await vi.advanceTimersByTimeAsync(15_000)
       else if (end === 'disconnect') f.disconnect()
@@ -373,7 +376,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
       install: async () => ({ ok: true }), doctor: async () => ({ ok: true, checked: true, lines: [] }),
       workspace: async () => { entered(); await workspace; return '/workspace' },
       create: async (packageId, cwd) => {
-        const answer = await old.wifi.create(packageId, 'claude', cwd)
+        const answer = await old.agents.create(createRequest(packageId, cwd))
         if (!answer.ok) return { state: 'failed', error: answer.error }
         agents.push({ agentId: answer.agentId, machineId: 'machine-1', packageId, workspace: cwd, engine: 'claude', state: 'active', runtime: 'ready' })
         return { state: 'created', agentId: answer.agentId }
@@ -406,7 +409,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     vi.mocked(f.connection.query).mockClear().mockImplementationOnce(() => { sent(); return new Promise(resolve => { release = resolve }) })
     const api = f.api()
     const request = operation === 'recent' ? api.turns.recent('a', 1)
-      : operation === 'create' ? api.wifi.create('package', 'claude', '/workspace')
+      : operation === 'create' ? api.agents.create(createRequest())
       : api.wifi.stepFocus('next', 'a')
     const rejected = expect(request).rejects.toThrow('the original core connection ended')
     await entered
@@ -1102,7 +1105,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     f.answer('recent', {}); expect(await f.api().turns.recent('a', 2)).toEqual([])
     expect(await f.adapter().stop!('a', () => true, new AbortController().signal)).toBe(true)
     f.answer('create', { requestId: 'x', ok: true, agentId: 'made' })
-    expect(await wifi.create('p', 'claude', '/w')).toEqual({ ok: true, agentId: 'made' })
+    expect(await owner.agents.create(createRequest('p', '/w'))).toEqual({ ok: true, agentId: 'made' })
     f.answer('stepFocus', { step: 'no_app' })
     expect(await wifi.stepFocus('next')).toBe('no_app')
     f.answer('stepFocus', { step: 'no_agents' })

@@ -169,7 +169,17 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
         const value = object(answer.value)
         return value.agentId === id && typeof value.sessionId === 'string' && typeof value.engine === 'string' ? value as unknown as AgentView : null
       } },
-      agents: { ...unasked.agents, readSessions: async (scope, receive, signal) => {
+      agents: { ...unasked.agents,
+        create: async request => {
+          if (stopped || component !== owner || !identity) throw new Error('WIFI_IDENTITY_UNAVAILABLE')
+          // Durable preparation may finish while the same machine is reconnecting. Wait only for
+          // identity, not the resume handler that may itself be recovering this preparation.
+          const binding = await identity.promise
+          if (!binding) throw new Error('WIFI_IDENTITY_UNAVAILABLE')
+          const { requestId: _id, ...result } = await ask(owner, 'create', { ...request }, binding)
+          return result as unknown as ForkResult
+        },
+        readSessions: async (scope, receive, signal) => {
         const binding = bindingFor(owner, 'the Wi-Fi device is not connected to the core')
         try {
           let hasWindow = false
@@ -203,15 +213,6 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
       machine: { id: () => owner.machineId, computerId: () => options.machineId, name: () => '' },
       turns: { ...unasked.turns, recent: async (agentId, n) => list<RecentTurn>((await ask(owner, 'recent', { agentId, n })).turns) },
       wifi: {
-        create: async (packageId, engine, cwd) => {
-          if (stopped || component !== owner || !identity) throw new Error('WIFI_IDENTITY_UNAVAILABLE')
-          // Durable preparation may finish while the same machine is reconnecting. Wait only for
-          // identity, not the resume handler that may itself be recovering this preparation.
-          const binding = await identity.promise
-          if (!binding) throw new Error('WIFI_IDENTITY_UNAVAILABLE')
-          const { requestId: _id, ...result } = await ask(owner, 'create', { packageId, engine, cwd }, binding)
-          return result as unknown as ForkResult
-        },
         stepFocus: (direction, currentAgentId) => stepFocus(owner, direction, currentAgentId),
         // Read against the view the request being answered just asked for, as the core read its own sockets.
         scroll: (phase, dy, velocity) => scroll(owner, phase, dy, velocity),

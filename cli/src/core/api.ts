@@ -419,9 +419,6 @@ export interface CoreApi {
   cloud?: CloudCore
   /** The Wi-Fi device's doors into the core (services/wifi.ts): each one call it made when it ran here. */
   wifi: {
-    /** Start an agent for an installed Store harness in `cwd`, with the device's fixed, safe launch
-     *  arguments; refused when another agent works there. */
-    create(packageId: string, engine: string, cwd: string): Promise<ForkResult>
     /** Move the window's focus one agent along the desk, the dial's way; 'no_app' without a window. */
     stepFocus(direction: 'next' | 'previous', currentAgentId?: string): Promise<{ machineId: string; agentId: string } | 'no_agents' | 'no_app'>
     /** A stroke on the device's glass for the window's terminal; false without a window. */
@@ -429,16 +426,18 @@ export interface CoreApi {
   }
 }
 
-/** An agent to create, as an experiment asks for one (the orchestrator's Director and specialists). */
+/** An ID-only session create for components; launch identity stays with the core. */
 export interface AgentCreateRequest {
   engine: AgentEngine
   cwd: string
   /** The harness to create it as, installed here; null for the engine alone. */
   dsh: string | null
   /** The message it opens with, already submitted. */
-  prompt: string
-  name: string
+  prompt: string | null
+  name: string | null
   bypassPermission: boolean
+  /** Current registered workspace absence, rechecked before native dispatch; not a pending reservation. */
+  requireUnusedWorkspace?: true
 }
 
 /** See `CoreApi.daemon`. */
@@ -1594,7 +1593,6 @@ export interface WifiPort {
 
 /** The Wi-Fi device's doors, for a service that is not it: nothing is listed, sent, made or moved. */
 export const WIFI_OFF: CoreApi['wifi'] = {
-  create: async () => ({ ok: false, error: 'UNSUPPORTED' }),
   stepFocus: async () => 'no_app', scroll: () => false,
 }
 

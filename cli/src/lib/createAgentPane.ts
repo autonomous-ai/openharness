@@ -127,7 +127,9 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
 
 export type CreateAgentPaneResult<Ref extends TerminalRuntimeRef = TerminalRuntimeRef> =
   | { ok: true; spawned: TerminalCreateResult<Ref> & { state: 'succeeded' }; pending: RegisteredSession }
-  | { ok: false; error: 'TMUX_UNAVAILABLE' | 'SPAWN_FAILED' | 'REGISTRATION_FAILED' | 'PERSISTENCE_UNCONFIRMED'; detail: string }
+  | { ok: false; error: 'TMUX_UNAVAILABLE' | 'SPAWN_FAILED' | 'REGISTRATION_FAILED' | 'PERSISTENCE_UNCONFIRMED'; detail: string
+      /** The first backend attempt proves no native command was sent. Later retries cannot make this claim. */
+      notStarted?: true }
 
 export async function createAndRegisterPane<Ref extends TerminalRuntimeRef = TerminalRuntimeRef>(
   deps: CreateAgentPaneDeps<Ref>,
@@ -152,7 +154,8 @@ export async function createAndRegisterPane<Ref extends TerminalRuntimeRef = Ter
     if (spawned.state !== 'succeeded') {
       console.warn(`[agent] create ${deps.engine} failed · tmux could not open a pane · ${spawned.reason ?? ''}`)
       const missing = spawned.reason === 'tmux is unavailable'
-      return { ok: false, error: missing ? 'TMUX_UNAVAILABLE' : 'SPAWN_FAILED', detail: spawned.reason }
+      return { ok: false, error: missing ? 'TMUX_UNAVAILABLE' : 'SPAWN_FAILED', detail: spawned.reason,
+        ...(attempt === 1 && spawned.dispatch === 'not_started' ? { notStarted: true as const } : {}) }
     }
     let pending: RegisteredSession | null
     try {

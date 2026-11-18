@@ -197,6 +197,8 @@ export class BackendSocket {
   onCreateAgent: ((input: {
     engine: AgentEngine
     cwd: string
+    /** Refuse if a registered session occupies this workspace at preparation or final native dispatch. */
+    requireUnusedWorkspace?: true
     bypassPermission: boolean
     /** A grid to point this agent at instead of the engine's own login; null when none was chosen. */
     grid: GridLaunchOverride | null

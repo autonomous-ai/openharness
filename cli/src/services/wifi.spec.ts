@@ -1011,7 +1011,8 @@ describe('the Wi-Fi device, with the dials', () => {
     await ports.wifi!.appFocus('machine-1', null, 'w')
     expect(given!.agents()).toEqual([{ agentId: 'a', machineId: 'machine-1', engine: 'claude', packageId: null, workspace: null, state: 'active', runtime: 'unavailable' }])
     await given!.create('autonomous/robot', 'claude', '/w')
-    expect(core.wifi.create).toHaveBeenCalledWith('autonomous/robot', 'claude', '/w')
+    expect(core.agents.create).toHaveBeenCalledExactlyOnceWith({ dsh: 'autonomous/robot', engine: 'claude', cwd: '/w',
+      prompt: null, name: null, bypassPermission: false, requireUnusedWorkspace: true })
     given!.reveal!('op', 'a')
     expect(core.clients.sendWindow).toHaveBeenCalledWith({ target: { kind: 'first' }, frame: { type: 'device_prepare_open', payload: { operationId: 'op', machineId: 'machine-1', agentId: 'a' } } })
   })

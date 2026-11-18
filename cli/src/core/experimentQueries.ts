@@ -24,6 +24,7 @@
  * answered by its own link, for what it uses alone (core/messagesLink.ts).
  */
 import type { BackendSocket } from '../backendSocket.js'
+import { isAbsolute } from 'node:path'
 import { experimentBackendAllowed, type AgentCreateRequest, type CoreApi } from './api.js'
 import { agentDshContext } from '../lib/agentFrame.js'
 import type { ServiceQueryAuthority } from './serviceLinks.js'
@@ -34,6 +35,18 @@ type Core = Pick<CoreApi, 'agents' | 'turns' | 'clients' | 'daemon' | 'account' 
 const QUERIES: ReadonlySet<string> = new Set(['shown', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_checkpoint', 'cloud_publish', 'cloud_ask', 'cloud_unask'])
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 
+/** The existing ID-only Create shape. Unknown launch-identity fields never enter the creator. */
+export function parseAgentCreate(payload: Payload): AgentCreateRequest | null {
+  if (!text(payload.engine) || !text(payload.cwd)
+    || payload.prompt !== null && typeof payload.prompt !== 'string'
+    || payload.name !== null && typeof payload.name !== 'string') return null
+  if ('requireUnusedWorkspace' in payload && (payload.requireUnusedWorkspace !== true
+    || !isAbsolute(payload.cwd as string) || (payload.cwd as string).length > 4096 || /[\x00-\x1f\x7f]/.test(payload.cwd as string))) return null
+  return { engine: payload.engine as AgentCreateRequest['engine'], cwd: payload.cwd as string,
+    dsh: text(payload.dsh) || null, prompt: payload.prompt as string | null, name: payload.name as string | null,
+    bypassPermission: payload.bypassPermission === true,
+    ...(payload.requireUnusedWorkspace === true ? { requireUnusedWorkspace: true } : {}) }
+}
 
 /** The live agents as the apps are shown them (`shown`): each with its name, whether its terminal is there and
  *  what its frame says about its harness. */
@@ -114,15 +127,8 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
     case 'shown':
       return shownAgents(core)
     case 'create': {
-      if (!text(payload.engine) || !text(payload.cwd) || typeof payload.prompt !== 'string' || typeof payload.name !== 'string') return { ok: false, error: 'INVALID_REQUEST' }
-      const request: AgentCreateRequest = {
-        engine: payload.engine as AgentCreateRequest['engine'],
-        cwd: text(payload.cwd),
-        dsh: text(payload.dsh) || null,
-        prompt: payload.prompt,
-        name: payload.name,
-        bypassPermission: payload.bypassPermission === true,
-      }
+      const request = parseAgentCreate(payload)
+      if (!request || typeof payload.prompt !== 'string' || typeof payload.name !== 'string') return { ok: false, error: 'INVALID_REQUEST' }
       return { ...await core.agents.create(request) }
     }
     case 'stop_turn':

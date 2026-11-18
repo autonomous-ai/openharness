@@ -13,6 +13,35 @@ function link() {
 }
 
 describe('the Wi-Fi device in the devices\' process, as the core sees it', () => {
+  const safeCreate = { engine: 'claude', cwd: '/workspace', dsh: 'fixture/package', prompt: null, name: null,
+    bypassPermission: false, requireUnusedWorkspace: true }
+  it('uses the shared ID-only creator with the existing empty launch capability', async () => {
+    const { wifi, core } = link()
+    vi.mocked(core.agents.create).mockResolvedValue({ ok: true, agentId: 'created' })
+    expect(await wifi.answer('create', { ...safeCreate, grid: { account: 'other' }, codexHome: '/other', claudeHome: '/other',
+      agent: 'other', permissionMode: 'approve', launchModel: { model: 'other' } }, () => true)).toEqual({ ok: true, agentId: 'created' })
+    expect(core.agents.create).toHaveBeenCalledExactlyOnceWith(safeCreate)
+  })
+
+  it.each([
+    { packageId: 'legacy', engine: 'claude', cwd: '/workspace' },
+    ...[undefined, false, 'true', 1].map(requireUnusedWorkspace => ({ ...safeCreate, requireUnusedWorkspace })),
+    ...['relative', '/bad\npath', '/' + 'a'.repeat(4096)].map(cwd => ({ ...safeCreate, cwd })),
+    ...[true, undefined].map(bypassPermission => ({ ...safeCreate, bypassPermission })),
+    ...['task', undefined].map(prompt => ({ ...safeCreate, prompt })),
+    ...['name', undefined].map(name => ({ ...safeCreate, name })),
+  ])('refuses malformed or broader private create authority %#', async payload => {
+    const { wifi, core } = link()
+    expect(await wifi.answer('create', payload, () => true)).toEqual({ ok: false, error: 'INVALID_REQUEST' })
+    expect(core.agents.create).not.toHaveBeenCalled()
+  })
+
+  it('requires the current authenticated connection immediately before admitting create', async () => {
+    const { wifi, core } = link()
+    expect(await wifi.answer('create', safeCreate, () => false)).toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE' })
+    expect(await wifi.answer('create', safeCreate)).toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE' })
+    expect(core.agents.create).not.toHaveBeenCalled()
+  })
   it('forwards shared input facts and disconnects without legacy interpretation', () => {
     const { wifi, sent } = link()
     const progress = { agentId: 'a', deliveryId: 'd', when: 'composer' as const, phase: 'written' as const }
@@ -46,7 +75,7 @@ describe('the Wi-Fi device in the devices\' process, as the core sees it', () =>
     expect(core.turns.recent).toHaveBeenLastCalledWith('', 3)
     expect(await wifi.answer('stop', { agentId: 'a' })).toEqual({ error: 'UNKNOWN_QUERY' })
     expect(await wifi.answer('answer', {})).toEqual({ error: 'UNKNOWN_QUERY' })
-    expect(await wifi.answer('create', { packageId: 'p', engine: 'claude', cwd: '/w' })).toEqual({ ok: false, error: 'UNSUPPORTED' })
+    expect(await wifi.answer('create', { packageId: 'p', engine: 'claude', cwd: '/w' }, () => true)).toEqual({ ok: false, error: 'INVALID_REQUEST' })
     expect(await wifi.answer('stepFocus', { direction: 'previous', currentAgentId: 'a' })).toEqual({ step: 'no_agents' })
     expect(core.wifi.stepFocus).toHaveBeenLastCalledWith('previous', 'a')
     vi.mocked(core.wifi.stepFocus).mockResolvedValueOnce({ machineId: 'm', agentId: 'b' })

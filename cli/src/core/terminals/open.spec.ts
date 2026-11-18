@@ -53,7 +53,7 @@ describe('the core terminal launch call', () => {
   })
   it('preserves a failed launch and never announces it', async () => {
     const { deps, open } = setup()
-    vi.mocked(createAndRegisterPane).mockResolvedValueOnce({ ok: false, error: 'SPAWN_FAILED', detail: 'gone' })
+    vi.mocked(createAndRegisterPane).mockResolvedValueOnce({ ok: false, error: 'SPAWN_FAILED', detail: 'gone', notStarted: true })
     expect(await open({ argv: ['/bin/sh'], cwd: '/work' })).toEqual({ ok: false, error: 'SPAWN_FAILED', detail: 'gone' })
     expect(deps.createBackend!.releaseHold).not.toHaveBeenCalled()
     expect(deps.announceSession).not.toHaveBeenCalled()

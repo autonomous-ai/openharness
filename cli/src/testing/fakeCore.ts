@@ -22,6 +22,7 @@ export function fakeCore(over: Overrides = {}): CoreApi {
     },
     machine: { id: vi.fn(() => 'machine-1'), computerId: vi.fn(() => 'computer-1'), name: vi.fn(() => 'This machine'), ...over.machine },
     agents: {
+      create: vi.fn(async () => ({ ok: false as const, error: 'UNSUPPORTED' })),
       all: vi.fn(async () => []),
       live: vi.fn(() => []),
       readSessions: vi.fn(snapshotReader(async () => ({ version: 1 as const, registered: [], cloud: [],
@@ -37,7 +38,6 @@ export function fakeCore(over: Overrides = {}): CoreApi {
       runtimeProfile: vi.fn(() => null),
       setRuntime: vi.fn(),
       fork: vi.fn(async () => ({ ok: false as const, error: 'UNSUPPORTED' })),
-      create: vi.fn(async () => ({ ok: false as const, error: 'UNSUPPORTED' })),
       dsh: vi.fn(() => null),
       activityText: vi.fn(async () => null),
       activity: vi.fn(async () => ({})),
@@ -85,7 +85,6 @@ export function fakeCore(over: Overrides = {}): CoreApi {
     },
     daemon: { command: 'harness', port: 18473, machineId: () => 'machine-1', autonomousEnv: 'prod', ...over.daemon },
     wifi: {
-      create: vi.fn(async () => ({ ok: false as const, error: 'UNSUPPORTED' })),
       stepFocus: vi.fn(async () => 'no_agents' as const), scroll: vi.fn(() => true),
       ...over.wifi,
     },

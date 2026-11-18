@@ -896,7 +896,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The existing open-turn fact, distinct from the app's leased activity state.
   const turnRunning = (sessionId: string): boolean => turnStartedAt.has(sessionId)
   const wifi = wifiDoors({
-    registry,
     socket: () => backendRef ?? null,
     devices: () => ports.devices,
   })
@@ -1745,6 +1744,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       ?? await answerConnectorsQuery(coreApi, service, query, payload)
       ?? await answerSharedMachinesQuery(sharedMachinesAccount, service, query, payload)
       ?? answerDaemonQuery(coreApi, service, query)
+      ?? (service === 'wifi' && query === 'create' ? wifiLink.answer(query, payload, () => authority.current?.() === true) : null)
       ?? await answerExperimentQuery(coreApi, experiments, service, query, payload, undefined, authority)
       ?? await terminalWatch.answer(service, query, payload)
       ?? (service === 'orchestrator' ? orchestratorLink.answer(query, payload) : null)
