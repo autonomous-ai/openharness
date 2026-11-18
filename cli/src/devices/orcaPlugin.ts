@@ -175,14 +175,17 @@ export type OrcaConnect =
   | { connect: 'failed'; error: OrcaConnectError }
 
 const FAILED: OrcaConnect = { connect: 'failed', error: 'failed' }
-/** Line breaks and tabs among them. */
-const CONTROL = /\p{Cc}/u
+/** What a line cannot show as written: control characters (line breaks and tabs among them), format characters (bidi
+ *  overrides and isolates, zero-width ones) that make a line read other than it is, Unicode's line and paragraph
+ *  separators (WebKit breaks a line on them), and a lone surrogate (`Cs` matches only an unpaired one), which is not
+ *  text the app can read. The app holds a grant to the same set (`UNSHOWN` in orca_cli.rs). */
+const UNSHOWN = /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u
 
-/** [text] as one line of an approval, trimmed; undefined when it is no string, holds a control character or is longer
+/** [text] as one line of an approval, trimmed; undefined when it is no string, holds an UNSHOWN character or is longer
  *  than ORCA_GRANT_MAX_CHARS. Characters are code points, as the app counts them (Rust's `chars()`), so a line this
  *  passes the app passes too. */
 function line(text: unknown): string | undefined {
-  if (typeof text !== 'string' || CONTROL.test(text)) return undefined
+  if (typeof text !== 'string' || UNSHOWN.test(text)) return undefined
   const trimmed = text.trim()
   return [...trimmed].length > ORCA_GRANT_MAX_CHARS ? undefined : trimmed
 }
