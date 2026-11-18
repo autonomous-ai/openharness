@@ -786,7 +786,10 @@ theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
   update, in every phase. Asking: the spinner and `Asking Orca…`, muted, under
   it, with no button. Approve: `Orca will let Harness Device:` and Orca's own
   lines, in its words, in a bulleted list that scrolls when it does not fit,
-  then `Cancel` and `Connect` (`Update` for an update). Done: `Orca connected.`
+  its scrollbar drawn at all times (`--muted` on `--control`, 6 wide), then
+  `Cancel` and `Connect` (`Update` for an update). The list is the first Tab
+  stop, so the arrow keys scroll it before Tab reaches a button; it shows the
+  focus boundary as a button does. Done: `Orca connected.`
   and `Done`. Failed: `Orca isn't running.` or `Couldn't connect Orca.` in error
   ink, and `Close`. No button has the focus: a Return typed in another app's
   habit must approve nothing.

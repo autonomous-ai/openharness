@@ -115,6 +115,8 @@ function body(kind: Body, lines: string[]): HTMLElement[] {
     }
     case 'grants': {
       const list = element('ul', 'grants')
+      // A Tab stop, so the arrow keys scroll what does not fit before Tab reaches Cancel or Connect.
+      list.tabIndex = 0
       list.append(...lines.map((line) => element('li', 'grant', line)))
       return [element('p', 'body', 'Orca will let Harness Device:'), list]
     }

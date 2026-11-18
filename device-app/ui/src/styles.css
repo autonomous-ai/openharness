@@ -143,6 +143,22 @@ body {
   padding-left: 18px;
 }
 
+/* macOS draws an overlay scrollbar only while it scrolls: a styled one is drawn whenever the list does not fit, so the
+   lines below are seen to be there before Connect. */
+.grants::-webkit-scrollbar {
+  width: 6px;
+}
+
+.grants::-webkit-scrollbar-track {
+  border-radius: 3px;
+  background: var(--control);
+}
+
+.grants::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: var(--muted);
+}
+
 .grant {
   overflow-wrap: anywhere;
 }
@@ -218,7 +234,8 @@ body {
   background: var(--accent-press);
 }
 
-.button:focus-visible {
+.button:focus-visible,
+.grants:focus-visible {
   outline: 1.5px solid var(--focus);
   outline-offset: 2px;
 }
