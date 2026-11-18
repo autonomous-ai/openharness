@@ -4795,6 +4795,8 @@ void ui_ota_boot_show(const char *version)
     (void)version;
     audio_client_abort();
     display_lock();
+    // As A_VOICE_ABORT does: a clip that already sent voice.end is still being transcribed and routed on the host.
+    audio_client_cancel(s.voice_upload);
     voice_close();
     view(OTA);
     display_unlock();
