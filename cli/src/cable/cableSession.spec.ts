@@ -4630,6 +4630,78 @@ describe('hello capabilities', () => {
     } finally { await session.stop() }
   })
 
+  describe('a question the inbox refuses', () => {
+    const text = `Approve  this\n\nplan? ${'Étape très longue. '.repeat(600)}`   // 12 kB: over the frame cap as it comes
+    const plan = [{ key: 'plan', q: text, options: ['Approve', 'Keep planning'] }]
+    let summary = ''
+    for (const ch of text.split(/[ \t-\r]+/).filter(Boolean).join(' ')) {
+      if (Buffer.byteLength(summary + ch, 'utf8') > 239) break
+      summary += ch
+    }
+    summary = summary.trimEnd()
+    const who = { name: 'Fix login screen', engine: 'claude', machine: '' }
+    const ring = { t: 'question', agentId: 'a1', ...who, id: 'q1', questions: [{ key: '', q: summary, options: [], multi: false }] }
+
+    it('reaches the dial as its small entry, rings once, is read as its summary and stays on the drawer until closed', async () => {
+      const { session, port } = await connect(richHost())
+      try {
+        port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' })
+        await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+        port.sent.length = 0
+        await session.question('a1', 'q1', plan)
+        await session.question('a1', 'q1', plan)   // the core asks again as the devices reconnect: nothing
+        expect(port.sent).toEqual([ring])
+        expect(Buffer.byteLength(JSON.stringify(ring), 'utf8')).toBeLessThan(600)
+        port.sent.length = 0
+        await session.replaceNotifications([])
+        expect(port.sent).toEqual([{ t: 'notif.replace', items: [{ agentId: 'a1', name: who.name, machine: '', summary, question: true }] }])
+        port.say({ t: 'question.read', agentId: 'a1', requestId: 'read-1' })
+        await vi.waitFor(() => expect(port.types()).toContain('question.state'))
+        const state = ofType(port, 'question.state')[0]
+        expect(state).toMatchObject({ ok: true, agentId: 'a1', id: 'q1', requestId: 'read-1', submitted: false,
+          questions: [{ key: '', q: summary, options: [] }] })
+        port.say({ t: 'answer.reviewed', agentId: 'a1', requestId: 'send-1', token: state.token, choices: [1] })
+        await vi.waitFor(() => expect(port.types()).toContain('answer.receipt'))
+        expect(ofType(port, 'answer.receipt')[0]).toMatchObject({ ok: false })
+        port.sent.length = 0
+        await session.questionClose('a1', 'q1')
+        await session.replaceNotifications([])
+        expect(port.sent).toEqual([{ t: 'question.close', agentId: 'a1', id: 'q1' }, { t: 'notif.replace', items: [] }])
+      } finally { await session.stop() }
+    })
+
+    it('reaches a Pro in the same words each time', async () => {
+      const { session, port } = await connect(richHost())
+      try {
+        port.say({ ...PRO_HELLO })
+        await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+        port.sent.length = 0
+        await session.question('a1', 'q1', plan)
+        expect(port.sent).toEqual([ring])
+        await session.turnDone('a1')
+        await session.replaceNotifications([])   // its row leaves the dial
+        port.sent.length = 0
+        await session.question('a1', 'q1', plan)
+        expect(port.sent).toEqual([ring])        // the Pro's mute is a hash of the id and these words
+      } finally { await session.stop() }
+    })
+
+    it('with no agent or no id is not kept and not sent', async () => {
+      const { session, port } = await connect(richHost())
+      const ask = [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }]
+      try {
+        port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' })
+        await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+        port.sent.length = 0
+        await session.question('', 'q1', ask)
+        await session.question('a1', '', ask)
+        await session.question('a1', '', plan)
+        await session.replaceNotifications([])
+        expect(port.sent).toEqual([{ t: 'notif.replace', items: [] }])
+      } finally { await session.stop() }
+    })
+  })
+
   describe('link counters in the dial log', () => {
     const linkLines = (log: DialLog) => readFileSync(log.currentPath, 'utf8').split('\n').filter((l) => l.includes('[daemon] link'))
 
