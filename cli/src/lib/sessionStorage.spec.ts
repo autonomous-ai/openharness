@@ -389,3 +389,17 @@ describe('required session storage process', () => {
     await expect(storage.close()).rejects.toMatchObject({ code: 'cleanup-unconfirmed' })
   })
 })
+
+
+it('prepares the actual legacy backup from its exact raw source rather than the placeholder input', async () => {
+  writeFileSync(join(root, 'registry.json'), JSON.stringify([row()]), { mode: 0o600 })
+  const original = await storage.read({ kind: 'registry' })
+  if (original.state !== 'image') throw new Error('fixture image missing')
+  const prepared = await storage.prepare({ kind: 'legacy-registry' }, null, [], original.proof)
+  expect(prepared.projection).toBe('value')
+  expect(containsKey(prepared)).toBe(false)
+  expect(containsKey(readFileSync(join(root, prepared.temporary), 'utf8'))).toBe(true)
+  if (prepared.projection === 'value') expect(prepared.value).toMatchObject([{ agentId: 'fixture-agent', title: 'fixture' }])
+  await storage.discard(prepared)
+  expect(readdirSync(root).some(name => name.endsWith('.tmp'))).toBe(false)
+})
