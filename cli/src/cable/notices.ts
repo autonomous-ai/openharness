@@ -34,12 +34,27 @@ export interface NoticesDeps {
 export const NOTICES_PENDING_MAX = 20
 /** The bytes of a line the dial keeps whole: its drawer row cuts at 239, and a question of 256 or more reads "This
  *  question needs the desktop" (firmware ui_habitat.c). 120 letters can be 360 bytes. */
-const LINE_MAX_BYTES = 239
+export const NOTICE_LINE_MAX_BYTES = 239
+/** A card's keys find its agent again after a restart (its session, then its panes): a few short ones, so the file
+ *  stays small. */
+export const NOTICE_KEYS_MAX = 4
+export const NOTICE_KEY_MAX_CHARS = 160
 
-/** The line within LINE_MAX_BYTES, cut between letters, with `…` when cut. */
-const fitBytes = (line: string): string => Buffer.byteLength(line) <= LINE_MAX_BYTES
+/** A pending card as `dial-notices.json` keeps it; `at` is the wall-clock ms it was shown. */
+export interface StoredNotice {
+  agentId: string
+  keys: string[]
+  id: string
+  line: string
+  host: string
+  who?: NoticeCaller['who']
+  at: number
+}
+
+/** The line within NOTICE_LINE_MAX_BYTES, cut between letters, with `…` when cut. */
+const fitBytes = (line: string): string => Buffer.byteLength(line) <= NOTICE_LINE_MAX_BYTES
   ? line
-  : `${truncateUtf8(line, LINE_MAX_BYTES - Buffer.byteLength('…'))}…`
+  : `${truncateUtf8(line, NOTICE_LINE_MAX_BYTES - Buffer.byteLength('…'))}…`
 
 interface Pending { id: string; line: string; questions: unknown; host: string; who?: NoticeCaller['who'] }
 
