@@ -1596,6 +1596,17 @@ static void apps_switch_checks(const char *dir) {
     assert(app_picks == 1 && !strcmp(app_target, "ghostty") && s.view == HOME && !s.loading);
     ui_swarms_replace(NULL, 0, ""); scene_take();
     assert(s.view == HOME && !s.loading);
+    // TABS again before that tab lands, by its cell or by the last other app going: on the tab being opened, so Done
+    // does not switch the desktop back to the one the swipe left.
+    for (int emptied = 0; emptied < 2; emptied++) {
+        switch_setup(3); hold_at(233, 230); picker_swipe(300, 200);
+        fake_ms += 1000; tap(fake_ms, 275, 76); assert(s.view == APPS);
+        if (emptied) { ui_apps_replace(picker_rows, 0, "harness"); scene_take(); }
+        else { fake_ms += 1000; tap(fake_ms, 191, 76); }
+        assert(s.view == TABS && ht_tab_carousel_index(&tab_carousel) == 2 && s.loading);
+        fake_ms += 1000; tap(fake_ms, 233, 420);
+        assert(tab_switches == 1 && !strcmp(tab_target, "tab-2"));
+    }
     puts("TABS | APPS switch: the pill on the window's TABS; its APPS lists the other apps and picks only on Done or a tap, TABS goes back; no feature or no app is today's TABS PASS");
 }
 int main(int argc, char **argv) {
