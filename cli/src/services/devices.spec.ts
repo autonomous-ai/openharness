@@ -361,17 +361,17 @@ function fakeOrcaHomes(homes: OrcaHomes = { claude: [], codex: [] }) {
 const processTable = { rows: [] as Array<{ pid: number; ppid: number }>, reads: 0 }
 
 /** VS Code and Harness's extension as the devices see them (services/devices.ts vscodeExtension): the spec's own, absent
- *  unless the spec names the version [installed], each `code` run kept, so no spec runs the developer's VS Code or reads
- *  its ~/.vscode. A run installs this build's 9.9.9. */
-function fakeVscode({ installed = null }: { installed?: string | null } = {}) {
+ *  unless the spec says its [app] is there or names the version [installed], each `code` run kept, so no spec runs the
+ *  developer's VS Code or reads its ~/.vscode. A run installs this build's 9.9.9. */
+function fakeVscode({ installed = null, app = installed !== null }: { installed?: string | null; app?: boolean } = {}) {
   const runs: string[][] = []
   let version = installed
   const deps: VscodeExtensionDeps = {
     platform: 'darwin',
     home: '/nowhere',
     pathVar: '',
-    exists: () => installed !== null,
-    executable: () => installed !== null,
+    exists: () => app,
+    executable: () => app,
     read: () => version === null ? null : JSON.stringify([{ identifier: { id: vscodeExtension.VSCODE_EXTENSION_ID }, version }]),
     run: async (file, args) => { runs.push([file, ...args]); version = '9.9.9'; return { code: 0, timedOut: false } },
     files: () => ({
@@ -7131,31 +7131,68 @@ describe('the dial setup, from the devices\' own process (cable/dialSetup.ts)', 
   })
 })
 
-describe('the VS Code extension brought current, from the devices\' own process (cable/vscodeExtensionUpdate.ts)', () => {
+describe('Harness\'s VS Code extension, set up once a computer from the devices\' own process (cable/vscodeExtensionSetup.ts)', () => {
   /** Lets an install's answer be taken. */
   const settled = () => new Promise((resolve) => setImmediate(resolve))
+  const flags = (vscode: ReturnType<typeof fakeVscode>) => vscode.runs.map(([, flag]) => flag)
+  const tallied = (line: string) => line.startsWith('[device] vscode extension · vscode')
 
-  it.each([
-    ['their own process: one install run', true, [['--install-extension']]],
-    ['the core\'s process: none', false, []],
-  ])('the extension is brought current as the devices start, in their own process alone: %s', async (_, own, runs) => {
-    const vscode = fakeVscode({ installed: '0.0.1' })
-    start({ faults: ['fleet'], listen: own ? fakeListener().listen : undefined, vscodeExtension: vscode.deps })
-    await vi.waitFor(() => expect(vscode.runs.map(([, flag]) => [flag])).toEqual(runs))
+  it('a dial\'s first attach installs it once, records it in dial-setup.json and counts it set up', async () => {
+    const vscode = fakeVscode({ app: true })
+    start({ faults: ['fleet'], listen: fakeListener().listen, vscodeExtension: vscode.deps })
     await settled()
-    expect(logs.filter((line) => line.startsWith('[device] vscode extension · vscode'))).toEqual(own ? ['[device] vscode extension · vscode · updated'] : [])
+    // No dial here yet: the start installs nothing.
+    expect(vscode.runs).toEqual([])
+
+    seen.host.watching!(true)
+
+    await vi.waitFor(() => expect(readSetup(dataDir).vscode).toBe('9.9.9'))
+    expect(flags(vscode)).toEqual(['--install-extension'])
+    expect(logs.filter(tallied)).toEqual(['[device] vscode extension · vscode · set up'])
+    expect(logs).toContainEqual(expect.stringMatching(/^\[device\] vscode extension · day \d{4}-\d\d-\d\d · vscode set up 1 updated 0 failed 0 left removed 0$/))
+    // A replug installs nothing more.
+    seen.host.watching!(false)
+    seen.host.watching!(true)
+    await settled()
+    expect(flags(vscode)).toEqual(['--install-extension'])
   })
 
-  it('with no vscodeExtension given, VS Code\'s own is looked at', () => {
-    const vscode = fakeVscode()
-    const own = vi.spyOn(vscodeExtension, 'vscodeExtensionDeps').mockReturnValue(vscode.deps)
+  it.each([
+    ['their own process: brought current as they start', true, ['--install-extension']],
+    ['the core\'s process: nothing, at a start or an attach', false, []],
+  ])('on at another version, in %s', async (_, own, runs) => {
+    const vscode = fakeVscode({ installed: '0.0.1' })
+    start({ faults: ['fleet'], listen: own ? fakeListener().listen : undefined, vscodeExtension: vscode.deps })
+    await vi.waitFor(() => expect(flags(vscode)).toEqual(runs))
+    seen.host.watching!(true)
+    await settled()
+    expect(flags(vscode)).toEqual(runs)
+    expect(logs.filter(tallied)).toEqual(own ? ['[device] vscode extension · vscode · updated'] : [])
+  })
+
+  // The end-to-end harness points HARNESS_VSCODE_BIN at a file inside each daemon's own root that is not there
+  // (e2e/harness/daemon.ts): a fake dial's attach on a Mac with VS Code in /Applications installs nothing into it.
+  it.each([
+    ['unset: VS Code in /Applications is found, and installed into', undefined, ['--install-extension']],
+    ['a file that is not there: none is found, and nothing runs', '/tmp/e2e/root/vscode/code', []],
+  ])('HARNESS_VSCODE_BIN %s', async (_, bin, runs) => {
+    vi.stubEnv('HARNESS_VSCODE_BIN', bin)
+    const vscode = fakeVscode({ app: true })
+    const inApplications = (path: string) => path.startsWith('/Applications/')
+    const own = vi.spyOn(vscodeExtension, 'vscodeExtensionDeps')
+      .mockImplementation((given) => ({ ...vscode.deps, exists: inApplications, executable: inApplications, bin: given }))
     start({ faults: ['fleet'], listen: fakeListener().listen, vscodeExtension: null })
-    expect(own).toHaveBeenCalledTimes(1)
+    seen.host.watching!(true)
+    await settled()
+    expect(own.mock.calls).toEqual([[bin]])
+    expect(flags(vscode)).toEqual(runs)
+    expect(readSetup(dataDir).vscode).toBe(runs.length ? '9.9.9' : undefined)
   })
 
   it('a throw there costs the dial nothing', async () => {
     const vscode = fakeVscode({ installed: '0.0.1' })
-    start({ faults: ['fleet', 'vscodeExtension'], listen: fakeListener().listen, vscodeExtension: vscode.deps })
+    // Its start pass follows the dial setup's, once Orca's homes are read.
+    await start({ faults: ['fleet', 'vscodeExtension'], listen: fakeListener().listen, vscodeExtension: vscode.deps }).orcaHomes.landed()
     expect(logs).toContain('[devices] vscodeExtension failed · injected fault: vscodeExtension')
     await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
     await settled()

@@ -67,6 +67,7 @@ interface ComputerOptions {
   answers?: Array<{ code: number | null; timedOut: boolean }>
   files?: VscodeExtensionFiles | null
   write?: VscodeExtensionDeps['write']
+  bin?: string
 }
 
 /** A computer as the module sees it. Its temporary folders are real, in the test's scratch, and written and removed by
@@ -104,6 +105,7 @@ function computer(options: ComputerOptions = {}) {
       },
       write: options.write ?? real.write,
       remove: real.remove,
+      bin: options.bin,
     } satisfies VscodeExtensionDeps,
   }
   return machine
@@ -265,6 +267,40 @@ describe('vscodeDisable', () => {
     const c = computer(options)
     expect(await vscodeDisable(c.deps)).toEqual({ vscode: 'on', version: '1.2.3', error })
     expect(c.runs).toHaveLength(runs)
+  })
+})
+
+describe('the end-to-end tests\' VS Code (HARNESS_VSCODE_BIN)', () => {
+  const BIN = '/e2e/root/vscode/code'
+  const HOME_APP = `${HOME}/Applications/Visual Studio Code.app`
+  /** VS Code everywhere it is looked for, on with an older version. */
+  const EVERYWHERE = { ...MAC, [HOME_APP]: '', [`${HOME_APP}/Contents/Resources/app/bin/code`]: '', '/usr/bin/code': '', [RECORD]: record('0.0.1') }
+
+  it('an absolute one is the only VS Code looked for: one in /Applications, ~/Applications or on PATH is not found', async () => {
+    for (const platform of ['darwin', 'linux'] as const) {
+      const c = computer({ platform, disk: EVERYWHERE, bin: BIN })
+      expect(vscodeStatus(c.deps), platform).toEqual({ vscode: 'absent' })
+      expect(await vscodeEnable(c.deps), platform).toEqual({ vscode: 'off', error: 'no-code' })
+      expect(await vscodeDisable(c.deps), platform).toEqual({ vscode: 'absent' })
+      expect(c.runs, platform).toEqual([])
+      expect(c.folders, platform).toEqual([])
+    }
+  })
+
+  it('a test that puts its own there has it run, on a Mac too', async () => {
+    const c = computer({ disk: { [BIN]: '' }, bin: BIN })
+    c.whenRun = () => c.disk.set(RECORD, record('1.2.3'))
+    expect(await vscodeEnable(c.deps)).toEqual({ vscode: 'on', version: '1.2.3' })
+    expect(c.runs.map(([file]) => file)).toEqual([BIN])
+  })
+
+  it('empty or relative, VS Code is looked for where it is installed', () => {
+    for (const bin of ['', 'vscode/code']) expect(vscodeStatus(computer({ disk: MAC, bin }).deps), bin).toEqual({ vscode: 'off' })
+  })
+
+  it('the real dependencies carry it as given', () => {
+    expect(vscodeExtensionDeps(BIN).bin).toBe(BIN)
+    expect(vscodeExtensionDeps().bin).toBeUndefined()
   })
 })
 

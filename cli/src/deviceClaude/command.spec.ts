@@ -12,7 +12,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DIAL_SKILL } from '../devices/dialSkill.js'
-import { readPluginHomes } from '../devices/dialSkillFiles.js'
+import { readPluginHomes, readRemoved, writeRemoved } from '../devices/dialSkillFiles.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
 import { listenLocalSocket, unixSocketPath } from '../lib/localSocket.js'
 import { socketIsPrivate } from '../lib/localTransport.js'
@@ -314,15 +314,17 @@ describe('harness device claude', () => {
     expect(DEVICE_USAGE).not.toMatch(/asked|approve|link|answers/)
   })
 
-  it('the usage says a dial sets the agents up, and that disable is a removal Harness leaves alone', () => {
+  it('the usage says a dial sets the agents and VS Code up, and that disable is a removal Harness leaves alone', () => {
     for (const line of [
-      'Harness device (with a dial plugged in, Claude Code and Codex are set up to ring it; disable takes that away, enable brings it back):',
+      'Harness device (with a dial plugged in, Claude Code and Codex are set up to ring it, and VS Code to follow it; disable takes that away, enable brings it back):',
       'harness device claude status [--json]  whether the dial is on for Claude Code (its harness-device plugin on, and not removed), and its version',
       'harness device claude enable           set Claude Code up again: the plugin and the dial skill (Claude Code 2.1.287 or later), in each Orca account too',
       'harness device claude disable          remove the plugin and the dial skill, in each Orca account too; Harness leaves them removed',
       'harness device codex status [--json]   whether the dial is on for Codex',
       'harness device codex enable            set Codex up again: the dial skill in its homes',
       'harness device codex disable           remove the dial skill Harness wrote; Harness leaves it removed',
+      'harness device vscode enable           set VS Code up again: Harness\'s extension in it',
+      'harness device vscode disable          remove Harness\'s extension; Harness leaves it removed',
     ]) expect(DEVICE_USAGE.split('\n').map((usage) => usage.trim())).toContain(line)
   })
 
@@ -1060,7 +1062,7 @@ describe('harness device orca link and vscode link', () => {
     for (const argv of [[host], [host, 'install'], [host, 'link', 'extra']]) {
       expect(await device(argv), argv.join(' ')).toEqual({ code: 1, out: [], err: [DEVICE_USAGE] })
     }
-    expect(DEVICE_USAGE).not.toContain(`device ${host}`)
+    expect(DEVICE_USAGE).not.toMatch(new RegExp(`${host} link`))
   })
 })
 
@@ -1070,10 +1072,10 @@ describe('harness device vscode', () => {
   /**
    * VS Code on a Mac as the command sees it, all fake: its app in a throwaway home's Applications, its record of
    * extensions in memory, and a `code` that records each run and answers [answer]; a run that exits 0 leaves the record
-   * listing [installed] after an install, and nothing after an uninstall. The real VS Code, /Applications and ~/.vscode
-   * are never looked at.
+   * listing [installed] after an install, and nothing after an uninstall; [onRun] sees each run before it answers. The
+   * real VS Code, /Applications and ~/.vscode are never looked at.
    */
-  function fakeVscode(options: { app?: boolean; cli?: boolean; version?: string; answer?: { code: number | null; timedOut: boolean }; installed?: string } = {}) {
+  function fakeVscode(options: { app?: boolean; cli?: boolean; version?: string; answer?: { code: number | null; timedOut: boolean }; installed?: string; onRun?: () => void } = {}) {
     const home = folder()
     const app = join(home, 'Applications', 'Visual Studio Code.app')
     const record = join(home, '.vscode', 'extensions', 'extensions.json')
@@ -1093,6 +1095,7 @@ describe('harness device vscode', () => {
       read: (path) => disk.get(path) ?? null,
       run: async (_file, args) => {
         runs.push([...args])
+        options.onRun?.()
         const answer = options.answer ?? OK
         if (answer.code === 0) list(args[0] === '--install-extension' ? options.installed : undefined)
         return answer
@@ -1144,8 +1147,45 @@ describe('harness device vscode', () => {
       .toEqual({ code: 1, err: [], out: ['{"vscode":"on","version":"0.6.60","error":"failed"}'] })
   })
 
-  it('the usage names none of them, and an unknown vscode word prints it', async () => {
-    expect(DEVICE_USAGE).not.toMatch(/vscode/i)
+  it('enable clears the removal before it installs; the engines\' removals stay', async () => {
+    const dataDir = folder()
+    writeRemoved(dataDir, 'codex', true)
+    writeRemoved(dataDir, 'vscode', true)
+    const atInstall: unknown[] = []
+    const vscode = fakeVscode({ installed: '0.6.60', onRun: () => atInstall.push(readRemoved(dataDir)) })
+    expect(await device(['vscode', 'enable'], { ...vscode, dataDir })).toEqual({ code: 0, err: [], out: ['{"vscode":"on","version":"0.6.60"}'] })
+    expect(atInstall).toEqual([{ codex: true }])
+    expect(answers(dataDir)).toEqual({ removed: { codex: true } })
+  })
+
+  it('disable marks it removed before it uninstalls, and the mark stays when the uninstall fails', async () => {
+    const dataDir = folder()
+    const atUninstall: unknown[] = []
+    const on = fakeVscode({ version: '0.6.60', onRun: () => atUninstall.push(readRemoved(dataDir)) })
+    expect(await device(['vscode', 'disable'], { ...on, dataDir })).toEqual({ code: 0, err: [], out: ['{"vscode":"off"}'] })
+    expect(atUninstall).toEqual([{ vscode: true }])
+    expect(answers(dataDir)).toEqual({ removed: { vscode: true } })
+
+    const failing = folder()
+    await device(['vscode', 'disable'], { ...fakeVscode({ version: '0.6.60', answer: { code: 1, timedOut: false } }), dataDir: failing })
+    expect(readRemoved(failing)).toEqual({ vscode: true })
+  })
+
+  it('a mark that cannot be saved is said and exits 1: enable then installs nothing, and disable still uninstalls', async () => {
+    const dataDir = folder()
+    readOnly(dataDir)
+    const vscode = fakeVscode({ installed: '0.6.60' })
+    expect(await device(['vscode', 'enable'], { ...vscode, dataDir })).toEqual({ code: 1, out: [], err: ['Could not save the dial setting.'] })
+    expect(vscode.runs).toEqual([])
+    const on = fakeVscode({ version: '0.6.60' })
+    expect(await device(['vscode', 'disable'], { ...on, dataDir })).toEqual({ code: 1, out: ['{"vscode":"off"}'], err: ['Could not save the dial setting.'] })
+    expect(on.runs).toEqual([['--uninstall-extension', VSCODE_EXTENSION_ID]])
+  })
+
+  it('the usage names enable and disable, as claude\'s, and neither status nor link; an unknown vscode word prints it', async () => {
+    expect(DEVICE_USAGE).toMatch(/^ {2}harness device vscode enable {2,}\S/m)
+    expect(DEVICE_USAGE).toMatch(/^ {2}harness device vscode disable {2,}\S/m)
+    expect(DEVICE_USAGE).not.toMatch(/vscode (status|link)/)
     for (const argv of [['vscode', 'install'], ['vscode', 'enable', 'extra'], ['vscode']]) {
       expect(await device(argv), argv.join(' ')).toEqual({ code: 1, out: [], err: [DEVICE_USAGE] })
     }

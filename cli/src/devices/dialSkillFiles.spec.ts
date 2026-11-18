@@ -92,8 +92,10 @@ describe('what disable removed', () => {
     writeFileSync(join(dataDir, DIAL_SKILL_FILE), '{"claude":false,"codex":true}')
     expect(readRemoved(dataDir)).toEqual({})
     // Only true is a removal.
-    writeFileSync(join(dataDir, DIAL_SKILL_FILE), '{"removed":{"claude":"yes","codex":true}}')
+    writeFileSync(join(dataDir, DIAL_SKILL_FILE), '{"removed":{"claude":"yes","codex":true,"vscode":1}}')
     expect(readRemoved(dataDir)).toEqual({ codex: true })
+    writeFileSync(join(dataDir, DIAL_SKILL_FILE), '{"removed":{"vscode":true}}')
+    expect(readRemoved(dataDir)).toEqual({ vscode: true })
     for (const text of ['not json', '[]', '{"removed":[true]}']) {
       writeFileSync(join(dataDir, DIAL_SKILL_FILE), text)
       expect(readRemoved(dataDir), text).toEqual({})
@@ -115,6 +117,19 @@ describe('what disable removed', () => {
     writeRemoved(dataDir, 'codex', false, [])
     expect(file()).toEqual({})
     expect(readdirSync(dataDir)).toEqual([DIAL_SKILL_FILE])
+  })
+
+  it('VS Code\'s removal is saved and cleared beside the engines\', which keep theirs and their folders', () => {
+    const dataDir = aDataDir()
+    const file = (): unknown => JSON.parse(readFileSync(join(dataDir, DIAL_SKILL_FILE), 'utf8'))
+    writeRemoved(dataDir, 'codex', true, ['/a/skills'])
+    expect(writeRemoved(dataDir, 'vscode', true)).toBeUndefined()
+    expect(readRemoved(dataDir)).toEqual({ codex: true, vscode: true })
+    expect(readWritten(dataDir)).toEqual({ claude: [], codex: ['/a/skills'] })
+    writeRemoved(dataDir, 'codex', false, [])
+    expect(file()).toEqual({ removed: { vscode: true } })
+    writeRemoved(dataDir, 'vscode', false)
+    expect(file()).toEqual({})
   })
 })
 
@@ -157,6 +172,21 @@ describe('the devices\' record of a dial\'s setup', () => {
     for (const plugin of ['0.6.59', '0.6.59-dev.3+1a2b', 'v'.repeat(64)]) {
       writeFileSync(join(dataDir, DIAL_SETUP_FILE), JSON.stringify({ dial: true, plugin }))
       expect(readSetup(dataDir).plugin, plugin).toBe(plugin)
+    }
+  })
+
+  it('the VS Code extension\'s version is kept beside the plugin\'s; one that is no version is dropped, and not saved', () => {
+    const dataDir = aDataDir()
+    const homes = { claude: [], codex: [] }
+    expect(writeSetup(dataDir, { dial: true, plugin: '0.6.59', vscode: '0.6.60-dev.g0123', homes, pluginHomes: [] })).toBeUndefined()
+    expect(readSetup(dataDir)).toEqual({ dial: true, plugin: '0.6.59', vscode: '0.6.60-dev.g0123', homes, pluginHomes: [] })
+    const record = readFileSync(join(dataDir, DIAL_SETUP_FILE), 'utf8')
+    // Saved, the extension would read as never set up, and be installed again.
+    expect(writeSetup(dataDir, { dial: true, vscode: '0.6.60 beta', homes, pluginHomes: [] })).toBe('EINVAL')
+    expect(readFileSync(join(dataDir, DIAL_SETUP_FILE), 'utf8')).toBe(record)
+    for (const vscode of [true, 660, '', '../x', '0.6.60 beta', 'v'.repeat(65)]) {
+      writeFileSync(join(dataDir, DIAL_SETUP_FILE), JSON.stringify({ dial: true, vscode }))
+      expect(readSetup(dataDir), String(vscode)).toEqual({ dial: true, homes, pluginHomes: [] })
     }
   })
 
