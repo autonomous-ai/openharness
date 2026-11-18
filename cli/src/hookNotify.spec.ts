@@ -297,6 +297,15 @@ async function collect(response: Record<string, unknown> = {}, credential?: stri
   return { port: address.port, requests, firedAts, headers }
 }
 
+/**
+ * Until the fake daemon has read [count] requests. A post to /api/hook/observed is written, never waited on: the hook
+ * exits once it is in the socket (notify.mjs postObserved), so the daemon can read it after the hook is gone. On a loaded
+ * machine it did, and a case that read `requests` as the hook exited found none.
+ */
+function received(requests: unknown[], count = 1): Promise<void> {
+  return vi.waitFor(() => expect(requests.length).toBeGreaterThanOrEqual(count), { timeout: 10_000 })
+}
+
 describe('hook notify terminal scope', () => {
   it.each(['claude', 'codex'] as const)('ignores a stale %s memory response and only reports ordinary session registration', async engine => {
     const additionalContext = 'Historical coding memory: keep review changes small.'
@@ -629,6 +638,7 @@ describe('hook notify terminal scope', () => {
     if (!address || typeof address === 'string') throw new Error('test server did not bind a TCP port')
 
     await runHook({ port: address.port })
+    await received(requests)
     expect(requests).toEqual([{
       url: '/api/hook/observed',
       body: { engine: 'claude', sessionId: 'session-test', event: 'session-end', callerPid: process.pid, hostHints: expect.any(Object) },
@@ -2117,12 +2127,15 @@ describe('hook notify in a Harness pty host pane (Windows)', () => {
     // Not a pane: the session is told to the devices only, as one outside a pane.
     const bad = await collect()
     await runHook({ port: bad.port, env: { HARNESS_PANE: 'p3:1007' }, input: sessionStart() })
+    await received(bad.requests)
     expect(bad.requests.map((request) => request.url)).toEqual(['/api/hook/observed'])
     const odd = await collect()
     await runHook({ port: odd.port, env: { HARNESS_PANE: 'p2-0.4.21 x:%7' }, input: sessionStart() })
+    await received(odd.requests)
     expect(odd.requests.map((request) => request.url)).toEqual(['/api/hook/observed'])
     const empty = await collect()
     await runHook({ port: empty.port, env: { HARNESS_PANE: '' }, input: sessionStart() })
+    await received(empty.requests)
     expect(empty.requests.map((request) => request.url)).toEqual(['/api/hook/observed'])
   })
 })
@@ -2316,6 +2329,7 @@ describe('hook notify: a session outside a pane', () => {
     const { port, requests } = await collect()
     const transcriptPath = '/home/u/.claude/projects/-work-app/sess-1.jsonl'
     await runHook({ port, input: { hook_event_name: 'Stop', session_id: 'sess-1', cwd: '/work/app', transcript_path: transcriptPath } })
+    await received(requests)
     expect(requests).toEqual([{
       url: '/api/hook/observed',
       body: {
@@ -2331,6 +2345,7 @@ describe('hook notify: a session outside a pane', () => {
   it.runIf(process.platform === 'linux')('a hook run through a shell that stays its parent names the shell\'s parent', async () => {
     const { port, requests } = await collect()
     await runHook({ port, viaShell: true, input: { hook_event_name: 'Stop', session_id: 'sess-1', cwd: '/work/app' } })
+    await received(requests)
     expect(requests).toEqual([{ url: '/api/hook/observed', body: expect.objectContaining({ callerPid: process.pid }) }])
   })
 
@@ -2339,6 +2354,7 @@ describe('hook notify: a session outside a pane', () => {
     'paneless claude Notification %s posts needs-input', async (type) => {
       const { port, requests } = await collect()
       await runHook({ port, input: { hook_event_name: 'Notification', notification_type: type, session_id: 'sess-1', cwd: '/w' } })
+      await received(requests)
       expect(requests.map((request) => [request.url, request.body.event])).toEqual([['/api/hook/observed', 'needs-input']])
     })
 
@@ -2373,6 +2389,7 @@ describe('hook notify: a session outside a pane', () => {
   it.each(['claude', 'codex'] as const)('%s in a tmux pane the person opened posts to /api/hook/observed with TMUX_PANE, and registers nothing', async (engine) => {
     const { port, requests } = await collect()
     await runHook({ port, engine, ...own, env: noHints, codexHome: folder('adapter-hook-own-codex-'), input: typed })
+    await received(requests)
     expect(urls(requests)).toEqual(['/api/hook/observed'])
     expect(requests[0].body).toMatchObject({ engine, sessionId: 'sess-1', event: 'turn-start', callerPid: process.pid })
     expect(requests[0].body.hostHints).toEqual({ TMUX_PANE: '%7' })
@@ -2382,6 +2399,7 @@ describe('hook notify: a session outside a pane', () => {
   it('its Notification is told, as a paneless session\'s is', async () => {
     const { port, requests } = await collect()
     await runHook({ port, ...own, env: noHints, input: waits })
+    await received(requests)
     expect(requests.map((request) => [request.url, request.body.event])).toEqual([['/api/hook/observed', 'needs-input']])
   })
 
@@ -2411,6 +2429,7 @@ describe('hook notify: a session outside a pane', () => {
     const { port, requests } = await collect()
     const set = Object.fromEntries(HINTS.filter((name) => name !== 'TMUX_PANE').map((name, index) => [name, `hint-${index}`]))
     await runHook({ port, ...own, env: set, input: typed })
+    await received(requests)
     expect(HINTS.length).toBeGreaterThan(MAX_HINTS)
     expect(Object.keys(requests[0].body.hostHints as object))
       .toEqual(SENT.filter((name) => !['HC_TERMINAL_ID', ...CMUX_IDS].includes(name)).slice(0, MAX_HINTS))
@@ -2420,6 +2439,7 @@ describe('hook notify: a session outside a pane', () => {
     const { port, requests } = await collect()
     await runHook({ port, env: { ...noHints, __CFBundleIdentifier: 'com.microsoft.VSCode', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' },
       input: { hook_event_name: 'UserPromptSubmit', session_id: 'sess-1', cwd: '/w', prompt: 'hi' } })
+    await received(requests)
     expect(requests[0].body.hostHints).toEqual({ __CFBundleIdentifier: 'com.microsoft.VSCode', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' })
   })
 
@@ -2431,6 +2451,7 @@ describe('hook notify: a session outside a pane', () => {
       ...start, session_id: 'child', source: { subagent: { thread_spawn: { parent_thread_id: 'parent', depth: 1 } } },
     } })
     await runHook({ port, engine: 'codex', codexHome, input: { ...start, session_id: 'parent', source: 'startup' } })
+    await received(requests)
     expect(requests.map((request) => request.body.sessionId)).toEqual(['parent'])
   })
 
@@ -2439,6 +2460,7 @@ describe('hook notify: a session outside a pane', () => {
     const { port, requests } = await collect()
     await runHook({ port, engine: 'cursor', cursorHome, input: { hook_event_name: 'sessionStart', session_id: 'background', is_background_agent: true } })
     await runHook({ port, engine: 'cursor', cursorHome, input: { hook_event_name: 'sessionStart', session_id: 'foreground', is_background_agent: false } })
+    await received(requests)
     expect(requests.map((request) => request.body.sessionId)).toEqual(['foreground'])
   })
 
@@ -2451,6 +2473,7 @@ describe('hook notify: a session outside a pane', () => {
     for (const conversationId of ['child', 'top']) {
       await runHook({ port, engine: 'agy', args: ['--agy-event', 'PreInvocation', '--agy-home', agyHome], input: { conversationId } })
     }
+    await received(requests)
     expect(requests.map((request) => request.body.sessionId)).toEqual(['top'])
   })
 
@@ -2496,6 +2519,7 @@ describe('hook notify: a session outside a pane', () => {
       port, engine, args: engine === 'agy' ? [...args, '--agy-home', agyHome] : [...args],
       input: { ...payload, [sessionField]: 'sess-1' },
     })
+    if (expected !== null) await received(requests)
     expect(requests).toEqual(expected === null ? [] : [{
       url: '/api/hook/observed', body: expect.objectContaining({ engine, sessionId: 'sess-1', ...expected }),
     }])
@@ -2509,6 +2533,7 @@ describe('hook notify: a session outside a pane', () => {
       env: { ...allowed, ORCA_PAIRING_CODE: 'pairing-secret', ORCA_AGENT_SESSION_SPAWN_TOKEN: 'spawn-secret', ORCA_OTHER: 'other-secret' },
       input: { hook_event_name: 'UserPromptSubmit', session_id: 'sess-1', cwd: '/w', prompt: 'prompt-secret' },
     })
+    await received(requests)
     expect(requests.map((request) => request.url)).toEqual(['/api/hook/observed'])
     // Every name a session outside a pane sets, all at once: the hook sends no more than the core takes
     // (core/observedHook.ts), so none is cut.
@@ -2532,6 +2557,7 @@ describe('hook notify: a session outside a pane', () => {
     const hints = Object.fromEntries(panelessHints.map((name) => [name, 'h'.repeat(64)]))
     const path = `/${'d'.repeat(1023)}`
     await runHook({ port, env: hints, input: { hook_event_name: 'Stop', session_id: 's'.repeat(128), cwd: path, transcript_path: path } })
+    await received(requests)
     expect(requests).toHaveLength(1)
     expect(requests[0].body).toMatchObject({ sessionId: 's'.repeat(128), cwd: path, transcriptPath: path, hostHints: hints })
     expect(Buffer.byteLength(JSON.stringify(requests[0].body))).toBeLessThan(4096)
@@ -2545,6 +2571,7 @@ describe('hook notify: a session outside a pane', () => {
       hook_event_name: 'UserPromptSubmit', session_id: 'sess-1', cwd: '/w',
       prompt: '<cross-session-message from="a1">prompt-secret</cross-session-message>',
     } })
+    await received(requests)
     expect(requests).toHaveLength(1)
     expect(requests[0].body).toMatchObject({ event: 'turn-start', relayed: true })
     expect(JSON.stringify(requests[0].body)).not.toMatch(/cross-session|prompt-secret/)
@@ -2557,6 +2584,7 @@ describe('hook notify: a session outside a pane', () => {
     await runHook({ port, input: {
       hook_event_name: 'UserPromptSubmit', session_id: 'sess-1', prompt: '\n \t<cross-session-message from="a1">x',
     } })
+    await received(requests)
     expect(requests).toHaveLength(1)
     expect(requests[0].body).toMatchObject({ event: 'turn-start', relayed: true })
   })
@@ -2570,6 +2598,7 @@ describe('hook notify: a session outside a pane', () => {
   ])('a %s prompt posts no relayed', async (_name, prompt) => {
     const { port, requests } = await collect()
     await runHook({ port, input: { hook_event_name: 'UserPromptSubmit', session_id: 'sess-1', ...prompt } })
+    await received(requests)
     expect(requests).toHaveLength(1)
     expect(requests[0].body.event).toBe('turn-start')
     expect(requests[0].body).not.toHaveProperty('relayed')
@@ -2586,6 +2615,7 @@ describe('hook notify: a session outside a pane', () => {
   ] as const)('only Claude Code\'s UserPromptSubmit says it: %s %s posts no relayed', async (engine, _name, args, payload) => {
     const { port, requests } = await collect()
     await runHook({ port, engine, args: [...args], input: { ...payload, prompt: '<cross-session-message from="a1">x' } })
+    await received(requests)
     expect(requests).toHaveLength(1)
     expect(requests[0].body).not.toHaveProperty('relayed')
   })
@@ -2598,6 +2628,7 @@ describe('hook notify: a session outside a pane', () => {
       hook_event_name: 'UserPromptSubmit', session_id: 's'.repeat(128), cwd: path, transcript_path: path,
       prompt: '<cross-session-message from="a1">x',
     } })
+    await received(requests)
     expect(requests).toHaveLength(1)
     expect(requests[0].body).toMatchObject({
       sessionId: 's'.repeat(128), event: 'turn-start', relayed: true, cwd: path, transcriptPath: path, hostHints: hints,
@@ -2609,6 +2640,7 @@ describe('hook notify: a session outside a pane', () => {
   it('never sends ORCA_APP_VERSION', async () => {
     const { port, requests } = await collect()
     await runHook({ port, env: { ...noHints, ORCA_APP_VERSION: '1.4.256' }, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
+    await received(requests)
     expect(requests).toHaveLength(1)
     expect(requests[0].body.hostHints).toEqual({})
   })
@@ -2616,6 +2648,7 @@ describe('hook notify: a session outside a pane', () => {
   it('a hint value of 200 chars is cut to 64', async () => {
     const { port, requests } = await collect()
     await runHook({ port, env: { TERM_PROGRAM: 'x'.repeat(200) }, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
+    await received(requests)
     expect(requests).toHaveLength(1)
     expect((requests[0].body.hostHints as Record<string, string>).TERM_PROGRAM).toBe('x'.repeat(64))
   })
@@ -2624,6 +2657,7 @@ describe('hook notify: a session outside a pane', () => {
   it('leaves out a cwd the core would refuse, and still posts the event', async () => {
     const { port, requests } = await collect()
     await runHook({ port, input: { hook_event_name: 'Stop', session_id: 'sess-1', cwd: `/${'d'.repeat(1024)}`, transcript_path: '/t.jsonl' } })
+    await received(requests)
     expect(requests).toHaveLength(1)
     expect(requests[0].body).not.toHaveProperty('cwd')
     expect(requests[0].body.transcriptPath).toBe('/t.jsonl')
@@ -2633,6 +2667,7 @@ describe('hook notify: a session outside a pane', () => {
   it('leaves out a hint value with a control character, and still posts the event', async () => {
     const { port, requests } = await collect()
     await runHook({ port, env: { ...noHints, TERM_PROGRAM: 'ghost\u0007ty', ZELLIJ: '0' }, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
+    await received(requests)
     expect(requests).toHaveLength(1)
     expect(requests[0].body.hostHints).toEqual({ ZELLIJ: '0' })
   })
@@ -2647,6 +2682,7 @@ describe('hook notify: a session outside a pane', () => {
       env: { ...noHints, HERDR_PANE_ID: 'w1:p1', HERDR_SESSION: 'side', HERDR_SOCKET_PATH: '/h/.config/herdr/sessions/side/herdr.sock' },
       input: { hook_event_name: 'Stop', session_id: 'sess-1' },
     })
+    await received(requests)
     expect(requests).toHaveLength(1)
     expect(requests[0].body.hostHints).toEqual({})
     expect(JSON.stringify(requests[0].body)).not.toMatch(/side/)
@@ -2658,6 +2694,7 @@ describe('hook notify: a session outside a pane', () => {
     const { port, requests } = await collect()
     const set = Object.fromEntries(HINTS.filter((name) => name !== 'TMUX_PANE').map((name, index) => [name, `hint-${index}`]))
     await runHook({ port, env: { ...set, HERDR_SESSION: 'side' }, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
+    await received(requests)
     expect(Object.keys(requests[0].body.hostHints as object))
       .toEqual(SENT.filter((name) => !['TMUX_PANE', 'HERDR_PANE_ID', 'HC_TERMINAL_ID', ...CMUX_IDS].includes(name)).slice(0, MAX_HINTS))
   })
@@ -2676,6 +2713,7 @@ describe('hook notify: a session outside a pane', () => {
         port, env: { ...noHints, ...herdr, HC_TERMINAL_ID: 't7', TERM_PROGRAM: 'ghostty' },
         input: { hook_event_name: 'Stop', session_id: 'sess-1' },
       })
+      await received(requests)
       expect(requests[0].body.hostHints, JSON.stringify(herdr)).toEqual(sent)
     }
   })
@@ -2689,6 +2727,7 @@ describe('hook notify: a session outside a pane', () => {
         port, env: { ...noHints, ...session, HC_TERMINAL_ID: 't7', TERM_PROGRAM: 'ghostty' },
         input: { hook_event_name: 'Stop', session_id: 'sess-1' },
       })
+      await received(requests)
       expect(requests[0].body.hostHints).toEqual({ TERM_PROGRAM: 'ghostty', HC_TERMINAL_ID: 't7' })
     }
   })
@@ -2702,6 +2741,7 @@ describe('hook notify: a session outside a pane', () => {
       env: { ...noHints, HC_TERMINAL_ID: 't1', HC_SESSION: 'side', HC_SOCKET: '/h/.local/state/herdr-core/side/side.sock' },
       input: { hook_event_name: 'Stop', session_id: 'sess-1' },
     })
+    await received(requests)
     expect(requests).toHaveLength(1)
     expect(requests[0].body.hostHints).toEqual({})
     expect(JSON.stringify(requests[0].body)).not.toMatch(/side/)
@@ -2713,6 +2753,7 @@ describe('hook notify: a session outside a pane', () => {
     const { port, requests } = await collect()
     const set = Object.fromEntries(HINTS.filter((name) => name !== 'TMUX_PANE' && name !== 'HERDR_PANE_ID').map((name, index) => [name, `hint-${index}`]))
     await runHook({ port, env: { ...set, HC_SESSION: 'side' }, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
+    await received(requests)
     expect(Object.keys(requests[0].body.hostHints as object))
       .toEqual(SENT.filter((name) => !['TMUX_PANE', 'HERDR_PANE_ID', 'HC_TERMINAL_ID', ...CMUX_IDS].includes(name)).slice(0, MAX_HINTS))
   })
@@ -2721,6 +2762,7 @@ describe('hook notify: a session outside a pane', () => {
     const { port, requests } = await collect()
     const set = Object.fromEntries(HINTS.filter((name) => name !== 'TMUX_PANE' && name !== 'HERDR_PANE_ID').map((name, index) => [name, `hint-${index}`]))
     await runHook({ port, env: set, input: { hook_event_name: 'Stop', session_id: 'sess-1' } })
+    await received(requests)
     expect(Object.keys(requests[0].body.hostHints as object))
       .toEqual(HINTS.filter((name) => !['TMUX_PANE', 'HERDR_PANE_ID', ...MAC_ONLY].includes(name)).slice(0, MAX_HINTS))
   })
@@ -2737,6 +2779,7 @@ describe('hook notify: a session outside a pane', () => {
       },
       input: { hook_event_name: 'Stop', session_id: 'sess-1' },
     })
+    await received(requests)
     expect(requests[0].body.hostHints).toEqual({ TERM_PROGRAM: 'ghostty', CMUX_SURFACE_ID: SURFACE, CMUX_WORKSPACE_ID: WORKSPACE })
     expect(JSON.stringify(requests[0].body)).not.toMatch(/TAB_ID|PANEL_ID|SOCKET|secret/)
   })
@@ -2757,6 +2800,7 @@ describe('hook notify: a session outside a pane', () => {
         port, env: { ...noHints, TERM_PROGRAM: 'ghostty', CMUX_SURFACE_ID: SURFACE, CMUX_WORKSPACE_ID: WORKSPACE, ...host },
         input: { hook_event_name: 'Stop', session_id: 'sess-1' },
       })
+      await received(requests)
       expect(requests[0].body.hostHints, JSON.stringify(host)).toEqual(sent)
     }
   })
@@ -2766,6 +2810,7 @@ describe('hook notify: a session outside a pane', () => {
     const { port, requests } = await collect()
     const long = `/${'日'.repeat(1000)}`
     await runHook({ port, env: noHints, input: { hook_event_name: 'Stop', session_id: 'sess-1', cwd: long, transcript_path: long } })
+    await received(requests)
     expect(requests).toHaveLength(1)
     expect(requests[0].body).not.toHaveProperty('transcriptPath')
     expect(requests[0].body.cwd).toBe(long)
@@ -2776,6 +2821,7 @@ describe('hook notify: a session outside a pane', () => {
     const long = `/${'日'.repeat(1000)}`
     const wide = Object.fromEntries(panelessHints.map((name) => [name, '日'.repeat(64)]))
     await runHook({ port, env: wide, input: { hook_event_name: 'Stop', session_id: 'sess-1', cwd: long, transcript_path: long } })
+    await received(requests)
     expect(requests).toHaveLength(1)
     expect(requests[0].body).not.toHaveProperty('transcriptPath')
     expect(requests[0].body).not.toHaveProperty('cwd')
@@ -2786,6 +2832,7 @@ describe('hook notify: a session outside a pane', () => {
   const posted = async (input: Record<string, unknown>, env: Record<string, string> = noHints, engine?: 'codex'): Promise<Record<string, unknown>> => {
     const { port, requests } = await collect()
     await runHook({ port, env, engine, input: { session_id: 'sess-1', cwd: '/w', ...input } })
+    await received(requests)
     expect(requests.map((request) => request.url)).toEqual(['/api/hook/observed'])
     return requests[0].body
   }
@@ -2905,6 +2952,7 @@ describe('hook notify: a session outside a pane', () => {
     const env = { PATH: `${bin}:${process.env.PATH ?? ''}` }
     const live = await collect()
     await runHook({ port: live.port, dataDir: join(dir, 'live'), claudeProjectsDir, env, input })
+    await received(live.requests)
     expect(live.requests.map((request) => request.url)).toEqual(['/api/hook/observed'])
     // The daemon down (nothing on port 9): no registry row is written behind it.
     await runHook({ port: 9, dataDir: join(dir, 'down'), claudeProjectsDir, env, input })
@@ -3137,10 +3185,11 @@ describe('hook notify: waits, turn ends and subagents from a pane', () => {
   // Outside a pane the devices hear Codex's own turn end and interrupt as Claude Code's Stop, and none of its words.
   it('outside a pane, a codex Stop tells the devices turn-stop, and its Interrupt turn-aborted', async () => {
     const { port, requests } = await collect()
-    for (const event of ['Stop', 'Interrupt']) {
+    for (const [index, event] of ['Stop', 'Interrupt'].entries()) {
       expect(await runHook({ port, engine: 'codex', input: {   // no tmuxPane
         hook_event_name: event, session_id: 'sess-1', turn_id: 't1', cwd: '/w', last_assistant_message: 'text-secret',
       } })).toBe('')
+      await received(requests, index + 1)
     }
     expect(requests.map((request) => [request.url, request.body.engine, request.body.sessionId, request.body.event])).toEqual([
       ['/api/hook/observed', 'codex', 'sess-1', 'turn-stop'], ['/api/hook/observed', 'codex', 'sess-1', 'turn-aborted'],
@@ -3151,8 +3200,9 @@ describe('hook notify: waits, turn ends and subagents from a pane', () => {
   // A lead outside a pane stays working while its subagents run: each event carries the lead's session_id.
   it('outside a pane, claude SubagentStart and a typed SubagentStop tell the devices, with the lead\'s session and no title', async () => {
     const { port, requests } = await collect()
-    for (const event of ['SubagentStart', 'SubagentStop'] as const) {
+    for (const [index, event] of (['SubagentStart', 'SubagentStop'] as const).entries()) {
       expect(await runHook({ port, input: subagent(event, { cwd: '/w', session_title: 'Tho', last_assistant_message: 'text-secret' }) })).toBe('')
+      await received(requests, index + 1)
     }
     expect(requests.map((request) => [request.url, request.body.sessionId, request.body.event])).toEqual([
       ['/api/hook/observed', 'lead-1', 'subagent-start'], ['/api/hook/observed', 'lead-1', 'subagent-stop'],
@@ -3185,6 +3235,7 @@ describe('hook notify: waits, turn ends and subagents from a pane', () => {
   it('outside a pane, claude Stop still tells the devices turn-stop', async () => {
     const { port, requests } = await collect()
     await runHook({ port, input: { hook_event_name: 'Stop', session_id: 'sess-1', cwd: '/w' } })
+    await received(requests)
     expect(requests.map((request) => [request.url, request.body.event])).toEqual([['/api/hook/observed', 'turn-stop']])
   })
 
