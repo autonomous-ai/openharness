@@ -478,7 +478,8 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
     expect(a.shellPid).not.toBe(a.pid)
     // Cursor in front shows Cursor's ring, whose agents alone the dial is sent. With one agent each the two apps tie, and
     // the dial keeps the first it showed, by which agent it knew of first or a draw (appFilter.ts): Ghostty's, on Linux
-    // CI, held back A's frames.
+    // CI, held back A's frames. Its ring is looked for from the dial's first frame: one shown already stays, and the
+    // front's settle on it sends none.
     const front = watch(d)
     front(CURSOR)
     await ring(dial, 'cursor', 0)
