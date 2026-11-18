@@ -43,12 +43,13 @@ export function daemonDataDir(env = process.env) {
   return env.ADAPTER_DATA_DIR || join(harnessRoots(env).data, 'cli', 'data')
 }
 
-/** XDG_RUNTIME_DIR when it is this account's alone: an absolute path to a folder of this uid's with mode 0700. Null otherwise. */
+/** XDG_RUNTIME_DIR when it is this account's alone: an absolute path to a real folder, not a link, of this uid's with mode exactly
+ *  0700. Null otherwise. */
 function privateRuntimeDir(env) {
   const dir = env.XDG_RUNTIME_DIR
   if (!dir || !isAbsolute(dir)) return null
-  const stat = statSync(dir, { throwIfNoEntry: false })
-  return stat?.isDirectory() && (stat.mode & 0o777) === 0o700 && stat.uid === process.getuid?.() ? dir : null
+  const stat = lstatSync(dir, { throwIfNoEntry: false })
+  return stat?.isDirectory() && (stat.mode & 0o7777) === 0o700 && stat.uid === process.getuid?.() ? dir : null
 }
 
 /**
