@@ -6152,7 +6152,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
       return { ...await again(first), restored }
     }
 
-    // harness-pm's required test: it rang before the restart, so it comes back silent and opens to its line.
+    // It rang before the restart, so it comes back silent and opens to its line.
     it('a restart puts the row of a caller no list holds back in the drawer, with no question and no alert, and holds the question its row opens to', async () => {
       const { port, restored } = await restartWithCaller()
       seen.host.watching!(true)

@@ -3432,7 +3432,7 @@ export class CableSession {
     await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions })
   }
   /** A question the dial reads when its row is opened and is never asked: a notice restored after the devices process
-   *  restarted rang before it (cable/notices.ts, harness-pm 2026-11-18). */
+   *  restarted rang before it (cable/notices.ts). */
   async hold(agentId: string, id: string, questions: unknown): Promise<void> {
     this.questionInbox.set(agentId, id, questions, true)
   }

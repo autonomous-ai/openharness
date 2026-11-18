@@ -288,7 +288,7 @@ describe('harness device notify', () => {
     for (const pid of devicesPids(d)) process.kill(pid, 'SIGKILL')
     await dial.welcomeAfter(back, 60_000)
     expect(await drawerRow(dial, engine.id, back)).toMatchObject({ agentId: engine.id, question: true, summary: LINE, name: 'fix-login' })
-    // harness-pm's required test: the row opens to its line, never "No readable question. Check the terminal."
+    // The row opens to its line, never "No readable question. Check the terminal."
     const state = await opened(dial, engine.id)
     expect(state).toMatchObject({ ok: true, id: question.id, questions: [{ q: LINE }] })
     expect(state.error).toBeUndefined()

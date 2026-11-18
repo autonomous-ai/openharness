@@ -95,8 +95,7 @@ const noticeQuestions = (line: string, host: string): unknown =>
 
 interface Pending {
   id: string; line: string; questions: unknown; host: string; who?: NoticeCaller['who']; keys: readonly string[]; at: number
-  /** Back from the file: a drawer row whose question is held, never asked, for it rang before the restart
-   *  (harness-pm, 2026-11-18). */
+  /** Back from the file: a drawer row whose question is held, never asked, for it rang before the restart. */
   restored?: true
   /** Restored, and no row until its agent is listed: a card no list holds (`who`) never waits. */
   waiting?: true
@@ -163,15 +162,15 @@ export class Notices {
     if (this.send(agentId)) this.deps.redraw()
   }
 
-  /** A dial attached: each pending card is asked again, under its id. No redraw: the attach's greeting replaces the
-   *  drawer itself. */
+  /** A dial attached: each pending card is sent again, under its id, a live one asked and a restored one held. No
+   *  redraw: the attach's greeting replaces the drawer itself. */
   attached(): void {
     for (const agentId of this.cards.keys()) this.send(agentId)
   }
 
   /** One kind of list as it is now: the core's Harness agents (`harness`), or the outside sources'. Each restored card of
    *  that kind still waiting looks for its agent there: by its id; else by its session, for an agent that names one; else
-   *  by a pane, for one that names none, so a card never moves to another session in the same pane (harness-pm). Found in
+   *  by a pane, for one that names none, so a card never moves to another session in the same pane. Found in
    *  a turn, most likely one after its notice, or with a card of its own already, it ends. Found otherwise, it takes the
    *  agent's id in its place, and its row is shown, by one drawer replace however many were found. A card found is not
    *  looked for again; with none waiting, the list is not read. */
