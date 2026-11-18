@@ -117,3 +117,26 @@ describe('Wi-Fi presentation outside core', () => {
     } finally { rmSync(root, { recursive: true, force: true }) }
   })
 })
+
+
+it('uses fresh native workspace resolution for aliases, missing paths and every repeated row', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'wifi-native-path-')))
+  const first = join(root, 'first é'), second = join(root, 'second 中'), alias = join(root, 'alias')
+  mkdirSync(first); mkdirSync(second); symlinkSync(first, alias)
+  const native = vi.spyOn(realpathSync, 'native')
+  try {
+    const registered = ['one', 'two', 'empty', 'null'].map(id => snapshotRow(id))
+    registered[0].session.cwd = registered[1].session.cwd = alias
+    registered[2].session.cwd = ''; registered[3].session.cwd = null
+    const read = () => readWifiView(snapshotReader(() => snapshotFixture({ registered })), 'machine-1')
+    const a = await read()
+    expect(a.store.map(row => row.workspace)).toEqual([first, first, null, null])
+    expect(a.agents.map(row => row.workspace)).toEqual([first, first, '', null])
+    expect(native.mock.calls.map(args => args[0])).toEqual([alias, alias])
+    rmSync(alias); symlinkSync(second, alias)
+    expect((await read()).store.map(row => row.workspace)).toEqual([second, second, null, null])
+    rmSync(alias)
+    expect((await read()).store.map(row => row.workspace)).toEqual([alias, alias, null, null])
+    expect(native.mock.calls.map(args => args[0])).toEqual(Array(6).fill(alias))
+  } finally { native.mockRestore(); rmSync(root, { recursive: true, force: true }) }
+})

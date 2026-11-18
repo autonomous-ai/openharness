@@ -137,3 +137,27 @@ it('does not let an old snapshot callback remove a same-ID successor or leak a l
   await socket.unregisterLocalClient('local:window')
   expect(socket.questionsObserved('anything')).toBe(false)
 })
+
+
+it.each(['false', 'throw'] as const)('closes the actual question observer after synchronous write success followed by %s', async mode => {
+  const socket = new BackendSocket('machine'), frames: Frame[] = [], close = vi.fn()
+  socket.questionSnapshot = function* () { yield { type: 'commander_question', agentId: 'a' }; yield { type: 'commander_question', agentId: 'b' } }
+  socket.registerLocalClient('local:contradictory', {
+    sendFrame: (frame: Frame, _quota?: LocalSendQuota, settled?: (sent: boolean) => void) => {
+      frames.push(frame); settled?.(true)
+      if (frame.type === 'questions_row') {
+        if (mode === 'throw') throw new Error('PRIVATE')
+        return false
+      }
+      return true
+    }, sendBinary: () => true, close,
+  }, { tool: true, questionProtocol: 1 })
+  try {
+    await dispatchDown(socket, { type: 'questions_observe', payload: { requestId: 'read', scope: 'all' } }, 'local:contradictory')
+    await new Promise<void>(resolve => { setImmediate(resolve) })
+    expect(close).toHaveBeenCalledExactlyOnceWith(1013, 'QUESTION_OBSERVATION_UNAVAILABLE')
+    expect(frames.filter(frame => frame.type === 'questions_row')).toHaveLength(1)
+    expect(frames.some(frame => frame.type === 'questions_end')).toBe(false)
+    expect(socket.questionsObserved('a')).toBe(false)
+  } finally { await socket.unregisterLocalClient('local:contradictory') }
+})

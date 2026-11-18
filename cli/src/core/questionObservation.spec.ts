@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { questionFrameBytes, QUESTION_OBSERVATION_BYTES, replayLegacyQuestions, startQuestionSnapshot } from './questionObservation.js'
 
-afterEach(() => vi.useRealTimers())
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
 describe('question observation bytes', () => {
   it('agrees with JSON at every byte boundary, including omitted fields, holes and inherited properties', () => {
@@ -243,5 +243,124 @@ describe('question snapshot', () => {
     await vi.runOnlyPendingTimersAsync()
     expect(sent).toHaveLength(2)
     expect(sent.some(frame => (frame as { type: string }).type === 'questions_end')).toBe(false)
+  })
+})
+
+
+describe('bounded settled read slices', () => {
+  const controlTurn = () => new Promise<void>(resolve => { setImmediate(resolve) })
+  const questions = (count: number) => Array.from({ length: count }, (_, i) => ({ type: 'commander_question', agentId: `a-${i}` }))
+
+  it('drains 32 synchronous rows before yielding to controls without recursive physical sends', async () => {
+    vi.spyOn(performance, 'now').mockReturnValue(0)
+    const sent: Record<string, unknown>[] = [], close = vi.fn()
+    let depth = 0, peak = 0
+    const snapshot = startQuestionSnapshot({ generation: 'g', rows: questions(4097)[Symbol.iterator](), current: () => true, close,
+      send: (frame, done) => { depth++; peak = Math.max(peak, depth); sent.push(frame); done(true); depth--; return true } })
+    try {
+      expect(sent).toHaveLength(1)
+      await controlTurn()
+      expect(sent.filter(frame => frame.type === 'questions_row')).toHaveLength(32)
+      expect(sent.some(frame => frame.type === 'questions_end')).toBe(false)
+      expect(peak).toBe(1)
+      snapshot.cancel()
+      await controlTurn()
+      expect(sent).toHaveLength(33)
+      expect(close).not.toHaveBeenCalled()
+    } finally { snapshot.cancel() }
+  })
+
+  it.each([false, true])('yields at 2 ms even below the row count bound (filtered=%s)', async filtered => {
+    let clock = 0, reads = 0
+    vi.spyOn(performance, 'now').mockImplementation(() => clock)
+    const sent: Record<string, unknown>[] = []
+    const rows = { next: () => { clock++; reads++; return { done: false as const, value: { agentId: 'a' } } } }
+    const snapshot = startQuestionSnapshot({ generation: 'g', rows, current: () => true, close: vi.fn(), accepts: () => !filtered,
+      send: (frame, done) => { sent.push(frame); done(true); return true } })
+    try {
+      await controlTurn()
+      expect(reads).toBe(2)
+      expect(sent).toHaveLength(filtered ? 1 : 3)
+    } finally { snapshot.cancel() }
+  })
+
+  it('counts filtered membership toward the slice and returns its iterator once on cancellation', async () => {
+    vi.spyOn(performance, 'now').mockReturnValue(0)
+    const returned = vi.fn(() => ({ done: true as const, value: undefined })), next = vi.fn(() => ({ done: false as const, value: {} }))
+    const snapshot = startQuestionSnapshot({ generation: 'g', rows: { next, return: returned }, accepts: () => false,
+      current: () => true, close: vi.fn(), send: (_frame, done) => { done(true); return true } })
+    try {
+      await controlTurn()
+      expect(next).toHaveBeenCalledTimes(32)
+      snapshot.cancel(); snapshot.cancel()
+      await controlTurn()
+      expect(next).toHaveBeenCalledTimes(32)
+      expect(returned).toHaveBeenCalledOnce()
+    } finally { snapshot.cancel() }
+  })
+
+  it('stops a synchronous slice at held physical credit and ignores repeated old callbacks', async () => {
+    vi.spyOn(performance, 'now').mockReturnValue(0)
+    const sent: Record<string, unknown>[] = [], close = vi.fn()
+    let held!: (ok: boolean) => void
+    const snapshot = startQuestionSnapshot({ generation: 'g', rows: questions(4)[Symbol.iterator](), current: () => true, close,
+      send: (frame, done) => {
+        sent.push(frame)
+        if (sent.length === 3) held = done
+        else done(true)
+        return true
+      } })
+    try {
+      await controlTurn()
+      expect(sent).toHaveLength(3)
+      await controlTurn()
+      expect(sent).toHaveLength(3)
+      held(true); held(false); held(true)
+      expect(sent).toHaveLength(3)
+      await controlTurn()
+      expect(sent.map(frame => frame.type)).toEqual(['questions_begin', ...Array(4).fill('questions_row'), 'questions_end'])
+      expect(close).not.toHaveBeenCalled()
+    } finally { snapshot.cancel() }
+  })
+
+  it('lets the original deadline stop synchronous slices and returns membership exactly once', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    vi.spyOn(performance, 'now').mockReturnValue(0)
+    const sent: Record<string, unknown>[] = [], close = vi.fn()
+    const returned = vi.fn(() => ({ done: true as const, value: undefined }))
+    const rows = { next: () => ({ done: false as const, value: {} }), return: returned }
+    const snapshot = startQuestionSnapshot({ generation: 'g', rows, current: () => true, close,
+      send: (frame, done) => { sent.push(frame); done(true); return true } })
+    try {
+      await controlTurn()
+      expect(sent).toHaveLength(33)
+      vi.advanceTimersByTime(20_000)
+      await controlTurn()
+      expect(close).toHaveBeenCalledExactlyOnceWith('QUESTION_OBSERVATION_TIMEOUT')
+      expect(returned).toHaveBeenCalledOnce()
+      expect(sent).toHaveLength(33)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { snapshot.cancel() }
+  })
+
+  it.each(['cancel', 'replace'] as const)('rechecks %s after a synchronous completion before reading another row', async mode => {
+    vi.spyOn(performance, 'now').mockReturnValue(0)
+    let current = true
+    const sent: Record<string, unknown>[] = [], close = vi.fn()
+    const snapshot = startQuestionSnapshot({ generation: 'g', rows: questions(5)[Symbol.iterator](), current: () => current, close,
+      send: (frame, done) => {
+        sent.push(frame); done(true)
+        if (sent.length === 3) {
+          if (mode === 'cancel') snapshot.cancel()
+          else current = false
+        }
+        return true
+      } })
+    try {
+      await controlTurn(); await controlTurn()
+      expect(sent).toHaveLength(3)
+      expect(sent.some(frame => frame.type === 'questions_end')).toBe(false)
+      expect(close).not.toHaveBeenCalled()
+    } finally { snapshot.cancel() }
   })
 })

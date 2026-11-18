@@ -23,7 +23,7 @@ function fixture() {
   const advance = async () => { callbacks.shift()!(true); await vi.advanceTimersByTimeAsync(1) }
   return { deps, members, cloud, identity, events, callbacks, start, advance, facts }
 }
-afterEach(() => vi.useRealTimers())
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
 describe('complete membership and current per-row facts', () => {
   it.each([
@@ -170,4 +170,66 @@ describe('complete membership and current per-row facts', () => {
     await expect(t.start()).rejects.toThrow('SESSION_READ_UNAVAILABLE')
     expect(t.deps.log).toHaveBeenCalledOnce()
   }, 500)
+})
+
+
+describe('bounded settled read caller authority', () => {
+  const controlTurn = () => new Promise<void>(resolve => { setImmediate(resolve) })
+
+  it('reads current facts for each row in a synchronous slice and commits only after end returns', async () => {
+    vi.spyOn(performance, 'now').mockReturnValue(0)
+    const t = fixture(), events: Event[] = []
+    let inSend = false
+    const pending = readSessions(t.deps, (event, settled) => {
+      expect(inSend).toBe(false); inSend = true
+      events.push(event); settled(true)
+      if (event.type === 'row' && event.payload.index === 0) {
+        t.members.delete('b'); t.members.set('c', { ...row('c'), sessionId: 'replacement', defaultName: 'Current' })
+        t.members.set('late', row('late'))
+      }
+      inSend = false
+      return true
+    })
+    try {
+      await controlTurn()
+      expect(events.map(event => event.type)).toEqual(['begin', 'row', 'row', 'row', 'end'])
+      await pending
+      expect(legacy(events)[2]).toMatchObject({ payload: { value: { source: 'registered', gone: 'b' } } })
+      expect(legacy(events)[3]).toMatchObject({ payload: { value: { row: { session: { sessionId: 'replacement' }, facts: { displayName: 'Current' } } } } })
+      expect(t.facts).toHaveBeenCalledTimes(2)
+    } finally { await pending }
+  })
+
+  it.each(['begin', 'row', 'end'] as const)('refuses %s when synchronous success is followed by a false return or throw', async target => {
+    for (const mode of ['false', 'throw']) {
+      const t = fixture(), events: Event[] = []
+      const pending = readSessions(t.deps, (event, settled) => {
+        events.push(event); settled(true)
+        if (event.type === target) {
+          if (mode === 'throw') throw new Error('PRIVATE')
+          return false
+        }
+        return true
+      })
+      await expect(pending).rejects.toThrow('SESSION_READ_UNAVAILABLE')
+      expect(events.at(-1)?.type).toBe(target)
+      expect(events.filter(event => event.type === 'row')).toHaveLength(target === 'begin' ? 0 : target === 'row' ? 1 : 3)
+      expect(t.deps.log).toHaveBeenCalledExactlyOnceWith('[sessions] SESSION_READ_UNAVAILABLE')
+    }
+  })
+
+  it('revokes a synchronous slice before the next facts read when its receiver aborts', async () => {
+    vi.spyOn(performance, 'now').mockReturnValue(0)
+    const t = fixture(), controller = new AbortController(), events: Event[] = []
+    const pending = readSessions(t.deps, (event, settled) => {
+      events.push(event); settled(true)
+      if (event.type === 'row' && event.payload.index === 1) controller.abort()
+      return true
+    }, controller.signal)
+    const outcome = pending.catch(error => error)
+    await controlTurn()
+    expect(events.map(event => event.type)).toEqual(['begin', 'row', 'row'])
+    expect(await outcome).toEqual(new Error('SESSION_READ_UNAVAILABLE'))
+    expect(t.facts).toHaveBeenCalledTimes(2)
+  })
 })
