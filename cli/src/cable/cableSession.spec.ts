@@ -81,6 +81,11 @@ class LoopbackPort implements CablePort {
     this.onData(Buffer.from(encodeCableFrame(CableType.Json, Buffer.from(JSON.stringify(msg), 'utf8'))))
   }
 
+  /** Speak as the dial in raw JSON text, for values `JSON.stringify` cannot write, such as `1e999`. */
+  sayText(json: string): void {
+    this.onData(Buffer.from(encodeCableFrame(CableType.Json, Buffer.from(json, 'utf8'))))
+  }
+
   /** Bytes that are not (all) a frame, as the dial's boot ROM or panic handler writes them. */
   raw(bytes: Buffer): void { this.onData(bytes) }
 
@@ -1664,6 +1669,44 @@ describe('cable session', () => {
     expect(host.scrolled).toHaveBeenNthCalledWith(1, 'down', 0, 0)
     expect(host.scrolled).toHaveBeenNthCalledWith(2, 'move', 12, 0)
     expect(host.scrolled).toHaveBeenNthCalledWith(3, 'up', 3, -1800)
+    await session.stop()
+  })
+
+  it('takes a travel that is not finite as none and holds a huge one to the bound, logging once per stroke', async () => {
+    // `"dy":1e999` parses to Infinity: forwarded, it became a scroll that never ends in VS Code's terminal and
+    // a null in Harness's windows. The frame still carries its phase, so the stroke keeps its two ends.
+    const lines: string[] = []
+    const host = makeHost({ log: (line) => lines.push(line) })
+    const { session, port } = await connect(host)
+    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    await settle()
+    const scrollLogs = () => lines.filter((line) => line.startsWith('cable: scroll'))
+
+    port.sayText('{"t":"scroll","phase":"down","dy":0}')
+    port.sayText('{"t":"scroll","phase":"move","dy":1e999}')
+    port.sayText('{"t":"scroll","phase":"move","dy":-1e999}')
+    port.sayText('{"t":"scroll","phase":"move","dy":1e300}')
+    port.sayText('{"t":"scroll","phase":"up","dy":-1e300,"v":1e999}')
+    await settle()
+
+    expect(host.scrolled).toHaveBeenNthCalledWith(1, 'down', 0, 0)
+    expect(host.scrolled).toHaveBeenNthCalledWith(2, 'move', 0, 0)
+    expect(host.scrolled).toHaveBeenNthCalledWith(3, 'move', 0, 0)
+    expect(host.scrolled).toHaveBeenNthCalledWith(4, 'move', 1000, 0)
+    expect(host.scrolled).toHaveBeenNthCalledWith(5, 'up', -1000, 0)
+    expect(scrollLogs()).toHaveLength(1)
+
+    // A new stroke may log again, and a normal one passes as it came.
+    port.sayText('{"t":"scroll","phase":"down","dy":0}')
+    port.sayText('{"t":"scroll","phase":"move","dy":12}')
+    port.sayText('{"t":"scroll","phase":"up","dy":3,"v":-1800}')
+    port.sayText('{"t":"scroll","phase":"down","dy":1e999}')
+    await settle()
+
+    expect(host.scrolled).toHaveBeenNthCalledWith(7, 'move', 12, 0)
+    expect(host.scrolled).toHaveBeenNthCalledWith(8, 'up', 3, -1800)
+    expect(host.scrolled).toHaveBeenNthCalledWith(9, 'down', 0, 0)
+    expect(scrollLogs()).toHaveLength(2)
     await session.stop()
   })
 
