@@ -381,10 +381,14 @@ export class IsolatedDaemon {
     // name, first on its PATH. Only the scan's own field output (-Fpn) loses the names outside the root: lsof's other
     // callers (process images, held files) see the computer as it is. A computer with no lsof has no scan to hide.
     // Admitted before the daemon runs it: the scan gives lsof 3 s, and macOS checks a new executable on its first exec.
+    // It exits with lsof's status, never awk's: the scan tells lsof's empty match (1, nothing said) from a failure.
     const lsof = SYSTEM_FOLDERS.map((folder) => join(folder, 'lsof')).find((file) => existsSync(file))
     if (lsof) writeExecutable(join(dirs.bin, 'lsof'), `#!/bin/sh
 case " $* " in
-  *" -Fpn "*) '${lsof}' "$@" | awk -v root='${root}/' 'substr($0, 1, 1) != "n" || index($0, "n" root) == 1' ;;
+  *" -Fpn "*)
+    exec 4>&1
+    status=$({ { '${lsof}' "$@" 3>&- 4>&-; echo $? >&3; } | awk -v root='${root}/' 'substr($0, 1, 1) != "n" || index($0, "n" root) == 1' >&4 3>&- 4>&-; } 3>&1)
+    exit "$status" ;;
   *) exec '${lsof}' "$@" ;;
 esac
 `)

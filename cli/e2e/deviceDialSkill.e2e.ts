@@ -14,7 +14,7 @@
  * The daemon's open scan sees only files under the test's root (harness/daemon.ts `create`): it reads every `codex` on
  * the computer, and would see another test's Codex, or one the developer runs, and write into its home.
  */
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -70,10 +70,13 @@ const noPathLogged = (d: IsolatedDaemon): void => {
   expect(logLines(d, 'dial s').filter((line) => line.includes(d.root))).toEqual([])
 }
 
-/** The open files `lsof` shows the daemon, asked as its open scan asks. */
+/** `lsof`'s field output as the daemon gets it, asked as its open scan asks, and read as it reads it, whatever lsof's
+ *  status: 1 when a name asked for has no process, as `Codex` with no Codex app. */
+const daemonLsofLines = (d: IsolatedDaemon, ...args: string[]): string[] =>
+  spawnSync('lsof', ['-n', '-P', '-Fpn', ...args], { env: d.env, encoding: 'utf8' }).stdout.split('\n')
+/** The open files `lsof` shows the daemon. */
 const daemonLsof = (d: IsolatedDaemon, ...args: string[]): string[] =>
-  execFileSync('lsof', ['-n', '-P', '-Fpn', ...args], { env: d.env }).toString().split('\n')
-    .filter((line) => line.startsWith('n')).map((line) => line.slice(1))
+  daemonLsofLines(d, ...args).filter((line) => line.startsWith('n')).map((line) => line.slice(1))
 
 /** Each process whose executable is under [folder]: `comm` is that path on macOS, /proc says it on Linux. */
 function executablesUnder(folder: string): number[] {
@@ -315,7 +318,7 @@ trust_level = "trusted"
           entered = Date.now()
         }
         let pid = 0
-        for (const line of execFileSync('lsof', ['-n', '-P', '-Fpn', '-c', 'codex', '-c', 'Codex'], { env: d.env }).toString().split('\n')) {
+        for (const line of daemonLsofLines(d, '-c', 'codex', '-c', 'Codex')) {
           if (line.startsWith('p')) pid = Number(line.slice(1))
           else if (line.startsWith(`n${sessions}/`) && /\/rollout-[^/]*\.jsonl$/.test(line)) return pid
         }
