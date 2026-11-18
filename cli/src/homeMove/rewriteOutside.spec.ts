@@ -170,6 +170,25 @@ describe('the move rewrites what names the old tree outside it', () => {
     expect(readFileSync(unitFile, 'utf8')).toBe(unitOf(home, moved, env).replace(platform, ''))
   })
 
+  it('each setting the unit carries that names a place in the old tree names its new place, as the unit spells it', () => {
+    for (const name of ['h', 'my home%1$x"q']) {
+      const { home, plan, binDir, unitFile, old, moved } = legacyHome({}, name)
+      // The settings `harness service install` carries (lib/platformDaemon.ts CARRIED_ENV), each folder or file in the old
+      // tree, one of them an entry itself; and two that name nothing there.
+      const carried = (at: (rest: string) => string) => ({
+        ADAPTER_DATA_DIR: at('cli/data'), ADAPTER_CLI_DIR: at('cli'), HARNESS_AUTH_DIR: at('auth'), HARNESS_ENV_FILE: at('harness.env'),
+        PORT: '18473', ADAPTER_UPDATE_DISABLE: 'true',
+      })
+      writeFileSync(unitFile, unitOf(home, old, carried(old)))
+      const steps = journal()
+      expect(rewriteOutside(plan, { binDir, unitFile, oldLogFile: old(LOG), env: {} }, steps, runner(unitFile).run).unit).toBe(true)
+      expect(readFileSync(unitFile, 'utf8')).toBe(unitOf(home, moved, carried(moved)))
+      expect(moved('auth')).toBe(`${plan.data}/auth`)
+      // The unit's previous bytes are journalled, as for its ExecStart.
+      expect(steps.steps).toEqual([{ did: 'reload' }, { did: 'file', path: unitFile, before: base64(unitOf(home, old, carried(old))) }])
+    }
+  })
+
   it('a unit whose log is another data folder\'s is not touched', () => {
     const { home, plan, binDir, unitFile, old } = legacyHome()
     const theirs = unitOf(home, old, {}, '/srv/other/cli/data/harness.log')
