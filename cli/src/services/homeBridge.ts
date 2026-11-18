@@ -40,6 +40,8 @@ export interface HomeBridgeDeps {
   environment: NodeJS.ProcessEnv
   /** The daemon's socket, as this process reaches it; null where it has none. */
   socket: string | null
+  /** The daemon's first process, all the daemon's own processes under it: harnessd's master, this one's parent. */
+  master: number
   rows(): ProcRow[]
   /** Every pane on tmux's default server, each its process and its tag. */
   tmux(): { status: number | null; stdout: string }
@@ -82,19 +84,19 @@ const said = (error: unknown): string => (error instanceof Error ? error.message
 
 /**
  * In the core's process (no master, or `HARNESSD_SERVICES=none`): the same service, which the apps ask nothing. The core is
- * there from its start, so it checks at once, and so is the Store, which it never wakes: in this process, or named outright
- * and started with the master's others (harnessd/services.ts). It lives as long as the core's process, where no link to
- * the core comes and goes. [given] is the tests'.
+ * the daemon's first process here, and there from its start, so it checks at once; and so is the Store, which it never
+ * wakes: in this process, or named outright and started with the master's others (harnessd/services.ts). It lives as long
+ * as the core's process, where no link to the core comes and goes. [given] is the tests'.
  */
 export function startHomeBridgeInCore(core: CoreApi, given: Partial<HomeBridgeDeps> = {}): ServiceRequests {
-  startHomeBridge(core, { askForStore: async () => {}, ...given }).connected()
+  startHomeBridge(core, { master: process.pid, askForStore: async () => {}, ...given }).connected()
   return {}
 }
 
 export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = {}): { stop(): void; connected(): void } {
   const deps: HomeBridgeDeps = {
     platform: process.platform, home: homedir(), environment: process.env, socket: unixSocketPath(core.dataDir, env.PORT),
-    rows: procRows, tmux: listPanes, setupsPending: pendingSetups, askForStore, log: console.log, ...given,
+    master: process.ppid, rows: procRows, tmux: listPanes, setupsPending: pendingSetups, askForStore, log: console.log, ...given,
   }
   // Nothing moves off Linux, and with no bridge.json there is no bridge to keep.
   if (deps.platform !== 'linux') return IDLE
@@ -148,7 +150,7 @@ export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = 
     try {
       serve()
       if (again) return
-      const count = oldUsers(bridge, deps.rows(), { uid: process.getuid!(), self: process.pid, roots, engines: ENGINES, apps: APPS, panePids: panePids() })
+      const count = oldUsers(bridge, deps.rows(), { uid: process.getuid!(), master: deps.master, roots, engines: ENGINES, apps: APPS, panePids: panePids() })
       note('bridged', count)
       // A harness set up before the move runs from the old paths until its setup has run again, which the Store does as it
       // starts: woken now, while old users run too, so the setups do not wait for them. One whose setup failed is marked

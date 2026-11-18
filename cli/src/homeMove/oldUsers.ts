@@ -42,22 +42,23 @@ export function procRows(fs: ProcFs = { readdirSync, readFileSync, readlinkSync 
 }
 
 /**
- * What the check knows of this computer. `self`: the service's own pid. `roots`: where the old tree's entries moved.
- * `engines`: the names of the engines Harness installs hooks for. `apps`: Desktop's and the Device app's executable names.
- * `panePids`: the processes of the panes the move retagged.
+ * What the check knows of this computer. `master`: the daemon's first process, harnessd's master, or the core where it
+ * runs alone. `roots`: where the old tree's entries moved. `engines`: the names of the engines Harness installs hooks
+ * for. `apps`: Desktop's and the Device app's executable names. `panePids`: the processes of the panes the move retagged.
  */
-export interface OldUserFacts { uid: number; self: number; roots: readonly string[]; engines: ReadonlySet<string>; apps: ReadonlySet<string>; panePids: readonly number[] }
+export interface OldUserFacts { uid: number; master: number; roots: readonly string[]; engines: ReadonlySet<string>; apps: ReadonlySet<string>; panePids: readonly number[] }
 
 /**
  * How many of [rows] can still use an old path: this account's processes that started before the move and are an engine
  * by name, run an executable in the old tree or the roots it moved to (the kernel names a moved executable at its new
- * place), are Desktop or the Device app, or are a retagged pane's process or one of its descendants. The service's own
- * process and its ancestors are not: a master that moved re-executed in place, keeping its start time, and runs from the
- * new paths.
+ * place), are Desktop or the Device app, or are a retagged pane's process or one of its descendants. The daemon's own
+ * are not, all of them the master's: the master and its ancestors, as a master that moved re-executed in place, keeping
+ * its start time, and runs from the new paths; and its descendants, the core, the services and what they started, which
+ * it started from the new paths, some in the move's own second.
  */
 export function oldUsers(bridge: BridgeRecord, rows: readonly ProcRow[], facts: OldUserFacts): number {
   const parents = new Map(rows.map(({ pid, parent }) => [pid, parent]))
-  const own = new Set(lineage(facts.self, parents))
+  const own = new Set([...lineage(facts.master, parents), ...descendants(facts.master, rows)])
   const panes = new Set(facts.panePids)
   const trees = [bridge.oldHome, ...facts.roots]
   // btime is a whole second, and moves as the clock is slewed: a start in the move's own second may be one from before it.
@@ -74,6 +75,26 @@ function lineage(pid: number, parents: ReadonlyMap<number, number>): number[] {
   const line: number[] = []
   for (let at: number | undefined = pid; at !== undefined && !line.includes(at); at = parents.get(at)) line.push(at)
   return line
+}
+
+/** Every process under [pid], by each one's parent; a loop ends at what was found already. */
+function descendants(pid: number, rows: readonly ProcRow[]): Set<number> {
+  const children = new Map<number, number[]>()
+  for (const row of rows) {
+    const siblings = children.get(row.parent)
+    if (siblings) siblings.push(row.pid)
+    else children.set(row.parent, [row.pid])
+  }
+  const found = new Set<number>()
+  const pending = [pid]
+  for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
+    for (const child of children.get(at) ?? []) {
+      if (child === pid || found.has(child)) continue
+      found.add(child)
+      pending.push(child)
+    }
+  }
+  return found
 }
 
 /** A kernel thread has no executable, and another account's is not this one's to read. */
