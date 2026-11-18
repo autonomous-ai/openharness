@@ -16,6 +16,13 @@ import { REPAIR_RETRY_MS } from './bind.js'
 
 /** Agents remembered; past it, those the registry no longer has are dropped, or all (one more read and line each). */
 const MAX_AGENTS = 256
+/**
+ * How long before its process's start a record may be stamped and still be that process's. Hermes stamps it with its
+ * own clock after it starts, and `ps` floors the start to the second: one second. A Hermes closed seconds before another
+ * started in the same tty rewrote its record as it closed (#4393, `ensure --fresh`), and the wider slack bound the new
+ * one to the old conversation. A sandboxed Hermes, whose clock is not the host's, keeps START_SLACK_MS.
+ */
+const RECORD_SLACK_MS = 1_000
 
 export interface HermesTerminalDeps {
   platform: NodeJS.Platform
@@ -103,7 +110,7 @@ export function createHermesTerminal(deps: HermesTerminalDeps) {
     let known = run.known
     if (known?.stamp !== stamp) {
       const read: TerminalRecordRead = Number.isFinite(startedAtMs)
-        ? await deps.read(home, names, startedAtMs - START_SLACK_MS)
+        ? await deps.read(home, names, startedAtMs - (observed.sandboxed ? START_SLACK_MS : RECORD_SLACK_MS))
         : { state: 'none' }
       if (read.state === 'ignored') say(agent.agentId, entry, HERMES_TERMINAL_SAID.ignored(read.reason === 'stale' ? 'older than its process' : read.reason))
       if (read.state !== 'record') {

@@ -317,11 +317,82 @@ describe('harness ensure (#4393)', () => {
     const d = new FakeDaemon()
     d.frames = [frame('a1')]
     own('a1')
+    d.extra.agent_purge = (p) => p.mode === 'inspect' ? { reviewId: 'r1' } : { deleted: true, kept: [] }
     const h = harness(d)
     await ensureCommand(args(['--fresh']), h.deps)
-    expect(d.requests.find((r) => r.type === 'agent_close' && r.payload.mode === 'now')?.payload).toMatchObject({ agentId: 'a1' })
+    // Asked as a fresh start: one that never bound a conversation is stopped without one (#4393, Hermes).
+    expect(d.requests.find((r) => r.type === 'agent_close' && r.payload.mode === 'now')?.payload).toMatchObject({ agentId: 'a1', freshStart: true })
     expect(h.json()).toMatchObject({ result: 'new', id: 'new1' })
     expect(new ProgramRecords(dir).get('a1')).toBeNull()
+  })
+
+  // #4393, a Mac test: --fresh left the old harness closed and no longer the token's, its conversation kept with nobody
+  // able to delete it, and a later forget of the name answered NOT_YOURS. The program asked for a new conversation: the
+  // one it replaces is deleted as harness delete does (agent_purge), before the new one starts.
+  describe('--fresh deletes the harness it replaces', () => {
+    const purging = (d: FakeDaemon, deleted = true) => {
+      d.extra.agent_close = (p) => {
+        if (p.mode === 'inspect') return { activity: 'idle' }
+        d.frames = d.frames.map((f) => f.id === p.agentId ? { ...f, status: 'stopped' } : f)
+        return { closed: true }
+      }
+      d.extra.agent_purge = (p) => {
+        if (p.mode === 'inspect') return { reviewId: 'r1' }
+        if (!deleted) return { error: 'DELETE_REFUSED', detail: 'The harness changed.' }
+        d.frames = d.frames.filter((f) => f.id !== p.agentId)
+        return { deleted: true, kept: [] }
+      }
+    }
+
+    it('closes it, deletes it and its conversation, forgets it, then starts the new one', async () => {
+      const d = new FakeDaemon()
+      d.frames = [frame('a1')]
+      own('a1')
+      purging(d)
+      const h = harness(d)
+      expect(await ensureCommand(args(['--fresh']), h.deps)).toBe(EXIT.ok)
+      const which = { agentId: 'a1', sessionId: 'agent:main:harness-a1', createdAt: Date.parse('2026-11-17T10:00:00Z') }
+      expect(d.requests.filter((r) => r.type === 'agent_purge').map((r) => r.payload)).toEqual([
+        { ...which, mode: 'inspect' },
+        { ...which, mode: 'delete', reviewId: 'r1', choices: { sessionData: true, worktreeData: false } },
+      ])
+      expect(d.types().indexOf('agent_purge')).toBeGreaterThan(d.types().indexOf('agent_close'))
+      expect(h.json()).toMatchObject({ result: 'new', id: 'new1' })
+      expect(new ProgramRecords(dir).get('a1')).toBeNull()
+    })
+
+    it('deletes a closed one too, and one never bound to a conversation by none', async () => {
+      const d = new FakeDaemon()
+      d.frames = [frame('a1', { status: 'stopped', sessionId: '' })]
+      own('a1')
+      purging(d)
+      const h = harness(d)
+      expect(await ensureCommand(args(['--fresh']), h.deps)).toBe(EXIT.ok)
+      expect(d.requests.find((r) => r.type === 'agent_purge')?.payload).toMatchObject({ agentId: 'a1', sessionId: null, mode: 'inspect' })
+      expect(h.json()).toMatchObject({ result: 'new', id: 'new1' })
+    })
+
+    it('a deletion refused starts nothing and keeps the old one the token\'s, for the next ensure', async () => {
+      const d = new FakeDaemon()
+      d.frames = [frame('a1')]
+      own('a1')
+      purging(d, false)
+      const h = harness(d)
+      expect(await ensureCommand(args(['--fresh']), h.deps)).not.toBe(EXIT.ok)
+      expect(h.json()).toMatchObject({ error: 'DELETE_REFUSED' })
+      expect(h.made).toEqual([])
+      expect(new ProgramRecords(dir).get('a1')).not.toBeNull()
+    })
+
+    it('a record whose harness the daemon no longer has is only forgotten', async () => {
+      const d = new FakeDaemon()
+      own('gone')
+      purging(d)
+      const h = harness(d)
+      expect(await ensureCommand(args(['--fresh']), h.deps)).toBe(EXIT.ok)
+      expect(d.types()).not.toContain('agent_purge')
+      expect(new ProgramRecords(dir).get('gone')).toBeNull()
+    })
   })
 
   it('refuses a name held by a harness without the token, with exit 5', async () => {

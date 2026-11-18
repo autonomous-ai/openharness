@@ -159,7 +159,7 @@ export function createCloseRequests({ cleanupPreview, closeAgentService }: {
     }
     // Saving/exit may take seconds; terminal input and unrelated agents keep flowing.
     void service.request({ agentId, sessionId, createdAt, mode: mode as CloseMode,
-      ...(payload.onlyIfHidden === true ? { onlyIfHidden: true } : {}) })
+      ...(payload.onlyIfHidden === true ? { onlyIfHidden: true } : {}), ...(payload.freshStart === true ? { freshStart: true } : {}) })
       .then(result => reply(result), () => reply({ error: 'CLOSE_FAILED' }))
   }
   return { preview, close }

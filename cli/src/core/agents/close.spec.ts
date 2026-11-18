@@ -294,6 +294,15 @@ describe('agent_close', () => {
     expect(request).toHaveBeenLastCalledWith({ ...target, mode: 'now' })
   })
 
+  // #4393: a program's ensure --fresh says so, and only a literal true passes on.
+  it("passes on a program's fresh start, and nothing else that names it", () => {
+    const request = vi.fn(async () => ({}))
+    ask({ request }, { ...target, mode: 'now', freshStart: true })
+    expect(request).toHaveBeenLastCalledWith({ ...target, mode: 'now', freshStart: true })
+    ask({ request }, { ...target, mode: 'now', freshStart: 'yes' })
+    expect(request).toHaveBeenLastCalledWith({ ...target, mode: 'now' })
+  })
+
   // A client cannot name the cleanup's rule: only CoreApi.agents.closeStarted sets it.
   it('never passes on a background rule a client names', () => {
     const request = vi.fn(async () => ({ closed: true as const }))

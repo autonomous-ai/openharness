@@ -408,6 +408,19 @@ describe('shared native databases', () => {
       expect(existsSync(join(session.hermesHome!, 'state.db'))).toBe(true)
     } finally { db.close() }
   })
+  // #4393: Hermes 0.21 keeps full-text and display triggers on its messages. Harness cannot verify what they write, so it
+  // never erases Hermes's rows; it refused the whole deletion, and a used Hermes harness could not be deleted at all
+  // (`harness delete`, `ensure --fresh`). Its store is kept, as OpenClaw's is, and the deletion says so.
+  it("deletes a Hermes harness whose store has triggers, keeping Hermes's store and saying so", async () => {
+    const db = dbFixture()
+    try {
+      db.exec("CREATE TABLE fts(content TEXT); CREATE TRIGGER messages_fts_insert AFTER INSERT ON messages BEGIN INSERT INTO fts VALUES (new.content); END;")
+      const kept = { what: 'engine-store', reason: "Hermes's store is kept: delete its session with hermes sessions delete." }
+      expect(await inspectNativeHistory(session)).toEqual({ bytes: 0, kept })
+      expect(db.prepare('SELECT id FROM messages').all()).toHaveLength(2)
+    } finally { db.close() }
+  })
+
   it('refuses dependent conversations, new dependencies and changed schemas without partial deletion', async () => {
     const db = dbFixture()
     try {
