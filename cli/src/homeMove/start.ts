@@ -69,28 +69,31 @@ export async function moveHomeAtStart(argv: readonly string[], env: NodeJS.Proce
   const lines: string[] = []
   const moveDeps: MoveDeps = { ...deps, log: (line) => lines.push(line) }
   const moved = fs.existsSync(roots.data)
+  // A person typed it: a harness start on a terminal. Desktop starts the daemon the same way, with no terminal.
+  const explicit = command === 'start' && !flags.includes('--if-down') && deps.print !== null
   let outcome: MoveOutcome | null = null
   try {
     // A journal is finished, or undone, before anything else: a crash after the data root's commit left one beside it.
     if (moved ? readJournal(roots.legacy) : fs.existsSync(roots.legacy)) {
-      // A person typed it: a harness start on a terminal. Desktop starts the daemon the same way, with no terminal.
-      const explicit = command === 'start' && !flags.includes('--if-down') && deps.print !== null
       outcome = await moveOrHold(explicit, env, environment, roots, deps, moveDeps, lines)
     } else if (moved) {
       noteStray(roots, environment, deps, lines)
     }
   } catch (error) {
-    outcome = failure(error, environment, deps, moveDeps)
+    // A lock this start could not take is no try: a failed move not due again keeps its hour, and says nothing.
+    outcome = due(explicit, environment, deps) || readJournal(roots.legacy) ? failure(error, environment, deps, moveDeps) : null
   }
   const movedNow = fs.existsSync(roots.data)
   // A rollback that could not undo every step keeps its journal for the next start.
   const halfMoved = !movedNow && readJournal(roots.legacy) !== null
+  // Moved, by this start, another, or long ago: one run from ~/.harness runs again from the new paths. That run finishes
+  // what failed after the commit, and says how it went: said here too, it would be said twice.
+  const again = movedNow ? startAgain(roots, argv, env, deps) : null
   if (outcome?.state === 'bridged') lines.push(`home move: moved · data ${roots.data} · state ${roots.state}`)
-  if (outcome?.state === 'failed') lines.push(`home move: failed ${outcome.reason} · ${afterFailure(movedNow, halfMoved)}`)
+  if (outcome?.state === 'failed' && !again) lines.push(`home move: failed ${outcome.reason} · ${afterFailure(movedNow, halfMoved)}`)
   say(lines, environment, deps)
   if (halfMoved) return deps.exit(1)
-  // Moved, by this start, another, or long ago: one run from ~/.harness runs from the new paths.
-  if (movedNow) startAgain(roots, argv, env, deps)
+  again?.()
 }
 
 function afterFailure(movedNow: boolean, halfMoved: boolean): string {
@@ -117,15 +120,19 @@ async function moveOrHold(explicit: boolean, env: NodeJS.ProcessEnv, environment
   const locked = await withMoveLock(roots.legacy, async () => {
     const recovered = await recoverMove(deps.home, environment, moveDeps)
     if (recovered) return recovered
-    // At once when a person typed harness start; else an hour after the last try.
-    const record = readMoveRecord(deps.home, environment)
-    if (!explicit && record?.state === 'failed' && deps.now() - (record.failedAt ?? record.at) < RETRY_MS) return null
+    if (!due(explicit, environment, deps)) return null
     const check = await checkMove({ ...deps, env, hasExecve: deps.execve !== undefined, fs: deps.io })
     if (check.move) return runMove(check, environment, moveDeps)
     if (check.hold) noteHold(check.hold, roots.legacy, deps.now(), lines)
     return null
   }, wait, deps.lock)
   return locked.held ? locked.value : null
+}
+
+/** Whether a move is due: one that failed is tried again at once when a person typed harness start, else an hour after the last try. */
+function due(explicit: boolean, environment: NodeJS.ProcessEnv, deps: StartDeps): boolean {
+  const record = readMoveRecord(deps.home, environment)
+  return explicit || record?.state !== 'failed' || deps.now() - (record.failedAt ?? record.at) >= RETRY_MS
 }
 
 /** A held move: one line at each start, its record in ~/.harness when the state or the reason changes. */
@@ -175,14 +182,18 @@ function say(lines: readonly string[], environment: NodeJS.ProcessEnv, deps: Sta
   }
 }
 
-/** execve from the new paths, same pid (systemd follows it), when this process ran from ~/.harness and its files are there. */
-function startAgain(roots: Roots, argv: readonly string[], env: NodeJS.ProcessEnv, deps: StartDeps): void {
+/**
+ * The execve from the new paths, same pid (systemd follows it), when this process ran from ~/.harness and its files are
+ * there; null when it does not start again.
+ */
+function startAgain(roots: Roots, argv: readonly string[], env: NodeJS.ProcessEnv, deps: StartDeps): (() => void) | null {
   const target = reexecTarget(roots, deps.execPath, argv, deps.execArgv)
-  if (!target || !deps.execve) return
+  const { execve } = deps
+  if (!target || !execve) return null
   // An execve that fails ends the process: a Node or a cli.js that is not there leaves this start where it is.
   const script = target.args[deps.execArgv.length + 1]
-  if (!runnable(target.file) || (script !== undefined && !fs.existsSync(script))) return
-  deps.execve(target.file, target.args, env)
+  if (!runnable(target.file) || (script !== undefined && !fs.existsSync(script))) return null
+  return () => execve(target.file, target.args, env)
 }
 
 function runnable(file: string): boolean {
