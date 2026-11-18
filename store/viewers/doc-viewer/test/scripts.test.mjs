@@ -57,6 +57,8 @@ function sandbox(script, { node = 'real', npm = null, harness = null, harnessNpm
   if (node === 'old') stub(bin, 'node', OLD_NODE)
   if (npm !== null) npmStub(bin, npm)
   const home = join(root, 'home')
+  // A home still on ~/.harness, so Harness's runtime is ~/.harness/runtime on Linux too (runtimes.sh's rule).
+  mkdirSync(join(home, '.harness'), { recursive: true })
   if (harness) {
     const harnessBin = join(root, 'harness-node', 'bin')
     mkdirSync(harnessBin, { recursive: true })
