@@ -12,14 +12,15 @@ const VSCODE = 'com.microsoft.VSCode'
 const link = (id: string) => `vscode://anthropic.claude-code/open?session=${id}`
 
 interface Call { file: string; args: string[]; timeoutMs: number }
-type Deps = Parameters<typeof createVscodeAdapter>[0]
+type Deps = Parameters<typeof createVscodeAdapter>[1]
 interface Terminal { window: string; shell: number }
 
 /** A recording runner that runs nothing, so no spec opens the developer's own VS Code: each call answers the next of
  *  [codes], then exit 0. VS Code is in front unless told. The opener holds this adapter alone. No window holds a
  *  terminal until a test sets `windows.held`; each show, scroll and page-key ask is recorded, and `asked` keeps the
- *  order of the terminal's looks beside a test's own. The terminals take page keys while the agent does not ask. */
-function recorder(over: Partial<Deps> = {}, codes: Array<number | null> = []) {
+ *  order of the terminal's looks beside a test's own. The terminals take page keys while the agent does not ask. The
+ *  adapter is VS Code's unless [editor] names Cursor. */
+function recorder(over: Partial<Deps> = {}, codes: Array<number | null> = [], editor: 'vscode' | 'cursor' = 'vscode') {
   const calls: Call[] = []
   const logs: string[] = []
   const windows = { held: undefined as Terminal | undefined, writes: true, shows: [] as Array<{ terminal: Terminal; tap: boolean }>,
@@ -41,7 +42,7 @@ function recorder(over: Partial<Deps> = {}, codes: Array<number | null> = []) {
     },
     ...over,
   }
-  const adapter = createVscodeAdapter(deps)
+  const adapter = createVscodeAdapter(editor, deps)
   const log = (line: string) => { logs.push(line) }
   return {
     calls, logs, adapter, windows, asked,
@@ -389,4 +390,54 @@ describe('an agent in VS Code\'s integrated terminal (docs/plans/2026-11-17-dial
   it('it declares VS Code\'s bundle', () => {
     expect(recorder().adapter.bundle).toBe('com.microsoft.VSCode')
   })
+})
+
+describe('the adapter made for Cursor', () => {
+  const CURSOR = 'com.todesktop.230313mzl4w4u92'
+  const cursorLink = (id: string) => `cursor://anthropic.claude-code/open?session=${id}`
+  const PANEL = { __CFBundleIdentifier: CURSOR, CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' }
+  const TERM = { TERM_PROGRAM: 'vscode', __CFBundleIdentifier: CURSOR }
+  const at = (hints: Record<string, string>, over: Partial<Place> = {}): Place =>
+    ({ host: detectHost(hints), app: detectApp(hints), hints, engine: 'claude', sessionId: UUID, pid: 4242, ...over })
+
+  it('its id is cursor and its bundle Cursor\'s', () => {
+    const { adapter } = recorder({}, [], 'cursor')
+    expect([adapter.id, adapter.bundle, adapter.tap]).toEqual(['cursor', CURSOR, 'instead'])
+  })
+
+  it('Claude Code\'s panel in Cursor opens by cursor://, sent to Cursor alone', async () => {
+    const { adapter, calls } = recorder({}, [], 'cursor')
+    expect(adapter.paneOf(at(PANEL))).toEqual({ adapter: 'cursor', id: UUID })
+    expect(await adapter.focus({ adapter: 'cursor', id: UUID })).toBe(true)
+    expect(calls).toEqual([run(OPEN, '-b', CURSOR, cursorLink(UUID))])
+  })
+
+  it('each editor takes its own panel and its own terminals alone', () => {
+    const vscode = recorder().adapter
+    const cursor = recorder({}, [], 'cursor').adapter
+    expect(vscode.paneOf(at(PANEL))).toBeUndefined()
+    expect(vscode.paneOf(at(TERM))).toBeUndefined()
+    expect(cursor.paneOf(at({ __CFBundleIdentifier: VSCODE, CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' }))).toBeUndefined()
+    expect(cursor.paneOf(at({ TERM_PROGRAM: 'vscode', __CFBundleIdentifier: VSCODE }))).toBeUndefined()
+    expect(cursor.paneOf(at(TERM))).toEqual({ adapter: 'cursor', id: 'term:4242' })
+  })
+
+  it('a tap on a terminal in Cursor queues its show with the raise, then opens Cursor by its bundle', async () => {
+    const r = recorder({}, [], 'cursor')
+    r.windows.held = { window: 'w1', shell: 4000 }
+    expect(await r.adapter.focus({ adapter: 'cursor', id: 'term:4242' })).toBe(true)
+    expect(r.windows.shows).toEqual([{ terminal: { window: 'w1', shell: 4000 }, tap: true }])
+    expect(r.calls).toEqual([run(OPEN, '-b', CURSOR)])
+  })
+})
+
+it.each(['vscode', 'cursor'] as const)('cursor-agent in %s\'s terminal has the terminal pane; with no TERM_PROGRAM, or another engine, none', (editor) => {
+  const bundle = editor === 'vscode' ? VSCODE : 'com.todesktop.230313mzl4w4u92'
+  const place = (engine: string, hints: Record<string, string> = { TERM_PROGRAM: 'vscode', __CFBundleIdentifier: bundle }): Place =>
+    ({ host: detectHost(hints), app: detectApp(hints), hints, engine, pid: 4242 })
+  const { adapter } = recorder({}, [], editor)
+  expect(adapter.paneOf(place('cursor'))).toEqual({ adapter: editor, id: 'term:4242' })
+  expect(adapter.paneOf(place('opencode'))).toBeUndefined()
+  // Cursor's own agent: its bundle id names the app, but it sends no TERM_PROGRAM, so its pid is never read with `ps`.
+  expect(adapter.paneOf(place('cursor', { __CFBundleIdentifier: bundle }))).toBeUndefined()
 })
