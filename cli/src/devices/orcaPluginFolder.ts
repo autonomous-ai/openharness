@@ -19,17 +19,18 @@ type Tree = Map<string, Tree | Buffer>
 const SEGMENT = /^[A-Za-z0-9._-]+$/
 const PID = /^[0-9]+$/
 
-/** Makes [folder] hold exactly [files], writing only when it differs. Never throws. */
-export function ensureOrcaPluginFolder(folder: string, files: Readonly<Record<string, string>>): 'same' | 'written' | 'failed' {
+/** Makes [folder] hold exactly [files], writing only when it differs. Never throws: a failure is its error's code
+ *  (`EACCES`), never its message, which names a path; a key off the pattern is `EINVAL`, as Node names a bad argument. */
+export function ensureOrcaPluginFolder(folder: string, files: Readonly<Record<string, string>>): 'same' | 'written' | { failed: string } {
   try {
     const tree = treeOf(files)
-    if (!tree) return 'failed'
+    if (!tree) return { failed: 'EINVAL' }
     recover(folder)
     if (same(folder, tree)) return 'same'
     write(folder, tree)
     return 'written'
-  } catch {
-    return 'failed'
+  } catch (error) {
+    return { failed: (error as NodeJS.ErrnoException).code ?? 'FAILED' }
   }
 }
 

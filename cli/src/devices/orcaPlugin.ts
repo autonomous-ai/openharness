@@ -2,10 +2,10 @@
  * What Harness Device's plugin for Orca (plugins/harness-device-orca) is in Orca, from Orca's own CLI: `orca status`,
  * `orca plugin inspect` and `orca plugin list`, each with `--json`; and the connect that installs, updates or enables
  * it (`orca plugin install|update|enable`). Orca installs the plugin from a folder in the data folder that holds the
- * files cli.js carries (orcaPluginFolder.ts), written before Orca is asked about it. It runs in the `harness` command's
- * own process (`harness device orca`), never in the core's or the devices' process. Orca's answers are outside text:
- * each is read up to ORCA_ANSWER_MAX_BYTES, only the fields named here are read, and nothing of them is logged
- * (docs/plans/2026-11-18-connect-orca-design.md).
+ * files cli.js carries (orcaPluginFolder.ts), written before Orca is asked about it; a folder that cannot be written is
+ * said on stderr by its error's code. It runs in the `harness` command's own process (`harness device orca`), never in
+ * the core's or the devices' process. Orca's answers are outside text: each is read up to ORCA_ANSWER_MAX_BYTES, only
+ * the fields named here are read, and nothing of them is logged (docs/plans/2026-11-18-connect-orca-design.md).
  */
 import { realpathSync } from 'node:fs'
 import { readOrcaConnected } from './dialSkillFiles.js'
@@ -29,14 +29,14 @@ export interface OrcaPluginRun {
   /** Null in a run from the sources. */
   files(): OrcaPluginFiles | null
 }
-export interface OrcaPluginDeps extends OrcaPluginRun { folder: string; dataDir: string }
+export interface OrcaPluginDeps extends OrcaPluginRun { folder: string; dataDir: string; err(line: string): void }
 export type OrcaPluginState = 'absent' | 'offer' | 'off' | 'approve' | 'behind' | 'current'
 
-/** The state, and what a connect needs beside it: whether `absent` is a CLI from the sources, the `orca` to run for
- *  the states a connect asks Orca in, the plugin's key to name to Orca, and whether a plugin `behind` was installed
- *  from the plugin's own folder. */
+/** The state, and what a connect needs beside it: its error for an `absent` that is not `not-running` (a CLI from the
+ *  sources, a folder that cannot be written), the `orca` to run for the states a connect asks Orca in, the plugin's key
+ *  to name to Orca, and whether a plugin `behind` was installed from the plugin's own folder. */
 type Found =
-  | { state: 'absent'; fromSources?: true }
+  | { state: 'absent'; error?: 'no-plugin' | 'failed' }
   | { state: 'off' }
   | { state: 'current' }
   | { state: 'offer'; orca: string }
@@ -97,14 +97,19 @@ async function ask(deps: OrcaPluginDeps, orca: string, args: string[], timeoutMs
 async function find(deps: OrcaPluginDeps): Promise<Found> {
   if (deps.platform === 'win32') return ABSENT
   const files = deps.files()
-  if (files === null) return { state: 'absent', fromSources: true }
+  if (files === null) return { state: 'absent', error: 'no-plugin' }
   const orca = deps.orca()
   if (orca === null) return ABSENT
   const carried = JSON.parse(files['orca-plugin.json']) as { version: string; engines: { orca: string } }
   const runtime = (await ask(deps, orca, ['status', '--json'], ORCA_STATUS_MS))?.runtime
   if (!isObject(runtime) || runtime.reachable !== true || typeof runtime.appVersion !== 'string') return ABSENT
   if (!meets(runtime.appVersion, carried.engines.orca)) return ABSENT
-  if (ensureOrcaPluginFolder(deps.folder, files) === 'failed') return ABSENT
+  const written = ensureOrcaPluginFolder(deps.folder, files)
+  if (typeof written === 'object') {
+    // Not Orca's absence: a connect would tell the person Orca is not running.
+    deps.err(`orca plugin folder: ${written.failed}`)
+    return { state: 'absent', error: 'failed' }
+  }
   const plugin = (await ask(deps, orca, ['plugin', 'inspect', deps.folder, '--json'], ORCA_READ_MS))?.plugin
   const key = isObject(plugin) ? plugin.pluginKey : undefined
   if (typeof key !== 'string' || !PLUGIN_KEY.test(key)) return ABSENT
@@ -210,7 +215,7 @@ function approval(data: unknown, update: boolean): OrcaConnect | undefined {
 export async function orcaConnect(deps: OrcaPluginDeps, approve?: string): Promise<OrcaConnect> {
   if (approve !== undefined && !ORCA_FINGERPRINT.test(approve)) return FAILED
   const found = await find(deps)
-  if (found.state === 'absent') return { connect: 'failed', error: found.fromSources ? 'no-plugin' : 'not-running' }
+  if (found.state === 'absent') return { connect: 'failed', error: found.error ?? 'not-running' }
   // A plugin the person removed or disabled after a connect stays so: no stale click installs it again.
   if (found.state === 'off') return { connect: 'failed', error: 'off' }
   if (found.state === 'current') return { connect: 'done' }

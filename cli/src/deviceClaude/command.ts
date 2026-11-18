@@ -213,7 +213,7 @@ async function vscodeCommand(verb: string, json: boolean, deps: DeviceDeps): Pro
  * and the line stays `done`, since Orca did connect.
  */
 async function orcaCommand(verb: 'status' | 'connect', args: string[], deps: DeviceDeps): Promise<number> {
-  const plugin = (): OrcaPluginDeps => ({ ...deps.orca(), folder: join(deps.dataDir, 'orca-plugin'), dataDir: deps.dataDir })
+  const plugin = (): OrcaPluginDeps => ({ ...deps.orca(), folder: join(deps.dataDir, 'orca-plugin'), dataDir: deps.dataDir, err: deps.err })
   if (verb === 'status') {
     if (args.some((arg) => arg !== '--json')) {
       deps.err(DEVICE_USAGE)
