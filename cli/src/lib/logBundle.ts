@@ -94,14 +94,22 @@ export function bundleFileName(now: Date): string {
   return `harness-logs-${ymd(now)}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}.zip`
 }
 
+/**
+ * At most the last `bytes` of a file, in whole lines: the line the cut lands in is dropped, since a token or the home
+ * cut short is no longer what the blanking knows it by.
+ */
 function readTail(path: string, bytes: number): Buffer {
   const size = statSync(path).size
-  const from = Math.max(0, size - bytes)
+  // From one byte before the cut, so a line that starts at the cut is kept.
+  const from = Math.max(0, size - bytes - 1)
   const fd = openSync(path, 'r')
   try {
     const out = Buffer.alloc(size - from)
     readSync(fd, out, 0, out.length, from)
-    return out
+    if (size <= bytes) return out
+    // No line break: all of it is the line the cut lands in.
+    const lineEnd = out.indexOf(0x0a)
+    return lineEnd < 0 ? Buffer.alloc(0) : out.subarray(lineEnd + 1)
   } finally {
     closeSync(fd)
   }
@@ -160,9 +168,9 @@ export function buildLogBundle(opts: LogBundleOptions): { zip: Buffer; included:
     const path = join(opts.logsDir, name)
     try {
       const whole = bytes === undefined || bytes >= statSync(path).size
-      const text = whole ? readFileSync(path, 'utf8') : readTail(path, bytes).toString('utf8')
-      entries.push({ name: `logs/${name}`, data: Buffer.from(blank(text)), mtime: statSync(path).mtime })
-      included.push(whole ? name : `${name} (last ${Math.round(bytes / 1024)} KB)`)
+      const read = whole ? readFileSync(path) : readTail(path, bytes)
+      entries.push({ name: `logs/${name}`, data: Buffer.from(blank(read.toString('utf8'))), mtime: statSync(path).mtime })
+      included.push(whole ? name : `${name} (last ${Math.round(read.length / 1024)} KB)`)
     } catch { /* unreadable: skipped, said in the README below */ }
   }
 
