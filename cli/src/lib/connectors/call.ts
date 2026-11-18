@@ -11,6 +11,7 @@ import { readFileSync, realpathSync, statSync } from 'node:fs'
 import { homedir, userInfo } from 'node:os'
 import platformPath, { basename, extname, resolve, type PlatformPath } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { harnessRoots } from '../../config/harnessHome.js'
 import { bearer, connectorsDir, ConnectorError, type Store, type Token } from './store.js'
 import { ready } from './renew.js'
 
@@ -71,9 +72,11 @@ export function unc(path: string, p: PlatformPath = platformPath): boolean {
 export function forbiddenDirs(env: NodeJS.ProcessEnv, homes: (string | undefined)[], p: PlatformPath = platformPath): string[] {
   const windows = p.sep === '\\'
   const all = [env.HOME, env.USERPROFILE, ...homes].filter((home): home is string => !!home)
-  const names = ['.ssh', '.gnupg', '.config', '.local/share', '.harness', '.codex', '.claude', ...(windows ? ['AppData'] : [])]
+  const names = ['.ssh', '.gnupg', '.config', '.local/share', '.codex', '.claude', ...(windows ? ['AppData'] : [])]
+  // harnessRoots joins by platform, not by path module: any posix one joins as `p` does.
+  const harness = (home: string): string[] => harnessRoots(home, windows ? 'win32' : 'linux')
   const appData = windows ? [env.APPDATA, env.LOCALAPPDATA].filter((dir): dir is string => !!dir) : []
-  return [...new Set([connectorsDir(env), ...all.flatMap(home => names.map(dir => p.join(home, dir))), ...appData, '/etc', '/proc', '/sys'])]
+  return [...new Set([connectorsDir(env), ...all.flatMap(home => [...names.map(dir => p.join(home, dir)), ...harness(home)]), ...appData, '/etc', '/proc', '/sys'])]
 }
 
 /**

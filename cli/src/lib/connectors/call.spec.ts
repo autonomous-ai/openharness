@@ -99,7 +99,7 @@ describe('forbiddenDirs', () => {
   it('fences no AppData on posix', () => {
     const env = { HOME: '/tmp/h', HARNESS_CONNECTIONS_DIR: '/tmp/c', APPDATA: '/tmp/roaming', LOCALAPPDATA: '/tmp/local' }
     expect(forbiddenDirs(env, [], posix)).toEqual(['/tmp/c', '/tmp/h/.ssh', '/tmp/h/.gnupg', '/tmp/h/.config', '/tmp/h/.local/share',
-      '/tmp/h/.harness', '/tmp/h/.codex', '/tmp/h/.claude', '/etc', '/proc', '/sys'])
+      '/tmp/h/.codex', '/tmp/h/.claude', '/tmp/h/.harness', '/etc', '/proc', '/sys'])
   })
 })
 
