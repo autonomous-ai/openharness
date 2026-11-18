@@ -430,3 +430,48 @@ functions and lines: nativeLaunch.ts 200/250/36/133; nativeLaunchSettings.ts 77/
 coverage maps are retained at `/tmp/core-launch-settings-fences-final-coverage2/`. Final types pass actual 0,
 6.335 s (`/tmp/core-launch-settings-fences-final-types.log`), diff check passes, and every owned group is empty.
 This is functional/coverage evidence only; final matched cost remains pending a reviewed frozen packet and quiet slot.
+
+
+### Frozen v6 result: smaller proof cost, baseline gap remains
+
+The final matched packet keeps A=9a2ae217cf and freezes B=a56e694ca1, including separate cold b3950702d6 and warm
+757ca3716b corrections. Manifest SHA256 is
+`216fe05f61e290b8805926c470e5374741db5ec3c37f14941faafd125cc9bac3` (791 inputs, eight arms).
+Caller, worker, fixture and all three custody helpers are byte-identical to v5. The only run/freeze code delta is the
+candidate snapshot path. Its one semantic smoke passes, outer actual 0, 12.537 s; both three-operation arms have equal
+final argv/frame/script/statusline output, zero unused scripts and exactly three candidate command factories.
+
+One approved fixed ABBA completes, outer actual 0, 45.391 s. All eight arms complete first publication, five warmups
+and fifty measured operations with equal semantics for all 448 operations. Candidate factories run exactly 56 times
+per arm and no unused script remains. Every sample, worker and capture child records actual 0 plus close and both
+EOFs. Independent inspection confirms all 32 recorded PIDs, eight groups/sockets, sixteen private roots and the outer
+group are gone, and all 791 frozen input hashes remain unchanged. The raw manifest is
+`/tmp/core-launch-settings-cost-v6-abba/manifest.json`; outer receipt is
+`/tmp/core-launch-settings-cost-v6-abba-outer-receipt.json`; independent custody is
+`/tmp/core-launch-settings-cost-v6-abba-custody.json`. The unchanged v4 summarizer produces the complete arm/range/
+paired output at `/tmp/core-launch-settings-cost-v6-summary.json`. There is no retry or dropped sample.
+
+| Arm | First publication ms | Warm p50 ms | Warm p95 ms | Core CPU ms/op | Worker CPU ms/op | Combined CPU ms/op |
+|---|---:|---:|---:|---:|---:|---:|
+| 0-A | 4.567 | 0.844 | 1.440 | 0.975 | 0.242 | 1.217 |
+| 1-B | 90.027 | 4.948 | 5.979 | 5.160 | 0.981 | 6.141 |
+| 2-B | 91.811 | 4.750 | 5.937 | 5.067 | 0.948 | 6.015 |
+| 3-A | 4.152 | 0.867 | 1.000 | 0.967 | 0.241 | 1.208 |
+| 4-A | 3.830 | 0.843 | 1.004 | 0.958 | 0.240 | 1.198 |
+| 5-B | 90.446 | 4.940 | 6.325 | 5.156 | 0.984 | 6.140 |
+| 6-B | 84.541 | 4.929 | 5.933 | 5.137 | 0.949 | 6.086 |
+| 7-A | 3.980 | 0.888 | 1.029 | 0.984 | 0.248 | 1.232 |
+
+Mean A→B warm p50 is 0.860→4.892 ms, p95 1.118→6.044 ms, core CPU 0.971→5.130 ms/op and combined CPU
+1.214→6.095 ms/op. All four paired p50 deltas are positive: +4.104, +3.883, +4.097 and +4.041 ms. First publication
+is 4.132→89.206 ms (B range 84.541–91.811), with first core CPU 4.281→41.508 ms. Candidate warm p50 improves
+from v5's 5.483 ms and first publication from 112.139 ms, but the unchanged baseline gap remains material. This
+records improvement, not cost acceptance or a claim that the entire daemon refactor is complete.
+
+Post-batch core RSS differs by +0.709 MiB and worker by +3.326 MiB; candidate core RSS ranges 120.480–137.113 MiB,
+so its mean is not a claim of stable whole-daemon memory. Retained heap growth is 0.181→0.219 MiB in core and
+-0.015→0.105 MiB in the worker. All original exclusions remain: fixed common semantic verification is inside the
+operation latency; worker CPU includes its ending GC snapshot; permission-probe runtime, slice1's extra model
+capture, cold service startup, real terminal I/O, full-daemon phases and native Windows/Linux validation are outside
+this packet. Existing final authority and file proofs remain intact. No further run or optimization is authorized by
+these numbers alone.
