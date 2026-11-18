@@ -199,7 +199,7 @@ import { createStoreOf } from './transcripts/stores.js'
 import { createOtherStreams } from './engines/otherStreams.js'
 import { paneReadIdentity } from './transcripts/readIdentity.js'
 import { isOtherEngine, OTHER_ENGINE_STATES, OTHER_ENGINES_SERVICE } from '../engines/otherEngines.js'
-import { CLOUD_FALLBACKS, CLOUD_REQUESTS, type CloudCore, CONNECTORS_FALLBACKS, CONNECTORS_OFF, CONNECTORS_REQUESTS, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARED_MACHINES_REQUESTS, MEMORY_REQUESTS, ROUTER_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, MACHINE_ADDON_REQUESTS, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, OS_DEVICE_REQUESTS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_FALLBACKS, STORE_OFF, STORE_REQUESTS, MESSAGES_FALLBACKS, MESSAGES_REQUESTS, GOALS_REQUESTS, TURN_DELIVERERS, USAGE_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, VIEWERS_UNAVAILABLE, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, ENGINE_PROBE_REQUESTS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type WindowFocus } from './api.js'
+import { CLOUD_FALLBACKS, CLOUD_REQUESTS, type CloudCore, CONNECTORS_FALLBACKS, CONNECTORS_OFF, CONNECTORS_REQUESTS, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARED_MACHINES_REQUESTS, MEMORY_REQUESTS, ROUTER_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, MACHINE_ADDON_REQUESTS, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, OS_DEVICE_REQUESTS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_FALLBACKS, STORE_OFF, STORE_REQUESTS, MESSAGES_FALLBACKS, MESSAGES_REQUESTS, GOALS_REQUESTS, TURN_DELIVERERS, USAGE_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, VIEWERS_UNAVAILABLE, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, ENGINE_PROBE_REQUESTS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus } from './api.js'
 import { createFrameParts } from './frameParts.js'
 import { testFaults } from './serviceHost.js'
 import { startStalls } from './stall.js'
@@ -239,6 +239,7 @@ import { publishHookRoute } from '../lib/hookRoutes.js'
 import { BackendSocket, isLocalClientId } from '../backendSocket.js'
 import { createGatewayLink, laneOf, tabKeyOf, tabRelayOf } from './gatewayLink.js'
 import { createWifiCore } from './wifi.js'
+import { createWindowFocus } from './windowFocus.js'
 import { createDevicesWake, DEVICES_ON_DEMAND } from './devicesWake.js'
 import { wakeModels } from './modelsWake.js'
 import { wakeGateway } from './gatewayWake.js'
@@ -1121,8 +1122,19 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       }
     }
   }
-  let appFormWindow: { machineId: string; connId: string } | undefined
-  let appVoiceFocus: { machineId: string; agentId: string; connId: string } | undefined
+  const focusState = createWindowFocus({
+    machineId: () => backend.machineId, byAgent: agentId => registry.byAgent(agentId), validator: () => ports.wifi,
+    validate: async (revision, connection) => {
+      const answer = outOfProcess.has('wifi')
+        ? await serviceLinksRef?.call('wifi', 'wifi_focus_current', { revision }, 15_000)
+        : await serviceHost?.call('wifi_focus_current', { revision }, { local: true, owner: true, connection }, 15_000)
+      return answer?.current === true
+    },
+    changed: (state, machineId, agentId, connection) => {
+      ports.devices?.windowFocus(state)
+      void ports.wifi?.appFocus(machineId, agentId, connection)
+    },
+  })
   let backendRef: BackendSocket | undefined
   // Where a browser stream's answers go: made below, once the socket is.
   /** Assigned below, once the grid reconcile exists. A backend (re)connect is the signal that the
@@ -1671,7 +1683,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     notify: (frame) => serviceLinks.notify('devices', frame),
     call: (type, payload, waitMs) => serviceLinks.call('devices', type, payload, waitMs),
     state: () => ({ desk: appPaneAgents, foreground: appWindowForeground, swarms: appSwarmsLatest, unread: appUnreadLatest,
-      focus: windowFocus(), engines: registry.active().map((agent) => agent.engine), commanders: backend.hasCommander() }),
+      focus: focusState.state(), engines: registry.active().map((agent) => agent.engine), commanders: backend.hasCommander() }),
   })
   // The remaining Wi-Fi feed and final focus fence use the ordered core link (core/wifiLink.ts).
   const wifiLink = createWifiLink({
@@ -1768,7 +1780,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // The gateway first hears what it starts from, then the shared tabs it held before a restart.
       if (service === 'gateway') { gatewayLink?.connected(); tabRelay.connected() }
       if (service === 'devices') devicesLink.connected()
-      if (service === 'wifi') { ports.wifi = { ...wifiLink.port }; wifiCore.started(appVoiceFocus ?? null) }
+      if (service === 'wifi') { ports.wifi = { ...wifiLink.port }; wifiCore.started(focusState.state().voice) }
       const streamSink = clientStreams.connected(service)
       if (streamSink) streamSinks.set(service, streamSink)
       devicesWake.connected(service)
@@ -2378,8 +2390,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The dial, the window bridges and the Wi-Fi device are the devices' (services/devices.ts, services/wifi.ts),
   // behind their ports, guarded there: the local socket closes a connection whose frame handler throws, so a
   // device fault reaching here would disconnect the desktop, again on every pane change.
-  /** Which window has the person's attention, as the devices are told it. */
-  const windowFocus = (): WindowFocus => ({ voice: appVoiceFocus ?? null, form: appFormWindow ?? null })
   const localWsServer = attachLocalWsServer(hookServer, {
     localSocketServer: localSocket?.server ?? null,
     // Over TCP the window, the CLI or a tool shows this user's 0600 credential (lib/localCredential.ts).
@@ -2390,41 +2400,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onVisitReply: (connId, machineId, payload) => ports.devices?.windowReply('visit', connId, machineId, payload),
     onFormReply: (connId, machineId, payload) => ports.devices?.windowReply('form', connId, machineId, payload),
     onAppDisconnect: (machineId, connId) => {
-      if (appFormWindow?.connId === connId) appFormWindow = undefined
-      if (appVoiceFocus?.connId === connId) appVoiceFocus = undefined
-      ports.devices?.windowFocus(windowFocus())
+      ports.devices?.windowFocus(focusState.disconnected(connId))
       ports.devices?.windowGone(connId)
       void ports.wifi?.appFocus(machineId, null, connId)
     },
     // The window and the dial are one desk: opening an agent in the app brings the dial to it, switching
     // the dial's machine first when the app moved to another one.
     onDevicePrepareOpened: (operationId, agentId) => ports.wifi?.revealed(operationId, agentId),
-    onAppFocusState: (machineId, agentId, connId, expectedRevision) => {
-      const apply = (): true => {
-        appFormWindow = { machineId, connId }
-        if (agentId === null) {
-          if (appVoiceFocus?.connId === connId) appVoiceFocus = undefined
-        } else appVoiceFocus = { machineId, agentId, connId }
-        ports.devices?.windowFocus(windowFocus())
-        void ports.wifi?.appFocus(machineId, agentId, connId)
-        return true
-      }
-      if (expectedRevision === undefined) return apply()
-      const service = ports.wifi, target = agentId ? registry.byAgent(agentId) : undefined
-      if (!expectedRevision || expectedRevision.length > 128 || !service || machineId !== backend.machineId || !target || target.identityHold) return false
-      const form = appFormWindow, voice = appVoiceFocus, binding = paneReadIdentity(target)
-      const checking = outOfProcess.has('wifi')
-        ? serviceLinks.call('wifi', 'wifi_focus_current', { revision: expectedRevision }, 15_000)
-        : serviceHost!.call('wifi_focus_current', { revision: expectedRevision }, { local: true, owner: true, connection: connId }, 15_000)
-      return checking.then(answer => {
-        if (answer.current !== true) return false as const
-        return (): boolean => {
-          if (ports.wifi !== service || appFormWindow !== form || appVoiceFocus !== voice ||
-            paneReadIdentity(registry.byAgent(agentId!)) !== binding) return false
-          return apply()
-        }
-      })
-    },
+    onAppFocusState: focusState.select,
     onAppFocus: (machineId, agentId) => ports.devices?.appFocus(machineId, agentId),
     // Everything the window still has unread. Held rather than acted on: the dial is handed it when a
     // cable attaches, which is the one moment its own drawer is known to be empty.
@@ -3413,7 +3396,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // resumed there as its link connects), or here.
   if (!outOfProcess.has('wifi')) {
     serviceHost!.start('wifi', (core, started) => inline!.startWifi(core, started, { peer: { composition: 'inline', port: env.PORT } }), coreApi, WIFI_FALLBACKS, WIFI_REQUESTS)
-    if (ports.wifi) wifiCore.started(appVoiceFocus ?? null)
+    if (ports.wifi) wifiCore.started(focusState.state().voice)
   }
 
 

@@ -72,6 +72,10 @@ The core stays small and secure, in the code and at run time: read
   services and the socket, and the one outside the 100% coverage: wiring only, run end to end. The
   services that run in their own processes by default it imports only dynamically, through
   `../services/inline.ts`, and only when one runs in this process instead.
+- `windowFocus.ts`: the actual local windows' form/voice selection and final guarded apply, for every
+  explicit choice and disconnect. A component validates its own revision; it cannot apply a selection
+  after the target binding, validator or current window state changes. Local transport owns the
+  physical-socket check. This extracts the existing authority from `main.ts`, without a feature cache.
 - `api.ts`: the contract with services, their ports, fallbacks and requests. `serviceHost.ts`: shared failure identities and fallback values; the inline host is
   `../services/inlineHost.ts`, loaded through `../services/inline.ts` only. `serviceLinks.ts`: services in their own processes. `serviceRoutes.ts`: a route of the local
   door a service answers (`SERVICE_HTTP_ROUTES`), handed on as it came once the door let it in, with the route's own
