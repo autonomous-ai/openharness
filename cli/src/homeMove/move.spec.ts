@@ -544,6 +544,41 @@ describe('across filesystems', () => {
     expect(readMoveRecord(t.home, t.env)).toMatchObject({ state: 'bridged', bytesCopied: bytes })
   })
 
+  it('what the copies wrote is on disk before the originals and the journal go: each file and folder, the roots and where they were renamed', async () => {
+    const t = await legacyHome()
+    const across = acrossDisks(t), opened = new Map<number, string>(), synced = new Set<string>()
+    let missing: string[] | null = null
+    const io: Io = {
+      ...across,
+      openSync: ((path: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+        const fd = fs.openSync(path, flags, mode)
+        opened.set(fd, String(path))
+        return fd
+      }) as typeof fs.openSync,
+      fsyncSync: (fd) => { synced.add(opened.get(fd)!) },
+      renameSync: (from, to) => {
+        across.renameSync(from, to)
+        // What was flushed before the commit does not count.
+        if (from === `${t.plan.data}.moving`) synced.clear()
+      },
+      rmSync: (path, options) => {
+        if (path === join(t.legacy, '.move-old')) {
+          const wanted = [t.legacy, t.plan.data, t.plan.state, dirname(t.plan.data), dirname(t.plan.state), join(t.plan.state, 'bridge.json')]
+          const walk = (at: string): void => {
+            const st = lstatSync(at)
+            if (st.isDirectory()) for (const name of readdirSync(at)) walk(join(at, name))
+            if (st.isDirectory() || st.isFile()) wanted.push(at)
+          }
+          for (const entry of t.plan.entries) walk(entry.to)
+          missing = wanted.filter((at) => !synced.has(at))
+        }
+        fs.rmSync(path, options)
+      },
+    }
+    expect(await runMove(t.check, t.env, t.deps({ io }))).toMatchObject({ state: 'bridged' })
+    expect(missing).toEqual([])
+  })
+
   it('a crash during a copy leaves the entry as it was', async () => {
     const t = await legacyHome()
     const before = snapshot(t)
