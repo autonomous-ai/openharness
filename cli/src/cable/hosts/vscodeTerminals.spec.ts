@@ -479,6 +479,58 @@ describe('VS Code\'s windows', () => {
     expect(h.logged.at(-1)).toBe('[devices] vscode · in the last minute: 0 shows, 0 taps, 0 refused states, 0 ps reads, 0 failed, 3 scroll lines, 1 dropped')
   })
 
+  it('page lines are written with "page":true, and plain lines carry no page', () => {
+    const h = harness()
+    const one = h.open(W1)
+    const terminal = { window: W1, shell: 700 }
+    h.terminals.scroll(terminal, -45, true)
+    one.drain()
+    h.terminals.scroll(terminal, -3)
+    expect(one.lines).toEqual([{ scroll: -45, pid: 700, page: true }, { scroll: -3, pid: 700 }])
+  })
+
+  it('page and plain lines that wait are never merged: each adds to its own kind, and the kind that waited first is written first', () => {
+    const h = harness()
+    const one = h.open(W1)
+    const terminal = { window: W1, shell: 700 }
+    // Written: the stream now has a line in flight, and what follows waits.
+    h.terminals.scroll(terminal, -1, true)
+    h.terminals.scroll(terminal, -30, true)
+    h.terminals.scroll(terminal, -3)
+    h.terminals.scroll(terminal, -10, true)
+    h.terminals.scroll(terminal, -2)
+    one.drain()
+    one.drain()
+    one.drain()
+    expect(one.lines).toEqual([{ scroll: -1, pid: 700, page: true }, { scroll: -40, pid: 700, page: true }, { scroll: -5, pid: 700 }])
+  })
+
+  it('page lines that wait are held to 100', () => {
+    const h = harness()
+    const one = h.open(W1)
+    const terminal = { window: W1, shell: 700 }
+    h.terminals.scroll(terminal, -1, true)
+    h.terminals.scroll(terminal, -90, true)
+    h.terminals.scroll(terminal, -90, true)
+    one.drain()
+    one.drain()
+    expect(one.lines).toEqual([{ scroll: -1, pid: 700, page: true }, { scroll: -100, pid: 700, page: true }])
+  })
+
+  it('lines for another shell replace both kinds that wait, each counted dropped', () => {
+    const h = harness()
+    const one = h.open(W1)
+    h.terminals.scroll({ window: W1, shell: 700 }, -1)
+    h.terminals.scroll({ window: W1, shell: 700 }, -5, true)
+    h.terminals.scroll({ window: W1, shell: 700 }, -5)
+    h.terminals.scroll({ window: W1, shell: 710 }, 2)
+    one.drain()
+    one.drain()
+    expect(one.lines).toEqual([{ scroll: -1, pid: 700 }, { scroll: 2, pid: 710 }])
+    h.timers[0]!.run()
+    expect(h.logged.at(-1)).toContain(', 2 dropped')
+  })
+
   it('scroll answers false once the window\'s stream has ended, and what waited is gone', () => {
     const h = harness()
     const one = h.open(W1)
