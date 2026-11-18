@@ -181,7 +181,8 @@ void ui_perf_run(void)
     ESP_LOGI("PERF", "idle_ms=2000 bytes=%lu flushes=%lu", (unsigned long)(b1 - b0),
              (unsigned long)(f1 - f0));
     audio_probe_run();
-    ui_question_close("perf-0", NULL);
+    // The question case's last of its 40 alerts; ui_project_clear_all leaves alert rows, so close it here.
+    ui_question_close("perf-0", "perf-q-39");
     ui_project_clear_all();
     ui_set_connected(false);
     ui_enter_boot_loading();

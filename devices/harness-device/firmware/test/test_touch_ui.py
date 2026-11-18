@@ -237,12 +237,12 @@ for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notic
 code += function('render_settings') + function('ui_visit_state')
 code += function('ui_project_known') + function('ui_focus_project') + function('ui_apply_pending_focus')
 code += function('focus_centred') + function('focus_spaced') + function('focus_header') + function('focus_switch') + function('focus_clipped') + function('tabs_move') + function('tab_split') + function('tab_fade') + function('tab_neighbour') + function('focus_carousel') + function('tab_label') + function('render_focus_tabs') + function('app_label') + function('app_under') + function('render_apps') + function('pane_label') + function('render_agents') + function('render_tabs') + function('page_controls') + function('css_line') + function('inbox_line') + function('inbox_page') + function('render_focus_inbox') + function('render_list')
+code += 'static void dispatch(action_t a);\n'
 for name in ['notice_drop', 'notice_remove', 'notice_remove_question', 'notice_sync_view', 'notice_selection', 'notice_restore_selection', 'notice_make_room', 'notice_add', 'notice_expire', 'on_face', 'notice_read_now', 'ui_notify_summary', 'ui_turn_error', 'ui_notif_seen', 'ui_notif_read', 'ui_notif_replace', 'ui_notif_open', 'ui_question_close', 'ui_answer_receipt']:
     code += function(name)
 code += '#define ui_notify_task_done(a,b,c,d) ui_notify_summary(a,b,c,d,"alert",false,false)\n'
 for name in ['ui_project_set_host_caps', 'ui_fleet_set_view', 'ui_apps_replace', 'ui_apps_forget', 'event', 'ui_project_emit', 'ui_project_restore_event', 'ui_project_clear_event', 'ui_project_set_name', 'ui_project_remove', 'ui_project_clear_all', 'ui_project_apply_order']:
     code += function(name)
-code += 'static void dispatch(action_t a);\n'
 visit_actions=source.split('    case A_LATEST:',1)[1].split('    case A_TABS:',1)[0]
 code+='static void visit_action(action_t a) { switch(a.kind) { case A_LATEST:'+visit_actions+'default: break; } }\n'
 notice_actions=source.split('    case A_NOTICE:',1)[1].split('    case A_LATEST:',1)[0]
@@ -1300,6 +1300,12 @@ static void notification_read_checks(const char *dir) {
     ui_notif_read("b","question-1"); assert(s.notice_count==1 && !s.notice[0].question);
     reset(); ui_notif_replace(beside,2);
     ui_question_close("b","request-1"); assert(s.notice_count==1 && !s.notice[0].question);
+    // The person opened question A of the agent, which then asked B: B's close takes B's row, the news stays.
+    reset(); ui_notif_replace(beside,2); strcpy(s.q.agent,"b"); strcpy(s.q.request,"A");
+    ui_question_close("b","B"); assert(s.notice_count==1 && !s.notice[0].question);
+    // A close while the agent's question screen still loads takes the row and the loading screen.
+    reset(); ui_notif_replace(beside,2); strcpy(s.q.agent,"b"); s.q.loading=true; s.view=QUESTION;
+    ui_question_close("b","B"); assert(s.notice_count==1 && !s.notice[0].question && s.view==HOME && !s.q.loading);
     reset(); ui_notif_replace(beside,2);
     strcpy(s.q.agent,"b"); strcpy(s.q.fetch,"fetch-1"); strcpy(s.q.token,"token-1"); s.q.valid=s.q.pending=true;
     {
