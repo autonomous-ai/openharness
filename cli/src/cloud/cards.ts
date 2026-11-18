@@ -1,4 +1,5 @@
 /** Cloud turn transitions belong to the component that owns these agents. */
+import { createHash } from 'node:crypto'
 import type { TurnCardFrame } from '../core/api.js'
 import { cloudFingerprint, type CloudHarness } from '../lib/cloudAgents.js'
 
@@ -12,12 +13,20 @@ export const emptyPresentation = (): CloudPresentation => ({ fingerprint: cloudF
 /** Preparing is pure: only acknowledged or reconciled publication advances the caller's checkpoint. */
 export function prepareCloudCards(harnesses: readonly CloudHarness[], previous: CloudPresentation = emptyPresentation()) {
   const beforeById = new Map(previous.owners.map(owner => [owner.agentId, owner]))
-  const next: CloudPresentation = { fingerprint: cloudFingerprint(harnesses), owners: [] }
+  const imageHash = createHash('sha256').update('[')
+  let imageBytes = 2
+  const next: CloudPresentation = { fingerprint: '', owners: [] }
   const cards: TurnCardFrame[] = []
-  for (const harness of harnesses) {
+  for (const [index, harness] of harnesses.entries()) {
+    // One transient encoding supplies both existing hashes and the publication's exact byte bound.
+    const encoded = JSON.stringify(harness)
+    if (index) imageHash.update(',')
+    imageHash.update(encoded)
+    imageBytes += Buffer.byteLength(encoded) + (index ? 1 : 0)
     const before = beforeById.get(harness.agentId)
     const busy = harness.state === 'working' || harness.state === 'starting'
-    const state = { agentId: harness.agentId, fingerprint: cloudFingerprint([harness]), busy, told: before?.told ?? harness.said ?? '' }
+    const fingerprint = createHash('sha256').update('[').update(encoded).update(']').digest('hex')
+    const state = { agentId: harness.agentId, fingerprint, busy, told: before?.told ?? harness.said ?? '' }
     next.owners.push(state)
     // Core suppresses unchanged rows. A same-image publication therefore cannot change notification history.
     if (before?.fingerprint === state.fingerprint) continue
@@ -39,5 +48,6 @@ export function prepareCloudCards(harnesses: readonly CloudHarness[], previous: 
       }
     }
   }
-  return { cards, next }
+  next.fingerprint = imageHash.update(']').digest('hex')
+  return { cards, next, imageBytes }
 }

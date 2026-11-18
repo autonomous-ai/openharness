@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import type { CloudHarness } from '../lib/cloudAgents.js'
+import { cloudFingerprint, cloudHarnessIn, type CloudHarness } from '../lib/cloudAgents.js'
 import { emptyPresentation, prepareCloudCards } from './cards.js'
 
 const createCloudCards = () => {
@@ -51,4 +51,48 @@ it('prepares a candidate without mutating the accepted transition checkpoint', (
   expect(working).toEqual(before)
   expect(prepareCloudCards([finished], working)).toEqual(first)
   expect(prepareCloudCards([finished], first.next).cards).toEqual([])
+})
+
+it.each<[string, CloudHarness[]]>([
+  ['empty', []],
+  ['absent optional fields', [row()]],
+  ['explicit null fields', [row({ said: null, card: null, providerStatus: { status: null, detail: null } })]],
+  ['multiple owners', [row(), row({ agentId: 'cloud_b', agent: 'devin-cloud', name: 'Second' })]],
+  ['reversed owners', [row({ agentId: 'cloud_b', agent: 'cursor-cloud', name: 'Second' }), row()]],
+  ['escaped and multibyte text', [row({ name: 'A "quoted" \\ name\nđ\uD800', activity: 'Working\0\uDC00😀',
+    repository: 'owner/đ', branch: 'fix/😀', said: '\0\n\\"\uD800\uDC00đ😀',
+    card: { recap: 'Done \uD800', text: '\0\n\\"\uDC00đ😀' },
+    links: [{ label: 'Link\0😀', url: 'https://example.test/\uD800' }] })]],
+  ['maximum normalized fields', [row({ name: 'N'.repeat(120), activity: '\0'.repeat(200),
+    repository: 'R'.repeat(200), branch: 'B'.repeat(200), said: '\0'.repeat(4000),
+    card: { recap: '\0'.repeat(2000), text: '\uD800'.repeat(2000) },
+    providerStatus: { status: '\0'.repeat(200), detail: '😀'.repeat(100) },
+    links: Array.from({ length: 8 }, () => ({ label: 'L'.repeat(80), url: `https://${'\0'.repeat(2040)}` })) })]],
+])('preserves exact image and singleton hash bytes for %s', (_name, values) => {
+  const rows = values.map(value => cloudHarnessIn(value)!)
+  const prepared = prepareCloudCards(rows)
+  expect(prepared.next.fingerprint).toBe(cloudFingerprint(rows))
+  expect(prepared.next.owners.map(owner => owner.fingerprint)).toEqual(rows.map(value => cloudFingerprint([value])))
+  expect(prepared).toHaveProperty('imageBytes', Buffer.byteLength(JSON.stringify(rows)))
+  const imageBytes = Buffer.byteLength(JSON.stringify(rows))
+  expect(Buffer.byteLength(JSON.stringify({ harnesses: [], cards: prepared.cards })) - 2 + imageBytes)
+    .toBe(Buffer.byteLength(JSON.stringify({ harnesses: rows, cards: prepared.cards })))
+})
+
+it.each(['failed', 'needs_input'] as const)('preserves the full %s completion card and its payload bytes', state => {
+  const before = prepareCloudCards([row()]).next
+  const finished = cloudHarnessIn(row({ state, said: 'Finished', card: { recap: '\0'.repeat(2000), text: '\uD800'.repeat(2000) } }))!
+  const prepared = prepareCloudCards([finished], before)
+  expect(prepared.cards).toEqual([{ type: 'commander_event', agentId: 'cloud_a', dbSessionId: 'cloud_a', name: 'Fixture',
+    payload: { kind: 'summary', ...finished.card, ...(state === 'failed' ? { failed: true } : {}),
+      notification: state === 'needs_input' ? null : { id: 'cloud_a:1', kind: 'done' } } }])
+  expect(prepared.next.fingerprint).toBe(cloudFingerprint([finished]))
+  expect(Buffer.byteLength(JSON.stringify({ harnesses: [], cards: prepared.cards })) - 2 + prepared.imageBytes)
+    .toBe(Buffer.byteLength(JSON.stringify({ harnesses: [finished], cards: prepared.cards })))
+})
+
+it('preserves the fallback error card when a failed turn has no activity or answer', () => {
+  const prepared = prepareCloudCards([row({ state: 'failed' })], prepareCloudCards([row()]).next)
+  expect(prepared.cards).toEqual([{ type: 'commander_event', agentId: 'cloud_a', dbSessionId: 'cloud_a',
+    payload: { kind: 'error', text: 'It stopped with an error.' } }])
 })

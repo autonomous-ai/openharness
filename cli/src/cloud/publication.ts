@@ -98,7 +98,8 @@ export function createCloudPublication(options: {
             for (const row of item.action.changed) wire.set(row.agentId, row)
             const rows = [...wire.values()]
             const prepared = prepareCloudCards(rows, accepted)
-            if (Buffer.byteLength(JSON.stringify({ harnesses: rows, cards: prepared.cards })) > CLOUD_OUTPUT_BYTES) {
+            const payloadBytes = Buffer.byteLength(JSON.stringify({ harnesses: [], cards: prepared.cards })) - 2 + prepared.imageBytes
+            if (payloadBytes > CLOUD_OUTPUT_BYTES) {
               fail('CLOUD_PUBLICATION_LIMIT', true); return
             }
             pending = prepared.next

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { expect, it, vi } from 'vitest'
 import type { CloudCore } from '../core/api.js'
 import { createCloudAgents } from '../core/agents/cloud.js'
-import { cloudHarnessIn, type CloudHarness } from '../lib/cloudAgents.js'
+import { cloudAgentFrame, cloudFingerprint, cloudHarnessIn, type CloudHarness } from '../lib/cloudAgents.js'
 import { prepareCloudCards } from './cards.js'
 import { CLOUD_OUTPUT_BYTES, createCloudPublication, type CloudJournal } from './publication.js'
 
@@ -20,10 +20,11 @@ function setup() {
   } })
   let snapshot: CloudHarness[] = [], saved: CloudJournal | undefined
   const doors: CloudCore = { ...core.doors }
-  const make = () => createCloudPublication({ core: doors, saved, persist: journal => { saved = structuredClone(journal) },
+  const persist = vi.fn((journal: CloudJournal) => { saved = structuredClone(journal) })
+  const make = () => createCloudPublication({ core: doors, saved, persist,
     snapshot: () => snapshot, questions: () => [], log })
   let publication = make()
-  return { core, doors, events, log, get publication() { return publication }, get saved() { return saved },
+  return { core, doors, events, log, persist, get publication() { return publication }, get saved() { return saved },
     rows(rows: CloudHarness[]) { snapshot = rows; publication.publish(rows) },
     snapshot(rows: CloudHarness[]) { snapshot = rows },
     async connect() { await publication.connect(); await vi.waitFor(() => expect(publication.state().pending).toBeNull()) },
@@ -31,6 +32,74 @@ function setup() {
     close() { publication.stop() },
   }
 }
+
+it('shares each encoded publication row across card fingerprints and the final payload bound', async () => {
+  const f = setup()
+  try {
+    await f.connect()
+    const rows = [row('cloud_a'), row('cloud_b'), row('cloud_c')]
+    const normalized = rows.map(value => cloudHarnessIn(value)!)
+    const writes = f.persist.mock.calls.length
+    const encode = vi.spyOn(JSON, 'stringify')
+    let calls: unknown[]
+    try {
+      f.rows(rows)
+      await vi.waitFor(() => expect(f.publication.state().pending).toBeNull())
+      calls = encode.mock.calls.map(([value]) => value)
+    } finally { encode.mockRestore() }
+    const ownerArray = (value: unknown): value is CloudHarness[] => Array.isArray(value) && value.length > 0
+      && value.every(owner => owner && typeof owner === 'object' && 'agentId' in owner && 'agent' in owner)
+    const encodings = {
+      catalogues: calls.filter(value => ownerArray(value) && value.length === rows.length).length,
+      singletonOwners: calls.filter(value => ownerArray(value) && value.length === 1).length,
+      fullPayloads: calls.filter(value => value && typeof value === 'object' && 'harnesses' in value
+        && ownerArray(value.harnesses) && 'cards' in value).length,
+    }
+    expect(f.core.frames()).toEqual(normalized.map(cloudAgentFrame))
+    expect(f.events).toEqual(['row:cloud_a', 'processing:cloud_a', 'row:cloud_b', 'processing:cloud_b', 'row:cloud_c', 'processing:cloud_c'])
+    expect(f.publication.state().accepted.fingerprint).toBe(cloudFingerprint(normalized))
+    expect(f.persist).toHaveBeenCalledTimes(writes + 1)
+    expect(encodings).toEqual({ catalogues: 1, singletonOwners: 0, fullPayloads: 0 })
+  } finally { f.close() }
+})
+
+it('keeps a prepared intent and cards fixed across an acknowledgement and captures the next mutation', async () => {
+  const f = setup()
+  try {
+    await f.connect(); f.rows([row()]); await vi.waitFor(() => expect(f.publication.state().pending).toBeNull())
+    const source = done(), first = structuredClone(source)
+    let release!: () => void
+    const held = new Promise<{ ok: true }>(resolve => { release = () => resolve({ ok: true }) })
+    const send = f.doors.publish
+    const publications: Array<{ rows: CloudHarness[]; cards: unknown }> = []
+    f.doors.publish = (rows, cards) => {
+      publications.push(structuredClone({ rows, cards }))
+      const result = send(rows, cards)
+      return publications.length === 1 ? held.then(() => result) : result
+    }
+    const writes = f.persist.mock.calls.length
+    f.rows([source])
+    const intent = structuredClone(f.publication.state().pending)
+    expect(intent?.fingerprint).toBe(cloudFingerprint([cloudHarnessIn(first)!]))
+    expect(f.saved?.pending).toEqual(intent)
+    source.name = 'Renamed'; source.said = 'Second'; source.card!.recap = 'Second'; source.card!.text = 'Second result'
+    f.rows([source])
+    expect(f.publication.state().pending).toEqual(intent)
+    expect(f.saved?.pending).toEqual(intent)
+    expect(f.persist).toHaveBeenCalledTimes(writes + 1)
+    expect(publications).toHaveLength(1)
+    release()
+    await vi.waitFor(() => expect(f.publication.state().pending).toBeNull())
+    expect(publications.map(value => value.rows)).toEqual([[cloudHarnessIn(first)], [cloudHarnessIn(source)]])
+    expect(publications.map(value => value.cards)).toEqual([first, source].map(value => [{
+      type: 'commander_event', agentId: value.agentId, dbSessionId: value.agentId, name: value.name,
+      payload: { kind: 'summary', ...value.card, notification: { id: `${value.agentId}:1`, kind: 'done' } },
+    }]))
+    expect(f.publication.state().accepted.fingerprint).toBe(cloudFingerprint([cloudHarnessIn(source)!]))
+    expect(f.persist).toHaveBeenCalledTimes(writes + 2)
+    expect(f.saved?.pending).toEqual(f.publication.state().accepted)
+  } finally { f.close() }
+})
 
 it('holds every healthy-link transition and question behind an unknown acknowledgement', async () => {
   const f = setup()
