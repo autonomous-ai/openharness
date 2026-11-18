@@ -103,9 +103,10 @@ process.stdin.on('data',c=>process.stdout.write('ECHO:'+c+'\\r\\n'));setInterval
     BACKEND_WS_URL: status.backendUrl, WEB_URL: status.webUrl, HARNESS_STORE_CATALOG_URL: 'http://127.0.0.1:9/catalog.json',
     DISABLE_HOOK_INSTALL: 'true', ADAPTER_UPDATE_DISABLE: 'true', ANALYTICS_ENABLED: 'false', RECAP_FORCE: 'false',
     RECAP_WITHOUT_DEVICE: 'false', CABLE_DISABLE: 'true', CABLE_FW_DISABLE: 'true', TERMINAL_BACKENDS: 'tmux',
-    // The developer's own HOME: the devices would bring the developer's VS Code extension current with this build's
-    // (cable/vscodeExtensionSetup.ts). They look for VS Code's `code` here alone, where there is none.
-    HARNESS_VSCODE_BIN: join(root, 'no-vscode', 'code') }
+    // The developer's own HOME: the devices would bring the developer's VS Code and Cursor extension current with this
+    // build's (cable/vscodeExtensionSetup.ts). They look for VS Code's `code` and Cursor's `cursor` here alone, where
+    // there is none.
+    HARNESS_VSCODE_BIN: join(root, 'no-vscode', 'code'), HARNESS_CURSOR_BIN: join(root, 'no-cursor', 'cursor') }
   child = spawn(process.execPath, ['dist/cli.js', '__run'], { cwd: cli, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
   const log = createWriteStream(join(root, 'daemon.log'))
   child.stdout!.pipe(log); child.stderr!.pipe(log)
