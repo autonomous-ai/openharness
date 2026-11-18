@@ -10,8 +10,8 @@
  * - with no answer from Orca, the default home's sessions are listed as before.
  * No log line names an account's home or email.
  *
- * The daemon's `lsof` shows only files under the test's root, as in deviceDialSkill.e2e.ts: with a dial attached, the
- * open scan would otherwise see a Codex the developer runs and write into their real home.
+ * The daemon's open scan sees only files under the test's root (harness/daemon.ts `create`): with a dial attached, it
+ * would otherwise see a Codex the developer runs and write into their real home.
  */
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
@@ -20,7 +20,6 @@ import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { DIAL_PLUGIN_ID, DIAL_SKILL } from '../src/devices/dialSkill.js'
-import { SYSTEM_FOLDERS } from '../src/testing/testPath.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
@@ -91,23 +90,10 @@ describe('Orca\'s account homes on the dial', () => {
     desk = undefined
   })
 
-  /** A daemon whose `lsof` shows only the test's own files, checked before anything is turned on. [claudeVersion]: its
-   *  fake Claude Code's, one recent enough for the plugin. */
+  /** A daemon with a dial port on the desk. [claudeVersion]: its fake Claude Code's, one recent enough for the plugin. */
   const fresh = async (before: (d: IsolatedDaemon) => void = () => {}, claudeVersion?: string): Promise<{ d: IsolatedDaemon; desk: Desk }> => {
     const d = await IsolatedDaemon.create({ env: { CABLE_DISABLE: 'false' }, claudeVersion })
     daemon = d
-    const system = SYSTEM_FOLDERS.map((folder) => join(folder, 'lsof')).find((file) => existsSync(file))
-    if (!system) throw new Error('lsof is required: the daemon\'s open scan reads it')
-    // First on the daemon's PATH, and the scan runs `lsof` by name (lib/processTable.ts). Only the field output (-F),
-    // which is what the scan reads, is filtered: its `n` lines are the names.
-    writeFileSync(join(d.root, 'bin', 'lsof'), `#!/bin/sh
-case " $* " in
-  *" -F"*) '${system}' "$@" | awk -v root='${d.root}/' 'substr($0, 1, 1) != "n" || index($0, "n" root) == 1' ;;
-  *) exec '${system}' "$@" ;;
-esac
-`, { mode: 0o755 })
-    // The daemon finds this one by name, or the filter proves nothing.
-    expect(execFileSync('/bin/sh', ['-c', 'command -v lsof'], { env: d.env }).toString().trim()).toBe(join(d.root, 'bin', 'lsof'))
     const file = join(d.root, 'dials.json')
     d.env.HARNESSD_TEST_DIAL_PORT = file
     writeFileSync(file, '[]')
