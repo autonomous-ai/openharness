@@ -15,12 +15,13 @@
  * in one of these engines' files, and say so in that change.
  */
 import { createHash } from 'node:crypto'
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { expectForeignHooksPreserved, preservedHookFiles } from '../testing/hookGoldenSafety.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/other-hooks.golden.json', import.meta.url))
 const RECORD = process.env.RECORD_OTHER_ENGINES_GOLDEN === '1'
@@ -254,12 +255,15 @@ function reset(): void {
   mkdirSync(join(root, 'home'), { recursive: true })
 }
 
-/** The OpenCode the installer asks for its version: the test's own script, answering as `major` would. */
+/** The OpenCode the installer asks for its version: the test's own script, answering as `major` would. Rewritten in
+ *  place while it is there: a new file waits for macOS's first-exec check (testing/executableFixture.ts) inside the
+ *  version probe's 5 s, and every case and the setup's every install ask it. */
 function opencode(major: 1 | 2 | null): void {
   const bin = join(root, 'bin', 'opencode')
-  rmSync(bin, { force: true })
-  if (major === null) return
-  write(bin, `#!/bin/sh\necho "${major === 1 ? '1.18.31' : 'opencode v2.0.18'}"\n`, 0o755)
+  if (major === null) { rmSync(bin, { force: true }); return }
+  const text = `#!/bin/sh\necho "${major === 1 ? '1.18.31' : 'opencode v2.0.18'}"\n`
+  if (existsSync(bin)) writeFileSync(bin, text)
+  else { mkdirSync(dirname(bin), { recursive: true }); writeExecutable(bin, text) }
 }
 
 async function install(vendor: Vendor, port: number): Promise<Run> {

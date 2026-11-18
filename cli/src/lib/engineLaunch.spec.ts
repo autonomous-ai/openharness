@@ -58,6 +58,7 @@ import { MIN_OPEN_FILES, RAISE_OPEN_FILES_SH } from './openFiles.js'
 import { browserPrelude } from './browserShim.js'
 import { DSH_SESSION_ENV, harnessEnvToClear } from '../dsh/launch.js'
 import { launchScriptOf } from '../testing/launchScript.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 import { buildGridEngineLaunch, gridConflictingEnvToClear } from './gridLaunch.js'
 import { TmuxBackend } from './tmuxBackend.js'
 import { resumeSessionId } from './processTable.js'
@@ -203,7 +204,7 @@ describe('buildEngineLaunchArgv', () => {
     const dir = mkdtempSync(join(tmpdir(), 'harness-launch-size-'))
     const savedPath = process.env.PATH
     try {
-      writeFileSync(join(dir, 'tmux'), `#!/bin/sh\nfor arg in "$@"; do printf '%s\\000' "$arg"; done > "$(mktemp ${dir}/call.XXXXXX)"\nprintf '%%42\\n'\n`, { mode: 0o755 })
+      writeExecutable(join(dir, 'tmux'), `#!/bin/sh\nfor arg in "$@"; do printf '%s\\000' "$arg"; done > "$(mktemp ${dir}/call.XXXXXX)"\nprintf '%%42\\n'\n`)
       process.env.PATH = `${dir}:${savedPath}`
       const grid = { networkId: 'grid-3378218621364f16', networkName: 'autonomous.ai', baseUrl: 'https://grid.autonomous.ai/grid-3378218621364f16/relay/v1', apiKey: 'gridkey-abc123', model: 'GLM-4.7-Flash', mcpUrl: 'https://api-grid.autonomous.ai/v1/grid/web-mcp/' }
       for (const engine of ['claude', 'codex'] as const) {
@@ -262,7 +263,7 @@ describe('buildEngineLaunchArgv', () => {
       const binary = join(folder, 'codex')
       // /bin/sh --help succeeds on macOS but fails with Ubuntu's dash. A
       // simulated CLI needs its own help contract for the real startup probe.
-      writeFileSync(binary, '#!/bin/sh\nif [ "$1" = "--help" ]; then echo "fixture CLI"; exit 0; fi\necho "engine ran"\n', { mode: 0o755 })
+      writeExecutable(binary, '#!/bin/sh\nif [ "$1" = "--help" ]; then echo "fixture CLI"; exit 0; fi\necho "engine ran"\n')
       // Not a child of this process, as the terminal's is not: an unreaped child never looks gone.
       const pid = Number(execFileSync('/bin/sh', ['-c', 'sleep 1 >/dev/null 2>&1 & echo $!']).toString().trim())
       try {
@@ -413,9 +414,9 @@ printf '%s %s' "$harness_status" "$resumed"`], { encoding: 'utf8', stdio: ['igno
       const folder = mkdtempSync(join(tmpdir(), 'harness-codex-launch-'))
       try {
         const binary = join(folder, 'codex fixture')
-        writeFileSync(binary, '#!/bin/sh\nif [ "$1" = "--help" ]; then\n'
+        writeExecutable(binary, '#!/bin/sh\nif [ "$1" = "--help" ]; then\n'
           + (mode === 'failed' ? 'exit 2\n' : `printf '%s\\n' '${mode === 'supported' ? '  --no-daemon  Run locally' : '  --model  Choose a model'}'\nexit 0\n`)
-          + 'fi\nprintf "<%s>\\n" "$@"\n', { mode: 0o755 })
+          + 'fi\nprintf "<%s>\\n" "$@"\n')
         const script = buildEngineLaunchArgv('codex', {}, '/bin/sh', undefined, undefined, NO_TMUX)[2]
         const args = ['-c', script, 'harness-engine', binary, 'resume', 'same-conversation', 'literal $(nothing) `nothing` and spaces']
         if (mode === 'failed') {
@@ -1107,8 +1108,7 @@ afterEach(() => {
 
 function executable(dir: string, name: string): string {
   const path = join(dir, name)
-  writeFileSync(path, '#!/bin/sh\nexit 0\n')
-  chmodSync(path, 0o700)
+  writeExecutable(path, '#!/bin/sh\nexit 0\n')
   return path
 }
 
@@ -1116,7 +1116,7 @@ function bashProbeShell(): string {
   const dir = mkdtempSync(join(tmpdir(), 'harness-engine-shell-'))
   dirs.push(dir)
   const shell = join(dir, 'bash')
-  writeFileSync(shell, `#!/bin/sh
+  writeExecutable(shell, `#!/bin/sh
 [ "$1" = '-ic' ] || exit 97
 shift
 script="$1"
@@ -1125,7 +1125,6 @@ PATH="$HARNESS_ENGINE_TEST_PATH"
 export PATH
 exec /bin/sh -c "$script" "$@"
 `)
-  chmodSync(shell, 0o700)
   return shell
 }
 
@@ -1143,7 +1142,7 @@ function zshProbeShell(): string {
   dirs.push(dir)
   // Named `zsh` so interactiveEngineShell hands it zsh's own `-lic`, exactly as it would $SHELL.
   const shell = join(dir, 'zsh')
-  writeFileSync(shell, `#!/bin/sh
+  writeExecutable(shell, `#!/bin/sh
 [ "$1" = '-lic' ] || exit 97
 shift
 script="$1"
@@ -1152,7 +1151,6 @@ PATH="$HARNESS_ENGINE_TEST_PATH"
 export PATH
 exec ${ZSH} -c "$script" "$@"
 `)
-  chmodSync(shell, 0o700)
   return shell
 }
 
@@ -1161,8 +1159,7 @@ describe('commandAvailableInInteractiveShell', () => {
     const dir = mkdtempSync(join(tmpdir(), 'harness-failed-probe-'))
     dirs.push(dir)
     const shell = join(dir, 'bash')
-    writeFileSync(shell, '#!/bin/sh\nexit 9\n')
-    chmodSync(shell, 0o700)
+    writeExecutable(shell, '#!/bin/sh\nexit 9\n')
     const result = await commandAvailableInInteractiveShell('git', shell, undefined, true)
     expect(result).toMatchObject({ status: 'unverified', detail: expect.stringContaining('9') })
   })
@@ -1211,23 +1208,22 @@ describe('commandOutputInInteractiveShell', () => {
   it('returns both streams and the exit status from the shell a launch uses, and nothing for a hung command', async () => {
     const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-output-'))
     dirs.push(binDir)
-    writeFileSync(join(binDir, 'openclaw'), '#!/bin/sh\nprintf "%s\\n" "OpenClaw $1"\nprintf "%s\\n" "a warning" >&2\nexit 3\n')
-    chmodSync(join(binDir, 'openclaw'), 0o700)
+    writeExecutable(join(binDir, 'openclaw'), '#!/bin/sh\nprintf "%s\\n" "OpenClaw $1"\nprintf "%s\\n" "a warning" >&2\nexit 3\n')
     writeFileSync(join(binDir, 'stuck'), '#!/bin/sh\nexec /bin/sleep 30\n')
     chmodSync(join(binDir, 'stuck'), 0o700)
     process.env.HARNESS_ENGINE_TEST_PATH = `${binDir}:/usr/bin:/bin`
-    const ran = await commandOutputInInteractiveShell('openclaw', 'openclaw', ['--version'], bashProbeShell())
+    const shell = bashProbeShell()
+    const ran = await commandOutputInInteractiveShell('openclaw', 'openclaw', ['--version'], shell)
     expect(ran?.code).toBe(3)
     expect(ran?.output).toContain('OpenClaw --version')
     expect(ran?.output).toContain('a warning')
-    await expect(commandOutputInInteractiveShell('openclaw', 'stuck', [], bashProbeShell())).resolves.toBeNull()
+    await expect(commandOutputInInteractiveShell('openclaw', 'stuck', [], shell)).resolves.toBeNull()
   }, 8_000)
 })
 
 /** A fake engine whose `--help` prints exactly `help`, and nothing else. */
 function fakeEngine(dir: string, name: string, help: string): void {
-  writeFileSync(join(dir, name), `#!/bin/sh\nif [ "$1" = "--help" ]; then printf "%s\\n" '${help}'; exit 0; fi\nexit 2\n`)
-  chmodSync(join(dir, name), 0o700)
+  writeExecutable(join(dir, name), `#!/bin/sh\nif [ "$1" = "--help" ]; then printf "%s\\n" '${help}'; exit 0; fi\nexit 2\n`)
 }
 
 describe('the permission gates', () => {
@@ -1362,11 +1358,10 @@ describe('commandSupportsFlagInInteractiveShell', () => {
     const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-capability-'))
     dirs.push(binDir)
     const codex = join(binDir, 'codex')
-    writeFileSync(
+    writeExecutable(
       codex,
       '#!/bin/sh\nif [ "$1" = "--help" ]; then printf "%s\\n" "--sandbox"; exit 0; fi\nexit 2\n',
     )
-    chmodSync(codex, 0o700)
     process.env.HARNESS_ENGINE_TEST_PATH = binDir
 
     await expect(
@@ -1442,8 +1437,7 @@ describe('commandSupportsFlagInInteractiveShell', () => {
       const shell = bashProbeShell()
       const runs = join(binDir, 'runs')
       const build = (path: string, help: string) => {
-        writeFileSync(path, `#!/bin/sh\necho run >> '${runs}'\nif [ "$1" = "--help" ]; then printf "%s\\n" '${help}'; exit 0; fi\nexit 2\n`)
-        chmodSync(path, 0o700)
+        writeExecutable(path, `#!/bin/sh\necho run >> '${runs}'\nif [ "$1" = "--help" ]; then printf "%s\\n" '${help}'; exit 0; fi\nexit 2\n`)
       }
       const asked = () => existsSync(runs) ? readFileSync(runs, 'utf8').split('\n').filter(Boolean).length : 0
       const opencode = join(binDir, 'opencode')
@@ -1482,8 +1476,7 @@ describe('commandSupportsFlagInInteractiveShell', () => {
     const shellDir = mkdtempSync(join(tmpdir(), 'harness-engine-shell-'))
     dirs.push(shellDir)
     const shell = join(shellDir, 'bash')
-    writeFileSync(shell, '#!/bin/sh\nexit 1\n')
-    chmodSync(shell, 0o700)
+    writeExecutable(shell, '#!/bin/sh\nexit 1\n')
 
     await expect(
       commandSupportsFlagInInteractiveShell('codex', '--approve-for-me', shell),
@@ -1494,8 +1487,7 @@ describe('commandSupportsFlagInInteractiveShell', () => {
     const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-capability-'))
     dirs.push(binDir)
     const codex = join(binDir, 'codex')
-    writeFileSync(codex, '#!/bin/sh\nexit 2\n')
-    chmodSync(codex, 0o700)
+    writeExecutable(codex, '#!/bin/sh\nexit 2\n')
     process.env.HARNESS_ENGINE_TEST_PATH = binDir
 
     await expect(
@@ -1511,11 +1503,10 @@ describe('commandSupportsFlagInInteractiveShell', () => {
     const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-capability-zsh-'))
     dirs.push(binDir)
     const codex = join(binDir, 'codex')
-    writeFileSync(
+    writeExecutable(
       codex,
       '#!/bin/sh\nif [ "$1" = "--help" ]; then printf "%s\\n" "--approve-for-me"; exit 0; fi\nexit 2\n',
     )
-    chmodSync(codex, 0o700)
     process.env.HARNESS_ENGINE_TEST_PATH = binDir
 
     await expect(
@@ -1745,12 +1736,11 @@ describe('buildEngineLaunchArgv with installIfMissing', () => {
     chmodSync(engineSource, 0o700)
     const installed = join(runtimeBin, 'installed-engine')
     const npm = join(runtimeBin, 'npm')
-    writeFileSync(npm, `#!/bin/sh
+    writeExecutable(npm, `#!/bin/sh
 if [ "$1" = prefix ]; then exit 0; fi
 /bin/cp ${JSON.stringify(engineSource)} ${JSON.stringify(installed)}
 /bin/chmod 700 ${JSON.stringify(installed)}
 `)
-    chmodSync(npm, 0o700)
 
     const result = await runPaneScript(
       script(recipe('npm install -g fixture', {

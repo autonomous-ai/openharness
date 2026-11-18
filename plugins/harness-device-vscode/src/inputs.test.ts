@@ -1,10 +1,11 @@
 // Node's real inputs, against scripts, sockets and folders in the test's own temporary folder: never the developer's own.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { MISSING, nodeInputs } from './inputs'
+import { writeExecutable } from '../../../cli/src/testing/executableFixture'
 
 const OPEN = '{"type":"vscode","window":"a1b2c3d4"}'
 const STATE = '{"type":"vscode-state","window":"a1b2c3d4","terminals":[101],"active":101,"focused":true}'
@@ -26,8 +27,7 @@ afterEach(async () => {
 
 function script(name: string, body: string): string {
   const file = `${dir}/${name}`
-  writeFileSync(file, `#!/bin/sh\n${body}\n`)
-  chmodSync(file, 0o755)
+  writeExecutable(file, `#!/bin/sh\n${body}\n`)
   return file
 }
 

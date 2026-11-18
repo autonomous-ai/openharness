@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { resolveBinaryOnPath } from './binaryOnPath.js'
 import { buildEngineLaunchArgv, commandAvailableInInteractiveShell, shellSingleQuote } from './engineLaunch.js'
 import type { EngineInstallRecipe } from './engineInstall.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 // Use real npm against a local package, with networking and lifecycle scripts disabled.
 // Fake npm missed the fresh-account EACCES failure in a shared Homebrew prefix.
@@ -34,7 +35,7 @@ function fixture() {
   mkdirSync(pkg)
   const name = 'harness-user-engine-fixture'
   writeFileSync(join(pkg, 'package.json'), JSON.stringify({ name, version: '1.0.0', bin: { [name]: 'engine.js' } }))
-  writeFileSync(join(pkg, 'engine.js'), '#!/usr/bin/env node\nconsole.log("ENGINE_READY:" + JSON.stringify(process.argv.slice(2)))\n')
+  writeExecutable(join(pkg, 'engine.js'), '#!/usr/bin/env node\nconsole.log("ENGINE_READY:" + JSON.stringify(process.argv.slice(2)))\n')
   const runtime = (name: string) => {
     const bin = join(root, name, 'bin')
     mkdirSync(bin, { recursive: true })
@@ -101,7 +102,7 @@ describe('engine installation for a fresh OS user', () => {
 
     // The availability probe uses the same per-user candidates as the launch, without installing.
     const probe = join(f.home, '..', 'bash')
-    writeFileSync(probe, '#!/bin/sh\nshift\nexec /bin/sh -c "$@"\n', { mode: 0o700 })
+    writeExecutable(probe, '#!/bin/sh\nshift\nexec /bin/sh -c "$@"\n')
     vi.stubEnv('PATH', f.env.PATH)
     await expect(commandAvailableInInteractiveShell(f.name, probe, f.recipe)).resolves.toBe(true)
   })

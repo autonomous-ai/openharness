@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { CODEX_THREAD, codexQueueDeps, createCodexQueue, type CodexQueueDeps, type CodexRunEnd } from './codexQueue.js'
+import { writeExecutable } from '../../testing/executableFixture.js'
 
 // The real execFile, watched: a spec reads how the child of a run ended.
 vi.mock('node:child_process', async (original) => {
@@ -37,7 +38,8 @@ function executable(path: string, body = '#!/bin/sh\nexit 0\n'): string {
  *  real one. */
 function fakeCodex(tail = 'exit 0') {
   const out = (name: string) => join(dir, `${name}.out`)
-  const file = executable(join(dir, 'codex'), [
+  const file = join(dir, 'codex')
+  writeExecutable(file, [
     '#!/bin/sh',
     `printf '%s\\0' "$@" > '${out('argv')}'`,
     `printf '%s' "$CODEX_HOME" > '${out('home')}'`,

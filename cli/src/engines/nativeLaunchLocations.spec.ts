@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { AgentEngine } from './types.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 // Claude Code and Codex are asked for their help: answered in this process (testing/engineHelpInProcess.ts).
 vi.mock('node:child_process', async (real) => (await import('../testing/engineHelpInProcess.js')).withEngineHelp(await real<typeof import('node:child_process')>()))
@@ -23,9 +24,11 @@ beforeEach(() => {
     'OPENCODE_PLUGIN_DIR', 'OPENCODE_CONFIG_DIR', 'KILO_PLUGIN_DIR', 'PI_HOME', 'PI_CODING_AGENT_DIR', 'PI_CODING_AGENT_SESSION_DIR',
     'HERMES_HOME', 'COMMANDCODE_HOME', 'DEVIN_HOME', 'DEVIN_CONFIG_PATH', 'AMP_PLUGIN_DIR', 'ZDOTDIR']) vi.stubEnv(key, '')
   for (const engine of ['CLAUDE', 'CODEX', 'CURSOR', 'GROK', 'AGY', 'COPILOT', 'OPENCODE', 'KILO', 'PI', 'AMP', 'HERMES', 'COMMANDCODE', 'DEVIN']) vi.stubEnv(`${engine}_PATH`, '')
-  for (const name of ['claude', 'codex', 'cursor-agent', 'grok', 'agy', 'copilot', 'opencode', 'kilo', 'pi', 'amp', 'hermes', 'cmd', 'devin']) {
+  for (const name of ['claude', 'codex', 'cursor-agent', 'grok', 'agy', 'copilot', 'kilo', 'pi', 'amp', 'hermes', 'cmd', 'devin']) {
     writeFileSync(join(bin, name), '#!/bin/sh\nprintf "2.0.0\\n"\n', { mode: 0o700 })
   }
+  // Only opencode's answer decides a case under a deadline (its 5 s version probe), so only it is admitted first.
+  writeExecutable(join(bin, 'opencode'), '#!/bin/sh\nprintf "2.0.0\\n"\n')
   vi.resetModules()
 })
 afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); rmSync(root, { recursive: true, force: true }) })

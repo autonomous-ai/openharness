@@ -12,6 +12,7 @@ import {
   claudeDisable, claudeEnable, claudeFound, claudeHomeDisable, claudeHomeEnable, claudeRun, claudeRunIn, claudeSetUp, claudeStatus,
   claudeUpdate, type ClaudeRun,
 } from './claudePlugin.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 // A copy of the module, so a test can watch whether the lookup that starts the login shell ran.
 vi.mock('../lib/engineBin.js', async (original) => ({ ...await original<object>() }))
@@ -475,8 +476,7 @@ describe('claudeRun', () => {
   it('runs the claude on PATH and gives its code and output', async () => {
     const dir = throwawayPath()
     const script = join(dir, 'claude')
-    writeFileSync(script, '#!/bin/sh\necho "args: $*"\necho "warned" >&2\nexit 3\n')
-    chmodSync(script, 0o755)
+    writeExecutable(script, '#!/bin/sh\necho "args: $*"\necho "warned" >&2\nexit 3\n')
     const run = claudeRun()
     expect(run).not.toBeNull()
     expect(await run!(['plugin', 'list', '--json'], 15_000))
@@ -520,8 +520,7 @@ describe('claudeFound', () => {
     mkdirSync(join(dir, 'other'))
     mkdirSync(bin)
     const script = join(bin, 'claude')
-    writeFileSync(script, '#!/bin/sh\necho "args: $*"\necho "home: ${CLAUDE_CONFIG_DIR-none}"\necho "first: ${PATH%%:*}"\n')
-    chmodSync(script, 0o755)
+    writeExecutable(script, '#!/bin/sh\necho "args: $*"\necho "home: ${CLAUDE_CONFIG_DIR-none}"\necho "first: ${PATH%%:*}"\n')
     vi.stubEnv('PATH', [join(dir, 'other'), bin].join(delimiter))
     return { dir, bin }
   }
@@ -545,8 +544,7 @@ describe('claudeFound', () => {
     expect(await claudeFound(join(dir, '.claude'), false)).toBeNull()
     mkdirSync(join(dir, '.local', 'bin'), { recursive: true })
     const script = join(dir, '.local', 'bin', 'claude')
-    writeFileSync(script, '#!/bin/sh\necho "args: $*"\n')
-    chmodSync(script, 0o755)
+    writeExecutable(script, '#!/bin/sh\necho "args: $*"\n')
 
     const run = await claudeFound(join(dir, '.claude'), false)
 
@@ -577,8 +575,7 @@ describe('claudeRunIn', () => {
   it('the child gets CLAUDE_CONFIG_DIR and process.env does not', async () => {
     const dir = throwawayPath()
     const script = join(dir, 'claude')
-    writeFileSync(script, '#!/bin/sh\necho "home: ${CLAUDE_CONFIG_DIR-none}"\n')
-    chmodSync(script, 0o755)
+    writeExecutable(script, '#!/bin/sh\necho "home: ${CLAUDE_CONFIG_DIR-none}"\n')
     vi.stubEnv('CLAUDE_CONFIG_DIR', join(dir, 'profile-b'))
     const home = join(dir, 'profile-a')
 
@@ -593,8 +590,7 @@ describe('claudeRunIn', () => {
   it('with ~/.claude as the home the child gets no CLAUDE_CONFIG_DIR, though the process has one', async () => {
     const dir = throwawayPath()
     const script = join(dir, 'claude')
-    writeFileSync(script, '#!/bin/sh\necho "home: ${CLAUDE_CONFIG_DIR-none}"\n')
-    chmodSync(script, 0o755)
+    writeExecutable(script, '#!/bin/sh\necho "home: ${CLAUDE_CONFIG_DIR-none}"\n')
     vi.stubEnv('CLAUDE_CONFIG_DIR', join(dir, 'profile-b'))
 
     const run = claudeRunIn(join(dir, '.claude'))

@@ -11,9 +11,10 @@
  * multi-turn answers are the parts that drift when copied, and a fake that means something slightly
  * different in each file is worse than none.
  */
-import { chmodSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { writeExecutable } from '../../testing/executableFixture.js'
 
 const FAKE_GRID = `#!/usr/bin/env node
 const fs = require('fs')
@@ -68,8 +69,7 @@ export interface FakeGrid {
 export function installFakeGrid(plan: FakeGridPlan): FakeGrid {
   const root = mkdtempSync(join(tmpdir(), 'fake-grid-'))
   const bin = join(root, 'grid')
-  writeFileSync(bin, FAKE_GRID)
-  chmodSync(bin, 0o755)
+  writeExecutable(bin, FAKE_GRID)
   const planFile = join(root, 'plan.json')
   writeFileSync(planFile, JSON.stringify(plan))
   const log = join(root, 'calls.jsonl')

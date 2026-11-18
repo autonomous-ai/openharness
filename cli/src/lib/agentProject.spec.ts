@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { agentProject, aliasRepository, canonicalRepository, createAgentProjectReader, type AgentProject } from './agentProject.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 const roots: string[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map(path => rm(path, { recursive: true, force: true }))) })
@@ -296,7 +297,7 @@ describe('the repository an SSH host alias stands for (task #2476)', () => {
     const root = await mkdtemp(join(tmpdir(), 'harness-v2-alias-')); roots.push(root)
     // An ssh on PATH that answers -G as a configuration with `Host harness-test-gh-work` / `HostName github.com` would.
     const bin = join(root, 'bin'); await mkdir(bin)
-    await writeFile(join(bin, 'ssh'), '#!/bin/sh\n[ "$2" = harness-test-gh-work ] && echo "hostname github.com" || echo "hostname $2"\n', { mode: 0o755 })
+    writeExecutable(join(bin, 'ssh'), '#!/bin/sh\n[ "$2" = harness-test-gh-work ] && echo "hostname github.com" || echo "hostname $2"\n')
     vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
     try {
       const repo = (name: string, origin: string) => {

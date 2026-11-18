@@ -2,6 +2,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, chmodSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 const REAL_PATH = process.env.PATH
 const REAL_HOME = process.env.HOME
@@ -68,11 +69,10 @@ describe('opencodeBinAsync', () => {
 
     // A shell that answers the resolver's probe with a PATH this process lacks.
     const fakeShell = join(mkdtempSync(join(tmpdir(), 'oc-sh-')), 'shell');
-    writeFileSync(
+    writeExecutable(
       fakeShell,
       `#!/bin/sh\nprintf '\\n__HARNESS_ENGINE_PATH__=%s\\n' "${shellOnly}"\n`,
     );
-    chmodSync(fakeShell, 0o755);
 
     process.env.HOME = home;
     process.env.USERPROFILE = process.env.HOME;

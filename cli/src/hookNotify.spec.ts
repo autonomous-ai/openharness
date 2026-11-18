@@ -14,6 +14,7 @@ import { HARNESS_OWNER_OPTION, HARNESS_SESSION_PREFIX, harnessPaneOwner, ownerCo
 import { hookRouteFile, publishHookRoute } from './lib/hookRoutes.js'
 import { hookTokenPath } from './lib/hookAuth.js'
 import { isTrustedLocal, listenLocalSocket, localSocketName, socketPathIn } from './lib/localSocket.js'
+import { writeExecutable } from './testing/executableFixture.js'
 
 // Every case here spawns the real hook as a child process, and several spawn shell shims for tmux, ps
 // and sqlite3 on top of that: its hooks get the room the suite gives each case (vitest.config.ts).
@@ -157,7 +158,7 @@ function runHook(opts: RunHookOpts): Promise<string> {
       // is (a Harness session, untagged, unless the test says otherwise).
       const paneFacts = `${opts.paneSession ?? 'harness-claude-1790000000000'}|${opts.paneOwner ?? ''}`
       const tmuxDelay = opts.tmuxDelaySeconds ? `sleep ${opts.tmuxDelaySeconds}\n` : ''
-      writeFileSync(join(binDir, 'tmux'), `#!/bin/sh\n${tmuxDelay}printf '%s\\n' ${shellQuote(`7000|${paneFacts}`)}\n`, { mode: 0o755 })
+      writeExecutable(join(binDir, 'tmux'), `#!/bin/sh\n${tmuxDelay}printf '%s\\n' ${shellQuote(`7000|${paneFacts}`)}\n`)
       env.PATH = `${binDir}:${env.PATH ?? ''}`
     }
     if (opts.processEngine) {
@@ -174,14 +175,14 @@ function runHook(opts: RunHookOpts): Promise<string> {
           { pid: 7001, parentPid: 7000, executable, startMarker: 'w:133000000000000001', args: processArgs, nativeArgv: processArgs.split(' ') },
           { pid: process.pid, parentPid: 7001, executable: 'node.exe', startMarker: 'w:133000000000000002', args: 'hook-parent', nativeArgv: ['hook-parent'] },
         ] }
-        writeFileSync(join(binDir, 'harness-pty'), `#!/bin/sh\n[ "$1 $2" = "ps --json" ] || exit 2\nprintf '%s\\n' ${shellQuote(JSON.stringify(table))}\n`, { mode: 0o755 })
+        writeExecutable(join(binDir, 'harness-pty'), `#!/bin/sh\n[ "$1 $2" = "ps --json" ] || exit 2\nprintf '%s\\n' ${shellQuote(JSON.stringify(table))}\n`)
         env.HARNESS_PTY_BIN = join(binDir, 'harness-pty')
         writeFileSync(join(binDir, 'ps'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
       } else {
         // Hermes 0.22+: the hook comes from the shared gateway the pane's Hermes started, not from that Hermes.
         const gateway = opts.viaHermesGateway ? ` '7002 7001 python3 Mon Aug 10 10:00:02 2026 python3 -m hermes_cli.main gateway run --quiet --idle-exit'` : ''
         // In macOS's legacy mode `ps -e` lists every process's environment; this one answers nothing in it instead.
-        writeFileSync(join(binDir, 'ps'), `#!/bin/sh\n[ "$COMMAND_MODE" = legacy ] && exit 1\nprintf '%s\\n' '7000 1 zsh Mon Aug 10 10:00:00 2026 -zsh' ${shellQuote(`7001 7000 ${executable} Mon Aug 10 10:00:01 2026 ${processArgs}`)}${gateway} '${process.pid} ${opts.viaHermesGateway ? 7002 : 7001} node Mon Aug 10 10:00:02 2026 hook-parent'\n`, { mode: 0o755 })
+        writeExecutable(join(binDir, 'ps'), `#!/bin/sh\n[ "$COMMAND_MODE" = legacy ] && exit 1\nprintf '%s\\n' '7000 1 zsh Mon Aug 10 10:00:00 2026 -zsh' ${shellQuote(`7001 7000 ${executable} Mon Aug 10 10:00:01 2026 ${processArgs}`)}${gateway} '${process.pid} ${opts.viaHermesGateway ? 7002 : 7001} node Mon Aug 10 10:00:02 2026 hook-parent'\n`)
       }
       const nativeFixture = join(binDir, 'native-process.mjs')
       writeFileSync(nativeFixture, `import fs from 'node:fs'; import { syncBuiltinESMExports } from 'node:module';
@@ -226,7 +227,7 @@ fs.readFileSync = (path, ...args) => {
           : JSON.stringify([typeof opts.hermesSource === 'object' ? opts.hermesSource : { source: opts.hermesSource }])
         const stepScale = Number(env.HARNESS_HOOK_DEADLINE_MS) / 4500
         const delay = opts.hermesDelaySeconds ? `sleep ${opts.hermesDelaySeconds * stepScale}\n` : ''
-        writeFileSync(join(binDir, 'sqlite3'), `#!/bin/sh\n${delay}printf '%s\\n' '${rows}'\n`, { mode: 0o755 })
+        writeExecutable(join(binDir, 'sqlite3'), `#!/bin/sh\n${delay}printf '%s\\n' '${rows}'\n`)
       }
       env.PATH = `${binDir}:${env.PATH ?? ''}`
     }
