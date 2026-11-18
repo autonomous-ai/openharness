@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { PROCESS_ENGINES } from '../engines/types.js'
@@ -402,6 +403,33 @@ describe('after Harness\'s folder moved', () => {
       expect(JSON.parse(saved).skills).toEqual([{ name: 'draw', dir: join(moved, 'skills', 'draw') }])
       expect(saved).not.toContain(oldDsh)
     }
+  })
+
+  // The home's own .harness is Harness's old folder, which the move turned into the bridge: a harness launched in the
+  // home keeps its runtime where the move put the ones made before it, and writes nothing into the bridge.
+  it('a harness launched in the home keeps its runtime in the state root', () => {
+    const hash = createHash('sha256').update('key').digest('hex')
+    prepareHarnessLaunch(pkg, home, 'claude', 'key')
+    expect(harnessRuntimeDir(home, 'key')).toBe(join(home, '.harness', 'runtime', hash))
+    // The move: runtime goes to the state root with what it holds, a link to it left in the bridge.
+    move()
+    const runtime = join(home, '.local', 'state', 'harness', 'runtime')
+    mkdirSync(dirname(runtime), { recursive: true })
+    renameSync(join(home, '.harness', 'runtime'), runtime)
+    symlinkSync(runtime, join(home, '.harness', 'runtime'))
+    rmSync(join(home, '.harness', '.gitignore'))
+    const launch = prepareHarnessLaunch(pkg, home, 'claude', 'key')
+    expect(harnessRuntimeDir(home, 'key')).toBe(join(runtime, hash))
+    expect(launch.env.HARNESS_CONTEXT_FILE).toBe(join(runtime, hash, 'CONTEXT.md'))
+    expect(readlinkSync(join(runtime, hash, 'skills', 'draw'))).toBe(join(newDsh, 'acme', 'draw', 'skills', 'draw'))
+    expect(forkRuntimeKey({ cwd: home, agentId: 'key' })).toBe('key')
+    expect(readdirSync(join(home, '.harness'))).toEqual(['runtime'])
+  })
+
+  it('off Linux the home keeps its runtime in its .harness, even beside an XDG folder', () => {
+    move()
+    on('darwin')
+    expect(harnessRuntimeDir(home, 'key')).toBe(join(home, '.harness', 'runtime', createHash('sha256').update('key').digest('hex')))
   })
 
   const unmoved = {
