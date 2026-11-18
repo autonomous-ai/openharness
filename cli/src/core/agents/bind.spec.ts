@@ -16,6 +16,8 @@ import type { RegisteredSession } from '../../lib/registry.js'
 import { findLiveSession, findResumedTranscript } from '../../lib/sessionRepair.js'
 import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
 import { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
+import { AttachTracker } from '../../lib/attachTracker.js'
+import { paneReadIdentity } from '../transcripts/readIdentity.js'
 import { createBinding, statBirthMs, type BindDeps, type RegisteredMeta } from './bind.js'
 import { createInput } from '../input.js'
 import type { TerminalActionResult } from '../../lib/terminalTypes.js'
@@ -1040,24 +1042,67 @@ describe('binding a running process to its session', () => {
         runtimes: seen.runtimes, primaryRuntimeKey: seen.primaryRuntimeKey, processIdentity: seen.processIdentity, hookEvent: 'HermesTerminal' }, { current: expect.any(Function) })
       expect(run.deps.attachSession).toHaveBeenCalledOnce()
       expect(findLiveSession).not.toHaveBeenCalled()
-      // A rotation the registry refused, or one that was not new, attaches nothing more.
-      vi.mocked(run.deps.registry.register).mockResolvedValueOnce(null).mockReturnValueOnce({ entry: agent({ engine: 'hermes', sessionId: 'S' }), ...meta() } as never)
-      await run.binding.bindObservedAgent(seen)
+      // A rotation the registry refused attaches nothing more; one that was not new is followed as a hook's re-register is.
+      vi.mocked(run.deps.registry.register).mockResolvedValueOnce(null)
       await run.binding.bindObservedAgent(seen)
       expect(run.deps.attachSession).toHaveBeenCalledOnce()
-      // Nor is either said to be a switch: a refused one is tried again in the repair's rhythm.
+      const kept = agent({ engine: 'hermes', sessionId: 'S' })
+      vi.mocked(run.deps.registry.register).mockResolvedValueOnce({ entry: kept, ...meta() } as never)
+      await run.binding.bindObservedAgent(seen)
+      expect(run.deps.attachSession).toHaveBeenCalledTimes(2)
+      expect(run.deps.attachSession).toHaveBeenLastCalledWith(kept, false, false, false)
+      // Neither is said to be a switch: a refused one is tried again in the repair's rhythm.
       expect(said()).toEqual(['[discovery] a1 switched hermes session old → S'])
     })
 
-    it('confirms a resumed Hermes without a switch', async () => {
+    it('confirms a resumed Hermes without a switch, and follows the binding it confirmed', async () => {
       const { run } = withRecord({ sessionId: 'S', resumeOnly: true, lastHookAt: 0 })
-      vi.mocked(run.deps.registry.register).mockResolvedValue({ entry: agent({ engine: 'hermes', sessionId: 'S' }), ...meta() } as never)
+      const confirmed = agent({ engine: 'hermes', sessionId: 'S' })
+      vi.mocked(run.deps.registry.register).mockResolvedValue({ entry: confirmed, ...meta() } as never)
       follow.mockResolvedValue({ sessionId: 'S' })
       await run.binding.bindObservedAgent(hermes())
       expect(run.deps.registry.register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: 'S', source: 'hermes-terminal', hookEvent: 'HermesTerminal' }), { current: expect.any(Function) })
       expect(said()).toEqual([])
-      expect(run.deps.attachSession).not.toHaveBeenCalled()
+      // The confirmation binds the row (`boundAt`), so the attach the resume started gave up on it (attach.ts).
+      expect(run.deps.attachSession).toHaveBeenCalledExactlyOnceWith(confirmed, false, false, false)
     })
+
+    it.each([["the resume's, of the row before it", true], ["a hook's, of the row it confirmed", false]] as const)(
+      'reads a confirmed Hermes resume once, while an attach still reads: %s', async (_reading, resumed) => {
+        const { run, entry } = withRecord({ sessionId: 'S', resumeOnly: true, lastHookAt: 0, boundAt: null })
+        const confirmed = agent({ ...entry, boundAt: 1, lastHookAt: 1 })
+        // Two attaches of one session as attach.ts runs them: one read at a time (lib/attachTracker.ts), a plain attach
+        // of the same binding joining the read in flight, and a read whose binding moved on meanwhile giving it up.
+        const tracker = new AttachTracker<string>()
+        const reads: string[] = []
+        let finish!: () => void
+        const held = new Promise<void>(resolve => { finish = resolve })
+        vi.mocked(run.deps.attachSession).mockImplementation((session, reset = false) => {
+          const identity = paneReadIdentity(session)
+          return tracker.attach(session, reset, async () => {
+            reads.push(identity)
+            await held
+            return paneReadIdentity(run.deps.registry.byAgent(session.agentId)) === identity
+          }, identity)
+        })
+        if (resumed) void run.deps.attachSession(entry)
+        vi.mocked(run.deps.registry.register).mockImplementation(async () => {
+          run.byAgent.set(entry.agentId, confirmed)
+          // A hook's re-register of the same binding, attaching it as the commit lands.
+          if (!resumed) void run.deps.attachSession(confirmed)
+          return { entry: confirmed, ...meta() } as never
+        })
+        follow.mockResolvedValue({ sessionId: 'S' })
+        await run.binding.bindObservedAgent(hermes())
+        expect(run.deps.attachSession).toHaveBeenCalledTimes(2)
+        expect(run.deps.attachSession).toHaveBeenLastCalledWith(confirmed, false, false, false)
+        expect(reads).toHaveLength(1)
+        finish()
+        const attached = await Promise.all(vi.mocked(run.deps.attachSession).mock.results.map(result => result.value))
+        expect(attached).toEqual(resumed ? [false, true] : [true, true])
+        expect(reads).toEqual([...resumed ? [paneReadIdentity(entry)] : [], paneReadIdentity(confirmed)])
+      },
+    )
 
     it('does nothing while a record waits', async () => {
       for (const sessionId of ['', 'old']) {
