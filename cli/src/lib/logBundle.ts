@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, lstatSync, statSync, openSync, readSync, closeSync, type Stats } from 'node:fs'
+import { readdirSync, lstatSync, statSync, openSync, fstatSync, readSync, closeSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { REMOVALS_FILE } from './signOut.js'
 import { writeZip, type ZipEntry } from './zipWriter.js'
@@ -94,29 +94,29 @@ export function bundleFileName(now: Date): string {
   return `harness-logs-${ymd(now)}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}.zip`
 }
 
-/** A file's own stats, or a throw for anything else: a link could point at any file of the person's. */
-function regularFile(path: string): Stats {
-  const stats = lstatSync(path)
-  if (!stats.isFile()) throw new Error(`${path} is not a regular file`)
-  return stats
-}
-
 /**
- * At most the last `bytes` of a file, in whole lines: the line the cut lands in is dropped, since a token or the home
- * cut short is no longer what the blanking knows it by.
+ * A log, read only as a file of its own: a link could point at any file of the person's. The file opened must be the
+ * one looked at, so a log swapped for a link in between is not followed either.
+ * With `tailBytes`, at most its last that many, in whole lines (`cut`): the line the cut lands in is dropped, since a
+ * token or the home cut short is no longer what the blanking knows it by.
  */
-function readTail(path: string, bytes: number): Buffer {
-  const size = regularFile(path).size
-  // From one byte before the cut, so a line that starts at the cut is kept.
-  const from = Math.max(0, size - bytes - 1)
+function readLog(path: string, tailBytes = Infinity): { data: Buffer; mtime: Date; cut: boolean } {
+  const seen = lstatSync(path)
+  if (!seen.isFile()) throw new Error(`${path} is not a regular file`)
   const fd = openSync(path, 'r')
   try {
+    const opened = fstatSync(fd)
+    if (opened.dev !== seen.dev || opened.ino !== seen.ino) throw new Error(`${path} changed while it was read`)
+    const { size, mtime } = opened
+    // From one byte before the cut, so a line that starts at the cut is kept.
+    const from = Math.max(0, size - tailBytes - 1)
     const out = Buffer.alloc(size - from)
-    readSync(fd, out, 0, out.length, from)
-    if (size <= bytes) return out
+    // A log trimmed meanwhile reads short: only what was read is kept, never the zeros after it.
+    const data = out.subarray(0, readSync(fd, out, 0, out.length, from))
+    if (size <= tailBytes) return { data, mtime, cut: false }
     // No line break: all of it is the line the cut lands in.
-    const lineEnd = out.indexOf(0x0a)
-    return lineEnd < 0 ? Buffer.alloc(0) : out.subarray(lineEnd + 1)
+    const lineEnd = data.indexOf(0x0a)
+    return { data: lineEnd < 0 ? Buffer.alloc(0) : data.subarray(lineEnd + 1), mtime, cut: true }
   } finally {
     closeSync(fd)
   }
@@ -179,12 +179,10 @@ export function buildLogBundle(opts: LogBundleOptions): { zip: Buffer; included:
     if (!m || m[2] < cutoff) continue
     const bytes = take.get(name)
     if (bytes === 0) { included.push(`${name} (left out to keep the bundle small)`); continue }
-    const path = join(opts.logsDir, name)
     try {
-      const whole = bytes === undefined || bytes >= statSync(path).size
-      const read = whole ? readFileSync(path) : readTail(path, bytes)
-      entries.push({ name: `logs/${name}`, data: Buffer.from(blank(read.toString('utf8'))), mtime: statSync(path).mtime })
-      included.push(whole ? name : `${name} (last ${Math.round(read.length / 1024)} KB)`)
+      const { data, mtime, cut } = readLog(join(opts.logsDir, name), bytes)
+      entries.push({ name: `logs/${name}`, data: Buffer.from(blank(data.toString('utf8'))), mtime })
+      included.push(cut ? `${name} (last ${Math.round(data.length / 1024)} KB)` : name)
     } catch { /* unreadable: skipped, said in the README below */ }
   }
 
@@ -196,27 +194,24 @@ export function buildLogBundle(opts: LogBundleOptions): { zip: Buffer; included:
     for (const file of files) {
       const m = DEVICE_APP_LOG.exec(file)
       if (!m || m[1] < cutoff) continue
-      const path = join(appDir, file)
       try {
-        entries.push({ name: `logs/harness-device/${file}`, data: Buffer.from(blank(readFileSync(path, 'utf8'))), mtime: statSync(path).mtime })
+        const { data, mtime } = readLog(join(appDir, file))
+        entries.push({ name: `logs/harness-device/${file}`, data: Buffer.from(blank(data.toString('utf8'))), mtime })
         included.push(`harness-device/${file}`)
       } catch { /* unreadable: skipped, said in the README below */ }
     }
   }
 
-  const harnessLog = join(opts.dataDir, 'harness.log')
   try {
-    const tail = readTail(harnessLog, opts.harnessLogTailBytes ?? 5 * 1024 * 1024)
-    const text = tail.toString('utf8')
-    entries.push({ name: 'harness.log', data: Buffer.from(blank(text)), mtime: statSync(harnessLog).mtime })
-    included.push(`harness.log (last ${Math.round(tail.length / 1024)} KB)`)
+    const { data, mtime } = readLog(join(opts.dataDir, 'harness.log'), opts.harnessLogTailBytes ?? 5 * 1024 * 1024)
+    entries.push({ name: 'harness.log', data: Buffer.from(blank(data.toString('utf8'))), mtime })
+    included.push(`harness.log (last ${Math.round(data.length / 1024)} KB)`)
   } catch { /* no daemon log */ }
 
   // Kept apart because harness.log's trim can take its line (anh Dee's Mac, 2026-11-12): small and whole.
-  const removals = join(opts.dataDir, REMOVALS_FILE)
   try {
-    const { mtime } = regularFile(removals)
-    entries.push({ name: REMOVALS_FILE, data: Buffer.from(blank(readFileSync(removals, 'utf8'))), mtime })
+    const { data, mtime } = readLog(join(opts.dataDir, REMOVALS_FILE))
+    entries.push({ name: REMOVALS_FILE, data: Buffer.from(blank(data.toString('utf8'))), mtime })
     included.push(REMOVALS_FILE)
   } catch { /* no removal yet */ }
 
