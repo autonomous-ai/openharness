@@ -26,6 +26,9 @@ import { Store } from '../src/lib/connectors/store.js'
 import { placeNode } from '../src/testing/placeNode.js'
 import { SYSTEM_FOLDERS } from '../src/testing/testPath.js'
 
+/** The computer's own lsof, which a daemon's stands in front of. None on Windows. */
+const SYSTEM_LSOF = SYSTEM_FOLDERS.map((folder) => join(folder, 'lsof')).find((file) => existsSync(file))
+
 /** A connections folder with one connection saved, as Connections leaves it. */
 function saved(root: string, code: string): void {
   mkdirSync(root, { recursive: true, mode: 0o700 })
@@ -321,9 +324,9 @@ describe('a daemon under test knows nothing of the developer\'s own state', () =
   })
 
   // The devices' open scan reads every `codex` on the computer (sessionSearch/externals/support.ts), and the dial skill is
-  // written into each Codex home whose rollout one holds (devices/dialHomeSetup.ts). Only deviceDialSkill.e2e.ts hid
-  // the computer's from its daemon: every other daemon with a dial attached wrote the skill into that test's homes, and
-  // into the developer's real ones. Windows has no lsof.
+  // written into each Codex home whose rollout one holds (cable/dialHomeSetup.ts). Only deviceDialSkill.e2e.ts and
+  // deviceOrcaHomes.e2e.ts hid the computer's from their daemon: every other daemon with a dial attached wrote the skill
+  // into those tests' homes, and into the developer's real ones. Windows has no lsof.
   it.skipIf(process.platform === 'win32')('sees no Codex of the developer\'s: its open scan shows only files under its own root', async () => {
     // The developer's Codex: a process named `codex` (a copy of Node: macOS's `lsof -c` reads the file the kernel ran,
     // Linux's the title) holding a rollout open in a home outside the root.
@@ -347,13 +350,23 @@ process.stdin.resume()`
     const names = (lsof: string, env: NodeJS.ProcessEnv): string[] =>
       spawnSync(lsof, ['-n', '-P', '-Fpn', '-c', 'codex', '-c', 'Codex'], { env, encoding: 'utf8' }).stdout.split('\n')
         .filter((line) => line.startsWith('n')).map((line) => line.slice(1))
-    const system = SYSTEM_FOLDERS.map((folder) => join(folder, 'lsof')).find((file) => existsSync(file))
-    expect(system, 'the system\'s lsof').toBeDefined()
+    expect(SYSTEM_LSOF, 'the system\'s lsof').toBeDefined()
     // The computer's lsof sees it, or the check below proves nothing.
-    expect(names(system!, process.env).includes(rollout), 'the system\'s lsof shows the rollout held').toBe(true)
+    expect(names(SYSTEM_LSOF!, process.env).includes(rollout), 'the system\'s lsof shows the rollout held').toBe(true)
     // Asked as the scan asks, by name on the daemon's PATH. Counted, never printed: the names are the developer's.
     expect(names('lsof', d.env).filter((name) => !name.startsWith(`${d.root}/`)).length, 'files outside the root').toBe(0)
     expect(execFileSync('/bin/sh', ['-c', 'command -v lsof'], { env: d.env }).toString().trim()).toBe(join(d.root, 'bin', 'lsof'))
+  })
+
+  // The scan reads lsof's output whatever its status, and tells its empty match (1, with nothing said) from a failure,
+  // which leaves the conversation's owner unknown (sessionSearch/externals/support.ts `run`): a filter at the end of a
+  // pipe answered awk's 0 for both, so a daemon under test never met either.
+  it.skipIf(process.platform === 'win32')('its lsof answers with lsof\'s own exit status', async () => {
+    const d = daemon = await IsolatedDaemon.create()
+    // A command name no process has: lsof's empty match.
+    const nobody = ['-n', '-P', '-Fpn', '-c', `zq${randomUUID().slice(0, 6)}`]
+    expect(spawnSync(SYSTEM_LSOF!, nobody).status).toBe(1)
+    expect(spawnSync('lsof', nobody, { env: d.env }).status).toBe(1)
   })
 
   // A shell script: Windows has no `open` to stand in for.
