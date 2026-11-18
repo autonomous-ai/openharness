@@ -20,11 +20,14 @@ export interface ConditionDeps { platform: NodeJS.Platform; home: string; env: N
   /** tmux's version (null with no tmux), and every pane's tag, read with or without pane options. */
   tmux: { version(): string | null; tags(paneOptions: boolean): string[] }; ptyHostRuns(ptyDir: string): boolean }
 
-/** Every setting whose default is under the home: config/env.ts's, and those read where they are used. */
+/**
+ * Every setting whose default is under the home: config/env.ts's, and those read where they are used. And the env file's
+ * own names (config/loadEnv.ts): one in ~/.harness would move away from the daemon that reads it.
+ */
 export const OVERRIDE_NAMES: readonly string[] = [
   'ADAPTER_DATA_DIR', 'ADAPTER_CLI_DIR', 'ADAPTER_RUNTIME_DIR', 'ADAPTER_COMPUTER_ID_FILE', 'AMP_SESSIONS_DIR', 'DSH_DIR',
   'HARNESS_AUTH_DIR', 'HARNESS_CONNECTIONS_DIR', 'HARNESS_HOOK_ROUTES_DIR', 'HARNESS_LOGS_DIR', 'HARNESS_PTY_DIR',
-  'HARNESS_DEVICES_DIR', 'HARNESS_AGENT_MESSAGES_DIR', 'HARNESS_FLASHER_CACHE',
+  'HARNESS_DEVICES_DIR', 'HARNESS_AGENT_MESSAGES_DIR', 'HARNESS_FLASHER_CACHE', 'HARNESS_ENV_FILE', 'DOTENV_CONFIG_PATH',
 ]
 
 // The daemon's socket names (lib/localSocket.ts).
