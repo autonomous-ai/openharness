@@ -547,7 +547,9 @@ class EnvironmentProvisioner {
   /// Harness's roots: the folder a test handed in, or this computer's by the
   /// rule, looked up again at each use so a move during setup is followed.
   HarnessHome get _roots {
-    final join = separatorJoin(Platform.pathSeparator);
+    // A macOS or Linux layout is joined with '/', as the CLI writes the paths
+    // it records (current-node), whatever the host the provisioner runs on.
+    final join = separatorJoin(_isWindows ? Platform.pathSeparator : '/');
     final fixed = _fixedHome;
     if (fixed != null) return HarnessHome.at(fixed.path, join: join);
     // The home and the XDG variables of the one environment this provisioner
