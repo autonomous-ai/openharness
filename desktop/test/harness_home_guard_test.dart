@@ -113,6 +113,8 @@ void main() {
         "final home = homeDir();\n/* p.join(home, '.harness')\n */",
         "final target = File(p.join(workspace.path, '.harness', 'design.json'));",
         "const agentHandoffDir = '.harness/handoff';",
+        r"final design = File('${workspace.path}/.harness/design.json');",
+        r"final handoff = Directory('$folder/.harness/handoff');",
         "final staging = await Directory(parent).createTemp('.harness-clone-');",
         r"final label = '${task.harness} · done';",
       ];
