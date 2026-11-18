@@ -38,7 +38,7 @@ beforeEach(async () => {
   Object.assign(row, { sessionId: 'saved', processIdentity: { pid: 77, executable: 'codex', startMarker: 'fixture' } })
   deps = { registry, stoppedAgents, restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(),
     backendFor: runtime => runtime.backend === 'tmux' ? { kill: tmuxKill } : undefined,
-    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn(async () => {}) },
+    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), nudge: vi.fn() },
     forgetSession: vi.fn(async (id, options) => { await registry.confirmEngineExit(id, 'remove', options.authority) }), markDeleted: vi.fn(), clearDeleted: vi.fn(),
     stopNative: vi.fn(async () => {}),
   }
@@ -266,7 +266,7 @@ it.each(['terminal', 'without tmux', 'failed process', 'failed tmux'] as const)(
     expect(deps.forgetSession).not.toHaveBeenCalled()
     expect(deps.agentReconciler.suppress).not.toHaveBeenCalled()
   } else await stopping
-  expect((await stoppedAgents.get(row.agentId))).not.toBeNull(); expect(deps.agentReconciler.trigger).toHaveBeenCalledOnce()
+  expect((await stoppedAgents.get(row.agentId))).not.toBeNull(); expect(deps.agentReconciler.nudge).toHaveBeenCalledOnce()
   expect(stoppedAgents.beginResume(row.agentId) === null).toBe(mode === 'failed process' || mode === 'failed tmux')
 })
 

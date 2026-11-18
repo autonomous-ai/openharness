@@ -5,7 +5,7 @@
  * 5 `opencode` and 4 `cursor-agent` among the processes tests left on one Mac). Every folder and file here is made up.
  */
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readdirSync, readlinkSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -79,6 +79,10 @@ describe.skipIf(process.platform === 'win32')('the PATH of what a test starts', 
   it('runs each tool the worker has through its link, with nothing else on PATH', () => {
     const root = folder(), path = testPath(root)
     for (const [name] of workerTools()) {
+      // Read first, unbounded: a tool's first run reads its whole file from disk, podman's 40 MB, and a CI runner's disk
+      // can be slow. On a disk held to 4 MB/s podman's `--version` took over 10 s cold and 0.8 s once read; CI timed it
+      // out twice (runs 44107058213, 44222372009). The bound below is for a tool that hangs, not for the disk.
+      readFileSync(join(root, 'tools', name))
       expect(() => execFileSync(join(root, 'tools', name), ASKED[name], { env: { PATH: path, HOME: root }, stdio: 'ignore', timeout: 10_000 }), name).not.toThrow()
     }
   })

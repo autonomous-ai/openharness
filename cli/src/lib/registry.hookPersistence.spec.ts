@@ -154,7 +154,7 @@ it('keeps a hook pending when Stop begins while its durable commit is held', asy
     settlePane: () => new Promise((_resolve, reject) => { fail = reject }),
     restartJobs: { cancel: vi.fn() } as unknown as import('./restartAgent.js').AgentRestartCoordinator,
     stoppedAgents: { save: never } as unknown as import('./stoppedAgents.js').StoppedAgentStore,
-    backendFor: () => ({ kill: never }), agentReconciler: { suppress: never, holdRoute: never, releaseRoute: never, trigger: never },
+    backendFor: () => ({ kill: never }), agentReconciler: { suppress: never, holdRoute: never, releaseRoute: never, nudge: never },
     forgetSession: never, markDeleted: never, clearDeleted: never, stopNative: never,
   })
   const held = hold(phase), response = post()

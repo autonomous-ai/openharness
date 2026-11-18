@@ -1303,7 +1303,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       saveHostTheme(theme)
       console.log(`[theme] panes now bg=${theme.background} fg=${theme.foreground}`)
       // Existing sessions pick it up on the next scan (TmuxBackend.inventory restyles); nudge one now.
-      void agentReconciler.trigger()
+      agentReconciler.nudge()
     },
   })
   backend.terminalInfoProvider = terminalRequests.terminalInfo
@@ -2154,11 +2154,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // now marks their agents gone, which the resume path takes from there, rather than at the next tick.
   // A drain host that exited took its panes too.
   for (const backend of ptyHosts ? [ptyHosts.create, ...ptyHosts.drain] : []) {
-    backend.onHostReplaced = () => {
-      void agentReconciler.trigger().catch((error) => {
-        console.error('[terminal] ptyhost: reconcile after host restart failed:', error instanceof Error ? error.message : error)
-      })
-    }
+    backend.onHostReplaced = () => agentReconciler.nudge()
   }
 
   // Account HTTP and the persistent machine cache belong to the gateway. The core routes the request

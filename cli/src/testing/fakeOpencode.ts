@@ -129,8 +129,11 @@ export async function fakeOpencode(options: FakeOpencodeOptions = {}): Promise<F
   let events = 0
   let asked = 0
   let messages = 0
+  let stamped = 0
 
   const url = () => `http://127.0.0.1:${port}`
+  // Each stamp later than the last: two in one millisecond would tie, and the list's order rest on the clock.
+  const stamp = () => (stamped = Math.max(Date.now(), stamped + 1))
 
   const sessionInfo = (held: Held) => ({
     id: held.id,
@@ -340,20 +343,20 @@ export async function fakeOpencode(options: FakeOpencodeOptions = {}): Promise<F
     stream: async (n) => { await until(() => opened >= n || undefined) },
     get streams() { return live.size },
     session: (session) => {
-      const updated = session.updated ?? Date.now()
+      const updated = session.updated ?? stamp()
       sessions.set(session.id, { ...session, updated, created: sessions.get(session.id)?.created ?? updated })
     },
     start: (id) => {
       active.add(id)
       const held = sessions.get(id)
-      if (held) held.updated = held.busy = Date.now()
+      if (held) held.updated = held.busy = stamp()
       event('session.execution.started', { sessionID: id })
     },
     end: (id, how, answer) => {
       active.delete(id)
       const held = sessions.get(id)
       if (held) {
-        held.updated = held.idle = Date.now()
+        held.updated = held.idle = stamp()
         if (answer !== undefined) held.answer = answer
       }
       const more = how === 'failed' ? { error: { type: 'unknown', message: 'The turn failed.' } }

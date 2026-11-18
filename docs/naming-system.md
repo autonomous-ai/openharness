@@ -24,7 +24,7 @@ applicable design system, including the [desktop Design System](../desktop/desig
 | Desktop, web, and mobile interfaces | **Harness** | Use descriptors such as “the Harness desktop app” or “Harness on your phone.” |
 | Compute hardware | **Autonomous Computer** | The physical computer. “Personal AI computer” can describe it. |
 | Optional companion controller | **Harness device** | The input and status device connected to the computer. |
-| Menu-bar app for the round dial | **Harness** | The small app in the menu bar that keeps the dial's line to Harness: its status, sign-in, Sound and Notifications. Its file stays `Harness Device.app`, since the desktop app is `Harness.app`; its code name is `device-app`. In copy the hardware is the **dial**. |
+| Menu-bar app for the round dial | **Harness** | The small app in the menu bar that keeps the dial's line to Harness: its status, sign-in, Sound and Notifications. Its file stays `Harness Device.app`, since the desktop app is `Harness.app`; its code name is `device-app`. In its copy the hardware is the **device**; outside the app, as on the website, it is the **Harness device**. |
 | Optional inference network | **Grid** | Routes model requests to the computers serving them. |
 | Open source project and repository | **OpenHarness** | Use for the source project and repository identity; the product interface says Harness. |
 
@@ -32,7 +32,7 @@ Use **Harness** in prose. Wordmarks and ASCII artwork may use their established
 lettering. `hn` and `harness` are commands, and `harnessd` is the name of the
 daemon's process (the way `dockerd` is Docker's); none of them is an additional
 product brand. Prose says "the Harness daemon".
-Keep vendor names intact: **Claude Code**, **Codex**, **OpenCode**, and **pi**.
+Keep vendor names intact: **Claude Code**, **Codex**, **OpenCode**, **pi**, and **VS Code**.
 
 The roadmap can be explained in one sentence:
 
@@ -63,7 +63,7 @@ and **Browser**. Technical documentation may still call the terminal interface a
 | **Connections** | Service accounts available to agents running as the same local user on a Harness computer. | Open Connections; connect GitHub. |
 | **Viewer** | A surface for inspecting or interacting with work. | The game viewer; the HTML preview. |
 | **This computer** | The local execution machine. | Run on This computer. |
-| **dial** | The round Harness hardware on a person's desk; the word copy uses for it. Lowercase in a sentence, like *harness* and *tab*. | Your dial is unplugged. |
+| **dial** | The round Harness hardware on a person's desk; the word copy in the CLI, Desktop and firmware uses for it; the menu-bar app says **device**. Lowercase in a sentence, like *harness* and *tab*. | Your dial is unplugged. |
 | **Cloud** | An agent maker's own servers, as a place a harness runs beside the computers. A **cloud agent** runs there, reached through its maker's API rather than as a terminal program. | Devin Cloud runs in Devin's cloud; Fo runs only in Fo's cloud. |
 | **Store** | The catalog of reusable harnesses and viewers. | Install a harness from the Store. |
 | **Conversation** | An agent's conversation history, including histories started outside Harness. | Provider usage counts native conversations. |

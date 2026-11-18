@@ -501,7 +501,7 @@ it('the actual Stop job blocks hook admission before its first asynchronous step
     settlePane: () => new Promise((_resolve, reject) => { fail = reject }),
     restartJobs: { cancel: vi.fn() } as unknown as import('./restartAgent.js').AgentRestartCoordinator,
     stoppedAgents: { save: never } as unknown as import('./stoppedAgents.js').StoppedAgentStore,
-    backendFor: () => ({ kill: never }), agentReconciler: { suppress: never, holdRoute: never, releaseRoute: never, trigger: never },
+    backendFor: () => ({ kill: never }), agentReconciler: { suppress: never, holdRoute: never, releaseRoute: never, nudge: never },
     forgetSession: never, markDeleted: never, clearDeleted: never, stopNative: never,
   })
   const f = await httpFixture(id => stopJobs.has(id))
@@ -660,7 +660,7 @@ it('refuses an HTTP hook whose matched process changed at the real core resolver
   const hooks = createEngineHooks({ tmuxBackend: {}, syncSession: vi.fn(), registry: { byAgent: registry.byAgent, byRuntimeEngine: () => {
     queueMicrotask(() => { row.processIdentity!.startMarker = 'replacement' })
     return row
-  } }, agentReconciler: { triggerHint: vi.fn(async () => true), trigger: vi.fn() } as never })
+  } }, agentReconciler: { triggerHint: vi.fn(async () => true), nudge: vi.fn() } as never })
   const f = await httpFixture(() => false, 65_536, { resolveHookAgent: hooks.resolveHookAgent })
   expect((await f.post({ callerPid: 6102 })).body).toEqual({ ignored: true, reason: 'stale_hook' })
   expect(f.prompts).toEqual([])

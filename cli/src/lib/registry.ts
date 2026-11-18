@@ -92,8 +92,10 @@ export interface LaunchPublicationInput {
 
 export type LaunchPublication = { state: 'not-published' } | { state: 'confirmed'; entry: RegisteredSession | null }
 
+/** A launch published `ready` and the row a hook's registration rebuilds without one are the same launch. Read
+ *  apart, the second of two restarts took the engine down and answered AGENT_CHANGED (e2e/races.e2e.ts, 2026-11-17). */
 function launchIdentity(row: RegisteredSession | undefined): string {
-  return rowFingerprint({ launch: row?.launch, launchArgs: row?.launchArgs, grid: row?.grid,
+  return rowFingerprint({ launch: row?.launch?.state === 'ready' ? undefined : row?.launch, launchArgs: row?.launchArgs, grid: row?.grid,
     gridLaunch: row?.gridLaunch, gridWebSearch: row?.gridWebSearch, subscriptionModel: row?.subscriptionModel, active: row?.active })
 }
 
@@ -572,12 +574,18 @@ export class RegistryOwnershipChanged extends IdentityReadUnavailable {}
 function persistenceFailure(error: unknown, names = false): Error {
   if (error instanceof IdentityReadUnavailable || error instanceof RegistryPersistenceUnavailable) return error
   const subject = names ? 'name storage' : 'registry storage'
-  const code = (error as NodeJS.ErrnoException | null)?.code
+  // A write unconfirmed after its rename (the folder's fsync) carries the disk's code on its cause.
+  const code = (error instanceof AtomicWriteUnconfirmed ? error.cause as NodeJS.ErrnoException | undefined
+    : error as NodeJS.ErrnoException | null)?.code
+  // The master tells a full disk from a broken build by these codes (harnessd/supervisor.ts namesTheDisk).
+  // Without them a good build whose core could not save on a full disk was rolled back
+  // (e2e/updateHostile.e2e.ts, 2026-11-17). A code names no path.
   const category = error instanceof SyntaxError ? 'contains invalid JSON'
-    : code === 'ENOSPC' || code === 'EDQUOT' ? 'has no available space'
-      : code === 'EACCES' || code === 'EPERM' ? 'access was refused'
-        : code === 'ENOENT' ? 'is unavailable'
-          : code === 'ELOOP' ? 'has an unsafe file type' : 'write failed'
+    : code === 'ENOSPC' || code === 'EDQUOT' ? `has no available space (${code})`
+      : code === 'EROFS' ? 'is read-only (EROFS)'
+        : code === 'EACCES' || code === 'EPERM' ? 'access was refused'
+          : code === 'ENOENT' ? 'is unavailable'
+            : code === 'ELOOP' ? 'has an unsafe file type' : 'write failed'
   const failure = new RegistryPersistenceUnavailable(`${subject} ${category}`)
   return error instanceof AtomicWriteUnconfirmed ? new AtomicWriteUnconfirmed(failure, error.retryable) : failure
 }
@@ -2058,7 +2066,9 @@ class Registry {
       })
     }).catch(error => {
       console.error('[registry] pending admission failed')
-      if (error instanceof AtomicWriteUnconfirmed) throw error
+      // Read as a taken route, a storage refusal opened and closed three panes and answered "tmux pane could not
+      // be registered" (e2e/diskfull.e2e.ts, 2026-11-17). Its caller answers it by name instead.
+      if (error instanceof RegistryPersistenceUnavailable || error instanceof AtomicWriteUnconfirmed) throw error
       return null
     })
   }
@@ -2105,13 +2115,20 @@ class Registry {
     this.assertOpen()
     const selected = this.byAgent(agentId)
     if (!selected || (!isTerminalEngine(selected.engine) && !validProcessIdentity(input.processIdentity))) return { state: 'not-published' }
-    const verifyOwner = this.ownerGuard(agentId, authority.current)
-    const beforeLaunch = launchIdentity(selected)
+    // A peer that recorded this same process while this write waited (discovery's pass over the pane: its confirmation,
+    // active and ready, or the process and the grid its argv names after a retarget) wrote part of this launch, not
+    // another owner's. Read apart, a resume that discovery beat answered RESUME_UNCONFIRMED over its running engine
+    // (e2e/eagerOpenCode.e2e.ts, 2026-11-17). Any other process or field still ends the write.
+    const owners = [selected, { ...selected, processIdentity: input.processIdentity }].map(ownershipIdentity)
+    const grids = input.grid === undefined ? [selected] : [selected, { ...selected, grid: input.grid }]
+    const launches = grids.flatMap(row => [row, { ...row, active: true, launch: { state: 'ready' as const } }]).map(launchIdentity)
     const requested = structuredClone(input)
     const expires = Math.min(authority.expires ?? Infinity, performance.now() + 5_000)
     const verify = () => {
-      verifyOwner()
-      if (launchIdentity(this.byAgent(agentId)) !== beforeLaunch) {
+      if (authority.current?.() === false || !owners.includes(ownershipIdentity(this.byAgent(agentId)))) {
+        throw new RegistryOwnershipChanged('the registry owner changed while its write was being prepared')
+      }
+      if (!launches.includes(launchIdentity(this.byAgent(agentId)))) {
         throw new RegistryOwnershipChanged('the selected launch changed while its write was being prepared')
       }
     }

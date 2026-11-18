@@ -984,6 +984,174 @@ describe.skipIf(process.platform === 'win32')('the devices listener', () => {
       expect(live.opened.map(({ ended }) => [ended.aborted, ended.reason])).toEqual([[true, 'closed'], [true, 'closed']])
       expect(runs).toBe(0)
     })
+
+    /** A keyed type for these tests: its key is `k`, three at once unless said. */
+    const keyed = (opened: Array<{ key: string; stream: ListenerStream }> = [], limit = 3): ListenerStreamHandler => ({
+      maxBytes: 64, perSecond: 100,
+      keyed: { key: ({ k }) => typeof k === 'string' && k !== '' ? k : REFUSED, limit },
+      open: (message, stream) => { opened.push({ key: message.k as string, stream }) },
+    })
+    const win = (k: string, standby?: boolean): string => JSON.stringify({ type: 'win', k, standby })
+    const reasons = (opened: Array<{ key: string; stream: ListenerStream }>): unknown[] =>
+      opened.map(({ key, stream }) => [key, stream.ended.reason])
+
+    it('a keyed type keeps one stream per key, each written on its own', async () => {
+      const opened: Array<{ key: string; stream: ListenerStream }> = []
+      const { path } = await open({ win: keyed(opened) })
+      const a = await asked(path, win('a'))
+      const b = await asked(path, win('b'))
+      expect([a.status, b.status]).toEqual([200, 200])
+      expect(reasons(opened)).toEqual([['a', undefined], ['b', undefined]])
+      expect(opened[0]!.stream.write({ to: 'a' })).toBe(true)
+      expect(await a.got(1)).toEqual(['{"to":"a"}'])
+      expect(opened[1]!.stream.write({ to: 'b' })).toBe(true)
+      expect(await b.got(1)).toEqual(['{"to":"b"}'])
+      expect(a.lines()).toEqual(['{"to":"a"}'])
+    })
+
+    it('a second open with the same key replaces the older, and only it', async () => {
+      const opened: Array<{ key: string; stream: ListenerStream }> = []
+      const { path } = await open({ win: keyed(opened) })
+      const older = await asked(path, win('a'))
+      const b = await asked(path, win('b'))
+      const newer = await asked(path, win('a'))
+      await older.closed
+      expect(older.lines()).toEqual([REPLACED])
+      expect(reasons(opened)).toEqual([['a', 'replaced'], ['b', undefined], ['a', undefined]])
+      expect(opened[1]!.stream.write({ n: 1 })).toBe(true)
+      expect(await b.got(1)).toEqual(['{"n":1}'])
+      expect(opened[2]!.stream.write({ n: 2 })).toBe(true)
+      expect(await newer.got(1)).toEqual(['{"n":2}'])
+    })
+
+    it('a new key past the limit is 409 before the handler opens it, and is no drop', async () => {
+      const opened: Array<{ key: string; stream: ListenerStream }> = []
+      const { path, lines } = await open({ win: keyed(opened) })
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      for (const k of ['a', 'b', 'c']) expect((await asked(path, win(k))).status).toBe(200)
+      const refused = await asked(path, win('d'))
+      expect(refused.status).toBe(409)
+      await refused.closed
+      expect(refused.lines()).toEqual([])
+      expect(reasons(opened)).toEqual([['a', undefined], ['b', undefined], ['c', undefined]])
+      // Not counted, as the standby 409: no minute's line at all.
+      vi.advanceTimersByTime(MINUTE)
+      expect(lines).toEqual(['[devices] listener open'])
+    })
+
+    it('at the limit the same key still replaces', async () => {
+      const opened: Array<{ key: string; stream: ListenerStream }> = []
+      const { path } = await open({ win: keyed(opened) })
+      for (const k of ['a', 'b']) await asked(path, win(k))
+      const older = await asked(path, win('c'))
+      const newer = await asked(path, win('c'))
+      expect(newer.status).toBe(200)
+      await older.closed
+      expect(older.lines()).toEqual([REPLACED])
+      expect(reasons(opened)).toEqual([['a', undefined], ['b', undefined], ['c', 'replaced'], ['c', undefined]])
+      expect(opened[3]!.stream.write({ n: 1 })).toBe(true)
+      expect(await newer.got(1)).toEqual(['{"n":1}'])
+    })
+
+    it('a key that ended frees its place', async () => {
+      const opened: Array<{ key: string; stream: ListenerStream }> = []
+      const { path } = await open({ win: keyed(opened) })
+      const clients: Asked[] = []
+      for (const k of ['a', 'b', 'c']) clients.push(await asked(path, win(k)))
+      clients[1]!.close()
+      await endOf(opened[1]!.stream)
+      const d = await asked(path, win('d'))
+      expect(d.status).toBe(200)
+      expect(reasons(opened)).toEqual([['a', undefined], ['b', 'gone'], ['c', undefined], ['d', undefined]])
+      expect(opened[3]!.stream.write({ n: 1 })).toBe(true)
+      expect(await d.got(1)).toEqual(['{"n":1}'])
+    })
+
+    it('a message with no key is 400 and counted refused, and nothing is opened', async () => {
+      const opened: Array<{ key: string; stream: ListenerStream }> = []
+      const { path, lines } = await open({ win: keyed(opened) })
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      const kept = await asked(path, win('a'))
+      for (const body of ['{"type":"win"}', '{"type":"win","k":""}', '{"type":"win","k":1}']) {
+        expect((await asked(path, body)).status, body).toBe(400)
+      }
+      // None reached the handler, and the open stream goes on.
+      expect(reasons(opened)).toEqual([['a', undefined]])
+      expect(opened[0]!.stream.write({ n: 1 })).toBe(true)
+      expect(await kept.got(1)).toEqual(['{"n":1}'])
+      vi.advanceTimersByTime(MINUTE)
+      expect(lines.at(-1)).toBe('[devices] listener in the last minute: 0 unknown, 0 oversized, 0 over rate, 3 refused, 0 failed')
+    })
+
+    it('a key that throws is 500, counted failed, logged with no text of the error, and nothing is opened', async () => {
+      const opened: Array<{ key: string; stream: ListenerStream }> = []
+      const handler = keyed(opened)
+      const { path, lines } = await open({
+        win: { ...handler, keyed: { ...handler.keyed!, key: (message) => {
+          if (message.boom) throw new Error('secret-9b1d')
+          return handler.keyed!.key(message)
+        } } },
+      })
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      const kept = await asked(path, win('a'))
+      expect(await connection(path).send(JSON.stringify({ type: 'win', k: 'b', boom: 1 }))).toMatchObject({ status: 500, body: '' })
+      // It reached no handler, and the open stream goes on.
+      expect(reasons(opened)).toEqual([['a', undefined]])
+      expect(opened[0]!.stream.write({ n: 1 })).toBe(true)
+      expect(await kept.got(1)).toEqual(['{"n":1}'])
+      vi.advanceTimersByTime(MINUTE)
+      expect(lines).toEqual(['[devices] listener open', '[devices] listener in the last minute: 0 unknown, 0 oversized, 0 over rate, 0 refused, 1 failed'])
+    })
+
+    it('a standby open of an open key is 409; of a free key it opens', async () => {
+      const opened: Array<{ key: string; stream: ListenerStream }> = []
+      const { path, lines } = await open({ win: keyed(opened) })
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      const kept = await asked(path, win('a'))
+      const refused = await asked(path, win('a', true))
+      expect(refused.status).toBe(409)
+      await refused.closed
+      const standing = await asked(path, win('b', true))
+      expect(standing).toMatchObject({ status: 200, type: 'application/x-ndjson' })
+      expect(reasons(opened)).toEqual([['a', undefined], ['b', undefined]])
+      expect(opened[0]!.stream.write({ n: 1 })).toBe(true)
+      expect(await kept.got(1)).toEqual(['{"n":1}'])
+      expect(opened[1]!.stream.write({ n: 2 })).toBe(true)
+      expect(await standing.got(1)).toEqual(['{"n":2}'])
+      vi.advanceTimersByTime(MINUTE)
+      expect(lines).toEqual(['[devices] listener open'])
+    })
+
+    it('closing the listener ends every keyed stream as closed', async () => {
+      const opened: Array<{ key: string; stream: ListenerStream }> = []
+      const { path, listener } = await open({ win: keyed(opened) })
+      const clients: Asked[] = []
+      for (const k of ['a', 'b', 'c']) clients.push(await asked(path, win(k)))
+      await listener!.close()
+      await Promise.all(clients.map(({ closed }) => closed))
+      expect(reasons(opened)).toEqual([['a', 'closed'], ['b', 'closed'], ['c', 'closed']])
+    })
+
+    it('eight keyed streams and the two unkeyed ones leave six connections for messages', async () => {
+      const opened: Array<{ key: string; stream: ListenerStream }> = []
+      const live = streamHandler()
+      const other = streamHandler()
+      const { path } = await open({ win: keyed(opened, 8), live: live.handler, other: other.handler })
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      for (let n = 0; n < 8; n++) await asked(path, win(`w${n}`))
+      await asked(path, LIVE)
+      await asked(path, '{"type":"other"}')
+      const streams = [...opened.map(({ stream }) => stream), ...live.opened, ...other.opened]
+      expect(streams.map(({ ended }) => ended.aborted)).toEqual(Array(10).fill(false))
+
+      // Silent, so only the faked deadline could free their slots: a kept-alive answer's real 2 s timer would.
+      const six = Array.from({ length: LISTENER_MAX_CONNECTIONS - 10 }, () => bare(path, ''))
+      expect(six).toHaveLength(6)
+      await Promise.all(six.map(({ socket }) => new Promise((connected) => socket.once('connect', connected))))
+      expect(await bare(path, '').read).toBe('')
+      for (const { socket } of six) expect(socket.destroyed).toBe(false)
+      expect(streams.map(({ ended }) => ended.aborted)).toEqual(Array(10).fill(false))
+    })
   })
 
   describe('tab and tabs', () => {

@@ -1,7 +1,8 @@
 /**
  * The `orca` an end-to-end daemon finds first on its PATH, in place of the stub that exits 1 (harness/daemon.ts): it
  * notes every run, prints a layout and a focus watch a test tells it, answers `terminal --help` as Orca 1.4.256
- * does, or as an Orca with `watch-focus`, and takes every `worktree activate`. The real Orca never runs: every session here runs inside it.
+ * does, or as an Orca with `watch-focus`, takes every `worktree activate`, and lists the accounts a test tells it. The real
+ * Orca never runs: every session here runs inside it.
  */
 import { spawnSync } from 'node:child_process'
 import { appendFileSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
@@ -48,6 +49,7 @@ case "$1 $2" in
   'terminal list') [ -f '${dir}/layout.json' ] || exit 1; cat '${dir}/layout.json' ;;
   'terminal watch-focus') [ -f '${dir}/watches' ] || exit 1; exec tail -n 1 -f '${dir}/focus' ;;
   'worktree activate') exit 0 ;;
+  'account list') [ -f '${dir}/accounts.json' ] || exit 1; cat '${dir}/accounts.json' ;;
   'terminal switch'|'terminal send')
     printf '%s' "$*" > "$(mktemp '${dir}/runs/run.XXXXXX')"
     code=$(cat '${dir}/exit' 2>/dev/null); exit "\${code:-0}" ;;
@@ -74,6 +76,8 @@ export class FakeOrca {
     writeFileSync(join(dir, 'help'), watchFocus ? HELP_WATCH : HELP)
     writeFileSync(join(dir, 'focus'), '')
     if (watchFocus) writeFileSync(join(dir, 'watches'), '')
+    // Through bin's link, into the launcher in Orca's install the harness made, which is the Orca app's own too
+    // (harness/daemon.ts): an `orca` anywhere else is not Orca's, and the daemon would run the app's, the stub.
     writeFileSync(join(bin, 'orca'), script(dir), { mode: 0o755 })
     return new FakeOrca(dir)
   }
@@ -112,6 +116,24 @@ export class FakeOrca {
     const file = join(this.dir, 'layout.json')
     // Renamed into place: a `terminal list` that runs meanwhile prints the old layout or the new, never half of one.
     writeFileSync(`${file}.new`, JSON.stringify({ id: 'e2e', ok: true, result: { terminals: [], visualLayouts, totalCount, truncated: false } }))
+    renameSync(`${file}.new`, file)
+  }
+
+  /**
+   * What `account list --json` prints from now on, in Orca 1.4.256's shape: an account per home, each with a made-up id
+   * and an email at example.invalid beside it, which Harness must never keep or say. Until then it exits 1.
+   */
+  accounts(homes: { claude?: string[]; codex?: string[] }): void {
+    let n = 0
+    const engine = (list: string[] = []) => {
+      const accounts = list.map((home) => {
+        n += 1
+        return { id: `acct-${n}-e2e`, email: `person${n}@example.invalid`, label: `Made up ${n}`, home, createdAt: 1763337600000 }
+      })
+      return { activeAccountId: accounts[0]?.id ?? null, accounts }
+    }
+    const file = join(this.dir, 'accounts.json')
+    writeFileSync(`${file}.new`, JSON.stringify({ id: 'e2e', ok: true, result: { claude: engine(homes.claude), codex: engine(homes.codex), gemini: engine() } }))
     renameSync(`${file}.new`, file)
   }
 

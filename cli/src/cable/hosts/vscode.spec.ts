@@ -1,31 +1,48 @@
 import { describe, expect, it } from 'vitest'
+import type { Place } from './adapter.js'
 import { detectApp, detectHost } from './hostDetect.js'
 import { bundleOf, createOpenActions, type OpenTarget } from './open.js'
-import { createVscodeAdapter } from './vscode.js'
+import { createVscodeAdapter, termPid } from './vscode.js'
 
 const OPEN = '/usr/bin/open'
 /** A Claude Code session's id, as its hook names it. */
 const UUID = '8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
+const UUID2 = '3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f'
+const VSCODE = 'com.microsoft.VSCode'
+const link = (id: string) => `vscode://anthropic.claude-code/open?session=${id}`
 
 interface Call { file: string; args: string[]; timeoutMs: number }
 type Deps = Parameters<typeof createVscodeAdapter>[0]
+interface Terminal { window: string; shell: number }
 
 /** A recording runner that runs nothing, so no spec opens the developer's own VS Code: each call answers the next of
- *  [codes], then exit 0. The opener holds this adapter alone. */
+ *  [codes], then exit 0. VS Code is in front unless told. The opener holds this adapter alone. No window holds a
+ *  terminal until a test sets `windows.held`; each show is recorded, and `asked` keeps the order of the terminal's looks
+ *  beside a test's own. */
 function recorder(over: Partial<Deps> = {}, codes: Array<number | null> = []) {
   const calls: Call[] = []
   const logs: string[] = []
+  const windows = { held: undefined as Terminal | undefined, writes: true, shows: [] as Array<{ terminal: Terminal; tap: boolean }> }
+  const asked: string[] = []
   const deps: Deps = {
     run: async (file, args, timeoutMs) => {
       calls.push({ file, args, timeoutMs })
       return { code: codes.length ? codes.shift()! : 0, stdout: '' }
     },
     platform: 'darwin',
+    inFront: () => true,
+    terminals: {
+      terminalOf: () => { asked.push('terminalOf'); return windows.held },
+      show: (terminal, tap) => { windows.shows.push({ terminal, tap }); return windows.writes },
+    },
     ...over,
   }
   const adapter = createVscodeAdapter(deps)
   const log = (line: string) => { logs.push(line) }
-  return { calls, logs, adapter, opener: createOpenActions({ run: deps.run, platform: deps.platform, adapters: [adapter], log }) }
+  return {
+    calls, logs, adapter, windows, asked,
+    opener: createOpenActions({ run: deps.run, platform: deps.platform, adapters: [adapter], log }),
+  }
 }
 
 /** What an agent's hook hints let a tap open, as the observed source reads them, for the hook's session and engine. */
@@ -37,19 +54,23 @@ const run = (file: string, ...args: string[]): Call => ({ file, args, timeoutMs:
 const forward = (bundle: string): Call => run(OPEN, '-b', bundle)
 
 describe('the VS Code adapter', () => {
-  it('its id is vscode, it taps before its app, and only macOS can focus', async () => {
+  it('its id is vscode, a tap is its link instead of its app, and only macOS can focus or show', async () => {
     const pane = { adapter: 'vscode', id: UUID }
     const { adapter } = recorder()
     expect(adapter.id).toBe('vscode')
-    expect(adapter.tap).toBe('before')
-    expect(adapter.show).toBeUndefined()
-    expect(adapter.canShow).toBeUndefined()
+    expect(adapter.tap).toBe('instead')
+    expect(adapter.show).toBeTypeOf('function')
+    expect(adapter.canShow).toBeTypeOf('function')
     expect(adapter.type).toBeUndefined()
     expect(adapter.canFocus(pane)).toBe(true)
+    expect(adapter.canShow(pane)).toBe(true)
+    expect(recorder({ inFront: () => false }).adapter.canShow(pane)).toBe(false)
     for (const platform of ['linux', 'win32'] as const) {
       const elsewhere = recorder({ platform })
       expect(elsewhere.adapter.canFocus(pane), platform).toBe(false)
+      expect(elsewhere.adapter.canShow(pane), platform).toBe(false)
       expect(await elsewhere.adapter.focus(pane), platform).toBe(false)
+      expect(await elsewhere.adapter.show(pane, 'a1'), platform).toBe('failed')
       expect(elsewhere.calls).toEqual([])
     }
   })
@@ -64,29 +85,29 @@ describe('the VS Code adapter', () => {
   ])('HARNESS_OPEN_BIN %j: an absolute path is the open a tap runs; empty, relative and none run /usr/bin/open', async (bin, file) => {
     const { calls, adapter } = recorder({ bin })
     expect(await adapter.focus({ adapter: 'vscode', id: UUID })).toBe(true)
-    expect(calls).toEqual([run(file, `vscode://anthropic.claude-code/open?session=${UUID}`)])
+    expect(calls).toEqual([run(file, '-b', VSCODE, link(UUID))])
   })
 
   it('a pane id not in its form runs nothing', async () => {
     const { calls, adapter } = recorder()
     for (const id of ['sess-1', UUID.toUpperCase(), `${UUID}&x=y`, `${UUID}/..`, `local_${UUID}`, '', '--args']) {
       expect(await adapter.focus({ adapter: 'vscode', id }), id).toBe(false)
+      expect(await adapter.show({ adapter: 'vscode', id }, 'a1'), id).toBe('failed')
     }
     expect(calls).toEqual([])
   })
 })
 
 describe('a tap on a session in the VS Code extension\'s tab (docs/specs/2026-11-15-device-wave1-checks.md, F3)', () => {
-  const VSCODE = 'com.microsoft.VSCode'
   const CURSOR = 'com.todesktop.230313mzl4w4u92'
   const TAB = { __CFBundleIdentifier: VSCODE, CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' }
-  const tabLink = run(OPEN, `vscode://anthropic.claude-code/open?session=${UUID}`)
+  const tabLink = run(OPEN, '-b', VSCODE, link(UUID))
 
-  it('the VS Code extension\'s tab: its session\'s link, then VS Code comes forward', async () => {
+  it('the VS Code extension\'s tab: its session\'s link, sent to VS Code alone', async () => {
     const { calls, logs, opener } = recorder()
     expect(target(TAB)).toEqual({ bundle: VSCODE, pane: { adapter: 'vscode', id: UUID } })
     expect(await opener.open('a1', target(TAB))).toBe(true)
-    expect(calls).toEqual([tabLink, forward(VSCODE)])
+    expect(calls).toEqual([tabLink])
     expect(logs).toEqual([])
   })
 
@@ -132,5 +153,180 @@ describe('a tap on a session in the VS Code extension\'s tab (docs/specs/2026-11
     expect(linux.opener.can(target(TAB))).toBe(false)
     expect(await linux.opener.open('a1', target(TAB))).toBe(false)
     expect(linux.calls).toEqual([])
+  })
+})
+
+describe('a rest on a session in the VS Code extension\'s tab (docs/plans/2026-11-17-dial-vscode-follow-design.md)', () => {
+  const pane = (id: string) => ({ adapter: 'vscode', id })
+
+  it('with VS Code in front, a rest runs the session\'s link once, sent to VS Code alone', async () => {
+    const { calls, adapter } = recorder()
+    expect(await adapter.show(pane(UUID), 'a1')).toBe('ok')
+    expect(calls).toEqual([run(OPEN, '-b', VSCODE, link(UUID))])
+  })
+
+  it('a rest whose link fails is failed and brings nothing forward', async () => {
+    const { calls, adapter } = recorder({}, [1])
+    expect(await adapter.show(pane(UUID), 'a1')).toBe('failed')
+    expect(calls).toEqual([run(OPEN, '-b', VSCODE, link(UUID))])
+  })
+
+  it('a second rest on the same agent while its link runs is busy; another agent\'s runs', async () => {
+    const calls: Call[] = []
+    const waiting: Array<() => void> = []
+    const { adapter } = recorder({
+      run: (file, args, timeoutMs) => {
+        calls.push({ file, args, timeoutMs })
+        return new Promise((resolve) => waiting.push(() => resolve({ code: 0, stdout: '' })))
+      },
+    })
+    const first = adapter.show(pane(UUID), 'a1')
+    expect(await adapter.show(pane(UUID), 'a1')).toBe('busy')
+    const other = adapter.show(pane(UUID2), 'a2')
+    waiting.forEach((release) => release())
+    expect(await first).toBe('ok')
+    expect(await other).toBe('ok')
+    expect(calls).toEqual([run(OPEN, '-b', VSCODE, link(UUID)), run(OPEN, '-b', VSCODE, link(UUID2))])
+  })
+})
+
+describe('an agent in VS Code\'s integrated terminal (docs/plans/2026-11-17-dial-vscode-extension-design.md, §3)', () => {
+  const TERM = { TERM_PROGRAM: 'vscode' }
+  const PID = 4321
+  const HELD: Terminal = { window: 'win-0001abcd', shell: 700 }
+  const pane = (id = `term:${PID}`) => ({ adapter: 'vscode', id })
+  /** The place a hook or the scan gives an agent in VS Code's terminal: its own pid, its engine. */
+  const place = (hints: Record<string, string>, over: Partial<Place> = {}): Place =>
+    ({ host: detectHost(hints), app: detectApp(hints), hints, engine: 'claude', pid: PID, ...over })
+  const tapOf = (hints: Record<string, string>, over: Partial<Place> = {}): OpenTarget =>
+    ({ bundle: bundleOf(detectHost(hints), hints), pane: recorder().adapter.paneOf(place(hints, over)) })
+
+  it('a Claude Code or Codex agent in VS Code\'s terminal has a term pane of its pid', () => {
+    for (const engine of ['claude', 'codex']) {
+      for (const hints of [TERM, { TERM_PROGRAM: 'vscode', __CFBundleIdentifier: VSCODE }]) {
+        expect(tapOf(hints, { engine }), engine).toEqual({ bundle: VSCODE, pane: pane() })
+      }
+    }
+  })
+
+  it('no term pane for the extension\'s panel, Cursor, another engine, or a place with no pid, pid 1, or a fraction', () => {
+    const { adapter } = recorder()
+    const cases: Array<[Record<string, string>, Partial<Place>]> = [
+      // The panel's word in a place with no session id: neither the panel's pane nor a terminal's.
+      [{ TERM_PROGRAM: 'vscode', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' }, {}],
+      [{ TERM_PROGRAM: 'vscode', __CFBundleIdentifier: 'com.todesktop.230313mzl4w4u92' }, {}],
+      [TERM, { engine: 'gemini' }],
+      [TERM, { engine: undefined }],
+      [TERM, { pid: undefined }],
+      [TERM, { pid: 1 }],
+      [TERM, { pid: 0 }],
+      [TERM, { pid: -5 }],
+      [TERM, { pid: 4321.5 }],
+      [TERM, { pid: 2 ** 31 }],
+    ]
+    for (const [hints, over] of cases) {
+      expect(adapter.paneOf(place(hints, over)), JSON.stringify([hints, over])).toBeUndefined()
+    }
+    expect(adapter.paneOf(place(TERM, { pid: 2 }))).toEqual(pane('term:2'))
+    expect(adapter.paneOf(place(TERM, { pid: 2 ** 31 - 1 }))).toEqual(pane(`term:${2 ** 31 - 1}`))
+  })
+
+  it('a tap writes the show, then runs open -b for VS Code itself, and the opener runs nothing after it', async () => {
+    const { calls, logs, opener, windows } = recorder()
+    windows.held = HELD
+    expect(await opener.open('a1', tapOf(TERM))).toBe(true)
+    expect(windows.shows).toEqual([{ terminal: HELD, tap: true }])
+    expect(calls).toEqual([forward(VSCODE)])
+    expect(logs).toEqual([])
+  })
+
+  it('a tap whose own open -b fails still answers true: the show was queued', async () => {
+    const { calls, logs, opener, windows } = recorder({}, [1])
+    windows.held = HELD
+    expect(await opener.open('a1', tapOf(TERM))).toBe(true)
+    expect(windows.shows).toEqual([{ terminal: HELD, tap: true }])
+    expect(calls).toEqual([forward(VSCODE)])
+    expect(logs).toEqual([])
+  })
+
+  it('off macOS the show alone is the tap', async () => {
+    const { calls, logs, adapter, opener, windows } = recorder({ platform: 'linux' })
+    windows.held = HELD
+    const tap = tapOf(TERM)
+    expect(adapter.canFocus(pane())).toBe(true)
+    expect(opener.can(tap)).toBe(true)
+    expect(await opener.open('a1', tap)).toBe(true)
+    expect(windows.shows).toEqual([{ terminal: HELD, tap: true }])
+    expect(calls).toEqual([])
+    expect(logs).toEqual([])
+  })
+
+  it('a show that cannot be written falls back to the app, once', async () => {
+    const { calls, logs, opener, windows } = recorder()
+    windows.held = HELD
+    windows.writes = false
+    expect(await opener.open('a1', tapOf(TERM))).toBe(true)
+    expect(windows.shows).toEqual([{ terminal: HELD, tap: true }])
+    expect(logs).toEqual(['[device] open · vscode · fallback'])
+    expect(calls).toEqual([forward(VSCODE)])
+  })
+
+  it('with no window holding its terminal a tap brings the app only, with no fallback line', async () => {
+    const { calls, logs, adapter, opener, windows } = recorder()
+    expect(adapter.canFocus(pane())).toBe(false)
+    expect(await opener.open('a1', tapOf(TERM))).toBe(true)
+    expect(windows.shows).toEqual([])
+    expect(logs).toEqual([])
+    expect(calls).toEqual([forward(VSCODE)])
+    expect(recorder({ platform: 'linux' }).opener.can(tapOf(TERM))).toBe(false)
+  })
+
+  it('a rest shows the terminal only while VS Code is in front', async () => {
+    let front = false
+    const r: ReturnType<typeof recorder> = recorder({ inFront: () => { r.asked.push('inFront'); return front } })
+    r.windows.held = HELD
+    expect(r.adapter.canShow(pane())).toBe(false)
+    expect(r.asked).toEqual(['inFront'])
+    front = true
+    expect(r.adapter.canShow(pane())).toBe(true)
+    expect(r.asked).toEqual(['inFront', 'inFront', 'terminalOf'])
+    expect(await r.adapter.show(pane(), 'a1')).toBe('ok')
+    expect(r.windows.shows).toEqual([{ terminal: HELD, tap: false }])
+    expect(r.calls).toEqual([])
+    r.windows.held = undefined
+    expect(r.adapter.canShow(pane())).toBe(false)
+  })
+
+  it('a rest whose window has gone fails', async () => {
+    const { calls, adapter, windows } = recorder()
+    expect(await adapter.show(pane(), 'a1')).toBe('failed')
+    windows.held = HELD
+    windows.writes = false
+    expect(await adapter.show(pane(), 'a1')).toBe('failed')
+    expect(windows.shows).toEqual([{ terminal: HELD, tap: false }])
+    expect(calls).toEqual([])
+  })
+
+  it('a term id out of form is no terminal pane: the link\'s verbs refuse it and run nothing', async () => {
+    const ids = ['term:0', 'term:1', 'term:x', 'term:2147483648', 'term:12.5', 'term:-4', 'term:042', 'term:', 'term: 42', 'xterm:42']
+    for (const platform of ['darwin', 'linux'] as const) {
+      const { calls, adapter, windows } = recorder({ platform })
+      windows.held = HELD
+      for (const id of ids) {
+        expect(termPid(id), id).toBeUndefined()
+        expect(adapter.canFocus(pane(id)), id).toBe(platform === 'darwin')
+        expect(await adapter.focus(pane(id)), id).toBe(false)
+        expect(await adapter.show(pane(id), 'a1'), id).toBe('failed')
+      }
+      expect(windows.shows).toEqual([])
+      expect(calls).toEqual([])
+    }
+    expect(termPid('term:2')).toBe(2)
+    expect(termPid(`term:${2 ** 31 - 1}`)).toBe(2 ** 31 - 1)
+    expect(termPid(UUID)).toBeUndefined()
+  })
+
+  it('it declares VS Code\'s bundle', () => {
+    expect(recorder().adapter.bundle).toBe('com.microsoft.VSCode')
   })
 })

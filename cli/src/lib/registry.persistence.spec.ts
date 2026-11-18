@@ -332,7 +332,9 @@ it.each(['registry.json', 'agent-names.json'])('does not expose private malforme
     expect(result).toBeInstanceOf(Error)
     expect(String(result)).not.toContain(sentinel)
     if (name === 'registry.json') {
-      expect(await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%2' }] })).toBeNull()
+      const refused = await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%2' }] }).catch(error => error)
+      expect(String(refused)).toContain('registry storage contains invalid JSON')
+      expect(String(refused)).not.toContain(sentinel)
       expect(errors.join(' ')).not.toContain(sentinel)
     }
   } finally { writeFileSync(file, before) }

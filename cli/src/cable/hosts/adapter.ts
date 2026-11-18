@@ -60,6 +60,7 @@ export interface HostAdapter {
    *  (a tab is selected once its app is in front). A pane that comes after its app is raised only when it is the pane a
    *  rest would show, so an adapter with `tap: 'after'` needs `show`: without it, its `focus` never runs from a tap. */
   readonly tap: 'before' | 'instead' | 'after'
-  /** Its app's macOS bundle id, for a tap on a pane its caller placed an agent at whose hook never named its app. */
+  /** Its app's macOS bundle id: a tap brings that app forward for an agent at one of its panes whose app no hook named,
+   *  one its caller placed there or the scan found (observed.ts target()). */
   readonly bundle?: string
 }

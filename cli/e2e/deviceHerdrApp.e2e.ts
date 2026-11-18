@@ -3,20 +3,22 @@
  * test's own (harness/hcCore.ts) runs a fake agent in a terminal Herdr's window would show, reporting its status as
  * Claude Code, and a fake dial on the desk lists it with no hook, follows its state, speaks to it, and switches Herdr's
  * window to it with a swipe and a tap. A core started after the dial comes with no daemon restart, and goes when it stops.
+ * A Claude Code session the scan finds in a Herdr terminal is paired with it, and listed once there, with its last answer.
  *
  * Herdr's real window is never driven. The daemon's `herdr-app` is a fake first on its PATH that records its arguments,
  * and its `open` is the harness's fake (HARNESS_OPEN_BIN, harness/daemon.ts): each is checked to be the one the daemon
  * finds before anything runs, since with no `herdr-app` on PATH it would run Herdr.app's own binary. The daemon finds the
- * private core's socket as hcClient.ts does, from the HC_SOCKET it is given: it inherits no HC_* and no XDG_*
- * (testing/daemonEnvironment.ts), so it never reaches the person's own core.
+ * private core's socket as hcClient.ts does, from the HC_SOCKET and XDG_RUNTIME_DIR it is given, both in the core's
+ * root: it inherits no HC_* and no XDG_* (testing/daemonEnvironment.ts), so it never reaches the person's own core.
  *
  * Skipped where Herdr Core is not installed, as on every GitHub runner, and off macOS.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
+import { observedAgentId } from '../src/cable/hosts/observed.js'
 import { resolveBinaryOnPath } from '../src/lib/binaryOnPath.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
@@ -89,7 +91,10 @@ describe.skipIf(!hcBinary)("Herdr's agents on the dial, from a private Herdr Cor
     backend = relay
     relay.addMachine(ME)
     const d = await IsolatedDaemon.create({
-      env: { CABLE_DISABLE: 'false', BACKEND_WS_URL: relay.wsUrl, WEB_URL: relay.httpUrl, ADAPTER_COMPUTER_ID: ME.computerId, HC_SOCKET: planned.socket },
+      // XDG_RUNTIME_DIR puts the default session's socket in the private root too: a core planned there is the session
+      // this daemon follows, as the person's daemon follows theirs (PrivateHc.planDefault).
+      env: { CABLE_DISABLE: 'false', BACKEND_WS_URL: relay.wsUrl, WEB_URL: relay.httpUrl, ADAPTER_COMPUTER_ID: ME.computerId,
+        HC_SOCKET: planned.socket, XDG_RUNTIME_DIR: planned.root },
     })
     daemon = d
     // Before anything runs: with no herdr-app on its PATH the daemon runs Herdr.app's own, which drives the real window.
@@ -257,5 +262,52 @@ describe.skipIf(!hcBinary)("Herdr's agents on the dial, from a private Herdr Cor
     await hc.stop()
     await showing(dial, 'api gone', (rows) => !rows.some((row) => row.host === 'herdr'), since)
     await said(d, '[herdr-app] closed · ended')
+  })
+
+  it('a session started in a Herdr terminal before the dial is listed once, on Herdr\'s page, with its last answer, and takes words there', async () => {
+    const planned = PrivateHc.planDefault()
+    const { d, desk, relay } = await fresh(planned)
+    const hc = await coreFor(planned)
+    const projectsDir = d.env.CLAUDE_PROJECTS_DIR!
+    const sessionId = randomUUID()
+    const t = await hc.agent('api', { projectsDir, sessionId, answer: 'answer 1: before the dial' })
+    const id = observedAgentId('claude', sessionId)
+
+    // 1. What the pairing rests on, from the real hc: the terminal's foreground is the pid of the session's one record.
+    const sessions = join(dirname(projectsDir), 'sessions')
+    const records = readdirSync(sessions)
+    expect(records).toHaveLength(1)
+    const foreground = await until('hc to report the terminal\'s foreground', async () =>
+      ((await hc.rpc('terminal.get', { terminal: t })).foreground as { pid?: unknown } | null)?.pid, 10_000, 50)
+    expect(foreground).toBe(JSON.parse(readFileSync(join(sessions, records[0]), 'utf8')).pid)
+
+    // 2. The dial's attach scans: the session is restored with its last answer, as history.
+    const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a', FILTER)
+    const restored = await dial.next((m) => m.t === 'summary' && m.agentId === id && m.restore === true, 45_000, 'its last answer restored')
+    expect(String(restored.text)).toContain('answer 1: before the dial')
+
+    // 3. Counted once, on Herdr's page: its own copy holds Herdr's terminal, and Herdr's row of it is folded in.
+    await until('Herdr alone counted, once', () => {
+      const apps = dial.messages.filter((m) => m.t === 'apps').at(-1)?.apps as Array<{ id: string; count: number }> | undefined
+      return apps?.length === 1 && apps[0].id === 'herdr' && apps[0].count === 1
+    }, 45_000, 100)
+    const ring = await showing(dial, 'its copy on Herdr\'s page', (rows) => rows.some((row) => row.id === id && row.host === 'herdr'))
+    const herdrs = ring.filter((row) => row.host === 'herdr')
+    expect(herdrs).toHaveLength(1)
+    expect(herdrs[0]).toMatchObject({ id, name: 'api', caps: 'svf' })
+    expect(dial.messages.filter((m) => m.agentId === id && (m.t === 'turn.done' || (m.t === 'summary' && m.restore !== true))))
+      .toEqual([])
+
+    // 4. The dial's words reach its terminal, through Herdr.
+    expect(await speak(dial, relay, id, 'run the paired words', 'paired-1')).toMatchObject({ t: 'voice.transcript', text: 'run the paired words', agentId: id })
+    await until('the words in its terminal', async () => (await hc.screen(t)).includes('GOT[run the paired words]'), 90_000, 100)
+    await said(d, '[device] voice · herdr-app')
+
+    // 5. Counts only: no address, folder, session, answer or words in the log.
+    await said(d, '[observed] herdr · 1 paired')
+    const log = d.log()
+    expect(log).toMatch(/\[observed\] scan · 1 found · \d+ app known · 0 named · 1 answered · \d+ ms/)
+    expect(log).not.toMatch(new RegExp(`(^|[^A-Za-z0-9_])${t}([^A-Za-z0-9_]|$)`, 'm'))
+    for (const secret of [planned.root, sessionId, 'answer 1', 'run the paired words']) expect(log).not.toContain(secret)
   })
 })

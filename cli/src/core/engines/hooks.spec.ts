@@ -54,7 +54,7 @@ function setup(onPane: Record<string, RegisteredSession> = {}, over: Partial<Eng
   const deps: EngineHookDeps = {
     tmuxBackend: {},
     syncSession: vi.fn(),
-    agentReconciler: { triggerHint: vi.fn(async () => true), trigger: vi.fn(async () => true) } as unknown as EngineHookDeps['agentReconciler'],
+    agentReconciler: { triggerHint: vi.fn(async () => true), nudge: vi.fn() } as unknown as EngineHookDeps['agentReconciler'],
     registry: { byRuntimeEngine: vi.fn((runtime: { paneId: string }) => onPane[runtime.paneId]),
       byAgent: vi.fn((id: string) => Object.values(onPane).find(row => row.agentId === id)) } as unknown as EngineHookDeps['registry'],
     ...over,
@@ -159,7 +159,7 @@ describe('which agent a hook belongs to', () => {
     const panes = { '%1': original }
     vi.mocked(processRows).mockResolvedValueOnce(tree([300, 100], [100, 1]) as never)
     const { hooks } = setup(panes, { agentReconciler: {
-      triggerHint: vi.fn(async () => { panes['%1'] = replacement; return true }), trigger: vi.fn(),
+      triggerHint: vi.fn(async () => { panes['%1'] = replacement; return true }), nudge: vi.fn(),
     } as unknown as EngineHookDeps['agentReconciler'] })
     expect(await hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [hint('%1')], callerPid: 300 })).toBeNull()
   })
@@ -169,7 +169,7 @@ describe('which agent a hook belongs to', () => {
     const rows = tree([300, 100], [100, 1])
     vi.mocked(processRows).mockResolvedValueOnce(rows as never)
     const { hooks } = setup({ '%1': original }, { agentReconciler: {
-      triggerHint: vi.fn(async () => { await Promise.resolve(); rows[1]!.startMarker = 'replacement'; return true }), trigger: vi.fn(),
+      triggerHint: vi.fn(async () => { await Promise.resolve(); rows[1]!.startMarker = 'replacement'; return true }), nudge: vi.fn(),
     } as unknown as EngineHookDeps['agentReconciler'] })
     expect(await hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [hint('%1')], callerPid: 300 })).toEqual(original)
   })
@@ -381,7 +381,7 @@ describe('which agent a hook belongs to', () => {
       // the pass outran its deadline (a loaded machine). Nothing is on the pane yet, so nothing waited.
       const onPane: Record<string, RegisteredSession> = {}
       vi.mocked(processRows).mockResolvedValue(newEngine() as never)
-      const slow = setup(onPane, { agentReconciler: { triggerHint: vi.fn(async () => false), trigger: vi.fn(async () => false) } as unknown as EngineHookDeps['agentReconciler'] })
+      const slow = setup(onPane, { agentReconciler: { triggerHint: vi.fn(async () => false), nudge: vi.fn() } as unknown as EngineHookDeps['agentReconciler'] })
       const onWait = vi.fn()
       const hook = ask(slow.hooks, ['%1'], onWait)
       await hook.waiting()
@@ -412,7 +412,7 @@ describe('which agent a hook belongs to', () => {
       let readDuringPass = -1
       const { hooks } = setup(onPane, { agentReconciler: {
         triggerHint: vi.fn(async () => { readDuringPass = vi.mocked(processRows).mock.calls.length; return true }),
-        trigger: vi.fn(async () => true),
+        nudge: vi.fn(),
       } as unknown as EngineHookDeps['agentReconciler'] })
       expect(await hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [hint('%1')], callerPid: 300 })).toEqual(agent('a1', 200))
       expect(readDuringPass).toBe(1)
@@ -479,7 +479,7 @@ describe('which agent a hook belongs to', () => {
   it('a SessionEnd only asks for a reconcile: discovery decides whether the agent still exists', () => {
     const { deps, hooks } = setup()
     hooks.onSessionEnd('s1', 'exit')
-    expect(deps.agentReconciler.trigger).toHaveBeenCalledTimes(1)
+    expect(deps.agentReconciler.nudge).toHaveBeenCalledTimes(1)
   })
 })
 

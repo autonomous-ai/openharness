@@ -45,6 +45,7 @@ import { HerdrSource } from '../cable/hosts/herdrSource.js'
 import { Inbox } from '../cable/hosts/inbox.js'
 import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer } from '../cable/hosts/lastAnswer.js'
 import { askedLine, countWord, hostDisplayName, observedAgentId, ObservedSource, type ObservedActions, type ObservedDeps, type PromptSource } from '../cable/hosts/observed.js'
+import { observedPlaces } from '../cable/hosts/observedPlaces.js'
 import { createOpenActions } from '../cable/hosts/open.js'
 import { createOpencodeClient, opencodeClientDeps, opencodeMessageId, type OpencodeClient } from '../cable/hosts/opencodeClient.js'
 import { OpencodeSource } from '../cable/hosts/opencodeSource.js'
@@ -52,13 +53,16 @@ import { createOrcaAdapter, createOrcaReads, orcaDeps, type OrcaFocusWatch, type
 import { readRecordName } from '../cable/hosts/recordName.js'
 import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
 import { learnApps, readProcessNames } from '../cable/hosts/scannedApp.js'
+import { createScrollLines } from '../cable/hosts/scrollLines.js'
 import { createTabsAdapter, readTty, type Tab } from '../cable/hosts/tabs.js'
 import { createTmuxAdapter } from '../cable/hosts/tmux.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { watchSocket } from '../cable/hosts/unixSocket.js'
-import { createVscodeAdapter } from '../cable/hosts/vscode.js'
+import { createVscodeAdapter, termPid } from '../cable/hosts/vscode.js'
+import { readProcessParents, vscodeStreams, type VscodeTerminal, type VscodeTerminalsDeps } from '../cable/hosts/vscodeTerminals.js'
 import { createWeztermAdapter } from '../cable/hosts/wezterm.js'
 import { createEngineTally } from '../cable/engineTally.js'
+import { createVscodeExtensionSetup } from '../cable/vscodeExtensionSetup.js'
 import { Notices, type NoticeCaller } from '../cable/notices.js'
 import { NOTIFY_MODE_FILE, NotifyModeStore, type NotifyMode } from '../cable/notifyMode.js'
 import { PetStore } from '../cable/pets/store.js'
@@ -67,6 +71,8 @@ import { DialVerdicts } from '../cable/dialPortVerdicts.js'
 import { createDialSetup } from '../cable/dialSetup.js'
 import { claudeFound, type ClaudeRun } from '../devices/claudePlugin.js'
 import { readRemoved, SETUP_COUNTS } from '../devices/dialSkillFiles.js'
+import { createOrcaHomesCache, orcaHomesDeps, readOrcaHomes, type OrcaHomesCache } from '../devices/orcaHomes.js'
+import { vscodeExtensionDeps, type VscodeExtensionDeps } from '../devices/vscodeExtension.js'
 import { WindowForm } from '../cable/windowForm.js'
 import { createWindowRouter } from '../cable/windowRoute.js'
 import { WindowSelection } from '../cable/windowSelection.js'
@@ -145,9 +151,17 @@ export interface DevicesDeps {
   listen?: (handlers: Readonly<Record<string, ListenerHandler | ListenerStreamHandler>>, log: (line: string) => void) => Promise<DevicesListener | null>
   /** For this service's tests: how an agent's tty is read; `ps` by default (cable/hosts/tabs.ts). */
   tty?: (pid: number) => Promise<string | undefined>
+  /** For this service's tests: the process table VS Code's terminals are matched by; `ps` by default
+   *  (cable/hosts/vscodeTerminals.ts). */
+  processParents?: VscodeTerminalsDeps['processes']
   /** For this service's tests: how Claude Code is found for a Claude Code home; the daemon's own lookup by default
    *  (devices/claudePlugin.ts claudeFound). */
   claude?: (home: string, shell: boolean) => Promise<ClaudeRun | null>
+  /** For this service's tests: Orca's account homes (devices/orcaHomes.ts); read with this computer's `orca` when unset. */
+  orcaHomes?: OrcaHomesCache
+  /** For this service's tests: how VS Code and Harness's extension in it are found and `code` is run; the real ones by
+   *  default (devices/vscodeExtension.ts). */
+  vscodeExtension?: VscodeExtensionDeps
 }
 
 /** ⌘K's answer while the fleet is not running: it never started, so there is no list to weigh. */
@@ -188,10 +202,25 @@ const LISTENER_WAIT_MS = 1_000
  *  the session it shows within about a second. Also how long any move of the dial sets the Claude app's settle aside. */
 const ATTACH_ECHO_MS = 2_000
 
-/** This computer's agents outside a pane, read with ⌘P's readers (services/externalSessions.ts), and how the dial's voice
- *  and tap reach them. */
-function observedSource(dataDir: string, log: (line: string) => void, actions: ObservedActions, tty: ObservedDeps['tty'], scanned: ObservedDeps['scanned']): ObservedSource {
-  const providers = externalProviders()
+/** Orca's account homes on this computer, read with its own `orca` (devices/orcaHomes.ts). */
+function orcaHomesCache(now: () => number, log: (line: string) => void): OrcaHomesCache {
+  const system = orcaHomesDeps()
+  return createOrcaHomesCache({ read: () => readOrcaHomes(system), now, platform: system.platform, log })
+}
+
+/** This computer's agents outside a pane, read with ⌘P's readers (services/externalSessions.ts) in the daemon's own homes
+ *  and Orca's account homes, and how the dial's voice and tap reach them. */
+function observedSource(
+  dataDir: string, log: (line: string) => void, orcaHomes: Pick<OrcaHomesCache, 'get'>, actions: ObservedActions,
+  tty: ObservedDeps['tty'], scanned: ObservedDeps['scanned'], herdrTerminal: ObservedDeps['herdrTerminal'],
+): ObservedSource {
+  // Worked out at each read: a home the person moved is adopted while the daemon runs, and Orca's follow its last read.
+  const places = observedPlaces({
+    claudeRoots: () => claudeProjectsRoots(env.CLAUDE_PROJECTS_DIR),
+    codexRoots: () => codexHomeRoots(env.CODEX_HOME),
+    orca: () => orcaHomes.get(),
+  })
+  const providers = externalProviders(undefined, places)
   return new ObservedSource({
     now: Date.now,
     processes: listProcesses,
@@ -201,18 +230,18 @@ function observedSource(dataDir: string, log: (line: string) => void, actions: O
     excluded: [dataDir],
     // Asked for Claude Code's and Codex's alone (observed.ts), and read only inside their own folders: a hook can name any path.
     lastAnswer: (engine, path) => readLastAnswer(engine as 'claude' | 'codex', path, {
-      roots: engine === 'claude' ? claudeProjectsRoots(env.CLAUDE_PROJECTS_DIR) : codexHomeRoots(env.CODEX_HOME).map((home) => join(home, 'sessions')),
+      roots: engine === 'claude' ? places.claude.roots() : places.codex.roots().map((home) => join(home, 'sessions')),
       maxBytes: LAST_ANSWER_MAX_BYTES, deadlineMs: LAST_ANSWER_DEADLINE_MS,
     }),
     fileStamp,
     log,
     actions,
     apps: learnApps,
-    // Asked for Claude Code's sessions alone (observed.ts), and read only inside its own folders, worked out at each read:
-    // a home the person moved is adopted while the daemon runs.
-    recordName: (owner) => readRecordName(owner, { roots: claudeProjectsRoots(env.CLAUDE_PROJECTS_DIR) }),
+    // Asked for Claude Code's sessions alone (observed.ts), and read only inside its own records folders.
+    recordName: (owner) => readRecordName(owner, { records: places.claude.records() }),
     tty,
     scanned,
+    herdrTerminal,
   })
 }
 
@@ -356,6 +385,16 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // (docs/specs/2026-11-16-orca-device-plugin.md). A part of its own, so a throw on its path is never the dial's. Its
   // count's timer stops with the devices.
   const dial = dialStream({ log, after: timerIn('dialStream') })
+  // The streams Harness's own VS Code extension holds open, one a window, and the terminal each VS Code agent runs in
+  // (docs/plans/2026-11-17-dial-vscode-extension-design.md). An adapter's capabilities are read at each look, so a
+  // terminal found or lost tells the dials to look again.
+  const vscode = vscodeStreams({
+    processes: deps.processParents ?? readProcessParents,
+    changed: () => part.call('dial', () => cable.syncAgents()),
+    now: monotonic,
+    after: timerIn('vscode'),
+    log,
+  })
   const ttyOf = apps.platform === 'darwin' ? deps.tty ?? readTty : undefined
   /** Where the dial moved an app lately, a rest's and a tap's alike, each as it started: the echoes an app's report is
    *  checked against, each excusing one. */
@@ -424,7 +463,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     { ...claude, show: (pane: Pane, agentId: string) => { noteLink(agentId); return claude.show(pane, agentId) } },
     // No echo to guard: the Codex app sends no attach for the follow to take as a person's.
     createCodexAppAdapter({ ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'codex', log }),
-    createVscodeAdapter({ ...apps, bin: openBin }),
+    // No echo to guard: VS Code sends no attach for the follow to take as a person's.
+    createVscodeAdapter({ ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'vscode', terminals: vscode }),
     createTabsAdapter({
       isOpen: () => tabs.isOpen(),
       select: (tab, raise) => {
@@ -444,6 +484,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** The route or the refusal of the dial's words, and why a queue failed: never the words, the session, the terminal or a
    *  path. */
   const voiced = (what: string): void => log(`[device] voice · ${what}`)
+  /** The Claude Code and Codex homes Orca's accounts run in, which Harness has not adopted: the open scan and the dial
+   *  skill reach them too (docs/plans/2026-11-17-new-user-onboarding-design.md, "C. Orca homes"). */
+  const orcaHomes = deps.orcaHomes ?? orcaHomesCache(monotonic, log)
   // The dial skill in each home an engine's sessions use and Claude Code's plugin, set up once a dial has attached on this
   // computer (cable/dialSetup.ts), in the devices' own process alone: inside the core's (`HARNESSD_SERVICES=none`) there
   // is no listener, so a skill would name a `harness device notify` that cannot ring. A part of its own, so a throw in a
@@ -454,16 +497,39 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     uid: process.getuid?.() ?? -1,
     claudeHome: dirname(env.CLAUDE_PROJECTS_DIR),
     codexHome: env.CODEX_HOME,
-    adopted: movedEngineHomes,
+    // Read at each start pass: the adopted homes, and Orca's as its last read gave them.
+    adopted: () => {
+      const moved = movedEngineHomes()
+      const orca = orcaHomes.get()
+      return { claude: [...moved.claude, ...orca.claude], codex: [...moved.codex, ...orca.codex] }
+    },
     removed: () => readRemoved(core.dataDir),
     now: monotonic,
     count: createEngineTally('[device] dial setup', ['claude', 'codex'], SETUP_COUNTS, log),
     log,
     claude: deps.claude ?? claudeFound,
+    orcaClaude: () => ({ homes: orcaHomes.get().claude, answered: orcaHomes.answered() }),
     version: VERSION,
   }) : null
-  if (skill) part.call('skill', () => skill.started())
-  const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, {
+  /** The dial setup's start pass, after a read of Orca's homes: the first, and each that changes them. A read that lands
+   *  once the devices stopped starts none. */
+  const skillPass = (): void => {
+    if (skill && !stopped) part.call('skill', () => skill.started())
+  }
+  // Harness's VS Code extension, set up once a computer through the dial setup's record (cable/vscodeExtensionSetup.ts),
+  // in the devices' own process alone, as the dial setup: inside the core's the core would run VS Code's `code`. A part
+  // of its own, so a throw in VS Code's files is never the dial's. `HARNESS_VSCODE_BIN`: the end-to-end tests' VS Code,
+  // so a daemon under test finds none of this computer's own (devices/vscodeExtension.ts).
+  const vscodeCount = createEngineTally('[device] vscode extension', ['vscode'], SETUP_COUNTS, log)
+  const vscodeSetup = skill ? createVscodeExtensionSetup({
+    vscode: deps.vscodeExtension ?? vscodeExtensionDeps(process.env.HARNESS_VSCODE_BIN),
+    removed: () => readRemoved(core.dataDir),
+    recorded: () => skill.vscode(),
+    record: (version) => skill.recordVscode(version),
+    after: timerIn('vscodeExtension'),
+    count: (kind, reason) => vscodeCount('vscode', kind, reason),
+  }) : null
+  const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, orcaHomes, {
     adapters,
     modReady: (sessionId) => inbox.ready(sessionId),
     toMod: (sessionId, text) => inbox.deliver(sessionId, text),
@@ -478,7 +544,25 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     codexQueue,
     codexHome: env.CODEX_HOME,
     count: (what) => voiced(countWord(what)),
-  }, ttyOf, skill ? (owners) => part.call('skill', () => skill.scanned(owners.values())) : undefined) : null
+  }, ttyOf, skill ? (owners) => part.call('skill', () => skill.scanned(owners.values())) : undefined,
+  // Only where a hook's address is taken: following another hc session, Herdr's adapter gives its terminals no pane, so
+  // a session paired there would be listed twice on Herdr's page.
+  hookIds ? (pid): string | undefined => hcSource?.terminalOf(pid) : undefined) : null
+  // Orca is asked only for the parts that use its homes, the first time as the devices start: the start pass waits for
+  // that read (at most its 5 s), so an Orca home gets the skill with the default one.
+  if (skill || observed) void orcaHomes.refresh().then(() => {
+    skillPass()
+    // After the dial setup's start pass, which reads the record VS Code's goes by (dialHomeSetup.ts vscode()).
+    if (vscodeSetup && !stopped) part.call('vscodeExtension', () => vscodeSetup.pass())
+  })
+  /** An open scan, once Orca's homes are read again where the last read is old (at most its 5 s): a session in an account
+   *  added since is found by this scan. */
+  const scanOpen = async (source: ObservedSource): Promise<void> => {
+    if (await orcaHomes.refresh()) skillPass()
+    // The dial went, or the devices began to stop, while Orca was read (up to its 5 s): the scan is an attached dial's alone.
+    if (stopped || !dialOn) return
+    await source.scanOpen()
+  }
   /** herdr's agents, hook or no hook, listed and followed over herdr's own socket (docs/specs/2026-11-16-device-herdr.md).
    *  It runs only while a dial is attached, as the open scan does, behind the observed agents' switch, and never on
    *  Windows, where herdr's socket is a named pipe (herdrSource.ts). */
@@ -593,6 +677,28 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     const entry = outside(agentId)
     return entry ? waiting(entry) : null
   }
+  /** The terminal the dial's scroll goes to: the shown agent's, while VS Code is in front (the rule a swipe uses) and a
+   *  window holds it (docs/plans/2026-11-17-dial-vscode-extension-design.md, §4). */
+  const scrollTerminal = (): VscodeTerminal | undefined => {
+    const agentId = cableHost.latestFront() === 'vscode' ? cableHost.shownAgentId() : undefined
+    const pid = agentId === undefined ? undefined : termPid(observed?.paneOf(agentId, 'vscode') ?? '')
+    return pid === undefined ? undefined : vscode.terminalOf(pid)
+  }
+  /** The route the stroke on the glass took at its `down`, kept to its `up`: Harness's windows are never left holding a
+   *  drag whose `up` went to VS Code. A `move` or an `up` with no `down` before it chooses then. */
+  let stroke: { terminal: VscodeTerminal; lines: ReturnType<typeof createScrollLines> } | 'windows' | undefined
+  const routeScroll = (phase: 'down' | 'move' | 'up', dy: number, velocity: number): void => {
+    let route = stroke
+    if (phase === 'down' || !route) {
+      const terminal = scrollTerminal()
+      route = terminal ? { terminal, lines: createScrollLines() } : 'windows'
+    }
+    stroke = phase === 'up' ? undefined : route
+    if (route === 'windows') core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity } })
+    // Whole lines, and an up's velocity is not played: the scroll stops where the finger stops. A window that went takes
+    // nothing more of the stroke, which never turns to Harness's windows midway.
+    else vscode.scroll(route.terminal, route.lines.take(phase, dy))
+  }
 
   const cableHost = new DaemonCableHost({
     // The cloud harnesses too, where the core offers them: tiles on the desk the dial walks like any other.
@@ -622,8 +728,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     environment: () => core.account.environment(),
     watching: (on) => {
       core.clients.dialWatching(on)
-      // Before the scan the attach starts, so that scan finds the dial recorded.
+      // Before the scan the attach starts, so that scan finds the dial recorded; and before VS Code's pass, which reads it.
       if (on && skill) part.call('skill', () => skill.attached())
+      if (on && vscodeSetup) part.call('vscodeExtension', () => vscodeSetup.pass())
       dialAttached(on)
       part.call('dialStream', () => dial.attached(on))
     },
@@ -669,7 +776,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     turned: noteMove,
     localFollowed: (cause, outcome) => log(FOLLOWED[cause === 'attach' ? attachAsk : cause][outcome]),
     swarmSelected: (swarmId) => core.clients.sendLocal({ type: 'dial_swarm', payload: { swarmId } }),
-    scrolled: (phase, dy, velocity) => core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity } }),
+    // Guarded as a notice into the dial is: a throw on the scroll path (a window's stream) is logged, never the session's.
+    scrolled: (phase, dy, velocity) => part.call('dial', () => routeScroll(phase, dy, velocity)),
     // Gestures stay at this desk. The device inventory and its settings also reach the owner's other
     // machines, through the encrypted device-management event.
     dialStatus: (status) => {
@@ -1086,6 +1194,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }
   observed?.onChange(() => part.call('dial', outsideTurn))
   herdr?.onChange(() => part.call('dial', outsideTurn))
+  // Before the dial's look, which then sees each session the scan found in the terminal it runs in.
+  hcSource?.onChange(() => part.call('observed', () => observed!.placeHerdr()))
   hcSource?.onChange(() => part.call('dial', outsideTurn))
   cmuxSource?.onChange(() => part.call('dial', outsideTurn))
   opencode?.onChange(() => part.call('dial', outsideTurn))
@@ -1210,6 +1320,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     return readOrcaOrder(source)
   }
   if (observed) observed.onChange(() => part.call('orca', () => orcaMembers(observed)))
+  // Each change tells VS Code's windows which agents run in one of its terminals, by their panes: only theirs may cost a
+  // read of the process table. A part of its own, so a throw there is never the dial's.
+  if (observed) observed.onChange(() => part.call('vscode', () => vscode.agents(observed.list().flatMap(({ id }) => {
+    const pid = termPid(observed.paneOf(id, 'vscode') ?? '')
+    return pid === undefined ? [] : [pid]
+  }))))
 
   /**
    * The open scan's copy of a session cmux lists, placed at that row's cmux pane
@@ -1350,7 +1466,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       return
     }
     // Agents already running when the dial came are listed now, idle until their next hook event.
-    part.call('observed', () => observed.scanOpen())
+    part.call('observed', () => scanOpen(observed))
     part.call('orca', () => orcaMembers(observed))
     // A dial plugged in while Orca is already in front: a front told again starts no settle, so none would come until the
     // person left Orca and came back.
@@ -1360,7 +1476,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     part.call('dial', showWaits)
     part.call('dial', remind)
     attached = [
-      every(OPEN_SCAN_MS, () => observed.scanOpen()),
+      every(OPEN_SCAN_MS, () => scanOpen(observed)),
       // A person can take minutes to come to an agent that waits on them.
       every(REMIND_MS, remind),
     ]
@@ -1414,6 +1530,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       part.call('notices', () => { result = notices.notify(ask) })
       return result
     }),
+    ...vscode.handlers,
   }, log)
     .then((listener) => {
       listenerOpen = listener !== null

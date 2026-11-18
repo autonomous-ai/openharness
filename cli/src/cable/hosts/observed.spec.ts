@@ -5,7 +5,9 @@ import type { HostAdapter, Pane, Place } from './adapter.js'
 import { createClaudeAppAdapter } from './claudeApp.js'
 import { createCodexAppAdapter } from './codexApp.js'
 import type { CodexQueueResult } from './codexQueue.js'
+import type { HcPrompt } from './hcClient.js'
 import { createHerdrAdapter } from './herdr.js'
+import { createHerdrAppAdapter } from './herdrApp.js'
 import type { HerdrPrompt } from './herdrClient.js'
 import { type Delivery, Inbox } from './inbox.js'
 import { askedLine, countWord, observedAgentId, type ObservedActions, ObservedSource, type ObservedDeps, type PromptSource } from './observed.js'
@@ -13,7 +15,7 @@ import type { OpenTarget } from './open.js'
 import { createOrcaAdapter, type OrcaDeps } from './orca.js'
 import { createTabsAdapter, type TabApp } from './tabs.js'
 import { createTmuxAdapter } from './tmux.js'
-import type { PaneSwitch, TypeResult } from './types.js'
+import type { HostAgent, PaneSwitch, TypeResult } from './types.js'
 import { createVscodeAdapter } from './vscode.js'
 import { createWeztermAdapter } from './wezterm.js'
 
@@ -37,6 +39,8 @@ function setup(over: Partial<ObservedDeps> = {}) {
   let looks = 0
   let held: Promise<void> | undefined
   const look = async (): Promise<void> => { looks++; await held }
+  // What each busy read waits on first, as a look waits on `held`.
+  let beforeBusy: () => Promise<void> = async () => {}
   const find = vi.fn(async (wanted: ReadonlyMap<string, string>) =>
     new Map([...wanted.keys()].flatMap((id) => (externals.has(id) ? [[id, externals.get(id)!] as const] : []))))
   const deps: ObservedDeps = {
@@ -54,7 +58,10 @@ function setup(over: Partial<ObservedDeps> = {}) {
         }))
       },
       // As OpenSessions says: busy unless the owner's record reads idle.
-      busy: async (owner: { record: string }) => working.get(owner.record) !== false,
+      busy: async (owner: { record: string }) => {
+        await beforeBusy()
+        return working.get(owner.record) !== false
+      },
     } as unknown as ObservedDeps['openSessions'],
     sessionRows: { find } as unknown as ObservedDeps['sessionRows'],
     lastAnswer: async (_engine, path) => answers.get(path),
@@ -72,6 +79,7 @@ function setup(over: Partial<ObservedDeps> = {}) {
   return {
     src, clock, gens, procs, alive, open, owners, working, externals, answers, stamps, changes, ev, find, logs,
     looks: () => looks, hold: (until: Promise<void>) => { held = until },
+    holdBusy: (wait: () => Promise<void>) => { beforeBusy = wait },
   }
 }
 
@@ -187,6 +195,15 @@ describe('ObservedSource states', () => {
     src.ingest(ev('turn-stop', { transcriptPath: '/t/s.jsonl' }))
     await graced()
     expect(src.list()[0].lastAnswer).toBe(`${'a'.repeat(298)}😀…`)
+  })
+
+  it('a read that fails logs a count and no error text: it can hold a path', async () => {
+    const { src, ev, logs } = setup({ lastAnswer: async () => { throw new Error('EACCES /Users/someone/.claude/projects/x.jsonl') } })
+    src.ingest(ev('turn-stop', { transcriptPath: '/t/s.jsonl' }))
+    await graced()
+    expect(src.list()[0]).toMatchObject({ state: 'done', unseenDone: true })
+    expect(src.list()[0].lastAnswer).toBeUndefined()
+    expect(logs).toEqual(['[observed] last answer · not read'])
   })
 
   it('does not read a transcript for other engines', async () => {
@@ -899,7 +916,7 @@ describe('ObservedSource and the app the scan learns', () => {
     found(s, 'a', 11)
     found(s, 'b', 12)
     await s.src.scanOpen()
-    expect(s.logs).toEqual(['[observed] scan · 2 found · 1 app known · 0 named · 7 ms'])
+    expect(s.logs).toEqual(['[observed] scan · 2 found · 1 app known · 0 named · 0 answered · 7 ms'])
     for (const word of ['ghostty', 'terminal', '11', '12', '/x/', '/t/']) expect(s.logs.join('\n')).not.toContain(word)
   })
 
@@ -1075,7 +1092,7 @@ describe('ObservedSource and the name in a session\'s own record', () => {
     found(s, 'a', 11)
     await s.src.scanOpen()
     expect(s.src.list()[0].name).toBe('a')
-    expect(s.logs).toEqual(['[observed] scan · 1 found · 0 app known · 0 named · 0 ms'])
+    expect(s.logs).toEqual(['[observed] scan · 1 found · 0 app known · 0 named · 0 answered · 0 ms'])
     expect(s.logs.join('\n')).not.toContain('someone')
   })
 
@@ -1138,7 +1155,7 @@ describe('ObservedSource and the name in a session\'s own record', () => {
     found(s, 'a', 11)
     found(s, 'b', 12)
     await s.src.scanOpen()
-    expect(s.logs).toEqual(['[observed] scan · 2 found · 0 app known · 1 named · 0 ms'])
+    expect(s.logs).toEqual(['[observed] scan · 2 found · 0 app known · 1 named · 0 answered · 0 ms'])
   })
 
   it('with no reader the scan names by folder', async () => {
@@ -1146,18 +1163,194 @@ describe('ObservedSource and the name in a session\'s own record', () => {
     found(s, 'a', 11)
     await s.src.scanOpen()
     expect(s.src.list()[0].name).toBe('a')
-    expect(s.logs).toEqual(['[observed] scan · 1 found · 0 app known · 0 named · 0 ms'])
+    expect(s.logs).toEqual(['[observed] scan · 1 found · 0 app known · 0 named · 0 answered · 0 ms'])
+  })
+})
+
+describe('ObservedSource and the last answer the scan reads', () => {
+  /** A session found open in a terminal and idle, its owner `pid`, its record its session id. */
+  const found = (
+    s: ReturnType<typeof setup>, sessionId: string, pid: number, engine = 'claude',
+    transcriptPath: string | null = `/t/${sessionId}.jsonl`,
+  ): void => {
+    s.open.set(sessionId, 'terminal')
+    s.owners.set(sessionId, { pid, engine })
+    s.externals.set(sessionId, { cwd: `/x/${sessionId}`, transcriptPath })
+    s.working.set(sessionId, false)
+  }
+
+  it('a Claude session the scan lists idle reads its last answer, cut at 300 code points', async () => {
+    const s = setup()
+    found(s, 'a', 11)
+    found(s, 'b', 12)
+    s.answers.set('/t/a.jsonl', 'Done: 3 files')
+    s.answers.set('/t/b.jsonl', '😀'.repeat(301))
+    await s.src.scanOpen()
+    expect(s.src.list().map((a) => [a.sessionId, a.lastAnswer])).toEqual([['a', 'Done: 3 files'], ['b', `${'😀'.repeat(299)}…`]])
+  })
+
+  it('a Codex session the scan lists idle reads its last answer, once', async () => {
+    const lastAnswer = vi.fn(async (_engine: string, _path: string): Promise<string | undefined> => 'Codex says hi')
+    const s = setup({ lastAnswer })
+    found(s, 'c', 13, 'codex')
+    await s.src.scanOpen()
+    expect(lastAnswer.mock.calls).toEqual([['codex', '/t/c.jsonl']])
+    expect(s.src.list()[0]).toMatchObject({ engine: 'codex', state: 'idle', lastAnswer: 'Codex says hi' })
+    await s.src.scanOpen()
+    await s.src.scanOpen()
+    expect(lastAnswer).toHaveBeenCalledTimes(1)
+  })
+
+  it('one found in a turn is not read and reads working', async () => {
+    const lastAnswer = vi.fn(async (): Promise<string | undefined> => 'x')
+    const s = setup({ lastAnswer })
+    found(s, 'a', 11)
+    s.working.set('a', true)
+    await s.src.scanOpen()
+    expect(lastAnswer).not.toHaveBeenCalled()
+    expect(s.src.list()[0].state).toBe('working')
+    expect(s.src.list()[0].lastAnswer).toBeUndefined()
+  })
+
+  it('one with no transcript path, or of another engine, is not read', async () => {
+    const lastAnswer = vi.fn(async (): Promise<string | undefined> => 'x')
+    const s = setup({ lastAnswer })
+    found(s, 'a', 11, 'claude', null)
+    found(s, 'g', 12, 'grok')
+    await s.src.scanOpen()
+    expect(lastAnswer).not.toHaveBeenCalled()
+    expect(s.src.list().map((a) => [a.sessionId, a.state, a.lastAnswer])).toEqual([['a', 'idle', undefined], ['g', 'idle', undefined]])
+  })
+
+  it.each<[string, ObservedDeps['lastAnswer']]>([
+    ['finds no answer', async () => undefined],
+    ['finds an empty one', async () => ''],
+    ['fails', async () => { throw new Error('EACCES /Users/someone/.claude/projects/x.jsonl') }],
+  ])('a read that %s leaves no recap, still lists it, and logs no error text', async (_what, lastAnswer) => {
+    const s = setup({ lastAnswer })
+    found(s, 'a', 11)
+    await s.src.scanOpen()
+    expect(s.src.list().map((a) => [a.sessionId, a.state, a.lastAnswer])).toEqual([['a', 'idle', undefined]])
+    expect(s.logs).toEqual(['[observed] scan · 1 found · 0 app known · 0 named · 0 answered · 0 ms'])
+    expect(s.logs.join('\n')).not.toContain('someone')
+  })
+
+  // As OpenSessions.busy counts an engine that cannot say: listed idle, a running turn would get a handle to type into.
+  it('a busy check that fails counts as busy: it reads working, its answer is not read, and the look lists the rest', async () => {
+    const lastAnswer = vi.fn(async (_engine: string, path: string): Promise<string | undefined> => `answer of ${path}`)
+    const s = setup({ lastAnswer })
+    let checks = 0
+    s.holdBusy(async () => { if (checks++ === 0) throw new Error('EACCES /Users/someone/.claude/sessions/11.json') })
+    found(s, 'a', 11)
+    found(s, 'b', 12)
+    await s.src.scanOpen()
+    expect(lastAnswer.mock.calls).toEqual([['claude', '/t/b.jsonl']])
+    expect(s.src.list().map((a) => [a.sessionId, a.state, a.lastAnswer])).toEqual([['a', 'working', undefined], ['b', 'idle', 'answer of /t/b.jsonl']])
+    expect(s.logs).toEqual(['[observed] scan · 2 found · 0 app known · 0 named · 1 answered · 0 ms'])
+  })
+
+  it('a hook heard while the answers are read wins', async () => {
+    let answer: (text: string | undefined) => void = () => {}
+    const lastAnswer = vi.fn(() => new Promise<string | undefined>((resolve) => { answer = resolve }))
+    const s = setup({ lastAnswer })
+    found(s, 'a', 11)
+    const scan = s.src.scanOpen()
+    await vi.waitFor(() => expect(lastAnswer).toHaveBeenCalled())
+    s.src.ingest(s.ev('turn-start', { sessionId: 'a', callerPid: 11, cwd: '/x/a' }))
+    answer('old answer')
+    await scan
+    expect(s.src.list()).toHaveLength(1)
+    expect(s.src.list()[0].state).toBe('working')
+    expect(s.src.list()[0].lastAnswer).toBeUndefined()
+  })
+
+  // The dial reads list() every second, and its restore marks an agent restored before reading its recap.
+  it('no reader of list() sees a session of the look half-read', async () => {
+    let releaseAnswers: () => void = () => {}
+    const answersHeld = new Promise<void>((resolve) => { releaseAnswers = resolve })
+    const lastAnswer = vi.fn(async (_engine: string, path: string): Promise<string | undefined> => {
+      await answersHeld
+      return path === '/t/a.jsonl' ? 'A done' : 'B done'
+    })
+    const s = setup({ lastAnswer })
+    let releaseBusy: () => void = () => {}
+    const busyHeld = new Promise<void>((resolve) => { releaseBusy = resolve })
+    const busy = vi.fn(() => busyHeld)
+    s.holdBusy(busy)
+    found(s, 'a', 11)
+    found(s, 'b', 12)
+    const seen: HostAgent[][] = []
+    s.changes.mockImplementation(() => { seen.push(s.src.list()) })
+    const scan = s.src.scanOpen()
+    await vi.waitFor(() => expect(busy).toHaveBeenCalled())
+    expect(s.src.list()).toEqual([])
+    releaseBusy()
+    await vi.waitFor(() => expect(lastAnswer).toHaveBeenCalled())
+    expect(s.src.list()).toEqual([])
+    releaseAnswers()
+    await scan
+    expect(s.changes).toHaveBeenCalledTimes(1)
+    expect(seen[0].map((a) => [a.sessionId, a.lastAnswer])).toEqual([['a', 'A done'], ['b', 'B done']])
+  })
+
+  it('a recap from before the dial is history: idle, not unseen, nothing told', async () => {
+    const s = setup()
+    found(s, 'a', 11)
+    s.answers.set('/t/a.jsonl', 'Done')
+    await s.src.scanOpen()
+    expect(s.src.list()[0]).toMatchObject({ state: 'idle', unseenDone: false, lastAnswer: 'Done' })
+    expect(s.changes).toHaveBeenCalledTimes(1)
+  })
+
+  it('at most 50 answers are read a look, and none past them is listed', async () => {
+    const lastAnswer = vi.fn(async (_engine: string, path: string): Promise<string | undefined> => `answer of ${path}`)
+    const s = setup({ lastAnswer })
+    for (let i = 0; i < 51; i++) found(s, `s${i}`, 200 + i)
+    await s.src.scanOpen()
+    expect(lastAnswer).toHaveBeenCalledTimes(50)
+    expect(s.src.list()).toHaveLength(50)
+    for (const agent of s.src.list()) expect(agent.lastAnswer).toBe(`answer of /t/${agent.sessionId}.jsonl`)
+  })
+
+  it('Harness\'s own session is never read for an answer', async () => {
+    const lastAnswer = vi.fn(async (): Promise<string | undefined> => 'x')
+    const s = setup({ lastAnswer })
+    found(s, 'v', 21)
+    s.externals.set('v', { cwd: '/data/harness/voice', transcriptPath: '/t/v.jsonl' })
+    await s.src.scanOpen()
+    expect(lastAnswer).not.toHaveBeenCalled()
+    expect(s.src.list()).toEqual([])
+  })
+
+  it('the scan\'s line counts the answered ones and times every read of the look', async () => {
+    const s = setup({
+      apps: async () => { s.clock.t += 7; return new Map([[11, 'ghostty']]) },
+      recordName: async (owner) => { s.clock.t += 5; return owner.sessionId === 'a' ? 'Tho 7f3a91c2' : undefined },
+      lastAnswer: async (_engine, path) => { s.clock.t += 2; return path === '/t/a.jsonl' ? 'Done: 3 files' : undefined },
+    })
+    s.holdBusy(async () => { s.clock.t += 3 })
+    found(s, 'a', 11)
+    found(s, 'b', 12)
+    await s.src.scanOpen()
+    // 7 for the apps, 5 for each name, 3 for each busy check and 2 for each answer.
+    expect(s.logs).toEqual(['[observed] scan · 2 found · 1 app known · 1 named · 1 answered · 27 ms'])
+    for (const word of ['Done', '/t/', 'Tho', '7f3a91c2']) expect(s.logs.join('\n')).not.toContain(word)
   })
 })
 
 const HANDLE = 'term_0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b'
 
-/** What the tests answer for the source's routes: its own, and the Orca, Claude app, Codex app and tab verbs its adapters run. */
+/** What the tests answer for the source's routes: its own, and the Orca, herdr, Herdr Core, Claude app, Codex app and tab
+ *  verbs its adapters run. */
 interface Fakes extends Omit<ObservedActions, 'adapters'> {
   orcaSend(handle: string, text: string): Promise<TypeResult>
   orcaSwitch(handle: string): Promise<PaneSwitch>
   herdrPrompt(pane: string, kind: string, text: string): Promise<HerdrPrompt>
   herdrStamp(): string | undefined
+  hcPrompt(address: string, kind: string, text: string): Promise<HcPrompt>
+  hcShows(address: string): boolean
+  hcReports(address: string): boolean
+  herdrInFront(): boolean
   claudeInFront(): boolean
   claudeShow(agentId: string, session: string): Promise<PaneSwitch>
   codexInFront(): boolean
@@ -1182,6 +1375,11 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
     herdrPrompt: vi.fn(async (_pane: string, _kind: string, _text: string): Promise<HerdrPrompt> => ({ outcome: 'sent' })),
     // herdr's socket is where the daemon looks.
     herdrStamp: vi.fn((): string | undefined => '1:1'),
+    // hc types into every terminal, Herdr's window shows each, and hc reports an agent in each; Herdr is not in front.
+    hcPrompt: vi.fn(async (_address: string, _kind: string, _text: string): Promise<HcPrompt> => ({ outcome: 'sent' })),
+    hcShows: vi.fn((_address: string) => true),
+    hcReports: vi.fn((_address: string) => true),
+    herdrInFront: vi.fn(() => false),
     // As on macOS: an app or a pane is something a tap can open (open.ts).
     canOpen: vi.fn((target: OpenTarget) => !!target.bundle || !!target.pane),
     open: vi.fn(async (_agentId: string, _target: OpenTarget) => true),
@@ -1210,11 +1408,15 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
       socketStamp: () => fake.herdrStamp(),
     } }),
     createTmuxAdapter({ run: ran, processes: async () => [], log: () => {} }),
+    // As devices.ts takes it where the hook's addresses are hc's own session's.
+    createHerdrAppAdapter({ ...deps, client: { prompt: (address, kind, text) => fake.hcPrompt(address, kind, text) },
+      hookIds: true, inFront: () => fake.herdrInFront(), shows: (address) => fake.hcShows(address),
+      reports: (address) => fake.hcReports(address), log: () => {} }),
     createWeztermAdapter(deps),
     { ...orca, type: (pane, text) => fake.orcaSend(pane.id, text), show: (pane) => fake.orcaSwitch(pane.id) },
     { ...claude, show: (pane, agentId) => fake.claudeShow(agentId, pane.id) },
     createCodexAppAdapter({ ...deps, inFront: () => fake.codexInFront(), log: () => {} }),
-    createVscodeAdapter(deps),
+    createVscodeAdapter({ ...deps, inFront: () => true, terminals: { terminalOf: () => undefined, show: () => false } }),
     createTabsAdapter({ isOpen: () => fake.tabsOpen(), select: (tab, raise) => fake.tabSelect(tab.app, tab.tty, raise) === 'ok' }),
   ]
   return { actions: { ...fake, adapters }, ready, ran }
@@ -1745,6 +1947,197 @@ describe('ObservedSource actions', () => {
   })
 })
 
+// hc's own foreground pid equal to the pid the scan lists a session by, in one terminal only, is where it runs (the
+// addendum of docs/plans/2026-11-17-dial-recap-after-restart-design.md, decision 5).
+describe('ObservedSource and the Herdr terminal a session the scan found runs in', () => {
+  /** A Claude session found open in a terminal and idle, its owner `pid`, its last answer `Done`. */
+  const found = (s: ReturnType<typeof setup>, sessionId: string, pid: number): void => {
+    s.open.set(sessionId, 'terminal')
+    s.owners.set(sessionId, { pid, engine: 'claude' })
+    s.externals.set(sessionId, { cwd: `/x/${sessionId}`, transcriptPath: `/t/${sessionId}.jsonl` })
+    s.working.set(sessionId, false)
+    s.answers.set(`/t/${sessionId}.jsonl`, 'Done')
+  }
+  /** A source whose lookup answers from `terminals` (pid → hc terminal), with the real adapters on `fakes`. */
+  const paired = (over: Partial<ObservedDeps> = {}, fakes: Partial<Fakes> = {}) => {
+    const terminals = new Map<number, string>()
+    const herdrTerminal = vi.fn((pid: number) => terminals.get(pid))
+    const { actions } = fakeActions(fakes)
+    return { ...setup({ actions, herdrTerminal, ...over }), actions, terminals, herdrTerminal }
+  }
+  /** The same session `a` of pid 11, as a hook with these hints places it. */
+  const hooked = (hostHints: Record<string, string>, fakes: Partial<Fakes> = {}) => {
+    const { actions } = fakeActions(fakes)
+    const s = setup({ actions })
+    s.src.ingest(s.ev('session-start', { sessionId: 'a', callerPid: 11, hostHints }))
+    return { ...s, actions }
+  }
+  const inT7 = { HC_TERMINAL_ID: 't7', TERM_PROGRAM: 'ghostty' }
+  const placeOf = ({ host, app, appPending, paneKeys }: HostAgent) => ({ host, app, appPending, paneKeys })
+  const herdrLines = (logs: string[]): string[] => logs.filter((line) => line.startsWith('[observed] herdr'))
+
+  it('paired by its pid, it is placed as its hook would place it, on Herdr\'s page, with its pane, words and tap there', async () => {
+    const s = paired()
+    found(s, 'a', 11)
+    s.terminals.set(11, 't7')
+    await s.src.scanOpen()
+    const [agent] = s.src.list()
+    expect(agent).toMatchObject({ host: 'herdr', app: 'herdr', paneKeys: ['herdr-app:t7'], state: 'idle', lastAnswer: 'Done' })
+    expect(agent).not.toHaveProperty('appPending')
+    expect(s.changes).toHaveBeenCalledTimes(1)
+    expect(s.logs).toEqual(['[observed] scan · 1 found · 0 app known · 0 named · 1 answered · 0 ms', '[observed] herdr · 1 paired'])
+    const h = hooked(inT7)
+    const [twin] = h.src.list()
+    expect(placeOf(agent)).toEqual(placeOf(twin))
+    expect(s.src.capabilities(agent)).toEqual(h.src.capabilities(twin))
+    expect(s.src.capabilities(agent)).toMatchObject({ voice: true, focus: true })
+    expect(await s.src.focus(agent)).toBe(true)
+    expect(await h.src.focus(twin)).toBe(true)
+    expect(s.actions.open.mock.calls).toEqual([[agent.id, { bundle: 'dev.herdr.app', pane: { adapter: 'herdr-app', id: 't7' } }]])
+    expect(h.actions.open.mock.calls).toEqual(s.actions.open.mock.calls)
+    expect(await s.src.send(agent, 'next')).toEqual({ ok: true })
+    expect(s.actions.hcPrompt.mock.calls).toEqual([['t7', 'claude', 'next']])
+    expect(counted(s.actions.count)).toEqual(['herdr-app'])
+  })
+
+  it('a terminal hc reports no agent in takes no words, as for a hooked agent', async () => {
+    const quiet = { hcReports: vi.fn((_address: string) => false) }
+    const s = paired({}, quiet)
+    found(s, 'a', 11)
+    s.terminals.set(11, 't7')
+    await s.src.scanOpen()
+    const [agent] = s.src.list()
+    expect(agent.paneKeys).toEqual(['herdr-app:t7'])
+    const h = hooked(inT7, quiet)
+    expect(s.src.capabilities(agent).voice).toBe(false)
+    expect(h.src.capabilities(h.src.list()[0]).voice).toBe(false)
+    expect(await s.src.send(agent, 'next')).toEqual({ ok: false, reason: 'a did not answer.' })
+    expect(await h.src.send(h.src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
+    expect(s.actions.hcPrompt).not.toHaveBeenCalled()
+  })
+
+  it('no lookup, or one that answers none, pairs nothing and logs no herdr line', async () => {
+    for (const herdrTerminal of [undefined, vi.fn((_pid: number): string | undefined => undefined)]) {
+      const s = setup({ actions: fakeActions().actions, herdrTerminal })
+      found(s, 'a', 11)
+      await s.src.scanOpen()
+      s.src.placeHerdr()
+      expect(placeOf(s.src.list()[0])).toEqual({ host: 'terminal', app: 'terminal', appPending: true, paneKeys: undefined })
+      expect(s.changes).toHaveBeenCalledTimes(1)
+      expect(herdrLines(s.logs)).toEqual([])
+    }
+  })
+
+  it('Herdr\'s list after the scan: placeHerdr pairs it and tells one change; again with nothing new, none', async () => {
+    const s = paired()
+    found(s, 'a', 11)
+    await s.src.scanOpen()
+    expect(placeOf(s.src.list()[0])).toEqual({ host: 'terminal', app: 'terminal', appPending: true, paneKeys: undefined })
+    expect(herdrLines(s.logs)).toEqual([])
+    s.terminals.set(11, 't7')
+    s.src.placeHerdr()
+    expect(s.src.list()[0]).toMatchObject({ host: 'herdr', app: 'herdr', paneKeys: ['herdr-app:t7'], lastAnswer: 'Done' })
+    expect(s.src.list()[0]).not.toHaveProperty('appPending')
+    expect(s.changes).toHaveBeenCalledTimes(2)
+    expect(herdrLines(s.logs)).toEqual(['[observed] herdr · 1 paired'])
+    s.src.placeHerdr()
+    expect(s.changes).toHaveBeenCalledTimes(2)
+    expect(herdrLines(s.logs)).toEqual(['[observed] herdr · 1 paired'])
+  })
+
+  it('a pairing that no longer holds is taken back to what the scan gave it; one that moves follows its terminal', async () => {
+    const s = paired({ apps: async () => new Map([[11, 'vscode']]) })
+    found(s, 'a', 11)
+    found(s, 'b', 12)
+    s.terminals.set(11, 't7').set(12, 't9')
+    await s.src.scanOpen()
+    const row = (sessionId: string): HostAgent => s.src.list().find((a) => a.sessionId === sessionId)!
+    expect(placeOf(row('a'))).toEqual({ host: 'herdr', app: 'herdr', appPending: undefined, paneKeys: ['herdr-app:t7'] })
+    expect(herdrLines(s.logs)).toEqual(['[observed] herdr · 2 paired'])
+    // a moves to t8; b's terminal no longer runs it.
+    s.terminals.set(11, 't8').delete(12)
+    s.src.placeHerdr()
+    expect(s.changes).toHaveBeenCalledTimes(2)
+    expect(placeOf(row('a'))).toEqual({ host: 'herdr', app: 'herdr', appPending: undefined, paneKeys: ['herdr-app:t8'] })
+    expect(placeOf(row('b'))).toEqual({ host: 'terminal', app: 'terminal', appPending: true, paneKeys: undefined })
+    expect(herdrLines(s.logs)).toEqual(['[observed] herdr · 2 paired', '[observed] herdr · 1 paired'])
+    // A move kept what the scan gave a: its app comes back, and no stale Herdr pane takes words or a tap.
+    s.terminals.delete(11)
+    s.src.placeHerdr()
+    expect(s.changes).toHaveBeenCalledTimes(3)
+    expect(placeOf(row('a'))).toEqual({ host: 'terminal', app: 'vscode', appPending: undefined, paneKeys: undefined })
+    expect(herdrLines(s.logs)).toHaveLength(2)
+    expect(s.src.capabilities(row('a'))).toMatchObject({ voice: false, focus: false })
+    expect(await s.src.focus(row('a'))).toBe(false)
+    expect(s.actions.canOpen).toHaveBeenLastCalledWith({})
+    expect(await s.src.send(row('a'), 'next')).toEqual({ ok: false, reason: 'a did not answer.' })
+    expect(s.actions.hcPrompt).not.toHaveBeenCalled()
+  })
+
+  it('a hook heard after the pairing places it by its own hints, and no later placeHerdr pairs it again', async () => {
+    const s = paired()
+    found(s, 'a', 11)
+    s.terminals.set(11, 't7')
+    await s.src.scanOpen()
+    s.src.ingest(s.ev('turn-stop', { sessionId: 'a', callerPid: 11, cwd: '/x/a', hostHints: { TERM_PROGRAM: 'iTerm.app' } }))
+    expect(placeOf(s.src.list()[0])).toEqual({ host: 'iterm', app: 'iterm', appPending: undefined, paneKeys: undefined })
+    const changes = s.changes.mock.calls.length
+    s.herdrTerminal.mockClear()
+    s.src.placeHerdr()
+    expect(s.herdrTerminal).not.toHaveBeenCalled()
+    expect(s.changes).toHaveBeenCalledTimes(changes)
+    expect(placeOf(s.src.list()[0])).toEqual({ host: 'iterm', app: 'iterm', appPending: undefined, paneKeys: undefined })
+    s.src.ingest(s.ev('turn-start', { sessionId: 'a', callerPid: 11, cwd: '/x/a', hostHints: { HC_TERMINAL_ID: 't9', TERM_PROGRAM: 'ghostty' } }))
+    expect(s.src.list()[0].paneKeys).toEqual(['herdr-app:t9'])
+  })
+
+  // The pairing's Herdr is no hook's: kept while the hook's caller is walked, the session would sit on Herdr's page with
+  // no Herdr pane, Herdr's own row of its terminal unfolded beside it.
+  it('a hook whose hints name no app keeps the app the scan gave it while its caller is walked, not the pairing\'s', async () => {
+    let walked: (apps: ReadonlyMap<number, string>) => void = () => {}
+    const apps = vi.fn(async (_pids: readonly number[]): Promise<ReadonlyMap<number, string>> => new Map([[11, 'vscode']]))
+    const s = paired({ apps })
+    found(s, 'a', 11)
+    s.terminals.set(11, 't7')
+    await s.src.scanOpen()
+    expect(placeOf(s.src.list()[0])).toEqual({ host: 'herdr', app: 'herdr', appPending: undefined, paneKeys: ['herdr-app:t7'] })
+    apps.mockImplementationOnce(() => new Promise((resolve) => { walked = resolve }))
+    s.src.ingest(s.ev('turn-start', { sessionId: 'a', callerPid: 11, cwd: '/x/a', hostHints: {} }))
+    expect(apps).toHaveBeenLastCalledWith([11])
+    expect(placeOf(s.src.list()[0])).toEqual({ host: 'terminal', app: 'vscode', appPending: undefined, paneKeys: undefined })
+    walked(new Map())
+    await flushed()
+    expect(placeOf(s.src.list()[0])).toEqual({ host: 'terminal', app: 'terminal', appPending: undefined, paneKeys: undefined })
+  })
+
+  it('a hook heard while the scan\'s reads ran keeps its own place', async () => {
+    let answer: (text: string | undefined) => void = () => {}
+    const lastAnswer = vi.fn(() => new Promise<string | undefined>((resolve) => { answer = resolve }))
+    const s = paired({ lastAnswer })
+    found(s, 'a', 11)
+    s.terminals.set(11, 't7')
+    const scan = s.src.scanOpen()
+    await vi.waitFor(() => expect(lastAnswer).toHaveBeenCalled())
+    s.src.ingest(s.ev('session-start', { sessionId: 'a', callerPid: 11, cwd: '/x/a', hostHints: { TERM_PROGRAM: 'ghostty' } }))
+    answer('Done')
+    await scan
+    expect(placeOf(s.src.list()[0])).toEqual({ host: 'ghostty', app: 'ghostty', appPending: undefined, paneKeys: undefined })
+    expect(s.herdrTerminal).not.toHaveBeenCalled()
+    expect(herdrLines(s.logs)).toEqual([])
+  })
+
+  it('the herdr line counts only: two paired in one look, and no pid, address or name in any line', async () => {
+    const s = paired({ recordName: async (owner) => (owner.sessionId === 'a' ? 'Tho 7f3a91c2' : undefined) })
+    found(s, 'a', 11)
+    found(s, 'b', 12)
+    s.terminals.set(11, 't7').set(12, 't8')
+    await s.src.scanOpen()
+    expect(s.logs).toEqual(['[observed] scan · 2 found · 0 app known · 1 named · 2 answered · 0 ms', '[observed] herdr · 2 paired'])
+    const said = s.logs.join('\n')
+    for (const word of ['t7', 't8', '11', '12', ...s.src.list().map((a) => a.name)]) expect(said).not.toMatch(new RegExp(`\\b${word}\\b`))
+  })
+})
+
 const THREAD = '01a1de76-a3b7-7270-b39e-1245893274c1'
 const FAILED: CodexQueueResult = { outcome: 'failed', reason: 'exit 1' }
 
@@ -2054,6 +2447,64 @@ describe('ObservedSource and the Codex app', () => {
     expect(src.hasPane(agent)).toBe(false)
     expect(await src.focus(agent)).toBe(true)
     expect(actions.open.mock.calls).toEqual([[agent.id, { bundle: 'com.mitchellh.ghostty' }]])
+  })
+})
+
+// A session the scan found has had no hook to name its caller or its app (VS Code's terminal pane, vscode.ts).
+describe('ObservedSource and a session the scan found', () => {
+  /** An adapter that places every agent by its process, and the pids it was asked about. */
+  const byPid = (bundle?: string) => {
+    const pids: (number | undefined)[] = []
+    const adapter: HostAdapter = {
+      id: 'pid', tap: 'before', ...(bundle ? { bundle } : {}),
+      paneOf: (place: Place): Pane | undefined => {
+        pids.push(place.pid)
+        return place.pid === undefined ? undefined : { adapter: 'pid', id: `p${place.pid}` }
+      },
+      canFocus: () => true,
+      focus: async () => true,
+    }
+    const { actions } = fakeActions()
+    return { actions: { ...actions, adapters: [adapter] }, pids }
+  }
+  /** A session only the open scan found, its process 100. */
+  const scanned = async (bundle?: string) => {
+    const { actions, pids } = byPid(bundle)
+    const t = setup({ actions })
+    t.open.set('s1', 'terminal')
+    t.owners.set('s1', { pid: 100, engine: 'claude' })
+    t.externals.set('s1', { cwd: '/work/proj' })
+    await t.src.scanOpen()
+    return { ...t, actions, pids }
+  }
+
+  it('a session the scan found is placed by its own pid until a hook names its caller', async () => {
+    const { src, ev, pids } = await scanned()
+    expect(pids.at(-1)).toBe(100)
+    src.ingest(ev('turn-start', { callerPid: 222 }))
+    expect(pids.at(-1)).toBe(222)
+  })
+
+  it('a tap on a session the scan found takes its pane\'s adapter\'s bundle', async () => {
+    const { src, actions } = await scanned('com.example.app')
+    const agent = src.list()[0]
+    expect(await src.focus(agent)).toBe(true)
+    expect(actions.open.mock.calls).toEqual([[agent.id, { bundle: 'com.example.app', pane: { adapter: 'pid', id: 'p100' } }]])
+  })
+
+  it('an entry\'s own bundle wins over its pane\'s adapter\'s', async () => {
+    const { src, ev, actions } = await scanned('com.example.app')
+    src.ingest(ev('turn-start', { callerPid: 222, hostHints: { TERM_PROGRAM: 'ghostty' } }))
+    const agent = src.list()[0]
+    expect(await src.focus(agent)).toBe(true)
+    expect(actions.open.mock.calls).toEqual([[agent.id, { bundle: 'com.mitchellh.ghostty', pane: { adapter: 'pid', id: 'p222' } }]])
+  })
+
+  it('a pane whose adapter declares no bundle adds none', async () => {
+    const { src, actions } = await scanned()
+    const agent = src.list()[0]
+    expect(await src.focus(agent)).toBe(true)
+    expect(actions.open.mock.calls).toEqual([[agent.id, { pane: { adapter: 'pid', id: 'p100' } }]])
   })
 })
 
@@ -2464,7 +2915,7 @@ describe('ObservedSource panes', () => {
     // It cannot bring its pane forward here: Orca's terminal is the first that can.
     near.canFocus.mockReturnValue(false)
     expect(await tap.src.focus(tap.agent)).toBe(true)
-    expect(tap.actions.open.mock.calls[1]).toEqual([tap.agent.id, { pane: { adapter: 'orca', id: HANDLE } }])
+    expect(tap.actions.open.mock.calls[1]).toEqual([tap.agent.id, { bundle: 'com.stablyai.orca', pane: { adapter: 'orca', id: HANDLE } }])
     expect(near.focus).not.toHaveBeenCalled()
 
     // It comes after its app: Orca's terminal is the tap's pane, and its own is raised once the app came.
@@ -2472,7 +2923,7 @@ describe('ObservedSource panes', () => {
     let opened!: (yes: boolean) => void
     const raised = first(late, both, { open: vi.fn(() => new Promise<boolean>((resolve) => { opened = resolve })) })
     const raising = raised.src.focus(raised.agent)
-    expect(raised.actions.open.mock.calls).toEqual([[raised.agent.id, { pane: { adapter: 'orca', id: HANDLE } }]])
+    expect(raised.actions.open.mock.calls).toEqual([[raised.agent.id, { bundle: 'com.stablyai.orca', pane: { adapter: 'orca', id: HANDLE } }]])
     expect(late.focus).not.toHaveBeenCalled()
     opened(true)
     expect(await raising).toBe(true)

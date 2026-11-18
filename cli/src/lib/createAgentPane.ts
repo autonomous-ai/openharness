@@ -9,7 +9,8 @@
  * call mints a never-before-used pane id from tmux's own monotonic counter, so a retry almost
  * always lands on an unclaimed route without needing to wait for anything. A tmux spawn failure
  * (`SPAWN_FAILED`/`TMUX_UNAVAILABLE`) is a different, not-obviously-transient problem and is
- * returned immediately — only the registration race is retried.
+ * returned immediately — only the registration race is retried. A storage refusal is neither a taken route nor tmux's:
+ * its one pane is closed and it is answered at once as `PERSISTENCE_UNCONFIRMED`.
  */
 import { homedir } from 'node:os'
 import type { AgentEngine } from '../engines/types.js'
@@ -19,6 +20,7 @@ import type { ForkOrigin, RegisteredSession } from './registry.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import type { TerminalCreateResult, TerminalRuntimeRef, TerminalDispatchControl, TerminalCommand } from './terminalTypes.js'
 import { terminalRouteKey } from './terminalRuntime.js'
+import { AtomicWriteUnconfirmed, RegistryPersistenceUnavailable } from './registryPersistence.js'
 import type { ExternalResumeIntent } from './externalResume.js'
 import type { WindowsPaneLaunch } from './windows/engineStart.js'
 import type { StartedBy } from './agentAttribution.js'
@@ -124,7 +126,7 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
 
 export type CreateAgentPaneResult<Ref extends TerminalRuntimeRef = TerminalRuntimeRef> =
   | { ok: true; spawned: TerminalCreateResult<Ref> & { state: 'succeeded' }; pending: RegisteredSession }
-  | { ok: false; error: 'TMUX_UNAVAILABLE' | 'SPAWN_FAILED' | 'REGISTRATION_FAILED'; detail: string }
+  | { ok: false; error: 'TMUX_UNAVAILABLE' | 'SPAWN_FAILED' | 'REGISTRATION_FAILED' | 'PERSISTENCE_UNCONFIRMED'; detail: string }
 
 export async function createAndRegisterPane<Ref extends TerminalRuntimeRef = TerminalRuntimeRef>(
   deps: CreateAgentPaneDeps<Ref>,
@@ -151,35 +153,44 @@ export async function createAndRegisterPane<Ref extends TerminalRuntimeRef = Ter
       const missing = spawned.reason === 'tmux is unavailable'
       return { ok: false, error: missing ? 'TMUX_UNAVAILABLE' : 'SPAWN_FAILED', detail: spawned.reason }
     }
-    const pending = await deps.registry.openPendingAgent({
-      ...(deps.agentId ? { agentId: deps.agentId } : {}),
-      ...(deps.nativeToken ? { nativeToken: deps.nativeToken } : {}),
-      engine: deps.engine,
-      runtimes: [spawned.runtime],
-      primaryRuntimeKey: terminalRouteKey(spawned.runtime),
-      cwd: deps.cwd,
-      grid: deps.grid,
-      gridLaunchRecord: deps.gridLaunchRecord,
-      scmLaunchRecord: deps.scmLaunchRecord,
-      ...(deps.launchModel ? { launchModel: deps.launchModel } : {}),
-      codexHome: deps.codexHome,
-      claudeHome: deps.claudeHome,
-      dsh: deps.dsh,
-      dshRuntime: deps.dshRuntime,
-      agent: deps.agent,
-      bypassPermission: deps.bypassPermission,
-      permissionMode: deps.permissionMode,
-      defaultName: deps.defaultName,
-      label: deps.label,
-      forkedFrom: deps.forkedFrom,
-      ...(deps.externalResume ? { externalResume: deps.externalResume } : {}),
-      ...(deps.startedBy ? { startedBy: deps.startedBy } : {}),
-      ...(deps.startedBy && deps.parentAgentId ? { parentAgentId: deps.parentAgentId } : {}),
-      ...(deps.guest ? { guest: deps.guest } : {}),
-      ...(deps.browser ? { browser: true } : {}),
-      ...(deps.firstTask ? { firstTask: deps.firstTask } : {}),
-      ...(deps.openclawLocal ? { openclawLocal: deps.openclawLocal } : {}),
-    })
+    let pending: RegisteredSession | null
+    try {
+      pending = await deps.registry.openPendingAgent({
+        ...(deps.agentId ? { agentId: deps.agentId } : {}),
+        ...(deps.nativeToken ? { nativeToken: deps.nativeToken } : {}),
+        engine: deps.engine,
+        runtimes: [spawned.runtime],
+        primaryRuntimeKey: terminalRouteKey(spawned.runtime),
+        cwd: deps.cwd,
+        grid: deps.grid,
+        gridLaunchRecord: deps.gridLaunchRecord,
+        scmLaunchRecord: deps.scmLaunchRecord,
+        ...(deps.launchModel ? { launchModel: deps.launchModel } : {}),
+        codexHome: deps.codexHome,
+        claudeHome: deps.claudeHome,
+        dsh: deps.dsh,
+        dshRuntime: deps.dshRuntime,
+        agent: deps.agent,
+        bypassPermission: deps.bypassPermission,
+        permissionMode: deps.permissionMode,
+        defaultName: deps.defaultName,
+        label: deps.label,
+        forkedFrom: deps.forkedFrom,
+        ...(deps.externalResume ? { externalResume: deps.externalResume } : {}),
+        ...(deps.startedBy ? { startedBy: deps.startedBy } : {}),
+        ...(deps.startedBy && deps.parentAgentId ? { parentAgentId: deps.parentAgentId } : {}),
+        ...(deps.guest ? { guest: deps.guest } : {}),
+        ...(deps.browser ? { browser: true } : {}),
+        ...(deps.firstTask ? { firstTask: deps.firstTask } : {}),
+        ...(deps.openclawLocal ? { openclawLocal: deps.openclawLocal } : {}),
+      })
+    } catch (error) {
+      const closed = await deps.tmuxBackend.kill(spawned.runtime)
+      if (!(error instanceof RegistryPersistenceUnavailable || error instanceof AtomicWriteUnconfirmed)) throw error
+      console.warn(`[agent] create ${deps.engine} not saved · pane ${spawned.runtime.paneId} `
+        + (closed?.state === 'succeeded' ? 'closed' : `close ${closed?.state ?? 'unknown'}`))
+      return { ok: false, error: 'PERSISTENCE_UNCONFIRMED', detail: error.message }
+    }
     if (pending) return { ok: true, spawned, pending }
     console.warn(`[agent] create ${deps.engine} registration failed · pane ${spawned.runtime.paneId} · `
       + `attempt ${attempt}/${maxAttempts}`)

@@ -5,8 +5,10 @@
 //   - as `codex app-server`, reads its stdin, answers nothing and ends when that stdin ends;
 //   - as `codex queue --thread <id> --message=<text>`, notes the call in `codex-queue` under the test's root when that
 //     thread's rollout is in its CODEX_HOME, else exits 1 having noted nothing, as 0.167 does;
-//   - as `claude plugin …`, adds, installs, turns on, uninstalls and lists the harness-device plugin as 2.1.326 does,
-//     noting each call in `claude-plugin-calls` under the test's root (`claudePlugin`);
+//   - as `claude plugin …`, adds, installs, turns on and off, uninstalls and lists the harness-device plugin as 2.1.326
+//     does, noting each call in `claude-plugin-calls` under the test's root (`claudePlugin`);
+//   - as `claude -p … --input-format stream-json`, answers the `initialize` control request with its `/model` and `/`
+//     lists as 2.1.x does on a subscription, and ends when its stdin ends (`answerClaudeLists`);
 //   - runs the hooks its own settings carry, as the real CLIs run them: the commands the daemon
 //     installed (lib/hooks.ts), through a shell, from inside the pane, with the event on stdin, killed at
 //     their timeout and waited for. So the real `hook/notify.mjs` is what reaches the daemon, with its
@@ -100,6 +102,7 @@ import { randomUUID } from 'node:crypto'
 import { appendFileSync, closeSync, constants, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { createInterface } from 'node:readline'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 /**
@@ -188,6 +191,38 @@ function holdUnreadableDescriptor(config, ms) {
   setTimeout(() => closeSync(fd), ms).unref()
 }
 
+const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
+/**
+ * Claude Code 2.1.x's `/model` rows on a subscription: bare aliases, Haiku with no effort. Opus and Sonnet take the
+ * efforts the daemon's alias list offers them, so a test that picks one sees the same choices whether its first ask is
+ * answered from the aliases or from this list (the aliases give `default` no effort, and add `fable`).
+ */
+const CLAUDE_LISTED_MODELS = [
+  { value: 'default', displayName: 'Default (recommended)', description: 'Opus for complex work', supportsEffort: true, supportedEffortLevels: CLAUDE_EFFORTS },
+  { value: 'opus', displayName: 'Opus', description: 'For complex work and everyday tasks', supportsEffort: true, supportedEffortLevels: CLAUDE_EFFORTS },
+  { value: 'sonnet', displayName: 'Sonnet', description: 'For everyday tasks', supportsEffort: true, supportedEffortLevels: CLAUDE_EFFORTS },
+  { value: 'haiku', displayName: 'Haiku', description: 'Fastest for quick answers' },
+]
+const CLAUDE_LISTED_COMMANDS = [
+  { name: 'compact', description: 'Clear history but keep a summary', argumentHint: '[instructions]' },
+  { name: 'review', description: 'Review a pull request', argumentHint: '' },
+]
+
+/**
+ * `claude -p … --input-format stream-json` as engines/claude/lists.ts reads it: each `initialize` control request on
+ * stdin is answered with the models and commands; nothing is launched, written or hooked, and it ends with its stdin.
+ */
+function answerClaudeLists() {
+  createInterface({ input: process.stdin }).on('line', (line) => {
+    let message
+    try { message = JSON.parse(line) } catch { return }
+    if (message?.type !== 'control_request' || message.request?.subtype !== 'initialize') return
+    process.stdout.write(`${JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id,
+      response: { models: CLAUDE_LISTED_MODELS, commands: CLAUDE_LISTED_COMMANDS } } })}\n`)
+  })
+  process.stdin.on('end', () => process.exit(0))
+}
+
 /** The one marketplace the fake knows, and the plugin in it: what devices/claudePlugin.ts adds and installs. */
 const FAKE_MARKETPLACE = { name: 'openharness', source: 'github', repo: 'autonomous-ai/openharness' }
 const FAKE_PLUGIN = 'harness-device@openharness'
@@ -196,12 +231,13 @@ const FAKE_PLUGIN_VERSION = 'e2e0c0de1234'
 
 /**
  * `claude plugin …` as Claude Code 2.1.326 answers the words devices/claudePlugin.ts runs: `list --json`, `marketplace
- * list --json`, `marketplace add`, `marketplace update`, `install`, `enable`, `uninstall` and `update`. What is added and
- * installed is kept per Claude Code home, as the real one keeps it, in `plugins/` of CLAUDE_CONFIG_DIR, else of
- * ~/.claude: a plugin installed in one home is not in another. Whether a plugin is on is Claude Code's own record,
- * `enabledPlugins` in that home's user settings, which install, enable and uninstall write. Each call is noted in
- * `claude-plugin-calls` under the test's root, one line of its words. A home outside the root throws: it would be the
- * person's own Claude Code.
+ * list --json`, `marketplace add`, `marketplace update`, `install`, `enable`, `disable`, `uninstall` and `update`. What
+ * is added and installed is kept per Claude Code home, as the real one keeps it, in `plugins/` of CLAUDE_CONFIG_DIR, else
+ * of ~/.claude: a plugin installed in one home is not in another, but one whose `plugins` links to another's shares it,
+ * as Orca's account homes do. Whether a plugin is on is Claude Code's own record, `enabledPlugins` in that home's user
+ * settings, which install, enable, disable and uninstall write: disable leaves the plugin installed and its entry
+ * `false`, uninstall removes the entry. Each call is noted in `claude-plugin-calls` under the test's root, one line of its
+ * words. A home outside the root throws: it would be the person's own Claude Code.
  */
 function claudePlugin(config, argv) {
   if (!config.root) throw new Error('fake claude plugin: the wrapper names no test root')
@@ -217,10 +253,11 @@ function claudePlugin(config, argv) {
     mkdirSync(dirname(stateFile), { recursive: true })
     writeFileSync(stateFile, JSON.stringify(state))
   }
-  const turn = (id, on) => {
+  /** [entry]: true or false as enable and disable write it, undefined removes it as uninstall does. */
+  const turn = (id, entry) => {
     const enabledPlugins = { ...settings.enabledPlugins }
-    if (on) enabledPlugins[id] = true
-    else delete enabledPlugins[id]
+    if (entry === undefined) delete enabledPlugins[id]
+    else enabledPlugins[id] = entry
     mkdirSync(dirname(settingsFile), { recursive: true })
     writeFileSync(settingsFile, `${JSON.stringify({ ...settings, enabledPlugins }, null, 2)}\n`)
   }
@@ -252,7 +289,7 @@ function claudePlugin(config, argv) {
       return
   }
   const verb = args[0]
-  if (!['install', 'enable', 'uninstall', 'update'].includes(verb)) fail(`error: unknown command '${verb}'`)
+  if (!['install', 'enable', 'disable', 'uninstall', 'update'].includes(verb)) fail(`error: unknown command '${verb}'`)
   if (id !== FAKE_PLUGIN || !state.marketplaces.includes(FAKE_MARKETPLACE.name)) {
     fail(`Failed to ${verb} plugin "${id}": Plugin "${id}" not found in any configured marketplace`)
   }
@@ -267,10 +304,13 @@ function claudePlugin(config, argv) {
   } else if (verb === 'enable') {
     turn(id, true)
     said(`Successfully enabled plugin: ${id} (scope: user)`)
+  } else if (verb === 'disable') {
+    turn(id, false)
+    said(`Successfully disabled plugin: ${id} (scope: user)`)
   } else if (verb === 'uninstall') {
     state.installed = state.installed.filter((plugin) => plugin !== id)
     saveState()
-    turn(id, false)
+    turn(id, undefined)
     said(`Successfully uninstalled plugin: ${id} (scope: user)`)
   } else {
     said(`Plugin "${id}" is already at the latest version (${FAKE_PLUGIN_VERSION}).`)
@@ -371,6 +411,13 @@ export async function run(engine, config = {}, { native = false } = {}) {
   // `claude plugin …` changes or lists plugins and starts no session: no launch, kept out of the launch-argv ledger.
   if (engine === 'claude' && args[0] === 'plugin') {
     claudePlugin(config, args)
+    return
+  }
+  // Since #4413 the daemon asks Claude Code its `/model` list this way (engines/claude/lists.ts), and Claude Code started
+  // so runs no hook and keeps no session. The fake used to take it for a launch (a launch-argv line, a session, hooks)
+  // and never answered, so every Claude models_list waited out the engine worker's 5 s deadline.
+  if (engine === 'claude' && args[0] === '-p' && args[args.indexOf('--input-format') + 1] === 'stream-json') {
+    answerClaudeLists()
     return
   }
   // Every launch's argv, for a test to read what an agent was started with.
@@ -575,16 +622,34 @@ export async function run(engine, config = {}, { native = false } = {}) {
   // session; Claude Code keeps a record per process, `~/.claude/sessions/<pid>.json`.
   let held = null
   const procStart = (() => { try { return execFileSync('ps', ['-o', 'lstart=', '-p', String(process.pid)]).toString().trim() } catch { return '' } })()
+  const processRecord = join(dirname(projectsDir), 'sessions', `${process.pid}.json`)
+  // Written first outside the records' folder, then renamed over: the daemon never reads half a record, and a test
+  // that lists the folder never finds the draft.
+  const draftRecord = join(dirname(projectsDir), `.${process.pid}.json.tmp`)
+  const writeProcessRecord = (row) => {
+    mkdirSync(dirname(processRecord), { recursive: true })
+    writeFileSync(draftRecord, JSON.stringify(row))
+    renameSync(draftRecord, processRecord)
+  }
   const announceProcess = () => {
     if (engine === 'codex') {
       if (config.holdsRollout === false) return
       if (held !== null) closeSync(held)
       held = openSync(transcript, 'r')
     } else if (procStart) {
-      const sessions = join(dirname(projectsDir), 'sessions')
-      mkdirSync(sessions, { recursive: true })
-      writeFileSync(join(sessions, `${process.pid}.json`), JSON.stringify({ pid: process.pid, sessionId, cwd: process.cwd(), procStart }))
+      writeProcessRecord({ pid: process.pid, sessionId, cwd: process.cwd(), procStart, status: 'idle' })
     }
+  }
+  // Claude Code's record says `busy` while a turn runs and `idle` between turns, and the devices' scan reads a
+  // session's last answer only when it is idle (docs/plans/2026-11-17-dial-recap-after-restart-design.md): without
+  // it every session the scan found read `working`. Only the status changes, so the fields a test wrote stay, as
+  // Claude Code keeps its own. Codex writes none: its busy reader reads its rollout.
+  const sayStatus = (status) => {
+    if (engine !== 'claude' || !procStart) return
+    let row
+    // A record it cannot read (one a test broke on purpose) stays as the test left it.
+    try { row = JSON.parse(readFileSync(processRecord, 'utf8')) } catch { return }
+    writeProcessRecord({ ...row, status })
   }
 
   const now = () => new Date().toISOString()
@@ -963,6 +1028,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
       else aborted()
     }
     open = null
+    sayStatus('idle')
     say('(interrupted)\r\n')
     interruptSlow?.()
   }
@@ -1440,11 +1506,13 @@ export async function run(engine, config = {}, { native = false } = {}) {
     say(`\r\n${text}\r\n\r\n`)
     // The Stop hooks run once the answer is in, and the CLI waits for them before it takes the next prompt; an
     // interrupt or an error ends a turn without them. Codex runs them before it writes the turn's task_complete
-    // (0.144.0 and 0.169.0, facts-codex §2), so its end is never read before its Stop has come.
+    // (0.144.0 and 0.169.0, facts-codex §2), so its end is never read before its Stop has come. Claude Code is idle in
+    // its record only then.
     const held = heldStop
     heldStop = null
     await runHooks('Stop', { stop_hook_active: false, ...(engine === 'codex' ? { turn_id: ended } : {}) }, held)
     if (lagging) { appendFileSync(transcript, lagging.join('')); lagging = null }
+    sayStatus('idle')
     if (engine === 'codex') codex('event_msg', { type: 'task_complete', turn_id: ended, last_agent_message: text })
   }
   /**
@@ -1614,6 +1682,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
     if (!late) await promptHooks
     turn++
     open = `turn-${turn}`
+    sayStatus('busy')
     if (engine === 'claude') {
       if (/^!lagwrite(?:\s|$)/.test(prompt.replace(START_HEADER, ''))) lagging = []
       claude({ type: 'user', message: { role: 'user', content: prompt } })
@@ -1844,6 +1913,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
       claude({ type: 'system', subtype: 'turn_duration', durationMs: 5_000, messageCount: 6 })
       say('Goal paused\r\n')
       open = null
+      sayStatus('idle')
       return
     }
     if (engine === 'claude' && directive?.[1] === 'goalloop') {
@@ -1884,6 +1954,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
     if (engine === 'claude' && directive?.[1] === 'latestop') {
       claude({ type: 'assistant', message: { id: `msg_${turn}`, role: 'assistant', model: claudeModel, content: [{ type: 'text', text: `answer ${turn}: ${prompt}` }], stop_reason: 'end_turn' } })
       open = null
+      sayStatus('idle')
       say(`\r\nanswer ${turn}: ${prompt}\r\n\r\n`)
       const stop = hookHeld()
       lateStop = { stop: runHooks('Stop', { stop_hook_active: false }, stop), release: stop.release }

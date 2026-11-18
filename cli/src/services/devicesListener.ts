@@ -14,8 +14,9 @@
  * has in front of them.
  *
  * A stream type (`tabs`, `dial`) is answered with NDJSON lines that stay open: the way the devices process says something
- * to a watch without the watch asking each time. One of a type is open at once, across every connection: a newer one ends
- * the older with a last line, `{"replaced":true}`, and one asked with `"standby":true` opens only while none is.
+ * to a watch without the watch asking each time. One of a type is open at once, across every connection, or, for a keyed
+ * type, one per key up to its limit, a new key past it answered 409: a newer one ends the older with a last line,
+ * `{"replaced":true}`, and one asked with `"standby":true` opens only while none is.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Socket } from 'node:net'
@@ -72,6 +73,9 @@ export interface ListenerStream {
 export interface ListenerStreamHandler {
   maxBytes: number
   perSecond: number
+  /** A keyed type keeps one stream per key instead of one of its type: `key` is an opening message's key, or REFUSED
+   *  for a message that has none; `limit` is the most streams of the type open at once. */
+  keyed?: { key(message: Record<string, unknown>): string | typeof REFUSED; limit: number }
   /** `REFUSED` for a body that is not a message of its type. Otherwise the stream is open, and the handler's to write on. */
   open(message: Record<string, unknown>, stream: ListenerStream): typeof REFUSED | void
 }
@@ -146,8 +150,9 @@ export async function openDevicesListener(
   // Each connection's deadline, gone with it.
   const deadlines = new WeakMap<Socket, NodeJS.Timeout>()
   const waiting = new Set<AbortController>()
-  // The open stream of each type, as how to end it; and the connections that hold one.
-  const streams = new Map<string, (reason: StreamEnd) => void>()
+  // The open streams of each type by key ('' for a type that has none), as how to end each; and the connections that
+  // hold one.
+  const streams = new Map<string, Map<string, (reason: StreamEnd) => void>>()
   const streaming = new WeakSet<Socket>()
   let dropped = { ...NONE_DROPPED }
   let minute: NodeJS.Timeout | undefined
@@ -191,9 +196,20 @@ export async function openDevicesListener(
   const openStream = (type: string, handler: ListenerStreamHandler, message: Record<string, unknown>, socket: Socket, res: ServerResponse): void => {
     const { standby } = message
     if (standby !== undefined && typeof standby !== 'boolean') return drop(res, 400, 'refused')
+    let key: string | typeof REFUSED
+    // The handler's code, as its open below: a throw would go unanswered and reject settle() with nobody to catch it.
+    try {
+      key = handler.keyed ? handler.keyed.key(message) : ''
+    } catch {
+      return drop(res, 500, 'failed')
+    }
+    if (key === REFUSED) return drop(res, 400, 'refused')
+    let ofType = streams.get(type)
+    if (!ofType) streams.set(type, ofType = new Map())
     // A watch a newer one replaced stands by: it never takes the stream from one that is open, so two watches at once do
-    // not take it from each other. Not counted: it is the answer a standing watch waits on, not a message dropped.
-    if (standby && streams.has(type)) {
+    // not take it from each other. Not counted: it is the answer a standing watch waits on, not a message dropped. A new
+    // key past its type's limit is the same answer, before its handler opens anything: a key already open is replaced.
+    if ((standby && ofType.has(key)) || (handler.keyed && !ofType.has(key) && ofType.size >= handler.keyed.limit)) {
       res.writeHead(409).end()
       return
     }
@@ -209,7 +225,7 @@ export async function openDevicesListener(
       writable = false
       ended.abort(reason)
       clearTimeout(stall)
-      streams.delete(type)
+      ofType.delete(key)
       // Its connection has no deadline left to free its slot. A replaced one's goes once its last line is taken, which
       // tells its watch to stand by, or 2 s on for a client that has stopped reading.
       if (reason !== 'replaced') return void socket.destroy()
@@ -254,8 +270,8 @@ export async function openDevicesListener(
       ended.abort('closed')
       return drop(res, 400, 'refused')
     }
-    streams.get(type)?.('replaced')
-    streams.set(type, end)
+    ofType.get(key)?.('replaced')
+    ofType.set(key, end)
     streaming.add(socket)
     clearTimeout(deadlines.get(socket))
     res.once('close', () => end('gone'))
@@ -345,7 +361,7 @@ export async function openDevicesListener(
   return {
     close: () => closed ??= (async () => {
       clearTimeout(minute)
-      for (const end of streams.values()) end('closed')
+      for (const ofType of streams.values()) for (const end of ofType.values()) end('closed')
       const gone = listening.close()
       for (const each of waiting) each.abort()
       await gone

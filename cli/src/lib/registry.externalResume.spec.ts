@@ -191,7 +191,8 @@ it('rolls back strict persistence failures before acknowledging admission, dispa
   writeFileSync(join(root, 'registry.json'), '{unreadable', { mode: 0o600 })
   await expect((async () => (await reloaded.finishExternalCancellation(other.agentId)))()).rejects.toThrow()
   expect(reloaded.byAgent(other.agentId)?.externalResume?.phase).toBe('cancelled')
-  expect((await reloaded.openPendingAgent({ engine: 'claude', cwd: null, runtimes: [{ backend: 'tmux', paneId: '%3' }], externalResume: intent({ request: { engine: 'claude', sessionId: 'third' } }) }))).toBeNull()
+  await expect(reloaded.openPendingAgent({ engine: 'claude', cwd: null, runtimes: [{ backend: 'tmux', paneId: '%3' }], externalResume: intent({ request: { engine: 'claude', sessionId: 'third' } }) }))
+    .rejects.toThrow('registry storage contains invalid JSON')
   expect(reloaded.byPaneEngine('%3', 'claude')).toBeUndefined()
 })
 

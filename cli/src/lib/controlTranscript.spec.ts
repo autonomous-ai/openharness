@@ -307,7 +307,7 @@ it('preserves a repaired parent through Stop and the final real forget archive',
     ended: vi.fn(), mirror: { forget: vi.fn() }, clients: { send: vi.fn(), sendCommander: vi.fn() } })
   const stop = createStopAgentService({ registry, stoppedAgents: stopped, restartJobs: new AgentRestartCoordinator(),
     stopJobs: new Map(), backendFor: () => ({ kill: vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const })) }),
-    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn(async () => {}) },
+    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), nudge: vi.fn() },
     forgetSession: forget, markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative: async () => {} })
   const checkpoint = async (session: typeof row) => {
     expect(session.transcriptPath).toBe(parent)
@@ -334,7 +334,7 @@ it.each(['prepared image', 'process refresh'] as const)('retains a typed Stop ho
     ended: vi.fn(), mirror: { forget: vi.fn() }, clients: { send, sendCommander: vi.fn() } })
   const stop = createStopAgentService({ registry, stoppedAgents: stopped, restartJobs: new AgentRestartCoordinator(),
     stopJobs: new Map(), backendFor: () => ({ kill: vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const })) }),
-    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn(async () => {}) },
+    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), nudge: vi.fn() },
     forgetSession: forget, markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative: async () => {} })
   let prepared!: () => void, release!: () => void
   const entered = new Promise<void>(resolve => { prepared = resolve })
@@ -382,7 +382,7 @@ it('retains a typed Stop hold when the native broker contains a failed grant che
   const kill = vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const })), forget = vi.fn()
   const stop = createStopAgentService({ registry, stoppedAgents: new StoppedAgentStore(join(root, 'stopped')),
     restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(), backendFor: () => ({ kill }),
-    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn(async () => {}) },
+    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), nudge: vi.fn() },
     forgetSession: forget, markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative: core.stop })
   await expect(stop(row.agentId)).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
   expect(mutation).not.toHaveBeenCalled(); expect(terminateDeletedAgent).not.toHaveBeenCalled()
@@ -400,7 +400,7 @@ it.each(['checkpoint', 'native drain'])('holds Stop when its transcript changes 
   const stopNative = vi.fn(async () => { if (phase === 'native drain') writeFileSync(transcript, header(B)) })
   const stop = createStopAgentService({ registry, stoppedAgents: new StoppedAgentStore(join(root, 'stopped')),
     restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(), backendFor: () => ({ kill }),
-    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn(async () => {}) },
+    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), nudge: vi.fn() },
     forgetSession: forget, markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative })
   await expect(stop(row.agentId, { checkpoint: async () => {
     if (phase === 'checkpoint') writeFileSync(transcript, header(B))
@@ -434,7 +434,7 @@ it.each(['binding', 'process birth', 'native grant', 'contained grant', 'process
     const forget = vi.fn(), nativeMutation = vi.fn()
     const stop = createStopAgentService({ registry, stoppedAgents: new StoppedAgentStore(join(root, 'stopped')),
       restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(), backendFor: () => ({ kill }),
-      agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn(async () => {}) },
+      agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), nudge: vi.fn() },
       forgetSession: forget, markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative: async (_session, current) => {
         if (phase === 'native grant' || phase === 'contained grant') writeFileSync(transcript, header(B))
         if (phase === 'contained grant') { try { current() } catch {} return }

@@ -388,9 +388,9 @@ export interface CableHost {
   turned?(): void
   /** What a local follow did to this dial: turned it to the agent, or found no tile for it on the ring it walks. */
   localFollowed?(cause: FollowCause, outcome: 'moved' | 'no-tile'): void
-  /** The agent this dial shows changed: as its ring last drew it, or null for none. `dial` is the session that says so,
-   *  which is how a host tells two dials apart. */
-  dialShows?(dial: object, agent: DialAgent | null): void
+  /** The agent this dial shows changed: as its ring last drew it and its id, or null for none. `dial` is the session that
+   *  says so, which is how a host tells two dials apart. */
+  dialShows?(dial: object, agent: DialAgent | null, agentId: string | null): void
   focus(agentId: string): void
   /**
    * "Put this one in front of me" — a NOTIFICATION was tapped.
@@ -740,6 +740,7 @@ export class CableSession {
   private focusRecord = ''
   /** What this session last told the host its dial shows. */
   private shown: DialAgent | null = null
+  private shownId: string | null = null
   /**
    * The record's agent as the ring last sent draws it, or none: the record alone outlives an unplug, can name an agent
    * on another tab, and is not cleared when its agent leaves. Told to the host only when it changed.
@@ -750,11 +751,14 @@ export class CableSession {
     const shown = entry
       ? { name: entry.name, app: entry.host !== undefined && APP_IDS.includes(entry.host) ? appDisplayName(entry.host) : 'Harness' }
       : null
-    if (shown?.name === this.shown?.name && shown?.app === this.shown?.app) return
+    // The id too: a move between two agents of one name and app changes where the dial's scroll goes.
+    const shownId = entry ? entry.id : null
+    if (shown?.name === this.shown?.name && shown?.app === this.shown?.app && shownId === this.shownId) return
     this.shown = shown
+    this.shownId = shownId
     // This dial's fault, never the move, the push or the close that got here: thrown out of a close, it would end the
     // whole devices process.
-    try { this.host.dialShows?.(this, shown) } catch (error) { this.fault(error) }
+    try { this.host.dialShows?.(this, shown, shownId) } catch (error) { this.fault(error) }
   }
   /** A superseded list refresh can record the selection without ever writing its focus frame. */
   private appFocusUnsent = false

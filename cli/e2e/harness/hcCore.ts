@@ -15,6 +15,13 @@
  * Its agent is Node, run by hc with no shell (a shell's return clears the status, F7). It reports `idle` as Claude Code
  * (`claude-code`) once it listens on a socket of its own under the root, and then each word written to that socket as
  * its next status. It prints `fake> `, then `GOT[<line>]` for each line it reads.
+ *
+ * Given a Claude Code session, it is Claude Code as hc runs it, before any dial is plugged and so with no hook heard by
+ * the devices: before it reports `idle` it writes what Claude Code leaves on disk, its process record and a transcript
+ * of one answered turn, at the paths it is handed (hc's environment is built from nothing). On Diego's Mac each hc
+ * terminal's foreground pid is the pid of a live Claude Code record, the fact the devices pair the scan's session with
+ * its Herdr terminal by (docs/plans/2026-11-17-dial-recap-after-restart-design.md, Addendum). Its script is named
+ * `claude`, as Claude Code's command is, since the scan takes a record's pid only when that process is Claude Code.
  */
 import { execFile } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
@@ -45,7 +52,30 @@ const JOB = /^dev\.herdr\.core\./
  *  `herdr-core connect`. */
 const HERDR = /herdr-core (--hc-launchd|hold|connect)( |$)|\/Herdr\.app\/Contents\/MacOS\/Herdr( |$)/
 
-const AGENT = `import { createServer } from 'node:net'
+const AGENT = `import { execFileSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { mkdirSync, renameSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:net'
+import { dirname, join } from 'node:path'
+const [socket, projectsDir, sessionId, answer] = process.argv.slice(2)
+// Written beside and renamed over, as fakeEngine.mjs writes its record: the scan never reads half a file.
+const put = (path, text) => {
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path + '.tmp', text)
+  renameSync(path + '.tmp', path)
+}
+if (projectsDir) {
+  const cwd = process.cwd()
+  const said = { isSidechain: false, userType: 'external', entrypoint: 'cli', cwd, sessionId, version: '2.1.270', timestamp: new Date().toISOString() }
+  const asked = randomUUID()
+  put(join(projectsDir, cwd.replace(/[^a-zA-Z0-9]/g, '-'), sessionId + '.jsonl'), [
+    { ...said, parentUuid: null, uuid: asked, type: 'user', message: { role: 'user', content: 'before the dial' } },
+    { ...said, parentUuid: asked, uuid: randomUUID(), type: 'assistant',
+      message: { id: 'msg_1', role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: answer }], stop_reason: 'end_turn' } },
+  ].map((line) => JSON.stringify(line) + '\\n').join(''))
+  const procStart = execFileSync('/bin/ps', ['-o', 'lstart=', '-p', String(process.pid)]).toString().trim()
+  put(join(dirname(projectsDir), 'sessions', process.pid + '.json'), JSON.stringify({ pid: process.pid, sessionId, cwd, procStart, status: 'idle' }))
+}
 const say = (state) => process.stdout.write('\\x1b]7501;state=' + state + ':app=claude-code\\x1b\\\\')
 createServer((connection) => {
   let read = ''
@@ -56,7 +86,7 @@ createServer((connection) => {
     say(read.slice(0, newline))
     connection.end('ok\\n')
   })
-}).listen(process.argv[2], () => {
+}).listen(socket, () => {
   say('idle')
   process.stdout.write('fake> ')
 })
@@ -133,6 +163,15 @@ export class PrivateHc {
     return { session: `harness-${randomBytes(6).toString('hex')}`, socket: join(root, 'c.sock'), root }
   }
 
+  /** As `plan`, its socket where a daemon whose XDG_RUNTIME_DIR is the root looks for hc's default session
+   *  (hcClient.ts `hcSocketPath`). Such a daemon follows the default session, as the person's own does, and only there
+   *  takes a hook's address and pairs a session the scan found with its terminal (services/devices.ts `hookIds`). The
+   *  core's session is still `harness-<random>`: only its socket's path is the default's. */
+  static planDefault(): PlannedHc {
+    const planned = PrivateHc.plan()
+    return { ...planned, socket: join(planned.root, 'herdr-core', 'default.sock') }
+  }
+
   /** Starts the planned core, put in [started] before its first command: whatever its start does, a timeout among it,
    *  the test's afterEach stops it through its own session. */
   static async start(planned: PlannedHc, started: PrivateHc[]): Promise<PrivateHc> {
@@ -207,15 +246,17 @@ export class PrivateHc {
   }
 
   /** A terminal Herdr's window would show (`herdr.space`), in <root>/work/<folder>, running the fake agent directly,
-   *  reported idle: its address. */
-  async agent(folder: string): Promise<string> {
+   *  reported idle: its address. With [claude], the agent first leaves that Claude Code session on disk: its process
+   *  record in <dirname(projectsDir)>/sessions and its transcript under projectsDir, answered with [claude.answer]. */
+  async agent(folder: string, claude?: { projectsDir: string; sessionId: string; answer: string }): Promise<string> {
     const { root } = this.planned
     const cwd = join(root, 'work', folder)
     await mkdir(cwd, { recursive: true })
-    const script = join(root, 'agent.mjs')
+    const script = join(root, 'claude')
     if (!existsSync(script)) await writeFile(script, AGENT)
     const socket = join(root, `${folder}.sock`)
-    const run = await this.rpc('terminal.run', { argv: [process.execPath, script, socket], cwd, labels: { 'herdr.space': 's1' } })
+    const session = claude ? [claude.projectsDir, claude.sessionId, claude.answer] : []
+    const run = await this.rpc('terminal.run', { argv: [process.execPath, script, socket, ...session], cwd, labels: { 'herdr.space': 's1' } })
     const address = run.address as string
     this.agents.set(address, socket)
     if (typeof run.pid === 'number') this.pids.add(run.pid)

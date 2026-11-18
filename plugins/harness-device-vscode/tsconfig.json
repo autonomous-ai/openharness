@@ -1,0 +1,9 @@
+{
+  "compilerOptions": {
+    "target": "ES2022", "lib": ["ES2022"], "module": "ESNext", "moduleResolution": "Bundler",
+    "strict": true, "noEmit": true, "skipLibCheck": true,
+    "typeRoots": ["../../cli/node_modules/@types"], "types": ["node", "vscode"],
+    "paths": { "*": ["../../cli/node_modules/*"] }
+  },
+  "include": ["src"]
+}
