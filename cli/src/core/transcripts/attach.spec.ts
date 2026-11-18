@@ -320,6 +320,23 @@ it('defers history publication if identity becomes held during pane hydration', 
   expect(run.deps.emit).not.toHaveBeenCalled()
 })
 
+// A hookless Hermes resume is attached with its row unbound, and its terminal record's confirmation binds the row
+// (agents/bind.ts): the attach that gives up on it leaves the attach after it a session to open, not a stream to find.
+it.each([['hermes', 'profile'], ['opencode', 'pane']] as const)('leaves its %s stream to the next attach when the binding moves on while its %s is read', async (engine, read) => {
+  vi.spyOn(console, 'log').mockImplementation(() => {})
+  const run = setup(), row = session(engine, undefined, { boundAt: null })
+  const moveOn = () => { bindings.set(row.agentId, { ...row, boundAt: 1 }) }
+  if (read === 'profile') vi.mocked(run.deps.runtimeProfiles.ingestConfig).mockImplementationOnce(async () => { moveOn(); return false })
+  else vi.mocked(run.deps.captureTerminal).mockImplementationOnce(async () => { moveOn(); return 'pane' })
+  expect(await run.attach.attachSession(row)).toBe(false)
+  expect(run.normalizers.hasState(row.sessionId)).toBe(false)
+  expect(await run.attach.attachSession(bindings.get(row.agentId)!)).toBe(true)
+  // The next attach read the conversation itself, and watches it for a question.
+  expect(made(engine)).toHaveLength(2)
+  expect(run.deps.questionWatcher.start).toHaveBeenCalledExactlyOnceWith(row.sessionId)
+  run.attach.forget(row.sessionId)
+})
+
 describe('the order of an attach of another engine\'s session', () => {
   it('loads the engine\'s code, then folds, then starts the tail: no line can come before its normalizer', async () => {
     let loaded!: () => void
