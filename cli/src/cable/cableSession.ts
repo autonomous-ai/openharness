@@ -2914,15 +2914,17 @@ export class CableSession {
    * since it last lost everything (a drawer cut its row, its turn moved on) is never rung again: a ring at every change
    * of the window's list was a beep for nothing new (2026-11-18). It goes back as a silent `tier: 'list'` row of `words`
    * to a dial that says questionTier, as the plain frame to a Pro (it mutes a question sent again by its id and words),
-   * and not at all to an older round dial, which would beep, nor for an id the dial cannot keep. Each mark is set before
-   * its frame is written, so two paths cannot both send it.
+   * and not at all to an older round dial, which would beep, nor for an id the dial cannot keep. A held one is never
+   * given to a Pro: it mutes a repeat only by a hash in its RAM, and the restart that held it may have cleared that too.
+   * Each mark is set before its frame is written, so two paths cannot both send it.
    */
   private async giveQuestion(agentId: string, id: string, questions: unknown, words: string): Promise<void> {
     const inbox = this.questionInbox
     const send = (rest: Record<string, unknown>) => this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, ...rest })
     if (!inbox.told(agentId, id)) {
       if (inbox.ask(agentId, id)) await send({ questions })
-    } else if (dialKeepsId(agentId) && (this.questionTier || this.seqOn) && inbox.refile(agentId, id)) {
+    } else if (dialKeepsId(agentId) && (this.questionTier || (this.seqOn && !inbox.held(agentId, id))) &&
+        inbox.refile(agentId, id)) {
       await send(this.questionTier ? { tier: 'list', questions: [{ key: '', q: noticeSummary(words), options: [] }] } : { questions })
     }
   }

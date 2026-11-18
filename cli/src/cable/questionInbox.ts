@@ -117,6 +117,12 @@ export class QuestionInbox {
     return !!entry && entry.id === id && !!entry.told
   }
 
+  /** Whether that agent's open question is held: it rang before the devices process restarted. */
+  held(agentId: string, id: string): boolean {
+    const entry = this.entries.get(agentId)
+    return !!entry && entry.id === id && !!entry.held
+  }
+
   /** Whether that agent's open question, told but no longer on the dial, is to be given back to it as a row with no
    *  ring, marking it asked. False when it was never told (it is rung instead), the dial has it, or it is no longer the
    *  open one. */
