@@ -49,7 +49,7 @@ The core stays small and secure, in the code and at run time: read
   and the requests about a terminal itself (`requests.ts`: `terminal_info`, `theme_set`).
 - `engines/`: hook coordination, reader ports and live worker coordination. Claude Code/Codex
   history, last-turn reads, live parsing, runtime profiles/catalogs and screen interpretation run in supervised workers, and so do
-  the other fourteen engines' history, live parsing, pane/config profiles, screens and question navigation, in one worker
+  the other fourteen engines' history, live parsing, pane/config profiles, screens and question navigation, plus ordinary terminal screen interpretation, in one worker
   of their own (`engines/others/`), together with OpenCode's model control; the other thirteen remain view-only. Core passes snapshots,
   validates bounded replies, retains acknowledged cursors and owns binding/turn state. The explicit
   inline/older-master compatibility path is the only live parser or runtime profile implementation

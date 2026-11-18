@@ -1,5 +1,5 @@
 /** Private daemon/home/tmux; real supervised reader processes and the engines' recorded wire format. */
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient } from './harness/client.js'
@@ -188,6 +188,37 @@ describe('Claude Code and Codex readers in their own processes', () => {
     await ended
     await turn(c, agent, `screen-recovered-${engine}`)
     expect(alive(bound.processIdentity.pid)).toBe(true)
+    expect(d.coresStarted()).toBe(1)
+  })
+
+  it.skipIf(process.platform === 'win32').each(['worker', 'inline'] as const)('terminal screen %s preserves shell input and failure isolation', async mode => {
+    const { d, c } = await fresh({ SHELL: '/bin/bash', HARNESSD_SERVICE_HEARTBEAT_TIMEOUT_MS: '60000',
+      ...(mode === 'inline' ? { HARNESSD_SERVICES: 'none' } : {}) })
+    const cwd = join(d.projectsDir, 'terminal-screen'); mkdirSync(cwd)
+    const opened = await c.request('agent_create', { engine: 'terminal', cwd }, 60_000)
+    expect(opened.error, JSON.stringify(opened)).toBeUndefined()
+    const agentId = opened.agent.id
+    const write = async (name: string) => {
+      c.send('message', { agentId, content: `printf verified > ${name}.txt` })
+      await until('the shell command to complete', () => existsSync(join(cwd, `${name}.txt`)) || null, 30_000, 50)
+      expect(readFileSync(join(cwd, `${name}.txt`), 'utf8')).toBe('verified')
+    }
+    await write('before')
+    const worker = harnessdProcesses(d).get('engine-others'), core = d.corePid()
+    if (mode === 'worker') {
+      expect(worker).toBeDefined()
+      process.kill(worker!, 'SIGSTOP')
+      try {
+        const refused = c.next(frame => frame.type === 'error' && frame.agentId === agentId, 25_000, 'unavailable terminal screen')
+        c.send('message', { agentId, content: 'printf forbidden > blocked.txt' })
+        expect((await refused).payload?.message).toContain('screen could not be read')
+        expect(existsSync(join(cwd, 'blocked.txt'))).toBe(false)
+        expect((await rows(c)).some(row => row.id === agentId)).toBe(true)
+        expect(d.corePid()).toBe(core)
+      } finally { process.kill(worker!, 'SIGCONT') }
+    } else expect(worker).toBeUndefined()
+    await write('after')
+    expect(d.corePid()).toBe(core)
     expect(d.coresStarted()).toBe(1)
   })
 

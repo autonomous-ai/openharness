@@ -17,7 +17,7 @@ export function otherRuntimeRequests(deps: {
   recycle?: () => void
 }) {
   const runtime = otherRuntimeReaders()
-  const routes = new Map<OtherEngine, ServiceRequests>(OTHER_ENGINES.map(engine => [engine, {
+  const routes = new Map<OtherEngine | 'terminal', ServiceRequests>(OTHER_ENGINES.map(engine => [engine, {
     ...(engine === 'opencode' ? engineModelControlRequests(engine, deps) : {}),
     ...engineRuntimeRequests(engine, { load: () => runtime.load(engine), recycle: deps.recycle }),
     ...engineScreenRequests(engine, { load: async () => {
@@ -26,6 +26,7 @@ export function otherRuntimeRequests(deps: {
     }, recycle: deps.recycle }),
     ...engineQuestionControlRequests(engine, { ...deps, load: async () => otherQuestionControl(engine) }),
   }]))
+  routes.set('terminal', engineScreenRequests('terminal', { recycle: deps.recycle }))
   const groups = [
     { methods: [MODEL_CONTROL_CAPABILITIES, MODEL_CONTROL_VALIDATE, MODEL_CONTROL_APPLY], limit: MODEL_CONTROL_IN_FLIGHT, version: MODEL_CONTROL_VERSION, busy: 'BUSY' },
     { methods: [RUNTIME_CAPABILITIES, RUNTIME_READ], limit: RUNTIME_IN_FLIGHT, version: RUNTIME_VERSION, busy: 'ENGINE_BUSY' },
@@ -37,7 +38,7 @@ export function otherRuntimeRequests(deps: {
     let pending = 0
     for (const method of group.methods) requests[method] = async (payload, asker, closed) => {
       const { engine, ...snapshot } = payload
-      if (!asker.owner || !asker.local || asker.connection !== undefined || typeof engine !== 'string' || !isOtherEngine(engine)) {
+      if (!asker.owner || !asker.local || asker.connection !== undefined || typeof engine !== 'string' || !(isOtherEngine(engine) || engine === 'terminal')) {
         return { version: group.version, error: 'ENGINE_INVALID_REQUEST' }
       }
       const route = routes.get(engine)![method]

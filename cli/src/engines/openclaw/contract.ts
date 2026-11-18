@@ -4,7 +4,7 @@
  * OpenClaw's code.
  */
 import { join, resolve } from 'node:path'
-import { stripAnsi } from '../kit/pane.js'
+import { stripAnsi } from '../kit/runtime.js'
 
 /**
  * A session key, `agent:<agentId>:<key>`: Harness's session id for OpenClaw. It outlives the key's windows (reset,

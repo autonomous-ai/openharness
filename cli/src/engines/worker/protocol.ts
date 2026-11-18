@@ -8,10 +8,10 @@ export type ReaderEngine = keyof typeof READER_SERVICES
 export type WorkerEngine = ReaderEngine | OtherEngine
 export const WORKER_SERVICES = [...Object.values(READER_SERVICES), OTHER_ENGINES_SERVICE]
 export function workerEngine(name: string): name is WorkerEngine { return readerEngine(name) || isOtherEngine(name) }
-export function workerService(engine: WorkerEngine): string { return isOtherEngine(engine) ? OTHER_ENGINES_SERVICE : READER_SERVICES[engine] }
+export function workerService(engine: WorkerEngine | 'terminal'): string { return engine === 'terminal' || isOtherEngine(engine) ? OTHER_ENGINES_SERVICE : READER_SERVICES[engine] }
 /** The shared worker needs an engine; the established single-engine payload stays unchanged. */
-export function workerPayload(engine: WorkerEngine, payload: Record<string, unknown>): Record<string, unknown> {
-  return isOtherEngine(engine) ? { ...payload, engine } : payload
+export function workerPayload(engine: WorkerEngine | 'terminal', payload: Record<string, unknown>): Record<string, unknown> {
+  return engine === 'terminal' || isOtherEngine(engine) ? { ...payload, engine } : payload
 }
 export const READER_VERSION = 1
 export const READER_HISTORY = 'engine_history_page'

@@ -7,7 +7,6 @@ import { createModelControls } from './engines/modelControls.js'
 import { masterRunsEngineModelControl } from '../harnessd/services.js'
 import { createScreens } from './engines/screens.js'
 import { createScreenTransport } from './engines/screenTransport.js'
-import { terminalScreen } from '../engines/kit/screen.js'
 import { inspectNativeLaunch, unsupportedNativeLaunchModelFlag, type NativeLaunch } from '../engines/nativeLaunch.js'
 import { nativeHookLocations, type NativeHookOptions } from '../engines/kit/nativeLocations.js'
 import { createNativeLaunchPreparer } from '../engines/prepareNativeLaunch.js'
@@ -730,7 +729,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const modelControlHosted = masterRunsEngineModelControl(harnessd, process.ppid)
   const isolatedModelControl = (engine: string): boolean => (modelControlHosted && isolatedLive(engine)) || (othersRuntime && engine === 'opencode')
   const screenHosted = masterRunsEngineScreen(harnessd, process.ppid)
-  const isolatedScreen = (engine: string): boolean => (screenHosted && isolatedLive(engine)) || (othersRuntime && isOtherEngine(engine))
+  const isolatedScreen = (engine: string): boolean => (screenHosted && isolatedLive(engine)) || (othersRuntime && isOtherEngine(engine)) || (terminalScreenHosted && isTerminalEngine(engine))
   const submissionHosted = masterRunsEngineSubmission(harnessd, process.ppid)
   const nativeControlHosted = masterRunsEngineNativeControl(harnessd, process.ppid)
   const isolatedNativeControl = (engine: string): boolean => nativeControlHosted && isolatedLive(engine)
@@ -748,8 +747,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const othersLive = othersHosted && otherEnginesVersion(harnessd, process.ppid) >= 2
   const othersRuntime = othersHosted && otherEnginesVersion(harnessd, process.ppid) >= 3
   const othersStorage = othersHosted && otherEnginesVersion(harnessd, process.ppid) >= 4
+  const terminalScreenHosted = othersHosted && otherEnginesVersion(harnessd, process.ppid) >= 5
   // Compatibility with explicit inline mode and older masters, until 2026-12-15.
-  const inline = knownServices.some((name) => !outOfProcess.has(name)) || !othersStorage || !runtimeHosted || !screenHosted || !modelControlHosted || !questionControlHosted || !submissionHosted || !nativeControlHosted || !backgroundJobHosted || !providerMoveHosted || !resumeRepairHosted
+  const inline = knownServices.some((name) => !outOfProcess.has(name)) || !othersStorage || !terminalScreenHosted || !runtimeHosted || !screenHosted || !modelControlHosted || !questionControlHosted || !submissionHosted || !nativeControlHosted || !backgroundJobHosted || !providerMoveHosted || !resumeRepairHosted
     ? await import('../services/inline.js') : null
   if (!othersRuntime) {
     registry.onEnter = engine => inline?.preloadEngine(engine)
@@ -772,7 +772,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
   })
   const screens = createScreens({ handles: isolatedScreen, transport: screenTransport, resolve: id => registry.resolve(id),
-    inline: (engine, capture) => isTerminalEngine(engine) ? terminalScreen(capture) : capture === null ? undefined : inline?.screenFor(engine).inspect(capture) })
+    inline: (engine, capture) => isTerminalEngine(engine) ? inline?.terminalScreen(capture) : capture === null ? undefined : inline?.screenFor(engine).inspect(capture) })
   const submissionTransport = createSubmissionTransport({
     call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
   })
@@ -1496,7 +1496,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // Its waitingFor changed: every window gets the agent's frame again.
     sync: (id) => { const session = registry.resolve(id); if (session) syncSession(session) },
     // Claude Code's and Codex's readers start on demand in a process of their own: a message waits for its engine's (26 s at load 40).
-    engineStarting: (engine) => isolatedScreen(engine) ? serviceLinksRef?.whenStarting(READER_SERVICES[engine as ReaderEngine]) ?? null : null,
+    engineStarting: (engine) => isolatedScreen(engine) ? serviceLinksRef?.whenStarting(readerEngine(engine) ? READER_SERVICES[engine] : OTHER_ENGINES_SERVICE) ?? null : null,
   })
   const input = inputs.input
   // Stateless kept-worker compatibility, introduced 2026-11-17: an old worker has receipts for inputs

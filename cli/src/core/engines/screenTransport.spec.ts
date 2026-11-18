@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { screenFor } from '../../engines/screens.js'
 import { engineScreenRequests } from '../../engines/worker/screenRequests.js'
 import { SCREEN_CAPABILITIES, SCREEN_IN_FLIGHT, SCREEN_QUEUED, SCREEN_READ, SCREEN_REPLY_BYTES, SCREEN_WAIT_MS } from '../../engines/worker/screenProtocol.js'
+import { createSnapshotTransport } from './snapshotTransport.js'
 import { createScreenTransport, type ScreenTransport } from './screenTransport.js'
 
 const capture = '────────────\n❯\n────────────\n? for shortcuts'
@@ -32,6 +33,30 @@ describe('screen transport', () => {
     await expect(transport.read('other', capture)).rejects.toThrow('ENGINE_INVALID_REQUEST')
     await expect(transport.read('claude', 'x'.repeat(300_000))).rejects.toThrow('ENGINE_INVALID_REQUEST')
   })
+  it('routes only terminal screens to the shared worker, preserving absence and connection custody', async () => {
+    const requests = engineScreenRequests('terminal')
+    const call = vi.fn(async (service, method, payload) => {
+      expect(service).toBe('engine-others')
+      expect(payload.engine).toBe('terminal')
+      const { engine: _engine, ...body } = payload
+      return await requests[method](body, { owner: true, local: true }) as Record<string, unknown>
+    })
+    const transport = createScreenTransport({ call })
+    transport.connected('engine-others')
+    const absent = await transport.read('terminal', null)
+    expect(absent).toMatchObject({ pane: { idle: false, draft: false }, question: null, messageHold: null, teamHold: 'team_waiting_unavailable' })
+    await expect(transport.read('claude', null)).rejects.toThrow('ENGINE_INVALID_REQUEST')
+    await expect(transport.read('terminal', 'é'.repeat(256 * 1024))).rejects.toThrow('ENGINE_INVALID_REQUEST')
+    let finish!: (value: Record<string, unknown>) => void
+    call.mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    const pending = transport.read('terminal', '')
+    transport.disconnected('engine-others'); transport.connected('engine-others')
+    finish({ version: 1, answer: absent })
+    await expect(pending).rejects.toThrow('ENGINE_STALE_REPLY')
+    const other = createSnapshotTransport({ call }, { version: 1, capabilities: 'other', capability: 'submission', inFlight: 8, queued: 64, waitMs: 1000, replyBytes: 1024 })
+    await expect(other.read('terminal', 'other', {}, () => true)).rejects.toThrow('ENGINE_INVALID_REQUEST')
+  })
+
   it('bounds requests, fences replaced connections, and releases slots', async () => {
     const t = setup(); await t.read()
     let finish!: (value: typeof answer) => void

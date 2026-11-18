@@ -35,8 +35,8 @@ export function createSnapshotTransport(deps: SnapshotTransportDeps, kind: Snaps
     },
     /** The reply's `answer`, once `valid` and within the reply bound; otherwise an EngineReadError. */
     async read(engine: string, method: string, payload: Record<string, unknown>, valid: (answer: unknown) => boolean): Promise<unknown> {
-      if (!workerEngine(engine)) fail('ENGINE_INVALID_REQUEST')
-      const service = workerService(engine as WorkerEngine), state = states.get(service)!
+      if (!workerEngine(engine) && !(engine === 'terminal' && kind.capability === 'screen')) fail('ENGINE_INVALID_REQUEST')
+      const service = workerService(engine as WorkerEngine | 'terminal'), state = states.get(service)!
       const generation = state.generation + (state.connected ? 0 : 1)
       const deadline = performance.now() + kind.waitMs
       // A poll tick can capture dozens of panes together. Refusing every read
@@ -56,7 +56,7 @@ export function createSnapshotTransport(deps: SnapshotTransportDeps, kind: Snaps
         let timer: ReturnType<typeof setTimeout> | undefined
         let reply: Record<string, unknown>
         try {
-          reply = await Promise.race([deps.call(service, name, workerPayload(engine as WorkerEngine, { version: kind.version, ...body }), remaining),
+          reply = await Promise.race([deps.call(service, name, workerPayload(engine as WorkerEngine | 'terminal', { version: kind.version, ...body }), remaining),
             new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new EngineReadError('ENGINE_UNAVAILABLE')), remaining) })])
         } finally { clearTimeout(timer) }
         if (performance.now() > deadline) fail('ENGINE_UNAVAILABLE')

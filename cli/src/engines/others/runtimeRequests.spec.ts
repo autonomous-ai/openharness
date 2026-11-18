@@ -46,6 +46,23 @@ describe('shared other-engine runtime requests', () => {
     served.clear()
   }, 30_000)
 
+  it('preserves terminal screens including absent capture through its bounded worker port', async () => {
+    const served = otherRuntimeRequests({ query: async () => ({}) })
+    const transport = createScreenTransport({ call: async (_service, method, payload) =>
+      await served.requests[method](payload, core) as Record<string, unknown> })
+    transport.connected('engine-others')
+    for (const input of [{ id: '(no capture)' }, ...golden.inputs]) {
+      const expected = golden.screens[input.id]?.terminal
+      expect(expected).toBeDefined()
+      await expect(transport.read('terminal', capture(input)), input.id).resolves.toEqual(golden.readings[expected])
+    }
+    for (const method of [RUNTIME_CAPABILITIES, RUNTIME_READ, QUESTION_CONTROL_CAPABILITIES,
+      QUESTION_CONTROL_APPLY, MODEL_CONTROL_CAPABILITIES, MODEL_CONTROL_VALIDATE, MODEL_CONTROL_APPLY]) {
+      expect(await served.requests[method]({ version: 1, engine: 'terminal' }, core)).toMatchObject({ error: 'ENGINE_INVALID_REQUEST' })
+    }
+    served.clear()
+  })
+
   it.each(OTHER_ENGINES.filter(engine => engine !== 'opencode'))('keeps %s view-only through the real runtime port', async engine => {
     vi.stubEnv('PATH', '/nonexistent-other-runtime-test')
     const served = otherRuntimeRequests({ query: async () => ({}) })

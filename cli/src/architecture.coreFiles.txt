@@ -213,13 +213,10 @@ engines/kit/nativeSessionModel.ts
 engines/kit/nativeSetupLink.ts
 engines/kit/nativeTrustWire.ts
 engines/kit/opencodeHookPreparation.ts
-engines/kit/pane.ts
 engines/kit/processFacts.ts
 engines/kit/processRecordEvidence.ts
 engines/kit/projectFolder.ts
-engines/kit/questionPane.ts
 engines/kit/runtime.ts
-engines/kit/screen.ts
 engines/kit/sessionIdentity.ts
 engines/kit/sessionLocation.ts
 engines/kit/sessionRecords.ts
@@ -315,7 +312,6 @@ lib/daemonState.ts
 lib/databaseCheckpoint.ts
 lib/deleteAgentFallback.ts
 lib/deletedSessions.ts
-lib/dialogEnd.ts
 lib/engineBin.ts
 lib/engineExitOption.ts
 lib/engineHomes.ts
@@ -414,6 +410,7 @@ lib/ptyHost/binary.ts
 lib/ptyHost/instance.ts
 lib/publishedGridConfig.ts
 lib/purgeAgentService.ts
+lib/questionApproval.ts
 lib/questionController.ts
 lib/recapReads.ts
 lib/redactSecrets.ts

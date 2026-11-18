@@ -4,7 +4,7 @@ import type { RegisteredSession } from './registry.js'
 import type { AgentEngine } from '../engines/types.js'
 import type { ShapedQuestion, QuestionRow, QuestionView, ReviewView, PaneView } from '../engines/facets/screen.js'
 export type { ShapedQuestion, QuestionRow, QuestionView, ReviewView, PaneView, FoundDialog } from '../engines/facets/screen.js'
-import { isApprovalDialog } from '../engines/kit/questionPane.js'
+import { isApprovalDialog } from './questionApproval.js'
 const STEP_MS = 350          // let the TUI repaint between keystrokes
 const MAX_STEPS = 14         // hard bound on the drive loop (questions × keys), never spin on a stuck pane
 const CAPTURE_LINES = 60
