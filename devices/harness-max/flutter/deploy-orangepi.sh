@@ -67,6 +67,32 @@ if [ ! -f "$BUNDLE/app.so" ]; then
     exit 1
 fi
 
+# Once per board (asks its sudo password): Near's voice service keeps the mic open for its wake word, so it stays down
+# while mode.env names this bundle; and the rules that let this script stop it and raise the USB gadget unasked.
+if ! $SSH "$HOST" "test -f /etc/systemd/system/near-voice.service.d/harness-max-v3.conf && sudo -n -l /usr/local/sbin/harness-max-usb >/dev/null 2>&1"; then
+    $SSH "$HOST" "cat > /tmp/harness-max-v3-setup.sh" <<'EOF'
+set -eu
+mkdir -p /etc/systemd/system/near-voice.service.d
+cat > /etc/systemd/system/near-voice.service.d/harness-max-v3.conf <<'UNIT'
+# Installed by Harness Max's flutter/deploy-orangepi.sh. Harness Max V3 records through its own arecord, and this service
+# holds the mic for its wake word, so it does not start while near-app runs V3 (mode.env names near/app-max).
+[Service]
+ExecCondition=/bin/sh -c '! grep -qs "^NEAR_BUNDLE=.*/near/app-max$" /home/orangepi/near/mode.env'
+UNIT
+cat > /tmp/harness-max-v3.sudoers <<'RULE'
+# Lets Harness Max's flutter/deploy-orangepi.sh put V3 on the bar without a password: Near's voice service off and on,
+# and the USB gadget (CDC-ACM) up and down for the cable. Installed as /etc/sudoers.d/harness-max-v3 (mode 440).
+orangepi ALL=(root) NOPASSWD: /usr/bin/systemctl stop near-voice, /usr/bin/systemctl start near-voice, /usr/local/sbin/harness-max-usb
+RULE
+visudo -cf /tmp/harness-max-v3.sudoers
+install -m 440 /tmp/harness-max-v3.sudoers /etc/sudoers.d/harness-max-v3
+rm -f /tmp/harness-max-v3.sudoers
+systemctl daemon-reload
+EOF
+    echo "First V3 deploy on this board: the board's sudo password, once"
+    $SSH -t "$HOST" "sudo sh /tmp/harness-max-v3-setup.sh; rm -f /tmp/harness-max-v3-setup.sh"
+fi
+
 # Near's flutter-pi is patched for this board; the bundle's own one is replaced by it after the copy.
 rsync -az --delete -e "$SSH" "$BUNDLE/" "$HOST:near/app-max/"
 FIXTURE_APP=${HARNESS_MAX_FIXTURE_APP:-orca}
@@ -83,6 +109,9 @@ HARNESS_MAX_FIXTURE_APP=$FIXTURE_APP
 ENV
 mv "$HOME/near/mode.env.new" "$HOME/near/mode.env"
 sudo -n systemctl stop harness-max 2>/dev/null || true
+sudo -n systemctl stop near-voice
+# The cable's USB side: the board a CDC-ACM device on its Type-C port, as the C build's harness-max.service does.
+if [ "$MODE" = usb ]; then sudo -n /usr/local/sbin/harness-max-usb --usb; fi
 sudo -n systemctl restart near-app
 sleep 4
 systemctl is-active near-app
