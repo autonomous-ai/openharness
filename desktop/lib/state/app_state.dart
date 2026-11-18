@@ -2,6 +2,7 @@ import '../browser/browser_availability.dart';
 import '../browser/browser_settings.dart';
 import '../browser/browser_stream.dart';
 import '../browser/browser_tiles.dart';
+import '../core/harness_home.dart';
 import '../core/home_dir.dart';
 import '../usage/usage_account_key.dart';
 import '../measurement/product_measurement.dart';
@@ -4563,8 +4564,10 @@ class AppNotifier extends ChangeNotifier {
           final home = maybeHomeDir();
           return home == null ||
               FileSystemEntity.typeSync(
-                    '$home${Platform.pathSeparator}.harness'
-                    '${Platform.pathSeparator}cli',
+                    HarnessHome.of(
+                      home,
+                      join: separatorJoin(Platform.pathSeparator),
+                    ).path(HarnessEntry.cli),
                   ) !=
                   FileSystemEntityType.notFound;
         };
@@ -4580,7 +4583,7 @@ class AppNotifier extends ChangeNotifier {
           if (home == null) return false;
           final sep = Platform.pathSeparator;
           return FileSystemEntity.typeSync(
-                '$home$sep.harness${sep}auth${sep}session.json',
+                '${HarnessHome.of(home, join: separatorJoin(sep)).path(HarnessEntry.auth)}${sep}session.json',
               ) ==
               FileSystemEntityType.file;
         };
@@ -14885,11 +14888,15 @@ class AppNotifier extends ChangeNotifier {
         for (final a in stateOf(machineId)?.agents ?? const <Agent>[])
           a.claudeHome,
       };
+      final profiles = HarnessHome.of(
+        home,
+        join: separatorJoin('/'),
+      ).path(HarnessEntry.claudeProfiles);
       var n = 1;
-      while (taken.contains('$home/.harness/claude-profiles/$n')) {
+      while (taken.contains('$profiles/$n')) {
         n++;
       }
-      final path = '$home/.harness/claude-profiles/$n';
+      final path = '$profiles/$n';
       // The folder only exists once Claude has signed in there; the machine finds it by itself then.
       final error = await createAgent(
         machineId,

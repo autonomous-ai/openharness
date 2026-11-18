@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import '../core/harness_home.dart';
 import '../core/hidden_process.dart';
 import '../core/home_dir.dart';
 import '../core/runtime_platform.dart';
@@ -78,7 +79,10 @@ class WindowsGitSetup {
     final home = maybeHomeDir(environment: _environment, isWindows: true);
     return home == null
         ? null
-        : p.windows.join(home, '.harness', 'run', 'git-install-tried');
+        : p.windows.join(
+            HarnessHome.of(home, join: p.windows.join).path(HarnessEntry.run),
+            'git-install-tried',
+          );
   }
 
   /// Never throws, and nothing waits for it.
