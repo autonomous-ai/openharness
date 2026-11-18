@@ -313,7 +313,7 @@ describe('the move', () => {
       version: 1, movedAt: PROC_NOW, oldHome: t.legacy, oldDataDir: join(t.legacy, 'cli', 'data'), oldTag: check.oldTag, newTag: check.newTag, panes: ['%1', '%2'],
       ...(boot ? { boot: { id: boot, uptime: expect.any(Number) } } : {}),
     })
-    expect(readMoveRecord(t.home, t.env)).toEqual({ version: 1, state: 'bridged', entries: ENTRIES, bytesCopied: 0, panes: 2, oldProcesses: 0, at: NOW })
+    expect(readMoveRecord(t.home, t.env)).toEqual({ version: 1, state: 'bridged', entries: ENTRIES, bytesCopied: 0, panes: 2, left: 0, oldProcesses: 0, at: NOW })
     // The journal and the staging folders are gone.
     expect(readJournal(t.legacy)).toBeNull()
     expect([existsSync(`${plan.data}.moving`), existsSync(`${plan.state}.moving`)]).toEqual([false, false])
@@ -352,6 +352,8 @@ describe('the move', () => {
     for (const agent of ['agent-7f3a', 'agent-8e2b']) put(join(t.legacy, 'cli', 'data', 'stopped-agents', `${agent}.json`), '{ cut')
     expect(await runMove(t.check, t.env, t.deps())).toMatchObject({ state: 'bridged' })
     expect(t.logs.filter((line) => !line.includes(UNKNOWN))).toEqual(['home move: 3 records left unchanged · claude-profiles.json, stopped-agents'])
+    // And counted in the record, for harness status and the fleet scan.
+    expect(readMoveRecord(t.home, t.env)).toMatchObject({ state: 'bridged', left: 3 })
     expect(readFileSync(join(t.plan.data, 'cli', 'data', 'claude-profiles.json'), 'utf8')).toBe('{ not json')
   })
 

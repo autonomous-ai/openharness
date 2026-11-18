@@ -54,7 +54,7 @@ describe('the move record', () => {
 
   it('it holds no path and no name', () => {
     const dir = folder()
-    const full: MoveRecord = { version: 1, state: 'failed', reason: 'io', entries: 27, bytesCopied: 4096, panes: 2, oldProcesses: 1, at: 1, failedAt: 2, stray: true }
+    const full: MoveRecord = { version: 1, state: 'failed', reason: 'io', entries: 27, bytesCopied: 4096, panes: 2, left: 3, oldProcesses: 1, at: 1, failedAt: 2, stray: true }
     writeMoveRecord(dir, { ...full, home: '/h', legacy: '/h/.harness', unknown: ['scratch'] } as MoveRecord)
     expect(onDisk(dir)).toEqual(full)
   })
