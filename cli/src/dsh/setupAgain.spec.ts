@@ -92,6 +92,23 @@ describe('setting harnesses up again after the move', () => {
     expect(lines).toEqual(['[dsh] a/b needs setup · SETUP_FAILED'])
   })
 
+  // Left pending, a package whose setup threw would hold the old folder's bridge for good.
+  const throwing: Array<[string, (boom: () => never) => Partial<SetupAgainDeps>]> = [
+    ['its setup rejects', (boom) => ({ finish: async (resolved) => resolved.id === 'a/b' ? boom() : ran(resolved) })],
+    ['it cannot be read', (boom) => ({ resolve: (record) => record.id === 'a/b' ? boom() : resolveInstalled(record) })],
+    ['its lock cannot be taken', (boom) => ({ lock: (id) => id === 'a/b' ? boom() : lockDsh(id) })],
+  ]
+  for (const [when, over] of throwing) it(`a package is needs-setup with one line and no path when ${when}`, async () => {
+    writeInstalledIndex([pkg('a/b'), pkg('a/c')])
+    const boom = (): never => { throw new Error(`EACCES: permission denied, open '${dshInstallDir('a/b')}/.venv'`) }
+    const { deps: threw, lines } = deps(over(boom))
+    expect(await setupAgain(threw)).toEqual({ done: 1, needsSetup: 1, busy: 0 })
+    expect(marks()).toEqual([['a/b', 'needs-setup'], ['a/c', undefined]])
+    expect(lines).toEqual(['[dsh] a/b needs setup · SETUP_THREW'])
+    // Every lock it took is let go.
+    for (const id of ['a/b', 'a/c']) lockDsh(id)!()
+  })
+
   it('a setup that ran clears the mark even when the doctor then complains', async () => {
     writeInstalledIndex([pkg('acme/doctor'), pkg('acme/viewer')])
     const finish = vi.fn(async (resolved: InstalledDsh) => ran(resolved, resolved.id === 'acme/doctor' ? 'DOCTOR_FAILED' : 'VIEWER_UNAVAILABLE'))
