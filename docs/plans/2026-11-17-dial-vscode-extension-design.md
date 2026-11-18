@@ -3,7 +3,7 @@
 Status: spec for PR A of two. Research: `docs/plans/2026-11-17-vscode-extension-research.md` (branch
 `feat/dial-vscode-follow`, which does only the swipe for the Claude Code extension's *panel*). Models: the Orca plugin
 (#4363, #4381) and the Herdr Core adapter (#4382). Nothing here touches the daemon core (cli/AGENTS.md rule 7): the
-devices process, its listener and adapters, a new VS Code extension, the CLI's `device` verbs and Harness Device's menu.
+devices process, its listener and adapters, a new VS Code extension and the CLI's `device` verbs.
 
 ## Why
 
