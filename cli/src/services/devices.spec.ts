@@ -3656,19 +3656,33 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(window.lines).toEqual([plain(-2), plain(-1)])
   })
 
-  it('a newer down drops the older answer: nothing of the older stroke is written', async () => {
+  it("a newer down leaves the older answer behind: the older stroke's held travel goes out at once as lines, with no page", async () => {
     const { window } = await shown()
     processGroups.held = true
     host().scrolled('down', 0, 0)
     host().scrolled('move', 8, 0)
     host().scrolled('move', 8, 0)
     host().scrolled('down', 0, 0)
+    expect(window.lines).toEqual([plain(-2)])
     host().scrolled('move', 8, 0)
     await vi.waitFor(() => expect(processGroups.land).toHaveLength(1))
     processGroups.land.shift()!()
-    await vi.waitFor(() => expect(window.lines).toEqual([page(-1)]))
+    // The answer is the newer stroke's alone.
+    await vi.waitFor(() => expect(window.lines).toEqual([plain(-2), page(-1)]))
     // The newer down joined the read in flight.
     expect([claudeSettings.reads, processGroups.reads]).toEqual([[['/work/api', '/t/sess-1.jsonl']], [[4242, SHELL]]])
+  })
+
+  it("a frame after a held stroke's up begins a new one: the older stroke's held travel goes out at once as lines", async () => {
+    const { window } = await shown()
+    processGroups.held = true
+    stroke([8, 8])
+    // Its down lost on the way: a move begins the newer stroke.
+    host().scrolled('move', 8, 0)
+    expect(window.lines).toEqual([plain(-2)])
+    await vi.waitFor(() => expect(processGroups.land).toHaveLength(1))
+    processGroups.land.shift()!()
+    await vi.waitFor(() => expect(window.lines).toEqual([plain(-2), page(-1)]))
   })
 
   it('the answer lands after the up: the whole stroke goes out with page', async () => {
