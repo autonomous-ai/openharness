@@ -376,22 +376,23 @@ impl App {
                 self.state.logs = LogsExport::Failed(failure);
                 effects.push(Effect::Log(format!("logs: export failed: {}", reason(failure))));
             }
-            Event::OrcaConnect(_, answer) if matches!(self.orca.running, Some((_, OrcaRun::Connect))) => {
+            Event::OrcaConnect(run, answer) if self.orca.running == Some((run, OrcaRun::Connect)) => {
                 self.orca.running = None;
                 self.orca_answered(answer, effects);
                 self.next_orca(effects);
             }
-            Event::OrcaConnect(_, answer) if matches!(self.orca.running, Some((_, OrcaRun::Update))) => {
+            Event::OrcaConnect(run, answer) if self.orca.running == Some((run, OrcaRun::Update)) => {
                 self.orca.running = None;
                 self.orca_updated(answer, effects);
                 self.next_orca(effects);
             }
-            Event::OrcaStatus(_, status) if matches!(self.orca.running, Some((_, OrcaRun::Status))) => {
+            Event::OrcaStatus(run, status) if self.orca.running == Some((run, OrcaRun::Status)) => {
                 self.orca.running = None;
                 self.orca_status(status, effects);
                 self.next_orca(effects);
             }
-            // A second answer to one run, or a run of a CLI that went away: nothing waits for it.
+            // A second answer to one run, or a run of a CLI that went away, even once a new run is under way: nothing
+            // waits for it.
             Event::OrcaConnect(..) | Event::OrcaStatus(..) => {}
         }
     }
