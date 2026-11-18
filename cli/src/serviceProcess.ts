@@ -42,6 +42,7 @@ export const SERVICE_RUNNERS: ReadonlyMap<string, () => Promise<Runner>> = new M
   ['engineProbe', async () => (await import('./services/engineProbeProcess.js')).runEngineProbeService],
   ['goals', async () => (await import('./services/goalsProcess.js')).runGoalsService],
   ['hachi', async () => (await import('./services/hachiProcess.js')).runHachiService],
+  ['homeBridge', async () => (await import('./services/homeBridgeProcess.js')).runHomeBridgeService],
   ['shell', async () => (await import('./services/shellProcess.js')).runShellService],
   ['handoff', async () => (await import('./services/handoffProcess.js')).runHandoffService],
   ['connectors', async () => (await import('./services/connectorsProcess.js')).runConnectorsService],

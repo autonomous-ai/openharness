@@ -19,11 +19,14 @@ export function readMoveRecord(home: string, env: NodeJS.ProcessEnv): MoveRecord
   return readRecord(join(harnessRoot('state', home, 'linux', { env, exists: existsSync }), OWN_FILES.record))
 }
 
-/** False, with nothing written, when the state and the reason are the ones on disk (and the stray mark, said once). */
+/**
+ * False, with nothing written, when the state, the reason and the count of old processes the bridge waits on are the ones
+ * on disk (and the stray mark, said once).
+ */
 export function writeMoveRecord(folder: string, next: MoveRecord): boolean {
   const path = join(folder, OWN_FILES.record)
   const now = readRecord(path)
-  if (now && now.state === next.state && now.reason === next.reason && now.stray === next.stray) return false
+  if (now && now.state === next.state && now.reason === next.reason && now.oldProcesses === next.oldProcesses && now.stray === next.stray) return false
   writeWhole(path, JSON.stringify(next, FIELDS))
   return true
 }

@@ -85,12 +85,13 @@ const row = (over: Partial<ProcRow>): ProcRow => ({ pid: pids++, uid: ME, starte
 
 /**
  * The service on [h], on Linux, with no old user, no pane and no harness to set up, unless [over] says otherwise. A
- * member [over] sets to undefined is the service's own.
+ * member [over] sets to undefined is the service's own. The connections folder is named: off Linux its default is
+ * ~/.harness's (lib/connectors/store.ts).
  */
 function start(h: Home, over: Partial<HomeBridgeDeps> = {}) {
   const log = vi.fn()
   const deps: Partial<HomeBridgeDeps> = {
-    platform: 'linux', home: h.home, environment: { HOME: h.home }, socket: h.socket,
+    platform: 'linux', home: h.home, environment: { HOME: h.home, HARNESS_CONNECTIONS_DIR: h.connections }, socket: h.socket,
     rows: () => [], tmux: () => ({ status: 1, stdout: '' }), setupsPending: async () => 0, log, ...over,
   }
   const given = Object.fromEntries(Object.entries(deps).filter(([, value]) => value !== undefined)) as Partial<HomeBridgeDeps>
@@ -318,11 +319,17 @@ describe('the home bridge service', () => {
     fakeInterval()
     const h = movedHome()
     const rows = vi.fn((): ProcRow[] => { throw new Error('/proc/stat gives no boot time') })
-    const { log } = start(h, { rows })
+    // Whatever the Store's count rejects with is said too.
+    const setupsPending = vi.fn(async () => 0).mockRejectedValueOnce('the index is busy')
+    const { log } = start(h, { rows, setupsPending })
     await settle()
     expect(log.mock.calls).toEqual([['home bridge: a check failed: /proc/stat gives no boot time · tried again in 10 minutes']])
     expect(existsSync(join(h.state, BRIDGE_FILE))).toBe(true)
     rows.mockReturnValue([])
+    await vi.advanceTimersByTimeAsync(CHECK_MS)
+    await settle()
+    expect(log.mock.calls.at(-1)).toEqual(['home bridge: a check failed: the index is busy · tried again in 10 minutes'])
+    expect(existsSync(join(h.state, BRIDGE_FILE))).toBe(true)
     await vi.advanceTimersByTimeAsync(CHECK_MS)
     await settle()
     expect(existsSync(join(h.state, BRIDGE_FILE))).toBe(false)

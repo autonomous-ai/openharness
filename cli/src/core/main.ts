@@ -1855,6 +1855,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   if (!outOfProcess.has('goals')) serviceHost.serve('goals', inline!.startGoals, coreApi, GOALS_REQUESTS)
   // Hachi's wakes and its off path (services/hachi.ts): here, or in the edge host. The apps ask it nothing.
   if (!outOfProcess.has('hachi')) serviceHost.serve('hachi', inline!.startHachiInCore, coreApi, [])
+  // The bridge left in ~/.harness once Harness's folder moved to the XDG folders on Linux (services/homeBridge.ts): here, or in the edge host.
+  if (!outOfProcess.has('homeBridge')) serviceHost.serve('homeBridge', inline!.startHomeBridgeInCore, coreApi, [])
   if (!outOfProcess.has('memory')) serviceHost.serve('memory', inline!.startMemory, coreApi, MEMORY_REQUESTS)
   if (!outOfProcess.has('router')) serviceHost.serve('router', inline!.startRouter, coreApi, ROUTER_REQUESTS)
   if (!outOfProcess.has('handoff')) serviceHost.serve('handoff', (core) => inline!.startHandoff(core), coreApi, HANDOFF_REQUESTS)
