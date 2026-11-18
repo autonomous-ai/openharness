@@ -57,14 +57,15 @@ static struct {
     uint32_t pet_until, nap_until, voice_retry_until, voice_started, voice_wait_until, voice_generation, voice_question_revision, voice_draft_revision;
     int voice_question_index;
     char hint[40];
-    char title[80], message[256], voice_target[64], voice_engine[12], pending_focus[64], pending_machine[64], opening_notice[48];
+    char title[80], message[256], voice_target[64], voice_engine[12], pending_focus[64], pending_machine[64], opening_notice[48], voice_upload[24];
     struct { bool valid, supported, loading, pending, uncertain; uint32_t revision, deadline; int index; char error[120],speech_error[96],agent[64],token[48],request[64]; struct { bool can_text; } item[4]; } q;
     agent_t agents[1];
     struct { bool live_summary; } memory[PANE_MEMORY_MAX];
 } s;
 static uint32_t now;
-static bool audio_active, recording, abort_requested, queue_full;
+static bool audio_active, recording, abort_requested, queue_full, start_ignored;
 static int starts, stops, aborts, cancels, confirms, scroll, gesture, reviews;
+static char cancelled[24];
 static action_t queued;
 static agent_t *active(void) { return &s.agents[0]; }
 #define COPY(dst, src) snprintf(dst, sizeof(dst), "%s", (src) ? (src) : "")
@@ -85,27 +86,32 @@ void audio_client_request_review(void) { reviews++; }
 void audio_client_abort(void) { aborts++; abort_requested = true; }
 void audio_client_copy_upload_id(char *dst, size_t cap) { snprintf(dst, cap, "capture-%d", starts); }
 static char started_for[64];
-void audio_client_start_cable(const char *id, int cmd) {
-    (void)cmd; snprintf(started_for, sizeof started_for, "%s", id ? id : ""); starts++; audio_active = recording = true; abort_requested = false;
+// start_ignored: the audio client does not take the start (the last clip's sender is still finishing).
+bool audio_client_start_cable(const char *id, int cmd) {
+    (void)cmd; if (start_ignored) return false;
+    snprintf(started_for, sizeof started_for, "%s", id ? id : ""); starts++; audio_active = recording = true; abort_requested = false;
+    return true;
 }
-void audio_client_start_search(const char *id, const char *selected, unsigned revision) {
-    assert(!strcmp(selected,"search-test") && revision==3); audio_client_start_cable(id,VOICE_CMD_NONE);
+bool audio_client_start_search(const char *id, const char *selected, unsigned revision) {
+    assert(!strcmp(selected,"search-test") && revision==3); return audio_client_start_cable(id,VOICE_CMD_NONE);
 }
-void audio_client_start_form(const char *id, unsigned revision) {
-    assert(!strcmp(id, "form-test") && revision==3); audio_client_start_cable(NULL, VOICE_CMD_NONE);
+bool audio_client_start_form(const char *id, unsigned revision) {
+    assert(!strcmp(id, "form-test") && revision==3); return audio_client_start_cable(NULL, VOICE_CMD_NONE);
 }
-void audio_client_start_question(const char *id,const char *token,unsigned index) {
-    assert(!strcmp(token,"question-token") && index==0); audio_client_start_cable(id,VOICE_CMD_NONE);
+bool audio_client_start_question(const char *id,const char *token,unsigned index) {
+    assert(!strcmp(token,"question-token") && index==0); return audio_client_start_cable(id,VOICE_CMD_NONE);
 }
-void audio_client_start_draft(const char *id, unsigned revision, bool append) {
-    assert(!strcmp(id,"draft-test") && revision==3); (void)append; audio_client_start_cable(NULL,VOICE_CMD_NONE);
+bool audio_client_start_draft(const char *id, unsigned revision, bool append) {
+    assert(!strcmp(id,"draft-test") && revision==3); (void)append; return audio_client_start_cable(NULL,VOICE_CMD_NONE);
 }
-void cable_client_voice_cancel(const char *id) { assert(id[0]); cancels++; }
-void audio_client_start_selection(const char *id, const char *selected, unsigned revision) {
-    assert(selected && selected[0] && revision); audio_client_start_cable(id, VOICE_CMD_NONE);
+// Each cancel that names an upload reaches the host; the audio client drops "" (test_audio_threads.py).
+void audio_client_cancel(const char *id) { if (id[0]) { cancels++; COPY(cancelled, id); } }
+void cable_client_voice_cancel(const char *id) { assert(id[0]); cancels++; COPY(cancelled, id); }
+bool audio_client_start_selection(const char *id, const char *selected, unsigned revision) {
+    assert(selected && selected[0] && revision); return audio_client_start_cable(id, VOICE_CMD_NONE);
 }
-void audio_client_start_carry(const char *id, const char *carried) {
-    assert(!strcmp(carried,"carry-test")); audio_client_start_cable(id, VOICE_CMD_NONE);
+bool audio_client_start_carry(const char *id, const char *carried) {
+    assert(!strcmp(carried,"carry-test")); return audio_client_start_cable(id, VOICE_CMD_NONE);
 }
 void cable_client_voice_confirm(const char *route, const char *id) { (void)route; (void)id; confirms++; }
 int find(const char *id) { return id && !strcmp(id, "agent") ? 0 : -1; }
@@ -130,8 +136,8 @@ static void reset(void) {
     host_features=31; memset(&draft,0,sizeof draft); reviews=0; memset(&s, 0, sizeof(s)); memset(&visit, 0, sizeof(visit)); memset(&carry,0,sizeof(carry)); now = 1000;
     s.ready = s.connected = true; s.view = HOME;
     strcpy(s.agents[0].name, "Agent");
-    audio_active = recording = abort_requested = queue_full = false;
-    starts = stops = aborts = cancels = confirms = 0;
+    audio_active = recording = abort_requested = queue_full = start_ignored = false;
+    starts = stops = aborts = cancels = confirms = 0; cancelled[0] = 0;
 }
 static void speak(void) { dispatch((action_t){.kind = A_VOICE, .id = "agent"}); }
 static void done(void) { dispatch((action_t){.kind = A_VOICE_STOP}); }
@@ -139,6 +145,19 @@ static void discard(void) { dispatch((action_t){.kind = A_VOICE_ABORT}); }
 static void finish_audio(void) { audio_active = recording = false; }
 static void begin(void) { speak(); work(queued); assert(recording && s.view == VOICE); }
 int main(void) {
+    // A discard cancels on the host only the upload its own gesture started, once, even with the action queue full.
+    // Still starting, after a clip that was sent: the previous clip's id is not this gesture's, and nothing starts.
+    reset(); begin(); done(); finish_audio(); ui_voice_routed(true,false,"","agent","Agent",1);
+    speak(); action_t pending = queued; discard(); work(pending); work(queued);
+    assert(!cancels && starts==1 && !recording && s.view==HOME);
+    // Recording, with the queue full: the cancel does not wait for a slot.
+    reset(); begin(); queue_full = true; discard();
+    assert(cancels==1 && !strcmp(cancelled,"capture-1") && aborts==1 && s.view==HOME);
+    // A start the audio client did not take has no upload to cancel.
+    reset(); begin(); done(); finish_audio(); ui_voice_routed(true,false,"","agent","Agent",1);
+    start_ignored = true; speak(); work(queued); assert(!s.voice_start_pending && starts==1);
+    discard(); work(queued); assert(!cancels);
+
     // The listening scene follows whom the turn is for: an agent's engine, nothing for a draft.
     reset(); strcpy(s.agents[0].engine, "claude"); begin(); assert(!strcmp(s.voice_engine, "claude"));
     reset(); host_features=0; begin(); dispatch((action_t){.kind=A_VOICE_STOP,.value=1});
@@ -176,7 +195,7 @@ int main(void) {
     strcpy(s.q.request,"question-request"); dispatch(question_voice); work(queued);
     ui_question_close("agent","other-request"); assert(s.voice_open && recording); // another question leaves it
     ui_question_close("agent","question-request");
-    assert(!s.voice_open && s.view==HOME && abort_requested && queued.kind==A_VOICE_ABORT);
+    assert(!s.voice_open && s.view==HOME && abort_requested && cancels==2 && !strcmp(cancelled,"capture-3"));
     finish_audio(); ui_voice_error("Transcription failed"); assert(s.view==HOME && !s.q.speech_error[0]);
     // Closed while voice is still starting: the start queued behind it finds its generation gone and records nothing.
     s.view=QUESTION; s.q.valid=true; question_voice.revision=s.q.revision; dispatch(question_voice);

@@ -58,7 +58,13 @@ static uint32_t esp_random(void) { static atomic_uint counter;return atomic_fetc
 static void vTaskDelay(unsigned ms) {
     (void)ms;struct timespec t={0,10000};nanosleep(&t,NULL);
 }
+static atomic_bool park,parked;
+static void send_audio(void *);
 static int ulTaskNotifyTake(int clear,int ticks) {
+    // The test parks the sender at its idle wait to line up what it finds there when it wakes.
+    if(ticks==portMAX_DELAY&&self->function==send_audio&&atomic_load(&park)) {
+        atomic_store(&parked,true);while(atomic_load(&park))sched_yield();
+    }
     assert(self&&clear==pdTRUE);assert(!pthread_mutex_lock(&self->lock));
     while(!self->pending&&!self->quit) {
         if(ticks==portMAX_DELAY) {
@@ -108,6 +114,10 @@ static bool audio_stream_begin(const char *,const char *,const char *,int);
 static bool audio_stream_pcm(const uint8_t *,size_t);
 static void audio_stream_end(void);
 static void audio_stream_abort(const char *);
+static atomic_uint cancels;
+static unsigned cancels_at_begin;
+static char cancelled[24];
+static void cable_client_voice_cancel(const char *);
 '''
 code+=source
 code+=r'''
@@ -134,6 +144,7 @@ static int audio_capture_read(uint8_t *out,int capacity) {
 static void audio_capture_stop(void) {stops++;}
 static bool audio_stream_begin(const char *id,const char *cmd,const char *lang,int rate) {
     assert(id&&!strcmp(id,expected_agent)&&!strcmp(cmd,"")&&!strcmp(lang,"en")&&rate==16000);begins++;
+    cancels_at_begin=atomic_load(&cancels);
     if(mode==OVERFLOW)while(!atomic_load(&abort_requested))sched_yield();
     return mode!=BEGIN_FAIL;
 }
@@ -147,7 +158,26 @@ static void audio_stream_end(void) {
     assert(atomic_load(&capture_done)&&!atomic_load(&abort_requested)&&sent_bytes==produced);ends++;
 }
 static void audio_stream_abort(const char *why) {assert(why&&atomic_load(&capture_done));aborts++;}
+static void cable_client_voice_cancel(const char *id) {
+    assert(id&&*id);snprintf(cancelled,sizeof cancelled,"%s",id);atomic_fetch_add(&cancels,1);
+}
 static bool asleep(task_t *task) {return atomic_load(&task->forever)&&!task->pending;}
+// Both workers idle with nothing pending: only the test wakes the sender next.
+static void wait_idle(void) {
+    for(bool idle=false;!idle;sched_yield()) {
+        assert(!pthread_mutex_lock(&capture_task->lock));assert(!pthread_mutex_lock(&sender_task->lock));
+        idle=asleep(capture_task)&&asleep(sender_task);
+        assert(!pthread_mutex_unlock(&sender_task->lock));assert(!pthread_mutex_unlock(&capture_task->lock));
+    }
+}
+static void session(unsigned m,char id[24]) {
+    assert(!audio_client_active());mode=m;session_number++;
+    raw_bytes=reads=sent_bytes=pcm_calls=starts=stops=begins=ends=aborts=0;
+    atomic_store(&overruns,0);atomic_store(&start_gate,false);atomic_store(&first_read,false);
+    snprintf(expected_agent,sizeof expected_agent,"offline-agent-%u",session_number);
+    assert(audio_client_start_cable(expected_agent,VOICE_CMD_NONE)&&audio_client_active());
+    audio_client_copy_upload_id(id,24);
+}
 // No wall-clock bound: a loaded machine only slows a session. A deadlock fails here; a livelock
 // meets CI's per-file timeout.
 static void wait_finished(void) {
@@ -168,14 +198,9 @@ int main(void) {
     audio_client_init();assert(storage&&capture_task&&sender_task);
     audio_client_init(); // Idempotent; no extra workers or ring.
     for(unsigned round=0;round<100;round++)for(mode=0;mode<MODES;mode++) {
-        assert(!audio_client_active());session_number++;
-        raw_bytes=reads=sent_bytes=pcm_calls=starts=stops=begins=ends=aborts=0;
-        atomic_store(&overruns,0);atomic_store(&start_gate,false);atomic_store(&first_read,false);
-        snprintf(expected_agent,sizeof expected_agent,"offline-agent-%u",session_number);
-        audio_client_start_cable(expected_agent,VOICE_CMD_NONE);assert(audio_client_active());
+        char current[24];session(mode,current);
         // A second start while recording cannot redirect this utterance.
-        audio_client_start_cable("wrong-agent",VOICE_CMD_GOAL);
-        char current[24];audio_client_copy_upload_id(current,sizeof current);
+        assert(!audio_client_start_cable("wrong-agent",VOICE_CMD_GOAL));
         assert(audio_client_upload_matches(current)&&!audio_client_upload_matches("old-upload"));
         assert(audio_client_recording());
         atomic_store(&start_gate,true);
@@ -191,8 +216,31 @@ int main(void) {
             assert(ends==1&&!aborts&&sent_bytes==produced&&!voice_buffer_used(&buffer));
         } else assert(!ends&&aborts==1);
     }
+    // A discard names its gesture's upload; the host hears one voice.abort for it, never two.
+    for(unsigned round=0;round<100;round++) {
+        char recorded[24],ended[24],next[24];
+        // Before the sender decides, its own voice.abort is the one: no "discarded" follows.
+        session(EXPLICIT_ABORT,recorded);atomic_store(&start_gate,true);
+        while(!atomic_load(&first_read))sched_yield();
+        audio_client_cancel(recorded);wait_finished();
+        assert(aborts==1&&!ends);
+        // After voice.end, one voice.abort "discarded" from the sender. It is parked so the cancel is still pending
+        // when the next start comes: the cancel goes out before that start's voice.begin.
+        wait_idle();atomic_store(&parked,false);atomic_store(&park,true);
+        session(HEALTHY,ended);atomic_store(&start_gate,true);
+        while(!atomic_load(&parked))sched_yield();
+        assert(ends==1&&!aborts&&atomic_load(&cancels)==2*round);
+        audio_client_cancel(ended);
+        audio_client_cancel(ended);audio_client_cancel(recorded);audio_client_cancel("");   // closed, older, none
+        session(HEALTHY,next);atomic_store(&park,false);atomic_store(&start_gate,true);wait_finished();
+        assert(ends==1&&cancels_at_begin==2*round+1&&!strcmp(cancelled,ended));
+        // The sender awake: it wakes for the cancel alone.
+        audio_client_cancel(next);
+        while(atomic_load(&cancels)!=2*round+2)sched_yield();
+        assert(!strcmp(cancelled,next));
+    }
     vTaskDelete(capture_task);vTaskDelete(sender_task);free(storage);
-    puts("Audio threads: 1000 concurrent offline sessions; exact PCM, pinned targets, explicit stop/abort, start/read/USB/overflow failures and immediate restart PASS");
+    puts("Audio threads: 1000 concurrent offline sessions; exact PCM, pinned targets, explicit stop/abort, start/read/USB/overflow failures, immediate restart and one host abort per discard PASS");
 }
 '''
 with tempfile.TemporaryDirectory(prefix='harness-audio-threads-') as d:
