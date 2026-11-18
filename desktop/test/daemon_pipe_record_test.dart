@@ -31,27 +31,42 @@ void main() {
     test(
       'is the CLI data folder in the profile on Windows, and in HOME elsewhere',
       () {
-        // The CLI folder of each home by this computer's rule.
-        String cliData(String home, p.Context context) => context.join(
-          HarnessHome.of(home, join: context.join).path(HarnessEntry.cli),
-          'data',
-        );
         expect(
           defaultDaemonDataDir(
             environment: {'USERPROFILE': r'C:\Users\Nguyễn Văn A'},
             isWindows: true,
           ),
-          cliData(r'C:\Users\Nguyễn Văn A', p.windows),
+          r'C:\Users\Nguyễn Văn A\.harness\cli\data',
         );
+        // Elsewhere HOME's CLI folder by this computer's rule.
         expect(
           defaultDaemonDataDir(
             environment: {'HOME': '/Users/me'},
             isWindows: false,
           ),
-          cliData('/Users/me', p.posix),
+          p.posix.join(
+            HarnessHome.of('/Users/me', join: p.posix.join)
+                .path(HarnessEntry.cli),
+            'data',
+          ),
         );
       },
     );
+
+    test('a Windows profile keeps the .harness layout on a Linux host', () {
+      expect(
+        defaultDaemonDataDir(
+          environment: {'USERPROFILE': r'C:\Users\me'},
+          isWindows: true,
+          look: HomeLook(
+            linux: true,
+            environment: const {},
+            exists: (path) => throw StateError('looked at $path for Windows'),
+          ),
+        ),
+        r'C:\Users\me\.harness\cli\data',
+      );
+    });
 
     test('takes ADAPTER_DATA_DIR first, and is null with no home', () {
       expect(

@@ -133,7 +133,7 @@ void main() {
           environment: {'USERPROFILE': r'C:\Users\me', 'HOME': '/c/Users/me'},
           isWindows: true,
         ),
-        p.windows.join(cliOf(r'C:\Users\me', p.windows.join), 'data'),
+        r'C:\Users\me\.harness\cli\data',
       );
     });
 
@@ -195,6 +195,22 @@ void main() {
           ),
         ),
         '/h/.local/state/harness/s/e50e7828cbafcbee/daemon-1.sock',
+      );
+    });
+
+    test('the data folder is found by the same look as the short one', () {
+      expect(
+        defaultDaemonSocketPath(
+          1,
+          environment: {'HOME': '/h'},
+          isWindows: false,
+          look: HomeLook(
+            linux: true,
+            environment: const {},
+            exists: (path) => path == '/h/.local/share/harness',
+          ),
+        ),
+        '/h/.local/share/harness/cli/data/daemon-1.sock',
       );
     });
 
