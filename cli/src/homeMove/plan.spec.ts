@@ -49,7 +49,7 @@ describe('the move\'s plan', () => {
   it('custom XDG folders', () => {
     const plan = planMove('/h', { XDG_DATA_HOME: '/disk/data', XDG_STATE_HOME: '/disk/state' }, ['auth', 'logs'])
     expect(plan).toMatchObject({ data: '/disk/data/harness', state: '/disk/state/harness' })
-    expect(plan.entries.map(({ staged, to }) => ({ staged, to }))).toEqual([
+    expect(plan.entries.filter((entry) => entry.present).map(({ staged, to }) => ({ staged, to }))).toEqual([
       { staged: '/disk/data/harness.moving/auth', to: '/disk/data/harness/auth' },
       { staged: '/disk/state/harness.moving/logs', to: '/disk/state/harness/logs' },
     ])

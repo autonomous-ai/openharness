@@ -28,11 +28,15 @@ function remove(path: string, io: StageIo): void {
 
 /**
  * Stage one entry and leave its link; returns the bytes copied (0 on one filesystem). A failure partway puts the
- * entry back at its old path before it is thrown, so a stage is whole or not done.
+ * entry back at its old path before it is thrown, so a stage is whole or not done. One not there gets its link alone.
  */
 export function stageEntry(entry: MoveEntry, plan: MovePlan, io: StageIo, startedAt: number): { copied: boolean; bytes: number } {
   // Owner-only, as the root it becomes.
   io.mkdirSync(stagingOf(plan, entry.kind), { recursive: true, mode: 0o700 })
+  if (!entry.present) {
+    undoing(entry, false, io, () => mergeRecreated(entry, io))
+    return { copied: false, bytes: 0 }
+  }
   try {
     io.renameSync(entry.from, entry.staged)
   } catch (error) {
@@ -124,6 +128,12 @@ function mergeInto(src: string, dest: string, io: StageIo): number {
 
 /** Puts an entry back at its old path as it was, from whatever its staging reached; one already back is left. */
 export function unstageEntry(entry: MoveEntry, copied: boolean, io: StageIo): void {
+  if (!entry.present) {
+    // Never there: its link goes, and what a late writer made there since, merged into its staged place, comes back.
+    if (lstatOf(entry.from, io)?.isSymbolicLink()) io.unlinkSync(entry.from)
+    if (lstatOf(entry.staged, io)) mergeInto(entry.staged, entry.from, io)
+    return
+  }
   const original = copied ? keptOf(entry) : entry.staged
   if (lstatOf(original, io)) {
     const there = lstatOf(entry.from, io)

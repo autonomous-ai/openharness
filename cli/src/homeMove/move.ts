@@ -118,7 +118,7 @@ function complete(journal: Journal, steps: Steps, oldDataDir: string, bytesCopie
     // The record of a start that waited, or failed, before: the bridge holds nothing of the move's.
     const record = join(plan.legacy, OWN_FILES.record)
     for (const path of [draftOf(record), record]) io.rmSync(path, { force: true })
-    const outcome = { state: 'bridged', entries: plan.entries.length, bytesCopied, panes: panes.length } as const
+    const outcome = { state: 'bridged', entries: plan.entries.filter((entry) => entry.present).length, bytesCopied, panes: panes.length } as const
     writeMoveRecord(plan.state, { version: 1, ...outcome, oldProcesses: 0, at: deps.now() })
     forgetJournal(plan.legacy, io)
     return outcome

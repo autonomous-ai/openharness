@@ -1,8 +1,11 @@
 import { posix } from 'node:path'
 import { HARNESS_ENTRIES, legacyHarnessHome, xdgRoots, type HarnessRootKind } from '../config/harnessHome.js'
 
-/** One top-level name of ~/.harness: where it is, where it waits until the commit, and where it ends. */
-export interface MoveEntry { name: string; kind: HarnessRootKind; known: boolean; from: string; staged: string; to: string }
+/**
+ * One top-level name of ~/.harness: where it is, where it waits until the commit, and where it ends. One not `present`
+ * at the move gets its link alone.
+ */
+export interface MoveEntry { name: string; kind: HarnessRootKind; known: boolean; present: boolean; from: string; staged: string; to: string }
 export interface MovePlan { home: string; legacy: string; data: string; state: string; entries: MoveEntry[] }
 
 /**
@@ -19,14 +22,22 @@ const known = (name: string): name is keyof typeof HARNESS_ENTRIES => Object.has
 // A name the table does not know goes to data: nothing is lost.
 const kindOf = (name: string): HarnessRootKind => known(name) ? HARNESS_ENTRIES[name] : 'data'
 
-/** Every top-level name of ~/.harness but the move's own files (OWN_FILES, their drafts). An unknown name goes to data. */
+/**
+ * Every top-level name of ~/.harness but the move's own files (OWN_FILES, their drafts), then every name of the table
+ * not there: its link, which points nowhere until the new daemon makes it, makes an old process that writes it late
+ * fail, rather than make a real folder in the bridge. An unknown name goes to data.
+ */
 export function planMove(home: string, env: NodeJS.ProcessEnv, names: readonly string[]): MovePlan {
   // The move runs on Linux alone: its paths are Linux's wherever this is asked.
   const legacy = legacyHarnessHome(home, 'linux')
   const roots = xdgRoots(home, env)
-  const entries = names.filter((name) => !OWN_NAMES.includes(name)).map((name) => {
+  const present = names.filter((name) => !OWN_NAMES.includes(name))
+  const entries = [...present, ...Object.keys(HARNESS_ENTRIES).filter((name) => !present.includes(name))].map((name) => {
     const kind = kindOf(name)
-    return { name, kind, known: known(name), from: posix.join(legacy, name), staged: posix.join(`${roots[kind]}.moving`, name), to: posix.join(roots[kind], name) }
+    return {
+      name, kind, known: known(name), present: present.includes(name),
+      from: posix.join(legacy, name), staged: posix.join(`${roots[kind]}.moving`, name), to: posix.join(roots[kind], name),
+    }
   })
   return { home, legacy, ...roots, entries }
 }
