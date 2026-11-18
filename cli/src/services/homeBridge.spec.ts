@@ -15,7 +15,7 @@ import { writeMoveRecord, type MoveRecord } from '../homeMove/record.js'
 import { harnessPaneOwner } from '../lib/harnessSessionLabel.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { isolatedTmux } from '../testing/isolatedTmux.js'
-import { askForStore, CHECK_MS, startHomeBridge, startHomeBridgeInCore, type HomeBridgeDeps } from './homeBridge.js'
+import { askForStore, CHECK_MS, STORE_ASK_MS, startHomeBridge, startHomeBridgeInCore, type HomeBridgeDeps } from './homeBridge.js'
 
 /** The move, 50 000 s into the boot it ran in, as /proc says them. */
 const BOOT = 'c2a9e1d8-55a4-4c3e-9b8f-0f6d2d1e7a11', BOOTED_AT = 1_700_000_000, MOVED_UPTIME = 50_000
@@ -391,6 +391,21 @@ describe('the home bridge service', () => {
     request.mockRejectedValueOnce(new Error('Harness did not answer dsh_update in time. Try again.'))
     await expect(askForStore(open)).rejects.toThrow('did not answer')
     expect(close).toHaveBeenCalledTimes(2)
+  })
+
+  it('gives up on a daemon that never opens the line, and closes the line it opens late', async () => {
+    vi.useFakeTimers()
+    try {
+      const close = vi.fn()
+      let opened: (daemon: { machineId: string; request: () => Promise<Record<string, unknown>>; close: () => void }) => void = () => {}
+      const open = () => new Promise<Parameters<typeof opened>[0]>((done) => { opened = done })
+      const asked = expect(askForStore(open)).rejects.toThrow('did not open')
+      await vi.advanceTimersByTimeAsync(STORE_ASK_MS)
+      await asked
+      opened({ machineId: 'm', request: async () => ({}), close })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(close).toHaveBeenCalledOnce()
+    } finally { vi.useRealTimers() }
   })
 
   it('reaches the daemon this computer\'s owner\'s tools reach: with none on the test\'s data folder, it says so', async () => {

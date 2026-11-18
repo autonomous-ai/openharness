@@ -131,6 +131,16 @@ describe('the move\'s journal', () => {
     expect(readdirSync(legacy)).toEqual([])
   })
 
+  // The previous bytes go first, the journal last (forgetJournal): a crash between them leaves a journal whose steps all
+  // ran, finished or undone. Read as one, it would never be finished, and keep ~/.harness from reading as the bridge.
+  it('a forget a crash cut short, its previous bytes gone and the journal left, reads as none, and is finished', () => {
+    const { home, legacy } = legacyHome()
+    openJournal(journalOf(home)).add(STEPS[1])
+    fs.rmSync(join(legacy, '.move-before'), { recursive: true })
+    expect(readJournal(legacy)).toBeNull()
+    expect(readdirSync(legacy)).toEqual([])
+  })
+
   it('it is the account\'s own', () => {
     const { home, legacy } = legacyHome()
     openJournal(journalOf(home)).add(STEPS[1])
