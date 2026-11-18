@@ -26,6 +26,18 @@ vi.mock('node:fs', async importOriginal => {
       return fd
     },
     closeSync: (fd: number) => { try { fs.closeSync(fd) } finally { paths.delete(fd) } },
+    fsync: (fd: number, done: (error: NodeJS.ErrnoException | null) => void) => {
+      const path = paths.get(fd)!
+      io.beforeSync?.(path)
+      fs.fsync(fd, error => {
+        if (error) { done(error); return }
+        try {
+          io.flushes.push({ path, kind: fs.fstatSync(fd).isDirectory() ? 'directory' : 'file' })
+          io.afterSync?.(path)
+          done(null)
+        } catch (failure) { done(failure as NodeJS.ErrnoException) }
+      })
+    },
     fsyncSync: (fd: number) => {
       const path = paths.get(fd)!
       io.beforeSync?.(path)
@@ -71,7 +83,7 @@ it('flushes both exports completely while flushing each owner filename only on c
     expect(ownerPath(lease)).toBe(record)
     await lease.writer(process.pid)
     expect(JSON.parse(await readFile(record, 'utf8')).writer).toBe(process.pid)
-    lease.settled()
+    await lease.settled()
     expect(JSON.parse(await readFile(record, 'utf8')).settled).toBe(true)
     await verify(lease)
     await lease.publish(destination(), () => {})
@@ -94,7 +106,7 @@ it.each(['beforeOpen', 'afterOpen', 'afterSync'] as const)('refuses an owner rep
   })
   await expect(lease.writer(process.pid)).rejects.toThrow('checkpoint stage changed')
   expect(await readFile(record, 'utf8')).toBe('unrelated owner')
-  expect(() => lease.settled()).toThrow('checkpoint stage changed')
+  await expect(lease.settled()).rejects.toThrow('checkpoint stage changed')
   await lease.close()
   expect(await readFile(record, 'utf8')).toBe('unrelated owner')
   expect(await stat(lease.stage.path)).toBeTruthy()
@@ -109,7 +121,7 @@ it.each(['beforeOpen', 'afterSync'] as const)('refuses an owner moved into a rep
   })
   await expect(lease.writer(process.pid)).rejects.toThrow('checkpoint slot changed')
   const unchanged = await readFile(record, 'utf8')
-  expect(() => lease.settled()).toThrow('checkpoint slot changed')
+  await expect(lease.settled()).rejects.toThrow('checkpoint slot changed')
   await lease.close()
   expect(await readFile(record, 'utf8')).toBe(unchanged)
   expect(await stat(join(`${slot}.previous`, 'history.tmp'))).toBeTruthy()
@@ -119,7 +131,7 @@ it.each(['beforeOpen', 'afterSync'] as const)('refuses an owner acquiring a seco
   const lease = await acquire(), record = ownerPath(lease)
   once(point, record, () => fs.linkSync(record, join(directory, 'other-owner')))
   await expect(lease.writer(process.pid)).rejects.toThrow('unsafe checkpoint stage')
-  expect(() => lease.settled()).toThrow('unsafe checkpoint stage')
+  await expect(lease.settled()).rejects.toThrow('unsafe checkpoint stage')
   await lease.close()
   expect(await stat(record)).toMatchObject({ nlink: 2 })
 })
@@ -165,7 +177,7 @@ it('retains a replaced owner during close even without a later owner update', as
 
 it('does not publish after a failed owner update and retries the complete file flush before publication', async () => {
   const lease = await acquire(), record = ownerPath(lease)
-  await lease.writer(process.pid); lease.settled(); await verify(lease)
+  await lease.writer(process.pid); await lease.settled(); await verify(lease)
   once('beforeSync', record, () => { throw new Error('injected owner update failure') })
   await expect(lease.publish(destination(), () => {})).rejects.toThrow('injected owner update failure')
   await expect(stat(destination())).rejects.toMatchObject({ code: 'ENOENT' })

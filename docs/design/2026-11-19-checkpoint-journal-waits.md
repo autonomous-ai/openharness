@@ -1,0 +1,128 @@
+# Asynchronous checkpoint owner-journal waits
+
+Review proposal only. No runtime code changed. Keep this separate from native route batching.
+
+## Evidence and scope
+
+The one completed actual Close/Resume CPU diagnostic identifies checkpoint journal durability on the
+core's main thread. Across ten Close cycles, V8 fsync sample occupancy rises from 3.1036 to 4.0140 s;
+that is occupancy including synchronous kernel wait, not function CPU. The stage has four owner-file
+flushes per successful export: initial owner, assigned writer, settled writer and intended destination.
+Its initial owner also requires a slot-directory flush. These are required durable transitions.
+
+Move those five waits to Node's asynchronous fsync on the exact already-owned descriptors. Keep
+small bounded open/stat/truncate/write and final rename/checks in their current owner. No new process,
+worker capability, protocol message, source module, persistent cache or disk format. The engine worker
+still receives only the core-selected history file and returns its bounded receipt; it gains no journal,
+manifest, rename or deletion authority.
+
+This pass deliberately retains the existing synchronous parent-directory flush after slot mkdir,
+final cleanup directory flushes and SessionCheckpointStore's manifest/screen writes. An asynchronous
+final rmdir-parent flush would free the physical slot before actual completion and needs additional
+admission custody to avoid accumulating timed-out cleanup waits. This bounded owner-journal change
+can reduce main-loop blocking without inventing that extra registry. Measure residual stalls before
+separately reviewing those remaining waits; this is not a claim that all Close I/O is asynchronous.
+
+## Design
+
+- Storage: unchanged version-1 owner JSON, four fixed directories and the same history inode. Only the
+  caller's original 30 s export deadline applies; no deadline extension or skipped durable transition.
+- Bounds: one owner update in flight per stage, no queued owner updates. Overlapping writer/settled/
+  publish calls fail closed rather than append a queue. At most four physical slots and therefore four
+  such asynchronous operations exist; close retains its slot until each actual callback and descriptor
+  close has settled. The one owner JSON snapshot is bounded by the existing 1 KiB format.
+- State: capture an immutable next-owner snapshot at admission. Hold the actual owner-write promise
+  separately from the bounded caller reply. Do not allow a later mutation to change the bytes written
+  by an earlier operation. Preserve writer assignment before dispatch; preserve settled attestation
+  before verification/publication; preserve destination intent before rename.
+- Owner-file authority: retain directory identity, private single-link file/mode/uid checks, no-follow
+  exclusive creation, exact opened-file identity, pre-truncate route checks and post-flush route checks.
+  Capture descriptor version after the bounded write and recheck it after asynchronous fsync as well:
+  the new await must not allow same-inode byte/mode mutation to pass merely because the key survived.
+- Initial directory authority: retain owner file fsync followed by creation-only directory fsync.
+  Open that directory with no-follow/directory flags, bind the descriptor to the known slot key, keep
+  it alive through its actual fsync callback, then recheck the slot and owner before acknowledgement.
+  Windows still skips directory fsync under the existing directorySyncSupported contract.
+- Descriptor custody: the original owner descriptor closes exactly once, only after fsync callback
+  settles. A reply timeout never closes/recycles it. Reuse secureState's existing close custody guard;
+  an uncertain close keeps the operation/slot unavailable and is never retried on a recycled integer.
+- Ordering: owner updates reject overlap, including while an earlier caller has timed out but its
+  actual fsync still runs. A failed completed destination update may be explicitly retried as today,
+  performing the whole checked write+flush again; no automatic retry or overlapping retry is added.
+- Revocation: public stage methods admit work only while the stage is open and within its original
+  deadline. Recheck current after awaited journal completion before writer dispatch, verification,
+  descriptor-close continuation or publication. The late operation may complete its own durability
+  and identity checks but can neither dispatch a writer nor rename after close/deadline revokes it.
+- Cleanup: close marks the stage closed synchronously, then waits for the actual owner journal promise,
+  verification and history descriptor close. Its existing bounded reply may end earlier, while its
+  continuation retains ownership. A live/unsettled writer still reserves the slot. Cleanup and startup
+  recovery remain conservative on any uncertain file, close, attestation or crashed cleanup marker.
+- Compatibility: ExportOwnership.settled becomes Promise<void>, a core-only callback that never crosses
+  IPC. Await it inside createEngineStorage's existing bounded admitted export operation, and recheck
+  its current/deadline afterward. Wire protocol version, worker/old-client compatibility and disk data
+  remain unchanged. Existing mock exporters must await settled too.
+- Failure: existing CHECKPOINT_STAGE_TIMEOUT, STAGE_OPERATION_TIMEOUT and STAGE_CLEANUP_UNAVAILABLE
+  paths remain; no content/path identifiers are added to logs. User's preceding checkpoint remains
+  intact on every failure. No migration, retention change, backend deployment or new setting.
+- Platforms: portable Node TypeScript; macOS native validation plus Linux final CI. Native Windows is
+  deferred by user, with directory-flush skip semantics retained and covered structurally.
+
+## Exact runtime files
+
+1. cli/src/lib/checkpointStages.ts: callback fsync helper/custody, owned bounded asynchronous journal,
+   awaited initialization, writer/settled/publish transitions, raw operation drain before close.
+2. cli/src/engines/worker/storageProtocol.ts: only settled(): Promise<void> callback typing.
+3. cli/src/core/engines/storage.ts: await durable settlement within the existing admitted/deadline
+   scope, keep all captured worker lifetime/source and active/current fences.
+
+No new architecture closure entry. No general secureState or registry write rewrite.
+
+## RED and safety controls before runtime
+
+Use controllable fsync callbacks over real private files/descriptors, never sleeps. An explicit
+setImmediate/event-loop turn must progress while an owner flush is held; a synchronous flush trap
+on an owner file makes the old implementation fail promptly rather than block the test runner.
+Actual callback release remains under the fixture's control and is drained before cleanup.
+
+1. Initial, writer, settled and destination journal flushes are asynchronous, preserve ordering and
+   leave the event loop available. Owner creation still flushes file before its directory; updates
+   flush the owner file only. No writer call or rename occurs until its durability completes.
+2. Held owner fsync past the original deadline rejects the reply while descriptor remains open and
+   its physical slot remains charged. A second update refuses; close cannot unlink/recycle it.
+   Release the original callback exactly once, prove final identity/current checks, then exact close.
+3. Close during held writer/settled/destination fsync cannot produce late dispatch, late rename or
+   deletion while an actual callback still owns a descriptor. Keep an unsettled writer's slot.
+4. Change owner inode, same-inode bytes/mode/link count or slot ancestor while a file/directory flush
+   is held: refuse acknowledgement and preserve unrelated files. Existing before-open/after-open/
+   after-sync tests remain, adapted to await real settlement rather than removing assertions.
+5. Synchronous dispatch throw, callback error and descriptor-close uncertainty retain safe custody;
+   an explicit destination retry only after actual failure settled performs its full flush again.
+6. Storage export cannot return a receipt while settlement is held. Its original timeout rejects;
+   a late settlement result is not returned, no new dispatch occurs, aggregate work stays bounded.
+7. Existing crash recovery remains: dead core+live writer, missing/malformed attestation, crashed
+   cleanup marker, rename-before-manifest uncommitted/committed/replaced histories, four slots.
+
+Run focused actual RED first. After review/runtime correction: checkpoint stage/durability/store,
+SQLite/database Close/OpenClaw and storage transport suites; 100% per-file coverage for changed
+core/engines/storage.ts, selected coverage for checkpointStages, architecture/types, and matched
+native Close/Resume validation under root's exclusive timing window. Pick exact checks before run.
+The existing frozen V5 hold remains until a final combined matched workload passes.
+
+## Prepared source review packet
+
+The actual runtime is still unchanged. The three-file proposed patch is retained at
+`/tmp/core-checkpoint-journal-runtime.patch`; the new callback-controlled caller fixtures are in
+`checkpointStages.async.spec.ts` and `core/engines/storage.spec.ts`. Existing journal crash/durability
+and mock exporters now await the core-only settlement callback, with their assertions retained.
+
+Close cannot await itself: it sets `closed` before its first suspension, captures/drains `ownerWrite`,
+and then drains verification/history close. `ownerWrite` owns only its file/directory callbacks and
+exact synchronous descriptor closes; it never calls or awaits stage.close. Each public writer,
+settled and publish continuation checks current after the bounded write completes. A publication
+captured before close therefore fails its current check before rename even when its disk wait succeeds.
+The Close-during-writer/settled/destination tests hold the actual callbacks and require close to settle
+only after release, with no late publication or deletion of a live writer's stage.
+
+Planned first RED executes only five main-loop/caller durability cases and the two storage settlement
+cases. No test, build or benchmark for this checkpoint patch has been run yet. Full source and runtime
+review precede the exclusive execution release; no source gate or performance acceptance is claimed.

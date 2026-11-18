@@ -44,7 +44,7 @@ beforeEach(async () => {
     await ownership.writer(process.pid)
     writeFileSync(stage.path, content)
     duringExport()
-    ownership.settled()
+    await ownership.settled()
     return { bytes: content.length, sha256: createHash('sha256').update(content).digest('hex') }
   } })
 })

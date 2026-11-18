@@ -95,7 +95,7 @@ it('reclaims only after both the old core and its unsettled writer are positivel
 it('reclaims a completed worker only after its core is gone, and never repeats an uncertain cleanup', async () => {
   vi.spyOn(console, 'error').mockImplementation(() => {})
   const completed = await acquire()
-  await completed.writer(424242); completed.settled()
+  await completed.writer(424242); await completed.settled()
   const next = new CheckpointStages(directory)
   await next.prepare()
   expect((await acquire(next)).stage.path).not.toBe(completed.stage.path)
@@ -124,7 +124,7 @@ it.each(['uncommitted', 'committed', 'malformed', 'replaced'] as const)('recover
   const stages = new CheckpointStages(join(directory, '.stages')), lease = await acquire(stages)
   const name = `${'a'.repeat(64)}-${'b'.repeat(8)}-${'b'.repeat(4)}-${'b'.repeat(4)}-${'b'.repeat(4)}-${'b'.repeat(12)}.history`
   const destination = join(directory, name), manifest = join(directory, `${'a'.repeat(64)}.json`)
-  await lease.writer(424242); lease.settled()
+  await lease.writer(424242); await lease.settled()
   await writeFile(lease.stage.path, 'history'); await lease.verify(receipt('history'))
   await lease.publish(destination, () => {})
   if (state === 'committed') await writeFile(manifest, JSON.stringify({ version: 1, file: name }), { mode: 0o600 })

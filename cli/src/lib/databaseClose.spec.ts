@@ -67,7 +67,7 @@ beforeEach(async () => {
     await ownership.writer(process.pid)
     writeFileSync(stage.path, bytes)
     duringExport?.()
-    ownership.settled()
+    await ownership.settled()
     return { bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }
   } })
   deps = { registry, stoppedAgents, restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(),

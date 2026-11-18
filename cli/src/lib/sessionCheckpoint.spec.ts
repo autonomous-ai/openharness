@@ -445,7 +445,7 @@ it('bounds held verification reads without releasing any of the four live slots 
   const exportDatabase = vi.fn(async (_session, stage, ownership) => {
     await ownership.writer(process.pid)
     await writeFile(stage.path, contents)
-    ownership.settled()
+    await ownership.settled()
     return { bytes: Buffer.byteLength(contents), sha256: createHash('sha256').update(contents).digest('hex') }
   })
   const delegated = new SessionCheckpointStore(directory, { exportDatabase })
@@ -483,7 +483,7 @@ it('checks native generation after the final descriptor close and before staged 
   const delegated = new SessionCheckpointStore(directory, { exportDatabase: async (_session, stage, ownership) => {
     await ownership.writer(process.pid)
     await writeFile(stage.path, contents)
-    ownership.settled()
+    await ownership.settled()
     return { bytes: contents.length, sha256: createHash('sha256').update(contents).digest('hex') }
   } })
   await delegated.save(row)
@@ -506,7 +506,7 @@ it.each(['acquisition', 'descriptor close'] as const)('bounds a held %s and clos
   const exportDatabase = vi.fn(async (_session, stage, ownership) => {
     await ownership.writer(process.pid)
     await writeFile(stage.path, contents)
-    ownership.settled()
+    await ownership.settled()
     return { bytes: contents.length, sha256: createHash('sha256').update(contents).digest('hex') }
   })
   const delegated = new SessionCheckpointStore(directory, { exportDatabase })

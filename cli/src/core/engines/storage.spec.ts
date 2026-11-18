@@ -224,3 +224,44 @@ it('keeps one aggregate inline admission until timed-out underlying reads actual
   release(); await vi.advanceTimersByTimeAsync(0)
   expect(await storage.background(session)).toBe(0)
 })
+
+it('awaits durable writer settlement before returning the checkpoint receipt', async () => {
+  const receipt = { bytes: 7, sha256: 'a'.repeat(64) }, owner = ownership()
+  let release!: () => void, entered!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  const waiting = new Promise<void>(resolve => { entered = resolve })
+  owner.settled.mockImplementation(async () => { entered(); await held })
+  const storage = createEngineStorage({ isolated: false, call: vi.fn(), inlineExport: async () => receipt })
+  let returned = false
+  const exporting = storage.exportDatabase(session as RegisteredSession, { path: '/stage', key: '1:2' }, owner, source)
+    .then(value => { returned = true; return value })
+  await waiting
+  try {
+    await new Promise<void>(resolve => setImmediate(resolve))
+    expect(returned).toBe(false)
+  } finally { release() }
+  expect(await exporting).toEqual(receipt)
+})
+
+it('retains four unsettled journal callbacks after their reply deadlines without accepting late receipts', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+  const receipt = { bytes: 7, sha256: 'a'.repeat(64) }
+  let release!: () => void, entered!: () => void, count = 0
+  const held = new Promise<void>(resolve => { release = resolve })
+  const waiting = new Promise<void>(resolve => { entered = resolve })
+  const owners = Array.from({ length: 4 }, () => {
+    const owner = ownership()
+    owner.settled.mockImplementation(async () => { if (++count === 4) entered(); await held })
+    return owner
+  })
+  const storage = createEngineStorage({ isolated: false, call: vi.fn(), inlineExport: async () => receipt })
+  const stage = { path: '/stage', key: '1:2' }
+  const results = owners.map(owner => storage.exportDatabase(session as RegisteredSession, stage, owner, source).catch(error => error))
+  await waiting
+  try {
+    await vi.advanceTimersByTimeAsync(STORAGE_EXPORT_WAIT_MS)
+    expect((await Promise.all(results)).every(result => result instanceof Error)).toBe(true)
+    await expect(storage.exportDatabase(session as RegisteredSession, stage, ownership(), source)).rejects.toThrow('busy')
+  } finally { release(); await vi.advanceTimersByTimeAsync(0) }
+  expect(await storage.exportDatabase(session as RegisteredSession, stage, ownership(), source)).toEqual(receipt)
+})
