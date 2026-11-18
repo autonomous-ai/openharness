@@ -127,10 +127,12 @@ VS Code needs no `onScreen`: its extension already drops a line for a terminal t
 - A run that fails (non-zero exit, timeout, no binary) drops its lines and what is pending for that terminal, and logs
   `[herdr-app] scroll · failed` once until a run succeeds again (no line per frame). Its words never name the terminal.
 - Once a terminal has been quiet for 1 s (no run under way, nothing pending and no new line for it for 1 s), the adapter
-  logs one line with what it did since its last such line: `[herdr-app] scroll · <lines> lines · <runs> runs · <failed>
-  failed`. Counts only. A run is faster than the dial's line, so the queue drains after almost every line: a line at each
-  drain would be up to ~30 a second. With the quiet second a stroke and its pauses give one line, a long stroke one at
-  its end, so the lines stay bounded; the adapter needs no word of the stroke's end.
+  logs one line with what it did since its last such line: `[herdr-app] scroll · <lines> lines · <runs> runs · <dropped>
+  dropped`. Counts only: `<dropped>` is the lines it did not scroll, whatever the reason (a failed run's, a question's,
+  a Claude Code terminal's short of a key); a failure has its own line, above. A run is faster than the dial's line, so
+  the queue drains after almost every line: a line at each drain would be up to ~30 a second. With the quiet second a
+  stroke and its pauses give one line, a long stroke one at its end, so the lines stay bounded; the adapter needs no
+  word of the stroke's end.
 
 - **A Claude Code terminal is scrolled by keys, not by Herdr's view** (PM, 2026-11-18). When hc reports the
   terminal's app as `claude-code`, `scroll` presses `pageup` (lines < 0) or `pagedown` through hc's own socket
@@ -141,7 +143,7 @@ VS Code needs no `onScreen`: its extension already drops a line for a terminal t
   0.6.65-dev tallied 0 lines · 0 runs for every stroke under 20 lines and a jump of half a screen per key ("not smooth,
   almost not working"). The lines short of a key are kept across strokes for that terminal and dropped only once it
   has had no line for the quiet second (or at stop): two strokes of 5 lines 300 ms apart press one key, and a lone
-  5-line stroke presses none and its tally counts the 5 failed. **One key a call, and at least `SCROLL_KEY_GAP_MS =
+  5-line stroke presses none and its tally counts the 5 dropped. **One key a call, and at least `SCROLL_KEY_GAP_MS =
   100` between a Claude Code terminal's calls** (at most 10 keys a second), and the lines that wait for it are clamped
   to ±32, 4 keys' worth, so a fast fling stops with the finger instead of paging on for a second. The same queue holds
   otherwise: one call at a time per terminal, the failure line once, the tally (its lines are the lines the keys stood
@@ -151,7 +153,7 @@ VS Code needs no `onScreen`: its extension already drops a line for a terminal t
   `blocked`, the dial's `needs-you` (a key could move the highlighted choice of a question, and the person's Enter would
   pick it); the stroke then goes to Harness's windows as today. The same test is made again right before each key
   call, as hc tells it then: a question that comes up mid-stroke stops its keys, and the lines that wait are dropped,
-  counted failed in the tally with no failed line (review, 2026-11-18). A status hc has not told counts as asking: a
+  counted dropped in the tally with no failed line (review, 2026-11-18). A status hc has not told counts as asking: a
   word a later hc adds, or none heard since the subscription dropped (the hc source keeps its rows through a drop for
   the retry, not their status). A `working` one takes keys: hc does not wait while a program writes. Measured on
   2026-11-18 against a private core (`cli/e2e/harness/hcCore.ts`, hc 0.1.21) with fake programs, never a model call: a
@@ -230,10 +232,10 @@ stroke's `down`, else `dial_scroll`. The stop's guards now hold for VS Code's te
 | `status` is under way when the finger moves | the stroke is held in a fixed size and replayed on the answer | the first lines arrive about 0.04 s later |
 | Herdr Core is not on its default session (`hookIds` false) and the dial shows the hooked copy | that copy has no Herdr pane | the stroke goes to Harness's windows |
 | The terminal is on the alternate screen and is not Claude Code | Herdr has no history to move | nothing scrolls |
-| A Claude Code terminal | `pageup`/`pagedown` through hc, one per 8 lines, one a call every 100 ms at most, ±32 lines waiting; the lines short of a key are dropped at the quiet second, counted failed in the tally; Herdr's view is not asked to move | the transcript moves half a screen per 8 lines of travel, and stops with the finger |
+| A Claude Code terminal | `pageup`/`pagedown` through hc, one per 8 lines, one a call every 100 ms at most, ±32 lines waiting; the lines short of a key are dropped at the quiet second, counted in the tally; Herdr's view is not asked to move | the transcript moves half a screen per 8 lines of travel, and stops with the finger |
 | A Claude Code terminal that asks (hc's `blocked`, the dial's `needs-you`) | no key is pressed; the stroke goes to Harness's windows | as today |
 | A Claude Code terminal that works (`working`) | its keys are pressed at once, as hc does while a program writes | the transcript moves while it works |
-| A Claude Code terminal begins to ask mid-stroke | the next key call is not made; the lines that wait are dropped, counted failed in the tally | the transcript stops where it was |
+| A Claude Code terminal begins to ask mid-stroke | the next key call is not made; the lines that wait are dropped, counted in the tally | the transcript stops where it was |
 | hc's subscription dropped, or hc tells a status it did not have before | a Claude Code terminal takes no key until a snapshot tells its status: the stroke goes to Harness's windows | as today |
 | hc refuses or times out a key call (5 s) | its lines are dropped, `[herdr-app] scroll · failed` once | nothing scrolls |
 | The person typed in Herdr's window less than 3 s before a Claude Code stroke | hc holds that call's keys until 3 s after their key; the queue waits for it, then checks again before the next call | the transcript moves up to 3 s late; a question that came up meanwhile can take the held call's key, open until hc refuses a blocked program |
@@ -264,10 +266,10 @@ every stroke goes to Harness's windows).
   - `herdrApp.spec.ts`, Claude Code: a `claude-code` terminal's lines press `pageup`/`pagedown` through the client's
     `keys`, one per 8 lines, one key a call with 100 ms between calls, the lines waiting clamped to ±32, with 5 s, and
     run no `herdr-app`; two strokes of 5 lines 300 ms apart press one key, and a lone 5-line stroke presses none and its
-    quiet second's tally counts the 5 failed; `canScroll` is
+    quiet second's tally counts the 5 dropped; `canScroll` is
     false while its state is `blocked` or none hc knows, and true while `working` (hc does not wait, measured); a
     state that turns `blocked` or unknown mid-stroke, even while a page waits for the gap, presses nothing more and
-    counts the lines failed; another app runs `terminal.scroll`; a refused or timed-out call drops and logs once;
+    counts the lines dropped; another app runs `terminal.scroll`; a refused or timed-out call drops and logs once;
     `stop()` presses nothing more.
   - `hcSource.spec.ts`: `statusOf` is none from a drop until the next snapshot tells it again; `kindOf` is kept.
   - `hcClient.spec.ts`: `keys(address, keys)` sends `terminal.keys` with exactly those names and answers its outcome.

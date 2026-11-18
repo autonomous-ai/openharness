@@ -111,16 +111,16 @@ export interface HerdrAppAdapter extends HostAdapter {
 interface Run { forward: boolean; switched: boolean }
 
 /** A terminal's scroll queue until it has been quiet for SCROLL_QUIET_MS: whether it is draining (a run under way, or the
- *  wait for the gap before one), the lines that wait (a Claude Code terminal's short of a page too), the gap since
- *  its last run started while it lasts, what it did since it started, for the line it says once quiet, and the timer
- *  of that quiet. */
+ *  wait for the gap before one), the lines that wait (a Claude Code terminal's short of a key too), the gap since
+ *  its last run started while it lasts, what it did since it started, for the line it says once quiet (`dropped`: the
+ *  lines it did not scroll, whatever the reason; hc's failure has its own line), and the timer of that quiet. */
 interface Scrolling {
   running: boolean
   pending: number
   gap?: Promise<void>
   lines: number
   runs: number
-  failed: number
+  dropped: number
   quiet?: ReturnType<typeof setTimeout>
 }
 
@@ -212,13 +212,13 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
       // Right before the call, as hc tells it now: a Claude Code that began to ask since the stroke's down takes none of
       // its keys, and what waits is dropped. Not a failure of hc's: the tally counts it, and no failed line is said.
       if (asks(address)) {
-        queue.failed += Math.abs(queue.pending)
+        queue.dropped += Math.abs(queue.pending)
         queue.pending = 0
         break
       }
       queue.pending = within(queue.pending - lines, pendingMax(address))
       if (!(await scrollRun(address, lines, keys, queue))) {
-        queue.failed += Math.abs(lines) + Math.abs(queue.pending)
+        queue.dropped += Math.abs(lines) + Math.abs(queue.pending)
         queue.pending = 0
         if (!scrollFailedSaid) deps.log('[herdr-app] scroll · failed')
         scrollFailedSaid = true
@@ -231,8 +231,8 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
     queue.quiet = setTimeout(() => {
       scrolling.delete(address)
       // A Claude Code terminal's lines short of a key go with its quiet second: counted, so a stroke too short is seen.
-      queue.failed += Math.abs(queue.pending)
-      deps.log(`[herdr-app] scroll · ${queue.lines} lines · ${queue.runs} runs · ${queue.failed} failed`)
+      queue.dropped += Math.abs(queue.pending)
+      deps.log(`[herdr-app] scroll · ${queue.lines} lines · ${queue.runs} runs · ${queue.dropped} dropped`)
     }, SCROLL_QUIET_MS)
   }
 
@@ -271,7 +271,7 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
 
   const scroll = (pane: Pane, lines: number): void => {
     if (!mac || !HC_TERMINAL.test(pane.id) || lines === 0 || !Number.isSafeInteger(lines)) return
-    const queue = scrolling.get(pane.id) ?? { running: false, pending: 0, lines: 0, runs: 0, failed: 0 }
+    const queue = scrolling.get(pane.id) ?? { running: false, pending: 0, lines: 0, runs: 0, dropped: 0 }
     clearTimeout(queue.quiet)
     if (queue.running) {
       queue.pending = within(queue.pending + lines, pendingMax(pane.id))
