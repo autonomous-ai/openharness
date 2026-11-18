@@ -98,8 +98,20 @@ describe('walk', () => {
 
   it('cannot tell under a folder it cannot read or one with no number, the file\'s own too', () => {
     expect(walk('/home/a/docs/x.txt', tree([], ['/home']), [], [], posix)).toBe('unknown')
-    for (const numberless of ['/home/a/docs/x.txt', '/home/a', '/']) {
+    for (const numberless of ['/home/a/docs/x.txt', '/home/a']) {
       expect(walk('/home/a/docs/x.txt', path => ({ dev: 1n, ino: path === numberless ? 0n : 9n }), [], [], posix), numberless).toBe('unknown')
+    }
+  })
+
+  // Windows' FAT driver gives a drive's root (a USB stick's, an SD card's) the number 0, and every other folder its own.
+  it('takes a document from a drive whose root has no number, as FAT gives it, and still compares that root', () => {
+    const numbered = tree()
+    const fat = (path: string): Identity => path === 'E:\\' ? { dev: 5n, ino: 0n } : { ...numbered(path)!, dev: 5n }
+    expect(walk('E:\\docs\\x.txt', fat, [], [], win32)).toBe('open')
+    expect(walk('E:\\.ssh\\id.txt', fat, [fat('E:\\.ssh')], [], win32)).toBe('fenced')
+    expect(walk('E:\\docs\\x.txt', fat, [{ dev: 5n, ino: 0n }], [], win32)).toBe('fenced')
+    for (const numberless of ['E:\\docs\\x.txt', 'E:\\docs']) {
+      expect(walk('E:\\docs\\x.txt', path => path === numberless ? { dev: 5n, ino: 0n } : fat(path), [], [], win32), numberless).toBe('unknown')
     }
   })
 
