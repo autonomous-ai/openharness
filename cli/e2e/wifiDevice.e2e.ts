@@ -396,18 +396,6 @@ describe('the Wi-Fi device with the dials', () => {
     expect(machine.daemon.coresStarted()).toBe(1)
   })
 
-  it('uses the public desk requests from inline Wi-Fi to external Devices without repeating a gesture', async () => {
-    const { machine, window, agentId, device } = await fresh({ HARNESSD_SERVICES: 'devices' })
-    await connect(device)
-    await until('the Devices service to connect', () => machine.daemon.log().includes('[services] devices connected') || null, 30_000, 200)
-    expect(devicesPids(machine.daemon)).toHaveLength(1)
-    expect(machine.daemon.log()).not.toContain('[services] wifi connected')
-    const corePid = machine.daemon.corePid()
-    await gestures(window, device, agentId, 'mixed-devices-external')
-    expect(machine.daemon.corePid()).toBe(corePid)
-    expect(machine.daemon.coresStarted()).toBe(1)
-  })
-
   it('two dials and a Wi-Fi device are three devices: each its own, the desk\'s turn on all three, and a dial unplugged costs the others nothing', async () => {
     const { machine, window, agentId, device, desk } = await fresh()
     onTab(window, [agentId])

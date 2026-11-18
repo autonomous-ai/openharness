@@ -64,6 +64,21 @@ describe('the desk shared by cohosted device components', () => {
     } finally { revoke() }
   })
 
+  it('reports real step and scroll failures through the default logger without exposing their messages or retrying', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const stepFocus = vi.fn(async () => { throw new Error('private step context') })
+    const scroll = vi.fn(() => { throw new Error('private scroll context') })
+    const revoke = publishDeviceDesk({ ...where, current: () => true, hasWindow: () => true, desk: { stepFocus, scroll } })
+    try {
+      const peer = deviceDeskFor(where.dataDir, where.machineId)!
+      expect(await peer.stepFocus('next', undefined, () => true)).toBe('no_agents')
+      // A one-way stroke retains its existing accepted result; failure is visible in the fixed log.
+      expect(peer.scroll('move', 2, 3, () => true)).toBe(true)
+      expect(stepFocus).toHaveBeenCalledOnce(); expect(scroll).toHaveBeenCalledOnce()
+      expect(warn.mock.calls).toEqual([['[devices] DESK_FAILED'], ['[devices] DESK_FAILED']])
+    } finally { revoke() }
+  })
+
   it('bounds payload bytes before starting a retained step', async () => {
     const log = vi.fn(), stepFocus = vi.fn(async () => result)
     const revoke = publishDeviceDesk({ ...where, current: () => true, hasWindow: () => true, desk: { stepFocus, scroll: () => {} }, log })

@@ -166,9 +166,15 @@ window must suppress effects; stale completions must not clear a replacement vie
 | same external host | same host | existing generation-owned direct desk |
 | inline | inline | same direct desk, now owned by inline service lifetime |
 | external | inline | local declared service request to inline Devices |
-| inline | external | local declared service request to external Devices |
-| separate external hosts | external | same local declared service request |
+| inline | external | source/unit-only path; current master cannot select this split |
+| separate external hosts | external | generic request path; current master cannot select separate hosts |
 | either | unavailable/off | unavailable step / false scroll, no fallback replay |
+
+The current selector treats a host name as that whole host. In particular,
+`HARNESSD_SERVICES=devices` starts devices, wifi and machineAddons together;
+`HARNESSD_SERVICES=wifi` selects only Wi-Fi. There is no supported inverse selector
+or exclusion syntax. The inverse direction has source/unit coverage only, and the
+native suite must not claim it from a cohost run or add a runtime setting to force it.
 
 Startup admits no effects before verified machine/transport readiness. A service
 or core disconnect revokes the captured owner before another can publish. Old
@@ -266,3 +272,40 @@ All required core/services/harnessd per-file coverage remains 100%; the library
 branch limit is explicitly 99%, not represented as full branch coverage. Packaged
 mixed composition and the earlier complete-view full-refresh performance hold
 remain open.
+
+
+## Packaged d59 evidence and selection correction
+
+The once-only six-case run on the unmodified d59 artifact returned actual exit 1:
+five passed and one failed, with three unrelated cases skipped. The five passing
+subcases were both Store Create modes, default cohost desk/Stop/questions,
+all-inline desk/Stop/questions, and Wi-Fi-external / Devices-inline gestures plus
+one held hello after the worker restart. Their exact source is the frozen d59
+fixture, not this later selection correction.
+
+The sixth case failed before its gestures at the explicit assertion that no Wi-Fi
+service connection existed. The selector intentionally treats `devices` as the
+whole host; source `servicePlan.ts` and the existing `services.spec.ts` assertion
+confirm it starts devices, wifi and machineAddons. Remove that unsupported inverse
+native case and retain unit-only coverage; do not change the runtime selector or
+reinterpret the original packet as passing. No repeat of the five passing cases is
+needed for this fixture-only correction.
+
+Packet: `/tmp/core-wifi-desk-native-d59f36ad98`; 171 observed owned PIDs were absent,
+actual runner exit and both EOFs settled, zero forced signals/timeouts, zero fixture
+roots or cohort claims. The failure's private root and log remain for review. Full
+refresh performance and Windows remain unaccepted.
+
+
+Independent verification (`independent-verification.json` in that packet) rehashed
+12,435 source/dependency files and all 528 cohort files, checked the artifact and
+runner/log receipts, and proved all 171 observed PIDs and 38 groups absent. It
+explicitly records `verified-failed-packet`; the original failure is not relabeled.
+
+The combined core gate's sole same-task coverage miss was deviceDesk's default
+logger, previously replaced by injected log callbacks in its failure tests. A real
+throwing step and scroll now prove the fixed public DESK_FAILED log, no private
+error text and no repeat effect without an injected logger. The narrow gate passed
+6 deviceDesk tests with 100% per-file coverage plus fixture/test types:
+`.harness/validation/20261118T183050.853858Z-3928/receipt.json`. No runtime code or
+native rerun was needed.
