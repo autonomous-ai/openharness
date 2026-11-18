@@ -34,7 +34,7 @@ export const DESKTOP_STATE = /^desktop-app/
 /** The program, as --keep-data reads the root: the rest of it is the person's data. */
 export const PROGRAM = new Set(['bin', 'runtime', 'pty'])
 /** The only folder name a removal root may have. */
-export const ROOT_NAME = HARNESS_HOME_NAME
+const ROOT_NAME = HARNESS_HOME_NAME
 
 export interface PlanInput {
   platform: NodeJS.Platform
