@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, posix, win32, type PlatformPath } from 'node:path'
-import { CallFailure, expandHome, forbiddenDirs, identities, identity, tempDir, unc, uploadPath, walk, type Identity, type Verdict } from './call.js'
+import { call, CallFailure, expandHome, forbiddenDirs, identities, identity, tempDir, unc, uploadFile, walk, type Identity, type Verdict } from './call.js'
+import type { Store } from './store.js'
 
 // The file system calls the upload check makes. A test that sets `disk.hooks.<name>` is handed the real call and its
 // arguments, and answers for it; unset, the real call runs.
@@ -24,7 +26,7 @@ vi.mock('node:os', async importOriginal => {
   return { ...os, userInfo: () => ({ ...os.userInfo(), homedir: account.home ?? os.userInfo().homedir }) }
 })
 
-// Windows' path module while a test sets `windows`, so uploadPath reads a path as it does on Windows, on any platform.
+// Windows' path module while a test sets `windows`, so uploadFile reads a path as it does on Windows, on any platform.
 const platform = vi.hoisted(() => ({ windows: false }))
 vi.mock('node:path', async importOriginal => {
   const path = await importOriginal<typeof import('node:path') & { default: PlatformPath }>()
@@ -41,6 +43,12 @@ function tree(same: string[][] = [], unread: string[] = []): (path: string) => I
     return { dev: 1n, ino: numbers.get(folder(path))! }
   }
 }
+
+/** Whether this account can make a file link: Windows needs a right for it, which CI's runner has. */
+const CAN_LINK = ((): boolean => {
+  const dir = mkdtempSync(join(tmpdir(), 'harness-link-'))
+  try { writeFileSync(join(dir, 'a'), ''); symlinkSync(join(dir, 'a'), join(dir, 'b')); return true } catch { return false } finally { rmSync(dir, { recursive: true, force: true }) }
+})()
 
 describe('walk', () => {
   const a = 'C:\\Users\\a'
@@ -170,7 +178,7 @@ describe('tempDir', () => {
   })
 })
 
-describe('uploadPath', () => {
+describe('uploadFile', () => {
   let home: string
   beforeEach(() => {
     // The file system's own spelling: on Windows CI the temporary folder is an 8.3 short name (C:\Users\RUNNER~1).
@@ -183,10 +191,29 @@ describe('uploadPath', () => {
     platform.windows = false
     disk.hooks = {}
     vi.restoreAllMocks()
+    vi.unstubAllGlobals()
     rmSync(home, { recursive: true, force: true })
   })
 
-  const refused = (raw: string): unknown => { try { uploadPath(raw, { HOME: home }); return null } catch (error) { return error } }
+  const refused = (raw: string): unknown => { try { uploadFile(raw, { HOME: home }); return null } catch (error) { return error } }
+  /** What one upload answers: 'sent', or the refusal's text. */
+  const said = (raw: string, env: NodeJS.ProcessEnv = { HOME: home }): string => { try { uploadFile(raw, env); return 'sent' } catch (error) { return (error as Error).message } }
+  /** From here on: the paths an open was tried on, the descriptors opened, and the ones closed. */
+  const descriptors = (): { tried: unknown[], opened: unknown[], closed: unknown[] } => {
+    const tried: unknown[] = [], opened: unknown[] = [], closed: unknown[] = []
+    disk.hooks.openSync = (real, ...args) => { tried.push((args as unknown[])[0]); const fd = real(...args); opened.push(fd); return fd }
+    disk.hooks.closeSync = (real, ...args) => { closed.push((args as unknown[])[0]); return real(...args) }
+    return { tried, opened, closed }
+  }
+  /** One request through `call` as far as `fetch`: the body it would send, and what it wrote to stderr in `err`. */
+  async function sent(args: string[], err: string[] = [], env: NodeJS.ProcessEnv = { HOME: home }): Promise<string> {
+    let body = ''
+    vi.stubGlobal('fetch', async (_url: URL, init: { body?: Buffer | string }) => { body = Buffer.from(init.body ?? '').toString('latin1'); return new Response('{}') })
+    // A stub: the real Store assumes posix permissions, and this spec runs on Windows too.
+    const vault = { root: home, token: () => ({ access_token: 't', source: 'gateway' }) } as unknown as Store
+    await call(vault, 'slack', 'POST', 'https://slack.com/api/files.upload', args, { out: () => undefined, err: line => { err.push(line) } }, env)
+    return body
+  }
   const expectFenced = (raw: string): void => {
     const error = refused(raw)
     expect(error, raw).toBeInstanceOf(CallFailure)
@@ -200,7 +227,7 @@ describe('uploadPath', () => {
 
   it('refuses it under the account\'s own home, whatever home HOME names', () => {
     account.home = home
-    expect(() => uploadPath(join(home, '.ssh', 'note.txt'), { HOME: join(home, 'docs') })).toThrow(/not a media file/)
+    expect(() => uploadFile(join(home, '.ssh', 'note.txt'), { HOME: join(home, 'docs') })).toThrow(/not a media file/)
   })
 
   it('refuses it however the path is spelled, where the file system reads the spelling as that folder', () => {
@@ -246,10 +273,12 @@ describe('uploadPath', () => {
   it('refuses a share path on Windows before it resolves it, one ~ names too', () => {
     platform.windows = true
     const realpath = vi.spyOn(realpathSync, 'native').mockImplementation(() => { throw new Error('opened') })
+    const { tried } = descriptors()
     for (const raw of ['\\\\host\\share\\x.txt', '//host/share/x.txt', '\\\\?\\UNC\\host\\share\\x.txt', '\\\\.\\UNC\\host\\share\\x.txt',
       '\\\\.\\C:\\..\\UNC\\host\\share\\x.txt', '\\??\\UNC\\host\\share\\x.txt']) expectFenced(raw)
-    expect(() => uploadPath('~\\x.txt', { HOME: '\\\\host\\share' })).toThrow(/not a media file/)
+    expect(() => uploadFile('~\\x.txt', { HOME: '\\\\host\\share' })).toThrow(/not a media file/)
     expect(realpath).not.toHaveBeenCalled()
+    expect(tried).toEqual([])
   })
 
   // A UNC path exists only on Windows, and only where this account reaches the local disk's admin share.
@@ -269,15 +298,91 @@ describe('uploadPath', () => {
     expectFenced(join(home, 'docs', 'app', 'note.txt'))
   })
 
+  // The path is swapped for a link into .ssh as the named call about the file runs: before the open, between the
+  // open and each check, and before the read.
+  it.skipIf(!CAN_LINK).each(['openSync', 'fstatSync', 'statSync', 'readFileSync'] as const)('never sends the file its path was swapped for as %s runs', async name => {
+    const file = join(home, 'docs', 'note.txt')
+    writeFileSync(file, 'checked')
+    writeFileSync(join(home, '.ssh', 'note.txt'), 'secret')
+    let swapped = false
+    disk.hooks[name] = (real, ...args) => {
+      const first = (args as unknown[])[0]
+      if (!swapped && (first === file || (typeof first === 'number' && first > 2))) {
+        swapped = true
+        renameSync(file, `${file}.moved`)
+        symlinkSync(join(home, '.ssh', 'note.txt'), file)
+      }
+      return real(...args)
+    }
+    const body = await sent(['--form', `file=@${file}`]).catch((error: unknown) => { expect(error).toMatchObject({ code: 2 }); return '' })
+    expect(swapped).toBe(true)
+    expect(body).not.toContain('secret')
+    if (body) expect(body).toContain('\r\n\r\nchecked\r\n')
+  })
+
   // On Windows the temporary folder holding `home` is the account's AppData\Local\Temp, inside the fenced AppData.
-  it('allows a document elsewhere, also written from ~/', () => {
-    expect(uploadPath(join(home, 'docs', 'note.txt'), { HOME: home })).toBe(join(home, 'docs', 'note.txt'))
-    expect(uploadPath('~/docs/note.txt', { HOME: home })).toBe(join(home, 'docs', 'note.txt'))
+  it('returns the resolved file\'s name and every byte, read from the descriptor it checked', async () => {
+    const doc = join(home, 'docs', 'note.txt')
+    expect(uploadFile(doc, { HOME: home })).toEqual({ name: 'note.txt', content: Buffer.from('x') })
+    expect(uploadFile('~/docs/note.txt', { HOME: home })).toEqual({ name: 'note.txt', content: Buffer.from('x') })
+    writeFileSync(join(home, 'docs', 'empty.txt'), '')
+    expect(uploadFile(join(home, 'docs', 'empty.txt'), { HOME: home }).content.length).toBe(0)
+    const large = Buffer.alloc(1 << 20, 7)
+    writeFileSync(join(home, 'docs', 'large.png'), large)
+    expect(uploadFile(join(home, 'docs', 'large.png'), { HOME: home }).content.equals(large)).toBe(true)
+    // Two files in one command: each part carries its own file's name and bytes.
+    const body = await sent(['--form', `a=@${doc}`, '--form', `b=@${join(home, 'docs', 'empty.txt')}`, '--form', 'title=t'])
+    expect(body).toContain('name="a"; filename="note.txt"\r\nContent-Type: application/octet-stream\r\n\r\nx\r\n')
+    expect(body).toContain('name="b"; filename="empty.txt"\r\nContent-Type: application/octet-stream\r\n\r\n\r\n')
+  })
+
+  it('closes the descriptor whatever the answer', () => {
+    linkSync(join(home, '.ssh', 'note.txt'), join(home, 'docs', 'link.txt'))
+    mkdirSync(join(home, 'docs', 'dir.txt'))
+    for (const [file, answer] of [['docs/note.txt', /^sent$/], ['.ssh/note.txt', /not a media file/], ['docs/link.txt', /not a media file/], ['docs/dir.txt', /not a media file/]] as const) {
+      const { opened, closed } = descriptors()
+      expect(said(join(home, file)), file).toMatch(answer)
+      expect(opened.length, file).toBe(1)
+      expect(closed, file).toEqual(opened)
+    }
+  })
+
+  // An open for reading waits for a FIFO's writer; with O_NONBLOCK it returns at once.
+  it.skipIf(process.platform === 'win32')('never waits on a FIFO named as a document', () => {
+    execFileSync('mkfifo', [join(home, 'docs', 'pipe.txt')])
+    const { opened, closed } = descriptors()
+    expect(said(join(home, 'docs', 'pipe.txt'))).toMatch(/not a media file/)
+    expect(closed).toEqual(opened)
+  }, 5_000)
+
+  it('cannot read a file that is not there, or one this account may not open', () => {
+    const missing = join(home, 'docs', 'none.txt')
+    expect(said(missing)).toBe(`cannot read upload ${missing}`)
+    // Windows has no such mode bits, and root opens anything.
+    if (process.platform === 'win32' || process.getuid?.() === 0) return
+    writeFileSync(join(home, 'docs', 'locked.txt'), 'x')
+    chmodSync(join(home, 'docs', 'locked.txt'), 0)
+    expect(said(join(home, 'docs', 'locked.txt'))).toBe(`cannot read upload ${join(home, 'docs', 'locked.txt')}`)
+  })
+
+  it('opens nothing that is not named as a media file or document, and checks the resolved name too', ctx => {
+    writeFileSync(join(home, 'docs', 'note.exe'), 'x')
+    const { tried, opened, closed } = descriptors()
+    expect(said(join(home, 'docs', 'note.exe'))).toMatch(/only .* files$/)
+    expect(said(join(home, 'docs', 'none.exe'))).toMatch(/only .* files$/)
+    expect(tried).toEqual([])
+    if (!CAN_LINK) ctx.skip()
+    writeFileSync(join(home, 'docs', 'id_rsa'), 'x')
+    symlinkSync(join(home, 'docs', 'id_rsa'), join(home, 'docs', 'pic.png'))
+    expect(said(join(home, 'docs', 'pic.png'))).toMatch(/only .* files$/)
+    symlinkSync(join(home, 'docs', 'note.txt'), join(home, 'docs', 'alias.md'))
+    expect(uploadFile(join(home, 'docs', 'alias.md'), { HOME: home }).name).toBe('note.txt')
+    expect(closed).toEqual(opened)
   })
 })
 
 // A file under the home's Harness folder is never sent, judged by where it really is, while a picture beside that folder is.
-describe('uploadPath around the home\'s Harness folder', () => {
+describe('uploadFile around the home\'s Harness folder', () => {
   const REFUSED = 'not a media file the helper may send'
   let base: string
   let home: string
@@ -296,7 +401,7 @@ describe('uploadPath around the home\'s Harness folder', () => {
 
   it('refuses a file under the home\'s .harness', () => {
     const shot = picture(join(home, '.harness', 'logs', 'shot.png'))
-    expect(() => uploadPath(shot, { HOME: home })).toThrow(REFUSED)
+    expect(() => uploadFile(shot, { HOME: home })).toThrow(REFUSED)
   })
 
   // A junction, which Windows makes with no admin rights; elsewhere the type is ignored and this is a symlink.
@@ -305,13 +410,13 @@ describe('uploadPath around the home\'s Harness folder', () => {
     const shot = picture(join(elsewhere, 'logs', 'shot.png'))
     mkdirSync(home)
     symlinkSync(elsewhere, join(home, '.harness'), 'junction')
-    expect(() => uploadPath(join(home, '.harness', 'logs', 'shot.png'), { HOME: home })).toThrow(REFUSED)
-    expect(() => uploadPath(shot, { HOME: home })).toThrow(REFUSED)
+    expect(() => uploadFile(join(home, '.harness', 'logs', 'shot.png'), { HOME: home })).toThrow(REFUSED)
+    expect(() => uploadFile(shot, { HOME: home })).toThrow(REFUSED)
   })
 
   it('takes a picture beside it', () => {
     mkdirSync(join(home, '.harness'), { recursive: true })
     const shot = picture(join(home, 'pictures', 'shot.png'))
-    expect(uploadPath(shot, { HOME: home })).toBe(realpathSync.native(shot))
+    expect(uploadFile(shot, { HOME: home })).toEqual({ name: 'shot.png', content: Buffer.from('png') })
   })
 })
