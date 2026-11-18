@@ -107,7 +107,7 @@ export function createAgentList({
     const projects: Array<AgentFrame | CloudAgentFrame> = await Promise.all(sessions.map((s) => toProject(s)))
     // Older clients/devices keep their live-only contract. The desktop picker
     // explicitly asks for stopped work and receives no stale terminal routes.
-    const savedSessions = payload.includeStopped === true && sessionRole() !== 'device' ? stoppedAgents.available(sessions) : []
+    const savedSessions = payload.includeStopped === true && sessionRole() !== 'device' ? await stoppedAgents.available(sessions) : []
     projects.push(...await Promise.all(savedSessions.map(s => toStoppedProject(s))))
     // A cloud harness is listed while it runs, and once stopped where stopped agents are asked for.
     projects.push(...cloudFrames().filter((frame) => frame.status !== 'stopped' || (payload.includeStopped === true && sessionRole() !== 'device')))

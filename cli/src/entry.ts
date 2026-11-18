@@ -49,6 +49,8 @@ if (guard?.isOldTeamAccount()) {
   process.exitCode = (await import('./masterProcess.js')).probeThisMaster()
 } else if (command === '__service') {
   await (await import('./serviceProcess.js')).startServiceProcess(name)
+} else if (command === '__storage') {
+  ;(await import('./storage/process.js')).runSessionStorage()
 } else if (command === '__run') {
   // The core: started the one way it is started from the lean bundle too (coreProcess.ts), on cli.js.
   (await import('./coreProcess.js')).startCoreProcess(script)

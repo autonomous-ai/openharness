@@ -38,8 +38,11 @@ export function answerAgentQuery(core: Pick<CoreApi, 'agents' | 'usage' | 'clien
   }
   if (query === 'agentUsage') {
     const target = payload.target
-    if (!validUsageTarget(target) || !core.agents.all().some(row => usageTargetKey(row) === usageTargetKey(target))) return { error: 'STALE_USAGE_TARGET' }
-    return Promise.resolve(core.usage?.(target) ?? null).then(value => ({ target: usageTarget(target), value }))
+    if (!validUsageTarget(target)) return { error: 'STALE_USAGE_TARGET' }
+    return core.agents.all().then(async rows => {
+      if (!rows.some(row => usageTargetKey(row) === usageTargetKey(target))) return { error: 'STALE_USAGE_TARGET' }
+      return { target: usageTarget(target), value: await core.usage?.(target) ?? null }
+    })
   }
   if (query === 'agent_of_pane') {
     // No parents: an older relay's `agent_browser_state` (core/api.ts `ofPane`).
@@ -47,7 +50,7 @@ export function answerAgentQuery(core: Pick<CoreApi, 'agents' | 'usage' | 'clien
     if (typeof payload.pane !== 'string' || ancestors === null) return INVALID
     return Promise.resolve(core.agents.ofPane?.(payload.pane, ancestors) ?? null).then(agent => (agent ? { ...agent } : { agentId: null }))
   }
-  if (query === 'agents') return { agents: core.agents.all().map((session) => ({ ...session, displayName: core.agents.displayName(session) })) }
+  if (query === 'agents') return core.agents.all().then(rows => ({ agents: rows.map(session => ({ ...session, displayName: core.agents.displayName(session) })) }))
   if (query === 'live') return { agents: core.agents.live() }
   if (query === 'advertised') return { agents: core.agents.advertised() }
   return { error: 'UNKNOWN_QUERY' }

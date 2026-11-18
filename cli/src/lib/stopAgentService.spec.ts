@@ -52,9 +52,9 @@ afterEach(async () => { vi.restoreAllMocks(); for (const entry of registry.list(
 it('saves history before removing the runtime, joins concurrent stops, and clears confirmed reservations', async () => {
   const token = stoppedAgents.beginResume(row.agentId); expect(token).toBeTruthy()
   const original = row.agentId
-  vi.mocked(deps.forgetSession).mockImplementation(async (id, options) => { expect(stoppedAgents.get(id)?.sessionId).toBe('saved'); await registry.confirmEngineExit(id, 'remove', options.authority) })
+  vi.mocked(deps.forgetSession).mockImplementation(async (id, options) => { expect((await stoppedAgents.get(id))?.sessionId).toBe('saved'); await registry.confirmEngineExit(id, 'remove', options.authority) })
   const stop = createStopAgentService(deps); const one = stop(original); expect(stop(original)).toBe(one); await one
-  expect(stoppedAgents.get(original)).toMatchObject({ active: false, sessionId: 'saved' })
+  expect((await stoppedAgents.get(original))).toMatchObject({ active: false, sessionId: 'saved' })
   expect(registry.byAgent(original)).toBeUndefined(); expect(deps.stopJobs.size).toBe(0)
   expect(stoppedAgents.beginResume(original)).not.toBeNull(); expect(deps.agentReconciler.suppress).toHaveBeenCalledWith(row)
 })
@@ -64,7 +64,7 @@ it('saves a captured Hermes home with its own mark, never the live row\'s', asyn
   vi.mocked(captureResumeIdentity).mockImplementation(async ({ hermesHomeDerived: _mark, ...session }) => ({ ...session,
     hermesHome: '/home/u/.hermes/profiles/work', source: 'stop-repair' }))
   await createStopAgentService(deps)(row.agentId)
-  const saved = stoppedAgents.get(row.agentId)
+  const saved = (await stoppedAgents.get(row.agentId))
   expect(saved?.hermesHome).toBe('/home/u/.hermes/profiles/work')
   expect(saved?.hermesHomeDerived).toBeUndefined()
 })
@@ -88,12 +88,12 @@ it.each(['forget', 'checkpoint'] as const)('retains a captured Pi resume path th
     if (stage === 'checkpoint' && phase === 'before') {
       // A hook can save the same live row while Close awaits its checkpoint, before tombstones exist.
       expect(row.transcriptPath).toBeNull()
-      stoppedAgents.save({ ...row, title: 'Hook arrived' })
-      expect(stoppedAgents.get(row.agentId)?.transcriptPath).toBe('/fixture/native.jsonl')
+      await stoppedAgents.save({ ...row, title: 'Hook arrived' })
+      expect((await stoppedAgents.get(row.agentId))?.transcriptPath).toBe('/fixture/native.jsonl')
     }
   } })
   expect(registry.byAgent(row.agentId)).toBeUndefined()
-  expect(stoppedAgents.get(row.agentId)).toMatchObject({ sessionId: row.sessionId,
+  expect((await stoppedAgents.get(row.agentId))).toMatchObject({ sessionId: row.sessionId,
     transcriptPath: '/fixture/native.jsonl', active: false })
 })
 it('cancels immediately, then joins the core pane commit before capturing the runtime to stop', async () => {
@@ -126,7 +126,7 @@ it.each(['process alive', 'storage', 'row retained'] as const)('keeps Stop uncon
   })
   await expect(createStopAgentService(deps)(row.agentId)).rejects.toMatchObject({ code: 'STOP_UNCONFIRMED' })
   expect(registry.byAgent(row.agentId)).toBe(row)
-  expect(stoppedAgents.get(row.agentId)?.sessionId).toBe('saved')
+  expect((await stoppedAgents.get(row.agentId))?.sessionId).toBe('saved')
   expect(stoppedAgents.resumeReservedAt(row.agentId)).not.toBeNull()
 })
 it('preserves an unexpected evidence failure without signalling or hiding its cause', async () => {
@@ -152,7 +152,7 @@ it('stops a guest harness by closing its pane, without the native probe or a sig
   expect(tmuxKill).toHaveBeenCalledOnce()
   // Recheck after preparation and again after POSIX directory durability yields to other work.
   expect(checkPidRuntime).toHaveBeenCalledTimes(process.platform === 'win32' ? 3 : 4)
-  expect(stoppedAgents.get(row.agentId)).toMatchObject({ active: false, sessionId: 'saved' })
+  expect((await stoppedAgents.get(row.agentId))).toMatchObject({ active: false, sessionId: 'saved' })
   expect(registry.byAgent(row.agentId)).toBeUndefined()
 })
 it('keeps a guest harness whose process is still running after its pane closed', async () => {
@@ -198,7 +198,7 @@ it('checks the saved guest process after its pane removes the registry row, with
   for (const [session] of vi.mocked(checkPidRuntime).mock.calls) expect(session.processIdentity).toEqual(identity)
   expect(deps.forgetSession).not.toHaveBeenCalled()
   expect(terminateDeletedAgent).not.toHaveBeenCalled()
-  expect(stoppedAgents.get(row.agentId)?.sessionId).toBe('saved')
+  expect((await stoppedAgents.get(row.agentId))?.sessionId).toBe('saved')
 })
 it('waits for the process a starting guest harness gained while it was saved', async () => {
   // Stopped before its engine was seen, which the pane's watcher binds while the screen is saved: an older copy of the
@@ -222,7 +222,7 @@ it('stops a harness that never bound a conversation without one, only when its c
   const unkept = vi.fn()
   await createStopAgentService(deps)(row.agentId, { withoutConversation: unkept })
   expect(unkept).toHaveBeenCalledOnce()
-  expect(stoppedAgents.get(row.agentId)).toMatchObject({ active: false, sessionId: '' })
+  expect((await stoppedAgents.get(row.agentId))).toMatchObject({ active: false, sessionId: '' })
   expect(registry.byAgent(row.agentId)).toBeUndefined()
 })
 it.each(['a bound conversation', 'a known transcript', 'a bind time', 'a conversation seen live', 'another failure'] as const)('never lets go of %s that cannot be read', async kind => {
@@ -266,7 +266,7 @@ it.each(['terminal', 'without tmux', 'failed process', 'failed tmux'] as const)(
     expect(deps.forgetSession).not.toHaveBeenCalled()
     expect(deps.agentReconciler.suppress).not.toHaveBeenCalled()
   } else await stopping
-  expect(stoppedAgents.get(row.agentId)).not.toBeNull(); expect(deps.agentReconciler.trigger).toHaveBeenCalledOnce()
+  expect((await stoppedAgents.get(row.agentId))).not.toBeNull(); expect(deps.agentReconciler.trigger).toHaveBeenCalledOnce()
   expect(stoppedAgents.beginResume(row.agentId) === null).toBe(mode === 'failed process' || mode === 'failed tmux')
 })
 
@@ -323,7 +323,7 @@ it.each(['codex', 'terminal'] as const)('stops a pty host %s through its own bac
   expect(ptyKill).toHaveBeenCalledExactlyOnceWith(pty, expect.any(Function))
   expect(tmuxKill).not.toHaveBeenCalled()
   expect(registry.byAgent(row.agentId)).toBeUndefined()
-  expect(stoppedAgents.get(row.agentId)).toMatchObject({ active: false })
+  expect((await stoppedAgents.get(row.agentId))).toMatchObject({ active: false })
 })
 it('closes each pane of a mixed row on its own backend, the tmux one as before', async () => {
   withPtyHost()
@@ -472,7 +472,7 @@ it.each(['capture', 'termination'] as const)('accepts a hook rebuilding the same
   await createStopAgentService(deps)(row.agentId)
   expect(deps.forgetSession).toHaveBeenCalledExactlyOnceWith(row.agentId, { force: true, captured: expect.objectContaining({ sessionId: 'saved' }), authority: expect.objectContaining({ current: expect.any(Function), refresh: expect.any(Function) }) })
   expect(registry.byAgent(row.agentId)).toBeUndefined()
-  expect(stoppedAgents.get(row.agentId)?.sessionId).toBe('saved')
+  expect((await stoppedAgents.get(row.agentId))?.sessionId).toBe('saved')
 })
 it('routes the stop signal through the agent signaller', async () => {
   const injected = vi.fn(); setAgentSignaller(injected)
@@ -530,7 +530,7 @@ it.each(['claude', 'codex'] as const)('captures an unbound %s conversation befor
     return { ...session, sessionId: 'recovered', transcriptPath: '/history.jsonl', boundAt: 1, source: 'stop-repair' }
   })
   await createStopAgentService(deps)(row.agentId)
-  expect(stoppedAgents.get(row.agentId)).toMatchObject({ engine, sessionId: 'recovered', transcriptPath: '/history.jsonl' })
+  expect((await stoppedAgents.get(row.agentId))).toMatchObject({ engine, sessionId: 'recovered', transcriptPath: '/history.jsonl' })
   expect(deps.markDeleted).toHaveBeenCalledWith('recovered')
 })
 it.each(['removed', 'replaced'] as const)('does not stop a process that was %s during identity capture', async mode => {
@@ -542,7 +542,7 @@ it.each(['removed', 'replaced'] as const)('does not stop a process that was %s d
   await expect(createStopAgentService(deps)(row.agentId)).rejects.toThrow('Harness changed')
   expect(tmuxKill).not.toHaveBeenCalled()
   expect(terminateDeletedAgent).not.toHaveBeenCalled()
-  expect(stoppedAgents.get(row.agentId)).toBeNull()
+  expect((await stoppedAgents.get(row.agentId))).toBeNull()
 })
 it('keeps the newer hook binding that arrives during capture', async () => {
   row.sessionId = ''
@@ -551,7 +551,7 @@ it('keeps the newer hook binding that arrives during capture', async () => {
     return { ...session, sessionId: 'older' }
   })
   await createStopAgentService(deps)(row.agentId)
-  expect(stoppedAgents.get(row.agentId)?.sessionId).toBe('latest')
+  expect((await stoppedAgents.get(row.agentId))?.sessionId).toBe('latest')
 })
 
 it('checks cancellation at the shared-server boundary and never signals after a failure there', async () => {

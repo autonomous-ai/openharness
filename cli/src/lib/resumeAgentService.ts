@@ -48,7 +48,7 @@ export interface ResumeAgentServiceDeps {
   prepareSessionResume(session: RegisteredSession, current: () => boolean): Promise<boolean>
   /** Stops a Claude Code background job holding the session before `--resume`, in its worker (core/engines/backgroundJobs.ts). */
   stopBackgroundJob?: ClearBackgroundJob
-  refreshGridWebSearch(agentId: string, overrides: LaunchOverrides): void
+  refreshGridWebSearch(agentId: string, overrides: LaunchOverrides, current?: () => boolean): Promise<void>
   clearDeleted(agentId: string): void
   /** A look at the resumed agent, for the services that follow agents (core/agentLife.ts `running`): its harness's viewer
    *  and its browser come back with it. */
@@ -267,6 +267,8 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       return !registry.bySession(saved.sessionId) && (await checkPidRuntime(saved)).state === 'gone'
     },
     launch: async (saved, resumeSessionId) => {
+      // The selected archive object owns its exact read proof; launch choices below are copies.
+      const archiveSelection = saved
       // As a create with no backend ready answers (core/agents/create.ts).
       if (!createBackend) return { ok: false, error: noBackendCode }
       // An explicit change is checked before allocating anything, and is persisted with the
@@ -310,7 +312,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         if (transcript) saved = { ...saved, transcriptPath: transcript.path }
         let sourceError: unknown
         const sourceCurrent = () => {
-          if (!current() || sourceError) return false
+          if (!current() || !stoppedAgents.current(archiveSelection) || sourceError) return false
           if (saved.sessionId && registry.bySession(saved.sessionId)) {
             sourceError = new IdentityReadUnavailable('another live harness owns this conversation')
             return false
@@ -461,7 +463,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
           return resumeChanged
         }
         if (!matchesLaunchReceipt(registry.byAgent(pending.agentId), pending)) return resumeChanged
-        refreshGridWebSearch(pending.agentId, built.overrides)
+        await refreshGridWebSearch(pending.agentId, built.overrides, current)
         const refreshed = registry.byAgent(pending.agentId)
         // Admission replies are detached. Only the two launch metadata fields above may have changed.
         if (!current() || !refreshed || !matchesLaunchReceipt(refreshed, { ...pending,

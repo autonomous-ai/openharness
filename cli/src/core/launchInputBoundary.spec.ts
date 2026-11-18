@@ -21,8 +21,11 @@ import { createGuestCreate } from './agents/guestCreate.js'
 import { GUEST_LAUNCH_UNAVAILABLE, type GuestLaunch, type GuestLaunchInput } from './api.js'
 
 const override = { networkId: 'test-grid', networkName: 'Test', baseUrl: 'https://fixture.invalid/relay/v1', apiKey: 'synthetic-key', model: 'test-model' }
-const request = (engine: AgentEngine = 'claude'): GridLaunchRequest => ({ engine, override, machine: { hermesSystemManaged: false, grokHome: '/private/fixture/grok' } })
-const built = (input: GridLaunchRequest) => answerGridLaunch(input, value => ({ override: value }))
+const request = (engine: AgentEngine = 'claude'): GridLaunchRequest & { override: typeof override } => ({ engine, override, machine: { hermesSystemManaged: false, grokHome: '/private/fixture/grok' } })
+const built = (input: GridLaunchRequest) => {
+  if (!('apiKey' in input.override)) throw Error('This wire fixture expects a freshly supplied override')
+  return answerGridLaunch({ ...input, override: input.override }, value => ({ override: value }))
+}
 const modelsPort = (answer: unknown) => createModelsLink(fakeCore(), async () => answer as Record<string, unknown>, () => true).port
 const models = (answer: unknown) => ({ gridLaunch: gridLaunchThrough(() => modelsPort(answer)) })
 const storeRequest = { dsh: 'test/draw', workspace: '/private/fixture/work', engine: 'claude' as const, key: 'session', account: {} }

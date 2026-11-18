@@ -27,6 +27,10 @@ import type { AgentEngine } from '../engines/types.js'
 import type { TerminalBackendCapabilities } from '../lib/terminalTypes.js'
 import { gridLaunchRequestIn } from '../services/modelsProcess.js'
 import { gridLaunchInProcess } from './gridLaunchInProcess.js'
+import { inspectNativeLaunch } from './nativeSetupInProcess.js'
+import { createRestoreLaunch } from '../core/agents/restoreLaunch.js'
+import { restoreLaunchComposition } from './restoreLaunchComposition.js'
+import type { LaunchOverridesResult } from '../lib/launchOverrides.js'
 
 export interface LaunchWorld {
   /** The data folder: saved APIs, and the config directories written for file-configured engines. */
@@ -88,6 +92,8 @@ export function launchShapes(world: LaunchWorld) {
   const dshLaunch = dshThrough({ store: () => link.port, nameOf: () => undefined,
     account: () => ({ privateGrid: gridName() }) })
   const launchOverridesDeps: LaunchOverridesDeps = {
+    native: (engine, source) => inspectNativeLaunch(engine, source),
+    prepareNative: (native, current, environment, clear) => native.prepareHooks(0, current, environment, clear),
     machine: world.machine,
     gridLaunch,
     writeGridConfigDir,
@@ -102,9 +108,19 @@ export function launchShapes(world: LaunchWorld) {
     setGridLaunch: world.setGridLaunch as never, prepareResume: async () => ({ repairedItems: 0 }),
   })
   return {
-    create: (rest: CreateRest) => createAgentCreator({ ...rest, gridLaunchMachine: world.machine, buildGridLaunch: gridLaunch, prepareInstructions, dshLaunch }),
+    create: (rest: CreateRest) => createAgentCreator({ native: (engine, source) => inspectNativeLaunch(engine, source),
+      ...rest, syncProfileHome: rest.syncProfileHome ?? (async () => []), gridLaunchMachine: world.machine, buildGridLaunch: gridLaunch, prepareInstructions, dshLaunch }),
     relaunch: (session: RegisteredSession, source?: LaunchSource) => helpers.relaunchOverrides(session, source),
-    fork: (rest: ForkRest) => createAgentForker({ opencodeMajor: opencodeMajorVersion, ...rest, prepareInstructions, relaunchOverrides: helpers.relaunchOverrides, gridName, dshLaunch }),
+    finalRelaunch: async (session: RegisteredSession, built: LaunchOverridesResult) => {
+      const restore = createRestoreLaunch({
+        workspaceMissing: () => null, relaunchOverrides: async () => built.ok ? { ...built, overrides: { ...built.overrides } } : built,
+        downgradedPermission: (row, native) => helpers.downgradedPermission(row, false, 'restore', native),
+        prepareSessionResume: async () => {}, refreshGridWebSearch: async () => {}, launch: restoreLaunchComposition,
+      })
+      return restore(session, { current: () => true, prepare: false })
+    },
+    fork: (rest: ForkRest) => createAgentForker({ native: (engine, source) => inspectNativeLaunch(engine, source),
+      prepareNative: launchOverridesDeps.prepareNative, opencodeMajor: opencodeMajorVersion, ...rest, prepareInstructions, relaunchOverrides: helpers.relaunchOverrides, gridName, dshLaunch }),
     validate: (engine: AgentEngine, source: LaunchSource) => validateLaunchOverrides(launchOverridesDeps, engine, source),
     /** The line retarget logs once a move onto a grid succeeded. */
     retargetLine: (engine: AgentEngine, overrides: LaunchOverrides): string | null => overrides.gridLaunchRecord

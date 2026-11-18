@@ -1,3 +1,4 @@
+import { storedGridFixture } from '../../testing/gridCredentials.js'
 import { homedir } from 'node:os'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildEngineLaunchArgv } from '../../lib/engineLaunch.js'
@@ -605,7 +606,7 @@ describe('restarting an agent', () => {
       const old = { baseUrl: 'https://grid.example/old/relay', model: null }
       // The saved API's endpoint as saved now: the record a relaunch refreshes (apiModels.ts `refreshApiLaunch`).
       const override = { networkId: 'api', networkName: 'Saved', baseUrl: 'https://saved.example/now/v1', apiKey: 'k', model: 'm' }
-      const onGrid = setup(agent({ grid: old, gridLaunch: { ...override, baseUrl: 'https://saved.example/then/v1' } } as Partial<RegisteredSession>), {
+      const onGrid = setup(agent({ grid: old, gridLaunch: storedGridFixture({ ...override, baseUrl: 'https://saved.example/then/v1' }) } as Partial<RegisteredSession>), {
         relaunchOverrides: vi.fn(async () => ({ ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [], gridLaunchRecord: { override, webSearch: 'on' } } })) as never,
       })
       await onGrid.restart('a1')

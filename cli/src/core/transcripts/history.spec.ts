@@ -26,6 +26,12 @@ import { wholeHistoryPage } from '../../engines/others/transcripts.js'
 import { createStoreOf } from './stores.js'
 import { loadEngine } from '../../engines/inProcess.js'
 
+const deferred = () => {
+  let resolve!: () => void
+  const promise = new Promise<void>(done => { resolve = done })
+  return { promise, resolve }
+}
+
 /**
  * `session_get`, answered by the core: which reader, replay and window each engine's history goes
  * through, and the reply that comes back, field for field.
@@ -134,7 +140,7 @@ function setup(s?: RegisteredSession, kept: RegisteredSession[] = [], readerFor?
   const hermesDb = vi.fn(async (_s: RegisteredSession) => '/profiles/work/state.db')
   const deps = {
     resolve: vi.fn((id: string) => (s && (id === s.sessionId || id === s.agentId) ? s : undefined)),
-    stopped: vi.fn(() => kept),
+    stopped: vi.fn(async () => kept),
     lineCount: pages.lineCount,
     readerFor: readerFor ?? ((engine: string) => {
       const reader = engineTranscriptFor(engine)
@@ -624,9 +630,11 @@ describe('history crossing a reader boundary', () => {
       const s = session('claude', { transcriptPath: '/read.jsonl' })
       let finish!: () => void
       const waiting = new Promise<void>((r) => { finish = r })
-      const adapter = { historyPage: async () => { await waiting; return { events: [], timestamp: MTIME.toISOString() } }, lastTurnText: async () => null }
+      const entered = deferred()
+      const adapter = { historyPage: async () => { entered.resolve(); await waiting; return { events: [], timestamp: MTIME.toISOString() } }, lastTurnText: async () => null }
       const h = setup(s, [], () => adapter)
       const result = h.sessionGet({ sessionId: s.sessionId })
+      await entered.promise
       if (change === 'mutate') s.transcriptPath = '/replacement.jsonl'
       else h.deps.resolve.mockReturnValue(undefined)
       finish()

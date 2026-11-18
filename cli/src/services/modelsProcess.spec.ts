@@ -256,7 +256,7 @@ describe('the core API models runs on in its own process', () => {
 
   it('has no agents of its own and drives none: what models never asks answers as nothing', async () => {
     const { ask, api } = asking({})
-    expect([api.agents.all(), api.agents.live(), api.agents.advertised(), api.agents.displayName({} as never)]).toEqual([[], [], [], ''])
+    expect([(await api.agents.all()), api.agents.live(), api.agents.advertised(), api.agents.displayName({} as never)]).toEqual([[], [], [], ''])
     expect([api.agents.byAgent('a1'), api.agents.resolve('a1'), api.agents.terminalAvailable('a1'), api.agents.runtimeProfile({} as never)]).toEqual([undefined, undefined, false, null])
     api.agents.sync({} as never)
     api.agents.setRuntime('a1')

@@ -24,7 +24,7 @@ import type { StoppedAgentStore } from '../../lib/stoppedAgents.js'
 type Frame = { type: string; payload: Record<string, unknown> }
 
 export interface ConversationOwnersDeps {
-  stoppedAgents: Pick<StoppedAgentStore, 'list' | 'get' | 'supersede' | 'resumeReservedAt'>
+  stoppedAgents: Pick<StoppedAgentStore, 'list' | 'selectConversations' | 'get' | 'supersede' | 'resumeReservedAt' | 'current'>
   /** The running harnesses (`registry.list()`). */
   live: () => readonly RegisteredSession[]
   /** The app (`send`) and the dial (`sendCommander`). */
@@ -50,9 +50,10 @@ export function createConversationOwners(deps: ConversationOwnersDeps) {
    * core starts, after a harness binds a conversation new to it, and after a stopped harness's last record is
    * saved: a stop can keep a conversation another harness has since taken (lib/stoppedAgents.ts `save`).
    */
-  const settle = (keys?: ReadonlyArray<string | null>): string[] => {
+  const settle = async (keys?: ReadonlyArray<string | null>): Promise<string[]> => {
     const wanted = keys ? new Set(keys.filter((key): key is string => !!key)) : null
     if (wanted?.size === 0) return []
+    const archived = wanted ? await deps.stoppedAgents.selectConversations([...wanted]) : await deps.stoppedAgents.list()
     const live = deps.live()
     const running = new Set(live.map((row) => row.agentId))
     const groups = new Map<string, { live: RegisteredSession[]; stopped: RegisteredSession[] }>()
@@ -65,7 +66,7 @@ export function createConversationOwners(deps: ConversationOwnersDeps) {
     }
     for (const row of live) add(row, 'live')
     // A running harness's own record follows it and is never a second owner.
-    for (const row of deps.stoppedAgents.list()) if (!running.has(row.agentId)) add(row, 'stopped')
+    for (const row of archived) if (!running.has(row.agentId)) add(row, 'stopped')
     const setAside: string[] = []
     for (const group of groups.values()) {
       if (!group.stopped.length || group.live.length + group.stopped.length < 2) continue
@@ -76,7 +77,14 @@ export function createConversationOwners(deps: ConversationOwnersDeps) {
         const reserved = deps.stoppedAgents.resumeReservedAt(row.agentId)
         if (reserved !== null && now() - reserved <= deps.reservationMs) continue
         try {
-          if (!deps.stoppedAgents.supersede(row.agentId)) continue
+          if (!await deps.stoppedAgents.supersede(row.agentId, () => {
+            const current = deps.live()
+            const reservation = deps.stoppedAgents.resumeReservedAt(row.agentId)
+            if (current.some(live => live.agentId === row.agentId) || reservation !== null && now() - reservation <= deps.reservationMs
+              || !deps.stoppedAgents.current(row)) return false
+            const liveOwner = current.find(live => conversationKey(live) === conversationKey(row))
+            return liveOwner ? liveOwner.agentId === owner.agentId : deps.stoppedAgents.current(owner)
+          })) continue
         } catch (error) {
           console.warn(`[agent] ${sid(row.agentId)} could not be set aside for ${sid(owner.agentId)} · ${error instanceof Error ? error.message : error}`)
           continue
@@ -94,8 +102,8 @@ export function createConversationOwners(deps: ConversationOwnersDeps) {
    * Settles the conversation a stopped harness's record holds as saved, which can be one the row given to the
    * save no longer named (`StoppedAgentStore.save` keeps a known conversation through an unbound observation).
    */
-  const settleSaved = (agentId: string): string[] => {
-    const saved = deps.stoppedAgents.get(agentId)
+  const settleSaved = async (agentId: string): Promise<string[]> => {
+    const saved = await deps.stoppedAgents.get(agentId)
     return saved ? settle([conversationKey(saved)]) : []
   }
 

@@ -76,7 +76,7 @@ describe('which OpenCode the core asks for, for a named agent', () => {
           return { ok: false, error: 'RECORDED' }
         },
         forkAgent: () => null, resumeAgent: () => null, restartAgent: () => null,
-        byAgent: () => undefined, stoppedAgent: () => undefined, toProject: async () => ({}) as never, modelTarget: async () => null as never,
+        byAgent: () => undefined, stoppedAgent: async () => undefined, toProject: async () => ({}) as never, modelTarget: async () => null as never,
         workspaces: () => null,
       })
       const results: unknown[] = []

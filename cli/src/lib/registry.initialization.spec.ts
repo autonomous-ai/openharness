@@ -44,6 +44,7 @@ afterEach(async () => {
   release?.(); release = undefined; turns.pause = undefined
   await Promise.allSettled(pending.splice(0))
   await registry.flush({ exiting: true }).catch(() => {})
+  await (await import('./sessionStorage.js')).sessionStorage.close()
   vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.resetModules(); rmSync(root, { recursive: true, force: true })
 })
 
@@ -58,7 +59,7 @@ function pausedLoad() {
 }
 
 it('keeps initial image I/O owned without using the blocking reader or admitting callers', async () => {
-  const persistence = await import('./registryPersistence.js'), read = persistence.readPrivateRegistryFile
+  const { sessionStorage } = await import('./sessionStorage.js'), read = sessionStorage.read.bind(sessionStorage)
   const secure = await import('./secureState.js'), readSync = secure.readPrivateStateFile
   const entered = deferred(), resumed = deferred()
   release = resumed.resolve
@@ -67,8 +68,8 @@ it('keeps initial image I/O owned without using the blocking reader or admitting
     return readSync(path, limit)
   })
   let held = false
-  vi.spyOn(persistence, 'readPrivateRegistryFile').mockImplementation(async (...args) => {
-    if (args[0] === file && !held) { held = true; entered.resolve(); await resumed.promise }
+  vi.spyOn(sessionStorage, 'read').mockImplementation(async (...args) => {
+    if (args[0].kind === 'registry' && !held) { held = true; entered.resolve(); await resumed.promise }
     return read(...args)
   })
   const loading = registry.load(); pending.push(loading)
@@ -87,7 +88,7 @@ it('keeps initial image I/O owned without using the blocking reader or admitting
 it('owns the recovery read through settlement before moving the exact corrupt image aside', async () => {
   const original = 'fixture invalid JSON'
   writeFileSync(file, original, { mode: 0o600 })
-  const persistence = await import('./registryPersistence.js'), read = persistence.readPrivateRegistryFile
+  const { sessionStorage } = await import('./sessionStorage.js'), read = sessionStorage.read.bind(sessionStorage)
   const secure = await import('./secureState.js'), readSync = secure.readPrivateStateFile
   const entered = deferred(), resumed = deferred()
   release = resumed.resolve
@@ -96,8 +97,8 @@ it('owns the recovery read through settlement before moving the exact corrupt im
     if (path === file && ++synchronousReads > 1) throw new Error('fixture: recovery disk read cannot run in line')
     return readSync(path, limit)
   })
-  vi.spyOn(persistence, 'readPrivateRegistryFile').mockImplementation(async (...args) => {
-    if (args[0] === file && ++asynchronousReads === 2) { entered.resolve(); await resumed.promise }
+  vi.spyOn(sessionStorage, 'read').mockImplementation(async (...args) => {
+    if (args[0].kind === 'registry' && ++asynchronousReads === 2) { entered.resolve(); await resumed.promise }
     return read(...args)
   })
   const loading = registry.load(); pending.push(loading)
@@ -150,11 +151,11 @@ it('seals public admission on exit but lets owned initialization settle before c
 
 it('keeps the previous complete view while an already admitted writer drains before reload', async () => {
   await registry.load()
-  const persistence = await import('./registryPersistence.js'), prepare = persistence.prepareRegistryImage
+  const publication = await import('./sessionPublication.js'), prepare = publication.prepareSessionPublication
   const entered = deferred(), resumed = deferred()
   release = resumed.resolve
-  vi.spyOn(persistence, 'prepareRegistryImage').mockImplementation(async (...args) => {
-    if (args[0] === file) { entered.resolve(); await resumed.promise }
+  vi.spyOn(publication, 'prepareSessionPublication').mockImplementation(async (...args) => {
+    if (args[1].kind === 'registry') { entered.resolve(); await resumed.promise }
     return prepare(...args)
   })
   const plan = { id: '12345678-1234-1234-1234-123456789012', identity: 'fixture-conversation', requestedAt: Date.now(), state: 'waiting' as const }
@@ -218,11 +219,11 @@ it.each(['new row', 'stolen binding', 'cancelled close'] as const)('rebases a co
 })
 
 it('keeps initialization and migration markers behind required durable publication', async () => {
-  const persistence = await import('./registryPersistence.js'), prepare = persistence.prepareRegistryImage
+  const publication = await import('./sessionPublication.js'), prepare = publication.prepareSessionPublication
   const entered = deferred(), resumed = deferred()
   release = resumed.resolve
-  vi.spyOn(persistence, 'prepareRegistryImage').mockImplementation(async (...args) => {
-    if (args[0] === file) { entered.resolve(); await resumed.promise }
+  vi.spyOn(publication, 'prepareSessionPublication').mockImplementation(async (...args) => {
+    if (args[1].kind === 'registry') { entered.resolve(); await resumed.promise }
     return prepare(...args)
   })
   let ready = false
@@ -240,8 +241,12 @@ it('keeps initialization and migration markers behind required durable publicati
 
 it('rejects a failed migration without exposing a partial image or advancing its markers', async () => {
   const before = readFileSync(file, 'utf8')
-  const persistence = await import('./registryPersistence.js')
-  vi.spyOn(persistence, 'prepareRegistryImage').mockRejectedValue(new Error('fixture write failure'))
+  const publication = await import('./sessionPublication.js')
+  const prepare = publication.prepareSessionPublication
+  vi.spyOn(publication, 'prepareSessionPublication').mockImplementation(async (...args) => {
+    if (args[1].kind === 'registry') throw new Error('fixture write failure')
+    return prepare(...args)
+  })
   await expect(registry.load()).rejects.toThrow()
   expect(registry.list()).toHaveLength(0)
   expect(readFileSync(file, 'utf8')).toBe(before)

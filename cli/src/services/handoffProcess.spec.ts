@@ -135,8 +135,8 @@ describe('the handoff in the edge host', () => {
       }
       const publicationErrors: unknown[] = []
       const commit = createHandoffPublisher({ directory: join(ws, 'daemon-data'),
-        resolve: id => Object.values(agents).find(agent => agent.agentId === id) as never,
-        ownedByOther: () => false, isRecentlyDeleted: () => false, deadlineMs: LOADED_HANDOFF_MS })
+        authority: async () => ({ resolve: id => Object.values(agents).find(agent => agent.agentId === id) as never,
+          ownedByOther: () => false, current: () => true }), isRecentlyDeleted: () => false, deadlineMs: LOADED_HANDOFF_MS })
       const publish = async (prepared: PreparedHandoff) => {
         try { return await commit(prepared, { current: () => true }) } catch (error) { publicationErrors.push(error); throw error }
       }

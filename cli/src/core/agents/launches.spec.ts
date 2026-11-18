@@ -109,7 +109,7 @@ function setup(over: Partial<LaunchRequestDeps> = {}, launches: { create?: Creat
         refusal: installed.manifest.kind === 'viewer' ? `${dsh} is a viewer package, not an agent`
           : engines.includes(engine) ? null : `${dsh} supports ${engines.join(', ')}; ${engine} is not compatible` }
     },
-    stoppedAgent: () => undefined,
+    stoppedAgent: async () => undefined,
     workspaces: () => workspaces,
     prepareFolderTrust: async ({ engine, cwd, profile, source }) => {
       if (engine === 'claude' && (!source || claudeTrusts(source))) preTrustClaudeProject(cwd)
@@ -1520,7 +1520,7 @@ describe('agent_restart with launchArgs', () => {
   it('resumes a stopped agent with them: its engine is read from the stopped store', async () => {
     const stopped = { ...session('a1'), engine: 'codex' as const }
     const resume = vi.fn(async () => ({ ok: true as const, session: stopped, resumed: true }))
-    const run = setup({ byAgent: () => undefined, stoppedAgent: (id) => id === 'a1' ? stopped : undefined }, { resume })
+    const run = setup({ byAgent: () => undefined, stoppedAgent: async (id) => id === 'a1' ? stopped : undefined }, { resume })
     // Codex's own -c is the owner's to use; a key Harness sets is not, and the engine is the stopped row's.
     expect(await run.relaunch('agent_resume', { agentId: 'a1', launchArgs: '-c model=x' })).toMatchObject({ error: 'INVALID_LAUNCH_ARGS' })
     expect(await run.relaunch('agent_resume', { agentId: 'a1', launchArgs: '-c model_reasoning_effort=high' })).toMatchObject({ resumed: true })

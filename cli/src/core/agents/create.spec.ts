@@ -1,3 +1,4 @@
+import { gridLaunchInProcess } from '../../testing/gridLaunchInProcess.js'
 import { chmodSync, mkdirSync, mkdtempSync, opendirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -25,8 +26,6 @@ import { projectsRoot } from '../../lib/projectFolder.js'
 import { NativeFiles } from '../../engines/kit/nativeFiles.js'
 import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
 import { ApiConnections } from '../../lib/apiConnections.js'
-import { refreshApiFor } from '../../lib/apiModels.js'
-import { answerGridLaunch } from '../../lib/gridLaunch.js'
 import { gridLaunchThrough } from './launch.js'
 import { AgentCreationReceipts } from '../../lib/agentCreationReceipt.js'
 import { createLaunchRequests } from './launches.js'
@@ -267,7 +266,7 @@ describe('creating an agent', () => {
       const store = new ApiConnections(folder())
       const connection = store.save({ provider: 'custom', name: 'Fixture API', baseUrl: 'https://old.example.test/v1', apiKey: 'FAKE-old-key' })
       const grid = { networkId: `api:${connection.id}`, networkName: connection.name, baseUrl: connection.baseUrl, apiKey: 'FAKE-old-key', model: 'fixture-model' }
-      const models = vi.fn(async (input: GridLaunchRequest) => answerGridLaunch(input, refreshApiFor(store)))
+      const models = vi.fn(async (input: GridLaunchRequest) => gridLaunchInProcess(store)(input))
       const run = setup({ buildGridLaunch: gridLaunchThrough(() => ({ gridLaunch: models })), ...over })
       const rotate = () => store.save({ ...connection, name: 'Current API', baseUrl: 'https://current.example.test/v1', apiKey: 'FAKE-current-key' })
       return { ...run, store, connection, grid, models, rotate }
@@ -327,7 +326,7 @@ describe('creating an agent', () => {
       const requests = createLaunchRequests({
         receipts, createAgent: () => run.create, prepareCreate: run.create.prepare,
         forkAgent: () => null, resumeAgent: () => null, restartAgent: () => null,
-        byAgent: id => id === pending.agentId ? pending : undefined, stoppedAgent: () => undefined,
+        byAgent: id => id === pending.agentId ? pending : undefined, stoppedAgent: async () => undefined,
         toProject: async row => ({ id: row.agentId }) as never,
         modelTarget: async () => null, workspaces: () => WORKSPACES_OFF,
       })

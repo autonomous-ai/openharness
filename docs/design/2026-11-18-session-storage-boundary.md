@@ -1,0 +1,351 @@
+# Session storage prerequisite for Grid custody
+
+Approved Design, 18 November 2026. The coordinator selected alternative B from
+[the custody alternatives](2026-11-18-grid-credential-custody.md): a required session-storage child handles
+private image reads and preparation; core retains session ownership and final publication. This is not an
+optional models service and not a universal data converter. The coordinator approved the choices below before
+runtime implementation: private stable bindings, parent-owned recovery descriptors and the existing JSON codec.
+
+**Acceptance for this increment:** no legacy Grid plaintext in current core's file-read bytes, parsed session
+rows, catalog cache, persistence baseline or unconfirmed recovery snapshots. Old-readable live/stopped files
+remain the sole durable authority, with literal keys, during a release-dated compatibility window. This does
+not complete the eventual removal of keys from those files. No new permanent plaintext store is introduced.
+
+## Bootstrap and process lifetime
+
+`main.ts` awaits `registry.load()` before creating the service links/local request handlers. Storage therefore
+uses a core-owned child with inherited IPC, started from the same admitted immutable execution payload before
+the first registry/stopped read. It is a required session subsystem, outside `HARNESSD_SERVICES`; disabling or
+crashing models cannot disable persistence. No extra public socket, service token, broker or arbitrary pathname
+operation. The child entry loads only Node built-ins, the private image codec and filesystem helpers; it imports
+no Registry, session-control code, models implementation or `core/main.ts`.
+
+Only fixed document selectors are accepted: live registry, one stopped agent, one superseded stopped agent,
+and the existing names document when used by a registry transaction. Agent ids use the existing 128-character
+safe-id rule. Root/data paths are bound at child startup, not accepted from each request. In source and bundled
+execution, the child uses the admitted cohort's entry and exact child mode, with its own runtime name; the bundle
+inventory and cohort plan must prove it. `HARNESS_NO_MASTER` still gets this same required child. There is no
+automatic plaintext inline fallback on spawn failure. Tests inject a transport; they do not silently change
+production process ownership.
+
+IPC close or core shutdown immediately revokes new reads/preparation. Core requests child termination and owns
+its PID until actual exit. Reply deadlines revoke the caller's permission but do not free its active slot.
+Expiration terminates the child; replacement is demand driven and starts only after reap. Parent filesystem
+opens and write leases also settle before shutdown acknowledges completion. No unbounded reconnect loop or child herd.
+
+This required composition uses private `WORKER_CONTRACT = 3`. A contract-2 parent cannot admit this core or its
+storage child, and a contract-3 parent cannot mix in an older storage implementation. A historical complete
+contract-2 cohort still admits its own children and can read the retained legacy files. No public client protocol
+or stored schema version changes. Full and lean entries dispatch `__storage` only after their first-import
+admission guard. `executedEntry.ts` captures the original immutable file/hash before canonical argv rewriting;
+`sessionStorageOwner.ts` retains a standalone artifact claim through actual storage shutdown. The existing named
+Node mechanism labels the child `harnessd-storage` where supported, with its existing plain-Node fallback.
+
+## Typed transport and bounds
+
+One active image preparation and one active read per child; at most 64 queued caller operations, matching the
+current Registry write queue. Calls carry a monotonically allocated id, child incarnation and absolute deadline.
+Admit at most 1 MiB per IPC frame. Images use an ordered begin/page/end transfer, so a peer cannot allocate an
+arbitrary array from a claimed count. Keep one page in each direction and credit it before sending another.
+Cancellation and actual settlement are separate states. Parsing, byte hashing and JSON encoding of raw images
+happen in the child. Core still parses/validates its bounded metadata pages and owns the complete session table.
+
+Registry has no current whole-image or row byte cap. `title`, `firstTask`, paths, runtime arrays, launch argument
+arrays and preserved unknown fields have no finite schema maximum. The raw Grid parser likewise has no key
+length limit; the saved-API store's 8-KiB limit does not apply to legacy Grid rows. Existing stopped coverage
+requires ten records with 512-KiB titles to remain visible despite the 4-MiB catalog cache; its existing per-file
+1-MiB cap remains unchanged. A speculative cap or custom JSON parser would change those contracts. The child
+therefore retains the existing JSON parse/stringify codec and projects serialized metadata through bounded IPC
+frames. Whole-image child RSS and retained core metadata growth remain explicit residuals to measure, not a
+completed bounded-image claim. Preserved unknown fields survive reconstruction unchanged.
+
+The canonical wire types are `SessionDocument`, `SessionImageProof`, `SessionStorageOperation`,
+`SessionPreparedImage` and `StoppedArchiveQuery` in `cli/src/lib/sessionStorageWire.ts`. An image proof is
+`{ document, identity, bytes, sha256 }`; `identity` preserves the complete BigInt stat tuple as a decimal string.
+A request carries `{ expires, operation }`, and its reply is `{ ok: true, value }` or `{ ok: false, code }`.
+The exact operations are `read`, `equal`, `prepare`, `discard`, `import`, `release`, `resolve` and
+`stopped-query`. `read` optionally names a retained source lease. `prepare` carries the selected document,
+source proof, safe candidate metadata, exact empty temporary reservation, and optional raw-source proof for
+legacy quarantine. The result carries the temporary leaf, proof and projected metadata. Publication and
+settlement are parent operations; there is no child `publish` or `finish` command.
+
+`sessionStorageFrames.ts` transports these logical messages with `begin`, `page`, `end` and `credit` frames.
+Every frame carries protocol, random child incarnation, request id and sequence; each sender holds its whole
+message slot until the last credited frame settles. Frames are at most 1 MiB and pages at most 64 Ki characters,
+with one credited page in flight. There is one active request and at most 64 waiting requests. The legacy
+logical image is not capped; its safe projected serialization remains a measured memory residual.
+
+Initialization is the single `session-storage-init-1` message containing the private root, stopped directory
+leaf, random incarnation and at most two retained source proofs/leases mapped to inherited descriptors 4 and 5.
+The child replies `session-storage-ready-1` for that incarnation. A lease is an opaque random id, not a
+credential or permission to launch/rename. IPC errors contain only fixed failure codes, never bytes, rows,
+refs, paths, OS messages carrying those values, or rejected payloads.
+
+## Read, merge and publication
+
+1. Core retains its existing Registry write queue and the exact legacy-compatible registry lock. The child
+   privately opens the selected source with existing owner/mode/no-link checks, retains its source descriptor,
+   parses/validates the image and emits only metadata pages. It returns the exact raw-image digest and descriptor
+   identity in `ImageProof`. Missing is a distinct result. Corruption/unknown schema is a fixed failure plus a
+   private opaque source lease for quarantine; plaintext diagnostics never return to core.
+2. Core performs existing normalization, global identity validation, prior-image comparisons, merge, selected-owner
+   decisions and native authority refresh on metadata. `persistedContents` becomes an image proof; the unchanged
+   observation path asks the child to compare the exact current bytes with that proof, not just stat times.
+   Recovery arrays contain metadata plus references, never raw images or keys.
+3. Core reserves the existing exclusive empty transaction temporary and records its exact inode before sending
+   the selected metadata and source lease to prepare. The child opens only that reserved inode, reconstructs each
+   legacy `gridLaunch` from its lease/reference (or this call's explicit fresh-import input), writes, flushes and
+   closes it, and emits its identity/digest and projected result. Parent cleanup therefore owns the exact file even
+   if the child dies before acknowledging preparation. A replacement inode is never unlinked. It must reproduce
+   the selected metadata exactly; worker output cannot select an owner, remove a row, change a credential binding
+   or change unrelated fields. The core validates the returned metadata against its selected candidate.
+4. Core holds the existing directory descriptor and legacy registry lock. Immediately before rename, in the
+   existing non-yielding fence, it checks deadline, caller/cancellation, child incarnation, lock ownership,
+   directory identity, source identity, prepared temporary identity and the current selected session ownership.
+   It then performs the rename itself. No `publish` message authorizes a later child rename. The child never
+   decides final session publication. A source changed outside the cooperative legacy lock refuses the candidate.
+   Exact source-byte proof comes from the read under that lock; a stat result alone is never its substitute.
+5. Core keeps today's directory-sync/close and post-sync admission order. A failed or expired sync after rename
+   is publication unconfirmed, never successful rollback. Core keeps its writer/reservation through actual OS
+   settlement; input/terminal traffic continues independently. A successful preparation reply means the child's
+   raw write, flush and close have actually settled. Parent `discard` checks/removes the reserved temporary and
+   releases its write slot; after rename, the absent temporary is the expected result. Source leases are released
+   separately. On a lost preparation reply, parent waits for the child to exit before cleaning its reservation.
+6. Core never repeats a rename merely because a preparation acknowledgement was lost. Cleanup removes only the same proven
+   temporary inode in the original directory. A failed cleanup owns that slot and rejects another preparation;
+   no accumulating private plaintext temporaries. Historical rollback sees the existing files, not an uncommitted
+   metadata derivative. Before orderly handoff, core drains preparation and cleanup before releasing its child.
+
+Current read/prepare helpers are useful implementation seams, but all raw bytes must move together: startup
+read, unchanged-image check, locked merge read, quarantine preservation, temporary serialization, unconfirmed
+prior/result snapshots and stopped catalog reads. Merely wrapping `prepareRegistryImage` misses most custody.
+
+## Credential reference and models resolution
+
+The storage codec owns the legacy secret field. It emits validated public override metadata plus a versioned
+credential binding and an image witness; no literal key. The binding must remain stable when an unrelated row
+changes, otherwise every registry write dirties every row and breaks baseline comparisons. A witness belongs to
+one image/descriptor and is refreshed independently of the stable binding. The candidate design is a digest of
+the canonical full override bound to its selected row identity, held only on the private core/storage/models
+boundary; no reference/digest is announced in `AgentView`, logged, or put into public frames.
+
+The approved digest is an equality proof, not an authorization credential. A random reference table would need durable survival/rehydration
+across storage restarts and would be a new state owner. A new per-user encryption key or generic secret store is
+not proposed. The raw file remains the sole durable authority; on a fresh child, references are derived anew
+from exactly the old-readable raw image.
+
+Models resolves only the core-selected reference through a small shared private codec, not by importing Registry.
+There need be no storage/models peer channel: the existing authenticated `gridLaunch` request names the bounded
+document selector, row identity, immutable credential binding and exact image witness. Models opens only that
+fixed document under the same private-file rules, checks source identity/digest and selected credential binding,
+and builds the existing engine contribution. It returns one-use environment/argv/config, credential-free override
+metadata and the same checked reference; never a reusable key-bearing override. A changed source gives a fixed
+stale-reference answer. Core rereads/revalidates the selected session before retrying; no silent latest-provider
+substitution. Saved APIs continue to refresh through existing models-owned `ApiConnections` and refuse removal.
+
+The supported inline models path (`HARNESSD_SERVICES=none` / no master) must not import the raw image codec into
+core. Its injected selected-reference resolver uses the required storage child; the separate models process uses
+its own private codec resolver. Only that explicitly selected override reaches the existing one-use builder
+transiently, after exact row/binding/image witness and current-owner checks. It never enters a session, closure
+cache, retry payload, baseline or generic IPC snapshot. This transient launch input, like the final environment,
+is a precise residual; it is not whole-image parsing or persistent credential custody in core.
+
+A fresh old-client unsaved override already arrives transiently at core and the eventual environment necessarily
+passes through its final launcher. It may cross the existing explicit models launch request once; it must not
+enter a RegisteredSession, baseline, receipt or stopped cache. For publication, the raw import is passed as this
+preparation's transient input to storage and the selected metadata carries its binding. There is no separate
+durable import file or commit: the old-readable row's rename is the first durable credential publication.
+Cancellation before that point drops the ephemeral import after actual settlement; after it, existing session
+and creation receipts decide whether a pane ran. A crash cannot leave a reference pointing at an absent new store.
+Once the candidate row publishes, all further preparation/launches recover its key from that old-readable row.
+
+`setGridLaunch` becomes an awaited, owner-checked Registry writer transaction. Its former synchronous mutation
+could put raw keys into live rows and combine several uncommitted key deltas in an observation batch. The new
+behavior admits projected metadata only after the same durable publication gate as other strict session changes;
+concurrent calls serialize, and uncertain publication is reported truthfully. Every production caller must await
+it and recheck ownership after the new await.
+
+## Storage failure and recovery
+
+- During initial loading, unavailable storage leaves session initialization explicitly unavailable and never
+  returns an empty table that could overwrite saved work. This is a required session subsystem; it is distinct
+  from an optional feature crash. Existing terminal engines remain running outside core.
+- After initialization, a storage failure leaves loaded metadata, terminal byte delivery, transcript observation
+  and authorized control of already-known live sessions running. Mutations that require durable identity/Stop/
+  Resume/Purge acknowledgement hold or fail with a named storage-unavailable result. No success before durability.
+- Child loss revokes all outstanding image/preparation witnesses immediately. No late reply from an earlier
+  incarnation can publish. The child must be reaped before replacement. Retained metadata may be displayed but
+  cannot authorize a new saved-session action without a fresh read/proof.
+- Core retains the original source descriptor, opened read-only with `O_NOFOLLOW` where supported, before a
+  replacement can unlink its inode. Core uses only metadata/fstat on that descriptor, never plaintext reads.
+  Its exact identity must match the child's read proof before publication. The descriptor remains owned until
+  the associated `unconfirmedBinding.prior` is released, including after a directory-sync error; expiry of a
+  caller reply cannot close it. At most the current write/prior image descriptors are retained. Actual close
+  determines ownership release; an uncertain close fails closed under the existing queue semantics.
+- After child loss, core reaps it and passes retained source descriptors only to its admitted replacement via
+  inherited stdio slots. The replacement reads from explicit offset zero, checks the exact prior image digest,
+  and restores the prior private image lease. The existing uncertain-publication rollback semantics therefore
+  retain their old key without a second durable file. A core crash closes the descriptors just as it previously
+  lost its memory snapshot. An inode is not immutable against same-user in-place edits: digest mismatch refuses
+  recovery instead of reconstructing a different credential.
+- During preparation, a prior credential may be reconstructed from the fresh locked current image when its row
+  identity and stable private override binding are equal. This does not weaken models' exact selected-image
+  witness check. Unchanged displaced credentials therefore need no historical inode; the changed-key target keeps
+  its original source. A different-target commit restores the earlier target before handing custody on, while peer
+  changes to affected/displaced rows retain the existing reconciliation/refusal behavior. The two-source bound
+  remains an invariant to prove with real Registry uncertainty/concurrent-import tests before acceptance.
+- Pinned Node 24.22.2 documents parent descriptors in `spawn` stdio. Its bundled libuv Windows implementation
+  duplicates `UV_INHERIT_FD` disk handles; filesystem opens share `FILE_SHARE_DELETE`, permitting replacement
+  while an original handle is retained. These source facts justify a portable design, not a Windows native pass.
+  A pinned macOS rename/child-loss/inherited-FD test is required first; Windows execution remains user-deferred.
+  [Node stdio contract](https://github.com/nodejs/node/blob/v24.22.2/doc/api/child_process.md#optionsstdio),
+  [Windows descriptor inheritance](https://github.com/nodejs/node/blob/v24.22.2/deps/uv/src/win/process-stdio.c),
+  [Windows file sharing](https://github.com/nodejs/node/blob/v24.22.2/deps/uv/src/win/fs.c).
+- The lean core entry rewrites `process.argv[1]` to the canonical mutable CLI. Storage therefore receives the
+  exact immutable admitted child entry/hash from the master and renews the parent-PID cohort proof when spawning.
+  It must never derive its executable from canonical `SCRIPT_PATH`. Replacement uses the same admitted payload.
+
+## Stopped callers and concurrency
+
+Fresh stopped actions become asynchronous. Do not use synchronous IPC or turn `get()` into a stale cache while
+keeping callers unaware. Lists are fresh asynchronous reads; returned metadata alone cannot authorize deletion,
+supersession, reservation, launch or provider selection without its fresh selected proof.
+
+| Current callers | Required behavior |
+| --- | --- |
+| `stopAgentService`, `agents/forget`, `agents/bind`, `retainExitedSession`, `keepAbandonedConversation` | Await selected stopped read/preparation/publication before forgetting/removing the live owner; preserve all existing captured transcript/home/known-conversation merge rules. |
+| `resumeAgentService`, `agents/lifecycle`, `agents/close`, `purgeAgentService` | Fresh asynchronous selected-row read with proof, then current owner/guest/reservation checks after every await; never act from the display catalog. |
+| `agents/conversationOwners` | Async fresh inventory when settling ownership; before each supersede recheck the exact stopped proof plus current live winner and reservation, not the earlier list. |
+| `agents/discovery` | Async startup/revival reads and removal; row/previous-agent/current runtime fences after each new await. |
+| `cwdRepair` | Async checked patch preserving exact source and unrelated fields; do not reorder a stopped row or change touchedAt/name. |
+| `handoffDiscovery`, `handoffDependencies` | Fresh async read for source/discovery/publication proof. `ownedByOther` must preserve fail-closed enumeration of unreadable records; an omitted catalog entry never proves that a conversation has no owner. Its async caller rechecks the current live source after this await. |
+| `transcripts/history` | Fresh async stopped lookup before reading a private transcript, then fresh selected-row revalidation after the history read. Its current `lookup` is a read-authority fence, not merely rendering; a stale catalog cannot replace it. |
+| `agents/launches` | Fresh async stopped lookup for resume/preflight selection, with the selected owner checked again after await; never the display catalog. |
+| `core/api.agents.all`, `agents/list`, `turns/recaps`, `agents/events` | Explicit metadata snapshot only where used to render/describe. Any consumer that subsequently selects private files or performs an action must take a fresh async read. No field makes a snapshot an authority grant. |
+| `main.ts` startup terminal retention and held-move recovery | Await fresh selected stopped records before choosing reconciliation/held conversations. |
+| `testing/socketCore`, `testing/observerShapes` | Match production action/read contracts; never fake sanitized inputs that cannot fail before the extraction. |
+
+Stopped `get`, `list`, `available`, `save`, `patch`, `remove` and `supersede` are asynchronous. `CoreApi.agents.all`
+now returns a promise; its consumers await the fresh listing. There is no retained core stopped catalog cache or
+record-count visibility cap. Listing returns every readable record, skips individually malformed archives, and
+fails visibly on a disconnected or stalled storage child. IPC pages and request queues remain bounded; the caller's
+requested metadata array and child whole-image codec memory remain explicit residuals.
+
+New stopped writes serialize through one bounded store writer and the shared storage write lease, retaining their
+slots through actual settlement. Source read/prepare is fresh, and final publication remains core's non-yielding
+current-proof fence. A stopped save and registry removal keep the existing save-before-remove order; there is no
+invented atomic multi-file transaction. Copying a credential into a stopped legacy row happens in storage, while
+core copies only reference metadata. Resume copies it back the same way. Purge removes the actual old key by
+removing the existing record; supersede keeps it in the existing superseded archive. No separate credential
+retirement sweep or new reference index is needed in B.
+
+### Stopped action authority
+
+The old handoff publication fence freshly read every stopped row; external adoption's synchronous `current()`
+restatted every cached row. Both detected an in-place mutation of a previously nonmatching archive during an
+awaited preparation, even if the stopped directory's inode, mtime and ctime stayed unchanged. The original-source
+regression confirms this. A directory version alone would weaken authority and is rejected.
+
+The child searches archive content for a bounded selected set of conversations (at most the external request's
+258 ids including its 256 aliases), or for overlap with one concrete worktree root that Workspaces resolved read-only.
+It returns booleans and a private metadata witness. Matching selected rows keep their own exact image proofs. Core's
+final synchronous fence recomputes the witness using a directory iterator, one stat and a commutative digest over
+names and full file metadata; it neither reads content nor holds a path/stat table. The directory's full before/after
+version fences each scan; the returned witness contains stable directory identity/permissions plus the count and
+digest of .json names/full stats. Unrelated .tmp and .resume entries therefore do not invalidate an operation's
+own authority. JSON membership and atomic replacements change that digest, while ctime and the other file metadata
+catch in-place changes. Scratch
+state is bounded. Provisional final-scan work limits are 16,384 directory entries and 50 ms; expiration refuses the
+action, never returns a partial absence answer. These limits affect action authority, not list visibility, and require
+current/10× measurements before acceptance. The remaining O(record-count) synchronous metadata cost is a residual.
+
+Purge resolves the concrete Git worktree root through Workspaces first, asks storage only about overlap with that
+root, and keeps Workspaces' existing root/identity/removal checks. Final core dispatch checks the selected row and
+archive witness; native history unlink also checks those synchronously at its existing verification fence. Handoff
+selects only its bounded lineage rows and read ids; external adoption retains only its current selected ids and
+refreshes them after native observations. No whole-archive authority snapshot is held by core.
+
+Keyed conversation-owner reconciliation uses the same child scan with the fixed `owners` selection. The
+request contains only selected conversation keys and the core's explicit default Codex home; the minimal
+child environment is not assumed to carry that profile setting. Replies contain only matching projected
+rows with their exact image proofs. Final loser/winner, live-owner and resume-reservation fences stay in
+core. Requests use at most 258 keys per credited operation, without truncating matching rows. Global boot
+reconciliation still groups the full safe metadata listing, and client all-agent listings still return every
+readable row. Those all-group and matching-group metadata allocations remain measured residuals.
+
+Legacy registry writers continue to obey the existing lock. Historical stopped writers do not use that lock.
+There is no universal data-folder exclusion on POSIX: distinct configured ports use distinct local sockets and
+can share the same data directory. No startup scan or daemon ownership gate excludes historical stopped writers.
+Current source/stat/proof checks detect unexpected replacement, but cannot promise atomic exclusion against an
+uncooperative same-OS-user writer between check and rename. Preserve that existing trust boundary explicitly.
+The shared write lease and store writer cover all current stopped writers, including recovery and repair paths.
+
+Source/catalog authority and live/cancellation authority have separate lifetimes. A stopped write checks its
+original source witness after retention, before preparation and immediately before its non-yielding publication.
+Its own rename necessarily changes that source witness. Live owner/cancellation authority remains checked through
+directory sync and final settlement. The final published target must still match its exact prepared metadata after
+sync; an external rewrite at that point is publication unconfirmed. Keep prepares a private empty archive directory
+at the actual save action before taking its absence witness. Read/list/query operations remain read-only, and a
+missing or replaced queried directory still revokes authority.
+
+Cwd repair binds both the source whose transcript proved the folder and the exact live or archived destination
+selected before any await. A later row with the same agent id cannot inherit an older row's folder proof. Forget
+likewise rechecks its captured live row after archive publication before removing it.
+
+Temporary cleanup records the parent directory's exact stable identity as well as the temporary inode. Missing
+temporary paths count as settled only in that original directory. A missing/replaced directory cannot prove a
+displaced plaintext temporary was removed: cleanup remains unconfirmed and its preparation capacity stays held.
+
+## Compatibility and verification
+
+No stored schema migration and no rollback-floor change. Current preparation produces the same old-readable
+legacy row (including keys); prior complete builds can restart/resume offline using the same provider/credential.
+Public client payloads/frames are unchanged. The legacy disk format is a dated compatibility residual: retain it
+for at least 30 days after the first published CLI release carrying the storage boundary, record that release's
+date before removal, then review the subsequent reference-only migration separately. A date by itself does not
+authorize erasing those keys or claiming final disk custody complete.
+
+RED acceptance for B is **core read/parse/cache omission**, not disk omission. Existing RED canary tests prove
+current in-memory/reloaded leaks; the disk-omission cases remain the ultimate task's residual and must not be
+presented as B's green criteria. Add interception of every raw read/IPC boundary so the test cannot pass merely
+because a helper removed `apiKey` after a plaintext read in core. The old-readable legacy files must keep the
+synthetic key and support offline Grid restart/resume; no canary values in logs or assertion diffs.
+
+Validation: current-source per-file coverage/types/architecture/lean and child-cohort tests,
+all stopped action awaits/freshness cases, exact-source tampering, lost replies, deadlines with real settlement,
+child crashes at every publication prefix, service-isolation native scenario, old-reader rollback fixtures, and
+coordinated before/after startup/registry-save/stopped-list/selected-launch CPU/RSS/latency at 16/160/1,600 rows.
+Private test homes only. Native Windows remains user-deferred; no mobile work.
+
+### Core closure additions
+
+Every session needs the required storage transport, publication fence and stopped authority witness:
+`lib/sessionStorage.ts`, `sessionStorageWire.ts`, `sessionStorageFrames.ts`, `sessionPublication.ts` and
+`stoppedAuthorityMetadata.ts`. Raw image codecs remain outside the core closure. The new bootstrap owner needs
+`harnessd/sessionStorageOwner.ts` and `executedEntry.ts`; its immutable no-master execution path reuses
+`bundleFingerprint.ts`, `childCapture.ts`, `executionArtifactChild.ts`, `executionArtifactProcess.ts`,
+`executionArtifacts.ts`, `leanBundle.ts` and `workerContract.ts`. These are session bootstrap dependencies,
+independent of whether models or any optional service runs. Their first-use cost remains in the measured acceptance.
+
+### Current implementation checks
+
+Real Registry tests cover two-source recovery after child loss, a different-target commit and concurrent imports,
+including actual descriptor closure. Raw-read interception covers synchronous and asynchronous fs reads and
+FileHandle reads; recursive state inspection includes Maps/Sets so baselines and unconfirmed priors cannot hide
+a key from JSON-only assertions. Stopped listings fail visibly on disconnect and recover through a newly admitted
+child; listings alongside a prepared write see the old published image until settlement. Worktree tests change a
+nonmatching stopped cwd during root resolution and after the final child answer and verify deletion is refused.
+
+The frame sender owns its slot through credit-to-next-page microtasks and refuses sends after close. Required
+startup ownership tests cover absent/changed selected entries, an incompatible replacement cohort and retained
+artifact claims after failed cleanup. Golden launch fixtures now inspect private fake executables and exercise
+the deferred argv factory. Historical script differences from the earlier native-launch migration are retained
+for explicit review; no expected output is accepted merely because current code produced it.
+
+The first full core gate preserved 54 failures (5,794 passing, 43 skipped); fixture corrections and the newly
+exposed archive/forget authority gaps are tracked separately, not treated as an initial pass. The current focused
+authority suite passes 33 tests, including displaced-directory cleanup, post-sync target replacement, archive
+conflicts during preparation and offline durable selected Grid resolution. The harnessd gate passes 551 tests
+(one skipped) with 100% statements, branches, functions and lines per file. Type checking passes. The rerun of
+the full core gate, compiled admission checks, remaining relevant coverage and coordinated measurements are
+still acceptance work; these results alone do not establish release readiness or a bounded whole-image design.

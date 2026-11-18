@@ -126,7 +126,7 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     terminals: TERMINALS_OFF,
     machine: { id: () => view.machine.id, computerId: () => view.machine.computerId, name: () => view.machine.name },
     agents: {
-      all: () => view.agents,
+      all: async () => view.agents,
       live: () => view.agents,
       advertised: () => view.agents,
       displayName: (session) => (session as Viewed).displayName ?? '',

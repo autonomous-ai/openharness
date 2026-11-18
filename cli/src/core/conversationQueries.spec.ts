@@ -59,7 +59,7 @@ describe('the conversation reads the handoff asks of the core', () => {
   })
 
   it('withholds live and stopped launch credentials from the handoff while discovery keeps the authoritative row', async () => {
-    const override = { networkId: 'fixture', networkName: 'Fixture', baseUrl: 'https://fixture.invalid/v1', apiKey: 'synthetic-handoff-canary' }
+    const override = storedGridFixture({ networkId: 'fixture', networkName: 'Fixture', baseUrl: 'https://fixture.invalid/v1', apiKey: 'synthetic-handoff-canary' })
     const live = { ...session, agentId: 'live', gridLaunch: override }
     const stopped = { ...session, agentId: 'stopped', gridLaunch: override }
     const records = [live, stopped]
@@ -73,7 +73,7 @@ describe('the conversation reads the handoff asks of the core', () => {
       expect(Object.hasOwn(view!, 'gridLaunch')).toBe(false)
       expect(handoffSessionFact(view!)).toEqual(handoffSessionFact(original))
       const reply = await answerConversationQuery(core, 'resolve', { id: original.agentId })
-      expect(JSON.stringify(reply)).not.toContain(override.apiKey)
+      expect(JSON.stringify(reply)).not.toContain(override.credential.binding)
       await reads.discover(original.agentId)
       expect(d.discoverSession).toHaveBeenLastCalledWith(original)
       expect(vi.mocked(d.discoverSession!).mock.lastCall?.[0]).toBe(original)
@@ -144,3 +144,4 @@ it('publishes only with a live core-owned originating request and preserves held
   publish.mockRejectedValueOnce(new Error('private failure detail'))
   expect(await answerConversationQuery(core, 'publish', payload, authority)).toEqual({ error: 'HANDOFF_UNAVAILABLE', held: true, retryable: true })
 })
+import { storedGridFixture } from '../testing/gridCredentials.js'

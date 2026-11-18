@@ -29,7 +29,7 @@ it.each(['inline', 'worker'])('preserves recorded history, cursors and last-turn
       const port = createEngineReaders({ isolated: new Set([`engine-${engine}`]), call: async (_service, type, payload) => await requests[type](JSON.parse(JSON.stringify(payload)), { owner: true, local: true }) })
       port.connected(`engine-${engine}`)
       const inline = createInlineHistory()
-      const deps = { readerFor: mode === 'worker' ? port.forEngine : inline.forEngine, resolve: () => session, stopped: () => [], lineCount: inline.lineCount, storeOf: async () => null }
+      const deps = { readerFor: mode === 'worker' ? port.forEngine : inline.forEngine, resolve: () => session, stopped: async () => [], lineCount: inline.lineCount, storeOf: async () => null }
       const history = createHistory(deps)
       const digest = (value: Record<string, unknown>) => {
         const { timestamp, ...stable } = value

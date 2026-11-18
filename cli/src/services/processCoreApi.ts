@@ -114,7 +114,7 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
     machine: UNASKED.machine,
     agents: {
       // The stopped agents are never sent to these services: none of them reads one.
-      all: live,
+      all: async () => live(),
       live,
       displayName: (session) => (session as ShownAgent).displayName ?? '',
       byAgent: (agentId) => live().find((session) => session.agentId === agentId),

@@ -174,7 +174,7 @@ describe('the core\'s view, read in line by the dial', () => {
     await vi.waitFor(() => expect(f.api().agents.advertised()).toHaveLength(1))
     const api = f.api()
     const session = api.agents.advertised()[0]
-    expect(api.agents.all()).toEqual([agent])
+    expect((await api.agents.all())).toEqual([agent])
     expect(api.agents.live()).toEqual([agent])
     expect(api.agents.displayName(session)).toBe('api')
     expect(api.agents.displayName({ agentId: 'x' } as RegisteredSession)).toBe('')

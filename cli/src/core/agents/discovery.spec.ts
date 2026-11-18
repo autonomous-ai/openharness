@@ -71,7 +71,7 @@ function setup(over: Partial<DiscoveryDeps> = {}) {
     questionWatcher: { stop: vi.fn() },
     stopHeartbeat: vi.fn(),
     retainExitedSession: vi.fn(async () => ({ state: 'confirmed' as const, entry: null })),
-    stoppedAgents: { finishResume: vi.fn(), get: vi.fn(() => null), list: vi.fn(() => []), remove: vi.fn(), resumeReservedAt: vi.fn(() => null) },
+    stoppedAgents: { finishResume: vi.fn(), get: vi.fn(async () => null), list: vi.fn(async () => []), remove: vi.fn(), resumeReservedAt: vi.fn(() => null) },
     send: vi.fn(),
     restoreDegraded: (agentId) => restoreDegraded(agentId),
     terminals: { backendFor: vi.fn(() => paneBackend) },
@@ -376,7 +376,7 @@ describe('discovery', () => {
         run.rows.set('shell', adopted)
         // As the registry does to its live row.
         vi.mocked(run.deps.registry.adoptEngine).mockImplementation(async () => { delete shell.previousAgentId; return adopted })
-        vi.mocked(run.deps.stoppedAgents.get).mockImplementation((agentId: string) => (agentId === 'ended' ? saved : null))
+        vi.mocked(run.deps.stoppedAgents.get).mockImplementation(async (agentId: string) => (agentId === 'ended' ? saved : null))
         Object.assign(run.deps.stoppedAgents, over)
         return { ...run, adopted, shell }
       }
@@ -424,8 +424,8 @@ describe('discovery', () => {
       const saved = row({ agentId: 'ended', sessionId: '', active: false, browser: true, runtimes: [PANE],
         processIdentity: { pid: 42, startMarker: 'now' } } as Partial<RegisteredSession>)
       const back = setup()
-      vi.mocked(back.deps.stoppedAgents.list).mockReturnValue([saved])
-      vi.mocked(back.deps.stoppedAgents.get).mockReturnValue(saved)
+      vi.mocked(back.deps.stoppedAgents.list).mockResolvedValue([saved])
+      vi.mocked(back.deps.stoppedAgents.get).mockResolvedValue(saved)
       vi.mocked(back.deps.registry.reinstateArchived).mockResolvedValue({ ...saved, active: true } as RegisteredSession)
       await back.handlers.onObserved(seen(), row({ agentId: 'shell', engine: 'terminal', sessionId: '', runtimes: [PANE],
         previousAgentId: 'ended' } as Partial<RegisteredSession>))
@@ -457,7 +457,7 @@ describe('discovery', () => {
 
       it('keeps the archive and permits a later observation after publication fails', async () => {
         const run = setup(), saved = archived()
-        vi.mocked(run.deps.stoppedAgents.list).mockReturnValue([saved])
+        vi.mocked(run.deps.stoppedAgents.list).mockResolvedValue([saved])
         vi.mocked(run.deps.registry.reinstateArchived).mockRejectedValueOnce(new Error('storage unavailable'))
         await expect(run.handlers.onObserved(hermesSeen(), shell)).rejects.toThrow('storage unavailable')
         expect(run.deps.stoppedAgents.remove).not.toHaveBeenCalled()
@@ -470,12 +470,12 @@ describe('discovery', () => {
         const run = setup()
         const saved = archived()
         const live = { ...saved, active: true, processIdentity: HERMES }
-        vi.mocked(run.deps.stoppedAgents.list).mockReturnValue([archived({ agentId: 'other', runtimes: [{ ...PANE, paneId: '%2009' }] }), saved])
+        vi.mocked(run.deps.stoppedAgents.list).mockResolvedValue([archived({ agentId: 'other', runtimes: [{ ...PANE, paneId: '%2009' }] }), saved])
         vi.mocked(run.deps.registry.reinstateArchived).mockResolvedValue(live as RegisteredSession)
         run.rows.set('bcdaa2eb', live as RegisteredSession)
         await run.handlers.onObserved(hermesSeen(), shell)
         expect(run.deps.registry.reinstateArchived).toHaveBeenCalledWith('0e375534', saved, HERMES, expect.any(Object))
-        expect(run.deps.stoppedAgents.remove).toHaveBeenCalledWith('bcdaa2eb')
+        expect(run.deps.stoppedAgents.remove).toHaveBeenCalledWith('bcdaa2eb', expect.any(Function))
         expect(run.deps.send).toHaveBeenCalledWith({ type: 'agent_deleted', payload: { agentId: '0e375534', successor: 'bcdaa2eb' } })
         expect(run.deps.announceSession).toHaveBeenCalledWith(live)
         expect(run.deps.registry.adoptEngine).not.toHaveBeenCalled()
@@ -487,7 +487,7 @@ describe('discovery', () => {
         const run = setup()
         const saved = archived({ browser: true })
         const live = { ...saved, active: true } as RegisteredSession
-        vi.mocked(run.deps.stoppedAgents.list).mockReturnValue([saved])
+        vi.mocked(run.deps.stoppedAgents.list).mockResolvedValue([saved])
         vi.mocked(run.deps.registry.reinstateArchived).mockResolvedValue(live)
         run.rows.set('bcdaa2eb', live)
         await run.handlers.onObserved(hermesSeen(), shell)
@@ -500,7 +500,7 @@ describe('discovery', () => {
         ['another engine', hermesSeen({ engine: 'codex' }), archived()],
       ])('is not what %s is: the terminal adopts its engine as before', async (_name, observed, saved) => {
         const run = setup()
-        vi.mocked(run.deps.stoppedAgents.list).mockReturnValue([saved])
+        vi.mocked(run.deps.stoppedAgents.list).mockResolvedValue([saved])
         await run.handlers.onObserved(observed, shell)
         expect(run.deps.registry.reinstateArchived).not.toHaveBeenCalled()
         expect(run.deps.registry.adoptEngine).toHaveBeenCalledWith('0e375534', observed.engine, observed.processIdentity, expect.any(Object), expect.any(Object))
@@ -508,7 +508,7 @@ describe('discovery', () => {
 
       it('waits for a resume already under way, and adopts when the archive cannot be read or the registry refuses', async () => {
         const reserved = setup()
-        vi.mocked(reserved.deps.stoppedAgents.list).mockReturnValue([archived()])
+        vi.mocked(reserved.deps.stoppedAgents.list).mockResolvedValue([archived()])
         vi.mocked(reserved.deps.stoppedAgents.resumeReservedAt).mockReturnValue(1)
         await reserved.handlers.onObserved(hermesSeen(), shell)
         expect(reserved.deps.registry.reinstateArchived).not.toHaveBeenCalled()
@@ -521,7 +521,7 @@ describe('discovery', () => {
         expect(warn).toHaveBeenCalledWith(expect.stringContaining('saved harnesses unreadable'))
 
         const refused = setup()
-        vi.mocked(refused.deps.stoppedAgents.list).mockReturnValue([archived()])
+        vi.mocked(refused.deps.stoppedAgents.list).mockResolvedValue([archived()])
         await refused.handlers.onObserved(hermesSeen(), shell)
         expect(refused.deps.stoppedAgents.remove).not.toHaveBeenCalled()
         expect(refused.deps.registry.adoptEngine).not.toHaveBeenCalled()
@@ -530,7 +530,7 @@ describe('discovery', () => {
       it('also from a terminal row that adopted that engine already, while no conversation is bound to it; looked up once', async () => {
         const run = setup()
         const saved = archived()
-        vi.mocked(run.deps.stoppedAgents.list).mockReturnValue([saved])
+        vi.mocked(run.deps.stoppedAgents.list).mockResolvedValue([saved])
         const adopted = row({ agentId: '0e375534', engine: 'hermes', terminalHost: true, sessionId: '', runtimes: [PANE],
           processIdentity: HERMES } as Partial<RegisteredSession>)
         vi.mocked(run.deps.registry.reinstateArchived).mockResolvedValue({ ...saved, active: true } as RegisteredSession)
@@ -538,7 +538,7 @@ describe('discovery', () => {
         expect(run.deps.registry.reinstateArchived).toHaveBeenCalledWith('0e375534', saved, HERMES, expect.any(Object))
 
         const bound = setup()
-        vi.mocked(bound.deps.stoppedAgents.list).mockReturnValue([saved])
+        vi.mocked(bound.deps.stoppedAgents.list).mockResolvedValue([saved])
         await bound.handlers.onObserved(hermesSeen(), { ...adopted, sessionId: 'local-61' })
         expect(bound.deps.stoppedAgents.list).not.toHaveBeenCalled()
 
@@ -569,7 +569,7 @@ describe('discovery', () => {
         await unreadable.handlers.onObserved(hermesSeen(), shell)
         expect(warn).toHaveBeenCalledWith(expect.stringContaining('adopts its engine as new: EACCES'))
         const busy = setup()
-        vi.mocked(busy.deps.stoppedAgents.list).mockReturnValue([archived()])
+        vi.mocked(busy.deps.stoppedAgents.list).mockResolvedValue([archived()])
         vi.mocked(busy.deps.stoppedAgents.remove).mockImplementation(() => { throw 'EBUSY' })
         vi.mocked(busy.deps.registry.reinstateArchived).mockResolvedValue({ ...archived(), active: true } as RegisteredSession)
         await busy.handlers.onObserved(hermesSeen(), shell)
@@ -579,7 +579,7 @@ describe('discovery', () => {
       it('says so, and stays back, when its archive cannot be removed', async () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
         const run = setup()
-        vi.mocked(run.deps.stoppedAgents.list).mockReturnValue([archived()])
+        vi.mocked(run.deps.stoppedAgents.list).mockResolvedValue([archived()])
         vi.mocked(run.deps.stoppedAgents.remove).mockImplementation(() => { throw new Error('EBUSY') })
         vi.mocked(run.deps.registry.reinstateArchived).mockResolvedValue({ ...archived(), active: true } as RegisteredSession)
         await run.handlers.onObserved(hermesSeen(), shell)

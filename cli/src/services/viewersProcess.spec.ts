@@ -204,7 +204,7 @@ describe('the viewers in their own process', () => {
     expect(viewers.attach).toHaveBeenCalledWith(agent('new'))
     expect(viewers.detach).toHaveBeenCalledWith('gone')
     expect(viewers.detach).toHaveBeenCalledTimes(1)
-    expect(api.agents.all().map((session) => session.agentId).sort()).toEqual(['kept', 'new'])
+    expect((await api.agents.all()).map((session) => session.agentId).sort()).toEqual(['kept', 'new'])
     expect(api.agents.live()).toHaveLength(2)
   })
 
@@ -230,7 +230,7 @@ describe('the viewers in their own process', () => {
     options.onEvent!({ kind: 'detach', agentId: 'kept' })
     expect(viewers.attach).toHaveBeenCalledWith(agent('new'))
     expect(viewers.detach).toHaveBeenCalledWith('kept')
-    expect(api.agents.all().map((session) => session.agentId)).toEqual(['new'])
+    expect((await api.agents.all()).map((session) => session.agentId)).toEqual(['new'])
   })
 
   it('leaves an agent heard of since it asked: news newer than the core\'s answer', async () => {
@@ -244,7 +244,7 @@ describe('the viewers in their own process', () => {
     options.onEvent!(ended('a1'))
     answer({ agents: [agent('a1')] })
     await flush()
-    expect(api.agents.all().map((session) => session.agentId)).toEqual(['a4'])
+    expect((await api.agents.all()).map((session) => session.agentId)).toEqual(['a4'])
     // Attached once, before the question: the answer naming it did not bring it back.
     expect(viewers.attach.mock.calls.filter(([session]) => session.agentId === 'a1')).toHaveLength(1)
   })
@@ -332,7 +332,7 @@ describe('the viewers in their own process', () => {
     const tell = vi.fn()
     const api = viewersCoreApi('/data', sessions, tell, () => false, () => () => {})
     expect(api.dataDir).toBe('/data')
-    expect(api.agents.all()).toEqual([agent()])
+    expect(await api.agents.all()).toEqual([agent()])
     expect(api.agents.live()).toEqual([agent()])
     expect(api.agents.byAgent('a1')).toEqual(agent())
     expect(api.agents.displayName(agent())).toBe('')

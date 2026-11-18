@@ -164,8 +164,8 @@ describe('the core API services stand on', () => {
       log: vi.fn(),
     })
 
-  it.each(['credential', 'null', 'absent'] as const)('keeps %s launch custody out of every service agent read', (kind) => {
-    const override = { networkId: 'fixture', networkName: 'Fixture', baseUrl: 'https://fixture.invalid/v1', apiKey: 'synthetic-agent-view-canary' }
+  it.each(['credential', 'null', 'absent'] as const)('keeps %s launch custody out of every service agent read', async (kind) => {
+    const override = storedGridFixture({ networkId: 'fixture', networkName: 'Fixture', baseUrl: 'https://fixture.invalid/v1', apiKey: 'synthetic-agent-view-canary' })
     const live = row('live'), stopped = row('stopped'), cloud = row('cloud')
     for (const session of [live, stopped, cloud]) {
       if (kind === 'credential') session.gridLaunch = override
@@ -177,9 +177,9 @@ describe('the core API services stand on', () => {
     deps.registry.advertised = () => [live]
     deps.registry.byAgent = id => id === live.agentId ? live : undefined
     deps.registry.resolve = id => id === live.sessionId ? live : undefined
-    deps.stoppedAgents.list = () => [stopped]
+    deps.stoppedAgents.list = async () => [stopped]
     const core = createCoreApi({ ...deps, cloudRows: () => [cloud] })
-    const views = [...core.agents.all(), ...core.agents.live(), ...core.agents.advertised(),
+    const views = [...await core.agents.all(), ...core.agents.live(), ...core.agents.advertised(),
       core.agents.byAgent('live')!, core.agents.resolve('s-live')!, ...core.agents.cloud!()]
     expect(views.map(session => session.agentId)).toEqual(['live', 'stopped', 'live', 'live', 'live', 'live', 'cloud'])
     for (const session of views) {
@@ -191,20 +191,20 @@ describe('the core API services stand on', () => {
     if (kind === 'credential') expect(live.gridLaunch).toBe(override)
     // Even a view taken before a key is assigned must not become a secret-bearing alias later.
     for (const session of [live, stopped, cloud]) session.gridLaunch = override
-    expect(JSON.stringify(views)).not.toContain(override.apiKey)
+    expect(JSON.stringify(views)).not.toContain(override.credential.binding)
     expect(views.every(session => !Object.hasOwn(session, 'gridLaunch'))).toBe(true)
     expect(core.agents.byAgent('missing')).toBeUndefined()
     expect(core.agents.resolve('missing')).toBeUndefined()
   })
 
   it('sends metadata without launch credentials through every agent-list service dispatch', async () => {
-    const override = { networkId: 'fixture', networkName: 'Fixture', baseUrl: 'https://fixture.invalid/v1', apiKey: 'synthetic-agent-dispatch-canary' }
+    const override = storedGridFixture({ networkId: 'fixture', networkName: 'Fixture', baseUrl: 'https://fixture.invalid/v1', apiKey: 'synthetic-agent-dispatch-canary' })
     const live: RegisteredSession = { ...row('live'), dsh: 'fixture', browser: true, gridLaunch: override }
     const stopped = { ...row('stopped'), gridLaunch: override }
     const deps = coreDeps()
     deps.registry.list = () => [live]
     deps.registry.advertised = () => [live]
-    deps.stoppedAgents.list = () => [stopped]
+    deps.stoppedAgents.list = async () => [stopped]
     const core = createCoreApi(deps)
     const replies = await Promise.all(['agents', 'live', 'advertised'].map(query => answerAgentQuery(core, query)))
     replies.push(shownAgents(core))
@@ -233,7 +233,7 @@ describe('the core API services stand on', () => {
     }
     const sent = JSON.stringify([replies, browserEvents])
     expect(sent).not.toContain('gridLaunch')
-    expect(sent).not.toContain(override.apiKey)
+    expect(sent).not.toContain(override.credential.binding)
     expect(live.gridLaunch).toBe(override)
     expect(stopped.gridLaunch).toBe(override)
   })
@@ -255,7 +255,7 @@ describe('the core API services stand on', () => {
     expect(await core.terminals.open({ argv: ['/bin/zsh'], cwd: '/work' })).toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE' })
     const terminals = { ...TERMINALS_OFF, open: vi.fn(async () => ({ ok: true as const, agentId: 'shell' })), watch: TERMINALS_OFF.watch }
     expect(createCoreApi({ ...deps, terminals }).terminals).toBe(terminals)
-    expect(core.agents.all().map((s) => s.agentId)).toEqual(['live', 'stopped'])
+    expect((await core.agents.all()).map((s) => s.agentId)).toEqual(['live', 'stopped'])
     expect(core.agents.live().map((s) => s.agentId)).toEqual(['live'])
     expect(core.agents.displayName).toBe(projectDisplayName)
     expect(core.transcripts.databaseHistory).toBe(deps.databaseHistory)
@@ -674,3 +674,4 @@ describe('the core API services stand on', () => {
     expect(LONG_ANSWERS.sharedMachines).toEqual({ guestLaunch: 2 * 60_000, shared_machines: 11 * 60_000 })
   })
 })
+import { storedGridFixture } from '../testing/gridCredentials.js'

@@ -15,8 +15,6 @@ import { writeMachineMcp } from './machineMcp.js'
 import { missingHookScript } from '../engines/kit/hookScript.js'
 import type { NativeLaunch } from '../engines/nativeLaunch.js'
 import { ApiConnections } from './apiConnections.js'
-import { refreshApiFor } from './apiModels.js'
-import { answerGridLaunch } from './gridLaunch.js'
 import { gridLaunchThrough } from '../core/agents/launch.js'
 
 const GRID: GridLaunchOverride = {
@@ -219,7 +217,7 @@ describe('buildLaunchOverrides — a relaunch comes back where the agent was', (
       const connection = store.save({ provider: 'custom', name: 'Previous name', baseUrl: 'https://old.example.test/v1', apiKey: 'FAKE-old-key' })
       const gridLaunch = { ...GRID, networkId: `api:${connection.id}`, networkName: connection.name, baseUrl: connection.baseUrl }
       const { d, calls } = deps({
-        gridLaunch: gridLaunchThrough(() => ({ gridLaunch: async input => answerGridLaunch(input, refreshApiFor(store)) })),
+        gridLaunch: gridLaunchThrough(() => ({ gridLaunch: async input => gridLaunchInProcess(store)(input) })),
         capabilities: async () => ({ sessionEnv: false }),
       })
       store.save({ ...connection, name: 'Current name', apiKey: 'FAKE-current-key' })

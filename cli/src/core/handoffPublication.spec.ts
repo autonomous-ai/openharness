@@ -44,8 +44,9 @@ async function setup(git = false) {
     exclude: old && { path: exclusion, before: old.text, after: handoffExcludeText(old.text), version: old.version, route: old.route } }
   const rows = new Map([[row.agentId, row]])
   const deps = { directory: data, resolve: (id: string) => rows.get(id), ownedByOther: () => false, isRecentlyDeleted: () => false }
-  const permit = { current: () => true }, publish = createHandoffPublisher(deps)
-  return { prepared, permit, publish, deps, rows, exclusion, create: () => createHandoffPublisher(deps) }
+  const authority = { ...deps, authority: async () => ({ resolve: (id: string) => authority.resolve(id), ownedByOther: () => authority.ownedByOther(), current: () => true }) }
+  const permit = { current: () => true }, publish = createHandoffPublisher(authority)
+  return { prepared, permit, publish, deps: authority, rows, exclusion, create: () => createHandoffPublisher(authority) }
 }
 
 /** A .gitignore an earlier publication left: one this publication did not write, so it flushes it (a file it wrote was

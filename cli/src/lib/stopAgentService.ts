@@ -183,7 +183,7 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
       if (!sameTarget() || options.current?.() === false) {
         throw new AgentStopError('Harness changed while saving its conversation. Try stopping again.')
       }
-      stoppedAgents.save(s)
+      await stoppedAgents.save(s, () => sameTarget() && options.current?.() !== false)
       await options.checkpoint?.(s, 'before', databaseProof && { ...databaseProof, verify: verifyTranscript })
       verifyTranscript()
       await options.beforeStop?.(s)

@@ -466,12 +466,12 @@ it('preserves a newly captured Hermes profile through actual Stop, checkpoint an
     if (phase === 'before') {
       expect(f.live.sessionId).toBe('')
       expect(f.live.hermesHome).toBeNull()
-      f.stoppedAgents.save(f.live)
-      expect(f.stoppedAgents.get(f.live.agentId)).toMatchObject({ sessionId: id, hermesHome: f.profile })
+      await f.stoppedAgents.save(f.live)
+      expect((await f.stoppedAgents.get(f.live.agentId))).toMatchObject({ sessionId: id, hermesHome: f.profile })
     }
   } })
   expect(f.registry.byAgent(f.live.agentId)).toBeUndefined()
-  expect(f.stoppedAgents.get(f.live.agentId)).toMatchObject({ sessionId: id, hermesHome: f.profile, active: false })
+  expect((await f.stoppedAgents.get(f.live.agentId))).toMatchObject({ sessionId: id, hermesHome: f.profile, active: false })
   expect(f.terminateDeletedAgent).toHaveBeenCalledOnce()
   expect(f.kill).toHaveBeenCalledOnce()
 })
@@ -490,12 +490,12 @@ it.each(['capture', 'checkpoint'])('cannot combine a captured conversation with 
 
 it.each(['home', 'process', 'registered', 'codex-home'])('does not carry saved Hermes history across a changed %s authority', async change => {
   const f = await stopFixture()
-  f.stoppedAgents.save({ ...f.live, sessionId: id, hermesHome: f.profile, source: 'stop-repair' })
+  await f.stoppedAgents.save({ ...f.live, sessionId: id, hermesHome: f.profile, source: 'stop-repair' })
   const current = { ...f.live }
   if (change === 'home') current.hermesHome = join(root, 'different-home')
   if (change === 'process') current.processIdentity = { ...current.processIdentity!, startMarker: 'replacement' }
   if (change === 'registered') current.registeredAt++
   if (change === 'codex-home') current.codexHome = join(root, 'different-profile')
-  f.stoppedAgents.save(current)
-  expect(f.stoppedAgents.get(f.live.agentId)?.sessionId).toBe('')
+  await f.stoppedAgents.save(current)
+  expect((await f.stoppedAgents.get(f.live.agentId))?.sessionId).toBe('')
 })

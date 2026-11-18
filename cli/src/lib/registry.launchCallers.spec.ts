@@ -228,7 +228,7 @@ it.each([false, true])('new-pane engine exit publishes its shell before release,
   await held.entered
   try {
     expect(releaseHold).not.toHaveBeenCalled(); expect(announce).not.toHaveBeenCalled(); expect(send).not.toHaveBeenCalled()
-    if (bound) expect(store.get(row.agentId)?.sessionId).toBe('fixture-session')
+    if (bound) expect((await store.get(row.agentId))?.sessionId).toBe('fixture-session')
   } finally { held.release(); await result }
   expect(persisted().some(entry => entry.engine === 'terminal')).toBe(true)
 })
@@ -350,7 +350,7 @@ it.each(process.platform === 'win32' ? [['prepare', false]] as const
   await registry.flush()
   row = registry.byAgent(row.agentId)!
   const store = new StoppedAgentStore(join(directory, 'stop-archive'))
-  store.save(row); store.beginResume(row.agentId)
+  await store.save(row); store.beginResume(row.agentId)
   const send = vi.fn(), nextDeletion = vi.fn()
   const forgetSession = createForgetSession({ registry, stoppedAgents: store, syncRecapPool: vi.fn(), normalizers: { forget: vi.fn() },
     forgetAttach: vi.fn(), turnStartedAt: new Map(), prompts: new Map(), neverFoldedHistory: new Set(), replayedFirstTurn: new Set(),
@@ -371,7 +371,7 @@ it.each(process.platform === 'win32' ? [['prepare', false]] as const
     expect(send).not.toHaveBeenCalled()
     expect(store.resumeReservedAt(row.agentId)).not.toBeNull()
     expect(nextDeletion).not.toHaveBeenCalled()
-    expect(store.get(row.agentId)).not.toBeNull()
+    expect((await store.get(row.agentId))).not.toBeNull()
     if (expires) {
       await vi.advanceTimersByTimeAsync(5_000)
       expect(await stopping).toMatchObject({ code: 'STOP_UNCONFIRMED' })
@@ -382,7 +382,7 @@ it.each(process.platform === 'win32' ? [['prepare', false]] as const
     expect(send).not.toHaveBeenCalled()
     expect(nextDeletion).not.toHaveBeenCalled()
     expect(store.resumeReservedAt(row.agentId)).not.toBeNull()
-    expect(store.get(row.agentId)).not.toBeNull()
+    expect((await store.get(row.agentId))).not.toBeNull()
     expect(registry.byAgent(row.agentId)).toBeDefined()
   } else {
     expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: 'agent_deleted' }))
@@ -395,7 +395,7 @@ it.each(['prepare', 'directory sync'] as const)('Stop keeps a failed %s removal 
   await registry.flush()
   row = registry.byAgent(row.agentId)!
   const store = new StoppedAgentStore(join(directory, 'failed-stop-archive')), send = vi.fn()
-  store.save(row); store.beginResume(row.agentId)
+  await store.save(row); store.beginResume(row.agentId)
   const forgetSession = createForgetSession({ registry, stoppedAgents: store, syncRecapPool: vi.fn(), normalizers: { forget: vi.fn() },
     forgetAttach: vi.fn(), turnStartedAt: new Map(), prompts: new Map(), neverFoldedHistory: new Set(), replayedFirstTurn: new Set(),
     clearAgyIdleWatch: vi.fn(), cursorDiscovery: { remove: vi.fn() }, runtimeProfiles: { forget: vi.fn() },
@@ -412,7 +412,7 @@ it.each(['prepare', 'directory sync'] as const)('Stop keeps a failed %s removal 
   await expect(stop(row.agentId)).rejects.toMatchObject({ code: 'STOP_UNCONFIRMED' })
   expect(registry.byAgent(row.agentId)).toBeDefined()
   expect(persisted().some(entry => entry.agentId === row.agentId)).toBe(phase === 'prepare')
-  expect(store.get(row.agentId)).not.toBeNull()
+  expect((await store.get(row.agentId))).not.toBeNull()
   expect(store.resumeReservedAt(row.agentId)).not.toBeNull()
   expect(send).not.toHaveBeenCalled()
 })
@@ -422,7 +422,7 @@ it.each((['new owner', 'adopted shell', 'archived owner', 'starting owner'] as c
   let current = row
   if (mode === 'new owner') row.sessionId = 'previous-session'
   if (mode === 'adopted shell') current = (await releaseRegistryEngine(registry, row.agentId))!
-  if (mode === 'archived owner') { store.save(row); current = (await releaseRegistryEngine(registry, row.agentId, true))! }
+  if (mode === 'archived owner') { await store.save(row); current = (await releaseRegistryEngine(registry, row.agentId, true))! }
   if (mode === 'starting owner') registry.setLaunch(row.agentId, { state: 'starting', nativeToken: startingToken })
   await registry.flush()
   const identity = mode === 'archived owner' ? oldProcess : newProcess
@@ -443,13 +443,13 @@ it.each((['new owner', 'adopted shell', 'archived owner', 'starting owner'] as c
   if (uncertain) {
     await failed.promise; await pending
     expect(announce).not.toHaveBeenCalled(); expect(send).not.toHaveBeenCalled(); expect(forgotten).not.toHaveBeenCalled()
-    if (mode === 'archived owner') expect(store.get(row.agentId)).not.toBeNull()
+    if (mode === 'archived owner') expect((await store.get(row.agentId))).not.toBeNull()
     return
   }
   await held!.entered
   try {
     expect(announce).not.toHaveBeenCalled(); expect(send).not.toHaveBeenCalled(); expect(moved).not.toHaveBeenCalled(); expect(forgotten).not.toHaveBeenCalled()
-    if (mode === 'archived owner') expect(store.get(row.agentId)).not.toBeNull()
+    if (mode === 'archived owner') expect((await store.get(row.agentId))).not.toBeNull()
   } finally { held!.release(); await pending }
   expect(announce).toHaveBeenCalled()
 })

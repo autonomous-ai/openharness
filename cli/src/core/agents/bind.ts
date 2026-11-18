@@ -212,17 +212,19 @@ export function createBinding({
     // Registration is complete before any optional history reader runs. In particular a stalled
     // module cannot withhold a resumed agent's record, name or announcement. Capture this fact before
     // finishResume changes the stopped record used to decide whether history may be replayed below.
-    const resumedConversation = !!entry.resumeOnly && stoppedAgents.get(entry.agentId)?.sessionId === entry.sessionId
+    const resumedConversation = !!entry.resumeOnly && (await stoppedAgents.get(entry.agentId))?.sessionId === entry.sessionId
     try {
-      stoppedAgents.save(entry)
+      if (!current()) return
+      await stoppedAgents.save(entry, current)
     } catch (error) {
       console.error(`[agent] ${sid(entry.agentId)} could not save the record it resumes from: ${error instanceof Error ? error.message : error}`)
     }
+    if (!current()) return
     if (entry.resumeOnly) stoppedAgents.finishResume(entry.agentId)
     // A conversation new to this harness has one owner from now on: a stopped harness it came from (a
     // `/resume`, `claude --resume` in a terminal, a compaction) lets it go, as a running one already has.
     if (meta.isNew) {
-      try { owners?.settle([conversationKey(entry)]) }
+      try { await owners?.settle([conversationKey(entry)]) }
       catch (error) { console.warn(`[agent] ${sid(entry.agentId)} could not settle who owns ${sid(entry.sessionId)}: ${error instanceof Error ? error.message : error}`) }
     }
     syncRecapPool()

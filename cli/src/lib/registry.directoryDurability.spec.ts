@@ -303,7 +303,7 @@ it.skipIf(process.platform === 'win32')('the actual bind caller never submits a 
   })
   const binding = createBinding({ registry, mirror: { inheritSummary: vi.fn() }, forgetSession: vi.fn(),
     clients: { send: vi.fn() }, attachSession: vi.fn(async () => true), captureReader: () => () => true,
-    announceSession: vi.fn(), stoppedAgents: { save: vi.fn(), finishResume: vi.fn(), get: vi.fn(() => null) },
+    announceSession: vi.fn(), stoppedAgents: { save: vi.fn(), finishResume: vi.fn(), get: vi.fn(async () => null) },
     syncRecapPool: vi.fn(), input: { forget: vi.fn(), awaitingConfirmation: () => false }, submitAgent: submit,
     homes: { copilot: root, grok: root, agy: root },
     capturePane: async () => screen, openclawPaneRead: () => true, openclawPaneDue: () => true,
@@ -390,7 +390,7 @@ it.skipIf(process.platform === 'win32').each(['deadline', 'token'] as const)(
     } }))!
   const kill = vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const })), forget = vi.fn(async () => {}), launch = vi.fn()
   const controller = createExternalResumes({ registry, backend: null, backendFor: () => ({ killHeld: kill }),
-    stopped: () => [], cancelled: () => false, generation: () => 1, waiting: async () => true,
+    stoppedQuery: async query => ({ witness: 'fixture', matches: query.kind === 'conversations' ? query.ids.map(() => false) : [false], current: () => true }), cancelled: () => false, generation: () => 1, waiting: async () => true,
     preflight: async () => null, announce: vi.fn(), forget, launch,
     inspect: async () => { throw new Error('Cancellation must not inspect or launch an engine') },
   })

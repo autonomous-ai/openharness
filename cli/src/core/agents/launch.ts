@@ -93,8 +93,9 @@ export function createLaunchHelpers({ authority, prepareInstructions, launchOver
    * does not go through here — its override is new, and it records the pair itself once the move
    * has succeeded.
    */
-  const refreshGridWebSearch = (agentId: string, overrides: LaunchOverrides): void => {
-    if (overrides.gridLaunchRecord) setGridLaunch(agentId, overrides.gridLaunchRecord)
+  const refreshGridWebSearch = async (agentId: string, overrides: LaunchOverrides, current: () => boolean = () => true): Promise<void> => {
+    const selected = authority(agentId)
+    if (overrides.gridLaunchRecord) await setGridLaunch(agentId, overrides.gridLaunchRecord, { current: () => current() && selected() })
   }
 
   /**

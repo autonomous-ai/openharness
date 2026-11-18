@@ -20,6 +20,8 @@ import type { CoreApi, ServiceRequests } from '../core/api.js'
 import { ACCOUNT_BACKEND_OFF, CONVERSATIONS_OFF, AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, LANE_OFF, TERMINALS_OFF } from '../core/api.js'
 import type { AgentGridTarget, GridGlance } from '../lib/gridAnnotation.js'
 import { parseGridLaunchOverride, type GridLaunchRequest } from '../lib/gridLaunch.js'
+import { parseGridLaunchSelection } from '../lib/gridLaunchWire.js'
+import { createSessionImageCodec } from '../storage/sessionImage.js'
 import { ENGINES, type AgentEngine } from '../engines/types.js'
 import { gridGlances, onGridModelsChanged } from '../lib/gridModels.js'
 import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
@@ -49,7 +51,7 @@ const text = (value: unknown): string => (typeof value === 'string' ? value : ''
 /** A grid launch the core asked to have built, checked as the core checks one: the engine, the launch it sends,
  *  this machine's facts and whether it is a relaunch; null when it is not one. */
 export function gridLaunchRequestIn(payload: Record<string, unknown>): GridLaunchRequest | null {
-  const parsed = parseGridLaunchOverride(payload.override)
+  const parsed = parseGridLaunchSelection(payload.override)
   const machine = payload.machine as Record<string, unknown> | null | undefined
   if (parsed.state !== 'ok' || !(ENGINES as readonly string[]).includes(text(payload.engine))) return null
   if (!machine || typeof machine !== 'object' || typeof machine.hermesSystemManaged !== 'boolean') return null
@@ -82,7 +84,7 @@ export function modelsCoreApi(dataDir: string, ask: (query: string, payload?: Pa
     terminals: TERMINALS_OFF,
     machine: UNASKED.machine,
     agents: {
-      all: () => [],
+      all: async () => [],
       live: () => [],
       displayName: () => '',
       byAgent: () => undefined,
@@ -154,7 +156,8 @@ export function runModelsService(options: ModelsServiceOptions): ServiceProcess 
   const ask = (query: string, payload: Payload = {}): Promise<Payload> =>
     core ? core.query(query, payload) : Promise.reject(new Error('not connected to the core'))
   const ports = emptyPorts()
-  const requests = (options.start ?? startModels)(modelsCoreApi(options.dataDir, ask), ports)
+  const imageCodec = createSessionImageCodec(options.dataDir)
+  const requests = (options.start ?? startModels)(modelsCoreApi(options.dataDir, ask), ports, reference => imageCodec.resolve(reference))
   if (!ports.models) throw new Error('models did not start')
   const models = ports.models
 

@@ -47,7 +47,10 @@ export { engineKeepsTranscriptFile } from '../engines/transcriptBindings.js'
 import { sessionStoreOf } from '../engines/sessionStoreContracts.js'
 import { ENGINES, isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import type { GridAssignment } from './gridAssignment.js'
-import { parseGridLaunchOverride, type GridLaunchOverride, type GridLaunchRecord, type GridWebSearchStatus } from './gridLaunchWire.js'
+import type { GridLaunchRecord, GridWebSearchStatus } from './gridLaunchWire.js'
+import { sessionStorage, type SessionImageSource } from './sessionStorage.js'
+import { credentialEquality, storedGridLaunch, sessionFileIdentity, type SessionImageProof, type StoredGridLaunch } from './sessionStorageWire.js'
+import { prepareSessionPublication } from './sessionPublication.js'
 import { parseScmLaunchRecord, type ScmLaunchRecord } from '../scm/types.js'
 import { storedLaunchModel, type LaunchModel } from './launchModel.js'
 import { commandcodeTranscriptPath } from '../engines/commandcode/contract.js'
@@ -56,7 +59,7 @@ import { copilotTranscriptPath } from '../engines/copilot/contract.js'
 import { OPENCLAW_KEY } from '../engines/openclaw/contract.js'
 import { bootChanged, currentBootId } from './bootId.js'
 import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
-import { AtomicWriteUnconfirmed, RegistryPersistenceUnavailable, RegistryWriteQueue, prepareRegistryImage, privateRegistryDirectory, readPrivateRegistryFile, registryFileLock, type RegistryWriteDeadline } from './registryPersistence.js'
+import { AtomicWriteUnconfirmed, RegistryPersistenceUnavailable, RegistryWriteQueue, privateRegistryDirectory, registryFileLock, type RegistryWriteDeadline } from './registryPersistence.js'
 import { mergeTerminalRuntimes, primaryRuntime, processIdentityKey, sameProcessIdentity, terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
 import type { HookTerminalHint, ProcessIdentity, TerminalRuntimeRef } from './terminalTypes.js'
 import { externalReservations, externalResumePending, externalResumeIds, parseExternalResume, type ExternalResumeIntent } from './externalResume.js'
@@ -194,7 +197,7 @@ export interface RegisteredSession {
    * Null on a vendor-login agent; absent on a row written before this field existed, which restore
    * treats as "grid agent without a credential".
    */
-  gridLaunch?: GridLaunchOverride | null
+  gridLaunch?: StoredGridLaunch | null
   /**
    * What `gridLaunch` decided about web search — `on`, `unavailable` or `unsupported` — as the app
    * shows it (`grid.webSearch` on the frame). Written with the launch and cleared with it, never
@@ -483,7 +486,6 @@ export function sessionDisplayTitle(s: RegisteredSession): string | null {
 }
 
 const FILE = join(env.ADAPTER_DATA_DIR, 'registry.json')
-const NAMES_FILE = join(env.ADAPTER_DATA_DIR, 'agent-names.json')
 const BOOT_FILE = join(env.ADAPTER_DATA_DIR, 'registry-boot')
 const LOCK_DIR = join(env.ADAPTER_DATA_DIR, 'registry.json.lock')
 const PRE_V2_BACKUP_FILE = join(env.ADAPTER_DATA_DIR, 'registry.pre-v2.json')
@@ -553,6 +555,7 @@ function rowId(row: unknown): string {
 // every 5 s on an unchanged row, ~720 writes/hour measured 2026-10-06. Array order still counts.
 function rowFingerprint(row: unknown): string {
   return JSON.stringify(row, (_key, value) => {
+    value = credentialEquality(value)
     if (!value || typeof value !== 'object' || Array.isArray(value)) return value
     // Admissions compare every row repeatedly; avoid a temporary entry array for every property.
     const ordered: Record<string, unknown> = Object.create(null)
@@ -742,7 +745,7 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   // `forkedFrom` is out too, so an invalid one is dropped rather than spread back in as-is.
   // `swarmSkill` is a Swarm role a build before the Swarm was deleted (2026-11-14) saved: dropped, and gone from the file at
   // its next write. Remove it from here on or after 2027-01-14.
-  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, launchModel: rawLaunchModel, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, launchArgs: rawLaunchArgs, browser: rawBrowser, quietTitle: rawQuietTitle, firstTask: rawFirstTask, openclawLocal: rawOpenclawLocal, earlierSessionIds: rawEarlierSessionIds, hermesHomeDerived: _hermesHomeDerived, swarmSkill: _retiredSwarmSkill, ...rest } = row as Partial<RegisteredSession> & { swarmSkill?: unknown }
+  const { gridLaunch: rawGridLaunch, identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, launchModel: rawLaunchModel, externalResume: _externalResume, startedBy: rawStartedBy, parentAgentId: rawParentAgentId, launchArgs: rawLaunchArgs, browser: rawBrowser, quietTitle: rawQuietTitle, firstTask: rawFirstTask, openclawLocal: rawOpenclawLocal, earlierSessionIds: rawEarlierSessionIds, hermesHomeDerived: _hermesHomeDerived, swarmSkill: _retiredSwarmSkill, ...rest } = row as Partial<RegisteredSession> & { swarmSkill?: unknown }
   const lastOpenedAt = normalizedOpenedAt(rawOpenedAt)
   // Out of the spread for the same reason: a half-formed record is dropped, never relaunched with.
   const scmLaunch = parseScmLaunchRecord(rawScmLaunch)
@@ -753,6 +756,7 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   const earlierSessionIds = earlierSessionKeys(rawEarlierSessionIds)
   return {
     ...rest,
+    gridLaunch: normalizedGridLaunch(rawGridLaunch),
     ...(externalResume ? { externalResume } : {}),
     ...(firstTask ? { firstTask } : {}),
     ...(openclawLocal ? { openclawLocal } : {}),
@@ -1254,6 +1258,11 @@ class Registry {
     if (this.exiting) throw new RegistryPersistenceUnavailable('registry is closing')
     if (this.loading) throw new RegistryPersistenceUnavailable('registry is initializing')
   }
+  private withGridRecord<T>(row: { agentId: string; registeredAt: number }, record: GridLaunchRecord | null | undefined,
+    apply: (record: { override: StoredGridLaunch; webSearch: GridWebSearchStatus } | null | undefined) => Promise<T>): Promise<T> {
+    if (!record) return apply(record)
+    return sessionStorage.withImport(row, record.override, override => apply({ override, webSearch: record.webSearch }))
+  }
   private pendingObservation: Promise<void> | undefined
   private transactionCompletion: Promise<void> = Promise.resolve()
   private transactionDepth = 0
@@ -1264,11 +1273,11 @@ class Registry {
   /** Last committed row bytes, used for a three-way merge with daemon-down hook writes. */
   private persistedBaseline = new Map<string, string>()
   /** Exact bytes of our last durable save; checked against the file, never just its mtime. */
-  private persistedContents: string | null = null
+  private persistedContents: SessionImageProof | null = null
   // A post-rename failure is not absence. Only the same immutable binding intent,
   // unchanged local owners and these exact affected rows can confirm that write.
   private unconfirmedBinding: { image: ReturnType<typeof persistedRow>[]; prior: unknown[]; before: Map<string, string>;
-    agentId: string; intent: string | null; affected: Set<string> } | null = null
+    agentId: string; intent: string | null; affected: Set<string>; source: SessionImageSource } | null = null
   /**
    * Fields a caller set on purpose since the last save, by agent: written as they are now, whatever the
    * file says. The merge alone keeps the file's value wherever this view matches what it last saved, so
@@ -1361,6 +1370,7 @@ class Registry {
   private async loadState(): Promise<void> {
     // A reload cannot clear a prior publication while its I/O still owns the queue.
     await this.writer.run(async () => {})
+    await this.unconfirmedBinding?.source.release()
     this.initializing = true
     this.agents.clear()
     this.sessionIndex.clear()
@@ -1380,14 +1390,20 @@ class Registry {
       console.error('[registry] unsafe state directory; refusing to load or write state:', error)
       return
     }
-    this.loadNames()
+    await this.loadNames()
     const savedBoot = readSavedBoot()
     const bootId = currentBootId()
     const rebooted = bootChanged(savedBoot, bootId)
-    let originalContents: string | undefined
+    let originalContents: SessionImageProof | undefined
     try {
-      originalContents = await readPrivateRegistryFile(FILE)
-      const stored = JSON.parse(originalContents) as unknown
+      const image = await sessionStorage.read({ kind: 'registry' })
+      if (image.state === 'missing') throw Object.assign(new Error('registry is absent'), { code: 'ENOENT' })
+      originalContents = image.proof
+      if (!image.json) {
+        await this.quarantine('is not JSON', image.proof)
+        return
+      }
+      const stored = image.value
       if (!Array.isArray(stored)) {
         await this.quarantine('root is not an array', originalContents)
         return
@@ -1430,7 +1446,7 @@ class Registry {
       arr = retired
       // The rollback copy is the file as found, retired runtimes and all — not the cleaned rows.
       if (arr.some((row) => row.schemaVersion !== 2)) {
-        atomicWriteJson(PRE_V2_BACKUP_FILE, stored, true)
+        await this.preserveLegacyImage(originalContents)
       }
       let changed = strippedRetired || swarmAuto || (ownModes && arr.some((row, i) => row !== parsed[i]))
       if (rebooted) {
@@ -1685,7 +1701,7 @@ class Registry {
    * not start a single agent until someone repaired the file by hand. A newer version's rows (an
    * unknown schema) are not corruption, and are still never touched.
    */
-  private async quarantine(reason: string, originalContents: string): Promise<void> {
+  private async quarantine(reason: string, originalContents: SessionImageProof): Promise<void> {
     this.agents.clear()
     this.sessionIndex.clear()
     this.runtimeIndex.clear()
@@ -1699,14 +1715,18 @@ class Registry {
       await this.writer.run(deadline => registryFileLock(env.ADAPTER_DATA_DIR, deadline, async checkOwner => {
         // A peer may publish while rows are being prepared or the lock is awaited.
         // Only the exact malformed image we read may be moved aside.
-        if (await readPrivateRegistryFile(FILE) !== originalContents) {
+        const latest = await sessionStorage.read({ kind: 'registry' })
+        if (latest.state !== 'image' || latest.proof.sha256 !== originalContents.sha256) {
           throw new RegistryPersistenceUnavailable('registry image changed during initialization')
         }
         checkOwner()
+        if (sessionFileIdentity(lstatSync(FILE, { bigint: true })) !== latest.proof.identity) {
+          throw new RegistryPersistenceUnavailable('registry image changed during initialization')
+        }
         renameSync(FILE, aside)
       }))
       this.writeBlocked = false
-      console.error(`[registry] registry ${reason}; moved it aside to ${aside} and started empty`)
+      console.error(`[registry] registry ${reason}; moved it aside and started empty`)
     } catch (error) {
       this.writeBlocked = true
       console.error(`[registry] registry ${reason}, and it could not be moved aside (${error instanceof Error ? error.message : error}); refusing to overwrite it`)
@@ -1714,9 +1734,39 @@ class Registry {
     }
   }
 
-  private loadNames(): void {
+  private async preserveLegacyImage(original: SessionImageProof): Promise<void> {
+    if (existsSync(PRE_V2_BACKUP_FILE)) return
+    await this.writer.run(deadline => sessionStorage.withWrite(deadline.expires,
+      () => registryFileLock(env.ADAPTER_DATA_DIR, deadline, async checkOwner => {
+        const latest = await sessionStorage.read({ kind: 'registry' })
+        if (latest.state !== 'image' || latest.proof.sha256 !== original.sha256) {
+          throw new RegistryPersistenceUnavailable('registry image changed during initialization')
+        }
+        const backup = await sessionStorage.retain({ kind: 'legacy-registry' })
+        try {
+          if (backup.image.state !== 'missing') return
+          const prepared = await prepareSessionPublication(sessionStorage, { kind: 'legacy-registry' }, backup, [], deadline, latest.proof)
+          try {
+            checkOwner()
+            if (sessionFileIdentity(lstatSync(FILE, { bigint: true })) !== latest.proof.identity) {
+              throw new RegistryPersistenceUnavailable('registry image changed during initialization')
+            }
+            prepared.publish(() => {})
+            await prepared.sync()
+            await prepared.settle()
+            checkOwner()
+            prepared.finish()
+            deadline.markAdmitted()
+          } finally { await prepared.discard() }
+        } finally { await backup.release() }
+      })))
+  }
+
+  private async loadNames(): Promise<void> {
     try {
-      const obj = JSON.parse(readPrivateStateFile(NAMES_FILE, 1024 * 1024)) as Record<string, unknown>
+      const image = await sessionStorage.read({ kind: 'names' })
+      if (image.state !== 'image' || !image.json) return
+      const obj = image.value as Record<string, unknown>
       for (const [id, name] of Object.entries(obj)) {
         if (typeof name === 'string' && name.trim()) NAME_OVERRIDES.set(id, name.trim())
       }
@@ -1945,6 +1995,7 @@ class Registry {
       const agentId = input.agentId ?? randomUUID()
       if (this.byAgent(agentId)) return null
       const now = Date.now()
+      return this.withGridRecord({ agentId, registeredAt: now }, input.gridLaunchRecord, async gridLaunchRecord => {
       const entry: RegisteredSession = {
         schemaVersion: 2,
         active: !externalResume,
@@ -1957,8 +2008,8 @@ class Registry {
         engine: input.engine,
         gateway: null,
         grid: input.grid ?? null,
-        gridLaunch: input.gridLaunchRecord?.override ?? null,
-        gridWebSearch: input.gridLaunchRecord?.webSearch ?? null,
+        gridLaunch: gridLaunchRecord?.override ?? null,
+        gridWebSearch: gridLaunchRecord?.webSearch ?? null,
         ...(input.scmLaunchRecord ? { scmLaunch: input.scmLaunchRecord } : {}),
         ...(storedLaunchModel(input.launchModel) ? { launchModel: storedLaunchModel(input.launchModel) } : {}),
         codexHome: input.codexHome ?? null,
@@ -2004,6 +2055,7 @@ class Registry {
       this.terminalAvailableAgents.add(entry.agentId)
       if (entry.firstTask) firstTaskKept(agentId)
       return structuredClone(committed)
+      })
     }).catch(error => {
       console.error('[registry] pending admission failed')
       if (error instanceof AtomicWriteUnconfirmed) throw error
@@ -2063,6 +2115,9 @@ class Registry {
         throw new RegistryOwnershipChanged('the selected launch changed while its write was being prepared')
       }
     }
+    const imported = requested.gridLaunchRecord
+    delete requested.gridLaunchRecord
+    return this.withGridRecord(selected, imported, async importedRecord => {
     let candidate: RegisteredSession | undefined
     let uncertain = false
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -2078,9 +2133,9 @@ class Registry {
               if (requested.launchArgs.length) candidate.launchArgs = requested.launchArgs
               else delete candidate.launchArgs
             }
-            if (requested.gridLaunchRecord !== undefined) {
-              candidate.gridLaunch = requested.gridLaunchRecord?.override ?? null
-              candidate.gridWebSearch = requested.gridLaunchRecord?.webSearch ?? null
+            if (importedRecord !== undefined) {
+              candidate.gridLaunch = importedRecord?.override ?? null
+              candidate.gridWebSearch = importedRecord?.webSearch ?? null
             }
             if (requested.subscriptionModel !== undefined) candidate.subscriptionModel = requested.subscriptionModel
             if (requested.runtimes !== undefined) {
@@ -2114,6 +2169,7 @@ class Registry {
       }
     }
     throw new AtomicWriteUnconfirmed(new Error('launch publication remains unconfirmed'))
+    })
   }
 
   /**
@@ -3053,15 +3109,20 @@ class Registry {
    * own login. One call for the pair on purpose: a status without its launch, or a launch without its
    * status, is a row the app would read wrongly.
    */
-  setGridLaunch(agentId: string, launch: GridLaunchRecord | null): boolean {
+  async setGridLaunch(agentId: string, launch: GridLaunchRecord | null, authority: RegistryAuthority = {}): Promise<boolean> {
     this.assertOpen()
     const session = this.agents.get(agentId)
     if (!session) return false
-    session.gridLaunch = launch?.override ?? null
-    session.gridWebSearch = launch?.webSearch ?? null
-    session.touchedAt = Date.now()
-    this.save()
-    return true
+    const verify = this.ownerGuard(agentId, authority.current)
+    return this.writer.run(async deadline => this.withGridRecord(session, launch, async record => {
+      verify()
+      const candidate = structuredClone(this.byAgent(agentId)!)
+      candidate.gridLaunch = record?.override ?? null
+      candidate.gridWebSearch = record?.webSearch ?? null
+      candidate.touchedAt = Date.now()
+      const receipt = await this.persist(deadline, true, false, undefined, { agentId, candidate, verify, refresh: authority.refresh, allowTransaction: true })
+      return this.committedOwner(agentId, receipt) !== null
+    }), authority.expires)
   }
 
   /** Record the model and effort [agentId]'s session relaunches with (RegisteredSession.launchModel); null forgets it. */
@@ -3447,22 +3508,27 @@ class Registry {
       // Read through the normal ownership/mode/no-symlink checks; timestamps cannot prove equality.
       // A concurrent commit after this read is picked up on the next pass, as after a locked save.
       // Close intents always take the durable path, even when an identical request is retried.
-      if (strict !== true && this.persistedContents !== null
+      if (strict !== true && !unconfirmed && this.persistedContents !== null
         && currentRows.size === this.persistedBaseline.size
-        && [...currentRows].every(([id]) => this.persistedBaseline.get(id) === beforeCommit.get(id))
-        && await readPrivateRegistryFile(FILE).catch(error => {
-          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-          throw error
-        }) === this.persistedContents) return
-      await registryFileLock(env.ADAPTER_DATA_DIR, deadline, async checkOwner => {
+        && [...currentRows].every(([id]) => this.persistedBaseline.get(id) === beforeCommit.get(id))) {
+        const same = await sessionStorage.equal(this.persistedContents)
+        if (same) {
+          this.persistedContents = same
+          // An old writer may atomically publish identical bytes. Keep launch witnesses fresh without a rewrite.
+          for (const row of this.agents.values()) if (row.gridLaunch) row.gridLaunch = { ...row.gridLaunch,
+            credential: { ...row.gridLaunch.credential, source: { kind: 'image', proof: same } } }
+          return
+        }
+      }
+      await sessionStorage.withWrite(deadline.expires, () => registryFileLock(env.ADAPTER_DATA_DIR, deadline, async checkOwner => {
+        const priorSource = unconfirmed?.source
+        const source = await sessionStorage.retain({ kind: 'registry' })
+        try {
         const latestValues: unknown[] = await (async () => {
-          const contents = await readPrivateRegistryFile(FILE).catch(error => {
-            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-            throw error
-          })
           deadline.check()
-          if (contents === null) return []
-          const stored = JSON.parse(contents) as unknown
+          if (source.image.state === 'missing') return []
+          if (!source.image.json) throw new Error('registry is not JSON')
+          const stored = source.image.value
           if (!Array.isArray(stored)) throw new Error('registry root changed to a non-array value')
           const parsed = withoutRetiredRows(stored).rows
           if (parsed.some(hasUnknownRowSchema) || parsed.some(value => !!value && typeof value === 'object'
@@ -3608,8 +3674,25 @@ class Registry {
           }
         }
         const merged = [...mergedForSave(latest, currentRows, this.persistedBaseline, capturedIntents, snapshotFingerprint, identities).values()]
-        const rows = validatedRows(merged)
+        let rows = validatedRows(merged)
         if (!rows) throw new Error('registry transaction would violate global identity invariants')
+        const candidateRows = rows.map(row => persistedRow(row))
+        const prepared = await prepareSessionPublication(sessionStorage, { kind: 'registry' }, source, candidateRows, deadline)
+        try {
+          const projected = Array.isArray(prepared.value) ? validatedRows(prepared.value) : null
+          if (!projected || projected.length !== candidateRows.length || projected.some((row, index) => {
+            const candidate = candidateRows[index]
+            const publicRow = (value: RegisteredSession | Omit<RegisteredSession, 'tmuxPane'>) => ({ ...value,
+              gridLaunch: value.gridLaunch ? (({ credential: _private, ...metadata }) => metadata)(value.gridLaunch) : value.gridLaunch })
+            if (rowFingerprint(publicRow(row)) !== rowFingerprint(publicRow(candidate))) return true
+            const before = candidate.gridLaunch, after = row.gridLaunch
+            if (!before || !after) return before !== after
+            if (after.credential.row.agentId !== row.agentId || after.credential.row.registeredAt !== row.registeredAt) return true
+            return before.credential.row.agentId === row.agentId && before.credential.row.registeredAt === row.registeredAt
+              && before.credential.binding !== after.credential.binding
+          })) throw new RegistryPersistenceUnavailable('prepared session metadata changed')
+          rows = projected
+        } catch (error) { await prepared.discard(); throw error }
         // Exact prepared objects may survive the fresh live rebase unchanged; their normalized rows
         // are still private. Changed/live-derived objects must be parsed again after refresh.
         const preparedRows = new Map<object, RegisteredSession>()
@@ -3620,7 +3703,6 @@ class Registry {
           preparedImages.set(row, saved as unknown as Record<string, unknown>)
           return saved
         })
-        const contents = JSON.stringify(serialized, null, 2)
         // Recovery must already exist when an asynchronous directory flush lets the reply timer run.
         const recovery = (() => {
           if (!bindingCommit && !unconfirmed) return null
@@ -3638,10 +3720,10 @@ class Registry {
             image: JSON.parse(JSON.stringify(serialized)), prior: JSON.parse(JSON.stringify([...prior.values()])),
             agentId: bindingCommit?.agentId ?? unconfirmed!.agentId, intent: intent ?? null,
             before: beforeCommit, affected,
+            source: unconfirmed && (!bindingCommit || bindingCommit.agentId === unconfirmed.agentId) ? unconfirmed.source : source,
           }
         })()
         const verifyOwners = strict ? this.preparedOwnerGuard(beforeOwners, currentRows, changed, mutationAgentId) : undefined
-        const prepared = await prepareRegistryImage(FILE, contents, deadline)
         let rebased: RegisteredSession[]
         const rebase = () => {
           deadline.check()
@@ -3666,9 +3748,10 @@ class Registry {
           if (syncing) {
             await syncing
             deadline.check()
-            await bindingCommit?.refresh?.()
-            rebased = rebase()
           }
+          await prepared.settle()
+          await bindingCommit?.refresh?.()
+          rebased = rebase()
           prepared.finish()
         }
         catch (error) {
@@ -3682,7 +3765,7 @@ class Registry {
           throw failure
         }
         this.unconfirmedBinding = null
-        this.persistedContents = contents
+        this.persistedContents = prepared.proof
         for (const [id, intent] of capturedIntents) if (this.intended.get(id) === intent) this.intended.delete(id)
 
         // External refresh keeps controller references. Registration replaces its target only now:
@@ -3721,7 +3804,11 @@ class Registry {
         deadline.markAdmitted()
         if (rebased.length !== serialized.length || rebased.some(row => this.persistedBaseline.get(row.agentId) !== (preparedImages.has(row)
           ? snapshotFingerprint(preparedImages.get(row)!) : rowFingerprint(persistedRow(row))))) void this.save()
-      })
+        } finally {
+          if (this.unconfirmedBinding?.source !== source) await source.release()
+          if (priorSource && priorSource !== source && this.unconfirmedBinding?.source !== priorSource) await priorSource.release()
+        }
+      }))
     } catch (err) {
       if (strict) throw persistenceFailure(err)
       console.error('[registry] save failed')
@@ -3758,6 +3845,7 @@ class Registry {
 
   private async persistNames(deadline: RegistryWriteDeadline, intent?: { key: string; value: string; verify: () => void }): Promise<void> {
     try {
+      await sessionStorage.withWrite(deadline.expires, async () => {
       const revision = this.namesRevision
       const names = Object.fromEntries(NAME_OVERRIDES)
       if (intent) names[intent.key] = intent.value
@@ -3765,18 +3853,19 @@ class Registry {
       await privateRegistryDirectory(env.ADAPTER_DATA_DIR)
       deadline.check()
       let existing: Record<string, string> = {}
-      let contents: string | undefined
+      const source = await sessionStorage.retain({ kind: 'names' })
       try {
-        contents = await readPrivateRegistryFile(NAMES_FILE, 1024 * 1024)
-        const obj = JSON.parse(contents) as Record<string, unknown>
+      if (source.image.state === 'image') {
+        if (!source.image.json) throw new RegistryPersistenceUnavailable('names are not JSON')
+        const obj = source.image.value as Record<string, unknown>
         existing = Object.fromEntries(Object.entries(obj).filter(([, value]) => typeof value === 'string')) as Record<string, string>
-      } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+      }
       deadline.check()
       // Equal bytes can still be an unconfirmed rename. Only a clean observation may omit publication.
       if (!intent && !this.namesUnsaved && deleted.size === 0 && revision === this.namesRevision
-        && contents === JSON.stringify(names, null, 2)) return
+        && source.image.state === 'image' && source.image.json && rowFingerprint(source.image.value) === rowFingerprint(names)) return
       for (const id of deleted) delete existing[id]
-      const prepared = await prepareRegistryImage(NAMES_FILE, JSON.stringify({ ...existing, ...names }, null, 2), deadline)
+      const prepared = await prepareSessionPublication(sessionStorage, { kind: 'names' }, source, { ...existing, ...names }, deadline)
       try {
         intent?.verify()
         prepared.publish(() => {})
@@ -3784,8 +3873,9 @@ class Registry {
         if (syncing) {
           await syncing
           deadline.check()
-          intent?.verify()
         }
+        await prepared.settle()
+        intent?.verify()
         prepared.finish()
       } catch (error) {
         let failure = prepared.published && !(error instanceof AtomicWriteUnconfirmed)
@@ -3807,6 +3897,8 @@ class Registry {
         for (const id of deleted) this.deletedNames.delete(id)
       }
       deadline.markAdmitted()
+      } finally { await source.release() }
+      })
     } catch (error) { this.namesUnsaved = true; throw persistenceFailure(error, true) }
   }
 
@@ -3858,10 +3950,9 @@ function validProcessIdentity(value: unknown): value is ProcessIdentity {
  *  "no credential" — a half-remembered key is worse than none, because a launch built from it would
  *  look like a grid launch and fail like one. `undefined` (the field was never written) is kept
  *  distinct from `null` (vendor login) so restore can tell a pre-upgrade grid row apart. */
-function normalizedGridLaunch(value: unknown): GridLaunchOverride | null | undefined {
+function normalizedGridLaunch(value: unknown): StoredGridLaunch | null | undefined {
   if (value === undefined) return undefined
-  const parsed = parseGridLaunchOverride(value)
-  return parsed.state === 'ok' ? parsed.override : null
+  return storedGridLaunch(value) ? value : null
 }
 
 /** What a persisted launch said about web search. Anything but the three known words is "nothing to

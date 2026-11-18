@@ -74,8 +74,9 @@ async function setup(rows = [row], found = true) {
   }
   class Stopped {
     constructor(readonly rows: Map<string, RegisteredSession>) {}
-    get(id: string) { return this.rows.get(id) ?? null }
-    ids() { return [...this.rows.keys()] }
+    async get(id: string) { return this.rows.get(id) ?? null }
+    current(row: RegisteredSession) { return this.rows.get(row.agentId) === row }
+    query: ReturnType<typeof stoppedFixture>['query'] = query => stoppedFixture(() => [...this.rows.values()]).query(query)
   }
   const deps = createHandoffDependencies({
     registry: new Registry(current), stopped: new Stopped(saved),
@@ -355,7 +356,7 @@ it('refuses a by-ID file without the current core selection witness', async () =
   const { createHandoffPublisher } = await import('./handoffPublication.js')
   // This core instance did not observe the lookup supplied by the earlier service preparation.
   ctx.deps.publish = createHandoffPublisher({ directory: join(root, 'ADAPTER_DATA_DIR'),
-    resolve: id => ctx.current.get(id), ownedByOther: () => false, isRecentlyDeleted: () => false })
+    authority: async () => ({ resolve: id => ctx.current.get(id), ownedByOther: () => false, current: () => true }), isRecentlyDeleted: () => false })
   expect(await processPrepare(ctx)).toMatchObject({ error: 'IDENTITY_UNAVAILABLE', held: true }); noPublication()
 })
 
@@ -555,3 +556,4 @@ it('publishes through core with a summary that could not be read', async () => {
   expect(result.degraded).toContain('summary')
   expect(result.file).toMatch(/^\.harness\/handoff\/selected-/)
 })
+import { stoppedFixture } from '../testing/stoppedFixture.js'

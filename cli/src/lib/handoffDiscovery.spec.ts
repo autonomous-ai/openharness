@@ -1,3 +1,4 @@
+import { stoppedFixture } from '../testing/stoppedFixture.js'
 // The session an unbound, live agent runs, found for the handoff (lib/handoffDiscovery.ts): read-only, born-only,
 // and never a guess: each refusal below is a case where a Change agent must not pick a conversation.
 import { describe, expect, it, vi } from 'vitest'
@@ -223,35 +224,25 @@ describe('sessionDiscovery', () => {
 })
 
 describe('ownedByOther: another agent holds the session, running or stopped, failing closed', () => {
-  const wiring = (over: Partial<Parameters<typeof ownedByOther>[0]> = {}) => ({
-    bySession: () => undefined,
-    stoppedIds: () => [] as string[],
-    stopped: () => null,
-    ...over,
-  }) as Parameters<typeof ownedByOther>[0]
-  const stoppedRow = (agentId: string, sessionId: string) => ({ agentId, sessionId }) as unknown as RegisteredSession
-
-  it('is false for a session nobody holds, or only the agent itself holds', () => {
-    expect(ownedByOther(wiring(), 's1', 'a1')).toBe(false)
-    expect(ownedByOther(wiring({ bySession: () => ({ agentId: 'a1' }) as never }), 's1', 'a1')).toBe(false)
-    expect(ownedByOther(wiring({ stoppedIds: () => ['a1'], stopped: () => stoppedRow('a1', 's1') }), 's1', 'a1')).toBe(false)
+  const row = (agentId: string, sessionId: string) => ({ agentId, sessionId }) as RegisteredSession
+  const wiring = (rows: RegisteredSession[] = [], over: Partial<Parameters<typeof ownedByOther>[0]> = {}) => ({
+    bySession: () => undefined, query: stoppedFixture(() => rows).query, ...over,
   })
-  it('is true when a running agent holds it', () => {
-    expect(ownedByOther(wiring({ bySession: () => ({ agentId: 'b' }) as never }), 's1', 'a1')).toBe(true)
+  it('is false for a session nobody holds, or only the selected agent holds', async () => {
+    expect(await ownedByOther(wiring(), 's1', 'a1')).toBe(false)
+    expect(await ownedByOther(wiring([], { bySession: () => row('a1', 's1') }), 's1', 'a1')).toBe(false)
+    expect(await ownedByOther(wiring([row('a1', 's1')]), 's1', 'a1')).toBe(false)
   })
-  it('is true when a stopped agent holds it', () => {
-    expect(ownedByOther(wiring({ stoppedIds: () => ['b', 'c'], stopped: (id) => stoppedRow(id, id === 'c' ? 's1' : 'sx') }), 's1', 'a1')).toBe(true)
+  it('is true when a running or stopped agent holds the conversation', async () => {
+    expect(await ownedByOther(wiring([], { bySession: () => row('b', 's1') }), 's1', 'a1')).toBe(true)
+    expect(await ownedByOther(wiring([row('b', 'other'), row('c', 's1')]), 's1', 'a1')).toBe(true)
   })
-  it('is true when ONE stopped record cannot be read, even though the others are fine and do not hold it', () => {
-    const stopped = (id: string) => { if (id === 'bad') throw new Error('Could not read the saved stopped harness.'); return stoppedRow(id, 'sx') }
-    expect(ownedByOther(wiring({ stoppedIds: () => ['b', 'bad', 'c'], stopped }), 's1', 'a1')).toBe(true)
+  it.each(['unreadable archive', 'invalid archive', 'unreadable directory', 'disconnected storage'])('is true for %s', async reason => {
+    expect(await ownedByOther(wiring([], { query: async () => { throw new Error(reason) } }), 's1', 'a1')).toBe(true)
   })
-  it('is true when a stopped record exists but is unusable (get answers null), or the stopped folder cannot be listed', () => {
-    expect(ownedByOther(wiring({ stoppedIds: () => ['b'], stopped: () => null }), 's1', 'a1')).toBe(true)
-    expect(ownedByOther(wiring({ stoppedIds: () => { throw new Error('EACCES') } }), 's1', 'a1')).toBe(true)
-  })
-  it('is true when the running registry cannot answer', () => {
-    expect(ownedByOther(wiring({ bySession: () => { throw new Error('boom') } }), 's1', 'a1')).toBe(true)
+  it('is true when the metadata answer changed or the live registry cannot answer', async () => {
+    expect(await ownedByOther(wiring([], { query: async () => ({ witness: 'fixture', matches: [false], current: () => false }) }), 's1', 'a1')).toBe(true)
+    expect(await ownedByOther(wiring([], { bySession: () => { throw new Error('unavailable') } }), 's1', 'a1')).toBe(true)
   })
 })
 
@@ -261,7 +252,7 @@ describe('handoffProviderDeps: each dependency reaches the right function with t
   function fakes(over: Partial<HandoffWiring> = {}): HandoffWiring {
     return {
       registry: { resolve: () => undefined, byAgent: () => undefined, bySession: () => undefined },
-      stopped: { get: () => null, ids: () => [] },
+      stopped: stoppedFixture(),
       mirror: { recentAsks: vi.fn(() => ['ask']), lastFullText: vi.fn(() => 'full'), recent: vi.fn(() => []) } as never,
       databaseHistory: vi.fn(() => undefined),
       findLiveSession: vi.fn(async () => null),
@@ -273,12 +264,12 @@ describe('handoffProviderDeps: each dependency reaches the right function with t
     }
   }
 
-  it('resolves a running agent first, then a stopped one', () => {
+  it('resolves a running agent first, then a stopped one', async () => {
     const run = { agentId: 'run' } as unknown as RegisteredSession
-    const stoppedGet = vi.fn((id: string) => (id === 'gone' ? fork : null))
-    const d = handoffProviderDeps(fakes({ registry: { resolve: (id) => (id === 'run' ? run : undefined), byAgent: () => undefined, bySession: () => undefined }, stopped: { get: stoppedGet, ids: () => [] } }))
-    expect(d.resolve('run')).toBe(run)
-    expect(d.resolve('gone')).toBe(fork)
+    const stoppedGet = vi.fn(async (id: string) => (id === 'gone' ? fork : null))
+    const d = handoffProviderDeps(fakes({ registry: { resolve: (id) => (id === 'run' ? run : undefined), byAgent: () => undefined, bySession: () => undefined }, stopped: { ...stoppedFixture(), get: stoppedGet } }))
+    expect(await d.resolve('run')).toBe(run)
+    expect(await d.resolve('gone')).toBe(fork)
     expect(stoppedGet).toHaveBeenCalledWith('gone')
     expect(stoppedGet).not.toHaveBeenCalledWith('run')
   })
@@ -329,7 +320,7 @@ describe('handoffProviderDeps: each dependency reaches the right function with t
     const processSession = vi.fn(async () => ({ sessionId: 'sx', transcriptPath: '/t/sx.jsonl' }))
     const running = fakes({ registry: { resolve: () => live, byAgent: () => ({}), bySession: (sid: string) => (sid === 'sx' ? { agentId: 'other' } : undefined) } as never, processSession })
     await expect(handoffProviderDeps(running).discoverSession?.(live)).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
-    const stopped = fakes({ registry: { resolve: () => live, byAgent: () => ({}), bySession: () => undefined }, stopped: { ids: () => ['old'], get: () => ({ agentId: 'old', sessionId: 'sx' }) as never }, processSession })
+    const stopped = fakes({ registry: { resolve: () => live, byAgent: () => ({}), bySession: () => undefined }, stopped: stoppedFixture(() => [{ agentId: 'old', sessionId: 'sx' } as RegisteredSession]), processSession })
     await expect(handoffProviderDeps(stopped).discoverSession?.(live)).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
   })
 

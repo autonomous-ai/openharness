@@ -26,7 +26,7 @@ export interface HistoryDeps {
   resolve: (id: string) => RegisteredSession | undefined
   /** The conversations kept as stopped harnesses (lib/stoppedAgents.ts): a stop's, an exited engine's,
    *  and one a restart, a move or a restore had to leave for a new one. */
-  stopped: () => readonly RegisteredSession[]
+  stopped: () => Promise<readonly RegisteredSession[]>
   /** Incremental line counts; paging belongs to the reader's own process. */
   lineCount: (path: string) => Promise<number>
   readerFor: (engine: string) => TranscriptReader | undefined
@@ -46,7 +46,12 @@ export function createHistory({ resolve, stopped, lineCount, readerFor, storeOf 
     oldestCursor: null,
   })
 
-  const lookup = (id: string) => resolve(id) ?? stopped().find((saved) => saved.sessionId === id)
+  const lookup = async (id: string) => {
+    const live = resolve(id)
+    if (live) return live
+    const saved = await stopped()
+    return resolve(id) ?? saved.find(row => row.sessionId === id)
+  }
 
   /** The reply to a `session_get` request, for the socket to send as it is. */
   const sessionGet = async (payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
@@ -61,7 +66,7 @@ export function createHistory({ resolve, stopped, lineCount, readerFor, storeOf 
     // file (that let a caller read any *.jsonl on the computer, incl. unshared claude history /
     // traversal). A kept conversation used to answer NOT_FOUND, so a conversation the daemon had to
     // leave for a new one could no longer be read at all (round 24).
-    const s = lookup(sessionId)
+    const s = await lookup(sessionId)
     if (!s) return { error: 'NOT_FOUND' }
     // The registry finds an agent by its agent id too, and the reply names the id it was asked by. What
     // is read is the conversation's own, `s.sessionId`: an engine's store, Amp's export and Cursor's task
@@ -81,7 +86,7 @@ export function createHistory({ resolve, stopped, lineCount, readerFor, storeOf 
     try {
       const read = store ? { ...s, store: await storeOf(s) } : s
       const { events, timestamp, ...page } = await reader.historyPage(read, { limit, before })
-      if (transcriptReadIdentity(lookup(sessionId)) !== identity) throw new EngineReadError('ENGINE_STALE_REPLY')
+      if (transcriptReadIdentity(await lookup(sessionId)) !== identity) throw new EngineReadError('ENGINE_STALE_REPLY')
       return { id: sessionId, title: projectDisplayName(s), events, timestamp, engine: s.engine, ...page }
     } catch (error) {
       const failed = error instanceof EngineReadError ? error : new EngineReadError('ENGINE_UNAVAILABLE')

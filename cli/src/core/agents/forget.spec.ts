@@ -70,6 +70,26 @@ function expectLetGo(deps: ForgetDeps, sessionId: string, agentId: string) {
 }
 
 describe('forgetting a session', () => {
+  it.each(['archive fence', 'after archive', 'caller revoked'] as const)(
+    'keeps a replacement owner when forgetting yields at %s', async phase => {
+      const { deps, forgetSession } = setup()
+      const selected = deps.registry.resolve('a1')!
+      let current = true
+      vi.mocked(deps.stoppedAgents.save).mockImplementation(async (_row, fence) => {
+        if (phase === 'caller revoked') current = false
+        else selected.sessionId = 'replacement'
+        if (phase === 'archive fence') {
+          expect(fence?.()).toBe(false)
+          throw new Error('archive owner changed')
+        }
+      })
+      await expect(forgetSession('a1', { authority: phase === 'caller revoked' ? { current: () => current } : undefined }))
+        .rejects.toThrow(phase === 'archive fence' ? 'archive owner changed' : 'changed')
+      expect(deps.registry.confirmEngineExit).not.toHaveBeenCalled()
+      expect(deps.clients.send).not.toHaveBeenCalled()
+      expect(deps.normalizers.forget).not.toHaveBeenCalled()
+    })
+
   it.each(['unpublished removal', 'replacement after removal', 'empty unbind', 'replacement after unbind'] as const)(
     'retains readers and notifications when publication cannot prove absence: %s', async phase => {
       const { deps, forgetSession } = setup()
@@ -128,8 +148,8 @@ describe('forgetting a session', () => {
     if (mode === 'process') live.processIdentity = { pid: 41, startMarker: 'birth', executable: '<engine>' }
     const captured = { ...live, sessionId: 's1', transcriptPath: '/fixture/parent.jsonl', boundAt: 23, source: 'stop-repair' }
     await forgetSession(live.agentId, { captured })
-    expect(deps.stoppedAgents.save).toHaveBeenCalledWith(expect.objectContaining(captured))
-    expect(deps.registry.confirmEngineExit).toHaveBeenCalledWith(live.agentId, 'remove', undefined)
+    expect(deps.stoppedAgents.save).toHaveBeenCalledWith(expect.objectContaining(captured), expect.any(Function))
+    expect(deps.registry.confirmEngineExit).toHaveBeenCalledWith(live.agentId, 'remove', expect.objectContaining({ current: expect.any(Function) }))
   })
 
   it('archives a captured Hermes home with its own mark, never the live row\'s', async () => {
@@ -193,7 +213,7 @@ describe('forgetting a session', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const { deps, forgetSession } = setup()
     await forgetSession('a1', { keepAgent: true })
-    expect(deps.registry.confirmSessionUnbound).toHaveBeenCalledWith('a1', 's1', undefined)
+    expect(deps.registry.confirmSessionUnbound).toHaveBeenCalledWith('a1', 's1', expect.objectContaining({ current: expect.any(Function) }))
     expect(deps.registry.confirmEngineExit).not.toHaveBeenCalled()
     expect(deps.stoppedAgents.save).not.toHaveBeenCalled()
     expect(deps.ended).not.toHaveBeenCalled()
@@ -207,8 +227,8 @@ describe('forgetting a session', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const { deps, forgetSession } = setup()
     await forgetSession('s1')
-    expect(deps.stoppedAgents.save).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a1' }))
-    expect(deps.registry.confirmEngineExit).toHaveBeenCalledWith('a1', 'remove', undefined)
+    expect(deps.stoppedAgents.save).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a1' }), expect.any(Function))
+    expect(deps.registry.confirmEngineExit).toHaveBeenCalledWith('a1', 'remove', expect.objectContaining({ current: expect.any(Function) }))
     expect(deps.ended).toHaveBeenCalledWith('a1')
     expectLetGo(deps, 's1', 'a1')
     expect(deps.clients.send).toHaveBeenCalledWith({ type: 'agent_deleted', payload: { agentId: 'a1', retained: true } })
@@ -224,7 +244,7 @@ describe('forgetting a session', () => {
     const order: string[] = []
     const remove = vi.mocked(deps.registry.confirmEngineExit).getMockImplementation()!
     vi.mocked(deps.registry.confirmEngineExit).mockImplementation(async (...args) => { order.push('removed'); return remove(...args) })
-    const owners = { settleSaved: vi.fn(() => { order.push('settled'); return [] }) }
+    const owners = { settleSaved: vi.fn(async () => { order.push('settled'); return [] }) }
     const forget = createForgetSession({ ...deps, owners })
     await forget('s1')
     expect(owners.settleSaved).toHaveBeenCalledWith('a1')
@@ -272,7 +292,7 @@ describe('forgetting a session', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const { deps, forgetSession } = setup()
     await forgetSession('fresh')
-    expect(deps.registry.confirmEngineExit).toHaveBeenCalledWith('fresh', 'remove', undefined)
+    expect(deps.registry.confirmEngineExit).toHaveBeenCalledWith('fresh', 'remove', expect.objectContaining({ current: expect.any(Function) }))
     expect(deps.normalizers.forget).toHaveBeenCalledWith('fresh')
   })
 })

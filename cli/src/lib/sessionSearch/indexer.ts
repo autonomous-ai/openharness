@@ -116,17 +116,17 @@ export interface SessionSearchResult {
 
 export interface SessionSearchIndexOptions {
   /** Exact resume metadata for catalog entries, including an agent's earlier conversations. */
-  catalogMetadata?: () => ReadonlyMap<string, ExternalHit>
+  catalogMetadata?: () => ReadonlyMap<string, ExternalHit> | Promise<ReadonlyMap<string, ExternalHit>>
   store: SessionSearchStore
   /** Every session this machine can index: live agents and stopped ones. */
-  sources: () => SearchSource[]
+  sources: () => SearchSource[] | Promise<SearchSource[]>
   /**
    * Every agent this machine knows, indexable right now or not. An agent's sessions leave the index
    * only when the agent does — never because its current session has no transcript for a moment
    * (a `/clear` between sessions), since its earlier ones cannot be read back once dropped.
    * Defaults to the agents of `sources`.
    */
-  agents?: () => Iterable<string>
+  agents?: () => Iterable<string> | Promise<Iterable<string>>
   log?: (line: string) => void
   /**
    * Which sessions are open in a running process right now (external.ts `OpenSessions`), so a
@@ -166,6 +166,7 @@ export class SessionSearchIndex {
   private readonly touches = new Map<string, NodeJS.Timeout>()
   private sources = new Map<string, SearchSource>()
   private sourcesReadAt = 0
+  private sourceRead: Promise<void> | undefined
   private running = false
   private stopped = false
   private sweepTimer: NodeJS.Timeout | null = null
@@ -259,14 +260,19 @@ export class SessionSearchIndex {
     if (pending) clearTimeout(pending)
     const timer = setTimeout(() => {
       this.touches.delete(sessionId)
-      this.refreshSources()
-      if (!this.sources.has(sessionId)) this.refreshSources(true)
-      // Ahead of a sweep's backlog: what somebody just said is what they are likeliest to look for.
-      this.front(sessionId)
-      void this.drain()
+      void this.refreshTouched(sessionId).catch(() => this.opts.log?.('[search] source discovery failed'))
     }, this.opts.touchDelayMs ?? 1_500)
     timer.unref?.()
     this.touches.set(sessionId, timer)
+  }
+
+  private async refreshTouched(sessionId: string): Promise<void> {
+    await this.refreshSources()
+    if (!this.sources.has(sessionId)) await this.refreshSources(true)
+    if (this.stopped) return
+    // Ahead of a sweep's backlog: what somebody just said is what they are likeliest to look for.
+    this.front(sessionId)
+    void this.drain()
   }
 
   /** Queue every known session, newest first; drop sessions whose agent no longer exists. */
@@ -275,10 +281,10 @@ export class SessionSearchIndex {
     this.discovering = true
     this.discoveryFailed = false
     this.discoveryStartedAt = Date.now()
-    const finish = (failed = false) => {
+    const finish = async (failed = false) => {
       if (this.stopped) { this.discovering = false; return }
       this.discoveryFailed = failed
-      try { this.sweepSources() }
+      try { await this.sweepSources() }
       catch (error) {
         this.discoveryFailed = true
         this.opts.log?.(`[search] source discovery failed: ${error instanceof Error ? error.message : String(error)}`)
@@ -293,13 +299,14 @@ export class SessionSearchIndex {
       void Promise.resolve().then(() => this.opts.discover!()).then(() => finish(), () => finish(true))
       return
     }
-    finish()
+    void finish()
   }
 
-  private sweepSources(): void {
+  private async sweepSources(): Promise<void> {
     if (this.stopped) return
-    this.refreshSources(true)
-    const agents = new Set(this.opts.agents?.() ?? [...this.sources.values()].map((source) => source.agentId))
+    await this.refreshSources(true)
+    const agents = new Set(await this.opts.agents?.() ?? [...this.sources.values()].map((source) => source.agentId))
+    if (this.stopped) return
     for (const sessionId of this.opts.store.sessionIds()) {
       // An agent's earlier sessions (before a /clear) stay findable while the agent exists; one
       // Harness did not start, while its file does.
@@ -322,7 +329,7 @@ export class SessionSearchIndex {
     void this.drain()
   }
 
-  search(query: string, options: { limit?: number; from?: number; to?: number; catalogAfter?: string } = {}): SessionSearchResult {
+  async search(query: string, options: { limit?: number; from?: number; to?: number; catalogAfter?: string } = {}): Promise<SessionSearchResult> {
     const started = performance.now()
     // Opening welcome/search is an explicit demand for current history, including sessions
     // started since boot. Keep a short cache across typing/retries, not the ten-minute idle sweep.
@@ -331,7 +338,7 @@ export class SessionSearchIndex {
         (this.discoveryStartedAt === undefined || Date.now() - this.discoveryStartedAt >= 1_000)) this.sweep()
     const hits = this.opts.store.search(query, options)
     if (options.catalogAfter !== undefined) {
-      const metadata = this.opts.catalogMetadata?.()
+      const metadata = await this.opts.catalogMetadata?.()
       for (const hit of hits) {
         const entry = metadata?.get(hit.sessionId)
         if (entry) hit.catalogEntry = { ...entry }
@@ -363,8 +370,8 @@ export class SessionSearchIndex {
    */
   async tail(sessionId: string, options: { beforeTurn?: number; maxChars?: number; freshMs?: number } = {}): Promise<SessionTail | null> {
     if (options.beforeTurn === undefined && !this.stopped) {
-      this.refreshSources()
-      if (!this.sources.has(sessionId)) this.refreshSources(true)
+      await this.refreshSources()
+      if (!this.sources.has(sessionId)) await this.refreshSources(true)
       if (this.sources.has(sessionId)) {
         const passed = new Promise<void>((resolve) => {
           const waiting = this.waiters.get(sessionId) ?? []
@@ -441,17 +448,27 @@ export class SessionSearchIndex {
     }
   }
 
-  private refreshSources(force = false): void {
+  private async refreshSources(force = false): Promise<void> {
+    if (this.stopped) return
+    if (this.sourceRead) return this.sourceRead
     if (!force && Date.now() - this.sourcesReadAt < 5_000) return
+    const pending = this.readSources()
+    this.sourceRead = pending
+    try { await pending }
+    finally { this.sourceRead = undefined }
+  }
+
+  private async readSources(): Promise<void> {
     const next = new Map<string, SearchSource>()
     const deletedListed = new Set<string>()
-    for (const source of this.opts.sources()) {
+    for (const source of await this.opts.sources()) {
       if (!source.sessionId) continue
       if (this.deletedSessions.has(source.sessionId)) { deletedListed.add(source.sessionId); continue }
       const known = next.get(source.sessionId)
       // One session can be listed live and stopped at once: the fresher record wins.
       if (!known || source.changedAt > known.changedAt) next.set(source.sessionId, source)
     }
+    if (this.stopped) return
     this.sources = next
     this.deletedListed = deletedListed
     this.sourcesReadAt = Date.now()

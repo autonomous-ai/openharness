@@ -75,7 +75,7 @@ export interface LaunchRequestDeps {
   restartAgent: () => RestartAgent | null
   byAgent: (agentId: string) => RegisteredSession | undefined
   /** A stopped agent's saved row (the stopped-agents store): a resume may bring it back with new launch words. */
-  stoppedAgent: (agentId: string) => RegisteredSession | undefined
+  stoppedAgent: (agentId: string) => Promise<RegisteredSession | undefined>
   /** An agent's frame, as the socket builds it for every reply. */
   toProject: (s: RegisteredSession) => Promise<AgentFrame>
   /** Where a new agent on a grid model sends its inference: the models service's to resolve, on this
@@ -651,7 +651,7 @@ export function createLaunchRequests({ describeDsh = async id => dshUnavailable(
     if (payload.launchArgs !== undefined) {
       if (!asker.ownerApp) { reply({ error: 'INVALID_LAUNCH_ARGS', detail: 'Launch flags can only be changed from your own Harness app.' }); return }
       // A harness a bad flag left stopped is in the stopped store, not the registry: the way back is to resume it.
-      const known = byAgent(target) ?? stoppedAgent(target)
+      const known = byAgent(target) ?? await stoppedAgent(target)
       if (typeof payload.launchArgs !== 'string') {
         reply({ error: 'INVALID_LAUNCH_ARGS' }); return
       }

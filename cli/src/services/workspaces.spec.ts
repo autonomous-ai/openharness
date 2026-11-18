@@ -27,7 +27,7 @@ const settle = () => new Promise((resolve) => setImmediate(resolve))
 
 function setup(live: RegisteredSession[] = [], all: RegisteredSession[] = live, current: RegisteredSession | null = live[0] ?? null) {
   const core = fakeCore({
-    agents: { live: vi.fn(() => live), all: vi.fn(() => all), byAgent: vi.fn(() => current ?? undefined), sync: vi.fn() },
+    agents: { live: vi.fn(() => live), all: vi.fn(async () => all), byAgent: vi.fn(() => current ?? undefined), sync: vi.fn() },
   })
   const ports = emptyPorts()
   startWorkspaces(core, ports)

@@ -20,7 +20,7 @@ function setup(connected = true) {
   const core = fakeCore({
     agents: {
       live: vi.fn(() => live),
-      all: vi.fn(() => [...live, stopped]),
+      all: vi.fn(async () => [...live, stopped]),
       byAgent: vi.fn((agentId: string) => live.find((session) => session.agentId === agentId)),
     },
   })

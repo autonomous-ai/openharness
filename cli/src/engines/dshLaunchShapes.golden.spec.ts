@@ -1,3 +1,5 @@
+let gridFixtureSnapshot: typeof import('../testing/gridCredentials.js')['gridFixtureSnapshot']
+let storedGridFixture: typeof import('../testing/gridCredentials.js')['storedGridFixture']
 /**
  * Every launch shape that carries a harness package (DSH), answer for answer: recorded from the code as it stood
  * before the Store prepared those launches for the core (docs/design/2026-10-08-launch-port.md, (L3)). For each
@@ -25,6 +27,7 @@ import { baseNode } from '../harnessd/baseNode.js'
 import { resolveBinaryOnPath } from '../lib/binaryOnPath.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { GridLaunchOverride } from '../lib/gridLaunchWire.js'
+import { launchShapeProofs } from '../testing/launchShapeProofs.js'
 
 process.env.TZ = 'UTC'
 
@@ -33,7 +36,10 @@ const pane = vi.hoisted(() => ({ calls: [] as Array<Record<string, unknown>>, tm
 const init = vi.hoisted(() => ({ calls: [] as Array<Record<string, unknown>>, code: 0 as number | null, timedOut: false }))
 vi.mock('../lib/createAgentPane.js', () => ({
   createAndRegisterPane: vi.fn(async (input: Record<string, unknown>) => {
-    pane.calls.push(input)
+    if (typeof input.current !== 'function' || !input.current()) return { ok: false, error: 'AGENT_CHANGED' }
+    const argv = typeof input.argv === 'function' ? input.argv() : input.argv
+    expect(input.current()).toBe(true)
+    pane.calls.push({ ...input, argv })
     return { ok: false, error: 'RECORDED', detail: 'the pane is not opened by this spec' }
   }),
 }))
@@ -58,7 +64,7 @@ const RECORD = process.env.RECORD_DSH_LAUNCH_SHAPES_GOLDEN === '1'
 let root = ''
 const saved: Record<string, string | undefined> = {}
 /** The variables a launch reads of the daemon's own environment, each pinned (or cleared) for the record. */
-const VARS = ['ADAPTER_DATA_DIR', 'DSH_DIR', 'HOME', 'USERPROFILE', 'ZDOTDIR', 'SHELL', 'CODEX_HOME', 'CODEX_PATH', 'HARNESS_OS', 'HARNESS_GRID_BIN', 'CLAUDE_PATH',
+const VARS = ['PATH', 'OMP_PATH', 'OPENCLAW_PATH', 'ADAPTER_DATA_DIR', 'DSH_DIR', 'HOME', 'USERPROFILE', 'ZDOTDIR', 'SHELL', 'CODEX_HOME', 'CODEX_PATH', 'HARNESS_OS', 'HARNESS_GRID_BIN', 'CLAUDE_PATH',
   'CURSOR_PATH', 'OPENCODE_PATH', 'PI_PATH', 'HERMES_PATH', 'COMMANDCODE_PATH', 'DEVIN_PATH', 'MUSE_PATH', 'AMP_PATH', 'KILO_PATH', 'GROK_PATH',
   'AGY_PATH', 'COPILOT_PATH', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME'] as const
 /** The launch scripts the cases name, by digest: most shapes share theirs with others. */
@@ -76,12 +82,12 @@ const M1 = { hermesSystemManaged: false, opencodeMajor: 2 }
 const placeheld = (text: string): string => {
   const node = baseNode(process.execPath)
   const tmux = resolveBinaryOnPath('tmux') ?? 'tmux'
-  return text.split(`'${node}'`).join("'<daemon-node>'").split(`'${dirname(node)}'`).join("'<daemon-node-dir>'")
+  return launchShapeProofs(text.split(`'${node}'`).join("'<daemon-node>'").split(`'${dirname(node)}'`).join("'<daemon-node-dir>'")
     .split(`'${tmux}'`).join("'<tmux>'")
     .split(root).join('<root>')
-    .replace(/\/launch\/[0-9a-f-]{36}\.sh/g, '/launch/<script>.sh')
+    .replace(/\/launch\/[0-9a-f-]{36}\.sh/g, '/launch/<script>.sh'))
 }
-const norm = (value: unknown): unknown => value === undefined ? '<undefined>' : JSON.parse(placeheld(JSON.stringify(value)))
+const norm = (value: unknown): unknown => value === undefined ? '<undefined>' : JSON.parse(placeheld(JSON.stringify(value, gridFixtureSnapshot)))
 /** The script a launch's argv sources, kept once by its digest. */
 function scriptOf(argv: unknown): string | null {
   const sourced = Array.isArray(argv) ? argv.map(String).map((arg) => /^\. '(.+\/launch\/[0-9a-f-]{36}\.sh)'$/.exec(arg)?.[1]).find(Boolean) : undefined
@@ -180,11 +186,14 @@ beforeAll(async () => {
   for (const dir of ['data', 'zdotdir', 'home/.codex', 'dsh']) mkdirSync(join(root, dir), { recursive: true })
   writeFileSync(join(root, 'zdotdir', '.zshrc'), '')
   vi.resetModules()
+  ;({ storedGridFixture, gridFixtureSnapshot } = await import('../testing/gridCredentials.js'))
+  const { launchShapeExecutables } = await import('../testing/launchShapeExecutables.js')
+  launchShapeExecutables(root)
   const { launchShapes } = await import('../testing/launchShapes.js')
   invalidate = (await import('../dsh/installed.js')).invalidateInstalledDsh
   shapes = (gridName = null) => launchShapes({
     dataDir: join(root, 'data'), machine: () => ({ ...M1 }), capabilities: async () => ({ sessionEnv: pane.tmux }),
-    readCodexConfig: () => null, setGridLaunch: () => {}, gridName: () => gridName, projectsRoot: join(root, 'work'),
+    readCodexConfig: () => null, setGridLaunch: async () => {}, gridName: () => gridName, projectsRoot: join(root, 'work'),
   })
 }, 30_000)
 
@@ -216,6 +225,7 @@ const resetHome = (): void => {
 const paneOf = (call: Record<string, unknown> | undefined): unknown => call ? {
   argv: call.argv, script: scriptOf(call.argv), sessionLabel: call.sessionLabel, env: call.env, dsh: call.dsh, dshRuntime: call.dshRuntime, label: call.label,
   permissionMode: call.permissionMode, bypassPermission: call.bypassPermission, grid: call.grid,
+  afterExit: (call.paneLaunch as { afterExit?: unknown } | undefined)?.afterExit ?? null,
 } : null
 
 // ------------------------------------------------------------------------------------------------ create
@@ -283,7 +293,15 @@ const session = (engine: AgentEngine, over: Partial<RegisteredSession> = {}): Re
 async function relaunchCase(s: RegisteredSession, options: { gridName?: string; source?: Parameters<Shapes['relaunch']>[1]; before?: () => Promise<void> | void } = {}): Promise<unknown> {
   await options.before?.()
   const { value, lines } = await logged(() => shapes(options.gridName ?? null).relaunch(s, options.source))
-  return norm({ result: value, folder: s.cwd ? tree(s.cwd) : null, logged: lines.filter((line) => /dsh|harness|refused|grid/i.test(line)) })
+  const final = await shapes(options.gridName ?? null).finalRelaunch(s, value)
+  let dispatch: unknown = final
+  if ('argv' in final) {
+    expect(final.current?.()).not.toBe(false)
+    const argv = typeof final.argv === 'function' ? final.argv() : final.argv
+    expect(final.current?.()).not.toBe(false)
+    dispatch = { argv, script: scriptOf(argv), env: final.env, afterExit: final.paneLaunch?.afterExit ?? null }
+  }
+  return norm({ result: value, dispatch, folder: s.cwd ? tree(s.cwd) : null, logged: lines.filter((line) => /dsh|harness|refused|grid/i.test(line)) })
 }
 
 async function relaunchCases(): Promise<Record<string, unknown>> {
@@ -299,7 +317,7 @@ async function relaunchCases(): Promise<Record<string, unknown>> {
     write(join(root, 'dsh', 'acme', 'draw', 'AGENTS.md'), DRAW_FILES['AGENTS.md'])
   }
   cases['claude · the account\'s private grid'] = await relaunchCase(session('claude'), { gridName: 'grid-of-mine' })
-  cases['claude · on a grid too'] = await relaunchCase(session('claude', { gridLaunch: GRID }))
+  cases['claude · on a grid too'] = await relaunchCase(session('claude', { gridLaunch: storedGridFixture(GRID) }))
   cases['claude · a package that was renamed'] = await relaunchCase(session('claude', { dsh: 'acme/old-name' }))
   cases['codex · a package with nothing but an engine'] = await relaunchCase(session('codex', { dsh: BARE }))
   cases['claude · a package not installed'] = await relaunchCase(session('claude', { dsh: 'acme/missing' }))
@@ -319,7 +337,7 @@ async function relaunchCases(): Promise<Record<string, unknown>> {
   }
   cases['claude · a skill folder with no skill'] = await relaunchCase(session('claude', { dsh: BROKEN }))
   // Retarget hands the override it just resolved, and the harness still comes from the row.
-  cases['claude · retarget onto a grid'] = await relaunchCase(session('claude'), { source: { gridLaunch: GRID } })
+  cases['claude · retarget onto a grid'] = await relaunchCase(session('claude'), { source: { gridLaunch: storedGridFixture(GRID) } })
   return cases
 }
 
@@ -377,6 +395,20 @@ async function sectionsOn(platform: (typeof PLATFORMS)[number]): Promise<Section
 }
 
 describe('every launch of a harness package starts as it did before the Store prepared it', () => {
+  it('preserves the final Grid and harness instructions through the actual restore factory', async () => {
+    installAll()
+    const row = session('claude', { gridLaunch: storedGridFixture(GRID) })
+    const actual = await relaunchCase(row) as { dispatch: { argv: string[]; afterExit: unknown } }
+    const old = JSON.parse(readFileSync(GOLDEN, 'utf8')).relaunch['claude · on a grid too'].result.overrides.extraArgs as string[]
+    const expected = old.map(value => value.replace(/<root>\/work\/w[0-9]+/g, String(norm(row.cwd))))
+    const at = actual.dispatch.argv.indexOf('<root>/bin/claude')
+    expect(at).toBeGreaterThan(0)
+    expect(actual.dispatch.argv.slice(at + 1)).toEqual(expected)
+    expect(actual.dispatch.argv.filter(arg => arg === '--settings')).toHaveLength(1)
+    expect(actual.dispatch.argv.filter(arg => arg === '--append-system-prompt')).toHaveLength(1)
+    expect(actual.dispatch.afterExit).toBeNull()
+  })
+
   it('create, relaunch and fork match the record, on darwin and linux', async () => {
     const darwin = await sectionsOn('darwin')
     const linux = await sectionsOn('linux')

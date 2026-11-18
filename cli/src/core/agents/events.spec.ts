@@ -31,7 +31,7 @@ function events(over: Partial<AgentEventDeps> = {}, socket?: AnnounceSink) {
     sink: () => socket,
     terminalAvailable: () => true,
     resolve: (target) => live.get(target),
-    stopped: () => null,
+    stopped: async () => null,
     project: async (s) => ({ id: s.agentId }) as unknown as AgentFrame,
     ...over,
   })
@@ -108,7 +108,7 @@ describe('agent events', () => {
   it('republishes a stopped agent whose usage moved, and nothing for anyone else', async () => {
     const out = sink()
     const saved = agent({ agentId: 'a2', sessionId: 's2' })
-    const announce = events({ stopped: (agentId) => agentId === 'a2' ? saved : null }, out.socket)
+    const announce = events({ stopped: async (agentId) => agentId === 'a2' ? saved : null }, out.socket)
     announce.onTokenUsageChanged(agent({ agentId: 'a2', sessionId: 's2', engine: 'claude' }))
     // Another session of the same agent, or an engine it no longer runs: not this record.
     announce.onTokenUsageChanged(agent({ agentId: 'a2', sessionId: 'older', engine: 'claude' }))
@@ -122,12 +122,12 @@ describe('agent events', () => {
 
   it('shrugs off a stopped record that is being removed, or a publish that fails', async () => {
     const out = sink()
-    events({ stopped: () => { throw new Error('archive moved') } }, out.socket)
+    events({ stopped: async () => { throw new Error('archive moved') } }, out.socket)
       .onTokenUsageChanged(agent({ agentId: 'a2', sessionId: 's2', engine: 'claude' }))
     out.failPublish()
     const saved = agent({ agentId: 'a2', sessionId: 's2' })
-    events({ stopped: () => saved }, out.socket).onTokenUsageChanged(agent({ agentId: 'a2', sessionId: 's2', engine: 'claude' }))
-    events({ stopped: () => saved }).onTokenUsageChanged(agent({ agentId: 'a2', sessionId: 's2', engine: 'claude' }))
+    events({ stopped: async () => saved }, out.socket).onTokenUsageChanged(agent({ agentId: 'a2', sessionId: 's2', engine: 'claude' }))
+    events({ stopped: async () => saved }).onTokenUsageChanged(agent({ agentId: 'a2', sessionId: 's2', engine: 'claude' }))
     await settle()
     expect(out.published).toEqual(['a2'])
   })

@@ -125,7 +125,7 @@ export interface RestartAgentDeps {
   launchRefusal?: (opts: RelaunchArgvOptions) => string | null
   log: (message: string) => void
   /** Keeps the conversation the fresh fallback left as a stopped harness (keepAbandonedConversation.ts). */
-  keepAbandoned?: () => void
+  keepAbandoned?: () => Promise<void>
 }
 
 /** Outcomes that mean the old process is confirmed gone — safe to respawn over the pane (or, for a move, to start
@@ -220,6 +220,7 @@ export async function restartAgent(
   }
   // The agent works on in a new conversation; the one it was in, which the engine could not reopen, is
   // kept as a stopped harness to read and to resume once it can (round 24). A /clear keeps nothing.
-  if (resumeSessionId && !resumed) deps.keepAbandoned?.()
+  if (resumeSessionId && !resumed) await deps.keepAbandoned?.()
+  if (!current()) return changed
   return { ok: true, processIdentity: identity, resumed }
 }

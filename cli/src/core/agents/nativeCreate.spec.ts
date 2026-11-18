@@ -98,7 +98,7 @@ it.each([
   const receipts = new AgentCreationReceipts(join(root, 'receipts'))
   const requests = createLaunchRequests({ receipts, createAgent: () => creator, prepareCreate: creator.prepare,
     forkAgent: () => null, resumeAgent: () => null, restartAgent: () => null,
-    byAgent: () => pending, stoppedAgent: () => undefined, toProject: async () => ({ agentId: pending.agentId }) as never, modelTarget: async () => null,
+    byAgent: () => pending, stoppedAgent: async () => undefined, toProject: async () => ({ agentId: pending.agentId }) as never, modelTarget: async () => null,
     workspaces: () => null, prepareFolderTrust })
   stop = requests.stop
   const replies: Record<string, unknown>[] = []

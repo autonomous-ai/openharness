@@ -87,7 +87,7 @@ function wire(sessions: RegisteredSession[], over: Partial<HandoffDeps> = {}, fa
       byAgent: (id) => sessions.find((s) => s.agentId === id),
       bySession: (sid) => (sid ? sessions.find((s) => s.sessionId === sid) : undefined),
     },
-    stopped: { get: () => null, ids: () => [] },
+    stopped: stoppedFixture(),
     mirror: { recentAsks: () => [], lastFullText: () => undefined, recent: () => [] },
     databaseHistory: () => undefined,
     findLiveSession: async () => null,
@@ -371,7 +371,7 @@ describe('agent_handoff_prepare, socket + real provider: a fork that has not ans
 
   it('W9: a discovered session is never handed over while one stopped record cannot be read (ownership fails closed)', async () => {
     const claudeProcessSession = vi.fn(async () => ({ sessionId: 'sx', transcriptPath: parentFile('found.jsonl', 'later ask') }))
-    const stopped = { ids: () => ['ok-1', 'bad-1'], get: (id: string) => { if (id === 'bad-1') throw new Error('Could not read the saved stopped harness.'); return { agentId: id, sessionId: 'other' } as unknown as RegisteredSession } }
+    const stopped = { ...stoppedFixture(), query: async () => { throw new Error('Could not read the saved stopped harness.') } }
     wire([unbound('new-1')], {}, { processSession: claudeProcessSession, stopped })
     ask('r1', 'new-1')
     expect(await reply('r1')).toEqual(nothing('new-1'))
@@ -386,3 +386,4 @@ describe('agent_handoff_prepare, socket + real provider: a fork that has not ans
     expect(claudeProcessSession).not.toHaveBeenCalled()
   })
 })
+import { stoppedFixture } from './testing/stoppedFixture.js'

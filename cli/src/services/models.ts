@@ -33,7 +33,8 @@ import { gridAvailable, managedGridPath } from '../lib/gridExec.js'
 import { GridFleetRpc, parseGridFleetRequest } from '../lib/gridFleetRpc.js'
 import { handOffToGrid } from '../lib/gridHandoff.js'
 import { ensureGridInstalled } from '../lib/gridInstall.js'
-import { answerGridLaunch, type GridLaunchOverride } from '../lib/gridLaunch.js'
+import { answerSelectedGridLaunch, type GridLaunchOverride } from '../lib/gridLaunch.js'
+import type { StoredGridLaunch } from '../lib/sessionStorageWire.js'
 import { clearGridMcpUrlCache } from '../lib/gridMcpUrl.js'
 import {
   forgetGridModels, gridAnnotation, gridInventory, gridServingNodes, keystrokePrewarm, listAllGridModels, listGridModels, observeMachineList, onGridModelsChanged,
@@ -60,7 +61,8 @@ interface GridSetUp {
   setUp(): boolean
 }
 
-export function startModels(core: CoreApi, ports: CorePorts): ServiceRequests {
+export function startModels(core: CoreApi, ports: CorePorts,
+  resolveSelected: (reference: StoredGridLaunch) => Promise<GridLaunchOverride> = async () => { throw new Error('session storage unavailable') }): ServiceRequests {
   // A managed grid already here follows its pin on EVERY start of this service — the daemon's, and the
   // restart a self-update ends in — not only on `--repair`: the pin is expected to move, and a machine
   // installed last month has to notice. A machine with none gets none from a start: grid is an add-on,
@@ -165,7 +167,7 @@ export function startModels(core: CoreApi, ports: CorePorts): ServiceRequests {
     // The launch that points an engine at a grid or a saved API, built here for the core, which builds none
     // (docs/design/2026-10-08-launch-port.md): a relaunch's saved API with its endpoint and key as saved now.
     gridAssignments: modelsAssignments(savedApis),
-    gridLaunch: async (request) => answerGridLaunch(request, refreshApiFor(savedApis)),
+    gridLaunch: async (request) => answerSelectedGridLaunch(request, refreshApiFor(savedApis), resolveSelected),
     apiTarget: (request) => apiTargetAnswer(savedApis, request.connectionId, request.model),
     privateGridName,
     // `grid_models_changed` to the windows: the same payload `grid_models_list` answers, built from the

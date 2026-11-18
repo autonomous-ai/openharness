@@ -15,8 +15,8 @@ import type { LaunchPublication, RegisteredSession, RegistryAuthority, registry 
 
 export interface RetainExitedSessionDeps {
   stoppedAgents: {
-    save(session: RegisteredSession): void
-    get(agentId: string): RegisteredSession | null
+    save(session: RegisteredSession, current?: () => boolean): Promise<void>
+    get(agentId: string): Promise<RegisteredSession | null>
   }
   registry: Pick<typeof registry, 'confirmEngineExit'>
   /** Web and desktop: `agent_deleted` closes this identity's views, `agent_synced` carries frames. */
@@ -37,8 +37,9 @@ export function createRetainExitedSession(deps: RetainExitedSessionDeps) {
   /** Retain the conversation's identity; a surviving shell gets its own live identity. */
   return async (entry: RegisteredSession, paneAlive: boolean, authority: RegistryAuthority = {}): Promise<LaunchPublication> => {
     try {
-      deps.stoppedAgents.save(entry)
-      const saved = deps.stoppedAgents.get(entry.agentId)!
+      await deps.stoppedAgents.save(entry, authority.current)
+      const saved = await deps.stoppedAgents.get(entry.agentId)
+      if (!saved || authority.current?.() === false) return { state: 'not-published' }
       const publication = await deps.registry.confirmEngineExit(entry.agentId, paneAlive ? 'successor' : 'remove', authority)
       if (publication.state !== 'confirmed' || (paneAlive && !publication.entry)) return publication
       deps.invalidateTerminalControl(entry.agentId)

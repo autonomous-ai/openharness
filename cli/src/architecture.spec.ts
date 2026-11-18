@@ -335,7 +335,7 @@ describe('the daemon\'s shape', () => {
     }
     // Every session pays this entry-only closure, which the walk from core/main.ts does not see.
     expect([...closureOf('harnessd/childEntry.ts').keys()].sort()).toEqual([
-      'harnessd/bundleFingerprint.ts', 'harnessd/childAdmission.ts', 'harnessd/childEntry.ts', 'harnessd/workerContract.ts',
+      'harnessd/bundleFingerprint.ts', 'harnessd/childAdmission.ts', 'harnessd/childEntry.ts', 'harnessd/executedEntry.ts', 'harnessd/workerContract.ts',
     ])
   })
   it('keeps optional settings interpretation outside the core launch path', () => {

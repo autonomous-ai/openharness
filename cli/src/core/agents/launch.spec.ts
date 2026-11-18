@@ -28,7 +28,7 @@ function setup() {
     authority: () => () => true,
     prepareInstructions: vi.fn(async () => {}),
     launchOverridesDeps: { marker: 'deps' } as unknown as LaunchOverridesDeps,
-    setGridLaunch: vi.fn(() => true),
+    setGridLaunch: vi.fn(async () => true),
     prepareResume,
   }
   return { deps, helpers: createLaunchHelpers(deps) }
@@ -163,13 +163,13 @@ describe('relaunch helpers', () => {
     expect(buildLaunchOverrides).toHaveBeenLastCalledWith(deps.launchOverridesDeps, 'openclaw', expect.objectContaining({ openclawLocal: null }), 'a1', expect.any(Function), undefined)
   })
 
-  it('records the web-search decision a relaunch made, when it made one', () => {
+  it('records the web-search decision a relaunch made, when it made one', async () => {
     const { deps, helpers } = setup()
-    helpers.refreshGridWebSearch('a1', {} as LaunchOverrides)
+    await helpers.refreshGridWebSearch('a1', {} as LaunchOverrides)
     expect(deps.setGridLaunch).not.toHaveBeenCalled()
     const record = { networkId: 'grid-1' }
-    helpers.refreshGridWebSearch('a1', { gridLaunchRecord: record } as unknown as LaunchOverrides)
-    expect(deps.setGridLaunch).toHaveBeenCalledWith('a1', record)
+    await helpers.refreshGridWebSearch('a1', { gridLaunchRecord: record } as unknown as LaunchOverrides)
+    expect(deps.setGridLaunch).toHaveBeenCalledWith('a1', record, { current: expect.any(Function) })
   })
 
   it('retains an imported Hermes profile for every relaunch, without applying it after an engine change', async () => {

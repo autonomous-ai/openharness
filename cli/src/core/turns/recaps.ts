@@ -30,7 +30,7 @@ export interface RecapDeps {
   bySession: (sessionId: string) => RegisteredSession | undefined
   resolve: (id: string) => RegisteredSession | undefined
   /** A stopped agent's archived record (stoppedAgents.get). */
-  stopped: (agentId: string) => RegisteredSession | null
+  stopped: (agentId: string) => Promise<RegisteredSession | null>
   /** The live agents: which of them are verifiably working, when a device joins. */
   live: () => RegisteredSession[]
   /** Whether a turn is open on the session: the core's own word, from its transcript. */
@@ -168,8 +168,8 @@ export function createRecaps({
   // Recaps are STORED under the engine session id — that is what lets `--resume` bring the last recap
   // back under a brand-new agent — but they are ASKED FOR by agent id, which is the only id the device
   // and the voice router know. Resolve across the two, or every tile restores empty.
-  const recent = (id: string, n: number) => mirror.recent(resolve(id)?.sessionId || stopped(id)?.sessionId || id, n)
-  const recentAsksOf = (id: string, n?: number) => mirror.recentAsks(resolve(id)?.sessionId || stopped(id)?.sessionId || id, n)
+  const recent = async (id: string, n: number) => mirror.recent(resolve(id)?.sessionId || (await stopped(id))?.sessionId || id, n)
+  const recentAsksOf = async (id: string, n?: number) => mirror.recentAsks(resolve(id)?.sessionId || (await stopped(id))?.sessionId || id, n)
   /**
    * The reply to `agent_recent`: an agent's last turn summaries and the person's last questions. Asked
    * by a device restoring its tiles at boot, so it holds only what was summarized (recap and body),
@@ -177,17 +177,17 @@ export function createRecaps({
    *
    * Moved verbatim out of the socket's request switch (docs/design/2026-10-03-harnessd.md).
    */
-  const agentRecent = (payload: Record<string, unknown>): Record<string, unknown> => {
+  const agentRecent = async (payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
     const projectId = payload.agentId as string | undefined
     if (!projectId) return { error: 'MISSING_AGENT_ID' }
     const n = Math.max(1, Math.min(5, Number(payload.n) || 2))
-    const events = recent(projectId, n)
+    const events = await recent(projectId, n)
     // ASKS TRAVEL AS THEIR OWN LIST, beside the events rather than inside them. A question exists
     // the moment it is asked; a recap exists once the turn has been answered and summarised. They
     // are different lengths on any machine where a turn ended without one, so a reply that folds
     // the questions into the event rows loses exactly the newest ones — and a REMOTE agent then
     // reaches the router with nothing but its name.
-    const asks = recentAsksOf(projectId, n)
+    const asks = await recentAsksOf(projectId, n)
     return { agentId: projectId, events, asks }
   }
   /** Whether the turn open in [sessionId] was started by a quiet delivery: its end is marked as no one's news. */

@@ -104,6 +104,8 @@ import { OpenTabProtection } from '../lib/openTabProtection.js'
 import { SessionCheckpointStore } from '../lib/sessionCheckpoint.js'
 import { repairProjectCwds } from '../lib/cwdRepair.js'
 import { stoppedAgents } from '../lib/stoppedAgents.js'
+import { sessionStorage } from '../lib/sessionStorage.js'
+import { ownProcessSessionStorage } from '../harnessd/sessionStorageOwner.js'
 import { externalSessionAnswer, externalUnavailable } from '../lib/externalSessionWire.js'
 import { externalResumePending } from '../lib/externalResume.js'
 import { type LaunchOverridesDeps } from '../lib/launchOverrides.js'
@@ -590,6 +592,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const prepareInstructions = (cwd: string | null | undefined, engine: string): Promise<void> =>
     prepareWorkspaceInstructions(ports.workspaces, cwd, engine)
 
+  const storageOwner = await ownProcessSessionStorage(env.ADAPTER_DATA_DIR, () => sessionStorage.close())
   await registry.load()
   // Persisted locators are hints until this process has observed their terminal root and PID/start marker.
   // Mark them dormant before the backend socket can publish anything; the first authoritative reconcile
@@ -1185,6 +1188,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   const gateway = gatewayLink ?? inlineGateway!
   // Its routes of the door, in this process; in its own, its link takes them (core/serviceRoutes.ts).
+  // Reconcile durable owners before any service can call the partly wired core.
+  const conversationOwners = createConversationOwners({ stoppedAgents, live: () => registry.list(), clients: backend, reservationMs: RESUME_READINESS_BUDGET_MS })
+  await conversationOwners.settle()
   if (inlineGateway) serviceHost!.serve('gateway', () => inlineGateway.requests, coreApi, GATEWAY_REQUESTS)
   backend.useGateway(gateway.port)
   const gatewayOps = gateway.ops
@@ -1575,7 +1581,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     stopped: {
       get: (id) => stoppedAgents.get(id),
       // Every saved record, readable or not (the store's own `list()` skips an unreadable one), so ownership fails closed.
-      ids: () => stoppedAgents.ids(),
+      query: query => stoppedAgents.query(query),
+      current: row => stoppedAgents.current(row),
     },
     mirror,
     databaseHistory,
@@ -1671,7 +1678,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const agentCleanupLink = createAgentCleanupLink(coreApi,
     (type, payload, waitMs) => serviceLinks.call('agentCleanup', type, payload, waitMs))
   const usageLink = createUsageLink({ call: payload => ports.usage?.read(payload.target as AgentUsageTarget) ?? Promise.resolve({}), changed: agentEvents.onTokenUsageChanged })
-  coreApi.usage = target => usageLink.readSnapshot(target, coreApi.agents.all())
+  coreApi.usage = async target => usageLink.readSnapshot(target, await coreApi.agents.all())
   coreApi.usageFresh = async (agentId) => {
     const row = registry.byAgent(agentId)
     const target = row && usageTarget(row)
@@ -1905,7 +1912,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // agent on a grid model sends its inference, and the models requests the apps send (services/models.ts):
   // in this process, or in its own (services/modelsProcess.ts), reached through core/modelsLink.ts.
   if (outOfProcess.has('models')) ports.models = modelsLink.port
-  else serviceHost!.start('models', (core, given) => inline!.startModels(core, given), coreApi, MODELS_FALLBACKS, MODELS_REQUESTS)
+  else serviceHost!.start('models', (core, given) => inline!.startModels(core, given, reference => sessionStorage.resolveSelected(reference)), coreApi, MODELS_FALLBACKS, MODELS_REQUESTS)
   // What the socket asks of models: read on each use, so a models service switched off answers its fallbacks.
   backend.models = () => ports.models ?? MODELS_OFF
 
@@ -1991,9 +1998,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
 
   // Release a session's binding, or remove a process-owned agent everywhere (core/agents/forget.ts).
-  // One owner per conversation, stopped harnesses included; the conversations claimed twice so far settle now.
-  const conversationOwners = createConversationOwners({ stoppedAgents, live: () => registry.list(), clients: backend, reservationMs: RESUME_READINESS_BUDGET_MS })
-  conversationOwners.settle()
   const forgetSession = createForgetSession({
     owners: conversationOwners,
     shortTurns,
@@ -2540,7 +2544,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     authority: launchAuthority,
     prepareInstructions,
     launchOverridesDeps,
-    setGridLaunch: (agentId, launch) => registry.setGridLaunch(agentId, launch),
+    setGridLaunch: (agentId, launch, authority) => registry.setGridLaunch(agentId, launch, authority),
     prepareResume: resumeRepairs.prepare,
   })
   const relaunchOverrides = launchHelpers.relaunchOverrides
@@ -2575,7 +2579,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // announce already shows every restored agent with a terminal; binding their engine processes
   // continues in the background, the same way `agent_create` does it.
   for (const entry of registry.list()) {
-    const saved = isTerminalEngine(entry.engine) ? stoppedAgents.get(entry.agentId) : null
+    const saved = isTerminalEngine(entry.engine) ? await stoppedAgents.get(entry.agentId) : null
     if (saved && !isTerminalEngine(saved.engine)) await retainExitedSession(entry, true)
   }
   // What restore asks of the terminals, each pane of its own backend, and the launch it builds (both shared with a move
@@ -2639,7 +2643,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     for (const pane of swept.keptPanes) agentReconciler.holdRoute(terminalRouteKey(pane), null)
     for (const agentId of swept.unconfirmed) {
       moveHeld.add(agentId)
-      const conversation = registry.byAgent(agentId)?.sessionId ?? stoppedAgents.get(agentId)?.sessionId
+      const conversation = registry.byAgent(agentId)?.sessionId ?? (await stoppedAgents.get(agentId))?.sessionId
       if (conversation) moveHeldConversations.set(conversation, agentId)
       for (const runtime of registry.byAgent(agentId)?.runtimes ?? []) agentReconciler.holdRoute(terminalRouteKey(runtime), null)
       console.warn(moveHeldLine(agentId))
@@ -2833,7 +2837,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   externalResumes = createExternalResumes({
     // Its waiting pane opens where new panes are made, and is asked about and closed by the backend it is on.
     registry, backend: createBackend, noBackendCode: createUnavailable, backendFor: (runtime) => terminals.backendFor(runtime),
-    stopped: () => stoppedAgents.list(), cancelled: id => restoreCancelled(id),
+    stoppedQuery: query => stoppedAgents.query(query), cancelled: id => restoreCancelled(id),
     generation: () => searchGeneration,
     waiting: row => heldIn(row, row.externalResume!.token, (runtime) => terminals.backendFor(runtime)).then(value => value === true),
     inspect: request => ports.search?.inspect(request) ?? Promise.resolve(externalUnavailable()),
@@ -3140,7 +3144,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     prepareCreate: creator.prepare, prepareEngine: prepareNativeLaunch, opencodeMajor: nativeSetup.opencodeMajor,
     probeLaunchModel: (engine, model) => unsupportedNativeLaunchModelFlag(engine, model, nativeSetup),
     resumeAgent: () => lifecycle.resumeAgent, restartAgent: () => restartAgent,
-    byAgent: (id) => registry.byAgent(id), stoppedAgent: (id) => stoppedAgents.get(id) ?? undefined, toProject: (s) => backend.toProject(s),
+    byAgent: (id) => registry.byAgent(id), stoppedAgent: async id => await stoppedAgents.get(id) ?? undefined, toProject: (s) => backend.toProject(s),
     modelTarget: (selection) => (ports.models ?? MODELS_OFF).launchTarget(selection),
     // A guest's New Harness: built by shared machines, as the guest's own OS user (core/agents/guestCreate.ts).
     guestCreate: () => guestCreate,
@@ -3233,6 +3237,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     ['the backend', () => backend.stop()],
     // Producers have stopped. Seal admission and retain ownership through actual writer cleanup.
     ['the registry', () => registry.flush({ exiting: true })],
+    ['stopped sessions', () => stoppedAgents.close()],
+    ['session storage', () => storageOwner.close()],
     // The claim just before the socket: a successor that saw the socket go must find the folder free.
     ['the data folder claim', () => dataFolderClaim?.release()], ['the local socket', () => localSocket?.close()],
     ['a grace', () => new Promise((r) => setTimeout(r, 1000))],
@@ -3304,6 +3310,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     deadline.at('the registry')
     try { await registry.flush({ exiting: true }) }
     catch { console.error('[registry] shutdown flush failed') }
+    deadline.at('stopped sessions')
+    await stoppedAgents.close()
+    deadline.at('session storage')
+    await storageOwner.close()
     deadline.at('the local socket')
     dataFolderClaim?.release()
     await localSocket?.close()

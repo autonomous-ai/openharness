@@ -162,7 +162,7 @@ export interface CoreApi {
   conversations: ConversationReads
   agents: {
     /** Every agent on this machine: the live ones, then the stopped ones. */
-    all(): AgentView[]
+    all(): Promise<AgentView[]>
     /** The live agents. */
     live(): AgentView[]
     /** The name the apps show for an agent. */
@@ -2150,7 +2150,7 @@ export function createCoreApi({
     machine,
     conversations,
     agents: {
-      all: () => [...registry.list(), ...stoppedAgents.list()].map(agentView),
+      all: async () => { const stopped = await stoppedAgents.list(); return [...registry.list(), ...stopped].map(agentView) },
       live: () => registry.list().map(agentView),
       displayName: projectDisplayName,
       byAgent: (agentId) => { const session = registry.byAgent(agentId); return session && agentView(session) },

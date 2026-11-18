@@ -1,3 +1,4 @@
+import { stoppedFixture } from '../testing/stoppedFixture.js'
 /** Former-code healthy history deletion and Change agent handoff, before native authority moves. */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -97,7 +98,7 @@ it.each(['linux', 'darwin'])('keeps native history consumer outcomes on %s', asy
           const deps = createHandoffDependencies({
             registry: { resolve: id => id === source.agentId ? source : id === entry.agentId ? entry : undefined,
               byAgent: () => source, bySession: () => undefined },
-            stopped: { get: () => null, ids: () => [] }, mirror: { recentAsks: () => [], lastFullText: () => undefined, recent: () => [] },
+            stopped: stoppedFixture(), mirror: { recentAsks: () => [], lastFullText: () => undefined, recent: () => [] },
             databaseHistory: () => undefined, findLiveSession: async () => ({ sessionId: A, transcriptPath: fixture.file }),
             processSession: async () => null, isRecentlyDeleted: () => false, findResumedTranscript: async () => fixture.file!, validTranscriptPath,
           }, join(root, 'ADAPTER_DATA_DIR'))

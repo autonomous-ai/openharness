@@ -105,11 +105,12 @@ export function createAgentClosing({
     // Not live, not being resumed, and kept as stopped with the conversation the close names: it was closed, and that
     // record says whether a conversation was kept. A record that cannot be read says nothing, and the close is answered
     // as changed, as before.
-    closedAlready: request => {
+    closedAlready: async request => {
       if (!stoppedAgents || registry.byAgent(request.agentId)) return null
       try {
         if (stoppedAgents.resumeReservedAt(request.agentId) !== null) return null
-        const stopped = stoppedAgents.get(request.agentId)
+        const stopped = await stoppedAgents.get(request.agentId)
+        if (registry.byAgent(request.agentId) || stoppedAgents.resumeReservedAt(request.agentId) !== null) return null
         return stopped && new Date(stopped.registeredAt).toISOString() === request.createdAt
           && (!request.sessionId || stopped.sessionId === request.sessionId) ? stopped : null
       } catch { return null }

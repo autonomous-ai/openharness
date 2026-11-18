@@ -73,7 +73,13 @@ export function createForgetSession({
   ): Promise<void> => {
     // A retired session may already belong to another agent. An explicit old agent id
     // is the selection, never a reason to resolve that reused session again.
-    const doomed = registry.resolve(opts.agentId ?? id)
+    const selected = registry.resolve(opts.agentId ?? id)
+    const doomed = selected ? structuredClone(selected) : undefined
+    const authority = doomed ? { ...opts.authority, current: () => opts.authority?.current?.() !== false
+      && matchesLaunchReceipt(registry.resolve(doomed.agentId), doomed) } : opts.authority
+    const verify = () => {
+      if (authority?.current?.() === false) throw new IdentityReadUnavailable('the selected session changed before removal')
+    }
     const sessionId = opts.keepAgent ? (doomed?.agentId === id ? doomed.sessionId : id) : doomed?.sessionId || id
     // Clients key on the AGENT id. Normally it is read off the entry, but an
     // agent already removed from the registry cannot be looked up — and
@@ -83,6 +89,7 @@ export function createForgetSession({
     const announceId = doomed?.agentId ?? opts.agentId ?? sessionId
 
     if (!opts.keepAgent && doomed) {
+      verify()
       const captured = opts.captured
       if (captured && (captured.agentId !== doomed.agentId || captured.engine !== doomed.engine
         || captured.registeredAt !== doomed.registeredAt || doomed.sessionId && captured.sessionId !== doomed.sessionId
@@ -92,13 +99,14 @@ export function createForgetSession({
       }
       // Stop may prove a parent path while the live row still names an overwritten child.
       // Preserve that capture through this last archive, including intervening hook saves.
-      stoppedAgents.save(captured ? withHermesHome({ ...doomed, sessionId: captured.sessionId, transcriptPath: captured.transcriptPath,
-        boundAt: captured.boundAt, source: captured.source }, captured) : doomed)
+      await stoppedAgents.save(captured ? withHermesHome({ ...doomed, sessionId: captured.sessionId, transcriptPath: captured.transcriptPath,
+        boundAt: captured.boundAt, source: captured.source }, captured) : doomed, authority?.current)
     }
     if (doomed && (!opts.keepAgent || doomed.sessionId === sessionId)) {
+      verify()
       const publication = opts.keepAgent
-        ? await registry.confirmSessionUnbound(doomed.agentId, sessionId, opts.authority)
-        : await registry.confirmEngineExit(doomed.agentId, 'remove', opts.authority)
+        ? await registry.confirmSessionUnbound(doomed.agentId, sessionId, authority)
+        : await registry.confirmEngineExit(doomed.agentId, 'remove', authority)
       const latest = registry.resolve(doomed.agentId)
       if (publication.state !== 'confirmed' || (opts.keepAgent ? !publication.entry || !matchesLaunchReceipt(latest, publication.entry) : !!latest)) {
         throw new IdentityReadUnavailable('the selected session removal is not durably confirmed')
@@ -110,7 +118,7 @@ export function createForgetSession({
     // No longer running, its last record may still hold a conversation another harness took meanwhile: the
     // save keeps a known one through an unbound row (StoppedAgentStore.save). One owner each from here on.
     if (!opts.keepAgent && doomed) {
-      try { owners?.settleSaved(doomed.agentId) }
+      try { await owners?.settleSaved(doomed.agentId) }
       catch (error) { console.warn(`[agent] ${sid(doomed.agentId)} could not settle who owns its conversation: ${error instanceof Error ? error.message : error}`) }
     }
     syncRecapPool()

@@ -1,12 +1,12 @@
 /** Directory durability may wait; publication and final admission each keep their own no-yield fence. */
-import { closeSync, constants, fstat, fstatSync, fsync, lstatSync, open, openSync, opendirSync, readSync, renameSync, rmdirSync, unlinkSync, type Stats } from 'node:fs'
+import { closeSync, constants, fstatSync, lstatSync, openSync, opendirSync, readSync, rmdirSync, unlinkSync } from 'node:fs'
 import * as fs from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
-import { directorySyncSupported, insideWindowsRoots, requireWindowsStateFile, windowsStateRoots } from './secureState.js'
+import { insideWindowsRoots, requireWindowsStateFile, windowsStateRoots } from './secureState.js'
 import { lockStartMarker, processExists } from './processLiveness.js'
 import { psEnv } from './childLocale.js'
 import { ownProcessGroup } from './windows/noWindow.js'
@@ -176,12 +176,12 @@ export async function privateRegistryDirectory(directory: string): Promise<void>
   try { await privateDescriptor(handle, true) } finally { await handle.close() }
 }
 
-export async function readPrivateRegistryFile(file: string, maxBytes = Number.MAX_SAFE_INTEGER): Promise<string> {
+export async function readPrivateRegistryOwner(file: string, maxBytes = OWNER_BYTES): Promise<string> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > OWNER_BYTES) throw new Error('invalid owner read limit')
   if (process.platform === 'win32') await windowsRoot(file)
   const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0))
   try {
     const size = await privateDescriptor(handle, false, maxBytes)
-    if (maxBytes === Number.MAX_SAFE_INTEGER) return await handle.readFile('utf8')
     const limit = maxBytes + 1
     let bytes = Buffer.alloc(Math.min(size + 1, limit))
     let offset = 0
@@ -202,104 +202,8 @@ export async function readPrivateRegistryFile(file: string, maxBytes = Number.MA
   finally { await handle.close() }
 }
 
-async function harden(file: string): Promise<void> {
-  try {
-    if (process.platform === 'win32') await windowsRoot(file)
-    const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0))
-    try { await privateDescriptor(handle, false) } finally { await handle.close() }
-  } catch (error) { if (!missing(error)) throw error }
-}
-
 export class AtomicWriteUnconfirmed extends Error {
   constructor(cause: unknown, readonly retryable = true) { super(cause instanceof Error ? cause.message : String(cause), { cause }) }
-}
-
-export async function prepareRegistryImage(file: string, contents: string, deadline: RegistryWriteDeadline) {
-  deadline.check()
-  await harden(file)
-  deadline.check()
-  const started = performance.now()
-  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
-  let renamed = false
-  const directory = dirname(file)
-  let directoryFd: number | undefined, directoryIdentity: Stats | undefined
-  const privateDirectory = (stat: Stats) => stat.isDirectory() && (uid() === null || stat.uid === uid()) && (stat.mode & 0o777) === 0o700
-  const checkDirectory = () => {
-    if (directoryFd === undefined) return
-    const descriptor = fstatSync(directoryFd), path = lstatSync(directory)
-    if (!privateDirectory(descriptor) || !privateDirectory(path)
-      || descriptor.dev !== directoryIdentity!.dev || descriptor.ino !== directoryIdentity!.ino
-      || path.dev !== descriptor.dev || path.ino !== descriptor.ino) {
-      throw new RegistryPersistenceUnavailable('state directory identity changed')
-    }
-  }
-  const closeDirectory = () => {
-    if (directoryFd === undefined) return
-    const closing = directoryFd
-    directoryFd = undefined
-    try { closeSync(closing) } catch { deadline.failClosed() }
-  }
-  try {
-    if (directorySyncSupported()) {
-      // A raw descriptor has one owner; closing a promises.FileHandle behind its finalizer is unsafe.
-      directoryFd = await new Promise<number>((resolve, reject) => open(directory,
-        constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
-        (error, fd) => error ? reject(error) : resolve(fd)))
-      directoryIdentity = await new Promise<Stats>((resolve, reject) => fstat(directoryFd!,
-        (error, info) => error ? reject(error) : resolve(info)))
-      if (!privateDirectory(directoryIdentity)) throw new RegistryPersistenceUnavailable('state directory is not private')
-      deadline.check()
-    }
-    const handle = await fs.open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600)
-    try {
-      deadline.check()
-      await handle.writeFile(contents)
-      deadline.check()
-      await handle.chmod(0o600)
-      deadline.check()
-      await handle.sync()
-      deadline.check()
-    } finally { await handle.close() }
-    deadline.check()
-  } catch (error) {
-    try { closeDirectory() } finally { await fs.rm(temporary, { force: true }) }
-    throw error
-  }
-  finally { measure('prepare', started) }
-  return {
-    get published() { return renamed },
-    publish(onRenamed: () => void): void {
-      deadline.check()
-      checkDirectory()
-      const started = performance.now()
-      try {
-        renameSync(temporary, file)
-        renamed = true
-        onRenamed()
-        deadline.markPublished()
-      }
-      finally { measure('publish', started) }
-    },
-    sync(): Promise<void> | undefined {
-      // Windows retains its existing uninterrupted rename/admission path.
-      if (directoryFd === undefined) return
-      const started = performance.now()
-      return new Promise<void>((resolve, reject) => fsync(directoryFd!, error => {
-        measure('publish', started)
-        if (error) reject(new AtomicWriteUnconfirmed(error))
-        else resolve()
-      }))
-    },
-    finish(): void { deadline.check(); checkDirectory(); closeDirectory() },
-    async discard(): Promise<void> {
-      try {
-        if (renamed) try { deadline.check(); checkDirectory() }
-        catch (error) { throw new AtomicWriteUnconfirmed(error, false) }
-      } finally {
-        try { closeDirectory() } finally { if (!renamed) await fs.rm(temporary, { force: true }) }
-      }
-    },
-  }
 }
 
 async function startMarker(pid: number, budget: number): Promise<string | null> {
@@ -335,7 +239,7 @@ function parseOwner(contents: string): Owner | null {
 }
 
 async function readOwner(file: string): Promise<Owner | null> {
-  try { return parseOwner(await readPrivateRegistryFile(file, OWNER_BYTES)) }
+  try { return parseOwner(await readPrivateRegistryOwner(file)) }
   catch (error) {
     if (missing(error)) return null
     throw new RegistryPersistenceUnavailable('registry lock owner could not be read safely')

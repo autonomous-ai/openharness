@@ -21,7 +21,7 @@ export function fakeCore(over: Overrides = {}): CoreApi {
     },
     machine: { id: vi.fn(() => 'machine-1'), computerId: vi.fn(() => 'computer-1'), name: vi.fn(() => 'This machine'), ...over.machine },
     agents: {
-      all: vi.fn(() => []),
+      all: vi.fn(async () => []),
       live: vi.fn(() => []),
       displayName: vi.fn(() => ''),
       byAgent: vi.fn(() => undefined),

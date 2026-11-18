@@ -12,7 +12,7 @@ interface RestoreLaunchDeps {
   relaunchOverrides(entry: RegisteredSession, source: RegisteredSession, current: () => boolean): Promise<LaunchOverridesResult>
   downgradedPermission(entry: RegisteredSession, native?: LaunchOverrides['native']): Promise<{ permissionMode?: string | null; bypassPermission?: boolean; nativeHold?: string }>
   prepareSessionResume(entry: RegisteredSession, current: () => boolean): Promise<unknown>
-  refreshGridWebSearch(agentId: string, overrides: LaunchOverrides): void
+  refreshGridWebSearch(agentId: string, overrides: LaunchOverrides, current?: () => boolean): Promise<void>
   launch(entry: RegisteredSession, opts: { resumeSessionId?: string; agentId: string }, overrides: LaunchOverrides,
     permission: { permissionMode?: string | null; bypassPermission?: boolean }): RestoreLaunch
 }
@@ -46,7 +46,7 @@ export function createRestoreLaunch(deps: RestoreLaunchDeps): RestoreAgentsDeps[
     // is held.
     const preparation = async (waiting?: () => boolean) => {
       if (opts.resumeSessionId) await deps.prepareSessionResume(entry, () => current() && waiting?.() !== false)
-      if (current()) deps.refreshGridWebSearch(entry.agentId, built.overrides)
+      if (current()) await deps.refreshGridWebSearch(entry.agentId, built.overrides, () => current() && waiting?.() !== false)
     }
     // These writes belong to the core. Neither a stopped conversation's transcript/tail nor a replacement binding's
     // grid may be changed by an old Store answer: the history is replaced only while this restore holds, and the grid
@@ -58,7 +58,8 @@ export function createRestoreLaunch(deps: RestoreLaunchDeps): RestoreAgentsDeps[
         }
         if (!current()) return { cancelled: true }
       }
-      deps.refreshGridWebSearch(entry.agentId, built.overrides)
+      await deps.refreshGridWebSearch(entry.agentId, built.overrides, current)
+      if (!current()) return { cancelled: true }
     }
     // Windows refuses a batch-file engine whose arguments cmd.exe would read (lib/windows/launch.ts): this row fails
     // alone. Thrown, it ended the whole pass ("restore skipped") on every start.

@@ -29,7 +29,8 @@ import { gridAssignmentAnswersIn } from '../lib/gridAssignmentWire.js'
  */
 import { annotate, glanceFor, type GridGlance } from '../lib/gridAnnotation.js'
 import type { GridAttachResult } from '../lib/gridAttach.js'
-import { API_NETWORK_PREFIX, GRID_ENV_VAR_NAMES, GRID_LAUNCH_FIELDS, parseGridLaunchOverride, type GridEngineLaunch, type GridLaunchAnswer, type GridLaunchOverride, type GridLaunchRequest } from '../lib/gridLaunchWire.js'
+import { API_NETWORK_PREFIX, GRID_ENV_VAR_NAMES, GRID_LAUNCH_FIELDS, parseGridLaunchSelection, type GridEngineLaunch, type GridLaunchAnswer, type GridLaunchOverride, type GridLaunchRequest } from '../lib/gridLaunchWire.js'
+import { storedGridLaunch } from '../lib/sessionStorageWire.js'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { LAUNCH_CONTRIBUTION_LIMITS, launchContributionIn, launchText } from '../lib/launchContribution.js'
@@ -64,10 +65,10 @@ export function glancesIn(value: unknown): GridGlance[] | null {
 }
 
 /** A launch the process resolved, checked as any grid launch is before it is used; null when there is none. */
-const launchIn = (value: unknown): GridLaunchOverride | null => {
+const launchIn = (value: unknown): GridLaunchRequest['override'] | null => {
   if (!isRecord(value) || ['networkId', 'networkName', 'baseUrl', 'apiKey', 'model', 'mcpUrl'].some(key =>
     value[key] !== undefined && value[key] !== null && !launchText(value[key]))) return null
-  const parsed = parseGridLaunchOverride(value)
+  const parsed = parseGridLaunchSelection(value)
   return parsed.state === 'ok' ? parsed.override : null
 }
 
@@ -132,13 +133,16 @@ export function gridLaunchAnswerIn(value: unknown, request: GridLaunchRequest): 
   const override = launchIn(value.override)
   if (value.ok !== true || !launch || !override) return null
   const refreshedApi = request.refresh && request.override.networkId.startsWith(API_NETWORK_PREFIX)
-  const retained = ['networkId', 'model', 'mcpUrl', 'contextWindow', ...refreshedApi ? [] : ['networkName', 'baseUrl', 'apiKey']] as const
-  if (retained.some(key => override[key as keyof GridLaunchOverride] !== request.override[key as keyof GridLaunchOverride])) return null
+  const retained = ['networkId', 'model', 'mcpUrl', 'contextWindow', ...refreshedApi ? [] : ['networkName', 'baseUrl']] as const
+  if (retained.some(key => override[key as keyof Omit<GridLaunchOverride, 'apiKey'>] !== request.override[key as keyof Omit<GridLaunchOverride, 'apiKey'>])) return null
+  if (storedGridLaunch(override)) {
+    if (!storedGridLaunch(request.override) || JSON.stringify(override.credential) !== JSON.stringify(request.override.credential)) return null
+  } else if (!refreshedApi && (storedGridLaunch(request.override) || override.apiKey !== request.override.apiKey)) return null
   const texts = [...Object.keys(launch.env), ...Object.values(launch.env), ...launch.args,
-    ...Object.values(override).filter((item): item is string => typeof item === 'string'), value.apiBase ?? '', launch.sessionModel ?? '',
+    value.apiBase ?? '', launch.sessionModel ?? '',
     ...launch.configDir?.files.flatMap(file => [file.name, file.content]) ?? [],
     ...launch.configDir?.links?.flatMap(link => [link.name, link.target]) ?? []]
-  if (texts.reduce((bytes, text) => bytes + Buffer.byteLength(text as string), 0) > LAUNCH_CONTRIBUTION_LIMITS.bytes) return null
+  if (texts.reduce((bytes, text) => bytes + Buffer.byteLength(text as string), Buffer.byteLength(JSON.stringify(override))) > LAUNCH_CONTRIBUTION_LIMITS.bytes) return null
   return { ok: true, launch, override, ...apiBase }
 }
 
@@ -165,11 +169,11 @@ export function createModelsLink(core: Pick<CoreApi, 'agents' | 'account' | 'cli
     },
     annotation: (grid) => annotate(glanceFor(glances, grid.baseUrl), grid),
     prewarm: (grid) => { if (glanceFor(glances, grid.baseUrl)?.asleep) tell({ kind: 'prewarm', grid }) },
-    launchTarget: async (selection) => launchIn((await ask('launchTarget', { ...selection })).target),
+    launchTarget: async (selection) => { const target = launchIn((await ask('launchTarget', { ...selection })).target); return target && !storedGridLaunch(target) ? target : null },
     moveTarget: async (request) => {
       const answer = await ask('moveTarget', { ...request })
       const target = launchIn(answer.target)
-      if (target) return { target }
+      if (target && !storedGridLaunch(target)) return { target }
       return { detail: typeof answer.detail === 'string' && answer.detail ? answer.detail : 'Could not read this machine\'s grid endpoint.' }
     },
     moved: (launch) => tell({ kind: 'moved', launch }),
@@ -182,7 +186,7 @@ export function createModelsLink(core: Pick<CoreApi, 'agents' | 'account' | 'cli
     apiTarget: async (request) => {
       const answer = await ask('apiTarget', { ...request })
       const target = launchIn(answer.target)
-      if (target && isText(answer.apiBase)) return { target, apiBase: answer.apiBase }
+      if (target && !storedGridLaunch(target) && isText(answer.apiBase)) return { target, apiBase: answer.apiBase }
       return { detail: isText(answer.detail) && answer.detail ? answer.detail : 'This API could not be used. Try again.' }
     },
     // Its fallback is no name, not an error: the backend's, which the caller reads first, is all there is.

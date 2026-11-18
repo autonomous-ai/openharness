@@ -69,6 +69,8 @@ beforeEach(async () => {
 })
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup()
+  await registry.flush()
+  await (await import('../../lib/sessionStorage.js')).sessionStorage.close()
   ;(await import('../../lib/sqliteBuiltin.js')).closeSqliteHandles()
   vi.restoreAllMocks(); vi.unstubAllEnvs(); rmSync(directory, { recursive: true, force: true })
 })
@@ -159,8 +161,25 @@ async function setup(boundary: 'terminal' | 'store' | 'open' | 'config' | 'none'
   })
   const send = vi.fn()
   const stoppedAgents = new StoppedAgentStore(join(directory, 'stopped-agents'))
-  stoppedAgents.save(saved)
-  vi.spyOn(stoppedAgents, 'save'); vi.spyOn(stoppedAgents, 'finishResume')
+  await stoppedAgents.save(saved)
+  const savedCalls = vi.spyOn(stoppedAgents, 'save'), readCalls = vi.spyOn(stoppedAgents, 'get')
+  vi.spyOn(stoppedAgents, 'finishResume')
+  // Native confirmation commits before its detached archive/attach work. Observe actual archive
+  // settlement so assertions never snapshot the attachment list before that work can enqueue it.
+  const settleArchive = async () => {
+    let settled = -1
+    while (settled !== savedCalls.mock.results.length + readCalls.mock.results.length) {
+      settled = savedCalls.mock.results.length + readCalls.mock.results.length
+      await Promise.all([...savedCalls.mock.results, ...readCalls.mock.results]
+        .filter(result => result.type === 'return').map(result => result.value))
+    }
+  }
+  cleanups.unshift(async () => {
+    release.resolve(); recordRelease.resolve()
+    await settleArchive()
+    await Promise.allSettled(attempts)
+    await stoppedAgents.close()
+  })
   const forget = (id: string) => { normalizers.forget(id); attach.forget(id) }
   const binding = createBinding({ registry, attachSession: requestAttach, captureReader: attach.captureReader, hermesTerminal,
     followsLive: id => others.follows(id),
@@ -172,7 +191,10 @@ async function setup(boundary: 'terminal' | 'store' | 'open' | 'config' | 'none'
   })
   const observed = { engine: 'hermes' as const, processIdentity: nextProcess, runtimes: resumed.runtimes,
     primaryRuntimeKey: resumed.primaryRuntimeKey, cwd: directory, args: `hermes --resume ${sessionId}`, resumeSessionId: sessionId }
-  const confirm = () => binding.bindObservedAgent(observed)
+  const confirm = async () => {
+    await binding.bindObservedAgent(observed)
+    await settleArchive()
+  }
   const liveTurn = async () => {
     expect(events).toEqual([])
     writeTurn('fresh turn after native confirmation')

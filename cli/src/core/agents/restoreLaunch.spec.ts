@@ -93,7 +93,7 @@ describe('a launch built without preparation', () => {
     expect(launch.deferred.permission).toEqual({ bypassPermission: true, permissionMode: 'plan' })
     await launch.deferred.prepare()
     expect(deps.prepareSessionResume).toHaveBeenCalledWith(entry, expect.any(Function))
-    expect(deps.refreshGridWebSearch).toHaveBeenCalledWith('agent', built.overrides)
+    expect(deps.refreshGridWebSearch).toHaveBeenCalledWith('agent', built.overrides, expect.any(Function))
     expect(deps.relaunchOverrides).toHaveBeenCalledTimes(1)
     // A preparation that fails says so to its caller, which falls back (hostMove/moveAgent.ts).
     deps.prepareSessionResume.mockRejectedValueOnce(new Error('rollout unreadable'))
@@ -193,7 +193,7 @@ describe('restore preparation keeps session authority in core', () => {
     const { deps, build } = setup()
     expect(await build(entry, { resumeSessionId, current: () => true })).toEqual({ argv: ['engine'], grid: null })
     expect(deps.prepareSessionResume).toHaveBeenCalledTimes(resumeSessionId ? 1 : 0)
-    expect(deps.refreshGridWebSearch).toHaveBeenCalledWith('agent', built.overrides)
+    expect(deps.refreshGridWebSearch).toHaveBeenCalledWith('agent', built.overrides, expect.any(Function))
     expect(deps.launch).toHaveBeenCalledWith(entry, { resumeSessionId, agentId: 'agent' }, built.overrides, { bypassPermission: false })
   })
 

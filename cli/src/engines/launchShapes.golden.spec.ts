@@ -1,3 +1,5 @@
+let gridFixtureSnapshot: typeof import('../testing/gridCredentials.js')['gridFixtureSnapshot']
+let storedGridFixture: typeof import('../testing/gridCredentials.js')['storedGridFixture']
 /**
  * Every launch shape that carries a grid model or a saved API, answer for answer: recorded from the code as it stood
  * before the models service built those launches for the core (docs/design/2026-10-08-launch-port.md, (L1)). For
@@ -27,6 +29,7 @@ import { baseNode } from '../harnessd/baseNode.js'
 import { resolveBinaryOnPath } from '../lib/binaryOnPath.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { GridLaunchOverride } from '../lib/gridLaunch.js'
+import { launchShapeProofs } from '../testing/launchShapeProofs.js'
 
 process.env.TZ = 'America/New_York'
 
@@ -34,7 +37,10 @@ process.env.TZ = 'America/New_York'
 const pane = vi.hoisted(() => ({ calls: [] as Array<Record<string, unknown>>, tmux: true }))
 vi.mock('../lib/createAgentPane.js', () => ({
   createAndRegisterPane: vi.fn(async (input: Record<string, unknown>) => {
-    pane.calls.push(input)
+    if (typeof input.current !== 'function' || !input.current()) return { ok: false, error: 'AGENT_CHANGED' }
+    const argv = typeof input.argv === 'function' ? input.argv() : input.argv
+    expect(input.current()).toBe(true)
+    pane.calls.push({ ...input, argv })
     return { ok: false, error: 'RECORDED', detail: 'the pane is not opened by this spec' }
   }),
 }))
@@ -50,7 +56,7 @@ let apiBase = ''
 let port = ''
 const saved: Record<string, string | undefined> = {}
 /** The variables a launch reads of the daemon's own environment, each pinned (or cleared) for the record. */
-const VARS = ['ADAPTER_DATA_DIR', 'HOME', 'USERPROFILE', 'ZDOTDIR', 'SHELL', 'CODEX_HOME', 'CODEX_PATH', 'HARNESS_OS', 'HARNESS_GRID_BIN', 'CLAUDE_PATH', 'CURSOR_PATH',
+const VARS = ['PATH', 'OMP_PATH', 'OPENCLAW_PATH', 'ADAPTER_DATA_DIR', 'HOME', 'USERPROFILE', 'ZDOTDIR', 'SHELL', 'CODEX_HOME', 'CODEX_PATH', 'HARNESS_OS', 'HARNESS_GRID_BIN', 'CLAUDE_PATH', 'CURSOR_PATH',
   'OPENCODE_PATH', 'PI_PATH', 'HERMES_PATH', 'COMMANDCODE_PATH', 'DEVIN_PATH', 'MUSE_PATH', 'AMP_PATH', 'KILO_PATH', 'GROK_PATH', 'AGY_PATH', 'COPILOT_PATH'] as const
 /** The launch scripts the cases name, by digest: most shapes share theirs with others. */
 const scripts: Record<string, string> = {}
@@ -76,12 +82,12 @@ const placeheld = (text: string, label?: string): string => {
   // Quoted, as every script quotes them: a Node in /usr/bin must not turn `/usr/bin/env` into a placeholder.
   let out = text.split(`'${node}'`).join("'<daemon-node>'").split(`'${dirname(node)}'`).join("'<daemon-node-dir>'")
   if (tmux) out = out.split(`'${tmux}'`).join("'<tmux>'")
-    .split(root).join('<root>').split(`127.0.0.1:${port}`).join('127.0.0.1:<port>')
+  out = out.split(root).join('<root>').split(`127.0.0.1:${port}`).join('127.0.0.1:<port>')
     .replace(/\/launch\/[0-9a-f-]{36}\.sh/g, '/launch/<script>.sh')
   if (label) out = out.split(label).join('<label>')
-  return out
+  return launchShapeProofs(out)
 }
-const norm = (value: unknown, label?: string): unknown => value === undefined ? '<undefined>' : JSON.parse(placeheld(JSON.stringify(value), label))
+const norm = (value: unknown, label?: string): unknown => value === undefined ? '<undefined>' : JSON.parse(placeheld(JSON.stringify(value, gridFixtureSnapshot), label))
 /** The script a launch's argv sources, kept once by its digest. */
 function scriptOf(argv: unknown, label?: string): string | null {
   const sourced = Array.isArray(argv) ? argv.map(String).map((arg) => /^\. '(.+\/launch\/[0-9a-f-]{36}\.sh)'$/.exec(arg)?.[1]).find(Boolean) : undefined
@@ -145,10 +151,13 @@ beforeAll(async () => {
   const store = new ApiConnections(join(root, 'data'))
   store.save({ provider: 'custom', name: 'Router', baseUrl: apiBase, apiKey: 'fresh-key' })
   store.save({ provider: 'custom', name: 'Keyed', baseUrl: apiBase, apiKey: 'other-key', authHeader: 'x-api-key', authPrefix: '' })
+  ;({ storedGridFixture, gridFixtureSnapshot } = await import('../testing/gridCredentials.js'))
+  const { launchShapeExecutables } = await import('../testing/launchShapeExecutables.js')
+  launchShapeExecutables(root)
   const { launchShapes } = await import('../testing/launchShapes.js')
   shapes = (machine) => launchShapes({
     dataDir: join(root, 'data'), machine: () => ({ ...machine }), capabilities: async () => ({ sessionEnv: pane.tmux }),
-    readCodexConfig: () => null, setGridLaunch: () => {}, projectsRoot: join(root, 'work'),
+    readCodexConfig: () => null, setGridLaunch: async () => {}, projectsRoot: join(root, 'work'),
   })
 })
 
@@ -196,6 +205,7 @@ async function createCase(engine: AgentEngine, grid: GridLaunchOverride | null, 
     result: value,
     pane: call ? {
       argv: call.argv, script: scriptOf(call.argv, label), env: call.env, grid: call.grid, gridLaunchRecord: call.gridLaunchRecord,
+      afterExit: (call.paneLaunch as { afterExit?: unknown } | undefined)?.afterExit ?? null,
       ...(call.startedBy ? { startedBy: call.startedBy } : {}),
     } : null,
     config: tree(configRoot()),
@@ -227,16 +237,25 @@ async function createCases(): Promise<Record<string, unknown>> {
 
 // ---------------------------------------------------------------------------------------------- relaunch
 
-const session = (engine: AgentEngine, over: Partial<RegisteredSession> = {}): RegisteredSession => ({
-  agentId: `agent-${engine}`, sessionId: 's', engine, cwd: work(), gridLaunch: null, codexHome: null, dsh: null, dshRuntime: null, agent: null,
-  scmLaunch: null, ...over,
+const session = (engine: AgentEngine, over: Omit<Partial<RegisteredSession>, 'gridLaunch'> & { gridLaunch?: GridLaunchOverride | null } = {}): RegisteredSession => ({
+  agentId: `agent-${engine}`, sessionId: 's', engine, cwd: work(), codexHome: null, dsh: null, dshRuntime: null, agent: null,
+  scmLaunch: null, ...over, gridLaunch: over.gridLaunch ? storedGridFixture(over.gridLaunch) : null,
 }) as unknown as RegisteredSession
 
 async function relaunchCase(engine: AgentEngine, s: RegisteredSession, source?: Parameters<Shapes['relaunch']>[1], machine = M1): Promise<unknown> {
   rmSync(configRoot(), { recursive: true, force: true })
   const { value, lines } = await logged(() => shapes(machine).relaunch(s, source))
+  const final = await shapes(machine).finalRelaunch(s, value)
+  let dispatch: unknown = final
+  if ('argv' in final) {
+    expect(final.current?.()).not.toBe(false)
+    const argv = typeof final.argv === 'function' ? final.argv() : final.argv
+    expect(final.current?.()).not.toBe(false)
+    dispatch = { argv, script: scriptOf(argv), env: final.env, afterExit: final.paneLaunch?.afterExit ?? null }
+  }
   return norm({
     result: value,
+    dispatch,
     retargetLine: value.ok ? shapes(machine).retargetLine(engine, value.overrides) : null,
     config: tree(configRoot()),
     folder: tree(s.cwd!),

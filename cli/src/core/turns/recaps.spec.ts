@@ -23,7 +23,7 @@ function setup(over: Partial<RecapDeps> = {}) {
     remoteApp: vi.fn(() => false),
     bySession: (sessionId) => sessions.get(sessionId),
     resolve: (id) => id === 'a1' ? live : undefined,
-    stopped: (agentId) => agentId === 'gone' ? ({ agentId: 'gone', sessionId: 'old-s' } as RegisteredSession) : null,
+    stopped: async (agentId) => agentId === 'gone' ? ({ agentId: 'gone', sessionId: 'old-s' } as RegisteredSession) : null,
     live: () => [live, bare, { agentId: 'a3', sessionId: '' } as RegisteredSession],
     sessionTurnOpen: vi.fn((sessionId: string) => sessionId === 's1'),
     orchestratorRoleOf: vi.fn(() => null),
@@ -188,16 +188,16 @@ describe('recaps, as the core keeps them', () => {
     expect(recaps.mirror.lastFullText('s1')).toBeUndefined()
   })
 
-  it('looks recaps up under the engine session, asked for by agent, live or stopped', () => {
+  it('looks recaps up under the engine session, asked for by agent, live or stopped', async () => {
     const { recaps } = setup()
     const recent = vi.spyOn(recaps.mirror, 'recent').mockReturnValue([])
     const asks = vi.spyOn(recaps.mirror, 'recentAsks').mockReturnValue([])
-    recaps.recent('a1', 3)
-    recaps.recent('gone', 2)
-    recaps.recent('s9', 1)
-    recaps.recentAsks('a1', 5)
-    recaps.recentAsks('gone')
-    recaps.recentAsks('s9', 1)
+    await recaps.recent('a1', 3)
+    await recaps.recent('gone', 2)
+    await recaps.recent('s9', 1)
+    await recaps.recentAsks('a1', 5)
+    await recaps.recentAsks('gone')
+    await recaps.recentAsks('s9', 1)
     expect(recent.mock.calls).toEqual([['s1', 3], ['old-s', 2], ['s9', 1]])
     expect(asks.mock.calls).toEqual([['s1', 5], ['old-s', undefined], ['s9', 1]])
   })
@@ -277,16 +277,16 @@ describe('recaps, as the core keeps them', () => {
     })
   })
 
-  it('answers agent_recent with an agent\'s summaries and questions, two of each unless one to five are asked for', () => {
+  it('answers agent_recent with an agent\'s summaries and questions, two of each unless one to five are asked for', async () => {
     const { recaps } = setup()
     const summary = { kind: 'summary', text: 'body', recap: 'recap' }
     const recent = vi.spyOn(recaps.mirror, 'recent').mockReturnValue([summary])
     const asks = vi.spyOn(recaps.mirror, 'recentAsks').mockReturnValue(['which build is this?'])
-    expect(recaps.agentRecent({})).toStrictEqual({ error: 'MISSING_AGENT_ID' })
-    const reply = recaps.agentRecent({ agentId: 'a1' })
+    expect(await recaps.agentRecent({})).toStrictEqual({ error: 'MISSING_AGENT_ID' })
+    const reply = await recaps.agentRecent({ agentId: 'a1' })
     expect(reply).toStrictEqual({ agentId: 'a1', events: [summary], asks: ['which build is this?'] })
     expect(Object.keys(reply)).toEqual(['agentId', 'events', 'asks'])
-    for (const n of [0, 'many', 9, -3, 3.5]) recaps.agentRecent({ agentId: 'a1', n })
+    for (const n of [0, 'many', 9, -3, 3.5]) await recaps.agentRecent({ agentId: 'a1', n })
     expect(recent.mock.calls.map(([, n]) => n)).toEqual([2, 2, 2, 5, 1, 3.5])
     expect(asks.mock.calls.map(([, n]) => n)).toEqual([2, 2, 2, 5, 1, 3.5])
     expect(recent).toHaveBeenCalledWith('s1', 2)

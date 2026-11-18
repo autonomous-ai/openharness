@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
+import { storedGridFixture } from '../testing/gridCredentials.js'
 import { createAgentLife, FOLLOWER_FAILURES_MAX, followOptions, PURGED_SESSIONS_MAX, TOLD_PRUNE_AT } from './agentLife.js'
 import { FOLLOW_HAVING_MAX, VIEWERS_FOLLOW, type AgentLife, type HeldAgentLife } from './api.js'
 
@@ -61,7 +62,7 @@ describe('what happens to agents, for the services that follow them', () => {
   })
 
   it.each(['inline', 'process'] as const)('keeps credentials out of %s catch-up and running notifications, including retained rows', (mode) => {
-    const override = { networkId: 'fixture', networkName: 'Fixture', baseUrl: 'https://fixture.invalid/v1', apiKey: 'synthetic-lifecycle-canary' }
+    const override = storedGridFixture({ networkId: 'fixture', networkName: 'Fixture', baseUrl: 'https://fixture.invalid/v1', apiKey: 'synthetic-lifecycle-canary' })
     const plain = agent('plain')
     const keyed = agent('keyed', { gridLaunch: override })
     const { hub, notify } = setup([plain, keyed])
@@ -74,7 +75,7 @@ describe('what happens to agents, for the services that follow them', () => {
     const disconnect = connect(false)
     const initial = JSON.stringify(received)
     expect(initial).not.toContain('gridLaunch')
-    expect(initial).not.toContain(override.apiKey)
+    expect(initial).not.toContain(override.credential.binding)
     plain.gridLaunch = override
     expect(JSON.stringify(received)).not.toContain('gridLaunch')
     hub.running(agent('new', { gridLaunch: override }))
@@ -86,7 +87,7 @@ describe('what happens to agents, for the services that follow them', () => {
     end()
     const all = [...received, ...notify.mock.calls]
     expect(JSON.stringify(all)).not.toContain('gridLaunch')
-    expect(JSON.stringify(all)).not.toContain(override.apiKey)
+    expect(JSON.stringify(all)).not.toContain(override.credential.binding)
     expect(keyed.gridLaunch).toBe(override)
     expect(plain.gridLaunch).toBe(override)
     if (mode === 'process') expect(notify).toHaveBeenCalledTimes(3)

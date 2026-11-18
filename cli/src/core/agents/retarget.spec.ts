@@ -1,3 +1,5 @@
+import { storedGridFixture } from '../../testing/gridCredentials.js'
+import { gridLaunchInProcess } from '../../testing/gridLaunchInProcess.js'
 import { opencodeMajorVersion } from '../../engines/opencode/version.js'
 vi.mock('../../engines/opencode/version.js', () => ({ opencodeMajorVersion: vi.fn(async () => 1) }))
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -10,8 +12,6 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ApiConnections } from '../../lib/apiConnections.js'
-import { refreshApiFor } from '../../lib/apiModels.js'
-import { answerGridLaunch } from '../../lib/gridLaunch.js'
 import { gridLaunchThrough } from './launch.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { AgentRestartCoordinator, bypassPermissionFor, restartAgent } from '../../lib/restartAgent.js'
@@ -123,7 +123,7 @@ describe('retargeting an agent', () => {
       const target = { ...grid, networkId: `api:${connection.id}`, networkName: connection.name, baseUrl: connection.baseUrl, apiKey: 'FAKE-old-key' }
       const launchOverridesDeps: LaunchOverridesDeps = {
         machine: () => ({ hermesSystemManaged: false }),
-        gridLaunch: gridLaunchThrough(() => ({ gridLaunch: async input => answerGridLaunch(input, refreshApiFor(store)) })),
+        gridLaunch: gridLaunchThrough(() => ({ gridLaunch: async input => gridLaunchInProcess(store)(input) })),
         capabilities: async () => ({ sessionEnv: true }), writeGridConfigDir: vi.fn(), installCodexHooks: vi.fn(),
         readCodexConfig: () => null,
       }
@@ -444,8 +444,8 @@ describe('retargeting an agent', () => {
     // a move between a grid and its own login changes provider, so the conversation goes on in a fork of it.
     it.each([
       ['its own login onto a grid', agent({ engine: 'codex' }), grid, true],
-      ['a grid back to its own login', agent({ engine: 'codex', gridLaunch: grid }), null, true],
-      ['one grid to another (the same provider)', agent({ engine: 'codex', gridLaunch: grid }), { ...grid, networkId: 'g2' }, false],
+      ['a grid back to its own login', agent({ engine: 'codex', gridLaunch: storedGridFixture(grid) }), null, true],
+      ['one grid to another (the same provider)', agent({ engine: 'codex', gridLaunch: storedGridFixture(grid) }), { ...grid, networkId: 'g2' }, false],
     ] as const)('continues a Codex conversation moved from %s in a fork only when its provider changes', async (_how, row, to, forks) => {
       const run = setup(row)
       expect(await run.retarget({ agentId: 'a1', grid: to })).toEqual({ ok: true })
@@ -472,7 +472,7 @@ describe('retargeting an agent', () => {
 
     it('prepares the fork home on the engine on the path, with the grid\'s variables gone', async () => {
       vi.stubEnv('ANTHROPIC_BASE_URL', 'http://grid.local')
-      const run = setup(agent({ engine: 'codex', gridLaunch: grid, cwd: null }), {
+      const run = setup(agent({ engine: 'codex', gridLaunch: storedGridFixture(grid), cwd: null }), {
         relaunchOverrides: (async () => ({ ok: true, overrides: { env: {}, clearEnv: [] } })) as never,
       })
       await run.retarget({ agentId: 'a1', grid: null })

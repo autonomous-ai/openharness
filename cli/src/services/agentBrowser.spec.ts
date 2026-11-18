@@ -751,7 +751,7 @@ describe('the agent browser service', () => {
 
   it('inline migration reads the legacy flag from the core list without using omissions to delete profiles', async () => {
     saveState({ a1: defaultSettings(HOST), unreadable: defaultSettings(HOST) })
-    const all = vi.fn(() => [session('a1')])
+    const all = vi.fn(async () => [session('a1')])
     const sw = startSwitching([session('b1', { browser: undefined })], { agents: { all }, options: { everyAgent: undefined } })
     sw.move('a1', 'b1')
     await ready(sw.port, 'b1')

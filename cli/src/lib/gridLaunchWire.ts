@@ -10,6 +10,7 @@
  */
 import { join } from 'node:path'
 import type { AgentEngine } from '../engines/types.js'
+import { storedGridLaunch, type StoredGridLaunch } from './sessionStorageWire.js'
 
 /** The variable an engine is told to read the key from, where the engine supports that indirection. Codex names it
  *  in `env_key`; Pi's provider extension writes it as a `$VAR` reference. */
@@ -34,7 +35,7 @@ export interface GridLaunchOverride {
    */
   baseUrl: string
   /** Short-lived, minted per launch. Never logged, never placed in argv; persisted only in the registry
-   *  row (see the module header), so a relaunch can repeat this launch. */
+   *  compatibility images, so a relaunch can repeat this launch; current session rows retain only a reference. */
   apiKey: string
   /** Absent means "whatever the engine asks for" — the relay's own default. */
   model?: string
@@ -178,6 +179,18 @@ export function parseGridLaunchOverride(raw: unknown): GridOverrideParse {
   }
 }
 
+/** Private models/storage selection only. Public client imports still require parseGridLaunchOverride. */
+export function parseGridLaunchSelection(raw: unknown):
+  | { state: 'ok'; override: GridLaunchOverride | StoredGridLaunch }
+  | Exclude<GridOverrideParse, { state: 'ok' }> {
+  if (!storedGridLaunch(raw)) return parseGridLaunchOverride(raw)
+  const { credential, ...metadata } = raw
+  const parsed = parseGridLaunchOverride({ ...metadata, apiKey: 'private-reference' })
+  if (parsed.state !== 'ok') return parsed
+  const { apiKey: _marker, ...checked } = parsed.override
+  return { state: 'ok', override: { ...checked, credential: structuredClone(credential) } }
+}
+
 /** The OpenAI-compatible relay root — what every engine here wants except Claude Code. */
 export function relayBaseUrl(baseUrl: string): string {
   const trimmed = baseUrl.replace(/\/+$/, '')
@@ -250,7 +263,7 @@ export type GridWebSearchStatus = 'on' | 'unavailable' | 'unsupported'
  * without its launch, or a launch without its status, is a row the app would read wrongly.
  */
 export interface GridLaunchRecord {
-  override: GridLaunchOverride
+  override: GridLaunchOverride | StoredGridLaunch
   webSearch: GridWebSearchStatus
 }
 
@@ -408,7 +421,7 @@ export type GridLaunchResult =
  *  the row's launch with a saved API's endpoint and key as saved now. */
 export interface GridLaunchRequest {
   engine: AgentEngine
-  override: GridLaunchOverride
+  override: GridLaunchOverride | StoredGridLaunch
   machine: GridLaunchMachine
   refresh?: boolean
 }
@@ -419,7 +432,7 @@ export interface GridLaunchRequest {
  * grid assignment recognises from then on (lib/gridAssignment.ts).
  */
 export type GridLaunchAnswer =
-  | { ok: true; launch: GridEngineLaunch; override: GridLaunchOverride; apiBase?: string }
+  | { ok: true; launch: GridEngineLaunch; override: GridLaunchOverride | StoredGridLaunch; apiBase?: string }
   | { ok: false; error: string; detail: string; apiBase?: string; unavailable?: string }
 
 /**
@@ -442,7 +455,7 @@ function webSearchReason(engine: AgentEngine, webSearch: GridWebSearchStatus): s
  *  the MCP url. The core's to say, from a launch it holds (create's, or the record a relaunch built). */
 export function describeGridLaunch(
   engine: AgentEngine,
-  override: GridLaunchOverride,
+  override: Omit<GridLaunchOverride, 'apiKey'>,
   webSearch: GridWebSearchStatus,
 ): string {
   const reason = webSearchReason(engine, webSearch)
@@ -453,7 +466,7 @@ export function describeGridLaunch(
 
 /** Why a grid launch could not be built when the models service is not there to build it. `unavailable` names
  *  the service, so a restore holds the agent for it rather than failing it (lib/restoreAgents.ts). */
-export function gridUnavailable(engine: AgentEngine, override: GridLaunchOverride): { ok: false; error: string; detail: string; unavailable: 'models' } {
+export function gridUnavailable(engine: AgentEngine, override: Pick<GridLaunchOverride, 'networkId' | 'networkName'>): { ok: false; error: string; detail: string; unavailable: 'models' } {
   return {
     ok: false,
     error: isApiLaunch(override) ? 'API_UNAVAILABLE' : 'GRID_UNAVAILABLE',

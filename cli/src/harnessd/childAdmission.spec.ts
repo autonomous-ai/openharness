@@ -34,4 +34,12 @@ describe('child code admission before runtime effects', () => {
   it('accepts a compatible cohort with its selected file unchanged', () => {
     expect(childAdmissionFailure(env, 42, '/cli.js', () => disk)).toBeNull()
   })
+  it('refuses a mixed required-storage cohort while preserving complete historical rollback', () => {
+    const previous = { contract: 2, plan: WORKER_PLAN }
+    const previousEnvironment = { ...env, [WORKER_COHORT_ENV]: `42:2:${WORKER_PLAN}:${disk}` }
+    expect(WORKER_CONTRACT).toBe(3)
+    expect(childAdmissionFailure(previousEnvironment, 42, '/previous.js', () => disk, previous)).toBeNull()
+    expect(childAdmissionFailure(previousEnvironment, 42, '/current.js', () => disk)).toContain('executed worker contract')
+    expect(childAdmissionFailure(env, 42, '/previous.js', () => disk, previous)).toContain('executed worker contract')
+  })
 })

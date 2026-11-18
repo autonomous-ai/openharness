@@ -311,13 +311,13 @@ it('preserves a repaired parent through Stop and the final real forget archive',
     forgetSession: forget, markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative: async () => {} })
   const checkpoint = async (session: typeof row) => {
     expect(session.transcriptPath).toBe(parent)
-    stopped.save({ ...row, title: 'A hook saved the stale child path' })
+    await stopped.save({ ...row, title: 'A hook saved the stale child path' })
   }
   await stop(row.agentId, { checkpoint })
   const { checkPidRuntime } = await import('./deleteAgentFallback.js')
   expect(checkPidRuntime).toHaveBeenCalledWith(expect.objectContaining({ agentId: row.agentId, processIdentity: row.processIdentity }))
   expect(registry.byAgent(row.agentId)).toBeUndefined()
-  expect(stopped.get(row.agentId)).toMatchObject({ active: false, sessionId: A, transcriptPath: parent })
+  expect((await stopped.get(row.agentId))).toMatchObject({ active: false, sessionId: A, transcriptPath: parent })
 })
 
 it.each(['prepared image', 'process refresh'] as const)('retains a typed Stop hold when native evidence changes during the %s', async phase => {
@@ -352,7 +352,7 @@ it.each(['prepared image', 'process refresh'] as const)('retains a typed Stop ho
   expect(registry.byAgent(row.agentId)?.sessionId).toBe(A)
   expect(JSON.parse(readFileSync(join(root, 'ADAPTER_DATA_DIR', 'registry.json'), 'utf8')))
     .toEqual(expect.arrayContaining([expect.objectContaining({ agentId: row.agentId, sessionId: A })]))
-  expect(stopped.get(row.agentId)).toMatchObject({ sessionId: A, transcriptPath: transcript })
+  expect((await stopped.get(row.agentId))).toMatchObject({ sessionId: A, transcriptPath: transcript })
   expect(send).not.toHaveBeenCalled()
   expect(result).toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
 })
@@ -465,7 +465,7 @@ it.each(['before', 'configuration', 'history repair', 'permission', 'tmux dispat
       return { choice, droppedFlag: null }
     })
     ;(await removeRegistryAgent(registry, row.agentId))
-    const stopped = new StoppedAgentStore(join(root, 'stopped')); stopped.save(row)
+    const stopped = new StoppedAgentStore(join(root, 'stopped')); await stopped.save(row)
     const writeConfiguration = vi.fn()
     const prepare = vi.fn(async () => { if (phase === 'history repair') writeFileSync(transcript, header(B)); return phase === 'history repair' })
     const create = vi.fn(async () => {
@@ -504,7 +504,7 @@ it.each(['before', 'configuration', 'history repair', 'permission', 'tmux dispat
       detail: expect.stringContaining(phase === 'conversation ownership' ? 'another live harness' : 'different conversation') })
     expect(registry.byAgent(row.agentId)).toBeUndefined()
     expect(announce).not.toHaveBeenCalled()
-    expect(stopped.get(row.agentId)?.sessionId).toBe(A)
+    expect((await stopped.get(row.agentId))?.sessionId).toBe(A)
     if (newOwner) expect(registry.bySession(A)?.agentId).toBe(newOwner)
     if (phase === 'before' || phase === 'configuration') {
       expect(writeConfiguration).not.toHaveBeenCalled()

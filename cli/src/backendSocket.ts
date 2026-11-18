@@ -342,7 +342,7 @@ export class BackendSocket {
   onBusy: (() => void) | null = null
   /** Answers `agent_recent` with the whole reply: an agent's last turn summaries and the person's last
    *  questions, for a device's tiles (cli.ts binds core/turns/recaps.ts). Null answers UNSUPPORTED. */
-  agentRecentProvider: ((payload: Record<string, unknown>) => Record<string, unknown>) | null = null
+  agentRecentProvider: ((payload: Record<string, unknown>) => Promise<Record<string, unknown>>) | null = null
   /** Answers `agents_list` through its last argument: every agent's frame, and its monitor readings when
    *  asked for (cli.ts binds core/agents/list.ts). The second argument reads the asker's paired role.
    *  Null answers UNSUPPORTED. */
@@ -1379,7 +1379,7 @@ export class BackendSocket {
 
         // An agent's last turn summaries and questions, for a device's tiles (core/turns/recaps.ts, bound by cli.ts).
         case 'agent_recent':
-          reply(type, requestId, this.agentRecentProvider ? this.agentRecentProvider(payload) : { error: 'UNSUPPORTED' })
+          reply(type, requestId, this.agentRecentProvider ? await this.agentRecentProvider(payload) : { error: 'UNSUPPORTED' })
           return
 
         // A rename, a model and effort, or an app opening the agent (core/agents/update.ts, bound by cli.ts).

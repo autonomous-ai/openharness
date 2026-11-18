@@ -48,7 +48,7 @@ export function searchCoreApi(
     terminals: TERMINALS_OFF,
     machine: UNASKED.machine,
     agents: {
-      all: agents,
+      all: async () => agents(),
       live: () => agents().filter((agent) => agent.active),
       displayName: (session) => (session as { displayName?: string }).displayName ?? '',
       byAgent: (agentId) => agents().find((agent) => agent.agentId === agentId),

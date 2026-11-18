@@ -67,7 +67,7 @@ export function viewersCoreApi(
     terminals: TERMINALS_OFF,
     machine: UNASKED.machine,
     agents: {
-      all: attached,
+      all: async () => attached(),
       live: attached,
       displayName: () => '',
       byAgent: (agentId) => sessions.get(agentId),

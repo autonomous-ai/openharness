@@ -100,9 +100,9 @@ export function createDiscoveryHandlers({
     looked.add(key)
     return true
   }
-  const archivedOwner = (terminal: RegisteredSession, observed: DiscoveredTerminalAgent): RegisteredSession | undefined => {
+  const archivedOwner = async (terminal: RegisteredSession, observed: DiscoveredTerminalAgent): Promise<RegisteredSession | undefined> => {
     let archived: RegisteredSession[]
-    try { archived = stoppedAgents.list() } catch (error) {
+    try { archived = await stoppedAgents.list() } catch (error) {
       console.warn(`[discovery] saved harnesses unreadable; ${sid(terminal.agentId)} adopts its engine as new: ${error instanceof Error ? error.message : error}`)
       return undefined
     }
@@ -116,14 +116,14 @@ export function createDiscoveryHandlers({
    * the pane. Not while a resume of it is under way (what went with the pane comes back with it), and not once it is
    * purged (no saved record).
    */
-  const paneTaken = (previous: string, adopted: RegisteredSession): void => {
+  const paneTaken = async (previous: string, adopted: RegisteredSession, current: () => boolean): Promise<void> => {
     if (stoppedAgents.resumeReservedAt(previous) !== null) return
     let saved: RegisteredSession | null
-    try { saved = stoppedAgents.get(previous) } catch (error) {
+    try { saved = await stoppedAgents.get(previous) } catch (error) {
       console.warn(`[discovery] saved harnesses unreadable; ${sid(adopted.agentId)} takes nothing of its pane: ${error instanceof Error ? error.message : error}`)
       return
     }
-    if (saved) taken(previous, adopted)
+    if (saved && stoppedAgents.resumeReservedAt(previous) === null && current()) taken(previous, adopted)
   }
   /**
    * Every `openclaw` command renames its process to `openclaw` (`onboard`, `logs --follow`, `doctor`, `sessions` too:
@@ -194,8 +194,8 @@ export function createDiscoveryHandlers({
     // engine already (a build with the engine fix but not this one), as long as no conversation is bound to it.
     const holder = !isTerminalEngine(observed.engine) && (isTerminalEngine(current.engine)
       || (!!current.terminalHost && !current.sessionId && current.engine === observed.engine))
-    const owner = holder && firstLook(current, observed) ? archivedOwner(current, observed) : undefined
     const authority = observedAuthority(observed, current)
+    const owner = holder && firstLook(current, observed) ? await archivedOwner(current, observed) : undefined
     let revived: RegisteredSession | null = null
     if (owner) {
       try { revived = await registry.reinstateArchived(current.agentId, owner, observed.processIdentity, authority) }
@@ -209,7 +209,7 @@ export function createDiscoveryHandlers({
       }
     }
     if (revived) {
-      try { stoppedAgents.remove(revived.agentId) } catch (error) {
+      try { await stoppedAgents.remove(revived.agentId, () => authority.committed(revived!)) } catch (error) {
         console.warn(`[discovery] ${sid(revived.agentId)} archive could not be removed: ${error instanceof Error ? error.message : error}`)
       }
       console.log(`[discovery] ${sid(revived.agentId)} back from the archive · its ${observed.engine} never stopped`
@@ -238,7 +238,10 @@ export function createDiscoveryHandlers({
       current = registry.byAgent(publication.entry.agentId)!
     }
     if (adopted) console.log(`[discovery] ${sid(current.agentId)} terminal → ${observed.engine} · ${observed.primaryRuntimeKey}`)
-    if (adopted && previous) paneTaken(previous, adopted)
+    if (adopted && previous) {
+      await paneTaken(previous, adopted, () => authority.committed(adopted))
+      if (!authority.committed(adopted)) return
+    }
     if (!wasLaunching && !adopted) {
       registry.updateRuntimes(current.agentId, observed.runtimes, observed.primaryRuntimeKey)
       registry.updateProcessIdentity(current.agentId, observed.processIdentity, observed.gateway, observed.grid)

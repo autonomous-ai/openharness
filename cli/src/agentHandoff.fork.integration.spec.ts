@@ -93,13 +93,7 @@ function cliDeps(m: Mods, rows: RegisteredSession[], over: { findLiveSession?: M
       byAgent: (id) => rows.find((s) => s.agentId === id),
       bySession: (sid) => rows.find((s) => s.sessionId === sid),
     },
-    stopped: {
-      get: (id) => store.get(id),
-      ids: () => {
-        try { return readdirSync(stoppedDir).filter((name) => name.endsWith('.json')).map((name) => name.slice(0, -5)) }
-        catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error }
-      },
-    },
+    stopped: store,
     mirror: {
       recentAsks: () => ['MIRROR-ASK'],
       lastFullText: () => 'MIRROR-ANSWER',
@@ -147,8 +141,8 @@ describe('fork record → registry → stopped copy → inheritance (real module
 
     // The stopped copy, as Change agent on a stopped fork resolves it (cli.ts: registry.resolve ?? stoppedAgents.get).
     const store = new m.StoppedAgentStore(join(data, 'stopped-agents'))
-    store.save({ ...fork, active: false })
-    const stoppedFork = new m.StoppedAgentStore(join(data, 'stopped-agents')).get(fork.agentId)!
+    await store.save({ ...fork, active: false })
+    const stoppedFork = (await store.get(fork.agentId))!
     expect(stoppedFork.forkedFrom).toEqual(fork.forkedFrom)
 
     {
@@ -288,7 +282,7 @@ describe('discovery through the real Claude process record (handoffDiscovery ↔
     processRecord(FOUND_SESSION, marker)
     const other = (await m.registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%10' }], cwd: ws }))!
     const store = new m.StoppedAgentStore(join(data, 'stopped-agents'))
-    store.save({ ...other, sessionId: 'unrelated-session', active: false })
+    await store.save({ ...other, sessionId: 'unrelated-session', active: false })
     // Readable and not the holder: discovery goes ahead.
     expect((await ask(m, cliDeps(m, [unbound(marker)]))).file).toBe(`.harness/handoff/agent-new-${CHANGE}.md`)
     // One more record that cannot be read (the store's list() would skip it silently): nothing is handed over.

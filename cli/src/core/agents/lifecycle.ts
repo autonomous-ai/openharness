@@ -107,7 +107,7 @@ export function createAgentLifecycle({
     return stop(target, options).then(() => { stopped?.(agentId) })
   }
   const purgeAgentService = new PurgeAgentService({
-    live: id => registry.byAgent(id), sessions: () => [...registry.list(), ...stoppedAgents.list()],
+    live: id => registry.byAgent(id), liveSessions: () => registry.list(),
     worktrees: () => workspaces() ?? WORKSPACES_OFF,
     stopped: stoppedAgents, checkpoints: sessionCheckpoints, stop: stopAgent,
     restarting: id => restartJobs.busy(id) || stopJobs.has(id),
@@ -131,20 +131,20 @@ export function createAgentLifecycle({
     retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume, stopBackgroundJob,
     refreshGridWebSearch, clearDeleted, attach, attachSession, relaunchMarks,
   })
-  const resumeAgent: ResumeAgent = (id, permissionMode, launchArgs) => {
+  const resumeAgent: ResumeAgent = async (id, permissionMode, launchArgs) => {
     // A pane a stopped move left may still run this conversation's engine, which no record names (its pid was never
     // the row's), so a resume would find the engine gone and start a second one beside it: not this start.
-    const heldId = (stoppedAgents.get(id) ?? registry.byAgent(id))?.agentId ?? id
+    const saved = await stoppedAgents.get(id)
+    const selected = saved ?? registry.byAgent(id)
+    const heldId = selected?.agentId ?? id
     if (moveHeld?.(heldId)) {
       console.warn(moveHeldLine(heldId))
       return Promise.resolve({ ok: false, error: 'AGENT_BUSY', detail: 'This harness is held until the daemon restarts.' })
     }
-    return resumeChecked(id, permissionMode, launchArgs)
+    if (selected?.guest) return GUEST_HARNESS_REFUSAL
+    if (purgeAgentService.busy(id) || purgeAgentService.blocksFolder(selected?.cwd)) return { ok: false, error: 'AGENT_BUSY' }
+    return resume(id, permissionMode, launchArgs)
   }
-  const resumeChecked: ResumeAgent = (id, permissionMode, launchArgs) => (stoppedAgents.get(id) ?? registry.byAgent(id))?.guest
-    ? Promise.resolve(GUEST_HARNESS_REFUSAL)
-    : purgeAgentService.busy(id) || purgeAgentService.blocksFolder(stoppedAgents.get(id)?.cwd)
-      ? Promise.resolve({ ok: false, error: 'AGENT_BUSY' }) : resume(id, permissionMode, launchArgs)
   return { stopJobs, stopAgent, purgeAgentService, resumeAgent }
 }
 

@@ -1,3 +1,4 @@
+import { stoppedFixture } from '../testing/stoppedFixture.js'
 /** Former-code Change agent output through both service compositions, with actual private history. */
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -61,7 +62,7 @@ it.each(['linux', 'darwin'])('keeps the former handoff service outcomes on %s', 
       const deps = createHandoffDependencies({
         registry: { resolve: id => id === 'selected' ? source : id === 'parent' ? parent : undefined,
           byAgent: () => source, bySession: () => undefined },
-        stopped: { get: () => null, ids: () => [] }, mirror: { recentAsks: () => [], lastFullText: () => undefined, recent: () => [] },
+        stopped: stoppedFixture(), mirror: { recentAsks: () => [], lastFullText: () => undefined, recent: () => [] },
         databaseHistory: () => undefined, findLiveSession: async () => ({ sessionId: ID, transcriptPath: path }),
         processSession: async () => null, isRecentlyDeleted: () => false, findResumedTranscript: async () => path, validTranscriptPath,
       }, dataDir)

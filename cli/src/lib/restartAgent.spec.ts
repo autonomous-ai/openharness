@@ -33,7 +33,7 @@ function deps(over: Overrides = {}): RestartAgentDeps & { calls: string[] } {
     waitForProcess: async () => { calls.push('waitForProcess'); return waitForProcessImpl() },
     buildArgv: (opts) => { calls.push('buildArgv'); return buildArgvImpl(opts) },
     log: () => {},
-    keepAbandoned: () => { calls.push('keepAbandoned') },
+    keepAbandoned: async () => { calls.push('keepAbandoned') },
   }
 }
 

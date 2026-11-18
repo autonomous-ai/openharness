@@ -33,8 +33,8 @@ it('catalog preserves a previous owned conversation with its own resume folder a
   ])})
   cleanups.push(()=>{index.stop();store.close()})
   await index.pass(source)
-  expect(index.search('',{catalogAfter:''}).hits[0]).toMatchObject({agentId:'same-agent',sessionId:'old-session',catalogEntry:{title:'Earlier conversation',cwd:'/work/earlier'}})
-  expect(index.search('Previous').hits[0].external).toBeUndefined()
+  expect((await index.search('',{catalogAfter:''})).hits[0]).toMatchObject({agentId:'same-agent',sessionId:'old-session',catalogEntry:{title:'Earlier conversation',cwd:'/work/earlier'}})
+  expect((await index.search('Previous')).hits[0].external).toBeUndefined()
 })
 
 function setup(initial: string, agents?: () => string[]) {
@@ -46,16 +46,45 @@ function setup(initial: string, agents?: () => string[]) {
   let sources: SearchSource[] = [{ agentId: 'agent-1', sessionId: 's1', engine: 'claude', transcriptPath: path, header: 'Dial firmware · harness', changedAt: 1 }]
   const index = new SessionSearchIndex({ store, sources: () => sources, agents, touchDelayMs: 5 })
   cleanups.push(() => { index.stop(); store.close() })
-  const found = (query: string) => index.search(query).hits.map((hit) => hit.sessionId)
+  const found = async (query: string) => (await index.search(query)).hits.map((hit) => hit.sessionId)
   const settle = async () => {
     index.sweep()
-    await vi.waitFor(() => { expect((index as unknown as { running: boolean }).running).toBe(false) })
+    await vi.waitFor(() => { expect((index as unknown as { discovering: boolean; running: boolean }).discovering || (index as unknown as { running: boolean }).running).toBe(false) })
     await index.drain()
   }
   return { path, store, index, found, settle, setSources: (next: SearchSource[]) => { sources = next } }
 }
 
 describe('SessionSearchIndex', () => {
+  it('shares a pending async catalog read across concurrent previews', async () => {
+    const store = SessionSearchStore.open(':memory:')!
+    let finish!: (rows: SearchSource[]) => void
+    const reading = new Promise<SearchSource[]>(resolve => { finish = resolve })
+    const sources = vi.fn(() => reading)
+    const index = new SessionSearchIndex({ store, sources })
+    cleanups.push(() => { index.stop(); store.close() })
+    const first = index.tail('s1'), second = index.tail('s1')
+    const count = sources.mock.calls.length
+    finish([{ agentId: 'a1', sessionId: 's1', engine: 'claude', transcriptPath: null, header: 'Fixture', changedAt: 1 }])
+    try { expect(count).toBe(1) }
+    finally { index.stop(); await Promise.allSettled([first, second]) }
+  })
+
+  it('does not retry or use a catalog answer after stopping during its read', async () => {
+    const store = SessionSearchStore.open(':memory:')!
+    let finish!: (rows: SearchSource[]) => void
+    const reading = new Promise<SearchSource[]>(resolve => { finish = resolve })
+    const sources = vi.fn(() => reading)
+    const index = new SessionSearchIndex({ store, sources })
+    cleanups.push(() => { index.stop(); store.close() })
+    const pending = index.tail('s1')
+    index.stop()
+    finish([])
+    await pending
+    expect(sources).toHaveBeenCalledTimes(1)
+    expect(store.counts().sessions).toBe(0)
+  })
+
   it('a later search discovers a new session without waiting for the idle sweep', async () => {
     let now = Date.now()
     const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
@@ -67,8 +96,8 @@ describe('SessionSearchIndex', () => {
     const index = new SessionSearchIndex({ store, sources: () => discovered, discover })
     cleanups.push(() => { index.stop(); store.close() })
     index.start(60_000)
-    expect(index.search('').ready).toBe(false)
-    await vi.waitFor(() => expect(index.search('').ready).toBe(true))
+    expect((await index.search('')).ready).toBe(false)
+    await vi.waitFor(async () => expect((await index.search('')).ready).toBe(true))
     expect(discover).toHaveBeenCalledTimes(1)
 
     const dir = mkdtempSync(join(tmpdir(), 'session-search-new-'))
@@ -80,10 +109,10 @@ describe('SessionSearchIndex', () => {
       external: { cwd: '/repo', origin: 'terminal', title: 'New terminal conversation' },
     }]
     now += 5_001
-    expect(index.search('', { from: 0, to: now })).toMatchObject({ hits: [], ready: false })
-    index.search('')
-    await vi.waitFor(() => {
-      const result = index.search('', { from: 0, to: now })
+    expect((await index.search('', { from: 0, to: now }))).toMatchObject({ hits: [], ready: false })
+    await index.search('')
+    await vi.waitFor(async () => {
+      const result = (await index.search('', { from: 0, to: now }))
       expect(result.ready).toBe(true)
       expect(result.hits.map((hit) => hit.sessionId)).toEqual(['new-terminal'])
     })
@@ -97,14 +126,14 @@ describe('SessionSearchIndex', () => {
     const index = new SessionSearchIndex({ store, sources: () => [], discover })
     cleanups.push(() => { index.stop(); store.close() })
     index.start(60_000)
-    expect(index.search('')).toMatchObject({ hits: [], ready: false, pending: 0 })
+    expect((await index.search(''))).toMatchObject({ hits: [], ready: false, pending: 0 })
     await Promise.resolve()
     expect(discover).toHaveBeenCalledTimes(1)
-    index.search('')
+    await index.search('')
     index.sweep()
     expect(discover).toHaveBeenCalledTimes(1)
     finish()
-    await vi.waitFor(() => expect(index.search('')).toMatchObject({ hits: [], ready: true }))
+    await vi.waitFor(async () => expect((await index.search(''))).toMatchObject({ hits: [], ready: true }))
   })
 
   it('keeps readiness false through the final indexing pass, then returns discovered history', async () => {
@@ -116,10 +145,11 @@ describe('SessionSearchIndex', () => {
       readHistory: () => new Promise<LiveEvent[]>((resolve) => { finish = resolve }),
     }] })
     cleanups.push(() => { index.stop(); store.close() })
-    expect(index.search('')).toMatchObject({ ready: false, pending: 0 })
+    expect((await index.search(''))).toMatchObject({ ready: false, pending: 0 })
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
     finish([{ type: 'user_message', payload: { content: 'fix welcome' } }])
-    await vi.waitFor(() => {
-      const result = index.search('', { from: 0, to: Date.now() + 1 })
+    await vi.waitFor(async () => {
+      const result = (await index.search('', { from: 0, to: Date.now() + 1 }))
       expect(result.ready).toBe(true)
       expect(result.hits[0]).toMatchObject({ sessionId: 'existing-codex', external: { title: 'Existing work' } })
     })
@@ -130,43 +160,43 @@ describe('SessionSearchIndex', () => {
     const discover = vi.fn().mockRejectedValueOnce(new Error('not ready')).mockResolvedValue(undefined)
     const index = new SessionSearchIndex({ store, sources: () => [], discover })
     cleanups.push(() => { index.stop(); store.close() })
-    index.search('')
-    await vi.waitFor(() => expect(index.search('')).toMatchObject({ ready: false, discoveryError: true }))
+    await index.search('')
+    await vi.waitFor(async () => expect((await index.search(''))).toMatchObject({ ready: false, discoveryError: true }))
     expect(discover).toHaveBeenCalledTimes(1)
     index.sweep()
-    await vi.waitFor(() => expect(index.search('').ready).toBe(true))
+    await vi.waitFor(async () => expect((await index.search('')).ready).toBe(true))
     expect(discover).toHaveBeenCalledTimes(2)
   })
 
   it('does not resurrect deleted conversation history from an in-flight pass or stale source list', async () => {
     const { index, found, settle, store } = setup(prompt('purge search history', 0) + answer('sensitive fixture', 1))
     await settle()
-    expect(found('sensitive')).toEqual(['s1'])
+    expect((await found('sensitive'))).toEqual(['s1'])
     const pass = index.pass({ agentId: 'agent-1', sessionId: 's1', engine: 'claude', transcriptPath: store.session('s1')!.path, header: 'stale row', changedAt: 2 })
     index.deleteHistory('s1')
     await pass
     await settle()
-    expect(found('sensitive')).toEqual([])
+    expect((await found('sensitive'))).toEqual([])
     expect(store.session('s1')).toBeUndefined()
   })
   it('indexes a transcript on the first sweep and picks up only what was added since', async () => {
     const { path, store, found, settle } = setup(prompt('why does the dial scroll jump', 0) + answer('The delta is doubled.', 1))
     await settle()
-    expect(found('doubled')).toEqual(['s1'])
+    expect((await found('doubled'))).toEqual(['s1'])
     const first = store.session('s1')!
     expect(first).toMatchObject({ resumeOffset: 0, resumeTurn: 0, turns: 1, lastAt: Date.parse(at(1)) })
 
     // The open turn grows, then a new one starts: the pass resumes at the open turn, not the start.
     appendFileSync(path, answer('Halved it in ui.c.', 2) + prompt('now flash the keyboard firmware', 3))
     await settle()
-    expect(found('halved')).toEqual(['s1'])
-    expect(found('keyboard')).toEqual(['s1'])
+    expect((await found('halved'))).toEqual(['s1'])
+    expect((await found('keyboard'))).toEqual(['s1'])
     const second = store.session('s1')!
     expect(second.resumeTurn).toBe(1)
     expect(second.resumeOffset).toBeGreaterThan(0)
     expect(store.counts()).toEqual({ sessions: 1, turns: 2 })
     // Nothing indexed twice.
-    expect(found('doubled')).toEqual(['s1'])
+    expect((await found('doubled'))).toEqual(['s1'])
     expect(store.search('delta')[0].snippet).toContain('doubled')
   })
 
@@ -180,7 +210,7 @@ describe('SessionSearchIndex', () => {
       return SessionSearchStore.prototype.writeSession.apply(this, args)
     })
     index.sweep()
-    await vi.waitFor(() => { expect((index as unknown as { running: boolean }).running).toBe(false) })
+    await vi.waitFor(() => { expect((index as unknown as { discovering: boolean; running: boolean }).discovering || (index as unknown as { running: boolean }).running).toBe(false) })
     // Stopped after the first batch: its rows are in, and the session resumes at the next one.
     expect(store.counts().turns).toBe(32)
     expect(store.session('s1')).toMatchObject({ resumeTurn: 32, mtime: 0 })
@@ -190,9 +220,9 @@ describe('SessionSearchIndex', () => {
     const resumed = new SessionSearchIndex({ store, sources: () => [{ agentId: 'agent-1', sessionId: 's1', engine: 'claude', transcriptPath: store.session('s1')!.path, header: 'Dial firmware · harness', changedAt: 1 }] })
     cleanups.push(() => resumed.stop())
     resumed.sweep()
-    await vi.waitFor(() => { expect((resumed as unknown as { running: boolean }).running).toBe(false) })
+    await vi.waitFor(() => { expect((resumed as unknown as { discovering: boolean; running: boolean }).discovering || (resumed as unknown as { running: boolean }).running).toBe(false) })
     expect(store.counts()).toEqual({ sessions: 1, turns: 70 })
-    for (const i of [0, 31, 32, 33, 64, 69]) expect(found(`step${i}`)).toEqual(['s1'])
+    for (const i of [0, 31, 32, 33, 64, 69]) expect((await found(`step${i}`))).toEqual(['s1'])
     expect(store.session('s1')).toMatchObject({ resumeTurn: 69, turns: 70 })
     expect(store.session('s1')!.mtime).toBeGreaterThan(0)
   })
@@ -228,14 +258,14 @@ describe('SessionSearchIndex', () => {
     const index = new SessionSearchIndex({ store, sources: () => sources, agents: () => [] })
     cleanups.push(() => { index.stop(); store.close() })
     index.sweep()
-    await vi.waitFor(() => { expect((index as unknown as { running: boolean }).running).toBe(false) })
+    await vi.waitFor(() => { expect((index as unknown as { discovering: boolean; running: boolean }).discovering || (index as unknown as { running: boolean }).running).toBe(false) })
     expect(store.session('c1')).toMatchObject({ lastAt: 1_790_000_000_000, title: 'Dial release', cwd: '/work/dial' })
     // A database's conversation, titled by its first ask, with its folder and origin.
     expect(store.session('ses_1')).toMatchObject({ title: 'compare cohorts in the warehouse', cwd: '/work/cohorts', origin: 'terminal', lastAt: 1_790_000_100_000 })
-    expect(index.search('warehouse').hits[0]).toMatchObject({ sessionId: 'ses_1', external: { title: 'compare cohorts in the warehouse' } })
+    expect((await index.search('warehouse')).hits[0]).toMatchObject({ sessionId: 'ses_1', external: { title: 'compare cohorts in the warehouse' } })
     // Read again unchanged: its heading is kept.
     index.sweep()
-    await vi.waitFor(() => { expect((index as unknown as { running: boolean }).running).toBe(false) })
+    await vi.waitFor(() => { expect((index as unknown as { discovering: boolean; running: boolean }).discovering || (index as unknown as { running: boolean }).running).toBe(false) })
     expect(store.session('ses_1')?.title).toBe('compare cohorts in the warehouse')
   })
 
@@ -262,16 +292,16 @@ describe('SessionSearchIndex', () => {
     cleanups.push(() => { index.stop(); store.close() })
     const settle = async () => {
       index.sweep()
-      await vi.waitFor(() => { expect((index as unknown as { running: boolean }).running).toBe(false) })
+      await vi.waitFor(() => { expect((index as unknown as { discovering: boolean; running: boolean }).discovering || (index as unknown as { running: boolean }).running).toBe(false) })
     }
     await settle()
     // The person's own title wins over Claude's; with none, the first ask, on one line.
     expect(store.session('e1')).toMatchObject({ agentId: '', title: 'Dial fix', cwd: '/work/dial', origin: 'terminal' })
     expect(store.session('e2')?.title).toBe('compare retention by cohort please')
     // Found by its title, marked as not Harness's, and as open elsewhere.
-    const hit = index.search('dial fix').hits[0]
+    const hit = (await index.search('dial fix')).hits[0]
     expect(hit).toMatchObject({ sessionId: 'e1', agentId: '', external: { title: 'Dial fix', cwd: '/work/dial', origin: 'terminal', open: true, openIn: 'terminal' } })
-    expect(index.search('cohort').hits[0]).toMatchObject({ sessionId: 'e2', external: { origin: 'claude-app', open: false } })
+    expect((await index.search('cohort')).hits[0]).toMatchObject({ sessionId: 'e2', external: { origin: 'claude-app', open: false } })
     const tail = await index.tail('e1')
     expect(tail?.external).toEqual({ title: 'Dial fix', cwd: '/work/dial', origin: 'terminal', open: true, openIn: 'terminal', working: true })
     working = false
@@ -318,10 +348,10 @@ describe('SessionSearchIndex', () => {
     })
     cleanups.push(() => { index.stop(); store.close() })
     index.sweep()
-    await vi.waitFor(() => { expect((index as unknown as { running: boolean }).running).toBe(false) })
+    await vi.waitFor(() => { expect((index as unknown as { discovering: boolean; running: boolean }).discovering || (index as unknown as { running: boolean }).running).toBe(false) })
     // A search never waits for a process table: it reads the last look.
     await openSessions.fresh()
-    expect(index.search('dial scroll').hits[0]).toMatchObject({ sessionId, agentId: '', external: { origin: 'claude-app', open: true, openIn: 'app' } })
+    expect((await index.search('dial scroll')).hits[0]).toMatchObject({ sessionId, agentId: '', external: { origin: 'claude-app', open: true, openIn: 'app' } })
   })
 
   it('starts over when the transcript was rewritten shorter', async () => {
@@ -329,8 +359,8 @@ describe('SessionSearchIndex', () => {
     await settle()
     writeFileSync(path, prompt('tiny', 0))
     await settle()
-    expect(found('cohort')).toEqual([])
-    expect(found('tiny')).toEqual(['s1'])
+    expect((await found('cohort'))).toEqual([])
+    expect((await found('tiny'))).toEqual(['s1'])
   })
 
   it('updates the name without rereading the transcript, and forgets sessions of deleted agents', async () => {
@@ -338,18 +368,18 @@ describe('SessionSearchIndex', () => {
     await settle()
     setSources([{ agentId: 'agent-1', sessionId: 's1', engine: 'claude', transcriptPath: path, header: 'Keyboard firmware', changedAt: 2 }])
     await settle()
-    expect(found('keyboard')).toEqual(['s1'])
-    expect(found('dial')).toEqual([])
+    expect((await found('keyboard'))).toEqual(['s1'])
+    expect((await found('dial'))).toEqual([])
     expect(store.session('s1')!.turns).toBe(1)
 
     // An agent's earlier session (before a /clear) stays while the agent does…
     setSources([{ agentId: 'agent-1', sessionId: 's2', engine: 'terminal', transcriptPath: null, header: 'Keyboard firmware', changedAt: 3 }])
     await settle()
-    expect(found('flash')).toEqual(['s1'])
+    expect((await found('flash'))).toEqual(['s1'])
     // …and goes with it.
     setSources([])
     await settle()
-    expect(found('flash')).toEqual([])
+    expect((await found('flash'))).toEqual([])
     expect(store.counts().sessions).toBe(0)
   })
 
@@ -381,12 +411,12 @@ describe('SessionSearchIndex', () => {
     expect(write.mock.calls.map((call) => call[2])).toEqual([[], [], []])
 
     // Still Harness's: no hit or preview of it reads as a conversation Harness did not start.
-    expect(index.search('flash').hits[0]).toMatchObject({ sessionId: 's1', agentId: 'agent-1' })
-    expect(index.search('flash').hits[0].external).toBeUndefined()
+    expect((await index.search('flash')).hits[0]).toMatchObject({ sessionId: 's1', agentId: 'agent-1' })
+    expect((await index.search('flash')).hits[0].external).toBeUndefined()
     expect((await index.tail('s1'))?.external).toBeUndefined()
     // A catalog entry the harness records do not cover any more (an earlier conversation) now has
     // its own title and folder, as the records give a current one, where it had the header and no folder.
-    expect(index.search('', { catalogAfter: '' }).hits[0].catalogEntry).toEqual({ title: 'Keyboard firmware', cwd: '/Users/me/work/dial/firmware', origin: 'harness' })
+    expect((await index.search('', { catalogAfter: '' })).hits[0].catalogEntry).toEqual({ title: 'Keyboard firmware', cwd: '/Users/me/work/dial/firmware', origin: 'harness' })
 
     // A transcript read from the start writes them with its turns.
     write.mockClear()
@@ -412,7 +442,7 @@ describe('SessionSearchIndex', () => {
     cleanups.push(() => { index.stop(); store.close() })
     const settle = async () => {
       index.sweep()
-      await vi.waitFor(() => { expect((index as unknown as { running: boolean }).running).toBe(false) })
+      await vi.waitFor(() => { expect((index as unknown as { discovering: boolean; running: boolean }).discovering || (index as unknown as { running: boolean }).running).toBe(false) })
     }
     set('/work/notes', 'Release notes')
     await settle()
@@ -442,11 +472,11 @@ describe('SessionSearchIndex', () => {
   it('indexes a touched session shortly after its turn event', async () => {
     const { path, index, found } = setup(prompt('first ask', 0))
     index.touch('s1')
-    await vi.waitFor(() => { expect(found('first')).toEqual(['s1']) })
+    await vi.waitFor(async () => { expect((await found('first'))).toEqual(['s1']) })
     appendFileSync(path, prompt('second ask about tmux', 1))
     index.touch('s1')
     index.touch('s1')
-    await vi.waitFor(() => { expect(found('tmux')).toEqual(['s1']) })
+    await vi.waitFor(async () => { expect((await found('tmux'))).toEqual(['s1']) })
   })
 
   it('reads a database-backed history whole, again only when the session changed', async () => {
@@ -462,9 +492,9 @@ describe('SessionSearchIndex', () => {
     }
     const index = new SessionSearchIndex({ store, sources: () => [source], touchDelayMs: 5 })
     cleanups.push(() => { index.stop(); store.close() })
-    const found = (query: string) => index.search(query).hits.map((hit) => hit.sessionId)
+    const found = async (query: string) => (await index.search(query)).hits.map((hit) => hit.sessionId)
     index.sweep()
-    await vi.waitFor(() => { expect(found('release')).toEqual(['ses_1']) })
+    await vi.waitFor(async () => { expect((await found('release'))).toEqual(['ses_1']) })
     expect(store.session('ses_1')).toMatchObject({ turns: 1, lastAt: 100 })
 
     index.sweep()
@@ -474,7 +504,7 @@ describe('SessionSearchIndex', () => {
     // A turn event marks it changed even before its update time moves.
     history = [...history, { type: 'user_message', payload: { content: 'now tag v2' } }]
     index.touch('ses_1')
-    await vi.waitFor(() => { expect(found('tag')).toEqual(['ses_1']) })
+    await vi.waitFor(async () => { expect((await found('tag'))).toEqual(['ses_1']) })
     expect(reads).toBe(2)
 
     // A turn event that changed nothing leaves it as it was worked on.
@@ -487,7 +517,7 @@ describe('SessionSearchIndex', () => {
     const now = Date.now()
     history = [...history, { type: 'user_message', payload: { content: 'publish the changelog' } }]
     index.touch('ses_1')
-    await vi.waitFor(() => { expect(found('changelog')).toEqual(['ses_1']) })
+    await vi.waitFor(async () => { expect((await found('changelog'))).toEqual(['ses_1']) })
     expect(store.session('ses_1')!.turns).toBe(3)
     expect(store.session('ses_1')!.lastAt).toBeGreaterThanOrEqual(now)
 
@@ -498,7 +528,7 @@ describe('SessionSearchIndex', () => {
     const restarted = new SessionSearchIndex({ store, sources: () => [source] })
     cleanups.push(() => restarted.stop())
     restarted.sweep()
-    await vi.waitFor(() => { expect(restarted.search('archive').hits.map((hit) => hit.sessionId)).toEqual(['ses_1']) })
+    await vi.waitFor(async () => { expect((await restarted.search('archive')).hits.map((hit) => hit.sessionId)).toEqual(['ses_1']) })
     expect(store.session('ses_1')).toMatchObject({ turns: 4, lastAt: 5_000 })
     restarted.sweep()
     await restarted.drain()
@@ -511,7 +541,7 @@ describe('SessionSearchIndex', () => {
     await settle()
     setSources([])
     await settle()
-    expect(found('tmux')).toEqual(['s1'])
+    expect((await found('tmux'))).toEqual(['s1'])
     agents = []
     await settle()
     expect(store.counts().sessions).toBe(0)

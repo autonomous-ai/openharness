@@ -1,3 +1,4 @@
+import { storedGridFixture } from './testing/gridCredentials.js'
 import { createClientStreams } from './core/clientStreams.js'
 import { removeRegistryAgent } from './testing/registryFixtures.js'
 import { SERVICE_WS_FRAMES, USAGE_FALLBACKS } from './core/api.js'
@@ -3085,10 +3086,10 @@ describe('agent_restart RPC', () => {
 
   it('lists stopped work only on request, without exposing old routes or launch credentials', async () => {
     const { socket, frames } = localSocket()
-    const saved = { ...BASE_SESSION, gridLaunch: { apiKey: 'fixture-private-key' } } as RegisteredSession
+    const saved = { ...BASE_SESSION, gridLaunch: storedGridFixture({ networkId: 'fixture', networkName: 'Fixture', baseUrl: 'https://grid.invalid/v1', apiKey: 'fixture-private-key' }) } as RegisteredSession
     vi.spyOn(registry, 'advertised').mockReturnValue([])
     vi.spyOn(registry, 'list').mockReturnValue([])
-    vi.spyOn(stoppedAgents, 'available').mockReturnValue([saved])
+    vi.spyOn(stoppedAgents, 'available').mockResolvedValue([saved])
     socket.handleLocalFrame('local:restart', { type: 'agents_list', payload: { requestId: 'live' } })
     socket.handleLocalFrame('local:restart', { type: 'agents_list', payload: { requestId: 'all', includeStopped: true } })
     await vi.waitFor(() => expect(frames.filter(frame => frame.type === 'agents_list_result')).toHaveLength(2))
@@ -3104,7 +3105,7 @@ describe('agent_restart RPC', () => {
     const { socket, frames } = localSocket()
     vi.spyOn(registry, 'advertised').mockReturnValue([BASE_SESSION])
     vi.spyOn(registry, 'list').mockReturnValue([BASE_SESSION])
-    vi.spyOn(stoppedAgents, 'available').mockReturnValue([{ ...BASE_SESSION, agentId: 'stopped' }])
+    vi.spyOn(stoppedAgents, 'available').mockResolvedValue([{ ...BASE_SESSION, agentId: 'stopped' }])
     const resources = vi.fn(async () => ({ sampledAt: new Date().toISOString(), agents: [{ agentId: 'agent-1', memoryBytes: 123, cpuPercent: 2, processCount: 1 }] }))
     bindAgentList(socket, { harnessResourcesReader: resources, monitorActivityProvider: sessionId => sessionId === BASE_SESSION.sessionId ? 'needsInput' : 'idle' })
     for (const [requestId, monitor] of [['plain', false], ['monitor', true]] as const) {
@@ -4053,7 +4054,7 @@ describe('agent_recent replies', () => {
   async function recentReplyFor(role: 'web' | 'device') {
     const socket = relaySocket('token')
     // The recaps module's answer (core/turns/recaps.ts); what this checks is the socket's fitting of it.
-    socket.agentRecentProvider = () => ({ agentId: 'a1', events, asks: ['which llama.cpp build is this?'] })
+    socket.agentRecentProvider = async () => ({ agentId: 'a1', events, asks: ['which llama.cpp build is this?'] })
     socket.connect()
     const ws = wsMock.instances.at(-1)!
     ws.open()

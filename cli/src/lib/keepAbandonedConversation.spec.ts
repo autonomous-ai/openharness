@@ -1,10 +1,11 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createKeepAbandonedConversation } from './keepAbandonedConversation.js'
 import type { RegisteredSession } from './registry.js'
 import { StoppedAgentStore } from './stoppedAgents.js'
+import * as publication from './sessionPublication.js'
 
 const pane = { backend: 'tmux' as const, paneId: '%4' }
 /** The agent's row as it was in the conversation it left: its conversation, pane and live process. */
@@ -25,47 +26,94 @@ describe('keeping a conversation the daemon left for a new one', () => {
     publish = vi.fn<(saved: RegisteredSession) => Promise<void>>(async () => {})
     vi.spyOn(console, 'log').mockImplementation(() => {})
   })
-  afterEach(() => { vi.restoreAllMocks(); rmSync(dir, { recursive: true, force: true }) })
+  afterEach(async () => { await store.close(); vi.restoreAllMocks(); rmSync(dir, { recursive: true, force: true }) })
 
-  it('keeps it as a stopped harness of its own, without the live process, and tells the windows', () => {
+  it('keeps it as a stopped harness of its own, without the live process, and tells the windows', async () => {
     // The agent's own record, which follows it into the new conversation: it is not the one kept.
-    store.save(left())
-    createKeepAbandonedConversation({ stoppedAgents: store, publishStoppedAgent: publish })(left())
-    const kept = store.list().find((saved) => saved.agentId !== 'agent-1')!
+    await store.save(left())
+    await createKeepAbandonedConversation({ stoppedAgents: store, publishStoppedAgent: publish })(left())
+    const kept = (await store.list()).find((saved) => saved.agentId !== 'agent-1')!
     expect(kept).toMatchObject({ sessionId: 'session-0', engine: 'codex', transcriptPath: '/work/rollout.jsonl', processIdentity: null, active: false })
     expect(publish).toHaveBeenCalledWith(expect.objectContaining({ agentId: kept.agentId, sessionId: 'session-0' }))
     expect(console.log).toHaveBeenCalledWith(`[agent] agent-1 kept the conversation it left, session-, as stopped harness ${kept.agentId.slice(0, 8)}`)
   })
 
-  it('keeps it once, keeps the same id under another Codex profile, and keeps nothing without a conversation', () => {
+  it('keeps it once, keeps the same id under another Codex profile, and keeps nothing without a conversation', async () => {
     const keep = createKeepAbandonedConversation({ stoppedAgents: store, publishStoppedAgent: publish })
-    keep(left())
-    keep(left())
-    expect(store.list()).toHaveLength(1)
-    keep(left({ codexHome: '/profile' }))
-    expect(store.list()).toHaveLength(2)
-    keep(left({ sessionId: '' }))
-    expect(store.list()).toHaveLength(2)
+    await keep(left())
+    await keep(left())
+    expect((await store.list())).toHaveLength(1)
+    await keep(left({ codexHome: '/profile' }))
+    expect((await store.list())).toHaveLength(2)
+    await keep(left({ sessionId: '' }))
+    expect((await store.list())).toHaveLength(2)
     expect(publish).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not publish a duplicate when a peer archive arrives during preparation', async () => {
+    await store.save(left({ agentId: 'peer' }))
+    const peerFile = join(dir, 'saved', 'peer.json'), peer = readFileSync(peerFile)
+    rmSync(peerFile)
+    const prepare = publication.prepareSessionPublication
+    vi.spyOn(publication, 'prepareSessionPublication').mockImplementationOnce(async (...args) => {
+      const prepared = await prepare(...args)
+      // An older cooperative writer does not take the current child's write lease.
+      writeFileSync(peerFile, peer, { mode: 0o600 })
+      return prepared
+    })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await createKeepAbandonedConversation({ stoppedAgents: store, publishStoppedAgent: publish })(left())
+    expect((await store.list()).map(row => row.agentId)).toEqual(['peer'])
+    expect(publish).not.toHaveBeenCalled()
+    expect(console.warn).toHaveBeenCalled()
+  })
+
+  it('does not confirm a saved row if its live authority is lost during directory sync', async () => {
+    let current = true
+    const prepare = publication.prepareSessionPublication
+    vi.spyOn(publication, 'prepareSessionPublication').mockImplementationOnce(async (...args) => {
+      const prepared = await prepare(...args)
+      const sync = prepared.sync
+      prepared.sync = async () => { await sync(); current = false }
+      return prepared
+    })
+    await expect(store.save(left(), () => current)).rejects.toMatchObject({ constructor: expect.objectContaining({ name: 'AtomicWriteUnconfirmed' }) })
+    expect((await store.get('agent-1'))?.sessionId).toBe('session-0')
+  })
+
+  it('does not confirm a peer replacement of the published target during directory sync', async () => {
+    const prepare = publication.prepareSessionPublication
+    vi.spyOn(publication, 'prepareSessionPublication').mockImplementationOnce(async (...args) => {
+      const prepared = await prepare(...args), sync = prepared.sync
+      prepared.sync = async () => {
+        await sync()
+        const file = join(dir, 'saved', 'agent-1.json')
+        const row = JSON.parse(readFileSync(file, 'utf8'))
+        row.session.cwd = '/peer-replacement'
+        writeFileSync(file, JSON.stringify(row))
+      }
+      return prepared
+    })
+    await expect(store.save(left())).rejects.toMatchObject({ constructor: expect.objectContaining({ name: 'AtomicWriteUnconfirmed' }) })
+    expect((await store.get('agent-1'))?.cwd).toBe('/peer-replacement')
   })
 
   it('says why it could not, and is never in the way; a window that cannot be told is not an error', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const full = { list: () => [], get: () => null, save: vi.fn<(row: RegisteredSession) => void>(() => { throw new Error('ENOSPC') }) }
+    const full = { prepareSave: () => {}, query: async () => ({ matches: [false], current: () => true, witness: 'fixture' }), get: async () => null, save: vi.fn<(row: RegisteredSession) => Promise<void>>(async () => { throw new Error('ENOSPC') }) }
     const keep = createKeepAbandonedConversation({ stoppedAgents: full, publishStoppedAgent: publish })
-    expect(() => keep(left())).not.toThrow()
+    await expect(keep(left())).resolves.toBeUndefined()
     expect(warn).toHaveBeenCalledWith('[agent] agent-1 could not keep the conversation it left, session- · ENOSPC')
-    full.save.mockImplementationOnce(() => { throw 'locked' })
-    keep(left())
+    full.save.mockImplementationOnce(async () => { throw 'locked' })
+    await keep(left())
     expect(warn).toHaveBeenCalledWith('[agent] agent-1 could not keep the conversation it left, session- · locked')
     // Saved, but it did not read back: nothing to tell the windows.
-    full.save.mockImplementationOnce(() => {})
-    keep(left())
+    full.save.mockImplementationOnce(async () => {})
+    await keep(left())
     expect(publish).not.toHaveBeenCalled()
 
     publish.mockRejectedValueOnce(new Error('no window'))
-    createKeepAbandonedConversation({ stoppedAgents: store, publishStoppedAgent: publish })(left())
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    await createKeepAbandonedConversation({ stoppedAgents: store, publishStoppedAgent: publish })(left())
     expect(publish).toHaveBeenCalledTimes(1)
   })
 })

@@ -31,7 +31,7 @@ let atEmptyComposer: typeof atFolderTrust
 let stopNative: ReturnType<typeof vi.fn<StopAgentServiceDeps['stopNative']>>
 
 const purge = () => new PurgeAgentService({
-  live: id => registry.byAgent(id), sessions: () => [...registry.list(), ...stopped.list()], stopped, worktrees: () => WORKSPACES_OFF,
+  live: id => registry.byAgent(id), liveSessions: () => registry.list(), stopped, worktrees: () => WORKSPACES_OFF,
   checkpoints: new SessionCheckpointStore(join(root, 'checkpoints')), restarting: () => false, deleted: vi.fn(), atFolderTrust, atEmptyComposer,
   stop: createStopAgentService({ registry, stoppedAgents: stopped, restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(),
     backendFor: () => ({ kill }), agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn(async () => {}) },
@@ -89,7 +89,7 @@ it('still refuses an agent that is not at the trust question, as before', async 
 it('does not take a bound conversation for an unused chat, whatever the screen shows', async () => {
   Object.assign(row, { sessionId: 'bound' })
   const stop = vi.fn(async () => {})
-  const service = new PurgeAgentService({ live: id => registry.byAgent(id), sessions: () => [], stopped, worktrees: () => WORKSPACES_OFF,
+  const service = new PurgeAgentService({ live: id => registry.byAgent(id), liveSessions: () => [], stopped, worktrees: () => WORKSPACES_OFF,
     checkpoints: new SessionCheckpointStore(join(root, 'checkpoints')), restarting: () => false, deleted: vi.fn(), atFolderTrust,
     inspect: async () => ({ bytes: 0 }), stop })
   const review = await service.request({ agentId: row.agentId, sessionId: 'bound', createdAt: row.registeredAt, mode: 'inspect' })

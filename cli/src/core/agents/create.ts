@@ -115,7 +115,8 @@ export function createAgentCreator({
     if (input.resumeSessionId) return { ok: true, dispatch: () => externalResume(input) }
     const stale = () => ({ ok: false as const, error: 'LAUNCH_AUTHORITY_CHANGED', unavailable: 'launch', detail: 'Waiting for the original launch request’s authority.' })
     if (!authority.current()) return stale()
-    let { engine, cwd, bypassPermission, permissionMode, grid, codexHome, claudeHome, dsh, prompt, name, agent, scmLaunchRecord, startedBy, parentAgentId, launchModel, browser } = input
+    let { engine, cwd, bypassPermission, permissionMode, grid: requestedGrid, codexHome, claudeHome, dsh, prompt, name, agent, scmLaunchRecord, startedBy, parentAgentId, launchModel, browser } = input
+    let grid: GridLaunchRequest['override'] | null = requestedGrid
     const openclawLocal = input.openclawLocal ?? undefined
     // Checked again here: a saved launch runs later, and a run without its folder never falls back to the shared one.
     if (openclawLocal && !isFolder(openclawLocal)) return { ok: false, error: 'OPENCLAW_FOLDER_GONE', detail: OPENCLAW_LOCAL.folderGone }

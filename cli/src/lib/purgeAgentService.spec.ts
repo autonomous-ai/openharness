@@ -26,6 +26,7 @@ let eraseFirst = vi.fn<(session: RegisteredSession) => Promise<void>>()
 /** Workspaces as the purge finds them at each call: up, on this module's functions, unless a test takes them down. */
 let workspaces: PurgeDeps['worktrees']
 beforeEach(async () => {
+  await registry.load()
   root = mkdtempSync(join(tmpdir(), 'harness-purge-'))
   const codexHome = join(root, 'profile'), cwd = join(root, 'project')
   mkdirSync(join(codexHome, 'sessions'), { recursive: true }); mkdirSync(cwd)
@@ -44,16 +45,16 @@ beforeEach(async () => {
   checkpoints = new SessionCheckpointStore(join(root, 'checkpoints'))
   stop = vi.fn(async (id, options) => {
     expect(options.current?.()).toBe(true)
-    stopped.save(registry.byAgent(id)!)
+    await stopped.save(registry.byAgent(id)!)
     ;(await removeRegistryAgent(registry, id))
   })
   deleted = vi.fn(); eraseRecords = vi.fn(async () => {}); eraseFirst = vi.fn(async () => {}); now = 1000
   workspaces = () => worktrees.worktreeAnswers(worktrees)
-  service = new PurgeAgentService({ live: id => registry.byAgent(id), sessions: () => [...registry.list(), ...stopped.list()],
+  service = new PurgeAgentService({ live: id => registry.byAgent(id), liveSessions: () => registry.list(),
     worktrees: () => workspaces(), stopped, checkpoints, stop, restarting: () => false, deleted, eraseRecords, eraseFirst, now: () => now })
   target = { agentId: session.agentId, sessionId: session.sessionId, createdAt: session.registeredAt }
 })
-afterEach(async () => { for (const row of registry.list()) (await removeRegistryAgent(registry, row.agentId)); rmSync(root, { recursive: true, force: true }); vi.restoreAllMocks() })
+afterEach(async () => { for (const row of registry.list()) (await removeRegistryAgent(registry, row.agentId)); await stopped?.close(); rmSync(root, { recursive: true, force: true }); vi.restoreAllMocks() })
 const review = () => service.request({ ...target, mode: 'inspect' })
 const remove = (reviewId: unknown) => service.request({ ...target, mode: 'delete', reviewId: String(reviewId) })
 
@@ -101,7 +102,7 @@ describe('database deletion without safe subprocess authority', () => {
     expect(await remove('review-from-another-core')).toMatchObject(refused)
     expect(stop).not.toHaveBeenCalled(); expect(eraseFirst).not.toHaveBeenCalled(); expect(eraseRecords).not.toHaveBeenCalled()
     expect(eraseTree).not.toHaveBeenCalled(); expect(deleted).not.toHaveBeenCalled()
-    expect(stopped.get(session.agentId)).toBeNull()
+    expect((await stopped.get(session.agentId))).toBeNull()
     expect(registry.byAgent(session.agentId)).toBe(session)
     expect(readFileSync(path)).toEqual(before)
   })
@@ -172,7 +173,7 @@ describe('selected session and worktree cleanup', () => {
     expect(eraseTree).toHaveBeenCalledTimes(worktreeData ? 1 : 0)
     expect(existsSync(session.transcriptPath!)).toBe(!sessionData)
     expect(existsSync(join(session.cwd!, 'project.txt'))).toBe(true)
-    expect(stopped.get(session.agentId) !== null).toBe(!sessionData)
+    expect((await stopped.get(session.agentId)) !== null).toBe(!sessionData)
   })
   it('refuses unreviewed, protected, empty or dirty selections before stopping', async () => {
     for (const scenario of ['legacy', 'protected', 'empty', 'dirty', 'path']) {
@@ -256,7 +257,7 @@ it('previews without stopping, then deletes only reviewed history and checkpoint
   expect(files.every(path => !existsSync(path))).toBe(true)
   expect(existsSync(join(session.codexHome!, 'sessions', 'other.jsonl'))).toBe(true)
   expect(existsSync(join(session.cwd!, 'project.txt'))).toBe(true)
-  expect(stopped.get(session.agentId)).toBeNull()
+  expect((await stopped.get(session.agentId))).toBeNull()
   expect(deleted).toHaveBeenCalledOnce()
   expect(await remove(plan.reviewId)).toHaveProperty('error')
   expect(stop).toHaveBeenCalledOnce()
@@ -274,7 +275,7 @@ describe('every record of a harness', () => {
     expect(eraseRecords).toHaveBeenCalledWith(expect.objectContaining({ agentId: session.agentId }))
     expect(deleted).toHaveBeenCalledOnce()
     expect(eraseRecords.mock.invocationCallOrder[0]).toBeLessThan(deleted.mock.invocationCallOrder[0]!)
-    expect(stopped.get(session.agentId)).toBeNull()
+    expect((await stopped.get(session.agentId))).toBeNull()
   })
 
   it('a harness whose engine\'s history Harness erases keeps nothing', async () => {
@@ -309,7 +310,7 @@ describe('every record of a harness', () => {
     expect(existsSync(session.transcriptPath!)).toBe(true)
     expect(eraseRecords).not.toHaveBeenCalled()
     expect(deleted).not.toHaveBeenCalled()
-    expect(stopped.get(session.agentId)).not.toBeNull()
+    expect((await stopped.get(session.agentId))).not.toBeNull()
     expect(await deleteOnce()).toMatchObject({ deleted: true, sessionDeleted: true })
     expect(eraseFirst).toHaveBeenCalledTimes(2)
     expect(eraseFirst).toHaveBeenLastCalledWith(expect.objectContaining({ agentId: session.agentId }))
@@ -324,11 +325,11 @@ describe('every record of a harness', () => {
     expect(refused).toMatchObject({ error: 'DELETE_REFUSED', sessionDeleted: false })
     expect(String(refused.detail)).toContain('The agent ledger is busy. Try again.')
     expect(deleted).not.toHaveBeenCalled()
-    expect(stopped.get(session.agentId)).not.toBeNull()
+    expect((await stopped.get(session.agentId))).not.toBeNull()
     expect(await deleteOnce()).toMatchObject({ deleted: true, sessionDeleted: true })
     expect(eraseRecords).toHaveBeenCalledTimes(2)
     expect(deleted).toHaveBeenCalledOnce()
-    expect(stopped.get(session.agentId)).toBeNull()
+    expect((await stopped.get(session.agentId))).toBeNull()
     expect(stop).toHaveBeenCalledOnce()
   })
 
@@ -362,9 +363,9 @@ it('keeps history if stopping fails, another harness uses it, or the file was re
   expect(await remove(plan.reviewId)).toHaveProperty('error')
   expect(existsSync(session.transcriptPath!)).toBe(true)
   const other = { ...session, agentId: 'other-agent' }
-  stopped.save(other)
+  await stopped.save(other)
   expect(await review()).toMatchObject({ error: 'DELETE_REFUSED', detail: expect.stringContaining('Another harness') })
-  stopped.remove(other.agentId)
+  await stopped.remove(other.agentId)
   const changed = await review()
   renameSync(session.transcriptPath!, session.transcriptPath! + '.old')
   writeFileSync(session.transcriptPath!, 'different file')
@@ -401,7 +402,7 @@ describe('a harness still starting', () => {
     expect(stop).toHaveBeenCalledOnce()
     expect(eraseRecords).toHaveBeenCalledOnce()
     expect(deleted).toHaveBeenCalledOnce()
-    expect(stopped.get(session.agentId)).toBeNull()
+    expect((await stopped.get(session.agentId))).toBeNull()
   })
 
   it('that cannot be stopped yet is refused in plain words, nothing deleted', async () => {
@@ -418,7 +419,7 @@ describe('a harness still starting', () => {
 
 it('can explicitly review remaining checkpoints after an interrupted partial deletion', async () => {
   await checkpoints.save(session, { screen: 'keep until confirmed' })
-  stopped.save(session); (await removeRegistryAgent(registry, session.agentId))
+  await stopped.save(session); (await removeRegistryAgent(registry, session.agentId))
   rmSync(session.transcriptPath!)
   const plan = await review()
   expect(plan.reviewId).toBeTypeOf('string')
@@ -444,11 +445,43 @@ it('binds worktree deletion to the reviewed path and dirty consent, blocking con
   expect(await service.worktreeRequest({ ...target, mode: 'delete', reviewId: String(final.reviewId), path, discardChanges: true })).toMatchObject({ deleted: true, historyKept: true, branchKept: true })
   expect(erase).toHaveBeenCalledOnce()
   expect(existsSync(session.transcriptPath!)).toBe(true)
-  expect(stopped.get(session.agentId)).not.toBeNull()
+  expect((await stopped.get(session.agentId))).not.toBeNull()
   expect(service.busy(session.agentId)).toBe(false)
   expect(service.blocksFolder(path)).toBe(false)
   expect(deleted).not.toHaveBeenCalled()
   inspect.mockRestore(); erase.mockRestore()
+})
+
+it.each(['root-resolution', 'final-child-answer'] as const)('keeps a worktree when stopped occupancy changes at %s', async phase => {
+  const path = join(root, 'temporary')
+  const tree = { path, main: session.cwd!, branch: 'feature', head: 'commit', bytes: 1, dirty: false, changes: [], signature: 'review', dev: 1, ino: 2 }
+  const other = { ...session, agentId: 'other-stopped', sessionId: 'other-conversation', cwd: join(root, 'elsewhere') }
+  await stopped.save(other)
+  const file = join(root, 'stopped', `${other.agentId}.json`)
+  const occupy = () => {
+    const value = JSON.parse(readFileSync(file, 'utf8'))
+    writeFileSync(file, JSON.stringify({ ...value, session: { ...value.session, cwd: join(path, 'child') } }))
+  }
+  let armed = false
+  vi.spyOn(worktrees, 'inspectWorktree').mockImplementation(async () => {
+    if (armed && phase === 'root-resolution') occupy()
+    return tree
+  })
+  const query = stopped.query.bind(stopped)
+  vi.spyOn(stopped, 'query').mockImplementation(async request => {
+    const answer = await query(request)
+    if (armed && phase === 'final-child-answer' && !registry.byAgent(session.agentId)) occupy()
+    return answer
+  })
+  const erase = vi.spyOn(worktrees, 'removeReviewedWorktree').mockResolvedValue()
+  const plan = await service.worktreeRequest({ ...target, mode: 'inspect' })
+  expect(plan.reviewId).toBeTypeOf('string')
+  armed = true
+  expect(await service.worktreeRequest({ ...target, mode: 'delete', reviewId: String(plan.reviewId), path }))
+    .toMatchObject({ error: 'WORKTREE_DELETE_REFUSED' })
+  expect(erase).not.toHaveBeenCalled()
+  expect(existsSync(session.transcriptPath!)).toBe(true)
+  expect(deleted).not.toHaveBeenCalled()
 })
 
 describe('shared native databases', () => {

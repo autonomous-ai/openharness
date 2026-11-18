@@ -53,12 +53,12 @@ describe('the core API a light service runs on in its own process', () => {
     ask.mockRejectedValueOnce(new Error('offline'))
     expect(await api.usage!(target)).toBeNull()
   })
-  it('answers the agents from what the core last said, by agent id or session id', () => {
+  it('answers the agents from what the core last said, by agent id or session id', async () => {
     const live = [agent('a1'), agent('a2')]
     const api = processCoreApi('/data', 'projects', { live: () => live, advertised: () => [live[1]] })
     expect(api.dataDir).toBe('/data')
     expect(api.agents.live()).toEqual(live)
-    expect(api.agents.all()).toEqual(live)
+    expect((await api.agents.all())).toEqual(live)
     expect(api.agents.advertised()).toEqual([live[1]])
     expect(api.agents.byAgent('a2')).toEqual(live[1])
     expect(api.agents.resolve('s-a1')).toEqual(live[0])

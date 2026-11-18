@@ -33,7 +33,7 @@ async function setup(over: Partial<PurgeDeps> = {}, rows = [row]) {
   const deletion = await import('./worktreeDeletion.js')
   const live = new Map(rows.map(entry => [entry.agentId, entry])), saved = new Map<string, RegisteredSession>()
   const deleted = vi.fn(), stop = vi.fn(async (id: string) => { saved.set(id, live.get(id)!); live.delete(id) })
-  const service = new PurgeAgentService({ live: (id: string) => live.get(id), sessions: () => [...live.values(), ...saved.values()],
+  const service = new PurgeAgentService({ live: (id: string) => live.get(id), liveSessions: () => [...live.values(), ...saved.values()],
     stopped: { get: (id: string) => saved.get(id) ?? null, beginResume: () => 'fixture-reservation',
       finishResume: () => {}, remove: (id: string) => saved.delete(id) },
     checkpoints: { deletionFiles: () => [] }, stop, restarting: () => false, deleted,
@@ -105,7 +105,7 @@ it.each(['shared conversation', 'saved binding'])('keeps history when %s changes
     dirty: false, changes: [], signature: 'fixture', dev: 1, ino: 2 }
   vi.spyOn(worktrees, 'inspectWorktree').mockResolvedValue(tree)
   const { registry } = await import('./registry.js')
-  const ctx = await setup({ sessions: () => [...ctx.live.values(), ...ctx.saved.values(), ...registry.list()] })
+  const ctx = await setup({ liveSessions: () => [...ctx.live.values(), ...ctx.saved.values(), ...registry.list()] })
   const removeTree = vi.spyOn(worktrees, 'removeReviewedWorktree').mockImplementation(async () => {
     await Promise.resolve()
     if (change === 'saved binding') { ctx.saved.get(row.agentId)!.boundAt! += 1; return }

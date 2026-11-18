@@ -355,7 +355,7 @@ describe('an OpenClaw pane, through the core', () => {
     const opened = vi.fn(async () => path)
     const dbs = { opencode: '/db/opencode.db', kilo: '/db/kilo.db', devin: '/db/devin.db', openclaw: opened }
     const inline = createInlineHistory()
-    const history = createHistory({ resolve: (id) => (id === row.sessionId ? row : undefined), stopped: () => [], lineCount: inline.lineCount,
+    const history = createHistory({ resolve: (id) => (id === row.sessionId ? row : undefined), stopped: async () => [], lineCount: inline.lineCount,
       readerFor: inline.forEngine, storeOf: createStoreOf(dbs, async () => '/db/hermes.db') })
     const users = (events: unknown) => (events as LiveEvent[]).filter((event) => event.type === 'user_message').map((event) => event.payload.content)
     const whole = await history.sessionGet({ sessionId: 'agent:main:reset' })
@@ -377,7 +377,7 @@ describe('an OpenClaw pane, through the core', () => {
     const opened = vi.fn(async () => null)
     const dbs = { opencode: '/db/opencode.db', kilo: '/db/kilo.db', devin: '/db/devin.db', openclaw: opened }
     const inline = createInlineHistory()
-    const history = createHistory({ resolve: (id) => (id === row.sessionId ? row : undefined), stopped: () => [], lineCount: inline.lineCount,
+    const history = createHistory({ resolve: (id) => (id === row.sessionId ? row : undefined), stopped: async () => [], lineCount: inline.lineCount,
       readerFor: inline.forEngine, storeOf: createStoreOf(dbs, async () => '/db/hermes.db') })
     // Nothing but the end of the history.
     expect((await history.sessionGet({ sessionId: 'not-a-key' })).events).toEqual([{ type: 'done', payload: { result: 'success' } }])

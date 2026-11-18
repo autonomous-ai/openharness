@@ -7,6 +7,7 @@ import type { RegisteredSession } from './registry.js'
 
 let directory = ''
 let projects = ''
+const cleanups: Array<() => Promise<void>> = []
 beforeEach(() => {
   vi.resetModules()
   directory = mkdtempSync(join(tmpdir(), 'harness-cwd-repair-'))
@@ -14,7 +15,9 @@ beforeEach(() => {
   vi.stubEnv('ADAPTER_DATA_DIR', directory)
   vi.stubEnv('CLAUDE_PROJECTS_DIR', projects)
 })
-afterEach(() => {
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0)) await cleanup()
+  vi.restoreAllMocks()
   vi.unstubAllEnvs()
   rmSync(directory, { recursive: true, force: true })
 })
@@ -33,6 +36,8 @@ async function fixture() {
   const { StoppedAgentStore } = await import('./stoppedAgents.js')
   const { repairProjectCwds: repairClaudeCwd } = await import('./cwdRepair.js')
   const store = new StoppedAgentStore(join(directory, 'stopped-agents'))
+  const { sessionStorage } = await import('./sessionStorage.js')
+  cleanups.push(async () => { await registry.flush(); await store.close(); await sessionStorage.close() })
   const project = join(directory, 'repo')
   mkdirSync(join(project, 'cli'), { recursive: true })
   const open = async (id: string, pane: string, cwd: string, extra: Pick<Partial<RegisteredSession>, 'forkedFrom'> = {}): Promise<RegisteredSession> =>
@@ -48,6 +53,30 @@ async function fixture() {
 }
 
 describe('repairProjectCwds (Claude Code rows)', () => {
+  it.each(['destination replaced', 'destination mutated', 'source replaced'] as const)(
+    'does not apply a captured fork folder after %s during archive listing', async change => {
+      const { repairProjectCwds } = await import('./cwdRepair.js')
+      const project = join(directory, 'repo'), drifted = join(project, 'cli')
+      mkdirSync(drifted, { recursive: true })
+      const source = { agentId: 'source', engine: 'claude', sessionId: 'source-session', cwd: drifted,
+        transcriptPath: transcript(project, 'source-session', [project]) } as RegisteredSession
+      const fork = { agentId: 'fork', engine: 'claude', sessionId: 'fork-session', cwd: drifted,
+        forkedFrom: { agentId: 'source', name: 'source' } } as RegisteredSession
+      const rows = new Map([['source', source], ['fork', fork]])
+      const setCwd = vi.fn((id: string, cwd: string) => { rows.get(id)!.cwd = cwd; return true })
+      await repairProjectCwds({ registry: { list: () => [...rows.values()], byAgent: id => rows.get(id), setCwd,
+        transaction: async apply => apply() }, stoppedAgents: {
+        list: async () => {
+          if (change === 'destination replaced') rows.set('fork', { ...fork, sessionId: 'replacement', cwd: '/replacement' })
+          else if (change === 'destination mutated') fork.cwd = '/replacement'
+          else rows.set('source', { ...source, sessionId: 'replacement', cwd: '/replacement' })
+          return []
+        }, get: async () => null, current: () => false, patch: vi.fn(async () => false),
+      }, log: vi.fn() })
+      expect(setCwd.mock.calls).toEqual([['source', project]])
+      expect(rows.get('fork')?.cwd).toBe(change === 'source replaced' ? drifted : '/replacement')
+    })
+
   it('moves drifted live and archived rows to their transcript folder, leaves the rest alone, and is idempotent', async () => {
     const { registry, store, repairClaudeCwd, project, open, bind, logs, log } = await fixture()
     // Drifted: the row says the subfolder, the transcript lives under the project and names it on line 3.
@@ -60,13 +89,13 @@ describe('repairProjectCwds (Claude Code rows)', () => {
     // Archived and drifted, with a name and activity time that must survive.
     const archivedRow = (await bind((await open('d', '%4', project)), 'sess-d', [join(project, 'cli'), project]))
     registry.setCwd(archivedRow.agentId, join(project, 'cli'))
-    store.save({ ...registry.byAgent(archivedRow.agentId)!, defaultName: 'harness Desktop' })
+    await store.save({ ...registry.byAgent(archivedRow.agentId)!, defaultName: 'harness Desktop' })
     ;(await removeRegistryAgent(registry, archivedRow.agentId))
-    const archivedBefore = store.get(archivedRow.agentId)!
+    const archivedBefore = (await store.get(archivedRow.agentId))!
     // A transcript-less fork of the drifted row, live and archived.
     const forkLive = (await open('e', '%5', join(project, 'cli'), { forkedFrom: { agentId: drifted.agentId, name: 'a' } }))
     const forkSaved = (await open('f', '%6', join(project, 'cli'), { forkedFrom: { agentId: archivedRow.agentId, name: 'd' } }))
-    store.save(forkSaved); (await removeRegistryAgent(registry, forkSaved.agentId))
+    await store.save(forkSaved); (await removeRegistryAgent(registry, forkSaved.agentId))
     // A fork of a row that was never drifted keeps its own folder.
     const forkFine = (await open('g', '%7', join(project, 'cli'), { forkedFrom: { agentId: 'someone-else', name: 'x' } }))
 
@@ -76,8 +105,8 @@ describe('repairProjectCwds (Claude Code rows)', () => {
     expect(registry.byAgent(forkLive.agentId)?.cwd).toBe(project)
     expect(registry.byAgent(forkFine.agentId)?.cwd).toBe(join(project, 'cli'))
     expect(registry.byAgent(renamed.agentId)?.cwd).toBe(join(project, 'cli'))
-    expect(store.get(archivedRow.agentId)).toEqual({ ...archivedBefore, cwd: project })
-    expect(store.get(forkSaved.agentId)?.cwd).toBe(project)
+    expect((await store.get(archivedRow.agentId))).toEqual({ ...archivedBefore, cwd: project })
+    expect((await store.get(forkSaved.agentId))?.cwd).toBe(project)
     expect(logs.filter((l) => l.includes("left as is")), logs.join("\n")).toHaveLength(1)
     expect(logs.filter((l) => l.includes('→'))).toHaveLength(4)
 
@@ -87,6 +116,8 @@ describe('repairProjectCwds (Claude Code rows)', () => {
     // Persisted, not just in memory.
     vi.resetModules()
     const { registry: reloaded } = await import('./registry.js')
+    const { sessionStorage } = await import('./sessionStorage.js')
+    cleanups.push(async () => { await reloaded.flush(); await sessionStorage.close() })
     await reloaded.load()
     expect(reloaded.byAgent(drifted.agentId)?.cwd).toBe(project)
   })

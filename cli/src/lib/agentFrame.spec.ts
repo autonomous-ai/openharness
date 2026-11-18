@@ -93,12 +93,12 @@ describe('agentFrame', () => {
     expect(said).not.toHaveBeenCalled()
   })
 
-  it('never carries the grid launch — the key stays in the registry', async () => {
+  it('never carries the private grid launch reference', async () => {
     const row = session(assignment)
-    row.gridLaunch = { networkId: 'grid-abc', networkName: 'Team grid', baseUrl: assignment.baseUrl, apiKey: 'gridkey-SECRET' }
+    row.gridLaunch = storedGridFixture({ networkId: 'grid-abc', networkName: 'Team grid', baseUrl: assignment.baseUrl, apiKey: 'fixture-grid-key' })
     const frame = await agentFrame(row, { selectedModel: null, terminalAvailable: true })
     expect(frame).not.toHaveProperty('gridLaunch')
-    expect(JSON.stringify(frame)).not.toContain('gridkey-SECRET')
+    expect(JSON.stringify(frame)).not.toContain(row.gridLaunch.credential.binding)
   })
 
   // The task is the person's words, typed into the pane once (core/agents/bind.ts); no client is ever sent it.
@@ -281,3 +281,4 @@ describe('agentFrame updatedAt', () => {
     }
   })
 })
+import { storedGridFixture } from '../testing/gridCredentials.js'

@@ -125,7 +125,7 @@ export interface CloseAgentServiceDeps {
   openTabs?: { assertHidden(s: RegisteredSession): Promise<void>; isHidden(s: RegisteredSession): boolean }
   /** The record the conversation [request] names was kept as, when it is closed already: no longer live, and kept as
    *  stopped. Null when it is not. */
-  closedAlready?(request: AgentCloseRequest): RegisteredSession | null
+  closedAlready?(request: AgentCloseRequest): Promise<RegisteredSession | null>
   /** Whether its pane shows a question the engine asks before any conversation: the folder's trust, or an MCP server the
    *  folder brings (`trust_open`). */
   atStartupQuestion?(s: RegisteredSession): Promise<boolean>
@@ -208,8 +208,8 @@ export class CloseAgentService {
    * AGENT_CHANGED". Anything else is AGENT_CHANGED. Said of the record it was kept as: answered `{ closed: true }`
    * alone, `harness close` said "Its conversation is kept" of one kept with none.
    */
-  private changed(request: AgentCloseRequest): AgentCloseResult {
-    const kept = request.mode === 'idle' || request.mode === 'now' || request.mode === 'inspect' ? this.deps.closedAlready?.(request) : null
+  private async changed(request: AgentCloseRequest): Promise<AgentCloseResult> {
+    const kept = request.mode === 'idle' || request.mode === 'now' || request.mode === 'inspect' ? await this.deps.closedAlready?.(request) : null
     if (!kept) return { error: 'AGENT_CHANGED' }
     return keptNone(kept) ? { closed: true, withoutConversation: true } : { closed: true }
   }

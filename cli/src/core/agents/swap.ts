@@ -31,7 +31,7 @@ export interface PaneSwapDeps {
   byAgent: (agentId: string) => RegisteredSession | undefined
   prepareSessionResume: (session: RegisteredSession, current: () => boolean) => Promise<unknown>
   /** Keeps a conversation a swap had to leave for a new one as a stopped harness (lib/keepAbandonedConversation.ts). */
-  keepAbandonedConversation: (left: RegisteredSession) => void
+  keepAbandonedConversation: (left: RegisteredSession) => Promise<void>
   /** Release the conversation on its engine's server before replacing the terminal client. */
   stopNative: StopAgentServiceDeps['stopNative']
   /** Stops a Claude Code background job holding the session before it is resumed, in its worker (core/engines/backgroundJobs.ts). */

@@ -9,10 +9,10 @@ const agent = (agentId: string, over: Partial<RegisteredSession> = {}) => ({ age
 describe('what a service in its own process may ask the core of the agents', () => {
   const live = [agent('a1'), agent('a2')]
   const stopped = [agent('a3', { active: false })]
-  const core = fakeCore({ agents: { all: () => [...live, ...stopped], live: () => live, advertised: () => [live[0]], displayName: (session: RegisteredSession) => `name of ${session.agentId}` } })
+  const core = fakeCore({ agents: { all: async () => [...live, ...stopped], live: () => live, advertised: () => [live[0]], displayName: (session: RegisteredSession) => `name of ${session.agentId}` } })
 
-  it('every agent, live then stopped, with the name the apps show for it', () => {
-    expect(answerAgentQuery(core, 'agents')).toEqual({ agents: [...live, ...stopped].map((session) => ({ ...session, displayName: `name of ${session.agentId}` })) })
+  it('every agent, live then stopped, with the name the apps show for it', async () => {
+    expect(await answerAgentQuery(core, 'agents')).toEqual({ agents: [...live, ...stopped].map((session) => ({ ...session, displayName: `name of ${session.agentId}` })) })
   })
 
   it('the live agents, and those the apps are shown', () => {
@@ -27,7 +27,7 @@ describe('what a service in its own process may ask the core of the agents', () 
   it('returns usage only for the exact live or stopped read target', async () => {
     const saved = agent('a', { transcriptPath: '/fixture/session', registeredAt: 1 })
     const target = usageTarget(saved)
-    const core = fakeCore({ agents: { all: () => [saved] } })
+    const core = fakeCore({ agents: { all: async () => [saved] } })
     expect(await answerAgentQuery(core, 'agentUsage')).toEqual({ error: 'STALE_USAGE_TARGET' })
     expect(await answerAgentQuery(core, 'agentUsage', { target: { ...target, cwd: '/different' } })).toEqual({ error: 'STALE_USAGE_TARGET' })
     expect(await answerAgentQuery(core, 'agentUsage', { target })).toEqual({ target, value: null })
@@ -83,7 +83,7 @@ describe('what a service in its own process may ask the core of the agents', () 
 
   // An attempt's end once read an agent's usage fresh, for the backend's costs, which went with backend S8 (#3908).
   it('answers no fresh usage read', async () => {
-    const core = fakeCore({ agents: { all: () => [...live, ...stopped], live: () => live } })
+    const core = fakeCore({ agents: { all: async () => [...live, ...stopped], live: () => live } })
     core.usageFresh = vi.fn(async () => ({ totalTokens: 9, updatedAt: '2026-10-29T00:00:00Z' }))
     expect(await answerAgentQuery(core, 'agentUsageFresh', { agentId: 'a1' })).toEqual({ error: 'UNKNOWN_QUERY' })
     expect(core.usageFresh).not.toHaveBeenCalled()

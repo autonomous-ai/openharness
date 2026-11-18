@@ -30,6 +30,7 @@ import {
   type GridLaunchRecord,
   type GridLaunchRequest,
 } from './gridLaunchWire.js'
+import type { StoredGridLaunch } from './sessionStorageWire.js'
 import type { TerminalBackendCapabilities } from './terminalTypes.js'
 import { tmuxTooOldForSessionEnv } from './tmuxVersion.js'
 import { harnessEnvToClear } from '../dsh/sessionEnv.js'
@@ -120,7 +121,7 @@ export interface LaunchOverridesDeps {
 
 /** Where the agent should come back: the registry row, or an override the desktop just sent. */
 export interface LaunchSource extends NativeLaunchSource {
-  gridLaunch?: GridLaunchOverride | null
+  gridLaunch?: GridLaunchOverride | StoredGridLaunch | null
   codexHome?: string | null
   /** OpenClaw's `--local` folder (the registry row's `openclawLocal`): every relaunch runs on it, or does not run. */
   openclawLocal?: string | null
@@ -192,7 +193,7 @@ export async function validateLaunchOverrides(
 
 /** Only a launch that SETS variables needs the tmux that can set them. */
 async function tmuxRefusal(
-  deps: Pick<LaunchOverridesDeps, 'capabilities'>, engine: AgentEngine, override: GridLaunchOverride,
+  deps: Pick<LaunchOverridesDeps, 'capabilities'>, engine: AgentEngine, override: Pick<GridLaunchOverride, 'networkName'>,
 ): Promise<{ ok: true } | { ok: false; error: string; detail: string }> {
   if ((await deps.capabilities()).sessionEnv) return { ok: true }
   return {

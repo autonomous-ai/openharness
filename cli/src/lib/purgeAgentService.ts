@@ -124,7 +124,7 @@ export interface PurgeRequest {
 export type WorktreeRequest = Omit<PurgeRequest, 'mode'> & { mode: 'describe' | 'inspect' | 'delete'; path?: string; discardChanges?: boolean }
 export interface PurgeDeps {
   live(id: string): RegisteredSession | undefined
-  sessions(): RegisteredSession[]
+  liveSessions(): RegisteredSession[]
   /** A harness's worktree, read, reviewed and removed by the workspaces service, which runs the git (core/api.ts
    *  `WorkspacesPort`): the core runs none. Read at each call, as the service may be off or back. */
   worktrees(): Pick<WorkspacesPort, 'describeWorkspace' | 'reviewWorktree' | 'removeWorktree'>
@@ -185,17 +185,21 @@ export class PurgeAgentService {
       if (this.busy(request.agentId)) throw new Error('Wait for the current harness operation to finish.')
       const now = this.deps.now?.() ?? Date.now()
       for (const [id, review] of this.worktreeReviews) if (review.expires <= now) this.worktreeReviews.delete(id)
-      const current = this.current(request, false)
+      const current = await this.current(request, false)
       if (request.mode === 'describe') {
         const signature = identity(current)
         const workspace = await this.deps.worktrees().describeWorkspace(targetOf(current), this.others(current))
           ?? { kind: 'unavailable', path: current.cwd ?? null, canDelete: false, reason: 'The working folder could not be verified. Reopen Inspect to try again.' }
-        if (identity(this.current(request, false)) !== signature) throw new Error('The harness changed. Reopen Inspect to check its workspace again.')
+        if (workspace.kind === 'worktree' && workspace.canDelete && workspace.worktreePath) {
+          try { await this.unoccupied(workspace.worktreePath, current) }
+          catch { return { workspace: { ...workspace, canDelete: false, reason: 'Another harness may use this worktree. Its files must be kept.' } } }
+        }
+        if (identity(await this.current(request, false)) !== signature) throw new Error('The harness changed. Reopen Inspect to check its workspace again.')
         return { workspace }
       }
       if (request.mode === 'inspect') {
         const signature = identity(current), worktree = await this.review(current)
-        if (identity(this.current(request, false)) !== signature) throw new Error('The harness changed. Review its worktree again.')
+        if (identity(await this.current(request, false)) !== signature) throw new Error('The harness changed. Review its worktree again.')
         const reviewId = randomUUID()
         if (this.worktreeReviews.size >= 64) this.worktreeReviews.delete(this.worktreeReviews.keys().next().value!)
         this.worktreeReviews.set(reviewId, { session: { ...current }, signature, worktree, expires: now + 120_000 })
@@ -219,7 +223,7 @@ export class PurgeAgentService {
         } })
         if (this.deps.live(request.agentId)) throw new Error('The harness did not stop. Its worktree was kept.')
         stopped = true
-        const saved = this.current(request, false), reservation = this.deps.stopped.beginResume(request.agentId)
+        const saved = await this.current(request, false), reservation = this.deps.stopped.beginResume(request.agentId)
         if (!reservation) throw new Error('Another operation is using this harness. Its worktree was kept.')
         try { await this.remove(review.worktree, saved, request.discardChanges === true) }
         finally { this.deps.stopped.finishResume(request.agentId, reservation) }
@@ -233,13 +237,27 @@ export class PurgeAgentService {
 
   /** The folders every other harness here works in, live or stopped: a worktree one of them is in is kept. */
   private others(s: RegisteredSession): string[] {
-    return [...new Set(this.deps.sessions().flatMap(other => other.agentId !== s.agentId && other.cwd ? [other.cwd] : []))]
+    return [...new Set(this.deps.liveSessions().flatMap(other => other.agentId !== s.agentId && other.cwd ? [other.cwd] : []))]
   }
 
   /** The harness's worktree, reviewed by workspaces; why not, thrown in its words. */
   private async review(s: RegisteredSession): Promise<WorktreeReview> {
     const answer = await this.deps.worktrees().reviewWorktree(targetOf(s), this.others(s))
-    return answer.ok ? answer.review : fail(answer.reason)
+    if (!answer.ok) return fail(answer.reason)
+    await this.unoccupied(answer.review.path, s)
+    return answer.review
+  }
+
+  private async unoccupied(root: string, s: RegisteredSession): Promise<() => void> {
+    const selected = await this.current({ agentId: s.agentId, sessionId: s.sessionId || null, createdAt: s.registeredAt }, false)
+    if (identity(selected) !== identity(s)) fail('The saved harness changed before its worktree could be removed.')
+    const archive = await this.deps.stopped.query({ kind: 'folder', root, exceptAgentId: s.agentId })
+    const verify = () => {
+      this.verifySelection(selected)
+      if (!archive.current() || archive.matches[0]) fail('Another harness may use this worktree or an overlapping folder. Its files must be kept.')
+    }
+    verify()
+    return verify
   }
 
   /** The reviewed worktree is still exactly what was reviewed: asked of workspaces before the first step that changes
@@ -252,6 +270,8 @@ export class PurgeAgentService {
   }
 
   private async remove(review: WorktreeReview, s: RegisteredSession, discardChanges: boolean): Promise<void> {
+    const verify = await this.unoccupied(review.path, s)
+    verify()
     const removed = await this.deps.worktrees().removeWorktree(review, targetOf(s), this.others(s), discardChanges)
     if (!removed.ok) fail(removed.reason)
   }
@@ -275,14 +295,30 @@ export class PurgeAgentService {
     return restoredWithoutConversation(session) && await this.deps.atEmptyComposer?.(session) === true
   }
 
-  private current(request: Pick<PurgeRequest, 'agentId' | 'sessionId' | 'createdAt'>, deletingHistory = true): RegisteredSession {
-    const s = this.deps.live(request.agentId) ?? this.deps.stopped.get(request.agentId)
+  private readonly authorities = new WeakMap<RegisteredSession, () => void>()
+  private verifySelection(session: RegisteredSession): void {
+    const verify = this.authorities.get(session)
+    if (!verify) return fail('The saved harness needs a fresh deletion review.')
+    verify()
+  }
+
+  private async current(request: Pick<PurgeRequest, 'agentId' | 'sessionId' | 'createdAt'>, deletingHistory = true): Promise<RegisteredSession> {
+    const s = this.deps.live(request.agentId) ?? await this.deps.stopped.get(request.agentId)
     if (!s || (s.sessionId || null) !== request.sessionId || s.registeredAt !== request.createdAt) return fail('This harness changed. Refresh and review deletion again.')
     if (s.dsh === 'autonomous/harness-monitor') return fail('This harness cannot be deleted from this monitor.')
     if (this.deps.restarting(s.agentId)) return fail('Wait for the current harness operation to finish, then try again.')
-    if (deletingHistory && s.sessionId && this.deps.sessions().some(other => other.agentId !== s.agentId && other.sessionId === s.sessionId)) {
-      return fail('Another harness uses this conversation. Its shared history cannot be deleted here.')
+    const signature = identity(s)
+    const archive = deletingHistory && s.sessionId ? await this.deps.stopped.query({ kind: 'conversations', ids: [s.sessionId], exceptAgentId: s.agentId, reservations: false }) : null
+    const verify = () => {
+      const live = this.deps.live(s.agentId)
+      if (live ? identity(live) !== signature : !this.deps.stopped.current(s)) fail('The saved harness changed. Refresh and review deletion again.')
+      if (archive && (!archive.current() || archive.matches[0]
+        || this.deps.liveSessions().some(other => other.agentId !== s.agentId && other.sessionId === s.sessionId))) {
+        fail('Another harness may use this conversation. Its shared history cannot be deleted here.')
+      }
     }
+    verify()
+    this.authorities.set(s, verify)
     return s
   }
 
@@ -295,14 +331,14 @@ export class PurgeAgentService {
       if (this.busy(request.agentId)) return { error: 'DELETE_IN_PROGRESS', detail: 'This harness is already being deleted.' }
       const now = this.deps.now?.() ?? Date.now()
       for (const [id, review] of this.reviews) if (review.expires <= now) this.reviews.delete(id)
-      const current = this.current(request, request.mode === 'inspect' ? !request.includeWorktree : sessionData)
+      const current = await this.current(request, request.mode === 'inspect' ? !request.includeWorktree : sessionData)
       if (request.mode === 'delete' && sessionData) requirePurgeAuthority(current)
       if (request.mode === 'inspect') {
         if (this.reviews.size >= 64) return fail('There are too many unexpired deletion reviews. Wait for one to finish or expire before reviewing another.')
         const signature = identity(current)
         let history: History | null = null, checkpointFiles: File[] = [], historyReason = ''
         try {
-          this.current(request)
+          await this.current(request)
           history = await (this.deps.inspect ?? inspectNativeHistory)(current)
           checkpointFiles = checkpointsOf(current, this.deps.checkpoints).map(file)
         } catch (error) {
@@ -315,7 +351,7 @@ export class PurgeAgentService {
           try { worktree = await this.review(current) }
           catch (error) { worktreeReason = error instanceof Error ? error.message : 'The worktree could not be verified.' }
         }
-        if (identity(this.current(request, !request.includeWorktree), !!current.processIdentity) !== signature) return fail('The harness changed while checking its data. Try again.')
+        if (identity(await this.current(request, !request.includeWorktree), !!current.processIdentity) !== signature) return fail('The harness changed while checking its data. Try again.')
         const sessionBytes = history?.bytes == null ? null : history.bytes + checkpointFiles.reduce((n, f) => n + f.bytes, 0)
         const paths = history ? [history.file?.path ?? history.missingFile, ...checkpointFiles.map(f => f.path)].filter(Boolean) : []
         const reviewId = randomUUID()
@@ -362,7 +398,7 @@ export class PurgeAgentService {
         }
         if (this.deps.live(request.agentId)) return fail('The harness did not stop. No session data was deleted.')
         stopped = true
-        const saved = this.current(request, sessionData)
+        const saved = await this.current(request, sessionData)
         const savedIdentity = identity(saved)
         if (sessionData && (conversation(saved) !== conversation(review.session) || saved.transcriptPath !== review.session.transcriptPath)) {
           return fail('The saved conversation changed while stopping. Review it before deleting.')
@@ -383,12 +419,15 @@ export class PurgeAgentService {
           }
           let freedBytes = 0
           if (sessionData) {
-            if (identity(this.current(request, true)) !== savedIdentity) return fail('The saved harness changed while deleting its worktree. Its native history was kept.')
-            freedBytes = await (this.deps.erase ?? eraseNativeHistory)(review.history!)
+            const selectedForErase = await this.current(request, true)
+            if (identity(selectedForErase) !== savedIdentity) return fail('The saved harness changed while deleting its worktree. Its native history was kept.')
+            const history = review.history!
+            freedBytes = await (this.deps.erase ?? eraseNativeHistory)({ ...history, verify: key => { this.verifySelection(selectedForErase); history.verify?.(key) } })
             historyErased = true
             for (const target of files) {
               const current = file(target.path)
               if (current.dev !== target.dev || current.ino !== target.ino) return fail('Saved session data changed. Some data may already have been deleted; refresh to check.')
+              this.verifySelection(selectedForErase)
               unlinkSync(target.path); freedBytes += current.bytes
             }
             await this.deps.eraseRecords?.(saved).catch((error: unknown) => {
@@ -397,7 +436,7 @@ export class PurgeAgentService {
               fail(`Harness could not erase this harness's saved launch request.${error.detail ? ` ${error.detail}` : ''} Try deleting it again.`)
             })
             await this.deps.deleted(saved)
-            this.deps.stopped.remove(request.agentId)
+            await this.deps.stopped.remove(request.agentId, () => { this.verifySelection(selectedForErase); return true })
             sessionDeleted = true
           }
           return { deleted: true, sessionDeleted, worktreeDeleted, freedBytes,
