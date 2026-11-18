@@ -1028,6 +1028,64 @@ static void bell_checks(const char *dir) {
     reset(); scene_take();
     assert(!blue_bell_drawn() && !action_enabled(A_INBOX));   // an empty inbox has no bell
     puts("bell/inbox: an empty inbox draws no bell PASS");
+    // The bell counts agents, like the window: "b"'s unread question and its unread news are one.
+    // Snapshot rows run newest first, and a newer question replaces the news: the news here is the newer row.
+    cable_notif_t both[2]={
+        {.agent_id="b",.name="Release",.summary="The release notes are ready."},
+        {.agent_id="b",.name="Release",.summary="May I publish this release?",.question=true}};
+    reset(); ui_notif_replace(both,2); scene_take();
+    assert(s.notice_count==2 && s.notice[0].question && !s.notice[1].question);
+    assert(notice_unread(NULL)==1 && notice_unread("a")==1 && status_is(HT_BELL " 1"));
+    puts("bell/inbox: an agent's unread question and news count one PASS");
+    reset();
+}
+static bool notice_has(const char *id, bool question) {
+    for(int i=0;i<s.notice_count;i++)
+        if(!strcmp(s.notice[i].agent_id,id) && s.notice[i].question==question) return true;
+    return false;
+}
+// A full inbox never gives up a question for a message.
+static void inbox_full_checks(void) {
+    cable_notif_t rows[NOTICES]={0};
+    char id[ID_MAX];
+    // 23 questions and the message being read: a new message has nothing to take the place of.
+    for(int i=0;i<NOTICES-1;i++) {
+        snprintf(rows[i].agent_id,sizeof rows[i].agent_id,"q-%d",i);
+        COPY(rows[i].summary,"May I go on?"); rows[i].question=true;
+    }
+    strcpy(rows[NOTICES-1].agent_id,"read"); COPY(rows[NOTICES-1].summary,"The build passed.");
+    reset(); ui_notif_replace(rows,NOTICES); ui_notif_open();
+    s.offset=NOTICES-1; assert(!strcmp(s.notice[s.offset].agent_id,"read"));
+    ui_notify_task_done("new","New pane","M2","Another result arrived.");
+    assert(s.notice_count==NOTICES && s.view==INBOX && !strcmp(s.notice[s.offset].agent_id,"read"));
+    for(int i=0;i<NOTICES-1;i++) { snprintf(id,sizeof id,"q-%d",i); assert(notice_has(id,true)); }
+    // 24 questions: a message is refused; a question takes the oldest question's place but the one being read.
+    for(int i=0;i<NOTICES;i++) {
+        snprintf(rows[i].agent_id,sizeof rows[i].agent_id,"q-%d",i);
+        COPY(rows[i].summary,"May I go on?"); rows[i].question=true;
+    }
+    reset(); ui_notif_replace(rows,NOTICES);
+    ui_notify_task_done("new","New pane","M2","Another result arrived.");
+    assert(s.notice_count==NOTICES && !notice_has("new",false));
+    for(int i=0;i<NOTICES;i++) { snprintf(id,sizeof id,"q-%d",i); assert(notice_has(id,true)); }
+    ui_notif_open(); s.offset=NOTICES-1; char oldest[ID_MAX]; COPY(oldest,s.notice[s.offset].agent_id);
+    char next[ID_MAX]; COPY(next,s.notice[NOTICES-2].agent_id);
+    assert(notice_add("q-new","New pane","M2","May I go on?",true,false));
+    assert(s.notice_count==NOTICES && notice_has("q-new",true) && notice_has(oldest,true) && !notice_has(next,true));
+    assert(!strcmp(s.notice[s.offset].agent_id,oldest));
+    // Messages and a question kept at the end while it was read: the oldest message gives way, not the question.
+    cable_notif_t held={.agent_id="held",.name="Release",.summary="May I publish?",.question=true,.read_token="t"};
+    reset(); ui_notif_replace(&held,1); ui_notif_open(); notice_mark_read(&s.notice[s.offset]);
+    for(int i=0;i<NOTICES-1;i++) {
+        memset(&rows[i],0,sizeof rows[i]);
+        snprintf(rows[i].agent_id,sizeof rows[i].agent_id,"m-%d",i); COPY(rows[i].summary,"Done.");
+    }
+    ui_notif_replace(rows,NOTICES-1);
+    assert(s.notice_count==NOTICES && s.notice[NOTICES-1].question && !strcmp(s.notice[NOTICES-1].agent_id,"held"));
+    s.offset=0; COPY(oldest,s.notice[NOTICES-2].agent_id);
+    ui_notify_task_done("new","New pane","M2","Another result arrived.");
+    assert(s.notice_count==NOTICES && notice_has("held",true) && notice_has("new",false) && !notice_has(oldest,false));
+    puts("inbox full: a message never takes a question's place; the oldest message, or the oldest question for a question, goes PASS");
     reset();
 }
 
@@ -1613,6 +1671,7 @@ int main(int argc, char **argv) {
     test_character = HT_CHARACTER_FOCUS;
     notification_read_checks(argc>1 ? argv[1] : NULL);
     bell_checks(argc>1 ? argv[1] : NULL);
+    inbox_full_checks();
     // The companion screen is gone: character, edge text and still-character are the app's now
     // (Settings > Autonomous robots). What the glass kept is actions, and Nap is the one that moved
     // off that screen into the controls list.
