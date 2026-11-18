@@ -3466,7 +3466,10 @@ export class CableSession {
     if (!this.questionInbox.close(agentId, id)) return
     // Answered: the turn goes on (its end clears it).
     if (this.liveTurns.get(agentId) === 'question') this.liveTurns.set(agentId, 'working')
-    await this.send({ t: 'question.close', agentId, id })
+    // A close that does not fit a frame names a question no frame carried (a question's is the larger): the dial never
+    // had it, and send would drop it as this side's bug. The inbox keeps no id past 6500 bytes; the close came anyway.
+    const close = { t: 'question.close', agentId, id }
+    if (fitsFrame(close)) await this.send(close)
   }
 
   async focusAgent(agentId: string): Promise<void> {
