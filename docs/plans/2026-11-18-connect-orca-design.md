@@ -64,8 +64,9 @@ but only after the person has seen what Orca lists and said yes.
 
 - The build puts the plugin's runtime files in `cli.js` as one JSON constant (as `__VSCODE_EXTENSION__`): its
   `orca-plugin.json` with `version` set to the build's version through `extensionVersion()` (Orca's version pattern takes
-  it), and its `src/` files that are not tests, each as text, by its path relative to the plugin. The plugin's tests,
-  `tsconfig.json` and the README stay out.
+  it), and its `src/` `.ts` and `.tsx` files that are not tests, each as text, by its path relative to the plugin. The
+  plugin's tests, other files, `tsconfig.json` and the README stay out. A name the plugin's folder would not take (other
+  than letters, digits, `.`, `_` and `-`) fails the build.
 - A run from the sources carries no files: `status` answers `absent` and `connect` fails with `no-plugin`.
 - `scripts/ci-plan.py` maps `plugins/harness-device-orca/` to the CLI's suite too, as it does the VS Code extension.
 
@@ -84,12 +85,15 @@ but only after the person has seen what Orca lists and said yes.
   new one renamed into place, and the old one removed. A run that finds `orca-plugin.old/` with no `orca-plugin/` puts
   it back first; a staging folder whose process no longer runs is removed, so two commands at once never touch each
   other's. Orca never reads half a folder.
+- A folder that cannot be written: `status` answers `absent` and `connect` fails with `failed` (not `not-running`), and
+  each prints `orca plugin folder: <code>` on stderr: the error's code (`EACCES`), never its message, which names a
+  path.
 
 ### The record
 
 - `dial-skill.json` (the device's settings record, `cli/src/devices/dialSkillFiles.ts`) gains `orcaConnected: true`.
   It is part of `DialSetting`, read and written with the rest, so another command's rewrite of the file keeps it. It is
-  written after a connect that Orca answered with success, and never cleared by Harness.
+  written after a connect that ends `done`, and never cleared by Harness.
 
 ### `harness device orca status --json`
 
@@ -112,14 +116,18 @@ One JSON line. It writes only the plugin's folder. It asks Orca at most `status`
 - `--approve` takes the next word as its value, read before the words that start with `-` are dropped, and only
   `^ap1-[0-9a-f]{32}$`. Anything else fails with `failed` before Orca is run.
 - It works out the state as `status` does, then:
-  - `off` or `absent`: `failed` (`off` or `not-running`), so no stale click can install again;
+  - `off` or `absent`: `failed` (`off`, or `not-running`; `failed` for a folder that cannot be written), so no stale
+    click can install again;
   - `offer`, or `behind` from another folder: `orca plugin install <folder>`;
   - `behind` from the plugin's folder: `orca plugin update <key>`;
   - `approve`: `orca plugin enable <key>`;
   - `current`: `done`;
-  each with `--approve <fingerprint>` only when given, and a deadline of 60 s.
+  each with `--approve <fingerprint>` only when given, and a deadline of 60 s. Orca may finish past it: `connect` then
+  asks `list` once (10 s), and is `done` when the entry is at the version `cli.js` carries, from the plugin's folder,
+  and neither `pending` nor `needsReconsent`; else `timeout`. With `status`, `inspect` and `list` before, 95 s at most,
+  within the app's 120 s.
 - One JSON line:
-  - `{"connect":"done"}`: Orca answered `ok`. It writes the record.
+  - `{"connect":"done"}`: Orca answered `ok`, or listed the plugin as asked past the deadline. It writes the record.
   - `{"connect":"approve","name":…,"version":…,"fingerprint":…,"grants":[…],"update":true|false}`, from Orca's
     `approval_required` or `approval_stale` `data`. `grants` is Orca's `executionDescription`, each capability's
     `description` and each replacement as Orca's own message words it (`Runs "<command>" instead of Orca's own
@@ -211,7 +219,7 @@ Orca CLI runs of about 0.3 s each; while Orca is not running, `orca status` alon
   record written only after `done` and kept by a `harness device vscode disable`; the grants' bounds. No test runs a
   real `orca`.
 - **Build** (`cli/scripts/lib/*.spec`): the bundle carries the manifest with the stamped version and the non-test `src/`
-  files only.
+  `.ts` and `.tsx` files only, and fails on a name the plugin's folder would not take.
 - **Harness app** (`cargo test --lib`): the menu's rows for each `OrcaState` (`model.rs`); when `status` runs (CLI
   found, CLI version change, menu open after 5 minutes, never two at a time, the screen's connect first); the silent
   update without `--approve`; Connect runs `--approve` with the fingerprint of the last `approve` answer only; a
