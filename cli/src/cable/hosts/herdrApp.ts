@@ -57,6 +57,11 @@ const SCROLL_PAGE_LINES = 20
 /** The most page keys in one call: as many pages as the lines that may wait. hc presses them one by one, about 35 ms
  *  each. */
 const SCROLL_KEYS_MAX = SCROLL_PENDING_MAX / SCROLL_PAGE_LINES
+/** A key call's deadline, past hc's hold: hc presses keys only once 3 s have passed since the person's own last key in
+ *  Herdr's window, and presses them then even if their call was given up (measured on a private core, 2026-11-18). So
+ *  a held call is waited for, not counted failed while its keys still go in, and the next call is asked about after
+ *  they landed. */
+const SCROLL_KEYS_TIMEOUT_MS = 5_000
 /** hc's `claude-code` app, as the client reads it (hcClient.ts hcKind). */
 const CLAUDE_CODE = 'claude'
 
@@ -178,7 +183,7 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
         return (await deps.run(herdrApp, ['do', 'terminal.scroll', '--terminal', address, '--lines', String(lines)], SCROLL_TIMEOUT_MS)).code === 0
       }
       const key = lines < 0 ? 'pageup' : 'pagedown'
-      return await deps.client.keys(address, Array<string>(Math.abs(lines) / SCROLL_PAGE_LINES).fill(key), SCROLL_TIMEOUT_MS)
+      return await deps.client.keys(address, Array<string>(Math.abs(lines) / SCROLL_PAGE_LINES).fill(key), SCROLL_KEYS_TIMEOUT_MS)
     } catch {
       return false
     }
