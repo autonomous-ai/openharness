@@ -116,13 +116,16 @@ static bool cable_client_answer_reviewed(const char *id,const char *fetch,const 
 code += '#include <limits.h>\n#include "focus_faces.h"\n'
 for name in ['focus_face_for','focus_chord','focus_put','focus_span','focus_take','focus_rows','ui_rows','ui_can_display','ui_wrap','text_in']:
     code += function(name)
+code += 'static void dispatch(action_t a);\n'
 for name in ['notice_sync_view','copy','control','text','center','heading','question_view','question_rows',
              'question_text','render_question','render_choices','render_answer_review',
              'open_question','question_answer','question_move','send_answer',
              'question_load','notice_question_read','ui_question_show','ui_question_state','ui_answer_receipt','ui_question_close','ui_focus_project','ui_voice_question']:
     code += function(name)
 actions = source.split('    case A_QUESTION_CHOICES:\n',1)[1].split('    case A_INBOX:',1)[0]
-code += 'static void dispatch(action_t a) { switch(a.kind) { case A_QUESTION_CHOICES:\n'+actions+'default: break; } }\n'
+# A voice discard only ends voice here: test_voice_ui runs the real one.
+code += 'static void dispatch(action_t a) { switch(a.kind) { case A_VOICE_ABORT: voice_close(); view(HOME); break;\n'
+code += 'case A_QUESTION_CHOICES:\n'+actions+'default: break; } }\n'
 worker = source.split('static void worker(',1)[1].split('        case A_QUESTION_READ:',1)[1].split('        default:',1)[0]
 code += 'static void work(action_t a) { switch(a.kind) { case A_QUESTION_READ:'+worker+'default: break; } }\n'
 code += r'''
@@ -248,6 +251,13 @@ int main(int argc,char **argv) {
     memset(&s,0,sizeof s);s.connected=true;s.pressed=-1;open_question();assert(s.q.loading && s.view==QUESTION);
     s.q.loading=false;strcpy(s.q.error,"Question did not arrive. Open the alert again.");
     ui_question_close("a","q-late");assert(s.view==HOME);
+    // Voice open over the question when it closes: voice ends and the dial goes home, so the speech result that
+    // follows is dropped, not "Question changed" pointing at an alert row already gone.
+    reset(false);recording();ui_question_close("a","q-a");assert(!s.voice_open && s.view==HOME);
+    spoken("token-a","Late");assert(s.view==HOME && !s.q.item[0].draft[0]);
+    // A new question of the agent replacing it still says "Question changed": the alert to open again is the new one.
+    reset(false);recording();ui_question_show("a","Research","M2","q-new",NULL,false);
+    spoken("token-a","Late");assert(s.view==MESSAGE && !strcmp(s.title,"Question changed") && !s.voice_open);
     reset(false);view(HOME);state("a",s.q.fetch,"token-a",false,long_question);assert(s.view==HOME);
     reset(false);s.view=MESSAGE;visit.available=true;strcpy(visit.agent,"b");b_known=false;
     ui_focus_project("b");assert(!strcmp(s.pending_focus,"b") && s.view==MESSAGE);

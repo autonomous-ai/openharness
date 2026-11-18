@@ -58,7 +58,7 @@ static struct {
     int voice_question_index;
     char hint[40];
     char title[80], message[256], voice_target[64], voice_engine[12], pending_focus[64], pending_machine[64], opening_notice[48];
-    struct { bool valid, supported, loading, pending, uncertain; uint32_t revision, deadline; int index; char error[120],speech_error[96],agent[64],token[48]; struct { bool can_text; } item[4]; } q;
+    struct { bool valid, supported, loading, pending, uncertain; uint32_t revision, deadline; int index; char error[120],speech_error[96],agent[64],token[48],request[64]; struct { bool can_text; } item[4]; } q;
     agent_t agents[1];
     struct { bool live_summary; } memory[PANE_MEMORY_MAX];
 } s;
@@ -112,6 +112,8 @@ int find(const char *id) { return id && !strcmp(id, "agent") ? 0 : -1; }
 bool is_question(const char *id) { (void)id; return false; }
 void open_question(void) { assert(false); }
 bool queue(action_t action) { if (queue_full) return false; queued = action; return true; }
+void notice_remove_question(const char *id) { assert(id && id[0]); }
+void notice_sync_view(void) {}
 '''
 harness += function('question_view') + function('copy') + function('input_cancel') + function('view') + function('voice_close') + function('workspace_failed')
 dispatch = source.split('case A_VOICE:\n', 1)[1].split('case A_PET:', 1)[0]
@@ -119,7 +121,7 @@ harness += 'static void dispatch(action_t a) { switch (a.kind) { case A_VOICE:\n
 worker = source.split('static void worker(', 1)[1].split('case A_VOICE:\n', 1)[1].split('case A_STOP_YES:', 1)[0]
 harness += 'static void work(action_t a) { switch (a.kind) { case A_VOICE:\n' + worker + '} }\n'
 for name in ['habitat_tick', 'ui_set_connected', 'ui_show_error', 'ui_cable_toast',
-             'ui_voice_error', 'ui_voice_routed', 'ui_voice_route_abort']:
+             'ui_voice_error', 'ui_voice_routed', 'ui_voice_route_abort', 'ui_question_close']:
     harness += function(name)
 harness += r'''
 static void reset(void) {
@@ -169,6 +171,13 @@ int main(void) {
     ui_voice_error("Transcription failed"); assert(!s.voice_open && s.view==QUESTION && s.q.speech_error[0]);
     dispatch(question_voice); work(queued); discard(); finish_audio();
     assert(!s.voice_open && s.view==QUESTION && starts==2); // Discard goes back to the question
+    // The question closes while voice is open over it (answered in the terminal): its alert row is gone, so voice
+    // ends as a discard does, the host's capture with it, and the dial goes home; a late result changes nothing.
+    strcpy(s.q.request,"question-request"); dispatch(question_voice); work(queued);
+    ui_question_close("agent","other-request"); assert(s.voice_open && recording); // another question leaves it
+    ui_question_close("agent","question-request");
+    assert(!s.voice_open && s.view==HOME && abort_requested && queued.kind==A_VOICE_ABORT);
+    finish_audio(); ui_voice_error("Transcription failed"); assert(s.view==HOME && !s.q.speech_error[0]);
     reset(); carry.active=true; strcpy(carry.id,"carry-test"); carry.deadline=now+100;
     dispatch((action_t){.kind=A_VOICE,.value=3,.id="agent",.text="wrong"});
     assert(!s.voice_open && !starts);
