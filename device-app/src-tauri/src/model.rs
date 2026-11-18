@@ -2,7 +2,7 @@
 
 use crate::logs::reason;
 use crate::types::{
-    AppState, AppUpdate, CliState, Daemon, DialStatus, LogsExport, MenuAction, MenuItem, NotifyMode, Screen,
+    AppState, AppUpdate, CliState, Daemon, DialStatus, LogsExport, MenuAction, MenuItem, NotifyMode, OrcaState, Screen,
 };
 
 /// The start of the line a saved export leaves in the menu, which the log writes as `Saved`.
@@ -51,6 +51,11 @@ pub fn menu(state: &AppState) -> Vec<MenuItem> {
         Some(true) => items.push(MenuItem::Text("Signed in".into())),
         Some(false) => items.push(MenuItem::Action(MenuAction::SignIn, "Sign in…".into())),
         None => {}
+    }
+    match state.orca {
+        OrcaState::Offer => items.push(MenuItem::Action(MenuAction::Orca, "Connect Orca…".into())),
+        OrcaState::Update => items.push(MenuItem::Action(MenuAction::Orca, "Update Orca connection…".into())),
+        OrcaState::None => {}
     }
     // The check is what the dial reports; the item carries the action its click does.
     match settable(state).and_then(|dial| dial.muted) {
@@ -138,7 +143,7 @@ mod tests {
     use super::*;
     use crate::types::{
         AppState, AppUpdate, CliState, Daemon, DialStatus, ExportFailure, LogsExport, MenuAction, MenuItem, NotifyMode,
-        Saved, Screen,
+        OrcaState, Saved, Screen,
     };
     use MenuItem::{Action, Check, Separator, Submenu, Text};
 
@@ -184,6 +189,7 @@ mod tests {
             app_update: AppUpdate::None,
             cli_version: None,
             logs: LogsExport::Idle,
+            orca: OrcaState::None,
         }
     }
 
@@ -211,7 +217,7 @@ mod tests {
         );
     }
 
-    /// Every CliState × Daemon × dial (none, attached, with Sound and Notifications) × signed_in.
+    /// Every CliState × Daemon × dial (none, attached, with Sound and Notifications) × signed_in × the Orca row.
     fn states() -> Vec<AppState> {
         let dials = [None, Some(dial(true, Some("0.0.95"))), Some(notifying(NotifyMode::Full))];
         let mut states = Vec::new();
@@ -219,7 +225,9 @@ mod tests {
             for daemon in [Daemon::Starting, Daemon::Up, Daemon::Stopped, Daemon::Updating] {
                 for dial in &dials {
                     for signed_in in [Some(true), Some(false), None] {
-                        states.push(AppState { cli, daemon, dial: dial.clone(), signed_in, ..state() });
+                        for orca in [OrcaState::None, OrcaState::Offer, OrcaState::Update] {
+                            states.push(AppState { cli, daemon, dial: dial.clone(), signed_in, orca, ..state() });
+                        }
                     }
                 }
             }
@@ -297,6 +305,31 @@ mod tests {
         assert!(!unknown.contains(&text("Signed in")));
         assert!(!unknown.contains(&act(MenuAction::SignIn, "Sign in…")));
         assert_eq!(unknown[1], Separator);
+    }
+
+    #[test]
+    fn the_orca_row_sits_under_the_account_and_above_sound() {
+        let on = Check(MenuAction::SoundOff, "Sound".into(), true);
+        let rows = [
+            (OrcaState::Offer, act(MenuAction::Orca, "Connect Orca…")),
+            (OrcaState::Update, act(MenuAction::Orca, "Update Orca connection…")),
+        ];
+        for (orca, row) in rows {
+            let with_sound = AppState { orca, dial: Some(sound(Some(false))), ..state() };
+            assert_eq!(menu(&with_sound)[1..4], [text("Signed in"), row.clone(), on.clone()], "{orca:?}");
+            let signed_out = AppState { orca, signed_in: Some(false), ..state() };
+            assert_eq!(menu(&signed_out)[1..4], [act(MenuAction::SignIn, "Sign in…"), row.clone(), Separator]);
+            // With no account row, it is the first under the dial line.
+            assert_eq!(menu(&AppState { orca, signed_in: None, ..state() })[1], row, "{orca:?}");
+        }
+        assert_eq!(
+            menu(&AppState { orca: OrcaState::None, dial: Some(sound(Some(false))), ..state() })[1..3],
+            [text("Signed in"), on]
+        );
+        assert_eq!(
+            menu_log(&menu(&AppState { orca: OrcaState::Offer, ..state() })),
+            "Device ready | Signed in | Connect Orca… | Open Harness | Export logs | About | Quit"
+        );
     }
 
     #[test]

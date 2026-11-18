@@ -1,7 +1,8 @@
 // The dial skill's two files in the daemon's data folder, which outlive the devices' process. dial-skill.json says what
 // `harness device <engine> disable` and `harness device vscode disable` removed, the skills folders the command wrote
-// into, and the Orca homes its `enable` turned Claude Code's plugin on in (`pluginHomes`); its one writer is that
-// command, and the devices service leaves what it removed alone. dial-setup.json is the devices service's own record of
+// into, the Orca homes its `enable` turned Claude Code's plugin on in (`pluginHomes`), and that a connect of Orca's own
+// plugin once succeeded (`orcaConnected`); its one writer is that command, and the devices service leaves what it
+// removed alone. dial-setup.json is the devices service's own record of
 // a dial's setup: a dial attached here once, the CLI versions that last set Claude Code's plugin and Harness's VS Code
 // extension up, the skills folders it wrote into, and the Orca homes it turned the plugin on in (`pluginHomes`); its
 // one writer is that service. A `disable` finds every folder in both. Each file keeps its own list of Orca homes, so
@@ -158,7 +159,7 @@ export function readPluginHomes(dataDir: string): Read<{ homes: string[] }> {
   return orUnread(() => ({ homes: homesOf(settingOf(dataDir).pluginHomes) }), { homes: [] })
 }
 
-interface DialSetting { removed: DialRemoved; homes: DialSkillHomes; pluginHomes: string[] }
+interface DialSetting { removed: DialRemoved; homes: DialSkillHomes; pluginHomes: string[]; orcaConnected: boolean }
 
 /**
  * dial-skill.json read right before the write and [change]d, so what the change leaves stays; one that cannot be read is
@@ -172,13 +173,14 @@ const rewriteSetting = (dataDir: string, change: (setting: DialSetting) => void)
   } catch (error) {
     return codeOf(error)
   }
-  const setting = { removed: removedOf(file), homes: writtenOf(file), pluginHomes: homesOf(file.pluginHomes) }
+  const setting = { removed: removedOf(file), homes: writtenOf(file), pluginHomes: homesOf(file.pluginHomes), orcaConnected: file.orcaConnected === true }
   change(setting)
-  const { removed, homes, pluginHomes } = setting
+  const { removed, homes, pluginHomes, orcaConnected } = setting
   return writeJson(join(dataDir, DIAL_SKILL_FILE), {
     ...(removed.claude || removed.codex || removed.vscode ? { removed } : {}),
     ...(homes.claude.length || homes.codex.length ? { homes } : {}),
     ...(pluginHomes.length ? { pluginHomes } : {}),
+    ...(orcaConnected ? { orcaConnected } : {}),
   })
 }
 
@@ -197,6 +199,19 @@ export function writeRemoved(dataDir: string, what: keyof DialRemoved, removed: 
 export function writePluginHomes(dataDir: string, homes: string[]): string | undefined {
   return rewriteSetting(dataDir, (setting) => {
     setting.pluginHomes = homesOf(homes)
+  })
+}
+
+/** Whether a connect of Orca's plugin once succeeded: Harness then offers it no more. Only true counts. */
+export function readOrcaConnected(dataDir: string): Read<{ connected: boolean }> {
+  return orUnread(() => ({ connected: settingOf(dataDir).orcaConnected === true }), { connected: false })
+}
+
+/** undefined once saved, else the error's code. Nothing clears it: a person who removed the plugin in Orca is not
+ *  offered it again. */
+export function writeOrcaConnected(dataDir: string): string | undefined {
+  return rewriteSetting(dataDir, (setting) => {
+    setting.orcaConnected = true
   })
 }
 

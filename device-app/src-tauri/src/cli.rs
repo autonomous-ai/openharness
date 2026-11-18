@@ -570,8 +570,15 @@ fn read_lines(stream: impl Read, mut send: impl FnMut(String) -> bool) {
     }
 }
 
+/// The run's name in the log: its arguments but the one after `--approve`, Orca's fingerprint, which a log never holds.
 fn name(args: &[&str]) -> String {
-    format!("harness {}", args.join(" "))
+    let shown: Vec<&str> = std::iter::once("")
+        .chain(args.iter().copied())
+        .zip(args)
+        .filter(|(before, _)| *before != "--approve")
+        .map(|(_, arg)| *arg)
+        .collect();
+    format!("harness {}", shown.join(" "))
 }
 
 /// The log line for a child that ended: its code and, after a failure, stderr's last line. Never stdout, which may
@@ -588,8 +595,9 @@ fn ended(name: &str, code: Option<i32>, stderr: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::orca_cli;
     use crate::testing::{Fake, wait_gone};
-    use crate::types::MemoryLog;
+    use crate::types::{Fingerprint, MemoryLog};
     use std::cell::Cell;
     use std::env;
     use std::fs;
@@ -992,6 +1000,36 @@ mod tests {
         let mut child = fake.cli().spawn(&WATCH).unwrap();
         assert_eq!(child.exit(WAIT), Ok(Some(3)));
         assert_eq!(fake.log().lines(), ["harness hardware watch --json: exit 3: gone"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_log_names_a_run_without_its_fingerprint() {
+        let fingerprint = Fingerprint::parse("ap1-0123456789abcdef0123456789abcdef").unwrap();
+        let grant = "Read your projects and workspaces.";
+        let approve = serde_json::json!({
+            "connect": "approve",
+            "name": "Harness Device",
+            "version": "0.6.70",
+            "fingerprint": fingerprint.as_str(),
+            "grants": [grant],
+            "update": false,
+        })
+        .to_string();
+        let fake = Fake::new();
+        fake.script("device orca connect --json", &[&approve]);
+        fake.script(
+            &format!("device orca connect --approve {} --json", fingerprint.as_str()),
+            &[r#"{"connect":"done"}"#],
+        );
+        orca_cli::connect(&fake.cli(), None);
+        orca_cli::connect(&fake.cli(), Some(&fingerprint));
+        let lines = fake.log().lines();
+        assert_eq!(
+            lines,
+            ["harness device orca connect --json: exit 0", "harness device orca connect --approve --json: exit 0"]
+        );
+        assert!(lines.iter().all(|line| !line.contains(fingerprint.as_str()) && !line.contains(grant)), "{lines:?}");
     }
 
     #[cfg(unix)]

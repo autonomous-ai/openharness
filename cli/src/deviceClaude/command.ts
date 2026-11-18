@@ -16,24 +16,30 @@
  * the devices service installs by itself once a dial has attached here (cable/vscodeExtensionSetup.ts): `disable` marks
  * it removed in dial-skill.json, which the service then leaves alone, before VS Code's own uninstall, and `enable` clears
  * the mark before its install (devices/vscodeExtension.ts); `status` is support's. `harness device notify` is an agent's,
- * from the dial skill (devices/notice.ts). This runs only in the `harness` command's own process; nothing the core or a
- * service loads imports this folder.
+ * from the dial skill (devices/notice.ts). `harness device orca status|connect` are the Harness app's, never typed: what
+ * Orca's plugin is in Orca, and its install, update or enable, from a folder in the home's .harness that holds what cli.js
+ * carries (devices/orcaPlugin.ts); a `connect` Orca answered with success is recorded in dial-skill.json, and Harness
+ * offers the plugin no more. This runs only in the `harness` command's own process; nothing the core or a service loads
+ * imports this folder.
  */
 import { mkdirSync, realpathSync } from 'node:fs'
 import { connect, type Socket } from 'node:net'
 import { dirname, join } from 'node:path'
+import { harnessPath } from '../config/harnessHome.js'
 import { claudeDisable, claudeEnable, claudeHomeDisable, claudeHomeEnable, claudeStatus, type ClaudeResult, type ClaudeRun } from '../devices/claudePlugin.js'
 import { claudePluginState, ownDirectory, removeSkill, skillsFolderOf, skillWanted, writeSkill } from '../devices/dialSkill.js'
-import { listable, MAX_HOMES, readRemoved, readSetup, readWritten, writePluginHomes, writeRemoved, type DialEngine } from '../devices/dialSkillFiles.js'
+import { listable, MAX_HOMES, readRemoved, readSetup, readWritten, writeOrcaConnected, writePluginHomes, writeRemoved, type DialEngine } from '../devices/dialSkillFiles.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
 import { NOTICE_USAGE, runNotice } from '../devices/notice.js'
+import { ORCA_FINGERPRINT, orcaConnect, type OrcaPluginDeps, type OrcaPluginRun, orcaStatus } from '../devices/orcaPlugin.js'
 import { vscodeDisable, vscodeEnable, vscodeStatus, type VscodeExtensionDeps } from '../devices/vscodeExtension.js'
 import { localSocketRoute, socketIsPrivate } from '../lib/localTransport.js'
 import { daemonPost, runAsked } from './asked.js'
 import { claudePluginOn, claudeSettingsPath } from './plugin.js'
 
 /** `asked`, `link`, `orca link` and `vscode link` are left out: they are the plugins', and typed by hand they only wait on
- *  stdin or print a path. `vscode status` is too: VS Code's Extensions view shows whether the extension is on. */
+ *  stdin or print a path. `vscode status` is too: VS Code's Extensions view shows whether the extension is on. So are
+ *  `orca status` and `orca connect`: the Harness app's, whose window shows what Orca lists before a person connects. */
 export const DEVICE_USAGE = `Harness device (with a dial plugged in, Claude Code and Codex are set up to ring it, and VS Code to follow it; disable takes that away, enable brings it back):
   harness device claude status [--json]  whether the dial is on for Claude Code (its harness-device plugin on, and not removed), and its version
   harness device claude enable           set Claude Code up again: the plugin and the dial skill (Claude Code 2.1.287 or later), in each Orca account too
@@ -47,6 +53,8 @@ export const DEVICE_USAGE = `Harness device (with a dial plugged in, Claude Code
 
 export interface DeviceDeps {
   dataDir: string
+  /** The account's home, whose .harness holds the Orca plugin's folder. */
+  home: string
   port: number
   platform: NodeJS.Platform
   stdin: AsyncIterable<Buffer | string>
@@ -65,6 +73,8 @@ export interface DeviceDeps {
   codex(): boolean
   /** What VS Code's words read and run: asked for only by `vscode status`, `enable` and `disable`. */
   vscode(): VscodeExtensionDeps
+  /** Orca's CLI and the plugin's files cli.js carries: asked for only by `orca status` and `orca connect`. */
+  orca(): OrcaPluginRun
   /** The command's own environment and folder: `notify` reads its caller from them. */
   env: NodeJS.ProcessEnv
   cwd: string
@@ -75,6 +85,8 @@ export interface DeviceDeps {
 export async function runDeviceCommand(argv: string[], deps: DeviceDeps): Promise<number> {
   // Before the words that start with `-` are dropped: they are part of the agent's line.
   if (argv[0] === 'notify') return runNotice(argv.slice(1), deps)
+  // `--approve` takes the word after it, whatever that word starts with.
+  if (argv[0] === 'orca' && (argv[1] === 'status' || argv[1] === 'connect')) return orcaCommand(argv[1], argv.slice(2), deps)
   const words = argv.filter((arg) => !arg.startsWith('-'))
   const json = argv.includes('--json')
   if (words.length === 2 && (words[0] === 'orca' || words[0] === 'vscode') && words[1] === 'link') return devicesLink(deps)
@@ -194,6 +206,38 @@ async function vscodeCommand(verb: string, json: boolean, deps: DeviceDeps): Pro
       deps.err(DEVICE_USAGE)
       return 1
   }
+}
+
+/**
+ * The Harness app's two words for Orca's plugin. Its folder is the data folder's, beside dial-skill.json: Orca installs
+ * from it and copies it again at each update, so it stays put. `--approve` is the one argument that carries consent, the
+ * fingerprint of the access a person was shown: one off its pattern, a second, or any other argument is `failed` before
+ * Orca is looked for. The record is written after Orca's success, as VS Code's mark is; one not saved is said on stderr,
+ * and the line stays `done`, since Orca did connect.
+ */
+async function orcaCommand(verb: 'status' | 'connect', args: string[], deps: DeviceDeps): Promise<number> {
+  const plugin = (): OrcaPluginDeps => ({ ...deps.orca(), folder: harnessPath('orca-plugin', deps.home), dataDir: deps.dataDir, err: deps.err })
+  if (verb === 'status') {
+    if (args.some((arg) => arg !== '--json')) {
+      deps.err(DEVICE_USAGE)
+      return 1
+    }
+    const status = await orcaStatus(plugin())
+    deps.out(args.includes('--json') ? JSON.stringify(status) : JSON.stringify(status, null, 2))
+    return 0
+  }
+  const at = args.indexOf('--approve')
+  const approve = at === -1 ? undefined : args[at + 1] ?? ''
+  const rest = at === -1 ? args : [...args.slice(0, at), ...args.slice(at + 2)]
+  if ((approve !== undefined && !ORCA_FINGERPRINT.test(approve)) || rest.some((arg) => arg !== '--json')) {
+    deps.out(JSON.stringify({ connect: 'failed', error: 'failed' }))
+    return 1
+  }
+  const result = await orcaConnect(plugin(), approve)
+  const saved = result.connect !== 'done' || writeOrcaConnected(deps.dataDir) === undefined
+  deps.out(JSON.stringify(result))
+  if (!saved) deps.err(SAVE_FAILED)
+  return result.connect === 'failed' ? 1 : 0
 }
 
 const ENGINE_NAMES: Record<DialEngine, string> = { claude: 'Claude Code', codex: 'Codex' }

@@ -76,6 +76,7 @@ import { DEVICE_USAGE, runDeviceCommand } from './deviceClaude/command.js'
 import { vscodeExtensionDeps } from './devices/vscodeExtension.js'
 import { claudeRun, claudeRunIn } from './devices/claudePlugin.js'
 import { orcaHomesDeps, readOrcaHomes } from './devices/orcaHomes.js'
+import { orcaPluginRun } from './devices/orcaPlugin.js'
 import { remoteCommand } from './remoteCommand.js'
 import { tuiCommand } from './tui/index.js'
 import { machineChoices, newCommand, type MachineRow, type NewMachine } from './lib/newCommand.js'
@@ -3093,6 +3094,7 @@ switch (cmd) {
   case 'device':
     runDeviceCommand(rest, {
       dataDir: env.ADAPTER_DATA_DIR,
+      home: homedir(),
       port: daemonPort(),
       platform: process.platform,
       stdin: process.stdin,
@@ -3103,6 +3105,7 @@ switch (cmd) {
       codexHome: env.CODEX_HOME,
       codex: () => installedEngineBin('codex') !== null,
       vscode: vscodeExtensionDeps,
+      orca: orcaPluginRun,
       env: process.env,
       cwd: process.cwd(),
       out: (line) => console.log(line),

@@ -736,13 +736,13 @@ Off (Settings ▸ Experimental ▸ Hachi), none of them is drawn and ⇧⌘H is 
 Harness Device is the menu-bar app for the dial (`device-app/`), named
 **Harness** wherever a person sees it; only its file stays
 `Harness Device.app`. It sets up
-Harness, keeps it running and shows the dial's state; sign-in is the one
-thing it offers. Claude Code and Codex need no setting: Harness sets them up
-once a dial is plugged in. The desktop app offers and installs it
+Harness, keeps it running and shows the dial's state; sign-in and Orca's
+connection are the two things it offers. Claude Code and Codex need no
+setting: Harness sets them up once a dial is plugged in. The desktop app offers and installs it
 ([Surface families](#surface-families), Menu-bar app offer).
 
 Its menu is the native menu; a row with nothing to say is absent. Its window
-has two screens, Install and Sign in,
+has three screens, Install, Sign in and Orca,
 at 420 × 320, in plain HTML and CSS (`device-app/ui/src/styles.css`)
 with this document's tokens and type. Hover and press fills are precomputed per
 theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
@@ -778,6 +778,22 @@ theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
   the one in force checked. Notifications is the first.
 - A menu action that asks for more before it is done ends in `…`; one that acts at
   once has none.
+- Orca has two rows, one or neither, under the sign-in row and above Sound:
+  `Connect Orca…` while Orca runs without Harness's plugin, and
+  `Update Orca connection…` when Orca asks again to approve Harness's plugin.
+  Each opens the Orca screen. `Cancel` keeps the row.
+- The Orca screen's heading is `Update Orca connection` for an update, else
+  `Connect Orca`: the row clicked says which until Orca lists the access, then
+  Orca's answer does, to the end. Asking: the spinner and `Asking Orca…`, muted,
+  under it, with no button. Approve: `Orca will let Harness Device:` and Orca's own
+  lines, in its words, in a bulleted list that scrolls when it does not fit,
+  its scrollbar drawn at all times (`--muted` on `--control`, 6 wide), then
+  `Cancel` and `Connect` (`Update` for an update). The list is the first Tab
+  stop, so the arrow keys scroll it before Tab reaches a button; it shows the
+  focus boundary as a button does. Done: `Orca connected.`
+  and `Done`. Failed: `Orca isn't running.` or `Couldn't connect Orca.` in error
+  ink, and `Close`. No button has the focus: a Return typed in another app's
+  habit must approve nothing.
 - The dial line names no firmware version: it reads `Updating device…`
   while the firmware updates. **About** opens macOS's standard About panel,
   brought to the front, with the app's name and version and one credits line,
@@ -793,6 +809,7 @@ The menu, top to bottom:
 ```text
   Device ready
   Signed in
+  Connect Orca…
 ✓ Sound
   Notifications ▸
 ──────────
@@ -804,8 +821,8 @@ The menu, top to bottom:
 ```
 
 The [gallery](../../device-app/ui/gallery.html) shows every screen in every
-state, light and dark, the primary button focused, and the menu-bar icon on
-both bars. Build it with
+state, light and dark, the primary button focused except on the Orca screen,
+and the menu-bar icon on both bars. Build it with
 `npm run gallery` in `device-app/ui`, then open the file. A change to a screen
 changes the gallery and this section in the same pull request.
 
