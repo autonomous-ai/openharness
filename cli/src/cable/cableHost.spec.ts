@@ -95,7 +95,7 @@ describe('notification read receipts', () => {
   })
 
   // The dial's drawer is replaced whole by what is unread: the questions only the devices ask (a notice, a wait) are rows
-  // of it too, and the dial keeps one row an agent.
+  // of it too, and a drawer carries one row an agent.
   it('the rows the devices ask lead what the window has unread, one row an agent', () => {
     const notice = { agentId: 'o1', machineId: 'mine', question: true, text: 'Connect the VPN' }
     const host = new DaemonCableHost(wiring({ noticeRows: () => [notice] }))

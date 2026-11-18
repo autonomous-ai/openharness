@@ -374,10 +374,12 @@ static bool notice_was_read(const cable_notif_t *n)
     }
     return false;
 }
-static void notice_forget_read(const char *id)
+// That agent's news receipt, and its question's too when `questions_too`: news leaves the question row beside it.
+static void notice_forget_read(const char *id, bool questions_too)
 {
     for (int i = 0; i < NOTICES; i++)
-        if (!strcmp(s.notice_reads[i].id, id)) s.notice_reads[i].id[0] = 0;
+        if (!strcmp(s.notice_reads[i].id, id) && (questions_too || !s.notice_reads[i].question))
+            s.notice_reads[i].id[0] = 0;
 }
 static void notice_flush_reads(uint32_t now)
 {
@@ -396,8 +398,9 @@ static void notice_mark_read(cable_notif_t *n)
 {
     if (n->read_on_dial) return;
     int slot = -1;
+    // An agent's question and its news are two rows, each with its own receipt.
     for (int i = 0; i < NOTICES; i++)
-        if (!strcmp(s.notice_reads[i].id, n->agent_id)) { slot = i; break; }
+        if (!strcmp(s.notice_reads[i].id, n->agent_id) && s.notice_reads[i].question == n->question) { slot = i; break; }
     if (slot < 0) for (int i = 0; i < NOTICES; i++)
         if (!s.notice_reads[i].id[0]) { slot = i; break; }
     if (slot < 0) { slot = s.notice_read_next; s.notice_read_next = (slot + 1) % NOTICES; }
@@ -3829,16 +3832,23 @@ void ui_notif_open(void)
     notice_open();
     display_unlock();
 }
+static void notice_drop(int i)
+{
+    memmove(&s.notice[i], &s.notice[i + 1], (size_t)(s.notice_count - i - 1) * sizeof(cable_notif_t));
+    s.notice_count--;
+    if (s.view == INBOX && i < s.offset) s.offset--;
+}
 static void notice_remove(const char *id, bool questions_too)
 {
     if (!id) return;
     for (int i = s.notice_count - 1; i >= 0; i--)
-        if (!strcmp(s.notice[i].agent_id, id) && (questions_too || !s.notice[i].question)) {
-            memmove(&s.notice[i], &s.notice[i + 1],
-                    (size_t)(s.notice_count - i - 1) * sizeof(cable_notif_t));
-            s.notice_count--;
-            if (s.view == INBOX && i < s.offset) s.offset--;
-        }
+        if (!strcmp(s.notice[i].agent_id, id) && (questions_too || !s.notice[i].question)) notice_drop(i);
+}
+// An answered or closed question goes alone: the news beside it stays.
+static void notice_remove_question(const char *id)
+{
+    for (int i = s.notice_count - 1; i >= 0; i--)
+        if (s.notice[i].question && !strcmp(s.notice[i].agent_id, id)) notice_drop(i);
 }
 static void notice_sync_view(void)
 {
@@ -3849,28 +3859,40 @@ static void notice_sync_view(void)
     if (!s.notice_count) view(HOME);
     else if (s.offset >= s.notice_count) s.offset = s.notice_count - 1;
 }
-static void notice_selection(char *id, size_t capacity)
+// The card being read is named by its agent and its kind: an agent's question and its news are two rows. Returns
+// whether it is the question.
+static bool notice_selection(char *id, size_t capacity)
 {
-    copy(id, capacity, s.view == INBOX && s.offset >= 0 && s.offset < s.notice_count
-        ? s.notice[s.offset].agent_id : "");
+    bool reading = s.view == INBOX && s.offset >= 0 && s.offset < s.notice_count;
+    copy(id, capacity, reading ? s.notice[s.offset].agent_id : "");
+    return reading && s.notice[s.offset].question;
 }
-static void notice_restore_selection(const char *id)
+static void notice_restore_selection(const char *id, bool question)
 {
     if (s.view != INBOX || !id[0]) return;
-    for (int i = 0; i < s.notice_count; i++)
-        if (!strcmp(id, s.notice[i].agent_id)) { s.offset = i; return; }
+    // The same row if it is still there, else that agent's other one.
+    int at = -1;
+    for (int i = 0; i < s.notice_count; i++) {
+        if (strcmp(id, s.notice[i].agent_id)) continue;
+        if (at < 0) at = i;
+        if (s.notice[i].question == question) { at = i; break; }
+    }
+    if (at >= 0) s.offset = at;
 }
-static void notice_add(const char *id, const char *name, const char *machine, const char *recap,
-                       bool question, bool failed)
+// The row added, or NULL when the id is refused.
+static cable_notif_t *notice_add(const char *id, const char *name, const char *machine, const char *recap,
+                                 bool question, bool failed)
 {
-    if (!id || !*id || strnlen(id, ID_MAX) >= ID_MAX) return;
-    char selected[ID_MAX]; notice_selection(selected, sizeof selected);
-    notice_remove(id, true);
+    if (!id || !*id || strnlen(id, ID_MAX) >= ID_MAX) return NULL;
+    char selected[ID_MAX]; bool selected_question = notice_selection(selected, sizeof selected);
+    // News replaces that agent's news and leaves its open question beside it: a turn's summary or failure arriving
+    // while it waits took the question off the dial (2026-11-18). A question replaces both, as it is the newer state.
+    notice_remove(id, question);
     if (s.notice_count == NOTICES) {
         // Keep a message being read even when the bounded inbox fills. The
         // oldest other message gives way; arrival never moves the current card.
         int drop = s.notice_count - 1;
-        if (!strcmp(selected, s.notice[drop].agent_id)) drop--;
+        if (!strcmp(selected, s.notice[drop].agent_id) && s.notice[drop].question == selected_question) drop--;
         memmove(&s.notice[drop], &s.notice[drop + 1],
                 (size_t)(s.notice_count - drop - 1) * sizeof(cable_notif_t));
         s.notice_count--;
@@ -3894,8 +3916,9 @@ static void notice_add(const char *id, const char *name, const char *machine, co
     if (!++s.notice_revision) ++s.notice_revision;
     n->display_revision = s.notice_revision;
     n->received_ms = ms();
-    notice_restore_selection(selected);
+    notice_restore_selection(selected, selected_question);
     notice_sync_view();
+    return n;
 }
 // Rows are news, and news goes stale: a drawer row left alone for 6 h goes away. A question stays until
 // it is answered. The signed difference keeps the 49-day ms() wrap harmless.
@@ -3932,7 +3955,7 @@ bool ui_notify_summary(const char *id, const char *name, const char *machine, co
     if (!level) return false;
     display_lock();
     bool face = on_face(id);
-    notice_forget_read(id); // A fresh completion is new even if its words repeat.
+    notice_forget_read(id, false); // A fresh completion is new even if its words repeat.
     notice_add(id, name, machine, recap, false, false);
     if (face) notice_read_now(id);
     s.notice_sequence++;
@@ -3955,7 +3978,7 @@ bool ui_turn_error(const char *id, const char *message)
     display_lock();
     bool face = on_face(id);
     int known = find(id);
-    notice_forget_read(id);
+    notice_forget_read(id, false);
     notice_add(id, known >= 0 ? s.agents[known].name : NULL, NULL, message, false, true);
     if (face) notice_read_now(id);
     s.notice_sequence++;
@@ -3999,7 +4022,8 @@ void ui_notif_read(const char *id, const char *token)
         n->read_on_dial = true;
         opened = !strcmp(s.opening_notice, id);
         if (s.view != INBOX || i != s.offset || opened) {
-            notice_remove(id, true); notice_sync_view();
+            // A read row goes alone: an agent's news and its open question are two rows.
+            notice_drop(i); notice_sync_view();
         }
         change(); break;
     }
@@ -4009,7 +4033,7 @@ void ui_notif_read(const char *id, const char *token)
 void ui_notif_replace(const cable_notif_t *rows, int count)
 {
     display_lock();
-    char selected[ID_MAX]; notice_selection(selected, sizeof selected);
+    char selected[ID_MAX]; bool selected_question = notice_selection(selected, sizeof selected);
     cable_notif_t held = {0};
     if (selected[0] && s.notice[s.offset].read_on_dial && s.notice[s.offset].read_token[0])
         held = s.notice[s.offset];
@@ -4017,12 +4041,12 @@ void ui_notif_replace(const cable_notif_t *rows, int count)
     if (count > NOTICES) count = NOTICES;
     s.notice_count = 0;
     for (int i = count - 1; i >= 0; i--) {
-        notice_add(rows[i].agent_id, rows[i].name, rows[i].machine, rows[i].summary,
-                   rows[i].question, rows[i].failed);
-        for (int j = 0; j < s.notice_count; j++) if (!strcmp(s.notice[j].agent_id, rows[i].agent_id)) {
-            COPY(s.notice[j].read_token, rows[i].read_token);
-            s.notice[j].read_on_dial = notice_was_read(&s.notice[j]);
-            break;
+        // The token goes on the row just added: the first row of that agent can be its question.
+        cable_notif_t *n = notice_add(rows[i].agent_id, rows[i].name, rows[i].machine, rows[i].summary,
+                                      rows[i].question, rows[i].failed);
+        if (n) {
+            COPY(n->read_token, rows[i].read_token);
+            n->read_on_dial = notice_was_read(n);
         }
     }
     // An authoritative absence acknowledges the read. It must not make the
@@ -4035,11 +4059,12 @@ void ui_notif_replace(const cable_notif_t *rows, int count)
         if (!present) s.notice_reads[i].pending = false;
     }
     bool retained = false;
-    for (int i = 0; i < s.notice_count; i++) if (!strcmp(s.notice[i].agent_id, selected)) retained = true;
+    for (int i = 0; i < s.notice_count; i++)
+        if (!strcmp(s.notice[i].agent_id, selected) && s.notice[i].question == selected_question) retained = true;
     if (held.agent_id[0] && !retained && s.notice_count < NOTICES) {
         s.notice[s.notice_count++] = held;
     }
-    notice_restore_selection(selected);
+    notice_restore_selection(selected, selected_question);
     notice_sync_view();
     change();
     display_unlock();
@@ -4082,7 +4107,7 @@ bool ui_question_show(const char *id, const char *name, const char *machine, con
     bool face = on_face(id);
     const cJSON *first=cJSON_GetArrayItem(questions,0);
     const cJSON *prompt=cJSON_GetObjectItemCaseSensitive(first,"q");
-    notice_forget_read(id);
+    notice_forget_read(id, true);
     notice_add(id,name,machine,cJSON_IsString(prompt) ? prompt->valuestring : "Needs your answer",true,false);
     if (face) notice_read_now(id);   // already on the glass: shown in place, read at once
     s.notice_sequence++;
@@ -4137,7 +4162,7 @@ void ui_answer_receipt(const cJSON *p)
         !strcmp(s.q.token,token->valuestring)) {
         if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p,"ok"))) {
             if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p,"pending"))) { display_unlock(); return; }
-            s.q.valid=s.q.pending=false; s.q.revision++; notice_remove(s.q.agent,true);
+            s.q.valid=s.q.pending=false; s.q.revision++; notice_remove_question(s.q.agent);
             if (question_view(s.view)) view(HOME);
             notice_sync_view();
         } else {
@@ -4155,8 +4180,8 @@ void ui_question_close(const char *id, const char *request)
     if (!strcmp(s.q.agent,id) && !strcmp(s.q.request,request)) {
         s.q.valid=s.q.pending=s.q.loading=false; s.q.revision++;
         if (question_view(s.view)) view(HOME);
-        notice_remove(id,true);
-    } else if (strcmp(s.q.agent,id)) notice_remove(id,true);
+        notice_remove_question(id);
+    } else if (strcmp(s.q.agent,id)) notice_remove_question(id);
     notice_sync_view();
     change(); display_unlock();
 }

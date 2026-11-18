@@ -170,6 +170,8 @@ export interface ActivitySnapshot {
 
 /** The device keeps 192 B of the agent's latest sentence (cable.md); a longer one is cut on a character boundary. */
 const ACTION_MAX_BYTES = 188
+/** A drawer row's words on the device (cable_notif_t summary, 240 B with its end): eight rows stay one frame. */
+const NOTICE_SUMMARY_MAX = 239
 
 /** What the Pro's firmware holds of a swarms frame: 24 tabs, 24 ids each, and 512 JSON tokens (480 here). */
 const SWARMS_MAX = 24
@@ -197,6 +199,27 @@ function clipUtf8(text: string, max: number): string {
   if (Buffer.byteLength(flat, 'utf8') <= max) return flat
   const decoded = new TextDecoder('utf-8').decode(Buffer.from(flat, 'utf8').subarray(0, max - 3))
   return `${decoded.replace(/\uFFFD+$/, '')}\u2026`
+}
+
+/**
+ * A drawer row's words as the dial keeps them (firmware recap_preview): whitespace folded to one space, cut on a whole
+ * character at 239 bytes, no ellipsis. The dial matches a read row by its words, so a question asked whole and then
+ * carried in a drawer stays read; and a window's question text, a plan of kilobytes, made the drawer frame too big to
+ * send, every question it carried with it (2026-11-18).
+ */
+function noticeSummary(text: string): string {
+  let out = ''
+  let bytes = 0
+  let space = false
+  for (const ch of text) {
+    if (ch === ' ' || (ch >= '\t' && ch <= '\r')) { space = bytes > 0; continue }
+    const size = Buffer.byteLength(ch, 'utf8') + (space ? 1 : 0)
+    if (bytes + size > NOTICE_SUMMARY_MAX) break
+    out += space ? ` ${ch}` : ch
+    bytes += size
+    space = false
+  }
+  return out
 }
 
 export interface CableAgent {
@@ -1384,8 +1407,9 @@ export class CableSession {
           // BEFORE the state push, not after: the push reads the selected machine, and for a remote one
           // that means an RPC over a lane this is what re-opens.
           // The host asks again, as the dial arrives, what it should hold (a pending notice, a wait, an open
-          // question): those wait for the push below.
+          // question): those wait for the push below. Its RAM held every question it was asked, and they went with it.
           this.greeting = true
+          this.questionInbox.forget()
           try {
             this.host.onDialAttached?.()
             // Both halves of the test above mean the same thing to this line: a dial with nothing on its
@@ -1393,7 +1417,8 @@ export class CableSession {
             // which is the whole reason the branch exists.
             await this.pushAgents()
           } finally {
-            // Still greeting: the push failed before its walk of the open questions, so the ones it held are asked now.
+            // The push's drawer left its questions to here, after it; or the push failed before the drawer, and every
+            // open question is asked now.
             if (this.greeting) await this.resendQuestions()
           }
           const focused = this.host.appFocus?.(this.asItself)
@@ -2808,15 +2833,14 @@ export class CableSession {
     }
     await this.pushRestores()
     // …and the drawer, which is the one thing a dial that has just greeted us is KNOWN to have lost:
-    // its rows live in RAM. Last, because it names agents the pushes above put on the carousel.
+    // its rows live in RAM. Last, because it names agents the pushes above put on the carousel. Its questions with it:
+    // see replaceNotifications.
     await this.replaceNotifications(this.host.listUnread())
-    // A question is a drawer row on the dial, and the drawer replaces them all: the ones still open come after it.
-    await this.resendQuestions()
   }
 
-  /** Every question still open, asked again of a dial that lost it: each once, here or by an ask that overtakes this walk. */
+  /** Every question still open that the dial does not hold, asked of it: each once, here or by an ask that overtakes
+   *  this walk. */
   private async resendQuestions(): Promise<void> {
-    this.questionInbox.forget()
     this.greeting = false
     for (const { agentId, id, questions } of this.questionInbox.open()) {
       if (this.owed(agentId, id) && this.questionInbox.ask(agentId, id)) {
@@ -2833,8 +2857,9 @@ export class CableSession {
 
   /**
    * A Pro saw a hole in `seq` (or a frame that failed its CRC): resend what a lost frame could have carried. The attach
-   * push minus the history replay, plus the open questions — a replayed `summary` is heavy, and a second burst on a link
-   * that just dropped bytes is what the rate limit (once per 2 s, here and on the device) is there to avoid.
+   * push minus the history replay, its drawer carrying the open questions — a replayed `summary` is heavy, and a second
+   * burst on a link that just dropped bytes is what the rate limit (once per 2 s, here and on the device) is there to
+   * avoid.
    */
   private async resync(): Promise<void> {
     const now = Date.now()
@@ -2844,7 +2869,6 @@ export class CableSession {
     await this.syncSwarms(true)
     await this.syncAgents(true)
     await this.replaceNotifications(this.host.listUnread())
-    await this.resendQuestions()
   }
 
   // ── swarms ────────────────────────────────────────────────────────────────────────────────────────
@@ -3245,7 +3269,7 @@ export class CableSession {
           summary = summary ? extendShortRecap(summary, saved?.text ?? '') : saved?.recap ?? ''
         } catch { /* keep the supplied text if history cannot be read */ }
       }
-      return { agentId: item.agentId, name: who.name, machine: who.machine, summary, question: item.question,
+      return { agentId: item.agentId, name: who.name, machine: who.machine, summary: noticeSummary(summary), question: item.question,
         ...(notificationReadToken(item.readToken) ? { readToken: item.readToken } : {}) }
     }))
     if (this.notificationReplay !== replay) return
@@ -3253,12 +3277,30 @@ export class CableSession {
     if (this.link !== link || this.stopped) return
     // Reading clears the notice, not the underlying question. Versioned clears
     // cannot eat a newer turn whose history happened to take longer to load.
-    const drawer = rows.filter(row =>
+    const listed = rows.filter(row =>
       (row.question || !replay.seen.has(row.agentId)) && !replay.seen.has(`${row.agentId}\0${row.readToken}`))
-    // The dial keeps a question as a row of this drawer: one the new drawer does not carry is gone from it, and its next
-    // ask (the core's, as the devices reconnect) is sent. Before the frame, so an ask that overtakes it stays marked.
+    // The dial keeps a question as a row of this drawer, and the drawer replaces them all. A live dial was asked its
+    // questions already: one the window's list leaves out (its mark turned into news, the person looked, the eight-row
+    // cap) goes back on it as a row, first, in place of that agent's news (2026-11-18). An ask would beep and wake it
+    // at every change of that list. A greeting dial lost them with its RAM, and its push asks them after this drawer.
+    const carried = new Set(listed.filter((row) => row.question).map((row) => row.agentId))
+    const open = this.greeting ? [] : this.owedQuestions().filter(({ agentId }) => !carried.has(agentId))
+    const back = new Set(open.map(({ agentId }) => agentId))
+    const rest = listed.filter((row) => !back.has(row.agentId))
+    // Questions before news within the eight: a question cut for a news row was asked again, a beep, at every change.
+    const drawer = [
+      ...open.map(({ agentId, questions }) => {
+        const who = this.whoIs(agentId)
+        return { agentId, name: who.name, machine: who.machine, summary: noticeSummary(questions[0].q), question: true }
+      }),
+      ...rest.filter((row) => row.question),
+      ...rest.filter((row) => !row.question),
+    ].slice(0, 8)
+    // Before the frame, so an ask that overtakes it stays marked.
     this.questionInbox.forget(new Set(drawer.filter((row) => row.question).map((row) => row.agentId)))
     await this.send({ t: 'notif.replace', items: drawer })
+    // One the eight rows could not hold is asked now. A greeting asks them as its push ends.
+    if (!this.greeting) await this.resendQuestions()
   }
 
   /**

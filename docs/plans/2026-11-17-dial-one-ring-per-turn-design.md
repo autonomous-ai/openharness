@@ -13,11 +13,12 @@ ring takes the notice's place:
 
 (This computer's daemon log, 2026-11-17, one test notice from a Claude Code session in Orca, Notifications: All.)
 
-The second ring is worse than noise: the dial keeps one drawer row per agent (firmware `notice_add` removes that
-agent's rows, its question row too, before adding the new one), so the turn's recap replaces the notice's line. The
-person hears two beeps and finds "Done: …" where "Connect the VPN so I can run the staging tests" was.
+The second ring is worse than noise: the dial kept one drawer row per agent (firmware `notice_add` removed that
+agent's rows, its question row too, before adding the new one), so the turn's recap replaced the notice's line. The
+person hears two beeps and finds "Done: …" where "Connect the VPN so I can run the staging tests" was. Since
+2026-11-18 news lands beside the agent's question row, and only a question replaces it.
 
-In Needs you the turn's end is already lowered to `list`, so it does not beep, but it still replaces the notice's row
+In Needs you the turn's end is already lowered to `list`, so it does not beep, but it still replaced the notice's row
 the same way.
 
 ## What the person gets
@@ -109,11 +110,11 @@ here (`tierOf`).
 ## Decided
 
 - The notice wins over the turn's end: it is the agent's own words about what the person must do; the recap is history.
-- Silent, not `list`: a `list` summary still adds a drawer row, and the firmware's one row per agent would replace the
-  notice's row with it. `silent` is the only tier the firmware leaves the drawer alone for (`ui_notify_summary` returns
-  before `notice_add`).
-- A failed turn keeps ringing: an error is itself something the person must see, and it is rare. Its row replacing the
-  notice's row is accepted; the agent's answer has the ask.
+- Silent, not `list`: a `list` summary still adds a drawer row, and a firmware before 2026-11-18 replaced the notice's
+  row with it. `silent` is the only tier the firmware leaves the drawer alone for (`ui_notify_summary` returns before
+  `notice_add`).
+- A failed turn keeps ringing: an error is itself something the person must see, and it is rare. Its row lands beside
+  the notice's; on a firmware before 2026-11-18 it replaced it, which is accepted: the agent's answer has the ask.
 - The daemon decides it, from what it already holds (`notices.from(agentId)`); no firmware or app release is needed,
   and an older dial behaves the same.
 - The check is the pending card, not "a notice was sent this turn": a card closed by a tap ("In Orca") means the person

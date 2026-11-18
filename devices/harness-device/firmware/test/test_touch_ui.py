@@ -237,7 +237,7 @@ for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notic
 code += function('render_settings') + function('ui_visit_state')
 code += function('ui_project_known') + function('ui_focus_project') + function('ui_apply_pending_focus')
 code += function('focus_centred') + function('focus_header') + function('focus_clipped') + function('tabs_move') + function('tab_split') + function('tab_fade') + function('tab_neighbour') + function('focus_carousel') + function('tab_label') + function('render_focus_tabs') + function('app_label') + function('app_under') + function('render_apps') + function('pane_label') + function('render_agents') + function('render_tabs') + function('page_controls') + function('css_line') + function('inbox_line') + function('inbox_page') + function('render_focus_inbox') + function('render_list')
-for name in ['notice_remove', 'notice_sync_view', 'notice_selection', 'notice_restore_selection', 'notice_add', 'notice_expire', 'on_face', 'notice_read_now', 'ui_notify_summary', 'ui_turn_error', 'ui_notif_seen', 'ui_notif_read', 'ui_notif_replace', 'ui_notif_open', 'ui_question_close', 'ui_answer_receipt']:
+for name in ['notice_drop', 'notice_remove', 'notice_remove_question', 'notice_sync_view', 'notice_selection', 'notice_restore_selection', 'notice_add', 'notice_expire', 'on_face', 'notice_read_now', 'ui_notify_summary', 'ui_turn_error', 'ui_notif_seen', 'ui_notif_read', 'ui_notif_replace', 'ui_notif_open', 'ui_question_close', 'ui_answer_receipt']:
     code += function(name)
 code += '#define ui_notify_task_done(a,b,c,d) ui_notify_summary(a,b,c,d,"alert",false,false)\n'
 for name in ['ui_project_set_host_caps', 'ui_fleet_set_view', 'ui_apps_replace', 'ui_apps_forget', 'event', 'ui_project_emit', 'ui_project_restore_event', 'ui_project_clear_event', 'ui_project_set_name', 'ui_project_remove', 'ui_project_clear_all', 'ui_project_apply_order']:
@@ -886,7 +886,9 @@ static void pane_notification_soak(void) {
         for(int i=0;i<s.notice_count;i++) {
             assert(s.notice[i].agent_id[0] && memchr(s.notice[i].agent_id,0,ID_MAX));
             assert(memchr(s.notice[i].summary,0,sizeof s.notice[i].summary));
-            for(int j=0;j<i;j++) assert(strcmp(s.notice[i].agent_id,s.notice[j].agent_id));
+            // One row per agent and kind: an agent's news sits beside its open question.
+            for(int j=0;j<i;j++)
+                assert(strcmp(s.notice[i].agent_id,s.notice[j].agent_id) || s.notice[i].question!=s.notice[j].question);
         }
         if((step&255)==0) {
             for(int i=0;i<PANE_MEMORY_MAX;i++) {
@@ -1132,7 +1134,7 @@ static void notification_read_checks(const char *dir) {
     assert(!ui_notify_summary("c","C","M2","x",NULL,true,true) && s.notice_count==1);
     assert(!ui_notify_summary("c","C","M2","x","bogus",true,false) && s.notice_count==2);
     assert(ui_notify_summary("d","D","M2","x",NULL,false,false) && s.notice_count==3 && wakes==1);
-    // One row per agent: the newest wins.
+    // One news row per agent: the newest wins.
     assert(ui_notify_summary("d","D","M2","newer","alert",false,false) && s.notice_count==3 && !strcmp(s.notice[0].summary,"newer"));
     // On the face: no beep, no wake, no celebration, and the row is read at once.
     reset(); fake_ms=5000; wakes=0;
@@ -1169,7 +1171,59 @@ static void notification_read_checks(const char *dir) {
     reset(); fake_ms=9000; ui_turn_error("b","");
     assert(!strcmp(s.notice[0].summary,"The turn failed") && !strcmp(s.message,"The turn failed"));
     ui_turn_error("c",NULL); assert(!strcmp(s.message,"The turn failed"));
-    puts("Notification tiers: alert/list/silent, old-daemon flags, face, one row per agent, 6 h expiry and 8 s error PASS");
+    puts("Notification tiers: alert/list/silent, old-daemon flags, face, one news row per agent, 6 h expiry and 8 s error PASS");
+
+    // A question outlives news: a turn's summary, a failure or a drawer's news row about the same agent lands beside
+    // its open question, never in its place, and each row keeps its own read token.
+    cable_notif_t asked={.agent_id="b",.name="B",.summary="Ship it?",.question=true,.read_token="question-1"};
+    reset(); ui_notif_replace(&asked,1);
+    ui_notify_summary("b","B","M2","Built.","list",false,false);
+    assert(s.notice_count==2 && s.notice[0].question && !strcmp(s.notice[1].summary,"Built."));
+    ui_turn_error("b","The build crashed.");
+    assert(s.notice_count==2 && s.notice[0].question && s.notice[1].failed);
+    cable_notif_t beside[2]={
+        {.agent_id="b",.name="B",.summary="Built.",.read_token="turn-1"},
+        {.agent_id="b",.name="B",.summary="Ship it?",.question=true,.read_token="question-1"}};
+    ui_notif_replace(beside,2);
+    assert(s.notice_count==2 && !strcmp(s.notice[0].read_token,"question-1") && !strcmp(s.notice[1].read_token,"turn-1"));
+    // The desktop reading the news row clears that row, not the question beside it.
+    ui_notif_read("b","turn-1"); assert(s.notice_count==1 && s.notice[0].question);
+    // Both rows read before a receipt goes out: each keeps its own.
+    reset(); ui_notif_replace(beside,2); congestion=true;
+    notice_mark_read(&s.notice[0]); notice_mark_read(&s.notice[1]);
+    int receipts=0; for (int i=0;i<NOTICES;i++) receipts+=s.notice_reads[i].pending;
+    assert(receipts==2); congestion=false;
+    // The card being read, the news row, stays in place as another agent's news arrives, and as a drawer that names
+    // only its agent's question replaces the rest.
+    reset(); ui_notif_replace(beside,2); ui_notif_open(); s.offset=1;
+    ui_notify_summary("c","C","M2","Done.","list",false,false);
+    assert(s.notice_count==3 && !strcmp(s.notice[s.offset].agent_id,"b") && !s.notice[s.offset].question);
+    notice_mark_read(&s.notice[s.offset]); ui_notif_replace(&asked,1);
+    assert(s.notice_count==2 && !strcmp(s.notice[s.offset].agent_id,"b") && !s.notice[s.offset].question);
+    // The question's row goes alone too: read on the desktop, closed elsewhere or answered here, the news beside it stays.
+    reset(); ui_notif_replace(beside,2);
+    ui_notif_read("b","question-1"); assert(s.notice_count==1 && !s.notice[0].question);
+    reset(); ui_notif_replace(beside,2);
+    ui_question_close("b","request-1"); assert(s.notice_count==1 && !s.notice[0].question);
+    reset(); ui_notif_replace(beside,2);
+    strcpy(s.q.agent,"b"); strcpy(s.q.fetch,"fetch-1"); strcpy(s.q.token,"token-1"); s.q.valid=s.q.pending=true;
+    {
+        cJSON fields[]={
+            {.string="agentId",.type=JSTRING,.valuestring="b"},
+            {.string="requestId",.type=JSTRING,.valuestring="fetch-1"},
+            {.string="token",.type=JSTRING,.valuestring="token-1"},
+            {.string="ok",.type=JTRUE}};
+        for(int i=0;i<3;i++)fields[i].next=&fields[i+1];
+        cJSON receipt={.child=fields}; ui_answer_receipt(&receipt);
+    }
+    assert(!s.q.valid && s.notice_count==1 && !s.notice[0].question);
+    // News about the agent keeps the read of its question's row: the receipt still goes out, and the row stays read.
+    reset(); ui_notif_replace(&asked,1); congestion=true; notice_mark_read(&s.notice[0]);
+    ui_notify_summary("b","B","M2","Built.","list",false,false); ui_turn_error("b","The build crashed.");
+    receipts=0; for (int i=0;i<NOTICES;i++) receipts+=s.notice_reads[i].pending;
+    assert(receipts==1); congestion=false;
+    ui_notif_replace(&asked,1); assert(s.notice_count==1 && s.notice[0].read_on_dial);
+    puts("Notification beside a question: summary, failure, drawer tokens, desktop read, receipts and the card being read PASS");
     reset();
 }
 

@@ -70,9 +70,9 @@ export class QuestionInbox {
   }
 
   /** The dial lost its questions (a greeting, a drawer replaced whole, a resync), but those of the agents named `kept`
-   *  (rows of the drawer that replaced its own): each other is to be asked again. */
+   *  (rows of the drawer that replaced its own), which it holds as asked: each other is to be asked again. */
   forget(kept?: ReadonlySet<string>): void {
-    for (const entry of this.entries.values()) if (!kept?.has(entry.agentId)) entry.asked = false
+    for (const entry of this.entries.values()) entry.asked = !!kept?.has(entry.agentId)
   }
 
   close(agentId: string, id: string): boolean {
