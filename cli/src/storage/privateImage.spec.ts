@@ -6,9 +6,14 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { readPrivateImage } from './privateImage.js'
 import { sameSessionFileIdentity, sessionFileIdentity } from '../lib/sessionStorageWire.js'
+import * as custody from '../lib/secureState.js'
 
 vi.mock('node:fs/promises', async original => ({ ...await original<object>() }))
-vi.mock('node:fs', async original => ({ ...await original<object>() }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual, constants: { ...actual.constants } }
+})
+vi.mock('../lib/secureState.js', async original => ({ ...await original<object>() }))
 
 vi.mock('../lib/sessionStorageWire.js', async original => {
   const actual = await original<typeof import('../lib/sessionStorageWire.js')>()
@@ -135,4 +140,41 @@ it('refuses a foreign image owner and closes the opened file', async () => {
   }) as typeof stat)
   await expect(readPrivateImage(file, 1024)).rejects.toMatchObject({ code: 'unsafe' })
   expect(close).toHaveBeenCalledTimes(2)
+})
+
+it('uses Windows root authority when POSIX ownership and open flags are unavailable', async () => {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+  const uid = Object.getOwnPropertyDescriptor(process, 'getuid')
+  const flags = nativeFs.constants as { O_NOFOLLOW?: number; O_NONBLOCK?: number }
+  const follow = flags.O_NOFOLLOW, nonblock = flags.O_NONBLOCK
+  const directory = vi.spyOn(custody, 'secureStateDirectory').mockImplementation(() => {})
+  const rootCheck = vi.spyOn(custody, 'requireWindowsStateFile').mockImplementation(() => {})
+  Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
+  Object.defineProperty(process, 'getuid', { configurable: true, value: undefined })
+  delete flags.O_NOFOLLOW; delete flags.O_NONBLOCK
+  try {
+    expect((await readPrivateImage(file, 1024))?.bytes.toString()).toBe('[{"title":"fixture"}]')
+    expect(directory).toHaveBeenCalledWith(join(root, 'state'), false)
+    expect(rootCheck).toHaveBeenCalledWith(file)
+    rootCheck.mockImplementation(() => { throw new Error('fixture root refused') })
+    await expect(readPrivateImage(file, 1024)).rejects.toMatchObject({ code: 'unsafe' })
+  } finally {
+    Object.defineProperty(process, 'platform', platform)
+    if (uid) Object.defineProperty(process, 'getuid', uid); else delete (process as { getuid?: unknown }).getuid
+    flags.O_NOFOLLOW = follow; flags.O_NONBLOCK = nonblock
+  }
+})
+
+it('refuses new handles under shared cleanup uncertainty and preserves failed-close identity', async () => {
+  const open = vi.spyOn(nativeFs, 'openSync')
+  const healthy = vi.spyOn(custody, 'stateFileCustodyHealthy').mockImplementation(() => { throw new custody.StateFileCleanupUnconfirmed() })
+  await expect(readPrivateImage(file, 1024)).rejects.toMatchObject({ code: 'cleanup-unconfirmed' })
+  expect(open).not.toHaveBeenCalled()
+  healthy.mockRestore()
+  const close = custody.closeStateFileDescriptor
+  vi.spyOn(custody, 'closeStateFileDescriptor').mockImplementation(fd => {
+    close(fd) // Physically settle this unit fixture; real before-close uncertainty is covered through actual child reap.
+    throw new custody.StateFileCleanupUnconfirmed()
+  })
+  await expect(readPrivateImage(file, 1024)).rejects.toMatchObject({ code: 'cleanup-unconfirmed' })
 })
