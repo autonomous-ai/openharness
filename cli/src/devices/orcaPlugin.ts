@@ -32,16 +32,19 @@ export interface OrcaPluginRun {
 export interface OrcaPluginDeps extends OrcaPluginRun { folder: string; dataDir: string; err(line: string): void }
 export type OrcaPluginState = 'absent' | 'offer' | 'off' | 'approve' | 'behind' | 'current'
 
+/** What a connect asks Orca with: the `orca` to run, the plugin's key to name to Orca, and the version cli.js carries,
+ *  to know a plugin Orca lists as the one asked for. */
+interface Asking { orca: string; key: string; version: string }
 /** The state, and what a connect needs beside it: its error for an `absent` that is not `not-running` (a CLI from the
- *  sources, a folder that cannot be written), the `orca` to run for the states a connect asks Orca in, the plugin's key
- *  to name to Orca, and whether a plugin `behind` was installed from the plugin's own folder. */
+ *  sources, a folder that cannot be written), what it asks Orca with in the states it asks Orca in, and whether a plugin
+ *  `behind` was installed from the plugin's own folder. */
 type Found =
   | { state: 'absent'; error?: 'no-plugin' | 'failed' }
   | { state: 'off' }
   | { state: 'current' }
-  | { state: 'offer'; orca: string }
-  | { state: 'approve'; orca: string; key: string }
-  | { state: 'behind'; orca: string; key: string; ours: boolean }
+  | ({ state: 'offer' } & Asking)
+  | ({ state: 'approve' } & Asking)
+  | ({ state: 'behind'; ours: boolean } & Asking)
 
 const ABSENT: Found = { state: 'absent' }
 /** The one range Orca's manifests take. */
@@ -92,6 +95,17 @@ async function ask(deps: OrcaPluginDeps, orca: string, args: string[], timeoutMs
   return answer?.ok === true && isObject(answer.result) ? answer.result : undefined
 }
 
+/** The plugin's entry in Orca's `plugin list`: undefined when Orca lists none, null when the list cannot be read. */
+async function entryOf(deps: OrcaPluginDeps, orca: string, key: string): Promise<Record<string, unknown> | undefined | null> {
+  const plugins = (await ask(deps, orca, ['plugin', 'list', '--json'], ORCA_READ_MS))?.plugins
+  if (!Array.isArray(plugins)) return null
+  return plugins.find((listed): listed is Record<string, unknown> => isObject(listed) && listed.pluginKey === key)
+}
+
+/** Whether an entry's `source` is the plugin's folder. */
+const fromFolder = (source: unknown, folder: string): boolean =>
+  isObject(source) && source.kind === 'local-path' && typeof source.reference === 'string' && real(source.reference) === real(folder)
+
 /** The first rule that holds (the design's `status`). Orca is asked `status` first: every other plugin command waits
  *  about 30 seconds for an Orca that is not reachable. */
 async function find(deps: OrcaPluginDeps): Promise<Found> {
@@ -113,22 +127,22 @@ async function find(deps: OrcaPluginDeps): Promise<Found> {
   const plugin = (await ask(deps, orca, ['plugin', 'inspect', deps.folder, '--json'], ORCA_READ_MS))?.plugin
   const key = isObject(plugin) ? plugin.pluginKey : undefined
   if (typeof key !== 'string' || !PLUGIN_KEY.test(key)) return ABSENT
-  const plugins = (await ask(deps, orca, ['plugin', 'list', '--json'], ORCA_READ_MS))?.plugins
-  if (!Array.isArray(plugins)) return ABSENT
-  const entry = plugins.find((listed): listed is Record<string, unknown> => isObject(listed) && listed.pluginKey === key)
+  const entry = await entryOf(deps, orca, key)
+  if (entry === null) return ABSENT
+  const asking: Asking = { orca, key, version: carried.version }
   if (entry === undefined) {
     // A record that cannot be read is not "never connected": that would offer the plugin again to a person who
     // removed it.
     const record = readOrcaConnected(deps.dataDir)
     if (record.unread) return ABSENT
-    return record.connected ? { state: 'off' } : { state: 'offer', orca }
+    return record.connected ? { state: 'off' } : { state: 'offer', ...asking }
   }
   const { version, status, source } = entry
   if (typeof version !== 'string' || typeof status !== 'string' || entry.isDev === true) return ABSENT
   if (status === 'disabled') return { state: 'off' }
-  if (status === 'pending' || entry.needsReconsent === true) return { state: 'approve', orca, key }
-  const ours = isObject(source) && source.kind === 'local-path' && typeof source.reference === 'string' && real(source.reference) === real(deps.folder)
-  if (version !== carried.version || !ours) return { state: 'behind', orca, key, ours }
+  if (status === 'pending' || entry.needsReconsent === true) return { state: 'approve', ...asking }
+  const ours = fromFolder(source, deps.folder)
+  if (version !== carried.version || !ours) return { state: 'behind', ours, ...asking }
   if (status === 'errored' || status === 'invalid') return ABSENT
   return { state: 'current' }
 }
@@ -150,6 +164,7 @@ export async function orcaStatus(deps: OrcaPluginDeps): Promise<{ orca: OrcaPlug
 
 /** An approval fingerprint as Orca prints one, held to it where it comes in: from the caller and from Orca. */
 export const ORCA_FINGERPRINT = /^ap1-[0-9a-f]{32}$/
+/** With `status`, `inspect`, `list` and the `list` after a deadline passed, 95 s: within the app's 120 s for a connect. */
 export const ORCA_CONNECT_MS = 60_000
 export const ORCA_GRANTS_MAX = 10
 export const ORCA_GRANT_MAX_CHARS = 300
@@ -209,6 +224,14 @@ function approval(data: unknown, update: boolean): OrcaConnect | undefined {
   return { connect: 'approve', name, version, fingerprint, grants, update }
 }
 
+/** Whether Orca lists the plugin as a connect asked for it: at the version cli.js carries, from the plugin's folder,
+ *  and waiting on no approval. */
+async function finished(deps: OrcaPluginDeps, { orca, key, version }: Asking): Promise<boolean> {
+  const entry = await entryOf(deps, orca, key)
+  return isObject(entry) && entry.version === version && fromFolder(entry.source, deps.folder)
+    && typeof entry.status === 'string' && entry.status !== 'pending' && entry.needsReconsent !== true
+}
+
 /** Installs, updates or enables the plugin, as its state in Orca asks. Without [approve], Orca answers with the access
  *  it would grant, or goes through when it asks for nothing new; [approve] is the fingerprint of the access a person
  *  was shown and accepted. It writes no record and logs nothing. */
@@ -226,7 +249,8 @@ export async function orcaConnect(deps: OrcaPluginDeps, approve?: string): Promi
     : ['install', deps.folder]
   const args = ['plugin', ...word, ...(approve === undefined ? [] : ['--approve', approve]), '--json']
   const { code, stdout, timedOut } = await deps.run(found.orca, args, { timeoutMs: ORCA_CONNECT_MS, maxBytes: ORCA_ANSWER_MAX_BYTES })
-  if (timedOut) return { connect: 'failed', error: 'timeout' }
+  // Orca may finish what it was asked after the deadline: `done` then, so the command records the connect.
+  if (timedOut) return await finished(deps, found) ? { connect: 'done' } : { connect: 'failed', error: 'timeout' }
   const answer = parse(stdout)
   if (code === 0 && answer?.ok === true) return { connect: 'done' }
   // Orca's message is never read: it can hold a path.
