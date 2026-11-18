@@ -118,3 +118,16 @@ native-fixture syntax, and all thirteen included runtime files at 100% statement
 lines. It includes positive 100-request shared-lifetime capacity, exact account/no-credential answers,
 known-empty name behavior and connection replacement during backend fallback. Native, matched cost and
 independent final review remain open; the earlier source-only checkpoint is not the final correction.
+
+## Packaged checkpoint, 18 November
+
+All three Store/Models cases pass against the immutable `80932c2ef1` full/lean artifact: supervised
+and explicit inline package context/init, plus Models held while an unrelated agent continues and
+package init completes once. Receipt `/tmp/core-store-screen-native-80932c2ef1/receipt.json` records
+three passing Store cases and two failing terminal fixtures; the packet as a whole is failed, not a
+five-case pass. Both terminal fixtures were independently corrected and passed in their separate packet.
+The original packet exits with actual code 1, both output streams end, all 94 observed owned PIDs are
+gone, no fixture roots/claims remain, and frozen source/dependency/artifact inputs match before/after.
+Combined source `e22df56bc7` passes 1,986 selected tests, types and 28-file full scoped coverage in
+`20261118T145158.137640Z-29428`. Matched package-create cost, independent final review and final combined
+packaged release acceptance remain open; the frozen native packet does not cover later runtime edits.

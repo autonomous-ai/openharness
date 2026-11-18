@@ -72,3 +72,18 @@ text-identical approval classification, with no production correctness blocker f
 fixture review caught an existence-before-content race in shell redirection; the fixture now waits
 for the expected complete contents and checks absence of the refused write again after recovery.
 The packaged tests and matched cost gate remain unrun; review does not waive them.
+
+## Packaged caller correction, 18 November
+
+The original two plain-terminal fixtures failed before reading a screen: `message` requires an engine
+process, while plain shell input uses the existing binary terminal stream. Runtime authority remains
+unchanged. The corrected cases open that stream, write a deterministic busy screen and inspect the
+agent through `agent_close` in inspect mode. With the exact owned screen worker stopped, inspection
+reports unknown while terminal input and unrelated core queries continue. After resumption inspection
+reports working again. The inline control starts no screen worker.
+
+Both cases pass against unchanged `80932c2ef1` packaged bytes in 14.35 seconds, actual exit 0, both
+output EOFs, no timeout/cleanup signal, all 21 owned PIDs absent, and no retained fixture roots or claims.
+Receipt: `/tmp/core-terminal-screen-ready-80932c2ef1/receipt.json`; fixture-only checkpoint `b90e9110b6`.
+The original failed packet remains `/tmp/core-store-screen-native-80932c2ef1/receipt.json`. This is
+packaged isolation evidence for that artifact, not matched cost or final combined release acceptance.
