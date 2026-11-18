@@ -164,7 +164,7 @@ mod tests {
 
     #[test]
     fn every_entry_is_under_its_root() {
-        let entries = [(Entry::Tui, "tui", Root::Data), (Entry::Cli, "cli", Root::Data), (Entry::ShellRequests, "shell-requests", Root::State)];
+        let entries = [(Entry::Tui, "tui", Root::Data), (Entry::Cli, "cli", Root::Data), (Entry::ShellRequests, "shell-requests", Root::State), (Entry::S, "s", Root::State)];
         for (entry, name, root) in entries {
             assert_eq!(entry.root(), root);
             assert_eq!(harness_path("/h", entry), harness_root("/h", root).join(name));

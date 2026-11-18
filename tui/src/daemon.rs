@@ -471,6 +471,20 @@ mod recovery_tests {
         (listener, TestSocket(path))
     }
 
+    #[test]
+    fn the_socket_is_in_the_data_folder_while_its_path_fits() {
+        let sockets = || -> PathBuf { panic!("a short data folder needs no short socket folder") };
+        assert_eq!(socket_in(Path::new("/h/.harness/cli/data"), 18473, sockets), PathBuf::from("/h/.harness/cli/data/daemon-18473.sock"));
+    }
+
+    #[test]
+    fn a_data_folder_too_long_for_a_socket_has_it_in_the_short_folder_the_cli_names() {
+        // The CLI's socketPathIn and Desktop's defaultDaemonSocketPath name this folder for this data folder.
+        let long = format!("/{}", "x".repeat(100));
+        let path = socket_in(Path::new(&long), 1, || PathBuf::from("/h/.local/state/harness/s"));
+        assert_eq!(path.to_str().unwrap(), "/h/.local/state/harness/s/e50e7828cbafcbee/daemon-1.sock");
+    }
+
     #[tokio::test]
     async fn rest_uses_only_the_users_private_socket_and_never_the_tcp_listener() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
