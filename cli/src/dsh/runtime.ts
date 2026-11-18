@@ -7,6 +7,9 @@ import { createHash, randomUUID } from 'node:crypto'
 import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, join, relative, resolve, sep } from 'node:path'
 import { z } from 'zod'
+// Not `env`: the launch's own environment is named that below.
+import { env as config } from '../config/env.js'
+import { harnessPath, legacyHarnessPath } from '../config/harnessHome.js'
 import { PROCESS_ENGINES, type AgentEngine } from '../engines/types.js'
 import { instructionFileOf, launchContract } from '../engines/launches.js'
 import { HARNESS_BOOTSTRAP, harnessAdapter } from './adapters.js'
@@ -43,6 +46,22 @@ function ensureRuntimeDir(workspace: string, dir: string): void {
       if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`Harness runtime directory is not a plain directory: ${path}`)
     } else mkdirSync(path)
   }
+}
+
+/**
+ * [path] at the dsh folder's new place when it names the old one: on Linux Harness's folder moves from `~/.harness` to the
+ * XDG places, and a workspace's saved runtime and skill links still name the old folder. Only the default folder moves; a
+ * DSH_DIR the person named is theirs.
+ */
+function movedDshPath(path: string): string {
+  const legacy = legacyHarnessPath('dsh')
+  if (!path.startsWith(legacy + sep) || config.DSH_DIR === legacy || config.DSH_DIR !== harnessPath('dsh')) return path
+  return config.DSH_DIR + path.slice(legacy.length)
+}
+
+function movedSnapshot(data: RuntimeSnapshot): RuntimeSnapshot {
+  return { ...data, env: Object.fromEntries(Object.entries(data.env).map(([name, value]) => [name, movedDshPath(value)])),
+    args: data.args.map(movedDshPath), skills: data.skills.map(skill => ({ ...skill, dir: movedDshPath(skill.dir) })) }
 }
 
 function isLink(path: string): boolean {
@@ -171,13 +190,13 @@ export function prepareHarnessLaunch(dsh: InstalledDsh, workspace: string, engin
     if (!existsSync(from)) throw new Error(`The original harness runtime is missing: ${from}`)
   }
   if (isLink(from)) throw new Error(`Harness runtime snapshot is a symlink: ${from}`)
-  const data = existsSync(from) ? Snapshot.parse(JSON.parse(readFileSync(from, 'utf8'))) : snapshot(dsh, ws, engine)
+  const data = existsSync(from) ? movedSnapshot(Snapshot.parse(JSON.parse(readFileSync(from, 'utf8')))) : snapshot(dsh, ws, engine)
   if (data.engine !== engine || (data.id !== dsh.id && !dsh.manifest.formerly?.includes(data.id))) {
     throw new Error(`Harness runtime belongs to ${data.id} / ${data.engine}, not ${dsh.id} / ${engine}`)
   }
   if (sourceKey && (existsSync(file) || isLink(file))) {
     if (isLink(file)) throw new Error(`Harness runtime snapshot is a symlink: ${file}`)
-    const saved = Snapshot.parse(JSON.parse(readFileSync(file, 'utf8')))
+    const saved = movedSnapshot(Snapshot.parse(JSON.parse(readFileSync(file, 'utf8'))))
     if (JSON.stringify(saved) !== JSON.stringify(data)) throw new Error(`The fork destination already has a different harness runtime: ${file}`)
   }
   const skillsDir = join(dir, 'skills')
@@ -187,8 +206,15 @@ export function prepareHarnessLaunch(dsh: InstalledDsh, workspace: string, engin
     if (!existsSync(join(skill.dir, 'SKILL.md'))) throw new Error(`Harness skill is missing: ${skill.dir}; repair the harness installation.`)
     const link = join(skillsDir, skill.name)
     if (existsSync(link) || isLink(link)) {
+      const target = isLink(link) ? readlinkSync(link) : ''
+      const atNewPlace = movedDshPath(target)
       // Compared resolved, so a link that writes the same folder another way (a trailing separator) is still its own.
-      if (!isLink(link) || resolve(readlinkSync(link)) !== resolve(skill.dir)) throw new Error(`Harness skill path is already occupied: ${link}`)
+      if (!target || resolve(atNewPlace) !== resolve(skill.dir)) throw new Error(`Harness skill path is already occupied: ${link}`)
+      // Made before Harness's folder moved: linked again at the new place, so nothing waits on the old folder's bridge.
+      if (atNewPlace !== target) {
+        unlinkSync(link)
+        symlinkSync(skill.dir, link, 'junction')
+      }
     // A junction on Windows: a directory symlink needs Developer Mode or an administrator (EPERM), a junction
     // neither. Other platforms ignore the type.
     } else symlinkSync(skill.dir, link, 'junction')
@@ -216,6 +242,8 @@ export function prepareHarnessLaunch(dsh: InstalledDsh, workspace: string, engin
     '',
   ].join('\n')
   writeManagedFile(env.HARNESS_CONTEXT_FILE!, context)
-  if (!existsSync(file)) writeManagedFile(file, `${JSON.stringify(data, null, 2)}\n`)
+  // Written once, and again when the move of Harness's folder gave its paths their new place.
+  const body = `${JSON.stringify(data, null, 2)}\n`
+  if (!existsSync(file) || readFileSync(file, 'utf8') !== body) writeManagedFile(file, body)
   return { env, args: [...data.args, ...(adapter.contextArgs?.(env.HARNESS_CONTEXT_FILE!) ?? []), ...(adapter.envArgs?.(env) ?? [])] }
 }
