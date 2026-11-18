@@ -5,7 +5,6 @@
 terminal. Subsequent commands use the printed --state path. All product actions
 are terminal keys or mouse input; daemon requests are read-only verification.
 Keep the state and captures as evidence, and run `stop` to close only this rig.
-`start --legacy-home` begins in a home from before the XDG folders, one that holds only ~/.harness.
 """
 import argparse
 import http.client
@@ -223,14 +222,11 @@ class User:
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
 
 
-def start(legacy_home=False):
+def start():
     root = Path(tempfile.mkdtemp(prefix='hn-user-', dir='/tmp')).resolve()
     home = root / 'home'
     for path in (home, root / 'tmp', root / 'tmux', root / 'hn'):
         path.mkdir(mode=0o700)
-    if legacy_home:
-        # The installer and hn still use a ~/.harness they find, until the daemon moves it.
-        (home / '.harness').mkdir(mode=0o700)
     tmux = shutil.which('tmux')
     assert tmux, 'tmux is needed only to drive the outer test terminal'
     with socket.socket() as probe:
@@ -276,11 +272,10 @@ def start(legacy_home=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--state')
-    parser.add_argument('--legacy-home', action='store_true', help='start in a home that holds only ~/.harness')
     parser.add_argument('action', choices=['start', 'run', 'screen', 'keys', 'text', 'field', 'wait', 'snapshot', 'status', 'resize', 'stop'])
     parser.add_argument('args', nargs='*')
     args = parser.parse_args()
-    user = start(args.legacy_home) if args.action == 'start' or (args.action == 'run' and not args.state) else User(args.state)
+    user = start() if args.action == 'start' or (args.action == 'run' and not args.state) else User(args.state)
     if args.action == 'run':
         import runpy
         runpy.run_path(str(Path(__file__).with_name('fresh-user-journeys.py')))['run'](user, args.args)
