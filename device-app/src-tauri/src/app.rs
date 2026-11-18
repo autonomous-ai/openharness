@@ -70,8 +70,8 @@ pub struct App {
     orca: OrcaRuns,
     /// When the last `harness device orca status` started.
     orca_asked_at: Option<u64>,
-    /// A silent update was wanted since the CLI was found or its version changed: it runs once for each.
-    orca_updated: bool,
+    /// The silent update since the CLI was found or its version changed: it runs once for each.
+    silent: Silent,
     /// The fingerprint of the access the window shows. Only the Connect click takes it, and a window that leaves that
     /// access drops it, so nothing is approved but what the person sees.
     approval: Option<Fingerprint>,
@@ -112,7 +112,7 @@ impl App {
             relaunch: false,
             orca: OrcaRuns::default(),
             orca_asked_at: None,
-            orca_updated: false,
+            silent: Silent::Due,
             approval: None,
         };
         let mut effects = Vec::new();
@@ -262,7 +262,7 @@ impl App {
                 if let (Some(known), Some(read)) = (&self.state.cli_version, &version)
                     && known != read
                 {
-                    self.orca_updated = false;
+                    self.silent = Silent::Due;
                     self.ask_orca(effects);
                 }
                 self.state.cli_version = version.or(self.state.cli_version.take());
@@ -397,12 +397,17 @@ impl App {
             Some(OrcaStatus::Offer) => OrcaState::Offer,
             Some(OrcaStatus::Approve) => OrcaState::Update,
             // Orca keeps the approval of an update that asks for no new access, so it runs with no click.
-            Some(OrcaStatus::Behind) => {
-                if !std::mem::replace(&mut self.orca_updated, true) {
+            Some(OrcaStatus::Behind) => match self.silent {
+                Silent::Due => {
+                    self.silent = Silent::Ran;
                     self.orca.update = true;
+                    OrcaState::None
                 }
-                OrcaState::None
-            }
+                // Orca refuses an update that asks for new access before it writes anything: the old version runs on,
+                // and says Behind, until the row's Connect.
+                Silent::Approve => OrcaState::Update,
+                Silent::Ran => OrcaState::None,
+            },
             Some(OrcaStatus::Absent | OrcaStatus::Off | OrcaStatus::Current) | None => OrcaState::None,
         };
         self.orca_row(row, effects);
@@ -412,6 +417,10 @@ impl App {
     fn orca_updated(&mut self, answer: OrcaAnswer, effects: &mut Vec<Effect>) {
         effects.push(Effect::Log(format!("orca connect: {}", orca_said(&answer))));
         let row = if matches!(answer, OrcaAnswer::Approve { .. }) { OrcaState::Update } else { OrcaState::None };
+        // A new CLI version while it ran wants its own silent update.
+        if row == OrcaState::Update && self.silent == Silent::Ran {
+            self.silent = Silent::Approve;
+        }
         self.orca_row(row, effects);
     }
 
@@ -605,7 +614,7 @@ impl App {
         self.keep = KeepAlive::new();
         self.awaiting_account = true;
         self.read(effects);
-        self.orca_updated = false;
+        self.silent = Silent::Due;
         self.ask_orca(effects);
     }
 
@@ -720,6 +729,14 @@ enum OrcaRun {
     Status,
     Update,
     Connect,
+}
+
+/// The silent update of a CLI version: due, run, or run and answered that Orca wants the new access approved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Silent {
+    Due,
+    Ran,
+    Approve,
 }
 
 /// One Orca run at a time, as two commands on the plugin's folder at once would fail one another, and the ones that
