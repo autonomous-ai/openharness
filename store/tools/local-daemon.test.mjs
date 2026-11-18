@@ -2,7 +2,7 @@
 // The small WebSocket and fetch every Store package reaches the daemon with, against raw frames on a real Unix socket.
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { chmodSync, mkdirSync, rmdirSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, rmdirSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -219,6 +219,14 @@ test('a long home\'s socket is under a private XDG_RUNTIME_DIR, else under <stat
   for (const value of [file, join(runtime, 'none'), 'run', '', undefined]) {
     assert.equal(daemonSocketPath(PORT, { ...env, XDG_RUNTIME_DIR: value }, 'linux'), inState, String(value))
   }
+  // As the CLI looks (cli/src/lib/localSocket.ts runtimeShortRoot): a link to a private folder is none, and so is a
+  // folder with a bit beyond 0700.
+  const linked = join(tempFolder('ld-link-'), 'run')
+  symlinkSync(runtime, linked)
+  assert.equal(daemonSocketPath(PORT, { ...env, XDG_RUNTIME_DIR: linked }, 'linux'), inState, 'a link')
+  chmodSync(runtime, 0o1700)
+  assert.equal(daemonSocketPath(PORT, env, 'linux'), inState, 'sticky')
+  chmodSync(runtime, 0o700)
   // macOS keeps its socket under ~/.harness, whatever XDG_RUNTIME_DIR says.
   assert.equal(daemonSocketPath(PORT, { ...env, HOME: '/h' }, 'darwin'), `/h/.harness/s/${LONG_HOME_HASH}/daemon-${PORT}.sock`)
 })
