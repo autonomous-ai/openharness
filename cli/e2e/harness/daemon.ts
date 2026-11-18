@@ -23,6 +23,7 @@ import { promisify } from 'node:util'
 import { isolatedTmux, type IsolatedTmux } from '../../src/testing/isolatedTmux.js'
 import { artifactLog, artifactsEnabled } from './artifacts.js'
 import { daemonEnvironment } from '../../src/testing/daemonEnvironment.js'
+import { writeExecutable } from '../../src/testing/executableFixture.js'
 import { GH_FORBIDDEN_STUB } from '../../src/testing/ghStub.js'
 import { readAdoptedHomes } from '../../src/engines/kit/homeAdoption.js'
 import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
@@ -30,6 +31,7 @@ import { endRootProcesses } from '../../src/testing/rootProcesses.js'
 import { assertSocketPathFits } from '../../src/testing/socketPathRoom.js'
 import { alive, processTable } from '../../src/testing/spawnedRuns.js'
 import { assertNodeAlone } from '../../src/testing/testNode.js'
+import { SYSTEM_FOLDERS } from '../../src/testing/testPath.js'
 import { forgetGroup, forgetTmux, leaderGone, watchGroup, watchTmux } from './reaper.js'
 
 const exec = promisify(execFile)
@@ -372,6 +374,20 @@ export class IsolatedDaemon {
     // helper (lib/guestAccounts.ts), which may be installed on the Mac the tests run on. Refused, as for an owner who
     // never turned guest access on.
     await writeFile(join(dirs.bin, 'sudo'), '#!/bin/sh\necho "sudo: a password is required" >&2\nexit 1\n', { mode: 0o755 })
+    // Nor does its open scan see a process outside its root. The scan reads every `codex` on the computer
+    // (sessionSearch/externals/support.ts) and the devices write the dial skill into each Codex home whose rollout one
+    // holds: every daemon with a dial attached wrote it into another test's Codex homes, and deviceDialSkill.e2e.ts
+    // failed whenever the other dial files ran beside it, and into the developer's real ones too (2026-11-19). Found by
+    // name, first on its PATH. Only the scan's own field output (-Fpn) loses the names outside the root: lsof's other
+    // callers (process images, held files) see the computer as it is. A computer with no lsof has no scan to hide.
+    // Admitted before the daemon runs it: the scan gives lsof 3 s, and macOS checks a new executable on its first exec.
+    const lsof = SYSTEM_FOLDERS.map((folder) => join(folder, 'lsof')).find((file) => existsSync(file))
+    if (lsof) writeExecutable(join(dirs.bin, 'lsof'), `#!/bin/sh
+case " $* " in
+  *" -Fpn "*) '${lsof}' "$@" | awk -v root='${root}/' 'substr($0, 1, 1) != "n" || index($0, "n" root) == 1' ;;
+  *) exec '${lsof}' "$@" ;;
+esac
+`)
     // Nor does it ever reach the real Orca app on the Mac the tests run on, which every session here may be running
     // inside: a listed Orca agent asks Orca for a list. A launcher is an `orca` whose real path is in Orca's install
     // (devices/orcaHomes.ts), so the stub sits in one, linked from bin, and it is the Orca app's own too
