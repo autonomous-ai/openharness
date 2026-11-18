@@ -1533,6 +1533,7 @@ mod tests {
     #[test]
     fn a_newer_version_is_installed_and_the_app_relaunches() {
         let mut app = found();
+        hear(&mut app, status(None));
         app.handle(tick(B + 5));
         let effects = app.handle(Event::UpdateChecked(Some("0.1.3".into())));
         assert!(has(&effects, &Effect::InstallUpdate));
@@ -1553,6 +1554,7 @@ mod tests {
     #[test]
     fn a_sign_in_delays_the_relaunch_not_the_download() {
         let mut app = on_sign_in();
+        hear(&mut app, status(None));
         app.handle(tick(B + 5));
         app.handle(Event::Act(Action::SignIn));
         assert!(has(&app.handle(Event::UpdateChecked(Some("0.1.3".into()))), &Effect::InstallUpdate));
@@ -1563,8 +1565,9 @@ mod tests {
         assert!(app.handle(tick(B + 15)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
     }
 
-    /// The first check finds 0.1.3 and installs it.
+    /// The start's status answered, the first check finds 0.1.3 and installs it.
     fn installed(app: &mut App) {
+        hear(app, status(None));
         assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
         assert!(has(&app.handle(Event::UpdateChecked(Some("0.1.3".into()))), &Effect::InstallUpdate));
         app.handle(Event::UpdateInstalled);
@@ -1573,6 +1576,7 @@ mod tests {
     #[test]
     fn a_start_of_the_daemon_delays_the_relaunch() {
         let mut app = found();
+        hear(&mut app, status(None));
         app.handle(Event::WatchExit(Some(3)));
         assert!(has(&app.handle(tick(B + 5)), &Effect::CheckUpdate));
         app.handle(Event::WatchExit(Some(3)));
@@ -1591,6 +1595,24 @@ mod tests {
         assert!(!has(&app.handle(tick(B + 10)), &Effect::Relaunch));
         app.handle(Event::WindowClosed);
         assert!(app.handle(tick(B + 15)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
+    }
+
+    #[test]
+    fn an_orca_run_delays_the_relaunch() {
+        // The start's status runs.
+        let mut app = found();
+        answer(&mut app, true);
+        app.handle(tick(B + 5));
+        app.handle(Event::UpdateChecked(Some("0.1.3".into())));
+        app.handle(Event::UpdateInstalled);
+        assert!(!has(&app.handle(tick(B + 10)), &Effect::Relaunch));
+        // A connect that waited starts at its answer, and holds the relaunch in turn.
+        app.handle(Event::Menu(MenuAction::Orca));
+        hear(&mut app, status(Some(OrcaStatus::Offer)));
+        app.handle(Event::WindowClosed);
+        assert!(!has(&app.handle(tick(B + 15)), &Effect::Relaunch));
+        hear(&mut app, connected());
+        assert!(app.handle(tick(B + 20)).ends_with(&[Effect::StopWatch, Effect::Relaunch]));
     }
 
     #[test]
