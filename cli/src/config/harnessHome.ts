@@ -41,6 +41,12 @@ export const HARNESS_ENTRIES = {
 
 export type HarnessEntry = keyof typeof HARNESS_ENTRIES
 
+/**
+ * The file in the data root that makes it Harness's (content `1\n`, mode 0600). Only the move's commit, a fresh install
+ * and a start on a fresh computer write it, so a folder anything else made there switches nothing.
+ */
+export const HARNESS_ROOT_MARKER = '.harness-root'
+
 /** What the rule reads of this computer: the XDG variables and one existence check. */
 export interface HomeLook { env: Readonly<Record<string, string | undefined>>; exists(path: string): boolean }
 
@@ -69,14 +75,14 @@ export function legacyHarnessPath(entry: HarnessEntry, home = homedir(), platfor
 }
 
 /**
- * Both roots, from one look. Off Linux, `~/.harness`. On Linux, the XDG roots once their data root exists (moved, or a
- * fresh install), else `~/.harness` while it exists (not moved yet), else the XDG roots (a fresh install).
+ * Both roots, from one look. Off Linux, `~/.harness`. On Linux, the XDG roots once their data root holds the marker
+ * (moved, or a fresh install), else `~/.harness` while it exists (not moved yet), else the XDG roots (a fresh install).
  */
 function roots(home: string, platform: NodeJS.Platform, look: HomeLook): Record<HarnessRootKind, string> {
   const legacy = legacyHarnessHome(home, platform)
   if (platform !== 'linux') return { data: legacy, state: legacy }
   const xdg = xdgRoots(home, look.env)
-  return !look.exists(xdg.data) && look.exists(legacy) ? { data: legacy, state: legacy } : xdg
+  return !look.exists(posix.join(xdg.data, HARNESS_ROOT_MARKER)) && look.exists(legacy) ? { data: legacy, state: legacy } : xdg
 }
 
 export function harnessRoot(kind: HarnessRootKind, home = homedir(), platform = process.platform, look = thisComputer()): string {

@@ -9,7 +9,7 @@ import * as fs from 'node:fs'
 import { createConnection } from 'node:net'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { harnessRoot, legacyHarnessHome, xdgRoots } from '../config/harnessHome.js'
+import { HARNESS_ROOT_MARKER, harnessRoot, legacyHarnessHome, xdgRoots } from '../config/harnessHome.js'
 import { isBridge, procNow } from './bridge.js'
 import { checkMove, withEnvFile, type ConditionDeps, type Hold } from './conditions.js'
 import { readJournal } from './journal.js'
@@ -68,7 +68,7 @@ export async function moveHomeAtStart(argv: readonly string[], env: NodeJS.Proce
   const roots: Roots = { legacy: legacyHarnessHome(deps.home, 'linux'), ...xdgRoots(deps.home, environment) }
   const lines: string[] = []
   const moveDeps: MoveDeps = { ...deps, log: (line) => lines.push(line) }
-  const moved = fs.existsSync(roots.data)
+  const moved = marked(roots)
   // A person typed it: a harness start on a terminal. Desktop starts the daemon the same way, with no terminal.
   const explicit = command === 'start' && !flags.includes('--if-down') && deps.print !== null
   let outcome: MoveOutcome | null = null
@@ -78,12 +78,14 @@ export async function moveHomeAtStart(argv: readonly string[], env: NodeJS.Proce
       outcome = await moveOrHold(explicit, env, environment, roots, deps, moveDeps, lines)
     } else if (moved) {
       noteStray(roots, environment, deps, lines)
+    } else {
+      markFresh(roots.data)
     }
   } catch (error) {
     // A lock this start could not take is no try: a failed move not due again keeps its hour, and says nothing.
     outcome = due(explicit, environment, deps) || readJournal(roots.legacy) ? failure(error, environment, deps, moveDeps) : null
   }
-  const movedNow = fs.existsSync(roots.data)
+  const movedNow = marked(roots)
   // A rollback that could not undo every step keeps its journal for the next start.
   const halfMoved = !movedNow && readJournal(roots.legacy) !== null
   // Moved, by this start, another, or long ago: one run from ~/.harness runs again from the new paths. That run finishes
@@ -95,6 +97,9 @@ export async function moveHomeAtStart(argv: readonly string[], env: NodeJS.Proce
   if (halfMoved) return deps.exit(1)
   again?.()
 }
+
+/** Whether the data root is Harness's: the move's commit puts the marker in it, and a folder without one is somebody else's. */
+const marked = (roots: Roots): boolean => fs.existsSync(join(roots.data, HARNESS_ROOT_MARKER))
 
 function afterFailure(movedNow: boolean, halfMoved: boolean): string {
   if (movedNow) return 'the next start finishes it'
@@ -116,7 +121,7 @@ export function reexecTarget(plan: Roots, execPath: string, argv: readonly strin
  * holds the lock for and has committed (this start then goes on from the new roots while that one finishes).
  */
 async function moveOrHold(explicit: boolean, env: NodeJS.ProcessEnv, environment: NodeJS.ProcessEnv, roots: Roots, deps: StartDeps, moveDeps: MoveDeps, lines: string[]): Promise<MoveOutcome | null> {
-  const wait = { committed: () => fs.existsSync(roots.data), long: () => say([UNDER_WAY], environment, deps) }
+  const wait = { committed: () => marked(roots), long: () => say([UNDER_WAY], environment, deps) }
   const locked = await withMoveLock(roots.legacy, async () => {
     const recovered = await recoverMove(deps.home, environment, moveDeps)
     if (recovered) return recovered
@@ -146,6 +151,19 @@ function heldLine(hold: Hold): string {
   if (hold.state === 'waiting') return `home move: waiting ${hold.reason} · ${hold.reason === 'update-pending' ? 'it moves at the start after this update settles' : CLOSE_AGENTS}`
   return hold.name === OLD_HOME ? `home move: skipped-override · ${OLD_HOME} is a link; it stays where it points`
     : `home move: skipped-override · ${hold.name} names a folder inside ${OLD_HOME}; unset it to move`
+}
+
+/**
+ * A fresh computer, neither moved nor on ~/.harness: its data root is made Harness's, so a ~/.harness something old
+ * makes later never takes the computer back. One that cannot be written is the daemon's to say, as it writes there.
+ */
+function markFresh(data: string): void {
+  try {
+    fs.mkdirSync(data, { recursive: true, mode: 0o700 })
+    fs.writeFileSync(join(data, HARNESS_ROOT_MARKER), '1\n', { mode: 0o600, flag: 'wx' })
+  } catch {
+    // Written already by another start, or not writable: see above.
+  }
 }
 
 /** A ~/.harness beside the data root that is not the bridge: nothing reads it (the root rule), which is said once and deleted never. */

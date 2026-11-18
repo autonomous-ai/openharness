@@ -142,9 +142,10 @@ beforeAll(async () => {
   const config = join(codexHome(), reviewed.file)
   write(config, `${read(config)}\n[hooks.state.${JSON.stringify(ownTrust[0])}]\ntrusted_hash = ${JSON.stringify(ownTrust[1])}\n`)
 
-  // The move: the XDG roots hold the tree, so the rule picks them. The next start installs from there.
+  // The move: the XDG roots hold the tree, and the data root its marker, so the rule picks them. The next start installs from there.
   const xdg = xdgRoots(home, {})
   layOut(xdg.data, xdg.state)
+  write(join(xdg.data, '.harness-root'), '1\n')
   after = await start(xdg.data)
   expect(after.env.ADAPTER_DATA_DIR).toBe(join(xdg.data, 'cli', 'data'))
 }, 60_000)

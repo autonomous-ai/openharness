@@ -365,9 +365,10 @@ describe('after Harness\'s folder moved', () => {
     vi.unstubAllEnvs()
     env.DSH_DIR = dshDir
   })
-  // The move: the data root is in place, the dsh folder in it, and DSH_DIR at its default there.
+  // The move: the data root is in place with its marker, the dsh folder in it, and DSH_DIR at its default there.
   const move = () => {
     moveTo(newDsh)
+    writeFileSync(join(dirname(newDsh), '.harness-root'), '1\n')
     env.DSH_DIR = harnessPath('dsh')
   }
 

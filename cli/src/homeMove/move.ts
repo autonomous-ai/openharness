@@ -4,7 +4,7 @@
  * crash is undone or finished by the next start. Each step looks at what is there first, so one run twice does it once.
  */
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
-import { legacyHarnessHome, type HarnessRootKind } from '../config/harnessHome.js'
+import { HARNESS_ROOT_MARKER, legacyHarnessHome, type HarnessRootKind } from '../config/harnessHome.js'
 import { BRIDGE_FILE, makeRealFolders, writeBridge } from './bridge.js'
 import type { MoveCheck, Reason } from './conditions.js'
 import { forgetJournal, openJournal, readJournal, type Done, type Journal } from './journal.js'
@@ -54,6 +54,10 @@ export async function runMove(check: Extract<MoveCheck, { move: true }>, env: No
     if (newTag !== oldTag) deps.tmux.retag(oldTag, newTag, steps)
     // A hook that ran since an entry's link went in may have put a folder in its place.
     for (const entry of plan.entries) mergeRecreated(entry, io)
+    // In the staged data root, so the root is Harness's from its rename on, and never before it.
+    const marker = join(stagingOf(plan, 'data'), HARNESS_ROOT_MARKER)
+    steps.add({ did: 'file', path: marker, before: null })
+    io.writeFileSync(marker, '1\n', { mode: 0o600 })
     for (const root of ROOTS) {
       steps.add({ did: 'commit', root })
       commitRoot(plan, root, io)

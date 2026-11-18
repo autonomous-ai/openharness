@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -65,13 +65,16 @@ describe('the move record', () => {
     expect(readMoveRecord(home, {})).toBeNull()
     writeMoveRecord(legacy, WAITING)
     expect(readMoveRecord(home, {})).toEqual(WAITING)
+    // Moved: the data root holds the marker the move's commit writes.
     mkdirSync(join(home, '.local', 'share', 'harness'), { recursive: true })
+    writeFileSync(join(home, '.local', 'share', 'harness', '.harness-root'), '1\n')
     mkdirSync(join(home, '.local', 'state', 'harness'), { recursive: true })
     writeMoveRecord(join(home, '.local', 'state', 'harness'), MOVED)
     expect(readMoveRecord(home, {})).toEqual(MOVED)
     // Custom XDG folders: the record is in the state root they name.
     const disk = folder(), env = { XDG_DATA_HOME: join(disk, 'data'), XDG_STATE_HOME: join(disk, 'state') }
     mkdirSync(join(disk, 'data', 'harness'), { recursive: true })
+    writeFileSync(join(disk, 'data', 'harness', '.harness-root'), '1\n')
     mkdirSync(join(disk, 'state', 'harness'), { recursive: true })
     writeMoveRecord(join(disk, 'state', 'harness'), { ...MOVED, panes: 0 })
     expect(readMoveRecord(home, env)).toEqual({ ...MOVED, panes: 0 })

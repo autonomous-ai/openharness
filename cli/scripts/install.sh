@@ -82,8 +82,9 @@ TUI_METADATA_URL="${HARNESS_TUI_MANIFEST_URL:-https://storage.googleapis.com/s3-
 HARNESS_KEY="${HARNESS_KEY:-cli}"
 # The two folders Harness keeps its files in, by the rule every Harness program follows
 # (cli/src/config/harnessHome.ts). On Linux, the XDG data and state folders; while only ~/.harness
-# exists, ~/.harness, which the daemon moves at its next start. Elsewhere ~/.harness. The data root is
-# the one switch: it exists only once that move is done, or after a fresh install.
+# exists, ~/.harness, which the daemon moves at its next start. Elsewhere ~/.harness. The data root's
+# marker (.harness-root) is the one switch: it is there only once that move is done, or after a fresh
+# install, so a folder something else made there switches nothing.
 harness_roots() {
   HARNESS_DATA_ROOT="$HOME/.harness"
   HARNESS_STATE_ROOT="$HOME/.harness"
@@ -99,12 +100,18 @@ harness_roots() {
     /*) _xdg_state="$(printf '%s' "$XDG_STATE_HOME" | tr -s /)"; _xdg_state="${_xdg_state%/}/harness" ;;
     *)  _xdg_state="$HOME/.local/state/harness" ;;
   esac
-  if [ -e "$_xdg_data" ] || [ ! -e "$HOME/.harness" ]; then
+  if [ -f "$_xdg_data/.harness-root" ] || [ ! -e "$HOME/.harness" ]; then
     HARNESS_DATA_ROOT="$_xdg_data"
     HARNESS_STATE_ROOT="$_xdg_state"
   fi
 }
 harness_roots
+# A fresh install on the XDG roots marks its data root Harness's, so a ~/.harness something old makes
+# later never takes the computer back. One on ~/.harness, or marked already, has nothing to mark.
+mark_data_root() {
+  [ "$HARNESS_DATA_ROOT" != "$HOME/.harness" ] && [ ! -f "$HARNESS_DATA_ROOT/.harness-root" ] || return 0
+  (umask 077 && mkdir -p "$HARNESS_DATA_ROOT" && printf '1\n' > "$HARNESS_DATA_ROOT/.harness-root")
+}
 CLI_DIR="$HARNESS_DATA_ROOT/cli"
 RUNTIME_DIR="$HARNESS_STATE_ROOT/runtime"
 CURRENT_NODE_FILE="$RUNTIME_DIR/current-node"
@@ -728,6 +735,7 @@ fi
 # 3. Fetch manifest, download + sha256-verify cli.js & notify.mjs, install them + the launcher (all in
 #    Node so it works identically on macOS/Linux without shasum/sha256sum差异).
 echo "▸ Installing harness from $METADATA_URL"
+mark_data_root
 HARNESS_METADATA_URL="$METADATA_URL" HARNESS_KEY="$HARNESS_KEY" HARNESS_NODE_BINARY="$NODE_BIN" HARNESS_CLI_DIR="$CLI_DIR" "$NODE_BIN" <<'HARNESSJS'
 const fs = require('fs'), os = require('os'), path = require('path'), crypto = require('crypto')
 const META = process.env.HARNESS_METADATA_URL, KEY = process.env.HARNESS_KEY, NODE = process.env.HARNESS_NODE_BINARY

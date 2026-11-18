@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { parseEnv } from 'node:util'
-import { legacyHarnessHome, xdgRoots } from '../config/harnessHome.js'
+import { HARNESS_ROOT_MARKER, legacyHarnessHome, xdgRoots } from '../config/harnessHome.js'
 import { harnessPaneOwner } from '../lib/harnessSessionLabel.js'
 import { isBridge } from './bridge.js'
 import { hasPaneOptions } from './panes.js'
@@ -44,7 +44,8 @@ export async function checkMove(deps: ConditionDeps): Promise<MoveCheck> {
   const legacy = legacyHarnessHome(home, 'linux')
   if (deps.platform !== 'linux' || !fs.existsSync(legacy)) return NO_HOLD
   const env = withEnvFile(deps)
-  if (fs.existsSync(xdgRoots(home, env).data)) return NO_HOLD
+  // Moved. A data root without the marker is somebody else's folder: the move runs, and refuses it (target-exists).
+  if (fs.existsSync(join(xdgRoots(home, env).data, HARNESS_ROOT_MARKER))) return NO_HOLD
   // A person who linked ~/.harness chose its place: nothing under it is read. Its name is the one a person reads.
   if (fs.lstatSync(legacy).isSymbolicLink()) return skipped(legacyHarnessHome('~', 'linux'))
   if (isBridge(legacy)) return NO_HOLD

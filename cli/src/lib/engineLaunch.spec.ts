@@ -1684,9 +1684,10 @@ describe('buildEngineLaunchArgv with installIfMissing', () => {
       expect(result.stdout).not.toContain('The command is above')
     })
 
-    // Moved: the data root is in place, and ~/.harness is the bridge left for what started before the move.
+    // Moved: the data root is in place with its marker, and ~/.harness is the bridge left for what started before the move.
     it('the prelude names the state root on a moved Linux home', () => {
       for (const folder of [['.local', 'share', 'harness'], ['.harness']]) mkdirSync(join(home, ...folder), { recursive: true })
+      writeFileSync(join(home, '.local', 'share', 'harness', '.harness-root'), '1\n')
       const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE }
       const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
       process.env.HOME = process.env.USERPROFILE = home

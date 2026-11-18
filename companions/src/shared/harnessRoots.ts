@@ -1,7 +1,7 @@
 /**
  * Where Harness keeps its data and its state: the CLI's rule (cli/src/config/harnessHome.ts), written again here
- * because this package ships alone. On Linux the XDG roots once the data root exists, else `~/.harness` while that
- * exists, else the XDG roots; macOS and Windows keep `~/.harness`.
+ * because this package ships alone. On Linux the XDG roots once the data root holds its marker (`.harness-root`), else
+ * `~/.harness` while that exists, else the XDG roots; macOS and Windows keep `~/.harness`.
  */
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -18,5 +18,5 @@ export function harnessRoots(home = homedir(), env: Readonly<Record<string, stri
     return value && posix.isAbsolute(value) ? value : posix.join(home, fallback)
   }
   const xdg = { data: posix.join(base('XDG_DATA_HOME', '.local/share'), 'harness'), state: posix.join(base('XDG_STATE_HOME', '.local/state'), 'harness') }
-  return exists(xdg.data) || !exists(legacy) ? xdg : { data: legacy, state: legacy }
+  return exists(posix.join(xdg.data, '.harness-root')) || !exists(legacy) ? xdg : { data: legacy, state: legacy }
 }

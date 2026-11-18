@@ -145,15 +145,15 @@ function agyStopStatus(input) {
 
 /**
  * Harness's data and state folders, by the rule of src/config/harnessHome.ts: on Linux the XDG ones once the data one
- * exists, else ~/.harness while that exists, else the XDG ones (a variable counts only as an absolute path); ~/.harness
- * elsewhere.
+ * holds its marker (`.harness-root`), else ~/.harness while that exists, else the XDG ones (a variable counts only as an
+ * absolute path); ~/.harness elsewhere.
  */
 function harnessRoots() {
   const legacy = join(homedir(), '.harness')
   if (process.platform !== 'linux') return { data: legacy, state: legacy }
   const base = (name, ...fallback) => isAbsolute(process.env[name] || '') ? process.env[name] : join(homedir(), ...fallback)
   const xdg = { data: join(base('XDG_DATA_HOME', '.local', 'share'), 'harness'), state: join(base('XDG_STATE_HOME', '.local', 'state'), 'harness') }
-  return existsSync(xdg.data) || !existsSync(legacy) ? xdg : { data: legacy, state: legacy }
+  return existsSync(join(xdg.data, '.harness-root')) || !existsSync(legacy) ? xdg : { data: legacy, state: legacy }
 }
 
 function paths() {

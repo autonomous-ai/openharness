@@ -37,8 +37,8 @@ SRC_NOTIFY="$ADAPTER_DIR/dist/notify.mjs"
 # The two folders Harness keeps its files in, by the rule every Harness program follows
 # (src/config/harnessHome.ts), as the public installer finds them. On Linux, the XDG data and state
 # folders; while only ~/.harness exists, ~/.harness, which the daemon moves at its next start.
-# Elsewhere ~/.harness. The data root is the one switch: it exists only once that move is done, or after
-# a fresh install.
+# Elsewhere ~/.harness. The data root's marker (.harness-root) is the one switch: it is there only once
+# that move is done, or after a fresh install, so a folder something else made there switches nothing.
 harness_roots() {
   HARNESS_DATA_ROOT="$HOME/.harness"
   HARNESS_STATE_ROOT="$HOME/.harness"
@@ -53,12 +53,18 @@ harness_roots() {
     /*) _xdg_state="$(printf '%s' "$XDG_STATE_HOME" | tr -s /)"; _xdg_state="${_xdg_state%/}/harness" ;;
     *)  _xdg_state="$HOME/.local/state/harness" ;;
   esac
-  if [ -e "$_xdg_data" ] || [ ! -e "$HOME/.harness" ]; then
+  if [ -f "$_xdg_data/.harness-root" ] || [ ! -e "$HOME/.harness" ]; then
     HARNESS_DATA_ROOT="$_xdg_data"
     HARNESS_STATE_ROOT="$_xdg_state"
   fi
 }
 harness_roots
+# A fresh install on the XDG roots marks its data root Harness's, so a ~/.harness something old makes
+# later never takes the computer back. One on ~/.harness, or marked already, has nothing to mark.
+mark_data_root() {
+  [ "$HARNESS_DATA_ROOT" != "$HOME/.harness" ] && [ ! -f "$HARNESS_DATA_ROOT/.harness-root" ] || return 0
+  (umask 077 && mkdir -p "$HARNESS_DATA_ROOT" && printf '1\n' > "$HARNESS_DATA_ROOT/.harness-root")
+}
 
 # Install layout — same defaults as src/config/env.ts, overridable for a sandboxed try-out.
 CLI_DIR="${ADAPTER_CLI_DIR:-$HARNESS_DATA_ROOT/cli}"
@@ -184,6 +190,8 @@ fi
 # --- Step 4: install the artifacts (write-then-rename; never touch DATA_DIR) ---
 # DATA_DIR lives INSIDE CLI_DIR and holds the token, computer-id, log and session registry — this step
 # only ever replaces the three packaged files, so a reinstall keeps the computer joined to its machine.
+# Only where the CLI goes in the data root: an ADAPTER_CLI_DIR elsewhere lays nothing there.
+if [ "$CLI_DIR" = "$HARNESS_DATA_ROOT/cli" ]; then mark_data_root; fi
 mkdir -p "$CLI_DIR" "$BIN_DIR"
 install_file() {
   local src="$1" dst="$2" mode="$3"
