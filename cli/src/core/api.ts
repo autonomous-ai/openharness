@@ -393,8 +393,6 @@ export interface CoreApi {
     focusApp(agentId: string, expiresAt: number, focusRevision: string): boolean
     /** Ask the window to open the agent a Store preparation made (`device_prepare_open`). */
     reveal(operationId: string, agentId: string): void
-    /** The focus revision, as it changes: a window's stale selection is refused against it. */
-    focus(revision: string): void
     /** It no longer reads this agent's transcript, as of the `seen`th prompt the core told it of. */
     transcripts(agentId: string, seen: number): void
     /** The agents whose transcripts it reads, said as it starts. */
@@ -1495,7 +1493,7 @@ export interface WifiResume {
 }
 
 /** The Wi-Fi device's routes of the door (`SERVICE_HTTP_ROUTES`): `harness device receipt` and its add-ons. */
-export const WIFI_REQUESTS = ['wifi_http', 'wifi_serving'] as const
+export const WIFI_REQUESTS = ['wifi_http', 'wifi_serving', 'wifi_focus_current'] as const
 
 /** What the core lists for the Wi-Fi device, read in line while it answers a request: the agents as it
  *  shows them, the Store's evidence on each, and whether a window is attached to show one. */
@@ -1541,7 +1539,6 @@ export const WIFI_OFF: CoreApi['wifi'] = {
   stop: async () => false, answer: async () => false,
   create: async () => ({ ok: false, error: 'UNSUPPORTED' }),
   stepFocus: async () => 'no_app', scroll: () => false, focusApp: () => false, reveal: () => {},
-  focus: () => {},
   transcripts: () => {}, watching: () => {}, streams: () => {},
 }
 

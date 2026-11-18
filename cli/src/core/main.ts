@@ -1678,9 +1678,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     core: coreApi,
     notify: (frame) => serviceLinks.notify('wifi', frame),
   })
-  // Its port from the start: its process connects as soon as the socket answers, before the rest of the
-  // core is wired, and is resumed through this port then (core/wifi.ts `started`).
-  if (outOfProcess.has('wifi')) ports.wifi = wifiLink.port
+  // The connected callback publishes a fresh port for each service connection. An old asynchronous
+  // focus check cannot apply against a replacement that happens to have the same revision.
   // What the core tells the recaps in their own process, and reads back from what they said (core/recapsLink.ts).
   const recapsLink = createRecapsLink({ notify: (frame, opts) => serviceLinks.notify('recaps', frame, opts), buffered: () => serviceLinks.buffered('recaps'),
     call: (type, payload) => serviceLinks.call('recaps', type, payload), clients: coreApi.clients, lastTurn: coreApi.transcripts.lastTurn })
@@ -1769,7 +1768,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // The gateway first hears what it starts from, then the shared tabs it held before a restart.
       if (service === 'gateway') { gatewayLink?.connected(); tabRelay.connected() }
       if (service === 'devices') devicesLink.connected()
-      if (service === 'wifi') wifiCore.started(appVoiceFocus ?? null)
+      if (service === 'wifi') { ports.wifi = { ...wifiLink.port }; wifiCore.started(appVoiceFocus ?? null) }
       const streamSink = clientStreams.connected(service)
       if (streamSink) streamSinks.set(service, streamSink)
       devicesWake.connected(service)
@@ -1798,7 +1797,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // Agent Messages' process went: its tabs' sockets have no one to hear them, and it opens them again as it starts.
       if (service === 'messages') tabRelay.closeOpened()
       if (service === 'devices') devicesLink.disconnected()
-      if (service === 'wifi') wifiCore.stopped()
+      if (service === 'wifi') { ports.wifi = null; wifiCore.stopped() }
       if (service === 'recaps') recapsLink.disconnected()
       clientStreams.disconnected(service)
       streamSinks.delete(service)
@@ -2401,15 +2400,30 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // the dial's machine first when the app moved to another one.
     onDevicePrepareOpened: (operationId, agentId) => ports.wifi?.revealed(operationId, agentId),
     onAppFocusState: (machineId, agentId, connId, expectedRevision) => {
-      // A delayed automatic selection cannot replace a newer explicit user choice. A device service
-      // that cannot say which choice is newest is one with no choice to protect: refused, as without one.
-      if (expectedRevision && wifiCore.focusRevision() !== expectedRevision) return false
-      appFormWindow = { machineId, connId }
-      if (agentId === null) {
-        if (appVoiceFocus?.connId === connId) appVoiceFocus = undefined
-      } else appVoiceFocus = { machineId, agentId, connId }
-      ports.devices?.windowFocus(windowFocus())
-      void ports.wifi?.appFocus(machineId, agentId, connId)
+      const apply = (): true => {
+        appFormWindow = { machineId, connId }
+        if (agentId === null) {
+          if (appVoiceFocus?.connId === connId) appVoiceFocus = undefined
+        } else appVoiceFocus = { machineId, agentId, connId }
+        ports.devices?.windowFocus(windowFocus())
+        void ports.wifi?.appFocus(machineId, agentId, connId)
+        return true
+      }
+      if (expectedRevision === undefined) return apply()
+      const service = ports.wifi, target = agentId ? registry.byAgent(agentId) : undefined
+      if (!expectedRevision || expectedRevision.length > 128 || !service || machineId !== backend.machineId || !target || target.identityHold) return false
+      const form = appFormWindow, voice = appVoiceFocus, binding = paneReadIdentity(target)
+      const checking = outOfProcess.has('wifi')
+        ? serviceLinks.call('wifi', 'wifi_focus_current', { revision: expectedRevision }, 15_000)
+        : serviceHost!.call('wifi_focus_current', { revision: expectedRevision }, { local: true, owner: true, connection: connId }, 15_000)
+      return checking.then(answer => {
+        if (answer.current !== true) return false as const
+        return (): boolean => {
+          if (ports.wifi !== service || appFormWindow !== form || appVoiceFocus !== voice ||
+            paneReadIdentity(registry.byAgent(agentId!)) !== binding) return false
+          return apply()
+        }
+      })
     },
     onAppFocus: (machineId, agentId) => ports.devices?.appFocus(machineId, agentId),
     // Everything the window still has unread. Held rather than acted on: the dial is handed it when a

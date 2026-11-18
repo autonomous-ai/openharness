@@ -37,6 +37,7 @@ function setup(over: { startThrows?: boolean; leavesOff?: boolean } = {}) {
   let adapter!: WifiDeps
   /** Its routes of the door, as each start returned them. */
   const routes = vi.fn(async (payload: Record<string, unknown>) => ({ status: 200, body: { asked: payload.target } }))
+  const focusCurrent = vi.fn(async (_payload: Record<string, unknown>) => ({ current: true }))
   const start = vi.fn((core: CoreApi, given: CorePorts, deps?: WifiDeps): ServiceRequests => {
     adapter = deps!
     if (over.startThrows) throw new Error('journal unreadable')
@@ -45,7 +46,7 @@ function setup(over: { startThrows?: boolean; leavesOff?: boolean } = {}) {
     const port = wifiPort(core.machine.id(), log)
     ports.push(port)
     given.wifi = port
-    return { wifi_http: routes }
+    return { wifi_http: routes, wifi_focus_current: focusCurrent }
   })
   let options!: ServiceProcessOptions
   const stop = vi.fn()
@@ -63,7 +64,7 @@ function setup(over: { startThrows?: boolean; leavesOff?: boolean } = {}) {
   }
   const settled = () => new Promise((resolve) => setTimeout(resolve, 30))
   return {
-    service, start, routes, log, ports, api: () => api, adapter: () => adapter, options: () => options, stop, notices, connection, settled,
+    service, start, routes, focusCurrent, log, ports, api: () => api, adapter: () => adapter, options: () => options, stop, notices, connection, settled,
     answer: (query: string, value: unknown) => { answers = { ...answers, [query]: value } },
     connect: () => options.onConnected!(connection),
     disconnect: () => options.onDisconnected!(),
@@ -74,6 +75,41 @@ function setup(over: { startThrows?: boolean; leavesOff?: boolean } = {}) {
 afterEach(() => vi.restoreAllMocks())
 
 describe('the Wi-Fi device in the devices\' process', () => {
+  it('keeps focus validation behind prior notices and bound to the original connection before and after its answer', async () => {
+    const f = setup(), asker = { local: true, owner: true }, payload = { revision: 'revision' }
+    const check = () => f.options().requests!.wifi_focus_current(payload, asker)
+    expect(await check()).toEqual({ current: false })
+    f.connect(); f.event({ kind: 'resume' })
+    await f.options().requests!.wifi_http({}, asker)
+    let moved!: () => void
+    vi.mocked(f.ports[0].appFocus).mockImplementationOnce(() => new Promise(resolve => { moved = resolve }))
+    f.event({ kind: 'appFocus', machineId: 'machine-1', agentId: 'a', connId: 'window' })
+    await vi.waitFor(() => expect(moved).toBeTypeOf('function'))
+    const waiting = check()
+    expect(f.focusCurrent).not.toHaveBeenCalled()
+    moved()
+    expect(await waiting).toEqual({ current: true })
+    expect(f.focusCurrent).toHaveBeenCalledWith(payload, asker, undefined)
+
+    let answered!: (value: { current: boolean }) => void
+    f.focusCurrent.mockImplementationOnce(() => new Promise(resolve => { answered = resolve }))
+    const stale = check()
+    await vi.waitFor(() => expect(answered).toBeTypeOf('function'))
+    f.disconnect(); f.connect(); f.event({ kind: 'resume' })
+    answered({ current: true })
+    expect(await stale).toEqual({ current: false })
+    await f.options().requests!.wifi_http({}, asker)
+
+    vi.mocked(f.ports[0].appFocus).mockImplementationOnce(() => new Promise(resolve => { moved = resolve }))
+    moved = undefined as never
+    f.event({ kind: 'appFocus', machineId: 'machine-1', agentId: null, connId: 'window' })
+    await vi.waitFor(() => expect(moved).toBeTypeOf('function'))
+    const old = check(), calls = f.focusCurrent.mock.calls.length
+    f.disconnect(); moved()
+    expect(await old).toEqual({ current: false })
+    expect(f.focusCurrent).toHaveBeenCalledTimes(calls)
+  })
+
   it('keeps a pending view bound to its original connection and refuses reads while disconnected', async () => {
     const f = setup()
     f.connect(); f.event({ kind: 'resume' })
@@ -450,17 +486,16 @@ describe('the Wi-Fi device in the devices\' process', () => {
     f.adapter().cancel!('d')
     await Promise.resolve()
     wifi.reveal('op', 'a')
-    wifi.focus('r')
     wifi.transcripts('a', 1)
     wifi.watching(['a'])
     wifi.streams(['a'])
-    expect(f.notices.map(([kind]) => kind)).toEqual(['scroll', 'focusApp', 'reveal', 'focus', 'transcripts', 'watching', 'streams'])
+    expect(f.notices.map(([kind]) => kind)).toEqual(['scroll', 'focusApp', 'reveal', 'transcripts', 'watching', 'streams'])
     expect(f.notices[0][1]).toEqual({ phase: 'move', dy: 2, velocity: 3 })
     // The core gone: asked, it says so; told, nothing goes.
     f.disconnect()
     await expect(wifi.stop('a')).rejects.toThrow('the Wi-Fi device is not connected to the core')
-    wifi.focus('after-disconnect')
-    expect(f.notices).toHaveLength(7)
+    wifi.streams([])
+    expect(f.notices).toHaveLength(6)
   })
 
   it('answers its routes of the door once what the core said before is heard, and as down while it is not built', async () => {

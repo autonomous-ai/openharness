@@ -72,7 +72,6 @@ export function createWifiLink(deps: WifiLinkDeps) {
     scroll: ({ phase, dy, velocity }) => { if (phase === 'down' || phase === 'move' || phase === 'up') core.wifi.scroll(phase, number(dy), number(velocity)) },
     focusApp: ({ agentId, expiresAt, focusRevision }) => { core.wifi.focusApp(text(agentId), number(expiresAt), text(focusRevision)) },
     reveal: ({ operationId, agentId }) => core.wifi.reveal(text(operationId), text(agentId)),
-    focus: ({ revision }) => core.wifi.focus(text(revision)),
     transcripts: ({ agentId, seen }) => core.wifi.transcripts(text(agentId), number(seen)),
     watching: ({ agentIds }) => core.wifi.watching(strings(agentIds)),
     streams: ({ agentIds }) => core.wifi.streams(strings(agentIds)),

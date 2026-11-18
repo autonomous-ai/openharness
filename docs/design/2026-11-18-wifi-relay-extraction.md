@@ -475,7 +475,7 @@ machine_select.payload.eventsProtocol = 1
 connected.payload.eventsProtocol = 1
 events_observe { requestId, scope: "all" | { agentIds: string[] } }
 events_observe_result { requestId, ok: true, generation }
-session_events { generation, agentId, sessionId, replay, events: LiveEvent[] }
+session_event { generation, frame: <existing app frame>, batch?: { id, index, count } }
 ```
 
 An empty named scope removes interest; it does not claim foreground presence. Scope is installed
@@ -486,15 +486,18 @@ Scope replacement and disconnect revoke old delivery authority without freeing w
 physically settled. Devices own their existing stream subscriptions and per-turn answer state.
 
 For real convergence, the proposed change also migrates the Desktop's local `ws_conn.dart` event
-decoder to this negotiated envelope and expands each batch through its existing event dispatcher.
-Legacy app connections retain their existing individual frames. Merely naming a device-only feed
+decoder to this negotiated envelope and passes its single inner frame through the existing event
+dispatcher. Legacy app connections retain their existing individual frames. Merely naming a device-only feed
 `events_observe` is not the proposal. A Desktop protocol change needs its applicable instructions,
 decoder coverage and a person-level session-stream test before integration.
 
-Unresolved before approval: where the funnel emits the negotiated envelope without changing the
-existing per-event app-before-input ordering or the receipt-before-recap ordering; whether individual
-frames carrying bounded batch provenance produce a smaller shared change than an array envelope;
-and the exact byte/count ceilings for both wire and component retention. Existing engine pages allow
+The selected candidate preserves the funnel's exact existing per-event send point. It passes only
+batch provenance (one process-local serial, index and original event count) alongside that send.
+Negotiated connections receive one envelope per existing event, not an array emitted before or after
+the funnel. Thus intervening heartbeat/input/recap frames keep their order. The devices consumer owns
+bounded assembly of original batches; the core owns no batch queue. Existing ordinary `agent_synced`
+and `agent_deleted` frames are eligible under the same session scope, without batch provenance.
+The exact physical send and component assembly census still requires source review. Existing engine pages allow
 1 MiB pages and fragmented 64 MiB results (`engines/worker/liveProtocol.ts`), so 16 MiB cannot be called
 a historical universal event maximum. Any new overload refusal must be named and tested, including
 escaped content, large tool inputs and a slow app as well as a slow device observer.
@@ -535,6 +538,23 @@ Current output checks are 64 correlated inputs, 512 results and a 32 KiB encoded
 these remain authoritative. A reused `streamRecords` reader must surface skipped oversized records:
 its current API silently skips them, so it cannot be used unchanged for proof of an uninterrupted read.
 
+Proposed explicit overload census, selected after checking the devices host's 256 MiB heap/512 MiB
+RSS limits: at most 512 capture metadata owners (the existing total receipt capacity), four actual
+reads with 64 KiB chunks, a single shared 16 MiB + 4 KiB raw/partial-byte budget, and 16 MiB total
+retained evidence strings plus 65,536 retained nodes/IDs across agents. Per-agent parser limits remain
+secondary bounds. Current-answer text shares a separate 16 MiB component budget with the existing
+16 KiB per-turn limit (1,024 completely full turns); the exact mixed-size record ceiling is also 1,024.
+Existing result storage remains at most 512 payloads, each at most 32 KiB encoded. Metadata, UTF-16
+strings and parsed object overhead count separately: encoded-byte caps are not claimed as heap caps.
+These are NEW overload policies, including smaller maximum raw records than some former inline reads.
+No oversized record is truncated into proof. The affected receipt stays unknown with a fixed local
+failure code, and an input whose capture cannot be admitted is never written.
+
+For first binding, the ordinary app `agent_synced` is only a trigger to the existing current `resolve`
+query. It never supplies a path or process authority. Binding already announces that ordinary frame
+(`agents/bind.ts` → `announceSession` → `sessionSync`); no extra `follow({each:true})` scan fan-out or
+new discover permission is needed. One existing capture owns its in-flight resolve and a dirty bit.
+
 Raw file observation and app events are different channels. Their ordering is not automatically the
 old raw-before-normalized order: a fast app `turn_ended` can otherwise mark a native receipt unknown
 before its raw result is read. The first RED must exercise that race, along with a complete first turn
@@ -542,7 +562,7 @@ written before its binding announcement. A bounded ordered handoff or a proven l
 inside the component is required before the core raw side-read is deleted. There is no approval to
 hide this race behind a sleep or to weaken native result evidence.
 
-### Focus: existing mutation authority and pending decision
+### Focus: existing mutation authority and approved caller contract
 
 The complete mutation audit of `AutonomousDeviceService` finds exactly two `focusCounter` increments:
 `appFocus`, which originates from an actual core window update/disconnect, and `focusSnapshot`, which
@@ -552,19 +572,75 @@ capturing existing `appFormWindow` and `appVoiceFocus` object identities over ad
 map. Both objects are replaced by explicit focus and cleared when their owning window disconnects.
 
 Candidate service request: `wifi_focus_current { revision }` returns `{ current: boolean }` from the
-component's current focus snapshot, after prior window notices. A conditional `app_focus` captures the
+component's current focus snapshot, after prior window notices. Revision is a nonempty string of at
+most 128 characters. The process adapter waits its existing `heardSoFar` owner and the handler waits
+its existing `focusing` owner, then checks captured core epoch and current service state. This wait
+matters: a choice made before the conditional acknowledgment arrived must be applied before the
+revision comparison, not merely protected against choices that happen during the check.
+A conditional `app_focus` captures the
 two existing window objects and the original physical socket/bound machine. After the bounded check,
 the final core apply is synchronous and requires those objects unchanged, the same physical window
 still open, and the target agent still current. Explicit untagged `app_focus` continues immediately,
 superseding a pending conditional check. No component revision is cached in core.
 
-This is still a proposal: `localWsServer` currently assumes a synchronous callback, and neither
-`serviceLinks.call` nor `inlineHost.call` is a blanket count bound for arbitrary simultaneous callers.
-The check must use existing connection-owned request custody with a precise actual-unsettled bound,
-not an unbounded Promise chain or a new Wi-Fi waiter map. A reply from a replaced/disabled service
+The old `localWsServer` assumed a synchronous callback; six actual temporary-socket REDs exposed
+pending promises treated as approval and absent named handling for rejected/thrown validation
+(`/tmp/core-wifi-focus-expanded-red.log`). The approved replacement keeps explicit focus synchronous.
+Conditional validation resolves `false` or a zero-argument guarded apply closure. On completion,
+`localWsServer` checks the original physical sink, open socket and captured bound machine, then calls
+the closure and forwards the dial update in the same stack. It does not await this on the connection's
+message chain. The machine binding is fixed at the original handshake; a later `machine_select`
+continues to reach the ordinary backend and does not rebind that socket. No new focus generation is
+introduced. Thrown/rejected validation emits only fixed `FOCUS_VALIDATION_UNAVAILABLE`, without
+content or identity, and explicit focus remains usable.
+
+The core closure compares the captured `appFormWindow` and `appVoiceFocus` objects, exact current
+`ports.wifi` object and a copied `paneReadIdentity` from the existing transcript authority helper.
+That scalar detects in-place changes to session, process, evidence revision, identity hold or terminal
+route. Missing/held local targets are refused; explicit remote focus is unchanged. The external Wi-Fi
+connected callback publishes a fresh shallow port object; disconnect clears it. Inline service ports
+already have their actual guarded lifetime. No component revision is cached in core.
+
+The integrated
+serviceLinks owner now caps all outstanding requests at 100 per service; the matching inline owner
+above caps actual unsettled handlers, including after timeout/abort. The check uses that existing
+bounded request custody, not a new Wi-Fi waiter map. External `call` is the core's request: closing a
+window revokes final apply authority but retains request credit until reply or its 15-second deadline.
+Inline `call` carries the existing asker connection for close notification and retains actual handler
+credit until settlement even after abort. A reply from a replaced/disabled service
 must not authorize a window move. The actual service callback and physical-window completion need
 RED cases for old reply/new explicit focus, disconnect/reconnect with the same agent, replacement,
 timeout/hung inline handler, target deletion and two conditional acknowledgments in flight.
+
+The first caller RED is `services/wifi.feed.spec.ts`: shared input executes while the proposed raw
+capture is held, and an app end executes while its proposed raw drain is held. It also covers empty
+first binding, original end/start adjacency, and named lost/gap/oversize callbacks without effect retry.
+These injected-reader caller cases do not substitute for the temporary-file identity, partial-record,
+capacity, first-binding catch-up and actual close/settlement cases required in the reader itself.
+The next actual-filesystem caller RED (`/tmp/core-wifi-filesystem-caller-red.log`, four failures,
+actual exit 1) uses production `startWifi` without an injected reader and real throwaway JSONL files:
+bound complete output, an old partial record completed before new output, and an original-unbound
+process whose whole first turn is written and bound before the faster app end. All three currently
+remain `RESULT_EVIDENCE_MISSING`; an unsafe symlink capture currently reaches shared input. These
+prove the missing caller behavior, not a completed reader's safety or capacity validation.
+
+### Focus slice validation
+
+- RED: six temporary-socket cases at `/tmp/core-wifi-focus-expanded-red.log`, actual exit 1;
+  four missing component-handler cases at `/tmp/core-wifi-focus-service-red.log`, actual exit 1.
+- GREEN: all 77 local WebSocket cases at `/tmp/core-wifi-focus-local-green.log`, actual exit 0.
+  The 209 selected core/service cases at `/tmp/core-wifi-focus-coverage.log` all pass; Wi-Fi core,
+  link, service and process each meet 100% statements/branches/functions/lines. That command exits 1
+  solely because the selected API tests omitted the existing connectors fallback caller. The corrected
+  five-file API selection at `/tmp/core-wifi-focus-api-coverage.log` passes all 91 cases and API
+  per-file 100%, actual exit 0. No unused defensive cases were added for that omission.
+- Architecture: all 30 cases pass at `/tmp/core-wifi-focus-architecture.log`, actual exit 0.
+  The parent's identical `d5514605d7` shared-limit export correction is included for that check.
+- Types: `/tmp/core-wifi-focus-types-final.log`, actual exit 0. Diff whitespace check clean.
+- Final composition authority is wired in `main.ts`, outside the unit coverage gate. Packaged native
+  focus/restart cases and cost validation remain the coordinator's responsibility after integration;
+  these unit tests make no claim that the real main wiring has already been exercised. Windows
+  remains explicitly unverified under the user's current deferral.
 
 ### Proposed files and next validation selection
 

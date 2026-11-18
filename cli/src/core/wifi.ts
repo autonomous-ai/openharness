@@ -1,4 +1,4 @@
-/** Remaining Wi-Fi transcript/stream and final focus fences; relay and presence live in components. */
+/** Remaining Wi-Fi transcript/stream feeds; relay, presence and focus revision live in components. */
 import type { LiveEvent } from '../engines/kit/events.js'
 import type { CoreApi, WifiPort, WifiResume } from './api.js'
 
@@ -36,11 +36,9 @@ export function createWifiCore(deps: WifiCoreDeps) {
   const dispatched = new Map<string, number>()
   /** The agents a device subscribed to. */
   let streamed = new Set<string>()
-  let revision: string | undefined
   let up = false
   const api: CoreApi['wifi'] = {
     ...deps.doors,
-    focus: (next) => { revision = next },
     transcripts: (agentId, seen) => { if ((dispatched.get(agentId) ?? 0) <= seen) watched.delete(agentId) },
     watching: (agentIds) => {
       watched.clear()
@@ -83,21 +81,17 @@ export function createWifiCore(deps: WifiCoreDeps) {
       const summary = frame.type === 'commander_event' && payload?.kind === 'summary' && typeof frame.agentId === 'string'
       service.card(frame, summary ? deps.fullText(frame.agentId as string) : undefined)
     },
-    /** The focus revision, as the service last said; none while it is off. */
-    focusRevision: (): string | undefined => (up ? revision : undefined),
     /** Re-establish the remaining feed/focus state on this service connection. */
     started: (focus: WifiResume['focus']): void => {
       up = true
       watched.clear()
       dispatched.clear()
       streamed = new Set()
-      revision = undefined
       void port()?.resume({ focus }).catch(() => {})
     },
-    /** Service loss disables its feed and final focus revision. */
+    /** Service loss disables its feed. */
     stopped: (): void => {
       up = false
-      revision = undefined
     },
 
   }

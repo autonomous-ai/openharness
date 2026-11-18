@@ -79,8 +79,10 @@ export interface LocalWsServerOptions {
   localClient?: () => { kind: string; name: string; machineId?: string } | null
   /** The desktop app opened an agent's terminal — which agent, and on which machine. Lets the dial follow
    *  the window, so the two screens stay one desk. */
-  /** Explicit app focus, including a live empty workspace, for device routing. */
-  onAppFocusState?: (machineId: string, agentId: string | null, connId: string, expectedRevision?: string) => unknown
+  /** Explicit focus applies synchronously. A conditional check returns its final guarded apply so
+   *  physical-window validation, state mutation and dial forwarding share one synchronous stack. */
+  onAppFocusState?: (machineId: string, agentId: string | null, connId: string, expectedRevision?: string) =>
+    boolean | void | Promise<false | (() => boolean)>
   /** A registered desktop connection closed. Never interpret this as live empty-workspace focus. */
   onAppDisconnect?: (machineId: string, connId: string) => void
   onDevicePrepareOpened?: (operationId: string, agentId: string) => void
@@ -757,9 +759,19 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
                 options.backend.setLocalTerminalFocus?.(connId, agentId, visible)
               }
               const revision = (parsed.payload as Record<string, unknown>)?.focusRevision
-              if (options.onAppFocusState?.(boundMachineId, agentId, connId,
-                typeof revision === 'string' ? revision : undefined) === false) return
-              if (agentId) options.onAppFocus?.(boundMachineId, agentId)
+              const machine = boundMachineId
+              const failed = (): void => { console.warn('[local-ws] FOCUS_VALIDATION_UNAVAILABLE') }
+              try {
+                const validation = options.onAppFocusState?.(machine, agentId, connId,
+                  typeof revision === 'string' ? revision : undefined)
+                if (validation instanceof Promise) {
+                  // Never put this wait on the dispatch chain: a later explicit choice must win now.
+                  void validation.then(apply => {
+                    if (ws.readyState !== WebSocket.OPEN || windowSinks.get(connId) !== sink || boundMachineId !== machine) return
+                    if (apply && apply() && agentId) options.onAppFocus?.(machine, agentId)
+                  }).catch(failed)
+                } else if (validation !== false && agentId) options.onAppFocus?.(machine, agentId)
+              } catch { failed() }
             }
             // Focus is local desk state and must never be forwarded to a remote machine.
             return

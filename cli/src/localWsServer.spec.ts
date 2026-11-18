@@ -1046,7 +1046,7 @@ describe('local CLI WebSocket', () => {
     server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
     local = attachLocalWsServer(server, {
       machineId, backend,
-      onAppFocusState: (machine, agent, conn) => states.push({ machine, agent, conn }),
+      onAppFocusState: (machine, agent, conn) => { states.push({ machine, agent, conn }) },
       onAppDisconnect: disconnected,
     })
     await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve))
@@ -1181,6 +1181,107 @@ describe('local CLI WebSocket', () => {
     expect(dial).not.toHaveBeenCalled()
     expect(backend.frames.map((frame) => frame.type)).toEqual(['terminal_open'])
     ws.close()
+  })
+
+  it.each(['refused', 'superseded', 'closed'] as const)('does not apply a %s asynchronous focus validation or delay an explicit choice', async outcome => {
+    const backend = new FakeBackend(), dial = vi.fn(), applied = vi.fn()
+    let finish!: () => void, current: string | null = null
+    const pending = new Promise<void>(resolve => { finish = resolve })
+    const focus = vi.fn((_machine: string, agent: string | null, _conn: string, revision?: string) => {
+      if (!revision) { current = agent; return }
+      const before = current
+      return pending.then(() => outcome === 'refused' ? false as const : () => {
+        if (current !== before) return false
+        current = agent; applied(); return true
+      })
+    })
+    server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
+    local = attachLocalWsServer(server, { machineId, backend, onAppFocusState: focus, onAppFocus: dial })
+    await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve))
+    const ws = new WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`)
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+    await connected
+    try {
+      ws.send(JSON.stringify({ type: 'app_focus', payload: { agentId: 'automatic', focusRevision: 'old:0' } }))
+      await vi.waitFor(() => expect(focus).toHaveBeenCalledOnce())
+      expect(dial).not.toHaveBeenCalled()
+      if (outcome === 'superseded') {
+        ws.send(JSON.stringify({ type: 'app_focus', payload: { agentId: 'explicit' } }))
+        await vi.waitFor(() => expect(dial).toHaveBeenCalledExactlyOnceWith(machineId, 'explicit'))
+      } else if (outcome === 'closed') {
+        ws.close()
+        await vi.waitFor(() => expect(backend.unregisters).toHaveLength(1))
+      }
+      finish()
+      await pending
+      // A later ordinary frame is an ordered dispatch witness, not a sleep.
+      if (outcome !== 'closed') {
+        ws.send(JSON.stringify({ type: 'terminal_open', payload: { agentId: 'background' } }))
+        await vi.waitFor(() => expect(backend.frames).toHaveLength(1))
+      }
+      expect(applied).not.toHaveBeenCalled()
+      expect(dial).toHaveBeenCalledTimes(outcome === 'superseded' ? 1 : 0)
+    } finally { finish(); ws.close() }
+  })
+
+  it('applies a current asynchronous focus on its original physical window and fixed machine binding', async () => {
+    const backend = new FakeBackend(), dial = vi.fn(), applied = vi.fn(() => true), pending = gate()
+    const focus = vi.fn(() => pending.promise.then(() => applied))
+    server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
+    local = attachLocalWsServer(server, { machineId, backend, onAppFocusState: focus, onAppFocus: dial })
+    await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve))
+    const ws = new WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`)
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+    await connected
+    try {
+      ws.send(JSON.stringify({ type: 'app_focus', payload: { agentId: 'automatic', focusRevision: 'current:1' } }))
+      await vi.waitFor(() => expect(focus).toHaveBeenCalledOnce())
+      expect(dial).not.toHaveBeenCalled()
+      // Established sockets never select again. The ordinary backend receives this frame unchanged;
+      // it cannot replace this physical connection's bound machine.
+      ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId: 'other-machine', localProtocolVersion: 1 } }))
+      await vi.waitFor(() => expect(backend.frames).toHaveLength(1))
+      pending.resolve()
+      await vi.waitFor(() => expect(dial).toHaveBeenCalledExactlyOnceWith(machineId, 'automatic'))
+      expect(applied).toHaveBeenCalledOnce()
+      expect(applied.mock.invocationCallOrder[0]).toBeLessThan(dial.mock.invocationCallOrder[0]!)
+    } finally { pending.resolve(); ws.close() }
+  })
+
+  it.each(['rejected', 'thrown'] as const)('contains a %s focus validator failure and leaves explicit focus usable', async failure => {
+    const backend = new FakeBackend(), dial = vi.fn(), logged = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let reject!: (error: Error) => void
+    const pending = new Promise<never>((_resolve, fail) => { reject = fail })
+    // The assertion below tests production's visible failure; keep a failing RED's orphan rejection
+    // from masking that assertion with a second test-runner error.
+    void pending.catch(() => {})
+    const focus = vi.fn((_machine: string, _agent: string | null, _conn: string, revision?: string) => {
+      if (!revision) return
+      if (failure === 'thrown') throw new Error('private validator detail')
+      return pending
+    })
+    server = http.createServer((_req, res) => { res.statusCode = 404; res.end() })
+    local = attachLocalWsServer(server, { machineId, backend, onAppFocusState: focus, onAppFocus: dial })
+    await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve))
+    const ws = new WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`)
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+    await connected
+    try {
+      ws.send(JSON.stringify({ type: 'app_focus', payload: { agentId: 'automatic', focusRevision: 'current:1' } }))
+      await vi.waitFor(() => expect(focus).toHaveBeenCalledOnce())
+      if (failure === 'rejected') reject(new Error('private validator detail'))
+      await vi.waitFor(() => expect(logged).toHaveBeenCalledWith('[local-ws] FOCUS_VALIDATION_UNAVAILABLE'))
+      expect(dial).not.toHaveBeenCalled()
+      ws.send(JSON.stringify({ type: 'app_focus', payload: { agentId: 'explicit' } }))
+      await vi.waitFor(() => expect(dial).toHaveBeenCalledExactlyOnceWith(machineId, 'explicit'))
+      expect(logged.mock.calls.flat().join(' ')).not.toContain('private validator detail')
+    } finally { ws.close(); logged.mockRestore() }
   })
 
   it('tells this daemon\'s terminals which one is focused, even when the dial refuses the move', async () => {

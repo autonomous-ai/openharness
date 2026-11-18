@@ -10,6 +10,7 @@ import type { LiveEvent } from '../lib/normalize.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { startWifi as startWifiService, type WifiDeps } from './wifi.js'
 import { devicePeerConnection } from '../lib/autonomous-device/peerConnection.js'
+import { devicePeerKey } from '../lib/autonomous-device/peerEndpoint.js'
 import { GatewayDeviceFixture } from '../testing/devicePeer.js'
 import { observeQuestions, type QuestionListener } from '../agentClient/questions.js'
 
@@ -107,27 +108,64 @@ describe('the Wi-Fi device, with the dials', () => {
     expect(start).toHaveBeenCalledOnce()
   })
 
-  it('holds focus replies behind one applied-state query, refuses its failure and recovers on a fresh read', async () => {
+  it('checks conditional focus only after preceding window moves and rejects malformed revisions', async () => {
     let service!: AutonomousDeviceService
     const core = fakeCore({ dataDir, wifi: { view: vi.fn(async () => ({ agents: [agent], store: [], hasWindow: true })) } })
     const ports = emptyPorts()
-    startWifi(core, ports, { service: options => service = new AutonomousDeviceService(options) })
-    await joinDevice(core)
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    let reject!: (error: Error) => void
-    const view = vi.mocked(core.wifi.view), calls = view.mock.calls.length
-    view.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail }))
-    service.appFocus('machine-1', 'agent', 'window')
-    const move = ports.wifi!.appFocus('machine-1', null, 'window')
-    const denied = expect(move).rejects.toThrow('barrier lost')
+    const requests = startWifi(core, ports, { service: options => service = new AutonomousDeviceService(options) })
+    await ports.wifi!.resume({ focus: null })
+    const revision = service.focusSnapshot().focusRevision
+    const check = (revision: unknown) => requests.wifi_focus_current!({ revision }, { local: true, owner: true })
+    expect(await check(revision)).toEqual({ current: true })
+    for (const value of [undefined, '', 'x'.repeat(129), 42, revision + 'stale']) expect(await check(value)).toEqual({ current: false })
+    let finish!: (value: { agents: typeof agent[]; store: []; hasWindow: boolean }) => void
+    vi.mocked(core.wifi.view).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const moving = ports.wifi!.appFocus('machine-1', 'agent', 'window')
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+    let settled = false
+    const checking = Promise.resolve(check(revision)).then(answer => { settled = true; return answer })
     await Promise.resolve()
-    service.appFocus('machine-1', null, 'window')
-    expect(view).toHaveBeenCalledTimes(calls + 1)
-    reject(new Error('barrier lost'))
-    await denied
-    expect(warn).toHaveBeenCalledWith('[wifi] CORE_VIEW_UNAVAILABLE')
-    await ports.wifi!.appFocus('machine-1', 'agent', 'window')
-    expect(service.focusSnapshot().focus?.agentId).toBe('agent')
+    expect(settled).toBe(false)
+    finish({ agents: [agent], store: [], hasWindow: true })
+    await moving
+    expect(await checking).toEqual({ current: false })
+    expect(await check(service.focusSnapshot().focusRevision)).toEqual({ current: true })
+  })
+
+  it('does not apply a queued old focus after a new resume supplies the current epoch', async () => {
+    let service!: AutonomousDeviceService
+    const core = fakeCore({ dataDir }), ports = emptyPorts()
+    const token = 'fixture-token-for-service-authority-32-bytes'
+    startWifi(core, ports, { service: options => service = new AutonomousDeviceService(options),
+      peer: { composition: 'services', port: 18474, token } })
+    await ports.wifi!.resume({ focus: null })
+    expect(vi.mocked(devicePeerConnection).mock.calls.at(-1)?.[0]).toMatchObject({
+      port: 18474, key: devicePeerKey('services', { HARNESSD_SERVICE_TOKEN: token }),
+    })
+    const moved = vi.spyOn(service, 'appFocus')
+    const old = ports.wifi!.appFocus('machine-1', null, 'old-window')
+    const resumed = ports.wifi!.resume({ focus: null })
+    await Promise.all([old, resumed])
+    expect(moved).not.toHaveBeenCalled()
+  })
+
+  it.each(['disconnect', 'resume', 'stop'] as const)('revokes a pending focus check on %s and never blesses its old completion', async change => {
+    let service!: AutonomousDeviceService
+    const core = fakeCore({ dataDir, wifi: { view: vi.fn(async () => ({ agents: [agent], store: [], hasWindow: true })) } })
+    const ports = emptyPorts()
+    const requests = startWifi(core, ports, { service: options => service = new AutonomousDeviceService(options) })
+    await ports.wifi!.resume({ focus: null })
+    let finish!: (value: { agents: typeof agent[]; store: []; hasWindow: boolean }) => void
+    vi.mocked(core.wifi.view).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const moving = ports.wifi!.appFocus('machine-1', null, 'window').catch(() => {})
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+    const checking = requests.wifi_focus_current!({ revision: service.focusSnapshot().focusRevision }, { local: true, owner: true })
+    let resumed: Promise<void> | undefined
+    if (change === 'stop') await ports.wifi!.stop()
+    else { ports.wifi!.disconnected(); if (change === 'resume') resumed = ports.wifi!.resume({ focus: null }) }
+    finish({ agents: [agent], store: [], hasWindow: true })
+    await moving; await resumed
+    expect(await checking).toEqual({ current: false })
   })
 
   it('bounds failed observation reconnects and never retries input effects', async () => {
@@ -443,13 +481,74 @@ describe('the Wi-Fi device, with the dials', () => {
     await hello()
     vi.mocked(core.wifi.streams).mockClear()
     const order: string[] = []
-    vi.mocked(core.wifi.streams).mockImplementation((ids) => { order.push(`streams ${ids.join(',')}`) })
+    let changed = false, applied!: () => void
+    const view = vi.mocked(core.wifi.view), original = view.getMockImplementation()!
+    view.mockImplementation(async () => {
+      if (changed) { changed = false; await new Promise<void>(resolve => { applied = resolve }) }
+      return original()
+    })
+    vi.mocked(core.wifi.streams).mockImplementation((ids) => { changed = true; order.push(`streams ${ids.join(',')}`) })
     peerFor(core).changed.on('frame', frame => { if (frame.type === 'send') order.push(String(frame.payload.type)) })
-    await ask({ type: 'agent.subscribe', machineId: 'machine-1', agentId: 'agent' }).catch(() => {})
+    const subscribing = ask({ type: 'agent.subscribe', machineId: 'machine-1', agentId: 'agent' })
+    await vi.waitFor(() => expect(applied).toBeTypeOf('function'))
+    expect(order).toEqual(['streams agent'])
+    applied()
+    await subscribing
     expect(order.slice(0, 2)).toEqual(['streams agent', 'agent.subscribe_result'])
     // Told once: the next answer finds the same subscriptions.
     await ask({ type: 'focus.get' })
     expect(core.wifi.streams).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses both a subscription handoff and a waiting focus when the stream-interest barrier fails', async () => {
+    const { core, port, peer, hello } = started()
+    await hello()
+    const logged = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let changed = false, reject!: (error: Error) => void
+    const view = vi.mocked(core.wifi.view), original = view.getMockImplementation()!
+    vi.mocked(core.wifi.streams).mockImplementation(() => { changed = true })
+    view.mockImplementation(() => changed ? new Promise((_resolve, fail) => { reject = fail }) : original())
+    const requestId = randomUUID()
+    const request = peer.request('c1', { type: 'agent.subscribe', requestId, machineId: 'machine-1', agentId: 'agent' })
+    await vi.waitFor(() => expect(reject).toBeTypeOf('function'))
+    const moving = port.appFocus('machine-1', 'agent', 'window')
+    const refused = expect(moving).rejects.toThrow('barrier unavailable')
+    await Promise.resolve()
+    reject(new Error('barrier unavailable'))
+    await refused; await request
+    expect(logged).toHaveBeenCalledWith('[wifi] CORE_VIEW_UNAVAILABLE')
+    expect(sent(core).some(frame => frame.requestId === requestId)).toBe(false)
+    changed = false
+    await port.appFocus('machine-1', 'agent', 'window')
+    expect(sent(core).some(frame => frame.requestId === requestId)).toBe(true)
+  })
+
+  it('applies last-subscriber removal that arrives during an outstanding stream-interest query', async () => {
+    const { core, port, peer, hello, ask } = started()
+    await hello()
+    peer.session('second', { ...client, identity: 'second-device' })
+    await ask({ type: 'hello', proto: 1 }, 'second')
+    let changed = false, applied!: () => void
+    const view = vi.mocked(core.wifi.view), original = view.getMockImplementation()!
+    vi.mocked(core.wifi.streams).mockImplementation(() => { changed = true })
+    view.mockImplementation(async () => {
+      if (changed) { changed = false; await new Promise<void>(resolve => { applied = resolve }) }
+      return original()
+    })
+    const request = peer.request('c1', { type: 'agent.subscribe', requestId: randomUUID(), machineId: 'machine-1', agentId: 'agent' })
+    await vi.waitFor(() => expect(applied).toBeTypeOf('function'))
+    peer.drop('c1')
+    port.card({ type: 'commander_event', agentId: 'agent', payload: { kind: 'tool', text: 'Read' } })
+    expect(core.wifi.streams).toHaveBeenLastCalledWith([])
+    expect(sent(core).some(frame => frame.kind === 'turn.tool')).toBe(false)
+    const first = applied
+    applied = undefined as never
+    first()
+    await vi.waitFor(() => expect(applied).toBeTypeOf('function'))
+    expect(sent(core).some(frame => frame.kind === 'turn.tool')).toBe(false)
+    applied()
+    await request
+    await vi.waitFor(() => expect(sent(core).some(frame => frame.kind === 'turn.tool')).toBe(true))
   })
 
   it('reads the turn\'s whole answer off a summary card, and passes the agents\' turns and live events on', async () => {
@@ -470,26 +569,31 @@ describe('the Wi-Fi device, with the dials', () => {
     port.revealed('op', 'agent')
   })
 
-  it('moves the window\'s focus in order, against the agents as they are, and tells the core the revision before anything carries it', async () => {
-    const { core, port } = started()
-    const order: string[] = []
-    vi.mocked(core.wifi.focus).mockImplementation((revision) => { order.push(`focus ${revision}`) })
-    await port.appFocus('machine-1', 'agent', 'w1')
+  it('applies window moves in order and keeps their revision in the component', async () => {
+    let service!: AutonomousDeviceService
+    const core = fakeCore({ dataDir, wifi: { view: vi.fn(async () => ({ agents: [agent], store: [], hasWindow: true })) } })
+    const ports = emptyPorts()
+    startWifi(core, ports, { service: options => service = new AutonomousDeviceService(options) })
+    await ports.wifi!.resume({ focus: null })
+    const first = ports.wifi!.appFocus('machine-1', 'agent', 'w1')
+    const second = ports.wifi!.appFocus('machine-1', null, 'w1')
+    await Promise.all([first, second])
+    expect(service.focusSnapshot()).toMatchObject({ focus: null, focusRevision: expect.stringMatching(/:2$/) })
     expect(core.wifi.view).toHaveBeenCalled()
-    expect(order).toEqual([expect.stringMatching(/^focus .+:1$/)])
-    await port.appFocus('machine-1', null, 'w1')
-    expect(order.at(-1)).toMatch(/:2$/)
   })
 
-  it('lets a focus move that fails cost that move alone, and the next one is applied', async () => {
-    const { core, port } = started()
-    vi.mocked(core.wifi.focus).mockImplementationOnce(() => { throw new Error('the core went away') })
-    await expect(port.appFocus('machine-1', 'agent', 'w1')).rejects.toThrow('the core went away')
-    await port.appFocus('machine-1', null, 'w1')
-    expect(core.wifi.focus).toHaveBeenLastCalledWith(expect.stringMatching(/:2$/))
-    // A move the core held for a restarted service fails the same way, and the service resumes.
-    vi.mocked(core.wifi.focus).mockImplementation((revision) => { if (revision.endsWith(':3')) throw new Error('not now') })
-    await port.resume({ focus: { machineId: 'machine-1', agentId: 'agent', connId: 'w2' } })
+  it('lets a failed focus move cost that move alone and applies the next one', async () => {
+    let service!: AutonomousDeviceService
+    const core = fakeCore({ dataDir, wifi: { view: vi.fn(async () => ({ agents: [agent], store: [], hasWindow: true })) } })
+    const ports = emptyPorts()
+    startWifi(core, ports, { service: options => service = new AutonomousDeviceService(options) })
+    await ports.wifi!.resume({ focus: null })
+    vi.spyOn(service, 'appFocus').mockImplementationOnce(() => { throw new Error('focus unavailable') })
+    await expect(ports.wifi!.appFocus('machine-1', 'agent', 'w1')).rejects.toThrow('focus unavailable')
+    await ports.wifi!.appFocus('machine-1', 'agent', 'w1')
+    expect(service.focusSnapshot().focus?.agentId).toBe('agent')
+    vi.spyOn(service, 'appFocus').mockImplementationOnce(() => { throw new Error('focus unavailable') })
+    await ports.wifi!.resume({ focus: { machineId: 'machine-1', agentId: 'agent', connId: 'w2' } })
     expect(peerFor(core).sent.some(frame => frame.type === 'ready')).toBe(true)
   })
 
@@ -507,7 +611,6 @@ describe('the Wi-Fi device, with the dials', () => {
     expect(peer.sent).toContainEqual(expect.objectContaining({ type: 'hello', connId: 'c9', hello: true }))
     expect(core.wifi.watching).toHaveBeenCalledWith([])
     expect(core.wifi.streams).toHaveBeenCalledWith([])
-    expect(core.wifi.focus).toHaveBeenCalled()
     peer.sent.length = 0
     await port.resume({ focus: null })
     expect(sent(core).filter(frame => frame.type === 'resync')).toEqual([])
@@ -644,19 +747,4 @@ describe('the Wi-Fi device, with the dials', () => {
     await expect(requests.wifi_http!({ method: 'GET', target: '/api/autonomous-device/addon/state' }, { local: true, owner: true })).rejects.toThrow('broken')
   })
 
-  it('says a focus change that carries no revision to nobody', () => {
-    const emits: Array<(frame: Record<string, unknown>) => void> = []
-    const core = fakeCore({ dataDir })
-    const ports = emptyPorts()
-    startWifi(core, ports, {
-      service: (options) => {
-        emits.push((frame) => options.emit?.(frame as never))
-        return new AutonomousDeviceService(options)
-      },
-    })
-    vi.mocked(core.wifi.focus).mockClear()
-    emits[0]({ type: 'event', kind: 'focus.changed', payload: {} })
-    emits[0]({ type: 'event', kind: 'focus.changed' })
-    expect(core.wifi.focus).not.toHaveBeenCalled()
-  })
 })

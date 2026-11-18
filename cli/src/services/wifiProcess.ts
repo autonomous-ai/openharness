@@ -137,7 +137,6 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
           return true
         },
         reveal: (operationId, agentId) => tell('reveal', { operationId, agentId }),
-        focus: (revision) => tell('focus', { revision }),
         transcripts: (agentId, seen) => tell('transcripts', { agentId, seen }),
         watching: (agentIds) => tell('watching', { agentIds }),
         streams: (agentIds) => tell('streams', { agentIds }),
@@ -207,6 +206,13 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
     machineId: options.machineId,
     token: options.token,
     requests: {
+      wifi_focus_current: async (payload, asker, closed) => {
+        const origin = core, service = built
+        await heardSoFar
+        if (!origin || core !== origin || !service || built !== service) return { current: false }
+        const answer = await service.requests.wifi_focus_current!(payload, asker, closed)
+        return core === origin && built === service ? answer : { current: false }
+      },
       wifi_serving: async (payload, asker, closed) => {
         await heardSoFar
         return built?.requests.wifi_serving?.(payload, asker, closed) ?? { serving: false }

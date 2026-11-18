@@ -115,17 +115,12 @@ describe('remaining Wi-Fi transcript, stream and final focus fences', () => {
     expect(fullText).toHaveBeenCalledTimes(1)
   })
 
-  it('resumes only window focus and clears its revision across service generations', async () => {
+  it('resumes only window focus across service generations without retaining its revision', async () => {
     const { wifi, port } = harness()
     expect(wifi.api.view).toBe(WIFI_OFF.view)
-    wifi.api.focus('old')
     wifi.started({ machineId: 'm', agentId: 'a', connId: 'w' })
     expect(port.resume).toHaveBeenCalledExactlyOnceWith({ focus: { machineId: 'm', agentId: 'a', connId: 'w' } })
-    expect(wifi.focusRevision()).toBeUndefined()
-    wifi.api.focus('r1')
-    expect(wifi.focusRevision()).toBe('r1')
     wifi.stopped()
-    expect(wifi.focusRevision()).toBeUndefined()
     port.resume.mockRejectedValueOnce(new Error('unavailable'))
     wifi.started(null)
     await Promise.resolve()

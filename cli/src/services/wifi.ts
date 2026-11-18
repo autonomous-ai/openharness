@@ -7,7 +7,7 @@
  * What the service reads in line while it answers (the agents, the Store's evidence on them, whether a
  * window is there) is the core's answer to `view`, asked again before each request and each move of the
  * window's focus, so what it answers is as fresh as when it ran in the core. What the core reads in line
- * of it (transcript/stream interests and the focus revision) is acknowledged by the following ordered
+ * of it (transcript/stream interests) is acknowledged by the following ordered
  * view query before a dependent direct reply leaves here. Relay sessions come from the gateway peer.
  *
  * What a person asks of it on this computer (`harness device receipt`, `harness autonomous-device addon`) comes as its
@@ -207,11 +207,6 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
     beforeRequest: refresh,
   })
   function emit(frame: AutonomousDeviceFrame, deviceId?: string): void {
-    // The revision a window's delayed selection is checked against, before anything that carries it.
-    if (frame.kind === 'focus.changed') {
-      const revision = (frame.payload as { focusRevision?: unknown } | undefined)?.focusRevision
-      if (typeof revision === 'string') { core.wifi.focus(revision); changed() }
-    }
     relay.emit(frame, deviceId)
   }
 
@@ -227,7 +222,6 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
       core.wifi.watching(service.transcriptWatches())
       streamed = service.streamedAgents().sort()
       core.wifi.streams(streamed)
-      core.wifi.focus(service.focusSnapshot().focusRevision)
       notices++
       if (focus) port.appFocus(focus.machineId, focus.agentId, focus.connId).catch(() => { /* said by the move itself */ })
       await refresh()
@@ -267,7 +261,12 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
       reportTranscript(agentId)
     },
     appFocus: (machineId, agentId, connId) => {
-      const moved = focusing.then(refresh).then(() => service.appFocus(machineId, agentId, connId))
+      const epoch = coreEpoch
+      const moved = focusing.then(refresh).then(() => {
+        // Stop, disconnect and resume all revoke this captured epoch, including after refresh settled.
+        if (coreEpoch !== epoch) return
+        service.appFocus(machineId, agentId, connId)
+      })
       // A move that fails is that move's: the next waits for it, not on it.
       focusing = moved.catch(() => {})
       return moved
@@ -281,6 +280,12 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
   // request, which its route answers as for a service that is down, since what failed may have been done.
   return {
     wifi_serving: () => ({ serving: !stopped && coreConnected }),
+    wifi_focus_current: async ({ revision }) => {
+      if (typeof revision !== 'string' || !revision || revision.length > 128) return { current: false }
+      const epoch = coreEpoch
+      await focusing
+      return { current: !stopped && coreConnected && coreEpoch === epoch && service.focusSnapshot().focusRevision === revision }
+    },
     wifi_http: deviceRoutes({
       receipt: ({ deviceId, idempotencyKey }) => ({ receipt: service.receipt(deviceId, idempotencyKey) }),
       addonState: ({ deviceId }) => ({ devices: service.addons.state(deviceId) }),
