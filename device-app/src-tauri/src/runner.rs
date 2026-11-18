@@ -1418,7 +1418,7 @@ mod tests {
         w.fake.script("auth status --json", &[r#"{"loggedIn":true}"#]);
         w.fake.script("--version", &["0.6.58"]);
         let (mut app, mut effects) = App::new(Saved::default(), w.runner.find_cli(), false, B);
-        let connected = MenuItem::Text("Dial connected".into());
+        let connected = MenuItem::Text("Device ready".into());
         let (mut dial, mut auth, mut version) = (false, false, false);
         loop {
             for effect in effects {

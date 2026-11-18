@@ -60,7 +60,7 @@ describe('screens', () => {
   it('sign-in: offer, browser, done', async () => {
     await mount(at('sign_in', 'offer'))
     expect(heading()).toBe('Sign in')
-    expect(text()).toContain('Add your other computers to the dial.')
+    expect(text()).toContain('Add your other computers to your device.')
     expect(buttons()).toEqual(['Later', 'Sign in'])
     click('Sign in')
     expect(act).toHaveBeenCalledWith('sign_in')
@@ -164,7 +164,7 @@ describe('screens', () => {
 
     push(at('sign_in', 'offer'))
     expect(alert()).toBeNull()
-    expect(described()).toBe('Add your other computers to the dial.')
+    expect(described()).toBe('Add your other computers to your device.')
   })
 
   it('the primary button has the focus, and no other', async () => {

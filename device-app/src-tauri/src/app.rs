@@ -968,7 +968,7 @@ mod tests {
 
         let effects = app.handle(line(false));
         assert_eq!(checks(&effects), vec![on.clone()]);
-        assert!(has(&effects, &Effect::Log("menu: Dial connected | Sound ✓ | About | Quit".into())));
+        assert!(has(&effects, &Effect::Log("menu: Device ready | Sound ✓ | About | Quit".into())));
 
         // The click's own check flipped natively: the menu drawn again puts it back where the dial is.
         let effects = app.handle(Event::Menu(MenuAction::SoundOff));
@@ -977,7 +977,7 @@ mod tests {
 
         let effects = app.handle(line(true));
         assert_eq!(checks(&effects), [off]);
-        assert!(has(&effects, &Effect::Log("menu: Dial connected | Sound | About | Quit".into())));
+        assert!(has(&effects, &Effect::Log("menu: Device ready | Sound | About | Quit".into())));
 
         assert!(checks(&app.handle(Event::WatchExit(Some(3)))).is_empty());
     }
@@ -1026,7 +1026,7 @@ mod tests {
 
         let effects = app.handle(notifying(NotifyMode::Full));
         assert_eq!(submenus(&effects), [checked(true, false)]);
-        assert!(has(&effects, &Effect::Log("menu: Dial connected | Notifications: All | About | Quit".into())));
+        assert!(has(&effects, &Effect::Log("menu: Device ready | Notifications: All | About | Quit".into())));
 
         // The click's own check flipped natively: the menu drawn again puts it back where the watch says.
         let effects = app.handle(Event::Menu(MenuAction::NotifyYou));
@@ -1035,7 +1035,7 @@ mod tests {
 
         let effects = app.handle(notifying(NotifyMode::You));
         assert_eq!(submenus(&effects), [checked(false, true)]);
-        assert!(has(&effects, &Effect::Log("menu: Dial connected | Notifications: Needs you | About | Quit".into())));
+        assert!(has(&effects, &Effect::Log("menu: Device ready | Notifications: Needs you | About | Quit".into())));
 
         assert!(submenus(&app.handle(Event::WatchExit(Some(3)))).is_empty());
     }
@@ -1054,8 +1054,8 @@ mod tests {
             notify: None,
         };
         let effects = app.handle(Event::WatchLine(line.clone()));
-        assert_eq!(rows(&effects)[0], "Dial connected");
-        assert!(has(&effects, &Effect::Log("menu: Dial connected | About | Quit".into())));
+        assert_eq!(rows(&effects)[0], "Device ready");
+        assert!(has(&effects, &Effect::Log("menu: Device ready | About | Quit".into())));
         assert!(app.handle(Event::WatchLine(line)).is_empty());
 
         assert_eq!(rows(&app.handle(Event::WatchExit(Some(3))))[0], "Starting Harness");
@@ -1174,10 +1174,10 @@ mod tests {
         assert!(app.handle(Event::CliVersion(Some("0.6.58".into()))).is_empty());
         assert_eq!(about(&mut app), [Effect::ShowAbout(Some("Harness 0.6.58".into()))]);
         app.handle(notifying(NotifyMode::Full));
-        assert_eq!(about(&mut app), [Effect::ShowAbout(Some("Dial 0.0.95 · Harness 0.6.58".into()))]);
+        assert_eq!(about(&mut app), [Effect::ShowAbout(Some("Device 0.0.95 · Harness 0.6.58".into()))]);
         // A read that failed keeps the last answer.
         app.handle(Event::CliVersion(None));
-        assert_eq!(about(&mut app), [Effect::ShowAbout(Some("Dial 0.0.95 · Harness 0.6.58".into()))]);
+        assert_eq!(about(&mut app), [Effect::ShowAbout(Some("Device 0.0.95 · Harness 0.6.58".into()))]);
 
         // A CLI that went away takes its version with it, and its read that answers late is not heard.
         let mut app = found();
