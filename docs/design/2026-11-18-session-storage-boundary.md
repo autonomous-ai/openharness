@@ -888,3 +888,26 @@ core-grid-storage-invalid-json-green1-20261118.log passes all three selected cas
 including the unchanged names privacy control. Actual 0 and group absence recorded.
 Current TypeScript passed in custody-runtime-types2. The other fourteen wider failures
 are separate fixture composition/representation updates, not waived assertions.
+
+## Preserve historical absence of Grid launch (18 November)
+
+After the broader fixture began resolving stored references instead of expecting raw
+keys in core rows, its next unchanged assertion exposed another runtime regression:
+strict normalization and the reference-receipt install both manufactured an own
+`gridLaunch: undefined` property on historical rows. The old source leaves the field
+absent, distinct from explicit vendor-login null. The disk remained JSON-compatible,
+but the in-memory distinction was not preserved.
+
+Design: strict normalization emits the Grid launch field only when its raw value is
+defined. Reference-receipt installation replaces only credential-bearing rows; absent
+and null rows stay as captured. Credential validation, exact row/proof bindings and
+fresh live rebases remain unchanged. The RegisteredSession comment now describes
+opaque references and the same absent/null distinction, not retained plaintext keys.
+
+Actual strict-normalization and save/publication REDs are in
+core-grid-storage-absent-grid-red1-20261118.log (2 failed). The corrected selected
+strict/save/reload/reboot/import/rekey/uncertainty cases pass in
+core-grid-storage-absent-grid-green1-20261118.log (27 passed/3 files, actual 0, group
+absent); the reboot caller's reference-aware fixture is in the separate fixture
+checkpoint. registry-fixture-types1 passes on all current runtime and fixture bytes.
+No storage image schema, rollback floor or credential resolution policy changes.

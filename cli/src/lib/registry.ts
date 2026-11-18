@@ -186,18 +186,16 @@ export interface RegisteredSession {
   /**
    * The grid this pane's engine is pointed at, if any. Comes from the launch record (create and retarget
    * write it) and from argv evidence that models classifies; unlike `gateway`, which comes from Codex's
-   * argv or a hook's header. See `gridAssignment.ts`. Carries no credential; the
-   * launch that put the engine there, credential included, is `gridLaunch` below.
+   * argv or a hook's header. See `gridAssignment.ts`. Carries no credential;
+   * `gridLaunch` below references the stored launch credential.
    */
   grid?: GridAssignment | null
   /**
-   * The full grid launch this agent was last created or retargeted with, apiKey included. Persisted
-   * (this file is 0600, see `secureState.ts`) so a pane recreated after a reboot (`restoreAgents`) or
-   * respawned in place (`agent_restart`) is launched onto the SAME grid with the SAME credential
-   * instead of silently coming back on the engine's own login. Never announced — `agentFrame` picks
-   * its fields explicitly — and never logged. `grid` stays the observed, credential-free projection.
-   * Null on a vendor-login agent; absent on a row written before this field existed, which restore
-   * treats as "grid agent without a credential".
+   * The launch metadata and opaque reference to this agent's stored Grid credential. Required
+   * storage owns the private legacy image and resolves only a selected launch, so reboot/respawn
+   * uses the same Grid and credential without retaining its apiKey in core session state.
+   * Never announced or logged. Null explicitly means the engine's vendor login; absent marks a
+   * historical row with no remembered launch, which restore must not silently treat as vendor login.
    */
   gridLaunch?: StoredGridLaunch | null
   /**
@@ -764,7 +762,7 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   const earlierSessionIds = earlierSessionKeys(rawEarlierSessionIds)
   return {
     ...rest,
-    gridLaunch: normalizedGridLaunch(rawGridLaunch),
+    ...(rawGridLaunch !== undefined ? { gridLaunch: normalizedGridLaunch(rawGridLaunch) } : {}),
     ...(externalResume ? { externalResume } : {}),
     ...(firstTask ? { firstTask } : {}),
     ...(openclawLocal ? { openclawLocal } : {}),
@@ -3717,7 +3715,9 @@ class Registry {
         // These graphs are private capture/merge results. Publication accepts only row-bound reference
         // replacements, so a second child metadata image cannot replace or revalidate session authority.
         const projected = prepared.value as Array<{ gridLaunch?: StoredGridLaunch | null }>
-        for (let index = 0; index < rows.length; index++) rows[index].gridLaunch = projected[index].gridLaunch
+        for (let index = 0; index < rows.length; index++) {
+          if (rows[index].gridLaunch != null) rows[index].gridLaunch = projected[index].gridLaunch
+        }
         // Exact prepared objects may survive the fresh live rebase unchanged; their normalized rows
         // are still private. Changed/live-derived objects must be parsed again after refresh.
         const preparedRows = new Map<object, RegisteredSession>()

@@ -616,3 +616,24 @@ it.skipIf(process.platform === 'win32')('refuses a successful strict receipt whe
   expect(live.closePlan).toBeUndefined()
   expect(recoveryFingerprints).toBeLessThanOrEqual(4)
 })
+
+it.each(['normalization', 'publication'] as const)('preserves an absent legacy Grid launch through %s', async phase => {
+  const first = registry!.byAgent(A)!, second = registry!.byAgent(B)!
+  delete first.gridLaunch
+  second.gridLaunch = null
+  if (phase === 'normalization') {
+    const { strictPersistedRow } = await import('./registry.js')
+    const saved = { ...disk().find(row => row.agentId === A)! }
+    delete saved.gridLaunch
+    expect(strictPersistedRow(saved)).not.toHaveProperty('gridLaunch')
+  } else {
+    await registry!.flush()
+    expect(registry!.byAgent(A)).not.toHaveProperty('gridLaunch')
+    expect(registry!.byAgent(B)?.gridLaunch).toBeNull()
+    expect(disk().find(row => row.agentId === A)).not.toHaveProperty('gridLaunch')
+    expect(disk().find(row => row.agentId === B)?.gridLaunch).toBeNull()
+    await registry!.load()
+    expect(registry!.byAgent(A)).not.toHaveProperty('gridLaunch')
+    expect(registry!.byAgent(B)?.gridLaunch).toBeNull()
+  }
+})
