@@ -1589,6 +1589,13 @@ static void apps_switch_checks(const char *dir) {
       assert(ht_workspace_refresh(&workspace, serial, 10));
       ui_workspace_applied("tab-2", 11); ui_land_after_reload(); }
     assert(!s.loading && s.view == APPS);
+    // A pick there before that tab lands leaves the tab: it is no longer waited for, so the face does not hold the
+    // loading wordmark, and the view's turn, which sends no tabs, does not read as that tab gone.
+    switch_setup(3); hold_at(233, 230); picker_swipe(300, 200);
+    fake_ms += 1000; tap(fake_ms, 275, 76); fake_ms += 1000; tap(fake_ms, 233, 420);
+    assert(app_picks == 1 && !strcmp(app_target, "ghostty") && s.view == HOME && !s.loading);
+    ui_swarms_replace(NULL, 0, ""); scene_take();
+    assert(s.view == HOME && !s.loading);
     puts("TABS | APPS switch: the pill on the window's TABS; its APPS lists the other apps and picks only on Done or a tap, TABS goes back; no feature or no app is today's TABS PASS");
 }
 int main(int argc, char **argv) {
