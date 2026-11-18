@@ -68,8 +68,7 @@ function meets(version: string, range: string): boolean {
   return app[4] === undefined
 }
 
-/** A path by its real path, or as written when it does not resolve: Orca may record the folder through a link, or
- *  resolve one the command was handed, and either names the same folder. */
+/** A path by its real path, or as written when it does not resolve. */
 function real(path: string): string {
   try {
     return realpathSync(path)
@@ -102,9 +101,12 @@ async function entryOf(deps: OrcaPluginDeps, orca: string, key: string): Promise
   return plugins.find((listed): listed is Record<string, unknown> => isObject(listed) && listed.pluginKey === key)
 }
 
-/** Whether an entry's `source` is the plugin's folder. */
+/** Whether an entry's `source` is the plugin's folder as Orca counts it: Orca records the real path of the folder it
+ *  was handed and updates from that path, so any other path is another folder, even one that leads to it through a link
+ *  (its place before Harness's files moved on Linux, now the bridge's link). Such an entry is installed from the folder
+ *  itself, which Orca asks the person to approve, so Orca's record follows the move and never reads the link. */
 const fromFolder = (source: unknown, folder: string): boolean =>
-  isObject(source) && source.kind === 'local-path' && typeof source.reference === 'string' && real(source.reference) === real(folder)
+  isObject(source) && source.kind === 'local-path' && source.reference === real(folder)
 
 /** The first rule that holds (the design's `status`). Orca is asked `status` first: every other plugin command waits
  *  about 30 seconds for an Orca that is not reachable. */

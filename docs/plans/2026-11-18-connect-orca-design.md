@@ -105,7 +105,9 @@ One JSON line. It writes only the plugin's folder. It asks Orca at most `status`
 3. **`off`** (no row, ever): no entry and recorded; or the entry is `disabled`.
 4. **`approve`** (`Update Orca connection…`): the entry is `pending` or `needsReconsent`.
 5. **`behind`** (silent update): the entry's version is not the one the CLI carries, or its `source.reference` is not
-   the plugin's folder (a person installed it by hand from a checkout).
+   the plugin's folder's real path, which is what Orca records (a person installed it by hand from a checkout, or Orca
+   recorded the folder's place before Harness's files moved on Linux, now a link to it). Orca updates from the path it
+   recorded and counts any other as a moved source, so such an entry is installed from the folder itself.
 6. **`absent`**: the entry is `errored` or `invalid`.
 7. **`current`** (no row): anything else.
 
