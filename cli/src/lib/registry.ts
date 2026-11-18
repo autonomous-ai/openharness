@@ -1228,14 +1228,14 @@ function writeBoot(bootId: string): void {
 }
 
 /**
- * What a log says of a failed admission: the error's kind and code, each only as one short token, never its message or
- * other free text (it can quote a path). A retried create said only "failed", and nothing told why its first pane was
- * not admitted (CI, cli/e2e/scale.e2e.ts, 2026-11-19).
+ * What a log says of a failed admission: the error's kind and code, each only in its own shape (a class name, a code such
+ * as ENOSPC), never its message or other text (it can quote a path, a file's or a person's name). A retried create said
+ * only "failed", and nothing told why its first pane was not admitted (CI, cli/e2e/scale.e2e.ts, 2026-11-19).
  */
 function admissionError(error: unknown): string {
-  const token = (value: unknown) => typeof value === 'string' && /^[A-Za-z0-9_.-]{1,40}$/.test(value) ? value : null
-  const code = token((error as { code?: unknown } | null)?.code)
-  return (error instanceof Error ? token(error.name) ?? 'Error' : typeof error) + (code ? ` ${code}` : '')
+  const shaped = (value: unknown, shape: RegExp) => typeof value === 'string' && shape.test(value) ? value : null
+  const code = shaped((error as { code?: unknown } | null)?.code, /^[A-Z][A-Z0-9_]{0,39}$/)
+  return (error instanceof Error ? shaped(error.name, /^[A-Z][A-Za-z0-9]{0,39}$/) ?? 'Error' : typeof error) + (code ? ` ${code}` : '')
 }
 
 class Registry {
