@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import { REFUSED, type ListenerStream, type StreamEnd } from '../../services/devicesListener.js'
+import type { PageAgent } from './adapter.js'
 import { PS_MAX_BYTES, PS_TIMEOUT_MS, type Exec } from './scannedApp.js'
 import {
   CHAIN_RETRY_MS, GROUPS_MAX_BYTES, readForeground, readProcessParents, VSCODE_GUARD_MS, VSCODE_OPEN_MAX_BYTES, VSCODE_OPEN_PER_SECOND,
   VSCODE_SCROLL_MAX, VSCODE_STATE_MAX_BYTES, VSCODE_STATE_PER_SECOND, VSCODE_TERMINALS, VSCODE_WINDOWS, vscodeStreams,
-  type PageAgent, type ProcessGroups, type VscodeTerminalsDeps,
+  type ProcessGroups, type VscodeTerminalsDeps,
 } from './vscodeTerminals.js'
 
 const W1 = 'window-1'

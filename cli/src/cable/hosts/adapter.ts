@@ -25,6 +25,11 @@ export interface Place {
   hostSession?: string
 }
 
+/** What a page guard knows of the agent: whether it waits on the person, the folder its session started in (its
+ *  project settings'), and its transcript path as its hook or the scan gave it (the user settings' home:
+ *  claudeRenderer.ts). */
+export interface PageAgent { asking: boolean; cwd?: string; transcriptPath?: string }
+
 /** One adapter's own handle on one agent: an Orca terminal, a Claude app session, a tab's tty, a pane id. */
 export interface Pane {
   adapter: string
@@ -65,7 +70,7 @@ export interface HostAdapter {
    *  app to scroll. Asked at a stroke's down, after `canScroll`, only for an agent whose engine has such keys, with
    *  whether it waits on the person, the folder it started in and its transcript path. `false` at once when no key may
    *  go and nothing was read; else a promise, never rejected, settled within the adapter's own deadline. */
-  pageKeys?(pane: Pane, agent: { asking: boolean; cwd?: string; transcriptPath?: string }): false | Promise<boolean>
+  pageKeys?(pane: Pane, agent: PageAgent): false | Promise<boolean>
   /** Scrolls the app's view of the pane's history by whole lines, n < 0 toward older lines. Fire and forget: a line it
    *  could not send is never retried into the program. `page`: this stroke's `pageKeys` said yes, and the lines may
    *  carry those keys too. */

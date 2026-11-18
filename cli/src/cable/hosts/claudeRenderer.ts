@@ -78,11 +78,12 @@ export async function readSettings(path: string, fs: SettingsFs = { stat, open }
     file = await fs.open(path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOCTTY)
     // Again on what was opened: the path may name something else by now. A folder, a FIFO or a device such as
     // /dev/zero is no settings file.
-    if (!(await file.stat()).isFile()) return undefined
-    // One byte past the cap tells a larger file from one exactly at it.
-    const buffer = Buffer.alloc(SETTINGS_MAX_BYTES + 1)
+    const opened = await file.stat()
+    if (!opened.isFile()) return undefined
+    // Its size, up to the cap, and one byte past it: a full buffer is a file over the cap, or one that grew meanwhile.
+    const buffer = Buffer.alloc(Math.min(opened.size, SETTINGS_MAX_BYTES) + 1)
     const { bytesRead } = await file.read(buffer, 0, buffer.length, 0)
-    return bytesRead > SETTINGS_MAX_BYTES ? undefined : buffer.toString('utf8', 0, bytesRead)
+    return bytesRead === buffer.length ? undefined : buffer.toString('utf8', 0, bytesRead)
   } catch {
     return undefined
   } finally {

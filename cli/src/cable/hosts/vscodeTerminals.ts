@@ -24,6 +24,7 @@
  */
 import { isAbsolute } from 'node:path'
 import { REFUSED, type ListenerHandler, type ListenerStream, type ListenerStreamHandler } from '../../services/devicesListener.js'
+import type { PageAgent } from './adapter.js'
 import { execText, parentChain, PS_MAX_BYTES, PS_TIMEOUT_MS, type Exec, type ProcessName } from './scannedApp.js'
 
 export const VSCODE_WINDOWS = 8
@@ -88,10 +89,6 @@ export async function readForeground(agent: number, shell: number, exec: Exec = 
   const ofShell = rows.get(shell)
   return lines.length === pids.length && ofAgent && ofShell ? { pgid: ofAgent.pgid, tpgid: ofShell.tpgid } : undefined
 }
-
-/** What the guard knows of the agent: whether it waits on the person, the folder its session started in (its project
- *  settings'), and its transcript path as its hook or the scan gave it (the user settings' home: claudeRenderer.ts). */
-export interface PageAgent { asking: boolean; cwd?: string; transcriptPath?: string }
 
 /** A terminal of an open window: the window's id and its shell's pid. */
 export interface VscodeTerminal { window: string; shell: number }
@@ -279,7 +276,8 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
       return groups.pgid === groups.tpgid ? 'pages' : 'background'
     })()
     guards.set(pid, verdict)
-    void verdict.then(() => guards.delete(pid))
+    // However it settles: a read that rejected never holds the agent's next ask.
+    void verdict.finally(() => guards.delete(pid))
     return verdict
   }
 

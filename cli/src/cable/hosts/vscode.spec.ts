@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import type { Place } from './adapter.js'
+import type { PageAgent, Place } from './adapter.js'
 import { detectApp, detectHost } from './hostDetect.js'
 import { bundleOf, createOpenActions, type OpenTarget } from './open.js'
 import { createVscodeAdapter, termPid } from './vscode.js'
-import type { PageAgent } from './vscodeTerminals.js'
 
 const OPEN = '/usr/bin/open'
 /** A Claude Code session's id, as its hook names it. */
