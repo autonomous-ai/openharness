@@ -16,6 +16,7 @@ import { join } from 'node:path'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { unixSocketPath } from '../lib/localSocket.js'
 import { DeviceFeedPool, type DeviceSessionFeed } from '../lib/autonomous-device/sessionFeed.js'
+import { AutonomousDeviceStore, type StoreAgent } from '../lib/autonomous-device/store.js'
 
 // The real service and the real link, as a process started by the master runs them: stood in for here.
 const real = vi.hoisted(() => ({ started: 0, options: null as ServiceProcessOptions | null }))
@@ -78,20 +79,222 @@ function setup(over: { startThrows?: boolean; leavesOff?: boolean; dataDir?: str
   }
 }
 
-afterEach(() => vi.restoreAllMocks())
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
 
 describe('the Wi-Fi device in the devices\' process', () => {
+  it('revokes every old component API and input callback after machine rebinding', async () => {
+    const f = setup(), asker = { local: true, owner: true }
+    const drain = () => f.options().requests!.wifi_http({}, asker)
+    f.connect(); f.event({ kind: 'resume' }); await drain()
+    const old = f.api(), adapter = f.adapter()
+    f.answer('machine', { id: 'machine-2' }); f.event({ kind: 'resume' }); await drain()
+    f.answer('view', { agents: [], store: [], hasWindow: true }); await f.api().wifi.view()
+    vi.mocked(f.connection.query).mockClear()
+    for (const read of [() => old.wifi.create('package', 'claude', '/workspace'), () => old.wifi.stop('a'),
+      () => old.wifi.stepFocus('next', 'a'), () => old.turns.recent('a', 1),
+      () => old.conversations.resolve('a'), () => old.wifi.view(),
+      () => adapter.submit!('a', 'old input', 'old-delivery', () => {})]) await expect(read()).rejects.toThrow()
+    adapter.cancel!('old-delivery')
+    old.wifi.reveal('old-operation', 'a')
+    expect(old.wifi.scroll('move', 2, 3)).toBe(false)
+    expect(old.wifi.focusApp('a', 9, 'revision')).toBe(false)
+    const oldRows = vi.fn(); old.agents.follow!(oldRows)()
+    expect(oldRows).not.toHaveBeenCalled()
+    expect(f.connection.query).not.toHaveBeenCalled()
+    expect(f.notices).toEqual([])
+    // Returning to the old identity makes a new component; it cannot revive the retained API.
+    f.answer('machine', { id: 'machine-1' }); f.event({ kind: 'resume' }); await drain()
+    vi.mocked(f.connection.query).mockClear()
+    await expect(old.wifi.create('package', 'claude', '/workspace')).rejects.toThrow()
+    expect(f.connection.query).not.toHaveBeenCalled()
+    await f.service.stop()
+  })
+
+  it('clears old private follow rows and callbacks before a different machine is built', async () => {
+    const f = setup(), asker = { local: true, owner: true }, oldRows = vi.fn(), newRows = vi.fn()
+    f.answer('follow_agents', { agents: [{ agentId: 'old-private-agent' }] })
+    f.connect(); f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, asker)
+    f.api().agents.follow!(oldRows); oldRows.mockClear()
+    const original = f.start.getMockImplementation()!
+    f.start.mockImplementationOnce((...args) => {
+      const routes = original(...args)
+      args[0].agents.follow!(newRows)
+      return routes
+    })
+    f.answer('machine', { id: 'machine-2' })
+    f.answer('follow_agents', { agents: [{ agentId: 'new-private-agent' }] })
+    f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, asker)
+    expect(oldRows).not.toHaveBeenCalled()
+    expect(newRows.mock.calls.map(([event]) => event)).toEqual([{ kind: 'running', session: { agentId: 'new-private-agent' } }])
+    await f.service.stop()
+  })
+
+  it.each(['same', 'different'] as const)('waits for a future identity handshake before durable create: %s machine', async identity => {
+    const f = setup(), asker = { local: true, owner: true }
+    f.connect(); f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, asker)
+    const old = f.api()
+    f.disconnect(); f.connect() // No resume has arrived yet.
+    vi.mocked(f.connection.query).mockClear()
+    f.answer('create', { ok: true, agentId: 'created' })
+    const creating = old.wifi.create('package', 'claude', '/workspace')
+    const result = identity === 'same' ? expect(creating).resolves.toEqual({ ok: true, agentId: 'created' }) : expect(creating).rejects.toThrow()
+    void result.catch(() => {}) // An earlier RED assertion must not leave its expected rejection unhandled.
+    expect(f.connection.query).not.toHaveBeenCalled()
+    await expect(old.wifi.stop('a')).rejects.toThrow()
+    await expect(old.turns.recent('a', 1)).rejects.toThrow()
+    await expect(old.conversations.resolve('a')).rejects.toThrow()
+    await expect(old.wifi.view()).rejects.toThrow()
+    old.wifi.reveal('old-operation', 'a')
+    expect(f.notices).toEqual([])
+    f.answer('machine', { id: identity === 'same' ? 'machine-1' : 'machine-2' })
+    f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, asker)
+    await result
+    expect(vi.mocked(f.connection.query).mock.calls.filter(([query]) => query === 'create')).toHaveLength(identity === 'same' ? 1 : 0)
+    await f.service.stop()
+  })
+
+  it('does not wait on its own resume when durable recovery creates after identity confirmation', async () => {
+    const f = setup(), asker = { local: true, owner: true }
+    f.connect(); f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, asker)
+    const old = f.api()
+    f.answer('create', { ok: true, agentId: 'created' })
+    vi.mocked(f.ports[0].resume).mockImplementationOnce(async () => {
+      expect(await old.wifi.create('package', 'claude', '/workspace')).toEqual({ ok: true, agentId: 'created' })
+    })
+    f.disconnect(); f.connect(); f.event({ kind: 'resume' })
+    await f.options().requests!.wifi_http({}, asker)
+    expect(vi.mocked(f.connection.query).mock.calls.filter(([query]) => query === 'create')).toHaveLength(1)
+    await f.service.stop()
+  })
+
+  it.each(['timeout', 'disconnect', 'replacement', 'stop'] as const)('settles unsent durable creation when identity readiness ends by %s', async end => {
+    const f = setup(), asker = { local: true, owner: true }
+    f.connect(); f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, asker)
+    vi.useFakeTimers()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      f.disconnect(); f.connect()
+      vi.mocked(f.connection.query).mockClear()
+      const creating = f.api().wifi.create('package', 'claude', '/workspace')
+      const refused = expect(creating).rejects.toThrow('WIFI_IDENTITY_UNAVAILABLE')
+      if (end === 'timeout') await vi.advanceTimersByTimeAsync(15_000)
+      else if (end === 'disconnect') f.disconnect()
+      else if (end === 'replacement') f.connect()
+      else await f.service.stop()
+      await refused
+      expect(f.connection.query).not.toHaveBeenCalled()
+      if (end === 'timeout') expect(warn).toHaveBeenCalledWith('[wifi] WIFI_IDENTITY_TIMEOUT')
+      await f.service.stop()
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { vi.useRealTimers() }
+  })
+
+  it('does not let an already queued old identity deadline revoke the replacement connection', async () => {
+    const timers = vi.spyOn(globalThis, 'setTimeout'), warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const f = setup(), asker = { local: true, owner: true }
+    try {
+      f.connect()
+      const oldDeadline = timers.mock.calls.find(([, ms]) => ms === 15_000)![0] as () => void
+      f.connect()
+      oldDeadline()
+      f.event({ kind: 'resume' })
+      expect(await f.options().requests!.wifi_http({}, asker)).toMatchObject({ status: 200 })
+      expect(warn).not.toHaveBeenCalled()
+      await f.service.stop()
+    } finally { timers.mockRestore() }
+  })
+
+  it('withholds cached follow rows until the same component has a verified connection', async () => {
+    const f = setup(), asker = { local: true, owner: true }, rows = vi.fn()
+    f.answer('follow_agents', { agents: [{ agentId: 'private-agent' }] })
+    f.connect(); f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, asker)
+    f.disconnect(); f.connect()
+    const stop = f.api().agents.follow!(rows)
+    expect(rows).not.toHaveBeenCalled()
+    stop()
+    f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, asker)
+    f.api().agents.follow!(rows)()
+    expect(rows).toHaveBeenCalledExactlyOnceWith({ kind: 'running', session: { agentId: 'private-agent' } })
+    await f.service.stop()
+  })
+
+  it.each([undefined, '', 7])('never authorizes an invalid machine identity: %s', async id => {
+    const f = setup(), asker = { local: true, owner: true }
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    f.answer('machine', { id })
+    f.connect(); f.event({ kind: 'resume' })
+    expect(await f.options().requests!.wifi_http({}, asker)).toEqual({ error: 'SERVICE_UNAVAILABLE' })
+    expect(f.start).not.toHaveBeenCalled()
+    await f.service.stop()
+  })
+
+  it('refuses a private reply after a different machine rebuild on the same core socket', async () => {
+    const f = setup(), asker = { local: true, owner: true }
+    f.connect(); f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, asker)
+    let release!: (answer: Record<string, unknown>) => void
+    vi.mocked(f.connection.query).mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    const read = f.api().turns.recent('old-private-agent', 1)
+    const refused = expect(read).rejects.toThrow('the original core connection ended')
+    f.answer('machine', { id: 'machine-2' }); f.event({ kind: 'resume' })
+    await f.options().requests!.wifi_http({}, asker)
+    release({ turns: [{ recap: 'old private content' }] })
+    await refused
+    await f.service.stop()
+  })
+
+  it.each(['same', 'different'] as const)('binds actual durable Store preparation to its component after a %s-machine reconnect', async identity => {
+    const directory = mkdtempSync(join(tmpdir(), 'wifi-store-owner-'))
+    const f = setup({ dataDir: directory }), asker = { local: true, owner: true }
+    f.connect(); f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, asker)
+    const old = f.api(), agents: StoreAgent[] = []
+    let release!: () => void, entered!: () => void
+    const workspace = new Promise<void>(resolve => { release = resolve })
+    const waiting = new Promise<void>(resolve => { entered = resolve })
+    const store = new AutonomousDeviceStore({
+      directory: join(directory, 'preparations'), machineId: 'machine-1',
+      packages: async () => [{ packageId: 'owner/package', name: 'Package', description: '', category: null, engine: 'claude',
+        installed: true, catalog: true, verified: true, viewerPackageId: null, installAllowed: true, version: 'one', broken: null }],
+      install: async () => ({ ok: true }), doctor: async () => ({ ok: true, checked: true, lines: [] }),
+      workspace: async () => { entered(); await workspace; return '/workspace' },
+      create: async (packageId, cwd) => {
+        const answer = await old.wifi.create(packageId, 'claude', cwd)
+        if (!answer.ok) return { state: 'failed', error: answer.error }
+        agents.push({ agentId: answer.agentId, machineId: 'machine-1', packageId, workspace: cwd, engine: 'claude', state: 'active', runtime: 'ready' })
+        return { state: 'created', agentId: answer.agentId }
+      },
+      agents: () => agents,
+    })
+    try {
+      const result = await store.request('paired-device', { type: 'agent.prepare', requestId: 'b69e1f7c-a82c-4ca0-a782-d870b7b153f9',
+        machineId: 'machine-1', packageId: 'owner/package', idempotencyKey: 'durable-owner', workspace: { kind: 'new', name: 'project' } })
+      const id = (result.operation as { operationId: string }).operationId
+      await waiting
+      f.disconnect(); f.connect()
+      f.answer('machine', { id: identity === 'same' ? 'machine-1' : 'machine-2' })
+      f.answer('create', { ok: true, agentId: 'created' })
+      f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, asker)
+      vi.mocked(f.connection.query).mockClear()
+      release()
+      await vi.waitFor(() => expect(store.get('paired-device', id).state).toBe(identity === 'same' ? 'ready' : 'needs_user_action'))
+      expect(vi.mocked(f.connection.query).mock.calls.filter(([query]) => query === 'create')).toHaveLength(identity === 'same' ? 1 : 0)
+      if (identity === 'different') expect(store.get('paired-device', id).error?.code).toBe('CREATION_UNCONFIRMED')
+    } finally { release(); store.stopUiDelivery(); await f.service.stop(); rmSync(directory, { recursive: true, force: true }) }
+  })
+
   it.each(['recent', 'stop', 'create', 'stepFocus'] as const)('rejects a late %s completion when the same connection facade reconnects', async operation => {
     const f = setup(), asker = { local: true, owner: true }
     f.connect(); f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, asker)
     let release!: (answer: Record<string, unknown>) => void
-    vi.mocked(f.connection.query).mockClear().mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    let sent!: () => void
+    const entered = new Promise<void>(done => { sent = done })
+    vi.mocked(f.connection.query).mockClear().mockImplementationOnce(() => { sent(); return new Promise(resolve => { release = resolve }) })
     const api = f.api()
     const request = operation === 'recent' ? api.turns.recent('a', 1)
       : operation === 'stop' ? api.wifi.stop('a')
       : operation === 'create' ? api.wifi.create('package', 'claude', '/workspace')
       : api.wifi.stepFocus('next', 'a')
     const rejected = expect(request).rejects.toThrow('the original core connection ended')
+    await entered
     // The socket read the reply before closing, but its continuation has not run yet.
     release({ ok: true, agentId: 'created', machineId: 'machine-1', turns: [{ recap: 'old' }] })
     f.disconnect(); f.connect()
@@ -114,6 +317,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
       wifi.reveal('old-operation', 'a')
       expect(f.notices).toEqual([])
     }
+    f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, asker)
     await wifi.view()
     expect(wifi.scroll('move', 2, 3)).toBe(true)
     expect(wifi.focusApp('a', 9, 'revision')).toBe(true)
@@ -493,6 +697,8 @@ describe('the Wi-Fi device in the devices\' process', () => {
     expect(f.connection.query).not.toHaveBeenCalled()
     f.connect()
     f.answer('input_contract', new Error('connection failed'))
+    f.event({ kind: 'resume' })
+    await f.options().requests!.wifi_http({}, { local: true, owner: true })
     f.adapter().cancel!('failed-contract')
     await vi.waitFor(() => expect(f.connection.query).toHaveBeenCalledWith('input_contract', {}))
     // A failed contract is consumed by the cancel path and never turns into a legacy notice.
@@ -554,12 +760,17 @@ describe('the Wi-Fi device in the devices\' process', () => {
     f.answer('input_contract', { version: 1 })
     f.connect(); f.event({ kind: 'resume' })
     await vi.waitFor(() => expect(f.start).toHaveBeenCalledOnce())
-    if (blocked === 'input_contract') { f.disconnect(); f.connect() }
     const query = vi.mocked(f.connection.query), original = query.getMockImplementation()!
     let release!: (value: Record<string, unknown>) => void, current = true
     const held = new Promise<Record<string, unknown>>(resolve => { release = resolve })
     query.mockClear().mockImplementation((name, payload) => name === blocked ? held : original(name, payload))
     const writing = f.adapter().submit!('a', 'hello', 'd', () => {}, () => current)
+    if (blocked === 'input_contract') {
+      // Identity negotiation already confirmed this contract. Revocation still wins at its await.
+      current = false; await writing
+      expect(query).not.toHaveBeenCalled()
+      return
+    }
     await vi.waitFor(() => expect(query).toHaveBeenCalledWith(blocked, expect.any(Object)))
     current = false
     release(blocked === 'input_contract' ? { version: 1 } : { value: { agentId: 'a', sessionId: 's', engine: 'claude' } })

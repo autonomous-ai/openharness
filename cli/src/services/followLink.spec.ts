@@ -20,6 +20,32 @@ function setup(options: Parameters<typeof followLink>[0] = {}) {
 describe('what a service in its own process hears of agents', () => {
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
+  it('resets private rows, callbacks, catch-up and readiness before a different owner uses the link', async () => {
+    vi.useFakeTimers()
+    const { link, heard } = setup()
+    link.heard(told({ kind: 'running', session: agent('old') }))
+    let release!: (answer: Record<string, unknown>) => void
+    const pending = link.connected(() => new Promise(resolve => { release = resolve }))
+    const ready = link.ready(1000)
+    link.reset()
+    expect(await ready).toBe(false)
+    expect(vi.getTimerCount()).toBe(0)
+    const fresh = vi.fn()
+    link.follow(fresh)
+    expect(fresh).not.toHaveBeenCalled()
+    release({ agents: [agent('late-old')] }); await pending
+    expect(fresh).not.toHaveBeenCalled()
+    await link.connected(coreAnswering({ agents: [agent('fresh')] }))
+    expect(fresh).toHaveBeenCalledExactlyOnceWith({ kind: 'running', session: agent('fresh') })
+    expect(heard).toEqual([{ kind: 'running', session: agent('old') }])
+    expect(await link.ready(1000)).toBe(true)
+    link.reset()
+    const resetReady = link.ready(1000)
+    link.reset()
+    expect(await resetReady).toBe(false)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it('delivers bounded accepted input observations without retaining them as live agent rows', () => {
     const { link, heard } = setup({ running: false })
     const source = { connection: 'phone', clientKind: 'phone' }

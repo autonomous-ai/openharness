@@ -131,6 +131,13 @@ export function followLink(options: FollowOptions, log: (line: string) => void =
       heard = null
       settle(false)
     },
+    /** A different component/account must inherit neither private rows nor the prior owner's callbacks. */
+    reset(): void {
+      generation++; heard = null; caughtUp = false
+      told.clear(); listeners.clear()
+      for (const waiter of waiters) waiter(false)
+      waiters = []
+    },
     /** Whether this connection's catch-up is in, waiting [ms] at most for it. */
     ready(ms: number): Promise<boolean> {
       if (caughtUp) return Promise.resolve(true)

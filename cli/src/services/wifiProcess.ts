@@ -35,10 +35,13 @@ export interface WifiServiceOptions {
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 const object = (value: unknown): Record<string, unknown> => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {})
 const list = <T>(value: unknown): T[] => (Array.isArray(value) ? value as T[] : [])
+type Component = { machineId: string; following: ReturnType<typeof followLink> }
+type Binding = { owner: Component; origin: CoreConnection }
+type Identity = { origin: CoreConnection; promise: Promise<Binding | null>; settled: boolean; settle(binding: Binding | null): void }
 
 export function runWifiService(options: WifiServiceOptions): ServiceProcess {
-  const following = followLink({})
   let core: CoreConnection | null = null
+  let component: Component | null = null, verified: Binding | null = null, identity: Identity | null = null
   let noticeEpoch = 0, noticesAvailable = true, stopped = false
   let lost!: () => void
   let noticeLost = new Promise<void>(resolve => { lost = resolve })
@@ -48,7 +51,33 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
   let link = new Promise<void>((resolve) => { linked = resolve })
   let built: { machineId: string; port: WifiPort; requests: ServiceRequests } | null = null
   /** A window in a previous core's view cannot authorize a notice to its replacement. */
-  let lastView: { origin: CoreConnection; view: WifiView } | null = null
+  let lastView: { binding: Binding; view: WifiView } | null = null
+  const currentBinding = (owner: Component, binding: Binding | null): binding is Binding =>
+    !stopped && component === owner && binding !== null && verified === binding && binding.owner === owner && core === binding.origin
+  const bindingFor = (owner: Component, error: string): Binding => {
+    if (!currentBinding(owner, verified)) throw new Error(error)
+    return verified
+  }
+  const requireBinding = (owner: Component, binding: Binding): void => {
+    if (!currentBinding(owner, binding)) throw new Error('the original core connection ended')
+  }
+  /** A connected socket says nothing about its account until its machine answer arrives. */
+  const identify = (origin: CoreConnection): Identity => {
+    identity?.settle(null)
+    verified = null; lastView = null
+    let resolve!: (binding: Binding | null) => void
+    const promise = new Promise<Binding | null>(done => { resolve = done })
+    const next: Identity = { origin, promise, settled: false, settle: binding => {
+      if (next.settled) return
+      next.settled = true; clearTimeout(timer); resolve(binding)
+    } }
+    const timer = setTimeout(() => {
+      if (identity === next) { disconnect(); console.warn('[wifi] WIFI_IDENTITY_TIMEOUT') }
+    }, 15_000)
+    timer.unref?.()
+    identity = next
+    return next
+  }
   const contracts = new WeakMap<CoreConnection, Promise<void>>()
   let sharedCore: CoreConnection | null = null
   const inputContract = (origin: CoreConnection): Promise<void> => {
@@ -63,14 +92,13 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
     }
     return pending
   }
-  const submit = async (agentId: string, text: string, deliveryId: string, context: (agent: AgentView) => void | Promise<void>, current: () => boolean = () => true): Promise<void> => {
-    const origin = core
-    if (!origin) throw new Error('the Wi-Fi device is not connected to the core')
+  const submit = async (owner: Component, agentId: string, text: string, deliveryId: string, context: (agent: AgentView) => void | Promise<void>, current: () => boolean = () => true): Promise<void> => {
+    const binding = bindingFor(owner, 'the Wi-Fi device is not connected to the core'), origin = binding.origin
     await inputContract(origin)
-    if (core !== origin) throw new Error('the original core connection ended')
+    requireBinding(owner, binding)
     if (!current()) return
     const resolved = await origin.query('resolve', { id: agentId })
-    if (core !== origin) throw new Error('the original core connection ended')
+    requireBinding(owner, binding)
     if (!current()) return
     const agent = object(resolved.value)
     if (agent.agentId !== agentId || typeof agent.sessionId !== 'string' || typeof agent.engine !== 'string') {
@@ -78,85 +106,91 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
       return
     }
     await context(agent as unknown as AgentView)
-    if (core !== origin) throw new Error('the original core connection ended')
+    requireBinding(owner, binding)
     if (!current()) return
     const answer = await origin.query('input', { version: 1, agentId, text, deliveryId, when: 'composer' })
-    if (core !== origin) throw new Error('the original core connection ended')
+    requireBinding(owner, binding)
     if (typeof answer.error === 'string') {
       const refused = ['INVALID_INPUT', 'INVALID_DELIVERY', 'NOT_A_DELIVERER', 'NOT_DELIVERY_OWNER', 'UNKNOWN_QUERY'].includes(answer.error)
       built?.port.delivery({ sessionId: agentId, deliveryId, state: refused ? 'rejected' : 'unknown', reason: refused ? answer.error : 'NOT_CONFIRMED' })
     }
   }
-  const cancel = (deliveryId: string): void => {
-    const origin = core
-    if (!origin) return
+  const cancel = (owner: Component, deliveryId: string): void => {
+    const binding = verified
+    if (!currentBinding(owner, binding)) return
+    const origin = binding.origin
     void inputContract(origin).then(async () => {
-      if (core !== origin) return
+      if (!currentBinding(owner, binding)) return
       await origin.query('cancel_delivery', { deliveryId })
     }).catch(() => {})
   }
 
-  const ask = async (query: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
-    const origin = core
-    if (!origin) throw new Error('the Wi-Fi device is not connected to the core')
-    const answer = await origin.query(query, payload)
-    if (core !== origin) throw new Error('the original core connection ended')
+  const ask = async (owner: Component, query: string, payload: Record<string, unknown>, binding = bindingFor(owner, 'the Wi-Fi device is not connected to the core')): Promise<Record<string, unknown>> => {
+    requireBinding(owner, binding)
+    const answer = await binding.origin.query(query, payload)
+    requireBinding(owner, binding)
     return answer
   }
-  const tell = (kind: string, payload: Record<string, unknown>): void => {
-    const origin = lastView?.origin
-    if (origin && core === origin) origin.notice?.(kind, payload)
+  const tell = (owner: Component, kind: string, payload: Record<string, unknown>): void => {
+    const binding = lastView?.binding ?? null
+    if (currentBinding(owner, binding)) binding.origin.notice?.(kind, payload)
   }
 
-  const api = (machineId: string): CoreApi => {
+  const api = (owner: Component): CoreApi => {
     const unasked = processCoreApi(options.dataDir, 'wifi')
     return {
       ...unasked,
       conversations: { ...unasked.conversations, resolve: async id => {
-        const origin = core
-        if (!origin) throw new Error('CORE_EVIDENCE_UNAVAILABLE')
-        const answer = await origin.query('resolve', { id })
+        const binding = bindingFor(owner, 'CORE_EVIDENCE_UNAVAILABLE')
+        const answer = await binding.origin.query('resolve', { id })
         // onEvent has enqueued every notice preceding this response. Normalized observation is
         // outside this owner, so waiting this prefix cannot wait on its own event handler.
-        if (!await heardPrefix() || core !== origin) throw new Error('CORE_EVIDENCE_UNAVAILABLE')
+        if (!await heardPrefix() || !currentBinding(owner, binding)) throw new Error('CORE_EVIDENCE_UNAVAILABLE')
         const value = object(answer.value)
         return value.agentId === id && typeof value.sessionId === 'string' && typeof value.engine === 'string' ? value as unknown as AgentView : null
       } },
-      agents: { ...unasked.agents, follow: following.follow },
-      machine: { id: () => machineId, computerId: () => options.machineId, name: () => '' },
-      turns: { ...unasked.turns, recent: async (agentId, n) => list<RecentTurn>((await ask('recent', { agentId, n })).turns) },
+      agents: { ...unasked.agents, follow: listener => {
+        if (component !== owner || stopped) return () => {}
+        return owner.following.follow(event => { if (currentBinding(owner, verified)) listener(event) })
+      } },
+      machine: { id: () => owner.machineId, computerId: () => options.machineId, name: () => '' },
+      turns: { ...unasked.turns, recent: async (agentId, n) => list<RecentTurn>((await ask(owner, 'recent', { agentId, n })).turns) },
       wifi: {
         view: async () => {
-          const origin = core
-          if (!origin) throw new Error('CORE_VIEW_UNAVAILABLE')
-          const answer = await origin.query('view', {})
-          if (core !== origin) throw new Error('CORE_VIEW_UNAVAILABLE')
+          const binding = bindingFor(owner, 'CORE_VIEW_UNAVAILABLE')
+          const answer = await binding.origin.query('view', {})
+          if (!currentBinding(owner, binding)) throw new Error('CORE_VIEW_UNAVAILABLE')
           const view: WifiView = { agents: list(answer.agents), store: list(answer.store), hasWindow: answer.hasWindow === true }
-          lastView = { origin, view }
+          lastView = { binding, view }
           return view
         },
-        stop: async (agentId) => (await ask('stop', { agentId })).ok === true,
+        stop: async (agentId) => (await ask(owner, 'stop', { agentId })).ok === true,
         create: async (packageId, engine, cwd) => {
-          const { requestId: _id, ...result } = await ask('create', { packageId, engine, cwd })
+          if (stopped || component !== owner || !identity) throw new Error('WIFI_IDENTITY_UNAVAILABLE')
+          // Durable preparation may finish while the same machine is reconnecting. Wait only for
+          // identity, not the resume handler that may itself be recovering this preparation.
+          const binding = await identity.promise
+          if (!binding) throw new Error('WIFI_IDENTITY_UNAVAILABLE')
+          const { requestId: _id, ...result } = await ask(owner, 'create', { packageId, engine, cwd }, binding)
           return result as unknown as ForkResult
         },
         stepFocus: async (direction, currentAgentId) => {
-          const answer = await ask('stepFocus', { direction, ...(currentAgentId ? { currentAgentId } : {}) })
+          const answer = await ask(owner, 'stepFocus', { direction, ...(currentAgentId ? { currentAgentId } : {}) })
           if (answer.step === 'no_agents' || answer.step === 'no_app') return answer.step
           return { machineId: text(answer.machineId), agentId: text(answer.agentId) }
         },
         // Read against the view the request being answered just asked for, as the core read its own sockets.
         scroll: (phase, dy, velocity) => {
-          if (!lastView?.view.hasWindow) return false
-          tell('scroll', { phase, dy, velocity })
+          if (!lastView?.view.hasWindow || !currentBinding(owner, lastView.binding)) return false
+          tell(owner, 'scroll', { phase, dy, velocity })
           return true
         },
         focusApp: (agentId, expiresAt, focusRevision) => {
-          if (!lastView?.view.hasWindow) return false
-          tell('focusApp', { agentId, expiresAt, focusRevision })
+          if (!lastView?.view.hasWindow || !currentBinding(owner, lastView.binding)) return false
+          tell(owner, 'focusApp', { agentId, expiresAt, focusRevision })
           return true
         },
-        reveal: (operationId, agentId) => tell('reveal', { operationId, agentId }),
+        reveal: (operationId, agentId) => tell(owner, 'reveal', { operationId, agentId }),
       },
     }
   }
@@ -166,24 +200,34 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
   const focusWork = new DeviceWorkBudget(), noticeWork = new DeviceWorkBudget()
   const answerWork = new DeviceWorkBudget()
   /** The service for this machine, built (again) when the core names another. */
-  const build = (machineId: string): WifiPort | null => {
-    if (built?.machineId === machineId) return built.port
+  const build = (machineId: string, origin: CoreConnection): WifiPort | null => {
+    if (built?.machineId === machineId && component) {
+      verified = { owner: component, origin }
+      return built.port
+    }
+    component?.following.reset()
+    component = null; verified = null; lastView = null
     if (built) void built.port.stop()
     built = null
+    const owner: Component = { machineId, following: followLink({}) }
+    component = owner; verified = { owner, origin }
     const ports: CorePorts = emptyPorts()
     let requests: ServiceRequests
     try {
-      requests = (options.start ?? startWifi)(api(machineId), ports, { submit, cancel, evidencePool, feedPool, focusWork,
+      requests = (options.start ?? startWifi)(api(owner), ports, {
+        submit: (...args) => submit(owner, ...args), cancel: deliveryId => cancel(owner, deliveryId), evidencePool, feedPool, focusWork,
         peer: { composition: 'services', port: env.PORT, token: options.token },
         answerWork,
         observeQuestions: (listener, budget) => observeQuestions({ dataDir: options.dataDir, port: env.PORT, machineId }, listener, undefined, budget),
         observeSessions: observer => observeDeviceSessions({ dataDir: options.dataDir, port: env.PORT, machineId }, observer),
       })
     } catch (error) {
+      owner.following.reset(); component = null; verified = null
       console.warn(`[wifi] did not start · ${error instanceof Error ? error.message : String(error)}`)
       return null
     }
     built = ports.wifi ? { machineId, port: ports.wifi, requests } : null
+    if (!built) { owner.following.reset(); component = null; verified = null }
     return built?.port ?? null
   }
 
@@ -200,10 +244,11 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
   let heardSoFar: Promise<unknown> = Promise.resolve()
   const disconnect = (): void => {
     // Revoke before waking a pre-connect resume or invoking a component callback.
-    noticeEpoch++; noticesAvailable = false; core = null; sharedCore = null; lastView = null
+    noticeEpoch++; noticesAvailable = false; core = null; sharedCore = null; lastView = null; verified = null
+    identity?.settle(null); identity = null
     lost(); linked()
     link = new Promise<void>(resolve => { linked = resolve })
-    following.disconnected()
+    component?.following.disconnected()
     built?.port.disconnected()
   }
   const heardPrefix = async (): Promise<boolean> => {
@@ -230,12 +275,16 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
     await originalLink
     const origin = core
     if (!current() || !origin) return
+    const ready = identity?.origin === origin && !identity.settled ? identity : identify(origin)
     await inputContract(origin).catch(() => { /* Only input is unavailable; the other device operations still work. */ })
     if (!current() || core !== origin) return
     const machine = await origin.query('machine', {})
     if (!current() || core !== origin) return
-    const port = build(text(machine.id))
-    if (core === sharedCore) await following.connected(async (query, payload) => {
+    const machineId = text(machine.id)
+    if (!machineId) throw new Error('WIFI_IDENTITY_UNAVAILABLE')
+    const port = build(machineId, origin)
+    ready.settle(verified)
+    if (core === sharedCore) await component?.following.connected(async (query, payload) => {
       const answer = await origin.query(query, payload)
       if (!current() || core !== origin) throw new Error('WIFI_NOTICE_UNAVAILABLE')
       return answer
@@ -274,7 +323,7 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
       if (kind === 'resume') { const originalLink = link; inOrder(payload, current => connected(payload, originalLink, current), true); return }
       const origin = core
       const whenCurrent = (run: () => unknown): void => inOrder(payload, () => { if (origin && core === origin) return run() })
-      if (kind === 'agent') { whenCurrent(() => following.heard(payload)); return }
+      if (kind === 'agent') { whenCurrent(() => component?.following.heard(payload)); return }
       if (kind === 'input') {
         const event = inputIn(payload)
         if (event) whenCurrent(() => built?.port.input?.(event))
@@ -291,13 +340,14 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
       if (stopped) return
       if (core) disconnect()
       if (!noticesAvailable) { noticeLost = new Promise<void>(resolve => { lost = resolve }); noticesAvailable = true }
-      core = { ...connection }; linked()
+      core = { ...connection }; identify(core); linked()
     },
     onDisconnected: disconnect,
   })
   return {
     stop: async () => {
       stopped = true; disconnect()
+      component?.following.reset()
       service.stop()
       await built?.port.stop()
     },
