@@ -73,6 +73,9 @@ export class HcSource implements HostSource {
    *  asks after (shows, reports). Each holds the client's 1,024 at most. */
   private readonly shown = new Set<string>()
   private readonly reported = new Set<string>()
+  /** The pid of the program each live terminal runs now (hc's foreground), shown or not, which the devices ask after
+   *  (terminalOf). It holds the client's 1,024 at most. */
+  private readonly foregrounds = new Map<string, number>()
   private running = false
   private subscription: { close(): void } | undefined
   /** The count of listed agents last said, and of those left out. */
@@ -183,6 +186,18 @@ export class HcSource implements HostSource {
     return this.reported.has(address)
   }
 
+  /** The one live terminal whose foreground is that pid. Two terminals naming one pid leave no certain terminal, and a
+   *  wrong one would take that session's words (docs/plans/2026-11-17-dial-recap-after-restart-design.md, Addendum). */
+  terminalOf(pid: number): string | undefined {
+    let found: string | undefined
+    for (const [address, foreground] of this.foregrounds) {
+      if (foreground !== pid) continue
+      if (found !== undefined) return undefined
+      found = address
+    }
+    return found
+  }
+
   private listed(): Row[] {
     return [...this.rows.values()].slice(0, MAX_AGENTS)
   }
@@ -234,40 +249,48 @@ export class HcSource implements HostSource {
     this.said = undefined
     this.over = 0
     this.unkept = 0
+    const held = this.rows.size > 0 || this.foregrounds.size > 0
     this.shown.clear()
     this.reported.clear()
-    if (this.rows.size === 0) return
+    this.foregrounds.clear()
     this.rows.clear()
-    this.emit()
+    if (held) this.emit()
   }
 
   /** hc's whole list: a row that stays listable with the same kind keeps its id and its place. */
   private snapshot(terminals: readonly HcTerminal[]): void {
     const before = JSON.stringify(this.list())
+    const foregrounds = new Map(this.foregrounds)
     this.shown.clear()
     this.reported.clear()
+    this.foregrounds.clear()
     for (const terminal of terminals) this.note(terminal)
     const fresh = new Map(terminals.filter(listable).map((terminal) => [terminal.address, terminal]))
     for (const [address, row] of this.rows) if (fresh.get(address)?.kind !== row.agent.engine) this.rows.delete(address)
     for (const terminal of fresh.values()) this.take(terminal, true)
-    this.told(before)
+    const moved = foregrounds.size !== this.foregrounds.size
+      || [...foregrounds].some(([address, pid]) => this.foregrounds.get(address) !== pid)
+    this.told(before, moved)
   }
 
   private changed(terminal: HcTerminal): void {
     const before = JSON.stringify(this.list())
+    const pid = this.foregrounds.get(terminal.address)
     this.note(terminal)
     if (listable(terminal)) this.take(terminal, false)
     else this.rows.delete(terminal.address)
-    this.told(before)
+    this.told(before, this.foregrounds.get(terminal.address) !== pid)
   }
 
-  /** Notes whether the window shows a terminal, and whether hc reports an agent there. */
+  /** Notes whether the window shows a terminal, whether hc reports an agent there, and the pid it runs now. */
   private note(terminal: HcTerminal): void {
     const { address } = terminal
     if (inWindow(terminal)) this.shown.add(address)
     else this.shown.delete(address)
     if (reporting(terminal)) this.reported.add(address)
     else this.reported.delete(address)
+    if (terminal.live && terminal.foregroundPid !== undefined) this.foregrounds.set(address, terminal.foregroundPid)
+    else this.foregrounds.delete(address)
   }
 
   /** Sets a terminal's row. Another kind at its address is another agent, whose first status ends no turn of the one
@@ -292,10 +315,11 @@ export class HcSource implements HostSource {
     this.status(row, terminal.status, terminal.turn, snapshot)
   }
 
-  /** The counts said when they change, and one onChange when anything a listed row shows changed. */
-  private told(before: string): void {
+  /** The counts said when they change, and one onChange when anything a listed row shows changed, or a terminal's
+   *  foreground pid did (`moved`): the devices pair a session with its terminal by it, listed or not. */
+  private told(before: string, moved: boolean): void {
     this.counted()
-    if (JSON.stringify(this.list()) !== before) this.emit()
+    if (moved || JSON.stringify(this.list()) !== before) this.emit()
   }
 
   /** The listed agents, and those left out: past the dial's 64, and the terminals past the client's own bound, which

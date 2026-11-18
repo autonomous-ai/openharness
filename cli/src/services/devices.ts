@@ -195,7 +195,10 @@ function orcaHomesCache(now: () => number, log: (line: string) => void): OrcaHom
 
 /** This computer's agents outside a pane, read with ⌘P's readers (services/externalSessions.ts) in the daemon's own homes
  *  and Orca's account homes, and how the dial's voice and tap reach them. */
-function observedSource(dataDir: string, log: (line: string) => void, orcaHomes: Pick<OrcaHomesCache, 'get'>, actions: ObservedActions, tty: ObservedDeps['tty'], scanned: ObservedDeps['scanned']): ObservedSource {
+function observedSource(
+  dataDir: string, log: (line: string) => void, orcaHomes: Pick<OrcaHomesCache, 'get'>, actions: ObservedActions,
+  tty: ObservedDeps['tty'], scanned: ObservedDeps['scanned'], herdrTerminal: ObservedDeps['herdrTerminal'],
+): ObservedSource {
   // Worked out at each read: a home the person moved is adopted while the daemon runs, and Orca's follow its last read.
   const places = observedPlaces({
     claudeRoots: () => claudeProjectsRoots(env.CLAUDE_PROJECTS_DIR),
@@ -223,6 +226,7 @@ function observedSource(dataDir: string, log: (line: string) => void, orcaHomes:
     recordName: (owner) => readRecordName(owner, { records: places.claude.records() }),
     tty,
     scanned,
+    herdrTerminal,
   })
 }
 
@@ -502,7 +506,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     codexQueue,
     codexHome: env.CODEX_HOME,
     count: (what) => voiced(countWord(what)),
-  }, ttyOf, skill ? (owners) => part.call('skill', () => skill.scanned(owners.values())) : undefined) : null
+  }, ttyOf, skill ? (owners) => part.call('skill', () => skill.scanned(owners.values())) : undefined,
+  // Only where a hook's address is taken: following another hc session, Herdr's adapter gives its terminals no pane, so
+  // a session paired there would be listed twice on Herdr's page.
+  hookIds ? (pid): string | undefined => hcSource?.terminalOf(pid) : undefined) : null
   // Orca is asked only for the parts that use its homes, the first time as the devices start: the start pass waits for
   // that read (at most its 5 s), so an Orca home gets the skill with the default one.
   if (skill || observed) void orcaHomes.refresh().then(skillPass)
@@ -1121,6 +1128,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   }
   observed?.onChange(() => part.call('dial', outsideTurn))
   herdr?.onChange(() => part.call('dial', outsideTurn))
+  // Before the dial's look, which then sees each session the scan found in the terminal it runs in.
+  hcSource?.onChange(() => part.call('observed', () => observed!.placeHerdr()))
   hcSource?.onChange(() => part.call('dial', outsideTurn))
   cmuxSource?.onChange(() => part.call('dial', outsideTurn))
   opencode?.onChange(() => part.call('dial', outsideTurn))

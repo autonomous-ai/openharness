@@ -21,8 +21,11 @@ export interface RecordNameOptions {
 /**
  * The name the person gave a Claude Code session, from the session's own process record, `<sessions>/<pid>.json`,
  * which the session writes itself. This is the one read the dial's naming allows of it (decisions 5 and 6 of
- * docs/specs/2026-11-15-dial-session-name.md): `name`, `nameSource` and `sessionId`, nothing else. Only a `user`
- * name is shown: a `derived` one can come from what was first asked. Never rejects, logs nothing and keeps nothing.
+ * docs/specs/2026-11-15-dial-session-name.md): `name`, `nameSource`, `entrypoint` and `sessionId`, nothing else. A
+ * `user` name is shown: a `derived` one can come from what was first asked. So is the Claude app's (`entrypoint`
+ * `claude-desktop`, no `nameSource`): the app sets that title itself (`rename_session`) and its hook sends the same
+ * string as `session_title` on the next prompt (decision 2 of
+ * docs/plans/2026-11-17-dial-recap-after-restart-design.md). Never rejects, logs nothing and keeps nothing.
  */
 export async function readRecordName(
   owner: Pick<SessionOwner, 'pid' | 'record'> & { sessionId: string }, opts: RecordNameOptions,
@@ -54,8 +57,9 @@ export async function readRecordName(
     return undefined
   }
   if (!row || typeof row !== 'object') return undefined
-  const { name, nameSource, sessionId } = row as Record<string, unknown>
+  const { name, nameSource, entrypoint, sessionId } = row as Record<string, unknown>
+  const given = nameSource === 'user' || (nameSource === undefined && entrypoint === 'claude-desktop')
   // The owner can be seconds old: a /clear or /resume since rewrote the record for another session (decision 6), as
   // confirmOwner (engines/kit/adoption.ts) checks.
-  return nameSource === 'user' && sessionId === owner.sessionId ? observedTitle(name) : undefined
+  return given && sessionId === owner.sessionId ? observedTitle(name) : undefined
 }

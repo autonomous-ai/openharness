@@ -28,7 +28,7 @@ import { FakeOrca } from './harness/fakeOrca.js'
 import { Outside } from './harness/outsideAgent.js'
 
 /** The open scan's report of the one session it found: counts and its time, nothing else. */
-const FOUND_ONE = /\[observed\] scan · 1 found · \d+ app known · \d+ named · \d+ ms/
+const FOUND_ONE = /\[observed\] scan · 1 found · \d+ app known · \d+ named · \d+ answered · \d+ ms/
 
 // The run's bundle when there is one (E2E_BUNDLE), as the daemon runs, as in deviceDialSkill.e2e.ts.
 const CLI_ENTRY = process.env.E2E_BUNDLE_PATH
@@ -183,7 +183,7 @@ esac
     const engine = await Outside.startIn(d, 'in-orca-home', home, {})
     outside.push(engine)
     await turn(d, engine)
-    engine.named(d, 'Tho 7f3a91c2', 'user')
+    await engine.named(d, 'Tho 7f3a91c2', { nameSource: 'user' })
     const dial = await plugged(desk)
     await listed(dial, engine, 'the agent by the name it was given', (row) => row.name === 'Tho 7f3a91c2')
     expect(d.log()).not.toContain('7f3a91c2')

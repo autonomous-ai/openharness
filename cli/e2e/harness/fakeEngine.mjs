@@ -622,16 +622,34 @@ export async function run(engine, config = {}, { native = false } = {}) {
   // session; Claude Code keeps a record per process, `~/.claude/sessions/<pid>.json`.
   let held = null
   const procStart = (() => { try { return execFileSync('ps', ['-o', 'lstart=', '-p', String(process.pid)]).toString().trim() } catch { return '' } })()
+  const processRecord = join(dirname(projectsDir), 'sessions', `${process.pid}.json`)
+  // Written first outside the records' folder, then renamed over: the daemon never reads half a record, and a test
+  // that lists the folder never finds the draft.
+  const draftRecord = join(dirname(projectsDir), `.${process.pid}.json.tmp`)
+  const writeProcessRecord = (row) => {
+    mkdirSync(dirname(processRecord), { recursive: true })
+    writeFileSync(draftRecord, JSON.stringify(row))
+    renameSync(draftRecord, processRecord)
+  }
   const announceProcess = () => {
     if (engine === 'codex') {
       if (config.holdsRollout === false) return
       if (held !== null) closeSync(held)
       held = openSync(transcript, 'r')
     } else if (procStart) {
-      const sessions = join(dirname(projectsDir), 'sessions')
-      mkdirSync(sessions, { recursive: true })
-      writeFileSync(join(sessions, `${process.pid}.json`), JSON.stringify({ pid: process.pid, sessionId, cwd: process.cwd(), procStart }))
+      writeProcessRecord({ pid: process.pid, sessionId, cwd: process.cwd(), procStart, status: 'idle' })
     }
+  }
+  // Claude Code's record says `busy` while a turn runs and `idle` between turns, and the devices' scan reads a
+  // session's last answer only when it is idle (docs/plans/2026-11-17-dial-recap-after-restart-design.md): without
+  // it every session the scan found read `working`. Only the status changes, so the fields a test wrote stay, as
+  // Claude Code keeps its own. Codex writes none: its busy reader reads its rollout.
+  const sayStatus = (status) => {
+    if (engine !== 'claude' || !procStart) return
+    let row
+    // A record it cannot read (one a test broke on purpose) stays as the test left it.
+    try { row = JSON.parse(readFileSync(processRecord, 'utf8')) } catch { return }
+    writeProcessRecord({ ...row, status })
   }
 
   const now = () => new Date().toISOString()
@@ -1010,6 +1028,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
       else aborted()
     }
     open = null
+    sayStatus('idle')
     say('(interrupted)\r\n')
     interruptSlow?.()
   }
@@ -1487,11 +1506,13 @@ export async function run(engine, config = {}, { native = false } = {}) {
     say(`\r\n${text}\r\n\r\n`)
     // The Stop hooks run once the answer is in, and the CLI waits for them before it takes the next prompt; an
     // interrupt or an error ends a turn without them. Codex runs them before it writes the turn's task_complete
-    // (0.144.0 and 0.169.0, facts-codex §2), so its end is never read before its Stop has come.
+    // (0.144.0 and 0.169.0, facts-codex §2), so its end is never read before its Stop has come. Claude Code is idle in
+    // its record only then.
     const held = heldStop
     heldStop = null
     await runHooks('Stop', { stop_hook_active: false, ...(engine === 'codex' ? { turn_id: ended } : {}) }, held)
     if (lagging) { appendFileSync(transcript, lagging.join('')); lagging = null }
+    sayStatus('idle')
     if (engine === 'codex') codex('event_msg', { type: 'task_complete', turn_id: ended, last_agent_message: text })
   }
   /**
@@ -1661,6 +1682,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
     if (!late) await promptHooks
     turn++
     open = `turn-${turn}`
+    sayStatus('busy')
     if (engine === 'claude') {
       if (/^!lagwrite(?:\s|$)/.test(prompt.replace(START_HEADER, ''))) lagging = []
       claude({ type: 'user', message: { role: 'user', content: prompt } })
@@ -1891,6 +1913,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
       claude({ type: 'system', subtype: 'turn_duration', durationMs: 5_000, messageCount: 6 })
       say('Goal paused\r\n')
       open = null
+      sayStatus('idle')
       return
     }
     if (engine === 'claude' && directive?.[1] === 'goalloop') {
@@ -1931,6 +1954,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
     if (engine === 'claude' && directive?.[1] === 'latestop') {
       claude({ type: 'assistant', message: { id: `msg_${turn}`, role: 'assistant', model: claudeModel, content: [{ type: 'text', text: `answer ${turn}: ${prompt}` }], stop_reason: 'end_turn' } })
       open = null
+      sayStatus('idle')
       say(`\r\nanswer ${turn}: ${prompt}\r\n\r\n`)
       const stop = hookHeld()
       lateStop = { stop: runHooks('Stop', { stop_hook_active: false }, stop), release: stop.release }

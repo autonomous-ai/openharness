@@ -5764,6 +5764,70 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
     expect(orcaRuns).toEqual(taken ? [openHerdr, switchTo('t7')] : [openHerdr])
   })
 
+  /** Claude Code at its prompt in /work/api, found by the scan with no hook heard: its process is pid 4242. */
+  const scanFinds = () => {
+    readers.known.set('sess-1', 'terminal')
+    readers.owners.set('sess-1', { engine: 'claude', pid: 4242 })
+    readers.rows.set('sess-1', { cwd: '/work/api', transcriptPath: '/t/sess-1.jsonl' })
+    readers.working.set('sess-1', false)
+  }
+  /** Herdr's own row for t7, beside the observed copy until the two are paired. */
+  const twoRows = [{ id: ID, name: 'api', caps: expect.any(String) }, { id: expect.not.stringMatching(ID), name: 'api', caps: 'svf' }]
+
+  // hc's foreground pid of a terminal is the scan's pid of the session (the addendum of
+  // docs/plans/2026-11-17-dial-recap-after-restart-design.md).
+  it('a session the scan found in an hc terminal is listed once, by its own copy, and takes words and a tap there', async () => {
+    scanFinds()
+    const { hc, live } = withHc()
+    live([terminal('t7', { foregroundPid: 4242 })])
+    await vi.waitFor(async () => expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }]))
+    expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
+    expect(hc.prompted).toEqual([['t7', 'claude', 'run the tests']])
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns).toEqual([openHerdr, switchTo('t7')])
+    expect(logs).toContain('[observed] herdr · 1 paired')
+    expect(logs.filter((line) => /\bt7\b|4242/.test(line))).toEqual([])
+  })
+
+  it('Herdr\'s list after the scan pairs it; a foreground that moves away takes it back', async () => {
+    scanFinds()
+    const { live, changed } = withHc()
+    live([terminal('t7')])
+    await vi.waitFor(async () => expect(await listed()).toEqual(expect.arrayContaining(twoRows)))
+    expect(await listed()).toHaveLength(2)
+    changed({ foregroundPid: 4242 })
+    await vi.waitFor(async () => expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }]))
+    changed({ foregroundPid: 999 })
+    await vi.waitFor(async () => expect(await listed()).toHaveLength(2))
+    expect(host().hostOf(ID)).toBe('terminal')
+  })
+
+  // As a hook's address (above): another session's t7 is another agent's terminal.
+  it.each([
+    [{}, true],
+    [{ HC_SESSION: 'other' }, false],
+  ])('with %j the devices pair a session the scan found: %s', async (vars, paired) => {
+    for (const [name, value] of Object.entries(vars)) vi.stubEnv(name, value)
+    scanFinds()
+    const { live } = withHc()
+    live([terminal('t7', { foregroundPid: 4242 })])
+    await vi.waitFor(() => expect(readers.answer).toHaveBeenCalled())
+    await vi.waitFor(async () => expect(await listed()).toHaveLength(paired ? 1 : 2))
+    expect(host().hostOf(ID)).toBe(paired ? 'herdr' : 'terminal')
+  })
+
+  // A stale pane would take the session's words in a terminal hc no longer tells of.
+  it('detached, the pairing is taken back', async () => {
+    scanFinds()
+    const { hc, live } = withHc()
+    live([terminal('t7', { foregroundPid: 4242 })])
+    await vi.waitFor(() => expect(host().hostOf(ID)).toBe('herdr'))
+    seen.host.watching!(false)
+    await vi.waitFor(() => expect(host().hostOf(ID)).toBe('terminal'))
+    await host().sendTurn(ID, 'run the tests')
+    expect(hc.prompted).toEqual([])
+  })
+
   // Every hc terminal has HC_TERMINAL_ID, hidden `hc run` workers too, and the window shows those not.
   it('a hooked agent in a terminal Herdr\'s window does not show takes words, and a tap brings Herdr forward only', async () => {
     const { port, hc, live } = withHc()

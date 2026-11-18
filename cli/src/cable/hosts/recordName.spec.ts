@@ -25,11 +25,18 @@ function record(pid: number, content: object | string, dir = sessions): string {
 }
 
 const named = { pid: 11, sessionId: 's', cwd: '/x', status: 'idle', name: 'Tho', nameSource: 'user' }
+/** The Claude app's record: the title it gave the session, with no nameSource. */
+const app = { pid: 11, sessionId: 's', cwd: '/x', status: 'idle', name: 'Tho', entrypoint: 'claude-desktop', hostSessionId: 'h' }
 const read = (path: string, pid = 11, records = [sessions]) => readRecordName({ pid, record: path, sessionId: 's' }, { records })
 
 describe('readRecordName', () => {
   it('reads the name the person gave', async () => {
     expect(await read(record(11, named))).toBe('Tho')
+  })
+
+  it('reads the title the Claude app gave its session', async () => {
+    expect(await read(record(11, app))).toBe('Tho')
+    expect(await read(record(11, { ...app, name: '  Fix \t login ' }))).toBe('Fix login')
   })
 
   it('reads the record at the path the provider builds, in the first records folder and in a moved home\'s', async () => {
@@ -61,6 +68,14 @@ describe('readRecordName', () => {
     ['a nameSource of 7', () => record(11, { ...named, nameSource: 7 })],
     ['a nameSource of User', () => record(11, { ...named, nameSource: 'User' })],
     ['a record a /clear moved to another session', () => record(11, { ...named, sessionId: 't' })],
+    ['a cli record with no nameSource', () => record(11, { ...app, entrypoint: 'cli' })],
+    ['an sdk-cli record with no nameSource', () => record(11, { ...app, entrypoint: 'sdk-cli' })],
+    ['no entrypoint and no nameSource', () => record(11, { ...app, entrypoint: undefined })],
+    ['a Claude app record with a derived name', () => record(11, { ...app, nameSource: 'derived' })],
+    ['a Claude app record with a nameSource of 7', () => record(11, { ...app, nameSource: 7 })],
+    ['an entrypoint of 7', () => record(11, { ...app, entrypoint: 7 })],
+    ['an entrypoint of Claude-Desktop', () => record(11, { ...app, entrypoint: 'Claude-Desktop' })],
+    ['a Claude app record a /clear moved to another session', () => record(11, { ...app, sessionId: 't' })],
     ['no sessionId', () => record(11, { ...named, sessionId: undefined })],
     ['a sessionId of 7', () => record(11, { ...named, sessionId: 7 })],
     ['no name', () => record(11, { ...named, name: undefined })],
