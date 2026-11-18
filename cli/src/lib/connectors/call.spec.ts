@@ -81,6 +81,7 @@ describe('fenced', () => {
   it('refuses a file in AppData on Windows', () => {
     expect(refuses('C:\\Users\\a\\AppData\\Roaming\\x.txt')).toBe(true)
     expect(refuses('C:\\Users\\a\\AppData\\Local\\Foo\\x.txt')).toBe(true)
+    expect(refuses('C:\\Users\\a\\AppData\\LocalLow\\Foo\\x.txt')).toBe(true)
   })
 
   it('allows a file in the home\'s own AppData\\Local\\Temp', () => {
