@@ -134,7 +134,7 @@ describe('the home bridge service', () => {
     }
   })
 
-  it('at its start, and each time the core connects, it serves the old paths', async () => {
+  it('each time the core connects it serves the old paths', async () => {
     const h = movedHome()
     const { bridge, log } = start(h, { rows: () => [row({ name: 'claude' })] })
     const route = join(h.oldHome, 'hook-routes', `${h.bridge.newTag}.json`)
@@ -224,7 +224,7 @@ describe('the home bridge service', () => {
     bridge.stop()
   })
 
-  it('it checks at its start and every 10 minutes: one timer, unreferenced', async () => {
+  it('it checks once the core connects and every 10 minutes: one timer, unreferenced', async () => {
     fakeInterval()
     const every = vi.spyOn(globalThis, 'setInterval')
     const h = movedHome()

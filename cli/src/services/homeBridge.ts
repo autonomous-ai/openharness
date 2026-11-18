@@ -2,8 +2,8 @@
  * The home bridge (docs/plans/2026-11-18-linux-xdg-paths-design.md, The bridge service). On Linux, once Harness's folder
  * moved to the XDG folders, ~/.harness is a bridge for what started before the move (homeMove/bridge.ts). This service
  * keeps in it what a link cannot give, and removes it once no process that could use an old path is left and every
- * harness's setup has run again. It runs only while bridge.json exists: one timer, a check every 10 minutes, and nothing
- * once the bridge is gone. It reads a process's owner, start time, name, executable and parent (homeMove/oldUsers.ts),
+ * harness's setup has run again. It runs only while bridge.json exists: a check each time the core connects and every 10
+ * minutes on one timer, and nothing once the bridge is gone. It reads a process's owner, start time, name, executable and parent (homeMove/oldUsers.ts),
  * never its environment or command line, and tmux's panes read only. The apps ask it nothing.
  */
 import { spawnSync } from 'node:child_process'
@@ -60,10 +60,11 @@ async function pendingSetups(): Promise<number> {
 
 const said = (error: unknown): string => (error instanceof Error ? error.message : String(error))
 
-/** In the core's process (no master, or `HARNESSD_SERVICES=none`): the same service, which the apps ask nothing. It lives as
- *  long as the core's process, where no link to the core comes and goes. */
-export function startHomeBridgeInCore(core: CoreApi): ServiceRequests {
-  startHomeBridge(core)
+/** In the core's process (no master, or `HARNESSD_SERVICES=none`): the same service, which the apps ask nothing. The core is
+ *  there from its start, so it checks at once; it lives as long as the core's process, where no link to the core comes and
+ *  goes. [given] is the tests'. */
+export function startHomeBridgeInCore(core: CoreApi, given: Partial<HomeBridgeDeps> = {}): ServiceRequests {
+  startHomeBridge(core, given).connected()
   return {}
 }
 
@@ -81,10 +82,11 @@ export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = 
   const roots = harnessRoots(deps.home, 'linux', look)
   const unlinkedSaid = new Set<string>()
   let running = true
+  let checking = false
 
-  /** The route record, a hard link where an old client looks for a socket, and the shim's files: made again as the core starts again with a new socket. */
+  /** The route record, a hard link where an old client looks for a socket, and the shim's files: made again at each check,
+   *  as the core and the connections bridge make their sockets again whenever they start. */
   const serve = (): void => {
-    if (!running) return
     const connections = connectorsDir(deps.environment)
     const sockets = [[bridge.oldDataDir, deps.socket], [join(bridge.oldHome, 'connections'), socketPathIn(connections, 'bridge.sock', deps.home)]] as const
     const served: Served = {
@@ -116,7 +118,13 @@ export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = 
   }
 
   const check = async (): Promise<void> => {
+    if (!running) return
+    // One at a time: a connection while a check waits on the Store serves the old paths again, and leaves the rest to it.
+    const again = checking
+    checking = true
     try {
+      serve()
+      if (again) return
       const count = oldUsers(bridge, deps.rows(), { uid: process.getuid!(), self: process.pid, roots, engines: ENGINES, apps: APPS, panePids: panePids() })
       note('bridged', count)
       // A harness set up before the move runs from the old paths until its setup has run again. One whose setup failed is
@@ -131,16 +139,17 @@ export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = 
     } catch (error) {
       // /proc with no boot time, a file it could not remove: the bridge stays until a check gets through.
       deps.log(`home bridge: a check failed: ${said(error)} · tried again in 10 minutes`)
+    } finally {
+      if (!again) checking = false
     }
   }
 
-  serve()
   const timer = setInterval(() => void check(), CHECK_MS)
   timer.unref()
   const stop = (): void => {
     running = false
     clearInterval(timer)
   }
-  void check()
-  return { stop, connected: serve }
+  // Before the core connects there is no socket to link: the first check waits for it.
+  return { stop, connected: () => void check() }
 }
