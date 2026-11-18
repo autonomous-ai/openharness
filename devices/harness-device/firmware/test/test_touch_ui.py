@@ -1114,6 +1114,13 @@ static void inbox_full_checks(void) {
     ui_notif_replace(rows,NOTICES);
     assert(s.notice_count==NOTICES && !notice_has("held",false));
     for(int i=0;i<NOTICES;i++) { snprintf(id,sizeof id,"q-%d",i); assert(notice_has(id,true)); }
+    // The question being read stays in its place: the oldest question gives way to it.
+    read.question=true;
+    reset(); ui_notif_replace(&read,1); ui_notif_open(); notice_mark_read(&s.notice[s.offset]);
+    ui_notif_replace(rows,NOTICES);
+    assert(s.notice_count==NOTICES && s.view==INBOX && !strcmp(s.notice[s.offset].agent_id,"held") && s.notice[s.offset].question);
+    snprintf(id,sizeof id,"q-%d",NOTICES-1); assert(!notice_has(id,true));
+    for(int i=0;i<NOTICES-1;i++) { snprintf(id,sizeof id,"q-%d",i); assert(notice_has(id,true)); }
     puts("inbox full: a message never takes a question's place; the oldest message, or the oldest question for a question, goes PASS");
     reset();
 }
