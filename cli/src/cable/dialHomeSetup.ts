@@ -97,8 +97,9 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
   const onAtPass = new Set<DialEngine>()
   /** Recorded folders counted left removed in this run, by engine. */
   const leftCounted = new Set<string>()
-  /** dial-skill.json as it was when each engine's removal was counted. */
-  const removalCounted: Partial<Record<DialEngine, string>> = {}
+  /** Engines whose removal was counted, until one is read not removed: dial-skill.json written again for another
+   *  removal (VS Code's, the other engine's) or by a second disable is not a new one. */
+  const removalCounted = new Set<DialEngine>()
   const said = new Set<string>()
   let stamp = ''
 
@@ -116,6 +117,7 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
   /** Read only once a dial is recorded: a pass never runs before. */
   const on = (engine: DialEngine): boolean => {
     if (removedNow()[engine] === true) return false
+    removalCounted.delete(engine)
     if (engine === 'codex') return true
     const state = claudePluginState(settingsFile)
     if (state !== 'unknown') pluginOn = state === 'on'
@@ -212,13 +214,9 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
     onAtPass.delete(engine)
     handled[engine].clear()
     const removal = removedNow()[engine] === true
-    if (removal) {
-      // Once a removal: another disable writes dial-skill.json again.
-      const at = stampOf(removedFile)
-      if (removalCounted[engine] !== at) {
-        removalCounted[engine] = at
-        deps.count(engine, 'left removed')
-      }
+    if (removal && !removalCounted.has(engine)) {
+      removalCounted.add(engine)
+      deps.count(engine, 'left removed')
     }
     const shared = on(OTHER[engine]) ? foldersOf(OTHER[engine]) : new Set()
     const results = new Map<string, string>()
