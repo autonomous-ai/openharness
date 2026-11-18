@@ -42,6 +42,10 @@ const OUT_OF_FORM: Array<[string, string]> = [
   ['one with a NUL', '/work/a\u0000b'],
   ['one with the last C0 control', '/work/a\u001fb'],
   ['one with a DEL', '/work/a\u007fb'],
+  // The C1 controls are control characters too (Unicode's Cc), as the spec's "no control character" says.
+  ['one with the first C1 control', '/work/a\u0080b'],
+  ['one with a NEL', '/work/a\u0085b'],
+  ['one with the last C1 control', '/work/a\u009fb'],
   ['one of 4097 characters', `/${'a'.repeat(4096)}`],
 ]
 
@@ -84,7 +88,8 @@ describe('the Cursor folder adapter', () => {
   })
 
   it('a tap opens Cursor on the folder: one open, the path one argument, in 10 s', async () => {
-    for (const folder of ['/work/my proj/ü', '/work/-rf', '/work/a;b $(x) `y`']) {
+    // A no-break space, just past the C1 controls, is a letter of a name and no control.
+    for (const folder of ['/work/my proj/ü', '/work/-rf', '/work/a;b $(x) `y`', '/work/a b']) {
       const { adapter, calls, folders } = rig()
       folders.add(folder)
       // The path reaches open as the hook named it: no part of it is cut, quoted or read as a flag.
