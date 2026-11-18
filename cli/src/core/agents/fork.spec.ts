@@ -208,6 +208,15 @@ describe('forking an agent', () => {
     if (engine === 'codex') expect(request.codexHome).toBe(finalHome)
   })
 
+  it('builds a retry pane\'s launch again, as the first pane\'s shell removed its one-time file', async () => {
+    expect(await setup().fork({ agentId: 'a1', name: null, prompt: null })).toMatchObject({ ok: true })
+    const pane = vi.mocked(createAndRegisterPane).mock.calls[0]![0]
+    const built = vi.mocked(buildEngineLaunchArgv).mock.results.length
+    expect(pane.argv(1)).toBe(vi.mocked(buildEngineLaunchArgv).mock.results[built - 1]!.value)
+    expect(pane.argv(2)).toBe(vi.mocked(buildEngineLaunchArgv).mock.results[built]!.value)
+    expect(vi.mocked(buildEngineLaunchArgv).mock.calls[built]).toEqual(vi.mocked(buildEngineLaunchArgv).mock.calls[built - 1])
+  })
+
   it('keeps its source\'s Claude account on its row', async () => {
     expect(await setup(source({ claudeHome: '/profiles/work' })).fork({ agentId: 'a1', name: null, prompt: null })).toMatchObject({ ok: true })
     expect(vi.mocked(createAndRegisterPane).mock.calls[0]![0].claudeHome).toBe('/profiles/work')
@@ -338,7 +347,7 @@ describe('forking an agent', () => {
     expect(await fork({ agentId: 'a1', name: null, prompt: 'next' })).toMatchObject({ level: 'handoff' })
     const pane = vi.mocked(createAndRegisterPane).mock.calls[0]![0]
     expect(pane.firstTask).toEqual(expect.stringContaining('next'))
-    expect(pane.argv.some(arg => arg.includes(pane.firstTask!))).toBe(false)
+    expect(pane.argv(1).some(arg => arg.includes(pane.firstTask!))).toBe(false)
   })
 
   it('forks an agent with no session from what little it has, and opens a native fork with no first prompt', async () => {

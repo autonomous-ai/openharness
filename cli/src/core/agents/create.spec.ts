@@ -599,6 +599,15 @@ describe('creating an agent', () => {
       expect(pane).toMatchObject({ engine: 'claude', sessionLabel: expect.any(String), grid: null, gridLaunchRecord: null, dsh: null, dshRuntime: null, defaultName: null })
     })
 
+    it('builds a retry pane\'s launch again, as the first pane\'s shell removed its one-time file', async () => {
+      expect(await setup().create(request())).toMatchObject({ ok: true })
+      const pane = vi.mocked(createAndRegisterPane).mock.calls[0][0]
+      const built = vi.mocked(buildEngineLaunchArgv).mock.results.length
+      expect(pane.argv(1)).toBe(vi.mocked(buildEngineLaunchArgv).mock.results[built - 1]!.value)
+      expect(pane.argv(2)).toBe(vi.mocked(buildEngineLaunchArgv).mock.results[built]!.value)
+      expect(vi.mocked(buildEngineLaunchArgv).mock.calls[built]).toEqual(vi.mocked(buildEngineLaunchArgv).mock.calls[built - 1])
+    })
+
     it('sends the launch\'s Windows variables (no /usr/bin/env there) with the pane env, after its own', async () => {
       vi.mocked(engineLaunchEnv).mockReturnValueOnce({ HARNESS_NATIVE_FIXTURE: 'token' })
       expect(await setup().create(request())).toMatchObject({ ok: true })
@@ -638,14 +647,14 @@ describe('creating an agent', () => {
     it('an OpenClaw first task is kept for typing, not launched with', async () => {
       const pane = await launchedFor({ engine: 'openclaw', prompt: 'Fix the parser' })
       expect(pane.firstTask).toBe('Fix the parser')
-      expect(pane.argv.join(' ')).not.toContain('Fix the parser')
-      expect(pane.argv.join(' ')).not.toContain('--message')
+      expect(pane.argv(1).join(' ')).not.toContain('Fix the parser')
+      expect(pane.argv(1).join(' ')).not.toContain('--message')
     })
 
     it('an engine that takes its first prompt in argv keeps none', async () => {
       const pane = await launchedFor({ engine: 'claude', prompt: 'Fix the parser' })
       expect(pane).not.toHaveProperty('firstTask')
-      expect(pane.argv.join(' ')).toContain('Fix the parser')
+      expect(pane.argv(1).join(' ')).toContain('Fix the parser')
     })
 
     it('opens a terminal ready at once, with nothing to watch', async () => {

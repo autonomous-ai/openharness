@@ -62,7 +62,7 @@ describe('createAndRegisterPane', () => {
     const tmuxBackend = fakeTmux([succeeded('%1')])
 
     const result = await createAndRegisterPane({
-      tmuxBackend, registry, engine: 'claude', cwd: '/tmp/demo', sessionLabel: 'harness-claude-1', argv: ['claude'],
+      tmuxBackend, registry, engine: 'claude', cwd: '/tmp/demo', sessionLabel: 'harness-claude-1', argv: () => ['claude'],
     })
 
     expect(result.ok).toBe(true)
@@ -78,7 +78,7 @@ describe('createAndRegisterPane', () => {
     const argv = ['/bin/zsh', '/work/a script', '$(touch injected)', 'a; echo b', '']
     const result = await createAndRegisterPane({
       tmuxBackend, registry, engine: 'terminal', cwd: '/work/project with spaces',
-      spawnCwd: '/work/project with spaces', sessionLabel: 'harness-shell-1', argv,
+      spawnCwd: '/work/project with spaces', sessionLabel: 'harness-shell-1', argv: () => argv,
     })
     expect(result.ok).toBe(true)
     expect(tmuxBackend.create).toHaveBeenCalledWith({ label: 'harness-shell-1', cwd: '/work/project with spaces', command: argv })
@@ -89,13 +89,13 @@ describe('createAndRegisterPane', () => {
     registry.load()
     const tmuxBackend = fakeTmux([succeeded('%1'), succeeded('%2'), succeeded('%3')])
     const afterExit = { command: ['pwsh.exe', '-NoLogo'], env: { HARNESS_ENGINE_COMMAND: 'claude' } }
-    await createAndRegisterPane({ tmuxBackend, registry, engine: 'claude', cwd: 'C:\\work', sessionLabel: 'harness-claude-1', argv: ['claude.exe'],
+    await createAndRegisterPane({ tmuxBackend, registry, engine: 'claude', cwd: 'C:\\work', sessionLabel: 'harness-claude-1', argv: () => ['claude.exe'],
       paneLaunch: { cwd: 'C:\\work', afterExit, clearInherited: ['ANTHROPIC_API_KEY'] } })
     expect(tmuxBackend.create).toHaveBeenLastCalledWith({ label: 'harness-claude-1', cwd: 'C:\\work', command: ['claude.exe'], afterExit, clearInherited: ['ANTHROPIC_API_KEY'] })
-    await createAndRegisterPane({ tmuxBackend, registry, engine: 'claude', cwd: '/w', spawnCwd: '/elsewhere', sessionLabel: 'harness-claude-2', argv: ['claude'],
+    await createAndRegisterPane({ tmuxBackend, registry, engine: 'claude', cwd: '/w', spawnCwd: '/elsewhere', sessionLabel: 'harness-claude-2', argv: () => ['claude'],
       paneLaunch: { cwd: '/w' } })
     expect(tmuxBackend.create).toHaveBeenLastCalledWith({ label: 'harness-claude-2', cwd: '/elsewhere', command: ['claude'] })
-    await createAndRegisterPane({ tmuxBackend, registry, engine: 'claude', cwd: '/w', sessionLabel: 'harness-claude-3', argv: ['claude'], paneLaunch: {} })
+    await createAndRegisterPane({ tmuxBackend, registry, engine: 'claude', cwd: '/w', sessionLabel: 'harness-claude-3', argv: () => ['claude'], paneLaunch: {} })
     expect(tmuxBackend.create).toHaveBeenLastCalledWith({ label: 'harness-claude-3', cwd: homedir(), command: ['claude'] })
   })
 
@@ -107,7 +107,7 @@ describe('createAndRegisterPane', () => {
     const tmuxBackend = fakeTmux([succeeded('%1'), succeeded('%2')])
 
     const result = await createAndRegisterPane({
-      tmuxBackend, registry, engine: 'claude', cwd: '/tmp/demo', sessionLabel: 'harness-claude-1', argv: ['claude'],
+      tmuxBackend, registry, engine: 'claude', cwd: '/tmp/demo', sessionLabel: 'harness-claude-1', argv: () => ['claude'],
     })
 
     expect(result.ok).toBe(true)
@@ -153,7 +153,7 @@ describe('createAndRegisterPane', () => {
     const tmuxBackend = fakeTmux([succeeded('%1'), succeeded('%2'), succeeded('%3')])
 
     const result = await createAndRegisterPane({
-      tmuxBackend, registry, engine: 'claude', cwd: '/tmp/demo', sessionLabel: 'harness-claude-1', argv: ['claude'],
+      tmuxBackend, registry, engine: 'claude', cwd: '/tmp/demo', sessionLabel: 'harness-claude-1', argv: () => ['claude'],
     })
 
     expect(result.ok).toBe(false)
@@ -174,7 +174,7 @@ describe('createAndRegisterPane', () => {
     const tmuxBackend = fakeTmux([succeeded('%1'), succeeded('%2'), succeeded('%3')])
 
     const result = await createAndRegisterPane({
-      tmuxBackend, registry, engine: 'claude', cwd: '/tmp/demo', sessionLabel: 'harness-claude-1', argv: ['claude'],
+      tmuxBackend, registry, engine: 'claude', cwd: '/tmp/demo', sessionLabel: 'harness-claude-1', argv: () => ['claude'],
     })
 
     expect(result).toEqual({ ok: false, error: 'PERSISTENCE_UNCONFIRMED',
@@ -192,7 +192,7 @@ describe('createAndRegisterPane', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const said = () => warn.mock.calls.map(([line]) => String(line)).filter(line => line.startsWith('[agent] create claude not saved'))
     const create = (tmuxBackend: ReturnType<typeof fakeTmux>) => createAndRegisterPane({
-      tmuxBackend, registry, engine: 'claude', cwd: '/tmp/demo', sessionLabel: 'harness-claude-1', argv: ['claude'],
+      tmuxBackend, registry, engine: 'claude', cwd: '/tmp/demo', sessionLabel: 'harness-claude-1', argv: () => ['claude'],
     })
     try {
       await create(fakeTmux([succeeded('%1')]))
@@ -223,7 +223,7 @@ describe('createAndRegisterPane', () => {
 
     const result = await createAndRegisterPane({
       tmuxBackend, registry, engine: 'opencode', cwd: '/home/someone', sessionLabel: 'harness-opencode-1',
-      argv: ['opencode', '--agent', 'harness-compute'], agent: 'harness-compute', defaultName: 'Local model',
+      argv: () => ['opencode', '--agent', 'harness-compute'], agent: 'harness-compute', defaultName: 'Local model',
     })
 
     expect(result.ok).toBe(true)
@@ -237,12 +237,12 @@ describe('createAndRegisterPane', () => {
     registry.load()
     const started = await createAndRegisterPane({
       tmuxBackend: fakeTmux([succeeded('%1')]), registry, engine: 'claude', cwd: '/tmp/demo', sessionLabel: 'harness-claude-1',
-      argv: ['claude'], startedBy: 'agent', parentAgentId: 'lead-1',
+      argv: () => ['claude'], startedBy: 'agent', parentAgentId: 'lead-1',
     })
     expect(started.ok && started.pending).toMatchObject({ startedBy: 'agent', parentAgentId: 'lead-1' })
     const person = await createAndRegisterPane({
       tmuxBackend: fakeTmux([succeeded('%2')]), registry, engine: 'claude', cwd: '/tmp/demo', sessionLabel: 'harness-claude-2',
-      argv: ['claude'], parentAgentId: 'lead-1',
+      argv: () => ['claude'], parentAgentId: 'lead-1',
     })
     expect(person.ok && person.pending).not.toHaveProperty('parentAgentId')
   })
@@ -252,11 +252,11 @@ describe('createAndRegisterPane', () => {
     registry.load()
     const ticked = await createAndRegisterPane({
       tmuxBackend: fakeTmux([succeeded('%1')]), registry, engine: 'claude', cwd: '/tmp/demo', sessionLabel: 'harness-claude-1',
-      argv: ['claude'], browser: true,
+      argv: () => ['claude'], browser: true,
     })
     expect(ticked.ok && ticked.pending).toMatchObject({ browser: true })
     const plain = await createAndRegisterPane({
-      tmuxBackend: fakeTmux([succeeded('%2')]), registry, engine: 'claude', cwd: '/tmp/demo', sessionLabel: 'harness-claude-2', argv: ['claude'],
+      tmuxBackend: fakeTmux([succeeded('%2')]), registry, engine: 'claude', cwd: '/tmp/demo', sessionLabel: 'harness-claude-2', argv: () => ['claude'],
     })
     expect(plain.ok && plain.pending).not.toHaveProperty('browser')
   })
@@ -267,12 +267,12 @@ describe('createAndRegisterPane', () => {
     const openPendingAgent = vi.spyOn(registry, 'openPendingAgent')
     await createAndRegisterPane({
       tmuxBackend: fakeTmux([succeeded('%1')]), registry, engine: 'openclaw', cwd: '/tmp/demo', sessionLabel: 'harness-openclaw-1',
-      argv: ['openclaw', 'tui'], firstTask: 'Fix the parser',
+      argv: () => ['openclaw', 'tui'], firstTask: 'Fix the parser',
     })
     expect(openPendingAgent).toHaveBeenCalledWith(expect.objectContaining({ firstTask: 'Fix the parser' }))
     await createAndRegisterPane({
       tmuxBackend: fakeTmux([succeeded('%2')]), registry, engine: 'openclaw', cwd: '/tmp/demo', sessionLabel: 'harness-openclaw-2',
-      argv: ['openclaw', 'tui'],
+      argv: () => ['openclaw', 'tui'],
     })
     expect(openPendingAgent.mock.calls[1]![0]).not.toHaveProperty('firstTask')
   })
@@ -283,13 +283,13 @@ describe('createAndRegisterPane', () => {
     const openPendingAgent = vi.spyOn(registry, 'openPendingAgent')
     const local = await createAndRegisterPane({
       tmuxBackend: fakeTmux([succeeded('%1')]), registry, engine: 'openclaw', cwd: '/tmp/demo', sessionLabel: 'harness-openclaw-1',
-      argv: ['openclaw', 'tui', '--local'], openclawLocal: '/runs/one',
+      argv: () => ['openclaw', 'tui', '--local'], openclawLocal: '/runs/one',
     })
     expect(openPendingAgent).toHaveBeenCalledWith(expect.objectContaining({ openclawLocal: '/runs/one' }))
     expect(local.ok && local.pending).toMatchObject({ openclawLocal: '/runs/one', openclawStateDir: '/runs/one' })
     await createAndRegisterPane({
       tmuxBackend: fakeTmux([succeeded('%2')]), registry, engine: 'openclaw', cwd: '/tmp/demo', sessionLabel: 'harness-openclaw-2',
-      argv: ['openclaw', 'tui'],
+      argv: () => ['openclaw', 'tui'],
     })
     expect(openPendingAgent.mock.calls[1]![0]).not.toHaveProperty('openclawLocal')
   })
@@ -301,7 +301,7 @@ describe('createAndRegisterPane', () => {
     const tmuxBackend = fakeTmux([{ state: 'failed', dispatch: 'not_started', reason: 'tmux is unavailable' }])
 
     const result = await createAndRegisterPane({
-      tmuxBackend, registry, engine: 'claude', cwd: '/tmp/demo', sessionLabel: 'harness-claude-1', argv: ['claude'],
+      tmuxBackend, registry, engine: 'claude', cwd: '/tmp/demo', sessionLabel: 'harness-claude-1', argv: () => ['claude'],
     })
 
     expect(result.ok).toBe(false)

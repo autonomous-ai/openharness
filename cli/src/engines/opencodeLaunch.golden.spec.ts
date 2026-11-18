@@ -10,7 +10,7 @@ import { writeExecutable } from '../testing/executableFixture.js'
 
 const captured = vi.hoisted(() => ({ panes: [] as Record<string, any>[] }))
 vi.mock('../lib/createAgentPane.js', () => ({ createAndRegisterPane: async (input: Record<string, any>) => {
-  captured.panes.push(input)
+  captured.panes.push({ ...input, argv: input.argv(1) })
   return { ok: false, error: 'RECORDED', detail: 'No pane is opened by this golden.' }
 } }))
 vi.mock('../lib/paneEngineProcess.js', async real => ({ ...await real<object>(),

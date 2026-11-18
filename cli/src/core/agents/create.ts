@@ -401,7 +401,8 @@ export function createAgentCreator({
       engine,
       cwd,
       sessionLabel: label,
-      argv,
+      // A retry's pane gets a launch file of its own: the first pane's shell removed this one as it read it.
+      argv: attempt => attempt === 1 ? argv : buildEngineLaunchArgv(engine, launchOptions),
       // Windows: the workspace to start in and the shell the pane becomes after the engine (lib/windows/engineStart.ts).
       paneLaunch: windowsPaneLaunch(engine, { ...launchOptions, held: isWindowsHeldPane(argv) }),
       // Windows: the variables the argv's `/usr/bin/env` prefix carries elsewhere, last (engineLaunchEnv).

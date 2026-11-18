@@ -73,7 +73,10 @@ export interface CreateAgentPaneDeps<Ref extends TerminalRuntimeRef = TerminalRu
   label?: string | null
   /** Base tmux session name (`-s`). Retries append `-r<attempt>` — see module doc. */
   sessionLabel: string
-  argv: string[]
+  /** The pane's command, built for each attempt (1 first): an engine launch reads its script from a one-time file that
+   *  the pane's shell removes as it reads it (engineLaunch.ts `sourcedOnce`), so a retry needs a file of its own. Handed
+   *  the first attempt's, a retry ran a file already gone and its pane died with status 127 (CI, cli/e2e/scale.e2e.ts). */
+  argv: (attempt: number) => string[]
   /** Explicit-argv terminals start here; engine wrappers still enter cwd after rc files. */
   spawnCwd?: string
   /** Windows: the folder the engine starts in (it has no wrapper to enter one) and the shell the pane becomes when it
@@ -142,7 +145,7 @@ export async function createAndRegisterPane<Ref extends TerminalRuntimeRef = Ter
       ...(deps.paneLaunch?.afterExit ? { afterExit: deps.paneLaunch.afterExit } : {}),
       ...(deps.paneLaunch?.clearInherited?.length ? { clearInherited: deps.paneLaunch.clearInherited } : {}),
       label,
-      command: deps.argv,
+      command: deps.argv(attempt),
       ...(deps.current ? { current: deps.current } : {}),
       ...(deps.onDispatch ? { onDispatch: deps.onDispatch } : {}),
       // The caller's own variables win over the pane's PATH rule (lib/windows/engineStart.ts `windowsPaneLaunch`).

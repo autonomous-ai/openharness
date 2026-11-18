@@ -60,10 +60,10 @@ it.each([true, false])('completes native Codex preparation before its dispatch c
   const cwd = join(projectsRoot(), 'workspace'); mkdirSync(cwd, { recursive: true })
   const config = join(process.env.CODEX_HOME!, 'config.toml')
   const pending = { agentId: 'fixture-agent', engine: 'codex', cwd, sessionId: '', runtimes: [] } as unknown as RegisteredSession
-  spawn.mockImplementation(async (options: { current(): boolean; argv: string[] }) => {
+  spawn.mockImplementation(async (options: { current(): boolean; argv(attempt: number): string[] }) => {
     expect(options.current()).toBe(true)
     expect(readFileSync(config, 'utf8').includes('trust_level = "trusted"')).toBe(local)
-    expect(options.argv.join(' ')).toContain('original prompt')
+    expect(options.argv(1).join(' ')).toContain('original prompt')
     return { ok: true, pending, spawned: { runtime: { backend: 'tmux', paneId: '%fixture' } } }
   })
   const creator = createAgentCreator({ native: (engine, source) => inspectNativeLaunch(engine, source),
