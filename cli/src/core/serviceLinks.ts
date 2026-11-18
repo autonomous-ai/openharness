@@ -17,6 +17,8 @@ import { performance } from 'node:perf_hooks'
 import { randomUUID, timingSafeEqual } from 'node:crypto'
 import type { Asker } from './api.js'
 import { HANDOFF_DEADLINE_MS } from '../lib/handoffAuthority.js'
+import { SERVICE_REQUESTS_MAX } from './serviceHost.js'
+export { SERVICE_REQUESTS_MAX } from './serviceHost.js'
 
 export interface ServiceFrame {
   type: string
@@ -124,10 +126,6 @@ export const ON_DEMAND_START_MS = 20_000
  *  Mac: 6.9, 7.2 and 7.8 s at load 40 to 48 (its process 2.4 to 3.2 s of that), and 26 s once at load 40 (R, 2026-11-10), past
  *  the 20 s of the others, which lost that message. */
 export const READER_START_MS = 45_000
-
-/** The most outstanding requests per service, including first startup, restart and a connected process that hangs.
- * The transport releases a slot when its answer settles; the service still bounds its own actual work. */
-export const SERVICE_REQUESTS_MAX = 100
 
 /** Who asks when the core itself asks a service (`call`): this machine's owner, on this machine. */
 const THE_CORE: Asker = { local: true, owner: true }
