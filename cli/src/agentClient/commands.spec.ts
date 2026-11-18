@@ -2454,6 +2454,23 @@ describe('harness watch', () => {
     expect(said[3]).toMatchObject({ state: 'idle', summary: 'Fixed: 12 passed.', tools: 1 })
   })
 
+  it('says held once with its sentence, and working again once the hold is gone', async () => {
+    const d = new FakeDaemon()
+    const looks = [
+      frame('kid', { activity: { state: 'working' } }),
+      frame('kid', { namedState: MISSING_HELPER }),
+      frame('kid', { namedState: MISSING_HELPER }),
+      frame('kid', { activity: { state: 'working' } }),
+    ]
+    d.frames = [looks[0]]
+    let round = 0
+    const h = harness(d, { sleep: async (ms) => { h.advance(ms); d.frames = [looks[Math.min(++round, looks.length - 1)]] } })
+    expect(await watchCommand(['kid', '--json', '--timeout', '5s'], h.deps)).toBe(EXIT.timeout)
+    const said = lines(h.out)
+    expect(said.map((l) => l.event)).toEqual(['working', 'held', 'working'])
+    expect(said[1]).toMatchObject({ state: 'held', namedState: MISSING_HELPER })
+  })
+
   it('says idle, not done, for a harness with nothing asked of it, once it is past its start', async () => {
     const d = new FakeDaemon()
     d.frames = [frame('new', { createdAt: '2026-10-11T11:00:00Z' })]
@@ -2693,6 +2710,17 @@ describe('wait and watch on pushed events', () => {
     // A push for each change, one look to confirm the idle one, then nothing but the backstop, a minute at a time.
     expect(slept.slice(0, 4)).toEqual([60_000, 60_000, 60_000, 1_000])
     expect(slept.slice(4, -1).every((ms) => ms === 60_000)).toBe(true)
+  })
+
+  it('waits a minute between looks while held, as while working', async () => {
+    const d = new PushingDaemon()
+    d.frames = [frame('kid', { namedState: MISSING_HELPER })]
+    const h = harness(d)
+    const slept: number[] = []
+    h.deps.sleep = async (ms) => { slept.push(ms); h.advance(ms) }
+    expect(await watchCommand(['kid', '--timeout', '3m'], h.deps)).toBe(EXIT.timeout)
+    expect(h.out).toEqual(['12:00:00Z kid: held: This Harness install is incomplete. Reinstall Harness.'])
+    expect(slept).toEqual([60_000, 60_000, 60_000])
   })
 
   it('watch says background while commands run, again when their number changes, and done once none does', async () => {
