@@ -86,10 +86,13 @@ canScroll?(pane: Pane): boolean
 /** Whether the pane is the one its app shows on screen now, asked of the app once a stroke, after `canScroll`. False on
  *  any failure or past its deadline; never throws. An adapter that knows it from `canScroll` alone has none. */
 onScreen?(pane: Pane): Promise<boolean>
-/** Scrolls the app's view of the pane's history by whole lines, n < 0 toward older lines. Fire and forget: it never
- *  throws, and a line it could not send is counted in its own log line, never retried into the program. */
+/** Scrolls the app's view of the pane's history by whole lines, n < 0 toward older lines. Fire and forget: a line it
+ *  could not send is never retried into the program. */
 scroll?(pane: Pane, lines: number): void
 ```
+
+Herdr's `scroll` never throws and counts a failed run in its own log line (§3). VS Code's throws when a window's stream
+breaks, as on `main`; the frame's `part.call('dial', …)` logs it (§4).
 
 VS Code needs no `onScreen`: its extension already drops a line for a terminal that is not the active one.
 

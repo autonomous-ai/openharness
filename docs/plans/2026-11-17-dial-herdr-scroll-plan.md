@@ -29,6 +29,8 @@
   - `devices.spec.ts`: `start`, `orca`, `orcaRuns`, `logs`, `harnessAgent`, and the describe `Herdr's agents, through Herdr Core`'s `withHc`, `terminal`, `hook`, `onMac`, `ID`, `host`, `said`, `listed`.
   - `cli/e2e/deviceHerdrApp.e2e.ts`: `fresh`, `coreFor`, `rowOf`, `said`, `herdrApps`, `FILTER`, `ORCA`, `HERDR`, `CLI_ENTRY`. `e2e/harness/client.ts`: `LocalClient`.
 - If a name differs at the base, the implementer follows the code and says so in its report.
+- **Rebased (2026-11-18)** onto `origin/main` `86558dafad`, where the VS Code branch merged first (#4427). The shared
+  parts are `main`'s from then on, and VS Code's terminal is on this branch's route (the spec's merge-order section).
 
 ## Tasks at a glance
 
@@ -58,13 +60,15 @@ Longest chain: 3 → 4 → 6 → 7: four tasks.
 | `cli/e2e/deviceHerdrApp.e2e.ts` | Test: the real daemon, a fake dial, a private hc, a fake `herdr-app` | Verification 1, locally on this Mac |
 | `cli/AGENTS.md` | Repo file, no process | Review |
 
-Not changed, and a diff in any is a finding: anything under `cli/src/core/`, `cli/src/architecture.coreFiles.txt`, `cli/vitest.setup.ts`, `cable/hosts/observed.ts`, `open.ts`, `registry.ts`, `hcClient.ts`, `herdrClient.ts`, `herdr.ts`, `vscode.ts`, `cli/e2e/harness/`, and the VS Code worktree.
+Not changed, and a diff in any is a finding: anything under `cli/src/core/`, `cli/src/architecture.coreFiles.txt`, `cli/vitest.setup.ts`, `cable/hosts/observed.ts`, `open.ts`, `registry.ts`, `hcClient.ts`, `herdrClient.ts`, `herdr.ts`, `cli/e2e/harness/`, and the VS Code worktree. `vscode.ts` was in this list until the
+rebase, which gave its adapter `canScroll` and `scroll` (with `vscode.spec.ts` and a fake's `scroll` in
+`observed.spec.ts`).
 
 ## Global Constraints
 
 - **Never the person's Herdr.** No task, spec or check runs a bare `herdr-app`, `hc` or `herdr-core`, reads `~/.config/herdr-app`, or reaches Diego's Herdr.app, its window or his default hc session. Unit tests use fakes; the e2e uses the private hc (`cli/e2e/harness/hcCore.ts`) and the fake `herdr-app` first on the daemon's `PATH`.
 - **Nothing in `cli/src/core/`.** No new core file, list or record (cli/AGENTS.md rule 7).
-- **The shared parts are copied, not rewritten** (Tasks 1 and 2): the VS Code branch's diff of each file, applied as it is. The VS Code worktree is never edited. This plan does not rebase onto that branch.
+- **The shared parts are copied, not rewritten** (Tasks 1 and 2): the VS Code branch's diff of each file, applied as it is. The VS Code worktree is never edited. No task rebases onto that branch; the rebase onto `main` came after the tasks.
 - **The three conditions**, asked at a stroke's `down`: Herdr in front (`cableHost.latestFront() === 'herdr'`); the dial shows an agent with a terminal in Herdr's window (`hcSource.shows(address)`); `herdr-app status`'s `agent` equals that terminal. Else the whole stroke is `dial_scroll`.
 - **The route** is chosen at `down` and kept to `up`. A `move` or `up` with no `down` before it chooses then.
 - **A run.** No shell, each value one argument, deadline `SCROLL_TIMEOUT_MS = 2_000`:
@@ -81,7 +85,7 @@ Not changed, and a diff in any is a finding: anything under `cli/src/core/`, `cl
   - `[device] scroll · herdr-app · not on screen`, once per stroke that went to the windows for that reason;
   - `cable: scroll ↓` and `cable: scroll ↑ (v=…)` stay as they are.
 - **Platforms.** macOS only. On Linux and Windows no Herdr verb runs and every stroke goes to Harness's windows.
-- **Out of scope:** herdr 0.8.0, tmux, Orca, Terminal, iTerm2 and Ghostty tabs, moving VS Code onto `HostAdapter.scroll`, a fling, `scrollReversed`, scrolling back to the bottom.
+- **Out of scope:** herdr 0.8.0, tmux, Orca, Terminal, iTerm2 and Ghostty tabs, a fling, `scrollReversed`, scrolling back to the bottom. Moving VS Code onto `HostAdapter.scroll` was out of the tasks; the rebase did it.
 - **Repo rules.** Test first, at the layer where the behavior lives. No fixed sleeps. Every fan-out bounded. Comments say why. No promise of an adapter rejects. `src/services` stays at 100% per file.
 
 ## Review Focus
@@ -116,9 +120,9 @@ Not changed, and a diff in any is a finding: anything under `cli/src/core/`, `cl
 - **The answer runs inside the frame's own `part.call('dial', …)`:** `routeScroll` returns the `onScreen` chain, which `devicesGuard.ts` `call` catches when it rejects.
 - **The devices' `stop` drops the stroke** (Review Focus 3).
 - **`HcSource.paneOf` reads `find()`,** so only a listed row (the first 64) has a pane. One past the 64 is not on the dial.
-- **The path "an adapter that scrolls and has no `onScreen`"** has no adapter on this branch (VS Code's moves onto it at the rebase). Task 6 tests it through a copy of the `herdrApp.js` module, as `devices.spec.ts` already copies `claudePlugin.js`.
+- **The path "an adapter that scrolls and has no `onScreen`"** had no adapter before the rebase, so Task 6 tested it through a copy of the `herdrApp.js` module. Since the rebase it is VS Code's terminal, which `main`'s VS Code specs in `devices.spec.ts` cover, and that stand-in test and the module copy are gone.
 - **The fixture is one file,** `cli/src/testing/herdrAppStatus.ts`, read by `herdrApp.spec.ts`, `devices.spec.ts` and the e2e's fake `herdr-app`.
-- **The `scrolled` wiring line is the VS Code branch's;** its comment drops "(a window's stream)", which names VS Code's path. `import { createScrollLines }` sits where that branch put it.
+- **The `scrolled` wiring line is `main`'s, comment and all:** "(a window's stream)" stays, as VS Code's window stream is still the scroll path that throws (Herdr's `scroll` never does). `import { createScrollLines }` sits where `main` put it.
 - **The e2e uses a dial that holds one app's ring and two Orca agents,** as the file's swipe test does, so each change of the app in front is seen as a ring. It asserts no time: it prints the stroke's runs and milliseconds.
 - **`cli/AGENTS.md`'s devices row gets one clause** (Task 8), as each Herdr, cmux and opencode change gave it one. The VS Code branch edits the same line: the rebase keeps both clauses. `docs/specs/2026-11-15-device-host-adapter.md` is not changed: its interface listing is the 2026-11-15 design's and already lacks `canType`, `paneKey` and `bundle`.
 
@@ -329,7 +333,7 @@ Not changed, and a diff in any is a finding: anything under `cli/src/core/`, `cl
   - `a stroke with no travel replays its down and its up alone`; `a stroke that begins with a move replays no down`; `the held move carries the last move's velocity` (`move 8` at velocity 120: `toWindows('move', 8, 120)`).
   - `a fling is not played`: `down`, answer, `up 8` at velocity 900: `scrolled('t7', -1)` and nothing more after `vi.advanceTimersByTimeAsync(5_000)`.
   - `the Wi-Fi device's stroke takes the same route`: `port.scroll('down', 0, 0)`, `port.scroll('move', 8, 0)`: the same runs.
-  - `an adapter that scrolls and has no onScreen decides at once`: through a copy of `../cable/hosts/herdrApp.js` (`vi.mock` with the real module spread, then `vi.spyOn` on `createHerdrAppAdapter` to drop `onScreen`): `stroke([8])` runs `scrolled('t7', -1)` before any wait, and no `status`.
+  - `an adapter that scrolls and has no onScreen decides at once`: through a copy of `../cable/hosts/herdrApp.js` (`vi.mock` with the real module spread, then `vi.spyOn` on `createHerdrAppAdapter` to drop `onScreen`): `stroke([8])` runs `scrolled('t7', -1)` before any wait, and no `status`. Removed at the rebase: VS Code's terminal is that adapter now, and `main`'s VS Code specs cover it.
   - `a throw on the scroll path is the part's, not the dial's`: `core.clients.sendLocal` throws: `host().scrolled('move', 8, 0)` does not throw, and the log holds `[devices] dial failed · <its message>`.
   - `a throw after the answer is the part's` (Review Focus 5): status answers `t9` and `sendLocal` throws in the replay: the same log line, and no rejection.
   - `the devices stopping drops a stroke still being decided` (Review Focus 3): status held, `down`, `8`; `await port.stop()`; the answer, either way: no `terminal.scroll`, no `dial_scroll`.

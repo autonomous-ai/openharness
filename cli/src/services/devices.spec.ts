@@ -9,7 +9,6 @@ import { AppFilter, FRONT_SETTLE_MS } from '../cable/hosts/appFilter.js'
 import type { CodexRunEnd } from '../cable/hosts/codexQueue.js'
 import { CMUX_APP_BINARY, type CmuxClient, type CmuxInputState, type CmuxSession } from '../cable/hosts/cmuxCli.js'
 import { hcClientDeps, type HcClient, type HcPrompt, type HcSubscriber, type HcTerminal } from '../cable/hosts/hcClient.js'
-import * as herdrApp from '../cable/hosts/herdrApp.js'
 import { herdrClientDeps, type HerdrAnswer, type HerdrClient, type HerdrEntry, type HerdrPrompt, type HerdrSubscriber } from '../cable/hosts/herdrClient.js'
 import { HerdrSource } from '../cable/hosts/herdrSource.js'
 import { observedAgentId, ObservedSource } from '../cable/hosts/observed.js'
@@ -59,8 +58,6 @@ const seen = vi.hoisted(() => ({
 vi.mock('../devices/claudePlugin.js', async (real) => ({ ...await real<object>() }))
 // A copy of the module, so a spec can watch the daemon's own VS Code deps be asked for, and answer with its fake.
 vi.mock('../devices/vscodeExtension.js', async (real) => ({ ...await real<object>() }))
-// A copy of the module, so a spec can build Herdr's adapter with a member left out.
-vi.mock('../cable/hosts/herdrApp.js', async (real) => ({ ...await real<object>() }))
 vi.mock('../cable/cableHost.js', async (real) => {
   const actual = await real<typeof import('../cable/cableHost.js')>()
   return {
@@ -6631,20 +6628,6 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       port.scroll('move', 8, 0)
       port.scroll('up', 0, 0)
       await vi.waitFor(() => expect(orcaRuns).toEqual([STATUS, scrolled('t7', -1)]))
-      expect(dialScrolls(core)).toEqual([])
-    })
-
-    // VS Code's adapter moves onto this path at the rebase: its extension drops a line for a terminal that is not active.
-    it('an adapter that scrolls and has no onScreen decides at once', async () => {
-      const real = herdrApp.createHerdrAppAdapter
-      vi.spyOn(herdrApp, 'createHerdrAppAdapter').mockImplementation((deps) => {
-        const { onScreen: _onScreen, ...adapter } = real(deps)
-        return adapter as herdrApp.HerdrAppAdapter
-      })
-      const { core } = inHerdr()
-      shows(await listedId())
-      stroke([8])
-      expect(orcaRuns).toEqual([scrolled('t7', -1)])
       expect(dialScrolls(core)).toEqual([])
     })
 
