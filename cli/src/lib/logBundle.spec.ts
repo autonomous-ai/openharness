@@ -181,6 +181,18 @@ describe('buildLogBundle', () => {
     expect(performance.now() - started).toBeLessThan(2_000)
   })
 
+  it('a day of long runs is blanked in a moment', () => {
+    // A device's day is up to 20 MB (dialLog.ts). With the email rule tried at each start of a run of hex or base64,
+    // 64 characters a start, 20 MB took 4.4 s on an M-series Mac: with the status commands' 10 s, near the 30 s the
+    // desktop app waits.
+    const run = 'x'.repeat(20 * 1024 * 1024)
+    const started = performance.now()
+    const blanked = blankPersonal(`${run} person@example.com`, '/Users/al')
+    expect(performance.now() - started).toBeLessThan(2_000)
+    expect(blanked.length).toBe(run.length + ' <email>'.length)
+    expect(blanked.endsWith('x <email>')).toBe(true)
+  })
+
   it('never includes a transcript, a sign-in file or a project file placed beside the logs', () => {
     const root = mkdtempSync(join(tmpdir(), 'bundle-'))
     const logs = join(root, 'logs'), device = join(logs, 'usb-AA'), data = join(root, 'data'), app = join(root, 'app')
