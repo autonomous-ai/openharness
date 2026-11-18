@@ -286,15 +286,17 @@ describe('durable orchestrator lifecycle', () => {
     expect(service.list().map(r => r.id)).toEqual([second, id])
     expect(String(service.list()[0].prompt)).toHaveLength(160)
   })
-  it('preserves corrupt state and refuses to overwrite its identity', async () => {
+  it('preserves corrupt state and refuses to overwrite its identity, and says it without the parse error\'s quote of the person\'s task', async () => {
     mkdirSync(deps.stateDir, { recursive: true })
     const file = join(deps.stateDir, `${id}.json`)
-    writeFileSync(file, '{not valid JSON')
-    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    writeFileSync(file, '{"prompt": SECRET-TASK-MARKER}')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     expect(service.list()).toEqual([])
     await expect(start()).rejects.toMatchObject({ code: 'CORRUPT_STATE' })
-    expect(readFileSync(file, 'utf8')).toBe('{not valid JSON')
+    expect(readFileSync(file, 'utf8')).toBe('{"prompt": SECRET-TASK-MARKER}')
     expect(launches).toHaveLength(0)
+    expect(warn).toHaveBeenCalledWith(`[orchestrator] could not read ${id}.json: it is not JSON`)
+    expect(warn.mock.calls.flat().join('\n')).not.toContain('SECRET')
   })
   it('recovers interrupted director and worker launches conservatively', async () => {
     await start(); await active(); service.plan(id, [task('a')]); await running('a'); service.stop()
