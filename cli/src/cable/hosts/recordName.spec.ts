@@ -25,19 +25,34 @@ function record(pid: number, content: object | string, dir = sessions): string {
 }
 
 const named = { pid: 11, sessionId: 's', cwd: '/x', status: 'idle', name: 'Tho', nameSource: 'user' }
-const read = (path: string, pid = 11, roots = [projects]) => readRecordName({ pid, record: path, sessionId: 's' }, { roots })
+const read = (path: string, pid = 11, records = [sessions]) => readRecordName({ pid, record: path, sessionId: 's' }, { records })
 
 describe('readRecordName', () => {
   it('reads the name the person gave', async () => {
     expect(await read(record(11, named))).toBe('Tho')
   })
 
-  it('reads the record at the path the provider builds, in the first home and in a moved one', async () => {
-    const moved = join(home, 'moved')
-    record(11, named, join(moved, 'sessions'))
-    expect(await read(join(moved, 'projects', '..', 'sessions', '11.json'), 11, [projects, join(moved, 'projects')])).toBe('Tho')
+  it('reads the record at the path the provider builds, in the first records folder and in a moved home\'s', async () => {
+    const moved = join(home, 'moved', 'sessions')
+    record(11, named, moved)
+    expect(await read(join(moved, '11.json'), 11, [sessions, moved])).toBe('Tho')
     record(11, named)
-    expect(await read(join(projects, '..', 'sessions', '11.json'))).toBe('Tho')
+    expect(await read(join(sessions, '11.json'), 11, [sessions, moved])).toBe('Tho')
+  })
+
+  it('a record in an Orca home\'s sessions folder is named', async () => {
+    // An Orca account's home, as `orca account list` gives it: its records are in its own sessions folder.
+    const orca = join(home, 'orca', 'accounts', 'a1', 'claude')
+    expect(await read(record(11, named, join(orca, 'sessions')), 11, [sessions, join(orca, 'sessions')])).toBe('Tho')
+  })
+
+  it('a record outside every records folder is refused', async () => {
+    const orca = join(home, 'orca', 'accounts', 'a1', 'claude')
+    expect(await read(record(11, named, join(orca, 'sessions')), 11, [sessions])).toBeUndefined()
+  })
+
+  it('a record one folder below a records folder is refused', async () => {
+    expect(await read(record(11, named, join(sessions, 'nested')))).toBeUndefined()
   })
 
   it.each<[string, () => string]>([

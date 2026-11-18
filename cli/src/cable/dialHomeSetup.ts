@@ -1,9 +1,10 @@
 // The dial skill in every home an engine's sessions use, set up from the devices' own process once a dial has attached
-// on this computer: before that no home is looked at. It writes the daemon's own and adopted homes at the service's
-// start and at each attach, a default home made since at the next scan, and each Codex home the open scan finds a
-// session in. Each skills folder it writes is in dial-setup.json, its own record, so a `disable` finds it, and a moment
-// that reads the engine removed takes them out again itself, which catches up on a `disable` a write raced. A recorded
-// folder is written once: after that only Harness's own file is brought current, and one the person removed stays so.
+// on this computer: before that no home is looked at. It writes the daemon's own, adopted and Orca's account homes at
+// the service's start and at each attach, a default home made since at the next scan, and each Codex home the open
+// scan finds a session in. Each skills folder it writes is in dial-setup.json, its own record, so a `disable` finds it,
+// and a moment that reads the engine removed takes them out again itself, which catches up on a `disable` a write
+// raced. A recorded folder is written once: after that only Harness's own file is brought current, and one the person
+// removed stays so.
 import { realpathSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { claudePluginState, ownDirectory, refreshSkill, removeSkill, skillsFolderOf, writeSkill } from '../devices/dialSkill.js'
@@ -17,7 +18,8 @@ export interface DialHomeSetupDeps {
   /** The daemon's own homes: dirname(env.CLAUDE_PROJECTS_DIR), env.CODEX_HOME. */
   claudeHome: string
   codexHome: string
-  /** The adopted homes, read at each start pass (lib/engineHomes.ts movedEngineHomes). */
+  /** The adopted homes (lib/engineHomes.ts movedEngineHomes) and Orca's account homes (devices/orcaHomes.ts), read at
+   *  each start pass. */
   adopted(): { claude: string[]; codex: string[] }
   /** dial-skill.json's removals, read anew at each call. */
   removed(): Read<DialRemoved>
@@ -29,7 +31,8 @@ export interface DialHomeSetupDeps {
 }
 
 export interface DialHomeSetup {
-  /** The devices service started. */
+  /** The devices service started, or a read of Orca's account homes changed them: each pass writes every home `adopted`
+   *  names, and a home already holding the skill is written nothing. */
   started(): void
   /** The first dial of the fleet attached. */
   attached(): void
@@ -42,6 +45,10 @@ export interface DialHomeSetup {
   plugin(): string | undefined
   /** false when the record could not be saved. */
   recordPlugin(version: string): boolean
+  /** The Orca homes the devices turned the plugin on in, by real path. */
+  pluginHomes(): readonly string[]
+  /** Replaces that list and saves the whole record; false when it could not be saved, and the list is as before. */
+  recordPluginHomes(homes: string[]): boolean
 }
 
 type Counts = Record<DialEngine, { wrote: number; removed: number; failed: number }>
@@ -69,7 +76,7 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
   const realDataDir = realOr(deps.dataDir)
   const defaultHome: Record<DialEngine, string> = { claude: deps.claudeHome, codex: deps.codexHome }
   // The devices process is the record's one writer: it is read at the start and at an attach, and saved whole.
-  let record: DialSetupRecord = { dial: false, homes: { claude: [], codex: [] } }
+  let record: DialSetupRecord = { dial: false, homes: { claude: [], codex: [] }, pluginHomes: [] }
   /** Homes done while their engine was on: a scan passes them with a set lookup. */
   const handled: Record<DialEngine, Set<string>> = { claude: new Set(), codex: new Set() }
   /** Homes, and recorded folders, given no skill for a reason the next try would meet again (no skills folder, a full
@@ -452,6 +459,16 @@ export function createDialHomeSetup(deps: DialHomeSetupDeps): DialHomeSetup {
 
     recordPlugin(version) {
       const next = { ...record, plugin: version }
+      if (writeSetup(deps.dataDir, next) !== undefined) return false
+      record = next
+      return true
+    },
+
+    pluginHomes: () => record.pluginHomes,
+
+    recordPluginHomes(homes) {
+      // A copy: the caller's list changing later must not change the record without a save.
+      const next = { ...record, pluginHomes: [...homes] }
       if (writeSetup(deps.dataDir, next) !== undefined) return false
       record = next
       return true

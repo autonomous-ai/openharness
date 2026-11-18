@@ -5,8 +5,8 @@
 //   - as `codex app-server`, reads its stdin, answers nothing and ends when that stdin ends;
 //   - as `codex queue --thread <id> --message=<text>`, notes the call in `codex-queue` under the test's root when that
 //     thread's rollout is in its CODEX_HOME, else exits 1 having noted nothing, as 0.167 does;
-//   - as `claude plugin …`, adds, installs, turns on, uninstalls and lists the harness-device plugin as 2.1.326 does,
-//     noting each call in `claude-plugin-calls` under the test's root (`claudePlugin`);
+//   - as `claude plugin …`, adds, installs, turns on and off, uninstalls and lists the harness-device plugin as 2.1.326
+//     does, noting each call in `claude-plugin-calls` under the test's root (`claudePlugin`);
 //   - runs the hooks its own settings carry, as the real CLIs run them: the commands the daemon
 //     installed (lib/hooks.ts), through a shell, from inside the pane, with the event on stdin, killed at
 //     their timeout and waited for. So the real `hook/notify.mjs` is what reaches the daemon, with its
@@ -196,12 +196,13 @@ const FAKE_PLUGIN_VERSION = 'e2e0c0de1234'
 
 /**
  * `claude plugin …` as Claude Code 2.1.326 answers the words devices/claudePlugin.ts runs: `list --json`, `marketplace
- * list --json`, `marketplace add`, `marketplace update`, `install`, `enable`, `uninstall` and `update`. What is added and
- * installed is kept per Claude Code home, as the real one keeps it, in `plugins/` of CLAUDE_CONFIG_DIR, else of
- * ~/.claude: a plugin installed in one home is not in another. Whether a plugin is on is Claude Code's own record,
- * `enabledPlugins` in that home's user settings, which install, enable and uninstall write. Each call is noted in
- * `claude-plugin-calls` under the test's root, one line of its words. A home outside the root throws: it would be the
- * person's own Claude Code.
+ * list --json`, `marketplace add`, `marketplace update`, `install`, `enable`, `disable`, `uninstall` and `update`. What
+ * is added and installed is kept per Claude Code home, as the real one keeps it, in `plugins/` of CLAUDE_CONFIG_DIR, else
+ * of ~/.claude: a plugin installed in one home is not in another, but one whose `plugins` links to another's shares it,
+ * as Orca's account homes do. Whether a plugin is on is Claude Code's own record, `enabledPlugins` in that home's user
+ * settings, which install, enable, disable and uninstall write: disable leaves the plugin installed and its entry
+ * `false`, uninstall removes the entry. Each call is noted in `claude-plugin-calls` under the test's root, one line of its
+ * words. A home outside the root throws: it would be the person's own Claude Code.
  */
 function claudePlugin(config, argv) {
   if (!config.root) throw new Error('fake claude plugin: the wrapper names no test root')
@@ -217,10 +218,11 @@ function claudePlugin(config, argv) {
     mkdirSync(dirname(stateFile), { recursive: true })
     writeFileSync(stateFile, JSON.stringify(state))
   }
-  const turn = (id, on) => {
+  /** [entry]: true or false as enable and disable write it, undefined removes it as uninstall does. */
+  const turn = (id, entry) => {
     const enabledPlugins = { ...settings.enabledPlugins }
-    if (on) enabledPlugins[id] = true
-    else delete enabledPlugins[id]
+    if (entry === undefined) delete enabledPlugins[id]
+    else enabledPlugins[id] = entry
     mkdirSync(dirname(settingsFile), { recursive: true })
     writeFileSync(settingsFile, `${JSON.stringify({ ...settings, enabledPlugins }, null, 2)}\n`)
   }
@@ -252,7 +254,7 @@ function claudePlugin(config, argv) {
       return
   }
   const verb = args[0]
-  if (!['install', 'enable', 'uninstall', 'update'].includes(verb)) fail(`error: unknown command '${verb}'`)
+  if (!['install', 'enable', 'disable', 'uninstall', 'update'].includes(verb)) fail(`error: unknown command '${verb}'`)
   if (id !== FAKE_PLUGIN || !state.marketplaces.includes(FAKE_MARKETPLACE.name)) {
     fail(`Failed to ${verb} plugin "${id}": Plugin "${id}" not found in any configured marketplace`)
   }
@@ -267,10 +269,13 @@ function claudePlugin(config, argv) {
   } else if (verb === 'enable') {
     turn(id, true)
     said(`Successfully enabled plugin: ${id} (scope: user)`)
+  } else if (verb === 'disable') {
+    turn(id, false)
+    said(`Successfully disabled plugin: ${id} (scope: user)`)
   } else if (verb === 'uninstall') {
     state.installed = state.installed.filter((plugin) => plugin !== id)
     saveState()
-    turn(id, false)
+    turn(id, undefined)
     said(`Successfully uninstalled plugin: ${id} (scope: user)`)
   } else {
     said(`Plugin "${id}" is already at the latest version (${FAKE_PLUGIN_VERSION}).`)

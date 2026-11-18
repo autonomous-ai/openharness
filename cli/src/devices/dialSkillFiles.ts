@@ -1,8 +1,10 @@
 // The dial skill's two files in the daemon's data folder, which outlive the devices' process. dial-skill.json says what
-// `harness device <engine> disable` removed, and the skills folders the command wrote into; its one writer is that
-// command, and the devices service leaves what it removed alone. dial-setup.json is the devices service's own record of
-// a dial's setup: a dial attached here once, the CLI version that last set Claude Code's plugin up, and the skills
-// folders it wrote into; its one writer is that service. A `disable` finds every folder in both.
+// `harness device <engine> disable` removed, the skills folders the command wrote into, and the Orca homes its `enable`
+// turned Claude Code's plugin on in (`pluginHomes`); its one writer is that command, and the devices service leaves what
+// it removed alone. dial-setup.json is the devices service's own record of a dial's setup: a dial attached here once,
+// the CLI version that last set Claude Code's plugin up, the skills folders it wrote into, and the Orca homes it turned
+// the plugin on in (`pluginHomes`); its one writer is that service. A `disable` finds every folder in both. Each file
+// keeps its own list of Orca homes, so neither has a second writer, and a home in either counts as turned on once.
 import { randomUUID } from 'node:crypto'
 import { closeSync, fsyncSync, openSync, readSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
@@ -17,8 +19,8 @@ export const MAX_HOMES = 64
 export const SETUP_COUNTS = ['set up', 'updated', 'failed', 'left removed'] as const
 export type SetupCount = typeof SETUP_COUNTS[number]
 
-/** Two full lists of the longest paths, with room for JSON's quotes: each file holds two lists. Paths whose characters
- *  JSON escapes can outgrow it, and such a file is not written. */
+/** Three full lists of the longest paths, with room for JSON's quotes: each file holds three lists. Paths whose
+ *  characters JSON escapes can outgrow it, and such a file is not written. */
 const MAX_FILE_BYTES = 256 * 1024
 const MAX_PATH_BYTES = 1024
 const CONTROL = /\p{Cc}/u
@@ -30,7 +32,8 @@ export interface DialSkillHomes { claude: string[]; codex: string[] }
 /** What `harness device <engine> disable` removed; a key is absent when it removed nothing. */
 export interface DialRemoved { claude?: true; codex?: true }
 
-export interface DialSetupRecord { dial: boolean; plugin?: string; homes: DialSkillHomes }
+/** [pluginHomes]: the Orca homes the devices turned Claude Code's plugin on in, by real path. */
+export interface DialSetupRecord { dial: boolean; plugin?: string; homes: DialSkillHomes; pluginHomes: string[] }
 
 /** A file read: [unread] when it is there but could not be read (EACCES, EIO, EMFILE), so it reads as empty, and
  *  nothing may be written from that read: it would lose what the file holds. */
@@ -147,38 +150,62 @@ export function readRemoved(dataDir: string): Read<DialRemoved> {
   return orUnread(() => removedOf(settingOf(dataDir)), {})
 }
 
+/** The Orca homes `harness device claude enable` turned the plugin on in, by real path. */
+export function readPluginHomes(dataDir: string): Read<{ homes: string[] }> {
+  return orUnread(() => ({ homes: homesOf(settingOf(dataDir).pluginHomes) }), { homes: [] })
+}
+
+interface DialSetting { removed: DialRemoved; homes: DialSkillHomes; pluginHomes: string[] }
+
 /**
- * undefined once saved; else the error's code (EACCES), never its message, which names the path. [written], when given,
- * becomes the folders the command wrote into for [engine]; else they stay. The old menu's answers are not carried, so
- * they leave the file at its next write.
+ * dial-skill.json read right before the write and [change]d, so what the change leaves stays; one that cannot be read is
+ * left. undefined once saved; else the error's code (EACCES), never its message, which names the path. The old menu's
+ * answers are not carried, so they leave the file at its next write.
  */
-export function writeRemoved(dataDir: string, engine: DialEngine, removed: boolean, written?: string[]): string | undefined {
-  // Read right before the write, so the other engine's removal and folders stay; one that cannot be read is left.
+const rewriteSetting = (dataDir: string, change: (setting: DialSetting) => void): string | undefined => {
   let file: Record<string, unknown>
   try {
     file = settingOf(dataDir)
   } catch (error) {
     return codeOf(error)
   }
-  const marks = removedOf(file)
-  if (removed) marks[engine] = true
-  else delete marks[engine]
-  const homes = writtenOf(file)
-  if (written) homes[engine] = homesOf(written)
+  const setting = { removed: removedOf(file), homes: writtenOf(file), pluginHomes: homesOf(file.pluginHomes) }
+  change(setting)
+  const { removed, homes, pluginHomes } = setting
   return writeJson(join(dataDir, DIAL_SKILL_FILE), {
-    ...(marks.claude || marks.codex ? { removed: marks } : {}),
+    ...(removed.claude || removed.codex ? { removed } : {}),
     ...(homes.claude.length || homes.codex.length ? { homes } : {}),
+    ...(pluginHomes.length ? { pluginHomes } : {}),
+  })
+}
+
+/** undefined once saved, else the error's code. [written], when given, becomes the folders the command wrote into for
+ *  [engine]; else they stay. */
+export function writeRemoved(dataDir: string, engine: DialEngine, removed: boolean, written?: string[]): string | undefined {
+  return rewriteSetting(dataDir, (setting) => {
+    if (removed) setting.removed[engine] = true
+    else delete setting.removed[engine]
+    if (written) setting.homes[engine] = homesOf(written)
+  })
+}
+
+/** Replaces the command's Orca homes whole; the removals and the skills folders stay. undefined once saved, else the
+ *  error's code. */
+export function writePluginHomes(dataDir: string, homes: string[]): string | undefined {
+  return rewriteSetting(dataDir, (setting) => {
+    setting.pluginHomes = homesOf(homes)
   })
 }
 
 /** A record damaged or edited by hand keeps only what it may hold, and one is written as a read keeps it, so the file
- *  never holds a folder a `disable` would not find. */
+ *  never holds a folder a `disable` would not find. A record from before Orca's homes (#4399) holds none. */
 const setupOf = (value: unknown): DialSetupRecord => {
   const file = fields(value)
   return {
     dial: file.dial === true,
     ...(typeof file.plugin === 'string' && VERSION.test(file.plugin) ? { plugin: file.plugin } : {}),
     homes: writtenOf(file),
+    pluginHomes: homesOf(file.pluginHomes),
   }
 }
 

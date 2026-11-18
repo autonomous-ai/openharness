@@ -1,6 +1,6 @@
 // The devices (services/devices.ts): what the core tells them reaches the dial and the window bridges, what
 // they say reaches the core through its API alone, and the fleet failing costs the dial nothing.
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { delimiter, dirname, join, parse } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
@@ -25,10 +25,12 @@ import * as claudePlugin from '../devices/claudePlugin.js'
 import type { ClaudeRun } from '../devices/claudePlugin.js'
 import { DIAL_SKILL } from '../devices/dialSkill.js'
 import { readSetup, writeSetup } from '../devices/dialSkillFiles.js'
+import type { OrcaHomes, OrcaHomesCache } from '../devices/orcaHomes.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
 import { STOP_HOOK_GRACE_MS } from '../core/turns/turnHooks.js'
 import type { FleetEvent } from '../cable/machineFleet.js'
 import { claudeProjectsRoots, codexHomeRoots } from '../lib/engineHomes.js'
+import type { ExternalProvider, ProcessView } from '../lib/sessionSearch/externals/types.js'
 import type { TierInput } from '../lib/notifyTier.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCmux, touchStore } from '../testing/fakeCmux.js'
@@ -208,6 +210,12 @@ vi.mock('../cable/hosts/lastAnswer.js', async (real) => ({
   ...await real<typeof import('../cable/hosts/lastAnswer.js')>(),
   readLastAnswer: readers.answer,
 }))
+// This computer's Orca, for the one spec that leaves the devices to build their own read of its account homes: a system
+// with none, so no spec runs the developer's own `orca` or reads its accounts.
+vi.mock('../devices/orcaHomes.js', async (real) => ({
+  ...await real<typeof import('../devices/orcaHomes.js')>(),
+  orcaHomesDeps: () => ({ run: async () => ({ code: null, stdout: '', timedOut: false }), onPath: () => null, exists: () => false, platform: 'linux', uid: 1 }),
+}))
 // The watch on the folder herdr's socket lives in: recorded, with its stops, so no spec watches this machine's folders.
 const watched = vi.hoisted(() => ({ calls: [] as unknown[][], stopped: 0 }))
 vi.mock('../cable/hosts/unixSocket.js', async (real) => ({
@@ -326,6 +334,24 @@ function fakeOrcaReads(over: { watches?: boolean | Promise<boolean> } = {}) {
   return { reads, probes, orders, watches }
 }
 
+/** Orca's account homes as a spec gives them (devices/orcaHomes.ts): `homes` is the last read's list, `answered` whether
+ *  that read gave Orca's answer, and each refresh says `changed` at once, or, while `held`, waits until the spec lands it. */
+function fakeOrcaHomes(homes: OrcaHomes = { claude: [], codex: [] }) {
+  const fake = {
+    homes,
+    answered: true,
+    changed: false,
+    held: false,
+    /** The refreshes held, each landed with whether the list changed. */
+    pending: [] as Array<(changed: boolean) => void>,
+    refresh: vi.fn((): Promise<boolean> => fake.held ? new Promise((resolve) => { fake.pending.push(resolve) }) : Promise.resolve(fake.changed)),
+    cache: (): OrcaHomesCache => ({ get: () => fake.homes, answered: () => fake.answered, refresh: fake.refresh }),
+    /** The last refresh asked: what the devices do once it lands runs before a spec's own wait on it ends. */
+    landed: () => fake.refresh.mock.results.at(-1)?.value,
+  }
+  return fake
+}
+
 let dataDir: string
 let logs: string[]
 beforeEach(() => {
@@ -357,8 +383,10 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
+  // None, and no read under way, unless the spec gives its own; null leaves the devices to read this computer's.
+  const orcaHomes = over.orcaHomes ?? fakeOrcaHomes()
   const ports: CorePorts = emptyPorts()
   const onExit = vi.fn()
   const gone: Array<() => void> = []
@@ -388,8 +416,13 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     tty: over.tty,
     // A `claude` that finds none unless the spec gives its own: no spec runs the developer's. null leaves it out.
     claude: over.claude === null ? undefined : over.claude ?? (async () => null),
+    orcaHomes: over.orcaHomes === null ? undefined : orcaHomes.cache(),
   })
-  return { core, ports, port: ports.devices as DevicesPort, requests, onExit, gone }
+  const port = ports.devices as DevicesPort
+  // Stopped once the spec ends, as the process stops them: a dial left attached on real timers keeps its 60 s scan, which
+  // would count in a later spec's scans.
+  onTestFinished(() => port.stop())
+  return { core, ports, port, requests, onExit, gone, orcaHomes }
 }
 
 const calls = (name: string) => seen.cable.calls.filter(([called]) => called === name).map(([, args]) => args)
@@ -1581,7 +1614,8 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     await vi.advanceTimersByTimeAsync(120_000)
     expect(readers.scans).toBe(0)
     seen.host.watching!(true)
-    expect(readers.scans).toBe(1)
+    // Once Orca's homes are read, where the last read is old.
+    await vi.waitFor(() => expect(readers.scans).toBe(1))
     // Running before the dial came, it is listed now.
     await vi.waitFor(async () => expect((await machineList(port)).agents).toEqual([expect.objectContaining({ id: observedAgentId('codex', 'sess-9'), engine: 'codex' })]))
     await vi.advanceTimersByTimeAsync(60_000)
@@ -1603,9 +1637,11 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     expect(readers.apps.mock.calls).toEqual([[[77]]])
   })
 
-  it('the scan asks a Claude session\'s own record for its name, inside Claude Code\'s folders', async () => {
+  it('a session\'s name is read with the records folders: Claude Code\'s own and each Orca account home\'s', async () => {
     vi.useFakeTimers()
-    const { port } = start({ faults: ['fleet'] })
+    const orca = mkdtempSync(join(tmpdir(), 'orca-home-'))
+    onTestFinished(() => rmSync(orca, { recursive: true, force: true }))
+    const { port } = start({ faults: ['fleet'], orcaHomes: fakeOrcaHomes({ claude: [orca], codex: [] }) })
     readers.known.set('sess-7', 'terminal')
     readers.owners.set('sess-7', { engine: 'claude', pid: 78, record: '/s/78.json' })
     readers.rows.set('sess-7', { cwd: '/work/scratch-2016', transcriptPath: null })
@@ -1614,7 +1650,123 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
     seen.host.watching!(true)
     await vi.waitFor(async () => expect((await machineList(port)).agents)
       .toEqual([expect.objectContaining({ id: observedAgentId('claude', 'sess-7'), name: 'Tho' })]))
-    expect(readers.name.mock.calls).toEqual([[{ pid: 78, record: '/s/78.json', sessionId: 'sess-7' }, { roots: claudeProjectsRoots(env.CLAUDE_PROJECTS_DIR) }]])
+    expect(readers.name.mock.calls).toEqual([[{ pid: 78, record: '/s/78.json', sessionId: 'sess-7' },
+      { records: [join(dirname(env.CLAUDE_PROJECTS_DIR), 'sessions'), join(orca, 'sessions')] }]])
+  })
+
+  describe('Orca\'s account homes (docs/plans/2026-11-17-new-user-onboarding-design.md, "C. Orca homes")', () => {
+    let root: string
+    beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'orca-homes-')) })
+    afterEach(() => rmSync(root, { recursive: true, force: true }))
+    /** An Orca account's config folder, as `orca account list` names one, with these folders in it. */
+    const orcaHome = (name: string, ...folders: string[]): string => {
+      const home = join(root, name)
+      mkdirSync(home)
+      for (const folder of folders) mkdirSync(join(home, folder))
+      return home
+    }
+
+    it('the open scan\'s providers look in Orca\'s homes', async () => {
+      // A Claude Code session's process record in the account's own sessions folder, and its process, as
+      // engines/transcriptReads.golden.spec.ts makes them.
+      const home = orcaHome('claude-1', 'sessions')
+      const sessionId = 'aaaaaaaa-0002-4000-8000-000000000002'
+      writeFileSync(join(home, 'sessions', '102.json'), JSON.stringify({ pid: 102, sessionId, status: 'idle' }))
+      const view: ProcessView = {
+        list: async () => [{ pid: 102, ppid: 1, executable: 'claude', args: 'claude' }],
+        openFiles: async () => new Map(), openFilesOf: async () => new Map(), cwds: async () => new Map(), alive: (pid) => pid === 102,
+      }
+      const orca = fakeOrcaHomes({ claude: [home], codex: [] })
+      start({ faults: ['fleet'], orcaHomes: orca })
+      const claude = (readers.open!.providers as ExternalProvider[]).find((provider) => provider.engine === 'claude')!
+      expect(await claude.owners!(view)).toEqual([{ sessionId, pid: 102, record: join(home, 'sessions', '102.json') }])
+      // The places follow the last read: with the home gone from Orca's list, nothing claims it.
+      orca.homes = { claude: [], codex: [] }
+      expect(await claude.owners!(view)).toEqual([])
+    })
+
+    it('a last answer is read with Orca\'s roots, for Claude Code and for Codex in an Orca Codex home', async () => {
+      vi.useFakeTimers()
+      readers.answer.mockResolvedValue('Shipped.')
+      const claudeHome = orcaHome('claude-1', 'projects')
+      const codexHome = orcaHome('codex-1')
+      const { port } = start({ faults: ['fleet'], orcaHomes: fakeOrcaHomes({ claude: [claudeHome], codex: [codexHome] }) })
+      const transcript = join(claudeHome, 'projects', '-work-api', 'sess-1.jsonl')
+      port.observed(hook('turn-start', { transcriptPath: transcript }))
+      port.observed(hook('turn-stop', { transcriptPath: transcript }))
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+      expect(readers.answer).toHaveBeenLastCalledWith('claude', transcript,
+        { roots: [env.CLAUDE_PROJECTS_DIR, join(claudeHome, 'projects')], maxBytes: 262_144, deadlineMs: 1000 })
+      const rollout = join(codexHome, 'sessions', '2026', '11', '17', 'rollout-a.jsonl')
+      port.observed(hook('turn-stop', { engine: 'codex', sessionId: 'cx-1', transcriptPath: rollout }))
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+      expect(readers.answer).toHaveBeenLastCalledWith('codex', rollout,
+        { roots: [join(env.CODEX_HOME, 'sessions'), join(codexHome, 'sessions')], maxBytes: 262_144, deadlineMs: 1000 })
+    })
+
+    it('a scan reads Orca\'s homes again when the list is old, and waits for it', async () => {
+      vi.useFakeTimers()
+      const orca = fakeOrcaHomes()
+      start({ faults: ['fleet'], orcaHomes: orca })
+      // The first read, as the devices start.
+      expect(orca.refresh).toHaveBeenCalledTimes(1)
+      orca.held = true
+      seen.host.watching!(true)
+      expect(orca.refresh).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(4_000)
+      expect(readers.scans).toBe(0)
+      orca.pending[0](false)
+      await vi.waitFor(() => expect(readers.scans).toBe(1))
+      // Each scan asks: the cache reads only once its last read is 5 minutes old.
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(orca.refresh).toHaveBeenCalledTimes(3)
+    })
+
+    // The read can take its 5 s: a scan that lands after the dial went, or once the devices stop, lists and says nothing.
+    it('a scan whose Orca read lands once the dial has gone or the devices are stopping reads no session', async () => {
+      vi.useFakeTimers()
+      const orca = fakeOrcaHomes()
+      const listener = fakeListener()
+      const { port } = start({ faults: ['fleet'], orcaHomes: orca, listen: listener.listen })
+      orca.held = true
+      // Landed with the dial still here, it scans.
+      seen.host.watching!(true)
+      orca.pending[0](false)
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(readers.scans).toBe(1)
+
+      await vi.advanceTimersByTimeAsync(59_000)
+      expect(orca.pending).toHaveLength(2)
+      seen.host.watching!(false)
+      orca.pending[1](false)
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(readers.scans).toBe(1)
+
+      // Stopping, the listener closes first: the dial is still attached until it has.
+      let closed!: () => void
+      listener.close.mockImplementationOnce(() => new Promise<void>((resolve) => { closed = resolve }))
+      seen.host.watching!(true)
+      const stopping = port.stop()
+      orca.pending[2](false)
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(readers.scans).toBe(1)
+      closed()
+      await stopping
+    })
+
+    it('with no observed source and no skill writer Orca is not asked', () => {
+      const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
+      switched.HARNESS_DEVICE_OBSERVED = false
+      onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
+      expect(start({ faults: ['fleet'] }).orcaHomes.refresh).not.toHaveBeenCalled()
+      // The dial skill's writer alone asks, for its start pass.
+      expect(start({ faults: ['fleet'], listen: fakeListener().listen }).orcaHomes.refresh).toHaveBeenCalledTimes(1)
+    })
+
+    it('unset, the cache is built on this computer\'s orca', async () => {
+      start({ faults: ['fleet'], orcaHomes: null })
+      await vi.waitFor(() => expect(logs).toContain('[observed] orca homes · not read · no orca'))
+    })
   })
 
   it('removes an ended session within 11 s, and ends a Codex turn within 3 s of its process going quiet', async () => {
@@ -6340,7 +6492,7 @@ describe('the dial setup, from the devices\' own process (cable/dialSetup.ts)', 
   }
   const claudeHome = () => dirname(env.CLAUDE_PROJECTS_DIR)
   /** A dial attached on this computer once. */
-  const dialOnce = () => writeSetup(dataDir, { dial: true, homes: { claude: [], codex: [] } })
+  const dialOnce = () => writeSetup(dataDir, { dial: true, homes: { claude: [], codex: [] }, pluginHomes: [] })
   /** A `claude` 2.1.287 with no plugin yet: each call recorded, and each home it was looked for in. */
   const fakeClaude = () => {
     const calls: string[] = []
@@ -6370,13 +6522,42 @@ describe('the dial setup, from the devices\' own process (cable/dialSetup.ts)', 
     expect(logs).toContainEqual(expect.stringMatching(/^\[device\] dial setup · day \d{4}-\d\d-\d\d · claude set up 0 updated 0 failed 0 left removed 0 · codex set up 1 updated 0 failed 0 left removed 0$/))
   })
 
-  it('the devices\' start on a computer that never had a dial writes nothing', () => {
+  it('the dial setup is given Orca\'s Claude Code homes and whether the read answered', async () => {
+    const home = join(homes, 'orca-claude')
+    mkdirSync(home)
+    // The default home's plugin on, as the install leaves it: Orca's homes follow it.
+    mkdirSync(claudeHome())
+    writeFileSync(join(claudeHome(), 'settings.json'), JSON.stringify({ enabledPlugins: { 'harness-device@openharness': true } }))
+    const claude = fakeClaude()
+    const read = fakeOrcaHomes({ claude: [home], codex: [] })
+    start({ faults: ['fleet'], listen: fakeListener().listen, claude: claude.found, orcaHomes: read })
+
+    seen.host.watching!(true)
+
+    await vi.waitFor(() => expect(readSetup(dataDir).pluginHomes).toEqual([realpathSync(home)]))
+    expect(claude.looked).toEqual([claudeHome(), realpathSync(home)])
+    expect(claude.calls).toContain('plugin enable harness-device@openharness --scope user')
+
+    // A read that failed lists no home and drops none from the record; Orca's answer with none does.
+    read.homes = { claude: [], codex: [] }
+    read.answered = false
+    seen.host.watching!(true)
+    // The attach's pass, which runs no `claude` here, ends within the tick.
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(readSetup(dataDir).pluginHomes).toEqual([realpathSync(home)])
+    read.homes = { claude: [], codex: [] }
+    read.answered = true
+    seen.host.watching!(true)
+    await vi.waitFor(() => expect(readSetup(dataDir).pluginHomes).toEqual([]))
+  })
+
+  it('the devices\' start on a computer that never had a dial writes nothing', async () => {
     // Claude Code's plugin already on, as a person may have turned it on by hand.
     mkdirSync(claudeHome())
     writeFileSync(join(claudeHome(), 'settings.json'), JSON.stringify({ enabledPlugins: { 'harness-device@openharness': true } }))
     const claude = fakeClaude()
 
-    start({ faults: ['fleet'], listen: fakeListener().listen, claude: claude.found })
+    await start({ faults: ['fleet'], listen: fakeListener().listen, claude: claude.found }).orcaHomes.landed()
 
     expect(held(env.CODEX_HOME)).toBeUndefined()
     expect(held(claudeHome())).toBeUndefined()
@@ -6384,10 +6565,60 @@ describe('the dial setup, from the devices\' own process (cable/dialSetup.ts)', 
     expect(claude.looked).toEqual([])
   })
 
-  it('once a dial attached, the devices\' start sets the homes up', () => {
+  it('once a dial attached, the devices\' start sets the homes up, once Orca\'s homes are read', async () => {
     dialOnce()
-    start({ faults: ['fleet'], listen: fakeListener().listen })
+    await start({ faults: ['fleet'], listen: fakeListener().listen }).orcaHomes.landed()
     expect(held(env.CODEX_HOME)).toBe(DIAL_SKILL)
+  })
+
+  it('the dial skill reaches an Orca Codex home once the first read lands', async () => {
+    dialOnce()
+    const orca = join(homes, 'orca-codex')
+    mkdirSync(orca)
+    const read = fakeOrcaHomes()
+    read.held = true
+    start({ faults: ['fleet'], listen: fakeListener().listen, orcaHomes: read })
+    // The start pass waits for the read.
+    expect(held(env.CODEX_HOME)).toBeUndefined()
+    read.homes = { claude: [], codex: [orca] }
+    read.pending[0](true)
+    await read.landed()
+    expect(held(orca)).toBe(DIAL_SKILL)
+    expect(held(env.CODEX_HOME)).toBe(DIAL_SKILL)
+  })
+
+  it('a later read that changes the list runs the start pass again', async () => {
+    vi.useFakeTimers()
+    dialOnce()
+    const orca = join(homes, 'orca-codex')
+    mkdirSync(orca)
+    const read = fakeOrcaHomes()
+    start({ faults: ['fleet'], listen: fakeListener().listen, orcaHomes: read })
+    await read.landed()
+    // Each scan reads Orca's homes first, so this fake's reads count these devices' scans: a scan of devices an earlier
+    // spec left attached is not one.
+    seen.host.watching!(true)
+    await vi.waitFor(() => expect(read.refresh).toHaveBeenCalledTimes(2))
+    // A scan whose read says the list is as it was runs no start pass.
+    read.homes = { claude: [], codex: [orca] }
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(read.refresh).toHaveBeenCalledTimes(3)
+    expect(held(orca)).toBeUndefined()
+    read.changed = true
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(read.refresh).toHaveBeenCalledTimes(4)
+    expect(held(orca)).toBe(DIAL_SKILL)
+  })
+
+  it('a read that lands after the devices stopped starts nothing', async () => {
+    dialOnce()
+    const read = fakeOrcaHomes()
+    read.held = true
+    const { port } = start({ faults: ['fleet'], listen: fakeListener().listen, orcaHomes: read })
+    await port.stop()
+    read.pending[0](true)
+    await read.landed()
+    expect(held(env.CODEX_HOME)).toBeUndefined()
   })
 
   it('a scan\'s owners reach the dial setup', async () => {
@@ -6412,7 +6643,7 @@ describe('the dial setup, from the devices\' own process (cable/dialSetup.ts)', 
     dialOnce()
     const lookup = vi.spyOn(claudePlugin, 'claudeFound')
 
-    start({ faults: ['fleet'], listen: fakeListener().listen, claude: null })
+    await start({ faults: ['fleet'], listen: fakeListener().listen, claude: null }).orcaHomes.landed()
 
     expect(held(env.CODEX_HOME)).toBe(DIAL_SKILL)
     // The start's lookup, the process's first: the login shell's PATH is read with it.
@@ -6446,7 +6677,7 @@ describe('the dial setup, from the devices\' own process (cable/dialSetup.ts)', 
     readers.owners.set('sess-9', { engine: 'codex', pid: 77 })
     readers.rows.set('sess-9', { cwd: '/work/web', transcriptPath: null })
     readers.working.set('sess-9', false)
-    start({ faults: ['fleet', 'skill'], listen: fakeListener().listen })
+    await start({ faults: ['fleet', 'skill'], listen: fakeListener().listen }).orcaHomes.landed()
     expect(logs).toContain('[devices] skill failed · injected fault: skill')
     await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
     // The scan goes on past the setup to list what it found.

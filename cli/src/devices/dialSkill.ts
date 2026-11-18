@@ -156,17 +156,34 @@ function removeEmpty(folder: string): void {
 
 /**
  * Claude Code's own record of the plugin, in its user settings: 'on' while its entry is true, 'off' once disabled or
- * uninstalled (the entry false or gone), 'unknown' when the file says nothing: missing, not a regular file, past 1 MiB,
- * not JSON or not an object. One read, sized by the file: the plugin's hook and mod read it on every call.
+ * uninstalled (the entry false or gone), 'unknown' when the file says nothing.
  */
 export function claudePluginState(settingsPath: string): 'on' | 'off' | 'unknown' {
+  const entry = pluginEntry(settingsPath)
+  return entry === UNKNOWN ? 'unknown' : entry === true ? 'on' : 'off'
+}
+
+/** Whether the person turned the plugin off in these settings: its entry false, as `claude plugin disable` and /plugin
+ *  leave it. An entry gone says no such thing: never set there, or uninstalled. */
+export function claudePluginTurnedOff(settingsPath: string): boolean {
+  return pluginEntry(settingsPath) === false
+}
+
+const UNKNOWN = Symbol('unknown')
+
+/**
+ * The plugin's entry as Claude Code's user settings hold it, undefined when they have none; UNKNOWN when the file says
+ * nothing: missing, not a regular file, past 1 MiB, not JSON or not an object. One read, sized by the file: the plugin's
+ * hook and mod read it on every call.
+ */
+function pluginEntry(settingsPath: string): unknown {
   let settings: unknown
   try {
     // No wait on a FIFO left at the path.
     const fd = openSync(settingsPath, constants.O_RDONLY | constants.O_NONBLOCK)
     try {
       const info = fstatSync(fd)
-      if (!info.isFile() || info.size > MAX_SETTINGS_BYTES) return 'unknown'
+      if (!info.isFile() || info.size > MAX_SETTINGS_BYTES) return UNKNOWN
       const buffer = Buffer.allocUnsafe(info.size)
       const length = readSync(fd, buffer, 0, info.size, 0)
       settings = JSON.parse(buffer.toString('utf8', 0, length))
@@ -174,11 +191,11 @@ export function claudePluginState(settingsPath: string): 'on' | 'off' | 'unknown
       closeSync(fd)
     }
   } catch {
-    return 'unknown'
+    return UNKNOWN
   }
-  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return 'unknown'
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return UNKNOWN
   const plugins = (settings as { enabledPlugins?: unknown }).enabledPlugins
-  return !!plugins && typeof plugins === 'object' && (plugins as Record<string, unknown>)[DIAL_PLUGIN_ID] === true ? 'on' : 'off'
+  return !!plugins && typeof plugins === 'object' ? (plugins as Record<string, unknown>)[DIAL_PLUGIN_ID] : undefined
 }
 
 /**

@@ -1,7 +1,9 @@
 // The dial's setup in the devices' own process: the skill in each home (dialHomeSetup.ts), then Claude Code's plugin
 // (dialPluginSetup.ts), at the service's start, at each attach and at each open scan. The plugin reads from the homes'
-// record whether a dial attached here once and the version that last set it up, so the record has one writer.
+// record whether a dial attached here once, the version that last set it up and the Orca homes it turned on, so the
+// record has one writer.
 import type { ClaudeRun } from '../devices/claudePlugin.js'
+import { readPluginHomes } from '../devices/dialSkillFiles.js'
 import type { RolloutOwner } from './codexRolloutHome.js'
 import { createDialHomeSetup, type DialHomeSetupDeps } from './dialHomeSetup.js'
 import { createDialPluginSetup } from './dialPluginSetup.js'
@@ -9,6 +11,8 @@ import { createDialPluginSetup } from './dialPluginSetup.js'
 export interface DialSetupDeps extends DialHomeSetupDeps {
   /** Claude Code as the daemon finds it, for this Claude Code home; [shell] as the plugin's setup asks it. */
   claude(home: string, shell: boolean): Promise<ClaudeRun | null>
+  /** Orca's Claude Code homes from its last read (devices/orcaHomes.ts); answered: that read gave Orca's answer. */
+  orcaClaude(): { homes: readonly string[]; answered: boolean }
   /** This CLI's version. */
   version: string
 }
@@ -24,7 +28,13 @@ export function createDialSetup(deps: DialSetupDeps): DialSetup {
   const plugin = createDialPluginSetup({
     platform: deps.platform,
     version: deps.version,
+    home: deps.claudeHome,
     claude: (shell) => deps.claude(deps.claudeHome, shell),
+    claudeIn: deps.claude,
+    orca: deps.orcaClaude,
+    pluginHomes: () => homes.pluginHomes(),
+    recordPluginHomes: (list) => homes.recordPluginHomes(list),
+    enabledByCommand: () => readPluginHomes(deps.dataDir),
     wanted: () => homes.wanted('claude'),
     recorded: () => homes.plugin(),
     record: (version) => homes.recordPlugin(version),
