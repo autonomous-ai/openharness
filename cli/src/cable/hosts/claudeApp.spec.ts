@@ -14,7 +14,6 @@ type Deps = Parameters<typeof createClaudeAppAdapter>[0]
  *  of [codes], then exit 0. */
 function recorder(over: Partial<Deps> = {}, codes: Array<number | null> = []) {
   const calls: Call[] = []
-  const logs: string[] = []
   const deps: Deps = {
     run: async (file, args, timeoutMs) => {
       calls.push({ file, args, timeoutMs })
@@ -22,10 +21,9 @@ function recorder(over: Partial<Deps> = {}, codes: Array<number | null> = []) {
     },
     platform: 'darwin',
     inFront: () => true,
-    log: (line) => { logs.push(line) },
     ...over,
   }
-  return { calls, logs, adapter: createClaudeAppAdapter(deps) }
+  return { calls, adapter: createClaudeAppAdapter(deps) }
 }
 
 /** The recorder, each command held until it is let go, so a link can be caught still running. */

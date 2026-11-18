@@ -1401,7 +1401,7 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
   const ran = vi.fn(async (_file: string, _args: string[], _timeoutMs: number) => ({ code: 0, stdout: '' }))
   const deps: OrcaDeps = { run: ran, onPath: (name) => `/fake/bin/${name}`, exists: () => false, platform }
   const orca = createOrcaAdapter(deps)
-  const claude = createClaudeAppAdapter({ ...deps, inFront: () => fake.claudeInFront(), log: () => {} })
+  const claude = createClaudeAppAdapter({ ...deps, inFront: () => fake.claudeInFront() })
   const adapters: HostAdapter[] = [
     createHerdrAdapter({ ...deps, client: {
       prompt: (pane, kind, text) => fake.herdrPrompt(pane, kind, text),

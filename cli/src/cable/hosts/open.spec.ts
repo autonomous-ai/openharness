@@ -65,7 +65,7 @@ function recorder(over: Partial<Over> = {}, codes: Array<number | null> = [], mo
 
 /** The adapters whose pane a tap takes, in the order the observed source keeps them: each reads the hints alone. */
 const inert: OrcaDeps = { run: async () => ({ code: 0, stdout: '' }), onPath: () => null, exists: () => false, platform: 'darwin' }
-const tapped = [createHerdrAdapter({ ...inert, client: herdrClient }), createWeztermAdapter(inert), createOrcaAdapter(inert), createClaudeAppAdapter({ ...inert, inFront: () => true, log: () => {} })]
+const tapped = [createHerdrAdapter({ ...inert, client: herdrClient }), createWeztermAdapter(inert), createOrcaAdapter(inert), createClaudeAppAdapter({ ...inert, inFront: () => true })]
 
 /** What an agent's hook hints let a tap open, as the observed source reads them. */
 const target = (hints: Record<string, string>): OpenTarget => {

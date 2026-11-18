@@ -8,19 +8,17 @@
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { createAppLink, type AppLinkDeps } from './appLink.js'
 import { APP_BUNDLES } from './hostDetect.js'
-import { openPath } from './open.js'
-import { RUN_TIMEOUT_MS } from './orca.js'
 
 /** The check the Claude app makes of a session its `claude://code/continue` link names (read in the app, 2026-11-14). */
 const CLAUDE_SESSION = /^local_[A-Za-z0-9-]{1,64}$/
 
 export function createClaudeAppAdapter(
-  deps: AppLinkDeps & { log(line: string): void },
+  deps: AppLinkDeps,
 ): HostAdapter & Required<Pick<HostAdapter, 'canShow' | 'show'>> {
-  const openBin = openPath(deps.bin)
   return {
     id: 'claude',
     tap: 'instead',
+    bundle: APP_BUNDLES.claude,
     paneOf(place: Place): Pane | undefined {
       const { __CFBundleIdentifier: bundle, CLAUDE_CODE_HOST_SESSION_ID: session } = place.hints
       // The link is the Claude app's: a session id another app's agent carries opens no link.
@@ -32,17 +30,12 @@ export function createClaudeAppAdapter(
       if (place.app !== 'claude' || !scanned || !CLAUDE_SESSION.test(scanned)) return undefined
       return { adapter: 'claude', id: scanned }
     },
+    // No forward of its own: a link that fails leaves the opener's fallback to bring the app, by the hook's bundle id
+    // or, for a session only the open scan found, by this adapter's bundle (observed.ts target(), open.ts).
     ...createAppLink(deps, {
       session: CLAUDE_SESSION,
       url: (session) => `claude://code/continue?session=${session}`,
       bundle: APP_BUNDLES.claude,
-      // A session only the open scan found has no bundle until its first hook (observed.ts), so the opener alone could
-      // not bring the app when its link failed (open.ts).
-      async forward() {
-        // The line the opener writes for every pane's fallback: which app only, never the session.
-        deps.log('[device] open · claude · fallback')
-        return (await deps.run(openBin, ['-b', APP_BUNDLES.claude], RUN_TIMEOUT_MS)).code === 0
-      },
     }),
   }
 }
