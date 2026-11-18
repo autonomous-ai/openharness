@@ -58,7 +58,10 @@ nothing.
        `/etc/claude-code/managed-settings.json` on Linux;
      - project local: `<cwd>/.claude/settings.local.json`;
      - project: `<cwd>/.claude/settings.json`;
-     - user: `settings.json` in the Claude Code home the devices already use (`dirname(CLAUDE_PROJECTS_DIR)`).
+     - user: `settings.json` in the session's own Claude Code home, taken from the transcript path the devices already
+       know (`<home>/projects/<slug>/<id>.jsonl`, so a session with its own `CLAUDE_CONFIG_DIR`, such as an Orca
+       account home, is judged by its own file). With no transcript path known, the default home
+       (`dirname(CLAUDE_PROJECTS_DIR)`). No environment is read (PM, 2026-11-18).
    - `<cwd>` is the session's own working folder.
    - Each file is read with a 256 KiB cap and parsed as JSON. Nothing but the `tui` value is kept, and it is never
      logged. A file missing, too large or unreadable counts as having no `tui`.

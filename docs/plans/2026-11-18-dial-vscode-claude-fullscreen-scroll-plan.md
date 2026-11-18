@@ -3,8 +3,8 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use devcrew phase 3 to implement this plan task-by-task. Steps use
 > checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** updated after the PM's four answers (2026-11-18). One question remains ("Open questions", at the end); it
-changes one default path in Task 2 and no task's shape.
+**Status:** updated after the PM's four answers and the answer on the user settings file (option b, 2026-11-18). No
+question remains.
 
 **Goal:** With Claude Code's `"tui": "fullscreen"` in a VS Code terminal, a stroke on the dial moves the transcript a
 page for each 20 lines of travel, and only while Claude Code is that terminal's foreground program and is not asking.
@@ -49,6 +49,7 @@ Its "Decided (PM, 2026-11-18)", 1 to 7, is not reopened here.
 | `cli/src/cable/hosts/adapter.ts` | `HostAdapter.pageKeys?`; `scroll?` gains `page?` |
 | `cli/src/cable/hosts/vscode.ts` | the VS Code adapter's `pageKeys`; its `scroll` passes `page` |
 | `cli/src/services/devices.ts` | the two deps wired (`DevicesDeps.claudeFullscreen`, `processGroups`); `routeScroll`'s third answer |
+| `cli/src/cable/hosts/observed.ts` | `ObservedSource.transcriptOf`: the transcript path an agent's hook or the scan gave |
 | `plugins/harness-device-vscode/src/window.ts`, `facade.ts`, `vscodeApi.ts` | `WindowFacade.pageKey`; `ApiTerminal.sendText` |
 | `plugins/harness-device-vscode/src/loop.ts` | a line's `page`, the page remainder, the keys in a run, the `page keys` count |
 | `plugins/harness-device-vscode/src/testing/fakeWindow.ts`, `fakeVscode.ts` | record page keys and `sendText` |
@@ -67,9 +68,10 @@ Nothing under `cli/src/core/` or `cli/src/harnessd/` changes; `cli/src/architect
   its pane pid is in its tty's foreground group (`pgid` equals `tpgid`, and `tpgid` is above 0).
 - **The renderer read:** only the `tui` key of, highest precedence first, the managed file
   (`/Library/Application Support/ClaudeCode/managed-settings.json` on macOS, `/etc/claude-code/managed-settings.json` on
-  Linux), `<cwd>/.claude/settings.local.json`, `<cwd>/.claude/settings.json`, and `settings.json` in
-  `dirname(CLAUDE_PROJECTS_DIR)`. Each read with a 256 KiB cap and parsed as JSON. Nothing but `tui` is kept, and never
-  logged.
+  Linux), `<cwd>/.claude/settings.local.json`, `<cwd>/.claude/settings.json`, and `settings.json` in the session's own
+  Claude Code home: `<home>` of its transcript path `<home>/projects/<slug>/<id>.jsonl`, else (no transcript path, or
+  another shape) the default home `dirname(CLAUDE_PROJECTS_DIR)`. Each read with a 256 KiB cap and parsed as JSON.
+  Nothing but `tui` is kept, and never logged.
 - **Never another process's environment or arguments.** `CLAUDE_CODE_NO_FLICKER=1` is not seen: a documented limit.
 - **The foreground read:** `ps -o pgid=,tpgid= -p <pid>` through `execText` (`scannedApp.ts`).
 - **The pid** is the pane's: `termPid(observed.paneOf(id, 'vscode'))`. Never `entry.pid`.
@@ -93,7 +95,7 @@ Nothing under `cli/src/core/` or `cli/src/harnessd/` changes; `cli/src/architect
 1. **The route stays general.** The adapter gets the door (`HostAdapter.pageKeys`, and `page` on `scroll`), as #4425
    made scroll an adapter's member. `routeScroll` owns who the agent is, whether it asks and its folder;
    `vscodeTerminals.ts` owns the two reads, their judgement, their deadline and the counts.
-2. **The renderer is a dep of `vscodeTerminals.ts`** (`fullscreen(cwd)`) beside `foreground(pid)`, so one deadline and
+2. **The renderer is a dep of `vscodeTerminals.ts`** (`fullscreen(cwd, transcriptPath)`) beside `foreground(pid)`, so one deadline and
    one join cover both reads. Its code is a module of its own, `claudeRenderer.ts`, with its own tests.
 3. **The renderer is read first, `ps` only when it passes.** Most sessions run the default renderer: they cost no `ps`.
    Both reads sit inside the one 500 ms.
@@ -123,6 +125,12 @@ Nothing under `cli/src/core/` or `cli/src/harnessd/` changes; `cli/src/architect
     move its terminal's foreground group, and the session's leader (the engine) cannot leave its own group.
 16. **The end-to-end case fails at once, naming the file, when this machine's managed settings file sets a `tui`:** it
     outranks the test's own project file, and the devices must read the real path.
+17. **The session's own home comes from its transcript path's shape alone.** The devices pass the path as the hook or
+    the scan gave it (`ObservedSource.transcriptOf`); `claudeRenderer.ts` judges it. It names a home only when it is
+    absolute, already normalized (no `.` or `..`, no doubled `/`), ends in `<id>.jsonl` and sits in
+    `<home>/projects/<slug>/`; anything else is the default home. It is not held to the homes the devices list (theirs
+    and Orca's): a home of the person's own `CLAUDE_CONFIG_DIR` is the case the PM's answer is for, and the read there
+    is still one `settings.json`, by the same capped, non-blocking, regular-file read, keeping `tui` alone.
 
 ## Design
 
@@ -261,40 +269,72 @@ export const MANAGED_SETTINGS: Partial<Record<NodeJS.Platform, string>> = {
   linux: '/etc/claude-code/managed-settings.json',
 }
 export interface RendererOptions {
-  /** The Claude Code home the devices use: dirname(CLAUDE_PROJECTS_DIR). */
-  claudeHome: string
+  /** The devices' default Claude Code home, dirname(CLAUDE_PROJECTS_DIR): the user file's home for a session whose
+   *  transcript path names none. */
+  defaultHome: string
   platform: NodeJS.Platform
 }
 /** The four files, highest precedence first: managed (where the platform has one), project local, project, user.
- *  `cwd` is absolute. */
-export function settingsFiles(cwd: string, opts: RendererOptions): string[]
+ *  `cwd` is absolute. The user file is `settings.json` in the session's own Claude Code home, `<home>` of its
+ *  `transcriptPath` `<home>/projects/<slug>/<id>.jsonl` (Decision 17); in `opts.defaultHome` when there is none or it
+ *  has another shape. From the path alone: no environment is read. */
+export function settingsFiles(cwd: string, transcriptPath: string | undefined, opts: RendererOptions): string[]
 /** One file's text: none when it is missing, not a regular file, over SETTINGS_MAX_BYTES or unreadable. Never rejects. */
 export async function readSettings(path: string): Promise<string | undefined>
-/** Whether Claude Code draws the session in `cwd` fullscreen, as far as its settings say: the first file whose JSON
- *  object has its own `tui` decides, and only `"fullscreen"` passes. Reads `tui` alone; keeps and logs nothing.
- *  Never rejects. */
-export async function readFullscreen(cwd: string, opts: RendererOptions, read = readSettings): Promise<boolean>
+/** Whether Claude Code draws the session in `cwd` with that transcript fullscreen, as far as its settings say: the first
+ *  of settingsFiles whose JSON object has its own `tui` decides, and only `"fullscreen"` passes. Reads `tui` alone;
+ *  keeps and logs nothing. Never rejects. */
+export async function readFullscreen(
+  cwd: string, transcriptPath: string | undefined, opts: RendererOptions, read = readSettings,
+): Promise<boolean>
 ```
+
+- **The home from the path** (private to the module): `isAbsolute(p) && normalize(p) === p && extname(p) === '.jsonl'
+  && basename(dirname(dirname(p))) === 'projects'` gives `dirname(dirname(dirname(p)))`; anything else gives
+  `opts.defaultHome`.
 
 - `readSettings`: `open(path, constants.O_RDONLY | constants.O_NONBLOCK)`, `fstat` must be a regular file, read
   `SETTINGS_MAX_BYTES + 1` bytes from 0, more than the cap is none. As `recordName.ts`'s read.
 - `readFullscreen`: files read one at a time, stopping at the one that decides. `Object.hasOwn(parsed, 'tui')` on a
   parsed value that is a non-null, non-array object.
 - The file's header comment says what is read and why only `tui`, the precedence (Claude Code's own, less its command
-  line), and the limit: fullscreen from `CLAUDE_CODE_NO_FLICKER=1` is not seen.
+  line), why the user file's home comes from the transcript path (a session with its own `CLAUDE_CONFIG_DIR`, such as
+  an Orca account home, reads its own `settings.json`, and another process's environment is never read), and the
+  limit: fullscreen from `CLAUDE_CODE_NO_FLICKER=1` is not seen.
 
 - [ ] **Step 1: Write the failing tests.** Real files under `mkdtempSync(join(tmpdir(), 'renderer-'))`, removed in
   `afterEach`; precedence with a fake `read` keyed by path.
 
 ```ts
-const opts = { claudeHome: '/h/.claude', platform: 'darwin' as const }
+const opts = { defaultHome: '/h/.claude', platform: 'darwin' as const }
+/** A session of an Orca account, whose Claude Code home is its own. */
+const ORCA_TRANSCRIPT = '/o/claude-profiles/acct/home/projects/-work-api/s1.jsonl'
 
 it('the four files, highest first', () => {
-  expect(settingsFiles('/work/api', opts)).toEqual([
+  expect(settingsFiles('/work/api', undefined, opts)).toEqual([
     '/Library/Application Support/ClaudeCode/managed-settings.json',
     '/work/api/.claude/settings.local.json', '/work/api/.claude/settings.json', '/h/.claude/settings.json'])
-  expect(settingsFiles('/work/api', { ...opts, platform: 'linux' })[0]).toBe('/etc/claude-code/managed-settings.json')
-  expect(settingsFiles('/work/api', { ...opts, platform: 'win32' })).toHaveLength(3)
+  expect(settingsFiles('/work/api', undefined, { ...opts, platform: 'linux' })[0]).toBe('/etc/claude-code/managed-settings.json')
+  expect(settingsFiles('/work/api', undefined, { ...opts, platform: 'win32' })).toHaveLength(3)
+})
+
+it.each<[string, string | undefined, string]>([
+  ['a transcript in an Orca account home: that home', ORCA_TRANSCRIPT, '/o/claude-profiles/acct/home/settings.json'],
+  ['no transcript path: the default home', undefined, '/h/.claude/settings.json'],
+  ['a transcript outside projects/<slug>/: the default home', '/o/home/sessions/-work-api/s1.jsonl', '/h/.claude/settings.json'],
+  ['a relative transcript path: the default home', 'o/home/projects/-work-api/s1.jsonl', '/h/.claude/settings.json'],
+  ['a transcript that is no .jsonl: the default home', '/o/home/projects/-work-api/s1.json', '/h/.claude/settings.json'],
+  ['a transcript path with ..: the default home', '/o/home/projects/../projects/-work-api/s1.jsonl', '/h/.claude/settings.json'],
+])('the user file, %s', (_, transcript, user) => {
+  expect(settingsFiles('/work/api', transcript, opts).at(-1)).toBe(user)
+})
+
+it("a session in its own home is judged by that home's settings.json, never the default home's", async () => {
+  const files: Record<string, string> = {
+    '/o/claude-profiles/acct/home/settings.json': '{"tui":"fullscreen"}', '/h/.claude/settings.json': '{"tui":"default"}' }
+  const read = vi.fn(async (path: string) => files[path])
+  expect(await readFullscreen('/work/api', ORCA_TRANSCRIPT, opts, read)).toBe(true)
+  expect(read.mock.calls.map(([path]) => path)).not.toContain('/h/.claude/settings.json')
 })
 
 it.each<[string, Record<string, string>, boolean]>([
@@ -310,7 +350,7 @@ it.each<[string, Record<string, string>, boolean]>([
   ['no file', {}, false],
 ])('%s', async (_, files, fullscreen) => {
   const read = vi.fn(async (path: string) => files[path])
-  expect(await readFullscreen('/work/api', opts, read)).toBe(fullscreen)
+  expect(await readFullscreen('/work/api', undefined, opts, read)).toBe(fullscreen)
 })
 
 it('stops at the file that decides', …)                 // local says fullscreen: read called with the managed and the local path only
@@ -356,12 +396,14 @@ export interface ProcessGroups { pgid: number; tpgid: number }
 /** One process's group and its tty's foreground group, from `ps -o pgid=,tpgid= -p <pid>` through scannedApp.ts's
  *  patient exec. None when `ps` failed, the process is gone, or it printed anything but one row of two numbers. */
 export async function readForeground(pid: number, exec: Exec = execText): Promise<ProcessGroups | undefined>
-/** What the guard knows of the agent: whether it waits on the person, and its folder. */
-export interface PageAgent { asking: boolean; cwd?: string }
+/** What the guard knows of the agent: whether it waits on the person, its folder, and its transcript path as its hook
+ *  or the scan gave it (the user settings' home: claudeRenderer.ts). */
+export interface PageAgent { asking: boolean; cwd?: string; transcriptPath?: string }
 
 // VscodeTerminalsDeps, beside `processes`
-/** Whether Claude Code's settings for that absolute folder draw it fullscreen (claudeRenderer.ts readFullscreen). */
-fullscreen(cwd: string): Promise<boolean>
+/** Whether Claude Code's settings for that absolute folder, and the home its transcript path names, draw it fullscreen
+ *  (claudeRenderer.ts readFullscreen). */
+fullscreen(cwd: string, transcriptPath: string | undefined): Promise<boolean>
 foreground(pid: number): Promise<ProcessGroups | undefined>
 
 // VscodeTerminals
@@ -385,7 +427,7 @@ processGroups?: VscodeTerminalsDeps['foreground']
 - **The judgement,** each ask counted once:
   - `asking` → `asking`, nothing read;
   - no `cwd`, or one that is not absolute → `renderer`, nothing read;
-  - `fullscreen(cwd)` answers false or rejects → `renderer`, no `ps`;
+  - `fullscreen(cwd, agent.transcriptPath)` answers false or rejects → `renderer`, no `ps`;
   - then `foreground(pid)` answers none, or rejects, or `tpgid <= 0` → `ps`;
   - `pgid !== tpgid` → `background`;
   - `pgid === tpgid` → a page stroke, `true`;
@@ -400,14 +442,14 @@ processGroups?: VscodeTerminalsDeps['foreground']
 
 - The file's header comment names the two reads: settings' `tui` alone, and two numbers from `ps`; never a name, an
   environment or arguments.
-- `devices.ts`: `vscodeStreams({ …, fullscreen: deps.claudeFullscreen ?? ((cwd) => readFullscreen(cwd, { claudeHome: dirname(env.CLAUDE_PROJECTS_DIR), platform: apps.platform })), foreground: deps.processGroups ?? readForeground })`.
-  Nothing else there.
+- `devices.ts`: `vscodeStreams({ …, fullscreen: deps.claudeFullscreen ?? ((cwd, transcriptPath) => readFullscreen(cwd, transcriptPath, { defaultHome: dirname(env.CLAUDE_PROJECTS_DIR), platform: apps.platform })), foreground: deps.processGroups ?? readForeground })`.
+  Nothing else there: the transcript path reaches the guard from the route (Task 7).
 - `devices.spec.ts`: two fakes beside `processTable`, passed by `start()` and reset where `processTable` is:
 
 ```ts
 /** Whether a session's settings draw it fullscreen (services/devices.ts claudeFullscreen): the spec's own, fullscreen
- *  unless a spec sets it, each read's folder kept, so no spec reads this machine's settings. */
-const claudeSettings = { fullscreen: true, reads: [] as string[] }
+ *  unless a spec sets it, each read's folder and transcript path kept, so no spec reads this machine's settings. */
+const claudeSettings = { fullscreen: true, reads: [] as Array<[string, string | undefined]> }
 /** An agent's process group and its tty's foreground group (services/devices.ts processGroups): the spec's own, the
  *  agent in front unless a spec sets it, each read's pid kept, and held while `held` until the spec lands it, so no
  *  spec runs this machine's ps. */
@@ -416,7 +458,7 @@ const processGroups = { answer: { pgid: 4242, tpgid: 4242 } as { pgid: number; t
 ```
 
 - [ ] **Step 1: Write the failing tests** in `vscodeTerminals.spec.ts`. Its `harness()` gains a `fullscreen` dep (true
-  unless a test sets it, each folder kept) and a `foreground` dep whose reads are held until the test lands them (as
+  unless a test sets it, each folder and transcript path kept) and a `foreground` dep whose reads are held until the test lands them (as
   `processes`); its timers keep whether each was cancelled.
 
 ```ts
@@ -435,7 +477,10 @@ describe('the foreground group the page guard reads', () => {
 
 // in describe('VS Code\'s windows'); AGENT = { asking: false, cwd: '/work/api' }
 it("a fullscreen agent in its tty's foreground group may take page keys: its folder read, then one ps, for its pid", …)
-  // { pgid: 900, tpgid: 900 } → true; fullscreen called with '/work/api', foreground with 900, in that order
+  // { pgid: 900, tpgid: 900 } → true; fullscreen called with ('/work/api', undefined), foreground with 900, in that order
+it("the agent's transcript path goes to the renderer read with its folder, as given", …)
+  // pageKeys(900, { ...AGENT, transcriptPath: '/o/home/projects/-work-api/s1.jsonl' }): fullscreen called with
+  // ('/work/api', '/o/home/projects/-work-api/s1.jsonl'); the shape is claudeRenderer.ts's to judge, not the guard's
 it('an agent that asks is refused at once, with nothing read', …)          // pageKeys(900, { ...AGENT, asking: true }) === false, not a promise
 it.each([undefined, 'work/api'])('a folder of %s is refused renderer at once, with nothing read', …)
 it('settings that do not say fullscreen are refused renderer, and ps is not run', …)
@@ -614,9 +659,9 @@ it('stop ends a run: what waited sends no key', …)
 // HostAdapter
 /** Whether the program in the pane takes its own page keys now: Claude Code's fullscreen view keeps no history for its
  *  app to scroll. Asked at a stroke's down, after `canScroll`, only for an agent whose engine has such keys, with
- *  whether it waits on the person and its folder. `false` at once when no key may go and nothing was read; else a
- *  promise, never rejected, settled within the adapter's own deadline. */
-pageKeys?(pane: Pane, agent: { asking: boolean; cwd?: string }): false | Promise<boolean>
+ *  whether it waits on the person, its folder and its transcript path. `false` at once when no key may go and nothing
+ *  was read; else a promise, never rejected, settled within the adapter's own deadline. */
+pageKeys?(pane: Pane, agent: { asking: boolean; cwd?: string; transcriptPath?: string }): false | Promise<boolean>
 /** … `page`: this stroke's `pageKeys` said yes, and the lines may carry those keys too. */
 scroll?(pane: Pane, lines: number, page?: boolean): void
 
@@ -633,10 +678,11 @@ terminals: Pick<VscodeTerminals, 'terminalOf' | 'show' | 'scroll' | 'pageKeys'>
 
 ```ts
 it("pageKeys asks the terminals for the pane's own pid, with what the route knows of its agent", async () => {
-  // terminals.pageKeys answers Promise.resolve(true) for (4242, { asking: false, cwd: '/w' }) and false when asking
-  expect(await r.adapter.pageKeys!(pane(), { asking: false, cwd: '/w' })).toBe(true)
-  expect(r.adapter.pageKeys!(pane(), { asking: true, cwd: '/w' })).toBe(false)
-  expect(r.windows.guards).toEqual([{ pid: 4242, agent: { asking: false, cwd: '/w' } }, { pid: 4242, agent: { asking: true, cwd: '/w' } }])
+  // terminals.pageKeys answers Promise.resolve(true) when not asking and false when asking
+  const agent = { asking: false, cwd: '/w', transcriptPath: '/t/s1.jsonl' }
+  expect(await r.adapter.pageKeys!(pane(), agent)).toBe(true)
+  expect(r.adapter.pageKeys!(pane(), { ...agent, asking: true })).toBe(false)
+  expect(r.windows.guards).toEqual([{ pid: 4242, agent }, { pid: 4242, agent: { ...agent, asking: true } }])
 })
 it("pageKeys is false at once for the tab's pane or a term id out of form, and asks nothing", …)   // UUID, 'term:1', 'term:x'
 it('scroll passes page on, and lines with none are plain', () => {
@@ -656,12 +702,21 @@ it('scroll passes page on, and lines with none are plain', () => {
 **Depends on:** 6. **Effort:** xhigh.
 
 **Files:**
-- Modify: `cli/src/services/devices.ts`
-- Test: `cli/src/services/devices.spec.ts`
+- Modify: `cli/src/services/devices.ts`, `cli/src/cable/hosts/observed.ts` (`transcriptOf` only)
+- Test: `cli/src/services/devices.spec.ts`, `cli/src/cable/hosts/observed.spec.ts`
 
 **Interfaces — Consumes:** `HostAdapter.pageKeys`, `scroll(pane, lines, page)` (Task 6); `observed.byPane(adapter, id)`
-(there today: the live agent at a pane, with its `engine`, `state` and `cwd`); the spec's `claudeSettings` and
+(there today: the live agent at a pane, with its `id`, `engine`, `state` and `cwd`); the spec's `claudeSettings` and
 `processGroups` fakes (Task 3).
+
+**Produces** (in `observed.ts`, beside `waitingOn`):
+
+```ts
+// ObservedSource
+/** The transcript path the agent's latest hook or the scan gave, as given; none when neither gave one. Its user
+ *  settings' home for the page guard (claudeRenderer.ts judges the path). */
+transcriptOf(agentId: string): string | undefined
+```
 
 - **The answer has three values.** `decided(asked, to: 'page' | 'lines' | 'windows')`. `windows` is today's replay and
   its `not on screen` line. `lines` and `page` take the held travel as one `move` and go on as that route. Herdr's
@@ -669,7 +724,8 @@ it('scroll passes page on, and lines with none are plain', () => {
 - **A decided route keeps `page: boolean`.**
 - **A stroke is held for the guard only when it can pass.** At a stroke's start, for a target whose adapter has no
   `onScreen`: read the agent at the pane (`observed?.byPane(target.adapter.id, target.pane.id)`). When its engine is
-  `claude` and the adapter has `pageKeys`, call `pageKeys(pane, { asking: agent.state === 'needs-you', cwd: agent.cwd })`:
+  `claude` and the adapter has `pageKeys`, call `pageKeys(pane, { asking: agent.state === 'needs-you', cwd: agent.cwd,
+  transcriptPath: observed.transcriptOf(agent.id) })`:
   - `false` → decided at once as `lines`, as now (Codex and every other engine never reach the call);
   - a promise → the stroke is held as Herdr's is (`{ deciding: target, held }`), and its answer goes to `decided` as
     `page` or `lines`. The adapter settles it within 500 ms (Task 3), so the routing arms no timer of its own.
@@ -679,9 +735,16 @@ it('scroll passes page on, and lines with none are plain', () => {
   today.
 - The comments on `stroke`, `decided` and `routeScroll` say the third answer and why a refused guard is `lines`.
 
-- [ ] **Step 1: Write the failing tests** (beside #4427's stroke cases, with `inVscodeTerminal()`, `shows`, `stroke`).
+- [ ] **Step 1: Write the failing tests** (beside #4427's stroke cases, with `inVscodeTerminal()`, `shows`, `stroke`;
+  and one in `observed.spec.ts`'s `describe('ObservedSource and a waiting prompt')`, beside `waitingOn`'s).
 
 ```ts
+// observed.spec.ts
+it("transcriptOf is the path the agent's latest hook gave, kept when a later hook gives none, and none for an agent it does not list", …)
+  // session-start with transcriptPath '/o/home/projects/-work-api/s1.jsonl', then turn-start with none:
+  // transcriptOf(agent.id) is that path; transcriptOf('claude:unknown') is undefined
+
+// devices.spec.ts
 const page = (n: number) => ({ scroll: n, pid: SHELL, page: true })
 const plain = (n: number) => ({ scroll: n, pid: SHELL })
 
@@ -691,7 +754,7 @@ it("Claude Code drawn fullscreen in its terminal's foreground group: the stroke 
   processGroups.held = true
   host().scrolled('down', 0, 0); host().scrolled('move', 8, 0); host().scrolled('move', 8, 0)
   await vi.waitFor(() => expect(processGroups.reads).toEqual([4242]))
-  expect([claudeSettings.reads, window.lines]).toEqual([['/work/api'], []])
+  expect([claudeSettings.reads, window.lines]).toEqual([[['/work/api', '/t/sess-1.jsonl']], []])   // the hook's own
   processGroups.land.shift()!()
   await vi.waitFor(() => expect(window.lines).toEqual([page(-2)]))      // the held travel, as one piece
   host().scrolled('move', 8, 0); host().scrolled('up', 0, 0)
@@ -699,6 +762,9 @@ it("Claude Code drawn fullscreen in its terminal's foreground group: the stroke 
   expect(dialScrolls(core)).toEqual([])
 })
 
+it("a session in an Orca account home: the renderer read gets the transcript path its hook gave, so that home's settings decide", …)
+  // inVscodeTerminal({ transcriptPath: '/o/claude-profiles/acct/home/projects/-work-api/sess-1.jsonl' }); stroke([8]):
+  // claudeSettings.reads is [['/work/api', '/o/claude-profiles/acct/home/projects/-work-api/sess-1.jsonl']]
 it.each(['Codex', 'an agent that asks at the down'])('%s is decided at once as lines, with nothing read', …)
   // stroke([8, 8, -24]) → [plain(-1), plain(-1), plain(3)] with no await; claudeSettings.reads and processGroups.reads are []
 it('settings that do not draw fullscreen: the lines carry no page, and no ps is read', …)
@@ -725,9 +791,11 @@ it("the minute's line counts a page stroke and a refusal for asking", …)
 ```
 
   #4427's stroke cases write a line as each frame comes, on a Claude Code agent. A Claude Code stroke is now held, so
-  they keep their assertions on a Codex agent, which is decided at once: `inVscodeTerminal` takes the engine. Its hook
-  carries `cwd: '/work/api'` (the spec's `hook()` default).
-- [ ] **Step 2: Run** `cd cli && npx vitest run src/services/devices.spec.ts`. Expected: FAIL in the new cases.
+  they keep their assertions on a Codex agent, which is decided at once: `inVscodeTerminal` takes the engine and the
+  session-start hook's `transcriptPath`. Its hook carries `cwd: '/work/api'` and `transcriptPath: '/t/sess-1.jsonl'`
+  (the spec's `hook()` defaults).
+- [ ] **Step 2: Run** `cd cli && npx vitest run src/services/devices.spec.ts src/cable/hosts/observed.spec.ts`.
+  Expected: FAIL in the new cases.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** the same, then `npm run test:core -- --maxWorkers=4 && npx tsc --noEmit`. Expected: PASS,
   `devices.ts` at 100%.
@@ -791,7 +859,11 @@ if pid == 0:
   background was stopped by SIGTTIN). `close()` kills the second process if it still runs, and resolves only once it
   is gone.
 - **The settings** are the session's own project file, `<the engine's folder>/.claude/settings.json`, under the
-  daemon's throwaway projects folder. The daemon's Claude home is throwaway too and holds no `settings.json`.
+  daemon's throwaway projects folder. The user file is in the home the fake engine's transcript path names:
+  `fakeEngine.mjs` writes it at `<projects>/<slug>/<id>.jsonl` under its `CLAUDE_CONFIG_DIR`, else under the
+  daemon's throwaway projects folder. The engine runs with the daemon's isolated environment (`d.env`), whose
+  `CLAUDE_CONFIG_DIR`, if set, `assertHooksContained` (`e2e/harness/daemon.ts`) holds inside the test's root. That
+  home holds no `settings.json`, and no person's home is read.
 - **The case,** `it("a stroke on Claude Code's fullscreen view in its terminal's foreground carries page keys, and none for the default renderer or in the background", …, 300_000)`:
   0. **Precondition:** this platform's `MANAGED_SETTINGS` file, if it exists, has no `tui` (read in the test). Else
      fail at once with a message that names the file: it outranks the test's own.
@@ -866,8 +938,9 @@ minute line (Task 5).
 
 - `cli/AGENTS.md`, the devices row. After "and the dial's scroll scrolls that terminal, line by line, while VS Code is
   in front and the dial shows such an agent", add: "; for Claude Code whose settings say `"tui": "fullscreen"` (that
-  key alone, of its managed, project-local, project and user settings files, each read up to 256 KiB at a stroke's
-  start: `cable/hosts/claudeRenderer.ts`), that is its terminal's foreground program (one `ps -o pgid=,tpgid= -p <pid>`
+  key alone, of its managed, project-local, project and user settings files, the user file in the session's own
+  Claude Code home as its transcript path names it, each read up to 256 KiB at a stroke's start:
+  `cable/hosts/claudeRenderer.ts`), that is its terminal's foreground program (one `ps -o pgid=,tpgid= -p <pid>`
   read a stroke; both waited for at most 500 ms) and is not waiting on the person, the extension also presses PageUp or
   PageDown there, one key per 20 lines, which moves Claude Code's fullscreen view".
 - `README.md`, "What it does", the Scroll line: "**Scroll** on the dial while VS Code is in front: that terminal
@@ -890,11 +963,11 @@ extension's tests among them), the suites that read `cli/`, and `process-checks`
 | # | Check | Where | Isolation | What a person sees |
 |---|---|---|---|---|
 | 1 | **Unit:** `cd cli && npx vitest run src/cable/hosts src/services/devices.spec.ts ../plugins/harness-device-vscode/src src/devices/vscodeExtensionTypes.spec.ts src/devices/vscodeExtensionBundle.spec.ts src/architecture.spec.ts src/architecture.environment.spec.ts && npx tsc --noEmit` | this Mac; PR CI on Linux | fakes only: a fake `ps`, fake settings reads, a fake window, a fake VS Code API; `claudeRenderer.spec.ts` reads files under its own temporary folder | all pass; each behavior's test was committed red before its code |
-| 2 | **CLI end to end, the file:** `cd cli && TMPDIR=/tmp npx vitest run --config vitest.e2e.config.ts e2e/dialVscode.e2e.ts` | this Mac | the repo's own (cli/AGENTS.md rule 6): a daemon under a throwaway root and home on a port of its own (never 18473), a fake dial, the fake engine in a pseudo-terminal under a fake `code`, in a throwaway folder whose `.claude/settings.json` the case writes; the extension's real loop over a fake window in a process of its own; the real `ps` reads only the test's own processes; the machine's managed settings file is read, and the case fails at once if it sets a `tui`; no VS Code, no `claude` | three cases pass; the new one prints one `up` key for fullscreen in front, and none for the default renderer or after `background()` |
+| 2 | **CLI end to end, the file:** `cd cli && TMPDIR=/tmp npx vitest run --config vitest.e2e.config.ts e2e/dialVscode.e2e.ts` | this Mac | the repo's own (cli/AGENTS.md rule 6): a daemon under a throwaway root and home on a port of its own (never 18473), a fake dial, the fake engine in a pseudo-terminal under a fake `code`, in a throwaway folder whose `.claude/settings.json` the case writes, the user file in the throwaway Claude home its transcript names; the extension's real loop over a fake window in a process of its own; the real `ps` reads only the test's own processes; the machine's managed settings file is read, and the case fails at once if it sets a `tui`; no VS Code, no `claude` | three cases pass; the new one prints one `up` key for fullscreen in front, and none for the default renderer or after `background()` |
 | 3 | **CLI end to end on Linux, the whole suite once at the final head, when the PM gives the turn:** `gh workflow run cli-e2e.yml --ref fix/dial-vscode-claude-fullscreen-scroll` (Actions → CLI end to end → Run workflow). | GitHub, Linux runners | each daemon under a throwaway root, fake dials, fake engines; no `/etc/claude-code` on the runner | every shard green, `e2e/dialVscode.e2e.ts` among them. Linux is where `ps` prints -1, the managed path differs, and the Python job control differs most from a Mac |
 | 4 | **The extension in a real VS Code:** `cd cli && npm run test:vscode` | this Mac, in a desktop session (it opens a window) | a VS Code downloaded into a temporary folder, with its own user data, extensions, home and bundle id, all removed at the end; a fake alt-screen app, never `claude`; never the installed VS Code, its settings or `~/.vscode` | a VS Code window opens and closes by itself; every case passes; the record holds exactly `ESC[5~` twice |
 | 5 | **Local gates' receipt:** `python3 scripts/local-checks.py --run` from a clean tree at the final commit. The change touches `cli/src/services/*`, so it runs `cli-core` (`npm run test:core`: `devices.ts` at 100%). Its output goes in the pull request body before the push that carries that head. | this Mac | the unit suites' own | one `harness-local-checks` fence, `cli-core` passed |
-| 6 | **By a person, after merge. Needs Diego himself** (his Claude Code login, his dial, his eye). Not run by an agent. | Diego's Mac | his own VS Code and Claude Code: a check only he can do | (a) with `"tui": "fullscreen"` in his settings: a stroke moves the transcript a page for each 20 lines, both ways, and text typed in the prompt is unchanged; (b) with that line removed: line by line, as today, and nothing is typed; (c) while Claude Code asks, or at a shell prompt: line scroll only, and nothing is typed |
+| 6 | **By a person, after merge. Needs Diego himself** (his Claude Code login, his dial, his eye). Not run by an agent. | Diego's Mac | his own VS Code and Claude Code: a check only he can do | (a) with `"tui": "fullscreen"` in his settings: a stroke moves the transcript a page for each 20 lines, both ways, and text typed in the prompt is unchanged; (b) with that line removed: line by line, as today, and nothing is typed; (c) while Claude Code asks, or at a shell prompt: line scroll only, and nothing is typed; (d) a Claude Code of an Orca account, in a VS Code terminal, with `"tui": "fullscreen"` only in that account's own `settings.json`: pages, as (a) |
 
 **No temporary workflow.** The one long check, the end-to-end suite, has its own workflow, started by hand once when
 the PM gives the turn (check 3); the new case then runs in it every night with no further change. The real-VS Code
@@ -909,15 +982,5 @@ that #4425 merged first.
 
 ## Open questions
 
-Returned to the main session with this plan. The tasks follow the PM's words until it is answered.
-
-1. **Which home's `settings.json` is the user file for a session with a Claude Code home of its own?** The PM named
-   `dirname(CLAUDE_PROJECTS_DIR)`, the devices' default home, and Task 2/3 wire that. A Claude Code started with its
-   own `CLAUDE_CONFIG_DIR` (an Orca account home, which the devices already list in `orcaHomes`) reads its user
-   settings from that home instead. Such a session is then judged by the wrong file, both ways: page keys to a
-   default-renderer view (pulled to the bottom after each 20 lines), or none to a fullscreen one. The devices already
-   know each observed session's transcript path, `<its home>/projects/<folder>/<id>.jsonl`, which names its own home
-   without reading its environment. Which?
-   - (a) keep the default home for every session, and document the limit beside `CLAUDE_CODE_NO_FLICKER`;
-   - (b) take the session's own home from its transcript path, the default home when it has none (one more field
-     passed to `pageKeys`, and one more test in Tasks 2, 3 and 7).
+None. The last one (which home's `settings.json` is the user file) was answered by the PM on 2026-11-18: the session's own
+home from its transcript path, else the default home (Decision 17, Tasks 2, 3 and 7).
