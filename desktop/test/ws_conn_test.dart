@@ -458,6 +458,86 @@ void main() {
   });
 
   test(
+    'local session envelopes keep original event fields and FIFO dispatch',
+    () async {
+      hub = await FakeHub.start();
+      final heard = <Map<String, dynamic>>[];
+      final first = Completer<void>(), release = Completer<void>();
+      final completed = Completer<void>();
+      conn = WsConn(
+        wsBaseUrl: 'wss://unused.example',
+        autonomousEnv: 'prod',
+        machineId: 'm1',
+        accessTokenProvider: (_, _) async => 'unused',
+        onAuthFailure: (_) {},
+        onStatus: (_) {},
+        transportKind: WsTransportKind.localPlaintext,
+        allowLocalTcpFixture: true,
+        localWsUri: Uri.parse('ws://127.0.0.1:${hub.port}/api/local-ws'),
+        onEvent: (frame) async {
+          heard.add(frame);
+          if (heard.length == 1) {
+            first.complete();
+            await release.future;
+          }
+          if (heard.length == 3) completed.complete();
+        },
+      );
+      await conn!.connect();
+      await conn!.request('agents_list');
+      final select = hub.frames.firstWhere(
+        (frame) => frame['type'] == 'machine_select',
+      );
+      expect((select['payload'] as Map)['eventsProtocol'], 1);
+      final frames = [
+        {
+          'type': 'turn_ended',
+          'agentId': 'a1',
+          'dbSessionId': 's1',
+          'replay': true,
+          'payload': {'agentId': 'a1', 'text': 'old conversation'},
+        },
+        {
+          'type': 'turn_started',
+          'agentId': 'a1',
+          'dbSessionId': 's2',
+          'payload': {'agentId': 'a1'},
+        },
+      ];
+      for (var i = 0; i < frames.length; i++) {
+        hub.clients.single.add(
+          jsonEncode({
+            'type': 'session_event',
+            'payload': {
+              'generation': 'current',
+              'source': 'recaps',
+              'frame': frames[i],
+              'batch': {'id': 1, 'index': i, 'count': 2, 'replay': true},
+            },
+          }),
+        );
+      }
+      await first.future.timeout(const Duration(seconds: 5));
+      expect(heard, [frames.first]);
+      release.complete();
+      // A malformed envelope must not poison the FIFO; old-daemon frames stay supported.
+      hub.clients.single.add(
+        jsonEncode({
+          'type': 'session_event',
+          'payload': {'frame': []},
+        }),
+      );
+      final legacy = {
+        'type': 'agent_activity',
+        'payload': {'agentId': 'a1', 'activity': 'idle'},
+      };
+      hub.clients.single.add(jsonEncode(legacy));
+      await completed.future.timeout(const Duration(seconds: 5));
+      expect(heard, [...frames, legacy]);
+    },
+  );
+
+  test(
     'local transport sends no credential and skips SSO environment',
     () async {
       hub = await FakeHub.start();
@@ -486,6 +566,7 @@ void main() {
         (frame) => frame['type'] == 'machine_select',
       );
       expect((select['payload'] as Map)['localProtocolVersion'], 1);
+      expect((select['payload'] as Map)['eventsProtocol'], 1);
       expect((result['agents'] as List).first['id'], 'a1');
     },
   );

@@ -1,14 +1,20 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart' show kDoubleTapTimeout;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/terminal/terminal_session.dart';
 import 'package:harness/widgets/terminal_panel.dart';
+import 'package:harness/ws/ws_conn.dart';
 import 'package:xterm/xterm.dart';
 
 import 'swarm_screen_test.dart' show mount;
 import 'swarm_state_test.dart' show createApp;
+import 'ws_conn_test.dart' show FakeHub;
 
 class _ObservedSession extends TerminalSession {
   _ObservedSession(String id, List<TerminalBinaryFrame> input)
@@ -43,6 +49,80 @@ Future<void> _event(
 ]) => app.handleEventForTest('m', {'type': type, 'payload': payload});
 
 void main() {
+  testWidgets('negotiated session events keep the focused terminal usable', (
+    tester,
+  ) async {
+    final app = createApp();
+    app.machineStates['m']!.nodeOnline = true;
+    final input = <TerminalBinaryFrame>[];
+    final session = _ObservedSession('a0', input);
+    app.adoptSessionForTest(session);
+    await _event(app, 'turn_started', {'agentId': 'a0'});
+    final hub = (await tester.runAsync(FakeHub.start))!;
+    final delivered = (await tester.runAsync(() async => Completer<void>()))!;
+    final connection = (await tester.runAsync(
+      () async => WsConn(
+        wsBaseUrl: 'wss://unused.example',
+        autonomousEnv: 'test',
+        machineId: 'm',
+        accessTokenProvider: (_, _) async => 'unused',
+        onAuthFailure: (_) {},
+        onStatus: (_) {},
+        transportKind: WsTransportKind.localPlaintext,
+        allowLocalTcpFixture: true,
+        localWsUri: Uri.parse('ws://127.0.0.1:${hub.port}/api/local-ws'),
+        onEvent: (frame) async {
+          await app.handleEventForTest('m', frame);
+          if (frame['type'] == 'turn_ended') delivered.complete();
+        },
+      ),
+    ))!;
+    try {
+      await mount(tester, app);
+      await tester.tap(find.byType(TerminalView).first);
+      // Finish xterm's tap classification before checking keyboard focus.
+      await tester.pump(kDoubleTapTimeout);
+      final focus = FocusManager.instance.primaryFocus;
+      expect(app.agentIsProcessing('m', 'a0'), isTrue);
+      await tester.runAsync(() async {
+        await connection.connect();
+        await connection.request('agents_list');
+        hub.clients.single.add(
+          jsonEncode({
+            'type': 'session_event',
+            'payload': {
+              'generation': 'fixture',
+              'frame': {
+                'type': 'turn_ended',
+                'agentId': 'a0',
+                'payload': {'agentId': 'a0'},
+              },
+              'batch': {'id': 1, 'index': 0, 'count': 1},
+            },
+          }),
+        );
+        await delivered.future.timeout(const Duration(seconds: 5));
+      });
+      await tester.pump();
+      expect(app.agentIsProcessing('m', 'a0'), isFalse);
+      expect(FocusManager.instance.primaryFocus, same(focus));
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.pump(const Duration(milliseconds: 5));
+      expect(input, hasLength(1));
+      expect(
+        tester.widget<TerminalView>(find.byType(TerminalView).first).terminal,
+        same(session.terminal),
+      );
+    } finally {
+      await tester.runAsync(() async {
+        await connection.close();
+        await hub.close();
+      });
+      await tester.pumpWidget(const SizedBox());
+      app.dispose();
+    }
+  });
+
   for (final activity in ['heartbeats', 'dial scroll']) {
     testWidgets('$activity leave the surrounding workspace idle', (
       tester,

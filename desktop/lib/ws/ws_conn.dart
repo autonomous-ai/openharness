@@ -617,6 +617,7 @@ class WsConn {
             'machineId': machineId,
             if (observerShareId != null) 'shareId': observerShareId,
             if (isLocal) 'localProtocolVersion': localProtocolVersion,
+            if (isLocal) 'eventsProtocol': 1,
             if (isLocal && localToolClient) 'tool': true,
             if (isLocal && forceRelayReconnect) 'forceReconnect': true,
           },
@@ -865,6 +866,20 @@ class WsConn {
   }
 
   Future<void> _dispatch(Map<String, dynamic> message) async {
+    if (isLocal && message['type'] == 'session_event') {
+      final envelope = message['payload'];
+      final frame = envelope is Map ? envelope['frame'] : null;
+      if (frame is! Map<String, dynamic> ||
+          frame['type'] is! String ||
+          frame['type'] == 'session_event' ||
+          (frame['payload'] != null &&
+              frame['payload'] is! Map<String, dynamic>)) {
+        appLog.info('ws', 'SESSION_EVENT_INVALID');
+        return;
+      }
+      // The existing FIFO owns dispatch. Envelope batching/provenance never changes the app frame's replay or identity.
+      message = frame;
+    }
     final payload = (message['payload'] as Map<String, dynamic>?) ?? {};
     final requestId = payload['requestId'];
     if (requestId is String && _pending.containsKey(requestId)) {
