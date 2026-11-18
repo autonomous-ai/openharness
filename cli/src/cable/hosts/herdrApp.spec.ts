@@ -788,7 +788,7 @@ describe('the Herdr adapter', () => {
         adapter.scroll(pane('t8'), -3)
         await turn()
         expect(calls).toEqual([scrollCall('t8', -3)])
-        expect(pressed).toHaveLength(2)
+        expect(pressed).toHaveLength(3)
       })
 
       // Diego's check of 0.6.65-dev (2026-11-18): at 20 lines a key, strokes under 20 lines pressed nothing.
