@@ -1,14 +1,50 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { directorySyncSupported, hardenPrivateStateFileIfPresent, insideWindowsRoots, readPrivateStateFile, requireWindowsStateFile, secureStateDirectory, syncStateDirectory, windowsStateRoots } from './secureState.js'
+import { AtomicWriteUnconfirmed, RENAME_TRIES, atomicWriteFile, atomicWriteJson, directorySyncSupported, hardenPrivateStateFileIfPresent, insideWindowsRoots, readPrivateStateFile, requireWindowsStateFile, secureStateDirectory, syncStateDirectory, windowsStateRoots } from './secureState.js'
 
 const WINDOWS = process.platform === 'win32'
+
+// Pass-through unless a test sets a hook: the faults a disk or another process can hand the writer.
+const fault = vi.hoisted(() => ({
+  write: undefined as ((fd: number) => void) | undefined,
+  rename: undefined as ((attempt: number) => void) | undefined,
+  renames: 0,
+  link: undefined as string | undefined,
+  directorySync: undefined as string | undefined,
+}))
+const errno = (code: string) => Object.assign(new Error(`${code}: fixture`), { code })
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    // Only a write to a descriptor (the writer's temporary file), and once: a hook may run a second writer.
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      const hook = fault.write
+      if (hook && typeof args[0] === 'number') { fault.write = undefined; hook(args[0]) }
+      return actual.writeFileSync(...args)
+    },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => {
+      fault.rename?.(++fault.renames)
+      return actual.renameSync(...args)
+    },
+    linkSync: (...args: Parameters<typeof actual.linkSync>) => {
+      if (fault.link) throw Object.assign(new Error(`${fault.link}: fixture`), { code: fault.link })
+      return actual.linkSync(...args)
+    },
+    fsyncSync: (fd: number) => {
+      if (fault.directorySync && actual.fstatSync(fd).isDirectory()) {
+        throw Object.assign(new Error(`${fault.directorySync}: fixture`), { code: fault.directorySync })
+      }
+      return actual.fsyncSync(fd)
+    },
+  }
+})
 
 const dirs: string[] = []
 afterEach(() => {
   vi.restoreAllMocks()
+  Object.assign(fault, { write: undefined, rename: undefined, renames: 0, link: undefined, directorySync: undefined })
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
@@ -185,5 +221,143 @@ describe('requireWindowsStateFile', () => {
       if (configured === undefined) delete process.env.ADAPTER_DATA_DIR
       else process.env.ADAPTER_DATA_DIR = configured
     }
+  })
+})
+
+describe('atomicWriteFile', () => {
+  function folder(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'secure-write-'))
+    dirs.push(dir)
+    return dir
+  }
+
+  function onPlatform<T>(platform: NodeJS.Platform, run: () => T): T {
+    const real = Object.getOwnPropertyDescriptor(process, 'platform')!
+    Object.defineProperty(process, 'platform', { ...real, value: platform })
+    try { return run() } finally { Object.defineProperty(process, 'platform', real) }
+  }
+
+  it('writes the whole file with its mode', () => {
+    const dir = folder(), f = join(dir, 'f')
+    expect(atomicWriteFile(f, '#!/bin/sh\n', 'cache', { mode: 0o700 })).toBe(true)
+    expect(readFileSync(f, 'utf8')).toBe('#!/bin/sh\n')
+    expect(readdirSync(dir)).toEqual(['f'])
+    const g = join(folder(), 'g')
+    expect(atomicWriteFile(g, new TextEncoder().encode('bytes'), 'trust')).toBe(true)
+    expect(readFileSync(g, 'utf8')).toBe('bytes')
+    if (!WINDOWS) {
+      expect(modeOf(f)).toBe(0o700)
+      expect(modeOf(g)).toBe(0o600)
+    }
+  })
+
+  it('atomicWriteJson writes JSON.stringify(value, null, 2)', () => {
+    const f = join(folder(), 'f')
+    const value = { rows: [1, 'two'], none: null }
+    expect(atomicWriteJson(f, value, 'trust')).toBe(true)
+    expect(readFileSync(f, 'utf8')).toBe(JSON.stringify(value, null, 2))
+  })
+
+  it('a write that fails part way leaves the old file whole and no temporary file', () => {
+    const dir = folder(), f = join(dir, 'f')
+    writeFileSync(f, 'old')
+    fault.write = fd => { writeSync(fd, 'ne'); throw errno('ENOSPC') }
+    expect(() => atomicWriteFile(f, 'new', 'trust')).toThrow(/ENOSPC/)
+    expect(readFileSync(f, 'utf8')).toBe('old')
+    expect(readdirSync(dir)).toEqual(['f'])
+  })
+
+  // Windows cannot flush a folder (syncStateDirectory skips it), so a rename there is never left unconfirmed.
+  it.skipIf(WINDOWS)('a rename the folder does not confirm is AtomicWriteUnconfirmed', () => {
+    const dir = folder(), f = join(dir, 'f')
+    writeFileSync(f, 'old')
+    fault.directorySync = 'EIO'
+    let failure: unknown
+    try { atomicWriteFile(f, 'new', 'trust') } catch (error) { failure = error }
+    expect(failure).toBeInstanceOf(AtomicWriteUnconfirmed)
+    expect((failure as Error).cause).toMatchObject({ code: 'EIO' })
+    expect(readFileSync(f, 'utf8')).toBe('new')
+    expect(readdirSync(dir)).toEqual(['f'])
+  })
+
+  it('exclusive: one creator wins and the other reads the winner\'s', () => {
+    const dir = folder(), f = join(dir, 'f')
+    expect(atomicWriteFile(f, 'first', 'trust', { exclusive: true })).toBe(true)
+    expect(atomicWriteFile(f, 'second', 'trust', { exclusive: true })).toBe(false)
+    expect(readFileSync(f, 'utf8')).toBe('first')
+    expect(readdirSync(dir)).toEqual(['f'])
+  })
+
+  it('exclusive: the file is never there half-written', () => {
+    const dir = folder(), f = join(dir, 'f')
+    let seen: boolean | undefined, second: boolean | undefined
+    fault.write = () => {
+      seen = existsSync(f)
+      second = atomicWriteFile(f, 'second', 'trust', { exclusive: true })
+    }
+    expect(atomicWriteFile(f, 'first', 'trust', { exclusive: true })).toBe(false)
+    expect(seen).toBe(false)
+    expect(second).toBe(true)
+    expect(readFileSync(f, 'utf8')).toBe('second')
+    expect(readdirSync(dir)).toEqual(['f'])
+  })
+
+  it.each(['EPERM', 'ENOTSUP', 'EXDEV', 'ENOSYS'])('exclusive: where link is refused (%s) it copies, still exclusive', code => {
+    const dir = folder(), f = join(dir, 'f')
+    fault.link = code
+    expect(atomicWriteFile(f, 'first', 'trust', { exclusive: true })).toBe(true)
+    expect(readFileSync(f, 'utf8')).toBe('first')
+    if (!WINDOWS) expect(modeOf(f)).toBe(0o600)
+    expect(atomicWriteFile(f, 'second', 'trust', { exclusive: true })).toBe(false)
+    expect(readFileSync(f, 'utf8')).toBe('first')
+    expect(readdirSync(dir)).toEqual(['f'])
+  })
+
+  it.skipIf(WINDOWS)('trust refuses a target another account could write; cache replaces it', () => {
+    const f = join(folder(), 'f')
+    writeFileSync(f, 'old')
+    chmodSync(f, 0o664)
+    expect(() => atomicWriteFile(f, 'new', 'trust')).toThrow(/group\/world writable/)
+    expect(readFileSync(f, 'utf8')).toBe('old')
+    expect(atomicWriteFile(f, 'new', 'cache')).toBe(true)
+    expect(readFileSync(f, 'utf8')).toBe('new')
+    expect(modeOf(f)).toBe(0o600)
+  })
+
+  // Windows refuses a rename over a file another process holds open (a scanner, a reader), for a moment.
+  it.each(['EPERM', 'EACCES', 'EBUSY'])('on Windows a rename refused for a moment (%s) is tried again', code => {
+    const f = join(folder(), 'f')
+    writeFileSync(f, 'old')
+    fault.rename = attempt => { if (attempt <= 2) throw errno(code) }
+    expect(onPlatform('win32', () => atomicWriteFile(f, 'new', 'cache'))).toBe(true)
+    expect(fault.renames).toBe(3)
+    expect(readFileSync(f, 'utf8')).toBe('new')
+  })
+
+  it('on Windows it gives up after RENAME_TRIES', () => {
+    const dir = folder(), f = join(dir, 'f')
+    writeFileSync(f, 'old')
+    fault.rename = () => { throw errno('EBUSY') }
+    expect(() => onPlatform('win32', () => atomicWriteFile(f, 'new', 'cache'))).toThrow(/EBUSY/)
+    expect(fault.renames).toBe(RENAME_TRIES)
+    expect(readFileSync(f, 'utf8')).toBe('old')
+    expect(readdirSync(dir)).toEqual(['f'])
+  })
+
+  it.each([['linux', 'EPERM'], ['win32', 'ENOENT']] as const)('on %s a rename refused with %s is not retried', (platform, code) => {
+    const f = join(folder(), 'f')
+    fault.rename = () => { throw errno(code) }
+    expect(() => onPlatform(platform, () => atomicWriteFile(f, 'new', 'cache'))).toThrow(code)
+    expect(fault.renames).toBe(1)
+  })
+
+  it.runIf(WINDOWS)('replaces an existing file for real, and loses an exclusive create for real', () => {
+    const dir = folder(), f = join(dir, 'f')
+    writeFileSync(f, 'old')
+    expect(atomicWriteFile(f, 'new', 'trust')).toBe(true)
+    expect(readFileSync(f, 'utf8')).toBe('new')
+    expect(atomicWriteFile(f, 'other', 'trust', { exclusive: true })).toBe(false)
+    expect(readFileSync(f, 'utf8')).toBe('new')
+    expect(readdirSync(dir)).toEqual(['f'])
   })
 })
