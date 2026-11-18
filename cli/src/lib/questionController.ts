@@ -67,6 +67,29 @@ export function matchRow(rows: QuestionRow[], answer: string): QuestionRow | nul
 }
 
 /**
+ * Read a multi-choice answer as the rows whose labels spell it, comma by comma. Senders join the chosen labels
+ * with ", " and a label may hold a comma itself, so the answer is split only where every piece is a whole label
+ * (exactly, as matchRow's first test). Of several readings the fewest pieces wins; on a tie, the longest first
+ * piece, then the same rule on the rest. Null when no reading spells the whole answer.
+ */
+export function partitionLabels(rows: QuestionRow[], answer: string): QuestionRow[] | null {
+  const parts = answer.split(',')
+  // best[i]: the fewest rows that spell parts[i..]; parts.length spells nothing.
+  const best = Array<QuestionRow[] | null>(parts.length + 1).fill(null)
+  best[parts.length] = []
+  for (let i = parts.length - 1; i >= 0; i--) {
+    // Longest piece first, so a tie keeps it.
+    for (let j = parts.length; j > i; j--) {
+      const piece = norm(parts.slice(i, j).join(','))
+      const row = piece ? rows.find((r) => norm(r.label) === piece) : undefined
+      const rest = best[j], current = best[i]
+      if (row && rest && (!current || rest.length + 1 < current.length)) best[i] = [row, ...rest]
+    }
+  }
+  return best[0]
+}
+
+/**
  * Pick the answer for the question the dialog is currently showing: the entry keyed by its own text.
  *
  * `positional` also takes the next unused entry when none names it. Only for a dialog the answer's
@@ -365,13 +388,15 @@ export class AskQuestionController {
       }
 
       if (view.multi) {
-        // Device joins the selected labels with ", " (q_done_tap).
-        const labels = reviewed ? reviewed.selectedLabels?.[picked.key] ?? []
-          : picked.value.split(',').map((s) => s.trim()).filter(Boolean)
+        // A reviewed answer lists its labels. An unreviewed one is one string of labels joined with ", " (the hn TUI,
+        // the dial's `answer`, the device `question.answer` API), read by the labels on screen because a label may
+        // hold a comma; only an answer they cannot spell is cut on every comma and matched loosely, piece by piece.
+        const labels = reviewed?.selectedLabels?.[picked.key] ?? []
         if (reviewed && (!labels.length || labels.some(label => !view.rows.some(row => row.label === label)))) return failed('That answer matches no option.')
         // Core chooses the exact approved set; the engine owns toggling and advancing its UI.
         const rows = reviewed ? view.rows.filter(row => row.checked !== labels.includes(row.label))
-          : labels.map(label => matchRow(view.rows, label)).filter((row): row is QuestionRow => !!row && !row.checked)
+          : (partitionLabels(view.rows, picked.value) ?? picked.value.split(',').map(label => matchRow(view.rows, label)))
+            .filter((row): row is QuestionRow => !!row && !row.checked)
         const freeText = !reviewed && !rows.length && view.typeRow ? { row: view.typeRow, text: picked.value } : undefined
         const toggled = notEntered(await apply({ kind: 'multiple', rows, ...(freeText ? { freeText } : {}) }))
         if (toggled) return toggled
