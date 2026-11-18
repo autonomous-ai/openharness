@@ -45,7 +45,7 @@ class Agent {
     DateTime? since,
     this.turnStarted,
     this.turnSeconds,
-  })  : steps = steps ?? <TurnStep>[],
+  })  : steps = [...?steps], // its own list: the model adds and drops steps, whatever list it was made with
         since = since ?? DateTime.fromMillisecondsSinceEpoch(0);
 
   final String id;
@@ -204,10 +204,14 @@ enum TalkPhase { off, listening, sending, closed }
 
 /// The toast at the bar's foot: a line, and optionally the agent a tap on it opens in Attention.
 class Toast {
-  const Toast(this.text, {required this.until, this.agentId});
+  const Toast(this.text, {required this.until, this.agentId, this.kind});
   final String text;
   final DateTime until;
   final String? agentId;
+
+  /// With [agentId]: why it needs the person (its colour, and the Attention a tap opens). It holds only while the agent
+  /// still is what it announced.
+  final AttnKind? kind;
 }
 
 // ---- what the daemon sends (the cable decodes frames into these; the demo makes them) ----
