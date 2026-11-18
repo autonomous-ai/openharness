@@ -8,7 +8,7 @@ import { type fileStamp, within } from '../../lib/sessionSearch/externals/suppor
 import type { ExternalEngine, RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { roundDrawable } from '../roundGlyphs.js'
 import type { HostAdapter, Pane } from './adapter.js'
-import { CODEX_THREAD, type CodexQueue, type CodexQueueFailure } from './codexQueue.js'
+import { CODEX_THREAD, type CodexQueue, type CodexQueueFailure, type CodexRan } from './codexQueue.js'
 import { APP_BUNDLES, detectApp, detectHost, hostDisplayName, UNKNOWN_APP } from './hostDetect.js'
 import type { Delivery } from './inbox.js'
 import { bundleOf, type OpenTarget } from './open.js'
@@ -131,10 +131,11 @@ export interface ObservedActions {
   /** The Codex home Harness reads (env.CODEX_HOME): `codex queue` loads its config, so a hook's path never chooses it. */
   codexHome: string
   /** The route (`codex`, `mod`, or the adapter that typed, said by its fixed id) or the refusal, the adapter that
-   *  refused in its own sentence, and a failed queue's reason. Fixed words or an adapter only: a string from a hook, a
-   *  pane's id, cannot reach the log line. */
+   *  refused in its own sentence, and a failed queue's reason and which `codex` ran. Fixed words or an adapter only: a
+   *  string from a hook, a pane's id, a binary's path, cannot reach the log line. */
   count(what: 'mod' | 'waiting' | 'busy' | 'pending' | 'too-long' | 'no-answer' | 'codex' | 'codex-timeout'
-    | `codex-failed (${CodexQueueFailure})` | HostAdapter | { refused: HostAdapter }): void
+    | 'codex-failed (refused)' | `codex-failed (${Exclude<CodexQueueFailure, 'refused'>} · ${CodexRan})`
+    | HostAdapter | { refused: HostAdapter }): void
 }
 
 /** What a count says in the log: a fixed word, the adapter that typed by its id, or `refused (<its id>)`. */
@@ -287,7 +288,10 @@ export class ObservedSource implements HostSource {
    * (docs/specs/2026-11-15-device-codex.md, the spike). Claude Code's go to its mod in every state, as a Harness agent's
    * are (lib/sessionInput.ts), whose `$.prompt.submit` types nothing and starts them once the turn is over. Else, and
    * after a queue that definitely failed, they are typed into the first of its panes whose app types (a herdr pane, an
-   * Orca terminal), only at its prompt.
+   * Orca terminal), only at its prompt. A queue whose codex failed, for a session with no such pane, says what helps: a
+   * session in the ChatGPT app is told `Update ChatGPT, then try again.` (an older app's codex has no queue), another
+   * `Codex could not take it. Try again.`; "did not answer" names nothing a person can do
+   * (docs/plans/2026-11-18-dial-chatgpt-pick-and-voice-design.md, cause 2).
    */
   async send(agent: HostAgent, text: string): Promise<SendResult> {
     const e = this.entries.get(agent.id)
@@ -320,7 +324,11 @@ export class ObservedSource implements HostSource {
         actions.count('codex-timeout')
         return { ok: false, reason: `${name} did not answer.` }
       }
-      actions.count(`codex-failed (${queued.reason})`)
+      if (queued.reason === 'refused') actions.count('codex-failed (refused)')
+      else {
+        actions.count(`codex-failed (${queued.reason} · ${queued.ran})`)
+        if (!typer) return refuse('no-answer', this.inCodexApp(e) ? 'Update ChatGPT, then try again.' : 'Codex could not take it. Try again.')
+      }
     }
     if (this.modReady(e, actions)) {
       const delivery = await actions.toMod(e.agent.sessionId!, text)
