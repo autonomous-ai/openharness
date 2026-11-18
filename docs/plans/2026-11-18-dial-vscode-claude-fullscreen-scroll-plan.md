@@ -144,8 +144,6 @@ parse.
    as no `tui`, at once, and no thread waits on it. Task 2 (`a FIFO`, `/dev/zero`, `one byte past`).
 2. **A window's stream is not ready when the kind changes** (page lines wait, plain lines come): neither is merged
    into the other and neither is dropped. Task 1 (`never merged`).
-3. **A frame whose travel is not finite or is enormous** (`dy: 1e999` parses to `Infinity`): no page line is written
-   without end. Task 1 (`a count of %s writes nothing`, `page lines that wait are held to 100`).
 4. **A dial sends `down` after `down` faster than the reads answer:** one guard in flight, and only the newest stroke
    is written. Task 3 (`joins it`), Task 7 (`a newer down`).
 5. **The agent's session ends mid-stroke, and its hook tells the devices:** nothing more of the stroke is written, so
