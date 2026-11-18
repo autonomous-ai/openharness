@@ -1,6 +1,0 @@
-lib/authSession.ts:76: '.harness'
-lib/localSocket.ts:59: '.harness'
-lib/claudeHomes.ts:45: '.harness'
-lib/claudeHomes.ts:112: '.harness'
-lib/claudeHomes.ts:150: '.harness'
-engines/kit/downloadMarker.ts:37: '.harness'
