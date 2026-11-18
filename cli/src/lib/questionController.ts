@@ -11,6 +11,9 @@ function multiSubmitKey(engine: AgentEngine): string { return engine === 'devin'
 const STEP_MS = 350          // let the TUI repaint between keystrokes
 const TEXT_MS = 250
 const MAX_STEPS = 14         // hard bound on the drive loop (questions × keys), never spin on a stuck pane
+// The longest answer value a dialog asks for: its longest options joined, with headroom (a reviewed text answer is
+// capped at 1200 bytes). Every sender's answer reaches the core's own loop through answer(), so it is bounded there.
+const ANSWER_BYTES_MAX = 4096
 const CAPTURE_LINES = 60
 
 function norm(value: string): string {
@@ -227,6 +230,14 @@ export class AskQuestionController {
     if (!sessionId || !answers || Object.keys(answers).length === 0) {
       console.warn(`[question] ignoring answer with no session/answers (req=${requestId})`)
       return failed('The answer named no agent or carried no choice.')
+    }
+    // A dialog asks at most 4 questions in Claude Code and 3 in Codex; opencode and Kilo set no limit, but the drive keys
+    // one question a step, so more than MAX_STEPS answers could never all go in.
+    const values = Object.values(answers)
+    const longest = values.reduce((max: number, value) => typeof value === 'string' ? Math.max(max, Buffer.byteLength(value, 'utf8')) : max, 0)
+    if (values.length > MAX_STEPS || longest > ANSWER_BYTES_MAX) {
+      console.warn(`[question] answer refused · ${values.length} answers, longest ${longest} bytes`)
+      return failed('The answer is too long. Answer it in the terminal.')
     }
     const session = this.deps.getSession(sessionId)
     const terminalTarget = session?.agentId || session?.sessionId
