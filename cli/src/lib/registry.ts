@@ -1227,6 +1227,17 @@ function writeBoot(bootId: string): void {
   } catch { /* registry load will remain conservative on the next restart */ }
 }
 
+/**
+ * What a log says of a failed admission: the error's kind and code, each only as one short token, never its message or
+ * other free text (it can quote a path). A retried create said only "failed", and nothing told why its first pane was
+ * not admitted (CI, cli/e2e/scale.e2e.ts, 2026-11-19).
+ */
+function admissionError(error: unknown): string {
+  const token = (value: unknown) => typeof value === 'string' && /^[A-Za-z0-9_.-]{1,40}$/.test(value) ? value : null
+  const code = token((error as { code?: unknown } | null)?.code)
+  return (error instanceof Error ? token(error.name) ?? 'Error' : typeof error) + (code ? ` ${code}` : '')
+}
+
 class Registry {
   /** agentId → record. The store. */
   private agents = new Map<string, RegisteredSession>()
@@ -1953,11 +1964,7 @@ class Registry {
       if (entry.firstTask) firstTaskKept(agentId)
       return structuredClone(committed)
     }).catch(error => {
-      // The error's kind and code, never its message (it can quote a path): a retried create said only "failed", and
-      // nothing told why its first pane was not admitted (CI, cli/e2e/scale.e2e.ts, 2026-11-19).
-      const code = (error as { code?: unknown } | null)?.code
-      console.error(`[registry] pending admission failed · ${error instanceof Error ? error.name : typeof error}`
-        + (typeof code === 'string' ? ` ${code}` : ''))
+      console.error(`[registry] pending admission failed · ${admissionError(error)}`)
       // Read as a taken route, a storage refusal opened and closed three panes and answered "tmux pane could not
       // be registered" (e2e/diskfull.e2e.ts, 2026-11-17). Its caller answers it by name instead.
       if (error instanceof RegistryPersistenceUnavailable || error instanceof AtomicWriteUnconfirmed) throw error
@@ -1995,7 +2002,7 @@ class Registry {
       if (!committed) return null
       this.terminalAvailableAgents.add(entry.agentId)
       return structuredClone(committed)
-    }).catch(() => { console.error('[registry] resume admission failed'); return null })
+    }).catch(error => { console.error(`[registry] resume admission failed · ${admissionError(error)}`); return null })
   }
 
   /** Readiness, its native process and the launch words are one durable authority change. */
