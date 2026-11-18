@@ -62,7 +62,9 @@ export function rewriteInside(plan: MovePlan, dataDir: string, journal: Journal,
   const cli = staged('cli')
   if (cli) rewrite(join(cli, 'node-migration.json'), move)
   const dsh = staged('dsh')
-  if (dsh) rewrite(join(dsh, 'installed.json'), (text) => markPending(move(text), !!runtime))
+  // Every name of the table is in the plan, there or not (plan.ts): only a runtime there moves Harness's Python.
+  const runtimeMoved = plan.entries.some((entry) => entry.name === 'runtime' && entry.present)
+  if (dsh) rewrite(join(dsh, 'installed.json'), (text) => markPending(move(text), runtimeMoved))
   const profiles = staged('claude-profiles')
   if (profiles) {
     for (const profile of entriesOf(profiles, io)) {
