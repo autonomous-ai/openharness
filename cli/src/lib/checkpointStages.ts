@@ -231,7 +231,7 @@ export class CheckpointStages {
           current()
           if (publication) throw new Error('checkpoint publication busy')
           const work = (async () => {
-            if (ownerWrite || !verified || (owner.writer !== null && !owner.settled)) throw new Error('checkpoint stage unconfirmed')
+            if (ownerWrite || verification || !verified || (owner.writer !== null && !owner.settled)) throw new Error('checkpoint stage unconfirmed')
             if (dirname(destination) !== dirname(this.directory) || !historyName(basename(destination))) throw new Error('checkpoint destination refused')
             await writeOwner({ ...owner, destination: basename(destination) })
             current()
@@ -242,6 +242,7 @@ export class CheckpointStages {
             allowed()
             current()
             renameSync(path, destination)
+            verified = undefined
           })()
           // Retain the destination through actual descriptor close, not just its journal write or bounded reply.
           publication = work
