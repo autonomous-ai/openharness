@@ -196,6 +196,17 @@ function fitsFrame(m: unknown): boolean {
   return Buffer.byteLength(JSON.stringify(m), 'utf8') <= CABLE_MAX_PAYLOAD - 256 && jsonTokens(m) <= SWARM_TOKENS_MAX
 }
 
+/** An escaped backslash, matched so the text after it is not read as an escape, or half an emoji as JSON escapes it. */
+const JSON_LONE_SURROGATE = /\\\\|\\ud[89a-f][0-9a-f]{2}/g
+
+/** A frame's JSON as the dial can parse it. JSON writes half an emoji as the escape \ud83d, and the dial's parser
+ *  refuses the whole frame for it: an agent named with one never got its question onto the dial. It is written '?', as
+ *  the dial writes a byte it cannot read, in keys and values alike. */
+function dialJson(m: unknown): string {
+  const json = JSON.stringify(m)
+  return json.includes('\\ud') ? json.replace(JSON_LONE_SURROGATE, (escape) => escape === '\\\\' ? escape : '?') : json
+}
+
 function clipUtf8(text: string, max: number): string {
   const flat = text.replace(/[\r\n\t]+/g, ' ')
   if (Buffer.byteLength(flat, 'utf8') <= max) return flat
@@ -210,8 +221,8 @@ function clipUtf8(text: string, max: number): string {
  * send, every question it carried with it (2026-11-18). It is cut sooner where its JSON passes twice `max`, a field of
  * quotes: JSON writes a control character six bytes wide, and eight rows of them passed the frame cap. Folding them
  * instead changed the words of a question the dial had filed with them, and a read question came back unread. Half an
- * emoji is written '?', as the dial writes a byte it cannot read: JSON escapes it, and the dial's parser refuses the
- * whole frame for it.
+ * emoji is written '?' here as `send` writes it for the dial: counted as the three bytes UTF-8 gives it, the cut fell
+ * short of the dial's own and a read question came back unread.
  */
 function dialText(text: string, max: number): string {
   let out = ''
@@ -235,7 +246,7 @@ function dialText(text: string, max: number): string {
 
 /** Whether the dial keeps a drawer row of this agent: it skips an id of ID_MAX (48 B) or more. One with a control
  *  character or half an emoji is left out too: JSON writes the first six bytes wide, past the room eight rows have,
- *  and the dial's parser refuses the whole frame for the second. No agent's id holds either. */
+ *  and the dial gets the second as '?', an id no agent has. No agent's id holds either. */
 function dialKeepsId(agentId: string): boolean {
   return Buffer.byteLength(agentId, 'utf8') < 48 && !/[\u0000-\u001f\ud800-\udfff]/u.test(agentId)
 }
@@ -2590,7 +2601,7 @@ export class CableSession {
     let frame: Uint8Array
     try {
       const framed = this.seqOn ? { ...msg, seq: this.seq } : msg
-      frame = encodeCableFrame(CableType.Json, Buffer.from(JSON.stringify(framed), 'utf8'))
+      frame = encodeCableFrame(CableType.Json, Buffer.from(dialJson(framed), 'utf8'))
     } catch (err) {
       this.log(`cable: dropped a ${String(msg.t)} frame (${(err as Error).message})`)
       return false
@@ -2881,8 +2892,8 @@ export class CableSession {
   /** Whether a dial that lost its questions is asked this one again. A real question whose turn moved on without a close
    *  is not. A notice or a wait is: its owner closes it, and it stays on the dial after its turn ends. One whose id no
    *  drawer row carries is not either (dialKeepsId), and it was sent again for nothing at each drawer: the dial drops an
-   *  id of 48 B or more and refuses a frame with half an emoji, and a control character, six bytes of JSON, is left out
-   *  here. */
+   *  id of 48 B or more and gets half an emoji as '?', no agent's id, and a control character, six bytes of JSON, is
+   *  left out here. */
   private owed(agentId: string, id: string): boolean {
     return dialKeepsId(agentId) && (id.startsWith(SHOWN_ONLY_PREFIX) || this.liveTurns.get(agentId) === 'question')
   }
