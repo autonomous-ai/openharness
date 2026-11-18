@@ -4785,7 +4785,7 @@ describe('a machine list lands a dial that holds no agent (docs/plans/2026-11-18
     return c
   }
   /** A session that opens a new loopback each time its port is reopened, as a dial unplugged and plugged in again. */
-  function replugging(snapshot: () => Snapshot) {
+  function replugging(snapshot: () => Snapshot | Promise<Snapshot>) {
     const ports: LoopbackPort[] = []
     const session = new CableSession(makeHost({ listAgentSnapshot: async () => snapshot() }), tmpLog(), async (onData, onClosed) => {
       const next = new LoopbackPort(onData, onClosed)
@@ -4935,6 +4935,42 @@ describe('a machine list lands a dial that holds no agent (docs/plans/2026-11-18
         expect(focuses(offRing.port)).toEqual([{ t: 'focus', agentId: 'zz' }])
       } finally { await offRing.session.stop() }
     } finally { vi.useRealTimers() }
+  })
+
+  // A follow writes its record before its push and its focus after it. The unplug in between ends it with no focus sent,
+  // and the dial comes back holding nothing: no follow is in flight any more, and nothing else will land it.
+  it('a follow the unplug cut short leaves none in flight: the next attach lands on the first agent', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    let rows = RING
+    let reads = 0
+    let gate: Promise<void> | undefined
+    const { session, ports } = replugging(async () => {
+      reads++
+      await gate
+      return machine(rows)
+    })
+    try {
+      await vi.waitFor(() => expect(ports).toHaveLength(1))
+      await greet(ports[0])
+      expect(focuses(ports[0])).toEqual([{ t: 'focus', agentId: 'o1' }])
+      // The follow's push waits on its read while the dial is unplugged.
+      let release!: () => void
+      gate = new Promise((resolve) => { release = resolve })
+      const before = reads
+      const following = session.followApp('mac-local', 'h1')
+      await vi.waitFor(() => expect(reads).toBeGreaterThan(before))
+      await ports[0].close('unplugged')
+      rows = OTHER
+      gate = undefined
+      release()
+      await following
+      expect(focuses(ports[0])).toEqual([{ t: 'focus', agentId: 'o1' }])
+      // The tick reopens a port 2 s after it last opened one.
+      vi.advanceTimersByTime(2_000)
+      await vi.waitFor(() => expect(ports).toHaveLength(2), NEXT_TICKS)
+      await greet(ports[1])
+      expect(focuses(ports[1])).toEqual([{ t: 'focus', agentId: 'x1' }])
+    } finally { await session.stop(); vi.useRealTimers() }
   })
 
   it('a window\'s tab with no record sends no focus', async () => {
