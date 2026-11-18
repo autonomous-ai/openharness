@@ -7,9 +7,9 @@
  * unusable credential · 4 host not allowed for this connector. On any failure nothing is written to
  * stdout, so a following `| jq` sees empty input instead of an error body it could mistake for a result.
  */
-import { readFileSync, realpathSync, statSync } from 'node:fs'
+import { closeSync, constants, fstatSync, openSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { homedir, userInfo } from 'node:os'
-import platformPath, { basename, extname, type PlatformPath } from 'node:path'
+import platformPath, { type PlatformPath } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { harnessRoots } from '../../config/harnessHome.js'
 import { bearer, connectorsDir, ConnectorError, type Store, type Token } from './store.js'
@@ -121,29 +121,44 @@ function accountHome(): string | undefined {
   try { return userInfo().homedir } catch { return undefined }
 }
 
-/** An `@path` upload: plain media or a document, never from where credentials or configs live. */
-export function uploadPath(raw: string, env: NodeJS.ProcessEnv = process.env): string {
-  const path = expandHome(raw, env.HOME || homedir())
+/**
+ * An `@path` upload: plain media or a document, never from where credentials or configs live. The bytes are read from
+ * the descriptor that was checked, so a path swapped for another file between the check and the read sends nothing of
+ * that file. A writer that renames the forbidden folders themselves while this runs is not kept out: it could copy the
+ * file out of them anyway.
+ */
+export function uploadFile(raw: string, env: NodeJS.ProcessEnv = process.env): { name: string, content: Buffer } {
+  const refused = (): CallFailure => new CallFailure(2, `refusing to upload ${raw}: not a media file the helper may send`)
+  const media = (path: string): void => {
+    if (!UPLOAD_SUFFIXES.includes(platformPath.extname(path).toLowerCase())) throw new CallFailure(2, `refusing to upload ${raw}: only ${UPLOAD_SUFFIXES.join(', ')} files`)
+  }
+  const read = <T>(step: () => T): T => { try { return step() } catch { throw new CallFailure(2, `cannot read upload ${raw}`) } }
+  const given = expandHome(raw, env.HOME || homedir())
   // Windows opens a share to resolve a path through it. The resolved path is checked again below: a link may lead there.
-  if (unc(path)) throw new CallFailure(2, `refusing to upload ${raw}: not a media file the helper may send`)
-  // Links followed, so the walk climbs the folders that hold the file, not a link's. The file system's own answer
-  // (`native`) is where it found the file: on Windows a mapped drive resolves to its share.
-  let real: string
-  try { real = realpathSync.native(path) } catch { throw new CallFailure(2, `cannot read upload ${raw}`) }
-  // Refused before the walk, which reads each folder above the file: nothing on a share is read.
-  if (unc(real)) throw new CallFailure(2, `refusing to upload ${raw}: not a media file the helper may send`)
-  const account = accountHome()
-  const verdict = walk(real, identity, identities(forbiddenDirs(env, [homedir(), account])), identities([tempDir(account)]))
-  if (verdict === 'unknown') throw new CallFailure(2, `cannot check upload ${raw}`)
-  const stat = statSync(real)
-  // A hard link's other names, which may be inside a forbidden folder, are found by no path the fence can check.
-  if (verdict === 'fenced' || !stat.isFile() || stat.nlink > 1) {
-    throw new CallFailure(2, `refusing to upload ${raw}: not a media file the helper may send`)
-  }
-  if (!UPLOAD_SUFFIXES.includes(extname(real).toLowerCase()) || !UPLOAD_SUFFIXES.includes(extname(path).toLowerCase())) {
-    throw new CallFailure(2, `refusing to upload ${raw}: only ${UPLOAD_SUFFIXES.join(', ')} files`)
-  }
-  return real
+  if (unc(given)) throw refused()
+  // Nothing is opened that is not named as media or a document.
+  media(given)
+  // An open for reading waits for a FIFO's writer; O_NONBLOCK returns at once. Windows has no such flag.
+  const fd = read(() => openSync(given, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0)))
+  try {
+    const open = read(() => fstatSync(fd, { bigint: true }))
+    // A hard link's other names, which may be inside a forbidden folder, are found by no path the fence can check.
+    if (!open.isFile() || open.nlink > 1n) throw refused()
+    // Links followed, so the walk climbs the folders that hold the file, not a link's. The file system's own answer
+    // (`native`) is where it found the file: on Windows a mapped drive resolves to its share.
+    const real = read(() => realpathSync.native(given))
+    // Refused before the walk, which reads each folder above the file: nothing on a share is read.
+    if (unc(real)) throw refused()
+    media(real)
+    // The path names another file than the open one: it moved after the open, and the walk would check the wrong one.
+    const named = identity(real)
+    if (!named || named.dev !== open.dev || named.ino !== open.ino) throw refused()
+    const account = accountHome()
+    const verdict = walk(real, identity, identities(forbiddenDirs(env, [homedir(), account])), identities([tempDir(account)]))
+    if (verdict === 'unknown') throw new CallFailure(2, `cannot check upload ${raw}`)
+    if (verdict === 'fenced') throw refused()
+    return { name: platformPath.basename(real), content: read(() => readFileSync(fd)) }
+  } finally { closeSync(fd) }
 }
 
 interface Options { query: [string, string][], json: string | null, data: [string, string][], form: [string, string][], header: [string, string][] }
@@ -178,9 +193,9 @@ function multipart(fields: [string, string][], env: NodeJS.ProcessEnv): { body: 
     let head = `--${boundary}\r\nContent-Disposition: form-data; name="${key}"`
     let content: Buffer
     if (value.startsWith('@')) {
-      const path = uploadPath(value.slice(1), env)
-      content = readFileSync(path)
-      head += `; filename="${basename(path)}"\r\nContent-Type: application/octet-stream`
+      const file = uploadFile(value.slice(1), env)
+      content = file.content
+      head += `; filename="${file.name}"\r\nContent-Type: application/octet-stream`
     } else content = Buffer.from(value)
     chunks.push(Buffer.from(head + '\r\n\r\n'), content, Buffer.from('\r\n'))
   }
