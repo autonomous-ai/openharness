@@ -7,7 +7,7 @@ local clients (Desktop, the TUI), and no host adapter under `cli/src/cable/hosts
 This item makes a stroke on the dial scroll Herdr's view of the shown agent's terminal while Herdr is in front. It is
 built the way the VS Code branch (`feat/dial-vscode-extension`, `docs/plans/2026-11-17-dial-vscode-extension-design.md`
 §4) scrolls a VS Code terminal, with the routing made general: an adapter that can scroll says so through
-`HostAdapter.scroll`, and the VS Code branch moves its own terminal onto it (the PM tells that branch).
+`HostAdapter.scroll`, and VS Code's terminal moves onto it at this branch's rebase (below).
 
 ## What Herdr offers (Phase 1, 2026-11-17)
 
@@ -66,7 +66,7 @@ built the way the VS Code branch (`feat/dial-vscode-extension`, `docs/plans/2026
 
 ### 1. The shown agent's id (shared with the VS Code branch, same names and signatures)
 
-Copied from the VS Code branch so that both rebase cleanly over each other:
+On `main` from the VS Code branch (#4427), which merged first; this branch uses them as they are:
 
 - `CableHost.dialShows?(dial, agent, agentId: string | null)` in `cableSession.ts`; `CableSession.reportShown` keeps
   `shownId` beside `shown` and calls the host when either changes ("a move between two agents of one name and app
@@ -91,8 +91,7 @@ onScreen?(pane: Pane): Promise<boolean>
 scroll?(pane: Pane, lines: number): void
 ```
 
-VS Code (when it moves onto these) needs no `onScreen`: its extension already drops a line for a terminal that is not
-the active one.
+VS Code needs no `onScreen`: its extension already drops a line for a terminal that is not the active one.
 
 ### 3. The Herdr adapter's scroll (herdrApp.ts)
 
@@ -193,17 +192,13 @@ let stroke:
   the cable dial's shown agent, as on the VS Code branch. That is intended: one person, one desk, one route at a time.
 - Everything stays in the devices process. Nothing in `src/core/` changes (cli/AGENTS.md rule 7).
 
-**Merge order with the VS Code branch (PM, 2026-11-17: VS Code merges first, this branch rebases).** `routeScroll` and
-`stroke` keep their names; `scrollTerminal()` becomes the general `scrollTarget()`, and `stroke`'s VS Code `terminal`
-becomes `{ adapter, pane }`. On the rebase there is one route only:
-- if VS Code landed with its adapter on `HostAdapter.scroll` (the PM asks that branch to), this branch only adds the
-  Herdr adapter's members and `hcSource.paneOf`;
-- if it landed with its own route (`scrollTerminal` → `vscode.scroll`), the rebase moves VS Code onto
-  `canScroll`/`scroll` in `createVscodeAdapter` (`canScroll`: VS Code in front and `terminalOf(termPid(pane.id))`;
-  `scroll`: `terminals.scroll(terminal, n)`) and deletes its own route, so no second way stays. Its e2e
-  (`dialVscode.e2e.ts`) and specs must still pass unchanged.
-- if VS Code has not merged when this branch is ready, this branch merges first with the shared parts above, and the
-  PM tells the VS Code branch to rebase onto `HostAdapter.scroll`.
+**Merge order with the VS Code branch (PM, 2026-11-17: VS Code merges first, this branch rebases).** VS Code merged
+first (#4427) with a route of its own (`scrollTerminal` → `vscode.scroll`). The rebase (2026-11-18) moved its terminal
+onto `canScroll`/`scroll` in `createVscodeAdapter` (`canScroll`: VS Code in front and a window holding the `term:<pid>`
+pane's terminal, `main`'s conditions; `scroll`: `terminals.scroll(terminal, n)`; no `onScreen`) and deleted
+`scrollTerminal` with its `stroke` and `routeScroll`: one `routeScroll`/`stroke` picks VS Code's terminal or Herdr's at a
+stroke's `down`, else `dial_scroll`. The stop's guards now hold for VS Code's terminal too. `main`'s VS Code specs and
+`dialVscode.e2e.ts` pass unchanged, bar a `scroll` member in two fakes of the VS Code terminals.
 
 ### 5. Measures and logs
 
@@ -304,5 +299,5 @@ every stroke goes to Harness's windows).
   would scroll Claude Code line by line and every such program; then the key path above goes (PM, 2026-11-18).
 - A key that hc holds landing in a question: hc would have to check at delivery. Follow-up for Herdr's maker:
   `terminal.keys` refuses a blocked program unless `force`, as `terminal.send` does.
-- herdr 0.8.0 (above); tmux, Orca, Terminal/iTerm2/Ghostty tabs; moving VS Code onto `HostAdapter.scroll` (the VS Code
-  branch does it); a fling; `scrollReversed`; scrolling back to the bottom when a stroke ends.
+- herdr 0.8.0 (above); tmux, Orca, Terminal/iTerm2/Ghostty tabs; a fling; `scrollReversed`; scrolling back to the
+  bottom when a stroke ends.
