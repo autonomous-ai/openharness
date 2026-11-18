@@ -23,6 +23,7 @@ export function fakeCore(over: Overrides = {}): CoreApi {
     agents: {
       all: vi.fn(async () => []),
       live: vi.fn(() => []),
+      facts: vi.fn(() => null),
       displayName: vi.fn(() => ''),
       byAgent: vi.fn(() => undefined),
       resolve: vi.fn(() => undefined),

@@ -26,7 +26,7 @@ import type { UnreadNotification } from '../lib/notificationRead.js'
 import type { AutonomousDeviceAgent, AutonomousDeviceDelivery } from '../lib/autonomous-device/service.js'
 import type { StoreAgent } from '../lib/autonomous-device/store.js'
 import type { DshDescribeAnswer, DshDescribeRequest, DshLaunchRequest, DshMaterializeAnswer, DshMaterializeRequest } from '../dsh/launchWire.js'
-import type { AgentDshContext } from '../lib/agentFrame.js'
+import type { AgentDshContext, AgentFacts } from '../lib/agentFrame.js'
 import type { GridAccess } from '../lib/gridAttach.js'
 import type { createHarnessResourcesReader } from '../lib/harnessResources.js'
 import type { createHarnessStorageReader } from '../lib/harnessTelemetry.js'
@@ -165,6 +165,8 @@ export interface CoreApi {
     all(): Promise<AgentView[]>
     /** The live agents. */
     live(): AgentView[]
+    /** Current registered display facts; unavailable without their owning core's synchronous reader. */
+    facts(session: RegisteredSession): AgentFacts | null
     /** The name the apps show for an agent. */
     displayName(session: RegisteredSession): string
     /** A live agent, by its agent id. */
@@ -497,9 +499,10 @@ export type ConnectorSync = (refresh: boolean) => Promise<{ shared: boolean }>
 export const CONNECTOR_SYNC_OFF: ConnectorSync = async () => { throw new Error('CONNECTORS_SYNC_UNAVAILABLE') }
 
 /** A service in its own process that acts on no agent: it creates none and reads no harness's frame. */
-export const AGENT_ACTIONS_OFF: Pick<CoreApi['agents'], 'create' | 'dsh'> = {
+export const AGENT_ACTIONS_OFF: Pick<CoreApi['agents'], 'create' | 'dsh' | 'facts'> = {
   create: async () => ({ ok: false, error: 'SERVICE_UNAVAILABLE' }),
   dsh: () => null,
+  facts: () => null,
 }
 
 /** The account signed in here, as Agent Messages' shared tabs name their owner and members by it. */
@@ -2068,6 +2071,8 @@ export interface CoreApiDeps {
   onNotice: CoreApi['account']['onNotice']
   create: CoreApi['agents']['create']
   dsh: CoreApi['agents']['dsh']
+  /** The same per-row capture the app formatter uses; no transport or retained snapshot. */
+  facts?: (session: RegisteredSession) => AgentFacts
   windows: CoreApi['clients']['windows']
   daemon: DaemonAddress
   runtimeProfile: CoreApi['agents']['runtimeProfile']
@@ -2121,7 +2126,7 @@ export interface CoreApiDeps {
 export function createCoreApi({
   dataDir, registry, stoppedAgents, databaseHistory, syncSession, runtimeModels, viewerChanged,
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, tabKey, tabRelay, connectorSync, observer, privateGridName, machineName, backend, onNotice,
-  runtimeProfile, setRuntime, fork, create, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, streamFrame, streamBytes, machine, activityText, activitySnapshot, activity, summaries,
+  runtimeProfile, setRuntime, fork, create, dsh, facts, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, streamFrame, streamBytes, machine, activityText, activitySnapshot, activity, summaries,
   closeAgent, activityAt, follow, panePid,
   signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, cloud, cloudRows, lastTurn, turnCard, turnSummary,
   count, hachiGoalDone, log = (line) => console.warn(line),
@@ -2150,6 +2155,7 @@ export function createCoreApi({
     agents: {
       all: async () => { const stopped = await stoppedAgents.list(); return [...registry.list(), ...stopped].map(agentView) },
       live: () => registry.list().map(agentView),
+      facts: row => { const current = registry.byAgent(row.agentId); return current && facts ? facts(current) : null },
       displayName: projectDisplayName,
       byAgent: (agentId) => { const session = registry.byAgent(agentId); return session && agentView(session) },
       resolve: (id) => { const session = registry.resolve(id); return session && agentView(session) },

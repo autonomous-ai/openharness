@@ -39,18 +39,20 @@ describe('what an experiment in its own process may ask of the core', () => {
   })
 
   it('shows the live agents as the apps are shown them: name, terminal and harness', async () => {
+    const first = { ...agent('a1'), dsh: 'original/id' }
+    const publication = { dsh: 'published/id', dshName: 'Published', viewerUrl: 'http://127.0.0.1:1/', viewerName: null, verdict: null }
     const core = fakeCore({
       agents: {
-        live: () => [agent('a1'), agent('a2')],
-        displayName: (session) => `name of ${session.agentId}`,
-        terminalAvailable: (agentId) => agentId === 'a1',
+        live: () => [first, agent('a2')],
+        facts: session => ({ displayName: `name of ${session.agentId}`, terminalAvailable: session.agentId === 'a1',
+          parts: session.agentId === 'a1' ? publication : {} }),
         runtimeProfile: session => session.agentId === 'a1' ? 'runtime-v1:a1:claude:opus@high' : null,
-        dsh: (session) => (session.agentId === 'a1' ? { viewerUrl: 'http://127.0.0.1:1/' } as never : null),
       },
     })
     expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'shown', {})).toEqual({
       agents: [
-        { ...agent('a1'), displayName: 'name of a1', terminalAvailable: true, selectedModel: 'runtime-v1:a1:claude:opus@high', dshContext: { viewerUrl: 'http://127.0.0.1:1/' } },
+        { ...first, displayName: 'name of a1', terminalAvailable: true, selectedModel: 'runtime-v1:a1:claude:opus@high',
+          dshContext: { id: 'published/id', name: 'Published', viewerUrl: 'http://127.0.0.1:1/', viewerName: null, verdict: null } },
         { ...agent('a2'), displayName: 'name of a2', terminalAvailable: false, selectedModel: null, dshContext: null },
       ],
     })

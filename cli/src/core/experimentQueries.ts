@@ -25,6 +25,7 @@
  */
 import type { BackendSocket } from '../backendSocket.js'
 import { experimentBackendAllowed, type AgentCreateRequest, type CoreApi } from './api.js'
+import { agentDshContext } from '../lib/agentFrame.js'
 
 type Payload = Record<string, unknown>
 type Core = Pick<CoreApi, 'agents' | 'turns' | 'clients' | 'daemon' | 'account' | 'cloud'>
@@ -36,15 +37,19 @@ const text = (value: unknown): string => (typeof value === 'string' ? value : ''
 /** The live agents as the apps are shown them (`shown`): each with its name, whether its terminal is there and
  *  what its frame says about its harness. */
 export function shownAgents(core: Pick<CoreApi, 'agents'>): Payload {
-  return {
-    agents: core.agents.live().map((session) => ({
+  const agents = []
+  for (const session of core.agents.live()) {
+    const facts = core.agents.facts(session)
+    if (!facts) return { error: 'SESSION_FACTS_UNAVAILABLE' }
+    agents.push({
       ...session,
-      displayName: core.agents.displayName(session),
-      terminalAvailable: core.agents.terminalAvailable(session.agentId),
+      displayName: facts.displayName,
+      terminalAvailable: facts.terminalAvailable,
       selectedModel: core.agents.runtimeProfile(session),
-      dshContext: core.agents.dsh(session),
-    })),
+      dshContext: agentDshContext(session, facts.parts),
+    })
   }
+  return { agents }
 }
 
 /** How an agent's shell reaches this daemon (`daemon`). */

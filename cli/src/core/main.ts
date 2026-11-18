@@ -112,7 +112,6 @@ import { type LaunchOverridesDeps } from '../lib/launchOverrides.js'
 import { buildHarnessSessionLabel } from '../lib/harnessSessionLabel.js'
 import { listTmuxPanes } from '../lib/tmuxAgentDiscovery.js'
 import { dshThrough } from './agents/dshThrough.js'
-import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { AgentGridTarget, GridAnnotation } from '../lib/gridAnnotation.js'
 import { confirmHomes, sessionCodexHome } from '../lib/engineHomes.js'
 import { sessionStoreContracts } from '../engines/sessionStoreContracts.js'
@@ -257,7 +256,7 @@ import { type ActivityFrame } from '../lib/turnActivity.js'
 import { cursorDataDir } from '../engines/cursor/contract.js'
 import { TranscriptIndexes } from '../lib/transcriptIndex.js'
 import { AgentCreationReceipts } from '../lib/agentCreationReceipt.js'
-import { agentFrame, lastActivityAt, type AgentFrame } from '../lib/agentFrame.js'
+import { agentDshContext, agentFacts, agentFrame, lastActivityAt, type AgentFrame } from '../lib/agentFrame.js'
 import { transcriptActivityAt } from '../lib/transcriptActivity.js'
 import { createUsageLink } from './usageLink.js'
 import type { UsageSnapshots } from './usageLink.js'
@@ -894,8 +893,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     hears: heldAgentLife(outOfProcess),
   })
   const machineIdNow = (): string => backendRef?.machineId ?? ''
+  // The existing open-turn fact, distinct from the app's leased activity state.
+  const turnRunning = (sessionId: string): boolean => turnStartedAt.has(sessionId)
   const wifi = wifiDoors({
-    registry, machineId: machineIdNow, packageId: session => { const id = frameParts.read(session.agentId).dsh; return typeof id === 'string' ? id : session.dsh ?? null }, displayName: projectDisplayName, running: (sessionId) => turnStartedAt.has(sessionId),
+    registry, machineId: machineIdNow, packageId: session => { const id = frameParts.read(session.agentId).dsh; return typeof id === 'string' ? id : session.dsh ?? null }, displayName: projectDisplayName, running: turnRunning,
     socket: () => backendRef ?? null,
     stop: (agentId) => cancelAgent(agentId, true), devices: () => ports.devices,
   })
@@ -1031,11 +1032,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const runtime = primaryRuntime(session)
       return terminals.backendFor(runtime)?.paneInfo(runtime).then(info => info?.pid ?? null) ?? Promise.resolve(null)
     },
-    dsh: (session) => {
-      const part = frameParts.read(session.agentId)
-      return session.dsh && typeof part.dsh === 'string' ? { id: part.dsh, name: part.dshName, viewerUrl: part.viewerUrl,
-        viewerName: part.viewerName, verdict: part.verdict } as AgentDshContext : null
-    },
+    facts: session => agentFacts(session, registry.terminalAvailable(session.agentId), frameParts.read(session.agentId)),
+    dsh: session => agentDshContext(session, frameParts.read(session.agentId)),
     windows: (frame) => backendRef?.sendLocal(frame),
     daemon: { command: daemonCommand(), port: env.PORT, machineId: () => backendRef?.machineId ?? '', autonomousEnv: session?.autonomousEnv ?? env.AUTONOMOUS_ENV },
     // Share: its observers' frames to the relay, and its welcomes signed by the gateway, which holds the identity.
@@ -1563,7 +1561,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     bySession: (sessionId) => registry.bySession(sessionId), resolve: (id) => registry.resolve(id), live: () => registry.list(),
     stopped: (agentId) => stoppedAgents.get(agentId),
     orchestratorRoleOf: (agentId) => ports.orchestrator?.roleOf(agentId) ?? null,
-    turnRunning: (sessionId) => turnStartedAt.has(sessionId),
+    turnRunning,
   })
   quietTurnRef = recaps.quietTurn
   asking.hearQuestions(recaps.question) // a turn waiting on the person is not announced as done

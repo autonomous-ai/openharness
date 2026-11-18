@@ -9,6 +9,9 @@ import { createDevicesLink } from './devicesLink.js'
 import { createWorkspacesLink } from './workspacesLink.js'
 import { createAgentLife } from './agentLife.js'
 import { agentsIn, processCoreApi } from '../services/processCoreApi.js'
+import { agentFacts, agentFrame } from '../lib/agentFrame.js'
+import * as transcriptActivity from '../lib/transcriptActivity.js'
+import { createFrameParts } from './frameParts.js'
 
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
 
@@ -138,6 +141,7 @@ describe('the core API services stand on', () => {
       fork: vi.fn(async () => ({ ok: true as const, agentId: 'fork' })),
       create: vi.fn(async () => ({ ok: true as const, agentId: 'made' })),
       dsh: vi.fn(() => null),
+      facts: session => agentFacts(session, session.agentId === 'live'),
       windows: vi.fn(),
       daemon: { command: 'harness', port: 18473, machineId: () => 'machine-1', autonomousEnv: 'prod' },
       observerKey: OBSERVER_KEY_OFF,
@@ -163,6 +167,101 @@ describe('the core API services stand on', () => {
       turnSummary: vi.fn(),
       log: vi.fn(),
     })
+
+  it('captures current registered facts for app and component callers without widening shown replies', async () => {
+    const live = { ...row('live'), active: true, registeredAt: 1, lastHookAt: 1, boundAt: 0,
+      transcriptPath: null, defaultName: 'Before attachment', runtimes: [], primaryRuntimeKey: '' }
+    let current: RegisteredSession | undefined = live
+    const publication = { dsh: 'published/id', dshName: 'Published name', viewerUrl: null, viewerName: null, verdict: null }
+    const deps = coreDeps()
+    deps.registry.list = () => current ? [current] : []
+    deps.registry.byAgent = id => id === 'live' ? current : undefined
+    deps.registry.terminalAvailable = () => false
+    deps.facts = session => agentFacts(session, deps.registry.terminalAvailable(session.agentId), publication)
+    deps.runtimeProfile = () => 'runtime-v1:kept'
+    const core = createCoreApi(deps), shown = core.agents.live()[0]
+    const frame = await agentFrame(live, { selectedModel: 'runtime-v1:kept', terminalAvailable: false, parts: () => publication })
+    expect(core.agents.facts({ ...shown, defaultName: 'stale caller name' })).toEqual({
+      displayName: frame.name, terminalAvailable: frame.terminal.available, parts: publication,
+    })
+    expect(createCoreApi({ ...deps, facts: undefined }).agents.facts(shown)).toBeNull()
+    expect(frame).toMatchObject({ name: 'Before attachment', launch: { state: 'ready' }, dsh: 'published/id', dshName: 'Published name' })
+    expect(Object.hasOwn(shown, 'launch')).toBe(false)
+    expect(shownAgents(core)).toEqual({ agents: [{ ...shown, displayName: frame.name,
+      terminalAvailable: false, selectedModel: 'runtime-v1:kept', dshContext: null }] })
+    live.dsh = 'old/id'
+    expect(shownAgents(core)).toMatchObject({ agents: [{ dshContext: {
+      id: 'published/id', name: 'Published name', viewerUrl: null, viewerName: null, verdict: null,
+    } }] })
+    current = undefined
+    expect(core.agents.facts(shown)).toBeNull()
+    expect(processCoreApi('/data', 'fixture', { live: () => [shown] }).agents.facts(shown)).toBeNull()
+    expect(shownAgents(processCoreApi('/data', 'fixture', { live: () => [shown] }))).toEqual({ error: 'SESSION_FACTS_UNAVAILABLE' })
+  })
+
+  it('keeps app facts in their original await phases and rejects a newer run\'s publication', async () => {
+    const live = { ...row('live'), active: true, registeredAt: 1, lastHookAt: 1, boundAt: 0,
+      transcriptPath: null, defaultName: 'Before read', runtimes: [], primaryRuntimeKey: '' }
+    let available = false, epoch = 'first'
+    const deps = coreDeps()
+    deps.registry.list = () => [live]
+    deps.registry.byAgent = id => id === 'live' ? live : undefined
+    deps.registry.terminalAvailable = () => available
+    deps.facts = session => agentFacts(session, deps.registry.terminalAvailable(session.agentId), parts.read(session.agentId))
+    const core = createCoreApi(deps)
+    const parts = createFrameParts({ core, epoch: () => epoch, hosts: { fixture: {
+      services: ['fixture'], heapLimitMiB: 1, rssLimitMiB: 0,
+      frameParts: { fixture: { fields: ['dsh', 'dshName'] } },
+    } } })
+    const publisher = parts.scope('fixture', core)
+    publisher.agents.publishFrame!({ ...live, frameEpoch: epoch }, { dsh: 'first/id', dshName: 'First' })
+    let release!: (value: number) => void
+    const reading = vi.spyOn(transcriptActivity, 'transcriptActivityAt').mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    try {
+      const pending = agentFrame(live, { selectedModel: 'caller-selected', terminalAvailable: available, parts: parts.forFrame(live) })
+      expect(reading).toHaveBeenCalledOnce()
+      live.defaultName = 'After read'; available = true; epoch = 'replacement'
+      publisher.agents.publishFrame!({ ...live, frameEpoch: epoch }, { dsh: 'replacement/id', dshName: 'Replacement' })
+      release(1)
+      expect(await pending).toMatchObject({ name: 'After read', terminal: { available: false },
+        selectedModel: 'caller-selected', dsh: null, dshName: null })
+      expect(core.agents.facts(live)).toEqual({ displayName: 'After read', terminalAvailable: true,
+        parts: { dsh: 'replacement/id', dshName: 'Replacement' } })
+      const changedDuringFormat = await agentFrame(live, { selectedModel: 'caller-selected', terminalAvailable: available,
+        parts: parts.forFrame(live), waitingFor: () => { epoch = 'third'; return null } })
+      expect(changedDuringFormat).toMatchObject({ dsh: null, dshName: null })
+    } finally { reading.mockRestore() }
+  })
+
+  it('keeps every registered row and its raw launch state separate from app defaults and terminal membership', async () => {
+    const registered: RegisteredSession[] = [
+      { ...row('unbound'), sessionId: '', active: true },
+      { ...row('starting'), active: true, launch: { state: 'starting' as const } },
+      { ...row('ready'), active: true, launch: { state: 'ready' as const } },
+      { ...row('failed'), active: true, launch: { state: 'failed' as const, error: 'ENGINE_DID_NOT_START', detail: 'See terminal.' } },
+      { ...row('inactive'), active: false },
+    ].map(session => ({ ...session, registeredAt: 1, transcriptPath: null, runtimes: [], primaryRuntimeKey: '' }))
+    const deps = coreDeps()
+    deps.registry.list = () => registered
+    deps.registry.byAgent = id => registered.find(session => session.agentId === id)
+    deps.registry.terminalAvailable = id => id === 'ready'
+    deps.registry.advertised = () => registered.filter(session => deps.registry.terminalAvailable(session.agentId))
+    deps.facts = session => agentFacts(session, deps.registry.terminalAvailable(session.agentId))
+    const core = createCoreApi(deps)
+    const shown = shownAgents(core).agents as Array<Record<string, unknown>>
+    expect(shown.map(session => session.agentId)).toEqual(registered.map(session => session.agentId))
+    expect(core.agents.advertised().map(session => session.agentId)).toEqual(['ready'])
+    expect(shown.map(session => session.terminalAvailable)).toEqual([false, false, true, false, false])
+    for (const [index, session] of registered.entries()) {
+      const facts = core.agents.facts(session)!
+      const frame = await agentFrame(session, { selectedModel: null, terminalAvailable: facts.terminalAvailable })
+      expect(shown[index]).toEqual({ ...session, displayName: frame.name, terminalAvailable: frame.terminal.available,
+        selectedModel: null, dshContext: null })
+      expect(frame.launch).toEqual(session.launch ?? { state: 'ready' })
+      expect(frame.status).toBe(session.active ? 'active' : 'offline')
+      expect(Object.hasOwn(shown[index], 'launch')).toBe(Object.hasOwn(session, 'launch'))
+    }
+  })
 
   it.each(['credential', 'null', 'absent'] as const)('keeps %s launch custody out of every service agent read', async (kind) => {
     const override = storedGridFixture({ networkId: 'fixture', networkName: 'Fixture', baseUrl: 'https://fixture.invalid/v1', apiKey: 'synthetic-agent-view-canary' })

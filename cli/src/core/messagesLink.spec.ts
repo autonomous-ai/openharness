@@ -37,7 +37,8 @@ describe('Agent Messages in its own process, as the core keeps it', () => {
   it('shows it the agents as the apps are shown them, and how this daemon is reached and whether it is signed in', async () => {
     let signedIn = true
     const { link: l } = link({
-      agents: { live: () => [agent('a1')], displayName: (s) => `name of ${s.agentId}`, terminalAvailable: () => true, dsh: () => null },
+      agents: { live: () => [agent('a1')], displayName: (s) => `name of ${s.agentId}`, terminalAvailable: () => true, dsh: () => null,
+        facts: s => ({ displayName: `name of ${s.agentId}`, terminalAvailable: true, parts: {} }) },
       daemon: { command: `'node' 'cli.js'`, port: 18473, machineId: () => 'machine-7', autonomousEnv: 'prod' },
       account: { signedIn: () => signedIn },
     })

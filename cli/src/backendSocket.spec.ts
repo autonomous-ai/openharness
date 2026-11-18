@@ -54,6 +54,8 @@ import { STRICT_DOWN_TYPES, encryptDownFrame, encryptDownFrameFor, encryptRpcRes
 import { CloseAgentService } from './lib/closeAgentService.js'
 import { env } from './config/env.js'
 import * as builtins from './dsh/builtins.js'
+import * as transcriptActivity from './lib/transcriptActivity.js'
+import { createFrameParts } from './core/frameParts.js'
 
 describe('safe session close RPC', () => {
   it('seals cleanup previews and passes the open-tab condition to Close', async () => {
@@ -3794,6 +3796,37 @@ describe('the models lists pushed to the windows', () => {
   })
 
   // `agents_list`, the launch replies and the updates build frames here; only pushed frames carried it (E2E 2026-11-10).
+  it('keeps the app caller\'s terminal and parts epoch capture while reading names after transcript work', async () => {
+    const socket = relaySocket('token')
+    const agent = { agentId: 'a-facts', sessionId: 's-facts', engine: 'claude', cwd: '/tmp', runtimes: [],
+      registeredAt: 1, active: true, defaultName: 'Before read', transcriptPath: null, model: 'stored-model' } as unknown as RegisteredSession
+    let epoch = 'first', available = false
+    const core = fakeCore({ agents: { byAgent: id => id === agent.agentId ? agent : undefined } })
+    const parts = createFrameParts({ core, epoch: () => epoch, hosts: { fixture: {
+      services: ['fixture'], heapLimitMiB: 1, rssLimitMiB: 0, frameParts: { fixture: { fields: ['dsh', 'dshName'] } },
+    } } })
+    const publisher = parts.scope('fixture', core)
+    publisher.agents.publishFrame!({ ...agent, frameEpoch: epoch }, { dsh: 'first/id', dshName: 'First' })
+    socket.framePartsProvider = session => parts.forFrame(session)
+    Object.assign(socket, { runtimeDisplayProvider: () => ({ selectedModel: 'runtime-selected', workspace: null }) })
+    const terminal = vi.spyOn(registry, 'terminalAvailable').mockImplementation(() => available)
+    let release!: (value: number) => void
+    const reading = vi.spyOn(transcriptActivity, 'transcriptActivityAt').mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    try {
+      const pending = socket.toProject(agent)
+      expect(reading).toHaveBeenCalledOnce()
+      agent.defaultName = 'After read'; available = true; epoch = 'replacement'
+      publisher.agents.publishFrame!({ ...agent, frameEpoch: epoch }, { dsh: 'replacement/id', dshName: 'Replacement' })
+      release(1)
+      expect(await pending).toMatchObject({ name: 'After read', terminal: { available: false },
+        selectedModel: 'runtime-selected', dsh: null, dshName: null })
+      expect(await socket.toProject(agent)).toMatchObject({ name: 'After read', terminal: { available: true },
+        selectedModel: 'runtime-selected', dsh: 'replacement/id', dshName: 'Replacement' })
+      expect(await socket.toStoppedProject(agent)).toMatchObject({ name: 'After read', status: 'stopped',
+        terminal: { available: false, primary: '', runtimes: [] }, selectedModel: 'stored-model', viewerUrl: null, forkable: false })
+    } finally { reading.mockRestore(); terminal.mockRestore(); await socket.stop() }
+  })
+
   it('carries model and workspace from the runtime display projection in every live frame', async () => {
     const socket = relaySocket('token')
     const agent = { agentId: 'a-ws', sessionId: 'agent:main:plain', engine: 'openclaw', cwd: '/tmp', runtimes: [], registeredAt: 1, active: true } as unknown as RegisteredSession
