@@ -1844,12 +1844,12 @@ describe('the dial that shows one app at a time', () => {
       expect(told).toEqual(['view tabs pick', 'brought harness'])
     })
 
-    it('with a window, a pick on the tab is ignored and brings nothing; a pick of another app on an app\'s ring brings it', () => {
+    it('a pick of another app brings it, on the tab and on an app\'s ring', () => {
       const { told, over } = telling()
       const host = setup(five(), over)
       onTab(host, ['h1'])
-      expect(host.pickApp('ghostty')).toBe('ignored')
-      expect(told).toEqual(['view tabs window'])
+      expect(host.pickApp('ghostty')).toBe('switched')
+      expect(told).toEqual(['view tabs window', 'view apps pick', 'brought ghostty'])
       settle(host, 'ghostty')
       told.length = 0
       expect(host.pickApp('vscode')).toBe('switched')
@@ -1865,15 +1865,76 @@ describe('the dial that shows one app at a time', () => {
       expect(appPicked).not.toHaveBeenCalled()
     })
 
-    it('a pick of another app works on an app\'s ring and is ignored on the tab', async () => {
+    it('a pick of another app works on an app\'s ring and on the tab', async () => {
       const appSwitched = vi.fn()
       const { host } = viewed(five(), { appSwitched })
       await onGhosttyRing(host)
       expect(host.pickApp('vscode')).toBe('switched')
       expect(appSwitched.mock.calls).toEqual([['pick']])
       settle(host, 'harness')
-      expect(host.pickApp('ghostty')).toBe('ignored')
-      expect(appSwitched.mock.calls).toEqual([['pick']])
+      expect(host.pickApp('ghostty')).toBe('switched')
+      expect(appSwitched.mock.calls).toEqual([['pick'], ['pick']])
+    })
+
+    it('a tab pick holds the app, turns the view to apps and brings it; Harness in front with known agents does not turn it back', async () => {
+      const { told, over } = telling()
+      const host = setup(five(), { sessions, ...over })
+      await host.listAgentSnapshot({ apps: true })
+      settle(host, 'harness')
+      onTab(host, ['h1'])
+      told.length = 0
+      expect(host.pickApp('vscode')).toBe('switched')
+      expect(told).toEqual(['switched pick', 'view apps pick', 'brought vscode'])
+      for (let i = 0; i < 2; i++) {
+        const read = await host.listAgentSnapshot({ apps: true })
+        expect(read).toMatchObject({ tab: '', view: 'machine', apps: { shown: 'vscode' } })
+        expect(read.apps?.apps.map((a) => a.id)).toEqual(['harness', 'ghostty', 'vscode'])
+        expect(ids(read)).toEqual(['v1', 'v2'])
+      }
+      expect(told).toEqual(['switched pick', 'view apps pick', 'brought vscode'])
+      expect(host.holdsTab()).toBe(false)
+    })
+
+    it('a tab pick of the app the filter already shows holds it too', async () => {
+      const { told, over } = telling()
+      let live: RegisteredSession[] = []
+      const host = setup(five(), { sessions: () => live, ...over })
+      await host.listAgentSnapshot({ apps: true })
+      settle(host, 'harness')
+      live = sessions()
+      onTab(host, ['h1'])
+      told.length = 0
+      expect(host.pickApp('ghostty')).toBe('switched')
+      expect(told).toEqual(['view apps pick', 'brought ghostty'])
+      // With a pick that holds nothing, the first read would feed Harness's agents and its D1 turn the view back.
+      for (let i = 0; i < 2; i++) expect(await host.listAgentSnapshot({ apps: true })).toMatchObject({ view: 'machine', apps: { shown: 'ghostty' } })
+      expect(told).toEqual(['view apps pick', 'brought ghostty'])
+    })
+
+    it('Harness, an app with no agents and a notice\'s pick stay ignored on the tab', () => {
+      const { told, over } = telling()
+      const appPicked = vi.fn()
+      const host = setup(five(), { sessions, appPicked, ...over })
+      onTab(host, ['h1'])
+      told.length = 0
+      expect([host.pickApp('harness'), host.pickApp('cursor'), host.pickApp('vscode', 'notice')]).toEqual(['ignored', 'ignored', 'ignored'])
+      expect(told).toEqual([])
+      expect(appPicked).toHaveBeenCalledTimes(2)
+      expect(host.holdsTab()).toBe(true)
+    })
+
+    it('a tab pick of the app Harness was picked over ends that hold', async () => {
+      const agents = [agent('g1', 'ghostty')]
+      const { host, views } = viewed(agents)
+      await onGhosttyRing(host)
+      expect(host.pickApp('harness')).toBe('tabs')
+      expect(host.pickApp('ghostty')).toBe('switched')
+      agents.length = 0
+      await host.listAgentSnapshot({ apps: true })
+      expect(views).toEqual(['apps window', 'tabs pick', 'apps pick', 'tabs empty'])
+      agents.push(agent('g2', 'ghostty'))
+      await host.listAgentSnapshot({ apps: true })
+      expect(views).toEqual(['apps window', 'tabs pick', 'apps pick', 'tabs empty', 'apps front'])
     })
 
     it('the window closing drops the view and a pick of Harness', async () => {
