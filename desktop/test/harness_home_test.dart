@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/harness_home.dart';
+import 'package:harness/core/harness_home_look_io.dart';
 import 'package:path/path.dart' as p;
 
 /// A Linux computer where only [existing] exists.
@@ -114,6 +117,17 @@ void main() {
         ).path(HarnessEntry.cli),
         '/Users/me/.harness/cli',
       );
+    });
+  });
+
+  group('this computer\'s look', () {
+    test('reads the environment its caller hands it', () {
+      const environment = {'HOME': '/home/t', 'XDG_DATA_HOME': '/x'};
+      expect(
+        platformHomeLook(environment: environment).environment,
+        same(environment),
+      );
+      expect(platformHomeLook().environment, same(Platform.environment));
     });
   });
 

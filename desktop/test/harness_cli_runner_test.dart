@@ -175,6 +175,17 @@ void main() {
     expect(result.setAt, DateTime.fromMillisecondsSinceEpoch(1700000000000));
   });
 
+  test('reads the XDG variables of the environment it is handed', () {
+    expect(
+      HarnessCliRunner(
+        environment: {'HOME': '/home/t', 'XDG_DATA_HOME': '/x'},
+        isWindows: false,
+      ).harnessHome.path,
+      // Off Linux the rule reads no variable.
+      Platform.isLinux ? '/x/harness' : '/home/t/.harness',
+    );
+  }, skip: Platform.isWindows);
+
   group('on Linux', () {
     late Directory home;
     late String data, state, legacy;

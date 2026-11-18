@@ -10,6 +10,7 @@ import 'package:harness/bootstrap/environment_provisioner.dart';
 import 'package:harness/bootstrap/setup_progress.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/engine_availability.dart';
+import 'package:harness/core/harness_home.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/state/app_state.dart';
@@ -618,10 +619,51 @@ void main() {
       void touch(String path) =>
           File('${home.path}/$path')..createSync(recursive: true);
 
+      /// A Linux computer whose XDG data folder is in this home, so no real
+      /// Harness folder on the computer running the test counts.
+      HomeLook linux() => HomeLook(
+        linux: true,
+        environment: {'XDG_DATA_HOME': '${home.path}/xdg'},
+        exists: (path) =>
+            FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound,
+      );
+
       test('a bare home has none', () {
         expect(
           AgentPrefetch.alreadyHasAnAgent(home.path, prefixes: const []),
           isFalse,
+        );
+        expect(
+          AgentPrefetch.alreadyHasAnAgent(
+            home.path,
+            prefixes: const [],
+            look: linux(),
+          ),
+          isFalse,
+        );
+      });
+
+      test('on Linux, Harness\'s CLI in the XDG data folder counts', () {
+        touch('xdg/harness/cli/cli.js');
+        expect(
+          AgentPrefetch.alreadyHasAnAgent(
+            home.path,
+            prefixes: const [],
+            look: linux(),
+          ),
+          isTrue,
+        );
+      });
+
+      test('on Linux, a home not moved yet counts by ~/.harness/cli', () {
+        touch('.harness/cli/cli.js');
+        expect(
+          AgentPrefetch.alreadyHasAnAgent(
+            home.path,
+            prefixes: const [],
+            look: linux(),
+          ),
+          isTrue,
         );
       });
       for (final path in [

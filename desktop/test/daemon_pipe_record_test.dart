@@ -53,6 +53,17 @@ void main() {
       },
     );
 
+    test('reads the XDG variables of the environment it is handed', () {
+      expect(
+        defaultDaemonDataDir(
+          environment: {'HOME': '/home/t', 'XDG_DATA_HOME': '/x'},
+          isWindows: false,
+        ),
+        // Off Linux the rule reads no variable.
+        Platform.isLinux ? '/x/harness/cli/data' : '/home/t/.harness/cli/data',
+      );
+    });
+
     test('a Windows profile keeps the .harness layout on a Linux host', () {
       expect(
         defaultDaemonDataDir(

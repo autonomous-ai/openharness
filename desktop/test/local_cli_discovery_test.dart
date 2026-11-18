@@ -35,6 +35,16 @@ void main() {
     expect(path, '/Users/tester/.harness/computer-id');
   }, skip: Platform.isWindows);
 
+  test('the computer id path reads the XDG variables of the environment it is handed', () {
+    expect(
+      LocalMachineIdentity.defaultComputerIdPath(
+        environment: {'HOME': '/home/t', 'XDG_DATA_HOME': '/x'},
+      ),
+      // Off Linux the rule reads no variable.
+      Platform.isLinux ? '/x/harness/computer-id' : '/home/t/.harness/computer-id',
+    );
+  }, skip: Platform.isWindows);
+
   group('the computer id by the rule', () {
     const before = '0123456789abcdef0123456789abcdef';
     const after = 'fedcba9876543210fedcba9876543210';

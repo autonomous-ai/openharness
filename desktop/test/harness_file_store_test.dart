@@ -48,6 +48,18 @@ void main() {
     );
   }, skip: Platform.isWindows);
 
+  test('reads the XDG variables of the environment it is handed', () {
+    expect(
+      HarnessFileStore.defaultDirectoryPath(
+        environment: {'HOME': '/home/t', 'XDG_DATA_HOME': '/x'},
+      ),
+      // Off Linux the rule reads no variable.
+      Platform.isLinux
+          ? '/x/harness/desktop-app-v2'
+          : '/home/t/.harness/desktop-app-v2',
+    );
+  }, skip: Platform.isWindows);
+
   test('with no home', () {
     expect(
       () => HarnessFileStore.defaultDirectoryPath(environment: {}),
