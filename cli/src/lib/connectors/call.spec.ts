@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, posix, win32, type PlatformPath } from 'node:path'
-import { call, CallFailure, expandHome, forbiddenDirs, identities, identity, tempDir, unc, uploadFile, walk, type Identity, type Verdict } from './call.js'
+import { call, CallFailure, expandHome, forbiddenDirs, identities, identity, tempDirs, unc, uploadFile, walk, type Identity, type Verdict } from './call.js'
 import type { Store } from './store.js'
 
 // The file system calls the upload check makes. A test that sets `disk.hooks.<name>` is handed the real call and its
@@ -31,6 +31,19 @@ const platform = vi.hoisted(() => ({ windows: false }))
 vi.mock('node:path', async importOriginal => {
   const path = await importOriginal<typeof import('node:path') & { default: PlatformPath }>()
   return { ...path, default: new Proxy(path.default, { get: (own, key) => Reflect.get(platform.windows ? path.win32 : own, key) }) }
+})
+
+// The registry's answer, which a test sets; `real` lets the real reader through (Windows only). No case here starts cmd.exe or reg.exe otherwise.
+const registry = vi.hoisted(() => ({
+  reads: [] as (string | undefined)[], real: false,
+  read: undefined as undefined | ((home: string | undefined, failed: (failure: string) => void) => { roaming: string[], local: string[] }),
+}))
+vi.mock('../windows/knownFolders.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../windows/knownFolders.js')>()
+  return { ...actual, appDataFolders: (home: string | undefined, failed: (failure: string) => void) => {
+    registry.reads.push(home)
+    return registry.read ? registry.read(home, failed) : registry.real ? actual.appDataFolders(home, failed) : { roaming: [], local: [] }
+  } }
 })
 
 /** A disk for the walk: every path is a folder of its own; `same` lists spellings of one folder, `unread` paths that cannot be read. */
@@ -183,11 +196,15 @@ describe('forbiddenDirs', () => {
   })
 })
 
-describe('tempDir', () => {
-  it('is the account\'s own AppData\\Local\\Temp on Windows, none on posix or with no home', () => {
-    expect(tempDir('C:\\Users\\a', win32)).toBe('C:\\Users\\a\\AppData\\Local\\Temp')
-    expect(tempDir('/home/a', posix)).toBeUndefined()
-    expect(tempDir(undefined, win32)).toBeUndefined()
+describe('tempDirs', () => {
+  it('is the account\'s own AppData\\Local\\Temp on Windows, and Temp under each Local AppData the registry names', () => {
+    expect(tempDirs('C:\\Users\\a', [], win32)).toEqual(['C:\\Users\\a\\AppData\\Local\\Temp'])
+    expect(tempDirs('C:\\Users\\a', ['D:\\Redirect\\Local', 'C:\\Old\\Local'], win32)).toEqual(['C:\\Users\\a\\AppData\\Local\\Temp', 'D:\\Redirect\\Local\\Temp', 'C:\\Old\\Local\\Temp'])
+    expect(tempDirs(undefined, ['D:\\Redirect\\Local'], win32)).toEqual(['D:\\Redirect\\Local\\Temp'])
+  })
+
+  it('is none on posix, where no registry names one', () => {
+    expect(tempDirs('/home/a', [], posix)).toEqual([])
   })
 })
 
@@ -203,6 +220,9 @@ describe('uploadFile', () => {
     account.home = undefined
     platform.windows = false
     disk.hooks = {}
+    registry.reads = []
+    registry.read = undefined
+    registry.real = false
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
     rmSync(home, { recursive: true, force: true })
@@ -434,6 +454,61 @@ describe('uploadFile', () => {
     symlinkSync(join(home, 'docs', 'note.txt'), join(home, 'docs', 'alias.md'))
     expect(uploadFile(join(home, 'docs', 'alias.md'), { HOME: home }).name).toBe('note.txt')
     expect(closed).toEqual(opened)
+  })
+
+  describe('uploadFile and the registry\'s AppData', () => {
+    const moved = (...names: string[]): string => {
+      mkdirSync(join(home, 'Redirect', ...names), { recursive: true })
+      writeFileSync(join(home, 'Redirect', ...names, 'note.txt'), 'x')
+      return join(home, 'Redirect', ...names, 'note.txt')
+    }
+
+    // On Windows CI `home` is in the account's own AppData\Local\Temp, which is open: only the registry's answer fences these.
+    it('fences the folders the registry names with APPDATA and LOCALAPPDATA unset, and leaves the Temp of its Local AppData open', () => {
+      registry.read = () => ({ roaming: [join(home, 'Redirect', 'Roaming')], local: [join(home, 'Redirect', 'Local')] })
+      expectFenced(moved('Roaming', 'app'))
+      expectFenced(moved('Local', 'app'))
+      expect(said(moved('Local', 'Temp'))).toBe('sent')
+      expect(said(moved('Local', 'Temp', 'docs'))).toBe('sent')
+      expect(said(join(home, 'docs', 'note.txt'))).toBe('sent')
+      // A folder the registry names on a share is dropped unread, as any forbidden folder there.
+      registry.read = () => ({ roaming: ['\\\\harness-no-such-host.invalid\\share\\Roaming'], local: [] })
+      expect(said(join(home, 'docs', 'note.txt'))).toBe('sent')
+    })
+
+    it('reads the registry with the account\'s home, and only once the file passed its own checks', () => {
+      account.home = home
+      linkSync(join(home, '.ssh', 'note.txt'), join(home, 'docs', 'link.txt'))
+      writeFileSync(join(home, 'docs', 'note.exe'), 'x')
+      for (const file of ['docs/note.exe', 'docs/none.txt', 'docs/link.txt']) expect(said(join(home, file)), file).not.toBe('sent')
+      expect(registry.reads).toEqual([])
+      expect(said(join(home, 'docs', 'note.txt'), { HOME: join(home, 'docs') })).toBe('sent')
+      expect(registry.reads).toEqual([home])
+    })
+
+    it('says a failed read as one line on stderr, and still uploads', async () => {
+      registry.read = (_home, failed) => { failed('cmd.exe timed out'); return { roaming: [], local: [] } }
+      const err: string[] = []
+      expect(await sent(['--form', `file=@${join(home, 'docs', 'note.txt')}`], err)).toContain('\r\n\r\nx\r\n')
+      expect(err).toEqual(['upload check: cmd.exe timed out; a moved AppData folder may not be fenced'])
+    })
+
+    it('reads no registry for a request with no @path upload', async () => {
+      await sent(['--form', 'title=x'])
+      await sent(['--json', '{}'])
+      await sent(['--data', 'a=b'])
+      await sent([])
+      expect(registry.reads).toEqual([])
+    })
+
+    // The real cmd.exe, reg.exe and registry: an ordinary upload from Windows' own temporary folder still goes, and nothing is said.
+    it.skipIf(process.platform !== 'win32')('takes a document from Windows\' own temporary folder with the real registry read', async () => {
+      registry.real = true
+      const err: string[] = []
+      expect(await sent(['--form', `file=@${join(home, 'docs', 'note.txt')}`], err)).toContain('\r\n\r\nx\r\n')
+      expect(err).toEqual([])
+      expectFenced(join(home, '.ssh', 'note.txt'))
+    })
   })
 })
 
