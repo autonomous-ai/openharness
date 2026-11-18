@@ -516,12 +516,7 @@ void main() {
   });
 
   test('forks are kept in the community folder under Harness home', () {
-    final importer = ForkProjectImporter(
-      cli: HarnessCliRunner(
-        harnessHome: Directory('/fixture/harness'),
-        environment: const {},
-      ),
-    );
+    final importer = ForkProjectImporter();
     expect(importer.root.path, p.join(homeDir(), '.harness', 'community'));
   });
 
