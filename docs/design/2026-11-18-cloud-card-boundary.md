@@ -157,7 +157,7 @@ Normal connected output cannot be coalesced arbitrarily: a withheld acknowledgme
 
 Question ask/close actions must share the output order so a delayed publication does not let a later question overtake an earlier row. On reconnect, queued unsent intermediate history is replaced by the current provider snapshot and current questions, as the old implementation republishes current state after a lost link. During a healthy connection every queued transition is retained in order.
 
-Admission must reserve the bounded output capacity before a provider operation or state mutation that cannot be undone. Otherwise a full queue after the provider accepted a command could orphan it. This adds component backpressure and an explicit busy result; it cannot be disguised as a behavior-neutral implementation detail. A suspended output owner keeps its reservation until acknowledged or reconciled, with a bounded request deadline and named unavailable state. Retry only a fixed bounded number of times per connection, then wait for actual reconnection or an explicit caller retry.
+Admission must reserve the bounded output capacity before a provider operation or state mutation that cannot be undone. Otherwise a full queue after the provider accepted a command could orphan it. This adds component backpressure and an explicit busy result; it cannot be disguised as a behavior-neutral implementation detail. A suspended output owner keeps its reservation until acknowledged or reconciled, with a bounded request deadline and named unavailable state. After one failed or timed-out output call, hold further sends until a physical reconnection. Retrying the user request does not retry uncertain output. If the connection stays unavailable, the existing explicit `harness start --restart` action provides a new connection and empty core authority.
 
 Optimistic `deliver` working state is currently published but not saved before the provider accepts the words. Persisting it as provider state would change crash semantics. Its publication record must be separate from the provider snapshot; after a component crash, an unapplied optimistic record is discarded, while an already-applied one informs the checkpoint before the actual saved state is republished.
 
@@ -209,3 +209,9 @@ Normalized owner rows are bounded before entering the ordered queue. Public appl
 core normalization and card format. This private cohort now carries that normalized projection on its local
 publication door; render-cache card objects are retained where their normalized value is unchanged. Whole-cohort
 rollback remains required, including provider-file metadata being ignored by older readers.
+
+
+Private owner batches are admitted whole: a non-list, malformed row or duplicate normalized owner ID is
+`CLOUD_PUBLICATION_INVALID` before any accepted row or client output changes. The component enforces the same
+rule before preparing a snapshot, so normalization never silently withdraws an invalid provider row. Normalizing
+valid fields retains the existing public frames. This is a boundary validation change, with no new core state.

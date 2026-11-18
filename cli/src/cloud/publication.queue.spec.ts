@@ -1,15 +1,15 @@
 import { expect, it, vi } from 'vitest'
 import type { CloudCore } from '../core/api.js'
 import { createCloudAgents } from '../core/agents/cloud.js'
-import type { CloudHarness } from '../lib/cloudAgents.js'
-import { createCloudPublication, type CloudJournal } from './publication.js'
+import { cloudHarnessIn, type CloudHarness } from '../lib/cloudAgents.js'
+import { CLOUD_OUTPUT_BYTES, createCloudPublication, type CloudJournal } from './publication.js'
 
 const row = (id = 'cloud_a', over: Partial<CloudHarness> = {}): CloudHarness => ({ agentId: id, agent: 'fo', name: id,
   state: 'working', activity: null, repository: null, branch: null, links: [], messages: 1,
   createdAt: '2026-11-18T00:00:00Z', updatedAt: '2026-11-18T00:00:00Z', ...over })
 const done = (id = 'cloud_a', answer = 'First'): CloudHarness => row(id, { state: 'idle', said: answer, card: { recap: answer, text: answer } })
 function setup() {
-  const events: string[] = []
+  const events: string[] = [], log = vi.fn()
   const core = createCloudAgents({ port: () => null, openQuestions: new Map(), log: () => {}, clients: {
     send: () => {}, sendLocal: () => {}, sendCommander: frame => events.push(frame.type === 'agent_synced'
       ? `row:${(frame.payload.agent as { id: string }).id}` : frame.type === 'commander_event'
@@ -18,9 +18,9 @@ function setup() {
   let snapshot: CloudHarness[] = [], saved: CloudJournal | undefined
   const doors: CloudCore = { ...core.doors }
   const make = () => createCloudPublication({ core: doors, saved, persist: journal => { saved = structuredClone(journal) },
-    snapshot: () => snapshot, questions: () => [], log: () => {} })
+    snapshot: () => snapshot, questions: () => [], log })
   let publication = make()
-  return { core, doors, events, get publication() { return publication }, get saved() { return saved },
+  return { core, doors, events, log, get publication() { return publication }, get saved() { return saved },
     rows(rows: CloudHarness[]) { snapshot = rows; publication.publish(rows) },
     async connect() { await publication.connect(); await vi.waitFor(() => expect(publication.state().pending).toBeNull()) },
     restart() { publication.stop(); publication = make() },
@@ -153,5 +153,146 @@ it('does not advance its checkpoint when core refuses a prepared publication', a
     expect(f.publication.state().accepted.owners).toEqual([])
     expect(f.publication.reserve()).toBeNull()
     expect(f.core.frames()).toEqual([])
+  } finally { f.close() }
+})
+
+
+it.each(['malformed', 'duplicate', 'non-list'] as const)('refuses an invalid %s component snapshot without withdrawing accepted owners', async bad => {
+  const f = setup()
+  try {
+    await f.connect(); f.rows([row()]); await vi.waitFor(() => expect(f.publication.state().pending).toBeNull())
+    f.events.length = 0
+    const rows = bad === 'non-list' ? 'invalid' as never : bad === 'duplicate' ? [row(), row()] : [row(), { ...row('cloud_bad'), state: 'unknown' } as never]
+    expect(() => f.rows(rows)).toThrow('CLOUD_PUBLICATION_INVALID')
+    expect(f.publication.status()).toBe('CLOUD_PUBLICATION_INVALID')
+    expect(f.core.frames().map(frame => frame.id)).toEqual(['cloud_a'])
+    expect(f.events).toEqual([])
+  } finally { f.close() }
+})
+
+
+it.each([null, { fingerprint: 'bad', owners: [] }, { fingerprint: 'a'.repeat(64), owners: [{ agentId: 'wrong' }] }])(
+  'holds a malformed saved presentation without changing accepted owners', async accepted => {
+    const f = setup()
+    let publication: ReturnType<typeof createCloudPublication> | undefined
+    try {
+      await f.connect(); f.rows([row()]); await vi.waitFor(() => expect(f.publication.state().pending).toBeNull())
+      publication = createCloudPublication({ core: f.doors, saved: { version: 1, accepted, pending: null },
+        persist: () => { throw new Error('must not write') }, snapshot: () => [], questions: () => [], log: f.log })
+      await publication.connect()
+      expect(publication.status()).toBe('CLOUD_PUBLICATION_RECOVERY_REQUIRED')
+      expect(f.core.frames().map(frame => frame.id)).toEqual(['cloud_a'])
+      publication.ask({ agentId: 'cloud_a', requestId: 'cloud_q_held', question: { text: 'Held', choices: [] } })
+      publication.unask('cloud_a', 'cloud_q_held')
+    } finally { publication?.stop(); f.close() }
+  })
+
+it('reports a sustained connection failure once and sends nothing after stopping', async () => {
+  const f = setup()
+  try {
+    f.doors.checkpoint = () => Promise.reject(new Error('fixture disconnected'))
+    await f.publication.connect(); await f.publication.connect()
+    expect(f.log).toHaveBeenCalledTimes(1)
+    expect(f.log).toHaveBeenCalledWith('[cloud] CLOUD_PUBLICATION_UNAVAILABLE')
+    f.close()
+    f.publication.ask({ agentId: 'cloud_a', requestId: 'cloud_q_stopped', question: { text: 'Stopped', choices: [] } })
+    f.publication.unask('cloud_a', 'cloud_q_stopped')
+    expect(f.events).toEqual([])
+  } finally { f.close() }
+})
+
+it('refuses a spent reservation before sending output', async () => {
+  const f = setup()
+  try {
+    await f.connect()
+    const reservation = f.publication.reserve()!
+    f.publication.release(reservation)
+    expect(() => f.publication.publish([row()], reservation)).toThrow('CLOUD_PUBLICATION_LIMIT')
+    expect(f.events).toEqual([])
+  } finally { f.close() }
+})
+
+it('bounds queued output count while the first publication is unanswered', async () => {
+  const f = setup()
+  try {
+    await f.connect()
+    f.doors.publish = () => new Promise(() => {})
+    f.rows([row()])
+    for (let index = 0; index < 63; index++) f.publication.unask('cloud_a', `cloud_q_${index}`)
+    expect(() => f.publication.unask('cloud_a', 'cloud_q_overflow')).toThrow('CLOUD_PUBLICATION_LIMIT')
+    expect(f.publication.status()).toBe('CLOUD_PUBLICATION_LIMIT')
+  } finally { f.close() }
+})
+
+const heavy = (id: string): CloudHarness => row(id, { said: '\0'.repeat(4000),
+  card: { recap: '\0'.repeat(2000), text: '\0'.repeat(2000) },
+  links: Array.from({ length: 8 }, () => ({ label: 'Link', url: `https://example.test/${'\0'.repeat(2000)}` })),
+})
+
+it('bounds queued bytes even when the action count fits', async () => {
+  const f = setup()
+  try {
+    await f.connect(); f.doors.publish = () => new Promise(() => {})
+    let refused = false
+    for (let index = 0; index < 63; index++) {
+      try { f.rows([{ ...heavy('cloud_a'), name: `Name ${index}` }]) } catch { refused = true; break }
+    }
+    expect(refused).toBe(true)
+    expect(f.publication.status()).toBe('CLOUD_PUBLICATION_LIMIT')
+  } finally { f.close() }
+})
+
+it('bounds the complete prepared wire image before the core can accept any rows', async () => {
+  const f = setup()
+  try {
+    await f.connect()
+    const size = Buffer.byteLength(JSON.stringify(cloudHarnessIn(heavy('cloud_fixture'))))
+    const count = Math.floor((CLOUD_OUTPUT_BYTES - 65_536) / size)
+    const working = Array.from({ length: count }, (_, index) => heavy(`cloud_${index}`))
+    f.rows(working); await vi.waitFor(() => expect(f.publication.state().pending).toBeNull())
+    expect(f.core.frames()).toHaveLength(count)
+    f.events.length = 0
+    f.rows(working.map(value => ({ ...value, state: 'idle', said: '\u0001'.repeat(4000) })))
+    await vi.waitFor(() => expect(f.publication.status()).toBe('CLOUD_PUBLICATION_LIMIT'))
+    expect(f.events).toEqual([])
+    expect(f.core.frames().every(frame => frame.cloud.state === 'working')).toBe(true)
+  } finally { f.close() }
+})
+
+it('refuses oversized catalogues and oversized legacy timestamps without sending them', async () => {
+  const f = setup(), large = setup()
+  try {
+    await f.connect(); await large.connect()
+    expect(() => f.rows(Array.from({ length: 60 }, (_, index) => heavy(`cloud_${index}`)))).toThrow('CLOUD_PUBLICATION_LIMIT')
+    const createdAt = `Wed Nov 18 2026 00:00:00 GMT+0000${' '.repeat(200_000)}`
+    expect(cloudHarnessIn(row('cloud_a', { createdAt }))).not.toBeNull()
+    expect(() => large.rows([row('cloud_a', { createdAt })])).toThrow('CLOUD_PUBLICATION_LIMIT')
+    expect(f.events).toEqual([]); expect(large.events).toEqual([])
+  } finally { f.close(); large.close() }
+})
+
+it('revokes a recovery read that resolved just before its async continuation', async () => {
+  const f = setup()
+  try {
+    await f.connect(); f.rows([row()]); await vi.waitFor(() => expect(f.publication.state().pending).toBeNull())
+    const older = f.publication.connect()
+    await Promise.resolve()
+    f.rows([done()])
+    const newer = f.publication.connect()
+    await Promise.all([older, newer])
+    await vi.waitFor(() => expect(f.publication.state().pending).toBeNull())
+    expect(f.events.filter(event => event === 'summary:cloud_a')).toHaveLength(1)
+  } finally { f.close() }
+})
+
+it('revokes a question acknowledgement that resolved just before its async continuation', async () => {
+  const f = setup()
+  try {
+    await f.connect(); f.rows([row()]); await vi.waitFor(() => expect(f.publication.state().pending).toBeNull())
+    f.publication.ask({ agentId: 'cloud_a', requestId: 'cloud_q_race', question: { text: 'Choice', choices: ['Yes'] } })
+    await Promise.resolve()
+    await f.connect()
+    f.rows([done()]); await vi.waitFor(() => expect(f.publication.state().pending).toBeNull())
+    expect(f.events.filter(event => event === 'summary:cloud_a')).toHaveLength(1)
   } finally { f.close() }
 })

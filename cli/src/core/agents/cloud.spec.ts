@@ -78,7 +78,7 @@ describe('agents a service owns', () => {
 
   it('lists what the service publishes and tells every client what changed', () => {
     const { cloud, clients } = setup()
-    cloud.doors.publish([harness(), { agentId: 'not-cloud' }, null] as never)
+    cloud.doors.publish([harness()])
     expect(cloud.owns('cloud_1')).toBe(true)
     expect(cloud.frames()).toMatchObject([{ id: 'cloud_1', location: 'cloud', engine: 'devin-cloud', terminal: { available: false } }])
     expect(clients.send).toHaveBeenCalledWith({ type: 'agent_synced', payload: { agent: expect.objectContaining({ id: 'cloud_1' }) } })
@@ -97,7 +97,7 @@ describe('agents a service owns', () => {
     expect(cloud.activity('cloud_1')).toBe('Reading code')
     expect(cloud.activity('cloud_2')).toBeNull()
     expect(cloud.activity('cloud_9')).toBeNull()
-    cloud.doors.publish('nonsense' as never)
+    cloud.doors.publish([])
     expect(clients.send).toHaveBeenCalledWith({ type: 'agent_deleted', payload: { agentId: 'cloud_1' } })
     expect(cloud.owns('cloud_1')).toBe(false)
   })

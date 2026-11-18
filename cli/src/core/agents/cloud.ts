@@ -62,15 +62,18 @@ export function createCloudAgents({ port, clients, openQuestions, log = (line) =
     clients.sendCommander(frame)
   }
 
+  const invalid = () => { log('[cloud] CLOUD_PUBLICATION_INVALID'); return { ok: false, error: 'CLOUD_PUBLICATION_INVALID' } as const }
   const doors: CloudCore = {
     checkpoint: () => cloudFingerprint([...harnesses.values()]),
     publish(list, cards = []) {
+      if (!Array.isArray(list)) return invalid()
       const next = new Map<string, CloudHarness>()
-      for (const raw of Array.isArray(list) ? list : []) {
+      for (const raw of list) {
         const harness = cloudHarnessIn(raw)
-        if (harness) next.set(harness.agentId, harness)
+        if (!harness || next.has(harness.agentId)) return invalid()
+        next.set(harness.agentId, harness)
       }
-      if (!admittedCards(cards, next)) { log('[cloud] CLOUD_PUBLICATION_INVALID'); return { ok: false, error: 'CLOUD_PUBLICATION_INVALID' } }
+      if (!admittedCards(cards, next)) return invalid()
       const byOwner = new Map(cards.map(card => [card.agentId, card]))
       const before = harnesses
       harnesses = next

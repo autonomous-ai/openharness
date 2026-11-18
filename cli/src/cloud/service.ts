@@ -74,6 +74,17 @@ const QUIET_MS = 24 * 60 * 60_000
 const LOOK_MIN_MS = 5_000
 const TRANSCRIPT_MAX = 500
 
+const OUTPUT_DETAILS: Readonly<Record<string, string>> = {
+  CLOUD_PUBLICATION_RECOVERY_REQUIRED: 'Run harness start --restart to rebuild Cloud notification history from saved provider sessions.',
+  CLOUD_PUBLICATION_UNAVAILABLE: 'Cloud output is waiting for a new connection. If it stays unavailable, run harness start --restart.',
+  CLOUD_PUBLICATION_BUSY: 'Cloud output is busy. Try again after pending work completes.',
+  CLOUD_PUBLICATION_LIMIT: 'Cloud output reached its limit. Restart Harness; if it remains unavailable, keep its Cloud data and contact support.',
+  CLOUD_PUBLICATION_INVALID: 'Cloud output was refused. Restart Harness; if it happens again, contact support.',
+  CLOUD_STATE_UNAVAILABLE: 'Cloud saved data could not be read. Keep the files and restore a known-good backup or contact support.',
+}
+const outputDetail = (error: string): string => OUTPUT_DETAILS[error] ?? 'Cloud output is unavailable.'
+const outputFailure = (error: string) => ({ ok: false as const, error, detail: outputDetail(error) })
+
 /** A harness's name from its task: its first line, short. */
 export function nameFor(task: string, agent: CloudAgentId): string {
   const line = task.split('\n').map((part) => part.trim()).find(Boolean) ?? ''
@@ -142,11 +153,10 @@ export function startCloudService(options: CloudServiceOptions) {
   }
   const admitted = async <T>(work: (reservation: CloudReservation) => Promise<T>, existing?: CloudReservation): Promise<T | { ok: false; error: string; detail: string }> => {
     const reservation = existing ?? (stateUnavailable ? null : publication.reserve())
-    if (!reservation) return { ok: false, error: stateUnavailable ? 'CLOUD_STATE_UNAVAILABLE' : publication.status() ?? 'CLOUD_PUBLICATION_BUSY',
-      detail: 'Cloud output is unavailable. Try again, or restart Harness if recovery is required.' }
+    if (!reservation) return outputFailure(stateUnavailable ? 'CLOUD_STATE_UNAVAILABLE' : publication.status() ?? 'CLOUD_PUBLICATION_BUSY')
     try {
       await ready
-      if (publication.blocked()) return { ok: false, error: publication.status() ?? 'CLOUD_PUBLICATION_UNAVAILABLE', detail: 'Cloud output needs recovery. Run harness start --restart to rebuild it from saved provider sessions.' }
+      if (publication.blocked()) return outputFailure(publication.status() ?? 'CLOUD_PUBLICATION_UNAVAILABLE')
       return await work(reservation)
     } finally { if (!existing) publication.release(reservation) }
   }
@@ -428,9 +438,7 @@ export function startCloudService(options: CloudServiceOptions) {
     cloud_agents: async (_payload, asker) => {
       if (!asker.owner) return { error: 'OWNER_REQUIRED' }
       const error = stateUnavailable ? 'CLOUD_STATE_UNAVAILABLE' : publication.status()
-      if (error) return { error, detail: error === 'CLOUD_PUBLICATION_RECOVERY_REQUIRED'
-        ? 'Cloud notification history needs recovery. Run harness start --restart to rebuild it from saved provider sessions.'
-        : 'Cloud output is unavailable. Try again after its connection recovers.' }
+      if (error) return { error, detail: outputDetail(error) }
       const agents = await Promise.all(CLOUD_AGENT_IDS.map(async (id) => {
         const info = CLOUD_AGENTS[id]
         const connected = await connectionFor(bridge, id).then(() => true, () => false)

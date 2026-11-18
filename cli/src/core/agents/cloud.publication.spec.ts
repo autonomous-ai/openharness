@@ -1,3 +1,6 @@
+import { answerExperimentQuery } from '../experimentQueries.js'
+import { fakeCore } from '../../testing/fakeCore.js'
+import type { ServiceQueryAuthority } from '../serviceLinks.js'
 import { createHash } from 'node:crypto'
 import { expect, it } from 'vitest'
 import { createCloudAgents } from './cloud.js'
@@ -47,4 +50,20 @@ it('keeps each changed row and card together before deleted rows', () => {
   events.length = 0
   cloud.doors.publish([row('cloud_a'), row('cloud_b')], [card('cloud_b'), card('cloud_a')])
   expect(events).toEqual(['row:cloud_a', 'card:cloud_a', 'row:cloud_b', 'card:cloud_b', 'delete:cloud_gone'])
+})
+
+it.each([
+  ['malformed row', [row('cloud_new'), { agentId: 'bad' }]],
+  ['duplicate owner', [row('cloud_new'), { ...row('cloud_new'), name: 'Duplicate' }]],
+  ['normalized duplicate', [row('cloud_new'), row(' cloud_new ')]],
+  ['non-list', 'invalid'],
+] as const)('refuses a %s through the real IPC dispatcher before replacing accepted owners', async (_reason, rows) => {
+  const { cloud, events } = setup()
+  cloud.doors.publish([row('cloud_existing')])
+  events.length = 0
+  const result = await answerExperimentQuery(fakeCore({ cloud: cloud.doors }), new Set(['cloud']), 'cloud',
+    'cloud_publish', { harnesses: rows, cards: [] }, undefined, { current: () => true } as ServiceQueryAuthority)
+  expect(result).toEqual({ ok: false, error: 'CLOUD_PUBLICATION_INVALID' })
+  expect(cloud.frames().map(frame => frame.id)).toEqual(['cloud_existing'])
+  expect(events).toEqual([])
 })

@@ -205,8 +205,12 @@ describe('the core API a light service runs on in its own process', () => {
     await expect(doors.publish([])).rejects.toThrow('gone')
     await doors.ask('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] })
     await doors.unask('cloud_1', 'cloud_q_1')
+    ask.mockResolvedValueOnce({ error: 'SERVICE_UNAVAILABLE' })
+    await expect(doors.ask('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] })).rejects.toThrow('CLOUD_PUBLICATION_UNAVAILABLE')
+    ask.mockResolvedValueOnce({ error: 'SERVICE_UNAVAILABLE' })
+    await expect(doors.unask('cloud_1', 'cloud_q_1')).rejects.toThrow('CLOUD_PUBLICATION_UNAVAILABLE')
     expect(ask.mock.calls.map(([query]) => query)).toEqual(['cloud_publish', 'cloud_publish', 'cloud_publish',
-      'cloud_checkpoint', 'cloud_checkpoint', 'cloud_publish', 'cloud_ask', 'cloud_unask'])
+      'cloud_checkpoint', 'cloud_checkpoint', 'cloud_publish', 'cloud_ask', 'cloud_unask', 'cloud_ask', 'cloud_unask'])
   })
 
   it('acts on the core for an experiment: agents made, turns stopped and delivered, windows told, each asked', async () => {

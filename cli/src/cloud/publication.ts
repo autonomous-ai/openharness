@@ -130,14 +130,14 @@ export function createCloudPublication(options: {
   }
   const publish = (list: CloudHarness[], reservation?: CloudReservation, force = false): void => {
     if (recovering || stopped || hold) return
+    if (!Array.isArray(list)) { fail('CLOUD_PUBLICATION_INVALID', true); throw new Error('CLOUD_PUBLICATION_INVALID') }
     const rows = new Map<string, CloudHarness>()
     for (const raw of list) {
       const row = cloudHarnessIn(raw)
-      if (row) {
-        if (Buffer.byteLength(JSON.stringify(row)) > ROW_BYTES) { fail('CLOUD_PUBLICATION_LIMIT', true); throw new Error('CLOUD_PUBLICATION_LIMIT') }
-        if (raw.card && JSON.stringify(raw.card) === JSON.stringify(row.card)) row.card = raw.card
-        rows.set(row.agentId, row)
-      }
+      if (!row || rows.has(row.agentId)) { fail('CLOUD_PUBLICATION_INVALID', true); throw new Error('CLOUD_PUBLICATION_INVALID') }
+      if (Buffer.byteLength(JSON.stringify(row)) > ROW_BYTES) { fail('CLOUD_PUBLICATION_LIMIT', true); throw new Error('CLOUD_PUBLICATION_LIMIT') }
+      if (raw.card && JSON.stringify(raw.card) === JSON.stringify(row.card)) row.card = raw.card
+      rows.set(row.agentId, row)
     }
     imageBytes = Buffer.byteLength(JSON.stringify([...rows.values()]))
     if (imageBytes > CLOUD_OUTPUT_BYTES - 4096) {

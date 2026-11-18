@@ -22,7 +22,7 @@ describe('the cloud agents\' doors', () => {
     expect(await ask('cloud_publish', { harnesses: [{ agentId: 'cloud_1' }], cards })).toEqual({ ok: true })
     expect(cloud.publish).toHaveBeenLastCalledWith([{ agentId: 'cloud_1' }], cards)
     await ask('cloud_publish', { harnesses: 'x' })
-    expect(cloud.publish).toHaveBeenLastCalledWith([], undefined)
+    expect(cloud.publish).toHaveBeenLastCalledWith('x', undefined)
     await ask('cloud_ask', { agentId: 'cloud_1', questionId: 'cloud_q_1', requestId: 'the-link-s-own', question: { text: 'Which?', choices: [] } })
     expect(cloud.ask).toHaveBeenCalledWith('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] })
     await ask('cloud_ask', {})
