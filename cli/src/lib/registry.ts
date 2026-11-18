@@ -1227,6 +1227,17 @@ function writeBoot(bootId: string): void {
   } catch { /* registry load will remain conservative on the next restart */ }
 }
 
+/**
+ * What a log says of a failed admission: the error's kind and code, each only in its own shape (a class name, a code such
+ * as ENOSPC), never its message or other text (it can quote a path, a file's or a person's name). A retried create said
+ * only "failed", and nothing told why its first pane was not admitted (CI, cli/e2e/scale.e2e.ts, 2026-11-19).
+ */
+function admissionError(error: unknown): string {
+  const shaped = (value: unknown, shape: RegExp) => typeof value === 'string' && shape.test(value) ? value : null
+  const code = shaped((error as { code?: unknown } | null)?.code, /^[A-Z][A-Z0-9_]{0,39}$/)
+  return (error instanceof Error ? shaped(error.name, /^[A-Z][A-Za-z0-9]{0,39}$/) ?? 'Error' : typeof error) + (code ? ` ${code}` : '')
+}
+
 class Registry {
   /** agentId → record. The store. */
   private agents = new Map<string, RegisteredSession>()
@@ -1953,7 +1964,7 @@ class Registry {
       if (entry.firstTask) firstTaskKept(agentId)
       return structuredClone(committed)
     }).catch(error => {
-      console.error('[registry] pending admission failed')
+      console.error(`[registry] pending admission failed · ${admissionError(error)}`)
       // Read as a taken route, a storage refusal opened and closed three panes and answered "tmux pane could not
       // be registered" (e2e/diskfull.e2e.ts, 2026-11-17). Its caller answers it by name instead.
       if (error instanceof RegistryPersistenceUnavailable || error instanceof AtomicWriteUnconfirmed) throw error
@@ -1991,7 +2002,7 @@ class Registry {
       if (!committed) return null
       this.terminalAvailableAgents.add(entry.agentId)
       return structuredClone(committed)
-    }).catch(() => { console.error('[registry] resume admission failed'); return null })
+    }).catch(error => { console.error(`[registry] resume admission failed · ${admissionError(error)}`); return null })
   }
 
   /** Readiness, its native process and the launch words are one durable authority change. */

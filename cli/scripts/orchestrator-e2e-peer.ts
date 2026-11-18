@@ -93,7 +93,7 @@ backend.onCreateAgent = async input => {
     registry, engine: input.engine, cwd: input.cwd, dsh: input.dsh, defaultName: input.name,
     ...(dsh ? { env: dshLaunch(dsh, input.cwd).env } : {}),
     sessionLabel: `harness-fixture-${++created}`,
-    argv: live
+    argv: () => live
       ? [process.execPath, '--import', loader, join(cliRoot, 'scripts/orchestrator-live-engine.ts'), input.cwd, input.engine, String(port), input.prompt]
       : [process.execPath, '--import', loader, join(cliRoot, 'scripts/orchestrator-fixture-engine.ts'), input.cwd, dsh ? 'worker' : 'director', String(port), machineId, join(cliRoot, 'src/cli.ts'), loader],
   })

@@ -18,6 +18,7 @@ import {
   terminalHintLines,
   buildEngineCommandArgv,
   buildEngineLaunchArgv,
+  launchAttempts,
   shellAgentArgv,
   buildTerminalLaunchArgv,
   interactiveEngineShell,
@@ -183,6 +184,52 @@ describe('buildEngineLaunchArgv', () => {
     buildEngineLaunchArgv('claude', {}, '/bin/zsh', undefined, undefined, NO_TMUX)
     expect(existsSync(stale)).toBe(false)
     expect(existsSync(fresh)).toBe(true)
+  })
+
+  it.each(['/bin/zsh', '/usr/local/bin/fish'])('a retry under %s removes the launch file its closed pane\'s shell never read, and no other', (shell) => {
+    const build = () => buildEngineLaunchArgv('claude', { cwd: '/work' }, shell, undefined, undefined, NO_TMUX)
+    const fileOf = (argv: string[]) => argv.map(arg => /^(?:\.|exec \S+) '(.+\.sh)'$/.exec(arg)?.[1]).find(Boolean)!
+    const another = fileOf(build())
+    const first = build()
+    const attempts = launchAttempts(first, build)
+    expect(attempts(1)).toBe(first)
+    const second = attempts(2)
+    // Its pane was closed at once (its registration refused), before its shell read the file: it waited an hour for
+    // the sweep, one more for each retry.
+    expect(existsSync(fileOf(first))).toBe(false)
+    expect(existsSync(fileOf(second))).toBe(true)
+    const third = attempts(3)
+    expect(existsSync(fileOf(second))).toBe(false)
+    // Another launch's file, its pane still to read it, stays.
+    expect(existsSync(another)).toBe(true)
+    rmSync(another)
+    rmSync(fileOf(third))
+  })
+
+  it('a retry removes no file a launch names outside its launch folder, nor one reached through it', () => {
+    const elsewhere = mkdtempSync(join(tmpdir(), 'launch-elsewhere-'))
+    const name = '0123abcd-0123-4abc-8def-0123456789ab.sh'
+    const outside = join(elsewhere, name)
+    writeFileSync(outside, '')
+    const through = `${join(env.ADAPTER_DATA_DIR, 'launch')}/../${elsewhere.split('/').slice(1).map(() => '..').join('/')}${outside}`
+    for (const arg of [`. '${outside}'`, `. '${through}'`, `source '${join(env.ADAPTER_DATA_DIR, 'launch', name)}'`]) {
+      const first = ['/bin/zsh', '-lc', arg]
+      const build = vi.fn(() => ['/bin/zsh'])
+      expect(launchAttempts(first, build)(2)).toBe(first)
+      expect(build).not.toHaveBeenCalled()
+    }
+    expect(existsSync(outside)).toBe(true)
+    rmSync(elsewhere, { recursive: true })
+  })
+
+  it('a retry of a launch with no one-time file runs it again as it is', () => {
+    // Windows has none, and its pane's other launch facts were read from the first argv (windowsPaneLaunch `held`).
+    const first = ['claude.exe', '--permission-mode', 'auto']
+    const build = vi.fn(() => ['claude.exe'])
+    const attempts = launchAttempts(first, build)
+    expect([attempts(1), attempts(2), attempts(3)]).toEqual([first, first, first])
+    expect(attempts(2)).toBe(first)
+    expect(build).not.toHaveBeenCalled()
   })
 
   it('puts the script on the command line when there is no data folder to write it in', () => {

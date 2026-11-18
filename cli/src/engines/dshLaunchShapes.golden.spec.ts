@@ -33,7 +33,7 @@ const pane = vi.hoisted(() => ({ calls: [] as Array<Record<string, unknown>>, tm
 const init = vi.hoisted(() => ({ calls: [] as Array<Record<string, unknown>>, code: 0 as number | null, timedOut: false }))
 vi.mock('../lib/createAgentPane.js', () => ({
   createAndRegisterPane: vi.fn(async (input: Record<string, unknown>) => {
-    pane.calls.push(input)
+    pane.calls.push({ ...input, argv: (input.argv as (attempt: number) => string[])(1) })
     return { ok: false, error: 'RECORDED', detail: 'the pane is not opened by this spec' }
   }),
 }))

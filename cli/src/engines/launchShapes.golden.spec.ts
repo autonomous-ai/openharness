@@ -34,7 +34,7 @@ process.env.TZ = 'America/New_York'
 const pane = vi.hoisted(() => ({ calls: [] as Array<Record<string, unknown>>, tmux: true }))
 vi.mock('../lib/createAgentPane.js', () => ({
   createAndRegisterPane: vi.fn(async (input: Record<string, unknown>) => {
-    pane.calls.push(input)
+    pane.calls.push({ ...input, argv: (input.argv as (attempt: number) => string[])(1) })
     return { ok: false, error: 'RECORDED', detail: 'the pane is not opened by this spec' }
   }),
 }))
