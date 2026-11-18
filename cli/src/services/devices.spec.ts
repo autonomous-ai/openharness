@@ -485,8 +485,8 @@ const turnTo = (agentId: string): void => {
 /** The listener the devices process opens (devicesProcess.ts), stood in for: what it was handed, its close, a front
  *  through its handler as `harness hardware watch` sends one, an attach as the harness-device mod sends one, the
  *  Notifications setting as a watch sends it, an agent's notice as `harness device notify` sends it, the tabs stream a
- *  watch holds open, the dial stream Orca's Harness Device plugin holds open, and a VS Code window's stream and state as
- *  Harness's own extension sends them. */
+ *  watch holds open, the dial stream Orca's Harness Device plugin holds open, the terminals of the worktree on Orca's
+ *  screen as that plugin sends them, and a VS Code window's stream and state as Harness's own extension sends them. */
 function fakeListener() {
   type Handlers = Readonly<Record<string, ListenerHandler | ListenerStreamHandler>>
   const given: Array<{ handlers: Handlers; log: (line: string) => void }> = []
@@ -499,6 +499,7 @@ function fakeListener() {
   const attach = (sessionId: unknown): unknown => (given[0].handlers.attach as ListenerHandler).handle({ type: 'attach', sessionId }, new AbortController().signal)
   const notify = (mode: unknown): unknown => (given[0].handlers.notify as ListenerHandler).handle({ type: 'notify', mode }, new AbortController().signal)
   const notice = (ask: Record<string, unknown>): unknown => (given[0].handlers.notice as ListenerHandler).handle({ type: 'notice', ...ask }, new AbortController().signal)
+  const orcaFront = (terminals: unknown): unknown => (given[0].handlers.orcaFront as ListenerHandler).handle({ type: 'orcaFront', terminals }, new AbortController().signal)
   /** The lines the devices write on the stream, its end, and whether it takes a line: one not drained yet does not. */
   const tabs = () => {
     const lines: unknown[] = []
@@ -555,7 +556,7 @@ function fakeListener() {
   /** A window's shells, as its extension reports them, the first one active. */
   const vscodeState = (window: string, terminals: number[]): unknown => (given[0].handlers['vscode-state'] as ListenerHandler)
     .handle({ type: 'vscode-state', window, terminals, active: terminals[0] ?? null, focused: true }, new AbortController().signal)
-  return { given, close, listen, front, attach, notify, notice, tabs, dial, vscode, vscodeState }
+  return { given, close, listen, front, attach, notify, notice, orcaFront, tabs, dial, vscode, vscodeState }
 }
 
 describe('the devices, as the core starts them', () => {
@@ -615,12 +616,13 @@ describe('the devices, as the core starts them', () => {
 })
 
 describe('the devices\' own listener (services/devicesListener.ts)', () => {
-  it('the devices open their listener once, with front, attach, the tab handler, the tabs stream, the dial stream, the Notifications setting, the notice and VS Code\'s windows', () => {
+  it('the devices open their listener once, with front, attach, the tab handler, the tabs stream, the dial stream, the worktree on Orca\'s screen, the Notifications setting, the notice and VS Code\'s windows', () => {
     const listener = fakeListener()
     start({ listen: listener.listen })
     expect(listener.listen).toHaveBeenCalledTimes(1)
     const [{ handlers, log }] = listener.given
-    expect(Object.keys(handlers)).toEqual(['front', 'attach', 'tab', 'tabs', 'dial', 'notify', 'notice', 'vscode', 'vscode-state'])
+    expect(Object.keys(handlers)).toEqual(['front', 'attach', 'tab', 'tabs', 'dial', 'orcaFront', 'notify', 'notice', 'vscode', 'vscode-state'])
+    expect(handlers.orcaFront).toMatchObject({ maxBytes: 4096, perSecond: 10 })
     expect(handlers.notice).toMatchObject({ maxBytes: NOTICE_MAX_BYTES, perSecond: NOTICE_PER_SECOND })
     expect(handlers.front).toMatchObject({ maxBytes: FRONT_MAX_BYTES, perSecond: FRONT_PER_SECOND })
     expect([FRONT_MAX_BYTES, FRONT_PER_SECOND]).toEqual([64, 10])
@@ -8206,6 +8208,219 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
     expect(orderLines()).toEqual(['[device] orca order · read', '[device] orca order · failed'])
     const secrets = [1, 2, 3].flatMap((n) => [H(n), agent(n), `sess-${n}`])
     expect(logs.filter((line) => secrets.some((secret) => line.includes(secret)))).toEqual([])
+  })
+})
+
+describe('Orca\'s ring is the worktree on screen (docs/plans/2026-11-18-dial-orca-tab-scope-design.md)', () => {
+  const H = (n: number) => `term_00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
+  /** Claude Code in Orca terminal `n`, as its hook says. */
+  const hook = (n: number, over: Partial<ObservedHookEvent> = {}): ObservedHookEvent => ({
+    engine: 'claude', sessionId: `sess-${n}`, event: 'session-start', cwd: '/work/api', callerPid: 4240 + n,
+    transcriptPath: `/t/sess-${n}.jsonl`,
+    hostHints: { ORCA_AGENT_SESSION_ID: 'orca-1', ORCA_TERMINAL_HANDLE: H(n), __CFBundleIdentifier: 'com.stablyai.orca' }, ...over,
+  })
+  const agent = (n: number) => observedAgentId('claude', `sess-${n}`)
+  const host = () => seen.dial as unknown as DaemonCableHost
+  /** Lets what a landing sets off run. */
+  const settled = () => new Promise((resolve) => setImmediate(resolve))
+  /** The latest read lands with these tabs, each a handle in a tab with no title, and these terminals an agent runs in. */
+  const land = async (fake: ReturnType<typeof fakeOrcaReads>, tabs: string[], terminals: OrcaTerminal[] = []) => {
+    const read = fake.orders.at(-1)
+    expect(read, 'a read asked').toBeTypeOf('function')
+    read!({ tabs: tabs.map((handle) => ({ handle })), terminals, worktrees: new Map() })
+    await settled()
+  }
+  /** Sessions `ns` running in Orca before the dial came, as their parent processes say, idle since: no hook, so no pane. */
+  const scanned = (...ns: number[]) => {
+    for (const n of ns) {
+      readers.known.set(`sess-${n}`, 'terminal')
+      readers.owners.set(`sess-${n}`, { engine: 'claude', pid: 4240 + n })
+      readers.rows.set(`sess-${n}`, { cwd: '/work/api', transcriptPath: null })
+      readers.working.set(`sess-${n}`, false)
+    }
+    readers.apps.mockResolvedValueOnce(new Map(ns.map((n) => [4240 + n, 'orca'])))
+  }
+  /** Orca's terminal `n`, Claude Code in it, in /work/api. */
+  const claudeIn = (n: number): OrcaTerminal => ({ handle: H(n), worktreePath: '/work/api', agentIdentity: 'claude' })
+  const ring = async () => (await host().listAgentSnapshot({ apps: true })).agents.map((a) => a.id)
+  const frontLines = () => logs.filter((line) => line.startsWith('[device] orca front'))
+  /** The devices on Orca's reads the spec lands, `n` sessions in Orca listed, no window, no dial, no stream and nothing
+   *  settled in front yet. `settle` keeps an app in front for the settle, as `harness hardware watch` tells it. The timers
+   *  are held; `setImmediate` is left to let a landing run. */
+  const withOrca = (n: number, over: Parameters<typeof start>[0] = {}) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    const listener = fakeListener()
+    const fake = fakeOrcaReads()
+    const started = start({ orcaReads: fake.reads, listen: listener.listen, ...over, faults: ['fleet', ...over.faults ?? []] })
+    for (let i = 1; i <= n; i++) started.port.observed(hook(i))
+    started.port.swarms(null)
+    const settle = async (app: string) => {
+      expect(listener.front(app)).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
+      await settled()
+    }
+    return { ...started, fake, listener, settle }
+  }
+  /** Scoped: a dial attached, these tabs landed, the plugin's dial stream open, and Orca settled in front. */
+  const scoped = async (n: number, tabs: string[]) => {
+    const started = withOrca(n)
+    seen.host.watching!(true)
+    await land(started.fake, tabs)
+    const stream = started.listener.dial()
+    await started.settle('orca')
+    return { ...started, stream }
+  }
+
+  it('scoped, an orcaFront makes Orca\'s ring the agents in those terminals, in tab order', async () => {
+    const { listener } = await scoped(3, [H(3), H(1), H(2)])
+    expect(listener.orcaFront([H(1), H(3)])).toBeUndefined()
+    const list = await host().listAgentSnapshot({ apps: true })
+    expect(list.agents.map((a) => a.id)).toEqual([agent(3), agent(1)])
+    expect(list.total).toBe(2)
+    expect(list.apps?.apps.find((app) => app.id === 'orca')?.count).toBe(3)
+    expect((await host().listAgentSnapshot()).agents).toHaveLength(3)
+  })
+
+  it('an agent placed by elimination is on screen when its terminal is', async () => {
+    // Diego's four tabs: a shell, two hooked agents, and the idle agent the attach scan found, with no pane.
+    const { port, fake, listener, settle } = withOrca(0)
+    port.observed(hook(2))
+    port.observed(hook(4))
+    scanned(3)
+    seen.host.watching!(true)
+    await settled()
+    const terminals = [claudeIn(2), claudeIn(3), claudeIn(4)]
+    await land(fake, [H(1), H(2), H(3), H(4)], terminals)
+    await land(fake, [H(1), H(2), H(3), H(4)], terminals)
+    listener.dial()
+    await settle('orca')
+    expect(await ring()).toEqual([agent(2), agent(3), agent(4)])
+    listener.orcaFront([H(3)])
+    expect(await ring()).toEqual([agent(3)])
+  })
+
+  it('a terminal with no agent, and no terminal at all, give an empty ring', async () => {
+    const { listener } = await scoped(2, [H(1), H(2)])
+    for (const terminals of [[H(9)], []]) {
+      listener.orcaFront(terminals)
+      const list = await host().listAgentSnapshot({ apps: true })
+      expect(list.agents).toEqual([])
+      expect(list.total).toBe(0)
+      expect(list.apps?.shown).toBe('orca')
+    }
+  })
+
+  it('the scope is read at each list', async () => {
+    const { port, listener } = await scoped(1, [H(1)])
+    listener.orcaFront([H(1), H(4)])
+    expect(await ring()).toEqual([agent(1)])
+    // A tab opened in the worktree on screen, then an agent started in it: Orca named its terminal before its hook did.
+    port.observed(hook(4))
+    expect(await ring()).toEqual([agent(1), agent(4)])
+    // Resumed in a terminal of another worktree.
+    port.observed(hook(1, { hostHints: { ...hook(1).hostHints, ORCA_TERMINAL_HANDLE: H(7) } }))
+    expect(await ring()).toEqual([agent(4)])
+  })
+
+  it('an agent in tmux inside one of those terminals is not listed', async () => {
+    const { port, listener } = await scoped(1, [H(1), H(2)])
+    // Its handle names the terminal tmux started in, not its pane: it has no Orca pane.
+    port.observed(hook(2, { hostHints: { TMUX_PANE: '%3', ORCA_TERMINAL_HANDLE: H(2), __CFBundleIdentifier: 'com.stablyai.orca' } }))
+    expect(await ring()).toEqual([agent(1), agent(2)])
+    listener.orcaFront([H(1), H(2)])
+    expect(await ring()).toEqual([agent(1)])
+  })
+
+  it('null clears it, and so does the stream\'s end: the whole ring again', async () => {
+    const { listener, stream } = await scoped(3, [H(1), H(2), H(3)])
+    const whole = [agent(1), agent(2), agent(3)]
+    listener.orcaFront([H(2)])
+    expect(await ring()).toEqual([agent(2)])
+    expect(listener.orcaFront(null)).toBeUndefined()
+    expect(await ring()).toEqual(whole)
+    listener.orcaFront([H(2)])
+    expect(await ring()).toEqual([agent(2)])
+    stream.end('gone')
+    expect(await ring()).toEqual(whole)
+  })
+
+  it('each change is one line, with a count and no handle', async () => {
+    const { listener, stream } = await scoped(3, [H(1), H(2), H(3)])
+    for (const terminals of [[H(1), H(2)], [H(2), H(1)], [H(1)], null, null, [H(3)]]) expect(listener.orcaFront(terminals)).toBeUndefined()
+    stream.end('gone')
+    expect(frontLines()).toEqual([
+      '[device] orca front · set · 2 terminals',
+      '[device] orca front · set · 1 terminals',
+      '[device] orca front · cleared',
+      '[device] orca front · set · 1 terminals',
+      '[device] orca front · cleared',
+    ])
+    expect(logs.filter((line) => line.includes('term_'))).toEqual([])
+  })
+
+  it('with no dial stream open an orcaFront is refused and nothing is kept', async () => {
+    const { fake, listener, settle } = withOrca(3)
+    seen.host.watching!(true)
+    await land(fake, [H(1), H(2), H(3)])
+    await settle('orca')
+    expect(listener.orcaFront([H(1)])).toBe(REFUSED)
+    expect(frontLines()).toEqual([])
+    expect(await ring()).toEqual([agent(1), agent(2), agent(3)])
+    listener.dial()
+    expect(await ring()).toEqual([agent(1), agent(2), agent(3)])
+  })
+
+  it('an orcaFront pushes nothing', async () => {
+    const { listener } = await scoped(2, [H(1), H(2)])
+    const pushed = calls('syncAgents').length
+    listener.orcaFront([H(1)])
+    listener.orcaFront(null)
+    await settled()
+    expect(calls('syncAgents')).toHaveLength(pushed)
+  })
+
+  it('Orca not in front, and a dial stream held with nothing sent, leave the whole ring', async () => {
+    const { fake, listener, settle } = withOrca(3)
+    seen.host.watching!(true)
+    await land(fake, [H(3), H(1), H(2)])
+    const whole = [agent(3), agent(1), agent(2)]
+    const held = listener.dial()
+    await settle('orca')
+    expect(await ring()).toEqual(whole)
+    // Its end has nothing to clear.
+    held.end('gone')
+    expect(frontLines()).toEqual([])
+    listener.dial()
+    await settle('ghostty')
+    expect(listener.orcaFront([H(1)])).toBeUndefined()
+    expect(await ring()).toEqual(whole)
+    await settle('orca')
+    expect(await ring()).toEqual([agent(1)])
+  })
+
+  it('with the observed agents switched off an orcaFront is taken and puts nobody in scope', () => {
+    const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
+    switched.HARNESS_DEVICE_OBSERVED = false
+    onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
+    const { listener } = withOrca(0)
+    const setScope = vi.spyOn(host(), 'setScope')
+    listener.dial()
+    expect(listener.orcaFront([H(1)])).toBeUndefined()
+    expect(frontLines()).toEqual(['[device] orca front · set · 1 terminals'])
+    expect(setScope).toHaveBeenCalledTimes(1)
+    const [app, scope] = setScope.mock.calls[0]
+    expect(app).toBe('orca')
+    expect(scope?.inScope(agent(1))).toBe(false)
+  })
+
+  it('a fault in the orca part costs the listener and the stream nothing', () => {
+    const { listener } = withOrca(0, { faults: ['orca'] })
+    const stream = listener.dial()
+    expect(logs).not.toContain('[devices] orca failed · injected fault: orca')
+    expect(listener.orcaFront([H(1)])).toBeUndefined()
+    expect(logs).toContain('[devices] orca failed · injected fault: orca')
+    expect(() => stream.end('gone')).not.toThrow()
+    expect(frontLines()).toEqual([])
   })
 })
 

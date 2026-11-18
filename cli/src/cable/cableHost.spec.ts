@@ -1,7 +1,7 @@
 // How the wheel's rows are composed: the local row, and the fleet's rows around it.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { DaemonCableHost, HARNESS_OPEN_WAIT_MS, cableEventFor, cableStepFor, type CableHostWiring } from './cableHost.js'
+import { DaemonCableHost, HARNESS_OPEN_WAIT_MS, cableEventFor, cableStepFor, type CableHostWiring, type RingScope } from './cableHost.js'
 import { FleetError, type FleetMachine, type MachineFleet } from './machineFleet.js'
 import type { FleetRouting } from '../services/fleet.js'
 import { ServiceUnavailableError } from '../core/serviceHost.js'
@@ -1170,6 +1170,118 @@ describe('the dial that shows one app at a time', () => {
     expect(ids(await host.listAgentSnapshot({ apps: true }))).toEqual(['o3', 'o1', 'o2'])
     host.setRank('orca', new Map([['o2', 0], ['o3', 1], ['o1', 2]]))
     expect(ids(await host.listAgentSnapshot({ apps: true }))).toEqual(['o2', 'o3', 'o1'])
+  })
+
+  describe('the front app\'s ring scoped (docs/plans/2026-11-18-dial-orca-tab-scope-design.md)', () => {
+    const without = (...out: string[]): RingScope => ({ inScope: (id) => !out.includes(id) })
+    /** A host over these agents whose settles run when `settle` says. */
+    function settling(agents: HostAgent[]): { host: DaemonCableHost; settle: (app: string) => void } {
+      const settles: Array<() => void> = []
+      const host = setup(agents, { appTimer: (_ms, run) => { settles.push(run); return () => {} } })
+      return { host, settle: (app) => { host.front(app); settles.at(-1)!() } }
+    }
+    const orcas = (n: number): HostAgent[] => Array.from({ length: n }, (_, i) => agent(`o${i + 1}`, 'orca'))
+
+    it('with Orca settled in front and a scope, the list is the in-scope agents in rank order, total is their count, and the app list is as it was', async () => {
+      const { host, settle } = settling(mixed())
+      settle('orca')
+      host.setRank('orca', new Map([['o3', 0], ['o1', 1], ['o2', 2]]))
+      const before = (await host.listAgentSnapshot({ apps: true })).apps?.apps
+      expect(before).toContainEqual({ id: 'orca', name: 'Orca', count: 3, waiting: 0 })
+      host.setScope('orca', without('o2'))
+      const scoped = await host.listAgentSnapshot({ apps: true })
+      expect(ids(scoped)).toEqual(['o3', 'o1'])
+      expect(scoped.total).toBe(2)
+      expect(scoped.apps?.apps).toEqual(before)
+    })
+
+    it('a scope that holds nobody gives an empty list and total 0', async () => {
+      const { host, settle } = settling(mixed())
+      settle('orca')
+      host.setScope('orca', without('o1', 'o2', 'o3'))
+      const scoped = await host.listAgentSnapshot({ apps: true })
+      expect(ids(scoped)).toEqual([])
+      expect(scoped.total).toBe(0)
+      expect(scoped.apps?.shown).toBe('orca')
+    })
+
+    it('the scope waits for Orca to settle in front: nothing settled, another app settled and none settled give today\'s list', async () => {
+      const { host, settle } = settling(mixed())
+      host.setScope('orca', without('o2'))
+      const today = async (): Promise<void> => {
+        const list = await host.listAgentSnapshot({ apps: true })
+        expect(list.apps?.shown).toBe('orca')
+        expect(ids(list)).toEqual(['o1', 'o2', 'o3'])
+        expect(list.total).toBe(3)
+      }
+      await today()
+      // In front, not settled yet.
+      host.front('orca')
+      await today()
+      // VS Code has no agents, so Orca stays shown.
+      settle('vscode')
+      await today()
+      settle('none')
+      await today()
+    })
+
+    it('another app shown is not scoped: with Orca in front, a pick of Ghostty lists Ghostty\'s two, and a pick back lists Orca\'s scope', async () => {
+      const { host, settle } = settling(mixed())
+      settle('orca')
+      host.setScope('orca', without('o2'))
+      expect(host.pickApp('ghostty')).toBe('switched')
+      const ghostty = await host.listAgentSnapshot({ apps: true })
+      expect(ids(ghostty)).toEqual(['g1', 'g2'])
+      expect(ghostty.total).toBe(2)
+      expect(host.pickApp('orca')).toBe('switched')
+      const orca = await host.listAgentSnapshot({ apps: true })
+      expect(ids(orca)).toEqual(['o1', 'o3'])
+      expect(orca.total).toBe(2)
+    })
+
+    it('a dial that does not say appFilter gets the single ring, scope or not', async () => {
+      const { host, settle } = settling(mixed())
+      settle('orca')
+      host.setScope('orca', without('o2'))
+      const all = await host.listAgentSnapshot()
+      expect(ids(all)).toEqual(['o1', 'g1', 'o2', 'o3', 'g2'])
+      expect(all.total).toBe(5)
+    })
+
+    it('setScope with undefined gives today\'s list again', async () => {
+      const { host, settle } = settling(mixed())
+      settle('orca')
+      host.setScope('orca', without('o2'))
+      expect(ids(await host.listAgentSnapshot({ apps: true }))).toEqual(['o1', 'o3'])
+      host.setScope('orca', undefined)
+      const today = await host.listAgentSnapshot({ apps: true })
+      expect(ids(today)).toEqual(['o1', 'o2', 'o3'])
+      expect(today.total).toBe(3)
+    })
+
+    it('more than 16 in scope: 16 rows, and total is all in scope', async () => {
+      // 19 Orca agents, 18 of them in scope: the total tells the scope's count from the app's.
+      const { host, settle } = settling(orcas(19))
+      settle('orca')
+      host.setScope('orca', without('o1'))
+      const scoped = await host.listAgentSnapshot({ apps: true })
+      expect(ids(scoped)).toEqual(orcas(17).slice(1).map((a) => a.id))
+      expect(scoped.total).toBe(18)
+    })
+
+    it('the same scope object keeps its ring, and a new one starts a new ring', async () => {
+      const agents = orcas(17)
+      const { host, settle } = settling(agents)
+      settle('orca')
+      const scope = without()
+      host.setScope('orca', scope)
+      expect(ids(await host.listAgentSnapshot({ apps: true }))).not.toContain('o17')
+      agents[16] = agent('o17', 'orca', { lastActivityAt: 100 })
+      host.setScope('orca', scope)
+      expect(ids(await host.listAgentSnapshot({ apps: true }))).not.toContain('o17')
+      host.setScope('orca', without())
+      expect(ids(await host.listAgentSnapshot({ apps: true }))).toContain('o17')
+    })
   })
 
   it('a pick switches the list and holds through a count change', async () => {

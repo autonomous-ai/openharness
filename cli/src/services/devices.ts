@@ -88,7 +88,7 @@ import { setVoiceRouterDeviceConnected, setVoiceRouterSessions, shutdownVoiceRou
 import { createTally, createTierDecider, type Tier, type TierDecision, type TierInput } from '../lib/notifyTier.js'
 import { VERSION } from '../version.js'
 import { createPartGuard } from './devicesGuard.js'
-import { attachHandler, dialStream, frontHandler, noticeHandler, notifyHandler, tabHandler, tabsStream, type DevicesListener, type ListenerHandler, type ListenerStreamHandler } from './devicesListener.js'
+import { attachHandler, dialStream, frontHandler, noticeHandler, notifyHandler, orcaFrontHandler, tabHandler, tabsStream, type DevicesListener, type ListenerHandler, type ListenerStreamHandler } from './devicesListener.js'
 import { FLEET_FALLBACKS, startFleet, type Fleet } from './fleet.js'
 
 export { DEVICES_REQUESTS }
@@ -380,7 +380,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // The stream Orca's Harness Device plugin holds open: whether a dial is attached and the agent it shows
   // (docs/specs/2026-11-16-orca-device-plugin.md). A part of its own, so a throw on its path is never the dial's. Its
   // count's timer stops with the devices.
-  const dial = dialStream({ log, after: timerIn('dialStream') })
+  const dial = dialStream({ log, after: timerIn('dialStream'), ended: () => part.call('orca', () => orcaFronted(null)) })
   // The streams Harness's own VS Code extension holds open, one a window, and the terminal each VS Code agent runs in
   // (docs/plans/2026-11-17-dial-vscode-extension-design.md). An adapter's capabilities are read at each look, so a
   // terminal found or lost tells the dials to look again.
@@ -1407,6 +1407,30 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     cmuxSource.onChange(place)
   }
 
+  // ── the worktree on Orca's screen ──────────────────────────────────────────────────────────────────
+  //
+  // Orca's Harness Device plugin tells the terminals of the worktree on Orca's screen while it holds the dial stream, and
+  // while Orca is settled in front, Orca's ring for a dial that says appFilter is the agents in them
+  // (docs/plans/2026-11-18-dial-orca-tab-scope-design.md). In memory only, and dropped as the plugin's stream ends: stale
+  // handles never scope the ring. Each change is one line with a count, never a handle. The message and the stream's end
+  // come in inside the orca part: Node reports a throw in an abort listener as an uncaught exception.
+  /** The handles of the worktree on Orca's screen; undefined while none is told. */
+  let orcaFront: ReadonlySet<string> | undefined
+  /** The plugin's terminals, null for none. The same handles in another order change nothing. */
+  const orcaFronted = (terminals: readonly string[] | null): void => {
+    const kept = orcaFront
+    const front = terminals === null ? undefined : new Set(terminals)
+    if (front && kept ? front.size === kept.size && [...front].every((handle) => kept.has(handle)) : front === kept) return
+    orcaFront = front
+    log(terminals === null ? '[device] orca front · cleared' : `[device] orca front · set · ${terminals.length} terminals`)
+    // Read when the dials list, never kept: an agent that starts in one of those terminals joins at the next list, and
+    // one resumed elsewhere leaves. Its terminal is its Orca pane or, with none yet, where the last order read placed it.
+    cableHost.setScope('orca', front && { inScope: (agentId) => {
+      const handle = observed?.paneOf(agentId, 'orca') ?? observed?.placedAt(agentId, 'orca')
+      return handle !== undefined && front.has(handle)
+    } })
+  }
+
   // ── the pane focused in Orca ───────────────────────────────────────────────────────────────────────
   //
   // Where Orca's CLI has `watch-focus`, the dials turn to the agent in the pane the person focuses in Orca: a prompt they
@@ -1570,6 +1594,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     tab: tabHandler((tab) => part.call('dial', () => tabReported(tab))),
     tabs: tabs.handler,
     dial: dial.handler,
+    orcaFront: orcaFrontHandler(() => dial.isOpen(), (terminals) => part.call('orca', () => orcaFronted(terminals))),
     notify: notifyHandler((mode) => {
       let answer: { mode: NotifyMode } | { error: string } = { error: 'FAILED' }
       part.call('dial', () => { answer = setNotify(mode) })

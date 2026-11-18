@@ -26,6 +26,7 @@ import { listenLocalSocket, type LocalSocketServer } from '../lib/localSocket.js
 import type { DialAgent } from '../cable/cableSession.js'
 import { APP_IDS } from '../cable/hosts/hostDetect.js'
 import { FRONT_NONE } from '../cable/hosts/frontApp.js'
+import { ORCA_HANDLE } from '../cable/hosts/orca.js'
 import { REPLACED_LINE, tabOf, type Tab } from '../cable/hosts/tabs.js'
 import { isNotifyMode, type NotifyMode } from '../cable/notifyMode.js'
 import { NOTICE_SESSION, noticeFolder, noticeLine, type NoticeAsk, type NoticeResult } from '../lib/dialNotice.js'
@@ -522,6 +523,8 @@ export type DialLine = { attached: false } | { attached: true; agent: DialAgent 
 
 export interface DialStream {
   handler: ListenerStreamHandler
+  /** Whether a stream is open: from its open until it ends. */
+  isOpen(): boolean
   /** Whether any dial is attached. */
   attached(on: boolean): void
   /** The agent the dial shows, or null for none. */
@@ -535,7 +538,12 @@ export interface DialStream {
  * across ten agents while a line drains is two lines, and no timer writes one. A name leaves the process here and
  * nowhere else: the log says only that the stream opened, why it ended and how many lines a minute.
  */
-export function dialStream({ log, after }: { log(line: string): void; after(ms: number, run: () => void): () => void }): DialStream {
+export function dialStream({ log, after, ended }: {
+  log(line: string): void
+  after(ms: number, run: () => void): () => void
+  /** Run once the open stream ends, for any reason: what the plugin told the devices lives no longer than its stream. */
+  ended?(): void
+}): DialStream {
   let on = false
   let agent: DialAgent | null = null
   /** Writes the latest line on the open stream; none with no stream open. */
@@ -566,13 +574,16 @@ export function dialStream({ log, after }: { log(line: string): void; after(ms: 
         writer = write
         log('[devices] dial stream · open')
         stream.ended.addEventListener('abort', () => {
-          // A newer stream is the open one by the time the older ends.
-          if (writer === write) writer = undefined
           log(`[devices] dial stream · ended · ${stream.ended.reason}`)
+          // A newer stream is the open one by the time the older ends: only the open stream's end closes it and runs `ended`.
+          if (writer !== write) return
+          writer = undefined
+          ended?.()
         })
         stream.onWritable(write)
       },
     },
+    isOpen: () => writer !== undefined,
     attached: (next) => {
       on = next
       writer?.()
@@ -582,6 +593,32 @@ export function dialStream({ log, after }: { log(line: string): void; after(ms: 
       // stays whole.
       agent = next && { name: [...next.name].slice(0, DIAL_NAME_MAX).join(''), app: next.app }
       writer?.()
+    },
+  }
+}
+
+/** Ten a second on a connection: the plugin sends one each time Orca's worktree on screen changes. */
+export const ORCA_FRONT_PER_SECOND = 10
+/** Its longest message, 50 handles, is 2234 bytes. */
+export const ORCA_FRONT_MAX_BYTES = 4096
+/** The most terminals of a workspace Orca tells a plugin (its PLUGIN_WORKSPACE_TERMINAL_LIMIT). */
+export const ORCA_FRONT_MAX_TERMINALS = 50
+
+/**
+ * The terminals of the worktree on Orca's screen, from Orca's Harness Device plugin
+ * (docs/plans/2026-11-18-dial-orca-tab-scope-design.md): their handles in Orca's order, or null for none, handed on as
+ * given. Taken only while the plugin's dial stream is open, as the devices drop them when that stream ends: one taken
+ * with none open, a late retry, would leave a scope nobody clears. It keeps nothing and logs nothing.
+ */
+export function orcaFrontHandler(isOpen: () => boolean, front: (terminals: readonly string[] | null) => void): ListenerHandler {
+  return {
+    maxBytes: ORCA_FRONT_MAX_BYTES,
+    perSecond: ORCA_FRONT_PER_SECOND,
+    handle: ({ terminals }) => {
+      if (!isOpen()) return REFUSED
+      if (terminals !== null && !(Array.isArray(terminals) && terminals.length <= ORCA_FRONT_MAX_TERMINALS
+        && terminals.every((handle): handle is string => typeof handle === 'string' && ORCA_HANDLE.test(handle)))) return REFUSED
+      front(terminals)
     },
   }
 }

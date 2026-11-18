@@ -3253,6 +3253,19 @@ describe('ObservedSource panes', () => {
     src.setPaneNames('orca', named([OTHER, 'Dev', true]), new Map([[src.list()[0].id, OTHER]]))
     expect(src.list()[0].name).toBe('proj')
   })
+
+  it('placedAt answers the pane an agent was placed at, in that adapter alone', async () => {
+    const s = setup({ actions: fakeActions().actions })
+    const id = await scannedIdle(s)
+    s.src.setPaneNames('orca', named([HANDLE, 'PM']), new Map([[id, HANDLE]]))
+    expect(s.src.placedAt(id, 'orca')).toBe(HANDLE)
+    expect(s.src.placedAt(id, 'cmux')).toBeUndefined()
+    expect(s.src.placedAt('observed:unknown', 'orca')).toBeUndefined()
+    // A place is never one of its panes.
+    expect(s.src.paneOf(id, 'orca')).toBeUndefined()
+    s.src.setPaneNames('orca', named([HANDLE, 'PM']), none)
+    expect(s.src.placedAt(id, 'orca')).toBeUndefined()
+  })
 })
 
 // An agent in Terminal, iTerm2 or Ghostty has a tab a rest selects, by the tty of its process
