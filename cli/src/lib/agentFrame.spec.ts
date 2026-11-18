@@ -2,6 +2,7 @@ import { mkdtemp, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
+import { MISSING_HELPER, REPLACED_PROGRAM } from '../engines/kit/identityScan.js'
 import { OPENCLAW_STATES } from '../engines/openclaw/contract.js'
 import { agentFrame } from './agentFrame.js'
 import { agentProject } from './agentProject.js'
@@ -42,6 +43,15 @@ describe('agentFrame', () => {
     const waiting = { ...session(null), identityHold: 'Waiting for the saved session homes.' }
     expect(await agentFrame(waiting, context)).not.toHaveProperty('namedState')
     expect(await agentFrame(session(null), context)).not.toHaveProperty('namedState')
+  })
+  // Only the person clears these two; a helper that failed to prepare may recover on a later pass, so it stays the daemon's.
+  it('names a build without its helper and a replaced program as named states', async () => {
+    const context = { selectedModel: null, terminalAvailable: true }
+    for (const identityHold of [MISSING_HELPER, REPLACED_PROGRAM]) {
+      expect(await agentFrame({ ...session(null), identityHold }, context)).toMatchObject({ namedState: identityHold })
+    }
+    const transient = { ...session(null), identityHold: 'Conversation identity is held: the native control helper is unavailable.' }
+    expect(await agentFrame(transient, context)).not.toHaveProperty('namedState')
   })
   it('a stopped local run is a named state', async () => {
     const held = { ...session(null), engine: 'openclaw' as const, identityHold: "OpenClaw's local run stopped: boom" }

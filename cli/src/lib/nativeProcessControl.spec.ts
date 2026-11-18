@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { IdentityReadUnavailable, REPLACED_PROGRAM } from '../engines/kit/identityScan.js'
 import { parseDescriptors } from '../engines/kit/nativeDescriptors.js'
 import { NativeEvidenceBudget } from '../engines/kit/nativeEvidence.js'
 import { controlDescriptors, nativeProcessControl, parseNativeProcessControl } from './nativeProcessControl.js'
@@ -113,11 +114,14 @@ describe('strict Darwin control protocol', () => {
   it('names a live process whose program was replaced on disk, and only that, when the probe fails', async () => {
     const live = process.pid, gone = 2_000_000_000
     const paths = (pid: number) => `${JSON.stringify({ schema: 1, mode: 'paths' })}\n${JSON.stringify({ pid, unavailable: true })}\n`
-    for (const [pid, expected] of [[live, 'replaced on disk'], [gone, 'probe did not complete']] as const) {
+    for (const [pid, expected] of [[live, { message: REPLACED_PROGRAM }], [gone, 'probe did not complete']] as const) {
       host.exec.mockImplementation((_path, args, _options, callback) => args[0] === '--paths'
         ? callback(null, paths(pid), '')
         : callback(Object.assign(Error('exit 75'), { code: 75 }), Buffer.alloc(0), Buffer.alloc(0)))
-      await expect(nativeProcessControl([pid], 0, budget())).rejects.toThrow(expected)
+      const read = nativeProcessControl([pid], 0, budget())
+      await expect(read).rejects.toBeInstanceOf(IdentityReadUnavailable)
+      if (typeof expected === 'string') await expect(read).rejects.toThrow(expected)
+      else await expect(read).rejects.toMatchObject(expected)
       expect(host.exec.mock.calls.at(-1)?.[1]).toEqual(['--paths', String(pid)])
     }
     host.exec.mockClear().mockImplementation((_path, _args, _options, callback) => callback(null, Buffer.from(output({ ...record(), imageHex: 'zz' })), Buffer.alloc(0)))
