@@ -2948,6 +2948,23 @@ describe('cable session', () => {
     await session.stop()
   })
 
+  it('forwards an answer verbatim to a question that repeats a key or an option', async () => {
+    // Two options in the same words are one answer, not two the dial could have meant: refused, they sent the person to
+    // the terminal for a question the dial had always answered.
+    const host = makeHost()
+    const { session, port } = await connect(host)
+    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+    await session.question('a1', 'req-7', [
+      { key: 'scope', q: 'Which scope?', options: ['wide', 'wide', 'narrow'] },
+      { key: 'scope', q: 'Which scope?', options: ['wide'] },
+    ])
+    port.say({ t: 'answer', agentId: 'a1', requestId: 'req-7', answers: { scope: 'wide' } })
+    await vi.waitFor(() => expect(host.answer).toHaveBeenCalled())
+    expect(host.answer).toHaveBeenCalledWith('a1', 'req-7', { scope: 'wide' })
+    await session.stop()
+  })
+
   it('fits ten machines with long names into single frames', async () => {
     const many: CableMachine[] = Array.from({ length: 10 }, (_, i) => ({
       id: `machine-${String(i).padStart(30, 'x')}`,

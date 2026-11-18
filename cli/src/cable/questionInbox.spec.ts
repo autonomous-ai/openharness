@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { CABLE_MAX_PAYLOAD } from './cableFrame.js'
 import { QuestionInbox, type ReviewedAnswer } from './questionInbox.js'
 
 const question = () => [{ key: 'scope', q: 'Which scope?', options: ['This file', 'Whole project'], multi: false }]
@@ -71,6 +72,21 @@ describe('QuestionInbox', () => {
     for (let i = 0; i < 65; i++) inbox.set(`agent-${i}`, 'q', question())
     expect(inbox.read('agent-0').ok).toBe(false)
     expect(inbox.read('agent-64').ok).toBe(true)
+  })
+  it('keeps the questions each agent asked last as they came, but none over a frame', () => {
+    const inbox = new QuestionInbox(), source = question()
+    inbox.set('a', 'qa', source)
+    source[0].options[0] = 'changed'
+    expect(inbox.asked('a', 'qa')).toEqual(question())
+    expect(inbox.asked('a', 'old')).toBeUndefined()
+    // The dial never read one over a frame, so no answer is in its words: 64 agents' worth were held for nothing.
+    inbox.set('a', 'qb', [{ ...question()[0], options: ['x'.repeat(CABLE_MAX_PAYLOAD)] }])
+    expect(inbox.asked('a', 'qb')).toBeUndefined()
+    expect(() => inbox.set('a', 'qd', [{ ...question()[0], size: BigInt(1) }])).not.toThrow()
+    expect(inbox.asked('a', 'qd')).toBeUndefined()
+    inbox.set('a', 'qc', question())
+    inbox.close('a', 'qc')
+    expect(inbox.asked('a', 'qc')).toBeUndefined()
   })
   it('asks each question once until the dial loses it, and a drawer that carries one holds it as asked', () => {
     const inbox = new QuestionInbox()
