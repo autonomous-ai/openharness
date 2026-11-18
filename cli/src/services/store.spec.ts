@@ -47,14 +47,25 @@ describe('the store service', () => {
     expect(deps.setupAgain).toHaveBeenCalledOnce()
     expect(await requests.dsh_list({}, ASKER)).toEqual({ dsh: [{ id: 'acme/thing', installed: false }] })
   })
-  it('says when setting them up again stops, and answers on', async () => {
+  // By its code: what was thrown names the index's path, in the person's home.
+  it('says when setting them up again stops, by its code, and answers on', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
-      const { requests } = setup({ setupAgain: vi.fn(async () => { throw new Error('EACCES: permission denied') }) })
+      const denied = Object.assign(new Error("EACCES: permission denied, open '/home/someone/.local/share/harness/dsh/installed.json'"), { code: 'EACCES' })
+      const { requests } = setup({ setupAgain: vi.fn(async () => { throw denied }) })
       // The rejection is handled within the turn it happens in; setImmediate runs after it.
       await new Promise((done) => setImmediate(done))
-      expect(warn).toHaveBeenCalledExactlyOnceWith('[dsh] setting harnesses up again stopped · Error: EACCES: permission denied')
+      expect(warn).toHaveBeenCalledExactlyOnceWith('[dsh] setting harnesses up again stopped · EACCES')
       expect(await requests.dsh_list({}, ASKER)).toEqual({ dsh: [{ id: 'acme/thing', installed: false }] })
+    } finally { warn.mockRestore() }
+  })
+
+  it('says a stop with no code by the kind of error', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      setup({ setupAgain: vi.fn(async () => { throw new SyntaxError("Unexpected token in JSON at /home/someone/.local/share/harness/dsh") }) })
+      await new Promise((done) => setImmediate(done))
+      expect(warn).toHaveBeenCalledExactlyOnceWith('[dsh] setting harnesses up again stopped · SyntaxError')
     } finally { warn.mockRestore() }
   })
   it('puts Hachi in place when its switch turns on while it runs, and generates nothing of it while off', () => {
