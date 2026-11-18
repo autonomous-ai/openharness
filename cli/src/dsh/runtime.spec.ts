@@ -451,6 +451,15 @@ describe('after Harness\'s folder moved', () => {
     expect(readdirSync(join(home, '.harness'))).toEqual(['runtime'])
   })
 
+  // A home with no real path to read (gone, or behind a folder this account cannot open) is still found as written.
+  it('a home whose real path cannot be read is matched as written', () => {
+    const gone = join(root, 'gone home')
+    vi.stubEnv('HOME', gone)
+    const hash = createHash('sha256').update('key').digest('hex')
+    expect(harnessRuntimeDir(gone, 'key')).toBe(join(gone, '.local', 'state', 'harness', 'runtime', hash))
+    expect(harnessRuntimeDir(ws, 'key')).toBe(join(ws, '.harness', 'runtime', hash))
+  })
+
   // What a migration of old instructions keeps of the home's AGENTS.md goes beside those runtimes, never into the bridge.
   it('old instructions taken out of the home\'s AGENTS.md are kept in the state root\'s runtime folder', () => {
     move()
