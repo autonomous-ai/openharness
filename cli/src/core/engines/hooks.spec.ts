@@ -363,8 +363,8 @@ describe('which agent a hook belongs to', () => {
       await hook.waiting()
       await new Promise((resolve) => setTimeout(resolve, 250))
       expect(hook.answer()).toBeUndefined()
-      // Said before the wait, so the hook is answered then: its client gives up after 500ms and writes
-      // the registry itself (hook/notify.mjs).
+      // Said before the wait, so the hook is answered then: its engine waits on it, and its client gives
+      // up after 500ms (hook/notify.mjs).
       expect(onWait).toHaveBeenCalledTimes(1)
       // What restart.ts does once the new process is found and probed.
       onPane['%1'] = agent('a1', 200)
