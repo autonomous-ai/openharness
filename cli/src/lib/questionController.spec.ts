@@ -138,6 +138,11 @@ describe('asynchronous question evidence', () => {
       expect(await toggled(['A', 'B', 'A, B'], 'A, B')).toEqual(['A, B'])
     })
 
+    it('passes over a blank piece, as the loose reading always did', async () => {
+      expect(await toggled(['Yes, continue', 'Yes, stop', 'Maybe'], 'Yes, stop, Maybe, ')).toEqual(['Yes, stop', 'Maybe'])
+      expect(await toggled(['Yes, continue', 'Yes, stop', 'Maybe'], ', Yes, stop,, Maybe')).toEqual(['Yes, stop', 'Maybe'])
+    })
+
     it('matches each piece loosely, as before, when no labels spell the answer', async () => {
       expect(await toggled(['Tea', 'Coffee', 'Milk'], 'tea, coff')).toEqual(['Tea', 'Coffee'])
     })
