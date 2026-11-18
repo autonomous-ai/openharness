@@ -152,6 +152,14 @@ describe('no hand-built home .harness path outside config/harnessHome.ts', () =>
     expect(hits.map(printed), 'Build the path with harnessPath() from config/harnessHome.ts.').toEqual([])
   })
 
+  it('excuses an allowlisted line, not another hit in the same file', () => {
+    for (const [file, planted] of [
+      ['harnessd/platform.ts', 'const logs = join(this.deps.home, \'.harness\', \'logs\')'],
+      ['lib/localSocket.ts', String.raw`const pattern = /\/\.harness\/run/`],
+      ['engines/kit/notifyHooks.ts', String.raw`const pattern = /\/\.harness\/run/`],
+    ]) expect(hitsIn(file, planted).filter((hit) => !allowed(hit)), `${file}: ${planted}`).toHaveLength(1)
+  })
+
   it('every allowlist entry still matches a hit', () => {
     const hits = treeHits()
     const stale = ALLOWED.flatMap(({ files, text }) => files.filter((file) => !hits.some((hit) => hit.file === file && text(hit.text))))
