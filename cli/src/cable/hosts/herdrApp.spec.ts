@@ -773,12 +773,17 @@ describe('the Herdr adapter', () => {
         adapter.scroll(pane('t7'), -8)
         await turn()
         expect(pressed).toEqual([press('pageup', 1)])
-        // The gap holds the next call, as it holds a run.
+        // The gap holds the next call, as it holds a run, and a Claude Code terminal's is 100 ms.
         adapter.scroll(pane('t7'), 16)
         await turn()
         expect(pressed).toEqual([press('pageup', 1)])
-        await vi.advanceTimersByTimeAsync(50)
-        expect(pressed).toEqual([press('pageup', 1), press('pagedown', 2)])
+        await vi.advanceTimersByTimeAsync(99)
+        expect(pressed).toEqual([press('pageup', 1)])
+        // One key a call: the second waits for the next gap.
+        await vi.advanceTimersByTimeAsync(1)
+        expect(pressed).toEqual([press('pageup', 1), press('pagedown', 1)])
+        await vi.advanceTimersByTimeAsync(100)
+        expect(pressed).toEqual([press('pageup', 1), press('pagedown', 1), press('pagedown', 1)])
         expect(calls).toEqual([])
         adapter.scroll(pane('t8'), -3)
         await turn()
@@ -824,27 +829,41 @@ describe('the Herdr adapter', () => {
         await vi.advanceTimersByTimeAsync(100)
         expect(pressed).toEqual([press('pageup', 1)])
         await answer(true)
-        expect(pressed).toEqual([press('pageup', 1), press('pagedown', 2)])
+        expect(pressed).toEqual([press('pageup', 1), press('pagedown', 1)])
         await answer(true)
-        expect(pressed).toHaveLength(2)
+        await vi.advanceTimersByTimeAsync(100)
+        expect(pressed).toEqual([press('pageup', 1), press('pagedown', 1), press('pagedown', 1)])
+        await answer(true)
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(pressed).toHaveLength(3)
       })
 
-      it('at most 12 keys go in one call, and the lines that wait are clamped to 100', async () => {
+      // PM, 2026-11-18: at 5 keys a call, a page each, a fast fling went on scrolling after the finger stopped.
+      it('one key a call, one call every 100 ms at most, and the lines that wait are clamped to 4 keys\' worth', async () => {
         const { pressed, adapter } = claudeCode()
         adapter.scroll(pane('t7'), 300)
         await turn()
-        expect(pressed).toEqual([press('pagedown', 12)])
+        expect(pressed).toEqual([press('pagedown', 1)])
+        // 292 lines wait, clamped to 32: 4 keys more, 100 ms apart, then none.
+        for (let key = 2; key <= 5; key++) {
+          await vi.advanceTimersByTimeAsync(100)
+          expect(pressed).toHaveLength(key)
+        }
         await vi.advanceTimersByTimeAsync(5_000)
-        expect(pressed).toEqual([press('pagedown', 12), press('pagedown', 12)])
+        expect(pressed).toEqual(Array(5).fill(press('pagedown', 1)))
 
+        // The lines that come while a call is under way are clamped too.
         const under = claudeCode(true)
         under.adapter.scroll(pane('t7'), -8)
         under.adapter.scroll(pane('t7'), -60)
         under.adapter.scroll(pane('t7'), -60)
-        await vi.advanceTimersByTimeAsync(100)
         await under.answer(true)
-        await under.answer(true)
-        expect(under.pressed).toEqual([press('pageup', 1), press('pageup', 12)])
+        for (let key = 2; key <= 5; key++) {
+          await vi.advanceTimersByTimeAsync(100)
+          await under.answer(true)
+        }
+        await vi.advanceTimersByTimeAsync(5_000)
+        expect(under.pressed).toEqual(Array(5).fill(press('pageup', 1)))
       })
 
       it('a refused or timed-out call drops its lines and those waiting, and says so once until a call succeeds', async () => {
