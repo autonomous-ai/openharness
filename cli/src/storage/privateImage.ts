@@ -40,11 +40,23 @@ export async function withPrivateImageDirectory<T>(directory: string, work: (rea
       }
       verify()
     }
+    let directoryFailure: SessionStorageUnavailable | undefined
+    const check = () => {
+      if (directoryFailure) throw directoryFailure
+      try { verify() }
+      catch (error) {
+        // An individual file may be skipped. A failed container admission revokes the entire page,
+        // even if another writer restores its path or permissions before the final fence.
+        directoryFailure = new SessionStorageUnavailable(error instanceof StateFileCleanupUnconfirmed
+          ? 'cleanup-unconfirmed' : sessionStorageFailureCode(error))
+        throw directoryFailure
+      }
+    }
     const value = await work((file, maxBytes) => readImage(file, maxBytes, () => {
       if (!active || dirname(file) !== directory) throw new SessionStorageUnavailable('invalid')
-      verify()
+      check()
     }))
-    verify()
+    check()
     return value
   } catch (error) {
     if (error instanceof StateFileCleanupUnconfirmed) throw new SessionStorageUnavailable('cleanup-unconfirmed')

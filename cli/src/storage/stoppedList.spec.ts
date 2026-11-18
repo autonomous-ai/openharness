@@ -162,6 +162,26 @@ describe('child-owned stopped list pages', () => {
     chmodSync(directory, 0o700)
     expect((await listing.page(null, deadline())).images).toHaveLength(1)
   })
+
+  it.skipIf(process.platform === 'win32').each(['writable', 'replacement'] as const)(
+    'keeps a caught %s directory admission failure fatal after the directory is restored', async fault => {
+      write('a'); write('b')
+      const { listing, read } = fixture()
+      read.mockImplementationOnce(async document => {
+        if (fault === 'writable') chmodSync(directory, 0o777)
+        else {
+          renameSync(directory, directory + '-held'); mkdirSync(directory, { mode: 0o700 })
+          write('a')
+        }
+        try { return await read.getMockImplementation()!(document) }
+        finally {
+          if (fault === 'writable') chmodSync(directory, 0o700)
+          else { rmSync(directory, { recursive: true }); renameSync(directory + '-held', directory) }
+        }
+      })
+      await expect(listing.page(null, deadline())).rejects.toMatchObject({ code: fault === 'writable' ? 'unsafe' : 'changed' })
+      expect(ids((await listing.page(null, deadline())).images)).toEqual(['a', 'b'])
+    })
 })
 
 

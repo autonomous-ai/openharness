@@ -678,3 +678,20 @@ that category and still proves fatal/no-partial behavior. No wire failure catego
 or system-error filtering changed. Earlier failed logs remain. The final raw byte
 reader, authority witness, per-row Registry capture and fingerprint semantics are
 unchanged. No new timing claim is made; measured parent save cost remains open.
+
+Independent review found that per-record filtering could catch a directory
+admission failure, then return a partial page if another writer restored the
+original directory before the final check. Both real archive regressions fail
+first: unsafe mode restored and replacement restored each incorrectly returned
+only the peer row (`/tmp/core-grid-storage-directory-page-sticky-red1-20261118.log`).
+The page now retains its first directory-admission failure and refuses all later
+admissions and final return, independently of pathname or permission restoration.
+Per-file unreadable filtering is unchanged; close uncertainty still requires reap.
+
+The correction passes 137 tests in seven files, including real-child page-close
+custody and unreadable-peer compatibility, with both reader and list files at
+100% in all four metrics. Types pass. Receipts:
+`/tmp/core-grid-storage-directory-page-sticky-coverage2-20261118.log` and
+`/tmp/core-grid-storage-directory-page-sticky-types1-20261118.log`. The preceding
+coverage attempt exposed a fixture injection placed before directory admission;
+its corrected injection now targets that check and preserves the actual failure.

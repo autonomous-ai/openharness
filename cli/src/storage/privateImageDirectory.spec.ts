@@ -131,6 +131,14 @@ it('keeps cleanup uncertainty sticky and closes other already-owned descriptors'
   const health = vi.spyOn(custody, 'stateFileCustodyHealthy').mockImplementation(() => { throw new custody.StateFileCleanupUnconfirmed() })
   await expect(withPrivateImageDirectory(directory, async () => undefined)).rejects.toMatchObject({ code: 'cleanup-unconfirmed' })
   expect(open).not.toHaveBeenCalled(); health.mockRestore()
+  await expect(withPrivateImageDirectory(directory, async read => {
+    let checks = 0
+    const unhealthy = vi.spyOn(custody, 'stateFileCustodyHealthy').mockImplementation(() => {
+      if (++checks === 2) throw new custody.StateFileCleanupUnconfirmed()
+    })
+    await expect(read(file, 1024)).rejects.toMatchObject({ code: 'cleanup-unconfirmed' })
+    unhealthy.mockRestore()
+  })).rejects.toMatchObject({ code: 'cleanup-unconfirmed' })
   if (process.platform === 'win32') return
   const close = custody.closeStateFileDescriptor
   let imageClosed = false, pageClosed = false
