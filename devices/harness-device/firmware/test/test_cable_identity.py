@@ -78,6 +78,8 @@ static bool ui_question_show(const char *id,const char *name,const char *machine
     snprintf(shown_request,sizeof shown_request,"%s",request?request:"");return !list;
 }
 static void audio_notify_done(void) { beeps++; }
+static uint32_t welcome_features;
+bool cable_client_supports(uint32_t features) { return (welcome_features & features) == features; }
 '''
 for name in ['str_of','bool_of','caps_of','handle_agent','handle_swarms','handle_notifications','handle_models','count_of','handle_apps','handle_question']:
     code += function(name)
@@ -194,6 +196,7 @@ int main(void) {
     p=cJSON_Parse("{\"shown\":\"b\"}");assert(p);handle_apps(p);cJSON_Delete(p);
     p=cJSON_Parse("{\"shown\":\"b\",\"apps\":{\"id\":\"b\"}}");assert(p);handle_apps(p);cJSON_Delete(p);
     assert(app_calls==calls&&app_count==2&&!strcmp(app_shown,"a"));bounds();
+    welcome_features=CABLE_FEATURE_QUESTION_TIER;
     // `question` with tier "list" files a silent row: no beep. With no tier, or any other, it is an alert.
     p=cJSON_Parse("{\"id\":\"q1\",\"tier\":\"list\",\"questions\":[{\"key\":\"\",\"q\":\"Ship it?\",\"options\":[]}]}");
     assert(p);handle_question(p,"a");cJSON_Delete(p);assert(shows==1&&shown_list&&!beeps&&!strcmp(shown_request,"q1"));
@@ -208,6 +211,13 @@ int main(void) {
     p=cJSON_Parse("{\"id\":\"q1\",\"tier\":\"list\"}");assert(p);handle_question(p,"a");cJSON_Delete(p);
     p=cJSON_Parse("{\"id\":\"q1\",\"questions\":[]}");assert(p);handle_question(p,NULL);cJSON_Delete(p);
     assert(shows==6&&beeps==5);
+    // A welcome without question.tier (an older daemon, or no welcome yet): tier "list" is an alert.
+    const uint32_t without[]={0,~(uint32_t)CABLE_FEATURE_QUESTION_TIER};
+    for(unsigned i=0;i<sizeof without/sizeof *without;i++) {
+        unsigned shows_before=shows,beeps_before=beeps;welcome_features=without[i];
+        p=cJSON_Parse("{\"id\":\"q1\",\"tier\":\"list\",\"questions\":[]}");assert(p);handle_question(p,"a");cJSON_Delete(p);
+        assert(shows==shows_before+1&&!shown_list&&beeps==beeps_before+1);
+    }
     printf("Protocol identities: exact %u-byte targets / %zu-byte profiles, overlong/duplicate rejection, malformed lists preserve state, fixed row bounds PASS\n",ID_MAX-1,sizeof profile-1);
 }
 '''
