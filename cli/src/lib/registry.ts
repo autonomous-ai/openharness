@@ -1953,7 +1953,11 @@ class Registry {
       if (entry.firstTask) firstTaskKept(agentId)
       return structuredClone(committed)
     }).catch(error => {
-      console.error('[registry] pending admission failed')
+      // The error's kind and code, never its message (it can quote a path): a retried create said only "failed", and
+      // nothing told why its first pane was not admitted (CI, cli/e2e/scale.e2e.ts, 2026-11-19).
+      const code = (error as { code?: unknown } | null)?.code
+      console.error(`[registry] pending admission failed · ${error instanceof Error ? error.name : typeof error}`
+        + (typeof code === 'string' ? ` ${code}` : ''))
       // Read as a taken route, a storage refusal opened and closed three panes and answered "tmux pane could not
       // be registered" (e2e/diskfull.e2e.ts, 2026-11-17). Its caller answers it by name instead.
       if (error instanceof RegistryPersistenceUnavailable || error instanceof AtomicWriteUnconfirmed) throw error
