@@ -77,12 +77,13 @@ class WindowsGitSetup {
 
   String? get _marker {
     final home = maybeHomeDir(environment: _environment, isWindows: true);
-    return home == null
-        ? null
-        : p.windows.join(
-            HarnessHome.of(home, join: p.windows.join).path(HarnessEntry.run),
-            'git-install-tried',
-          );
+    if (home == null) return null;
+    // A Windows profile, so the Linux rule never runs for it, whatever the host.
+    final run = HarnessHome.at(
+      p.windows.join(home, harnessHomeName),
+      join: p.windows.join,
+    ).path(HarnessEntry.run);
+    return p.windows.join(run, 'git-install-tried');
   }
 
   /// Never throws, and nothing waits for it.
