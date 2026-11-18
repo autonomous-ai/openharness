@@ -1,5 +1,6 @@
-// The plugin's worker: Orca starts it as the person running Orca. It runs the loop on Node's own inputs and tells the
-// panel and the status bar item each change of the dial's state. It is read only.
+// The plugin's worker: Orca starts it as the person running Orca. It runs the loop on Node's own inputs, tells the
+// panel and the status bar item each change of the dial's state, and hands the loop the focused worktree's terminals.
+// It is read only.
 import type { OrcaWorkerApi } from 'orca/worker'
 import { startDial } from './dial'
 import { nodeInputs, type DialInputs } from './inputs'
@@ -12,7 +13,8 @@ const RETRY_MS = 1_000
 
 type BarItem = { id: 'dial'; visible: boolean; text?: string }
 
-/** The loop wired to Orca: `dial.get`, `dial.changed`, the status bar item and the log. Returns its stop. */
+/** The loop wired to Orca: `dial.get`, `dial.changed`, `workspace.changed`, the status bar item and the log. Returns its
+ *  stop. */
 export function wire(orca: OrcaWorkerApi, inputs: DialInputs): () => Promise<void> {
   let barRefused = false
   let latest: BarItem | null = null
@@ -50,9 +52,14 @@ export function wire(orca: OrcaWorkerApi, inputs: DialInputs): () => Promise<voi
     log: (line) => orca.log(line),
   })
   const handler = orca.panels.handle('dial.get', () => dial.state())
+  // Only the terminal ids leave the worker: no name, branch, title or path of the workspace.
+  const workspace = orca.events.on('workspace.changed', ({ context }) => {
+    dial.front(context && context.terminals.map(({ id }) => id))
+  })
   showBar(dial.state())
 
   return async () => {
+    workspace.dispose()
     handler.dispose()
     // A refusal that arrives after this sends nothing again.
     latest = null
