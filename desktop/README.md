@@ -280,7 +280,8 @@ The pane shows download progress and Cancel. Closing/changing panes cancels the
 download. An interrupted transfer or a file changed during transfer is never opened.
 
 Previews are limited to 512 MiB per file and downloaded in bounded chunks. Copies
-live in `~/.harness/desktop-app/media-previews` (on Linux `~/.local/share/harness/desktop-app/media-previews`); before each download, inactive
+live in `~/.harness/desktop-app-v2/media-previews` (on Linux
+`$XDG_DATA_HOME/harness/desktop-app-v2/media-previews`, by default under `~/.local/share`); before each download, inactive
 copies older than 24 hours or over the 1 GiB cache budget are pruned. Cache names
 are unique, so matching paths on different machines cannot overwrite one another.
 This reads visible terminal text, not hidden OSC 8 hyperlink targets.
