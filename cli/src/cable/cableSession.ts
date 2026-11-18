@@ -259,7 +259,9 @@ function dialKeepsId(agentId: string): boolean {
 /**
  * The leading drawer rows that fit one frame. Every field is bounded, so eight rows fit today; this guards a field added
  * later without a bound, whose frame `send` would refuse, leaving the dial without its drawer. A question row cut here
- * stays owed and is asked again.
+ * is not on the dial: the forget that follows takes the drawer after this cut, so the question keeps told and loses
+ * asked, and comes back by giveQuestion's rule (a silent row, the Pro's plain frame, or nothing on an older dial), never
+ * as a second ring.
  */
 export function fitDrawer<T>(rows: T[]): T[] {
   const kept = [...rows]
@@ -760,6 +762,10 @@ export class CableSession {
   /** `appFilter: 'v1'` (the round dial, spec 2026-11-14-dial-app-filter): with no window, or a window and the app in
    *  front, it holds one app's ring, is sent `apps` and picks with `app.pick`. Any other device gets the single ring. */
   private appFilter = false
+  /** `questionTier: 'v1'` (the round dial): it files a `question` sent with `tier: 'list'` as a silent row. A question it
+   *  was told and no longer holds goes back on it that way, since a ring at every change of the window's list was a beep
+   *  for nothing new (2026-11-18); a round dial that does not say it would beep, so it is sent nothing (giveQuestion). */
+  private questionTier = false
   private playerOffset = 0
   private playerRequest = 0
   private playerLibraryKey = ''
@@ -776,13 +782,14 @@ export class CableSession {
 
   /** For the greeting's log line: which capabilities this hello named, or nothing. */
   private capabilitiesNamed(): string {
-    const named = [this.swarmMembers && 'swarms', this.longRecap && 'recap', this.stepsActivity && 'activity', this.statsTurn && 'stats', this.playerCapable && 'player', this.appFilter && 'appFilter']
+    const named = [this.swarmMembers && 'swarms', this.longRecap && 'recap', this.stepsActivity && 'activity', this.statsTurn && 'stats', this.playerCapable && 'player', this.appFilter && 'appFilter', this.questionTier && 'questionTier']
       .filter(Boolean)
     return named.length ? ` caps ${named.join(',')}` : ''
   }
 
   private resetCapabilities(): void {
     this.swarmMembers = this.longRecap = this.stepsActivity = this.statsTurn = this.playerCapable = this.appFilter = false
+    this.questionTier = false
     this.seqOn = false
     this.seq = 0
     this.resyncAt = 0
@@ -1388,6 +1395,7 @@ export class CableSession {
         this.statsTurn = str('stats') === 'turn-v1'
         this.playerCapable = str('player') === 'library-v1'
         this.appFilter = str('appFilter') === 'v1'
+        this.questionTier = str('questionTier') === 'v1'
         this.seqOn = str('board') === 'pro'
         this.seq = 0
         const mac = str('mac') ?? ''
@@ -1418,6 +1426,9 @@ export class CableSession {
             // The dial shows its TABS | APPS switch only when told, so a list kept from an earlier machine view
             // never becomes a control nothing answers.
             ...(this.appFilter && this.host.pickApp ? ['apps.switch'] : []),
+            // The dial files a `tier: 'list'` question silently only when told, so a daemon that does not name it never
+            // mutes a ring: such a frame stays an alert.
+            ...(this.questionTier ? ['question.tier'] : []),
             // The desktop will carry this device's preferences. A device that does not see this keeps
             // its own settings screens and never reports.
             'settings',
@@ -2889,14 +2900,30 @@ export class CableSession {
     await this.replaceNotifications(this.host.listUnread())
   }
 
-  /** Every question still open that the dial does not hold, asked of it: each once, here or by an ask that overtakes
-   *  this walk. */
+  /** Every open, owed question the dial does not hold, given to it by giveQuestion's rule: rung if it was never told,
+   *  else back as a row with no ring. Each once, here or by an ask that overtakes this walk. */
   private async resendQuestions(): Promise<void> {
     this.greeting = false
     for (const { agentId, id, questions } of this.questionInbox.open()) {
-      if (this.owed(agentId, id) && this.questionInbox.ask(agentId, id)) {
-        await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions })
-      }
+      if (this.owed(agentId, id)) await this.giveQuestion(agentId, id, questions, questions[0].q)
+    }
+  }
+
+  /**
+   * The one rule for a question the dial does not hold. One it was never told is rung, in `questions`. One it was told
+   * since it last lost everything (a drawer cut its row, its turn moved on) is never rung again: a ring at every change
+   * of the window's list was a beep for nothing new (2026-11-18). It goes back as a silent `tier: 'list'` row of `words`
+   * to a dial that says questionTier, as the plain frame to a Pro (it mutes a question sent again by its id and words),
+   * and not at all to an older round dial, which would beep, nor for an id the dial cannot keep. Each mark is set before
+   * its frame is written, so two paths cannot both send it.
+   */
+  private async giveQuestion(agentId: string, id: string, questions: unknown, words: string): Promise<void> {
+    const inbox = this.questionInbox
+    const send = (rest: Record<string, unknown>) => this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, ...rest })
+    if (!inbox.told(agentId, id)) {
+      if (inbox.ask(agentId, id)) await send({ questions })
+    } else if (dialKeepsId(agentId) && (this.questionTier || this.seqOn) && inbox.refile(agentId, id)) {
+      await send(this.questionTier ? { tier: 'list', questions: [{ key: '', q: noticeSummary(words), options: [] }] } : { questions })
     }
   }
 
@@ -3402,9 +3429,14 @@ export class CableSession {
     this.questionInbox.set(agentId, id, questions)
     this.liveTurns.set(agentId, 'question')
     // The dial beeps at each ask, and the devices and the core ask again what a dial should hold as it arrives or they
-    // reconnect: one the inbox holds is asked once until the dial loses it. One it cannot hold is sent as it comes.
-    if (this.questionInbox.read(agentId).ok && (this.greeting || !this.questionInbox.ask(agentId, id))) return
-    await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions })
+    // reconnect: one the inbox holds goes by giveQuestion's rule, rung once and never again after the dial was told it,
+    // and during a greeting it waits for the walk. One it cannot hold is sent as it comes.
+    const held = this.questionInbox.read(agentId)
+    if (!held.ok) {
+      await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions })
+      return
+    }
+    if (!this.greeting) await this.giveQuestion(agentId, id, questions, held.questions[0].q)
   }
   /** A question the dial reads when its row is opened and is never asked: a notice restored after the devices process
    *  restarted rang before it (cable/notices.ts). */
