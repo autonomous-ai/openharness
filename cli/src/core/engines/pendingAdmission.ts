@@ -1,4 +1,5 @@
 /** Core owns pending hook admission. A late lookup cannot replace a newer hook or binding. */
+import { errorKind } from '../../lib/log.js'
 import { compareAdmissionOrder, createAdmissionOrder, type AdmissionOrder } from './admissionOrder.js'
 
 export type AdmissionDecision<T> =
@@ -55,7 +56,7 @@ export function createPendingAdmissions({ retryMs = 1_000, capacity = 64, isProc
     if (index !== -1) queue.splice(index, 1)
     if (!queue.length) jobs.delete(key)
   }
-  const report = (error: unknown) => console.warn('[hooks] pending admission callback failed', error)
+  const report = (error: unknown) => console.warn('[hooks] pending admission callback failed', errorKind(error))
   // Notification can await optional interpretation. Its failure is contained, but it
   // cannot block the next core admission or cause a committed binding to be retried.
   const notified = (result: void | Promise<void>) => { void Promise.resolve(result).catch(report) }

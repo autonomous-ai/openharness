@@ -19,7 +19,7 @@ import { pollsQuestions, type QuestionWatcher } from '../../lib/questionControll
 import { attachTranscript, type AttachRead } from '../../lib/attachTranscript.js'
 import { AttachTracker } from '../../lib/attachTracker.js'
 import type { WifiFeed } from '../wifi.js'
-import { sid } from '../../lib/log.js'
+import { errorKind, sid } from '../../lib/log.js'
 import { foldTranscript, TranscriptFold } from '../../engines/kit/transcriptFold.js'
 import type { LiveEvent } from '../../engines/kit/events.js'
 import type { RegisteredSession } from '../../lib/registry.js'
@@ -136,7 +136,7 @@ export function createAttach({
         return
       }
       void attachSession(resolve(session.agentId)!, false, replayCursorFromStart, replayFromStart).catch(error => console.error(
-        `[agent] ${sid(session.agentId)} attach retry failed: ${error instanceof Error ? error.message : error}`))
+        `[agent] ${sid(session.agentId)} attach retry failed: ${errorKind(error)}`))
     }, 1_000 * 2 ** retries.attempts++)
     retries.timer.unref()
   }
@@ -182,8 +182,8 @@ export function createAttach({
       // The control obligation already exists. A failed status notification must
       // never make its caller replay that Stop after a later explicit Cancel.
       try { announceSession(latest) }
-      catch (error) { console.warn('[agent] interpretation hold notification failed', error) }
-      void attachSession(latest, true).catch(error => console.warn(`[agent] recovery held: ${String(error)}`))
+      catch (error) { console.warn('[agent] interpretation hold notification failed', errorKind(error)) }
+      void attachSession(latest, true).catch(error => console.warn(`[agent] recovery held: ${errorKind(error)}`))
     }
   }
   const holdStop = (session: RegisteredSession, force = false): boolean => {
@@ -465,9 +465,9 @@ export function createAttach({
     }
     if (other) {
       let store: string | null
-      try { store = keepsStore(session.engine) ? await storeOf(session) : null } catch {
+      try { store = keepsStore(session.engine) ? await storeOf(session) : null } catch (error) {
         if (current()) others.unavailable(session)
-        console.warn(`[agent] ${sid(session.agentId)} transcript held · engine=${session.engine} · its store reader is unavailable`)
+        console.warn(`[agent] ${sid(session.agentId)} transcript held · engine=${session.engine} · its store reader is unavailable · ${errorKind(error)}`)
         return true
       }
       if (!current()) return false
@@ -597,7 +597,7 @@ export function createAttach({
       recoveryReady = true
       if (opened) others.release(session.sessionId)
       else void watcher.pollSession(session.sessionId).catch(error => console.warn(
-        `[agent] ${sid(session.agentId)} recovered tail read failed: ${error instanceof Error ? error.message : error}`))
+        `[agent] ${sid(session.agentId)} recovered tail read failed: ${errorKind(error)}`))
     }
     if (!session.interpretationHold && relaunch) relaunchMarks!.complete(session.sessionId, relaunch)
     // Marked on the FOLD, not on the emission. A live fold that happened to produce nothing — the file
@@ -697,7 +697,7 @@ export function createAttach({
     // forget's remove revokes it even while the first filesystem lookup is pending.
     if (session.engine === 'cursor' && !session.transcriptPath) {
       void cursorDiscovery.add(session.sessionId).catch(error => console.error(
-        `[cursor-discovery] lookup failed: ${error instanceof Error ? error.message : error}`))
+        `[cursor-discovery] lookup failed: ${errorKind(error)}`))
     }
     const key = session.sessionId
     pendingAttaches.set(key, (pendingAttaches.get(key) ?? 0) + 1)

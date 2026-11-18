@@ -17,7 +17,7 @@ import type { HookTurnContext } from '../../engines/facets/hooks.js'
 import { isOtherEngine, STOP_RULES } from '../../engines/otherEngines.js'
 import type { OtherStreams } from '../engines/otherStreams.js'
 import type { TurnRecaps } from './recaps.js'
-import { sid } from '../../lib/log.js'
+import { errorKind, sid } from '../../lib/log.js'
 import type { LiveEvent } from '../../engines/kit/events.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { SessionNormalizers } from '../transcripts/normalizers.js'
@@ -253,7 +253,7 @@ export function createTurnHooks({
       if (!onStop || !current()) return
       // Invoke synchronously: the engine snapshots which turn the hook arrived about before draining.
       const failed = (error: unknown): void => {
-        console.error(`[hooks] ${session.engine} stop hook failed:`, error instanceof Error ? error.message : error)
+        console.error(`[hooks] ${session.engine} stop hook failed:`, errorKind(error))
       }
       const context: HookTurnContext = { ...hookTurns, heldBeforeHook,
         turnState: id => current() ? hookTurns.turnState(id) : undefined,
@@ -285,7 +285,7 @@ export function createTurnHooks({
       emit(sessionId, rule.plainEnd ? [{ type: 'turn_ended', payload: {} }] : closing)
       if (error && rule.errorIfSilent && !closing.length) announceTurnAborted(sessionId, session.engine, rule.errorIfSilent)
     })().catch((err) => {
-      console.error(`[hooks] ${session.engine} stop hook failed:`, err instanceof Error ? err.message : err)
+      console.error(`[hooks] ${session.engine} stop hook failed:`, errorKind(err))
     })
   }
   /**
