@@ -101,10 +101,16 @@ const FOREIGN_AFTER_MS = 12_000
 // Most firmware writes one dial may take in an hour. A real release is one; anything repeating is two
 // pieces of software disagreeing about who owns the board, and the dial pays for that in erase cycles.
 const FW_WRITES_PER_HOUR = 3
-// The most travel one scroll report may carry. The glass is 720 px and the firmware sends 32-bit ints
-// (devices/harness-device/firmware/main/cable_scroll.c), so no real report comes near it; a bigger one is
-// a broken frame, and an unbounded travel would scroll a terminal without end.
+// The most travel one scroll report may carry, and the most speed its `up` may throw. A report carries the
+// finger's travel since the last one, which the glass bounds (720 px on Harness Pro, 466 on the round dial), and
+// every firmware caps the speed at 6000 px/s (MAX_SPEED in its scroll.c), so no real report comes near
+// either; a bigger one is a broken frame. Unbounded, a travel scrolled VS Code's terminal without end, and a speed
+// over f32's range is a fling hn never stops (tui/src/dial.rs).
 const SCROLL_DY_MAX = 1000
+const SCROLL_V_MAX = 10_000
+/** A scroll report's number held to ±max; one that is not a finite number is 0. */
+const bounded = (value: unknown, max: number): number =>
+  typeof value === 'number' && Number.isFinite(value) ? Math.max(-max, Math.min(max, value)) : 0
 /** How often the machine list is re-read. Slower than the agent list because it is an HTTP read, not a
  *  map lookup — and because a machine appearing is not something anyone is waiting on a stopwatch for. */
 const MACHINES_POLL_MS = 15_000
@@ -1580,14 +1586,12 @@ export class CableSession {
         const phase = str('phase')
         if (phase !== 'down' && phase !== 'move' && phase !== 'up') return
         // `"dy":1e999` parses to Infinity: a value that is not a finite number is no travel, and the phase still goes.
-        const rawDy = typeof msg.dy === 'number' && Number.isFinite(msg.dy) ? msg.dy : 0
-        const v = typeof msg.v === 'number' && Number.isFinite(msg.v) ? msg.v : 0
-        const dy = Math.max(-SCROLL_DY_MAX, Math.min(SCROLL_DY_MAX, rawDy))
+        const dy = bounded(msg.dy, SCROLL_DY_MAX), v = bounded(msg.v, SCROLL_V_MAX)
         if (phase === 'down') this.scrollBadLogged = false
         const bad = (typeof msg.dy === 'number' && dy !== msg.dy) || (typeof msg.v === 'number' && v !== msg.v)
         if (bad && !this.scrollBadLogged) {
           this.scrollBadLogged = true
-          this.log('cable: scroll travel out of bounds, bounded')
+          this.log('cable: scroll report out of bounds, bounded')
         }
         this.host.scrolled(phase, dy, v)
         return
