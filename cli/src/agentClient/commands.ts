@@ -120,9 +120,10 @@ ${ON_MACHINE}`
 export const WATCH_USAGE = `Usage: harness watch [--machine <name>] <name> | --mine [--chars N] [--timeout 30m] [--json]
 
 Follows one harness and prints a line each time it changes: started, working, needs_person (its last words),
-background (idle, with commands it started still running: how many), done (its answer), idle (nothing asked of it),
-failed, stopped (with its last answer). With --json each line is one JSON object, for a program to read. The first
-line is how it stands now; the same state with new words, or background with a new number, is a new line.
+held (what only the person can fix), background (idle, with commands it started still running: how many), done (its
+answer), idle (nothing asked of it), failed, stopped (with its last answer). With --json each line is one JSON object,
+for a program to read. The first line is how it stands now; the same state with new words, or background with a new
+number, is a new line.
 It hears each change of a harness here as Harness pushes it, as wait does, and looks every 3 s at a cloud harness
 or a harness on another machine. A cloud harness's state is its maker's: Devin Cloud says needs_person both when it
 asks and when it has only finished, so read the words and cloud.providerStatus.
@@ -1684,8 +1685,9 @@ export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
 // ── watch ──────────────────────────────────────────────────────────────────────────────────────────
 
 /** What `harness watch` says changed. `idle`: idle with nothing asked of it, so nothing done to report. `background`:
- *  idle after a turn with background commands it started still running, so not done yet. */
-export type WatchEvent = 'started' | 'working' | 'needs_person' | 'background' | 'done' | 'idle' | 'failed' | 'stopped'
+ *  idle after a turn with background commands it started still running, so not done yet. `held`: Harness cannot follow
+ *  it until the person acts (`namedStateOf`). */
+export type WatchEvent = 'started' | 'working' | 'needs_person' | 'held' | 'background' | 'done' | 'idle' | 'failed' | 'stopped'
 
 /** A cloud harness's maker state as an event; none while it is unknown. */
 const CLOUD_EVENTS: Partial<Record<State, WatchEvent>> = {
@@ -1694,7 +1696,7 @@ const CLOUD_EVENTS: Partial<Record<State, WatchEvent>> = {
 
 /** The state a harness here is in at each event: its frame says only working or idle, the screen the rest. */
 const EVENT_STATES: Record<WatchEvent, State> = {
-  started: 'starting', working: 'working', needs_person: 'needs-input', background: 'idle', done: 'idle', idle: 'idle', failed: 'failed', stopped: 'stopped',
+  started: 'starting', working: 'working', needs_person: 'needs-input', held: 'held', background: 'idle', done: 'idle', idle: 'idle', failed: 'failed', stopped: 'stopped',
 }
 
 type LastTurn = Awaited<ReturnType<typeof readLastTurn>>
@@ -1739,6 +1741,8 @@ function follower(s: Setup, o: Opened, h: Target, say: (event: WatchEvent, turn:
     }
     h.frame = frame
     if (frame.status === 'stopped') return 'stopped'
+    // Over what its screen shows. A hold can last hours: one look a minute (the backstop), as while it works.
+    if (namedStateOf(frame)?.held) { idle = null; pushedNext = true; return 'held' }
     if (frame.location === 'cloud') return CLOUD_EVENTS[stateOf(frame)] ?? null
     const { screen, background } = frame.activity?.state === 'working' ? { screen: 'working' as const, background: null } : await inspect(h)
     running = background
@@ -1772,9 +1776,10 @@ function follower(s: Setup, o: Opened, h: Target, say: (event: WatchEvent, turn:
         throw error
       })
       if (!event) return null
-      const turn = event !== 'started' && event !== 'idle' && event !== 'background' ? await turnNow() : null
-      // A `background` line is new when their number changes.
-      const key = `${event}\u0000${event === 'working' ? turn?.ask ?? '' : event === 'background' ? running : keyOf(turn)}`
+      const turn = event !== 'started' && event !== 'idle' && event !== 'background' && event !== 'held' ? await turnNow() : null
+      // A `background` line is new when their number changes, a `held` one when its sentence does.
+      const key = `${event}\u0000${event === 'working' ? turn?.ask ?? '' : event === 'background' ? running
+        : event === 'held' ? namedStateOf(h.frame)?.sentence : keyOf(turn)}`
       if (key !== printed) {
         printed = key
         say(event, turn, running)
@@ -1912,6 +1917,7 @@ function printWatch(s: Setup, json: boolean, chars: number, t: Target, event: Wa
   turn: { ask: string | null; answer: string; tools: number } | null, running: number | null, machine?: string): void {
   const text = turn?.answer ?? ''
   const words: Record<string, unknown> = event === 'working' ? { ask: turn?.ask ? withoutStartHeader(turn.ask) : null }
+    : event === 'held' ? { namedState: namedStateOf(t.frame)?.sentence }
     : event === 'needs_person' ? { question: clip(text, chars), truncated: text.length > chars }
     : event === 'done' || event === 'failed' ? { summary: clip(text, chars), truncated: text.length > chars, tools: turn?.tools ?? 0 }
     // Stopped after a turn (Devin put to sleep once it finished, #1449): its answer is still the one to read.
@@ -1928,6 +1934,7 @@ function printWatch(s: Setup, json: boolean, chars: number, t: Target, event: Wa
   }
   if (json) { s.out(JSON.stringify(line)); return }
   const said = event === 'background' && running ? backgroundSaid(running)
+    : typeof words.namedState === 'string' ? words.namedState
     : typeof words.question === 'string' ? words.question : typeof words.summary === 'string' ? words.summary
     : typeof words.ask === 'string' ? `asked: ${clip(words.ask, 200)}` : ''
   s.out(`${at.slice(11, 19)}Z ${line.name}${machine ? ` @${machine}` : ''}: ${event.replace('_', ' ')}${said ? `: ${said}` : ''}`)
