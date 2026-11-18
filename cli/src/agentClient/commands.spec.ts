@@ -10,6 +10,8 @@ import { agentSettingsPath } from '../lib/agentSettings.js'
 import { setAgentSettingsForTest, signedOutForTest, TEST_ACCOUNT } from '../testing/agentSettings.js'
 import type { Frame } from './model.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
+import { MISSING_HELPER, REPLACED_PROGRAM } from '../engines/kit/identityScan.js'
+import { OTHER_ENGINE_STATES } from '../engines/otherEngines.js'
 
 const NOW = Date.parse('2026-10-11T12:00:00Z')
 
@@ -876,6 +878,51 @@ describe('refusals and the person', () => {
     const shownJson = harness(d)
     expect(await showCommand(['asker', '--json'], shownJson.deps)).toBe(EXIT.ok)
     expect(JSON.parse(shownJson.out[0])).toMatchObject({ state: 'needs-input', needsPerson: true })
+  })
+})
+
+describe('a harness held for the person', () => {
+  it('wait ends on a held one with exit 3 and its sentence, in text and JSON', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('kid', { namedState: MISSING_HELPER })]
+    const h = harness(d)
+    expect(await waitCommand(['kid'], h.deps)).toBe(EXIT.needsInput)
+    expect(h.out[0]).toBe('kid: held · This Harness install is incomplete. Reinstall Harness. Only the person can fix this.')
+    const json = harness(d)
+    expect(await waitCommand(['kid', '--json'], json.deps)).toBe(EXIT.needsInput)
+    expect(JSON.parse(json.out.join('\n')).harnesses[0]).toMatchObject({ state: 'held', namedState: MISSING_HELPER, needsPerson: true,
+      next: [{ tell: 'tell the person: This Harness install is incomplete. Reinstall Harness.' }] })
+  })
+
+  it('wait ends on a held one over a working screen, at the first look', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('kid', { activity: { state: 'working' }, namedState: REPLACED_PROGRAM })]
+    d.screens.set('kid', ['working'])
+    const h = harness(d)
+    expect(await waitCommand(['kid'], h.deps)).toBe(EXIT.needsInput)
+    expect(d.requests.some((r) => r.type === 'agent_close')).toBe(false)
+  })
+
+  it('wait does not end on a recovering state, and says it when the time is up', async () => {
+    for (const sentence of [OTHER_ENGINE_STATES.lost, 'A state from a newer Harness.']) {
+      const d = new FakeDaemon()
+      d.frames = [frame('kid', { activity: { state: 'working' }, namedState: sentence })]
+      const h = harness(d)
+      expect(await waitCommand(['kid', '--timeout', '1s'], h.deps)).toBe(EXIT.timeout)
+      expect(h.out[0]).toBe(`kid: timeout · ${sentence} Wait again or read it: harness show kid`)
+      const json = harness(d)
+      expect(await waitCommand(['kid', '--timeout', '1s', '--json'], json.deps)).toBe(EXIT.timeout)
+      const result = JSON.parse(json.out.join('\n')).harnesses[0]
+      expect(result).toMatchObject({ state: 'timeout', namedState: sentence })
+      expect(result).not.toHaveProperty('needsPerson')
+    }
+  })
+
+  it('wait with --any returns on the held one', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('busy', { activity: { state: 'working' } }), frame('kid', { namedState: MISSING_HELPER })]
+    const h = harness(d)
+    expect(await waitCommand(['busy,kid', '--any'], h.deps)).toBe(EXIT.needsInput)
   })
 })
 
