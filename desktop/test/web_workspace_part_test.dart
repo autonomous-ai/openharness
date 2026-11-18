@@ -71,8 +71,9 @@ void main() {
     expect(part.loaded, isFalse);
   });
 
-  // Fake time: the font grace is a timer, and real time under parallel test
-  // workers would let it fire while the test is still looking.
+  // The font grace is a timer. The tests that wait on it run on fake time:
+  // real time under parallel test workers lets it fire while a test is still
+  // looking.
   test('the workspace part waits for the terminal font as well', () {
     fakeAsync((async) {
       final library = Completer<void>();
@@ -86,7 +87,9 @@ void main() {
       );
 
       library.complete();
-      async.flushMicrotasks();
+      // One millisecond short of the grace, so what lets the workspace in
+      // below is the font and not the clock.
+      async.elapse(terminalFontsGrace - const Duration(milliseconds: 1));
       expect(done, isFalse);
 
       fonts.complete();
