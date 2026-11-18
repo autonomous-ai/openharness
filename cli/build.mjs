@@ -2,6 +2,7 @@ import * as esbuild from 'esbuild'
 import { readdirSync, statSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { readDshRegistry } from './scripts/lib/dshRegistry.mjs'
+import { readVscodeExtensionBundle } from './scripts/lib/vscodeExtensionBundle.mjs'
 import { readBuiltinBundle, readHachiBundle, readHarnessMonitorBundle, readMemoriesBundle, readModelManagerBundle } from './scripts/lib/modelManagerBundle.mjs'
 import { fileURLToPath } from 'node:url'
 const modelManagerBundle = JSON.stringify(readModelManagerBundle(fileURLToPath(new URL('../store/agents/autonomous-grid', import.meta.url))))
@@ -70,6 +71,8 @@ try {
       __BROWSER_DEVICE_INJECT__: JSON.stringify(readFileSync('assets/browser/device-inject.mjs', 'utf8')),
       // Claude Code's status line script (src/engines/kit/statusLine.ts), which a launch writes into the data folder.
       __STATUS_LINE_SCRIPT__: JSON.stringify(readFileSync('hook/statusline.mjs', 'utf8')),
+      // Harness's VS Code extension (src/devices/vscodeExtension.ts), at this CLI's version: the two ship together.
+      __VSCODE_EXTENSION__: JSON.stringify(await readVscodeExtensionBundle(version)),
     },
     logLevel: 'info',
   })

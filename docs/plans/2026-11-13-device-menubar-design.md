@@ -99,8 +99,15 @@ At start, no CLI found and the state file says no CLI was ever seen here → the
 the other, `curl -fsSL https://cdn.autonomous.ai/harness/cli/install.sh | /bin/sh -s -- --host` and the same with
 `--desktop` (the desktop app's `kHarnessHostSetupCommand` and `kHarnessDesktopInstallCommand`; no grid download). On
 success: `harness start --if-down`, then the screen moves on. On failure: the last lines of the script's output, and
-Retry. The output goes to the app's log, not the screen beyond those lines. Windows (`install.ps1 -Desktop`) is a
+Retry. Windows (`install.ps1 -Desktop`) is a
 later wave; the install module returns "not supported here" on other platforms for now.
+
+Under the spinner, "Setting up Harness" shows the step: `Getting ready…` until the script names one, then
+`Installing tmux…` or `Downloading Harness…`. The step comes from a fixed table of the script's step lines
+(`install.rs` `STEPS`), read as the output arrives; the script's own text never reaches the screen while it works. A
+line not in the table changes nothing. The app's log holds only each run's step lines (`▸`, `✓`, `✗`, at most 200 a
+run), its result and, after a failure, the lines the screen shows; never the rest of what a run prints (2026-11-17,
+docs/plans/2026-11-17-new-user-onboarding-design.md).
 
 A CLI that was seen once and is gone now was removed on purpose (`harness uninstall`), so the app never reinstalls it
 on its own: the dial line reads "Harness removed" and the menu offers **Install**, which opens the Install screen.

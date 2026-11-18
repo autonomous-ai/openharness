@@ -3,7 +3,10 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 
 import { env } from '../../../config/env.js'
+import { adoptionProviderOf } from '../../../engines/adoptions.js'
+import type { AdoptionPlaces } from '../../../engines/kit/adoption.js'
 import { loadEngine } from '../../../engines/inProcess.js'
+import { claudeProjectsRoots, codexHomeRoots } from '../../engineHomes.js'
 import { scanMemo } from './support.js'
 import { externalPaths, externalProviders } from './index.js'
 import { EXTERNAL_ENGINES, type ProcessView } from './types.js'
@@ -12,6 +15,12 @@ import { EXTERNAL_ENGINES, type ProcessView } from './types.js'
 vi.mock('../../../engines/inProcess.js', async (real) => {
   const actual = await real<typeof import('../../../engines/inProcess.js')>()
   return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
+})
+
+// Claude Code's and Codex's providers are built from their places; a test reads the places each was given.
+vi.mock('../../../engines/adoptions.js', async (real) => {
+  const actual = await real<typeof import('../../../engines/adoptions.js')>()
+  return { ...actual, adoptionProviderOf: vi.fn(actual.adoptionProviderOf) }
 })
 
 describe('where each engine keeps its conversations', () => {
@@ -49,6 +58,33 @@ describe('where each engine keeps its conversations', () => {
     const engines = externalProviders(externalPaths({ PI_CODING_AGENT_SESSION_DIR: '/pi/moved' })).map((provider) => provider.engine)
     expect([...engines].sort()).toEqual([...EXTERNAL_ENGINES].sort())
     expect(externalProviders().length).toBe(EXTERNAL_ENGINES.length)
+  })
+})
+
+describe("Claude Code's and Codex's places", () => {
+  const paths = () => externalPaths({})
+  const placesOf = (engine: 'claude' | 'codex'): AdoptionPlaces =>
+    vi.mocked(adoptionProviderOf).mock.calls.find(([name]) => name === engine)![1]
+
+  it("with no places it builds today's providers", () => {
+    vi.mocked(adoptionProviderOf).mockClear()
+    externalProviders(paths())
+    expect(placesOf('claude').roots()).toEqual(claudeProjectsRoots(paths().claudeProjectsDir))
+    expect(placesOf('claude').records).toBeUndefined()
+    expect(placesOf('codex').roots()).toEqual(codexHomeRoots(paths().codexHome))
+  })
+
+  it("given places replace that engine's alone", () => {
+    const claude: AdoptionPlaces = { roots: () => ['/orca/claude/projects'], records: () => ['/orca/claude/sessions'] }
+    const codex: AdoptionPlaces = { roots: () => ['/orca/codex'] }
+    vi.mocked(adoptionProviderOf).mockClear()
+    externalProviders(paths(), { claude })
+    expect(placesOf('claude')).toBe(claude)
+    expect(placesOf('codex').roots()).toEqual(codexHomeRoots(paths().codexHome))
+    vi.mocked(adoptionProviderOf).mockClear()
+    externalProviders(paths(), { claude, codex })
+    expect(placesOf('claude')).toBe(claude)
+    expect(placesOf('codex')).toBe(codex)
   })
 })
 

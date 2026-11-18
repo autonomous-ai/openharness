@@ -14,7 +14,7 @@ const setup = (file = true) => {
   const dir = mkdtempSync(join(tmpdir(), 'replacement-control-')); dirs.push(dir)
   const transcriptPath = join(dir, 'session.jsonl'); writeFileSync(transcriptPath, '{}\n')
   const session = { agentId: 'agent', engine: 'claude', sessionId: 'session', transcriptPath: file ? transcriptPath : null } as RegisteredSession
-  const normalizers = createSessionNormalizers(noOtherStreams()), replacements = createTurnReplacements(normalizers)
+  const normalizers = createSessionNormalizers(noOtherStreams(), { held: () => false, closed: () => {}, forget: () => {} }), replacements = createTurnReplacements(normalizers)
   return { session, normalizers, replacements }
 }
 const parser = (): LiveState => ({ engine: 'claude', turnOpen: true,

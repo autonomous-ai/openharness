@@ -66,7 +66,7 @@ function setup(physical = false) {
     registry: { resolve: () => session },
     stoppedAgents: { save: vi.fn(), finishResume: vi.fn() } as unknown as StopAgentServiceDeps['stoppedAgents'],
     restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(), backendFor: (() => { const tmux = new TmuxBackend(); return () => tmux })(),
-    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn(async () => {}) },
+    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), nudge: vi.fn() },
     forgetSession: vi.fn(async () => { stopped(); session = undefined }), markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative: vi.fn(async () => {}),
   }
   const deps = {

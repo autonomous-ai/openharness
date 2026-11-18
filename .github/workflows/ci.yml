@@ -762,14 +762,19 @@ jobs:
         run: cargo test --locked --manifest-path device-app/src-tauri/Cargo.toml
       # x11_live (front_x11.rs) brings two xterms to the front, one copied as `code`, and waits for each exe name from
       # the X11 source. xvfb-run is not used: it needs xauth, which apt-install.sh's --no-install-recommends leaves out.
-      # Xvfb picks a free display and writes its number on fd 3 once it takes connections: a bounded read, no sleep.
+      # Xvfb picks a free display and writes its number on fd 3 once it takes connections: a bounded read, no sleep. A
+      # cold runner can take well over 10 s to start it; its log shows why when it never does.
       # A filter that matches no test passes with 0 tests, so the step fails unless x11_live itself passed.
       - name: X11 front source, live
         run: |
           cp "$(command -v xterm)" "$RUNNER_TEMP/code"
           mkfifo "$RUNNER_TEMP/xvfb-display"
-          Xvfb -displayfd 3 -screen 0 1280x800x24 3>"$RUNNER_TEMP/xvfb-display" &
-          read -r -t 10 display < "$RUNNER_TEMP/xvfb-display"
+          Xvfb -displayfd 3 -screen 0 1280x800x24 3>"$RUNNER_TEMP/xvfb-display" 2>"$RUNNER_TEMP/xvfb.log" &
+          if ! read -r -t 60 display < "$RUNNER_TEMP/xvfb-display"; then
+            echo "Xvfb gave no display within 60 s"
+            cat "$RUNNER_TEMP/xvfb.log"
+            exit 1
+          fi
           export DISPLAY=":$display"
           openbox &
           X11_LIVE_CLIENTS="$(command -v xterm):$RUNNER_TEMP/code" cargo test --locked --lib \

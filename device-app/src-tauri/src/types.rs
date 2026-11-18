@@ -171,7 +171,8 @@ pub enum LoginEvent {
     Done(Result<(), String>),
 }
 
-/// What happened. WatchExit(None): ended by a signal. UpdateChecked(Some): a strictly newer release.
+/// What happened. WatchExit(None): ended by a signal. UpdateChecked(Some): a strictly newer release. InstallStep:
+/// `'static`, so only the step table's fixed copy can be one, never a line of the script's.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
     Tick { now: u64, desktop_running: bool },
@@ -180,6 +181,7 @@ pub enum Event {
     WatchLine(DialStatus),
     WatchExit(Option<i32>),
     StartDone { ok: bool },
+    InstallStep(&'static str),
     InstallDone(Result<(), Vec<String>>),
     Auth(Option<bool>),
     CliVersion(Option<String>),

@@ -8,8 +8,8 @@
  * stdout, so a following `| jq` sees empty input instead of an error body it could mistake for a result.
  */
 import { readFileSync, realpathSync, statSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { basename, extname, join, resolve } from 'node:path'
+import { homedir, userInfo } from 'node:os'
+import platformPath, { basename, extname, resolve, type PlatformPath } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { bearer, connectorsDir, ConnectorError, type Store, type Token } from './store.js'
 import { ready } from './renew.js'
@@ -39,15 +39,82 @@ export function hostAllowed(code: string, host: string): boolean {
   return (OFFICIAL_HOSTS[code] ?? []).some(allowed => host === allowed || host.endsWith('.' + allowed))
 }
 
+/**
+ * Whether `file` is `dir` or inside it, by path segments: a prefix check on `dir + '/'` misses Windows' backslashes
+ * and its case-insensitive names. `relative` is absolute when the two are on different drives.
+ */
+export function inside(dir: string, file: string, p: PlatformPath = platformPath): boolean {
+  const rel = p.relative(dir, file)
+  return rel === '' || !(rel === '..' || rel.startsWith('..' + p.sep) || p.isAbsolute(rel))
+}
+
+/** `~` before a separator is home; on posix a backslash is part of a name, so only Windows takes `~\`. */
+export function expandHome(raw: string, home: string, p: PlatformPath = platformPath): string {
+  return raw.replace(p.sep === '\\' ? /^~(?=$|[\\/])/ : /^~(?=$|\/)/, home)
+}
+
+/**
+ * A Windows path through a share, as given or resolved: the fence compares local folders, and a share may be any of
+ * them, as the local disk's admin share (`\\localhost\C$`) is. Two separators of either kind start a share or a device
+ * path, and Windows passes `\??\` on as the NT path it is. Of those only a drive's `\\?\C:\` is local: Windows takes a
+ * `..` in `\\.\C:\..\UNC\host\share` back to the `\\.\` prefix, but never normalizes `\\?\`. On posix, realpath reads
+ * `//` as `/`.
+ */
+export function unc(path: string, p: PlatformPath = platformPath): boolean {
+  return p.sep === '\\' && /^[\\/]([\\/]|\?\?[\\/])/.test(path) && !/^\\\\\?\\[a-z]:\\/i.test(path)
+}
+
+/**
+ * Where credentials or configs live, under each home: HOME and USERPROFILE (Windows' HOME) are the caller's to set, so
+ * `homes` brings the ones no variable moves. On Windows, apps keep theirs in AppData (browsers' profiles, sign-in caches).
+ */
+export function forbiddenDirs(env: NodeJS.ProcessEnv, homes: (string | undefined)[], p: PlatformPath = platformPath): string[] {
+  const windows = p.sep === '\\'
+  const all = [env.HOME, env.USERPROFILE, ...homes].filter((home): home is string => !!home)
+  const names = ['.ssh', '.gnupg', '.config', '.local/share', '.harness', '.codex', '.claude', ...(windows ? ['AppData'] : [])]
+  const appData = windows ? [env.APPDATA, env.LOCALAPPDATA].filter((dir): dir is string => !!dir) : []
+  return [...new Set([connectorsDir(env), ...all.flatMap(home => names.map(dir => p.join(home, dir))), ...appData, '/etc', '/proc', '/sys'])]
+}
+
+/**
+ * The account's own temporary folder on Windows, inside AppData\Local, where downloads and agents' files land. Never
+ * TEMP or TMP, nor one under HOME or USERPROFILE: the caller sets those, and so could make the folder a link into AppData.
+ */
+export function tempDir(home: string | undefined, p: PlatformPath = platformPath): string | undefined {
+  return home && p.sep === '\\' ? p.join(home, 'AppData', 'Local', 'Temp') : undefined
+}
+
+/**
+ * Whether a folder of `forbidden` holds `file`, all three resolved. Inside the temporary folder only a forbidden folder
+ * inside it fences the file: AppData, which holds it, does not.
+ */
+export function fenced(file: string, forbidden: string[], temp: string | undefined, p: PlatformPath = platformPath): boolean {
+  const inTemp = !!temp && inside(temp, file, p)
+  return forbidden.some(dir => inside(dir, file, p) && (!inTemp || inside(temp, dir, p)))
+}
+
+/** The account's own home; an account with no passwd entry (a container's bare uid) has none, and `userInfo` throws. */
+function accountHome(): string | undefined {
+  try { return userInfo().homedir } catch { return undefined }
+}
+
 /** An `@path` upload: plain media or a document, never from where credentials or configs live. */
 export function uploadPath(raw: string, env: NodeJS.ProcessEnv = process.env): string {
-  const home = env.HOME || homedir()
-  const path = raw.replace(/^~(?=$|\/)/, home)
+  const path = expandHome(raw, env.HOME || homedir())
+  // Windows opens a share to resolve a path through it. The resolved path is checked again below: a link may lead there.
+  if (unc(path)) throw new CallFailure(2, `refusing to upload ${raw}: not a media file the helper may send`)
+  // The file system's own spelling (`native`): the JS realpath only follows links and keeps the spelling given, so
+  // ~/.SSH on macOS, and SSH~1 (an 8.3 short name) or a \\?\ prefix on Windows, read ~/.ssh outside the fence.
   let real: string
-  try { real = realpathSync(path) } catch { throw new CallFailure(2, `cannot read upload ${raw}`) }
-  const forbidden = [connectorsDir(env), join(home, '.ssh'), join(home, '.gnupg'), join(home, '.config'), join(home, '.local/share'),
-    join(home, '.harness'), join(home, '.codex'), join(home, '.claude'), '/etc', '/proc', '/sys'].map(dir => { try { return realpathSync(dir) } catch { return resolve(dir) } })
-  if (forbidden.some(dir => real === dir || real.startsWith(dir + '/')) || !statSync(real).isFile()) {
+  try { real = realpathSync.native(path) } catch { throw new CallFailure(2, `cannot read upload ${raw}`) }
+  const native = (dir: string): string => { try { return realpathSync.native(dir) } catch { return resolve(dir) } }
+  const account = accountHome()
+  const forbidden = forbiddenDirs(env, [homedir(), account]).map(native)
+  // Resolved as the file is, so both compare in the file system's own spelling, through any link on the profile's path.
+  const temp = tempDir(account)
+  const stat = statSync(real)
+  // A hard link's other names, which may be inside a forbidden folder, are found by no path the fence can check.
+  if (unc(real) || fenced(real, forbidden, temp && native(temp)) || !stat.isFile() || stat.nlink > 1) {
     throw new CallFailure(2, `refusing to upload ${raw}: not a media file the helper may send`)
   }
   if (!UPLOAD_SUFFIXES.includes(extname(real).toLowerCase()) || !UPLOAD_SUFFIXES.includes(extname(path).toLowerCase())) {

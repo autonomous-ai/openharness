@@ -5,6 +5,8 @@ import type { Action, Phase, Screen, View } from './api'
 type Body =
   | { kind: 'sentences'; text: string[] }
   | { kind: 'spinner' }
+  // The spinner, and under it lines[0] when there is one: the install's step.
+  | { kind: 'step' }
   // The install script's last lines, monospace.
   | { kind: 'output' }
   // lines[0] when there is one.
@@ -30,7 +32,7 @@ const CANCEL: Button = { label: 'Cancel', action: 'cancel' }
 // Rust never sends a pair missing here; one would draw nothing. Buttons are in the order drawn: secondary first,
 // primary last, as the desktop's dialogs (swarm_dialogs.dart).
 const FACES: Partial<Record<`${Screen}.${Phase}`, Face>> = {
-  'install.working': { heading: 'Setting up Harness', body: SPINNER, buttons: [] },
+  'install.working': { heading: 'Setting up Harness', body: { kind: 'step' }, buttons: [] },
   'install.failed': {
     heading: 'Setting up Harness',
     body: { kind: 'output' },
@@ -38,7 +40,7 @@ const FACES: Partial<Record<`${Screen}.${Phase}`, Face>> = {
   },
   'sign_in.offer': {
     heading: 'Sign in',
-    body: { kind: 'sentences', text: ['Add your other computers to the dial.'] },
+    body: { kind: 'sentences', text: ['Add your other computers to your device.'] },
     buttons: [{ label: 'Later', action: 'later' }, { label: 'Sign in', action: 'sign_in', primary: true }],
   },
   'sign_in.working': { heading: 'Sign in', body: SPINNER, buttons: [CANCEL] },
@@ -56,17 +58,23 @@ function element(tag: string, className: string, text?: string): HTMLElement {
   return node
 }
 
+// Named by the screen's heading, and by the step under it when there is one: render gives the step id body-0, the
+// first of the body's nodes with text.
+function spinner(withStep = false): HTMLElement {
+  const spinner = element('div', 'spinner')
+  spinner.setAttribute('role', 'status')
+  spinner.setAttribute('aria-labelledby', withStep ? 'heading body-0' : 'heading')
+  return spinner
+}
+
 function body(kind: Body, lines: string[]): HTMLElement[] {
   switch (kind.kind) {
     case 'sentences':
       return kind.text.map((sentence) => element('p', 'body', sentence))
-    case 'spinner': {
-      const spinner = element('div', 'spinner')
-      spinner.setAttribute('role', 'status')
-      // Named by the screen's heading: its only approved words.
-      spinner.setAttribute('aria-labelledby', 'heading')
-      return [spinner]
-    }
+    case 'spinner':
+      return [spinner()]
+    case 'step':
+      return lines.length > 0 ? [spinner(true), element('p', 'body muted', lines[0])] : [spinner()]
     case 'output': {
       const output = element('div', 'output')
       output.setAttribute('role', 'alert')

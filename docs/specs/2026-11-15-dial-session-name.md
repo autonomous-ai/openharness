@@ -44,9 +44,16 @@ folders, so on the dial they cannot be told apart. The app's list and the dial s
 5. **A session the open scan finds is named from its own process record.** Claude Code keeps
    `~/.claude/sessions/<pid>.json` for each running session, and the scan already reads it to find the session's owner.
    That record holds the session's name (`name`) and where the name came from (`nameSource`: `user` for a name the
-   person gave, `derived` for one Claude Code made up). The devices read those two fields of that one record, and
-   nothing else from it. Only a `user` name is shown: a `derived` name can come from what was first asked, and the hook
-   never sends one either. This narrows decision 1 for the scan alone: the session's own record, written by the session
+   person gave, `derived` for one Claude Code made up). The devices read `name`, `nameSource`, `entrypoint` and
+   `hostSessionId` of that one record (beside `sessionId`, decision 6), by `cli/src/cable/hosts/record.ts`, and nothing
+   else from it. `hostSessionId`, the Claude app's own id of the session, is taken only from a `claude-desktop` record
+   and used only in the Claude app's link; it is never shown, logged, sent or stored. (Widened 2026-11-18 for a swipe
+   before the first hook, [design](../plans/2026-11-18-dial-claude-app-swipe-before-hook-design.md).) A `user` name is shown, and, for the Claude
+   app alone, a name with no `nameSource` when `entrypoint` is `claude-desktop`: the app sets that title itself, and its
+   hook sends the same string as `session_title` on the next prompt. A `derived` name, and a CLI record with no
+   `nameSource`, are still refused: a `derived` name can come from what was first asked, and the hook never sends one
+   either. (Widened 2026-11-17 for the Claude app,
+   [the recap after a restart, decision 2](../plans/2026-11-17-dial-recap-after-restart-design.md).) This narrows decision 1 for the scan alone: the session's own record, written by the session
    itself, is read; still nothing from the Claude app's stores, another session's files, or any conversation. Found while
    diagnosing Diego's report that two idle Claude app sessions were missing from the dial (the scan's miss is its own
    fix, `fix/process-table-full-comm`).
@@ -104,7 +111,7 @@ folders, so on the dial they cannot be told apart. The app's list and the dial s
   (`engines/kit/adoption.ts`) claims from: an owner claimed from its arguments has no record, and a transcript is never
   opened here.
 - One read of at most 16 KiB (a record is about 1–2 KiB): a larger file, one that is not JSON, or one whose `name` is not
-  a string gives no name. `nameSource` must be the string `user`, and `sessionId` the listed session's (decision 6). The name is cleaned and cut as the hook's title is
+  a string gives no name. `nameSource` must be the string `user`, or absent with `entrypoint` `claude-desktop`, and `sessionId` the listed session's (decision 6). The name is cleaned and cut as the hook's title is
   (whitespace folded, trimmed, 64 UTF-16 units without splitting a surrogate pair, none with a control character).
 - Read in the devices process, by the scan's own reader, for the sessions it lists in that look (at most 50), after the
   rows and apps are read and under the same look: a session a hook told of meanwhile keeps what the hook said.
@@ -155,7 +162,7 @@ Reviewed revision: this spec's first commit on `fix/dial-session-name`, and deci
 ## Data
 
 - **What:** the session's title, as the person gave it in the engine (`session_title` in its hook, `name` with
-  `nameSource: user` in its own process record).
+  `nameSource: user`, or with no `nameSource` and `entrypoint: claude-desktop`, in its own process record).
 - **Where:** the hook's body to the daemon's local hook route; the session's process record, read by the devices process;
   the devices process's memory; the dial over USB.
 - **Kept:** in memory only, while the agent is listed. Never written to disk, a log, an error, a measure, the backend,

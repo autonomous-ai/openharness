@@ -165,7 +165,10 @@ setInterval(() => {}, 1000);
     BACKEND_WS_URL: `ws://127.0.0.1:${backendPort}`, WEB_URL: backendUrl,
     DISABLE_HOOK_INSTALL: 'true', ADAPTER_UPDATE_DISABLE: 'true', ANALYTICS_ENABLED: 'false', RECAP_FORCE: 'false',
     RECAP_WITHOUT_DEVICE: 'false', CABLE_DISABLE: 'true', CABLE_FW_DISABLE: 'true',
-    TMUX_REAP_INTERVAL_MS: '5000', TERMINAL_RECONCILE_INTERVAL_MS: '5000', TERMINAL_BACKENDS: 'tmux', CLAUDE_PROJECTS_DIR: join(root, 'claude-projects') }
+    TMUX_REAP_INTERVAL_MS: '5000', TERMINAL_RECONCILE_INTERVAL_MS: '5000', TERMINAL_BACKENDS: 'tmux', CLAUDE_PROJECTS_DIR: join(root, 'claude-projects'),
+    // The developer's own HOME: the devices would bring the developer's VS Code extension current with this build's
+    // (cable/vscodeExtensionSetup.ts). They look for VS Code's `code` here alone, where there is none.
+    HARNESS_VSCODE_BIN: join(root, 'no-vscode', 'code') }
   const dshSource = join(root, 'harness-source')
   await mkdir(join(dshSource, 'template'), { recursive: true })
   await mkdir(join(dshSource, 'skills/example'), { recursive: true })

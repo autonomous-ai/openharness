@@ -6,6 +6,7 @@ import { ENGINES, type AgentEngine } from '../engines/types.js'
  * so a flood or a forged body costs the core one small parse and a counter, never state.
  */
 export type ObservedEventName = 'session-start' | 'turn-start' | 'needs-input' | 'turn-stop' | 'turn-error' | 'session-end'
+  | 'turn-aborted' | 'subagent-start' | 'subagent-stop'
 
 export interface ObservedHookEvent {
   engine: AgentEngine
@@ -38,7 +39,8 @@ export interface ObservedAsked {
 
 export type ObservedEvent = ObservedHookEvent | ObservedAsked
 
-const EVENTS: readonly string[] = ['session-start', 'turn-start', 'needs-input', 'asked', 'turn-stop', 'turn-error', 'session-end']
+const EVENTS: readonly string[] = ['session-start', 'turn-start', 'needs-input', 'asked', 'turn-stop', 'turn-error', 'session-end',
+  'turn-aborted', 'subagent-start', 'subagent-stop']
 const MAX_SESSION_ID = 128
 const MAX_PATH = 1024
 const MAX_TOOL = 64

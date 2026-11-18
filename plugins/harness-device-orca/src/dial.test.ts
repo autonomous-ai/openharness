@@ -37,12 +37,16 @@ function ready(socket: string): string {
 type Timer = { at: number; run: () => void }
 type Watch = { folder: string; changed: (name: string | null) => void; failed: () => void; closed: boolean }
 
-/** A loop on inputs of the test's own. `answers` are link's, one a run; with none left, a run lasts until aborted. */
+/** A loop on inputs of the test's own. `answers` are link's, one a run; with none left, a run lasts until aborted.
+ *  `replies` are the devices' answers to the posts, one a post: a status, null, or one the test settles, which an abort
+ *  makes null; with none left, 204. */
 function world(answers: (Ran | Promise<Ran>)[], over: Partial<DialInputs> = {}) {
   let time = 0
   const timers = new Set<Timer>()
   const scheduled: number[] = []
   const runs: { file: string; args: readonly string[]; path: string; timeoutMs: number; maxBytes: number; signal: AbortSignal; at: number }[] = []
+  const posts: { socket: string; body: string; signal: AbortSignal }[] = []
+  const replies: (number | null | Promise<number | null>)[] = []
   const watches: Watch[] = []
   const states: DialState[] = []
   const logs: string[] = []
@@ -62,6 +66,15 @@ function world(answers: (Ran | Promise<Ran>)[], over: Partial<DialInputs> = {}) 
       return new Promise((settle) => bounds.signal.addEventListener('abort', () => settle(null)))
     },
     connect: nodeInputs().connect,
+    post(socket, body, signal) {
+      posts.push({ socket, body, signal })
+      called()
+      const reply = replies.length > 0 ? replies.shift()! : 204
+      return new Promise((settle) => {
+        signal.addEventListener('abort', () => settle(null))
+        void Promise.resolve(reply).then(settle)
+      })
+    },
     watch(folder, changed, failed) {
       const watch = { folder, changed, failed, closed: false }
       watches.push(watch)
@@ -96,6 +109,8 @@ function world(answers: (Ran | Promise<Ran>)[], over: Partial<DialInputs> = {}) 
   return {
     dial,
     runs,
+    posts,
+    replies,
     watches,
     states,
     logs,
@@ -612,4 +627,295 @@ test('the log names each state as it changes, and holds no name, app or path', a
   w.to(1_000)
   await w.until(() => w.states.length === 4)
   assert.deepEqual(w.logs, ['dial: unplugged', 'dial: attached', 'dial: 1 lines skipped', 'dial: notRunning'])
+})
+
+const H = (n: number) => `term_00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
+/** The body that tells the devices these terminals. */
+const fronted = (...ids: string[]) => `{"type":"orcaFront","terminals":[${ids.map((id) => `"${id}"`).join(',')}]}`
+const bodies = (w: { posts: { body: string }[] }) => w.posts.map((post) => post.body)
+/** Every answer already given reaches the loop: it takes them in microtasks, and this resolves on a turn after them. */
+const answered = () => new Promise<void>((done) => setImmediate(done))
+
+test("front() with a stream open posts the ids to the stream's socket", async () => {
+  const { socket, opened } = await devices()
+  const w = world([ready(socket)])
+  await opened
+  w.dial.front([H(1), H(2)])
+  await w.until(() => w.posts.length === 1)
+  assert.deepEqual(
+    w.posts.map(({ socket, body }) => ({ socket, body })),
+    [{ socket, body: '{"type":"orcaFront","terminals":["term_00000000-0000-4000-8000-000000000001","term_00000000-0000-4000-8000-000000000002"]}' }]
+  )
+})
+
+test('front(null) posts "terminals":null', async () => {
+  const { w } = await streaming()
+  w.dial.front(null)
+  await w.until(() => w.posts.length === 1)
+  assert.deepEqual(bodies(w), ['{"type":"orcaFront","terminals":null}'])
+})
+
+test('ids that are no handle are left out, the order kept, and at most 50 go', async () => {
+  const { w } = await streaming()
+  // Not in order, so a sort would show.
+  const handles = Array.from({ length: 54 }, (_, i) => H(54 - i))
+  w.dial.front([...handles.slice(0, 2), 'x', H(1).toUpperCase(), 7 as unknown as string, ...handles.slice(2)])
+  await w.until(() => w.posts.length === 1)
+  assert.deepEqual(JSON.parse(w.posts[0].body), { type: 'orcaFront', terminals: handles.slice(0, 50) })
+})
+
+test('with no stream open nothing is posted, and the latest ids go when one opens', async () => {
+  const elsewhere = await serve(({ res }) => res.writeHead(409).end())
+  const { socket } = await devices()
+  const w = world([UNPLUGGED, null, ready(elsewhere), ready(socket)])
+  await w.until(() => w.states.length === 1 && w.timers.size > 0)
+  w.dial.front([H(1)])
+  w.to(1_000)
+  await w.until(() => w.states.length === 2 && w.timers.size > 0)
+  w.dial.front([H(2)])
+  w.to(2_000)
+  await w.until(() => w.states.length === 3 && w.timers.size > 0)
+  assert.deepEqual([w.states, w.posts], [[{ state: 'unplugged' }, { state: 'notRunning' }, { state: 'elsewhere' }], []])
+  w.to(4_000)
+  await w.until(() => w.posts.length === 1)
+  assert.deepEqual(bodies(w), [fronted(H(2))])
+})
+
+test('each open posts the latest ids again', async () => {
+  const { socket, opened } = await devices()
+  const w = world([ready(socket), ready(socket)])
+  const stream = await opened
+  w.dial.front([H(1)])
+  await w.until(() => w.posts.length === 1)
+  await answered()
+  stream.res.end()
+  await w.until(() => w.due().includes(1_000))
+  w.to(1_000)
+  await w.until(() => w.posts.length === 2)
+  assert.deepEqual(w.posts.map(({ socket, body }) => ({ socket, body })), [
+    { socket, body: fronted(H(1)) },
+    { socket, body: fronted(H(1)) },
+  ])
+})
+
+test('the same ids again post nothing', async () => {
+  const { w } = await streaming()
+  w.dial.front([H(1), H(2)])
+  await w.until(() => w.posts.length === 1)
+  await answered()
+  w.dial.front([H(1), H(2)])
+  await answered()
+  assert.deepEqual(bodies(w), [fronted(H(1), H(2))])
+})
+
+test('a send that fails is sent once more 1 s later; if that fails too it is logged once, with no id', async () => {
+  const { w } = await streaming()
+  w.replies.push(500, null)
+  w.dial.front([H(1)])
+  await w.until(() => w.due().includes(1_000))
+  // The same ids during the wait, as a tab renamed sends them, wait for the retry too.
+  w.dial.front([H(1)])
+  await answered()
+  assert.deepEqual([w.posts.length, w.logs, w.due()], [1, [], [1_000]])
+  w.to(1_000)
+  await w.until(() => w.logs.length > 0)
+  w.to(60_000)
+  await answered()
+  assert.deepEqual([bodies(w), w.logs, w.timers.size], [[fronted(H(1)), fronted(H(1))], ['dial: front not sent'], 0])
+  assert.equal(w.logs.some((line) => line.includes('term_')), false)
+})
+
+test('after a logged failure the same ids post nothing, as a tab renamed gives them; other ids post, and so does the next open', async () => {
+  const { socket, opened } = await devices()
+  const w = world([ready(socket), ready(socket)])
+  const stream = await opened
+  w.replies.push(404, 404)
+  w.dial.front([H(1)])
+  await w.until(() => w.due().includes(1_000))
+  w.to(1_000)
+  await w.until(() => w.logs.length === 1)
+  // A tab renamed in the worktree on screen: the same ids, which a daemon from before orcaFront would refuse each time.
+  w.dial.front([H(1)])
+  w.dial.front([H(1)])
+  await answered()
+  assert.deepEqual([bodies(w), w.logs, w.timers.size], [[fronted(H(1)), fronted(H(1))], ['dial: front not sent'], 0])
+
+  // Another worktree, and back: each a change.
+  w.dial.front([H(2)])
+  await w.until(() => w.posts.length === 3)
+  await answered()
+  w.dial.front([H(1)])
+  await w.until(() => w.posts.length === 4)
+  await answered()
+  assert.deepEqual(bodies(w).slice(2), [fronted(H(2)), fronted(H(1))])
+
+  // Refused twice again, then the stream ends: the next one is offered the latest.
+  w.replies.push(404, 404)
+  w.dial.front([H(3)])
+  await w.until(() => w.due().includes(2_000))
+  w.to(2_000)
+  await w.until(() => w.logs.length === 2)
+  stream.res.end()
+  await w.until(() => w.due().includes(3_000))
+  w.to(3_000)
+  await w.until(() => w.posts.length === 7)
+  assert.deepEqual(bodies(w).slice(4), [fronted(H(3)), fronted(H(3)), fronted(H(3))])
+})
+
+test('a send with no answer may still land, so the ids the devices took before it go again', async () => {
+  const { w } = await streaming()
+  w.dial.front([H(1)])
+  await w.until(() => w.posts.length === 1)
+  await answered()
+  // A devices process that stalls past the deadline still reads H(2) once it runs again: H(1) must land after it.
+  w.replies.push(new Promise(() => {}))
+  w.dial.front([H(2)])
+  await w.until(() => w.posts.length === 2)
+  w.dial.front([H(1)])
+  w.to(2_000)
+  await answered()
+  assert.deepEqual([bodies(w), w.logs], [[fronted(H(1)), fronted(H(2)), fronted(H(1))], []])
+})
+
+test("a newer front() during the wait is sent at once, and the older one's retry is not", async () => {
+  const { w } = await streaming()
+  w.replies.push(500)
+  w.dial.front([H(1)])
+  await w.until(() => w.due().includes(1_000))
+  w.dial.front([H(2)])
+  await w.until(() => w.posts.length === 2)
+  await answered()
+  w.to(5_000)
+  await answered()
+  assert.deepEqual([bodies(w), w.logs, w.timers.size], [[fronted(H(1)), fronted(H(2))], [], 0])
+
+  // Back to the ids the devices took: nothing to send, and the refused one's retry is not sent either.
+  w.replies.push(500)
+  w.dial.front([H(3)])
+  await w.until(() => w.due().includes(6_000))
+  w.dial.front([H(2)])
+  w.to(10_000)
+  await answered()
+  assert.deepEqual([bodies(w), w.logs, w.timers.size], [[fronted(H(1)), fronted(H(2)), fronted(H(3))], [], 0])
+})
+
+test('the stream ending during the wait cancels the retry: nothing more is sent or logged', async () => {
+  const { w, stream } = await streaming()
+  w.replies.push(500)
+  w.dial.front([H(1)])
+  await w.until(() => w.due().includes(1_000))
+  w.to(500)
+  stream.res.end()
+  // The next pass's wait alone.
+  await w.until(() => w.due().includes(1_500))
+  assert.deepEqual(w.due(), [1_500])
+  w.to(1_500)
+  await w.until(() => w.runs.length === 2)
+  assert.deepEqual([bodies(w), w.logs], [[fronted(H(1))], []])
+})
+
+test('sends never overlap: front() calls while one is in flight send only the latest once it answers', async () => {
+  const { w } = await streaming()
+  let answer: (status: number) => void = () => {}
+  w.replies.push(new Promise((done) => (answer = done)))
+  w.dial.front([H(1)])
+  await w.until(() => w.posts.length === 1)
+  w.dial.front([H(2)])
+  w.dial.front([H(3)])
+  await answered()
+  assert.deepEqual(bodies(w), [fronted(H(1))])
+  answer(204)
+  await w.until(() => w.posts.length === 2)
+  await answered()
+  assert.deepEqual(bodies(w), [fronted(H(1)), fronted(H(3))])
+
+  // One that fails once a newer one waits is neither sent again nor logged: the newer goes at once.
+  let refuse: (status: number) => void = () => {}
+  w.replies.push(new Promise((done) => (refuse = done)))
+  w.dial.front([H(4)])
+  await w.until(() => w.posts.length === 3)
+  w.dial.front([H(5)])
+  refuse(500)
+  await answered()
+  w.to(5_000)
+  await answered()
+  assert.deepEqual([bodies(w).slice(2), w.logs, w.timers.size], [[fronted(H(4)), fronted(H(5))], [], 0])
+})
+
+test('a send with no answer in 2 s is aborted and counts as failed', async () => {
+  const { w } = await streaming()
+  w.replies.push(new Promise(() => {}))
+  w.dial.front([H(1)])
+  await w.until(() => w.posts.length === 1)
+  assert.deepEqual(w.due(), [2_000])
+  w.to(1_999)
+  assert.equal(w.posts[0].signal.aborted, false)
+  w.to(2_000)
+  assert.equal(w.posts[0].signal.aborted, true)
+  await w.until(() => w.due().includes(3_000))
+  w.to(3_000)
+  await w.until(() => w.posts.length === 2)
+  assert.deepEqual([bodies(w), w.logs], [[fronted(H(1)), fronted(H(1))], []])
+})
+
+test('a daemon from before orcaFront answers 404: one retry, one line, and the state and the stream are untouched', async () => {
+  const { w, stream } = await streaming()
+  stream.res.write('{"attached":true,"agent":null}\n')
+  await w.until(() => w.states.length === 1)
+  w.replies.push(404, 404)
+  w.dial.front([H(1)])
+  await w.until(() => w.due().includes(1_000))
+  w.to(1_000)
+  await w.until(() => w.logs.length === 2)
+  w.to(60_000)
+  await answered()
+  assert.deepEqual([w.posts.length, w.logs, w.dial.state()], [2, ['dial: attached', 'dial: front not sent'], { state: 'attached' }])
+  // A later line of the same stream still becomes the state.
+  stream.res.write(`${AGENT}\n`)
+  await w.until(() => w.states.length === 2)
+  assert.deepEqual(w.dial.state(), { state: 'attached', agent: { name: 'api', app: 'Orca' } })
+})
+
+test('on Windows, and after stop(), front() posts nothing and throws nothing; stop() aborts a send in flight and leaves no timer', async () => {
+  const windows = world([], { platform: 'win32' })
+  await windows.until(() => windows.states.length > 0)
+  windows.dial.front([H(1)])
+  windows.dial.front(null)
+  await answered()
+  assert.deepEqual([windows.posts, windows.timers.size], [[], 0])
+
+  const { w } = await streaming()
+  w.replies.push(new Promise(() => {}))
+  w.dial.front([H(1)])
+  await w.until(() => w.posts.length === 1)
+  await w.dial.stop()
+  assert.deepEqual([w.posts[0].signal.aborted, w.timers.size], [true, 0])
+  w.dial.front([H(2)])
+  await answered()
+  assert.deepEqual([w.posts.length, w.logs], [1, []])
+
+  // A retry that waits is cancelled too.
+  const waiting = await streaming()
+  waiting.w.replies.push(500)
+  waiting.w.dial.front([H(1)])
+  await waiting.w.until(() => waiting.w.due().includes(1_000))
+  // From the call of stop(), though the stream ends a moment after it.
+  const stopping = waiting.w.dial.stop()
+  waiting.w.dial.front([H(2)])
+  await stopping
+  assert.deepEqual([waiting.w.posts.length, waiting.w.timers.size], [1, 0])
+})
+
+test('an answer that comes as stop() is called sends nothing more, though the stream ends a moment after it', async () => {
+  const { w } = await streaming()
+  let answer: (status: number) => void = () => {}
+  w.replies.push(new Promise((done) => (answer = done)))
+  w.dial.front([H(1)])
+  await w.until(() => w.posts.length === 1)
+  w.dial.front([H(2)])
+  const stopping = w.dial.stop()
+  answer(204)
+  await stopping
+  await answered()
+  assert.deepEqual(bodies(w), [fronted(H(1))])
 })

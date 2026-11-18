@@ -1,5 +1,6 @@
 // The loop behind the panel and the status bar: it asks `harness device orca link` where the devices' socket is,
-// holds the `dial` stream open on it, and makes each of its lines the state. Nothing of `orca` is loaded here: the end
+// holds the `dial` stream open on it, and makes each of its lines the state. While that stream is open it tells the
+// devices the terminals of the worktree on Orca's screen, by their ids alone. Nothing of `orca` is loaded here: the end
 // to end test runs this file outside Orca.
 import { basename, dirname } from 'node:path'
 import { MISSING, type DialInputs, type Ran } from './inputs'
@@ -10,6 +11,8 @@ const DIAL_OPEN = '{"type":"dial","standby":true}'
 
 export interface Dial {
   state(): DialState
+  /** The terminal ids of the worktree on Orca's screen, in Orca's order, or null when none is. */
+  front(terminals: readonly string[] | null): void
   /** Ends the loop: nothing is told or logged once it is called. Resolves when the pass in flight has ended. */
   stop(): Promise<void>
 }
@@ -29,8 +32,25 @@ const LAST_WAIT_MS = 30_000
 const WATCHED_WAIT_MS = 300_000
 // The folder watch asks link at most this often.
 const WATCH_MS = 1_000
+// What the devices take of the worktree on screen: Orca's terminal handles, at most 50.
+const HANDLE = /^term_[0-9a-f-]{36}$/
+const FRONT_MAX_TERMINALS = 50
+const FRONT_RETRY_MS = 1_000
 
 type Link = { ready: false; socket?: string } | { ready: true; socket: string }
+
+// The `dial` stream while it is open.
+interface Stream {
+  socket: string
+  /** The body the devices last took. */
+  sent?: string
+  /** Stops the send in flight. */
+  sending?: () => void
+  /** The body whose retry waits. */
+  retry?: { body: string; cancel(): void }
+  /** The body whose retry failed too. */
+  failed?: string
+}
 
 const decoder = new TextDecoder()
 
@@ -47,6 +67,9 @@ export function startDial(inputs: DialInputs, tell: { changed(state: DialState):
   let cancelNext = () => {}
   let watching: { socket: string; close(): void } | null = null
   let watchFailed = false
+  // The body of the last front(), kept for the next stream while none is open.
+  let latest: string | undefined
+  let stream: Stream | null = null
 
   function log(line: string): void {
     if (!stopped) tell.log(line)
@@ -160,6 +183,9 @@ export function startDial(inputs: DialInputs, tell: { changed(state: DialState):
     const answer = await inputs.connect(socket, DIAL_OPEN, abort.signal)
     cancelHead()
     if (answer?.status !== 200) return set({ state: answer?.status === 409 ? 'elsewhere' : 'notRunning' })
+    stream = { socket }
+    // A devices process that started again holds no worktree: each open tells it the latest.
+    push()
     const opened = inputs.now()
     let skipped = 0
     const tooLong = await eachLine(answer.chunks, (line) => {
@@ -169,9 +195,64 @@ export function startDial(inputs: DialInputs, tell: { changed(state: DialState):
       else skipped += 1
       return true
     })
+    close()
     if (skipped > 0) log(`dial: ${skipped} lines skipped`)
     if (tooLong) log('dial: line too long')
     if (inputs.now() - opened > LAST_WAIT_MS) wait = FIRST_WAIT_MS
+  }
+
+  // The devices drop the worktree with the stream: nothing more is sent or logged for it.
+  function close(): void {
+    const open = stream
+    stream = null
+    open?.sending?.()
+    open?.retry?.cancel()
+  }
+
+  // One send at a time, so an older worktree never lands after a newer one: the latest goes once the one in flight
+  // answers, unless it waits for its retry or the devices took it. Any other body's retry is dropped. What failed twice
+  // waits for other ids or the next stream: a tab renamed gives the same ids again, which a daemon from before orcaFront
+  // would refuse each time, so a rename costs no post and no line.
+  function push(): void {
+    const open = stream
+    if (!open || latest === undefined || open.sending || latest === open.retry?.body || latest === open.failed) return
+    open.retry?.cancel()
+    open.retry = undefined
+    open.failed = undefined
+    if (latest !== open.sent) void send(open, latest, false)
+  }
+
+  async function send(open: Stream, body: string, retried: boolean): Promise<void> {
+    const abort = new AbortController()
+    // The listener's own deadline, on the loop's clock, so a devices process that hangs holds no later send for ever.
+    const cancelHead = inputs.after(HEAD_MS, () => abort.abort())
+    open.sending = () => {
+      cancelHead()
+      abort.abort()
+    }
+    const status = await inputs.post(open.socket, body, abort.signal)
+    cancelHead()
+    open.sending = undefined
+    if (open !== stream) return
+    if (status !== null && status >= 200 && status < 300) {
+      open.sent = body
+      return push()
+    }
+    // One with no answer may still land, read by a devices process that stalled past the deadline once it runs again:
+    // what they hold is not known, so the latest goes even when it is what they took before.
+    if (status === null) open.sent = undefined
+    if (body !== latest) push()
+    else if (retried) {
+      open.failed = body
+      log('dial: front not sent')
+    } else {
+      // A refusal by a daemon from before orcaFront costs one more send and one line, never the stream.
+      const cancel = inputs.after(FRONT_RETRY_MS, () => {
+        open.retry = undefined
+        void send(open, body, true)
+      })
+      open.retry = { body, cancel }
+    }
   }
 
   if (inputs.platform === 'win32') set({ state: 'windows' })
@@ -179,11 +260,20 @@ export function startDial(inputs: DialInputs, tell: { changed(state: DialState):
 
   return {
     state: () => current,
+    front(terminals) {
+      if (stopped) return
+      // Orca's list is outside text: only what the devices take goes, and no title, branch or path.
+      const ids = terminals && terminals.filter((id) => typeof id === 'string' && HANDLE.test(id)).slice(0, FRONT_MAX_TERMINALS)
+      latest = JSON.stringify({ type: 'orcaFront', terminals: ids })
+      push()
+    },
     async stop() {
       stopped = true
       cancelNext()
       unwatch()
       passing?.abort()
+      // At once: the stream ends a moment after its pass is aborted, and an answer or a retry then would send again.
+      close()
       await passDone
     },
   }

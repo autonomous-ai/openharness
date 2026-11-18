@@ -34,6 +34,17 @@ describe('launch preparation authority', () => {
     expect(current()).toBe(false)
   })
 
+  it.each([
+    [{ state: 'ready' }, undefined],
+    [undefined, { state: 'ready' }],
+  ] as const)('keeps its target when a ready launch is written %j and read %j', (before, after) => {
+    const row = agent()
+    if (before) row.launch = { ...before }
+    const current = createLaunchAuthority({ byAgent: () => row, revision: () => 1, cancelled: () => false })(row.agentId)
+    if (after) row.launch = { ...after }; else delete row.launch
+    expect(current()).toBe(true)
+  })
+
   it('allows display-only updates and route ordering without losing the original target', () => {
     const row = agent()
     row.runtimes.push({ backend: 'tmux', paneId: '%9' })

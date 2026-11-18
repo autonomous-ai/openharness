@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CoreApi, TurnLifecycle } from '../core/api.js'
+import { DONE_QUIET_MS } from '../lib/agentNotifications.js'
 import type { LiveEvent } from '../lib/normalize.js'
 import type { CoreConnection, ServiceProcessOptions } from './process.js'
 import { createRecaps } from './recaps.js'
@@ -29,6 +30,7 @@ function connection(turn: unknown = { assistantText: 'The fix is in.', userMessa
 
 describe('the recaps in their own process', () => {
   afterEach(() => {
+    vi.useRealTimers()
     vi.clearAllMocks()
     vi.restoreAllMocks()
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
@@ -58,12 +60,15 @@ describe('the recaps in their own process', () => {
 
   it('cuts a turn\'s recap, sends its cards and recap as notices, and says what it now holds of the session', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.useFakeTimers()
     const { options } = setup()
     const core = connection()
     options.onConnected!(core.core)
     options.onEvent!(lifecycle({ kind: 'events', session: s1, events: [started], replay: false }))
     expect(core.said('recaps').at(-1)).toMatchObject({ sessionId: 's1', recaps: { asks: ['what is the fix?'], busy: true } })
     options.onEvent!(lifecycle({ kind: 'events', session: s1, events: [ended], replay: false }))
+    // The recap is told once the turn's end stays quiet for DONE_QUIET_MS (lib/agentNotifications.ts).
+    await vi.advanceTimersByTimeAsync(DONE_QUIET_MS)
     await vi.waitFor(() => expect(core.said('summary')).toHaveLength(1))
     expect(core.query).toHaveBeenCalledWith('lastTurn', { sessionId: 's1' })
     expect(core.said('summary')[0]).toMatchObject({ frame: { type: 'turn_summary', agentId: 'a1', dbSessionId: 's1', payload: { tier: 'list' } } })

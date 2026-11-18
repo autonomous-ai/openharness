@@ -5,6 +5,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { MISSING, nodeInputs } from './inputs'
 
 const BODY = '{"type":"dial","standby":true}'
+const FRONT = '{"type":"orcaFront","terminals":null}'
 let dir = ''
 let servers: Server[] = []
 
@@ -145,6 +146,36 @@ test('an abort after it ends the chunks', async () => {
     abort.abort()
   }
   assert.equal(all, '{"attached":false}\n')
+})
+
+test('post posts the body to / on a connection of its own and answers the status', async () => {
+  const got: unknown[] = []
+  const socketPath = await serve((req, res, body) => {
+    got.push({ method: req.method, url: req.url, body, connection: req.headers.connection })
+    if (got.length === 1) res.writeHead(204).end()
+    else res.writeHead(400).end('{"error":"bad"}\n')
+  })
+  const signal = new AbortController().signal
+  assert.equal(await nodeInputs().post(socketPath, FRONT, signal), 204)
+  assert.equal(await nodeInputs().post(socketPath, FRONT, signal), 400)
+  const seen = { method: 'POST', url: '/', body: FRONT, connection: 'close' }
+  assert.deepEqual(got, [seen, seen])
+})
+
+test('post to a socket that is not there, and to one nothing listens on, is null', async () => {
+  const signal = new AbortController().signal
+  assert.equal(await nodeInputs().post(`${dir}/none.sock`, FRONT, signal), null)
+  const socketPath = await serve(() => {})
+  renameSync(socketPath, `${dir}/stale.sock`)
+  const server = servers.pop()!
+  await new Promise((done) => server.close(done))
+  assert.equal(await nodeInputs().post(`${dir}/stale.sock`, FRONT, signal), null)
+})
+
+test('an abort before the answer makes post null', async () => {
+  const abort = new AbortController()
+  const socketPath = await serve(() => abort.abort())
+  assert.equal(await nodeInputs().post(socketPath, FRONT, abort.signal), null)
 })
 
 test('watch tells the name of an entry made in its folder; after its close it tells nothing', async () => {

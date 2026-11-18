@@ -57,10 +57,39 @@ describe('screens', () => {
     expect(buttons()).toEqual([])
   })
 
+  it('install: the step under the spinner', async () => {
+    const step = () => page().querySelector('.body.muted')?.textContent ?? null
+    await mount(at('install', 'working', ['Installing tmux…']))
+    expect(spinner()).not.toBeNull()
+    expect(step()).toBe('Installing tmux…')
+
+    push(at('install', 'working', ['Downloading Harness…', 'a second line']))
+    expect(step()).toBe('Downloading Harness…')
+    expect(text()).not.toContain('a second line')
+
+    push(at('install', 'working'))
+    expect(spinner()).not.toBeNull()
+    expect(page().querySelectorAll('.content > *')).toHaveLength(2)
+  })
+
+  it('install: the spinner is named by the heading and the step', async () => {
+    // The text of each element the spinner's aria-labelledby names, as a screen reader reads it.
+    const name = () =>
+      (spinner()?.getAttribute('aria-labelledby') ?? '')
+        .split(' ')
+        .map((id) => document.getElementById(id)?.textContent)
+        .join(' ')
+    await mount(at('install', 'working', ['Installing tmux…']))
+    expect(name()).toBe('Setting up Harness Installing tmux…')
+
+    push(at('install', 'working'))
+    expect(name()).toBe('Setting up Harness')
+  })
+
   it('sign-in: offer, browser, done', async () => {
     await mount(at('sign_in', 'offer'))
     expect(heading()).toBe('Sign in')
-    expect(text()).toContain('Add your other computers to the dial.')
+    expect(text()).toContain('Add your other computers to your device.')
     expect(buttons()).toEqual(['Later', 'Sign in'])
     click('Sign in')
     expect(act).toHaveBeenCalledWith('sign_in')
@@ -144,6 +173,10 @@ describe('screens', () => {
     push(at('sign_in', 'failed', [outside]))
     expect(page().querySelector('img')).toBeNull()
     expect(text()).toContain(outside)
+
+    push(at('install', 'working', [outside]))
+    expect(page().querySelector('img')).toBeNull()
+    expect(text()).toContain(outside)
   })
 
   it('a screen reader hears a failure, and what the focused button answers', async () => {
@@ -164,7 +197,7 @@ describe('screens', () => {
 
     push(at('sign_in', 'offer'))
     expect(alert()).toBeNull()
-    expect(described()).toBe('Add your other computers to the dial.')
+    expect(described()).toBe('Add your other computers to your device.')
   })
 
   it('the primary button has the focus, and no other', async () => {

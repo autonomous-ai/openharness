@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/core/runtime_model_name.dart';
 
 void main() {
@@ -23,6 +24,22 @@ void main() {
         label,
       );
     }
+  });
+
+  test('an agent keeps the whole model its machine names, however long', () {
+    // An OpenCode agent's id names its provider, and is longer than a label: the chip read just "OpenCode" once it
+    // was cut at 80 (iPhone 14, 2026-11-18).
+    const id = '774b61bd-dd52-4d12-9e76-275325cabc65';
+    final agent = Agent.fromJson({
+      'id': id,
+      'engine': 'opencode',
+      'selectedModel':
+          'runtime-v1:$id:opencode:${Uri.encodeComponent('opencode/deepseek-v4.1-flash-free')}@auto',
+    });
+    expect(
+      runtimeModelName(agent.selectedModel, agentId: id, engine: 'opencode'),
+      'opencode/deepseek-v4.1-flash-free',
+    );
   });
 
   test('OpenCode labels exclude an adjacent padded project path', () {

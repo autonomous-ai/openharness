@@ -5,7 +5,7 @@ import { render } from './screens'
 
 // focused draws the primary button's focus ring, which a page shows on one element at a time (gallery.html).
 export const STATES: { name: string; view: View; focused?: true }[] = [
-  { name: 'Install · working', view: { screen: 'install', phase: 'working', lines: [] } },
+  { name: 'Install · working', view: { screen: 'install', phase: 'working', lines: ['Installing tmux…'] } },
   {
     name: 'Install · failed',
     view: {
