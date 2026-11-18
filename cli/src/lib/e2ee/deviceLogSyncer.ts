@@ -31,6 +31,7 @@ import {
 } from './deviceLogStore.js'
 import { devLogHistory, type DevLogHistoryRow } from './deviceHistory.js'
 import { b64d, fingerprint, verify } from './core.js'
+import { errorKind } from '../log.js'
 
 export interface DeviceLogFetched { acct: string; head: DevLogHead; entries: unknown[] }
 export type DeviceLogAppendAnswer = { head: DevLogHead } | { error: string; head?: DevLogHead }
@@ -306,7 +307,7 @@ export class DeviceLogSyncer {
         await this.sleep(200 + Math.floor(Math.random() * 800) * (attempt + 1))
       }
     } catch (err) {
-      this.deps.log?.(`[devlog] register failed: ${err instanceof Error ? err.message : String(err)}`)
+      this.deps.log?.(`[devlog] register failed: ${errorKind(err)}`)
     }
   }
 
@@ -314,7 +315,7 @@ export class DeviceLogSyncer {
   refresh(): Promise<void> {
     if (this.refreshing) return this.refreshing
     this.refreshing = this.doRefresh()
-      .catch((err) => { this.deps.log?.(`[devlog] refresh failed: ${err instanceof Error ? err.message : String(err)}`) })
+      .catch((err) => { this.deps.log?.(`[devlog] refresh failed: ${errorKind(err)}`) })
       .finally(() => { this.refreshing = null })
     return this.refreshing
   }
@@ -343,7 +344,7 @@ export class DeviceLogSyncer {
       this.trustState(state, [member])
       return 'trusted'
     } catch (err) {
-      this.deps.log?.(`[devlog] could not read the log for a key: ${err instanceof Error ? err.message : String(err)}`)
+      this.deps.log?.(`[devlog] could not read the log for a key: ${errorKind(err)}`)
       return 'unavailable'
     }
   }
@@ -519,7 +520,7 @@ export class DeviceLogSyncer {
       const adopted = this.trustState(state, missing)
       if (adopted.length) this.deps.log?.(`[devlog] trusting ${adopted.length} key(s) the log has and this machine did not: ${adopted.map((m) => fp(m.pub)).join(', ')}`)
     } catch (err) {
-      this.deps.log?.(`[devlog] could not trust what the log has: ${err instanceof Error ? err.message : String(err)}`)
+      this.deps.log?.(`[devlog] could not trust what the log has: ${errorKind(err)}`)
     }
   }
 
@@ -688,7 +689,7 @@ export class DeviceLogSyncer {
       this.deps.changed?.()
     } catch (err) {
       // The list stays as it was; the next read asks again.
-      this.deps.log?.(`[devlog] could not read which devices were confirmed: ${err instanceof Error ? err.message : String(err)}`)
+      this.deps.log?.(`[devlog] could not read which devices were confirmed: ${errorKind(err)}`)
     }
   }
 
@@ -961,7 +962,7 @@ export class DeviceLogSyncer {
         this.deps.log?.(`[devlog] removed unused device ${m.label || '(no name)'} (${fp(m.pub)}), ${when}`)
       }
     } catch (err) {
-      this.deps.log?.(`[devlog] sweep failed: ${err instanceof Error ? err.message : String(err)}`)
+      this.deps.log?.(`[devlog] sweep failed: ${errorKind(err)}`)
     }
   }
 
@@ -1210,7 +1211,7 @@ export class DeviceLogSyncer {
       if (!kept) this.deps.log?.(`[devlog] could not tell your other devices that ${member.label || '(no name)'} (${fp(pub)}) is yours: they still show it as new`)
       return kept
     } catch (err) {
-      this.deps.log?.(`[devlog] could not share "It's mine": ${err instanceof Error ? err.message : String(err)}`)
+      this.deps.log?.(`[devlog] could not share "It's mine": ${errorKind(err)}`)
       return false
     }
   }
