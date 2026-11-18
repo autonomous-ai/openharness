@@ -4,9 +4,10 @@
  */
 import type * as ChildProcesses from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { wholeLines } from '../../testing/wholeLines.js'
 
 /** Each fake's script path: whether it was removed, and its children still running. */
 const fakes = new Map<string, { removed: boolean; running: Set<ChildProcess> }>()
@@ -106,9 +107,9 @@ export function fakePodman(): FakePodman {
     calls() {
       const log = join(dir, 'calls.jsonl')
       if (!existsSync(log)) return []
-      return readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line) as FakeCall)
+      return wholeLines(log).map(line => JSON.parse(line) as FakeCall)
     },
-    pids: () => readFileSync(join(dir, 'pids.log'), 'utf8').split('\n').filter(Boolean).map(Number),
+    pids: () => wholeLines(join(dir, 'pids.log')).map(Number),
     async remove() {
       fake.removed = true
       await Promise.all([...fake.running].map(child => new Promise(done => child.once('exit', done))))

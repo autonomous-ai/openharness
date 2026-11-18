@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LocalModels } from './localModels.js'
 import { writeExecutable } from '../testing/executableFixture.js'
+import { wholeLines } from '../testing/wholeLines.js'
 
 it('discovers, downloads, starts, verifies, stops and restarts across real subprocesses and HTTP', async () => {
   const root = await mkdtemp(join(tmpdir(), 'models-pipeline-'))
@@ -84,7 +85,7 @@ else process.exitCode = 2;
     expect((await stat(join(gridHome, 'models', 'tiny.gguf'))).size).toBe(64)
     await service.act('home', modelId, 'start'); await service.settled()
     expect((await service.list('home')).models[0].state).toBe('running')
-    const calls = (await readFile(join(gridHome, 'calls.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line) as string[])
+    const calls = wholeLines(join(gridHome, 'calls.jsonl')).map(line => JSON.parse(line) as string[])
     expect(calls.filter(args => args[0] === 'pull')).toHaveLength(1)
     expect(calls.filter(args => args.includes('sync'))).toHaveLength(2)
     expect(calls.filter(args => args[0] === 'engine')).toHaveLength(1)

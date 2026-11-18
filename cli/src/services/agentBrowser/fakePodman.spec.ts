@@ -1,5 +1,6 @@
 import * as childProcesses from 'node:child_process'
-import { readFileSync, statSync } from 'node:fs'
+import { appendFileSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 
 describe('fakePodman', () => {
@@ -14,6 +15,26 @@ describe('fakePodman', () => {
       expect(spawnSync.mock.calls.map(([command]) => command)).toEqual([fake.path])
       expect(readFileSync(fake.path, 'utf8').split('\n')[0]).toBe(`#!${process.execPath}`)
       expect(statSync(fake.path).mode & 0o777).toBe(0o755)
+    } finally {
+      await fake.remove()
+    }
+  })
+
+  // A call logs itself with one append, which creates the file before it writes the line: a spec that read the log
+  // then found an empty file, and threw (agentBrowser.spec.ts under parallel load, 2026-11-19).
+  it('reads only the calls and pids whose lines are whole', async () => {
+    vi.resetModules()
+    const { fakePodman, trackingFakes } = await import('./fakePodman.js')
+    trackingFakes(childProcesses)
+    const fake = fakePodman()
+    const dir = dirname(fake.path)
+    try {
+      writeFileSync(join(dir, 'calls.jsonl'), '')
+      expect(fake.calls()).toEqual([])
+      appendFileSync(join(dir, 'calls.jsonl'), `${JSON.stringify({ args: ['ps'], stdin: '' })}\n{"args":["in`)
+      expect(fake.calls()).toEqual([{ args: ['ps'], stdin: '' }])
+      appendFileSync(join(dir, 'pids.log'), '4242\n42')
+      expect(fake.pids()).toEqual([4242])
     } finally {
       await fake.remove()
     }

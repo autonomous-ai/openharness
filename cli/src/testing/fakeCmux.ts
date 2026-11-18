@@ -23,9 +23,10 @@
  *   (`CMUXTermMain`). Only `automation` and `allowAll` let a process started outside cmux in: `cmuxOnly` checks the
  *   caller's ancestry, `password` asks a secret, `off` has no socket.
  */
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { wholeLines } from './wholeLines.js'
 
 /** The cmux release the fake answers as; its header names each upstream file a field comes from (A1 to A7). */
 export const CMUX_TAG = 'v0.65.2.2'
@@ -252,7 +253,7 @@ export function fakeCmux(root?: string): FakeCmux {
     dir,
     set,
     calls: () => existsSync(callsFile)
-      ? readFileSync(callsFile, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line) as FakeCmuxCall)
+      ? wholeLines(callsFile).map((line) => JSON.parse(line) as FakeCmuxCall)
       : [],
     remove: () => rmSync(base, { recursive: true, force: true }),
   }
