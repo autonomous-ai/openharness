@@ -266,3 +266,18 @@ the original intent remains and removes the correct uncommitted orphan. The held
 released and drained before cleanup, then ordinary publication must still succeed. Existing actual
 failed-flush retry and held-close overlap controls follow in GREEN, then the three stage suites.
 No broader filesystem rewrite, timeout change or extra performance measurement is part of this fix.
+
+## Publication proof RED and GREEN
+
+At clean test/Design source `c31f9a8dc6`, all three selected cases fail as intended (1.2 seconds):
+the same destination opens six additional descriptors, a different destination replaces the durable
+intent, and publication succeeds while the second real verification is held. Receipt:
+`.harness/validation/20261118T222326.739561Z-54731/receipt.json`, actual exit 1 without timeout.
+
+Runtime-only commit `813d47434d` adds the pending-verification guard and consumes the successful proof.
+All five selected controls then pass (1.4 seconds), including failed-flush retry and held-close overlap:
+`.harness/validation/20261118T222355.348990Z-55195/receipt.json`. The three complete stage suites pass
+45/45 cases (6.7 seconds): `.harness/validation/20261118T222412.054903Z-55568/receipt.json`.
+Both GREEN receipts record actual exit 0, one worker and unchanged source. No additional typing,
+coverage, benchmark or broader suite was run for this approved narrow follow-up. Frozen comparison
+sources and all measured evidence remain unchanged; root owns final integrated input/Resume validation.
