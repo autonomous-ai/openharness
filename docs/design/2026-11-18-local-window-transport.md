@@ -52,7 +52,7 @@ The unscoped CoreApi's sendWindow is unavailable. Composition hands only the dev
 
 A stateless generic service-notice admission path reads the declaration for the authenticated service and calls the same validation/transport function; no factory cache or new lifecycle record is needed. This relocates the existing permissions and lets the shared transport serve two real components. It does not introduce a WiFi-only core operation or per-feature state.
 
-There is no new fanout or queue: all inherits the existing local broadcast, first stops after one successful sink and exact examines one physical connection. Local service frames retain the existing LOCAL_JSON_MAX_BYTES boundary. No new arbitrary command/raw backend forwarding route is exposed. This does not claim to fix the pre-existing lack of an explicit total local-client count bound.
+There is no new fanout or queue: all inherits the existing local broadcast, first stops after one successful sink and exact examines one physical connection. Token-authenticated service notices retain the existing MAX_WS_MESSAGE_BYTES transport ceiling (6 MiB + 4096 bytes); localWsServer explicitly exempts an admitted service link from the ordinary client JSON limit of 512 KiB. This is the existing inbound notice bound, not a new per-feature or outbound list bound. No new arbitrary command/raw backend forwarding route is exposed. This does not claim to fix the pre-existing lack of an explicit total local-client count bound.
 
 ## RED / compatibility and ownership proof selected before implementation
 
