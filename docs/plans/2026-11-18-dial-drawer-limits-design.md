@@ -124,7 +124,9 @@ reconnect) use it:
 - `told`, and a Pro: the plain frame, as today, then marked `asked`;
 - `told`, and an older round dial: not sent.
 
-A question the dial holds (`asked`) is not sent again, as today.
+A question the dial holds (`asked`) is not sent again, as today. A told question whose agent id the dial cannot keep
+(`dialKeepsId`, #4451: 48 bytes or more, a control character or half an emoji) is not sent again either, as a row or
+as the Pro's plain frame, on the live path as on the walk: the dial drops it (main session, 2026-11-18).
 
 ### A question the inbox refuses (`set`)
 
@@ -138,6 +140,9 @@ A question the dial holds (`asked`) is not sent again, as today.
   sibling dial carry it like any question.
 - `read()` returns it as `ok: true` with those `questions`, so `question.read` sends it to the dial. Every answer path
   refuses it: `submit` fails (no mask is valid for an empty option list), `canSpeak` and `draft` fail (no `canText`).
+  The legacy `answer` frame is left exactly as #4451 made it, `asAsked` of the raw questions as asked: an older dial
+  answers the raw question it was sent, and #4451 let such an answer to a question that repeats a key reach the agent
+  on purpose (main session, 2026-11-18).
 - With an empty `agentId` or `id` nothing is kept and nothing is sent: the dial could neither open nor close it.
 - `CableSession.question()` never sends the raw refused frame: it sends the unreadable entry's shape (a ring, the first
   time), so no `question` frame is oversized because of what the inbox refused.
@@ -195,7 +200,8 @@ above (a replace never clears `told`, a greeting does) hold wherever the calls e
   said `questionTier: 'v1'`, and the fullest round-dial welcome is 9 names, at most 16; an unchanged re-delivery of a told question the dial
   lost follows the same rule; a greeting rings once each question its drawer does not carry; a
   refused question of 10 kB reaches the dial as the small unreadable frame (under the cap) and is carried by the next
-  drawer; `question.read` of it returns its summary.
+  drawer; `question.read` of it returns its summary, and a reviewed answer to it is refused (the legacy `answer` path is
+  unchanged); a told question whose id the dial cannot keep is not sent again.
 - `cableFleet.spec.ts`, only if the sibling path changes.
 - Firmware: `test_question_ui.py` for the silent re-file (no beep, no wake, read state kept with a different token)
   and the answer screen
