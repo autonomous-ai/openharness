@@ -96,3 +96,52 @@ including completed-proof success and refusal. Coverage is retained under
 Actual caller common-directory reads now meet 4/8/8 instead of 6/12/12, with unchanged fresh final
 proofs and alias/cap/overlap controls. A matched actual Create comparison and the final combined
 launch/Resume cost gate are still pending; this source gate does not clear the original V5 hold.
+
+
+## Matched first-Create and cached-Create evidence
+
+The fixed A/B/B/A correction comparison completed on macOS with pinned Node24.22.2, seven Creates
+and one delivered turn per arm. A is `b1706dd080`, B is `1d294e775a`; the complete source delta is the
+19-line batching correction alone. Product bundles remain `05ac0d83...` and `9bd4b885...`. Final input
+manifest `/tmp/core-native-route-batch-create-v2/inputs.json` has SHA
+`43ad2b2bf7bd633846b5c28171dbbd62452780565284a8761ce8b88d83c9219b`.
+
+Two actual failed packets remain retained. The first was launched in a sandbox that denied localhost
+and process inspection; it timed out before daemon start. The environment-corrected packet completed
+all seven Creates, its turn and custody, then its report validator incorrectly required setup to exist
+before first Create. Revision 2 checks that observation against its snapshot and requires one unchanged
+setup process after first Create through the turn. Three syntax checks and nine retained-report controls
+pass at `.harness/validation/20261118T214854.398401Z-2193/receipt.json` in the checkpoint worktree.
+A rejected check display name was corrected before those checks started; its original plan is retained.
+No failed packet supplied a selected sample to the final four-arm comparison.
+
+All four final arms pass with actual exit/EOF, guardian/group/Node-copy and root cleanup. Root independently
+verified 1,202 frozen files, four reports, 36 PIDs and eight process groups. Output is retained at
+`/tmp/core-native-route-batch-create-v2-abba`; raw analysis is
+`/tmp/core-native-route-batch-create-v2-cost-review.json` (SHA
+`1eb54e88006e0ce700a3fe132f05beb0e5de8b58057dea00a0f44fbf8c98f6a7`).
+
+| Arm | First Create response ms | Six cached Creates core CPU ms | Six cached Creates main CPU ms | Turn core CPU ms |
+| --- | ---: | ---: | ---: | ---: |
+| 1-A-setup | 1138.32 | 877.96 | 549.43 | 232.90 |
+| 2-B-setup | 923.45 | 774.02 | 506.32 | 301.94 |
+| 3-B-setup | 967.37 | 778.92 | 495.40 | 346.47 |
+| 4-A-setup | 980.59 | 816.55 | 514.93 | 272.07 |
+
+For the two-arm side medians, cached Create core CPU changes 847.26→776.47 ms (-8.35%) and main CPU
+532.18→500.86 ms (-5.89%). Pooled 12-request median response is 550.81→347.97 ms (-36.83%); pooled
+p95 is nearly unchanged (-0.42%). The delivered turn increases core CPU 28.40%, main CPU 33.69% and
+response latency 24.56%. These increases remain part of the result.
+
+The old raw field named `cold` means first Create after ready, not guaranteed cold setup. Core declares
+ready and then installs hooks in the background; the fixture waits for ready, not hook settlement.
+Only the first A has no setup child in its initial snapshot. Thus first-Create and whole-window changes
+cannot be attributed solely to batching. Create responses also precede full engine readiness, allowing
+launch work to continue into the turn. Secondary deltas derived from the first/last retained points
+are core 1369.96→1351.02 ms (-1.38%), main 877.06→873.15 ms (-0.45%), elapsed 5896.39→5373.70 ms
+(-8.86%); they include snapshot gaps and incidental work and are not newly measured intervals.
+
+These two arms per side provide limited correction evidence, not statistical significance or full
+acceptance. The original V5 cost hold and final input/Resume validation remain open. There is no new
+immediate measurement or changed warm-up to remove this limitation. The source-only startup trace is
+retained at `/tmp/core-native-route-batch-create-v2-startup-review.md`.
