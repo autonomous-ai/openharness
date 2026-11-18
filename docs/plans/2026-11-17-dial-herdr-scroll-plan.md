@@ -502,3 +502,6 @@ Files: `cli/src/cable/hosts/hcClient.ts` (+spec), `cli/src/cable/hosts/hcSource.
 - e2e: a stroke over a private terminal whose fake program reports `claude-code` presses `pageup`/`pagedown`, seen
   in what the fake program reads (the keys' bytes), and runs no `terminal.scroll`; the existing case keeps
   `terminal.scroll` for another app.
+- Tuned after Diego's check of 0.6.65-dev (PM, 2026-11-18): one key per 8 lines, the lines short of one kept across
+  strokes until the quiet second and tallied when dropped, one key a call 100 ms apart, ±32 lines waiting. The tally's
+  `<failed> failed` is now `<dropped> dropped` (final review): those short lines are no failure, and hc's has its line.

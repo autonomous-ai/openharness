@@ -6344,7 +6344,7 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       expect(dialScrolls(core)).toEqual([])
       // One tally for the stroke, once its terminal has been quiet for 1 s.
       await vi.advanceTimersByTimeAsync(1_000)
-      expect(drained()).toEqual(['[herdr-app] scroll · 5 lines · 3 runs · 0 failed'])
+      expect(drained()).toEqual(['[herdr-app] scroll · 5 lines · 3 runs · 0 dropped'])
     }
 
     it('with Herdr in front, the dial on an agent hc lists and its terminal on screen, a stroke\'s lines go to herdr-app and the windows hear no dial_scroll', async () => {
@@ -6492,7 +6492,7 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       await vi.advanceTimersByTimeAsync(32)
       expect(orcaRuns).toEqual([STATUS, scrolled('t7', -2), scrolled('t7', -1)])
       await vi.advanceTimersByTimeAsync(1_000)
-      expect(drained()).toEqual(['[herdr-app] scroll · 3 lines · 2 runs · 0 failed'])
+      expect(drained()).toEqual(['[herdr-app] scroll · 3 lines · 2 runs · 0 dropped'])
     })
 
     it.each([
@@ -6576,20 +6576,20 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       await vi.advanceTimersByTimeAsync(5_000)
       expect(orcaRuns).toEqual([STATUS, scrolled('t7', -1)])
       expect(dialScrolls(core)).toEqual([])
-      expect(drained()).toEqual(['[herdr-app] scroll · 1 lines · 1 runs · 0 failed'])
+      expect(drained()).toEqual(['[herdr-app] scroll · 1 lines · 1 runs · 0 dropped'])
     })
 
     // Claude Code draws on the alternate screen, where Herdr's view has no history (design §3).
     it('a Claude Code terminal\'s stroke presses its page keys through hc, and herdr-app scrolls nothing', async () => {
       const { core, hc } = inHerdr({ terminals: [terminal('t7')] })
       shows(await listedId())
-      // 128 px toward older lines: 320 px of travel, twenty lines, a page.
-      stroke([64, 64])
+      // 52 px toward older lines: 130 px of travel, eight lines, a page key.
+      stroke([26, 26])
       await vi.waitFor(() => expect(hc.pressed).toEqual([['t7', ['pageup'], 5_000]]))
       expect(orcaRuns).toEqual([STATUS])
       expect(dialScrolls(core)).toEqual([])
       await vi.advanceTimersByTimeAsync(1_000)
-      expect(drained()).toEqual(['[herdr-app] scroll · 20 lines · 1 runs · 0 failed'])
+      expect(drained()).toEqual(['[herdr-app] scroll · 8 lines · 1 runs · 0 dropped'])
     })
 
     // A key could move the highlighted choice of its question, and the person's Enter would pick it.
@@ -6608,8 +6608,8 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       shows(await listedId())
       host().scrolled('down', 0, 0)
       await vi.waitFor(() => expect(orcaRuns).toEqual([STATUS]))
-      host().scrolled('move', 64, 0)
-      host().scrolled('move', 64, 0)
+      host().scrolled('move', 26, 0)
+      host().scrolled('move', 26, 0)
       await vi.waitFor(() => expect(hc.pressed).toEqual([['t7', ['pageup'], 5_000]]))
       changed({ status: 'blocked' })
       for (const dy of [64, 64, 64, 64]) {
@@ -6620,7 +6620,7 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       await vi.advanceTimersByTimeAsync(1_000)
       expect(hc.pressed).toEqual([['t7', ['pageup'], 5_000]])
       expect(dialScrolls(core)).toEqual([])
-      expect(drained()).toEqual(['[herdr-app] scroll · 20 lines · 1 runs · 40 failed'])
+      expect(drained()).toEqual(['[herdr-app] scroll · 8 lines · 1 runs · 40 dropped'])
     })
 
     it('the Wi-Fi device\'s stroke takes the same route', async () => {
@@ -6729,7 +6729,7 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       shows(await listedId())
       stroke([8, 8])
       await vi.advanceTimersByTimeAsync(1_000)
-      expect(drained()).toEqual(['[herdr-app] scroll · 2 lines · 1 runs · 0 failed'])
+      expect(drained()).toEqual(['[herdr-app] scroll · 2 lines · 1 runs · 0 dropped'])
       screen.tab = 'tbzzzz'
       stroke([8])
       await vi.waitFor(() => expect(scrollSaid()).toEqual([NOT_ON_SCREEN]))

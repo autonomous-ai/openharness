@@ -18,12 +18,13 @@
  * not one per dial frame. Its queue is its own: a scroll that joined an `agent.focus` run would lose its lines.
  *
  * Claude Code 2.1.327 draws on the alternate screen, where Herdr's view has no history: `terminal.scroll` moved
- * nothing on Diego's second check (2026-11-18). Its own `pageup` and `pagedown` move its transcript a page, so a Claude
- * Code terminal's lines press those, one per page of lines, through hc's socket on the same queue, and none while it
- * asks: a key would move its question's highlighted choice, and the person's Enter would pick it. That is asked at the
- * stroke's down and again right before each call, as hc tells it then: a question can come up mid-stroke. A status hc
- * has not told (a word it adds later, or none heard since its subscription dropped) may be a question too. hc presses
- * at once while a program writes (about 35 ms a key, measured 2026-11-18), so a working Claude Code takes them too.
+ * nothing on Diego's second check (2026-11-18). Its own `pageup` and `pagedown` move its transcript half a screen, so a
+ * Claude Code terminal's lines press those, one per 8 lines and one a call every 100 ms at most, through hc's socket
+ * on the same queue, and none while it asks: a key would move its question's highlighted choice, and the person's Enter
+ * would pick it. That is asked at the stroke's down and again right before each call, as hc tells it then: a question
+ * can come up mid-stroke. A status hc has not told (a word it adds later, or none heard since its subscription dropped)
+ * may be a question too. hc presses at once while a program writes (about 35 ms a key, measured 2026-11-18), so a
+ * working Claude Code takes them too.
  *
  * Which terminal is on screen is the window's alone: hc's terminal facts have no focus or viewer. So a stroke asks
  * `herdr-app status` (one run took 0.04 s) and reads its `tab` alone, the tab on screen, which it matches with the
@@ -52,11 +53,14 @@ const SCROLL_PENDING_MAX = 100
 /** How long a terminal's scrolling is quiet before its tally is said: a run is faster than the dial's line, so a queue
  *  drains after almost every line, and a line at each drain would bury the log while scrolling. */
 const SCROLL_QUIET_MS = 1_000
-/** The lines a Claude Code page key stands for: one page moved 19 lines at 46 rows (2026-11-18). */
-const SCROLL_PAGE_LINES = 20
-/** The most page keys in one call: as many pages as the lines that may wait. hc presses them one by one, about 35 ms
- *  each. */
-const SCROLL_KEYS_MAX = SCROLL_PENDING_MAX / SCROLL_PAGE_LINES
+/** The dial lines a Claude Code page key stands for (PM, 2026-11-18): a page moved 19 lines at 46 rows, but at 20 lines a
+ *  key Diego's strokes under 20 lines pressed nothing, so about half a screen follows about 8 lines of the finger. */
+const SCROLL_PAGE_LINES = 8
+/** A Claude Code terminal's gap, one key a call (PM, 2026-11-18): at most 10 keys a second, each half a screen. */
+const SCROLL_KEY_GAP_MS = 100
+/** The most lines that wait for a Claude Code terminal, either way: 4 keys' worth, so a fast fling stops with the
+ *  finger, not a second of pages later. */
+const SCROLL_KEYS_PENDING_MAX = 4 * SCROLL_PAGE_LINES
 /** A key call's deadline, past hc's hold: hc presses keys only once 3 s have passed since the person's own last key in
  *  Herdr's window, and presses them then even if their call was given up (measured on a private core, 2026-11-18). So
  *  a held call is waited for, not counted failed while its keys still go in, and the next call is asked about after
@@ -107,16 +111,16 @@ export interface HerdrAppAdapter extends HostAdapter {
 interface Run { forward: boolean; switched: boolean }
 
 /** A terminal's scroll queue until it has been quiet for SCROLL_QUIET_MS: whether it is draining (a run under way, or the
- *  wait for the gap before one), the lines that wait (a Claude Code terminal's short of a page too), the gap since
- *  its last run started while it lasts, what it did since it started, for the line it says once quiet, and the timer
- *  of that quiet. */
+ *  wait for the gap before one), the lines that wait (a Claude Code terminal's short of a key too), the gap since
+ *  its last run started while it lasts, what it did since it started, for the line it says once quiet (`dropped`: the
+ *  lines it did not scroll, whatever the reason; a failed run has its own line), and the timer of that quiet. */
 interface Scrolling {
   running: boolean
   pending: number
   gap?: Promise<void>
   lines: number
   runs: number
-  failed: number
+  dropped: number
   quiet?: ReturnType<typeof setTimeout>
 }
 
@@ -160,6 +164,7 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
 
   const within = (value: number, most: number): number => Math.max(-most, Math.min(most, value))
   const byKeys = (address: string): boolean => deps.kindOf(address) === CLAUDE_CODE
+  const pendingMax = (address: string): number => (byKeys(address) ? SCROLL_KEYS_PENDING_MAX : SCROLL_PENDING_MAX)
   // hc's `blocked` is a question on Claude Code's screen, and a status it has not told may be one.
   const asks = (address: string): boolean => {
     const status = deps.statusOf(address)
@@ -177,13 +182,12 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
     queue.gap = new Promise((resolve) => setTimeout(() => {
       queue.gap = undefined
       resolve()
-    }, SCROLL_GAP_MS))
+    }, keys ? SCROLL_KEY_GAP_MS : SCROLL_GAP_MS))
     try {
       if (herdrApp !== undefined) {
         return (await deps.run(herdrApp, ['do', 'terminal.scroll', '--terminal', address, '--lines', String(lines)], SCROLL_TIMEOUT_MS)).code === 0
       }
-      const key = lines < 0 ? 'pageup' : 'pagedown'
-      return await deps.client.keys(address, Array<string>(Math.abs(lines) / SCROLL_PAGE_LINES).fill(key), SCROLL_KEYS_TIMEOUT_MS)
+      return await deps.client.keys(address, [lines < 0 ? 'pageup' : 'pagedown'], SCROLL_KEYS_TIMEOUT_MS)
     } catch {
       return false
     }
@@ -194,10 +198,10 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
   const drain = async (address: string, queue: Scrolling): Promise<void> => {
     while (!stopped) {
       const keys = byKeys(address)
-      // A run takes every line that waits; a Claude Code terminal's, its whole pages, SCROLL_KEYS_MAX at most, and the
-      // rest waits for that terminal's next lines.
+      // A run takes every line that waits; a Claude Code terminal's, one key's worth, and the rest waits for its gap or
+      // for that terminal's next lines.
       const lines = keys
-        ? within(Math.trunc(queue.pending / SCROLL_PAGE_LINES), SCROLL_KEYS_MAX) * SCROLL_PAGE_LINES
+        ? within(Math.trunc(queue.pending / SCROLL_PAGE_LINES), 1) * SCROLL_PAGE_LINES
         : queue.pending
       if (lines === 0) break
       // The lines that come while it waits for the gap are summed into the next run, or cancel out.
@@ -208,13 +212,13 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
       // Right before the call, as hc tells it now: a Claude Code that began to ask since the stroke's down takes none of
       // its keys, and what waits is dropped. Not a failure of hc's: the tally counts it, and no failed line is said.
       if (asks(address)) {
-        queue.failed += Math.abs(queue.pending)
+        queue.dropped += Math.abs(queue.pending)
         queue.pending = 0
         break
       }
-      queue.pending = within(queue.pending - lines, SCROLL_PENDING_MAX)
+      queue.pending = within(queue.pending - lines, pendingMax(address))
       if (!(await scrollRun(address, lines, keys, queue))) {
-        queue.failed += Math.abs(lines) + Math.abs(queue.pending)
+        queue.dropped += Math.abs(lines) + Math.abs(queue.pending)
         queue.pending = 0
         if (!scrollFailedSaid) deps.log('[herdr-app] scroll · failed')
         scrollFailedSaid = true
@@ -226,7 +230,9 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
     queue.running = false
     queue.quiet = setTimeout(() => {
       scrolling.delete(address)
-      deps.log(`[herdr-app] scroll · ${queue.lines} lines · ${queue.runs} runs · ${queue.failed} failed`)
+      // A Claude Code terminal's lines short of a key go with its quiet second: counted, so a stroke too short is seen.
+      queue.dropped += Math.abs(queue.pending)
+      deps.log(`[herdr-app] scroll · ${queue.lines} lines · ${queue.runs} runs · ${queue.dropped} dropped`)
     }, SCROLL_QUIET_MS)
   }
 
@@ -265,10 +271,10 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
 
   const scroll = (pane: Pane, lines: number): void => {
     if (!mac || !HC_TERMINAL.test(pane.id) || lines === 0 || !Number.isSafeInteger(lines)) return
-    const queue = scrolling.get(pane.id) ?? { running: false, pending: 0, lines: 0, runs: 0, failed: 0 }
+    const queue = scrolling.get(pane.id) ?? { running: false, pending: 0, lines: 0, runs: 0, dropped: 0 }
     clearTimeout(queue.quiet)
     if (queue.running) {
-      queue.pending = within(queue.pending + lines, SCROLL_PENDING_MAX)
+      queue.pending = within(queue.pending + lines, pendingMax(pane.id))
       return
     }
     queue.running = true

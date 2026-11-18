@@ -86,9 +86,10 @@ const FAILED_LINE = '[herdr-app] focus · failed'
 const scrollCall = (address: string, lines: number, file = FAKE_PATH_HERDR_APP): Call =>
   ({ file, args: ['do', 'terminal.scroll', '--terminal', address, '--lines', String(lines)], timeoutMs: 2_000 })
 const SCROLL_FAILED = '[herdr-app] scroll · failed'
-/** The line a terminal's scroll queue says once it has been quiet for 1 s. */
-const drained = (lines: number, runs: number, failed: number) =>
-  `[herdr-app] scroll · ${lines} lines · ${runs} runs · ${failed} failed`
+/** The line a terminal's scroll queue says once it has been quiet for 1 s: the lines it scrolled, its runs, and the
+ *  lines it did not scroll (a failed run's, a question's, a Claude Code terminal's short of a key). */
+const drained = (lines: number, runs: number, dropped: number) =>
+  `[herdr-app] scroll · ${lines} lines · ${runs} runs · ${dropped} dropped`
 const scrollFailures = (log: string[]) => log.filter((line) => line === SCROLL_FAILED).length
 const statusCall: Call = { file: FAKE_PATH_HERDR_APP, args: ['status'], timeoutMs: 2_000 }
 const STATUS_FAILED = '[herdr-app] status · failed'
@@ -705,10 +706,9 @@ describe('the Herdr adapter', () => {
         }
         return { ...rest, pressed, answer }
       }
-      /** A call of [count] keys, with 5 s: hc holds keys until 3 s after the person's own last key in Herdr's window,
-       *  and presses them then even once their call was given up (measured 2026-11-18). */
-      const press = (key: 'pageup' | 'pagedown', count: number): [string, string[], number] =>
-        ['t7', Array<string>(count).fill(key), 5_000]
+      /** A call of one key, with 5 s: hc holds keys until 3 s after the person's own last key in Herdr's window, and
+       *  presses them then even once their call was given up (measured 2026-11-18). */
+      const press = (key: 'pageup' | 'pagedown'): [string, string[], number] => ['t7', [key], 5_000]
 
       it('canScroll is false while it asks, or while hc tells no status it knows; working, idle, done and error take the stroke, as another app\'s does whatever its status', () => {
         const can = (kind: string, status?: HcStatus) =>
@@ -723,140 +723,166 @@ describe('the Herdr adapter', () => {
       })
 
       // canScroll is asked at the stroke's down only: a question that comes up mid-stroke must stop its keys too.
-      it('a Claude Code that begins to ask mid-stroke takes no key from then on: the lines that wait are dropped and counted failed', async () => {
+      it('a Claude Code that begins to ask mid-stroke takes no key from then on: the lines that wait are dropped and counted', async () => {
         let state: HcStatus | undefined = 'working'
         const { pressed, log, adapter, answer } = claudeCode(true, { statusOf: () => state })
-        adapter.scroll(pane('t7'), -20)
-        adapter.scroll(pane('t7'), -40)
-        expect(pressed).toEqual([press('pageup', 1)])
-        // It asks while the first call is under way: the 40 lines that wait press nothing.
+        adapter.scroll(pane('t7'), -8)
+        adapter.scroll(pane('t7'), -16)
+        expect(pressed).toEqual([press('pageup')])
+        // It asks while the first call is under way: the 16 lines that wait press nothing.
         state = 'blocked'
         await answer(true)
-        await vi.advanceTimersByTimeAsync(50)
-        expect(pressed).toEqual([press('pageup', 1)])
+        await vi.advanceTimersByTimeAsync(100)
+        expect(pressed).toEqual([press('pageup')])
         // The rest of the stroke, and lines once hc tells no status it knows, press nothing either.
         adapter.scroll(pane('t7'), 60)
-        await vi.advanceTimersByTimeAsync(50)
+        await vi.advanceTimersByTimeAsync(100)
         state = undefined
         adapter.scroll(pane('t7'), 20)
-        await vi.advanceTimersByTimeAsync(50)
-        expect(pressed).toEqual([press('pageup', 1)])
+        await vi.advanceTimersByTimeAsync(100)
+        expect(pressed).toEqual([press('pageup')])
         await vi.advanceTimersByTimeAsync(1_000)
         // Not a failure of hc's: no failed line, only the tally's count.
-        expect(log).toEqual([drained(20, 1, 120)])
+        expect(log).toEqual([drained(8, 1, 96)])
 
         // Answered, it takes the keys of a new stroke.
         state = 'working'
-        adapter.scroll(pane('t7'), 20)
+        adapter.scroll(pane('t7'), 8)
         await turn()
-        expect(pressed).toEqual([press('pageup', 1), press('pagedown', 1)])
+        expect(pressed).toEqual([press('pageup'), press('pagedown')])
       })
 
-      it('the check is made again right before each call: a page that waited for the gap is not pressed once it asks', async () => {
+      it('the check is made again right before each call: a key that waited for the gap is not pressed once it asks', async () => {
         let state: HcStatus = 'idle'
         const { pressed, log, adapter } = claudeCode(false, { statusOf: () => state })
-        adapter.scroll(pane('t7'), 20)
+        adapter.scroll(pane('t7'), 8)
         await turn()
-        expect(pressed).toEqual([press('pagedown', 1)])
+        expect(pressed).toEqual([press('pagedown')])
         // Held for the gap, then it asks before the gap ends.
-        adapter.scroll(pane('t7'), 20)
+        adapter.scroll(pane('t7'), 8)
         await turn()
         state = 'blocked'
-        await vi.advanceTimersByTimeAsync(50)
-        expect(pressed).toEqual([press('pagedown', 1)])
+        await vi.advanceTimersByTimeAsync(100)
+        expect(pressed).toEqual([press('pagedown')])
         await vi.advanceTimersByTimeAsync(1_000)
-        expect(log).toEqual([drained(20, 1, 20)])
+        expect(log).toEqual([drained(8, 1, 8)])
       })
 
-      it('its lines press pageup or pagedown through hc, one a 20 lines, within 5 s, past hc\'s hold, and run no herdr-app; Codex\'s run terminal.scroll', async () => {
+      it('its lines press pageup or pagedown through hc, one per 8 lines, within 5 s, past hc\'s hold, and run no herdr-app; Codex\'s run terminal.scroll', async () => {
         const { calls, pressed, adapter } = claudeCode()
-        adapter.scroll(pane('t7'), -20)
+        adapter.scroll(pane('t7'), -8)
         await turn()
-        expect(pressed).toEqual([press('pageup', 1)])
-        // The gap holds the next call, as it holds a run.
-        adapter.scroll(pane('t7'), 40)
+        expect(pressed).toEqual([press('pageup')])
+        // The gap holds the next call, as it holds a run, and a Claude Code terminal's is 100 ms.
+        adapter.scroll(pane('t7'), 16)
         await turn()
-        expect(pressed).toEqual([press('pageup', 1)])
-        await vi.advanceTimersByTimeAsync(50)
-        expect(pressed).toEqual([press('pageup', 1), press('pagedown', 2)])
+        expect(pressed).toEqual([press('pageup')])
+        await vi.advanceTimersByTimeAsync(99)
+        expect(pressed).toEqual([press('pageup')])
+        // One key a call: the second waits for the next gap.
+        await vi.advanceTimersByTimeAsync(1)
+        expect(pressed).toEqual([press('pageup'), press('pagedown')])
+        await vi.advanceTimersByTimeAsync(100)
+        expect(pressed).toEqual([press('pageup'), press('pagedown'), press('pagedown')])
         expect(calls).toEqual([])
         adapter.scroll(pane('t8'), -3)
         await turn()
         expect(calls).toEqual([scrollCall('t8', -3)])
-        expect(pressed).toHaveLength(2)
+        expect(pressed).toHaveLength(3)
       })
 
-      it('lines short of a page wait for that terminal\'s next lines; its quiet second drops them, and its tally counts the lines its keys stood for', async () => {
+      // Diego's check of 0.6.65-dev (2026-11-18): at 20 lines a key, strokes under 20 lines pressed nothing.
+      it('lines short of a key are kept across strokes: two strokes of 5 lines 300 ms apart press one key', async () => {
         const { pressed, log, adapter } = claudeCode()
-        adapter.scroll(pane('t7'), -15)
+        adapter.scroll(pane('t7'), -5)
         await turn()
         expect(pressed).toEqual([])
-        // 25 lines: a page, 5 kept.
-        adapter.scroll(pane('t7'), -10)
-        await turn()
-        expect(pressed).toEqual([press('pageup', 1)])
-        await vi.advanceTimersByTimeAsync(50)
-        adapter.scroll(pane('t7'), -15)
-        await turn()
-        expect(pressed).toEqual([press('pageup', 1), press('pageup', 1)])
-        adapter.scroll(pane('t7'), -15)
-        await vi.advanceTimersByTimeAsync(1_000)
-        expect(log).toEqual([drained(40, 2, 0)])
-        // The 15 went with the quiet second: 5 more are no page.
+        await vi.advanceTimersByTimeAsync(300)
+        // 10 lines: a key, 2 kept.
         adapter.scroll(pane('t7'), -5)
+        await turn()
+        expect(pressed).toEqual([press('pageup')])
         await vi.advanceTimersByTimeAsync(1_000)
-        expect(pressed).toHaveLength(2)
-        expect(log).toEqual([drained(40, 2, 0), drained(0, 0, 0)])
+        // The 2 kept went with the quiet second, and the tally says so.
+        expect(log).toEqual([drained(8, 1, 2)])
       })
 
-      it('one call at a time: the lines that come meanwhile are summed, and the next call carries their pages', async () => {
+      it('a lone stroke short of a key presses none, and its quiet second drops its lines and tallies them', async () => {
+        const { pressed, log, adapter } = claudeCode()
+        adapter.scroll(pane('t7'), 5)
+        await vi.advanceTimersByTimeAsync(999)
+        expect(log).toEqual([])
+        await vi.advanceTimersByTimeAsync(1)
+        expect(log).toEqual([drained(0, 0, 5)])
+        // The 5 went with the quiet second: 5 more are no key.
+        adapter.scroll(pane('t7'), 5)
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(pressed).toEqual([])
+        expect(log).toEqual([drained(0, 0, 5), drained(0, 0, 5)])
+      })
+
+      it('one call at a time: the lines that come meanwhile are summed, and the next calls press their keys', async () => {
         const { pressed, adapter, answer } = claudeCode(true)
-        adapter.scroll(pane('t7'), -20)
-        adapter.scroll(pane('t7'), -20)
-        adapter.scroll(pane('t7'), 60)
-        await vi.advanceTimersByTimeAsync(50)
-        expect(pressed).toEqual([press('pageup', 1)])
+        adapter.scroll(pane('t7'), -8)
+        adapter.scroll(pane('t7'), -8)
+        adapter.scroll(pane('t7'), 24)
+        await vi.advanceTimersByTimeAsync(100)
+        expect(pressed).toEqual([press('pageup')])
         await answer(true)
-        expect(pressed).toEqual([press('pageup', 1), press('pagedown', 2)])
+        expect(pressed).toEqual([press('pageup'), press('pagedown')])
         await answer(true)
-        expect(pressed).toHaveLength(2)
+        await vi.advanceTimersByTimeAsync(100)
+        expect(pressed).toEqual([press('pageup'), press('pagedown'), press('pagedown')])
+        await answer(true)
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(pressed).toHaveLength(3)
       })
 
-      it('at most 5 keys go in one call, and the lines that wait are clamped to 100', async () => {
+      // PM, 2026-11-18: a fast fling stops with the finger, not pages later.
+      it('one key a call, one call every 100 ms at most, and the lines that wait are clamped to 4 keys\' worth', async () => {
         const { pressed, adapter } = claudeCode()
         adapter.scroll(pane('t7'), 300)
         await turn()
-        expect(pressed).toEqual([press('pagedown', 5)])
+        expect(pressed).toEqual([press('pagedown')])
+        // 292 lines wait, clamped to 32: 4 keys more, 100 ms apart, then none.
+        for (let key = 2; key <= 5; key++) {
+          await vi.advanceTimersByTimeAsync(100)
+          expect(pressed).toHaveLength(key)
+        }
         await vi.advanceTimersByTimeAsync(5_000)
-        expect(pressed).toEqual([press('pagedown', 5), press('pagedown', 5)])
+        expect(pressed).toEqual(Array(5).fill(press('pagedown')))
 
+        // The lines that come while a call is under way are clamped too.
         const under = claudeCode(true)
-        under.adapter.scroll(pane('t7'), -20)
+        under.adapter.scroll(pane('t7'), -8)
         under.adapter.scroll(pane('t7'), -60)
         under.adapter.scroll(pane('t7'), -60)
-        await vi.advanceTimersByTimeAsync(50)
         await under.answer(true)
-        await under.answer(true)
-        expect(under.pressed).toEqual([press('pageup', 1), press('pageup', 5)])
+        for (let key = 2; key <= 5; key++) {
+          await vi.advanceTimersByTimeAsync(100)
+          await under.answer(true)
+        }
+        await vi.advanceTimersByTimeAsync(5_000)
+        expect(under.pressed).toEqual(Array(5).fill(press('pageup')))
       })
 
       it('a refused or timed-out call drops its lines and those waiting, and says so once until a call succeeds', async () => {
         const { pressed, log, adapter, answer } = claudeCode(true)
-        adapter.scroll(pane('t7'), -20)
-        adapter.scroll(pane('t7'), -30)
+        adapter.scroll(pane('t7'), -8)
+        adapter.scroll(pane('t7'), -12)
         await answer(false)
-        expect(pressed).toEqual([press('pageup', 1)])
+        expect(pressed).toEqual([press('pageup')])
         expect(log).toEqual([SCROLL_FAILED])
-        await vi.advanceTimersByTimeAsync(50)
-        adapter.scroll(pane('t7'), -20)
+        await vi.advanceTimersByTimeAsync(100)
+        adapter.scroll(pane('t7'), -8)
         await answer(false)
         expect(log).toEqual([SCROLL_FAILED])
-        await vi.advanceTimersByTimeAsync(50)
-        adapter.scroll(pane('t7'), -20)
+        await vi.advanceTimersByTimeAsync(100)
+        adapter.scroll(pane('t7'), -8)
         await answer(true)
         await vi.advanceTimersByTimeAsync(1_000)
-        expect(pressed).toEqual([press('pageup', 1), press('pageup', 1), press('pageup', 1)])
-        expect(log).toEqual([SCROLL_FAILED, drained(20, 3, 70)])
+        expect(pressed).toEqual([press('pageup'), press('pageup'), press('pageup')])
+        expect(log).toEqual([SCROLL_FAILED, drained(8, 3, 28)])
       })
 
       // Review Focus 5: nobody awaits a scroll, so a rejection left unhandled would end the devices process.
@@ -868,9 +894,9 @@ describe('the Herdr adapter', () => {
             kindOf: () => 'claude',
             client: { prompt: async () => ({ outcome: 'sent' }), keys: async () => { throw new Error('socket broken') } },
           })
-          adapter.scroll(pane('t7'), -20)
+          adapter.scroll(pane('t7'), -8)
           await vi.advanceTimersByTimeAsync(1_000)
-          expect(log).toEqual([SCROLL_FAILED, drained(0, 1, 20)])
+          expect(log).toEqual([SCROLL_FAILED, drained(0, 1, 8)])
           expect(unhandled).not.toHaveBeenCalled()
         } finally {
           process.off('unhandledRejection', unhandled)
@@ -879,14 +905,14 @@ describe('the Herdr adapter', () => {
 
       it('once stopped, no key is pressed', async () => {
         const { pressed, adapter } = claudeCode()
-        adapter.scroll(pane('t7'), -20)
+        adapter.scroll(pane('t7'), -8)
         await turn()
-        adapter.scroll(pane('t7'), -20)
+        adapter.scroll(pane('t7'), -8)
         adapter.stop()
         await vi.advanceTimersByTimeAsync(5_000)
-        adapter.scroll(pane('t7'), -40)
+        adapter.scroll(pane('t7'), -16)
         await vi.advanceTimersByTimeAsync(5_000)
-        expect(pressed).toEqual([press('pageup', 1)])
+        expect(pressed).toEqual([press('pageup')])
       })
     })
   })
