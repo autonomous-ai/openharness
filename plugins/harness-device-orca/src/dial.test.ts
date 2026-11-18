@@ -762,6 +762,21 @@ test('after a logged failure the same ids post nothing, as a tab renamed gives t
   assert.deepEqual(bodies(w).slice(4), [fronted(H(3)), fronted(H(3)), fronted(H(3))])
 })
 
+test('a send with no answer may still land, so the ids the devices took before it go again', async () => {
+  const { w } = await streaming()
+  w.dial.front([H(1)])
+  await w.until(() => w.posts.length === 1)
+  await answered()
+  // A devices process that stalls past the deadline still reads H(2) once it runs again: H(1) must land after it.
+  w.replies.push(new Promise(() => {}))
+  w.dial.front([H(2)])
+  await w.until(() => w.posts.length === 2)
+  w.dial.front([H(1)])
+  w.to(2_000)
+  await answered()
+  assert.deepEqual([bodies(w), w.logs], [[fronted(H(1)), fronted(H(2)), fronted(H(1))], []])
+})
+
 test("a newer front() during the wait is sent at once, and the older one's retry is not", async () => {
   const { w } = await streaming()
   w.replies.push(500)
