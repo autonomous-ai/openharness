@@ -10,7 +10,12 @@ import { env } from '../config/env.js'
 
 const host = vi.hoisted(() => ({ root: '', exec: vi.fn(), helper: vi.fn(), before: undefined as undefined | ((operation: string, path: string) => void),
   // A filesystem lists a directory in its own order (a tmpfs, ext4's hash): CI listed task 99 before 42.
-  listDescending: false }))
+  listDescending: false,
+  // Entries a case writes, 64 at most: on a Mac flushing its drive for other tests each waited 12-25 ms, and a case
+  // writing 4,097 descriptor links took 50-77 s, past its 30 s, and removing them past afterEach's 10 s (2026-11-19).
+  writes: 0,
+  // Numbered entries a /proc directory lists past those written, so an oversized pool costs no writes.
+  listedMore: {} as Record<string, number> }))
 vi.mock('node:os', async original => ({ ...await original<object>(), platform: () => process.platform }))
 vi.mock('node:child_process', async original => ({ ...await original<object>(), execFile: host.exec }))
 vi.mock('./nativeProcessImages.js', async original => ({ ...await original<object>(), bundledProcessImageHelper: host.helper }))
@@ -18,6 +23,9 @@ vi.mock('node:fs', async original => {
   const fs = await original<typeof import('node:fs')>()
   const mapped = (path: unknown) => String(path).startsWith('/proc/') ? join(host.root, String(path).slice(1)) : path
   const result = { ...fs }
+  for (const method of ['mkdirSync', 'writeFileSync', 'symlinkSync'] as const) {
+    result[method] = ((...args: unknown[]) => { host.writes++; return Reflect.apply(fs[method], fs, args) }) as never
+  }
   for (const method of ['openSync', 'opendirSync', 'readlinkSync', 'statSync'] as const) {
     result[method] = ((path: unknown, ...args: unknown[]) => {
       host.before?.(method, String(path))
@@ -27,11 +35,13 @@ vi.mock('node:fs', async original => {
   const opendir = result.opendirSync
   result.opendirSync = ((path: unknown, ...args: unknown[]) => {
     const directory = Reflect.apply(opendir, fs, [path, ...args]) as import('node:fs').Dir
-    if (!host.listDescending) return directory
+    const more = host.listedMore[String(path)] ?? 0
+    if (!host.listDescending && !more) return directory
     const listed: import('node:fs').Dirent[] = []
     for (let next = directory.readSync(); next; next = directory.readSync()) listed.push(next)
     directory.closeSync()
-    listed.sort((a, b) => Number(b.name) - Number(a.name))
+    for (let i = 0; i < more; i++) listed.push({ name: String(1_000_000 + i) } as import('node:fs').Dirent)
+    if (host.listDescending) listed.sort((a, b) => Number(b.name) - Number(a.name))
     return { readSync: () => listed.shift() ?? null, closeSync: () => {} }
   }) as never
   return result
@@ -56,11 +66,14 @@ function processRow(pid = 42, parent = 1, command = 'codex', ticks = 100) {
 }
 beforeEach(() => {
   host.root = realpathSync(mkdtempSync(join(tmpdir(), 'native-control-')))
-  host.before = undefined; host.exec.mockReset(); host.helper.mockReset().mockResolvedValue({ path: '/fixture/native-helper', key: 'fixture' })
+  host.before = undefined; host.writes = 0; host.listedMore = {}; host.exec.mockReset(); host.helper.mockReset().mockResolvedValue({ path: '/fixture/native-helper', key: 'fixture' })
   Object.defineProperty(process, 'platform', { ...platform, value: 'darwin' })
   host.exec.mockImplementation((_path, _args, _options, callback) => callback(null, Buffer.from(output()), Buffer.alloc(0)))
 })
-afterEach(() => { Object.defineProperty(process, 'platform', platform); env.ADAPTER_RUNTIME_DIR = originalRuntime; vi.restoreAllMocks(); vi.unstubAllGlobals(); rmSync(host.root, { recursive: true, force: true }) })
+afterEach(() => {
+  Object.defineProperty(process, 'platform', platform); env.ADAPTER_RUNTIME_DIR = originalRuntime; vi.restoreAllMocks(); vi.unstubAllGlobals(); rmSync(host.root, { recursive: true, force: true })
+  expect(host.writes).toBeLessThanOrEqual(64)
+})
 
 describe('strict Darwin control protocol', () => {
   it('retains exact birth, image, command digest and lossless file keys without argv/environment text', () => {
@@ -230,9 +243,9 @@ describe('joined Linux control proof', () => {
     file(join(host.root, 'proc/42/cmdline'), 'c'.repeat(65_537))
     await expect(nativeProcessControl([42], 0, budget())).rejects.toThrow('byte limit')
     file(join(host.root, 'proc/42/cmdline'), 'codex\0')
-    for (let i = 100; i < 228; i++) file(join(host.root, 'proc/42/task', String(i), 'children'), '')
+    host.listedMore['/proc/42/task'] = 128 // With task 42, one past the limit.
     await expect(nativeProcessControl([42], 42, budget())).rejects.toThrow('directory pool')
-    for (let i = 0; i < 4097; i++) symlinkSync('pipe:[1]', join(host.root, 'proc/42/fd', String(i)))
+    host.listedMore['/proc/42/fd'] = 4097
     await expect(nativeProcessControl([42], 0, budget())).rejects.toThrow('directory pool')
   })
 })
