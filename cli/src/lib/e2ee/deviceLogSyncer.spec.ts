@@ -2395,7 +2395,7 @@ describe('DeviceLogSyncer — "It\'s mine", once for the account', () => {
       await t.syncer.refresh()
       expect(t.calls.announce, fail).toHaveBeenCalledWith(expect.objectContaining({ pub: phone.pub }))
       expect(t.store.read().pending, fail).toEqual([phone.pub])
-      if (fail === 'throws') expect(lines.some((l) => l.includes('could not read which devices were confirmed: down'))).toBe(true)
+      if (fail === 'throws') expect(lines.some((l) => l.includes('could not read which devices were confirmed: Error'))).toBe(true)
     }
   })
 
@@ -2559,7 +2559,7 @@ describe('DeviceLogSyncer — "It\'s mine", once for the account', () => {
       const u = await joined({ log: (l) => lines.push(l) })
       u.backend.postAck.mockRejectedValueOnce(new Error('boom'))
       expect(await u.syncer.dismiss({ pub: phone.pub, confirm: true })).toBe(false)
-      expect(lines.some((l) => l.includes('boom'))).toBe(true)
+      expect(lines.some((l) => l.includes('could not share "It\'s mine": Error'))).toBe(true)
     })
 
     it('a machine with nothing to share it with keeps "It\'s mine" here', async () => {
