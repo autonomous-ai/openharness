@@ -2,9 +2,9 @@
 // Update with one line and no detail, a package another process holds left for the Store's next start. The index, the
 // manifests and the locks are real; only the setup (finishInstall) is played by the test.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { env } from '../config/env.js'
 import type { DshInstallResult } from './install.js'
 import {
@@ -132,8 +132,22 @@ describe('setting harnesses up again after the move', () => {
     expect(lines).toEqual(['[dsh] acme/gone needs setup · BROKEN'])
   })
 
-  it('a linked package, or one with no mark or needs-setup, is not touched', async () => {
-    writeInstalledIndex([pkg('acme/linked', { linked: true }), pkg('acme/plain', { setup: undefined }), pkg('acme/failed', { setup: 'needs-setup' })])
+  it('a linked package waiting is set up again at its checkout: what its setup built there runs on Harness\'s Python, which moved', async () => {
+    const checkout = join(root, 'checkout')
+    mkdirSync(checkout)
+    writeFileSync(join(checkout, 'harness.json'), JSON.stringify({ spec: 1, id: 'acme/linked', name: 'linked', engine: 'claude' }))
+    const dir = dshInstallDir('acme/linked')
+    mkdirSync(dirname(dir), { recursive: true })
+    symlinkSync(checkout, dir)
+    writeInstalledIndex([{ id: 'acme/linked', dir, source: checkout, ref: null, commit: null, linked: true, installedAt: 1, setup: 'pending' }])
+    const finish = vi.fn(async (resolved: InstalledDsh) => ran(resolved))
+    expect(await setupAgain(deps({ finish }).deps)).toEqual({ done: 1, needsSetup: 0, busy: 0 })
+    expect(finish.mock.calls.map(([resolved]) => resolved.realDir)).toEqual([checkout])
+    expect(marks()).toEqual([['acme/linked', undefined]])
+  })
+
+  it('one with no mark or needs-setup is not touched', async () => {
+    writeInstalledIndex([pkg('acme/plain', { setup: undefined }), pkg('acme/failed', { setup: 'needs-setup' })])
     const before = readFileSync(join(dshRootDir(), 'installed.json'), 'utf8')
     const lock = vi.fn(lockDsh)
     const finish = vi.fn()
