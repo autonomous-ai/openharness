@@ -70,7 +70,7 @@ export interface WifiDeps {
 export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}): ServiceRequests {
   const machineId = core.machine.id()
   let view: WifiView = { agents: [], store: [], hasWindow: false }
-  let stopped = false, coreConnected = true, coreEpoch = 0, notices = 0, applied = 0
+  let stopped = false, coreConnected = true, coreEpoch = 0, notices = 0, applied = -1
   let cancellations = new AbortController()
   /** One ask of the core at a time: requests arriving together share it, and are answered in order. */
   let viewing: { epoch: number; promise: Promise<void>; closed: AbortController } | null = null
@@ -108,8 +108,15 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
   const store = (deps.store ?? createDeviceStore)({
     dataDir: core.dataDir, machineId,
     agents: () => view.store,
-    create: (packageId, engine, cwd) => core.agents.create({ dsh: packageId, engine: engine as AgentCreateRequest['engine'], cwd,
-      prompt: null, name: null, bypassPermission: false, requireUnusedWorkspace: true }),
+    agentsCurrent: () => !stopped && coreConnected && applied === notices,
+    create: async (packageId, engine, cwd) => {
+      const result = await core.agents.create({ dsh: packageId, engine: engine as AgentCreateRequest['engine'], cwd,
+        prompt: null, name: null, bypassPermission: false, requireUnusedWorkspace: true })
+      // A read already in flight can predate this agent. Invalidate it before Store evaluates
+      // readiness, but keep the known creation result even if the next read fails (native Wi-Fi Store, 2026-11-18).
+      if (result.ok && !stopped) changed()
+      return result
+    },
     reveal: (operationId, agentId) => { core.clients.sendWindow({ target: { kind: 'first' },
       frame: { type: 'device_prepare_open', payload: { operationId, machineId, agentId } } }) },
   })

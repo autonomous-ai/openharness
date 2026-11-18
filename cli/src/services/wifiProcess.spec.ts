@@ -399,7 +399,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
         agents.push({ agentId: answer.agentId, machineId: 'machine-1', packageId, workspace: cwd, engine: 'claude', state: 'active', runtime: 'ready' })
         return { state: 'created', agentId: answer.agentId }
       },
-      agents: () => agents,
+      agents: () => agents, agentsCurrent: () => true,
     })
     try {
       const result = await store.request('paired-device', { type: 'agent.prepare', requestId: 'b69e1f7c-a82c-4ca0-a782-d870b7b153f9',

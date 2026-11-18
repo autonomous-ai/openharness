@@ -23,6 +23,7 @@ export interface DeviceStoreDependencies {
   workspace(request: PrepareRequest['workspace'], label: string): Promise<string>
   create(packageId: string, cwd: string): Promise<AgentCreationOutcome>
   agents(): StoreAgent[]
+  agentsCurrent(): boolean
   reveal?: (operationId: string, agentId: string) => void
   now?: () => number
 }
@@ -86,6 +87,7 @@ export class AutonomousDeviceStore {
   private deliverUi(): void {
     for (const id of this.pendingUi) {
       try {
+        if (!this.deps.agentsCurrent()) return
         const row = this.read(id)
         if (!row || row.uiRevealed || this.revoked.has(id)) { this.pendingUi.delete(id); continue }
         const agent = this.deps.agents().find(a => a.agentId === row.operation.agentId)
@@ -267,6 +269,9 @@ export class AutonomousDeviceStore {
   private refreshRuntime(row: Journal): void {
     if (!row.operation.agentId || (row.operation.state !== 'running' && row.operation.state !== 'ready'
       && !['ENGINE_ACTION_REQUIRED', 'AGENT_UNAVAILABLE'].includes(row.operation.error?.code ?? ''))) return
+    // A known create can finish before its component's next complete view. Keep its receipt and
+    // launch state; an older list proves neither disappearance nor readiness.
+    if (!this.deps.agentsCurrent()) return
     const agent = this.deps.agents().find(a => a.agentId === row.operation.agentId)
     if (agent?.packageId !== row.operation.packageId || agent?.workspace !== row.operation.workspace) {
       this.action(row, 'AGENT_UNAVAILABLE', 'The prepared agent is missing or its package/workspace changed', 'Inspect this agent in Harness; preparation never changes an existing session.'); return

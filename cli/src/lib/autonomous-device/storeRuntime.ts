@@ -48,6 +48,8 @@ export interface DeviceStoreOptions {
   machineId: string
   /** Every agent with the Store's evidence on it, as the core last listed them. */
   agents(): StoreAgent[]
+  /** Whether that complete list still covers the current component and its known mutations. */
+  agentsCurrent(): boolean
   /** The core starts the agent, with the device's fixed launch arguments, unless another works in `cwd`. */
   create(packageId: string, engine: string, cwd: string): Promise<ForkResult>
   reveal?: (operationId: string, agentId: string) => void
@@ -58,6 +60,7 @@ export function createDeviceStore(options: DeviceStoreOptions): AutonomousDevice
     directory: join(options.dataDir, 'device-preparations'), machineId: options.machineId, reveal: options.reveal,
     packages: deviceStorePackages,
     agents: () => options.agents(),
+    agentsCurrent: () => options.agentsCurrent(),
     install: async (id, progress) => {
       const pkg = (await deviceStorePackages()).find(p => p.packageId === id)
       if (!pkg?.installAllowed) return { ok: false, error: 'PACKAGE_REVIEW_REQUIRED', detail: 'Review this package and its dependencies in Harness Store first.' }

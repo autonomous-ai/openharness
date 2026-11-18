@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { emptyPorts, type CoreApi, type CorePorts, type RemoteClient, type WifiPort } from '../core/api.js'
 import { AutonomousDeviceService } from '../lib/autonomous-device/service.js'
 import { createDeviceStore } from '../lib/autonomous-device/storeRuntime.js'
+import { AutonomousDeviceStore } from '../lib/autonomous-device/store.js'
+import { AgentCreationReceipts } from '../lib/agentCreationReceipt.js'
 import type { LiveEvent } from '../lib/normalize.js'
 import { snapshotFixture, snapshotRow, snapshotReader } from '../testing/sessionSnapshot.js'
 import type { SessionSnapshot } from '../testing/sessionSnapshot.js'
@@ -119,6 +121,81 @@ async function joinDevice(core: CoreApi, connId = 'c1'): Promise<void> {
 const KEY = Buffer.alloc(32, 7).toString('base64')
 
 describe('the Wi-Fi device, with the dials', () => {
+  it.each(['complete', 'failed'] as const)('keeps a confirmed Store creation pending while the pre-create view is still held: %s', async outcome => {
+    const core = fakeCore({ dataDir }), ports = emptyPorts()
+    let created = false, store!: AutonomousDeviceStore, release!: (snapshot: SessionSnapshot) => void, fail!: (error: Error) => void
+    const snapshot = () => snapshotFixture({ registered: created ? [snapshotRow('created', {
+      session: { ...snapshotRow('created').session, cwd: realpathSync(dataDir), dsh: 'test/package',
+        active: true, sessionId: 'bound' },
+      facts: { displayName: 'Package', terminalAvailable: true, parts: {} },
+    })] : [], hasWindow: true })
+    const read = vi.fn(snapshotReader(async () => snapshot()))
+    Object.assign(core.agents, { readSessions: read, create: vi.fn(async () => {
+      created = true
+      return { ok: true, agentId: 'created' }
+    }) })
+    startWifi(core, ports, { store: options => {
+      store = new AutonomousDeviceStore({ directory: join(dataDir, 'preparations'), machineId: 'machine-1',
+        agents: options.agents,
+        agentsCurrent: options.agentsCurrent,
+        packages: async () => [{ packageId: 'test/package', name: 'Package', description: '', category: null,
+          engine: 'claude', installed: true, catalog: false, verified: false, viewerPackageId: null,
+          installAllowed: false, version: 'one', broken: null }],
+        install: async () => ({ ok: true }), doctor: async () => ({ ok: true, checked: true, lines: [] }),
+        workspace: async () => realpathSync(dataDir),
+        create: async (id, cwd) => {
+          const result = await options.create(id, 'claude', cwd)
+          return result.ok ? { state: 'created', agentId: result.agentId } : { state: 'failed', error: result.error }
+        }, reveal: options.reveal,
+      })
+      return store
+    } })
+    await ports.wifi!.resume({ focus: null })
+    const old = snapshot()
+    read.mockImplementationOnce(snapshotReader(() => new Promise((resolve, reject) => { release = resolve; fail = reject })))
+    const held = ports.wifi!.appFocus('machine-1', null, 'window')
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+    try {
+      const answer = await store.request('device', { type: 'agent.prepare', requestId: randomUUID(), machineId: 'machine-1',
+        packageId: 'test/package', idempotencyKey: 'once', workspace: { kind: 'new', name: 'Package' } })
+      const id = (answer.operation as { operationId: string }).operationId
+      const receipts = new AgentCreationReceipts(join(dataDir, 'preparations', 'creations'))
+      await vi.waitFor(() => expect(receipts.status(id)).toEqual({ state: 'created', agentId: 'created' }))
+      expect(store.get('device', id)).toMatchObject({ state: 'running', phase: 'launch', agentId: 'created', error: null })
+      expect(core.clients.sendWindow).not.toHaveBeenCalled()
+      if (outcome === 'failed') {
+        const refused = expect(held).rejects.toThrow('read failed')
+        fail(new Error('read failed')); await refused
+        expect(store.get('device', id)).toMatchObject({ state: 'running', phase: 'launch', agentId: 'created', error: null })
+        expect(receipts.status(id)).toEqual({ state: 'created', agentId: 'created' })
+        await ports.wifi!.appFocus('machine-1', null, 'window')
+      } else { release(old); await held }
+      expect(store.get('device', id)).toMatchObject({ state: 'ready', phase: 'complete', agentId: 'created', error: null })
+      expect(await store.request('device', { type: 'agent.prepare', requestId: randomUUID(), machineId: 'machine-1',
+        packageId: 'test/package', idempotencyKey: 'once', workspace: { kind: 'new', name: 'Package' } })).toMatchObject({ status: 'duplicate' })
+      expect(core.agents.create).toHaveBeenCalledOnce()
+    } finally { release(old); await held.catch(() => {}) }
+  })
+
+  it('revokes Store view evidence with its component and preserves a known create after stop', async () => {
+    const core = fakeCore({ dataDir }), ports = emptyPorts()
+    let given!: Parameters<typeof createDeviceStore>[0], finish!: (value: { ok: true; agentId: string }) => void
+    startWifi(core, ports, { store: options => { given = options; expect(options.agentsCurrent()).toBe(false); return createDeviceStore(options) } })
+    await ports.wifi!.resume({ focus: null })
+    expect(given.agentsCurrent()).toBe(true)
+    ports.wifi!.disconnected()
+    expect(given.agentsCurrent()).toBe(false)
+    await ports.wifi!.resume({ focus: null })
+    expect(given.agentsCurrent()).toBe(true)
+    vi.mocked(core.agents.create).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const creating = given.create('test/package', 'claude', dataDir)
+    await ports.wifi!.stop()
+    const reads = vi.mocked(core.agents.readSessions).mock.calls.length
+    finish({ ok: true, agentId: 'created' })
+    expect(await creating).toEqual({ ok: true, agentId: 'created' })
+    expect(given.agentsCurrent()).toBe(false)
+    expect(core.agents.readSessions).toHaveBeenCalledTimes(reads)
+  })
   it('uses the process-owned validated view source while keeping inline reads separate', async () => {
     const core = fakeCore({ dataDir }), ports = emptyPorts()
     const readView = vi.fn(async () => ({ agents: [], store: [], hasWindow: true }))

@@ -52,6 +52,7 @@ async function setup() {
     return { ok: true as const, session }
   })
   const store = createDeviceStore({ dataDir: join(root, 'state'), machineId: 'mac', agents: () => deviceStoreAgents('mac'),
+    agentsCurrent: () => true,
     create: (dsh, engine, cwd) => createForExperiment(create, { dsh, engine: engine as AgentCreateRequest['engine'], cwd,
       prompt: null, name: null, bypassPermission: false, requireUnusedWorkspace: true }) })
   const request = { type: 'agent.prepare', requestId: randomUUID(), machineId: 'mac', packageId: 'test/robot-fixture', workspace: { kind: 'existing', path: cwd }, idempotencyKey: 'prepare' }

@@ -22,6 +22,7 @@ describe('OS handoff contract', () => {
     const path = mkdtempSync(join(tmpdir(), 'device-contract-'))
     let installed = false, created = false
     const store = new AutonomousDeviceStore({ directory: path, machineId: 'mac-example',
+      agentsCurrent: () => true,
       packages: async () => [{ packageId: 'autonomous/blender', name: 'Blender', description: '3D', category: '3D', engine: 'claude', installed,
         catalog: true, verified: true, viewerPackageId: null, installAllowed: true, version: null, broken: null }],
       install: async () => { installed = true; return { ok: true } }, doctor: async () => ({ ok: true, checked: true, lines: [] }),
