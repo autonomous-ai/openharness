@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { AtomicWriteUnconfirmed, RENAME_TRIES, RENAME_WAIT_MS, atomicWriteFile, atomicWriteJson, directorySyncSupported, hardenPrivateStateFileIfPresent, insideWindowsRoots, readPrivateStateFile, requireWindowsStateFile, secureStateDirectory, syncStateDirectory, windowsStateRoots } from './secureState.js'
+import { dirname, join } from 'node:path'
+import { AtomicWriteUnconfirmed, READ_TRIES, READ_WAIT_MS, RENAME_TRIES, RENAME_WAIT_MS, StateFileUnreadable, atomicWriteFile, atomicWriteJson, directorySyncSupported, hardenPrivateStateFileIfPresent, insideWindowsRoots, jsonArray, jsonObject, probeState, readPrivateStateFile, readState, requireState, requireWindowsStateFile, secureStateDirectory, syncStateDirectory, windowsStateRoots } from './secureState.js'
 
 const WINDOWS = process.platform === 'win32'
 
@@ -368,5 +368,177 @@ describe('atomicWriteFile', () => {
     expect(atomicWriteFile(f, 'other', 'trust', { exclusive: true })).toBe(false)
     expect(readFileSync(f, 'utf8')).toBe('new')
     expect(readdirSync(dir)).toEqual(['f'])
+  })
+})
+
+describe('readState', () => {
+  let warn: MockInstance<typeof console.warn>
+  beforeEach(() => { warn = vi.spyOn(console, 'warn').mockImplementation(() => {}) })
+
+  function stateFile(name: string): string {
+    const dir = mkdtempSync(join(tmpdir(), 'secure-read-'))
+    dirs.push(dir)
+    return join(dir, name)
+  }
+  const torn = '[{"identityPub":"'   // what a reader saw mid-write
+  const whole = '[{"identityPub":"k"}]'
+
+  it('a missing file is missing', () => {
+    const parse = vi.fn(jsonArray)
+    expect(readState(stateFile('paired.json'), 'trust', parse)).toEqual({ state: 'missing' })
+    expect(readState(stateFile('summaries.json'), 'cache', parse)).toEqual({ state: 'missing' })
+    expect(probeState(stateFile('paired.json'), parse)).toEqual({ state: 'missing' })
+    expect(parse).not.toHaveBeenCalled()
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('a trust file that cannot be parsed is left, and said once', () => {
+    const file = stateFile('paired.json')
+    writeFileSync(file, torn)
+    expect(readState(file, 'trust', jsonArray)).toEqual({ state: 'unreadable', failure: 'not valid JSON' })
+    expect(readFileSync(file, 'utf8')).toBe(torn)
+    expect(warn).toHaveBeenCalledExactlyOnceWith('[state] paired.json cannot be read (not valid JSON); left as it is. Move it aside to start over.')
+    expect(readState(file, 'trust', jsonArray)).toEqual({ state: 'unreadable', failure: 'not valid JSON' })
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('a cache file that cannot be parsed is set aside and read as missing', () => {
+    const file = stateFile('summaries.json')
+    writeFileSync(file, '{"s1":["a recap')
+    expect(readState(file, 'cache', jsonObject)).toEqual({ state: 'missing' })
+    expect(readFileSync(`${file}.unreadable`, 'utf8')).toBe('{"s1":["a recap')
+    expect(existsSync(file)).toBe(false)
+    expect(warn).toHaveBeenCalledExactlyOnceWith('[state] summaries.json could not be read (not valid JSON); kept as summaries.json.unreadable, starting empty.')
+  })
+
+  it('one copy is kept', () => {
+    const file = stateFile('summaries.json')
+    writeFileSync(file, '{"first')
+    readState(file, 'cache', jsonObject)
+    writeFileSync(file, '{"second')
+    expect(readState(file, 'cache', jsonObject)).toEqual({ state: 'missing' })
+    expect(readFileSync(`${file}.unreadable`, 'utf8')).toBe('{"second')
+    expect(readdirSync(dirname(file))).toEqual(['summaries.json.unreadable'])
+  })
+
+  // A person replacing a file on purpose (a sign-in over a torn session) sets aside what a trust read left.
+  it('a trust file left as it is can still be set aside', () => {
+    const file = stateFile('session.json')
+    writeFileSync(file, '{"version":1,"accessTok')
+    expect(readState(file, 'trust', jsonObject)).toMatchObject({ state: 'unreadable' })
+    expect(readState(file, 'cache', jsonObject)).toEqual({ state: 'missing' })
+    expect(readFileSync(`${file}.unreadable`, 'utf8')).toBe('{"version":1,"accessTok')
+  })
+
+  it('a file another process is still writing is read again', () => {
+    const file = stateFile('paired.json')
+    writeFileSync(file, torn)
+    pauses.mockImplementation(() => {
+      if (pauses.mock.calls.length === 2) writeFileSync(file, whole)   // its writer finishes during the second wait
+      return 'timed-out'
+    })
+    const parse = vi.fn(jsonArray)
+    expect(readState(file, 'trust', parse)).toEqual({ state: 'ok', value: [{ identityPub: 'k' }] })
+    expect(parse).toHaveBeenCalledTimes(3)
+    expect(pausedFor()).toEqual([READ_WAIT_MS, READ_WAIT_MS])
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('it stops after READ_TRIES, and a probe says and moves nothing', () => {
+    const file = stateFile('summaries.json')
+    writeFileSync(file, torn)
+    const parse = vi.fn(jsonArray)
+    expect(probeState(file, parse)).toEqual({ state: 'unreadable', failure: 'not valid JSON' })
+    expect(parse).toHaveBeenCalledTimes(READ_TRIES)
+    expect(pausedFor()).toEqual(Array(READ_TRIES - 1).fill(READ_WAIT_MS))
+    expect(warn).not.toHaveBeenCalled()
+    expect(readdirSync(dirname(file))).toEqual(['summaries.json'])
+  })
+
+  it('an unchanged unreadable file is not retried', () => {
+    const file = stateFile('machinePeers.json')
+    writeFileSync(file, torn)
+    const parse = vi.fn(jsonArray)
+    probeState(file, parse)
+    parse.mockClear()
+    pauses.mockClear()
+    expect(probeState(file, parse)).toEqual({ state: 'unreadable', failure: 'not valid JSON' })
+    expect(parse).not.toHaveBeenCalled()
+    expect(pausedFor()).toEqual([])
+    writeFileSync(file, whole)
+    expect(probeState(file, parse)).toEqual({ state: 'ok', value: [{ identityPub: 'k' }] })
+  })
+
+  it('the memory holds the last 64 files', () => {
+    const files = Array.from({ length: 65 }, (_, index) => stateFile(`${index}.json`))
+    for (const file of files) writeFileSync(file, torn)
+    const parse = vi.fn(jsonArray)
+    for (const file of files) probeState(file, parse)
+    parse.mockClear()
+    probeState(files[64]!, parse)
+    expect(parse).not.toHaveBeenCalled()
+    probeState(files[0]!, parse)
+    expect(parse).toHaveBeenCalledTimes(READ_TRIES)
+  })
+
+  it('the failure is a fixed word', () => {
+    const thrown = stateFile('group.json')
+    writeFileSync(thrown, '{}')
+    expect(probeState(thrown, () => { throw new Error('x') })).toEqual({ state: 'unreadable', failure: 'unexpected content' })
+    const wrongType = stateFile('machinePeers.json')
+    writeFileSync(wrongType, '{}')
+    expect(probeState(wrongType, jsonArray)).toEqual({ state: 'unreadable', failure: 'unexpected content' })
+    const folder = stateFile('group-blocked.json')
+    mkdirSync(folder)
+    expect(probeState(folder, jsonArray)).toEqual({ state: 'unreadable', failure: 'EISDIR' })
+  })
+
+  it('no line holds the folder or the file\'s text', () => {
+    const trust = stateFile('paired.json')
+    const cache = stateFile('summaries.json')
+    writeFileSync(trust, torn)
+    writeFileSync(cache, torn)
+    let failure: unknown
+    try { requireState(trust, jsonArray) } catch (error) { failure = error }
+    readState(cache, 'cache', jsonArray)
+    expect(warn).toHaveBeenCalledTimes(2)
+    const said = [...warn.mock.calls.flat().map(String), String(failure)].join('\n')
+    for (const secret of [dirname(trust), dirname(cache), 'identityPub']) expect(said).not.toContain(secret)
+  })
+
+  it('requireState: the value, null when missing, StateFileUnreadable otherwise', () => {
+    const file = stateFile('paired.json')
+    expect(requireState(file, jsonArray)).toBeNull()
+    writeFileSync(file, whole)
+    expect(requireState(file, jsonArray)).toEqual([{ identityPub: 'k' }])
+    writeFileSync(file, torn)
+    let failure: unknown
+    try { requireState(file, jsonArray) } catch (error) { failure = error }
+    expect(failure).toBeInstanceOf(StateFileUnreadable)
+    expect(failure).toMatchObject({
+      name: 'StateFileUnreadable', base: 'paired.json', failure: 'not valid JSON',
+      message: 'paired.json cannot be read (not valid JSON). Move it aside to start over.',
+    })
+    expect(readFileSync(file, 'utf8')).toBe(torn)
+  })
+
+  it('a file that cannot be set aside is still read as missing, and not tried again', () => {
+    const file = stateFile('summaries.json')
+    writeFileSync(file, torn)
+    mkdirSync(`${file}.unreadable`)
+    writeFileSync(join(`${file}.unreadable`, 'older'), 'x')
+    expect(readState(file, 'cache', jsonArray)).toEqual({ state: 'missing' })
+    expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/^\[state\] summaries\.json could not be set aside \([A-Z]+\)$/))
+    expect(readFileSync(file, 'utf8')).toBe(torn)
+    expect(readState(file, 'cache', jsonArray)).toEqual({ state: 'missing' })
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('jsonArray and jsonObject take their own shape only', () => {
+    expect(jsonArray('[1]')).toEqual([1])
+    expect(jsonObject('{"a":1}')).toEqual({ a: 1 })
+    expect(() => jsonArray('{}')).toThrow()
+    expect(() => jsonObject('[]')).toThrow()
+    expect(() => jsonObject('null')).toThrow()
   })
 })
