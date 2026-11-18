@@ -67,10 +67,11 @@ describe('localSocketPath', () => {
     // 96 bytes fits (the staging name adds 4, still under macOS's 104 with the terminator); 97 does not.
     const dirFor = (total: number) => `/${'d'.repeat(total - '/daemon-18473.sock'.length - 1)}`
     expect(localSocketPath(dirFor(96), 18473, 'darwin')).toHaveLength(96)
-    // A short home: the test's own leaves no room for Linux's longer state root, and the path would be none.
+    // A short home: the test's own leaves no room for Linux's longer state root, and the path would be none. The platform
+    // asked for places the short folder: macOS's is in ~/.harness, whatever computer runs this.
     vi.stubEnv('HOME', '/h')
     try {
-      expect(localSocketPath(dirFor(97), 18473, 'darwin')).toBe(join(freshShortRoot('/h'), hash(dirFor(97)), 'daemon-18473.sock'))
+      expect(localSocketPath(dirFor(97), 18473, 'darwin')).toBe(join('/h', '.harness', 's', hash(dirFor(97)), 'daemon-18473.sock'))
     } finally { vi.unstubAllEnvs() }
     expect(isLocalSocketName('daemon-18473.sock')).toBe(true)
     expect(isLocalSocketName('daemon.sock')).toBe(false)
@@ -455,7 +456,10 @@ describe('a data folder too long to hold a socket', () => {
     try {
       mkdirSync(join(home, '.harness'))
       expect(socketPathIn(long, 'daemon-1.sock', home)).toBe(join(home, '.harness', 's', hash(long), 'daemon-1.sock'))
+      // A data root with no marker switches nothing; its marker, which the move's commit writes, moves the home.
       mkdirSync(join(home, '.local', 'share', 'harness'), { recursive: true })
+      expect(socketPathIn(long, 'daemon-1.sock', home)).toBe(join(home, '.harness', 's', hash(long), 'daemon-1.sock'))
+      writeFileSync(join(home, '.local', 'share', 'harness', '.harness-root'), '1\n')
       expect(socketPathIn(long, 'daemon-1.sock', home)).toBe(join(home, '.local', 'state', 'harness', 's', hash(long), 'daemon-1.sock'))
     } finally { rmSync(home, { recursive: true, force: true }) }
   })
