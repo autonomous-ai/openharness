@@ -288,13 +288,21 @@ describe('the move at a start', () => {
     expect(t.exits).toEqual([1])
   })
 
-  it('a failure after the data root\'s commit runs from the new folders, and does not say ~/.harness is as it was', async () => {
+  it('a failure after the data root\'s commit runs from the new folders, which try again and say it once: never ~/.harness is as it was', async () => {
     const t = legacyHome()
     const noProc = (): number => { throw Object.assign(new Error('no /proc'), { code: 'EIO' }) }
     await moveHomeAtStart(argvOf(t, 'start'), {}, t.deps({ procNow: noProc }))
     expect(existsSync(t.data)).toBe(true)
+    expect(t.execs).toHaveLength(1)
+    // The same start, from the new paths.
+    const [{ file, args }] = t.execs
+    await moveHomeAtStart(args, {}, t.deps({ procNow: noProc, execPath: file }))
     expect(logOf(t)).toEqual(['home move: failed io · the next start finishes it'])
     expect(t.execs).toHaveLength(1)
+    // A start that cannot run from them says it itself.
+    const outside = legacyHome()
+    await moveHomeAtStart(['/usr/bin/node', '/usr/lib/harness/cli.mjs', 'start'], {}, outside.deps({ procNow: noProc, execPath: '/usr/bin/node' }))
+    expect(logOf(outside)).toEqual(['home move: failed io · the next start finishes it'])
   })
 
   it('a journal is recovered before anything else: the failed hour, and a data root already there, do not stop it', async () => {
@@ -307,8 +315,26 @@ describe('the move at a start', () => {
     expect(readJournal(t.legacy)).toBeNull()
     expect(readBridge(t.state)).toMatchObject({ oldHome: t.legacy, movedAt: PROC_NOW })
     expect(readMoveRecord(t.home, {})).toMatchObject({ state: 'bridged' })
-    expect(logOf(t)).toEqual(['home move: failed io · the next start finishes it', moved(t)])
+    expect(logOf(t)).toEqual([moved(t)])
     expect(t.execs).toHaveLength(2)
+  })
+
+  it('a lock this start cannot take is no try: a failed move not due again says nothing and keeps its hour', async () => {
+    const t = legacyHome()
+    mkdirSync(t.state, { recursive: true })
+    await moveHomeAtStart(argvOf(t, '__harnessd'), {}, t.deps())
+    const failedLine = 'home move: failed target-exists · ~/.harness is as it was'
+    expect(logOf(t)).toEqual([failedLine])
+    // A process with no start time does not take the lock.
+    const noStartTime = t.lockAs(9_999)
+    t.clock.now += MINUTE
+    await moveHomeAtStart(argvOf(t, '__harnessd'), {}, t.deps({ lock: noStartTime }))
+    expect(logOf(t)).toEqual([failedLine])
+    expect(readMoveRecord(t.home, {})).toMatchObject({ reason: 'target-exists', failedAt: NOW })
+    // Due again, it is the try, and is said.
+    t.clock.now += 60 * MINUTE
+    await moveHomeAtStart(argvOf(t, '__harnessd'), {}, t.deps({ lock: noStartTime }))
+    expect(logOf(t)).toEqual([failedLine, 'home move: failed io · ~/.harness is as it was'])
   })
 
   it('a failed move is tried again at once by harness start on a terminal, and by any other start an hour after the last try', async () => {
