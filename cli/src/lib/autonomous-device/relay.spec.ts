@@ -10,17 +10,132 @@ function replayTo(send: ConstructorParameters<typeof AutonomousDeviceRelay>[1]):
     for (const frame of frames) if (allowed(frame)) send(connId, { type: 'autonomous_device_event', payload: structuredClone(frame) }, proof)
   }
 }
-function fixture(store?: import('./store.js').AutonomousDeviceStore, beforeReady?: () => Promise<void>) {
+function fixture(store?: import('./store.js').AutonomousDeviceStore, beforeReady?: () => Promise<void>, beforeRequest?: ConstructorParameters<typeof AutonomousDeviceRelay>[9], replay?: DeviceRelayReplay) {
   let identity: string | null = 'trusted-device'
   const submit = vi.fn(), cancel = vi.fn(() => true), send = vi.fn(), remoteRevoke = vi.fn(), clients = vi.fn()
   const proof = () => ({ identity: identity ?? 'revoked', incarnation: `session:${identity}`, peerEpoch: 'peer' })
   const service = new AutonomousDeviceService({ store, now: () => 0, machineId: 'machine', agents: () => [{ agentId: 'agent', name: 'Agent', engine: 'codex', state: 'idle' }], submit, cancelDelivery: cancel, stop: async () => true, answer: async () => true, recent: () => [] })
-  const relay = new AutonomousDeviceRelay(() => identity ? proof() : null, send, service, 'machine', replayTo(send), undefined, remoteRevoke, clients, beforeReady)
+  const relay = new AutonomousDeviceRelay(() => identity ? proof() : null, send, service, 'machine', replay ?? replayTo(send), undefined, remoteRevoke, clients, beforeReady, beforeRequest)
   const request = (payload: Record<string, unknown>) => relay.handle('conn', proof(), payload)
   return { relay, request, proof, send, submit, service, cancel, clients, remoteRevoke,
     setIdentity: (id: string) => { identity = id }, revoke: () => { identity = null } }
 }
 describe('application relay over authenticated opened device requests', () => {
+  it('provides the admitted request to component readiness before its gesture runs', async () => {
+    const prepare = vi.fn(async (_request?: Record<string, unknown>) => {})
+    const f = fixture(undefined, undefined, prepare)
+    await f.request({ type: 'hello', proto: 1, requestId: randomUUID() })
+    expect(prepare).not.toHaveBeenCalled()
+    const request = { type: 'agents.list', requestId: randomUUID() }
+    await f.request(request)
+    expect(prepare).toHaveBeenCalledExactlyOnceWith(request)
+  })
+  it('keeps the first readiness refusal even after a later request recovers and releases admission credit', async () => {
+    let finish!: (error: { code: string; message: string }) => void
+    const prepare = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finish = resolve })).mockResolvedValue(undefined)
+    const f = fixture(undefined, undefined, prepare)
+    await f.request({ type: 'hello', proto: 1, requestId: 'hello' })
+    const serve = vi.spyOn(f.service, 'request')
+    const firstId = randomUUID()
+    const first = f.request({ type: 'agents.list', requestId: firstId })
+    await f.request({ type: 'agents.list', requestId: randomUUID() })
+    finish({ code: 'FOCUS_UNAVAILABLE', message: 'Open Harness Desktop to scroll a terminal' }); await first
+    expect(f.send.mock.calls.at(-1)?.[1]).toMatchObject({ payload: { requestId: firstId, error: { code: 'FOCUS_UNAVAILABLE' } } })
+    expect(serve).toHaveBeenCalledOnce()
+    await Promise.all(Array.from({ length: 4 }, (_, i) => f.request({ type: 'agents.list', requestId: randomUUID() })))
+    expect(serve).toHaveBeenCalledTimes(5)
+  })
+  it('refuses malformed envelopes and unsupported hellos before any readiness work', async () => {
+    const prepare = vi.fn(async () => {}), f = fixture(undefined, prepare)
+    for (const request of [null, [], 'text']) await f.request(request as never)
+    expect(f.send).not.toHaveBeenCalled()
+    for (const request of [{ type: 'hello', proto: 2, requestId: randomUUID() }, { type: 'hello', proto: 1, requestId: 7 }]) {
+      await f.request(request)
+      expect(f.send.mock.calls.at(-1)?.[1]).toMatchObject({ payload: { error: { code: 'PROTO_UNSUPPORTED' } } })
+    }
+    expect(prepare).not.toHaveBeenCalled()
+  })
+
+  it('does not announce readiness or publish a replay that its transport cannot admit', async () => {
+    const f = fixture(undefined, undefined, undefined, () => null)
+    await f.request({ type: 'hello', proto: 1, requestId: randomUUID() })
+    expect(f.send.mock.calls.at(-1)?.[1]).toMatchObject({ payload: { error: { code: 'BACKPRESSURE' } } })
+    expect(f.relay.helloed()).toEqual([])
+    f.relay.drop('conn', f.proof().incarnation)
+    f.send.mockClear(); f.relay.restore('conn', f.proof())
+    expect(f.relay.helloed()).toEqual([]); expect(f.send).not.toHaveBeenCalled()
+  })
+
+  it('does not report a ready session revoked while the admitted replay is being written', async () => {
+    let f!: ReturnType<typeof fixture>
+    f = fixture(undefined, undefined, undefined, () => () => { f.revoke() })
+    await f.request({ type: 'hello', proto: 1, requestId: randomUUID() })
+    expect(f.relay.connected()).toBe(false)
+  })
+
+  it.each(['hello', 'request'])('does not continue a %s whose client was dropped during readiness', async phase => {
+    let finish!: () => void
+    const prepare = () => new Promise<void>(resolve => { finish = resolve })
+    const f = phase === 'hello' ? fixture(undefined, prepare) : fixture(undefined, undefined, prepare)
+    if (phase === 'request') await f.request({ type: 'hello', proto: 1, requestId: randomUUID() })
+    f.send.mockClear()
+    const pending = f.request(phase === 'hello' ? { type: 'hello', proto: 1, requestId: randomUUID() } : { type: 'agents.list', requestId: randomUUID() })
+    f.relay.drop('conn', f.proof().incarnation)
+    finish(); await pending
+    expect(f.send).not.toHaveBeenCalled()
+  })
+
+  it('keeps the existing token limit when readiness refuses requests', async () => {
+    vi.useFakeTimers()
+    try {
+      const prepare = vi.fn(async () => ({ code: 'FOCUS_UNAVAILABLE', message: 'unavailable' })), f = fixture(undefined, undefined, prepare)
+      await f.request({ type: 'hello', proto: 1, requestId: randomUUID() })
+      for (let i = 0; i < 20; i++) await f.request({ type: 'scroll', requestId: randomUUID() })
+      await f.request({ type: 'scroll', requestId: randomUUID() })
+      expect(f.send.mock.calls.at(-1)?.[1]).toMatchObject({ payload: { error: { code: 'RATE_LIMITED' } } })
+      expect(prepare).toHaveBeenCalledTimes(20)
+      await vi.advanceTimersByTimeAsync(1000)
+      await f.request({ type: 'scroll', requestId: randomUUID() })
+      expect(prepare).toHaveBeenCalledTimes(21)
+    } finally { vi.useRealTimers() }
+  })
+
+  it('never forwards another receipt or turn through a current device route', async () => {
+    const f = fixture(); await f.request({ type: 'hello', proto: 1, requestId: randomUUID() })
+    await f.request({ type: 'turn.send', requestId: randomUUID(), machineId: 'machine', agentId: 'agent', idempotencyKey: 'owned', text: 'fixture' })
+    const owned = f.service.receipt('trusted-device', 'owned')!
+    f.send.mockClear()
+    for (const payload of [{ idempotencyKey: 'absent' }, { idempotencyKey: 'owned', receipt: { deliveryId: 'other' } }, { idempotencyKey: 'owned', turnId: 'other' }]) {
+      f.relay.emit({ type: 'event', kind: 'receipt.changed', payload })
+    }
+    expect(f.send).not.toHaveBeenCalled()
+    f.relay.emit({ type: 'event', kind: 'receipt.changed', payload: { idempotencyKey: 'owned', receipt: owned } })
+    expect(f.send).toHaveBeenCalledOnce()
+  })
+
+  it.each(['current', 'dropped'])('reports a failed hello only while its %s client still owns it', async owner => {
+    let reject!: (error: Error) => void
+    const prepare = vi.fn().mockImplementationOnce(() => new Promise<void>((_, fail) => { reject = fail })).mockResolvedValue(undefined)
+    const f = fixture(undefined, prepare)
+    const opening = f.request({ type: 'hello', proto: 1, requestId: randomUUID() })
+    if (owner === 'dropped') f.relay.drop('conn', f.proof().incarnation)
+    reject(new Error('unavailable')); await opening
+    if (owner === 'current') expect(f.send.mock.calls.at(-1)?.[1]).toMatchObject({ payload: { error: { code: 'QUESTION_STATE_UNAVAILABLE' } } })
+    else expect(f.send).not.toHaveBeenCalled()
+    expect(f.relay.helloed()).toEqual([])
+    await f.request({ type: 'hello', proto: 1, requestId: randomUUID() })
+    expect(f.relay.helloed()).toEqual(['conn'])
+  })
+
+  it.each(['connId', 'identity', 'incarnation'])('retains only exact snapshot ownership including %s', async field => {
+    const f = fixture(); await f.request({ type: 'hello', proto: 1, requestId: randomUUID() })
+    const owner = { connId: 'conn', ...f.proof() }
+    f.relay.retain([owner]); expect(f.relay.helloed()).toEqual(['conn'])
+    f.relay.drop('conn', 'obsolete'); expect(f.relay.helloed()).toEqual(['conn'])
+    f.relay.revoke('other-device'); expect(f.relay.helloed()).toEqual(['conn'])
+    f.relay.retain([{ ...owner, [field]: 'replacement' }]); expect(f.relay.helloed()).toEqual([])
+  })
+
   it('holds one hello until questions are ready, replies first and fences a replaced identity', async () => {
     let ready!: () => void
     const prepare = vi.fn(() => new Promise<void>(resolve => { ready = resolve }))

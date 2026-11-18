@@ -240,7 +240,6 @@ import { wakeModels } from './modelsWake.js'
 import { wakeGateway } from './gatewayWake.js'
 import { createViewersWake, VIEWERS_ON_DEMAND, wakeViewers } from './viewersWake.js'
 import { createWifiLink } from './wifiLink.js'
-import { wifiDoors } from './wifiAgents.js'
 import { createServiceRoutes } from './serviceRoutes.js'
 import { GATEWAY_REQUESTS, SERVICE_HTTP_ROUTES, SERVICE_WS_FRAMES, WIFI_REQUESTS } from './api.js'
 import { loadOrCreateHookCredential } from '../lib/hookAuth.js'
@@ -895,10 +894,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const machineIdNow = (): string => backendRef?.machineId ?? ''
   // The existing open-turn fact, distinct from the app's leased activity state.
   const turnRunning = (sessionId: string): boolean => turnStartedAt.has(sessionId)
-  const wifi = wifiDoors({
-    socket: () => backendRef ?? null,
-    devices: () => ports.devices,
-  })
   // The cloud agents' doors (core/agents/cloud.ts), handed to the core API now and built once the questions and
   // the socket are, below; the cloud service starts after both.
   let cloudAgents: CloudAgents | null = null
@@ -995,7 +990,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     devicesChanged: (payload) => backendRef?.send({ type: 'harness_devices_changed', payload }),
     // A goal Hachi closed: every window here and the owner's apps away, sealed for them (createCoreApi checks it).
     hachiGoalDone: (notice) => backendRef?.send({ type: 'hachi_goal_done', payload: { ...notice } }),
-    wifi,
     dialWatching: (watching) => {
       const attached = watching && !dialWatching
       dialWatching = watching

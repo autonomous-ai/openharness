@@ -56,7 +56,7 @@ async function fixture(over: { unbound?: boolean; actualFile?: boolean; arm?: Pr
   let sink: EvidenceSink | undefined, service!: AutonomousDeviceService, feedOptions: DeviceSessionFeedOptions | undefined
   const events: AutonomousDeviceFrame[] = []
   let serviceOptions!: ConstructorParameters<typeof AutonomousDeviceService>[0]
-  let feed = { ready: Promise.resolve(), close: vi.fn(), stop: vi.fn(async () => {}), barrier: vi.fn(async (_agentId: string) => {}) }
+  let feed = { ready: Promise.resolve(), deskReady: vi.fn(async () => true), scroll: vi.fn((_phase: 'down' | 'move' | 'up', _dy: number, _velocity: number) => true), close: vi.fn(), stop: vi.fn(async () => {}), barrier: vi.fn(async (_agentId: string) => {}) }
   let nextReady = Promise.resolve()
   const observations: Array<{ options: DeviceSessionFeedOptions; feed: typeof feed }> = []
   const backend = new BackendSocket('machine-1')
@@ -79,7 +79,7 @@ async function fixture(over: { unbound?: boolean; actualFile?: boolean; arm?: Pr
     observeSessions: (given: DeviceSessionFeedOptions) => {
       feedOptions = given
       if (!over.actualFeed) {
-        feed = { ready: nextReady, close: vi.fn(), stop: vi.fn(async () => {}), barrier: vi.fn(async (_agentId: string) => {}) }
+        feed = { ready: nextReady, deskReady: vi.fn(async () => true), scroll: vi.fn((_phase: 'down' | 'move' | 'up', _dy: number, _velocity: number) => true), close: vi.fn(), stop: vi.fn(async () => {}), barrier: vi.fn(async (_agentId: string) => {}) }
         observations.push({ options: given, feed })
         return feed
       }
@@ -91,11 +91,11 @@ async function fixture(over: { unbound?: boolean; actualFile?: boolean; arm?: Pr
         if (frame.type === 'machine_select') {
           backend.registerLocalClient('local:observer', { sendFrame: frame => { message(frame); return true }, sendBinary: () => true, close: () => socket.close() },
             { tool: true, eventsProtocol: 1 })
-          message({ type: 'connected', payload: { eventsProtocol: 1 } })
+          message({ type: 'connected', payload: { machineId: 'machine-1', transport: 'local', localProtocolVersion: 1, eventsProtocol: 1 } })
         } else void dispatchDown(backend, frame, 'local:observer')
       }
       const own = observeDeviceSessions({ port: 1, dataDir, machineId: 'machine-1' }, given, () => socket)
-      feed = { ready: own.ready, close: vi.fn(own.close), stop: vi.fn(own.stop), barrier: vi.fn(own.barrier) }
+      feed = { ready: own.ready, deskReady: vi.fn(own.deskReady), scroll: vi.fn(own.scroll), close: vi.fn(own.close), stop: vi.fn(own.stop), barrier: vi.fn(own.barrier) }
       queueMicrotask(() => socket.emit('open'))
       return feed
     },

@@ -24,7 +24,6 @@ import { env } from '../config/env.js'
 import { DeviceEvidencePool } from '../lib/autonomous-device/evidenceReader.js'
 import { DeviceFeedPool, observeDeviceSessions } from '../lib/autonomous-device/sessionFeed.js'
 import { DeviceWorkBudget } from '../lib/autonomous-device/pendingWork.js'
-import { deviceDeskFor, type DeskStep } from './deviceDesk.js'
 
 export interface WifiServiceOptions {
   dataDir: string
@@ -135,28 +134,6 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
     requireBinding(owner, binding)
     return answer
   }
-  const stepFocus = async (owner: Component, direction: 'next' | 'previous', currentAgentId?: string, callerCurrent: () => boolean = () => true): Promise<DeskStep> => {
-    const binding = bindingFor(owner, 'the Wi-Fi device is not connected to the core')
-    const current = () => currentBinding(owner, binding) && callerCurrent()
-    if (!current()) return 'no_agents'
-    const desk = deviceDeskFor(options.dataDir, owner.machineId)
-    if (desk) {
-      if (!lastView?.hasWindow) return 'no_app'
-      return desk.stepFocus(direction, currentAgentId, current)
-    }
-    const answer = await ask(owner, 'stepFocus', { direction, ...(currentAgentId ? { currentAgentId } : {}) })
-    if (!current()) return 'no_agents'
-    if (answer.step === 'no_agents' || answer.step === 'no_app') return answer.step
-    return { machineId: text(answer.machineId), agentId: text(answer.agentId) }
-  }
-  const scroll = (owner: Component, phase: 'down' | 'move' | 'up', dy: number, velocity: number, callerCurrent: () => boolean = () => true): boolean => {
-    if (!lastView?.hasWindow || !currentBinding(owner, lastView.binding) || !callerCurrent()) return false
-    const binding = lastView.binding, desk = deviceDeskFor(options.dataDir, owner.machineId)
-    if (desk) return desk.scroll(phase, dy, velocity, () => currentBinding(owner, binding) && callerCurrent())
-    binding.origin.notice?.('scroll', { phase, dy, velocity })
-    return true
-  }
-
   const api = (owner: Component): CoreApi => {
     const unasked = processCoreApi(options.dataDir, 'wifi')
     return {
@@ -193,11 +170,6 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
       } },
       machine: { id: () => owner.machineId, computerId: () => options.machineId, name: () => '' },
       turns: { ...unasked.turns, recent: async (agentId, n) => list<RecentTurn>((await ask(owner, 'recent', { agentId, n })).turns) },
-      wifi: {
-        stepFocus: (direction, currentAgentId) => stepFocus(owner, direction, currentAgentId),
-        // Read against the view the request being answered just asked for, as the core read its own sockets.
-        scroll: (phase, dy, velocity) => scroll(owner, phase, dy, velocity),
-      },
     }
   }
 
@@ -244,8 +216,10 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
           }
         },
         submit: (...args) => submit(owner, ...args), cancel: deliveryId => cancel(owner, deliveryId), evidencePool, feedPool, focusWork,
-        desk: { stepFocus: (direction, agentId, current) => stepFocus(owner, direction, agentId, current),
-          scroll: (phase, dy, velocity, current) => scroll(owner, phase, dy, velocity, current) },
+        deskCurrent: () => {
+          const binding = verified
+          return () => currentBinding(owner, binding) && lastView?.binding === binding
+        },
         peer: { composition: 'services', port: env.PORT, token: options.token },
         answerWork,
         stop: async (agentId, callerCurrent, signal) => {

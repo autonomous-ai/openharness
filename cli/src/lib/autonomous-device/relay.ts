@@ -2,6 +2,7 @@ import { deviceDump } from './dump.js'
 import { type AutonomousDeviceService, type AutonomousDeviceFrame } from './service.js'
 
 type Frame = Record<string, unknown>
+export interface DeviceRequestRefusal { code: string; message: string }
 export interface DeviceSessionProof { readonly identity: string; readonly incarnation: string }
 export interface DeviceRelayProof extends DeviceSessionProof { readonly peerEpoch: string }
 export type DeviceRelayReplay = (connId: string, proof: DeviceRelayProof,
@@ -24,7 +25,7 @@ export class AutonomousDeviceRelay {
     /** One shared component snapshot; each existing authenticated client may wait once. */
     private readonly beforeReady?: () => Promise<void>,
     /** Runs only after the existing four-request admission, never before it. */
-    private readonly beforeRequest?: () => Promise<void>) {}
+    private readonly beforeRequest?: (request: Record<string, unknown>) => Promise<void | DeviceRequestRefusal>) {}
   private sameSession(connId: string, proof: DeviceSessionProof): boolean {
     const current = this.session(connId)
     return current?.identity === proof.identity && current.incarnation === proof.incarnation
@@ -108,9 +109,9 @@ export class AutonomousDeviceRelay {
     if (error) { reply({ type: `${req.type}_result`, requestId: req.requestId, error: { code: error, message: error } }); return }
     client.tokens--; client.active++
     try {
-      if (this.beforeRequest) await this.beforeRequest()
+      const refused = this.beforeRequest ? await this.beforeRequest(req) : undefined
       if (this.clients.get(connId) !== client || !this.current(connId, proof)) return
-      reply(await this.service.request(identity, req))
+      reply(refused ? { type: `${req.type}_result`, requestId: req.requestId, error: refused } : await this.service.request(identity, req))
     } finally { client.active-- }
   }
   private sendEvent(connId: string, proof: DeviceRelayProof, event: AutonomousDeviceFrame): void {

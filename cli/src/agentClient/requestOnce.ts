@@ -4,7 +4,7 @@ import type { ClientSocket, Connect, Where } from './daemon.js'
 export interface RequestBudget { reserve(payload: unknown): (() => void) | null }
 
 /** One correlated owner request; capacity remains held until the socket physically closes. */
-export function requestOnce(where: Where, type: 'cancel' | 'grid_launch_context', payload: Record<string, unknown>,
+export function requestOnce(where: Where, type: 'cancel' | 'grid_launch_context' | 'harness_device_step', payload: Record<string, unknown>,
   current: () => boolean, signal: AbortSignal, budget: RequestBudget, timeoutMs: number,
   diagnostic: (code: string) => void, connect: Connect): Promise<Record<string, unknown> | null> {
   if (!current() || signal.aborted || !where.machineId || where.machineId.length > 200) return Promise.resolve(null)
@@ -54,7 +54,7 @@ export function requestOnce(where: Where, type: 'cancel' | 'grid_launch_context'
           let frame: { type?: unknown; payload?: unknown }
           try {
             const text = raw.toString()
-            if (Buffer.byteLength(text) > (type === 'cancel' ? 4096 : 32 * 1024)) throw new Error('oversize')
+            if (Buffer.byteLength(text) > (type === 'grid_launch_context' ? 32 * 1024 : 4096)) throw new Error('oversize')
             frame = JSON.parse(text)
             if (!frame || typeof frame !== 'object' || Array.isArray(frame)) throw new Error('frame')
           } catch { settle(null, 'PROTOCOL'); return }

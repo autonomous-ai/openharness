@@ -2,6 +2,10 @@ import { randomUUID } from 'node:crypto'
 import { AgentClientError, connectSocket, type ClientSocket, type Connect, type Where } from '../../agentClient/daemon.js'
 import { SESSION_EVENT_BYTES, SESSION_EVENT_FRAMES, type SessionEventBatch } from '../sessionEvents.js'
 
+import { devicePeerBudget } from './peerProtocol.js'
+import { DESK_WAIT_MS, deskStroke, type DeskPhase } from './deskProtocol.js'
+
+const WRITE_BYTES = 64 * 1024
 const WAIT_MS = 15_000
 type Frame = Record<string, unknown> & { type: string; payload: Record<string, unknown> }
 type Barrier = { at: number; resolve(): void; reject(error: Error): void; release(): void }
@@ -11,6 +15,7 @@ const id = (value: unknown): value is string => typeof value === 'string' && val
 
 /** Actual retained frame/handler ownership survives a replaced component or connection. */
 export class DeviceFeedPool {
+  readonly outgoing = devicePeerBudget(WRITE_BYTES, 256)
   bytes = 0
   frames = 0
   active = 0
@@ -36,6 +41,9 @@ export function observeDeviceSessions(where: Where, options: DeviceSessionFeedOp
   const ready = new Promise<void>((done, fail) => { resolve = done; reject = fail })
   const partial = new Map<number, Job>(), queued: Job[] = []
   const barriers = new Map<string, Barrier>()
+  const writes = new Set<{ at: number; release(): void }>()
+  let deskSupported = false
+  let probe: { requestId: string; promise: Promise<boolean>; settle(ok: boolean): void } | undefined
   let active: { job: Job; actual: Promise<void> } | undefined
   let drainDeadline: ReturnType<typeof setTimeout> | undefined
   const release = (job: Job): void => { for (const done of job.releases) done(); job.releases.length = 0 }
@@ -43,6 +51,7 @@ export function observeDeviceSessions(where: Where, options: DeviceSessionFeedOp
   const fail = (code: string, notify = true): void => {
     if (closed) return
     closed = true
+    deskSupported = false; probe?.settle(false)
     clearTimeout(handshake); clearTimeout(drainDeadline)
     for (const job of partial.values()) release(job)
     partial.clear()
@@ -54,7 +63,7 @@ export function observeDeviceSessions(where: Where, options: DeviceSessionFeedOp
   }
   const deadline = (): void => {
     if (closed) return
-    if (!active && !queued.length && !partial.size && !barriers.size) {
+    if (!active && !queued.length && !partial.size && !barriers.size && !writes.size) {
       clearTimeout(drainDeadline); drainDeadline = undefined; return
     }
     // An enclosing batch can finish behind a newer nested batch. Keep the earliest
@@ -64,11 +73,28 @@ export function observeDeviceSessions(where: Where, options: DeviceSessionFeedOp
     for (const job of queued) earliest = Math.min(earliest, job.at)
     for (const job of partial.values()) earliest = Math.min(earliest, job.at)
     for (const held of barriers.values()) earliest = Math.min(earliest, held.at)
-    if (earliest === Infinity) return
+    for (const held of writes) earliest = Math.min(earliest, held.at)
     const remaining = earliest + WAIT_MS - Date.now()
     if (remaining <= 0) { fail('SESSION_EVENTS_DRAIN_TIMEOUT'); return }
     drainDeadline = setTimeout(() => { drainDeadline = undefined; deadline() }, remaining)
     drainDeadline.unref?.()
+  }
+  /** Credit follows actual transport settlement, including a logically revoked socket. */
+  const sendDesk = (type: string, payload: Record<string, unknown>): boolean => {
+    // Both callers enter synchronously from this feed's current acknowledged generation.
+    const connected = socket!
+    const buffered = connected.bufferedAmount
+    if (!Number.isSafeInteger(buffered) || buffered! < 0) { console.warn('[wifi] DESK_TRANSPORT_UNSUPPORTED'); return false }
+    const wire = JSON.stringify({ type, payload }), bytes = Buffer.byteLength(wire)
+    if (bytes > 1024 || buffered! > WRITE_BYTES - bytes) { console.warn('[wifi] DESK_BACKPRESSURE'); return false }
+    const credit = pool.outgoing.reserve(bytes)
+    if (!credit) { console.warn('[wifi] DESK_BACKPRESSURE'); return false }
+    const held = { at: Date.now(), release: () => { credit(); writes.delete(held); deadline() } }
+    writes.add(held)
+    try { connected.send(wire, error => { held.release(); if (error) fail('DESK_WRITE_UNAVAILABLE') }) }
+    catch { fail('DESK_WRITE_UNAVAILABLE'); return false }
+    deadline()
+    return !closed
   }
   const drain = (): void => {
     if (closed || active || !queued.length) return
@@ -136,6 +162,7 @@ export function observeDeviceSessions(where: Where, options: DeviceSessionFeedOp
         fail(code === 1013 ? 'SESSION_EVENTS_BACKPRESSURE' : 'SESSION_EVENTS_UNAVAILABLE')
         for (const held of barriers.values()) held.release()
         barriers.clear()
+        for (const held of writes) held.release()
       })
       connected.on('message', (raw, binary) => {
         if (closed && !barriers.size) return
@@ -147,7 +174,10 @@ export function observeDeviceSessions(where: Where, options: DeviceSessionFeedOp
           const frame: unknown = JSON.parse(text)
           if (!record(frame) || typeof frame.type !== 'string' || !record(frame.payload)) { fail('SESSION_EVENTS_PROTOCOL'); return }
           const payload = frame.payload
-          if (frame.type === 'agent_recent_result' && typeof payload.requestId === 'string') {
+          if (probe && payload.requestId === probe.requestId) {
+            probe.settle(frame.type === 'harness_device_step_result' && payload.protocol === 1 && payload.machineId === where.machineId
+              && Object.keys(payload).every(key => key === 'requestId' || key === 'protocol' || key === 'machineId'))
+          } else if (frame.type === 'agent_recent_result' && typeof payload.requestId === 'string') {
             const held = barriers.get(payload.requestId)
             if (!held) return
             barriers.delete(payload.requestId)
@@ -159,6 +189,7 @@ export function observeDeviceSessions(where: Where, options: DeviceSessionFeedOp
             drain(); deadline()
           } else if (closed) return
           else if (!selected && frame.type === 'connected') {
+            if (!where.machineId || where.machineId.length > 200 || payload.machineId !== where.machineId || payload.transport !== 'local' || payload.localProtocolVersion !== 1) { fail('SESSION_EVENTS_PROTOCOL'); return }
             if (payload.eventsProtocol !== 1) { fail('SESSION_EVENTS_UNSUPPORTED'); return }
             selected = true
             connected.send(JSON.stringify({ type: 'events_observe', payload: { requestId, scope: 'all' } }))
@@ -173,6 +204,28 @@ export function observeDeviceSessions(where: Where, options: DeviceSessionFeedOp
   })()
   return {
     ready,
+    deskReady(): Promise<boolean> {
+      if (closed || !generation) return Promise.resolve(false)
+      if (deskSupported) return Promise.resolve(true)
+      if (probe) return probe.promise
+      const requestId = randomUUID()
+      let resolve!: (ok: boolean) => void
+      const own = { requestId, promise: new Promise<boolean>(done => { resolve = done }), settle: (ok: boolean) => {
+        if (probe !== own) return
+        clearTimeout(timer); probe = undefined
+        deskSupported = ok && !closed
+        resolve(deskSupported)
+      } }
+      const timer = setTimeout(() => own.settle(false), DESK_WAIT_MS)
+      timer.unref?.()
+      probe = own
+      if (!sendDesk('harness_device_step', { machineId: where.machineId, requestId, probe: true })) own.settle(false)
+      return own.promise
+    },
+    scroll(phase: DeskPhase, dy: number, velocity: number): boolean {
+      return deskSupported && deskStroke(phase, dy, velocity)
+        && sendDesk('harness_device_scroll', { machineId: where.machineId, phase, dy, velocity })
+    },
     barrier(agentId: string): Promise<void> {
       if (closed || !generation || !socket || !id(agentId)) return Promise.reject(new Error('SESSION_EVENTS_UNAVAILABLE'))
       if (pool.barriers >= 4) return Promise.reject(new Error('SESSION_EVENTS_BACKPRESSURE'))
@@ -180,11 +233,10 @@ export function observeDeviceSessions(where: Where, options: DeviceSessionFeedOp
       const credit = pool.reserve(Buffer.byteLength(wire))
       if (!credit) return Promise.reject(new Error('SESSION_EVENTS_BACKPRESSURE'))
       pool.barriers++
-      let released = false, settled = false
+      let released = false
       const promise = new Promise<void>((resolve, reject) => {
         barriers.set(requestId, { at: Date.now(),
-          resolve: () => { if (!settled) { settled = true; resolve() } },
-          reject: error => { if (!settled) { settled = true; reject(error) } },
+          resolve, reject,
           release: () => { if (!released) { released = true; pool.barriers--; credit() } },
         })
       })

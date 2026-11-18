@@ -101,7 +101,6 @@ export function viewersCoreApi(
     },
     clients: { viewerChanged: tell, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {}, windows: () => {}, observer: () => false, ...UNASKED.clients, streamFrame },
     daemon: DAEMON_UNKNOWN,
-    wifi: UNASKED.wifi,
   }
 }
 

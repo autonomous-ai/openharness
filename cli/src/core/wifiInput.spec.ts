@@ -83,7 +83,7 @@ async function bridge() {
     run: given => { options = given; return { stop: () => {} } },
     start: (api, ports, deps) => startWifi(api, ports, { ...deps,
       service: value => component = new AutonomousDeviceService(value),
-      observeSessions: options => { feed = options; return { ready: Promise.resolve(), close: vi.fn(), stop: vi.fn(async () => {}), barrier: vi.fn(async () => {}) } },
+      observeSessions: options => { feed = options; return { ready: Promise.resolve(), deskReady: vi.fn(async () => true), scroll: vi.fn(() => true), close: vi.fn(), stop: vi.fn(async () => {}), barrier: vi.fn(async () => {}) } },
       evidence: options => {
         const reader = createDeviceEvidence(options)
         return { ...reader, arm: async (...args) => { await reader.arm(...args); armed = true } }

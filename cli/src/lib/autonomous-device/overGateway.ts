@@ -1,5 +1,5 @@
 /** The devices process speaks directly to the authenticated gateway peer; core owns no relay state. */
-import { AutonomousDeviceRelay, type DeviceRelayProof } from './relay.js'
+import { AutonomousDeviceRelay, type DeviceRelayProof, type DeviceRequestRefusal } from './relay.js'
 import { devicePeerConnection } from './peerConnection.js'
 import { devicePeerBudgets, devicePeerChannel, type DevicePeerChannel } from './peerChannel.js'
 import { devicePeerWriter } from './peerWriter.js'
@@ -20,7 +20,7 @@ export function deviceRelayOverGateway(deps: {
   service: AutonomousDeviceService
   machineId: string
   beforeReady(): Promise<void>
-  beforeRequest(): Promise<void>
+  beforeRequest(request: Record<string, unknown>): Promise<void | DeviceRequestRefusal>
   maySend(): boolean
   clientChanged(): void
   card(frame: Record<string, unknown>, fullText: string | undefined, current: () => boolean): Promise<void>

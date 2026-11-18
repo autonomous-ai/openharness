@@ -83,7 +83,6 @@ export function searchCoreApi(
     },
     clients: { viewerChanged: () => {}, streamFrame: () => false, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {}, windows: () => {}, observer: () => false, ...UNASKED.clients },
     daemon: DAEMON_UNKNOWN,
-    wifi: UNASKED.wifi,
   }
 }
 

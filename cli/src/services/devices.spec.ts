@@ -1,3 +1,4 @@
+import { deviceDeskFor, publishDeviceDesk } from './deviceDesk.js'
 // The devices (services/devices.ts): what the core tells them reaches the dial and the window bridges, what
 // they say reaches the core through its API alone, and the fleet failing costs the dial nothing.
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
@@ -1726,16 +1727,115 @@ describe('⌘K, the Wi-Fi device\'s borrowed walk, the voice router and stopping
     expect(() => seen.host.fleet!()!.knows('a1')).toThrow(ServiceUnavailableError)
   })
 
-  it('lend the Wi-Fi device the dial\'s walk and stroke', async () => {
-    const { core, port } = start()
+  it('serves declared desk probe and gestures without the core private port route', async () => {
+    const { core, port, requests } = start()
+    const machineId = core.machine.id()
+    expect(await requests.devices_ws({ frame: 'harness_device_step', payload: { probe: true, machineId, requestId: 'probe' } }, WINDOW, never))
+      .toEqual({ protocol: 1, machineId })
+    expect(core.clients.sendWindow).not.toHaveBeenCalled()
     port.desk(['a1', 'a2'], true)
     port.swarms({ active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds: ['a1', 'a2'], panes: 2 }], tiles: [] })
     vi.mocked(core.agents.advertised).mockReturnValue([{ agentId: 'a1', registeredAt: 1, engine: 'claude' }, { agentId: 'a2', registeredAt: 2, engine: 'claude' }] as RegisteredSession[])
-    // The fleet's router is a stand-in here, so the walk is the host's own over the core's agents.
     seen.fleet!.fail = true
-    expect(await port.stepFocus('next', 'a1')).toEqual(expect.objectContaining({ agentId: 'a2' }))
-    port.scroll('down', 0, 0)
-    expect(vi.mocked(core.clients.sendWindow).mock.calls.filter(([delivery]) => delivery.target.kind === 'all').map(([{ frame }]) => frame.type)).toEqual(['dial_focus', 'dial_scroll'])
+    expect(await requests.devices_ws({ frame: 'harness_device_step', payload: { machineId, direction: 'next', currentAgentId: 'a1',
+      requestId: 'step', expiresAt: Date.now() + 5000 } }, WINDOW, never)).toMatchObject({ agentId: 'a2' })
+    await requests.devices_ws({ frame: 'harness_device_scroll', payload: { machineId, phase: 'down', dy: 2, velocity: 3 } }, WINDOW, never)
+    expect(vi.mocked(core.clients.sendWindow).mock.calls.map(([{ frame }]) => frame.type)).toEqual(['dial_focus', 'dial_scroll'])
+  })
+
+  it.each([
+    { local: false, owner: true, connection: 'remote' }, { local: true, owner: false, connection: 'local' },
+    { local: true, owner: true }, { ...WINDOW, rpcRoute: true as const },
+  ])('refuses undeclared desk authority %j', async asker => {
+    const { requests, core } = start()
+    expect(await requests.devices_ws({ frame: 'harness_device_step', payload: { machineId: core.machine.id(), probe: true, requestId: 'r' } }, asker, never))
+      .toEqual({ error: 'LOCAL_ONLY' })
+    expect(core.clients.sendWindow).not.toHaveBeenCalled()
+  })
+
+  it('refuses missing/closed authority, malformed requests and absent or foreign desk ownership', async () => {
+    const { requests, core, port } = start()
+    const payload = { frame: 'harness_device_step', payload: { machineId: core.machine.id(), probe: true, requestId: 'r' } }
+    expect(await requests.devices_ws(payload, WINDOW)).toEqual({ error: 'LOCAL_ONLY' })
+    const closed = new AbortController(); closed.abort()
+    expect(await requests.devices_ws(payload, WINDOW, closed.signal)).toEqual({ error: 'LOCAL_ONLY' })
+    expect(await requests.devices_ws({ ...payload, payload: { ...payload.payload, direction: 'next' } }, WINDOW, never)).toEqual({ error: 'INVALID_REQUEST' })
+    expect(await requests.devices_ws({ ...payload, payload: { ...payload.payload, machineId: 'foreign' } }, WINDOW, never)).toEqual({ error: 'DESK_UNAVAILABLE' })
+    await port.stop()
+    expect(await requests.devices_ws(payload, WINDOW, never)).toEqual({ error: 'LOCAL_ONLY' })
+    expect(deviceDeskFor(dataDir, core.machine.id())).toBeNull()
+  })
+
+  it('keeps scroll on existing window facts without a receiver membership refresh', async () => {
+    const refresh = vi.fn(async () => false), { requests, core, port } = start({ refresh })
+    const stroke = { frame: 'harness_device_scroll', payload: { machineId: core.machine.id(), phase: 'down', dy: 1, velocity: 2 } }
+    expect(await requests.devices_ws(stroke, WINDOW, never)).toEqual({ ok: true })
+    expect(refresh).not.toHaveBeenCalled()
+    vi.mocked(core.clients.hasWindow).mockReturnValue(false)
+    expect(await requests.devices_ws(stroke, WINDOW, never)).toEqual({ ok: false })
+    expect(core.clients.sendWindow).toHaveBeenCalledOnce()
+    await port.stop()
+    expect(await requests.devices_ws(stroke, WINDOW, never)).toEqual({ error: 'LOCAL_ONLY' })
+    expect(refresh).not.toHaveBeenCalled()
+  })
+
+  it('requires a successful refresh for step membership while a later request can recover', async () => {
+    const refresh = vi.fn(async () => false), { requests, core } = start({ refresh })
+    const step = { frame: 'harness_device_step', payload: { machineId: core.machine.id(), requestId: 'step', direction: 'next', expiresAt: Date.now() + 5000 } }
+    expect(await requests.devices_ws(step, WINDOW, never)).toEqual({ error: 'DESK_UNAVAILABLE' })
+    expect(core.clients.sendWindow).not.toHaveBeenCalled()
+    refresh.mockResolvedValue(true)
+    seen.fleet!.fail = true
+    expect(await requests.devices_ws(step, WINDOW, never)).toEqual({ step: 'no_agents' })
+    expect(refresh).toHaveBeenCalled()
+  })
+
+  it.each(['closed', 'replacement', 'machine', 'stop'] as const)('fences a desk effect when %s changes during its refresh', async change => {
+    let finish!: (fresh: boolean) => void
+    const refresh = () => new Promise<boolean>(resolve => { finish = resolve })
+    const { requests, core, port } = start({ refresh }), closed = new AbortController()
+    const answer = requests.devices_ws({ frame: 'harness_device_step', payload: { machineId: core.machine.id(), requestId: 'step', direction: 'next', expiresAt: Date.now() + 5000 } }, WINDOW, closed.signal)
+    let revoke = () => {}
+    if (change === 'closed') closed.abort()
+    if (change === 'replacement') revoke = publishDeviceDesk({ dataDir, machineId: core.machine.id(), current: () => true, hasWindow: () => true,
+      desk: { stepFocus: async () => 'no_agents', scroll: vi.fn() } })
+    if (change === 'machine') vi.mocked(core.machine.id).mockReturnValue('replacement')
+    if (change === 'stop') await port.stop()
+    finish(true)
+    expect(await answer).toEqual({ error: 'DESK_UNAVAILABLE' })
+    expect(core.clients.sendWindow).not.toHaveBeenCalled(); revoke()
+  })
+
+  it.each(['closed', 'expired'] as const)('rechecks %s after the actual desk list settles without a late focus', async change => {
+    vi.useFakeTimers()
+    const { requests, core, port } = start(), closed = new AbortController()
+    port.desk(['a1'], true)
+    port.swarms({ active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds: ['a1'], panes: 1 }], tiles: [] })
+    let finish!: (rows: unknown[]) => void
+    seen.fleet!.answers.listAgentsFlat = () => new Promise(resolve => { finish = resolve }) as never
+    const result = requests.devices_ws({ frame: 'harness_device_step', payload: {
+      machineId: core.machine.id(), requestId: 'step', direction: 'next', expiresAt: Date.now() + 100,
+    } }, WINDOW, closed.signal)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(finish).toBeTypeOf('function')
+    if (change === 'closed') closed.abort(); else vi.setSystemTime(Date.now() + 101)
+    finish([{ id: 'a1' }])
+    expect(await result).toEqual({ error: 'DESK_UNAVAILABLE' })
+    expect(core.clients.sendWindow).not.toHaveBeenCalled()
+    await port.stop()
+  })
+
+  it('refuses expired or overlong step grants and reports unavailable windows without focus', async () => {
+    const { requests, core } = start()
+    const step = (expiresAt: number) => requests.devices_ws({ frame: 'harness_device_step', payload: {
+      machineId: core.machine.id(), requestId: 's', direction: 'previous', expiresAt,
+    } }, WINDOW, never)
+    expect(await step(Date.now() - 1)).toEqual({ error: 'DESK_TIMEOUT' })
+    expect(await step(Date.now() + 10000)).toEqual({ error: 'DESK_TIMEOUT' })
+    vi.mocked(core.clients.hasWindow).mockReturnValue(false)
+    seen.fleet!.fail = true
+    expect(await step(Date.now() + 5000)).toEqual({ step: 'no_app' })
+    expect(core.clients.sendWindow).not.toHaveBeenCalled()
   })
 
   it('keeps the component-only desk endpoint bound to its caller and stops it before late gestures', async () => {
@@ -1754,7 +1854,7 @@ describe('⌘K, the Wi-Fi device\'s borrowed walk, the voice router and stopping
     await port.stop()
     vi.mocked(core.clients.sendWindow).mockClear()
     expect(await desk.stepFocus('next', undefined, () => true)).toBe('no_agents')
-    expect(await port.stepFocus('next', undefined)).toBe('no_agents')
+    expect(port).not.toHaveProperty('stepFocus')
     desk.scroll('move', 2, 3, () => true)
     expect(core.clients.sendWindow).not.toHaveBeenCalled()
   })
@@ -1766,7 +1866,7 @@ describe('⌘K, the Wi-Fi device\'s borrowed walk, the voice router and stopping
     vi.mocked(core.agents.advertised).mockReturnValue([{ agentId: 'a1', registeredAt: 1, engine: 'claude' }] as RegisteredSession[])
     core.agents.cloud = () => [{ agentId: 'cloud_1', registeredAt: 2, engine: 'fo' }] as unknown as RegisteredSession[]
     seen.fleet!.fail = true
-    expect(await port.stepFocus('next', 'a1')).toEqual(expect.objectContaining({ agentId: 'cloud_1' }))
+    expect(await deviceDeskFor(dataDir, core.machine.id())!.stepFocus('next', 'a1', () => true)).toEqual(expect.objectContaining({ agentId: 'cloud_1' }))
   })
 
   it('tell the voice router the engines here and whether a device watches, and stop everything', async () => {
@@ -6966,7 +7066,7 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
     const h1 = { agentId: 'h1', registeredAt: 1, engine: 'opencode' }
     let view = [h1] as RegisteredSession[]
     const core = fakeCore({ dataDir, agents: { advertised: vi.fn(() => view) } })
-    const refresh = async () => { view = [{ ...h1, sessionId: SES }] as RegisteredSession[] }
+    const refresh = async () => { view = [{ ...h1, sessionId: SES }] as RegisteredSession[]; return true }
     const { oc, live, tell } = withOpencode({ core, refresh })
     oc.active = { [SES]: { type: 'busy' } }
     await live()

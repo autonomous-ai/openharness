@@ -39,9 +39,8 @@ function devicesPort() {
   const port = {
     card: record('card'), observed: (...args: unknown[]) => { calls.push(['observed', args]); return true }, desk: record('desk'), swarms: record('swarms'), unread: record('unread'), appFocus: record('appFocus'),
     seen: record('seen'), settings: record('settings'), windowFocus: record('windowFocus'), windowReply: record('windowReply'),
-    windowGone: record('windowGone'), scroll: record('scroll'), engines: record('engines'),
+    windowGone: record('windowGone'), engines: record('engines'),
     commanders: record('commanders'),
-    stepFocus: vi.fn(async (): Promise<{ machineId: string; agentId: string } | 'no_agents'> => ({ machineId: 'm1', agentId: 'a2' })),
     inboxPoll: vi.fn(async (_poll: unknown): Promise<{ text?: string; off?: true }> => ({ text: 'run the tests' })),
     inboxGone: record('inboxGone'),
     stop: vi.fn(async () => {}),
@@ -93,6 +92,34 @@ function setup(over: { processEnv?: NodeJS.ProcessEnv; openListener?: DevicesSer
 afterEach(() => vi.restoreAllMocks())
 
 describe('the devices in their own process', () => {
+  it('reports failed desk refresh without discarding the display and recovers on the same binding', async () => {
+    const f = setup()
+    f.answer('session_read_advertised', snapshotFixture({ registered: [snapshotRow('retained')] }))
+    f.connect(); await f.deps().refresh!()
+    f.answer('session_read_advertised', new Error('unavailable'))
+    await expect(f.deps().refresh!()).resolves.toBe(false)
+    expect(f.api().agents.advertised().map(row => row.agentId)).toEqual(['retained'])
+    f.answer('session_read_advertised', snapshotFixture({ registered: [snapshotRow('current')] }))
+    await expect(f.deps().refresh!()).resolves.toBe(true)
+    expect(f.api().agents.advertised().map(row => row.agentId)).toEqual(['current'])
+    await f.service.stop()
+  })
+  it('never reports successful desk refresh from a replaced connection', async () => {
+    const f = setup()
+    let finish!: () => void
+    vi.mocked(f.connection.read!).mockImplementationOnce(async (_query, _payload, receive) => {
+      for (const record of snapshotRecords(snapshotFixture({ registered: [snapshotRow('old')] }))) receive(record)
+      await new Promise<void>(resolve => { finish = resolve })
+    })
+    f.connect(); const old = f.deps().refresh!()
+    f.options().onDisconnected!()
+    f.answer('session_read_advertised', snapshotFixture({ registered: [snapshotRow('replacement')] }))
+    f.connect(); await f.deps().refresh!()
+    finish()
+    await expect(old).resolves.toBe(false)
+    expect(f.api().agents.advertised().map(row => row.agentId)).toEqual(['replacement'])
+    await f.service.stop()
+  })
   it('validates each external record once in its actual advertised refresh', async () => {
     const f = setup()
     const row = snapshotRow('once')
@@ -192,7 +219,7 @@ describe('the devices in their own process', () => {
     expect(Object.keys(f.deps())).not.toContain('identity')
     expect([...f.deps().faults!]).toEqual(['dial', 'fleet.knows'])
     // The Devices tab's requests are the devices' own, beside what only the core asks.
-    expect(Object.keys(f.options().requests).sort()).toEqual(['devices_ws', 'harness_devices_list', 'inboxPoll', 'routeSend', 'routeTask', 'stepFocus'])
+    expect(Object.keys(f.options().requests).sort()).toEqual(['devices_ws', 'harness_devices_list', 'inboxPoll', 'routeSend', 'routeTask'])
   })
 
   it('read no serials, dial or faults without them', () => {
@@ -543,8 +570,6 @@ describe('what the core tells the devices, reaching their port', () => {
       { kind: 'windowReply', which: 'visit', connId: 'w1', machineId: 'm1', reply: null },
       { kind: 'windowReply', which: 'anything', connId: 'w1', machineId: 'm1', reply: {} },
       { kind: 'windowGone', connId: 'w1' },
-      { kind: 'scroll', phase: 'move', dy: 2, velocity: Infinity },
-      { kind: 'scroll', phase: 'sideways', dy: 2, velocity: 1 },
       { kind: 'engines', engines: ['claude'] },
       { kind: 'commanders', connected: true },
       { kind: 'nothing it knows' },
@@ -570,7 +595,6 @@ describe('what the core tells the devices, reaching their port', () => {
       ['windowReply', ['visit', 'w1', 'm1', {}]],
       ['windowReply', ['selection', 'w1', 'm1', {}]],
       ['windowGone', ['w1']],
-      ['scroll', ['move', 2, 0]],
       ['engines', [['claude']]],
       ['commanders', [true]],
     ])
@@ -639,16 +663,8 @@ describe('what the core asks of the devices', () => {
       expect(f.legacy[type]).toHaveBeenLastCalledWith(payload, asker, closed)
     }
   })
-  it('is the Wi-Fi device\'s step, answered from the devices\' port', async () => {
-    const f = setup()
-    const asker = { local: true, owner: true }
-    const { requests } = f.options()
-    expect(await requests.stepFocus({ direction: 'previous', currentAgentId: 'a1' }, asker)).toEqual({ machineId: 'm1', agentId: 'a2' })
-    expect(f.port.stepFocus).toHaveBeenLastCalledWith('previous', 'a1')
-    f.port.stepFocus.mockResolvedValueOnce('no_agents')
-    expect(await requests.stepFocus({ direction: 'sideways', currentAgentId: 7 }, asker)).toEqual({ step: 'no_agents' })
-    expect(f.port.stepFocus).toHaveBeenLastCalledWith('next', undefined)
-    expect(await requests.harness_devices_list({}, asker)).toEqual({ protocol: 1 })
+  it('has no private desk request', () => {
+    const f = setup(); expect(f.options().requests).not.toHaveProperty('stepFocus')
   })
 
   it('is the mod\'s poll, answered { text } from the devices\' port; an approval is no request', async () => {

@@ -45,7 +45,6 @@ describe('what the core tells the devices', () => {
     port.windowFocus({ voice: null, form: null })
     port.windowReply('form', 'w1', 'm1', { ok: true })
     port.windowGone('w1')
-    port.scroll('move', 2, 9)
     port.engines(['codex'])
     port.commanders(true)
     expect(sent.map((frame) => frame.payload)).toEqual([
@@ -60,7 +59,6 @@ describe('what the core tells the devices', () => {
       { kind: 'windowFocus', focus: { voice: null, form: null } },
       { kind: 'windowReply', which: 'form', connId: 'w1', machineId: 'm1', reply: { ok: true } },
       { kind: 'windowGone', connId: 'w1' },
-      { kind: 'scroll', phase: 'move', dy: 2, velocity: 9 },
       { kind: 'engines', engines: ['codex'] },
       { kind: 'commanders', connected: true },
     ])
@@ -95,21 +93,9 @@ describe('what the core tells the devices', () => {
 })
 
 describe('what the core asks of the devices', () => {
-  it('asks the Wi-Fi device\'s step under their own types, with deadlines', async () => {
-    const { call, port } = link()
-    call.mockResolvedValueOnce({ machineId: 'm1', agentId: 'a2' })
-    expect(await port.stepFocus('next', 'a1')).toEqual({ machineId: 'm1', agentId: 'a2' })
-    expect(call).toHaveBeenLastCalledWith('stepFocus', { direction: 'next', currentAgentId: 'a1' }, DEVICES_WAIT_MS)
-    call.mockResolvedValueOnce({ step: 'no_agents' })
-    expect(await port.stepFocus('previous')).toBe('no_agents')
-    expect(call).toHaveBeenLastCalledWith('stepFocus', { direction: 'previous' }, DEVICES_WAIT_MS)
-    call.mockResolvedValueOnce({ machineId: 7 })
-    expect(await port.stepFocus('next')).toEqual({ machineId: '', agentId: '' })
-  })
-
-  it('answers with the port\'s fallbacks when they are down, slow or failing: the walk finds no desk', async () => {
-    const { port } = link({ error: 'SERVICE_UNAVAILABLE', service: 'devices', retryable: true })
-    expect(await port.stepFocus('next')).toBe('no_agents')
+  it('keeps desk effects out of the private core port', () => {
+    const { port } = link()
+    expect(port).not.toHaveProperty('stepFocus'); expect(port).not.toHaveProperty('scroll')
   })
 
   // The dial only shows a waiting prompt (docs/specs/2026-11-13-device-claude-orca.md): nothing asks the devices for an approval.

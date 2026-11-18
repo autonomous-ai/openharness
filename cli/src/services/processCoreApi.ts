@@ -14,7 +14,7 @@ import { usageTarget, usageTargetKey, usageSnapshot, validUsage, validUsageTarge
  * each asked of the core over its link (`ask`). The agents it reads come as the apps are shown them (`service_query shown`): each with its
  * name, whether its terminal is there and its harness's viewer.
  */
-import { LOCAL_WINDOW_OFF, AGENT_ACTIONS_OFF, CONNECTOR_SYNC_OFF, CONVERSATIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, LANE_OFF, OBSERVER_KEY_OFF, resolveAgent, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, WIFI_OFF, type AgentView, type CloudCore, type CoreApi, type DaemonAddress, type TerminalWatch } from '../core/api.js'
+import { LOCAL_WINDOW_OFF, AGENT_ACTIONS_OFF, CONNECTOR_SYNC_OFF, CONVERSATIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, LANE_OFF, OBSERVER_KEY_OFF, resolveAgent, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, type AgentView, type CloudCore, type CoreApi, type DaemonAddress, type TerminalWatch } from '../core/api.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { turnsLink } from './turnsLink.js'
 
@@ -75,7 +75,6 @@ export const UNASKED = {
   summaries: async (): Promise<Record<string, string>> => ({}),
   account: { signedIn: () => false, environment: () => '', machines: async () => ({ status: 503, body: {} }) },
   clients: { sendWindow: LOCAL_WINDOW_OFF, hasWindow: () => false, devicesChanged: () => {}, dialWatching: () => {}, turnCard: () => {}, turnSummary: () => {} },
-  wifi: WIFI_OFF,
   /** What only the recaps ask (services/recapsProcess.ts): a turn's final answer. */
   lastTurn: async () => null,
 } satisfies {
@@ -85,7 +84,6 @@ export const UNASKED = {
   summaries: CoreApi['agents']['summaries']
   account: Pick<CoreApi['account'], 'signedIn' | 'environment' | 'machines'>
   clients: Pick<CoreApi['clients'], 'sendWindow' | 'hasWindow' | 'devicesChanged' | 'dialWatching' | 'turnCard' | 'turnSummary'>
-  wifi: CoreApi['wifi']
   lastTurn: CoreApi['transcripts']['lastTurn']
 }
 
@@ -215,7 +213,6 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       machineId: () => daemon().machineId(),
       get autonomousEnv() { return daemon().autonomousEnv },
     },
-    wifi: UNASKED.wifi,
     // Hachi's daemon counters, handed to the core (core/agentQueries.ts `count`), which refuses any other name. A count
     // the core cannot take now is lost: counters are measures, never state.
     count: (metric) => { void ask?.('count', { metric }).catch(() => {}) },

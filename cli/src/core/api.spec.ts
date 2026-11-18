@@ -1,7 +1,7 @@
 import { SERVICE_HOSTS } from '../harnessd/services.js'
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { readSessions, SESSION_READ_HEADER_BYTES, SESSION_READ_MEMBERS_BYTES, AGENT_BROWSER_REQUESTS, CLOUD_DOWN, CLOUD_REPLY_DOWN, CLOUD_ANSWER_DOWN, CLOUD_FALLBACKS, CONNECTOR_SYNC_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, sendLocalWindow, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, GATEWAY_REQUESTS, LANE_OFF, MACHINE_ADDON_REQUESTS, PAIR_WAIT_MS, SERVICE_HTTP_ROUTES, SERVICE_WS_FRAMES, WIFI_REQUESTS, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, WIFI_FALLBACKS, WIFI_OFF, WORKSPACES_FALLBACKS, WORKSPACES_OFF, WORKSPACES_UNAVAILABLE, type CoreApiDeps } from './api.js'
+import { readSessions, SESSION_READ_HEADER_BYTES, SESSION_READ_MEMBERS_BYTES, AGENT_BROWSER_REQUESTS, CLOUD_DOWN, CLOUD_REPLY_DOWN, CLOUD_ANSWER_DOWN, CLOUD_FALLBACKS, CONNECTOR_SYNC_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, sendLocalWindow, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, GATEWAY_REQUESTS, LANE_OFF, MACHINE_ADDON_REQUESTS, PAIR_WAIT_MS, SERVICE_HTTP_ROUTES, SERVICE_WS_FRAMES, WIFI_REQUESTS, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, WIFI_FALLBACKS, WORKSPACES_FALLBACKS, WORKSPACES_OFF, WORKSPACES_UNAVAILABLE, type CoreApiDeps } from './api.js'
 import { FAIL, readFallback } from './serviceHost.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
 import { answerAgentQuery } from './agentQueries.js'
@@ -58,11 +58,13 @@ describe('the core API services stand on', () => {
   it('sends a window\'s ⌘K and its answer to a spoken task to the devices, as a request they declare', () => {
     const frames = SERVICE_WS_FRAMES.filter(each => each.type === 'devices_ws')
     expect(frames.map((each) => [each.frame, each.type, each.result])).toEqual([
-      ['route_task', 'devices_ws', 'route_result'], ['route_send', 'devices_ws', 'route_send_result'], ['voice_route_reply', 'devices_ws', undefined]])
+      ['route_task', 'devices_ws', 'route_result'], ['route_send', 'devices_ws', 'route_send_result'], ['harness_device_step', 'devices_ws', 'harness_device_step_result'], ['harness_device_scroll', 'devices_ws', undefined], ['voice_route_reply', 'devices_ws', undefined]])
     for (const each of frames) expect((DEVICES_REQUESTS as readonly string[]).includes(each.type)).toBe(true)
     const reason = 'the devices service is unavailable'
     expect(frames[0].unanswered).toEqual({ agentId: '', machineId: '', name: '', confidence: 0, reason, candidates: [], weighed: 0, machines: 0, via: '' })
     expect(frames[1].unanswered).toEqual({ ok: false, machine: '', reason })
+    expect(frames[2]).toMatchObject({ waitMs: 5000, unanswered: { error: 'DESK_UNAVAILABLE' } })
+    for (const each of frames.slice(2, 4)) expect(each).not.toHaveProperty('rpc')
   })
   it('gives a service with no lane of the core\'s nothing to seal with, and never its frame back in the clear', async () => {
     await expect(LANE_OFF.hello('m', 'pub')).rejects.toThrow(/no E2EE identity/)
@@ -163,7 +165,6 @@ describe('the core API services stand on', () => {
       hasWindow: vi.fn(() => true),
       devicesChanged: vi.fn(),
       dialWatching: vi.fn(),
-      wifi: WIFI_OFF,
       lastTurn: vi.fn(async () => null),
       turnCard: vi.fn(),
       turnSummary: vi.fn(),
@@ -766,9 +767,8 @@ describe('the core API services stand on', () => {
     const reason = 'the devices service is unavailable'
     expect(SERVICE_WS_FRAMES.find(route => route.frame === 'route_task')?.unanswered).toMatchObject({ agentId: '', reason, candidates: [] })
     expect(SERVICE_WS_FRAMES.find(route => route.frame === 'route_send')?.unanswered).toEqual({ ok: false, machine: '', reason })
-    // The Wi-Fi device finds no desk to walk; the dial and the window bridges hear nothing.
-    expect(readFallback(DEVICES_FALLBACKS.stepFocus).value).toBe('no_agents')
-    for (const member of ['card', 'desk', 'swarms', 'unread', 'appFocus', 'seen', 'settings', 'windowFocus', 'windowReply', 'windowGone', 'scroll', 'engines', 'commanders'] as const) {
+    expect(DEVICES_FALLBACKS).not.toHaveProperty('stepFocus')
+    for (const member of ['card', 'desk', 'swarms', 'unread', 'appFocus', 'seen', 'settings', 'windowFocus', 'windowReply', 'windowGone', 'engines', 'commanders'] as const) {
       expect(DEVICES_FALLBACKS[member], member).toBeUndefined()
     }
     expect(readFallback(DEVICES_FALLBACKS.stop)).toEqual({ deferred: true, value: undefined })
@@ -790,15 +790,6 @@ describe('the core API services stand on', () => {
     for (const member of ['delivery', 'input', 'disconnected', 'revealed'] as const) {
       expect(WIFI_FALLBACKS[member], member).toBeUndefined()
     }
-  })
-
-  it('gives a service that is not the Wi-Fi device\'s doors that list, send, make and move nothing', async () => {
-    expect(WIFI_OFF).not.toHaveProperty('stop')
-    expect(WIFI_OFF).not.toHaveProperty('create')
-    expect(await WIFI_OFF.stepFocus('next')).toBe('no_app')
-    expect(WIFI_OFF.scroll('down', 0, 0)).toBe(false)
-    expect(WIFI_OFF).not.toHaveProperty('focusApp')
-    expect(WIFI_OFF).not.toHaveProperty('reveal')
   })
 
   it('falls back, when Agent Messages fails, to writing none of its deliveries', () => {

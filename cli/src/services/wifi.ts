@@ -25,6 +25,9 @@ import { DeviceResultJournal } from '../lib/autonomous-device/resultJournal.js'
 import { AutonomousDeviceService, type AutonomousDeviceFrame } from '../lib/autonomous-device/service.js'
 import { deviceRefusal, deviceRoutes } from '../lib/autonomous-device/localHttp.js'
 import { createDeviceStore } from '../lib/autonomous-device/storeRuntime.js'
+import { deviceDeskFor } from './deviceDesk.js'
+import { deskStroke } from '../lib/autonomous-device/deskProtocol.js'
+import { stepDeviceDesk } from '../lib/autonomous-device/deskClient.js'
 import { cancelTurn } from '../agentClient/cancel.js'
 import { observeQuestions, type QuestionAnswerBudget, type QuestionListener, type QuestionObservation } from '../agentClient/questions.js'
 import { createDeviceEvidence, DeviceEvidencePool } from '../lib/autonomous-device/evidenceReader.js'
@@ -45,8 +48,8 @@ const inlineAnswerWork = new DeviceWorkBudget()
 export interface WifiDeps {
   /** Process-owned source and binding checks composed with the same validated projection used inline. */
   readView?: (signal?: AbortSignal) => Promise<WifiView>
-  /** Same-worker desk calls carry this component's lifetime without adding a core API rule. */
-  desk?: import('./deviceDesk.js').DeviceDeskClient
+  /** Capture the process adapter's verified binding before an effect can await. */
+  deskCurrent?: () => () => boolean
   /** Explicit composition: an absent service token never silently creates an unrelated peer authority. */
   peer?: { composition: 'inline' | 'services'; port: number; token?: string }
   /** Swapped in tests, to reach what the service and the Store are given. */
@@ -131,25 +134,21 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
     requestAppFocus: (agentId, expiresAt, focusRevision) => core.clients.sendWindow({ target: { kind: 'first' },
       frame: { type: 'device_focus', payload: { machineId, agentId, expiresAt, focusRevision } } }),
     stepFocus: async (direction, currentAgentId) => {
-      const epoch = coreEpoch, current = () => !stopped && coreConnected && coreEpoch === epoch
+      const epoch = coreEpoch, bound = deps.deskCurrent?.() ?? (() => true)
+      const current = () => !stopped && coreConnected && coreEpoch === epoch && bound()
       if (!current()) return 'no_agents'
-      if (deps.desk) {
-        const result = await deps.desk.stepFocus(direction, currentAgentId, current)
-        return current() ? result : 'no_agents'
-      }
-      // Explicit inline mode uses the existing guarded devices port; mixed hosts keep the core route.
-      if (ports.devices && !view.hasWindow) return 'no_app'
-      const result = await (ports.devices?.stepFocus(direction, currentAgentId) ?? core.wifi.stepFocus(direction, currentAgentId))
+      if (!view.hasWindow) return 'no_app'
+      const desk = deviceDeskFor(core.dataDir, machineId)
+      const result = await (desk ? desk.stepFocus(direction, currentAgentId, current)
+        : stepDeviceDesk({ dataDir: core.dataDir, port: deps.peer?.port ?? core.daemon.port, machineId }, direction, currentAgentId, current, cancellations.signal))
       return current() ? result : 'no_agents'
     },
     scroll: (phase, dy, velocity) => {
-      const current = () => !stopped && coreConnected
-      if (!current()) return false
-      if (deps.desk) return deps.desk.scroll(phase, dy, velocity, current)
-      if (!ports.devices) return core.wifi.scroll(phase, dy, velocity)
-      if (!view.hasWindow) return false
-      ports.devices.scroll(phase, dy, velocity)
-      return true
+      const epoch = coreEpoch, bound = deps.deskCurrent?.() ?? (() => true)
+      const current = () => !stopped && coreConnected && coreEpoch === epoch && bound()
+      if (!current() || !view.hasWindow) return false
+      const desk = deviceDeskFor(core.dataDir, machineId)
+      return desk ? desk.scroll(phase, dy, velocity, current) : feed?.scroll(phase, dy, velocity) ?? false
     },
     agents: () => view.agents,
     submit: async (agentId, text, deliveryId) => {
@@ -373,7 +372,16 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
     },
     failed: code => console.warn(`[wifi] ${code}`),
     beforeReady: async () => { await ensureFeed(); await ensureQuestions() },
-    beforeRequest: refresh,
+    beforeRequest: async request => {
+      const epoch = coreEpoch, own = feed, bound = deps.deskCurrent?.() ?? (() => true)
+      const current = () => !stopped && coreConnected && epoch === coreEpoch && bound()
+      await refresh()
+      if (request.type !== 'scroll' || !deskStroke(request.phase, request.dy ?? 0, request.velocity ?? 0)) return
+      const unavailable = { code: 'FOCUS_UNAVAILABLE', message: 'Open Harness Desktop to scroll a terminal' }
+      if (!current()) return unavailable
+      if (deviceDeskFor(core.dataDir, machineId)) return
+      if (!own || feed !== own || !await own.deskReady() || !current() || feed !== own) return unavailable
+    },
   })
   function emit(frame: AutonomousDeviceFrame, deviceId?: string): void {
     relay.emit(frame, deviceId)

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { SERVICE_WS_FRAMES } from './api.js'
 import type { Asker, HttpAnswer, ServiceHttpRoute, ServiceWsFrame } from './api.js'
 import { createServiceRoutes, type ServiceRouter } from './serviceRoutes.js'
 import { createServiceLinks, type ServiceFrame } from './serviceLinks.js'
@@ -28,6 +29,23 @@ const frame = (doors: ReturnType<typeof createServiceRoutes>, connection: string
   doors.frames.get(message.type as string)?.(connection, message)
 
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
+
+it('routes the two local desk declarations without granting any RPC caller desk authority', async () => {
+  const linked = router(['devices_ws'], () => ({ protocol: 1, machineId: 'm', requestId: 'cannot-replace' }))
+  const doors = createServiceRoutes({ routes: [], frames: SERVICE_WS_FRAMES, linked, hosted: router([]) })
+  const answer = vi.fn()
+  for (const type of ['harness_device_step', 'harness_device_scroll']) {
+    for (const asker of [{ local: true, owner: true }, { local: false, owner: true }, { local: true, owner: false }, { local: false, owner: false, guest: 'guest' }]) {
+      expect(doors.route(type, {}, asker, answer)).toBe(false)
+    }
+  }
+  expect(linked.route).not.toHaveBeenCalled()
+  expect(await frame(doors, 'local:tool', { type: 'harness_device_step', payload: { requestId: 'exact', machineId: 'm', probe: true } }))
+    .toEqual({ type: 'harness_device_step_result', payload: { requestId: 'exact', protocol: 1, machineId: 'm' } })
+  expect(linked.route).toHaveBeenCalledWith('devices_ws', { frame: 'harness_device_step', payload: { requestId: 'exact', machineId: 'm', probe: true } },
+    { local: true, owner: true, connection: 'local:tool' }, expect.any(Function), 5000)
+  expect(await frame(doors, 'local:tool', { type: 'harness_device_scroll', payload: { machineId: 'm', phase: 'up', dy: 0, velocity: 0 } })).toBeNull()
+})
 
 describe('declared service frames over owner RPC', () => {
   const frames = [{ frame: 'pick', type: 'thing_ws', result: 'picked', waitMs: 25_000, unanswered: { chosen: false }, rpc: 'owner' },

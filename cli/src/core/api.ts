@@ -417,13 +417,6 @@ export interface CoreApi {
   daemon: DaemonAddress
   /** The cloud agents' doors into the core (services/cloud.ts): absent from a core or a process that offers them none. */
   cloud?: CloudCore
-  /** The Wi-Fi device's doors into the core (services/wifi.ts): each one call it made when it ran here. */
-  wifi: {
-    /** Move the window's focus one agent along the desk, the dial's way; 'no_app' without a window. */
-    stepFocus(direction: 'next' | 'previous', currentAgentId?: string): Promise<{ machineId: string; agentId: string } | 'no_agents' | 'no_app'>
-    /** A stroke on the device's glass for the window's terminal; false without a window. */
-    scroll(phase: 'down' | 'move' | 'up', dy: number, velocity: number): boolean
-  }
 }
 
 /** An ID-only session create for components; launch identity stays with the core. */
@@ -1523,10 +1516,6 @@ export interface DevicesPort extends DeviceHookPort {
   windowReply(kind: 'selection' | 'visit' | 'form', connId: string, machineId: string, payload: Record<string, unknown>): void
   /** A window left. */
   windowGone(connId: string): void
-  /** The Wi-Fi device borrowing the dial's walk along the desk, through the core (`CoreApi.wifi.stepFocus`). */
-  stepFocus(direction: 'next' | 'previous', currentAgentId?: string): Promise<{ machineId: string; agentId: string } | 'no_agents'>
-  /** The Wi-Fi device borrowing the dial's stroke for the window's terminal. */
-  scroll(phase: 'down' | 'move' | 'up', dy: number, velocity: number): void
   /** The engines the live agents run: the voice router's worker is one of them. */
   engines(engines: string[]): void
   /** Whether a device watches through the backend: the voice router keeps its worker warm meanwhile. */
@@ -1551,7 +1540,7 @@ const UNSENT: SendResult = { ok: false, machine: '', reason: DEVICES_UNAVAILABLE
 export const DEVICES_FALLBACKS: PortFallbacks<DevicesPort> = {
   card: undefined, desk: undefined, swarms: undefined, unread: undefined, appFocus: undefined, seen: undefined,
   settings: undefined, windowFocus: undefined, windowReply: undefined, windowGone: undefined,
-  stepFocus: later('no_agents'), scroll: undefined, engines: undefined, commanders: undefined, observed: false,
+  engines: undefined, commanders: undefined, observed: false,
   // Off, not an empty hold: the mod asks again in a minute, not at once.
   inboxPoll: later({ off: true }), inboxGone: undefined,
   stop: later(undefined),
@@ -1589,11 +1578,6 @@ export interface WifiPort {
   /** A window opened the agent a device's Store preparation made. */
   revealed(operationId: string, agentId: string): void
   stop(): Promise<void>
-}
-
-/** The Wi-Fi device's doors, for a service that is not it: nothing is listed, sent, made or moved. */
-export const WIFI_OFF: CoreApi['wifi'] = {
-  stepFocus: async () => 'no_app', scroll: () => false,
 }
 
 /**
@@ -2015,6 +1999,9 @@ export const SERVICE_WS_FRAMES: readonly ServiceWsFrame[] = [
   { frame: 'route_task', type: 'devices_ws', rpc: 'owner', result: 'route_result', waitMs: 25_000, unanswered: { ...UNROUTED } },
   // ⌘K's send, through the fleet's router: the turn delivered on the agent's own machine, or refused with why.
   { frame: 'route_send', type: 'devices_ws', rpc: 'owner', result: 'route_send_result', waitMs: 5_000, unanswered: { ...UNSENT } },
+  // Component desk gestures use this same local door, with no relay RPC grant.
+  { frame: 'harness_device_step', type: 'devices_ws', result: 'harness_device_step_result', waitMs: 5_000, unanswered: { error: 'DESK_UNAVAILABLE' } },
+  { frame: 'harness_device_scroll', type: 'devices_ws', waitMs: 5_000 },
   // The window's answer to a spoken task the devices offered it (cable/windowRoute.ts): taken, then sent or cancelled.
   { frame: 'voice_route_reply', type: 'devices_ws', waitMs: 5_000 },
 ]
@@ -2181,8 +2168,6 @@ export interface CoreApiDeps {
   hasWindow: CoreApi['clients']['hasWindow']
   devicesChanged: CoreApi['clients']['devicesChanged']
   dialWatching: CoreApi['clients']['dialWatching']
-  /** The Wi-Fi device's remaining stateless doors (core/wifiAgents.ts). */
-  wifi: CoreApi['wifi']
   /** The cloud agents' doors (core/agents/cloud.ts). */
   cloud?: CloudCore
   /** The running cloud harnesses as list rows (`agents.cloud`). */
@@ -2301,7 +2286,7 @@ export function createCoreApi({
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, tabKey, tabRelay, connectorSync, observer, privateGridName, machineName, backend, onNotice,
   runtimeProfile, setRuntime, fork, create, dsh, facts, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, streamFrame, streamBytes, machine, activityText, activitySnapshot, activity, summaries,
   closeAgent, activityAt, follow, panePid,
-  signedIn, environment, machines, hasWindow, devicesChanged, dialWatching, wifi, cloud, cloudRows, cloudRead, lastTurn, turnCard, turnSummary,
+  signedIn, environment, machines, hasWindow, devicesChanged, dialWatching, cloud, cloudRows, cloudRead, lastTurn, turnCard, turnSummary,
   count, hachiGoalDone, log = (line) => console.warn(line),
 }: CoreApiDeps): CoreApi {
   // The recaps reach the devices and the apps through their own two doors, and only with their own frames.
@@ -2388,7 +2373,6 @@ export function createCoreApi({
       ...(goalDone ? { hachiGoalDone: goalDone } : {}),
     },
     daemon,
-    wifi,
     ...(cloud ? { cloud } : {}),
   }
 }

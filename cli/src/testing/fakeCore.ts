@@ -84,10 +84,7 @@ export function fakeCore(over: Overrides = {}): CoreApi {
       ...over.clients,
     },
     daemon: { command: 'harness', port: 18473, machineId: () => 'machine-1', autonomousEnv: 'prod', ...over.daemon },
-    wifi: {
-      stepFocus: vi.fn(async () => 'no_agents' as const), scroll: vi.fn(() => true),
-      ...over.wifi,
-    },
+
     // Only a spec that gives a counter has one, as only a core that offers it does.
     ...(over.count ? { count: over.count } : {}),
     // Only a spec that gives the cloud agents doors has them, as only a core that offers them does.

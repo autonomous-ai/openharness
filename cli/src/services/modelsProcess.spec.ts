@@ -339,6 +339,9 @@ describe('a grid launch the core asks models to build, as models reads it', () =
   const machine = { hermesSystemManaged: true }
 
   it('takes the engine, the launch, the machine and a relaunch as the core sent them', () => {
+    expect(gridLaunchRequestIn({ engine: 'grok', override: LAUNCH, machine: { ...machine, grokHome: '/home/grok' } }))
+      .toMatchObject({ machine: { grokHome: '/home/grok' } })
+    expect(gridLaunchRequestIn({ engine: 'grok', override: LAUNCH, machine: { ...machine, grokHome: 7 } })).toBeNull()
     expect(gridLaunchRequestIn({ engine: 'codex', override: LAUNCH, machine })).toEqual({ engine: 'codex', override: LAUNCH, machine })
     expect(gridLaunchRequestIn({ engine: 'opencode', override: LAUNCH, machine: { ...machine, opencodeMajor: null }, refresh: true }))
       .toEqual({ engine: 'opencode', override: LAUNCH, machine: { ...machine, opencodeMajor: null }, refresh: true })

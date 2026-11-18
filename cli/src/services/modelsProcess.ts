@@ -143,7 +143,6 @@ export function modelsCoreApi(dataDir: string, ask: (query: string, payload?: Pa
       ...UNASKED.clients,
     },
     daemon: DAEMON_UNKNOWN,
-    wifi: UNASKED.wifi,
   }
 }
 

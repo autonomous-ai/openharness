@@ -8,9 +8,8 @@
  * application hello state come from the gateway peer. What a person asks of it
  * (`harness device receipt`, its add-ons) are its routes of the door (core/serviceRoutes.ts).
  *
- * What it asks of the core is `CoreApi`'s Wi-Fi doors, as it would call them in the core's process:
- * the agents as it lists them, a stop, an agent made for a Store harness, a step along the desk
- * and a recent turn, as queries; the rest as notices.
+ * Its remaining reads name this machine and recent turns. Create uses the shared ID-only primitive
+ * under its existing empty-launch grant; desk gestures and Stop use ordinary component client doors.
  */
 import type { CoreApi, WifiPort } from './api.js'
 import type { ServiceFrame } from './serviceLinks.js'
@@ -24,7 +23,6 @@ export interface WifiLinkDeps {
 }
 
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
-const number = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) ? value : 0)
 
 export function createWifiLink(deps: WifiLinkDeps) {
   const { core } = deps
@@ -49,15 +47,7 @@ export function createWifiLink(deps: WifiLinkDeps) {
     // Asked, not told: the pane's lock says what became of the prompt as it takes it, and the device's reply
     // carries that, as it did when the service ran in the core's process.
     recent: async ({ agentId, n }) => ({ turns: await core.turns.recent(text(agentId), typeof n === 'number' ? n : 3) }),
-    stepFocus: async ({ direction, currentAgentId }) => {
-      const step = await core.wifi.stepFocus(direction === 'previous' ? 'previous' : 'next', typeof currentAgentId === 'string' ? currentAgentId : undefined)
-      return typeof step === 'string' ? { step } : { ...step }
-    },
-  }
 
-  /** What the service tells the core without asking (`service_notice`), by kind. */
-  const notices: Record<string, (payload: Record<string, unknown>) => void> = {
-    scroll: ({ phase, dy, velocity }) => { if (phase === 'down' || phase === 'move' || phase === 'up') core.wifi.scroll(phase, number(dy), number(velocity)) },
   }
 
   return {
@@ -76,9 +66,7 @@ export function createWifiLink(deps: WifiLinkDeps) {
     },
     notice(payload: Record<string, unknown>): void {
       const kind = text(payload.kind)
-      const tell = Object.hasOwn(notices, kind) ? notices[kind] : undefined
-      if (!tell) { log(`[services] wifi said ${kind.slice(0, 40) || 'nothing'}, which the core does not hear`); return }
-      tell(payload)
+      log(`[services] wifi said ${kind.slice(0, 40) || 'nothing'}, which the core does not hear`)
     },
   }
 }

@@ -14,12 +14,14 @@
  * tabs, unread rows and focus it keeps, and says again whenever the devices start.
  *
  * The Wi-Fi device is a service of its own beside these (services/wifi.ts), in the same process, on a link
- * of its own: it rides the gateway's sessions, and borrows the dial's walk and stroke through the core.
+ * of its own: it rides the gateway's sessions and calls the devices' bounded desk endpoint.
  */
 import { randomUUID } from 'node:crypto'
 import { existsSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { deviceDeskFor, publishDeviceDesk, type DeviceDesk } from './deviceDesk.js'
+import { deskRequest, DESK_WAIT_MS } from '../lib/autonomous-device/deskProtocol.js'
 import { createOwnerCommands } from './ownerCommands.js'
 import { env } from '../config/env.js'
 import { DEVICES_FALLBACKS, DEVICES_REQUESTS, type CoreApi, type CorePorts, type DeviceHookPort, type DevicesPort, type RouteAnswer, type SendResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
@@ -131,7 +133,7 @@ export interface DevicesDeps {
   onExit?: (run: () => void) => void
   /** Read this computer's agents again before a list is built from them: in their own process the devices
    *  keep a copy, asked of the core as the dial's tick or ⌘K needs it (services/devicesProcess.ts). */
-  refresh?: () => Promise<void>
+  refresh?: () => Promise<boolean>
   /** Called with a function this part runs whenever its link to the core drops: the calls that core held have failed. */
   onCoreGone?: (run: () => void) => void
   /** Old cores' private route calls, retained only in this service process until 2026-12-16. */
@@ -259,6 +261,7 @@ function observedSource(
 
 export function startDevices(core: DevicesCore, ports: CorePorts, deps: DevicesDeps): ServiceRequests {
   const log = deps.log ?? ((line: string) => console.log(line))
+  const refreshDisplay = deps.refresh ? async () => { await deps.refresh!() } : undefined
   const monotonic = deps.now ?? (() => performance.now())
   const tally = createTally((line) => log(`[cable] ${line}`))
   const tierOf = deps.decideTier ?? createTierDecider({
@@ -297,7 +300,7 @@ export function startDevices(core: DevicesCore, ports: CorePorts, deps: DevicesD
   // the trust group read; this copy writes no file of its own, so `machines.json` has one writer.
   const machines = new MachineListCache(() => core.account.machines(), () => core.machine.computerId(),
     (line) => log(`[cable] ${line}`), core.dataDir, () => null, false)
-  const fleet: Fleet | null = part.start('fleet', () => startFleet(core, { machines, desk: () => desk, refresh: deps.refresh }).fleet, FLEET_FALLBACKS)
+  const fleet: Fleet | null = part.start('fleet', () => startFleet(core, { machines, desk: () => desk, refresh: refreshDisplay }).fleet, FLEET_FALLBACKS)
 
   // ── the window bridges ─────────────────────────────────────────────────────────────────────────────
   //
@@ -715,7 +718,7 @@ export function startDevices(core: DevicesCore, ports: CorePorts, deps: DevicesD
   const cableHost = new DaemonCableHost({
     // The cloud harnesses too, where the core offers them: tiles on the desk the dial walks like any other.
     sessions: () => [...core.agents.advertised(), ...core.agents.cloud?.() ?? []],
-    refresh: deps.refresh,
+    refresh: refreshDisplay,
     displayName: (session) => core.agents.displayName(session),
     appFocus: () => focus.voice ?? undefined,
     activityText: async (agentId) => {
@@ -1557,6 +1560,7 @@ export function startDevices(core: DevicesCore, ports: CorePorts, deps: DevicesD
     .catch((): null => { log('[devices] listener not opened · failed'); return null })
 
   let stopped = false
+  let revokeDesk: (() => void) | undefined
   if (deps.cableDisabled) log('[cable] disabled (CABLE_DISABLE=true) — the serial port is left alone')
   else if (!listening) cable.start()
   else {
@@ -1821,9 +1825,6 @@ export function startDevices(core: DevicesCore, ports: CorePorts, deps: DevicesD
       windowForm.disconnected(connId)
       windowSelection.focusChanged()
     }),
-    // The Wi-Fi device borrows the dial's walk along the desk and its stroke, until it is one of the devices.
-    stepFocus: (direction, currentAgentId) => cableHost.stepFocus(direction, currentAgentId, () => !stopped),
-    scroll: (phase, dy, velocity) => cableHost.scrolled(phase, dy, velocity),
     // The voice router warms a worker on an engine the machine runs, while a device is watching.
     engines: (engines) => setVoiceRouterSessions(engines.map((engine) => ({ engine }))),
     commanders: (connected) => setVoiceRouterDeviceConnected(connected),
@@ -1834,6 +1835,7 @@ export function startDevices(core: DevicesCore, ports: CorePorts, deps: DevicesD
     stop: async () => {
       // A cable still waiting on the listener never starts.
       stopped = true
+      revokeDesk?.()
       // The listener before anything, once it has opened: no front reaches a stopped cable or sets a timer after the
       // timers below are cleared.
       await (await listening)?.close()
@@ -1851,10 +1853,17 @@ export function startDevices(core: DevicesCore, ports: CorePorts, deps: DevicesD
     },
   }
   ports.devices = port
-  deps.onDesk?.({
+  const direct: DeviceDesk = {
     stepFocus: (direction, currentAgentId, current) => cableHost.stepFocus(direction, currentAgentId, () => !stopped && current()),
     scroll: (phase, dy, velocity, current) => { if (!stopped && current()) cableHost.scrolled(phase, dy, velocity) },
-  })
+  }
+  if (deps.onDesk) deps.onDesk(direct)
+  else {
+    const machineId = core.machine.id()
+    revokeDesk = publishDeviceDesk({ dataDir: core.dataDir, machineId, desk: direct, faults: deps.faults, log,
+      current: () => !stopped && !!machineId && core.machine.id() === machineId, hasWindow: () => core.clients.hasWindow(),
+    })
+  }
 
   // The Devices tab: physical devices belong to this machine, and only its owner may manage them.
   const tab = {
@@ -1899,13 +1908,30 @@ export function startDevices(core: DevicesCore, ports: CorePorts, deps: DevicesD
     }
     return { error: 'UNKNOWN_FRAME' }
   }
+  const deskFrame: NonNullable<ServiceRequests[string]> = async (payload, asker, closed) => {
+    if (!asker.local || !asker.owner || !asker.connection || asker.rpcRoute || !closed || closed.aborted || stopped) return { error: 'LOCAL_ONLY' }
+    const request = deskRequest(payload.frame as string, payload.payload)
+    if (!request) return { error: 'INVALID_REQUEST' }
+    const peer = deviceDeskFor(core.dataDir, request.machineId)
+    const current = (): boolean => !stopped && !closed.aborted && core.machine.id() === request.machineId
+      && deviceDeskFor(core.dataDir, request.machineId) === peer
+    if (!peer || !current()) return { error: 'DESK_UNAVAILABLE' }
+    if (request.kind === 'probe') return { protocol: 1, machineId: request.machineId }
+    if (request.kind === 'scroll') return { ok: peer.scroll(request.phase, request.dy, request.velocity, current) }
+    if (request.expiresAt <= Date.now() || request.expiresAt > Date.now() + DESK_WAIT_MS) return { error: 'DESK_TIMEOUT' }
+    if (deps.refresh && !await deps.refresh() || !current()) return { error: 'DESK_UNAVAILABLE' }
+    const result = await peer.stepFocus(request.direction, request.currentAgentId, () => current() && Date.now() < request.expiresAt)
+    if (!current() || Date.now() >= request.expiresAt) return { error: 'DESK_UNAVAILABLE' }
+    return typeof result === 'string' ? { step: result } : { ...result }
+  }
   // Pets name files on this computer by path, so they are answered to a process here only, never the owner's relayed app.
   const local = (type: string) => (payload: Record<string, unknown>, asker: { local?: boolean; owner: boolean }) =>
     !asker.owner ? { error: 'OWNER_REQUIRED' } : asker.local ? harnessDevicesRequest(tab, type, payload) : { error: 'LOCAL_ONLY' }
   return {
     harness_devices_list: answer('harness_devices_list'), harness_device_settings: answer('harness_device_settings'),
     pet_preview: local('pet_preview'), pet_apply: local('pet_apply'), pet_reset: local('pet_reset'), pet_status: local('pet_status'),
-    devices_ws: (payload, asker, closed) => asker.rpcRoute === true
+    devices_ws: (payload, asker, closed) => payload.frame === 'harness_device_step' || payload.frame === 'harness_device_scroll'
+      ? deskFrame(payload, asker, closed) : asker.rpcRoute === true
       ? ownerCommand(typeof payload.frame === 'string' ? payload.frame : '',
         payload.payload && typeof payload.payload === 'object' && !Array.isArray(payload.payload) ? payload.payload as Record<string, unknown> : {}, asker, closed)
       : windowFrame(payload, asker),

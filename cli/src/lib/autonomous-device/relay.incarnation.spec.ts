@@ -44,6 +44,16 @@ describe('device replies belong to their original E2EE session', () => {
     expect(f.relay.connected()).toBe(false)
   })
 
+  it('does not reject a replacement peer when the old hello readiness fails later', async () => {
+    let reject!: (error: Error) => void
+    const f = fixture(() => new Promise<void>((_, fail) => { reject = fail }))
+    const opening = f.hello()
+    f.replacePeer(); f.send.mockClear()
+    reject(new Error('unavailable')); await opening
+    expect(f.send).not.toHaveBeenCalled()
+    expect(f.relay.helloed()).toEqual(['reused-connection'])
+  })
+
   it('does not send an old async result into a replacement that has completed its own hello', async () => {
     const reading = pending<unknown[]>()
     const f = fixture(undefined, () => reading.promise)

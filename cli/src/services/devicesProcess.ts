@@ -61,7 +61,6 @@ export interface DevicesServiceOptions {
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [])
 const object = (value: unknown): Record<string, unknown> => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {})
-const number = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) ? value : 0)
 
 /** The window that has the person's attention, as the core sent it; nothing for anything else. */
 function focusOf(value: unknown): WindowFocus {
@@ -108,12 +107,12 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     }) }
   }
   /** One ask of the core's view at a time: the dial's tick and ⌘K asking together share it. */
-  let viewing: { generation: number; promise: Promise<void>; closed: AbortController } | null = null
-  const refresh = (): Promise<void> => {
+  let viewing: { generation: number; promise: Promise<boolean>; closed: AbortController } | null = null
+  const refresh = (): Promise<boolean> => {
     if (viewing?.generation === generation) return viewing.promise
-    if (!core) return Promise.resolve()
+    if (!core) return Promise.resolve(false)
     const origin = core, epoch = generation
-    const pending = { generation: epoch, promise: Promise.resolve(), closed: new AbortController() }
+    const pending = { generation: epoch, promise: Promise.resolve(false), closed: new AbortController() }
     pending.promise = readSessionView((scope, receive, signal) => readCoreSessionRecords(origin, scope, receive, signal), 'advertised', header => {
       const agents: Viewed[] = []
       return { row: (member, budget) => {
@@ -129,10 +128,11 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
         signedIn: header.signedIn, environment: header.environment, hasWindow: header.hasWindow,
       }) }
     }, pending.closed.signal).then(next => {
-      if (stopped || generation !== epoch || core !== origin) return
+      if (stopped || generation !== epoch || core !== origin) return false
       view = next
       publishDesk()
-    }).catch(() => { /* the core went away; its next connection is asked again */ }).finally(() => { if (viewing === pending) viewing = null })
+      return true
+    }).catch(() => false).finally(() => { if (viewing === pending) viewing = null })
     viewing = pending
     return pending.promise
   }
@@ -228,7 +228,6 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     },
     daemon: DAEMON_UNKNOWN,
     // The Wi-Fi device beside the dials has a link of its own (services/wifiProcess.ts).
-    wifi: unasked.wifi,
   }
 
   const ports: CorePorts = emptyPorts()
@@ -265,7 +264,6 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     windowReply: ({ which, connId, machineId, reply }) =>
       port.windowReply(which === 'form' ? 'form' : which === 'visit' ? 'visit' : 'selection', text(connId), text(machineId), object(reply)),
     windowGone: ({ connId }) => port.windowGone(text(connId)),
-    scroll: ({ phase, dy, velocity }) => { if (phase === 'down' || phase === 'move' || phase === 'up') port.scroll(phase, number(dy), number(velocity)) },
     engines: ({ engines }) => port.engines(strings(engines)),
     commanders: ({ connected }) => port.commanders(connected === true),
     // The mod's poll whose client went before its answer (core/deviceHookCalls.ts): it ends.
@@ -290,12 +288,6 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     ...requests,
     // Direct service-owned closures preserve old private port replies until 2026-12-16.
     ...legacyCommands,
-    // What the core asks of the devices (core/devicesLink.ts), under types only the core sends: no client's
-    // request is routed here under these names (core/serviceLinks.ts routes the Devices tab's alone).
-    stepFocus: async ({ direction, currentAgentId }) => {
-      const step = await port.stepFocus(direction === 'previous' ? 'previous' : 'next', typeof currentAgentId === 'string' ? currentAgentId : undefined)
-      return step === 'no_agents' ? { step } : { ...step }
-    },
     // The mod's poll, checked and bounded by the core (core/deviceHookCalls.ts), and held here until a transcript takes it
     // or the hold runs out.
     inboxPoll: async ({ pollId, sessionId }) => ({ ...await port.inboxPoll({ pollId: text(pollId), sessionId: text(sessionId) }) }),
