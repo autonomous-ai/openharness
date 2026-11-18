@@ -149,6 +149,13 @@ mod tests {
     }
 
     #[test]
+    fn a_variable_with_a_trailing_slash_names_the_same_folder() {
+        // As text: a PathBuf compares by its parts, so it would let `/d//harness` pass.
+        let (data, state) = linux_roots(&[("XDG_DATA_HOME", "/d/"), ("XDG_STATE_HOME", "/s/")], &[]);
+        assert_eq!((data.to_str().unwrap(), state.to_str().unwrap()), ("/d/harness", "/s/harness"));
+    }
+
+    #[test]
     fn off_linux_the_rule_is_not_run() {
         for root in [Root::Data, Root::State] {
             assert_eq!(harness_root_with(Path::new("/h"), root, &OFF_LINUX), PathBuf::from("/h").join(".harness"));
@@ -172,7 +179,7 @@ mod tests {
 
     /// `_hn_state_root` as shell_integration.sh defines it between its markers, run by `sh` for `home` and `env`.
     #[cfg(unix)]
-    fn shell_state_root(uname: &str, home: &Path, env: &[(&str, &str)]) -> PathBuf {
+    fn shell_state_root(uname: &str, home: &Path, env: &[(&str, &str)]) -> String {
         let script = include_str!("shell_integration.sh");
         let start = script.find("# >>> harness state root\n").expect("the start marker");
         let end = script.find("# <<< harness state root\n").expect("the end marker");
@@ -182,17 +189,32 @@ mod tests {
         sh.arg("-c").arg(text).env("HOME", home).env_remove("XDG_DATA_HOME").env_remove("XDG_STATE_HOME");
         let out = sh.envs(env.iter().copied()).output().unwrap();
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-        PathBuf::from(String::from_utf8(out.stdout).unwrap().trim_end_matches('\n'))
+        String::from_utf8(out.stdout).unwrap().trim_end_matches('\n').to_string()
     }
 
+    /// The state root tests/harness_home.py lays the fixtures out in for `home` and `env`, on this computer.
+    #[cfg(unix)]
+    fn fixture_state_root(home: &Path, env: &[(&str, &str)]) -> String {
+        let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/harness_home.py");
+        let mut python = std::process::Command::new("python3");
+        python.arg(script).arg(home).arg("shell-requests").env_remove("XDG_DATA_HOME").env_remove("XDG_STATE_HOME");
+        let out = python.envs(env.iter().copied()).output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let entry = String::from_utf8(out.stdout).unwrap();
+        entry.trim_end_matches('\n').strip_suffix("/shell-requests").expect("the entry under its root").to_string()
+    }
+
+    // Compared as text: a PathBuf compares by its parts, so `a//b` would pass for `a/b`.
     #[cfg(unix)]
     #[test]
-    fn the_shell_function_gives_the_same_folder() {
+    fn the_shell_function_and_the_fixtures_give_the_same_folder() {
         let home = std::env::temp_dir().join(format!("hn-home-{}", uuid::Uuid::new_v4()));
         let custom = home.join("xdg");
         let (custom_data, custom_state) = (custom.join("data"), custom.join("state"));
         let custom_env = [("XDG_DATA_HOME", custom_data.to_str().unwrap()), ("XDG_STATE_HOME", custom_state.to_str().unwrap())];
-        let envs: [&[(&str, &str)]; 3] = [&[], &[("XDG_DATA_HOME", ""), ("XDG_STATE_HOME", "share")], &custom_env];
+        let (slashed_data, slashed_state) = (format!("{}/", custom_data.display()), format!("{}/", custom_state.display()));
+        let slashed_env = [("XDG_DATA_HOME", slashed_data.as_str()), ("XDG_STATE_HOME", slashed_state.as_str())];
+        let envs: [&[(&str, &str)]; 4] = [&[], &[("XDG_DATA_HOME", ""), ("XDG_STATE_HOME", "share")], &custom_env, &slashed_env];
         // Fresh, legacy, the default data root beside a bridge, then the custom data root too.
         let steps = [home.clone(), home.join(".harness"), home.join(".local/share/harness"), custom_data.join("harness")];
         for step in steps {
@@ -202,7 +224,13 @@ mod tests {
                 for (uname, linux) in [("Linux", true), ("Darwin", false)] {
                     let look = Look { linux, env: &read, exists: &Path::exists };
                     let rust = harness_root_with(&home, Root::State, &look);
-                    assert_eq!(shell_state_root(uname, &home, env), rust, "{uname} {env:?} with {}", step.display());
+                    let rust = rust.to_str().unwrap();
+                    let at = format!("{uname} {env:?} with {}", step.display());
+                    assert_eq!(shell_state_root(uname, &home, env), rust, "the shell: {at}");
+                    // The fixtures follow the platform they run on.
+                    if linux == cfg!(target_os = "linux") {
+                        assert_eq!(fixture_state_root(&home, env), rust, "the fixtures: {at}");
+                    }
                 }
             }
         }

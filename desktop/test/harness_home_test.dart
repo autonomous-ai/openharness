@@ -172,6 +172,18 @@ void main() {
       );
     });
 
+    test('an XDG variable\'s trailing slashes are dropped, as the CLI drops them', () {
+      expectRoots(
+        HarnessHome.of(
+          '/h',
+          join: separatorJoin('/'),
+          look: linux(environment: {'XDG_DATA_HOME': '/x/', 'XDG_STATE_HOME': '/y//'}),
+        ),
+        '/x/harness',
+        '/y/harness',
+      );
+    });
+
     test('every entry goes to the root its label names', () {
       final home = of(linux());
       for (final e in HarnessEntry.values) {

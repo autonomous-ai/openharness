@@ -145,6 +145,13 @@ mod tests {
     }
 
     #[test]
+    fn a_variable_with_a_trailing_slash_names_the_same_folder() {
+        // As text: a PathBuf compares by its parts, so it would let `/d//harness` pass.
+        let (data, state) = roots(&[("XDG_DATA_HOME", "/d/"), ("XDG_STATE_HOME", "/s/")], &[]);
+        assert_eq!((data.to_str().unwrap(), state.to_str().unwrap()), ("/d/harness", "/s/harness"));
+    }
+
+    #[test]
     fn off_linux_the_rule_is_not_run() {
         let env = |_: &str| -> Option<OsString> { panic!("read the environment") };
         let exists = |_: &Path| -> bool { panic!("looked for a folder") };
