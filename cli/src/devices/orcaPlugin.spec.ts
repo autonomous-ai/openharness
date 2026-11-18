@@ -569,6 +569,26 @@ describe('connect', () => {
     }
   })
 
+  it('a line with a character it cannot show is failed, as in the app', async () => {
+    const { deps } = setup()
+    up([])
+    const ask = async (over: Parameters<typeof approval>[1]) => {
+      orca.answer('plugin install', approval('approval_required', over), 3)
+      return orcaConnect(deps)
+    }
+    const shown = 'Đọc dự án của bạn 🚀'
+    expect(await ask({ grants: { executionDescription: shown, capabilities: [] }, data: { name: shown, version: shown } }))
+      .toMatchObject({ connect: 'approve', name: shown, version: shown, grants: [shown] })
+    // The cases of orca_cli.rs's test: bidi overrides and isolates, format characters, Unicode's line and paragraph
+    // separators (WebKit breaks a line on them), and a lone surrogate.
+    for (const unshown of ['‮', '⁦', '​', '﻿', ' ', ' ', '\uD800']) {
+      const text = `Read your${unshown} projects`
+      for (const over of [{ grants: { executionDescription: text } }, { data: { name: text } }, { data: { version: text } }]) {
+        expect({ case: [unshown, over], ...await ask(over) }).toStrictEqual({ case: [unshown, over], ...FAILED })
+      }
+    }
+  })
+
   it('an approval with no grant left is failed', async () => {
     const { deps } = setup()
     up([])
