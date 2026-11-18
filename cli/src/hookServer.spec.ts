@@ -1128,9 +1128,9 @@ describe('requests must name this server', () => {
     })
     expect(hook.status).toBe(202)
     expect(await hook.json()).toMatchObject({ pending: false, retry: true })
-    expect(error).toHaveBeenCalledWith('[hooks] GET /api/status failed:', 'status read failed')
-    expect(error).toHaveBeenCalledWith('[hooks] GET /api/status failed:', expect.stringContaining('BigInt'))
-    await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[hooks] POST /api/hook/session-start failed:', 'resolution failed after the answer'))
+    expect(error).toHaveBeenCalledWith('[hooks] GET failed:', 'Error')
+    expect(error).toHaveBeenCalledWith('[hooks] GET failed:', 'TypeError')
+    await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[hooks] POST failed:', 'string'))
     error.mockRestore()
   })
 

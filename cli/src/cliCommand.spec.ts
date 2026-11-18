@@ -446,7 +446,8 @@ describe('start beside a daemon that serves another account', () => {
 
     const result = await runAsync(root, ['start'], { PORT: String(port) })
 
-    expect(result.stdout).toContain('machine id not resolved yet')
+    expect(result.stdout).toMatch(/machine id not resolved yet — [A-Za-z_ ]+; starting on the computer id/)
+    expect(result.stdout).not.toContain('fetch failed')
     expect(result.stdout).toContain('dev mode — running in the foreground')
   }, ONE_RUN_TEST_MS)
 

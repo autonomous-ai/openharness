@@ -97,13 +97,13 @@ describe('a service in its own process', () => {
     const { host, hosted } = fakeHost()
     await startServiceProcess('usage,monitor', { runners, host })
     expect(hosted[0].services).toHaveLength(1)
-    expect(error).toHaveBeenCalledWith('[service usage] did not start · injected fault: usage')
+    expect(error).toHaveBeenCalledWith('[service usage] did not start · Error')
     await expect(startServiceProcess('usage', { runners, host })).rejects.toThrow('injected fault: usage')
     // Nothing started, no process beats for it: the master sees it end before its first heartbeat.
     expect(hosted).toHaveLength(1)
     const thrown = new Map([['usage', async () => () => { throw 'not an error' }]])
     await expect(startServiceProcess('usage', { runners: thrown, host })).rejects.toBe('not an error')
-    expect(error).toHaveBeenCalledWith('[service usage] did not start · not an error')
+    expect(error).toHaveBeenCalledWith('[service usage] did not start · string')
   })
 
   it('refuses, with exit 2 and why, a service this build does not know or a core with no socket', async () => {

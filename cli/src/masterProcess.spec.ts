@@ -343,7 +343,7 @@ describe('the master on Windows', () => {
       expect(config.stopByMessage).toBe(true)
       expect(lost.seen.redirected).toEqual([])
       expect(lost.seen.fatal).toEqual([])
-      expect(error).toHaveBeenCalledWith(expect.stringContaining('could not open the daemon log (EACCES: permission denied)'))
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('could not open the daemon log (EACCES)'))
     } finally { error.mockRestore() }
   })
 
