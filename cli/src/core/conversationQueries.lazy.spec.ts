@@ -10,7 +10,7 @@ const loading = vi.hoisted(() => ({ evaluated: vi.fn(), create: vi.fn(), gate: u
 
 const row = { agentId: 'selected', sessionId: 'conversation', engine: 'codex' } as RegisteredSession
 const wiring = { registry: { resolve: (id: string) => id === row.agentId ? row : null },
-  stopped: { get: async () => null } } as HandoffWiring
+  stopped: { get: async () => null } } as unknown as HandoffWiring
 const directory = '/private-fixture/handoff'
 const dependencies = (): HandoffDeps => ({
   resolve: id => id === row.agentId ? row : undefined,
@@ -162,7 +162,7 @@ it('keeps shared live and stopped resolution independent of unavailable handoff 
   const live = { ...row, gridLaunch: { credential: 'synthetic-live-canary' } } as unknown as RegisteredSession
   const stopped = { ...row, agentId: 'stopped', gridLaunch: { credential: 'synthetic-stopped-canary' } } as unknown as RegisteredSession
   const shared = { registry: { resolve: (id: string) => id === row.agentId ? live : null },
-    stopped: { get: async (id: string) => id === 'stopped' ? stopped : null } } as HandoffWiring
+    stopped: { get: async (id: string) => id === 'stopped' ? stopped : null } } as unknown as HandoffWiring
   const { conversationReads, answerConversationQuery } = await import('./conversationQueries.js')
   const reads = conversationReads(shared, directory), core = fakeCore({ conversations: reads })
   const authority = { current: () => true, ownsRequest: () => false }
@@ -183,7 +183,7 @@ it('keeps shared stopped resolution fenced to the requesting connection without 
   let finish!: (value: RegisteredSession) => void
   let connected = true
   const shared = { registry: { resolve: () => null },
-    stopped: { get: () => new Promise<RegisteredSession>(resolve => { finish = resolve }) } } as HandoffWiring
+    stopped: { get: () => new Promise<RegisteredSession>(resolve => { finish = resolve }) } } as unknown as HandoffWiring
   const { conversationReads, answerConversationQuery } = await import('./conversationQueries.js')
   const core = fakeCore({ conversations: conversationReads(shared, directory) })
   const pending = answerConversationQuery(core, 'resolve', { id: row.agentId },

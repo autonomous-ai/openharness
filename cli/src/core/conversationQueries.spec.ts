@@ -12,7 +12,7 @@ vi.mock('./handoffDependencies.js', () => ({ createHandoffDependencies: create }
 const readsOf = (deps: HandoffDeps) => {
   create.mockReturnValueOnce(deps)
   return conversationReads({ registry: { resolve: () => null },
-    stopped: { get: async (id: string) => (await deps.resolve(id)) ?? null } } as HandoffWiring, '/private-fixture/handoff')
+    stopped: { get: async (id: string) => (await deps.resolve(id)) ?? null } } as unknown as HandoffWiring, '/private-fixture/handoff')
 }
 
 const session = { agentId: 'retained', sessionId: 's1', engine: 'claude' } as RegisteredSession

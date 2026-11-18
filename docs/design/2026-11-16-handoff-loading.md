@@ -189,3 +189,9 @@ Shared `resolve` now uses the same live-or-stopped authority expression directly
 open or install the deferred handoff composition. The independent review approved this exact runtime
 patch and its warm/cached and live-fork/stopped-parent fixture adaptations before application.
 Post-correction coverage, types, packaged validation and matched cost evidence are still pending.
+
+The corrected runtime passes 96 caller/native-authority tests with `conversationQueries.ts` at 100%
+for all coverage metrics, the credential-free fork caller, and 37 architecture cases. Receipt
+`20261118T195411.973196Z-60644` remains failed because three deliberately partial mocked wiring
+fixtures need explicit `unknown` assertions for TypeScript. The fixture-only assertion correction
+does not change executable test or product behavior; its type check is selected separately.
