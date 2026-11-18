@@ -3,7 +3,7 @@
 //! cli/src/config/harnessHome.ts and desktop/lib/core/harness_home.dart.
 //! The guard below fails on a .harness path built by hand anywhere else in src.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 const HARNESS_DIR: &str = ".harness";
@@ -55,9 +55,14 @@ pub struct Look<'a> {
     pub file: &'a dyn Fn(&Path) -> bool,
 }
 
+/// Whether an XDG variable names an absolute folder, by Linux's rule rather than the host's: its value starts with `/`.
+fn linux_absolute(value: &OsStr) -> bool {
+    value.as_encoded_bytes().first() == Some(&b'/')
+}
+
 /// `<base>/harness` for an XDG base folder, or for `<home>/<default>` when the variable is unset, empty or relative.
 fn xdg_root(home: &Path, look: &Look, variable: &str, default: &str) -> PathBuf {
-    let base = (look.env)(variable).map(PathBuf::from).filter(|base| base.is_absolute());
+    let base = (look.env)(variable).filter(|base| linux_absolute(base)).map(PathBuf::from);
     base.unwrap_or_else(|| home.join(default)).join("harness")
 }
 

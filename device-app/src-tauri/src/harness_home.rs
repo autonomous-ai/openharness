@@ -1,7 +1,7 @@
 //! Harness's folders under the person's home, built in one place. The CLI's `config/harnessHome.ts` holds the whole
 //! table; this crate declares only the entries it uses. A test below fails on a home `.harness` path built elsewhere.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 const HARNESS_DIR: &str = ".harness";
@@ -87,9 +87,14 @@ pub fn harness_roots_with(home: &Path, look: &Look) -> Roots {
     Roots { data, state: xdg_root(home, "XDG_STATE_HOME", "state", look) }
 }
 
+/// Whether an XDG variable names an absolute folder, by Linux's rule rather than the host's: its value starts with `/`.
+fn linux_absolute(value: &OsStr) -> bool {
+    value.as_encoded_bytes().first() == Some(&b'/')
+}
+
 /// `$<var>/harness` when the variable is an absolute path, else `<home>/.local/<fallback>/harness`.
 fn xdg_root(home: &Path, var: &str, fallback: &str, look: &Look) -> PathBuf {
-    let base = (look.env)(var).map(PathBuf::from).filter(|base| base.is_absolute());
+    let base = (look.env)(var).filter(|base| linux_absolute(base)).map(PathBuf::from);
     base.unwrap_or_else(|| home.join(".local").join(fallback)).join(XDG_DIR)
 }
 
