@@ -217,7 +217,7 @@ describe('createAndRegisterPane', () => {
       .rejects.toThrow('registry storage has no available space (ENOSPC)')
   })
 
-  it('a pending admission that fails says what kind of error it was, and nothing the error carries', async () => {
+  it('a pending or resumed admission that fails says what kind of error it was, and nothing the error carries', async () => {
     const { registry } = await loadRegistryModule()
     registry.load()
     const said = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -225,12 +225,22 @@ describe('createAndRegisterPane', () => {
       refuse.code = 'ENOSPC'
       await expect(registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%1' }] })).rejects.toThrow()
       refuse.code = undefined
-      vi.spyOn(registry as unknown as { automaticName(): string }, 'automaticName')
+      const naming = vi.spyOn(registry as unknown as { automaticName(): string }, 'automaticName')
         .mockImplementation(() => { throw Object.assign(new Error('/Users/someone/secret'), { code: 'EBUSY' }) })
       expect(await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%2' }] })).toBeNull()
+      // A code or a name that is free text is not a kind: it can quote what the message would.
+      naming.mockImplementation(() => { throw Object.assign(new Error('x'), { name: 'open /Users/someone/secret', code: 'open /Users/someone/secret' }) })
+      expect(await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%3' }] })).toBeNull()
+      naming.mockRestore()
+      const saved = { ...(await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%4' }] }))!, agentId: 'stopped-1', sessionId: '' }
+      vi.spyOn(registry as unknown as { ownerGuard(): unknown }, 'ownerGuard')
+        .mockImplementation(() => { throw Object.assign(new Error('/Users/someone/secret'), { code: 'EBUSY' }) })
+      expect(await registry.resumePendingAgent(saved, [{ backend: 'tmux', paneId: '%5' }])).toBeNull()
       // A retried create logged only "failed", and nothing said why its first pane was not admitted (CI, 2026-11-19).
-      expect(said.mock.calls.map(([line]) => String(line)).filter(line => line.startsWith('[registry] pending admission failed')))
-        .toEqual(['[registry] pending admission failed · RegistryPersistenceUnavailable', '[registry] pending admission failed · Error EBUSY'])
+      expect(said.mock.calls.map(([line]) => String(line)).filter(line => / admission failed/.test(line))).toEqual([
+        '[registry] pending admission failed · RegistryPersistenceUnavailable', '[registry] pending admission failed · Error EBUSY',
+        '[registry] pending admission failed · Error', '[registry] resume admission failed · Error EBUSY',
+      ])
     } finally {
       said.mockRestore()
     }
