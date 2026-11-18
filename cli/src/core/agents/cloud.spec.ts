@@ -1,7 +1,8 @@
+import { cloudFactory } from '../../testing/sessionFactories.js'
 import { cloudQuestionClose, prepareCloudQuestion } from '../../cloud/questions.js'
 import { describe, expect, it, vi } from 'vitest'
-import { CLOUD_DOWN, type CloudPort } from '../api.js'
-import { cloudAgentFrame, type CloudHarness } from '../../lib/cloudAgents.js'
+import { CLOUD_DOWN, CLOUD_REPLY_DOWN, type CloudPort } from '../api.js'
+import { CLOUD_AGENT_IDS, cloudAgentFrame, type CloudHarness } from '../../lib/cloudAgents.js'
 import { createCloudAgents } from './cloud.js'
 import { cloudCard } from '../../cloud/service.js'
 import { emptyPresentation, prepareCloudCards } from '../../cloud/cards.js'
@@ -18,7 +19,7 @@ const harness = (over: Partial<CloudHarness> = {}): CloudHarness => {
 function setup(port: CloudPort | null = null) {
   const clients = { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }
   const openQuestions = new Map<string, Record<string, unknown>>()
-  const cloud = createCloudAgents({ port: () => port, clients, openQuestions, log: () => {} })
+  const cloud = createCloudAgents({ ownsFactory: cloudFactory, port: () => port, clients, openQuestions, log: () => {} })
   return { cloud, clients, openQuestions }
 }
 
@@ -233,6 +234,26 @@ describe('agents a service owns', () => {
     expect(openQuestions.has('cloud_1')).toBe(false)
   })
 
+  it('does not select a provider factory absent from its declared ownership', () => {
+    const service = port()
+    const ownership = { ownsFactory: vi.fn(() => false) }
+    const cloud = createCloudAgents({ ...ownership, port: () => service,
+      clients: { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }, openQuestions: new Map() })
+    expect(cloud.create({ engine: 'fo', prompt: 'fixture' })).toBeNull()
+    expect(service.create).not.toHaveBeenCalled()
+  })
+
+  it.each(CLOUD_AGENT_IDS)('keeps declared %s on its existing port, including while unavailable', async agent => {
+    const service = port(), payload = { engine: agent, prompt: 'fixture' }
+    const reply = { agent: cloudAgentFrame(harness({ agent })) }
+    service.create.mockResolvedValueOnce(reply)
+    expect(await setup(service).cloud.create(payload)).toEqual(reply)
+    expect(service.create).toHaveBeenCalledExactlyOnceWith(payload)
+    const unavailable = setup().cloud.create(payload)
+    expect(unavailable).not.toBeNull()
+    expect(await unavailable).toEqual(CLOUD_REPLY_DOWN)
+  })
+
   it('hands New Harness, words, an answer and Stop for its agents to the service, and nothing else', async () => {
     const service = port()
     const { cloud } = setup(service)
@@ -311,7 +332,7 @@ describe('agents a service owns', () => {
 
   it('logs a question by default', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    const cloud = createCloudAgents({ port: () => null, clients: { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }, openQuestions: new Map() })
+    const cloud = createCloudAgents({ ownsFactory: cloudFactory, port: () => null, clients: { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }, openQuestions: new Map() })
     cloud.doors.publish([harness()])
     cloud.doors.ask('cloud_1', 'cloud_q_1', prepareCloudQuestion('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] }))
     expect(log).toHaveBeenCalledWith('[cloud] question accepted')

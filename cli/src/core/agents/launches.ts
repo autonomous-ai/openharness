@@ -20,7 +20,7 @@ import { homeIsAbsolute } from '../../engines/kit/homeAdoption.js'
 import type { PrepareFolderTrust } from '../../engines/folderTrustPreparation.js'
 import type { NativeLaunchResult, NativeLaunchSource } from '../../engines/nativeLaunch.js'
 import { OPENCLAW_KEY, OPENCLAW_LOCAL } from '../../engines/openclaw/contract.js'
-import { ENGINES, isTerminalEngine, type AgentEngine } from '../../engines/types.js'
+import { isTerminalEngine, type AgentEngine } from '../../engines/types.js'
 import { parseLaunchArgs } from '../../lib/launchArgs.js'
 import { AgentCreationReceiptError, creationFingerprint, validCreationId, type AgentCreationOutcome, type AgentCreationReceipts, type AgentCreationStatus, type CreationAuthority } from '../../lib/agentCreationReceipt.js'
 import type { AgentFrame } from '../../lib/agentFrame.js'
@@ -59,6 +59,8 @@ export type RestartAgent = (agentId: string, launchArgs?: string[]) => Promise<
 export type ResumeAgent = (agentId: string, permissionMode?: string, launchArgs?: string[]) => ReturnType<RestartAgent>
 
 export interface LaunchRequestDeps {
+  /** Native ownership from the same immutable declaration used by service factories. */
+  nativeFactory(value: unknown): value is AgentEngine
   discovery: PendingCreationDiscovery
   /** Bounded facts from the Store; never the installed index in core. */
   describeDsh?: (dsh: string, engine: CreateInput['engine']) => Promise<DshDescribeAnswer>
@@ -108,7 +110,7 @@ export const WORKSPACES_WAIT_MS = 10 * 60_000
 const WORKSPACES_GONE = { state: 'failed' as const, error: 'SERVICE_UNAVAILABLE',
   detail: 'Could not make the project folder: Harness\'s workspaces service was not available for 10 minutes. Try again, or restart Harness.' }
 
-export function createLaunchRequests({ describeDsh = async id => dshUnavailable(id), receipts, discovery, createAgent, prepareCreate, prepareEngine, opencodeMajor, forkAgent, resumeAgent, restartAgent, byAgent, stoppedAgent, toProject, modelTarget, guestCreate, claudeHomeListed, workspaces, prepareFolderTrust, probeLaunchModel }: LaunchRequestDeps) {
+export function createLaunchRequests({ nativeFactory, describeDsh = async id => dshUnavailable(id), receipts, discovery, createAgent, prepareCreate, prepareEngine, opencodeMajor, forkAgent, resumeAgent, restartAgent, byAgent, stoppedAgent, toProject, modelTarget, guestCreate, claudeHomeListed, workspaces, prepareFolderTrust, probeLaunchModel }: LaunchRequestDeps) {
   /** Since when each create has waited for workspaces, by its creation id: in memory, as its hold is retried in this
    *  core. An entry lasts only while its create waits: it goes when the create goes on, gives up or is cancelled. */
   const waitingSince = new Map<string, number>()
@@ -229,7 +231,7 @@ export function createLaunchRequests({ describeDsh = async id => dshUnavailable(
         || typeof saved.label !== 'string' || !/^harness-[a-z0-9-]+$/.test(saved.label)) return null
       const input = structuredClone(saved.input) as CreateInput
       const projectFolder = (saved.projectFolder ?? null) as ProjectFolder | null
-      if (!ENGINES.includes(input.engine) || typeof input.cwd !== 'string' || input.resumeSessionId
+      if (!nativeFactory(input.engine) || typeof input.cwd !== 'string' || input.resumeSessionId
         || (projectFolder !== null && typeof projectFolder.source !== 'string')) return null
       const { local, label } = saved
       if (saved.selection) {
@@ -292,7 +294,7 @@ export function createLaunchRequests({ describeDsh = async id => dshUnavailable(
       || !saved.input || typeof saved.input !== 'object' || !saved.selection || typeof saved.selection !== 'object') return null
     const input = structuredClone(saved.input) as CreateInput
     const selection = saved.selection as NewAgentModel
-    if (!ENGINES.includes(input.engine) || typeof input.cwd !== 'string' || input.resumeSessionId
+    if (!nativeFactory(input.engine) || typeof input.cwd !== 'string' || input.resumeSessionId
       || input.grid !== null || typeof selection.model !== 'string' || typeof selection.grid !== 'string') return null
     const invoke = createAgent()
     if (!invoke) return null
@@ -378,9 +380,9 @@ export function createLaunchRequests({ describeDsh = async id => dshUnavailable(
    *  of a machine shared with them asks (core/guestPolicy.ts). */
   const create = async (payload: Record<string, unknown>, asker: Pick<Asker, 'local' | 'guest'>, reply: Reply): Promise<void> => {
     if (asker.guest !== undefined) { await createForGuest(payload, asker.guest, reply); return }
-    const engine = payload.engine as AgentEngine | undefined
+    const engine = payload.engine
     const cwd = payload.cwd
-    if (typeof engine !== 'string' || !ENGINES.includes(engine)) { reply({ error: 'INVALID_ENGINE' }); return }
+    if (!nativeFactory(engine)) { reply({ error: 'INVALID_ENGINE' }); return }
     let projectFolder
     try { projectFolder = parseProjectFolder(payload) }
     catch (error) {

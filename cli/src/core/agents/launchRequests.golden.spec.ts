@@ -1,3 +1,4 @@
+import { nativeFactory } from '../../testing/sessionFactories.js'
 import { localPendingCreationDiscovery } from '../../testing/pendingCreation.js'
 /** Public launch receipts and dispatch inputs, recorded from main before durable retry changes. */
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
@@ -61,7 +62,7 @@ it.each(['linux', 'darwin'])('preserves healthy launch requests and durable rece
         return { ok: true as const, session, level: 'native' as const, resumed: operation === 'resume' }
       }
       const discovery = localPendingCreationDiscovery(directory)
-      const deps: LaunchRequestDeps = {
+      const deps: LaunchRequestDeps = { nativeFactory,
         receipts: new AgentCreationReceipts(directory, discovery.ensure), discovery,
         createAgent: () => input => dispatch('create', input),
         forkAgent: () => input => dispatch('fork', input),

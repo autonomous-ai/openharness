@@ -1,3 +1,4 @@
+import { cloudFactory } from '../testing/sessionFactories.js'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -26,7 +27,7 @@ vi.mock('node:fs', async importOriginal => {
 function fixture() {
   const dataDir = mkdtempSync(join(tmpdir(), 'cloud-publication-'))
   const clients = { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }
-  const freshCore = () => createCloudAgents({ port: () => null, clients, openQuestions: new Map(), log: () => {} })
+  const freshCore = () => createCloudAgents({ ownsFactory: cloudFactory, port: () => null, clients, openQuestions: new Map(), log: () => {} })
   let core = freshCore(), disconnected = false, lostAck = false, publicationCalls = 0
   let poll: (() => void) | undefined
   const rejected = () => { const result = Promise.reject(new Error('fixture disconnect')); void result.catch(() => {}); return result }

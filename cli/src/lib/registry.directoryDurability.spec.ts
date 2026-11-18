@@ -1,3 +1,4 @@
+import { nativeFactory } from '../testing/sessionFactories.js'
 /** Real renamed images remain unadmitted while their directory flush is outstanding. */
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
@@ -213,7 +214,7 @@ async function receiptCreate() {
   const create = vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const,
     runtime: { backend: 'tmux' as const, paneId: '%7' } }))
   const kill = vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const }))
-  const requests = createLaunchRequests({ receipts, discovery,
+  const requests = createLaunchRequests({ nativeFactory, receipts, discovery,
     createAgent: () => async () => {
       const result = await createAndRegisterPane({ registry, tmuxBackend: { create, kill }, engine: 'claude',
         agentId: 'receipt-pending', cwd: root, sessionLabel: 'fixture', argv: ['fixture-engine'] })

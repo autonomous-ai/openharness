@@ -44,6 +44,8 @@ export interface ServiceSpec {
   windows?: Readonly<Record<string, LocalWindowPermissions>>
   /** Explicit shared reads; a component's private catch-all does not gain unrelated core queries. */
   reads?: Readonly<Record<string, readonly string[]>>
+  /** Session factories owned by a service hosted here; fixed by the selected artifact. */
+  factories?: Readonly<Record<string, readonly string[]>>
 }
 
 /** The kinds of what happens to an agent that a service in its own process can be held (core/api.ts `AgentLife`): a stop
@@ -119,7 +121,8 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   router: { services: ['router'], heapLimitMiB: 128, rssLimitMiB: 384, onDemand: true },
   // Cloud agents (services/cloudProcess.ts), an experiment: started once one is on, for a saved harness or a
   // request. A timer and a bounded look per working harness, and each conversation read a file at a time.
-  cloud: { services: ['cloud'], heapLimitMiB: 128, rssLimitMiB: 384, onDemand: true },
+  cloud: { services: ['cloud'], heapLimitMiB: 128, rssLimitMiB: 384, onDemand: true,
+    factories: { cloud: ['fo', 'devin-cloud', 'cursor-cloud'] } },
   // Share, an experiment (services/sharingProcess.ts): its invitations, its observers' sessions and their
   // ciphers; the headless Chrome it captures a shared viewer in is a process of its own, outside this budget.
   sharing: { services: ['sharing'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true },
@@ -160,6 +163,31 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
 
 /** Every service this build can run outside the core's process: what `HARNESSD_SERVICES` names. */
 export const KNOWN_SERVICES: readonly string[] = Object.values(SERVICE_HOSTS).flatMap((host) => host.services)
+
+export type SessionFactoryOwner = Readonly<{ kind: 'native' }> | Readonly<{ kind: 'service'; service: string }>
+
+/** Core supplies its native catalogue, so the master loads no engine module for this build-owned lookup. */
+export function sessionFactoryOwners(nativeIds: readonly string[], hosts: Readonly<Record<string, ServiceHostSpec>> = SERVICE_HOSTS): (factory: unknown) => SessionFactoryOwner | undefined {
+  const owners: Record<string, SessionFactoryOwner> = Object.create(null)
+  const fail = (): never => { throw new Error('INVALID_SESSION_FACTORY_DECLARATION') }
+  const add = (factory: unknown, owner: SessionFactoryOwner): void => {
+    if (typeof factory !== 'string' || !/^[a-z][a-z0-9-]*$/.test(factory) || Object.hasOwn(owners, factory)) return fail()
+    owners[factory] = owner
+  }
+  const native = Object.freeze({ kind: 'native' as const })
+  for (const factory of nativeIds) add(factory, native)
+  const hosted = Object.values(hosts).flatMap(host => host.services)
+  for (const host of Object.values(hosts)) {
+    for (const [service, factories] of Object.entries(host.factories ?? {})) {
+      if (!host.services.includes(service) || hosted.filter(name => name === service).length !== 1
+        || !Array.isArray(factories) || !factories.length) fail()
+      const owner = Object.freeze({ kind: 'service' as const, service })
+      for (const factory of factories) add(factory, owner)
+    }
+  }
+  Object.freeze(owners)
+  return factory => typeof factory === 'string' ? owners[factory] : undefined
+}
 
 /** What the core holds for each service of [outOfProcess] while it is down (`hears`), by service. A service in the
  *  core's process is told as it happens, and none is held for it. */

@@ -17,6 +17,8 @@ import type { QuestionAnswerResult } from '../../lib/questionController.js'
 type Frame = { type: string; agentId?: string; dbSessionId?: string; payload: Record<string, unknown> }
 
 export interface CloudAgentsDeps {
+  /** This wrapper's immutable factory ownership, from the selected build's declaration. */
+  ownsFactory(value: unknown): boolean
   /** The cloud service's port, or null while it is off. */
   port: () => CloudPort | null
   /** Existing bounded first-start readiness; capture authority only after the first connection exists. */
@@ -82,7 +84,7 @@ const answerReply = (value: unknown): boolean => fields(value, ['ok']) && value.
 const stopReply = (value: unknown): boolean => refusal(value) || record(value) && value.deleted === true
   && (value.detail === undefined || typeof value.detail === 'string') && Object.keys(value).every(key => key === 'deleted' || key === 'detail')
 
-export function createCloudAgents({ port, whenStarting, clients, openQuestions, log = (line) => console.log(line) }: CloudAgentsDeps) {
+export function createCloudAgents({ ownsFactory, port, whenStarting, clients, openQuestions, log = (line) => console.log(line) }: CloudAgentsDeps) {
   let harnesses = new Map<string, CloudHarness>()
   /** One accepted request per owner; its original close destination survives reconnects and replacement. */
   const asked = new Map<string, { agentId: string; close: CloudQuestionClose; dial: boolean }>()
@@ -229,7 +231,7 @@ export function createCloudAgents({ port, whenStarting, clients, openQuestions, 
     },
     /** `agent_create` for a cloud agent, answered as the socket answers one (`{ agent }`, or the refusal); null for any other engine. */
     create(payload: Record<string, unknown>): Promise<Record<string, unknown>> | null {
-      if (!isCloudAgent(payload.engine)) return null
+      if (!ownsFactory(payload.engine)) return null
       return call(cloud => cloud.create(payload), CLOUD_REPLY_DOWN, result => refusal(result)
         || fields(result, ['agent']) && agentReply(result.agent) && result.agent.engine === payload.engine)
     },

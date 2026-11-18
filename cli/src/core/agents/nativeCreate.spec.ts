@@ -1,3 +1,4 @@
+import { nativeFactory } from '../../testing/sessionFactories.js'
 import { localPendingCreationDiscovery } from '../../testing/pendingCreation.js'
 /** The real receipt → create → native hook proof → trust composition, with no real pane. */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -98,7 +99,7 @@ it.each([
   })
   const discovery = localPendingCreationDiscovery(join(root, 'receipts'))
   const receipts = new AgentCreationReceipts(join(root, 'receipts'), discovery.ensure)
-  const requests = createLaunchRequests({ receipts, discovery, createAgent: () => creator, prepareCreate: creator.prepare,
+  const requests = createLaunchRequests({ nativeFactory, receipts, discovery, createAgent: () => creator, prepareCreate: creator.prepare,
     forkAgent: () => null, resumeAgent: () => null, restartAgent: () => null,
     byAgent: () => pending, stoppedAgent: async () => undefined, toProject: async () => ({ agentId: pending.agentId }) as never, modelTarget: async () => null,
     workspaces: () => null, prepareFolderTrust })

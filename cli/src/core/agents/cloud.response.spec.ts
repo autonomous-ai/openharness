@@ -1,3 +1,4 @@
+import { cloudFactory } from '../../testing/sessionFactories.js'
 import { describe, expect, it, vi } from 'vitest'
 import { CLOUD_DOWN, type CloudPort } from '../api.js'
 import { cloudAgentFrame, type CloudHarness } from '../../lib/cloudAgents.js'
@@ -14,7 +15,7 @@ function setup() {
   const rename = vi.fn(() => new Promise(done => { resolve = done }))
   let current = { rename } as unknown as CloudPort | null
   const clients = { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }
-  const cloud = createCloudAgents({ port: () => current, clients, openQuestions: new Map(), log: () => {} })
+  const cloud = createCloudAgents({ ownsFactory: cloudFactory, port: () => current, clients, openQuestions: new Map(), log: () => {} })
   cloud.doors.publish([owner]); clients.send.mockClear(); clients.sendCommander.mockClear()
   return { cloud, clients, rename, resolve: (value: unknown) => resolve(value), replace: () => { current = { rename } as unknown as CloudPort }, disable: () => { current = null } }
 }
@@ -48,7 +49,7 @@ function immediate(value: unknown, starting?: () => Promise<boolean> | null) {
   const call = vi.fn(async () => value)
   let port = { create: call, deliver: call, answer: call, rename: call, stopHarness: call } as unknown as CloudPort
   const clients = { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }, log = vi.fn()
-  const cloud = createCloudAgents({ port: () => port, whenStarting: starting, clients, openQuestions: new Map(), log })
+  const cloud = createCloudAgents({ ownsFactory: cloudFactory, port: () => port, whenStarting: starting, clients, openQuestions: new Map(), log })
   cloud.doors.publish([owner]); cloud.doors.ask(owner.agentId, 'cloud_q_1', prepareCloudQuestion(owner.agentId, 'cloud_q_1', { text: 'Which?', choices: [] }))
   clients.send.mockClear(); clients.sendCommander.mockClear()
   return { cloud, call, clients, log, replace: () => { port = { ...port } } }

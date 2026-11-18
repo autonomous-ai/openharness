@@ -223,7 +223,7 @@ import { answerConnectorsQuery } from './connectorsQueries.js'
 import { answerSharedMachinesQuery } from './sharedMachinesQueries.js'
 import { createOrchestratorLink } from './orchestratorLink.js'
 import { daemonCommand } from '../lib/daemonCommand.js'
-import { SERVICE_HOSTS, heldAgentLife, KNOWN_SERVICES, masterRunsEngineRuntime, masterRunsLiveEngines, otherEnginesVersion, servicesTheMasterRuns } from '../harnessd/services.js'
+import { SERVICE_HOSTS, heldAgentLife, KNOWN_SERVICES, masterRunsEngineRuntime, masterRunsLiveEngines, otherEnginesVersion, servicesTheMasterRuns, sessionFactoryOwners } from '../harnessd/services.js'
 import { askForMessages, createMessagesLink } from './messagesLink.js'
 import { createDevicesLink } from './devicesLink.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE, PROBE_COMMAND } from '../harnessd/protocol.js'
@@ -1546,7 +1546,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const questions = asking.questions
   // Cloud harnesses (core/agents/cloud.ts): listed with the rest; their questions shown as the panes' are, and
   // answered through the cloud service.
-  cloudAgents = createCloudAgents({ port: () => serviceHost?.isOff('cloud') ? null : ports.cloud,
+  const factoryOwner = sessionFactoryOwners(ENGINES)
+  const nativeFactory = (value: unknown): value is AgentEngine => factoryOwner(value)?.kind === 'native'
+  cloudAgents = createCloudAgents({ ownsFactory: value => {
+    const owner = factoryOwner(value)
+    return owner?.kind === 'service' && owner.service === 'cloud'
+  }, port: () => serviceHost?.isOff('cloud') ? null : ports.cloud,
     whenStarting: () => outOfProcess.has('cloud') ? serviceLinks.whenStarting('cloud') : null,
     clients: backend, openQuestions: asking.openQuestions })
   const cloud = cloudAgents
@@ -3147,6 +3152,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The requests that start an agent's process, and the receipts of those asked with a creationId
   // (core/agents/launches.ts). The orchestrator and the cable create and fork through the socket's slots.
   const launches = createLaunchRequests({
+    nativeFactory,
     discovery: sessionStorage.creations,
     describeDsh: dshLaunch.describe,
     prepareFolderTrust,

@@ -1,3 +1,4 @@
+import { nativeFactory } from '../testing/sessionFactories.js'
 import { localPendingCreationDiscovery } from '../testing/pendingCreation.js'
 /**
  * How the core asks which OpenCode is installed when an agent is asked for as a named agent, recorded from main
@@ -71,7 +72,7 @@ describe('which OpenCode the core asks for, for a named agent', () => {
       const { opencodeMajorVersion } = await import('./opencode/version.js')
       const receiptDirectory = join(root, 'data', `receipts-${++receipts}`)
       const discovery = localPendingCreationDiscovery(receiptDirectory)
-      const requests = createLaunchRequests({
+      const requests = createLaunchRequests({ nativeFactory,
         discovery, opencodeMajor: opencodeMajorVersion,
         receipts: new AgentCreationReceipts(receiptDirectory, discovery.ensure),
         createAgent: () => async (request) => {

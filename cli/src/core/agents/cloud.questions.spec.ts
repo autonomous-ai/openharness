@@ -1,3 +1,4 @@
+import { cloudFactory } from '../../testing/sessionFactories.js'
 import { answerExperimentQuery } from '../experimentQueries.js'
 import { fakeCore } from '../../testing/fakeCore.js'
 import { cloudQuestionClose, prepareCloudQuestion } from '../../cloud/questions.js'
@@ -11,7 +12,7 @@ function fixture() {
   const clients = { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }, openQuestions = new Map<string, Record<string, unknown>>()
   const answer = vi.fn(async () => ({ ok: true as const }))
   const port = { answer }
-  const cloud = createCloudAgents({ clients, openQuestions, port: () => port as never, log: () => {} })
+  const cloud = createCloudAgents({ ownsFactory: cloudFactory, clients, openQuestions, port: () => port as never, log: () => {} })
   cloud.doors.publish([owner])
   return { cloud, clients, openQuestions, answer }
 }

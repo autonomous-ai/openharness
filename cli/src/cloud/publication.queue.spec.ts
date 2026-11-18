@@ -1,3 +1,4 @@
+import { cloudFactory } from '../testing/sessionFactories.js'
 import { createHash } from 'node:crypto'
 import { expect, it, vi } from 'vitest'
 import type { CloudCore } from '../core/api.js'
@@ -12,7 +13,7 @@ const row = (id = 'cloud_a', over: Partial<CloudHarness> = {}): CloudHarness => 
 const done = (id = 'cloud_a', answer = 'First'): CloudHarness => row(id, { state: 'idle', said: answer, card: { recap: answer, text: answer } })
 function setup() {
   const events: string[] = [], log = vi.fn()
-  const core = createCloudAgents({ port: () => null, openQuestions: new Map(), log: () => {}, clients: {
+  const core = createCloudAgents({ ownsFactory: cloudFactory, port: () => null, openQuestions: new Map(), log: () => {}, clients: {
     send: () => {}, sendLocal: () => {}, sendCommander: frame => events.push(frame.type === 'agent_synced'
       ? `row:${(frame.payload.agent as { id: string }).id}` : frame.type === 'commander_event'
         ? `${frame.payload.kind}:${frame.agentId}` : frame.type === 'agent_deleted' ? `delete:${frame.payload.agentId}` : frame.type),

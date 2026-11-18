@@ -1,3 +1,4 @@
+import { nativeFactory } from './sessionFactories.js'
 import { sessionStorage } from '../lib/sessionStorage.js'
 import { opencodeMajorVersion } from '../engines/opencode/version.js'
 /**
@@ -152,7 +153,7 @@ export function bindLaunchRequests(socket: BackendSocket, over: Partial<Launcher
     const state: Launcher = { describeDsh: null, resume: null, restart: null, modelTarget: null, workspaces: null }
     launcher = state
     launchers.set(socket, state)
-    const launches = createLaunchRequests({
+    const launches = createLaunchRequests({ nativeFactory,
       discovery: sessionStorage.creations,
       describeDsh: (dsh, engine) => state.describeDsh?.(dsh, engine) ?? STORE_OFF.dshDescribe({ dsh, engine }),
       opencodeMajor: opencodeMajorVersion,

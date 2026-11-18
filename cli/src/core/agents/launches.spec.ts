@@ -1,3 +1,4 @@
+import { nativeFactory } from '../../testing/sessionFactories.js'
 import { localPendingCreationDiscovery } from '../../testing/pendingCreation.js'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
@@ -7,6 +8,7 @@ import { installedDsh } from '../../dsh/installed.js'
 import { dshSupportedEngines } from '../../dsh/manifest.js'
 import { loadEngine } from '../../engines/inProcess.js'
 import { opencodeMajorVersion } from '../../engines/opencode/version.js'
+import type { AgentEngine } from '../../engines/types.js'
 import { unsupportedNativeLaunchModelFlag, type NativeLaunchResult } from '../../engines/nativeLaunch.js'
 import { createNativeLaunchPreparer } from '../../engines/prepareNativeLaunch.js'
 import { AgentCreationReceiptError, AgentCreationReceipts, creationFingerprint, type AgentCreationOutcome } from '../../lib/agentCreationReceipt.js'
@@ -99,7 +101,7 @@ function setup(over: Partial<LaunchRequestDeps> = {}, launches: { create?: Creat
   const workspaces = { ...WORKSPACES_OFF, ready: vi.fn(() => true), prepareFolder: vi.fn(async (project: GitProjectFolder, _options: { cloneFallback: boolean }) => gitFolder(project)) }
   const receiptDirectory = join(dir, `receipts-${++stores}`)
   const discovery = localPendingCreationDiscovery(receiptDirectory)
-  const deps: LaunchRequestDeps = { probeLaunchModel, opencodeMajor: opencodeMajorVersion,
+  const deps: LaunchRequestDeps = { nativeFactory, probeLaunchModel, opencodeMajor: opencodeMajorVersion,
     receipts: new AgentCreationReceipts(receiptDirectory, discovery.ensure), discovery,
     createAgent: () => create, forkAgent: () => fork, resumeAgent: () => resume, restartAgent: () => restart,
     byAgent: (id) => known.get(id), toProject: vi.fn(async (s: RegisteredSession) => frameOf(s)),
@@ -136,6 +138,30 @@ function setup(over: Partial<LaunchRequestDeps> = {}, launches: { create?: Creat
 }
 
 describe('agent_create, refused before any pane exists', () => {
+  it('refuses a known engine absent from native factory ownership before preparation', async () => {
+    const ownership = { nativeFactory: (_value: unknown): _value is AgentEngine => false }
+    const run = setup({ ...ownership })
+    expect(await run.ask({ engine: 'claude', cwd: '/fixture/work' })).toEqual({ error: 'INVALID_ENGINE' })
+    expect(parseProjectFolder).not.toHaveBeenCalled()
+    expect(run.create).not.toHaveBeenCalled()
+  })
+
+  it.each(['native-create-v1', 'model-create-v1'])('holds %s outside native factory ownership before recovery effects', async kind => {
+    let prepare!: Parameters<typeof pendingLaunches.createPendingLaunches>[0]['prepare']
+    const factory = pendingLaunches.createPendingLaunches
+    vi.spyOn(pendingLaunches, 'createPendingLaunches').mockImplementation(deps => { prepare = deps.prepare; return factory(deps) })
+    const ownership = { nativeFactory: (_value: unknown): _value is AgentEngine => false }
+    const prepareCreate = vi.fn<NonNullable<LaunchRequestDeps['prepareCreate']>>().mockResolvedValue({ ok: false, error: 'FIXTURE' })
+    resolveNewAgentModel.mockResolvedValue(null)
+    setup({ ...ownership, prepareCreate })
+    expect(await prepare({ kind, local: true, label: 'harness-claude-fixture',
+      input: { engine: 'claude', cwd: '/fixture/work', grid: null }, selection: { grid: 'fixture-grid', model: 'm' } },
+    { id: CREATION, current: () => true, hold: vi.fn() })).toBeNull()
+    expect(resolveNewAgentModel).not.toHaveBeenCalled()
+    expect(prepareCreate).not.toHaveBeenCalled()
+    expect(prepareNewFolder).not.toHaveBeenCalled()
+  })
+
   it('admits a package from Store facts without opening its index in core', async () => {
     vi.mocked(installedDsh).mockImplementationOnce(() => { throw Error('core opened the package index') })
     const describeDsh = vi.fn(async () => ({ ok: true, id: 'acme/current', name: 'Notes', permissionMode: null, refusal: null }))

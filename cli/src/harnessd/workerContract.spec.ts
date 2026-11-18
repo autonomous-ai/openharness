@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { SERVICE_HOSTS, serviceProcessesEnv } from './services.js'
+import { ENGINES } from '../engines/types.js'
 import { readWorkerProbe, WORKER_PLAN, WORKER_CONTRACT, workerCohortEnvironment, WORKER_COHORT_ENV } from './workerContract.js'
 
 describe('the executed worker contract', () => {
   it('binds the literal plan to the complete host catalogue and capability versions', () => {
-    const actual = createHash('sha256').update(JSON.stringify({ hosts: SERVICE_HOSTS, capabilities: serviceProcessesEnv([], 0) })).digest('hex')
+    const actual = createHash('sha256').update(JSON.stringify({ hosts: SERVICE_HOSTS, nativeFactories: ENGINES, capabilities: serviceProcessesEnv([], 0) })).digest('hex')
     expect(WORKER_PLAN).toBe(actual)
   })
   it('carries only a bounded parent and code contract into a child', () => {

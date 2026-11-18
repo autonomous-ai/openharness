@@ -1,3 +1,4 @@
+import { nativeFactory } from '../../testing/sessionFactories.js'
 import { localPendingCreationDiscovery } from '../../testing/pendingCreation.js'
 import { gridLaunchInProcess } from '../../testing/gridLaunchInProcess.js'
 import { chmodSync, mkdirSync, mkdtempSync, opendirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
@@ -322,7 +323,7 @@ describe('creating an agent', () => {
       const gate = new Promise<void>(resolve => { release = resolve })
       const answer = run.models.getMockImplementation()!
       run.models.mockImplementationOnce(async input => { enter(); await gate; return answer(input) })
-      const requests = createLaunchRequests({
+      const requests = createLaunchRequests({ nativeFactory,
         receipts, discovery, createAgent: () => run.create, prepareCreate: run.create.prepare,
         forkAgent: () => null, resumeAgent: () => null, restartAgent: () => null,
         byAgent: id => id === pending.agentId ? pending : undefined, stoppedAgent: async () => undefined,
