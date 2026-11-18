@@ -7,6 +7,7 @@ import { loadEngine } from '../../engines/inProcess.js'
 import { HERMES_SANDBOX_HOLD } from '../../engines/hermes/contract.js'
 import { OPENCLAW_STATES } from '../../engines/openclaw/contract.js'
 import { OTHER_ENGINE_STATES } from '../../engines/otherEngines.js'
+import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { OpenclawLive } from '../../engines/openclaw/live.js'
 import { continuationOf } from '../../engines/sessionFiles.js'
 import { env } from '../../config/env.js'
@@ -1205,6 +1206,22 @@ describe('binding a running process to its session', () => {
       expect(row).not.toHaveProperty('identityHold')
       expect(run.deps.announceSession).toHaveBeenCalledTimes(4)
       expect(run.deps.registry.register).not.toHaveBeenCalled()
+    })
+
+    // A hold only the person can clear lasts hours: a line on every 5 s pass buried the log (12 lines a minute).
+    it('logs a hold once, and again only when its words change or it comes back after a release', async () => {
+      const run = setup()
+      inRegistry(run)
+      const incomplete = new IdentityReadUnavailable('', 'This Harness install is incomplete. Reinstall Harness.')
+      vi.mocked(findLiveSession).mockRejectedValueOnce(incomplete).mockRejectedValueOnce(incomplete).mockRejectedValueOnce(incomplete)
+        .mockRejectedValueOnce(unsettled).mockResolvedValueOnce(null).mockRejectedValueOnce(incomplete)
+      for (let pass = 0; pass < 6; pass++) await run.binding.bindObservedAgent(codex())
+      expect(said()).toEqual([
+        '[discovery] a1 binding held · This Harness install is incomplete. Reinstall Harness.',
+        '[discovery] a1 binding held · a native child changed during inspection',
+        '[discovery] a1 binding released · its native evidence was read completely',
+        '[discovery] a1 binding held · This Harness install is incomplete. Reinstall Harness.',
+      ])
     })
 
     it('is let go when the resume lookup that failed completes and finds no transcript', async () => {
