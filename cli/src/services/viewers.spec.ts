@@ -101,20 +101,24 @@ describe('the DSH viewers service', () => {
     detach('a1')
     await vi.waitFor(() => expect(console.warn).toHaveBeenCalledWith('[viewers] VIEWER_STOP_FAILED'))
   })
-  it('a new core lease replaces producers before accepting their next asynchronous result', () => {
+  it('a new core lease keeps the running viewer and republishes its URL under the new lease', () => {
     const { attach, viewers, verdicts, core } = setup()
     const old = { ...agent(), frameEpoch: 'old-core:1' }, next = { ...agent(), frameEpoch: 'new-core:1' }
     attach(old)
-    viewers.stop.mockImplementationOnce(async () => { viewers.deps.onUrl('a1', null) })
+    viewers.deps.onUrl('a1', 'http://127.0.0.1:8000')
     vi.mocked(core.agents.publishFrame!).mockClear()
     attach(next)
-    expect(viewers.stop).toHaveBeenCalledWith('a1')
-    expect(verdicts.unwatch).toHaveBeenCalledWith('a1')
-    expect(viewers.start).toHaveBeenCalledTimes(2)
+    expect(viewers.stop).not.toHaveBeenCalled()
+    expect(verdicts.unwatch).not.toHaveBeenCalled()
     expect(core.agents.publishFrame).toHaveBeenCalledTimes(1)
-    expect(core.agents.publishFrame).toHaveBeenLastCalledWith(next, expect.objectContaining({ viewerUrl: null }))
-    attach({ ...next })
-    expect(viewers.stop).toHaveBeenCalledOnce()
+    expect(core.agents.publishFrame).toHaveBeenLastCalledWith(next, expect.objectContaining({ viewerUrl: 'http://127.0.0.1:8000' }))
+    // What the same producer says next goes out under the new lease too.
+    viewers.deps.onUrl('a1', 'http://127.0.0.1:8001')
+    expect(core.agents.publishFrame).toHaveBeenLastCalledWith(next, expect.objectContaining({ viewerUrl: 'http://127.0.0.1:8001' }))
+    // Another folder is the manager's to replace (dsh/viewer.ts): it is asked with the new one.
+    attach({ ...next, cwd: '/work/other' })
+    expect(viewers.start).toHaveBeenLastCalledWith('a1', blender, '/work/other')
+    expect(viewers.stop).not.toHaveBeenCalled()
   })
   beforeEach(() => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
