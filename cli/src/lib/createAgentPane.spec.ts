@@ -231,6 +231,9 @@ describe('createAndRegisterPane', () => {
       // A code or a name that is free text is not a kind: it can quote what the message would.
       naming.mockImplementation(() => { throw Object.assign(new Error('x'), { name: 'open /Users/someone/secret', code: 'open /Users/someone/secret' }) })
       expect(await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%3' }] })).toBeNull()
+      // Nor is one word that is not a class name or a code's shape: a file's or a person's name.
+      naming.mockImplementation(() => { throw Object.assign(new Error('x'), { name: 'someone', code: 'notes.md' }) })
+      expect(await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%6' }] })).toBeNull()
       naming.mockRestore()
       const saved = { ...(await registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%4' }] }))!, agentId: 'stopped-1', sessionId: '' }
       vi.spyOn(registry as unknown as { ownerGuard(): unknown }, 'ownerGuard')
@@ -239,7 +242,8 @@ describe('createAndRegisterPane', () => {
       // A retried create logged only "failed", and nothing said why its first pane was not admitted (CI, 2026-11-19).
       expect(said.mock.calls.map(([line]) => String(line)).filter(line => / admission failed/.test(line))).toEqual([
         '[registry] pending admission failed · RegistryPersistenceUnavailable', '[registry] pending admission failed · Error EBUSY',
-        '[registry] pending admission failed · Error', '[registry] resume admission failed · Error EBUSY',
+        '[registry] pending admission failed · Error', '[registry] pending admission failed · Error',
+        '[registry] resume admission failed · Error EBUSY',
       ])
     } finally {
       said.mockRestore()
