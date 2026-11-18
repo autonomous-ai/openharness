@@ -76,3 +76,7 @@ it omits the existing Messages link caller of the shared refusal logger; all thr
 other selected files reach 100%. The final selected collection includes that
 caller. Types pass. Packaged checks, cost measurement and independent review are
 still outstanding; this source checkpoint is not release acceptance.
+
+The final fixed-source receipt `20261118T051021.783039Z-35208` exits 0: 130 cases
+across nine suites, architecture included, and types. All four selected runtime
+files have 100% statements, branches, functions and lines (334/332/149/255).
