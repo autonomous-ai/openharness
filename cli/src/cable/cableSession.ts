@@ -3387,7 +3387,7 @@ export class CableSession {
     // Before the frame, so an ask that overtakes it stays marked.
     this.questionInbox.forget(new Set(drawer.filter((row) => row.question).map((row) => row.agentId)))
     await this.send({ t: 'notif.replace', items: drawer })
-    // One the eight rows could not hold is asked now. A greeting asks them as its push ends.
+    // One the eight rows could not hold is given back now, by giveQuestion's rule. A greeting gives them as its push ends.
     if (!this.greeting) await this.resendQuestions()
   }
 
@@ -3426,17 +3426,17 @@ export class CableSession {
    * came through quiet, no row was ever recorded, and looking away later left nothing behind.
    */
   async question(agentId: string, id: string, questions: unknown): Promise<void> {
-    this.questionInbox.set(agentId, id, questions)
+    // Nobody could close it: it would stay on the dial for good.
+    if (!agentId || !id) return
+    const whole = this.questionInbox.set(agentId, id, questions)
     this.liveTurns.set(agentId, 'question')
     // The dial beeps at each ask, and the devices and the core ask again what a dial should hold as it arrives or they
-    // reconnect: one the inbox holds goes by giveQuestion's rule, rung once and never again after the dial was told it,
-    // and during a greeting it waits for the walk. One it cannot hold is sent as it comes.
+    // reconnect: it goes by giveQuestion's rule, rung once and never again after the dial was told it, and during a
+    // greeting it waits for the walk. One the inbox cannot hold whole is kept and sent as its summary, never as it came:
+    // a plan of kilobytes passed the frame cap and never reached the dial (2026-11-18).
     const held = this.questionInbox.read(agentId)
-    if (!held.ok) {
-      await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions })
-      return
-    }
-    if (!this.greeting) await this.giveQuestion(agentId, id, questions, held.questions[0].q)
+    if (!held.ok || this.greeting) return
+    await this.giveQuestion(agentId, id, whole ? questions : held.questions, held.questions[0].q)
   }
   /** A question the dial reads when its row is opened and is never asked: a notice restored after the devices process
    *  restarted rang before it (cable/notices.ts). */
