@@ -502,6 +502,15 @@ describe('the process starts again from the new paths', () => {
     expect(t.execs[0].env).toBe(env)
   })
 
+  it('a start run from ~/.harness once it is the bridge starts again from the new paths, whoever moved it', async () => {
+    const t = legacyHome()
+    await moveHomeAtStart(argvOf(t, 'start'), {}, t.deps())
+    t.execs.length = 0
+    // A launcher the move did not rewrite still runs ~/.harness's Node and cli.js, through the bridge's links.
+    await moveHomeAtStart(argvOf(t, '__harnessd'), {}, t.deps())
+    expect(t.execs).toEqual([{ file: join(t.state, NODE), args: [join(t.state, NODE), join(t.data, 'cli', 'cli.js'), '__harnessd'], env: {} }])
+  })
+
   it('with no target, or one that is not there, the start goes on in this process', async () => {
     const outside = legacyHome()
     await moveHomeAtStart(['/usr/bin/node', '/usr/lib/harness/cli.mjs', 'start'], {}, outside.deps({ execPath: '/usr/bin/node' }))
