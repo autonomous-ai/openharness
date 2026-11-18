@@ -195,6 +195,11 @@ static void render(const char *dir,const char *name) {
     }
     fclose(out);
 }
+static bool shows(const char *words) {
+    static ht_scene_t scene;ht_scene_clear(&scene,BG);s.hit_count=0;render_question(&scene);
+    for(int i=0;i<scene.count;i++) if(strstr(scene.runs[i].text,words)) return true;
+    return false;
+}
 int main(int argc,char **argv) {
     const char *dir=argc>1 ? argv[1] : NULL;
     reset(false);assert(s.q.item[0].can_text);recording();
@@ -292,6 +297,27 @@ int main(int argc,char **argv) {
         assert(s.q.valid && s.q.supported && s.q.count==1 && s.q.item[0].count==1 && !s.q.item[0].can_text);
         view(QUESTION);render(dir,"shown-only");
         ui_question_close("b","shown:p1");assert(removed==1);
+    }
+    // A question the dial cannot answer says what is asked: its first question's words, then [ on desktop ].
+    {
+        static const char *plan="Approve this plan? It moves the parser into its own module, deletes the old reader, renames the public API, rewrites every test that touches them and ends on the word zebra";
+        cJSON fields[]={{.string="key",.type=JSTRING,.valuestring=""},
+            {.string="q",.type=JSTRING,.valuestring=plan},
+            {.string="options",.type=JARRAY}};
+        cJSON question=object(fields,3),questions={.type=JARRAY,.child=&question};
+        reset(false);question_load(&questions);view(QUESTION);
+        assert(s.q.valid && !s.q.supported && ui_rows(plan,UI_FONT,336)>5);
+        assert(shows("Approve this") && !shows("This question needs") && shows("[ on desktop ]") && s.hit_count==2);
+        assert(!shows("zebra"));                               // cut at the five lines
+        render(dir,"unanswerable");
+        // A letter Inter does not draw: the sentence, as before.
+        fields[1].valuestring="Approve \xe9\x9b\xaa?";question_load(&questions);
+        assert(!s.q.supported && shows("This question needs") && !shows("Approve") && shows("[ on desktop ]"));
+        // No words, an error, or a question answered elsewhere: as before.
+        fields[1].valuestring="";question_load(&questions);assert(shows("This question needs"));
+        fields[1].valuestring="Approve this plan?";question_load(&questions);
+        COPY(s.q.error,"Could not load the question.");assert(shows("Could not load") && !shows("Approve"));
+        s.q.error[0]=0;s.q.valid=false;assert(shows("Answered elsewhere.") && !shows("Approve"));
     }
     // The ESP32 compiler's -O0 restrict analysis sees the enclosing global s,
     // not the disjoint options/answer fields. Exercise every selected subset
