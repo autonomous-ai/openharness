@@ -39,3 +39,10 @@ export default function setup(): (() => void) | undefined {
   }
   return () => rmSync(dir, { recursive: true, force: true })
 }
+
+/** The sha256 of the helper a built bundle carries, as build-bundle.mjs embeds it, or undefined for one built without.
+ *  Read from the bundle, not the run's artifact: a baseline built elsewhere carries its own helper, or none, and a
+ *  release's helper is built by another toolchain, so its bytes are not the ones this Mac built. */
+export function bundledProcessImages(bundle: string): string | undefined {
+  return /\{\\?"schema\\?":1,\\?"size\\?":\d+,\\?"sha256\\?":\\?"([0-9a-f]{64})\\?"/.exec(bundle)?.[1]
+}

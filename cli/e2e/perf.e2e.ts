@@ -29,6 +29,7 @@ import { TerminalBinaryKind } from '../src/lib/terminalBinary.js'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, until } from './harness/daemon.js'
 import { harnessdProcesses } from './harness/endurance.js'
+import { bundledProcessImages } from './harness/processImages.js'
 import { startPhoneMachine, type PhoneMachine } from './harness/fleet.js'
 import { askAndAnswer, compareAnswers, engineAnswers, QUESTION_KINDS, summarizeAnswers, type QuestionEngine, type QuestionOutcome } from './harness/questionWork.js'
 
@@ -177,10 +178,8 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
     if (profile) nodeOptions.push('--cpu-prof', `--cpu-prof-dir=${JSON.stringify(artifactDir)}`)
     const git = (...args: string[]) => execFileSync('git', args, { cwd: CLI_ROOT, encoding: 'utf8', timeout: 5_000 }).trim()
     // From the bundle measured, not from the setting: every Mac run names a helper (harness/processImages.ts), and a
-    // baseline built elsewhere (PERF_BUNDLE_SOURCE) may carry none and look its processes up with `lsof` instead.
-    const helper = process.env.HARNESS_PROCESS_IMAGES_ARTIFACT
-    const helperSha = helper ? JSON.parse(readFileSync(helper, 'utf8')).sha256 : undefined
-    const embedded = typeof helperSha === 'string' && /^[0-9a-f]{64}$/.test(helperSha) && readFileSync(bundle, 'utf8').includes(helperSha)
+    // baseline built elsewhere (PERF_BUNDLE_SOURCE) carries its own, or none and looks its processes up with `lsof`.
+    const helperSha256 = bundledProcessImages(readFileSync(bundle, 'utf8'))
     const report: Record<string, any> = {
       schema: 1, state: 'running', startedAt: new Date().toISOString(), artifactDir,
       source: { commit: git('rev-parse', 'HEAD'), tree: git('rev-parse', 'HEAD^{tree}'),
@@ -194,7 +193,7 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
       instrumentation: { profile, heaps, delayResolutionMs: 10, rssSampleEveryMs: 1_000, cpuPercentBasis: 'one logical CPU',
         scope: measureWorkers ? 'core PID and both engine worker PIDs (engine-claude, engine-codex) by in-process probe; the master by ps, reported separately; excludes other services, engines and tmux' : 'core PID only; the master by ps, reported separately; excludes services, engines and tmux', heapPausesOutsideWindows: true },
       loadAverage: { start: loadavg() },
-      nativeProcessImages: embedded ? { mode: 'embedded', artifactSha256: sha(helper!) } : { mode: 'fallback' },
+      nativeProcessImages: helperSha256 ? { mode: 'embedded', helperSha256 } : { mode: 'fallback' },
       limitations: ['Fake engines and a loopback fake backend; no real model latency or token streaming.',
         'Cable access disabled for isolation; not a measurement of USB discovery.', 'Heap snapshots force GC after each measured window.'],
       phases: [], snapshots: [],
