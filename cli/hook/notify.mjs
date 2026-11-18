@@ -282,9 +282,11 @@ function boundedPrompt(prompt) {
 
 /**
  * POST one hook event to the daemon. Resolves true when it answered 2xx, false when it could not be
- * reached or refused, 'held' for live admission backpressure, and 'late' when it took the request but
- * did not answer within the budget. Neither live hold is permission for an offline registry write.
+ * reached, 'refused' when it answered anything else, 'held' for live admission backpressure, and 'late'
+ * when it took the request but did not answer within the budget. Only false permits an offline registry write.
  *
+ * 'refused' is a daemon that runs: a 500 taken for an outage wrote the hook's own row in place of the
+ * agent's, which the daemon's next save took in, and the agent it had created was gone (e2e/scale.e2e.ts).
  * 'late' is not "the daemon is down", and nothing may be written behind its back for it: the request is
  * in its socket, and it handles it once it gets to it. A daemon whose event loop is held for a few
  * seconds (or one simply slow to answer a session-start, which waits for a discovery pass) used to get
@@ -445,7 +447,7 @@ function post(port, path, body, onResponse, facts = {}) {
           if (ok && onResponse && response.length <= 16_384) {
             try { onResponse(JSON.parse(response)) } catch { /* Unavailable context never blocks a turn. */ }
           }
-          resolve(ok)
+          resolve(ok || 'refused')
         })
       }
     )
