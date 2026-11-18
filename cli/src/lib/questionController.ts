@@ -374,7 +374,7 @@ export class AskQuestionController {
       // then treat it as stuck rather than hammering the pane with more keystrokes. Never consume a
       // second answer for it.
       if (view.question === lastQuestion) {
-        if (++repeats >= 2) { console.warn(`[question] dialog stuck on "${view.question.slice(0, 60)}"`); return STUCK }
+        if (++repeats >= 2) { console.warn(`[question] ${terminalTarget.slice(0, 8)} dialog stuck on a question of ${view.question.length} chars`); return STUCK }
         await wait(STEP_MS)
         continue
       }
@@ -386,7 +386,7 @@ export class AskQuestionController {
       let positional = false
       if (answered === 0 && asked.requestId) {
         if (!asked.owners.some((owner) => questionRequestId(owner, view) === asked.requestId)) {
-          console.warn(`[question] answer for req=${asked.requestId} arrived after the dialog changed to "${view.question.slice(0, 60)}" — nothing typed`)
+          console.warn(`[question] ${terminalTarget.slice(0, 8)} answer for req=${asked.requestId} arrived after the dialog changed to a question of ${view.question.length} chars — nothing typed`)
           return STALE_CHANGED
         }
         positional = true
@@ -406,7 +406,7 @@ export class AskQuestionController {
         : pickAnswer(answers, view.question, used, { positional })
       if (!picked) {
         if (answered > 0 && reviewedComplete()) return { ok: true }
-        console.warn(`[question] no answer names "${view.question.slice(0, 60)}" — nothing typed`)
+        console.warn(`[question] ${terminalTarget.slice(0, 8)} no answer names the question of ${view.question.length} chars — nothing typed`)
         return STALE_CHANGED
       }
       used.add(picked.key)
@@ -446,7 +446,7 @@ export class AskQuestionController {
         continue
       }
       if (reviewed) return failed('That answer matches no option.')
-      if (!view.typeRow) { console.warn(`[question] no option matched "${picked.value.slice(0, 40)}" and no free-text row`); return failed('That answer matches no option.') }
+      if (!view.typeRow) { console.warn(`[question] ${terminalTarget.slice(0, 8)} no option matched an answer of ${picked.value.length} chars and no free-text row`); return failed('That answer matches no option.') }
       const typed = notEntered(await apply({ kind: 'text', row: view.typeRow, text: picked.value }))
       if (typed) return typed
     }

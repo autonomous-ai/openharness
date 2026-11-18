@@ -525,7 +525,7 @@ describe('the review of the first cut', () => {
       expect(read).toMatchObject({ next: Buffer.byteLength(content), records: 3, failed: false })
       expect(folded).toEqual([codex.started('t1'), codex.user('a'), codex.complete('t1')])
       expect(warn).toHaveBeenCalledOnce()
-      expect(warn.mock.calls[0][0]).toContain('7 record(s) could not be taken in: Error: profile')
+      expect(warn.mock.calls[0][0]).toContain('7 record(s) could not be taken in: Error')
       const watcher = new Watcher()
       const lines: string[] = []
       watcher.on('line', (event: LineEvent) => lines.push(event.text))
@@ -534,6 +534,19 @@ describe('the review of the first cut', () => {
       await watcher.pollSession('s')
       await watcher.stop()
       expect(lines).toEqual([record])
+    } finally { warn.mockRestore() }
+  })
+
+  it('names the kind of a record\'s failure, never the record\'s words, which a parse error quotes', async () => {
+    writeFileSync(file, [codex.started('t1'), codex.user('SECRET-LINE-MARKER'), codex.complete('t1')].join('\n') + '\n')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      // A consumer reading a record's text as JSON throws "Unexpected token 'S', "SECRET-…" is not valid JSON".
+      const fold = (line: string) => { if (line.includes('SECRET')) JSON.parse('SECRET-LINE-MARKER') }
+      await attachTranscript(file, codexAttachRules(() => []), { profile: () => {}, fold })
+      expect(warn).toHaveBeenCalledOnce()
+      expect(warn.mock.calls[0][0]).toBe(`[attach] ${file}: 1 record(s) could not be taken in: SyntaxError`)
+      expect(warn.mock.calls[0][0]).not.toContain('SECRET')
     } finally { warn.mockRestore() }
   })
 

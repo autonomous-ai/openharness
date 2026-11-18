@@ -14,7 +14,6 @@ import type { WifiFeed } from './wifi.js'
 import { deviceErrorText } from './cardText.js'
 import { adaptSlashCommand } from '../lib/goalCommand.js'
 import { sid } from '../lib/log.js'
-import { redactSecretsInText } from '../lib/redactSecrets.js'
 import type { LiveEvent } from '../engines/kit/events.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { MoveGate } from '../lib/hostMove/gate.js'
@@ -122,9 +121,9 @@ export function messageWriter({ readScreen, resolve, terminal: { captureTerminal
           if (before === 'popup_open') return null
           if (!before) return null
           if (!passingHold(before) || tries >= ENTER_CHECK_TRIES) {
-            // The screen itself, as read: DESKTOP-0TFH0OJ (2026-10-25) held three messages' Enter as
-            // `prompt_hidden` while the same pane, read by hand a minute later, showed Claude Code's composer.
-            console.warn(`[inject] ${sid(id)} Enter held · ${before} · screen ${heldScreen(capture)}`)
+            // The screen's size, never its rows: they hold the person's typed message and the transcript.
+            const read = capture === null ? 'unread' : `${capture.split('\n').length} rows, ${capture.length} chars`
+            console.warn(`[inject] ${sid(id)} Enter held · ${before} · screen ${read}`)
             return before
           }
           await new Promise((settle) => setTimeout(settle, ENTER_CHECK_RETRY_MS))
@@ -137,17 +136,6 @@ export function messageWriter({ readScreen, resolve, terminal: { captureTerminal
 /** How long the check before a message's Enter asks again after a read that says nothing: 3 s. */
 const ENTER_CHECK_TRIES = 12
 const ENTER_CHECK_RETRY_MS = 250
-
-/** The bottom of a capture for the log: escape sequences and odd spaces kept visible (JSON), secrets redacted,
- *  each row cut, so a composer the reader missed can be read back from the log. */
-export function heldScreen(capture: string | null): string {
-  if (capture === null) return 'unread'
-  const rows = capture.split('\n')
-  while (rows.length && !rows.at(-1)!.trim()) rows.pop()
-  return JSON.stringify(rows.slice(-HELD_SCREEN_ROWS).map((row) => redactSecretsInText(row).slice(0, HELD_SCREEN_ROW_CHARS)))
-}
-const HELD_SCREEN_ROWS = 15
-const HELD_SCREEN_ROW_CHARS = 400
 
 /** What holds a typed delivery from the pane as read: the same draft and dialog checks as a person's own message. */
 function paneHold(screen: ScreenReading | null): string | null {

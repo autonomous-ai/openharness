@@ -350,7 +350,8 @@ export class DshViewerManager {
     const onData = (chunk: Buffer): void => {
       for (const line of chunk.toString('utf8').split('\n')) {
         if (!line.trim() || isShellNoise(line)) continue
-        if (logged++ < LOG_LINE_LIMIT) this.log(`[dsh] ${state.dsh.id} viewer · ${line}`)
+        // Its size only: a viewer reads the person's workspace, and what it prints can quote their work.
+        if (logged++ < LOG_LINE_LIMIT) this.log(`[dsh] ${state.dsh.id} viewer printed a line of ${line.length} chars`)
       }
     }
     child.stdout?.on('data', onData)

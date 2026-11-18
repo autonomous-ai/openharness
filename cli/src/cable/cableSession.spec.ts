@@ -4504,7 +4504,7 @@ describe('hello capabilities', () => {
   describe('link counters in the dial log', () => {
     const linkLines = (log: DialLog) => readFileSync(log.currentPath, 'utf8').split('\n').filter((l) => l.includes('[daemon] link'))
 
-    it('logs bytes and frames both ways at close, and keeps the printable text of non-frame bytes', async () => {
+    it('logs bytes and frames both ways at close, and the size of the printable text of non-frame bytes, never its words', async () => {
       const log = tmpLog()
       const { session, port } = await connect(makeHost(), log)
       try {
@@ -4522,11 +4522,31 @@ describe('hello capabilities', () => {
       expect(line).toContain(`tx ${sentBytes} B in ${port.frames.length} frames`)
       expect(line).toMatch(/rx \d+ B in 2 frames/)
       expect(line).toMatch(/discarded \d+ B/)
-      expect(line).toContain('non-frame text: Guru Meditation Error: Core 0 panic')
-      expect(line).not.toContain('ab')   // a two-character run is not text worth keeping
+      // A two-character run ('ab') is not text worth counting.
+      expect(line).toContain('non-frame text 35 chars')
+      expect(line).not.toContain('Guru')
     })
 
-    it('logs once a minute while connected, and caps the text at 200 characters', async () => {
+    it('never says the words of a frame of the dial\'s that arrived broken, which can be the person\'s', async () => {
+      const log = tmpLog()
+      const { session, port } = await connect(makeHost(), log)
+      try {
+        port.say({ t: 'hello', product: 'harness', fw: '0.1.0', proto: 1, mac: 'aa:bb' })
+        await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+        // A turn the dial sends, its last byte lost on the cable: the decoder steps over its bytes as noise.
+        const sent = encodeCableFrame(CableType.Json, Buffer.from(JSON.stringify({ t: 'turn.send', agentId: 'a1', text: 'SECRET-TEXT-MARKER' }), 'utf8'))
+        port.raw(Buffer.from(sent.subarray(0, sent.length - 1)))
+        port.raw(Buffer.from([sent[sent.length - 1] ^ 0xff]))
+        await settle()
+        await port.close('unplugged')
+        await log.flush()
+      } finally { await session.stop() }
+      const [line] = linkLines(log)
+      expect(line).toMatch(/corrupt 1 · discarded \d+ B · non-frame text \d+ chars/)
+      expect(line).not.toContain('SECRET')
+    })
+
+    it('logs once a minute while connected, with the size of the text', async () => {
       vi.useFakeTimers({ toFake: ['Date'] })
       const log = tmpLog()
       const { session, port } = await connect(makeHost(), log)
@@ -4539,7 +4559,9 @@ describe('hello capabilities', () => {
       } finally { vi.useRealTimers(); await session.stop() }
       const [line] = linkLines(log)
       expect(line).toMatch(/\] link · tx \d+ B in \d+ frames · rx \d+ B in 1 frames/)
-      expect(line.split('non-frame text: ')[1]).toHaveLength(200)
+      // The last few bytes may still wait in the decoder for a header: what it stepped over is counted.
+      expect(line).toMatch(/ · discarded (\d+) B · non-frame text \1 chars$/)
+      expect(line).not.toContain('xxxx')
     })
   })
 })

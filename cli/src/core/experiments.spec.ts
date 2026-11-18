@@ -358,19 +358,19 @@ describe('the account\'s agent experiments, kept for this computer', () => {
     expect(t.want).toHaveBeenCalledOnce()
   })
 
-  it('names in its log the agent that turned one on with the person\'s yes, which is only its word', async () => {
+  it('says in its log that an agent turned one on with the person\'s yes, which is only its word, and not the agent\'s name', async () => {
     const lines: string[] = []
     const t = setup({ log: (line) => lines.push(line) })
     answer(account({}))
     answers.push(async () => account({ agents_tell_agents: true }))
-    expect(await t.sync.settingsWrite({ agentsTellAgents: true, byAgent: 'Claude Code' }))
+    expect(await t.sync.settingsWrite({ agentsTellAgents: true, byAgent: 'SECRET-NAME-MARKER' }))
       .toEqual({ status: 200, body: { ...OFF, agentsTellAgents: true, signedIn: true } })
-    expect(lines).toEqual(['[settings] agentsTellAgents on by Claude Code, which says the person said yes'])
-    // The summary switch grants by turning off: the agent's word is named for it too.
+    expect(lines).toEqual(['[settings] agentsTellAgents on by an agent, which says the person said yes'])
+    // The summary switch grants by turning off: the agent's word is said for it too.
     answer(account({ agent_messages_hide_summary: true }))
     answers.push(async () => account({}))
     await t.sync.settingsWrite({ agentMessagesHideSummary: false, byAgent: 'Codex' })
-    expect(lines.at(-1)).toBe('[settings] agentMessagesHideSummary off by Codex, which says the person said yes')
+    expect(lines.at(-1)).toBe('[settings] agentMessagesHideSummary off by an agent, which says the person said yes')
     // Not for the person's own write, nor for a name that says nothing.
     answer(account({ agents_tell_agents: true }))
     answers.push(async () => account({}))
