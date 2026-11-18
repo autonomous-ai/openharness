@@ -178,7 +178,7 @@ mod tests {
         assert_eq!(
             menu(&state()),
             vec![
-                text("Dial connected"),
+                text("Device ready"),
                 text("Signed in"),
                 Separator,
                 act(MenuAction::OpenHarness, "Open Harness"),
@@ -236,7 +236,7 @@ mod tests {
                     ..dial(true, Some("0.0.95"))
                 })
             }),
-            "Updating to 0.0.96"
+            "Updating device…"
         );
         assert_eq!(
             with(&|s| {
@@ -248,9 +248,9 @@ mod tests {
             "Not answering — unplug and replug"
         );
         // The firmware's version is the About panel's, not the menu's.
-        assert_eq!(with(&|s| s.dial = Some(dial(true, Some("0.0.95")))), "Dial connected");
-        assert_eq!(with(&|s| s.dial = Some(dial(true, None))), "Dial connected");
-        assert_eq!(with(&|s| s.dial = Some(dial(false, None))), "No dial");
+        assert_eq!(with(&|s| s.dial = Some(dial(true, Some("0.0.95")))), "Device ready");
+        assert_eq!(with(&|s| s.dial = Some(dial(true, None))), "Device ready");
+        assert_eq!(with(&|s| s.dial = Some(dial(false, None))), "Plug in your device");
     }
 
     #[test]
@@ -283,7 +283,7 @@ mod tests {
         assert_eq!(
             menu(&AppState { dial: Some(sound(Some(false))), ..state() }),
             vec![
-                text("Dial connected"),
+                text("Device ready"),
                 text("Signed in"),
                 on.clone(),
                 Separator,
@@ -320,7 +320,7 @@ mod tests {
     #[test]
     fn the_update_rows() {
         let rows = [
-            // No version: the dial's own update reads "Updating to X".
+            // No version: the firmware update reads "Updating device…".
             (AppUpdate::Installing, text("Updating Harness…")),
             (AppUpdate::Blocked("0.1.3".into()), act(MenuAction::Update, "Update 0.1.3…")),
         ];
@@ -333,7 +333,7 @@ mod tests {
         }
         assert_eq!(
             menu_log(&menu(&AppState { app_update: AppUpdate::Blocked("0.1.3".into()), ..state() })),
-            "Dial connected | Signed in | Update 0.1.3… | Open Harness | About | Quit"
+            "Device ready | Signed in | Update 0.1.3… | Open Harness | About | Quit"
         );
     }
 
@@ -342,7 +342,7 @@ mod tests {
         assert_eq!(
             menu(&AppState { dial: Some(notifying(NotifyMode::Full)), ..state() }),
             vec![
-                text("Dial connected"),
+                text("Device ready"),
                 text("Signed in"),
                 Check(MenuAction::SoundOff, "Sound".into(), true),
                 notifications(true, false),
@@ -413,9 +413,9 @@ mod tests {
         let harness = Some("0.6.58".to_string());
         assert_eq!(
             about_credits(&AppState { cli_version: harness.clone(), ..state() }),
-            Some("Dial 0.0.95 · Harness 0.6.58".into())
+            Some("Device 0.0.95 · Harness 0.6.58".into())
         );
-        assert_eq!(about_credits(&state()), Some("Dial 0.0.95".into()));
+        assert_eq!(about_credits(&state()), Some("Device 0.0.95".into()));
         for dial in [None, Some(dial(true, None)), Some(dial(false, Some("0.0.95")))] {
             let state = AppState { dial: dial.clone(), cli_version: harness.clone(), ..state() };
             assert_eq!(about_credits(&state), Some("Harness 0.6.58".into()), "{dial:?}");
@@ -441,22 +441,22 @@ mod tests {
 
     #[test]
     fn the_menu_as_a_log_line() {
-        assert_eq!(menu_log(&menu(&state())), "Dial connected | Signed in | Open Harness | About | Quit");
+        assert_eq!(menu_log(&menu(&state())), "Device ready | Signed in | Open Harness | About | Quit");
         assert_eq!(
             menu_log(&menu(&AppState { dial: Some(sound(Some(false))), ..state() })),
-            "Dial connected | Signed in | Sound ✓ | Open Harness | About | Quit"
+            "Device ready | Signed in | Sound ✓ | Open Harness | About | Quit"
         );
         assert_eq!(
             menu_log(&menu(&AppState { dial: Some(sound(Some(true))), ..state() })),
-            "Dial connected | Signed in | Sound | Open Harness | About | Quit"
+            "Device ready | Signed in | Sound | Open Harness | About | Quit"
         );
         assert_eq!(
             menu_log(&menu(&AppState { dial: Some(notifying(NotifyMode::Full)), ..state() })),
-            "Dial connected | Signed in | Sound ✓ | Notifications: All | Open Harness | About | Quit"
+            "Device ready | Signed in | Sound ✓ | Notifications: All | Open Harness | About | Quit"
         );
         assert_eq!(
             menu_log(&menu(&AppState { dial: Some(notifying(NotifyMode::You)), ..state() })),
-            "Dial connected | Signed in | Sound ✓ | Notifications: Needs you | Open Harness | About | Quit"
+            "Device ready | Signed in | Sound ✓ | Notifications: Needs you | Open Harness | About | Quit"
         );
     }
 }
