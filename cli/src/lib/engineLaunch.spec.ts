@@ -206,6 +206,16 @@ describe('buildEngineLaunchArgv', () => {
     rmSync(fileOf(third))
   })
 
+  it('a retry of a launch with no one-time file runs it again as it is', () => {
+    // Windows has none, and its pane's other launch facts were read from the first argv (windowsPaneLaunch `held`).
+    const first = ['claude.exe', '--permission-mode', 'auto']
+    const build = vi.fn(() => ['claude.exe'])
+    const attempts = launchAttempts(first, build)
+    expect([attempts(1), attempts(2), attempts(3)]).toEqual([first, first, first])
+    expect(attempts(2)).toBe(first)
+    expect(build).not.toHaveBeenCalled()
+  })
+
   it('puts the script on the command line when there is no data folder to write it in', () => {
     const saved = env.ADAPTER_DATA_DIR
     env.ADAPTER_DATA_DIR = '/dev/null/no-data-folder'

@@ -7,7 +7,7 @@ import { createAndRegisterPane } from '../../lib/createAgentPane.js'
 import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
 import { enginePathOverride } from '../../lib/engineBin.js'
 import { windowsAfterExit } from '../../lib/windows/engineStart.js'
-import { buildEngineLaunchArgv, engineLaunchEnv, refusePermissionFlagIfUnsupported, supportsNamedAgent } from '../../lib/engineLaunch.js'
+import { buildEngineLaunchArgv, engineLaunchEnv, launchAttempts, refusePermissionFlagIfUnsupported, supportsNamedAgent } from '../../lib/engineLaunch.js'
 import { planFork } from '../../lib/forkAgent.js'
 import { prepareInstructionWrites } from '../../scm/launch.js'
 import type { RegisteredSession } from '../../lib/registry.js'
@@ -35,6 +35,7 @@ vi.mock('../../lib/engineLaunch.js', async (real) => ({
   buildEngineCommandArgv: vi.fn(() => ['claude']),
   buildEngineLaunchArgv: vi.fn(() => ['zsh', '-lc', 'claude']),
   engineLaunchEnv: vi.fn(() => undefined),
+  launchAttempts: vi.fn((first: string[]) => () => first),
   namedAgentArgs: vi.fn((_engine: string, agent: string) => ['--agent', agent]),
   refusePermissionFlagIfUnsupported: vi.fn(async () => null),
   supportsNamedAgent: vi.fn(() => true),
@@ -208,12 +209,13 @@ describe('forking an agent', () => {
     if (engine === 'codex') expect(request.codexHome).toBe(finalHome)
   })
 
-  it('builds a retry pane\'s launch again, as the first pane\'s shell removed its one-time file', async () => {
+  it('builds a retry pane\'s launch again with the same options, as the first pane\'s shell removed its one-time file', async () => {
     expect(await setup().fork({ agentId: 'a1', name: null, prompt: null })).toMatchObject({ ok: true })
-    const pane = vi.mocked(createAndRegisterPane).mock.calls[0]![0]
+    expect(vi.mocked(createAndRegisterPane).mock.calls[0]![0].argv).toBe(vi.mocked(launchAttempts).mock.results.at(-1)!.value)
+    const [first, build] = vi.mocked(launchAttempts).mock.calls.at(-1)!
     const built = vi.mocked(buildEngineLaunchArgv).mock.results.length
-    expect(pane.argv(1)).toBe(vi.mocked(buildEngineLaunchArgv).mock.results[built - 1]!.value)
-    expect(pane.argv(2)).toBe(vi.mocked(buildEngineLaunchArgv).mock.results[built]!.value)
+    expect(first).toBe(vi.mocked(buildEngineLaunchArgv).mock.results[built - 1]!.value)
+    expect(build()).toBe(vi.mocked(buildEngineLaunchArgv).mock.results[built]!.value)
     expect(vi.mocked(buildEngineLaunchArgv).mock.calls[built]).toEqual(vi.mocked(buildEngineLaunchArgv).mock.calls[built - 1])
   })
 

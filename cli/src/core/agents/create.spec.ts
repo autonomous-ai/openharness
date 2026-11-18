@@ -9,7 +9,7 @@ import { incompatibleHarnessEngine } from '../../dsh/compatibility.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
 import { enginePathOverride } from '../../lib/engineBin.js'
 import { windowsAfterExit } from '../../lib/windows/engineStart.js'
-import { buildEngineLaunchArgv, engineLaunchEnv, namedAgentArgs, permissionModeFlags, refusePermissionFlagIfUnsupported, supportsFirstPrompt } from '../../lib/engineLaunch.js'
+import { buildEngineLaunchArgv, engineLaunchEnv, launchAttempts, namedAgentArgs, permissionModeFlags, refusePermissionFlagIfUnsupported, supportsFirstPrompt } from '../../lib/engineLaunch.js'
 import { setUpWithin } from '../../lib/setUpWithin.js'
 import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
 import type { GridLaunchAnswer, GridLaunchRequest } from '../../lib/gridLaunchWire.js'
@@ -89,6 +89,7 @@ vi.mock('../../lib/engineLaunch.js', async (real) => ({
   buildEngineCommandArgv: vi.fn(() => ['claude']),
   buildEngineLaunchArgv: vi.fn(() => ['zsh', '-lc', 'claude']),
   engineLaunchEnv: vi.fn(() => undefined),
+  launchAttempts: vi.fn((first: string[]) => () => first),
   namedAgentArgs: vi.fn((_engine: string, agent: string) => ['--agent', agent]),
   permissionModeApproves: vi.fn(() => true),
   permissionModeFlags: vi.fn(() => ['--permission-mode']),
@@ -599,12 +600,13 @@ describe('creating an agent', () => {
       expect(pane).toMatchObject({ engine: 'claude', sessionLabel: expect.any(String), grid: null, gridLaunchRecord: null, dsh: null, dshRuntime: null, defaultName: null })
     })
 
-    it('builds a retry pane\'s launch again, as the first pane\'s shell removed its one-time file', async () => {
+    it('builds a retry pane\'s launch again with the same options, as the first pane\'s shell removed its one-time file', async () => {
       expect(await setup().create(request())).toMatchObject({ ok: true })
-      const pane = vi.mocked(createAndRegisterPane).mock.calls[0][0]
+      expect(vi.mocked(createAndRegisterPane).mock.calls[0][0].argv).toBe(vi.mocked(launchAttempts).mock.results.at(-1)!.value)
+      const [first, build] = vi.mocked(launchAttempts).mock.calls.at(-1)!
       const built = vi.mocked(buildEngineLaunchArgv).mock.results.length
-      expect(pane.argv(1)).toBe(vi.mocked(buildEngineLaunchArgv).mock.results[built - 1]!.value)
-      expect(pane.argv(2)).toBe(vi.mocked(buildEngineLaunchArgv).mock.results[built]!.value)
+      expect(first).toBe(vi.mocked(buildEngineLaunchArgv).mock.results[built - 1]!.value)
+      expect(build()).toBe(vi.mocked(buildEngineLaunchArgv).mock.results[built]!.value)
       expect(vi.mocked(buildEngineLaunchArgv).mock.calls[built]).toEqual(vi.mocked(buildEngineLaunchArgv).mock.calls[built - 1])
     })
 
