@@ -266,18 +266,19 @@ export function vscodeStreams(deps: VscodeTerminalsDeps): VscodeTerminals {
     const reading = guards.get(pid)
     if (reading) return reading
     const verdict = (async (): Promise<Verdict> => {
-      if (!(await deps.fullscreen(cwd, transcriptPath).catch(() => false))) return 'renderer'
+      // A read that rejects, or throws as it is asked, is a refusal by its reason: the verdict itself never rejects.
+      const fullscreen = await (async () => deps.fullscreen(cwd, transcriptPath))().catch(() => false)
+      if (!fullscreen) return 'renderer'
       // Its terminal now: a window that went meanwhile leaves no shell whose foreground could be read.
       const terminal = terminalOf(pid)
       if (!terminal) return 'ps'
-      const groups = await deps.foreground(pid, terminal.shell).catch(() => undefined)
+      const groups = await (async () => deps.foreground(pid, terminal.shell))().catch(() => undefined)
       // No terminal: macOS prints a foreground group of 0, Linux -1.
       if (!groups || groups.tpgid <= 0) return 'ps'
       return groups.pgid === groups.tpgid ? 'pages' : 'background'
     })()
     guards.set(pid, verdict)
-    // However it settles: a read that rejected never holds the agent's next ask.
-    void verdict.finally(() => guards.delete(pid))
+    void verdict.then(() => guards.delete(pid))
     return verdict
   }
 
