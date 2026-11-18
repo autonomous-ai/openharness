@@ -95,7 +95,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
   it('keeps window permission provisional until the matching read completes', async () => {
     const f = setup()
     f.connect(); f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, { local: true, owner: true })
-    f.answer('session_snapshot', snapshotFixture({ hasWindow: false })); await collectSessionRead(f.api().agents.readSessions)
+    f.answer('session_read_registered', snapshotFixture({ hasWindow: false })); await collectSessionRead(f.api().agents.readSessions)
     let send!: Parameters<NonNullable<CoreConnection['read']>>[2], finish!: () => void
     vi.mocked(f.connection.read!).mockImplementationOnce(async (_query, _payload, receive) => {
       send = receive; await new Promise<void>(resolve => { finish = resolve })
@@ -148,7 +148,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
   it('calls its same-machine cohost desk directly and never falls back after direct dispatch', async () => {
     const f = setup(), asker = { local: true, owner: true }
     f.connect(); f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, asker)
-    f.answer('session_snapshot', snapshotFixture()); await collectSessionRead(f.api().agents.readSessions)
+    f.answer('session_read_registered', snapshotFixture()); await collectSessionRead(f.api().agents.readSessions)
     const stepFocus = vi.fn(async () => ({ machineId: 'machine-1', agentId: 'next' })), scroll = vi.fn()
     const revoke = publishDeviceDesk({ dataDir: '/data', machineId: 'machine-1', current: () => true, hasWindow: () => true,
       desk: { stepFocus, scroll } })
@@ -164,9 +164,9 @@ describe('the Wi-Fi device in the devices\' process', () => {
       expect(f.adapter().desk!.scroll('move', 2, 3, () => false)).toBe(false)
       expect(await f.adapter().desk!.stepFocus('next', 'a', () => true)).toEqual({ machineId: 'machine-1', agentId: 'next' })
       expect(f.adapter().desk!.scroll('move', 2, 3, () => true)).toBe(true)
-      f.answer('session_snapshot', snapshotFixture({ hasWindow: false })); await collectSessionRead(f.api().agents.readSessions)
+      f.answer('session_read_registered', snapshotFixture({ hasWindow: false })); await collectSessionRead(f.api().agents.readSessions)
       expect(await f.api().wifi.stepFocus('next', 'a')).toBe('no_app')
-      f.answer('session_snapshot', snapshotFixture()); await collectSessionRead(f.api().agents.readSessions)
+      f.answer('session_read_registered', snapshotFixture()); await collectSessionRead(f.api().agents.readSessions)
       vi.mocked(f.connection.query).mockClear()
       stepFocus.mockRejectedValueOnce(new Error('private content must not be logged'))
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -179,7 +179,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
   it('uses the explicit mixed-host fallback once and does not confirm it after its caller departs', async () => {
     const f = setup(), asker = { local: true, owner: true }
     f.connect(); f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, asker)
-    f.answer('session_snapshot', snapshotFixture()); await collectSessionRead(f.api().agents.readSessions)
+    f.answer('session_read_registered', snapshotFixture()); await collectSessionRead(f.api().agents.readSessions)
     const foreign = vi.fn(async () => ({ machineId: 'other-machine', agentId: 'private' }))
     const revoke = publishDeviceDesk({ dataDir: '/data', machineId: 'other-machine', current: () => true, hasWindow: () => true,
       desk: { stepFocus: foreign, scroll: () => {} } })
@@ -203,7 +203,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     f.connect(); f.event({ kind: 'resume' }); await drain()
     const old = f.api(), adapter = f.adapter()
     f.answer('machine', { id: 'machine-2' }); f.event({ kind: 'resume' }); await drain()
-    f.answer('session_snapshot', snapshotFixture({ machine: { id: 'machine-2', computerId: 'computer-9', name: 'Desk' } })); await collectSessionRead(f.api().agents.readSessions)
+    f.answer('session_read_registered', snapshotFixture({ machine: { id: 'machine-2', computerId: 'computer-9', name: 'Desk' } })); await collectSessionRead(f.api().agents.readSessions)
     vi.mocked(f.connection.query).mockClear()
     for (const read of [() => old.wifi.create('package', 'claude', '/workspace'),
       () => old.wifi.stepFocus('next', 'a'), () => old.turns.recent('a', 1),
@@ -445,7 +445,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     delete f.connection.notice
     f.connect(); f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, asker)
     expect(revealWindow(f.api(), 'op', 'a')).toBe(true)
-    f.answer('session_snapshot', snapshotFixture()); await collectSessionRead(f.api().agents.readSessions)
+    f.answer('session_read_registered', snapshotFixture()); await collectSessionRead(f.api().agents.readSessions)
     expect(focusWindow(f.api(), 'a', 9, 'r')).toBe(true)
     expect(f.api().wifi.scroll('move', 1, 2)).toBe(true)
     expect(f.notices).toEqual([])
@@ -455,7 +455,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
   it('revokes cached window notices until a fresh view on the replacement connection', async () => {
     const f = setup(), asker = { local: true, owner: true }
     f.connect(); f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, asker)
-    f.answer('session_snapshot', snapshotFixture())
+    f.answer('session_read_registered', snapshotFixture())
     const owner = f.api(), wifi = owner.wifi
     await collectSessionRead(f.api().agents.readSessions)
     f.disconnect()
@@ -669,14 +669,14 @@ describe('the Wi-Fi device in the devices\' process', () => {
   it.each(['malformed', 'wrong-machine', 'failed'] as const)('revokes owned window permission when a new snapshot is %s', async failure => {
     const f = setup(), asker = { local: true, owner: true }
     f.connect(); f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, asker)
-    f.answer('session_snapshot', snapshotFixture()); await collectSessionRead(f.api().agents.readSessions)
+    f.answer('session_read_registered', snapshotFixture()); await collectSessionRead(f.api().agents.readSessions)
     expect(focusWindow(f.api(), 'a', 9, 'before')).toBe(true)
-    f.answer('session_snapshot', failure === 'malformed' ? {} : failure === 'failed' ? new Error('QUERY_FAILED') : snapshotFixture({ machine: { id: 'other', computerId: 'computer-9', name: 'Other' } }))
+    f.answer('session_read_registered', failure === 'malformed' ? {} : failure === 'failed' ? new Error('QUERY_FAILED') : snapshotFixture({ machine: { id: 'other', computerId: 'computer-9', name: 'Other' } }))
     await expect(collectSessionRead(f.api().agents.readSessions)).rejects.toThrow(failure === 'malformed' ? 'SESSION_READ_UNAVAILABLE' : failure === 'failed' ? 'QUERY_FAILED' : 'WIFI_IDENTITY_UNAVAILABLE')
     expect(focusWindow(f.api(), 'a', 9, 'failed')).toBe(false)
     expect(f.api().wifi.scroll('move', 1, 2)).toBe(false)
     expect(revealWindow(f.api(), 'durable-operation', 'a')).toBe(true)
-    f.answer('session_snapshot', snapshotFixture()); await collectSessionRead(f.api().agents.readSessions)
+    f.answer('session_read_registered', snapshotFixture()); await collectSessionRead(f.api().agents.readSessions)
     expect(focusWindow(f.api(), 'a', 9, 'fresh')).toBe(true)
     await f.service.stop()
   })
@@ -687,7 +687,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     f.connect(); f.event({ kind: 'resume' }); await drain()
     let finish!: (value: Record<string, unknown>) => void
     const query = vi.mocked(f.connection.query), original = query.getMockImplementation()!
-    query.mockImplementation((name, payload) => name === 'session_snapshot' ? new Promise(resolve => { finish = resolve }) : original(name, payload))
+    query.mockImplementation((name, payload) => name === 'session_read_registered' ? new Promise(resolve => { finish = resolve }) : original(name, payload))
     const old = collectSessionRead(f.api().agents.readSessions), failed = expect(old).rejects.toThrow('the original core connection ended')
     if (change === 'reconnect') { f.disconnect(); f.connect(); f.event({ kind: 'resume' }); await drain() }
     else {
@@ -695,7 +695,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
       f.answer('machine', { id: 'machine-1' }); f.event({ kind: 'resume' }); await drain()
     }
     query.mockImplementation(original)
-    f.answer('session_snapshot', snapshotFixture()); await collectSessionRead(f.api().agents.readSessions)
+    f.answer('session_read_registered', snapshotFixture()); await collectSessionRead(f.api().agents.readSessions)
     finish({}); await failed
     expect(focusWindow(f.api(), 'a', 9, 'current')).toBe(true)
     expect(f.api().wifi.scroll('move', 1, 2)).toBe(true)
@@ -708,7 +708,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     await f.options().requests!.wifi_http({}, { local: true, owner: true })
     let finish!: (view: Record<string, unknown>) => void
     const query = vi.mocked(f.connection.query), original = query.getMockImplementation()!
-    query.mockImplementation((name, payload) => name === 'session_snapshot' ? new Promise(resolve => { finish = resolve }) : original(name, payload))
+    query.mockImplementation((name, payload) => name === 'session_read_registered' ? new Promise(resolve => { finish = resolve }) : original(name, payload))
     const reading = collectSessionRead(f.api().agents.readSessions)
     const failed = expect(reading).rejects.toThrow('the original core connection ended')
     f.disconnect(); f.connect()
@@ -1088,11 +1088,11 @@ describe('the Wi-Fi device in the devices\' process', () => {
     f.event({ kind: 'resume' })
     await f.settled()
     const owner = f.api(), wifi = owner.wifi
-    f.answer('session_snapshot', snapshotFixture())
+    f.answer('session_read_registered', snapshotFixture())
     expect(await collectSessionRead(f.api().agents.readSessions)).toEqual(snapshotFixture())
     expect(wifi.scroll('move', 2, 3)).toBe(true)
     expect(focusWindow(owner, 'a', 9, 'r')).toBe(true)
-    f.answer('session_snapshot', snapshotFixture({ hasWindow: false }))
+    f.answer('session_read_registered', snapshotFixture({ hasWindow: false }))
     await collectSessionRead(f.api().agents.readSessions)
     // Without a window in the view the request being answered asked for, nothing is sent to one.
     expect(wifi.scroll('down', 0, 0)).toBe(false)

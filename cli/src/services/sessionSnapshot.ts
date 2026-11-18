@@ -1,5 +1,5 @@
 /** Complete per-row reads: validate each record, retain only the component's provisional projection. */
-import { SESSION_READ_HEADER_BYTES, SESSION_READ_VIEW_BYTES, type CoreApi, type ReadRecord, type SessionReadHeader, type SessionReadReceiver, type SessionReadValue } from '../core/api.js'
+import { SESSION_READ_HEADER_BYTES, SESSION_READ_VIEW_BYTES, type CoreApi, type ReadRecord, type SessionReadHeader, type SessionReadReceiver, type SessionReadScope, type SessionReadValue } from '../core/api.js'
 import { boundedJsonBytes } from '../lib/boundedJsonBytes.js'
 import { RECORD_READ_BYTES } from '../lib/recordReadWire.js'
 import type { CoreConnection } from './process.js'
@@ -50,9 +50,9 @@ function checked(value: unknown): ReadRecord<SessionReadHeader, SessionReadValue
 }
 
 /** The authenticated record transport supplies sequence/connection checks; this adapter supplies the typed row boundary. */
-export async function readCoreSessions(core: CoreConnection, receive: SessionReadReceiver, signal?: AbortSignal): Promise<void> {
+export async function readCoreSessions(core: CoreConnection, scope: SessionReadScope, receive: SessionReadReceiver, signal?: AbortSignal): Promise<void> {
   if (!core.read) return invalid()
-  await core.read('session_snapshot', {}, value => {
+  await core.read(`session_read_${scope}`, {}, value => {
     let accepted: boolean | undefined
     const sent = receive(checked(value), ok => { if (accepted !== undefined) return invalid(); accepted = ok })
     // A component's projection is synchronous. Never keep incoming frames behind an unbounded consumer queue.
@@ -66,7 +66,7 @@ export interface SessionProjection<T> {
 }
 
 /** Commit only after exact end and successful read settlement. No aggregate raw row array is retained. */
-export async function readSessionView<T>(read: CoreApi['agents']['readSessions'], build: (header: SessionReadHeader) => SessionProjection<T>, signal?: AbortSignal): Promise<T> {
+export async function readSessionView<T>(read: CoreApi['agents']['readSessions'], scope: SessionReadScope, build: (header: SessionReadHeader) => SessionProjection<T>, signal?: AbortSignal): Promise<T> {
   const ids = new Set<string>()
   let projection: SessionProjection<T> | undefined, expected: number | undefined, index = 0, ended = false, bytes = 0
   const retain = (value: unknown): void => {
@@ -75,7 +75,7 @@ export async function readSessionView<T>(read: CoreApi['agents']['readSessions']
     bytes += length + 48
   }
   try {
-    await read((raw, settled) => {
+    await read(scope, (raw, settled) => {
       const value = checked(raw)
       if (ended) return invalid()
       if (value.type === 'begin') {

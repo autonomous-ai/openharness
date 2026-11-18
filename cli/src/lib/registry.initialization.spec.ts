@@ -75,6 +75,7 @@ it('keeps initial image I/O owned without using the blocking reader or admitting
   const loading = registry.load(); pending.push(loading)
   expect(await Promise.race([entered.promise.then(() => 'reading'), loading.then(() => 'completed')])).toBe('reading')
   expect(() => registry.list()).toThrow('initializing')
+  expect(() => registry.advertisedRows()).toThrow('initializing')
   expect(() => registry.markOpened('fixture-0')).toThrow('initializing')
   let closed = false
   const closing = registry.flush({ exiting: true }).then(() => { closed = true }); pending.push(closing)
@@ -252,4 +253,22 @@ it('rejects a failed migration without exposing a partial image or advancing its
   expect(readFileSync(file, 'utf8')).toBe(before)
   expect(existsSync(join(root, 'data', 'registry-boot'))).toBe(false)
   expect(existsSync(join(root, 'data', 'registry-own-modes'))).toBe(false)
+})
+
+it('iterates exactly advertised membership in Registry order with current object identities', async () => {
+  await registry.load()
+  const [first, second] = registry.list()
+  registry.setTerminalAvailable(second.agentId, true)
+  registry.setTerminalAvailable(first.agentId, true)
+  // Availability alone is the public predicate, even when the engine is dormant or unbound.
+  first.active = false; first.sessionId = ''
+  expect([...registry.advertisedRows()]).toEqual(registry.advertised())
+  expect([...registry.advertisedRows()][0]).toBe(first)
+  expect([...registry.advertisedRows()][1]).toBe(second)
+  registry.setTerminalAvailable(first.agentId, false)
+  expect([...registry.advertisedRows()]).toEqual([second])
+  expect(registry.advertised()).toEqual([second])
+  registry.setTerminalAvailable(second.agentId, false)
+  expect([...registry.advertisedRows()]).toEqual([])
+  expect(registry.list()).toEqual([first, second])
 })

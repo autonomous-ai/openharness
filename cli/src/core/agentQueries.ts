@@ -64,7 +64,7 @@ export async function answerSessionRead(core: Pick<CoreApi, 'agents'>, service: 
   const host = Object.values(SERVICE_HOSTS).find(host => host.services.includes(service))
   if (!host?.reads || !Object.hasOwn(host.reads, service) || !host.reads[service].includes(query)) throw new Error('READ_NOT_DECLARED')
   if (!authority.current?.()) throw new Error('SESSION_READ_UNAVAILABLE')
-  await core.agents.readSessions((record, settled) => {
+  await core.agents.readSessions(query === 'session_read_registered' ? 'registered' : 'advertised', (record, settled) => {
     if (!authority.current?.()) { settled(false); return false }
     return receive(record, settled)
   }, signal)

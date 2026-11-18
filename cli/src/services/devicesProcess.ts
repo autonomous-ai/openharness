@@ -113,7 +113,7 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     if (!core) return Promise.resolve()
     const origin = core, epoch = generation
     const pending = { generation: epoch, promise: Promise.resolve(), closed: new AbortController() }
-    pending.promise = readSessionView((receive, signal) => readCoreSessions(origin, receive, signal), header => {
+    pending.promise = readSessionView((scope, receive, signal) => readCoreSessions(origin, scope, receive, signal), 'advertised', header => {
       const agents: Viewed[] = []
       return { row: (member, retain) => {
         if (stopped || generation !== epoch || core !== origin) throw new Error('SESSION_READ_UNAVAILABLE')

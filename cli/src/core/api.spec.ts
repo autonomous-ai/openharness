@@ -172,6 +172,19 @@ describe('the core API services stand on', () => {
 
   const capture = (deps: CoreApiDeps) => collectSessionRead(createCoreApi(deps).agents.readSessions)
 
+  it('preserves explicit membership through the in-process API', async () => {
+    const deps = coreDeps(), shown = { ...row('shown'), active: false, registeredAt: 1, lastHookAt: 0, transcriptPath: null },
+      hidden = { ...shown, agentId: 'hidden', sessionId: '' }
+    deps.registry.list = () => [shown, hidden]
+    deps.registry.byAgent = id => id === 'shown' ? shown : hidden
+    deps.registry.advertisedRows = () => [shown][Symbol.iterator]()
+    deps.turns.running = () => false
+    deps.facts = session => ({ displayName: session.agentId, terminalAvailable: session === shown, parts: {} })
+    const core = createCoreApi(deps)
+    expect((await collectSessionRead(core.agents.readSessions, 'advertised')).registered.map(row => row.session.agentId)).toEqual(['shown'])
+    expect((await collectSessionRead(core.agents.readSessions, 'registered')).registered.map(row => row.session.agentId)).toEqual(['shown', 'hidden'])
+  })
+
   it.each(['membership', 'aggregate bytes'])('captures complete valid %s beyond the former whole-reply limit', async kind => {
     const rows = Array.from({ length: kind === 'membership' ? 4097 : 1600 }, (_, i) => ({
       ...row(`a-${i}`), active: true, registeredAt: 1, lastHookAt: 0, transcriptPath: null,

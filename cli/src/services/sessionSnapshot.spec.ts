@@ -3,7 +3,7 @@ import { SESSION_READ_HEADER_BYTES, SESSION_READ_VIEW_BYTES, type CoreApi, type 
 import { snapshotFixture, snapshotRow, snapshotReader, snapshotRecords, type SessionSnapshot } from '../testing/sessionSnapshot.js'
 import { readCoreSessions, readSessionView } from './sessionSnapshot.js'
 
-const collect = (read: CoreApi['agents']['readSessions']) => readSessionView(read, header => {
+const collect = (read: CoreApi['agents']['readSessions']) => readSessionView(read, 'registered', header => {
   const result: SessionSnapshot = { ...header, registered: [], cloud: [] }
   return { row: (member, retain) => {
     if ('gone' in member) return
@@ -13,7 +13,7 @@ const collect = (read: CoreApi['agents']['readSessions']) => readSessionView(rea
   }, value: () => result }
 })
 const sessionSnapshot = (value: unknown) => collect(snapshotReader(() => value))
-const records = (values: unknown[]): CoreApi['agents']['readSessions'] => async receive => {
+const records = (values: unknown[]): CoreApi['agents']['readSessions'] => async (_scope, receive) => {
   for (const value of values) { let ok = false; if (!receive(value as ReadRecord<SessionReadHeader, SessionReadValue>, sent => { ok = sent }) || !ok) throw new Error('READ_REFUSED') }
 }
 const complete = () => snapshotFixture({ registered: [snapshotRow()], cloud: [{ agentId: 'cloud', sessionId: 'remote', engine: 'fo',
@@ -100,37 +100,39 @@ describe('complete shared session facts at the component boundary', async () => 
   it('never publishes failed provisional rows and admits projected retention before keeping it', async () => {
     const commit = vi.fn(), held: unknown[] = []
     const incomplete = snapshotRecords(complete()).slice(0, -1)
-    await expect(readSessionView(records(incomplete), () => ({ row: value => { held.push(value) }, value: commit }))).rejects.toThrow('SESSION_READ_UNAVAILABLE')
+    await expect(readSessionView(records(incomplete), 'registered', () => ({ row: value => { held.push(value) }, value: commit }))).rejects.toThrow('SESSION_READ_UNAVAILABLE')
     expect(held).toHaveLength(2); expect(commit).not.toHaveBeenCalled()
-    await expect(readSessionView(records(snapshotRecords(complete())), () => ({
+    await expect(readSessionView(records(snapshotRecords(complete())), 'registered', () => ({
       row: (_value, retain) => retain('x'.repeat(SESSION_READ_VIEW_BYTES)), value: commit,
     }))).rejects.toThrow('SESSION_READ_TOO_LARGE')
     expect(commit).not.toHaveBeenCalled()
     const failure = records(snapshotRecords(complete()))
-    await expect(readSessionView(failure, () => { throw new Error('PROJECT_FAILED') })).rejects.toThrow('PROJECT_FAILED')
+    await expect(readSessionView(failure, 'registered', () => { throw new Error('PROJECT_FAILED') })).rejects.toThrow('PROJECT_FAILED')
   })
 
   it('adapts only available record transport and requires synchronous acknowledged projection', async () => {
-    await expect(readCoreSessions({ query: vi.fn() }, vi.fn())).rejects.toThrow('SESSION_READ_UNAVAILABLE')
+    await expect(readCoreSessions({ query: vi.fn() }, 'registered', vi.fn())).rejects.toThrow('SESSION_READ_UNAVAILABLE')
     const value = snapshotRecords(snapshotFixture())[0]
     const read = vi.fn(async (_query, _payload, receive) => receive(value))
     const core = { query: vi.fn(), read }, controller = new AbortController()
     const receive = vi.fn((_record, settled) => { settled(true); return true })
-    await readCoreSessions(core, receive, controller.signal)
-    expect(read).toHaveBeenCalledWith('session_snapshot', {}, expect.any(Function), controller.signal)
+    await readCoreSessions(core, 'registered', receive, controller.signal)
+    expect(read).toHaveBeenCalledWith('session_read_registered', {}, expect.any(Function), controller.signal)
+    await readCoreSessions(core, 'advertised', receive, controller.signal)
+    expect(read).toHaveBeenLastCalledWith('session_read_advertised', {}, expect.any(Function), controller.signal)
     expect(core.query).not.toHaveBeenCalled()
     for (const handle of [() => false, () => true, (_record: unknown, settled: (sent: boolean) => void) => { settled(false); return true },
       (_record: unknown, settled: (sent: boolean) => void) => { settled(true); settled(true); return true }]) {
-      await expect(readCoreSessions(core, handle)).rejects.toThrow('SESSION_READ_UNAVAILABLE')
+      await expect(readCoreSessions(core, 'registered', handle)).rejects.toThrow('SESSION_READ_UNAVAILABLE')
     }
     read.mockImplementationOnce(async (_query, _payload, receive) => receive({ type: 'begin', payload: {} }))
-    await expect(readCoreSessions(core, receive)).rejects.toThrow('SESSION_READ_UNAVAILABLE')
+    await expect(readCoreSessions(core, 'registered', receive)).rejects.toThrow('SESSION_READ_UNAVAILABLE')
   })
 
   it('bounds membership retained by the component even when every member is gone', async () => {
     const commit = vi.fn(), id = 'x'.repeat(7 * 1024 * 1024)
     const members = Array.from({ length: 5 }, (_, index) => ({ type: 'row', payload: { index, value: { source: 'registered', gone: `${index}${id}` } } }))
-    await expect(readSessionView(records([{ type: 'begin', payload: { header: snapshotFixture(), count: 5 } }, ...members]),
+    await expect(readSessionView(records([{ type: 'begin', payload: { header: snapshotFixture(), count: 5 } }, ...members]), 'registered',
       () => ({ row: () => {}, value: commit }))).rejects.toThrow('SESSION_READ_TOO_LARGE')
     expect(commit).not.toHaveBeenCalled()
   })

@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { SessionSnapshotRow } from '../core/api.js'
 import { snapshotFixture, snapshotRow, snapshotReader } from '../testing/sessionSnapshot.js'
 import { readWifiView } from './wifiView.js'
@@ -26,8 +26,10 @@ describe('Wi-Fi presentation outside core', () => {
         make('unbound', { sessionId: '', cwd: null }), make('empty', { cwd: '' }), make('held', { sessionId: '', launch: { state: 'held', service: 'engine', detail: 'wait' } }),
       ]
       delete registered[5].session.dsh
-      const view = await readWifiView(snapshotReader(() => snapshotFixture({ registered, cloud: [{ agentId: 'cloud', sessionId: 'c', engine: 'fo', registeredAt: 0, lastHookAt: 0,
-        transcriptPath: null, displayName: 'Cloud', selectedModel: null }] })), 'machine-1')
+      const read = vi.fn(snapshotReader(() => snapshotFixture({ registered, cloud: [{ agentId: 'cloud', sessionId: 'c', engine: 'fo', registeredAt: 0, lastHookAt: 0,
+        transcriptPath: null, displayName: 'Cloud', selectedModel: null }] })))
+      const view = await readWifiView(read, 'machine-1')
+      expect(read).toHaveBeenCalledWith('registered', expect.any(Function), undefined)
       expect(view.hasWindow).toBe(true)
       expect(view.store).toHaveLength(11)
       expect(view.agents.map(row => row.agentId)).not.toContain('hidden')

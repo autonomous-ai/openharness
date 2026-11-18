@@ -197,9 +197,9 @@ describe('a service in its own process', () => {
     let core!: CoreConnection
     const service = run({ onConnected: value => { core = value } })
     socket().open(); socket().say({ type: 'connected', payload: {} })
-    const receive = vi.fn(), pending = core.read!('session_snapshot', {}, receive)
+    const receive = vi.fn(), pending = core.read!('session_read_registered', {}, receive)
     const requestId = socket().sent.at(-1)!.payload.requestId
-    await expect(core.read!('session_snapshot', {}, vi.fn())).rejects.toThrow('READ_BUSY')
+    await expect(core.read!('session_read_registered', {}, vi.fn())).rejects.toThrow('READ_BUSY')
     socket().say({ type: 'service_read_begin', payload: { requestId, generation: 'g', count: 1, header: { value: 'header' } } })
     socket().say({ type: 'service_read_row', payload: { requestId, generation: 'g', index: 0, value: { value: 'row' } } })
     expect(receive).toHaveBeenCalledTimes(2)
@@ -210,12 +210,12 @@ describe('a service in its own process', () => {
     const queryId = socket().sent.at(-1)!.payload.requestId
     socket().say({ type: 'service_query_result', payload: { requestId: queryId, ok: true } })
     expect(await query).toEqual({ ok: true })
-    const fresh = core.read!('session_snapshot', {}, vi.fn())
+    const fresh = core.read!('session_read_registered', {}, vi.fn())
     const id = socket().sent.at(-1)!.payload.requestId
     socket().say({ type: 'service_read_error', payload: { requestId: id, code: 'READ_NOT_DECLARED' } })
     await expect(fresh).rejects.toThrow('READ_NOT_DECLARED')
     expect(socket().closed).toBe(false)
-    service.stop(); await expect(core.read!('session_snapshot', {}, receive)).rejects.toThrow('READ_UNAVAILABLE')
+    service.stop(); await expect(core.read!('session_read_registered', {}, receive)).rejects.toThrow('READ_UNAVAILABLE')
   })
 
   it('admits a bounded request before encoding and refuses already-aborted callers', async () => {
@@ -223,9 +223,9 @@ describe('a service in its own process', () => {
     const service = run({ onConnected: value => { core = value } })
     socket().open(); socket().say({ type: 'connected' })
     const controller = new AbortController(); controller.abort()
-    await expect(core.read!('session_snapshot', {}, vi.fn(), controller.signal)).rejects.toThrow('READ_UNAVAILABLE')
-    for (const [query, payload] of [['', {}], ['中'.repeat(50), {}], ['session_snapshot', { extra: 'x'.repeat(4096) }],
-      ['session_snapshot', { extra: 'x'.repeat(4050) }]] as const) {
+    await expect(core.read!('session_read_registered', {}, vi.fn(), controller.signal)).rejects.toThrow('READ_UNAVAILABLE')
+    for (const [query, payload] of [['', {}], ['中'.repeat(50), {}], ['session_read_registered', { extra: 'x'.repeat(4096) }],
+      ['session_read_registered', { extra: 'x'.repeat(4050) }]] as const) {
       await expect(core.read!(query, payload, vi.fn())).rejects.toThrow('READ_UNAVAILABLE')
     }
     expect(socket().sent).toHaveLength(1)
@@ -237,7 +237,7 @@ describe('a service in its own process', () => {
     const service = run({ onConnected: value => { core = value } })
     socket().open(); socket().say({ type: 'connected' })
     const send = vi.spyOn(socket(), 'send').mockImplementationOnce(() => { throw new Error('PRIVATE') })
-    await expect(core.read!('session_snapshot', {}, vi.fn())).rejects.toThrow('READ_UNAVAILABLE')
+    await expect(core.read!('session_read_registered', {}, vi.fn())).rejects.toThrow('READ_UNAVAILABLE')
     expect(socket().closed).toBe(true); send.mockRestore()
     socket().drop(); await vi.advanceTimersByTimeAsync(100)
     socket().open(); socket().say({ type: 'connected' })
@@ -250,7 +250,7 @@ describe('a service in its own process', () => {
     let core!: CoreConnection
     const service = run({ onConnected: value => { core = value } })
     socket().open(); socket().say({ type: 'connected' })
-    const controller = new AbortController(), pending = core.read!('session_snapshot', {}, vi.fn(), controller.signal)
+    const controller = new AbortController(), pending = core.read!('session_read_registered', {}, vi.fn(), controller.signal)
     const send = vi.spyOn(socket(), 'send').mockImplementationOnce(() => { throw new Error('PRIVATE') })
     controller.abort()
     await expect(pending).rejects.toThrow('READ_UNAVAILABLE')
@@ -263,7 +263,7 @@ describe('a service in its own process', () => {
     run({ onConnected: value => { core = value } })
     socket().open(); socket().say({ type: 'connected' })
     const receive = vi.fn(() => { if (fault === 'callback') throw new Error('PRIVATE') })
-    const pending = core.read!('session_snapshot', {}, receive), failed = expect(pending).rejects.toThrow('READ_UNAVAILABLE')
+    const pending = core.read!('session_read_registered', {}, receive), failed = expect(pending).rejects.toThrow('READ_UNAVAILABLE')
     const requestId = socket().sent.at(-1)!.payload.requestId
     const begin = { type: 'service_read_begin', payload: { requestId, generation: 'g', count: 1, header: {} } }
     socket().say(begin)
@@ -278,7 +278,7 @@ describe('a service in its own process', () => {
       if (fault === 'bad-end-count') socket().say({ type: 'service_read_end', payload: { requestId, generation: 'g', count: 2 } })
     }
     await failed; expect(socket().closed).toBe(true)
-    await expect(core.read!('session_snapshot', {}, vi.fn())).rejects.toThrow('READ_BUSY')
+    await expect(core.read!('session_read_registered', {}, vi.fn())).rejects.toThrow('READ_BUSY')
     socket().say({ type: 'service_read_end', payload: { requestId, generation: 'g', count: 1 } })
     expect(lines.join(' ')).not.toContain('PRIVATE')
   })
@@ -288,7 +288,7 @@ describe('a service in its own process', () => {
     const service = run({ onConnected: value => { core = value } })
     socket().open(); socket().say({ type: 'connected' })
     const reused = core, original = socket(), controller = new AbortController(), receive = vi.fn()
-    const pending = core.read!('session_snapshot', {}, receive, controller.signal), failed = expect(pending).rejects.toThrow()
+    const pending = core.read!('session_read_registered', {}, receive, controller.signal), failed = expect(pending).rejects.toThrow()
     const retiredCancel = getEventListeners(controller.signal, 'abort')[0] as () => void
     const requestId = original.sent.at(-1)!.payload.requestId
     if (ending === 'abort') controller.abort()
@@ -299,10 +299,10 @@ describe('a service in its own process', () => {
     if (ending === 'abort') expect(original.sent.at(-1)).toEqual({ type: 'service_read_cancel', payload: { requestId } })
     if (ending === 'stop') return
     if (ending !== 'disconnect') original.drop()
-    await expect(core.read!('session_snapshot', {}, receive)).rejects.toThrow('READ_UNAVAILABLE')
+    await expect(core.read!('session_read_registered', {}, receive)).rejects.toThrow('READ_UNAVAILABLE')
     await vi.advanceTimersByTimeAsync(100); socket().open(); socket().say({ type: 'connected' })
     expect(core).toBe(reused)
-    const fresh = core.read!('session_snapshot', {}, receive), id = socket().sent.at(-1)!.payload.requestId
+    const fresh = core.read!('session_read_registered', {}, receive), id = socket().sent.at(-1)!.payload.requestId
     retiredCancel()
     expect(socket().closed).toBe(false)
     expect(socket().sent.at(-1)!.type).toBe('service_read')

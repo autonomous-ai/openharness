@@ -143,7 +143,7 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // a device, or a request for one (core/devicesWake.ts): about 72 MiB at idle, which a computer with none
   // never pays.
   devices: { services: ['devices', 'wifi', 'machineAddons'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true, askedSince: 4,
-    reads: { devices: ['session_snapshot'], wifi: ['session_snapshot'] },
+    reads: { devices: ['session_read_advertised'], wifi: ['session_read_registered'] },
     windows: {
       devices: { all: ['dial_open', 'dial_notification_read', 'dial_forked', 'dial_focus', 'dial_swarm', 'dial_scroll', 'dial_status', 'voice_route_request'],
         connection: ['dial_selection', 'dial_visit', 'dial_form'] },

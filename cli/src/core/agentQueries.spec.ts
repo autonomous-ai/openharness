@@ -96,30 +96,36 @@ describe('shared session read admission', () => {
   it('serves only its two declared readers and checks exact connection at every event and after await', async () => {
     const core = fakeCore(), current = vi.fn(() => true), controller = new AbortController()
     const receive = vi.fn((_record, settled) => { settled(true); return true })
-    for (const service of ['devices', 'wifi']) {
-      await answerSessionRead(core, service, 'session_snapshot', receive, controller.signal, { current })
+    for (const [service, scope] of [['devices', 'advertised'], ['wifi', 'registered']]) {
+      await answerSessionRead(core, service, `session_read_${scope}`, receive, controller.signal, { current })
+    }
+    expect(vi.mocked(core.agents.readSessions).mock.calls.map(([scope]) => scope)).toEqual(['advertised', 'registered'])
+    for (const [service, query] of [['devices', 'session_read_registered'], ['wifi', 'session_read_advertised'], ['devices', 'session_snapshot'], ['wifi', 'session_snapshot']]) {
+      await expect(answerSessionRead(core, service, query, receive, controller.signal, { current })).rejects.toThrow('READ_NOT_DECLARED')
     }
     expect(receive.mock.calls.map(([record]) => record.type)).toEqual(['begin', 'end', 'begin', 'end'])
     for (const service of ['messages', 'gateway', 'unknown', '__proto__']) {
-      await expect(answerSessionRead(core, service, 'session_snapshot', receive, controller.signal, { current })).rejects.toThrow('READ_NOT_DECLARED')
+      for (const query of ['session_snapshot', 'session_read_registered', 'session_read_advertised']) {
+        await expect(answerSessionRead(core, service, query, receive, controller.signal, { current })).rejects.toThrow('READ_NOT_DECLARED')
+      }
     }
     await expect(answerSessionRead(core, 'devices', 'view', receive, controller.signal, { current })).rejects.toThrow('READ_NOT_DECLARED')
-    await expect(answerSessionRead(core, 'devices', 'session_snapshot', receive, controller.signal, {})).rejects.toThrow('SESSION_READ_UNAVAILABLE')
+    await expect(answerSessionRead(core, 'devices', 'session_read_advertised', receive, controller.signal, {})).rejects.toThrow('SESSION_READ_UNAVAILABLE')
     current.mockReturnValue(false)
-    await expect(answerSessionRead(core, 'devices', 'session_snapshot', receive, controller.signal, { current })).rejects.toThrow('SESSION_READ_UNAVAILABLE')
+    await expect(answerSessionRead(core, 'devices', 'session_read_advertised', receive, controller.signal, { current })).rejects.toThrow('SESSION_READ_UNAVAILABLE')
     current.mockReturnValue(true)
     let release!: () => void
     vi.mocked(core.agents.readSessions).mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
-    const old = answerSessionRead(core, 'wifi', 'session_snapshot', receive, controller.signal, { current })
+    const old = answerSessionRead(core, 'wifi', 'session_read_registered', receive, controller.signal, { current })
     current.mockReturnValue(false); release()
     await expect(old).rejects.toThrow('SESSION_READ_UNAVAILABLE')
     current.mockReturnValue(true)
-    vi.mocked(core.agents.readSessions).mockImplementationOnce(async send => {
+    vi.mocked(core.agents.readSessions).mockImplementationOnce(async (_scope, send) => {
       current.mockReturnValue(false)
       const settled = vi.fn()
       expect(send({ type: 'end', payload: { count: 0 } }, settled)).toBe(false)
       expect(settled).toHaveBeenCalledWith(false)
     })
-    await expect(answerSessionRead(core, 'wifi', 'session_snapshot', receive, controller.signal, { current })).rejects.toThrow('SESSION_READ_UNAVAILABLE')
+    await expect(answerSessionRead(core, 'wifi', 'session_read_registered', receive, controller.signal, { current })).rejects.toThrow('SESSION_READ_UNAVAILABLE')
   })
 })

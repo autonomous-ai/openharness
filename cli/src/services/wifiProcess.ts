@@ -169,11 +169,11 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
         const value = object(answer.value)
         return value.agentId === id && typeof value.sessionId === 'string' && typeof value.engine === 'string' ? value as unknown as AgentView : null
       } },
-      agents: { ...unasked.agents, readSessions: async (receive, signal) => {
+      agents: { ...unasked.agents, readSessions: async (scope, receive, signal) => {
         const binding = bindingFor(owner, 'the Wi-Fi device is not connected to the core')
         try {
           let hasWindow = false
-          await readCoreSessions(binding.origin, (record, settled) => {
+          await readCoreSessions(binding.origin, scope, (record, settled) => {
             requireBinding(owner, binding)
             if (record.type === 'begin') {
               if (record.payload.header.machine.id !== owner.machineId) throw new Error('WIFI_IDENTITY_UNAVAILABLE')

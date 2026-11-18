@@ -436,9 +436,9 @@ describe('the Wi-Fi device, with the dials', () => {
     startWifi(core, ports)
     await ports.wifi!.resume({ focus: null })
     let release!: (value: SessionSnapshot) => void, signal!: AbortSignal
-    vi.mocked(core.agents.readSessions).mockImplementationOnce((receive, closed) => {
+    vi.mocked(core.agents.readSessions).mockImplementationOnce((_scope, receive, closed) => {
       signal = closed!
-      return snapshotReader(() => new Promise(resolve => { release = resolve }))(receive, closed)
+      return snapshotReader(() => new Promise(resolve => { release = resolve }))(_scope, receive, closed)
     })
     const first = ports.wifi!.resume({ focus: null }), second = ports.wifi!.resume({ focus: null })
     const both = Promise.allSettled([first, second])

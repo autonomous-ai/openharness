@@ -134,6 +134,7 @@ export type ReadRecord<Header = Record<string, unknown>, Row = Record<string, un
   | { type: 'end'; payload: { count: number } }
 export type ReadReceiver<Header = Record<string, unknown>, Row = Record<string, unknown>> =
   (record: ReadRecord<Header, Row>, settled: (sent: boolean) => void) => boolean
+export type SessionReadScope = 'registered' | 'advertised'
 export type SessionReadReceiver = ReadReceiver<SessionReadHeader, SessionReadValue>
 /** Provisional logical retention budgets, separate from actual transport credits and measured heap cost. */
 export const SESSION_READ_MEMBERS_BYTES = 8 * 1024 * 1024
@@ -204,8 +205,8 @@ export interface CoreApi {
     all(): Promise<AgentView[]>
     /** The live agents. */
     live(): AgentView[]
-    /** Complete registered facts for scoped component readers; rejects when unavailable or too large. */
-    readSessions(receive: SessionReadReceiver, signal?: AbortSignal): Promise<void>
+    /** Complete facts for the selected existing membership; rejects when unavailable or too large. */
+    readSessions(scope: SessionReadScope, receive: SessionReadReceiver, signal?: AbortSignal): Promise<void>
     /** Current registered display facts; unavailable without their owning core's synchronous reader. */
     facts(session: RegisteredSession): AgentFacts | null
     /** The name the apps show for an agent. */
@@ -2126,7 +2127,7 @@ export interface CoreApiDeps {
   terminals?: TerminalsPort
   conversations?: ConversationReads
   dataDir: string
-  registry: Pick<typeof registry, 'list' | 'rows' | 'byAgent' | 'resolve' | 'advertised' | 'terminalAvailable'>
+  registry: Pick<typeof registry, 'list' | 'rows' | 'byAgent' | 'resolve' | 'advertised' | 'advertisedRows' | 'terminalAvailable'>
   stoppedAgents: Pick<StoppedAgentStore, 'list'>
   databaseHistory: CoreApi['transcripts']['databaseHistory']
   syncSession: CoreApi['agents']['sync']
@@ -2203,7 +2204,7 @@ export interface CoreApiDeps {
 
 /** Complete membership once; current facts for each member when it is emitted. Never an atomic whole-time view. */
 export function readSessions(deps: Pick<CoreApiDeps, 'registry' | 'cloudRead' | 'facts' | 'runtimeProfile' | 'turns' | 'machine' | 'signedIn' | 'environment' | 'hasWindow' | 'log'>,
-  receive: SessionReadReceiver, signal?: AbortSignal): Promise<void> {
+  receive: SessionReadReceiver, signal?: AbortSignal, scope: SessionReadScope = 'registered'): Promise<void> {
   return new Promise((resolve, reject) => {
     const started = performance.now(), ids: string[] = []
     let sourceFailure: string | undefined
@@ -2236,7 +2237,7 @@ export function readSessions(deps: Pick<CoreApiDeps, 'registry' | 'cloudRead' | 
         if (bytes > SESSION_READ_MEMBERS_BYTES) fail('SESSION_READ_TOO_LARGE')
         ids.push(id)
       }
-      for (const row of deps.registry.rows()) member(row.agentId)
+      for (const row of scope === 'registered' ? deps.registry.rows() : deps.registry.advertisedRows()) member(row.agentId)
       const registeredCount = ids.length
       if (deps.cloudRead) for (const id of deps.cloudRead.ids()) member(id)
       const count = ids.length
@@ -2268,6 +2269,7 @@ export function readSessions(deps: Pick<CoreApiDeps, 'registry' | 'cloudRead' | 
           // Shared app facts stay last. No provider is called after this final current-row check.
           const captured = deps.facts!(row)
           if (!captured || deps.registry.byAgent(agentId) !== row) fail('SESSION_READ_UNAVAILABLE')
+          if (scope === 'advertised' && !captured.terminalAvailable) { yield { source: 'registered', gone: agentId }; continue }
           const facts = { displayName: captured.displayName, terminalAvailable: captured.terminalAvailable,
             parts: typeof captured.parts.dsh === 'string' ? { dsh: captured.parts.dsh } : {} }
           yield { source: 'registered', row: { session, selectedModel, turnRunning, facts } }
@@ -2323,7 +2325,7 @@ export function createCoreApi({
     agents: {
       all: async () => { const stopped = await stoppedAgents.list(); return [...registry.list(), ...stopped].map(agentView) },
       live: () => registry.list().map(agentView),
-      readSessions: (receive, signal) => readSessions({ registry, cloudRead, facts, runtimeProfile, turns, machine, signedIn, environment, hasWindow, log }, receive, signal),
+      readSessions: (scope, receive, signal) => readSessions({ registry, cloudRead, facts, runtimeProfile, turns, machine, signedIn, environment, hasWindow, log }, receive, signal, scope),
       facts: row => { const current = registry.byAgent(row.agentId); return current && facts ? facts(current) : null },
       displayName: projectDisplayName,
       byAgent: (agentId) => { const session = registry.byAgent(agentId); return session && agentView(session) },

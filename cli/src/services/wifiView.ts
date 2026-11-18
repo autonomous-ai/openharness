@@ -12,7 +12,7 @@ const canonicalPath = (path: string | null): string | null => {
 }
 
 export function readWifiView(read: CoreApi['agents']['readSessions'], machineId: string, signal?: AbortSignal): Promise<WifiView> {
-  return readSessionView(read, header => {
+  return readSessionView(read, 'registered', header => {
     if (header.machine.id !== machineId) throw new Error('CORE_VIEW_UNAVAILABLE')
     return wifiProjection(header)
   }, signal)

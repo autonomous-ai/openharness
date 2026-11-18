@@ -3277,7 +3277,13 @@ class Registry {
 
   /** The one public list: a verified terminal pane is sufficient even when its engine is dormant. */
   advertised(): RegisteredSession[] {
-    return this.list().filter((entry) => this.terminalAvailableAgents.has(entry.agentId))
+    return Array.from(this.advertisedRows())
+  }
+
+  /** The same public membership and order, without first allocating all registered rows. */
+  advertisedRows(): IterableIterator<RegisteredSession> {
+    const rows = this.rows(), available = this.terminalAvailableAgents
+    return (function* () { for (const row of rows) if (available.has(row.agentId)) yield row })()
   }
 
   /**

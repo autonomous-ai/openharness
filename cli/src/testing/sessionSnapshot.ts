@@ -1,5 +1,5 @@
 /** Aggregate fixtures are test data only. Production consumers retain their own projection, never this raw catalog. */
-import type { CoreApi, ReadRecord, SessionCloudRow, SessionReadHeader, SessionReadReceiver, SessionReadValue, SessionSnapshotRow } from '../core/api.js'
+import type { CoreApi, ReadRecord, SessionCloudRow, SessionReadHeader, SessionReadReceiver, SessionReadScope, SessionReadValue, SessionSnapshotRow } from '../core/api.js'
 import type { CoreConnection } from '../services/process.js'
 
 export interface SessionSnapshot extends SessionReadHeader { registered: SessionSnapshotRow[]; cloud: SessionCloudRow[] }
@@ -20,7 +20,7 @@ export function snapshotRecords(value: unknown): ReadRecord<SessionReadHeader, S
   return [{ type: 'begin', payload: { header, count: members.length } },
     ...members.map((value, index) => ({ type: 'row' as const, payload: { index, value } })), { type: 'end', payload: { count: members.length } }]
 }
-export const snapshotReader = (value: () => unknown | Promise<unknown>): CoreApi['agents']['readSessions'] => async (receive, signal) => {
+export const snapshotReader = (value: () => unknown | Promise<unknown>): CoreApi['agents']['readSessions'] => async (_scope, receive, signal) => {
   const records = snapshotRecords(await value())
   for (const record of records) {
     if (signal?.aborted) throw new Error('SESSION_READ_UNAVAILABLE')
@@ -30,9 +30,9 @@ export const snapshotReader = (value: () => unknown | Promise<unknown>): CoreApi
 }
 /** Existing adapter fixtures supply values through their query mock; production transport is exercised in process.spec. */
 export const fixtureRead = (answer: CoreConnection['query']): NonNullable<CoreConnection['read']> => async (query, payload, receive, signal) => {
-  await snapshotReader(() => answer(query, payload))((record, settled) => { receive(record); settled(true); return true }, signal)
+  await snapshotReader(() => answer(query, payload))('registered', (record, settled) => { receive(record); settled(true); return true }, signal)
 }
-export async function collectSessionRead(read: CoreApi['agents']['readSessions']): Promise<SessionSnapshot> {
+export async function collectSessionRead(read: CoreApi['agents']['readSessions'], scope: SessionReadScope = 'registered'): Promise<SessionSnapshot> {
   let result: SessionSnapshot | undefined
   const receive: SessionReadReceiver = (record, settled) => {
     if (record.type === 'begin') result = { ...record.payload.header, registered: [], cloud: [] }
@@ -43,6 +43,6 @@ export async function collectSessionRead(read: CoreApi['agents']['readSessions']
     }
     settled(true); return true
   }
-  await read(receive)
+  await read(scope, receive)
   return result!
 }
