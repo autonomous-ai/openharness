@@ -7,6 +7,8 @@ import 'package:harness/core/harness_cli_runner.dart';
 import 'package:harness/core/harness_home.dart';
 import 'package:path/path.dart' as p;
 
+import 'support/scratch_home_look.dart';
+
 void main() {
   late Directory scratch;
 
@@ -215,12 +217,7 @@ void main() {
 
     HarnessCliRunner runner({Directory? harnessHome}) => HarnessCliRunner(
       harnessHome: harnessHome,
-      look: HomeLook(
-        linux: true,
-        environment: const {},
-        exists: (path) =>
-            FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound,
-      ),
+      look: scratchHomeLook(scratch.path),
       environment: {'HOME': home.path, 'PATH': '/usr/bin'},
       isWindows: false,
     );

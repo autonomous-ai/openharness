@@ -9,6 +9,8 @@ import 'package:harness/core/uninstall_marker.dart';
 import 'package:harness/settings/config_store.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'support/scratch_home_look.dart';
+
 void main() {
   late Directory scratch;
   late Directory dataDirectory;
@@ -92,12 +94,7 @@ void main() {
     'a data root Desktop\'s own store made before the CLI switches nothing',
     () async {
       final home = '${scratch.path}/home';
-      final look = HomeLook(
-        linux: true,
-        environment: const {},
-        exists: (path) =>
-            FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound,
-      );
+      final look = scratchHomeLook(scratch.path);
       String path() => HarnessFileStore.defaultDirectoryPath(
         environment: {'HOME': home},
         look: look,

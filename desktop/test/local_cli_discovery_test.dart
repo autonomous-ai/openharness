@@ -9,6 +9,8 @@ import 'package:harness/core/harness_cli_runner.dart';
 import 'package:harness/core/harness_home.dart';
 import 'package:harness/ws/local_cli_discovery.dart';
 
+import 'support/scratch_home_look.dart';
+
 void main() {
   HttpServer? server;
   late Directory scratch;
@@ -41,7 +43,9 @@ void main() {
         environment: {'HOME': '/home/t', 'XDG_DATA_HOME': '/x'},
       ),
       // Off Linux the rule reads no variable.
-      Platform.isLinux ? '/x/harness/computer-id' : '/home/t/.harness/computer-id',
+      Platform.isLinux
+          ? '/x/harness/computer-id'
+          : '/home/t/.harness/computer-id',
     );
   }, skip: Platform.isWindows);
 
@@ -50,16 +54,12 @@ void main() {
     const after = 'fedcba9876543210fedcba9876543210';
 
     /// This scratch home's real folders, on [linux] or not.
-    HomeLook look({required bool linux}) => HomeLook(
-      linux: linux,
-      environment: const {},
-      exists: (path) =>
-          FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound,
-    );
+    HomeLook look({required bool linux}) =>
+        scratchHomeLook(scratch.path, linux: linux);
 
-    void write(String folder, String id) =>
-        (File('$folder/computer-id')..createSync(recursive: true))
-            .writeAsStringSync('$id\n');
+    void write(String folder, String id) => (File(
+      '$folder/computer-id',
+    )..createSync(recursive: true)).writeAsStringSync('$id\n');
 
     test('the computer id is read again after the folder moves', () async {
       write('${scratch.path}/.harness', before);
@@ -687,12 +687,14 @@ void main() {
     var slotOpen = false;
     final discovery = _SupervisionProbe(
       readProbe: () async => running
-          ? LocalCliProbe.ready(LocalCliEndpoint(
-              computerId: computerId,
-              wsUri: Uri.parse('ws://127.0.0.1/api/local-ws'),
-              protocolVersion: localWsProtocolVersion,
-              terminalProtocolVersion: localTerminalProtocolVersion,
-            ))
+          ? LocalCliProbe.ready(
+              LocalCliEndpoint(
+                computerId: computerId,
+                wsUri: Uri.parse('ws://127.0.0.1/api/local-ws'),
+                protocolVersion: localWsProtocolVersion,
+                terminalProtocolVersion: localTerminalProtocolVersion,
+              ),
+            )
           : const LocalCliProbe.down('fixture daemon is down'),
       spawnCommand: () async {
         spawnCount++;
@@ -756,12 +758,14 @@ void main() {
     final readies = <LocalCliEndpoint>[];
     final discovery = _SupervisionProbe(
       readProbe: () async => running
-          ? LocalCliProbe.ready(LocalCliEndpoint(
-              computerId: computerId,
-              wsUri: Uri.parse('ws://127.0.0.1/api/local-ws'),
-              protocolVersion: localWsProtocolVersion,
-              terminalProtocolVersion: localTerminalProtocolVersion,
-            ))
+          ? LocalCliProbe.ready(
+              LocalCliEndpoint(
+                computerId: computerId,
+                wsUri: Uri.parse('ws://127.0.0.1/api/local-ws'),
+                protocolVersion: localWsProtocolVersion,
+                terminalProtocolVersion: localTerminalProtocolVersion,
+              ),
+            )
           : const LocalCliProbe.down('fixture daemon is down'),
       spawnCommand: () async {
         spawnCount++;
@@ -966,7 +970,8 @@ void main() {
       var spawnCount = 0;
       var signedOutCalls = 0;
       final discovery = _SupervisionProbe(
-        readProbe: () async => const LocalCliProbe.down('fixture daemon is down'),
+        readProbe: () async =>
+            const LocalCliProbe.down('fixture daemon is down'),
         spawnCommand: () async {
           spawnCount++;
         },
@@ -1006,7 +1011,8 @@ void main() {
       var spawnCount = 0;
       var signedOutCalls = 0;
       final discovery = _SupervisionProbe(
-        readProbe: () async => const LocalCliProbe.down('fixture daemon is down'),
+        readProbe: () async =>
+            const LocalCliProbe.down('fixture daemon is down'),
         spawnCommand: () async {
           spawnCount++;
         },
@@ -1049,7 +1055,8 @@ void main() {
       var spawnCount = 0;
       var signedOutCalls = 0;
       final discovery = _SupervisionProbe(
-        readProbe: () async => const LocalCliProbe.down('fixture daemon is down'),
+        readProbe: () async =>
+            const LocalCliProbe.down('fixture daemon is down'),
         spawnCommand: () async {
           spawnCount++;
         },

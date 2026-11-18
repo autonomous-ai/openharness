@@ -19,6 +19,7 @@ import 'package:harness/state/pane_layout_store.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import 'support/guest_app.dart';
+import 'support/scratch_home_look.dart';
 
 /// An installer that exits when the test says so.
 class _MemoryStore implements LocalKeyValueStore {
@@ -619,14 +620,9 @@ void main() {
       void touch(String path) =>
           File('${home.path}/$path')..createSync(recursive: true);
 
-      /// A Linux computer whose XDG data folder is in this home, so no real
-      /// Harness folder on the computer running the test counts.
-      HomeLook linux() => HomeLook(
-        linux: true,
-        environment: {'XDG_DATA_HOME': '${home.path}/xdg'},
-        exists: (path) =>
-            FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound,
-      );
+      /// A Linux computer that is this home alone: the rule's default XDG
+      /// folders are in it, on any host.
+      HomeLook linux() => scratchHomeLook(home.path);
 
       test('a bare home has none', () {
         expect(
@@ -644,7 +640,7 @@ void main() {
       });
 
       test('on Linux, Harness\'s CLI in the XDG data folder counts', () {
-        touch('xdg/harness/cli/cli.js');
+        touch('.local/share/harness/cli/cli.js');
         expect(
           AgentPrefetch.alreadyHasAnAgent(
             home.path,

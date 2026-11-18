@@ -17,6 +17,7 @@ import 'package:harness/core/home_dir.dart';
 import 'package:harness/state/app_state.dart';
 
 import 'support/model_manager.dart';
+import 'support/scratch_home_look.dart';
 
 class MemoryStore implements LocalKeyValueStore {
   final values = <String, String>{};
@@ -580,12 +581,7 @@ void main() {
 
     ForkProjectImporter importer() => ForkProjectImporter(
       cli: HarnessCliRunner(
-        look: HomeLook(
-          linux: true,
-          environment: const {},
-          exists: (path) =>
-              FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound,
-        ),
+        look: scratchHomeLook(temp.path),
         environment: {'HOME': home},
         isWindows: false,
       ),
