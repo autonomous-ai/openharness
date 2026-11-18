@@ -1,9 +1,9 @@
 /**
  * Herdr Core's socket (hc, docs/plans/2026-11-16-herdr-app-design.md): the terminals Herdr's window shows, their status,
- * and the dial's words, for the hc source and the Herdr adapter. hc is the core the Herdr app runs its terminals in, a
- * program of its own with its own API: not herdr 0.8.0, the older multiplexer herdrClient.ts speaks to. JSON-RPC 2.0,
- * one message a line. A request is one connection; a subscription is a connection of its own that writes `hello` and
- * `events.subscribe` together, then only reads.
+ * the dial's words, and the page keys its scroll presses in Claude Code, for the hc source and the Herdr adapter. hc is
+ * the core the Herdr app runs its terminals in, a program of its own with its own API: not herdr 0.8.0, the older
+ * multiplexer herdrClient.ts speaks to. JSON-RPC 2.0, one message a line. A request is one connection; a subscription
+ * is a connection of its own that writes `hello` and `events.subscribe` together, then only reads.
  *
  * Everything is checked here. The socket is another program's: it must be this user's before anything connects, a line
  * has a bound, an answer counts only under its own id, and an error only by its kind, never by its message. The address
@@ -120,6 +120,9 @@ export interface HcClient {
   request(method: string, params: Record<string, unknown>, deadlineMs?: number): Promise<HcAnswer>
   subscribe(to: HcSubscriber): { close(): void }
   prompt(address: string, kind: string, text: string): Promise<HcPrompt>
+  /** Presses those named keys in the terminal's program (`terminal.keys`): hc encodes each for the program's keyboard
+   *  modes, so none is typed as text. True only for hc's result. */
+  keys(address: string, keys: readonly string[], deadlineMs: number): Promise<boolean>
   /** The socket's inode and change time while it is a socket of this user's; else none. */
   socketStamp(): string | undefined
 }
@@ -378,5 +381,8 @@ export function createHcClient(deps: HcClientDeps): HcClient {
     return sent.fault === 'rejected' && sent.kind === 'status_mismatch' ? { outcome: 'busy' } : failed(sent)
   }
 
-  return { request, subscribe, prompt, socketStamp }
+  const keys = async (address: string, names: readonly string[], deadlineMs: number): Promise<boolean> =>
+    HC_TERMINAL.test(address) && (await request('terminal.keys', { terminal: address, keys: [...names] }, deadlineMs)).ok
+
+  return { request, subscribe, prompt, keys, socketStamp }
 }

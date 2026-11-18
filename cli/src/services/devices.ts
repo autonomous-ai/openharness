@@ -361,7 +361,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const hookIds = hcAt.socketPath === hcSocketPath({ ...process.env, HC_SESSION: undefined, HC_SOCKET: undefined }, hcAt.home)
   const herdrApp = createHerdrAppAdapter({ ...apps, client: hcClient, log, bin: openBin, hookIds,
     inFront: () => cableHost.latestFront() === 'herdr', shows: (address) => hcSource?.shows(address) === true,
-    tabOf: (address) => hcSource?.tabOf(address), reports: (address) => hcSource?.reports(address) === true })
+    tabOf: (address) => hcSource?.tabOf(address), kindOf: (address) => hcSource?.kindOf(address),
+    statusOf: (address) => hcSource?.statusOf(address), reports: (address) => hcSource?.reports(address) === true })
   const hcPane = (address: string): Pane => ({ adapter: herdrApp.id, id: address })
   const cmuxClient = deps.cmux ?? createCmuxClient({ ...cmuxClientDeps(), platform: apps.platform })
   /** cmux is installed, as the last attach found it: only then are a hooked agent's words offered to it. */

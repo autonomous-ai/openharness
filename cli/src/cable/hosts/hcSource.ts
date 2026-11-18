@@ -69,9 +69,10 @@ export class HcSource implements HostSource {
   private readonly listeners = new Set<() => void>()
   /** Every listable terminal, by address, in the order each became listable. */
   private readonly rows = new Map<string, Row>()
-  /** The live terminals the window shows with their tab, and those hc reports an agent for, listed or not, which the
-   *  Herdr adapter asks after (shows, tabOf, reports). Each holds the client's 1,024 at most. */
-  private readonly shown = new Map<string, string | undefined>()
+  /** The live terminals the window shows, with their tab, kind and status, and those hc reports an agent for, listed
+   *  or not, which the Herdr adapter asks after (shows, tabOf, kindOf, statusOf, reports). Each holds the client's
+   *  1,024 at most. */
+  private readonly shown = new Map<string, Pick<HcTerminal, 'tab' | 'kind' | 'status'>>()
   private readonly reported = new Set<string>()
   /** The pid of the program each live terminal runs now (hc's foreground), shown or not, which the devices ask after
    *  (terminalOf). It holds the client's 1,024 at most. */
@@ -183,7 +184,17 @@ export class HcSource implements HostSource {
   /** The tab of Herdr's window that holds a terminal it shows, its `herdr.tab` label as hc tells it now: a stroke
    *  matches it with the tab `herdr-app status` names on screen (herdrApp.ts onScreen). */
   tabOf(address: string): string | undefined {
-    return this.shown.get(address)
+    return this.shown.get(address)?.tab
+  }
+
+  /** The kind and hc's status of the agent in a terminal the window shows, as hc tells them now: a stroke presses a
+   *  Claude Code terminal's own page keys, and none while it asks (herdrApp.ts). */
+  kindOf(address: string): string | undefined {
+    return this.shown.get(address)?.kind
+  }
+
+  statusOf(address: string): HcStatus | undefined {
+    return this.shown.get(address)?.status
   }
 
   /** Whether hc reports an agent's status for that live terminal, shown or not: a hidden worker's hooked copy takes
@@ -293,11 +304,11 @@ export class HcSource implements HostSource {
     this.told(before, this.foregrounds.get(terminal.address) !== pid)
   }
 
-  /** Notes whether the window shows a terminal and in which tab, whether hc reports an agent there, and the pid it runs
-   *  now. */
+  /** Notes whether the window shows a terminal, in which tab and with which agent's kind and status, whether hc
+   *  reports an agent there, and the pid it runs now. */
   private note(terminal: HcTerminal): void {
-    const { address } = terminal
-    if (inWindow(terminal)) this.shown.set(address, terminal.tab)
+    const { address, tab, kind, status } = terminal
+    if (inWindow(terminal)) this.shown.set(address, { tab, kind, status })
     else this.shown.delete(address)
     if (reporting(terminal)) this.reported.add(address)
     else this.reported.delete(address)

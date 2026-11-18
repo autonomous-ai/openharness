@@ -12,8 +12,8 @@ built the way the VS Code branch (`feat/dial-vscode-extension`, `docs/plans/2026
 ## What Herdr offers (Phase 1, 2026-11-17)
 
 - **Herdr Core (hc 0.1.21) cannot scroll a view.** Its API (`hc schema`, 32 methods) has no scroll method; history is
-  only read (`terminal.read`, `terminal.attach`'s `history`). `terminal.keys` presses keys in the program itself, after
-  about 3 s of quiet: it would scroll the program, not the history, and late.
+  only read (`terminal.read`, `terminal.attach`'s `history`). `terminal.keys` presses keys in the program itself: it
+  scrolls the program, not the history (and not late: measured 2026-11-18, §3).
 - **Herdr.app (`herdr-app` 0.1.16) can.** `herdr-app commands` lists `terminal.scroll {lines | pages | to, terminal?}`:
   "Scroll a terminal's view of its history ... lines (a whole number; negative goes up, toward history) ... This
   scrolls Herdr's view, not the program." It is run as `herdr-app do terminal.scroll --terminal t7 --lines -3`, through
@@ -36,8 +36,9 @@ built the way the VS Code branch (`feat/dial-vscode-extension`, `docs/plans/2026
   `scroll:pageUp`, `pagedown` to `scroll:pageDown` and the wheel to lines. On that Claude Code, with 300 lines of local
   output on screen (lines 263–300): `herdr-app do terminal.scroll --lines -20` moved nothing; `hc keys <t> pageup`
   (0.05 s, idle) showed lines 244–282, and `pagedown` 263–300 again; its input box stayed empty. hc encodes a named key
-  for the program's current keyboard modes, so a key is never typed as text. hc's `terminal.keys` presses "after ~3 s
-  of quiet" (`hc schema`). hc offers no way to send a wheel event, and raw wheel bytes into the terminal are not sent:
+  for the program's current keyboard modes, so a key is never typed as text. hc's `terminal.keys` says it presses
+  "after ~3 s of quiet" (`hc schema`), yet it pressed at once while a fake program wrote (measured, §3). hc offers no
+  way to send a wheel event, and raw wheel bytes into the terminal are not sent:
   if the program's mouse mode were guessed wrong, their `ESC` would be an Escape key and the rest typed text.
 - **herdr 0.8.0** (the older multiplexer, `herdrClient.ts`) is left out (PM, 2026-11-17): its public API only reports a
   pane's scroll (`PaneScrollChanged`, `PaneInfo.scroll`), and its `send-keys` types into the program.
@@ -136,11 +137,15 @@ the active one.
   that terminal and dropped with the queue at the stroke's end, quiet second or stop. At most 5 keys go in one call. The
   same queue holds: one call at a time per terminal, the 50 ms gap, `SCROLL_TIMEOUT_MS`, the ±100 clamp, the failure
   line once, the tally (its lines are the lines the keys stood for; its runs the calls) and `stop()`.
-- **No key while Claude Code asks or works.** `canScroll` is false for a `claude-code` terminal whose hc status state is
-  `needs-you` (a key could move the highlighted choice of a question, and the person's Enter would pick it) or
-  `working` (hc presses after ~3 s of quiet, so a stroke would land seconds late); the stroke then goes to Harness's
-  windows as today. Whether hc waits while a program writes is measured against a private core with a fake program,
-  never a model call; if it does not wait, `working` is allowed and the spec says so.
+- **No key while Claude Code asks.** `canScroll` is false for a `claude-code` terminal whose hc status state is
+  `blocked`, the dial's `needs-you` (a key could move the highlighted choice of a question, and the person's Enter would
+  pick it); the stroke then goes to Harness's windows as today. A `working` one takes keys: hc does not wait while a
+  program writes. Measured on 2026-11-18 against a private core (`cli/e2e/harness/hcCore.ts`, hc 0.1.21) with fake
+  programs, never a model call: a `terminal.keys` call of one `pageup` was answered in 32–45 ms, three calls each, to an
+  idle program quiet for 3 s, to one printing a line every 100 ms, to one that also reported `claude-code` `working`,
+  and to one that had written 60 ms before; that `working` program read each key 40–103 ms after its call began (its
+  screen polled through `terminal.read`), and five keys in one call took 158–173 ms. The "~3 s of quiet" of `hc schema`
+  is not the program's output.
 - Every other app keeps `terminal.scroll`.
 
 ### 4. Routing (services/devices.ts)
@@ -212,7 +217,8 @@ becomes `{ adapter, pane }`. On the rebase there is one route only:
 | Herdr Core is not on its default session (`hookIds` false) and the dial shows the hooked copy | that copy has no Herdr pane | the stroke goes to Harness's windows |
 | The terminal is on the alternate screen and is not Claude Code | Herdr has no history to move | nothing scrolls |
 | A Claude Code terminal | `pageup`/`pagedown` through hc, one per 20 lines; Herdr's view is not asked to move | the transcript moves a page at a time |
-| A Claude Code terminal that asks (`needs-you`) or works (`working`) | no key is pressed; the stroke goes to Harness's windows | as today |
+| A Claude Code terminal that asks (hc's `blocked`, the dial's `needs-you`) | no key is pressed; the stroke goes to Harness's windows | as today |
+| A Claude Code terminal that works (`working`) | its keys are pressed at once, as hc does while a program writes | the transcript moves while it works |
 | hc refuses or times out a key call | its lines are dropped, `[herdr-app] scroll · failed` once | nothing scrolls |
 | Herdr leaves the front mid-stroke | the stroke keeps its route to its `up` | the rest of that stroke scrolls Herdr's view behind |
 | The dial moves to another agent mid-stroke | the stroke keeps its route; the next stroke chooses again | — |
@@ -240,7 +246,7 @@ every stroke goes to Harness's windows).
     of the gap are summed into one run; a stroke's first run starts at once; another terminal's runs do not wait.
   - `herdrApp.spec.ts`, Claude Code: a `claude-code` terminal's lines press `pageup`/`pagedown` through the client's
     `keys`, one per 20 lines, the rest kept, at most 5 keys a call, and run no `herdr-app`; `canScroll` is false while
-    its state is `needs-you` or (unless the measure says hc does not wait) `working`; another app runs
+    its state is `blocked` and true while `working` (hc does not wait, measured); another app runs
     `terminal.scroll`; a refused or timed-out call drops and logs once; `stop()` presses nothing more.
   - `hcClient.spec.ts`: `keys(address, keys)` sends `terminal.keys` with exactly those names and answers its outcome.
   - `hcClient.spec.ts`: `herdr.tab` is kept and read into `tab`; a `labels` event changes it; a missing or empty label
@@ -267,6 +273,9 @@ every stroke goes to Harness's windows).
     reaches the window as `dial_scroll` (the third condition, end to end);
   - then another app goes in front through the watch, a second stroke is sent, and the window's `dial_scroll` phases are
     exactly the strokes sent while Herdr was not the target: the first reached no window;
+  - those strokes run over a fake program that reports `codex`; over one that reports `claude-code`, a stroke of 20 lines
+    each way presses `pageup` then `pagedown`, which the fake program, reading its terminal raw, shows as their bytes, and
+    no `terminal.scroll` runs nor `dial_scroll` reaches the window;
   - every wait is on a log line or a recorded run, never a fixed sleep.
   Skipped where hc is not installed (every GitHub runner); run locally on macOS. It never reaches Diego's own Herdr or
   hc.
