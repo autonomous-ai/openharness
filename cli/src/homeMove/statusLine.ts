@@ -1,16 +1,20 @@
-import { legacyHarnessHome } from '../config/harnessHome.js'
+import { legacyHarnessHome, xdgRoots } from '../config/harnessHome.js'
 import type { Reason } from './conditions.js'
 import type { MoveRecord } from './record.js'
 
-// What is happening and what a person does, in plain words: the reason codes stay in the record and the log.
-const CLOSE_AGENTS = `Harness's folders stay in ${legacyHarnessHome('~', 'linux')} until the agents close: close them, then run harness start.`
+// The folders the move goes to by their default names, whatever a setting named: a person finds them by those.
+const NEW = xdgRoots('~', {})
+const NEW_FOLDERS = `${NEW.data} or ${NEW.state}`
+// What is happening and what a person does, in plain words: the reason codes stay in the record and the log. A PTY host
+// holds Harness's terminals, which are closed too.
+const CLOSE_AGENTS = `Harness's folders stay in ${legacyHarnessHome('~', 'linux')} until its agents and terminals close: close them, then run harness start.`
 const SAYS: Record<Reason, string> = {
   'update-pending': 'Harness\'s folders move after this update settles.',
   'old-tmux': CLOSE_AGENTS,
   'pty-host': CLOSE_AGENTS,
-  'target-exists': 'Moving Harness\'s folders failed: the new folders already exist; move them aside, then run harness start.',
+  'target-exists': `Moving Harness's folders failed: ${NEW_FOLDERS} already exists; move it aside, then run harness start.`,
   'no-space': 'Moving Harness\'s folders failed: free some disk space, then run harness start.',
-  permission: 'Moving Harness\'s folders failed: Harness cannot write where they go; make those folders yours, then run harness start.',
+  permission: `Moving Harness's folders failed: Harness cannot write ${NEW_FOLDERS}; make the folders they are in yours, then run harness start.`,
   io: 'Moving Harness\'s folders failed: run harness start to try again.',
 }
 
