@@ -167,7 +167,8 @@ export function createEngineHooks(deps: EngineHookDeps) {
         // publish it. Match fresh evidence through the existing wait. Answered 500, the hook client wrote the
         // registry itself while this daemon ran, and the agent it replaced never bound (e2e/scale.e2e.ts).
         overdue = true
-        console.log('[hooks] reconciliation held; checking current process evidence')
+        // Its message is one of a fixed set (IdentityReadUnavailable), never a path or a process's content.
+        console.log(`[hooks] reconciliation held · ${error.message} · checking current process evidence`)
       }
     }
 
