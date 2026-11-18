@@ -46,7 +46,10 @@ describe('a large settings file', () => {
 
   it('takes the hooks when it is as long as Hermes\'s own, which held every Hermes agent', async () => {
     writeFileSync(join(home, 'config.yaml'), lines(6_000))
-    expect(await installNativeYamlHooks(rule(), command)).toBe(true)
+    const installed = await installNativeYamlHooks(rule(), command)
+    const refusals = vi.mocked(console.error).mock.calls.flatMap(args => args
+      .filter((value): value is Error => value instanceof Error).map(error => `${error.name}: ${error.message}`))
+    expect(installed, refusals.join('\n')).toBe(true)
     expect(readFileSync(join(home, 'config.yaml'), 'utf8')).toContain(`--hermes-home ${home}`)
   })
 

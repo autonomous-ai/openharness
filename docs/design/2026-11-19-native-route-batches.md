@@ -56,3 +56,13 @@ are each 12 rather than 8. The remaining 22 cases were intentionally excluded fr
 The validator records actual exit 1, no timeout, and unchanged source before and after in
 `.harness/validation/20261118T203516.030301Z-22470/receipt.json` (0.665 seconds for the test process).
 The runtime patch follows this captured RED; the selected caller/authority suite and types follow next.
+
+## First selected gate
+
+At clean source `3f643140bfead530414751cdce5b1b99a5131e6a`, 397 of 398 selected tests pass,
+including all 25 new batch cases. The inherited 6,000-line Hermes YAML install returns false after
+6.998 seconds under V8 coverage; its fixture suppresses the underlying refusal. TypeScript passes
+in 41.688 seconds. The failed suite produces no coverage report. The retained receipt is
+`.harness/validation/20261118T203835.915627Z-26155/receipt.json`; source stays clean and unchanged.
+The test now includes only error name/message as assertion context so the failure's reason is visible.
+The next diagnostic compares unchanged and batched routes on this case; no timeout is relaxed.
