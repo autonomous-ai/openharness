@@ -53,10 +53,16 @@ const DEVICE_APP_LOG = /^app-(\d{8})\.log$/
  * and 100 KB took 20 s.
  */
 const EMAIL = /[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g
+/**
+ * A whole run of the characters an address is made of, holding an `@`: the only text EMAIL can match, so it is tried on
+ * these alone, with the same result. Tried on all of it, its 64 characters a start took 4.4 s on a 20 MB run of hex or
+ * base64 (a device's day); found this way, 0.15 s. The lookbehind starts each run once.
+ */
+const AT_RUN = /(?<![A-Za-z0-9._%+@-])[A-Za-z0-9._%+@-]*@[A-Za-z0-9._%+@-]*/g
 
 /** Steps 2 and 3 of the bundle's blanking, after `redact`: email addresses, then the home folder. */
 export function blankPersonal(text: string, home: string): string {
-  const emailsBlanked = text.replace(EMAIL, '<email>')
+  const emailsBlanked = text.replace(AT_RUN, (run) => run.replace(EMAIL, '<email>'))
   const folder = home.replace(/[\\/]+$/, '')
   // A root holds every path: it names no one, and blanking it would hide where each file is.
   if (!folder || /^[A-Za-z]:$/.test(folder)) return emailsBlanked
