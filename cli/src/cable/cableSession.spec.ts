@@ -4466,12 +4466,14 @@ const NAMES: Record<string, string> = { ghostty: 'Ghostty', vscode: 'VS Code' }
 
 /** A host with the cable host's app answers: Ghostty (3) shown, VS Code (2, one waiting); v1 can be brought forward.
  *  With a window, a dial that says appFilter holds the shown app's ring while `appView` is set, and the tab t1 (a1, a2)
- *  otherwise; any other dial holds the tab. `focus` is the window's. */
+ *  otherwise; any other dial holds the tab. `focus` is the window's. `tabApps`: the tab's answer to such a dial carries
+ *  the other apps, as the cable host's does. */
 function appHost(over: Partial<CableHost> = {}) {
   const state = {
     shown: 'ghostty',
     window: false,
     appView: false,
+    tabApps: false,
     focus: undefined as { machineId: string; agentId: string } | undefined,
     rings: { ghostty: [row('g1', 'ghostty'), row('g2', 'ghostty'), row('g3', 'ghostty')], vscode: [row('v1', 'vscode', 'sf'), row('v2', 'vscode')] } as Record<string, CableAgent[]>,
     waiting: { vscode: 1 } as Record<string, number>,
@@ -4492,7 +4494,7 @@ function appHost(over: Partial<CableHost> = {}) {
   const host = makeHost({
     listAgentSnapshot: async (opts) => {
       asked.push(opts)
-      if (onTab(opts)) return { agents: AGENTS, tab: 't1', total: 2 }
+      if (onTab(opts)) return { agents: AGENTS, tab: 't1', total: 2, ...(opts?.apps && state.tabApps ? { apps: { shown: 'harness', apps: list().apps } } : {}) }
       if (!opts?.apps) return { agents: all(), tab: '', total: all().length, view: 'machine' as const }
       const rows = state.rings[state.shown] ?? []
       return { agents: rows, tab: '', total: rows.length, view: 'machine' as const, apps: list() }
@@ -4549,14 +4551,72 @@ describe('the app filter', () => {
     } finally { await session.stop() }
   })
 
-  it('with a window no apps frame is sent', async () => {
-    const { host, state, asked } = appHost()
-    state.window = true
+  it('the welcome lists apps.switch for a dial that says appFilter and a host that picks', async () => {
+    const welcome = (port: LoopbackPort) => port.sent.find((m) => m.t === 'welcome')?.features
+    const c = await greeted(appHost().host)
+    try {
+      expect(welcome(c.port)).toEqual(['voice.draft', 'agents.refresh', 'apps.switch', 'settings'])
+    } finally { await c.session.stop() }
+    const old = await greeted(appHost().host, false)
+    try {
+      expect(welcome(old.port)).toEqual(['voice.draft', 'agents.refresh', 'settings'])
+    } finally { await old.session.stop() }
+    const noPick = await greeted(appHost({ pickApp: undefined }).host)
+    try {
+      expect(welcome(noPick.port)).toEqual(['voice.draft', 'agents.refresh', 'settings'])
+    } finally { await noPick.session.stop() }
+  })
+
+  it('the fullest round-dial welcome is eight names', async () => {
+    const { host } = appHost({
+      form: async () => ({ ok: false, active: false, error: 'test' }),
+      visit: async () => ({ ok: false, active: false, error: 'test' }),
+      selectPassage: async () => ({ ok: false, error: 'test' }),
+      answerReviewed: async () => ({ ok: false, error: 'test' }),
+    })
     const { session, port } = await greeted(host)
     try {
-      expect(listTypes(port)).toEqual(['agents.begin', 'agent', 'agent', 'agents.end'])
-      expect(asked).toContainEqual({ apps: true })
+      const features = port.sent.find((m) => m.t === 'welcome')?.features as string[]
+      expect(features).toEqual(['voice.draft', 'agents.refresh', 'form', 'selection', 'visit', 'question.review', 'apps.switch', 'settings'])
+      // The dial drops every feature of a welcome that lists more than 16 names.
+      expect(features.length).toBeLessThanOrEqual(16)
     } finally { await session.stop() }
+  })
+
+  it('with a window the tab\'s apps go before the tab\'s list, and a count change alone sends apps', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    const { host, state, asked, list } = appHost()
+    state.window = state.tabApps = true
+    const { session, port } = await greeted(host)
+    try {
+      expect(listTypes(port)).toEqual(['apps', 'agents.begin', 'agent', 'agent', 'agents.end'])
+      expect(listFrames(port)[0]).toEqual({ t: 'apps', shown: 'harness', apps: list().apps })
+      expect(asked).toContainEqual({ apps: true })
+      port.sent.length = 0
+      vi.advanceTimersByTime(1_100)
+      state.rings.vscode = [row('v1', 'vscode', 'sf')]
+      await session.syncAgents()
+      expect(listFrames(port)).toEqual([{ t: 'apps', shown: 'harness', apps: list().apps }])
+      port.sent.length = 0
+      vi.advanceTimersByTime(1_100)
+      await session.syncAgents()
+      expect(listFrames(port)).toEqual([])
+    } finally { await session.stop(); vi.useRealTimers() }
+  })
+
+  it('app.pick on the tab that the host answers switched is sent apps and that app\'s ring at once', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    const { host, state, pickApp } = appHost()
+    state.window = state.tabApps = true
+    pickApp.mockImplementation((app: string): AppPick => { state.appView = true; state.shown = app; return 'switched' })
+    const { session, port } = await greeted(host)
+    try {
+      port.sent.length = 0
+      port.say({ t: 'app.pick', app: 'vscode' })
+      await vi.waitFor(() => expect(listTypes(port)).toEqual(['apps', 'agents.begin', 'agent', 'agent', 'agents.end']))
+      expect(listFrames(port)[0]).toMatchObject({ t: 'apps', shown: 'vscode' })
+      expect(listFrames(port).at(-1)).toEqual({ t: 'agents.end', total: 2, tab: '', view: 'machine' })
+    } finally { await session.stop(); vi.useRealTimers() }
   })
 
   it('a count change alone sends apps and no agents.begin', async () => {

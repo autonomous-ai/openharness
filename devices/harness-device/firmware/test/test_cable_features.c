@@ -31,6 +31,12 @@ int main(void)
     check("{\"features\":[\"form\",{}]}", 0);
     check("{\"features\":[\"form\",[\"visit\"]]}", 0);
     check("{\"features\":[\"agents.refresh\"]}", CABLE_FEATURE_AGENTS_REFRESH);
+    check("{\"features\":[\"apps.switch\"]}", CABLE_FEATURE_APPS_SWITCH);
+    check("{\"features\":[\"Apps.switch\",\"apps.Switch\",\"apps\",\"switch\",\"apps.switch.2\"]}", 0);
+    // The daemon's fullest round-dial welcome sets every bit.
+    check("{\"features\":[\"voice.draft\",\"agents.refresh\",\"form\",\"selection\",\"visit\","
+          "\"question.review\",\"apps.switch\",\"settings\"]}", 255u);
+    assert(!(CABLE_FEATURE_APPS_SWITCH & (CABLE_FEATURE_SETTINGS | 63u)));
     static const char *names[] = {"form", "selection", "visit", "voice.draft", "question.review", "agents.refresh"};
     for (unsigned mask=0; mask<64; mask++) {
         cJSON *root=cJSON_CreateObject(), *array=cJSON_AddArrayToObject(root,"features");

@@ -108,6 +108,7 @@ typedef enum {
     A_TABS,
     A_TAB, A_TAB_REFRESH, A_TAB_DONE,
     A_APP, A_APP_DONE,   // a page of APPS, by app id; its Done
+    A_SWITCH_TABS, A_SWITCH_APPS,   // the two cells of the TABS | APPS switch
     A_MACHINES,
     A_MACHINE,
     A_VOICE,
@@ -610,12 +611,14 @@ static const char *tab_id_at(int i)
 {
     return i >= 0 && i < s.tab_count ? s.tabs[i].id : "";
 }
-// TABS opens on the desktop's tab.
+// TABS opens on the desktop's tab, or on the tab a swipe is still opening: the switch's APPS can be left for TABS
+// before that tab lands, and a carousel on the tab the swipe left would switch the desktop back to it on Done.
 static void tabs_open(void)
 {
     view(TABS);
     if (s.view != TABS) return;
-    ht_tab_carousel_reset(&tab_carousel, s.tab_count, workspace_index(s.selected_tab));
+    int opening = workspace.phase != HT_WORKSPACE_IDLE ? workspace_index(workspace.pending) : -1;
+    ht_tab_carousel_reset(&tab_carousel, s.tab_count, opening >= 0 ? opening : workspace_index(s.selected_tab));
 }
 static int app_index(const char *id)
 {
@@ -623,7 +626,8 @@ static int app_index(const char *id)
         if (!strcmp(s.apps[i].id, id)) return i;
     return -1;
 }
-// APPS opens on the app the dial shows. No agents is no app: then nothing opens (an empty list shows nothing).
+// APPS opens on the app the dial shows. No agents is no app: then nothing opens (an empty list shows nothing). From the
+// switch it opens on its first page: the shown app is then Harness, which that list leaves out.
 static void apps_open(void)
 {
     if (!s.app_count) return;
@@ -636,6 +640,17 @@ static void apps_open(void)
 static bool hold_picks_app(void)
 {
     return s.machine_view && s.apps_known;
+}
+// On the window's tab the daemon lists the other apps; only one that takes a pick there (apps.switch) gets the switch,
+// so a list left from an earlier machine view never makes a dead control.
+static bool apps_switch(void)
+{
+    return cable_client_supports(CABLE_FEATURE_APPS_SWITCH) && !s.machine_view && s.app_count > 0;
+}
+// The APPS opened from the switch, not the machine view's.
+static bool apps_from_switch(void)
+{
+    return s.view == APPS && !s.machine_view;
 }
 static void hold_open(void)
 {
@@ -651,6 +666,12 @@ static void app_pick(int i)
     COPY(a.id, s.apps[i].id);
     if (!queue(a)) return;
     if (strcmp(a.id, s.app_shown)) COPY(s.app_landing, a.id);
+    // A pick from the switch leaves the window's tab, so a tab a swipe is still opening is no longer waited for: its
+    // roster never comes, and the view's turn, which sends no tabs, would read as that tab gone.
+    if (workspace.phase != HT_WORKSPACE_IDLE) {
+        ht_workspace_cancel_request(&workspace);
+        s.loading = false;
+    }
     view(HOME);
 }
 static void workspace_failed(const char *message)
@@ -1281,6 +1302,22 @@ static void focus_clipped(ht_scene_t *f, int x, int y, const ht_font_t *font, ui
     int w = ht_measure(font, probe);
     if (w > 0) ht_text(f, x, y, w, font, ink, BG, probe);
 }
+// A title word as the lists' header draws it, centred between `left` and `left + width`.
+static void focus_spaced(ht_scene_t *f, int left, int width, uint16_t ink, uint16_t bg, const char *title)
+{
+    enum { TITLE_Y = 62 };
+    const ht_font_t *small = &ht_lv_inter_20.base;
+    // A letter to a run, which is how the spacing is drawn.
+    int tw = 0;
+    for (const char *c = title; *c; c++) { char one[2] = {*c, 0}; tw += ht_measure(small, one) + 2; }
+    int tx = left + (width - (tw - 2)) / 2;
+    for (const char *c = title; *c; c++) {
+        char one[2] = {*c, 0};
+        int w = ht_measure(small, one);
+        ht_text(f, tx, TITLE_Y, w, small, ink, bg, one);
+        tx += w + 2;
+    }
+}
 /*
  * The top of Focus's lists: the 60 x 32 close pill at y 16 (tabs use Done below) —
  * the way back, in place of a ← — and the list's name in grey Inter 20 (inter_20: the "Kindle dark"
@@ -1289,18 +1326,27 @@ static void focus_clipped(ht_scene_t *f, int x, int y, const ht_font_t *font, ui
 static void focus_header(ht_scene_t *f, const char *title)
 {
     // No close pill (owner, 2026-10-06: one too many): Done, or a tap on the chosen name, leaves.
-    enum { TITLE_Y = 62 };
-    const ht_font_t *small = &ht_lv_inter_20.base;
-    // A letter to a run, which is how the spacing is drawn.
-    int tw = 0;
-    for (const char *c = title; *c; c++) { char one[2] = {*c, 0}; tw += ht_measure(small, one) + 2; }
-    int tx = (HT_WIDTH - (tw - 2)) / 2;
-    for (const char *c = title; *c; c++) {
-        char one[2] = {*c, 0};
-        int w = ht_measure(small, one);
-        ht_text(f, tx, TITLE_Y, w, small, color(0x4c4c4c), BG, one);
-        tx += w + 2;
-    }
+    focus_spaced(f, 0, HT_WIDTH, color(0x4c4c4c), BG, title);
+}
+/*
+ * THE TABS | APPS SWITCH (mockup tabs-apps-options, "2 · Pill"): the title of TABS, and of the APPS it opens, becomes a
+ * 168 x 36 pill at y 58 split into two 84 px cells; the selected cell is filled #1e1e1e, a 81 x 30 box inset 3 px. The
+ * words keep the title's Inter 20 letter-spaced 2 (59 px each), centred in their cells: the mockup's Inter 17 is no
+ * font on the dial, and a font for two words is flash spent. Each half of the band above the pages (y 30 to 108) is
+ * its cell's target, generous for a thumb; the selected cell's does nothing.
+ */
+static void focus_switch(ht_scene_t *f, bool apps)
+{
+    enum { PILL_X = 149, PILL_Y = 58, PILL_W = 168, PILL_H = 36, CELL = PILL_W / 2, INSET = 3, CELL_H = PILL_H - 2 * INSET };
+    enum { HIT_Y = 30, HIT_W = 150, HIT_H = 78 };
+    uint16_t filled = color(0x1e1e1e);
+    ht_box(f, PILL_X, PILL_Y, PILL_W, PILL_H, PILL_H / 2, BG, color(0x2c2c2c));
+    ht_box(f, apps ? PILL_X + CELL : PILL_X + INSET, PILL_Y + INSET, CELL - INSET, CELL_H, CELL_H / 2, filled, filled);
+    // A text run fills its bg, so the selected word takes the cell's fill.
+    focus_spaced(f, PILL_X, CELL, color(apps ? 0x3a3a3a : 0x8a8a8a), apps ? BG : filled, "TABS");
+    focus_spaced(f, PILL_X + CELL, CELL, color(apps ? 0x8a8a8a : 0x3a3a3a), apps ? filled : BG, "APPS");
+    s.hits[s.hit_count++] = (hit_t){{PILL_X + CELL - HIT_W, HIT_Y, HIT_W, HIT_H}, A_SWITCH_TABS, 0, apps};
+    s.hits[s.hit_count++] = (hit_t){{PILL_X + CELL, HIT_Y, HIT_W, HIT_H}, A_SWITCH_APPS, 0, !apps};
 }
 /*
  * FOCUS'S PANE PICKER (design 2026-10-06, focus-project.html "Panes"): the close pill and "PANES" on top, the panes
@@ -1613,7 +1659,8 @@ static const char *tab_label(int i)
 }
 static void render_focus_tabs(ht_scene_t *f)
 {
-    focus_header(f, "TABS");
+    if (apps_switch()) focus_switch(f, false);
+    else focus_header(f, "TABS");
     if (ht_tab_carousel_index(&tab_carousel) < 0) {
         focus_centred(f, 214, 348, &ht_lv_inter_30.base, DIM, BG, "No tabs yet.");
         return;
@@ -1657,7 +1704,8 @@ static void render_apps(ht_scene_t *f)
 {
     ht_text(f, (HT_WIDTH-ht_done_28.width)/2, 400, ht_done_28.width, &ht_done_28,
             color(HT_THEME_VOICE), BG, HT_DONE);
-    focus_header(f, "APPS");
+    if (apps_from_switch()) focus_switch(f, true);
+    else focus_header(f, "APPS");
     focus_carousel(f, &app_carousel, s.app_count, app_label, A_APP, app_under);
     s.hits[s.hit_count++] = (hit_t){{83, 392, 300, 74}, A_APP_DONE, 0, true};
 }
@@ -2448,6 +2496,12 @@ static void dispatch(action_t a)
         if (s.view != APPS) break;
         ht_tab_carousel_cancel(&app_carousel);
         app_pick(ht_tab_carousel_index(&app_carousel));
+        break;
+    case A_SWITCH_APPS:
+        if (s.view == TABS && apps_switch()) apps_open();
+        break;
+    case A_SWITCH_TABS:
+        if (apps_from_switch()) tabs_open();
         break;
     case A_MACHINE:
         if (s.connected && queue(a)) {
@@ -3499,7 +3553,7 @@ void ui_apps_replace(const cable_app_t *rows, int count, const char *shown)
 {
     display_lock();
     // APPS stays on its app by id, never by place: a list that moved keeps the person on the same app, the page of an
-    // app that went closes up, and no app left closes the picker.
+    // app that went closes up, and no app left closes the picker: to TABS from the switch, to the face otherwise.
     int at = ht_tab_carousel_index(&app_carousel);
     char on[CABLE_APP_ID_MAX] = "";
     if (s.view == APPS && at >= 0 && at < s.app_count) COPY(on, s.apps[at].id);
@@ -3512,8 +3566,10 @@ void ui_apps_replace(const cable_app_t *rows, int count, const char *shown)
     if (strcmp(s.app_landing, s.app_shown)) s.app_landing[0] = 0;
     if (s.view == APPS) {
         int i = app_index(on);
-        if (!s.app_count) view(HOME);
-        else if (i != at || app_carousel.count != s.app_count)   // the same page in the same list keeps a dragging finger
+        if (!s.app_count) {
+            if (apps_from_switch()) tabs_open();
+            else view(HOME);
+        } else if (i != at || app_carousel.count != s.app_count)   // the same page in the same list keeps a dragging finger
             ht_tab_carousel_reset(&app_carousel, s.app_count, i < 0 ? at : i);
     }
     change();
@@ -3804,7 +3860,8 @@ void ui_land_after_reload(void)
     if (s.loading && (workspace.phase==HT_WORKSPACE_IDLE || workspace.phase==HT_WORKSPACE_READY)) {
         ht_workspace_cancel_request(&workspace);
         s.loading = false;
-        if (s.view != TABS) view(HOME);
+        // The switch's APPS stays as TABS does: it was opened while the swipe's tab was loading.
+        if (s.view != TABS && !apps_from_switch()) view(HOME);
     }
     // The ring of an app picked here: the `apps` that names it came first, so this list is that app's.
     if (s.app_landing[0] && !strcmp(s.app_landing, s.app_shown)) {

@@ -13,6 +13,10 @@ enum {
     // device that does not see it keeps its own settings screens; nothing here is load-bearing for a
     // session, so an older daemon simply never asks.
     CABLE_FEATURE_SETTINGS = 1u << 6,
+    // The daemon lists the other apps on the window's tab and takes a pick there, so the TABS screen
+    // can offer its TABS | APPS switch. An older daemon would ignore that pick, so without it there is
+    // no switch.
+    CABLE_FEATURE_APPS_SWITCH = 1u << 7,
 };
 
 // Optional welcome field. Older daemons omit it and retain the core voice,

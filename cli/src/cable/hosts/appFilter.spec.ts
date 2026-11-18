@@ -317,6 +317,51 @@ describe('AppFilter', () => {
     expect(causes()).toEqual(['front'])
   })
 
+  it('hold of the shown app holds it and tells no switch', () => {
+    const { filter, agents, causes } = setup()
+    agents({ ghostty: 3 })
+    expect(filter.shown()).toBe('ghostty')
+    filter.front('vscode')
+    settle()
+    expect(filter.hold('ghostty')).toBe(true)
+    agents({ ghostty: 3, vscode: 1 })
+    expect(filter.shown()).toBe('ghostty')
+    expect(causes()).toEqual([])
+  })
+
+  it('hold of another app is a switch by pick', () => {
+    const { filter, agents, causes } = setup()
+    agents({ ghostty: 3, vscode: 1 })
+    filter.front('ghostty')
+    settle()
+    expect(filter.hold('vscode')).toBe(true)
+    expect(filter.shown()).toBe('vscode')
+    expect(causes()).toEqual(['pick'])
+  })
+
+  it('hold of an app with no agents answers false and holds nothing', () => {
+    const { filter, agents, causes } = setup()
+    agents({ ghostty: 3 })
+    expect(filter.shown()).toBe('ghostty')
+    filter.front('vscode')
+    settle()
+    expect(filter.hold('cursor')).toBe(false)
+    agents({ ghostty: 3, vscode: 1 })
+    expect(filter.shown()).toBe('vscode')
+    expect(causes()).toEqual(['front'])
+  })
+
+  it('a hold ends when another app settles in front', () => {
+    const { filter, agents, causes } = setup()
+    agents({ ghostty: 3, vscode: 1 })
+    expect(filter.shown()).toBe('ghostty')
+    expect(filter.hold('vscode')).toBe(true)
+    filter.front('ghostty')
+    settle()
+    expect(filter.shown()).toBe('ghostty')
+    expect(causes()).toEqual(['pick', 'front'])
+  })
+
   it('a notice pick is a switch by notice and holds as a pick does', () => {
     const { filter, agents, causes } = setup()
     agents({ ghostty: 3, vscode: 1 })
@@ -565,6 +610,16 @@ describe('AppFilter', () => {
       settle()
       expect(filter.shown()).toBe('terminal')
       expect(causes()).toEqual(['pick'])
+    })
+
+    it('a hold of the default page stops it giving way', () => {
+      const { filter, agents, causes } = setup()
+      agents({ terminal: 3 }, {})
+      expect(filter.shown()).toBe('terminal')
+      expect(filter.hold('terminal')).toBe(true)
+      agents({ terminal: 3, ghostty: 5 }, { ghostty: 5 })
+      expect(filter.shown()).toBe('terminal')
+      expect(causes()).toEqual([])
     })
   })
 })
