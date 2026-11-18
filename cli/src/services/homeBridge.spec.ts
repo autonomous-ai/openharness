@@ -27,11 +27,11 @@ const SOCKET = `daemon-${env.PORT}.sock`
 const BRIDGED: MoveRecord = { version: 1, state: 'bridged', entries: 27, bytesCopied: 0, panes: 1, oldProcesses: 0, at: 1_700_001_235_000 }
 
 const homes: string[] = []
-const restore: Array<() => void> = []
-afterEach(() => {
+const restore: Array<() => unknown> = []
+afterEach(async () => {
   vi.useRealTimers()
   vi.unstubAllEnvs()
-  for (const undo of restore.splice(0)) undo()
+  for (const undo of restore.splice(0)) await undo()
   for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true })
 })
 
@@ -350,7 +350,7 @@ describe('the home bridge service', () => {
 
   it('reads the panes from tmux\'s default server: a pane carrying the new tag keeps the bridge', async () => {
     const tmux = await isolatedTmux()
-    restore.push(() => { void tmux.close() })
+    restore.push(() => tmux.close())
     // The service's own tmux call, on the test's server: TMUX outranks TMUX_TMPDIR.
     vi.stubEnv('TMUX', undefined)
     vi.stubEnv('TMUX_PANE', undefined)

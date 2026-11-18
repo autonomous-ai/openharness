@@ -18,7 +18,7 @@ function setup(over: Partial<StoreDeps> = {}, dataDir = '/data') {
   const deps: StoreDeps = {
     prepare: vi.fn(() => true),
     setupAgain: vi.fn(async () => ({ done: 0, needsSetup: 0, busy: 0 })),
-    refresh:vi.fn(async () => [{ id: 'acme/thing' }] as never),
+    refresh: vi.fn(async () => [{ id: 'acme/thing' }] as never),
     rows: vi.fn((_installed, catalog) => (catalog ?? []).map((entry: { id: string }) => ({ id: entry.id, installed: false }))),
     remove: vi.fn(() => ({ ok: true as const })),
     mutate: vi.fn(async ({ id }: { id?: string }) => ({ ok: true as const, id: id ?? 'acme/from-url' })),
