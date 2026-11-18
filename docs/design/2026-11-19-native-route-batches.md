@@ -47,3 +47,12 @@ fresh final ancestry/leaf checks, aliases, nested proof calls and the existing 2
 Then run the native hook file/publication and affected launch caller suites with per-file coverage,
 plus TypeScript. A short matched actual Create comparison measures the isolated change; final combined
 launch/Resume validation waits for the other held runtime corrections. No checkpoint flush is removed.
+
+## Actual RED
+
+At clean source `bee20802aaf8f8b8fa8c6dbf7ad7b2790e915cf4`, the three count cases fail
+as intended: destination route reads are 6 rather than 4, and preparation and completed-proof reads
+are each 12 rather than 8. The remaining 22 cases were intentionally excluded from this RED run.
+The validator records actual exit 1, no timeout, and unchanged source before and after in
+`.harness/validation/20261118T203516.030301Z-22470/receipt.json` (0.665 seconds for the test process).
+The runtime patch follows this captured RED; the selected caller/authority suite and types follow next.

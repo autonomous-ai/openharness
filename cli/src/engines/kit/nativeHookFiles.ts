@@ -321,7 +321,7 @@ export interface HookPreparationAttempt {
   check(): void
   /** All unfinished destinations and already-published outputs still match. */
   verify(): void
-  observe(file: string, verify: () => void): void
+  observe(file: string, verify: (directories?: Map<string, BigIntStats>) => void): void
   /** Own the descriptor until the actual syscall settles, even after a reply timeout. */
   flush(fd: number): Promise<void>
 }
@@ -357,7 +357,12 @@ function preparationProof(files: readonly string[], verifyRoutes: () => void): H
     return { file, target: located?.path ?? join(directoryPath(dirname(file)), basename(file)), stamp: observed.stamp, facts: paths.snapshot(), verify: observed.verify }
   })
   const proof = { files: confirmed.map(({ verify: _verify, ...file }) => file), current: () => {
-    try { verifyRoutes(); for (const file of confirmed) file.verify(); return true } catch { return false }
+    try {
+      verifyRoutes()
+      const directories = new Map<string, BigIntStats>()
+      for (const file of confirmed) file.verify(directories)
+      return true
+    } catch { return false }
   } }
   if (!proof.current()) throw new HookPreparationHeld('the prepared settings changed before acknowledgement')
   return proof
@@ -442,8 +447,9 @@ export function hookPreparationRoutes(files: readonly string[]): { verify(): voi
       aliases: new Set(facts.filter(fact => fact.alias).map(fact => fact.path)) }
   })
   const verifyRoutes = () => {
+    const directories = new Map<string, BigIntStats>()
     for (const { file, key, facts, aliases } of reservations) {
-      const fresh = new NativePaths(new NativeEvidenceBudget()), located = fresh.resolveSync(file, true)
+      const fresh = new NativePaths(new NativeEvidenceBudget()), located = fresh.resolveSync(file, true, directories)
       const target = located?.path ?? join(directoryPath(dirname(file)), basename(file))
       const snapshot = fresh.snapshot()
       if (facts.length) verifyRetainedPathSnapshot(facts, snapshot)
@@ -485,10 +491,13 @@ export async function runHookPreparation<T>(files: readonly string[], work: (att
       throw new HookPreparationHeld('the preparation expired or its owner changed')
     }
   }
-  const observations = new Map<string, () => void>()
+  const observations = new Map<string, (directories?: Map<string, BigIntStats>) => void>()
   const verify = () => {
     check(); options.verify?.()
-    verifyRoutes(); for (const inspect of observations.values()) inspect()
+    verifyRoutes()
+    // Share only provisional directory walks; every observation still verifies its final snapshot afresh.
+    const directories = new Map<string, BigIntStats>()
+    for (const inspect of observations.values()) inspect(directories)
     options.verify?.(); check()
   }
   const attempt: HookPreparationAttempt = {
