@@ -33,6 +33,7 @@ import { MANAGED_SETTINGS, readFullscreen } from '../cable/hosts/claudeRenderer.
 import { cmuxClientDeps, cmuxStoreDir, cmuxStores, createCmuxClient, type CmuxClient } from '../cable/hosts/cmuxCli.js'
 import { createCmuxAppAdapter } from '../cable/hosts/cmuxApp.js'
 import { CmuxSource } from '../cable/hosts/cmuxSource.js'
+import { createCursorFolderAdapter, isFolder } from '../cable/hosts/cursorFolder.js'
 import { watchNearest } from '../cable/hosts/folderWatch.js'
 import { createCodexAppAdapter } from '../cable/hosts/codexApp.js'
 import { codexQueueDeps, createCodexQueue, type CodexQueueDeps } from '../cable/hosts/codexQueue.js'
@@ -399,7 +400,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const dial = dialStream({ log, after: timerIn('dialStream'), ended: () => part.call('orca', () => orcaFronted(null)) })
   // The streams Harness's own VS Code extension holds open, one a window, and the terminal each VS Code agent runs in
   // (docs/plans/2026-11-17-dial-vscode-extension-design.md). An adapter's capabilities are read at each look, so a
-  // terminal found or lost tells the dials to look again.
+  // terminal found or lost tells the dials to look again. Cursor's windows hold the same stream, with no word of which
+  // editor they are: a window reports shells by pid, and an agent's pid is placed in one editor alone by its hook's bundle
+  // id (vscode.ts paneOf), so each editor's adapter finds only its own agents' terminals in the one pool.
   const renderer = {
     defaultHome: dirname(env.CLAUDE_PROJECTS_DIR), managed: deps.claudeManagedSettings ?? MANAGED_SETTINGS[apps.platform],
   }
@@ -482,6 +485,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     createCodexAppAdapter({ ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'codex', log }),
     // No echo to guard: VS Code sends no attach for the follow to take as a person's.
     createVscodeAdapter('vscode', { ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'vscode', terminals: vscode }),
+    createVscodeAdapter('cursor', { ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'cursor', terminals: vscode }),
+    // After Cursor's terminals and tabs: whatever agent in Cursor they do not reach opens its folder's window.
+    createCursorFolderAdapter({ run: apps.run, platform: apps.platform, bin: openBin, isFolder }),
     createTabsAdapter({
       isOpen: () => tabs.isOpen(),
       select: (tab, raise) => {
@@ -1454,12 +1460,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     return readOrcaOrder(source)
   }
   if (observed) observed.onChange(() => part.call('orca', () => orcaMembers(observed)))
-  // Each change tells VS Code's windows which agents run in one of its terminals, by their panes: only theirs may cost a
-  // read of the process table. A part of its own, so a throw there is never the dial's.
-  if (observed) observed.onChange(() => part.call('vscode', () => vscode.agents(observed.list().flatMap(({ id }) => {
-    const pid = termPid(observed.paneOf(id, 'vscode') ?? '')
-    return pid === undefined ? [] : [pid]
-  }))))
+  // Each change tells VS Code's and Cursor's windows which agents run in one of their terminals, by their panes: only
+  // theirs may cost a read of the process table. A part of its own, so a throw there is never the dial's.
+  if (observed) observed.onChange(() => part.call('vscode', () => vscode.agents(observed.list().flatMap(({ id }) =>
+    (['vscode', 'cursor'] as const).flatMap((editor) => {
+      const pid = termPid(observed.paneOf(id, editor) ?? '')
+      return pid === undefined ? [] : [pid]
+    })))))
 
   /**
    * The open scan's copy of a session cmux lists, placed at that row's cmux pane
