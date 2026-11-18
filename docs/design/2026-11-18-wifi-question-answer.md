@@ -134,3 +134,10 @@ this slice. Shared abort-card presentation remains a broader dial/legacy caller 
 The evidence paragraph was added after the fixed-source run; no runtime or test changed afterward.
 Subsequent source review corrected the timeout comparison above; the implemented 30-second bound and
 its timeout/no-replay/physical-close tests are unchanged.
+
+Combined integration `a42150e1de` passes all six packaged Wi-Fi scenarios, including ordinary question
+answers, supervised crash/recovery, inline operation and a deliberately unavailable component. It also
+passes 550 selected combined caller/architecture cases and types. Receipt
+`.harness/validation/20261118T041410.536205Z-56097/receipt.json` is overall passed; native execution took
+165.1 seconds and asserts master exit zero, close, both output EOFs and private-root removal. Later
+storage custody and adapter identity changes retain their separate source-scoped validation obligations.
