@@ -4057,6 +4057,7 @@ describe('hello capabilities', () => {
       } finally { await session.stop() }
     }
     expect(await asked('é'.repeat(32))).toEqual([])   // 64 UTF-8 bytes, as the firmware's strlen counts them
+    expect(await asked('\u0000ship')).toEqual([])     // cJSON keeps the NUL: strlen reads an empty id, which it ignores too
     expect(await asked('x'.repeat(63))).toEqual(['question', 'notif.replace', 'question.close'])
   })
 
