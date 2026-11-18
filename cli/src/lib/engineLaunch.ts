@@ -34,6 +34,7 @@ import { shellSingleQuote } from './shellQuote.js'
 import { browserPrelude } from './browserShim.js'
 import { currentUserShell } from './userShell.js'
 import { harnessPaneOwner } from './harnessSessionLabel.js'
+import { errorKind } from './log.js'
 
 export { shellSingleQuote }
 
@@ -1517,7 +1518,7 @@ export async function commandOutputInInteractiveShell(engine: AgentEngine, comma
       : windowsEngineArgv(engine, [command, ...args])
   } catch (error) {
     // A shim Windows will not run (lib/windows/launch.ts): the launch itself says why.
-    console.warn(`[engine] ${engine} ${args.join(' ')} not run · ${error instanceof Error ? error.message : error}`)
+    console.warn(`[engine] ${engine} ${args.join(' ')} not run · ${errorKind(error)}`)
     return null
   }
   const [file, ...argv] = run

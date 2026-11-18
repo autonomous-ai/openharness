@@ -44,6 +44,7 @@ import type { TerminalDispatchControl, TerminalRuntimeRef } from './terminalType
 import type { WindowsPaneLaunch } from './windows/engineStart.js'
 import { processAmong, sameProcessIdentity, sameTerminalPlacement, terminalInstanceId, terminalRouteKey } from './terminalRuntime.js'
 import { resumesConversation } from './resumeCapability.js'
+import { errorKind } from './log.js'
 
 export interface RestoreLaunch {
   nativeToken?: string
@@ -596,7 +597,7 @@ export async function restoreAgents(input: RestoreAgentsDeps): Promise<RestoreSu
     const reason = error instanceof Error ? error.message : String(error)
     if (error instanceof Unsurveyed) summary.unsurveyed.push(entry.agentId)
     else summary.failed.push({ agentId: entry.agentId, reason })
-    deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · could not be surveyed · ${reason}`)
+    deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · could not be surveyed · ${errorKind(error)}`)
    }
   }
   if (!missing.length) return summary
@@ -1020,7 +1021,7 @@ async function watchRestoredPane(
     }
     fail('START_TIMEOUT', `${engine} did not expose an engine process within ${Math.round(budgetMs / 60_000)} minutes. The terminal remains available.`)
   } catch (error) {
-    deps.log(`[restore] ${engine} · agent ${agentId} · watch failed · registry publication unavailable`)
+    deps.log(`[restore] ${engine} · agent ${agentId} · watch failed · registry publication unavailable · ${errorKind(error)}`)
   } finally {
     release()
   }

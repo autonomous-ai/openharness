@@ -16,6 +16,7 @@ import { engineInstallPaths, engineInstallRecipe } from './engineInstall.js'
 import { currentUserShell } from './userShell.js'
 import { windowsLaunchCandidates, windowsLaunchCommand } from './binaryOnPath.js'
 import { hermesBootFile, hermesRoot } from './windows/hermesLaunch.js'
+import { errorKind } from './log.js'
 
 // Keep this historical import surface for callers, but never duplicate the
 // catalog here. `engines/types.ts` is the one iterable source of truth.
@@ -435,7 +436,7 @@ export function agentCommandOwnershipSnapshotAsync(): Promise<AgentCommandOwners
     timer = setTimeout(() => { expired = true; reject(new Error('ENGINE_LOOKUP_TIMEOUT')) }, 10_000)
   })
   const result = Promise.race([work, deadline]).catch(error => {
-    console.error(`[engine] ${error.message}: executable ownership unavailable`)
+    console.error(`[engine] ${errorKind(error)}: executable ownership unavailable`)
     throw error
   })
   ownershipFlight = result

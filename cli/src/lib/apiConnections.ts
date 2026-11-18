@@ -8,6 +8,7 @@ import { z } from 'zod'
 import { API_CONNECTIONS_DIR, API_LIST_FILE, API_LIST_MAX_BYTES, UNREADABLE, baseUrl, id, metadata, ApiConnectionError,
   type ApiConnection } from './apiConnectionMetadata.js'
 import { readPrivateStateFile, secureStateDirectory } from './secureState.js'
+import { errorKind } from './log.js'
 export { ApiConnectionError, type ApiConnection } from './apiConnectionMetadata.js'
 
 const stored = metadata.extend({ apiKey: z.string().trim().min(1).max(8192).regex(/^[^\s\x00-\x1f\x7f]+$/) })
@@ -125,7 +126,7 @@ export class ApiConnections {
           && readPrivateStateFile(this.listFile, API_LIST_MAX_BYTES) === contents) return
       } catch { /* A damaged derivative is replaced from the already validated key store. */ }
       this.replace('list', this.listFile, contents)
-    } catch { console.warn('[apis] The list of saved APIs a launch reads could not be written; the next read of them writes it.') }
+    } catch (error) { console.warn(`[apis] The list of saved APIs a launch reads could not be written; the next read of them writes it · ${errorKind(error)}`) }
   }
 
   recognizedBases(): string[] {

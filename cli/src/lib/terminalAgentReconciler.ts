@@ -10,6 +10,7 @@ import {
 import type { TerminalBackend } from './terminalBackend.js'
 import { mergeTerminalRuntimes, processAmong, processIdentityKey, sameProcessIdentity, terminalInstanceId, terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
 import type { TerminalRuntimeRef } from './terminalTypes.js'
+import { errorKind } from './log.js'
 
 const MISS_LIMIT = 2
 
@@ -133,7 +134,7 @@ function boundProcessRuns(
 
 /** A failed pass, said by its kind only: its message may quote a path (a probe's command, a state file). */
 function passFailed(error: unknown): void {
-  console.warn(`[discovery] a pass failed, the next one tries again · ${error instanceof Error ? error.constructor.name : typeof error}`)
+  console.warn(`[discovery] a pass failed, the next one tries again · ${errorKind(error)}`)
 }
 
 /** Serialized, failure-isolated reconciliation across every enabled backend instance. */
@@ -306,8 +307,7 @@ export class TerminalAgentReconciler {
     } catch (error) {
       if (!(error instanceof RegistryPersistenceUnavailable || error instanceof AtomicWriteUnconfirmed)) throw error
       this.refused = true
-      // The message is a fixed category (registry.ts persistenceFailure): no path, no content.
-      if (!this.outageSaid) console.warn(`[discovery] observations not saved, kept for the next pass · ${error.message}`)
+      if (!this.outageSaid) console.warn(`[discovery] observations not saved, kept for the next pass · ${errorKind(error)}`)
       this.outageSaid = true
     }
   }

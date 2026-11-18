@@ -28,6 +28,7 @@ import { RECENT_TURNS, lastFullText, recentAsks, recentRecaps, splitSummary, typ
 import { atomicWriteJson } from './registry.js'
 import { fallbackTier, type Tier, type TierInput } from './notifyTier.js'
 import { TurnStats } from '../cable/turnStats.js'
+import { errorKind } from './log.js'
 
 export type CommanderFrame = {
   type: 'commander_event'
@@ -1242,7 +1243,7 @@ export class CommanderMirror {
       writeFileSync(this.askFile, JSON.stringify(Object.fromEntries(this.asks), null, 2))
     } catch (err) {
       if (strict) throw err
-      console.error('[commander] save summaries failed:', err)
+      console.error('[commander] save summaries failed:', errorKind(err))
     }
   }
 }
