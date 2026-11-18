@@ -570,8 +570,15 @@ fn read_lines(stream: impl Read, mut send: impl FnMut(String) -> bool) {
     }
 }
 
+/// The run's name in the log: its arguments but the one after `--approve`, Orca's fingerprint, which a log never holds.
 fn name(args: &[&str]) -> String {
-    format!("harness {}", args.join(" "))
+    let shown: Vec<&str> = std::iter::once("")
+        .chain(args.iter().copied())
+        .zip(args)
+        .filter(|(before, _)| *before != "--approve")
+        .map(|(_, arg)| *arg)
+        .collect();
+    format!("harness {}", shown.join(" "))
 }
 
 /// The log line for a child that ended: its code and, after a failure, stderr's last line. Never stdout, which may

@@ -1,6 +1,104 @@
 //! `harness device orca status --json` and `harness device orca connect [--approve <fingerprint>] --json`: the CLI
 //! does all of the work with Orca, and the app reads the one line each prints.
 
+use crate::cli::{Cli, LINE_MAX};
+use crate::log;
+use crate::types::{Fingerprint, OrcaAnswer, OrcaError, OrcaStatus};
+use serde::Deserialize;
+use std::time::Duration;
+
+/// `status` asks Orca three things, 25 s at most between them, after it writes the plugin's folder.
+pub const ORCA_STATUS_DEADLINE: Duration = Duration::from_secs(30);
+/// `connect` asks what `status` asks, then waits up to 60 s on Orca's install, update or enable.
+pub const ORCA_CONNECT_DEADLINE: Duration = Duration::from_secs(120);
+
+/// The CLI's own bounds on the access it passes on. Past one, the whole answer fails and nothing is cut, so a person
+/// never approves access the window did not show.
+const GRANTS_MAX: usize = 10;
+const GRANT_MAX: usize = 300;
+
+/// What the plugin is in Orca; None when the CLI could not say, as one from before the command, which prints its usage.
+pub fn status(cli: &dyn Cli) -> Option<OrcaStatus> {
+    status_within(cli, ORCA_STATUS_DEADLINE)
+}
+
+fn status_within(cli: &dyn Cli, deadline: Duration) -> Option<OrcaStatus> {
+    #[derive(Deserialize)]
+    struct Line {
+        orca: String,
+    }
+    let output = cli.run(&["device", "orca", "status", "--json"], deadline).ok()?;
+    // It exits 0 in every state: any other end is a run that failed.
+    if output.timed_out || output.code != Some(0) {
+        return None;
+    }
+    output.stdout.lines().filter(|line| line.len() <= LINE_MAX).find_map(|line| {
+        let Line { orca } = serde_json::from_str(line).ok()?;
+        match orca.as_str() {
+            "absent" => Some(OrcaStatus::Absent),
+            "offer" => Some(OrcaStatus::Offer),
+            "off" => Some(OrcaStatus::Off),
+            "approve" => Some(OrcaStatus::Approve),
+            "behind" => Some(OrcaStatus::Behind),
+            "current" => Some(OrcaStatus::Current),
+            _ => None,
+        }
+    })
+}
+
+/// Asks Orca to connect the plugin, with `--approve` only when handed the fingerprint of the access the person was
+/// shown and clicked Connect on.
+pub fn connect(cli: &dyn Cli, approve: Option<&Fingerprint>) -> OrcaAnswer {
+    connect_within(cli, approve, ORCA_CONNECT_DEADLINE)
+}
+
+fn connect_within(cli: &dyn Cli, approve: Option<&Fingerprint>, deadline: Duration) -> OrcaAnswer {
+    #[derive(Deserialize)]
+    #[serde(tag = "connect", rename_all = "snake_case")]
+    enum Line {
+        Done,
+        Approve { fingerprint: String, grants: Vec<String>, update: bool },
+        Failed { error: String },
+    }
+    let mut args = vec!["device", "orca", "connect"];
+    if let Some(fingerprint) = approve {
+        args.extend(["--approve", fingerprint.as_str()]);
+    }
+    args.push("--json");
+    let Ok(output) = cli.run(&args, deadline) else { return OrcaAnswer::Failed(OrcaError::Failed) };
+    // Its line says how it ended whatever the exit code: a `failed` line exits 1.
+    let line =
+        output.stdout.lines().filter(|line| line.len() <= LINE_MAX).find_map(|line| serde_json::from_str(line).ok());
+    match line {
+        Some(Line::Done) => OrcaAnswer::Done,
+        Some(Line::Approve { fingerprint, grants, update }) => approval(&fingerprint, grants, update),
+        Some(Line::Failed { error }) => OrcaAnswer::Failed(match error.as_str() {
+            "not-running" => OrcaError::NotRunning,
+            "no-plugin" => OrcaError::NoPlugin,
+            "off" => OrcaError::Off,
+            "timeout" => OrcaError::Timeout,
+            _ => OrcaError::Failed,
+        }),
+        None if output.timed_out => OrcaAnswer::Failed(OrcaError::Timeout),
+        None => OrcaAnswer::Failed(OrcaError::Failed),
+    }
+}
+
+/// An `approve` line held to the CLI's bounds: a fingerprint on its pattern, and 1 to GRANTS_MAX grants, each with no
+/// control character, not blank, and GRANT_MAX characters at most. The CLI drops a blank grant, so one here would put
+/// an empty line before the person.
+fn approval(fingerprint: &str, grants: Vec<String>, update: bool) -> OrcaAnswer {
+    let shown = |grant: &String| {
+        log::printable(grant) == *grant && !grant.trim().is_empty() && grant.chars().count() <= GRANT_MAX
+    };
+    match Fingerprint::parse(fingerprint) {
+        Some(fingerprint) if (1..=GRANTS_MAX).contains(&grants.len()) && grants.iter().all(shown) => {
+            OrcaAnswer::Approve { fingerprint, grants, update }
+        }
+        _ => OrcaAnswer::Failed(OrcaError::Failed),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

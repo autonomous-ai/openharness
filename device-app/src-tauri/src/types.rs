@@ -173,6 +173,53 @@ pub enum LoginEvent {
     Done(Result<(), String>),
 }
 
+/// An approval fingerprint as Orca prints one: `ap1-` and 32 lowercase hex digits. Only `parse` makes one: it is the
+/// one argument the app runs that is not fixed text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Fingerprint(String);
+
+impl Fingerprint {
+    pub fn parse(text: &str) -> Option<Fingerprint> {
+        let digits = text.strip_prefix("ap1-")?;
+        let hex = |byte: u8| matches!(byte, b'0'..=b'9' | b'a'..=b'f');
+        (digits.len() == 32 && digits.bytes().all(hex)).then(|| Fingerprint(text.into()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// What the Harness Device plugin is in Orca, as `harness device orca status` says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OrcaStatus {
+    Absent,
+    Offer,
+    Off,
+    Approve,
+    Behind,
+    Current,
+}
+
+/// The CLI's five codes; anything else it prints is `Failed`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OrcaError {
+    NotRunning,
+    NoPlugin,
+    Off,
+    Timeout,
+    Failed,
+}
+
+/// What `harness device orca connect` answered. Approve: the access Orca lists, a line each in Orca's words and order,
+/// and whether the plugin is installed already.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OrcaAnswer {
+    Done,
+    Approve { fingerprint: Fingerprint, grants: Vec<String>, update: bool },
+    Failed(OrcaError),
+}
+
 /// What happened. WatchExit(None): ended by a signal. UpdateChecked(Some): a strictly newer release. InstallStep:
 /// `'static`, so only the step table's fixed copy can be one, never a line of the script's.
 #[derive(Clone, Debug, PartialEq, Eq)]
