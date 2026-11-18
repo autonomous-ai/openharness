@@ -24,6 +24,8 @@ case " $* " in
     *) down; exit 0 ;;
 esac
 
+# The role first, then the gadget, as the image's own /etc/adb_conf.sh does: the switch starts the device controller.
+if [ -w "$ROLE" ]; then echo usb_device > "$ROLE"; fi
 [ -d /sys/kernel/config/usb_gadget ] || mount -t configfs none /sys/kernel/config
 UDC=$(ls /sys/class/udc | head -n 1)
 if [ -z "$UDC" ]; then
@@ -44,4 +46,3 @@ if [ ! -d "$G" ]; then
     ln -s "$G/functions/acm.usb0" "$G/configs/c.1/"
 fi
 [ -n "$(cat "$G/UDC")" ] || echo "$UDC" > "$G/UDC"
-if [ -w "$ROLE" ]; then echo usb_device > "$ROLE"; fi
