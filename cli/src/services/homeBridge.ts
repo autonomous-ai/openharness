@@ -11,7 +11,7 @@ import { existsSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { env } from '../config/env.js'
-import { harnessRoot, harnessRoots } from '../config/harnessHome.js'
+import { harnessRoot, harnessRoots, legacyHarnessHome } from '../config/harnessHome.js'
 import type { CoreApi, ServiceRequests } from '../core/api.js'
 import { BRIDGE_FILE, readBridge, removeBridge, serveOldPaths, type Served } from '../homeMove/bridge.js'
 import { oldUsers, procRows, type ProcRow } from '../homeMove/oldUsers.js'
@@ -126,7 +126,7 @@ export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = 
       // The record before bridge.json: a crash between the two leaves a bridge.json, and the next start finishes.
       note('moved', 0)
       rmSync(join(stateRoot, BRIDGE_FILE), { force: true })
-      deps.log(outcome === 'removed' ? 'home bridge: removed' : 'home bridge: removed · ~/.harness holds something else, so it stays')
+      deps.log(outcome === 'removed' ? 'home bridge: removed' : `home bridge: removed · ${legacyHarnessHome('~', 'linux')} holds something else, so it stays`)
       stop()
     } catch (error) {
       // /proc with no boot time, a file it could not remove: the bridge stays until a check gets through.
