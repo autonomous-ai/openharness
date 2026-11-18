@@ -335,7 +335,9 @@ function removeMoved(deps: UninstallDeps, move: NonNullable<UninstallDeps['move'
   const bridged = deps.tildify(legacyHarnessHome(deps.home, deps.platform))
   try {
     const bridge = move.readBridge(state)
-    if (bridge && move.removeBridge(bridge, state) === 'removed') deps.out(`✓ removed ${bridged}, which held only links`)
+    // The folder it names is the one removeBridge empties: only ~/.harness is the move's (services/homeBridge.ts refuses the same).
+    if (bridge && bridge.oldHome !== legacyHarnessHome(deps.home, 'linux')) problems.push(`${deps.tildify(posix.join(state, BRIDGE_FILE))} names a folder other than ${bridged}: nothing in that folder was removed`)
+    else if (bridge && move.removeBridge(bridge, state) === 'removed') deps.out(`✓ removed ${bridged}, which held only links`)
     else if (bridge) problems.push(`${bridged} is still there: something in it is not Harness's. Look in it, then delete it yourself`)
   } catch (error) {
     problems.push(`could not remove ${bridged}, which links to Harness's folders (${message(error)}): delete it yourself`)
