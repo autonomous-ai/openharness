@@ -2942,7 +2942,7 @@ export class CableSession {
    */
   private async giveQuestion(agentId: string, id: string, words: string): Promise<void> {
     // The dial drops a frame of an id it cannot keep: a question never on it is neither asked nor told.
-    if (!dialKeepsId(agentId)) return
+    if (!this.dialKeeps(agentId, id)) return
     const inbox = this.questionInbox
     // Read only for a frame: every drawer change walks each open question here, and most send nothing.
     const send = (tier: Record<string, unknown>) => {
@@ -2955,6 +2955,12 @@ export class CableSession {
     } else if ((this.questionTier || (this.seqOn && !inbox.held(agentId, id))) && inbox.refile(agentId, id)) {
       await send(this.questionTier ? { tier: 'list' } : {})
     }
+  }
+
+  /** Whether this dial keeps a question: its agent's drawer row (dialKeepsId), and on a Pro its id, which the Pro
+   *  closes nothing by from 64 bytes on (pro_cable.c handle_question_close): one rung with it rang for good. */
+  private dialKeeps(agentId: string, id: string): boolean {
+    return dialKeepsId(agentId) && (!this.seqOn || Buffer.byteLength(id, 'utf8') < 64)
   }
 
   /** Whether a dial that lost its questions is asked this one again. A real question whose turn moved on without a close
@@ -3400,7 +3406,9 @@ export class CableSession {
     // cap) goes back on it as a row, first, in place of that agent's news (2026-11-18). An ask would beep and wake it
     // at every change of that list. A greeting dial lost them with its RAM, and its push asks them after this drawer.
     const carried = new Set(listed.filter((row) => row.question).map((row) => row.agentId))
-    const open = this.greeting ? [] : this.owedQuestions().filter(({ agentId }) => !carried.has(agentId))
+    // Owed is this dial's own rule here (dialKeeps); owedQuestions stays the same for any kind of dial beside it.
+    const open = this.greeting ? []
+      : this.owedQuestions().filter(({ agentId, id }) => !carried.has(agentId) && this.dialKeeps(agentId, id))
     const back = new Set(open.map(({ agentId }) => agentId))
     const rest = listed.filter((row) => !back.has(row.agentId))
     // Questions before news within the eight: a question cut for a news row was asked again, a beep, at every change.
@@ -3497,7 +3505,7 @@ export class CableSession {
     // (giveQuestion; a question's frame is the larger): the dial never had it, and send would drop an over-cap one as
     // this side's bug. The inbox keeps no id past 6500 bytes; the close came anyway.
     const close = { t: 'question.close', agentId, id }
-    if (dialKeepsId(agentId) && fitsFrame(close)) await this.send(close)
+    if (this.dialKeeps(agentId, id) && fitsFrame(close)) await this.send(close)
   }
 
   async focusAgent(agentId: string): Promise<void> {
