@@ -448,7 +448,7 @@ exec '${realGit}' "$@"
       const hooks = join(root, 'hooks')
       await mkdir(hooks)
       const pidFile = join(root, 'hook.pid')
-      await writeFile(join(hooks, 'post-checkout'), `#!/bin/sh\necho $$ > '${pidFile}'\nexec sleep 60\n`, { mode: 0o755 })
+      writeExecutable(join(hooks, 'post-checkout'), `#!/bin/sh\necho $$ > '${pidFile}'\nexec sleep 60\n`)
       await git('config', 'core.hooksPath', hooks)
       const path = await prepareGitProject(repo, { root: harnesses(), worktree: true, branchName: 'slow', worktreeTimeout: 1_500 })
       expect(path).toBe(join(worktrees(), 'slow'))

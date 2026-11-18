@@ -117,7 +117,7 @@ it('cancels a download that hangs: the real grid process ends, and what it wrote
     await writeFile(join(gridHome, 'credentials.toml'), `session_token = 'catalog-fixture'\napi_url = '${base}'\n`)
     const executable = join(root, 'grid.mjs')
     // `grid pull` as it hung when its connection stopped sending: a `.part` written, then nothing, forever.
-    await writeFile(executable, `#!${process.execPath}
+    writeExecutable(executable, `#!${process.execPath}
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 const home = process.env.GRID_HOME, args = process.argv.slice(2);
@@ -125,7 +125,7 @@ if (args[0] === 'device-info') console.log(JSON.stringify({ usable_bytes: 16 * 1
 else if (args.includes('ls')) console.log(JSON.stringify([{ grid: 'home', id: 'fixture-grid' }]));
 else if (args[0] === 'pull') { writeFileSync(join(home, 'models', 'tiny.gguf.part'), Buffer.alloc(24)); writeFileSync(join(home, 'pulling'), String(process.pid)); setInterval(() => {}, 1000); }
 else process.exitCode = 2;
-`, { mode: 0o700 })
+`)
     const inventory = async () => ({ state: 'awake' as const, status: 'running', nodes: [] })
     service = new LocalModels({ stateDir, processEnv: { GRID_HOME: gridHome, HARNESS_GRID_BIN: executable, PATH: root }, inventory })
     await service.act('home', modelId, 'download')

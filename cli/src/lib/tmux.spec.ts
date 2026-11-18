@@ -818,7 +818,7 @@ if [ "$1" = "load-buffer" ]; then exec sleep 30; fi
     const calls = join(dir, 'calls')
     const loaded = join(dir, 'loaded')
     const first = join(dir, 'first')
-    writeFileSync(join(dir, 'tmux'), `#!/bin/sh
+    writeExecutable(join(dir, 'tmux'), `#!/bin/sh
 printf '%s\\n' "$*" >> "$TMUX_LATE_CALLS"
 if [ "$1" = "load-buffer" ]; then
   cat > /dev/null
@@ -829,7 +829,7 @@ if [ "$1" = "load-buffer" ]; then
   fi
   printf '%s\\n' "$3" >> "$TMUX_LATE_LOADED"
 fi
-`, { mode: 0o700 })
+`)
     const previous = {
       path: process.env.PATH,
       calls: process.env.TMUX_LATE_CALLS,

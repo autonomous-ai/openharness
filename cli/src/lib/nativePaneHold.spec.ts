@@ -72,7 +72,7 @@ describe.skipIf(!binary)('native guard publication on private tmux servers', () 
 
   it('bounds a stalled transition and kills its client before falling back inert', async () => {
     const token = randomUUID(), pidFile = join(tmux.root, 'client-pid'), binary = join(tmux.root, 'stalled-tmux')
-    writeFileSync(binary, `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000);\n`, { mode: 0o700 })
+    writeExecutable(binary, `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000);\n`)
     const pane = await start(token, hold(token, binary, held(token)))
     onTestFailed(async () => console.log(await tmux.run('capture-pane', '-p', '-t', pane.paneId)))
     await vi.waitFor(() => expect(existsSync(pidFile)).toBe(true), { timeout: 3_000 })
