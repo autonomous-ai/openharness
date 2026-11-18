@@ -130,11 +130,12 @@ What `needs-you` covers, and what it does not:
 - **The page remainder:** for a page line, the line's signed count is added to a remainder kept for its shell. The
   remainder resets on a line for another shell, on a line with no `page`, after 1 s with no page line, and when the
   stream ends.
-- **The keys:** each time the remainder reaches ±20, one page key joins the run. It is `\x1b[5~` toward older lines
+- **The keys:** each time the remainder reaches ±20, one page key is pressed. It is `\x1b[5~` toward older lines
   (n < 0) or `\x1b[6~` toward newer lines.
-- **The run:** it does what it does today, a host scroll per line while the shell's terminal is active. It also sends
-  that line's page keys, under the same active check. The `waiting` merge keeps page keys apart from lines, each with
-  its own cap: at most 100 lines and 5 keys from one line.
+- **When they go:** a line's keys are pressed as soon as the line arrives, while that shell's terminal is active and the
+  loop runs, never behind a run of host scroll lines (which move nothing on the alternate screen), so no key can follow
+  a later line with no `page`. Only the host scroll lines wait, merged as today: at most 100 lines a line, so at most 5
+  keys a line.
 - **The facade:** gains `pageKey(pid, up)`. It finds the terminal by its shell pid and calls `terminal.sendText(seq,
   false)` with one of the two fixed sequences. It cannot write any other text.
 - **The types:** `ApiTerminal` gains `sendText(text: string, addNewLine?: boolean): void`. `WindowFacade`, the tests'
