@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Install the adapter CLI from THIS working tree into ~/.harness/cli — the local twin of
+# Install the adapter CLI from THIS working tree into Harness's cli folder (~/.harness/cli; on Linux, the
+# one harness_roots below finds) — the local twin of
 # scripts/upload-cli.sh with the GCS round-trip cut out. It produces exactly the layout the public
 # installer does (the hosted installer), so afterwards `harness` on this computer IS
 # your build. Nothing is uploaded, nothing is version-bumped, nothing is git-committed.
@@ -33,8 +34,34 @@ ADAPTER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # this package
 SRC_CLI="$ADAPTER_DIR/dist/cli.js"
 SRC_NOTIFY="$ADAPTER_DIR/dist/notify.mjs"
 
+# The two folders Harness keeps its files in, by the rule every Harness program follows
+# (src/config/harnessHome.ts), as the public installer finds them. On Linux, the XDG data and state
+# folders; while only ~/.harness exists, ~/.harness, which the daemon moves at its next start.
+# Elsewhere ~/.harness. The data root is the one switch: it exists only once that move is done, or after
+# a fresh install.
+harness_roots() {
+  HARNESS_DATA_ROOT="$HOME/.harness"
+  HARNESS_STATE_ROOT="$HOME/.harness"
+  [ "$(uname -s)" = Linux ] || return 0
+  # Only an absolute path counts, as the XDG spec says. A trailing / is dropped so the paths written
+  # into the launcher are spelled as the CLI's own join spells them.
+  case "${XDG_DATA_HOME:-}" in
+    /*) _xdg_data="${XDG_DATA_HOME%/}/harness" ;;
+    *)  _xdg_data="$HOME/.local/share/harness" ;;
+  esac
+  case "${XDG_STATE_HOME:-}" in
+    /*) _xdg_state="${XDG_STATE_HOME%/}/harness" ;;
+    *)  _xdg_state="$HOME/.local/state/harness" ;;
+  esac
+  if [ -e "$_xdg_data" ] || [ ! -e "$HOME/.harness" ]; then
+    HARNESS_DATA_ROOT="$_xdg_data"
+    HARNESS_STATE_ROOT="$_xdg_state"
+  fi
+}
+harness_roots
+
 # Install layout — same defaults as src/config/env.ts, overridable for a sandboxed try-out.
-CLI_DIR="${ADAPTER_CLI_DIR:-$HOME/.harness/cli}"
+CLI_DIR="${ADAPTER_CLI_DIR:-$HARNESS_DATA_ROOT/cli}"
 DATA_DIR="${ADAPTER_DATA_DIR:-$CLI_DIR/data}"
 BIN_DIR="${HARNESS_BIN_DIR:-$HOME/.local/bin}"
 LAUNCHER="$BIN_DIR/harness"
@@ -64,7 +91,7 @@ done
 # the public installer pins an absolute path, which this script's header promises to match.
 # The managed runtime wins when it is present, so a dev install drives the same cli.js on the same
 # Node the desktop app uses instead of quietly forking onto whatever PATH resolves.
-HARNESS_RUNTIME_NODE="${HARNESS_RUNTIME_NODE:-$HOME/.harness/runtime/current-node}"
+HARNESS_RUNTIME_NODE="${HARNESS_RUNTIME_NODE:-$HARNESS_STATE_ROOT/runtime/current-node}"
 NODE_BIN=""
 if [ -r "$HARNESS_RUNTIME_NODE" ]; then
   CANDIDATE="$(cat "$HARNESS_RUNTIME_NODE" 2>/dev/null || true)"

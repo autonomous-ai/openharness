@@ -19,9 +19,9 @@
 # Login and start are deliberately separate: login saves a native SSO session, while start launches the
 # adapter from that session. The running daemon auto-updates itself thereafter (polls the same manifest).
 # There is no system Node prerequisite. The CLI is plain JS (no native binary, no code-signing) and it runs on a
-# checksum-verified Node this installer puts in ~/.harness/runtime — the same runtime Desktop Harness
-# manages, shared on purpose so one cli.js is never run by two different Nodes. Your own Node and nvm
-# are neither required nor touched.
+# checksum-verified Node this installer puts in ~/.harness/runtime (on Linux, in the XDG state folder: see
+# harness_roots) — the same runtime Desktop Harness manages, shared on purpose so one cli.js is never run
+# by two different Nodes. Your own Node and nvm are neither required nor touched.
 #
 # What the CLI RUNS is a short list — tmux (its only terminal backend), `ps`, and on a Linux desktop
 # the clipboard helper for the active display — and step 1 checks exactly that list. Everything else
@@ -80,15 +80,39 @@ GRID_METADATA_URL="${HARNESS_GRID_METADATA_URL:-https://storage.googleapis.com/s
 # Published by release-tui.yml: hn, the native terminal client, one static binary per platform.
 TUI_METADATA_URL="${HARNESS_TUI_MANIFEST_URL:-https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/tui/metadata.json}"
 HARNESS_KEY="${HARNESS_KEY:-cli}"
-CLI_DIR="$HOME/.harness/cli"
-RUNTIME_DIR="$HOME/.harness/runtime"
+# The two folders Harness keeps its files in, by the rule every Harness program follows
+# (cli/src/config/harnessHome.ts). On Linux, the XDG data and state folders; while only ~/.harness
+# exists, ~/.harness, which the daemon moves at its next start. Elsewhere ~/.harness. The data root is
+# the one switch: it exists only once that move is done, or after a fresh install.
+harness_roots() {
+  HARNESS_DATA_ROOT="$HOME/.harness"
+  HARNESS_STATE_ROOT="$HOME/.harness"
+  [ "$(uname -s)" = Linux ] || return 0
+  # Only an absolute path counts, as the XDG spec says. A trailing / is dropped so the paths written
+  # into the launcher and current-node are spelled as the CLI's own join spells them.
+  case "${XDG_DATA_HOME:-}" in
+    /*) _xdg_data="${XDG_DATA_HOME%/}/harness" ;;
+    *)  _xdg_data="$HOME/.local/share/harness" ;;
+  esac
+  case "${XDG_STATE_HOME:-}" in
+    /*) _xdg_state="${XDG_STATE_HOME%/}/harness" ;;
+    *)  _xdg_state="$HOME/.local/state/harness" ;;
+  esac
+  if [ -e "$_xdg_data" ] || [ ! -e "$HOME/.harness" ]; then
+    HARNESS_DATA_ROOT="$_xdg_data"
+    HARNESS_STATE_ROOT="$_xdg_state"
+  fi
+}
+harness_roots
+CLI_DIR="$HARNESS_DATA_ROOT/cli"
+RUNTIME_DIR="$HARNESS_STATE_ROOT/runtime"
 CURRENT_NODE_FILE="$RUNTIME_DIR/current-node"
 CURRENT_TMUX_FILE="$RUNTIME_DIR/current-tmux"
 CURRENT_GRID_FILE="$RUNTIME_DIR/current-grid"
 BIN_DIR="$HOME/.local/bin"
 LAUNCHER="$BIN_DIR/harness"
 # Where `harness tui` looks for hn's binary (cli/src/tui/index.ts), and the `hn` command.
-TUI_BIN="$HOME/.harness/bin/harness-tui"
+TUI_BIN="$HARNESS_DATA_ROOT/bin/harness-tui"
 HN_LAUNCHER="$BIN_DIR/hn"
 
 # The PATH of the terminal this runs in, before the steps below put ~/.local/bin on the installer's
@@ -101,7 +125,7 @@ ORIGINAL_PATH="$PATH"
 # window opens on OpenCode there, so step 4b downloads it, as the desktop app does during its setup
 # (desktop/lib/bootstrap/agent_prefetch.dart `alreadyHasAnAgent`, the same places).
 no_agent_yet() {
-  for path in "$HOME/.harness/cli" "$HOME/.claude" "$HOME/.codex" "$HOME/.opencode/bin/opencode" \
+  for path in "$CLI_DIR" "$HOME/.claude" "$HOME/.codex" "$HOME/.opencode/bin/opencode" \
       "$HOME/.bun/bin/opencode" "$HOME/.config/opencode" "$HOME/.local/share/opencode"; do
     [ -e "$path" ] && return 1
   done
@@ -207,7 +231,7 @@ case "$(basename "${SHELL:-/bin/sh}")" in
 esac
 }
 
-# The managed grid for this computer: download, verify, unpack under ~/.harness/runtime and record it
+# The managed grid for this computer: download, verify, unpack under $RUNTIME_DIR and record it
 # in current-grid (what the daemon reads, like current-node). Returns non-zero, having said why,
 # instead of exiting: the caller decides that a missing grid is not a failed install — the harness
 # works without one, and the daemon fetches it on its next start. Laid down READ-ONLY, the bin
@@ -520,10 +544,10 @@ else
 fi
 
 # 2. Resolve the Node that will run the CLI (and this installer's own JSON parse + sha256 verify in
-#    step 3). The CLI runs on the MANAGED runtime under ~/.harness/runtime, not on whatever Node the
+#    step 3). The CLI runs on the MANAGED runtime under $RUNTIME_DIR, not on whatever Node the
 #    computer happens to have:
 #      1. $HARNESS_NODE_BINARY — Desktop Harness handing over the runtime it just validated.
-#      2. ~/.harness/runtime/current-node — the managed runtime, if it is already here.
+#      2. $RUNTIME_DIR/current-node — the managed runtime, if it is already here.
 #      3. otherwise, download it.
 #    A Node on PATH is used only as a last resort, on a platform we publish no runtime for.
 #
@@ -531,7 +555,7 @@ fi
 #    driven from the desktop app and from a terminal must be ONE cli.js on ONE Node, and a `node`
 #    that PATH resolves is none of stable, shared, or ours — it moves with nvm, it differs between a
 #    Finder launch and a Terminal launch, and it can be upgraded out from under a running daemon.
-#    Nothing outside ~/.harness is read or changed either way; the user's own Node is left alone.
+#    Nothing outside Harness's own folders is read or changed either way; the user's own Node is left alone.
 #
 #    Everything in this step must run in plain POSIX sh: there is no Node yet to lean on.
 
@@ -703,10 +727,10 @@ fi
 # 3. Fetch manifest, download + sha256-verify cli.js & notify.mjs, install them + the launcher (all in
 #    Node so it works identically on macOS/Linux without shasum/sha256sum差异).
 echo "▸ Installing harness from $METADATA_URL"
-HARNESS_METADATA_URL="$METADATA_URL" HARNESS_KEY="$HARNESS_KEY" HARNESS_NODE_BINARY="$NODE_BIN" "$NODE_BIN" <<'HARNESSJS'
+HARNESS_METADATA_URL="$METADATA_URL" HARNESS_KEY="$HARNESS_KEY" HARNESS_NODE_BINARY="$NODE_BIN" HARNESS_CLI_DIR="$CLI_DIR" "$NODE_BIN" <<'HARNESSJS'
 const fs = require('fs'), os = require('os'), path = require('path'), crypto = require('crypto')
 const META = process.env.HARNESS_METADATA_URL, KEY = process.env.HARNESS_KEY, NODE = process.env.HARNESS_NODE_BINARY
-const dir = path.join(os.homedir(), '.harness', 'cli')
+const dir = process.env.HARNESS_CLI_DIR
 const bin = path.join(os.homedir(), '.local', 'bin')
 ;(async () => {
   const res = await fetch(META)
@@ -759,7 +783,7 @@ if [ "$INSTALL_MODE" != "host" ]; then
     echo "▸ Installing the managed grid into $RUNTIME_DIR"
     install_managed_grid || echo "  · grid will be set up the first time a grid feature is used"
   fi
-  "$NODE_BIN" "$HOME/.harness/cli/cli.js" dsh builtins </dev/null || echo "  · Core harnesses will be prepared on the next start"
+  "$NODE_BIN" "$CLI_DIR/cli.js" dsh builtins </dev/null || echo "  · Core harnesses will be prepared on the next start"
 fi
 
 # 3c. hn's binary (the standalone install; Desktop's CLI fetches it on the first `hn`).
@@ -782,7 +806,7 @@ ensure_path_rc
 if [ "$INSTALL_MODE" = "standalone" ] && [ "$NEW_COMPUTER" = 1 ] \
     && { [ -t 1 ] || [ "${HARNESS_INSTALL_ATTENDED:-}" = 1 ]; }; then
   # The mark hn's first start takes (tui/src/first_run.rs): OpenCode with a task typed, not a shell.
-  mkdir -p "$HOME/.harness/tui" && : > "$HOME/.harness/tui/first-run" || true
+  mkdir -p "$HARNESS_DATA_ROOT/tui" && : > "$HARNESS_DATA_ROOT/tui/first-run" || true
   echo "▸ Downloading OpenCode, the free coding agent hn starts with"
   ( curl -fsSL --connect-timeout 20 https://opencode.ai/install | bash -s -- --no-modify-path ) </dev/null >/dev/null 2>&1 &
   download=$!
