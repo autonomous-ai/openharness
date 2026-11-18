@@ -29,6 +29,7 @@ enum {
     VOICE_TURN_MS = 500,     // from the words to the agent starting on them
     CREATE_MS = 1500,        // New Harness starting an agent
     UNATTENDED_MS = 40000,   // story time an unanswered question waits before it is answered on the computer
+    SHOWN_WAIT_MS = 12000,   // the same for one the bar only shows: nobody can answer it there, so its app does sooner
     MIN_PCM = 3200,          // 0.1 s of 16 kHz, 16-bit audio: less is nothing said
     VOICE_MAX_BYTES = 10 * 60 * 32000,   // the daemon's ceiling on one recording
     MAX_AGENTS = 12,
@@ -265,8 +266,8 @@ static const beat_t DOCS_PAGE[] = {
 
 enum { AUTH, HERO, E2E, RATE, SWEEP, FW, CLI, DOCS, API };
 static const struct { uint32_t at; uint8_t agent; const beat_t *turn; } STORY[] = {
-    {1000, AUTH, AUTH_SPLIT}, {3000, HERO, HERO_ASK}, {6000, E2E, E2E_FIX}, {10000, RATE, RATE_LIMIT},
-    {40000, RATE, RATE_FIX}, {72000, CLI, CLI_PROTO}, {75000, FW, FW_FLASH}, {80000, DOCS, DOCS_PAGE},
+    {1000, AUTH, AUTH_SPLIT}, {3000, HERO, HERO_ASK}, {6000, E2E, E2E_FIX}, {24000, RATE, RATE_LIMIT},
+    {48000, RATE, RATE_FIX}, {72000, CLI, CLI_PROTO}, {75000, FW, FW_FLASH}, {80000, DOCS, DOCS_PAGE},
     {135000, AUTH, AUTH_FOLLOW}};
 enum { N_STORY = sizeof STORY / sizeof STORY[0] };
 // The app in front on the computer, each change at the end of the daemon's 1 s settle: the person works in Orca, moves
@@ -593,6 +594,8 @@ static uint8_t status_of(const agent_t *a)
 
 // What the device may do with an agent, by its app's letters; and whether the agent runs outside Harness.
 static bool lacks(const agent_t *a, char cap) { return !strchr(APPS[a->app].caps, cap); }
+// How long its open question waits for the bar before the computer answers it.
+static uint32_t unattended(const agent_t *a) { return lacks(a, 'a') ? SHOWN_WAIT_MS : UNATTENDED_MS; }
 static bool outside(const agent_t *a) { return a->app != APP_HARNESS; }
 // On the ring the device is shown: the shown app's agents for a device that says appFilter, every agent otherwise.
 static bool in_ring(const agent_t *a) { return !s.app_filter || a->app == s.shown; }
@@ -1171,7 +1174,7 @@ static void advance_story(uint32_t dt)
     const int n = agent_count();
     for (int i = 0; i < n; i++) {
         agent_t *a = &agents[i];
-        if (a->ask != ASK_OPEN || s.story_total - a->asked_story < UNATTENDED_MS) continue;
+        if (a->ask != ASK_OPEN || s.story_total - a->asked_story < unattended(a)) continue;
         a->choice = 0;
         take_answer(a);
     }
@@ -1196,7 +1199,7 @@ static uint32_t story_wait(void)
         const agent_t *a = &agents[i];
         if (a->ask != ASK_OPEN) continue;
         const uint32_t waited = s.story_total - a->asked_story;
-        const uint32_t left = waited >= UNATTENDED_MS ? 0 : UNATTENDED_MS - waited;
+        const uint32_t left = waited >= unattended(a) ? 0 : unattended(a) - waited;
         if (left < wait) wait = left;
     }
     return wait;

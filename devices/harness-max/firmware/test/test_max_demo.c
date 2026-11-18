@@ -934,6 +934,28 @@ static void test_beats(void)
     CHECK(count("turn.started", id_of("docs-sweep")) == 0 && count("turn.started", id_of("api-client")) == 0);
 }
 
+// Left alone, a question the bar only shows is answered in its app after 12 s, one the bar answers after 40 s; and the
+// story's failure comes after Orca's question closed, so its Attention is not held behind the question.
+static void test_unattended_waits(void)
+{
+    attach();
+    const char *hero = id_of("landing-hero"), *cli = id_of("harness-cli"), *rate = id_of("rate-limiter");
+    until_asked("landing-hero");
+    forget();
+    run(11500);
+    CHECK(find("question.close", hero) < 0);
+    run(1000);
+    CHECK(find("question.close", hero) >= 0);
+    const int failed = wait_for("turn.error", rate, 30000);
+    CHECK(failed >= 0 && find("question.close", hero) < failed);
+    until_asked("harness-cli");
+    forget();
+    run(39000);
+    CHECK(find("question.close", cli) < 0);
+    run(2000);
+    CHECK(find("question.close", cli) >= 0);
+}
+
 // An Orca agent's question: the bar shows it and cannot answer it. A tap brings it up in Orca, which answers it.
 static void test_outside_question(void)
 {
@@ -1482,6 +1504,7 @@ int main(void)
     test_open_and_focus();
     test_voice();
     test_beats();
+    test_unattended_waits();
     test_outside_question();
     test_question();
     test_question_legacy_answer();
