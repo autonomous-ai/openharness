@@ -81,13 +81,16 @@ class _Agent {
   Spoken? said;
   int saidAt = 0;
 
+  /// The manual demo's standing work: the turn waits before this beat until a person talks to the agent.
+  int? hold;
+
   bool get idle => turn == null && ask == _Ask.none && said == null;
   DemoApp get home => kApps[app];
   bool can(String cap) => home.caps.contains(cap);
 }
 
 class DemoLink implements BarLink {
-  DemoLink(this.model, {this.mic, DemoClock? clock}) : clock = clock ?? RealDemoClock() {
+  DemoLink(this.model, {this.mic, DemoClock? clock, this.manual = false}) : clock = clock ?? RealDemoClock() {
     for (final c in kCast) {
       _agents.add(_Agent(c.id, c.name, c.engine, c.app, recap: c.recap, text: c.text));
     }
@@ -96,6 +99,10 @@ class DemoLink implements BarLink {
   final BarModel model;
   final Mic? mic;
   final DemoClock clock;
+
+  /// A person drives it: the work in [kStage] stands from the start, and nothing happens by itself after (no story,
+  /// no front change, no answer for the person, no telling again). Every case comes from what is done at the bar.
+  final bool manual;
 
   /// In the daemon's list order: the cast first (they never move), then the agents New Harness made.
   final List<_Agent> _agents = [];
@@ -152,6 +159,7 @@ class DemoLink implements BarLink {
     model.onLink(true, computer: kComputer, offersNew: true);
     _ringOwed = true;
     _tick();
+    if (manual) _stage();
   }
 
   @override
@@ -331,7 +339,7 @@ class DemoLink implements BarLink {
     final createAt = _createAt;
     if (createAt != null && now >= createAt) _create();
     final from = _storyFrom();
-    if (now > from) _advanceStory(min(now - from, kStepCapMs));
+    if (!manual && now > from) _advanceStory(min(now - from, kStepCapMs));
     _lastTick = now;
     for (final a in _agents) {
       _run(a, now);
@@ -355,13 +363,13 @@ class DemoLink implements BarLink {
     for (final a in _agents) {
       if (a.ask == _Ask.taken) {
         soon(a.closeAt);
-      } else if (a.turn != null && a.ask == _Ask.none) {
+      } else if (a.turn != null && a.ask == _Ask.none && !_held(a)) {
         soon(a.beatAt);
       } else if (a.turn == null && a.said != null) {
         soon(a.saidAt);
       }
     }
-    soon(_storyFrom() + _storyWait());
+    if (!manual) soon(_storyFrom() + _storyWait());
     return max(best, now);
   }
 
@@ -447,6 +455,7 @@ class DemoLink implements BarLink {
 
   void _endTurn(_Agent a) {
     a.turn = null;
+    a.hold = null;
     a.question = null;
     a.ask = _Ask.none;
     // Words said while it was busy go next, after a breath.
@@ -461,7 +470,7 @@ class DemoLink implements BarLink {
     }
     if (a.ask == _Ask.taken && now >= a.closeAt) _takeAnswer(a);
     // Bounded: beats with no wait between them all go now, and the guard stops a list that never waits.
-    for (var guard = 0; guard < 16 && a.turn != null && a.ask == _Ask.none && now >= a.beatAt; guard++) {
+    for (var guard = 0; guard < 16 && a.turn != null && a.ask == _Ask.none && !_held(a) && now >= a.beatAt; guard++) {
       _play(a, now);
     }
   }
@@ -506,6 +515,22 @@ class DemoLink implements BarLink {
     } else {
       _endTurn(a);
     }
+  }
+
+  bool _held(_Agent a) => a.hold != null && a.beat >= a.hold!;
+
+  /// The manual demo's opening: each standing turn played at once to its hold, or to its question.
+  void _stage() {
+    final now = _now;
+    for (final s in kStage) {
+      final a = _agents[s.agent];
+      _startTurn(a, s.turn, 0);
+      a.hold = s.hold;
+      for (var guard = 0; guard < 32 && a.turn != null && a.ask == _Ask.none && !_held(a); guard++) {
+        _play(a, now);
+      }
+    }
+    _soon();
   }
 
   // ---- questions ----
@@ -733,6 +758,12 @@ class DemoLink implements BarLink {
   /// The words reach the agent: the mockup's line for it. Said to a question the bar answers, they are its answer
   /// (never a permission prompt's, which takes Allow or Deny only); otherwise the agent works on them when it is free.
   void _take(_Agent a) {
+    if (a.hold != null) {
+      // Standing work in the manual demo: the words let it go on, a second later, and queue nothing of their own.
+      a.hold = null;
+      a.beatAt = _now + 1000;
+      return;
+    }
     final spoken = kSay[a.name] ?? kSayElse;
     final q = a.question;
     if (a.ask == _Ask.open && q != null && a.can('a') && !q.permission) {

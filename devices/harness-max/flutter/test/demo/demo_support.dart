@@ -180,9 +180,9 @@ class FakeMic implements Mic {
 
 /// The demo on a hand-run clock, with a recording model.
 class Demo {
-  Demo({Mic? mic}) {
+  Demo({Mic? mic, bool manual = false}) {
     model = RecordingModel(() => clock.nowMs);
-    link = DemoLink(model, mic: mic, clock: clock);
+    link = DemoLink(model, mic: mic, clock: clock, manual: manual);
     model.link = link;
   }
 

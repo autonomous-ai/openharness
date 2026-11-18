@@ -2,9 +2,10 @@
 # Builds Harness Max Demo V3 (Flutter) for the Orange Pi 4 Pro's bar, installs it beside Near's bundles and switches
 # the bar to it. Runs on the Mac, from any directory.
 #
-#   deploy-orangepi.sh [--demo | --usb | --tcp | --fixture] [--no-build] [ssh-host]
+#   deploy-orangepi.sh [--demo | --story | --usb | --tcp | --fixture] [--no-build] [ssh-host]
 #
-# --demo (the default): the scripted computer runs inside the app. --usb / --tcp: a real daemon on the cable (see
+# --demo (the default): the scripted computer runs inside the app, and the person drives it: every state stands from
+# the start and nothing happens by itself. --story: the same computer plays max_demo.c's story by itself, in a loop. --usb / --tcp: a real daemon on the cable (see
 # lib/link/cable/). --fixture: a still page from the mockup's data (HARNESS_MAX_FIXTURE_APP=harness for the Harness
 # ring). --no-build installs the bundle built last.
 #
@@ -19,14 +20,16 @@ set -eu
 APP=$(cd "$(dirname "$0")" && pwd)
 
 usage() {
-    echo "usage: deploy-orangepi.sh [--demo | --usb | --tcp | --fixture] [--no-build] [ssh-host]"
+    echo "usage: deploy-orangepi.sh [--demo | --story | --usb | --tcp | --fixture] [--no-build] [ssh-host]"
 }
 
 MODE=demo
+DEMO=manual
 BUILD=1
 while [ $# -gt 0 ]; do
     case $1 in
         --demo|--usb|--tcp|--fixture) MODE=${1#--} ;;
+        --story) MODE=demo; DEMO=story ;;
         --no-build) BUILD=0 ;;
         -h|--help) usage; exit 0 ;;
         -*) usage >&2; exit 2 ;;
@@ -96,15 +99,17 @@ fi
 # Near's flutter-pi is patched for this board; the bundle's own one is replaced by it after the copy.
 rsync -az --delete -e "$SSH" "$BUNDLE/" "$HOST:near/app-max/"
 FIXTURE_APP=${HARNESS_MAX_FIXTURE_APP:-orca}
-$SSH "$HOST" sh -s "$MODE" "$FIXTURE_APP" <<'EOF'
+$SSH "$HOST" sh -s "$MODE" "$FIXTURE_APP" "$DEMO" <<'EOF'
 set -eu
 MODE=$1
 FIXTURE_APP=$2
+DEMO=$3
 if [ -x "$HOME/near/app/flutter-pi" ]; then cp "$HOME/near/app/flutter-pi" "$HOME/near/app-max/flutter-pi"; fi
 cat > "$HOME/near/mode.env.new" <<ENV
 # Written by Harness Max's flutter/deploy-orangepi.sh: near-app runs Harness Max Demo V3. near-demo rewrites this file.
 NEAR_BUNDLE=$HOME/near/app-max
 HARNESS_MAX_MODE=$MODE
+HARNESS_MAX_DEMO=$DEMO
 HARNESS_MAX_FIXTURE_APP=$FIXTURE_APP
 ENV
 mv "$HOME/near/mode.env.new" "$HOME/near/mode.env"
@@ -116,4 +121,4 @@ sudo -n systemctl restart near-app
 sleep 4
 systemctl is-active near-app
 EOF
-echo "Harness Max Demo V3 ($MODE) is on the bar"
+if [ "$MODE" = demo ]; then echo "Harness Max Demo V3 (demo, $DEMO) is on the bar"; else echo "Harness Max Demo V3 ($MODE) is on the bar"; fi

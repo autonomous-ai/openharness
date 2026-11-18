@@ -64,4 +64,42 @@ void main() {
     expect(model.toast?.text, 'Sent to docs');
     expect(model.agentById('ag-docs')!.state, AgentState.working);
   });
+
+  test('the manual demo on the real model: the states stand, and a tap on rate-limiter then words make it fail',
+      () async {
+    final clock = ManualDemoClock();
+    final wall = DateTime(2026, 11, 18, 14, 32);
+    final model = BarModel(clock: () => wall.add(Duration(milliseconds: clock.nowMs)));
+    final demo = DemoLink(model, clock: clock, manual: true);
+    model.link = demo;
+    void runFor(int ms) {
+      final end = clock.nowMs + ms;
+      while (clock.nowMs < end) {
+        clock.advance(100);
+        model.tick();
+      }
+    }
+
+    await demo.start();
+    runFor(500);
+    final state = {for (final a in model.agents) a.name: a.state};
+    expect(state['auth-refactor'], AgentState.working);
+    expect(state['landing-hero'], AgentState.asking);
+    expect(state['rate-limiter'], AgentState.working);
+    expect(model.page, BarPage.attention, reason: 'the open question takes the glass, as on any computer that asks');
+    expect(model.attention!.agentId, 'ag-hero');
+
+    model.away();
+    runFor(500);
+    expect(model.page, BarPage.overview);
+    runFor(70000);
+    expect(model.agents.firstWhere((a) => a.name == 'rate-limiter').state, AgentState.working,
+        reason: 'nothing moves by itself');
+
+    model.tapCell('ag-rate');
+    runFor(3000); // the made-up speech, then its quiet sends it
+    runFor(8000);
+    expect(model.agents.firstWhere((a) => a.name == 'rate-limiter').state, AgentState.failed);
+    expect(model.attention?.kind, AttnKind.failed);
+  });
 }

@@ -270,6 +270,16 @@ const List<({int at, int agent, List<Beat> turn})> kStory = [
   (at: 135000, agent: _auth, turn: authFollow),
 ];
 
+/// The demo a person drives (DemoLink.manual): the work standing when it starts, each turn played at once up to beat
+/// [hold] (null: until it asks) and held there until a person talks to its agent. Then nothing moves by itself.
+const List<({int agent, List<Beat> turn, int? hold})> kStage = [
+  (agent: _auth, turn: authSplit, hold: 5),
+  (agent: _hero, turn: heroAsk, hold: null),
+  (agent: _rate, turn: rateLimit, hold: 6),
+  (agent: _fw, turn: fwFlash, hold: 4),
+  (agent: _cli, turn: cliProto, hold: null),
+];
+
 /// The app in front on the computer: the person works in Orca, moves to Harness for the protocol and the flash, and
 /// comes back.
 const List<({int at, int app})> kFront = [(at: 0, app: kOrca), (at: 70000, app: kHarness), (at: 130000, app: kOrca)];
