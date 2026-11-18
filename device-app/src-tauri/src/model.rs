@@ -14,20 +14,20 @@ pub fn dial_line(state: &AppState) -> String {
     }
     // Up comes only with a status line: none here is a watch the app has stopped.
     let Some(dial) = &state.dial else { return "Starting Harness".into() };
-    if let Some(version) = &dial.updating {
-        return format!("Updating to {version}");
+    if dial.updating.is_some() {
+        return "Updating device…".into();
     }
     if let Some(problem) = &dial.problem {
         return problem.clone();
     }
     // The firmware's version is in the About panel.
-    if dial.attached { "Dial connected".into() } else { "No dial".into() }
+    if dial.attached { "Device ready".into() } else { "Plug in your device".into() }
 }
 
-/// The About panel's credits line, `Dial 0.1.0 · Harness 0.6.58`: a version the app does not know is left out.
+/// The About panel's credits line, `Device 0.1.0 · Harness 0.6.58`: a version the app does not know is left out.
 pub fn about_credits(state: &AppState) -> Option<String> {
     let dial = state.dial.as_ref().filter(|dial| dial.attached).and_then(|dial| dial.fw.as_ref());
-    let pieces: Vec<String> = [("Dial", dial), ("Harness", state.cli_version.as_ref())]
+    let pieces: Vec<String> = [("Device", dial), ("Harness", state.cli_version.as_ref())]
         .into_iter()
         .filter_map(|(name, version)| Some(format!("{name} {}", version?)))
         .collect();
@@ -62,7 +62,7 @@ pub fn menu(state: &AppState) -> Vec<MenuItem> {
         ));
     }
     match &state.app_update {
-        // No version: the dial line's "Updating to X" is the dial's firmware.
+        // The app's own update; the dial line's "Updating device…" is the firmware's.
         AppUpdate::Installing => items.push(MenuItem::Text("Updating Harness…".into())),
         // The app cannot replace its bundle: the click opens the download page.
         AppUpdate::Blocked(version) => items.push(MenuItem::Action(MenuAction::Update, format!("Update {version}…"))),
@@ -320,7 +320,7 @@ mod tests {
     #[test]
     fn the_update_rows() {
         let rows = [
-            // No version: the firmware update reads "Updating device…".
+            // The app's own update; the firmware's reads "Updating device…".
             (AppUpdate::Installing, text("Updating Harness…")),
             (AppUpdate::Blocked("0.1.3".into()), act(MenuAction::Update, "Update 0.1.3…")),
         ];

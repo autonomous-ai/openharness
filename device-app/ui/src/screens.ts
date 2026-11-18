@@ -38,7 +38,7 @@ const FACES: Partial<Record<`${Screen}.${Phase}`, Face>> = {
   },
   'sign_in.offer': {
     heading: 'Sign in',
-    body: { kind: 'sentences', text: ['Add your other computers to the dial.'] },
+    body: { kind: 'sentences', text: ['Add your other computers to your device.'] },
     buttons: [{ label: 'Later', action: 'later' }, { label: 'Sign in', action: 'sign_in', primary: true }],
   },
   'sign_in.working': { heading: 'Sign in', body: SPINNER, buttons: [CANCEL] },

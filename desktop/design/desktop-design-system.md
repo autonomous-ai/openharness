@@ -737,15 +737,15 @@ theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
   the one in force checked. Notifications is the first.
 - A menu action that asks for more before it is done ends in `…`; one that acts at
   once has none.
-- The dial line names no firmware version: only `Updating to <version>`
-  while the dial updates. **About** opens macOS's standard About panel,
+- The dial line names no firmware version: it reads `Updating device…`
+  while the firmware updates. **About** opens macOS's standard About panel,
   brought to the front, with the app's name and version and one credits line,
-  `Dial 0.1.0 · Harness 0.6.58`, a version the app does not know left out.
+  `Device 0.1.0 · Harness 0.6.58`, a version the app does not know left out.
 
 The menu, top to bottom:
 
 ```text
-  Dial connected
+  Device ready
   Signed in
 ✓ Sound
   Notifications ▸
