@@ -9,7 +9,8 @@ import type { ConversationReads } from './api.js'
 const loading = vi.hoisted(() => ({ evaluated: vi.fn(), create: vi.fn(), gate: undefined as Promise<void> | undefined }))
 
 const row = { agentId: 'selected', sessionId: 'conversation', engine: 'codex' } as RegisteredSession
-const wiring = {} as HandoffWiring
+const wiring = { registry: { resolve: (id: string) => id === row.agentId ? row : null },
+  stopped: { get: async () => null } } as HandoffWiring
 const directory = '/private-fixture/handoff'
 const dependencies = (): HandoffDeps => ({
   resolve: id => id === row.agentId ? row : undefined,
@@ -17,9 +18,9 @@ const dependencies = (): HandoffDeps => ({
   recaps: () => ['recap'], discoverSession: async () => ({ engine: 'codex', sessionId: row.sessionId, transcriptPath: '/private-fixture/native' }),
   findTranscript: async () => '/private-fixture/native', transcriptOk: () => true,
 })
-const facade = async () => {
+const facade = async (owner = wiring) => {
   const { conversationReads, answerConversationQuery } = await import('./conversationQueries.js')
-  return { reads: conversationReads(wiring, directory), answerConversationQuery }
+  return { reads: conversationReads(owner, directory), answerConversationQuery }
 }
 
 beforeEach(() => {
@@ -69,7 +70,7 @@ const queryCases: { name: string; ask: (reads: ConversationReads) => Promise<unk
   { name: 'publish', ask: reads => reads.publish({} as never, { current: () => true }), value: published },
 ]
 
-it.each(queryCases)('starts a warmed $name request before the next caller replaces its conversation', async ({ ask, value }) => {
+it.each(queryCases)('starts a warmed $name request before the next caller replaces its conversation', async ({ name, ask, value }) => {
   let current = row
   const deps: HandoffDeps = {
     resolve: () => current, readHistory: () => undefined,
@@ -78,13 +79,13 @@ it.each(queryCases)('starts a warmed $name request before the next caller replac
     transcriptOk: () => current === row, publish: async () => published(current),
   }
   loading.create.mockReturnValue(deps)
-  const { reads } = await facade()
+  const { reads } = await facade({ ...wiring, registry: { ...wiring.registry, resolve: () => current } })
   expect(await ask(reads)).toEqual(value(row))
   const pending = ask(reads)
   current = { ...row, sessionId: 'replacement-conversation' }
   expect(await pending).toEqual(value(row))
   expect(await ask(reads)).toEqual(value(current))
-  expect(loading.create).toHaveBeenCalledOnce()
+  expect(loading.create).toHaveBeenCalledTimes(name === 'resolve' ? 0 : 1)
 })
 
 it.each(queryCases)('preserves a cached cold $name method after initialization', async ({ ask, value }) => {
@@ -96,9 +97,9 @@ it.each(queryCases)('preserves a cached cold $name method after initialization',
     transcriptOk: () => current === row, publish: async () => published(current),
   }
   loading.create.mockReturnValue(deps)
-  const { reads } = await facade()
+  const { reads } = await facade({ ...wiring, registry: { ...wiring.registry, resolve: () => current } })
   const saved = { ...reads }
-  await reads.resolve(row.agentId)
+  await reads.discover(row.agentId)
   const pending = ask(saved)
   current = { ...row, sessionId: 'replacement-conversation' }
   expect(await pending).toEqual(value(row))
@@ -110,7 +111,7 @@ it('keeps synchronous dependency failures as rejected warm queries', async () =>
   const deps = dependencies(), failure = new Error('query unavailable')
   loading.create.mockReturnValue(deps)
   const { reads } = await facade()
-  await reads.resolve(row.agentId)
+  await reads.discover(row.agentId)
   deps.lastFullText = () => { throw failure }
   let pending!: Promise<string | null>
   expect(() => { pending = reads.lastFullText(row.sessionId) }).not.toThrow()
@@ -122,7 +123,7 @@ it('fails visibly for every waiting caller and retries only on a later query', a
   const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
   loading.create.mockImplementationOnce(() => { throw new Error('private path or content must not escape') }).mockReturnValue(dependencies())
   const { reads } = await facade()
-  const results = await Promise.allSettled([reads.resolve(row.agentId), reads.discover(row.agentId), reads.findTranscript('codex', row.sessionId, {})])
+  const results = await Promise.allSettled([reads.recentAsks(row.sessionId, 1), reads.discover(row.agentId), reads.findTranscript('codex', row.sessionId, {})])
   for (const result of results) expect(result).toMatchObject({ status: 'rejected', reason: { code: 'HANDOFF_UNAVAILABLE' } })
   expect(logged.mock.calls).toEqual([['[handoff] initialization failed: HANDOFF_UNAVAILABLE']])
   expect(loading.create).toHaveBeenCalledOnce()

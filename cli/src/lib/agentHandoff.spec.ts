@@ -1144,28 +1144,26 @@ describe('prepareAgentHandoff: a fork that has no history of its own yet', () =>
     const records = [parentOf(parentTranscript(), { gridLaunch: override }), forkOf({ gridLaunch: override })]
     const original = structuredClone(records)
     const authority = forkDeps(records)
-    const composition = await import('../core/handoffDependencies.js')
-    const create = vi.spyOn(composition, 'createHandoffDependencies')
-      .mockReturnValueOnce(authority as ReturnType<typeof composition.createHandoffDependencies>)
-    const reads = conversationReads({} as HandoffWiring, root)
-    try {
-      const resolved: RegisteredSession[] = []
-      const result = await prepareAgentHandoff({ ...authority,
-        resolve: async id => { const view = await reads.resolve(id); if (view) resolved.push(view); return view },
-        publish: (prepared, permit) => {
-          expect(prepared.sessions).toEqual(expect.arrayContaining(records.map(handoffSessionFact)))
-          return authority.publish!(prepared, permit)
-        },
-      }, request(C, 'fork-1'))
-      expect(result.file).not.toBeNull()
-      expect(forkMd()).toContain('Add a retry')
-      expect(forkMd()).toContain(header('harness Devops', 'parent-1', 10))
-      expect(new Set(resolved.map(row => row.agentId))).toEqual(new Set(['fork-1', 'parent-1']))
-      expect(resolved.every(row => !Object.hasOwn(row, 'gridLaunch'))).toBe(true)
-      expect(JSON.stringify(resolved)).not.toContain(override.apiKey)
-      expect(records).toEqual(original)
-      for (const row of records) expect(row.gridLaunch).toBe(override)
-    } finally { create.mockRestore() }
+    const reads = conversationReads({
+      registry: { resolve: (id: string) => id === records[1].agentId ? records[1] : null },
+      stopped: { get: async (id: string) => id === records[0].agentId ? records[0] : null },
+    } as HandoffWiring, root)
+    const resolved: RegisteredSession[] = []
+    const result = await prepareAgentHandoff({ ...authority,
+      resolve: async id => { const view = await reads.resolve(id); if (view) resolved.push(view); return view },
+      publish: (prepared, permit) => {
+        expect(prepared.sessions).toEqual(expect.arrayContaining(records.map(handoffSessionFact)))
+        return authority.publish!(prepared, permit)
+      },
+    }, request(C, 'fork-1'))
+    expect(result.file).not.toBeNull()
+    expect(forkMd()).toContain('Add a retry')
+    expect(forkMd()).toContain(header('harness Devops', 'parent-1', 10))
+    expect(new Set(resolved.map(row => row.agentId))).toEqual(new Set(['fork-1', 'parent-1']))
+    expect(resolved.every(row => !Object.hasOwn(row, 'gridLaunch'))).toBe(true)
+    expect(JSON.stringify(resolved)).not.toContain(override.apiKey)
+    expect(records).toEqual(original)
+    for (const row of records) expect(row.gridLaunch).toBe(override)
   })
 
   it('legacy record: inherits the parent up to the fork, and says so', async () => {

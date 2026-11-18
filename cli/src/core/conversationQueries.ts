@@ -7,14 +7,16 @@ import type { HandoffDeps } from '../lib/agentHandoff.js'
 import type { HandoffWiring } from '../lib/handoffDiscovery.js'
 import { agentView, CONVERSATIONS_OFF, type ConversationReads, type CoreApi } from './api.js'
 
+type HandoffReads = Omit<ConversationReads, 'resolve'>
+
 /** Discovery and publication share one witness owner, including concurrent first queries. */
 export function conversationReads(wiring: HandoffWiring, directory: string, deadlineMs?: number): ConversationReads {
-  let pending: Promise<ConversationReads> | undefined
-  let ready: ConversationReads | undefined
+  let pending: Promise<HandoffReads> | undefined
+  let ready: HandoffReads | undefined
   const load = () => pending ??= import('./handoffDependencies.js')
     .then(({ createHandoffDependencies }) => {
       const bound = boundReads(createHandoffDependencies(wiring, directory, deadlineMs))
-      for (const key of Object.keys(cold) as (keyof ConversationReads)[]) {
+      for (const key of Object.keys(cold) as (keyof HandoffReads)[]) {
         // Preserve an owner's decorated method. A frozen facade keeps its working cold wrapper.
         if (reads[key] === cold[key]) Reflect.defineProperty(reads, key, { value: bound[key] })
       }
@@ -26,9 +28,8 @@ export function conversationReads(wiring: HandoffWiring, directory: string, dead
       console.error('[handoff] initialization failed: HANDOFF_UNAVAILABLE')
       throw new HandoffError('HANDOFF_UNAVAILABLE')
     })
-  const cold: ConversationReads = {
+  const cold: HandoffReads = {
     publish: async (prepared, permit) => (ready ?? await load()).publish(prepared, permit),
-    resolve: async id => (ready ?? await load()).resolve(id),
     recentAsks: async (id, count) => (ready ?? await load()).recentAsks(id, count),
     lastFullText: async id => (ready ?? await load()).lastFullText(id),
     recaps: async (id, count) => (ready ?? await load()).recaps(id, count),
@@ -36,17 +37,22 @@ export function conversationReads(wiring: HandoffWiring, directory: string, dead
     findTranscript: async (engine, id, options) => (ready ?? await load()).findTranscript(engine, id, options),
     transcriptOk: async (engine, path, home) => (ready ?? await load()).transcriptOk(engine, path, home),
   }
-  const reads = { ...cold }
+  const reads: ConversationReads = { ...cold,
+    // Ordinary Wi-Fi input and Stop share this resolver; optional handoff loading cannot gate them.
+    resolve: async id => {
+      const session = await (wiring.registry.resolve(id) ?? wiring.stopped.get(id))
+      return session ? agentView(session) : null
+    },
+  }
   return reads
 }
 
-function boundReads(deps: HandoffDeps): ConversationReads {
+function boundReads(deps: HandoffDeps): HandoffReads {
   return {
     publish: async (prepared, permit) => {
       if (!deps.publish) throw new HandoffError('HANDOFF_UNAVAILABLE')
       return deps.publish(prepared, permit)
     },
-    resolve: async (id) => { const session = await deps.resolve(id); return session ? agentView(session) : null },
     recentAsks: async (id, n) => deps.recentAsks(id, n),
     lastFullText: async (id) => (await deps.lastFullText(id)) ?? null,
     recaps: async (id, n) => (await deps.recaps?.(id, n)) ?? [],

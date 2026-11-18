@@ -11,7 +11,8 @@ const create = vi.hoisted(() => vi.fn())
 vi.mock('./handoffDependencies.js', () => ({ createHandoffDependencies: create }))
 const readsOf = (deps: HandoffDeps) => {
   create.mockReturnValueOnce(deps)
-  return conversationReads({} as HandoffWiring, '/private-fixture/handoff')
+  return conversationReads({ registry: { resolve: () => null },
+    stopped: { get: async (id: string) => (await deps.resolve(id)) ?? null } } as HandoffWiring, '/private-fixture/handoff')
 }
 
 const session = { agentId: 'retained', sessionId: 's1', engine: 'claude' } as RegisteredSession

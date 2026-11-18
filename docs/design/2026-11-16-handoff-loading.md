@@ -178,3 +178,14 @@ initializer. Live, stopped and missing resolution must remain available and cred
 loading handoff. A stopped read resolved after disconnection must still refuse. First shared resolve
 is no longer a proxy for first handoff activation: cost preparation must measure actual discovery or
 publication separately, retaining the original shared-resolve work as its own control.
+
+### Shared resolver correction, 19 November
+
+The two actual caller REDs fail on clean `637ed929ef` before correction: a missing handoff initializer
+rejects ordinary live/stopped resolution, and the stopped-read connection test never reaches its read.
+Receipt: `.harness/validation/20261118T195312.122534Z-59638/receipt.json` (two expected failures, no timeout).
+Shared `resolve` now uses the same live-or-stopped authority expression directly, still copies through
+`agentView`, and remains behind the existing post-await connection check. Only the other seven methods
+open or install the deferred handoff composition. The independent review approved this exact runtime
+patch and its warm/cached and live-fork/stopped-parent fixture adaptations before application.
+Post-correction coverage, types, packaged validation and matched cost evidence are still pending.
