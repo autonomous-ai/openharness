@@ -398,6 +398,27 @@ mod tests {
     }
 
     #[test]
+    fn a_fingerprint_is_ap1_and_32_hex_digits() {
+        let good = "ap1-0123456789abcdef0123456789abcdef";
+        assert_eq!(Fingerprint::parse(good).as_ref().map(Fingerprint::as_str), Some(good));
+        let hex = &good[4..];
+        let bad = [
+            format!("AP1-{hex}"),
+            format!("ap1-{}", &hex[1..]),
+            format!("ap1-{hex}0"),
+            format!("ap1-{}A", &hex[1..]),
+            format!(" {good}"),
+            format!("{good} "),
+            // 32 bytes, 16 characters.
+            format!("ap1-{}", "é".repeat(16)),
+            String::new(),
+        ];
+        for text in bad {
+            assert_eq!(Fingerprint::parse(&text), None, "{text:?}");
+        }
+    }
+
+    #[test]
     fn state_json_keys() {
         let keys = json!({ "version": 1, "cliSeen": false, "askedSignIn": false, "loginItem": false });
         assert_eq!(serde_json::to_value(Saved::default()).unwrap(), keys);
