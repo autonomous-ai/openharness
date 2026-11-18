@@ -378,8 +378,8 @@ describe('the extension in a real, throwaway VS Code', () => {
     expect(streams.show({ window, shell: app }, false)).toBe(true)
     await until('a state whose active is the app', () => (states.at(-1)?.active === app ? true : undefined))
     expect(streams.scroll({ window, shell: app }, -45, true)).toBe(true)
-    await until('2 page keys', () => (scrollCounts(channelFile()).keys === 2 ? true : undefined))
-    expect(readFileSync(record)).toEqual(Buffer.from('\x1b[5~\x1b[5~'))
+    await until('5 page keys', () => (scrollCounts(channelFile()).keys === 5 ? true : undefined))
+    expect(readFileSync(record)).toEqual(Buffer.from('\x1b[5~'.repeat(5)))
   })
 
   it('VS Code exits with code 0, and the stream ends gone', async () => {
