@@ -10,7 +10,7 @@ import { fingerprint } from '../harnessd/bundleFingerprint.js'
 import { baseNode, namedNode } from '../harnessd/processName.js'
 import { workerCohortEnvironment } from '../harnessd/workerContract.js'
 import { stoppedArchiveWitness, stoppedAuthorityHealthy } from './stoppedAuthorityMetadata.js'
-import type { StoppedArchiveAnswer, StoppedArchiveQuery } from './sessionStorageWire.js'
+import { STOPPED_LIST_ROWS, sessionImageProof, type StoppedListPage, type StoppedArchiveAnswer, type StoppedArchiveQuery } from './sessionStorageWire.js'
 import { sessionStorageFrames } from './sessionStorageFrames.js'
 import { privateRegistryDirectory } from './registryPersistence.js'
 import { SESSION_STORAGE_QUEUE, SESSION_STORAGE_REQUEST_MS,
@@ -72,6 +72,10 @@ export class SessionStorage {
   private writeWaiting = 0
   private readonly descriptorOperations = new Set<Promise<unknown>>()
   private closing: Promise<void> | undefined
+  private listing = false
+  private listSettlement: Promise<void> = Promise.resolve()
+  private finishListing: (() => void) | undefined
+  private readonly listWaiters: Array<{ resolve(release: () => void): void; reject(error: Error): void; expires: number; timer: ReturnType<typeof setTimeout> }> = []
 
   readonly creations: PendingCreationDiscovery = {
     ensure: id => typeof id === 'string' && /^[a-zA-Z0-9_-]{16,96}$/.test(id)
@@ -293,6 +297,81 @@ export class SessionStorage {
     })
   }
 
+  private startListing(): () => void {
+    this.listing = true
+    this.listSettlement = new Promise(resolve => { this.finishListing = resolve })
+    return () => {
+      this.finishListing!()
+      this.finishListing = undefined
+      this.listing = false
+      for (;;) {
+        const next = this.listWaiters.shift()
+        if (!next) return
+        clearTimeout(next.timer)
+        if (this.closed || this.closeFailed) next.reject(new SessionStorageUnavailable('disconnected'))
+        else if (performance.now() >= next.expires) next.reject(new SessionStorageUnavailable('expired'))
+        else { next.resolve(this.startListing()); return }
+      }
+    }
+  }
+
+  private acquireListing(): Promise<() => void> {
+    if (this.closed || this.closeFailed) return Promise.reject(new SessionStorageUnavailable('disconnected'))
+    if (!this.listing) return Promise.resolve(this.startListing())
+    if (this.listWaiters.length >= SESSION_STORAGE_QUEUE) return Promise.reject(new SessionStorageUnavailable('busy'))
+    return new Promise((resolve, reject) => {
+      const waiting = { resolve, reject, expires: performance.now() + SESSION_STORAGE_REQUEST_MS, timer: setTimeout(() => {
+        const index = this.listWaiters.indexOf(waiting)
+        if (index !== -1) this.listWaiters.splice(index, 1)
+        reject(new SessionStorageUnavailable('expired'))
+      }, SESSION_STORAGE_REQUEST_MS) }
+      this.listWaiters.push(waiting)
+    })
+  }
+
+  /** One names snapshot in the child; bounded pages preserve the complete visible-list contract. */
+  async stoppedList(accept: (image: SessionImage) => void): Promise<void> {
+    const release = await this.acquireListing()
+    let cursor: string | null = null, next = 0, total: number | undefined
+    let owner: ChildProcess | undefined, uncertain = false
+    try {
+      for (;;) {
+        const page: StoppedListPage = await this.request({ kind: 'stopped-list-page', cursor })
+        owner ??= this.child
+        if (!page || typeof page.cursor !== 'string' || !(page.cursor === '' && page.done === true && page.total === 0 || /^[a-f0-9-]{36}$/.test(page.cursor))
+          || cursor !== null && page.cursor !== cursor || owner !== this.child
+          || !Number.isSafeInteger(page.offset) || page.offset !== next
+          || !Number.isSafeInteger(page.next) || page.next < next || page.next - next > STOPPED_LIST_ROWS
+          || !Number.isSafeInteger(page.total) || page.total < page.next || total !== undefined && page.total !== total
+          || typeof page.done !== 'boolean' || page.done !== (page.next === page.total) || !page.done && page.next === next
+          || !Array.isArray(page.images) || page.images.length > page.next - next
+          || page.images.some(image => !image || image.state !== 'image' || typeof image.json !== 'boolean'
+            || !sessionImageProof(image.proof) || image.proof.document.kind !== 'stopped')) {
+          uncertain = true
+          throw new SessionStorageUnavailable('invalid')
+        }
+        cursor = page.cursor
+        next = page.next
+        total = page.total
+        for (const image of page.images) accept(image)
+        if (page.done) { cursor = null; return }
+      }
+    } finally {
+      try {
+        if (owner && owner === this.child) {
+          try {
+            if (uncertain) throw new SessionStorageUnavailable('invalid')
+            if (cursor) await this.request({ kind: 'stopped-list-close', cursor })
+          } catch (error) {
+            // A lost close reply cannot free the listing slot while its child still owns the cursor.
+            if (owner === this.child) { this.terminate(); await this.exiting }
+            throw error
+          }
+        }
+      } finally { release() }
+    }
+  }
+
   read(document: SessionDocument): Promise<SessionImage> { return this.request({ kind: 'read', document }) }
   equal(proof: SessionImageProof): Promise<SessionImageProof | null> { return this.request({ kind: 'equal', proof }) }
   /** Explicit one-use launch input only. It is never used by image reads, caches or session persistence. */
@@ -495,6 +574,7 @@ export class SessionStorage {
       // Reaping the child alone does not settle those parent operations or their write authority.
       await Promise.allSettled([...this.descriptorOperations])
       await this.writeTail
+      await this.listSettlement
       for (const source of this.retained.values()) this.closeDescriptor(source.fd)
       this.retained.clear()
       stoppedAuthorityHealthy()

@@ -381,3 +381,61 @@ introduced by `9c41a90cd4`; intermediate settings movement from `ff33cd095c`; de
 `38f9eba9e0`, including unchanged fixture modes; and verified credential-reference representation. A separate literal
 historical Grid-and-DSH final argv assertion stays independent of rerecording. Fresh matrix verification passes all
 five tests. No flags, config, permission or precedence category outside that review was accepted.
+# Measured storage cost correction, 18 November
+
+The first exact-source macOS comparison is a failed performance acceptance, despite passing
+credential, offline restart and cleanup semantics. At 1,600 records the fixed ABBA samples show
+warm stopped-list medians of 32.25 ms before extraction and 784.97 ms afterward; Registry save
+257.71 ms and 502.39 ms. Four warm observations per arm are descriptive samples, not p95.
+The original twelve-arm receipts remain in `/tmp/core-grid-storage-cost-timing1-2026-11-18`.
+The original source at `47403ddfbe` and packaged payload remain frozen. Corrections start on the
+combined `c56b2fbb5d` source, including the pending creation index and its admission retry fix.
+
+One fixed, instrumented full/embedded-lean attribution pair found 8,043 requests in each arm:
+8,000 came from five 1,600-file archive listings. Both arms preserved all rows, offline launch,
+legacy disk readability and actual exit/close/EOF/IPC cleanup. The four inspector profiles and
+root's unchanged-input verification are retained in
+`/tmp/core-grid-storage-cost-profile-1-2026-11-18`; their sampled CPU/RSS are attribution only.
+
+## Design: bounded stopped-list pages
+
+The required child now owns one listing's initial `.json` names snapshot, preserving the prior
+readdir domain/order. Named `stopped-list-page` and `stopped-list-close` operations use the same
+credited transport. A page considers at most 64 names and packs at most 256 KiB of projected
+images, except one individually supported archive may occupy a page alone. The existing 1 MiB
+raw archive contract is unchanged. No truncation, new whole-archive cap or custom JSON parser
+is introduced. One projected lookahead may wait for the next page; its name remains unsettled
+until delivery, so the final `done` cannot omit it.
+
+The parent verifies cursor identity, contiguous offsets, stable total, positive progress,
+the 64-name limit and exact selected image proof shapes. It runs the same strict row decoder
+and retains each returned row's exact WeakMap proof. No success is returned until all pages
+complete. Individual damaged records still cannot hide their peers; worker loss, expiration
+and uncertain cleanup fail the entire listing. Names and at most one projected page/lookahead
+stay in the child. The API's complete returned row array remains in core; child names storage
+and core visible metadata still grow with record count and are explicit residuals.
+
+Every page retains the existing five-second monotonic request deadline. There is no new
+five-second whole-list deadline. Concurrent listings share one cursor slot with at most 64
+waiting callers and five-second admission deadlines, an explicit overload scheduling change
+from interleaving per-file requests. Other storage operations and writes run between pages;
+listing does not take the global write lease. A listing takes no content cache and grants no
+whole-archive absence or conflict authority. Those queries retain their separate child search,
+write lease and final metadata witness. Selected mutation after read still revokes `current()`.
+
+The child retains no cursor descriptor: the names operation returns before image processing,
+and each image read completes its original close fences. Parent cleanup closes the exact
+cursor before admitting another listing. A failed close response triggers child termination;
+the slot remains held until actual child exit. Replacement never resumes an old cursor.
+Ordinary reads still create no container. A listing snapshots names once, then reads each
+selected current pathname, matching the previous listing behavior during same-user writes.
+
+The caller RED receipt is `/tmp/core-grid-storage-batch-red-20261118.log`: all 129 rows, exact
+selected proofs, offline credential resolution and unchanged legacy disk bytes passed, then
+the bounded-request assertion failed with 129 requests instead of at most four. The corrected
+caller and all 62 stopped tests pass. Separate child and transport tests cover byte packing,
+large supported rows, malformed peers, name progress, concurrent listings/writes, deadline
+admission, child replacement and uncertain close custody. Final coverage, packaged artifact
+and cost acceptance must be on the corrected combined source; earlier passing gates do not
+establish this correction's performance or final release acceptance.
+

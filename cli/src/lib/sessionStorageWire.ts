@@ -64,8 +64,20 @@ export type StoppedArchiveQuery =
   | { kind: 'folder'; root: string; exceptAgentId: string }
   | { kind: 'owners'; keys: string[]; defaultCodexHome: string; exceptAgentId?: never }
 export interface StoppedArchiveAnswer { witness: string; matches: boolean[]; selected?: SessionImage[] }
+export const STOPPED_LIST_ROWS = 64
+export const STOPPED_LIST_BYTES = 256 * 1024
+export interface StoppedListPage {
+  cursor: string
+  offset: number
+  next: number
+  total: number
+  images: SessionImage[]
+  done: boolean
+}
 
 export type SessionStorageOperation =
+  | { kind: 'stopped-list-page'; cursor: string | null }
+  | { kind: 'stopped-list-close'; cursor: string }
   | { kind: 'creation-ensure'; id: string }
   | { kind: 'creation-page'; cursor: string | null }
   | { kind: 'creation-close'; cursor: string }

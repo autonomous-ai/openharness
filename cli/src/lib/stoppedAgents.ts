@@ -92,16 +92,15 @@ export class StoppedAgentStore {
     try { secureStateDirectory(this.directory, false) }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error }
     const rows: RegisteredSession[] = []
-    // Sequential requests keep IPC work bounded; the returned snapshot still includes every readable row.
-    for (const id of this.ids()) {
+    await this.storage.stoppedList(image => {
       try {
-        const saved = await this.get(id)
+        const saved = this.decode(image.state === 'image' && image.proof.document.kind === 'stopped' ? image.proof.document.agentId : '', image)
         if (saved) rows.push(saved)
       } catch (error) {
         // A bad archive cannot hide its peers. A missing worker is a failed listing, never an empty catalog.
         if (!(error instanceof SessionStorageUnavailable) || !['unsafe', 'invalid', 'missing', 'changed'].includes(error.code)) throw error
       }
-    }
+    })
     return rows
   }
 

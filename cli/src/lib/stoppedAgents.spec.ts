@@ -3,6 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { chmodSync, constants, openSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { createHash, randomUUID } from 'node:crypto'
 import type { RegisteredSession } from './registry.js'
 import type { ChildProcess } from 'node:child_process'
 
@@ -29,6 +30,40 @@ afterEach(async () => {
 })
 
 describe('saved catalog reads', () => {
+  it('lists every archive in bounded pages instead of one storage request per file', async () => {
+    const { saved, store } = await fixture()
+    await store.save(saved)
+    const folder = join(directory, 'stopped-agents'), original = join(folder, `${saved.agentId}.json`)
+    const record = JSON.parse(readFileSync(original, 'utf8'))
+    rmSync(original)
+    const key = randomUUID(), files: Array<{ file: string; hash: string }> = []
+    const hash = (file: string) => createHash('sha256').update(readFileSync(file)).digest('hex')
+    for (let index = 0; index < 129; index++) {
+      const agentId = `batch-${String(index).padStart(3, '0')}`, file = join(folder, `${agentId}.json`)
+      const session = { ...record.session, agentId, sessionId: `conversation-${index}`,
+        ...(index === 0 ? { gridLaunch: { networkId: 'fixture', networkName: 'Fixture', baseUrl: 'https://grid.example.test/v1', apiKey: key } } : {}) }
+      writeFileSync(file, JSON.stringify({ ...record, session }), { mode: 0o600 })
+      files.push({ file, hash: hash(file) })
+    }
+    const { sessionStorage } = await import('./sessionStorage.js')
+    const child = (sessionStorage as unknown as { child: ChildProcess }).child
+    const send = child.send.bind(child)
+    let requests = 0
+    child.send = ((...args: Parameters<typeof child.send>) => {
+      if ((args[0] as { kind?: string }).kind === 'begin') requests++
+      return send(...args)
+    }) as typeof child.send
+    let rows: RegisteredSession[]
+    try { rows = await store.list() } finally { child.send = send }
+    expect(rows).toHaveLength(129)
+    expect(rows.every(row => store.current(row))).toBe(true)
+    expect(JSON.stringify(rows).includes(key)).toBe(false)
+    const selected = rows.find(row => row.agentId === 'batch-000')!
+    expect((await sessionStorage.resolveSelected(selected.gridLaunch!)).apiKey === key).toBe(true)
+    expect(files.every(({ file, hash: before }) => hash(file) === before)).toBe(true)
+    expect(requests).toBeLessThanOrEqual(4)
+  })
+
   it('fails a disconnected listing visibly and freshly reads every row after child replacement', async () => {
     const { saved, store } = await fixture()
     await store.save(saved)
