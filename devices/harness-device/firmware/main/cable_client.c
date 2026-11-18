@@ -845,15 +845,18 @@ static void handle_apps(const cJSON *p)
     ui_apps_replace(rows, n, shown && strlen(shown) < CABLE_APP_ID_MAX ? shown : "");
 }
 
-// `question` {agentId, id, questions}.
+// `question` {agentId, id, questions, tier?}. `tier: "list"` is a question the dial was told before, back on the
+// daemon's drawer; any other tier, or none, is an alert, so a tier this build does not know still rings.
 static void handle_question(const cJSON *p, const char *agent_id)
 {
     const cJSON *questions = cJSON_GetObjectItemCaseSensitive(p, "questions");
+    const char *tier = str_of(p, "tier");
     // The name rides on the frame for the same reason as on `summary`: the asker may be off this tab.
     if (agent_id && questions) {
         // A question is an alert: pinned row, wake and a (coalesced) beep, all but the beep inside
-        // ui_question_show, which stays quiet for the pane already on the glass.
-        if (ui_question_show(agent_id, str_of(p, "name"), str_of(p, "machine"), str_of(p, "id"), questions))
+        // ui_question_show, which stays quiet for the pane already on the glass and for a list row.
+        if (ui_question_show(agent_id, str_of(p, "name"), str_of(p, "machine"), str_of(p, "id"), questions,
+                             tier && !strcmp(tier, "list")))
             audio_notify_done();
     }
 }
