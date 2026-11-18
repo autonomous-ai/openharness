@@ -213,9 +213,12 @@ int main(void) {
         pro_rec_cancel(ended); start(HEALTHY, next);
         atomic_store(&stalled, false); atomic_store(&start_gate, true); wait_idle();
         assert(ends == 1 && cancels_at_begin == base + 2 && !strcmp(cancelled, ended));
+        // With no next clip, the sender wakes for the cancel alone.
+        pro_rec_cancel(next); wait_idle();
+        assert(atomic_load(&cancels) == base + 3 && !strcmp(cancelled, next));
     }
     vTaskDelete(s_capture_task); vTaskDelete(s_sender_task); free(s_storage);
-    puts("Pro recorder: 500 offline clips; one voice.abort per discard, before the next voice.begin, none for a closed, older or missing clip or a dead cable PASS");
+    puts("Pro recorder: 600 offline clips; one voice.abort per discard, before the next voice.begin or alone, none for a closed, older or missing clip or a dead cable PASS");
 }
 '''
 with tempfile.TemporaryDirectory(prefix='harness-pro-recorder-') as d:
@@ -225,4 +228,6 @@ with tempfile.TemporaryDirectory(prefix='harness-pro-recorder-') as d:
                     '-fsanitize=' + os.environ.get('SANITIZERS', 'undefined,bounds'), '-I', str(main),
                     '-I', str(main / 'audio'), str(out / 'recorder.c'), str(main / 'audio' / 'voice_buffer.c'),
                     '-o', str(out / 'recorder')], check=True)
-    subprocess.run([str(out / 'recorder')], check=True)
+    # run.sh has no per-file bound (the dial's CI gives each threaded test 120 s): a lost wakeup fails here, not at the
+    # job's timeout.
+    subprocess.run([str(out / 'recorder')], check=True, timeout=120)
