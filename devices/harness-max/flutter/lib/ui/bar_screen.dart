@@ -19,13 +19,18 @@ class BarScreen extends StatelessWidget {
   final BarModel model;
 
   @override
-  Widget build(BuildContext context) => ListenableBuilder(
-        listenable: model,
-        builder: (context, _) => Stack(fit: StackFit.expand, children: [
-          FadeSwitch(child: KeyedSubtree(key: ValueKey(model.page), child: _page())),
-          if (model.page == BarPage.attention) EdgeLight(model: model),
-          ToastOverlay(model: model),
-        ]),
+  Widget build(BuildContext context) => Listener(
+        // Every touch, a drag through Inbox or Apps too, starts the idle clock again, not only the taps that act.
+        behavior: HitTestBehavior.translucent,
+        onPointerDown: (_) => model.touched(),
+        child: ListenableBuilder(
+          listenable: model,
+          builder: (context, _) => Stack(fit: StackFit.expand, children: [
+            FadeSwitch(child: KeyedSubtree(key: ValueKey(model.page), child: _page())),
+            if (model.page == BarPage.attention) EdgeLight(model: model),
+            ToastOverlay(model: model),
+          ]),
+        ),
       );
 
   Widget _page() => switch (model.page) {

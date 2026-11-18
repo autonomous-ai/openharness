@@ -8,7 +8,7 @@ import '../../model/types.dart';
 import '../ambient/aurora.dart';
 import '../ambient/clock_face.dart';
 import '../attention/pet_fit.dart';
-import '../pet.dart';
+import '../pet.dart' hide petFit;
 import '../tokens.dart';
 
 class AmbientPage extends StatefulWidget {

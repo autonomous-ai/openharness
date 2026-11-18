@@ -11,7 +11,7 @@ import '../app_icon.dart';
 import '../attention/answer_button.dart';
 import '../attention/kind.dart';
 import '../attention/pet_fit.dart';
-import '../pet.dart';
+import '../pet.dart' hide petFit;
 import '../tokens.dart';
 
 class AttentionPage extends StatefulWidget {

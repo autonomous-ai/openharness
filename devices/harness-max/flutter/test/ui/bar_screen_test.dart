@@ -62,8 +62,9 @@ void main() {
       ..page = BarPage.inbox
       ..changed();
     await tester.pump(const Duration(milliseconds: 50));
+    // the Overview's bell under the finger, fading out: the tap is Inbox's (its card there), never openInbox
     await tester.tapAt(const Offset(1424, 160));
-    expect(m.calls, isEmpty);
+    expect(m.calls, isNot(contains('openInbox')));
   });
 
   testWidgets('on the agent page, a turn that ends fades its page from Working to reading; the band stays up',
@@ -89,5 +90,14 @@ void main() {
     expect(tester.getTopLeft(band), bandTop);
     await tester.pump(const Duration(milliseconds: 250));
     expect(find.text('session.ts'), findsNothing);
+  });
+
+  testWidgets('any touch on any page starts the idle clock again, a drag on Inbox too', (tester) async {
+    await tester.runAsync(preloadPets);
+    final m = RecordingModel(mockupModel()..page = BarPage.inbox);
+    await pumpOnBar(tester, BarScreen(model: m));
+    await tester.dragFrom(const Offset(900, 160), const Offset(-200, 0));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(m.calls, contains('touched'));
   });
 }
