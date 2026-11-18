@@ -270,7 +270,15 @@ export class ObservedSource implements HostSource {
    */
   private queueable(e: Entry, actions: ObservedActions): boolean {
     return e.agent.engine === 'codex' && !!e.transcriptPath && within(join(actions.codexHome, 'sessions'), e.transcriptPath)
-      && CODEX_THREAD.test(e.agent.sessionId!) && actions.codexQueue.can()
+      && CODEX_THREAD.test(e.agent.sessionId!) && actions.codexQueue.can(this.inCodexApp(e))
+  }
+
+  /**
+   * A session of the ChatGPT app, whose own codex queues into its threads (codexQueue.ts): the test codexApp.ts `paneOf`
+   * uses. One whose app is not known yet is not: it takes the other codex until its next hook names the app.
+   */
+  private inCodexApp(e: Entry): boolean {
+    return e.agent.app === 'codex' && e.agent.engine === 'codex'
   }
 
   /**
@@ -299,7 +307,7 @@ export class ObservedSource implements HostSource {
     if (this.queueable(e, actions)) {
       // Recorded first: an idle Codex starts the queued turn, and its hook can be heard, before `codex queue` has exited.
       const record = this.dialPrompt(e)
-      const queued = await actions.codexQueue.send(e.agent.sessionId!, text)
+      const queued = await actions.codexQueue.send(e.agent.sessionId!, text, this.inCodexApp(e))
       if (queued.outcome === 'queued') {
         actions.count('codex')
         return { ok: true }
