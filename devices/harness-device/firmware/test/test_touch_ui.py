@@ -232,11 +232,11 @@ code += function('color')
 code += function('settings_item') + function('settings_count') + function('hit_contains')
 code += function('find')
 code += 'static void notice_expire(uint32_t now);\n'
-for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'host_name', 'face_app', 'agent_allows', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'face_id', 'tab_id_at', 'tabs_open', 'app_index', 'apps_open', 'hold_picks_app', 'hold_open', 'app_pick', 'workspace_failed', 'tab_request', 'tabs_sync', 'ui_scroll_reportable', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
+for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'host_name', 'face_app', 'agent_allows', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'face_id', 'tab_id_at', 'tabs_open', 'app_index', 'apps_open', 'hold_picks_app', 'apps_switch', 'apps_from_switch', 'hold_open', 'app_pick', 'workspace_failed', 'tab_request', 'tabs_sync', 'ui_scroll_reportable', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
     code += function(name)
 code += function('render_settings') + function('ui_visit_state')
 code += function('ui_project_known') + function('ui_focus_project') + function('ui_apply_pending_focus')
-code += function('focus_centred') + function('focus_header') + function('focus_clipped') + function('tabs_move') + function('tab_split') + function('tab_fade') + function('tab_neighbour') + function('focus_carousel') + function('tab_label') + function('render_focus_tabs') + function('app_label') + function('app_under') + function('render_apps') + function('pane_label') + function('render_agents') + function('render_tabs') + function('page_controls') + function('css_line') + function('inbox_line') + function('inbox_page') + function('render_focus_inbox') + function('render_list')
+code += function('focus_centred') + function('focus_header') + function('focus_switch') + function('focus_clipped') + function('tabs_move') + function('tab_split') + function('tab_fade') + function('tab_neighbour') + function('focus_carousel') + function('tab_label') + function('render_focus_tabs') + function('app_label') + function('app_under') + function('render_apps') + function('pane_label') + function('render_agents') + function('render_tabs') + function('page_controls') + function('css_line') + function('inbox_line') + function('inbox_page') + function('render_focus_inbox') + function('render_list')
 for name in ['notice_drop', 'notice_remove', 'notice_remove_question', 'notice_sync_view', 'notice_selection', 'notice_restore_selection', 'notice_add', 'notice_expire', 'on_face', 'notice_read_now', 'ui_notify_summary', 'ui_turn_error', 'ui_notif_seen', 'ui_notif_read', 'ui_notif_replace', 'ui_notif_open', 'ui_question_close', 'ui_answer_receipt']:
     code += function(name)
 code += '#define ui_notify_task_done(a,b,c,d) ui_notify_summary(a,b,c,d,"alert",false,false)\n'
@@ -300,7 +300,8 @@ static void dispatch(action_t a) {
     else if (a.kind == A_RECAP_DISMISS) dismiss_result(a.id);
     else if (a.kind == A_DESKTOP) desktop_action(a);
     else if (a.kind == A_UP || a.kind == A_DOWN) page_action(a);
-    else if (a.kind == A_TABS || a.kind == A_TAB || a.kind == A_TAB_DONE || a.kind == A_APP || a.kind == A_APP_DONE) workspace_action(a);
+    else if (a.kind == A_TABS || a.kind == A_TAB || a.kind == A_TAB_DONE || a.kind == A_APP || a.kind == A_APP_DONE ||
+             a.kind == A_SWITCH_TABS || a.kind == A_SWITCH_APPS) workspace_action(a);
     else if (a.kind == A_SELECT_BEGIN) {
         view(SELECTION); ht_selection_open(&selection,"pick-test",active()->id,1800,select_emit,NULL);
     } else if (a.kind == A_SELECT_EXTEND) ht_selection_extend(&selection,3000);
@@ -1428,6 +1429,168 @@ static void app_picker_checks(const char *dir) {
     }
     puts("APPS picker: a hold in the machine view opens it on the shown app, pages drawn as the mockup, picks only on Done or a tap, kept by app id; the hints say Hold for apps and Hold to switch apps PASS");
 }
+/*
+ * THE TABS | APPS SWITCH (spec 2026-11-18-dial-tabs-apps-switch, mockup tabs-apps-options "2 · Pill"): on the window's
+ * tab, with the daemon's apps.switch and another app with agents, the TABS title is a pill. Its APPS cell flips to the
+ * other apps, a pick there turns the dial to that app, and its TABS cell goes back.
+ */
+static void switch_setup(int n) {
+    workspace_setup(); ht_character_select(&character, HT_CHARACTER_FOCUS); fake_ms = 1000;
+    host_features |= CABLE_FEATURE_APPS_SWITCH; ui_apps_replace(picker_rows, n, "harness"); scene_take();
+}
+// TABS from a hold, then a tap on the pill's APPS.
+static void switch_apps(void) {
+    switch_setup(3); hold_at(233, 230); fake_ms += 1000; tap(fake_ms, 275, 76);
+}
+static const hit_t *hit_of(action_kind_t action) {
+    for (int i = 0; i < s.hit_count; i++) if (s.hits[i].action == action) return &s.hits[i];
+    return NULL;
+}
+static bool hit_is(const hit_t *h, int x, int y, int w, int height) {
+    return h && h->rect.x == x && h->rect.y == y && h->rect.w == w && h->rect.h == height;
+}
+// The title's letters: Inter 20 runs at y 62, in order.
+static int title_letters(const ht_run_t **letters, int cap) {
+    int n = 0;
+    for (int i = 0; i < scene.count; i++)
+        if (scene.runs[i].font == &ht_lv_inter_20.base && scene.runs[i].y == 62 && scene.runs[i].text[0] && n < cap)
+            letters[n++] = &scene.runs[i];
+    return n;
+}
+// The pill, `apps` its selected cell: two boxes, eight letters each word centred in its 84 px cell, and the two hits.
+static void pill_is(bool apps) {
+    static const char *const word[8] = {"T", "A", "B", "S", "A", "P", "P", "S"};
+    const ht_run_t *outer = NULL, *cell = NULL, *letters[16];
+    for (int i = 0; i < scene.count; i++) {
+        if (scene.runs[i].box.h == 36) { assert(!outer); outer = &scene.runs[i]; }
+        if (scene.runs[i].box.h == 30) { assert(!cell); cell = &scene.runs[i]; }
+    }
+    assert(outer && outer->x == 149 && outer->y == 58 && outer->w == 168 && outer->box.radius == 18);
+    assert(outer->box.fill == BG && outer->box.border == color(0x2c2c2c));
+    assert(cell && cell->x == (apps ? 233 : 152) && cell->y == 61 && cell->w == 81 && cell->box.radius == 15);
+    assert(cell->box.fill == color(0x1e1e1e) && cell->box.border == color(0x1e1e1e));
+    assert(outer < cell);   // the cell is drawn over the pill
+    assert(title_letters(letters, 16) == 8);
+    for (int i = 0; i < 8; i++) {
+        bool on = (i >= 4) == apps;
+        assert(!strcmp(letters[i]->text, word[i]) && cell < letters[i]);   // the letters over the cell
+        assert(letters[i]->fg == color(on ? 0x8a8a8a : 0x3a3a3a) && letters[i]->bg == (on ? color(0x1e1e1e) : BG));
+    }
+    assert(letters[0]->x == 161 && letters[4]->x == 245);
+    for (int w = 0; w < 2; w++)
+        assert(letters[w * 4 + 3]->x + ht_measure(&ht_lv_inter_20.base, letters[w * 4 + 3]->text) - letters[w * 4]->x == 59);
+    const hit_t *tabs = hit_of(A_SWITCH_TABS), *other = hit_of(A_SWITCH_APPS);
+    assert(hit_is(tabs, 83, 30, 150, 78) && tabs->enabled == apps);
+    assert(hit_is(other, 233, 30, 150, 78) && other->enabled == !apps);
+}
+// Today's title: four grey letters, no pill and no switch.
+static void plain_title_is(const char *title) {
+    const ht_run_t *letters[16];
+    int n = title_letters(letters, 16);
+    assert(n == 4);
+    for (int i = 0; i < n; i++) assert(letters[i]->text[0] == title[i] && letters[i]->fg == color(0x4c4c4c));
+    for (int i = 0; i < scene.count; i++) assert(scene.runs[i].box.h != 36);
+    assert(!hit_of(A_SWITCH_TABS) && !hit_of(A_SWITCH_APPS));
+}
+static bool runs_same(const ht_scene_t *a, const ht_scene_t *b) {
+    if (a->count != b->count) return false;
+    for (int i = 0; i < a->count; i++) {
+        const ht_run_t *p = &a->runs[i], *q = &b->runs[i];
+        if (strcmp(p->text, q->text) || p->x != q->x || p->y != q->y || p->fg != q->fg || p->bg != q->bg || p->font != q->font)
+            return false;
+    }
+    return true;
+}
+static void apps_switch_checks(const char *dir) {
+    // A hold in the window view opens TABS on the desktop's tab, the title a pill with TABS filled; nothing is sent.
+    switch_setup(3); hold_at(233, 230);
+    assert(s.view == TABS && ht_tab_carousel_index(&tab_carousel) == 1 && !tab_switches && !app_picks);
+    pill_is(false);
+    assert(scene.count == 29);
+    host_features &= ~CABLE_FEATURE_APPS_SWITCH; scene_take();
+    assert(scene.count == 29 - 6); plain_title_is("TABS");
+    host_features |= CABLE_FEATURE_APPS_SWITCH;
+    FOCUS_PAGE("tabs-switch");
+    // Tap APPS: the other apps on the first page (Harness is shown and not listed), APPS filled, no pick.
+    fake_ms += 1000; tap(fake_ms, 275, 76);
+    assert(s.view == APPS && !s.machine_view && ht_tab_carousel_index(&app_carousel) == 0 && !app_picks && !tab_switches);
+    assert(run_in("Ghostty", &ht_lv_inter_44.base) && run_in("3 agents", &ht_lv_inter_25.base));
+    pill_is(true);
+    assert(scene.count == 31);
+    for (int d = -200; d <= 200; d += 40) {
+        int keep = app_carousel.position; app_carousel.position = keep + d;
+        ht_scene_t dragged; ht_scene_clear(&dragged, BG); s.hit_count = 0; render_apps(&dragged);
+        assert(dragged.count == 31);
+        app_carousel.position = keep;
+    }
+    FOCUS_PAGE("apps-switch");
+    // Browsing sends nothing; Done picks the page in the middle and the face waits for that app's first agent.
+    picker_swipe(300, 200); assert(s.view == APPS && ht_tab_carousel_index(&app_carousel) == 1 && !app_picks);
+    fake_ms += 1000; tap(fake_ms, 233, 420);
+    assert(app_picks == 1 && !strcmp(app_target, "vscode") && s.view == HOME && !strcmp(s.app_landing, "vscode"));
+    // A tap on a page picks that page.
+    switch_apps(); fake_ms += 1000; tap(fake_ms, 233, 233);
+    assert(app_picks == 1 && !strcmp(app_target, "ghostty") && s.view == HOME);
+    // Tap TABS: back to TABS on the desktop's tab, TABS filled, nothing sent.
+    switch_apps(); picker_swipe(300, 200); fake_ms += 1000; tap(fake_ms, 191, 76);
+    assert(s.view == TABS && ht_tab_carousel_index(&tab_carousel) == 1 && !app_picks && !tab_switches);
+    pill_is(false);
+    // The selected cell, a swipe over the pill and a hold on it do nothing.
+    switch_setup(3); hold_at(233, 230);
+    fake_ms += 1000; tap(fake_ms, 191, 76);
+    fake_ms += 1000; habitat_touch(true, 275, 76, fake_ms); habitat_touch(true, 175, 76, fake_ms + 100);
+    habitat_touch(false, 175, 76, fake_ms + 150); surface_tick(fake_ms + 600); scene_take();
+    hold_at(275, 76);
+    assert(s.view == TABS && ht_tab_carousel_index(&tab_carousel) == 1 && !app_picks && !tab_switches);
+    pill_is(false);
+    switch_apps(); fake_ms += 1000; tap(fake_ms, 275, 76);
+    fake_ms += 1000; habitat_touch(true, 275, 76, fake_ms); habitat_touch(true, 175, 76, fake_ms + 100);
+    habitat_touch(false, 175, 76, fake_ms + 150); surface_tick(fake_ms + 600); scene_take();
+    assert(s.view == APPS && ht_tab_carousel_index(&app_carousel) == 0 && !app_picks && !tab_switches);
+    pill_is(true);
+    // The switch remembers nothing: from APPS, TABS, Done, and the next hold opens TABS again.
+    switch_apps(); fake_ms += 1000; tap(fake_ms, 191, 76);
+    fake_ms += 1000; tap(fake_ms, 233, 420); assert(s.view == HOME);
+    hold_at(233, 230); assert(s.view == TABS); pill_is(false);
+    // No pill: (a) a daemon without apps.switch that sends apps; (b) no other app; (c) no apps yet; (d) the machine
+    // view without apps. The hold opens today's TABS and the pill's place does nothing.
+    for (int mode = 0; mode < 4; mode++) {
+        static ht_scene_t face;
+        workspace_setup(); fake_ms = 1000;
+        if (mode) host_features |= CABLE_FEATURE_APPS_SWITCH;
+        if (mode == 3) ui_fleet_set_view(true);
+        scene_take(); face = scene;
+        if (mode < 2) ui_apps_replace(picker_rows, mode ? 0 : 3, "harness");
+        scene_take();
+        if (!mode) assert(runs_same(&face, &scene));   // what old firmware does with the new daemon: the face as before
+        hold_at(233, 230); assert(s.view == TABS); plain_title_is("TABS");
+        fake_ms += 1000; tap(fake_ms, 275, 76); assert(s.view == TABS);
+    }
+    // No tabs yet: the pill is there too, so APPS stays one tap away.
+    reset(); fake_ms = 1000; host_features |= CABLE_FEATURE_APPS_SWITCH; ui_apps_replace(picker_rows, 3, "harness"); scene_take();
+    hold_at(233, 230); assert(s.view == TABS && run_in("No tabs yet.", &ht_lv_inter_30.base)); pill_is(false);
+    FOCUS_PAGE("tabs-switch-empty");
+    fake_ms += 1000; tap(fake_ms, 275, 76); assert(s.view == APPS);
+    // The last other app going on the switch's APPS: back to TABS, on the desktop's tab, with the plain title.
+    switch_apps(); assert(s.view == APPS);
+    ui_apps_replace(picker_rows, 0, "harness"); scene_take();
+    assert(s.view == TABS && ht_tab_carousel_index(&tab_carousel) == 1); plain_title_is("TABS");
+    // Another app brought to the front on the Mac closes the switch's APPS to the face.
+    switch_apps(); ui_fleet_set_view(true); assert(s.view == HOME);
+    // The machine view's hold: today's APPS with its plain title, the feature on.
+    picker_setup(3, "ghostty"); host_features |= CABLE_FEATURE_APPS_SWITCH; scene_take(); hold_at(233, 230);
+    assert(s.view == APPS); plain_title_is("APPS"); assert(scene.count == 25);
+    // A tab switch still loading when APPS is tapped: its roster lands and the switch's APPS stays open.
+    switch_setup(3); hold_at(233, 230); picker_swipe(300, 200);
+    assert(s.view == TABS && tab_switches == 1 && !strcmp(tab_target, "tab-2") && s.loading);
+    fake_ms += 1000; tap(fake_ms, 275, 76); assert(s.view == APPS);
+    { uint32_t serial = workspace.serial;
+      ui_swarms_replace(s.tabs, s.tab_count, "tab-2");
+      assert(ht_workspace_refresh(&workspace, serial, 10));
+      ui_workspace_applied("tab-2", 11); ui_land_after_reload(); }
+    assert(!s.loading && s.view == APPS);
+    puts("TABS | APPS switch: the pill on the window's TABS; its APPS lists the other apps and picks only on Done or a tap, TABS goes back; no feature or no app is today's TABS PASS");
+}
 int main(int argc, char **argv) {
     test_character = HT_CHARACTER_FOCUS;
     notification_read_checks(argc>1 ? argv[1] : NULL);
@@ -2082,6 +2245,7 @@ int main(int argc, char **argv) {
       ui_apps_replace(rows, 1, "terminal"); scene_take(); assert(scene_says("Other") && !scene_says("Terminal"));
       tap(1000,233,220); assert(!starts && scene_says("See it in Terminal")); }
     app_picker_checks(dir);
+    apps_switch_checks(dir);
     // the resting face of an agent without V shows no voice invitation, on the plain face and the pet's relaxing one
     for (int pet = 0; pet < 2; pet++) {
         reset(); fake_ms = 1000; if (pet) strcpy(s.agents[0].engine, "claude");
