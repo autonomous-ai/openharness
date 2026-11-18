@@ -5,7 +5,7 @@
  */
 import { spawnSync } from 'node:child_process'
 import * as fs from 'node:fs'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, watch, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -302,6 +302,39 @@ describe('the move at a start', () => {
     expect(logOf(t)).toEqual([])
     expect(t.execs).toHaveLength(1)
     expect(t.execs[0].file).toBe(join(t.state, NODE))
+  })
+
+  it('two starts that read different XDG_STATE_HOME take the one lock: the second waits for the first', async () => {
+    const t = legacyHome()
+    // A socket in the data folder: the first start asks whether a daemon answers on it, and waits there for the answer.
+    put(join(t.legacy, 'cli', 'data', 'daemon-1.sock'), '')
+    let answer = (_answers: boolean): void => {}
+    let asked = (): void => {}
+    const firstAsked = new Promise<void>((done) => { asked = done })
+    let watching = (): void => {}
+    const secondWaits = new Promise<'waits'>((done) => { watching = () => done('waits') })
+    const lock = (pid: number, onWatch = (): void => {}): LockDeps => ({
+      pid, startTime: (other) => other === SELF || other === OTHER ? 1 : null,
+      watch: (folder, onChange) => {
+        onWatch()
+        return watch(folder, onChange)
+      },
+    })
+    const first = moveHomeAtStart(argvOf(t, '__harnessd'), {}, t.deps({
+      lock: lock(SELF),
+      answers: () => {
+        asked()
+        return new Promise<boolean>((done) => { answer = done })
+      },
+    }))
+    await firstAsked
+    const otherState = join(t.root, 'other-state')
+    const second = moveHomeAtStart(argvOf(t, 'start', '--if-down'), { XDG_STATE_HOME: otherState }, t.deps({ lock: lock(OTHER, watching) }))
+    expect(await Promise.race([second.then(() => 'went on'), secondWaits])).toBe('waits')
+    answer(false)
+    await Promise.all([first, second])
+    expect(readBridge(t.state)).toMatchObject({ oldHome: t.legacy })
+    expect(existsSync(otherState)).toBe(false)
   })
 
   it('a lock still held after 30 s lets the start go on, unmoved', async () => {
