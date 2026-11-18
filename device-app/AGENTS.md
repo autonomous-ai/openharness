@@ -4,9 +4,9 @@ A menu-bar app for the round dial, for people who do not use the Harness desktop
 only its file stays `Harness Device.app` (`productName`), beside the desktop app's `Harness.app`, and the bundle id,
 binary, release files and update path keep the Harness Device name, so installed apps keep updating. It installs the
 `harness` CLI, keeps the daemon running, shows the dial's state in its menu, and offers sign-in once. While Orca runs
-without Harness's plugin, it offers `Connect Orca…` once. It also exports the logs (`Export logs`), through the CLI. It
-has no row for Claude Code or Codex: the devices service sets them up. Rust and Tauri 2 in `src-tauri/`; the window's
-three screens are plain TypeScript in `ui/`.
+without Harness's plugin, it offers `Connect Orca…` until Orca is connected, and `Update Orca connection…` when Orca asks
+again. It also exports the logs (`Export logs`), through the CLI. It has no row for Claude Code or Codex: the devices
+service sets them up. Rust and Tauri 2 in `src-tauri/`; the window's three screens are plain TypeScript in `ui/`.
 
 ## Toolchain
 
