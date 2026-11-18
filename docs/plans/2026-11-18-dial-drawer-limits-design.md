@@ -185,8 +185,9 @@ Added 2026-11-18 (harness-pm).
 
 That branch adds `held` entries to the inbox: a question restored after the devices process restarted, which rang
 before and is read when its row is opened, never asked. Whichever merges second keeps both: a `held` entry is `told`
-(it rang before), so on a `questionTier` dial it comes back as a silent row after a replace, and on an older dial it
-is never sent, as that branch wants. That branch also moves where `forget` and `resendQuestions` are called; the rules
+(it rang before), so on a `questionTier` dial it comes back as a silent row after a replace, and on an older dial
+or a Pro it is never sent, as that branch wants: a Pro mutes a repeat only by a hash in its RAM, which the restart may
+have cleared too. That branch also moves where `forget` and `resendQuestions` are called; the rules
 above (a replace never clears `told`, a greeting does) hold wherever the calls end up.
 
 ## Tests (red first, at the layer where each behaviour lives)
