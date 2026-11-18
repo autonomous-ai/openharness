@@ -273,6 +273,23 @@ describe('the home bridge service', () => {
     bridge.stop()
   })
 
+  it('each engine Harness installs hooks for is an old user by the name its process runs as', async () => {
+    const names = ['claude', 'codex', 'cursor-agent', 'opencode', 'hermes', 'hermes-agent', 'command-code', 'commandcode', 'devin', 'kilo', 'kilocode', 'grok', 'agy', 'copilot']
+    const h = movedHome()
+    const { bridge } = start(h, { rows: () => names.map((name) => row({ name, exe: `/usr/local/bin/${name}` })) })
+    await settle()
+    expect(record(h).oldProcesses).toBe(names.length)
+    bridge.stop()
+  })
+
+  it('a program as plainly named as an engine\'s other command (agent, cmd, pi, amp), or an engine with no hooks, holds nothing', async () => {
+    const h = movedHome()
+    const rows = ['agent', 'cmd', 'pi', 'amp', 'omp', 'muse', 'openclaw'].map((name) => row({ name, exe: `/usr/bin/${name}` }))
+    start(h, { rows: () => rows })
+    await settle()
+    expect(existsSync(join(h.state, BRIDGE_FILE))).toBe(false)
+  })
+
   it('while a harness waits to be set up again each check asks for the Store, once, old users running or not', async () => {
     fakeInterval()
     const h = movedHome()
