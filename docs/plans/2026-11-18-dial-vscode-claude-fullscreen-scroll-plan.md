@@ -12,7 +12,8 @@ page for each 20 lines of travel, and only while Claude Code is that terminal's 
 **Architecture:**
 - **The devices process** asks two more things at a stroke's `down`, one after the other, within 500 ms in all:
   whether the session's Claude Code settings say `"tui": "fullscreen"` (the `tui` key alone, of four files), then
-  whether the agent's process is in its tty's foreground group (one `ps -o pgid=,tpgid= -p <pid>`). The stroke's
+  whether the agent's process group is its VS Code terminal's foreground group, the tpgid of the shell VS Code started
+  there (one `ps -o pid=,pgid=,tpgid= -p <agent>,<shell>`). The stroke's
   answer becomes `page`, `lines` or `windows`. A `page` stroke's lines go to the window as
   `{"scroll":n,"pid":shell,"page":true}`.
 - **Harness's VS Code extension** runs a page line's host scroll as today and also presses PageUp or PageDown in that
@@ -65,7 +66,8 @@ Nothing under `cli/src/core/` or `cli/src/harnessd/` changes; `cli/src/architect
 - **Two sequences only:** `\x1b[5~` (PageUp, toward older lines, n < 0) and `\x1b[6~` (PageDown), each sent with
   `terminal.sendText(seq, false)`. The extension can write no other text to a terminal.
 - **The guard:** the shown agent's engine is `claude`; it is not `needs-you`; its settings' `tui` is `"fullscreen"`;
-  its pane pid is in its tty's foreground group (`pgid` equals `tpgid`, and `tpgid` is above 0).
+  its pane pid's group is its VS Code terminal's foreground group (the agent's `pgid` equals the `tpgid` of the shell the
+  window reported for its terminal, and that `tpgid` is above 0).
 - **The renderer read:** only the `tui` key of, highest precedence first, the managed file
   (`/Library/Application Support/ClaudeCode/managed-settings.json` on macOS, `/etc/claude-code/managed-settings.json` on
   Linux), `<cwd>/.claude/settings.local.json`, `<cwd>/.claude/settings.json`, and `settings.json` in the session's own
@@ -73,7 +75,9 @@ Nothing under `cli/src/core/` or `cli/src/harnessd/` changes; `cli/src/architect
   another shape) the default home `dirname(CLAUDE_PROJECTS_DIR)`. Each read with a 256 KiB cap and parsed as JSON.
   Nothing but `tui` is kept, and never logged.
 - **Never another process's environment or arguments.** `CLAUDE_CODE_NO_FLICKER=1` is not seen: a documented limit.
-- **The foreground read:** `ps -o pgid=,tpgid= -p <pid>` through `execText` (`scannedApp.ts`).
+- **The foreground read:** `ps -o pid=,pgid=,tpgid= -p <agent>,<shell>` through `execText` (`scannedApp.ts`). The
+  foreground is the shell's `tpgid`, never the agent's own: under screen, script, asciinema or sudo's use_pty the agent
+  leads a pseudo-terminal of its own and is always in front there.
 - **The pid** is the pane's: `termPid(observed.paneOf(id, 'vscode'))`. Never `entry.pid`.
 - **A refused guard is `lines`**, the VS Code terminal's line scroll as today, never Harness's windows.
 - **A stroke is held at most 500 ms** of wall time, then goes out as lines and stays lines.
@@ -144,8 +148,8 @@ parse.
    as no `tui`, at once, and no thread waits on it. Task 2 (`a FIFO`, `/dev/zero`, `one byte past`).
 2. **A window's stream is not ready when the kind changes** (page lines wait, plain lines come): neither is merged
    into the other and neither is dropped. Task 1 (`never merged`).
-4. **A dial sends `down` after `down` faster than the reads answer:** one guard in flight, and only the newest stroke
-   is written. Task 3 (`joins it`), Task 7 (`a newer down`).
+4. **A dial sends `down` after `down` faster than the reads answer:** one guard in flight, and an older stroke held
+   for the page guard sends its travel as plain lines. Task 3 (`joins it`), Task 7 (`a newer down`).
 5. **The agent's session ends mid-stroke, and its hook tells the devices:** nothing more of the stroke is written, so
    no key reaches the shell that came back. Task 7 (`whose agent then leaves`).
 
@@ -388,12 +392,13 @@ describe('readSettings', () => {
 ```ts
 // vscodeTerminals.ts
 export const VSCODE_GUARD_MS = 500
-/** The read prints two numbers of at most 10 digits. */
-export const GROUPS_MAX_BYTES = 64
+/** The read prints two rows of three numbers of at most 10 digits and a sign, with ps's padding. */
+export const GROUPS_MAX_BYTES = 128
 export interface ProcessGroups { pgid: number; tpgid: number }
-/** One process's group and its tty's foreground group, from `ps -o pgid=,tpgid= -p <pid>` through scannedApp.ts's
- *  patient exec. None when `ps` failed, the process is gone, or it printed anything but one row of two numbers. */
-export async function readForeground(pid: number, exec: Exec = execText): Promise<ProcessGroups | undefined>
+/** The agent's group and its VS Code terminal's foreground group, the tpgid of the shell VS Code started there, from
+ *  one `ps -o pid=,pgid=,tpgid= -p <agent>,<shell>` through scannedApp.ts's patient exec. None when `ps` failed, either
+ *  process is gone, or it printed anything but one row of three numbers for each. */
+export async function readForeground(agent: number, shell: number, exec: Exec = execText): Promise<ProcessGroups | undefined>
 /** What the guard knows of the agent: whether it waits on the person, its folder, and its transcript path as its hook
  *  or the scan gave it (the user settings' home: claudeRenderer.ts). */
 export interface PageAgent { asking: boolean; cwd?: string; transcriptPath?: string }
@@ -402,31 +407,34 @@ export interface PageAgent { asking: boolean; cwd?: string; transcriptPath?: str
 /** Whether Claude Code's settings for that absolute folder, and the home its transcript path names, draw it fullscreen
  *  (claudeRenderer.ts readFullscreen). */
 fullscreen(cwd: string, transcriptPath: string | undefined): Promise<boolean>
-foreground(pid: number): Promise<ProcessGroups | undefined>
+/** The agent's process group and the foreground group of the terminal whose shell has that pid (readForeground). */
+foreground(agent: number, shell: number): Promise<ProcessGroups | undefined>
 
 // VscodeTerminals
 /** Whether a stroke on the terminal of the agent with that pid may carry page keys. `false` at once, with nothing read,
  *  when the agent asks or has no absolute folder; else a promise, never rejected, settled within VSCODE_GUARD_MS: true
- *  when its settings say fullscreen and its process is in its tty's foreground group. Every answer is counted in the
- *  minute's line. */
+ *  when its settings say fullscreen and its process group is its VS Code terminal's foreground group. Every answer is
+ *  counted in the minute's line. */
 pageKeys(agentPid: number, agent: PageAgent): false | Promise<boolean>
 
 // devices.ts — DevicesDeps
 /** For this service's tests: whether a Claude Code session's settings draw it fullscreen; its settings files by default
  *  (cable/hosts/claudeRenderer.ts readFullscreen). */
 claudeFullscreen?: VscodeTerminalsDeps['fullscreen']
-/** For this service's tests: how an agent's process group and its tty's foreground group are read; `ps` by default
- *  (cable/hosts/vscodeTerminals.ts readForeground). */
+/** For this service's tests: how an agent's process group and its VS Code terminal's foreground group, through that
+ *  terminal's shell, are read; `ps` by default (cable/hosts/vscodeTerminals.ts readForeground). */
 processGroups?: VscodeTerminalsDeps['foreground']
 ```
 
-- **The read:** `exec('ps', ['-o', 'pgid=,tpgid=', '-p', String(pid)], { timeout: PS_TIMEOUT_MS, maxBuffer: GROUPS_MAX_BYTES })`.
-  The row is two numbers, the second possibly negative.
+- **The read:** `exec('ps', ['-o', 'pid=,pgid=,tpgid=', '-p', <agent>,<shell>], { timeout: PS_TIMEOUT_MS, maxBuffer: GROUPS_MAX_BYTES })`,
+  an agent that is its terminal's own process named once. A row is three numbers, the last possibly negative; the
+  answer is the agent's `pgid` and the shell's `tpgid`.
 - **The judgement,** each ask counted once:
   - `asking` → `asking`, nothing read;
   - no `cwd`, or one that is not absolute → `renderer`, nothing read;
   - `fullscreen(cwd, agent.transcriptPath)` answers false or rejects → `renderer`, no `ps`;
-  - then `foreground(pid)` answers none, or rejects, or `tpgid <= 0` → `ps`;
+  - then the agent has no terminal now (its window went meanwhile) → `ps`, no `ps` run;
+  - `foreground(pid, terminal.shell)` answers none, or rejects, or `tpgid <= 0` → `ps`;
   - `pgid !== tpgid` → `background`;
   - `pgid === tpgid` → a page stroke, `true`;
   - no answer `VSCODE_GUARD_MS` after the ask, on `deps.after` → `slow`, `false`. What lands later counts nothing for
@@ -448,11 +456,11 @@ processGroups?: VscodeTerminalsDeps['foreground']
 /** Whether a session's settings draw it fullscreen (services/devices.ts claudeFullscreen): the spec's own, fullscreen
  *  unless a spec sets it, each read's folder and transcript path kept, so no spec reads this machine's settings. */
 const claudeSettings = { fullscreen: true, reads: [] as Array<[string, string | undefined]> }
-/** An agent's process group and its tty's foreground group (services/devices.ts processGroups): the spec's own, the
- *  agent in front unless a spec sets it, each read's pid kept, and held while `held` until the spec lands it, so no
- *  spec runs this machine's ps. */
+/** An agent's process group and its VS Code terminal's foreground group (services/devices.ts processGroups): the spec's
+ *  own, the agent in front unless a spec sets it, each read's agent and shell pids kept, and held while `held` until the
+ *  spec lands it, so no spec runs this machine's ps. */
 const processGroups = { answer: { pgid: 4242, tpgid: 4242 } as { pgid: number; tpgid: number } | undefined,
-  reads: [] as number[], held: false, land: [] as Array<() => void> }
+  reads: [] as Array<[number, number]>, held: false, land: [] as Array<() => void> }
 ```
 
 - [ ] **Step 1: Write the failing tests** in `vscodeTerminals.spec.ts`. Its `harness()` gains a `fullscreen` dep (true
@@ -461,21 +469,25 @@ const processGroups = { answer: { pgid: 4242, tpgid: 4242 } as { pgid: number; t
 
 ```ts
 describe('the foreground group the page guard reads', () => {
-  it("is one process's group and its tty's foreground group alone, from one ps read within its bounds", async () => {
-    const exec = vi.fn<Exec>(async () => ' 4242  4242\n')
-    expect(await readForeground(4242, exec)).toEqual({ pgid: 4242, tpgid: 4242 })
-    expect(exec.mock.calls).toEqual([['ps', ['-o', 'pgid=,tpgid=', '-p', '4242'], { timeout: PS_TIMEOUT_MS, maxBuffer: GROUPS_MAX_BYTES }]])
+  it("is the agent's group and its VS Code terminal's foreground group as the terminal's shell sees it, from one ps read within its bounds", async () => {
+    const exec = vi.fn<Exec>(async () => '  700   700   900\n  900   900   900\n')
+    expect(await readForeground(900, 700, exec)).toEqual({ pgid: 900, tpgid: 900 })
+    expect(exec.mock.calls).toEqual([['ps', ['-o', 'pid=,pgid=,tpgid=', '-p', '900,700'], { timeout: PS_TIMEOUT_MS, maxBuffer: GROUPS_MAX_BYTES }]])
   })
-  it('reads the -1 Linux prints for a process with no terminal', …)        // ' 4242    -1\n' → { pgid: 4242, tpgid: -1 }
-  it.each([null, '', 'SECRET-TOKEN rotate the key\n', ' 1 1\n 2 2\n', ' 4242\n'])('a ps that failed, or printed anything but one row, is none', …)
-  it.skipIf(process.platform === 'win32')("this machine's: this process has a group", async () => {
-    expect(await readForeground(process.pid)).toEqual({ pgid: expect.any(Number), tpgid: expect.any(Number) })
+  it("an agent in front of a pseudo-terminal of its own (screen, script, sudo's) is not in front of the VS Code terminal", …)
+    // '  700   700   800\n  900   900   900\n' → { pgid: 900, tpgid: 800 }
+  it("an agent that is its terminal's own process is asked once", …)       // readForeground(900, 900): '-p', '900'
+  it('reads the -1 Linux prints for a shell with no terminal', …)          // → { pgid: 900, tpgid: -1 }
+  it.each([null, '', 'SECRET-TOKEN rotate the key\n', /* the agent gone, the shell gone, another's row, two numbers, a row twice */ …])
+    ('a ps that failed, or printed anything but one row of three numbers for each, is none: %j', …)
+  it.skipIf(process.platform === 'win32')("this machine's: this process has a group, and its parent a foreground group", async () => {
+    expect(await readForeground(process.pid, process.ppid)).toEqual({ pgid: expect.any(Number), tpgid: expect.any(Number) })
   })
 })
 
 // in describe('VS Code\'s windows'); AGENT = { asking: false, cwd: '/work/api' }
-it("a fullscreen agent in its tty's foreground group may take page keys: its folder read, then one ps, for its pid", …)
-  // { pgid: 900, tpgid: 900 } → true; fullscreen called with ('/work/api', undefined), foreground with 900, in that order
+it("a fullscreen agent in its terminal's foreground group may take page keys: its folder read, then one ps, for its pid", …)
+  // { pgid: 900, tpgid: 900 } → true; fullscreen called with ('/work/api', undefined), foreground with (900, its shell), in that order
 it("the agent's transcript path goes to the renderer read with its folder, as given", …)
   // pageKeys(900, { ...AGENT, transcriptPath: '/o/home/projects/-work-api/s1.jsonl' }): fullscreen called with
   // ('/work/api', '/o/home/projects/-work-api/s1.jsonl'); the shape is claudeRenderer.ts's to judge, not the guard's
@@ -485,6 +497,7 @@ it('settings that do not say fullscreen are refused renderer, and ps is not run'
 it('a renderer read that rejects is refused renderer, and nothing rejects', …)
 it('another group in front is refused', …)                                  // { pgid: 900, tpgid: 700 } → false
 it.each([['none', undefined], ['macOS, no terminal', { pgid: 900, tpgid: 0 }], ['Linux, no terminal', { pgid: 900, tpgid: -1 }]])('a read of %s is refused', …)
+it('an agent with no terminal now is refused ps, with no ps run', …)
 it('a ps read that rejects is refused, and nothing rejects', …)
 it('no answer in 500 ms is refused, and the answer that lands later counts nothing', …)     // the 500 timer run → false; then land
 it('an answer in time cancels its 500 ms', …)
@@ -815,47 +828,25 @@ it("the minute's line counts a page stroke and a refusal for asking", …)
 
 ```ts
 // outsideAgent.ts
-static async start(d, folder, hints, app?, { shell = false, jobs = false } = {}): Promise<Outside>
-/** With `jobs`: the engine leaves its terminal's foreground, as a job a shell stopped or put in the background.
+static async start(d, folder, hints, app?, { shell = false } = {}): Promise<Outside>
+/** With `shell`: Ctrl+Z, as a person types it, and the engine leaves its terminal's foreground, a job its shell stopped.
  *  Resolves once `ps -o pgid=,tpgid=` of the engine shows another group in front. */
 background(): Promise<void>
 // vscodeWindow.ts prints, for each pageKey
 {"key":"up"|"down","pid":<pid>}
 ```
 
-- **The job-control step.** `jobs` passes `--jobs` to the Python helper as its first argument; without it the helper
-  runs exactly as today (eight end-to-end files use it). With it, the pseudo-terminal's child forks once more before it
-  becomes the engine:
-
-```python
-import os, pty, select, signal, sys
-jobs = sys.argv[1] == '--jobs'
-argv = sys.argv[2:] if jobs else sys.argv[1:]
-said = os.dup(2) if jobs else -1    # the helper's own stderr: the child's is the pseudo-terminal
-pid, fd = pty.fork()
-if pid == 0:
-    if jobs:
-        if os.fork() == 0:
-            # A second process of the engine's session, as a shell's other job: only a member of the session may
-            # move its terminal's foreground group, and the engine, which leads the session, cannot leave its group.
-            signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGUSR1})
-            os.write(said, b'jobs %d\n' % os.getpid())
-            os.close(said)
-            signal.sigwait({signal.SIGUSR1})
-            signal.signal(signal.SIGTTOU, signal.SIG_IGN)   # a background group calling tcsetpgrp is stopped otherwise
-            os.setpgid(0, 0)
-            os.tcsetpgrp(0, os.getpgrp())
-            signal.pause()                                  # it ends with the session: SIGHUP when the engine goes
-            os._exit(0)
-        os.close(said)
-    os.execvp(argv[0], argv)
-```
-
-- `open()` reads the `jobs <pid>` line beside the pids it reads today. `background()` sends that pid `SIGUSR1` and
-  waits on `ps`, with `until`.
-- **Clean-up:** `kill()` sends the engine `SIGCONT` before its `SIGKILL` (an engine that read its terminal in the
-  background was stopped by SIGTTIN). `close()` kills the second process if it still runs, and resolves only once it
-  is gone.
+- **The shell in the terminal.** With `shell`, the Python helper's pseudo-terminal runs `/bin/sh -i -c SHELL sh
+  <engine>`, as VS Code starts a shell in its terminal: interactive, so it has job control, and the engine is its
+  foreground job, in a group of its own that holds the terminal's foreground, so the shell's `tpgid` is the engine's
+  `pgid`. `--say` before the command makes the helper's own stderr the child's fd 3, where the shell's job says
+  `engine <pid>` before it becomes the engine; the helper prints the shell's pid as it prints its child's today.
+  Without `shell` the helper runs exactly as before (seven other end-to-end files use it).
+- `background()` types Ctrl+Z into the tab: the fake engine stops its group (SIGTSTP) and the shell takes the terminal
+  back. It waits on `ps`, with `until`.
+- **Clean-up:** `kill()` sends the engine `SIGCONT` before its `SIGKILL` (a suspended engine is stopped). The shell
+  stays after its engine, as a person's does, reading its terminal: `close()` kills it and resolves only once it is
+  gone, which is once the helper, its parent, ends with the terminal.
 - **The settings** are the session's own project file, `<the engine's folder>/.claude/settings.json`, under the
   daemon's throwaway projects folder. The user file is in the home the fake engine's transcript path names:
   `fakeEngine.mjs` writes it at `<projects>/<slug>/<id>.jsonl` under its `CLAUDE_CONFIG_DIR`, else under the
@@ -865,14 +856,14 @@ if pid == 0:
 - **The case,** `it("a stroke on Claude Code's fullscreen view in its terminal's foreground carries page keys, and none for the default renderer or in the background", …, 300_000)`:
   0. **Precondition:** this platform's `MANAGED_SETTINGS` file, if it exists, has no `tui` (read in the test). Else
      fail at once with a message that names the file: it outranks the test's own.
-  1. A in a VS Code terminal with `jobs`, its project file `{"tui":"fullscreen"}`, the window connected, VS Code in
+  1. A in a VS Code terminal, its project file `{"tui":"fullscreen"}`, the window connected, VS Code in
      front, the dial on A, A's shell active.
   2. **Fullscreen, foreground:** `down`, one `move` of `dy: 128` (320 px: 20 lines of 16), `up`. The window prints 20
      `up` scrolls and one `up` key.
   3. **Default renderer:** the project file becomes `{"tui":"default"}`, the same stroke. The window prints 20 more
      scrolls; its keys are still one. The loop sends a line's keys before its lines (Task 5), so the lines printed
      mean no key came.
-  4. **Background:** the project file back to `{"tui":"fullscreen"}`, `await a.background()`, the same stroke. 20 more
+  4. **Background:** the project file back to `{"tui":"fullscreen"}`, `await a.background()` (Ctrl+Z), the same stroke. 20 more
      scrolls; the keys are still one.
   5. The devices' minute lines, summed (a stroke may fall either side of a minute): 1 page stroke, 1 refused
      `renderer`, 1 refused `background`.
@@ -887,7 +878,7 @@ if pid == 0:
   Expected: FAIL in the new case (`background` is not a function).
 - [ ] **Step 3: Implement** the helper's step, `background()` and the clean-up.
 - [ ] **Step 4: Run** `cd cli && TMPDIR=/tmp npx vitest run --config vitest.e2e.config.ts e2e/dialVscode.e2e.ts e2e/deviceWithoutApp.e2e.ts`.
-  Expected: PASS (`deviceWithoutApp` starts the helper with no `jobs`: that path is as it was).
+  Expected: PASS (`deviceWithoutApp` starts the helper with no `shell`: that path is as it was).
 - [ ] **Step 5: Commit** `Dial: a stroke's page keys reach a VS Code terminal only while Claude Code's fullscreen view is in front, end to end`.
 
 ### Task 9: Local gate: the key in a real VS Code
@@ -938,8 +929,9 @@ minute line (Task 5).
   in front and the dial shows such an agent", add: "; for Claude Code whose settings say `"tui": "fullscreen"` (that
   key alone, of its managed, project-local, project and user settings files, the user file in the session's own
   Claude Code home as its transcript path names it, each read up to 256 KiB at a stroke's start:
-  `cable/hosts/claudeRenderer.ts`), that is its terminal's foreground program (one `ps -o pgid=,tpgid= -p <pid>`
-  read a stroke; both waited for at most 500 ms) and is not waiting on the person, the extension also presses PageUp or
+  `cable/hosts/claudeRenderer.ts`), that is its terminal's foreground program (its group is the foreground group of
+  the shell VS Code started in that terminal, one `ps -o pid=,pgid=,tpgid= -p <agent>,<shell>` read a stroke; both
+  waited for at most 500 ms) and is not waiting on the person, the extension also presses PageUp or
   PageDown there, one key per 20 lines, which moves Claude Code's fullscreen view".
 - `README.md`, "What it does", the Scroll line: "**Scroll** on the dial while VS Code is in front: that terminal
   scrolls, line by line. With `"tui": "fullscreen"` in Claude Code's settings, its view moves a page for each 20
