@@ -7,8 +7,9 @@
  * What is read: the `tui` key alone, and nothing else of a file is kept or logged, since a settings file holds a
  * person's permissions, hooks and environment. The files are Claude Code's own, in its own precedence less its command
  * line, which the devices never read: managed, the project's local file, the project's, then the user's. The
- * project's files come from whatever folder the person opened, so each is opened without waiting for a writer, read
- * only when it is a regular file, and no further than one byte past its cap.
+ * project's files come from whatever folder the person opened, so each is opened only when its path names a regular
+ * file (a link to a serial port would toggle its DTR as it opens), then without waiting for a writer and never as a
+ * controlling terminal, checked a regular file again, and read no further than one byte past its cap.
  *
  * The user file is `settings.json` in the session's own Claude Code home, which its transcript path names
  * (`<home>/projects/<slug>/<id>.jsonl`): a session started with its own CLAUDE_CONFIG_DIR, such as an Orca account's,
@@ -18,7 +19,7 @@
  * session scrolls line by line, as before.
  */
 import { constants } from 'node:fs'
-import { open, type FileHandle } from 'node:fs/promises'
+import { open, stat, type FileHandle } from 'node:fs/promises'
 import { basename, dirname, extname, isAbsolute, join, normalize } from 'node:path'
 
 /** A settings file is about 1–10 KiB; a larger file is not read. */
@@ -60,13 +61,23 @@ export function settingsFiles(cwd: string, transcriptPath: string | undefined, o
   ]
 }
 
+/** The two calls readSettings makes of the file system. */
+export interface SettingsFs {
+  stat(path: string): Promise<{ isFile(): boolean }>
+  open(path: string, flags: number): Promise<FileHandle>
+}
+
 /** One file's text: none when it is missing, not a regular file, over SETTINGS_MAX_BYTES or unreadable. Never rejects. */
-export async function readSettings(path: string): Promise<string | undefined> {
+export async function readSettings(path: string, fs: SettingsFs = { stat, open }): Promise<string | undefined> {
   let file: FileHandle | undefined
   try {
-    // Non-blocking: a FIFO in a cloned project's .claude must not hold a thread waiting for a writer.
-    file = await open(path, constants.O_RDONLY | constants.O_NONBLOCK)
-    // A folder, a FIFO or a device such as /dev/zero is no settings file.
+    // Before it is opened: opening a device has effects of its own, such as a serial port's DTR.
+    if (!(await fs.stat(path)).isFile()) return undefined
+    // Non-blocking: a FIFO in a cloned project's .claude must not hold a thread waiting for a writer. No controlling
+    // terminal: a tty swapped in after the stat never becomes the devices'.
+    file = await fs.open(path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOCTTY)
+    // Again on what was opened: the path may name something else by now. A folder, a FIFO or a device such as
+    // /dev/zero is no settings file.
     if (!(await file.stat()).isFile()) return undefined
     // One byte past the cap tells a larger file from one exactly at it.
     const buffer = Buffer.alloc(SETTINGS_MAX_BYTES + 1)
