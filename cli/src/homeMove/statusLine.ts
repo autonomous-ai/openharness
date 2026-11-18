@@ -1,8 +1,9 @@
+import { legacyHarnessHome } from '../config/harnessHome.js'
 import type { Reason } from './conditions.js'
 import type { MoveRecord } from './record.js'
 
 // What is happening and what a person does, in plain words: the reason codes stay in the record and the log.
-const CLOSE_AGENTS = 'Harness\'s folders stay in ~/.harness until the agents close: close them, then run harness start.'
+const CLOSE_AGENTS = `Harness's folders stay in ${legacyHarnessHome('~', 'linux')} until the agents close: close them, then run harness start.`
 const SAYS: Record<Reason, string> = {
   'update-pending': 'Harness\'s folders move after this update settles.',
   'old-tmux': CLOSE_AGENTS,
