@@ -14,17 +14,18 @@
  * - paired, it starts the devices' process with the daemon, with no dial (core/devicesWake.ts), and what it
  *   sends while that process starts again is held by the gateway and answered.
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import type { ChildProcess } from 'node:child_process'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
+import { dirname, join } from 'node:path'
+import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { until } from './harness/daemon.js'
 import { Desk, devicesPids } from './harness/desk.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
 import { FakeWifiDevice } from './harness/fakeWifiDevice.js'
 import { startPhoneMachine, type PhoneMachine } from './harness/fleet.js'
+import { withFault } from './harness/release.js'
 
 const row = async (client: LocalClient, agentId: string) =>
   ((await client.request<{ agents: Array<Record<string, any>> }>('agents_list', {}, 30_000)).agents).find((agent) => agent.id === agentId)
@@ -33,6 +34,50 @@ const restarts = (w: PhoneMachine) => w.machine.daemon.log().split('\n').filter(
 const wifiConnections = (w: PhoneMachine) => w.machine.daemon.log().split('\n').filter((line) => line.includes('[services] wifi connected')).length
 
 describe('the Wi-Fi device with the dials', () => {
+  let build: string | undefined, scriptPath: string
+  beforeAll(() => {
+    const bundle = process.env.E2E_BUNDLE_PATH
+    if (!bundle) throw new Error('wifiDevice requires E2E_BUNDLE=1 or E2E_BUNDLE_PATH')
+    build = mkdtempSync(join(tmpdir(), 'wifi-desk-bundle-'))
+    scriptPath = join(build, 'cli.js')
+    // Deny only the old core gesture routes. The direct endpoint keeps its production fault boundary.
+    // This runs in both full and lean entries; no product hook or payload contents enter the trace.
+    const fault = `
+if (process.argv[2] === '__run' && process.env.NODE_ENV === 'test' && process.env.E2E_WIFI_DESK_ROOT) {
+  const fs = process.getBuiltinModule('node:fs'), path = process.getBuiltinModule('node:path');
+  const root = process.env.E2E_WIFI_DESK_ROOT, info = fs.statSync(root);
+  if (!path.isAbsolute(root) || fs.realpathSync(root) !== root || !info.isDirectory() || (info.mode & 0o077)
+    || (process.getuid && info.uid !== process.getuid())) throw new Error('INVALID_DESK_FIXTURE');
+  const trace = path.join(root, 'desk-routes'), flag = path.join(root, 'desk-routes-fault');
+  const parse = JSON.parse, stringify = JSON.stringify, refused = new Set();
+  const record = (route, denied = false) => fs.appendFileSync(trace, stringify({ route, denied, pid: process.pid }) + '\\n', { mode: 0o600 });
+  record('armed');
+  JSON.parse = function(...args) {
+    const frame = parse.apply(this, args), payload = frame?.payload;
+    const step = frame?.type === 'service_query' && payload?.query === 'stepFocus' && /^wifi-[0-9]+$/.test(payload.requestId);
+    const scroll = frame?.type === 'service_notice' && payload?.kind === 'scroll';
+    if (step || scroll) {
+      const denied = fs.existsSync(flag);
+      record(step ? 'stepFocus' : 'scroll', denied);
+      if (denied) {
+        if (step) {
+          if (refused.size >= 4) throw new Error('DESK_FIXTURE_LIMIT');
+          refused.add(payload.requestId); payload.query = 'fixture_desk_refused';
+        } else payload.kind = 'fixture_desk_refused';
+      }
+    }
+    return frame;
+  };
+  JSON.stringify = function(frame, ...args) {
+    if (frame?.type === 'service_query_result' && refused.delete(frame.payload?.requestId))
+      frame = { ...frame, payload: { requestId: frame.payload.requestId, step: 'no_agents' } };
+    return stringify.call(this, frame, ...args);
+  };
+}`
+    writeFileSync(scriptPath, withFault(readFileSync(bundle, 'utf8'), fault), { mode: 0o755 })
+    copyFileSync(join(dirname(bundle), 'notify.mjs'), join(build, 'notify.mjs'))
+  })
+  afterAll(() => { if (build) rmSync(build, { recursive: true, force: true }) })
   let world: PhoneMachine | undefined
   let device: FakeWifiDevice | undefined
   let window: LocalClient | undefined
@@ -82,13 +127,16 @@ describe('the Wi-Fi device with the dials', () => {
     return created.agent as { id: string; tmuxPane: string }
   }
 
-  const fresh = async (env: Record<string, string> = {}) => {
+  const fresh = async (env: Record<string, string> = {}, denyCoreGestures = false) => {
     // Owned before startup: startPhoneMachine cleans its resources if it fails, then this test removes ours.
-    dialsRoot = mkdtempSync(join(tmpdir(), 'wifi-dials-'))
+    dialsRoot = realpathSync(mkdtempSync(join(tmpdir(), 'wifi-dials-')))
     const dials = join(dialsRoot, 'dials.json')
     writeFileSync(dials, '[]')
-    const w = await startPhoneMachine({ wifiDevice: true, env: {
+    writeFileSync(join(dialsRoot, 'desk-routes'), '')
+    if (denyCoreGestures) writeFileSync(join(dialsRoot, 'desk-routes-fault'), '')
+    const w = await startPhoneMachine({ wifiDevice: true, scriptPath, env: {
       CABLE_DISABLE: 'false',
+      E2E_WIFI_DESK_ROOT: dialsRoot,
       HARNESSD_TEST_DIAL_PORT: dials,
       HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200',
       HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000',
@@ -128,6 +176,27 @@ describe('the Wi-Fi device with the dials', () => {
     client.send('app_swarms', { active: 't1', swarms: [{ id: 't1', name: 'Tab', agentIds, panes: agentIds.length }], tiles: [] })
     client.send('app_panes', { agentIds, foreground: true })
   }
+  type DeskRoute = { route: 'armed' | 'stepFocus' | 'scroll'; denied: boolean; pid: number }
+  const deskRoutes = (): DeskRoute[] => readFileSync(join(dialsRoot!, 'desk-routes'), 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as DeskRoute)
+  /** One agent makes the requested step unambiguous; still observe the actual window mutation. */
+  const gestures = async (client: LocalClient, d: FakeWifiDevice, agentId: string, key: string) => {
+    onTab(client, [agentId])
+    // This reply follows the desk notices on the devices link: no sleep guesses whether the tab arrived.
+    expect((await client.request('harness_devices_list')).error).toBeUndefined()
+    if ((await d.ask('focus.get')).focus?.agentId !== agentId) {
+      const since = d.mark()
+      client.send('app_focus', { agentId })
+      // The app echo is an actual focus observation, not a guessed revision in the test.
+      await d.nextEvent(e => e.kind === 'focus.changed' && e.payload?.focus?.agentId === agentId, 'gesture focus', since)
+    }
+    const focus = await d.ask('focus.get')
+    const fromFocus = client.frames.length
+    expect(await d.ask('focus.step', { direction: 'next', idempotencyKey: key, focusRevision: focus.focusRevision })).toMatchObject({ focus: { agentId } })
+    await client.waitFor(f => f.type === 'dial_focus' && f.payload?.agentId === agentId, 15_000, 'gesture dial_focus', fromFocus)
+    const fromScroll = client.frames.length
+    expect((await d.ask('scroll', { phase: 'move', dy: 7, velocity: 2 })).error).toBeUndefined()
+    await client.waitFor(f => f.type === 'dial_scroll' && f.payload?.phase === 'move' && f.payload?.dy === 7, 15_000, 'gesture dial_scroll', fromScroll)
+  }
   /** A prompt from the device, to its turn's end as the device hears it. */
   const deviceTurn = async (d: FakeWifiDevice, machineId: string, agentId: string, key: string, text: string) => {
     const since = d.mark()
@@ -153,7 +222,8 @@ describe('the Wi-Fi device with the dials', () => {
   // In the core's process too, with every service (`HARNESSD_SERVICES=none`): the same doors, called.
   it.each([['from the devices\' process', {}], ['from the core\'s own, with every service there', { HARNESSD_SERVICES: 'none' }]] as const)(
     'is answered %s as it was: its hello, its agents, a prompt and its receipt, a question, a window\'s focus', async (_where, env) => {
-    const { w, machine, window, agentId, device } = await fresh(env)
+    const cohost = !('HARNESSD_SERVICES' in env)
+    const { w, machine, window, agentId, device } = await fresh(env, cohost)
     const others = [await createAgent(w, window, 'question-b'), await createAgent(w, window, 'question-c')]
     const hello = await connect(device)
     expect(hello).toMatchObject({ type: 'hello_result', proto: 1, machineId: machine.machineId })
@@ -177,6 +247,10 @@ describe('the Wi-Fi device with the dials', () => {
     const focus = await device.nextEvent((e) => e.kind === 'focus.changed' && e.payload?.focus?.agentId === agentId, 'focus.changed', since)
     expect(focus.payload.focus).toMatchObject({ machineId: machine.machineId, agentId })
     expect((await device.ask('focus.get')).focus).toMatchObject({ agentId })
+    expect(deskRoutes()).toEqual([{ route: 'armed', denied: false, pid: machine.daemon.corePid() }])
+    await gestures(window, device, agentId, 'cohost-step')
+    // The default path works while the old core routes are denied; inline still uses its guarded port.
+    expect(deskRoutes()).toEqual([{ route: 'armed', denied: false, pid: machine.daemon.corePid() }])
     // No window, remote app or dial may supply question interest for this device.
     window.close()
     await until('the only window to close', () => window.closed || null, 10_000)
@@ -266,12 +340,33 @@ describe('the Wi-Fi device with the dials', () => {
   })
 
   it('paired, it starts the devices\' process with the daemon, and a hello it sends once while that process starts again is held and answered', async () => {
-    const { machine, agentId, device } = await fresh()
+    // Explicit mixed composition: this worker owns only Wi-Fi; devices remain inline in the core.
+    const { machine, window, agentId, device } = await fresh({ HARNESSD_SERVICES: 'wifi' }, true)
     const log = () => machine.daemon.log()
     // No dial here: its pairing asks for the process (core/devicesWake.ts).
     await until('the Wi-Fi device\'s service to connect', () => wifiConnections(world!) >= 1 || null, 30_000, 200)
     expect(log()).toContain('[devices] a paired Wi-Fi device: asking for the devices\' process')
     await connect(device)
+    const focus = await device.ask('focus.get'), beforeFocus = window.frames.filter(frame => frame.type === 'dial_focus').length
+    expect(await device.ask('focus.step', { direction: 'next', idempotencyKey: 'mixed-denied', focusRevision: focus.focusRevision }))
+      .toMatchObject({ error: { code: 'NO_AGENTS' } })
+    expect(window.frames.filter(frame => frame.type === 'dial_focus')).toHaveLength(beforeFocus)
+    expect(deskRoutes().filter(row => row.route === 'stepFocus')).toEqual([{ route: 'stepFocus', denied: true, pid: machine.daemon.corePid() }])
+    const beforeScroll = window.frames.filter(frame => frame.type === 'dial_scroll').length
+    expect((await device.ask('scroll', { phase: 'move', dy: 7, velocity: 2 })).error).toBeUndefined()
+    // A later view on the same Wi-Fi/core socket passes the denied notice; a window reply flushes its stream.
+    await device.ask('focus.get'); await window.request('harness_devices_list')
+    expect(window.frames.filter(frame => frame.type === 'dial_scroll')).toHaveLength(beforeScroll)
+    expect(deskRoutes().filter(row => row.route === 'scroll')).toEqual([{ route: 'scroll', denied: true, pid: machine.daemon.corePid() }])
+    rmSync(join(dialsRoot!, 'desk-routes-fault'))
+    // A new gesture after restoring the route: never replay the failed idempotency key.
+    await gestures(window, device, agentId, 'mixed-allowed')
+    expect(deskRoutes().filter(row => row.route !== 'armed')).toEqual([
+      { route: 'stepFocus', denied: true, pid: machine.daemon.corePid() },
+      { route: 'scroll', denied: true, pid: machine.daemon.corePid() },
+      { route: 'stepFocus', denied: false, pid: machine.daemon.corePid() },
+      { route: 'scroll', denied: false, pid: machine.daemon.corePid() },
+    ])
     for (const pid of devicesPids(machine.daemon)) process.kill(pid, 'SIGKILL')
     await until('the core to see the service go', () => log().includes('[services] wifi disconnected') || null, 15_000, 50)
     // One hello, no retry: held by the gateway while the process starts, handed on once its service is resumed.
