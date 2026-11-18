@@ -3,6 +3,7 @@ import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { harnessPath } from '../config/harnessHome.js'
 import { resolveBinaryOnPath } from './binaryOnPath.js'
 import { buildEngineLaunchArgv, commandAvailableInInteractiveShell, shellSingleQuote } from './engineLaunch.js'
 import type { EngineInstallRecipe } from './engineInstall.js'
@@ -19,7 +20,7 @@ afterEach(() => {
   for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
-const installLog = (home: string) => readFileSync(join(home, '.harness/logs/install-codex.log'), 'utf8')
+const installLog = (home: string) => readFileSync(join(harnessPath('logs', home), 'install-codex.log'), 'utf8')
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'harness-user-engine-'))
@@ -118,7 +119,7 @@ describe('engine installation for a fresh OS user', () => {
       expect(installLog(f.home)).toContain('trying the npm package instead')
       expect(result.stdout).toContain('ENGINE_READY:["argument with spaces"]')
       expect(existsSync(join(f.home, '.local/bin', f.name))).toBe(true)
-      expect(readdirSync(join(f.home, '.harness/logs')).filter((file) => file.endsWith('.rc'))).toEqual([])
+      expect(readdirSync(harnessPath('logs', f.home)).filter((file) => file.endsWith('.rc'))).toEqual([])
     })
   }
 

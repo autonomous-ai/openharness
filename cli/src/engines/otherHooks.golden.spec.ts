@@ -326,6 +326,9 @@ beforeAll(async () => {
   }
   mkdirSync(join(root, 'data'), { recursive: true })
   mkdirSync(join(root, 'runtime'), { recursive: true })
+  // A home Harness ran in before the XDG move (`~/.harness` is in it) while the modules resolve their paths, so the hooks
+  // name `<home>/.harness/…` and the record holds for every platform. The first install's reset empties the home again.
+  mkdirSync(join(home, '.harness'), { recursive: true })
   vi.resetModules()
   ;({ installEngineHooks } = await import('../core/engines/hooks.js') as unknown as { installEngineHooks: typeof installEngineHooks })
   const notify = await import('./kit/notifyHooks.js')

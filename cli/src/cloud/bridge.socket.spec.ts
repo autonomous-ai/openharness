@@ -4,6 +4,7 @@ import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { dirname, join } from 'node:path'
 import { randomBytes } from 'node:crypto'
+import { harnessPath } from '../config/harnessHome.js'
 import { bridgeKey, bridgePipeRecord, bridgeSocketPath, harnessKey, retireBridgeKey, rotateHarnessKey, KEY_GRACE_MS } from '../lib/connectors/agents.js'
 import { serveBridgePipe, serveBridgeSocket } from '../lib/connectors/bridge.js'
 import { writePrivate } from '../lib/connectors/store.js'
@@ -132,7 +133,7 @@ describe('cloud agents and the bridge', () => {
 
   it('a long vault\'s route is its short socket, and only a home too long as well is the port', () => {
     const long = new Store(join(home, 'x'.repeat(120)), env)
-    expect(bridgeSocketPath(long)).toMatch(/\/\.harness\/s\/[0-9a-f]{16}\/bridge\.sock$/)
+    expect(bridgeSocketPath(long)?.replace(/\/[0-9a-f]{16}\/bridge\.sock$/, '/<hash>/bridge.sock')).toBe(join(harnessPath('s'), '<hash>', 'bridge.sock'))
     expect(bridgeRoute(long).base).toMatch(/^http:\/\/connections\.invalid\//)
     vi.stubEnv('HOME', `/${'h'.repeat(120)}`)
     closers.push(() => vi.unstubAllEnvs())
@@ -148,7 +149,7 @@ describe('a long data folder\'s short socket', () => {
     vi.stubEnv('HOME', home)
     closers.push(() => vi.unstubAllEnvs())
     const path = unixSocketPath(data, hold.port)!
-    expect(path).toContain('/.harness/s/')
+    expect(dirname(dirname(path))).toBe(harnessPath('s', home))
     const heard: string[] = []
     const server = createServer((request, response) => { heard.push(String(request.url)); response.writeHead(200).end('{}') })
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 })

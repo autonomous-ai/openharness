@@ -1,7 +1,8 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { homedir, tmpdir } from 'node:os'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
+import { harnessPath } from '../config/harnessHome.js'
 import type { SpawnLockOwner } from './daemonSpawnLock.js'
 import type { ProcessRow } from './processTable.js'
 import {
@@ -171,18 +172,18 @@ describe("--if-down's view of this computer", () => {
       vi.resetModules()
       const { FLASHER_DIR } = await import('./flasherDir.js')
       const { processIfDownDeps: own } = await import('./startIfDown.js')
-      expect(FLASHER_DIR).toBe(join(homedir(), '.harness', 'flasher'))
+      expect(FLASHER_DIR).toBe(harnessPath('flasher'))
       expect(own('darwin').flashing()).toBe(false)
       expect(own('darwin').uninstalling()).toBe(false)
       const now = `${Math.floor(Date.now() / 1000)}\n`
       mkdirSync(FLASHER_DIR, { recursive: true })
       writeFileSync(join(FLASHER_DIR, 'flashing'), now)
-      writeFileSync(join(homedir(), '.harness', 'uninstalling'), now)
+      writeFileSync(harnessPath('uninstalling'), now)
       expect(own('darwin').flashing()).toBe(true)
       expect(own('darwin').uninstalling()).toBe(true)
     } finally {
-      rmSync(join(homedir(), '.harness', 'flasher', 'flashing'), { force: true })
-      rmSync(join(homedir(), '.harness', 'uninstalling'), { force: true })
+      rmSync(join(harnessPath('flasher'), 'flashing'), { force: true })
+      rmSync(harnessPath('uninstalling'), { force: true })
       if (cache !== undefined) process.env.HARNESS_FLASHER_CACHE = cache
       vi.resetModules()
     }

@@ -2,10 +2,12 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { harnessPath } from '../config/harnessHome.js'
 import { inheritedAccountDataFolder } from './homeDataFolder.js'
 
 const ACCOUNT = '/Users/real'
-const REAL_DATA = '/Users/real/.harness/cli/data'
+// The account's data folder where the rule puts it: no folder exists under ACCOUNT, so on Linux that is the XDG data root.
+const REAL_DATA = join(harnessPath('cli', ACCOUNT), 'data')
 
 describe('an ADAPTER_DATA_DIR inherited from the account under another HOME', () => {
   it('is recognised: the account\'s own folder while HOME is a throwaway', () => {
@@ -40,6 +42,21 @@ describe('real locations', () => {
       symlinkSync(account, link)
       expect(inheritedAccountDataFolder({ HOME: link, ADAPTER_DATA_DIR: join(account, '.harness', 'cli', 'data') }, account, 'darwin')).toBe(false)
       expect(inheritedAccountDataFolder({ HOME: join(base, 'other'), ADAPTER_DATA_DIR: join(link, '.harness', 'cli', 'data') }, account, 'darwin')).toBe(true)
+    } finally { rmSync(base, { recursive: true, force: true }) }
+  })
+})
+
+describe('a Linux account whose roots moved to XDG', () => {
+  it.runIf(process.platform === 'linux')('a folder in either root is the account\'s', () => {
+    const base = mkdtempSync(join(tmpdir(), 'home-data-folder-'))
+    try {
+      const account = join(base, 'account')
+      const data = join(account, '.local', 'share', 'harness', 'cli', 'data')
+      mkdirSync(data, { recursive: true })
+      const throwaway = { HOME: join(base, 'throwaway') }
+      expect(inheritedAccountDataFolder({ ...throwaway, ADAPTER_DATA_DIR: data }, account)).toBe(true)
+      expect(inheritedAccountDataFolder({ ...throwaway, ADAPTER_DATA_DIR: join(account, '.local', 'state', 'harness', 'run') }, account)).toBe(true)
+      expect(inheritedAccountDataFolder({ ...throwaway, ADAPTER_DATA_DIR: join(account, '.local', 'share', 'other') }, account)).toBe(false)
     } finally { rmSync(base, { recursive: true, force: true }) }
   })
 })
