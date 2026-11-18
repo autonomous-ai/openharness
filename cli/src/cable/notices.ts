@@ -10,6 +10,8 @@ import { roundDrawable } from './roundGlyphs.js'
 
 export interface NoticeCaller {
   agentId: string
+  /** What finds its agent again after a restart (noticeKeys); none for a caller no list holds. */
+  keys: readonly string[]
   /** The host its app is named by; '' when nothing says. */
   host: string
   /** Only for a caller no list holds: what its card carries. */
@@ -27,6 +29,10 @@ export interface NoticesDeps {
   close(agentId: string, id: string): void
   uuid(): string
   now(): number                    // monotonic ms
+  /** Wall-clock ms: when a card was shown must still mean something to the next start. */
+  clock(): number
+  /** The pending set changed: its file is written again (noticeFile.ts). */
+  changed(): void
   /** Each answer, by the caller's engine (`agent` when it names none), for the day's tally. */
   count(engine: 'claude' | 'codex' | 'agent', result: NoticeResult): void
 }
@@ -51,12 +57,20 @@ export interface StoredNotice {
   at: number
 }
 
+/** An agent's keys as its list entry holds them now: its session first, which names it alone, then its panes. */
+export function noticeKeys(agent: { engine: string; sessionId?: string; paneKeys?: readonly string[] }): string[] {
+  const session = agent.sessionId ? [`${agent.engine}:${agent.sessionId}`] : []
+  return [...session, ...agent.paneKeys ?? []].filter((key) => key.length <= NOTICE_KEY_MAX_CHARS).slice(0, NOTICE_KEYS_MAX)
+}
+
 /** The line within NOTICE_LINE_MAX_BYTES, cut between letters, with `…` when cut. */
 const fitBytes = (line: string): string => Buffer.byteLength(line) <= NOTICE_LINE_MAX_BYTES
   ? line
   : `${truncateUtf8(line, NOTICE_LINE_MAX_BYTES - Buffer.byteLength('…'))}…`
 
-interface Pending { id: string; line: string; questions: unknown; host: string; who?: NoticeCaller['who'] }
+interface Pending {
+  id: string; line: string; questions: unknown; host: string; who?: NoticeCaller['who']; keys: readonly string[]; at: number
+}
 
 export class Notices {
   // One card an agent, oldest first: a Map keeps insertion order, and a replaced card is put back at the end.
@@ -82,7 +96,9 @@ export class Notices {
     const id = SHOWN_ONLY_PREFIX + this.deps.uuid()
     const line = fitBytes(roundDrawable(ask.text))
     const questions = [{ key: 'notice', q: line, options: [`In ${hostDisplayName(caller.host)}`] }]
-    this.cards.set(caller.agentId, { id, line, questions, host: caller.host, who: caller.who })
+    this.cards.set(caller.agentId,
+      { id, line, questions, host: caller.host, who: caller.who, keys: caller.keys, at: this.deps.clock() })
+    this.deps.changed()
     this.reask(caller.agentId)
     return answer('shown')
   }
@@ -92,6 +108,7 @@ export class Notices {
     const card = this.cards.get(agentId)
     if (!card) return
     this.cards.delete(agentId)
+    this.deps.changed()
     this.deps.close(agentId, card.id)
   }
 
@@ -123,6 +140,12 @@ export class Notices {
   /** Whether that agent's card is still pending, asked or held back. */
   pending(agentId: string): boolean {
     return this.cards.has(agentId)
+  }
+
+  /** Every pending card as its file keeps it, oldest first. */
+  stored(): StoredNotice[] {
+    return [...this.cards].map(([agentId, { keys, id, line, host, who, at }]) =>
+      ({ agentId, keys: [...keys], id, line, host, ...(who && { who }), at }))
   }
 
   /** Who a pending notice's caller is, when no list holds it. */

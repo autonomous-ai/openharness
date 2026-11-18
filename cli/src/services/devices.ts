@@ -63,7 +63,8 @@ import { readForeground, readProcessParents, vscodeStreams, type VscodeTerminals
 import { createWeztermAdapter } from '../cable/hosts/wezterm.js'
 import { createEngineTally } from '../cable/engineTally.js'
 import { createVscodeExtensionSetup } from '../cable/vscodeExtensionSetup.js'
-import { Notices, type NoticeCaller } from '../cable/notices.js'
+import { NoticeFile, NOTICES_FILE } from '../cable/noticeFile.js'
+import { noticeKeys, Notices, type NoticeCaller } from '../cable/notices.js'
 import { NOTIFY_MODE_FILE, NotifyModeStore, type NotifyMode } from '../cable/notifyMode.js'
 import { PetStore } from '../cable/pets/store.js'
 import { DialLog } from '../cable/dialLog.js'
@@ -1186,15 +1187,16 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** Whose notice it is, read from what the devices hold, with no wait: the listener gives a connection 2 s. */
   const noticeCaller = ({ engine, sessionId, folder }: NoticeAsk): NoticeCaller => {
     const who = { name: folder ?? 'An agent', machine: core.machine.name() }
-    if (!engine || !sessionId) return { agentId: observedAgentId('notify', folder ?? ''), host: '', who: { ...who, engine: '' } }
+    if (!engine || !sessionId) return { agentId: observedAgentId('notify', folder ?? ''), keys: [], host: '', who: { ...who, engine: '' } }
     // A Harness agent first, by the session the core bound to it: an outside source lists its session too until the
     // dial's list is read again.
     const own = core.agents.advertised().find((session) => session.engine === engine && session.sessionId === sessionId)
-    if (own) return { agentId: own.agentId, host: 'harness' }
+    if (own) return { agentId: own.agentId, keys: noticeKeys(own), host: 'harness' }
     const entry = outsideEntries().find(({ agent }) => agent.engine === engine && agent.sessionId === sessionId)
-    if (entry) return { agentId: entry.agent.id, host: entry.agent.host }
-    return { agentId: observedAgentId(engine, sessionId), host: '', who: { ...who, engine } }
+    if (entry) return { agentId: entry.agent.id, keys: noticeKeys(entry.agent), host: entry.agent.host }
+    return { agentId: observedAgentId(engine, sessionId), keys: [], host: '', who: { ...who, engine } }
   }
+  const noticeFile = new NoticeFile({ file: join(core.dataDir, NOTICES_FILE), cards: () => notices.stored(), after: timerIn('notices'), log })
   // Typed, or its type would be read from itself: the cable host's wiring reads it, and it reads the cable built on that host.
   const notices: Notices = new Notices({
     connected: () => cable.isConnected,
@@ -1205,6 +1207,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     close: (agentId, id) => inOrder(agentId, () => { void cable.questionClose(agentId, id) }),
     uuid: randomUUID,
     now: monotonic,
+    clock: Date.now,
+    changed: () => noticeFile.changed(),
     count: createEngineTally('[device] notify', ['claude', 'codex', 'agent'], ['shown', 'no dial', 'limited'], log),
   })
   /** That agent's next turn started, a tap opened it, or it left: its card goes. */
@@ -1927,6 +1931,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     stop: async () => {
       // A cable still waiting on the listener never starts, and a stroke's answer landing from here on sends nothing.
       stopped = true
+      // A stop is not an ending: the detach below and a listing source's emptied list end cards in memory, and the next
+      // start must still find them, so the file takes what was waiting and nothing after.
+      part.call('notices', () => noticeFile.close())
       herdrApp.stop()
       // The listener before anything, once it has opened: no front reaches a stopped cable or sets a timer after the
       // timers below are cleared.
