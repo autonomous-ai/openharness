@@ -239,7 +239,7 @@ it('reports a non-Error dependency failure and still prepares the other bundled 
   const failure = vi.spyOn(packageLock, 'lockDsh').mockImplementationOnce(() => { throw 'lock backend unavailable' })
   try {
     expect(ensureBundledCoreHarnesses({ hachi: false }, log)).toBe(false)
-    expect(log).toHaveBeenCalledExactlyOnceWith('[core-harnesses] Could not prepare Model Manager: lock backend unavailable')
+    expect(log).toHaveBeenCalledExactlyOnceWith('[core-harnesses] Could not prepare Model Manager: string')
     expect(installedDsh(MODEL_MANAGER_ID)).toBeUndefined()
     expect(installedDsh(DEVICES_HARNESS_ID)).toBeDefined()
     expect(installedDsh(HARNESS_MONITOR_ID)).toBeDefined()

@@ -388,7 +388,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
       await until('the restarted core to bind', () => supervisor.status().state === 'running' && ups.length === 2)
       expect(ups).toEqual([process.execPath, process.execPath])
       expect(logged.mock.calls.map(([line]) => String(line)).filter((line) => line.includes('after its core came up'))).toEqual([
-        expect.stringMatching(/\[harnessd\] what the master does after its core came up failed: the launcher is read-only$/)])
+        expect.stringMatching(/\[harnessd\] what the master does after its core came up failed: Error$/)])
       signals.get('SIGTERM')!()
       await until('the master to finish', () => exits.length > 0)
       expect(exits).toEqual([0])
@@ -416,7 +416,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
     })
     try {
       await until('the core to be running', () => supervisor.status().state === 'running')
-      expect(log.mock.calls.map((call) => String(call[0]))).toContainEqual(expect.stringContaining('[harnessd] could not write the pid file: ENOENT'))
+      expect(log.mock.calls.map((call) => String(call[0]))).toContainEqual(expect.stringMatching(/\[harnessd\] could not write the pid file: ENOENT$/))
       signals.get('SIGTERM')!()
       await until('the master to finish', () => exits.length > 0)
       expect(exits).toEqual([0])

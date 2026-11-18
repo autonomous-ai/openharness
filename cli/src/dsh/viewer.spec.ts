@@ -480,7 +480,7 @@ describe('DshViewerManager, the rest of a viewer\'s life', () => {
     const viewerLines = logs.filter((line) => line.startsWith('[dsh] acme/thing viewer printed '))
     expect(viewerLines).toEqual(printed.slice(0, 40).map((line) => `[dsh] acme/thing viewer printed a line of ${line.length} chars`))
     expect(logs.join('\n')).not.toContain('SECRET')
-    expect(logs).toContain('[dsh] acme/thing viewer could not start · spawn EACCES')
+    expect(logs).toContain('[dsh] acme/thing viewer could not start · Error')
   })
 
   it('names a watcher close timeout and completes its stop within the cleanup deadline', async () => {
@@ -651,7 +651,7 @@ describe('DshViewerManager, the rest of a viewer\'s life', () => {
     it('a viewer whose process could not be started, or that found no port, closes its watch', async () => {
       const failing = setup({ waitForPort: async () => { failing.spawned[0].emit('error', new Error('spawn EACCES')); return false } })
       await failing.manager.start('a1', watched(), workspace)
-      expect(failing.logs).toContain('[dsh] acme/thing viewer could not start · spawn EACCES')
+      expect(failing.logs).toContain('[dsh] acme/thing viewer could not start · Error')
       expect(watchers[0].closed).toBe(true)
       const noPort = setup({ freePort: async () => { throw new Error('EMFILE') } })
       await noPort.manager.start('a2', watched(), workspace)
@@ -695,7 +695,7 @@ describe('DshViewerManager, the rest of a viewer\'s life', () => {
     const inner = (manager as unknown as { states: Map<string, { watcher: EventEmitter }> }).states.get('a1')!.watcher
     inner.emit('error', new Error('EMFILE'))
     inner.emit('error', 'lost')
-    expect(logs.filter((line) => line.includes('artifact watch error'))).toEqual(['[dsh] artifact watch error · EMFILE', '[dsh] artifact watch error · lost'])
+    expect(logs.filter((line) => line.includes('artifact watch error'))).toEqual(['[dsh] artifact watch error · Error', '[dsh] artifact watch error · string'])
 
     // a stop with a rescan still pending cancels it, and a watcher that fails to close does not fail the stop
     const state = (manager as unknown as { states: Map<string, { rescanTimer: unknown; watcher: { close: () => Promise<void> } }> }).states.get('a1')!
@@ -707,6 +707,7 @@ describe('DshViewerManager, the rest of a viewer\'s life', () => {
     await settle(500)
     expect(urls.at(-1)).toBeNull()
     expect(urls.filter((url) => url?.endsWith('newest.step'))).toEqual([])
+    expect(logs).toContain('[viewers] VIEWER_WATCH_CLOSE_FAILED · Error')
   }, 20_000)
 
   it('runs a real viewer through the user\'s shell, on the port it was given, and stops it', async () => {

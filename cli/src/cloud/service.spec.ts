@@ -49,13 +49,13 @@ const bridge = (connections: unknown[] = []): Bridge => ({
   api: vi.fn(async () => ({ status: 200, json: {} })),
 })
 
-function start(adapters: Record<string, CloudAdapter>, given = bridge()) {
+function start(adapters: Record<string, CloudAdapter>, given = bridge(), log: (line: string) => void = () => {}) {
   return startCloudService({
     dataDir, core: doors as unknown as CloudCore, bridge: given, adapters: adapters as never,
     now: () => clock,
     setTimer: (fn, ms) => { const id = nextTimer++; timers.set(id, { fn, ms }); return id },
     clearTimer: (id) => { timers.delete(id as number) },
-    log: () => {},
+    log,
   })
 }
 
@@ -160,7 +160,8 @@ describe('a cloud harness', () => {
   it('says why it cannot reach its maker and looks again later', async () => {
     const devin = maker({ poll: vi.fn(async () => { throw new CloudError('RATE_LIMITED', 'Devin Cloud is busy.') }) })
     const fo = maker({ id: 'fo', poll: vi.fn(async () => { throw new Error('socket') }) })
-    const service = start({ 'devin-cloud': devin, fo })
+    const lines: string[] = []
+    const service = start({ 'devin-cloud': devin, fo }, bridge(), (line) => lines.push(line))
     await service.port.create({ engine: 'devin-cloud', prompt: 'fix it', repository: 'acme/api' })
     await tick()
     expect(published()[0].activity).toBe('Devin Cloud is busy.')
@@ -168,6 +169,8 @@ describe('a cloud harness', () => {
     await service.port.create({ engine: 'fo', prompt: 'book a haircut' })
     await tick()
     expect(published().find((harness) => harness.agent === 'fo')!.activity).toBe('Fo could not be reached.')
+    expect(lines).toContainEqual(expect.stringMatching(/ look failed \(1\): CloudError RATE_LIMITED$/))
+    expect(lines).toContainEqual(expect.stringMatching(/ look failed \(1\): Error$/))
   })
 
   it('takes words and refuses them when its maker does', async () => {

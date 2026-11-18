@@ -233,7 +233,7 @@ describe('DshVerdictWatcher, event by event', () => {
     const logs: string[] = []
     watcher = new DshVerdictWatcher({ onChange: () => undefined, log: (line) => logs.push(line) })
     watcher.watch('a', join(workspace, 'plain-file', '.harness', 'verdict.json'))
-    expect(logs).toEqual([expect.stringMatching(/^\[dsh\] verdict dir .*plain-file\/\.harness could not be created · ENOTDIR/)])
+    expect(logs).toEqual(['[dsh] verdict dir could not be created · ENOTDIR'])
     expect(watcher.current('a')).toBeNull()
     // and with no log at all, still no throw
     new DshVerdictWatcher({ onChange: () => undefined }).watch('b', join(workspace, 'plain-file', 'x', 'verdict.json'))
@@ -245,7 +245,7 @@ describe('DshVerdictWatcher, event by event', () => {
     watcher.watch('a', join(workspace, '.harness', 'verdict.json'))
     innerWatcher(watcher, 'a').emit('error', new Error('EMFILE: too many open files'))
     innerWatcher(watcher, 'a').emit('error', 'a string')
-    expect(logs).toEqual(['[dsh] verdict watch error · EMFILE: too many open files', '[dsh] verdict watch error · a string'])
+    expect(logs).toEqual(['[dsh] verdict watch error · Error', '[dsh] verdict watch error · string'])
     // with nowhere to log, an error is still not a throw
     const quiet = new DshVerdictWatcher({ onChange: () => undefined })
     quiet.watch('q', join(workspace, 'q', 'verdict.json'))
