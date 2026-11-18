@@ -1,10 +1,12 @@
-// The bar: the page the model shows, the edge light over it while Attention is up, and the toast.
+// The bar: the page the model shows, the edge light over it while Attention is up, and the toast. A new page fades in
+// over the last as the mockup's go() and its .page transition do.
 import 'package:flutter/widgets.dart';
 
 import '../model/bar_model.dart';
 import '../model/types.dart';
 import 'overlays/edge_light.dart';
 import 'overlays/toast_overlay.dart';
+import 'overview/motion.dart';
 import 'pages/agent_page.dart';
 import 'pages/ambient_page.dart';
 import 'pages/apps_page.dart';
@@ -20,7 +22,7 @@ class BarScreen extends StatelessWidget {
   Widget build(BuildContext context) => ListenableBuilder(
         listenable: model,
         builder: (context, _) => Stack(fit: StackFit.expand, children: [
-          _page(),
+          FadeSwitch(child: KeyedSubtree(key: ValueKey(model.page), child: _page())),
           if (model.page == BarPage.attention) EdgeLight(model: model),
           ToastOverlay(model: model),
         ]),
