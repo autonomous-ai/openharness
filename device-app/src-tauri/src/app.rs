@@ -532,10 +532,11 @@ impl App {
         self.state.cli == CliState::Installing || self.login.is_some()
     }
 
-    /// The relaunch would also cut short a daemon start or what the window shows, so it waits for them too; a check
-    /// does not, as the first launch's window is open right after the CLI install.
+    /// The relaunch would also cut short a daemon start, what the window shows or an Orca run midway through the
+    /// plugin's folder, so it waits for them too, an Orca run at most its 30 s or 120 s deadline; a check does not, as
+    /// the first launch's window is open right after the CLI install.
     fn relaunch_waits(&self) -> bool {
-        self.running() || self.keep.starting() || self.window.is_some()
+        self.running() || self.keep.starting() || self.window.is_some() || self.orca.running.is_some()
     }
 
     /// Only a button the window shows does something, so a second click on one that started a run does nothing.
