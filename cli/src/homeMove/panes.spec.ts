@@ -16,21 +16,19 @@ vi.mock('node:child_process', async (original) => ({ ...await original<typeof im
 
 /**
  * A tmux that lists [panes] as given, sets a tag on any pane but the [gone] ones, which it refuses, and the [closed] ones,
- * which closed after the listing and are no longer listed by id, and records every call.
+ * which close as their tag is set and are listed no more, and records every call.
  */
 function fakeTmux({ version = 'tmux 3.4', panes = '', gone = [] as string[], closed = [] as string[], installed = true, server = true } = {}) {
   const calls: string[][] = []
+  const shut = new Set<string>()
   const run = (args: string[]): { status: number | null; stdout: string } => {
     calls.push(args)
     if (!installed) return { status: null, stdout: '' }
     if (args[0] === '-V') return { status: 0, stdout: `${version}\n` }
     if (!server) return { status: 1, stdout: '' }
-    if (args[0] === 'list-panes' && args[3] === '#{pane_id}') {
-      const ids = panes.split('\n').filter(Boolean).map((line) => line.split('|')[0])
-      return { status: 0, stdout: ids.filter((id) => !closed.includes(id)).map((id) => `${id}\n`).join('') }
-    }
-    if (args[0] === 'list-panes') return { status: 0, stdout: panes }
-    if (args[0] === 'set-option') return { status: gone.includes(args[3]) || closed.includes(args[3]) ? 1 : 0, stdout: '' }
+    if (args[0] === 'list-panes') return { status: 0, stdout: panes.split('\n').filter((line) => !shut.has(line.split('|')[0])).join('\n') }
+    if (args[0] === 'set-option' && closed.includes(args[3])) shut.add(args[3])
+    if (args[0] === 'set-option') return { status: gone.includes(args[3]) || shut.has(args[3]) ? 1 : 0, stdout: '' }
     return { status: 1, stdout: '' }
   }
   return { calls, run }

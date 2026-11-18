@@ -45,16 +45,16 @@ export function defaultTmux(run: Run = onDefaultServer): Tmux {
       // Before 3.0 a pane has no options, and the move waits while one carries the tag in its start command
       // (conditions.ts): what lists the tag there is a window's, which `set-option -p` cannot reach.
       if (!hasPaneOptions(version())) return []
+      const listing = (): [id: string, tag: string][] => lines(['list-panes', '-a', '-F', `#{pane_id}|${paneOwnerFormat(true)}`])
+        .map((line) => [line.slice(0, line.indexOf('|')), line.slice(line.indexOf('|') + 1)])
       const ids: string[] = []
-      for (const line of lines(['list-panes', '-a', '-F', `#{pane_id}|${paneOwnerFormat(true)}`])) {
-        const at = line.indexOf('|')
-        const id = line.slice(0, at)
-        if (line.slice(at + 1) !== from) continue
+      for (const [id, tag] of listing()) {
+        if (tag !== from) continue
         // In the journal first: a crash between the two leaves a pane the rollback sets back, never one it does not know.
         journal.add({ did: 'pane', id })
         if (!setTag(id, to)) {
           // A pane that closed since the listing runs nothing that could use an old path.
-          if (!lines(['list-panes', '-a', '-F', '#{pane_id}']).includes(id)) continue
+          if (!listing().some(([listed]) => listed === id)) continue
           throw new Error(`tmux could not retag pane ${id}`)
         }
         ids.push(id)
