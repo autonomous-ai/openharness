@@ -713,7 +713,10 @@ test('a send that fails is sent once more 1 s later; if that fails too it is log
   w.replies.push(500, null)
   w.dial.front([H(1)])
   await w.until(() => w.due().includes(1_000))
-  assert.deepEqual([w.posts.length, w.logs], [1, []])
+  // The same ids during the wait, as a tab renamed sends them, wait for the retry too.
+  w.dial.front([H(1)])
+  await answered()
+  assert.deepEqual([w.posts.length, w.logs, w.due()], [1, [], [1_000]])
   w.to(1_000)
   await w.until(() => w.logs.length > 0)
   w.to(60_000)
@@ -745,6 +748,15 @@ test("a newer front() during the wait is sent at once, and the older one's retry
   w.to(5_000)
   await answered()
   assert.deepEqual([bodies(w), w.logs, w.timers.size], [[fronted(H(1)), fronted(H(2))], [], 0])
+
+  // Back to the ids the devices took: nothing to send, and the refused one's retry is not sent either.
+  w.replies.push(500)
+  w.dial.front([H(3)])
+  await w.until(() => w.due().includes(6_000))
+  w.dial.front([H(2)])
+  w.to(10_000)
+  await answered()
+  assert.deepEqual([bodies(w), w.logs, w.timers.size], [[fronted(H(1)), fronted(H(2)), fronted(H(3))], [], 0])
 })
 
 test('the stream ending during the wait cancels the retry: nothing more is sent or logged', async () => {
@@ -776,6 +788,18 @@ test('sends never overlap: front() calls while one is in flight send only the la
   await w.until(() => w.posts.length === 2)
   await answered()
   assert.deepEqual(bodies(w), [fronted(H(1)), fronted(H(3))])
+
+  // One that fails once a newer one waits is neither sent again nor logged: the newer goes at once.
+  let refuse: (status: number) => void = () => {}
+  w.replies.push(new Promise((done) => (refuse = done)))
+  w.dial.front([H(4)])
+  await w.until(() => w.posts.length === 3)
+  w.dial.front([H(5)])
+  refuse(500)
+  await answered()
+  w.to(5_000)
+  await answered()
+  assert.deepEqual([bodies(w).slice(2), w.logs, w.timers.size], [[fronted(H(4)), fronted(H(5))], [], 0])
 })
 
 test('a send with no answer in 2 s is aborted and counts as failed', async () => {
@@ -835,6 +859,9 @@ test('on Windows, and after stop(), front() posts nothing and throws nothing; st
   waiting.w.replies.push(500)
   waiting.w.dial.front([H(1)])
   await waiting.w.until(() => waiting.w.due().includes(1_000))
-  await waiting.w.dial.stop()
+  // From the call of stop(), though the stream ends a moment after it.
+  const stopping = waiting.w.dial.stop()
+  waiting.w.dial.front([H(2)])
+  await stopping
   assert.deepEqual([waiting.w.posts.length, waiting.w.timers.size], [1, 0])
 })
