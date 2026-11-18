@@ -1710,6 +1710,27 @@ describe('cable session', () => {
     await session.stop()
   })
 
+  it('holds a huge velocity to the bound, logging it as a bounded report', async () => {
+    // hn plays a fling's velocity as an f32 (tui/src/dial.rs): `"v":1e300` is Infinity there, a fling that never
+    // decays. Every dial firmware caps its speed at 6000 px/s, so the bound takes nothing from a real throw.
+    const lines: string[] = []
+    const host = makeHost({ log: (line) => lines.push(line) })
+    const { session, port } = await connect(host)
+    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    await settle()
+
+    port.sayText('{"t":"scroll","phase":"down","dy":0}')
+    port.sayText('{"t":"scroll","phase":"up","dy":0,"v":1e300}')
+    port.sayText('{"t":"scroll","phase":"down","dy":0}')
+    port.sayText('{"t":"scroll","phase":"up","dy":0,"v":-6000}')
+    await settle()
+
+    expect(host.scrolled).toHaveBeenNthCalledWith(2, 'up', 0, 10_000)
+    expect(host.scrolled).toHaveBeenNthCalledWith(4, 'up', 0, -6000)
+    expect(lines.filter((line) => line.startsWith('cable: scroll'))).toHaveLength(1)
+    await session.stop()
+  })
+
   it('drops a stroke whose phase is not one of the three', async () => {
     // The dial is the only thing that speaks this today, but the decoder hands up whatever arrives, and a
     // phase nobody understands must not reach the window as a drag it can never close.
