@@ -389,14 +389,15 @@ describe('hook notify terminal scope', () => {
   })
 
   // CI 44381432197 (Linux): the hook paused while it read the time, its fired time came out before its turn's opening
-  // record, and the daemon held that turn's end for 2 minutes. A pause of 30 ms between two clock reads moves nothing.
+  // record, and the daemon held that turn's end for 2 minutes. A pause between two clock reads moves nothing: 10 s, longer
+  // than any start of the hook here, so a fired time taken from two reads always lands before the hook was started.
   it('says when its engine ran it however long the hook pauses while it reads the time', async () => {
     const { port, firedAts } = await collect()
     const recordings = JSON.parse(readFileSync(new URL('./lib/__fixtures__/prompt-hooks.json', import.meta.url), 'utf8'))
     const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-paused-'))
     tmpDirs.push(dir)
     const preload = join(dir, 'paused.mjs')
-    writeFileSync(preload, 'const uptime = process.uptime\nprocess.uptime = () => uptime() + 0.03\n')
+    writeFileSync(preload, 'const uptime = process.uptime\nprocess.uptime = () => uptime() + 10\n')
     const before = Date.now()
     await runHook({ port, engine: 'claude', tmuxPane: '%42', input: recordings.claude.input,
       env: { NODE_OPTIONS: `--import ${pathToFileURL(preload).href}` } })
