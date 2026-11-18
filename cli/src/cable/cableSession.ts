@@ -209,15 +209,18 @@ function clipUtf8(text: string, max: number): string {
  * carried in a drawer stays read; and a window's question text, a plan of kilobytes, made the drawer frame too big to
  * send, every question it carried with it (2026-11-18). It is cut sooner where its JSON passes twice `max`, a field of
  * quotes: JSON writes a control character six bytes wide, and eight rows of them passed the frame cap. Folding them
- * instead changed the words of a question the dial had filed with them, and a read question came back unread.
+ * instead changed the words of a question the dial had filed with them, and a read question came back unread. Half an
+ * emoji is written '?', as the dial writes a byte it cannot read: JSON escapes it, and the dial's parser refuses the
+ * whole frame for it.
  */
 function dialText(text: string, max: number): string {
   let out = ''
   let bytes = 0
   let width = 0
   let space = false
-  for (const ch of text) {
-    if (ch === ' ' || (ch >= '\t' && ch <= '\r')) { space = bytes > 0; continue }
+  for (const char of text) {
+    if (char === ' ' || (char >= '\t' && char <= '\r')) { space = bytes > 0; continue }
+    const ch = /[\ud800-\udfff]/u.test(char) ? '?' : char
     const gap = space ? 1 : 0
     const size = Buffer.byteLength(ch, 'utf8')
     const wide = ch === '"' || ch === '\\' ? 2 : ch < ' ' ? 6 : size
@@ -230,10 +233,11 @@ function dialText(text: string, max: number): string {
   return out
 }
 
-/** Whether the dial keeps a drawer row of this agent: it skips an id of ID_MAX (48 B) or more, and one with a control
- *  character could never be matched back to an agent. */
+/** Whether the dial keeps a drawer row of this agent: it skips an id of ID_MAX (48 B) or more. One with a control
+ *  character or half an emoji is left out too: JSON writes the first six bytes wide, past the room eight rows have,
+ *  and the dial's parser refuses the whole frame for the second. No agent's id holds either. */
 function dialKeepsId(agentId: string): boolean {
-  return Buffer.byteLength(agentId, 'utf8') < 48 && !/[\u0000-\u001f\u007f]/.test(agentId)
+  return Buffer.byteLength(agentId, 'utf8') < 48 && !/[\u0000-\u001f\ud800-\udfff]/u.test(agentId)
 }
 
 /**
