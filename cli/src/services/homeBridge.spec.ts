@@ -15,7 +15,7 @@ import { writeMoveRecord, type MoveRecord } from '../homeMove/record.js'
 import { harnessPaneOwner } from '../lib/harnessSessionLabel.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { isolatedTmux } from '../testing/isolatedTmux.js'
-import { CHECK_MS, startHomeBridge, startHomeBridgeInCore, type HomeBridgeDeps } from './homeBridge.js'
+import { askForStore, CHECK_MS, startHomeBridge, startHomeBridgeInCore, type HomeBridgeDeps } from './homeBridge.js'
 
 const MOVED_AT = 1_700_001_234.56
 /** A minute before the move. */
@@ -92,7 +92,7 @@ function handed(h: Home, over: Partial<HomeBridgeDeps> = {}) {
   const log = vi.fn()
   const deps: Partial<HomeBridgeDeps> = {
     platform: 'linux', home: h.home, environment: { HOME: h.home, HARNESS_CONNECTIONS_DIR: h.connections }, socket: h.socket,
-    rows: () => [], tmux: () => ({ status: 1, stdout: '' }), setupsPending: async () => 0, log, ...over,
+    rows: () => [], tmux: () => ({ status: 1, stdout: '' }), setupsPending: async () => 0, askForStore: async () => {}, log, ...over,
   }
   return { log, given: Object.fromEntries(Object.entries(deps).filter(([, value]) => value !== undefined)) as Partial<HomeBridgeDeps> }
 }
@@ -262,9 +262,57 @@ describe('the home bridge service', () => {
     expect(lstatSync(join(h.oldHome, 'cli')).isSymbolicLink()).toBe(true)
     expect(record(h)).toMatchObject({ state: 'bridged', oldProcesses: count })
     // An old user keeps the bridge whatever the Store says.
-    expect(setupsPending).not.toHaveBeenCalled()
+    expect(setupsPending).toHaveBeenCalledOnce()
     expect(log).not.toHaveBeenCalled()
     bridge.stop()
+  })
+
+  it('while a harness waits to be set up again each check asks for the Store, once, old users running or not', async () => {
+    fakeInterval()
+    const h = movedHome()
+    const askForStore = vi.fn(async () => {})
+    let users = [row({ name: 'claude' })]
+    const { bridge, log } = start(h, { rows: () => users, setupsPending: async () => 2, askForStore })
+    await settle()
+    expect(askForStore).toHaveBeenCalledOnce()
+    users = []
+    await vi.advanceTimersByTimeAsync(CHECK_MS)
+    await settle()
+    expect(askForStore).toHaveBeenCalledTimes(2)
+    expect(existsSync(join(h.state, BRIDGE_FILE))).toBe(true)
+    expect(log).not.toHaveBeenCalled()
+    bridge.stop()
+  })
+
+  it('with no harness to set up again it asks the Store nothing', async () => {
+    const h = movedHome()
+    const askForStore = vi.fn(async () => {})
+    const { bridge } = start(h, { rows: () => [row({ name: 'claude' })], askForStore })
+    await settle()
+    expect(askForStore).not.toHaveBeenCalled()
+    bridge.stop()
+  })
+
+  it('asks the Store as this computer\'s owner\'s tool does, with an update naming no harness, and closes its line', async () => {
+    const request = vi.fn(async (): Promise<Record<string, unknown>> => ({ error: 'INVALID_DSH' }))
+    const close = vi.fn()
+    const open = async () => ({ machineId: 'm', request, close })
+    await askForStore(open)
+    expect(request.mock.calls).toEqual([['dsh_update', {}]])
+    expect(close).toHaveBeenCalledOnce()
+    // A daemon that does not answer fails the check, which tries again at the next one.
+    request.mockRejectedValueOnce(new Error('Harness did not answer dsh_update in time. Try again.'))
+    await expect(askForStore(open)).rejects.toThrow('did not answer')
+    expect(close).toHaveBeenCalledTimes(2)
+  })
+
+  it('in the core\'s process it asks the Store nothing: the Store started with the core', async () => {
+    const h = movedHome()
+    const { given, log } = handed(h, { setupsPending: async () => 1, askForStore: undefined })
+    startHomeBridgeInCore(fakeCore({ dataDir: h.dataDir }), given)
+    await settle()
+    expect(existsSync(join(h.state, BRIDGE_FILE))).toBe(true)
+    expect(log).not.toHaveBeenCalled()
   })
 
   it('the record\'s oldProcesses is written when the count changes, not at each check', async () => {
