@@ -4267,6 +4267,9 @@ void ui_question_close(const char *id, const char *request)
     // another question of the open agent leaves a question being read alone.
     if (!strcmp(s.q.agent,id) && (s.q.loading || !s.q.valid || !strcmp(s.q.request,request))) {
         s.q.valid=s.q.pending=s.q.loading=false; s.q.revision++;
+        // Voice open over this question would answer nothing and then say "Open the alert again." about a row
+        // removed below, so it ends as a discard does, dropping the capture and the host's work, and lands home.
+        if (s.voice_open && question_view(s.voice_return)) dispatch((action_t){.kind=A_VOICE_ABORT});
         if (question_view(s.view)) view(HOME);
     }
     // A row keeps no question id, yet removing by agent is exact: the dial holds at most one question row per agent,
