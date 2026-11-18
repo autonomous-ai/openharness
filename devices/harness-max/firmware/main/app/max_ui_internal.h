@@ -19,8 +19,7 @@
 #define MAX_VERSION_BYTES 24
 #define MAX_DONE_MS 60000u          // how long a finished turn's summary stays on its lane
 #define MAX_WAKE_MS 60000u          // the render task's longest sleep when nothing drawn depends on the time
-#define MAX_QUIET_MS 20000u         // a tap or swipe this recent means a person is at the bar: a new question waits
-#define MAX_TOAST_MS 5000u          // a question that waits is announced this long, as the Pro's toast
+#define MAX_TOAST_MS 5000u          // what needs a person who is talking is announced this long, as the Pro's toast
 
 // The glass, 1920 x 480 at about 225 ppi (8.86 px a mm), or the demo bar's 1920 x 415. Columns, left to right, on one
 // row 22 px from the glass's ends: the room (one agent, large), the lanes (the others, up to three a page sharing their
@@ -138,7 +137,7 @@ typedef enum {
     MAX_HIT_TALK,        // the room's pet and its Tap to talk: record for the room's agent
     MAX_HIT_TALK_SEND,   // the room's Send while recording
     MAX_HIT_TALK_CANCEL, // the room's Cancel while recording: nothing is sent
-    MAX_HIT_TOAST,       // the toast: the room opens its agent (toast_id)
+    MAX_HIT_TOAST,       // the toast: Attention for its agent (toast_id, toast_attn)
     MAX_HIT_FORM_SAY,    // the form's Say, while max_form_can_say(): a spoken name for its field
     MAX_HIT_PAGE,        // the pager: the next page of lanes, the first after the last
     // Demo V2's pages:
@@ -175,10 +174,10 @@ typedef struct {
     uint8_t step_count;
     char question[MAX_QUESTION_BYTES];
     uint32_t ask_key;                // the open question's request, prompt and questions: a re-sent one is no change
-    uint32_t ask_since;              // when the open question arrived: the room takes the oldest first
+    uint32_t ask_since;              // when the open question arrived: Attention takes the oldest first
     char note[MAX_NOTE_BYTES];       // FAILED: the error; DONE: the summary's text, shown until note_until
     uint32_t note_until;
-    bool card;                       // a failure opens a card until dismissed; an alert's summary, until it runs out
+    bool card;                       // a failure's card lasts until the agent moves on; an alert's, until it runs out
     char host[PRO_APP_ID_BYTES];     // its app ("" when the daemon sent none)
     uint8_t caps;                    // MAX_CAP_* bits
     uint32_t since_ms;               // its state's last change: the agent page's "· 2m ago"
@@ -201,16 +200,15 @@ typedef struct {
     max_form_t form;
     max_out_t outbox[MAX_OUTBOX];    // queued for the app to send (max_ui_take)
     int out_count;
-    char selected[ID_MAX];           // the room's agent, "" = none; the lanes show the others
-    bool touched;                    // a tap or swipe at touched_ms: a person is at the bar for MAX_QUIET_MS
-    uint32_t touched_ms;
-    char toast_id[ID_MAX];           // a question that arrived while a person was at the bar, announced from toast_from
+    char selected[ID_MAX];           // the agent page's agent, "" = none (it left the ring)
+    char toast_id[ID_MAX];           // what needed the person while they talked or the form was up, from toast_from
     uint32_t toast_from;
+    max_attn_t toast_attn;           // why: a question, a turn done or failed
     int page;                        // the page of lanes shown, 0-based, always within max_ui_pages()
     char notice[MAX_NOTICE_BYTES];
     uint32_t notice_until;
     max_talk_t talk;
-    char talk_id[ID_MAX];            // the agent the recording is for (set when the room's pet starts it; "": Say's)
+    char talk_id[ID_MAX];            // the agent the recording is for (set by the tap that starts it; "": Say's)
     int update_pct;                  // -1: no update
     char update_to[MAX_VERSION_BYTES];
     // Demo V2's pages.
@@ -265,27 +263,19 @@ max_agent_t *max_find(const char *id);
 int max_order(int out[MAX_AGENTS]);
 // The pages of lanes: every agent but the room's, MAX_LANES a page.
 int max_pages(void);
-// Keep the page within the pages there are.
-void max_clamp_page(void);
-// The room shows this agent ("" for none) and the lanes the others. True when it changed. Nothing is sent: the finger
-// sends agent.open itself.
-bool max_room_show(const char *id);
-// A new question from this agent (ask_since set): with nobody at the bar it takes the room, unless the room's agent
-// asks itself; with a person there the room stays, and the toast announces it.
-void max_room_asks(const max_agent_t *, uint32_t now_ms);
-// The room's agent's answer left the bar (a tap that sent it, or a recording sent for it): the room moves on to the
-// question that has waited longest, or stays to show the agent at work when none waits. True when it moved.
-bool max_room_answered(const char *id);
 // The seconds a lane's clock shows at now_ms, or -1 when it shows none.
 int64_t max_secs(const max_agent_t *, uint32_t now_ms);
 // Whether a finished lane still shows its summary, and the notice is up.
 bool max_note_shown(const max_agent_t *, uint32_t now_ms);
 bool max_notice_shown(uint32_t now_ms);
-// A digest of everything drawn that depends on the time (the clocks of the room and the lanes shown, a summary or a
-// notice running out).
+// A digest of everything drawn that depends on the time (the agent page's clock, summary and "ago", Inbox's "ago",
+// the recording's band, a notice or the toast running out).
 uint32_t max_time_key(uint32_t now_ms);
 // "m:ss" under an hour, else "h:mm:ss"; "" for a negative count.
 void max_fmt_elapsed(char *out, size_t cap, int64_t secs);
+// How long ago since_ms was at now_ms, as the agent page's status and Inbox's cards say it: "just now" under a minute,
+// then "2m ago", "3h ago", "4d ago".
+void max_fmt_ago(char *out, size_t cap, uint32_t since_ms, uint32_t now_ms);
 // FNV-1a over n bytes, from h (2166136261u to start).
 uint32_t max_fnv(uint32_t h, const void *data, size_t n);
 // The lanes on the page shown, as roster indices, in max_order() without the room's agent. Returns how many.
@@ -296,11 +286,27 @@ bool max_notice_set(const char *text, uint32_t now_ms);   // for MAX_NOTICE_MS
 // A state change, with the turn's clock (stopped at the end of a turn, dropped when one we did not see start begins).
 void max_set_state(max_agent_t *, max_state_t st, uint32_t now_ms);
 
-// The toast is up: toast_id still asks, for MAX_TOAST_MS from toast_from.
+// The toast is up: its agent still is what it announced (asking, done, failed), for MAX_TOAST_MS from toast_from.
 bool max_toast_shown(uint32_t now_ms);
-// The room's pet takes voice for this agent: the link is up, nothing is recorded or sent, no form is up, and the agent
-// is neither on a permission prompt (Yes or No only) nor waiting on an answer that is on its way or in.
+// The bar may record for this agent now: the link is up, nothing is recorded or sent, no form is up, and the agent is
+// neither on a permission prompt (Yes or No only) nor waiting on an answer that is on its way or in. Whether the agent
+// takes voice at all is max_takes_voice.
 bool max_can_talk(const max_agent_t *);
+
+// ---- Demo V2: which page is up (max_ui_model.c) ----
+// Put this page up; leaving Inbox marks every notice read. True when it changed.
+bool max_show(max_view_t view);
+// Attention for this agent, for this reason, from now_ms (the edge light and a turn's end count from it).
+void max_attention(const char *id, max_attn_t why, uint32_t now_ms);
+// The agent still is what `why` says (asking, done, failed): Attention and the toast hold only while it is.
+bool max_attn_holds(const char *id, max_attn_t why);
+// An agent needs the person (a new question, a failed turn, an alert's summary): an unread notice in Inbox, and
+// Attention takes the glass, unless a person talks or New Harness is up (then only the toast), or another agent's
+// question is on Attention (a question then waits its turn; a turn's end stays in Inbox).
+void max_attend(max_agent_t *, max_attn_t why, uint32_t now_ms);
+// Attention leaves `except`'s question (answered, or gone): the question that has waited longest takes it, else
+// Overview.
+void max_next_question(const char *except, uint32_t now_ms);
 
 // ---- Demo V2: what the pages read (max_ui_nav.c) ----
 // Overview's cells on the page shown, as roster indices in roster order (the ring's own). Returns how many.
@@ -331,7 +337,7 @@ uint8_t max_caps_of(const char *letters);
 // ---- questions (max_ui_ask.c) ----
 max_ask_t *max_ask_of(const char *agent);
 void max_ask_drop(const char *agent);
-// Whether the room shows the agent's card: a question, a failure not yet dismissed, or an alert's summary while it shows.
+// Whether the agent has a card for Attention: a question, a failure, or an alert's summary while it shows.
 bool max_has_card(const max_agent_t *, uint32_t now_ms);
 // What a tap on the card must match (the question, its step, its phase).
 uint32_t max_card_key(const max_agent_t *);
@@ -339,7 +345,7 @@ uint32_t max_card_key(const max_agent_t *);
 // the card gives a yes and a no their colours.
 bool max_option_approves(const char *option);
 bool max_option_rejects(const char *option);
-// The finger on a card: an option, Send, the question before, Reload, Dismiss.
+// The finger on a card: an option, Send, the question before, Reload.
 bool max_ask_hit(max_agent_t *, max_hit_kind_t kind, int arg, uint32_t now_ms);
 void max_ask_due(uint32_t now_ms);
 uint32_t max_ask_wake(uint32_t now_ms, uint32_t ms);

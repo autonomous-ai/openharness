@@ -1,7 +1,10 @@
-// Harness Max's app layer (main/app/max_app.c) over the real lanes model. Below it the host plays the device: a fake
-// clock, the renderer as a notification counter, and the cable, the recorder and the speaker as recorders. Every one of
-// them checks that the app's lock is NOT held: nothing leaves the device under it.
+// Harness Max's app layer (main/app/max_app.c) over the real model. Below it the host plays the device: a fake clock
+// and wall clock, the render task run one pass at a time, the mic's level, and the cable, the recorder and the speaker
+// as recorders. Every one of them checks that the app's lock is NOT held: nothing leaves the device under it. The
+// pages' targets are planted as the drawing records them (max_test.h), after the pass that drew them.
+#include <setjmp.h>
 #include <stdarg.h>
+#include <time.h>
 
 #include "max_test.h"
 
@@ -9,6 +12,7 @@
 #include "app/pro_touch.h"
 #include "app/pro_voice.h"
 #include "audio/audio_capture.h"
+#include "audio/pro_recorder.h"
 #include "cable/cable_features.h"
 #include "cable/cable_link.h"
 #include "cable/pro_cable.h"
@@ -36,19 +40,29 @@ static int NOTIFIES;   // the render task's wake-ups
 struct host_mutex { int unused; };
 struct host_task { int unused; };
 static struct host_task RENDERER;
+static TaskFunction_t RENDER_FN;
+static jmp_buf PASS;
+static bool IN_PASS;   // render_pass() runs the render task: its wait ends the pass
 SemaphoreHandle_t xSemaphoreCreateRecursiveMutex(void) { return calloc(1, sizeof(struct host_mutex)); }
 BaseType_t xSemaphoreTakeRecursive(SemaphoreHandle_t m, TickType_t w) { (void)m; (void)w; LOCK_DEPTH++; return pdTRUE; }
 BaseType_t xSemaphoreGiveRecursive(SemaphoreHandle_t m) { (void)m; CHECK(LOCK_DEPTH > 0); LOCK_DEPTH--; return pdTRUE; }
 BaseType_t xTaskCreatePinnedToCore(TaskFunction_t fn, const char *name, uint32_t stack, void *arg, unsigned prio,
                                    TaskHandle_t *out, int core)
 {
-    (void)fn; (void)stack; (void)arg; (void)prio; (void)core;
+    (void)stack; (void)arg; (void)prio; (void)core;
     CHECK(!strcmp(name, "pro_render"));   // ram_telemetry and the heartbeat know it by this name
-    *out = &RENDERER;                     // never run: the test is the render task's only observer
+    RENDER_FN = fn;                       // run a pass at a time by render_pass()
+    *out = &RENDERER;
     return pdPASS;
 }
 BaseType_t xTaskNotifyGive(TaskHandle_t t) { CHECK(t == &RENDERER); NOTIFIES++; return pdPASS; }
-uint32_t ulTaskNotifyTake(BaseType_t clear, TickType_t wait) { (void)clear; (void)wait; return 0; }
+uint32_t ulTaskNotifyTake(BaseType_t clear, TickType_t wait)
+{
+    (void)clear; (void)wait;
+    CHECK(LOCK_DEPTH == 0);
+    if (IN_PASS) longjmp(PASS, 1);   // the pass is done: back to the test
+    return 0;
+}
 void vTaskDelay(TickType_t ticks) { now += ticks; }
 uint32_t uxTaskGetStackHighWaterMark(TaskHandle_t t) { (void)t; return 0; }
 int64_t esp_timer_get_time(void) { return (int64_t)now * 1000; }
@@ -151,6 +165,15 @@ void pro_cable_voice_form(const char *form_id, int revision)
     VOICE_REVISION = revision;
 }
 uint32_t esp_random(void) { return 0xc0ffee; }
+// The mic's envelope, and the wall clock (0 is 1970: a clock nobody set).
+static unsigned LEVEL;
+unsigned pro_rec_level(void) { return LEVEL; }
+static time_t WALL;
+time_t time(time_t *out)
+{
+    if (out) *out = WALL;
+    return WALL;
+}
 bool pro_settings_muted(void) { return false; }
 void pro_cable_counters(uint32_t *bad, uint32_t *unknown) { *bad = *unknown = 0; }
 uint32_t pro_cable_seq_gaps(void) { return 0; }
@@ -171,21 +194,62 @@ void last_words_phase(lw_task_t task, const char *phase) { (void)task; (void)pha
 void ram_telemetry_periodic(const char *tag) { (void)tag; }
 
 // ---- helpers ----
-// a, b, c...: the room's agent and two pages of lanes, whatever MAX_LANES is.
-static const char *const IDS[] = {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"};
-enum { AGENTS = MAX_LANES + 2 };
-_Static_assert(AGENTS <= sizeof IDS / sizeof IDS[0], "IDS holds the room and two pages of lanes");
+// a..f: two pages of Overview's cells.
+static const char *const IDS[] = {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"};
+enum { AGENTS = MAX_CELLS + 1 };
+_Static_assert(AGENTS <= sizeof IDS / sizeof IDS[0], "IDS holds two pages of cells");
 
-// The cable says hello and lists the agents; the glass shows what the model holds (the render task's draw). The room
-// shows a.
+// One pass of the render task: its tick (the mic's level, the clock's send, the wall clock, the outbox), the draw, and
+// its wait. A touch keeps the screen from sleeping meanwhile.
+static void render_pass(void)
+{
+    pro_app_bump_activity();
+    IN_PASS = true;
+    if (!setjmp(PASS)) RENDER_FN(NULL);
+    IN_PASS = false;
+    CHECK(LOCK_DEPTH == 0);
+}
+
+// Overview as drawn: the bell, then the cells of the page shown.
+static void overview_drawn(void)
+{
+    drawn_page(MAX_VIEW_OVERVIEW);
+    plant(MAX_HIT_BELL, 0);
+    plant_cells();
+}
+// The agent page as drawn: Back, the strip, X while it records, then the body.
+static void agent_drawn(void)
+{
+    CHECK(max_m.view == MAX_VIEW_AGENT);
+    drawn_page(MAX_VIEW_AGENT);
+    plant(MAX_HIT_BACK, 0);
+    plant_strip();
+    if (max_m.talk == MAX_TALK_RECORDING) plant(MAX_HIT_TALK_CANCEL, 0);
+    plant_page(MAX_HIT_BODY);
+}
+// Attention as drawn: the card's options, Say it, then the page around them.
+static void attention_drawn(int options)
+{
+    CHECK(max_m.view == MAX_VIEW_ATTENTION);
+    drawn_page(MAX_VIEW_ATTENTION);
+    plant_card();
+    for (int i = 0; i < options; i++) plant(MAX_HIT_OPTION, i);
+    plant(MAX_HIT_SAY_IT, 0);
+    plant_page(MAX_HIT_AWAY);
+}
+
+// The cable says hello and lists the agents (a..f, every one taking voice); the glass shows Overview as drawn.
 static void fresh(void)
 {
     pro_app_link(false, NULL);
+    V_OPEN = V_PENDING = V_WAITING = false;
+    LEVEL = 0;
     pro_app_link(true, "MacBook Pro");
     pro_agent_row_t rows[AGENTS];
     for (int i = 0; i < AGENTS; i++) rows[i] = (pro_agent_row_t){IDS[i], IDS[i], "claude", "m1", "MacBook Pro", NULL, NULL};
     pro_app_agents(rows, AGENTS);
-    render(now);
+    render_pass();
+    overview_drawn();
     NOTIFIES = 0;
 }
 
@@ -200,111 +264,176 @@ static void contact(int x, int y, int dx, int dy)
     CHECK(pro_app_touch(false, x + dx, y + dy));
     CHECK(LOCK_DEPTH == 0);
 }
-
-// A button the view drew.
+static void tap_on(const max_hit_t *h) { contact(h->x + h->w / 2, h->y + h->h / 2, 0, 0); }
+static void tap_cell(const char *id)
+{
+    const max_box_t *b = cell_of(id);
+    contact(b->x + b->w / 2, b->y + b->h / 2, 2, 1);
+}
+static void tap_page(void) { contact(HT_WIDTH / 2, HT_HEIGHT - 20, 0, 0); }
+// The hit of this kind as planted.
 static const max_hit_t *find_hit(max_hit_kind_t kind, int arg)
 {
     for (int i = 0; i < max_m.hit_count; i++)
         if (max_m.hits[i].kind == kind && max_m.hits[i].arg == arg) return &max_m.hits[i];
-    return NULL;
-}
-static void press(max_hit_kind_t kind, int arg)
-{
-    render(now);
-    const max_hit_t *h = find_hit(kind, arg);
-    CHECK(h != NULL);
-    contact(h->x + h->w / 2, h->y + h->h / 2, 0, 0);
-}
-// A button of the room: its card's, its pet, Send and Cancel while it records, the form's Say.
-static void press_room(max_hit_kind_t kind, int arg)
-{
-    render(now);
-    room_card();
-    const max_hit_t *h = room_hit(kind, arg);
-    contact(h->x + h->w / 2, h->y + h->h / 2, 0, 0);
+    CHECK(!"no such hit");
+    return &max_m.hits[0];
 }
 
 // ---- tests ----
 
-// A swipe or the pager turns the page and a tap moves the selection: the model only marks itself for redraw
-// (max_ui_touch returns MAX_ACT_NONE), so the touch path must wake the render task, or the new page shows at its next
-// wake, up to 60 s later.
+// A swipe that pages the cells and a tap that opens a page only mark the model for redraw (max_ui_touch returns
+// MAX_ACT_NONE for them): the touch path must wake the render task, or the page shows at its next wake, up to 60 s
+// later.
 static void test_touch_wakes_the_renderer(void)
 {
     fresh();
-    contact(lane_x(1), lane_y(1), -(MAX_SWIPE_PX + 40), 0);
-    CHECK(max_m.page == 1);
-    CHECK(NOTIFIES > 0);
+    contact(HT_WIDTH / 2, HT_HEIGHT / 2, -(MAX_SWIPE_PX + 40), 0);
+    CHECK(max_m.cell_page == 1 && NOTIFIES > 0);
 
     fresh();
-    press(MAX_HIT_PAGE, 0);
-    CHECK(max_m.page == 1);
-    CHECK(NOTIFIES > 0);
-
-    fresh();
-    contact(lane_x(1), lane_y(1), 3, -2);
-    CHECK(!strcmp(max_ui_selected(), "c"));
-    CHECK(NOTIFIES > 0);
+    tap_on(find_hit(MAX_HIT_BELL, 0));
+    CHECK(max_m.view == MAX_VIEW_INBOX && NOTIFIES > 0);
 }
 
-// A lane tap sends agent.open for that agent, once, after the lock is released (the recorders check the lock).
-static void test_tap_opens_the_lane(void)
+// One tap on a cell: agent.open for it, and the mic opens for it, both after the lock is released (the recorders check
+// the lock). The agent page shows it, recording.
+static void test_cell_tap_opens_and_listens(void)
 {
+    fresh();
+    OPENS = V_BEGINS = 0;
+    tap_cell("b");
+    CHECK(OPENS == 1 && !strcmp(OPENED, "b") && V_BEGINS == 1 && !strcmp(V_AGENT, "b") && V_OPEN);
+    CHECK(max_m.view == MAX_VIEW_AGENT && !strcmp(max_ui_selected(), "b") && max_m.talk == MAX_TALK_RECORDING);
+    CHECK(NOTIFIES > 0);
+    // A swipe opens nothing.
     fresh();
     OPENS = 0;
-    contact(lane_x(0), lane_y(0), 2, 1);
-    CHECK(OPENS == 1 && !strcmp(OPENED, "b"));
-    // A swipe opens nothing.
-    contact(lane_x(0), lane_y(0), -(MAX_SWIPE_PX + 40), 0);
-    CHECK(OPENS == 1);
+    const max_box_t *b = cell_of("a");
+    contact(b->x + b->w / 2, b->y + b->h / 2, -(MAX_SWIPE_PX + 40), 0);
+    CHECK(OPENS == 0 && !V_OPEN);
 }
 
-// The room's pet records for its agent, Send sends, and the reply ends it; the room follows the recorder.
-static void test_talk_records_and_sends(void)
+// Speech, then MAX_SILENCE_MS of quiet: the render task's tick sends it, after the lock, and says so.
+static void test_the_clock_sends_after_silence(void)
 {
     fresh();
-    V_BEGINS = 0;
-    contact(lane_x(0), lane_y(0), 0, 0);   // the room shows b
-    NOTIFIES = 0;
-    press_room(MAX_HIT_TALK, 0);
-    CHECK(V_BEGINS == 1 && !strcmp(V_AGENT, "b") && V_OPEN);
-    CHECK(max_m.talk == MAX_TALK_RECORDING && NOTIFIES > 0);
-
-    press_room(MAX_HIT_TALK_SEND, 0);
-    CHECK(V_WAITING && max_m.talk == MAX_TALK_SENDING);
-
-    pro_app_voice_result(PRO_VOICE_ERROR, "Nobody heard that");
+    tap_cell("a");
+    LEVEL = 3;
+    render_pass();
+    CHECK(max_m.talk_heard && max_m.level_count == 1 && max_m.levels[0] == 3);
+    LEVEL = 0;
+    now += MAX_SILENCE_MS - 1;
+    render_pass();
+    CHECK(V_OPEN && !V_WAITING && max_m.talk == MAX_TALK_RECORDING);
+    now += 1;
+    render_pass();
+    CHECK(V_WAITING && max_m.talk == MAX_TALK_SENDING && !strcmp(max_m.notice, "Sent to a"));
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW);
+    pro_app_voice_result(PRO_VOICE_OK, "a");
     CHECK(!V_OPEN && max_m.talk == MAX_TALK_IDLE);
-    CHECK(!strcmp(max_m.notice, "Nobody heard that"));
 }
 
-// Cancel stops the recording and sends nothing; the room's agent takes voice again.
-static void test_cancel_sends_nothing(void)
+// Nothing heard in MAX_HEAR_MS: the mic closes, nothing is sent, and the agent page stays to be tapped again.
+static void test_the_mic_closes_when_nothing_is_heard(void)
 {
     fresh();
-    press_room(MAX_HIT_TALK, 0);
+    tap_cell("a");
+    LEVEL = 1;   // a room's hum
+    now += MAX_HEAR_MS - 1;
+    render_pass();
     CHECK(V_OPEN && max_m.talk == MAX_TALK_RECORDING);
-    press_room(MAX_HIT_TALK_CANCEL, 0);
-    CHECK(!V_OPEN && !V_WAITING && max_m.talk == MAX_TALK_IDLE && LOCK_DEPTH == 0);
-    V_BEGINS = 0;
-    press_room(MAX_HIT_TALK, 0);
-    CHECK(V_BEGINS == 1 && V_OPEN && !strcmp(V_AGENT, "a"));
-    press_room(MAX_HIT_TALK_CANCEL, 0);
+    now += 1;
+    render_pass();
+    CHECK(!V_OPEN && !V_WAITING && max_m.talk == MAX_TALK_IDLE);
+    CHECK(!strcmp(max_m.notice, "Mic closed \xc2\xb7 tap to talk") && max_m.view == MAX_VIEW_AGENT);
 }
 
-// An accepted update offer holds voice off: a tap on the pet says so and starts nothing.
+// The agent page's body opens the mic, X drops it (the page stays), and the body again sends it.
+static void test_the_body_talks_and_x_cancels(void)
+{
+    fresh();
+    tap_cell("a");
+    agent_drawn();
+    tap_on(find_hit(MAX_HIT_TALK_CANCEL, 0));
+    CHECK(!V_OPEN && max_m.talk == MAX_TALK_IDLE && max_m.view == MAX_VIEW_AGENT);
+    agent_drawn();
+    V_BEGINS = 0;
+    tap_page();
+    CHECK(V_BEGINS == 1 && V_OPEN && !strcmp(V_AGENT, "a") && max_m.talk == MAX_TALK_RECORDING);
+    agent_drawn();
+    tap_page();
+    CHECK(V_WAITING && max_m.talk == MAX_TALK_SENDING && max_m.view == MAX_VIEW_OVERVIEW);
+    pro_app_voice_result(PRO_VOICE_ERROR, "Nobody heard that");
+    CHECK(!V_OPEN && max_m.talk == MAX_TALK_IDLE && !strcmp(max_m.notice, "Nobody heard that"));
+}
+
+// The wall clock: read each tick, known once it is past 2024 (a board that never synced reads 1970).
+static void test_the_wall_clock(void)
+{
+    fresh();
+    setenv("TZ", "UTC0", 1);
+    tzset();
+    WALL = 0;
+    render_pass();
+    CHECK(!max_m.wall_known);
+    WALL = 1795006800;   // Wednesday 18 November 2026, 13:00 UTC
+    render_pass();
+    CHECK(max_m.wall_known && max_m.wall_hour == 13 && max_m.wall_min == 0 && max_m.wall_wday == 3);
+    CHECK(max_m.wall_mday == 18 && max_m.wall_mon == 10);
+    WALL += 61;
+    render_pass();
+    CHECK(max_m.wall_min == 1);
+    WALL = 0;
+    render_pass();
+    CHECK(!max_m.wall_known);
+}
+
+// Apps: a card picks its app on the computer, after the lock; the bar goes back to Overview.
+static void test_an_app_card_picks_it(void)
+{
+    fresh();
+    const pro_app_row_t apps[] = {{"orca", "Orca", 6, 0}, {"vscode", "VS Code", 2, 0}};
+    pro_app_apps("orca", apps, 2);
+    tap_on(plant(MAX_HIT_APPS, 0));
+    CHECK(max_m.view == MAX_VIEW_APPS);
+    drawn_page(MAX_VIEW_APPS);
+    PICKED[0] = 0;
+    tap_on(plant(MAX_HIT_APP, 1));
+    CHECK(!strcmp(PICKED, "vscode") && max_m.view == MAX_VIEW_OVERVIEW);
+}
+
+// Attention outside its buttons brings the agent up on the computer, after the lock, and says where.
+static void test_away_brings_the_agent_up(void)
+{
+    fresh();
+    const pro_app_row_t apps[] = {{"orca", "Orca", 6, 1}};
+    pro_app_apps("orca", apps, 1);
+    pro_app_turn("c", "started", "", 0);
+    pro_app_turn("c", "error", "boom", 0);
+    CHECK(max_m.view == MAX_VIEW_ATTENTION && !strcmp(max_m.attn_id, "c") && max_m.attn == MAX_ATTN_FAIL);
+    attention_drawn(0);
+    OPENS = 0;
+    tap_page();
+    CHECK(OPENS == 1 && !strcmp(OPENED, "c") && !strcmp(max_m.notice, "c is up in Orca"));
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW);
+}
+
+// An accepted update offer holds voice off: a cell still opens its agent, but the mic says why it stays closed.
 static void test_update_gate_holds_talk(void)
 {
     fresh();
     CHECK(pro_app_begin_update_gate());
-    V_BEGINS = 0;
-    press_room(MAX_HIT_TALK, 0);
-    CHECK(V_BEGINS == 0 && !V_OPEN && max_m.talk == MAX_TALK_IDLE);
-    CHECK(!strcmp(max_m.notice, "Updating"));
+    OPENS = V_BEGINS = 0;
+    tap_cell("a");
+    CHECK(OPENS == 1 && V_BEGINS == 0 && !V_OPEN && max_m.talk == MAX_TALK_IDLE);
+    CHECK(!strcmp(max_m.notice, "Updating") && max_m.view == MAX_VIEW_AGENT);
     pro_app_end_update_gate();
-    press_room(MAX_HIT_TALK, 0);
+    agent_drawn();
+    tap_page();
     CHECK(V_BEGINS == 1 && V_OPEN);
-    press_room(MAX_HIT_TALK_SEND, 0);
+    agent_drawn();
+    tap_page();
     pro_app_voice_result(PRO_VOICE_OK, "a");
     CHECK(!V_OPEN);
 }
@@ -313,11 +442,12 @@ static void test_update_gate_holds_talk(void)
 static void test_asleep_refuses_the_finger(void)
 {
     fresh();
+    const max_box_t *b = cell_of("a");
     pro_app_sleep();
-    CHECK(!pro_app_touch(true, lane_x(0), lane_y(0)));
+    CHECK(!pro_app_touch(true, b->x + 5, b->y + 5));
     CHECK(LOCK_DEPTH == 0);
     pro_app_wake();
-    CHECK(pro_app_touch(true, lane_x(0), lane_y(0)));
+    CHECK(pro_app_touch(true, b->x + 5, b->y + 5));
     pro_app_touch_cancel();
 }
 
@@ -347,28 +477,32 @@ static void test_question_chimes_once(void)
 
 static const pro_ask_item_t DB = {"db", "Which database?", {"Dev", "Staging"}, 2, false, true};
 
-// The reviewed path end to end: the read goes out after the lock (with the next contact's take, as with the clock's),
-// the option's answer under the read's token, and the receipt's "Sent".
+// The reviewed path end to end on Attention: the read goes out after the lock (with the next contact's take, as with
+// the clock's), the option's answer under the read's token, and the receipt's "Sent".
 static void test_reviewed_answer_is_sent_after_the_lock(void)
 {
     fresh();
     FEATURES = CABLE_FEATURE_FORM | CABLE_FEATURE_QUESTION_REVIEW;
     SENDS = OPENS = 0;
     pro_app_ask("a", "toolu_1", DB.q, &DB, 1, false);
-    CHECK(SENDS == 0);   // nothing goes from the cable_link task's callback
+    CHECK(SENDS == 0 && max_m.view == MAX_VIEW_ATTENTION);   // nothing goes from the cable_link task's callback
+    drawn_page(MAX_VIEW_ATTENTION);
     contact(HT_WIDTH - 2, HT_HEIGHT - 2, 0, 0);   // where nothing is drawn
     CHECK(SENDS == 1 && WAITED && !strcmp(last_sent(), "question.read a q1"));
     pro_app_question_state("a", "q1", true, "toolu_1", "tok", false, NULL, &DB, 1);
-    press_room(MAX_HIT_OPTION, 1);
+    attention_drawn(2);
+    tap_on(find_hit(MAX_HIT_OPTION, 1));
     CHECK(SENDS == 2 && WAITED && !strcmp(last_sent(), "answer.reviewed a tok q1 1:2"));
-    CHECK(OPENS == 0);   // a button is not the lane
+    CHECK(OPENS == 0 && max_m.view == MAX_VIEW_OVERVIEW);   // a button is not the page around it
     pro_app_answer_receipt("a", "q1", "tok", true, false, NULL);
     CHECK(!strcmp(max_m.notice, "Sent") && max_find("a")->state == MAX_WORKING);
     // The daemon refuses it: its words.
     pro_app_ask("a", "toolu_2", DB.q, &DB, 1, true);
+    drawn_page(MAX_VIEW_ATTENTION);
     contact(HT_WIDTH - 2, HT_HEIGHT - 2, 0, 0);   // where nothing is drawn
     pro_app_question_state("a", "q2", true, "toolu_2", "tok2", false, NULL, &DB, 1);
-    press_room(MAX_HIT_OPTION, 0);
+    attention_drawn(2);
+    tap_on(find_hit(MAX_HIT_OPTION, 0));
     pro_app_answer_receipt("a", "q2", "tok2", false, false, "Permission prompts cannot be answered from here.");
     CHECK(!strcmp(max_m.notice, "Permission prompts cannot be answered from here."));
     CHECK(LOCK_DEPTH == 0);
@@ -381,23 +515,29 @@ static void test_plain_answer_and_a_full_port(void)
     FEATURES = CABLE_FEATURE_FORM;
     SENDS = 0;
     pro_app_ask("a", "toolu_1", DB.q, &DB, 1, false);
+    attention_drawn(2);
     PORT_FULL = true;
-    press_room(MAX_HIT_OPTION, 0);
+    tap_on(find_hit(MAX_HIT_OPTION, 0));
     PORT_FULL = false;
     CHECK(SENDS == 0 && !strcmp(max_m.notice, "Not sent") && max_ask_of("a")->phase == MAX_ASK_READY);
-    press_room(MAX_HIT_OPTION, 0);
+    attention_drawn(2);
+    tap_on(find_hit(MAX_HIT_OPTION, 0));
     CHECK(SENDS == 1 && !strcmp(last_sent(), "answer a toolu_1 1 db=Dev") && !strcmp(max_m.notice, "Sent"));
     FEATURES = CABLE_FEATURE_FORM | CABLE_FEATURE_QUESTION_REVIEW;
 }
 
-// New Harness: the open after the lock under a fresh name, a spoken name for the field, the reply ending the recording,
-// Close; a turn for an agent names no form.
+// New Harness: the open after the lock under a fresh name, a spoken name for the field (sent by a tap), the reply
+// ending the recording, Close; a recording for an agent names no form.
 static void test_new_harness(void)
 {
     fresh();
     max_ui_offers(true);   // as the render task's tick reads the welcome
+    const pro_app_row_t apps[] = {{"orca", "Orca", 6, 0}};
+    pro_app_apps("orca", apps, 1);
+    tap_on(plant(MAX_HIT_APPS, 0));
+    drawn_page(MAX_VIEW_APPS);
     SENDS = 0;
-    press(MAX_HIT_NEW, 0);
+    tap_on(plant(MAX_HIT_NEW, 0));
     CHECK(SENDS == 1 && WAITED && max_form_open());
     char form_id[MAX_FORM_ID_BYTES], request[MAX_FETCH_BYTES];
     CHECK(sscanf(last_sent(), "form %48s %15s open 0 0", form_id, request) == 2);
@@ -407,25 +547,31 @@ static void test_new_harness(void)
                                   .revision = 7, .position = 1, .total = 5, .active = true, .enabled = true,
                                   .can_query = true};
     pro_app_form_state("form-1", form_id, true, &page);
-    // Say: the recording names the form, not an agent.
+    max_m.form_revision = 7;   // the page drawn
+    drawn_page(MAX_VIEW_APPS);
+    const max_hit_t *say = plant(MAX_HIT_FORM_SAY, 0), *close = plant(MAX_HIT_FORM_CLOSE, 0);
+    // Say: the recording names the form, not an agent; a tap sends it.
     V_BEGINS = 0;
-    press_room(MAX_HIT_FORM_SAY, 0);
+    tap_on(say);
     CHECK(V_BEGINS == 1 && V_OPEN && !strcmp(V_AGENT, "") && !strcmp(VOICE_FORM, form_id) && VOICE_REVISION == 7);
     CHECK(max_m.talk == MAX_TALK_RECORDING);
-    press_room(MAX_HIT_TALK_SEND, 0);
-    CHECK(V_WAITING);
+    tap_on(say);
+    CHECK(V_WAITING && max_form_open());
     pro_form_page_t found = page;
     found.revision = 8;
     found.label = "website";
     pro_app_voice_form(form_id, true, &found);
     CHECK(!V_OPEN && max_m.talk == MAX_TALK_IDLE && !strcmp(max_m.form.page.label, "website"));
     // Close goes out, and the form leaves the bar.
-    press(MAX_HIT_FORM_CLOSE, 0);
+    tap_on(close);
     CHECK(!max_form_open() && strstr(last_sent(), " close 8 0"));
     // Talk for an agent clears the form's name from the next recording.
-    press_room(MAX_HIT_TALK, 0);
+    max_show(MAX_VIEW_OVERVIEW);
+    overview_drawn();
+    tap_cell("a");
     CHECK(V_OPEN && !strcmp(V_AGENT, "a") && VOICE_FORM[0] == 0);
-    press_room(MAX_HIT_TALK_SEND, 0);
+    agent_drawn();
+    tap_page();
     pro_app_voice_result(PRO_VOICE_OK, "a");
     CHECK(LOCK_DEPTH == 0);
 }
@@ -441,10 +587,15 @@ static void test_toast(void)
 int main(void)
 {
     pro_app_start();
+    CHECK(RENDER_FN != NULL);
     test_touch_wakes_the_renderer();
-    test_tap_opens_the_lane();
-    test_talk_records_and_sends();
-    test_cancel_sends_nothing();
+    test_cell_tap_opens_and_listens();
+    test_the_clock_sends_after_silence();
+    test_the_mic_closes_when_nothing_is_heard();
+    test_the_body_talks_and_x_cancels();
+    test_the_wall_clock();
+    test_an_app_card_picks_it();
+    test_away_brings_the_agent_up();
     test_update_gate_holds_talk();
     test_asleep_refuses_the_finger();
     test_question_chimes_once();

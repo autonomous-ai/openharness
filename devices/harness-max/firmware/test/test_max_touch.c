@@ -1,19 +1,20 @@
-// The finger: a tap opens a lane, talks from the room, presses a card's button, the toast, the pager or the form's, a
-// sideways swipe turns the page (or moves the form), anything else does nothing; while a recording is up, only its Send
-// and Cancel act.
+// The finger on the pages: what a tap or a sideways swipe does on each page, and what the clock owes a recording. The
+// targets are planted as the pages record them (max_test.h), never drawn: the drawing's layout is its own. While a
+// recording is up the page is its send: X cancels, Back and the strip send what was heard, any other tap sends.
 #include "max_test.h"
 
 static const char *const ABCDE[] = {"a", "b", "c", "d", "e"};
-// Enough agents for the room's and three pages of lanes, whatever MAX_LANES is.
-static const char *const XS[] = {"x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9"};
-_Static_assert(2 * MAX_LANES + 2 <= sizeof XS / sizeof XS[0], "XS holds the room and three pages of lanes");
+// More agents than two pages of cells hold.
+static const char *const XS[] = {"x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11"};
+_Static_assert(2 * MAX_CELLS + 1 <= sizeof XS / sizeof XS[0], "XS holds more than two pages of cells");
 
-static max_act_t tap(int x, int y)
+static max_act_t tap_at(int x, int y, uint32_t now)
 {
-    max_ui_touch(true, x, y, 0);
-    max_ui_touch(true, x + 3, y - 2, 40);   // a finger never holds still
-    return max_ui_touch(false, x + 3, y - 2, 90);
+    max_ui_touch(true, x, y, now);
+    max_ui_touch(true, x + 3, y - 2, now + 40);   // a finger never holds still
+    return max_ui_touch(false, x + 3, y - 2, now + 90);
 }
+static max_act_t tap(int x, int y) { return tap_at(x, y, 0); }
 static max_act_t drag(int x, int y, int dx, int dy)
 {
     max_ui_touch(true, x, y, 0);
@@ -21,416 +22,646 @@ static max_act_t drag(int x, int y, int dx, int dy)
     return max_ui_touch(false, x + dx, y + dy, 150);
 }
 static max_act_t tap_on(const max_hit_t *h) { return tap(h->x + h->w / 2, h->y + h->h / 2); }
-static const max_hit_t *find_hit(max_hit_kind_t kind, int arg)
-{
-    for (int i = 0; i < max_m.hit_count; i++)
-        if (max_m.hits[i].kind == kind && max_m.hits[i].arg == arg) return &max_m.hits[i];
-    return NULL;
-}
-static max_act_t press(max_hit_kind_t kind, int arg)
-{
-    const max_hit_t *h = find_hit(kind, arg);
-    CHECK(h != NULL);
-    return tap_on(h);
-}
-// The lane the last render drew for this agent, or -1.
-static int lane_of(const char *id)
-{
-    for (int i = 0; i < max_m.lane_hits; i++)
-        if (!strcmp(max_m.lane_id[i], id)) return i;
-    return -1;
-}
+static max_act_t tap_box(const max_box_t *b) { return tap(b->x + b->w / 2, b->y + b->h / 2); }
+// Where no button is: on a page-wide target when one is planted.
+static max_act_t tap_page(void) { return tap(HT_WIDTH / 2, HT_HEIGHT - 20); }
+static max_act_t swipe_left(void) { return drag(HT_WIDTH / 2, HT_HEIGHT / 2, -200, 10); }
+static max_act_t swipe_right(void) { return drag(HT_WIDTH / 2, HT_HEIGHT / 2, 200, 10); }
+
 static max_out_t OUT[MAX_OUTBOX];
 static max_answer_t ANSWER;
 static int take(uint32_t now) { return max_ui_take(OUT, MAX_OUTBOX, &ANSWER, now); }
 static const pro_ask_item_t DB = {"db", "Which database?", {"Dev", "Staging"}, 2, false, true};
 static const pro_ask_item_t DEPLOY = {"perm", "Approve Bash command: npm run deploy", {"Yes", "No"}, 2, false, true};
 
-static void test_tap_opens_a_lane(void)
+static bool noticed(const char *text) { return max_notice_shown(0) && !strcmp(max_m.notice, text); }
+static void no_notice(void) { max_ui_notice(NULL, 0, 0); }
+
+// ---- the pages as drawn ----
+static void overview_drawn(void)
 {
-    linked(ABCDE, 5);   // the room shows a, the lanes the others
-    render(0);
-    CHECK(!strcmp(max_m.lane_id[0], "b"));
-    max_act_t act = tap(lane_x(0), lane_y(0));
-    CHECK(act.kind == MAX_ACT_OPEN && !strcmp(act.agent_id, "b"));
-    CHECK(!strcmp(max_ui_selected(), "b"));
-    CHECK(max_ui_tick(0));   // the room changed: draw again
-    render(0);
-    CHECK(!max_ui_tick(0));
-    // a is back among the lanes. The card's corner is still the lane (a finger's 80 px fit anywhere in it).
-    CHECK(!strcmp(max_m.lane_id[0], "a") && !strcmp(max_m.lane_id[1], "c"));
-    act = tap(max_m.lane_box[1].x + 2, max_m.lane_box[1].y + 2);
-    CHECK(act.kind == MAX_ACT_OPEN && !strcmp(act.agent_id, "c"));
-    // The gaps between the room, the lanes and the side column, and the band below them are nobody's.
-    const max_box_t first = max_m.lane_box[0];
-    CHECK(tap(MAX_ROOM_X + MAX_ROOM_W + 8, lane_y(0)).kind == MAX_ACT_NONE);
-    CHECK(tap(MAX_LANE_X + MAX_LANES_W + 8, lane_y(0)).kind == MAX_ACT_NONE);
-    CHECK(tap((first.x + first.w + max_m.lane_box[1].x) / 2, lane_y(0)).kind == MAX_ACT_NONE);
-    CHECK(tap(lane_x(0), first.y + first.h + 2).kind == MAX_ACT_NONE);
-    CHECK(!strcmp(max_ui_selected(), "c"));
+    drawn_page(MAX_VIEW_OVERVIEW);
+    plant(MAX_HIT_BELL, 0);
+    plant_cells();
+}
+// The agent page for max_m.selected: Back, the strip, X while it records, then the body.
+static void agent_drawn(void)
+{
+    CHECK(max_m.view == MAX_VIEW_AGENT);
+    drawn_page(MAX_VIEW_AGENT);
+    plant(MAX_HIT_BACK, 0);
+    plant_strip();
+    if (max_m.talk == MAX_TALK_RECORDING) plant(MAX_HIT_TALK_CANCEL, 0);
+    plant_page(MAX_HIT_BODY);
+}
+// The agent page for this agent, as a tap on its segment would put it up.
+static void agent_page(const char *id)
+{
+    max_copy(max_m.selected, sizeof max_m.selected, id);
+    max_show(MAX_VIEW_AGENT);
+    agent_drawn();
+}
+// Attention: `options` answers and Say it when asked for, then the rest of the page.
+static void attention_drawn(int options, bool say)
+{
+    CHECK(max_m.view == MAX_VIEW_ATTENTION);
+    drawn_page(MAX_VIEW_ATTENTION);
+    plant_card();
+    for (int i = 0; i < options; i++) plant(MAX_HIT_OPTION, i);
+    if (say) plant(MAX_HIT_SAY_IT, 0);
+    plant_page(MAX_HIT_AWAY);
+}
+// A recording for the agent page's agent, words heard or not.
+static void recording(bool heard)
+{
+    max_copy(max_m.talk_id, sizeof max_m.talk_id, max_m.selected);
+    max_ui_talk(MAX_TALK_IDLE, 0);
+    max_ui_talk(MAX_TALK_RECORDING, 0);
+    if (heard) max_ui_level(3, 0);
+    agent_drawn();
+}
+
+// ---- Overview ----
+
+// One tap on a cell: an agent that asks opens Attention; one that takes voice opens its page with the mic on (the
+// computer opens it too); any other opens its page with the mic closed.
+static void test_cell_tap(void)
+{
+    max_ui_reset();
+    max_ui_link(true, "MacBook Pro", 0);
+    const pro_agent_row_t rows[] = {{"a", "a", "claude", "m1", "MacBook Pro", NULL, NULL},
+                                    {"b", "b", "codex", "m1", "MacBook Pro", "orca", "sf"},
+                                    {"c", "c", "claude", "m1", "MacBook Pro", NULL, NULL},
+                                    {"d", "d", "claude", "m1", "MacBook Pro", NULL, NULL}};
+    max_ui_agents(rows, 4, 0);
+    overview_drawn();
+    max_act_t act = tap_box(cell_of("a"));
+    CHECK(act.kind == MAX_ACT_OPEN_TALK && !strcmp(act.agent_id, "a") && !strcmp(max_m.talk_id, "a"));
+    CHECK(max_m.view == MAX_VIEW_AGENT && !strcmp(max_ui_selected(), "a") && max_m.dirty);
+    // No voice (caps without v): its page, and the computer opens it ("Talk to it in <App>").
+    max_m.talk_id[0] = 0;
+    max_show(MAX_VIEW_OVERVIEW);
+    overview_drawn();
+    act = tap_box(cell_of("b"));
+    CHECK(act.kind == MAX_ACT_OPEN && !strcmp(act.agent_id, "b") && max_m.talk_id[0] == 0);
+    CHECK(max_m.view == MAX_VIEW_AGENT && !strcmp(max_ui_selected(), "b"));
+    // An agent that asks: its question on Attention, nothing recorded or sent.
+    max_ui_question("c", "r1", DB.q, &DB, 1, false, false, 0);
+    max_show(MAX_VIEW_OVERVIEW);
+    overview_drawn();
+    act = tap_box(cell_of("c"));
+    CHECK(act.kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_ATTENTION && !strcmp(max_m.attn_id, "c"));
+    CHECK(max_m.attn == MAX_ATTN_ASK && max_m.talk_id[0] == 0);
+    // While the last words are still being sent the page opens with the mic closed.
+    max_show(MAX_VIEW_OVERVIEW);
+    overview_drawn();
+    max_ui_talk(MAX_TALK_SENDING, 0);
+    act = tap_box(cell_of("d"));
+    CHECK(act.kind == MAX_ACT_OPEN && !strcmp(max_ui_selected(), "d"));
+    max_ui_talk(MAX_TALK_IDLE, 0);
+    // A cell whose agent left the ring since it was drawn opens nothing; nor does the space between cells.
+    max_show(MAX_VIEW_OVERVIEW);
+    overview_drawn();
+    const max_box_t gone = *cell_of("d");
+    max_ui_agents(rows, 3, 0);
+    CHECK(tap_box(&gone).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_OVERVIEW);
+    CHECK(tap(max_m.cell_box[0].x + max_m.cell_box[0].w + 5, max_m.cell_box[0].y + 5).kind == MAX_ACT_NONE);
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW);
 }
 
 static void test_drag_is_not_a_tap(void)
 {
     linked(ABCDE, 5);
-    render(0);
-    const int x = lane_x(0), y = lane_y(0);
+    overview_drawn();
+    const max_box_t *b = cell_of("a");
+    const int x = b->x + b->w / 2, y = b->y + b->h / 2;
     CHECK(drag(x, y, 0, MAX_TAP_SLOP + 6).kind == MAX_ACT_NONE);
     CHECK(drag(x, y, MAX_TAP_SLOP + 6, 0).kind == MAX_ACT_NONE);
     // Out and back within one contact is still a drag.
     max_ui_touch(true, x, y, 0);
     max_ui_touch(true, x, y + 60, 50);
     CHECK(max_ui_touch(false, x, y, 100).kind == MAX_ACT_NONE);
-    CHECK(!strcmp(max_ui_selected(), "a") && max_m.page == 0);
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW && max_m.cell_page == 0);
     // A lift with no contact is nothing.
     CHECK(max_ui_touch(false, x, y, 200).kind == MAX_ACT_NONE);
 }
 
-static void test_swipe_turns_the_page(void)
+// A sideways swipe pages Overview's cells, within the pages there are.
+static void test_swipe_pages_the_cells(void)
 {
-    enum { N = MAX_LANES + 2 };
-    linked(XS, N);   // the room shows x0; two pages of lanes
-    render(0);
-    const int last = lane_x(MAX_LANES - 1), first = lane_x(0), y = lane_y(0);
-    CHECK(drag(last, y, -200, 30).kind == MAX_ACT_NONE);
-    CHECK(max_m.page == 1 && max_ui_tick(0));
-    render(0);
-    CHECK(max_m.lane_hits == 1 && !strcmp(max_m.lane_id[0], XS[N - 1]));
-    drag(last, y, -200, 0);   // the last page: no further
-    CHECK(max_m.page == 1);
-    drag(first, y, MAX_SWIPE_PX, 0);
-    CHECK(max_m.page == 0);
-    drag(first, y, 300, 0);   // the first page: no further back
-    CHECK(max_m.page == 0);
+    linked(XS, 2 * MAX_CELLS + 1);
+    overview_drawn();
+    CHECK(swipe_left().kind == MAX_ACT_NONE && max_m.cell_page == 1 && max_m.dirty);
+    swipe_left();
+    CHECK(max_m.cell_page == 2);
+    max_m.dirty = false;
+    swipe_left();   // the last page: no further
+    CHECK(max_m.cell_page == 2 && !max_m.dirty);
+    swipe_right();
+    CHECK(max_m.cell_page == 1);
     // Too short, or more down than across: no page.
-    drag(last, y, -(MAX_SWIPE_PX - 1), 0);
-    CHECK(max_m.page == 0);
-    drag(last, 60, -120, 300);
-    CHECK(max_m.page == 0);
-    // A swipe that starts on the room's pet turns the page too, and never talks.
-    render(0);
-    const max_hit_t *pet = room_hit(MAX_HIT_TALK, 0);
-    CHECK(drag(pet->x + pet->w / 2, pet->y + pet->h / 2, -200, 0).kind == MAX_ACT_NONE && max_m.page == 1);
+    drag(HT_WIDTH / 2, 100, -(MAX_SWIPE_PX - 1), 0);
+    drag(HT_WIDTH / 2, 60, -120, 300);
+    CHECK(max_m.cell_page == 1);
     // One page: a swipe does nothing.
     linked(ABCDE, 3);
-    render(0);
-    drag(lane_x(1), y, -200, 0);
-    CHECK(max_m.page == 0 && !max_ui_tick(0));
+    overview_drawn();
+    swipe_left();
+    CHECK(max_m.cell_page == 0 && !max_m.dirty);
 }
 
-// The pager: a tap shows the next page of lanes, the first again after the last. Like any tap it means a person is at
-// the bar. One page takes no tap; nor does a pager drawn before the form covered the lanes or the pages went.
-static void test_pager_turns_the_page(void)
+// Inbox as drawn: Close, then a card for each notice.
+static void inbox_drawn(void)
 {
-    enum { N = 2 * MAX_LANES + 2 };
-    linked(XS, N);   // the room shows x0; three pages of lanes
-    render(0);
-    CHECK(max_pages() == 3 && max_m.page == 0);
-    for (int want = 1; want <= 3; want++) {
-        const max_hit_t *turn = find_hit(MAX_HIT_PAGE, 0);
-        CHECK(turn && tap_on(turn).kind == MAX_ACT_NONE);
-        CHECK(max_m.page == want % 3 && max_ui_tick(90) && max_m.touched && max_m.touched_ms == 90);
-        render(90);
-        CHECK(!max_ui_tick(90) && !strcmp(max_m.lane_id[0], XS[1 + want % 3 * MAX_LANES]));
-    }
-    // A person at the bar: a new question waits in its toast rather than take the room.
-    max_ui_question("x5", "r1", DB.q, &DB, 1, false, false, 100);
-    CHECK(!strcmp(max_ui_selected(), "x0") && max_toast_shown(100));
-    // The pager drawn, then the form up: it turns nothing.
+    drawn_page(MAX_VIEW_INBOX);
+    plant(MAX_HIT_CLOSE, 0);
+    for (int i = 0; i < max_m.inbox_count; i++) plant(MAX_HIT_NOTE, i);
+}
+// The card of this agent's newest notice of this kind, as inbox_drawn() drew it.
+static const max_hit_t *note_of(const char *id, max_attn_t kind)
+{
+    for (int i = 0; i < max_m.inbox_count; i++)
+        if (!strcmp(max_m.inbox[i].id, id) && max_m.inbox[i].kind == kind) return &max_m.hits[1 + i];
+    CHECK(!"no such notice");
+    return &max_m.hits[0];
+}
+
+// The bell opens Inbox. A tap on a notice of an agent that still asks and is answered on the bar opens its Attention;
+// any other brings its agent up on the computer (the daemon turns to its app) and says so. Leaving reads them all.
+static void test_inbox(void)
+{
+    max_ui_reset();
+    max_ui_link(true, "MacBook Pro", 0);
+    const pro_app_row_t apps[] = {{"orca", "Orca", 3, 2}};
+    max_ui_apps("orca", apps, 1, 0);
+    const pro_agent_row_t rows[] = {{"a", "a", "claude", "m1", "MacBook Pro", "orca", NULL},
+                                    {"b", "b", "codex", "m1", "MacBook Pro", "orca", "sv"},
+                                    {"c", "c", "claude", "m1", "MacBook Pro", "orca", NULL}};
+    max_ui_agents(rows, 3, 0);
+    max_ui_question("a", "r1", DB.q, &DB, 1, false, false, 0);
+    max_ui_question("b", "r2", DB.q, &DB, 1, false, false, 10);   // b takes no answers on the bar
+    max_ui_turn("c", "error", "boom", 0, 20);
+    max_show(MAX_VIEW_OVERVIEW);
+    overview_drawn();
+    CHECK(max_unread() == 3 && tap_on(&max_m.hits[0]).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_INBOX);
+    inbox_drawn();
+    CHECK(!strcmp(max_m.inbox[0].id, "c") && !strcmp(max_m.inbox[2].id, "a"));
+    max_act_t act = tap_on(note_of("a", MAX_ATTN_ASK));
+    CHECK(act.kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_ATTENTION && !strcmp(max_m.attn_id, "a"));
+    CHECK(max_unread() == 0);
+    // b: answered on the computer only.
+    max_ui_question("c", "r3", DB.q, &DB, 1, false, false, 30);   // unread again for the next look
+    max_show(MAX_VIEW_INBOX);
+    inbox_drawn();
+    no_notice();
+    act = tap_on(note_of("b", MAX_ATTN_ASK));
+    CHECK(act.kind == MAX_ACT_OPEN && !strcmp(act.agent_id, "b") && noticed("b is up in Orca"));
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW && max_unread() == 0);
+    // c's failure, with c asking since: c is answered on the bar, so its notice opens its question.
+    max_show(MAX_VIEW_INBOX);
+    CHECK(tap_on(note_of("c", MAX_ATTN_FAIL)).kind == MAX_ACT_NONE && !strcmp(max_m.attn_id, "c"));
+    // An agent gone from the ring: brought up on the computer by its id, under the name and app its notice kept.
+    max_show(MAX_VIEW_INBOX);
+    max_ui_agents(rows + 1, 2, 40);
+    no_notice();
+    act = tap_on(note_of("a", MAX_ATTN_ASK));
+    CHECK(act.kind == MAX_ACT_OPEN && !strcmp(act.agent_id, "a") && noticed("a is up in Orca"));
+    // A notice past the cards there are opens nothing. Close: Overview.
+    max_show(MAX_VIEW_INBOX);
+    CHECK(tap_on(plant(MAX_HIT_NOTE, MAX_INBOX)).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_INBOX);
+    CHECK(tap_on(&max_m.hits[0]).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_OVERVIEW);
+    // No computer: nothing to bring up, and the notice says so.
+    max_ui_link(false, NULL, 50);
+    max_show(MAX_VIEW_INBOX);
+    act = tap_on(note_of("a", MAX_ATTN_ASK));
+    CHECK(act.kind == MAX_ACT_NONE && noticed("Not connected") && max_m.view == MAX_VIEW_INBOX);
+}
+
+// The app column opens Apps when the daemon lists them; a card picks its app (the daemon's next `apps` names it shown),
+// "+ New" names a form, Close goes back.
+static void test_apps(void)
+{
+    linked(ABCDE, 3);
     max_ui_offers(true);
-    render(100);
-    const max_hit_t turn = *find_hit(MAX_HIT_PAGE, 0);
-    CHECK(press(MAX_HIT_NEW, 0).kind == MAX_ACT_NEW && max_ui_form_open("form-1", 100));
-    CHECK(tap_on(&turn).kind == MAX_ACT_NONE && max_m.page == 0 && max_form_open());
+    overview_drawn();
+    const max_hit_t *column = plant(MAX_HIT_APPS, 0);
+    CHECK(tap_on(column).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_OVERVIEW);   // no `apps`: no Apps page
+    const pro_app_row_t apps[] = {{"orca", "Orca", 3, 1}, {"vscode", "VS Code", 2, 0}};
+    max_ui_apps("orca", apps, 2, 0);
+    CHECK(tap_on(column).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_APPS);
+    drawn_page(MAX_VIEW_APPS);
+    const max_hit_t *close = plant(MAX_HIT_CLOSE, 0), *orca = plant(MAX_HIT_APP, 0), *vscode = plant(MAX_HIT_APP, 1),
+                    *past = plant(MAX_HIT_APP, 2), *add = plant(MAX_HIT_NEW, 0);
+    CHECK(tap_on(past).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_APPS);
+    max_act_t act = tap_on(vscode);
+    CHECK(act.kind == MAX_ACT_PICK && !strcmp(act.app, "vscode") && max_m.view == MAX_VIEW_OVERVIEW);
+    CHECK(!strcmp(max_m.shown, "orca"));   // until the daemon says otherwise
+    max_show(MAX_VIEW_APPS);
+    CHECK(tap_on(orca).kind == MAX_ACT_PICK && !strcmp(max_ui_touch(false, 0, 0, 0).app, ""));
+    max_show(MAX_VIEW_APPS);
+    CHECK(tap_on(add).kind == MAX_ACT_NEW && max_ui_form_open("form-1", 0));
+    CHECK(tap_on(add).kind == MAX_ACT_NONE);   // one form at a time
     max_form_dismiss();
-    // The pager drawn, then all but a page of lanes gone: it turns nothing.
-    render(100);
-    roster(XS, MAX_LANES + 1);
-    CHECK(tap_on(&turn).kind == MAX_ACT_NONE && max_m.page == 0 && !max_m.dirty);
-    // One page: no pager to tap, and a tap there turns nothing.
-    render(100);
-    CHECK(!find_hit(MAX_HIT_PAGE, 0) && tap_on(&turn).kind == MAX_ACT_NONE && max_m.page == 0 && !max_m.dirty);
+    CHECK(tap_on(close).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_OVERVIEW);
 }
 
-// Voice goes to the room's agent: its pet starts a recording, and while it records only Send and Cancel act.
-static void test_talk_from_the_room(void)
+// Ambient: a tap anywhere is Overview, and a person at the bar.
+static void test_ambient_wakes(void)
 {
-    linked(XS, MAX_LANES + 2);   // the room shows x0; two pages of lanes
-    max_ui_offers(true);
-    max_ui_question("x0", "toolu_1", DB.q, &DB, 1, false, false, 0);
-    render(0);
-    room_card();
-    const max_hit_t pet = *room_hit(MAX_HIT_TALK, 0), send = *room_hit(MAX_HIT_TALK_SEND, 0),
-                    cancel = *room_hit(MAX_HIT_TALK_CANCEL, 0), option = *room_hit(MAX_HIT_OPTION, 0),
-                    toast = *room_hit(MAX_HIT_TOAST, 0);
-    // Idle, Send and Cancel do nothing; the pet records for the room's agent, which may answer its question by voice.
-    CHECK(tap_on(&send).kind == MAX_ACT_NONE && tap_on(&cancel).kind == MAX_ACT_NONE);
-    max_act_t act = tap_on(&pet);
-    CHECK(act.kind == MAX_ACT_TALK && !strcmp(act.agent_id, "x0") && !strcmp(max_m.talk_id, "x0"));
+    linked(ABCDE, 3);
+    max_show(MAX_VIEW_AMBIENT);
+    drawn_page(MAX_VIEW_AMBIENT);
+    plant_page(MAX_HIT_WAKE);
+    CHECK(tap_at(10, 10, 5000).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_OVERVIEW && max_m.idle_from == 5090);
+}
+
+// ---- the agent page ----
+
+// A tap on the page opens the mic for its agent (one without voice is brought up on the computer instead). While it
+// records, a tap on the page sends at once, says so, and goes back to Overview; X cancels and the page stays.
+static void test_agent_page_talks(void)
+{
+    max_ui_reset();
+    max_ui_link(true, "MacBook Pro", 0);
+    const pro_agent_row_t rows[] = {{"a", "a", "claude", "m1", "MacBook Pro", NULL, NULL},
+                                    {"b", "b", "codex", "m1", "MacBook Pro", "orca", "f"}};
+    max_ui_agents(rows, 2, 0);
+    agent_page("a");
+    max_act_t act = tap_page();
+    CHECK(act.kind == MAX_ACT_TALK && !strcmp(act.agent_id, "a") && !strcmp(max_m.talk_id, "a"));
     max_ui_talk(MAX_TALK_RECORDING, 0);
-    // While it records everything else rests: the pet, the card's buttons, the toast, New, the pager, a lane, a swipe.
-    max_ui_question("x1", "toolu_2", DB.q, &DB, 1, false, false, 10);
-    CHECK(max_toast_shown(10) && tap_on(&toast).kind == MAX_ACT_NONE);
-    CHECK(tap_on(&pet).kind == MAX_ACT_NONE && tap_on(&option).kind == MAX_ACT_NONE && max_m.out_count == 0);
-    CHECK(press(MAX_HIT_NEW, 0).kind == MAX_ACT_NONE);
-    CHECK(press(MAX_HIT_PAGE, 0).kind == MAX_ACT_NONE && max_m.page == 0);
-    CHECK(tap(lane_x(0), lane_y(0)).kind == MAX_ACT_NONE && !strcmp(max_ui_selected(), "x0"));
-    drag(lane_x(0), lane_y(0), -200, 0);
-    CHECK(max_m.page == 0 && !strcmp(max_ui_selected(), "x0"));
-    // Cancel stops it: nothing is sent.
-    CHECK(tap_on(&cancel).kind == MAX_ACT_CANCEL && !strcmp(max_ui_selected(), "x0"));
+    agent_drawn();
+    act = tap_on(&max_m.hits[max_m.hit_count - 2]);   // X
+    CHECK(act.kind == MAX_ACT_CANCEL && max_m.view == MAX_VIEW_AGENT && !strcmp(max_ui_selected(), "a"));
     max_ui_talk(MAX_TALK_IDLE, 0);
-    max_ui_question_close("x1");
-    // Send finishes the next for x0; while it is sent nothing acts, until the reply ends it.
-    CHECK(tap_on(&pet).kind == MAX_ACT_TALK);
+    // The mic again: a tap sends, whether or not the level said anything was heard.
+    agent_drawn();
+    CHECK(tap_page().kind == MAX_ACT_TALK);
     max_ui_talk(MAX_TALK_RECORDING, 0);
-    act = tap_on(&send);
-    CHECK(act.kind == MAX_ACT_SEND && !strcmp(act.agent_id, "x0"));
+    agent_drawn();
+    no_notice();
+    act = tap_page();
+    CHECK(act.kind == MAX_ACT_SEND && !strcmp(act.agent_id, "a") && noticed("Sent to a"));
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW && max_m.dirty);
+    // While it is sent the page takes no voice: a tap there brings the agent up instead.
     max_ui_talk(MAX_TALK_SENDING, 0);
-    CHECK(tap_on(&send).kind == MAX_ACT_NONE && tap_on(&cancel).kind == MAX_ACT_NONE);
+    agent_page("a");
+    act = tap_page();
+    CHECK(act.kind == MAX_ACT_OPEN && !strcmp(act.agent_id, "a"));
     max_ui_talk(MAX_TALK_IDLE, 0);
+    // No voice: brought up on the computer; X does nothing when no recording is up.
+    agent_page("b");
+    act = tap_page();
+    CHECK(act.kind == MAX_ACT_OPEN && !strcmp(act.agent_id, "b") && max_m.talk_id[0] != 'b');
+    drawn_page(MAX_VIEW_AGENT);   // X alone, over no body
+    CHECK(tap_on(plant(MAX_HIT_TALK_CANCEL, 0)).kind == MAX_ACT_NONE);
     // A permission prompt takes Yes or No only, and an answer on its way no voice either.
-    max_ui_question("x0", "toolu_3", DEPLOY.q, &DEPLOY, 1, true, false, 20);
-    CHECK(tap_on(&pet).kind == MAX_ACT_NONE);
-    max_ui_question("x0", "toolu_4", DB.q, &DB, 1, false, false, 30);
-    max_ask_hit(max_find("x0"), MAX_HIT_OPTION, 0, 30);
-    CHECK(max_ask_of("x0")->phase == MAX_ASK_SENDING && tap_on(&pet).kind == MAX_ACT_NONE);
-    // The room's agent left the roster before the tap: the room shows another, and the pet is its.
-    roster(XS + 2, 3);
-    act = tap_on(&pet);
-    CHECK(act.kind == MAX_ACT_TALK && !strcmp(act.agent_id, max_ui_selected()));
+    max_ui_question("a", "r1", DEPLOY.q, &DEPLOY, 1, true, false, 0);
+    agent_page("a");
+    CHECK(tap_page().kind == MAX_ACT_OPEN);
+    max_ui_question("a", "r2", DB.q, &DB, 1, false, false, 0);
+    max_ask_hit(max_find("a"), MAX_HIT_OPTION, 0, 0);
+    agent_page("a");
+    CHECK(max_ask_of("a")->phase == MAX_ASK_SENDING && tap_page().kind == MAX_ACT_OPEN);
+    // A page whose agent left the ring since it was drawn opens nothing.
+    agent_page("b");
+    max_ui_agents(rows, 1, 0);
+    CHECK(tap_page().kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_OVERVIEW);
 }
 
-// A recording sent for the room's agent while it asked is its answer: the room moves on to the question that has waited
-// longest, or stays when none waits. Spoken to an agent that does not ask, it moves nothing.
-static void test_spoken_answer_moves_the_room(void)
+// Back goes to Overview; a segment or a sideways swipe shows another agent of the ring with the mic closed. While a
+// recording is up each first sends what was heard (else drops it).
+static void test_back_and_the_strip(void)
 {
     linked(ABCDE, 5);
-    max_ui_question("a", "toolu_1", DB.q, &DB, 1, false, false, 0);
-    max_ui_question("c", "toolu_2", DB.q, &DB, 1, false, false, 10);
-    render(0);
-    const max_hit_t pet = *room_hit(MAX_HIT_TALK, 0), send = *room_hit(MAX_HIT_TALK_SEND, 0);
-    CHECK(tap_on(&pet).kind == MAX_ACT_TALK);
-    max_ui_talk(MAX_TALK_RECORDING, 0);
-    max_act_t act = tap_on(&send);
-    CHECK(act.kind == MAX_ACT_SEND && !strcmp(act.agent_id, "a") && !strcmp(max_ui_selected(), "c") && max_ui_tick(0));
+    agent_page("a");
+    CHECK(tap_on(seg_of("c")).kind == MAX_ACT_NONE && !strcmp(max_ui_selected(), "c") && max_m.view == MAX_VIEW_AGENT);
+    agent_drawn();
+    CHECK(swipe_left().kind == MAX_ACT_NONE && !strcmp(max_ui_selected(), "d"));   // to the left: the next
+    swipe_left();
+    swipe_left();
+    CHECK(!strcmp(max_ui_selected(), "a"));   // round the ring
+    swipe_right();
+    CHECK(!strcmp(max_ui_selected(), "e"));
+    agent_drawn();
+    CHECK(tap_on(&max_m.hits[0]).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_OVERVIEW);
+    // Back while recording: what was heard is sent, and says so.
+    agent_page("b");
+    recording(true);
+    no_notice();
+    max_act_t act = tap_on(&max_m.hits[0]);
+    CHECK(act.kind == MAX_ACT_SEND && !strcmp(act.agent_id, "b") && noticed("Sent to b"));
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW);
+    // Nothing heard: dropped, nothing said.
+    agent_page("b");
+    recording(false);
+    no_notice();
+    CHECK(tap_on(&max_m.hits[0]).kind == MAX_ACT_CANCEL && !max_notice_shown(0) && max_m.view == MAX_VIEW_OVERVIEW);
+    // The strip: sent, then that agent's page with the mic closed.
+    agent_page("b");
+    recording(true);
+    act = tap_on(seg_of("d"));
+    CHECK(act.kind == MAX_ACT_SEND && !strcmp(act.agent_id, "b") && noticed("Sent to b"));
+    CHECK(max_m.view == MAX_VIEW_AGENT && !strcmp(max_ui_selected(), "d"));
+    agent_page("b");
+    recording(false);
+    CHECK(tap_on(seg_of("d")).kind == MAX_ACT_CANCEL && !strcmp(max_ui_selected(), "d"));
+    // A swipe the same.
+    agent_page("b");
+    recording(true);
+    act = swipe_left();
+    CHECK(act.kind == MAX_ACT_SEND && !strcmp(act.agent_id, "b") && !strcmp(max_ui_selected(), "c"));
+    agent_page("b");
+    recording(false);
+    CHECK(swipe_right().kind == MAX_ACT_CANCEL && !strcmp(max_ui_selected(), "a"));
+    // A segment whose agent left since it was drawn is no segment: while recording, the tap sends as one on the page.
+    agent_page("b");
+    recording(false);
+    const max_hit_t gone = *seg_of("e");
+    roster(ABCDE, 4);
+    act = tap_on(&gone);
+    CHECK(act.kind == MAX_ACT_SEND && !strcmp(act.agent_id, "b") && max_m.view == MAX_VIEW_OVERVIEW);
     max_ui_talk(MAX_TALK_IDLE, 0);
-    max_ui_question_close("a");   // the daemon took it
-    // c's question answered by voice, and none waits: the room stays to show c at work.
-    act = tap_on(&pet);
-    CHECK(act.kind == MAX_ACT_TALK && !strcmp(act.agent_id, "c"));
-    max_ui_talk(MAX_TALK_RECORDING, 0);
-    CHECK(tap_on(&send).kind == MAX_ACT_SEND && !strcmp(max_ui_selected(), "c"));
-    max_ui_talk(MAX_TALK_IDLE, 0);
-    // c no longer asks: talking to it moves nothing, whatever waits.
-    max_ui_question_close("c");
-    max_ui_question("b", "toolu_3", DB.q, &DB, 1, false, false, 20);
-    CHECK(tap_on(&pet).kind == MAX_ACT_TALK);
-    max_ui_talk(MAX_TALK_RECORDING, 0);
-    CHECK(tap_on(&send).kind == MAX_ACT_SEND && !strcmp(max_ui_selected(), "c"));
-    max_ui_talk(MAX_TALK_IDLE, 0);
+    agent_page("b");
+    CHECK(tap_on(&max_m.hits[5]).kind == MAX_ACT_TALK);   // the body under where e's segment was
 }
 
-// A question that came while a person was at the bar: a tap on its toast opens it; a lane tap puts the toast away.
-static void test_toast_opens_its_agent(void)
+// While a recording is up, a tap on anything but X, Back and the strip sends it: the toast, a cell, the bare glass.
+static void test_any_other_tap_sends(void)
 {
     linked(ABCDE, 5);
-    render(0);
-    tap(HT_WIDTH - 2, HT_HEIGHT - 2);   // nothing there, but a person at the bar
-    max_ui_question("c", "r1", "Ok?", NULL, 0, false, false, 100);
-    CHECK(!strcmp(max_ui_selected(), "a") && max_toast_shown(100));
-    render(100);
-    const max_hit_t toast = *room_hit(MAX_HIT_TOAST, 0);
-    max_act_t act = tap_on(&toast);
-    CHECK(act.kind == MAX_ACT_OPEN && !strcmp(act.agent_id, "c") && !strcmp(max_ui_selected(), "c"));
-    CHECK(max_m.toast_id[0] == 0 && max_ui_tick(100));
-    CHECK(tap_on(&toast).kind == MAX_ACT_NONE);   // gone: it opens nothing
-    max_ui_question("d", "r2", "Ok?", NULL, 0, false, false, 200);
-    CHECK(max_toast_shown(200) && !strcmp(max_m.toast_id, "d"));
-    render(200);
-    const int b = lane_of("b");
-    CHECK(b >= 0);
-    act = tap(lane_x(b), lane_y(b));
-    CHECK(act.kind == MAX_ACT_OPEN && !strcmp(max_ui_selected(), "b") && max_m.toast_id[0] == 0);
+    agent_page("a");
+    recording(false);
+    max_ui_question("c", "r1", DB.q, &DB, 1, false, false, 0);   // a person talks: only the toast
+    CHECK(max_m.view == MAX_VIEW_AGENT && !strcmp(max_m.toast_id, "c") && max_toast_shown(0));
+    drawn_page(MAX_VIEW_AGENT);
+    const max_hit_t *toast = plant(MAX_HIT_TOAST, 0);
+    max_act_t act = tap_on(toast);
+    CHECK(act.kind == MAX_ACT_SEND && !strcmp(act.agent_id, "a") && max_m.view == MAX_VIEW_OVERVIEW);
+    CHECK(!strcmp(max_m.toast_id, "c"));
+    overview_drawn();
+    CHECK(tap_box(cell_of("b")).kind == MAX_ACT_SEND && max_m.view == MAX_VIEW_OVERVIEW);
+    drawn_page(MAX_VIEW_OVERVIEW);
+    CHECK(tap(5, 5).kind == MAX_ACT_SEND);
+    // Swipes rest everywhere but the agent page.
+    overview_drawn();
+    CHECK(swipe_left().kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_OVERVIEW);
 }
 
-// The toast while New Harness is up: the person chose that question over the form, so the form closes (and the computer
-// is told) and the room opens the agent.
-static void test_toast_over_the_form(void)
+// ---- Attention ----
+
+// Its answers answer, and the question waiting longest takes the page; Say it opens the mic on the agent page (never on
+// a permission prompt); anywhere else brings the agent up on the computer and goes to Overview.
+static void test_attention(void)
+{
+    max_ui_reset();
+    max_ui_link(true, "MacBook Pro", 0);
+    const pro_app_row_t apps[] = {{"orca", "Orca", 5, 2}};
+    max_ui_apps("orca", apps, 1, 0);
+    roster(ABCDE, 5);
+    max_ui_question("a", "r1", DB.q, &DB, 1, false, false, 0);
+    max_ui_question("c", "r2", DB.q, &DB, 1, false, false, 10);
+    attention_drawn(2, true);
+    max_act_t act = tap_on(&max_m.hits[1]);
+    CHECK(act.kind == MAX_ACT_NONE && take(20) == 1 && !strcmp(ANSWER.values[0], "Staging"));
+    CHECK(max_m.view == MAX_VIEW_ATTENTION && !strcmp(max_m.attn_id, "c"));
+    // Say it: c's page with the mic on. The words are its answer: sent, and with none waiting, Overview.
+    attention_drawn(2, true);
+    act = tap_on(&max_m.hits[2]);
+    CHECK(act.kind == MAX_ACT_TALK && !strcmp(act.agent_id, "c") && !strcmp(max_m.talk_id, "c"));
+    CHECK(max_m.view == MAX_VIEW_AGENT && !strcmp(max_ui_selected(), "c"));
+    max_ui_talk(MAX_TALK_RECORDING, 0);
+    agent_drawn();
+    act = tap_page();
+    CHECK(act.kind == MAX_ACT_SEND && !strcmp(act.agent_id, "c") && max_m.view == MAX_VIEW_OVERVIEW);
+    max_ui_talk(MAX_TALK_IDLE, 0);
+    // A permission prompt: Say it does nothing. The rest of the page brings the agent up in its app.
+    max_ui_question("e", "r3", DEPLOY.q, &DEPLOY, 1, true, false, 30);
+    attention_drawn(2, true);
+    CHECK(tap_on(&max_m.hits[2]).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_ATTENTION);
+    no_notice();
+    act = tap_page();
+    CHECK(act.kind == MAX_ACT_OPEN && !strcmp(act.agent_id, "e") && noticed("e is up in Orca"));
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW && max_m.out_count == 0);
+    // A turn's end: the same, anywhere on it.
+    max_ui_turn("b", "error", "boom", 0, 40);
+    attention_drawn(0, false);
+    act = tap_page();
+    CHECK(act.kind == MAX_ACT_OPEN && !strcmp(act.agent_id, "b") && max_m.view == MAX_VIEW_OVERVIEW);
+    // An answer drawn for a question that changed since does nothing; the page around it still brings it up.
+    max_ui_question("d", "r4", DB.q, &DB, 1, false, false, 50);
+    attention_drawn(2, true);
+    max_ui_question("d", "r5", "Which other database?", &DB, 1, false, false, 60);
+    CHECK(tap_on(&max_m.hits[0]).kind == MAX_ACT_NONE && max_m.out_count == 0 && max_m.view == MAX_VIEW_ATTENTION);
+    // Its targets do nothing once Attention is down.
+    attention_drawn(2, true);
+    max_show(MAX_VIEW_OVERVIEW);
+    CHECK(tap_on(&max_m.hits[2]).kind == MAX_ACT_NONE && tap_page().kind == MAX_ACT_NONE);
+}
+
+// The toast (what needed the person while they talked): a tap opens its Attention; over New Harness, the form closes
+// first (and the computer is told). Gone, it opens nothing.
+static void test_toast(void)
 {
     linked(ABCDE, 5);
+    agent_page("a");
+    recording(false);
+    max_ui_turn("b", "error", "boom", 0, 100);
+    CHECK(!strcmp(max_m.toast_id, "b") && max_m.toast_attn == MAX_ATTN_FAIL && max_toast_shown(100));
+    CHECK(max_toast_shown(100 + MAX_TOAST_MS - 1) && !max_toast_shown(100 + MAX_TOAST_MS));
+    max_ui_talk(MAX_TALK_IDLE, 0);
+    drawn_page(MAX_VIEW_AGENT);
+    const max_hit_t toast = *plant(MAX_HIT_TOAST, 0);
+    CHECK(tap_at(toast.x + 5, toast.y + 5, 200).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_ATTENTION);
+    CHECK(!strcmp(max_m.attn_id, "b") && max_m.attn == MAX_ATTN_FAIL && max_m.attn_from == 290);
+    CHECK(max_m.toast_id[0] == 0 && tap_on(&toast).kind == MAX_ACT_NONE);
+    // Over the form.
+    max_show(MAX_VIEW_APPS);
     max_ui_offers(true);
-    render(0);
-    CHECK(press(MAX_HIT_NEW, 0).kind == MAX_ACT_NEW && max_ui_form_open("form-1", 0) && take(0) == 1);
-    const pro_form_page_t page = {.title = "Project", .label = "harness-max-firmware", .detail = "", .previous = "backend",
-                                  .next = "website", .error = "", .status = "", .action = "choose", .query = "",
-                                  .revision = 7, .position = 2, .total = 5, .active = true, .enabled = true};
-    max_ui_form_state(OUT[0].fetch, "form-1", true, &page, 0);
-    max_ui_question("c", "r1", "Ok?", NULL, 0, false, false, 100);
-    CHECK(max_toast_shown(100) && !strcmp(max_ui_selected(), "a"));
-    render(100);
-    max_act_t act = press(MAX_HIT_TOAST, 0);
-    CHECK(act.kind == MAX_ACT_OPEN && !strcmp(act.agent_id, "c") && !strcmp(max_ui_selected(), "c"));
-    CHECK(!max_form_open() && max_m.toast_id[0] == 0 && max_ui_tick(100));
-    CHECK(take(100) == 1 && OUT[0].kind == MAX_OUT_FORM && OUT[0].op == MAX_FORM_CLOSE && !strcmp(OUT[0].form, "form-1"));
-    // The room shows it, its card's buttons at hand, New Harness back in reach and the pager turning again.
-    render(100);
-    CHECK(!strcmp(max_m.card_id, "c") && max_m.lane_hits == MAX_LANES && find_hit(MAX_HIT_NEW, 0));
-    CHECK(find_hit(MAX_HIT_PAGE, 0));
+    CHECK(max_ui_form_open("form-1", 0) && take(0) == 1);
+    max_ui_question("c", "r1", DB.q, &DB, 1, false, false, 300);
+    CHECK(max_m.view == MAX_VIEW_APPS && !strcmp(max_m.toast_id, "c"));
+    CHECK(tap_on(&toast).kind == MAX_ACT_NONE && !max_form_open() && !strcmp(max_m.attn_id, "c"));
+    CHECK(take(300) == 1 && OUT[0].kind == MAX_OUT_FORM && OUT[0].op == MAX_FORM_CLOSE);
+    // Answered on the computer before the tap: nothing.
+    max_show(MAX_VIEW_OVERVIEW);
+    max_ui_form_open("form-2", 0);
+    max_ui_question("d", "r2", DB.q, &DB, 1, false, false, 400);
+    max_ui_question_close("d");
+    CHECK(tap_on(&toast).kind == MAX_ACT_NONE && max_form_open() && max_m.view == MAX_VIEW_OVERVIEW);
 }
+
+// ---- the clock's side of a recording ----
+
+// Speech, then MAX_SILENCE_MS of quiet: sent, as a tap on the page. Nothing heard in MAX_HEAR_MS: the mic closes and
+// the page stays. Its agent leaving the ring: what was heard is sent, else dropped; Overview. No link: nothing.
+static void test_talk_due(void)
+{
+    linked(ABCDE, 5);
+    agent_page("a");
+    max_copy(max_m.talk_id, sizeof max_m.talk_id, "a");
+    max_ui_talk(MAX_TALK_RECORDING, 1000);
+    CHECK(max_ui_talk_due(1000).kind == MAX_ACT_NONE);
+    max_ui_level(3, 1100);
+    max_ui_level(0, 1200);
+    CHECK(max_ui_talk_due(1100 + MAX_SILENCE_MS - 1).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_AGENT);
+    no_notice();
+    max_act_t act = max_ui_talk_due(1100 + MAX_SILENCE_MS);
+    CHECK(act.kind == MAX_ACT_SEND && !strcmp(act.agent_id, "a") && noticed("Sent to a"));
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW && max_m.dirty);
+    // Nothing heard.
+    max_ui_talk(MAX_TALK_IDLE, 0);
+    agent_page("a");
+    max_ui_talk(MAX_TALK_RECORDING, 5000);
+    max_ui_level(1, 6000);   // below speech
+    CHECK(max_ui_talk_due(5000 + MAX_HEAR_MS - 1).kind == MAX_ACT_NONE);
+    act = max_ui_talk_due(5000 + MAX_HEAR_MS);
+    CHECK(act.kind == MAX_ACT_CANCEL && noticed("Mic closed \xc2\xb7 tap to talk") && max_m.view == MAX_VIEW_AGENT);
+    // Not recording: nothing owed.
+    max_ui_talk(MAX_TALK_SENDING, 0);
+    CHECK(max_ui_talk_due(99999).kind == MAX_ACT_NONE);
+    // Words to an agent that asked are its answer: the question waiting longest takes the page.
+    max_ui_talk(MAX_TALK_IDLE, 0);
+    max_ui_question("b", "r1", DB.q, &DB, 1, false, false, 10000);
+    max_ui_question("c", "r2", DB.q, &DB, 1, false, false, 10100);
+    agent_page("b");
+    recording(true);
+    max_m.talk_quiet_from = 10000;
+    act = max_ui_talk_due(10000 + MAX_SILENCE_MS);
+    CHECK(act.kind == MAX_ACT_SEND && max_m.view == MAX_VIEW_ATTENTION && !strcmp(max_m.attn_id, "c"));
+    max_ui_talk(MAX_TALK_IDLE, 0);
+    // The recording's agent leaves the ring: its page goes at once, and the clock sends what was heard ("Sent").
+    agent_page("d");
+    recording(true);
+    roster(ABCDE, 3);
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW);
+    no_notice();
+    act = max_ui_talk_due(20000);
+    CHECK(act.kind == MAX_ACT_SEND && !strcmp(act.agent_id, "d") && noticed("Sent") && max_m.view == MAX_VIEW_OVERVIEW);
+    max_ui_talk(MAX_TALK_IDLE, 0);
+    roster(ABCDE, 5);
+    agent_page("e");
+    recording(false);
+    roster(ABCDE, 3);
+    CHECK(max_ui_talk_due(20000).kind == MAX_ACT_CANCEL && max_m.view == MAX_VIEW_OVERVIEW);
+    // The link went: nothing to send to (the app ended the recording with it).
+    max_ui_talk(MAX_TALK_IDLE, 0);
+    agent_page("a");
+    recording(true);
+    max_ui_link(false, NULL, 0);
+    CHECK(max_ui_talk_due(99999).kind == MAX_ACT_NONE);
+}
+
+// ---- the rest ----
 
 static void test_cancel(void)
 {
     linked(ABCDE, 5);
-    render(0);
+    overview_drawn();
     // A cancelled contact's lift is nothing (pro_touch.c delivers no more of it; the next DOWN is a new contact).
-    const int y = lane_y(0);
-    max_ui_touch(true, lane_x(0), y, 0);
+    const max_box_t *a = cell_of("a");
+    const int x = a->x + a->w / 2, y = a->y + a->h / 2;
+    max_ui_touch(true, x, y, 0);
     max_ui_touch_cancel();
-    CHECK(max_ui_touch(false, lane_x(0), y, 60).kind == MAX_ACT_NONE);
-    max_ui_touch(true, lane_x(2), y, 100);
-    max_ui_touch(true, lane_x(2) - 150, y, 130);
-    max_ui_touch_cancel();
-    max_ui_touch(false, lane_x(2) - 200, y, 160);
-    CHECK(max_m.page == 0 && !strcmp(max_ui_selected(), "a"));
+    CHECK(max_ui_touch(false, x, y, 60).kind == MAX_ACT_NONE);
     // The next contact works.
-    CHECK(tap(lane_x(0), y).kind == MAX_ACT_OPEN);
+    CHECK(tap(x, y).kind == MAX_ACT_OPEN_TALK);
 }
 
-static void test_drawn_lanes_are_what_a_tap_hits(void)
+// Nothing is tappable on the update screen, and nothing turns.
+static void test_update_screen(void)
 {
-    // The tap acts on the lanes the person saw, even when the order moved since.
-    linked(ABCDE, 5);
-    render(0);
-    max_ui_question("c", "r", "Ok?", NULL, 0, false, false, 0);
-    max_act_t act = tap(lane_x(0), lane_y(0));
-    CHECK(act.kind == MAX_ACT_OPEN && !strcmp(act.agent_id, "b"));
-    // A lane whose agent left before the tap opens nothing.
-    render(0);
-    CHECK(!strcmp(max_m.lane_id[1], "a"));
-    roster(ABCDE + 1, 4);
-    CHECK(tap(lane_x(1), lane_y(1)).kind == MAX_ACT_NONE);
-    // Nothing is tappable on the update screen, and nothing turns.
-    linked(XS, MAX_LANES + 2);
-    render(0);
-    const int x = lane_x(0), y = lane_y(0);
+    linked(XS, 2 * MAX_CELLS + 1);
+    overview_drawn();
     max_ui_update(10, "0.9.0");
-    render(0);
-    CHECK(tap(x, y).kind == MAX_ACT_NONE && tap_on(room_hit(MAX_HIT_TALK, 0)).kind == MAX_ACT_NONE);
-    drag(x, y, -200, 0);
-    CHECK(max_m.page == 0);
+    CHECK(tap_box(cell_of("x0")).kind == MAX_ACT_NONE && tap_on(&max_m.hits[0]).kind == MAX_ACT_NONE);
+    swipe_left();
+    CHECK(max_m.cell_page == 0 && max_m.view == MAX_VIEW_OVERVIEW);
 }
 
-// ---- the card's buttons and New Harness ----
-
-// The room's card: its buttons answer, and a button of a card that changed since it was drawn does nothing.
-static void test_card_buttons(void)
-{
-    linked(ABCDE, 3);
-    max_ui_question("a", "toolu_1", DB.q, &DB, 1, false, false, 0);
-    render(0);
-    room_card();
-    // An option answers; the tap opens nothing and the answer waits in the outbox for the app.
-    CHECK(tap_on(room_hit(MAX_HIT_OPTION, 1)).kind == MAX_ACT_NONE && max_ui_tick(0));
-    CHECK(take(0) == 1 && OUT[0].kind == MAX_OUT_ANSWER && !strcmp(ANSWER.values[0], "Staging"));
-    CHECK(!strcmp(max_ui_selected(), "a"));
-    // Another question, or the same one sent, since the card was drawn.
-    max_ui_question("a", "toolu_2", DB.q, &DB, 1, false, false, 0);
-    render(0);
-    room_card();
-    const max_hit_t old = *room_hit(MAX_HIT_OPTION, 0);
-    max_ui_question("a", "toolu_3", "Which other database?", &DB, 1, false, false, 0);
-    CHECK(tap_on(&old).kind == MAX_ACT_NONE && max_m.out_count == 0);
-    render(0);
-    room_card();
-    const max_hit_t first = *room_hit(MAX_HIT_OPTION, 0);
-    max_ask_hit(max_find("a"), MAX_HIT_OPTION, 1, 0);   // answered meanwhile (a tap a moment earlier)
-    take(0);
-    tap_on(&first);
-    CHECK(max_m.out_count == 0);
-    // A failure's card: Dismiss closes it.
-    max_ui_turn("a", "error", "boom", 0, 0);
-    render(0);
-    room_card();
-    CHECK(tap_on(room_hit(MAX_HIT_DISMISS, 0)).kind == MAX_ACT_NONE && !max_find("a")->card && max_ui_tick(0));
-}
-
+// New Harness: its moves, choice, Back and Close; Say records a name for its field, sent by a tap or cancelled by X;
+// a failed form's Retry names a new one.
 static void test_new_harness(void)
 {
     linked(ABCDE, 3);
     max_ui_offers(true);
-    render(0);
-    // New asks the app to name a form and open it.
-    CHECK(press(MAX_HIT_NEW, 0).kind == MAX_ACT_NEW);
+    max_show(MAX_VIEW_APPS);
+    drawn_page(MAX_VIEW_APPS);
+    CHECK(tap_on(plant(MAX_HIT_NEW, 0)).kind == MAX_ACT_NEW);
     CHECK(max_ui_form_open("form-1", 0) && take(0) == 1);
     const pro_form_page_t page = {.title = "Project", .label = "harness-max-firmware", .detail = "", .previous = "backend",
                                   .next = "website", .error = "", .status = "", .action = "choose", .query = "",
                                   .revision = 7, .position = 2, .total = 5, .active = true, .enabled = true,
                                   .can_query = true};
     max_ui_form_state(OUT[0].fetch, "form-1", true, &page, 0);
-    render(0);
-    // A tap on the neighbours moves; on the focused choice it chooses; one at a time.
-    CHECK(press(MAX_HIT_FORM_MOVE, 1).kind == MAX_ACT_NONE && take(0) == 1 && OUT[0].op == MAX_FORM_MOVE && OUT[0].delta == 1);
+    max_m.form_revision = 7;   // the page drawn
+    drawn_page(MAX_VIEW_APPS);
+    const max_hit_t *next = plant(MAX_HIT_FORM_MOVE, 1), *pick = plant(MAX_HIT_FORM_PICK, 0),
+                    *back = plant(MAX_HIT_FORM_BACK, 0), *close = plant(MAX_HIT_FORM_CLOSE, 0),
+                    *say = plant(MAX_HIT_FORM_SAY, 0), *x = plant(MAX_HIT_TALK_CANCEL, 0);
+    CHECK(tap_on(next).kind == MAX_ACT_NONE && take(0) == 1 && OUT[0].op == MAX_FORM_MOVE && OUT[0].delta == 1);
     max_ui_form_state(OUT[0].fetch, "form-1", true, &page, 0);
     // A swipe moves too: to the left is the next choice.
-    CHECK(drag(HT_WIDTH / 2, HT_HEIGHT / 2, -200, 0).kind == MAX_ACT_NONE && max_m.page == 0);
-    CHECK(take(0) == 1 && OUT[0].delta == 1);
+    CHECK(swipe_left().kind == MAX_ACT_NONE && take(0) == 1 && OUT[0].delta == 1);
     max_ui_form_state(OUT[0].fetch, "form-1", true, &page, 0);
-    drag(HT_WIDTH / 2, HT_HEIGHT / 2, 200, 0);
+    swipe_right();
     CHECK(take(0) == 1 && OUT[0].delta == -1);
     max_ui_form_state(OUT[0].fetch, "form-1", true, &page, 0);
-    render(0);
-    // Say takes a spoken name for the field, at the page drawn, and Send finishes it; the room's pet is for agents.
-    CHECK(tap_on(room_hit(MAX_HIT_TALK, 0)).kind == MAX_ACT_NONE);
-    max_act_t act = tap_on(room_hit(MAX_HIT_FORM_SAY, 0));
+    // Say: a spoken name for the field at the page drawn. X cancels it; a tap anywhere else sends it, the form stays.
+    max_act_t act = tap_on(say);
     CHECK(act.kind == MAX_ACT_SAY && !strcmp(act.form_id, "form-1") && act.revision == 7 && max_m.talk_id[0] == 0);
     max_ui_talk(MAX_TALK_RECORDING, 0);
-    act = tap_on(room_hit(MAX_HIT_TALK_SEND, 0));
-    CHECK(act.kind == MAX_ACT_SEND && act.agent_id[0] == 0);
+    CHECK(tap_on(x).kind == MAX_ACT_CANCEL);
     max_ui_talk(MAX_TALK_IDLE, 0);
-    render(0);
-    CHECK(press(MAX_HIT_FORM_PICK, 0).kind == MAX_ACT_NONE && take(0) == 1 && OUT[0].op == MAX_FORM_ACTIVATE);
+    CHECK(tap_on(say).kind == MAX_ACT_SAY);
+    max_ui_talk(MAX_TALK_RECORDING, 0);
+    no_notice();
+    act = tap_on(pick);
+    CHECK(act.kind == MAX_ACT_SEND && act.agent_id[0] == 0 && !max_notice_shown(0) && max_m.out_count == 0);
+    CHECK(max_form_open() && max_m.view == MAX_VIEW_APPS);
+    // While a name is said and sent, swipes rest.
+    swipe_left();
+    CHECK(take(0) == 0);
+    max_ui_talk(MAX_TALK_IDLE, 0);
+    CHECK(tap_on(pick).kind == MAX_ACT_NONE && take(0) == 1 && OUT[0].op == MAX_FORM_ACTIVATE);
     // A page that changed since it was drawn (here by a spoken name) takes no tap.
     max_ui_form_state(OUT[0].fetch, "form-1", true, &page, 0);
-    render(0);
-    pro_form_page_t next = page;
-    next.revision = 8;
-    max_ui_voice_form("form-1", true, &next, 0);
-    CHECK(press(MAX_HIT_FORM_PICK, 0).kind == MAX_ACT_NONE && take(0) == 0);
-    CHECK(tap_on(room_hit(MAX_HIT_FORM_SAY, 0)).kind == MAX_ACT_NONE);
-    render(0);
-    CHECK(press(MAX_HIT_FORM_BACK, 0).kind == MAX_ACT_NONE && take(0) == 1 && OUT[0].op == MAX_FORM_BACK);
-    // Close: the form goes, and the lanes are back.
-    render(0);
-    CHECK(press(MAX_HIT_FORM_CLOSE, 0).kind == MAX_ACT_NONE && !max_form_open());
+    pro_form_page_t changed = page;
+    changed.revision = 8;
+    max_ui_voice_form("form-1", true, &changed, 0);
+    CHECK(tap_on(pick).kind == MAX_ACT_NONE && take(0) == 0);
+    CHECK(tap_on(say).kind == MAX_ACT_NONE);
+    max_m.form_revision = 8;
+    CHECK(tap_on(back).kind == MAX_ACT_NONE && take(0) == 1 && OUT[0].op == MAX_FORM_BACK);
+    // Close: the form goes.
+    CHECK(tap_on(close).kind == MAX_ACT_NONE && !max_form_open());
     CHECK(take(0) == 1 && OUT[0].op == MAX_FORM_CLOSE);
-    render(0);
-    CHECK(max_m.lane_hits == 2 && find_hit(MAX_HIT_NEW, 0));
     // A failed form: Retry names a new one.
     max_ui_form_open("form-2", 0);
     take(0);
     max_form_due(MAX_FORM_WAIT_MS);
-    render(0);
-    CHECK(press(MAX_HIT_FORM_RETRY, 0).kind == MAX_ACT_NEW && !max_form_open());
+    CHECK(tap_on(plant(MAX_HIT_FORM_RETRY, 0)).kind == MAX_ACT_NEW && !max_form_open());
     // A page that takes no name: Say does nothing.
     max_ui_form_open("form-3", 0);
-    render(0);
-    CHECK(tap_on(room_hit(MAX_HIT_FORM_SAY, 0)).kind == MAX_ACT_NONE);
+    CHECK(tap_on(say).kind == MAX_ACT_NONE);
 }
 
 int main(void)
 {
-    test_tap_opens_a_lane();
+    test_cell_tap();
     test_drag_is_not_a_tap();
-    test_swipe_turns_the_page();
-    test_pager_turns_the_page();
-    test_talk_from_the_room();
-    test_spoken_answer_moves_the_room();
-    test_toast_opens_its_agent();
-    test_toast_over_the_form();
+    test_swipe_pages_the_cells();
+    test_inbox();
+    test_apps();
+    test_ambient_wakes();
+    test_agent_page_talks();
+    test_back_and_the_strip();
+    test_any_other_tap_sends();
+    test_attention();
+    test_toast();
+    test_talk_due();
     test_cancel();
-    test_drawn_lanes_are_what_a_tap_hits();
-    test_card_buttons();
+    test_update_screen();
     test_new_harness();
     printf("test_max_touch: %d checks passed\n", checks);
     return 0;

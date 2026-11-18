@@ -200,9 +200,11 @@ static void test_plain_answer(void)
     CHECK(!strcmp(ANSWER.keys[1], "checks") && !strcmp(ANSWER.values[1], "Lint, Tests"));
     // No receipt comes for it: sent once handed out.
     CHECK(ask("a")->phase == MAX_ASK_SENT && !strcmp(max_m.notice, "Sent"));
-    // The port had no room: the same choices can go again.
+    // The port had no room: the same choices can go again, and the question is back on Attention for them.
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW);
     CHECK(max_ui_unsent(&OUT[0], 6) && ask("a")->phase == MAX_ASK_READY && !strcmp(max_m.notice, "Not sent"));
     CHECK(ask("a")->choices[0] == 2 && ask("a")->choices[1] == 5);
+    CHECK(max_m.view == MAX_VIEW_ATTENTION && !strcmp(max_m.attn_id, "a") && max_m.attn_from == 6);
     CHECK(hit("a", MAX_HIT_SEND, 0, 7) && take(7) == 1);
     // The question went before its answer was handed out: nothing goes.
     max_ui_question("b", "toolu_2", "Which database?", &DB, 1, false, false, 0);
@@ -216,11 +218,13 @@ static void test_plain_answer(void)
     hit("c", MAX_HIT_OPTION, 1, 0);
     CHECK(take(0) == 1 && !strcmp(OUT[0].agent, "b") && !strcmp(ANSWER.values[0], "Dev"));
     CHECK(take(0) == 1 && !strcmp(OUT[0].agent, "c") && !strcmp(ANSWER.values[0], "Staging"));
-    // A reviewed answer that did not go out is back to be sent.
+    // A reviewed answer that did not go out is back to be sent. Another question on Attention keeps it: this one waits.
     reviewed("a", &DB, 1, 0);
     hit("a", MAX_HIT_OPTION, 0, 0);
     take(0);
-    CHECK(max_ui_unsent(&OUT[0], 0) && ask("a")->phase == MAX_ASK_READY);
+    max_ui_question("c", "toolu_6", "Which database?", &DB, 1, false, false, 0);
+    CHECK(!strcmp(max_m.attn_id, "c"));
+    CHECK(max_ui_unsent(&OUT[0], 0) && ask("a")->phase == MAX_ASK_READY && !strcmp(max_m.attn_id, "c"));
     // A read that did not go out is read again by the clock.
     max_ui_question("b", "toolu_5", "Which database?", &DB, 1, false, true, 0);
     take(0);
@@ -286,54 +290,48 @@ static void test_what_ends_a_question(void)
     CHECK(take(100000) == 0);
 }
 
-// An answer from the room on its way: the room moves on to the question waiting longest; with none waiting it stays,
-// to show the agent start working. Left alone meanwhile, it waits for the answer.
-static void test_answered_room_moves_on(void)
+// An answer from Attention on its way: Attention moves on to the question waiting longest; with none waiting,
+// Overview. A step on is no answer; an answer that found no room in the outbox did not go, and the page stays.
+static void test_answered_attention_moves_on(void)
 {
     linked(ABC, 3);
     CHECK(max_ui_question("a", "toolu_1", DB.q, &DB, 1, false, false, 1000));
     reviewed("c", TWO, 2, 2000);
     CHECK(max_ui_question("b", "toolu_3", DEPLOY.q, &DEPLOY, 1, true, false, 3000));
-    CHECK(!strcmp(max_ui_selected(), "a"));
+    CHECK(max_m.view == MAX_VIEW_ATTENTION && !strcmp(max_m.attn_id, "a"));
     // One tap on a single choice: the answer goes, and c's question has waited longest.
     CHECK(hit("a", MAX_HIT_OPTION, 0, 4000) && ask("a")->phase == MAX_ASK_SENDING);
-    CHECK(!strcmp(max_ui_selected(), "c"));
+    CHECK(max_m.view == MAX_VIEW_ATTENTION && !strcmp(max_m.attn_id, "c") && max_m.attn_from == 4000);
     // A step on is not the answer; Send on several choices is.
-    CHECK(hit("c", MAX_HIT_OPTION, 1, 4100) && !strcmp(max_ui_selected(), "c"));
-    CHECK(hit("c", MAX_HIT_OPTION, 2, 4200) && !strcmp(max_ui_selected(), "c"));
-    CHECK(hit("c", MAX_HIT_SEND, 0, 4300) && !strcmp(max_ui_selected(), "b"));
-    // Yes on the permission prompt, and nothing else waits (a's and c's answers are on their way): the room stays.
+    CHECK(hit("c", MAX_HIT_OPTION, 1, 4100) && !strcmp(max_m.attn_id, "c"));
+    CHECK(hit("c", MAX_HIT_OPTION, 2, 4200) && !strcmp(max_m.attn_id, "c"));
+    CHECK(hit("c", MAX_HIT_SEND, 0, 4300) && !strcmp(max_m.attn_id, "b"));
+    // Yes on the permission prompt, and nothing else waits (a's and c's answers are on their way): Overview.
     CHECK(hit("b", MAX_HIT_OPTION, 0, 4400) && ask("b")->phase == MAX_ASK_SENDING);
-    CHECK(!strcmp(max_ui_selected(), "b"));
-    max_ui_tick(4400 + MAX_QUIET_MS);
-    CHECK(!strcmp(max_ui_selected(), "b"));
-    // An answer from outside the room leaves the room where it is.
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW);
+    // An answer for an agent Attention does not show leaves the page where it is.
     take(4500);
     CHECK(max_ui_answer_receipt("c", ask("c")->fetch, "tok", true, false, NULL, 4500));
-    CHECK(max_ui_question("a", "toolu_4", DB.q, &DB, 1, false, false, 5000));
-    CHECK(max_ui_question("c", "toolu_5", DB.q, &DB, 1, false, false, 6000));
-    CHECK(hit("c", MAX_HIT_OPTION, 0, 7000) && !strcmp(max_ui_selected(), "b"));
-    // An answer that found no room in the outbox did not go: the room stays with its question.
-    max_ui_question_close("b");
-    max_ui_focus("a");
+    CHECK(max_ui_question("a", "toolu_4", DB.q, &DB, 1, false, false, 5000) && !strcmp(max_m.attn_id, "a"));
+    CHECK(max_ui_question("c", "toolu_5", DB.q, &DB, 1, false, false, 6000) && !strcmp(max_m.attn_id, "a"));
+    CHECK(hit("c", MAX_HIT_OPTION, 0, 7000) && !strcmp(max_m.attn_id, "a") && max_m.attn_from == 5000);
+    // An answer that found no room in the outbox did not go: Attention stays with its question.
     while (max_out_push(MAX_OUT_READ)) {}
-    CHECK(hit("a", MAX_HIT_OPTION, 1, 8000) && ask("a")->phase == MAX_ASK_READY && !strcmp(max_ui_selected(), "a"));
+    CHECK(hit("a", MAX_HIT_OPTION, 1, 8000) && ask("a")->phase == MAX_ASK_READY && !strcmp(max_m.attn_id, "a"));
+    CHECK(max_m.view == MAX_VIEW_ATTENTION);
 }
 
+// What a card holds: a failure's until the agent moves on, an alert's while its words show, a question's in place of
+// either. Attention shows it; nothing on the card closes it.
 static void test_cards(void)
 {
     linked(ABC, 3);
-    // A failure's card stays until dismissed.
     max_ui_turn("a", "started", "", 0, 0);
     max_ui_turn("a", "error", "boom", 0, 0);
     CHECK(max_has_card(max_find("a"), 1000000));
-    CHECK(hit("a", MAX_HIT_DISMISS, 0, 10) && !max_has_card(max_find("a"), 10));
-    CHECK(!hit("a", MAX_HIT_DISMISS, 0, 10));
-    // An alert's summary opens one while it shows; dismissed, the lane no longer shows it either.
     max_ui_summary("b", "Fixed it", NULL, false, POD_TIER_ALERT, 0);
     CHECK(max_has_card(max_find("b"), MAX_DONE_MS - 1) && !max_has_card(max_find("b"), MAX_DONE_MS));
-    CHECK(hit("b", MAX_HIT_DISMISS, 0, 10) && !max_note_shown(max_find("b"), 10));
-    // A quieter summary shows on the lane only.
+    // A quieter summary shows on the agent's page only.
     max_ui_summary("c", "Fixed it", NULL, false, POD_TIER_LIST, 0);
     CHECK(!max_has_card(max_find("c"), 0) && max_note_shown(max_find("c"), 0));
     // A question's card replaces a failure's.
@@ -353,7 +351,7 @@ int main(void)
     test_only_ready_cards_answer();
     test_outbox_full();
     test_what_ends_a_question();
-    test_answered_room_moves_on();
+    test_answered_attention_moves_on();
     test_cards();
     printf("test_max_ask: %d checks passed\n", checks);
     return 0;

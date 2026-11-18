@@ -163,7 +163,7 @@ bool max_ui_question(const char *id, const char *request, const char *text, cons
     a->card = false;   // the question's card replaces a failure's or a summary's
     max_ask_t *k = ask_slot(id);
     if (k) take_question(k, request, items, n, permission, review, now_ms);
-    max_room_asks(a, now_ms);
+    max_attend(a, MAX_ATTN_ASK, now_ms);
     return true;
 }
 
@@ -268,7 +268,8 @@ static bool submit(const max_agent_t *a, max_ask_t *k, uint32_t now_ms)
         memcpy(o->request, k->request, sizeof o->request);
     }
     k->phase = MAX_ASK_SENDING;
-    max_room_answered(a->id);
+    // Answered on Attention: the question that has waited longest takes it, else Overview.
+    if (max_m.view == MAX_VIEW_ATTENTION && !strcmp(max_m.attn_id, a->id)) max_next_question(a->id, now_ms);
     return true;
 }
 
@@ -284,12 +285,6 @@ static bool advance(const max_agent_t *a, max_ask_t *k, uint32_t now_ms)
 
 bool max_ask_hit(max_agent_t *a, max_hit_kind_t kind, int arg, uint32_t now_ms)
 {
-    if (kind == MAX_HIT_DISMISS) {
-        if (!a->card) return false;
-        a->card = false;
-        if (a->state == MAX_DONE) a->note_until = now_ms;   // read on its card: the lane does not show it again
-        return true;
-    }
     max_ask_t *k = max_ask_of(a->id);
     if (!k || a->state != MAX_ASKING) return false;
     if (kind == MAX_HIT_RELOAD) {
@@ -392,5 +387,7 @@ bool max_ask_unsent(const max_out_t *o, uint32_t now_ms)
     if (!mine) return false;
     k->phase = MAX_ASK_READY;   // nothing went: the same choices can go again
     max_notice_set("Not sent", now_ms);
+    // The answer moved Attention on to Overview: its question comes back for them. A question that took it waits.
+    if (max_m.view == MAX_VIEW_OVERVIEW) max_attention(o->agent, MAX_ATTN_ASK, now_ms);
     return true;
 }

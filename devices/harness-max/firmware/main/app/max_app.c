@@ -1,23 +1,25 @@
-// Harness Max's app layer, after the Pro's pro_app.c. pro_cable's callbacks (pro_app_api.h) become feeds into the lanes
-// model (max_ui.h), the touch task's contacts become lane taps and page swipes, and the render task draws the model.
+// Harness Max's app layer, after the Pro's pro_app.c. pro_cable's callbacks (pro_app_api.h) become feeds into the
+// model of the pages (max_ui.h), the touch task's contacts become taps and swipes, and the render task draws the model.
 //
 // THREADS: the cable_link task calls the pro_app_* callbacks; the touch task calls pro_app_touch; the voice tasks call
 // pro_app_notice; the render task ticks, draws and paints. One recursive mutex guards the model, the dirty flag and the
-// state below. Nothing that leaves the device is sent under it: a tap's agent.open, a recording's start and its send,
-// the beep and the wake happen after the mutex is released. So does the model's outbox (answers, question reads, the
-// New Harness form): taken under the mutex, sent after it, by the touch task (a tap's, waiting for the port as
-// agent.open does) or the render task (the clock's, never waiting).
+// state below. Nothing that leaves the device is sent under it: a tap's agent.open or app pick, a recording's start and
+// its send (a tap's or the clock's), the beep and the wake happen after the mutex is released. So does the model's
+// outbox (answers, question reads, the New Harness form): taken under the mutex, sent after it, by the touch task (a
+// tap's, waiting for the port as agent.open does) or the render task (the clock's, never waiting).
 #include "app/max_app.h"
 
 #include <assert.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include "app/max_ui.h"
 #include "app/pro_touch.h"
 #include "app/pro_voice.h"
 #include "audio/audio_capture.h"
+#include "audio/pro_recorder.h"
 #include "cable/cable_features.h"
 #include "cable/cable_link.h"
 #include "cable/pro_cable.h"
@@ -243,7 +245,7 @@ void pro_app_turn_stats(const char *id, int tests_passed, int tests_failed, int 
 
 void pro_app_summary(const char *id, const char *text, const char *recap, const char *full, bool restore, pod_tier_t tier)
 {
-    (void)full;   // the lane shows a short note: the long recap has nowhere to go
+    (void)full;   // the pages show a short note: the long recap has nowhere to go
     if (!id_ok(id)) return;
     lock();
     const bool changed = max_ui_summary(id, text, recap, restore, tier, ms());
@@ -252,7 +254,7 @@ void pro_app_summary(const char *id, const char *text, const char *recap, const 
     leave();
 }
 
-// The Max has no inbox: its lanes show each agent's state.
+// The Max keeps its own Inbox from the turns and questions it sees (max_ui.h): the daemon's list adds nothing.
 void pro_app_notif_replace(const pro_notif_row_t *rows, int n)
 {
     (void)rows; (void)n;
@@ -370,7 +372,7 @@ void pro_app_notice(const char *text)
     unlock();
 }
 
-// The room's voice follows the recorder: recording (or starting), sending (stopped, its reply awaited), or idle. The
+// The bar's voice follows the recorder: recording (or starting), sending (stopped, its reply awaited), or idle. The
 // caller reads the recorder before taking the lock.
 static void talk_locked(bool open, bool waiting)
 {
@@ -417,8 +419,8 @@ static const char *voice_gate(void)
     return why;   // a literal, valid after the unlock
 }
 
-// The room's pet or the form's Say was tapped: record for this agent ("": the form's). No lock held: the recorder may
-// call back.
+// A tap that opens the mic (a cell, the agent page, Say it) or the form's Say: record for this agent ("": the form's).
+// No lock held: the recorder may call back.
 static void talk_begin(const char *agent)
 {
     const char *why = voice_gate();
@@ -439,7 +441,7 @@ static void talk_begin(const char *agent)
     unlock();
 }
 
-// Send while recording. Stopped before the recorder even started, nothing was recorded.
+// Send while recording (a tap, or the clock's silence). Stopped before the recorder even started, nothing was recorded.
 static void talk_send(void)
 {
     if (pro_voice_open() && pro_voice_start_pending()) {
@@ -505,7 +507,7 @@ bool pro_app_touch(bool down, int x, int y)
     const uint32_t now = ms();
     const max_act_t a = max_ui_touch(down, x, y, now);
     take_locked(&s_touch_out);      // an answer or a form command the tap queued
-    changed_if(max_ui_tick(now));   // a tap that selected a lane, a swipe that turned the page
+    changed_if(max_ui_tick(now));   // a tap that put a page up, a swipe that paged the cells
     leave();
     send_taken(&s_touch_out, true);
     act(&a);
@@ -542,20 +544,36 @@ void pro_app_wake(void)
 
 // ---- the render task --------------------------------------------------------------------------------------
 
+// The wall clock for Ambient, read before the lock: unknown until the daemon or NTP set it (a clock still in 1970).
+static void wall(bool *known, struct tm *t)
+{
+    const time_t now = time(NULL);
+    *known = localtime_r(&now, t) != NULL && t->tm_year + 1900 >= 2024;
+}
+
 static void tick(void)
 {
     const uint32_t now = ms();
     pro_voice_tick(now);
     const bool open = pro_voice_open(), waiting = pro_voice_waiting();   // read before the lock
+    const unsigned level = pro_rec_level();
     const bool form = pro_cable_supports(CABLE_FEATURE_FORM);
+    struct tm t = {0};
+    bool known = false;
+    wall(&known, &t);
     if (open || atomic_load(&s_updating)) pro_app_bump_activity();
     lock();
     talk_locked(open, waiting);   // the 600 s cap, a recorder that died, a reply that never came
+    changed_if(max_ui_level(level, now));
+    const max_act_t due = max_ui_talk_due(now);   // speech then quiet: sent; nothing heard: the mic closes
+    changed_if(due.kind != MAX_ACT_NONE);
+    changed_if(max_ui_wall(known, t.tm_hour, t.tm_min, t.tm_wday, t.tm_mday, t.tm_mon));
     changed_if(max_ui_offers(form));
     take_locked(&s_tick_out);     // a question read again, the form's poll, a reply that never came
     if (!pro_app_asleep()) changed_if(max_ui_tick(now));
     unlock();
     send_taken(&s_tick_out, false);
+    act(&due);
 }
 
 static uint32_t next_wake_ms(void)
@@ -683,7 +701,7 @@ void pro_app_start(void)
     BaseType_t ok = xTaskCreatePinnedToCore(render_task, "pro_render", STACK_RENDER, NULL, 5, &s_renderer, 1);
     assert(ok == pdPASS);
     (void)ok;
-    ESP_LOGI(TAG, "app up: lanes, render stack %d B", STACK_RENDER);
+    ESP_LOGI(TAG, "app up: pages, render stack %d B", STACK_RENDER);
 }
 
 // ---- firmware update (sys/fw_update.c and pro_cable call these, from the cable task) ------------------------
@@ -733,7 +751,7 @@ void fw_update_ui_restarting(const char *to)
 
 void fw_update_ui_failed(void)
 {
-    update_screen(-1, NULL);   // the lanes come back
+    update_screen(-1, NULL);   // the pages come back
     pro_app_notice("Update failed \xc2\xb7 trying again later");
     pro_app_bump_activity();
 }

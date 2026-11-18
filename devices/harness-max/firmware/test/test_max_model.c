@@ -1,12 +1,13 @@
-// The lanes model: what the cable's feeds do to the lanes, their order, the pages and the clock.
+// The pages model: what the cable's feeds do to the agents, which page is up and why (Attention, Ambient), Inbox, the
+// cells' pages and the clock. Nothing here draws: the clock's picture is taken as drawn (as_drawn).
 #include "max_test.h"
 #include "max_ui_motion.h"
 
 static const char *const ABC[] = {"a", "b", "c"};
 static const char *const ABCDE[] = {"a", "b", "c", "d", "e"};
-// Enough agents for the room's and two pages of lanes, whatever MAX_LANES is.
-static const char *const XS[] = {"x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9"};
-_Static_assert(MAX_LANES + 2 <= sizeof XS / sizeof XS[0], "XS holds the room and two pages of lanes");
+// More agents than two pages of cells hold.
+static const char *const XS[] = {"x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11"};
+_Static_assert(2 * MAX_CELLS + 1 <= sizeof XS / sizeof XS[0], "XS holds more than two pages of cells");
 
 static bool utf8_valid(const char *s)
 {
@@ -23,8 +24,8 @@ static bool utf8_valid(const char *s)
 static void test_reset(void)
 {
     max_ui_reset();
-    CHECK(!max_m.link && max_m.count == 0 && max_m.machine_count == 0);
-    CHECK(max_ui_selected() == NULL);
+    CHECK(!max_m.link && max_m.count == 0 && max_m.machine_count == 0 && max_m.inbox_count == 0);
+    CHECK(max_m.view == MAX_VIEW_AMBIENT && max_ui_selected() == NULL);   // no computer: Ambient says so
     CHECK(max_m.update_pct == -1 && max_m.talk == MAX_TALK_IDLE && !max_notice_shown(0));
 }
 
@@ -34,42 +35,51 @@ static void test_link_down_clears_everything(void)
     CHECK(max_ui_link(true, "MacBook Pro", 0));
     CHECK(!max_ui_link(true, "MacBook Pro", 10));
     CHECK(max_ui_link(true, "Mac Studio", 20));
-    CHECK(!strcmp(max_m.computer, "Mac Studio"));
+    CHECK(!strcmp(max_m.computer, "Mac Studio") && max_m.view == MAX_VIEW_AMBIENT);   // no agents yet
     roster(ABCDE, 5);
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW);
     cable_machine_t m = {.id = "m1", .name = "MacBook Pro", .state = "ready", .local = true};
     CHECK(max_ui_machines(&m, 1, "m1"));
     max_ui_turn("b", "started", "", 0, 30);
-    CHECK(max_ui_focus("e"));
-    max_m.page = 1;
+    max_ui_turn("c", "error", "boom", 0, 35);
+    CHECK(max_m.view == MAX_VIEW_ATTENTION && !strcmp(max_m.attn_id, "c"));
     CHECK(max_ui_link(false, NULL, 40));
     CHECK(!max_m.link && max_m.computer[0] == 0);
-    CHECK(max_m.count == 0 && max_m.machine_count == 0 && max_m.page == 0);
-    CHECK(max_ui_selected() == NULL);
+    CHECK(max_m.count == 0 && max_m.machine_count == 0 && max_m.cell_page == 0);
+    CHECK(max_m.view == MAX_VIEW_AMBIENT && max_ui_selected() == NULL && max_m.attn_id[0] == 0);
+    // Inbox is the bar's own: its notices stay.
+    CHECK(max_m.inbox_count == 1 && !strcmp(max_m.inbox[0].id, "c"));
     CHECK(!max_ui_link(false, NULL, 50));
 }
 
 static void test_roster_replace(void)
 {
     linked(ABC, 3);
-    CHECK(max_ui_focus("b"));
     max_ui_turn("b", "activity", "Editing touch.c", 12, 100);
-    const pro_agent_row_t same[] = {{"a", "a", "claude", "m1", "MacBook Pro", NULL, NULL}, {"b", "b", "claude", "m1", "MacBook Pro", NULL, NULL},
+    const pro_agent_row_t same[] = {{"a", "a", "claude", "m1", "MacBook Pro", NULL, NULL},
+                                    {"b", "b", "claude", "m1", "MacBook Pro", NULL, NULL},
                                     {"c", "c", "claude", "m1", "MacBook Pro", NULL, NULL}};
     CHECK(!max_ui_agents(same, 3, 200));
-    // b stays (and keeps its turn), a goes, d comes: the selection stays on b.
-    const pro_agent_row_t next[] = {{"c", "c", "codex", "m1", "MacBook Pro", NULL, NULL}, {"b", "backend", "claude", "m2", "Mac Studio", NULL, NULL},
-                                    {"d", "d", "claude", "m1", "MacBook Pro", NULL, NULL}};
+    // b stays (and keeps its turn), a goes, d comes: each with its app and what the bar may do with it.
+    const pro_agent_row_t next[] = {{"c", "c", "codex", "m1", "MacBook Pro", "orca", "sv"},
+                                    {"b", "backend", "claude", "m2", "Mac Studio", NULL, NULL},
+                                    {"d", "d", "claude", "m1", "MacBook Pro", "harness", ""}};
     CHECK(max_ui_agents(next, 3, 300));
     CHECK(max_m.count == 3);
     CHECK(!strcmp(max_m.agents[0].id, "c") && !strcmp(max_m.agents[0].engine, "codex"));
+    CHECK(!strcmp(max_m.agents[0].host, "orca") && max_m.agents[0].caps == MAX_CAP_VOICE);
     const max_agent_t *b = max_find("b");
     CHECK(b == &max_m.agents[1] && !strcmp(b->name, "backend") && !strcmp(b->machine, "Mac Studio"));
     CHECK(b->state == MAX_WORKING && !strcmp(b->activity, "Editing touch.c"));
-    CHECK(max_find("d")->state == MAX_IDLE && max_find("a") == NULL);
+    CHECK(b->host[0] == 0 && b->caps == MAX_CAPS_ALL);   // left out: all of them, as the dial reads it
+    const max_agent_t *d = max_find("d");
+    CHECK(d->state == MAX_IDLE && d->caps == 0 && d->since_ms == 300 && max_find("a") == NULL);
+    // The agent page's agent leaves the ring: its page goes, back to Overview.
+    max_copy(max_m.selected, sizeof max_m.selected, "b");
+    max_show(MAX_VIEW_AGENT);
     CHECK(!strcmp(max_ui_selected(), "b"));
-    // b goes: the room takes the agent that leads the lanes.
     CHECK(max_ui_agents(next, 1, 400));
-    CHECK(!strcmp(max_ui_selected(), "c"));
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW && max_m.selected[0] == 0 && max_ui_selected() == NULL);
     // An absent name reads as the id; a repeated id is kept once; rows past the cap are dropped.
     pro_agent_row_t many[MAX_AGENTS + 3];
     char ids[MAX_AGENTS + 3][8];
@@ -81,9 +91,9 @@ static void test_roster_replace(void)
     CHECK(max_ui_agents(many, MAX_AGENTS + 3, 500));
     CHECK(max_m.count == MAX_AGENTS);
     CHECK(!strcmp(max_m.agents[0].name, "x0") && !strcmp(max_m.agents[1].id, "x2"));
-    CHECK(!strcmp(max_ui_selected(), "x0"));
+    // The ring empties: nothing to show but Ambient's "No agents yet".
     CHECK(max_ui_agents(NULL, 0, 600));
-    CHECK(max_m.count == 0 && max_ui_selected() == NULL);
+    CHECK(max_m.count == 0 && max_m.view == MAX_VIEW_AMBIENT);
 }
 
 static void test_turn_kinds(void)
@@ -93,6 +103,7 @@ static void test_turn_kinds(void)
     CHECK(max_ui_turn("a", "started", "Reading the issue", 0, 1000));
     max_agent_t *a = max_find("a");
     CHECK(a->state == MAX_WORKING && a->clock && max_secs(a, 1000) == 0 && max_secs(a, 3999) == 2);
+    CHECK(a->since_ms == 1000);   // the state's change: the agent page's "ago"
     CHECK(!strcmp(a->activity, "Reading the issue"));
     CHECK(max_ui_turn("a", "verb", "Infusing\xe2\x80\xa6", -1, 1100));
     CHECK(!strcmp(a->verb, "Infusing"));
@@ -116,6 +127,7 @@ static void test_turn_kinds(void)
     // done: the clock stops where it was.
     CHECK(max_ui_turn("a", "done", "", 0, 10000));
     CHECK(a->state == MAX_DONE && max_secs(a, 10000) == 130 && max_secs(a, 99000) == 130);
+    CHECK(a->since_ms == 10000);   // progress in between changed no state
     // error: red with its message, the clock stopped; the next turn clears it.
     max_ui_turn("b", "started", "", 0, 0);
     CHECK(max_ui_turn("b", "error", "pnpm test exited with 1", 0, 61000));
@@ -213,181 +225,247 @@ static void test_order_and_stability(void)
     CHECK(!strcmp(order_ids(buf, sizeof buf), "b d e a c"));
 }
 
-// The room shows one agent large; the lanes page through the others, in lane order.
-static void test_room_and_lanes(void)
+// Overview's cells: five a page, in the ring's order; the page stays within the pages there are.
+static void test_cell_pages(void)
 {
-    enum { N = MAX_LANES + 2 };   // the room's agent and two pages of lanes
+    enum { N = 2 * MAX_CELLS + 1 };
     linked(XS, N);
-    // There was no room when the agents arrived: it takes the one that leads the lanes.
-    CHECK(!strcmp(max_ui_selected(), "x0"));
-    CHECK(max_pages() == 2 && max_m.page == 0);
-    int v[MAX_LANES], n = max_visible(v);
-    CHECK(n == MAX_LANES && !strcmp(max_m.agents[v[0]].id, "x1") && !strcmp(max_m.agents[v[n - 1]].id, XS[MAX_LANES]));
-    max_m.page = 1;
-    CHECK(max_visible(v) == 1 && !strcmp(max_m.agents[v[0]].id, XS[N - 1]));
-    // The computer's window moved: the room shows that agent, and the one it showed goes back to the lanes.
-    CHECK(!max_ui_focus("zz") && !max_ui_focus("x0"));
-    CHECK(max_ui_focus(XS[N - 1]));
-    CHECK(!strcmp(max_ui_selected(), XS[N - 1]) && max_m.page == 1);
-    CHECK(max_visible(v) == 1 && !strcmp(max_m.agents[v[0]].id, XS[MAX_LANES]));
-    // The room's agent leaves: the room takes the one that leads the lanes, a failure before the idle ones.
-    max_ui_turn("x2", "error", "boom", 0, 0);
-    roster(XS, N - 1);
-    CHECK(!strcmp(max_ui_selected(), "x2"));
+    int c[MAX_CELLS];
+    CHECK(max_cell_pages() == 3 && max_m.cell_page == 0);
+    CHECK(max_cells(c) == MAX_CELLS && c[0] == 0 && c[MAX_CELLS - 1] == MAX_CELLS - 1);
+    max_m.cell_page = 2;
+    CHECK(max_cells(c) == 1 && c[0] == N - 1);
+    // A question on the second page: its dot is yellow, and only its.
+    max_ui_question(XS[MAX_CELLS + 1], "r1", "Ok?", NULL, 0, false, false, 0);
+    CHECK(!max_page_waits(0) && max_page_waits(1) && !max_page_waits(2));
     // Fewer agents: the page comes back within the pages there are.
-    CHECK(max_pages() == 1 && max_m.page == 0);
-    roster(XS, 1);
-    CHECK(!strcmp(max_ui_selected(), "x0") && max_pages() == 0 && max_m.page == 0);
-    roster(NULL, 0);
-    CHECK(max_ui_selected() == NULL && max_pages() == 0 && max_m.page == 0);
-}
-
-// Three lanes a page: the room's agent and six lanes are two pages, a seventh lane makes three.
-static void test_pages_of_three(void)
-{
-    CHECK(MAX_LANES == 3);
-    linked(XS, 7);
-    CHECK(max_pages() == 2);
-    linked(XS, 8);
-    int v[MAX_LANES];
-    CHECK(max_pages() == 3 && max_visible(v) == 3);
-    max_m.page = 2;
-    CHECK(max_visible(v) == 1 && !strcmp(max_m.agents[v[0]].id, "x7"));
-}
-
-// The pager's badge: an agent on a page of lanes not shown asks. The room's agent is on no page.
-static void test_asks_off_page(void)
-{
-    linked(XS, 8);   // the room shows x0; x1..x7 on three pages
-    CHECK(!max_asks_off_page());
-    max_ui_turn("x7", "error", "boom", 0, 0);   // a failure leads the lanes too, but it does not ask
-    max_m.page = 1;
-    CHECK(!max_asks_off_page());
-    max_ui_question("x0", "r0", "Ok?", NULL, 0, false, false, 0);   // the room's own question
-    CHECK(!strcmp(max_ui_selected(), "x0") && !max_asks_off_page());
-    max_ui_question("x5", "r5", "Ok?", NULL, 0, false, false, 0);   // it leads the lanes: on the first page
-    max_m.page = 0;
-    CHECK(!max_asks_off_page());
-    max_m.page = 1;
-    CHECK(max_asks_off_page());
-    max_m.page = 2;
-    CHECK(max_asks_off_page());
-    max_ui_question_close("x5");
-    CHECK(!max_asks_off_page());
-}
-
-// The room's clock and summary are drawn too: they wake the render task and redraw, whatever page the lanes show. And
-// the room's pet moves: the render task wakes for its next step.
-static void test_room_clock(void)
-{
-    enum { N = MAX_LANES + 2 };
-    linked(XS, N);
-    roster_of(XS, N, "gemini");   // a logo for a pet: it holds still, so only the clocks wake the render task
-    max_ui_focus(XS[N - 1]);
-    max_m.page = 0;
-    max_ui_turn(XS[N - 1], "started", "", 0, 1000);
-    render(1000);
-    CHECK(!max_ui_tick(1999) && max_ui_tick(2000));
-    CHECK(max_ui_next_wake_ms(1500) == 500);
-    max_ui_summary(XS[N - 1], "Done it", NULL, false, POD_TIER_LIST, 4000);
-    render(4000);
-    CHECK(max_ui_next_wake_ms(4000 + MAX_DONE_MS - 10) == 10 && max_ui_tick(4000 + MAX_DONE_MS));
-    // Claude's pet at work: its next step wakes the render task, sooner than the clock's next second.
+    roster(XS, MAX_CELLS + 1);
+    CHECK(max_cell_pages() == 2 && max_m.cell_page == 1);
+    roster(XS, 2);
+    CHECK(max_cell_pages() == 1 && max_m.cell_page == 0);
+    // Another app's ring starts on its first page.
     roster(XS, N);
-    max_ui_turn(XS[N - 1], "started", "", 0, 10000);
-    render(10000);
-    const uint32_t step = max_ui_next_wake_ms(10000);
-    CHECK(step >= POD_PH_ANIM_MS && step < 1000 && step == max_motion_ms(10000));
-    CHECK(!max_ui_tick(10000 + step - 1) && max_ui_tick(10000 + step));
+    max_m.cell_page = 2;
+    const pro_app_row_t apps[] = {{"orca", "Orca", N, 0}, {"vscode", "VS Code", 2, 0}};
+    CHECK(max_ui_apps("orca", apps, 2, 0) && max_m.cell_page == 0);
+    max_m.cell_page = 2;
+    CHECK(!max_ui_apps("orca", apps, 2, 0) && max_m.cell_page == 2);   // the same app: the page stays
+    CHECK(max_ui_apps("vscode", apps, 2, 0) && max_m.cell_page == 0);
+    roster(NULL, 0);
+    CHECK(max_cell_pages() == 0 && max_m.cell_page == 0);
 }
 
-// A tap where nothing is drawn: a person at the bar from `at`.
-static void touch_at(uint32_t at)
+// The computer's window moving is not a person at the bar: no page changes.
+static void test_focus_changes_no_page(void)
 {
-    max_ui_touch(true, HT_WIDTH - 2, HT_HEIGHT - 2, at);
-    max_ui_touch(false, HT_WIDTH - 2, HT_HEIGHT - 2, at);
+    linked(ABC, 3);
+    CHECK(!max_ui_focus("b") && max_m.view == MAX_VIEW_OVERVIEW && max_ui_selected() == NULL);
+    max_copy(max_m.selected, sizeof max_m.selected, "a");
+    max_show(MAX_VIEW_AGENT);
+    CHECK(!max_ui_focus("b") && !strcmp(max_ui_selected(), "a"));
 }
 
-// Nobody at the bar: a question takes the room at once, unless the room's agent asks itself; then the questions wait,
-// and the one that has waited longest takes the room next.
-static void test_questions_take_the_room_oldest_first(void)
+// A new question takes Attention at once; a question sent again does not; questions that come while another agent's
+// is up wait their turn, the oldest first, and take the page when it is answered or gone.
+static void test_questions_take_attention_oldest_first(void)
 {
     linked(ABCDE, 5);
     max_ui_turn("a", "started", "", 0, 0);
     CHECK(max_ui_question("c", "r1", "Deploy?", NULL, 0, false, false, 1000));
-    CHECK(!strcmp(max_ui_selected(), "c") && max_m.toast_id[0] == 0 && max_find("c")->ask_since == 1000);
-    // c asks: d's and b's wait, d's the older though b leads the lanes; d's sent again is the same question.
+    CHECK(max_m.view == MAX_VIEW_ATTENTION && !strcmp(max_m.attn_id, "c") && max_m.attn == MAX_ATTN_ASK);
+    CHECK(max_m.attn_from == 1000 && !strcmp(max_ui_selected(), "c") && max_m.toast_id[0] == 0);
+    // Sent again (the same request and prompt): no news, and the page keeps its time.
+    CHECK(!max_ui_question("c", "r1", "Deploy?", NULL, 0, false, false, 1500));
+    CHECK(max_m.attn_from == 1000 && max_m.inbox_count == 1);
+    // c's is up: d's and b's wait, d's the older.
     CHECK(max_ui_question("d", "r2", "Merge?", NULL, 0, false, false, 2000));
     CHECK(max_ui_question("b", "r3", "Push?", NULL, 0, false, false, 3000));
-    CHECK(!max_ui_question("d", "r2", "Merge?", NULL, 0, false, false, 4000));
-    CHECK(!strcmp(max_ui_selected(), "c") && max_find("d")->ask_since == 2000);
-    max_ui_question_close("c");   // answered on the computer
-    max_ui_tick(4000);
-    CHECK(!strcmp(max_ui_selected(), "d"));
-    // Another question for an agent that asks already is a new one: it waits from when it came.
-    max_ui_question("e", "r4", "Tag?", NULL, 0, false, false, 4500);
-    max_ui_question("b", "r5", "Push now?", NULL, 0, false, false, 5000);
-    CHECK(max_find("b")->ask_since == 5000);
-    max_ui_question_close("d");
-    max_ui_tick(5000);
-    CHECK(!strcmp(max_ui_selected(), "e"));
-    // The computer's window moving is no person at the bar: the next question still takes the room.
-    linked(ABCDE, 5);
-    CHECK(max_ui_focus("b"));
-    max_ui_question("d", "r6", "Merge?", NULL, 0, false, false, 6000);
-    CHECK(!strcmp(max_ui_selected(), "d"));
+    CHECK(!strcmp(max_m.attn_id, "c") && max_m.inbox_count == 3);
+    // c's answered on the computer: the clock moves Attention to the question that has waited longest.
+    max_ui_question_close("c");
+    CHECK(max_ui_tick(4000) && !strcmp(max_m.attn_id, "d") && max_m.attn_from == 4000);
+    // c asks again (a new question): it waits behind d's. d's own new one takes its page again, from its time.
+    CHECK(max_ui_question("c", "r4", "Deploy now?", NULL, 0, false, false, 4500));
+    CHECK(!strcmp(max_m.attn_id, "d"));
+    CHECK(max_ui_question("d", "r5", "Merge now?", NULL, 0, false, false, 5000));
+    CHECK(!strcmp(max_m.attn_id, "d") && max_m.attn_from == 5000);
+    // d leaves the ring: b's (3000) has waited longer than c's (4500).
+    const pro_agent_row_t rows[] = {{"a", "a", "claude", "m1", "MacBook Pro", NULL, NULL},
+                                    {"b", "b", "claude", "m1", "MacBook Pro", NULL, NULL},
+                                    {"c", "c", "claude", "m1", "MacBook Pro", NULL, NULL}};
+    CHECK(max_ui_agents(rows, 3, 6000));
+    CHECK(max_m.view == MAX_VIEW_ATTENTION && !strcmp(max_m.attn_id, "b"));
+    // None waits: Overview.
+    max_ui_question_close("b");
+    max_ui_question_close("c");
+    CHECK(max_ui_tick(7000) && max_m.view == MAX_VIEW_OVERVIEW && max_ui_selected() == NULL);
 }
 
-// A person at the bar (a tap in the last MAX_QUIET_MS, a recording, the form): a question never takes the room; the
-// toast says it came. Left alone, the room goes back to the question waiting.
-static void test_a_person_at_the_bar_keeps_the_room(void)
+// A failed turn and an alert's summary take Attention (red, green) and go back to Overview by themselves; a quieter
+// summary or history does not. A question replaces a turn's end on the page; a turn's end waits in Inbox behind a
+// question.
+static void test_turn_ends_take_attention(void)
 {
     linked(ABCDE, 5);
-    roster_of(ABCDE, 5, "gemini");   // pets that hold still: the clocks below are the toast's and the quiet's
-    touch_at(1000);
-    CHECK(max_ui_question("c", "r1", "Deploy?", NULL, 0, false, false, 2000));
-    CHECK(!strcmp(max_ui_selected(), "a") && !strcmp(max_m.toast_id, "c"));
-    CHECK(max_toast_shown(2000) && max_toast_shown(2000 + MAX_TOAST_MS - 1) && !max_toast_shown(2000 + MAX_TOAST_MS));
-    // The render task wakes for the toast's bar as it runs down, when the toast runs out, and when the person has been
-    // away long enough.
-    render(2000);
-    CHECK(max_ui_next_wake_ms(2000) == max_motion_ms(2000) && max_motion_ms(2000) < MAX_TOAST_MS);
-    render(2000 + MAX_TOAST_MS - 50);
-    CHECK(max_ui_next_wake_ms(2000 + MAX_TOAST_MS - 50) == 50);
-    CHECK(!max_ui_tick(2000 + MAX_TOAST_MS - 1) && max_ui_tick(2000 + MAX_TOAST_MS));
-    render(2000 + MAX_TOAST_MS);
-    CHECK(max_ui_next_wake_ms(2000 + MAX_TOAST_MS) == 1000 + MAX_QUIET_MS - (2000 + MAX_TOAST_MS));
-    CHECK(!max_ui_tick(1000 + MAX_QUIET_MS - 1) && !strcmp(max_ui_selected(), "a"));
-    CHECK(max_ui_tick(1000 + MAX_QUIET_MS) && !strcmp(max_ui_selected(), "c") && !max_toast_shown(1000 + MAX_QUIET_MS));
-    render(1000 + MAX_QUIET_MS);
-    CHECK(max_ui_next_wake_ms(1000 + MAX_QUIET_MS) == MAX_WAKE_MS);
-    // The room's own agent asks again: nothing to announce.
-    touch_at(30000);
-    max_ui_question("c", "r2", "Deploy now?", NULL, 0, false, false, 30500);
-    CHECK(!strcmp(max_ui_selected(), "c") && !max_toast_shown(30500));
-    // A recording is a person at the bar, however long ago the last tap.
-    max_ui_question_close("c");
-    max_ui_talk(MAX_TALK_RECORDING, 0);
-    max_ui_question("d", "r3", "Merge?", NULL, 0, false, false, 60000);
-    CHECK(!strcmp(max_m.toast_id, "d"));
-    max_ui_tick(90000);
-    CHECK(!strcmp(max_ui_selected(), "c"));
-    max_ui_talk(MAX_TALK_IDLE, 0);
-    max_ui_tick(90000);
-    CHECK(!strcmp(max_ui_selected(), "d"));
-    // So is the form, until it goes.
-    max_ui_question_close("d");
-    CHECK(max_ui_form_open("form-1", 91000));
-    max_ui_question("e", "r4", "Tag?", NULL, 0, false, false, 92000);
-    max_ui_tick(120000);
-    CHECK(!strcmp(max_ui_selected(), "d"));
+    max_ui_turn("a", "started", "", 0, 0);
+    CHECK(max_ui_turn("a", "error", "pnpm test exited with 1", 0, 1000));
+    CHECK(max_m.view == MAX_VIEW_ATTENTION && !strcmp(max_m.attn_id, "a") && max_m.attn == MAX_ATTN_FAIL);
+    as_drawn(1000);
+    CHECK(max_ui_next_wake_ms(1000) == MAX_ATTN_END_MS);
+    CHECK(!max_ui_tick(1000 + MAX_ATTN_END_MS - 1) && max_m.view == MAX_VIEW_ATTENTION);
+    CHECK(max_ui_tick(1000 + MAX_ATTN_END_MS) && max_m.view == MAX_VIEW_OVERVIEW);
+    // A list or a silent summary only shows on its agent; history is never news.
+    max_ui_turn("b", "started", "", 0, 10000);
+    CHECK(max_ui_summary("b", "Docs updated", NULL, false, POD_TIER_LIST, 11000) && max_m.view == MAX_VIEW_OVERVIEW);
+    max_ui_turn("c", "started", "", 0, 10000);
+    CHECK(max_ui_summary("c", "Sub-agent finished", NULL, false, POD_TIER_SILENT, 11000));
+    CHECK(!max_ui_summary("d", "Old news", "Old recap", true, POD_TIER_ALERT, 12000));
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW && max_m.inbox_count == 1);
+    // An alert's summary: done.
+    max_ui_turn("e", "started", "", 0, 12000);
+    CHECK(max_ui_summary("e", "Fixed the login race", NULL, false, POD_TIER_ALERT, 13000));
+    CHECK(max_m.view == MAX_VIEW_ATTENTION && !strcmp(max_m.attn_id, "e") && max_m.attn == MAX_ATTN_DONE);
+    // One with nothing to say ends the turn, and is no news.
+    max_ui_turn("d", "started", "", 0, 13000);
+    CHECK(max_ui_summary("d", NULL, NULL, false, POD_TIER_ALERT, 13500));
+    CHECK(max_find("d")->state == MAX_DONE && !strcmp(max_m.attn_id, "e") && max_m.inbox_count == 2);
+    // A question replaces a turn's end on the page.
+    CHECK(max_ui_question("b", "r1", "Push?", NULL, 0, false, false, 14000));
+    CHECK(!strcmp(max_m.attn_id, "b") && max_m.attn == MAX_ATTN_ASK && max_m.attn_from == 14000);
+    // A turn's end while another agent's question is up: Inbox only.
+    max_ui_turn("c", "started", "", 0, 14500);
+    CHECK(max_ui_turn("c", "error", "boom", 0, 15000));
+    CHECK(!strcmp(max_m.attn_id, "b") && !strcmp(max_m.inbox[0].id, "c") && max_m.inbox[0].kind == MAX_ATTN_FAIL);
+    // A done page whose agent starts again is over at once.
+    max_ui_question_close("b");
+    max_ui_tick(16000);
+    CHECK(max_ui_summary("e", "Fixed it again", NULL, false, POD_TIER_ALERT, 17000) && !strcmp(max_m.attn_id, "e"));
+    CHECK(max_ui_turn("e", "started", "", 0, 18000) && max_m.view == MAX_VIEW_OVERVIEW);
+    // So is a failed page whose agent leaves the ring.
+    max_ui_turn("e", "error", "boom", 0, 19000);
+    CHECK(max_m.view == MAX_VIEW_ATTENTION && !strcmp(max_m.attn_id, "e"));
+    roster(ABCDE, 4);
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW);
+}
+
+// Inbox: every event an unread notice, newest first, kept after its agent leaves; the same one again moves to the top,
+// unread again; leaving Inbox reads them all.
+static void test_inbox(void)
+{
+    max_ui_reset();
+    max_ui_link(true, "MacBook Pro", 0);
+    const pro_agent_row_t rows[] = {{"a", "alpha", "codex", "m1", "MacBook Pro", "orca", NULL},
+                                    {"b", "b", "claude", "m1", "MacBook Pro", NULL, NULL}};
+    max_ui_agents(rows, 2, 0);
+    // No `apps` yet: a notice names the agent's own app (its host).
+    CHECK(max_ui_question("a", "r1", "Keep the dark gradient?", NULL, 0, false, false, 1000));
+    const max_inbox_t *n = &max_m.inbox[0];
+    CHECK(max_m.inbox_count == 1 && !strcmp(n->id, "a") && !strcmp(n->name, "alpha") && !strcmp(n->engine, "codex"));
+    CHECK(!strcmp(n->app, "orca") && n->kind == MAX_ATTN_ASK && !strcmp(n->text, "Keep the dark gradient?"));
+    CHECK(n->at == 1000 && n->unread && max_unread() == 1);
+    // With `apps`, the shown app's name.
+    const pro_app_row_t apps[] = {{"orca", "Orca", 2, 1}};
+    max_ui_apps("orca", apps, 1, 1500);
+    max_ui_turn("b", "error", "boom", 0, 2000);
+    CHECK(max_m.inbox_count == 2 && !strcmp(max_m.inbox[0].id, "b") && max_m.inbox[0].kind == MAX_ATTN_FAIL);
+    CHECK(!strcmp(max_m.inbox[0].app, "Orca") && !strcmp(max_m.inbox[0].text, "boom") && max_unread() == 2);
+    // Opened and left: read. Only leaving does it.
+    CHECK(max_show(MAX_VIEW_INBOX) && max_unread() == 2);
+    CHECK(max_show(MAX_VIEW_OVERVIEW) && max_unread() == 0);
+    // The cable comes back and the daemon sends the same question again: on top, unread again, not twice.
+    max_ui_link(false, NULL, 3000);
+    max_ui_link(true, "MacBook Pro", 3000);
+    max_ui_apps("orca", apps, 1, 3000);
+    max_ui_agents(rows, 2, 3000);
+    CHECK(max_ui_question("a", "r1", "Keep the dark gradient?", NULL, 0, false, false, 5000));
+    CHECK(max_m.inbox_count == 2 && !strcmp(max_m.inbox[0].id, "a") && max_m.inbox[0].unread);
+    CHECK(max_m.inbox[0].at == 5000 && !max_m.inbox[1].unread && max_unread() == 1);
+    // Its agent leaves the ring: the notice keeps who and where.
+    max_ui_agents(rows + 1, 1, 6000);
+    CHECK(!strcmp(max_m.inbox[0].name, "alpha") && !strcmp(max_m.inbox[0].app, "Orca"));
+    // MAX_INBOX kept: the oldest goes.
+    char text[16];
+    for (int i = 0; i < MAX_INBOX; i++) {
+        snprintf(text, sizeof text, "boom %d", i);
+        max_ui_turn("b", "started", "", 0, 7000);
+        max_ui_turn("b", "error", text, 0, 7000 + (uint32_t)i);
+    }
+    CHECK(max_m.inbox_count == MAX_INBOX && !strcmp(max_m.inbox[0].text, text));
+    CHECK(!strcmp(max_m.inbox[MAX_INBOX - 1].text, "boom 0"));
+    // A failure with no words of its own: its summary's words are its notice's.
+    max_ui_turn("b", "started", "", 0, 8000);
+    max_ui_turn("b", "error", "", 0, 8100);
+    CHECK(max_m.inbox[0].text[0] == 0);
+    CHECK(max_ui_summary("b", "Could not reach the API", NULL, false, POD_TIER_ALERT, 8200));
+    CHECK(max_m.inbox_count == MAX_INBOX && !strcmp(max_m.inbox[0].text, "Could not reach the API"));
+    CHECK(!strcmp(max_m.inbox[1].text, text));
+}
+
+// Ambient: with no computer, with no agents, and on Overview when nothing works or waits and nobody touched for
+// MAX_AMBIENT_MS. A turn that starts or an agent that needs the person leaves it.
+static void test_ambient(void)
+{
+    max_ui_reset();
+    max_ui_link(true, "MacBook Pro", 0);
+    CHECK(max_m.view == MAX_VIEW_AMBIENT);
+    roster(ABC, 3);
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW);
+    as_drawn(0);
+    CHECK(max_ui_next_wake_ms(1000) == MAX_AMBIENT_MS - 1000);
+    CHECK(!max_ui_tick(MAX_AMBIENT_MS - 1) && max_m.view == MAX_VIEW_OVERVIEW);
+    CHECK(max_ui_tick(MAX_AMBIENT_MS) && max_m.view == MAX_VIEW_AMBIENT);
+    // A turn that starts: Overview. While it works, no Ambient however long nobody touches.
+    uint32_t t = 70000;
+    CHECK(max_ui_turn("a", "started", "", 0, t) && max_m.view == MAX_VIEW_OVERVIEW);
+    as_drawn(t);
+    CHECK(max_ui_next_wake_ms(t) == MAX_WAKE_MS);
+    max_ui_tick(t + 10 * MAX_AMBIENT_MS);
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW);
+    // It ends: the wait starts from then.
+    t = 800000;
+    max_ui_turn("a", "done", "", 0, t);
+    CHECK(!max_ui_tick(t + MAX_AMBIENT_MS - 1) && max_m.view == MAX_VIEW_OVERVIEW);
+    CHECK(max_ui_tick(t + MAX_AMBIENT_MS) && max_m.view == MAX_VIEW_AMBIENT);
+    // A question: Attention.
+    t = 900000;
+    max_ui_question("b", "r1", "Push?", NULL, 0, false, false, t);
+    CHECK(max_m.view == MAX_VIEW_ATTENTION);
+    max_ui_question_close("b");
+    max_ui_turn("b", "done", "", 0, t);
+    max_ui_tick(t);
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW);
+    // A touch is a person at the bar: the wait starts from the lift.
+    t = 1000000;
+    max_ui_touch(true, 5, 5, t);
+    max_ui_touch(false, 5, 5, t + 90);
+    CHECK(max_m.idle_from == t + 90);
+    CHECK(!max_ui_tick(t + 90 + MAX_AMBIENT_MS - 1) && max_ui_tick(t + 90 + MAX_AMBIENT_MS));
+    CHECK(max_m.view == MAX_VIEW_AMBIENT);
+    // Only Overview goes: another page stays, however long.
+    max_show(MAX_VIEW_INBOX);
+    max_ui_tick(t + 10 * MAX_AMBIENT_MS);
+    CHECK(max_m.view == MAX_VIEW_INBOX);
+    // Nor while a recording or New Harness is up.
+    max_show(MAX_VIEW_OVERVIEW);
+    max_ui_talk(MAX_TALK_RECORDING, t);
+    max_ui_tick(t + 20 * MAX_AMBIENT_MS);
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW);
+    max_ui_talk(MAX_TALK_IDLE, t);
+    CHECK(max_ui_form_open("form-1", t));
+    max_ui_tick(t + 20 * MAX_AMBIENT_MS);
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW);
     max_form_dismiss();
-    max_ui_tick(120000);
-    CHECK(!strcmp(max_ui_selected(), "e"));
-    // Left alone, the room keeps an agent that asks.
-    max_ui_question("b", "r5", "Push?", NULL, 0, false, false, 121000);
-    max_ui_tick(200000);
-    CHECK(!strcmp(max_ui_selected(), "e"));
+    CHECK(max_ui_tick(t + 20 * MAX_AMBIENT_MS) && max_m.view == MAX_VIEW_AMBIENT);
+    // The ring empties: Ambient at once. Agents again: Overview, waiting from then.
+    t = 3000000;
+    max_show(MAX_VIEW_OVERVIEW);
+    roster(NULL, 0);
+    CHECK(max_m.view == MAX_VIEW_AMBIENT);
+    const pro_agent_row_t row = {"a", "a", "claude", "m1", "MacBook Pro", NULL, NULL};
+    CHECK(max_ui_agents(&row, 1, t) && max_m.view == MAX_VIEW_OVERVIEW && max_m.idle_from == t);
+    // The link goes: Ambient at once, from any page.
+    max_show(MAX_VIEW_APPS);
+    CHECK(max_ui_link(false, NULL, t) && max_m.view == MAX_VIEW_AMBIENT);
 }
 
 static bool ends_cut(const char *s) { const size_t n = strlen(s); return n >= 3 && !strcmp(s + n - 3, "\xe2\x80\xa6"); }
@@ -460,6 +538,57 @@ static void test_no_talk_while_an_answer_waits(void)
     CHECK(max_can_talk(a));
 }
 
+// The agent page draws its agent's clock while it works, else how long ago its state changed: the render task wakes
+// for each, and Overview draws neither.
+static void test_agent_page_clock(void)
+{
+    linked(XS, 3);
+    max_ui_turn("x1", "started", "", 0, 1000);
+    as_drawn(1000);
+    CHECK(max_ui_next_wake_ms(1500) == MAX_WAKE_MS && !max_ui_tick(5000));
+    max_copy(max_m.selected, sizeof max_m.selected, "x1");
+    max_show(MAX_VIEW_AGENT);
+    as_drawn(1000);
+    CHECK(max_ui_next_wake_ms(1500) == 500 && !max_ui_tick(1999) && max_ui_tick(2000));
+    // Done: "just now", then "1m ago" as its summary stops showing, then each minute.
+    max_ui_summary("x1", "Done it", NULL, false, POD_TIER_LIST, 4000);
+    as_drawn(4000);
+    CHECK(max_ui_next_wake_ms(34000) == 30000);
+    CHECK(!max_ui_tick(63999) && max_ui_tick(64000));
+    as_drawn(64000);
+    CHECK(!max_ui_tick(123999) && max_ui_tick(124000));
+}
+
+// While a recording is up the band redraws every MAX_TALK_FRAME_MS, and the render task wakes for what the clock owes
+// it: the send after the quiet, or the mic closing when nothing was heard.
+static void test_recording_clock(void)
+{
+    linked(ABC, 3);
+    roster_of(ABC, 3, "gemini");
+    max_copy(max_m.selected, sizeof max_m.selected, "a");
+    max_show(MAX_VIEW_AGENT);
+    max_copy(max_m.talk_id, sizeof max_m.talk_id, "a");
+    CHECK(max_ui_talk(MAX_TALK_RECORDING, 1000) && max_m.talk_from == 1000 && !max_m.talk_heard);
+    as_drawn(1000);
+    CHECK(max_ui_next_wake_ms(1000) == MAX_TALK_FRAME_MS);
+    CHECK(!max_ui_tick(1000 + MAX_TALK_FRAME_MS - 1) && max_ui_tick(1000 + MAX_TALK_FRAME_MS));
+    CHECK(max_ui_next_wake_ms(1000 + MAX_HEAR_MS - 30) == 30);
+    // Speech: the waveform takes each level, and the send is due MAX_SILENCE_MS after the last of it.
+    CHECK(max_ui_level(3, 1200) && max_m.talk_heard && max_m.talk_quiet_from == 1200);
+    CHECK(max_ui_level(9, 1300) && max_m.levels[max_m.level_count - 1] == 4);   // past the scale: its top
+    CHECK(max_ui_level(1, 1400) && max_m.talk_quiet_from == 1300 && max_m.level_count == 3);
+    CHECK(max_ui_next_wake_ms(1300 + MAX_SILENCE_MS - 40) == 40);
+    for (int i = 0; i < MAX_LEVELS + 5; i++) max_ui_level(0, 1500);
+    CHECK(max_m.level_count == MAX_LEVELS && max_m.levels[0] == 0);
+    // Not recording: no levels, no frames.
+    max_ui_talk(MAX_TALK_SENDING, 2000);
+    CHECK(!max_ui_level(3, 2000));
+    as_drawn(2000);
+    CHECK(max_ui_next_wake_ms(2000) == 60000 - 2000 && !max_ui_tick(2000 + MAX_TALK_FRAME_MS));
+    // A new recording starts its own clock, nothing heard.
+    CHECK(max_ui_talk(MAX_TALK_RECORDING, 5000) && max_m.talk_from == 5000 && !max_m.talk_heard && !max_m.level_count);
+}
+
 static void test_elapsed_format(void)
 {
     char t[16];
@@ -469,6 +598,13 @@ static void test_elapsed_format(void)
     for (unsigned i = 0; i < sizeof cases / sizeof cases[0]; i++) {
         max_fmt_elapsed(t, sizeof t, cases[i].s);
         CHECK(!strcmp(t, cases[i].want));
+    }
+    static const struct { uint32_t ms; const char *want; } ago[] = {
+        {0, "just now"}, {59999, "just now"}, {60000, "1m ago"}, {3599999, "59m ago"}, {3600000, "1h ago"},
+        {86399999, "23h ago"}, {86400000, "1d ago"}, {3 * 86400000u, "3d ago"}};
+    for (unsigned i = 0; i < sizeof ago / sizeof ago[0]; i++) {
+        max_fmt_ago(t, sizeof t, 5000, 5000 + ago[i].ms);
+        CHECK(!strcmp(t, ago[i].want));
     }
 }
 
@@ -506,14 +642,16 @@ int main(void)
     test_question();
     test_summary_tiers();
     test_order_and_stability();
-    test_room_and_lanes();
-    test_pages_of_three();
-    test_asks_off_page();
-    test_room_clock();
-    test_questions_take_the_room_oldest_first();
-    test_a_person_at_the_bar_keeps_the_room();
+    test_cell_pages();
+    test_focus_changes_no_page();
+    test_questions_take_attention_oldest_first();
+    test_turn_ends_take_attention();
+    test_inbox();
+    test_ambient();
     test_caps();
     test_no_talk_while_an_answer_waits();
+    test_agent_page_clock();
+    test_recording_clock();
     test_elapsed_format();
     test_app_state();
     printf("test_max_model: %d checks passed\n", checks);

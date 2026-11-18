@@ -1,5 +1,6 @@
-// The lanes model: the cable's feeds and the app's own state, kept for the view and the finger, and the outbox
-// (max_ui.h). Questions are max_ui_ask.c's, New Harness max_ui_form.c's.
+// The model: the cable's feeds and the app's own state, kept for the pages and the finger, which page is up and why,
+// Inbox, and the outbox (max_ui.h). Questions are max_ui_ask.c's, New Harness max_ui_form.c's, the finger
+// max_ui_touch.c's.
 #include <stdio.h>
 #include <string.h>
 
@@ -8,7 +9,7 @@
 #include "pod/pod_mem.h"   // EXT_RAM_BSS_ATTR: the agents' text is tens of KB, PSRAM on the device
 
 EXT_RAM_BSS_ATTR max_model_t max_m;
-// Scratch for the feeds: the roster before an agents feed (staying agents keep their turn), and one lane before a turn
+// Scratch for the feeds: the roster before an agents feed (staying agents keep their turn), and one agent before a turn
 // feed (to tell whether it changed). Both are too big for the cable_link task's stack.
 static EXT_RAM_BSS_ATTR max_agent_t s_old[MAX_AGENTS];
 static EXT_RAM_BSS_ATTR max_agent_t s_before;
@@ -41,6 +42,13 @@ void max_copy_label(char *dst, size_t cap, const char *src)
 }
 
 static bool running(max_state_t st) { return st == MAX_WORKING || st == MAX_ASKING; }
+static bool reached(uint32_t at, uint32_t now_ms) { return (int32_t)(now_ms - at) >= 0; }
+static void sooner(uint32_t *ms, uint32_t d)
+{
+    if (d < *ms) *ms = d;
+}
+// The wait until `at` (0 once it is reached), for the render task's sleep.
+static void until(uint32_t *ms, uint32_t at, uint32_t now_ms) { sooner(ms, reached(at, now_ms) ? 0 : at - now_ms); }
 
 max_agent_t *max_find(const char *id)
 {
@@ -76,13 +84,6 @@ int max_pages(void)
 {
     int o[MAX_AGENTS];
     return (lane_order(o) + MAX_LANES - 1) / MAX_LANES;
-}
-
-void max_clamp_page(void)
-{
-    const int last = max_pages() - 1;
-    if (max_m.page > last) max_m.page = last;
-    if (max_m.page < 0) max_m.page = 0;
 }
 
 int64_t max_secs(const max_agent_t *a, uint32_t now_ms)
@@ -126,29 +127,31 @@ bool max_asks_off_page(void)
     return false;
 }
 
-// What is drawn with a clock or a summary: the lanes of the page shown, then the room's agent. Returns how many.
-static int drawn(int out[MAX_LANES + 1])
-{
-    int n = max_visible(out);
-    const max_agent_t *room = max_find(max_m.selected);
-    if (room) out[n++] = (int)(room - max_m.agents);
-    return n;
-}
+// ---- Demo V2: which page is up ----
 
-bool max_room_show(const char *id)
+bool max_show(max_view_t view)
 {
-    if (!strcmp(max_m.selected, id)) return false;
-    max_copy(max_m.selected, sizeof max_m.selected, id);
-    if (!strcmp(max_m.toast_id, id)) max_m.toast_id[0] = 0;   // what it announced is in the room now
-    max_clamp_page();   // the agent it showed is back among the lanes
+    if (max_m.view == view) return false;
+    if (max_m.view == MAX_VIEW_INBOX)   // seen: the bell's count goes
+        for (int i = 0; i < max_m.inbox_count; i++) max_m.inbox[i].unread = false;
+    max_m.view = view;
     return true;
 }
 
-// A tap or swipe in the last MAX_QUIET_MS, a recording, or the form up: a question must not take the room from them.
-static bool at_bar(uint32_t now_ms)
+bool max_attn_holds(const char *id, max_attn_t why)
 {
-    return (max_m.touched && (int32_t)(now_ms - max_m.touched_ms) < (int32_t)MAX_QUIET_MS) ||
-           max_m.talk != MAX_TALK_IDLE || max_form_open();
+    const max_agent_t *a = max_find(id);
+    const max_state_t st = why == MAX_ATTN_ASK ? MAX_ASKING : why == MAX_ATTN_DONE ? MAX_DONE : MAX_FAILED;
+    return a && a->state == st;
+}
+
+void max_attention(const char *id, max_attn_t why, uint32_t now_ms)
+{
+    max_copy(max_m.attn_id, sizeof max_m.attn_id, id);
+    max_m.attn = why;
+    max_m.attn_from = now_ms;
+    if (!strcmp(max_m.toast_id, id)) max_m.toast_id[0] = 0;   // what it announced is up now
+    max_show(MAX_VIEW_ATTENTION);
 }
 
 // An agent that asks and has no answer on its way waits for a person.
@@ -170,28 +173,100 @@ static const max_agent_t *oldest(const char *except)
     return best;
 }
 
-// Nobody at the bar and the room's agent not asking (nor with its answer on its way): the room shows the question that
-// has waited longest. True when the room moved.
+void max_next_question(const char *except, uint32_t now_ms)
+{
+    const max_agent_t *next = oldest(except);
+    if (next) max_attention(next->id, MAX_ATTN_ASK, now_ms);
+    else max_show(MAX_VIEW_OVERVIEW);
+}
+
+// The notice's words: the question, or what the turn said (a failure's error, a summary's text).
+static void inbox_add(const max_agent_t *a, max_attn_t why, uint32_t now_ms)
+{
+    static char text[MAX_QUESTION_BYTES];   // with the scan below, over the cable_link task's frame budget
+    max_copy(text, sizeof text, why == MAX_ATTN_ASK ? a->question : a->note);
+    int j = 0;   // the same notice again (a question re-sent after the link came back) moves up instead
+    while (j < max_m.inbox_count && (max_m.inbox[j].kind != why || strcmp(max_m.inbox[j].id, a->id) ||
+                                     strcmp(max_m.inbox[j].text, text)))
+        j++;
+    if (j == max_m.inbox_count) {
+        if (max_m.inbox_count < MAX_INBOX) max_m.inbox_count++;
+        j = max_m.inbox_count - 1;   // full: the oldest goes
+    }
+    memmove(&max_m.inbox[1], &max_m.inbox[0], (size_t)j * sizeof max_m.inbox[0]);
+    max_inbox_t *n = &max_m.inbox[0];
+    memset(n, 0, sizeof *n);
+    max_copy(n->id, sizeof n->id, a->id);
+    max_copy(n->name, sizeof n->name, a->name);
+    max_copy(n->engine, sizeof n->engine, a->engine);
+    max_copy(n->app, sizeof n->app, max_app_of(a));   // kept: the agent may leave the ring before it is read
+    n->kind = why;
+    memcpy(n->text, text, sizeof n->text);
+    n->at = now_ms;
+    n->unread = true;
+}
+
+// A failure that came without words: its summary fills the newest notice of it.
+static void inbox_words(const max_agent_t *a)
+{
+    for (int i = 0; i < max_m.inbox_count; i++) {
+        max_inbox_t *n = &max_m.inbox[i];
+        if (n->kind != MAX_ATTN_FAIL || strcmp(n->id, a->id)) continue;
+        if (!n->text[0]) max_copy(n->text, sizeof n->text, a->note);
+        return;
+    }
+}
+
+void max_attend(max_agent_t *a, max_attn_t why, uint32_t now_ms)
+{
+    max_m.idle_from = now_ms;
+    inbox_add(a, why, now_ms);
+    if (max_m.talk != MAX_TALK_IDLE || max_form_open()) {   // a person talks or fills the form: only the toast
+        max_copy(max_m.toast_id, sizeof max_m.toast_id, a->id);
+        max_m.toast_attn = why;
+        max_m.toast_from = now_ms;
+        if (max_m.view == MAX_VIEW_AMBIENT) max_show(MAX_VIEW_OVERVIEW);
+        return;
+    }
+    // Another agent's question keeps Attention: this one waits its turn, a turn's end stays in Inbox.
+    if (max_m.view == MAX_VIEW_ATTENTION && max_m.attn == MAX_ATTN_ASK && strcmp(max_m.attn_id, a->id) &&
+        max_attn_holds(max_m.attn_id, MAX_ATTN_ASK))
+        return;
+    max_attention(a->id, why, now_ms);
+}
+
+static bool busy(void)
+{
+    for (int i = 0; i < max_m.count; i++)
+        if (running(max_m.agents[i].state)) return true;
+    return false;
+}
+
+// Overview with nothing working or waiting and nobody talking: Ambient comes MAX_AMBIENT_MS after the last touch or
+// news.
+static bool ambient_waits(void)
+{
+    return max_m.view == MAX_VIEW_OVERVIEW && max_m.talk == MAX_TALK_IDLE && !max_form_open() && !busy();
+}
+
+// The page follows what it shows: Attention whose agent moved on gives way to the next question (else Overview), a
+// turn's end goes after MAX_ATTN_END_MS, the agent page goes with its agent, and an idle Overview turns Ambient. True
+// when the page changed.
 static bool settle(uint32_t now_ms)
 {
-    const max_agent_t *room = max_find(max_m.selected), *next = oldest("");
-    if (at_bar(now_ms) || !next || (room && room->state == MAX_ASKING)) return false;
-    return max_room_show(next->id);
-}
-
-void max_room_asks(const max_agent_t *a, uint32_t now_ms)
-{
-    if (at_bar(now_ms) && strcmp(max_m.selected, a->id)) {
-        max_copy(max_m.toast_id, sizeof max_m.toast_id, a->id);
-        max_m.toast_from = now_ms;
+    const max_view_t view = max_m.view;
+    const max_attn_t attn = max_m.attn;
+    char attn_id[ID_MAX];
+    memcpy(attn_id, max_m.attn_id, sizeof attn_id);
+    if (view == MAX_VIEW_ATTENTION) {
+        if (!max_attn_holds(max_m.attn_id, max_m.attn)) max_next_question(attn_id, now_ms);
+        else if (max_m.attn != MAX_ATTN_ASK && reached(max_m.attn_from + MAX_ATTN_END_MS, now_ms))
+            max_show(MAX_VIEW_OVERVIEW);
+    } else if (view == MAX_VIEW_AGENT && !max_find(max_m.selected)) {
+        max_show(MAX_VIEW_OVERVIEW);
     }
-    settle(now_ms);
-}
-
-bool max_room_answered(const char *id)
-{
-    const max_agent_t *next = strcmp(max_m.selected, id) ? NULL : oldest(id);
-    return next && max_room_show(next->id);
+    if (ambient_waits() && reached(max_m.idle_from + MAX_AMBIENT_MS, now_ms)) max_show(MAX_VIEW_AMBIENT);
+    return max_m.view != view || max_m.attn != attn || strcmp(max_m.attn_id, attn_id);
 }
 
 uint32_t max_fnv(uint32_t h, const void *data, size_t n)
@@ -200,16 +275,41 @@ uint32_t max_fnv(uint32_t h, const void *data, size_t n)
     for (size_t i = 0; i < n; i++) h = (h ^ p[i]) * 16777619u;
     return h;
 }
+void max_fmt_ago(char *out, size_t cap, uint32_t since_ms, uint32_t now_ms)
+{
+    const uint32_t s = (int32_t)(now_ms - since_ms) > 0 ? (now_ms - since_ms) / 1000u : 0;
+    if (s < 60) snprintf(out, cap, "just now");
+    else if (s < 3600) snprintf(out, cap, "%lum ago", (unsigned long)(s / 60));
+    else if (s < 86400) snprintf(out, cap, "%luh ago", (unsigned long)(s / 3600));
+    else snprintf(out, cap, "%lud ago", (unsigned long)(s / 86400));
+}
+
+static uint32_t fnv_ago(uint32_t h, uint32_t since_ms, uint32_t now_ms)
+{
+    char ago[24];
+    max_fmt_ago(ago, sizeof ago, since_ms, now_ms);
+    return max_fnv(h, ago, strlen(ago));
+}
+
+// The agent page's agent, while it is up.
+static const max_agent_t *paged(void) { return max_m.view == MAX_VIEW_AGENT ? max_find(max_m.selected) : NULL; }
+
 uint32_t max_time_key(uint32_t now_ms)
 {
-    uint32_t h = 2166136261u;
-    int v[MAX_LANES + 1], n = drawn(v);
-    for (int i = 0; i < n; i++) {
-        const max_agent_t *a = &max_m.agents[v[i]];
-        const int64_t secs = max_secs(a, now_ms);
+    uint32_t h = max_fnv(2166136261u, &max_m.view, sizeof max_m.view);
+    const max_agent_t *a = paged();
+    if (a) {   // a turn's clock while it runs, else how long ago it ended; its summary until it runs out
+        const int64_t secs = running(a->state) ? max_secs(a, now_ms) : -1;
         const bool note = max_note_shown(a, now_ms);
         h = max_fnv(h, &secs, sizeof secs);
         h = max_fnv(h, &note, sizeof note);
+        if (!running(a->state)) h = fnv_ago(h, a->since_ms, now_ms);
+    }
+    if (max_m.view == MAX_VIEW_INBOX)
+        for (int i = 0; i < max_m.inbox_count; i++) h = fnv_ago(h, max_m.inbox[i].at, now_ms);
+    if (max_m.talk == MAX_TALK_RECORDING) {   // the band's frames
+        const uint32_t frame = (now_ms - max_m.talk_from) / MAX_TALK_FRAME_MS;
+        h = max_fnv(h, &frame, sizeof frame);
     }
     const bool notice = max_notice_shown(now_ms), toast = max_toast_shown(now_ms);
     h = max_fnv(h, &notice, sizeof notice);
@@ -220,6 +320,7 @@ void max_ui_reset(void)
 {
     memset(&max_m, 0, sizeof max_m);
     max_m.update_pct = -1;
+    max_m.view = MAX_VIEW_AMBIENT;   // no link yet
 }
 
 // ---- the outbox ----
@@ -279,23 +380,25 @@ bool max_ui_link(bool up, const char *machine, uint32_t now_ms)
         memcpy(max_m.computer, name, sizeof name);
         return changed;
     }
-    // Everything the daemon told us goes with the link: a lane is a claim that the agent is there now. So do the
-    // questions, the form and whatever was queued for a daemon that is no longer there.
-    const bool changed = max_m.link || max_m.count || max_m.machine_count || max_m.computer[0] || max_form_open();
+    // Everything the daemon told us goes with the link: an agent on the bar is a claim that it is there now. So do the
+    // questions, the form, the pages that showed them and whatever was queued for a daemon that is no longer there.
+    // Inbox stays: what happened, happened.
+    const bool changed = max_m.link || max_m.count || max_m.machine_count || max_m.computer[0] || max_form_open() ||
+                         max_m.view != MAX_VIEW_AMBIENT;
     max_m.link = false;
     max_m.computer[0] = 0;
     max_m.count = max_m.machine_count = 0;
-    max_m.selected[0] = 0;
-    max_m.page = 0;
+    max_m.selected[0] = max_m.attn_id[0] = max_m.toast_id[0] = 0;
+    max_m.page = max_m.cell_page = 0;
     memset(max_m.asks, 0, sizeof max_m.asks);
     max_form_reset();
     max_m.out_count = 0;
+    max_show(MAX_VIEW_AMBIENT);
     return changed;
 }
 
 bool max_ui_agents(const pro_agent_row_t *rows, int n, uint32_t now_ms)
 {
-    (void)now_ms;
     const int old = max_m.count;
     memcpy(s_old, max_m.agents, (size_t)old * sizeof s_old[0]);
     int k = 0;
@@ -312,6 +415,7 @@ bool max_ui_agents(const pro_agent_row_t *rows, int n, uint32_t now_ms)
         else {
             memset(a, 0, sizeof *a);
             max_copy(a->id, sizeof a->id, r->id);
+            a->since_ms = now_ms;
         }
         max_copy_label(a->name, sizeof a->name, r->name && r->name[0] ? r->name : r->id);
         max_copy(a->engine, sizeof a->engine, r->engine);
@@ -324,12 +428,16 @@ bool max_ui_agents(const pro_agent_row_t *rows, int n, uint32_t now_ms)
     for (int i = 0; i < MAX_AGENTS; i++)   // a question goes with its agent
         if (max_m.asks[i].agent[0] && !max_find(max_m.asks[i].agent)) max_m.asks[i].agent[0] = 0;
     bool changed = k != old || memcmp(max_m.agents, s_old, (size_t)k * sizeof s_old[0]);
-    if (!max_find(max_m.selected)) {   // the room's agent left, or there was none: the agent that leads the lanes
-        int o[MAX_AGENTS];
-        changed |= max_room_show(max_order(o) ? max_m.agents[o[0]].id : "");
+    if (!max_find(max_m.selected)) max_m.selected[0] = 0;   // its page goes (settle)
+    const int last = max_cell_pages() - 1;
+    if (max_m.cell_page > last) max_m.cell_page = last < 0 ? 0 : last;
+    if (!k && old) {   // nobody left: Ambient
+        changed |= max_show(MAX_VIEW_AMBIENT);
+    } else if (k && !old) {   // the first agents: Overview, and Ambient waits from now
+        max_m.idle_from = now_ms;
+        if (max_m.view == MAX_VIEW_AMBIENT) changed |= max_show(MAX_VIEW_OVERVIEW);
     }
-    max_clamp_page();
-    return changed;
+    return settle(now_ms) || changed;
 }
 
 bool max_ui_machines(const cable_machine_t *rows, int count, const char *selected)
@@ -362,6 +470,7 @@ void max_set_state(max_agent_t *a, max_state_t st, uint32_t now_ms)
         a->clock_ms = now_ms;
     }
     if (!was && will) a->clock = false;
+    if (a->state != st) a->since_ms = now_ms;
     a->state = st;
 }
 
@@ -423,7 +532,7 @@ static bool turn(max_agent_t *a, const char *kind, const char *text, int elapsed
         max_set_state(a, MAX_FAILED, now_ms);
         a->question[0] = 0;
         max_copy(a->note, sizeof a->note, text);
-        a->card = true;   // a failure is an alert: its card stays until dismissed
+        a->card = true;   // a failure is an alert: its card stays until the agent moves on
         max_ask_drop(a->id);
         return true;
     }
@@ -456,7 +565,13 @@ bool max_ui_turn(const char *id, const char *kind, const char *text, int elapsed
     max_agent_t *a = max_find(id);
     if (!a || !kind) return false;
     s_before = *a;
-    return turn(a, kind, text, elapsed_s, now_ms) && memcmp(&s_before, a, sizeof *a) != 0;
+    if (!turn(a, kind, text, elapsed_s, now_ms) || !memcmp(&s_before, a, sizeof *a)) return settle(now_ms);
+    max_m.idle_from = now_ms;
+    if (!strcmp(kind, "error")) max_attend(a, MAX_ATTN_FAIL, now_ms);
+    else if (running(a->state) && !running(s_before.state) && max_m.view == MAX_VIEW_AMBIENT)
+        max_show(MAX_VIEW_OVERVIEW);
+    settle(now_ms);
+    return true;
 }
 
 bool max_ui_summary(const char *id, const char *text, const char *recap, bool restore, pod_tier_t tier,
@@ -467,7 +582,8 @@ bool max_ui_summary(const char *id, const char *text, const char *recap, bool re
     s_before = *a;
     // "done" is the daemon's placeholder when the turn had nothing to say: the recap speaks instead.
     const char *say = text && text[0] && strcmp(text, "done") ? text : recap && recap[0] ? recap : NULL;
-    if (a->state == MAX_FAILED) {
+    const bool failed = a->state == MAX_FAILED;
+    if (failed) {
         if (!a->note[0]) max_copy(a->note, sizeof a->note, say);   // the error first; with none, what happened
     } else {
         if (a->state != MAX_DONE) {   // a live summary ends the turn
@@ -480,12 +596,22 @@ bool max_ui_summary(const char *id, const char *text, const char *recap, bool re
             max_copy(a->note, sizeof a->note, say);
             a->note_until = now_ms + MAX_DONE_MS;
         }
-        a->card = tier == POD_TIER_ALERT && say;   // the loud tier opens a card; list only shows it on the lane
+        a->card = tier == POD_TIER_ALERT && say;   // the loud tier takes Attention; list only shows on its page
     }
-    return memcmp(&s_before, a, sizeof *a) != 0;
+    if (!memcmp(&s_before, a, sizeof *a)) return settle(now_ms);
+    max_m.idle_from = now_ms;
+    if (failed) inbox_words(a);
+    else if (a->card) max_attend(a, MAX_ATTN_DONE, now_ms);
+    settle(now_ms);
+    return true;
 }
 
-bool max_ui_focus(const char *id) { return max_find(id) && max_room_show(id); }
+// The computer focused an agent: the bar keeps the page it shows (the person chose it, or Attention holds it).
+bool max_ui_focus(const char *id)
+{
+    (void)id;
+    return false;
+}
 
 // ---- the app's own state ----
 
@@ -542,21 +668,6 @@ bool max_ui_level(unsigned level, uint32_t now_ms)
     return true;   // the waveform moved
 }
 
-max_act_t max_ui_talk_due(uint32_t now_ms)
-{
-    max_act_t act = {MAX_ACT_NONE, "", "", 0, ""};
-    if (max_m.talk != MAX_TALK_RECORDING) return act;
-    const uint32_t quiet = now_ms - max_m.talk_quiet_from;
-    if (max_m.talk_heard && quiet >= MAX_SILENCE_MS) {
-        act.kind = MAX_ACT_SEND;
-        max_copy(act.agent_id, sizeof act.agent_id, max_m.talk_id);
-    } else if (!max_m.talk_heard && now_ms - max_m.talk_from >= MAX_HEAR_MS) {
-        act.kind = MAX_ACT_CANCEL;
-        max_notice_set("Mic closed \xc2\xb7 tap to talk", now_ms);
-    }
-    return act;
-}
-
 bool max_ui_apps(const char *shown, const pro_app_row_t *rows, int n, uint32_t now_ms)
 {
     (void)now_ms;
@@ -572,6 +683,7 @@ bool max_ui_apps(const char *shown, const pro_app_row_t *rows, int n, uint32_t n
     }
     char id[PRO_APP_ID_BYTES];
     max_copy(id, sizeof id, shown);
+    if (strcmp(id, max_m.shown)) max_m.cell_page = 0;   // another app's agents: from their first page
     const bool changed = !max_m.apps_known || n != max_m.app_count || strcmp(id, max_m.shown) ||
                          memcmp(apps, max_m.apps, sizeof apps);
     memcpy(max_m.apps, apps, sizeof apps);
@@ -597,7 +709,7 @@ bool max_ui_update(int pct, const char *to)
 
 bool max_ui_tick(uint32_t now_ms)
 {
-    const bool moved = settle(now_ms);   // left alone: the room goes back to the question waiting
+    const bool moved = settle(now_ms);
     return moved || max_m.dirty || max_time_key(now_ms) != max_m.drawn_key || !max_motion_ms(now_ms);
 }
 
@@ -605,32 +717,41 @@ uint32_t max_ui_next_wake_ms(uint32_t now_ms)
 {
     if (max_m.dirty) return 1;
     uint32_t ms = MAX_WAKE_MS;
-    int v[MAX_LANES + 1], n = drawn(v);
-    for (int i = 0; i < n; i++) {
-        const max_agent_t *a = &max_m.agents[v[i]];
-        if (a->clock && running(a->state)) {
-            const uint32_t step = 1000u - (uint32_t)(now_ms - a->clock_ms) % 1000u;   // to the next second
-            if (step < ms) ms = step;
-        }
-        if (a->state == MAX_DONE && max_note_shown(a, now_ms) && a->note_until - now_ms < ms) ms = a->note_until - now_ms;
+    const max_agent_t *a = paged();
+    if (a && running(a->state)) {
+        if (a->clock) sooner(&ms, 1000u - (uint32_t)(now_ms - a->clock_ms) % 1000u);   // to the clock's next second
+    } else if (a) {
+        sooner(&ms, 60000u - (uint32_t)(now_ms - a->since_ms) % 60000u);   // "2m ago" turns "3m ago"
+        if (a->state == MAX_DONE && max_note_shown(a, now_ms)) until(&ms, a->note_until, now_ms);
     }
-    if (max_notice_shown(now_ms) && max_m.notice_until - now_ms < ms) ms = max_m.notice_until - now_ms;
-    const uint32_t toast_end = max_m.toast_from + MAX_TOAST_MS, quiet_end = max_m.touched_ms + MAX_QUIET_MS;
-    if (max_toast_shown(now_ms) && toast_end - now_ms < ms) ms = toast_end - now_ms;
-    // The person's quiet runs out: left alone, the room may go back to a question (max_ui_tick).
-    if (max_m.touched && (int32_t)(quiet_end - now_ms) > 0 && quiet_end - now_ms < ms) ms = quiet_end - now_ms;
+    for (int i = 0; max_m.view == MAX_VIEW_INBOX && i < max_m.inbox_count; i++)
+        sooner(&ms, 60000u - (uint32_t)(now_ms - max_m.inbox[i].at) % 60000u);
+    if (max_m.talk == MAX_TALK_RECORDING) {   // the band, and the send or the close the clock owes (max_ui_talk_due)
+        sooner(&ms, MAX_TALK_FRAME_MS);
+        until(&ms, max_m.talk_heard ? max_m.talk_quiet_from + MAX_SILENCE_MS : max_m.talk_from + MAX_HEAR_MS, now_ms);
+    }
+    if (max_m.view == MAX_VIEW_ATTENTION && max_m.attn != MAX_ATTN_ASK)
+        until(&ms, max_m.attn_from + MAX_ATTN_END_MS, now_ms);
+    if (ambient_waits()) until(&ms, max_m.idle_from + MAX_AMBIENT_MS, now_ms);
+    if (max_notice_shown(now_ms)) until(&ms, max_m.notice_until, now_ms);
+    if (max_toast_shown(now_ms)) until(&ms, max_m.toast_from + MAX_TOAST_MS, now_ms);
     if (max_m.link) ms = max_form_wake(now_ms, max_ask_wake(now_ms, ms));   // a read again, a poll, a reply overdue
-    const uint32_t motion = max_motion_ms(now_ms);   // the room's pet, the toast's bar
-    if (motion < ms) ms = motion;
+    sooner(&ms, max_motion_ms(now_ms));   // the drawing's own motion
     return ms ? ms : 1;
 }
 
-const char *max_ui_selected(void) { return max_m.selected[0] ? max_m.selected : NULL; }
+const char *max_ui_selected(void)
+{
+    const char *id = max_m.view == MAX_VIEW_AGENT       ? max_m.selected
+                     : max_m.view == MAX_VIEW_ATTENTION ? max_m.attn_id
+                                                        : "";
+    return id[0] ? id : NULL;
+}
 
 bool max_toast_shown(uint32_t now_ms)
 {
-    const max_agent_t *a = max_m.toast_id[0] ? max_find(max_m.toast_id) : NULL;
-    return a && a->state == MAX_ASKING && now_ms - max_m.toast_from < MAX_TOAST_MS;
+    return max_m.toast_id[0] && max_attn_holds(max_m.toast_id, max_m.toast_attn) &&
+           now_ms - max_m.toast_from < MAX_TOAST_MS;
 }
 
 bool max_can_talk(const max_agent_t *a)

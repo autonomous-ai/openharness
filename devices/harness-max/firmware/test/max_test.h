@@ -1,10 +1,11 @@
-// What Harness Max's screen tests share: the check macro, a roster and a render into one scene.
+// What Harness Max's screen tests share: the check macro, a roster, a render into one scene, and the finger's targets
+// planted as the pages record them.
 #pragma once
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "max_ui_draw.h"   // max_hit
+#include "max_ui_draw.h"   // the drawing's helpers, for test_max_view.c
 #include "max_ui_internal.h"
 #include "pro_canvas.h"
 #include "theme.h"
@@ -34,24 +35,13 @@ static inline void render(uint32_t now)
     ht_scene_clear(&S, ht_rgb(HT_THEME_CANVAS));
     max_ui_render(&S, now);
 }
-// The middle of lane i as the last render drew it.
-static inline int lane_x(int i) { return max_m.lane_box[i].x + max_m.lane_box[i].w / 2; }
-static inline int lane_y(int i) { return max_m.lane_box[i].y + max_m.lane_box[i].h / 2; }
-// The room's card and buttons as the finger reads them, wherever a view draws them: the card is the room agent's as it
-// stands now, and each button asked for gets a box of its own along the top edge of the glass, above every lane.
+// The room's card as the old view drew it (test_max_view.c): the card is the room agent's as it stands now.
 static inline void room_card(void)
 {
     const max_agent_t *a = max_find(max_m.selected);
     CHECK(a != NULL);
     max_copy(max_m.card_id, sizeof max_m.card_id, a->id);
     max_m.card_key = max_card_key(a);
-}
-static inline const max_hit_t *room_hit(max_hit_kind_t kind, int arg)
-{
-    const int i = max_m.hit_count;
-    max_hit(i * 100, 0, 90, 10, kind, arg);
-    CHECK(max_m.hit_count == i + 1);
-    return &max_m.hits[i];
 }
 // The first text run holding `t`, or NULL.
 static inline const ht_run_t *text_run(const char *t)
@@ -70,4 +60,78 @@ static inline const char *order_ids(char *buf, size_t cap)
         snprintf(buf + len, cap - len, "%s%s", i ? " " : "", max_m.agents[o[i]].id);
     }
     return buf;
+}
+
+// What a render leaves for the clock, without drawing: the time-dependent picture as of now_ms, nothing pending.
+static inline void as_drawn(uint32_t now_ms)
+{
+    max_m.drawn_key = max_time_key(now_ms);
+    max_m.dirty = false;
+}
+
+// ---- the finger's targets, planted as a page records them, without drawing: the drawing's layout is its own ----
+// What the finger reads after a render of this page, before the page records anything: no hits, no cells.
+static inline void drawn_page(max_view_t view)
+{
+    max_m.view = view;
+    max_m.hit_count = 0;
+    max_m.cell_hits = 0;
+}
+// A hit area at (x, y, w, h), after those planted before it (the first match wins).
+static inline const max_hit_t *plant_at(max_hit_kind_t kind, int arg, int x, int y, int w, int h)
+{
+    CHECK(max_m.hit_count < MAX_HITS);
+    max_hit_t *hit = &max_m.hits[max_m.hit_count++];
+    *hit = (max_hit_t){(int16_t)x, (int16_t)y, (int16_t)w, (int16_t)h, (uint8_t)kind, (int8_t)arg};
+    return hit;
+}
+// A button: a 90 x 40 box of its own, in rows along the top of the glass.
+static inline const max_hit_t *plant(max_hit_kind_t kind, int arg)
+{
+    const int i = max_m.hit_count;
+    return plant_at(kind, arg, i % 19 * 100, i / 19 * 50, 90, 40);
+}
+// A page-wide target (the agent page's body, Attention's away), planted after the buttons as a page records it.
+static inline const max_hit_t *plant_page(max_hit_kind_t kind) { return plant_at(kind, 0, 0, 0, HT_WIDTH, HT_HEIGHT); }
+// Overview's cells on the page of cells shown, as max_cells() lists them, side by side under the buttons.
+static inline void plant_cells(void)
+{
+    int c[MAX_CELLS];
+    max_m.cell_hits = max_cells(c);
+    for (int i = 0; i < max_m.cell_hits; i++) {
+        max_m.cell_box[i] = (max_box_t){(int16_t)(i * 300), 200, 280, 100};
+        max_copy(max_m.cell_id[i], sizeof max_m.cell_id[i], max_m.agents[c[i]].id);
+    }
+}
+// The cell planted for this agent, or NULL.
+static inline const max_box_t *cell_of(const char *id)
+{
+    for (int i = 0; i < max_m.cell_hits; i++)
+        if (!strcmp(max_m.cell_id[i], id)) return &max_m.cell_box[i];
+    return NULL;
+}
+// The agent page's strip as max_segs() lists it: a segment each (seg_id).
+static inline void plant_strip(void)
+{
+    int g[MAX_SEGS], n = max_segs(g);
+    memset(max_m.seg_id, 0, sizeof max_m.seg_id);
+    for (int i = 0; i < n; i++) {
+        max_copy(max_m.seg_id[i], sizeof max_m.seg_id[i], max_m.agents[g[i]].id);
+        plant(MAX_HIT_SEG, i);
+    }
+}
+// The strip's segment for this agent, or NULL.
+static inline const max_hit_t *seg_of(const char *id)
+{
+    for (int i = 0; i < max_m.hit_count; i++)
+        if (max_m.hits[i].kind == MAX_HIT_SEG && !strcmp(max_m.seg_id[max_m.hits[i].arg], id)) return &max_m.hits[i];
+    return NULL;
+}
+// Attention's answer buttons stand for the agent on it as it stands now (card_id, card_key).
+static inline void plant_card(void)
+{
+    const max_agent_t *a = max_find(max_m.attn_id);
+    CHECK(a != NULL);
+    max_copy(max_m.card_id, sizeof max_m.card_id, a->id);
+    max_m.card_key = max_card_key(a);
 }
