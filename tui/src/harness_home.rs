@@ -51,26 +51,126 @@ pub fn harness_path(home: impl AsRef<Path>, entry: Entry) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
+
+    fn no_env(_: &str) -> Option<OsString> {
+        panic!("off Linux the rule reads no variable")
+    }
+
+    fn no_folder(_: &Path) -> bool {
+        panic!("off Linux the rule looks at no folder")
+    }
+
+    const OFF_LINUX: Look<'static> = Look { linux: false, env: &no_env, exists: &no_folder };
+
+    /// Both roots for the home `/h` on Linux, where only `existing` exist and `env` is the environment.
+    fn linux_roots(env: &[(&str, &str)], existing: &[&str]) -> (PathBuf, PathBuf) {
+        let env = |name: &str| env.iter().find(|(key, _)| *key == name).map(|(_, value)| OsString::from(value));
+        let exists = |path: &Path| existing.iter().any(|folder| Path::new(folder) == path);
+        let look = Look { linux: true, env: &env, exists: &exists };
+        let home = Path::new("/h");
+        (harness_root_with(home, Root::Data, &look), harness_root_with(home, Root::State, &look))
+    }
+
+    fn pair(data: &str, state: &str) -> (PathBuf, PathBuf) {
+        (PathBuf::from(data), PathBuf::from(state))
+    }
+
+    const XDG: (&str, &str) = ("/h/.local/share/harness", "/h/.local/state/harness");
+    const LEGACY: (&str, &str) = ("/h/.harness", "/h/.harness");
 
     #[test]
-    fn every_entry_is_under_the_homes_harness() {
-        let harness = PathBuf::from("/h").join(".harness");
-        assert_eq!(harness_path("/h", Entry::Tui).as_os_str(), harness.join("tui").as_os_str());
-        assert_eq!(harness_path("/h", Entry::ShellRequests).as_os_str(), harness.join("shell-requests").as_os_str());
-        assert_eq!(Entry::Tui.root(), Root::Data);
-        assert_eq!(Entry::ShellRequests.root(), Root::State);
+    fn fresh_linux_is_xdg() {
+        assert_eq!(linux_roots(&[], &[]), pair(XDG.0, XDG.1));
     }
 
     #[test]
-    fn both_roots_are_one_folder() {
-        assert_eq!(harness_root("/h", Root::Data), harness_root("/h", Root::State));
-        assert_eq!(harness_root("/h", Root::Data).as_os_str(), PathBuf::from("/h").join(".harness").as_os_str());
+    fn legacy_linux_is_dot_harness() {
+        assert_eq!(linux_roots(&[], &["/h/.harness"]), pair(LEGACY.0, LEGACY.1));
+    }
+
+    #[test]
+    fn the_data_root_wins_over_a_bridge() {
+        assert_eq!(linux_roots(&[], &["/h/.harness", XDG.0]), pair(XDG.0, XDG.1));
+    }
+
+    #[test]
+    fn an_unset_empty_or_relative_variable_is_ignored() {
+        for value in ["", "share"] {
+            let env = [("XDG_DATA_HOME", value), ("XDG_STATE_HOME", value)];
+            assert_eq!(linux_roots(&env, &[]), pair(XDG.0, XDG.1), "{value:?}");
+            assert_eq!(linux_roots(&env, &["/h/.harness", XDG.0]), pair(XDG.0, XDG.1), "{value:?}");
+        }
+    }
+
+    #[test]
+    fn a_custom_absolute_variable_is_used() {
+        let env = [("XDG_DATA_HOME", "/d"), ("XDG_STATE_HOME", "/s")];
+        assert_eq!(linux_roots(&env, &[]), pair("/d/harness", "/s/harness"));
+        // The data root the rule looks for is the variable's, not the default.
+        assert_eq!(linux_roots(&env, &["/h/.harness", XDG.0]), pair(LEGACY.0, LEGACY.1));
+        assert_eq!(linux_roots(&env, &["/h/.harness", "/d/harness"]), pair("/d/harness", "/s/harness"));
+    }
+
+    #[test]
+    fn off_linux_the_rule_is_not_run() {
+        for root in [Root::Data, Root::State] {
+            assert_eq!(harness_root_with(Path::new("/h"), root, &OFF_LINUX), PathBuf::from("/h").join(".harness"));
+        }
+    }
+
+    #[test]
+    fn every_entry_is_under_its_root() {
+        let entries = [(Entry::Tui, "tui", Root::Data), (Entry::Cli, "cli", Root::Data), (Entry::ShellRequests, "shell-requests", Root::State)];
+        for (entry, name, root) in entries {
+            assert_eq!(entry.root(), root);
+            assert_eq!(harness_path("/h", entry), harness_root("/h", root).join(name));
+        }
     }
 
     #[test]
     fn an_empty_home() {
-        // HOME unset: callers read "" and get today's relative .harness/…
-        assert_eq!(harness_path("", Entry::Tui).as_os_str(), PathBuf::from("").join(".harness").join("tui").as_os_str());
+        // HOME unset: callers read "" and, off Linux, get today's relative .harness/…
+        assert_eq!(harness_root_with(Path::new(""), Root::Data, &OFF_LINUX).as_os_str(), PathBuf::from(".harness").as_os_str());
+    }
+
+    /// `_hn_state_root` as shell_integration.sh defines it between its markers, run by `sh` for `home` and `env`.
+    #[cfg(unix)]
+    fn shell_state_root(uname: &str, home: &Path, env: &[(&str, &str)]) -> PathBuf {
+        let script = include_str!("shell_integration.sh");
+        let start = script.find("# >>> harness state root\n").expect("the start marker");
+        let end = script.find("# <<< harness state root\n").expect("the end marker");
+        // A function named uname stands in for the command, so both branches run on any computer.
+        let text = format!("uname() {{ printf '%s\\n' {uname}; }}\n{}_hn_state_root", &script[start..end]);
+        let mut sh = std::process::Command::new("sh");
+        sh.arg("-c").arg(text).env("HOME", home).env_remove("XDG_DATA_HOME").env_remove("XDG_STATE_HOME");
+        let out = sh.envs(env.iter().copied()).output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        PathBuf::from(String::from_utf8(out.stdout).unwrap().trim_end_matches('\n'))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_shell_function_gives_the_same_folder() {
+        let home = std::env::temp_dir().join(format!("hn-home-{}", uuid::Uuid::new_v4()));
+        let custom = home.join("xdg");
+        let (custom_data, custom_state) = (custom.join("data"), custom.join("state"));
+        let custom_env = [("XDG_DATA_HOME", custom_data.to_str().unwrap()), ("XDG_STATE_HOME", custom_state.to_str().unwrap())];
+        let envs: [&[(&str, &str)]; 3] = [&[], &[("XDG_DATA_HOME", ""), ("XDG_STATE_HOME", "share")], &custom_env];
+        // Fresh, legacy, the default data root beside a bridge, then the custom data root too.
+        let steps = [home.clone(), home.join(".harness"), home.join(".local/share/harness"), custom_data.join("harness")];
+        for step in steps {
+            std::fs::create_dir_all(&step).unwrap();
+            for env in envs {
+                let read = |name: &str| env.iter().find(|(key, _)| *key == name).map(|(_, value)| OsString::from(value));
+                for (uname, linux) in [("Linux", true), ("Darwin", false)] {
+                    let look = Look { linux, env: &read, exists: &Path::exists };
+                    let rust = harness_root_with(&home, Root::State, &look);
+                    assert_eq!(shell_state_root(uname, &home, env), rust, "{uname} {env:?} with {}", step.display());
+                }
+            }
+        }
+        std::fs::remove_dir_all(&home).unwrap();
     }
 
     /// A hit the guard keeps on purpose: its file, the text it matched, and why. Each excuses exactly one hit.
