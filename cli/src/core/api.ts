@@ -26,9 +26,8 @@ import type { ObservedEvent } from './observedHook.js'
 import type { AppSwarms } from '../cable/cableSession.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
 import type { AutonomousDeviceDelivery } from '../lib/autonomous-device/service.js'
-import type { DshDescribeAnswer, DshDescribeRequest, DshLaunchRequest, DshMaterializeAnswer, DshMaterializeRequest } from '../dsh/launchWire.js'
+import type { DshContextAnswer, DshDescribeAnswer, DshDescribeRequest, DshLaunchRequest, DshMaterializeAnswer, DshMaterializeRequest } from '../dsh/launchWire.js'
 import type { AgentDshContext, AgentFacts } from '../lib/agentFrame.js'
-import type { GridAccess } from '../lib/gridAttach.js'
 import type { createHarnessResourcesReader } from '../lib/harnessResources.js'
 import type { createHarnessStorageReader } from '../lib/harnessTelemetry.js'
 import type { AgentGridTarget, GridAnnotation } from '../lib/gridAnnotation.js'
@@ -752,7 +751,7 @@ export const MACHINE_ADDON_REQUESTS = ['machine_addon', 'machine_addons_http'] a
  * The saved APIs and the Codex profiles came out of the socket's switch (launchTargetRequests).
  */
 export const MODELS_REQUESTS = [
-  'grid_models_list', 'models_list',
+  'grid_models_list', 'models_list', 'grid_launch_context',
   'grid_fleet_models_list', 'grid_fleet_model_download', 'grid_fleet_model_start', 'grid_fleet_model_stop',
   'grid_fleet_run', 'grid_fleet_cancel',
   'api_connections', 'codex_profiles_list', 'codex_profile_link',
@@ -769,8 +768,9 @@ const MINUTE = 60_000
  *
  * - A grid command runs as long as its caller asked, up to half an hour (`GRID_FLEET_MAX_TIMEOUT_MS`).
  * - Grid's set-up installs `grid` on first use (its installer is given ten minutes, `gridInstall.ts`),
- *   hands it this machine's sign-in and makes the account's grid: a Set up, a Get, a Use, `ensure` and
+ *   hands it this machine's sign-in and makes the account's grid: a Set up, a Get, a Use and
  *   a move onto a grid model (`moveTarget`) each wait for it.
+ * - Package context waits eight seconds for setup, then reads the private Grid name.
  * - A launch target, the private grid's name and the lists each run a few `grid` calls of up to 30 s.
  * - The Store's install and update set up a harness's toolchain: minutes.
  *
@@ -786,10 +786,10 @@ export const LONG_ANSWERS: Readonly<Record<string, Readonly<Record<string, numbe
   models: {
     grid_fleet_run: GRID_FLEET_MAX_TIMEOUT_MS + MINUTE,
     grid_fleet_models_list: 15 * MINUTE, grid_fleet_model_download: 15 * MINUTE, grid_fleet_model_start: 15 * MINUTE,
-    ensure: 15 * MINUTE, moveTarget: 15 * MINUTE,
+    grid_launch_context: 3 * MINUTE, moveTarget: 15 * MINUTE,
     launchTarget: 3 * MINUTE, privateGridName: 2 * MINUTE, lists: 2 * MINUTE,
   },
-  store: { dsh_install: 30 * MINUTE, dsh_update: 30 * MINUTE, dshMaterialize: 6 * MINUTE },
+  store: { dsh_install: 30 * MINUTE, dsh_update: 30 * MINUTE, dshMaterialize: 6 * MINUTE, dshContext: 3 * MINUTE },
   // A cloud agent's maker answers on its own time: Fo's reply waits 40 s, and a busy Fo is retried for half a
   // minute more. A wait shorter than that said "not running" of words that were then sent anyway.
   cloud: { create: 3 * MINUTE, deliver: 3 * MINUTE, answer: 3 * MINUTE, stopHarness: 2 * MINUTE, cloud_send: 3 * MINUTE },
@@ -1156,8 +1156,6 @@ export const VIEWERS_FALLBACKS: PortFallbacks<ViewersPort> = {
  * service last told it for what a frame or a keystroke reads, and by asking it for the rest.
  */
 export interface ModelsPort {
-  /** Have grid ready for what the caller is about to do; resolves with what happened, never rejects. */
-  ensure: GridAccess['ensure']
   /** What an agent's frame says of the grid it is on: from memory, so a frame costs no I/O. */
   annotation(grid: AgentGridTarget): GridAnnotation | null
   /** Someone is typing to an agent on `grid`: start it while they type, if it sleeps. */
@@ -1202,13 +1200,12 @@ export interface ModelsPort {
  * engine's own login never asks models.
  */
 export const MODELS_FALLBACKS: PortFallbacks<ModelsPort> = {
-  ensure: later(FAIL), annotation: null, prewarm: undefined, launchTarget: later(FAIL), moveTarget: later(FAIL), moved: undefined,
+  annotation: null, prewarm: undefined, launchTarget: later(FAIL), moveTarget: later(FAIL), moved: undefined,
   gridAssignments: later(FAIL), gridLaunch: later(FAIL), apiTarget: later(FAIL), privateGridName: later(null), lists: later(FAIL), machines: undefined, signedOut: undefined,
 }
 
 /** What the core calls while `ports.models` is null (models is off): its fallbacks' answers. */
 export const MODELS_OFF: ModelsPort = {
-  ensure: () => Promise.reject(new ServiceUnavailableError('models')),
   annotation: () => null,
   prewarm: () => {},
   launchTarget: () => Promise.reject(new ServiceUnavailableError('models')),
@@ -2064,14 +2061,18 @@ export interface WindowRelay {
 }
 
 export interface StorePort {
+  stop(): void
+  dshContext(request: DshDescribeRequest): Promise<DshContextAnswer>
   dshDescribe(request: DshDescribeRequest): Promise<DshDescribeAnswer>
   dshMaterialize(request: DshMaterializeRequest): Promise<DshMaterializeAnswer>
   /** Untrusted contribution; dshThrough checks it against captured request and session identity. */
   dshLaunch(request: DshLaunchRequest): Promise<unknown>
 }
 
-export const STORE_FALLBACKS: PortFallbacks<StorePort> = { dshDescribe: later(FAIL), dshMaterialize: later(FAIL), dshLaunch: later(FAIL) }
+export const STORE_FALLBACKS: PortFallbacks<StorePort> = { stop: undefined, dshContext: later(FAIL), dshDescribe: later(FAIL), dshMaterialize: later(FAIL), dshLaunch: later(FAIL) }
 export const STORE_OFF: StorePort = {
+  stop: () => {},
+  dshContext: () => Promise.reject(new ServiceUnavailableError('store')),
   dshDescribe: () => Promise.reject(new ServiceUnavailableError('store')),
   dshMaterialize: () => Promise.reject(new ServiceUnavailableError('store')),
   dshLaunch: () => Promise.reject(new ServiceUnavailableError('store')),

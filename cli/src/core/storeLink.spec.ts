@@ -40,6 +40,32 @@ describe('checked Store launch replies', () => {
   const request = { dsh: 'test/draw', workspace: '/workspace', engine: 'claude' as const, key: 'agent', account: {} }
   const materialized = { ok: true, created: [], kept: ['existing'], warnings: [] }
   const launched = { ok: true, launch: { env: { HARNESS_DSH: 'test/draw' }, args: ['--context'] } }
+  it('detaches bounded account context and refuses malformed or missing context', async () => {
+    const source = { privateGrid: 'private', extra: 'discarded' }
+    const call = vi.fn(async () => ({ ok: true, account: source }))
+    const link = createStoreLink(fakeCore(), call)
+    link.port.stop()
+    const through = dshThrough({ store: () => link.port, nameOf: () => 'Draw', account: () => ({}) })
+    const context = await through.context(request)
+    source.privateGrid = 'changed'
+    expect(context).toEqual({ ok: true, account: { privateGrid: 'private' } })
+    expect(call).toHaveBeenCalledWith('dshContext', request)
+    for (const account of [{}, { privateGrid: null }, { privateGrid: '' }, { privateGrid: 'x'.repeat(4096) }]) {
+      call.mockResolvedValueOnce({ ok: true, account } as never)
+      expect(await through.context(request)).toEqual({ ok: true, account })
+    }
+    for (const bad of [null, [], {}, { ok: true }, { ok: true, account: [] },
+      { ok: true, account: { privateGrid: 1 } }, { ok: true, account: { privateGrid: 'é'.repeat(2049) } },
+      { ok: true, account: { privateGrid: 'x\0y' } }]) {
+      call.mockResolvedValueOnce(bad as never)
+      expect(await through.context(request)).toMatchObject({ ok: false, unavailable: 'store' })
+    }
+    const refused = { ok: false, error: 'DSH_NOT_INSTALLED', detail: 'gone' }
+    call.mockResolvedValueOnce(refused as never)
+    expect(await through.context(request)).toEqual(refused)
+    const inline = dshThrough({ store: () => ({ ...link.port, dshContext: async () => ({}) as never }), nameOf: () => 'Draw', account: () => ({}) })
+    expect(await inline.context(request)).toMatchObject({ ok: false, unavailable: 'store' })
+  })
   it('reads bounded package facts across the link and drops manifest data', async () => {
     const facts = { ok: true, id: 'test/draw', name: 'Draw', permissionMode: null, refusal: null }
     const call = vi.fn(async () => ({ ...facts, manifest: { secret: 'not retained' } }))

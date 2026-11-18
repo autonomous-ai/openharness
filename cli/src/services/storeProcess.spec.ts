@@ -2,9 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { STORE_REQUESTS, type CoreApi } from '../core/api.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcessOptions } from './process.js'
 import { runStoreService } from './storeProcess.js'
+import * as launchModule from './storeLaunch.js'
+import { storeLaunchContext } from './storeContext.js'
 
 // The real default reaches a real socket and clones real repositories: never in a test.
 vi.mock('./process.js', () => ({ runServiceProcess: vi.fn(() => ({ stop: vi.fn() })) }))
+vi.mock('./storeContext.js', () => ({ storeLaunchContext: vi.fn(async () => ({ privateGrid: 'selected' })) }))
 
 const ASKER = { local: true, owner: true }
 
@@ -40,9 +43,10 @@ describe('the Store in its own process', () => {
 
   it('reaches the core as `store`, answering its four requests, holding no credential', async () => {
     const { options, api, handle, service } = setup()
-    expect(handle).toBe(service)
+    handle.stop()
+    expect(service.stop).toHaveBeenCalledOnce()
     expect(options).toMatchObject({ name: 'store', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
-    expect(Object.keys(options.requests).sort()).toEqual([...STORE_REQUESTS, 'dshDescribe', 'dshMaterialize', 'dshLaunch'].sort())
+    expect(Object.keys(options.requests).sort()).toEqual([...STORE_REQUESTS, 'dshDescribe', 'dshContext', 'dshMaterialize', 'dshLaunch'].sort())
     await expect(api.account.accessToken()).rejects.toThrow('store holds no credential')
   })
 
@@ -75,14 +79,14 @@ describe('the Store in its own process', () => {
     runStoreService({ dataDir: '/data', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
     const options = vi.mocked(runServiceProcess).mock.calls.at(-1)![0]
     expect(options.name).toBe('store')
-    expect(Object.keys(options.requests).sort()).toEqual([...STORE_REQUESTS, 'dshDescribe', 'dshMaterialize', 'dshLaunch'].sort())
+    expect(Object.keys(options.requests).sort()).toEqual([...STORE_REQUESTS, 'dshDescribe', 'dshContext', 'dshMaterialize', 'dshLaunch'].sort())
   })
 })
 
 describe('the Store launch port on its process wire', () => {
   const request = { dsh: 'test/draw', workspace: '/workspace', engine: 'claude', key: 'agent', account: {} }
   const setup = () => {
-    const launch = { dshDescribe: vi.fn(async () => ({ ok: true as const, id: 'test/draw', name: 'Draw', permissionMode: null, refusal: null })), dshMaterialize: vi.fn(async () => ({ ok: true as const, created: [], kept: [], warnings: [] })),
+    const launch = { stop: vi.fn(), dshContext: vi.fn(async () => ({ ok: true as const, account: { privateGrid: null } })), dshDescribe: vi.fn(async () => ({ ok: true as const, id: 'test/draw', name: 'Draw', permissionMode: null, refusal: null })), dshMaterialize: vi.fn(async () => ({ ok: true as const, created: [], kept: [], warnings: [] })),
       dshLaunch: vi.fn(async () => ({ ok: true as const, launch: { env: {}, args: [] } })) }
     runStoreService({ dataDir: '/data', socketPath: '/socket', machineId: 'm', token: 't', start: () => ({}), launch,
       prepare: Object.assign(() => true, { ready: () => true, invalidate: () => {} }) })
@@ -92,8 +96,11 @@ describe('the Store launch port on its process wire', () => {
     const { launch, requests } = setup()
     expect(await requests.dshDescribe!({ dsh: request.dsh, engine: 'claude', manifest: {} }, ASKER)).toMatchObject({ ok: true, id: request.dsh })
     expect(launch.dshDescribe).toHaveBeenCalledWith({ dsh: request.dsh, engine: 'claude' })
+    expect(await requests.dshContext!({ dsh: request.dsh, engine: 'claude', privateGrid: 'untrusted' }, ASKER)).toEqual({ ok: true, account: { privateGrid: null } })
+    expect(launch.dshContext).toHaveBeenCalledWith({ dsh: request.dsh, engine: 'claude' })
     for (const payload of [{}, { dsh: 'invalid', engine: 'claude' }, { dsh: request.dsh, engine: 'unknown' }]) {
       expect(await requests.dshDescribe!(payload, ASKER)).toMatchObject({ error: 'INVALID_DSH' })
+      expect(await requests.dshContext!(payload, ASKER)).toMatchObject({ error: 'INVALID_DSH' })
     }
     for (const account of [{}, { privateGrid: null }, { privateGrid: '' }, { privateGrid: 'private' }]) {
       expect(await requests.dshMaterialize!({ ...request, account, secret: 'not forwarded' }, ASKER)).toMatchObject({ ok: true })
@@ -173,4 +180,53 @@ describe('the Store launch port on its process wire', () => {
     expect(query).toHaveBeenCalledTimes(6)
   })
 
+})
+
+describe('Store context follows the physical core connection', () => {
+  afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
+  const address = { command: 'harness', port: 18473, machineId: 'm' }
+  const request = { dsh: 'test/draw', engine: 'claude' }
+  function setup() {
+    const original = launchModule.storeLaunchPort
+    vi.spyOn(launchModule, 'storeLaunchPort').mockImplementation((_lookup, run, prepare, context) =>
+      original(() => ({ id: 'test/draw' }) as never, run, prepare, context))
+    const service = { stop: vi.fn() }
+    const handle = runStoreService({ dataDir: '/data', socketPath: '/socket', machineId: 'm', token: 't',
+      start: () => ({}), prepare: Object.assign(() => true, { ready: () => false, invalidate: () => {} }),
+      run: options => { vi.mocked(runServiceProcess)(options); return service } })
+    return { handle, service, options: vi.mocked(runServiceProcess).mock.calls.at(-1)![0] }
+  }
+  it('uses the address from this connection and aborts its context on replacement, disconnect and stop', async () => {
+    const run = setup(), query = vi.fn(async () => address)
+    await expect(run.options.requests.dshContext!(request, ASKER)).rejects.toThrow('connection unavailable')
+    run.options.onConnected!({ query })
+    expect(await run.options.requests.dshContext!(request, ASKER)).toEqual({ ok: true, account: { privateGrid: 'selected' } })
+    const first = vi.mocked(storeLaunchContext).mock.calls.at(-1)!
+    expect(first[0]).toEqual({ dataDir: '/data', port: 18473, machineId: 'm' })
+    expect(first[1]).toBe(false); expect(first[2]()).toBe(true); expect(first[3].aborted).toBe(false)
+    run.options.onConnected!({ query })
+    expect(first[2]()).toBe(false); expect(first[3].aborted).toBe(true)
+    await run.options.requests.dshContext!(request, ASKER)
+    const second = vi.mocked(storeLaunchContext).mock.calls.at(-1)!
+    run.options.onDisconnected!()
+    expect(second[2]()).toBe(false); expect(second[3].aborted).toBe(true)
+    run.options.onConnected!({ query }); await run.options.requests.dshContext!(request, ASKER)
+    const third = vi.mocked(storeLaunchContext).mock.calls.at(-1)!
+    run.handle.stop(); expect(third[2]()).toBe(false); expect(third[3].aborted).toBe(true)
+    expect(run.service.stop).toHaveBeenCalledOnce()
+  })
+  it.each(['invalid', 'machine', 'replaced', 'disconnected', 'stopped'] as const)('refuses %s address before opening a context socket', async reason => {
+    const run = setup()
+    let answer!: (value: Record<string, unknown>) => void
+    const query = vi.fn(() => new Promise<Record<string, unknown>>(resolve => { answer = resolve }))
+    run.options.onConnected!({ query })
+    const pending = run.options.requests.dshContext!(request, ASKER)
+    const rejected = expect(pending).rejects.toThrow('connection changed')
+    if (reason === 'replaced') run.options.onConnected!({ query: async () => address })
+    if (reason === 'disconnected') run.options.onDisconnected!()
+    if (reason === 'stopped') run.handle.stop()
+    answer(reason === 'invalid' ? {} : { ...address, machineId: reason === 'machine' ? 'other' : 'm' })
+    await rejected; expect(storeLaunchContext).not.toHaveBeenCalled()
+    run.handle.stop()
+  })
 })

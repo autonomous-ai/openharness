@@ -28,7 +28,6 @@ import { gridAssignmentAnswersIn } from '../lib/gridAssignmentWire.js'
  * asks for it each time), each agent's Model/Effort choices, and the two pushes to the windows.
  */
 import { annotate, glanceFor, type GridGlance } from '../lib/gridAnnotation.js'
-import type { GridAttachResult } from '../lib/gridAttach.js'
 import { API_NETWORK_PREFIX, GRID_ENV_VAR_NAMES, GRID_LAUNCH_FIELDS, parseGridLaunchSelection, type GridEngineLaunch, type GridLaunchAnswer, type GridLaunchOverride, type GridLaunchRequest } from '../lib/gridLaunchWire.js'
 import { storedGridLaunch } from '../lib/sessionStorageWire.js'
 import { homedir } from 'node:os'
@@ -162,11 +161,6 @@ export function createModelsLink(core: Pick<CoreApi, 'agents' | 'account' | 'cli
   const tell = (payload: Record<string, unknown>): void => { notify({ type: 'service_event', payload }) }
 
   const port: ModelsPort = {
-    ensure: async (request) => {
-      const answer = await ask('ensure', { ...request })
-      if (typeof answer.status !== 'string') throw new ServiceUnavailableError('models')
-      return answer as unknown as GridAttachResult
-    },
     annotation: (grid) => annotate(glanceFor(glances, grid.baseUrl), grid),
     prewarm: (grid) => { if (glanceFor(glances, grid.baseUrl)?.asleep) tell({ kind: 'prewarm', grid }) },
     launchTarget: async (selection) => { const target = launchIn((await ask('launchTarget', { ...selection })).target); return target && !storedGridLaunch(target) ? target : null },

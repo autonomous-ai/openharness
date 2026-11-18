@@ -178,7 +178,6 @@ export function runModelsService(options: ModelsServiceOptions): ServiceProcess 
 
   // The core's own calls into models, under its port's member names: no client's request reaches these.
   const portCalls: ServiceRequests = {
-    ensure: async (payload) => ({ ...await models.ensure({ ownGrid: payload.ownGrid === true }) }),
     launchTarget: async (payload) => ({ target: await models.launchTarget({ model: text(payload.model), grid: text(payload.grid) }) }),
     moveTarget: async (payload) => ({ ...await models.moveTarget({ gridName: text(payload.gridName) || null, model: text(payload.model) }) }),
     gridAssignments: async (payload) => {

@@ -302,7 +302,7 @@ describe('what the add-ons of a device that is this machine ask of the core', ()
 
   it('is told to Hachi\'s service and the agent cleanup, which reach this daemon and the owner\'s other machines as a tool does', () => {
     const core = fakeCore({ daemon: { machineId: () => 'm_account' } as never })
-    for (const service of ['hachi', 'agentCleanup']) expect(answerDaemonQuery(core, service, 'daemon')).toMatchObject({ port: 18473, machineId: 'm_account' })
+    for (const service of ['hachi', 'agentCleanup', 'store']) expect(answerDaemonQuery(core, service, 'daemon')).toMatchObject({ port: 18473, machineId: 'm_account' })
   })
 })
 

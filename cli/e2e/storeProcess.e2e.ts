@@ -81,9 +81,52 @@ describe('the Store in its own process, beside the viewers', () => {
     const window = await LocalClient.connect(d)
     expect(Array.isArray((await window.request('dsh_list', {}, 60_000)).dsh)).toBe(true)
     window.close()
-    await until('the Store to connect to the core', () => connected(d) >= 1 || null, 30_000, 200)
+    if (env.HARNESSD_SERVICES !== 'none') await until('the Store to connect to the core', () => connected(d) >= 1 || null, 30_000, 200)
     return d
   }
+
+  it.each(['supervised', 'inline'] as const)('reads package context through Models in %s composition before workspace init', async mode => {
+    const d = await fresh(mode === 'inline' ? { HARNESSD_SERVICES: 'none' } : {})
+    const client = await LocalClient.connect(d)
+    try {
+      expect(await client.request('grid_launch_context', { setup: false }, 30_000)).toMatchObject({ ok: true, account: { privateGrid: null } })
+      const script = `import fs from 'node:fs';
+        fs.appendFileSync('context-attempts', 'once\\n');
+        fs.writeFileSync('account-context.json', JSON.stringify({ privateGrid: process.env.HARNESS_PRIVATE_GRID ?? null }));`
+      expect(await client.request('dsh_install', { url: repository(d, HARNESS, 'Context', undefined, script) }, 180_000)).toMatchObject({ ok: true })
+      const cwd = join(d.projectsDir, 'package-context')
+      const agent = await create(d, client, cwd, HARNESS)
+      expect(JSON.parse(readFileSync(join(cwd, 'account-context.json'), 'utf8'))).toEqual({ privateGrid: null })
+      expect(readFileSync(join(cwd, 'context-attempts'), 'utf8')).toBe('once\n')
+      await turn(client, agent.id, 'package context was prepared outside session authority')
+      expect(d.coresStarted()).toBe(1)
+    } finally { client.close() }
+  })
+
+  it('keeps ordinary turns running while Models hangs during package context, then completes init once', async () => {
+    const d = await fresh({ HARNESSD_SERVICE_HEARTBEAT_TIMEOUT_MS: '3000', HARNESSD_SERVICE_STOP_GRACE_MS: '100' })
+    const client = await LocalClient.connect(d)
+    try {
+      const ordinary = await create(d, client, 'ordinary-during-context')
+      const script = `import fs from 'node:fs'; fs.appendFileSync('context-attempts', 'once\\n');`
+      expect(await client.request('dsh_install', { url: repository(d, HARNESS, 'Context', undefined, script) }, 180_000)).toMatchObject({ ok: true })
+      expect(await client.request('grid_launch_context', { setup: false }, 30_000)).toMatchObject({ ok: true })
+      const starts = () => [...d.log().matchAll(/\[harnessd\] service models started \(pid (\d+)\)/g)].map(match => Number(match[1]))
+      const pid = starts().at(-1)!
+      expect(Number.isSafeInteger(pid) && pid > 0).toBe(true)
+      process.kill(pid, 'SIGSTOP')
+      const cwd = join(d.projectsDir, 'context-after-models')
+      const creating = create(d, client, cwd, HARNESS)
+      // Observe the pending create even if the independent turn fails before it is awaited.
+      void creating.catch(() => {})
+      await turn(client, ordinary.id, 'Models context cannot block another agent')
+      await creating
+      await until('Models to restart after its held heartbeat', () => starts().some(next => next !== pid) || null, 30_000, 100)
+      expect(readFileSync(join(cwd, 'context-attempts'), 'utf8')).toBe('once\n')
+      expect(await client.request('grid_launch_context', { setup: false }, 30_000)).toMatchObject({ ok: true })
+      expect(d.coresStarted()).toBe(1)
+    } finally { client.close() }
+  })
 
   it('installs a harness there, says how it goes, and the agent created the moment it answers finds it', async () => {
     const d = await fresh()

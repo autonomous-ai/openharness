@@ -12,8 +12,7 @@ import { realpathSync, statSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { BackendSocket } from '../../backendSocket.js'
-import type { ConnectorsPort, ModelsPort } from '../api.js'
-import { MODEL_MANAGER_ID } from '../../dsh/builtinIds.js'
+import type { ConnectorsPort } from '../api.js'
 import type { DshAccount } from '../../dsh/launch.js'
 import { harnessEnvToClear } from '../../dsh/sessionEnv.js'
 import type { DshThrough } from './dshThrough.js'
@@ -25,7 +24,6 @@ import {
   buildEngineCommandArgv, buildEngineLaunchArgv, engineLaunchEnv, namedAgentArgs, permissionModeApproves, permissionModeFlags,
   refusePermissionFlagIfUnsupported, supportsFirstPrompt, supportsNamedAgent, typedFirstPrompt, NamedAgentUnsupportedError,
 } from '../../lib/engineLaunch.js'
-import { setUpWithin } from '../../lib/setUpWithin.js'
 import { joinedInstructions, launchSettingsArgs } from '../../engines/kit/launchValues.js'
 import { machineMcpLaunchArgs } from '../../lib/machineMcp.js'
 import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
@@ -48,11 +46,6 @@ import { tmuxTooOldForSessionEnv } from '../../lib/tmuxVersion.js'
 import { scmLaunchEnv } from '../../scm/launch.js'
 import { mergedLaunchEnv } from './launchEnv.js'
 import type { createPaneWatcher } from './newPane.js'
-
-/** How long creating a Model Manager waits for grid to be set up before its workspace asks grid which
- *  grid is this account's. Short: the app gives the whole create 20s, and a first install takes minutes.
- *  Past it the set-up carries on, and the agent's own `harness grid setup` waits for it. */
-const MODEL_MANAGER_GRID_WAIT_MS = 8_000
 
 type CreateAgent = NonNullable<BackendSocket['onCreateAgent']>
 
@@ -86,11 +79,7 @@ export interface CreateAgentDeps {
   terminalHintMachineName: () => string
   /** Whether a folder is being purged (PurgeAgentService.blocksFolder). */
   blocksFolder: (cwd: string) => boolean | undefined
-  /** Grid set-up, when this daemon can do it: the models service's (core/api.ts `ModelsPort.ensure`), null
-   *  while it is off. */
-  gridSetup: () => ModelsPort['ensure'] | null
-  privateGridName: () => Promise<string | null>
-  dshLaunch: Pick<DshThrough, 'describe' | 'materialize' | 'launch'>
+  dshLaunch: Pick<DshThrough, 'describe' | 'context' | 'materialize' | 'launch'>
   /** A profile home's MCP config written with the connections' entries, by connected services (core/api.ts
    *  `ConnectorsPort`): bounded, and answered nothing while they are off, failing or slow. Never rejects. */
   syncProfileHome: ConnectorsPort['syncProfileHome']
@@ -108,7 +97,7 @@ function hooksHeld(engine: string, waiting: string) {
 export function createAgentCreator({
   native: inspectNative, publishConfig, createBackend: initialBackend, recoverBackend, noBackendCode = 'TMUX_UNAVAILABLE', registry, externalResume, watchNewPane, announceSession, attach,
   prepareInstructions, prepareFolderTrust, hookPort, hooksDisabled, gridLaunchMachine, buildGridLaunch, terminalHintMachineName, blocksFolder,
-  gridSetup, privateGridName, dshLaunch, syncProfileHome,
+  dshLaunch, syncProfileHome,
 }: CreateAgentDeps) {
   const prepare = async (input: Parameters<CreateAgent>[0], authority: LaunchAuthority,
     context?: { local: boolean; folderTrustAttempted?: true }): Promise<LaunchPreparation<Awaited<ReturnType<CreateAgent>>>> => {
@@ -226,16 +215,11 @@ export function createAgentCreator({
     if (dsh) {
       // Checked above: a harness that is not installed was refused before models was asked.
       const harness = pinnedDsh!
-      // The Model Manager is grid in use, however it was made (the Store, New Harness, `harness new`, the
-      // models picker): grid is set up before the workspace asks it which grid is this account's.
-      const ensureGrid = gridSetup()
-      if (harness.id === MODEL_MANAGER_ID && ensureGrid) {
-        const setUp = await setUpWithin(() => ensureGrid({ ownGrid: true }), MODEL_MANAGER_GRID_WAIT_MS)
-        if (setUp === 'pending') console.log(`[dsh] ${dsh} · grid is still being set up; the agent waits for it with \`harness grid setup\``)
-      }
       try {
-        dshAccount = { privateGrid: await privateGridName().catch(() => null) }
+        const context = await dshLaunch.context({ dsh, engine })
         if (!current()) return stale()
+        if (!context.ok) return context
+        dshAccount = context.account
         const materialized = await dshLaunch.materialize({ dsh, workspace: cwd, account: dshAccount, engine, key: label })
         if (!current()) return stale()
         if (!materialized.ok) {

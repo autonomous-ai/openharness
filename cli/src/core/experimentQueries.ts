@@ -61,8 +61,9 @@ export function daemonAddress(core: Pick<CoreApi, 'daemon'>): Payload {
 /** The services, not experiments, that ask how this daemon is reached: the add-ons of a device that is this machine
  *  (services/machineAddonsProcess.ts), for the account's machine id; Hachi's service (services/hachi.ts), which follows
  *  harnesses here and on the owner's other machines as a tool does; and the agent cleanup, which hands what Hachi
- *  started on another machine to the person there (services/hachiHandOver.ts). */
-const DAEMON_ASKERS: ReadonlySet<string> = new Set(['machineAddons', 'hachi', 'agentCleanup', 'engineSetup'])
+ *  started on another machine to the person there (services/hachiHandOver.ts). Store uses the same local
+ *  owner transport for Models-owned package context; it receives no account credential here. */
+const DAEMON_ASKERS: ReadonlySet<string> = new Set(['machineAddons', 'hachi', 'agentCleanup', 'engineSetup', 'store'])
 
 /** This daemon's address, to those services. Answered before the experiments' check, which would refuse it as
  *  NOT_AN_EXPERIMENT; any other query of theirs is not answered here. */

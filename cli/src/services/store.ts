@@ -11,6 +11,7 @@
  */
 import type { CoreApi, CorePorts, ServiceRequests } from '../core/api.js'
 import { storeLaunchPort } from './storeLaunch.js'
+import { storeLaunchContext } from './storeContext.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
 import { ensureBundledCoreHarnesses } from '../dsh/builtins.js'
 import { agentSettingsPath, readAgentSettings } from '../lib/agentSettings.js'
@@ -62,7 +63,7 @@ export function startStore(core: CoreApi, deps: StoreDeps = DEFAULTS, prepare = 
   // Hachi turned on while the Store runs is put in place at once: the person's first ⇧⌘H creates it and must not wait
   // for the Store's next start. Only the turn from off to on prepares: the file is written for every setting, and the
   // watch says it may have changed once more as it starts. Turned off, an installed Hachi stays, with its goals and
-  // conversation. The watch keeps no process alive, and the Store has no stop of its own: it ends with its process.
+  // conversation. The watch keeps no process alive; inline composition closes it with that Store instance.
   deps.watch(agentSettingsPath(core.dataDir), () => {
     const now = hachiOn()
     if (now !== hachi) prepare.invalidate()
@@ -96,9 +97,20 @@ export function startStore(core: CoreApi, deps: StoreDeps = DEFAULTS, prepare = 
 
 export function startStoreInCore(core: CoreApi, ports: CorePorts, prepared?: () => void,
   prepare = createStorePreparation(core)): ServiceRequests {
-  const requests = startStore(core, undefined, prepare)
-  const launch = storeLaunchPort(undefined, undefined, prepare)
+  const lifetime = new AbortController()
+  const requests = startStore(core, { ...DEFAULTS, watch: (path, changed) => {
+    const stop = DEFAULTS.watch(path, changed)
+    lifetime.signal.addEventListener('abort', stop, { once: true })
+    return stop
+  } }, prepare)
+  const launch = storeLaunchPort(undefined, undefined, prepare, setup => {
+    const machineId = core.daemon.machineId()
+    return storeLaunchContext({ dataDir: core.dataDir, port: core.daemon.port, machineId }, setup,
+      () => !lifetime.signal.aborted && core.daemon.machineId() === machineId, lifetime.signal)
+  })
   ports.store = {
+    stop: () => lifetime.abort(),
+    dshContext: request => launch.dshContext(request),
     dshDescribe: async request => {
       const answer = await launch.dshDescribe(request)
       if (prepare.ready()) prepared?.()

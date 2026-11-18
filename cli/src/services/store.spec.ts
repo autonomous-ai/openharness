@@ -7,11 +7,15 @@ import { setAgentSettingsForTest } from '../testing/agentSettings.js'
 import type { DshInstallProgress } from '../dsh/install.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { storeLaunchPort } from './storeLaunch.js'
-import { emptyPorts } from '../core/api.js'
+import { emptyPorts, STORE_OFF } from '../core/api.js'
+import { storeLaunchContext } from './storeContext.js'
+import { watchSettingFile } from '../messages/settingWatch.js'
 import { STORE_REQUESTS, createStorePreparation, startStore, startStoreInCore, type StoreDeps } from './store.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
 
 vi.mock('./storeLaunch.js', () => ({ storeLaunchPort: vi.fn() }))
+vi.mock('./storeContext.js', () => ({ storeLaunchContext: vi.fn(async () => ({ privateGrid: 'selected' })) }))
+vi.mock('../messages/settingWatch.js', () => ({ watchSettingFile: vi.fn(() => vi.fn()) }))
 
 const ASKER = { local: true, owner: true }
 
@@ -84,11 +88,35 @@ describe('the store service', () => {
     expect(Object.keys(startStoreInCore(fakeCore(), ports)).sort()).toEqual([...STORE_REQUESTS].sort())
     expect(ports.store).toMatchObject({ dshMaterialize: expect.any(Function), dshLaunch: expect.any(Function) })
   })
+  it('uses the same context transport inline and revokes it on machine change or stop', async () => {
+    let machineId = 'first'
+    const core = fakeCore({ daemon: { machineId: () => machineId } }), ports = emptyPorts()
+    vi.mocked(storeLaunchPort).mockImplementationOnce((_lookup, _prepare, _prepared, context) => ({ ...STORE_OFF,
+      dshLaunch: async () => ({ ok: false, error: 'unused', detail: '' }),
+      dshContext: async () => ({ ok: true, account: await context!(false) }) }))
+    startStoreInCore(core, ports, undefined, Object.assign(() => true, { ready: () => true, invalidate: () => {} }))
+    expect(await ports.store!.dshContext({ dsh: 'test/draw', engine: 'claude' })).toEqual({ ok: true, account: { privateGrid: 'selected' } })
+    const call = vi.mocked(storeLaunchContext).mock.calls.at(-1)!
+    expect(call[0]).toEqual({ dataDir: core.dataDir, port: core.daemon.port, machineId: 'first' })
+    expect(call[2]()).toBe(true)
+    machineId = 'second'; expect(call[2]()).toBe(false)
+    await ports.store!.dshContext({ dsh: 'test/draw', engine: 'claude' })
+    const next = vi.mocked(storeLaunchContext).mock.calls.at(-1)!
+    expect(next[2]()).toBe(true); ports.store!.stop()
+    expect(next[2]()).toBe(false); expect(next[3].aborted).toBe(true)
+  })
+  it('closes the inline setting watch when Store stops', () => {
+    const close = vi.fn(), ports = emptyPorts()
+    vi.mocked(watchSettingFile).mockReturnValueOnce(close)
+    startStoreInCore(fakeCore(), ports, undefined, Object.assign(() => true, { ready: () => true, invalidate: () => {} }))
+    ports.store!.stop(); ports.store!.stop()
+    expect(close).toHaveBeenCalledOnce()
+  })
   it('wakes waiting workspaces on every confirmed inline outcome, including a released failure', async () => {
     const request = { dsh: 'test/package', workspace: '/unused', engine: 'claude' as const, key: 'agent', account: {} }
     const confirmed = { ok: false as const, error: 'DSH_MATERIALIZE_FAILED', detail: 'init failed' }
     const uncertain = { ...confirmed, unavailable: 'store' as const }
-    const launch = { dshDescribe: vi.fn(async () => confirmed), dshMaterialize: vi.fn(async () => confirmed), dshLaunch: vi.fn(async () => confirmed) }
+    const launch = { stop: vi.fn(), dshContext: vi.fn(async () => confirmed), dshDescribe: vi.fn(async () => confirmed), dshMaterialize: vi.fn(async () => confirmed), dshLaunch: vi.fn(async () => confirmed) }
     vi.mocked(storeLaunchPort).mockReturnValue(launch)
     const prepared = vi.fn()
     const ports = emptyPorts()

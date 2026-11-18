@@ -17,9 +17,10 @@ import type { DshMaterializeRequest, DshLaunchRequest } from '../dsh/launchWire.
 import { DSH_ID_RE } from '../dsh/id.js'
 import { PROCESS_ENGINES, type AgentEngine } from '../engines/types.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
-import { processCoreApi } from './processCoreApi.js'
+import { daemonIn, processCoreApi } from './processCoreApi.js'
 import { createStorePreparation, startStore, type StorePreparation } from './store.js'
 import { storeLaunchPort } from './storeLaunch.js'
+import { storeLaunchContext } from './storeContext.js'
 
 export interface StoreServiceOptions {
   dataDir: string
@@ -62,6 +63,7 @@ const CHANGES = ['dsh_install', 'dsh_update', 'dsh_remove']
 
 export function runStoreService(options: StoreServiceOptions): ServiceProcess {
   let core: CoreConnection | null = null
+  let lifetime = new AbortController()
   const base = processCoreApi(options.dataDir, 'store')
   const api: CoreApi = {
     ...base,
@@ -69,7 +71,14 @@ export function runStoreService(options: StoreServiceOptions): ServiceProcess {
   }
   const prepare = options.prepare ?? createStorePreparation(api)
   const answers = options.start ? options.start(api) : startStore(api, undefined, prepare)
-  const launch = options.launch ?? storeLaunchPort(undefined, undefined, prepare)
+  const launch = options.launch ?? storeLaunchPort(undefined, undefined, prepare, async setup => {
+    const connection = core, signal = lifetime.signal
+    if (!connection) throw new Error('Store context connection unavailable')
+    const where = daemonIn(await connection.query('daemon'))
+    const current = () => core === connection && !signal.aborted
+    if (!where || !current() || where.machineId() !== options.machineId) throw new Error('Store context connection changed')
+    return storeLaunchContext({ port: where.port, machineId: where.machineId(), dataDir: options.dataDir }, setup, current, signal)
+  })
   /** Answered once the core has heard that what is installed changed: whatever it was, it may have. */
   const changing = (handle: ServiceRequest): ServiceRequest => async (payload, asker) => {
     const answer = await handle(payload, asker)
@@ -82,6 +91,10 @@ export function runStoreService(options: StoreServiceOptions): ServiceProcess {
     const answer = await launch.dshDescribe({ dsh: payload.dsh, engine: payload.engine as AgentEngine })
     if (prepare.ready()) void core?.query('prepared').catch(() => {})
     return { ...answer }
+  }
+  requests.dshContext = async payload => {
+    if (!text(payload.dsh) || !DSH_ID_RE.test(payload.dsh) || !PROCESS_ENGINES.some(engine => engine === payload.engine)) return { ok: false, error: 'INVALID_DSH', detail: 'Invalid harness context request' }
+    return { ...await launch.dshContext({ dsh: payload.dsh, engine: payload.engine as AgentEngine }) }
   }
   requests.dshMaterialize = async payload => {
     const request = dshMaterializeRequestIn(payload)
@@ -97,16 +110,19 @@ export function runStoreService(options: StoreServiceOptions): ServiceProcess {
     if ((answer.ok || !answer.unavailable) && prepare.ready()) void core?.query('prepared').catch(() => {})
     return { ...answer }
   }
-  return (options.run ?? runServiceProcess)({
+  const service = (options.run ?? runServiceProcess)({
     name: 'store',
     socketPath: options.socketPath,
     machineId: options.machineId,
     token: options.token,
     requests,
     onConnected: (connection) => {
+      lifetime.abort(); lifetime = new AbortController()
       core = connection
       // A partial startup is never announced ready. The next real package request can finish it.
       if (prepare.ready()) void connection.query('prepared').catch(() => {})
     },
+    onDisconnected: () => { core = null; lifetime.abort() },
   })
+  return { stop() { core = null; lifetime.abort(); return service.stop() } }
 }

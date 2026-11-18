@@ -2880,12 +2880,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     buildGridLaunch: gridLaunch,
     terminalHintMachineName,
     blocksFolder: (cwd) => backend.purgeAgentService?.blocksFolder(cwd),
-    gridSetup: () => {
-      const models = ports.models
-      return models ? (request) => models.ensure(request) : null
-    },
-    // The backend's word, else what the models service works out (services/models.ts).
-    privateGridName: async () => backend.gridName() ?? await (ports.models ?? MODELS_OFF).privateGridName(),
     syncProfileHome: (engine, folder) => (ports.connectors ?? CONNECTORS_OFF).syncProfileHome(engine, folder),
   })
   backend.onCreateAgent = creator

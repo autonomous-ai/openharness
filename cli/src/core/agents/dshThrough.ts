@@ -2,10 +2,10 @@
 import type { DshAccount } from '../../dsh/launch.js'
 import { realpath } from 'node:fs/promises'
 import { setUpWithin } from '../../lib/setUpWithin.js'
-import { dshUnavailable, type DshLaunchRequest, type DshMaterializeRequest } from '../../dsh/launchWire.js'
+import { dshUnavailable, type DshDescribeRequest, type DshLaunchRequest, type DshMaterializeRequest } from '../../dsh/launchWire.js'
 import type { AgentEngine } from '../../engines/types.js'
 import type { StorePort } from '../api.js'
-import { dshDescriptionIn, dshLaunchAnswerIn, dshMaterializeAnswerIn, type DshLaunchIdentity } from '../storeLink.js'
+import { dshContextAnswerIn, dshDescriptionIn, dshLaunchAnswerIn, dshMaterializeAnswerIn, type DshLaunchIdentity } from '../storeLink.js'
 
 /** A slow/unavailable workspace holds this launch; it cannot pin the core's event loop. */
 export async function captureDshWorkspace(workspace: string, read: (path: string) => Promise<string> = realpath): Promise<string | null> {
@@ -27,6 +27,10 @@ export function dshThrough({ store, nameOf, account }: {
       return answer ?? unavailable(dsh)
     }
     catch { return unavailable(dsh) }
+  }
+  const context = async (request: DshDescribeRequest) => {
+    try { return dshContextAnswerIn(await store().dshContext(request)) ?? unavailable(request.dsh) }
+    catch { return unavailable(request.dsh) }
   }
   const materialize = async (request: DshMaterializeRequest) => {
     try { return dshMaterializeAnswerIn(await store().dshMaterialize(request)) ?? unavailable(request.dsh) }
@@ -54,7 +58,7 @@ export function dshThrough({ store, nameOf, account }: {
     if (answer.error === 'DSH_NOT_INSTALLED') console.warn(`[dsh] ${dsh} is not installed on this machine · cannot restore its harness context`)
     return { ...answer, detail: answer.thrown ?? answer.detail }
   }
-  return { describe, materialize, launch, relaunch }
+  return { describe, context, materialize, launch, relaunch }
 }
 
 export type DshThrough = ReturnType<typeof dshThrough>

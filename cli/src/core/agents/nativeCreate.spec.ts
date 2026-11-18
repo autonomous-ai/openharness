@@ -92,8 +92,8 @@ it.each([
     announceSession: () => {}, attach: () => {}, prepareInstructions: async () => {},
     hookPort: 19473, hooksDisabled: false,
     gridLaunchMachine: () => ({}) as never, buildGridLaunch: async () => { throw Error('unexpected grid') },
-    terminalHintMachineName: () => 'Fixture', blocksFolder: () => false, gridSetup: () => null, privateGridName: async () => null,
-    dshLaunch: { describe: async () => { throw Error('unused') }, launch: async () => { throw Error('unexpected DSH') }, materialize: async () => { throw Error('unexpected DSH') } },
+    terminalHintMachineName: () => 'Fixture', blocksFolder: () => false,
+    dshLaunch: { context: async () => { throw Error('unused') }, describe: async () => { throw Error('unused') }, launch: async () => { throw Error('unexpected DSH') }, materialize: async () => { throw Error('unexpected DSH') } },
     syncProfileHome: async () => [],
   })
   const discovery = localPendingCreationDiscovery(join(root, 'receipts'))

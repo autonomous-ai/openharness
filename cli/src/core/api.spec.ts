@@ -787,7 +787,8 @@ describe('the core API services stand on', () => {
     const dsh = { dsh: 'test/draw', workspace: '/workspace', engine: 'claude' as const, account: {}, key: 'agent' }
     await expect(STORE_OFF.dshMaterialize(dsh)).rejects.toThrow('the store service is unavailable')
     await expect(STORE_OFF.dshLaunch(dsh)).rejects.toThrow('the store service is unavailable')
-    await expect(MODELS_OFF.ensure()).rejects.toThrow('the models service is unavailable')
+    STORE_OFF.stop()
+    await expect(STORE_OFF.dshContext(dsh)).rejects.toThrow('the store service is unavailable')
     await expect(MODELS_OFF.launchTarget({ model: 'm', grid: 'mine' })).rejects.toThrow('the models service is unavailable')
     await expect(MODELS_OFF.moveTarget({ gridName: null, model: 'm' })).rejects.toThrow('the models service is unavailable')
     await expect(MODELS_OFF.lists()).rejects.toThrow('the models service is unavailable')
@@ -802,7 +803,7 @@ describe('the core API services stand on', () => {
 
   it('waits longer only for answers that take longer, each a request or port call of its service', () => {
     for (const type of Object.keys(LONG_ANSWERS.models!)) {
-      expect([...MODELS_REQUESTS, 'ensure', 'moveTarget', 'launchTarget', 'privateGridName', 'lists']).toContain(type)
+      expect([...MODELS_REQUESTS, 'moveTarget', 'launchTarget', 'privateGridName', 'lists']).toContain(type)
     }
     // A grid command may run half an hour, and is waited for longer than that.
     expect(LONG_ANSWERS.models!.grid_fleet_run).toBeGreaterThan(30 * 60_000)

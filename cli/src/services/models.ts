@@ -26,7 +26,7 @@ import { listOpencodeCommands } from '../engines/opencode/commandList.js'
 import { linkClaudeProfile } from '../lib/claudeProfiles.js'
 import { listClaudeProfiles, profileId } from '../lib/claudeHomes.js'
 import { defaultCodexHome, linkCodexProfile, listCodexProfiles } from '../lib/codexProfiles.js'
-import { createGridAccess, gridNamesLocal, reconcileGridAttach } from '../lib/gridAttach.js'
+import { createGridAccess, gridNamesLocal, reconcileGridAttach, type GridAccess } from '../lib/gridAttach.js'
 import { deriveHarnessGridName, resetGridDeriveMemo, signedInGridEmail } from '../lib/gridDerive.js'
 import { ensureHarnessGrid } from '../lib/gridEnsure.js'
 import { gridAvailable, managedGridPath } from '../lib/gridExec.js'
@@ -49,13 +49,15 @@ import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
 import { parseRuntimeProfile } from '../lib/runtimeProfileWire.js'
 import { ensureManagedGrid, startGridPinRecheck } from '../lib/runtimeInstall.js'
 import { internalOnThrow } from './requestErrors.js'
+import { setUpWithin } from '../lib/setUpWithin.js'
+import { dshAccountIn } from '../dsh/launchWire.js'
 
 /** The requests models answers for the apps, declared in core/api.ts for the core to route. */
 export { MODELS_REQUESTS } from '../core/api.js'
 
 /** What grid's set-up for an act needs of models: have grid ready, and whether it is set up at all. */
 interface GridSetUp {
-  ensure: ModelsPort['ensure']
+  ensure: GridAccess['ensure']
   /** Offline, for every list read: is there a `grid` here holding a sign-in? What decides whether the
    *  picker offers local and shared models or a Set up row. */
   setUp(): boolean
@@ -79,7 +81,7 @@ export function startModels(core: CoreApi, ports: CorePorts,
 
   // Grid is an add-on (`lib/gridAttach.ts`): nothing on this path installs `grid`, signs this machine in
   // to it or creates a grid. The first grid feature a person uses — the models picker's Set up, a local
-  // model's Get or Use, an agent moved onto a grid model, the Model Manager — asks `ports.models.ensure`,
+  // model's Get or Use, an agent moved onto a grid model, the Model Manager — asks this shared Grid access,
   // which does it then, with this machine's harness token (no second browser) and, only for what needs
   // one, the account's own grid. It used to run here on every start and every reconnect.
   const gridLog = (line: string): void => console.log(`[grid-attach] ${line}`)
@@ -153,7 +155,6 @@ export function startModels(core: CoreApi, ports: CorePorts,
   const savedApis = new ApiConnections(core.dataDir)
   rememberSavedApis(savedApis)
   ports.models = {
-    ensure: grid.ensure,
     annotation: (target) => gridAnnotation(target),
     // The keystroke prewarm (grid-reads-without-waking issue 03): typing into a pane whose agent runs on
     // a sleeping grid starts that grid while the person types.
@@ -301,6 +302,19 @@ function modelsRequests(core: CoreApi, grid: GridSetUp, privateGridName: () => P
   }
 
   return {
+    grid_launch_context: async (payload, asker) => {
+      if (!asker.owner || asker.guest !== undefined) return { error: 'OWNER_REQUIRED' }
+      if (typeof payload.setup !== 'boolean') return { error: 'INVALID_REQUEST' }
+      if (payload.setup && await setUpWithin(() => grid.ensure({ ownGrid: true }), 8_000) === 'pending') {
+        console.warn('[models] LAUNCH_SETUP_PENDING')
+      }
+      const account = dshAccountIn({ privateGrid: await privateGridName().catch(() => {
+        console.warn('[models] LAUNCH_CONTEXT_UNAVAILABLE')
+        return null
+      }) })
+      if (!account) { console.warn('[models] LAUNCH_CONTEXT_INVALID'); return { error: 'CONTEXT_INVALID' } }
+      return { ok: true, account }
+    },
     grid_models_list: async (payload) => {
       // Every grid this computer is signed into, in sections, the account's own first. `gridName`
       // and `models` keep naming the own grid alone, for an app that predates `grids`.

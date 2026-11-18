@@ -9,7 +9,8 @@ import { join } from 'node:path'
 import { DSH_SESSION_ENV } from '../dsh/sessionEnv.js'
 import { DSH_ID_RE } from '../dsh/id.js'
 import { launchContributionIn, launchText } from '../lib/launchContribution.js'
-import type { DshLaunchRequest, DshLaunchAnswer, DshMaterializeAnswer, DshRefusal, DshDescribeAnswer } from '../dsh/launchWire.js'
+import { dshAccountIn } from '../dsh/launchWire.js'
+import type { DshContextAnswer, DshLaunchRequest, DshLaunchAnswer, DshMaterializeAnswer, DshRefusal, DshDescribeAnswer } from '../dsh/launchWire.js'
 import type { CoreApi, StorePort } from './api.js'
 import { ServiceUnavailableError } from './serviceHost.js'
 
@@ -47,6 +48,13 @@ export function dshMaterializeAnswerIn(value: unknown): DshMaterializeAnswer | n
     ? { ok: true, created: value.created, kept: value.kept, warnings: value.warnings } : null
 }
 
+export function dshContextAnswerIn(value: unknown): DshContextAnswer | null {
+  if (!record(value)) return null
+  if (value.ok !== true) return refusal(value)
+  const account = dshAccountIn(value.account)
+  return account ? { ok: true, account } : null
+}
+
 /** Captured before awaiting the launch. New creates retain their admitted package id.
  * Historical snapshot ids remain Store-declared package authority; an alias list in a reply is no proof. */
 export interface DshLaunchIdentity { ids?: readonly string[]; workspace: string }
@@ -72,6 +80,12 @@ export function createStoreLink(core: Pick<CoreApi, 'clients'>,
   call: CallStore = async () => ({ error: 'SERVICE_UNAVAILABLE' })) {
   const listeners = new Set<() => void>()
   const port: StorePort = {
+    stop: () => {},
+    dshContext: async request => {
+      const answer = dshContextAnswerIn(await call('dshContext', { ...request }))
+      if (!answer) throw new ServiceUnavailableError('store')
+      return answer
+    },
     dshDescribe: async request => {
       const answer = dshDescriptionIn(await call('dshDescribe', { ...request }))
       if (!answer) { console.warn('[store] PACKAGE_FACTS_REFUSED'); throw new ServiceUnavailableError('store') }

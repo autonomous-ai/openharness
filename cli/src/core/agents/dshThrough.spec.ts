@@ -36,7 +36,7 @@ describe('package preparation through the Store', () => {
     expect(await through.relaunch(request.dsh, join(workspace, 'gone'), request.engine, request.key)).toMatchObject({ error: 'DSH_WORKSPACE_MISSING' })
   })
   it('passes create and fork context through and never fabricates a launch', async () => {
-    const store = { dshDescribe: STORE_OFF.dshDescribe, dshMaterialize: vi.fn(async () => materialized), dshLaunch: vi.fn(async () => ({ ok: true as const, launch })) }
+    const store = { ...STORE_OFF, dshDescribe: STORE_OFF.dshDescribe, dshMaterialize: vi.fn(async () => materialized), dshLaunch: vi.fn(async () => ({ ok: true as const, launch })) }
     const through = setup(store)
     expect(await through.materialize(request)).toEqual(materialized)
     const fork = { ...request, forkOf: { agentId: 'source', dshRuntime: null } }
@@ -58,7 +58,7 @@ describe('package preparation through the Store', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const missing = { ok: false as const, error: 'DSH_NOT_INSTALLED', detail: 'missing' }
     const failed = { ok: false as const, error: 'DSH_RUNTIME_FAILED', detail: 'disk full', thrown: 'Error: disk full' }
-    const store = { dshDescribe: STORE_OFF.dshDescribe, dshMaterialize: vi.fn(async () => missing), dshLaunch: vi.fn().mockResolvedValueOnce(missing).mockResolvedValue(failed) }
+    const store = { ...STORE_OFF, dshDescribe: STORE_OFF.dshDescribe, dshMaterialize: vi.fn(async () => missing), dshLaunch: vi.fn().mockResolvedValueOnce(missing).mockResolvedValue(failed) }
     const through = setup(store)
     expect(await through.materialize(request)).toEqual(missing)
     expect(await through.relaunch(request.dsh, request.workspace, request.engine, request.key)).toEqual(missing)

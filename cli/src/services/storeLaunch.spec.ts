@@ -19,6 +19,19 @@ const pkg = { id: request.dsh } as NonNullable<ReturnType<typeof installedDsh>>
 
 describe('the Store owns package preparation', () => {
   afterEach(() => vi.clearAllMocks())
+  it('owns Model Manager context setup separately from workspace effects', async () => {
+    const context = vi.fn(async (_setup: boolean) => ({ privateGrid: 'component-grid' }))
+    const lookup = vi.fn(() => ({ ...pkg, id: MODEL_MANAGER_ID }))
+    const port = storeLaunchPort(lookup, run, () => true, context)
+    expect(await port.dshContext(request)).toEqual({ ok: true, account: { privateGrid: 'component-grid' } })
+    expect(context).toHaveBeenCalledExactlyOnceWith(true)
+    expect(materializeWorkspace).not.toHaveBeenCalled()
+    expect(prepareInstructionWrites).not.toHaveBeenCalled()
+    lookup.mockReturnValue({ ...pkg, id: 'test/draw' })
+    expect(await port.dshContext(request)).toMatchObject({ ok: true })
+    expect(context).toHaveBeenLastCalledWith(false)
+  })
+
   it('recovers incomplete startup on the next actual package request without restarting', async () => {
     let installed: typeof pkg | undefined
     const prepare = vi.fn().mockReturnValueOnce(false).mockReturnValueOnce(false).mockImplementation(() => {
@@ -36,12 +49,20 @@ describe('the Store owns package preparation', () => {
   it('refuses missing packages without writing anything', async () => {
     const port = storeLaunchPort(() => undefined, run)
     const refused = { ok: false, error: 'DSH_NOT_INSTALLED', detail: 'test/draw is not installed on this machine' }
+    expect(await port.dshContext(request)).toEqual(refused)
     expect(await port.dshMaterialize(request)).toEqual(refused)
     expect(await port.dshLaunch(request)).toEqual(refused)
     expect(await port.dshDescribe(request)).toEqual({ ...refused, error: 'INVALID_DSH' })
     expect(prepareInstructionWrites).not.toHaveBeenCalled()
     expect(materializeWorkspace).not.toHaveBeenCalled()
     expect(prepareHarnessLaunch).not.toHaveBeenCalled()
+  })
+  it('propagates context loss before any workspace action', async () => {
+    const port = storeLaunchPort(() => pkg, run, () => true, async () => { throw Error('context gone') })
+    await expect(port.dshContext(request)).rejects.toThrow('context gone')
+    expect(materializeWorkspace).not.toHaveBeenCalled()
+    expect(prepareInstructionWrites).not.toHaveBeenCalled()
+    expect(await storeLaunchPort(() => pkg, run).dshContext(request)).toEqual({ ok: true, account: { privateGrid: null } })
   })
   it('projects canonical identity and compatibility without exposing a manifest', async () => {
     const installed = { ...pkg, id: 'test/current', manifest: { id: 'test/current', name: 'Draw', spec: 1, engine: 'codex',

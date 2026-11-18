@@ -69,8 +69,6 @@ function creator(backend: PtyHostBackend) {
     buildGridLaunch: unused,
     terminalHintMachineName: () => 'windows-vm',
     blocksFolder: () => false,
-    gridSetup: () => null,
-    privateGridName: async () => null,
     dshLaunch: { materialize: unused, launch: unused } as unknown as CreateAgentDeps['dshLaunch'],
     syncProfileHome: async () => [],
   }

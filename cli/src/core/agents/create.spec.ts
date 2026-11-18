@@ -12,7 +12,6 @@ import { createAndRegisterPane } from '../../lib/createAgentPane.js'
 import { enginePathOverride } from '../../lib/engineBin.js'
 import { windowsAfterExit, windowsHeldPaneArgv } from '../../lib/windows/engineStart.js'
 import { buildEngineCommandArgv, buildEngineLaunchArgv, engineLaunchEnv, namedAgentArgs, permissionModeFlags, refusePermissionFlagIfUnsupported, supportsFirstPrompt } from '../../lib/engineLaunch.js'
-import { setUpWithin } from '../../lib/setUpWithin.js'
 import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
 import { describeGridLaunch, type GridLaunchAnswer, type GridLaunchRequest } from '../../lib/gridLaunchWire.js'
 import { ENUMERATION_ATTEMPTS } from '../../engines/kit/nativeFiles.js'
@@ -97,7 +96,6 @@ vi.mock('../../lib/engineLaunch.js', async (real) => ({
   refusePermissionFlagIfUnsupported: vi.fn(async () => null),
   supportsFirstPrompt: vi.fn(() => true),
 }))
-vi.mock('../../lib/setUpWithin.js', async (real) => ({ ...await real<object>(), setUpWithin: vi.fn(async (run: () => Promise<unknown>) => { await run(); return 'done' }) }))
 vi.mock('../../lib/gridConfigDir.js', () => ({ writeGridConfigDir: vi.fn(async () => '/config/harness-claude') }))
 vi.mock('../../lib/gridLaunchWire.js', async (real) => ({
   ...await real<object>(),
@@ -165,9 +163,8 @@ function setup(over: Partial<CreateAgentDeps> = {}) {
     buildGridLaunch,
     terminalHintMachineName: () => 'this-mac',
     blocksFolder: vi.fn(() => false),
-    gridSetup: vi.fn(() => vi.fn(async () => ({}))) as never,
-    privateGridName: vi.fn(async () => 'grid-me'),
-    dshLaunch: { describe: describeDsh, launch: launchDsh, materialize: async () => ({ ok: true, ...await materializeWorkspace() }) },
+    dshLaunch: { describe: describeDsh, context: async () => ({ ok: true, account: { privateGrid: 'grid-me' } }),
+      launch: launchDsh, materialize: async () => ({ ok: true, ...await materializeWorkspace() }) },
     syncProfileHome: vi.fn(async () => []),
     ...over,
   }
@@ -576,8 +573,8 @@ describe('creating an agent', () => {
       vi.mocked(refusePermissionFlagIfUnsupported).mockImplementationOnce(async () => { revoke('permission'); return null })
       const run = setup({ native: async () => { revoke('inspect'); return { ok: true, launch } },
         buildGridLaunch: async request => { revoke('models'); return { ok: true, override: request.override, launch: { env: {}, args: [], webSearch: 'unsupported' } } },
-        privateGridName: async () => { revoke('account'); return null },
         dshLaunch: { describe: async (dsh, engine) => { const answer = await describeDsh(dsh, engine); revoke('description'); return answer },
+          context: async () => { revoke('account'); return { ok: true, account: { privateGrid: null } } },
           materialize: async () => { revoke('materialize'); return { ok: true, warnings: [], created: [], kept: [] } },
           launch: async () => { revoke('harness'); return { ok: true, launch: { env: {}, args: [] } } },
         },
@@ -958,6 +955,7 @@ describe('creating an agent', () => {
       const run = setup({ prepareFolderTrust, native: async () => ({ ok: true, launch }),
         dshLaunch: {
           describe: describeDsh,
+          context: async () => ({ ok: true, account: {} }),
           materialize: async () => {
             await Promise.resolve()
             writeFileSync(join(cwd, 'user-repository'), 'arrived during init')
@@ -978,7 +976,7 @@ describe('creating an agent', () => {
       vi.mocked(installedDsh).mockReturnValue(installed() as never)
       const refused = { ok: false as const, error: 'DSH_UNAVAILABLE', detail: 'Store unavailable', unavailable: 'store' as const }
       const materialize = vi.fn(async () => refused)
-      const { create } = setup({ dshLaunch: { describe: describeDsh, materialize, launch: launchDsh } })
+      const { create } = setup({ dshLaunch: { describe: describeDsh, context: async () => ({ ok: true, account: {} }), materialize, launch: launchDsh } })
       expect(await create(request({ dsh: 'blender' }))).toEqual(refused)
       expect(launchDsh).not.toHaveBeenCalled()
       expect(createAndRegisterPane).not.toHaveBeenCalled()
@@ -1033,26 +1031,41 @@ describe('creating an agent', () => {
       vi.mocked(materializeWorkspace).mockReset().mockResolvedValue({ warnings: [], created: [], kept: [] } as never)
     })
 
-    it('as the Model Manager: grid is set up first, waiting a while for it', async () => {
-      const log = vi.mocked(console.log)
+    it('rechecks create authority after Store context and before workspace effects', async () => {
       vi.mocked(installedDsh).mockReturnValue(installed({ id: 'autonomous/autonomous-grid' }) as never)
-      const ensure = vi.fn(async () => ({}))
-      const { create } = setup({ gridSetup: () => ensure as never })
-      await create(request({ dsh: 'autonomous-grid' }))
-      expect(setUpWithin).toHaveBeenCalled()
-      expect(ensure).toHaveBeenCalledWith({ ownGrid: true })
-      vi.mocked(setUpWithin).mockResolvedValueOnce('pending' as never)
-      await create(request({ dsh: 'autonomous-grid' }))
-      expect(log.mock.calls.map(([line]) => String(line)).some((line) => line.includes('grid is still being set up'))).toBe(true)
-      // No grid set-up on this daemon: the harness starts anyway.
-      expect(await setup({ gridSetup: () => undefined as never }).create(request({ dsh: 'autonomous-grid' }))).toMatchObject({ ok: true })
+      let current = true
+      const seed = setup()
+      const context = vi.fn(async () => { current = false; return { ok: true as const, account: { privateGrid: 'component-grid' } } })
+      const run = setup({ dshLaunch: { ...seed.deps.dshLaunch, context } as CreateAgentDeps['dshLaunch'] })
+      expect(await run.create.prepare(request({ dsh: 'autonomous-grid' }), {
+        id: 'context-proof', label: 'context-proof', current: () => current, hold: () => {},
+      })).toMatchObject({ ok: false, error: 'LAUNCH_AUTHORITY_CHANGED' })
+      expect(context).toHaveBeenCalledExactlyOnceWith({ dsh: 'autonomous-grid', engine: 'claude' })
+      expect(materializeWorkspace).not.toHaveBeenCalled()
+      expect(launchDsh).not.toHaveBeenCalled()
+      expect(createAndRegisterPane).not.toHaveBeenCalled()
+      vi.mocked(installedDsh).mockReset().mockReturnValue(undefined)
+    })
+
+    it('holds refused Store context and passes one selected account to both workspace stages', async () => {
+      vi.mocked(installedDsh).mockReturnValue(installed() as never)
+      const account = { privateGrid: 'selected' }, seed = setup()
+      const refused = { ok: false as const, error: 'DSH_UNAVAILABLE', unavailable: 'store' as const, detail: 'waiting' }
+      const context = vi.fn().mockResolvedValueOnce(refused).mockResolvedValue({ ok: true, account })
+      const materialize = vi.fn(async () => ({ ok: true as const, created: [], kept: [], warnings: [] }))
+      const run = setup({ dshLaunch: { ...seed.deps.dshLaunch, context, materialize } })
+      expect(await run.create(request({ dsh: 'blender' }))).toEqual(refused)
+      expect(materialize).not.toHaveBeenCalled(); expect(createAndRegisterPane).not.toHaveBeenCalled()
+      expect(await run.create(request({ dsh: 'blender' }))).toMatchObject({ ok: true })
+      expect(materialize).toHaveBeenCalledWith(expect.objectContaining({ account }))
+      expect(launchDsh).toHaveBeenCalledWith(expect.objectContaining({ account }), expect.any(Object))
       vi.mocked(installedDsh).mockReset().mockReturnValue(undefined)
     })
 
     it('pins a DSH\'s permission mode when the engine takes it, and tells the harness about the account it can', async () => {
       vi.mocked(installedDsh).mockReturnValue(installed() as never)
       vi.mocked(dshPinnedPermissionMode).mockReturnValue('auto' as never)
-      const { create } = setup({ privateGridName: vi.fn(async () => { throw new Error('signed out') }) })
+      const { create } = setup()
       await create(request({ dsh: 'blender' }))
       expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).toMatchObject({ permissionMode: 'auto', bypassPermission: true })
       vi.mocked(permissionModeFlags).mockReturnValueOnce(null as never)

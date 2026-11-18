@@ -88,16 +88,6 @@ describe('models in its own process, as the core reaches it', () => {
   })
 
   describe('what the core asks models when it needs it', () => {
-    it('grid set-up: what models answered, or unavailable', async () => {
-      const ready = { status: 'converged', name: 'mine', detail: 'ok' }
-      const { call, port } = setup({ ensure: ready })
-      expect(await port.ensure({ ownGrid: true })).toEqual(ready)
-      expect(call).toHaveBeenCalledWith('ensure', { ownGrid: true })
-      await expect(setup().port.ensure()).rejects.toBeInstanceOf(ServiceUnavailableError)
-      await expect(setup({ ensure: { requestId: 'x' } }).port.ensure()).rejects.toBeInstanceOf(ServiceUnavailableError)
-      await expect(setup({ ensure: { error: 'SERVICE_FAILED', service: 'models' } }).port.ensure()).rejects.toBeInstanceOf(ServiceUnavailableError)
-    })
-
     it('a new agent\'s target, checked as any launch is; none when models found none or said something else', async () => {
       const { call, port } = setup({ launchTarget: { target: LAUNCH } })
       expect(await port.launchTarget({ model: 'Small-Q4', grid: 'mine' })).toEqual(LAUNCH)

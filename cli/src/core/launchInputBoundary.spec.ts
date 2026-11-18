@@ -259,7 +259,7 @@ describe('Store contribution bounds preserve the installed package contract', ()
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const answer = make()
     await expect(storeLaunch(answer)).resolves.toMatchObject({ ok: false, error: 'DSH_UNAVAILABLE' })
-    const through = dshThrough({ store: () => ({ dshDescribe: async () => ({ ok: false, error: 'unused', detail: '' }), dshLaunch: async () => answer, dshMaterialize: async () => ({ ok: true, created: [], kept: [], warnings: [] }) }), nameOf: () => 'Drawing', account: () => ({}) })
+    const through = dshThrough({ store: () => ({ stop: () => {}, dshContext: async () => ({ ok: true, account: {} }), dshDescribe: async () => ({ ok: false, error: 'unused', detail: '' }), dshLaunch: async () => answer, dshMaterialize: async () => ({ ok: true, created: [], kept: [], warnings: [] }) }), nameOf: () => 'Drawing', account: () => ({}) })
     expect(await through.launch(storeRequest)).toMatchObject({ ok: false, error: 'DSH_UNAVAILABLE' })
   })
 

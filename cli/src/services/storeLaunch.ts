@@ -8,18 +8,20 @@ import { dshPreparations, type PrepareDsh } from '../dsh/preparation.js'
 import { prepareInstructionWrites } from '../scm/instructionWrites.js'
 import { dshPinnedPermissionMode } from '../dsh/manifest.js'
 import { incompatibleHarnessEngine } from '../dsh/compatibility.js'
-import { BUNDLED_HARNESSES } from '../dsh/builtinIds.js'
+import type { DshAccount } from '../dsh/launch.js'
+import { BUNDLED_HARNESSES, MODEL_MANAGER_ID } from '../dsh/builtinIds.js'
 import { dshUnavailable, type DshLaunchAnswer, type DshLaunchRequest } from '../dsh/launchWire.js'
 
 /** The producer knows what it builds; core receives it as unknown until the caller checks it. */
-interface StoreLaunchPort extends StorePort {
+interface StoreLaunchPort extends Omit<StorePort, 'stop'> {
   dshLaunch(request: DshLaunchRequest): Promise<DshLaunchAnswer>
 }
 
 const detail = (error: unknown) => error instanceof Error ? error.message : String(error)
 
 export function storeLaunchPort(installedDsh: typeof lookup = lookup,
-  prepare: PrepareDsh = dshPreparations(join(dshRootDir(), '.preparations')), prepared: (id?: string) => boolean = () => true): StoreLaunchPort {
+  prepare: PrepareDsh = dshPreparations(join(dshRootDir(), '.preparations')), prepared: (id?: string) => boolean = () => true,
+  context: (setup: boolean) => Promise<DshAccount> = async () => ({ privateGrid: null })): StoreLaunchPort {
   const missing = (id: string) => ({ ok: false as const, error: 'DSH_NOT_INSTALLED', detail: `${id} is not installed on this machine` })
   const find = (id: string) => {
     const ready = prepared(id)
@@ -28,6 +30,11 @@ export function storeLaunchPort(installedDsh: typeof lookup = lookup,
       : !ready && BUNDLED_HARNESSES.some(harness => harness.id === id) ? dshUnavailable(id) : missing(id)
   }
   return {
+    async dshContext({ dsh }) {
+      const found = find(dsh)
+      if (!found.ok) return found
+      return { ok: true, account: await context(found.installed.id === MODEL_MANAGER_ID) }
+    },
     async dshDescribe({ dsh, engine }) {
       const found = find(dsh)
       if (!found.ok) return found.error === 'DSH_NOT_INSTALLED' ? { ...found, error: 'INVALID_DSH' } : found

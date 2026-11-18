@@ -24,7 +24,6 @@ const glance = (state: 'awake' | 'asleep'): GridGlance => ({ id: 'net-own', view
 /** Models that read no grid: its port, every member a fake, and the apps' requests it answers. */
 function fakeModels() {
   const port = {
-    ensure: vi.fn(async () => ({ status: 'converged' as const, name: 'mine', detail: 'ok' })),
     annotation: vi.fn(() => null),
     prewarm: vi.fn(),
     launchTarget: vi.fn(async () => LAUNCH),
@@ -94,7 +93,7 @@ describe('models in its own process', () => {
   it('reaches the core as `models`, answering the apps\' requests and the core\'s port calls, and stops with its link', () => {
     const { models, options, handle, service } = setup()
     expect(options).toMatchObject({ name: 'models', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
-    expect(Object.keys(options.requests).sort()).toEqual(['apiTarget', 'ensure', 'gridAssignments', 'gridLaunch', 'grid_models_list', 'launchTarget', 'lists', 'moveTarget', 'privateGridName'])
+    expect(Object.keys(options.requests).sort()).toEqual(['apiTarget', 'gridAssignments', 'gridLaunch', 'grid_models_list', 'launchTarget', 'lists', 'moveTarget', 'privateGridName'])
     expect(options.requests.grid_models_list).toBe(models.requests.grid_models_list)
     handle.stop()
     expect(service.stop).toHaveBeenCalled()
@@ -108,9 +107,6 @@ describe('models in its own process', () => {
   it('answers the core\'s port calls through the port, as the core\'s process would', async () => {
     const { models, options } = setup()
     const asker = { local: true, owner: true }
-    expect(await options.requests.ensure!({ ownGrid: true }, asker)).toEqual({ status: 'converged', name: 'mine', detail: 'ok' })
-    await options.requests.ensure!({}, asker)
-    expect(models.port.ensure.mock.calls).toEqual([[{ ownGrid: true }], [{ ownGrid: false }]])
     expect(await options.requests.launchTarget!({ model: 'Small-Q4', grid: 'mine' }, asker)).toEqual({ target: LAUNCH })
     expect(await options.requests.launchTarget!({ model: 7 }, asker)).toEqual({ target: LAUNCH })
     expect(models.port.launchTarget.mock.calls).toEqual([[{ model: 'Small-Q4', grid: 'mine' }], [{ model: '', grid: '' }]])
