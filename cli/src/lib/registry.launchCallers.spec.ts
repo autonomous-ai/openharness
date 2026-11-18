@@ -1,6 +1,6 @@
 import { releaseRegistryEngine, removeRegistryAgent } from '../testing/registryFixtures.js'
 /** Real registry images at the callers that release terminals or announce launches. */
-import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -15,6 +15,7 @@ import { AgentRestartCoordinator } from './restartAgent.js'
 import { restoreAgents, type RestoreAgentsDeps } from './restoreAgents.js'
 import { createRetainExitedSession } from './retainExitedSession.js'
 import { StoppedAgentStore } from './stoppedAgents.js'
+import { sessionStorage } from './sessionStorage.js'
 import { MoveGate } from './hostMove/gate.js'
 import { AtomicWriteUnconfirmed } from './registryPersistence.js'
 import type { TerminalBackend } from './terminalBackend.js'
@@ -60,22 +61,6 @@ vi.mock('node:fs', async original => {
     })
   } }
 })
-vi.mock('node:fs/promises', async original => {
-  const actual = await original<typeof import('node:fs/promises')>()
-  return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
-    const handle = await actual.open(...args), write = handle.writeFile.bind(handle), sync = handle.sync.bind(handle)
-    let selected = false
-    handle.writeFile = async (...values) => {
-      if (String(args[0]).includes(image.names ? 'names.json.' : 'registry.json.') && String(args[0]).endsWith('.tmp')) {
-        selected = image.names || image.match?.(JSON.parse(String(values[0]))) === true
-        if (selected) { image.match = undefined; image.selectedTemporary = String(args[0]) }
-      }
-      return write(...values)
-    }
-    handle.sync = async () => { await sync(); if (selected && !image.directory) await image.wait?.() }
-    return handle
-  } }
-})
 vi.mock('./paneEngineProcess.js', async original => ({ ...await original<object>(), resolvePaneEngineProcess: vi.fn() }))
 vi.mock('./deleteAgentFallback.js', async original => ({ ...await original<object>(), checkPidRuntime: async () => ({ state: 'gone', reason: 'fixture terminated' }) }))
 vi.mock('./workspaceCheck.js', () => ({ workspaceMissing: () => null }))
@@ -100,6 +85,12 @@ const terminal = { name: 'tmux', holdOpen: async () => ({ state: 'succeeded' }),
   rootProcess: async () => null, inventory: async () => ({ state: 'available', roots: [] }), paneState, releaseHold } as unknown as TerminalBackend
 let row: RegisteredSession
 let directory: string
+const stores: StoppedAgentStore[] = []
+const stoppedStore = (directory: string): StoppedAgentStore => {
+  const store = new StoppedAgentStore(directory)
+  stores.push(store)
+  return store
+}
 const deferred = () => { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done }); return { promise, resolve } }
 function holdImage(match: (rows: RegisteredSession[]) => boolean, phase: 'prepare' | 'directory' = 'prepare') {
   const entered = deferred(), held = deferred()
@@ -111,6 +102,27 @@ const persisted = (): RegisteredSession[] => JSON.parse(readFileSync(join(env.AD
 
 beforeEach(async () => {
   vi.clearAllMocks()
+  const prepare = sessionStorage.prepare.bind(sessionStorage)
+  vi.spyOn(sessionStorage, 'prepare').mockImplementation(async (...args) => {
+    // Hold the actual child's durable image, before the parent can publish it. Parent fs mocks cannot
+    // observe the child write; the row predicate reads the bytes that child really prepared.
+    const prepared = await prepare(...args)
+    try {
+      if (args[0].kind === (image.names ? 'names' : 'registry')) {
+        const temporary = join(sessionStorage.root, prepared.temporary)
+        const selected = image.names || image.match?.(JSON.parse(readFileSync(temporary, 'utf8'))) === true
+        if (selected) {
+          image.match = undefined
+          image.selectedTemporary = temporary
+          if (!image.directory) await image.wait?.()
+        }
+      }
+    } catch (error) {
+      await sessionStorage.discard(prepared)
+      throw error
+    }
+    return prepared
+  })
   vi.mocked(resolvePaneEngineProcess).mockResolvedValue(newProcess)
   paneState.mockResolvedValue({ dead: false, engineExit: null })
   directory = mkdtempSync(join(tmpdir(), 'launch-publication-'))
@@ -127,8 +139,11 @@ afterEach(async () => {
   image.names = false; image.directory = false; image.directoryPending = false; image.selectedTemporary = ''
   for (const entry of registry.list()) (await removeRegistryAgent(registry, entry.agentId))
   await registry.flush()
+  await Promise.all(stores.splice(0).map(store => store.close()))
+  vi.restoreAllMocks()
   rmSync(directory, { recursive: true, force: true })
 })
+afterAll(() => sessionStorage.close())
 
 it('restart keeps its terminal and ready announcement held until its process is durable', async () => {
   const held = holdImage(rows => rows.some(entry => entry.agentId === row.agentId && entry.processIdentity?.pid === newProcess.pid))
@@ -272,7 +287,7 @@ it.each([false, true])('new-pane engine exit publishes its shell before release,
   vi.mocked(resolvePaneEngineProcess).mockResolvedValue(null)
   paneState.mockResolvedValue({ dead: false, engineExit: 1 })
   const held = holdImage(rows => rows.some(entry => entry.engine === 'terminal' && (entry.agentId === row.agentId || entry.previousAgentId === row.agentId)))
-  const store = new StoppedAgentStore(join(directory, 'stopped')), send = vi.fn()
+  const store = stoppedStore(join(directory, 'stopped')), send = vi.fn()
   const retain = createRetainExitedSession({ registry, stoppedAgents: store, send, publishStoppedAgent: async () => {}, announceSession: announce,
     invalidateTerminalControl: vi.fn(), forgetInput: vi.fn(), ended: vi.fn(), syncRecapPool: vi.fn(), warn: vi.fn() })
   const watch = createPaneWatcher({ registry, announceSession: announce, triggerHint: async () => {}, captureTerminal: async () => 'engine exited',
@@ -367,7 +382,7 @@ it('binding revalidation cannot change Stop evidence while its prepared image wa
   row = registry.byAgent(row.agentId)!
   row.title = 'observed title pending publication'
   const revision = row.evidenceRevision
-  const store = new StoppedAgentStore(join(directory, 'revalidation-stop')), jobs = new Map<string, Promise<void>>()
+  const store = stoppedStore(join(directory, 'revalidation-stop')), jobs = new Map<string, Promise<void>>()
   const binding = createBinding({ registry, mirror: { inheritSummary: vi.fn() }, forgetSession: vi.fn(), clients: { send: vi.fn() },
     attachSession: vi.fn(async () => true), captureReader: () => () => false, announceSession: announce, stoppedAgents: store, syncRecapPool: vi.fn(),
     input: { forget: vi.fn(), awaitingConfirmation: () => false }, submitAgent: vi.fn(),
@@ -402,7 +417,7 @@ it.each(process.platform === 'win32' ? [['prepare', false]] as const
   ;(await releaseRegistryEngine(registry, row.agentId))
   await registry.flush()
   row = registry.byAgent(row.agentId)!
-  const store = new StoppedAgentStore(join(directory, 'stop-archive'))
+  const store = stoppedStore(join(directory, 'stop-archive'))
   await store.save(row); store.beginResume(row.agentId)
   const send = vi.fn(), nextDeletion = vi.fn()
   const forgetSession = createForgetSession({ registry, stoppedAgents: store, syncRecapPool: vi.fn(), normalizers: { forget: vi.fn() },
@@ -447,7 +462,7 @@ it.each(['prepare', 'directory sync'] as const)('Stop keeps a failed %s removal 
   await releaseRegistryEngine(registry, row.agentId)
   await registry.flush()
   row = registry.byAgent(row.agentId)!
-  const store = new StoppedAgentStore(join(directory, 'failed-stop-archive')), send = vi.fn()
+  const store = stoppedStore(join(directory, 'failed-stop-archive')), send = vi.fn()
   await store.save(row); store.beginResume(row.agentId)
   const forgetSession = createForgetSession({ registry, stoppedAgents: store, syncRecapPool: vi.fn(), normalizers: { forget: vi.fn() },
     forgetAttach: vi.fn(), turnStartedAt: new Map(), prompts: new Map(), neverFoldedHistory: new Set(), replayedFirstTurn: new Set(),
@@ -471,7 +486,7 @@ it.each(['prepare', 'directory sync'] as const)('Stop keeps a failed %s removal 
 })
 
 it.each((['new owner', 'adopted shell', 'archived owner', 'starting owner'] as const).flatMap(mode => [false, true].map(uncertain => [mode, uncertain] as const)))('discovery keeps %s unpublished until its ownership image is durable (uncertain=%s)', async (mode, uncertain) => {
-  const store = new StoppedAgentStore(join(directory, 'discovery-archive')), send = vi.fn(), moved = vi.fn(), forgotten = vi.fn(async () => {})
+  const store = stoppedStore(join(directory, 'discovery-archive')), send = vi.fn(), moved = vi.fn(), forgotten = vi.fn(async () => {})
   let current = row
   if (mode === 'new owner') row.sessionId = 'previous-session'
   if (mode === 'adopted shell') current = (await releaseRegistryEngine(registry, row.agentId))!
@@ -521,7 +536,7 @@ it.each([false, true])('discovery cleans every fully displaced owner (selected=%
     registry.updateProcessIdentity(opened.agentId, newProcess)
   }
   await registry.flush()
-  const store = new StoppedAgentStore(join(directory, 'discovery-archive')), send = vi.fn(), moved = vi.fn()
+  const store = stoppedStore(join(directory, 'discovery-archive')), send = vi.fn(), moved = vi.fn()
   const forgotten = vi.fn(async (id: string, options?: { agentId?: string }) => {
     expect(persisted().some(entry => entry.agentId === options?.agentId)).toBe(false)
     send({ type: 'agent_deleted', payload: { agentId: options?.agentId, id } })
@@ -620,7 +635,7 @@ it.each(process.platform === 'win32' ? ['prepare'] as const : ['prepare', 'direc
 it('discovery cannot retire an engine that appeared while its exit image was prepared', async () => {
   registry.setLaunch(row.agentId, { state: 'ready' })
   await registry.flush()
-  const store = new StoppedAgentStore(join(directory, 'dormant-archive')), send = vi.fn()
+  const store = stoppedStore(join(directory, 'dormant-archive')), send = vi.fn()
   const retain = createRetainExitedSession({ registry, stoppedAgents: store, send, publishStoppedAgent: async () => {}, announceSession: announce,
     invalidateTerminalControl: vi.fn(), forgetInput: vi.fn(), ended: vi.fn(), syncRecapPool: vi.fn(), warn: vi.fn() })
   const handlers = createDiscoveryHandlers({ registry, attach: vi.fn(), taken: vi.fn(),

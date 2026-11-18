@@ -72,7 +72,7 @@ beforeEach(async () => {
   } })
   deps = { registry, stoppedAgents, restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(),
     backendFor: () => ({ kill: vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const })) }),
-    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn(async () => {}) },
+    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), nudge: vi.fn() },
     forgetSession: vi.fn(async id => { await removeRegistryAgent(registry, id) }), markDeleted: vi.fn(), clearDeleted: vi.fn(),
     stopNative: vi.fn(async () => {}),
   }
@@ -255,7 +255,7 @@ it.each(['no runtime', 'failed lookup'] as const)('holds Hermes before saving wh
   else deps.paneInfo = vi.fn(async () => { throw new Error('terminal unavailable') })
   await expect(stop()).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
   expect(signalled).not.toHaveBeenCalled()
-  expect(stoppedAgents.get(row.agentId)).toBeNull()
+  expect(await stoppedAgents.get(row.agentId)).toBeNull()
   expect(deps.forgetSession).not.toHaveBeenCalled()
 })
 
@@ -270,7 +270,7 @@ it.each(['cancel', 'rebind'] as const)('holds Close before saving when %s arrive
     checkpoint: async (s, _phase, databaseProof) => store.save(s, { databaseProof }),
   })).rejects.toMatchObject({ code: 'STOP_UNCONFIRMED' })
   expect(signalled).not.toHaveBeenCalled()
-  expect(stoppedAgents.get(row.agentId)).toBeNull()
+  expect(await stoppedAgents.get(row.agentId)).toBeNull()
   expect(deps.forgetSession).not.toHaveBeenCalled()
 })
 
