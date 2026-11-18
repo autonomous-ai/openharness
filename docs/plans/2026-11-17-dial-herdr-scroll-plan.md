@@ -470,3 +470,27 @@ Files: `cli/src/cable/hosts/herdrApp.ts` (+spec). Depends on: Task 9 (same file)
   lines summed; a stroke's first run starts at once; another terminal does not wait.
 - Green: `SCROLL_GAP_MS = 50`: the drain waits on the deps' timer, never a sleep, until 50 ms after the last run of that
   terminal started; pending stays clamped to ±100; the quiet-second tally and the failure line are unchanged.
+
+## Claude Code draws on the alternate screen (2026-11-18)
+
+Diego's second check (Herdr and VS Code) scrolled nothing: Claude Code 2.1.327 runs on the alternate screen, so Herdr's
+view has no history (spec, "What Herdr offers"). The PM chose option A (2026-11-18): Claude Code terminals scroll by
+`pageup`/`pagedown` through hc; option B (Herdr sends wheel reports) is a follow-up for Herdr's maker.
+
+### Task 11: A Claude Code terminal scrolls by keys through hc
+
+Files: `cli/src/cable/hosts/hcClient.ts` (+spec), `cli/src/cable/hosts/hcSource.ts` (+spec),
+`cli/src/cable/hosts/herdrApp.ts` (+spec), `cli/src/services/devices.ts` (+spec, wiring only),
+`cli/e2e/deviceHerdrApp.e2e.ts` and `cli/e2e/harness/hcCore.ts` if the e2e needs a fake program that reports
+`claude-code`. Depends on: Tasks 9 and 10. Effort: `xhigh`.
+
+- First, a measure against a private hc core only (the e2e harness's), never the person's: does `terminal.keys` wait
+  while a fake program keeps writing output? Time a `keys` call to a terminal printing a line every 100 ms, and to an
+  idle one. Record the numbers in the spec's finding and the PR. Never run the real `claude`.
+- Red: `herdrApp.spec.ts` and `hcClient.spec.ts` cases from the spec's Tests section (a `claude-code` terminal's stroke
+  presses `pageup` through `keys` and runs no `herdr-app`; fails today: it runs `terminal.scroll`).
+- Green: as the spec's §3 "A Claude Code terminal is scrolled by keys" and "No key while Claude Code asks or works"
+  say. The adapter learns the terminal's app and state from the hc source (new deps, as `shows`/`tabOf`).
+- e2e: a stroke over a private terminal whose fake program reports `claude-code` presses `pageup`/`pagedown`, seen
+  in what the fake program reads (the keys' bytes), and runs no `terminal.scroll`; the existing case keeps
+  `terminal.scroll` for another app.

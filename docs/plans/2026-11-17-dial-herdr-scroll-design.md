@@ -28,7 +28,17 @@ built the way the VS Code branch (`feat/dial-vscode-extension`, `docs/plans/2026
   temporary terminal's tab opened and shown, `tab` changed to that tab while `agent` still named the agent of the tab
   before. hc labels each terminal Herdr's window holds with `herdr.space` and `herdr.tab`, so the tab is matched there.
 - **The alternate screen has no history.** A program on it (an editor, a pager) is not scrolled: `terminal.scroll` has
-  nothing to move. Claude Code and Codex run on the main screen by default.
+  nothing to move, and still answers `ok`.
+- **Claude Code 2.1.327 draws on the alternate screen and takes the mouse** (found 2026-11-18, after Diego's second
+  check scrolled nothing on Herdr and on VS Code). A temporary Claude Code with the person's settings (`"tui":
+  "fullscreen"`), its output recorded with `script`, wrote `?1049h` (alternate screen), `?1000h`/`?1002h`/`?1003h` and
+  `?1006h` (mouse with wheel, SGR), kitty keyboard and bracketed paste. Its "Scroll" key context binds `pageup` to
+  `scroll:pageUp`, `pagedown` to `scroll:pageDown` and the wheel to lines. On that Claude Code, with 300 lines of local
+  output on screen (lines 263–300): `herdr-app do terminal.scroll --lines -20` moved nothing; `hc keys <t> pageup`
+  (0.05 s, idle) showed lines 244–282, and `pagedown` 263–300 again; its input box stayed empty. hc encodes a named key
+  for the program's current keyboard modes, so a key is never typed as text. hc's `terminal.keys` presses "after ~3 s
+  of quiet" (`hc schema`). hc offers no way to send a wheel event, and raw wheel bytes into the terminal are not sent:
+  if the program's mouse mode were guessed wrong, their `ESC` would be an Escape key and the rest typed text.
 - **herdr 0.8.0** (the older multiplexer, `herdrClient.ts`) is left out (PM, 2026-11-17): its public API only reports a
   pane's scroll (`PaneScrollChanged`, `PaneInfo.scroll`), and its `send-keys` types into the program.
 
@@ -44,6 +54,8 @@ built the way the VS Code branch (`feat/dial-vscode-extension`, `docs/plans/2026
 - Otherwise the stroke goes to Harness's windows as today (`dial_scroll`), so no terminal nobody sees is scrolled.
 - The route is chosen at a stroke's `down` and kept to its `up`, as on the VS Code branch: Harness's windows are never
   left holding a drag whose `up` went to Herdr. A `move` or `up` with no `down` before it chooses then.
+- A Claude Code terminal is moved by its own `pageup`/`pagedown` keys a page at a time, since it draws on the alternate
+  screen (PM, 2026-11-18); every other terminal by Herdr's view, line by line.
 - Travel turns into lines with Harness's own numbers (`scrollLines.ts`, from the VS Code branch: remainder += −dy × 2.5,
   16 px a line, whole lines spent, n < 0 toward older lines; `down` resets). A fling (`up` with a velocity) is not
   played: the scroll stops where the finger stops. The device's `scrollReversed` is not applied (the daemon applies it
@@ -117,6 +129,20 @@ the active one.
   drain would be up to ~30 a second. With the quiet second a stroke and its pauses give one line, a long stroke one at
   its end, so the lines stay bounded; the adapter needs no word of the stroke's end.
 
+- **A Claude Code terminal is scrolled by keys, not by Herdr's view** (PM, 2026-11-18). When hc reports the
+  terminal's app as `claude-code`, `scroll` presses `pageup` (lines < 0) or `pagedown` through hc's own socket
+  (`HcClient.keys(address, keys)`, `terminal.keys`), never `herdr-app`. Lines are summed per terminal and one key is
+  pressed per `SCROLL_PAGE_LINES = 20` lines (one page measured 19 lines at 46 rows), the rest kept for the next lines of
+  that terminal and dropped with the queue at the stroke's end, quiet second or stop. At most 5 keys go in one call. The
+  same queue holds: one call at a time per terminal, the 50 ms gap, `SCROLL_TIMEOUT_MS`, the ±100 clamp, the failure
+  line once, the tally (its lines are the lines the keys stood for; its runs the calls) and `stop()`.
+- **No key while Claude Code asks or works.** `canScroll` is false for a `claude-code` terminal whose hc status state is
+  `needs-you` (a key could move the highlighted choice of a question, and the person's Enter would pick it) or
+  `working` (hc presses after ~3 s of quiet, so a stroke would land seconds late); the stroke then goes to Harness's
+  windows as today. Whether hc waits while a program writes is measured against a private core with a fake program,
+  never a model call; if it does not wait, `working` is allowed and the spec says so.
+- Every other app keeps `terminal.scroll`.
+
 ### 4. Routing (services/devices.ts)
 
 `routeScroll(phase, dy, velocity)` and `stroke` keep the VS Code branch's names and shape, with the target made general:
@@ -184,7 +210,10 @@ becomes `{ adapter, pane }`. On the rebase there is one route only:
 | A fast stroke | at most one `terminal.scroll` run per terminal every 50 ms; the lines of the gap are summed into the next run | at most 20 processes a second |
 | `status` is under way when the finger moves | the stroke is held in a fixed size and replayed on the answer | the first lines arrive about 0.04 s later |
 | Herdr Core is not on its default session (`hookIds` false) and the dial shows the hooked copy | that copy has no Herdr pane | the stroke goes to Harness's windows |
-| The terminal is on the alternate screen | Herdr has no history to move | nothing scrolls |
+| The terminal is on the alternate screen and is not Claude Code | Herdr has no history to move | nothing scrolls |
+| A Claude Code terminal | `pageup`/`pagedown` through hc, one per 20 lines; Herdr's view is not asked to move | the transcript moves a page at a time |
+| A Claude Code terminal that asks (`needs-you`) or works (`working`) | no key is pressed; the stroke goes to Harness's windows | as today |
+| hc refuses or times out a key call | its lines are dropped, `[herdr-app] scroll · failed` once | nothing scrolls |
 | Herdr leaves the front mid-stroke | the stroke keeps its route to its `up` | the rest of that stroke scrolls Herdr's view behind |
 | The dial moves to another agent mid-stroke | the stroke keeps its route; the next stroke chooses again | — |
 
@@ -209,6 +238,11 @@ every stroke goes to Harness's windows).
     but `tab` read.
   - `herdrApp.spec.ts`, the gap: a run starts no sooner than 50 ms after the last one for that terminal started; lines
     of the gap are summed into one run; a stroke's first run starts at once; another terminal's runs do not wait.
+  - `herdrApp.spec.ts`, Claude Code: a `claude-code` terminal's lines press `pageup`/`pagedown` through the client's
+    `keys`, one per 20 lines, the rest kept, at most 5 keys a call, and run no `herdr-app`; `canScroll` is false while
+    its state is `needs-you` or (unless the measure says hc does not wait) `working`; another app runs
+    `terminal.scroll`; a refused or timed-out call drops and logs once; `stop()` presses nothing more.
+  - `hcClient.spec.ts`: `keys(address, keys)` sends `terminal.keys` with exactly those names and answers its outcome.
   - `hcClient.spec.ts`: `herdr.tab` is kept and read into `tab`; a `labels` event changes it; a missing or empty label
     is none.
   - `hcSource.spec.ts`: `paneOf(agentId)` answers a listed row's address and none for another id; `tabOf(address)`
@@ -240,5 +274,8 @@ every stroke goes to Harness's windows).
 
 ## Out of scope
 
+- A wheel event for programs on the alternate screen: Herdr would have to send one (its real wheel does). Follow-up for
+  Herdr's maker: `terminal.scroll` sends wheel reports when the program on the alternate screen takes the mouse, which
+  would scroll Claude Code line by line and every such program; then the key path above goes (PM, 2026-11-18).
 - herdr 0.8.0 (above); tmux, Orca, Terminal/iTerm2/Ghostty tabs; moving VS Code onto `HostAdapter.scroll` (the VS Code
   branch does it); a fling; `scrollReversed`; scrolling back to the bottom when a stroke ends.
