@@ -184,6 +184,15 @@ export function createCloudAgents({ port, whenStarting, clients, openQuestions, 
     return accepted
   }
 
+  const dialRow = (harness: CloudHarness): Record<string, unknown> => ({
+      agentId: harness.agentId, sessionId: harness.agentId, engine: harness.agent, displayName: harness.name, defaultName: harness.name, runtimeProfile: null,
+      registeredAt: Date.parse(harness.createdAt), lastHookAt: Date.parse(harness.updatedAt), active: true,
+      tmuxPane: '', cwd: '', projectDir: '', transcriptPath: null, runtimes: [], primaryRuntimeKey: '',
+    })
+  const dialIds = function* (): IterableIterator<string> {
+    for (const harness of harnesses.values()) if (harness.state !== 'stopped') yield harness.agentId
+  }
+
   return {
     doors,
     /** Every cloud harness's frame, for `agents_list`. */
@@ -212,11 +221,12 @@ export function createCloudAgents({ port, whenStarting, clients, openQuestions, 
      * start, its engine and its name): rows with no pane, no transcript and no process, so nothing that reads a
      * terminal agent's files finds one to read. A stopped one is off the wheel, as a stopped agent is.
      */
-    dialRows: (): Array<Record<string, unknown>> => [...harnesses.values()].filter((harness) => harness.state !== 'stopped').map((harness) => ({
-      agentId: harness.agentId, sessionId: harness.agentId, engine: harness.agent, displayName: harness.name, defaultName: harness.name, runtimeProfile: null,
-      registeredAt: Date.parse(harness.createdAt), lastHookAt: Date.parse(harness.updatedAt), active: true,
-      tmuxPane: '', cwd: '', projectDir: '', transcriptPath: null, runtimes: [], primaryRuntimeKey: '',
-    })),
+    dialRows: (): Array<Record<string, unknown>> => Array.from(dialIds(), id => dialRow(harnesses.get(id)!)),
+    dialIds,
+    dialRow: (agentId: string): Record<string, unknown> | undefined => {
+      const harness = harnesses.get(agentId)
+      return harness && harness.state !== 'stopped' ? dialRow(harness) : undefined
+    },
     /** `agent_create` for a cloud agent, answered as the socket answers one (`{ agent }`, or the refusal); null for any other engine. */
     create(payload: Record<string, unknown>): Promise<Record<string, unknown>> | null {
       if (!isCloudAgent(payload.engine)) return null

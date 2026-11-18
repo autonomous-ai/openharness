@@ -16,7 +16,7 @@ import { usageTargetKey, usageTarget, validUsageTarget } from '../lib/agentUsage
  */
 import { SERVICE_HOSTS } from '../harnessd/services.js'
 import type { ServiceQueryAuthority } from './serviceLinks.js'
-import type { CoreApi, HachiGoalDone, UsageEvent } from './api.js'
+import type { CoreApi, HachiGoalDone, ReadReceiver, UsageEvent } from './api.js'
 
 const INVALID = { error: 'INVALID_REQUEST' }
 
@@ -58,17 +58,15 @@ export function answerAgentQuery(core: Pick<CoreApi, 'agents' | 'usage' | 'clien
   return { error: 'UNKNOWN_QUERY' }
 }
 
-/** The shared complete capture is granted only to its declared authenticated readers. */
-export async function answerSessionSnapshot(core: Pick<CoreApi, 'agents'>, service: string, query: string,
-  authority: Pick<ServiceQueryAuthority, 'current'>): Promise<Record<string, unknown> | null> {
-  if (query !== 'session_snapshot') return null
+/** Only the declared authenticated readers may open this complete per-row read. */
+export async function answerSessionRead(core: Pick<CoreApi, 'agents'>, service: string, query: string,
+  receive: ReadReceiver<unknown, unknown>, signal: AbortSignal, authority: Pick<ServiceQueryAuthority, 'current'>): Promise<void> {
   const host = Object.values(SERVICE_HOSTS).find(host => host.services.includes(service))
-  if (!host?.queries || !Object.hasOwn(host.queries, service) || !host.queries[service].includes(query)) return { error: 'QUERY_NOT_DECLARED' }
-  if (!authority.current?.()) return { error: 'SESSION_SNAPSHOT_UNAVAILABLE' }
-  try {
-    const snapshot = await core.agents.snapshot()
-    return authority.current() ? { ...snapshot } : { error: 'SESSION_SNAPSHOT_UNAVAILABLE' }
-  } catch (error) {
-    return { error: error instanceof Error && error.message === 'SESSION_SNAPSHOT_TOO_LARGE' ? error.message : 'SESSION_SNAPSHOT_UNAVAILABLE' }
-  }
+  if (!host?.reads || !Object.hasOwn(host.reads, service) || !host.reads[service].includes(query)) throw new Error('READ_NOT_DECLARED')
+  if (!authority.current?.()) throw new Error('SESSION_READ_UNAVAILABLE')
+  await core.agents.readSessions((record, settled) => {
+    if (!authority.current?.()) { settled(false); return false }
+    return receive(record, settled)
+  }, signal)
+  if (!authority.current()) throw new Error('SESSION_READ_UNAVAILABLE')
 }

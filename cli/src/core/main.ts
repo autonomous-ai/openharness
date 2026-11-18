@@ -213,7 +213,7 @@ import { createModelsLink } from './modelsLink.js'
 import { createRecapsLink } from './recapsLink.js'
 import { createAgentCleanupLink } from './agentCleanupLink.js'
 import { agentView, AGENT_BROWSER_REQUESTS, AGENT_CLEANUP_FALLBACKS, RECAPS_FALLBACKS, TERMINALS_OFF } from './api.js'
-import { answerAgentQuery, answerSessionSnapshot } from './agentQueries.js'
+import { answerAgentQuery, answerSessionRead } from './agentQueries.js'
 import { createDeliveries } from './deliveries.js'
 import { createTerminalWatch } from './terminalWatch.js'
 import { createSharingLink } from './sharingLink.js'
@@ -920,6 +920,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const coreApi = createCoreApi({
     cloud: cloudDoors,
     cloudRows: () => (cloudAgents?.dialRows() ?? []) as unknown as RegisteredSession[],
+    cloudRead: { ids: () => cloudAgents?.dialIds() ?? [][Symbol.iterator](),
+      row: agentId => cloudAgents?.dialRow(agentId) as unknown as RegisteredSession | undefined },
     // Agents' terminals: a literal-argv launch, and a read-only view for Share's observers (core/terminalWatch.ts).
     terminals: { ...TERMINALS_OFF, ...createTerminalOpener({ createBackend, recoverBackend, registry, announceSession, blocksFolder: (cwd) => !!backendRef?.purgeAgentService?.blocksFolder(cwd), noBackendCode: createUnavailable }), watch: terminalWatch.watch },
     dataDir: env.ADAPTER_DATA_DIR,
@@ -1705,6 +1707,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     token: serviceToken,
     owned: Object.fromEntries([...outOfProcess].map((name) => [name, requestsOf[name] ?? []])),
     waits: LONG_ANSWERS,
+    read: (service, query, receive, signal, authority) => answerSessionRead(coreApi, service, query, receive, signal, authority),
     // An experiment's process runs once on, the devices' once there is one, models', the gateway's and the viewers'
     // once needed: a request asks. Shell, Agent Messages and the engine probe are in the always-running edge host, but
     // a first request can beat that host's connection. Hold it through the same bounded startup gate; after any
@@ -1736,7 +1739,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       ?? (query === 'follow_agents' ? agentLife.followed(service, payload) : null)
       ?? await answerConnectorsQuery(coreApi, service, query, payload)
       ?? await answerSharedMachinesQuery(sharedMachinesAccount, service, query, payload)
-      ?? (query === 'session_snapshot' ? await answerSessionSnapshot(coreApi, service, query, authority) : null)
       ?? answerDaemonQuery(coreApi, service, query)
       ?? await answerExperimentQuery(coreApi, experiments, service, query, payload, undefined, authority)
       ?? await terminalWatch.answer(service, query, payload)

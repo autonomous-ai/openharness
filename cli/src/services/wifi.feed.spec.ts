@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { emptyPorts, type AgentView, type WifiPort } from '../core/api.js'
 import { AutonomousDeviceService, type AutonomousDeviceFrame } from '../lib/autonomous-device/service.js'
 import { GatewayDeviceFixture } from '../testing/devicePeer.js'
-import { snapshotFixture, snapshotRow } from '../testing/sessionSnapshot.js'
+import { snapshotFixture, snapshotRow, snapshotReader, type SessionSnapshot } from '../testing/sessionSnapshot.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { startWifi, type WifiDeps } from './wifi.js'
 import type { DeviceSessionFeedOptions } from '../lib/autonomous-device/sessionFeed.js'
@@ -51,7 +51,7 @@ async function fixture(over: { unbound?: boolean; actualFile?: boolean; arm?: Pr
     processIdentity: { pid: 42, startMarker: '1970-01-01T00:00:00.100Z' }, evidenceRevision: 1 } as AgentView
   const core = fakeCore({ dataDir,
     conversations: { resolve: vi.fn(async () => structuredClone(agent)) },
-    agents: { snapshot: vi.fn(async () => snapshotFixture({ registered: [snapshotRow('agent', { session: { ...snapshotRow().session, engine: agent.engine } })], hasWindow: false })) },
+    agents: { readSessions: vi.fn(snapshotReader(async () => snapshotFixture({ registered: [snapshotRow('agent', { session: { ...snapshotRow().session, engine: agent.engine } })], hasWindow: false }))) },
   })
   let sink: EvidenceSink | undefined, service!: AutonomousDeviceService, feedOptions: DeviceSessionFeedOptions | undefined
   const events: AutonomousDeviceFrame[] = []
@@ -207,26 +207,26 @@ describe('component evidence and normalized-feed ordering', () => {
 
   it('applies binding-change notices through the existing view refresh and exposes a failed refresh', async () => {
     const t = await fixture(), warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    vi.mocked(t.core.agents.snapshot).mockRejectedValueOnce(new Error('view failed'))
+    vi.mocked(t.core.agents.readSessions).mockRejectedValueOnce(new Error('view failed'))
     await t.feedOptions()!.receive('agent', [{ type: 'agent_synced', payload: {} }], () => true)
     expect(t.reader.changed).toHaveBeenCalledExactlyOnceWith('agent')
     await vi.waitFor(() => expect(warn).toHaveBeenCalledExactlyOnceWith('[wifi] CORE_VIEW_UNAVAILABLE'))
     await t.feedOptions()!.receive('agent', [{ type: 'agent_synced', payload: {} }], () => true)
     await t.port.appFocus('machine-1', 'agent', 'window')
-    expect(t.core.agents.snapshot).toHaveBeenCalledTimes(3)
+    expect(t.core.agents.readSessions).toHaveBeenCalledTimes(3)
   })
 
   it('shares one failed changed-view read and rejects focus waiting on that same core revision', async () => {
     const t = await fixture(), warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     let reject!: (error: Error) => void
-    vi.mocked(t.core.agents.snapshot).mockImplementationOnce(() => new Promise((_done, fail) => { reject = fail }))
+    vi.mocked(t.core.agents.readSessions).mockImplementationOnce(() => new Promise((_done, fail) => { reject = fail }))
     const synced = () => t.feedOptions()!.receive('agent', [{ type: 'agent_synced', payload: {} }], () => true)
     await synced(); await synced()
     const moving = t.port.appFocus('machine-1', 'agent', 'window')
     const failed = expect(moving).rejects.toThrow('changed view failed')
     await Promise.resolve()
     reject(new Error('changed view failed')); await failed
-    expect(t.core.agents.snapshot).toHaveBeenCalledTimes(2)
+    expect(t.core.agents.readSessions).toHaveBeenCalledTimes(2)
     expect(warn).toHaveBeenCalledWith('[wifi] CORE_VIEW_UNAVAILABLE')
   })
 
@@ -301,13 +301,13 @@ describe('component evidence and normalized-feed ordering', () => {
   })
 
   it('does not apply focus when draining the refreshed view synchronously revokes its connection', async () => {
-    const t = await fixture(), held = deferred<Awaited<ReturnType<typeof t.core.agents.snapshot>>>()
+    const t = await fixture(), held = deferred<SessionSnapshot>()
     t.peer.session('conn', { role: 'device', identity: 'device', direct: true })
     await t.peer.request('conn', { type: 'hello', proto: 1, requestId: 'hello' })
     await vi.waitFor(() => expect(t.peer.replies().some(frame => frame.type === 'hello_result')).toBe(true))
-    vi.mocked(t.core.agents.snapshot).mockReturnValueOnce(held.promise)
+    vi.mocked(t.core.agents.readSessions).mockImplementationOnce(snapshotReader(() => held.promise))
     const focus = vi.spyOn(t.service, 'appFocus'), moving = t.port.appFocus('machine-1', 'agent', 'window')
-    await vi.waitFor(() => expect(t.core.agents.snapshot).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(t.core.agents.readSessions).toHaveBeenCalledTimes(2))
     await t.feedOptions()!.receive('agent', [{ type: 'agent_synced', payload: {} }], () => true)
     t.service.commander({ type: 'commander_event', agentId: 'agent', payload: { kind: 'error', text: 'queued' } })
     t.peer.changed.once('frame', () => t.port.disconnected())

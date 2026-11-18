@@ -1,3 +1,5 @@
+import { boundedJsonBytes } from '../lib/boundedJsonBytes.js'
+import { RECORD_READ_ID_BYTES, RECORD_READ_REQUEST_BYTES } from '../lib/recordReadWire.js'
 import type { ClientStreamQuota } from '../lib/clientStreamQueue.js'
 /**
  * The core's end of the services that run in their own processes (harnessd/services.ts starts them).
@@ -15,7 +17,7 @@ import type { ClientStreamQuota } from '../lib/clientStreamQueue.js'
  */
 import { performance } from 'node:perf_hooks'
 import { randomUUID, timingSafeEqual } from 'node:crypto'
-import type { Asker } from './api.js'
+import type { Asker, ReadReceiver } from './api.js'
 import { HANDOFF_DEADLINE_MS } from '../lib/handoffAuthority.js'
 import { SERVICE_REQUESTS_MAX } from './serviceHost.js'
 export { SERVICE_REQUESTS_MAX } from './serviceHost.js'
@@ -29,6 +31,7 @@ export interface ServiceFrame {
 /** Where frames to one service's connection go. */
 export interface ServiceSink {
   sendFrame(frame: ServiceFrame, quota?: ClientStreamQuota): boolean
+  sendFrame(frame: ServiceFrame, quota: { kind: 'records' }, settled: (sent: boolean) => void): boolean
   /** Bytes, for a service that carries terminals (the gateway); false when the socket refused them. */
   sendBinary?(bytes: Uint8Array, quota?: ClientStreamQuota): boolean
   /** How many bytes are waiting on the socket to the service: a hung one stops reading, and what the core
@@ -57,6 +60,8 @@ export interface ServiceLinksOptions {
   owned: Readonly<Record<string, readonly string[]>>
   /** The core's answer to a service's question (`service_query`): `query` names it. */
   answer(service: string, query: string, payload: Record<string, unknown>, authority: ServiceQueryAuthority): Record<string, unknown> | Promise<Record<string, unknown>>
+  /** A declared complete read over this connection, paced by the physical sink's settlement. */
+  read?(service: string, query: string, receive: ReadReceiver<unknown, unknown>, signal: AbortSignal, authority: ServiceQueryAuthority): Promise<void>
   /** What a service tells the core without asking (`service_notice`), and its binary frames: the gateway's
    *  remote clients and what they sent. Only the services that send them are given these. */
   notice?(service: string, payload: Record<string, unknown>): void
@@ -94,6 +99,7 @@ export interface ServiceLinksOptions {
 }
 
 interface Connected {
+  read?: { id: string; closed: AbortController }
   sink: ServiceSink
   close: (code: number, reason: string) => void
 }
@@ -241,6 +247,7 @@ export function createServiceLinks(options: ServiceLinksOptions) {
       }
       // A service reconnecting (the core restarted, its socket dropped) replaces its old connection.
       const replaced = links.get(service)
+      replaced?.read?.closed.abort()
       replaced?.close(4409, 'replaced by a newer connection')
       for (const [id, entry] of waiting) if (replaced && entry.connection === replaced) settle(id, entry, unavailable(service))
       const connected: Connected = { sink, close }
@@ -285,6 +292,58 @@ export function createServiceLinks(options: ServiceLinksOptions) {
           if (links.get(service) !== connected) return
           const payload = frame.payload ?? {}
           if (frame.type === 'service_notice') { options.notice?.(service, payload); return }
+          if (frame.type === 'service_read_cancel') {
+            const reading = connected.read
+            if (reading && reading.id === payload.requestId) {
+              reading.closed.abort()
+              close(1013, 'Read cancelled')
+            }
+            return
+          }
+          if (frame.type === 'service_read') {
+            const requestId = payload.requestId, query = payload.query
+            const validId = (id: unknown): id is string => typeof id === 'string' && !!id && Buffer.byteLength(id) <= RECORD_READ_ID_BYTES
+            if (!validId(requestId) || !validId(query) || boundedJsonBytes(frame, RECORD_READ_REQUEST_BYTES) === null) { close(1008, 'Invalid read'); return }
+            const error = (code: string): void => {
+              let settled = false
+              const done = (sent: boolean): void => {
+                if (settled) return
+                settled = true
+                if (!sent && links.get(service) === connected) close(1013, 'Read unavailable')
+              }
+              try { if (!sink.sendFrame({ type: 'service_read_error', payload: { requestId, code } }, { kind: 'records' }, done)) done(false) }
+              catch { done(false) }
+            }
+            if (connected.read) {
+              if (connected.read.id === requestId) { connected.read.closed.abort(); close(1008, 'Duplicate read') }
+              else error('READ_BUSY')
+              return
+            }
+            if (!options.read) { error('READ_NOT_DECLARED'); return }
+            const reading = { id: requestId, closed: new AbortController() }
+            connected.read = reading
+            const generation = newId()
+            const current = (): boolean => links.get(service) === connected && connected.read === reading && !reading.closed.signal.aborted
+            // The source sends begin before returning. Own the request before calling it, including inline/reentrant sinks.
+            void Promise.resolve().then(() => {
+              if (!current()) throw new Error('READ_UNAVAILABLE')
+              return options.read!(service, query, (record, settled) => {
+                if (!current()) { settled(false); return false }
+                return sink.sendFrame({ type: `service_read_${record.type}`, payload: { ...record.payload, requestId, generation } },
+                  { kind: 'records' }, settled)
+              }, reading.closed.signal, { ...authority, current })
+            }).then(() => {
+              if (current()) connected.read = undefined
+            }, failure => {
+              if (!current()) return
+              const code = failure instanceof Error && ['READ_NOT_DECLARED', 'SESSION_READ_TOO_LARGE'].includes(failure.message)
+                ? failure.message : 'READ_UNAVAILABLE'
+              if (failure instanceof Error && failure.message === 'SESSION_READ_TIMEOUT') {
+                reading.closed.abort(); close(1013, 'Read timeout')
+              } else { connected.read = undefined; error(code) }
+            })
+            return
+          }
           if (frame.type === 'service_query') {
             const requestId = payload.requestId
             const query = typeof payload.query === 'string' ? payload.query : ''
@@ -303,6 +362,7 @@ export function createServiceLinks(options: ServiceLinksOptions) {
         },
         receiveBinary: (bytes) => { if (links.get(service) === connected) options.binary?.(service, bytes) },
         closed: () => {
+          connected.read?.closed.abort()
           if (links.get(service) !== connected) return
           links.delete(service)
           log(`[services] ${service} disconnected`)

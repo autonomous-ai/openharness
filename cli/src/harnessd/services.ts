@@ -43,7 +43,7 @@ export interface ServiceSpec {
   /** Local app delivery rights, bound to the authenticated service and selection. */
   windows?: Readonly<Record<string, LocalWindowPermissions>>
   /** Explicit shared reads; a component's private catch-all does not gain unrelated core queries. */
-  queries?: Readonly<Record<string, readonly string[]>>
+  reads?: Readonly<Record<string, readonly string[]>>
 }
 
 /** The kinds of what happens to an agent that a service in its own process can be held (core/api.ts `AgentLife`): a stop
@@ -143,7 +143,7 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // a device, or a request for one (core/devicesWake.ts): about 72 MiB at idle, which a computer with none
   // never pays.
   devices: { services: ['devices', 'wifi', 'machineAddons'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true, askedSince: 4,
-    queries: { devices: ['session_snapshot'], wifi: ['session_snapshot'] },
+    reads: { devices: ['session_snapshot'], wifi: ['session_snapshot'] },
     windows: {
       devices: { all: ['dial_open', 'dial_notification_read', 'dial_forked', 'dial_focus', 'dial_swarm', 'dial_scroll', 'dial_status', 'voice_route_request'],
         connection: ['dial_selection', 'dial_visit', 'dial_form'] },

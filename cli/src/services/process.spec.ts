@@ -1,4 +1,4 @@
-import { EventEmitter } from 'node:events'
+import { EventEmitter, getEventListeners } from 'node:events'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -13,7 +13,7 @@ vi.mock('node:perf_hooks', async (original) => {
   return { ...real, monitorEventLoopDelay: (...args: Parameters<typeof real.monitorEventLoopDelay>) => { loopMonitors.started++; return real.monitorEventLoopDelay(...args) } }
 })
 import type { MasterChannel } from '../harnessd/coreLink.js'
-import { heldOffFile, hostServices, LEAVE_GRACE_MS, REFUSED, runServiceProcess, serviceFaults, type ServiceHostOptions, type ServiceProcessOptions } from './process.js'
+import { heldOffFile, hostServices, LEAVE_GRACE_MS, REFUSED, runServiceProcess, serviceFaults, type CoreConnection, type ServiceHostOptions, type ServiceProcessOptions } from './process.js'
 
 /** A socket that records what it is sent, and is told what the core says. */
 class FakeSocket extends EventEmitter {
@@ -28,6 +28,7 @@ class FakeSocket extends EventEmitter {
     else this.binary.push(data)
   }
   close(): void { this.closed = true }
+  terminate(): void { this.closed = true }
   open(): void { this.readyState = WebSocket.OPEN; this.emit('open') }
   say(frame: unknown): void { this.emit('message', Buffer.from(typeof frame === 'string' ? frame : JSON.stringify(frame))) }
   drop(code = 1006): void { this.readyState = WebSocket.CLOSED; this.emit('error', new Error('reset')); this.emit('close', code) }
@@ -191,6 +192,126 @@ describe('a service in its own process', () => {
 
   beforeEach(() => { vi.useFakeTimers(); sockets = []; lines = [] })
   afterEach(() => vi.useRealTimers())
+
+  it('reads one exact complete sequence, refuses overwrite, and preserves ordinary queries', async () => {
+    let core!: CoreConnection
+    const service = run({ onConnected: value => { core = value } })
+    socket().open(); socket().say({ type: 'connected', payload: {} })
+    const receive = vi.fn(), pending = core.read!('session_snapshot', {}, receive)
+    const requestId = socket().sent.at(-1)!.payload.requestId
+    await expect(core.read!('session_snapshot', {}, vi.fn())).rejects.toThrow('READ_BUSY')
+    socket().say({ type: 'service_read_begin', payload: { requestId, generation: 'g', count: 1, header: { value: 'header' } } })
+    socket().say({ type: 'service_read_row', payload: { requestId, generation: 'g', index: 0, value: { value: 'row' } } })
+    expect(receive).toHaveBeenCalledTimes(2)
+    socket().say({ type: 'service_read_end', payload: { requestId, generation: 'g', count: 1 } })
+    await pending
+    expect(receive.mock.calls.map(([event]) => event.type)).toEqual(['begin', 'row', 'end'])
+    const query = core.query('ordinary')
+    const queryId = socket().sent.at(-1)!.payload.requestId
+    socket().say({ type: 'service_query_result', payload: { requestId: queryId, ok: true } })
+    expect(await query).toEqual({ ok: true })
+    const fresh = core.read!('session_snapshot', {}, vi.fn())
+    const id = socket().sent.at(-1)!.payload.requestId
+    socket().say({ type: 'service_read_error', payload: { requestId: id, code: 'READ_NOT_DECLARED' } })
+    await expect(fresh).rejects.toThrow('READ_NOT_DECLARED')
+    expect(socket().closed).toBe(false)
+    service.stop(); await expect(core.read!('session_snapshot', {}, receive)).rejects.toThrow('READ_UNAVAILABLE')
+  })
+
+  it('admits a bounded request before encoding and refuses already-aborted callers', async () => {
+    let core!: CoreConnection
+    const service = run({ onConnected: value => { core = value } })
+    socket().open(); socket().say({ type: 'connected' })
+    const controller = new AbortController(); controller.abort()
+    await expect(core.read!('session_snapshot', {}, vi.fn(), controller.signal)).rejects.toThrow('READ_UNAVAILABLE')
+    for (const [query, payload] of [['', {}], ['中'.repeat(50), {}], ['session_snapshot', { extra: 'x'.repeat(4096) }],
+      ['session_snapshot', { extra: 'x'.repeat(4050) }]] as const) {
+      await expect(core.read!(query, payload, vi.fn())).rejects.toThrow('READ_UNAVAILABLE')
+    }
+    expect(socket().sent).toHaveLength(1)
+    service.stop()
+  })
+
+  it('retires a failed first send and refuses unsolicited read frames on a healthy idle socket', async () => {
+    let core!: CoreConnection
+    const service = run({ onConnected: value => { core = value } })
+    socket().open(); socket().say({ type: 'connected' })
+    const send = vi.spyOn(socket(), 'send').mockImplementationOnce(() => { throw new Error('PRIVATE') })
+    await expect(core.read!('session_snapshot', {}, vi.fn())).rejects.toThrow('READ_UNAVAILABLE')
+    expect(socket().closed).toBe(true); send.mockRestore()
+    socket().drop(); await vi.advanceTimersByTimeAsync(100)
+    socket().open(); socket().say({ type: 'connected' })
+    socket().say({ type: 'service_read_end', payload: { requestId: 'unsolicited', generation: 'g', count: 0 } })
+    expect(socket().closed).toBe(true)
+    expect(lines.join(' ')).not.toContain('PRIVATE'); service.stop()
+  })
+
+  it('physically retires an aborted read even when its cancellation send throws', async () => {
+    let core!: CoreConnection
+    const service = run({ onConnected: value => { core = value } })
+    socket().open(); socket().say({ type: 'connected' })
+    const controller = new AbortController(), pending = core.read!('session_snapshot', {}, vi.fn(), controller.signal)
+    const send = vi.spyOn(socket(), 'send').mockImplementationOnce(() => { throw new Error('PRIVATE') })
+    controller.abort()
+    await expect(pending).rejects.toThrow('READ_UNAVAILABLE')
+    expect(socket().closed).toBe(true)
+    expect(lines.join(' ')).not.toContain('PRIVATE'); send.mockRestore(); service.stop()
+  })
+
+  it.each(['id', 'generation', 'duplicate-begin', 'gap', 'early-end', 'bad-end-count', 'excess-row', 'unknown', 'bad-error', 'callback'] as const)('closes an ambiguous %s read without reusing its physical connection', async fault => {
+    let core!: CoreConnection
+    run({ onConnected: value => { core = value } })
+    socket().open(); socket().say({ type: 'connected' })
+    const receive = vi.fn(() => { if (fault === 'callback') throw new Error('PRIVATE') })
+    const pending = core.read!('session_snapshot', {}, receive), failed = expect(pending).rejects.toThrow('READ_UNAVAILABLE')
+    const requestId = socket().sent.at(-1)!.payload.requestId
+    const begin = { type: 'service_read_begin', payload: { requestId, generation: 'g', count: 1, header: {} } }
+    socket().say(begin)
+    if (fault === 'duplicate-begin') socket().say(begin)
+    else if (fault === 'early-end') socket().say({ type: 'service_read_end', payload: { requestId, generation: 'g', count: 1 } })
+    else if (fault === 'bad-error') socket().say({ type: 'service_read_error', payload: { requestId, code: 'PRIVATE' } })
+    else if (fault === 'unknown') socket().say({ type: 'service_read_unknown', payload: { requestId, generation: 'g' } })
+    else if (fault !== 'callback') {
+      socket().say({ type: 'service_read_row', payload: { requestId: fault === 'id' ? 'wrong' : requestId,
+        generation: fault === 'generation' ? 'wrong' : 'g', index: fault === 'gap' ? 1 : 0, value: {} } })
+      if (fault === 'excess-row') socket().say({ type: 'service_read_row', payload: { requestId, generation: 'g', index: 1, value: {} } })
+      if (fault === 'bad-end-count') socket().say({ type: 'service_read_end', payload: { requestId, generation: 'g', count: 2 } })
+    }
+    await failed; expect(socket().closed).toBe(true)
+    await expect(core.read!('session_snapshot', {}, vi.fn())).rejects.toThrow('READ_BUSY')
+    socket().say({ type: 'service_read_end', payload: { requestId, generation: 'g', count: 1 } })
+    expect(lines.join(' ')).not.toContain('PRIVATE')
+  })
+
+  it.each(['abort', 'timeout', 'disconnect', 'stop'] as const)('retires a read on %s and fences a reused CoreConnection wrapper', async ending => {
+    let core!: CoreConnection
+    const service = run({ onConnected: value => { core = value } })
+    socket().open(); socket().say({ type: 'connected' })
+    const reused = core, original = socket(), controller = new AbortController(), receive = vi.fn()
+    const pending = core.read!('session_snapshot', {}, receive, controller.signal), failed = expect(pending).rejects.toThrow()
+    const retiredCancel = getEventListeners(controller.signal, 'abort')[0] as () => void
+    const requestId = original.sent.at(-1)!.payload.requestId
+    if (ending === 'abort') controller.abort()
+    else if (ending === 'timeout') await vi.advanceTimersByTimeAsync(20_000)
+    else if (ending === 'stop') service.stop()
+    else original.drop()
+    await failed
+    if (ending === 'abort') expect(original.sent.at(-1)).toEqual({ type: 'service_read_cancel', payload: { requestId } })
+    if (ending === 'stop') return
+    if (ending !== 'disconnect') original.drop()
+    await expect(core.read!('session_snapshot', {}, receive)).rejects.toThrow('READ_UNAVAILABLE')
+    await vi.advanceTimersByTimeAsync(100); socket().open(); socket().say({ type: 'connected' })
+    expect(core).toBe(reused)
+    const fresh = core.read!('session_snapshot', {}, receive), id = socket().sent.at(-1)!.payload.requestId
+    retiredCancel()
+    expect(socket().closed).toBe(false)
+    expect(socket().sent.at(-1)!.type).toBe('service_read')
+    original.say({ type: 'service_read_begin', payload: { requestId, generation: 'old', count: 0, header: {} } })
+    expect(receive).not.toHaveBeenCalled()
+    socket().say({ type: 'service_read_begin', payload: { requestId: id, generation: 'fresh', count: 0, header: {} } })
+    socket().say({ type: 'service_read_end', payload: { requestId: id, generation: 'fresh', count: 0 } })
+    await fresh; service.stop()
+  })
 
   it('connects to the core\'s socket as the service it is, with the master\'s token', () => {
     const service = run()

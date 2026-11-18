@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createServiceLinks, HELD_MAX, ON_DEMAND_START_MS, SERVICE_REQUESTS_MAX, type ServiceFrame } from './serviceLinks.js'
-import { sendLocalWindow } from './api.js'
+import { sendLocalWindow, type ReadReceiver } from './api.js'
 import { SERVICE_HOSTS } from '../harnessd/services.js'
 import { HANDOFF_DEADLINE_MS } from '../lib/handoffAuthority.js'
 
@@ -27,6 +27,129 @@ describe('service links', () => {
 
   beforeEach(() => { vi.useFakeTimers(); ids = 0; lines = [] })
   afterEach(() => vi.useRealTimers())
+
+  it('owns one complete read per current service connection and forwards physical settlement', async () => {
+    let receive!: ReadReceiver<unknown, unknown>, signal!: AbortSignal, current!: () => boolean, finish!: () => void
+    const read = vi.fn(async (_service, _query, send, closed, authority) => {
+      receive = send; signal = closed; current = authority.current
+      await new Promise<void>(resolve => { finish = resolve })
+    })
+    const links = make({ read }), sent: ServiceFrame[] = [], callbacks: Array<(ok: boolean) => void> = []
+    const sink = { sendFrame: vi.fn((frame: ServiceFrame, quota?: unknown, done?: (ok: boolean) => void) => {
+      sent.push(frame); if (done) { expect(quota).toEqual({ kind: 'records' }); callbacks.push(done) }; return true
+    }) }
+    const close = vi.fn(), link = links.accept('search', TOKEN, sink, close)!
+    const ask = (requestId: string) => link.receive({ type: 'service_read', payload: { query: 'fixture', requestId } })
+    ask('one'); await Promise.resolve()
+    expect(read).toHaveBeenCalledOnce(); expect(current()).toBe(true)
+    const settled = vi.fn()
+    expect(receive({ type: 'begin', payload: { header: {}, count: 0 } }, settled)).toBe(true)
+    expect(settled).not.toHaveBeenCalled()
+    expect(sent[0]).toEqual({ type: 'service_read_begin', payload: { requestId: 'one', generation: 'route-1', header: {}, count: 0 } })
+    callbacks.shift()!(true); expect(settled).toHaveBeenCalledExactlyOnceWith(true)
+    ask('other')
+    expect(sent.at(-1)).toEqual({ type: 'service_read_error', payload: { requestId: 'other', code: 'READ_BUSY' } })
+    expect(read).toHaveBeenCalledOnce(); expect(signal.aborted).toBe(false)
+    finish(); await vi.advanceTimersByTimeAsync(0)
+    ask('fresh'); await Promise.resolve(); expect(read).toHaveBeenCalledTimes(2)
+    link.receive({ type: 'service_read_cancel', payload: {} }); expect(signal.aborted).toBe(false)
+    link.receive({ type: 'service_read_cancel', payload: { requestId: 'one' } }); expect(signal.aborted).toBe(false)
+    link.receive({ type: 'service_read_cancel', payload: { requestId: 'fresh' } }); expect(signal.aborted).toBe(true)
+    expect(close).toHaveBeenCalledExactlyOnceWith(1013, 'Read cancelled')
+    finish(); link.closed()
+  })
+
+  it.each(['replaced', 'closed', 'duplicate'] as const)('revokes read callbacks on %s without replay into a replacement', async ending => {
+    let receive!: ReadReceiver<unknown, unknown>, signal!: AbortSignal, finish!: () => void
+    const links = make({ read: async (_service, _query, send, closed) => {
+      receive = send; signal = closed; await new Promise<void>(resolve => { finish = resolve })
+    } })
+    const first = sink(), fresh = sink(), close = vi.fn(), link = links.accept('search', TOKEN, first, close)!
+    const frame = { type: 'service_read', payload: { query: 'fixture', requestId: 'one' } }
+    link.receive(frame); await Promise.resolve()
+    if (ending === 'replaced') links.accept('search', TOKEN, fresh, vi.fn())
+    else if (ending === 'duplicate') link.receive(frame)
+    else link.closed()
+    expect(signal.aborted).toBe(true)
+    const settled = vi.fn()
+    expect(receive({ type: 'row', payload: { index: 0, value: {} } }, settled)).toBe(false)
+    expect(settled).toHaveBeenCalledExactlyOnceWith(false)
+    expect(first.sent).toEqual([]); expect(fresh.sent).toEqual([])
+    finish(); await vi.advanceTimersByTimeAsync(0)
+    link.closed()
+  })
+
+  it('refuses malformed/unavailable reads without invoking an undeclared source or changing ordinary queries', async () => {
+    const answer = vi.fn(() => ({ ok: true })), links = make({ answer }), target = sink(), close = vi.fn()
+    const link = links.accept('search', TOKEN, target, close)!
+    link.receive({ type: 'service_read_cancel', payload: {} })
+    for (const payload of [{}, { requestId: '', query: 'fixture' }, { requestId: 'r', query: 7 }, { requestId: 'r', query: '中'.repeat(50) }, { requestId: 'r', query: 'fixture', ignored: 'x'.repeat(4096) }]) {
+      link.receive({ type: 'service_read', payload })
+    }
+    expect(close).toHaveBeenCalledTimes(5)
+    link.receive({ type: 'service_read', payload: { requestId: 'r', query: 'fixture' } })
+    expect(target.sent.at(-1)).toEqual({ type: 'service_read_error', payload: { requestId: 'r', code: 'READ_NOT_DECLARED' } })
+    expect(answer).not.toHaveBeenCalled()
+    link.receive({ type: 'service_query', payload: { requestId: 'q', query: 'ordinary' } })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(answer).toHaveBeenCalledOnce()
+    expect(target.sent.at(-1)).toEqual({ type: 'service_query_result', payload: { requestId: 'q', ok: true } })
+    link.closed()
+  })
+
+  it('drops a read cancelled before admission and a rejected source after replacement', async () => {
+    let reject!: (error: Error) => void
+    const read = vi.fn(() => new Promise<void>((_resolve, fail) => { reject = fail }))
+    const links = make({ read }), target = sink(), close = vi.fn()
+    const first = links.accept('search', TOKEN, target, close)!
+    first.receive({ type: 'service_read', payload: { requestId: 'one', query: 'fixture' } })
+    first.closed(); await vi.advanceTimersByTimeAsync(0)
+    expect(read).not.toHaveBeenCalled(); expect(target.sent).toEqual([])
+    const second = links.accept('search', TOKEN, target, close)!
+    second.receive({ type: 'service_read', payload: { requestId: 'two', query: 'fixture' } })
+    await Promise.resolve()
+    const fresh = sink(), current = links.accept('search', TOKEN, fresh, vi.fn())!
+    reject(new Error('PRIVATE')); await vi.advanceTimersByTimeAsync(0)
+    expect(target.sent).toEqual([]); expect(fresh.sent).toEqual([])
+    current.closed()
+  })
+
+  it('ignores failed physical error settlement after its connection is replaced', () => {
+    let settle!: (ok: boolean) => void
+    const links = make(), close = vi.fn()
+    const first = links.accept('search', TOKEN, { sendFrame: (_frame: ServiceFrame, _quota?: unknown, done?: (ok: boolean) => void) => { settle = done!; return true } }, close)!
+    first.receive({ type: 'service_read', payload: { requestId: 'one', query: 'fixture' } })
+    const freshClose = vi.fn(), fresh = links.accept('search', TOKEN, sink(), freshClose)!
+    close.mockClear(); settle(false)
+    expect(close).not.toHaveBeenCalled(); expect(freshClose).not.toHaveBeenCalled()
+    fresh.closed()
+  })
+
+  it.each(['READ_NOT_DECLARED', 'SESSION_READ_TOO_LARGE', 'SESSION_READ_TIMEOUT', 'PRIVATE'])('settles a source failure %s without retaining its reader', async code => {
+    const read = vi.fn(async () => { throw new Error(code) }), links = make({ read }), target = sink(), close = vi.fn()
+    const link = links.accept('search', TOKEN, target, close)!
+    link.receive({ type: 'service_read', payload: { requestId: 'one', query: 'fixture' } })
+    await vi.advanceTimersByTimeAsync(0)
+    if (code === 'SESSION_READ_TIMEOUT') expect(close).toHaveBeenCalledExactlyOnceWith(1013, 'Read timeout')
+    else {
+      expect(target.sent.at(-1)).toEqual({ type: 'service_read_error', payload: { requestId: 'one', code: code === 'PRIVATE' ? 'READ_UNAVAILABLE' : code } })
+      link.receive({ type: 'service_read', payload: { requestId: 'fresh', query: 'fixture' } })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(read).toHaveBeenCalledTimes(2)
+    }
+    expect(JSON.stringify(target.sent)).not.toContain('PRIVATE'); link.closed()
+  })
+
+  it.each(['refused', 'throws', 'callback'])('contains a failing physical error reply (%s)', mode => {
+    const close = vi.fn(), links = make(), target = { sendFrame: vi.fn((_frame: ServiceFrame, _quota?: unknown, done?: (sent: boolean) => void) => {
+      if (mode === 'throws') throw new Error('PRIVATE')
+      if (mode === 'callback') { done!(false); done!(false); return true }
+      return false
+    }) }
+    const link = links.accept('search', TOKEN, target, close)!
+    link.receive({ type: 'service_read', payload: { requestId: 'r', query: 'fixture' } })
+    expect(close).toHaveBeenCalledExactlyOnceWith(1013, 'Read unavailable'); link.closed()
+  })
 
   it('binds window delivery to the authenticated service and current connection without replay', () => {
     const send = vi.fn(() => true), refused = vi.fn()

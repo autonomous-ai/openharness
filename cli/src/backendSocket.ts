@@ -84,11 +84,11 @@ const logged = (frame: Frame): boolean => env.LOG_FRAMES && !String(frame.type).
 
 export type Frame = Record<string, unknown>
 
-export type LocalSendQuota = ClientStreamQuota | { kind: 'questions' | 'events' }
+export type LocalSendQuota = ClientStreamQuota | { kind: 'questions' | 'events' | 'records' }
 export interface LocalClientSink {
   sendFrame(frame: Frame, quota?: ClientStreamQuota): boolean
   /** Snapshot progress follows physical question-send settlement, including socket close. */
-  sendFrame(frame: Frame, quota: { kind: 'questions' | 'events' }, settled?: (sent: boolean) => void): boolean
+  sendFrame(frame: Frame, quota: { kind: 'questions' | 'events' | 'records' }, settled?: (sent: boolean) => void): boolean
   sendBinary: (frame: Uint8Array, quota?: ClientStreamQuota) => boolean
   /** Physical transport close. Logical unregister must not retire pending sends. */
   close?: (code: number, reason: string) => void

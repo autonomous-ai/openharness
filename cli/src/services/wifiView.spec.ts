@@ -3,11 +3,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { SessionSnapshotRow } from '../core/api.js'
-import { snapshotFixture, snapshotRow } from '../testing/sessionSnapshot.js'
-import { wifiView } from './wifiView.js'
+import { snapshotFixture, snapshotRow, snapshotReader } from '../testing/sessionSnapshot.js'
+import { readWifiView } from './wifiView.js'
 
 describe('Wi-Fi presentation outside core', () => {
-  it('preserves all registered workspace evidence and only advertises terminal membership', () => {
+  it('preserves all registered workspace evidence and only advertises terminal membership', async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'wifi-view-')))
     try {
       const work = join(root, 'work'); mkdirSync(work)
@@ -26,8 +26,8 @@ describe('Wi-Fi presentation outside core', () => {
         make('unbound', { sessionId: '', cwd: null }), make('empty', { cwd: '' }), make('held', { sessionId: '', launch: { state: 'held', service: 'engine', detail: 'wait' } }),
       ]
       delete registered[5].session.dsh
-      const view = wifiView(snapshotFixture({ registered, cloud: [{ agentId: 'cloud', sessionId: 'c', engine: 'fo', registeredAt: 0, lastHookAt: 0,
-        transcriptPath: null, displayName: 'Cloud', selectedModel: null }] }))
+      const view = await readWifiView(snapshotReader(() => snapshotFixture({ registered, cloud: [{ agentId: 'cloud', sessionId: 'c', engine: 'fo', registeredAt: 0, lastHookAt: 0,
+        transcriptPath: null, displayName: 'Cloud', selectedModel: null }] })), 'machine-1')
       expect(view.hasWindow).toBe(true)
       expect(view.store).toHaveLength(11)
       expect(view.agents.map(row => row.agentId)).not.toContain('hidden')
@@ -47,7 +47,7 @@ describe('Wi-Fi presentation outside core', () => {
       expect(view.agents.find(row => row.agentId === 'empty')?.workspace).toBe('')
       expect(view.agents[0]).toMatchObject({ name: 'Name ready', workspace: work, state: 'running' })
       expect(view.agents[1]).toMatchObject({ name: 'Name fallback', state: 'idle' })
-      expect(wifiView(snapshotFixture({ hasWindow: false }))).toEqual({ agents: [], store: [], hasWindow: false })
+      expect(await readWifiView(snapshotReader(() => snapshotFixture({ hasWindow: false })), 'machine-1')).toEqual({ agents: [], store: [], hasWindow: false })
     } finally { rmSync(root, { recursive: true, force: true }) }
   })
 })

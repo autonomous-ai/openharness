@@ -9,9 +9,11 @@ const state = vi.hoisted(() => ({ agents: [] as RegisteredSession[], catalog: []
 // The core's registry, as the core's Wi-Fi doors read it (core/wifiAgents.ts): the Store runs with the device's
 // service, in the devices' process, and reads the agents and makes one through them.
 const registry = { list: () => state.agents, advertised: () => state.agents, terminalAvailable: () => true }
-const deviceStoreAgents = (machineId: string) => wifiView(snapshotFixture({ machine: { id: machineId, computerId: 'computer', name: 'Fixture' },
-  registered: state.agents.map(row => snapshotRow(row.agentId, { session: { ...snapshotRow(row.agentId).session, ...row } })),
-})).store
+const deviceStoreAgents = (machineId: string) => {
+  const projection = wifiProjection(snapshotFixture({ machine: { id: machineId, computerId: 'computer', name: 'Fixture' } }))
+  for (const row of state.agents) projection.row({ source: 'registered', row: snapshotRow(row.agentId, { session: { ...snapshotRow(row.agentId).session, ...row } }) }, () => {})
+  return projection.value().store
+}
 vi.mock('../../dsh/catalog.js', () => ({ refreshDshRegistry: async () => state.catalog, catalogEntry: (id: string) => state.catalog.find(e => e.id === id) }))
 import { env } from '../../config/env.js'
 import * as engineLaunch from '../engineLaunch.js'
@@ -19,7 +21,7 @@ import { installDsh } from '../../dsh/install.js'
 import { installedDsh, invalidateInstalledDsh } from '../../dsh/installed.js'
 import { materializeWorkspace } from '../../dsh/materialize.js'
 import { createDeviceStore, deviceStorePackages } from './storeRuntime.js'
-import { wifiView } from '../../services/wifiView.js'
+import { wifiProjection } from '../../services/wifiView.js'
 import { snapshotFixture, snapshotRow } from '../../testing/sessionSnapshot.js'
 import { wifiCreate } from '../../core/wifiAgents.js'
 import { DeviceStoreResultSchema } from './storeContract.js'

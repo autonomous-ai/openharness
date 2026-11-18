@@ -28,7 +28,7 @@ import { accountLink } from './accountLink.js'
 import { startDevices, type DevicesDeps, type DevicesCore, type DeviceSession } from './devices.js'
 import { openDevicesListener } from './devicesListener.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess, type ServiceProcessOptions } from './process.js'
-import { sessionSnapshot } from './sessionSnapshot.js'
+import { readCoreSessions, readSessionView } from './sessionSnapshot.js'
 import { processCoreApi, UNASKED } from './processCoreApi.js'
 import { harnessdEnv } from '../lib/harnessdEnv.js'
 import { publishDeviceDesk, type DeviceDesk } from './deviceDesk.js'
@@ -107,24 +107,29 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     }) }
   }
   /** One ask of the core's view at a time: the dial's tick and ⌘K asking together share it. */
-  let viewing: { generation: number; promise: Promise<void> } | null = null
+  let viewing: { generation: number; promise: Promise<void>; closed: AbortController } | null = null
   const refresh = (): Promise<void> => {
     if (viewing?.generation === generation) return viewing.promise
     if (!core) return Promise.resolve()
     const origin = core, epoch = generation
-    const pending = { generation: epoch, promise: Promise.resolve() }
-    pending.promise = origin.query('session_snapshot').then((answer) => {
+    const pending = { generation: epoch, promise: Promise.resolve(), closed: new AbortController() }
+    pending.promise = readSessionView((receive, signal) => readCoreSessions(origin, receive, signal), header => {
+      const agents: Viewed[] = []
+      return { row: (member, retain) => {
+        if (stopped || generation !== epoch || core !== origin) throw new Error('SESSION_READ_UNAVAILABLE')
+        if ('gone' in member) return
+        if (member.source === 'registered' && !member.row.facts.terminalAvailable) return
+        const row = member.source === 'registered' ? { ...member.row.session,
+          displayName: member.row.facts.displayName, runtimeProfile: member.row.selectedModel }
+          : { ...member.row, runtimeProfile: member.row.selectedModel }
+        retain(row); agents.push(row)
+      }, value: (): View => ({ agents,
+        machine: { ...header.machine, computerId: header.machine.computerId || options.machineId, name: header.machine.name || 'This machine' },
+        signedIn: header.signedIn, environment: header.environment, hasWindow: header.hasWindow,
+      }) }
+    }, pending.closed.signal).then(next => {
       if (stopped || generation !== epoch || core !== origin) return
-      const snapshot = sessionSnapshot(answer)
-      view = {
-        agents: [
-          ...snapshot.registered.filter(row => row.facts.terminalAvailable).map(row => ({ ...row.session,
-            displayName: row.facts.displayName, runtimeProfile: row.selectedModel })),
-          ...snapshot.cloud.map(row => ({ ...row, runtimeProfile: row.selectedModel })),
-        ],
-        machine: { ...snapshot.machine, computerId: snapshot.machine.computerId || options.machineId, name: snapshot.machine.name || 'This machine' },
-        signedIn: snapshot.signedIn, environment: snapshot.environment, hasWindow: snapshot.hasWindow,
-      }
+      view = next
       publishDesk()
     }).catch(() => { /* the core went away; its next connection is asked again */ }).finally(() => { if (viewing === pending) viewing = null })
     viewing = pending
@@ -134,6 +139,7 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
   let coreGone: (() => void) | undefined
   const disconnect = (): void => {
     deskOwner?.revoke(); deskOwner = null
+    viewing?.closed.abort()
     generation++; core = null; viewing = null; view = emptyView()
     coreGone?.()
   }

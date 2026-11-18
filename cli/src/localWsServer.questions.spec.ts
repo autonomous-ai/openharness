@@ -46,6 +46,30 @@ function holdWrites() {
 const quota = { kind: 'questions' } as const
 const fullFrame = () => ({ data: 'x'.repeat(LIMIT - Buffer.byteLength(JSON.stringify({ data: '' }))) })
 
+it('shares actual service-record and question credits until physical callback or close', async () => {
+  const sinks = await setup(3), held = holdWrites(), settled = vi.fn()
+  expect(sinks[0].sendFrame(fullFrame(), { kind: 'records' }, settled)).toBe(true)
+  expect(sinks[1].sendFrame({}, quota)).toBe(false)
+  const physical = new Promise<void>(resolve => held.sockets[0].once('close', () => resolve()))
+  clients[0].close(); await physical
+  expect(settled).toHaveBeenCalledExactlyOnceWith(false)
+  expect(sinks[2].sendFrame(fullFrame(), { kind: 'records' })).toBe(true)
+  held.callbacks[0](); held.callbacks[0]()
+  expect(sinks[2].sendFrame({}, quota)).toBe(false)
+})
+
+it('counts the full service envelope before encoding a record and reports a fixed refusal', async () => {
+  const sinks = await setup(1), settled = vi.fn(), held = holdWrites()
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  const encode = vi.spyOn(JSON, 'stringify')
+  const frame = { type: 'service_read_row', payload: { requestId: 'r', generation: 'g', index: 0, value: 'x'.repeat(LIMIT) } }
+  expect(sinks[0].sendFrame(frame, { kind: 'records' }, settled)).toBe(false)
+  expect(encode.mock.calls.some(([value]) => value === frame)).toBe(false)
+  expect(held.callbacks).toHaveLength(0)
+  expect(settled).toHaveBeenCalledExactlyOnceWith(false)
+  expect(warn).toHaveBeenCalledWith('[session-read] SESSION_READ_TOO_LARGE')
+})
+
 it('counts all physical observers globally, settles once and never credits logical replacement', async () => {
   const sinks = await setup(3), held = holdWrites(), first = vi.fn(), refused = vi.fn()
   expect(sinks[0].sendFrame(fullFrame(), quota, first)).toBe(true)

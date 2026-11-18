@@ -346,14 +346,15 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
     const observations = {
       questions: { pending: 0, frames: 0, bytes: 0, refused: 0 },
       events: { pending: 0, frames: 0, bytes: 0, refused: 0 },
+      records: { pending: 0, frames: 0, bytes: 0, refused: 0 },
     }
     let eventDeadline: ReturnType<typeof setTimeout> | undefined
     ws.once('close', () => {
       clearTimeout(eventDeadline)
       for (const settled of observationSends) settled(false)
-      for (const kind of ['questions', 'events'] as const) {
-        const stats = observations[kind], budget = kind === 'questions' ? questionBudget : eventBudget
-        if (stats.frames || stats.refused) console.log(`[${kind === 'questions' ? 'question-observation' : 'session-events'}] closed · frames=${stats.frames} bytes=${stats.bytes} peakBytes=${budget.peakBytes} peakFrames=${budget.peakFrames} refused=${stats.refused}`)
+      for (const kind of ['questions', 'events', 'records'] as const) {
+        const stats = observations[kind], budget = kind === 'events' ? eventBudget : questionBudget
+        if (stats.frames || stats.refused) console.log(`[${kind === 'questions' ? 'question-observation' : kind === 'events' ? 'session-events' : 'session-read'}] closed · frames=${stats.frames} bytes=${stats.bytes} peakBytes=${budget.peakBytes} peakFrames=${budget.peakFrames} refused=${stats.refused}`)
       }
     })
 
@@ -372,19 +373,19 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
       sendFrame: (frame: Frame, quota?: LocalSendQuota, settled?: (sent: boolean) => void) => {
         if (ws.readyState !== WebSocket.OPEN) { settled?.(false); return false }
         if (quota && 'kind' in quota) {
-          const questions = quota.kind === 'questions', budget = questions ? questionBudget : eventBudget
+          const questions = quota.kind !== 'events', budget = questions ? questionBudget : eventBudget
           const stats = observations[quota.kind]
           const limit = questions ? QUESTION_OBSERVATION_BYTES : SESSION_EVENT_BYTES
           const total = questions ? QUESTION_OBSERVATION_BYTES : SESSION_EVENT_SEND_BYTES
           const connectionFrames = questions ? QUESTION_OBSERVATION_CONNECTION_FRAMES : SESSION_EVENT_CONNECTION_FRAMES
           const totalFrames = questions ? QUESTION_OBSERVATION_FRAMES : SESSION_EVENT_FRAMES
-          const prefix = questions ? 'QUESTION_OBSERVATION' : 'SESSION_EVENTS'
+          const prefix = quota.kind === 'records' ? 'SESSION_READ' : questions ? 'QUESTION_OBSERVATION' : 'SESSION_EVENTS'
           let bytes: number | null
           try { bytes = questions ? questionFrameBytes(frame, limit) : boundedJsonBytes(frame, limit) } catch { bytes = null }
           if (bytes === null || budget.bytes + bytes > total || stats.pending >= connectionFrames || budget.frames >= totalFrames) {
             stats.refused++
             const reason = `${prefix}_${bytes === null ? 'TOO_LARGE' : 'BACKPRESSURE'}`
-            console.warn(`[${questions ? 'question-observation' : 'session-events'}] ${reason}`)
+            console.warn(`[${quota.kind === 'records' ? 'session-read' : questions ? 'question-observation' : 'session-events'}] ${reason}`)
             close(1013, reason)
             settled?.(false)
             return false

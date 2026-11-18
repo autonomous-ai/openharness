@@ -121,6 +121,18 @@ describe('question observation bytes', () => {
 })
 
 describe('question snapshot', () => {
+  it('releases the record iterator on cancellation while a physical send is still held', () => {
+    vi.useFakeTimers()
+    const returned = vi.fn(() => ({ done: true as const, value: undefined }))
+    const next = vi.fn(() => ({ done: false as const, value: {} }))
+    let settled!: (ok: boolean) => void
+    const snapshot = startQuestionSnapshot({ generation: 'g', rows: { next, return: returned }, current: () => true,
+      close: vi.fn(), send: (_frame, done) => { settled = done; return true } })
+    snapshot.cancel(); snapshot.cancel(); settled(true)
+    expect(returned).toHaveBeenCalledOnce()
+    expect(next).not.toHaveBeenCalled()
+  })
+
   it('cancels a queued continuation before it reads any snapshot row', async () => {
     vi.useFakeTimers()
     const next = vi.fn()

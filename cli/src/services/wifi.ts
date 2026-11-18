@@ -1,4 +1,4 @@
-import { wifiView, type WifiView } from './wifiView.js'
+import { readWifiView, type WifiView } from './wifiView.js'
 /**
  * The Wi-Fi device (lib/autonomous-device/, docs/autonomous-device-integration.md): a paired device that
  * speaks its own protocol over an E2EE session the gateway holds. Its service, its Store preparations and
@@ -71,7 +71,7 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
   let stopped = false, coreConnected = true, coreEpoch = 0, notices = 0, applied = 0
   let cancellations = new AbortController()
   /** One ask of the core at a time: requests arriving together share it, and are answered in order. */
-  let viewing: { epoch: number; promise: Promise<void> } | null = null
+  let viewing: { epoch: number; promise: Promise<void>; closed: AbortController } | null = null
   const refresh = async (): Promise<void> => {
     if (stopped || !coreConnected) throw new Error('CORE_VIEW_UNAVAILABLE')
     if (viewing) {
@@ -81,11 +81,10 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
       return
     }
     const epoch = coreEpoch, revision = notices
-    const pending = { epoch, promise: Promise.resolve() }
-    pending.promise = core.agents.snapshot().then(snapshot => {
+    const pending = { epoch, promise: Promise.resolve(), closed: new AbortController() }
+    pending.promise = readWifiView(core.agents.readSessions, machineId, pending.closed.signal).then(next => {
       if (stopped || !coreConnected || coreEpoch !== epoch) throw new Error('CORE_VIEW_UNAVAILABLE')
-      if (snapshot.machine.id !== machineId) throw new Error('CORE_VIEW_UNAVAILABLE')
-      view = wifiView(snapshot); applied = revision
+      view = next; applied = revision
     }).catch(error => {
       // Preserve the existing last-view read fallback only when no unapplied notice needs a barrier.
       if (!stopped && coreConnected && coreEpoch === epoch && applied === notices) return
@@ -375,13 +374,17 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
 
   const port: WifiPort = {
     resume: async ({ focus }) => {
+      if (stopped) throw new Error('CORE_VIEW_UNAVAILABLE')
       stopFeed(); feedRetries = 0
       cancellations.abort(); cancellations = new AbortController()
       coreConnected = true
       const epoch = ++coreEpoch
       notices++
       if (focus) port.appFocus(focus.machineId, focus.agentId, focus.connId).catch(() => { /* said by the move itself */ })
-      await refresh()
+      try { await refresh() } catch (error) {
+        if (!stopped && coreConnected && coreEpoch === epoch) throw error
+        return
+      }
       if (!stopped && coreConnected && coreEpoch === epoch) {
         evidence.connected(); await ensureFeed()
         if (!stopped && coreConnected && coreEpoch === epoch) relay.start()
@@ -391,7 +394,7 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
       service.inputProgress(event)
       evidence.input(event)
     },
-    disconnected: () => { coreConnected = false; coreEpoch++; cancellations.abort(); stopQuestions(); stopFeed(); evidence.disconnected(); void relay.stop(); service.coreDisconnected() },
+    disconnected: () => { coreConnected = false; coreEpoch++; viewing?.closed.abort(); cancellations.abort(); stopQuestions(); stopFeed(); evidence.disconnected(); void relay.stop(); service.coreDisconnected() },
     delivery: (event) => {
       service.delivery(event)
       if (event.state === 'completed' || event.state === 'rejected') evidence.settled(event.sessionId, event.deliveryId)
@@ -425,7 +428,7 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
       return reply
     },
     revealed: (operationId, agentId) => store.acknowledgeReveal(operationId, agentId),
-    stop: async () => { stopped = true; coreEpoch++; cancellations.abort(); stopQuestions(); const feed = stopFeed(); stopInput?.(); stopDelivery?.(); stopAgents?.(); store.stopUiDelivery(); await Promise.all([relay.stop(), evidence.stop(), feed?.stop()]) },
+    stop: async () => { stopped = true; coreEpoch++; viewing?.closed.abort(); cancellations.abort(); stopQuestions(); const feed = stopFeed(); stopInput?.(); stopDelivery?.(); stopAgents?.(); store.stopUiDelivery(); await Promise.all([relay.stop(), evidence.stop(), feed?.stop()]) },
   }
   store.startUiDelivery()
   ports.wifi = port

@@ -6,8 +6,8 @@ import { createDeviceHookCalls } from '../core/deviceHookCalls.js'
 import { createDevicesLink, type DevicesState } from '../core/devicesLink.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
 import type { RegisteredSession } from '../lib/registry.js'
-import { snapshotFixture, snapshotRow } from '../testing/sessionSnapshot.js'
-import type { SessionSnapshot } from '../core/api.js'
+import { fixtureRead, snapshotRecords, snapshotFixture, snapshotRow } from '../testing/sessionSnapshot.js'
+import type { SessionSnapshot } from '../testing/sessionSnapshot.js'
 import type { DevicesCore, DevicesDeps } from './devices.js'
 import type { ListenerHandler } from './devicesListener.js'
 import { runDevicesService, type DevicesServiceOptions } from './devicesProcess.js'
@@ -73,6 +73,7 @@ function setup(over: { processEnv?: NodeJS.ProcessEnv; openListener?: DevicesSer
       if (answer instanceof Error) throw answer
       return (answer ?? {}) as Record<string, unknown>
     }),
+    read: vi.fn(fixtureRead((query, payload) => connection.query(query, payload))),
     notice: (kind, payload) => { notices.push([kind, payload]) },
   }
   return {
@@ -86,6 +87,62 @@ function setup(over: { processEnv?: NodeJS.ProcessEnv; openListener?: DevicesSer
 afterEach(() => vi.restoreAllMocks())
 
 describe('the devices in their own process', () => {
+  it.each(['row', 'completion'] as const)('drops an old read at its %s seam after reconnecting the same wrapper', async seam => {
+    const f = setup()
+    f.answer('session_snapshot', snapshotFixture({ registered: [snapshotRow('fresh')] }))
+    let send!: Parameters<NonNullable<CoreConnection['read']>>[2], finish!: () => void
+    vi.mocked(f.connection.read!).mockImplementationOnce(async (_query, _payload, receive) => {
+      send = receive; await new Promise<void>(resolve => { finish = resolve })
+    })
+    f.connect(); const old = f.deps().refresh!()
+    const records = snapshotRecords(snapshotFixture({ registered: [snapshotRow('old')] }))
+    send(records[0])
+    if (seam === 'completion') { send(records[1]); send(records[2]) }
+    f.options().onDisconnected!(); f.connect(); await f.deps().refresh!()
+    if (seam === 'row') expect(() => send(records[1])).toThrow('SESSION_READ_UNAVAILABLE')
+    finish(); await old
+    expect(f.api().agents.advertised().map(row => row.agentId)).toEqual(['fresh'])
+    await f.service.stop()
+  })
+
+  it('commits an explicitly gone member without exposing a phantom dial row', async () => {
+    const f = setup()
+    vi.mocked(f.connection.read!).mockImplementationOnce(async (_query, _payload, receive) => {
+      receive({ type: 'begin', payload: { header: snapshotFixture(), count: 1 } })
+      receive({ type: 'row', payload: { index: 0, value: { source: 'registered', gone: 'deleted' } } })
+      receive({ type: 'end', payload: { count: 1 } })
+    })
+    f.connect(); await f.deps().refresh!()
+    expect(f.api().agents.advertised()).toEqual([])
+    expect(f.api().machine.id()).toBe('machine-1')
+    await f.service.stop()
+  })
+
+  it('commits only a complete new dial projection and keeps the prior view on a partial failure', async () => {
+    const f = setup()
+    f.answer('session_snapshot', snapshotFixture({ registered: [snapshotRow('old')] }))
+    f.connect(); await f.deps().refresh!()
+    let send!: Parameters<NonNullable<CoreConnection['read']>>[2], finish!: () => void, fail!: (error: Error) => void
+    vi.mocked(f.connection.read!).mockImplementationOnce(async (_query, _payload, receive) => {
+      send = receive; await new Promise<void>((resolve, reject) => { finish = resolve; fail = reject })
+    })
+    const pending = f.deps().refresh!()
+    const records = snapshotRecords(snapshotFixture({ registered: [snapshotRow('partial')] }))
+    send(records[0]); send(records[1])
+    expect(f.api().agents.advertised().map(row => row.agentId)).toEqual(['old'])
+    fail(new Error('READ_UNAVAILABLE')); await pending
+    expect(f.api().agents.advertised().map(row => row.agentId)).toEqual(['old'])
+    vi.mocked(f.connection.read!).mockImplementationOnce(async (_query, _payload, receive) => {
+      send = receive; await new Promise<void>(resolve => { finish = resolve })
+    })
+    const fresh = f.deps().refresh!()
+    for (const record of records) send(record)
+    expect(f.api().agents.advertised().map(row => row.agentId)).toEqual(['old'])
+    finish(); await fresh
+    expect(f.api().agents.advertised().map(row => row.agentId)).toEqual(['partial'])
+    await f.service.stop()
+  })
+
   it('reads the shared session snapshot and keeps hidden rows out of the actual dial list', async () => {
     const f = setup()
     const row = (agentId: string, available: boolean) => ({

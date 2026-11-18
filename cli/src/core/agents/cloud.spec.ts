@@ -77,6 +77,19 @@ describe('agents a service owns', () => {
     expect(clients.sendCommander).not.toHaveBeenCalled()
   })
 
+  it('shares current eligible membership and exact single-row formatting with the existing dial list', () => {
+    const { cloud } = setup()
+    cloud.doors.publish([harness({ agentId: 'cloud_b' }), harness({ agentId: 'cloud_a', state: 'stopped' }), harness({ agentId: 'cloud_c' })])
+    expect([...cloud.dialIds()]).toEqual(['cloud_b', 'cloud_c'])
+    expect([...cloud.dialIds()].map(id => cloud.dialRow(id))).toEqual(cloud.dialRows())
+    expect(cloud.dialRow('missing')).toBeUndefined(); expect(cloud.dialRow('cloud_a')).toBeUndefined()
+    cloud.doors.publish([harness({ agentId: 'cloud_c', name: 'Current', updatedAt: '2026-11-18T00:00:00.000Z' })])
+    expect(cloud.dialRow('cloud_b')).toBeUndefined()
+    expect([...cloud.dialIds()]).toEqual(['cloud_c'])
+    expect(cloud.dialRow('cloud_c')).toEqual(cloud.dialRows()[0])
+    expect(cloud.dialRow('cloud_c')).toMatchObject({ displayName: 'Current', lastHookAt: Date.parse('2026-11-18T00:00:00.000Z') })
+  })
+
   it('lists what the service publishes and tells every client what changed', () => {
     const { cloud, clients } = setup()
     cloud.doors.publish([harness()])

@@ -1,3 +1,4 @@
+import { startSettledRecords, QUESTION_OBSERVATION_BYTES, QUESTION_OBSERVATION_TIMEOUT_MS } from './questionObservation.js'
 import { boundedJsonBytes } from '../lib/boundedJsonBytes.js'
 import type { LocalWindowPermissions } from '../harnessd/services.js'
 import type { ClientStreamQuota } from '../lib/clientStreamQueue.js'
@@ -118,19 +119,28 @@ export interface SessionCloudRow {
   agentId: string; sessionId: string; engine: string; registeredAt: number; transcriptPath: string | null; lastHookAt: number
   displayName: string; selectedModel: string | null
 }
-export interface SessionSnapshot {
+export interface SessionReadHeader {
   version: 1
-  registered: SessionSnapshotRow[]
-  cloud: SessionCloudRow[]
   machine: { id: string; computerId: string; name: string }
   signedIn: boolean
   environment: string
   hasWindow: boolean
 }
-/** Provisional source-evaluation budgets; one complete capture or an explicit refusal, never a partial list. */
-export const SESSION_SNAPSHOT_MAX_ROWS = 4096
-export const SESSION_SNAPSHOT_MAX_BYTES = 6 * 1024 * 1024
-export const SESSION_SNAPSHOT_OFF = async (): Promise<SessionSnapshot> => { throw new Error('SESSION_SNAPSHOT_UNAVAILABLE') }
+export type SessionReadValue = { source: 'registered'; row: SessionSnapshotRow } | { source: 'cloud'; row: SessionCloudRow }
+  | { source: 'registered' | 'cloud'; gone: string }
+export type ReadRecord<Header = Record<string, unknown>, Row = Record<string, unknown>> =
+  | { type: 'begin'; payload: { header: Header; count: number } }
+  | { type: 'row'; payload: { index: number; value: Row } }
+  | { type: 'end'; payload: { count: number } }
+export type ReadReceiver<Header = Record<string, unknown>, Row = Record<string, unknown>> =
+  (record: ReadRecord<Header, Row>, settled: (sent: boolean) => void) => boolean
+export type SessionReadReceiver = ReadReceiver<SessionReadHeader, SessionReadValue>
+/** Provisional logical retention budgets, separate from actual transport credits and measured heap cost. */
+export const SESSION_READ_MEMBERS_BYTES = 8 * 1024 * 1024
+export const SESSION_READ_HEADER_BYTES = 64 * 1024
+export const SESSION_READ_VIEW_BYTES = 64 * 1024 * 1024
+export const SESSION_READ_OFF = async (): Promise<void> => { throw new Error('SESSION_READ_UNAVAILABLE') }
+
 
 /** Read-only conversation facts for the handoff in the edge host. Each lookup asks the core now;
  * a stopped record is never replaced by a stale live-agent list in another process. */
@@ -195,7 +205,7 @@ export interface CoreApi {
     /** The live agents. */
     live(): AgentView[]
     /** Complete registered facts for scoped component readers; rejects when unavailable or too large. */
-    snapshot(): Promise<SessionSnapshot>
+    readSessions(receive: SessionReadReceiver, signal?: AbortSignal): Promise<void>
     /** Current registered display facts; unavailable without their owning core's synchronous reader. */
     facts(session: RegisteredSession): AgentFacts | null
     /** The name the apps show for an agent. */
@@ -521,8 +531,8 @@ export type ConnectorSync = (refresh: boolean) => Promise<{ shared: boolean }>
 export const CONNECTOR_SYNC_OFF: ConnectorSync = async () => { throw new Error('CONNECTORS_SYNC_UNAVAILABLE') }
 
 /** A service in its own process that acts on no agent: it creates none and reads no harness's frame. */
-export const AGENT_ACTIONS_OFF: Pick<CoreApi['agents'], 'snapshot' | 'create' | 'dsh' | 'facts'> = {
-  snapshot: SESSION_SNAPSHOT_OFF,
+export const AGENT_ACTIONS_OFF: Pick<CoreApi['agents'], 'readSessions' | 'create' | 'dsh' | 'facts'> = {
+  readSessions: SESSION_READ_OFF,
   create: async () => ({ ok: false, error: 'SERVICE_UNAVAILABLE' }),
   dsh: () => null,
   facts: () => null,
@@ -2116,7 +2126,7 @@ export interface CoreApiDeps {
   terminals?: TerminalsPort
   conversations?: ConversationReads
   dataDir: string
-  registry: Pick<typeof registry, 'list' | 'byAgent' | 'resolve' | 'advertised' | 'terminalAvailable'>
+  registry: Pick<typeof registry, 'list' | 'rows' | 'byAgent' | 'resolve' | 'advertised' | 'terminalAvailable'>
   stoppedAgents: Pick<StoppedAgentStore, 'list'>
   databaseHistory: CoreApi['transcripts']['databaseHistory']
   syncSession: CoreApi['agents']['sync']
@@ -2178,6 +2188,8 @@ export interface CoreApiDeps {
   cloud?: CloudCore
   /** The running cloud harnesses as list rows (`agents.cloud`). */
   cloudRows?: () => RegisteredSession[]
+  /** Current Cloud membership and one current row, without a temporary projected catalog. */
+  cloudRead?: { ids(): IterableIterator<string>; row(agentId: string): RegisteredSession | undefined }
   lastTurn: CoreApi['transcripts']['lastTurn']
   /** Where a turn's cards and recaps go: the devices, and the apps. Only their own frame types reach these. */
   turnCard: CoreApi['clients']['turnCard']
@@ -2189,54 +2201,99 @@ export interface CoreApiDeps {
   log?: (line: string) => void
 }
 
-/** A single synchronous capture; each admitted row is detached before another provider can change it. */
-export function captureSessionSnapshot(deps: Pick<CoreApiDeps, 'registry' | 'cloudRows' | 'facts' | 'runtimeProfile' | 'turns' | 'machine' | 'signedIn' | 'environment' | 'hasWindow' | 'log'>): SessionSnapshot {
-  const fail = (code: 'SESSION_SNAPSHOT_UNAVAILABLE' | 'SESSION_SNAPSHOT_TOO_LARGE'): never => {
-    ;(deps.log ?? console.warn)(`[sessions] ${code}`)
-    throw new Error(code)
-  }
-  const rows = deps.registry.list(), cloud = deps.cloudRows?.() ?? []
-  if (rows.length + cloud.length > SESSION_SNAPSHOT_MAX_ROWS) return fail('SESSION_SNAPSHOT_TOO_LARGE')
-  if (!deps.turns.running || !deps.facts) return fail('SESSION_SNAPSHOT_UNAVAILABLE')
-  const value: SessionSnapshot = { version: 1, registered: [], cloud: [],
-    machine: { id: deps.machine.id(), computerId: deps.machine.computerId(), name: deps.machine.name() },
-    signedIn: deps.signedIn(), environment: deps.environment(), hasWindow: deps.hasWindow() }
-  const headerBytes = boundedJsonBytes(value, SESSION_SNAPSHOT_MAX_BYTES)
-  if (headerBytes === null) return fail('SESSION_SNAPSHOT_TOO_LARGE')
-  let bytes = headerBytes
-  const detached = <T>(row: T, comma: boolean): T => {
-    const length = boundedJsonBytes(row, SESSION_SNAPSHOT_MAX_BYTES - bytes - (comma ? 1 : 0))
-    if (length === null) return fail('SESSION_SNAPSHOT_TOO_LARGE')
-    bytes += length + (comma ? 1 : 0)
-    return JSON.parse(JSON.stringify(row)) as T
-  }
-  for (const row of rows) {
-    const selectedModel = deps.runtimeProfile(row), turnRunning = deps.turns.running(row.sessionId)
-    if (deps.registry.byAgent(row.agentId) !== row) return fail('SESSION_SNAPSHOT_UNAVAILABLE')
-    const session: SessionRow = { agentId: row.agentId, sessionId: row.sessionId, engine: row.engine,
-      registeredAt: row.registeredAt, transcriptPath: row.transcriptPath, lastHookAt: row.lastHookAt,
-      active: row.active, cwd: row.cwd, ...(row.dsh === undefined ? {} : { dsh: row.dsh }) }
-    if (row.launch) {
-      const launch = row.launch
-      session.launch = { state: launch.state,
-        ...(launch.state === 'failed' ? { error: launch.error, ...(launch.detail === undefined ? {} : { detail: launch.detail }) } : {}),
-        ...(launch.state === 'held' ? { service: launch.service, detail: launch.detail } : {}) }
+/** Complete membership once; current facts for each member when it is emitted. Never an atomic whole-time view. */
+export function readSessions(deps: Pick<CoreApiDeps, 'registry' | 'cloudRead' | 'facts' | 'runtimeProfile' | 'turns' | 'machine' | 'signedIn' | 'environment' | 'hasWindow' | 'log'>,
+  receive: SessionReadReceiver, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const started = performance.now(), ids: string[] = []
+    let sourceFailure: string | undefined
+    let finished = false, pump: { cancel(): void } | undefined
+    const abort = (): void => { pump?.cancel() }
+    const fail = (code: string): never => { sourceFailure = code; throw new Error(code) }
+    const finish = (code?: string): void => {
+      finished = true
+      ids.length = 0
+      signal?.removeEventListener('abort', abort)
+      if (code) {
+        reject(new Error(code))
+        try { (deps.log ?? console.warn)(`[sessions] ${code}`) } catch { /* a failed diagnostic cannot leave the read pending */ }
+      }
+      else resolve()
     }
-    // Same app fact producer, read last after synchronous providers as well as any earlier caller await.
-    const captured = deps.facts(row)
-    if (!captured || deps.registry.byAgent(session.agentId) !== row) return fail('SESSION_SNAPSHOT_UNAVAILABLE')
-    const facts = { displayName: captured.displayName, terminalAvailable: captured.terminalAvailable,
-      parts: typeof captured.parts.dsh === 'string' ? { dsh: captured.parts.dsh } : {} }
-    value.registered.push(detached({ session, selectedModel, turnRunning, facts }, value.registered.length > 0))
-  }
-  for (const raw of cloud) {
-    const row = raw as AgentView & { displayName?: unknown; runtimeProfile?: unknown }
-    value.cloud.push(detached({ agentId: row.agentId, sessionId: row.sessionId, engine: row.engine,
-      registeredAt: row.registeredAt, transcriptPath: row.transcriptPath, lastHookAt: row.lastHookAt,
-      displayName: typeof row.displayName === 'string' ? row.displayName : '',
-      selectedModel: typeof row.runtimeProfile === 'string' ? row.runtimeProfile : null }, value.cloud.length > 0))
-  }
-  return value
+    try {
+      if (signal?.aborted || !deps.turns.running || !deps.facts) return finish('SESSION_READ_UNAVAILABLE')
+      const header: SessionReadHeader = { version: 1,
+        machine: { id: deps.machine.id(), computerId: deps.machine.computerId(), name: deps.machine.name() },
+        signedIn: deps.signedIn(), environment: deps.environment(), hasWindow: deps.hasWindow() }
+      if (!header.machine.id) return finish('SESSION_READ_UNAVAILABLE')
+      if (boundedJsonBytes(header, SESSION_READ_HEADER_BYTES) === null) return finish('SESSION_READ_TOO_LARGE')
+      const current = (): boolean => !signal?.aborted && deps.machine.id() === header.machine.id
+        && deps.machine.computerId() === header.machine.computerId && deps.signedIn() === header.signedIn && deps.environment() === header.environment
+      let bytes = 0
+      const member = (id: string): void => {
+        if (performance.now() - started >= QUESTION_OBSERVATION_TIMEOUT_MS) fail('SESSION_READ_TIMEOUT')
+        bytes += 48 + 2 * id.length
+        if (bytes > SESSION_READ_MEMBERS_BYTES) fail('SESSION_READ_TOO_LARGE')
+        ids.push(id)
+      }
+      for (const row of deps.registry.rows()) member(row.agentId)
+      const registeredCount = ids.length
+      if (deps.cloudRead) for (const id of deps.cloudRead.ids()) member(id)
+      const count = ids.length
+      const rows = function* (): Generator<SessionReadValue> {
+        for (let index = 0; index < count; index++) {
+          const agentId = ids[index]
+          if (index >= registeredCount) {
+            const row = deps.cloudRead!.row(agentId) as (AgentView & { displayName?: unknown; runtimeProfile?: unknown }) | undefined
+            if (!row) { yield { source: 'cloud', gone: agentId }; continue }
+            yield { source: 'cloud', row: { agentId: row.agentId, sessionId: row.sessionId, engine: row.engine,
+              registeredAt: row.registeredAt, transcriptPath: row.transcriptPath, lastHookAt: row.lastHookAt,
+              displayName: typeof row.displayName === 'string' ? row.displayName : '',
+              selectedModel: typeof row.runtimeProfile === 'string' ? row.runtimeProfile : null } }
+            continue
+          }
+          const row = deps.registry.byAgent(agentId)
+          if (!row) { yield { source: 'registered', gone: agentId }; continue }
+          const selectedModel = deps.runtimeProfile(row), turnRunning = deps.turns.running!(row.sessionId)
+          if (deps.registry.byAgent(agentId) !== row) fail('SESSION_READ_UNAVAILABLE')
+          const session: SessionRow = { agentId: row.agentId, sessionId: row.sessionId, engine: row.engine,
+            registeredAt: row.registeredAt, transcriptPath: row.transcriptPath, lastHookAt: row.lastHookAt,
+            active: row.active, cwd: row.cwd, ...(row.dsh === undefined ? {} : { dsh: row.dsh }) }
+          if (row.launch) {
+            const launch = row.launch
+            session.launch = { state: launch.state,
+              ...(launch.state === 'failed' ? { error: launch.error, ...(launch.detail === undefined ? {} : { detail: launch.detail }) } : {}),
+              ...(launch.state === 'held' ? { service: launch.service, detail: launch.detail } : {}) }
+          }
+          // Shared app facts stay last. No provider is called after this final current-row check.
+          const captured = deps.facts!(row)
+          if (!captured || deps.registry.byAgent(agentId) !== row) fail('SESSION_READ_UNAVAILABLE')
+          const facts = { displayName: captured.displayName, terminalAvailable: captured.terminalAvailable,
+            parts: typeof captured.parts.dsh === 'string' ? { dsh: captured.parts.dsh } : {} }
+          yield { source: 'registered', row: { session, selectedModel, turnRunning, facts } }
+        }
+      }
+      let index = 0
+      pump = startSettledRecords<SessionReadValue, ReadRecord<SessionReadHeader, SessionReadValue>>({
+        rows: rows(), current,
+        begin: { type: 'begin', payload: { header, count } },
+        row: value => {
+          const record: ReadRecord<SessionReadHeader, SessionReadValue> = { type: 'row', payload: { index: index++, value } }
+          // All retained row fields above are copied primitives. Admit before the transport serializes the frame.
+          // Leave room for the bounded request/generation envelope; the physical sink counts the complete frame again.
+          if (boundedJsonBytes(record, QUESTION_OBSERVATION_BYTES - 2048) === null) fail('SESSION_READ_TOO_LARGE')
+          return record
+        },
+        end: { type: 'end', payload: { count } }, send: receive,
+        timeoutMs: Math.max(1, QUESTION_OBSERVATION_TIMEOUT_MS - (performance.now() - started)),
+        finished: reason => finish(reason === null ? undefined : sourceFailure ?? (reason === 'timeout' ? 'SESSION_READ_TIMEOUT' : 'SESSION_READ_UNAVAILABLE')),
+      })
+      if (signal?.aborted) pump.cancel()
+      else if (!finished) signal?.addEventListener('abort', abort, { once: true })
+    } catch (error) {
+      finish(error instanceof Error && ['SESSION_READ_TIMEOUT', 'SESSION_READ_TOO_LARGE'].includes(error.message) ? error.message : 'SESSION_READ_UNAVAILABLE')
+    }
+  })
 }
 
 export function createCoreApi({
@@ -2244,7 +2301,7 @@ export function createCoreApi({
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, tabKey, tabRelay, connectorSync, observer, privateGridName, machineName, backend, onNotice,
   runtimeProfile, setRuntime, fork, create, dsh, facts, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, streamFrame, streamBytes, machine, activityText, activitySnapshot, activity, summaries,
   closeAgent, activityAt, follow, panePid,
-  signedIn, environment, machines, hasWindow, devicesChanged, dialWatching, wifi, cloud, cloudRows, lastTurn, turnCard, turnSummary,
+  signedIn, environment, machines, hasWindow, devicesChanged, dialWatching, wifi, cloud, cloudRows, cloudRead, lastTurn, turnCard, turnSummary,
   count, hachiGoalDone, log = (line) => console.warn(line),
 }: CoreApiDeps): CoreApi {
   // The recaps reach the devices and the apps through their own two doors, and only with their own frames.
@@ -2266,7 +2323,7 @@ export function createCoreApi({
     agents: {
       all: async () => { const stopped = await stoppedAgents.list(); return [...registry.list(), ...stopped].map(agentView) },
       live: () => registry.list().map(agentView),
-      snapshot: async () => captureSessionSnapshot({ registry, cloudRows, facts, runtimeProfile, turns, machine, signedIn, environment, hasWindow, log }),
+      readSessions: (receive, signal) => readSessions({ registry, cloudRead, facts, runtimeProfile, turns, machine, signedIn, environment, hasWindow, log }, receive, signal),
       facts: row => { const current = registry.byAgent(row.agentId); return current && facts ? facts(current) : null },
       displayName: projectDisplayName,
       byAgent: (agentId) => { const session = registry.byAgent(agentId); return session && agentView(session) },

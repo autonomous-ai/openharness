@@ -1,10 +1,11 @@
+import { RECORD_READ_BYTES, RECORD_READ_TIMEOUT_MS } from '../lib/recordReadWire.js'
 import { jsonStringBytes } from '../lib/jsonStringBytes.js'
 
 /** The shared question snapshot contract. Connection owners retain interest and physical send ownership. */
-export const QUESTION_OBSERVATION_BYTES = 16 * 1024 * 1024
+export const QUESTION_OBSERVATION_BYTES = RECORD_READ_BYTES
 export const QUESTION_OBSERVATION_CONNECTION_FRAMES = 256
 export const QUESTION_OBSERVATION_FRAMES = 4096
-export const QUESTION_OBSERVATION_TIMEOUT_MS = 20_000
+export const QUESTION_OBSERVATION_TIMEOUT_MS = RECORD_READ_TIMEOUT_MS
 
 /** Public app compatibility, retained from 2026-11-18. Old mobile readers require ONE complete final
  * ID list. This adapter remains unbounded; date its removal from the first shipped capable clients. */
@@ -83,38 +84,46 @@ export interface QuestionSnapshotDeps {
   close(reason: 'QUESTION_OBSERVATION_TIMEOUT' | 'QUESTION_OBSERVATION_UNAVAILABLE'): void
 }
 
-/** No copied snapshot or deferred live queue: the current record is put on the ordered socket before yielding. */
-export function startQuestionSnapshot(deps: QuestionSnapshotDeps): { cancel(): void } {
+/** Questions and service reads advance only when the physical transport settles the previous record. */
+export function startSettledRecords<Row, Frame>(deps: {
+  rows: Iterator<Row>
+  begin: Frame
+  row(value: Row): Frame | null
+  end: Frame
+  current(): boolean
+  send(frame: Frame, settled: (sent: boolean) => void): boolean
+  finished(reason: 'cancelled' | 'unavailable' | 'timeout' | null): void
+  timeoutMs?: number
+}): { cancel(): void } {
   let stopped = false
   let next: NodeJS.Immediate | undefined
-  const cancel = (): void => {
+  const finish = (reason: Parameters<typeof deps.finished>[0]): void => {
+    if (stopped) return
     stopped = true
     clearTimeout(deadline)
     if (next) clearImmediate(next)
+    // Release membership even while an old physical send still owns its socket credit.
+    try { deps.rows.return?.() } catch { /* the source is already unavailable */ }
+    deps.finished(reason)
   }
-  const failed = (reason: Parameters<QuestionSnapshotDeps['close']>[0]): void => {
-    const current = deps.current()
-    cancel()
-    if (current) deps.close(reason)
-  }
-  const deadline = setTimeout(() => failed('QUESTION_OBSERVATION_TIMEOUT'), QUESTION_OBSERVATION_TIMEOUT_MS)
+  const deadline = setTimeout(() => finish('timeout'), deps.timeoutMs ?? QUESTION_OBSERVATION_TIMEOUT_MS)
   deadline.unref?.()
   const current = (): boolean => {
     if (stopped) return false
     if (deps.current()) return true
-    cancel()
+    finish('cancelled')
     return false
   }
-  const send = (frame: Record<string, unknown>, ended = false): void => {
+  const send = (frame: Frame, ended = false): void => {
     if (!current()) return
     let settled = false
     const done = (sent: boolean): void => {
       if (settled) return
       settled = true
       if (!current()) return
-      if (!sent) { failed('QUESTION_OBSERVATION_UNAVAILABLE'); return }
-      if (ended) { cancel(); return }
-      // Even an inline test sink cannot recursively walk the whole map on this stack.
+      if (!sent) { finish('unavailable'); return }
+      if (ended) { finish(null); return }
+      // A synchronously settling sink cannot recursively walk the whole source on this stack.
       next = setImmediate(advance)
     }
     try { if (!deps.send(frame, done)) done(false) } catch { done(false) }
@@ -122,12 +131,32 @@ export function startQuestionSnapshot(deps: QuestionSnapshotDeps): { cancel(): v
   const advance = (): void => {
     next = undefined
     if (!current()) return
-    let row: IteratorResult<Record<string, unknown>>
-    try { row = deps.rows.next() } catch { failed('QUESTION_OBSERVATION_UNAVAILABLE'); return }
-    if (row.done) send({ type: 'questions_end', payload: { generation: deps.generation } }, true)
-    else if (deps.accepts && !deps.accepts(row.value)) next = setImmediate(advance)
-    else send({ type: 'questions_row', payload: { generation: deps.generation, question: row.value } })
+    try {
+      const row = deps.rows.next()
+      if (row.done) send(deps.end, true)
+      else {
+        const frame = deps.row(row.value)
+        if (frame === null) next = setImmediate(advance)
+        else send(frame)
+      }
+    } catch { finish('unavailable') }
   }
-  send({ type: 'questions_begin', payload: { generation: deps.generation } })
-  return { cancel }
+  send(deps.begin)
+  return { cancel: () => finish('cancelled') }
+}
+
+/** Preserve the existing question frames and interest filtering over the shared physical-send pump. */
+export function startQuestionSnapshot(deps: QuestionSnapshotDeps): { cancel(): void } {
+  return startSettledRecords({
+    rows: deps.rows,
+    begin: { type: 'questions_begin', payload: { generation: deps.generation } },
+    row: question => deps.accepts && !deps.accepts(question) ? null : { type: 'questions_row', payload: { generation: deps.generation, question } },
+    end: { type: 'questions_end', payload: { generation: deps.generation } },
+    current: deps.current, send: deps.send,
+    finished: reason => {
+      if (deps.current() && (reason === 'timeout' || reason === 'unavailable')) {
+        deps.close(reason === 'timeout' ? 'QUESTION_OBSERVATION_TIMEOUT' : 'QUESTION_OBSERVATION_UNAVAILABLE')
+      }
+    },
+  })
 }

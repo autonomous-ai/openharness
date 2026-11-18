@@ -785,6 +785,6 @@ describe('which services the core leaves to its master', () => {
 
 
 it('declares the complete session snapshot only for the two actual readers', () => {
-  expect(Object.entries(SERVICE_HOSTS).filter(([, host]) => host.queries).map(([name]) => name)).toEqual(['devices'])
-  expect(SERVICE_HOSTS.devices.queries).toEqual({ devices: ['session_snapshot'], wifi: ['session_snapshot'] })
+  expect(Object.entries(SERVICE_HOSTS).filter(([, host]) => host.reads).map(([name]) => name)).toEqual(['devices'])
+  expect(SERVICE_HOSTS.devices.reads).toEqual({ devices: ['session_snapshot'], wifi: ['session_snapshot'] })
 })

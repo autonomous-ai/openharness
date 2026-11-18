@@ -34,8 +34,8 @@ describe('child code admission before runtime effects', () => {
   it('accepts a compatible cohort with its selected file unchanged', () => {
     expect(childAdmissionFailure(env, 42, '/cli.js', () => disk)).toBeNull()
   })
-  it('refuses either mixed private session-query plan while admitting each complete contract-three cohort', () => {
-    const previousPlan = 'ad3cd3af3b497aa0ac8422ed823ff3da403497dc16f4623fc53001ea75645467'
+  it('refuses either mixed complete-session-read plan while admitting each complete contract-three cohort', () => {
+    const previousPlan = '056d151a8e509ec9a8e76e3ca015cdc6e1aa660a79c83f524f9aa6c1f3417250'
     const previous = { contract: 3, plan: previousPlan }
     const previousEnvironment = { ...env, [WORKER_COHORT_ENV]: `42:3:${previousPlan}:${disk}` }
     expect(WORKER_CONTRACT).toBe(3)

@@ -1,4 +1,4 @@
-import { sessionSnapshot } from './sessionSnapshot.js'
+import { readCoreSessions } from './sessionSnapshot.js'
 /**
  * The Wi-Fi device's service in the devices' process (`harness __service devices,wifi`, harnessd/services.ts),
  * on a link of its own to the core (core/wifiLink.ts; step 9, D3). Its sessions are the gateway's, its
@@ -169,17 +169,24 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
         const value = object(answer.value)
         return value.agentId === id && typeof value.sessionId === 'string' && typeof value.engine === 'string' ? value as unknown as AgentView : null
       } },
-      agents: { ...unasked.agents, snapshot: async () => {
+      agents: { ...unasked.agents, readSessions: async (receive, signal) => {
         const binding = bindingFor(owner, 'the Wi-Fi device is not connected to the core')
         try {
-          const snapshot = sessionSnapshot(await ask(owner, 'session_snapshot', {}, binding))
+          let hasWindow = false
+          await readCoreSessions(binding.origin, (record, settled) => {
+            requireBinding(owner, binding)
+            if (record.type === 'begin') {
+              if (record.payload.header.machine.id !== owner.machineId) throw new Error('WIFI_IDENTITY_UNAVAILABLE')
+              hasWindow = record.payload.header.hasWindow
+            }
+            return receive(record, settled)
+          }, signal)
           requireBinding(owner, binding)
-          if (snapshot.machine.id !== owner.machineId) throw new Error('WIFI_IDENTITY_UNAVAILABLE')
-          lastView = { binding, hasWindow: snapshot.hasWindow }
-          return snapshot
+          lastView = { binding, hasWindow }
         } catch (error) {
           // A failed current read cannot keep permission from its previous view. An old owner cannot revoke a new one.
-          if (currentBinding(owner, binding)) lastView = null
+          requireBinding(owner, binding)
+          lastView = null
           throw error
         }
       }, follow: listener => {

@@ -3261,9 +3261,14 @@ class Registry {
     return this.writer.run(deadline => this.persistNames(deadline))
   }
 
-  list(): RegisteredSession[] {
+  /** Current insertion order without allocating a complete temporary list. */
+  rows(): IterableIterator<RegisteredSession> {
     this.assertReady()
-    return Array.from(this.agents.values())
+    return this.agents.values()
+  }
+
+  list(): RegisteredSession[] {
+    return Array.from(this.rows())
   }
 
   active(): RegisteredSession[] {
