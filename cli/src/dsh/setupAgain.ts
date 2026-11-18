@@ -44,10 +44,11 @@ export async function setupAgain(deps: SetupAgainDeps = DEFAULTS): Promise<{ don
 }
 
 async function setUpOne(id: string, deps: SetupAgainDeps): Promise<Outcome | null> {
-  // Held by an install, update or removal: the mark stays for the Store's next start.
-  const unlock = deps.lock(id)
-  if (!unlock) return 'busy'
+  let unlock: (() => void) | null = null
   try {
+    // Held by an install, update or removal: the mark stays for the Store's next start.
+    unlock = deps.lock(id)
+    if (!unlock) return 'busy'
     // Read again under the lock: an update or removal that ended since keeps what it wrote.
     const record = deps.records().find((row) => row.id === id)
     if (!record || !awaitsSetup(record)) return null
@@ -60,11 +61,18 @@ async function setUpOne(id: string, deps: SetupAgainDeps): Promise<Outcome | nul
       deps.mark(id, null)
       return 'done'
     }
-    deps.mark(id, 'needs-setup')
-    // The code only: a setup's detail holds its folder and whatever it printed.
-    deps.log(`[dsh] ${id} needs setup · ${result.error}`)
-    return 'needsSetup'
+    return needsSetup(id, result.error, deps)
+  } catch {
+    // Thrown rather than answered, it is marked all the same: left pending, it would hold the old folder's bridge for good.
+    return needsSetup(id, 'SETUP_THREW', deps)
   } finally {
-    unlock()
+    unlock?.()
   }
+}
+
+function needsSetup(id: string, code: string, deps: SetupAgainDeps): Outcome {
+  deps.mark(id, 'needs-setup')
+  // The code only: a setup's detail, or what it threw, holds its folder and whatever it printed.
+  deps.log(`[dsh] ${id} needs setup · ${code}`)
+  return 'needsSetup'
 }
