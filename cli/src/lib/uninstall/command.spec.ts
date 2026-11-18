@@ -131,6 +131,10 @@ describe('harness uninstall', () => {
     expect(t.calls).toContain('final 2 +root')
     expect(t.out).toContain('✓ removed ~\\.harness\\bin from your PATH')
     expect(t.out).toContain('✓ ~\\.harness goes once this command has exited (anything left is listed in C:\\T\\h.log)')
+    // The plan's PATH line, which the question shows before anything is removed.
+    const asked = fake({ ...win, isTTY: true })
+    expect(await uninstallCommand([], asked.deps)).toBe(1)
+    expect(asked.out).toContain('  · removes ~\\.harness\\bin from your PATH')
   })
 
   // Stopping the harnesses, then the daemon and the terminal host, ends the pane this command runs in, and the command
