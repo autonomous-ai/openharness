@@ -124,9 +124,10 @@ One JSON line. It writes only the plugin's folder. It asks Orca at most `status`
     `approval_required` or `approval_stale` `data`. `grants` is Orca's `executionDescription`, each capability's
     `description` and each replacement as Orca's own message words it (`Runs "<command>" instead of Orca's own
     <action>`), in Orca's order: the access, not the panels it adds. `update` is true when the plugin is installed. A
-    string that holds a control character (a line break or a tab too) or is longer than 300 characters, more than 10
-    of them, or a fingerprint that is not `ap1-` and 32 hex digits makes the whole answer `failed`, with nothing of it
-    passed on: nothing is cut. The app holds an `approve` line to the same bounds.
+    string that holds a control, format, line separator or paragraph separator character (Unicode categories Cc, Cf,
+    Zl, Zp: a line break, a tab, a bidi override or a zero-width space too) or a lone surrogate, or is longer than 300
+    characters, more than 10 of them, or a fingerprint that is not `ap1-` and 32 hex digits makes the whole answer
+    `failed`, with nothing of it passed on: nothing is cut. The app holds an `approve` line to the same bounds.
   - `{"connect":"failed","error":"<code>"}`: one of `not-running`, `no-plugin`, `off`, `timeout`, `failed`. Never Orca's
     message, which can hold a path.
 - Exit 0 on `done` and `approve`, 1 on `failed`.
