@@ -32,6 +32,10 @@ static atomic_bool s_active, s_recording, s_stop, s_abort, s_quiet, s_capture_do
 static atomic_uint s_level;
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 static char s_agent[ID_MAX], s_upload[24], s_lang[CFG_VLANG_MAX];
+// Where s_upload stands with the daemon, under s_mux, so a cancel and the sender's end-or-abort decision cannot both
+// tell it. s_discarded holds a cancel that came after voice.end, for the sender to send.
+static enum { UPLOAD_CLOSED, UPLOAD_SENDING, UPLOAD_ENDED } s_phase;
+static char s_discarded[24];
 static uint32_t s_produced, s_high_water, s_read_max_us;
 
 static void capture(void *unused)
@@ -92,6 +96,13 @@ static void sender(void *unused)
     (void)unused;
     for (;;) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        // Before any new voice.begin: the daemon must hear the old clip's cancel first.
+        char cancel[sizeof s_discarded];
+        portENTER_CRITICAL(&s_mux);
+        snprintf(cancel, sizeof cancel, "%s", s_discarded);
+        s_discarded[0] = 0;
+        portEXIT_CRITICAL(&s_mux);
+        if (cancel[0]) (void)pro_cable_voice_cancel(cancel);
         if (!atomic_load(&s_active)) continue;
         char agent[ID_MAX], upload[24], lang[CFG_VLANG_MAX];
         portENTER_CRITICAL(&s_mux);
@@ -126,8 +137,12 @@ static void sender(void *unused)
         }
         atomic_store(&s_stop, true);
         while (!atomic_load_explicit(&s_capture_done, memory_order_acquire)) ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(20));
+        portENTER_CRITICAL(&s_mux);
+        const bool aborted = atomic_load(&s_abort);
+        s_phase = aborted ? UPLOAD_CLOSED : UPLOAD_ENDED;
+        portEXIT_CRITICAL(&s_mux);
         // A dead cable (pro_rec_abort(quiet)) is sent nothing.
-        if (atomic_load(&s_abort)) {
+        if (aborted) {
             if (!atomic_load(&s_quiet)) (void)pro_cable_voice_abort(upload, "capture or cable interrupted");
         } else {
             (void)pro_cable_voice_end(upload);
@@ -137,7 +152,7 @@ static void sender(void *unused)
                  "rx_overruns=%lu aborted=%d heard=%d stack_rx=%u stack_tx=%u",
                  (unsigned long)((esp_timer_get_time() - began) / 1000), (unsigned long)s_produced,
                  (unsigned long)delivered, (unsigned long)s_high_water, (unsigned long)s_read_max_us,
-                 (unsigned long)send_max_us, (unsigned long)audio_capture_overruns(), atomic_load(&s_abort),
+                 (unsigned long)send_max_us, (unsigned long)audio_capture_overruns(), aborted,
                  atomic_load(&s_heard), (unsigned)uxTaskGetStackHighWaterMark(s_capture_task),
                  (unsigned)uxTaskGetStackHighWaterMark(NULL));
         // The next utterance cannot reuse the metadata or the ring until capture and finalisation finished.
@@ -182,6 +197,7 @@ bool pro_rec_start(const char *agent_id, const char *lang, const char *upload_id
     }
     snprintf(s_agent, sizeof s_agent, "%s", agent_id ? agent_id : "");
     snprintf(s_upload, sizeof s_upload, "%s", upload_id ? upload_id : "");
+    s_phase = UPLOAD_SENDING;
     snprintf(s_lang, sizeof s_lang, "%s", lang ? lang : "");
     s_produced = s_high_water = s_read_max_us = 0;
     voice_buffer_init(&s_buffer, s_storage, BUFFER_BYTES);
@@ -210,6 +226,24 @@ void pro_rec_abort(bool quiet)
     if (quiet) atomic_store(&s_quiet, true);
     atomic_store(&s_abort, true);
     atomic_store(&s_stop, true);
+}
+
+void pro_rec_cancel(const char *upload_id)
+{
+    bool wake = false;
+    portENTER_CRITICAL(&s_mux);
+    if (upload_id && upload_id[0] && !strcmp(upload_id, s_upload)) {
+        if (s_phase == UPLOAD_SENDING) {
+            atomic_store(&s_abort, true);
+            atomic_store(&s_stop, true);
+        } else if (s_phase == UPLOAD_ENDED) {
+            s_phase = UPLOAD_CLOSED;
+            snprintf(s_discarded, sizeof s_discarded, "%s", s_upload);
+            wake = true;
+        }
+    }
+    portEXIT_CRITICAL(&s_mux);
+    if (wake) xTaskNotifyGive(s_sender_task);
 }
 
 bool pro_rec_active(void) { return atomic_load_explicit(&s_active, memory_order_acquire); }

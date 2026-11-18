@@ -3,7 +3,8 @@
 // pro_voice.c owns those and drives this through the calls below. Split from pro_voice.c so the state machine can be
 // replayed on the host with a fake recorder (test/test_pro_voice_gate.py).
 //
-// Locking: one spinlock guards the metadata (agent, upload id) while a utterance starts; everything else is an atomic.
+// Locking: one spinlock guards the metadata (agent, upload id and where it stands with the daemon); everything else is
+// an atomic.
 // Nothing here calls pro_app or takes any lock another module can hold across a call into this file.
 #pragma once
 #include <stdbool.h>
@@ -19,6 +20,10 @@ bool pro_rec_start(const char *agent_id, const char *lang, const char *upload_id
 void pro_rec_stop(void);
 // Discard it. quiet=true: the cable is dead, send nothing (otherwise voice.abort goes out).
 void pro_rec_abort(bool quiet);
+// Discard the utterance `upload_id` names and tell the daemon once, from the sender task: its own voice.abort before
+// it decides end or abort, one voice.abort "discarded" after voice.end. Nothing for "", another upload, or one already
+// closed: an abort naming no upload would cancel whatever the daemon has open.
+void pro_rec_cancel(const char *upload_id);
 
 bool pro_rec_active(void);      // an utterance is recording or still being finalised
 bool pro_rec_recording(void);   // the mic is (being) captured; false once the clip is only being sent

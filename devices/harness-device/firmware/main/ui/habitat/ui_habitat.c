@@ -245,6 +245,7 @@ static EXT_RAM_BSS_ATTR struct {
     uint32_t voice_generation, voice_question_revision;
     int voice_question_index;
     uint32_t voice_wait_until;
+    char voice_upload[24];   // the upload this voice's start took; "" while it is queued or did not take
     hit_t hits[24];
     int hit_count, pressed;
     bool touch_down, touch_cancelled;
@@ -609,6 +610,7 @@ static void voice_close(void)
     s.voice_open = s.voice_start_pending = s.voice_waiting = false;
     s.voice_carry = false;
     s.voice_review = s.voice_review_preview = false;
+    s.voice_upload[0] = 0;
     s.voice_generation++; // invalidate a start still queued behind another cable action
 }
 static int workspace_index(const char *id)
@@ -2608,9 +2610,10 @@ static void dispatch(action_t a)
         break;
     case A_VOICE_ABORT:
         audio_client_abort();
-        audio_client_copy_upload_id(a.text, sizeof(a.text));
+        // Not through the action queue, which can be full: the audio client's sender tells the host once, also
+        // after capture has finished, and only about this voice's own upload.
+        audio_client_cancel(s.voice_upload);
         voice_close();
-        queue(a); // also cancel host work after capture has already finished
         ht_gesture_guard(&gesture, ms());
         view(s.voice_return == DRAFT && draft.page.active ? DRAFT : s.voice_return == FORM && form.id[0] ? FORM : question_view(s.voice_return) && s.q.valid ? s.voice_return : HOME);
         if (s.view == DRAFT) ht_draft_command(&draft, HT_DRAFT_STATE, draft.page.revision, 0, ms());
@@ -2847,21 +2850,21 @@ static void worker(void *unused)
             display_lock();
             if (s.connected && s.voice_open && s.voice_start_pending &&
                 a.revision == s.voice_generation) {
-                if (a.value == 7) audio_client_start_search(a.id, a.text, (unsigned)a.dy);
-                else if (a.value == 5 || a.value == 6) audio_client_start_draft(a.text, (unsigned)a.dy, a.value == 6);
-                else if (a.value == 4) audio_client_start_question(a.id,a.text,(unsigned)a.dy);
-                else if (a.value == 2) audio_client_start_form(a.text, (unsigned)a.dy);
-                else if (a.value == 3) audio_client_start_carry(a.id,a.text);
-                else if (a.text[0] && a.dy > 0) audio_client_start_selection(a.id, a.text, (unsigned)a.dy);
-                else audio_client_start_cable(a.id[0] ? a.id : NULL,
-                                              a.value == 1 ? VOICE_CMD_GOAL : VOICE_CMD_NONE);
+                bool started;
+                if (a.value == 7) started = audio_client_start_search(a.id, a.text, (unsigned)a.dy);
+                else if (a.value == 5 || a.value == 6) started = audio_client_start_draft(a.text, (unsigned)a.dy, a.value == 6);
+                else if (a.value == 4) started = audio_client_start_question(a.id,a.text,(unsigned)a.dy);
+                else if (a.value == 2) started = audio_client_start_form(a.text, (unsigned)a.dy);
+                else if (a.value == 3) started = audio_client_start_carry(a.id,a.text);
+                else if (a.text[0] && a.dy > 0) started = audio_client_start_selection(a.id, a.text, (unsigned)a.dy);
+                else started = audio_client_start_cable(a.id[0] ? a.id : NULL,
+                                                        a.value == 1 ? VOICE_CMD_GOAL : VOICE_CMD_NONE);
+                // A start that did not take leaves the last clip's id in the audio client: never this voice's.
+                if (started) audio_client_copy_upload_id(s.voice_upload, sizeof s.voice_upload);
                 s.voice_start_pending = false;
                 change();
             }
             display_unlock();
-            break;
-        case A_VOICE_ABORT:
-            cable_client_voice_cancel(a.text);
             break;
         case A_STOP_YES:
             cable_client_stop_turn(a.id);

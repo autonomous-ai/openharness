@@ -106,7 +106,6 @@ bool audio_client_start_draft(const char *id, unsigned revision, bool append) {
 }
 // Each cancel that names an upload reaches the host; the audio client drops "" (test_audio_threads.py).
 void audio_client_cancel(const char *id) { if (id[0]) { cancels++; COPY(cancelled, id); } }
-void cable_client_voice_cancel(const char *id) { assert(id[0]); cancels++; COPY(cancelled, id); }
 bool audio_client_start_selection(const char *id, const char *selected, unsigned revision) {
     assert(selected && selected[0] && revision); return audio_client_start_cable(id, VOICE_CMD_NONE);
 }
