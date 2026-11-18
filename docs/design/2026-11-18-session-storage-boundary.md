@@ -963,3 +963,23 @@ The first attempted corrected caller packet, wider-registry-focused-green1, reta
 not called a passing gate. The complete 333-case results above and the focused final
 Grid assertion pass supersede that failed selection. They do not replace final
 combined core/harnessd/resume/storage coverage, native admission or matched cost gates.
+
+## Final resume gate: transcript fixture ownership
+
+The frozen `0bcfb5c678` resume gate exited 1 with 43 failures and 554 passes. Forty-two
+failures occurred before transcript assertions: the fixture forbade the required storage
+child. Its only new execution allowance is the exact pinned Node/source storage entry,
+arguments and private data root. Its preparation hold now follows the real child's
+completed image instead of the removed parent write. Every custom stopped store and the
+singleton are closed; actual exit, close, IPC disconnect and owned PID absence precede
+fixture-directory removal. All original native transcript and Stop/Resume authority
+assertions remain.
+
+The complete corrected transcript file passes all 42 tests (23.62 seconds, actual exit 0,
+owned group 96209 absent without a cleanup signal). The first correction run preserved six
+cleanup assertion failures because signal-boundary tests still mocked `process.kill`;
+restoring those spies before checking actual child absence fixes that fixture mistake.
+Receipts are `/tmp/core-grid-storage-control-transcript-fixture-green{1,2}-20261118.*`.
+The distinct pending Resume publication failure remains a runtime investigation and is
+not claimed fixed by this fixture checkpoint. The full failed resume receipt remains
+`/tmp/core-grid-storage-final-source-0bcfb5c678/test-resume-cli-correction1.receipt.json`.
