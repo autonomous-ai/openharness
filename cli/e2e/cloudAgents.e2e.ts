@@ -143,13 +143,14 @@ describe('cloud agents on the real daemon', () => {
     const listed = (await client.request<{ agents: Array<Record<string, any>> }>('agents_list', {})).agents.find((row) => row.id === agent.id)
     expect(listed).toMatchObject({ location: 'cloud', cloud: { place: "Devin's cloud", state: 'needs_input', providerStatus: { status: 'running', detail: 'waiting_for_user' } } })
 
-    const finished = client.next((frame: Frame) => frame.type === 'agent_synced' && frame.payload?.agent?.id === agent.id && frame.payload?.agent?.cloud?.state === 'idle', 60_000, 'the harness to finish')
+    const finished = client.next((frame: Frame) => frame.type === 'session_event' && frame.payload?.frame?.type === 'agent_synced'
+      && frame.payload.frame.payload?.agent?.id === agent.id && frame.payload.frame.payload?.agent?.cloud?.state === 'idle', 60_000, 'the harness to finish')
     // Answered as the dial and the windows answer any agent's question: under the question's own id.
     const answered = client.next((frame: Frame) => frame.type === 'question_response_result' && frame.payload?.requestId === question.payload!.requestId, 30_000, 'the answer\'s result')
     client.send('question_response', { requestId: question.payload!.requestId, agentId: agent.id, answers: { answer: 'main' } })
     expect((await answered).payload).toMatchObject({ ok: true })
     expect(devin.sent).toEqual(['main'])
-    const done = (await finished).payload!.agent
+    const done = (await finished).payload!.frame.payload.agent
     expect(done.cloud.links).toContainEqual({ label: 'Pull request #42', url: 'https://github.com/acme/api/pull/42' })
     expect(done.cloud).toMatchObject({ state: 'idle', providerStatus: { status: 'running', detail: 'finished' } })
     await client.waitFor(frame => frame.type === 'session_event' && frame.payload?.frame?.agentId === agent.id
@@ -179,13 +180,15 @@ describe('cloud agents on the real daemon', () => {
     fake.status = 'suspended'
     fake.detail = 'inactivity'
     fake.messages.push({ event_id: 'e-sleep', source: 'devin', message: 'Still working through the tests.', created_at: '2026-10-11T10:04:00Z' })
-    const slept = client.next((frame: Frame) => frame.type === 'agent_synced' && frame.payload?.agent?.id === agent.id && frame.payload?.agent?.cloud?.providerStatus?.detail === 'inactivity', 60_000, 'asleep after inactivity')
+    const slept = client.next((frame: Frame) => frame.type === 'session_event' && frame.payload?.frame?.type === 'agent_synced'
+      && frame.payload.frame.payload?.agent?.id === agent.id && frame.payload.frame.payload?.agent?.cloud?.providerStatus?.detail === 'inactivity', 60_000, 'asleep after inactivity')
     expect(await client.request('cloud_send', { agentId: agent.id, text: 'are you still there?' })).toMatchObject({ ok: true })
-    expect((await slept).payload!.agent.cloud).toMatchObject({ state: 'stopped', activity: 'Devin went to sleep after inactivity.', providerStatus: { status: 'suspended', detail: 'inactivity' } })
+    expect((await slept).payload!.frame.payload.agent.cloud).toMatchObject({ state: 'stopped', activity: 'Devin went to sleep after inactivity.', providerStatus: { status: 'suspended', detail: 'inactivity' } })
     fake.detail = 'user_request'
-    const halted = client.next((frame: Frame) => frame.type === 'agent_synced' && frame.payload?.agent?.id === agent.id && frame.payload?.agent?.cloud?.providerStatus?.detail === 'user_request', 60_000, 'stopped by request')
+    const halted = client.next((frame: Frame) => frame.type === 'session_event' && frame.payload?.frame?.type === 'agent_synced'
+      && frame.payload.frame.payload?.agent?.id === agent.id && frame.payload.frame.payload?.agent?.cloud?.providerStatus?.detail === 'user_request', 60_000, 'stopped by request')
     expect(await client.request('cloud_send', { agentId: agent.id, text: 'stop there' })).toMatchObject({ ok: true })
-    expect((await halted).payload!.agent.cloud).toMatchObject({ state: 'stopped', activity: 'The session was stopped by request.', providerStatus: { status: 'suspended', detail: 'user_request' } })
+    expect((await halted).payload!.frame.payload.agent.cloud).toMatchObject({ state: 'stopped', activity: 'The session was stopped by request.', providerStatus: { status: 'suspended', detail: 'user_request' } })
 
     expect(await client.request('agent_delete', { agentId: agent.id })).toMatchObject({ deleted: true })
     expect(devin.archived).toBe(1)
