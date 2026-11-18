@@ -13,7 +13,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { harnessPaneOwner } from '../lib/harnessSessionLabel.js'
 import { readBridge } from './bridge.js'
 import { checkMove } from './conditions.js'
-import { readJournal } from './journal.js'
+import { openJournal, readJournal } from './journal.js'
 import { LOCK_WAIT_MS, moveLockPath, type LockDeps } from './lock.js'
 import { runMove, type MoveDeps } from './move.js'
 import { defaultTmux, type Tmux } from './panes.js'
@@ -59,6 +59,12 @@ interface Home {
   clock: { now: number }
   /** Every execve, as asked. */
   execs: { file: string; args: string[]; env: NodeJS.ProcessEnv }[]
+  /** The processes the fake lock knows to run, by pid, with the clock tick each started at. */
+  procs: Map<number, number>
+  /** The fake lock of the start that runs as [pid]: its watch wakes at wake(). */
+  lockAs(pid: number): LockDeps
+  /** A change beside the lock, as fs.watch would tell it. */
+  wake(): void
   deps(over?: Partial<StartDeps>): StartDeps
 }
 
@@ -77,9 +83,19 @@ function legacyHome({ unknown = false }: { unknown?: boolean } = {}): Home {
   const panes = new Map([['%1', harnessPaneOwner(join(legacy, 'cli', 'data'))]])
   const execs: Home['execs'] = []
   const clock = { now: NOW }
+  const procs = new Map([[SELF, 3]])
+  const watchers = new Set<() => void>()
   const t: Home = {
     root, home, legacy, data: join(home, '.local', 'share', 'harness'), state: join(home, '.local', 'state', 'harness'),
-    tmuxVersion: 'tmux 3.4', clock, execs,
+    tmuxVersion: 'tmux 3.4', clock, execs, procs,
+    lockAs: (pid) => ({
+      pid, startTime: (other) => procs.get(other) ?? null,
+      watch: (_folder, onChange) => {
+        watchers.add(onChange)
+        return { close: () => watchers.delete(onChange) }
+      },
+    }),
+    wake: () => { for (const onChange of [...watchers]) onChange() },
     tmux: defaultTmux((args) => {
       if (args[0] === '-V') return { status: 0, stdout: `${t.tmuxVersion}\n` }
       if (args[0] === 'list-panes') {
@@ -93,7 +109,7 @@ function legacyHome({ unknown = false }: { unknown?: boolean } = {}): Home {
     deps: (over = {}) => ({
       platform: 'linux', home, io: disk, tmux: t.tmux, run: () => ({ status: 0 }), now: () => clock.now, procNow: () => PROC_NOW,
       alive: () => false, answers: async () => false, ptyHostRuns: () => false,
-      execve: (file, args, env) => { execs.push({ file, args, env }) }, execPath: join(legacy, NODE), execArgv: [], print: null, ...over,
+      execve: (file, args, env) => { execs.push({ file, args, env }) }, execPath: join(legacy, NODE), execArgv: [], print: null, lock: t.lockAs(SELF), ...over,
     }),
   }
   return t
@@ -112,17 +128,17 @@ function logOf(t: Home, env: NodeJS.ProcessEnv = {}): string[] {
   }
 }
 
-/** A lock on the move another live start holds, and the fake process table and watch this start waits with. */
-function heldByAnother(t: Home): { lock: LockDeps; release(): void } {
+/** A lock on the move another live start holds: it lets go, or it is killed, which changes nothing beside the lock. */
+function heldByAnother(t: Home): { release(): void; dies(): void } {
   const path = moveLockPath(t.legacy)
   put(join(path, 'owner'), JSON.stringify({ pid: OTHER, start: 7 }))
-  let wake = (): void => {}
+  t.procs.set(OTHER, 7)
   return {
-    lock: { pid: SELF, startTime: (pid) => pid === OTHER ? 7 : pid === SELF ? 3 : null, watch: (_folder, onChange) => { wake = onChange; return { close: () => {} } } },
     release: () => {
       rmSync(path, { recursive: true })
-      wake()
+      t.wake()
     },
+    dies: () => { t.procs.delete(OTHER) },
   }
 }
 
@@ -290,7 +306,7 @@ describe('the move at a start', () => {
   it('a start that waited for another start\'s move resolves the roots again, and starts again from the new paths', async () => {
     const t = legacyHome()
     const other = heldByAnother(t)
-    const waiting = moveHomeAtStart(argvOf(t, '__harnessd'), {}, t.deps({ lock: other.lock }))
+    const waiting = moveHomeAtStart(argvOf(t, '__harnessd'), {}, t.deps())
     // The other start moves, as its own run does, then lets go of the lock.
     const check = await checkMove({ ...t.deps(), env: {}, hasExecve: true, fs: disk })
     if (!check.move) throw new Error(`this home does not move: ${JSON.stringify(check.hold)}`)
@@ -337,17 +353,69 @@ describe('the move at a start', () => {
     expect(existsSync(otherState)).toBe(false)
   })
 
-  it('a lock still held after 30 s lets the start go on, unmoved', async () => {
+  it('a start waits while the lock\'s owner lives and the data root is not there, says so once, and takes the lock of an owner killed', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     const t = legacyHome()
     const other = heldByAnother(t)
-    const waiting = moveHomeAtStart(argvOf(t, 'start'), {}, t.deps({ lock: other.lock }))
+    let settled = false
+    const waiting = moveHomeAtStart(argvOf(t, 'start'), {}, t.deps()).finally(() => { settled = true })
+    await vi.advanceTimersByTimeAsync(LOCK_WAIT_MS)
+    expect(logOf(t)).toEqual(['home move: under way · waiting'])
+    await vi.advanceTimersByTimeAsync(10 * LOCK_WAIT_MS)
+    // A tree half moved is never started on.
+    expect(settled).toBe(false)
+    expect(logOf(t)).toEqual(['home move: under way · waiting'])
+    expect(t.execs).toEqual([])
+    // Killed: the next look finds its owner gone.
+    other.dies()
     await vi.advanceTimersByTimeAsync(LOCK_WAIT_MS)
     await waiting
-    expect(existsSync(t.data)).toBe(false)
-    expect(readMoveRecord(t.home, {})).toBeNull()
+    expect(logOf(t)).toEqual(['home move: under way · waiting', moved(t)])
+    expect(t.execs).toHaveLength(1)
+  })
+
+  it('a start that finds the data root there goes on while the lock\'s owner finishes', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const t = legacyHome()
+    heldByAnother(t)
+    // The other start committed and still finishes: its journal is there.
+    mkdirSync(join(t.data, 'cli', 'data'), { recursive: true })
+    openJournal({ version: 1, startedAt: NOW, plan: { home: t.home, legacy: t.legacy, data: t.data, state: t.state, entries: [] }, oldTag: 'a', newTag: 'b', done: [] }, disk)
+    const start = moveHomeAtStart(argvOf(t, '__harnessd'), {}, t.deps())
+    expect(await Promise.race([start.then(() => 'went on'), new Promise((done) => setImmediate(done, 'waits'))])).toBe('went on')
+    expect(existsSync(moveLockPath(t.legacy))).toBe(true)
     expect(logOf(t)).toEqual([])
-    expect(t.execs).toEqual([])
+  })
+
+  it.each([
+    ['before the data root\'s commit', (t: Home) => (from: string) => from === join(t.legacy, 'auth')],
+    ['after it', (t: Home) => (from: string) => from === `${t.data}.moving`],
+  ])('a start killed %s leaves its journal and its lock: the next start takes the lock over, recovers, and goes on', async (_, at) => {
+    const t = legacyHome()
+    const killedAt = at(t), image = `${t.root}.killed`
+    roots.push(image)
+    const io: StartDeps['io'] = {
+      ...disk,
+      renameSync: (from, to) => {
+        fs.renameSync(from, to)
+        if (!killedAt(String(from)) || existsSync(image)) return
+        // What the disk holds when the process is killed, its lock still in place.
+        fs.cpSync(t.root, image, { recursive: true, verbatimSymlinks: true })
+        throw new Error('killed')
+      },
+    }
+    await moveHomeAtStart(argvOf(t, 'start'), {}, t.deps({ io }))
+    rmSync(t.root, { recursive: true, force: true })
+    fs.cpSync(image, t.root, { recursive: true, verbatimSymlinks: true })
+    expect([readJournal(t.legacy), existsSync(moveLockPath(t.legacy))]).toEqual([expect.anything(), true])
+    t.execs.length = 0
+
+    t.procs.delete(SELF)
+    t.procs.set(OTHER, 7)
+    await moveHomeAtStart(argvOf(t, '__harnessd'), {}, t.deps({ lock: t.lockAs(OTHER) }))
+    expect([readJournal(t.legacy), existsSync(moveLockPath(t.legacy))]).toEqual([null, false])
+    expect(readFileSync(join(t.legacy, 'auth', 'session.json'), 'utf8')).toBe('{"token":"t-1"}')
+    expect(t.execs).toHaveLength(existsSync(t.data) ? 1 : 0)
   })
 
   it('a ~/.harness beside the data root that is not the bridge is said once, and nothing in it is deleted', async () => {
