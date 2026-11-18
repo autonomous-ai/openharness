@@ -109,7 +109,8 @@ export function createCloudPublication(options: {
             persisted = true
             const result = await within(options.core.publish(rows, prepared.cards))
             if (generation !== epoch) return
-            if (!result.ok) { fail('CLOUD_PUBLICATION_INVALID', true); return }
+            if (!result.ok) { fail(result.error === 'SESSION_OWNER_CONFLICT'
+              ? 'CLOUD_PUBLICATION_RECOVERY_REQUIRED' : 'CLOUD_PUBLICATION_INVALID', true); return }
             accepted = pending
             pending = null
           } else if (item.action.kind === 'ask') {
@@ -202,6 +203,7 @@ export function createCloudPublication(options: {
       try {
         const image = await within(options.core.checkpoint())
         if (generation !== epoch) return
+        if (typeof image !== 'string') { fail('CLOUD_PUBLICATION_RECOVERY_REQUIRED', true); return }
         // Empty authority is a fresh core, including an explicit operator restart after a journal hold.
         const empty = emptyPresentation(), retained = image !== empty.fingerprint
         if (!retained) accepted = empty

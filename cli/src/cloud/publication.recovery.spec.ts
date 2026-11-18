@@ -41,7 +41,8 @@ function fixture() {
   const dataDir = mkdtempSync(join(tmpdir(), 'cloud-publication-'))
   const clients = { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }
   let service: ReturnType<typeof startCloudService>
-  const freshCore = () => createCloudAgents({ ownsFactory: cloudFactory, port: () => service?.port ?? null, clients, questions: createQuestionPresentations(), log: () => {} })
+  const native = new Set<string>()
+  const freshCore = () => createCloudAgents({ ownsFactory: cloudFactory, native: id => native.has(id), port: () => service?.port ?? null, clients, questions: createQuestionPresentations(), log: () => {} })
   let core = freshCore(), disconnected = false, lostAck = false, publicationCalls = 0, holdAcks = false
   const heldAcks: Array<() => void> = []
   let heldQuestion: 'ask' | 'unask' | null = null
@@ -103,6 +104,8 @@ function fixture() {
     reconnect() { disconnected = lostAck = false; return service.republish() },
     restartComponent() { service.stop(); service = makeService() },
     restartDaemon() { service.stop(); core = freshCore(); service = makeService() },
+    nativeClaim(id: string) { native.add(id); core.nativeEntered(id, '') },
+    nativeRetire(id: string) { native.delete(id) },
     replaceCoreImage() { const saved = JSON.parse(readFileSync(join(dataDir, 'cloud/harnesses.json'), 'utf8')); core.doors.publish([{ ...saved.harnesses[0].harness, agentId: 'cloud_other' }]) },
     removeJournal() { const file = join(dataDir, 'cloud/harnesses.json'); const saved = JSON.parse(readFileSync(file, 'utf8')); delete saved.publication; writeFileSync(file, JSON.stringify(saved)) },
     damageCheckpoint() { const file = join(dataDir, 'cloud/harnesses.json'); const saved = JSON.parse(readFileSync(file, 'utf8')); saved.publication.pending.owners[0].told = 'Damaged checkpoint'; writeFileSync(file, JSON.stringify(saved)) },
@@ -149,6 +152,26 @@ it.each(['missing', 'corrupt', 'unmatched', 'damaged checkpoint'] as const)('hol
     f.restartComponent(); f.reconnect()
     await vi.waitFor(async () => expect(await f.service.requests.cloud_agents({}, { owner: true, local: true }))
       .toMatchObject({ error: 'CLOUD_PUBLICATION_RECOVERY_REQUIRED' }))
+    f.restartDaemon(); f.reconnect()
+    await vi.waitFor(() => expect(f.core.frames()[0]?.id).toBe(id))
+    expect(f.completions()).toEqual([])
+    expect(JSON.parse(readFileSync(join(f.dataDir, 'cloud/harnesses.json'), 'utf8')).harnesses[0].remote.id).toBe('fixture')
+  } finally { f.close() }
+})
+
+it.each(['reconnect', 'publication'] as const)('keeps native-owner recovery visible after %s until the whole daemon restarts', async trigger => {
+  const f = fixture()
+  try {
+    const id = await f.create()
+    f.nativeClaim(id); f.nativeRetire(id)
+    expect(await f.core.doors.checkpoint()).toEqual({ ok: false, error: 'SESSION_OWNER_CONFLICT' })
+    if (trigger === 'reconnect') f.reconnect()
+    else await f.service.port.rename(id, 'Saved provider name', f.row())
+    const held = async () => expect(await f.service.requests.cloud_agents({}, { owner: true, local: true }))
+      .toMatchObject({ error: 'CLOUD_PUBLICATION_RECOVERY_REQUIRED', detail: expect.stringContaining('harness start --restart') })
+    await vi.waitFor(held)
+    f.restartComponent(); f.reconnect(); await vi.waitFor(held)
+    expect(await f.core.doors.checkpoint()).toEqual({ ok: false, error: 'SESSION_OWNER_CONFLICT' })
     f.restartDaemon(); f.reconnect()
     await vi.waitFor(() => expect(f.core.frames()[0]?.id).toBe(id))
     expect(f.completions()).toEqual([])

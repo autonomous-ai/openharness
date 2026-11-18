@@ -219,6 +219,15 @@ describe('the core API a light service runs on in its own process', () => {
       'cloud_checkpoint', 'cloud_checkpoint', 'cloud_publish', 'cloud_ask', 'cloud_unask', 'cloud_ask', 'cloud_unask', 'cloud_ask', 'cloud_unask'])
   })
 
+  it('preserves the fixed owner conflict for publication and recovery without treating it as a fingerprint', async () => {
+    const conflict = { ok: false, error: 'SESSION_OWNER_CONFLICT' }
+    const ask = vi.fn(async () => conflict)
+    const doors = processCoreApi('/data', 'cloud', { ask }).cloud!
+    expect(await doors.publish([])).toEqual(conflict)
+    expect(await doors.checkpoint()).toEqual(conflict)
+    expect(ask.mock.calls).toEqual([['cloud_publish', { harnesses: [], cards: [] }], ['cloud_checkpoint', {}]])
+  })
+
   it('acts on the core for an experiment: agents made, turns stopped and delivered, windows told, each asked', async () => {
     const answers: Record<string, Record<string, unknown> | Error> = {
       create: { ok: true, agentId: 'made' }, stop_turn: {}, windows: {}, deliver: {}, cancel_delivery: { cancelled: true },

@@ -20,7 +20,7 @@ const harness = (over: Partial<CloudHarness> = {}): CloudHarness => {
 function setup(port: CloudPort | null = null) {
   const clients = { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }
   const questions = createQuestionPresentations(), openQuestions = questions.openQuestions
-  const cloud = createCloudAgents({ ownsFactory: cloudFactory, port: () => port, clients, questions, log: () => {} })
+  const cloud = createCloudAgents({ ownsFactory: cloudFactory, native: () => false, port: () => port, clients, questions, log: () => {} })
   return { cloud, clients, openQuestions }
 }
 
@@ -238,7 +238,7 @@ describe('agents a service owns', () => {
   it('does not select a provider factory absent from its declared ownership', () => {
     const service = port()
     const ownership = { ownsFactory: vi.fn(() => false) }
-    const cloud = createCloudAgents({ ...ownership, port: () => service,
+    const cloud = createCloudAgents({ ...ownership, native: () => false, port: () => service,
       clients: { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }, questions: createQuestionPresentations() })
     expect(cloud.create({ engine: 'fo', prompt: 'fixture' })).toBeNull()
     expect(service.create).not.toHaveBeenCalled()
@@ -333,7 +333,7 @@ describe('agents a service owns', () => {
 
   it('logs a question by default', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    const cloud = createCloudAgents({ ownsFactory: cloudFactory, port: () => null, clients: { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }, questions: createQuestionPresentations() })
+    const cloud = createCloudAgents({ ownsFactory: cloudFactory, native: () => false, port: () => null, clients: { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }, questions: createQuestionPresentations() })
     cloud.doors.publish([harness()])
     cloud.doors.ask('cloud_1', 'cloud_q_1', prepareCloudQuestion('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] }))
     expect(log).toHaveBeenCalledWith('[cloud] question accepted')

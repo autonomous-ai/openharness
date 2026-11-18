@@ -12,6 +12,16 @@ const agent = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine
 const experiments = new Set(['orchestrator'])
 
 describe('the cloud agents\' doors', () => {
+  it('preserves native-owner conflict as a refusal through the real query dispatcher', async () => {
+    const conflict = { ok: false, error: 'SESSION_OWNER_CONFLICT' } as const
+    const core = fakeCore({ cloud: { checkpoint: () => conflict, publish: () => conflict,
+      ask: () => ({ ok: true }), unask: () => ({ ok: true }) } })
+    const authority = { current: () => true, ownsRequest: () => false }
+    for (const query of ['cloud_checkpoint', 'cloud_publish']) {
+      expect(await answerExperimentQuery(core, new Set(['cloud']), 'cloud', query, {}, undefined, authority)).toEqual(conflict)
+    }
+  })
+
   it('are the cloud service\'s alone, and carry its harnesses and questions to the core', async () => {
     const cloud = { checkpoint: vi.fn(() => 'a'.repeat(64)), publish: vi.fn(() => ({ ok: true as const })), ask: vi.fn(() => ({ ok: true as const })), unask: vi.fn(() => ({ ok: true as const })) }
     const core = fakeCore({ cloud })
@@ -171,6 +181,19 @@ describe('what an experiment in its own process may ask of the core', () => {
     // Another service's are still said.
     refuse('router', 'GET', '/api/device-keys', never)
     expect(lines[17]).toBe('[services] router asked for a backend route which it has not declared, and was refused: GET /api/device-keys (core/api.ts)')
+  })
+
+  it('uses the default diagnostic for an actual refused route without logging its query content', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const core = fakeCore()
+    try {
+      expect(await answerExperimentQuery(core, new Set(['sharing']), 'sharing', 'backend', {
+        method: 'GET', path: '/api/device-keys?question-content-canary',
+      })).toEqual({ error: 'ROUTE_NOT_DECLARED' })
+      expect(core.account.backend).not.toHaveBeenCalled()
+      expect(warn).toHaveBeenCalledExactlyOnceWith('[services] sharing asked for a backend route which it has not declared, and was refused: GET /api/device-keys (core/api.ts)')
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('question-content-canary')
+    } finally { warn.mockRestore() }
   })
 
   it('has every experiment declare its backend routes, if only that it calls none', () => {

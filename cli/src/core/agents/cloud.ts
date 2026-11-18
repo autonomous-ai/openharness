@@ -20,6 +20,8 @@ type Frame = { type: string; agentId?: string; dbSessionId?: string; payload: Re
 export interface CloudAgentsDeps {
   /** This wrapper's immutable factory ownership, from the selected build's declaration. */
   ownsFactory(value: unknown): boolean
+  /** The current native agent or conversation alias always takes precedence. */
+  native(id: string): boolean
   /** The cloud service's port, or null while it is off. */
   port: () => CloudPort | null
   /** Existing bounded first-start readiness; capture authority only after the first connection exists. */
@@ -82,12 +84,12 @@ const answerReply = (value: unknown): boolean => fields(value, ['ok']) && value.
 const stopReply = (value: unknown): boolean => refusal(value) || record(value) && value.deleted === true
   && (value.detail === undefined || typeof value.detail === 'string') && Object.keys(value).every(key => key === 'deleted' || key === 'detail')
 
-export function createCloudAgents({ ownsFactory, port, whenStarting, clients, questions, log = (line) => console.log(line) }: CloudAgentsDeps) {
+export function createCloudAgents({ ownsFactory, native, port, whenStarting, clients, questions, log = (line) => console.log(line) }: CloudAgentsDeps) {
   const agentReply = (value: unknown): value is CloudAgentFrame => record(value) && typeof value.id === 'string'
     && value.id.startsWith('cloud_') && value.id.length <= 80 && value.sessionId === value.id && ownsFactory(value.engine)
     && value.location === 'cloud' && typeof value.name === 'string' && value.name.length <= 120 && typeof value.createdAt === 'string'
   const incarnation = Symbol('owner')
-  type Owner = CloudHarness & { [incarnation]: object }
+  type Owner = CloudHarness & { [incarnation]: { revoked?: true } }
   let harnesses = new Map<string, Owner>()
   const questionOwner = {}
   const close = (entry: QuestionPresentation): void => {
@@ -100,6 +102,26 @@ export function createCloudAgents({ ownsFactory, port, whenStarting, clients, qu
     if (prior?.owner === questionOwner && questions.remove(questionOwner, prior.key, requestId)) close(prior)
   }
   const currentRequest = (agentId: string): string | undefined => questions.current(agentId)?.requestId
+  const current = (owner: Owner): boolean => harnesses.get(owner.agentId)?.[incarnation] === owner[incarnation]
+    && !owner[incarnation].revoked && !native(owner.agentId)
+  const owned = (agentId: string): Owner | undefined => {
+    const owner = harnesses.get(agentId)
+    return owner && current(owner) ? owner : undefined
+  }
+  const conflict = () => ({ ok: false, error: 'SESSION_OWNER_CONFLICT' }) as const
+  const nativeEntered = (agentId: string, sessionId: string): void => {
+    const first = harnesses.get(agentId), alias = sessionId !== agentId ? harnesses.get(sessionId) : undefined
+    // Both claims revoke before a client close can throw. Neither token is a public or durable field.
+    if (first) first[incarnation].revoked = true
+    if (alias) alias[incarnation].revoked = true
+    for (const owner of [first, alias]) if (owner) {
+      const requestId = currentRequest(owner.agentId)
+      if (requestId) {
+        try { retire(requestId) }
+        catch { try { log('[sessions] question close unavailable') } catch { /* authority is already revoked */ } }
+      }
+    }
+  }
   const invalidQuestion = () => { log('[cloud] CLOUD_QUESTION_INVALID'); return { ok: false, error: 'CLOUD_QUESTION_INVALID' } as const }
 
   const sync = (harness: CloudHarness): void => {
@@ -116,7 +138,10 @@ export function createCloudAgents({ ownsFactory, port, whenStarting, clients, qu
 
   const invalid = () => { log('[cloud] CLOUD_PUBLICATION_INVALID'); return { ok: false, error: 'CLOUD_PUBLICATION_INVALID' } as const }
   const doors: CloudCore = {
-    checkpoint: () => cloudFingerprint([...harnesses.values()]),
+    checkpoint: () => {
+      for (const owner of harnesses.values()) if (!current(owner)) return conflict()
+      return cloudFingerprint([...harnesses.values()])
+    },
     publish(list, cards = []) {
       if (!Array.isArray(list)) return invalid()
       const next = new Map<string, Owner>()
@@ -125,7 +150,8 @@ export function createCloudAgents({ ownsFactory, port, whenStarting, clients, qu
         if (!harness || next.has(harness.agentId)) return invalid()
         const prior = harnesses.get(harness.agentId)
         // Authority survives ordinary snapshots, but not removal/recreation with identical provider facts.
-        const token = prior?.agent === harness.agent && prior.createdAt === harness.createdAt ? prior[incarnation] : {}
+        const token: Owner[typeof incarnation] = prior?.agent === harness.agent && prior.createdAt === harness.createdAt ? prior[incarnation] : {}
+        if (native(harness.agentId) || token.revoked) return conflict()
         Object.defineProperty(harness, incarnation, { value: token })
         next.set(harness.agentId, harness as Owner)
       }
@@ -145,15 +171,15 @@ export function createCloudAgents({ ownsFactory, port, whenStarting, clients, qu
         if (frame) clients.sendCommander({ type: frame.type, agentId: frame.agentId,
           dbSessionId: frame.dbSessionId, ...(frame.name !== undefined ? { name: frame.name } : {}), payload: frame.payload })
       }
-      for (const agentId of before.keys()) if (!next.has(agentId)) {
+      for (const [agentId, prior] of before) if (!next.has(agentId)) {
         const requestId = currentRequest(agentId)
         if (requestId) retire(requestId)
-        gone(agentId)
+        if (!prior[incarnation].revoked && !native(agentId)) gone(agentId)
       }
       return { ok: true }
     },
     ask(agentId, requestId, question) {
-      if (!harnesses.has(agentId) || typeof requestId !== 'string' || !requestId.startsWith('cloud_q_') || requestId.length > 80
+      if (!owned(agentId) || typeof requestId !== 'string' || !requestId.startsWith('cloud_q_') || requestId.length > 80
         || !admittedQuestion(question, agentId, requestId)) return invalidQuestion()
       const prior = questions.request(requestId)
       if (prior && (prior.owner !== questionOwner || prior.key !== agentId || question.dial && !prior.dial
@@ -205,30 +231,31 @@ export function createCloudAgents({ ownsFactory, port, whenStarting, clients, qu
       tmuxPane: '', cwd: '', projectDir: '', transcriptPath: null, runtimes: [], primaryRuntimeKey: '',
     })
   const dialIds = function* (): IterableIterator<string> {
-    for (const harness of harnesses.values()) if (harness.state !== 'stopped') yield harness.agentId
+    for (const harness of harnesses.values()) if (current(harness) && harness.state !== 'stopped') yield harness.agentId
   }
 
   return {
     doors,
+    nativeEntered,
     /** Every cloud harness's frame, for `agents_list`. */
-    frames: (): CloudAgentFrame[] => [...harnesses.values()].map(cloudAgentFrame),
-    owns: (agentId: string): boolean => harnesses.has(agentId),
+    frames: (): CloudAgentFrame[] => [...harnesses.values()].filter(current).map(cloudAgentFrame),
+    owns: (agentId: string): boolean => owned(agentId) !== undefined,
     /** Its last turn as the dial restores a tile (`agent_recent`), what it said; null when it is not one. */
     recent: (agentId: string): Array<{ kind: 'summary'; recap: string; text: string; fullText: string }> | null => {
-      const harness = harnesses.get(agentId)
+      const harness = owned(agentId)
       if (!harness) return null
       const recap = recapOf(harness)
       return recap ? [{ kind: 'summary', ...recap, fullText: harness.said! }] : []
     },
     /** All it said last, for a dial that draws a long recap; undefined when it is not one or said nothing. */
-    said: (agentId: string): string | undefined => harnesses.get(agentId)?.said ?? undefined,
+    said: (agentId: string): string | undefined => owned(agentId)?.said ?? undefined,
     /** The working cards, for a dial attaching mid-turn. */
-    liveCards: (): Frame[] => [...harnesses.values()].filter(busy).map((harness) => ({
+    liveCards: (): Frame[] => [...harnesses.values()].filter(harness => current(harness) && busy(harness)).map((harness) => ({
       type: 'commander_event', agentId: harness.agentId, dbSessionId: harness.agentId, payload: { kind: 'processing', text: harness.activity ?? 'Working…' },
     })),
     /** What a working cloud harness is doing, for the dial's working card; null when it says nothing. */
     activity: (agentId: string): string | null => {
-      const harness = harnesses.get(agentId)
+      const harness = owned(agentId)
       return harness && (harness.state === 'working' || harness.state === 'starting') ? harness.activity : null
     },
     /**
@@ -239,7 +266,7 @@ export function createCloudAgents({ ownsFactory, port, whenStarting, clients, qu
     dialRows: (): Array<Record<string, unknown>> => Array.from(dialIds(), id => dialRow(harnesses.get(id)!)),
     dialIds,
     dialRow: (agentId: string): Record<string, unknown> | undefined => {
-      const harness = harnesses.get(agentId)
+      const harness = owned(agentId)
       return harness && harness.state !== 'stopped' ? dialRow(harness) : undefined
     },
     /** `agent_create` for a cloud agent, answered as the socket answers one (`{ agent }`, or the refusal); null for any other engine. */
@@ -250,20 +277,22 @@ export function createCloudAgents({ ownsFactory, port, whenStarting, clients, qu
     },
     /** Words for a cloud harness; null when it is not one. */
     deliver(agentId: string, text: string): Promise<CloudResult> | null {
-      if (!harnesses.has(agentId)) return null
-      return call(cloud => cloud.deliver(agentId, text), CLOUD_DOWN, result => record(result) && (result.ok === true || result.ok === false && typeof result.error === 'string'))
+      const owner = owned(agentId)
+      if (!owner) return null
+      return call(cloud => cloud.deliver(agentId, text), CLOUD_DOWN,
+        result => record(result) && (result.ok === true || result.ok === false && typeof result.error === 'string'), () => current(owner))
     },
     /** `question_response` to a cloud harness's question, answered as a terminal agent's is; null when it is not one. */
     answer(payload: { requestId?: unknown; answers?: unknown }): Promise<QuestionAnswerResult> | null {
       const requestId = typeof payload.requestId === 'string' ? payload.requestId : ''
       const question = questions.request(requestId)
       const agentId = question?.owner === questionOwner ? question.key : undefined
-      const owner = agentId ? harnesses.get(agentId) : undefined
+      const owner = agentId ? owned(agentId) : undefined
       if (!agentId || !owner || questions.current(agentId) !== question) return null
       const answers = Object.fromEntries(Object.entries(payload.answers && typeof payload.answers === 'object' ? payload.answers : {})
         .filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
       return call(cloud => cloud.answer(agentId, requestId, answers), CLOUD_ANSWER_DOWN, answerReply,
-        phase => harnesses.get(agentId)?.[incarnation] === owner[incarnation]
+        phase => current(owner)
           // A successful service answer closes its own question before returning.
           && (phase === 'result' || questions.current(agentId) === question))
     },
@@ -274,24 +303,20 @@ export function createCloudAgents({ ownsFactory, port, whenStarting, clients, qu
      */
     update(payload: Record<string, unknown>): Promise<Record<string, unknown>> | null {
       const agentId = typeof payload.agentId === 'string' ? payload.agentId : ''
-      const harness = harnesses.get(agentId)
+      const harness = owned(agentId)
       if (!harness) return null
       if (!Object.prototype.hasOwnProperty.call(payload, 'name')) {
         return Promise.resolve(payload.opened === true ? { agent: cloudAgentFrame(harness) } : { error: 'MISSING_UPDATE' })
       }
       const name = typeof payload.name === 'string' ? payload.name.trim().slice(0, 120) : ''
       if (!name) return Promise.resolve({ error: 'MISSING_NAME' })
-      const current = () => {
-        const owner = harnesses.get(agentId)
-        return owner?.agent === harness.agent && owner.createdAt === harness.createdAt
-      }
       return call(cloud => cloud.rename(agentId, name, JSON.parse(JSON.stringify(harness))), CLOUD_REPLY_DOWN,
         result => refusal(result) || fields(result, ['agent', 'renamed']) && agentReply(result.agent)
           && result.agent.id === agentId && result.agent.engine === harness.agent && result.agent.createdAt === harness.createdAt
           && result.agent.name === name && fields(result.renamed, ['type', 'payload']) && result.renamed.type === 'agent_renamed'
           && fields(result.renamed.payload, ['agentId', 'name', 'engine']) && result.renamed.payload.agentId === agentId
           && result.renamed.payload.name === name && result.renamed.payload.engine === harness.agent,
-        current, result => {
+        () => current(harness), result => {
           if ('renamed' in result) { clients.send(result.renamed); clients.sendCommander(result.renamed) }
         }).then(result => 'agent' in result ? { agent: result.agent } : result)
     },
@@ -301,11 +326,13 @@ export function createCloudAgents({ ownsFactory, port, whenStarting, clients, qu
      * harness's frame says when it has: the window's other requests never wait behind a vendor.
      */
     stop(agentId: string, quickMs = 3_000): Promise<Record<string, unknown>> | null {
-      if (!harnesses.has(agentId)) return null
-      const stopped = call(cloud => cloud.stopHarness(agentId), CLOUD_REPLY_DOWN, stopReply)
+      const owner = owned(agentId)
+      if (!owner) return null
+      const stopped = call(cloud => cloud.stopHarness(agentId), CLOUD_REPLY_DOWN, stopReply, () => current(owner))
       let timer: ReturnType<typeof setTimeout> | undefined
       const stopping = new Promise<Record<string, unknown>>((resolve) => {
-        timer = setTimeout(() => resolve({ deleted: true, detail: 'Stopping. Its pane says when it has.' }), quickMs)
+        timer = setTimeout(() => resolve(current(owner)
+          ? { deleted: true, detail: 'Stopping. Its pane says when it has.' } : CLOUD_REPLY_DOWN), quickMs)
         timer.unref?.()
       })
       return Promise.race([stopped, stopping]).finally(() => clearTimeout(timer))

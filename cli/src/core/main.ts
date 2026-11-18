@@ -749,8 +749,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Compatibility with explicit inline mode and older masters, until 2026-12-15.
   const inline = knownServices.some((name) => !outOfProcess.has(name)) || !othersStorage || !terminalScreenHosted || !runtimeHosted || !screenHosted || !modelControlHosted || !questionControlHosted || !submissionHosted || !nativeControlHosted || !backgroundJobHosted || !providerMoveHosted || !resumeRepairHosted
     ? await import('../services/inline.js') : null
+  let cloudAgents: CloudAgents | null = null
+  registry.onEnter = (engine, row) => {
+    cloudAgents?.nativeEntered(row.agentId, row.sessionId)
+    if (!othersRuntime) inline?.preloadEngine(engine)
+  }
   if (!othersRuntime) {
-    registry.onEnter = engine => inline?.preloadEngine(engine)
     for (const session of registry.list()) inline?.preloadEngine(session.engine)
   }
   const inlineHistory = inline?.createInlineHistory()
@@ -895,7 +899,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const turnRunning = (sessionId: string): boolean => turnStartedAt.has(sessionId)
   // The cloud agents' doors (core/agents/cloud.ts), handed to the core API now and built once the questions and
   // the socket are, below; the cloud service starts after both.
-  let cloudAgents: CloudAgents | null = null
   const cloudDoors: CloudCore = {
     publish: (harnesses, cards) => cloudAgents?.doors.publish(harnesses, cards) ?? { ok: false, error: 'CLOUD_PUBLICATION_INVALID' },
     checkpoint: () => { if (!cloudAgents) throw new Error('CLOUD_PUBLICATION_UNAVAILABLE'); return cloudAgents.doors.checkpoint() },
@@ -1543,7 +1546,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   cloudAgents = createCloudAgents({ ownsFactory: value => {
     const owner = factoryOwner(value)
     return owner?.kind === 'service' && owner.service === 'cloud'
-  }, port: () => serviceHost?.isOff('cloud') ? null : ports.cloud,
+  }, native: id => registry.resolve(id) !== undefined, port: () => serviceHost?.isOff('cloud') ? null : ports.cloud,
     whenStarting: () => outOfProcess.has('cloud') ? serviceLinks.whenStarting('cloud') : null,
     clients: backend, questions: asking.presentations })
   const cloud = cloudAgents

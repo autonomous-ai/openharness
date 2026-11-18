@@ -14,7 +14,7 @@ function fixture(whenStarting?: () => Promise<boolean> | null) {
   const clients = { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }, questions = createQuestionPresentations(), openQuestions = questions.openQuestions
   const answer = vi.fn(async () => ({ ok: true as const }))
   const port = { answer }
-  const cloud = createCloudAgents({ ownsFactory: cloudFactory, clients, questions, whenStarting, port: () => port as never, log: () => {} })
+  const cloud = createCloudAgents({ ownsFactory: cloudFactory, native: () => false, clients, questions, whenStarting, port: () => port as never, log: () => {} })
   cloud.doors.publish([owner])
   return { cloud, clients, openQuestions, questions, answer }
 }

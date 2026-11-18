@@ -17,7 +17,7 @@ const card = (agentId: string): TurnCardFrame => ({ type: 'commander_event', age
 const hash = (rows: CloudHarness[]) => createHash('sha256').update(JSON.stringify(rows.map(cloudHarnessIn))).digest('hex')
 const setup = () => {
   const events: string[] = []
-  const cloud = createCloudAgents({ ownsFactory: cloudFactory, port: () => null, questions: createQuestionPresentations(), log: () => {}, clients: {
+  const cloud = createCloudAgents({ ownsFactory: cloudFactory, native: () => false, port: () => null, questions: createQuestionPresentations(), log: () => {}, clients: {
     send: frame => events.push(frame.type === 'agent_synced' ? `row:${(frame.payload.agent as { id: string }).id}` : `delete:${frame.payload.agentId}`),
     sendCommander: frame => { if (frame.type === 'commander_event') events.push(`card:${frame.agentId}`) },
     sendLocal: () => {},

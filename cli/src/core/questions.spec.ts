@@ -129,7 +129,7 @@ describe('questions', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const { deps, asking } = setup(), watcher = given(asking.questionWatcher)
     const answer = vi.fn(async () => ({ ok: true })), port = { answer }
-    const cloud = createCloudAgents({ ownsFactory: cloudFactory, port: () => port as never,
+    const cloud = createCloudAgents({ ownsFactory: cloudFactory, native: () => false, port: () => port as never,
       clients: { send: vi.fn(), sendCommander: deps.clients.sendCommander, sendLocal: deps.clients.sendLocal },
       questions: asking.presentations, log: () => {} })
     cloud.doors.publish([{ agentId: 'cloud_1', agent: 'fo', name: 'Service', state: 'idle', activity: null,
@@ -171,7 +171,7 @@ describe('questions', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { deps, asking } = setup(), watcher = given(asking.questionWatcher)
-    const cloud = createCloudAgents({ ownsFactory: cloudFactory, port: () => null,
+    const cloud = createCloudAgents({ ownsFactory: cloudFactory, native: () => false, port: () => null,
       clients: { send: vi.fn(), sendCommander: deps.clients.sendCommander, sendLocal: deps.clients.sendLocal },
       questions: asking.presentations, log: () => {} })
     cloud.doors.publish([{ agentId: 'cloud_1', agent: 'fo', name: 'Service', state: 'idle', activity: null,
@@ -199,7 +199,7 @@ describe('questions', () => {
     const { asking, deps } = setup(), watcher = given(asking.questionWatcher)
     watcher.onQuestion('cloud_1', 'native_request', [{ q: 'Native', options: ['Yes'] }])
     const native = asking.openQuestions.get('cloud_1')
-    const cloud = createCloudAgents({ ownsFactory: cloudFactory, port: () => null,
+    const cloud = createCloudAgents({ ownsFactory: cloudFactory, native: () => false, port: () => null,
       clients: { send: vi.fn(), sendCommander: deps.clients.sendCommander, sendLocal: deps.clients.sendLocal },
       questions: asking.presentations, log: () => {} })
     cloud.doors.publish([{ agentId: 'cloud_1', agent: 'fo', name: 'Service', state: 'idle', activity: null,

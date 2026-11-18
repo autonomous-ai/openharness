@@ -18,7 +18,7 @@ function setup() {
   const rename = vi.fn(() => new Promise(done => { resolve = done }))
   let current = { rename } as unknown as CloudPort | null
   const clients = { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }
-  const cloud = createCloudAgents({ ownsFactory: cloudFactory, port: () => current, clients, questions: createQuestionPresentations(), log: () => {} })
+  const cloud = createCloudAgents({ ownsFactory: cloudFactory, native: () => false, port: () => current, clients, questions: createQuestionPresentations(), log: () => {} })
   cloud.doors.publish([owner]); clients.send.mockClear(); clients.sendCommander.mockClear()
   return { cloud, clients, rename, resolve: (value: unknown) => resolve(value), replace: () => { current = { rename } as unknown as CloudPort }, disable: () => { current = null } }
 }
@@ -52,7 +52,7 @@ function immediate(value: unknown, starting?: () => Promise<boolean> | null, own
   const call = vi.fn(async () => value)
   let port = { create: call, deliver: call, answer: call, rename: call, stopHarness: call } as unknown as CloudPort
   const clients = { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }, log = vi.fn()
-  const cloud = createCloudAgents({ ownsFactory, port: () => port, whenStarting: starting, clients, questions: createQuestionPresentations(), log })
+  const cloud = createCloudAgents({ ownsFactory, native: () => false, port: () => port, whenStarting: starting, clients, questions: createQuestionPresentations(), log })
   cloud.doors.publish([owner]); cloud.doors.ask(owner.agentId, 'cloud_q_1', prepareCloudQuestion(owner.agentId, 'cloud_q_1', { text: 'Which?', choices: [] }))
   clients.send.mockClear(); clients.sendCommander.mockClear()
   return { cloud, call, clients, log, replace: () => { port = { ...port } } }

@@ -162,7 +162,10 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
       if (service !== 'cloud' || !core.cloud) return { error: 'NOT_CLOUD' }
       // Earlier asynchronous handlers can outlive this service connection; check at the effect itself.
       if (authority?.current?.() !== true) return { error: 'SERVICE_UNAVAILABLE' }
-      if (query === 'cloud_checkpoint') return { fingerprint: await core.cloud.checkpoint() }
+      if (query === 'cloud_checkpoint') {
+        const checkpoint = await core.cloud.checkpoint()
+        return typeof checkpoint === 'string' ? { fingerprint: checkpoint } : checkpoint
+      }
       if (query === 'cloud_publish') return await core.cloud.publish(payload.harnesses as Parameters<NonNullable<Core['cloud']>['publish']>[0], payload.cards as Parameters<NonNullable<Core['cloud']>['publish']>[1])
       else if (query === 'cloud_ask') return await core.cloud.ask(text(payload.agentId), text(payload.questionId), payload.question as Parameters<NonNullable<Core['cloud']>['ask']>[2])
       else return await core.cloud.unask(text(payload.agentId), text(payload.questionId), payload.close as Parameters<NonNullable<Core['cloud']>['unask']>[2])

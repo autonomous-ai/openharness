@@ -1302,24 +1302,23 @@ class Registry {
   }
 
   /**
-   * Told the engine of every session as it enters: loaded, registered, opened or adopted. The core starts
-   * loading what that engine's sessions read in its own process then (engines/inProcess.ts `preloadEngine`),
-   * so that nothing the session does later waits for an import. Unset outside the core.
+   * The complete native publication revokes competing service ownership before any cleanup can yield.
+   * Its engine also starts optional inline readers (engines/inProcess.ts `preloadEngine`). Unset outside core.
    */
-  onEnter: ((engine: AgentEngine) => void) | null = null
+  onEnter: ((engine: AgentEngine, owner: Pick<RegisteredSession, 'agentId' | 'sessionId'>) => void) | null = null
 
   private index(entry: RegisteredSession, notify = true): void {
     this.agents.set(entry.agentId, entry)
     if (entry.sessionId) this.sessionIndex.set(entry.sessionId, entry.agentId)
     for (const runtime of entry.runtimes) this.runtimeIndex.set(terminalRouteKey(runtime), entry.agentId)
     if (entry.processIdentity) this.processIndex.set(processIdentityKey(entry.engine, entry.processIdentity), entry.agentId)
-    if (notify) this.entered(entry.engine)
+    if (notify) this.entered(entry)
   }
 
-  private entered(engine: AgentEngine): void {
+  private entered(owner: RegisteredSession): void {
     if (this.initializing || this.exiting) return
-    try { this.onEnter?.(engine) }
-    catch (error) { console.warn('[registry] engine entry notification failed:', error) }
+    try { this.onEnter?.(owner.engine, owner) }
+    catch { console.warn('[registry] entry notification failed') }
   }
 
   private drop(entry: RegisteredSession | undefined): void {
@@ -1361,7 +1360,7 @@ class Registry {
     } catch (error) { return Promise.reject(error) }
     const loading = this.loadState().then(() => {
       this.initializing = false
-      for (const row of this.agents.values()) this.entered(row.engine)
+      for (const row of this.agents.values()) this.entered(row)
     }, error => {
       this.agents.clear(); this.sessionIndex.clear(); this.runtimeIndex.clear(); this.processIndex.clear()
       this.writeBlocked = true
@@ -3457,6 +3456,12 @@ class Registry {
       this.intended.delete(id)
     }
     this.persistedContents = null
+    // Recovery can return a refusal after installing this complete ownership group. Its claims still revoke
+    // competing service authority before any cleanup or caller continuation can observe retirement.
+    for (const id of affected) {
+      const row = this.agents.get(id)
+      if (row) this.entered(row)
+    }
   }
 
   private async persist(deadline: RegistryWriteDeadline, strict: boolean | 'observation' | 'flush' = false, exiting = false, externalAgentId?: string,
@@ -3480,7 +3485,6 @@ class Registry {
       candidate: bindingCommit.candidate ? structuredClone(bindingCommit.candidate) : null,
       ...(bindingCommit.displaced ? { displaced: bindingCommit.displaced.map(row => ({ ...row,
         candidate: row.candidate ? structuredClone(row.candidate) : null })) } : {}) }
-    const entered: AgentEngine[] = []
     let committedOwner: string | undefined
     try {
       deadline.check()
@@ -3870,11 +3874,16 @@ class Registry {
             if (evidenceRevision !== undefined) entry.evidenceRevision = evidenceRevision
           }
           this.index(entry, false)
-          entered.push(entry.engine)
         }
         committedOwner = bindingCommit ? ownershipIdentity(this.agents.get(bindingCommit.agentId)) : undefined
         this.persistedBaseline = new Map(serialized.map(row => [rowId(row), snapshotFingerprint(row as unknown as Record<string, unknown>)]))
         deadline.markAdmitted()
+        // The complete native view is authoritative now, even if releasing its source fails next.
+        // Reuse the existing notification before that await; no service read may revive an old owner.
+        for (const row of rebased) {
+          const current = this.agents.get(row.agentId)
+          if (current) this.entered(current)
+        }
         if (rebased.length !== serialized.length || rebased.some(row => this.persistedBaseline.get(row.agentId) !== (preparedImages.has(row)
           ? snapshotFingerprint(preparedImages.get(row)!) : rowFingerprint(persistedRow(row))))) void this.save()
         } finally {
@@ -3887,8 +3896,6 @@ class Registry {
       if (strict) throw persistenceFailure(err)
       console.error('[registry] save failed')
     }
-    // Optional engine startup observes the complete durable publication, outside its no-yield section.
-    for (const engine of entered) this.entered(engine)
     return committedOwner
   }
 

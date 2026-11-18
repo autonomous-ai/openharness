@@ -223,10 +223,12 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
           const result = await ask('cloud_publish', { harnesses, cards })
           if (result.ok === true) return { ok: true }
           if (result.ok === false && result.error === 'CLOUD_PUBLICATION_INVALID') return { ok: false, error: 'CLOUD_PUBLICATION_INVALID' }
+          if (result.ok === false && result.error === 'SESSION_OWNER_CONFLICT') return { ok: false, error: 'SESSION_OWNER_CONFLICT' }
           throw new Error('CLOUD_PUBLICATION_UNAVAILABLE')
         },
         checkpoint: async () => {
           const result = await ask('cloud_checkpoint', {})
+          if (result.ok === false && result.error === 'SESSION_OWNER_CONFLICT') return { ok: false, error: 'SESSION_OWNER_CONFLICT' }
           if (typeof result.fingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(result.fingerprint)) throw new Error('CLOUD_PUBLICATION_UNAVAILABLE')
           return result.fingerprint
         },
