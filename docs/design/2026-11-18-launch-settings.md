@@ -397,3 +397,19 @@ measurements, not a claim of complete coverage. Initial types found an inferred 
 fixture (actual 2); after its explicit boolean annotation, final types pass actual 0, 6.413 s
 (`/tmp/core-launch-settings-fences-cold-types2.log`). All actual-exit receipts show empty owned process groups.
 Warm transport admission has not changed in this commit; no new cost measurement has run.
+
+Warm RED: four intended failures and three safety passes, actual 1, 1.172 s
+(`/tmp/core-launch-settings-fences-warm-red2.log`). The initial run also had three test expectation failures because
+the renderer runs during prepare, before commit; that receipt remains, and the expectation was corrected before the
+runtime change. The one-line callback change passes those same seven cases, actual 0, 1.171 s. Tests use actual
+serialized service envelopes, service routers and setup handlers with only the socket in memory. Native/source/
+ancestor changes between prepare and commit may complete a read-only candidate but the full post-await proof omits
+it before effects. Owner/account/revision changes still send allowed=false. The unchanged helper final-use proof
+continues to check source, native and output identity after receipt waits.
+
+The combined native-launch/settings/setup selection passes 200/200 across 13 actual files, actual 0, 30.216 s
+(`/tmp/core-launch-settings-fences-final-coverage.log`). A nonexistent engineSetup.control selector matched nothing;
+engineSetup.lifecycle is explicitly selected for the follow-up coverage pass. Both changed files reach 100% lines
+and functions; nativeLaunch.ts has 97% statements/94% branches, nativeLaunchSettings.ts 93.75%/85.29%. Exact uncovered
+branches were extracted for meaningful safety cases before final acceptance. Types pass actual 0, 6.373 s
+(`/tmp/core-launch-settings-fences-warm-types.log`); all owned groups are empty. No timed run is claimed for these changes.

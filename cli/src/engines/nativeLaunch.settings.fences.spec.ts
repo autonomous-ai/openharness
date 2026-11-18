@@ -1,6 +1,8 @@
 import { existsSync, fstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { EventEmitter } from 'node:events'
+import WebSocket from 'ws'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { inspectNativeLaunch, type NativeLaunch } from './nativeLaunch.js'
 import { inspectHookFile } from './kit/nativeHookFiles.js'
@@ -8,6 +10,11 @@ import { launchSettingsArgs } from './kit/launchValues.js'
 import { prepareNativeLaunchSettings } from '../services/nativeLaunchSettings.js'
 import type { NativeSetup } from './kit/nativeSetup.js'
 import type { LaunchSettingsInput } from './kit/launchSettingsWire.js'
+import { statusLineScript } from './kit/statusLine.js'
+import { createNativeSetupLink } from './kit/nativeSetupLink.js'
+import { startEngineSetup } from '../services/engineSetup.js'
+import { createServiceLinks, type ServiceFrame, type ServiceLink } from '../core/serviceLinks.js'
+import { runServiceProcess } from '../services/process.js'
 
 const fixture = vi.hoisted(() => ({ home: '', data: '', executable: '', epoch: 'epoch-a',
   nativeCurrent: (): boolean => true, onSync: undefined as ((fd: number) => void) | undefined,
@@ -61,8 +68,8 @@ beforeEach(() => {
   fixture.nativeCurrent = nativeReads
 })
 afterEach(() => { fixture.onSync = undefined; fixture.reads = undefined; rmSync(root, { recursive: true, force: true }) })
-const prepared = async (): Promise<NativeLaunch> => {
-  const result = await inspectNativeLaunch('claude', {}, { setup })
+const prepared = async (selected = setup): Promise<NativeLaunch> => {
+  const result = await inspectNativeLaunch('claude', {}, { setup: selected })
   if (!result.ok) throw Error('fixture native inspection held')
   expect(await result.launch.prepareHooks(0, () => true)).toBe(true)
   const proof = inspectHookFile(dependency)
@@ -145,3 +152,88 @@ it.each(['native', 'source', 'output', 'sign-in'] as const)('rechecks %s after a
   expect(launchSettingsArgs('claude', base, settings)).toEqual(base)
   expect(launch.current()).toBe(change !== 'native')
 })
+
+/** Only the socket is in memory; production routers, transport envelopes, setup preparation and commit are real. */
+function routedSetup(afterReply: (type: string) => void | Promise<void>, beforeCall: (type: string) => void = () => {}) {
+  const render = vi.fn<NonNullable<NativeSetup['prepareFiles']>>(async (input, _request, current) =>
+    prepareNativeLaunchSettings(input as LaunchSettingsInput, current))
+  const worker: NativeSetup = { ...setup, prepareFiles: render, downloading: async () => false,
+    installations: { ensure: vi.fn(), status: vi.fn() } }
+  const service = startEngineSetup(fixture.data, worker), routed: ServiceFrame[] = []
+  const links = createServiceLinks({ token: 'fixture-token', owned: { engineSetup: ['setup_files_prepare', 'setup_files_commit'] },
+    answer: () => ({}), log: () => {} })
+  let accepted: ServiceLink | null = null
+  class Socket extends EventEmitter {
+    readyState: number = WebSocket.CONNECTING
+    receive(frame: ServiceFrame): void { this.emit('message', Buffer.from(JSON.stringify(frame)), false) }
+    send(text: string): void {
+      const frame = JSON.parse(text) as ServiceFrame
+      if (frame.type === 'machine_select') {
+        accepted = links.accept('engineSetup', 'fixture-token', { sendFrame: message => {
+          routed.push(message); this.receive(message); return true
+        } }, () => this.close(), () => this.receive({ type: 'connected' }))
+        expect(accepted).not.toBeNull()
+      } else accepted!.receive(frame)
+    }
+    close(): void { this.readyState = WebSocket.CLOSED; this.emit('close', 1000); accepted?.closed() }
+    terminate(): void { this.close() }
+  }
+  const socket = new Socket()
+  const transport = runServiceProcess({ name: 'engineSetup', socketPath: '/fixture/socket', machineId: 'machine',
+    token: 'fixture-token', requests: service.requests, onDisconnected: service.disconnect, env: {}, log: () => {},
+    connect: () => socket as unknown as WebSocket })
+  socket.readyState = WebSocket.OPEN; socket.emit('open')
+  const link = createNativeSetupLink(async (type, payload, wait) => {
+    beforeCall(type)
+    const answer = await links.call('engineSetup', type, payload, wait)
+    await afterReply(type)
+    return answer
+  })
+  return { selected: { ...setup, prepareFiles: link.prepareFiles }, routed, render,
+    stop: async () => { try { await transport.stop() } finally { service.stop() } } }
+}
+
+it('uses owner admission without native file walks between read-only prepare and commit', async () => {
+  mkdirSync(join(fixture.data, 'statusline')); writeFileSync(script, statusLineScript())
+  let commitReads = -1
+  const routed = routedSetup(type => { if (type === 'setup_files_prepare') nativeReads.mockClear() },
+    type => { if (type === 'setup_files_commit') commitReads = nativeReads.mock.calls.length })
+  try {
+    const launch = await prepared(routed.selected), settings = await launch.prepareSettings!(fixture.home, () => true)
+    expect(settings?.current()).toBe(true)
+    expect(routed.routed.map(frame => frame.type)).toEqual(['setup_files_prepare', 'setup_files_commit'])
+    expect(routed.routed.map(frame => frame.payload?.requestId)).toEqual([expect.any(String), expect.any(String)])
+    expect(routed.render).toHaveBeenCalledOnce()
+    expect(commitReads).toBe(0)
+  } finally { await routed.stop() }
+})
+
+it.each(['source', 'native', 'source ancestor', 'owner', 'sign-in', 'revision'] as const)(
+  'discards a read-only candidate when %s changes between routed prepare and commit', async change => {
+    mkdirSync(join(fixture.data, 'statusline')); writeFileSync(script, statusLineScript())
+    let owner = true, launch: NativeLaunch
+    const routed = routedSetup(async type => {
+      if (type !== 'setup_files_prepare') return
+      if (change === 'source') writeFileSync(source, '{}')
+      else if (change === 'native') writeFileSync(fixture.executable, 'replacement executable')
+      else if (change === 'source ancestor') {
+        renameSync(join(fixture.home, '.claude'), join(fixture.home, 'displaced'))
+        mkdirSync(join(fixture.home, '.claude')); writeFileSync(source, sourceBytes)
+      } else if (change === 'owner') owner = false
+      else if (change === 'sign-in') fixture.epoch = 'epoch-b'
+      else expect(await launch.prepareHooks(0, () => true, { CLAUDE_CONFIG_DIR: join(fixture.home, 'new-profile') })).toBe(true)
+    })
+    try {
+      launch = await prepared(routed.selected)
+      let flushes = 0; fixture.onSync = () => { flushes++ }
+      expect(await launch.prepareSettings!(fixture.home, () => owner)).toBeNull()
+      const allowed = ['source', 'native', 'source ancestor'].includes(change)
+      expect(routed.routed.map(frame => frame.type)).toEqual(['setup_files_prepare', 'setup_files_commit'])
+      expect(routed.routed[1].payload).toMatchObject({ allowed })
+      // Rendering is read-only and already happened at prepare; commit only releases or discards its candidate.
+      expect(routed.render).toHaveBeenCalledOnce()
+      expect(flushes).toBe(0)
+      expect(readFileSync(script, 'utf8')).toBe(statusLineScript())
+    } finally { await routed.stop() }
+  },
+)

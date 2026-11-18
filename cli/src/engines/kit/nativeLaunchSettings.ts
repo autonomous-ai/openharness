@@ -73,7 +73,8 @@ export async function prepareLaunchSettings(engine: string, environment: Readonl
         ...(output.content === null ? {} : { alias: lstatSync(destination).isSymbolicLink() }) }] : [],
     }
     if (!boundedLaunchSettingsInput(input) || !current()) return null
-    const candidate = launchSettingsCandidate(await setup.prepareFiles(input, randomUUID(), current), input)
+    // Setup only renders captured bytes. Fresh file proof fences its answer before any owner-side effect.
+    const candidate = launchSettingsCandidate(await setup.prepareFiles(input, randomUUID(), options.current), input)
     if (!candidate || !current()) return null
     let outputCurrent: (() => boolean) | undefined
     if (candidate.files.length) {
