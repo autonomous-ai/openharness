@@ -68,6 +68,15 @@ describe('the store service', () => {
       expect(warn).toHaveBeenCalledExactlyOnceWith('[dsh] setting harnesses up again stopped · SyntaxError')
     } finally { warn.mockRestore() }
   })
+
+  it('says a stop that is no error at all as unknown', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      setup({ setupAgain: vi.fn(() => Promise.reject(null)) })
+      await new Promise((done) => setImmediate(done))
+      expect(warn).toHaveBeenCalledExactlyOnceWith('[dsh] setting harnesses up again stopped · unknown')
+    } finally { warn.mockRestore() }
+  })
   it('puts Hachi in place when its switch turns on while it runs, and generates nothing of it while off', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'store-hachi-'))
     let changed = (): void => {}
