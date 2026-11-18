@@ -340,4 +340,15 @@ describe('the move rewrites what names the old tree, inside it', () => {
     restoreFile({ did: 'file', path: made, before: null })
     expect(existsSync(made)).toBe(false)
   })
+
+  it('restoreFile puts back bytes that are not text: rewriteOutside journals a launcher or the unit as it found it', () => {
+    const t = staged()
+    const unit = join(t.home, 'harnessd.service')
+    // A Latin-1 é and a lone 0xff: no UTF-8 text spells them.
+    const before = Buffer.concat([Buffer.from('Description=Harness caf'), Buffer.from([0xe9, 0xff]), Buffer.from('\n')])
+    writeFileSync(unit, 'rewritten\n', { mode: 0o644 })
+    restoreFile({ did: 'file', path: unit, before: before.toString('base64') })
+    expect(readFileSync(unit)).toEqual(before)
+    expect(statSync(unit).mode & 0o7777).toBe(0o644)
+  })
 })
