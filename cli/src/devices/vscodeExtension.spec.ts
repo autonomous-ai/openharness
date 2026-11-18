@@ -4,7 +4,7 @@
  * test's scratch. The real dependencies are run only on that scratch and on fake `code` scripts in it: never an
  * installed VS Code, /Applications or ~/.vscode.
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { inflateRawSync } from 'node:zlib'
@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { crc32 } from '../lib/zipWriter.js'
 import {
   buildVersion, packVsix, recordVersion, vscodeDisable, vscodeEnable, vscodeExtensionDeps, vscodeStatus,
-  VSCODE_EXTENSION_ID, VSCODE_RECORD_MAX_BYTES, type VscodeExtensionDeps, type VscodeExtensionFiles,
+  VSCODE_EXTENSION_ID, VSCODE_RECORD_MAX_BYTES, type VscodeEditor, type VscodeExtensionDeps, type VscodeExtensionFiles,
 } from './vscodeExtension.js'
 import { writeExecutable } from '../testing/executableFixture.js'
 
@@ -62,6 +62,7 @@ beforeEach(() => { scratch = mkdtempSync(join(tmpdir(), 'vscode-extension-')) })
 afterEach(() => { rmSync(scratch, { recursive: true, force: true }) })
 
 interface ComputerOptions {
+  editor?: VscodeEditor
   platform?: NodeJS.Platform
   pathVar?: string
   disk?: Record<string, string>
@@ -69,6 +70,8 @@ interface ComputerOptions {
   files?: VscodeExtensionFiles | null
   write?: VscodeExtensionDeps['write']
   bin?: string
+  /** Links on its disk, from a path to where it ends: what `real` follows. */
+  links?: Record<string, string>
 }
 
 /** A computer as the module sees it. Its temporary folders are real, in the test's scratch, and written and removed by
@@ -78,12 +81,14 @@ function computer(options: ComputerOptions = {}) {
   const runs: Array<[string, readonly string[], number]> = []
   const folders: string[] = []
   const answers = [...options.answers ?? []]
-  const real = vscodeExtensionDeps()
+  const real = vscodeExtensionDeps('vscode')
   const machine = {
     disk, runs, folders,
     /** What the fake `code` does when it runs, before it answers. */
     whenRun: undefined as ((file: string, args: readonly string[]) => void) | undefined,
     deps: {
+      editor: options.editor ?? 'vscode',
+      real: (path) => options.links?.[path] ?? path,
       platform: options.platform ?? 'darwin',
       home: HOME,
       pathVar: options.pathVar ?? '/usr/bin:/bin',
@@ -115,22 +120,22 @@ function computer(options: ComputerOptions = {}) {
 describe('vscodeStatus', () => {
   it('absent on Windows whatever is on disk, on a Mac with no app, on Linux with no code on PATH', () => {
     const everything = { ...MAC, '/usr/bin/code': '', [RECORD]: record('1.2.3') }
-    expect(vscodeStatus(computer({ platform: 'win32', disk: everything }).deps)).toEqual({ vscode: 'absent' })
-    expect(vscodeStatus(computer({ platform: 'darwin', disk: { [RECORD]: record('1.2.3') } }).deps)).toEqual({ vscode: 'absent' })
-    expect(vscodeStatus(computer({ platform: 'linux', pathVar: '/usr/local/bin:/opt/bin', disk: everything }).deps)).toEqual({ vscode: 'absent' })
-    expect(vscodeStatus(computer({ platform: 'freebsd', disk: everything }).deps)).toEqual({ vscode: 'absent' })
+    expect(vscodeStatus(computer({ platform: 'win32', disk: everything }).deps)).toEqual({ state: 'absent' })
+    expect(vscodeStatus(computer({ platform: 'darwin', disk: { [RECORD]: record('1.2.3') } }).deps)).toEqual({ state: 'absent' })
+    expect(vscodeStatus(computer({ platform: 'linux', pathVar: '/usr/local/bin:/opt/bin', disk: everything }).deps)).toEqual({ state: 'absent' })
+    expect(vscodeStatus(computer({ platform: 'freebsd', disk: everything }).deps)).toEqual({ state: 'absent' })
   })
 
   it('the app in the home\'s Applications counts; /Applications is looked at first', async () => {
     const homeApp = `${HOME}/Applications/Visual Studio Code.app`
     const homeCode = `${homeApp}/Contents/Resources/app/bin/code`
     const mine = computer({ disk: { [homeApp]: '', [homeCode]: '', [RECORD]: record('1.2.3') } })
-    expect(vscodeStatus(mine.deps)).toEqual({ vscode: 'on', version: '1.2.3' })
+    expect(vscodeStatus(mine.deps)).toEqual({ state: 'on', version: '1.2.3' })
     await vscodeDisable(mine.deps)
     expect(mine.runs.map(([file]) => file)).toEqual([homeCode])
     // The first app found is VS Code: one in /Applications without its CLI is not passed over for the home's.
     const both = computer({ disk: { [APP]: '', [homeApp]: '', [homeCode]: '' } })
-    expect(await vscodeEnable(both.deps)).toEqual({ vscode: 'off', error: 'no-code' })
+    expect(await vscodeEnable(both.deps)).toEqual({ state: 'off', error: 'no-code' })
     expect(both.runs).toEqual([])
   })
 
@@ -139,7 +144,7 @@ describe('vscodeStatus', () => {
       { identifier: { id: 'ms-python.python' }, version: '2026.1.0' },
       { identifier: { id: 'Autonomous-AI.Harness-Device' }, version: '0.6.60-dev.g0123456.dirty' },
     ])
-    const on = { vscode: 'on', version: '0.6.60-dev.g0123456.dirty' }
+    const on = { state: 'on', version: '0.6.60-dev.g0123456.dirty' }
     expect(recordVersion(text)).toBe('0.6.60-dev.g0123456.dirty')
     expect(vscodeStatus(computer({ disk: { ...MAC, [RECORD]: text } }).deps)).toEqual(on)
     // Linux: a `code` on PATH, in any of its folders.
@@ -149,7 +154,7 @@ describe('vscodeStatus', () => {
   it('a record of exactly the bound is read', () => {
     const text = record('1.2.3')
     const atBound = text + ' '.repeat(VSCODE_RECORD_MAX_BYTES - Buffer.byteLength(text))
-    expect(vscodeStatus(computer({ disk: { ...MAC, [RECORD]: atBound } }).deps)).toEqual({ vscode: 'on', version: '1.2.3' })
+    expect(vscodeStatus(computer({ disk: { ...MAC, [RECORD]: atBound } }).deps)).toEqual({ state: 'on', version: '1.2.3' })
   })
 
   const valid = record('1.2.3')
@@ -165,7 +170,7 @@ describe('vscodeStatus', () => {
   ])('%s reads as off, and nothing throws', (_, text) => {
     const disk: Record<string, string> = { ...MAC }
     if (text !== undefined) disk[RECORD] = text
-    expect(vscodeStatus(computer({ disk }).deps)).toEqual({ vscode: 'off' })
+    expect(vscodeStatus(computer({ disk }).deps)).toEqual({ state: 'off' })
   })
 
   it('status runs nothing', () => {
@@ -186,7 +191,7 @@ describe('vscodeEnable', () => {
       seen = { mode: statSync(args[1]).mode & 0o777, names: [...readZip(readFileSync(args[1])).keys()] }
       c.disk.set(RECORD, record('1.2.3'))
     }
-    expect(await vscodeEnable(c.deps)).toEqual({ vscode: 'on', version: '1.2.3' })
+    expect(await vscodeEnable(c.deps)).toEqual({ state: 'on', version: '1.2.3' })
     expect(c.folders).toHaveLength(1)
     expect(c.runs).toEqual([[CODE, ['--install-extension', join(c.folders[0], 'harness-device.vsix'), '--force'], 60_000]])
     expect(seen).toEqual({ mode: 0o600, names: ENTRIES })
@@ -195,7 +200,7 @@ describe('vscodeEnable', () => {
 
   it('on at this build\'s version already, enable runs nothing and answers on', async () => {
     const c = computer({ disk: { ...MAC, [RECORD]: record('1.2.3') } })
-    expect(await vscodeEnable(c.deps)).toEqual({ vscode: 'on', version: '1.2.3' })
+    expect(await vscodeEnable(c.deps)).toEqual({ state: 'on', version: '1.2.3' })
     expect(c.runs).toEqual([])
     expect(c.folders).toEqual([])
   })
@@ -203,7 +208,7 @@ describe('vscodeEnable', () => {
   it('on Linux it is the code found on PATH that installs', async () => {
     const c = computer({ platform: 'linux', pathVar: '/usr/local/bin:/usr/bin', disk: { '/usr/bin/code': '' } })
     c.whenRun = () => c.disk.set(RECORD, record('1.2.3'))
-    expect(await vscodeEnable(c.deps)).toEqual({ vscode: 'on', version: '1.2.3' })
+    expect(await vscodeEnable(c.deps)).toEqual({ state: 'on', version: '1.2.3' })
     expect(c.runs.map(([file]) => file)).toEqual(['/usr/bin/code'])
   })
 
@@ -211,9 +216,9 @@ describe('vscodeEnable', () => {
     const disk = { 'rel/bin/code': '', code: '', '/usr/bin/code': '' }
     const c = computer({ platform: 'linux', pathVar: 'rel/bin:.:/usr/bin', disk })
     c.whenRun = () => c.disk.set(RECORD, record('1.2.3'))
-    expect(await vscodeEnable(c.deps)).toEqual({ vscode: 'on', version: '1.2.3' })
+    expect(await vscodeEnable(c.deps)).toEqual({ state: 'on', version: '1.2.3' })
     expect(c.runs.map(([file]) => file)).toEqual(['/usr/bin/code'])
-    expect(vscodeStatus(computer({ platform: 'linux', pathVar: 'rel/bin:.', disk }).deps)).toEqual({ vscode: 'absent' })
+    expect(vscodeStatus(computer({ platform: 'linux', pathVar: 'rel/bin:.', disk }).deps)).toEqual({ state: 'absent' })
   })
 
   // Each starts on at an older version, so its answer shows a failure's `vscode` is off whatever was there before.
@@ -229,7 +234,7 @@ describe('vscodeEnable', () => {
     ['still off afterwards', 'failed', { disk: MAC }, 1],
   ])('enable with %s answers off and %s', async (_, error, options, runs) => {
     const c = computer(options)
-    expect(await vscodeEnable(c.deps)).toEqual({ vscode: 'off', error })
+    expect(await vscodeEnable(c.deps)).toEqual({ state: 'off', error })
     expect(c.runs).toHaveLength(runs)
     for (const folder of c.folders) expect(existsSync(folder)).toBe(false)
   })
@@ -239,7 +244,7 @@ describe('vscodeEnable', () => {
       const c = computer({ disk: MAC, answers: [answer] })
       let there = false
       c.whenRun = (_, args) => { there = existsSync(args[1]) }
-      expect((await vscodeEnable(c.deps)).vscode).toBe('off')
+      expect((await vscodeEnable(c.deps)).state).toBe('off')
       expect(there).toBe(true)
       expect(c.folders.map(existsSync)).toEqual([false])
     }
@@ -250,13 +255,13 @@ describe('vscodeDisable', () => {
   it('disable uninstalls by id; off or absent runs nothing', async () => {
     const on = computer({ disk: { ...MAC, [RECORD]: record('1.2.3') } })
     on.whenRun = () => on.disk.set(RECORD, '[]')
-    expect(await vscodeDisable(on.deps)).toEqual({ vscode: 'off' })
+    expect(await vscodeDisable(on.deps)).toEqual({ state: 'off' })
     expect(on.runs).toEqual([[CODE, ['--uninstall-extension', 'autonomous-ai.harness-device'], 60_000]])
 
     const off = computer({ disk: MAC })
-    expect(await vscodeDisable(off.deps)).toEqual({ vscode: 'off' })
+    expect(await vscodeDisable(off.deps)).toEqual({ state: 'off' })
     const absent = computer({ disk: { [RECORD]: record('1.2.3') } })
-    expect(await vscodeDisable(absent.deps)).toEqual({ vscode: 'absent' })
+    expect(await vscodeDisable(absent.deps)).toEqual({ state: 'absent' })
     expect([...off.runs, ...absent.runs]).toEqual([])
   })
 
@@ -266,7 +271,7 @@ describe('vscodeDisable', () => {
     ['no CLI in the app', 'no-code', { disk: { [APP]: '', [RECORD]: record('1.2.3') } }, 0],
   ])('a disable that leaves it on, with %s, says %s', async (_, error, options, runs) => {
     const c = computer(options)
-    expect(await vscodeDisable(c.deps)).toEqual({ vscode: 'on', version: '1.2.3', error })
+    expect(await vscodeDisable(c.deps)).toEqual({ state: 'on', version: '1.2.3', error })
     expect(c.runs).toHaveLength(runs)
   })
 })
@@ -280,9 +285,9 @@ describe('the end-to-end tests\' VS Code (HARNESS_VSCODE_BIN)', () => {
   it('an absolute one is the only VS Code looked for: one in /Applications, ~/Applications or on PATH is not found', async () => {
     for (const platform of ['darwin', 'linux'] as const) {
       const c = computer({ platform, disk: EVERYWHERE, bin: BIN })
-      expect(vscodeStatus(c.deps), platform).toEqual({ vscode: 'absent' })
-      expect(await vscodeEnable(c.deps), platform).toEqual({ vscode: 'off', error: 'no-code' })
-      expect(await vscodeDisable(c.deps), platform).toEqual({ vscode: 'absent' })
+      expect(vscodeStatus(c.deps), platform).toEqual({ state: 'absent' })
+      expect(await vscodeEnable(c.deps), platform).toEqual({ state: 'off', error: 'no-code' })
+      expect(await vscodeDisable(c.deps), platform).toEqual({ state: 'absent' })
       expect(c.runs, platform).toEqual([])
       expect(c.folders, platform).toEqual([])
     }
@@ -291,17 +296,74 @@ describe('the end-to-end tests\' VS Code (HARNESS_VSCODE_BIN)', () => {
   it('a test that puts its own there has it run, on a Mac too', async () => {
     const c = computer({ disk: { [BIN]: '' }, bin: BIN })
     c.whenRun = () => c.disk.set(RECORD, record('1.2.3'))
-    expect(await vscodeEnable(c.deps)).toEqual({ vscode: 'on', version: '1.2.3' })
+    expect(await vscodeEnable(c.deps)).toEqual({ state: 'on', version: '1.2.3' })
     expect(c.runs.map(([file]) => file)).toEqual([BIN])
   })
 
   it('empty or relative, VS Code is looked for where it is installed', () => {
-    for (const bin of ['', 'vscode/code']) expect(vscodeStatus(computer({ disk: MAC, bin }).deps), bin).toEqual({ vscode: 'off' })
+    for (const bin of ['', 'vscode/code']) expect(vscodeStatus(computer({ disk: MAC, bin }).deps), bin).toEqual({ state: 'off' })
   })
 
   it('the real dependencies carry it as given', () => {
-    expect(vscodeExtensionDeps(BIN).bin).toBe(BIN)
-    expect(vscodeExtensionDeps().bin).toBeUndefined()
+    expect(vscodeExtensionDeps('vscode', BIN).bin).toBe(BIN)
+    expect(vscodeExtensionDeps('vscode').bin).toBeUndefined()
+  })
+})
+
+describe('Cursor', () => {
+  const APP = '/Applications/Cursor.app'
+  const CLI = `${APP}/Contents/Resources/app/bin/cursor`
+  const RECORD = `${HOME}/.cursor/extensions/extensions.json`
+  const SHIM = `${HOME}/.local/bin/cursor`
+  const cursor = (options: ComputerOptions = {}) => computer({ editor: 'cursor', ...options })
+
+  it('absent with no Cursor.app, off with no record, on with the version in ~/.cursor\'s record', () => {
+    expect(vscodeStatus(cursor({ disk: { ...MAC, [`${HOME}/.vscode/extensions/extensions.json`]: record('1.2.3') } }).deps)).toEqual({ state: 'absent' })
+    expect(vscodeStatus(cursor({ disk: { [APP]: '', [CLI]: '', [`${HOME}/.vscode/extensions/extensions.json`]: record('1.2.3') } }).deps)).toEqual({ state: 'off' })
+    expect(vscodeStatus(cursor({ disk: { [APP]: '', [CLI]: '', [RECORD]: record('1.2.3') } }).deps)).toEqual({ state: 'on', version: '1.2.3' })
+  })
+
+  it('enable and disable run the cursor inside the app', async () => {
+    const c = cursor({ disk: { [APP]: '', [CLI]: '' } })
+    c.whenRun = () => c.disk.set(RECORD, record('1.2.3'))
+    expect(await vscodeEnable(c.deps)).toEqual({ state: 'on', version: '1.2.3' })
+    expect(c.runs).toEqual([[CLI, ['--install-extension', join(c.folders[0], 'harness-device.vsix'), '--force'], 60_000]])
+    c.whenRun = () => c.disk.delete(RECORD)
+    expect(await vscodeDisable(c.deps)).toEqual({ state: 'off' })
+    expect(c.runs[1]).toEqual([CLI, ['--uninstall-extension', VSCODE_EXTENSION_ID], 60_000])
+  })
+
+  it('on Linux it is the cursor on PATH, and cursor-agent\'s shim is passed over, by its real path', async () => {
+    const pathVar = `${HOME}/.local/bin:/usr/local/bin:/opt/cursor/bin`
+    const disk = { [SHIM]: '', '/usr/local/bin/cursor': '', '/opt/cursor/bin/cursor': '' }
+    const c = cursor({ platform: 'linux', pathVar, disk, links: { '/usr/local/bin/cursor': SHIM } })
+    c.whenRun = () => c.disk.set(RECORD, record('1.2.3'))
+    expect(await vscodeEnable(c.deps)).toEqual({ state: 'on', version: '1.2.3' })
+    expect(c.runs.map(([file]) => file)).toEqual(['/opt/cursor/bin/cursor'])
+    expect(vscodeStatus(cursor({ platform: 'linux', pathVar, disk: { [SHIM]: '' } }).deps)).toEqual({ state: 'absent' })
+  })
+
+  it('VS Code\'s code under ~/.local/bin is not a shim', () => {
+    expect(vscodeStatus(computer({ platform: 'linux', pathVar: `${HOME}/.local/bin`, disk: { [`${HOME}/.local/bin/code`]: '' } }).deps)).toEqual({ state: 'off' })
+  })
+
+  it('HARNESS_CURSOR_BIN, absolute, is the only Cursor looked for', async () => {
+    const c = cursor({ disk: { [APP]: '', [CLI]: '', [RECORD]: record('0.0.1') }, bin: '/e2e/root/cursor/cursor' })
+    expect(vscodeStatus(c.deps)).toEqual({ state: 'absent' })
+    expect(await vscodeEnable(c.deps)).toEqual({ state: 'off', error: 'no-code' })
+    expect(c.runs).toEqual([])
+  })
+
+  it('the real deps say their editor, and real follows a link', () => {
+    const real = vscodeExtensionDeps('cursor', '/x')
+    expect(real.editor).toBe('cursor')
+    expect(real.bin).toBe('/x')
+    const target = join(scratch, 'target')
+    writeFileSync(target, '')
+    const link = join(scratch, 'link')
+    symlinkSync(target, link)
+    expect(real.real(link)).toBe(realpathSync(target))
+    expect(real.real('/nowhere/x')).toBe('/nowhere/x')
   })
 })
 
@@ -348,7 +410,7 @@ describe('packVsix', () => {
 
 describe('the real dependencies, on the test\'s own files', () => {
   it('are this process\'s platform, home and PATH, with no built extension in a run from the sources', () => {
-    const real = vscodeExtensionDeps()
+    const real = vscodeExtensionDeps('vscode')
     expect(real).toMatchObject({ platform: process.platform, home: homedir(), pathVar: process.env.PATH ?? '' })
     expect(real.files()).toBeNull()
     expect(buildVersion(real)).toBeNull()
@@ -360,15 +422,15 @@ describe('the real dependencies, on the test\'s own files', () => {
     const said = join(scratch, 'args')
     writeExecutable(join(bin, 'code'), `#!/bin/sh\nprintf '%s\\n' "$@" > '${said}'\nexit 3\n`)
     const vsix = join(scratch, 'a b;$(touch x).vsix')
-    expect(await vscodeExtensionDeps().run(join(bin, 'code'), ['--install-extension', vsix, '--force'], 30_000)).toEqual({ code: 3, timedOut: false })
+    expect(await vscodeExtensionDeps('vscode').run(join(bin, 'code'), ['--install-extension', vsix, '--force'], 30_000)).toEqual({ code: 3, timedOut: false })
     expect(readFileSync(said, 'utf8')).toBe(`--install-extension\n${vsix}\n--force\n`)
-    expect(await vscodeExtensionDeps().run(join(scratch, 'none'), [], 30_000)).toEqual({ code: null, timedOut: false })
+    expect(await vscodeExtensionDeps('vscode').run(join(scratch, 'none'), [], 30_000)).toEqual({ code: null, timedOut: false })
   })
 
   it('a run past its time is killed and says so', async () => {
     const code = join(scratch, 'code')
     writeFileSync(code, '#!/bin/sh\nexec sleep 60\n', { mode: 0o755 })
-    expect(await vscodeExtensionDeps().run(code, [], 300)).toEqual({ code: null, timedOut: true })
+    expect(await vscodeExtensionDeps('vscode').run(code, [], 300)).toEqual({ code: null, timedOut: true })
   })
 
   it('a run past its time ends what it started too, as VS Code\'s own script starts Electron and waits', async () => {
@@ -376,13 +438,13 @@ describe('the real dependencies, on the test\'s own files', () => {
     const pidFile = join(scratch, 'child.pid')
     writeFileSync(code, `sleep 60 &\necho $! > '${pidFile}'\nwait $!\nexit $?\n`)
     // The script through /bin/sh: macOS checks a new executable on its first run, which can take longer than the time.
-    expect(await vscodeExtensionDeps().run('/bin/sh', [code], 300)).toEqual({ code: null, timedOut: true })
+    expect(await vscodeExtensionDeps('vscode').run('/bin/sh', [code], 300)).toEqual({ code: null, timedOut: true })
     const pid = Number(readFileSync(pidFile, 'utf8'))
     await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' })))
   })
 
   it('on Linux, PATH\'s `code` is a file this account may run: a folder or a file it may not run is passed over', async () => {
-    const real = vscodeExtensionDeps()
+    const real = vscodeExtensionDeps('vscode')
     const [folder, plain, runnable] = ['a', 'b', 'c'].map((name) => join(scratch, name))
     mkdirSync(join(folder, 'code'), { recursive: true })
     mkdirSync(plain)
@@ -391,12 +453,12 @@ describe('the real dependencies, on the test\'s own files', () => {
     writeFileSync(join(runnable, 'code'), '', { mode: 0o755 })
     const c = computer({ platform: 'linux', pathVar: [folder, plain, runnable].join(':') })
     c.whenRun = () => c.disk.set(RECORD, record('1.2.3'))
-    expect(await vscodeEnable({ ...c.deps, exists: real.exists, executable: real.executable })).toEqual({ vscode: 'on', version: '1.2.3' })
+    expect(await vscodeEnable({ ...c.deps, exists: real.exists, executable: real.executable })).toEqual({ state: 'on', version: '1.2.3' })
     expect(c.runs.map(([file]) => file)).toEqual([join(runnable, 'code')])
   })
 
   it('the temporary folder and the file are this account\'s alone, and removing never throws', () => {
-    const real = vscodeExtensionDeps()
+    const real = vscodeExtensionDeps('vscode')
     const folder = real.tempDir()
     expect(statSync(folder).mode & 0o777).toBe(0o700)
     const file = join(folder, 'harness-device.vsix')
@@ -408,7 +470,7 @@ describe('the real dependencies, on the test\'s own files', () => {
   })
 
   it('the read gives a file within its bound, and null over it, missing, or not a file', () => {
-    const { read } = vscodeExtensionDeps()
+    const { read } = vscodeExtensionDeps('vscode')
     const file = join(scratch, 'extensions.json')
     writeFileSync(file, '[1234]')
     expect(read(file, 6)).toBe('[1234]')
