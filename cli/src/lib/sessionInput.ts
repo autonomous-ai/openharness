@@ -823,8 +823,8 @@ export class SessionInputController {
 
   cancel(sessionId: string): void {
     void this.interrupt(sessionId, true).catch((error) => {
+      // Before an owner was captured, an unexpected failure can be logged but cannot address an agent.
       console.warn(`[inject] ${sid(sessionId)} cancel failed · ${error instanceof Error ? error.message : error}`)
-      this.deps.onError(sessionId, 'Stop did not reach this agent.')
     })
   }
 
@@ -843,7 +843,9 @@ export class SessionInputController {
   private async interrupt(sessionId: string, reportGone: boolean): Promise<boolean> {
     const session = this.controlSession(sessionId)
     if (!session) return false
-    const state = this.state(sessionId)
+    const state = this.state(sessionId), sameBinding = captureSessionBinding(session)
+    // A runtime check or queued key may finish after this id belongs to another pane or input owner.
+    const current = (): boolean => this.states.get(sessionId) === state && sameBinding(this.controlSession(sessionId))
     state.cancelling++
     let held = true
     const release = (): void => {
@@ -865,13 +867,24 @@ export class SessionInputController {
       release()
     }, CANCEL_HOLD_MS)
     try {
-      if (!await this.deps.validateRuntime(session)) {
+      const valid = await this.deps.validateRuntime(session)
+      if (!current()) return false
+      if (!valid) {
         if (reportGone) this.deps.onError(sessionId, 'This agent process is no longer running.')
         return false
       }
-      const result = await this.writeTerminal(sessionId, () => this.deps.sendKey(session.agentId, 'C-c'))
+      const result = await this.writeTerminal(sessionId, () => current()
+        ? this.deps.sendKey(session.agentId, 'C-c', current) : Promise.resolve(false))
+      if (!current()) return false
       this.interrupted(sessionId, state)
       return typeof result === 'boolean' ? result : result.dispatch === 'executed'
+    } catch (error) {
+      if (!current()) return false
+      if (!reportGone) throw error
+      // No extra promise continuation may put this original failure on a replacement agent.
+      console.warn(`[inject] ${sid(sessionId)} cancel failed · ${error instanceof Error ? error.message : error}`)
+      this.deps.onError(sessionId, 'Stop did not reach this agent.')
+      return false
     } finally { release() }
   }
 

@@ -1640,6 +1640,189 @@ describe('optional lamp delivery preserves legacy behavior', () => {
     controller.forget('s1')
   })
 
+  describe('cancel ownership', () => {
+    it.each(['replace', 'pane', 'process', 'revision', 'gone', 'input-state'] as const)('refuses a %s change during runtime validation', async change => {
+      vi.useFakeTimers()
+      let row: RegisteredSession | undefined = session(), checked!: (ok: boolean) => void
+      const sendKey = vi.fn(async () => true), onError = vi.fn()
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+        getSession: () => row, validateRuntime: () => new Promise(resolve => { checked = resolve }),
+        inject: async () => true, sendKey, onError })
+      const pending = controller.cancelConfirmed('s1')
+      if (change === 'replace') row = { ...row!, sessionId: 'new-conversation', boundAt: 2 }
+      if (change === 'pane') row!.runtimes[0].paneId = '%replacement'
+      if (change === 'process') row!.processIdentity = { pid: 222, executable: 'fixture-engine', startMarker: 'replacement' }
+      if (change === 'revision') row!.evidenceRevision = 2
+      if (change === 'gone') row = undefined
+      if (change === 'input-state') { controller.forget('s1'); controller.setTurnOpen('s1', true) }
+      checked(true)
+      expect(await pending).toBe(false)
+      expect(sendKey).not.toHaveBeenCalled()
+      expect(onError).not.toHaveBeenCalled()
+      controller.forget('s1')
+    })
+
+    it('rechecks the captured binding when a queued writer is finally released', async () => {
+      vi.useFakeTimers()
+      const row = session(), sendKey = vi.fn(async () => true)
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+        getSession: () => row, validateRuntime: async () => true, inject: async () => true, sendKey, onError: vi.fn() })
+      const release = controller.acquireInputWriter('s1')!
+      const pending = controller.cancelConfirmed('s1')
+      await Promise.resolve()
+      expect(sendKey).not.toHaveBeenCalled()
+      row.primaryRuntimeKey = 'tmux\u0000%replacement'
+      release()
+      expect(await pending).toBe(false)
+      expect(sendKey).not.toHaveBeenCalled()
+      controller.forget('s1')
+    })
+
+    it('passes the original binding through the terminal await before a key is dispatched', async () => {
+      vi.useFakeTimers()
+      const row = session(), written: string[] = []
+      let press!: () => void, entered!: () => void
+      const entering = new Promise<void>(resolve => { entered = resolve })
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+        getSession: () => row, validateRuntime: async () => true, inject: async () => true, onError: vi.fn(),
+        sendKey: (_id, key, current) => new Promise(resolve => { press = () => {
+          const allowed = current?.() ?? true
+          if (allowed) written.push(key)
+          resolve(allowed)
+        }; entered() }) })
+      const pending = controller.cancelConfirmed('s1')
+      await entering
+      row.tmuxPane = '%replacement'
+      press()
+      expect(await pending).toBe(false)
+      expect(written).toEqual([])
+      controller.forget('s1')
+    })
+
+    it('does not close a replacement turn when an earlier key completes', async () => {
+      vi.useFakeTimers()
+      let row = session(), pressed!: (ok: boolean) => void, entered!: () => void
+      const entering = new Promise<void>(resolve => { entered = resolve }), inject = vi.fn(async () => true)
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+        getSession: () => row, validateRuntime: async () => true, inject, onError: vi.fn(),
+        sendKey: () => new Promise(resolve => { pressed = resolve; entered() }) })
+      const pending = controller.cancelConfirmed('s1')
+      await entering
+      row = { ...row, sessionId: 'replacement', boundAt: 2 }
+      controller.setTurnOpen('s1', true)
+      controller.submit('s1', 'after the replacement turn', 'delivery-next')
+      pressed(true)
+      expect(await pending).toBe(false)
+      await vi.advanceTimersByTimeAsync(250)
+      expect(inject).not.toHaveBeenCalled()
+      controller.onTurnEnded('s1')
+      await vi.advanceTimersByTimeAsync(1)
+      expect(inject).toHaveBeenCalledWith('h1', 'after the replacement turn', expect.any(Function))
+      controller.forget('s1')
+    })
+
+    it.each(['gone', 'rejected'] as const)('does not report a late %s validation error on a replacement', async failure => {
+      vi.useFakeTimers()
+      let row = session(), resolve!: (ok: boolean) => void, reject!: (error: Error) => void
+      const onError = vi.fn(), warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+        getSession: () => row, validateRuntime: () => new Promise((done, fail) => { resolve = done; reject = fail }),
+        inject: async () => true, sendKey: async () => true, onError })
+      controller.cancel('s1')
+      row = { ...row, sessionId: 'replacement', boundAt: 2 }
+      if (failure === 'gone') resolve(false)
+      else reject(new Error('old terminal failed'))
+      await vi.advanceTimersByTimeAsync(1)
+      expect(onError).not.toHaveBeenCalled()
+      warn.mockRestore()
+      controller.forget('s1')
+    })
+
+    it('reports a legacy failure while its original binding still owns the error', async () => {
+      vi.useFakeTimers()
+      let row = session(), reject!: (error: Error) => void
+      const reported: string[] = [], warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+        getSession: () => row, validateRuntime: () => new Promise((_done, fail) => { reject = fail }),
+        inject: async () => true, sendKey: async () => true, onError: () => { reported.push(row.sessionId) } })
+      controller.cancel('s1')
+      reject(new Error('original validation failed'))
+      // The interrupt's rejection runs first; its former outer catch ran after this replacement.
+      const replaced = Promise.resolve().then(() => { row = { ...row, sessionId: 'replacement', boundAt: 2 } })
+      await replaced
+      await vi.advanceTimersByTimeAsync(1)
+      expect(reported).toEqual(['s1'])
+      warn.mockRestore()
+      controller.forget('s1')
+    })
+
+    it.each([new Error('fixture failed'), 'fixture failed'])('keeps current-owner failures and uncaptured diagnostics separate: %s', async failure => {
+      vi.useFakeTimers()
+      const onError = vi.fn(), warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      let unavailable = false
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+        getSession: () => { if (unavailable) throw failure; return session() }, validateRuntime: async () => { throw failure },
+        inject: async () => true, sendKey: async () => true, onError })
+      await expect(controller.cancelConfirmed('s1')).rejects.toBe(failure)
+      expect(onError).not.toHaveBeenCalled()
+      controller.cancel('s1')
+      await vi.advanceTimersByTimeAsync(1)
+      expect(onError).toHaveBeenCalledExactlyOnceWith('s1', 'Stop did not reach this agent.')
+      onError.mockClear()
+      unavailable = true
+      controller.cancel('s1')
+      await vi.advanceTimersByTimeAsync(1)
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('cancel failed'))
+      expect(onError).not.toHaveBeenCalled()
+      warn.mockRestore()
+      controller.forget('s1')
+    })
+
+    it.each(['missing', 'gone', 'executed', 'unknown'] as const)('retains the confirmed %s result without app error presentation', async outcome => {
+      vi.useFakeTimers()
+      const onError = vi.fn(), sendKey = vi.fn(async (): Promise<TerminalActionResult> => outcome === 'executed'
+        ? { state: 'succeeded', dispatch: 'executed' } : { state: 'unknown', dispatch: 'possibly_executed', reason: 'fixture' })
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+        getSession: () => outcome === 'missing' ? undefined : session(), validateRuntime: async () => outcome !== 'gone',
+        inject: async () => true, sendKey, onError })
+      expect(await controller.cancelConfirmed('s1')).toBe(outcome === 'executed')
+      expect(sendKey).toHaveBeenCalledTimes(outcome === 'missing' || outcome === 'gone' ? 0 : 1)
+      expect(onError).not.toHaveBeenCalled()
+      controller.forget('s1')
+    })
+
+    it('holds a later message until both concurrent original-owner cancels finish', async () => {
+      vi.useFakeTimers()
+      const keys: Array<(ok: boolean) => void> = [], inject = vi.fn(async () => true)
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+        getSession: () => session(), validateRuntime: async () => true, inject, onError: vi.fn(),
+        sendKey: () => new Promise(resolve => { keys.push(resolve) }) })
+      const first = controller.cancelConfirmed('s1'), second = controller.cancelConfirmed('s1')
+      await Promise.resolve()
+      expect(keys).toHaveLength(2)
+      controller.submit('s1', 'after both cancels')
+      keys[0](true)
+      expect(await first).toBe(true)
+      await vi.advanceTimersByTimeAsync(250)
+      expect(inject).not.toHaveBeenCalled()
+      keys[1](true)
+      expect(await second).toBe(true)
+      await vi.advanceTimersByTimeAsync(250)
+      expect(inject).toHaveBeenCalledOnce()
+      controller.forget('s1')
+    })
+
+    it('keeps confirmation for an unchanged binding returned as a fresh record', async () => {
+      vi.useFakeTimers()
+      const sendKey = vi.fn(async (_id: string, _key: string, current?: () => boolean) => current?.() ?? true)
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+        getSession: () => session(), validateRuntime: async () => true, inject: async () => true, sendKey, onError: vi.fn() })
+      expect(await controller.cancelConfirmed('s1')).toBe(true)
+      expect(sendKey).toHaveBeenCalledOnce()
+      controller.forget('s1')
+    })
+  })
+
   // Seen once in seven Codex Stop runs (2026-11-10): a message sent within a second of Stop was typed while the
   // Ctrl-C was still on its way, then the cancel's bookkeeping, done after the key, settled it as cancelled and
   // dropped its submit check, so it was received and never typed into a turn.
