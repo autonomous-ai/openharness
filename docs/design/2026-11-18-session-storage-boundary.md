@@ -467,3 +467,28 @@ despite an available proved lean pair. The focused current-source follow-up has1
 checks across eight files; typechecking passes. The original instrumented RSS difference is
 attribution only. No new performance acceptance is asserted until the combined corrected
 artifact is built and measured under a reviewed fixed workload.
+
+## Design: synchronous reads only inside storage/models
+
+The fixed profiles also attribute archive cost to separate libuv open/stat/read/EOF/stat/path/
+close round trips for every small image. Replace the one private-image reader with synchronous
+owned-descriptor I/O, retaining its Promise-returning API. Its sole runtime importer is
+`storage/sessionImage`; normal composition calls that codec only in required storage and the
+models child. Architecture and raw-read custody regressions must keep it outside core.
+
+Preserve O_NOFOLLOW/O_NONBLOCK, secure directory and Windows-root checks, owner/type/mode
+checks and tightening, the original byte limit and growth/EOF probe, and exact ten-field
+before/after/path identity comparisons. Open only after shared custody is healthy. Every
+successful open is closed through the shared sticky closeStateFileDescriptor owner; any
+uncertain close remains cleanup-unconfirmed until actual child exit. No alternate reader,
+content cache, extra plaintext file or parent raw read is introduced.
+
+This intentionally spends read work in the owning child's loop instead of libuv scheduling.
+A required child's parent still enforces each five-second monotonic request deadline and holds
+custody until actual reap; archive pages still consider at most 64 names. Models' selected
+credential read can occupy its own loop for an entire Registry image. That whole-image work
+and RSS are existing unbounded-image residuals, not a completed bounded-read claim. The final
+matched comparison must use one frozen corrected source/artifact after all accepted changes.
+Tests cover actual bytes, unsafe/missing/symlink/type/mode cases, short/growing reads, every
+metadata-field mutation and actual child death after file/helper close uncertainty, in addition
+to the failure-first asynchronous-open counter. Windows native execution remains deferred.

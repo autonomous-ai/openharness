@@ -28,6 +28,13 @@ it('checks the exact read metadata without repeatedly serializing proof identiti
   expect(sessionFileIdentity).toHaveBeenCalledTimes(0)
 })
 
+it('reads a private image inside its owning process without per-operation libuv round trips', async () => {
+  const open = vi.spyOn(fs, 'open')
+  const image = await readPrivateImage(file, 1024)
+  expect(image?.bytes.toString()).toBe('[{"title":"fixture"}]')
+  expect(open).toHaveBeenCalledTimes(0)
+})
+
 const fields = ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'birthtimeNs', 'mode', 'uid', 'gid', 'nlink'] as const
 const change = (stat: BigIntStats, field: typeof fields[number]): BigIntStats => {
   const result = Object.create(Object.getPrototypeOf(stat), Object.getOwnPropertyDescriptors(stat)) as BigIntStats
