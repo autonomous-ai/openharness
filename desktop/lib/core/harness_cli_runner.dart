@@ -114,10 +114,14 @@ class HarnessCliRunner {
   HarnessHome get roots {
     final fixed = _fixedHome;
     if (fixed != null) return HarnessHome.at(fixed.path);
+    // homeDir, not HOME: Windows sets only USERPROFILE, and Git Bash's HOME is not where the
+    // CLI lives.
+    final home = homeDir(environment: environment, isWindows: _isWindows);
+    // The Linux rule never runs for a Windows profile, whatever the host: no
+    // Windows profile has the XDG roots.
+    if (_isWindows) return HarnessHome.at(p.join(home, harnessHomeName));
     return HarnessHome.of(
-      // homeDir, not HOME: Windows sets only USERPROFILE, and Git Bash's HOME is not where the
-      // CLI lives.
-      homeDir(environment: environment, isWindows: _isWindows),
+      home,
       look: _look ?? platformHomeLook(environment: environment),
     );
   }

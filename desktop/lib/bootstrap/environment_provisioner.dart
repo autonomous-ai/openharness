@@ -558,6 +558,11 @@ class EnvironmentProvisioner {
     if (home == null) {
       throw StateError('Could not resolve the current user home directory');
     }
+    // The Linux rule never runs for a Windows profile, whatever the host: no
+    // Windows profile has the XDG roots.
+    if (_isWindows) {
+      return HarnessHome.at(join(home, harnessHomeName), join: join);
+    }
     return HarnessHome.of(home, join: join, look: _look);
   }
 
