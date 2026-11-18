@@ -19,7 +19,7 @@ import { followLink } from './followLink.js'
 import { observeQuestions } from '../agentClient/questions.js'
 import { env } from '../config/env.js'
 import { DeviceEvidencePool } from '../lib/autonomous-device/evidenceReader.js'
-import { DeviceFeedPool } from '../lib/autonomous-device/sessionFeed.js'
+import { DeviceFeedPool, observeDeviceSessions } from '../lib/autonomous-device/sessionFeed.js'
 import { DeviceWorkBudget } from '../lib/autonomous-device/pendingWork.js'
 
 export interface WifiServiceOptions {
@@ -170,6 +170,7 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
       requests = (options.start ?? startWifi)(api(machineId), ports, { submit, cancel, evidencePool, feedPool, focusWork,
         peer: { composition: 'services', port: env.PORT, token: options.token },
         observeQuestions: listener => observeQuestions({ dataDir: options.dataDir, port: env.PORT, machineId }, listener),
+        observeSessions: observer => observeDeviceSessions({ dataDir: options.dataDir, port: env.PORT, machineId }, observer),
       })
     } catch (error) {
       console.warn(`[wifi] did not start · ${error instanceof Error ? error.message : String(error)}`)

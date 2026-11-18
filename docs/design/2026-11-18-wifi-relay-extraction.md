@@ -895,6 +895,30 @@ reentrant focus drainage and late callbacks. Existing encrypted peer boundary te
 These are macOS source/fixture checks. The coordinator still owns final combined packaged Wi-Fi and
 inline acceptance, restored nonfocused-question behavior, and hot-path cost measurements. Windows
 execution is deferred by the user. No native, Windows or performance acceptance is claimed here.
+
+### Process observer address correction
+
+The first combined packaged supervised case reported `SESSION_EVENTS_UNAVAILABLE`, followed by
+`WIFI_NOTICE_FAILED`, during startup. `runWifiService` builds a lightweight `processCoreApi` without a daemon
+view, whose unknown port is zero. Question observation already used this process's configured address;
+session observation accidentally fell through to that incomplete API view.
+
+The process now supplies the session observer with the same constructor-owned data directory, configured
+port and selected account machine ID as question observation. Its real `connectSocket` transport, handshake,
+deadlines and physical resource accounting are unchanged. The inline path already receives the actual core
+daemon address and keeps its existing observer construction.
+
+A failure-first process-composition case requires this injected observer, then opens its real private Unix
+socket, negotiates `eventsProtocol: 1` and receives an original session frame. Before the correction the
+observer dependency is absent; afterward the handshake and event pass. The fixture touches no installed daemon
+or real account home. The affected runtime is TypeScript on macOS, Linux and Windows; the real Unix-socket
+case runs on macOS/Linux, and Windows execution remains deferred by the user. Packaged verification remains
+with the integration coordinator; the passing unit case does not replace it.
+
+The targeted RED exited 1 (`/tmp/core-wifi-native-composition-red.log`); the real observer case then exited
+0 (`-green.log`). The complete affected `wifiProcess.spec.ts` gate passed 43 cases with all four per-file
+coverage metrics at 100% (`-coverage.log`, 2.93 seconds); full TypeScript checking exited 0 (`-types.log`).
+All checks used pinned Node 24.22.2 on macOS and were settled before delivery.
 The remaining `wifiAgents` door is stateless; this slice removes feature observation/relay state and
 raw/normalized feed plumbing rather than claiming that every named feature door has disappeared.
 

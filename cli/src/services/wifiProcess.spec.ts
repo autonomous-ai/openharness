@@ -8,6 +8,14 @@ import type { WifiDeps } from './wifi.js'
 import { runWifiService } from './wifiProcess.js'
 import { observeQuestions } from '../agentClient/questions.js'
 import { env } from '../config/env.js'
+import http from 'node:http'
+import { EventEmitter, once } from 'node:events'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { WebSocketServer, type WebSocket } from 'ws'
+import { unixSocketPath } from '../lib/localSocket.js'
+import { DeviceFeedPool, type DeviceSessionFeed } from '../lib/autonomous-device/sessionFeed.js'
 
 // The real service and the real link, as a process started by the master runs them: stood in for here.
 const real = vi.hoisted(() => ({ started: 0, options: null as ServiceProcessOptions | null }))
@@ -28,7 +36,7 @@ function wifiPort(machineId: string, log: string[]) {
   return port
 }
 
-function setup(over: { startThrows?: boolean; leavesOff?: boolean } = {}) {
+function setup(over: { startThrows?: boolean; leavesOff?: boolean; dataDir?: string } = {}) {
   const log: string[] = []
   const ports: WifiPort[] = []
   let api!: CoreApi
@@ -49,7 +57,7 @@ function setup(over: { startThrows?: boolean; leavesOff?: boolean } = {}) {
   let options!: ServiceProcessOptions
   const stop = vi.fn()
   const run = vi.fn((given: ServiceProcessOptions) => { options = given; return { stop } })
-  const service = runWifiService({ dataDir: '/data', socketPath: '/sock', machineId: 'computer-9', token: 't', start, run })
+  const service = runWifiService({ dataDir: over.dataDir ?? '/data', socketPath: '/sock', machineId: 'computer-9', token: 't', start, run })
   const notices: Array<[string, Record<string, unknown> | undefined]> = []
   let answers: Record<string, unknown> = { machine: { id: 'machine-1' }, input_contract: { version: 1 }, follow_agents: { agents: [] }, resolve: { value: { agentId: 'a', sessionId: 's', engine: 'claude' } } }
   const connection: CoreConnection = {
@@ -304,6 +312,52 @@ describe('the Wi-Fi device in the devices\' process', () => {
     await observation.ready
     expect(observeQuestions).toHaveBeenCalledWith({ dataDir: '/data', port: env.PORT, machineId: 'machine-1' }, listener)
     observation.close()
+  })
+
+  it.skipIf(process.platform === 'win32')('binds the real session observer to this process configured daemon socket', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'wifi-observer-'))
+    const socketPath = unixSocketPath(dataDir, env.PORT)!
+    const server = http.createServer(), sockets = new WebSocketServer({ server, path: '/api/local-ws' })
+    const f = setup({ dataDir }), handshakes: unknown[] = []
+    let peer: WebSocket | undefined, feed: DeviceSessionFeed | undefined
+    sockets.on('connection', socket => {
+      peer = socket
+      socket.on('message', raw => {
+        const frame = JSON.parse(raw.toString())
+        if (frame.type === 'machine_select') {
+          handshakes.push(frame.payload)
+          socket.send(JSON.stringify({ type: 'connected', payload: { eventsProtocol: 1 } }))
+        } else if (frame.type === 'events_observe') socket.send(JSON.stringify({ type: 'events_observe_result', payload: {
+          requestId: frame.payload.requestId, ok: true, generation: 'fixture-generation',
+        } }))
+      })
+    })
+    try {
+      const listening = once(server, 'listening', { signal: AbortSignal.timeout(5_000) })
+      server.listen(socketPath); await listening
+      f.connect(); f.event({ kind: 'resume' })
+      await f.options().requests!.wifi_http({}, { local: true, owner: true })
+      // The lightweight process API intentionally has no daemon view. Its zero port is not this process's address.
+      expect(f.api().daemon.port).toBe(0)
+      expect(f.adapter().observeSessions).toBeTypeOf('function')
+      const delivery = new EventEmitter()
+      const receive = vi.fn(async () => { delivery.emit('received') }), unavailable = vi.fn(), pool = new DeviceFeedPool()
+      feed = f.adapter().observeSessions!({ pool, receive, unavailable })
+      await feed.ready
+      expect(handshakes).toEqual([{ machineId: 'machine-1', localProtocolVersion: 1, tool: true, eventsProtocol: 1, questionProtocol: 1 }])
+      const frame = { type: 'agent_activity', agentId: 'a', payload: { activity: { state: 'idle' } } }
+      const delivered = once(delivery, 'received', { signal: AbortSignal.timeout(5_000) })
+      peer!.send(JSON.stringify({ type: 'session_event', payload: { generation: 'fixture-generation', frame } }))
+      await delivered
+      expect(receive).toHaveBeenCalledWith('a', [frame], expect.any(Function), undefined)
+      expect(unavailable).not.toHaveBeenCalled()
+    } finally {
+      await feed?.stop(); await f.service.stop()
+      for (const socket of sockets.clients) socket.terminate()
+      await new Promise<void>(resolve => sockets.close(() => resolve()))
+      await new Promise<void>(resolve => server.close(() => resolve()))
+      rmSync(dataDir, { recursive: true, force: true })
+    }
   })
 
   it('delivers only validated shared input facts and current agent lifecycle notices', async () => {
