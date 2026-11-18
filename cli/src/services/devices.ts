@@ -64,7 +64,7 @@ import { createWeztermAdapter } from '../cable/hosts/wezterm.js'
 import { createEngineTally } from '../cable/engineTally.js'
 import { createVscodeExtensionSetup } from '../cable/vscodeExtensionSetup.js'
 import { NoticeFile, NOTICES_FILE } from '../cable/noticeFile.js'
-import { noticeKeys, Notices, type NoticeCaller } from '../cable/notices.js'
+import { listedAgent, noticeKeys, Notices, type NoticeCaller } from '../cable/notices.js'
 import { NOTIFY_MODE_FILE, NotifyModeStore, type NotifyMode } from '../cable/notifyMode.js'
 import { PetStore } from '../cable/pets/store.js'
 import { DialLog } from '../cable/dialLog.js'
@@ -291,7 +291,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // the trust group read; this copy writes no file of its own, so `machines.json` has one writer.
   const machines = new MachineListCache(() => core.account.machines(), () => core.machine.computerId(),
     (line) => log(`[cable] ${line}`), core.dataDir, () => null, false)
-  const fleet: Fleet | null = part.start('fleet', () => startFleet(core, { machines, desk: () => desk, refresh: deps.refresh }).fleet, FLEET_FALLBACKS)
+  // Each read of the core's agents, as a list is built (once a second with a dial attached), lets a restored notice
+  // waiting for a Harness agent find it (`lookHarness`): a dial can attach before the first read. Inside the core's
+  // process there is no refresh and no listener, so no notice is made there.
+  const refresh = deps.refresh && ((): Promise<void> => deps.refresh!().then(() => lookHarness()))
+  const fleet: Fleet | null = part.start('fleet', () => startFleet(core, { machines, desk: () => desk, refresh }).fleet, FLEET_FALLBACKS)
 
   // ── the window bridges ─────────────────────────────────────────────────────────────────────────────
   //
@@ -797,7 +801,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const cableHost = new DaemonCableHost({
     // The cloud harnesses too, where the core offers them: tiles on the desk the dial walks like any other.
     sessions: () => [...core.agents.advertised(), ...core.agents.cloud?.() ?? []],
-    refresh: deps.refresh,
+    refresh,
     displayName: (session) => core.agents.displayName(session),
     appFocus: () => focus.voice ?? undefined,
     activityText: async (agentId) => {
@@ -1220,6 +1224,13 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const endNotice = (agentId: string): void => part.call('notices', () => notices.ended(agentId))
   /** Another question of that agent closed: its notice, covered or held back by it, is asked again. */
   const reaskNotice = (agentId: string): void => part.call('notices', () => notices.reask(agentId))
+  /** The outside sources' lists as they are now: a restored notice waiting for one of their agents finds it, or goes. */
+  const lookOutside = (entries: HostEntry[]): void => part.call('notices', () =>
+    notices.look(false, () => entries.map(({ agent }) => listedAgent(agent.id, agent, busyState(agent.state)))))
+  /** The core's agents as last read: a restored notice waiting for a Harness agent finds it. Its turn is not known here:
+   *  the first card of a running turn heard ends the notice (`toCable`). */
+  const lookHarness = (): void => part.call('notices', () =>
+    notices.look(true, () => core.agents.advertised().map((session) => listedAgent(session.agentId, session, false))))
 
   /** The ids on the dial's lists, built now, which reads the core's agents again. Both lists a dial can hold: the one
    *  ring, and the shown app's for a dial that says appFilter, read only while one is connected: that read can switch the
@@ -1254,6 +1265,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const outsideTurn = (): void => {
     showWaits()
     const entries = outsideEntries()
+    // Before `told` is read: an agent listed busy for the first time ends its restored notice here, under the id the
+    // notice was kept by.
+    lookOutside(entries)
     const ids = new Set(entries.map((entry) => entry.agent.id))
     const fresh = new Map<string, DialEvent[]>()
     for (const id of told.keys()) {
@@ -1735,6 +1749,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     if (!event) return
     // A silent one (a sub-agent's, a restored recap) is not news of the agent itself.
     if (!event.subagent) cableHost.harness.noteCard(event.agentId, event.kind)
+    // A turn running: a restored notice of that agent rang before it, and is over.
+    if (event.kind === 'processing') part.call('notices', () => notices.working(event.agentId))
     toDial(event)
   }
   /**

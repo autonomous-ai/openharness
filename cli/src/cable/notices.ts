@@ -66,10 +66,22 @@ export interface StoredNotice {
   at: number
 }
 
+type KeyedAgent = { engine: string; sessionId?: string; paneKeys?: readonly string[] }
+
+/** The key of an agent's session, the one way a card and a list name it. */
+const sessionKey = ({ engine, sessionId }: KeyedAgent): string | undefined => sessionId ? `${engine}:${sessionId}` : undefined
+
 /** An agent's keys as its list entry holds them now: its session first, which names it alone, then its panes. */
-export function noticeKeys(agent: { engine: string; sessionId?: string; paneKeys?: readonly string[] }): string[] {
-  const session = agent.sessionId ? [`${agent.engine}:${agent.sessionId}`] : []
-  return [...session, ...agent.paneKeys ?? []].filter((key) => key.length <= NOTICE_KEY_MAX_CHARS).slice(0, NOTICE_KEYS_MAX)
+export function noticeKeys(agent: KeyedAgent): string[] {
+  const session = sessionKey(agent)
+  return [...session ? [session] : [], ...agent.paneKeys ?? []].filter((key) => key.length <= NOTICE_KEY_MAX_CHARS).slice(0, NOTICE_KEYS_MAX)
+}
+
+/** An agent on a list the devices hold: `session` its `<engine>:<sessionId>`, `busy` in a turn as listed. */
+export interface ListedAgent { agentId: string; session?: string; panes: readonly string[]; busy: boolean }
+
+export function listedAgent(agentId: string, agent: KeyedAgent, busy: boolean): ListedAgent {
+  return { agentId, session: sessionKey(agent), panes: agent.paneKeys ?? [], busy }
 }
 
 /** The line within NOTICE_LINE_MAX_BYTES, cut between letters, with `…` when cut. */
@@ -119,6 +131,11 @@ export class Notices {
     const caller = this.deps.resolve(ask)
     if (!this.limits.take(caller.agentId, ask.text)) return answer('limited')
     this.ended(caller.agentId)
+    // Its restored card, still waiting under the id a listing source gave it before the restart: one card an agent, and
+    // nothing found later moves onto the new one.
+    for (const [agentId, card] of [...this.cards]) {
+      if (card.waiting && card.keys.some((key) => caller.keys.includes(key))) this.ended(agentId)
+    }
     if (this.cards.size >= NOTICES_PENDING_MAX) this.ended(this.cards.keys().next().value!)
     const id = SHOWN_ONLY_PREFIX + this.deps.uuid()
     const line = fitBytes(roundDrawable(ask.text))
@@ -150,6 +167,47 @@ export class Notices {
    *  drawer itself. */
   attached(): void {
     for (const agentId of this.cards.keys()) this.send(agentId)
+  }
+
+  /** One kind of list as it is now: the core's Harness agents (`harness`), or the outside sources'. Each restored card of
+   *  that kind still waiting looks for its agent there: by its id; else by its session, for an agent that names one; else
+   *  by a pane, for one that names none, so a card never moves to another session in the same pane (harness-pm). Found in
+   *  a turn, most likely one after its notice, or with a card of its own already, it ends. Found otherwise, it takes the
+   *  agent's id in its place, and its row is shown, by one drawer replace however many were found. A card found is not
+   *  looked for again; with none waiting, the list is not read. */
+  look(harness: boolean, listed: () => readonly ListedAgent[]): void {
+    const waiting = [...this.cards].filter(([, card]) => card.waiting && (card.host === 'harness') === harness)
+    if (waiting.length === 0) return
+    const agents = listed()
+    let shown = false
+    for (const [agentId, card] of waiting) {
+      const agent = agents.find((other) => other.agentId === agentId)
+        ?? agents.find(({ session, panes }) => session ? card.keys.includes(session) : panes.some((pane) => card.keys.includes(pane)))
+      if (!agent) continue
+      if (agent.busy || (agent.agentId !== agentId && this.cards.has(agent.agentId))) {
+        this.ended(agentId)
+        continue
+      }
+      delete card.waiting
+      if (agent.agentId !== agentId) this.rename(agentId, agent.agentId)
+      if (this.send(agent.agentId)) shown = true
+    }
+    // A covered card shows no row: it comes with its cover's close (reask).
+    if (shown) this.deps.redraw()
+  }
+
+  /** That agent is in a turn: its restored card ends, as the turn most likely came after its notice. A live card stays:
+   *  it was shown in this turn. */
+  working(agentId: string): void {
+    if (this.cards.get(agentId)?.restored) this.ended(agentId)
+  }
+
+  /** A card under its agent's new id, in the same place of the order. */
+  private rename(from: string, to: string): void {
+    const cards = [...this.cards]
+    this.cards.clear()
+    for (const [agentId, card] of cards) this.cards.set(agentId === from ? to : agentId, card)
+    this.deps.changed()
   }
 
   /** The card to every dial: a live one asked, a restored one held. Nothing for one waiting for its agent or covered by
