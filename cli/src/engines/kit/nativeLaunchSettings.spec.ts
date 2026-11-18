@@ -9,7 +9,17 @@ import type { NativeSetup } from './nativeSetup.js'
 import { statusLineScript } from './statusLine.js'
 import { launchSettingsArgs } from './launchValues.js'
 
-const effects = vi.hoisted(() => ({ active: false, flushes: 0, writes: 0 }))
+const effects = vi.hoisted(() => ({ active: false, flushes: 0, writes: 0,
+  beforePublish: undefined as (() => void) | undefined, afterPublish: undefined as (() => void) | undefined }))
+vi.mock('./nativeHookPublication.js', async original => {
+  const publication = await original<typeof import('./nativeHookPublication.js')>()
+  return { ...publication, publishNativeFiles: async (...args: Parameters<typeof publication.publishNativeFiles>) => {
+    effects.beforePublish?.()
+    const result = await publication.publishNativeFiles(...args)
+    effects.afterPublish?.()
+    return result
+  } }
+})
 vi.mock('node:fs', async original => {
   const fs = await original<typeof import('node:fs')>()
   return { ...fs, fsync: (...args: Parameters<typeof fs.fsync>) => {
@@ -24,12 +34,13 @@ vi.mock('node:fs', async original => {
 let root: string, dataDir: string, cwd: string
 beforeEach(() => {
   effects.active = false; effects.flushes = 0; effects.writes = 0
+  effects.beforePublish = undefined; effects.afterPublish = undefined
   root = mkdtempSync(join(tmpdir(), 'launch-settings-'))
   dataDir = join(root, 'data'); cwd = join(root, 'work')
   mkdirSync(dataDir); mkdirSync(cwd); mkdirSync(join(root, '.codex')); mkdirSync(join(root, '.claude'))
   writeFileSync(join(dataDir, 'agent-settings.json'), JSON.stringify({ machineId: 'machine', accountId: 'account', agentsStartAgents: true, pullRequestLine: true }))
 })
-afterEach(() => { effects.active = false; rmSync(root, { recursive: true, force: true }) })
+afterEach(() => { effects.active = false; effects.beforePublish = undefined; effects.afterPublish = undefined; rmSync(root, { recursive: true, force: true }) })
 const options = () => ({ dataDir, runtimeNode: process.execPath, platform: 'darwin' as const, gitBash: null,
   owner: { machineId: 'machine', accountId: 'account' }, current: () => true, nativeCurrent: () => true })
 const setup: Pick<NativeSetup, 'prepareFiles'> = { prepareFiles: async (input, _request, current) => prepareNativeLaunchSettings(input as LaunchSettingsInput, current) }
@@ -106,6 +117,71 @@ it('does not overwrite a script whose captured bytes changed while setup was pre
   })
   expect(await prepareLaunchSettings('claude', { HOME: root }, cwd, { prepareFiles }, options())).toBeNull()
   expect(readFileSync(script, 'utf8')).toBe('new owner bytes')
+})
+
+it.each(['claude', 'codex'])('prepares %s without inventing project sources when cwd is absent', async engine => {
+  const prepared = await prepareLaunchSettings(engine, { HOME: root }, null, setup, options())
+  expect(prepared?.current()).toBe(true)
+})
+
+it('reads a Codex profile that is also the workspace source only once', async () => {
+  const profile = join(cwd, '.codex'); mkdirSync(profile)
+  writeFileSync(join(profile, 'config.toml'), 'developer_instructions = "Keep workspace."\n')
+  const prepareFiles = vi.fn(setup.prepareFiles!)
+  const prepared = await prepareLaunchSettings('codex', { HOME: root, CODEX_HOME: profile }, cwd, { prepareFiles }, options())
+  expect(prepared?.values.instructions).toMatch(/^Keep workspace\./)
+  expect((prepareFiles.mock.calls[0][0] as LaunchSettingsInput).sources.filter(source => source.file === join(profile, 'config.toml'))).toHaveLength(1)
+})
+
+it('bounds an arbitrarily deep Codex ancestor walk before reading or sending sources', async () => {
+  const prepareFiles = vi.fn(setup.prepareFiles!)
+  const deep = join(root, ...Array.from({ length: 257 }, () => 'x'))
+  expect(await prepareLaunchSettings('codex', { HOME: root }, deep, { prepareFiles }, options())).toBeNull()
+  expect(prepareFiles).not.toHaveBeenCalled()
+})
+
+it('refuses the combined source-byte budget even when each file is within its own limit', async () => {
+  mkdirSync(join(cwd, '.claude'))
+  for (const file of [join(dataDir, 'agent-settings.json'), join(root, '.claude', 'settings.json'), join(cwd, '.claude', 'settings.json')]) {
+    writeFileSync(file, 'x'.repeat(800_000))
+  }
+  const prepareFiles = vi.fn(setup.prepareFiles!)
+  expect(await prepareLaunchSettings('claude', { HOME: root }, cwd, { prepareFiles }, options())).toBeNull()
+  expect(prepareFiles).not.toHaveBeenCalled()
+})
+
+it('refuses invalid declarative inputs before asking setup', async () => {
+  const prepareFiles = vi.fn(setup.prepareFiles!)
+  expect(await prepareLaunchSettings('claude', { HOME: root }, cwd, { prepareFiles }, { ...options(), runtimeNode: 'invalid\0node' })).toBeNull()
+  expect(prepareFiles).not.toHaveBeenCalled()
+})
+
+it('rechecks owner admission after the native and source filesystem proofs', async () => {
+  let owner = true, nativeReads = 0
+  const prepareFiles = vi.fn(setup.prepareFiles!)
+  expect(await prepareLaunchSettings('claude', { HOME: root }, cwd, { prepareFiles }, { ...options(),
+    current: () => owner, nativeCurrent: () => { if (++nativeReads === 2) owner = false; return true },
+  })).toBeNull()
+  expect(prepareFiles).not.toHaveBeenCalled()
+})
+
+it('keeps the publisher proof when another preparation has just supplied the exact candidate', async () => {
+  const script = join(dataDir, 'statusline', 'statusline.mjs')
+  effects.beforePublish = () => {
+    effects.beforePublish = undefined
+    mkdirSync(join(dataDir, 'statusline')); writeFileSync(script, statusLineScript())
+  }
+  const prepared = await prepareLaunchSettings('claude', { HOME: root }, cwd, setup, options())
+  expect(prepared?.current()).toBe(true)
+  expect(readFileSync(script, 'utf8')).toBe(statusLineScript())
+  writeFileSync(script, 'replacement')
+  expect(prepared?.current()).toBe(false)
+})
+
+it('omits the acknowledged result if a source changes after publication but before helper return', async () => {
+  effects.afterPublish = () => writeFileSync(join(dataDir, 'agent-settings.json'), '{}')
+  expect(await prepareLaunchSettings('claude', { HOME: root }, cwd, setup, options())).toBeNull()
+  expect(readFileSync(join(dataDir, 'statusline', 'statusline.mjs'), 'utf8')).toBe(statusLineScript())
 })
 
 

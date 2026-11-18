@@ -43,8 +43,8 @@ export async function prepareLaunchSettings(engine: string, environment: Readonl
     if (launch.harnessInstructions?.kind === 'config') {
       const rule = launch.harnessInstructions.config, config = join(homes.CODEX_HOME, rule.file)
       add(config)
-      if (cwd) for (let dir = resolve(cwd), depth = 0; dir !== resolve(environment.HOME) && dir !== parse(dir).root; dir = dirname(dir)) {
-        if (++depth > LAUNCH_SOURCE_LIMIT) throw new HookPreparationHeld('the launch settings ancestor limit was reached')
+      // Every ancestor adds a distinct source except the one that may already be the profile; add() bounds the walk.
+      if (cwd) for (let dir = resolve(cwd); dir !== resolve(environment.HOME) && dir !== parse(dir).root; dir = dirname(dir)) {
         const file = join(dir, rule.folder)
         if (file !== config) add(file)
       }

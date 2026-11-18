@@ -70,3 +70,13 @@ it('asks no version of another engine', async () => {
   await inspectNativeLaunch('codex', { permissionMode: 'auto' })
   expect(fixture.calls).not.toContainEqual(['--version'])
 })
+
+it('treats an unavailable version transport as no identity evidence, while still requiring help', async () => {
+  const { inspectNativeLaunch, notClaudeCode } = await import('./nativeLaunch.js')
+  const probe = vi.fn(async (_executable, kind) => kind === 'versionHelp' ? null
+    : { code: 0, stdout: '--permission-mode', stderr: '' })
+  expect(await inspectNativeLaunch('claude', {}, { setup: { probe, opencodeMajor: async () => null, hermesKeepsRecord: async () => null } }))
+    .toMatchObject({ ok: true })
+  expect(probe.mock.calls.map(call => call[1])).toEqual(['versionHelp', 'help'])
+  expect(notClaudeCode('/fixture/claude', '\n  \n')).toContain('it answered ""')
+})

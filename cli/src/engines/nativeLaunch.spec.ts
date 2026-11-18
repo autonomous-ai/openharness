@@ -31,6 +31,59 @@ let installs = 0
 beforeEach(() => { fixture.identity = `install-${++installs}`; fixture.current = true; fixture.hooks = true; fixture.version = '2.0.0'; fixture.help = '--auto --permission-mode --approve-for-me'; fixture.calls = []; fixture.pending = []; fixture.stalled = false; fixture.failed = false; fixture.environments = []; fixture.exit = 0; fixture.stderr = '' })
 afterEach(() => { vi.clearAllMocks(); vi.unstubAllEnvs() })
 
+it('holds native inspection when its setup dependency is absent', async () => {
+  expect(await inspect('codex')).toMatchObject({ ok: false, unavailable: 'native', detail: 'Waiting for engine setup.' })
+  expect(captureLaunchExecutable).not.toHaveBeenCalled()
+})
+
+it('holds a capture with no confirmed HOME before any engine probe', async () => {
+  vi.mocked(captureLaunchExecutable).mockResolvedValueOnce({ state: 'ready',
+    executable: { command: '/fixture/engine', identity: 'no-home', current: () => true }, environment: { PATH: '/fixture/bin' } })
+  expect(await inspectNativeLaunch('codex')).toMatchObject({ ok: false, detail: 'Waiting to confirm native engine locations.' })
+  expect(fixture.calls).toEqual([])
+})
+
+it('refuses an OpenClaw runtime failure even when it has no special Node diagnostic', async () => {
+  const setup = { ...nativeSetupProbes, probe: async () => ({ code: 1, stdout: '', stderr: 'Runtime failed.' }) }
+  expect(await inspectNativeLaunch('openclaw', {}, { setup })).toMatchObject({ ok: false, refusal: 'ENGINE_CANNOT_RUN',
+    detail: 'OpenClaw is installed but cannot run: Runtime failed.' })
+})
+
+it('keeps an engine without hook or optional-settings contracts independent of both', async () => {
+  const result = await inspectNativeLaunch('openclaw')
+  if (!result.ok) throw Error(result.detail)
+  expect(await result.launch.prepareHooks(19473, () => true)).toBe(true)
+  expect(await result.launch.prepareSettings!('/fixture/work', () => true)).toBeNull()
+})
+
+it('refuses stale or excess retained proofs without changing selected authority', async () => {
+  const result = await inspectNativeLaunch('codex')
+  if (!result.ok) throw Error(result.detail)
+  expect(result.launch.retain!({ files: [], current: () => false })).toBe(false)
+  for (let index = 0; index < 16; index++) expect(result.launch.retain!({ files: [], current: () => true })).toBe(true)
+  expect(result.launch.retain!({ files: [], current: () => true })).toBe(false)
+  expect(result.launch.proofs).toHaveLength(16)
+  fixture.current = false
+  expect(result.launch.retain!({ files: [], current: () => true })).toBe(false)
+})
+
+it('ignores unrelated clear keys and refuses a relative replacement profile before hooks', async () => {
+  const result = await inspectNativeLaunch('codex')
+  if (!result.ok) throw Error(result.detail)
+  expect(await result.launch.prepareHooks(0, () => true, {}, ['UNRELATED_OPTION'])).toBe(true)
+  expect(result.launch.environment.HOME).toBe('/fixture/home')
+  expect(await result.launch.prepareHooks(19473, () => true, { CODEX_HOME: 'relative' })).toBe(false)
+  expect(engineHooks.codex.installIn).not.toHaveBeenCalled()
+})
+
+it('holds native preparation when an installer rejects with a non-Error failure', async () => {
+  const result = await inspectNativeLaunch('codex')
+  if (!result.ok) throw Error(result.detail)
+  vi.mocked(engineHooks.codex.installIn).mockRejectedValueOnce('fixture publication refused')
+  expect(await result.launch.prepareHooks(19473, () => true)).toBe(false)
+  expect(result.launch.current()).toBe(false)
+})
+
 it('needs no executable, hooks or probes for a terminal', async () => {
   const prepared = await inspectNativeLaunch('terminal')
   expect(prepared.ok).toBe(true)

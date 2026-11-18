@@ -413,3 +413,20 @@ engineSetup.lifecycle is explicitly selected for the follow-up coverage pass. Bo
 and functions; nativeLaunch.ts has 97% statements/94% branches, nativeLaunchSettings.ts 93.75%/85.29%. Exact uncovered
 branches were extracted for meaningful safety cases before final acceptance. Types pass actual 0, 6.373 s
 (`/tmp/core-launch-settings-fences-warm-types.log`); all owned groups are empty. No timed run is claimed for these changes.
+
+Coverage follow-up removes one unreachable counter guard with review approval: Codex begins with two distinct
+sources (agent settings and profile). Every ancestor contributes a distinct workspace path except at most one that
+equals the profile. The existing 256-source cap therefore refuses by ancestor 256; a separate depth>256 guard could
+never run first. The unchanged deep-path refusal test passes before removing that counter. The source cap, stop at
+HOME/root, individual-file and total-byte limits remain unchanged. New safety cases cover the other actual contract
+gaps, including portable simulated Windows behavior; no new platform validation or unrelated behavior is claimed.
+
+The initial gap selection passed 103 cases and failed one test expectation: the existing DTO permits a relative
+runtime command. That test now uses a forbidden NUL instead; no DTO or runtime-command rule changed. Its failed
+receipt is retained (`/tmp/core-launch-settings-fences-coverage-gaps.log`, actual 1, 2.714 s). The final corrected
+14-file selection passes 223/223, actual 0, 30.340 s
+(`/tmp/core-launch-settings-fences-final-coverage2.log`). Both changed runtime files have 100% statements, branches,
+functions and lines: nativeLaunch.ts 200/250/36/133; nativeLaunchSettings.ts 77/66/10/50. The JSON summary and exact
+coverage maps are retained at `/tmp/core-launch-settings-fences-final-coverage2/`. Final types pass actual 0,
+6.335 s (`/tmp/core-launch-settings-fences-final-types.log`), diff check passes, and every owned group is empty.
+This is functional/coverage evidence only; final matched cost remains pending a reviewed frozen packet and quiet slot.
