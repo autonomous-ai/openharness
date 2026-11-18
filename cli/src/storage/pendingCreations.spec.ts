@@ -100,6 +100,49 @@ it('reads an absent archive without creating a directory or flushing anything', 
   expect(existsSync(directory)).toBe(false); expect(fs.fsyncSync).not.toHaveBeenCalled()
 })
 
+it('checks classified receipts and page boundaries without restatting both directories for every sidecar', async () => {
+  for (let n = 0; n < 32; n++) {
+    seed(key(n), false)
+    writeFileSync(join(directory, `ignored-${n}.tmp`), '', { mode: 0o600 })
+  }
+  const index = createPendingCreationIndex(directory)
+  index.ensure(id) // A missing primary cannot retire this marker.
+  const stat = vi.spyOn(fs, 'lstatSync'), status = vi.spyOn(AgentCreationReceipts.prototype, 'status')
+  let cursor: string | null = null, pages = 0
+  for (;;) {
+    const page = await index.page(cursor, deadline()); pages++
+    expect(page.ids).toEqual([]); expect(page.damaged).toBe(0)
+    if (page.done) break
+    expect(pages).toBeLessThan(100)
+    cursor = page.cursor
+  }
+  expect(status).toHaveBeenCalledTimes(33)
+  expect(existsSync(join(markers, id))).toBe(true)
+  expect(faults.closed).toEqual(expect.arrayContaining([directory, markers]))
+  expect(stat.mock.calls.filter(([path]) => path === directory).length).toBeLessThanOrEqual(33 + 2 * pages + 2)
+  expect(stat.mock.calls.filter(([path]) => path === markers).length).toBeLessThanOrEqual(2 * pages + 2)
+})
+
+it('refuses the original scan before ensuring a marker in a directory replaced during classification', async () => {
+  seed(id)
+  const index = createPendingCreationIndex(directory); index.ensure(id)
+  const status = AgentCreationReceipts.prototype.status
+  let replaced = false
+  vi.spyOn(AgentCreationReceipts.prototype, 'status').mockImplementation(function (this: AgentCreationReceipts, key) {
+    const result = status.call(this, key)
+    if (!replaced) {
+      replaced = true
+      renameSync(directory, directory + '-prior'); mkdirSync(markers, { recursive: true, mode: 0o700 })
+      seed(key)
+    }
+    return result
+  })
+  await expect(index.page(null, deadline())).rejects.toMatchObject({ code: 'changed' })
+  expect(replaced).toBe(true)
+  expect(existsSync(join(markers, id))).toBe(false)
+  expect(faults.closed).toEqual(expect.arrayContaining([directory, markers]))
+})
+
 it('discovers bounded pending IDs across legacy history and preserves missing or damaged primary markers', async () => {
   const index = createPendingCreationIndex(directory)
   for (let n = 0; n < 140; n++) seed(key(n), n === 0 || n === 139)
