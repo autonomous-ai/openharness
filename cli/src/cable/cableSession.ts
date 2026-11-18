@@ -3434,9 +3434,9 @@ export class CableSession {
     // reconnect: it goes by giveQuestion's rule, rung once and never again after the dial was told it, and during a
     // greeting it waits for the walk. One the inbox cannot hold whole is kept and sent as its summary, never as it came:
     // a plan of kilobytes passed the frame cap and never reached the dial (2026-11-18).
-    const held = this.questionInbox.read(agentId)
-    if (!held.ok || this.greeting) return
-    await this.giveQuestion(agentId, id, whole ? questions : held.questions, held.questions[0].q)
+    const open = this.questionInbox.read(agentId)
+    if (!open.ok || this.greeting) return
+    await this.giveQuestion(agentId, id, whole ? questions : open.questions, open.questions[0].q)
   }
   /** A question the dial reads when its row is opened and is never asked: a notice restored after the devices process
    *  restarted rang before it (cable/notices.ts). */
