@@ -358,6 +358,10 @@ describe('the home bridge service', () => {
     expect(close).toHaveBeenCalledTimes(2)
   })
 
+  it('reaches the daemon this computer\'s owner\'s tools reach: with none on the test\'s data folder, it says so', async () => {
+    await expect(askForStore()).rejects.toMatchObject({ code: expect.stringMatching(/^(DAEMON_UNREACHABLE|DISCONNECTED)$/) })
+  })
+
   it('in the core\'s process it asks the Store nothing: the Store started with the core', async () => {
     const h = movedHome()
     const { given, log } = handed(h, { setupsPending: async () => 1, askForStore: undefined })
@@ -640,6 +644,7 @@ describe('the home bridge service', () => {
   it.each<[string, ReturnType<HomeBridgeDeps['tmux']>, string]>([
     ['did not answer in time', { status: null, stdout: '', stderr: '', error: missing('ETIMEDOUT') }, 'ETIMEDOUT'],
     ['is not its server\'s version', { status: 1, stdout: '', stderr: 'protocol version mismatch (client 8, server 7)\n' }, 'protocol version mismatch (client 8, server 7)'],
+    ['fails with no word', { status: 2, stdout: '', stderr: '' }, 'status 2'],
   ])('a tmux that %s says nothing of the panes: the check fails, and the bridge stays', async (_, answer, why) => {
     const h = movedHome()
     const { bridge, log } = start(h, { tmux: () => answer })
