@@ -95,4 +95,11 @@ describe('logsExportCommand', () => {
     expect(lines.slice(1)).toContain('  status.txt')
     expect(lines.slice(1)).not.toContain('  app-20261116.log')
   })
+
+  it('without --json the zip is named from the home it was given', async () => {
+    const { deps, lines, home } = setup(['export'])
+    mkdirSync(join(home, 'Desktop'))
+    await logsExportCommand(deps)
+    expect(lines[0].startsWith(`wrote ${join('~', 'Desktop', ZIP)} (`)).toBe(true)
+  })
 })
