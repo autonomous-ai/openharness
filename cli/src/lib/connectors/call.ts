@@ -63,12 +63,31 @@ export function unc(path: string, p: PlatformPath = platformPath): boolean {
 
 /**
  * Where credentials or configs live, under each home: HOME and USERPROFILE (Windows' HOME) are the caller's to set, so
- * `homes` brings the ones no variable moves.
+ * `homes` brings the ones no variable moves. On Windows, apps keep theirs in AppData (browsers' profiles, sign-in caches).
  */
 export function forbiddenDirs(env: NodeJS.ProcessEnv, homes: (string | undefined)[], p: PlatformPath = platformPath): string[] {
+  const windows = p.sep === '\\'
   const all = [env.HOME, env.USERPROFILE, ...homes].filter((home): home is string => !!home)
-  const dirs = all.flatMap(home => ['.ssh', '.gnupg', '.config', '.local/share', '.harness', '.codex', '.claude'].map(dir => p.join(home, dir)))
-  return [...new Set([connectorsDir(env), ...dirs, '/etc', '/proc', '/sys'])]
+  const names = ['.ssh', '.gnupg', '.config', '.local/share', '.harness', '.codex', '.claude', ...(windows ? ['AppData/Roaming', 'AppData/Local'] : [])]
+  const appData = windows ? [env.APPDATA, env.LOCALAPPDATA].filter((dir): dir is string => !!dir) : []
+  return [...new Set([connectorsDir(env), ...all.flatMap(home => names.map(dir => p.join(home, dir))), ...appData, '/etc', '/proc', '/sys'])]
+}
+
+/**
+ * The account's own temporary folder on Windows, inside AppData\Local, where downloads and agents' files land. Never
+ * TEMP or TMP, nor one under HOME or USERPROFILE: the caller sets those, and so could make the folder a link into AppData.
+ */
+export function tempDir(home: string | undefined, p: PlatformPath = platformPath): string | undefined {
+  return home && p.sep === '\\' ? p.join(home, 'AppData', 'Local', 'Temp') : undefined
+}
+
+/**
+ * Whether a folder of `forbidden` holds `file`, all three resolved. Inside the temporary folder only a forbidden folder
+ * inside it fences the file: AppData\Local, which holds it, does not.
+ */
+export function fenced(file: string, forbidden: string[], temp: string | undefined, p: PlatformPath = platformPath): boolean {
+  const inTemp = !!temp && inside(temp, file, p)
+  return forbidden.some(dir => inside(dir, file, p) && (!inTemp || inside(temp, dir, p)))
 }
 
 /** The account's own home; an account with no passwd entry (a container's bare uid) has none, and `userInfo` throws. */
@@ -83,10 +102,14 @@ export function uploadPath(raw: string, env: NodeJS.ProcessEnv = process.env): s
   // ~/.SSH on macOS, and SSH~1 (an 8.3 short name) or a \\?\ prefix on Windows, read ~/.ssh outside the fence.
   let real: string
   try { real = realpathSync.native(path) } catch { throw new CallFailure(2, `cannot read upload ${raw}`) }
-  const forbidden = forbiddenDirs(env, [homedir(), accountHome()]).map(dir => { try { return realpathSync.native(dir) } catch { return resolve(dir) } })
+  const native = (dir: string): string => { try { return realpathSync.native(dir) } catch { return resolve(dir) } }
+  const account = accountHome()
+  const forbidden = forbiddenDirs(env, [homedir(), account]).map(native)
+  // Resolved as the file is, so both are in the file system's own spelling: TEMP on Windows CI is C:\Users\RUNNER~1\...
+  const temp = tempDir(account)
   const stat = statSync(real)
   // A hard link's other names, which may be inside a forbidden folder, are found by no path the fence can check.
-  if (unc(real) || forbidden.some(dir => inside(dir, real)) || !stat.isFile() || stat.nlink > 1) {
+  if (unc(real) || fenced(real, forbidden, temp && native(temp)) || !stat.isFile() || stat.nlink > 1) {
     throw new CallFailure(2, `refusing to upload ${raw}: not a media file the helper may send`)
   }
   if (!UPLOAD_SUFFIXES.includes(extname(real).toLowerCase()) || !UPLOAD_SUFFIXES.includes(extname(path).toLowerCase())) {
