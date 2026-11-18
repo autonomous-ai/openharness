@@ -4145,15 +4145,26 @@ describe('codex queue, for Codex outside a pane (docs/specs/2026-11-15-device-co
 
   it('a failed queue is said in one line with its exit code, then today\'s route answers', async () => {
     started({ codex: ending(1) })
-    expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false, message: 'api did not answer.' })
+    expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false, message: 'Codex could not take it. Try again.' })
     expect(codexRuns).toHaveLength(1)
-    expect(said()).toEqual(['[device] voice · codex-failed (exit 1)', '[device] voice · no-answer'])
+    expect(said()).toEqual(['[device] voice · codex-failed (exit 1 · path)', '[device] voice · no-answer'])
   })
 
   it('a codex that could not start is said with no binary', async () => {
     started({ codex: ending('not-started') })
-    expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false, message: 'api did not answer.' })
-    expect(said()).toEqual(['[device] voice · codex-failed (no binary)', '[device] voice · no-answer'])
+    expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false, message: 'Codex could not take it. Try again.' })
+    expect(said()).toEqual(['[device] voice · codex-failed (no binary · path)', '[device] voice · no-answer'])
+  })
+
+  // An older app's CLI has no queue: updating the app is what helps, and the log names no path and no app.
+  it('a ChatGPT app session whose app codex exits 127 is told to update ChatGPT, in one line that names no path', async () => {
+    started({ codex: { ...ending(127), platform: 'darwin', appBinary: () => APP }, orca: { ...orca, platform: 'darwin' } },
+      { hostHints: { __CFBundleIdentifier: 'com.openai.codex' } })
+    expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false, message: 'Update ChatGPT, then try again.' })
+    expect(codexRuns.map(([file]) => file)).toEqual([APP])
+    expect(said()).toEqual(['[device] voice · codex-failed (exit 127 · app)', '[device] voice · no-answer'])
+    expect(logs.filter((line) => line.includes(APP))).toEqual([])
+    expect(said().filter((line) => line.includes('ChatGPT'))).toEqual([])
   })
 
   // The spec's first failure case: voice only where Orca can type, as today.
@@ -4177,8 +4188,8 @@ describe('codex queue, for Codex outside a pane (docs/specs/2026-11-15-device-co
   it('no log line carries the thread id, the words, the transcript\'s path or the Codex home', async () => {
     started({ codex: ending(0, 1, 'not-started', 'unknown') }, { hostHints: { ORCA_TERMINAL_HANDLE: HANDLE } })
     for (let i = 0; i < 4; i++) await host().sendTurn(ID, 'run the tests')
-    expect(said()).toEqual(['[device] voice · codex', '[device] voice · codex-failed (exit 1)', '[device] voice · orca',
-      '[device] voice · codex-failed (no binary)', '[device] voice · orca', '[device] voice · codex-timeout'])
+    expect(said()).toEqual(['[device] voice · codex', '[device] voice · codex-failed (exit 1 · path)', '[device] voice · orca',
+      '[device] voice · codex-failed (no binary · path)', '[device] voice · orca', '[device] voice · codex-timeout'])
     expect(logs.filter((line) => [THREAD, 'run the tests', transcriptPath, env.CODEX_HOME].some((secret) => line.includes(secret)))).toEqual([])
   })
 })

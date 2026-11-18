@@ -1831,7 +1831,7 @@ describe('ObservedSource actions', () => {
     const { actions } = fakeActions()
     const orca = actions.adapters.find((a) => a.id === 'orca')!
     expect(countWord('busy')).toBe('busy')
-    expect(countWord('codex-failed (exit 1)')).toBe('codex-failed (exit 1)')
+    expect(countWord('codex-failed (exit 1 · path)')).toBe('codex-failed (exit 1 · path)')
     expect(countWord(orca)).toBe('orca')
     expect(countWord({ refused: orca })).toBe('refused (orca)')
   })
@@ -2347,14 +2347,14 @@ describe('ObservedSource and codex queue', () => {
       [inOrca, 'idle', { ok: true }, 'orca'],
       [inOrca, 'working', { ok: false, reason: 'proj is busy. Say it when it is done.' }, 'busy'],
       [inOrca, 'needs-you', { ok: false, reason: 'proj is waiting for your answer in Orca.' }, 'waiting'],
-      [cx, 'idle', { ok: false, reason: 'proj did not answer.' }, 'no-answer'],
+      [cx, 'idle', { ok: false, reason: 'Codex could not take it. Try again.' }, 'no-answer'],
     ]
     for (const [session, state, sent, said] of cases) {
       const { src, actions } = given(session, state)
       actions.codexQueue.send.mockResolvedValue(FAILED)
       expect(await src.send(src.list()[0], 'next')).toEqual(sent)
       expect(actions.orcaSend.mock.calls).toEqual(said === 'orca' ? [[HANDLE, 'next']] : [])
-      expect(counted(actions.count)).toEqual(['codex-failed (exit 1)', said])
+      expect(counted(actions.count)).toEqual(['codex-failed (exit 1 · path)', said])
     }
   })
 
@@ -2367,20 +2367,35 @@ describe('ObservedSource and codex queue', () => {
       for (const engine of ['claude', 'codex'] as const) {
         const { src, actions } = given({ ...inOrca, engine, hostHints: { ...inOrca.hostHints, ...hints } })
         actions.codexQueue.send.mockResolvedValue(FAILED)
-        expect(await src.send(src.list()[0], 'next')).toEqual(herdrSocket ? { ok: true } : { ok: false, reason: 'proj did not answer.' })
+        const refused = engine === 'codex' ? 'Codex could not take it. Try again.' : 'proj did not answer.'
+        expect(await src.send(src.list()[0], 'next')).toEqual(herdrSocket ? { ok: true } : { ok: false, reason: refused })
         expect(actions.herdrPrompt.mock.calls).toEqual(herdrSocket ? [['w1:p2', engine, 'next']] : [])
         expect(actions.orcaSend).not.toHaveBeenCalled()
-        expect(counted(actions.count)).toEqual([...(engine === 'codex' ? ['codex-failed (exit 1)'] : []), herdrSocket ? 'herdr' : 'no-answer'])
+        expect(counted(actions.count)).toEqual([...(engine === 'codex' ? ['codex-failed (exit 1 · path)'] : []), herdrSocket ? 'herdr' : 'no-answer'])
       }
     }
   })
 
-  it('a failure is counted with its reason', async () => {
-    for (const reason of ['no binary', 'refused'] as const) {
+  it('a failure is counted with its reason and the codex that ran; a refused one keeps today\'s sentence', async () => {
+    const cases: Array<[CodexQueueResult, string, string]> = [
+      [{ outcome: 'failed', reason: 'no binary', ran: 'path' }, 'Codex could not take it. Try again.', 'codex-failed (no binary · path)'],
+      [{ outcome: 'failed', reason: 'refused' }, 'proj did not answer.', 'codex-failed (refused)'],
+    ]
+    for (const [result, reason, count] of cases) {
       const { src, actions } = given(cx)
-      actions.codexQueue.send.mockResolvedValue(reason === 'refused' ? { outcome: 'failed', reason } : { outcome: 'failed', reason, ran: 'path' })
-      expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
-      expect(actions.count.mock.calls).toEqual([[`codex-failed (${reason})`], ['no-answer']])
+      actions.codexQueue.send.mockResolvedValue(result)
+      expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason })
+      expect(actions.count.mock.calls).toEqual([[count], ['no-answer']])
+    }
+  })
+
+  // A session in the ChatGPT app has no pane to type into, and an older app's CLI has no queue: updating it is what helps.
+  it('an app session whose queue failed is told to update ChatGPT', async () => {
+    for (const ran of ['app', 'path'] as const) {
+      const { src, actions } = given({ ...cx, hostHints: { __CFBundleIdentifier: 'com.openai.codex' } })
+      actions.codexQueue.send.mockResolvedValue({ outcome: 'failed', reason: 'exit 127', ran })
+      expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'Update ChatGPT, then try again.' })
+      expect(actions.count.mock.calls).toEqual([[`codex-failed (exit 127 · ${ran})`], ['no-answer']])
     }
   })
 
