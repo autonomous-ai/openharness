@@ -32,7 +32,7 @@ scan gave it decides, and the id comes from the session's own file):
 
 1. **The record gives the app's session id.** `recordName.ts` becomes the record's one reader for the scan:
    `readRecordName` becomes `readRecord(owner, opts)` (file renamed `record.ts`), answering `{ name?, hostSession? }`.
-   `hostSession` is the record's `hostSessionId` when it is a string, `entrypoint` is `'claude-desktop'` and the
+   `hostSession` is the record's `hostSessionId` when it is a non-empty string, `entrypoint` is `'claude-desktop'` and the
    record's `sessionId` is the listed session's (decision 6 of the session-name spec, as for the name). Every other
    check stands: the record's path, the 16 KiB bound, JSON. It keeps nothing and logs nothing. Its doc comment lists
    the fields it reads.
@@ -87,8 +87,8 @@ process.
 
 ## Tests (red first)
 
-- `recordName.spec.ts`: a Claude app record gives its name and `hostSession`; a CLI record gives no `hostSession`; a
-  record for another `sessionId` gives neither; a non-string `hostSessionId` gives none.
+- `record.spec.ts`: a Claude app record gives its name and `hostSession`; a CLI record gives no `hostSession`; a
+  record for another `sessionId` gives neither; a non-string or empty `hostSessionId` gives none.
 - `claudeApp.spec.ts`: `paneOf` takes `{ app: 'claude', hostSession: local_… }`; refuses it under any other app, with no
   `hostSession`, and for each malformed id; the hook's hints still work. Its `bundle` is the Claude app's; a tap whose
   link failed answers false and runs nothing more.
