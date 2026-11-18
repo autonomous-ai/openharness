@@ -65,7 +65,7 @@ void main() {
     expect(model.agentById('ag-docs')!.state, AgentState.working);
   });
 
-  test('the manual demo on the real model: it opens at rest, a tap wakes it, words to rate-limiter make it fail',
+  test('the manual demo on the real model: it opens at rest, a tap opens Apps, words to rate-limiter make it fail',
       () async {
     final clock = ManualDemoClock();
     final wall = DateTime(2026, 11, 18, 14, 32);
@@ -83,9 +83,13 @@ void main() {
     await demo.start();
     runFor(500);
     expect([model.page, model.mood], [BarPage.ambient, AmbientMood.quiet]);
+    // The first tap on that Ambient opens Apps, every app of the mockup on it; a card brings its ring up.
     model.wake();
     runFor(500);
-    expect(model.page, BarPage.overview);
+    expect([model.page, model.apps.length], [BarPage.apps, 11]);
+    model.pickApp('orca');
+    runFor(500);
+    expect([model.page, model.shownApp], [BarPage.overview, 'orca']);
 
     model.tapCell('ag-rate');
     runFor(3000); // the made-up speech, then its quiet sends it

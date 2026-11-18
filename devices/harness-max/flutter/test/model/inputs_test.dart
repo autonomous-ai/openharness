@@ -375,4 +375,48 @@ void main() {
     m.restNow();
     expect(m.page, BarPage.overview, reason: 'an agent at work keeps Overview up');
   });
+
+  test('restNow(wakeToApps): the first tap on that Ambient opens Apps; a later Ambient wakes to Overview, as always', () {
+    final b = linked(abcde), m = b.model;
+    m.onApps('orca', const [
+      AppInfo(id: 'harness', name: 'Harness', count: 3),
+      AppInfo(id: 'orca', name: 'Orca', count: 5),
+    ]);
+    m.restNow(wakeToApps: true);
+    expect(m.page, BarPage.ambient);
+    m.wake();
+    expect(m.page, BarPage.apps);
+    m.closeList();
+    expect(m.page, BarPage.overview);
+    b.at(60000);
+    m.tick();
+    expect(m.page, BarPage.ambient, reason: 'a quiet minute');
+    m.wake();
+    expect(m.page, BarPage.overview, reason: 'only the first Ambient opens Apps');
+  });
+
+  test('restNow(wakeToApps): an Ambient left without a tap forgets it; with no other app the tap wakes to Overview', () {
+    final b = linked(abcde), m = b.model;
+    m.onApps('orca', const [
+      AppInfo(id: 'harness', name: 'Harness', count: 3),
+      AppInfo(id: 'orca', name: 'Orca', count: 5),
+    ]);
+    m.restNow(wakeToApps: true);
+    m.onTurn('a', 'started', '');
+    m.onTurn('a', 'error', 'npm test failed');
+    expect(m.page, BarPage.attention, reason: 'a failure takes the glass from Ambient');
+    b.at(8000);
+    m.tick();
+    expect(m.page, BarPage.overview);
+    b.at(68000);
+    m.tick();
+    expect(m.page, BarPage.ambient);
+    m.wake();
+    expect(m.page, BarPage.overview);
+
+    final c = linked(abcde), n = c.model;
+    n.restNow(wakeToApps: true);
+    n.wake();
+    expect(n.page, BarPage.overview, reason: 'no `apps`: no Apps page');
+  });
 }

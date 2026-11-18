@@ -5,7 +5,7 @@
 #   deploy-orangepi.sh [--demo | --story | --usb | --tcp | --fixture] [--no-build] [ssh-host]
 #
 # --demo (the default): the scripted computer runs inside the app, and the person drives it: it opens all quiet on
-# Ambient, nothing happens by itself, and each case comes from talking to an agent. --story: the same computer plays max_demo.c's story by itself, in a loop. --usb / --tcp: a real daemon on the cable (see
+# Ambient, whose first tap opens Apps; nothing happens by itself, and each case comes from talking to an agent. --story: the same computer plays max_demo.c's story by itself, in a loop. --usb / --tcp: a real daemon on the cable (see
 # lib/link/cable/). --fixture: a still page from the mockup's data (HARNESS_MAX_FIXTURE_APP=harness for the Harness
 # ring). --no-build installs the bundle built last.
 #

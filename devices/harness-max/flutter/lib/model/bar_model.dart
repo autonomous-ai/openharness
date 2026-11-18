@@ -122,6 +122,9 @@ class BarModel extends ChangeNotifier {
   /// The last touch or news: Ambient waits [kAmbientAfter] from it.
   DateTime _idleFrom;
 
+  /// restNow(wakeToApps: true): the tap that wakes this Ambient opens Apps. Forgotten when Ambient goes any other way.
+  bool _wakeToApps = false;
+
   /// The agent the open recording is for (C talk_id): its "Sent to", and its question the words answer.
   String? _talkId;
 
@@ -849,19 +852,22 @@ class BarModel extends ChangeNotifier {
     _publish();
   }
 
-  /// A tap on Ambient: Overview.
+  /// A tap on Ambient: Overview, or Apps once after restNow(wakeToApps: true) while another app is listed.
   void wake() {
     touched();
     if (_sendsFirst()) return;
-    _show(BarPage.overview);
+    final apps = _wakeToApps && hasOtherApps;
+    _show(apps ? BarPage.apps : BarPage.overview);
     _publish();
   }
 
   /// Ambient now, as a quiet minute would bring it, when the bar may rest (Overview, the mic closed, nothing at work):
-  /// the demo a person drives opens on it rather than a minute later. Over work it does nothing.
-  void restNow() {
+  /// the demo a person drives opens on it rather than a minute later. Over work it does nothing. [wakeToApps]: the tap
+  /// that wakes it opens Apps rather than Overview (the demo starts by showing every app).
+  void restNow({bool wakeToApps = false}) {
     if (!_ambientWaits()) return;
     _show(BarPage.ambient);
+    _wakeToApps = wakeToApps;
     _settle();
     _publish();
   }
@@ -1140,6 +1146,7 @@ class BarModel extends ChangeNotifier {
       _dirty = true;
     }
     if (page == p) return;
+    if (p != BarPage.ambient) _wakeToApps = false;
     if (page == BarPage.inbox) {
       for (final n in inbox) {
         n.unread = false;

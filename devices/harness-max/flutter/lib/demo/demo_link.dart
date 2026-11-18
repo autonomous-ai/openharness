@@ -161,8 +161,8 @@ class DemoLink implements BarLink {
     model.onLink(true, computer: kComputer, offersNew: true);
     _ringOwed = true;
     _tick();
-    // All quiet on the person's demo from the first moment, not a quiet minute later.
-    if (manual) model.restNow();
+    // All quiet on the person's demo from the first moment, not a quiet minute later; its first tap shows every app.
+    if (manual) model.restNow(wakeToApps: true);
   }
 
   @override
