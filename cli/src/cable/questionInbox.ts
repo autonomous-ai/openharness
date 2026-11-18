@@ -63,10 +63,10 @@ export class QuestionInbox {
   /** The questions each agent asked last, as they came (JSON), reviewable or not: the dial's answer is read against them. */
   private readonly latest = new Map<string, { id: string; json?: string }>()
 
-  /** True when the inbox holds the question as it came; false when it kept only its summary, or nothing. */
-  set(agentId: string, id: string, raw: unknown, held = false): boolean {
+  /** Holds that agent's question: as it came when the dial can answer it, else its summary alone (see the class). */
+  set(agentId: string, id: string, raw: unknown, held = false): void {
     // Nobody can close a question with no agent or id: it must not evict, nor replace, one that can be.
-    if (!agentId || !id) return false
+    if (!agentId || !id) return
     if (this.latest.size >= 64 && !this.latest.has(agentId)) {
       const oldest = this.latest.keys().next().value!
       this.latest.delete(oldest); this.entries.delete(oldest)
@@ -86,14 +86,13 @@ export class QuestionInbox {
     // as JSON, made every frame of it too big, sent and dropped at each drawer. Its own signature is held to the 6500
     // bytes an answerable one is, which keeps its frame under the cap; past them it replaces the agent's last question
     // with nothing, as a refused one did before it was kept.
-    if (Buffer.byteLength(signature, 'utf8') > 6500) { this.entries.delete(agentId); return false }
-    if (this.entries.get(agentId)?.signature === signature) return whole
+    if (Buffer.byteLength(signature, 'utf8') > 6500) { this.entries.delete(agentId); return }
+    if (this.entries.get(agentId)?.signature === signature) return
     if (this.entries.size >= 64 && !this.entries.has(agentId)) this.entries.delete(this.entries.keys().next().value!)
     for (const question of questions) { Object.freeze(question.options); Object.freeze(question) }
     Object.freeze(questions)
     this.entries.set(agentId, { agentId, id, token: randomUUID(), signature, questions, drafts: new Map(),
       ...(held ? { held: true as const, told: true } : {}) })
-    return whole
   }
 
   /** Every question still open, for a resync. */

@@ -16,6 +16,7 @@ import { DaemonCableHost } from './cableHost.js'
 import type { MachineFleet } from './machineFleet.js'
 import { CableSession, fitDrawer, SHOWN_ONLY_PREFIX, SWIPE_REST_MS, type CableAgent, type CableHost, type CableMachine, type CablePort, type DialAgent, type SendOutcome } from './cableSession.js'
 import { DialLog } from './dialLog.js'
+import { noticeSummary } from './dialText.js'
 import type { PetStore } from './pets/store.js'
 import { HostRegistry } from './hosts/registry.js'
 import type { AppList, AppPick, HostAgent, HostSource } from './hosts/types.js'
@@ -421,7 +422,7 @@ describe('cable session', () => {
       for (const frame of port.frames) expect(Buffer.from(frame).toString('utf8')).not.toMatch(/\\ud[89a-f]/i)
       expect(port.sent.find((m) => m.t === 'agent')).toMatchObject({ name: 'Fix ?' })
       expect(port.sent.find((m) => m.t === 'question'))
-        .toMatchObject({ name: 'Fix ?', questions: [{ q: 'Ship ? it? 😀', options: ['?yes', 'no'] }] })
+        .toMatchObject({ name: 'Fix ?', questions: [{ q: 'Ship ? it? 😀', options: [] }] })
     } finally { await session.stop() }
   })
 
@@ -2428,7 +2429,7 @@ describe('cable session', () => {
     expect(port.sent.find((m) => m.t === 'summary' && m.agentId === 'a2'))
       .toMatchObject({ name: 'Device firmware voice', engine: 'codex', machine: '' })
     await vi.waitFor(() =>
-      expect(port.sent.find((m) => m.t === 'question')).toMatchObject({ name: 'Fix login screen', engine: 'claude', id: 'q1' }))
+      expect(port.sent.find((m) => m.t === 'question')).toEqual(expect.objectContaining({ name: 'Fix login screen', machine: '', id: 'q1' })))
     expect(port.sent.find((m) => m.t === 'summary' && m.agentId === 'ghost')).toMatchObject({ name: '', engine: '' })
     await session.stop()
   })
@@ -3862,7 +3863,7 @@ describe('hello capabilities', () => {
   it('a drawer holds eight rows, open questions first: one past them comes back as a row, with no ring', async () => {
     const ask = [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }]
     const round = { t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' }
-    const who = { name: '', engine: '', machine: '' }   // q8 is on no list
+    const who = { name: '', machine: '' }   // q8 is on no list
     /** Nine questions rung live, then two changes of the window's list: what follows the drawers. */
     const afterDrawers = async (hello: Record<string, unknown>) => {
       const { session, port } = await connect(richHost())
@@ -3886,8 +3887,8 @@ describe('hello capabilities', () => {
     // An older round dial would ring, and so would one that says a tier this daemon does not know: neither is sent it.
     expect(await afterDrawers(round)).toEqual([])
     expect(await afterDrawers({ ...round, questionTier: 'v2' })).toEqual([])
-    // A Pro mutes a question sent again by its id and words: the plain frame, as before.
-    const plain = { t: 'question', agentId: 'q8', ...who, id: 'id8', questions: [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'], multi: false }] }
+    // A Pro mutes a question sent again by its id and words: the plain frame, its words as the ring had them.
+    const plain = { t: 'question', agentId: 'q8', ...who, id: 'id8', questions: [{ key: '', q: 'Ship it?', options: [] }] }
     expect(await afterDrawers({ ...PRO_HELLO })).toEqual([plain, plain])
   })
 
@@ -3943,7 +3944,7 @@ describe('hello capabilities', () => {
   it('a told question the dial lost, delivered again unchanged, follows the same rule and stays one small frame', async () => {
     const long = [{ key: 'k', q: `Ship  it?\n${'x'.repeat(6000)}`, options: ['yes', 'no'] }]
     const round = { t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' }
-    const who = { name: 'Fix login screen', engine: 'claude', machine: '' }
+    const who = { name: 'Fix login screen', machine: '' }
     const again = async (hello: Record<string, unknown>) => {
       const { session, port } = await connect(richHost())
       try {
@@ -3962,7 +3963,7 @@ describe('hello capabilities', () => {
     expect(await again({ ...round, questionTier: 'v1' })).toEqual([row])
     expect(Buffer.byteLength(JSON.stringify(row), 'utf8')).toBeLessThan(600)
     expect(await again(round)).toEqual([])
-    expect(await again({ ...PRO_HELLO })).toEqual([{ t: 'question', agentId: 'a1', ...who, id: 'q1', questions: long }])
+    expect(await again({ ...PRO_HELLO })).toEqual([{ t: 'question', agentId: 'a1', ...who, id: 'q1', questions: row.questions }])
   })
 
   it('a told question whose id the dial cannot keep is not given back, as a row or as the plain frame', async () => {
@@ -3981,6 +3982,83 @@ describe('hello capabilities', () => {
         expect(port.types()).toEqual(['notif.replace'])
       } finally { await session.stop() }
     }
+  })
+
+  it('an answerable question whose objects carry kilobytes beyond what the dial reads rings as one small frame', async () => {
+    const q = 'Ship it?'
+    const ask = [{ key: 'k', q, options: ['yes', 'no'], detail: 'x'.repeat(9000) }]
+    const log = vi.fn()
+    const { session, port } = await connect(richHost({ log }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      port.sent.length = 0
+      await session.question('a1', 'q1', ask)
+      const rung = ofType(port, 'question')
+      expect(rung).toHaveLength(1)
+      expect(Buffer.byteLength(JSON.stringify(rung[0]), 'utf8')).toBeLessThanOrEqual(CABLE_MAX_PAYLOAD)
+      expect(rung[0].questions).toEqual([{ key: '', q: noticeSummary(q), options: [] }])
+      expect(log.mock.calls.map(([line]) => String(line)).filter((line) => line.includes('dropped'))).toEqual([])
+    } finally { await session.stop() }
+  })
+
+  it('a question of an agent whose id the dial cannot keep is not rung, nor closed', async () => {
+    const ask = [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }]
+    const big = 'x'.repeat(9000)
+    for (const hello of [{ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' },
+      { t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0', questionTier: 'v1' }, { ...PRO_HELLO }]) {
+      const log = vi.fn()
+      const { session, port } = await connect(richHost({ log }))
+      try {
+        port.say(hello)
+        await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+        port.sent.length = 0
+        await session.question(big, 'q1', ask)
+        await session.questionClose(big, 'q1')
+        expect(ofType(port, 'question')).toEqual([])
+        expect(ofType(port, 'question.close')).toEqual([])
+        expect(log.mock.calls.map(([line]) => String(line)).filter((line) => line.includes('dropped'))).toEqual([])
+      } finally { await session.stop() }
+    }
+  })
+
+  it('a question rung on a Pro and given back after it lost it carries the same words both times', async () => {
+    const q = `Ship  it?\nThe  tests pass. ${'Étape très longue. '.repeat(20)}`
+    const ask = [{ key: 'k', q, options: ['yes', 'no'] }]
+    const { session, port } = await connect(richHost())
+    try {
+      port.say({ ...PRO_HELLO })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      port.sent.length = 0
+      await session.question('a1', 'q1', ask)      // rung
+      await session.turnDone('a1')                  // its turn moved on without a close: no longer owed
+      await session.replaceNotifications([])        // the drawer drops its row
+      await session.question('a1', 'q1', ask)       // the core asks again as the devices reconnect: the plain frame
+      const words = ofType(port, 'question').map((m) => (m.questions as Array<{ q: string }>)[0].q)
+      // The Pro mutes a repeat by a hash of the id and these words, and reads them as the drawer row shows them.
+      expect(words).toEqual([noticeSummary(q), noticeSummary(q)])
+    } finally { await session.stop() }
+  })
+
+  it('a Pro is never rung, given back or closed a question whose id it closes nothing by', async () => {
+    const ask = [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }]
+    // pro_cable.c ignores a question.close whose id is 64 bytes or more: a ring for it could never be closed.
+    const asked = async (id: string) => {
+      const { session, port } = await connect(richHost())
+      try {
+        port.say({ ...PRO_HELLO })
+        await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+        port.sent.length = 0
+        await session.question('a1', id, ask)
+        await session.replaceNotifications([])        // no row of the window's carries it
+        await session.questionClose('a1', id)
+        return port.sent.filter((m) => m.t === 'question' || m.t === 'question.close' ||
+          (m.t === 'notif.replace' && (m.items as unknown[]).length > 0)).map((m) => m.t)
+      } finally { await session.stop() }
+    }
+    expect(await asked('é'.repeat(32))).toEqual([])   // 64 UTF-8 bytes, as the firmware's strlen counts them
+    expect(await asked('\u0000ship')).toEqual([])     // cJSON keeps the NUL: strlen reads an empty id, which it ignores too
+    expect(await asked('x'.repeat(63))).toEqual(['question', 'notif.replace', 'question.close'])
   })
 
   it('a refused question whose id is past the bound an answerable one has is not sent, nor filed as a row', async () => {
@@ -4701,8 +4779,8 @@ describe('hello capabilities', () => {
       summary += ch
     }
     summary = summary.trimEnd()
-    const who = { name: 'Fix login screen', engine: 'claude', machine: '' }
-    const ring = { t: 'question', agentId: 'a1', ...who, id: 'q1', questions: [{ key: '', q: summary, options: [], multi: false }] }
+    const who = { name: 'Fix login screen', machine: '' }
+    const ring = { t: 'question', agentId: 'a1', ...who, id: 'q1', questions: [{ key: '', q: summary, options: [] }] }
 
     it('reaches the dial as its small entry, rings once, is read as its summary and stays on the drawer until closed', async () => {
       const { session, port } = await connect(richHost())

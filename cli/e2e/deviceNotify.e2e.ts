@@ -104,6 +104,8 @@ describe('harness device notify', () => {
   const questions = (dial: FakeDial, agentId: string): DialMessage[] =>
     dial.messages.filter((m) => m.t === 'question' && m.agentId === agentId)
   const card = (app: string) => [{ key: 'notice', q: LINE, options: [`In ${app}`] }]
+  /** What a ring carries of the card: its line, as the drawer row shows it. The dial reads the card itself. */
+  const rung = [{ key: '', q: LINE, options: [] }]
 
   it('an outside Claude Code session\'s notice is its own card, read without closing it, and closed by its next prompt', async () => {
     const { d, desk } = await fresh()
@@ -115,7 +117,7 @@ describe('harness device notify', () => {
 
     expect(await notify(d, caller, cwd)).toMatchObject({ code: 0, out: 'shown' })
     const question = await dial.next((m) => m.t === 'question' && m.agentId === engine.id, 45_000, 'the notice')
-    expect(question).toMatchObject({ agentId: engine.id, name: 'fix-login', id: expect.stringMatching(/^shown:/), questions: card('Ghostty') })
+    expect(question).toMatchObject({ agentId: engine.id, name: 'fix-login', id: expect.stringMatching(/^shown:/), questions: rung })
 
     // The same line again, within the minute: limited, and nothing more on the dial.
     expect(await notify(d, caller, cwd)).toMatchObject({ code: 0, out: 'limited' })
@@ -180,7 +182,8 @@ describe('harness device notify', () => {
     await listed(dial, codex.id)
     expect(await notify(d, { CODEX_THREAD_ID: codex.sessionId }, codex.cwd)).toMatchObject({ code: 0, out: 'shown' })
     expect(await dial.next((m) => m.t === 'question' && m.agentId === codex.id, 45_000, 'the notice'))
-      .toMatchObject({ name: 'api', id: expect.stringMatching(/^shown:/), questions: card('Ghostty') })
+      .toMatchObject({ name: 'api', id: expect.stringMatching(/^shown:/), questions: rung })
+    expect(await opened(dial, codex.id)).toMatchObject({ ok: true, questions: card('Ghostty') })
     await until('the notice in the daemon\'s log', () => d.log().includes('[device] notify · codex · shown'), 30_000, 50)
   })
 
@@ -193,7 +196,8 @@ describe('harness device notify', () => {
     const caller = { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: harness.sessionId }
     expect(await notify(d, caller, join(d.projectsDir, 'in-harness'))).toMatchObject({ code: 0, out: 'shown' })
     expect(await dial.next((m) => m.t === 'question' && m.agentId === harness.id, 45_000, 'the notice'))
-      .toMatchObject({ id: expect.stringMatching(/^shown:/), questions: card('Harness') })
+      .toMatchObject({ id: expect.stringMatching(/^shown:/), questions: rung })
+    expect(await opened(dial, harness.id)).toMatchObject({ ok: true, questions: card('Harness') })
     expect(questions(dial, observedAgentId('claude', harness.sessionId))).toEqual([])
     client.close()
   })
@@ -206,7 +210,8 @@ describe('harness device notify', () => {
     expect(await notify(d, { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: sessionId }, join(d.projectsDir, 'scratch')))
       .toMatchObject({ code: 0, out: 'shown' })
     expect(await dial.next((m) => m.t === 'question' && m.agentId === agentId, 45_000, 'the notice'))
-      .toMatchObject({ name: 'scratch', id: expect.stringMatching(/^shown:/), questions: card('Terminal') })
+      .toMatchObject({ name: 'scratch', id: expect.stringMatching(/^shown:/), questions: rung })
+    expect(await opened(dial, agentId)).toMatchObject({ ok: true, questions: card('Terminal') })
   })
 
   it('it rings with a window open on its tab', async () => {
@@ -223,7 +228,7 @@ describe('harness device notify', () => {
     const caller = { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: engine.sessionId }
     expect(await notify(d, caller, join(d.projectsDir, 'fix-login'))).toMatchObject({ code: 0, out: 'shown' })
     expect(await dial.next((m) => m.t === 'question' && m.agentId === engine.id, 45_000, 'the notice', since))
-      .toMatchObject({ questions: card('Ghostty') })
+      .toMatchObject({ questions: rung })
     window.close()
   })
 
