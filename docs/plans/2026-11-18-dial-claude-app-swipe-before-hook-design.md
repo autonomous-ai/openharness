@@ -48,9 +48,11 @@ scan gave it decides, and the id comes from the session's own file):
    app: a record alone, or the app alone, places nothing. A session paired with an hc terminal has `app: 'herdr'`, so
    the pairing wins with no rule of its own. A session whose app the scan did not learn (the 16-bundles-a-pass bound, a
    bundle with no id) stays unplaced until its first hook, as its name's app does today.
-4. **A tap whose link fails brings the Claude app forward**, as the Codex app's does (`forward()`, the line
-   `[device] open · claude · fallback`): a scanned session has no `entry.bundle` until its first hook, so the opener
-   alone could not. The comment in `claudeApp.ts` that says it needs no forward is replaced.
+4. **A tap whose link fails brings the Claude app forward** by the adapter's bundle: the Claude adapter gains
+   `bundle: APP_BUNDLES.claude` (`HostAdapter.bundle`), and `target()` takes it when no hook gave `entry.bundle`. The
+   opener's own fallback then brings the app with its one line, `[device] open · claude · fallback`, as for every pane:
+   no forward of the adapter's own, so `open -b` runs once even when the link and the app both fail. The comment in
+   `claudeApp.ts` says why it has no forward.
 5. **Then everything works as after a hook.** `hasPane` is true while the Claude app is in front, a rest runs one
    `claude://code/continue?session=<local_…>` link to the Claude app alone (`appLink.ts`), a tap runs the same link.
    The safety rules stand unchanged: a rest shows the session only while the Claude app is in front, nothing is ever
@@ -88,8 +90,11 @@ process.
 - `recordName.spec.ts`: a Claude app record gives its name and `hostSession`; a CLI record gives no `hostSession`; a
   record for another `sessionId` gives neither; a non-string `hostSessionId` gives none.
 - `claudeApp.spec.ts`: `paneOf` takes `{ app: 'claude', hostSession: local_… }`; refuses it under any other app, with no
-  `hostSession`, and for each malformed id; the hook's hints still work. A tap whose link failed brings the Claude app
-  forward by its bundle and logs `[device] open · claude · fallback`.
+  `hostSession`, and for each malformed id; the hook's hints still work. Its `bundle` is the Claude app's; a tap whose
+  link failed answers false and runs nothing more.
+- `open.spec.ts`: a scanned session's target, its pane and the adapter's bundle, opens by its link; a failed link
+  brings the app once with one `[device] open · claude · fallback`; a link and an app that both fail run `open -b`
+  once, in one line.
 - `observed.spec.ts`: a session the scan found, with the Claude app's parents and a record's `local_…` id, has a Claude
   pane before any hook: `hasPane` while the app is in front, `showPane` shows that id, a tap opens it; with only one of
   the two (the record's id under a Ghostty parent, or the Claude app's parent and no id) it has none; the first hook
