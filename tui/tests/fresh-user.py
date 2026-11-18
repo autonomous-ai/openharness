@@ -5,6 +5,7 @@
 terminal. Subsequent commands use the printed --state path. All product actions
 are terminal keys or mouse input; daemon requests are read-only verification.
 Keep the state and captures as evidence, and run `stop` to close only this rig.
+`start --legacy-home` begins in a home from before the XDG folders, one that holds only ~/.harness.
 """
 import argparse
 import http.client
@@ -18,6 +19,8 @@ import socket
 import subprocess
 import tempfile
 import time
+
+import harness_home
 
 
 class User:
@@ -57,8 +60,12 @@ class User:
             time.sleep(.025)
         raise AssertionError('Popup did not settle\n' + self.screen())
 
+    def folder(self, entry):
+        # Looked up at each use: the daemon's first start moves a ~/.harness home to the XDG folders.
+        return harness_home.path(self.home, self.env, entry)
+
     def native(self, *args):
-        return subprocess.check_output([str(self.home / '.harness/bin/harness-tui'), *args],
+        return subprocess.check_output([str(self.folder('bin') / 'harness-tui'), *args],
                                        env=self.env, cwd=self.home, text=True, timeout=15).strip()
 
     def zoom(self):
@@ -192,7 +199,7 @@ class User:
         conn.sock = socket.socket(socket.AF_UNIX)
         conn.sock.settimeout(3)
         try:
-            conn.sock.connect(str(self.home / '.harness/cli/data' / f'daemon-{self.env["PORT"]}.sock'))
+            conn.sock.connect(str(self.folder('cli') / 'data' / f'daemon-{self.env["PORT"]}.sock'))
             conn.request('GET', '/api/status')
             response = conn.getresponse()
             assert response.status == 200
@@ -201,7 +208,7 @@ class User:
             conn.close()
 
     def stop(self):
-        native = self.home / '.harness/bin/harness-tui'
+        native = self.folder('bin') / 'harness-tui'
         if native.exists():
             subprocess.run([str(native), 'kill-server'], env=self.env, cwd=self.home,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
@@ -210,17 +217,20 @@ class User:
             subprocess.run([str(launcher), 'stop'], env=self.env, cwd=self.home,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=25)
         self.outer('kill-server', check=False)
-        marker = self.home / '.harness/runtime/current-tmux'
+        marker = self.folder('runtime') / 'current-tmux'
         if marker.exists():
             subprocess.run([marker.read_text().strip(), 'kill-server'], env=self.env,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
 
 
-def start():
+def start(legacy_home=False):
     root = Path(tempfile.mkdtemp(prefix='hn-user-', dir='/tmp')).resolve()
     home = root / 'home'
     for path in (home, root / 'tmp', root / 'tmux', root / 'hn'):
         path.mkdir(mode=0o700)
+    if legacy_home:
+        # The installer and hn still use a ~/.harness they find, until the daemon moves it.
+        (home / '.harness').mkdir(mode=0o700)
     tmux = shutil.which('tmux')
     assert tmux, 'tmux is needed only to drive the outer test terminal'
     with socket.socket() as probe:
@@ -243,8 +253,8 @@ def start():
                                 env=env, cwd=home, stdout=log, stderr=subprocess.STDOUT, timeout=600)
     assert result.returncode == 0, (root / 'install.log').read_text()
     # Optional local candidates are applied only after the real public installer completes.
-    for variable, destination in [('HN_FRESH_USER_CLI', home / '.harness/cli/cli.js'),
-                                  ('HN_FRESH_USER_BINARY', home / '.harness/bin/harness-tui')]:
+    for variable, destination in [('HN_FRESH_USER_CLI', harness_home.path(home, env, 'cli') / 'cli.js'),
+                                  ('HN_FRESH_USER_BINARY', harness_home.path(home, env, 'bin') / 'harness-tui')]:
         if os.environ.get(variable):
             shutil.copy2(os.environ[variable], destination)
     env['PATH'] = f'{home}/.local/bin:' + env['PATH']
@@ -266,10 +276,11 @@ def start():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--state')
+    parser.add_argument('--legacy-home', action='store_true', help='start in a home that holds only ~/.harness')
     parser.add_argument('action', choices=['start', 'run', 'screen', 'keys', 'text', 'field', 'wait', 'snapshot', 'status', 'resize', 'stop'])
     parser.add_argument('args', nargs='*')
     args = parser.parse_args()
-    user = start() if args.action == 'start' or (args.action == 'run' and not args.state) else User(args.state)
+    user = start(args.legacy_home) if args.action == 'start' or (args.action == 'run' and not args.state) else User(args.state)
     if args.action == 'run':
         import runpy
         runpy.run_path(str(Path(__file__).with_name('fresh-user-journeys.py')))['run'](user, args.args)

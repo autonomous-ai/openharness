@@ -18,6 +18,8 @@ import time
 import unicodedata
 import urllib.request
 
+import harness_home
+
 ROOT = Path(__file__).resolve().parents[1]
 PORT = int(os.environ.get('HN_WORKSPACE_PORT', '19920'))
 assert 19920 <= PORT <= 19929, 'refusing a non-test workspace port'
@@ -357,7 +359,7 @@ def placement_restart_journey(command, alpha):
     assert len(requests('agent_create')) == 1
     made = requests('agent_create')[0]['payload']['creationId']
     replacement = next(a['id'] for a in api()['agents'][api()['local']] if a['name'] == 'Alpha task' and a['status'] != 'stopped')
-    sessions_file = BASE / '.harness' / 'tui' / f'sessions-{PREFIX}.json'
+    sessions_file = harness_home.path(BASE, ENV, 'tui') / f'sessions-{PREFIX}.json'
     wait(lambda: sessions_file.exists() and any(r.get('agent') == replacement for r in json.loads(sessions_file.read_text()).get('pending_workspace', [])), 'pending view is saved before client exit')
     snapshot('placement-pending-before-restart')
     tmux('set-window-option', '-t', TARGET, 'remain-on-exit', 'on')
@@ -616,7 +618,9 @@ try:
     with socket.socket() as probe:
         probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         probe.bind(('127.0.0.1', PORT))
-    mock = subprocess.Popen(['node', str(ROOT / 'tests/workspace-mock.mjs'), str(PORT)], env=ENV,
+    # The mock puts its socket where a daemon on this computer would; hn finds it by its own rule.
+    mock = subprocess.Popen(['node', str(ROOT / 'tests/workspace-mock.mjs'), str(PORT)],
+                            env={**ENV, 'ADAPTER_DATA_DIR': str(harness_home.path(BASE, ENV, 'cli') / 'data')},
                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     for _ in range(100):
         assert mock.poll() is None, mock.stderr.read().decode() if mock.poll() is not None else ''
@@ -1078,7 +1082,7 @@ try:
     tmux('set-window-option', '-t', 'test', 'remain-on-exit', 'on')
     hn('hn-hand-over')
     wait(lambda: tmux('display-message', '-p', '-t', 'test', '#{pane_dead}').strip() == '1', 'client hands off for restart')
-    sessions_file = BASE / '.harness' / 'tui' / f'sessions-{PREFIX}.json'
+    sessions_file = harness_home.path(BASE, ENV, 'tui') / f'sessions-{PREFIX}.json'
     saved = json.loads(sessions_file.read_text())
     old_identity = {'machine': joined, 'localOnly': False}
     stale = {'name': 'old-account-session', 'id': 90000, 'desk': False, 'owner': None,
