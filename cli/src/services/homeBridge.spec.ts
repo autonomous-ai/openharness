@@ -84,18 +84,25 @@ let pids = 100
 const row = (over: Partial<ProcRow>): ProcRow => ({ pid: pids++, uid: ME, startedAt: OLD, name: 'bash', exe: '/usr/bin/bash', parent: 1, ...over })
 
 /**
- * The service on [h], on Linux, with no old user, no pane and no harness to set up, unless [over] says otherwise. A
- * member [over] sets to undefined is the service's own. The connections folder is named: off Linux its default is
+ * What the service is handed on [h]: Linux, no old user, no pane and no harness to set up, unless [over] says otherwise.
+ * A member [over] sets to undefined is the service's own. The connections folder is named: off Linux its default is
  * ~/.harness's (lib/connectors/store.ts).
  */
-function start(h: Home, over: Partial<HomeBridgeDeps> = {}) {
+function handed(h: Home, over: Partial<HomeBridgeDeps> = {}) {
   const log = vi.fn()
   const deps: Partial<HomeBridgeDeps> = {
     platform: 'linux', home: h.home, environment: { HOME: h.home, HARNESS_CONNECTIONS_DIR: h.connections }, socket: h.socket,
     rows: () => [], tmux: () => ({ status: 1, stdout: '' }), setupsPending: async () => 0, log, ...over,
   }
-  const given = Object.fromEntries(Object.entries(deps).filter(([, value]) => value !== undefined)) as Partial<HomeBridgeDeps>
-  return { log, bridge: startHomeBridge(fakeCore({ dataDir: h.dataDir }), given) }
+  return { log, given: Object.fromEntries(Object.entries(deps).filter(([, value]) => value !== undefined)) as Partial<HomeBridgeDeps> }
+}
+
+/** The service on [h] in its own process, and the core connected to it unless [connect] is false (services/process.ts). */
+function start(h: Home, over: Partial<HomeBridgeDeps> = {}, connect = true) {
+  const { log, given } = handed(h, over)
+  const bridge = startHomeBridge(fakeCore({ dataDir: h.dataDir }), given)
+  if (connect) bridge.connected()
+  return { log, bridge }
 }
 
 /** The check awaits only the Store's count: once the turns after it ran, it is over. */
@@ -145,6 +152,56 @@ describe('the home bridge service', () => {
     await settle()
     expect(log).not.toHaveBeenCalled()
     bridge.stop()
+  })
+
+  it('in its own process it serves and checks nothing until the core connects: before, there is no socket to link or Store to ask', async () => {
+    const h = movedHome()
+    const rows = vi.fn((): ProcRow[] => [])
+    const { bridge } = start(h, { rows }, false)
+    await settle()
+    expect(rows).not.toHaveBeenCalled()
+    expect(readdirSync(join(h.oldHome, 'hook-routes'))).toEqual([])
+    bridge.connected()
+    await settle()
+    expect(rows).toHaveBeenCalledOnce()
+    expect(existsSync(join(h.state, BRIDGE_FILE))).toBe(false)
+  })
+
+  it('each time the core connects it checks again', async () => {
+    const h = movedHome()
+    const rows = vi.fn(() => [row({ name: 'claude' })])
+    const { bridge } = start(h, { rows })
+    await settle()
+    expect(rows).toHaveBeenCalledOnce()
+    bridge.connected()
+    await settle()
+    expect(rows).toHaveBeenCalledTimes(2)
+    bridge.stop()
+  })
+
+  it('every check serves the old paths again: what the connections bridge made anew is linked anew', async () => {
+    fakeInterval()
+    const h = movedHome()
+    const { bridge } = start(h, { rows: () => [row({ name: 'claude' })] })
+    await settle()
+    for (const name of ['bridge.sock', 'mcp-shim.mjs']) {
+      rmSync(join(h.connections, name))
+      writeFileSync(join(h.connections, name), name)
+    }
+    await vi.advanceTimersByTimeAsync(CHECK_MS)
+    await settle()
+    for (const name of ['bridge.sock', 'mcp-shim.mjs']) expect(sameFile(join(h.oldHome, 'connections', name), join(h.connections, name)), name).toBe(true)
+    bridge.stop()
+  })
+
+  it('in the core\'s process the core is there from its start: it serves and checks at once', async () => {
+    const h = movedHome()
+    const rows = vi.fn((): ProcRow[] => [row({ name: 'claude' })])
+    const { given } = handed(h, { rows })
+    expect(startHomeBridgeInCore(fakeCore({ dataDir: h.dataDir }), given)).toEqual({})
+    await settle()
+    expect(rows).toHaveBeenCalledOnce()
+    expect(existsSync(join(h.oldHome, 'hook-routes', `${h.bridge.newTag}.json`))).toBe(true)
   })
 
   it('what could not be linked is logged once, not at each pass', () => {
