@@ -124,7 +124,7 @@ The draft's two questions, answered by the PM on 2026-11-18:
 - **One function** (`orcaFronted`) serves the message and the stream's end, inside the `orca` part's guard: Node reports a throw in an abort listener as an uncaught exception.
 - **A scope is an object**, `{ inScope(agentId) }` (the spec's `setScope(app, inScope?)` is shorthand). The same object set again keeps its ring. `pageOf` is exported from `select.ts` so the host finds the shown app's agents as the rings do.
 - **`placedAt`** is the map's own answer, as `shownOnly` reads it.
-- **The plugin's `front()`** keeps the strings that match the handle pattern, then the first 50, and compares bodies as sent. A send fails on `null`, on any status outside 200 to 299, or with no answer in 2 s (`HEAD_MS`, the listener's own deadline). A failure a newer `front()` replaced is not logged. After a logged failure the same ids are tried again at the next `front()`.
+- **The plugin's `front()`** keeps the strings that match the handle pattern, then the first 50, and compares bodies as sent. A send fails on `null`, on any status outside 200 to 299, or with no answer in 2 s (`HEAD_MS`, the listener's own deadline). A failure a newer `front()` replaced is not logged. After a logged failure the same ids wait for other ids or the next stream: a tab renamed gives the same ids, which a daemon from before `orcaFront` would refuse each time (the spec's "a title-only rename sends nothing").
 - **`post`** answers the status at the answer's head, on a connection of its own (`agent: false`).
 - **The harness's stdin** is one JSON line per `front()` argument: an array of ids, or `null`.
 - **The end-to-end cases join `dialStream.e2e.ts`**, which holds the loop's launcher shim and its isolation checks.
@@ -320,7 +320,7 @@ The draft's two questions, answered by the PM on 2026-11-18:
   - A send is `inputs.post(socket, body, signal)` on the stream's own socket, aborted with the pass and after `HEAD_MS` (2 s) on the loop's clock. A status from 200 to 299: `sent` is that body, then push. Anything else, `null` included, failed:
     - the body is no longer `latest`: push;
     - a first failure: once more after `FRONT_RETRY_MS = 1_000`, if it is still `latest` and the stream still open;
-    - the retry failed: log `dial: front not sent`. `sent` stays as it was.
+    - the retry failed: log `dial: front not sent`. `sent` stays as it was, and a push sends nothing while `latest` is that body.
   - On Windows nothing is ever sent. `stop()` aborts a send in flight and cancels a retry.
 
 - [ ] **Step 1: Write the failing tests.** `world()` gains `posts` (each `{ socket, body, signal }`) and a `post` that answers what the test queued: a status, `null`, or a hold that ends as `null` when its signal aborts; 204 with nothing queued. `H(n)` as in Task 1.
@@ -331,7 +331,7 @@ The draft's two questions, answered by the PM on 2026-11-18:
   - `each open posts the latest ids again` (the stream ends, the clock passes 1 s, the next stream gets the same body).
   - `the same ids again post nothing` (twice the same list: one post).
   - `a send that fails is sent once more 1 s later; if that fails too it is logged once, with no id` (500 then `null`: two posts, one `dial: front not sent`, no line holds `term_`, no third post).
-  - `after a logged failure the same ids are sent again at the next front()`.
+  - `after a logged failure the same ids post nothing, as a tab renamed gives them; other ids post, and so does the next open`.
   - `a newer front() during the wait is sent at once, and the older one's retry is not`.
   - `the stream ending during the wait cancels the retry: nothing more is sent or logged`.
   - `sends never overlap: front() calls while one is in flight send only the latest once it answers` (A held; B, C: posts are A; A answers 204: posts are A, C).

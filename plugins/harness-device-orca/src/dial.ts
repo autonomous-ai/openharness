@@ -39,9 +39,18 @@ const FRONT_RETRY_MS = 1_000
 
 type Link = { ready: false; socket?: string } | { ready: true; socket: string }
 
-// The `dial` stream while it is open: the body the devices last took, the stop of the send in flight, and the body
-// whose retry waits.
-interface Stream { socket: string; sent?: string; sending?: () => void; retry?: { body: string; cancel(): void } }
+// The `dial` stream while it is open.
+interface Stream {
+  socket: string
+  /** The body the devices last took. */
+  sent?: string
+  /** Stops the send in flight. */
+  sending?: () => void
+  /** The body whose retry waits. */
+  retry?: { body: string; cancel(): void }
+  /** The body whose retry failed too. */
+  failed?: string
+}
 
 const decoder = new TextDecoder()
 
@@ -197,12 +206,15 @@ export function startDial(inputs: DialInputs, tell: { changed(state: DialState):
   }
 
   // One send at a time, so an older worktree never lands after a newer one: the latest goes once the one in flight
-  // answers, unless it waits for its retry or the devices took it. Any other body's retry is dropped.
+  // answers, unless it waits for its retry or the devices took it. Any other body's retry is dropped. What failed twice
+  // waits for other ids or the next stream: a tab renamed gives the same ids again, which a daemon from before orcaFront
+  // would refuse each time, so a rename costs no post and no line.
   function push(): void {
     const open = stream
-    if (!open || latest === undefined || open.sending || latest === open.retry?.body) return
+    if (!open || latest === undefined || open.sending || latest === open.retry?.body || latest === open.failed) return
     open.retry?.cancel()
     open.retry = undefined
+    open.failed = undefined
     if (latest !== open.sent) void send(open, latest, false)
   }
 
@@ -222,8 +234,10 @@ export function startDial(inputs: DialInputs, tell: { changed(state: DialState):
       open.sent = body
       push()
     } else if (body !== latest) push()
-    else if (retried) log('dial: front not sent')
-    else {
+    else if (retried) {
+      open.failed = body
+      log('dial: front not sent')
+    } else {
       // A refusal by a daemon from before orcaFront costs one more send and one line, never the stream.
       const cancel = inputs.after(FRONT_RETRY_MS, () => {
         open.retry = undefined
