@@ -32,6 +32,7 @@ import { Ledger, ledgerPath } from '../agentClient/ledger.js'
 import type { AgentCleanupPort, CoreApi, CorePorts } from '../core/api.js'
 import { backgroundSaid } from '../lib/backgroundSaid.js'
 import type { AgentCloseResult } from '../lib/closeAgentService.js'
+import { errorKind } from '../lib/log.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { createMessagesRpc } from '../messages/rpc.js'
 import { createHachiHandOver } from './hachiHandOver.js'
@@ -92,7 +93,6 @@ const incarnation = (s: RegisteredSession): string => `${s.agentId}|${s.processI
 
 /** A harness in the log: its id, as its name and title hold the person's words. */
 const label = (s: RegisteredSession): string => s.agentId.slice(0, 8)
-const reason = (error: unknown): string => (error instanceof Error ? error.message : String(error))
 const STARTER_CLOSED = 'the harness that started it was closed'
 
 export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
@@ -133,7 +133,7 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
       writeFileSync(`${file}.tmp`, JSON.stringify({ version: 1, joined: Object.fromEntries(joined) }), { mode: 0o600 })
       renameSync(`${file}.tmp`, file)
     } catch (error) {
-      log(`[agent-cleanup] could not keep which harnesses the person joined: ${reason(error)}`)
+      log(`[agent-cleanup] could not keep which harnesses the person joined: ${errorKind(error)}`)
     }
   }
 
@@ -238,14 +238,14 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
     return () => clearInterval(timer)
   })
   const unschedule = every(LOOK_EVERY_MS, () => {
-    void look().catch((error: unknown) => log(`[agent-cleanup] a look failed: ${reason(error)}`))
+    void look().catch((error: unknown) => log(`[agent-cleanup] a look failed: ${errorKind(error)}`))
   })
 
   // A harness closed or stopped (`agent_close`, Stop Harness, a purge): the harnesses it started close too. It follows no
   // agent as it runs: the looks above ask for the live ones.
   const unfollow = core.agents.follow?.((event) => {
     if (event.kind !== 'stopped') return
-    void closeStartedBy(event.agentId).catch((error: unknown) => log(`[agent-cleanup] could not close what ${event.agentId.slice(0, 8)} started: ${reason(error)}`))
+    void closeStartedBy(event.agentId).catch((error: unknown) => log(`[agent-cleanup] could not close what ${event.agentId.slice(0, 8)} started: ${errorKind(error)}`))
   }, { running: false })
   const port: AgentCleanupPort = {
     typed: (id) => {
@@ -266,8 +266,8 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
         new Ledger(ledgerPath(core.dataDir), deps.forgetLockWaitMs ?? FORGET_LOCK_WAIT_MS).forgetTold(agentId)
         return true
       } catch (error) {
-        // Said here, where the reason is known: the delete is refused in the person's words (core/agents/lifecycle.ts).
-        log(`[agent-cleanup] could not erase what ${agentId.slice(0, 8)} was told: ${reason(error)}`)
+        // Said here, where the kind is known: the delete is refused in the person's words (core/agents/lifecycle.ts).
+        log(`[agent-cleanup] could not erase what ${agentId.slice(0, 8)} was told: ${errorKind(error)}`)
         return false
       }
     },

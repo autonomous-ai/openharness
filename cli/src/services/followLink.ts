@@ -8,6 +8,7 @@
  * was not hearing (the core restarted, or the link dropped): they are told it ended.
  */
 import type { AgentLife, AgentView, FollowOptions } from '../core/api.js'
+import { errorKind } from '../lib/log.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { agentsIn, isSession } from './processCoreApi.js'
 
@@ -48,7 +49,7 @@ export function followLink(options: FollowOptions, log: (line: string) => void =
   const tell = (event: AgentLife): void => {
     for (const listener of listeners) {
       try { listener(event) } catch (error) {
-        log(`[agents] a follower failed on ${event.kind}: ${error instanceof Error ? error.message : String(error)}`)
+        log(`[agents] a follower failed on ${event.kind}: ${errorKind(error)}`)
       }
     }
   }
@@ -65,7 +66,7 @@ export function followLink(options: FollowOptions, log: (line: string) => void =
       listeners.add(listener)
       for (const session of told.values()) {
         try { listener({ kind: 'running', session }) } catch (error) {
-          log(`[agents] a follower failed on running: ${error instanceof Error ? error.message : String(error)}`)
+          log(`[agents] a follower failed on running: ${errorKind(error)}`)
         }
       }
       return () => { listeners.delete(listener) }

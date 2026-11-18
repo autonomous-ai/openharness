@@ -83,6 +83,7 @@ import { MachineListCache } from '../device/machineList.js'
 import type { NoticeAsk, NoticeResult } from '../lib/dialNotice.js'
 import { claudeProjectsRoots, codexHomeRoots, movedEngineHomes } from '../lib/engineHomes.js'
 import { harnessDevicesRequest } from '../lib/harnessDevices.js'
+import { errorKind } from '../lib/log.js'
 import { pidAlive } from '../lib/processProof.js'
 import { OpenSessions, SessionRows } from '../lib/sessionSearch/external.js'
 import { externalProviders } from '../lib/sessionSearch/externals/index.js'
@@ -1723,7 +1724,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       if (listenerOpen && revision > 0) sayStatus(cableHost.currentDialStatus())
       return listener
     })
-    .catch((): null => { log('[devices] listener not opened · failed'); return null })
+    .catch((error: unknown): null => { log(`[devices] listener not opened · ${errorKind(error)}`); return null })
 
   let stopped = false
   if (deps.cableDisabled) log('[cable] disabled (CABLE_DISABLE=true) — the serial port is left alone')
