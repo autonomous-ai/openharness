@@ -1,6 +1,5 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
-import { tildify } from './daemonState.js'
+import { join, relative, resolve, sep } from 'node:path'
 import { buildLogBundle, bundleFileName } from './logBundle.js'
 import type { BundleFacts } from './logBundleFacts.js'
 import { redactSecretsInText } from './redactSecrets.js'
@@ -48,7 +47,9 @@ export async function logsExportCommand(deps: LogsExportDeps): Promise<void> {
   writeFileSync(path, zip)
   if (deps.args.includes('--json')) deps.out(JSON.stringify({ path, included, bytes: zip.length }))
   else {
-    deps.out(`wrote ${tildify(path)} (${Math.round(zip.length / 1024)} KB)`)
+    // From the home it was handed, as the bundle's blanking is: `tildify` reads this computer's.
+    const shown = path.startsWith(deps.home + sep) ? join('~', relative(deps.home, path)) : path
+    deps.out(`wrote ${shown} (${Math.round(zip.length / 1024)} KB)`)
     for (const name of included) deps.out(`  ${name}`)
     if (!included.length) deps.out('  (no logs found)')
   }
