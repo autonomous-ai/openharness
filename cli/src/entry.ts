@@ -26,8 +26,10 @@ if (guard?.isOldTeamAccount()) {
   process.exit(0)
 }
 // On Linux a start moves ~/.harness to the XDG folders before anything that resolves a path loads, then starts again from
-// them (homeMove/start.ts).
-if (command === 'start' || command === '__harnessd') await (await import('./homeMove/start.js')).moveHomeAtStart(process.argv, process.env)
+// them (homeMove/start.ts). Nothing moves on macOS or Windows, which load none of it.
+if (process.platform === 'linux' && (command === 'start' || command === '__harnessd')) {
+  await (await import('./homeMove/start.js')).moveHomeAtStart(process.argv, process.env)
+}
 if (command === '__swarm-shell-guard') {
   // The Swarm's shell guard is gone (anh Dee, 2026-11-09), but an agent a release before started still runs its hook before
   // each tool, as its engine was told at launch, and Codex fails a tool call whose hook fails: the call is read, so the engine's
