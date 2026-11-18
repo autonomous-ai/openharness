@@ -108,6 +108,41 @@ describe('asynchronous question evidence', () => {
     })
   })
 
+  describe('a multi-choice answer joined with ", "', () => {
+    // The labels of the rows the answer toggled, from an unreviewed answer string.
+    const toggled = async (labels: string[], answer: string) => {
+      const question = { kind: 'question' as const, question: 'Pick?', multi: true, typeRow: null,
+        rows: labels.map((label, i) => ({ number: String(i + 1), label, checked: false })) }
+      const apply = vi.fn(async (_step: { kind: string, rows?: { label: string }[] }) => true)
+      const readQuestion = vi.fn(async (): Promise<PaneView> => null).mockResolvedValueOnce(question)
+      const controller = new AskQuestionController({ getSession: () => row(), capture: async () => capture, readQuestion,
+        sendKey: vi.fn(async () => true), sendText: vi.fn(async () => true), acquireControl: () => vi.fn(), wait: async () => {},
+        questionControlFor: () => ({ apply }) })
+      expect(await controller.answer({ agentId: 'agent', answers: { 'Pick?': answer } })).toEqual({ ok: true })
+      expect(apply).toHaveBeenCalledOnce()
+      return apply.mock.calls[0][0].rows?.map(row => row.label)
+    }
+
+    it('keeps an option whose label holds a comma whole', async () => {
+      expect(await toggled(['Yes, continue', 'No', 'Maybe'], 'Yes, continue, Maybe')).toEqual(['Yes, continue', 'Maybe'])
+      expect(await toggled(['Yes, continue', 'No', 'Maybe'], 'Yes, continue')).toEqual(['Yes, continue'])
+      // Cut on every comma, "Yes" reads as the first option it starts.
+      expect(await toggled(['Yes, continue', 'Yes, stop', 'Maybe'], 'Yes, stop, Maybe')).toEqual(['Yes, stop', 'Maybe'])
+    })
+
+    it('reads the answer as labels that spell all of it, where taking the longest label first would not', async () => {
+      expect(await toggled(['A, B', 'A', 'B, C'], 'A, B, C')).toEqual(['A', 'B, C'])
+    })
+
+    it('takes the reading with the fewest options when several spell it', async () => {
+      expect(await toggled(['A', 'B', 'A, B'], 'A, B')).toEqual(['A, B'])
+    })
+
+    it('matches each piece loosely, as before, when no labels spell the answer', async () => {
+      expect(await toggled(['Tea', 'Coffee', 'Milk'], 'tea, coff')).toEqual(['Tea', 'Coffee'])
+    })
+  })
+
   it('keeps a previously announced question while the screen reader is unavailable', async () => {
     vi.useFakeTimers()
     const current = row(), onQuestion = vi.fn(), onQuestionGone = vi.fn()
