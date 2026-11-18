@@ -1,7 +1,7 @@
 /** Narrow adapter onto the SAME Store, project preparation and engine creator used by Desktop.
  * Never passes device frames to BackendSocket's generic dispatcher. It runs with the Wi-Fi device's
  * service, in the devices' process (services/wifi.ts): the agents it reads and the one it creates are the
- * core's (`CoreApi.wifi.view` and `create`, core/wifiAgents.ts).
+ * component's (`services/wifiView.ts`); creation still uses `CoreApi.wifi.create`.
  */
 import { realpathSync, statSync } from 'node:fs'
 import { join } from 'node:path'

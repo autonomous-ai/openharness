@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { answerAgentQuery } from './agentQueries.js'
+import { snapshotFixture } from '../testing/sessionSnapshot.js'
+import { answerAgentQuery, answerSessionSnapshot } from './agentQueries.js'
 import { usageTarget } from '../lib/agentUsageWire.js'
 
 const agent = (agentId: string, over: Partial<RegisteredSession> = {}) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: `/work/${agentId}`, ...over }) as RegisteredSession
@@ -87,5 +88,31 @@ describe('what a service in its own process may ask the core of the agents', () 
     core.usageFresh = vi.fn(async () => ({ totalTokens: 9, updatedAt: '2026-10-29T00:00:00Z' }))
     expect(await answerAgentQuery(core, 'agentUsageFresh', { agentId: 'a1' })).toEqual({ error: 'UNKNOWN_QUERY' })
     expect(core.usageFresh).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('shared snapshot service admission', () => {
+  it('serves only its two declared authenticated readers and checks exact current authority after await', async () => {
+    const core = fakeCore(), current = vi.fn(() => true)
+    for (const service of ['devices', 'wifi']) expect(await answerSessionSnapshot(core, service, 'session_snapshot', { current })).toEqual(await core.agents.snapshot())
+    for (const service of ['messages', 'gateway', 'unknown', '__proto__']) {
+      expect(await answerSessionSnapshot(core, service, 'session_snapshot', { current })).toEqual({ error: 'QUERY_NOT_DECLARED' })
+    }
+    expect(await answerSessionSnapshot(core, 'devices', 'view', { current })).toBeNull()
+    expect(await answerSessionSnapshot(core, 'devices', 'session_snapshot', {})).toEqual({ error: 'SESSION_SNAPSHOT_UNAVAILABLE' })
+    current.mockReturnValue(false)
+    expect(await answerSessionSnapshot(core, 'devices', 'session_snapshot', { current })).toEqual({ error: 'SESSION_SNAPSHOT_UNAVAILABLE' })
+    current.mockReturnValue(true)
+    let release!: (value: ReturnType<typeof snapshotFixture>) => void
+    vi.mocked(core.agents.snapshot).mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    const old = answerSessionSnapshot(core, 'wifi', 'session_snapshot', { current })
+    current.mockReturnValue(false); release(snapshotFixture())
+    expect(await old).toEqual({ error: 'SESSION_SNAPSHOT_UNAVAILABLE' })
+    current.mockReturnValue(true)
+    for (const error of [new Error('SESSION_SNAPSHOT_TOO_LARGE'), new Error('PRIVATE'), 'PRIVATE']) {
+      vi.mocked(core.agents.snapshot).mockRejectedValueOnce(error)
+      expect(await answerSessionSnapshot(core, 'wifi', 'session_snapshot', { current })).toEqual({ error: error instanceof Error && error.message === 'SESSION_SNAPSHOT_TOO_LARGE' ? error.message : 'SESSION_SNAPSHOT_UNAVAILABLE' })
+    }
   })
 })

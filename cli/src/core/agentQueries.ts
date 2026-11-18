@@ -14,6 +14,8 @@ import { usageTargetKey, usageTarget, validUsageTarget } from '../lib/agentUsage
  *   whether it is the live Hachi's.
  * Each is read as it is asked, so the service works from the registry as it is at that moment.
  */
+import { SERVICE_HOSTS } from '../harnessd/services.js'
+import type { ServiceQueryAuthority } from './serviceLinks.js'
 import type { CoreApi, HachiGoalDone, UsageEvent } from './api.js'
 
 const INVALID = { error: 'INVALID_REQUEST' }
@@ -54,4 +56,19 @@ export function answerAgentQuery(core: Pick<CoreApi, 'agents' | 'usage' | 'clien
   if (query === 'live') return { agents: core.agents.live() }
   if (query === 'advertised') return { agents: core.agents.advertised() }
   return { error: 'UNKNOWN_QUERY' }
+}
+
+/** The shared complete capture is granted only to its declared authenticated readers. */
+export async function answerSessionSnapshot(core: Pick<CoreApi, 'agents'>, service: string, query: string,
+  authority: Pick<ServiceQueryAuthority, 'current'>): Promise<Record<string, unknown> | null> {
+  if (query !== 'session_snapshot') return null
+  const host = Object.values(SERVICE_HOSTS).find(host => host.services.includes(service))
+  if (!host?.queries || !Object.hasOwn(host.queries, service) || !host.queries[service].includes(query)) return { error: 'QUERY_NOT_DECLARED' }
+  if (!authority.current?.()) return { error: 'SESSION_SNAPSHOT_UNAVAILABLE' }
+  try {
+    const snapshot = await core.agents.snapshot()
+    return authority.current() ? { ...snapshot } : { error: 'SESSION_SNAPSHOT_UNAVAILABLE' }
+  } catch (error) {
+    return { error: error instanceof Error && error.message === 'SESSION_SNAPSHOT_TOO_LARGE' ? error.message : 'SESSION_SNAPSHOT_UNAVAILABLE' }
+  }
 }

@@ -214,7 +214,7 @@ import { createModelsLink } from './modelsLink.js'
 import { createRecapsLink } from './recapsLink.js'
 import { createAgentCleanupLink } from './agentCleanupLink.js'
 import { agentView, AGENT_BROWSER_REQUESTS, AGENT_CLEANUP_FALLBACKS, RECAPS_FALLBACKS, TERMINALS_OFF } from './api.js'
-import { answerAgentQuery } from './agentQueries.js'
+import { answerAgentQuery, answerSessionSnapshot } from './agentQueries.js'
 import { createDeliveries } from './deliveries.js'
 import { createTerminalWatch } from './terminalWatch.js'
 import { createSharingLink } from './sharingLink.js'
@@ -896,7 +896,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The existing open-turn fact, distinct from the app's leased activity state.
   const turnRunning = (sessionId: string): boolean => turnStartedAt.has(sessionId)
   const wifi = wifiDoors({
-    registry, machineId: machineIdNow, packageId: session => { const id = frameParts.read(session.agentId).dsh; return typeof id === 'string' ? id : session.dsh ?? null }, displayName: projectDisplayName, running: turnRunning,
+    registry,
     socket: () => backendRef ?? null,
     stop: (agentId) => cancelAgent(agentId, true), devices: () => ports.devices,
   })
@@ -1047,6 +1047,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       return result.ok ? { ok: true, agentId: result.session.agentId } : { ok: false, error: result.error, detail: result.detail }
     },
     turns: {
+      running: turnRunning,
       send: (agentId, text) => backendRef?.onMessage?.(agentId, text),
       stop: (agentId) => backendRef?.onCancel?.(agentId),
       recent: async (agentId, n) => cloudAgents?.recent(agentId) ?? mirror.recent(registry.resolve(agentId)?.sessionId || agentId, n),
@@ -1573,7 +1574,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     bySession: (sessionId) => registry.bySession(sessionId), resolve: (id) => registry.resolve(id), live: () => registry.list(),
     stopped: (agentId) => stoppedAgents.get(agentId),
     orchestratorRoleOf: (agentId) => ports.orchestrator?.roleOf(agentId) ?? null,
-    turnRunning,
+    turnRunning: coreApi.turns.running!,
   })
   quietTurnRef = recaps.quietTurn
   asking.hearQuestions(recaps.question) // a turn waiting on the person is not announced as done
@@ -1731,6 +1732,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       ?? (query === 'follow_agents' ? agentLife.followed(service, payload) : null)
       ?? await answerConnectorsQuery(coreApi, service, query, payload)
       ?? await answerSharedMachinesQuery(sharedMachinesAccount, service, query, payload)
+      ?? await answerSessionSnapshot(coreApi, service, query, authority)
       ?? answerDaemonQuery(coreApi, service, query)
       ?? await answerExperimentQuery(coreApi, experiments, service, query, payload, undefined, authority)
       ?? await terminalWatch.answer(service, query, payload)

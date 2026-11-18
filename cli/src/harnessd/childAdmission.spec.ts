@@ -34,6 +34,17 @@ describe('child code admission before runtime effects', () => {
   it('accepts a compatible cohort with its selected file unchanged', () => {
     expect(childAdmissionFailure(env, 42, '/cli.js', () => disk)).toBeNull()
   })
+  it('refuses either mixed private session-query plan while admitting each complete contract-three cohort', () => {
+    const previousPlan = 'ad3cd3af3b497aa0ac8422ed823ff3da403497dc16f4623fc53001ea75645467'
+    const previous = { contract: 3, plan: previousPlan }
+    const previousEnvironment = { ...env, [WORKER_COHORT_ENV]: `42:3:${previousPlan}:${disk}` }
+    expect(WORKER_CONTRACT).toBe(3)
+    expect(WORKER_PLAN).not.toBe(previousPlan)
+    expect(childAdmissionFailure(previousEnvironment, 42, '/previous.js', () => disk, previous)).toBeNull()
+    expect(childAdmissionFailure(env, 42, '/current.js', () => disk)).toBeNull()
+    expect(childAdmissionFailure(previousEnvironment, 42, '/current.js', () => disk)).toContain('executed worker contract')
+    expect(childAdmissionFailure(env, 42, '/previous.js', () => disk, previous)).toContain('executed worker contract')
+  })
   it('refuses a mixed required-storage cohort while preserving complete historical rollback', () => {
     const previous = { contract: 2, plan: WORKER_PLAN }
     const previousEnvironment = { ...env, [WORKER_COHORT_ENV]: `42:2:${WORKER_PLAN}:${disk}` }

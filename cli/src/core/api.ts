@@ -1,3 +1,4 @@
+import { boundedJsonBytes } from '../lib/boundedJsonBytes.js'
 import type { LocalWindowPermissions } from '../harnessd/services.js'
 import type { ClientStreamQuota } from '../lib/clientStreamQueue.js'
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
@@ -24,8 +25,7 @@ import type { AgentEngine } from '../engines/types.js'
 import type { ObservedEvent } from './observedHook.js'
 import type { AppSwarms } from '../cable/cableSession.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
-import type { AutonomousDeviceAgent, AutonomousDeviceDelivery } from '../lib/autonomous-device/service.js'
-import type { StoreAgent } from '../lib/autonomous-device/store.js'
+import type { AutonomousDeviceDelivery } from '../lib/autonomous-device/service.js'
 import type { DshDescribeAnswer, DshDescribeRequest, DshLaunchRequest, DshMaterializeAnswer, DshMaterializeRequest } from '../dsh/launchWire.js'
 import type { AgentDshContext, AgentFacts } from '../lib/agentFrame.js'
 import type { GridAccess } from '../lib/gridAttach.js'
@@ -104,6 +104,34 @@ export function agentView(session: RegisteredSession): AgentView {
   return view
 }
 
+/** Registered session facts shared by the actual device readers; no credential or launch token crosses. */
+export type SessionRow = Pick<AgentView, 'agentId' | 'sessionId' | 'engine' | 'registeredAt' | 'transcriptPath' | 'lastHookAt' | 'active' | 'cwd' | 'dsh'> & {
+  launch?: { state: 'starting' | 'ready' | 'held' | 'failed'; error?: string; detail?: string; service?: string }
+}
+export interface SessionSnapshotRow {
+  session: SessionRow
+  facts: { displayName: string; terminalAvailable: boolean; parts: { dsh?: string } }
+  selectedModel: string | null
+  turnRunning: boolean
+}
+export interface SessionCloudRow {
+  agentId: string; sessionId: string; engine: string; registeredAt: number; transcriptPath: string | null; lastHookAt: number
+  displayName: string; selectedModel: string | null
+}
+export interface SessionSnapshot {
+  version: 1
+  registered: SessionSnapshotRow[]
+  cloud: SessionCloudRow[]
+  machine: { id: string; computerId: string; name: string }
+  signedIn: boolean
+  environment: string
+  hasWindow: boolean
+}
+/** Provisional source-evaluation budgets; one complete capture or an explicit refusal, never a partial list. */
+export const SESSION_SNAPSHOT_MAX_ROWS = 4096
+export const SESSION_SNAPSHOT_MAX_BYTES = 6 * 1024 * 1024
+export const SESSION_SNAPSHOT_OFF = async (): Promise<SessionSnapshot> => { throw new Error('SESSION_SNAPSHOT_UNAVAILABLE') }
+
 /** Read-only conversation facts for the handoff in the edge host. Each lookup asks the core now;
  * a stopped record is never replaced by a stale live-agent list in another process. */
 export interface ConversationReads {
@@ -166,6 +194,8 @@ export interface CoreApi {
     all(): Promise<AgentView[]>
     /** The live agents. */
     live(): AgentView[]
+    /** Complete registered facts for scoped component readers; rejects when unavailable or too large. */
+    snapshot(): Promise<SessionSnapshot>
     /** Current registered display facts; unavailable without their owning core's synchronous reader. */
     facts(session: RegisteredSession): AgentFacts | null
     /** The name the apps show for an agent. */
@@ -242,6 +272,8 @@ export interface CoreApi {
   count?(metric: ProductUsageMetric): void
   /** A device's or another machine's turns for an agent on this one: the doors the web and the hooks use. */
   turns: {
+    /** Exact open-turn state; absent outside the owning core, never inferred from an activity lease. */
+    running?(sessionId: string): boolean
     /** Deliver text into a live agent. */
     send(agentId: string, text: string): void
     /** Stop a live agent's turn. */
@@ -376,8 +408,6 @@ export interface CoreApi {
   cloud?: CloudCore
   /** The Wi-Fi device's doors into the core (services/wifi.ts): each one call it made when it ran here. */
   wifi: {
-    /** What it lists and reads in line (`WifiView`), asked again before each request it answers. */
-    view(): Promise<WifiView>
     /** Stop a live agent's turn; resolves whether it stopped. */
     stop(agentId: string): Promise<boolean>
     /** Start an agent for an installed Store harness in `cwd`, with the device's fixed, safe launch
@@ -493,7 +523,8 @@ export type ConnectorSync = (refresh: boolean) => Promise<{ shared: boolean }>
 export const CONNECTOR_SYNC_OFF: ConnectorSync = async () => { throw new Error('CONNECTORS_SYNC_UNAVAILABLE') }
 
 /** A service in its own process that acts on no agent: it creates none and reads no harness's frame. */
-export const AGENT_ACTIONS_OFF: Pick<CoreApi['agents'], 'create' | 'dsh' | 'facts'> = {
+export const AGENT_ACTIONS_OFF: Pick<CoreApi['agents'], 'snapshot' | 'create' | 'dsh' | 'facts'> = {
+  snapshot: SESSION_SNAPSHOT_OFF,
   create: async () => ({ ok: false, error: 'SERVICE_UNAVAILABLE' }),
   dsh: () => null,
   facts: () => null,
@@ -1499,14 +1530,6 @@ export interface WifiResume {
 /** The Wi-Fi device's routes of the door (`SERVICE_HTTP_ROUTES`): `harness device receipt` and its add-ons. */
 export const WIFI_REQUESTS = ['wifi_http', 'wifi_serving', 'wifi_focus_current'] as const
 
-/** What the core lists for the Wi-Fi device, read in line while it answers a request: the agents as it
- *  shows them, the Store's evidence on each, and whether a window is attached to show one. */
-export interface WifiView {
-  agents: AutonomousDeviceAgent[]
-  store: StoreAgent[]
-  hasWindow: boolean
-}
-
 /**
  * Input facts and window notifications. Relay sessions, cards, normalized events and transcript evidence
  * are owned and observed outside this port. What a person asks of it (`harness device receipt`, its
@@ -1528,7 +1551,6 @@ export interface WifiPort {
 
 /** The Wi-Fi device's doors, for a service that is not it: nothing is listed, sent, made or moved. */
 export const WIFI_OFF: CoreApi['wifi'] = {
-  view: async () => ({ agents: [], store: [], hasWindow: false }),
   stop: async () => false,
   create: async () => ({ ok: false, error: 'UNSUPPORTED' }),
   stepFocus: async () => 'no_app', scroll: () => false,
@@ -2132,6 +2154,55 @@ export interface CoreApiDeps {
   log?: (line: string) => void
 }
 
+/** A single synchronous capture; each admitted row is detached before another provider can change it. */
+export function captureSessionSnapshot(deps: Pick<CoreApiDeps, 'registry' | 'cloudRows' | 'facts' | 'runtimeProfile' | 'turns' | 'machine' | 'signedIn' | 'environment' | 'hasWindow' | 'log'>): SessionSnapshot {
+  const fail = (code: 'SESSION_SNAPSHOT_UNAVAILABLE' | 'SESSION_SNAPSHOT_TOO_LARGE'): never => {
+    ;(deps.log ?? console.warn)(`[sessions] ${code}`)
+    throw new Error(code)
+  }
+  const rows = deps.registry.list(), cloud = deps.cloudRows?.() ?? []
+  if (rows.length + cloud.length > SESSION_SNAPSHOT_MAX_ROWS) return fail('SESSION_SNAPSHOT_TOO_LARGE')
+  if (!deps.turns.running || !deps.facts) return fail('SESSION_SNAPSHOT_UNAVAILABLE')
+  const value: SessionSnapshot = { version: 1, registered: [], cloud: [],
+    machine: { id: deps.machine.id(), computerId: deps.machine.computerId(), name: deps.machine.name() },
+    signedIn: deps.signedIn(), environment: deps.environment(), hasWindow: deps.hasWindow() }
+  const headerBytes = boundedJsonBytes(value, SESSION_SNAPSHOT_MAX_BYTES)
+  if (headerBytes === null) return fail('SESSION_SNAPSHOT_TOO_LARGE')
+  let bytes = headerBytes
+  const detached = <T>(row: T, comma: boolean): T => {
+    const length = boundedJsonBytes(row, SESSION_SNAPSHOT_MAX_BYTES - bytes - (comma ? 1 : 0))
+    if (length === null) return fail('SESSION_SNAPSHOT_TOO_LARGE')
+    bytes += length + (comma ? 1 : 0)
+    return JSON.parse(JSON.stringify(row)) as T
+  }
+  for (const row of rows) {
+    const selectedModel = deps.runtimeProfile(row), turnRunning = deps.turns.running(row.sessionId)
+    if (deps.registry.byAgent(row.agentId) !== row) return fail('SESSION_SNAPSHOT_UNAVAILABLE')
+    const session: SessionRow = { agentId: row.agentId, sessionId: row.sessionId, engine: row.engine,
+      registeredAt: row.registeredAt, transcriptPath: row.transcriptPath, lastHookAt: row.lastHookAt,
+      active: row.active, cwd: row.cwd, ...(row.dsh === undefined ? {} : { dsh: row.dsh }) }
+    if (row.launch) {
+      const launch = row.launch
+      session.launch = { state: launch.state,
+        ...(launch.state === 'failed' ? { error: launch.error, ...(launch.detail === undefined ? {} : { detail: launch.detail }) } : {}),
+        ...(launch.state === 'held' ? { service: launch.service, detail: launch.detail } : {}) }
+    }
+    // Same app fact producer, read last after synchronous providers as well as any earlier caller await.
+    const captured = deps.facts(row)
+    const facts = { displayName: captured.displayName, terminalAvailable: captured.terminalAvailable,
+      parts: typeof captured.parts.dsh === 'string' ? { dsh: captured.parts.dsh } : {} }
+    value.registered.push(detached({ session, selectedModel, turnRunning, facts }, value.registered.length > 0))
+  }
+  for (const raw of cloud) {
+    const row = raw as AgentView & { displayName?: unknown; runtimeProfile?: unknown }
+    value.cloud.push(detached({ agentId: row.agentId, sessionId: row.sessionId, engine: row.engine,
+      registeredAt: row.registeredAt, transcriptPath: row.transcriptPath, lastHookAt: row.lastHookAt,
+      displayName: typeof row.displayName === 'string' ? row.displayName : '',
+      selectedModel: typeof row.runtimeProfile === 'string' ? row.runtimeProfile : null }, value.cloud.length > 0))
+  }
+  return value
+}
+
 export function createCoreApi({
   dataDir, registry, stoppedAgents, databaseHistory, syncSession, runtimeModels, viewerChanged,
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, tabKey, tabRelay, connectorSync, observer, privateGridName, machineName, backend, onNotice,
@@ -2159,6 +2230,7 @@ export function createCoreApi({
     agents: {
       all: async () => { const stopped = await stoppedAgents.list(); return [...registry.list(), ...stopped].map(agentView) },
       live: () => registry.list().map(agentView),
+      snapshot: async () => captureSessionSnapshot({ registry, cloudRows, facts, runtimeProfile, turns, machine, signedIn, environment, hasWindow, log }),
       facts: row => { const current = registry.byAgent(row.agentId); return current && facts ? facts(current) : null },
       displayName: projectDisplayName,
       byAgent: (agentId) => { const session = registry.byAgent(agentId); return session && agentView(session) },

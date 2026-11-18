@@ -12,6 +12,7 @@ import { createQuestionResponse, createQuestions } from '../core/questions.js'
 import { emptyPorts, type WifiPort } from '../core/api.js'
 import { AutonomousDeviceService } from '../lib/autonomous-device/service.js'
 import { observeQuestions } from '../agentClient/questions.js'
+import { snapshotFixture, snapshotRow } from '../testing/sessionSnapshot.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { startWifi } from './wifi.js'
 import { GatewayDeviceFixture } from '../testing/devicePeer.js'
@@ -56,9 +57,9 @@ it('keeps all-agent questions working through real component tool connections, i
   local = attachLocalWsServer(server, { machineId: 'machine-1', backend, openQuestions: () => asking.snapshot('local'), localSocketServer: unix?.server })
   await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve))
   const url = `ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`
-  const core = fakeCore({ dataDir, wifi: { view: vi.fn(async () => ({ hasWindow: false, store: [], agents: ['agent', 'unfocused'].map(agentId => ({
-    agentId, name: 'Fixture', engine: 'claude', state: 'idle',
-  })) })) } })
+  const core = fakeCore({ dataDir, agents: { snapshot: vi.fn(async () => snapshotFixture({ hasWindow: false,
+    registered: ['agent', 'unfocused'].map(agentId => snapshotRow(agentId)),
+  })) } })
   let service!: AutonomousDeviceService
   const ports = emptyPorts()
   startWifi(core, ports, {

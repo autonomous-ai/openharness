@@ -6,7 +6,9 @@ import { createDeviceHookCalls } from '../core/deviceHookCalls.js'
 import { createDevicesLink, type DevicesState } from '../core/devicesLink.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
 import type { RegisteredSession } from '../lib/registry.js'
-import type { DevicesDeps } from './devices.js'
+import { snapshotFixture, snapshotRow } from '../testing/sessionSnapshot.js'
+import type { SessionSnapshot } from '../core/api.js'
+import type { DevicesCore, DevicesDeps } from './devices.js'
 import type { ListenerHandler } from './devicesListener.js'
 import { runDevicesService, type DevicesServiceOptions } from './devicesProcess.js'
 import type { CoreConnection, ServiceProcessOptions } from './process.js'
@@ -43,11 +45,11 @@ function devicesPort() {
 
 function setup(over: { processEnv?: NodeJS.ProcessEnv; openListener?: DevicesServiceOptions['openListener'] } = {}) {
   const { port, calls } = devicesPort()
-  let api!: CoreApi
+  let api!: DevicesCore
   let deps!: DevicesDeps
   const legacy = { routeTask: vi.fn(async () => ({ agentId: 'a1' })), routeSend: vi.fn(async () => ({ ok: true })) }
   const tab = { harness_devices_list: vi.fn(async () => ({ protocol: 1 })), devices_ws: vi.fn(async () => ({ ok: true })) }
-  const start = vi.fn((core: CoreApi, ports: CorePorts, given: DevicesDeps): ServiceRequests => {
+  const start = vi.fn((core: DevicesCore, ports: CorePorts, given: DevicesDeps): ServiceRequests => {
     api = core
     deps = given
     given.onLegacyCommands?.(legacy)
@@ -84,6 +86,25 @@ function setup(over: { processEnv?: NodeJS.ProcessEnv; openListener?: DevicesSer
 afterEach(() => vi.restoreAllMocks())
 
 describe('the devices in their own process', () => {
+  it('reads the shared session snapshot and keeps hidden rows out of the actual dial list', async () => {
+    const f = setup()
+    const row = (agentId: string, available: boolean) => ({
+      session: { agentId, sessionId: `s-${agentId}`, engine: 'claude', registeredAt: 1, transcriptPath: '/history', lastHookAt: 2,
+        active: true, cwd: '/work', dsh: null },
+      facts: { displayName: `Shown ${agentId}`, terminalAvailable: available, parts: {} }, selectedModel: 'runtime-v1:s:claude:opus', turnRunning: false,
+    })
+    f.answer('session_snapshot', { version: 1, registered: [row('hidden', false), row('shown', true)], cloud: [],
+      machine: { id: 'm1', computerId: 'c1', name: 'Desk' }, signedIn: true, environment: 'prod', hasWindow: true })
+    f.connect()
+    await f.deps().refresh!()
+    expect(f.api().agents.advertised().map(row => row.agentId)).toEqual(['shown'])
+    const shown = f.api().agents.advertised()[0]
+    expect(f.api().agents.displayName(shown)).toBe('Shown shown')
+    expect(shown.transcriptPath).toBe('/history')
+    expect(f.queries.map(([query]) => query)).toEqual(['session_snapshot'])
+    await f.service.stop()
+  })
+
   it('start the devices on a link of their own, with what their process\'s environment says', () => {
     const f = setup({ processEnv: { HARNESS_DIAL_SERIALS: ' AA, ,BB ', HARNESSD_TEST_DIAL_PORT: '/dev/ttys042', HARNESSD_TEST_FAULTS: 'dial, fleet.knows ,' } })
     expect(f.options()).toMatchObject({ name: 'devices', socketPath: '/sock', machineId: 'computer-9', token: 't' })
@@ -153,7 +174,11 @@ describe('the devices in their own process', () => {
 })
 
 describe('the core\'s view, read in line by the dial', () => {
-  const agent = { agentId: 'a1', sessionId: 's1', engine: 'claude', displayName: 'api', runtimeProfile: 'runtime-v1:s1:claude:opus@high' }
+  const agent = { ...snapshotRow('a1').session, sessionId: 's1', displayName: 'api', runtimeProfile: 'runtime-v1:s1:claude:opus@high' }
+  const capture = (over: { agents: typeof agent[]; machine?: Partial<SessionSnapshot['machine']>; hasWindow?: boolean; signedIn?: boolean; environment?: string }) => snapshotFixture({
+    ...over, registered: over.agents.map(row => snapshotRow(row.agentId, { session: row, facts: { displayName: row.displayName, terminalAvailable: true, parts: {} }, selectedModel: row.runtimeProfile })),
+    machine: { ...snapshotFixture().machine, ...over.machine },
+  })
 
   it('publishes a desk only after a verified view and keeps its in-flight effects on that exact connection', async () => {
     const f = setup(), effects: string[] = []
@@ -168,7 +193,7 @@ describe('the core\'s view, read in line by the dial', () => {
     }
     f.deps().onDesk!(desk)
     expect(deviceDeskFor('/data', 'machine-1')).toBeNull()
-    f.answer('view', { agents: [agent], machine: { id: 'machine-1', computerId: 'computer-9' }, hasWindow: true })
+    f.answer('session_snapshot', capture({ agents: [agent], machine: { id: 'machine-1', computerId: 'computer-9' }, hasWindow: true }))
     f.connect(); await f.deps().refresh!()
     const peer = deviceDeskFor('/data', 'machine-1')!
     const first = peer.stepFocus('next', 'a0', () => true)
@@ -185,7 +210,7 @@ describe('the core\'s view, read in line by the dial', () => {
     expect(f.notices).toHaveLength(1)
     expect(deviceDeskFor('/data', 'machine-1')!.scroll('move', 2, 3, () => true)).toBe(true)
     expect(effects).toEqual(['focus', 'scroll'])
-    f.answer('view', { agents: [], machine: { id: 'machine-2', computerId: 'not-this-computer' } })
+    f.answer('session_snapshot', capture({ agents: [], machine: { id: 'machine-2', computerId: 'not-this-computer' } }))
     await f.deps().refresh!()
     expect(deviceDeskFor('/data', 'machine-2')).toBeNull()
     await f.service.stop()
@@ -199,14 +224,14 @@ describe('the core\'s view, read in line by the dial', () => {
     f.connect()
     const old = f.deps().refresh!()
     if (ending === 'disconnect') f.options().onDisconnected!()
-    f.answer('view', { agents: [{ ...agent, agentId: 'fresh' }], machine: { id: 'machine-2' }, hasWindow: true })
+    f.answer('session_snapshot', capture({ agents: [{ ...agent, agentId: 'fresh' }], machine: { id: 'machine-2' }, hasWindow: true }))
     f.connect()
     expect(f.connection.query).toHaveBeenCalledTimes(2)
     await f.deps().refresh!()
-    expect(f.api().agents.live().map(row => row.agentId)).toEqual(['fresh'])
-    release({ agents: [agent], machine: { id: 'machine-1' }, hasWindow: false })
+    expect(f.api().agents.advertised().map(row => row.agentId)).toEqual(['fresh'])
+    release({ ...capture({ agents: [agent], machine: { id: 'machine-1' }, hasWindow: false }) })
     await old
-    expect(f.api().agents.live().map(row => row.agentId)).toEqual(['fresh'])
+    expect(f.api().agents.advertised().map(row => row.agentId)).toEqual(['fresh'])
     expect(f.api().machine.id()).toBe('machine-2')
     expect(f.api().clients.hasWindow()).toBe(true)
     await f.service.stop()
@@ -217,11 +242,11 @@ describe('the core\'s view, read in line by the dial', () => {
 
   it('revokes the cached window and agents before disconnect callbacks or stop can act', async () => {
     const f = setup()
-    f.answer('view', { agents: [agent], machine: { id: 'machine-1' }, hasWindow: true })
+    f.answer('session_snapshot', capture({ agents: [agent], machine: { id: 'machine-1' }, hasWindow: true }))
     f.connect(); await f.deps().refresh!()
     const gone = vi.fn(() => {
       expect(f.api().clients.hasWindow()).toBe(false)
-      expect(f.api().agents.live()).toEqual([])
+      expect(f.api().agents.advertised()).toEqual([])
     })
     f.deps().onCoreGone!(gone)
     f.options().onDisconnected!()
@@ -229,7 +254,22 @@ describe('the core\'s view, read in line by the dial', () => {
     f.connect(); await f.deps().refresh!()
     await f.service.stop()
     expect(f.api().clients.hasWindow()).toBe(false)
-    expect(f.api().agents.live()).toEqual([])
+    expect(f.api().agents.advertised()).toEqual([])
+  })
+
+  it('keeps cloud display/profile/path facts after local rows and preserves empty machine label fallbacks', async () => {
+    const f = setup()
+    f.answer('session_snapshot', snapshotFixture({ registered: [snapshotRow('local')],
+      cloud: [{ agentId: 'cloud', sessionId: 'remote', engine: 'fo', registeredAt: 2, transcriptPath: '/remote/history', lastHookAt: 3, displayName: 'Cloud name', selectedModel: 'cloud-profile' }],
+      machine: { id: 'machine-1', computerId: '', name: '' } }))
+    f.connect(); await f.deps().refresh!()
+    const rows = f.api().agents.advertised()
+    expect(rows.map(row => row.agentId)).toEqual(['local', 'cloud'])
+    expect(f.api().agents.displayName(rows[1])).toBe('Cloud name')
+    expect(f.api().agents.runtimeProfile(rows[1])).toBe('cloud-profile')
+    expect(rows[1].transcriptPath).toBe('/remote/history')
+    expect(f.api().machine.computerId()).toBe('computer-9'); expect(f.api().machine.name()).toBe('This machine')
+    await f.service.stop()
   })
 
   it('is nothing but this computer\'s id before the core is asked', async () => {
@@ -247,21 +287,16 @@ describe('the core\'s view, read in line by the dial', () => {
 
   it('is asked as the core connects, and again as the dial\'s tick or ⌘K needs it, one ask at a time', async () => {
     const f = setup()
-    f.answer('view', { agents: [agent], machine: { id: 'machine-1', computerId: 'computer-1', name: 'Studio' }, signedIn: true, environment: 'prod', hasWindow: true })
+    f.answer('session_snapshot', capture({ agents: [agent], machine: { id: 'machine-1', computerId: 'computer-1', name: 'Studio' }, signedIn: true, environment: 'prod', hasWindow: true }))
     f.connect()
     await vi.waitFor(() => expect(f.api().agents.advertised()).toHaveLength(1))
     const api = f.api()
     const session = api.agents.advertised()[0]
-    expect((await api.agents.all())).toEqual([agent])
-    expect(api.agents.live()).toEqual([agent])
+    expect(api.agents.advertised()).toEqual([agent])
     expect(api.agents.displayName(session)).toBe('api')
     expect(api.agents.displayName({ agentId: 'x' } as RegisteredSession)).toBe('')
     expect(api.agents.runtimeProfile(session)).toBe('runtime-v1:s1:claude:opus@high')
     expect(api.agents.runtimeProfile({ agentId: 'x' } as RegisteredSession)).toBeNull()
-    expect(api.agents.byAgent('a1')).toEqual(agent)
-    expect(api.agents.resolve('s1')).toEqual(agent)
-    expect(api.agents.terminalAvailable('a1')).toBe(true)
-    api.agents.sync(session)
     expect([api.machine.id(), api.machine.computerId(), api.machine.name()]).toEqual(['machine-1', 'computer-1', 'Studio'])
     expect(api.account.signedIn()).toBe(true)
     expect(api.account.environment()).toBe('prod')
@@ -271,16 +306,16 @@ describe('the core\'s view, read in line by the dial', () => {
     await Promise.all([f.deps().refresh!(), f.deps().refresh!()])
     expect(f.queries.length).toBe(before + 1)
     // An answer that is not a view changes nothing; one that is missing names keeps the defaults.
-    f.answer('view', { error: 'QUERY_FAILED' })
+    f.answer('session_snapshot', { error: 'QUERY_FAILED' })
     await f.deps().refresh!()
     expect(api.agents.advertised()).toHaveLength(1)
-    f.answer('view', { agents: [], machine: 'nothing' })
+    f.answer('session_snapshot', { agents: [], machine: 'nothing' })
     await f.deps().refresh!()
-    expect([api.machine.id(), api.machine.computerId(), api.machine.name()]).toEqual(['', 'computer-9', 'This machine'])
+    expect([api.machine.id(), api.machine.computerId(), api.machine.name()]).toEqual(['machine-1', 'computer-1', 'Studio'])
     // An ask the core never answers (it went away) leaves the last view.
-    f.answer('view', new Error('the core went away'))
+    f.answer('session_snapshot', new Error('the core went away'))
     await f.deps().refresh!()
-    expect(api.machine.computerId()).toBe('computer-9')
+    expect(api.machine.computerId()).toBe('computer-1')
   })
 })
 

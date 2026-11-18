@@ -45,7 +45,6 @@ export function createWifiLink(deps: WifiLinkDeps) {
   const queries: Record<string, (payload: Record<string, unknown>) => Record<string, unknown> | Promise<Record<string, unknown>>> = {
     // Which machine this is (the account's id, which every frame to a device carries), asked as it connects.
     machine: () => ({ id: core.machine.id() }),
-    view: async () => ({ ...await core.wifi.view() }),
     // Asked, not told: the pane's lock says what became of the prompt as it takes it, and the device's reply
     // carries that, as it did when the service ran in the core's process.
     recent: async ({ agentId, n }) => ({ turns: await core.turns.recent(text(agentId), typeof n === 'number' ? n : 3) }),

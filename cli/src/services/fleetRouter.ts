@@ -16,7 +16,6 @@ import type { ForkResult, SendResult } from '../core/api.js'
 import type { FleetRouting, ForkOutcome, SelectResult } from './fleet.js'
 import { extendShortRecap } from '../lib/deviceRecap.js'
 import { transcriptActivityAt } from '../lib/transcriptActivity.js'
-import type { RegisteredSession } from '../lib/registry.js'
 import type { RouterContinuity } from '../lib/voiceRouter.js'
 import type { RecentTurn } from '../cable/cableHost.js'
 import type { CableAgent, CableMachine, CableMachineSource } from '../cable/cableSession.js'
@@ -30,6 +29,10 @@ export type { ForkResult, SendResult }
  * turn, a stop or an answer for one of its own agents goes through. The dial's host fills it from its
  * wiring; the fleet service from the core (`CoreApi`).
  */
+export interface FleetSession {
+  agentId: string; sessionId: string; engine: string; registeredAt: number; transcriptPath: string | null; lastHookAt: number
+}
+
 export interface FleetLocal {
   machineName(): string
   /** This computer's machineId, or '' when the daemon has never resolved one (signed out). */
@@ -37,11 +40,11 @@ export interface FleetLocal {
   /** A stable id for this computer, used to name the local row when there is no machineId yet. */
   computerId(): string
   /** The live agents the apps are shown. */
-  sessions(): RegisteredSession[]
+  sessions(): FleetSession[]
   /** The name the apps show for an agent. */
-  displayName(session: RegisteredSession): string
+  displayName(session: FleetSession): string
   /** The opaque runtime-v1 profile, which is where the dial's Model/Effort chips come from. */
-  runtimeProfile?: (session: RegisteredSession) => string | null
+  runtimeProfile?(session: FleetSession): string | null
   /** The window's tiles on its active tab, in tile order, as last reported. */
   desk(): string[]
   /** Deliver text into a local agent. The SAME path the web and the WiFi device use. */

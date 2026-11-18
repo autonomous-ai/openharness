@@ -18,11 +18,10 @@
 import { join } from 'node:path'
 import { notificationReadToken, type UnreadNotification } from '../lib/notificationRead.js'
 
-import type { RegisteredSession } from '../lib/registry.js'
 import { fetchRelease, loadImage, shouldOffer, type FirmwareRelease } from './fwPush.js'
 import { routeVoiceTask, type RouterAgent, type RouterContinuity } from '../lib/voiceRouter.js'
 import { env } from '../config/env.js'
-import { FleetRouter } from '../services/fleetRouter.js'
+import { FleetRouter, type FleetSession } from '../services/fleetRouter.js'
 import type { ForkResult } from '../core/api.js'
 import type { FleetRouting } from '../services/fleet.js'
 import { ServiceUnavailableError } from '../core/serviceHost.js'
@@ -59,8 +58,8 @@ export interface RecentTurn {
 export interface CableHostWiring {
   /** The live agents the apps are shown, and the name they show for each: the router this host keeps for
    *  this computer reads them (the core's `agents.advertised` and `agents.displayName`). */
-  sessions: () => RegisteredSession[]
-  displayName: (session: RegisteredSession) => string
+  sessions: () => FleetSession[]
+  displayName(session: FleetSession): string
   /** Exact live terminal footer for a local agent; absent when no footer is visible. */
   activityText?: (agentId: string) => Promise<string | null>
   /** `activityText` plus the footer's timer and the assistant's latest paragraph. */
@@ -93,7 +92,7 @@ export interface CableHostWiring {
   /** Recaps of an agent's last `n` completed turns — for routing, and for redrawing a reattached dial. */
   recent: (agentId: string, n: number) => RecentTurn[] | Promise<RecentTurn[]>
   /** The opaque runtime-v1 profile, which is where the dial's Model/Effort chips come from. */
-  runtimeProfile?: (session: RegisteredSession) => string | null
+  runtimeProfile?(session: FleetSession): string | null
   updateAgent?: (agentId: string, model?: string, effort?: string) => void
   /** The runtime catalog, from the same provider the web and the WiFi device read. */
   listModels?: (agentId: string) => Promise<Array<{ id: string }>>

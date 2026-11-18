@@ -90,11 +90,23 @@ import { createTally, createTierDecider, type Tier, type TierDecision, type Tier
 import { VERSION } from '../version.js'
 import { createPartGuard } from './devicesGuard.js'
 import { attachHandler, dialStream, frontHandler, noticeHandler, notifyHandler, tabHandler, tabsStream, type DevicesListener, type ListenerHandler, type ListenerStreamHandler } from './devicesListener.js'
+import type { FleetSession } from './fleetRouter.js'
 import { FLEET_FALLBACKS, startFleet, type Fleet } from './fleet.js'
 
 export { DEVICES_REQUESTS }
 
 /** What the devices need that is not the core's to give. */
+/** The component reads only these row fields; a process never manufactures a full registry record. */
+export type DeviceSession = FleetSession & { displayName?: string; runtimeProfile?: string | null }
+export type DevicesCore = Omit<CoreApi, 'agents'> & {
+  agents: Pick<CoreApi['agents'], 'runtimeModels' | 'setRuntime' | 'fork' | 'activityText' | 'activitySnapshot'> & {
+    advertised(): DeviceSession[]
+    cloud?(): DeviceSession[]
+    displayName(session: DeviceSession): string
+    runtimeProfile(session: DeviceSession): string | null
+  }
+}
+
 export interface DevicesDeps {
   /** Direct gestures for the Wi-Fi component in this worker; no core callback or socket hop. */
   onDesk?: (desk: import('./deviceDesk.js').DeviceDesk) => void
@@ -245,7 +257,7 @@ function observedSource(
   })
 }
 
-export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps): ServiceRequests {
+export function startDevices(core: DevicesCore, ports: CorePorts, deps: DevicesDeps): ServiceRequests {
   const log = deps.log ?? ((line: string) => console.log(line))
   const monotonic = deps.now ?? (() => performance.now())
   const tally = createTally((line) => log(`[cable] ${line}`))

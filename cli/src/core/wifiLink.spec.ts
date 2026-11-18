@@ -38,7 +38,7 @@ describe('the Wi-Fi device in the devices\' process, as the core sees it', () =>
   it('answers what it asks through the core\'s Wi-Fi doors', async () => {
     const { wifi, core } = link()
     expect(await wifi.answer('machine', {})).toEqual({ id: 'machine-1' })
-    expect(await wifi.answer('view', {})).toEqual({ agents: [], store: [], hasWindow: true })
+    expect(await wifi.answer('view', {})).toEqual({ error: 'UNKNOWN_QUERY' })
     vi.mocked(core.turns.recent).mockResolvedValueOnce([{ recap: 'done' }] as never)
     expect(await wifi.answer('recent', { agentId: 'a', n: 1 })).toEqual({ turns: [{ recap: 'done' }] })
     expect(core.turns.recent).toHaveBeenLastCalledWith('a', 1)

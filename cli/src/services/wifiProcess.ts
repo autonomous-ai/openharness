@@ -1,3 +1,4 @@
+import { sessionSnapshot } from './sessionSnapshot.js'
 /**
  * The Wi-Fi device's service in the devices' process (`harness __service devices,wifi`, harnessd/services.ts),
  * on a link of its own to the core (core/wifiLink.ts; step 9, D3). Its sessions are the gateway's, its
@@ -9,7 +10,7 @@
  * whichever devices the new core's gateway brings.
  */
 import type { RecentTurn } from '../cable/cableHost.js'
-import { emptyPorts, type AgentView, type CoreApi, type CorePorts, type ForkResult, type ServiceRequests, type WifiPort, type WifiResume, type WifiView } from '../core/api.js'
+import { emptyPorts, type AgentView, type CoreApi, type CorePorts, type ForkResult, type ServiceRequests, type WifiPort, type WifiResume } from '../core/api.js'
 import type { AutonomousDeviceDelivery } from '../lib/autonomous-device/service.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess, type ServiceProcessOptions } from './process.js'
 import { processCoreApi } from './processCoreApi.js'
@@ -52,7 +53,7 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
   let link = new Promise<void>((resolve) => { linked = resolve })
   let built: { machineId: string; port: WifiPort; requests: ServiceRequests } | null = null
   /** A window in a previous core's view cannot authorize a notice to its replacement. */
-  let lastView: { binding: Binding; view: WifiView } | null = null
+  let lastView: { binding: Binding; hasWindow: boolean } | null = null
   const currentBinding = (owner: Component, binding: Binding | null): binding is Binding =>
     !stopped && component === owner && binding !== null && verified === binding && binding.owner === owner && core === binding.origin
   const bindingFor = (owner: Component, error: string): Binding => {
@@ -138,7 +139,7 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
     if (!current()) return 'no_agents'
     const desk = deviceDeskFor(options.dataDir, owner.machineId)
     if (desk) {
-      if (!lastView?.view.hasWindow) return 'no_app'
+      if (!lastView?.hasWindow) return 'no_app'
       return desk.stepFocus(direction, currentAgentId, current)
     }
     const answer = await ask(owner, 'stepFocus', { direction, ...(currentAgentId ? { currentAgentId } : {}) })
@@ -147,7 +148,7 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
     return { machineId: text(answer.machineId), agentId: text(answer.agentId) }
   }
   const scroll = (owner: Component, phase: 'down' | 'move' | 'up', dy: number, velocity: number, callerCurrent: () => boolean = () => true): boolean => {
-    if (!lastView?.view.hasWindow || !currentBinding(owner, lastView.binding) || !callerCurrent()) return false
+    if (!lastView?.hasWindow || !currentBinding(owner, lastView.binding) || !callerCurrent()) return false
     const binding = lastView.binding, desk = deviceDeskFor(options.dataDir, owner.machineId)
     if (desk) return desk.scroll(phase, dy, velocity, () => currentBinding(owner, binding) && callerCurrent())
     binding.origin.notice?.('scroll', { phase, dy, velocity })
@@ -167,28 +168,33 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
         const value = object(answer.value)
         return value.agentId === id && typeof value.sessionId === 'string' && typeof value.engine === 'string' ? value as unknown as AgentView : null
       } },
-      agents: { ...unasked.agents, follow: listener => {
+      agents: { ...unasked.agents, snapshot: async () => {
+        const binding = bindingFor(owner, 'the Wi-Fi device is not connected to the core')
+        try {
+          const snapshot = sessionSnapshot(await ask(owner, 'session_snapshot', {}, binding))
+          requireBinding(owner, binding)
+          if (snapshot.machine.id !== owner.machineId) throw new Error('WIFI_IDENTITY_UNAVAILABLE')
+          lastView = { binding, hasWindow: snapshot.hasWindow }
+          return snapshot
+        } catch (error) {
+          // A failed current read cannot keep permission from its previous view. An old owner cannot revoke a new one.
+          if (currentBinding(owner, binding)) lastView = null
+          throw error
+        }
+      }, follow: listener => {
         if (component !== owner || stopped) return () => {}
         return owner.following.follow(event => { if (currentBinding(owner, verified)) listener(event) })
       } },
       clients: { ...unasked.clients, sendWindow: delivery => {
         if (!currentBinding(owner, verified)) return false
         // Focus needs the view this request read. Durable Store reveal can precede a view.
-        if (delivery.frame.type === 'device_focus' && (!lastView?.view.hasWindow || !currentBinding(owner, lastView.binding))) return false
+        if (delivery.frame.type === 'device_focus' && (!lastView?.hasWindow || !currentBinding(owner, lastView.binding))) return false
         verified.origin.notice?.('window', { ...delivery })
         return true
       } },
       machine: { id: () => owner.machineId, computerId: () => options.machineId, name: () => '' },
       turns: { ...unasked.turns, recent: async (agentId, n) => list<RecentTurn>((await ask(owner, 'recent', { agentId, n })).turns) },
       wifi: {
-        view: async () => {
-          const binding = bindingFor(owner, 'CORE_VIEW_UNAVAILABLE')
-          const answer = await binding.origin.query('view', {})
-          if (!currentBinding(owner, binding)) throw new Error('CORE_VIEW_UNAVAILABLE')
-          const view: WifiView = { agents: list(answer.agents), store: list(answer.store), hasWindow: answer.hasWindow === true }
-          lastView = { binding, view }
-          return view
-        },
         stop: async (agentId) => (await ask(owner, 'stop', { agentId })).ok === true,
         create: async (packageId, engine, cwd) => {
           if (stopped || component !== owner || !identity) throw new Error('WIFI_IDENTITY_UNAVAILABLE')

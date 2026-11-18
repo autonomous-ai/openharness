@@ -118,6 +118,7 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
       live,
       // Existing wire rows do not prove a coherent name/membership/publication capture.
       facts: AGENT_ACTIONS_OFF.facts,
+      snapshot: AGENT_ACTIONS_OFF.snapshot,
       displayName: (session) => (session as ShownAgent).displayName ?? '',
       byAgent: (agentId) => live().find((session) => session.agentId === agentId),
       resolve: (id) => resolveAgent(live(), id),

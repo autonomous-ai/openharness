@@ -23,6 +23,8 @@ export function fakeCore(over: Overrides = {}): CoreApi {
     agents: {
       all: vi.fn(async () => []),
       live: vi.fn(() => []),
+      snapshot: vi.fn(async () => ({ version: 1 as const, registered: [], cloud: [],
+        machine: { id: 'machine-1', computerId: 'computer-1', name: 'This machine' }, signedIn: true, environment: 'prod', hasWindow: true })),
       facts: vi.fn(() => null),
       displayName: vi.fn(() => ''),
       byAgent: vi.fn(() => undefined),
@@ -42,7 +44,7 @@ export function fakeCore(over: Overrides = {}): CoreApi {
       ...over.agents,
     },
     turns: {
-      send: vi.fn(), stop: vi.fn(), recent: vi.fn(async () => []), asks: vi.fn(async () => []),
+      running: vi.fn(() => false), send: vi.fn(), stop: vi.fn(), recent: vi.fn(async () => []), asks: vi.fn(async () => []),
       onInput: vi.fn(() => () => {}), deliver: vi.fn(), cancelDelivery: vi.fn(() => false), onDelivery: vi.fn(() => () => {}),
       ...over.turns,
     },
@@ -82,7 +84,6 @@ export function fakeCore(over: Overrides = {}): CoreApi {
     },
     daemon: { command: 'harness', port: 18473, machineId: () => 'machine-1', autonomousEnv: 'prod', ...over.daemon },
     wifi: {
-      view: vi.fn(async () => ({ agents: [], store: [], hasWindow: true })),
       stop: vi.fn(async () => true),
       create: vi.fn(async () => ({ ok: false as const, error: 'UNSUPPORTED' })),
       stepFocus: vi.fn(async () => 'no_agents' as const), scroll: vi.fn(() => true),

@@ -1,65 +1,25 @@
-/**
- * The Wi-Fi device's doors into the core (`CoreApi.wifi`), where the registry, the panes and the windows
- * are: its service runs with the dials, in the devices' process (services/wifi.ts). The agents as it
- * lists them, asked before each request it answers; an agent made for a Store harness; its prompts into
- * the panes; the window it moves. Moved as they were from the core's wiring and
- * lib/autonomous-device/storeRuntime.ts.
- */
+/** Remaining Wi-Fi create, confirmed cancel and mixed-host desk doors. Presentation is component-owned. */
 import { realpathSync } from 'node:fs'
-import type { AutonomousDeviceAgent } from '../lib/autonomous-device/service.js'
-import type { StoreAgent } from '../lib/autonomous-device/store.js'
-import type { RegisteredSession, registry } from '../lib/registry.js'
+import type { registry } from '../lib/registry.js'
 import type { BackendSocket } from '../backendSocket.js'
-import type { CoreApi, DevicesPort, WifiView } from './api.js'
+import type { CoreApi, DevicesPort } from './api.js'
 
 const canonicalPath = (path: string | null): string | null => {
   if (!path) return null
   try { return realpathSync(path) } catch { return path }
 }
 
-export interface WifiAgentsDeps {
-  registry: Pick<typeof registry, 'list' | 'advertised' | 'terminalAvailable'>
-  /** The account's id for this machine. */
-  machineId(): string
-  /** The same service-reported package identity as the agent frame. */
-  packageId?(session: RegisteredSession): string | null
-  displayName(session: RegisteredSession): string
-  /** Whether an engine session has a turn open: its agent is running. */
-  running(sessionId: string): boolean
-  hasWindow(): boolean
-}
-
-/** Every agent with the Store's evidence on it: which harness it runs, where, and whether its engine is up
- *  yet. A device's Store preparation reads it to find an agent already working in a folder. */
-export function storeAgents(deps: Pick<WifiAgentsDeps, 'registry' | 'machineId' | 'packageId'>): StoreAgent[] {
-  const machineId = deps.machineId()
-  return deps.registry.list().map(s => ({ agentId: s.agentId, machineId, packageId: deps.packageId?.(s) ?? s.dsh ?? null,
-    engine: s.engine, workspace: canonicalPath(s.cwd), state: s.active ? 'active' : 'inactive',
-    runtime: !deps.registry.terminalAvailable(s.agentId) || s.launch?.state === 'failed' ? 'unavailable'
-      : s.launch?.state === 'starting' ? 'starting' : s.active ? (s.launch?.state === 'ready' || s.sessionId || s.engine === 'terminal' ? 'ready' : 'starting') : 'unavailable',
-    ...(s.launch?.state === 'failed' ? { error: s.launch.detail ?? s.launch.error } : {}) }))
-}
-
-export function wifiView(deps: WifiAgentsDeps): WifiView {
-  const store = storeAgents(deps)
-  const evidence = new Map(store.map(a => [a.agentId, a]))
-  const agents: AutonomousDeviceAgent[] = deps.registry.advertised().map(s => ({ agentId: s.agentId, name: deps.displayName(s), engine: s.engine,
-    packageId: evidence.get(s.agentId)?.packageId ?? null, workspace: evidence.get(s.agentId)?.workspace ?? s.cwd,
-    runtime: evidence.get(s.agentId)?.runtime ?? 'unavailable',
-    state: deps.running(s.sessionId) ? 'running' : 'idle' }))
-  return { agents, store, hasWindow: deps.hasWindow() }
-}
-
 /** What a device's Store preparation launches with: the harness's own engine in the folder it prepared,
  *  never a bypass, a grid, another engine home, a first prompt, a name or a named agent. Fixed here, in the
  *  core, so no process but the core's decides how an agent starts. */
 export type WifiCreateInput = Parameters<NonNullable<BackendSocket['onCreateAgent']>>[0]
-export function wifiCreate(deps: Pick<WifiAgentsDeps, 'registry' | 'machineId' | 'packageId'> & {
+export function wifiCreate(deps: {
+  registry: Pick<typeof registry, 'list'>
   createAgent(): BackendSocket['onCreateAgent']
 }): CoreApi['wifi']['create'] {
   return async (packageId, engine, cwd) => {
     // Checked again here, immediately before the agent is made: another agent working there is never retargeted.
-    if (storeAgents(deps).some(a => a.workspace === cwd)) return { ok: false, error: 'WORKSPACE_IN_USE' }
+    if (deps.registry.list().some(row => canonicalPath(row.cwd) === cwd)) return { ok: false, error: 'WORKSPACE_IN_USE' }
     const create = deps.createAgent()
     if (!create) return { ok: false, error: 'UNSUPPORTED' }
     const input: WifiCreateInput = { engine: engine as WifiCreateInput['engine'], cwd, dsh: packageId,
@@ -69,8 +29,8 @@ export function wifiCreate(deps: Pick<WifiAgentsDeps, 'registry' | 'machineId' |
   }
 }
 
-export interface WifiDoorsDeps extends Pick<WifiAgentsDeps, 'registry' | 'machineId' | 'displayName' | 'running' | 'packageId'> {
-  registry: WifiAgentsDeps['registry'] & Pick<typeof registry, 'resolve'>
+export interface WifiDoorsDeps {
+  registry: Pick<typeof registry, 'list'>
   /** The socket, once it exists: the windows on this computer, and how an agent is created. */
   socket(): Pick<BackendSocket, 'hasLocalClient' | 'onCreateAgent'> | null
   /** Stop a live agent's turn, as the stop button does. */
@@ -82,12 +42,11 @@ export interface WifiDoorsDeps extends Pick<WifiAgentsDeps, 'registry' | 'machin
 /** The doors the Wi-Fi device's service reaches the core through (`CoreApi.wifi`), each the one call it
  *  made when it ran in the core's process. */
 export function wifiDoors(deps: WifiDoorsDeps): CoreApi['wifi'] {
-  const { registry, machineId, socket } = deps
+  const { registry, socket } = deps
   const hasWindow = (): boolean => !!socket()?.hasLocalClient()
   return {
-    view: async () => wifiView({ ...deps, hasWindow }),
     stop: (agentId) => deps.stop(agentId),
-    create: wifiCreate({ registry, machineId, createAgent: () => socket()?.onCreateAgent ?? null }),
+    create: wifiCreate({ registry, createAgent: () => socket()?.onCreateAgent ?? null }),
     // The dial's walk and stroke: `dial_focus` and `dial_scroll` to the window. Without a window the forward
     // is a no-op, so it says so up front; without the devices there is no desk to walk.
     stepFocus: async (direction, currentAgentId) => {

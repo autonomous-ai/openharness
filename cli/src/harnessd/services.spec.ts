@@ -782,3 +782,9 @@ describe('which services the core leaves to its master', () => {
     expect([...servicesTheMasterRuns({ HARNESSD_SUPERVISED: '1', [SERVICE_PROCESSES_ENV]: 'search' }, known)]).toEqual([])
   })
 })
+
+
+it('declares the complete session snapshot only for the two actual readers', () => {
+  expect(Object.entries(SERVICE_HOSTS).filter(([, host]) => host.queries).map(([name]) => name)).toEqual(['devices'])
+  expect(SERVICE_HOSTS.devices.queries).toEqual({ devices: ['session_snapshot'], wifi: ['session_snapshot'] })
+})

@@ -1,7 +1,7 @@
 import { SERVICE_HOSTS } from '../harnessd/services.js'
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { AGENT_BROWSER_REQUESTS, CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_SYNC_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, sendLocalWindow, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, GATEWAY_REQUESTS, LANE_OFF, MACHINE_ADDON_REQUESTS, PAIR_WAIT_MS, SERVICE_HTTP_ROUTES, SERVICE_WS_FRAMES, WIFI_REQUESTS, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, WIFI_FALLBACKS, WIFI_OFF, WORKSPACES_FALLBACKS, WORKSPACES_OFF, WORKSPACES_UNAVAILABLE, type CoreApiDeps } from './api.js'
+import { captureSessionSnapshot, SESSION_SNAPSHOT_MAX_BYTES, SESSION_SNAPSHOT_MAX_ROWS, AGENT_BROWSER_REQUESTS, CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_SYNC_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, sendLocalWindow, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, GATEWAY_REQUESTS, LANE_OFF, MACHINE_ADDON_REQUESTS, PAIR_WAIT_MS, SERVICE_HTTP_ROUTES, SERVICE_WS_FRAMES, WIFI_REQUESTS, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, WIFI_FALLBACKS, WIFI_OFF, WORKSPACES_FALLBACKS, WORKSPACES_OFF, WORKSPACES_UNAVAILABLE, type CoreApiDeps } from './api.js'
 import { FAIL, readFallback } from './serviceHost.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
 import { answerAgentQuery } from './agentQueries.js'
@@ -167,6 +167,72 @@ describe('the core API services stand on', () => {
       log: vi.fn(),
     })
 
+  it('captures complete lean current session facts with parts last and no launch authority or retained service trees', async () => {
+    const live = { ...row('live'), active: true, registeredAt: 1, lastHookAt: 2, transcriptPath: '/history/session',
+      firstTask: 'PRIVATE', dsh: 'retained', gridLaunch: storedGridFixture({ networkId: 'fixture', networkName: 'Fixture', baseUrl: 'https://fixture.invalid/v1', apiKey: 'PRIVATE' }), launch: { state: 'held', service: 'engine', detail: 'wait', nativeToken: 'PRIVATE' } } as RegisteredSession
+    const hidden = { ...live, agentId: 'hidden', sessionId: '', launch: undefined, dsh: undefined }
+    const deps = coreDeps(), order: string[] = []
+    deps.registry.list = () => [live, hidden]
+    deps.registry.byAgent = id => id === 'live' ? live : hidden
+    const parts = { dsh: 'published', ignored: { secret: 'PRIVATE' } }
+    deps.runtimeProfile = session => { order.push(`profile ${session.agentId}`); parts.dsh = session.agentId; return 'selected' }
+    deps.turns.running = id => { order.push(`running ${id}`); return id === live.sessionId }
+    deps.facts = session => { order.push(`facts ${session.agentId}`); return { displayName: session.agentId, terminalAvailable: session === live, parts } }
+    deps.cloudRows = () => [{ ...live, agentId: 'cloud', displayName: 'Cloud name', runtimeProfile: 'cloud-profile' } as RegisteredSession]
+    const pending = createCoreApi(deps).agents.snapshot()
+    parts.dsh = 'after-await'; live.launch = { state: 'ready' }
+    const captured = await pending
+    expect(order).toEqual(['profile live', 'running s-live', 'facts live', 'profile hidden', 'running ', 'facts hidden'])
+    expect(captured.registered).toHaveLength(2)
+    expect(captured.registered[0]).toMatchObject({ session: { transcriptPath: '/history/session', launch: { state: 'held', service: 'engine', detail: 'wait' } },
+      facts: { displayName: 'live', terminalAvailable: true, parts: { dsh: 'live' } }, selectedModel: 'selected', turnRunning: true })
+    expect(captured.registered[1]).toMatchObject({ facts: { terminalAvailable: false }, turnRunning: false })
+    expect(captured.registered[1].session).not.toHaveProperty('launch')
+    expect(captured.registered[1].session).not.toHaveProperty('dsh')
+    expect(captured.cloud).toEqual([{ agentId: 'cloud', sessionId: 's-live', engine: 'claude', registeredAt: 1,
+      transcriptPath: '/history/session', lastHookAt: 2, displayName: 'Cloud name', selectedModel: 'cloud-profile' }])
+    expect(JSON.stringify(captured)).not.toContain('PRIVATE')
+    expect(deps.stoppedAgents.list).not.toHaveBeenCalled()
+    // Optional source fields keep their exact absence and fallback meaning, without inventing full rows.
+    deps.cloudRows = undefined; deps.facts = session => ({ displayName: session.agentId, terminalAvailable: true, parts: { dsh: null } })
+    for (const launch of [{ state: 'starting' }, { state: 'ready' }, { state: 'failed', error: 'FAILED' },
+      { state: 'failed', error: 'FAILED', detail: 'detail' }] as const) {
+      live.launch = launch
+      expect((await createCoreApi(deps).agents.snapshot()).registered[0].session.launch).toEqual(launch)
+    }
+    deps.cloudRows = () => [live]
+    expect((await createCoreApi(deps).agents.snapshot()).cloud[0]).toMatchObject({ displayName: '', selectedModel: null })
+  })
+
+  it('refuses unavailable authority and bounds complete captures before copying rows or reading later providers', async () => {
+    const live = { ...row('live'), registeredAt: 1, lastHookAt: 0, transcriptPath: null, active: true }
+    const deps = coreDeps()
+    deps.registry.list = () => [live]; deps.registry.byAgent = () => live
+    deps.turns.running = () => false
+    await expect(createCoreApi({ ...deps, facts: undefined }).agents.snapshot()).rejects.toThrow('SESSION_SNAPSHOT_UNAVAILABLE')
+    await expect(createCoreApi({ ...deps, turns: { ...deps.turns, running: undefined } }).agents.snapshot()).rejects.toThrow('SESSION_SNAPSHOT_UNAVAILABLE')
+    deps.runtimeProfile = () => { deps.registry.byAgent = () => undefined; return null }
+    await expect(createCoreApi(deps).agents.snapshot()).rejects.toThrow('SESSION_SNAPSHOT_UNAVAILABLE')
+    deps.registry.byAgent = () => live; deps.runtimeProfile = () => null
+    const facts = vi.fn(() => ({ displayName: 'Live', terminalAvailable: true, parts: {} }))
+    deps.facts = facts
+    deps.registry.list = () => Array(SESSION_SNAPSHOT_MAX_ROWS + 1).fill(live)
+    await expect(createCoreApi(deps).agents.snapshot()).rejects.toThrow('SESSION_SNAPSHOT_TOO_LARGE')
+    expect(facts).not.toHaveBeenCalled()
+    deps.registry.list = () => [live]
+    deps.machine.name = () => 'x'.repeat(SESSION_SNAPSHOT_MAX_BYTES)
+    await expect(createCoreApi(deps).agents.snapshot()).rejects.toThrow('SESSION_SNAPSHOT_TOO_LARGE')
+    expect(facts).not.toHaveBeenCalled()
+    deps.machine.name = () => 'Desk'
+    deps.facts = () => ({ displayName: 'Live', terminalAvailable: true, parts: { dsh: 'x'.repeat(SESSION_SNAPSHOT_MAX_BYTES) } })
+    await expect(createCoreApi(deps).agents.snapshot()).rejects.toThrow('SESSION_SNAPSHOT_TOO_LARGE')
+    expect(deps.log).toHaveBeenCalledWith('[sessions] SESSION_SNAPSHOT_TOO_LARGE')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(() => captureSessionSnapshot({ ...deps, log: undefined })).toThrow('SESSION_SNAPSHOT_TOO_LARGE')
+    expect(warn).toHaveBeenCalledWith('[sessions] SESSION_SNAPSHOT_TOO_LARGE'); warn.mockRestore()
+    await expect(processCoreApi('/data', 'fixture').agents.snapshot()).rejects.toThrow('SESSION_SNAPSHOT_UNAVAILABLE')
+  })
+
   it('captures current registered facts for app and component callers without widening shown replies', async () => {
     const live = { ...row('live'), active: true, registeredAt: 1, lastHookAt: 1, boundAt: 0,
       transcriptPath: null, defaultName: 'Before attachment', runtimes: [], primaryRuntimeKey: '' }
@@ -306,10 +372,6 @@ describe('the core API services stand on', () => {
     const core = createCoreApi(deps)
     const replies = await Promise.all(['agents', 'live', 'advertised'].map(query => answerAgentQuery(core, query)))
     replies.push(shownAgents(core))
-    const devices = createDevicesLink({ core, notify: () => true, call: async () => ({}), state: () => ({
-      desk: [], foreground: false, swarms: null, unread: [], focus: { voice: null, form: null }, engines: [], commanders: false,
-    }) })
-    replies.push(await devices.answer('view', {}))
     const workspaces = createWorkspacesLink(core, frame => { replies.push(frame.payload ?? {}); return true }, async () => ({}))
     workspaces.port.nameBranches()
     const browserEvents: unknown[] = []
@@ -650,7 +712,6 @@ describe('the core API services stand on', () => {
   })
 
   it('gives a service that is not the Wi-Fi device\'s doors that list, send, make and move nothing', async () => {
-    expect(await WIFI_OFF.view()).toEqual({ agents: [], store: [], hasWindow: false })
     expect(await WIFI_OFF.stop('a')).toBe(false)
     expect(await WIFI_OFF.create('p', 'claude', '/w')).toEqual({ ok: false, error: 'UNSUPPORTED' })
     expect(await WIFI_OFF.stepFocus('next')).toBe('no_app')

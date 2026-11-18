@@ -16,6 +16,8 @@ import { AutonomousDeviceService } from '../lib/autonomous-device/service.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { readInlineScreen } from '../testing/inlineScreen.js'
 import { inlineSubmission } from '../testing/inlineSubmission.js'
+import { answerSessionSnapshot } from './agentQueries.js'
+import { snapshotFixture, snapshotRow } from '../testing/sessionSnapshot.js'
 import { fakeCore } from '../testing/fakeCore.js'
 
 const READY = '────────────\n❯\n────────────\n  ? for shortcuts'
@@ -31,8 +33,8 @@ async function bridge() {
   const file = join(dataDir, 'session.jsonl'); writeFileSync(file, '')
   const session = { agentId: 'agent', sessionId: 'session', engine: 'claude', active: true, cliVersion: '2.1.283',
     transcriptPath: file, boundAt: 1, processIdentity: { pid: 42, startMarker: '1970-01-01T00:00:00Z' }, evidenceRevision: 1 } as RegisteredSession
-  const core = fakeCore({ dataDir, machine: { id: () => 'machine' }, agents: { byAgent: () => agentView(session) },
-    wifi: { view: async () => ({ agents: [{ agentId: 'agent', name: 'Agent', engine: 'claude', state: 'working' }], store: [], hasWindow: true }) } })
+  const core = fakeCore({ dataDir, machine: { id: () => 'machine' }, agents: { byAgent: () => agentView(session),
+    snapshot: async () => snapshotFixture({ machine: { id: 'machine', computerId: 'computer', name: 'Fixture' }, registered: [snapshotRow()] }) } })
   let options!: ServiceProcessOptions, component!: AutonomousDeviceService, feed!: DeviceSessionFeedOptions, armed = false
   const frames: ServiceFrame[] = [], watchedAtDispatch: boolean[] = []
   const notify = (frame: ServiceFrame): boolean => {
@@ -70,7 +72,7 @@ async function bridge() {
     query: async (query, payload = {}) => {
       if (query === 'resolve') return { value: agentView(session) }
       if (query === 'follow_agents') return { agents: [] }
-      return await deliveries.answer('wifi', query, payload, authority) ?? await link.answer(query, payload)
+      return await deliveries.answer('wifi', query, payload, authority) ?? await answerSessionSnapshot(core, 'wifi', query, authority) ?? await link.answer(query, payload)
     },
     notice: (kind, payload) => link.notice({ ...payload, kind }),
   }

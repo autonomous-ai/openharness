@@ -21,20 +21,20 @@ import type { AppSwarms } from '../cable/cableSession.js'
 import type { RecentTurn } from '../cable/cableHost.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
 import { validUsage } from '../lib/agentUsageWire.js'
-import { AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, resolveAgent, TERMINALS_OFF, type CoreApi, type CorePorts, type DevicesPort, type ForkResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
-import type { RegisteredSession } from '../lib/registry.js'
+import { DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, TERMINALS_OFF, type CorePorts, type DevicesPort, type ForkResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
 import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
 import { accountLink } from './accountLink.js'
-import { startDevices, type DevicesDeps } from './devices.js'
+import { startDevices, type DevicesDeps, type DevicesCore, type DeviceSession } from './devices.js'
 import { openDevicesListener } from './devicesListener.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess, type ServiceProcessOptions } from './process.js'
+import { sessionSnapshot } from './sessionSnapshot.js'
 import { processCoreApi, UNASKED } from './processCoreApi.js'
 import { harnessdEnv } from '../lib/harnessdEnv.js'
 import { publishDeviceDesk, type DeviceDesk } from './deviceDesk.js'
 
 /** An agent as the core lists it for the dial: with the name the apps show and the model it runs. */
-type Viewed = RegisteredSession & { displayName?: string; runtimeProfile?: string | null }
+type Viewed = DeviceSession
 
 /** What the core last said of this computer: what the dial reads in line. */
 interface View {
@@ -113,16 +113,17 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     if (!core) return Promise.resolve()
     const origin = core, epoch = generation
     const pending = { generation: epoch, promise: Promise.resolve() }
-    pending.promise = origin.query('view').then((answer) => {
+    pending.promise = origin.query('session_snapshot').then((answer) => {
       if (stopped || generation !== epoch || core !== origin) return
-      if (!Array.isArray(answer.agents)) return
-      const machine = object(answer.machine)
+      const snapshot = sessionSnapshot(answer)
       view = {
-        agents: answer.agents as Viewed[],
-        machine: { id: text(machine.id), computerId: text(machine.computerId) || options.machineId, name: text(machine.name) || 'This machine' },
-        signedIn: answer.signedIn === true,
-        environment: text(answer.environment),
-        hasWindow: answer.hasWindow === true,
+        agents: [
+          ...snapshot.registered.filter(row => row.facts.terminalAvailable).map(row => ({ ...row.session,
+            displayName: row.facts.displayName, runtimeProfile: row.selectedModel })),
+          ...snapshot.cloud.map(row => ({ ...row, runtimeProfile: row.selectedModel })),
+        ],
+        machine: { ...snapshot.machine, computerId: snapshot.machine.computerId || options.machineId, name: snapshot.machine.name || 'This machine' },
+        signedIn: snapshot.signedIn, environment: snapshot.environment, hasWindow: snapshot.hasWindow,
       }
       publishDesk()
     }).catch(() => { /* the core went away; its next connection is asked again */ }).finally(() => { if (viewing === pending) viewing = null })
@@ -147,21 +148,15 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
   const noticeListeners = new Set<(notice: BackendNotice) => void>()
   const unasked = processCoreApi(options.dataDir, 'devices')
   const account = accountLink((query, payload) => ask(query, payload))
-  const api: CoreApi = {
+  const api: DevicesCore = {
     dataDir: options.dataDir,
     conversations: unasked.conversations,
     // Terminals are launched by the core alone (#893).
     terminals: TERMINALS_OFF,
     machine: { id: () => view.machine.id, computerId: () => view.machine.computerId, name: () => view.machine.name },
     agents: {
-      all: async () => view.agents,
-      live: () => view.agents,
       advertised: () => view.agents,
       displayName: (session) => (session as Viewed).displayName ?? '',
-      byAgent: (agentId) => view.agents.find((agent) => agent.agentId === agentId),
-      resolve: (id) => resolveAgent(view.agents, id),
-      terminalAvailable: () => true,
-      sync: () => {},
       runtimeModels: async (agentId) => ((await ask('models', { agentId })).models ?? []) as RuntimeModelOption[],
       runtimeProfile: (session) => (session as Viewed).runtimeProfile ?? null,
       setRuntime: (agentId, model, effort) => tell('setRuntime', { agentId, model, effort }),
@@ -180,11 +175,6 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
         const text = (await ask('activityText', { agentId })).text
         return typeof text === 'string' && text ? { text } : null
       },
-      // Whether harnesses work is asked by Agent Messages alone.
-      activity: UNASKED.activity,
-      summaries: UNASKED.summaries,
-      // The devices make no agent of their own and show no harness's viewer.
-      ...AGENT_ACTIONS_OFF,
     },
     turns: {
       send: (agentId, said) => tell('turn', { agentId, text: said }),

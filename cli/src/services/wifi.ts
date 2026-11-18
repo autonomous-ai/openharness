@@ -1,3 +1,4 @@
+import { wifiView, type WifiView } from './wifiView.js'
 /**
  * The Wi-Fi device (lib/autonomous-device/, docs/autonomous-device-integration.md): a paired device that
  * speaks its own protocol over an E2EE session the gateway holds. Its service, its Store preparations and
@@ -15,7 +16,7 @@
  * (lib/autonomous-device/localHttp.ts).
  */
 import { join } from 'node:path'
-import type { AgentView, CoreApi, CorePorts, ServiceRequests, WifiPort, WifiView } from '../core/api.js'
+import type { AgentView, CoreApi, CorePorts, ServiceRequests, WifiPort } from '../core/api.js'
 import { submissionPolicy } from '../engines/submissionPolicies.js'
 import { startDevicePart } from '../lib/autonomous-device/parts.js'
 import { deviceRelayOverGateway } from '../lib/autonomous-device/overGateway.js'
@@ -78,9 +79,10 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
     }
     const epoch = coreEpoch, revision = notices
     const pending = { epoch, promise: Promise.resolve() }
-    pending.promise = core.wifi.view().then(next => {
+    pending.promise = core.agents.snapshot().then(snapshot => {
       if (stopped || !coreConnected || coreEpoch !== epoch) throw new Error('CORE_VIEW_UNAVAILABLE')
-      view = next; applied = revision
+      if (snapshot.machine.id !== machineId) throw new Error('CORE_VIEW_UNAVAILABLE')
+      view = wifiView(snapshot); applied = revision
     }).catch(error => {
       // Preserve the existing last-view read fallback only when no unapplied notice needs a barrier.
       if (!stopped && coreConnected && coreEpoch === epoch && applied === notices) return

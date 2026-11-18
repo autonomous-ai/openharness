@@ -138,25 +138,8 @@ describe('what the core asks of the devices', () => {
 })
 
 describe('what the devices ask of the core', () => {
-  it('is this computer\'s agents as the dial lists them, with what the dial reads in line', async () => {
-    const agent = { agentId: 'a1', engine: 'claude' } as RegisteredSession
-    const { core, devices } = link()
-    vi.mocked(core.agents.advertised).mockReturnValue([agent])
-    vi.mocked(core.agents.displayName).mockReturnValue('api')
-    vi.mocked(core.agents.runtimeProfile).mockReturnValue('runtime-v1:s:claude:opus@high')
-    expect(await devices.answer('view', {})).toEqual({
-      agents: [{ ...agent, displayName: 'api', runtimeProfile: 'runtime-v1:s:claude:opus@high' }],
-      machine: { id: 'machine-1', computerId: 'computer-1', name: 'This machine' },
-      signedIn: true, environment: 'prod', hasWindow: true,
-    })
-  })
-
-  it('lists the cloud harnesses after this computer\'s agents, as the dial lists agents', async () => {
-    const row = { agentId: 'cloud_1', engine: 'fo', displayName: 'haircut', registeredAt: 1 } as unknown as RegisteredSession
-    const core = fakeCore({ agents: { cloud: () => [row] } })
-    const devices = createDevicesLink({ core, notify: () => true, call: vi.fn(), state: () => STATE })
-    vi.mocked(core.agents.advertised).mockReturnValue([{ agentId: 'a1', engine: 'claude' } as RegisteredSession])
-    expect(((await devices.answer('view', {})) as { agents: Array<{ agentId: string }> }).agents.map((agent) => agent.agentId)).toEqual(['a1', 'cloud_1'])
+  it('retires the private feature view in the positively admitted worker cohort', async () => {
+    expect(await link().devices.answer('view', {})).toEqual({ error: 'UNKNOWN_QUERY' })
   })
 
   it('is the core\'s own doors and the sign-in, asked when they need them', async () => {
