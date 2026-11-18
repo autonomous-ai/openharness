@@ -84,7 +84,7 @@ const ALLOWED: { files: string[], hit: (hit: Hit) => boolean, why: string }[] = 
   { files: ['engines/kit/notifyHooks.ts'], hit: onLine(String.raw`const LEGACY_SCRIPT = /\/\.harness\/cli\/(?:hook\/)?notify\.mjs$/`), why: 'LEGACY_SCRIPT: what old installs wrote' },
   { files: ['lib/localSocket.ts'], hit: onLine(String.raw`if (!inRuntime && !/[\\/]\.?harness[\\/]s[\\/][0-9a-f]{16}$/.test(folder)) return`), why: 'prepareShortFolder checks the shape of a folder it is handed' },
   { files: ['lib/uninstall/removal.ts'], hit: onLine('import { HARNESS_ENTRIES, HARNESS_HOME_NAME, xdgRoots, type HarnessEntry } from \'../../config/harnessHome.js\'', 'const ROOT_NAME = HARNESS_HOME_NAME'), why: 'checkRoot refuses a root not named after the home folder, but Linux\'s two XDG roots' },
-  { files: ['cli.ts', 'lib/uninstall/command.ts', 'config/startHome.ts', 'config/testIsolation.ts'], hit: (hit) => hit.text.startsWith('~'), why: 'Help and message text a person reads' },
+  { files: ['cli.ts', 'lib/uninstall/command.ts', 'config/testIsolation.ts'], hit: (hit) => hit.text.startsWith('~'), why: 'Help and message text a person reads' },
 ]
 
 const allowed = (hit: Hit): boolean => ALLOWED.some((entry) => entry.files.includes(hit.file) && entry.hit(hit))
