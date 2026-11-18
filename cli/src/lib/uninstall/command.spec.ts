@@ -11,7 +11,7 @@ function fake(overrides: Partial<UninstallDeps> = {}) {
   const after = (what: string) => marks.push(calls.length ? `${what} after ${calls.at(-1)}` : `${what} first`)
   let running = true
   const deps: UninstallDeps = {
-    platform: 'darwin', cwd: '/Users/u/code', roots: ['/Users/u/.harness'], home: '/Users/u',
+    platform: 'darwin', cwd: '/Users/u/code', roots: ['/Users/u/.harness'], binDir: '/Users/u/.harness/bin', home: '/Users/u',
     cliDir: '/Users/u/.harness/cli', dataDir: '/Users/u/.harness/cli/data', authDir: '/Users/u/.harness/auth',
     isTTY: false, harnessOs: false, pane: null,
     markUninstalling: () => { after('mark') },
@@ -43,7 +43,7 @@ function fake(overrides: Partial<UninstallDeps> = {}) {
 
 /** This computer's Windows layout, as the fakes above see it. */
 const win = {
-  platform: 'win32' as const, cwd: 'C:\\Users\\u', roots: ['C:\\Users\\u\\.harness'], home: 'C:\\Users\\u', cliDir: 'C:\\Users\\u\\.harness\\cli',
+  platform: 'win32' as const, cwd: 'C:\\Users\\u', roots: ['C:\\Users\\u\\.harness'], binDir: 'C:\\Users\\u\\.harness\\bin', home: 'C:\\Users\\u', cliDir: 'C:\\Users\\u\\.harness\\cli',
   dataDir: 'C:\\Users\\u\\.harness\\cli\\data', authDir: 'C:\\Users\\u\\.harness\\auth', service: { name: 'Task Scheduler', present: () => true, unregister: () => ({ ok: true as const }) },
   removePathEntry: () => ({ kind: 'windows' as const, result: { state: 'removed' as const, folder: 'C:\\Users\\u\\.harness\\bin' } }),
   listEntries: (dir: string) => (dir === 'C:\\Users\\u\\.harness' ? [{ name: 'bin', dir: true }, { name: 'cli', dir: true }] : []),
@@ -190,7 +190,7 @@ describe('harness uninstall', () => {
 
   it('uninstalls a half install: no daemon, no task, no terminal host, no cli\\current, only bin\\ and runtime\\', async () => {
     const half = {
-      platform: 'win32' as const, cwd: 'C:\\Users\\u', roots: ['C:\\Users\\u\\.harness'], home: 'C:\\Users\\u',
+      platform: 'win32' as const, cwd: 'C:\\Users\\u', roots: ['C:\\Users\\u\\.harness'], binDir: 'C:\\Users\\u\\.harness\\bin', home: 'C:\\Users\\u',
       cliDir: 'C:\\Users\\u\\.harness\\cli', dataDir: 'C:\\Users\\u\\.harness\\cli\\data', authDir: 'C:\\Users\\u\\.harness\\auth',
       daemonPid: () => null, alive: () => false,
       service: { name: 'Task Scheduler', present: () => false, unregister: () => { throw new Error('there is no task to unregister') } },

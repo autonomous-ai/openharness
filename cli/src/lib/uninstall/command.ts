@@ -118,6 +118,8 @@ export interface UninstallDeps {
   home: string
   /** Harness's roots in this home, the data root first (config/harnessHome.ts harnessRoots): today one, ~/.harness. */
   roots: readonly string[]
+  /** Harness's bin folder (harnessPath('bin')): on Windows the PATH entry the uninstall removes. */
+  binDir: string
   cliDir: string
   dataDir: string
   authDir: string
@@ -188,7 +190,7 @@ function whatItDoes(deps: UninstallDeps, daemon: number | null, keepData: boolea
     // The rules are recognized by their text: one the person added that is the same as Harness's cannot be told apart (B5.5).
     '  · removes the hooks and permission rules Harness added to Claude Code, Codex and your other agents (a rule of yours that is the same as one of Harness\'s goes too)',
     deps.platform === 'win32'
-      ? `  · removes ${deps.tildify(win32.join(deps.roots[0], 'bin'))} from your PATH`
+      ? `  · removes ${deps.tildify(deps.binDir)} from your PATH`
       : '  · removes the harness and hn commands, and the PATH line the installer added',
     ...deps.roots.map((root) => (keepData
       ? `  · deletes the program in ${deps.tildify(root)}, and keeps your sign-in, this computer's identity, history and settings there`
