@@ -115,3 +115,19 @@ reviewed runtime, the affected caller/helper coverage gate, TypeScript and
 architecture checks with one test worker. No additional diagnostic or timing
 round is authorized by this follow-up; source and gates return to the
 integration owner first. The earlier 798ceec399/V13 worktree stays frozen.
+
+The actual RED on clean `4ca3bdcda3cff870a9e5b84d2616429e6e409b68` passes six
+semantic controls and fails with exactly 1,408 conversions against 192 expected
+(`.harness/validation/20261118T225917.326519Z-97221/receipt.json`). Runtime
+`7aa63b667a7f140d175eff20a87d16ca00da23eb` passes all 251 callers in 11 files,
+including exactly 192 conversions and zero helper-name writes. TypeScript and
+architecture pass; its overall gate remains failed for one uncovered branch
+(`.harness/validation/20261118T230011.605429Z-98124/receipt.json`).
+
+A direct control for an own key disappearing during reflection closes that
+branch without a runtime change. On clean `046963d99b61191999960b89e23284514df22822`,
+all 14 direct/peer JSON tests pass, with helper coverage 88/88 statements,
+87/87 branches, 3/3 functions and 56/56 lines, plus passing TypeScript
+(`.harness/validation/20261118T230215.454190Z-830/receipt.json`). No new
+performance measurement or acceptance claim accompanies these deterministic
+work and semantic results.
