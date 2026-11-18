@@ -58,8 +58,8 @@ export interface HostAdapter {
   /** Whether the pane is the one its app shows on screen now, asked of the app once a stroke, after `canScroll`. False on
    *  any failure or past its deadline; never throws. An adapter that knows it from `canScroll` alone has none. */
   onScreen?(pane: Pane): Promise<boolean>
-  /** Scrolls the app's view of the pane's history by whole lines, n < 0 toward older lines. Fire and forget: it never
-   *  throws, and a line it could not send is counted in its own log line, never retried into the program. */
+  /** Scrolls the app's view of the pane's history by whole lines, n < 0 toward older lines. Fire and forget: a line it
+   *  could not send is never retried into the program. */
   scroll?(pane: Pane, lines: number): void
   /** The key a source that lists this app's agents knows the same pane by (registry.ts). Only an app with such a
    *  source has one. */
