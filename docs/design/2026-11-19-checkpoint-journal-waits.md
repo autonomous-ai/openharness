@@ -182,3 +182,13 @@ A new controlled-clock case expires the original deadline between settlement's a
 and outward receipt delivery. It preserves and exercises the final current fence. Runtime and
 coverage thresholds stay unchanged. Only affected storage coverage and test typing need follow-up;
 the other successful source gates remain evidence for the unchanged runtime.
+
+## Source acceptance
+
+At clean `aad5b70e28`, all 20 storage cases pass (0.9 seconds), covering 69/69 statements, 53/53
+branches, 12/12 functions and 46/46 lines in the changed core file. Types pass (6.7 seconds).
+Receipt `.harness/validation/20261118T211854.198630Z-68983/receipt.json` records actual exit 0
+and unchanged source. Together with the unchanged other nine suites, the selected evidence covers
+200 passing cases and two platform skips; architecture also remains passed. All 20 new controls
+are exercised. This is source acceptance only: native Close/Resume measurement and the independent
+full V5 cost hold are still pending. No remaining synchronous cleanup or manifest flush is removed.
