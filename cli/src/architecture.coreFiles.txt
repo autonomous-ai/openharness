@@ -5,6 +5,7 @@
 backendSocket.ts
 config/env.ts
 config/envFields.ts
+config/harnessHome.ts
 config/loadEnv.ts
 config/terminalConfig.ts
 config/testIsolation.ts
