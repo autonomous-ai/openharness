@@ -36,6 +36,7 @@ import {
   writeFileSync,
 } from 'fs'
 import { randomUUID } from 'crypto'
+import { isDeepStrictEqual } from 'node:util'
 import { setImmediate as nextTurn } from 'node:timers/promises'
 import { join, basename, dirname, relative, isAbsolute } from 'path'
 import { machineNames } from './machineNames.js'
@@ -3811,7 +3812,13 @@ class Registry {
           const liveRows = new Map(Array.from(this.agents.values()).map(row => [row.agentId, persistedRow(row) as unknown as Record<string, unknown>]))
           const committed = new Map(serialized.map(row => [row.agentId, row as unknown as Record<string, unknown>]))
           const remainingIntents = new Map([...this.intended].filter(([id, intent]) => capturedIntents.get(id) !== intent))
-          return [...mergedForSave(committed, liveRows, beforeCommit, remainingIntents).values()].map(value => {
+          const fingerprint = (row: Record<string, unknown>): string => {
+            const captured = currentRows.get(rowId(row))
+            // The measured save serialized unchanged peers in both rebases. Prove equality afresh;
+            // canonical JSON still decides differences such as omitted values or credential witnesses.
+            return captured && isDeepStrictEqual(row, captured) ? snapshotFingerprint(captured) : rowFingerprint(row)
+          }
+          return [...mergedForSave(committed, liveRows, beforeCommit, remainingIntents, fingerprint).values()].map(value => {
             const row = preparedRows.get(value) ?? strictPersistedRow(value)
             if (!row) throw new IdentityReadUnavailable('a live registry observation changed to an invalid row')
             return row
