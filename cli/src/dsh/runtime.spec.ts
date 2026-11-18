@@ -405,6 +405,21 @@ describe('after Harness\'s folder moved', () => {
     }
   })
 
+  // `/home` is a link on some systems (`/var/home`): HOME names the link, a package's saved paths its real folder.
+  it('a saved runtime that names the old dsh folder through the home\'s real path is read at its new place', () => {
+    const linked = join(root, 'linked home')
+    symlinkSync(home, linked)
+    vi.stubEnv('HOME', linked)
+    prepareHarnessLaunch(pkg, ws, 'claude', 'key')
+    expect(readFileSync(runtimeFile('key'), 'utf8')).toContain(oldDsh)
+    move()
+    const moved = join(linked, '.local', 'share', 'harness', 'dsh', 'acme', 'draw')
+    expect(env.DSH_DIR).toBe(join(linked, '.local', 'share', 'harness', 'dsh'))
+    const launch = prepareHarnessLaunch(pkg, ws, 'claude', 'key')
+    expect(launch.env).toMatchObject({ HARNESS_DSH_DIR: moved, TOOLCHAIN: join(moved, 'tools') })
+    expect(readFileSync(runtimeFile('key'), 'utf8')).not.toContain(oldDsh)
+  })
+
   // The home's own .harness is Harness's old folder, which the move turned into the bridge: a harness launched in the
   // home keeps its runtime where the move put the ones made before it, and writes nothing into the bridge.
   it('a harness launched in the home keeps its runtime in the state root', () => {
