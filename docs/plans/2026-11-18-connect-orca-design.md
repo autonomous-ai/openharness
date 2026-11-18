@@ -80,9 +80,10 @@ but only after the person has seen what Orca lists and said yes.
   helper gains no entry. It is this account's alone (0700 folders, 0600 files). It is the folder Orca installs from,
   and the folder Orca re-copies at each update, so it stays put.
 - `status` and `connect` both make sure it holds what `cli.js` carries before they ask Orca about it, writing only when
-  its content differs: the new files go into `orca-plugin.new/`, the old folder is renamed to `orca-plugin.old/`, the
+  its content differs: the new files go into a staging folder of the run's own, `orca-plugin.new.<pid>/`, the old folder is renamed to `orca-plugin.old/`, the
   new one renamed into place, and the old one removed. A run that finds `orca-plugin.old/` with no `orca-plugin/` puts
-  it back first; a leftover `orca-plugin.new/` is removed. Orca never reads half a folder.
+  it back first; a staging folder whose process no longer runs is removed, so two commands at once never touch each
+  other's. Orca never reads half a folder.
 
 ### The record
 
