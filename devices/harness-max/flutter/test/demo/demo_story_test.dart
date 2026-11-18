@@ -44,7 +44,7 @@ void main() {
       'ag-hero landing-hero codex orca sv',
       'ag-e2e flaky-e2e claude orca sv',
       'ag-rate rate-limiter codex orca sv',
-      'ag-sweep docs-sweep claude orca sv',
+      'ag-sweep docs-sweep muse orca sv',
     ]);
 
     // History, not news: one summary for each agent of the ring.
