@@ -2982,6 +2982,16 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   const UUID2 = '3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f'
   const vscodeLink = (id: string) => `vscode://anthropic.claude-code/open?session=${id}`
   const tabLink = (id: string): [string, string[], number] => ['/usr/bin/open', ['-b', VSCODE, vscodeLink(id)], 10_000]
+  // Cursor, a VS Code fork with the same extensions (docs/plans/2026-11-18-dial-cursor-design.md).
+  const CURSOR = 'com.todesktop.230313mzl4w4u92'
+  const CURSOR_UUID = '5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b'
+  const IN_CURSOR = { TERM_PROGRAM: 'vscode', __CFBundleIdentifier: CURSOR }
+  /** A folder of the test's own whose name is the person's: no log line may hold it. */
+  const secretFolder = () => {
+    const folder = mkdtempSync(join(tmpdir(), 'SECRET-FOLDER-MARKER-'))
+    onTestFinished(() => { rmSync(folder, { recursive: true, force: true }) })
+    return folder
+  }
 
   it('a session in the VS Code extension\'s tab opens by its link, sent to VS Code alone', async () => {
     const { port } = startHere({ orca: mac })
@@ -3405,15 +3415,22 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(orcaRuns).toEqual([])
   })
 
-  it('no swipe line carries the VS Code session, the link or the bundle', async () => {
-    const { front } = await inVscode({ orca: exiting(0, 1) })
+  it('no swipe line carries the VS Code or Cursor session, the link or the bundle', async () => {
+    const { port, front } = await inVscode({ orca: exiting(0, 1) })
     front('vscode')
     host().swipeEnded(V1, 'rest')
     await swiped('ok')
     host().swipeEnded(V1, 'rest')
     await swiped('failed')
-    expect(said()).toEqual(['[device] swipe · ok', '[device] swipe · failed'])
-    expect(logs.filter((line) => [UUID, V1, 'vscode://', VSCODE].some((secret) => line.includes(secret)))).toEqual([])
+    // The same extension's tab in Cursor, shown while Cursor is in front.
+    const IN_CURSOR_TAB = observedAgentId('claude', CURSOR_UUID)
+    port.observed(hook('session-start', { sessionId: CURSOR_UUID, hostHints: { __CFBundleIdentifier: CURSOR, CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' } }))
+    front('cursor')
+    host().swipeEnded(IN_CURSOR_TAB, 'rest')
+    await vi.waitFor(() => expect(said()).toEqual(['[device] swipe · ok', '[device] swipe · failed', '[device] swipe · ok']))
+    expect(orcaRuns.at(-1)).toEqual(['/usr/bin/open', ['-b', CURSOR, `cursor://anthropic.claude-code/open?session=${CURSOR_UUID}`], 10_000])
+    expect(logs.filter((line) => [UUID, V1, CURSOR_UUID, IN_CURSOR_TAB, 'vscode://', 'cursor://', VSCODE, CURSOR]
+      .some((secret) => line.includes(secret)))).toEqual([])
   })
 
   // An agent in VS Code's integrated terminal is shown by Harness's own extension, in the window that reports its shell,
@@ -3423,14 +3440,15 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   const SHELL = 4000
   const TERMINAL_TREE = [{ pid: 4242, ppid: SHELL }, { pid: SHELL, ppid: 1 }]
   /** Claude Code in a VS Code terminal, or the agent `agent` names, its dial on the cable once the listener opened; on
-   *  macOS its hook carries VS Code's bundle id too. */
-  const inVscodeTerminal = async (over: Parameters<typeof start>[0] = {}, agent: Partial<ObservedHookEvent> = {}) => {
+   *  macOS its hook carries VS Code's bundle id too. With `bundle` Cursor's, the terminal is Cursor's: only its bundle id
+   *  names Cursor, so its hook carries it on every platform. */
+  const inVscodeTerminal = async (over: Parameters<typeof start>[0] = {}, agent: Partial<ObservedHookEvent> = {}, bundle = VSCODE) => {
     vi.useFakeTimers()
     processTable.rows = TERMINAL_TREE
     const listener = fakeListener()
     const started = startHere({ listen: listener.listen, ...over })
-    const bundle: Record<string, string> = over.orca?.platform === 'darwin' ? { __CFBundleIdentifier: VSCODE } : {}
-    started.port.observed(hook('session-start', { ...agent, hostHints: { TERM_PROGRAM: 'vscode', ...bundle } }))
+    const named: Record<string, string> = over.orca?.platform === 'darwin' || bundle !== VSCODE ? { __CFBundleIdentifier: bundle } : {}
+    started.port.observed(hook('session-start', { ...agent, hostHints: { TERM_PROGRAM: 'vscode', ...named } }))
     attach(started.port)
     await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
     const front = (app: string) => { expect(listener.front(app)).toBeUndefined() }
@@ -3828,6 +3846,127 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     writeFileSync(managed, '{"tui":"default"}')
     stroke([8, 8])
     await vi.waitFor(() => expect(window.lines).toEqual([page(-2), plain(-2)]))
+  })
+
+  // In Cursor, the VS Code adapter made for Cursor reaches its terminals through the same windows' streams, and any
+  // agent there no terminal or tab reaches opens its folder's window (docs/plans/2026-11-18-dial-cursor-design.md).
+  it('a tap on an agent in Cursor\'s terminal writes the show with the raise, then brings Cursor forward', async () => {
+    const { reported } = await inVscodeTerminal({ orca: mac }, {}, CURSOR)
+    const window = await reported()
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(window.lines).toEqual([{ show: SHELL, raise: true }])
+    expect(orcaRuns).toEqual([['/usr/bin/open', ['-b', CURSOR], 10_000]])
+    expect(said()).toEqual([])
+  })
+
+  it('a rest shows Cursor\'s terminal while Cursor is in front, and nothing while VS Code is', async () => {
+    const { reported, front } = await inVscodeTerminal({ orca: mac }, {}, CURSOR)
+    const window = await reported()
+    front('vscode')
+    expect(host().swipeSwitches(ID)).toBe(false)
+    front('cursor')
+    expect(host().swipeSwitches(ID)).toBe(true)
+    host().swipeEnded(ID, 'rest')
+    await swiped('ok')
+    expect(window.lines).toEqual([{ show: SHELL }])
+    expect(orcaRuns).toEqual([])
+  })
+
+  it('a stroke scrolls Cursor\'s terminal while Cursor is in front', async () => {
+    const { core, reported, front } = await inVscodeTerminal({}, IN_CODEX, CURSOR)
+    const window = await reported()
+    front('cursor')
+    shows(CODEX)
+    stroke([8, 8, -24])
+    expect(window.lines).toEqual([{ scroll: -1, pid: SHELL }, { scroll: -1, pid: SHELL }, { scroll: 3, pid: SHELL }])
+    expect(dialScrolls(core)).toEqual([])
+  })
+
+  it('the pool hears both editors\' terminal agents: one in VS Code and one in Cursor each get their terminal from one read', async () => {
+    vi.useFakeTimers()
+    const CURSOR_SHELL = 4001
+    processTable.rows = [...TERMINAL_TREE, { pid: 4343, ppid: CURSOR_SHELL }, { pid: CURSOR_SHELL, ppid: 1 }]
+    const listener = fakeListener()
+    const { port } = startHere({ listen: listener.listen })
+    port.observed(hook('session-start', { hostHints: { TERM_PROGRAM: 'vscode' } }))
+    port.observed(hook('session-start', { sessionId: 'sess-2', callerPid: 4343, hostHints: IN_CURSOR }))
+    attach(port)
+    await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+    listener.vscode(WINDOW_ID)
+    const looks = calls('syncAgents').length
+    expect(listener.vscodeState(WINDOW_ID, [SHELL, CURSOR_SHELL])).toBeUndefined()
+    await vi.waitFor(() => expect(calls('syncAgents')).toHaveLength(looks + 1))
+    expect(await caps()).toEqual(expect.arrayContaining([{ id: ID, caps: 'sf' }, { id: observedAgentId('claude', 'sess-2'), caps: 'sf' }]))
+    expect(await caps()).toHaveLength(2)
+    expect(processTable.reads).toBe(1)
+  })
+
+  it('cursor-agent in a terminal has its terminal, and a stroke on it asks no page keys', async () => {
+    const AGENT = observedAgentId('cursor', 'cur-1')
+    const { reported, front } = await inVscodeTerminal({}, { engine: 'cursor', sessionId: 'cur-1' }, CURSOR)
+    const window = await reported()
+    expect(await caps()).toEqual([{ id: AGENT, caps: 'sf' }])
+    front('cursor')
+    shows(AGENT)
+    stroke([8, 8])
+    expect(window.lines).toEqual([plain(-1), plain(-1)])
+    expect([claudeSettings.reads, processGroups.reads]).toEqual([[], []])
+  })
+
+  it('Cursor\'s own agent has status and a tap and no voice, and its tap opens Cursor on its folder', async () => {
+    const folder = secretFolder()
+    const { port } = startHere({ orca: mac })
+    port.observed(hook('session-start', { engine: 'cursor', sessionId: 'cur-1', title: 'SECRET-TITLE-MARKER', cwd: folder,
+      hostHints: { __CFBundleIdentifier: CURSOR } }))
+    attach(port)
+    const id = observedAgentId('cursor', 'cur-1')
+    expect(await caps()).toEqual([{ id, caps: 'sf' }])
+    expect(await host().openAgent(id)).toBeUndefined()
+    expect(orcaRuns).toEqual([['/usr/bin/open', ['-b', CURSOR, folder], 10_000]])
+    expect(logs.filter((line) => ['SECRET-', 'cur-1', CURSOR].some((secret) => line.includes(secret)))).toEqual([])
+  })
+
+  it('an agent in Cursor\'s terminal whose window is not there falls to its folder\'s window', async () => {
+    const folder = secretFolder()
+    const { port } = startHere({ orca: mac })
+    port.observed(hook('session-start', { cwd: folder, hostHints: IN_CURSOR }))
+    attach(port)
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns).toEqual([['/usr/bin/open', ['-b', CURSOR, folder], 10_000]])
+  })
+
+  it('with the folder gone a tap brings Cursor forward alone; with its open failing the opener says so, then brings Cursor', async () => {
+    const AGENT = observedAgentId('cursor', 'cur-1')
+    const inCursor = { engine: 'cursor', sessionId: 'cur-1', hostHints: { __CFBundleIdentifier: CURSOR } } as const
+    const { port } = startHere({ orca: exiting(0, 1) })
+    port.observed(hook('session-start', { ...inCursor, cwd: '/nowhere/gone' }))
+    attach(port)
+    expect(await host().openAgent(AGENT)).toBeUndefined()
+    expect(orcaRuns).toEqual([['/usr/bin/open', ['-b', CURSOR], 10_000]])
+    expect(said()).toEqual([])
+    const folder = secretFolder()
+    port.observed(hook('turn-start', { ...inCursor, cwd: folder }))
+    expect(await host().openAgent(AGENT)).toBeUndefined()
+    expect(orcaRuns.slice(1)).toEqual([['/usr/bin/open', ['-b', CURSOR, folder], 10_000], ['/usr/bin/open', ['-b', CURSOR], 10_000]])
+    // The turn's own prompt line aside.
+    expect(said().filter((line) => line.startsWith('[device] open'))).toEqual(['[device] open · cursor-folder · fallback'])
+    expect(logs.filter((line) => ['SECRET-', CURSOR].some((secret) => line.includes(secret)))).toEqual([])
+  })
+
+  it('off macOS Cursor\'s own agent has no tap', async () => {
+    const { port } = startHere()
+    port.observed(hook('session-start', { engine: 'cursor', sessionId: 'cur-1', cwd: secretFolder(), hostHints: { __CFBundleIdentifier: CURSOR } }))
+    attach(port)
+    expect(await caps()).toEqual([{ id: observedAgentId('cursor', 'cur-1'), caps: 's' }])
+  })
+
+  it('Claude Code\'s panel in Cursor opens by cursor://, sent to Cursor alone', async () => {
+    const { port } = startHere({ orca: mac })
+    port.observed(hook('session-start', { sessionId: CURSOR_UUID, hostHints: { __CFBundleIdentifier: CURSOR, CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' } }))
+    attach(port)
+    expect(await host().openAgent(observedAgentId('claude', CURSOR_UUID))).toBeUndefined()
+    expect(orcaRuns).toEqual([['/usr/bin/open', ['-b', CURSOR, `cursor://anthropic.claude-code/open?session=${CURSOR_UUID}`], 10_000]])
+    expect(logs.filter((line) => [CURSOR_UUID, 'cursor://', CURSOR].some((secret) => line.includes(secret)))).toEqual([])
   })
 
   it('no swipe line carries a handle, a session or an agent', async () => {
