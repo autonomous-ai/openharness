@@ -183,9 +183,6 @@ void ui_focus_project(const char *project_id);
 // commander_route_confirm. `need_new` = no agent fit. Runs on the commander-WS task (takes the display lock).
 void ui_voice_routed(bool auto_sent, bool need_new, const char *route_id, const char *agent_id,
                      const char *agent_name, double confidence);
-// Backend abandoned an Overview route voice (empty transcript / STT or router error) → drop the loading
-// overlay now instead of waiting out the routing watchdog. No-op unless a route voice is waiting.
-void ui_voice_route_abort(void);
 // One short line from the cabled Mac (a routing refusal, a send that did not land). Releases the routing
 // overlay first, then shows the message for ~2s over whatever is on screen.
 void ui_cable_toast(const char *msg);

@@ -4829,12 +4829,6 @@ void ui_voice_routed(bool auto_sent, bool need_new, const char *route, const cha
     if (!auto_sent && route && *route && id && *id)
         cable_client_voice_confirm(route, id);
 }
-void ui_voice_route_abort(void)
-{
-    display_lock();
-    dispatch((action_t){.kind = A_VOICE_ABORT});
-    display_unlock();
-}
 void ui_boot_pressed(void)
 {
     display_lock();

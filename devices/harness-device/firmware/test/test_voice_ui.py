@@ -126,7 +126,7 @@ harness += 'static void dispatch(action_t a) { switch (a.kind) { case A_VOICE:\n
 worker = source.split('static void worker(', 1)[1].split('case A_VOICE:\n', 1)[1].split('case A_STOP_YES:', 1)[0]
 harness += 'static void work(action_t a) { switch (a.kind) { case A_VOICE:\n' + worker + '} }\n'
 for name in ['habitat_tick', 'ui_set_connected', 'ui_show_error', 'ui_cable_toast',
-             'ui_voice_error', 'ui_voice_routed', 'ui_voice_route_abort', 'ui_question_close']:
+             'ui_voice_error', 'ui_voice_routed', 'ui_question_close']:
     harness += function(name)
 harness += r'''
 static void reset(void) {
