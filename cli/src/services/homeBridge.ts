@@ -118,6 +118,11 @@ export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = 
   const stateRoot = harnessRoot('state', deps.home, 'linux', look)
   const bridge = readBridge(stateRoot)
   if (!bridge) return IDLE
+  // The folder it names is the one the service writes into and empties: only ~/.harness is the move's.
+  if (bridge.oldHome !== legacyHarnessHome(deps.home, 'linux')) {
+    deps.log(`home bridge: ${BRIDGE_FILE} names a folder other than ${legacyHarnessHome('~', 'linux')} · nothing is served or removed`)
+    return IDLE
+  }
   const roots = harnessRoots(deps.home, 'linux', look)
   const connections = connectorsDir(deps.environment)
   // A connections folder a setting keeps elsewhere was there before the move too, where an old client still finds it.
