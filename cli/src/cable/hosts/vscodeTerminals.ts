@@ -89,8 +89,8 @@ export async function readForeground(agent: number, shell: number, exec: Exec = 
   return lines.length === pids.length && ofAgent && ofShell ? { pgid: ofAgent.pgid, tpgid: ofShell.tpgid } : undefined
 }
 
-/** What the guard knows of the agent: whether it waits on the person, its folder, and its transcript path as its hook
- *  or the scan gave it (the user settings' home: claudeRenderer.ts). */
+/** What the guard knows of the agent: whether it waits on the person, the folder its session started in (its project
+ *  settings'), and its transcript path as its hook or the scan gave it (the user settings' home: claudeRenderer.ts). */
 export interface PageAgent { asking: boolean; cwd?: string; transcriptPath?: string }
 
 /** A terminal of an open window: the window's id and its shell's pid. */

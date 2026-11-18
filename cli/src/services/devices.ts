@@ -729,7 +729,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     const agent = observed?.byPane(adapter.id, pane.id)
     if (agent?.engine !== 'claude') return undefined
     const keys = adapter.pageKeys?.(pane, {
-      asking: agent.state === 'needs-you', cwd: agent.cwd, transcriptPath: observed?.transcriptOf(agent.id),
+      asking: agent.state === 'needs-you', cwd: observed?.startedIn(agent.id), transcriptPath: observed?.transcriptOf(agent.id),
     })
     return keys ? keys.then((page) => (page ? 'page' : 'lines')) : undefined
   }

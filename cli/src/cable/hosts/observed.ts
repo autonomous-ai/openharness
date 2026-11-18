@@ -162,6 +162,9 @@ interface Entry {
   /** When its state began (a turn's start renews it): how long a turn has run, and since when an agent waits. */
   since: number
   transcriptPath?: string
+  /** The folder of its first event that named one, a hook's or the scan's row: where its session started, whose
+   *  project settings Claude Code reads, while `agent.cwd` follows each hook. */
+  startedIn?: string
   pid: number
   /** Its latest event's host hints: none for a session the scan found, until its first. */
   hints: Readonly<Record<string, string>>
@@ -587,6 +590,12 @@ export class ObservedSource implements HostSource {
     return this.entries.get(agentId)?.transcriptPath
   }
 
+  /** The folder the agent's session started in (Entry.startedIn); none when no event named one. The project settings'
+   *  folder for the page guard. */
+  startedIn(agentId: string): string | undefined {
+    return this.entries.get(agentId)?.startedIn
+  }
+
   /** Takes the event; for a turn's start of a session it lists, answers what started it. */
   ingest(e: ObservedEvent): PromptSource | undefined {
     if (e.event === 'asked') {
@@ -623,7 +632,10 @@ export class ObservedSource implements HostSource {
     entry.caller = e.callerPid
     this.locate(entry)
     entry.bundle = bundleOf(a.host, e.hostHints)
-    if (e.cwd) a.cwd = e.cwd
+    if (e.cwd) {
+      a.cwd = e.cwd
+      entry.startedIn ??= e.cwd
+    }
     if (e.event === 'session-start' || e.event === 'turn-start') {
       if (e.title !== undefined) entry.title = e.title
       else if (e.engine === 'claude') entry.title = undefined
@@ -800,6 +812,7 @@ export class ObservedSource implements HostSource {
       dialPrompts: [],
       subagents: 0,
       ...(init.transcriptPath ? { transcriptPath: init.transcriptPath } : {}),
+      ...(init.cwd ? { startedIn: init.cwd } : {}),
     }
     this.entries.set(id, entry)
     return entry
