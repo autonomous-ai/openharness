@@ -245,21 +245,30 @@ describe('Orca\'s account homes on the dial', () => {
   })
 
   it('a home the person turned off stays off', async () => {
-    // A session in the other account, where Harness put no hooks, so only a scan lists it, and only once its first turn
-    // is on disk. Started before the dial: the scan's look at the processes is kept up to 5 s, and one started after the
-    // attach's scan may be missing from the replug's; a pane opened after an unplug took the dial's pseudo-terminal.
+    // Two sessions in the other account, where Harness put no hooks, so only a scan lists one, and only once its first
+    // turn is on disk. Both started before the dial: the scan's look at the processes is kept up to 5 s, and one started
+    // after the attach's scan may be missing from the replug's; a pane opened after an unplug took the dial's
+    // pseudo-terminal.
+    let first: Outside | undefined
     let engine: Outside | undefined
     const { d, desk, a, b } = await orcaPluginsOn(async (started, home) => {
+      first = await Outside.startIn(started, 'first-in-orca-home', home, {})
+      outside.push(first)
       engine = await Outside.startIn(started, 'in-orca-home', home, {})
       outside.push(engine)
+      await turn(started, first)
     })
+    // A scan already started runs on after an unplug, and logs only when it lists a session: the attach's lists the
+    // first session, so its line says it is over. The other's turn, taken after it, can then be listed by the replug's
+    // scan alone.
+    const scans = (): number => d.log().split('\n').filter((line) => FOUND_ONE.test(line)).length
+    await until('the first attach\'s scan', () => scans() > 0, 45_000, 100)
     // As /plugin would, in that account's Claude Code.
     execFileSync(d.env.CLAUDE_PATH!, ['plugin', 'disable', DIAL_PLUGIN_ID, '--scope', 'user'], { env: { ...d.env, CLAUDE_CONFIG_DIR: a }, stdio: 'ignore' })
     expect(pluginOn(a)).toBe(false)
     const calls = pluginCalls(d).length
-    await turn(d, engine!)
-    const scans = (): number => d.log().split('\n').filter((line) => FOUND_ONE.test(line)).length
     await desk.unplug('E2E-A')
+    await turn(d, engine!)
     const before = scans()
     await plugged(desk)
     // Its line comes once that scan's pass has run, and the attach's before it.
