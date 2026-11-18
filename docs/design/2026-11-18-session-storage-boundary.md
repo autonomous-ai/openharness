@@ -768,3 +768,23 @@ by this correction. A later matched comparison must decide actual performance.
 
 Actual RED: `/tmp/core-grid-storage-source-normalization-red1-20261118.log` fails
 15 > 11 after the original literal durable and receipt assertions pass.
+
+The correction preserves the successful source normalization results only by exact
+raw object. It passes the caller's <=11 bound (RED was 15), four missing-clock-input
+fallback cases, a numeric legacy updatedAt case, and an invalid changed candidate
+which keeps source runtimes but must still be rejected. Source results are cleared
+before the first preparation await and before failing asynchronous source cleanup.
+
+Selected evidence is combined: the first four-file run has 63 passes and one new
+fixture assertion mismatch (the invalid candidate correctly exposed the existing
+fixed Registry storage failure instead of its internal invariant text). After
+correcting only that assertion and adding the legacy updatedAt case, the affected
+caller file passes 29 cases; the other three unchanged files' 36 cases pass, including
+3,000 generated merge comparisons, real held-child ownership/recovery tests, and
+Grid reference rekey/final-witness checks. No runtime changed between these runs.
+Receipts: `/tmp/core-grid-storage-source-normalization-green1-20261118.log` and
+`/tmp/core-grid-storage-source-normalization-green2-20261118.log`. The first run's
+owned process group was absent; each caller fixture closes its actual storage owner.
+The earlier failed result is retained, not described as an uninterrupted full gate.
+TypeScript passes at the final source/test shape:
+`/tmp/core-grid-storage-source-normalization-types2-20261118.log`.

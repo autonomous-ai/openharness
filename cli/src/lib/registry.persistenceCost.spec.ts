@@ -240,6 +240,50 @@ it('reuses private normalization across admission checks and unchanged prepared 
   expect(normalizations).toBeLessThanOrEqual(11)
 })
 
+it.each(['registeredAt', 'touchedAt', 'lastHookAt', 'lastTranscriptAt'] as const)(
+  'keeps per-call historical clock normalization when source %s is absent', async field => {
+    const image = disk(), missing = row(image, B), started = Date.now()
+    delete missing[field]
+    writeFileSync(io.file, JSON.stringify(image), { mode: 0o600 })
+    const { validTerminalRuntime } = await import('./registry.js'), filter = Array.prototype.filter
+    let normalizations = 0
+    const filtered = vi.spyOn(Array.prototype, 'filter').mockImplementation(function (this: unknown[], predicate, thisArg) {
+      if (predicate === validTerminalRuntime && (this[0] as { paneId?: string })?.paneId === '%2') normalizations++
+      return filter.call(this, predicate, thisArg)
+    })
+    try { registry!.setCwd(A, '/fixture/changed'); await registry!.flush() }
+    finally { filtered.mockRestore() }
+    expect(normalizations).toBeGreaterThanOrEqual(3)
+    expect(row(disk(), B)[field]).toBeGreaterThanOrEqual(started)
+    expect(row(disk(), A).cwd).toBe('/fixture/changed')
+  })
+
+it('validates a changed candidate independently even when it keeps the source runtime array', async () => {
+  const live = registry!.byAgent(A)!, before = readFileSync(io.file, 'utf8'), project = live.projectDir
+  ;(live as unknown as Row).projectDir = 42
+  try {
+    await expect(registry!.flush()).rejects.toThrow('registry storage write failed')
+    expect(readFileSync(io.file, 'utf8')).toBe(before)
+    expect(io.prepared).toEqual([])
+  } finally { live.projectDir = project }
+})
+
+it('reuses source normalization with a numeric legacy updatedAt and preserves its exact time', async () => {
+  const image = disk(), legacy = row(image, B), stamp = legacy.touchedAt
+  legacy.updatedAt = stamp; delete legacy.touchedAt
+  writeFileSync(io.file, JSON.stringify(image), { mode: 0o600 })
+  const { validTerminalRuntime } = await import('./registry.js'), filter = Array.prototype.filter
+  let normalizations = 0
+  const filtered = vi.spyOn(Array.prototype, 'filter').mockImplementation(function (this: unknown[], predicate, thisArg) {
+    if (predicate === validTerminalRuntime && (this[0] as { paneId?: string })?.paneId === '%2') normalizations++
+    return filter.call(this, predicate, thisArg)
+  })
+  try { registry!.setCwd(A, '/fixture/changed'); await registry!.flush() }
+  finally { filtered.mockRestore() }
+  expect(normalizations).toBe(1)
+  expect(row(disk(), B)).toMatchObject({ updatedAt: stamp, touchedAt: stamp })
+})
+
 it('rejects a live row made invalid after preparation instead of reusing its earlier normalized owner', async () => {
   const live = registry!.byAgent(A)!, originalProject = live.projectDir
   const before = readFileSync(io.file, 'utf8'), held = holdPreparation()

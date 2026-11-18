@@ -940,7 +940,7 @@ function normalizedClosePlan(value: unknown): RegisteredSession['closePlan'] {
     ...(typeof plan.detail === 'string' ? { detail: plan.detail.slice(0, 500) } : {}) }
 }
 
-function validatedRows(values: readonly unknown[]): RegisteredSession[] | null {
+function validatedRows(values: readonly unknown[], normalize: typeof strictPersistedRow = strictPersistedRow): RegisteredSession[] | null {
   const rows: RegisteredSession[] = []
   const agents = new Set<string>()
   const sessions = new Set<string>()
@@ -948,7 +948,7 @@ function validatedRows(values: readonly unknown[]): RegisteredSession[] | null {
   const processes = new Set<string>()
   const routes = new Set<string>()
   for (const value of values) {
-    const row = strictPersistedRow(value)
+    const row = normalize(value)
     if (!row || agents.has(row.agentId)) return null
     agents.add(row.agentId)
     // A waiting adoption is an intention, not ownership. A real hook may bind while search is
@@ -1037,7 +1037,7 @@ class MergeIdentities {
   private readonly strict = new Map<string, RegisteredSession>()
   private readonly holders = new Map<string, Set<string>>()
 
-  constructor(rows: ReadonlyMap<string, Record<string, unknown>>) {
+  constructor(rows: ReadonlyMap<string, Record<string, unknown>>, private readonly normalize: typeof strictPersistedRow = strictPersistedRow) {
     for (const [id, row] of rows) this.put(id, row)
   }
 
@@ -1055,7 +1055,7 @@ class MergeIdentities {
     if (!this.order.has(id)) this.order.set(id, this.nextOrder++)
     // A row that is not a valid v2 row claims nothing and is claimed by nothing, as before. Parsed once
     // here rather than once per pair: what a claim reads of it, its identity and binding, is the row's own.
-    const row = strictPersistedRow(value)
+    const row = this.normalize(value)
     if (!row) return
     this.strict.set(id, row)
     for (const key of MergeIdentities.keys(row)) {
@@ -1103,6 +1103,7 @@ export function mergedForSave(
   intents: ReadonlyMap<string, ReadonlySet<string>>,
   fingerprint: (row: Record<string, unknown>) => string = rowFingerprint,
   identities?: MergeIdentities,
+  normalize: typeof strictPersistedRow = strictPersistedRow,
 ): Map<string, Record<string, unknown>> {
   const merged = new Map(latest)
   for (const baselineId of baselines.keys()) {
@@ -1123,11 +1124,11 @@ export function mergedForSave(
       ? threeWayRow(baseline, current, latest.get(agentId)!)
       : current
     if (intended) candidate = withIntended(candidate, current, intended)
-    const process = strictPersistedRow(candidate)?.processIdentity
+    const process = normalize(candidate)?.processIdentity
     const engine = candidate.engine
     const sessionId = typeof candidate.sessionId === 'string' ? candidate.sessionId : ''
     const routes = new Set(normalizedRuntimes(candidate.runtimes, candidate.tmuxPane).map(terminalRouteKey))
-    identities ??= new MergeIdentities(merged)
+    identities ??= new MergeIdentities(merged, normalize)
     for (const [otherId, otherRow] of identities.sharing(agentId, process?.pid, sessionId, routes)) {
       const sameProcess = otherRow.engine === engine && sameProcessIdentity(process, otherRow.processIdentity)
       const sameSession = !!sessionId && otherRow.sessionId === sessionId
@@ -3540,8 +3541,12 @@ class Registry {
       await sessionStorage.withWrite(deadline.expires, () => registryFileLock(env.ADAPTER_DATA_DIR, deadline, async checkOwner => {
         const priorSource = unconfirmed?.source
         const source = await sessionStorage.retain({ kind: 'registry' })
+        const normalizedSourceRows = new Map<object, RegisteredSession>()
+        const normalizeSourceRow = (value: unknown): RegisteredSession | null =>
+          value && typeof value === 'object' && normalizedSourceRows.has(value)
+            ? normalizedSourceRows.get(value)! : strictPersistedRow(value)
         try {
-        const latestValues: unknown[] = await (async () => {
+        const latestValues: unknown[] = (() => {
           deadline.check()
           if (source.image.state === 'missing') return []
           if (!source.image.json) throw new Error('registry is not JSON')
@@ -3558,7 +3563,18 @@ class Registry {
           }
           const v2Rows = parsed.filter((row) => !!row && typeof row === 'object'
             && (row as { schemaVersion?: unknown }).schemaVersion === 2)
-          if (v2Rows.length && !validatedRows(v2Rows)) throw new Error('registry contains a malformed v2 row')
+          if (v2Rows.length) {
+            const normalized = validatedRows(v2Rows)
+            if (!normalized) throw new Error('registry contains a malformed v2 row')
+            for (const [index, value] of v2Rows.entries()) {
+              const row = value as Record<string, unknown>
+              // Historical incomplete rows still receive their original per-call clock defaults.
+              if (typeof row.registeredAt === 'number' && savedTouchedAt(row) !== null
+                && typeof row.lastHookAt === 'number' && typeof row.lastTranscriptAt === 'number') {
+                normalizedSourceRows.set(row, normalized[index])
+              }
+            }
+          }
           return parsed
         })()
         const latest = new Map<string, Record<string, unknown>>()
@@ -3631,7 +3647,7 @@ class Registry {
           }
           const candidate = bindingCommit.candidate
           const routes = new Set(candidate?.runtimes.map(terminalRouteKey) ?? [])
-          identities = new MergeIdentities(latest)
+          identities = new MergeIdentities(latest, normalizeSourceRow)
           for (const [otherId, other] of identities.sharing(bindingCommit.agentId,
             candidate?.processIdentity?.pid, candidate?.sessionId ?? '', routes)) {
             if (!candidate || displacedIds.has(otherId)) continue
@@ -3670,7 +3686,7 @@ class Registry {
             !this.persistedBaseline.has(id) || this.persistedBaseline.get(id) !== (currentRows.has(id) ? snapshotFingerprint(currentRows.get(id)!) : undefined))
           : [])
         if (bindingCommit) {
-          identities ??= new MergeIdentities(latest)
+          identities ??= new MergeIdentities(latest, normalizeSourceRow)
           for (const id of changed) {
             if (bindingCommit.metadata && id === bindingCommit.agentId) continue
             if (confirming && unconfirmed!.affected.has(id)) continue
@@ -3690,10 +3706,13 @@ class Registry {
             }
           }
         }
-        const merged = [...mergedForSave(latest, currentRows, this.persistedBaseline, capturedIntents, snapshotFingerprint, identities).values()]
-        const rows = validatedRows(merged)
+        const merged = [...mergedForSave(latest, currentRows, this.persistedBaseline, capturedIntents, snapshotFingerprint, identities, normalizeSourceRow).values()]
+        const rows = validatedRows(merged, normalizeSourceRow)
         if (!rows) throw new Error('registry transaction would violate global identity invariants')
         const candidateRows = rows.map(row => persistedRow(row))
+        // Reuse only the exact validated source objects in this non-yielding merge. Fresh live rebases
+        // must normalize changed objects again, and no comparison cache survives preparation.
+        normalizedSourceRows.clear()
         const prepared = await prepareSessionPublication(sessionStorage, { kind: 'registry' }, source, candidateRows, deadline)
         // These graphs are private capture/merge results. Publication accepts only row-bound reference
         // replacements, so a second child metadata image cannot replace or revalidate session authority.
@@ -3811,6 +3830,7 @@ class Registry {
         if (rebased.length !== serialized.length || rebased.some(row => this.persistedBaseline.get(row.agentId) !== (preparedImages.has(row)
           ? snapshotFingerprint(preparedImages.get(row)!) : rowFingerprint(persistedRow(row))))) void this.save()
         } finally {
+          normalizedSourceRows.clear()
           if (this.unconfirmedBinding?.source !== source) await source.release()
           if (priorSource && priorSource !== source && this.unconfirmedBinding?.source !== priorSource) await priorSource.release()
         }
