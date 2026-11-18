@@ -116,7 +116,7 @@ async function device(argv: string[], deps: Partial<DeviceDeps> = {}) {
   const out: string[] = []
   const err: string[] = []
   const code = await runDeviceCommand(argv, {
-    dataDir: folder(), port: PORT, platform: 'darwin', stdin: chunks(), claude: () => fakeClaude(),
+    dataDir: folder(), home: folder(), port: PORT, platform: 'darwin', stdin: chunks(), claude: () => fakeClaude(),
     orcaHomes: async () => [], claudeIn: () => null,
     // The command's own: CLAUDE_CONFIG_DIR stands for ~/.claude unless a spec runs it in an Orca terminal.
     defaultClaudeHome: claudeHome,
@@ -1137,14 +1137,15 @@ describe('harness device orca status and connect', () => {
 
   it('connect --json prints what Orca lists, installs nothing and records nothing', async () => {
     const dataDir = folder()
+    const home = folder()
     const calls = up()
     approvalRequired()
-    const { code, out, err } = await device(['orca', 'connect', '--json'], { dataDir, orca: orcaRun })
+    const { code, out, err } = await device(['orca', 'connect', '--json'], { dataDir, home, orca: orcaRun })
     expect({ code, err, lines: out.length }).toEqual({ code: 0, err: [], lines: 1 })
     expect(JSON.parse(out[0]!)).toStrictEqual({
       connect: 'approve', name: 'Harness Device', version: '1.2.3', fingerprint: FP, grants: [EXECUTION, WORKSPACE_READ], update: false,
     })
-    expect(calls().at(-1)).toBe(`plugin install ${join(dataDir, 'orca-plugin')} --json`)
+    expect(calls().at(-1)).toBe(`plugin install ${join(home, '.harness', 'orca-plugin')} --json`)
     expect(existsSync(join(dataDir, 'dial-skill.json'))).toBe(false)
   })
 
@@ -1197,8 +1198,7 @@ describe('harness device orca status and connect', () => {
   it('a record that cannot be saved is said, and the line stays done', async () => {
     const dataDir = folder()
     up()
-    // The plugin's folder is written first: a data folder that cannot be written would leave Orca nothing to install.
-    expect(await device(['orca', 'status', '--json'], { dataDir, orca: orcaRun })).toEqual({ code: 0, err: [], out: ['{"orca":"offer"}'] })
+    // The plugin's folder is in the home's .harness, so a data folder that cannot be written still leaves Orca it to install.
     readOnly(dataDir)
     installs()
     expect(await device(['orca', 'connect', '--approve', FP, '--json'], { dataDir, orca: orcaRun }))
@@ -1207,23 +1207,23 @@ describe('harness device orca status and connect', () => {
   })
 
   it.skipIf(process.getuid?.() === 0)("a plugin folder that cannot be written: status is absent, connect is failed, each says the folder's code", async () => {
-    const dataDir = folder()
+    const home = folder()
     const calls = up()
     installs()
-    readOnly(dataDir)
+    readOnly(home)
     const said = ['orca plugin folder: EACCES']
-    expect(await device(['orca', 'status', '--json'], { dataDir, orca: orcaRun })).toEqual({ code: 0, out: ['{"orca":"absent"}'], err: said })
-    expect(await device(['orca', 'connect', '--approve', FP, '--json'], { dataDir, orca: orcaRun })).toEqual({ code: 1, out: [FAILED_LINE], err: said })
+    expect(await device(['orca', 'status', '--json'], { home, orca: orcaRun })).toEqual({ code: 0, out: ['{"orca":"absent"}'], err: said })
+    expect(await device(['orca', 'connect', '--approve', FP, '--json'], { home, orca: orcaRun })).toEqual({ code: 1, out: [FAILED_LINE], err: said })
     expect(calls().filter((call) => call.startsWith('plugin install'))).toEqual([])
   })
 
-  it('what the build carries is what the folder holds', async () => {
-    const dataDir = folder()
+  it('what the build carries is what the folder holds, in the home\'s .harness', async () => {
+    const home = folder()
     const calls = up()
     const files = JSON.parse(readOrcaPluginBundle('1.2.3')) as OrcaPluginFiles
-    expect(await device(['orca', 'status', '--json'], { dataDir, orca: () => orcaRun(files) }))
+    expect(await device(['orca', 'status', '--json'], { home, orca: () => orcaRun(files) }))
       .toEqual({ code: 0, err: [], out: ['{"orca":"offer"}'] })
-    const plugin = join(dataDir, 'orca-plugin')
+    const plugin = join(home, '.harness', 'orca-plugin')
     for (const [path, text] of Object.entries(files)) expect(readFileSync(join(plugin, path), 'utf8'), path).toBe(text)
     expect(JSON.parse(readFileSync(join(plugin, 'orca-plugin.json'), 'utf8'))).toMatchObject({ version: '1.2.3' })
     expect(calls()).toContain(`plugin inspect ${plugin} --json`)

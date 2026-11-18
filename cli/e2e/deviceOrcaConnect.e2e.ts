@@ -1,7 +1,7 @@
 /**
  * `harness device orca status` and `connect` from the built `cli.js` (docs/plans/2026-11-18-connect-orca-design.md),
  * run as the Harness app runs them, against a fake `orca` (testing/fakeOrcaCli.ts):
- * - the build's own plugin is written into the data folder, private, at the build's version, before Orca is asked;
+ * - the build's own plugin is written into the home's .harness, private, at the build's version, before Orca is asked;
  * - `status` follows what Orca lists: `offer`, `current`, `behind`, `off`, and `absent` for an Orca that is not running;
  * - `connect` prints the access Orca lists and passes no fingerprint; only `connect --approve` installs, and records it;
  * - a plugin `behind` is updated, and one the person removed is never installed again.
@@ -89,7 +89,7 @@ describe('harness device orca, from the built CLI', () => {
   it('offers the plugin, shows what Orca lists, installs it only with the fingerprint, then follows the list', async () => {
     const { d, orca, harness } = await machine()
     running(orca)
-    const folder = join(d.dataDir, 'orca-plugin')
+    const folder = join(d.env.HOME!, '.harness', 'orca-plugin')
 
     expect(await harness('device', 'orca', 'status', '--json')).toEqual({ code: 0, out: '{"orca":"offer"}\n', err: '' })
     expect(orca.calls()[0]).toBe('status --json')
@@ -152,6 +152,6 @@ describe('harness device orca, from the built CLI', () => {
     orca.answer('status', { id: 'req-1', ok: true, result: { app: { running: false }, runtime: { reachable: false } } })
     expect(await harness('device', 'orca', 'status', '--json')).toEqual({ code: 0, out: '{"orca":"absent"}\n', err: '' })
     expect(orca.calls()).toEqual(['status --json'])
-    expect(existsSync(join(d.dataDir, 'orca-plugin'))).toBe(false)
+    expect(existsSync(join(d.env.HOME!, '.harness', 'orca-plugin'))).toBe(false)
   })
 })
