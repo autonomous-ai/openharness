@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { connectWorkspace, initializeWorkspace, pickPrivateGrid, readStatus } from '../lib/connect.mjs';
+import { connectWorkspace, defaultsPath, initializeWorkspace, pickPrivateGrid, readStatus } from '../lib/connect.mjs';
 import { atomicJson, DEFAULT_CONFIG, gridJson, readConfig } from '../lib/fleet.mjs';
 import { createCollector } from '../lib/telemetry.mjs';
 
@@ -109,4 +109,19 @@ test('Grid network denials explain the approval boundary rather than claiming a 
   await writeFile(file,'#!/bin/sh\necho "Could not reach grid home: [Errno 1] Operation not permitted"\nexit 1\n',{mode:0o755});
   const result=await gridJson({transport:'local',gridBinary:file},'local',['models','home']);
   assert.equal(result.ok,false);assert.match(result.error,/scoped network approval/);assert.match(result.error,/fleet status/);
+});
+// On Linux the defaults follow Harness's data root (cli/src/config/harnessHome.ts); the platform is set so it runs anywhere.
+test('the fleet\'s defaults are in <data>/grid-fleet, and GRID_FLEET_DEFAULTS still wins',async t=>{
+  const platform=Object.getOwnPropertyDescriptor(process,'platform');t.after(()=>Object.defineProperty(process,'platform',platform));
+  const home=await mkdtemp(join(tmpdir(),'grid-defaults-'));t.after(()=>rm(home,{recursive:true,force:true}));
+  const under=(...root)=>join(home,...root,'grid-fleet','default.json'),env={HOME:home};
+  Object.defineProperty(process,'platform',{value:'linux'});
+  assert.equal(defaultsPath(env),under('.local','share','harness'),'a fresh Linux home');
+  await mkdir(join(home,'.harness'));
+  assert.equal(defaultsPath(env),under('.harness'),'a Linux home not moved yet');
+  await mkdir(join(home,'.local','share','harness'),{recursive:true});
+  assert.equal(defaultsPath(env),under('.local','share','harness'),'a moved Linux home');
+  assert.equal(defaultsPath({...env,GRID_FLEET_DEFAULTS:'/own/default.json'}),'/own/default.json');
+  Object.defineProperty(process,'platform',{value:'darwin'});
+  assert.equal(defaultsPath(env),under('.harness'),'macOS');
 });
