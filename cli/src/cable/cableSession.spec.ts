@@ -369,7 +369,6 @@ describe('cable session', () => {
   })
 
   it('bounds every drawer field to what the dial keeps, so eight rows of the worst text stay one frame', async () => {
-    const control = /[\u0000-\u001f\u007f]/
     const long = '\u0001"\u001f\u007f"'.repeat(200)
     const { session, port } = await connect(makeHost({ describe: () => ({ name: long, engine: 'claude', machine: long }) }))
     try {
@@ -384,7 +383,8 @@ describe('cable session', () => {
       for (const { name, machine, summary } of items) {
         for (const [text, max] of [[name, 39], [machine, 39], [summary, 239]] as const) {
           expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(max)
-          expect(text).not.toMatch(control)
+          // Its JSON, quotes aside, no wider than a field of quotes the dial keeps whole.
+          expect(Buffer.byteLength(JSON.stringify(text), 'utf8') - 2).toBeLessThanOrEqual(2 * max)
         }
       }
       expect(port.isOpen).toBe(true)
@@ -3768,6 +3768,19 @@ describe('hello capabilities', () => {
       const items = ofType(port, 'notif.replace')[0].items as Array<{ agentId: string; summary: string }>
       expect(items.map((row) => row.agentId)).toEqual(['a0', 'w0', 'w1', 'w2', 'w3', 'w4', 'w5', 'w6'])
       for (const row of items) expect(row.summary).toBe(preview)
+    } finally { await session.stop() }
+  })
+
+  it("a drawer row keeps its words' control characters, as the dial previews them, so a read question stays read", async () => {
+    const { session, port } = await connect(richHost())
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' })
+      await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+      // Colored text: the dial filed the asked question with its escapes and bell (recap_preview folds only whitespace).
+      await session.question('a0', 'id0', [{ key: 'k', q: '\u001b[1mShip\u001b[0m  it?\u0007\u007f', options: ['yes', 'no'] }])
+      port.sent.length = 0
+      await session.replaceNotifications([])
+      expect(ofType(port, 'notif.replace')[0].items).toMatchObject([{ agentId: 'a0', summary: '\u001b[1mShip\u001b[0m it?\u0007\u007f' }])
     } finally { await session.stop() }
   })
 
