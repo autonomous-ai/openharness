@@ -437,6 +437,43 @@ void main() {
   });
 
   test(
+    'on a fresh Linux home the terminal script is in the state root, and the data root waits for the CLI',
+    () async {
+      String? terminalScript;
+      final data = '${scratch.path}/data/harness';
+      final state = '${scratch.path}/state/harness';
+      final provisioner = EnvironmentProvisioner(
+        look: HomeLook(
+          linux: true,
+          environment: {
+            'XDG_DATA_HOME': '${scratch.path}/data',
+            'XDG_STATE_HOME': '${scratch.path}/state',
+          },
+          // Only this test's folders: the real ~/.harness is not this home's.
+          exists: (path) =>
+              path.startsWith(scratch.path) &&
+              FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound,
+        ),
+        isMacOS: false,
+        isLinux: true,
+        isWindows: false,
+        openTerminal: (path) async => terminalScript = path,
+        run: runner(tmuxPresent: () => false),
+      );
+
+      await provisioner.ensureReady(
+        onProgress: (_) {},
+        install: true,
+        mode: EnvironmentSetupMode.automatic,
+      );
+
+      expect(terminalScript, startsWith('$state/desktop-app-v2/setup-runs/'));
+      // The data root is the rule's switch: only the CLI's installer makes it.
+      expect(Directory(data).existsSync(), isFalse);
+    },
+  );
+
+  test(
     'X11 with tmux ready still opens Terminal when xclip needs sudo',
     () async {
       await createManagedHarness();
