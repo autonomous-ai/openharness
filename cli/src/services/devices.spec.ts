@@ -290,6 +290,7 @@ const hc: HcClient = {
     return { close: () => {} }
   },
   prompt: async (address, kind, text) => { hcCalls.push(['prompt', address, kind, text]); return { outcome: 'sent' } },
+  keys: async (address, keys) => { hcCalls.push(['keys', address, keys]); return false },
   socketStamp: () => undefined,
 }
 /** cmux as every spec but cmux's own has it: not installed, so no spec runs the developer's own cmux. */
@@ -5821,11 +5822,12 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
   /**
    * The devices with a Herdr Core the test drives, the dial not attached yet. Its socket is there (`stamp`). Each
    * subscription keeps its subscriber and whether it was closed; a prompt is recorded and answers the next of `prompts`,
-   * else sent. `live` attaches the dial and tells the first subscription's snapshot; `changed` tells one change of t7.
+   * else sent; keys are recorded in `pressed` and pressed. `live` attaches the dial and tells the first subscription's
+   * snapshot; `changed` tells one change of t7.
    */
   const withHc = (over: Parameters<typeof start>[0] = {}) => {
     const subs: Array<{ to: HcSubscriber; closed: boolean }> = []
-    const hc = { stamp: '1:1' as string | undefined, subs, prompted: [] as unknown[][], prompts: [] as HcPrompt[] }
+    const hc = { stamp: '1:1' as string | undefined, subs, prompted: [] as unknown[][], prompts: [] as HcPrompt[], pressed: [] as unknown[][] }
     const client: HcClient = {
       request: async () => ({ ok: false, fault: 'no_socket' }),
       subscribe: (to) => {
@@ -5836,6 +5838,10 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       prompt: async (...args) => {
         hc.prompted.push(args)
         return hc.prompts.shift() ?? { outcome: 'sent' }
+      },
+      keys: async (...args) => {
+        hc.pressed.push(args)
+        return true
       },
       socketStamp: () => hc.stamp,
     }
@@ -6292,11 +6298,14 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
     /** The id the dial holds for the one agent hc lists. */
     const listedId = async () => (await listed())[0].id
 
+    /** Codex draws on the main screen, whose history Herdr's view scrolls; Claude Code's own keys move it. */
+    const CODEX: Partial<HcTerminal> = { kind: 'codex' }
+
     /**
-     * The devices with Herdr Core listing `terminals` (t7 alone by default), the hook `hooked` heard first, the dial
-     * attached and Herdr in front. Every herdr-app run is recorded in `orcaRuns`: its `status` exits `screen.code` and
-     * prints `screen.tab` as the tab on screen (t7's own by default), held while `screen.held` until `answer` names the
-     * tab. Its `agent` names t7 whatever the tab, as Herdr's did on Diego's first check (2026-11-18).
+     * The devices with Herdr Core listing `terminals` (Codex in t7 alone by default), the hook `hooked` heard first,
+     * the dial attached and Herdr in front. Every herdr-app run is recorded in `orcaRuns`: its `status` exits
+     * `screen.code` and prints `screen.tab` as the tab on screen (t7's own by default), held while `screen.held` until
+     * `answer` names the tab. Its `agent` names t7 whatever the tab, as Herdr's did on Diego's first check (2026-11-18).
      */
     const inHerdr = (over: Parameters<typeof start>[0] & { hooked?: ObservedHookEvent; terminals?: HcTerminal[] } = {}) => {
       const screen = { tab: 'tbaaaa', code: 0 as number | null, held: false }
@@ -6311,7 +6320,7 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       if (over.hooked) started.port.observed(over.hooked)
       attach(started.port)
       // None off macOS or with the observed agents off: hc is not followed there.
-      started.hc.subs[0]?.to.snapshot(over.terminals ?? [terminal('t7')])
+      started.hc.subs[0]?.to.snapshot(over.terminals ?? [terminal('t7', CODEX)])
       host().front('herdr')
       const answer = (tab: string) => {
         screen.tab = tab
@@ -6452,7 +6461,7 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
     ])('a terminal hc tells %s is not on screen', async (_, change) => {
       const { core, changed } = inHerdr()
       shows(await listedId())
-      changed(change)
+      changed({ ...CODEX, ...change })
       stroke([8], 300)
       await vi.waitFor(() => expect(dialScrolls(core)).toEqual([toWindows('down', 0, 0), toWindows('move', 8, 0), toWindows('up', 0, 300)]))
       expect(orcaRuns).toEqual([STATUS])
@@ -6569,6 +6578,29 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       expect(orcaRuns).toEqual([STATUS, scrolled('t7', -1)])
       expect(dialScrolls(core)).toEqual([])
       expect(drained()).toEqual(['[herdr-app] scroll · 1 lines · 1 runs · 0 failed'])
+    })
+
+    // Claude Code draws on the alternate screen, where Herdr's view has no history (design §3).
+    it('a Claude Code terminal\'s stroke presses its page keys through hc, and herdr-app scrolls nothing', async () => {
+      const { core, hc } = inHerdr({ terminals: [terminal('t7')] })
+      shows(await listedId())
+      // 128 px toward older lines: 320 px of travel, twenty lines, a page.
+      stroke([64, 64])
+      await vi.waitFor(() => expect(hc.pressed).toEqual([['t7', ['pageup'], 2_000]]))
+      expect(orcaRuns).toEqual([STATUS])
+      expect(dialScrolls(core)).toEqual([])
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(drained()).toEqual(['[herdr-app] scroll · 20 lines · 1 runs · 0 failed'])
+    })
+
+    // A key could move the highlighted choice of its question, and the person's Enter would pick it.
+    it('a Claude Code terminal that asks takes no key: the stroke goes to the windows, and herdr-app is not asked', async () => {
+      const { core, hc } = inHerdr({ terminals: [terminal('t7', { status: 'blocked' })] })
+      shows(await listedId())
+      stroke([64, 64], 300)
+      expect(dialScrolls(core)).toEqual([toWindows('down', 0, 0), toWindows('move', 64, 0), toWindows('move', 64, 0), toWindows('up', 0, 300)])
+      expect(orcaRuns).toEqual([])
+      expect(hc.pressed).toEqual([])
     })
 
     it('the Wi-Fi device\'s stroke takes the same route', async () => {

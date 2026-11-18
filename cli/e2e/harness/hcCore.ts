@@ -12,9 +12,11 @@
  * what it found, and no core starts after it in this run. Nothing here ends a process: a private core that will not
  * stop is left for a person to see, and named.
  *
- * Its agent is Node, run by hc with no shell (a shell's return clears the status, F7). It reports `idle` as Claude Code
- * (`claude-code`) once it listens on a socket of its own under the root, and then each word written to that socket as
- * its next status. It prints `fake> `, then `GOT[<line>]` for each line it reads.
+ * Its agent is Node, run by hc with no shell (a shell's return clears the status, F7). It reports `idle` as the app it
+ * is given, Claude Code (`claude-code`) unless told another, once it listens on a socket of its own under the root, and
+ * then each word written to that socket as its next status. It reads its terminal raw, as Claude Code does, so a key
+ * that is no text reaches it as its bytes: it prints `fake> `, then `KEY[<the key, its ESC written ^[>]` for each such
+ * key (`KEY[^[[5~]`, pageup) and `GOT[<line>]` for each line it reads.
  *
  * Given a Claude Code session, it is Claude Code as hc runs it, before any dial is plugged and so with no hook heard by
  * the devices: before it reports `idle` it writes what Claude Code leaves on disk, its process record and a transcript
@@ -57,7 +59,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { dirname, join } from 'node:path'
-const [socket, projectsDir, sessionId, answer] = process.argv.slice(2)
+const [socket, app, projectsDir, sessionId, answer] = process.argv.slice(2)
 // Written beside and renamed over, as fakeEngine.mjs writes its record: the scan never reads half a file.
 const put = (path, text) => {
   mkdirSync(dirname(path), { recursive: true })
@@ -76,7 +78,7 @@ if (projectsDir) {
   const procStart = execFileSync('/bin/ps', ['-o', 'lstart=', '-p', String(process.pid)]).toString().trim()
   put(join(dirname(projectsDir), 'sessions', process.pid + '.json'), JSON.stringify({ pid: process.pid, sessionId, cwd, procStart, status: 'idle' }))
 }
-const say = (state) => process.stdout.write('\\x1b]7501;state=' + state + ':app=claude-code\\x1b\\\\')
+const say = (state) => process.stdout.write('\\x1b]7501;state=' + state + ':app=' + app + '\\x1b\\\\')
 createServer((connection) => {
   let read = ''
   connection.on('data', (chunk) => {
@@ -91,9 +93,13 @@ createServer((connection) => {
   process.stdout.write('fake> ')
 })
 let line = ''
+process.stdin.setRawMode(true)
 process.stdin.setEncoding('utf8')
 process.stdin.on('data', (chunk) => {
-  line += chunk
+  line += chunk.replace(/\\x1b\\[[0-9;]*~/g, (key) => {
+    process.stdout.write('KEY[^[' + key.slice(1) + ']\\n')
+    return ''
+  })
   for (let newline = line.search(/[\\r\\n]/); newline !== -1; newline = line.search(/[\\r\\n]/)) {
     const got = line.slice(0, newline)
     line = line.slice(newline + 1)
@@ -246,11 +252,12 @@ export class PrivateHc {
   }
 
   /** A terminal Herdr's window would show (`herdr.space`), with [labels] beside it, in <root>/work/<folder>, running the
-   *  fake agent directly, reported idle: its address. With [claude], the agent first leaves that Claude Code session on
-   *  disk: its process record in <dirname(projectsDir)>/sessions and its transcript under projectsDir, answered with
-   *  [claude.answer]. */
+   *  fake agent directly as [app], reported idle: its address. With [claude], the agent first leaves that Claude Code
+   *  session on disk: its process record in <dirname(projectsDir)>/sessions and its transcript under projectsDir,
+   *  answered with [claude.answer]. */
   async agent(
     folder: string, claude?: { projectsDir: string; sessionId: string; answer: string }, labels: Record<string, string> = {},
+    app = 'claude-code',
   ): Promise<string> {
     const { root } = this.planned
     const cwd = join(root, 'work', folder)
@@ -259,7 +266,7 @@ export class PrivateHc {
     if (!existsSync(script)) await writeFile(script, AGENT)
     const socket = join(root, `${folder}.sock`)
     const session = claude ? [claude.projectsDir, claude.sessionId, claude.answer] : []
-    const run = await this.rpc('terminal.run', { argv: [process.execPath, script, socket, ...session], cwd, labels: { 'herdr.space': 's1', ...labels } })
+    const run = await this.rpc('terminal.run', { argv: [process.execPath, script, socket, app, ...session], cwd, labels: { 'herdr.space': 's1', ...labels } })
     const address = run.address as string
     this.agents.set(address, socket)
     if (typeof run.pid === 'number') this.pids.add(run.pid)

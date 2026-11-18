@@ -922,6 +922,43 @@ describe.skipIf(process.platform === 'win32')('the hc client (docs/plans/2026-11
     expect(await hc.prompt('t7', 'claude', 'x'.repeat(2000))).toEqual({ outcome: 'sent' })
   })
 
+  // A Claude Code terminal draws on the alternate screen, so the dial's scroll presses its own page keys
+  // (docs/plans/2026-11-17-dial-herdr-scroll-design.md §3).
+  it('keys sends terminal.keys with the terminal and exactly those names, and is true only for hc\'s result', async () => {
+    const hc = client()
+    server.answer('terminal.keys', { result: { status: 'idle', turn: 0 } })
+    expect(await hc.keys('t7', ['pageup', 'pageup'], 2_000)).toBe(true)
+    expect(server.requests).toEqual([
+      { connection: 1, request: { jsonrpc: '2.0', id: expect.any(String), method: 'terminal.keys', params: { terminal: 't7', keys: ['pageup', 'pageup'] } } },
+    ])
+    for (const answer of [{ error: 'not_found' }, { raw: 'not json\n' }, { raw: '{"id":1,"jsonrpc":"2.0"}\n' }, 'close'] as const) {
+      server.answer('terminal.keys', answer)
+      expect(await hc.keys('t7', ['pagedown'], 2_000), JSON.stringify(answer)).toBe(false)
+    }
+  })
+
+  it('keys with no answer within the deadline it is given is false, and its connection closes', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    server.answer('terminal.keys', 'hold')
+    let answered = false
+    const pressed = client().keys('t7', ['pageup'], 2_000).finally(() => { answered = true })
+    await server.got('terminal.keys', 1)
+    vi.advanceTimersByTime(1_999)
+    await turn()
+    expect(answered).toBe(false)
+    vi.advanceTimersByTime(1)
+    expect(await pressed).toBe(false)
+    await server.ended(1)
+  })
+
+  it('keys to an address not in its form is false, and nothing connects', async () => {
+    const hc = client()
+    for (const address of ['t', 'T7', 'vps/t7', '--help', 't7; rm -rf /', `t${'1'.repeat(17)}`]) {
+      expect(await hc.keys(address, ['pageup'], 2_000), address).toBe(false)
+    }
+    expect(server.connections).toBe(0)
+  })
+
   it('socketStamp is none without a socket of this user\'s on macOS', async () => {
     const file = join(dirname(server.path), 'file.sock')
     await writeFile(file, '')

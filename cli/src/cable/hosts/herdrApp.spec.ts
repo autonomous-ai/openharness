@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Place } from './adapter.js'
-import type { HcPrompt } from './hcClient.js'
+import type { HcPrompt, HcStatus } from './hcClient.js'
 import { createHerdrAppAdapter, type HerdrAppDeps } from './herdrApp.js'
 import { detectApp, detectHost } from './hostDetect.js'
 import { herdrAppStatus } from '../../testing/herdrAppStatus.js'
@@ -17,13 +17,14 @@ interface Call { file: string; args: string[]; timeoutMs: number }
 
 /** A recording runner that runs nothing, so no spec opens Herdr or moves its window: each call answers the next of
  *  [codes], then exit 0, with [stdout] (what `herdr-app status` printed). Beside it a recording client that opens no
- *  socket (its `prompt` answers `sent` unless the test sets another answer), Herdr in front, every terminal shown and
- *  reporting an agent, t7 and t8 in the tabs of TABS, and the default hc session followed unless the test says
- *  otherwise, and the log's lines kept. */
+ *  socket (its `prompt` answers `sent` unless the test sets another answer, its `keys` true), Herdr in front, every
+ *  terminal shown and reporting Codex idle, t7 and t8 in the tabs of TABS, and the default hc session followed unless
+ *  the test says otherwise, and the log's lines kept. */
 function recorder(over: Partial<HerdrAppDeps> = {}, codes: Array<number | null> = [], stdout = '') {
   const calls: Call[] = []
   const log: string[] = []
   const prompt = vi.fn(async (_address: string, _kind: string, _text: string): Promise<HcPrompt> => ({ outcome: 'sent' }))
+  const keys = vi.fn(async (_address: string, _keys: readonly string[], _deadlineMs: number) => true)
   const deps: HerdrAppDeps = {
     run: async (file, args, timeoutMs) => {
       calls.push({ file, args, timeoutMs })
@@ -32,16 +33,18 @@ function recorder(over: Partial<HerdrAppDeps> = {}, codes: Array<number | null> 
     onPath: (name) => (name === 'herdr-app' ? FAKE_PATH_HERDR_APP : null),
     exists: () => false,
     platform: 'darwin',
-    client: { prompt },
+    client: { prompt, keys },
     inFront: () => true,
     shows: () => true,
     tabOf: (address) => TABS.get(address),
+    kindOf: () => 'codex',
+    statusOf: () => 'idle',
     reports: () => true,
     hookIds: true,
     log: (line) => log.push(line),
     ...over,
   }
-  return { calls, log, prompt, adapter: createHerdrAppAdapter(deps) }
+  return { calls, log, prompt, keys, adapter: createHerdrAppAdapter(deps) }
 }
 
 /** Lets every step already able to run take place. */
@@ -674,6 +677,166 @@ describe('the Herdr adapter', () => {
         expect(calls, platform).toEqual([])
         expect(log, platform).toEqual([])
       }
+    })
+
+    // Claude Code draws on the alternate screen, where Herdr's view has no history: its own page keys move it
+    // (docs/plans/2026-11-17-dial-herdr-scroll-design.md §3).
+    describe('a Claude Code terminal', () => {
+      /** The recorder with Claude Code in t7 and Codex in t8: each key call is recorded in `pressed`, and answers true,
+       *  or when `held` waits until the test answers it. */
+      const claudeCode = (held = false) => {
+        const pressed: Array<[string, string[], number]> = []
+        const waiting: Array<(pressed: boolean) => void> = []
+        const rest = recorder({
+          kindOf: (address) => (address === 't7' ? 'claude' : 'codex'),
+          client: {
+            prompt: async () => ({ outcome: 'sent' }),
+            keys: async (address, keys, deadlineMs) => {
+              pressed.push([address, [...keys], deadlineMs])
+              return held ? new Promise<boolean>((resolve) => waiting.push(resolve)) : true
+            },
+          },
+        })
+        /** Answers the oldest key call still held, and lets what follows it run. */
+        const answer = async (ok: boolean) => {
+          waiting.shift()!(ok)
+          await turn()
+        }
+        return { ...rest, pressed, answer }
+      }
+      const press = (key: 'pageup' | 'pagedown', count: number): [string, string[], number] =>
+        ['t7', Array<string>(count).fill(key), 2_000]
+
+      it('canScroll is false while it asks; working, idle, done and no status take the stroke, as another app\'s does whatever its status', () => {
+        const can = (kind: string, status?: HcStatus) =>
+          recorder({ kindOf: () => kind, statusOf: () => status }).adapter.canScroll(pane('t7'))
+        expect(can('claude', 'blocked')).toBe(false)
+        // hc presses at once while the program writes (measured 2026-11-18): a stroke over a working Claude Code is
+        // not late.
+        for (const status of ['working', 'idle', 'done', 'error', undefined] as const) expect(can('claude', status), status).toBe(true)
+        for (const status of ['blocked', 'working'] as const) expect(can('codex', status), status).toBe(true)
+      })
+
+      it('its lines press pageup or pagedown through hc, one a 20 lines, within 2 s, and run no herdr-app; Codex\'s run terminal.scroll', async () => {
+        const { calls, pressed, adapter } = claudeCode()
+        adapter.scroll(pane('t7'), -20)
+        await turn()
+        expect(pressed).toEqual([press('pageup', 1)])
+        // The gap holds the next call, as it holds a run.
+        adapter.scroll(pane('t7'), 40)
+        await turn()
+        expect(pressed).toEqual([press('pageup', 1)])
+        await vi.advanceTimersByTimeAsync(50)
+        expect(pressed).toEqual([press('pageup', 1), press('pagedown', 2)])
+        expect(calls).toEqual([])
+        adapter.scroll(pane('t8'), -3)
+        await turn()
+        expect(calls).toEqual([scrollCall('t8', -3)])
+        expect(pressed).toHaveLength(2)
+      })
+
+      it('lines short of a page wait for that terminal\'s next lines; its quiet second drops them, and its tally counts the lines its keys stood for', async () => {
+        const { pressed, log, adapter } = claudeCode()
+        adapter.scroll(pane('t7'), -15)
+        await turn()
+        expect(pressed).toEqual([])
+        // 25 lines: a page, 5 kept.
+        adapter.scroll(pane('t7'), -10)
+        await turn()
+        expect(pressed).toEqual([press('pageup', 1)])
+        await vi.advanceTimersByTimeAsync(50)
+        adapter.scroll(pane('t7'), -15)
+        await turn()
+        expect(pressed).toEqual([press('pageup', 1), press('pageup', 1)])
+        adapter.scroll(pane('t7'), -15)
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(log).toEqual([drained(40, 2, 0)])
+        // The 15 went with the quiet second: 5 more are no page.
+        adapter.scroll(pane('t7'), -5)
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(pressed).toHaveLength(2)
+        expect(log).toEqual([drained(40, 2, 0), drained(0, 0, 0)])
+      })
+
+      it('one call at a time: the lines that come meanwhile are summed, and the next call carries their pages', async () => {
+        const { pressed, adapter, answer } = claudeCode(true)
+        adapter.scroll(pane('t7'), -20)
+        adapter.scroll(pane('t7'), -20)
+        adapter.scroll(pane('t7'), 60)
+        await vi.advanceTimersByTimeAsync(50)
+        expect(pressed).toEqual([press('pageup', 1)])
+        await answer(true)
+        expect(pressed).toEqual([press('pageup', 1), press('pagedown', 2)])
+        await answer(true)
+        expect(pressed).toHaveLength(2)
+      })
+
+      it('at most 5 keys go in one call, and the lines that wait are clamped to 100', async () => {
+        const { pressed, adapter } = claudeCode()
+        adapter.scroll(pane('t7'), 300)
+        await turn()
+        expect(pressed).toEqual([press('pagedown', 5)])
+        await vi.advanceTimersByTimeAsync(5_000)
+        expect(pressed).toEqual([press('pagedown', 5), press('pagedown', 5)])
+
+        const under = claudeCode(true)
+        under.adapter.scroll(pane('t7'), -20)
+        under.adapter.scroll(pane('t7'), -60)
+        under.adapter.scroll(pane('t7'), -60)
+        await vi.advanceTimersByTimeAsync(50)
+        await under.answer(true)
+        await under.answer(true)
+        expect(under.pressed).toEqual([press('pageup', 1), press('pageup', 5)])
+      })
+
+      it('a refused or timed-out call drops its lines and those waiting, and says so once until a call succeeds', async () => {
+        const { pressed, log, adapter, answer } = claudeCode(true)
+        adapter.scroll(pane('t7'), -20)
+        adapter.scroll(pane('t7'), -30)
+        await answer(false)
+        expect(pressed).toEqual([press('pageup', 1)])
+        expect(log).toEqual([SCROLL_FAILED])
+        await vi.advanceTimersByTimeAsync(50)
+        adapter.scroll(pane('t7'), -20)
+        await answer(false)
+        expect(log).toEqual([SCROLL_FAILED])
+        await vi.advanceTimersByTimeAsync(50)
+        adapter.scroll(pane('t7'), -20)
+        await answer(true)
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(pressed).toEqual([press('pageup', 1), press('pageup', 1), press('pageup', 1)])
+        expect(log).toEqual([SCROLL_FAILED, drained(20, 3, 70)])
+      })
+
+      // Review Focus 5: nobody awaits a scroll, so a rejection left unhandled would end the devices process.
+      it('a call that rejects is a failed call', async () => {
+        const unhandled = vi.fn()
+        process.on('unhandledRejection', unhandled)
+        try {
+          const { log, adapter } = recorder({
+            kindOf: () => 'claude',
+            client: { prompt: async () => ({ outcome: 'sent' }), keys: async () => { throw new Error('socket broken') } },
+          })
+          adapter.scroll(pane('t7'), -20)
+          await vi.advanceTimersByTimeAsync(1_000)
+          expect(log).toEqual([SCROLL_FAILED, drained(0, 1, 20)])
+          expect(unhandled).not.toHaveBeenCalled()
+        } finally {
+          process.off('unhandledRejection', unhandled)
+        }
+      })
+
+      it('once stopped, no key is pressed', async () => {
+        const { pressed, adapter } = claudeCode()
+        adapter.scroll(pane('t7'), -20)
+        await turn()
+        adapter.scroll(pane('t7'), -20)
+        adapter.stop()
+        await vi.advanceTimersByTimeAsync(5_000)
+        adapter.scroll(pane('t7'), -40)
+        await vi.advanceTimersByTimeAsync(5_000)
+        expect(pressed).toEqual([press('pageup', 1)])
+      })
     })
   })
 

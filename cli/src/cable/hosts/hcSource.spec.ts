@@ -771,6 +771,37 @@ describe.skipIf(process.platform === 'win32')('the hc source (docs/plans/2026-11
     expect(tabs()).toEqual(addresses.map(() => undefined))
   })
 
+  // The dial's scroll presses a Claude Code terminal's own page keys, and none while it asks (herdrApp.ts).
+  it('kindOf and statusOf: the kind and hc\'s status of each terminal shows covers, listed or past the 64, as they change; none for any other', async () => {
+    server.terminals = [
+      agent('t7'),
+      agent('t8', status('working', 'codex')),
+      // Shown, its program reporting nothing.
+      agent('t9', { status: null }),
+      // A hidden worker: the window does not show it.
+      agent('t10', { labels: {} }),
+      agent('t11', { state: 'finished' }),
+      // With t7 and t8, 66 listable: t76 is past the 64.
+      ...Array.from({ length: 64 }, (_, at) => agent(`t${at + 13}`, status('blocked'))),
+    ]
+    const s = setup()
+    await live(s)
+    const addresses = ['t7', 't8', 't9', 't10', 't11', 't76', 't99']
+    const kinds = () => addresses.map((address) => s.source.kindOf(address))
+    const statuses = () => addresses.map((address) => s.source.statusOf(address))
+    expect(kinds()).toEqual(['claude', 'codex', undefined, undefined, undefined, 'claude', undefined])
+    expect(statuses()).toEqual(['idle', 'working', undefined, undefined, undefined, 'blocked', undefined])
+
+    server.change('t7', status('blocked'))
+    server.change('t8', { status: null })
+    await vi.waitFor(() => expect(statuses()).toEqual(['blocked', undefined, undefined, undefined, undefined, 'blocked', undefined]))
+    expect(kinds()).toEqual(['claude', undefined, undefined, undefined, undefined, 'claude', undefined])
+
+    s.source.stop()
+    expect(kinds()).toEqual(addresses.map(() => undefined))
+    expect(statuses()).toEqual(addresses.map(() => undefined))
+  })
+
   it('paneOf answers a listed agent\'s terminal, and none for another id or one that left', async () => {
     server.terminals = [agent('t7'), agent('t8')]
     const s = setup()
