@@ -8,9 +8,10 @@ import 'package:path/path.dart' as p;
 /// A `.harness` path segment that starts a string literal.
 final _segment = RegExp(r'''(['"])\.harness(?:[\\/][^'"\n]*)?\1''');
 
-/// A home, on the literal's line or one of the two lines above it: [_segment] is a hit only with one.
+/// A home (any name with `home` in it, HOME, USERPROFILE or a profile), on the literal's line or one of
+/// the two lines above it: [_segment] is a hit only with one.
 final _home = RegExp(
-  r'homeDir\(|maybeHomeDir\(|userHome\(|\b_?home\b|\bHOME\b|\bUSERPROFILE\b',
+  r'[A-Za-z_]*[Hh]ome\w*|\bHOME\b|\bUSERPROFILE\b|\bprofile\b',
 );
 
 /// `.harness` straight after home text in one literal: $home/.harness, ${x}.harness, $sep.harness,
