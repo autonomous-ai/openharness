@@ -467,8 +467,8 @@ mod tests {
     use crate::tabs::{NoTabs, Selected, TabApp, TabError, TabScripts};
     use crate::testing::{Fake, alive, fake_harness, wait_gone};
     use crate::types::{
-        DialStatus, Effect, Event, ExportFailure, Exported, Fingerprint, LoginEvent, MenuItem, NotifyMode, OrcaAnswer,
-        Output, Saved, UpdateFailure,
+        Action, DialStatus, Effect, Event, ExportFailure, Exported, Fingerprint, LoginEvent, MenuAction, MenuItem,
+        NotifyMode, OrcaAnswer, OrcaStatus, Output, Phase, Saved, Screen, UpdateFailure, View,
     };
     use crate::update::AppUpdater;
     use std::collections::VecDeque;
@@ -1087,6 +1087,16 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn a_status_runs_its_fixed_words() {
+        let w = world();
+        assert!(w.runner.find_cli());
+        w.fake.script("device orca status --json", &[r#"{"orca":"offer"}"#]);
+        assert_eq!(w.answer(Effect::RunOrcaStatus), Event::OrcaStatus(Some(OrcaStatus::Offer)));
+        assert_eq!(w.fake.calls(), ["device orca status --json"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn relaunch_is_the_binarys() {
         let w = world();
         assert_eq!(w.runner.run(Effect::Relaunch), Some(Effect::Relaunch));
@@ -1525,25 +1535,103 @@ mod tests {
         w.fake.script("--version", &["0.6.58"]);
         let (mut app, mut effects) = App::new(Saved::default(), w.runner.find_cli(), false, B);
         let connected = MenuItem::Text("Device ready".into());
-        let (mut dial, mut auth, mut version) = (false, false, false);
+        let (mut dial, mut auth, mut version, mut orca) = (false, false, false, false);
         loop {
             for effect in effects {
                 if let Some(Effect::Menu(items)) = w.runner.run(effect) {
                     dial |= items.first() == Some(&connected);
                 }
             }
-            if dial && auth && version {
+            if dial && auth && version && orca {
                 break;
             }
             let event = w.next();
             auth |= event == Event::Auth(Some(true));
             version |= event == Event::CliVersion(Some("0.6.58".into()));
+            // A CLI with no `device orca` prints its usage: no row, and Orca is asked nothing more.
+            orca |= event == Event::OrcaStatus(None);
             effects = app.handle(event);
         }
-        assert!(w.fake.calls().iter().all(|call| !call.starts_with("device ")), "{:?}", w.fake.calls());
+        let device: Vec<String> = w.fake.calls().into_iter().filter(|call| call.starts_with("device ")).collect();
+        assert_eq!(device, ["device orca status --json"]);
         let mut calls = w.fake.calls();
         calls.sort();
-        assert_eq!(calls, ["--version", "auth status --json", "hardware watch --json"]);
+        assert_eq!(calls, ["--version", "auth status --json", "device orca status --json", "hardware watch --json"]);
+    }
+
+    /// What the binary was last told to draw.
+    #[derive(Default)]
+    struct Drawn {
+        menu: Vec<MenuItem>,
+        view: Option<View>,
+    }
+
+    /// Runs the effects, then hands the app each event the runner sends and runs what it asks, until `done` holds of
+    /// what was last drawn.
+    fn drive(w: &World, app: &mut App, mut effects: Vec<Effect>, drawn: &mut Drawn, done: impl Fn(&Drawn) -> bool) {
+        loop {
+            for effect in effects {
+                match w.runner.run(effect) {
+                    Some(Effect::Menu(items)) => drawn.menu = items,
+                    Some(Effect::Show(view)) => drawn.view = view,
+                    _ => {}
+                }
+            }
+            if done(drawn) {
+                return;
+            }
+            effects = app.handle(w.next());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn from_the_row_to_orca_connected() {
+        let w = world();
+        let fingerprint = "ap1-0123456789abcdef0123456789abcdef";
+        let grants = [
+            "Runs its own code in a separate Node.js process on the Orca host.",
+            "Read your projects and workspaces, and get notified when they change",
+        ];
+        let approve = serde_json::json!({
+            "connect": "approve",
+            "name": "Harness Device",
+            "version": "0.6.70",
+            "fingerprint": fingerprint,
+            "grants": grants,
+            "update": false,
+        })
+        .to_string();
+        let approved = format!("device orca connect --approve {fingerprint} --json");
+        w.fake.script("hardware watch --json", &[r#"{"attached":true,"fw":"0.0.95"}"#, "@stdin"]);
+        w.fake.script("auth status --json", &[r#"{"loggedIn":true}"#]);
+        w.fake.script("--version", &["0.6.58"]);
+        w.fake.script("device orca status --json", &[r#"{"orca":"offer"}"#]);
+        w.fake.script("device orca connect --json", &[&approve]);
+        w.fake.script(&approved, &[r#"{"connect":"done"}"#]);
+        let row = MenuItem::Action(MenuAction::Orca, "Connect Orca…".into());
+        let at = |phase: Phase| move |drawn: &Drawn| drawn.view.as_ref().is_some_and(|view| view.phase == phase);
+
+        let (mut app, effects) = App::new(Saved::default(), w.runner.find_cli(), false, B);
+        let mut drawn = Drawn::default();
+        drive(&w, &mut app, effects, &mut drawn, |drawn| drawn.menu.contains(&row));
+        let effects = app.handle(Event::Menu(MenuAction::Orca));
+        drive(&w, &mut app, effects, &mut drawn, at(Phase::Approve));
+        let lines = grants.iter().map(|grant| grant.to_string()).collect();
+        assert_eq!(drawn.view, Some(View { screen: Screen::Orca, phase: Phase::Approve, lines, update: false }));
+        let effects = app.handle(Event::Act(Action::ConnectOrca));
+        drive(&w, &mut app, effects, &mut drawn, at(Phase::Done));
+        assert!(!drawn.menu.contains(&row), "{:?}", drawn.menu);
+
+        let device: Vec<String> = w.fake.calls().into_iter().filter(|call| call.starts_with("device ")).collect();
+        assert_eq!(device, ["device orca status --json", "device orca connect --json", approved.as_str()]);
+        let lines = w.fake.log().lines();
+        for listed in [fingerprint, &fingerprint[4..], grants[0], grants[1], "Orca host", "workspaces"] {
+            assert!(lines.iter().all(|line| !line.contains(listed)), "{listed}: {lines:?}");
+        }
+        for line in ["orca: offer", "orca connect: approve", "orca connect: done", "orca: none"] {
+            assert!(lines.iter().any(|logged| logged == line), "{line}: {lines:?}");
+        }
     }
 
     #[cfg(unix)]
