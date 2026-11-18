@@ -54,6 +54,14 @@ export function expandHome(raw: string, home: string, p: PlatformPath = platform
 }
 
 /**
+ * A resolved Windows path through a share (`\\?\UNC\` resolves to `\\`): the fence compares local folders, and a share
+ * may be any of them, as the local disk's admin share (`\\localhost\C$`) is. On posix, realpath reads `//` as `/`.
+ */
+export function unc(path: string, p: PlatformPath = platformPath): boolean {
+  return p.sep === '\\' && path.startsWith('\\\\')
+}
+
+/**
  * Where credentials or configs live, under each home: HOME and USERPROFILE (Windows' HOME) are the caller's to set, so
  * `homes` brings the ones no variable moves.
  */
@@ -78,7 +86,7 @@ export function uploadPath(raw: string, env: NodeJS.ProcessEnv = process.env): s
   const forbidden = forbiddenDirs(env, [homedir(), accountHome()]).map(dir => { try { return realpathSync.native(dir) } catch { return resolve(dir) } })
   const stat = statSync(real)
   // A hard link's other names, which may be inside a forbidden folder, are found by no path the fence can check.
-  if (forbidden.some(dir => inside(dir, real)) || !stat.isFile() || stat.nlink > 1) {
+  if (unc(real) || forbidden.some(dir => inside(dir, real)) || !stat.isFile() || stat.nlink > 1) {
     throw new CallFailure(2, `refusing to upload ${raw}: not a media file the helper may send`)
   }
   if (!UPLOAD_SUFFIXES.includes(extname(real).toLowerCase()) || !UPLOAD_SUFFIXES.includes(extname(path).toLowerCase())) {
