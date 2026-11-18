@@ -87,7 +87,9 @@ int main(int argc,char **argv) {
     while(!atomic_load(&calls)&&!atomic_load(&first_done))nap();
     assert(atomic_load(&calls)==1);
     assert(!pthread_create(&b,NULL,second,NULL));
-    while(!atomic_load(&b_waits)&&!atomic_load(&second_done))nap();
+    // It also ends when B allocates beside A: in scenario 0 that allocation waits for A,
+    // and A waits for main.
+    while(!atomic_load(&b_waits)&&!atomic_load(&second_done)&&atomic_load(&calls)<2)nap();
     assert(atomic_load(&b_waits)&&"B must wait while A allocates");
     if(scenario==2) {
         atomic_store(&fake_now,PAST_DEADLINE);assert(!pthread_join(b,&rb));
