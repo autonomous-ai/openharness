@@ -1,12 +1,16 @@
-// Only `package:path`, so the web build loads it too.
+// Only `package:path` and the look, whose `dart:io` side the web build swaps
+// for a stub, so the web build loads it too.
 import 'package:path/path.dart' as p;
+
+import 'harness_home_look_stub.dart'
+    if (dart.library.io) 'harness_home_look_io.dart';
 
 /// The folder under the account's home that holds everything Harness keeps.
 const harnessHomeName = '.harness';
 
 /// What an entry holds: something the person would miss (data), or something
-/// Harness can rebuild (state). Both are `~/.harness` today; the labels let a
-/// later change move each kind on its own.
+/// Harness can rebuild (state). On Linux each kind has its XDG root; elsewhere,
+/// and on a Linux home not moved yet, both are `~/.harness`.
 enum HarnessRootKind { data, state }
 
 /// Every name Harness uses directly under its home folder, with its kind.
@@ -26,6 +30,7 @@ enum HarnessEntry {
   lessons('lessons', HarnessRootKind.data),
   gridFleet('grid-fleet', HarnessRootKind.data),
   community('community', HarnessRootKind.data),
+  memory('memory', HarnessRootKind.data),
   logs('logs', HarnessRootKind.state),
   runtime('runtime', HarnessRootKind.state),
   hookRoutes('hook-routes', HarnessRootKind.state),
@@ -34,7 +39,8 @@ enum HarnessEntry {
   shellRequests('shell-requests', HarnessRootKind.state),
   pty('pty', HarnessRootKind.state),
   uninstalling('uninstalling', HarnessRootKind.state),
-  flasher('flasher', HarnessRootKind.state);
+  flasher('flasher', HarnessRootKind.state),
+  monitor('monitor', HarnessRootKind.state);
 
   const HarnessEntry(this.segment, this.root);
 
@@ -50,20 +56,90 @@ typedef HarnessJoin = String Function(String left, String right);
 HarnessJoin separatorJoin(String separator) =>
     (left, right) => '$left$separator$right';
 
-/// Harness's home folder and the paths of its entries.
+/// What the rule reads of this computer: whether it is Linux, its environment
+/// (the XDG variables) and one existence check.
+final class HomeLook {
+  const HomeLook({
+    required this.linux,
+    required this.environment,
+    required this.exists,
+  });
+
+  final bool linux;
+  final Map<String, String> environment;
+  final bool Function(String path) exists;
+}
+
+/// Harness's roots and the paths of its entries.
 final class HarnessHome {
-  /// `<home>/.harness`, joined as the caller joins.
-  HarnessHome.of(String home, {HarnessJoin join = p.join})
-    : this.at(join(home, harnessHomeName), join: join);
+  /// The roots for [home] by the rule (docs/plans/2026-11-18-linux-xdg-paths-design.md):
+  /// on Linux the XDG roots when the data root exists, else `<home>/.harness`
+  /// when that exists, else the XDG roots. Off Linux, `<home>/.harness`.
+  /// Resolved here, once: a caller that must follow a move builds it again.
+  factory HarnessHome.of(
+    String home, {
+    HarnessJoin join = p.join,
+    HomeLook? look,
+  }) {
+    final legacy = join(home, harnessHomeName);
+    final rule = look ?? platformHomeLook();
+    if (!rule.linux) return HarnessHome._(legacy, legacy, legacy, join);
+    final data = join(
+      _xdgBase(rule, 'XDG_DATA_HOME', home, 'share', join),
+      'harness',
+    );
+    final state = join(
+      _xdgBase(rule, 'XDG_STATE_HOME', home, 'state', join),
+      'harness',
+    );
+    // The data root is the one switch, so the bridge or a ~/.harness that
+    // something old recreates never sends a moved home back.
+    if (!rule.exists(data) && rule.exists(legacy)) {
+      return HarnessHome._(legacy, legacy, legacy, join);
+    }
+    return HarnessHome._(data, state, legacy, join);
+  }
 
   /// Both roots at [root]: a folder a caller already holds.
-  const HarnessHome.at(this._root, {this._join = p.join});
+  const HarnessHome.at(String root, {HarnessJoin join = p.join})
+    : this._(root, root, root, join);
 
-  final String _root;
+  /// Two roots a caller already holds. No older folder is known, so
+  /// [legacyPath] names the data root's entry.
+  const HarnessHome.roots({
+    required String data,
+    required String state,
+    HarnessJoin join = p.join,
+  }) : this._(data, state, data, join);
+
+  const HarnessHome._(this._data, this._state, this._legacy, this._join);
+
+  final String _data;
+  final String _state;
+  final String _legacy;
   final HarnessJoin _join;
 
-  /// Every kind resolves to the one `.harness` folder until the roots split.
-  String root(HarnessRootKind kind) => _root;
+  String root(HarnessRootKind kind) => switch (kind) {
+    HarnessRootKind.data => _data,
+    HarnessRootKind.state => _state,
+  };
 
   String path(HarnessEntry entry) => _join(root(entry.root), entry.segment);
+
+  /// `<home>/.harness/<entry>`, whatever the rule says: where Harness kept
+  /// everything before the move.
+  String legacyPath(HarnessEntry entry) => _join(_legacy, entry.segment);
+}
+
+/// The variable when it is an absolute path, else `<home>/.local/<fallback>`.
+String _xdgBase(
+  HomeLook look,
+  String variable,
+  String home,
+  String fallback,
+  HarnessJoin join,
+) {
+  final value = look.environment[variable];
+  if (value != null && p.posix.isAbsolute(value)) return value;
+  return join(join(home, '.local'), fallback);
 }
