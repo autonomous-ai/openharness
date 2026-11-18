@@ -98,6 +98,17 @@ function relink(path: string, plan: MovePlan, journal: { add(done: Done): void }
   return true
 }
 
+/** An `Environment=` line whose value is a path in the old tree, with that path's new place; any other line as it is. */
+function moveVariable(line: string, plan: MovePlan): string {
+  const quoted = /^Environment="((?:[^"\\]|\\.)*)"$/.exec(line)?.[1]
+  if (quoted === undefined) return line
+  // unitProgram's escapes undone: a backslash and the character it escapes, and a doubled %.
+  const assignment = quoted.replace(/\\(.)|%%/g, (_, escaped: string | undefined) => escaped ?? '%')
+  const at = assignment.indexOf('=')
+  const value = assignment.slice(at + 1), next = movedPath(plan, value)
+  return next === value ? line : unitVariable(assignment.slice(0, at), next)
+}
+
 function reload(run: Run): void {
   const { status } = run('systemctl', ['--user', 'daemon-reload'])
   if (status !== 0) throw new Error(`systemctl --user daemon-reload failed with status ${status}`)
@@ -105,9 +116,10 @@ function reload(run: Run): void {
 
 /**
  * The systemd user unit, when it is this install's: it logs to [oldLogFile], as harnessd/platform.ts ownedBy reads it.
- * ExecStart's Node and cli.js and the log path name the new folders, and it carries the XDG variables as the move
- * read them (a line for one no longer set goes), where systemdUnit writes them: before its platform's variable, after
- * ExecStart in a unit without one.
+ * ExecStart's Node and cli.js, the log path and each setting it carries that names a path in the old tree (a data, CLI or
+ * sign-in folder, an env file) name the new folders: once the bridge goes, the old path names nothing. And it carries
+ * the XDG variables as the move read them (a line for one no longer set goes), where systemdUnit writes them: before its
+ * platform's variable, after ExecStart in a unit without one.
  */
 function rewriteUnit(plan: MovePlan, unitFile: string, oldLogFile: string, env: NodeJS.ProcessEnv, journal: { add(done: Done): void }, run: Run): boolean {
   if (!lstatOrNull(unitFile)?.isFile()) return false
@@ -116,7 +128,7 @@ function rewriteUnit(plan: MovePlan, unitFile: string, oldLogFile: string, env: 
   const lines = text.split('\n')
     .filter((line) => !XDG_NAMES.some((name) => line.startsWith(`Environment="${name}=`)))
     .map((line) => line.startsWith('ExecStart=') ? respell(respell(line, plan, unitProgram), plan, unitArgument)
-      : /^Standard(?:Output|Error)=append:/.test(line) ? respell(line, plan, unitPath) : line)
+      : /^Standard(?:Output|Error)=append:/.test(line) ? respell(line, plan, unitPath) : moveVariable(line, plan))
   const platform = lines.findIndex((line) => line.startsWith('Environment="HARNESSD_PLATFORM='))
   const at = platform === -1 ? lines.findIndex((line) => line.startsWith('ExecStart=')) + 1 : platform
   lines.splice(at, 0, ...XDG_NAMES.filter((name) => env[name]).map((name) => unitVariable(name, env[name]!)))
