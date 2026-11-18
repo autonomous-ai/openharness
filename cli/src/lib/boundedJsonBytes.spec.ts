@@ -69,6 +69,33 @@ describe('bounded JSON admission', () => {
     expect(refused).toBeNull(); expect(invoked).not.toHaveBeenCalled()
   })
 
+  it('omits inherited object fields and refuses exhausted punctuation or key budgets', () => {
+    const key = '__bounded_json_inherited__', original = Object.getOwnPropertyDescriptor(Object.prototype, key)
+    let actual: number | null = null
+    try {
+      Object.defineProperty(Object.prototype, key, { configurable: true, enumerable: true, value: 'not own' })
+      actual = boundedJsonBytes({ a: 0 }, 100)
+    } finally {
+      if (original) Object.defineProperty(Object.prototype, key, original)
+      else Reflect.deleteProperty(Object.prototype, key)
+    }
+    expect(actual).toBe(Buffer.byteLength('{"a":0}'))
+    expect(boundedJsonBytes({ a: 0, b: 0 }, 7)).toBeNull()
+    for (const limit of [4, 5]) expect(boundedJsonBytes({ a: 0 }, limit)).toBeNull()
+  })
+
+  it('refuses a reflection failure without leaking it or retaining state for the next call', () => {
+    const value = { a: 0 }, original = Object.getOwnPropertyDescriptor
+    const spy = vi.spyOn(Object, 'getOwnPropertyDescriptor').mockImplementation((target, key) => {
+      if (target === value) throw new Error('PRIVATE_REFLECTION_FAILURE')
+      return original(target, key)
+    })
+    let actual: number | null = 0
+    try { actual = boundedJsonBytes(value, 100) } finally { spy.mockRestore() }
+    expect(actual).toBeNull()
+    expect(boundedJsonBytes(value, 100)).toBe(Buffer.byteLength(JSON.stringify(value)))
+  })
+
   it('allocates no named helper functions for a count in the release transform', () => {
     // V12 sampled the three per-call function-name writes; use the real release transform,
     // not a wall-clock assertion or a synthetic alternative to the byte counter.
