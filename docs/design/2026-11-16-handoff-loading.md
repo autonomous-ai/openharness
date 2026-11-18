@@ -131,3 +131,24 @@ before porting runtime. Reuse the existing historical tests only for their uncha
 branch's CPU hold is not cleared by this port. A current matched cold/first/warm composition comparison
 and packaged handoff/service-outage validation remain required. Windows native execution is deferred
 by the owner; do not label it passed. The 30-day public contract and receipt bytes stay unchanged.
+
+### Dispatch after initialization
+
+The corrected old branch still measured higher warm resolve CPU in both fixed pairs
+(`core-handoff-e9db-composition-summary.json`: median 4.166→4.852 ms per 10,000 reads).
+Its native packet also measured 474.901→501.842 ms summed core CPU; neither is accepted.
+Those observations do not isolate one instruction or establish the current source's cost.
+
+The current port will install the ordinary dependency-bound methods on the existing facade when
+initialization succeeds. Warm callers then invoke the same read body as the eager facade, without
+a readiness branch or initialization-promise access on every call. A caller that saved a cold method
+reference still checks the ready facade synchronously before using the cold promise, preserving
+read-before-yield behavior. The two facades hold functions and one dependency object, never another
+conversation image or witness map. Failure installs no method and clears the initialization promise;
+concurrent first calls still share one construction. Keep the async error contract for every method.
+
+Add caller controls that save each method before initialization and invoke that saved reference after
+initialization, then change the backing conversation before yielding. The saved and current methods
+must observe the same original conversation and retain rejected-promise behavior. Measurements must
+separate import/construction, first query and warm dispatch and retain the old packets unchanged.
+No CPU or native acceptance is claimed by changing the dispatch shape.

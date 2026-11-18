@@ -87,6 +87,25 @@ it.each(queryCases)('starts a warmed $name request before the next caller replac
   expect(loading.create).toHaveBeenCalledOnce()
 })
 
+it.each(queryCases)('preserves a cached cold $name method after initialization', async ({ ask, value }) => {
+  let current = row
+  const deps: HandoffDeps = {
+    resolve: () => current, readHistory: () => undefined,
+    recentAsks: () => [current.sessionId], lastFullText: () => current.sessionId, recaps: () => [current.sessionId],
+    discoverSession: async session => found(session), findTranscript: async () => transcript(current),
+    transcriptOk: () => current === row, publish: async () => published(current),
+  }
+  loading.create.mockReturnValue(deps)
+  const { reads } = await facade()
+  const saved = { ...reads }
+  await reads.resolve(row.agentId)
+  const pending = ask(saved)
+  current = { ...row, sessionId: 'replacement-conversation' }
+  expect(await pending).toEqual(value(row))
+  expect(await ask(reads)).toEqual(value(current))
+  expect(loading.create).toHaveBeenCalledOnce()
+})
+
 it('keeps synchronous dependency failures as rejected warm queries', async () => {
   const deps = dependencies(), failure = new Error('query unavailable')
   loading.create.mockReturnValue(deps)
