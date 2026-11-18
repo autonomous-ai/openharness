@@ -153,6 +153,25 @@ describe('asynchronous question evidence', () => {
       expect(await toggled(['Yes, continue', 'Yes, stop', 'No'], 'Yes, stop, No. ')).toEqual(['Yes, stop', 'No'])
     })
 
+    it('refuses an answer longer than any dialog asks for, before anything reaches the terminal', async () => {
+      const apply = vi.fn(async () => true), capture = vi.fn(async () => '')
+      const controller = new AskQuestionController({ getSession: () => row(), capture, readQuestion: async () => null,
+        sendKey: vi.fn(async () => true), sendText: vi.fn(async () => true), acquireControl: () => vi.fn(), wait: async () => {},
+        questionControlFor: () => ({ apply }) })
+      const tooLong = { ok: false, error: 'ANSWER_FAILED', detail: 'The answer is too long. Answer it in the terminal.' }
+      expect(await controller.answer({ agentId: 'agent', answers: { 'Pick?': 'A, '.repeat(2731) } })).toEqual(tooLong)
+      const many = Object.fromEntries(Array.from({ length: 15 }, (_, i) => [`Q${i}?`, 'A']))
+      expect(await controller.answer({ agentId: 'agent', answers: many })).toEqual(tooLong)
+      expect(capture).not.toHaveBeenCalled()
+      expect(apply).not.toHaveBeenCalled()
+    })
+
+    it('reads an answer of 4096 bytes of labels whole', async () => {
+      const answer = `A${', A'.repeat(1365)}`
+      expect(Buffer.byteLength(answer, 'utf8')).toBe(4096)
+      expect(await toggled(['A'], answer)).toHaveLength(1366)
+    })
+
     it('reads a long answer in time that grows with its length', () => {
       // The answer is outside text and the core reads it in line: trying every run of pieces as a label held the
       // core 12 s on this 3 KB answer, its time growing with the cube of the pieces (2026-11-18).
