@@ -194,7 +194,7 @@ const screen = async (backend: PtyHostBackend, runtime: PtyRuntimeRef): Promise<
         const backendFor = (runtime: TerminalRuntimeRef) => runtime.backend === 'ptyhost' ? backend : undefined
         const stop = createStopAgentService({
           registry, stoppedAgents, restartJobs, stopJobs, backendFor,
-          agentReconciler: { suppress() {}, holdRoute() {}, releaseRoute() {}, trigger: async () => {} },
+          agentReconciler: { suppress() {}, holdRoute() {}, releaseRoute() {}, nudge: () => {} },
           forgetSession: async (id) => { (await removeRegistryAgent(registry, id)) }, markDeleted() {}, clearDeleted() {}, stopNative: async () => {},
         })
         await stop(row.agentId)

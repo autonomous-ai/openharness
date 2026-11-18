@@ -55,7 +55,7 @@ beforeEach(async () => {
   const stop = createStopAgentService({
     registry, stoppedAgents, restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(),
     backendFor: () => ({ kill: killPane }),
-    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn(async () => {}) },
+    agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), nudge: vi.fn() },
     forgetSession: async (id, options) => { await registry.confirmEngineExit(id, 'remove', options.authority) }, markDeleted: vi.fn(), clearDeleted: vi.fn(),
     // The real chain: the core's broker, Codex's own control in process, the process table mocked above.
     stopNative: inlineNativeControls({ rows: processRows }).stop,
