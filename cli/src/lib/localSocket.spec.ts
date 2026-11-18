@@ -15,6 +15,11 @@ import { ensureDaemonToken, newPipePath } from './windows/pipeAuth.js'
 
 const LOCAL_SOCKET_NAME = localSocketName(18473)
 
+const hash = (folder: string): string => createHash('sha256').update(folder).digest('hex').slice(0, 16)
+/** Where the short folders go for a home with no Harness folder in it: the state root on Linux, ~/.harness elsewhere (config/harnessHome.ts). */
+const freshShortRoot = (home: string): string =>
+  process.platform === 'linux' ? join(home, '.local', 'state', 'harness', 's') : join(home, '.harness', 's')
+
 /** A filesystem without hard links, when a test says so. */
 const fsState = vi.hoisted(() => ({ noLinks: false }))
 vi.mock('node:fs', async (importOriginal) => {
@@ -62,7 +67,11 @@ describe('localSocketPath', () => {
     // 96 bytes fits (the staging name adds 4, still under macOS's 104 with the terminator); 97 does not.
     const dirFor = (total: number) => `/${'d'.repeat(total - '/daemon-18473.sock'.length - 1)}`
     expect(localSocketPath(dirFor(96), 18473, 'darwin')).toHaveLength(96)
-    expect(localSocketPath(dirFor(97), 18473, 'darwin')).toMatch(/\/\.harness\/s\/[0-9a-f]{16}\/daemon-18473\.sock$/)
+    // A short home: the test's own leaves no room for Linux's longer state root, and the path would be none.
+    vi.stubEnv('HOME', '/h')
+    try {
+      expect(localSocketPath(dirFor(97), 18473, 'darwin')).toBe(join(freshShortRoot('/h'), hash(dirFor(97)), 'daemon-18473.sock'))
+    } finally { vi.unstubAllEnvs() }
     expect(isLocalSocketName('daemon-18473.sock')).toBe(true)
     expect(isLocalSocketName('daemon.sock')).toBe(false)
     expect(isLocalSocketName('daemon-18473.sock.bak')).toBe(false)
@@ -394,7 +403,6 @@ describe('who serves a data folder, over the Windows pipe', () => {
 
 describe('a data folder too long to hold a socket', () => {
   const long = `/data/${'x'.repeat(120)}`
-  const hash = (folder: string): string => createHash('sha256').update(folder).digest('hex').slice(0, 16)
 
   it('keeps a short folder\'s socket where it is', () => {
     expect(socketPathIn('/d', 'daemon-1.sock', '/h')).toBe('/d/daemon-1.sock')
@@ -402,7 +410,7 @@ describe('a data folder too long to hold a socket', () => {
 
   it('gets one under the home folder, the same each time and another for another folder', () => {
     const path = socketPathIn(long, 'daemon-1.sock', '/h')
-    expect(path).toBe(`/h/.harness/s/${hash(long)}/daemon-1.sock`)
+    expect(path).toBe(join(freshShortRoot('/h'), hash(long), 'daemon-1.sock'))
     expect(socketPathIn(long, 'daemon-1.sock', '/h')).toBe(path)
     expect(socketPathIn(`${long}y`, 'daemon-1.sock', '/h')).not.toBe(path)
   })
@@ -412,10 +420,21 @@ describe('a data folder too long to hold a socket', () => {
   })
 
   it('pins the rule every client copies', () => {
-    expect(socketPathIn(long, 'bridge.sock', '/h')).toBe(`/h/.harness/s/${hash(long)}/bridge.sock`)
+    const root = process.platform === 'linux' ? '.local/state/harness' : '.harness'
+    expect(socketPathIn(long, 'bridge.sock', '/h')).toBe(`/h/${root}/s/${hash(long)}/bridge.sock`)
     // Desktop's test pins the same hash (desktop/test/local_daemon_transport_test.dart).
     expect(hash(`/${'x'.repeat(100)}`)).toBe('e50e7828cbafcbee')
     expect(hash('/x')).toBe('b3d1db318671a024')
+  })
+
+  it.runIf(process.platform === 'linux')('on Linux, stays in ~/.harness until the home moves, then goes to the state root', () => {
+    const home = mkdtempSync(join('/tmp', 'ls-'))
+    try {
+      mkdirSync(join(home, '.harness'))
+      expect(socketPathIn(long, 'daemon-1.sock', home)).toBe(join(home, '.harness', 's', hash(long), 'daemon-1.sock'))
+      mkdirSync(join(home, '.local', 'share', 'harness'), { recursive: true })
+      expect(socketPathIn(long, 'daemon-1.sock', home)).toBe(join(home, '.local', 'state', 'harness', 's', hash(long), 'daemon-1.sock'))
+    } finally { rmSync(home, { recursive: true, force: true }) }
   })
 
   describe('listening', () => {
@@ -428,7 +447,7 @@ describe('a data folder too long to hold a socket', () => {
       const listening = await listenLocalSocket(() => {}, path)
       closers.push(listening.close)
       expect(lstatSync(dirname(path)).mode & 0o777).toBe(0o700)
-      expect(lstatSync(join(home, '.harness', 's')).mode & 0o777).toBe(0o700)
+      expect(lstatSync(freshShortRoot(home)).mode & 0o777).toBe(0o700)
       expect(lstatSync(path).mode & 0o777).toBe(0o600)
     })
 
