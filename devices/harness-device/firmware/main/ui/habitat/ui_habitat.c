@@ -611,12 +611,14 @@ static const char *tab_id_at(int i)
 {
     return i >= 0 && i < s.tab_count ? s.tabs[i].id : "";
 }
-// TABS opens on the desktop's tab.
+// TABS opens on the desktop's tab, or on the tab a swipe is still opening: the switch's APPS can be left for TABS
+// before that tab lands, and a carousel on the tab the swipe left would switch the desktop back to it on Done.
 static void tabs_open(void)
 {
     view(TABS);
     if (s.view != TABS) return;
-    ht_tab_carousel_reset(&tab_carousel, s.tab_count, workspace_index(s.selected_tab));
+    int opening = workspace.phase != HT_WORKSPACE_IDLE ? workspace_index(workspace.pending) : -1;
+    ht_tab_carousel_reset(&tab_carousel, s.tab_count, opening >= 0 ? opening : workspace_index(s.selected_tab));
 }
 static int app_index(const char *id)
 {
