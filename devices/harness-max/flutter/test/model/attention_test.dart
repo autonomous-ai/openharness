@@ -78,17 +78,18 @@ void main() {
     expect(m.page, BarPage.overview);
     expect(m.inbox.length, 1);
 
-    // An alert's summary: done.
+    // An alert's summary: done. It never takes the glass: the small note, and its notice.
     m.onTurn('e', 'started', '');
     b.at(13000);
     m.onSummary('e', 'Fixed the login race');
-    expect([m.page, m.attention!.agentId, m.attention!.kind], [BarPage.attention, 'e', AttnKind.done]);
+    expect([m.page, m.attention], [BarPage.overview, null]);
+    expect([m.doneNote!.agentId, m.doneNote!.text], ['e', 'Fixed the login race']);
     // One with nothing to say ends the turn, and is no news.
     m.onTurn('d', 'started', '');
     b.at(13500);
     m.onSummary('d', '');
     expect(m.agentById('d')!.state, AgentState.done);
-    expect(m.attention!.agentId, 'e');
+    expect(m.doneNote!.agentId, 'e');
     expect(m.inbox.length, 2);
 
     // A question replaces a turn's end on the page.
@@ -103,14 +104,16 @@ void main() {
     expect(m.attention!.agentId, 'b');
     expect([m.inbox.first.agentId, m.inbox.first.kind], ['c', AttnKind.failed]);
 
-    // A done page whose agent starts again is over at once.
+    // A done note whose agent starts again is over at once.
     m.onQuestionClose('b');
     expect(m.page, BarPage.overview);
     b.at(17000);
     m.onSummary('e', 'Fixed it again');
-    expect(m.attention!.agentId, 'e');
+    expect(m.doneNote!.agentId, 'e');
     b.at(18000);
     m.onTurn('e', 'started', '');
+    m.tick();
+    expect(m.doneNote, isNull);
     expect(m.page, BarPage.overview);
     // So is a failed page whose agent leaves the ring.
     b.at(19000);
@@ -344,5 +347,53 @@ void main() {
     b.at(32000 + 60000);
     m.tick();
     expect(b.notes, n + 1);
+  });
+
+  test('a finished turn never takes the glass: a small note for 6 s, its notice unread until read', () {
+    final b = linked(abcde), m = b.model;
+    m.onTurn('c', 'started', '');
+    b.at(1000);
+    m.onSummary('c', 'Fixed the login race');
+    expect([m.page, m.attention, m.toast], [BarPage.overview, null, null]);
+    expect([m.doneNote!.agentId, m.doneNote!.kind, m.doneNote!.text], ['c', AttnKind.done, 'Fixed the login race']);
+    expect([m.inbox.first.agentId, m.inbox.first.kind, m.inbox.first.unread], ['c', AttnKind.done, true]);
+    expect(m.unread, 1);
+    b.at(6999);
+    m.tick();
+    expect(m.doneNote, isNotNull);
+    b.at(7000);
+    m.tick();
+    expect(m.doneNote, isNull);
+    expect(m.inbox.first.unread, isTrue, reason: 'unread until the person reads it');
+  });
+
+  test('a tap on the note reads it: its agent\'s page with the mic closed, its notice read', () {
+    final b = linked(abcde), m = b.model;
+    m.onTurn('c', 'started', '');
+    m.onSummary('c', 'Fixed the login race');
+    m.onTurn('d', 'started', '');
+    m.onSummary('d', 'Docs updated');
+    expect(m.doneNote!.agentId, 'd', reason: 'the newer note takes the corner');
+    m.tapDoneNote();
+    expect([m.page, m.selectedId, m.talk, m.doneNote], [BarPage.agent, 'd', TalkPhase.off, null]);
+    expect(m.inbox.firstWhere((n) => n.agentId == 'd').unread, isFalse);
+    expect(m.inbox.firstWhere((n) => n.agentId == 'c').unread, isTrue);
+  });
+
+  test('a finished turn while a person talks is the same note; the talk goes on', () {
+    final b = linked(abcde), m = b.model;
+    m.tapCell('a');
+    expect(m.talk, TalkPhase.listening);
+    m.onTurn('c', 'started', '');
+    m.onSummary('c', 'Fixed');
+    expect([m.talk, m.page, m.toast], [TalkPhase.listening, BarPage.agent, null]);
+    expect(m.doneNote!.agentId, 'c');
+  });
+
+  test('a failure and a question still take the glass', () {
+    final b = linked(abcde), m = b.model;
+    m.onTurn('c', 'started', '');
+    m.onTurn('c', 'error', 'boom');
+    expect([m.page, m.attention!.kind, m.doneNote], [BarPage.attention, AttnKind.failed, null]);
   });
 }

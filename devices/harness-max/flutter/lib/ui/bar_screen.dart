@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 
 import '../model/bar_model.dart';
 import '../model/types.dart';
+import 'overlays/done_note.dart';
 import 'overlays/edge_light.dart';
 import 'overlays/toast_overlay.dart';
 import 'overview/motion.dart';
@@ -29,6 +30,7 @@ class BarScreen extends StatelessWidget {
             FadeSwitch(child: KeyedSubtree(key: ValueKey(model.page), child: _page())),
             if (model.page == BarPage.attention) EdgeLight(model: model),
             ToastOverlay(model: model),
+            DoneNote(model: model),
           ]),
         ),
       );

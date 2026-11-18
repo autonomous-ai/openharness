@@ -59,6 +59,8 @@ class RecordingModel extends BarModel {
   void wake() => calls.add('wake');
   @override
   void tapToast() => calls.add('tapToast');
+  @override
+  void tapDoneNote() => calls.add('tapDoneNote');
 }
 
 /// Pumps [child] on the bar's glass and decodes the images on it (app icons), so a golden shows them.

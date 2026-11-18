@@ -22,6 +22,9 @@ const Duration kAmbientAfter = Duration(seconds: 60);
 const Duration kAttentionEnd = Duration(seconds: 8);
 const Duration kToastFor = Duration(seconds: 5);
 
+/// A finished turn's small note at the glass's bottom right.
+const Duration kDoneNoteFor = Duration(seconds: 6);
+
 /// A mic level at least this is speech: the C model's MAX_SPEECH_LEVEL 2 on pro_rec_level's 0..4, on this 0..1 scale.
 const double kSpeechLevel = 0.5;
 
@@ -109,6 +112,10 @@ class BarModel extends ChangeNotifier {
 
   /// The line at the bar's foot ("Sent to auth-refactor").
   Toast? toast;
+
+  /// A finished turn: the small note at the glass's bottom right ([Toast.agentId] who, [Toast.text] what it said).
+  /// It never takes the glass; its notice waits in Inbox, unread, until the person reads it.
+  Toast? doneNote;
 
   // ---- the model's own bookkeeping (max_model_t's fields the pages do not draw) ----
 
@@ -601,6 +608,11 @@ class BarModel extends ChangeNotifier {
         _dirty = true;
       }
     }
+    final d = doneNote;
+    if (d != null && (!now().isBefore(d.until) || !_holds(d.agentId!, AttnKind.done))) {
+      doneNote = null; // its time is up, or its agent is at work again or gone
+      _dirty = true;
+    }
     talkCall?.call();
     for (final k in reads) {
       link.questionRead(k.agentId, k.requestId, k.fetch);
@@ -834,6 +846,28 @@ class BarModel extends ChangeNotifier {
     touched();
     if (_sendsFirst()) return;
     _show(BarPage.overview);
+    _publish();
+  }
+
+  /// A tap on a finished turn's note: its agent's page to read what it did (the mic closed), its notice read. Words
+  /// being said go first, as a strip segment sends them; an agent gone from the ring leaves Inbox, where it still is.
+  void tapDoneNote() {
+    touched();
+    final n = doneNote;
+    final id = n?.agentId;
+    if (n == null || id == null) return;
+    doneNote = null;
+    _dirty = true;
+    final call = talk == TalkPhase.listening ? _settleTalk() : null;
+    if (agentById(id) == null) {
+      _show(BarPage.inbox);
+    } else {
+      for (final x in inbox) {
+        if (x.kind == AttnKind.done && x.agentId == id) x.unread = false;
+      }
+      _showAgent(id);
+    }
+    call?.call();
     _publish();
   }
 
@@ -1154,6 +1188,13 @@ class BarModel extends ChangeNotifier {
   void _attend(Agent a, AttnKind kind) {
     _idleFrom = now();
     _inboxAdd(a, kind);
+    if (kind == AttnKind.done) {
+      // A finished turn never takes the glass (the owner's call, 18 Nov): the small note at the bottom right, over
+      // whatever is up, talk or not; its notice stays unread in Inbox.
+      doneNote = Toast(a.said, until: now().add(kDoneNoteFor), agentId: a.id, kind: AttnKind.done);
+      _dirty = true;
+      return;
+    }
     if (talk == TalkPhase.listening || talk == TalkPhase.sending) {
       final why = switch (kind) { AttnKind.ask => 'asks', AttnKind.done => 'is done', AttnKind.failed => 'failed' };
       toast = Toast(a.said.isEmpty ? '${a.name} $why' : '${a.name} $why · ${a.said}',
