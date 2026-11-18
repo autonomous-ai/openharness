@@ -141,3 +141,16 @@ root (8 PIDs, 4 groups, 8 roots). All 316 frozen inputs still matched after comp
 retained: v2 refused a wrongly shaped standalone-Node directory before launch; v3 found missing snapshot methods
 in the controlled backend before measurement. Both were fixture defects corrected before timing; their roots were
 removed and the v3 failed child was actually reaped. No performance run was retried.
+
+### Combined optional setup validation
+
+At integrated `9b02645618`, the packaged inline case passed, while the supervised case failed waiting for
+unrelated local work after gateway replacement. The fixture sent composer input 17 ms after pane creation,
+before the engine bound; the daemon reported the refused input, then the engine attached successfully.
+Receipt `.harness/validation/20261118T031722.581798Z-71798/receipt.json` retains this failure and the inline pass.
+
+The fixture now waits for the new agent's concrete session binding, as its first agent already did, and uses
+the existing `LocalClient.turn` helper to require that exact prompt's start and end. No runtime, timeout or sleep
+changed. Only the failed supervised case was rerun: actual exit zero in 32.6 seconds, with master exit/close,
+output EOF and private-root removal asserted by the test. Receipt:
+`.harness/validation/20261118T032650.855175Z-86544/receipt.json`.

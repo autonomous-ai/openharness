@@ -75,9 +75,12 @@ for (const services of ['gateway,engineSetup', 'none']) {
         await until('the old gateway to end', () => !daemon.servicePids('gateway').includes(pids[0]) || null, 10_000, 50)
         const other = await desk.request('agent_create', { engine: 'claude', cwd, bypassPermission: true }, 60_000)
         expect(other.error).toBeUndefined()
-        const localEnd = desk.next(frame => frame.type === 'turn_ended' && frame.agentId === other.agent.id, 45_000, 'unrelated local turn')
-        desk.send('message', { agentId: other.agent.id, content: 'local work after gateway loss' })
-        await localEnd
+        // Creation acknowledges the pane before its engine binds. Early composer input is correctly refused.
+        await until('the unrelated local agent to bind', async () => {
+          const listed = await desk!.request<{ agents: Array<Record<string, any>> }>('agents_list', {})
+          return listed.agents.find(row => row.id === other.agent.id && row.sessionId) ?? null
+        }, 45_000, 100)
+        await desk.turn(other.agent.id, 'local work after gateway loss')
         await until('the replacement gateway to reach the relay', () => backend.nodeUp(machine.machineId) || null, 30_000)
         await phone.open()
         expect(await phone.request('browser_callback', { url: callback })).toMatchObject({ error: 'NOT_EXPECTED' })
