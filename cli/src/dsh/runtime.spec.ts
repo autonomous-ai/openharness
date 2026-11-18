@@ -316,6 +316,15 @@ describe('runtime validation and file ownership', () => {
     expect(() => prepareHarnessLaunch(pkg, ws, 'codex', 'key')).not.toThrow()
     expect(readFileSync(join(skill, 'SKILL.md'), 'utf8')).toContain('# Draw')
   })
+
+  it('a relaunch leaves a saved runtime\'s bytes alone, however it is spelled', () => {
+    prepareHarnessLaunch(pkg, ws, 'codex', 'key')
+    const file = join(harnessRuntimeDir(ws, 'key'), 'runtime.json')
+    const saved = JSON.stringify(JSON.parse(readFileSync(file, 'utf8')))
+    writeFileSync(file, saved)
+    prepareHarnessLaunch(pkg, ws, 'codex', 'key')
+    expect(readFileSync(file, 'utf8')).toBe(saved)
+  })
 })
 
 // On Linux Harness's folder moves from ~/.harness to the XDG places (docs/plans/2026-11-18-linux-xdg-paths-design.md), and a
