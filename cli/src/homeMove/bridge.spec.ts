@@ -13,7 +13,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MCP_SHIM_SOURCE } from '../lib/connectors/mcpShimSource.js'
 import { harnessPaneOwner } from '../lib/harnessSessionLabel.js'
 import { hookRouteFile, publishHookRoute } from '../lib/hookRoutes.js'
-import { bootNow, BRIDGE_FILE, isBridge, makeRealFolders, procNow, readBridge, REAL_ENTRIES, removeBridge, serveOldPaths, writeBridge, type BridgeRecord, type Served } from './bridge.js'
+import { bootId, BRIDGE_FILE, isBridge, makeRealFolders, procNow, readBridge, REAL_ENTRIES, removeBridge, serveOldPaths, writeBridge, type BridgeRecord, type Served } from './bridge.js'
 
 vi.mock('node:fs', async (real) => ({ ...await real<object>(), linkSync: vi.fn((await real<typeof import('node:fs')>()).linkSync) }))
 
@@ -315,21 +315,19 @@ describe('the bridge\'s record', () => {
     expect(readBridge(state)!.boot).toEqual({ id: BOOT_ID, uptime: 1234.56 })
   })
 
-  it('the boot is /proc\'s boot id and uptime, the clock /proc start times count on: none where /proc has neither, off Linux', () => {
-    expect(bootNow(proc)).toEqual({ id: BOOT_ID, uptime: 1234.56 })
-    expect(bootNow(missing)).toBeNull()
-    // A /proc that says neither is not this boot's.
-    expect(() => bootNow((path) => path === '/proc/uptime' ? 'soon\n' : proc(path))).toThrow()
-    expect(() => bootNow((path) => path === '/proc/uptime' ? proc(path) : '\n')).toThrow()
+  it('the boot is /proc\'s boot id: none where /proc has none, off Linux, and a bridge.json written there has none', () => {
+    expect(bootId(proc)).toBe(BOOT_ID)
+    expect(bootId(missing)).toBeNull()
+    // A /proc that names no boot, or no boot time, is not one to count on.
+    expect(() => bootId(() => '\n')).toThrow()
+    expect(() => writeBridge(shortFolder(), record, (path) => path === '/proc/stat' ? 'cpu  1 2 3\n' : proc(path))).toThrow()
     const state = shortFolder()
     writeBridge(state, record, missing)
     expect(readBridge(state)).toEqual(record)
   })
 
   it.runIf(process.platform === 'linux')('reads this boot from the real /proc', () => {
-    const boot = bootNow()!
-    expect(boot.id).toMatch(/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/)
-    expect(boot.uptime).toBeGreaterThan(process.uptime())
+    expect(bootId()).toMatch(/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/)
   })
 
   it('the move\'s time is btime of /proc/stat plus /proc/uptime, in seconds since the epoch', () => {
