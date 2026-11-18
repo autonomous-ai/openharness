@@ -54,11 +54,12 @@ export function expandHome(raw: string, home: string, p: PlatformPath = platform
 }
 
 /**
- * A resolved Windows path through a share (`\\?\UNC\` resolves to `\\`): the fence compares local folders, and a share
- * may be any of them, as the local disk's admin share (`\\localhost\C$`) is. On posix, realpath reads `//` as `/`.
+ * A Windows path through a share, as given or resolved: the fence compares local folders, and a share may be any of
+ * them, as the local disk's admin share (`\\localhost\C$`) is. Two separators of either kind start a share or a device
+ * path, and of those only a drive's own (`\\?\C:\`, `\\.\C:\`) is local. On posix, realpath reads `//` as `/`.
  */
 export function unc(path: string, p: PlatformPath = platformPath): boolean {
-  return p.sep === '\\' && path.startsWith('\\\\')
+  return p.sep === '\\' && /^[\\/]{2}/.test(path) && !/^\\\\[?.]\\[a-z]:\\/i.test(path)
 }
 
 /**
@@ -98,6 +99,8 @@ function accountHome(): string | undefined {
 /** An `@path` upload: plain media or a document, never from where credentials or configs live. */
 export function uploadPath(raw: string, env: NodeJS.ProcessEnv = process.env): string {
   const path = expandHome(raw, env.HOME || homedir())
+  // Windows opens a share to resolve a path through it. The resolved path is checked again below: a link may lead there.
+  if (unc(path)) throw new CallFailure(2, `refusing to upload ${raw}: not a media file the helper may send`)
   // The file system's own spelling (`native`): the JS realpath only follows links and keeps the spelling given, so
   // ~/.SSH on macOS, and SSH~1 (an 8.3 short name) or a \\?\ prefix on Windows, read ~/.ssh outside the fence.
   let real: string
