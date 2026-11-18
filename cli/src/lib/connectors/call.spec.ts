@@ -396,6 +396,28 @@ describe('uploadFile', () => {
     if (body) expect(body).toContain('\r\n\r\nchecked\r\n')
   })
 
+  // A file in .ssh is opened through a folder link; once its links are counted, a hard link to it is made outside .ssh
+  // and the folder link moved onto that folder, so realpath names the file where the walk finds no forbidden folder.
+  // Junctions and hard links need no right on Windows.
+  it('never sends a file whose path leads, after the open, to a hard link made outside its folder', () => {
+    writeFileSync(join(home, '.ssh', 'note.txt'), 'secret')
+    mkdirSync(join(home, 'docs', 'other'))
+    symlinkSync(join(home, '.ssh'), join(home, 'docs', 'keys'), 'junction')
+    let linked = false
+    disk.hooks.fstatSync = (real, ...args) => {
+      const stat = real(...args)
+      if (!linked) {
+        linked = true
+        linkSync(join(home, '.ssh', 'note.txt'), join(home, 'docs', 'other', 'note.txt'))
+        renameSync(join(home, 'docs', 'keys'), join(home, 'docs', 'keys.old'))
+        symlinkSync(join(home, 'docs', 'other'), join(home, 'docs', 'keys'), 'junction')
+      }
+      return stat
+    }
+    expect(said(join(home, 'docs', 'keys', 'note.txt'))).toMatch(/not a media file/)
+    expect(linked).toBe(true)
+  })
+
   // On Windows the temporary folder holding `home` is the account's AppData\Local\Temp, inside the fenced AppData.
   it('returns the resolved file\'s name and every byte, read from the descriptor it checked', async () => {
     const doc = join(home, 'docs', 'note.txt')
