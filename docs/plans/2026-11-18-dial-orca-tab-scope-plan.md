@@ -321,7 +321,7 @@ The draft's two questions, answered by the PM on 2026-11-18:
     - the body is no longer `latest`: push;
     - a first failure: once more after `FRONT_RETRY_MS = 1_000`, if it is still `latest` and the stream still open;
     - the retry failed: log `dial: front not sent`, and a push sends nothing while `latest` is that body.
-  - On Windows nothing is ever sent. `stop()` aborts a send in flight and cancels a retry.
+  - On Windows nothing is ever sent. `stop()` aborts a send in flight and cancels a retry at once, though the stream ends a moment after it.
 
 - [ ] **Step 1: Write the failing tests.** `world()` gains `posts` (each `{ socket, body, signal }`) and a `post` that answers what the test queued: a status, `null`, or a hold that ends as `null` when its signal aborts; 204 with nothing queued. `H(n)` as in Task 1.
   - `front() with a stream open posts the ids to the stream's socket` (the body is exactly `{"type":"orcaFront","terminals":["<H(1)>","<H(2)>"]}`, the socket is link's).
@@ -338,6 +338,7 @@ The draft's two questions, answered by the PM on 2026-11-18:
   - `a send with no answer in 2 s is aborted and counts as failed` (its signal aborts at 2 s; a retry is due 1 s later).
   - `a daemon from before orcaFront answers 404: one retry, one line, and the state and the stream are untouched` (a later line of the stream still becomes the state).
   - `on Windows, and after stop(), front() posts nothing and throws nothing; stop() aborts a send in flight and leaves no timer`.
+  - `an answer that comes as stop() is called sends nothing more, though the stream ends a moment after it`.
 - [ ] **Step 2: Run** `iso test .`. Expected: FAIL (`front` is not a function).
 - [ ] **Step 3: Implement.** The file's header gains one sentence: what it tells the devices, and that only ids go.
 - [ ] **Step 4: Run** `iso test .` and the plugin's type check. Expected: PASS, no type error.

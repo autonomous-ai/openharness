@@ -183,8 +183,7 @@ export function startDial(inputs: DialInputs, tell: { changed(state: DialState):
     const answer = await inputs.connect(socket, DIAL_OPEN, abort.signal)
     cancelHead()
     if (answer?.status !== 200) return set({ state: answer?.status === 409 ? 'elsewhere' : 'notRunning' })
-    const open: Stream = { socket }
-    stream = open
+    stream = { socket }
     // A devices process that started again holds no worktree: each open tells it the latest.
     push()
     const opened = inputs.now()
@@ -196,13 +195,18 @@ export function startDial(inputs: DialInputs, tell: { changed(state: DialState):
       else skipped += 1
       return true
     })
-    // The devices drop the worktree with the stream: nothing more is sent or logged for it.
-    stream = null
-    open.sending?.()
-    open.retry?.cancel()
+    close()
     if (skipped > 0) log(`dial: ${skipped} lines skipped`)
     if (tooLong) log('dial: line too long')
     if (inputs.now() - opened > LAST_WAIT_MS) wait = FIRST_WAIT_MS
+  }
+
+  // The devices drop the worktree with the stream: nothing more is sent or logged for it.
+  function close(): void {
+    const open = stream
+    stream = null
+    open?.sending?.()
+    open?.retry?.cancel()
   }
 
   // One send at a time, so an older worktree never lands after a newer one: the latest goes once the one in flight
@@ -268,6 +272,8 @@ export function startDial(inputs: DialInputs, tell: { changed(state: DialState):
       cancelNext()
       unwatch()
       passing?.abort()
+      // At once: the stream ends a moment after its pass is aborted, and an answer or a retry then would send again.
+      close()
       await passDone
     },
   }
