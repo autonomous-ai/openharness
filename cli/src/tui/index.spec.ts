@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { findTuiBinary, opensClient, platformKey, TUI_NOT_IN_PAYLOAD, tuiCommand } from './index.js'
@@ -109,6 +109,12 @@ describe('harness tui launcher', () => {
     expect(calls[1]).toEqual([binary, args, expect.objectContaining({
       env: expect.objectContaining({ PORT: '19419' }),
     })])
+  })
+
+  it('with no ADAPTER_DATA_DIR the data folder is <home>/.harness/cli/data', async () => {
+    vi.stubEnv('ADAPTER_DATA_DIR', undefined)
+    await expect(tuiCommand(['-L', 'hnr19fix-launcher', '--port', '19419'], { port: 19418 })).resolves.toBe(0)
+    expect(localDaemonStatus).toHaveBeenCalledWith(join(homedir(), '.harness', 'cli', 'data'), 19419)
   })
 
   it('opens a local client after the daemon startup deadline', async () => {
