@@ -780,8 +780,8 @@ theme: the app runs from macOS 13, older than WebKit's `color-mix()`.
   once has none.
 - Orca has two rows, one or neither, under the sign-in row and above Sound:
   `Connect Orca…` while Orca runs without Harness's plugin, and
-  `Update Orca connection…` when an update asks Orca for new access. Each opens
-  the Orca screen. `Cancel` keeps the row.
+  `Update Orca connection…` when Orca asks again to approve Harness's plugin.
+  Each opens the Orca screen. `Cancel` keeps the row.
 - The Orca screen's heading is `Connect Orca`, or `Update Orca connection` for an
   update, in every phase. Asking: the spinner and `Asking Orca…`, muted, under
   it, with no button. Approve: `Orca will let Harness Device:` and Orca's own
