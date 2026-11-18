@@ -150,7 +150,7 @@ describe('closing the harnesses a closed harness started', () => {
     const failing = setup([], {}, { refresh: async () => { throw new Error('the core is gone') } })
     failing.stopped('lead-agent-id')
     await settle()
-    expect(failing.log).toHaveBeenCalledWith('[agent-cleanup] could not close what lead-age started: the core is gone')
+    expect(failing.log).toHaveBeenCalledWith('[agent-cleanup] could not close what lead-age started: Error')
     // The real wait: a timer that holds nothing open.
     vi.useFakeTimers()
     const timed = setup([kid('stuck')], {}, { refuse: { stuck: { error: 'CLOSE_FAILED' } }, wait: undefined })
@@ -421,7 +421,7 @@ describe('closing a harness another agent started once it has sat idle', () => {
     const { tick, log } = setup([], {}, { refresh: async () => { throw 'no core' } })
     tick()!()
     await settle()
-    expect(log).toHaveBeenCalledWith('[agent-cleanup] a look failed: no core')
+    expect(log).toHaveBeenCalledWith('[agent-cleanup] a look failed: string')
     vi.useFakeTimers()
     const core = fakeCore({ dataDir: dir, agents: { live: vi.fn(() => []) } })
     const timed = createAgentCleanup(core, { log: vi.fn() })
@@ -466,7 +466,7 @@ describe('erasing what a deleted harness was told', () => {
     expect(await cleanup.port.forgetTold('kid')).toBe(false)
     expect(Date.now() - began).toBeLessThan(1_500)
     expect(readFileSync(ledgerPath(dir), 'utf8')).toContain('fix the login')
-    expect(log.mock.calls).toEqual([['[agent-cleanup] could not erase what kid was told: The agent ledger is busy. Try again.']])
+    expect(log.mock.calls).toEqual([['[agent-cleanup] could not erase what kid was told: LedgerBusyError']])
   })
 
   it('says it did not, and why in the log, when the ledger could not be rewritten', async () => {
@@ -474,7 +474,7 @@ describe('erasing what a deleted harness was told', () => {
     writeFileSync(join(dir, 'agent-client'), '')
     const { cleanup, log } = setup([])
     expect(await cleanup.port.forgetTold('kid-0123456789')).toBe(false)
-    expect(log.mock.calls).toEqual([[expect.stringMatching(/^\[agent-cleanup\] could not erase what kid-0123 was told: /)]])
+    expect(log.mock.calls).toEqual([[expect.stringMatching(/^\[agent-cleanup\] could not erase what kid-0123 was told: E[A-Z]+$/)]])
   })
 })
 
@@ -506,7 +506,7 @@ describe('what the cleanup keeps and how it runs', () => {
     const core = fakeCore({ dataDir: join(blocked, 'data') })
     const log = vi.fn()
     createAgentCleanup(core, { log, every: () => () => {} }).port.typed('kid')
-    expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\[agent-cleanup\] could not keep which harnesses the person joined: /))
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\[agent-cleanup\] could not keep which harnesses the person joined: E[A-Z]+$/))
   })
 
   it('closes nothing, and knows no time, on a core that offers neither', async () => {

@@ -740,7 +740,7 @@ describe('the devices\' own listener (services/devicesListener.ts)', () => {
 
   it('a listener that cannot open is one log line, and the devices run on', async () => {
     const { port } = start({ listen: async () => { throw new Error('listen EACCES /Users/someone/.harness/devices.sock') } })
-    await vi.waitFor(() => expect(logs).toEqual(['[devices] listener not opened · failed']))
+    await vi.waitFor(() => expect(logs).toEqual(['[devices] listener not opened · Error']))
     expect(calls('start')).toHaveLength(1)
     await port.stop()
     expect(calls('stop')).toHaveLength(1)
@@ -811,7 +811,7 @@ describe('the dial stream, for Orca\'s Harness Device plugin (docs/specs/2026-11
     }).not.toThrow()
     expect(core.clients.dialWatching).toHaveBeenCalledWith(true)
     expect(stream.lines).toEqual([{ attached: false }])
-    expect(logs).toContain('[devices] dialStream failed · injected fault: dialStream')
+    expect(logs).toContain('[devices] dialStream failed · Error')
     // Its minute count is the stream's too.
     await vi.advanceTimersByTimeAsync(60_000)
     expect(said()).toEqual(['[devices] dial stream · open'])
@@ -826,7 +826,7 @@ describe('the dial stream, for Orca\'s Harness Device plugin (docs/specs/2026-11
     expect(() => seen.host.watching!(true)).not.toThrow()
     expect(() => seen.host.dialShows!(API)).not.toThrow()
     expect(core.clients.dialWatching).toHaveBeenCalledWith(true)
-    expect(logs).toContain('[devices] dialStream failed · write broken')
+    expect(logs).toContain('[devices] dialStream failed · Error')
   })
 
   it('with no listen given the dial\'s moves reach no stream and nothing throws', () => {
@@ -1528,7 +1528,7 @@ describe('what the windows say, reaching the dial', () => {
     const { port } = start({ faults: ['dial'] })
     port.card({ type: 'commander_event', agentId: 'a1', payload: { kind: 'done' } })
     port.desk(['a1'], true)
-    expect(logs).toContain('[devices] dial failed · injected fault: dial')
+    expect(logs).toContain('[devices] dial failed · Error')
     expect(calls('turnDone')).toEqual([])
   })
 })
@@ -1589,7 +1589,7 @@ describe('⌘K, the Wi-Fi device\'s borrowed walk, the voice router and stopping
     const { port } = start({ faults: ['fleet'] })
     expect(await port.routeTask('anything')).toMatchObject({ agentId: '', reason: 'no agent list yet', candidates: [] })
     expect(await port.routeSend('a1', 'go')).toEqual({ ok: false, machine: '', reason: 'no agent list yet' })
-    expect(logs).toContain('[devices] fleet did not start · injected fault: fleet · the devices run without it')
+    expect(logs).toContain('[devices] fleet did not start · Error · the devices run without it')
     expect(seen.host.fleet!()).toBeNull()
     await port.stop()
     expect(calls('stop')).toHaveLength(1)
@@ -2359,7 +2359,7 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
       vi.spyOn(AppRings.prototype, 'counts').mockImplementationOnce(() => { throw new Error('rings unreadable') })
       host().front('vscode')
       await vi.advanceTimersByTimeAsync(FRONT_SETTLE_MS)
-      expect(logs).toContain('[devices] dial failed · rings unreadable')
+      expect(logs).toContain('[devices] dial failed · Error')
       // The next app in front settles as before.
       host().front('ghostty')
       host().front('vscode')
@@ -2466,7 +2466,7 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
       start({ faults: ['fleet'], listen: listener.listen })
       vi.spyOn(host(), 'front').mockImplementation(() => { throw new Error('rings unreadable') })
       expect(listener.front('vscode')).toBeUndefined()
-      expect(logs).toContain('[devices] dial failed · rings unreadable')
+      expect(logs).toContain('[devices] dial failed · Error')
     })
 
     it('an app that empties as a dial reads the list is pushed after that read, never from inside it', async () => {
@@ -3521,7 +3521,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     port.observed(hook('session-start', { hostHints: { TERM_PROGRAM: 'vscode' } }))
     attach(port)
     expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 's' }])
-    expect(logs).toContain('[devices] vscode failed · injected fault: vscode')
+    expect(logs).toContain('[devices] vscode failed · Error')
   })
 
   // The dial's scroll scrolls that terminal, line by line, while VS Code is in front and the dial shows its agent
@@ -3635,7 +3635,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     shows(CODEX)
     window.break()
     expect(() => host().scrolled('move', 8, 0)).not.toThrow()
-    expect(logs).toContain('[devices] dial failed · write broken')
+    expect(logs).toContain('[devices] dial failed · Error')
   })
 
   // A stroke on Claude Code drawn fullscreen, while it is its terminal's foreground program and does not ask, carries
@@ -4166,13 +4166,13 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     const { port } = startHere({ faults: ['inbox.inboxPoll'] })
     attach(port)
     expect(await port.inboxPoll({ pollId: 'p1', sessionId: 'sess-1' })).toEqual({ off: true })
-    expect(logs).toEqual(expect.arrayContaining(['[devices] inbox.inboxPoll failed · injected fault: inbox.inboxPoll']))
+    expect(logs).toEqual(expect.arrayContaining(['[devices] inbox.inboxPoll failed · Error']))
     // A part that did not start answers the same, and hears nothing.
     const off = startHere({ faults: ['inbox'] })
     attach(off.port)
     expect(await off.port.inboxPoll({ pollId: 'p1', sessionId: 'sess-1' })).toEqual({ off: true })
     off.port.inboxGone('p1')
-    expect(logs).toEqual(expect.arrayContaining(['[devices] inbox did not start · injected fault: inbox · the devices run without it']))
+    expect(logs).toEqual(expect.arrayContaining(['[devices] inbox did not start · Error · the devices run without it']))
   })
 
   it('an inbox part the guard switches off ends its open poll', async () => {
@@ -4512,7 +4512,7 @@ describe('a person\'s prompt in the app in front turns the dial (docs/specs/2026
     vi.spyOn(seen.cable as unknown as { followLocal: (agentId: string, cause: string) => Promise<void> }, 'followLocal')
       .mockRejectedValueOnce(new Error('dial unplugged'))
     port.observed(hook('turn-start'))
-    await vi.waitFor(() => expect(logs).toContain('[devices] dial failed · dial unplugged'))
+    await vi.waitFor(() => expect(logs).toContain('[devices] dial failed · Error'))
     port.observed(hook('turn-start'))
     expect(asked()).toEqual([[ID, 'prompt']])
   })
@@ -4925,7 +4925,7 @@ describe('the session the Claude app shows turns the dial (docs/specs/2026-11-15
       await wait(FRONT_SETTLE_MS)
     }
     await wait(0)
-    expect(logs).toContain('[devices] dial failed · dial unplugged')
+    expect(logs).toContain('[devices] dial failed · Error')
     attach(SESSION)
     expect(asked()).toEqual([[A, 'attach']])
   })
@@ -5377,7 +5377,7 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
     // Acted on at the settle, inside the filter's timer.
     report('terminal-app', TTY)
     await settle('terminal-app')
-    await vi.waitFor(() => expect(logs).toContain('[devices] dial failed · dial unplugged'))
+    await vi.waitFor(() => expect(logs).toContain('[devices] dial failed · Error'))
     report('terminal-app', TTY)
     expect(asked()).toEqual([[ID, 'tab']])
   })
@@ -5414,7 +5414,7 @@ describe('selecting a tab moves the dial (docs/specs/2026-11-15-dial-terminal-fo
       .mockImplementationOnce(() => { throw new Error('dial unplugged') })
     report('terminal-app', TTY)
     seen.host.appSettled!('claude')
-    expect(logs).toContain('[devices] dial failed · dial unplugged')
+    expect(logs).toContain('[devices] dial failed · Error')
     expect(tabLines()).toEqual(['[device] tab · skipped · not in front', '[device] tab · skipped · not in front'])
   })
 })
@@ -5705,7 +5705,7 @@ describe('herdr\'s agents, over its socket (docs/specs/2026-11-16-device-herdr.m
     port.observed(hook('session-start'))
     attach(port)
     expect(herdr.subs).toEqual([])
-    expect(logs).toContain('[devices] herdr failed · injected fault: herdr')
+    expect(logs).toContain('[devices] herdr failed · Error')
     expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
   })
 
@@ -6272,7 +6272,7 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     const { port, listener } = devices({ faults: ['fleet', 'notices'] })
     expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'no dial' })
     expect(calls('question')).toEqual([])
-    expect(logs).toContain('[devices] notices failed · injected fault: notices')
+    expect(logs).toContain('[devices] notices failed · Error')
     port.observed(hook('turn-start'))
     expect(calls('turnStarted')).toEqual([[ID, '', undefined]])
   })
@@ -7069,7 +7069,7 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
     port.observed(hook('session-start'))
     attach(port)
     expect(hc.subs).toEqual([])
-    expect(logs).toContain('[devices] herdr-app failed · injected fault: herdr-app')
+    expect(logs).toContain('[devices] herdr-app failed · Error')
     expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
   })
 
@@ -7486,7 +7486,7 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       shows('h1')
       vi.mocked(core.clients.sendLocal).mockImplementation(() => { throw new Error('send broken') })
       expect(() => host().scrolled('move', 8, 0)).not.toThrow()
-      expect(logs).toContain('[devices] dial failed · send broken')
+      expect(logs).toContain('[devices] dial failed · Error')
     })
 
     it('a throw after the answer is the part\'s', async () => {
@@ -7496,7 +7496,7 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       onTab(port)
       vi.mocked(core.clients.sendLocal).mockImplementation(() => { throw new Error('send broken') })
       stroke([8])
-      await vi.waitFor(() => expect(logs).toContain('[devices] dial failed · send broken'))
+      await vi.waitFor(() => expect(logs).toContain('[devices] dial failed · Error'))
       expect(scrollSaid()).toEqual([NOT_ON_SCREEN])
     })
 
@@ -8222,7 +8222,7 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
       transcriptPath: '/t/sess-1.jsonl', hostHints: {} })
     attach(port)
     expect(oc.streams).toEqual([])
-    expect(logs).toContain('[devices] opencode failed · injected fault: opencode')
+    expect(logs).toContain('[devices] opencode failed · Error')
     expect((await listed()).map(({ id }) => id)).toEqual([observedAgentId('claude', 'sess-1')])
   })
 
@@ -8451,7 +8451,7 @@ describe('the dial setup, from the devices\' own process (cable/dialSetup.ts)', 
     readers.rows.set('sess-9', { cwd: '/work/web', transcriptPath: null })
     readers.working.set('sess-9', false)
     await start({ faults: ['fleet', 'skill'], listen: fakeListener().listen }).orcaHomes.landed()
-    expect(logs).toContain('[devices] skill failed · injected fault: skill')
+    expect(logs).toContain('[devices] skill failed · Error')
     await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
     // The scan goes on past the setup to list what it found.
     seen.host.watching!(true)
@@ -8525,7 +8525,7 @@ describe('Harness\'s VS Code extension, set up once a computer in VS Code and in
     const vscode = fakeVscode({ installed: '0.0.1' })
     // Its start pass follows the dial setup's, once Orca's homes are read.
     await start({ faults: ['fleet', 'vscodeExtension'], listen: fakeListener().listen, vscodeExtension: vscode.deps }).orcaHomes.landed()
-    expect(logs).toContain('[devices] vscodeExtension failed · injected fault: vscodeExtension')
+    expect(logs).toContain('[devices] vscodeExtension failed · Error')
     await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
     await settled()
     expect(vscode.runs).toEqual([])
@@ -8607,7 +8607,7 @@ describe('Harness\'s VS Code extension, set up once a computer in VS Code and in
     const vscode = fakeVscode({ installed: '0.0.1' })
     const cursor = fakeVscode({ installed: '0.0.1', editor: 'cursor' })
     await start({ faults: ['fleet', 'cursorExtension'], listen: fakeListener().listen, vscodeExtension: vscode.deps, cursorExtension: cursor.deps }).orcaHomes.landed()
-    expect(logs).toContain('[devices] cursorExtension failed · injected fault: cursorExtension')
+    expect(logs).toContain('[devices] cursorExtension failed · Error')
     await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
     await vi.waitFor(() => expect(flags(vscode)).toEqual(['--install-extension']))
     expect(cursor.runs).toEqual([])
@@ -9044,7 +9044,7 @@ describe('Orca\'s ring follows Orca\'s tabs (docs/plans/2026-11-16-dial-orca-foc
     const { fake } = dialWith(2, { faults: ['orca'] })
     expect(await ring()).toEqual([agent(1), agent(2)])
     expect(fake.orders).toEqual([])
-    expect(logs).toContain('[devices] orca failed · injected fault: orca')
+    expect(logs).toContain('[devices] orca failed · Error')
   })
 
   it('an order read that throws as it is asked leaves the next change free to ask again', async () => {
@@ -9352,9 +9352,9 @@ describe('Orca\'s ring is the worktree on screen (docs/plans/2026-11-18-dial-orc
   it('a fault in the orca part costs the listener and the stream nothing', () => {
     const { listener } = withOrca(0, { faults: ['orca'] })
     const stream = listener.dial()
-    expect(logs).not.toContain('[devices] orca failed · injected fault: orca')
+    expect(logs).not.toContain('[devices] orca failed · Error')
     expect(listener.orcaFront([H(1)])).toBeUndefined()
-    expect(logs).toContain('[devices] orca failed · injected fault: orca')
+    expect(logs).toContain('[devices] orca failed · Error')
     expect(() => stream.end('gone')).not.toThrow()
     expect(frontLines()).toEqual([])
   })
@@ -9850,7 +9850,7 @@ describe('the dial follows the pane focused in Orca (docs/plans/2026-11-16-dial-
       port.observed(hook(1, { event: 'turn-start' }))
       expect(asked()).toEqual([[agent(1), 'prompt']])
       expect(fake.probes.count).toBe(0)
-      expect(logs).toContain('[devices] orca failed · injected fault: orca')
+      expect(logs).toContain('[devices] orca failed · Error')
     })
 
     it('no line holds a handle or an agent', async () => {

@@ -17,13 +17,13 @@ describe('a notice into a part', () => {
     guard.call('dial', () => { throw new Error('unplugged') })
     guard.call('dial', () => Promise.reject(new Error('later')))
     await Promise.resolve()
-    expect(log.mock.calls).toEqual([['[devices] dial failed · unplugged']])
-    // Each part is counted on its own, and a thrown non-error is said as it is.
+    expect(log.mock.calls).toEqual([['[devices] dial failed · Error']])
+    // Each part is counted on its own, and a thrown non-error by its type.
     guard.call('window', () => { throw 'gone' })
-    expect(log).toHaveBeenLastCalledWith('[devices] window failed · gone')
+    expect(log).toHaveBeenLastCalledWith('[devices] window failed · string')
     at = 61_000
     guard.call('dial', () => { throw new Error('still') })
-    expect(log).toHaveBeenLastCalledWith('[devices] dial failed · still · 2 more since')
+    expect(log).toHaveBeenLastCalledWith('[devices] dial failed · Error · 2 more since')
     // A promise that settles well is nothing to say.
     guard.call('dial', () => Promise.resolve('fine'))
     await Promise.resolve()
@@ -37,7 +37,7 @@ describe('a notice into a part', () => {
     guard.call('dial', ran)
     guard.call('window', ran)
     expect(ran).toHaveBeenCalledOnce()
-    expect(error).toHaveBeenCalledWith('[devices] dial failed · injected fault: dial')
+    expect(error).toHaveBeenCalledWith('[devices] dial failed · Error')
   })
 })
 
@@ -72,8 +72,8 @@ describe('a part with members', () => {
     expect(guard.start('fleet', () => { throw new Error('no identity') }, FALLBACKS)).toBeNull()
     expect(guard.start('lane', () => router(), FALLBACKS)).toBeNull()
     expect(log.mock.calls).toEqual([
-      ['[devices] fleet did not start · no identity · the devices run without it'],
-      ['[devices] lane did not start · injected fault: lane · the devices run without it'],
+      ['[devices] fleet did not start · Error · the devices run without it'],
+      ['[devices] lane did not start · Error · the devices run without it'],
     ])
     expect(guard.isOff('fleet')).toBe(true)
   })
@@ -91,10 +91,10 @@ describe('a part with members', () => {
     await expect(part.list()).rejects.toBeInstanceOf(ServiceUnavailableError)
     expect(await part.named()).toBe('nobody')
     expect(log.mock.calls.map(([line]) => line)).toEqual([
-      '[devices] fleet.knows failed · lost',
-      '[devices] fleet.total failed · injected fault: fleet.total',
-      '[devices] fleet.list failed · rpc',
-      '[devices] fleet.named failed · sync throw',
+      '[devices] fleet.knows failed · Error',
+      '[devices] fleet.total failed · Error',
+      '[devices] fleet.list failed · Error',
+      '[devices] fleet.named failed · Error',
     ])
   })
 
