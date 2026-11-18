@@ -40,20 +40,35 @@ function hitsIn(file: string, source: string): Hit[] {
 }
 
 /**
- * The lines with comments blanked, so line numbers stay. A block comment runs from a line whose first text is `/*` to
- * the first line holding its end; a line comment starts at `//` (`#` in a shell script) at a line's start or after
- * whitespace, which a URL's `://` is not.
+ * The lines without their comments, so line numbers stay and the code beside a comment is still read. A comment starts
+ * outside a string literal, at a line's start or after whitespace, which a URL's `://` is not: `//` to the line's end,
+ * `/*` to its `*\/` on this line or a later one, and `#` in a shell script. A literal ends with its line, so a quote in a
+ * regular expression hides no more than the rest of that line.
  */
 function withoutComments(lines: string[], shell: boolean): string[] {
   let inBlock = false
-  const lineComment = shell ? /(?:^|\s)#/ : /(?:^|\s)\/\//
   return lines.map((line) => {
-    if (inBlock || (!shell && line.trimStart().startsWith('/*'))) {
-      inBlock = !line.includes('*/', inBlock ? 0 : line.indexOf('/*') + 2)
-      return ''
+    let code = ''
+    let quote = ''
+    for (let at = 0; at < line.length; at++) {
+      const char = line[at]
+      if (inBlock) {
+        if (line.startsWith('*/', at)) { inBlock = false; at++ }
+        continue
+      }
+      if (quote) {
+        // An escaped character, a quote among them, does not end the literal.
+        if (char === '\\') { code += line.slice(at, at + 2); at++; continue }
+        if (char === quote) quote = ''
+      } else {
+        const starts = at === 0 || /\s/.test(line[at - 1])
+        if (starts && (shell ? char === '#' : line.startsWith('//', at))) break
+        if (starts && !shell && line.startsWith('/*', at)) { inBlock = true; at++; continue }
+        if (/['"`]/.test(char)) quote = char
+      }
+      code += char
     }
-    const at = line.search(lineComment)
-    return at === -1 ? line : line.slice(0, at)
+    return code
   })
 }
 
