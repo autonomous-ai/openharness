@@ -14,19 +14,19 @@
 
 **Spec:** `docs/plans/2026-11-18-dial-drawer-limits-design.md`. Read it with this plan, the root `AGENTS.md` and `cli/AGENTS.md`.
 
-**Open questions:** two, at the end. Neither blocks Tasks 1 to 9 as written.
+**Open questions:** none. harness-pm answered both on 2026-11-18 ("Decided here", 13 and 14).
 
 ## Base
 
-- `fix/dial-drawer-limits` at `a490c22c39` (`main` after #4445). The spec and this plan are untracked. The main session commits them; no task does.
+- `fix/dial-drawer-limits` at `275512c33a`: `main` after #4445 (`a490c22c39`), plus the commit of the spec and this plan. No task commits either.
 - Measured at the base on this Mac, 2026-11-18:
   - `npx vitest run src/cable/questionInbox.spec.ts src/cable/cableFleet.spec.ts`: 61 passed.
   - `IDF_PATH=$HOME/esp/esp-idf make device-test`: every test passes up to `test_cable_models.py`, which fails to build on macOS (`'snprintf' macro redefined`, the known exception of earlier dial plans; green on CI's Linux) and stops `run.sh` before `test_cable_outbound.py`. So the SDK-dependent tests are run one file at a time here. `test_question_ui.py`, `test_touch_ui.py`, `test_cable_identity.py` and `test_cable_outbound.py` each pass alone.
-  - `e2e/deviceNotify.e2e.ts` and `e2e/deviceClaudeOrca.e2e.ts`: 10 passed, **2 failed at the base** (open question 2). Both wait 45 s for a second `question` frame that #4445 replaced with a drawer row.
+  - `e2e/deviceNotify.e2e.ts` and `e2e/deviceClaudeOrca.e2e.ts`: 10 passed, **2 failed at the base**. Both wait 45 s for a second `question` frame that #4445 replaced with a drawer row. Task 10 fixes them.
   - The firmware builds with check 1's two commands: the default in 41 s (`interns_commander.bin`, 0x294d50 bytes, 67% of the app partition free), the bench variant in 1 min 37 s. Both leave `git status` clean. The probe's build folders were removed; the ignored `managed_components/` it downloaded is still in the firmware folder.
-- **Three branches are open on the same files.** Keep every edit where its task says, so whichever lands second merges by hand in minutes:
-  - `fix/dial-frame-cap` rewrites `noticeSummary` inside `cableSession.ts` into `dialText(text, max)`, and edits `owed` and `replaceNotifications`. Task 1 moves `noticeSummary` to its own file. Whoever lands second keeps **one** function for the drawer's words and the inbox's summary (after both: `dialText` lives in `noticeSummary.ts` and `noticeSummary(text)` is `dialText(text, 239)`). Two functions would make a read question come back unread.
-  - `fix/dial-inbox-count` edits `notice_add`, `notice_unread` and `ui_notif_replace`, deletes `notice_sequence` (one line of `ui_question_show`), and lets `notice_add` return NULL. Task 6 leaves the `s.notice_sequence++` line alone and checks the row for NULL.
+- **Three other branches touch the same files.** Keep every edit where its task says, so whichever lands second merges by hand in minutes:
+  - `fix/dial-frame-cap` (#4451, open on 2026-11-18, about to merge) rewrites `noticeSummary` inside `cableSession.ts` into `dialText(text, max)` (also used for names, with `NAME_MAX`), and edits `whoIs`, `owed`, `send` and `replaceNotifications`. **No hand merge for it:** Task 1 starts only after #4451 has merged and the main session has rebased `fix/dial-drawer-limits` onto that `main`, with no task running. Task 1 then moves whatever #4451 left, keeping **one** function for the drawer's words and the inbox's summary. Two functions would make a read question come back unread. Tasks 3, 4 and 5 reach `noticeSummary` through Task 1, so none of them starts before that rebase either.
+  - `fix/dial-inbox-count` merged as #4448 on 2026-11-18, after this plan was written. The rebase above brings it in, and Tasks 6, 8 and 9, started before it, meet it there: a conflict in `ui_habitat.c` is resolved at that rebase by the rule of this line. It edits `notice_add`, `notice_unread` and `ui_notif_replace`, deletes `notice_sequence` (one line of `ui_question_show`), and lets `notice_add` return NULL. Task 6 leaves the `s.notice_sequence++` line alone and checks the row for NULL.
   - `fix/dial-notices-restart` adds `held` entries, `set(agentId, id, raw, held = false)` and `CableSession.hold`. Tasks 2 and 3 never use the names `hold` or `held`. Whoever lands second: a `held` entry is created `told` (it rang before).
 - The tasks name functions, never lines. If a name differs at the base, the implementer follows the code and says so in its report.
 
@@ -34,22 +34,24 @@
 
 | Task | Files | Depends on | Effort | Test that fails first |
 |---|---|---|---|---|
-| 1 One `noticeSummary` for the drawer and the inbox | `cli/src/cable/noticeSummary.ts` (new), `cableSession.ts` | none | medium | none: a move, no behavior, one commit |
+| 1 One `noticeSummary` for the drawer and the inbox | `cli/src/cable/noticeSummary.ts` (new), `cableSession.ts` | #4451 merged + this branch rebased onto `main` | medium | none: a move, no behavior, one commit |
 | 2 The inbox remembers what the dial was told | `cli/src/cable/questionInbox.ts`, `questionInbox.spec.ts` | none | high | `questionInbox.spec.ts` |
 | 3 The inbox keeps a refused question as its summary | `cli/src/cable/questionInbox.ts`, `questionInbox.spec.ts`, `cableSession.spec.ts` (one existing test) | 1 | high | `questionInbox.spec.ts` |
-| 4 A told question comes back as a silent row, never a ring | `cli/src/cable/cableSession.ts`, `cableSession.spec.ts` | 2 | xhigh | `cableSession.spec.ts` |
+| 4 A told question comes back as a silent row, never a ring | `cli/src/cable/cableSession.ts`, `cableSession.spec.ts` | 1, 2 | xhigh | `cableSession.spec.ts` |
 | 5 A refused question reaches the dial small and stays on its drawer | `cli/src/cable/cableSession.ts`, `cableSession.spec.ts`, `cableFleet.spec.ts` | 3, 4 | high | `cableSession.spec.ts`, `cableFleet.spec.ts` |
 | 6 Firmware: a `question` with `tier: 'list'` files its row silently | `main/ui/habitat/ui_habitat.c`, `main/ui/ui_screens.h`, `main/ui/ui_perf.c`, `main/cable_client.c`, `test/test_question_ui.py`, `test/test_cable_identity.py` | none | high | `test_question_ui.py`, `test_cable_identity.py` |
 | 7 Firmware: the hello says `questionTier: 'v1'` | `main/cable_client.c`, `test/test_cable_outbound.py` | 6 | medium | `test_cable_outbound.py` |
 | 8 Firmware: a question the dial cannot answer shows its words | `main/ui/habitat/ui_habitat.c`, `test/test_question_ui.py` | none | high | `test_question_ui.py` |
 | 9 Firmware: the drawer's reader keeps a row per agent and kind | `main/cable_client.c`, `test/test_cable_identity.py` | none | medium | `test_cable_identity.py` |
+| 10 End to end: an open question comes back as a drawer row | `cli/e2e/deviceNotify.e2e.ts`, `cli/e2e/deviceClaudeOrca.e2e.ts` | none | high | none of its own: test-only, one commit; its two cases are red at the base |
 
 Firmware paths are under `devices/harness-device/firmware/`.
 
-Longest chain: three tasks (1 → 3 → 5, or 2 → 4 → 5).
+Longest chain: three tasks (1 → 3 → 5, 1 → 4 → 5, or 2 → 4 → 5), after the wait for #4451 and the rebase, which gates Task 1 and through it 3, 4 and 5.
 
-- Tasks 1, 2, 8 and 9 share no file and start at once. The CLI tasks and the firmware tasks share no file.
-- Shared files, with no dependency between the tasks (they do not run together, in either order): `questionInbox.ts` and its spec (2, 3); `cableSession.ts` (1, 4); `cableSession.spec.ts` (3, 4); `ui_habitat.c` and `test_question_ui.py` (6, 8); `cable_client.c` (6, 9; 7, 9) and `test_cable_identity.py` (6, 9).
+- Tasks 2, 6, 8 and 9 are running from the committed plan. Task 10 starts at once. Task 1 starts once #4451 has merged and the main session has rebased this branch onto `main`, with no task running.
+- The CLI tasks, the firmware tasks and Task 10 share no file.
+- Shared files, with no dependency between the tasks (they do not run together, in either order): `questionInbox.ts` and its spec (2, 3); `cableSession.spec.ts` (3, 4); `ui_habitat.c` and `test_question_ui.py` (6, 8); `cable_client.c` (6, 9; 7, 9) and `test_cable_identity.py` (6, 9).
 
 ## Layers
 
@@ -58,6 +60,7 @@ Longest chain: three tasks (1 → 3 → 5, or 2 → 4 → 5).
 | `cli/src/cable/questionInbox.ts`, `noticeSummary.ts`, `cableSession.ts` | **Devices service process**, in memory | Their specs (PR CI `cli-tests`) |
 | `devices/harness-device/firmware/main/**` | **The round dial** | Host tests (PR CI `firmware-checks`), a local build |
 | `cli/src/cable/*.spec.ts`, `firmware/test/*.py` | Tests | — |
+| `cli/e2e/deviceNotify.e2e.ts`, `deviceClaudeOrca.e2e.ts` | End-to-end tests: the real daemon and a fake dial | Verification, check 4 |
 
 No file under `cli/src/core/` or `cli/src/services/` changes, `src/architecture.coreFiles.txt` gains no line, and `cableFleet.ts`, `cableHost.ts`, `services/devices.ts`, `devices/harness-pro/` and the Desktop do not change.
 
@@ -102,6 +105,9 @@ Most likely to bite first. Each is pinned by a test in the task named.
 10. **The handler tests** (`handle_question`, `handle_notifications`) go in `test_cable_identity.py`, where `cable_client.c`'s handlers are tested with the SDK's cJSON.
 11. **The firmware build runs on this Mac,** not on a temporary workflow (Verification says why).
 12. **A fact at the base that differs from the spec's "Why":** `send` drops a frame over the cap, logs `cable: dropped a question frame (...)` and keeps the link (2026-11-03). The design holds either way: the question never reached the dial.
+13. **Both rows of one agent in one drawer** (harness-pm, 2026-11-18): the daemon does **not** start sending an agent's news beside its question. `replaceNotifications` keeps putting an agent's open question in the place of its news, and `ui_notif_replace` is not changed. Task 9 fixes the dial's reader only. Task 9's "(open question 1)" points here.
+14. **The end-to-end reds from #4445** (harness-pm, 2026-11-18): fixed in this branch, by Task 10. Test-only: the daemon's frames are what #4445 meant them to be.
+15. **`noticeSummary` after #4451** (harness-pm, 2026-11-18): Task 1 waits for #4451 and a rebase, then moves what #4451 left. Task 4 depends on Task 1 too: its rule calls `noticeSummary`, which #4451 takes out of `cableSession.ts`, so a Task 4 written before the rebase would not build after it.
 
 ---
 
@@ -109,16 +115,19 @@ Most likely to bite first. Each is pinned by a test in the task named.
 
 **Files:**
 - Create: `cli/src/cable/noticeSummary.ts`
-- Modify: `cli/src/cable/cableSession.ts` (`NOTICE_SUMMARY_MAX`, `noticeSummary`, the imports)
+- Modify: `cli/src/cable/cableSession.ts` (`NOTICE_SUMMARY_MAX`, the function #4451 left for a drawer row's words, its callers, the imports)
 
-**Depends on:** none. **Effort:** medium. **Red test:** none (a move; `cableSession.spec.ts` already holds its behavior).
+**Depends on:** #4451 (`fix/dial-frame-cap`) merged into `main`, and `fix/dial-drawer-limits` rebased onto that `main` by the main session, with no task running (Base). No task of this plan. **Effort:** medium. **Red test:** none (a move; `cableSession.spec.ts` already holds its behavior).
 
 **Interfaces:**
-- Produces: `export function noticeSummary(text: string): string` in `cli/src/cable/noticeSummary.ts`. Idempotent: `noticeSummary(noticeSummary(x)) === noticeSummary(x)`.
+- Produces, in `cli/src/cable/noticeSummary.ts`:
+  - `export function noticeSummary(text: string): string` — a drawer row's words and the inbox's summary, 239 bytes. Idempotent: `noticeSummary(noticeSummary(x)) === noticeSummary(x)`.
+  - the one cutting function #4451 left, exported when `cableSession.ts` still calls it for something else. In #4451 as read on 2026-11-18 that is `dialText(text: string, max: number): string`, which `whoIs` also calls with `NAME_MAX`; then `noticeSummary(text)` is `dialText(text, NOTICE_SUMMARY_MAX)`.
 
-- [ ] **Step 1:** Move `NOTICE_SUMMARY_MAX` and `noticeSummary`, with their comments, unchanged, to the new file. Export the function only. `cableSession.ts` imports it and keeps no copy.
-- [ ] **Step 2: Run** `cd cli && npm run typecheck && npx vitest run src/cable/cableSession.spec.ts -t "drawer" && npx vitest run src/architecture.spec.ts`. Expected: PASS.
-- [ ] **Step 3: Commit** `Dial: one noticeSummary for the drawer and the inbox`.
+- [ ] **Step 1: Check the base.** `git log --oneline -1 --grep '#4451' origin/main` names #4451's merge, and `git merge-base --is-ancestor origin/main HEAD` succeeds. If either fails, stop and report: Task 1 is not ready.
+- [ ] **Step 2: Move** `NOTICE_SUMMARY_MAX` and the cutting function, with their comments, unchanged, to the new file, and add `noticeSummary(text)` as its 239-byte call, with a comment: the drawer's words and the inbox's summary must be one cut, or a read question comes back unread. `cableSession.ts` imports what it uses and keeps no copy; its calls that cut a row's words at `NOTICE_SUMMARY_MAX` become `noticeSummary(...)`; `NAME_MAX` and every other caller stay as #4451 left them. **One** cutting function after the move. If #4451 merged in another shape than the one above, the same rule holds, and the report says what it found.
+- [ ] **Step 3: Run** `cd cli && npm run typecheck && npx vitest run src/cable/cableSession.spec.ts src/architecture.spec.ts`. Expected: PASS, #4451's own tests included.
+- [ ] **Step 4: Commit** `Dial: one noticeSummary for the drawer and the inbox`.
 
 ### Task 2: The inbox remembers what the dial was told
 
@@ -280,10 +289,10 @@ describe('a question the dial cannot answer', () => {
 - Modify: `cli/src/cable/cableSession.ts` (the capability fields, `hello`, `resendQuestions`, `question`; not `replaceNotifications`)
 - Test: `cli/src/cable/cableSession.spec.ts` (`describe('hello capabilities')`)
 
-**Depends on:** 2. **Effort:** xhigh (two async paths, three kinds of dial).
+**Depends on:** 1, 2. **Effort:** xhigh (two async paths, three kinds of dial).
 
 **Interfaces:**
-- Consumes: `QuestionInbox.told`, `refile`, `ask` (Task 2).
+- Consumes: `QuestionInbox.told`, `refile`, `ask` (Task 2); `noticeSummary(text)` from `./noticeSummary.js` (Task 1).
 - Produces:
   - `private questionTier = false` — `hello.questionTier === 'v1'`, read at every hello, cleared in `resetCapabilities`, named `questionTier` in `capabilitiesNamed` (after `appFilter`).
   - `private async giveQuestion(agentId: string, id: string, questions: unknown, words: string): Promise<void>` — the one rule. `questions` is what a ring and a Pro's plain frame carry; `words` is the first question's text as the inbox holds it.
@@ -422,6 +431,8 @@ it('names questionTier in the greeting line', async () => {
 - [ ] **Step 4: Run** `cd cli && npm run typecheck && npx vitest run src/cable/cableSession.spec.ts src/cable/cableFleet.spec.ts`. Expected: PASS, every other test unchanged.
 - [ ] **Step 5: Commit** `Dial: a question the dial was told comes back as a silent row, never a ring`.
 
+**End to end:** Task 10's two cases see the same frames after this task. Their fake dial says no `questionTier`, and each question is told and carried by the drawer as a row (`forget(kept)` marks it asked and told), so `giveQuestion` sends nothing, as at the base; a re-ask that lands after a greeting's drawer finds a new, untold entry and rings once, as at the base. No end-to-end run after this task: check 4 runs them at the final head.
+
 ### Task 5: A refused question reaches the dial small and stays on its drawer
 
 **Files:**
@@ -531,6 +542,8 @@ it('is given a question the dial cannot answer, once, and the first dial is not 
 - [ ] **Step 3: Implement** `question()` as above, and update its comment: one the inbox cannot hold is kept and sent as its summary, never as it came (a plan of kilobytes passed the frame cap).
 - [ ] **Step 4: Run** `cd cli && npm run typecheck && npx vitest run src/cable/questionInbox.spec.ts src/cable/cableSession.spec.ts src/cable/cableFleet.spec.ts`. Expected: PASS.
 - [ ] **Step 5: Commit** `Dial: a refused question reaches the dial small and stays on its drawer`.
+
+**End to end:** Task 10's two cases see the same frames after this task. Their questions (a notice card, an Orca wait) each have one option, so the inbox holds them as they came (`set` answers true) and nothing of this task applies to them. No end-to-end run after this task: check 4 runs them at the final head.
 
 ### Task 6: Firmware: a `question` with `tier: 'list'` files its row silently
 
@@ -739,12 +752,60 @@ So this task changes the reader only. No frame of the daemon changes.
 - [ ] **Step 4: Run** the same command. Expected: PASS, the existing one-row-per-agent assertions included (their rows are all news).
 - [ ] **Step 5: Commit** `Dial firmware: the drawer's reader keeps a row per agent and kind`.
 
+### Task 10: End to end: an open question comes back as a drawer row
+
+**Files:**
+- Test: `cli/e2e/deviceNotify.e2e.ts`, `cli/e2e/deviceClaudeOrca.e2e.ts`
+
+**Depends on:** none (starts at once). **Effort:** high (two files, the real daemon). **Red test:** none of its own. A test-only change, one commit: its two cases are red at the base, and that is the "failing first" evidence.
+
+**Why they are red** (read at `a490c22c39`): before #4445, every `notif.replace` cleared the inbox's marks and asked each open question again, so the dial got a second `question` frame. Since #4445, `replaceNotifications` carries each open question as a row of the drawer (`question: true`, its words as `noticeSummary` cuts them) and `forget(kept)` marks the questions it carries as asked, so `resendQuestions` sends them no frame. Both cases still wait 45 s for that frame:
+- `deviceNotify.e2e.ts`, "an outside Claude Code session's notice is its own card, read without closing it, and closed by its next prompt": after `agents.list`, `pushAgents` ends with a drawer from `CableHost.listUnread`, whose first rows are the devices' own (`noticeRows`: the pending notice cards). Fails with `heard no the card sent again with the list`.
+- `deviceClaudeOrca.e2e.ts`, "the dial shows the agent waiting with "printf hi · answer in Orca", as a question nothing answers, and its Stop ends the wait": the dial plugged in again greets; the greeting's drawer carries the wait from `noticeRows` (the devices' `shown` map), and the forget that follows marks it asked. Fails with `heard no the question again`.
+
+Neither case changes after Tasks 4 and 5 (their "End to end" notes): the fake dial (`e2e/harness/fakeDial.ts`) says no `questionTier`.
+
+- [ ] **Step 1: See them fail.** `cd cli && env -u TMUX -u TMUX_PANE TMPDIR=/tmp npx vitest run --config vitest.e2e.config.ts e2e/deviceNotify.e2e.ts e2e/deviceClaudeOrca.e2e.ts -t "notice is its own card, read without closing it|the dial shows the agent waiting"`. Expected at the base: 2 failed, with the two messages above, the others skipped. About two minutes.
+- [ ] **Step 2: `deviceNotify.e2e.ts`.** In that case, replace the wait for `'the card sent again with the list'` with the list's drawer and its row:
+
+```ts
+    // Opening the alert to read it leaves the card. The list asked after it is the barrier: the daemon has handled the
+    // read, and whatever it sent for it, by the time the list's drawer is sent. A drawer carries the dial's open
+    // questions as rows instead of asking them again (#4445): the card is one of them.
+    let since = dial.messages.length
+    dial.send({ t: 'question.read', agentId: engine.id, requestId: 'read-1' })
+    const state = await dial.next((m) => m.t === 'question.state' && m.requestId === 'read-1', 45_000, 'the card read', since)
+    expect(state).toMatchObject({ ok: true, id: question.id, questions: card('Ghostty') })
+    since = dial.messages.length
+    dial.send({ t: 'agents.list' })
+    const drawer = await dial.next((m) => m.t === 'notif.replace', 45_000, 'the drawer sent with the list', since)
+    expect(drawer.items).toContainEqual(expect.objectContaining({ agentId: engine.id, name: 'fix-login', summary: LINE, question: true }))
+```
+
+  The lines after it stay: the same card id each time, never a second one, never closed, then closed by the next prompt.
+- [ ] **Step 3: `deviceClaudeOrca.e2e.ts`.** In that case, replace the wait for `'the question again'` with the first drawer's row:
+
+```ts
+    // A dial plugged in again holds it as a row of its first drawer, the devices' own questions first: a drawer carries
+    // an open question as a row instead of asking it again (#4445).
+    await desk.unplug('E2E-A')
+    dial = await plugged(desk)
+    const drawer = await dial.next((m) => m.t === 'notif.replace', 45_000, 'the drawer')
+    expect(drawer.items).toContainEqual(expect.objectContaining({ agentId: claude.id, name: 'in-orca', summary: 'printf hi · answer in Orca', question: true }))
+```
+
+  In the file's header, "(every answer to it refused, and asked again of a dial plugged in again)" becomes "(every answer to it refused, and a row of the drawer of a dial plugged in again)". The rest of the case stays: the session's Stop still closes the question by its id, since the devices ask it again as the dial attaches and the new session's inbox holds it.
+- Neither case asserts that no second `question` frame comes. There is no barrier after the drawer to wait on, and the devices' ask as a dial attaches can land after the greeting's drawer, find an entry nobody told and ring it once, at the base as after this plan.
+- [ ] **Step 4: Run** Step 1's command. Expected: 2 passed (`npm run typecheck` does not read `e2e/`; vitest compiles both files).
+- [ ] **Step 5: Commit** `test(dial): end to end, an open question comes back as a drawer row (#4445)`.
+
 ---
 
 ## The pull request's body
 
 - **Platforms:** the daemon on macOS, Linux and Windows (one code path; unit tests on Linux in PR CI, and on this Mac). The round dial: firmware built and host-tested, not flashed in this pull request. The Harness Pro: no firmware change; the daemon sends it what it sent before, and a refused question as its summary.
-- **Evidence:** each task's red commit and code commit; the receipts of Verification checks 1 to 4; `HABITAT_PREVIEW_DIR`'s `unanswerable.ppm` as a picture.
+- **Fixes the end-to-end reds from #4445 (deviceNotify, deviceClaudeOrca).** Test-only (Task 10): each case now reads the open question as a row of the drawer, which #4445 sends in place of a second `question` frame.
+- **Evidence:** each task's red commit and code commit; Task 10's two cases red at the base and green after it; the receipts of Verification checks 1 to 4; `HABITAT_PREVIEW_DIR`'s `unanswerable.ppm` as a picture.
 - **Says plainly:** an older round dial is never sent a told question again, so its row for a ninth or later question is missing until its next greeting. End to end on a real dial is harness-pm's, after its flash.
 
 ## Verification
@@ -782,8 +843,8 @@ So this task changes the reader only. No frame of the daemon changes.
 **4. The real daemon and a fake dial: nothing else moved** (this Mac, the final head)
 - The four end-to-end files that read a dial's `question` frames or drawer. Isolation is the suite's own (`cli/e2e/harness/daemon.ts`, cli/AGENTS.md rules 5 and 6): a throwaway home and data folder, a private port and tmux server, fake engines, a fake dial on a pseudo-terminal that says no `questionTier`.
 - Run: `cd cli && env -u TMUX -u TMUX_PANE TMPDIR=/tmp npx vitest run --config vitest.e2e.config.ts e2e/deviceNotify.e2e.ts e2e/deviceClaudeOrca.e2e.ts e2e/deviceCompat.e2e.ts e2e/fleet.e2e.ts`. About six minutes.
-- A person sees: every test passes but the two that fail at the base (`deviceNotify` "an outside Claude Code session's notice is its own card ...": `heard no the card sent again with the list`; `deviceClaudeOrca` "the dial shows the agent waiting ...": `heard no the question again`). If open question 2 is answered "fix here", all pass.
-- On GitHub, by hand: Actions → CLI end to end → Run workflow on `fix/dial-drawer-limits` (`.github/workflows/cli-e2e.yml`, the whole suite in eight shards). Not started for this change unless the orchestrator asks: these four files are every one that reads a dial's questions, and the suite carries the two reds above.
+- A person sees: every test passes, none skipped, the two that failed at the base included (`deviceNotify` "an outside Claude Code session's notice is its own card ..." and `deviceClaudeOrca` "the dial shows the agent waiting ...", fixed by Task 10).
+- On GitHub, by hand: Actions → CLI end to end → Run workflow on `fix/dial-drawer-limits` (`.github/workflows/cli-e2e.yml`, the whole suite in eight shards). Not started for this change unless the orchestrator asks: these four files are every one that reads a dial's questions.
 
 **5. On a real dial (needs harness-pm itself: its flash, its dial, its eye; after this plan, not by any agent of it)**
 - After harness-pm flashes check 1's image, macOS first: 10 open questions, the window's list changed twice, one beep per question; a 10 kB plan question shows as a row and opens to its words with `[ on desktop ]`.
@@ -803,8 +864,3 @@ Not built in this branch.
 - Send every `question` frame in the inbox's own shape instead of as it came. An answerable question whose raw frame passes the cap because of fields the inbox drops is still dropped by `send` today, and only its drawer row reaches the dial.
 - An end-to-end case with a fake dial that says `questionTier: 'v1'` and nine questions.
 - A permanent `dial-firmware-build` check in PR CI.
-
-## Open questions
-
-1. **Both rows of one agent in one drawer.** Task 9 fixes the dial's reader, as asked. But nothing sends both today (Task 9, "What is known"), and even with the reader fixed, `ui_notif_replace` drops the news when the question row comes first, which is the daemon's drawer order. Is the reader alone what this pull request should carry? Or should the daemon's drawer also carry an agent's news beside its question (a `replaceNotifications` change, a share of the eight rows), with `ui_notif_replace` keeping both in either order (its `notice_add` is `fix/dial-inbox-count`'s)?
-2. **Two end-to-end cases are red at the base since #4445** (`e2e/deviceNotify.e2e.ts` and `e2e/deviceClaudeOrca.e2e.ts`, measured 2026-11-18, 2 failed of 12). Each waits for a second `question` frame where the dial is now given a drawer row. Fix them here (one more task: assert the drawer's question row instead), or in a pull request of their own?
