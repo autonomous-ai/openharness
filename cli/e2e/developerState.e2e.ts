@@ -12,7 +12,8 @@
  * Every path and value here is made up, in a folder of this test. `vi.stubEnv` puts them in this worker's environment
  * as a developer's shell would, and takes them out again: no real value of these variables is read or printed.
  */
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative } from 'node:path'
@@ -23,6 +24,7 @@ import { CodexOutside } from './harness/codexOutside.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { Store } from '../src/lib/connectors/store.js'
 import { placeNode } from '../src/testing/placeNode.js'
+import { SYSTEM_FOLDERS } from '../src/testing/testPath.js'
 
 /** A connections folder with one connection saved, as Connections leaves it. */
 function saved(root: string, code: string): void {
@@ -77,11 +79,14 @@ async function typed(d: IsolatedDaemon, pane: string, line: string, file: string
 describe('a daemon under test knows nothing of the developer\'s own state', () => {
   let scratch = ''
   let daemon: IsolatedDaemon | undefined
+  let holder: ChildProcess | undefined
   const failed = (d: IsolatedDaemon) => onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-120).join('\n')}`) })
 
   beforeEach(() => { scratch = mkdtempSync(join(tmpdir(), 'developer-state-')) })
   afterEach(async () => {
     vi.unstubAllEnvs()
+    holder?.kill('SIGKILL')
+    holder = undefined
     await daemon?.close()
     daemon = undefined
     rmSync(scratch, { recursive: true, force: true })
@@ -313,6 +318,42 @@ describe('a daemon under test knows nothing of the developer\'s own state', () =
       await expect(d.start()).rejects.toThrow('E2E_NODE_PATH is not set: run the end-to-end tests through vitest.e2e.config.ts')
     }
     expect([d.pid, d.log()]).toEqual([null, ''])
+  })
+
+  // The devices' open scan reads every `codex` on the computer (sessionSearch/externals/support.ts), and the dial skill is
+  // written into each Codex home whose rollout one holds (devices/dialHomeSetup.ts). Only deviceDialSkill.e2e.ts hid
+  // the computer's from its daemon: every other daemon with a dial attached wrote the skill into that test's homes, and
+  // into the developer's real ones. Windows has no lsof.
+  it.skipIf(process.platform === 'win32')('sees no Codex of the developer\'s: its open scan shows only files under its own root', async () => {
+    // The developer's Codex: a process named `codex` (a copy of Node: macOS's `lsof -c` reads the file the kernel ran,
+    // Linux's the title) holding a rollout open in a home outside the root.
+    const rollout = join(realpathSync(scratch), 'codex-home', 'sessions', '2026', '11', '16', `rollout-2026-11-16T00-00-00-${randomUUID()}.jsonl`)
+    mkdirSync(dirname(rollout), { recursive: true })
+    writeFileSync(rollout, '')
+    const codex = join(scratch, 'holder', 'codex')
+    mkdirSync(dirname(codex))
+    placeNode(codex)
+    const script = `if (process.platform === 'linux') process.title = 'codex'
+require('node:fs').openSync(process.argv[1], 'r')
+process.stdout.write('held\\n')
+process.stdin.resume()`
+    const child = holder = spawn(codex, ['-e', script, rollout], { stdio: ['pipe', 'pipe', 'ignore'] })
+    await new Promise<void>((resolve, reject) => {
+      child.stdout!.once('data', () => resolve())
+      child.once('exit', (code) => reject(new Error(`the holder exited (${code})`)))
+    })
+    const d = daemon = await IsolatedDaemon.create()
+    // Its exit status is not read: lsof exits 1 when a name it was asked for has no process, as `Codex` here.
+    const names = (lsof: string, env: NodeJS.ProcessEnv): string[] =>
+      spawnSync(lsof, ['-n', '-P', '-Fpn', '-c', 'codex', '-c', 'Codex'], { env, encoding: 'utf8' }).stdout.split('\n')
+        .filter((line) => line.startsWith('n')).map((line) => line.slice(1))
+    const system = SYSTEM_FOLDERS.map((folder) => join(folder, 'lsof')).find((file) => existsSync(file))
+    expect(system, 'the system\'s lsof').toBeDefined()
+    // The computer's lsof sees it, or the check below proves nothing.
+    expect(names(system!, process.env).includes(rollout), 'the system\'s lsof shows the rollout held').toBe(true)
+    // Asked as the scan asks, by name on the daemon's PATH. Counted, never printed: the names are the developer's.
+    expect(names('lsof', d.env).filter((name) => !name.startsWith(`${d.root}/`)).length, 'files outside the root').toBe(0)
+    expect(execFileSync('/bin/sh', ['-c', 'command -v lsof'], { env: d.env }).toString().trim()).toBe(join(d.root, 'bin', 'lsof'))
   })
 
   // A shell script: Windows has no `open` to stand in for.
