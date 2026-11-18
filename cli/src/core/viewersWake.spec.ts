@@ -133,16 +133,4 @@ describe('the viewers\' process as the core starts', () => {
     wakeViewers({ wake: { ask }, agents: () => [{ dsh: null }], dataDir: data() })
     expect(ask).not.toHaveBeenCalled()
   })
-
-  it('asks for the Store when harnesses wait to be set up again after the move, which the home bridge waits for', () => {
-    const ask = vi.fn()
-    const blender = record({ id: 'acme/blender', source: 'https://example.com/acme/blender' })
-    wakeViewers({ wake: { ask }, agents: () => [], dataDir: data(), bundled: state([{ ...blender, setup: 'pending' }], { revisions: {} }) })
-    expect(ask.mock.calls).toEqual([['store', 'harnesses to set up again']])
-    ask.mockClear()
-    // One whose setup failed waits for an update, and a linked checkout the move left where it was for nothing.
-    const done = [{ ...blender, setup: 'needs-setup' as const }, { ...blender, id: 'acme/maya', setup: 'pending' as const, linked: true }]
-    wakeViewers({ wake: { ask }, agents: () => [], dataDir: data(), bundled: state(done, { revisions: {} }) })
-    expect(ask).not.toHaveBeenCalled()
-  })
 })

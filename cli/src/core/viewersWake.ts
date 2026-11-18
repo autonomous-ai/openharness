@@ -11,16 +11,15 @@
  * - **what it does on its own as it starts**, asked for as the core starts when there is something to do. The Store
  *   puts in place the harnesses the release bundles (dsh/builtins.ts: the Model Manager, Devices, the Harness Monitor,
  *   Memories, and Hachi while its switch is on) when the installed index does not have this build's. That cannot wait for a request: the core checks a
- *   create against the index before it asks the Store, and memory and models run those packages' own files. After
- *   Harness's folder moved, the Store sets each harness up again (dsh/setupAgain.ts) when the index marks one pending:
- *   the home bridge waits for that before it goes, and asks the Store nothing. And the viewers stop the viewer servers
- *   an earlier process of theirs left running (dsh/viewerLedger.ts), when its ledger names any.
+ *   create against the index before it asks the Store, and memory and models run those packages' own files. And the
+ *   viewers stop the viewer servers an earlier process of theirs left running (dsh/viewerLedger.ts), when its ledger
+ *   names any.
  *
  * Nothing else in it runs on a timer: the Store's catalog is fetched when it is listed, and the viewers' watches and
  * restarts are each harness's. Once asked for, it is the master's to keep running, as every service is.
  */
 import { BUNDLED_HARNESSES, bundledRevisions, HACHI_ID } from '../dsh/builtinIds.js'
-import { isBrokenDsh, readInstalledIndex, resolveInstalled, setupsPending, type InstalledDshRecord } from '../dsh/installed.js'
+import { isBrokenDsh, readInstalledIndex, resolveInstalled, type InstalledDshRecord } from '../dsh/installed.js'
 import { readAgentSettings } from '../lib/agentSettings.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { savedRows } from './devicesWake.js'
@@ -113,7 +112,6 @@ export function wakeViewers(deps: {
 }): void {
   if (deps.agents().some((agent) => !!agent.dsh)) deps.wake.ask('viewers', 'a harness here')
   else if (savedRows(deps.dataDir, VIEWER_LEDGER, deps.read).length) deps.wake.ask('viewers', 'viewer servers an earlier process left running')
-  const state: BundledState = { ...BUNDLED, hachi: readAgentSettings(deps.dataDir).hachi, ...deps.bundled }
-  const pending = bundledPending(state) ?? (setupsPending(state.index()) ? 'harnesses to set up again' : null)
+  const pending = bundledPending({ hachi: readAgentSettings(deps.dataDir).hachi, ...deps.bundled })
   if (pending) deps.wake.ask('store', pending)
 }

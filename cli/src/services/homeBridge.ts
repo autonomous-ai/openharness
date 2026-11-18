@@ -3,8 +3,9 @@
  * moved to the XDG folders, ~/.harness is a bridge for what started before the move (homeMove/bridge.ts). This service
  * keeps in it what a link cannot give, and removes it once no process that could use an old path is left and every
  * harness's setup has run again. It runs only while bridge.json exists: a check each time the core connects and every 10
- * minutes on one timer, and nothing once the bridge is gone. It reads a process's owner, start time, name, executable and parent (homeMove/oldUsers.ts),
- * never its environment or command line, and tmux's panes read only. The apps ask it nothing.
+ * minutes on one timer, and nothing once the bridge is gone. It reads a process's owner, start time, name, executable and
+ * parent (homeMove/oldUsers.ts), never its environment or command line, and tmux's panes read only. While a harness waits
+ * to be set up again, it wakes the Store, as a tool of this computer's owner would. The apps ask it nothing.
  */
 import { spawnSync } from 'node:child_process'
 import { existsSync, rmSync } from 'node:fs'
@@ -12,6 +13,7 @@ import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { env } from '../config/env.js'
 import { harnessRoot, harnessRoots, legacyHarnessHome } from '../config/harnessHome.js'
+import { openDaemon, whereFor, type Daemon } from '../agentClient/daemon.js'
 import type { CoreApi, ServiceRequests } from '../core/api.js'
 import { BRIDGE_FILE, readBridge, removeBridge, serveOldPaths, type Served } from '../homeMove/bridge.js'
 import { oldUsers, procRows, type ProcRow } from '../homeMove/oldUsers.js'
@@ -43,6 +45,8 @@ export interface HomeBridgeDeps {
   tmux(): { status: number | null; stdout: string }
   /** The harnesses whose setup has yet to run again after the move. */
   setupsPending(): Promise<number>
+  /** Wakes the Store's process, which sets them up again as it starts. */
+  askForStore(): Promise<void>
   log(line: string): void
 }
 
@@ -53,25 +57,44 @@ function listPanes(): { status: number | null; stdout: string } {
   return spawnSync('tmux', ['list-panes', '-a', '-F', `#{pane_pid} #{${HARNESS_OWNER_OPTION}}`], { encoding: 'utf8', timeout: TMUX_LIMIT_MS })
 }
 
-/** Loaded at the check that asks: the Store's index module brings zod, which the edge host otherwise never loads (leanEntry.spec.ts). */
+/** Loaded at the first check, which only a bridge brings: the Store's index module brings zod, which the edge host otherwise
+ *  never loads (leanEntry.spec.ts). */
 async function pendingSetups(): Promise<number> {
   return (await import('../dsh/installed.js')).setupsPending()
 }
 
+/**
+ * The Store sets each harness up again as its process starts (dsh/setupAgain.ts), and in the master its process starts at
+ * a request (core/viewersWake.ts). Asked as a tool of this computer's owner asks (agentClient/daemon.ts), with the lightest
+ * request the Store answers: an update naming no harness, which it refuses at once, with no catalog fetched and nothing
+ * changed (services/store.ts).
+ */
+export async function askForStore(open: () => Promise<Daemon> = () => openDaemon(whereFor(undefined))): Promise<void> {
+  const daemon = await open()
+  try {
+    await daemon.request('dsh_update', {})
+  } finally {
+    daemon.close()
+  }
+}
+
 const said = (error: unknown): string => (error instanceof Error ? error.message : String(error))
 
-/** In the core's process (no master, or `HARNESSD_SERVICES=none`): the same service, which the apps ask nothing. The core is
- *  there from its start, so it checks at once; it lives as long as the core's process, where no link to the core comes and
- *  goes. [given] is the tests'. */
+/**
+ * In the core's process (no master, or `HARNESSD_SERVICES=none`): the same service, which the apps ask nothing. The core is
+ * there from its start, so it checks at once, and so is the Store, which it never wakes: in this process, or named outright
+ * and started with the master's others (harnessd/services.ts). It lives as long as the core's process, where no link to
+ * the core comes and goes. [given] is the tests'.
+ */
 export function startHomeBridgeInCore(core: CoreApi, given: Partial<HomeBridgeDeps> = {}): ServiceRequests {
-  startHomeBridge(core, given).connected()
+  startHomeBridge(core, { askForStore: async () => {}, ...given }).connected()
   return {}
 }
 
 export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = {}): { stop(): void; connected(): void } {
   const deps: HomeBridgeDeps = {
     platform: process.platform, home: homedir(), environment: process.env, socket: unixSocketPath(core.dataDir, env.PORT),
-    rows: procRows, tmux: listPanes, setupsPending: pendingSetups, log: console.log, ...given,
+    rows: procRows, tmux: listPanes, setupsPending: pendingSetups, askForStore, log: console.log, ...given,
   }
   // Nothing moves off Linux, and with no bridge.json there is no bridge to keep.
   if (deps.platform !== 'linux') return IDLE
@@ -127,9 +150,12 @@ export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = 
       if (again) return
       const count = oldUsers(bridge, deps.rows(), { uid: process.getuid!(), self: process.pid, roots, engines: ENGINES, apps: APPS, panePids: panePids() })
       note('bridged', count)
-      // A harness set up before the move runs from the old paths until its setup has run again. One whose setup failed is
-      // marked needs-setup, and holds nothing.
-      if (count > 0 || await deps.setupsPending() > 0) return
+      // A harness set up before the move runs from the old paths until its setup has run again, which the Store does as it
+      // starts: woken now, while old users run too, so the setups do not wait for them. One whose setup failed is marked
+      // needs-setup, and holds nothing.
+      const pending = await deps.setupsPending()
+      if (pending > 0) await deps.askForStore()
+      if (count > 0 || pending > 0) return
       const outcome = removeBridge(bridge, stateRoot)
       // The record before bridge.json: a crash between the two leaves a bridge.json, and the next start finishes.
       note('moved', 0)
