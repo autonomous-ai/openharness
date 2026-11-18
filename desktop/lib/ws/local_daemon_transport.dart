@@ -47,10 +47,14 @@ String? defaultDaemonSocketPath(
   HomeLook? look,
 }) {
   if (isWindows ?? Platform.isWindows) return null;
+  // One answer per folder for both folders, so they never come from two
+  // layouts while Harness's folder moves.
+  final rule = (look ?? platformHomeLook(environment: environment))
+      .remembered();
   final dataDir = defaultDaemonDataDir(
     environment: environment,
     isWindows: isWindows,
-    look: look,
+    look: rule,
   );
   if (dataDir == null) return null;
   final path = '$dataDir/${daemonSocketName(port)}';
@@ -65,7 +69,7 @@ String? defaultDaemonSocketPath(
   final sockets = HarnessHome.of(
     home,
     join: separatorJoin('/'),
-    look: look ?? platformHomeLook(environment: environment),
+    look: rule,
   ).path(HarnessEntry.s);
   final short = '$sockets/$hex/${daemonSocketName(port)}';
   return utf8.encode(short).length <= _maxSocketPathBytes ? short : null;
@@ -103,7 +107,7 @@ HttpClient unixHttpClient(String path) => HttpClient()
 /// discovery, REST and the local WebSocket so they agree.
 class LocalDaemonTransport {
   LocalDaemonTransport({
-    this.candidate,
+    this._candidate,
     this.trustedPipe,
     this.recordedPort,
     this.credential,
@@ -114,7 +118,9 @@ class LocalDaemonTransport {
   /// for all local routes, and the credential for non-Windows loopback TCP. Under `flutter
   /// test`, no real daemon transport or credential is reached.
   factory LocalDaemonTransport.detect(Uri daemonBase) => LocalDaemonTransport(
-    candidate: kUnderTest ? null : defaultDaemonSocketPath(daemonBase.port),
+    candidate: kUnderTest
+        ? null
+        : () => defaultDaemonSocketPath(daemonBase.port),
     trustedPipe: kUnderTest || !Platform.isWindows
         ? null
         : TrustedPipe.forPort(daemonBase.port),
@@ -129,8 +135,11 @@ class LocalDaemonTransport {
     credential: kUnderTest ? null : readDaemonCredential,
   );
 
-  /// Where the socket would be, or null when this app never uses one.
-  final String? candidate;
+  final String? Function()? _candidate;
+
+  /// Where the socket would be, or null when this app never uses one. Found
+  /// again at each use: Harness's folder may move while the app runs.
+  String? get candidate => _candidate?.call();
 
   /// Windows: the daemon's authenticated pipe (CLI `listenAuthenticated`),
   /// which carries all local REST and WebSocket traffic. The window connection

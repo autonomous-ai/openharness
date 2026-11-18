@@ -71,6 +71,17 @@ final class HomeLook {
   final bool linux;
   final Map<String, String> environment;
   final bool Function(String path) exists;
+
+  /// This look, each folder answered as it first was: roots found through it
+  /// twice come from one layout even while Harness's folder moves.
+  HomeLook remembered() {
+    final seen = <String, bool>{};
+    return HomeLook(
+      linux: linux,
+      environment: environment,
+      exists: (path) => seen[path] ??= exists(path),
+    );
+  }
 }
 
 /// Harness's roots and the paths of its entries.
