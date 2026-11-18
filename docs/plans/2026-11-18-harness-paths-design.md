@@ -220,7 +220,23 @@ standalone `.mjs` have no shared module, and the store agents are packages shipp
   `prepareShortFolder` in `cli/src/lib/localSocket.ts`, `cli/src/harnessd/platform.ts`'s fallback, `tui/src/daemon.rs`'s
   `".harness/cli/data"`.
 - CLI joins onto `dirname(ADAPTER_CLI_DIR)` or a `rootDir`: `cli/src/lib/windows/*`, `lib/platformDaemon.ts`,
-  `masterProcess.ts`, `services/updaterProcess.ts`, `lib/launchers.ts`. `LEGACY_SCRIPT` stays: it names what old installs wrote.
+  `masterProcess.ts` (`windowsMaster`'s `dirname(deps.cliDir)`), `services/updaterProcess.ts`, `lib/launchers.ts`.
+  `LEGACY_SCRIPT` stays: it names what old installs wrote.
+
+What assumes one root, and changes when the roots split:
+
+- `cli/src/lib/uninstall/removal.ts`: `checkRoot` refuses any root not named `.harness` (`HARNESS_HOME_NAME`), so an
+  XDG root makes `harness uninstall` refuse before it removes anything.
+- Uninstall on Windows with two roots: each root gets its own cleanup script (`finalRemovalScript`), and each removes
+  the marker from its own root. The marker is a state entry, so the state root's script can remove it while the data
+  root's still deletes files: the marker no longer goes last.
+- `harness uninstall --keep-data` says, for each root, that it keeps the sign-in, identity, history and settings there
+  (`lib/uninstall/command.ts` `whatItDoes`): a state root holds none of them and needs its own line.
+- Desktop's `HarnessHome.at(root)` takes a folder the caller already holds as both roots, so `runtime` (a state entry)
+  resolves under the held data root in `desktop/lib/core/harness_cli_runner.dart` (`_managedHome`),
+  `desktop/lib/core/windows_layout.dart` (`managedWindowsCli`, `installedTerminalHost`) and
+  `desktop/lib/bootstrap/environment_provisioner.dart` (`_hasHarness`). These holders keep a `HarnessHome` (both roots)
+  instead of one `Directory`.
 
 ## Design section (feature-design-rules)
 
