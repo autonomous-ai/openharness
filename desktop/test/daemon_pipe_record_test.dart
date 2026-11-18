@@ -3,7 +3,9 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/harness_home.dart';
 import 'package:harness/ws/daemon_pipe_record.dart';
+import 'package:path/path.dart' as p;
 
 const _id = '0123456789abcdef0123456789abcdef';
 const _pipe = r'\\.\pipe\harness-' + _id;
@@ -29,19 +31,24 @@ void main() {
     test(
       'is the CLI data folder in the profile on Windows, and in HOME elsewhere',
       () {
+        // The CLI folder of each home by this computer's rule.
+        String cliData(String home, p.Context context) => context.join(
+          HarnessHome.of(home, join: context.join).path(HarnessEntry.cli),
+          'data',
+        );
         expect(
           defaultDaemonDataDir(
             environment: {'USERPROFILE': r'C:\Users\Nguyễn Văn A'},
             isWindows: true,
           ),
-          r'C:\Users\Nguyễn Văn A\.harness\cli\data',
+          cliData(r'C:\Users\Nguyễn Văn A', p.windows),
         );
         expect(
           defaultDaemonDataDir(
             environment: {'HOME': '/Users/me'},
             isWindows: false,
           ),
-          '/Users/me/.harness/cli/data',
+          cliData('/Users/me', p.posix),
         );
       },
     );

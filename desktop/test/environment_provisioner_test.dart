@@ -138,7 +138,13 @@ void main() {
 
   test('with no harnessHome it is .harness under the user home', () {
     expect(
-      EnvironmentProvisioner().harnessHome.path,
+      EnvironmentProvisioner(
+        look: HomeLook(
+          linux: false,
+          environment: const {},
+          exists: (path) => throw StateError('looked at $path off Linux'),
+        ),
+      ).harnessHome.path,
       '${EnvironmentProvisioner.userHome()}${Platform.pathSeparator}.harness',
     );
   });

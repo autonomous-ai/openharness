@@ -9,6 +9,7 @@ import 'package:harness/core/config.dart';
 import 'package:harness/core/home_dir.dart';
 import 'package:harness/e2ee/envelope.dart';
 import 'package:harness/core/first_task.dart';
+import 'package:harness/core/harness_home.dart';
 import 'package:harness/state/agent_handoff_file.dart';
 import 'package:harness/state/agent_switch_handoff.dart';
 import 'package:harness/ws/ws_conn.dart'
@@ -1748,17 +1749,24 @@ void main() {
       expect(claudeReads(), 12);
     });
 
+    // The listed home's profiles folder by this computer's rule, as Desktop
+    // finds it: the layout is not what these tests are about.
+    final profiles = HarnessHome.of(
+      '/home/me',
+      join: separatorJoin('/'),
+    ).path(HarnessEntry.claudeProfiles);
+
     test('Add Claude account… skips folders that are listed or used by an agent, and a double click adds one', () async {
       final connection = ProfileConnection();
       connection.claudeRows.add({
         'id': '39f7292d285c38ed',
-        'path': '/home/me/.harness/claude-profiles/1',
+        'path': '$profiles/1',
         'label': 'One',
       });
       final app = fixture(
         connection,
         sourceEngine: 'codex',
-        claudeHome: '/home/me/.harness/claude-profiles/2',
+        claudeHome: '$profiles/2',
       );
       app.stateOf('m')!.localOnly = true;
       addTearDown(app.dispose);
@@ -1770,7 +1778,7 @@ void main() {
       expect(connection.creations, hasLength(1));
       expect(
         connection.creations.single,
-        containsPair('claudeHome', '/home/me/.harness/claude-profiles/3'),
+        containsPair('claudeHome', '$profiles/3'),
       );
       // Settled: the next one may go.
       expect(await app.addClaudeAccount('m', 'a0'), isNull);
@@ -1791,7 +1799,7 @@ void main() {
         expect(connection.creations.single, containsPair('engine', 'claude'));
         expect(
           connection.creations.single,
-          containsPair('claudeHome', '/home/me/.harness/claude-profiles/1'),
+          containsPair('claudeHome', '$profiles/1'),
         );
         expect(notice, 'Run /login, then pick it again');
       },

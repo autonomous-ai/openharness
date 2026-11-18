@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/bootstrap/windows_git_setup.dart';
+import 'package:harness/core/harness_home.dart';
+import 'package:path/path.dart' as p;
 
 void main() {
   late Directory home;
@@ -78,7 +80,7 @@ void main() {
     expect(logs.single, contains('winget exited 7'));
   });
 
-  test('marks its one try under the profile\'s .harness/run', () async {
+  test('marks its one try in Harness\'s run folder under the profile', () async {
     final asked = <String>[];
     // Answering yes for the marker stops start() before it creates the file,
     // so a wrong path is only recorded, never written.
@@ -94,7 +96,12 @@ void main() {
         return 0;
       },
     ).start();
-    expect(asked.last, r'C:\Users\me\.harness\run\git-install-tried');
+    // The profile's run folder by this computer's rule.
+    final run = HarnessHome.of(
+      r'C:\Users\me',
+      join: p.windows.join,
+    ).path(HarnessEntry.run);
+    expect(asked.last, p.windows.join(run, 'git-install-tried'));
     expect(runs, isEmpty);
   });
 

@@ -26,6 +26,11 @@ void main() {
   test('uses the stable Harness computer id path', () {
     final path = LocalMachineIdentity.defaultComputerIdPath(
       environment: {'HOME': '/Users/tester'},
+      look: HomeLook(
+        linux: false,
+        environment: const {},
+        exists: (path) => throw StateError('looked at $path off Linux'),
+      ),
     );
     expect(path, '/Users/tester/.harness/computer-id');
   }, skip: Platform.isWindows);

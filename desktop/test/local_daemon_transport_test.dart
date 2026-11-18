@@ -11,6 +11,7 @@ import 'package:harness/ws/daemon_pipe_record.dart' show defaultDaemonDataDir;
 import 'package:harness/ws/local_cli_discovery.dart';
 import 'package:harness/ws/local_daemon_transport.dart';
 import 'package:harness/ws/ws_conn.dart';
+import 'package:path/path.dart' as p;
 
 const _computerId = '0123456789abcdef0123456789abcdef';
 
@@ -118,20 +119,28 @@ void main() {
   );
 
   group('defaultDaemonSocketPath', () {
+    // These homes' roots by this computer's rule, as the app finds them.
+    String cliOf(String home, HarnessJoin join) =>
+        HarnessHome.of(home, join: join).path(HarnessEntry.cli);
+    final shortSockets = HarnessHome.of(
+      '/h',
+      join: separatorJoin('/'),
+    ).path(HarnessEntry.s);
+
     test('uses USERPROFILE when a Windows shell also sets HOME', () {
       expect(
         defaultDaemonDataDir(
           environment: {'USERPROFILE': r'C:\Users\me', 'HOME': '/c/Users/me'},
           isWindows: true,
         ),
-        r'C:\Users\me\.harness\cli\data',
+        p.windows.join(cliOf(r'C:\Users\me', p.windows.join), 'data'),
       );
     });
 
     test('is the socket for the daemon\'s port in the CLI data directory', () {
       expect(
         defaultDaemonSocketPath(18473, environment: {'HOME': '/Users/me'}, isWindows: false),
-        '/Users/me/.harness/cli/data/daemon-18473.sock',
+        '${cliOf('/Users/me', p.posix.join)}/data/daemon-18473.sock',
       );
       // Another port, another daemon, another socket.
       expect(
@@ -151,7 +160,9 @@ void main() {
           environment: {'HOME': '/h', 'ADAPTER_DATA_DIR': '/${'x' * 100}'},
           isWindows: false,
         ),
-        matches(RegExp(r'^/h/\.harness/s/[0-9a-f]{16}/daemon-18473\.sock$')),
+        matches(
+          RegExp('^${RegExp.escape(shortSockets)}/[0-9a-f]{16}/daemon-18473\\.sock\$'),
+        ),
       );
       expect(
         defaultDaemonSocketPath(18473, environment: {'HOME': '/${'x' * 100}'}, isWindows: false),
@@ -167,7 +178,7 @@ void main() {
           environment: {'HOME': '/h', 'ADAPTER_DATA_DIR': '/${'x' * 100}'},
           isWindows: false,
         ),
-        '/h/.harness/s/e50e7828cbafcbee/daemon-1.sock',
+        '$shortSockets/e50e7828cbafcbee/daemon-1.sock',
       );
     });
 

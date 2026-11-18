@@ -12,6 +12,8 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   late Directory scratch;
   late Directory dataDirectory;
+  // The tester's Harness home by this computer's rule, as the store finds it.
+  final tester = HarnessHome.of('/Users/tester', join: separatorJoin('/'));
 
   setUp(() async {
     scratch = await Directory.systemTemp.createTemp('desktop-file-store-test-');
@@ -29,7 +31,7 @@ void main() {
       environment: {'HOME': '/Users/tester'},
     );
 
-    expect(path, '/Users/tester/.harness/desktop-app-v2');
+    expect(path, tester.path(HarnessEntry.desktopApp));
   }, skip: Platform.isWindows);
 
   test('names a sibling under Harness home', () {
@@ -38,11 +40,11 @@ void main() {
       entry: entry,
     );
 
-    expect(sibling(HarnessEntry.logs), '/Users/tester/.harness/logs');
-    expect(sibling(HarnessEntry.flasher), '/Users/tester/.harness/flasher');
+    expect(sibling(HarnessEntry.logs), tester.path(HarnessEntry.logs));
+    expect(sibling(HarnessEntry.flasher), tester.path(HarnessEntry.flasher));
     expect(
       sibling(HarnessEntry.uninstalling),
-      '/Users/tester/.harness/uninstalling',
+      tester.path(HarnessEntry.uninstalling),
     );
   }, skip: Platform.isWindows);
 
