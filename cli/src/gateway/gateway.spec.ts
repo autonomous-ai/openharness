@@ -14,7 +14,7 @@ import type { Asker } from '../core/api.js'
 import * as C from '../lib/e2ee/core.js'
 import { deriveTerminalBinaryKey, sealTerminalBinary } from '../lib/e2ee/terminalSeal.js'
 import { encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } from '../lib/terminalBinary.js'
-import { bindMessageRequest } from '../testing/socketCore.js'
+import { bindCancelRequest, bindMessageRequest } from '../testing/socketCore.js'
 import { dispatchDown, gatewayOf, relaySocket, upstreamOf } from '../testing/relaySocket.js'
 import type { DeviceLogTrustOutcome } from '../lib/e2ee/deviceLogSyncer.js'
 import { unknownHelloReader } from './start.js'
@@ -140,6 +140,25 @@ describe('a remote client, as the core hears it', () => {
       { type: 'guest_folders', asker: expect.objectContaining({ local: false, owner: false, accountOwner: false, connection: 'colleague', requestId: 'u' }) },
     ])
     await socket.stop()
+  })
+
+  it('seals a confirmed cancel to its exact requester and keeps legacy no-id cancellation one-way', async () => {
+    const socket = relaySocket(MACHINE), window: Frame[] = []
+    socket.registerLocalClient('local:cancel-window', { sendFrame: frame => { window.push(frame); return true }, sendBinary: () => true })
+    const phone = await pairedClient(socket, 'cancel-phone'), other = await pairedClient(socket, 'other-phone')
+    const cancel = vi.fn(async () => true); bindCancelRequest(socket, cancel)
+    await dispatchDown(socket, phone.seal('cancel', { agentId: 'a', requestId: 'cancel-1' }), 'cancel-phone')
+    const replies = queuedFor(socket, 'cancel-phone').filter(frame => frame.type === 'cancel_result')
+    expect(replies).toHaveLength(1)
+    expect(replies[0].payload).toHaveProperty('__e2e')
+    expect(phone.open(replies[0])).toEqual({ requestId: 'cancel-1', ok: true })
+    expect(other.open(replies[0])).toBeNull()
+    expect(queuedFor(socket, 'other-phone').filter(frame => frame.type === 'cancel_result')).toEqual([])
+    expect(window.filter(frame => frame.type === 'cancel_result')).toEqual([])
+    await dispatchDown(socket, phone.seal('cancel', { sessionId: 's' }), 'cancel-phone')
+    expect(cancel.mock.calls).toEqual([['a', true, expect.any(Function)], ['s']])
+    expect(queuedFor(socket, 'cancel-phone').filter(frame => frame.type === 'cancel_result')).toHaveLength(1)
+    await socket.unregisterLocalClient('local:cancel-window'); await socket.stop()
   })
 
   it('gets its reply sealed to it alone: no other client and no window hears it', async () => {

@@ -898,7 +898,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const wifi = wifiDoors({
     registry,
     socket: () => backendRef ?? null,
-    stop: (agentId) => cancelAgent(agentId, true), devices: () => ports.devices,
+    devices: () => ports.devices,
   })
   // The cloud agents' doors (core/agents/cloud.ts), handed to the core API now and built once the questions and
   // the socket are, below; the cloud service starts after both.
@@ -2818,7 +2818,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     tell: turnBeats.tell,
   })
   backend.onCancel = id => { void cancelAgent(id) }
-  backend.cancelProvider = createCancelRequest((id) => { void cancelAgent(id) })
+  backend.cancelProvider = createCancelRequest(cancelAgent)
 
   /**
    * Web requested a new agent (`agent_create`): spawn a fresh tmux session running the chosen engine in

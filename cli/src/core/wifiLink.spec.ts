@@ -44,7 +44,7 @@ describe('the Wi-Fi device in the devices\' process, as the core sees it', () =>
     expect(core.turns.recent).toHaveBeenLastCalledWith('a', 1)
     await wifi.answer('recent', { agentId: 7 })
     expect(core.turns.recent).toHaveBeenLastCalledWith('', 3)
-    expect(await wifi.answer('stop', { agentId: 'a' })).toEqual({ ok: true })
+    expect(await wifi.answer('stop', { agentId: 'a' })).toEqual({ error: 'UNKNOWN_QUERY' })
     expect(await wifi.answer('answer', {})).toEqual({ error: 'UNKNOWN_QUERY' })
     expect(await wifi.answer('create', { packageId: 'p', engine: 'claude', cwd: '/w' })).toEqual({ ok: false, error: 'UNSUPPORTED' })
     expect(await wifi.answer('stepFocus', { direction: 'previous', currentAgentId: 'a' })).toEqual({ step: 'no_agents' })

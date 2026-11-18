@@ -175,7 +175,7 @@ export class BackendSocket {
   /** Cancels an agent's turn, for the orchestrator (cli.ts binds core/turns/cancel.ts). */
   onCancel: ((sessionId: string) => void) | null = null
   /** Takes a `cancel` frame, a turn interrupted with C-c (cli.ts binds core/turns/cancel.ts). */
-  cancelProvider: ((payload: Record<string, unknown>) => void) | null = null
+  cancelProvider: ((payload: Record<string, unknown>, reply: (result: Record<string, unknown>) => void, current: () => boolean) => void | Promise<void>) | null = null
   /** Answers `agent_delete`, Stop Harness: the validated engine process signalled and the session
    *  forgotten, its recap and name kept (cli.ts binds core/agents/lifecycle.ts). Null answers UNSUPPORTED. */
   stopProvider: ((payload: Record<string, unknown>) => Promise<Record<string, unknown>>) | null = null
@@ -1544,7 +1544,18 @@ export class BackendSocket {
           return
 
         // A person interrupting an agent's turn (core/turns/cancel.ts, bound by cli.ts).
-        case 'cancel': this.cancelProvider?.(payload); return
+        case 'cancel': {
+          if (requestId === undefined) { this.cancelProvider?.(payload, answer, () => true); return }
+          const registration = local ? this.localClients.get(connId) : this.remoteClients.get(connId)
+          if (!owner || !registration) { answer({ error: 'OWNER_REQUIRED' }); return }
+          const machineId = this.machineId
+          const current = (): boolean => this.machineId === machineId && (local
+            ? this.localClients.get(connId) === registration : this.remoteClients.get(connId) === registration)
+          const confirmed = (result: Record<string, unknown>): void => { if (current()) answer(result) }
+          if (this.cancelProvider) await this.cancelProvider(payload, confirmed, current)
+          else confirmed({ error: 'UNSUPPORTED' })
+          return
+        }
 
         // A person's answer to an agent's question, keyed into its dialog (core/questions.ts, bound by cli.ts).
         case 'question_response':

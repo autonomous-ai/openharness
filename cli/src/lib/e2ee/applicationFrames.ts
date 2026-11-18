@@ -122,7 +122,7 @@ const SEALED_REPLIES = new Set([
   // move onto a model, and a terminal handed between machines (refused over the relay).
   'dsh_list_result', 'dsh_install_result', 'dsh_update_result', 'dsh_remove_result',
   'engines_probe_result', 'grid_models_list_result', 'claude_login_status_result', 'agent_retarget_result',
-  'remote_terminal_handoff_result',
+  'remote_terminal_handoff_result', 'cancel_result',
 ])
 export const encryptRpcResult = (type: string): boolean =>
   ENCRYPTED_RPC_RESULT_TYPES.has(type) || MACHINE_RESULTS.has(type) || FLEET_RESULTS.has(type) || SHARE_RESULT_TYPES.has(type)

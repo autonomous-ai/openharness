@@ -1641,6 +1641,29 @@ describe('optional lamp delivery preserves legacy behavior', () => {
   })
 
   describe('cancel ownership', () => {
+    it('refuses already-revoked cancellation before reading or holding an input owner', async () => {
+      const getSession = vi.fn(() => session()), validateRuntime = vi.fn(async () => true), sendKey = vi.fn(async () => true)
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+        getSession, validateRuntime, inject: async () => true, sendKey, onError: vi.fn() })
+      expect(await controller.cancelConfirmed('s1', () => false)).toBe(false)
+      expect(getSession).not.toHaveBeenCalled(); expect(validateRuntime).not.toHaveBeenCalled(); expect(sendKey).not.toHaveBeenCalled()
+      controller.forget('s1')
+    })
+
+    it('revokes a confirmed caller during runtime validation before pressing its key', async () => {
+      vi.useFakeTimers()
+      let active = true, checked!: (ok: boolean) => void
+      const sendKey = vi.fn(async () => true)
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+        getSession: () => session(), validateRuntime: () => new Promise(resolve => { checked = resolve }),
+        inject: async () => true, sendKey, onError: vi.fn() })
+      const pending = controller.cancelConfirmed('s1', () => active)
+      active = false; checked(true)
+      expect(await pending).toBe(false)
+      expect(sendKey).not.toHaveBeenCalled()
+      controller.forget('s1')
+    })
+
     it.each(['replace', 'pane', 'process', 'revision', 'gone', 'input-state'] as const)('refuses a %s change during runtime validation', async change => {
       vi.useFakeTimers()
       let row: RegisteredSession | undefined = session(), checked!: (ok: boolean) => void

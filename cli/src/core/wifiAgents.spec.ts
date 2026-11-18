@@ -59,19 +59,16 @@ describe('the Wi-Fi device\'s doors into the core', () => {
     const agents = [agent({ agentId: 'a', sessionId: 's-a', engine: 'codex' })]
     const socket = { hasLocalClient: vi.fn(() => over.window !== false), onCreateAgent: null }
     const devices = { stepFocus: vi.fn(async () => ({ machineId: 'mac', agentId: 'a' })), scroll: vi.fn() }
-    const stop = vi.fn(async () => true)
     const doors = wifiDoors({
       registry: registryOf(agents),
-      socket: () => (over.socket === false ? null : socket), stop,
+      socket: () => (over.socket === false ? null : socket),
       devices: () => (over.devices === false ? null : devices),
     })
-    return { doors, socket, devices, stop }
+    return { doors, socket, devices }
   }
 
-  it('stops a turn and refuses unsupported creation', async () => {
-    const { doors, stop } = doorsWith()
-    expect(await doors.stop('a')).toBe(true)
-    expect(stop).toHaveBeenCalledWith('a')
+  it('refuses unsupported creation', async () => {
+    const { doors } = doorsWith()
     expect(await doors.create('p', 'claude', '/x')).toEqual({ ok: false, error: 'UNSUPPORTED' })
   })
 

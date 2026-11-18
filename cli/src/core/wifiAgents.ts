@@ -1,4 +1,4 @@
-/** Remaining Wi-Fi create, confirmed cancel and mixed-host desk doors. Presentation is component-owned. */
+/** Remaining Wi-Fi create and mixed-host desk doors. Presentation is component-owned. */
 import { realpathSync } from 'node:fs'
 import type { registry } from '../lib/registry.js'
 import type { BackendSocket } from '../backendSocket.js'
@@ -33,8 +33,6 @@ export interface WifiDoorsDeps {
   registry: Pick<typeof registry, 'list'>
   /** The socket, once it exists: the windows on this computer, and how an agent is created. */
   socket(): Pick<BackendSocket, 'hasLocalClient' | 'onCreateAgent'> | null
-  /** Stop a live agent's turn, as the stop button does. */
-  stop(agentId: string): Promise<boolean>
   /** The dials' walk along the desk and their stroke, which the device borrows. */
   devices(): Pick<DevicesPort, 'stepFocus' | 'scroll'> | null
 }
@@ -45,7 +43,6 @@ export function wifiDoors(deps: WifiDoorsDeps): CoreApi['wifi'] {
   const { registry, socket } = deps
   const hasWindow = (): boolean => !!socket()?.hasLocalClient()
   return {
-    stop: (agentId) => deps.stop(agentId),
     create: wifiCreate({ registry, createAgent: () => socket()?.onCreateAgent ?? null }),
     // The dial's walk and stroke: `dial_focus` and `dial_scroll` to the window. Without a window the forward
     // is a no-op, so it says so up front; without the devices there is no desk to walk.

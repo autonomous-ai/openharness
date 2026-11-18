@@ -34,13 +34,14 @@ export function createCancel({
   // heartbeat and mark the turn closed here (mirrors the hosted runtime stopping its heartbeat on cancel). We do
   // NOT emit turn_ended: the web clears its own dots on cancel, and a turn_ended would fire a device
   // recap for a killed turn. The next real prompt reopens a fresh turn.
-  const cancelAgent = (id: string, confirmed = false): Promise<boolean> => {
+  const cancelAgent = (id: string, confirmed = false, current: () => boolean = () => true): Promise<boolean> => {
+    if (!current()) return Promise.resolve(false)
     const record = resolve(id)
     const sessionId = record?.sessionId ?? id
     if (record) beforeCancel?.(record)
     // Cursor's sub-agents end with its turn's cancel, in its worker (engines/others/streams.ts).
     normalizers.closeTurns(sessionId)
-    const cancelled = confirmed ? input.cancelConfirmed(record?.agentId ?? sessionId) : (input.cancel(record?.agentId ?? sessionId), Promise.resolve(true))
+    const cancelled = confirmed ? input.cancelConfirmed(record?.agentId ?? sessionId, current) : (input.cancel(record?.agentId ?? sessionId), Promise.resolve(true))
     stopHeartbeat(sessionId)
     questionWatcher.stop(sessionId)
     mirror.cancel(sessionId) // close the device's "Working…" tile (bare done, no recap) — a cancel emits no turn_ended
@@ -51,20 +52,29 @@ export function createCancel({
     turnStartedAt.delete(sessionId)
     turnActivity.observe(sessionId, 'turn_ended')
     tell(sessionId, 'cancel')
-    return cancelled
+    return confirmed ? cancelled.then(ok => current() && ok) : cancelled
   }
   return cancelAgent
 }
 
 /**
  * Takes a `cancel` frame: the person interrupted an agent's turn (C-c from the app), the agent named by
- * agent id or session id. Nothing is answered: every window reads the agent as idle once it is.
+ * agent id or session id. An optional request id asks for confirmation; legacy callers receive no reply.
  *
  * Moved verbatim out of the socket's request switch (docs/design/2026-10-03-harnessd.md).
  */
-export function createCancelRequest(cancel: (id: string) => void) {
-  return (payload: Record<string, unknown>): void => {
+export function createCancelRequest(cancel: (id: string, confirmed?: boolean, current?: () => boolean) => void | Promise<boolean>) {
+  return (payload: Record<string, unknown>, reply: (result: Record<string, unknown>) => void = () => {},
+    current: () => boolean = () => true): void | Promise<void> => {
     const target = (payload.agentId as string | undefined) || (payload.sessionId as string | undefined)
-    if (target) cancel(target)
+    if (payload.requestId === undefined) { if (target) void cancel(target); return }
+    if (!current()) return
+    if (typeof payload.requestId !== 'string' || !payload.requestId || payload.requestId.length > 128
+      || typeof target !== 'string' || !target || target.length > 200) { reply({ error: 'INVALID_REQUEST' }); return }
+    const answer = (result: Record<string, unknown>): void => { if (current()) reply(result) }
+    try {
+      return Promise.resolve(cancel(target, true, current)).then(ok => answer({ ok: ok === true }),
+        () => answer({ ok: false, error: 'CANCEL_UNAVAILABLE' }))
+    } catch { answer({ ok: false, error: 'CANCEL_UNAVAILABLE' }) }
   }
 }

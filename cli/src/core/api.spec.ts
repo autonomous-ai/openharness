@@ -727,7 +727,7 @@ describe('the core API services stand on', () => {
   })
 
   it('gives a service that is not the Wi-Fi device\'s doors that list, send, make and move nothing', async () => {
-    expect(await WIFI_OFF.stop('a')).toBe(false)
+    expect(WIFI_OFF).not.toHaveProperty('stop')
     expect(await WIFI_OFF.create('p', 'claude', '/w')).toEqual({ ok: false, error: 'UNSUPPORTED' })
     expect(await WIFI_OFF.stepFocus('next')).toBe('no_app')
     expect(WIFI_OFF.scroll('down', 0, 0)).toBe(false)

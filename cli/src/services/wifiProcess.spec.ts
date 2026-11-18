@@ -7,6 +7,7 @@ import type { CoreApi, CorePorts, ServiceRequests, WifiPort } from '../core/api.
 import type { CoreConnection, ServiceProcessOptions } from './process.js'
 import type { WifiDeps } from './wifi.js'
 import { runWifiService } from './wifiProcess.js'
+import { cancelTurn } from '../agentClient/cancel.js'
 import { observeQuestions } from '../agentClient/questions.js'
 import { env } from '../config/env.js'
 import http from 'node:http'
@@ -24,6 +25,7 @@ import { publishDeviceDesk } from './deviceDesk.js'
 const real = vi.hoisted(() => ({ started: 0, options: null as ServiceProcessOptions | null }))
 vi.mock('./wifi.js', () => ({ startWifi: () => { real.started++ } }))
 vi.mock('./process.js', () => ({ runServiceProcess: (options: ServiceProcessOptions) => { real.options = options; return { stop: () => {} } } }))
+vi.mock('../agentClient/cancel.js', () => ({ cancelTurn: vi.fn(async () => true) }))
 vi.mock('../agentClient/questions.js', () => ({ observeQuestions: vi.fn(() => ({ ready: Promise.resolve(), answer: vi.fn(async () => true), close: vi.fn() })) }))
 
 /** A Wi-Fi port that records what reached it, in order. */
@@ -89,6 +91,40 @@ function setup(over: { startThrows?: boolean; leavesOff?: boolean; dataDir?: str
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
 
 describe('the Wi-Fi device in the devices\' process', () => {
+  it.each(['disconnect', 'reconnect', 'machine', 'stop', 'caller'] as const)('fences public cancellation through %s without replay', async change => {
+    const f = setup(), asker = { local: true, owner: true }
+    f.connect(); f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, asker)
+    const adapter = f.adapter(), controller = new AbortController()
+    let release!: (ok: boolean) => void, current!: () => boolean, caller = true
+    vi.mocked(cancelTurn).mockClear().mockImplementationOnce(async (where, agentId, predicate, signal, budget) => {
+      expect(where).toEqual({ dataDir: '/data', port: env.PORT, machineId: 'machine-1' })
+      expect(agentId).toBe('a'); expect(signal).toBe(controller.signal); expect(budget).toBe(adapter.answerWork)
+      current = predicate; return new Promise(done => { release = done })
+    })
+    const pending = adapter.stop!('a', () => caller, controller.signal)
+    expect(current()).toBe(true)
+    if (change === 'caller') caller = false
+    else if (change === 'stop') await f.service.stop()
+    else {
+      f.disconnect()
+      if (change !== 'disconnect') {
+        f.connect(); if (change === 'machine') f.answer('machine', { id: 'machine-2' })
+        f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, asker)
+      }
+    }
+    expect(current()).toBe(false); release(true); expect(await pending).toBe(false)
+    expect(cancelTurn).toHaveBeenCalledOnce()
+    expect(f.connection.query).not.toHaveBeenCalledWith('stop', expect.anything())
+    await f.service.stop()
+  })
+
+  it('does not open a public cancel socket for an already revoked caller', async () => {
+    const f = setup(); f.connect(); f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, { local: true, owner: true })
+    vi.mocked(cancelTurn).mockClear()
+    expect(await f.adapter().stop!('a', () => false, new AbortController().signal)).toBe(false)
+    expect(cancelTurn).not.toHaveBeenCalled(); await f.service.stop()
+  })
+
   it('calls its same-machine cohost desk directly and never falls back after direct dispatch', async () => {
     const f = setup(), asker = { local: true, owner: true }
     f.connect(); f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, asker)
@@ -149,10 +185,11 @@ describe('the Wi-Fi device in the devices\' process', () => {
     f.answer('machine', { id: 'machine-2' }); f.event({ kind: 'resume' }); await drain()
     f.answer('session_snapshot', snapshotFixture({ machine: { id: 'machine-2', computerId: 'computer-9', name: 'Desk' } })); await f.api().agents.snapshot()
     vi.mocked(f.connection.query).mockClear()
-    for (const read of [() => old.wifi.create('package', 'claude', '/workspace'), () => old.wifi.stop('a'),
+    for (const read of [() => old.wifi.create('package', 'claude', '/workspace'),
       () => old.wifi.stepFocus('next', 'a'), () => old.turns.recent('a', 1),
       () => old.conversations.resolve('a'), () => old.agents.snapshot(),
       () => adapter.submit!('a', 'old input', 'old-delivery', () => {})]) await expect(read()).rejects.toThrow()
+    expect(await adapter.stop!('a', () => true, new AbortController().signal)).toBe(false)
     adapter.cancel!('old-delivery')
     revealWindow(old, 'old-operation', 'a')
     expect(old.wifi.scroll('move', 2, 3)).toBe(false)
@@ -199,7 +236,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     const result = identity === 'same' ? expect(creating).resolves.toEqual({ ok: true, agentId: 'created' }) : expect(creating).rejects.toThrow()
     void result.catch(() => {}) // An earlier RED assertion must not leave its expected rejection unhandled.
     expect(f.connection.query).not.toHaveBeenCalled()
-    await expect(old.wifi.stop('a')).rejects.toThrow()
+    expect(await f.adapter().stop!('a', () => true, new AbortController().signal)).toBe(false)
     await expect(old.turns.recent('a', 1)).rejects.toThrow()
     await expect(old.conversations.resolve('a')).rejects.toThrow()
     await expect(old.agents.snapshot()).rejects.toThrow()
@@ -340,7 +377,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     } finally { release(); store.stopUiDelivery(); await f.service.stop(); rmSync(directory, { recursive: true, force: true }) }
   })
 
-  it.each(['recent', 'stop', 'create', 'stepFocus'] as const)('rejects a late %s completion when the same connection facade reconnects', async operation => {
+  it.each(['recent', 'create', 'stepFocus'] as const)('rejects a late %s completion when the same connection facade reconnects', async operation => {
     const f = setup(), asker = { local: true, owner: true }
     f.connect(); f.event({ kind: 'resume' }); await f.options().requests!.wifi_http({}, asker)
     let release!: (answer: Record<string, unknown>) => void
@@ -349,7 +386,6 @@ describe('the Wi-Fi device in the devices\' process', () => {
     vi.mocked(f.connection.query).mockClear().mockImplementationOnce(() => { sent(); return new Promise(resolve => { release = resolve }) })
     const api = f.api()
     const request = operation === 'recent' ? api.turns.recent('a', 1)
-      : operation === 'stop' ? api.wifi.stop('a')
       : operation === 'create' ? api.wifi.create('package', 'claude', '/workspace')
       : api.wifi.stepFocus('next', 'a')
     const rejected = expect(request).rejects.toThrow('the original core connection ended')
@@ -1044,8 +1080,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     f.answer('recent', { turns: [{ recap: 'x' }] })
     expect(await f.api().turns.recent('a', 2)).toEqual([{ recap: 'x' }])
     f.answer('recent', {}); expect(await f.api().turns.recent('a', 2)).toEqual([])
-    f.answer('stop', { ok: true })
-    expect(await wifi.stop('a')).toBe(true)
+    expect(await f.adapter().stop!('a', () => true, new AbortController().signal)).toBe(true)
     f.answer('create', { requestId: 'x', ok: true, agentId: 'made' })
     expect(await wifi.create('p', 'claude', '/w')).toEqual({ ok: true, agentId: 'made' })
     f.answer('stepFocus', { step: 'no_app' })
@@ -1069,7 +1104,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     ])
     // The core gone: asked, it says so; told, nothing goes.
     f.disconnect()
-    await expect(wifi.stop('a')).rejects.toThrow('the Wi-Fi device is not connected to the core')
+    expect(await f.adapter().stop!('a', () => true, new AbortController().signal)).toBe(false)
     revealWindow(owner, 'late', 'a')
     expect(f.notices).toHaveLength(3)
   })

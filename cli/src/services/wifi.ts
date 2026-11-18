@@ -25,6 +25,7 @@ import { DeviceResultJournal } from '../lib/autonomous-device/resultJournal.js'
 import { AutonomousDeviceService, type AutonomousDeviceFrame } from '../lib/autonomous-device/service.js'
 import { deviceRefusal, deviceRoutes } from '../lib/autonomous-device/localHttp.js'
 import { createDeviceStore } from '../lib/autonomous-device/storeRuntime.js'
+import { cancelTurn } from '../agentClient/cancel.js'
 import { observeQuestions, type QuestionAnswerBudget, type QuestionListener, type QuestionObservation } from '../agentClient/questions.js'
 import { createDeviceEvidence, DeviceEvidencePool } from '../lib/autonomous-device/evidenceReader.js'
 import { observeDeviceSessions, DeviceFeedPool, type DeviceSessionFeedOptions, type DeviceSessionFeed } from '../lib/autonomous-device/sessionFeed.js'
@@ -52,6 +53,7 @@ export interface WifiDeps {
   /** Process adapter: captures one core connection through capability probe, read and submit. */
   submit?: (agentId: string, text: string, deliveryId: string, context: (agent: AgentView) => void | Promise<void>, current?: () => boolean) => Promise<void>
   cancel?: (deliveryId: string) => void
+  stop?: (agentId: string, current: () => boolean, signal: AbortSignal) => Promise<boolean>
   evidence?: typeof createDeviceEvidence
   evidencePool?: DeviceEvidencePool
   feedPool?: DeviceFeedPool
@@ -67,6 +69,7 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
   const machineId = core.machine.id()
   let view: WifiView = { agents: [], store: [], hasWindow: false }
   let stopped = false, coreConnected = true, coreEpoch = 0, notices = 0, applied = 0
+  let cancellations = new AbortController()
   /** One ask of the core at a time: requests arriving together share it, and are answered in order. */
   let viewing: { epoch: number; promise: Promise<void> } | null = null
   const refresh = async (): Promise<void> => {
@@ -172,7 +175,15 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
       else core.turns.cancelDelivery(deliveryId)
       return true
     },
-    stop: (agentId) => core.wifi.stop(agentId),
+    stop: async (agentId) => {
+      const epoch = coreEpoch, signal = cancellations.signal
+      const current = () => !stopped && coreConnected && coreEpoch === epoch && core.machine.id() === machineId
+      if (!current()) return false
+      const ok = deps.stop ? await deps.stop(agentId, current, signal) : await cancelTurn({
+        dataDir: core.dataDir, port: core.daemon.port, machineId,
+      }, agentId, current, signal, deps.answerWork ?? inlineAnswerWork)
+      return ok && current()
+    },
     answer: async (agentId, requestId, answers) => {
       const original = observation, epoch = coreEpoch, generation = questionEpoch
       const current = () => !stopped && coreConnected && coreEpoch === epoch && questionEpoch === generation && observation === original
@@ -363,6 +374,7 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
   const port: WifiPort = {
     resume: async ({ focus }) => {
       stopFeed(); feedRetries = 0
+      cancellations.abort(); cancellations = new AbortController()
       coreConnected = true
       const epoch = ++coreEpoch
       notices++
@@ -377,7 +389,7 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
       service.inputProgress(event)
       evidence.input(event)
     },
-    disconnected: () => { coreConnected = false; coreEpoch++; stopQuestions(); stopFeed(); evidence.disconnected(); void relay.stop(); service.coreDisconnected() },
+    disconnected: () => { coreConnected = false; coreEpoch++; cancellations.abort(); stopQuestions(); stopFeed(); evidence.disconnected(); void relay.stop(); service.coreDisconnected() },
     delivery: (event) => {
       service.delivery(event)
       if (event.state === 'completed' || event.state === 'rejected') evidence.settled(event.sessionId, event.deliveryId)
@@ -411,7 +423,7 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
       return reply
     },
     revealed: (operationId, agentId) => store.acknowledgeReveal(operationId, agentId),
-    stop: async () => { stopped = true; coreEpoch++; stopQuestions(); const feed = stopFeed(); stopInput?.(); stopDelivery?.(); stopAgents?.(); store.stopUiDelivery(); await Promise.all([relay.stop(), evidence.stop(), feed?.stop()]) },
+    stop: async () => { stopped = true; coreEpoch++; cancellations.abort(); stopQuestions(); const feed = stopFeed(); stopInput?.(); stopDelivery?.(); stopAgents?.(); store.stopUiDelivery(); await Promise.all([relay.stop(), evidence.stop(), feed?.stop()]) },
   }
   store.startUiDelivery()
   ports.wifi = port

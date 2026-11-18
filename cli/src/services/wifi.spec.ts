@@ -15,10 +15,13 @@ import { startWifi as startWifiService, type WifiDeps } from './wifi.js'
 import { devicePeerConnection } from '../lib/autonomous-device/peerConnection.js'
 import { devicePeerKey } from '../lib/autonomous-device/peerEndpoint.js'
 import { GatewayDeviceFixture } from '../testing/devicePeer.js'
+import { cancelTurn } from '../agentClient/cancel.js'
 import { observeQuestions, type QuestionListener } from '../agentClient/questions.js'
 import type { ClientSocket } from '../agentClient/daemon.js'
 import type { DeviceSessionFeedOptions } from '../lib/autonomous-device/sessionFeed.js'
 import type { createDeviceEvidence } from '../lib/autonomous-device/evidenceReader.js'
+
+vi.mock('../agentClient/cancel.js', () => ({ cancelTurn: vi.fn(async () => true) }))
 
 vi.mock('../agentClient/questions.js', () => ({ observeQuestions: vi.fn((_where, listener: QuestionListener) => ({
   ready: Promise.resolve().then(() => { listener.begin('fixture'); listener.end('fixture') }), answer: vi.fn(async () => true), close: vi.fn(),
@@ -114,6 +117,44 @@ async function joinDevice(core: CoreApi, connId = 'c1'): Promise<void> {
 const KEY = Buffer.alloc(32, 7).toString('base64')
 
 describe('the Wi-Fi device, with the dials', () => {
+  it.each(['disconnect', 'resume', 'stop', 'machine'] as const)('revokes the original Stop and closes its socket owner on %s', async end => {
+    const core = fakeCore({ dataDir }), ports = emptyPorts()
+    let device!: ConstructorParameters<typeof AutonomousDeviceService>[0], release!: (ok: boolean) => void
+    const stop = vi.fn((_id: string, _current: () => boolean, _signal: AbortSignal) => new Promise<boolean>(done => { release = done }))
+    startWifi(core, ports, { stop, service: options => { device = options; return new AutonomousDeviceService(options) } })
+    const pending = device.stop('agent'), [, current, signal] = stop.mock.calls[0]
+    if (end === 'disconnect') ports.wifi!.disconnected()
+    else if (end === 'stop') await ports.wifi!.stop()
+    else if (end === 'resume') await ports.wifi!.resume({ focus: null })
+    else vi.mocked(core.machine.id).mockReturnValue('other')
+    expect(current()).toBe(false)
+    if (end !== 'machine') expect(signal.aborted).toBe(true)
+    release(true); expect(await pending).toBe(false)
+    if (end !== 'resume') expect(await device.stop('agent')).toBe(false)
+  })
+
+  it('stops through its component-owned confirmed request instead of the private core door', async () => {
+    const core = fakeCore({ dataDir }), ports = emptyPorts()
+    let device!: ConstructorParameters<typeof AutonomousDeviceService>[0]
+    const stop = vi.fn(async (_agentId: string, current: () => boolean) => current())
+    startWifi(core, ports, { stop, service: options => { device = options; return new AutonomousDeviceService(options) } })
+    expect(await device.stop('agent')).toBe(true)
+    expect(stop).toHaveBeenCalledWith('agent', expect.any(Function), expect.any(AbortSignal))
+  })
+
+  it('revokes a confirmed stop when its original core epoch goes away', async () => {
+    const core = fakeCore({ dataDir }), ports = emptyPorts()
+    let device!: ConstructorParameters<typeof AutonomousDeviceService>[0], finish!: (ok: boolean) => void, current!: () => boolean
+    const stop = vi.fn((_agentId: string, live: () => boolean) => { current = live; return new Promise<boolean>(resolve => { finish = resolve }) })
+    startWifi(core, ports, { stop, service: options => { device = options; return new AutonomousDeviceService(options) } })
+    const pending = device.stop('agent')
+    expect(stop).toHaveBeenCalledOnce()
+    ports.wifi!.disconnected()
+    expect(current()).toBe(false)
+    finish(true)
+    expect(await pending).toBe(false)
+  })
+
   it('derives the actual device list and Store preparation evidence from shared session facts', async () => {
     const row = (agentId: string, terminalAvailable: boolean) => ({
       session: { agentId, sessionId: '', engine: 'claude', registeredAt: 1, transcriptPath: null, lastHookAt: 0,
@@ -851,7 +892,7 @@ describe('the Wi-Fi device, with the dials', () => {
     const { core, hello, ask } = started()
     await hello()
     expect(await ask({ type: 'turn.stop', machineId: 'machine-1', agentId: 'agent', idempotencyKey: 's1' })).toMatchObject({ receipt: { state: 'completed' } })
-    expect(core.wifi.stop).toHaveBeenCalledWith('agent')
+    expect(cancelTurn).toHaveBeenCalledWith(expect.objectContaining({ machineId: 'machine-1' }), 'agent', expect.any(Function), expect.any(AbortSignal), expect.anything())
     expect(await ask({ type: 'focus.ensure', machineId: 'untrusted-other-machine' })).toMatchObject({ error: { code: 'INVALID_REQUEST' } })
     expect(core.clients.sendWindow).not.toHaveBeenCalled()
     // No window took the ask: said at once.

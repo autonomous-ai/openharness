@@ -48,7 +48,6 @@ export function createWifiLink(deps: WifiLinkDeps) {
     // Asked, not told: the pane's lock says what became of the prompt as it takes it, and the device's reply
     // carries that, as it did when the service ran in the core's process.
     recent: async ({ agentId, n }) => ({ turns: await core.turns.recent(text(agentId), typeof n === 'number' ? n : 3) }),
-    stop: async ({ agentId }) => ({ ok: await core.wifi.stop(text(agentId)) }),
     create: async ({ packageId, engine, cwd }) => ({ ...await core.wifi.create(text(packageId), text(engine), text(cwd)) }),
     stepFocus: async ({ direction, currentAgentId }) => {
       const step = await core.wifi.stepFocus(direction === 'previous' ? 'previous' : 'next', typeof currentAgentId === 'string' ? currentAgentId : undefined)

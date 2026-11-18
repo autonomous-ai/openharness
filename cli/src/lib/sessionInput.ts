@@ -828,8 +828,8 @@ export class SessionInputController {
     })
   }
 
-  cancelConfirmed(sessionId: string): Promise<boolean> {
-    return this.interrupt(sessionId, false)
+  cancelConfirmed(sessionId: string, current?: () => boolean): Promise<boolean> {
+    return this.interrupt(sessionId, false, current)
   }
 
   /**
@@ -840,12 +840,13 @@ export class SessionInputController {
    * 2026-11-10: received, never typed). Held at most CANCEL_HOLD_MS: a key stuck behind another writer does not
    * hold them for good.
    */
-  private async interrupt(sessionId: string, reportGone: boolean): Promise<boolean> {
+  private async interrupt(sessionId: string, reportGone: boolean, callerCurrent: () => boolean = () => true): Promise<boolean> {
+    if (!callerCurrent()) return false
     const session = this.controlSession(sessionId)
     if (!session) return false
     const state = this.state(sessionId), sameBinding = captureSessionBinding(session)
     // A runtime check or queued key may finish after this id belongs to another pane or input owner.
-    const current = (): boolean => this.states.get(sessionId) === state && sameBinding(this.controlSession(sessionId))
+    const current = (): boolean => callerCurrent() && this.states.get(sessionId) === state && sameBinding(this.controlSession(sessionId))
     state.cancelling++
     let held = true
     const release = (): void => {

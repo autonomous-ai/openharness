@@ -17,6 +17,7 @@ import { processCoreApi } from './processCoreApi.js'
 import { startWifi } from './wifi.js'
 import { inputIn } from './turnsLink.js'
 import { followLink } from './followLink.js'
+import { cancelTurn } from '../agentClient/cancel.js'
 import { observeQuestions } from '../agentClient/questions.js'
 import { env } from '../config/env.js'
 import { DeviceEvidencePool } from '../lib/autonomous-device/evidenceReader.js'
@@ -195,7 +196,6 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
       machine: { id: () => owner.machineId, computerId: () => options.machineId, name: () => '' },
       turns: { ...unasked.turns, recent: async (agentId, n) => list<RecentTurn>((await ask(owner, 'recent', { agentId, n })).turns) },
       wifi: {
-        stop: async (agentId) => (await ask(owner, 'stop', { agentId })).ok === true,
         create: async (packageId, engine, cwd) => {
           if (stopped || component !== owner || !identity) throw new Error('WIFI_IDENTITY_UNAVAILABLE')
           // Durable preparation may finish while the same machine is reconnecting. Wait only for
@@ -237,6 +237,13 @@ export function runWifiService(options: WifiServiceOptions): ServiceProcess {
           scroll: (phase, dy, velocity, current) => scroll(owner, phase, dy, velocity, current) },
         peer: { composition: 'services', port: env.PORT, token: options.token },
         answerWork,
+        stop: async (agentId, callerCurrent, signal) => {
+          const binding = verified
+          if (!currentBinding(owner, binding)) return false
+          const current = () => currentBinding(owner, binding) && callerCurrent()
+          if (!current()) return false
+          return await cancelTurn({ dataDir: options.dataDir, port: env.PORT, machineId }, agentId, current, signal, answerWork) && current()
+        },
         observeQuestions: (listener, budget) => observeQuestions({ dataDir: options.dataDir, port: env.PORT, machineId }, listener, undefined, budget),
         observeSessions: observer => observeDeviceSessions({ dataDir: options.dataDir, port: env.PORT, machineId }, observer),
       })
