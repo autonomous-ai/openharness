@@ -1,5 +1,6 @@
 // Dev tool: renders one screen of a fixed demo model to a PPM at the glass it is built for (1920 x HT_HEIGHT), through
-// the same calls max_app.c makes.
+// the same calls max_app.c makes. Each scene sets its page and its listening straight in max_m too, so it shows that
+// page whatever the model's own moves between pages.
 //   max_render <screen> <out.ppm>   one screen (max_render.py turns them into PNGs, golden.sh hashes them)
 //   max_render --list               the screens, one a line
 //   max_render --check-all          every screen within the run budget (run.sh)
@@ -10,52 +11,34 @@
 #include "pro_canvas.h"
 #include "theme.h"
 
-#define T0 100000u
+#define T0 20000000u
 static ht_scene_t S;
 static uint16_t px[HT_WIDTH * HT_HEIGHT];
 
-static const cable_machine_t MACHINES[] = {{.id = "m1", .name = "MacBook Pro", .state = "ready", .local = true},
-                                           {.id = "m2", .name = "Mac Studio", .state = "ready"},
-                                           {.id = "m3", .name = "Build server", .state = "offline"}};
-static const pro_agent_row_t AGENTS[] = {{"fw", "firmware-max", "claude", "m1", "MacBook Pro", NULL, NULL},
-                                         {"be", "backend", "codex", "m2", "Mac Studio", NULL, NULL},
-                                         {"web", "website", "claude", "m1", "MacBook Pro", NULL, NULL},
-                                         {"docs", "docs", "codex", "m1", "MacBook Pro", NULL, NULL},
-                                         {"cli", "harness-cli", "claude", "m2", "Mac Studio", NULL, NULL}};
+// Diego's mockup's agents: Orca's five, whose answers the bar does not take, and Harness's three, whose it does.
+static const pro_agent_row_t ORCA[] = {{"auth", "auth-refactor", "claude", "m1", "MacBook Pro", "orca", "svf"},
+                                       {"hero", "landing-hero", "codex", "m1", "MacBook Pro", "orca", "svf"},
+                                       {"e2e", "flaky-e2e", "claude", "m1", "MacBook Pro", "orca", "svf"},
+                                       {"rate", "rate-limiter", "codex", "m1", "MacBook Pro", "orca", "svf"},
+                                       {"sweep", "docs-sweep", "muse", "m1", "MacBook Pro", "orca", "svf"}};
+static const pro_agent_row_t HARNESS[] = {{"fw", "firmware-max", "claude", "m1", "MacBook Pro", "harness", NULL},
+                                          {"cli", "harness-cli", "claude", "m1", "MacBook Pro", "harness", NULL},
+                                          {"docs", "docs", "muse", "m1", "MacBook Pro", "harness", NULL}};
+static const pro_app_row_t APPS[] = {{"harness", "Harness", 3, 1}, {"orca", "Orca", 5, 1}, {"herdr", "herdr", 2, 0},
+                                     {"vscode", "VS Code", 1, 0},  {"ghostty", "Ghostty", 1, 0},
+                                     {"terminal", "Terminal", 2, 1}, {"iterm", "iTerm2", 1, 0}};
 
-// The daemon offers New Harness, as cableHost does.
-static void cable(int agents)
-{
-    max_ui_reset();
-    max_ui_link(true, "MacBook Pro", T0);
-    max_ui_offers(true);
-    max_ui_machines(MACHINES, 3, "m1");
-    max_ui_agents(AGENTS, agents, T0);
-}
-static void work(const char *id, const char *verb, const char *activity, int elapsed_s, const char *const steps[], int n)
-{
-    max_ui_turn(id, "started", "", 0, T0 - (uint32_t)elapsed_s * 1000u);
-    for (int i = n - 1; i >= 0; i--) max_ui_turn(id, "step", steps[i], -1, T0);
-    max_ui_turn(id, "verb", verb, -1, T0);
-    max_ui_turn(id, "activity", activity, elapsed_s, T0);
-}
-static const char *const FW_STEPS[] = {"Edit \xc2\xb7 main/display/max_panel.c", "Read \xc2\xb7 esp_lcd_ota7290b.h",
-                                       "Bash \xc2\xb7 idf.py build"};
-static const char *const BE_STEPS[] = {"Bash \xc2\xb7 pnpm test auth", "Edit \xc2\xb7 src/auth/session.ts"};
-static const char *const WEB_STEPS[] = {"Read \xc2\xb7 pricing.tsx"};
-static void three_working(void)
-{
-    cable(3);
-    work("fw", "Infusing...", "Turning each 24-line strip into the portrait framebuffer", 134, FW_STEPS, 3);
-    work("be", "Brewing\xe2\x80\xa6", "Running the auth tests \xe2\x80\x94 212 of 640", 3723, BE_STEPS, 2);
-    work("web", "Drawing", "Drawing the pricing cards", 12, WEB_STEPS, 1);
-}
-// ---- questions ----
 static max_out_t OUT[MAX_OUTBOX];
 static max_answer_t ANSWER;
 static int take(void) { return max_ui_take(OUT, MAX_OUTBOX, &ANSWER, T0); }
-static void hit(const char *id, max_hit_kind_t kind, int arg) { max_ask_hit(max_find(id), kind, arg, T0); }
 
+static void work(const char *id, const char *verb, const char *activity, int elapsed_s, const char *const steps[], int n)
+{
+    max_ui_turn(id, "started", "", 0, T0 - (uint32_t)elapsed_s * 1000u);
+    for (int i = 0; i < n; i++) max_ui_turn(id, "step", steps[i], -1, T0);
+    max_ui_turn(id, "verb", verb, -1, T0);
+    max_ui_turn(id, "activity", activity, elapsed_s, T0);
+}
 // The question as pro_app_ask has it; on the reviewed path, read whole as the daemon answers question.read.
 static void ask(const char *id, const char *request, const pro_ask_item_t *items, int n, bool permission, bool review)
 {
@@ -64,194 +47,325 @@ static void ask(const char *id, const char *request, const pro_ask_item_t *items
     take();
     max_ui_question_state(id, max_ask_of(id)->fetch, true, request, "tok-1", false, NULL, items, n, T0);
 }
-static const pro_ask_item_t MIGRATE = {"run", "Run the migration on the dev database now?", {"Run it", "Not now"}, 2,
-                                       false, true};
-static const pro_ask_item_t DATABASE = {"db", "Which database should the migration run on?", {"Dev", "Staging"}, 2,
-                                        false, true};
-static const pro_ask_item_t BOARD = {"board", "Which board should I flash the new panel driver to?",
-                                     {"ESP32-P4 Function EV", "Harness Max rev A", "Harness Max rev B", "Harness Pro",
-                                      "Dial", "None of these"}, 6, false, true};
-static const pro_ask_item_t PUSH[] = {
-    {"branch", "Where should the fix go?", {"main", "release/0.9"}, 2, false, true},
-    {"checks", "Which checks should run before the push?", {"Lint", "Type check", "Unit tests", "E2E on staging"}, 4,
-     true, true},
-};
-static const pro_ask_item_t DEPLOY = {"perm", "Approve Bash command: npm run deploy:staging",
-                                      {"Yes", "Yes, and don't ask again for: npm run deploy:*",
-                                       "No, and tell Claude what to do differently"}, 3, false, true};
-static const pro_ask_item_t SHOWN = {"shown", "Allow Edit of src/auth/session.ts?", {"In Orca"}, 1, false, true};
-static const pro_ask_item_t LONG_EN = {"plan", "The auth tests fail on the session table that the migration dropped. "
-                                       "Should I restore it from the audit log, rebuild it from scratch, or stop here "
-                                       "so you can look at the failing tests yourself first?",
-                                       {"Restore it from the audit log and run the tests again",
-                                        "Rebuild the table from scratch with an empty set of sessions",
-                                        "Stop here and leave everything as it is"}, 3, false, true};
-static const pro_ask_item_t LONG_VI = {"vi", "Bài kiểm thử xác thực lỗi vì bảng phiên đã bị xoá. Tôi nên khôi phục từ "
-                                       "nhật ký kiểm toán, dựng lại từ đầu, hay dừng ở đây để bạn tự xem?",
-                                       {"Khôi phục từ nhật ký kiểm toán rồi chạy lại", "Dựng lại bảng từ đầu",
-                                        "Dừng ở đây", "Hỏi lại tôi sau khi build xong"}, 4, false, true};
+static void ago(const char *id, uint32_t secs) { max_find(id)->since_ms = T0 - secs * 1000u; }
 
-static void five(void)
+static const char *const AUTH_STEPS[] = {"Thinking", "Reading", "Editing"};
+static const char *const RATE_STEPS[] = {"Planning", "Editing"};
+static const char *const FW_STEPS[] = {"Reading", "Editing", "Building"};
+static const pro_ask_item_t HERO = {"hero", "Both hero versions build. Keep the dark gradient, or switch to the product "
+                                    "photo?", {"Gradient", "Photo"}, 2, false, true};
+static const pro_ask_item_t BUMP = {"bump", "Bump the cable protocol to 4, or keep 3 and add a field?",
+                                    {"Bump to 4", "Keep 3"}, 2, false, true};
+static const pro_ask_item_t FLASH = {"perm", "Approve Bash command: make flash PORT=usb",
+                                     {"Yes", "Yes, and don't ask again for: make flash*",
+                                      "No, and tell Claude what to do differently"}, 3, false, true};
+
+// The cable, the daemon's apps and Orca's ring, as the mockup's Overview has them.
+static void orca(void)
 {
-    cable(5);
-    work("fw", "Infusing...", "Turning each 24-line strip into the portrait framebuffer", 134, FW_STEPS, 3);
-    work("be", "Brewing", "Preparing the migration", 301, BE_STEPS, 2);
-    ask("be", "q1", &MIGRATE, 1, false, false);
-    work("cli", "Musing", "Reading the hello handshake", 48, NULL, 0);
-    max_ui_turn("web", "started", "", 0, T0 - 252000);
-    max_ui_summary("web", "The pricing cards now match the design, and the footer links work again.", NULL, false,
-                   POD_TIER_ALERT, T0 - 5000);
+    max_ui_reset();
+    max_ui_link(true, "MacBook Pro", T0);
+    max_ui_offers(true);
+    max_ui_apps("orca", APPS, 7, T0);
+    max_ui_agents(ORCA, 5, T0);
+    work("auth", "Editing", "session.ts", 269, AUTH_STEPS, 3);
+    max_ui_turn("hero", "started", "", 0, T0 - 61000);
+    ask("hero", "q-hero", &HERO, 1, false, true);
+    max_ui_turn("e2e", "started", "", 0, T0 - 400000);
+    max_ui_summary("e2e", "Found it: the checkout test raced the cart request. It now waits for the response, and 50 "
+                   "runs in a row pass.", NULL, false, POD_TIER_ALERT, T0 - 120000);
+    work("rate", "Planning", "4 steps, starting with the middleware", 534, RATE_STEPS, 2);
+    ago("e2e", 120);
+    ago("sweep", 3600);
+    ago("auth", 269);
 }
-static void swipe_left(void)
+// Harness's ring: its agents take answers on the bar.
+static void harness(void)
 {
-    ht_scene_clear(&S, ht_rgb(HT_THEME_CANVAS));
-    max_ui_render(&S, T0);
-    max_ui_touch(true, 1400, 240, T0);
-    max_ui_touch(true, 1250, 244, T0 + 40);
-    max_ui_touch(false, 1150, 246, T0 + 80);
+    max_ui_reset();
+    max_ui_link(true, "MacBook Pro", T0);
+    max_ui_offers(true);
+    max_ui_apps("harness", APPS, 7, T0);
+    max_ui_agents(HARNESS, 3, T0);
+    work("fw", "Flashing", "the bar over USB, 40%", 190, FW_STEPS, 3);
+    max_ui_turn("cli", "started", "", 0, T0 - 60000);
+    work("cli", "Editing", "cable/protocol.ts", 60, NULL, 0);
+    max_ui_turn("docs", "started", "", 0, T0 - 600000);
+    max_ui_summary("docs", "The setup guide now covers the menu-bar app and the one cable.", NULL, false,
+                   POD_TIER_ALERT, T0 - 300000);
+    ago("docs", 300);
 }
-// A person talks to `id` (NULL: says a name for the form's field), as the app sets it when the pet is tapped.
-static void talk(const char *id, max_talk_t state)
+// n unread notices, in place of what the model put in Inbox.
+static void unread(int n)
+{
+    max_m.inbox_count = 0;
+    for (int i = 0; i < n && i < MAX_INBOX; i++) {
+        max_inbox_t *e = &max_m.inbox[max_m.inbox_count++];
+        snprintf(e->id, sizeof e->id, "n%d", i);
+        snprintf(e->name, sizeof e->name, "landing-hero");
+        snprintf(e->engine, sizeof e->engine, "codex");
+        snprintf(e->app, sizeof e->app, "Orca");
+        snprintf(e->text, sizeof e->text, "%s", HERO.q);
+        e->at = T0 - 60000;
+        e->unread = true;
+    }
+}
+static void show(max_view_t view, const char *id)
+{
+    max_m.view = view;
+    if (view == MAX_VIEW_AGENT) max_copy(max_m.selected, sizeof max_m.selected, id);
+}
+static void attention(const char *id, max_attn_t kind)
+{
+    max_m.view = MAX_VIEW_ATTENTION;
+    max_copy(max_m.attn_id, sizeof max_m.attn_id, id);
+    max_m.attn = kind;
+    max_m.attn_from = T0 - 700;
+}
+// A recording for `id`, `secs` in, the mic's last levels a speech-like run (or none), quiet for quiet_ms since.
+static void talk(const char *id, uint32_t secs, bool heard, uint32_t quiet_ms)
 {
     max_copy(max_m.talk_id, sizeof max_m.talk_id, id);
-    max_ui_talk(state, T0);
-}
-// A question that arrived while a person was at the bar: the toast, `age_ms` into its time.
-static void toast(const char *id, uint32_t age_ms)
-{
-    max_copy(max_m.toast_id, sizeof max_m.toast_id, id);
-    max_m.toast_from = T0 - age_ms;
+    max_ui_talk(MAX_TALK_RECORDING, T0 - secs * 1000u);
+    static const uint8_t SPEECH[] = {0, 1, 2, 3, 2, 4, 3, 2, 3, 4, 4, 3, 2, 3, 2, 1, 3, 4, 3, 2, 4, 3, 3, 2,
+                                     1, 2, 3, 4, 2, 3, 4, 3, 2, 2, 3, 1, 2, 3, 2, 1, 1, 0, 1, 0, 0, 0, 0, 0};
+    for (int i = 0; heard && i < MAX_LEVELS; i++) max_ui_level(SPEECH[i], T0 - (MAX_LEVELS - i) * 100u);
+    for (int i = 0; !heard && i < (int)secs * 10 && i < MAX_LEVELS; i++) max_ui_level(0, T0 - (MAX_LEVELS - i) * 100u);
+    if (heard) max_m.talk_quiet_from = T0 - quiet_ms;
 }
 
-static void s_linkdown(void) { max_ui_reset(); }
-static void s_noagents(void) { cable(0); }
-static void s_working(void) { three_working(); max_ui_focus("fw"); }
-// A question the daemon's inbox cannot hold: only the computer answers it.
-static void s_asking(void)
+// ---- Overview ----
+static void s_overview(void) { orca(); unread(2); show(MAX_VIEW_OVERVIEW, NULL); }
+static void s_overview_harness(void)
 {
-    three_working();
-    max_ui_question("be", "q1", "Run the migration on the dev database now? It drops the sessions table and rebuilds it "
-                    "from the audit log, which takes about four minutes.", NULL, 0, false, true, T0);
-    max_ui_focus("be");
+    harness();
+    unread(1);
+    show(MAX_VIEW_OVERVIEW, NULL);
+    max_ui_notice("Following Harness on your Mac", 3000, T0);
 }
-static void s_failed(void)
+static void s_overview_one(void)
 {
-    three_working();
-    max_ui_turn("be", "error", "pnpm test exited with 1: 3 tests failed in auth/session.spec.ts", 0, T0);
-    max_ui_summary("web", "The pricing cards now match the design, and the footer links work again.", NULL, false,
-                   POD_TIER_ALERT, T0);
-    max_ui_focus("be");
+    max_ui_reset();
+    max_ui_link(true, "MacBook Pro", T0);
+    max_ui_agents(HARNESS, 1, T0);
+    work("fw", "Flashing", "the bar over USB, 40%", 190, FW_STEPS, 3);
+    show(MAX_VIEW_OVERVIEW, NULL);
 }
-static void s_five_p1(void) { five(); max_ui_focus("be"); }
-static void s_five_p2(void) { five(); max_ui_focus("be"); swipe_left(); }
-// The room on an agent at work, the others beside it: one asks, one waits for a permission, one failed, one is done.
-static void watching(void)
+// More agents than a page holds: the second page shown, a question waiting on the first.
+static void s_overview_pages(void)
 {
-    five();
-    ask("docs", "q2", &DEPLOY, 1, true, true);
-    max_ui_turn("cli", "error", "flutter test failed: 2 golden snapshots out of date", 0, T0);
-    max_ui_focus("fw");
+    orca();
+    static const pro_agent_row_t more[] = {{"bill", "billing-export", "muse", "m1", "MacBook Pro", "orca", "svf"},
+                                           {"notes", "release-notes", "claude", "m1", "MacBook Pro", "orca", "svf"},
+                                           {"css", "css-cleanup", "claude", "m1", "MacBook Pro", "orca", "svf"}};
+    pro_agent_row_t rows[8];
+    memcpy(rows, ORCA, sizeof ORCA);
+    memcpy(rows + 5, more, sizeof more);
+    max_ui_agents(rows, 8, T0);
+    work("bill", "Reading", "the invoices schema", 97, NULL, 0);
+    unread(2);
+    show(MAX_VIEW_OVERVIEW, NULL);
+    max_m.cell_page = 1;
 }
-static void s_watching(void) { watching(); }
-// The second page: its lane alone, and the pager's badge for the questions on the first.
-static void s_watching_p2(void) { watching(); swipe_left(); }
-static void s_toast(void) { watching(); toast("be", 1200); }
-static void s_toast_notice(void) { watching(); toast("be", 3900); max_ui_notice("Sent", 3000, T0); }
-static void s_listening(void) { three_working(); max_ui_focus("be"); talk("be", MAX_TALK_RECORDING); }
-static void s_sending(void) { three_working(); max_ui_focus("be"); talk("be", MAX_TALK_SENDING); }
-// Talking while a question waits: everything but the room rests, the toast too.
-static void s_talk_toast(void) { watching(); toast("be", 600); talk("fw", MAX_TALK_RECORDING); }
-static void s_update(void) { three_working(); max_ui_update(40, "0.9.0"); }
-static void s_long(void)
+static void s_overview_long(void)
 {
     static const pro_agent_row_t rows[] = {
-        {"en", "an-agent-name-that-is-far-too-long-for-one-lane", "claude", "m1", "A MacBook Pro with a long name", NULL, NULL},
-        {"vi", "Trợ lý viết tài liệu tiếng Việt cho nhóm", "codex", "m2", "Máy chủ ở văn phòng", NULL, NULL},
-        {"vq", "Kiểm thử", "claude", "m1", "MacBook Pro", NULL, NULL}};
+        {"en", "an-agent-name-that-is-far-too-long-for-one-cell", "claude", "m1", "MacBook Pro", NULL, NULL},
+        {"vi", "Trợ lý viết tài liệu tiếng Việt cho nhóm", "codex", "m1", "MacBook Pro", NULL, NULL},
+        {"vq", "Kiểm thử", "muse", "m1", "MacBook Pro", NULL, NULL}};
     max_ui_reset();
     max_ui_link(true, "MacBook Pro của nhóm ở văn phòng", T0);
     max_ui_agents(rows, 3, T0);
-    work("en", "Infusing", "Editing the touch driver so that the panel and the finger agree on which way is up, then "
-         "running every host test again", 59, FW_STEPS, 3);
-    work("vi", "Đang viết", "Đang viết lại hướng dẫn cài đặt cho thanh Harness Max, từ cách cắm cáp đến cách chọn "
-         "một làn và nói với nó", 7384, NULL, 0);
-    max_ui_turn("vq", "started", "", 0, T0);
-    max_ui_turn("vq", "step", "Bash \xc2\xb7 chạy lại toàn bộ bài kiểm thử trên máy build", -1, T0);
-    max_ui_focus("vi");
-}
-static void s_notice(void) { three_working(); max_ui_focus("fw"); max_ui_notice("Sent to backend", 3000, T0); }
-// More agents than a page of lanes holds: the pager beside them.
-static void s_pages(void)
-{
-    static const pro_agent_row_t more[] = {{"a1", "landing-page", "claude", "m1", "MacBook Pro", NULL, NULL},
-                                           {"a2", "billing", "codex", "m2", "Mac Studio", NULL, NULL},
-                                           {"a3", "search", "gemini", "m2", "Mac Studio", NULL, NULL},
-                                           {"a4", "mobile", "muse", "m1", "MacBook Pro", NULL, NULL}};
-    pro_agent_row_t rows[9];
-    memcpy(rows, AGENTS, sizeof AGENTS);
-    memcpy(rows + 5, more, sizeof more);
-    cable(0);
-    max_ui_agents(rows, 9, T0);
-    work("fw", "Infusing...", "Turning each 24-line strip into the portrait framebuffer", 134, FW_STEPS, 3);
-    work("a2", "Billing", "Moving the invoices to the new tax table", 45, NULL, 0);
-    work("a3", "Searching", "Reindexing the docs", 12, NULL, 0);
-    ask("a4", "q3", &MIGRATE, 1, false, true);
-    max_ui_focus("fw");
+    work("en", "Reticulating splines", "Editing", 59, NULL, 0);
+    work("vi", "Đang viết", "Đang viết lại hướng dẫn cài đặt", 7384, NULL, 0);
+    show(MAX_VIEW_OVERVIEW, NULL);
 }
 
-// ---- answering and New Harness ----
-static void s_q_two(void) { three_working(); ask("be", "q1", &DATABASE, 1, false, true); max_ui_focus("be"); }
-static void s_q_six(void) { three_working(); ask("fw", "q1", &BOARD, 1, false, true); max_ui_focus("fw"); }
-static void s_q_multi(void)
+// ---- the agent page ----
+static void s_agent_reading(void) { orca(); show(MAX_VIEW_AGENT, "e2e"); }
+static void s_agent_working(void) { orca(); show(MAX_VIEW_AGENT, "auth"); }
+static void s_agent_mic_closed(void)
 {
-    three_working();
-    ask("web", "q1", PUSH, 2, false, true);
-    hit("web", MAX_HIT_OPTION, 1);   // release/0.9: on to the checks
-    hit("web", MAX_HIT_OPTION, 0);
-    hit("web", MAX_HIT_OPTION, 2);
-    max_ui_focus("web");
+    orca();
+    show(MAX_VIEW_AGENT, "sweep");
+    max_ui_notice("Mic closed \xc2\xb7 tap to talk", 3000, T0);
 }
-static void s_q_permission(void) { three_working(); ask("be", "q1", &DEPLOY, 1, true, true); max_ui_focus("be"); }
-static void s_q_shown(void) { three_working(); ask("be", "shown:toolu_7", &SHOWN, 1, true, true); max_ui_focus("be"); }
-static void s_q_error(void)
+static void s_agent_listening(void) { orca(); show(MAX_VIEW_AGENT, "e2e"); talk("e2e", 2, true, 700); }
+static void s_agent_listening_start(void) { orca(); show(MAX_VIEW_AGENT, "sweep"); talk("sweep", 1, false, 0); }
+static void s_agent_working_talking(void) { orca(); show(MAX_VIEW_AGENT, "auth"); talk("auth", 2, true, 200); }
+static void s_agent_sending(void)
 {
-    three_working();
-    ask("be", "q1", &DEPLOY, 1, true, true);
-    hit("be", MAX_HIT_OPTION, 0);
-    take();
-    max_ui_answer_receipt("be", max_ask_of("be")->fetch, "tok-1", false, false,
-                          "Permission prompts cannot be answered from here.", T0);
-    max_ui_focus("be");
+    orca();
+    show(MAX_VIEW_AGENT, "e2e");
+    talk("e2e", 3, true, 1600);
+    max_ui_talk(MAX_TALK_SENDING, T0);
 }
-static void s_q_sent(void)
+// An agent the bar cannot record for: where to talk to it instead.
+static void s_agent_no_voice(void)
 {
-    three_working();
-    ask("be", "q1", &DATABASE, 1, false, true);
-    hit("be", MAX_HIT_OPTION, 0);
-    take();
-    max_ui_answer_receipt("be", max_ask_of("be")->fetch, "tok-1", true, true, NULL, T0);
-    max_ui_focus("be");
+    static const pro_agent_row_t rows[] = {{"term", "deploy-bot", "codex", "m1", "MacBook Pro", "terminal", "s"}};
+    max_ui_reset();
+    max_ui_link(true, "MacBook Pro", T0);
+    max_ui_apps("terminal", APPS, 7, T0);
+    max_ui_agents(rows, 1, T0);
+    max_ui_turn("term", "started", "", 0, T0 - 30000);
+    max_ui_summary("term", "Staging is on 0.9.0. The smoke tests pass.", NULL, false, POD_TIER_LIST, T0 - 30000);
+    ago("term", 30);
+    show(MAX_VIEW_AGENT, "term");
 }
-static void s_q_long(void) { three_working(); ask("fw", "q1", &LONG_EN, 1, false, true); max_ui_focus("fw"); }
-static void s_q_long_vi(void)
+// A question while the person talks to another agent: the toast.
+static void s_toast(void)
 {
-    s_long();
-    ask("vq", "q", &LONG_VI, 1, false, true);
-    max_ui_focus("vq");
+    orca();
+    show(MAX_VIEW_AGENT, "auth");
+    talk("auth", 4, true, 300);
+    max_copy(max_m.toast_id, sizeof max_m.toast_id, "hero");
+    max_m.toast_from = T0 - 1000;
 }
-static void s_done(void)
+
+// ---- Attention ----
+static void s_attention_question(void)
 {
-    three_working();
-    max_ui_summary("web", "The pricing cards now match the design, and the footer links work again. I also moved the "
-                   "price table into its own component so the annual toggle can share it.", NULL, false,
+    harness();
+    max_ui_turn("cli", "started", "", 0, T0 - 60000);
+    ask("cli", "q-bump", &BUMP, 1, false, true);
+    attention("cli", MAX_ATTN_ASK);
+    max_ui_notice("Sent to auth-refactor", 3000, T0);
+}
+static void s_attention_permission(void)
+{
+    harness();
+    ask("fw", "q-flash", &FLASH, 1, true, true);
+    attention("fw", MAX_ATTN_ASK);
+    max_ui_notice("Sent: Keep 3", 3000, T0);
+}
+static void s_attention_outside(void)
+{
+    orca();
+    attention("hero", MAX_ATTN_ASK);
+    max_ui_notice("Allowed: make flash PORT=usb", 3000, T0);
+}
+static void s_attention_done(void)
+{
+    orca();
+    max_ui_summary("auth", "Token refresh retries once, then signs out cleanly. Auth suite: 14 of 14.", NULL, false,
                    POD_TIER_ALERT, T0);
-    max_ui_focus("web");
+    attention("auth", MAX_ATTN_DONE);
 }
+static void s_attention_failed(void)
+{
+    harness();
+    max_ui_turn("fw", "error", "idf.py flash exited with 2: no serial port at /dev/cu.usbmodem1101", 0, T0);
+    attention("fw", MAX_ATTN_FAIL);
+}
+static void s_attention_six(void)
+{
+    static const pro_ask_item_t board = {"board", "Which board should I flash the new panel driver to?",
+                                         {"ESP32-P4 Function EV", "Harness Max rev A", "Harness Max rev B", "Harness Pro",
+                                          "Dial", "None of these"}, 6, false, true};
+    harness();
+    ask("cli", "q-board", &board, 1, false, true);
+    attention("cli", MAX_ATTN_ASK);
+}
+static void s_attention_multi(void)
+{
+    static const pro_ask_item_t push[] = {
+        {"branch", "Where should the fix go?", {"main", "release/0.9"}, 2, false, true},
+        {"checks", "Which checks should run before the push?", {"Lint", "Type check", "Unit tests", "E2E on staging"}, 4,
+         true, true}};
+    harness();
+    ask("cli", "q-push", push, 2, false, true);
+    max_ask_hit(max_find("cli"), MAX_HIT_OPTION, 1, T0);   // release/0.9: on to the checks
+    max_ask_hit(max_find("cli"), MAX_HIT_OPTION, 0, T0);
+    max_ask_hit(max_find("cli"), MAX_HIT_OPTION, 2, T0);
+    attention("cli", MAX_ATTN_ASK);
+}
+static void s_attention_error(void)
+{
+    harness();
+    ask("cli", "q-bump", &BUMP, 1, false, true);
+    max_ask_hit(max_find("cli"), MAX_HIT_OPTION, 1, T0);
+    take();
+    max_ui_answer_receipt("cli", max_ask_of("cli")->fetch, "tok-1", false, false, "Question changed.", T0);
+    attention("cli", MAX_ATTN_ASK);
+}
+static void s_attention_long_vi(void)
+{
+    static const pro_ask_item_t vi = {"vi", "Bài kiểm thử xác thực lỗi vì bảng phiên đã bị xoá. Tôi nên khôi phục từ "
+                                      "nhật ký kiểm toán, dựng lại từ đầu, hay dừng ở đây để bạn tự xem?",
+                                      {"Khôi phục từ nhật ký kiểm toán rồi chạy lại", "Dựng lại bảng từ đầu",
+                                       "Dừng ở đây", "Hỏi lại tôi sau khi build xong"}, 4, false, true};
+    static const pro_agent_row_t rows[] = {{"vq", "Trợ lý kiểm thử tiếng Việt của nhóm", "claude", "m1", "MacBook Pro",
+                                            "harness", NULL}};
+    max_ui_reset();
+    max_ui_link(true, "MacBook Pro", T0);
+    max_ui_apps("harness", APPS, 7, T0);
+    max_ui_agents(rows, 1, T0);
+    ask("vq", "q-vi", &vi, 1, false, true);
+    attention("vq", MAX_ATTN_ASK);
+}
+
+// ---- Inbox, Apps, Ambient ----
+static void s_inbox(void)
+{
+    static const struct { const char *name, *engine, *app; max_attn_t kind; const char *text; uint32_t ago_s; bool unread; }
+        NOTES[] = {
+            {"firmware-max", "claude", "Harness", MAX_ATTN_ASK, "Wants to run: make flash PORT=usb", 20, false},
+            {"harness-cli", "claude", "Harness", MAX_ATTN_ASK, "Bump the cable protocol to 4, or keep 3 and add a field?",
+             30, false},
+            {"auth-refactor", "claude", "Orca", MAX_ATTN_DONE,
+             "Token refresh retries once, then signs out cleanly. Auth suite: 14 of 14.", 40, false},
+            {"landing-hero", "codex", "Orca", MAX_ATTN_ASK, "Both hero versions build. Keep the dark gradient, or switch "
+             "to the product photo?", 60, true},
+            {"api-docs", "codex", "VS Code", MAX_ATTN_FAIL, "The docs build failed: 3 broken links.", 540, false}};
+    orca();
+    max_m.inbox_count = 0;
+    for (size_t i = 0; i < sizeof NOTES / sizeof NOTES[0]; i++) {
+        max_inbox_t *e = &max_m.inbox[max_m.inbox_count++];
+        snprintf(e->id, sizeof e->id, "n%d", (int)i);
+        snprintf(e->name, sizeof e->name, "%s", NOTES[i].name);
+        snprintf(e->engine, sizeof e->engine, "%s", NOTES[i].engine);
+        snprintf(e->app, sizeof e->app, "%s", NOTES[i].app);
+        snprintf(e->text, sizeof e->text, "%s", NOTES[i].text);
+        e->kind = NOTES[i].kind;
+        e->at = T0 - NOTES[i].ago_s * 1000u;
+        e->unread = NOTES[i].unread;
+    }
+    show(MAX_VIEW_INBOX, NULL);
+    max_ui_notice("Following Harness on your Mac", 3000, T0);
+}
+static void s_inbox_empty(void)
+{
+    orca();
+    max_m.inbox_count = 0;
+    show(MAX_VIEW_INBOX, NULL);
+}
+static void s_apps(void) { orca(); show(MAX_VIEW_APPS, NULL); }
+static void s_ambient(void)
+{
+    max_ui_reset();
+    max_ui_link(true, "MacBook Pro", T0);
+    static const pro_agent_row_t rows[] = {{"fw", "firmware-max", "claude", "m1", "MacBook Pro", "harness", NULL},
+                                           {"docs", "docs", "muse", "m1", "MacBook Pro", "harness", NULL},
+                                           {"hero", "landing-hero", "codex", "m1", "MacBook Pro", "orca", NULL}};
+    max_ui_agents(rows, 3, T0);
+    max_ui_wall(true, 15, 7, 3, 18, 10);
+    show(MAX_VIEW_AMBIENT, NULL);
+}
+static void s_ambient_no_agents(void)
+{
+    max_ui_reset();
+    max_ui_link(true, "MacBook Pro", T0);
+    max_ui_wall(true, 9, 41, 1, 3, 0);
+    show(MAX_VIEW_AMBIENT, NULL);
+}
+static void s_not_connected(void) { max_ui_reset(); show(MAX_VIEW_AMBIENT, NULL); }
+static void s_update(void) { orca(); max_ui_update(40, "0.9.0"); }
 
 // ---- New Harness, as the demo daemon's form answers ----
 static void form_open(void)
 {
-    three_working();
+    orca();
     max_ui_form_open("form-0badc0de-000186a0", T0);
     take();
 }
@@ -285,21 +399,37 @@ static void s_form_busy(void)
     form_page(&busy);
 }
 static void s_form_failed(void) { form_open(); max_form_due(T0 + MAX_FORM_WAIT_MS); }
-static void s_form_say(void) { s_form_page(); talk(NULL, MAX_TALK_RECORDING); }   // a name for the field
-static void s_form_toast(void) { s_form_page(); max_ui_question("be", "q1", MIGRATE.q, &MIGRATE, 1, false, false, T0); toast("be", 2000); }
+static void s_form_say(void)   // a name for the field
+{
+    s_form_page();
+    max_m.talk_id[0] = 0;
+    max_ui_talk(MAX_TALK_RECORDING, T0);
+}
+static void s_form_toast(void)
+{
+    s_form_page();
+    max_copy(max_m.toast_id, sizeof max_m.toast_id, "hero");
+    max_m.toast_from = T0 - 2000;
+    max_ui_notice("Sent to auth-refactor", 3000, T0);
+}
 
 typedef struct { const char *name; void (*setup)(void); } screen_t;
 static const screen_t SCREENS[] = {
-    {"linkdown", s_linkdown}, {"noagents", s_noagents}, {"working", s_working}, {"asking", s_asking},
-    {"failed", s_failed}, {"five-p1", s_five_p1}, {"five-p2", s_five_p2}, {"watching", s_watching},
-    {"watching-p2", s_watching_p2}, {"toast", s_toast}, {"toast-notice", s_toast_notice}, {"listening", s_listening},
-    {"sending", s_sending}, {"talk-toast", s_talk_toast}, {"update", s_update}, {"long", s_long}, {"notice", s_notice},
-    {"pages", s_pages},
-    {"q-two", s_q_two}, {"q-six", s_q_six}, {"q-multi", s_q_multi}, {"q-permission", s_q_permission},
-    {"q-shown", s_q_shown}, {"q-error", s_q_error}, {"q-sent", s_q_sent}, {"q-long", s_q_long},
-    {"q-long-vi", s_q_long_vi}, {"done", s_done}, {"form-opening", s_form_opening}, {"form-page", s_form_page},
-    {"form-start", s_form_start}, {"form-busy", s_form_busy}, {"form-failed", s_form_failed}, {"form-say", s_form_say},
-    {"form-toast", s_form_toast},
+    {"overview", s_overview}, {"overview-harness", s_overview_harness}, {"overview-one", s_overview_one},
+    {"overview-pages", s_overview_pages}, {"overview-long", s_overview_long},
+    {"agent-reading", s_agent_reading}, {"agent-working", s_agent_working}, {"agent-mic-closed", s_agent_mic_closed},
+    {"agent-listening", s_agent_listening}, {"agent-listening-start", s_agent_listening_start},
+    {"agent-working-talking", s_agent_working_talking}, {"agent-sending", s_agent_sending},
+    {"agent-no-voice", s_agent_no_voice}, {"toast", s_toast},
+    {"attention-question", s_attention_question}, {"attention-permission", s_attention_permission},
+    {"attention-outside", s_attention_outside}, {"attention-done", s_attention_done},
+    {"attention-failed", s_attention_failed}, {"attention-six", s_attention_six},
+    {"attention-multi", s_attention_multi}, {"attention-error", s_attention_error},
+    {"attention-long-vi", s_attention_long_vi},
+    {"inbox", s_inbox}, {"inbox-empty", s_inbox_empty}, {"apps", s_apps}, {"ambient", s_ambient},
+    {"ambient-no-agents", s_ambient_no_agents}, {"not-connected", s_not_connected}, {"update", s_update},
+    {"form-opening", s_form_opening}, {"form-page", s_form_page}, {"form-start", s_form_start},
+    {"form-busy", s_form_busy}, {"form-failed", s_form_failed}, {"form-say", s_form_say}, {"form-toast", s_form_toast},
 };
 enum { SCREEN_COUNT = sizeof SCREENS / sizeof SCREENS[0] };
 
