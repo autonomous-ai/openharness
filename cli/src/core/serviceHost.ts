@@ -23,6 +23,7 @@
  *   again.
  */
 import type { Asker, CoreApi, CorePorts, ServiceRequest, ServiceRequests } from './api.js'
+import { errorKind } from '../lib/log.js'
 
 /** The fallback of a member whose failure belongs to its caller: it throws (or rejects). */
 export const FAIL = Symbol('fail')
@@ -74,8 +75,6 @@ type PortName = keyof CorePorts
 type Port<K extends PortName> = NonNullable<CorePorts[K]>
 type Member = (...args: unknown[]) => unknown
 
-const describe = (error: unknown): string => (error instanceof Error ? error.message : String(error))
-
 /** `HARNESSD_TEST_FAULTS`: a comma-separated list of `service` and `service.member` names. */
 export function testFaults(value: string | undefined): ReadonlySet<string> {
   return new Set((value ?? '').split(',').map((entry) => entry.trim()).filter(Boolean))
@@ -106,12 +105,12 @@ export function createServiceHost(ports: CorePorts, options: ServiceHostOptions 
     if (Object.hasOwn(ports, name)) ports[name as PortName] = null
     log(`[services] ${name} switched off after ${failed} failures in ${Math.round(windowMs / 1000)}s · it stays off until the daemon restarts`)
     for (const handler of [stoppers.get(name), ...offHandlers.get(name) ?? []]) {
-      try { handler?.() } catch (error) { log(`[services] switching ${name} off: ${describe(error)}`) }
+      try { handler?.() } catch (error) { log(`[services] switching ${name} off: ${errorKind(error)}`) }
     }
   }
 
   const failed = (name: string, member: string, error: unknown): void => {
-    log(`[services] ${name}.${member} failed · ${describe(error)}`)
+    log(`[services] ${name}.${member} failed · ${errorKind(error)}`)
     const at = now()
     const recent = (failures.get(name) ?? []).filter((t) => at - t < windowMs)
     recent.push(at)
@@ -174,7 +173,7 @@ export function createServiceHost(ports: CorePorts, options: ServiceHostOptions 
   const didNotStart = (name: string, error: unknown): void => {
     off.add(name)
     if (Object.hasOwn(ports, name)) ports[name as PortName] = null
-    log(`[services] ${name} did not start · ${describe(error)} · the core runs without it`)
+    log(`[services] ${name} did not start · ${errorKind(error)} · the core runs without it`)
   }
 
   return {
