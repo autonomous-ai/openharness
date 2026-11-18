@@ -168,3 +168,17 @@ source). Fixtures drain the actual file callbacks and history closes before remo
 The initial failed close-count receipt remains above. Broader validation is prepared but not run:
 10 affected journal/store/Close/secure-state/storage files, changed core storage at 100% per-file,
 checkpoint helper coverage, architecture and types. Native timing remains pending.
+
+## First broader gate
+
+At clean `66b46815ab`, all 10 selected files pass 199 cases with two platform skips (42.3 seconds).
+Architecture passes (6.1 seconds), and types pass (42.2 seconds). The gate still fails its required
+core-file coverage: storage has 100% lines/functions but 98.55% statements and 98.11% branches,
+with only the final outward receipt refusal unexercised. The retained receipt is
+`.harness/validation/20261118T211221.791480Z-61943/receipt.json`. The checkpoint helper reports
+99.44% lines, 95.27% statements, 91.97% branches and 97.82% functions; no 100% claim is made for it.
+
+A new controlled-clock case expires the original deadline between settlement's admitted continuation
+and outward receipt delivery. It preserves and exercises the final current fence. Runtime and
+coverage thresholds stay unchanged. Only affected storage coverage and test typing need follow-up;
+the other successful source gates remain evidence for the unchanged runtime.

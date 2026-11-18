@@ -265,3 +265,16 @@ it('retains four unsettled journal callbacks after their reply deadlines without
   } finally { release(); await vi.advanceTimersByTimeAsync(0) }
   expect(await storage.exportDatabase(session as RegisteredSession, stage, ownership(), source)).toEqual(receipt)
 })
+
+it('refuses an expired receipt between completed settlement and delivery to its caller', async () => {
+  const clock = vi.spyOn(performance, 'now').mockReturnValue(0), owner = ownership()
+  const receipt = { bytes: 7, sha256: 'a'.repeat(64) }
+  // Settlement resumes its admitted operation first; its outward promise has not delivered the receipt yet.
+  owner.settled.mockImplementation(async () => {
+    queueMicrotask(() => queueMicrotask(() => { clock.mockReturnValue(STORAGE_EXPORT_WAIT_MS) }))
+  })
+  const storage = createEngineStorage({ isolated: false, call: vi.fn(), inlineExport: async () => receipt })
+  await expect(storage.exportDatabase(session as RegisteredSession, { path: '/stage', key: '1:2' }, owner, source))
+    .rejects.toThrow('unavailable')
+  expect(owner.settled).toHaveBeenCalledOnce()
+})
