@@ -354,14 +354,17 @@ describe('Notices', () => {
     notices.stopped('a1', false)
     expect(core.typed).toEqual([])
     expect(log).toHaveBeenCalledTimes(2)
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('cannot be read'))
+    expect(log.mock.calls).toEqual([
+      ['agent browser a1: the ready line is not typed · PodmanError'],
+      ['agent browser a1: the stop line is not typed · PodmanError'],
+    ])
   })
 
   it('a mark that cannot be saved is logged', () => {
     notices.ready('a1')
     writeFileSync(path, '[]')
     core.hear(core.last().deliveryId, 'delivered')
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('not a browser state file'))
+    expect(log).toHaveBeenCalledWith('agent browser a1: the ready line\'s mark was not saved · PodmanError')
   })
 
   it('close stops hearing', () => {

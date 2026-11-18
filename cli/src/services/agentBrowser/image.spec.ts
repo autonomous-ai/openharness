@@ -131,7 +131,7 @@ describe('ensureImage', () => {
     const log = vi.fn(changed)
     await expect(ensureImage(podman, NOW, log)).resolves.toBe(OLDER)
     await until(() => log.mock.calls.length === 1)
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('no network'))
+    expect(log).toHaveBeenCalledWith(`agent browser: image ${TAG}: its build or prune failed · PodmanError`)
     await expect(ensureImage(podman, NOW, log)).resolves.toBe(OLDER)
     await until(() => log.mock.calls.length === 2)
     expect(removals()).toEqual([])
@@ -146,7 +146,7 @@ describe('ensureImage', () => {
     expect((error as PodmanError).message).toBe(Array.from({ length: 50 }, (_, n) => `line ${n + 31}`).join('\n'))
   })
 
-  it('a failed build logs and throws its own output, where apt says why, not only Podman\'s step line', async () => {
+  it('a failed build throws its own output, where apt says why, not only Podman\'s step line, and logs its kind', async () => {
     // As two macOS runs failed: apt's error is the RUN step's output, on stdout; stderr has only the failed step.
     const apt = [...Array.from({ length: 60 }, (_, n) => `Get:${n + 1} http://deb.debian.org/debian bookworm InRelease`), 'E: Unable to locate package chromium']
     const step = 'Error: building at STEP "RUN apt-get install -y chromium": while running runtime: exit status 100'
@@ -159,7 +159,7 @@ describe('ensureImage', () => {
     expect(lines).toHaveLength(50)
     expect(lines.slice(-2)).toEqual(['E: Unable to locate package chromium', step])
     await settled()
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('E: Unable to locate package chromium'))
+    expect(log).toHaveBeenCalledWith(`agent browser: image ${TAG}: its build or prune failed · PodmanError`)
   })
 
   it('a build that times out throws image_failed naming the timeout, as it printed no output of its own', async () => {
