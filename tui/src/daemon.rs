@@ -7,6 +7,7 @@
 //! questions, agents appearing — goes to the app as an event, as do binary terminal frames.
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::path::{Path, PathBuf};
@@ -49,9 +50,30 @@ pub fn socket_path(port: u16) -> PathBuf {
     let dir = std::env::var_os("ADAPTER_DATA_DIR").filter(|s| !s.is_empty()).map(PathBuf::from)
         .unwrap_or_else(default_data_dir);
     socket_in(&dir, port, || {
-        crate::harness_home::harness_path(std::env::var_os("HOME").unwrap_or_default(), crate::harness_home::Entry::S)
+        short_sockets(cfg!(target_os = "linux"), std::env::var_os("XDG_RUNTIME_DIR"), || {
+            crate::harness_home::harness_path(std::env::var_os("HOME").unwrap_or_default(), crate::harness_home::Entry::S)
+        })
     })
 }
+
+/// Where a data folder too long for a socket keeps it (cli/src/lib/localSocket.ts): on Linux in
+/// `$XDG_RUNTIME_DIR/harness` while that variable names this account's own folder (no link) of mode 0700, else in
+/// `state_sockets`, the state root's `s`.
+fn short_sockets(linux: bool, runtime: Option<OsString>, state_sockets: impl FnOnce() -> PathBuf) -> PathBuf {
+    let runtime = runtime.map(PathBuf::from).filter(|folder| linux && folder.is_absolute() && own_private_folder(folder));
+    runtime.map_or_else(state_sockets, |folder| folder.join("harness"))
+}
+
+#[cfg(unix)]
+fn own_private_folder(folder: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::symlink_metadata(folder).is_ok_and(|metadata| {
+        metadata.is_dir() && metadata.uid() == unsafe { libc::geteuid() } && metadata.mode() & 0o7777 == 0o700
+    })
+}
+
+#[cfg(not(unix))]
+fn own_private_folder(_: &Path) -> bool { false }
 
 /// The longest socket path the daemon opens (cli/src/lib/localSocket.ts MAX_SOCKET_PATH_BYTES).
 const MAX_SOCKET_PATH_BYTES: usize = 96;
@@ -480,7 +502,6 @@ fn dechunk(body: &[u8]) -> Vec<u8> {
 #[cfg(all(test, unix))]
 mod recovery_tests {
     use super::*;
-    use std::ffi::OsString;
     use std::os::unix::fs::PermissionsExt;
 
     struct TestSocket(PathBuf);
