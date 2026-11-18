@@ -8,7 +8,10 @@
  * SERVICE_UNAVAILABLE at once (a create on a grid model, GRID_UNAVAILABLE), and the master brings it back
  * (or parks it, when it keeps crashing), every service in it connected again.
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import type { ChildProcess } from 'node:child_process'
+import { once } from 'node:events'
+import { finished } from 'node:stream/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
@@ -16,6 +19,8 @@ import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { Ledger, ledgerPath } from '../src/agentClient/ledger.js'
 import { fakeJwt, installFakeGrid } from '../src/lib/__fixtures__/fakeGrid.js'
+import { processTable } from '../src/testing/spawnedRuns.js'
+import { rootProcesses } from '../src/testing/rootProcesses.js'
 
 type Engine = 'claude' | 'codex'
 
@@ -487,7 +492,7 @@ describe('models in its own process', () => {
       const [claude, codex] = discovered
       await until('codex classified from its argv after models returns', async () => {
         const now = await row(client, codex.id)
-        return now?.sessionId === codex.sessionId && now.grid?.baseUrl === grid.baseUrl && now.grid?.model === grid.model ? now : null
+        return now && now.sessionId === codex.sessionId && now.grid?.baseUrl === grid.baseUrl && now.grid?.model === grid.model ? now : null
       }, 45_000, 250)
       // Its endpoint is in its environment alone, which the daemon never reads.
       expect((await row(client, claude.id))?.grid ?? null).toBeNull()
@@ -548,6 +553,9 @@ describe('models in its own process', () => {
     const hold = join(holdDir, 'hold')
     const gridName = 'fixture-grid'
     const token = fakeJwt({ exp: Math.floor(Date.now() / 1000) + 86400 * 300, sub: 'fixture' })
+    let fixture: IsolatedDaemon | undefined
+    const ownedPids = new Set<number>(), ownedGroups = new Set<number>()
+    const settled: Promise<unknown>[] = []
     const grid = installFakeGrid({
       ls: { stdout: JSON.stringify([{ grid: gridName, id: 'fixture-grid-id', type: 'permissioned-public' }]) },
       // No network address for inventory: the reader uses the fake CLI only.
@@ -559,6 +567,12 @@ describe('models in its own process', () => {
     try {
       const d = await fresh({ HARNESSD_TEST_HOLD_CONNECT: `models:${hold}`,
         HARNESS_GRID_BIN: process.env.HARNESS_GRID_BIN!, FAKE_GRID_PLAN: process.env.FAKE_GRID_PLAN!, FAKE_GRID_LOG: process.env.FAKE_GRID_LOG! })
+      fixture = d
+      for (const child of (d as unknown as { groups: Set<ChildProcess> }).groups) {
+        if (child.pid) { ownedPids.add(child.pid); ownedGroups.add(child.pid) }
+        const ending = Promise.all([once(child, 'exit'), once(child, 'close'), finished(child.stdout!), finished(child.stderr!)])
+        void ending.catch(() => {}); settled.push(ending)
+      }
       let client = await LocalClient.connect(d)
       writeFileSync(hold, '')
       for (const pid of modelsPids(d)) process.kill(pid, 'SIGKILL')
@@ -572,6 +586,19 @@ describe('models in its own process', () => {
         expect(await client.request('agent_create', payload, 15_000)).toMatchObject({ creationId: payload.creationId, state: 'pending', held: { service: 'models' } })
       }
       expect((await client.request('agents_list', { includeStopped: true })).agents).toHaveLength(0)
+      // Kill only the required storage child of this fixture's current core. Its replacement must
+      // retain the saved intents without taking the core or unrelated launches down with it.
+      const originalCore = d.corePid()!
+      ownedPids.add(originalCore)
+      const storage = processTable().filter(row => row.ppid === originalCore && /(?:^|\s)__storage(?:\s|$)/.test(row.command))
+      expect(storage).toHaveLength(1)
+      ownedPids.add(storage[0].pid)
+      process.kill(storage[0].pid, 'SIGKILL')
+      await until('the original storage child to be reaped', () => !processTable().some(row => row.pid === storage[0].pid) || null, 5_000, 50)
+      for (const { creationId } of payloads) {
+        expect(await client.request('agent_create_status', { creationId })).toMatchObject({ state: 'pending', held: { service: 'models' } })
+      }
+      expect(d.corePid()).toBe(originalCore)
       const before = d.log().length
       const asked = Date.now()
       process.kill(d.corePid()!, 'SIGKILL')
@@ -605,9 +632,30 @@ describe('models in its own process', () => {
       expect(d.coresStarted()).toBe(2)
       client.close()
     } finally {
-      await daemon?.close(); daemon = undefined
-      grid.dispose()
-      rmSync(holdDir, { recursive: true, force: true })
+      try {
+        const table = processTable()
+        let added: boolean
+        do {
+          added = false
+          for (const row of table) if (ownedPids.has(row.ppid) && !ownedPids.has(row.pid)) {
+            ownedPids.add(row.pid); added = true
+          }
+        } while (added)
+        const cleanup = await Promise.allSettled([daemon?.close(), ...settled])
+        const errors = cleanup.flatMap(value => value.status === 'rejected' ? [value.reason] : [])
+        if (errors.length) throw new AggregateError(errors, 'Pending intent fixture cleanup failed')
+        const after = processTable()
+        expect(after.filter(row => ownedPids.has(row.pid) || ownedGroups.has(row.pgid))).toEqual([])
+        if (fixture) {
+          expect(rootProcesses(fixture.root, after).all).toEqual([])
+          expect(existsSync(fixture.tmux.socket)).toBe(false)
+          expect(existsSync(fixture.root)).toBe(false)
+        }
+      } finally {
+        daemon = undefined
+        grid.dispose()
+        rmSync(holdDir, { recursive: true, force: true })
+      }
     }
   })
 

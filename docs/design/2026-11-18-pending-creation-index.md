@@ -168,3 +168,26 @@ bytes, time to prepare the first/last pending intent, and median/p95 fresh admis
 candidate order with the same fixture snapshots and host-load observations. Core may read selected pending receipts;
 historical primary JSON must be opened only by the storage child. Do not infer speed or memory improvement from source
 size or a passing unit suite. This task prepares the plan; root owns execution and acceptance with the final build.
+
+### Packaged acceptance selection (prepared, not executed)
+
+`e2e/pendingCreationIndex.e2e.ts` has two cases, selecting the full entry and the embedded lean entry from the same
+reviewed artifact. Each uses 140 valid completed receipt names and one pending legacy intent, starts a credited
+scan, kills its exact child, waits for exit/close/IPC disconnect, refuses the stale cursor and discovers the pending
+intent with a replacement. After that scan completes, a legacy writer publishes another pending intent while the
+directory timestamp is restored; the next child scan must find it and durably create its marker. Two concurrent
+modern retries execute the selected intent once, terminal evidence retires its marker, and terminal replay still
+works after the storage owner has permanently closed. Cleanup checks every owned child absent before deleting the
+private root.
+
+The existing `serviceProcesses` case named `keeps manual model requests through an outage and core crash` is extended
+to kill only the current fixture core's verified `__storage` child while three requests are held on models. Their
+statuses stay pending and core stays alive. It then exercises the existing core crash, cancellation, unrelated
+agent turn, recovered Claude/Codex creation and duplicate retry checks. The fixture now awaits master exit/close and
+both stream EOFs and asserts its owned PID/group/descendant, private socket and root cleanup. Its separate strict
+fixture type check also exposed an existing nullable poll-result guard; that guard now checks the row before fields.
+
+The fixed selection is `/tmp/core-pending-index-native-plan.json`: three cases, one worker, 180 seconds per case and
+720 seconds for the outer validation check. It disables implicit builds and requires root to supply the exact
+`E2E_BUNDLE_PATH` after the combined artifact is frozen. No optional native process-image artifact is assumed. The
+fixture type check passes; no packaged execution or timing result is claimed by this preparation.
