@@ -52,7 +52,11 @@ export function defaultTmux(run: Run = onDefaultServer): Tmux {
         if (line.slice(at + 1) !== from) continue
         // In the journal first: a crash between the two leaves a pane the rollback sets back, never one it does not know.
         journal.add({ did: 'pane', id })
-        if (!setTag(id, to)) throw new Error(`tmux could not retag pane ${id}`)
+        if (!setTag(id, to)) {
+          // A pane that closed since the listing runs nothing that could use an old path.
+          if (!lines(['list-panes', '-a', '-F', '#{pane_id}']).includes(id)) continue
+          throw new Error(`tmux could not retag pane ${id}`)
+        }
         ids.push(id)
       }
       return ids
