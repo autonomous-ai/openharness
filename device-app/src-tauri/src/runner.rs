@@ -250,6 +250,7 @@ impl Runner {
             Effect::RunOrcaConnect(approve) => {
                 shared.with_cli(move |cli| Event::OrcaConnect(orca_cli::connect(cli, approve.as_ref())))
             }
+            Effect::RunOrcaStatus => shared.with_cli(|cli| Event::OrcaStatus(orca_cli::status(cli))),
             // Not with_cli: its Cli(false) would leave the row waiting for an answer that never comes.
             Effect::ExportLogs => match shared.cli() {
                 Some(cli) => {

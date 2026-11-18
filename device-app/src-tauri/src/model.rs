@@ -2,7 +2,7 @@
 
 use crate::logs::reason;
 use crate::types::{
-    AppState, AppUpdate, CliState, Daemon, DialStatus, LogsExport, MenuAction, MenuItem, NotifyMode, Screen,
+    AppState, AppUpdate, CliState, Daemon, DialStatus, LogsExport, MenuAction, MenuItem, NotifyMode, OrcaState, Screen,
 };
 
 /// The start of the line a saved export leaves in the menu, which the log writes as `Saved`.
@@ -51,6 +51,11 @@ pub fn menu(state: &AppState) -> Vec<MenuItem> {
         Some(true) => items.push(MenuItem::Text("Signed in".into())),
         Some(false) => items.push(MenuItem::Action(MenuAction::SignIn, "Sign in…".into())),
         None => {}
+    }
+    match state.orca {
+        OrcaState::Offer => items.push(MenuItem::Action(MenuAction::Orca, "Connect Orca…".into())),
+        OrcaState::Update => items.push(MenuItem::Action(MenuAction::Orca, "Update Orca connection…".into())),
+        OrcaState::None => {}
     }
     // The check is what the dial reports; the item carries the action its click does.
     match settable(state).and_then(|dial| dial.muted) {

@@ -175,6 +175,16 @@ pub struct AppState {
     /// What `harness --version` printed, for the About panel.
     pub cli_version: Option<String>,
     pub logs: LogsExport,
+    pub orca: OrcaState,
+}
+
+/// The menu's Orca row: `Connect Orca…` (Offer), `Update Orca connection…` (Update), or none.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OrcaState {
+    #[default]
+    None,
+    Offer,
+    Update,
 }
 
 /// AuthorizeUrl holds an `https:` URL only (account.rs lets no other through).
@@ -233,7 +243,8 @@ pub enum OrcaAnswer {
 }
 
 /// What happened. WatchExit(None): ended by a signal. UpdateChecked(Some): a strictly newer release. InstallStep:
-/// `'static`, so only the step table's fixed copy can be one, never a line of the script's.
+/// `'static`, so only the step table's fixed copy can be one, never a line of the script's. OrcaStatus(None): the CLI
+/// could not say.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
     Tick { now: u64, desktop_running: bool },
@@ -256,6 +267,7 @@ pub enum Event {
     UpdateFailed(UpdateFailure),
     LogsExported(Result<Exported, ExportFailure>),
     OrcaConnect(OrcaAnswer),
+    OrcaStatus(Option<OrcaStatus>),
 }
 
 /// What to do about it. Show(None) hides the window. ShowAbout: the About panel, with its credits line. Menu, Show,
@@ -283,6 +295,7 @@ pub enum Effect {
     CheckUpdate,
     InstallUpdate,
     RunOrcaConnect(Option<Fingerprint>),
+    RunOrcaStatus,
     Menu(Vec<MenuItem>),
     Show(Option<View>),
     ShowAbout(Option<String>),
