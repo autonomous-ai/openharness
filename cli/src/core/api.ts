@@ -51,6 +51,7 @@ import type { StoppedAgentStore } from '../lib/stoppedAgents.js'
 import type { TerminalBinaryClear } from '../lib/terminalBinary.js'
 import type { DeviceHookPort } from './deviceHookCalls.js'
 import { FAIL, later, readFallback, ServiceUnavailableError, type PortFallbacks } from './serviceHost.js'
+export { SERVICE_REQUESTS_MAX } from './serviceHost.js'
 
 /** The mod's poll, as the core hands it to the devices: a service reads these types here alone. */
 export type { DeviceHookPort, InboxAnswer, InboxPoll } from './deviceHookCalls.js'

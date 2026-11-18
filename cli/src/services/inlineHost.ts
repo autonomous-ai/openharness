@@ -22,8 +22,7 @@
  *   and the `onOff` handlers unbind what clients reach it through. A restart of the daemon starts it
  *   again.
  */
-import { FAIL, readFallback, ServiceUnavailableError, type Asker, type CoreApi, type CorePorts, type PortFallbacks, type ServiceRequest, type ServiceRequests } from '../core/api.js'
-import { SERVICE_REQUESTS_MAX } from '../core/serviceHost.js'
+import { FAIL, readFallback, ServiceUnavailableError, SERVICE_REQUESTS_MAX, type Asker, type CoreApi, type CorePorts, type PortFallbacks, type ServiceRequest, type ServiceRequests } from '../core/api.js'
 
 export interface ServiceHostOptions {
   /** Failures within `windowMs` that switch a service off. */
