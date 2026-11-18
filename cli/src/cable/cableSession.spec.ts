@@ -394,9 +394,18 @@ describe('cable session', () => {
   it('leaves out a row whose id the dial cannot keep', async () => {
     const { session, port } = await connect()
     try {
-      await session.replaceNotifications(['x'.repeat(48), 'é'.repeat(24), 'a\u0001b', 'x'.repeat(47), 'a1'].map((agentId) => (
+      await session.replaceNotifications(['x'.repeat(48), 'é'.repeat(24), 'a\u0001b', 'a\ud800', 'x'.repeat(47), 'a1'].map((agentId) => (
         { agentId, machineId: 'mac-local', question: true, text: 'Which branch?' })))
       expect((port.sent.at(-1)!.items as Array<{ agentId: string }>).map((row) => row.agentId)).toEqual(['x'.repeat(47), 'a1'])
+    } finally { await session.stop() }
+  })
+
+  it('writes half an emoji in a drawer row as the dial writes a byte it cannot read, so the dial can parse the frame', async () => {
+    // JSON escapes a lone surrogate as \ud83d, and the dial's parser refuses the whole frame for it.
+    const { session, port } = await connect(makeHost({ describe: () => ({ name: 'Fix \ud83d', engine: 'claude', machine: '\ude00Mac' }) }))
+    try {
+      await session.replaceNotifications([{ agentId: 'a1', machineId: 'mac-local', question: true, text: 'Ship \ud83d it? 😀' }])
+      expect(port.sent.at(-1)!.items).toMatchObject([{ name: 'Fix ?', machine: '?Mac', summary: 'Ship ? it? 😀' }])
     } finally { await session.stop() }
   })
 
