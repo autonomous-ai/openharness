@@ -23,6 +23,7 @@ import {
   accessSync,
   closeSync,
   constants,
+  existsSync,
   fchmodSync,
   fstatSync,
   fsyncSync,
@@ -142,9 +143,22 @@ function agyStopStatus(input) {
   return input.fullyIdle === false ? 'waiting' : failed || input.error ? 'error' : undefined
 }
 
+/**
+ * Harness's data and state folders, by the rule of src/config/harnessHome.ts: on Linux the XDG ones once the data one
+ * exists, else ~/.harness while that exists, else the XDG ones (a variable counts only as an absolute path); ~/.harness
+ * elsewhere.
+ */
+function harnessRoots() {
+  const legacy = join(homedir(), '.harness')
+  if (process.platform !== 'linux') return { data: legacy, state: legacy }
+  const base = (name, ...fallback) => isAbsolute(process.env[name] || '') ? process.env[name] : join(homedir(), ...fallback)
+  const xdg = { data: join(base('XDG_DATA_HOME', '.local', 'share'), 'harness'), state: join(base('XDG_STATE_HOME', '.local', 'state'), 'harness') }
+  return existsSync(xdg.data) || !existsSync(legacy) ? xdg : { data: legacy, state: legacy }
+}
+
 function paths() {
-  const cliDir = join(homedir(), '.harness', 'cli')
-  const dataDir = routed?.dataDir ?? argValue('--data-dir', process.env.ADAPTER_DATA_DIR || join(cliDir, 'data'))
+  // Every installed command names its data folder: the rule is looked up only for one that does not.
+  const dataDir = routed?.dataDir ?? (argValue('--data-dir', '') || process.env.ADAPTER_DATA_DIR || join(harnessRoots().data, 'cli', 'data'))
   const claudeProjectsDir = argValue('--claude-projects-dir', process.env.CLAUDE_PROJECTS_DIR || join(homedir(), '.claude', 'projects'))
   const codexHome = argValue('--codex-home', process.env.CODEX_HOME || join(homedir(), '.codex'))
   const grokHome = argValue('--grok-home', process.env.GROK_HOME || join(homedir(), '.grok'))
@@ -318,7 +332,7 @@ function privateSocket(file) {
 function socketIn(dataDir, port) {
   const beside = join(dataDir, `daemon-${port}.sock`)
   if (Buffer.byteLength(beside) <= MAX_SOCKET_PATH_BYTES) return beside
-  const short = join(homedir(), '.harness', 's', createHash('sha256').update(dataDir).digest('hex').slice(0, 16), `daemon-${port}.sock`)
+  const short = join(harnessRoots().state, 's', createHash('sha256').update(dataDir).digest('hex').slice(0, 16), `daemon-${port}.sock`)
   return Buffer.byteLength(short) <= MAX_SOCKET_PATH_BYTES ? short : null
 }
 
@@ -1008,11 +1022,11 @@ async function ownPane(pane) {
 }
 
 /**
- * Where every daemon on this computer says it listens, one file per pane tag (src/lib/hookRoutes.ts,
- * which hookNotify.spec.ts keeps this equal to).
+ * Where every daemon on this computer says it listens, one file per pane tag (src/lib/hookRoutes.ts), by default
+ * in the state folder.
  */
 function hookRoutesDir() {
-  return process.env.HARNESS_HOOK_ROUTES_DIR || join(homedir(), '.harness', 'hook-routes')
+  return process.env.HARNESS_HOOK_ROUTES_DIR || join(harnessRoots().state, 'hook-routes')
 }
 
 /**
