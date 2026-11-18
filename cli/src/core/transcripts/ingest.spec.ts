@@ -106,25 +106,26 @@ describe('ingesting a transcript line', () => {
     expect(none.ingest.ingestLine(line('s1', 'claude', CLAUDE_PROMPT))).toEqual(expect.any(Array))
   })
 
-  it('gives a line to its engine though the device or the runtime profile cannot take it in, and says so once a session', () => {
+  it('gives a line to its engine though the device or the runtime profile cannot take it in, and says so once a session by the error\'s kind', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const clean = setup({ s1: 'claude' })
     const expected = clean.ingest.ingestLine(line('s1', 'claude', CLAUDE_PROMPT))
     expect(expected).not.toEqual([])
     const { ingest, deps, service } = setup({ s1: 'claude', s2: 'claude' })
     service.needsTranscript.mockReturnValue(true)
-    service.observeTranscript.mockImplementation(() => { throw new Error('evidence unreadable') })
-    vi.mocked(deps.runtimeProfiles.ingest).mockImplementation(() => { throw 'profile unreadable' })
+    // A reader that parses the line throws an error quoting it: the person's words, never in the log.
+    service.observeTranscript.mockImplementation(() => { JSON.parse('SECRET-LINE-MARKER') })
+    vi.mocked(deps.runtimeProfiles.ingest).mockImplementation(() => { throw 'SECRET-PROFILE-MARKER' })
     // The line's events are the ones it has without the two readers: a turn's start, here.
     expect(ingest.ingestLine(line('s1', 'claude', CLAUDE_PROMPT))).toEqual(expected)
     ingest.ingestLine(line('s1', 'claude', '{}'))
     ingest.ingestLine(line('s2', 'claude', CLAUDE_PROMPT))
     expect(deps.runtimeProfiles.ingest).toHaveBeenCalledTimes(3)
     expect(error.mock.calls).toEqual([
-      ['[transcripts] the device could not take in a line of s1; the line goes on to its engine: evidence unreadable'],
-      ['[transcripts] the runtime profile could not take in a line of s1; the line goes on to its engine: profile unreadable'],
-      ['[transcripts] the device could not take in a line of s2; the line goes on to its engine: evidence unreadable'],
-      ['[transcripts] the runtime profile could not take in a line of s2; the line goes on to its engine: profile unreadable'],
+      ['[transcripts] the device could not take in a line of s1; the line goes on to its engine: SyntaxError'],
+      ['[transcripts] the runtime profile could not take in a line of s1; the line goes on to its engine: string'],
+      ['[transcripts] the device could not take in a line of s2; the line goes on to its engine: SyntaxError'],
+      ['[transcripts] the runtime profile could not take in a line of s2; the line goes on to its engine: string'],
     ])
   })
 
@@ -189,20 +190,21 @@ describe('the watcher wiring', () => {
     return { ...run, watcher }
   }
 
-  it('streams each live line, and contains a line that throws', () => {
+  it('streams each live line, and contains a line that throws, said by the error\'s kind', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const run = wired({ s1: 'claude' })
     run.watcher.emit('line', line('s1', 'claude', CLAUDE_PROMPT))
     run.watcher.emit('line', line('nobody', 'claude', CLAUDE_PROMPT))
     expect(vi.mocked(run.deps.emit).mock.calls).toHaveLength(1)
     expect(vi.mocked(run.deps.emit).mock.calls[0][0]).toBe('s1')
-    vi.mocked(run.deps.tokenUsage.changed).mockImplementationOnce(() => { throw new Error('bad line') })
+    // A parser that throws on a line quotes it: the person's words, never in the log.
+    vi.mocked(run.deps.tokenUsage.changed).mockImplementationOnce(() => { JSON.parse('SECRET-LINE-MARKER') })
     run.watcher.emit('line', line('s1', 'claude', CLAUDE_PROMPT))
-    vi.mocked(run.deps.tokenUsage.changed).mockImplementationOnce(() => { throw 'worse' })
+    vi.mocked(run.deps.tokenUsage.changed).mockImplementationOnce(() => { throw 'SECRET-LINE-MARKER' })
     run.watcher.emit('line', line('s1', 'claude', CLAUDE_PROMPT))
     expect(error.mock.calls).toEqual([
-      ['[cli] line handler error (session s1):', 'bad line'],
-      ['[cli] line handler error (session s1):', 'worse'],
+      ['[cli] line handler error (session s1):', 'SyntaxError'],
+      ['[cli] line handler error (session s1):', 'string'],
     ])
   })
 
@@ -238,13 +240,13 @@ describe('the watcher wiring', () => {
     run.watcher.emit('history', batch([line('nobody', 'claude')]))
     expect(vi.mocked(run.deps.emit).mock.calls).toHaveLength(1)
     expect(vi.mocked(run.deps.emit).mock.calls[0][2]).toEqual({ replay: true })
-    vi.mocked(run.deps.tokenUsage.changed).mockImplementationOnce(() => { throw new Error('bad batch') })
+    vi.mocked(run.deps.tokenUsage.changed).mockImplementationOnce(() => { JSON.parse('SECRET-LINE-MARKER') })
     run.watcher.emit('history', batch([line('s1', 'claude', CLAUDE_PROMPT)]))
-    vi.mocked(run.deps.tokenUsage.changed).mockImplementationOnce(() => { throw 'worse' })
+    vi.mocked(run.deps.tokenUsage.changed).mockImplementationOnce(() => { throw 'SECRET-LINE-MARKER' })
     run.watcher.emit('history', batch([line('s1', 'claude', CLAUDE_PROMPT)]))
     expect(error.mock.calls).toEqual([
-      ['[cli] history handler error (session s1):', 'bad batch'],
-      ['[cli] history handler error (session s1):', 'worse'],
+      ['[cli] history handler error (session s1):', 'SyntaxError'],
+      ['[cli] history handler error (session s1):', 'string'],
     ])
   })
 

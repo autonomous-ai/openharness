@@ -756,10 +756,10 @@ describe('attaching a session', () => {
       expect(run.service.observeTranscript).toHaveBeenCalledWith('claude-agent', 'claude-s', 'claude', expect.any(String))
       expect(run.profile.commit).toHaveBeenCalled()
       expect(error.mock.calls).toEqual([
-        ['[transcripts] the device could not take in a line of terminal; the line goes on to its engine: device state unreadable'],
-        ['[transcripts] the device could not take in a line of terminal; the line goes on to its engine: evidence unreadable'],
-        ['[transcripts] the runtime profile could not take in a line of terminal; the line goes on to its engine: profile unreadable'],
-        ['[transcripts] the device could not take in a line of claude-s; the line goes on to its engine: evidence unreadable'],
+        ['[transcripts] the device could not take in a line of terminal; the line goes on to its engine: Error'],
+        ['[transcripts] the device could not take in a line of terminal; the line goes on to its engine: Error'],
+        ['[transcripts] the runtime profile could not take in a line of terminal; the line goes on to its engine: string'],
+        ['[transcripts] the device could not take in a line of claude-s; the line goes on to its engine: Error'],
       ])
     })
 
