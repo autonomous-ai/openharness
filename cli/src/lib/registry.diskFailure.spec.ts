@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { namesTheDisk } from '../harnessd/supervisor.js'
+import { errorKind } from './log.js'
 import type { registry as Registry } from './registry.js'
 
 const refuse = vi.hoisted(() => ({ code: undefined as string | undefined, directorySync: undefined as string | undefined }))
@@ -45,7 +46,36 @@ afterEach(async () => {
   refuse.directorySync = undefined
   await registry.flush().catch(() => {})
   vi.unstubAllEnvs()
+  vi.restoreAllMocks()
   rmSync(directory, { recursive: true, force: true })
+})
+
+it.each(['EACCES', 'ENOSPC'])('a save refused with %s logs that code, and no path', async (code) => {
+  const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+  refuse.code = code
+  registry.setActive(input.agentId, false) // save(): logged, never thrown
+  await registry.flush().catch(() => {})
+  const lines = error.mock.calls.map((call) => call.map(String).join(' '))
+  expect(lines).toContain(`[registry] save failed · ${code}`)
+  expect(lines.join('\n')).not.toContain(directory)
+})
+
+it.each(['ENOSPC', 'EROFS'])('a strict save refused with %s keeps the disk code for the log, off the message', async (code) => {
+  refuse.code = code
+  const failure = await registry.transaction(() => { registry.setActive(input.agentId, false) }).catch((error: Error) => error)
+  expect(errorKind(failure)).toBe(`RegistryPersistenceUnavailable ${code}`)
+  expect((failure as { code?: unknown }).code).toBeUndefined()
+})
+
+it('a names save refused with ENOSPC logs the type and the disk code', async () => {
+  const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+  await registry.rename(input.agentId, 'Chosen name')
+  refuse.code = 'ENOSPC'
+  // An inherited name has no request to answer: saveNames() logs its failure, never throws it.
+  registry.inheritName(input.agentId, 'next-session')
+  await registry.flush().catch(() => {})
+  expect(error.mock.calls.map((call) => call.map(String).join(' ')))
+    .toContain('[registry] save names failed · RegistryPersistenceUnavailable ENOSPC')
 })
 
 it.each([
