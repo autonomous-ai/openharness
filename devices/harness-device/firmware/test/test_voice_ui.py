@@ -36,7 +36,7 @@ static bool cable_client_supports(uint32_t features) { return (host_features & f
 #include "draft.h"
 #include "workspace.h"
 #define EXT_RAM_BSS_ATTR
-enum { HOME, AGENTS, AGENT, COMPANION, VOICE, MESSAGE, SELECTION, FORM, QUESTION, CHOICE, ANSWER_REVIEW, DRAFT, DRAFT_OPTIONS, INBOX };
+enum { HOME, AGENTS, AGENT, COMPANION, VOICE, MESSAGE, SELECTION, FORM, QUESTION, CHOICE, ANSWER_REVIEW, DRAFT, DRAFT_OPTIONS, INBOX, OTA };
 enum { A_VOICE, A_VOICE_STOP, A_VOICE_ABORT };
 enum { VOICE_CMD_NONE, VOICE_CMD_GOAL };
 typedef int view_t;
@@ -126,7 +126,7 @@ harness += 'static void dispatch(action_t a) { switch (a.kind) { case A_VOICE:\n
 worker = source.split('static void worker(', 1)[1].split('case A_VOICE:\n', 1)[1].split('case A_STOP_YES:', 1)[0]
 harness += 'static void work(action_t a) { switch (a.kind) { case A_VOICE:\n' + worker + '} }\n'
 for name in ['habitat_tick', 'ui_set_connected', 'ui_show_error', 'ui_cable_toast',
-             'ui_voice_error', 'ui_voice_routed', 'ui_question_close']:
+             'ui_voice_error', 'ui_voice_routed', 'ui_question_close', 'ui_ota_boot_show']:
     harness += function(name)
 harness += r'''
 static void reset(void) {
@@ -156,6 +156,12 @@ int main(void) {
     reset(); begin(); done(); finish_audio(); ui_voice_routed(true,false,"","agent","Agent",1);
     start_ignored = true; speak(); work(queued); assert(!s.voice_start_pending && starts==1);
     discard(); work(queued); assert(!cancels);
+    // An OTA ends the voice as a discard does: a clip that already sent voice.end is cancelled on the host, once.
+    reset(); begin(); done(); finish_audio(); assert(s.voice_waiting);
+    ui_ota_boot_show("1.0.0"); assert(cancels==1 && !strcmp(cancelled,"capture-1") && !s.voice_open && s.view==OTA);
+    // Still starting: no upload yet, so nothing is cancelled and the queued start records nothing.
+    reset(); speak(); pending = queued; ui_ota_boot_show("1.0.0"); work(pending);
+    assert(!cancels && !starts && !s.voice_open && s.view==OTA);
 
     // The listening scene follows whom the turn is for: an agent's engine, nothing for a draft.
     reset(); strcpy(s.agents[0].engine, "claude"); begin(); assert(!strcmp(s.voice_engine, "claude"));
