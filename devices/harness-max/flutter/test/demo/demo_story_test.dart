@@ -33,8 +33,20 @@ void main() {
     final apps = d.first('apps')!;
     expect(apps.text, 'orca');
     final rows = apps['rows'] as List<AppInfo>;
-    expect([for (final r in rows) '${r.id} ${r.name} ${r.count} ${r.waiting}'],
-        ['orca Orca 5 0', 'harness Harness 3 0', 'vscode VS Code 1 0']);
+    // The mockup's apps, in its order: those with no agents too, so the demo's Apps is as full as the mockup's.
+    expect([for (final r in rows) '${r.id} ${r.name} ${r.count} ${r.waiting}'], [
+      'harness Harness 3 0',
+      'orca Orca 5 0',
+      'herdr herdr 2 0',
+      'vscode VS Code 1 0',
+      'cursor Cursor 0 0',
+      'claude Claude 0 0',
+      'codex ChatGPT 0 0',
+      'terminal-app Terminal 0 0',
+      'ghostty Ghostty 0 0',
+      'iterm iTerm2 0 0',
+      'cmux cmux 0 0',
+    ]);
 
     final ring = d.first('agents')!;
     expect(d.seen.indexOf(ring), d.seen.indexOf(apps) + 1);
@@ -152,7 +164,8 @@ void main() {
     d.run(1);
     final apps = d.first('apps')!;
     expect(apps.text, 'harness');
-    expect([for (final r in apps['rows'] as List<AppInfo>) '${r.id} ${r.count}'], ['orca 5', 'harness 4', 'vscode 1']);
+    expect([for (final r in (apps['rows'] as List<AppInfo>).take(4)) '${r.id} ${r.count}'],
+        ['harness 4', 'orca 5', 'herdr 2', 'vscode 1']);
     final ring = d.first('agents')!;
     expect(ring.text, 'firmware-max,harness-cli,docs,harness-web');
     final made = (ring['rows'] as List<AgentRow>).last;

@@ -42,8 +42,9 @@ const int kStepCapMs = 10000;
 /// ...and the demo ticks at least this often, so the cap never cuts a gap the story meant.
 const int kTickMs = 1000;
 
-/// The most agents the computer runs: New Harness says so past it.
-const int kMaxAgents = 12;
+/// The most agents the computer runs: New Harness says so past it. The cast's eleven and three more, the room the
+/// story's nine had.
+const int kMaxAgents = 14;
 
 /// Made-up levels with no mic: 20 a second, speech-like for 2.2 s, then near silence, so the model hears speech and
 /// then sends by itself. A recording the model never ends is fed no longer than [kTalkMaxMs].
@@ -605,12 +606,11 @@ class DemoLink implements BarLink {
   String _appsKeyNow() =>
       [_shown, for (var i = 0; i < kApps.length; i++) '${_count(i)}/${_count(i, waiting: true)}'].join(' ');
 
-  /// The apps with agents on this computer, in the daemon's fixed order, and the one whose ring the bar holds.
+  /// The computer's apps in a fixed order, those with no agents too (kApps), and the one whose ring the bar holds.
   void _pushApps() {
     model.onApps(kApps[_shown].id, [
       for (var i = 0; i < kApps.length; i++)
-        if (_count(i) > 0)
-          AppInfo(id: kApps[i].id, name: kApps[i].name, count: _count(i), waiting: _count(i, waiting: true)),
+        AppInfo(id: kApps[i].id, name: kApps[i].name, count: _count(i), waiting: _count(i, waiting: true)),
     ]);
     _appsKey = _appsKeyNow();
   }
@@ -648,7 +648,7 @@ class DemoLink implements BarLink {
   void _create() {
     _createAt = null;
     if (_agents.length >= kMaxAgents) {
-      model.onToast('The bar holds 12 agents. Wait for one to finish.');
+      model.onToast('The bar holds $kMaxAgents agents. Wait for one to finish.');
       return;
     }
     final project = kProjects[_made % kProjects.length];

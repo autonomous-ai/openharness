@@ -70,7 +70,7 @@ void main() {
     d.link.pickApp('orca');
     d.run(0);
     expect(d.count('apps') + d.count('agents'), 0);
-    d.link.pickApp('herdr');
+    d.link.pickApp('cursor');
     d.run(0);
     expect(d.count('agents'), 0);
     expect(d.all('apps').map((a) => a.text), ['orca']);
@@ -130,5 +130,35 @@ void main() {
     expect(hero.last.text, asked.text);
     // Resting agents bring only their history.
     expect(d.seen.where((s) => s.agent == 'ag-sweep').map((s) => s.type), ['summary']);
+  });
+
+  test("herdr's ring: billing-export and release-notes, with what they did last", () async {
+    final d = Demo(manual: true);
+    await d.start();
+    d.run(0);
+    d.forget();
+    d.link.pickApp('herdr');
+    d.run(0);
+    expect(d.first('apps')!.text, 'herdr');
+    final ring = d.first('agents')!;
+    expect([for (final a in ring['rows'] as List<AgentRow>) '${a.name} ${a.engine} ${a.host}'],
+        ['billing-export muse herdr', 'release-notes claude herdr']);
+    expect(d.all('summary').map((s) => (s.agent, s['restore'])), [('ag-bill', true), ('ag-notes', true)]);
+  });
+
+  test("New Harness makes three agents beside the cast's eleven; a fourth is past the computer's fourteen", () async {
+    final d = Demo(manual: true);
+    await d.start();
+    d.run(0);
+    for (var i = 0; i < 3; i++) {
+      d.link.newHarness();
+      d.run(1500);
+    }
+    expect(d.all('agents').last.text.split(',').length, 6, reason: "Harness's three and the three made");
+    d.forget();
+    d.link.newHarness();
+    d.run(1500);
+    expect(d.count('agents'), 0);
+    expect(d.all('toast').map((t) => t.text), ['The bar holds 14 agents. Wait for one to finish.']);
   });
 }

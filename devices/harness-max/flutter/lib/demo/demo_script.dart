@@ -13,13 +13,22 @@ class DemoApp {
   final String id, name, caps;
 }
 
-/// In the order the daemon lists them.
+/// The mockup's apps (diego-1tap.html APPS), in its order, by the daemon's ids and names. The daemon lists only apps
+/// with agents; the demo lists these all, those with none too, so its Apps is as full as the mockup's.
 const List<DemoApp> kApps = [
-  DemoApp('orca', 'Orca', 'sv'),
   DemoApp('harness', 'Harness', 'svfa'),
+  DemoApp('orca', 'Orca', 'sv'),
+  DemoApp('herdr', 'herdr', 'sv'),
   DemoApp('vscode', 'VS Code', 's'),
+  DemoApp('cursor', 'Cursor', 's'),
+  DemoApp('claude', 'Claude', 's'),
+  DemoApp('codex', 'ChatGPT', 's'),
+  DemoApp('terminal-app', 'Terminal', 's'),
+  DemoApp('ghostty', 'Ghostty', 's'),
+  DemoApp('iterm', 'iTerm2', 's'),
+  DemoApp('cmux', 'cmux', 's'),
 ];
-const int kOrca = 0, kHarness = 1, kVsCode = 2;
+const int kHarness = 0, kOrca = 1, kHerdr = 2, kVsCode = 3;
 
 const List<String> kEngines = ['claude', 'codex'];
 
@@ -254,6 +263,11 @@ const List<Cast> kCast = [
       'The getting-started guide has a page for the Max: plugging it in and what it shows.'),
   Cast('ag-api', 'api-client', 'claude', kVsCode, 'API client regenerated from the spec',
       'The typed client matches the OpenAPI spec again, with the two new billing routes.'),
+  // herdr's two, as the mockup's.
+  Cast('ag-bill', 'billing-export', 'muse', kHerdr, 'Invoices export per currency',
+      'The billing export writes one CSV per currency, with its totals at the foot.'),
+  Cast('ag-notes', 'release-notes', 'claude', kHerdr, 'Release notes for 0.9 drafted',
+      'Release notes for 0.9 are drafted: 14 fixes, 3 features, and one breaking change called out at the top.'),
 ];
 const int _auth = 0, _hero = 1, _e2e = 2, _rate = 3, _fw = 5, _cli = 6, _docs = 7;
 

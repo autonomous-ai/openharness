@@ -824,7 +824,15 @@ class BarModel extends ChangeNotifier {
   void pickApp(String appId) {
     touched();
     // A card acts only while Apps is up: a tap can land between a change and the redraw.
-    if (_sendsFirst() || page != BarPage.apps || !apps.any((a) => a.id == appId)) return;
+    if (_sendsFirst() || page != BarPage.apps) return;
+    final app = apps.where((a) => a.id == appId).firstOrNull;
+    if (app == null) return;
+    if (app.count == 0) {
+      // Listed with no agents (the demo lists every app): no ring to turn to, so Apps stays and says why.
+      _notice('No agents in ${app.name}');
+      _publish();
+      return;
+    }
     _show(BarPage.overview); // the daemon turns to it, and its next `apps` names it shown
     _picked = appId;
     link.pickApp(appId);

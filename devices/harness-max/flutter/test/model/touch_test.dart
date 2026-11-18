@@ -84,7 +84,7 @@ void main() {
     m.onApps('orca', const [AppInfo(id: 'orca', name: 'Orca', count: 3, waiting: 1)]);
     m.openApps();
     expect(m.page, BarPage.overview, reason: 'no other app');
-    m.onApps('orca', const [AppInfo(id: 'orca', name: 'Orca', count: 3), AppInfo(id: 'vscode', name: 'VS Code')]);
+    m.onApps('orca', const [AppInfo(id: 'orca', name: 'Orca', count: 3), AppInfo(id: 'vscode', name: 'VS Code', count: 1)]);
     m.openApps();
     expect(m.page, BarPage.apps);
     b.sent();
@@ -186,5 +186,14 @@ void main() {
     b.at(110000);
     m.tick();
     expect(m.page, BarPage.ambient);
+  });
+
+  test('a card of an app with no agents keeps Apps up and says so: there is no ring to turn the bar to', () {
+    final b = linked(abc), m = b.model;
+    m.onApps('orca', const [AppInfo(id: 'orca', name: 'Orca', count: 3), AppInfo(id: 'cursor', name: 'Cursor')]);
+    m.openApps();
+    b.sent();
+    m.pickApp('cursor');
+    expect([b.sent(), m.page, m.toast?.text], [isEmpty, BarPage.apps, 'No agents in Cursor']);
   });
 }
