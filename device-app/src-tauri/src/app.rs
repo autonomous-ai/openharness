@@ -2308,6 +2308,32 @@ mod tests {
     }
 
     #[test]
+    fn the_update_row_stays_while_orca_waits_for_the_approval() {
+        let mut app = settled(Some(OrcaStatus::Behind));
+        app.handle(version("0.6.66"));
+        app.handle(approve(FP1, true));
+        // Orca wrote nothing, so the old version runs and says Behind again: the row stays, and nothing runs twice.
+        app.handle(opened(B + 300));
+        let effects = app.handle(status(Some(OrcaStatus::Behind)));
+        assert!(connects(&effects).is_empty());
+        assert!(!effects.iter().any(|effect| matches!(effect, Effect::Menu(_))), "{effects:?}");
+        assert_eq!(app.state.orca, OrcaState::Update);
+
+        // Cancel keeps it too.
+        app.handle(Event::Menu(MenuAction::Orca));
+        app.handle(approve(FP2, true));
+        app.handle(Event::Act(Action::Cancel));
+        app.handle(opened(B + 600));
+        let effects = app.handle(status(Some(OrcaStatus::Behind)));
+        assert!(connects(&effects).is_empty());
+        assert_eq!(app.state.orca, OrcaState::Update);
+
+        // A new CLI version runs the silent update again.
+        assert_eq!(statuses(&app.handle(version("0.6.67"))), 1);
+        assert_eq!(connects(&app.handle(status(Some(OrcaStatus::Behind)))), [None]);
+    }
+
+    #[test]
     fn a_silent_update_that_fails_is_one_log_line_and_no_row() {
         let mut app = settled(Some(OrcaStatus::Behind));
         let effects = app.handle(failed(OrcaError::Timeout));
