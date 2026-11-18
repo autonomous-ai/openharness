@@ -12,6 +12,7 @@ import 'package:harness/community/fork_controller.dart';
 import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/core/dsh_catalog.dart';
 import 'package:harness/core/harness_cli_runner.dart';
+import 'package:harness/core/home_dir.dart';
 import 'package:harness/state/app_state.dart';
 
 import 'support/model_manager.dart';
@@ -512,5 +513,50 @@ void main() {
       throwsFormatException,
     );
     expect(commands, hasLength(3));
+  });
+
+  test('forks are kept in the community folder under Harness home', () {
+    final importer = ForkProjectImporter(
+      cli: HarnessCliRunner(
+        harnessHome: Directory('/fixture/harness'),
+        environment: const {},
+      ),
+    );
+    expect(importer.root.path, p.join(homeDir(), '.harness', 'community'));
+  });
+
+  test('godogen links the modules its store entry installed', () async {
+    final temp = await Directory.systemTemp.createTemp('community-godogen');
+    try {
+      final harnessHome = p.join(temp.path, 'harness');
+      final modules = p.join(
+        harnessHome,
+        'dsh',
+        'autonomous',
+        'godogen',
+        'node_modules',
+      );
+      await Directory(modules).create(recursive: true);
+      final folder = await Directory(p.join(temp.path, 'game')).create();
+      final importer = ForkProjectImporter(
+        root: Directory(p.join(temp.path, 'community')),
+        cli: HarnessCliRunner(
+          harnessHome: Directory(harnessHome),
+          environment: const {},
+        ),
+      );
+      await importer.prepareRuntime(
+        ForkProject(
+          folder: folder.path,
+          package: '',
+          title: 'Godogen',
+          engine: 'codex',
+          dsh: 'autonomous/godogen',
+        ),
+      );
+      expect(Link(p.join(folder.path, 'node_modules')).targetSync(), modules);
+    } finally {
+      await temp.delete(recursive: true);
+    }
   });
 }
