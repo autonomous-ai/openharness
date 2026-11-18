@@ -104,6 +104,8 @@ body {
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 4;
   overflow: hidden;
+  /* Its overflow lets a flex item shrink to nothing: a clamped line keeps its height, and a list beside it scrolls. */
+  flex-shrink: 0;
 }
 
 .muted {
@@ -131,6 +133,22 @@ body {
   border-radius: 10px;
   background: var(--control);
   font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.grants {
+  /* Up to ten of Orca's lines, each up to 300 characters: the list shrinks and scrolls, the heading and buttons stay. */
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.grant {
+  overflow-wrap: anywhere;
+}
+
+.grant + .grant {
+  margin-top: 4px;
 }
 
 .line {
