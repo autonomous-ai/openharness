@@ -37,9 +37,12 @@ import { launchDetached, type LaunchOutcome } from './windows/launcher.js'
  * and sign-in live, its port, its environment file, and a local build's update pin. Without them a
  * definition written from a shell with ADAPTER_DATA_DIR set would run a master on the default folder,
  * whose pid file that shell's `harness start` would wait on in vain. Anything else belongs in the file
- * HARNESS_ENV_FILE names.
+ * HARNESS_ENV_FILE names. The XDG folders too: a daemon systemd starts must find the roots this shell finds.
  */
-export const CARRIED_ENV = ['ADAPTER_DATA_DIR', 'ADAPTER_CLI_DIR', 'HARNESS_AUTH_DIR', 'PORT', 'HARNESS_ENV_FILE', 'ADAPTER_UPDATE_DISABLE'] as const
+export const CARRIED_ENV = [
+  'ADAPTER_DATA_DIR', 'ADAPTER_CLI_DIR', 'HARNESS_AUTH_DIR', 'PORT', 'HARNESS_ENV_FILE', 'ADAPTER_UPDATE_DISABLE',
+  'XDG_DATA_HOME', 'XDG_STATE_HOME',
+] as const
 
 /** How long a start through the platform waits for the master to claim the pid file, which it does once
  *  its core has bound: as long as `harness start` waits for one it spawned (daemonLaunch BIND_WAIT_MS). */
