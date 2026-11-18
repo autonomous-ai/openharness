@@ -154,7 +154,7 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
       if (service !== 'cloud' || !core.cloud) return { error: 'NOT_CLOUD' }
       // Earlier asynchronous handlers can outlive this service connection; check at the effect itself.
       if (authority?.current?.() !== true) return { error: 'SERVICE_UNAVAILABLE' }
-      if (query === 'cloud_publish') core.cloud.publish(Array.isArray(payload.harnesses) ? payload.harnesses : [])
+      if (query === 'cloud_publish') core.cloud.publish(Array.isArray(payload.harnesses) ? payload.harnesses : [], payload.cards as Parameters<NonNullable<Core['cloud']>['publish']>[1])
       else if (query === 'cloud_ask') core.cloud.ask(text(payload.agentId), text(payload.questionId), (payload.question ?? {}) as { text: string; choices: string[] })
       else core.cloud.unask(text(payload.agentId), text(payload.questionId))
       return {}

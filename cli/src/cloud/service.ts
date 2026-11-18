@@ -14,7 +14,7 @@ import { randomBytes } from 'node:crypto'
 import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { CloudCore, CloudPort, CloudResult, ServiceRequests } from '../core/api.js'
-import { CLOUD_AGENT_IDS, CLOUD_AGENTS, SAID_MAX, cloudAgentFrame, cloudRequestRefusal, isCloudAgent, repositoryOf, type CloudAgentId, type CloudCard, type CloudHarness } from '../lib/cloudAgents.js'
+import { CLOUD_AGENT_IDS, CLOUD_AGENTS, SAID_MAX, cloudAgentFrame, cloudHarnessIn, cloudRequestRefusal, isCloudAgent, repositoryOf, type CloudAgentId, type CloudCard, type CloudHarness } from '../lib/cloudAgents.js'
 import { deriveTurnSummary } from '../lib/deviceRecap.js'
 import { splitSummary } from '../lib/recapReads.js'
 import { connectionFor, connectionsBridge, type Bridge } from './bridge.js'
@@ -23,6 +23,7 @@ import { devinAdapter } from './devin.js'
 import { foAdapter } from './fo.js'
 import { McpClient } from './mcp.js'
 import { CloudError, type CloudAdapter, type CloudUpdate, type Remote } from './types.js'
+import { createCloudCards } from './cards.js'
 
 interface Entry {
   harness: CloudHarness
@@ -88,6 +89,7 @@ export function startCloudService(options: CloudServiceOptions) {
   const dir = join(options.dataDir, 'cloud')
   const stateFile = join(dir, 'harnesses.json')
   const entries = new Map<string, Entry>()
+  const cards = createCloudCards()
   const timers = new Map<string, unknown>()
   /** One thing at a time per harness: a look and a message never cross. */
   const queues = new Map<string, Promise<unknown>>()
@@ -152,9 +154,15 @@ export function startCloudService(options: CloudServiceOptions) {
     return entry.card.lines
   }
 
-  const publish = (): void => {
+  const publish = (reconnect = false): void => {
     if (stopped) return
-    options.core.publish([...entries.values()].map((entry) => ({ ...entry.harness, links: [...entry.harness.links], card: cardOf(entry) })))
+    const harnesses = [...entries.values()].map(entry => ({ ...entry.harness, links: [...entry.harness.links], card: cardOf(entry) }))
+    // Use the core's bounded owner projection while keeping the existing published row bytes and render cache.
+    const owners = harnesses.flatMap(row => {
+      const harness = cloudHarnessIn(row)
+      return harness ? [harness] : []
+    })
+    options.core.publish(harnesses, cards(owners, reconnect))
   }
   const touched = (entry: Entry): void => {
     entry.harness.updatedAt = new Date(now()).toISOString()
@@ -421,12 +429,13 @@ export function startCloudService(options: CloudServiceOptions) {
     port: { create, deliver, answer, rename, stopHarness } satisfies CloudPort,
     /** The core connected again (its restart): it is told every harness, and asked every open question, again. */
     republish(): void {
-      publish()
+      publish(true)
       for (const entry of entries.values()) if (entry.question) options.core.ask(entry.harness.agentId, entry.question.requestId, { text: entry.question.text, choices: entry.question.choices })
     },
     transcript,
     stop(): void {
       stopped = true
+      cards([])
       for (const timer of timers.values()) clearTimer(timer)
       timers.clear()
     },

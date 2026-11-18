@@ -36,8 +36,8 @@ The core stays small and secure, in the code and at run time: read
 
 - `agents/`: create, fork, restart, retarget, stop, resume, close, discovery, adoption, binding, the list.
   `agents/cloud.ts`: agents a service owns, the cloud agents: listed with the rest from what the cloud
-  service publishes, their questions shown as a pane's are, the dial's turn cards made from what changes
-  (working, then what it said, in the card's two lines as the service worked them out), and New Harness, words, an answer, a rename and Stop Harness for one handed
+  service publishes, their questions shown as a pane's are, the component's prepared cards admitted
+  against those owners and forwarded, and New Harness, words, an answer, a rename and Stop Harness for one handed
   to its port (`cloudLink.ts` when it runs in its own process).
 - `transcripts/`: attach (bounded reads from the end), ingest, live tail, relaunch marks, normalizers.
   Claude Code/Codex live interpretation is injected through `Engine.live`; core keeps parser handles

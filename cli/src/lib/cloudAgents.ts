@@ -107,7 +107,8 @@ export interface CloudHarness {
   said?: string | null
   /** Those words as the dial's card reads them, a headline and the text under it. Worked out by the cloud service
    *  (cloud/service.ts), which faces the maker: the core never reads markdown a maker's agent wrote (the audit of
-   *  2026-11-12). Null where the words hold nothing to show. Absent only from a service from before 2026-11-13. */
+   *  2026-11-12). Null where the words hold nothing to show. Older stored rows may omit it; the component
+   *  renders those before publication under the current private worker cohort. */
   card?: CloudCard | null
   createdAt: string
   updatedAt: string
@@ -168,7 +169,7 @@ export function cloudHarnessIn(raw: unknown): CloudHarness | null {
     links,
     messages: typeof value.messages === 'number' && Number.isInteger(value.messages) && value.messages >= 0 ? value.messages : 0,
     said: text(value.said, SAID_MAX),
-    // Kept apart: a service that says there is no card (null), and one from before cards, which names none.
+    // Stored rows can predate cards; the component renders those before publishing them.
     ...('card' in value ? { card: cardIn(value.card) } : {}),
     createdAt,
     updatedAt,

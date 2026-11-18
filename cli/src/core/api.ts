@@ -1297,8 +1297,8 @@ export const MESSAGES_FALLBACKS: PortFallbacks<MessagesPort> = { canWrite: false
  * terminal agents and tells every client what changed (core/agents/cloud.ts).
  */
 export interface CloudCore {
-  /** Every cloud harness, replacing the last list. */
-  publish(harnesses: CloudHarness[]): void
+  /** Every cloud harness and its component-prepared cards, admitted together under the private worker cohort. */
+  publish(harnesses: CloudHarness[], cards?: TurnCardFrame[]): void
   /** One waits on the person: shown wherever questions show; the answer comes back through `CloudPort.answer`. */
   ask(agentId: string, requestId: string, question: { text: string; choices: string[] }): void
   /** That question is no longer asked. */

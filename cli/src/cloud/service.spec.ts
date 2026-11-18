@@ -97,6 +97,10 @@ describe('a cloud harness', () => {
     expect(made.ok).toBe(true)
     expect(devin.start).toHaveBeenCalledWith({ task: 'fix the flaky login test', repository: 'acme/api', options: { acuLimit: 3, model: undefined } })
     const harness = published()[0]
+    expect(doors.publish.mock.calls.at(-1)?.[1]).toEqual([{
+      type: 'commander_event', agentId: harness.agentId, dbSessionId: harness.agentId,
+      payload: { kind: 'processing', text: 'Working…' },
+    }])
     expect(harness).toMatchObject({ agent: 'devin-cloud', name: 'fix the flaky login test', state: 'working', repository: 'acme/api', messages: 1,
       links: [{ label: 'Session', url: 'https://app.devin.ai/sessions/1' }] })
     expect(made.ok && made.agent).toMatchObject({ id: harness.agentId, location: 'cloud', engine: 'devin-cloud' })

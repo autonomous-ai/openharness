@@ -18,10 +18,11 @@ describe('the cloud agents\' doors', () => {
     const both = new Set(['orchestrator', 'cloud'])
     const ask = (query: string, payload: Record<string, unknown>) => answerExperimentQuery(core, both, 'cloud', query, payload,
       undefined, { current: () => true, ownsRequest: () => false })
-    expect(await ask('cloud_publish', { harnesses: [{ agentId: 'cloud_1' }] })).toEqual({})
-    expect(cloud.publish).toHaveBeenLastCalledWith([{ agentId: 'cloud_1' }])
+    const cards = [{ type: 'commander_event', agentId: 'cloud_1', dbSessionId: 'cloud_1', payload: { kind: 'done', text: 'done' } }]
+    expect(await ask('cloud_publish', { harnesses: [{ agentId: 'cloud_1' }], cards })).toEqual({})
+    expect(cloud.publish).toHaveBeenLastCalledWith([{ agentId: 'cloud_1' }], cards)
     await ask('cloud_publish', { harnesses: 'x' })
-    expect(cloud.publish).toHaveBeenLastCalledWith([])
+    expect(cloud.publish).toHaveBeenLastCalledWith([], undefined)
     await ask('cloud_ask', { agentId: 'cloud_1', questionId: 'cloud_q_1', requestId: 'the-link-s-own', question: { text: 'Which?', choices: [] } })
     expect(cloud.ask).toHaveBeenCalledWith('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] })
     await ask('cloud_ask', {})

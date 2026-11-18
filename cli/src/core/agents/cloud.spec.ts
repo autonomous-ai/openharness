@@ -3,6 +3,7 @@ import { CLOUD_DOWN, type CloudPort } from '../api.js'
 import type { CloudHarness } from '../../lib/cloudAgents.js'
 import { createCloudAgents } from './cloud.js'
 import { cloudCard } from '../../cloud/service.js'
+import { createCloudCards } from '../../cloud/cards.js'
 
 /** A row as the cloud service publishes it: what it said, and those words as a card reads them (cloud/service.ts). */
 const harness = (over: Partial<CloudHarness> = {}): CloudHarness => {
@@ -20,6 +21,13 @@ function setup(port: CloudPort | null = null) {
   return { cloud, clients, openQuestions }
 }
 
+/** The component's real transition producer feeding the core's private publication boundary. */
+function preparedSetup() {
+  const test = setup(), cards = createCloudCards(), publish = test.cloud.doors.publish
+  test.cloud.doors.publish = rows => publish(rows, cards(rows))
+  return test
+}
+
 const port = (): CloudPort & { [K in keyof CloudPort]: ReturnType<typeof vi.fn> } => ({
   create: vi.fn(async () => ({ ok: true as const, agent: { id: 'cloud_2' } })),
   deliver: vi.fn(async () => ({ ok: true as const })),
@@ -29,6 +37,39 @@ const port = (): CloudPort & { [K in keyof CloudPort]: ReturnType<typeof vi.fn> 
 })
 
 describe('agents a service owns', () => {
+  it('does not synthesize a feature card from a published agent state', () => {
+    const { cloud, clients } = setup()
+    cloud.doors.publish([harness()])
+    cloud.doors.publish([harness({ state: 'idle', said: 'Finished.' })])
+    expect(clients.sendCommander.mock.calls.filter(([frame]) => frame.type === 'commander_event')).toEqual([])
+  })
+
+  it('admits the whole prepared batch against its published owners before emitting any change', () => {
+    const { cloud, clients } = setup()
+    const card = { type: 'commander_event' as const, agentId: 'cloud_1', dbSessionId: 'cloud_1',
+      name: 'fix it', payload: { kind: 'summary', recap: 'Prepared', text: 'By component' } }
+    const next = [harness({ state: 'idle' }), harness({ agentId: 'cloud_2', state: 'idle' })]
+    const invalid: unknown[] = [null, {}, [null], [{ ...card, type: 'agent_create' }],
+      [{ ...card, agentId: 7 }], [{ ...card, agentId: 'terminal', dbSessionId: 'terminal' }],
+      [{ ...card, dbSessionId: 'other' }], [{ ...card, name: 'Other name' }],
+      [{ ...card, payload: null }], [{ ...card, payload: 'text' }], [{ ...card, payload: [] }],
+      [card, card], [card, card, card]]
+    for (const batch of invalid) {
+      cloud.doors.publish(next, batch as never)
+      expect(cloud.frames()).toEqual([])
+      expect(clients.send).not.toHaveBeenCalled()
+      expect(clients.sendCommander).not.toHaveBeenCalled()
+    }
+    cloud.doors.publish(next, [card])
+    expect(clients.sendCommander).toHaveBeenLastCalledWith(card)
+    expect(cloud.frames()).toHaveLength(2)
+    clients.send.mockClear(); clients.sendCommander.mockClear()
+    cloud.doors.publish([], [card])
+    expect(cloud.frames()).toHaveLength(2)
+    expect(clients.send).not.toHaveBeenCalled()
+    expect(clients.sendCommander).not.toHaveBeenCalled()
+  })
+
   it('lists what the service publishes and tells every client what changed', () => {
     const { cloud, clients } = setup()
     cloud.doors.publish([harness(), { agentId: 'not-cloud' }, null] as never)
@@ -56,7 +97,7 @@ describe('agents a service owns', () => {
   })
 
   it('makes the dial\'s turn cards from what changes: working, then what it said, as a terminal agent\'s turn', () => {
-    const { cloud, clients } = setup()
+    const { cloud, clients } = preparedSetup()
     const cards = () => clients.sendCommander.mock.calls.map(([frame]) => frame).filter((frame) => frame.type === 'commander_event')
     // New and working: the tile is told, since it is idle until it is.
     cloud.doors.publish([harness({ agent: 'fo', name: 'trip', said: null })])
@@ -121,7 +162,7 @@ describe('agents a service owns', () => {
   // The card's two lines are the cloud service's to work out (the audit of 2026-11-12): the core reads no markdown a
   // maker's agent wrote, and shows what it is handed.
   it('shows the card its service worked out, never one of its own making, and none where the service sent none', () => {
-    const { cloud, clients } = setup()
+    const { cloud, clients } = preparedSetup()
     const cards = () => clients.sendCommander.mock.calls.map(([frame]) => frame).filter((frame) => frame.type === 'commander_event')
     cloud.doors.publish([harness({ agent: 'fo', state: 'working' })])
     cloud.doors.publish([harness({ agent: 'fo', state: 'idle', said: '## Booked\n\nBooked for **9:30**.', card: { recap: 'the service\'s headline', text: 'the service\'s text' }, messages: 2 })])
@@ -129,27 +170,15 @@ describe('agents a service owns', () => {
     expect(cloud.recent('cloud_1')).toEqual([{ kind: 'summary', recap: 'the service\'s headline', text: 'the service\'s text', fullText: '## Booked\n\nBooked for **9:30**.' }])
   })
 
-  // Delete with the fallback, on or after 2026-12-13 (core/agents/cloud.ts `recapOf`).
-  it('shows the words of a service from before 2026-11-13, which sends no card, as they are: one line, cut, no markdown read', () => {
-    const { cloud, clients } = setup()
-    const said = `## Booked\n\nBooked for **9:30**. ${'More. '.repeat(60)}`
-    // No card named at all: a row as that service sends it.
-    const { card: _none, ...older } = harness({ state: 'idle', said, messages: 2 })
-    cloud.doors.publish([harness({ state: 'working' })])
-    cloud.doors.publish([older])
-    const card = clients.sendCommander.mock.calls.map(([frame]) => frame.payload).at(-1)
-    const line = said.replace(/\s+/g, ' ').trim()
-    expect(card).toMatchObject({ kind: 'summary', recap: line.slice(0, 180), text: line.slice(0, 250) })
-    expect(card.recap.startsWith('## Booked Booked for **9:30**.')).toBe(true)
-    expect(cloud.recent('cloud_1')).toEqual([{ kind: 'summary', recap: line.slice(0, 180), text: line.slice(0, 250), fullText: said.trim() }])
-    // Words that are only space are no words (lib/cloudAgents.ts keeps none), so nothing is shown for them.
-    const { cloud: quiet } = setup()
-    quiet.doors.publish([{ ...harness({ state: 'idle' }), said: ' \n ' }])
-    expect(quiet.recent('cloud_1')).toEqual([])
+  it('does not interpret missing component cards in the current private cohort', () => {
+    const { cloud } = setup()
+    cloud.doors.publish([harness({ state: 'idle', said: 'Legacy words', card: undefined })])
+    expect(cloud.recent('cloud_1')).toEqual([])
+    expect(cloud.said('cloud_1')).toBe('Legacy words')
   })
 
   it('shows nothing for words its service says hold nothing to show, as before: done, and no card of the raw words', () => {
-    const { cloud, clients } = setup()
+    const { cloud, clients } = preparedSetup()
     cloud.doors.publish([harness({ state: 'working' })])
     cloud.doors.publish([harness({ state: 'idle', said: '**  **', messages: 2 })])
     expect(clients.sendCommander.mock.calls.map(([frame]) => frame.payload).at(-1)).toEqual({ kind: 'done', text: 'done' })

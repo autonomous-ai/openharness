@@ -223,7 +223,7 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
     // id travels as `questionId`: `requestId` is the query's own, which the link writes over.
     ...(ask ? {
       cloud: {
-        publish: (harnesses) => { void ask('cloud_publish', { harnesses }).catch(() => {}) },
+        publish: (harnesses, cards = []) => { void ask('cloud_publish', { harnesses, cards }).catch(() => {}) },
         ask: (agentId, requestId, question) => { void ask('cloud_ask', { agentId, questionId: requestId, question }).catch(() => {}) },
         unask: (agentId, requestId) => { void ask('cloud_unask', { agentId, questionId: requestId }).catch(() => {}) },
       } satisfies CloudCore,

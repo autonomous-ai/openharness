@@ -41,7 +41,7 @@ describe('cloud agents in their own process', () => {
     core!.cloud!.ask('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] })
     core!.cloud!.unask('cloud_1', 'cloud_q_1')
     expect(query.mock.calls).toEqual([
-      ['cloud_publish', { harnesses: [] }], ['cloud_ask', { agentId: 'cloud_1', questionId: 'cloud_q_1', question: { text: 'Which?', choices: [] } }],
+      ['cloud_publish', { harnesses: [], cards: [] }], ['cloud_ask', { agentId: 'cloud_1', questionId: 'cloud_q_1', question: { text: 'Which?', choices: [] } }],
       ['cloud_unask', { agentId: 'cloud_1', questionId: 'cloud_q_1' }],
     ])
   })

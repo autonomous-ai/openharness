@@ -16,7 +16,7 @@ describe('cloud agents in the core\'s process', () => {
     const ports = emptyPorts()
     const requests = startCloud(fakeCore({ dataDir, cloud }), ports, { bridge: { connections: async () => [], mcpUrl: () => '', api: async () => ({ status: 200, json: {} }) } })
     expect(Object.keys(requests).sort()).toEqual([...CLOUD_REQUESTS].sort())
-    expect(cloud.publish).toHaveBeenCalledWith([])
+    expect(cloud.publish).toHaveBeenCalledWith([], [])
     expect(ports.cloud).toMatchObject({ create: expect.any(Function), deliver: expect.any(Function), answer: expect.any(Function), rename: expect.any(Function), stopHarness: expect.any(Function), stop: expect.any(Function) })
     expect(await ports.cloud!.create({ engine: 'claude' })).toMatchObject({ ok: false, error: 'INVALID_ENGINE' })
     ;(ports.cloud as unknown as { stop: () => void }).stop()

@@ -6,10 +6,9 @@
  * back here first: a New Harness for a cloud agent, words for it, an answer to its question, a rename and Stop
  * are handed to the service's port, and everything else goes on to the terminal agents' own paths.
  *
- * The dial reads a turn from its cards (lib/commander.ts): working as it starts, its answer as it ends. A cloud
- * harness has no turns to read, so its cards are made here, from what changes between two lists.
+ * The Cloud component prepares its cards. Core admits them against the published owners and forwards them.
  */
-import type { CloudCore, CloudPort, CloudResult } from '../api.js'
+import type { CloudCore, CloudPort, CloudResult, TurnCardFrame } from '../api.js'
 import { CLOUD_DOWN } from '../api.js'
 import { cloudAgentFrame, cloudHarnessIn, isCloudAgent, type CloudAgentFrame, type CloudHarness } from '../../lib/cloudAgents.js'
 import type { QuestionAnswerResult } from '../../lib/questionController.js'
@@ -28,23 +27,20 @@ export interface CloudAgentsDeps {
 
 const DOWN = async (): Promise<typeof CLOUD_DOWN> => CLOUD_DOWN
 const busy = (harness: CloudHarness): boolean => harness.state === 'working' || harness.state === 'starting'
-/** The lengths of a card's two lines where the core has to cut them itself (lib/deviceRecap.ts cuts to the same). */
-const HEADLINE_MAX = 180, TEXT_MAX = 250
-/**
- * Its last words as the dial's recap and the text under it, as its service worked them out (lib/cloudAgents.ts
- * `card`), or null when it has said nothing.
- *
- * A cloud service from before 2026-11-13 sends its words and no card: beside this core its card read "done" and its
- * tile restored empty (the review of 2026-11-13). Until that process starts again on this build its words are shown
- * as they are, in one line and cut to a card's lengths: no markdown is read here. Delete on or after 2026-12-13.
- */
-const recapOf = (harness: CloudHarness): { recap: string; text: string } | null => {
-  if (!harness.said) return null
-  // Null is the service's word that these words hold nothing to show.
-  if (harness.card !== undefined) return harness.card
-  // Kept trimmed, and never empty (lib/cloudAgents.ts `cloudHarnessIn`).
-  const line = harness.said.replace(/\s+/g, ' ')
-  return { recap: line.slice(0, HEADLINE_MAX), text: line.slice(0, TEXT_MAX) }
+/** Legacy stored rows are rendered by the component before this private cohort publishes them. */
+const recapOf = (harness: CloudHarness) => harness.said ? harness.card ?? null : null
+
+function admittedCards(value: unknown, owners: ReadonlyMap<string, CloudHarness>): value is TurnCardFrame[] {
+  if (!Array.isArray(value) || value.length > owners.size) return false
+  const seen = new Set<string>()
+  return value.every(frame => {
+    if (!frame || frame.type !== 'commander_event' || typeof frame.agentId !== 'string'
+      || frame.dbSessionId !== frame.agentId || !owners.has(frame.agentId) || seen.has(frame.agentId)
+      || frame.name !== undefined && frame.name !== owners.get(frame.agentId)!.name
+      || !frame.payload || typeof frame.payload !== 'object' || Array.isArray(frame.payload)) return false
+    seen.add(frame.agentId)
+    return true
+  })
 }
 
 export function createCloudAgents({ port, clients, openQuestions, log = (line) => console.log(line) }: CloudAgentsDeps) {
@@ -53,36 +49,6 @@ export function createCloudAgents({ port, clients, openQuestions, log = (line) =
   const asked = new Map<string, string>()
   /** The questions the dial was shown: only those with choices, since its question screen takes no words. */
   const onDial = new Set<string>()
-  /** The last words each harness's card told, so a list told again is not told twice. */
-  const told = new Map<string, string>()
-
-  const card = (harness: CloudHarness, payload: Record<string, unknown>): void => {
-    // The name rides a summary's outer frame, as a terminal agent's does: a notification's second line.
-    clients.sendCommander({ type: 'commander_event', agentId: harness.agentId, dbSessionId: harness.agentId, ...(payload.kind === 'summary' ? { name: harness.name } : {}), payload })
-  }
-  /**
-   * Its cards, from one list to the next: working as it starts; once it stops, what it said, or done. First seen
-   * (new, or a list told again whole after a restart), what it said is not news: the dial restores its tile by
-   * `recent`. Working is, since the tile is idle until told.
-   */
-  const cards = (before: CloudHarness | undefined, harness: CloudHarness): void => {
-    if (!before) told.set(harness.agentId, harness.said ?? '')
-    // Stopped, it leaves the dial's wheel (`sync`): there is no tile to tell.
-    if (harness.state === 'stopped') return
-    if (busy(harness)) {
-      if (!before || !busy(before)) card(harness, { kind: 'processing', text: harness.activity ?? 'Working…' })
-      return
-    }
-    if (!before) return
-    const recap = recapOf(harness)
-    if (recap && harness.said !== told.get(harness.agentId)) {
-      told.set(harness.agentId, harness.said!)
-      // Waiting on the person, its question rings instead (lib/agentNotifications.ts keeps the same rule).
-      card(harness, { kind: 'summary', ...recap, ...(harness.state === 'failed' ? { failed: true } : {}), notification: harness.state === 'needs_input' ? null : { id: `${harness.agentId}:${harness.messages}`, kind: 'done' } })
-    } else if (busy(before)) {
-      card(harness, harness.state === 'failed' ? { kind: 'error', text: harness.activity ?? 'It stopped with an error.' } : { kind: 'done', text: 'done' })
-    }
-  }
 
   const sync = (harness: CloudHarness): void => {
     const frame: Frame = { type: 'agent_synced', payload: { agent: cloudAgentFrame(harness) } }
@@ -97,21 +63,23 @@ export function createCloudAgents({ port, clients, openQuestions, log = (line) =
   }
 
   const doors: CloudCore = {
-    publish(list) {
+    publish(list, cards = []) {
       const next = new Map<string, CloudHarness>()
       for (const raw of Array.isArray(list) ? list : []) {
         const harness = cloudHarnessIn(raw)
         if (harness) next.set(harness.agentId, harness)
       }
+      if (!admittedCards(cards, next)) { log('[cloud] CLOUD_PUBLICATION_INVALID'); return }
       const before = harnesses
       harnesses = next
       for (const [agentId, harness] of next) {
         const prior = before.get(agentId)
         if (JSON.stringify(prior) === JSON.stringify(harness)) continue
         sync(harness)
-        cards(prior, harness)
       }
-      for (const agentId of before.keys()) if (!next.has(agentId)) { told.delete(agentId); gone(agentId) }
+      for (const agentId of before.keys()) if (!next.has(agentId)) gone(agentId)
+      for (const frame of cards) clients.sendCommander({ type: frame.type, agentId: frame.agentId,
+        dbSessionId: frame.dbSessionId, ...(frame.name !== undefined ? { name: frame.name } : {}), payload: frame.payload })
     },
     ask(agentId, requestId, question) {
       if (!harnesses.has(agentId) || typeof requestId !== 'string' || !requestId.startsWith('cloud_q_') || typeof question?.text !== 'string') return
