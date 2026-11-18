@@ -1073,8 +1073,10 @@ static void inbox_full_checks(void) {
         snprintf(rows[i].agent_id,sizeof rows[i].agent_id,"q-%d",i);
         COPY(rows[i].summary,"May I go on?"); rows[i].question=true;
     }
-    reset(); ui_notif_replace(rows,NOTICES);
-    ui_notify_task_done("new","New pane","M2","Another result arrived.");
+    reset(); ui_notif_replace(rows,NOTICES); wakes=0;
+    // With no row to read, nothing rings, wakes or celebrates; a failure still shows as an error about no agent does.
+    assert(!ui_notify_task_done("new","New pane","M2","Another result arrived.") && !wakes && !s.pet_pose);
+    assert(!ui_turn_error("new","The build crashed.") && !wakes && s.view==MESSAGE);
     assert(s.notice_count==NOTICES && !notice_has("new",false));
     for(int i=0;i<NOTICES;i++) { snprintf(id,sizeof id,"q-%d",i); assert(notice_has(id,true)); }
     ui_notif_open(); s.offset=NOTICES-1; char oldest[ID_MAX]; COPY(oldest,s.notice[s.offset].agent_id);
