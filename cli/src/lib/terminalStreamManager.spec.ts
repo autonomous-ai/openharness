@@ -866,6 +866,23 @@ describe('TerminalStreamManager', () => {
       })
     })
 
+    // A file's name is written by the person (AGENTS.md rule 7): the log keeps its extension and size only.
+    it('logs an upload begin with the extension and size, never the file name', async () => {
+      const lines: { event: string; fields: Record<string, unknown> }[] = []
+      manager = newManager({ diagnostic: (event, fields) => lines.push({ event, fields }) })
+      const streamId = await openStream()
+      // A name with no dot, and one whose "extension" is the whole marker, must not leak through ext.
+      for (const filename of ['SECRET-NAME-MARKER.PDF', 'SECRET-NAME-MARKER', 'x.SECRET-NAME-MARKER']) {
+        await begin(streamId, { uploadKind: 'file', filename, totalBytes: fileContent.length })
+        await manager.handleFrame('web-1', 'terminal_chunked_upload_cancel', { streamId })
+      }
+
+      const begins = lines.filter((l) => l.event === 'chunked_upload_begin')
+      expect(begins).toHaveLength(3)
+      expect(begins[0].fields).toMatchObject({ uploadKind: 'file', totalBytes: fileContent.length, ext: 'pdf' })
+      expect(JSON.stringify(lines)).not.toMatch(/SECRET-NAME-MARKER/i)
+    })
+
     it('rejects a second begin while one upload is already in progress on the same pane', async () => {
       const streamId = await openStream()
       await begin(streamId, { uploadKind: 'image', totalBytes: pngBytes.length })
