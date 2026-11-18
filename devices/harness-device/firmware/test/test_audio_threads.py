@@ -42,6 +42,7 @@ typedef struct task {
     pthread_cond_t wake;
     unsigned pending;
     bool quit;
+    atomic_bool forever; // Written under lock; read bare by wait_finished's fast path.
     void (*function)(void *);
 } task_t;
 typedef task_t *TaskHandle_t;
@@ -60,7 +61,10 @@ static void vTaskDelay(unsigned ms) {
 static int ulTaskNotifyTake(int clear,int ticks) {
     assert(self&&clear==pdTRUE);assert(!pthread_mutex_lock(&self->lock));
     while(!self->pending&&!self->quit) {
-        if(ticks==portMAX_DELAY) assert(!pthread_cond_wait(&self->wake,&self->lock));
+        if(ticks==portMAX_DELAY) {
+            atomic_store(&self->forever,true);assert(!pthread_cond_wait(&self->wake,&self->lock));
+            atomic_store(&self->forever,false);
+        }
         else {
             struct timespec until;clock_gettime(CLOCK_REALTIME,&until);
             until.tv_nsec+=1000000;if(until.tv_nsec>=1000000000){until.tv_nsec-=1000000000;until.tv_sec++;}
@@ -143,9 +147,22 @@ static void audio_stream_end(void) {
     assert(atomic_load(&capture_done)&&!atomic_load(&abort_requested)&&sent_bytes==produced);ends++;
 }
 static void audio_stream_abort(const char *why) {assert(why&&atomic_load(&capture_done));aborts++;}
+static bool asleep(task_t *task) {return atomic_load(&task->forever)&&!task->pending;}
+// No wall-clock bound: a loaded machine only slows a session. A deadlock fails here; a livelock
+// meets CI's per-file timeout.
 static void wait_finished(void) {
-    int64_t limit=esp_timer_get_time()+5000000;
-    while(audio_client_active()) {assert(esp_timer_get_time()<limit);sched_yield();}
+    while(audio_client_active()) {
+        sched_yield();
+        // Lock-free first so this spin does not contend with the workers' notifications.
+        if(!atomic_load(&capture_task->forever)||!atomic_load(&sender_task->forever))continue;
+        // Only start_context and the workers notify, so both workers asleep with nothing
+        // pending while the session is active can never wake. Tasks lock only themselves or
+        // their target, so taking both here in a fixed order cannot deadlock.
+        assert(!pthread_mutex_lock(&capture_task->lock));assert(!pthread_mutex_lock(&sender_task->lock));
+        bool stuck=asleep(capture_task)&&asleep(sender_task)&&audio_client_active();
+        assert(!pthread_mutex_unlock(&sender_task->lock));assert(!pthread_mutex_unlock(&capture_task->lock));
+        assert(!stuck&&"both workers sleep forever while the session is active");
+    }
 }
 int main(void) {
     audio_client_init();assert(storage&&capture_task&&sender_task);
@@ -183,4 +200,4 @@ with tempfile.TemporaryDirectory(prefix='harness-audio-threads-') as d:
     subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-O1','-g','-pthread',
         '-fsanitize='+os.environ.get('SANITIZERS','undefined,bounds'),'-I',str(main),
         str(out/'threads.c'),str(main/'voice_buffer.c'),'-o',str(out/'threads')],check=True)
-    subprocess.run([str(out/'threads')],check=True,timeout=120)
+    subprocess.run([str(out/'threads')],check=True)

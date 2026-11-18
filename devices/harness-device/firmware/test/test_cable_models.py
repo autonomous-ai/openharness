@@ -207,4 +207,4 @@ with tempfile.TemporaryDirectory(prefix='harness-cable-models-') as folder:
                             '-o', str(out / 'cJSON.o')], check=True)
     subprocess.run(flags + ['-I', str(json_dir), str(out / 'models.c'), str(out / 'cJSON.o'),
                             '-lm', '-pthread', '-o', str(out / 'models')], check=True)
-    subprocess.run([str(out / 'models')], check=True, timeout=30)
+    subprocess.run([str(out / 'models')], check=True)

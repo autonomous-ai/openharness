@@ -126,4 +126,4 @@ with tempfile.TemporaryDirectory(prefix='harness-audio-stream-') as folder:
                     '-fsanitize=' + os.environ.get('SANITIZERS', 'undefined,bounds'),
                     '-I', str(main), str(out / 'stream.c'), str(main / 'voice_buffer.c'),
                     '-o', str(out / 'stream')], check=True)
-    subprocess.run([str(out / 'stream')], check=True, timeout=30)
+    subprocess.run([str(out / 'stream')], check=True)
