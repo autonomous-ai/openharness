@@ -76,8 +76,11 @@ export function runStoreService(options: StoreServiceOptions): ServiceProcess {
     if (!connection) throw new Error('Store context connection unavailable')
     const where = daemonIn(await connection.query('daemon'))
     const current = () => core === connection && !signal.aborted
-    if (!where || !current() || where.machineId() !== options.machineId) throw new Error('Store context connection changed')
-    return storeLaunchContext({ port: where.port, machineId: where.machineId(), dataDir: options.dataDir }, setup, current, signal,
+    // Service startup names the local computer; the daemon supplies its backend registration ID.
+    const machineId = where?.machineId()
+    if (!where || !current() || !machineId || machineId.length > 200 || !Number.isInteger(where.port)
+      || where.port < 1 || where.port > 65535) throw new Error('Store context connection changed')
+    return storeLaunchContext({ port: where.port, machineId, dataDir: options.dataDir }, setup, current, signal,
       undefined, async () => (await connection.query('account')).gridName)
   })
   /** Answered once the core has heard that what is installed changed: whatever it was, it may have. */

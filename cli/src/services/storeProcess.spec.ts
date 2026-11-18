@@ -196,6 +196,24 @@ describe('Store context follows the physical core connection', () => {
       run: options => { vi.mocked(runServiceProcess)(options); return service } })
     return { handle, service, options: vi.mocked(runServiceProcess).mock.calls.at(-1)![0] }
   }
+  it.each(['registered-machine', 'm'.repeat(200)])('uses the registered machine from the current daemon even when its computer ID differs: %s', async machineId => {
+    const run = setup()
+    run.options.onConnected!({ query: async () => ({ ...address, machineId }) })
+    expect(run.options.machineId).toBe('m')
+    await expect(run.options.requests.dshContext!(request, ASKER)).resolves.toEqual({ ok: true, account: { privateGrid: 'selected' } })
+    expect(vi.mocked(storeLaunchContext).mock.calls.at(-1)![0]).toEqual({ dataDir: '/data', port: 18473, machineId })
+    run.handle.stop()
+  })
+  it.each([
+    { machineId: '' }, { machineId: 'm'.repeat(201) },
+    { port: 0 }, { port: -1 }, { port: 65536 }, { port: 1.5 }, { port: NaN }, { port: Infinity },
+  ])('refuses an unusable daemon address before the backend-account fast path: %j', async fields => {
+    const run = setup()
+    run.options.onConnected!({ query: async () => ({ ...address, ...fields }) })
+    await expect(run.options.requests.dshContext!(request, ASKER)).rejects.toThrow('connection changed')
+    expect(storeLaunchContext).not.toHaveBeenCalled()
+    run.handle.stop()
+  })
   it('uses the address from this connection and aborts its context on replacement, disconnect and stop', async () => {
     const run = setup(), query = vi.fn(async () => address)
     await expect(run.options.requests.dshContext!(request, ASKER)).rejects.toThrow('connection unavailable')
@@ -218,7 +236,7 @@ describe('Store context follows the physical core connection', () => {
     run.handle.stop(); expect(third[2]()).toBe(false); expect(third[3].aborted).toBe(true)
     expect(run.service.stop).toHaveBeenCalledOnce()
   })
-  it.each(['invalid', 'machine', 'replaced', 'disconnected', 'stopped'] as const)('refuses %s address before opening a context socket', async reason => {
+  it.each(['invalid', 'replaced', 'disconnected', 'stopped'] as const)('refuses %s address before opening a context socket', async reason => {
     const run = setup()
     let answer!: (value: Record<string, unknown>) => void
     const query = vi.fn(() => new Promise<Record<string, unknown>>(resolve => { answer = resolve }))
@@ -228,7 +246,7 @@ describe('Store context follows the physical core connection', () => {
     if (reason === 'replaced') run.options.onConnected!({ query: async () => address })
     if (reason === 'disconnected') run.options.onDisconnected!()
     if (reason === 'stopped') run.handle.stop()
-    answer(reason === 'invalid' ? {} : { ...address, machineId: reason === 'machine' ? 'other' : 'm' })
+    answer(reason === 'invalid' ? {} : address)
     await rejected; expect(storeLaunchContext).not.toHaveBeenCalled()
     run.handle.stop()
   })

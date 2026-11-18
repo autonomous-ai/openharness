@@ -50,9 +50,11 @@ describe('what happens to agents, for the services that follow them', () => {
     const row = agent('joined', { startedBy: 'agent' })
     hub.input(row, { connId: 'phone', kind: 'phone' })
     hub.input(agent('own'), { connId: 'desktop', kind: null })
+    hub.input(agent('unattributed'))
     const events = [
       { kind: 'input', agentId: 'joined', source: { connection: 'phone', clientKind: 'phone' }, startedByAgent: true },
       { kind: 'input', agentId: 'own', source: { connection: 'desktop', clientKind: null }, startedByAgent: false },
+      { kind: 'input', agentId: 'unattributed', startedByAgent: false },
     ]
     expect(inline.heard).toEqual(events)
     for (const name of ['gateway', 'agentCleanup']) expect(toldTo(notify, name)).toEqual(events.map(event => ({
