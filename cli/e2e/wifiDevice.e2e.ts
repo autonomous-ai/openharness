@@ -16,6 +16,7 @@
  */
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import type { ChildProcess } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
@@ -127,14 +128,14 @@ if (process.argv[2] === '__run' && process.env.NODE_ENV === 'test' && process.en
     return created.agent as { id: string; tmuxPane: string }
   }
 
-  const fresh = async (env: Record<string, string> = {}, denyCoreGestures = false) => {
+  const fresh = async (env: Record<string, string> = {}, denyCoreGestures = false, artifact = scriptPath) => {
     // Owned before startup: startPhoneMachine cleans its resources if it fails, then this test removes ours.
     dialsRoot = realpathSync(mkdtempSync(join(tmpdir(), 'wifi-dials-')))
     const dials = join(dialsRoot, 'dials.json')
     writeFileSync(dials, '[]')
     writeFileSync(join(dialsRoot, 'desk-routes'), '')
     if (denyCoreGestures) writeFileSync(join(dialsRoot, 'desk-routes-fault'), '')
-    const w = await startPhoneMachine({ wifiDevice: true, scriptPath, env: {
+    const w = await startPhoneMachine({ wifiDevice: true, scriptPath: artifact, env: {
       CABLE_DISABLE: 'false',
       E2E_WIFI_DESK_ROOT: dialsRoot,
       HARNESSD_TEST_DIAL_PORT: dials,
@@ -165,6 +166,57 @@ if (process.argv[2] === '__run' && process.env.NODE_ENV === 'test' && process.en
       return answer?.proto === 1 ? answer : null
     }, 60_000, 500)
   }
+
+  it.each(['supervised', 'inline'] as const)('prepares one Store agent through the WiFi protocol in %s composition and refuses occupied workspaces', async mode => {
+    // Exercise the production artifact itself; the gesture diagnostic prelude is unrelated to Create.
+    const { machine, window, device, agent } = await fresh(mode === 'inline' ? { HARNESSD_SERVICES: 'none' } : {}, false, process.env.E2E_BUNDLE_PATH!)
+    const packageId = 'e2e/wifi-store-create', source = join(machine.daemon.root, 'wifi-store-package')
+    mkdirSync(join(source, 'template'), { recursive: true })
+    writeFileSync(join(source, 'harness.json'), JSON.stringify({ spec: 1, id: packageId, name: 'WiFi Store Fixture', engine: 'claude',
+      toolchain: { setup: './setup.sh', doctor: './doctor.sh' }, workspace: { template: 'template', marker: 'fixture.txt' } }))
+    writeFileSync(join(source, 'setup.sh'), '#!/bin/sh\nprintf ready > dependency\n', { mode: 0o755 })
+    writeFileSync(join(source, 'doctor.sh'), '#!/bin/sh\ntest -f dependency || exit 1\nprintf "ok fixture\\n"\n', { mode: 0o755 })
+    writeFileSync(join(source, 'template', 'fixture.txt'), 'local package fixture\n')
+    const git = (...args: string[]) => execFileSync('git', ['-C', source, ...args], {
+      timeout: 10_000, env: { ...machine.daemon.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_TERMINAL_PROMPT: '0' },
+    })
+    git('init', '-q', '-b', 'main'); git('add', '.')
+    git('-c', 'user.name=e2e', '-c', 'user.email=e2e@example.invalid', 'commit', '-q', '-m', 'local fixture')
+    expect(await window.request('dsh_install', { url: source }, 180_000)).toMatchObject({ ok: true, id: packageId })
+    await connect(device)
+    expect(await device.ask('store.inspect', { packageId })).toMatchObject({ package: { installed: true } })
+    const cwd = join(machine.daemon.projectsDir, 'wifi-prepared'); mkdirSync(cwd)
+    const prepare = { machineId: machine.machineId, packageId, workspace: { kind: 'existing', path: cwd }, idempotencyKey: 'store-create' }
+    const accepted = await device.ask('agent.prepare', prepare)
+    expect(accepted).toMatchObject({ status: 'accepted', operation: { packageId, taskDispatched: false } })
+    const completed = await until('the WiFi Store creation to settle', async () => {
+      const answer = await device.ask('operation.get', { operationId: accepted.operation.operationId })
+      expect(answer.error).toBeUndefined()
+      return ['ready', 'failed', 'needs_user_action'].includes(answer.operation.state) ? answer.operation : null
+    }, 90_000, 250)
+    expect(completed).toMatchObject({ state: 'ready', phase: 'complete', packageId, workspace: realpathSync(cwd), taskDispatched: false, error: null })
+    expect(completed.agentId).toEqual(expect.any(String))
+    const made = await until('the prepared agent conversation to bind', async () => {
+      const found = await row(window, completed.agentId)
+      return found?.sessionId ? found : null
+    }, 45_000, 250)
+    expect(made).toMatchObject({ project: { cwd: realpathSync(cwd) }, dsh: packageId, engine: 'claude',
+      bypassPermission: false, permissionMode: null, grid: null, codexHome: null, claudeHome: null, namedAgent: null })
+    expect(readFileSync(join(cwd, 'fixture.txt'), 'utf8')).toBe('local package fixture\n')
+    expect(await device.ask('agent.prepare', prepare)).toMatchObject({ status: 'duplicate', operation: { operationId: completed.operationId, agentId: completed.agentId } })
+    const occupied = await device.ask('agent.prepare', { ...prepare, workspace: { kind: 'existing', path: join(machine.daemon.projectsDir, 'wifi') }, idempotencyKey: 'occupied-workspace' })
+    const refused = await until('the occupied workspace preparation to refuse', async () => {
+      const answer = await device.ask('operation.get', { operationId: occupied.operation.operationId })
+      expect(answer.error).toBeUndefined()
+      return ['ready', 'failed', 'needs_user_action'].includes(answer.operation.state) ? answer.operation : null
+    }, 30_000, 250)
+    expect(refused).toMatchObject({ state: 'needs_user_action', agentId: null, taskDispatched: false, error: { code: 'WORKSPACE_IN_USE' } })
+    const listed = await window.request<{ agents: Array<{ id: string }> }>('agents_list', {}, 30_000)
+    expect(listed.agents.map(item => item.id).sort()).toEqual([agent.id, completed.agentId].sort())
+    expect(existsSync(join(machine.daemon.projectsDir, 'wifi', 'fixture.txt'))).toBe(false)
+    await deviceTurn(device, machine.machineId, completed.agentId, 'store-created-turn', 'the prepared agent works')
+    await windowTurn(window, agent.id, 'the occupied agent remains unchanged')
+  }, 240_000)
   const windowTurn = async (client: LocalClient, agentId: string, content: string) => {
     const ended = client.next(isTurn('turn_ended', agentId), 45_000, `turn_ended (${content})`)
     client.send('message', { agentId, content })
