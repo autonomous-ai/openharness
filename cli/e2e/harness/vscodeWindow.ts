@@ -1,8 +1,8 @@
 /**
  * Harness's VS Code extension's own loop, outside VS Code (dialVscode.e2e.ts), over a fake window: each line on stdin is
  * a `Partial<WindowState>` the window takes, as VS Code tells it of its terminals; each line on stdout is
- * `{"state":…}`, `{"show":<pid>}`, `{"raise":true}`, `{"scroll":"up"|"down"}`, `{"took":<WindowState>}` or
- * `{"log":…}`. `took` follows each line taken, so the test knows the window changed before it sends what depends on it.
+ * `{"state":…}`, `{"show":<pid>}`, `{"raise":true}`, `{"scroll":"up"|"down"}`, `{"key":"up"|"down","pid":<pid>}`,
+ * `{"took":<WindowState>}` or `{"log":…}`. `took` follows each line taken, so the test knows the window changed before it sends what depends on it.
  * A script, not a module, as pluginDial.ts is: in a process of its own `nodeInputs()` reads only the home and PATH the
  * test hands it.
  *
@@ -30,6 +30,10 @@ const loop = startLoop(nodeInputs(), {
   scrollLine: (up) => {
     say({ scroll: up ? 'up' : 'down' })
     return fake.window.scrollLine(up)
+  },
+  pageKey: (pid, up) => {
+    say({ key: up ? 'up' : 'down', pid })
+    return fake.window.pageKey(pid, up)
   },
 }, {
   changed: (state) => say({ state }),

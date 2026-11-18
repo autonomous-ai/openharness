@@ -3,8 +3,8 @@
  * (docs/plans/2026-11-17-dial-vscode-extension-design.md), on the real daemon. Two sessions run each under a shell of its own under a fake VS Code (harness/outsideAgent.ts), so
  * the parent chain the devices read from `ps` is this computer's own; Harness's extension's loop
  * (plugins/harness-device-vscode/src/loop.ts) runs with a fake window in a process of its own (harness/vscodeWindow.ts),
- * reports both shells on the real devices' socket and prints each terminal it is asked to show, each raise of its window
- * and each line it scrolls;
+ * reports both shells on the real devices' socket and prints each terminal it is asked to show, each raise of its window,
+ * each line it scrolls and each page key it presses;
  * a fake dial on the desk taps, rests and scrolls. The app in front is a line on the stdin of the real `harness hardware watch --json`, as the Harness
  * Device app writes it.
  *
@@ -17,8 +17,9 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
-import { isAbsolute, join, relative, sep } from 'node:path'
+import { dirname, isAbsolute, join, relative, sep } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
+import { MANAGED_SETTINGS, readSettings } from '../src/cable/hosts/claudeRenderer.js'
 import { devicesListenerPath } from '../src/devices/listenerPath.js'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
@@ -52,6 +53,8 @@ interface Window {
   raised: number[]
   /** Each line it scrolled its active terminal, in order. */
   scrolls: ('up' | 'down')[]
+  /** Each page key it pressed, and the shell whose terminal it was for, in order. */
+  keys: { key: 'up' | 'down'; pid: number }[]
   /** Each state it took from set(), as it then said it was, in order. */
   took: WindowState[]
   /** Its channel's lines, then anything it wrote on stderr. */
@@ -101,9 +104,10 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
     expect(devicesListenerPath(d.dataDir, process.platform, d.env.HOME)).toBe(join(d.dataDir, 'devices.sock'))
   }
 
-  /** Claude Code in a VS Code terminal: its shell under the fake VS Code, and the engine under the shell's tab. */
-  const inVscode = async (d: IsolatedDaemon, folder: string): Promise<Outside> => {
-    const engine = await Outside.start(d, folder, IN_VSCODE, 'vscode', { shell: true })
+  /** Claude Code in a VS Code terminal: its shell under the fake VS Code, and the engine under the shell's tab. With
+   *  `jobs`, another job in its terminal can take the terminal's foreground from it (Outside.background). */
+  const inVscode = async (d: IsolatedDaemon, folder: string, jobs = false): Promise<Outside> => {
+    const engine = await Outside.start(d, folder, IN_VSCODE, 'vscode', { shell: true, jobs })
     outside.push(engine)
     return engine
   }
@@ -142,6 +146,7 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
     const shows: number[] = []
     const raised: number[] = []
     const scrolls: ('up' | 'down')[] = []
+    const keys: { key: 'up' | 'down'; pid: number }[] = []
     const took: WindowState[] = []
     const logs: string[] = []
     const lines = (from: NodeJS.ReadableStream, take: (line: string) => void): void => {
@@ -154,20 +159,23 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
       })
     }
     lines(child.stdout, (line) => {
-      const said = JSON.parse(line) as { state?: string; show?: number; raise?: true; scroll?: 'up' | 'down'; took?: WindowState; log?: string }
+      const said = JSON.parse(line) as {
+        state?: string; show?: number; raise?: true; scroll?: 'up' | 'down'; key?: 'up' | 'down'; pid?: number; took?: WindowState; log?: string
+      }
       if (said.state !== undefined) states.push(said.state)
       if (said.show !== undefined) shows.push(said.show)
       if (said.raise) raised.push(shows.length)
       if (said.scroll !== undefined) scrolls.push(said.scroll)
+      if (said.key !== undefined) keys.push({ key: said.key, pid: said.pid! })
       if (said.took !== undefined) took.push(said.took)
       if (said.log !== undefined) logs.push(said.log)
     })
     lines(child.stderr, (line) => logs.push(line))
     let exited: { code: number | null } | undefined
     child.once('close', (code) => { exited = { code } })
-    onTestFailed(() => { console.log(`---- the window's states\n${states.join('\n')}\n---- its shows\n${shows.join('\n')}\n---- its raises, after so many shows\n${raised.join(' ')}\n---- its scrolls\n${scrolls.join(' ')}\n---- its log\n${logs.join('\n')}`) })
+    onTestFailed(() => { console.log(`---- the window's states\n${states.join('\n')}\n---- its shows\n${shows.join('\n')}\n---- its raises, after so many shows\n${raised.join(' ')}\n---- its scrolls\n${scrolls.join(' ')}\n---- its page keys\n${keys.map(({ key, pid }) => `${key} ${pid}`).join(' ')}\n---- its log\n${logs.join('\n')}`) })
     return {
-      states, shows, raised, scrolls, took, logs,
+      states, shows, raised, scrolls, keys, took, logs,
       set: (state) => { child.stdin.write(`${JSON.stringify(state)}\n`) },
       stop: async () => {
         child.stdin.end()
@@ -182,6 +190,13 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
   const swipes = (d: IsolatedDaemon): string[] => linesWith(d, '[device] swipe ·')
   const said = (d: IsolatedDaemon, line: string): Promise<true> =>
     until(`"${line}" in the daemon's log`, () => d.log().includes(line), 30_000, 50)
+  /** The daemon's lines about VS Code that hold a shell's or an engine's pid of [agents], a window's id, the root's path
+   *  or the word `fullscreen`: each a leak. */
+  const leaks = (d: IsolatedDaemon, agents: Outside[]): string[] => {
+    const pids = agents.flatMap((agent) => [agent.shellPid!, agent.pid]).map((pid) => new RegExp(`\\b${pid}\\b`))
+    return linesWith(d, 'vscode').filter((line) => pids.some((pid) => pid.test(line)) || UUID.test(line) || line.includes(d.root)
+      || line.includes('fullscreen'))
+  }
 
   /** [dial] turns to [agent], again every 2 s until [probe] gives a value; that value. */
   const turned = <T>(dial: FakeDial, agent: Outside, what: string, probe: () => T | undefined): Promise<T> => {
@@ -203,10 +218,11 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
 
   /**
    * A and B in VS Code's terminals, and W in Ghostty, so that Ghostty's ring tells Ghostty is in front: VS Code's ring is
-   * shown, with both. Then the window's loop connects and reports both shells, A's active.
+   * shown, with both. Then the window's loop connects and reports both shells, A's active. With `jobs`, A is started
+   * with another job in its terminal (inVscode).
    */
-  const twoTerminals = async (d: IsolatedDaemon, dial: FakeDial): Promise<{ a: Outside; b: Outside; window: Window }> => {
-    const a = await inVscode(d, 'a')
+  const twoTerminals = async (d: IsolatedDaemon, dial: FakeDial, { jobs = false } = {}): Promise<{ a: Outside; b: Outside; window: Window }> => {
+    const a = await inVscode(d, 'a', jobs)
     const b = await inVscode(d, 'b')
     const w = new InOrca(d, 'w', children, { TERM_PROGRAM: 'ghostty' })
     await w.hook('SessionStart', { source: 'startup' })
@@ -294,9 +310,7 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
     expect(window.shows).toEqual(shownBefore)
 
     // 6. No line about VS Code holds a shell's pid, an engine's pid, the window's id or the root's path.
-    const pids = [a.shellPid!, b.shellPid!, a.pid, b.pid].map((pid) => new RegExp(`\\b${pid}\\b`))
-    const leaks = linesWith(d, 'vscode').filter((line) => pids.some((pid) => pid.test(line)) || UUID.test(line) || line.includes(d.root))
-    expect(leaks).toEqual([])
+    expect(leaks(d, [a, b])).toEqual([])
   })
 
   /** The window's minute lines' counts of scroll lines and of lines dropped, summed: a stroke may fall either side of a minute. */
@@ -363,5 +377,87 @@ describe.skipIf(process.platform === 'win32')("a tap, a swipe and a stroke reach
     expect(window.scrolls).toEqual(['up', 'up', 'up'])
     expect(window.shows).toEqual(shown)
     expect(harness.frames.filter((f) => f.type === 'dial_scroll').map((f) => f.payload?.phase)).toEqual(['down', 'move', 'move', 'move', 'up'])
+  }, 300_000)
+
+  /** The devices' minute lines' page strokes and guard refusals, summed: a stroke may fall either side of a minute. */
+  const guardCounts = (d: IsolatedDaemon): Record<'pages' | 'renderer' | 'asking' | 'background' | 'ps' | 'slow', number> => {
+    const sums = { pages: 0, renderer: 0, asking: 0, background: 0, ps: 0, slow: 0 }
+    for (const line of linesWith(d, '[devices] vscode · in the last minute:')) {
+      const counted = /, (\d+) page strokes, guard refused: (\d+) renderer, (\d+) asking, (\d+) background, (\d+) ps, (\d+) slow$/.exec(line)
+      if (!counted) continue
+      const [pages, renderer, asking, background, ps, slow] = counted.slice(1).map(Number)
+      sums.pages += pages
+      sums.renderer += renderer
+      sums.asking += asking
+      sums.background += background
+      sums.ps += ps
+      sums.slow += slow
+    }
+    return sums
+  }
+
+  // As long as the scroll case: the devices write their counts a minute after a minute's first stroke, and step 5 waits
+  // for them.
+  it("a stroke on Claude Code's fullscreen view in its terminal's foreground carries page keys, and none for the default renderer or in the background", async () => {
+    // 0. The devices read this computer's managed settings file, which outranks the session's own: one that sets a tui
+    // would decide every stroke here.
+    const managed = MANAGED_SETTINGS[process.platform]
+    const text = managed === undefined ? undefined : await readSettings(managed)
+    let managedTui = false
+    try {
+      managedTui = text !== undefined && Object.hasOwn(JSON.parse(text) as object, 'tui')
+    } catch { /* not a JSON object: it decides nothing */ }
+    expect(managedTui, `${managed} sets a tui, which outranks this test's own settings`).toBe(false)
+
+    // 1. A in a VS Code terminal with another job beside it, its project's settings fullscreen, the window connected, VS
+    // Code in front, the dial on A and A's terminal active. Its user settings are in the throwaway Claude home its
+    // transcript names, which holds none.
+    const { d, dial } = await fresh()
+    const { a, b, window } = await twoTerminals(d, dial, { jobs: true })
+    const settings = join(d.projectsDir, a.folder, '.claude', 'settings.json')
+    expect(settings.startsWith(d.root + sep)).toBe(true)
+    mkdirSync(dirname(settings), { recursive: true })
+    const tui = (value: string): void => writeFileSync(settings, JSON.stringify({ tui: value }))
+    tui('fullscreen')
+    const front = watch(d)
+    front(VSCODE)
+    await turned(dial, a, "A's terminal shown", () => window.shows[0])
+
+    // A stroke toward older lines: 128 is 320 px, 20 lines of 16 (scrollLines.ts), one page. The loop presses a line's
+    // keys before it scrolls its lines, so once the window scrolled the stroke's 20 lines, any key of it came.
+    let strokes = 0
+    const stroke = async (): Promise<void> => {
+      dial.send({ t: 'scroll', phase: 'down', dy: 0, v: 0 })
+      dial.send({ t: 'scroll', phase: 'move', dy: 128, v: 0 })
+      dial.send({ t: 'scroll', phase: 'up', dy: 0, v: 0 })
+      strokes += 1
+      await until(`stroke ${strokes}'s lines scrolled`, () => window.scrolls.length >= 20 * strokes, 30_000, 50)
+    }
+
+    // 2. Fullscreen, its terminal's foreground program: one PageUp, in A's terminal.
+    await stroke()
+    expect(window.keys).toEqual([{ key: 'up', pid: a.shellPid }])
+
+    // 3. The default renderer: lines alone.
+    tui('default')
+    await stroke()
+    expect(window.keys).toHaveLength(1)
+
+    // 4. Fullscreen again, with another job in front of it in its terminal: lines alone.
+    tui('fullscreen')
+    await a.background()
+    await stroke()
+    expect(window.keys).toHaveLength(1)
+    expect(window.scrolls).toEqual(Array(60).fill('up'))
+
+    // 5. The devices counted one page stroke, and a refusal for each other reason.
+    const counted = await until('the three strokes counted', () => {
+      const counts = guardCounts(d)
+      return Object.values(counts).reduce((sum, n) => sum + n, 0) >= 3 && counts
+    }, 150_000, 200)
+    expect(counted).toEqual({ pages: 1, renderer: 1, asking: 0, background: 1, ps: 0, slow: 0 })
+
+    // 6. No line about VS Code holds a pid, a window's id, the root's path or the renderer's name.
+    expect(leaks(d, [a, b])).toEqual([])
   }, 300_000)
 })
