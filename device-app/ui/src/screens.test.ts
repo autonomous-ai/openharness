@@ -304,4 +304,16 @@ describe('screens', () => {
     await mount(at('orca', 'approve', lines))
     expect(grants()).toEqual(lines)
   })
+
+  it('orca: the grants are the first Tab stop, and nothing has the focus', async () => {
+    const lines = Array.from({ length: 10 }, (_, i) => `${i}`.padEnd(300, 'x'))
+    await mount(at('orca', 'approve', lines))
+    // The arrow keys scroll the list before Tab reaches Cancel or Connect.
+    const stops = [...page().querySelectorAll<HTMLElement>('*')].filter((node) => node.tabIndex >= 0)
+    expect(stops.map((node) => node.tagName)).toEqual(['UL', 'BUTTON', 'BUTTON'])
+    expect(document.activeElement?.tagName).toBe('BODY')
+    const list = page().querySelector<HTMLElement>('ul')!
+    list.focus()
+    expect(document.activeElement).toBe(list)
+  })
 })
