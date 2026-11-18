@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync, linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, join, posix, win32 } from 'node:path'
+import { basename, join, posix, win32, type PlatformPath } from 'node:path'
 import { CallFailure, expandHome, fenced, forbiddenDirs, inside, tempDir, unc, uploadPath } from './call.js'
 
 // The account's own home, which a test that needs one points at a folder of its own: no test writes in the real one.
@@ -9,6 +9,13 @@ const account = vi.hoisted(() => ({ home: undefined as string | undefined }))
 vi.mock('node:os', async importOriginal => {
   const os = await importOriginal<typeof import('node:os')>()
   return { ...os, userInfo: () => ({ ...os.userInfo(), homedir: account.home ?? os.userInfo().homedir }) }
+})
+
+// Windows' path module while a test sets `windows`, so uploadPath reads a path as it does on Windows, on any platform.
+const platform = vi.hoisted(() => ({ windows: false }))
+vi.mock('node:path', async importOriginal => {
+  const path = await importOriginal<typeof import('node:path') & { default: PlatformPath }>()
+  return { ...path, default: new Proxy(path.default, { get: (own, key) => Reflect.get(platform.windows ? path.win32 : own, key) }) }
 })
 
 describe('inside', () => {
@@ -51,8 +58,19 @@ describe('unc', () => {
     expect(unc('C:\\Users\\a\\Pictures\\x.png', win32)).toBe(false)
   })
 
+  it('is a share however its separators or device prefix are spelled', () => {
+    const shares = ['\\\\host\\share\\x.txt', '//host/share/x.txt', '\\/host\\share\\x.txt', '\\\\?\\UNC\\host\\share\\x.txt',
+      '\\\\.\\UNC\\host\\share\\x.txt', '\\\\localhost\\C$\\x.txt']
+    for (const path of shares) expect(unc(path, win32), path).toBe(true)
+  })
+
+  it('is no local drive\'s path, nor its device path', () => {
+    for (const path of ['\\\\?\\C:\\Users\\a\\x.txt', '\\\\.\\c:\\x.txt', 'C:\\x.txt']) expect(unc(path, win32), path).toBe(false)
+  })
+
   it('is never a posix path', () => {
     expect(unc('//server/share/x.txt', posix)).toBe(false)
+    expect(unc('//x/y', posix)).toBe(false)
   })
 })
 
@@ -133,6 +151,8 @@ describe('uploadPath', () => {
   })
   afterEach(() => {
     account.home = undefined
+    platform.windows = false
+    vi.restoreAllMocks()
     rmSync(home, { recursive: true, force: true })
   })
 
@@ -164,6 +184,16 @@ describe('uploadPath', () => {
   it('refuses a hard link, whose other names may be inside such a folder', () => {
     linkSync(join(home, '.ssh', 'note.txt'), join(home, 'docs', 'link.txt'))
     expectFenced(join(home, 'docs', 'link.txt'))
+  })
+
+  // Windows opens a share to resolve a path through it, so a share path is refused before realpath, which stands in here
+  // for that open.
+  it('refuses a share path on Windows before it resolves it, one ~ names too', () => {
+    platform.windows = true
+    const realpath = vi.spyOn(realpathSync, 'native').mockImplementation(() => { throw new Error('opened') })
+    for (const raw of ['\\\\host\\share\\x.txt', '//host/share/x.txt', '\\\\?\\UNC\\host\\share\\x.txt', '\\\\.\\UNC\\host\\share\\x.txt']) expectFenced(raw)
+    expect(() => uploadPath('~\\x.txt', { HOME: '\\\\host\\share' })).toThrow(/not a media file/)
+    expect(realpath).not.toHaveBeenCalled()
   })
 
   // A UNC path exists only on Windows, and only where this account reaches the local disk's admin share.
