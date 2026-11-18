@@ -17,7 +17,7 @@
  * it removed in dial-skill.json, which the service then leaves alone, before VS Code's own uninstall, and `enable` clears
  * the mark before its install (devices/vscodeExtension.ts); `status` is support's. `harness device notify` is an agent's,
  * from the dial skill (devices/notice.ts). `harness device orca status|connect` are the Harness app's, never typed: what
- * Orca's plugin is in Orca, and its install, update or enable, from a folder in the data folder that holds what cli.js
+ * Orca's plugin is in Orca, and its install, update or enable, from a folder in the home's .harness that holds what cli.js
  * carries (devices/orcaPlugin.ts); a `connect` Orca answered with success is recorded in dial-skill.json, and Harness
  * offers the plugin no more. This runs only in the `harness` command's own process; nothing the core or a service loads
  * imports this folder.
@@ -25,6 +25,7 @@
 import { mkdirSync, realpathSync } from 'node:fs'
 import { connect, type Socket } from 'node:net'
 import { dirname, join } from 'node:path'
+import { harnessPath } from '../config/harnessHome.js'
 import { claudeDisable, claudeEnable, claudeHomeDisable, claudeHomeEnable, claudeStatus, type ClaudeResult, type ClaudeRun } from '../devices/claudePlugin.js'
 import { claudePluginState, ownDirectory, removeSkill, skillsFolderOf, skillWanted, writeSkill } from '../devices/dialSkill.js'
 import { listable, MAX_HOMES, readRemoved, readSetup, readWritten, writeOrcaConnected, writePluginHomes, writeRemoved, type DialEngine } from '../devices/dialSkillFiles.js'
@@ -52,6 +53,8 @@ export const DEVICE_USAGE = `Harness device (with a dial plugged in, Claude Code
 
 export interface DeviceDeps {
   dataDir: string
+  /** The account's home, whose .harness holds the Orca plugin's folder. */
+  home: string
   port: number
   platform: NodeJS.Platform
   stdin: AsyncIterable<Buffer | string>
@@ -213,7 +216,7 @@ async function vscodeCommand(verb: string, json: boolean, deps: DeviceDeps): Pro
  * and the line stays `done`, since Orca did connect.
  */
 async function orcaCommand(verb: 'status' | 'connect', args: string[], deps: DeviceDeps): Promise<number> {
-  const plugin = (): OrcaPluginDeps => ({ ...deps.orca(), folder: join(deps.dataDir, 'orca-plugin'), dataDir: deps.dataDir, err: deps.err })
+  const plugin = (): OrcaPluginDeps => ({ ...deps.orca(), folder: harnessPath('orca-plugin', deps.home), dataDir: deps.dataDir, err: deps.err })
   if (verb === 'status') {
     if (args.some((arg) => arg !== '--json')) {
       deps.err(DEVICE_USAGE)

@@ -72,14 +72,12 @@ but only after the person has seen what Orca lists and said yes.
 
 ### The plugin's folder
 
-- `orca-plugin/` in the CLI's data folder, beside `dial-skill.json`. It is a new entry in the paths module's table
-  (`cli/src/config/harnessHome.ts`, label `data`; ken-pm, 2026-11-18). When that module is not on main when the code is
-  written, the folder is `join(deps.dataDir, 'orca-plugin')` from the data folder the `harness device` command is
-  already handed (`DeviceDeps.dataDir`, from the CLI's config), the one place with the least hand-built path; the pull
-  request names it, and chore/harness-paths moves it into the module. No new path is built from the home folder. A
-  conflict in the path files at a rebase goes to the PM. The Harness app never names the folder, so its crate's paths
-  helper gains no entry. It is this account's alone (0700 folders, 0600 files). It is the folder Orca installs from,
-  and the folder Orca re-copies at each update, so it stays put.
+- `~/.harness/orca-plugin/`: the `orca-plugin` entry of the paths module's table (`cli/src/config/harnessHome.ts`,
+  label `data`; ken-pm, 2026-11-18), built by `harnessPath('orca-plugin', deps.home)` from the home the `harness device`
+  command is handed (`DeviceDeps.home`), so a test with a throwaway home stays in it. A home with no `.harness` yet gets
+  one (0700). The Harness app never names the folder, so its crate's paths helper gains no entry. It is this account's
+  alone (0700 folders, 0600 files). It is the folder Orca installs from, and the folder Orca re-copies at each update,
+  so it stays put.
 - `status` and `connect` both make sure it holds what `cli.js` carries before they ask Orca about it, writing only when
   its content differs: the new files go into a staging folder of the run's own, `orca-plugin.new.<pid>/`, the old folder is renamed to `orca-plugin.old/`, the
   new one renamed into place, and the old one removed. A run that finds `orca-plugin.old/` with no `orca-plugin/` puts
@@ -194,7 +192,7 @@ The core: nothing. The devices process: nothing. The plugin's code: nothing (onl
 
 ## Data
 
-- **Stored.** `orcaConnected: true` in `dial-skill.json`, and the plugin's own files in `orca-plugin/` in the data folder. Neither
+- **Stored.** `orcaConnected: true` in `dial-skill.json`, and the plugin's own files in `~/.harness/orca-plugin/`. Neither
   holds a name, path of the person's, token or content.
 - **Exposed.** Nothing new leaves the computer. Orca's grant lines go from the CLI to the Harness app's window and
   nowhere else (not logged).

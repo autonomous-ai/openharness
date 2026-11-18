@@ -24,6 +24,7 @@ export const HARNESS_ENTRIES = {
   lessons: 'data',
   'grid-fleet': 'data',
   community: 'data',
+  'orca-plugin': 'data',
   logs: 'state',
   runtime: 'state',
   'hook-routes': 'state',

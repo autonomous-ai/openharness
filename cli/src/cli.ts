@@ -3094,6 +3094,7 @@ switch (cmd) {
   case 'device':
     runDeviceCommand(rest, {
       dataDir: env.ADAPTER_DATA_DIR,
+      home: homedir(),
       port: daemonPort(),
       platform: process.platform,
       stdin: process.stdin,
