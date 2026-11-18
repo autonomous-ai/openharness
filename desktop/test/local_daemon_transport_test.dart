@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/api/api_client.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
+import 'package:harness/core/harness_home.dart';
 import 'package:harness/ws/daemon_pipe_record.dart' show defaultDaemonDataDir;
 import 'package:harness/ws/local_cli_discovery.dart';
 import 'package:harness/ws/local_daemon_transport.dart';
@@ -165,6 +166,38 @@ void main() {
           1,
           environment: {'HOME': '/h', 'ADAPTER_DATA_DIR': '/${'x' * 100}'},
           isWindows: false,
+        ),
+        '/h/.harness/s/e50e7828cbafcbee/daemon-1.sock',
+      );
+    });
+
+    test('the short socket folder is under the state root', () {
+      expect(
+        defaultDaemonSocketPath(
+          1,
+          environment: {'HOME': '/h', 'ADAPTER_DATA_DIR': '/${'x' * 100}'},
+          isWindows: false,
+          look: HomeLook(
+            linux: true,
+            environment: const {},
+            exists: (path) => path == '/h/.local/share/harness',
+          ),
+        ),
+        '/h/.local/state/harness/s/e50e7828cbafcbee/daemon-1.sock',
+      );
+    });
+
+    test('on macOS the short socket folder is under ~/.harness', () {
+      expect(
+        defaultDaemonSocketPath(
+          1,
+          environment: {'HOME': '/h', 'ADAPTER_DATA_DIR': '/${'x' * 100}'},
+          isWindows: false,
+          look: HomeLook(
+            linux: false,
+            environment: const {},
+            exists: (path) => throw StateError('looked at $path off Linux'),
+          ),
         ),
         '/h/.harness/s/e50e7828cbafcbee/daemon-1.sock',
       );

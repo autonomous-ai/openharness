@@ -6,6 +6,7 @@ import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/harness_cli_runner.dart';
+import 'package:harness/core/harness_home.dart';
 import 'package:harness/ws/local_cli_discovery.dart';
 
 void main() {
@@ -27,6 +28,44 @@ void main() {
       environment: {'HOME': '/Users/tester'},
     );
     expect(path, '/Users/tester/.harness/computer-id');
+  }, skip: Platform.isWindows);
+
+  group('the computer id by the rule', () {
+    const before = '0123456789abcdef0123456789abcdef';
+    const after = 'fedcba9876543210fedcba9876543210';
+
+    /// This scratch home's real folders, on [linux] or not.
+    HomeLook look({required bool linux}) => HomeLook(
+      linux: linux,
+      environment: const {},
+      exists: (path) =>
+          FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound,
+    );
+
+    void write(String folder, String id) =>
+        (File('$folder/computer-id')..createSync(recursive: true))
+            .writeAsStringSync('$id\n');
+
+    test('the computer id is read again after the folder moves', () async {
+      write('${scratch.path}/.harness', before);
+      final identity = LocalMachineIdentity(
+        environment: {'HOME': scratch.path},
+        look: look(linux: true),
+      );
+      expect(await identity.computerId(), before);
+      write('${scratch.path}/.local/share/harness', after);
+      expect(await identity.computerId(), after);
+    });
+
+    test('on macOS the computer id is under ~/.harness', () async {
+      write('${scratch.path}/.harness', before);
+      write('${scratch.path}/.local/share/harness', after);
+      final identity = LocalMachineIdentity(
+        environment: {'HOME': scratch.path},
+        look: look(linux: false),
+      );
+      expect(await identity.computerId(), before);
+    });
   }, skip: Platform.isWindows);
 
   test('discovers only an exact-computer loopback endpoint', () async {
