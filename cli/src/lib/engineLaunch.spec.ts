@@ -206,6 +206,22 @@ describe('buildEngineLaunchArgv', () => {
     rmSync(fileOf(third))
   })
 
+  it('a retry removes no file a launch names outside its launch folder, nor one reached through it', () => {
+    const elsewhere = mkdtempSync(join(tmpdir(), 'launch-elsewhere-'))
+    const name = '0123abcd-0123-4abc-8def-0123456789ab.sh'
+    const outside = join(elsewhere, name)
+    writeFileSync(outside, '')
+    const through = `${join(env.ADAPTER_DATA_DIR, 'launch')}/../${elsewhere.split('/').slice(1).map(() => '..').join('/')}${outside}`
+    for (const arg of [`. '${outside}'`, `. '${through}'`, `source '${join(env.ADAPTER_DATA_DIR, 'launch', name)}'`]) {
+      const first = ['/bin/zsh', '-lc', arg]
+      const build = vi.fn(() => ['/bin/zsh'])
+      expect(launchAttempts(first, build)(2)).toBe(first)
+      expect(build).not.toHaveBeenCalled()
+    }
+    expect(existsSync(outside)).toBe(true)
+    rmSync(elsewhere, { recursive: true })
+  })
+
   it('a retry of a launch with no one-time file runs it again as it is', () => {
     // Windows has none, and its pane's other launch facts were read from the first argv (windowsPaneLaunch `held`).
     const first = ['claude.exe', '--permission-mode', 'auto']
