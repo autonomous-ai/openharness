@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import type { RegisteredSession, registry as Registry } from './registry.js'
 import type { SessionStorage } from './sessionStorage.js'
 
@@ -74,6 +75,22 @@ function holdPreparation() {
     await within(held, 'prepared image release')
   }
   return { entered: () => within(entered, 'prepared image arrival'), release: resume }
+}
+
+function holdEquality() {
+  let enter!: () => void, resume!: () => void
+  const entered = new Promise<void>(resolve => { enter = resolve })
+  const held = new Promise<void>(resolve => { resume = resolve })
+  release = resume
+  const equal = storage!.equal.bind(storage!)
+  let intercepted = false
+  vi.spyOn(storage!, 'equal').mockImplementation(async proof => {
+    if (proof.document.kind === 'registry' && !intercepted) {
+      intercepted = true; enter(); await within(held, 'exact equality release')
+    }
+    return equal(proof)
+  })
+  return { entered: () => within(entered, 'exact equality arrival'), release: resume }
 }
 
 beforeEach(async () => {
@@ -160,6 +177,29 @@ it('flushes an unchanged image without copying rows or publishing different byte
   expect(copied).toBe(0)
 })
 
+it('refreshes the selected credential witness after an identical legacy image replacement without copying rows', async () => {
+  const apiKey = randomUUID()
+  expect(await registry!.setGridLaunch(A, { override: { networkId: 'fixture-grid', networkName: 'Fixture',
+    baseUrl: 'https://grid.example.test/relay/v1', apiKey, model: 'fixture-model' }, webSearch: 'on' })).toBe(true)
+  const live = registry!.byAgent(A)!, before = live.gridLaunch!.credential.source
+  const bytes = readFileSync(io.file), replacement = io.file + '.fixture-replacement'
+  writeFileSync(replacement, bytes, { mode: 0o600 })
+  const actual = await vi.importActual<typeof import('node:fs')>('node:fs')
+  actual.renameSync(replacement, io.file)
+  io.durable = []; io.prepared = []
+  const clone = vi.spyOn(globalThis, 'structuredClone')
+  await registry!.flush()
+  const copied = clone.mock.calls.filter(([value]) => isPersistedRow(value)).length
+  clone.mockRestore()
+  expect(copied).toBe(0)
+  expect(readFileSync(io.file).equals(bytes)).toBe(true)
+  expect(live.gridLaunch!.credential.source).not.toEqual(before)
+  expect((await storage!.resolveSelected(live.gridLaunch!)).apiKey === apiKey).toBe(true)
+  expect(JSON.stringify(live).includes(apiKey)).toBe(false)
+  expect(io.durable).toEqual([])
+  expect(io.prepared).toEqual([])
+})
+
 it('persists a direct last-row mutation without an additional full fingerprint pass', async () => {
   const live = registry!.byAgent(B)!, first = row(disk(), A)
   live.launchArgs = ['--direct-last-row']
@@ -219,27 +259,119 @@ it('preserves nested historical JSON from a late writer and persists its later d
 
 it('keeps the unchanged flush snapshot while a direct live edit arrives during exact equality', async () => {
   const live = registry!.byAgent(A)!, before = readFileSync(io.file, 'utf8')
-  let enter!: () => void
-  const entered = new Promise<void>(resolve => { enter = resolve })
-  const held = new Promise<void>(resolve => { release = resolve })
-  const equal = storage!.equal.bind(storage!)
-  let intercepted = false
-  vi.spyOn(storage!, 'equal').mockImplementation(async proof => {
-    if (proof.document.kind === 'registry' && !intercepted) {
-      intercepted = true; enter(); await within(held, 'exact equality release')
-    }
-    return equal(proof)
-  })
+  const held = holdEquality()
   const flushing = track(registry!.flush())
-  await within(entered, 'exact equality arrival')
+  await held.entered()
   live.launchArgs!.push('--after-flush-snapshot')
-  release!()
+  held.release()
   await flushing
   expect(readFileSync(io.file, 'utf8')).toBe(before)
   expect(io.durable).toEqual([])
   await registry!.flush()
   expect(row(disk()).launchArgs).toEqual(['--before', '--after-flush-snapshot'])
   expect(registry!.byAgent(A)).toBe(live)
+  expect(io.durable).toHaveLength(1)
+})
+
+it('captures a fresh live edit when a late legacy writer makes the awaited equality miss', async () => {
+  const live = registry!.byAgent(A)!, held = holdEquality()
+  const flushing = track(registry!.flush())
+  await held.entered()
+  const peer = disk()
+  row(peer, B).title = 'late peer title'
+  writeFileSync(io.file, JSON.stringify(peer), { mode: 0o600 })
+  live.launchArgs!.push('--during-peer-proof')
+  held.release()
+  await flushing
+  expect(row(io.prepared[0], A).launchArgs).toEqual(['--before', '--during-peer-proof'])
+  expect(row(disk(), A).launchArgs).toEqual(['--before', '--during-peer-proof'])
+  expect(row(disk(), B).title).toBe('late peer title')
+  expect(registry!.byAgent(A)).toBe(live)
+  expect(io.durable).toHaveLength(1)
+})
+
+it('reads one exact equality proof before retaining a peer-only changed image', async () => {
+  const peer = disk()
+  row(peer, B).title = 'peer-only title'
+  writeFileSync(io.file, JSON.stringify(peer), { mode: 0o600 })
+  const equal = vi.spyOn(storage!, 'equal'), retain = vi.spyOn(storage!, 'retain')
+  await registry!.flush()
+  expect(row(disk(), B).title).toBe('peer-only title')
+  expect(registry!.byAgent(B)!.title).toBe('peer-only title')
+  expect(io.durable).toHaveLength(1)
+  expect(retain.mock.calls.filter(([document]) => document.kind === 'registry')).toHaveLength(1)
+  expect(equal).toHaveBeenCalledTimes(1)
+})
+
+it('retains the captured path when names change during the preceding names read', async () => {
+  await registry!.rename(A, 'fixture named')
+  const retain = storage!.retain.bind(storage!)
+  let inherited = false
+  vi.spyOn(storage!, 'retain').mockImplementation(async (...args) => {
+    const source = await retain(...args)
+    if (args[0].kind === 'names' && !inherited) {
+      inherited = true
+      registry!.inheritName(A, B)
+    }
+    return source
+  })
+  const before = readFileSync(io.file, 'utf8'), clone = vi.spyOn(globalThis, 'structuredClone')
+  await registry!.flush()
+  const copied = clone.mock.calls.filter(([value]) => isPersistedRow(value)).length
+  clone.mockRestore()
+  expect(inherited).toBe(true)
+  expect(copied).toBe(2)
+  expect(JSON.parse(readFileSync(join(root, 'data', 'agent-names.json'), 'utf8'))).toMatchObject({ [A]: 'fixture named', [B]: 'fixture named' })
+  expect(registry!.displayName(registry!.byAgent(B)!)).toBe('fixture named')
+  expect(readFileSync(io.file, 'utf8')).toBe(before)
+  expect(io.durable).toEqual([])
+})
+
+it.each(['transaction', 'exit'] as const)('keeps full row capture for unchanged %s observations', async operation => {
+  const live = registry!.byAgent(A)!, before = readFileSync(io.file, 'utf8')
+  const clone = vi.spyOn(globalThis, 'structuredClone')
+  if (operation === 'exit') await registry!.flush({ exiting: true })
+  else await registry!.transaction(() => {
+    const { cwd, touchedAt } = live
+    registry!.setCwd(A, '/fixture/reverted-observation')
+    live.cwd = cwd; live.touchedAt = touchedAt
+  })
+  const copied = clone.mock.calls.filter(([value]) => isPersistedRow(value)).length
+  clone.mockRestore()
+  expect(copied).toBe(2)
+  expect(readFileSync(io.file, 'utf8')).toBe(before)
+  expect(io.durable).toEqual([])
+})
+
+it('retains strict repeated intent publication even when its rows are already equal', async () => {
+  await registry!.setClosePlan(A, plan)
+  io.durable = []; io.prepared = []
+  const clone = vi.spyOn(globalThis, 'structuredClone')
+  const receipt = await registry!.setClosePlan(A, plan)
+  const copied = clone.mock.calls.filter(([value]) => isPersistedRow(value)).length
+  clone.mockRestore()
+  expect(copied).toBeGreaterThanOrEqual(2)
+  expect(receipt?.closePlan).toEqual(plan)
+  expect(row(disk()).closePlan).toEqual(plan)
+  expect(io.durable).toHaveLength(1)
+})
+
+it.skipIf(process.platform === 'win32')('captures and reconciles an unconfirmed image instead of accepting equal bytes', async () => {
+  const { AtomicWriteUnconfirmed } = await import('./registryPersistence.js')
+  io.failDirectorySync = true
+  await expect(track(registry!.setClosePlan(A, plan))).rejects.toBeInstanceOf(AtomicWriteUnconfirmed)
+  expect(row(disk()).closePlan).toEqual(plan)
+  expect(registry!.byAgent(A)!.closePlan).toBeUndefined()
+  io.failDirectorySync = false
+  io.prepared = []
+  const clone = vi.spyOn(globalThis, 'structuredClone'), equal = vi.spyOn(storage!, 'equal')
+  await registry!.flush()
+  const copied = clone.mock.calls.filter(([value]) => isPersistedRow(value)).length
+  clone.mockRestore()
+  expect(copied).toBeGreaterThanOrEqual(2)
+  expect(equal).not.toHaveBeenCalled()
+  expect(row(disk())).not.toHaveProperty('closePlan')
+  expect(io.prepared).toHaveLength(1)
   expect(io.durable).toHaveLength(1)
 })
 

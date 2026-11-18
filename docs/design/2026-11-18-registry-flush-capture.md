@@ -14,7 +14,7 @@ The final fixed timing still has PERFORMANCE HOLD: at 1,600 rows the save median
 was 330.082 ms parent CPU and 48.474 ms queued callback delay, versus baseline
 256.389 ms and 34.911 ms. The original packets and 80932 source remain immutable.
 
-## Design proposed for review
+## Design
 
 Only an explicit, non-exiting `flush()` may compare current persisted views before
 owning full nested copies. Distinguish it with a private persist mode, not a public
@@ -42,7 +42,9 @@ introduced. See the actual caller contract below; this is not valid for arbitrar
 
 If exact child equality misses after an await, discard all preflight views and
 strings and capture fresh rows normally. Never seed fingerprints across that
-await. Both fresh-live rebases, global row validation, selected owner guards,
+await. A local known-miss flag skips the old equality shortcut on this fallback,
+so a peer-only change causes one equality proof followed by the mandatory locked
+retain, not two equality reads. Both fresh-live rebases, global row validation, selected owner guards,
 deadline checks, names publication, source FD custody, legacy writer locks,
 prepared-image proof, rename, and directory durability remain unchanged.
 
@@ -76,11 +78,11 @@ mutation remains supported for these data graphs and is covered below.
 
 The generic fingerprint helper deliberately supports broader JavaScript inputs
 (including Date and inherited toJSON). Its existing tests remain unchanged; that
-does not extend Registry's internal producer contract. If this source-level
-contract is insufficient for review, the preflight must not seed raw fingerprints;
-the alternative is to retain current capture until an explicit ownership API can
-remove the cost. An unconditional duplicate pass on a changed last row is not an
-acceptable fallback optimization.
+does not extend Registry's internal producer contract. The reviewed implementation
+relies on the audited production contract only in this private, non-yielding
+path. A future producer with custom object behavior must not reuse its raw
+fingerprint for a clone. An unconditional duplicate pass on a changed last row
+is not an acceptable fallback optimization.
 
 ## Races, names, and compatibility
 
@@ -106,12 +108,50 @@ unchanged then direct edits; a late old-writer nested JSON field survives merge 
 later direct edit; a direct live mutation during held equality retains current
 snapshot semantics. Add explicit late-writer/equality-miss fresh capture, names,
 and excluded transaction/exit/strict/unconfirmed controls if the Design is approved.
-All use private homes/data and actual store closure. First run is RED on unchanged
-copy count; runtime remains unchanged until review. No build/native/cost run is
-authorized by this proposal.
+All use private homes/data and actual store closure. The first run was RED on
+unchanged copy count before the runtime change was approved. No build/native/cost
+run is authorized by these source checks.
 
 Pre-change receipt: `/tmp/core-grid-storage-flush-capture-red1-20261118.receipt.json`
 and its adjacent log. Actual exit 1 in 4.306 s: unchanged flush failed with two
 row copies instead of zero; the other four selected controls passed. No timeout
 or cleanup signal was needed, and process group 7525 was absent after actual exit.
 This is the caller RED, not a performance pass.
+
+The peer-only control failed before the known-miss flag: two actual child equality
+calls instead of one, while the late writer's value was retained and published.
+Receipt `/tmp/core-grid-storage-flush-capture-peer-red1-20261118.receipt.json`:
+actual exit 1 in 1.875 s, process group 23691 absent, no timeout or cleanup signal.
+The final affected two-file gate passed 53 tests, and TypeScript passed; receipts
+`flush-capture-affected2` and `flush-capture-types2` under the same `/tmp/core-grid-storage-`
+prefix. These counts prove the removed capture and unchanged behavioral controls,
+not that the prior wall/CPU performance hold is resolved.
+
+## Names validation found by the wider gate
+
+The first nine-file gate retained 225 passing tests and four failures in
+`registry.namesCost.spec.ts` (`flush-capture-scoped1`, actual exit 1 in 186.13 s).
+Three tests still held parent FileHandle close/sync calls although required
+storage now owns those operations. Their fixture now holds actual child retain
+and flushed prepare results, releases/discards a result if the wrapper fails,
+and attempts actual store closure even if an earlier teardown step fails. The
+original publication, ownership, inherited-name, and durability assertions stay.
+
+The fourth failure was a runtime category mismatch. Untouched source 89757d4b7a
+reproduced it in `/tmp/harness-core-storage-names-baseline`; receipt
+`/tmp/core-grid-storage-names-category-baseline-red1-20261118.receipt.json`
+records actual exit 1 in 1.666 s, group 25344 absent, no timeout or cleanup signal.
+After a validated child `json:false`, persistNames now creates a local SyntaxError
+so the existing sanitizer retains the historical `name storage contains invalid JSON`
+category. No raw child error, name, path, or content is exposed. This matches the
+already corrected Registry-image path and leaves finite disk error codes intact.
+
+Final selected coverage gate: `/tmp/core-grid-storage-flush-capture-scoped2-20261118.receipt.json`,
+230 tests in nine files passed, actual exit 0 in 144.894 s. Group 28823 was absent;
+no timeout or cleanup signal was needed. The emitted coverage covers all 23
+statements, 17 branch counters, and three functions in the new preflight region
+(lines 3487–3523 at this checkpoint). The full existing Registry file is 82%
+statements, 75.62% branches, 85.84% functions, and 86.69% lines for this selected
+suite; this is not full-file 100% coverage. Full core/harnessd, native, and cost
+acceptance are not claimed by this slice. The prior failed gate and both REDs
+remain unchanged beside the successful receipts.

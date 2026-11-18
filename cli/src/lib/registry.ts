@@ -3350,7 +3350,7 @@ class Registry {
     const finish = () => {
       const write = async (deadline: RegistryWriteDeadline) => {
         await this.persistNames(deadline)
-        await this.persist(deadline, 'observation', options.exiting === true)
+        await this.persist(deadline, 'flush', options.exiting === true)
       }
       return options.exiting ? this.writer.finish(write) : this.writer.run(write)
     }
@@ -3459,7 +3459,7 @@ class Registry {
     this.persistedContents = null
   }
 
-  private async persist(deadline: RegistryWriteDeadline, strict: boolean | 'observation' = false, exiting = false, externalAgentId?: string,
+  private async persist(deadline: RegistryWriteDeadline, strict: boolean | 'observation' | 'flush' = false, exiting = false, externalAgentId?: string,
     bindingCommit?: { agentId: string; candidate: RegisteredSession | null; verify: () => void; refresh?: () => Promise<void>; replaceLive?: boolean;
       displaced?: Array<{ agentId: string; candidate: RegisteredSession | null }>; allowTransaction?: boolean; resumed?: boolean; metadata?: 'closePlan' },
     mutationAgentId = externalAgentId ?? bindingCommit?.agentId): Promise<string | undefined> {
@@ -3484,7 +3484,44 @@ class Registry {
     let committedOwner: string | undefined
     try {
       deadline.check()
-      const currentRows = new Map(Array.from(this.agents.values()).map((entry) => {
+      const fingerprints = new WeakMap<Record<string, unknown>, string>()
+      let comparedRows: Map<string, Record<string, unknown>> | undefined
+      let equalityMiss = false
+      // The measured updateTitle + flush copied the same 1,600 rows twice. Only an explicit
+      // flush may compare first: mutators and transaction releases keep their capture boundary.
+      if (strict === 'flush' && !exiting && !this.exiting && !bindingCommit && !externalAgentId
+        && !this.unconfirmedBinding && !this.namesUnsaved && this.persistedContents !== null
+        && this.agents.size === this.persistedBaseline.size) {
+        const observations = Array.from(this.agents.values(), entry => {
+          const row = persistedRow(entry) as unknown as Record<string, unknown>
+          return { id: entry.agentId, row, fingerprint: rowFingerprint(row) }
+        })
+        if (observations.every(row => this.persistedBaseline.get(row.id) === row.fingerprint)) {
+          // No live view or comparison is reused after an await. A missed byte proof requires
+          // fresh owned rows; a concurrent direct edit after a matching proof waits for the next save.
+          observations.length = 0
+          await privateRegistryDirectory(env.ADAPTER_DATA_DIR)
+          deadline.check()
+          const same = await sessionStorage.equal(this.persistedContents)
+          if (same) {
+            this.persistedContents = same
+            for (const row of this.agents.values()) if (row.gridLaunch) row.gridLaunch = { ...row.gridLaunch,
+              credential: { ...row.gridLaunch.credential, source: { kind: 'image', proof: same } } }
+            return
+          }
+          equalityMiss = true
+        } else {
+          // Registry producers install plain records/arrays (the caller audit and real nested
+          // metadata tests pin this). Copy per row without yielding, retaining its comparison on
+          // that owned clone only. A changed last row must not add another full canonical pass.
+          comparedRows = new Map(observations.map(observation => {
+            const row = structuredClone(observation.row)
+            fingerprints.set(row, observation.fingerprint)
+            return [observation.id, row]
+          }))
+        }
+      }
+      const currentRows = comparedRows ?? new Map(Array.from(this.agents.values()).map((entry) => {
         const row = structuredClone(persistedRow(entry)) as unknown as Record<string, unknown>
         return [entry.agentId, row] as const
       }))
@@ -3493,7 +3530,6 @@ class Registry {
         ...currentRows.get(row.agentId), evidenceRevision: row.evidenceRevision,
       } as unknown as RegisteredSession]) : [])
       // Only these owned snapshots share comparisons; live rows must be read afresh after preparation.
-      const fingerprints = new WeakMap<Record<string, unknown>, string>()
       const snapshotFingerprint = (row: Record<string, unknown>): string => {
         let value = fingerprints.get(row)
         if (value === undefined) {
@@ -3536,7 +3572,7 @@ class Registry {
       // Read through the normal ownership/mode/no-symlink checks; timestamps cannot prove equality.
       // A concurrent commit after this read is picked up on the next pass, as after a locked save.
       // Close intents always take the durable path, even when an identical request is retried.
-      if (strict !== true && !unconfirmed && this.persistedContents !== null
+      if (!equalityMiss && strict !== true && !unconfirmed && this.persistedContents !== null
         && currentRows.size === this.persistedBaseline.size
         && [...currentRows].every(([id]) => this.persistedBaseline.get(id) === beforeCommit.get(id))) {
         const same = await sessionStorage.equal(this.persistedContents)
