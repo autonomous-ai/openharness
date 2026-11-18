@@ -54,10 +54,10 @@ function summaryOnly(raw: unknown): ReviewQuestion[] {
 
 /** The host owns the pending catalog; the dial holds only the question it is reading.
  * Tokens name immutable contents, not merely the engine's sometimes-reused id.
- * An entry may be unreadable: a question the dial cannot answer (too many questions or options, none, a repeated key,
- * past 6500 bytes) is kept as its summary alone, so it stays a row on the dial's drawer until the agent closes it,
- * instead of ringing once and vanishing. `submit`, `canSpeak` and `draft` refuse it by its shape: no mask is valid for
- * an empty option list, and it has no `canText`. */
+ * An entry may be one the dial cannot answer (too many questions or options, none, a repeated key, past 6500 bytes): it
+ * is kept as its summary alone, so it stays a row on the dial's drawer until the agent closes it, instead of ringing
+ * once and vanishing. It is read like any other; `submit`, `canSpeak` and `draft` refuse it by its shape: no mask is
+ * valid for an empty option list, and it has no `canText`. */
 export class QuestionInbox {
   private readonly entries = new Map<string, Entry>()
   /** The questions each agent asked last, as they came (JSON), reviewable or not: the dial's answer is read against them. */
@@ -77,10 +77,10 @@ export class QuestionInbox {
         Array.isArray(q.options) && q.options.length > 0 && q.options.length <= 6 &&
         q.options.every((o: unknown) => typeof o === 'string' && o.length > 0)) &&
       new Set(raw.map(q => q.key)).size === raw.length
-    const asked: ReviewQuestion[] | undefined = valid ? raw.map(q => ({ key: q.key, q: q.q,
+    const reviewable: ReviewQuestion[] | undefined = valid ? raw.map(q => ({ key: q.key, q: q.q,
       options: [...q.options], multi: q.multi === true, ...(q.canText === true ? { canText: true } : {}) })) : undefined
-    const whole = !!asked && Buffer.byteLength(JSON.stringify([id, asked]), 'utf8') <= 6500
-    const questions = whole ? asked! : summaryOnly(raw)
+    const whole = !!reviewable && Buffer.byteLength(JSON.stringify([id, reviewable]), 'utf8') <= 6500
+    const questions = whole ? reviewable! : summaryOnly(raw)
     const signature = JSON.stringify([id, questions])
     if (this.entries.get(agentId)?.signature === signature) return whole
     if (this.entries.size >= 64 && !this.entries.has(agentId)) this.entries.delete(this.entries.keys().next().value!)
