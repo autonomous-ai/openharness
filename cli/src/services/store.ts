@@ -17,6 +17,7 @@ import { watchSettingFile } from '../messages/settingWatch.js'
 import { refreshDshRegistry } from '../dsh/catalog.js'
 import { removeDsh } from '../dsh/install.js'
 import { mutateDsh } from '../dsh/service.js'
+import { setupAgain } from '../dsh/setupAgain.js'
 import { dshInstallReply, dshInstallRequest, dshInstallStatus, dshListRows, dshRemoveId, dshRemoveReply } from '../dsh/wire.js'
 
 /** The requests the store answers for the apps, declared in core/api.ts for the core to route. */
@@ -24,6 +25,7 @@ export { STORE_REQUESTS } from '../core/api.js'
 
 export interface StoreDeps {
   prepare: typeof ensureBundledCoreHarnesses
+  setupAgain: typeof setupAgain
   refresh: typeof refreshDshRegistry
   remove: typeof removeDsh
   mutate: typeof mutateDsh
@@ -31,7 +33,7 @@ export interface StoreDeps {
   watch: typeof watchSettingFile
 }
 
-const DEFAULTS: StoreDeps = { prepare: ensureBundledCoreHarnesses, refresh: refreshDshRegistry, remove: removeDsh, mutate: mutateDsh, rows: dshListRows, watch: watchSettingFile }
+const DEFAULTS: StoreDeps = { prepare: ensureBundledCoreHarnesses, setupAgain, refresh: refreshDshRegistry, remove: removeDsh, mutate: mutateDsh, rows: dshListRows, watch: watchSettingFile }
 
 const internal = (error: unknown): Record<string, unknown> =>
   ({ error: 'INTERNAL', detail: error instanceof Error ? error.message : String(error) })
@@ -41,6 +43,9 @@ export function startStore(core: CoreApi, deps: StoreDeps = DEFAULTS): ServiceRe
   const hachiOn = (): boolean => readAgentSettings(core.dataDir).hachi
   let hachi = hachiOn()
   deps.prepare({ hachi })
+  // After Harness's folder moved, each harness's setup runs again at its new folder, once the built-ins are in place.
+  // It takes minutes, and no request waits for it.
+  void deps.setupAgain().catch((error: unknown) => console.warn(`[dsh] setting harnesses up again stopped · ${String(error)}`))
   // Hachi turned on while the Store runs is put in place at once: the person's first ⇧⌘H creates it and must not wait
   // for the Store's next start. Only the turn from off to on prepares: the file is written for every setting, and the
   // watch says it may have changed once more as it starts. Turned off, an installed Hachi stays, with its goals and
