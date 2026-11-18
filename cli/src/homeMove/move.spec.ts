@@ -77,11 +77,11 @@ interface Home {
  * with known bytes, 600 files in 700 folders, records that name the tree, a sealed engine-home pool; the launcher and
  * the systemd unit outside it; two panes tagged by its daemon and one by another, on tmux 3.4.
  */
-async function legacyHome({ env: envOf = () => ({}), bases = true }: { env?: (root: string) => NodeJS.ProcessEnv; bases?: boolean } = {}): Promise<Home> {
+async function legacyHome({ env: envOf = () => ({}), bases = true, absent = [] }: { env?: (root: string) => NodeJS.ProcessEnv; bases?: boolean; absent?: string[] } = {}): Promise<Home> {
   const root = fresh(), env = envOf(root)
   const home = join(root, 'h'), legacy = join(home, '.harness')
   const at = (...rest: string[]): string => join(legacy, ...rest)
-  for (const name of [...Object.keys(HARNESS_ENTRIES), UNKNOWN]) {
+  for (const name of [...Object.keys(HARNESS_ENTRIES), UNKNOWN].filter((name) => !absent.includes(name))) {
     if (name === 'computer-id') put(at(name), 'c0ffee-machine', 0o600)
     else put(at(name, 'keep'), `${name}\n`, 0o644)
   }
@@ -321,6 +321,24 @@ describe('the move', () => {
     expect(readFileSync(join(t.plan.data, UNKNOWN, 'keep'), 'utf8')).toBe(`${UNKNOWN}\n`)
     expect(readlinkSync(join(t.legacy, UNKNOWN))).toBe(join(t.plan.data, UNKNOWN))
     expect(t.logs).toEqual([expect.stringContaining(UNKNOWN)])
+  })
+
+  it('an entry not there at the move gets its link too: an old process writing it late fails, and puts nothing in the bridge', async () => {
+    const t = await legacyHome({ absent: ['logs', 'dsh'] })
+    expect(await runMove(t.check, t.env, t.deps())).toMatchObject({ state: 'bridged', entries: ENTRIES - 2 })
+    expect([readlinkSync(join(t.legacy, 'logs')), readlinkSync(join(t.legacy, 'dsh'))]).toEqual([join(t.plan.state, 'logs'), join(t.plan.data, 'dsh')])
+    expect(isBridge(t.legacy)).toBe(true)
+    expect(() => mkdirSync(join(t.legacy, 'logs', 'today'), { recursive: true })).toThrow()
+    expect(isBridge(t.legacy)).toBe(true)
+    expect(readMoveRecord(t.home, t.env)).toMatchObject({ entries: ENTRIES - 2 })
+  })
+
+  it('a failed move leaves no link for an entry that was not there', async () => {
+    const t = await legacyHome({ absent: ['logs'] })
+    const before = snapshot(t)
+    expect(await runMove(t.check, t.env, t.deps({ io: failingRename((from) => from === `${t.plan.data}.moving`) }))).toEqual({ state: 'failed', reason: 'io' })
+    failedRecord(t)
+    expect(snapshot(t)).toEqual(before)
   })
 
   it('a folder recreated at an old path mid-move is merged', async () => {

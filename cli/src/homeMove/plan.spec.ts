@@ -14,21 +14,29 @@ describe('the move\'s plan', () => {
     expect(plan.entries).toHaveLength(26)
     for (const [name, kind] of Object.entries(HARNESS_ENTRIES)) {
       expect(plan.entries.find((entry) => entry.name === name)).toEqual({
-        name, kind, known: true, from: `/h/.harness/${name}`, staged: `${ROOT[kind]}.moving/${name}`, to: `${ROOT[kind]}/${name}`,
+        name, kind, known: true, present: true, from: `/h/.harness/${name}`, staged: `${ROOT[kind]}.moving/${name}`, to: `${ROOT[kind]}/${name}`,
       })
     }
   })
 
   it('an entry the table does not know goes to data', () => {
-    expect(planMove('/h', {}, ['scratch']).entries).toEqual([
-      { name: 'scratch', kind: 'data', known: false, from: '/h/.harness/scratch', staged: `${DATA}.moving/scratch`, to: `${DATA}/scratch` },
+    expect(planMove('/h', {}, ['scratch']).entries[0]).toEqual(
+      { name: 'scratch', kind: 'data', known: false, present: true, from: '/h/.harness/scratch', staged: `${DATA}.moving/scratch`, to: `${DATA}/scratch` },
+    )
+  })
+
+  it('every entry of the table is planned, there or not, so each gets its link: an old process writing one late then fails, rather than make a real folder in the bridge', () => {
+    const plan = planMove('/h', {}, ['cli', 'scratch'])
+    expect(plan.entries.map(({ name, present }) => [name, present])).toEqual([
+      ['cli', true], ['scratch', true], ...Object.keys(HARNESS_ENTRIES).filter((name) => name !== 'cli').map((name) => [name, false]),
     ])
+    expect(plan.entries.find((entry) => entry.name === 'logs')).toMatchObject({ from: '/h/.harness/logs', to: `${STATE}/logs` })
   })
 
   it('the move\'s own files are not entries', () => {
     // .move-before holds the previous bytes of the files the move rewrites, and .move-old what a copy across filesystems
     // kept, until the finish drops them.
-    expect(planMove('/h', {}, ['.move.json', '.move-before', '.move-old', 'cli', 'home-move.json']).entries.map((entry) => entry.name)).toEqual(['cli'])
+    expect(planMove('/h', {}, ['.move.json', '.move-before', '.move-old', 'cli', 'home-move.json']).entries.flatMap((entry) => entry.present ? [entry.name] : [])).toEqual(['cli'])
   })
 
   it('movedPath maps <legacy>/runtime/x to <state>/runtime/x, <legacy>/cli/data to <data>/cli/data, and leaves /usr/bin/node alone', () => {

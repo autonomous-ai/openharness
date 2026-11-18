@@ -139,6 +139,6 @@ describe('the move\'s journal', () => {
   })
 
   it('a draft a crash left in ~/.harness is not one of its entries', () => {
-    expect(planMove('/h', {}, ['.move.json.next', 'cli', 'home-move.json.next']).entries.map((entry) => entry.name)).toEqual(['cli'])
+    expect(planMove('/h', {}, ['.move.json.next', 'cli', 'home-move.json.next']).entries.flatMap((entry) => entry.present ? [entry.name] : [])).toEqual(['cli'])
   })
 })

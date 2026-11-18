@@ -18,7 +18,9 @@ const OLD = 1_600_000_000
 function legacyHome(names: string[]): MovePlan {
   const home = mkdtempSync(join(tmpdir(), 'move-stage-'))
   mkdirSync(join(home, '.harness'))
-  const plan = planMove(home, {}, names)
+  // The entries made here: what the table holds besides is staged by move.spec.ts.
+  const planned = planMove(home, {}, names)
+  const plan = { ...planned, entries: planned.entries.filter((entry) => names.includes(entry.name)) }
   for (const { name, from } of plan.entries) {
     if (name === 'computer-id') {
       writeFileSync(from, 'c0ffee', { mode: 0o600 })
@@ -213,6 +215,25 @@ describe('the commit', () => {
 })
 
 describe('unstaging an entry', () => {
+  it('an entry not there at the move is linked alone; unstaged, its link goes, and what a late writer made there comes back', () => {
+    const home = mkdtempSync(join(tmpdir(), 'move-stage-'))
+    mkdirSync(join(home, '.harness'))
+    const plan = planMove(home, {}, [])
+    const logs = entryOf(plan, 'logs')
+    expect(stageEntry(logs, plan, NODE_FS, Date.now())).toEqual({ copied: false, bytes: 0 })
+    expect([readlinkSync(logs.from), existsSync(logs.staged)]).toEqual([logs.to, false])
+    unstageEntry(logs, false, NODE_FS)
+    expect(readdirSync(plan.legacy)).toEqual([])
+    // A late writer's folder, merged in at the end of the move.
+    stageEntry(logs, plan, NODE_FS, Date.now())
+    fs.unlinkSync(logs.from)
+    mkdirSync(logs.from)
+    writeFileSync(join(logs.from, 'late.log'), 'late\n')
+    mergeRecreated(logs, NODE_FS)
+    unstageEntry(logs, false, NODE_FS)
+    expect([lstatSync(logs.from).isDirectory(), readFileSync(join(logs.from, 'late.log'), 'utf8'), existsSync(logs.staged)]).toEqual([true, 'late\n', false])
+  })
+
   it.each([
     ['renamed', false, (): StageIo => NODE_FS],
     ['copied', true, (entry: MoveEntry): StageIo => acrossDisks(entry)],
