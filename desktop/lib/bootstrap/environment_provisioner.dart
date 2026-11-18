@@ -1691,9 +1691,13 @@ foreach ($name in ($env:HARNESS_SIGNATURE_FILES -split [string][char]10)) {
   }
 
   Future<void> _ensureHarness(void Function(String line) onOutput) async {
+    // This provisioner's home, environment and platform, so the CLI it
+    // verifies is the one it installed.
     final runner = HarnessCliRunner(
       harnessHome: _fixedHome,
       look: _look,
+      environment: _platformEnvironment,
+      isWindows: _isWindows,
       runProcess: _probeHarnessCommand,
     );
     if (await _hasHarness()) return;
