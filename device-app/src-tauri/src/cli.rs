@@ -596,6 +596,7 @@ fn ended(name: &str, code: Option<i32>, stderr: &str) -> String {
 mod tests {
     use super::*;
     use crate::orca_cli;
+    use crate::harness_home::Look;
     use crate::testing::{Fake, wait_gone};
     use crate::types::{Fingerprint, MemoryLog};
     use std::cell::Cell;
@@ -617,8 +618,37 @@ mod tests {
         path
     }
 
+    /// No XDG variable set: the folders a test lays out are the only ones the rule finds, whatever the computer
+    /// running it holds.
+    fn no_env(_: &str) -> Option<OsString> {
+        None
+    }
+
     fn found(home: &Path, path_var: Option<&OsStr>) -> Option<(PathBuf, Vec<OsString>)> {
-        find_cli(home, path_var, None).map(|cli| (cli.program, cli.prefix))
+        find_cli_with(home, path_var, None, no_env).map(|cli| (cli.program, cli.prefix))
+    }
+
+    #[test]
+    fn the_cli_and_its_node_come_from_one_look() {
+        let home = tempfile::tempdir().unwrap();
+        let home = home.path();
+        let legacy = home.join(".harness");
+        let node = put(legacy.join("runtime").join("node-v22").join("bin").join("node"));
+        fs::write(legacy.join("runtime").join("current-node"), node.display().to_string()).unwrap();
+        let cli_js = put(legacy.join("cli").join("cli.js"));
+        // The move lands between two looks: the XDG data root is there from the second one on.
+        let data = home.join(".local").join("share").join("harness");
+        let asked = Cell::new(0);
+        let exists = |path: &Path| {
+            if path == data {
+                asked.set(asked.get() + 1);
+                return asked.get() > 1;
+            }
+            path.exists()
+        };
+        let look = Look { linux: true, env: &no_env, exists: &exists };
+        assert_eq!(installed_with(home, None, &look), Some((node, vec![cli_js.into_os_string()])));
+        assert_eq!(asked.get(), 1);
     }
 
     #[test]
@@ -724,7 +754,7 @@ mod tests {
         std::os::unix::fs::symlink("/usr/bin/true", &old).unwrap();
         std::os::unix::fs::symlink("/usr/bin/false", &new).unwrap();
         fs::write(runtime.join("current-node"), old.display().to_string()).unwrap();
-        let cli = HarnessCli::new(find_cli(home, None, None).unwrap(), Arc::new(MemoryLog::default()));
+        let cli = HarnessCli::new(find_cli_with(home, None, None, no_env).unwrap(), Arc::new(MemoryLog::default()));
         let status = ["auth", "status", "--json"];
         assert_eq!(cli.run(&status, WAIT).unwrap().code, Some(0));
         // The CLI's updater repoints it while the app runs.
