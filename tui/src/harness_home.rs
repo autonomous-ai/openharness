@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-pub const HARNESS_DIR: &str = ".harness";
+const HARNESS_DIR: &str = ".harness";
 
 /// Data is what a person would miss, state what Harness rebuilds. Both are one folder today.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,8 +37,10 @@ impl Entry {
 
 /// `<home>/.harness` for either root, as the callers joined it before. An empty home (HOME unset)
 /// gives today's relative `.harness`.
-pub fn harness_root(home: impl AsRef<Path>, _root: Root) -> PathBuf {
-    home.as_ref().join(HARNESS_DIR)
+pub fn harness_root(home: impl AsRef<Path>, root: Root) -> PathBuf {
+    match root {
+        Root::Data | Root::State => home.as_ref().join(HARNESS_DIR),
+    }
 }
 
 /// `<home>/.harness/<entry>`: `home.join(".harness").join(name)`.
@@ -52,8 +54,9 @@ mod tests {
 
     #[test]
     fn every_entry_is_under_the_homes_harness() {
-        assert_eq!(harness_path("/h", Entry::Tui), PathBuf::from("/h").join(".harness").join("tui"));
-        assert_eq!(harness_path("/h", Entry::ShellRequests), PathBuf::from("/h").join(".harness").join("shell-requests"));
+        let harness = PathBuf::from("/h").join(".harness");
+        assert_eq!(harness_path("/h", Entry::Tui).as_os_str(), harness.join("tui").as_os_str());
+        assert_eq!(harness_path("/h", Entry::ShellRequests).as_os_str(), harness.join("shell-requests").as_os_str());
         assert_eq!(Entry::Tui.root(), Root::Data);
         assert_eq!(Entry::ShellRequests.root(), Root::State);
     }
@@ -61,18 +64,13 @@ mod tests {
     #[test]
     fn both_roots_are_one_folder() {
         assert_eq!(harness_root("/h", Root::Data), harness_root("/h", Root::State));
-        assert_eq!(harness_root("/h", Root::Data), PathBuf::from("/h").join(".harness"));
-    }
-
-    #[test]
-    fn the_same_paths_as_before() {
-        assert_eq!(harness_path("/h", Entry::ShellRequests), PathBuf::from("/h").join(".harness/shell-requests"));
+        assert_eq!(harness_root("/h", Root::Data).as_os_str(), PathBuf::from("/h").join(".harness").as_os_str());
     }
 
     #[test]
     fn an_empty_home() {
         // HOME unset: callers read "" and get today's relative .harness/…
-        assert_eq!(harness_path("", Entry::Tui), PathBuf::from("").join(".harness").join("tui"));
+        assert_eq!(harness_path("", Entry::Tui).as_os_str(), PathBuf::from("").join(".harness").join("tui").as_os_str());
     }
 
     /// A hit the guard keeps on purpose: its file, the text it matched, and why. Each excuses exactly one hit.

@@ -6,7 +6,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-pub const HARNESS_DIR: &str = ".harness";
+const HARNESS_DIR: &str = ".harness";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Root {
@@ -16,7 +16,10 @@ pub enum Root {
 
 /// `%USERPROFILE%`, then `HOME` (off Windows, for the tests); none when unset or empty.
 pub fn home(env: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
-    env("USERPROFILE").or_else(|| env("HOME")).filter(|home| !home.is_empty()).map(PathBuf::from)
+    env("USERPROFILE")
+        .or_else(|| env("HOME"))
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from)
 }
 
 /// Both roots are the home's `.harness` until Harness keeps state apart from data.
@@ -28,7 +31,10 @@ pub fn harness_root(home: &Path, root: Root) -> PathBuf {
 
 /// The distinct roots, the data root first: today one.
 pub fn harness_roots(home: &Path) -> Vec<PathBuf> {
-    let mut roots = vec![harness_root(home, Root::Data), harness_root(home, Root::State)];
+    let mut roots = vec![
+        harness_root(home, Root::Data),
+        harness_root(home, Root::State),
+    ];
     roots.dedup();
     roots
 }
@@ -45,7 +51,10 @@ mod tests {
             _ => None,
         };
         assert_eq!(home(both), Some(PathBuf::from("P")));
-        assert_eq!(home(|key: &str| (key == "HOME").then(|| OsString::from("H"))), Some(PathBuf::from("H")));
+        assert_eq!(
+            home(|key: &str| (key == "HOME").then(|| OsString::from("H"))),
+            Some(PathBuf::from("H"))
+        );
         assert_eq!(home(|_| None), None);
         assert_eq!(home(|_| Some(OsString::new())), None);
     }
@@ -53,9 +62,13 @@ mod tests {
     #[test]
     fn both_roots_are_the_homes_harness_and_the_roots_are_one() {
         let home = Path::new("P");
-        assert_eq!(harness_root(home, Root::Data), PathBuf::from("P").join(".harness"));
-        assert_eq!(harness_root(home, Root::State), PathBuf::from("P").join(".harness"));
-        assert_eq!(harness_roots(home), vec![PathBuf::from("P").join(".harness")]);
+        let root = PathBuf::from("P").join(".harness");
+        assert_eq!(harness_root(home, Root::Data).as_os_str(), root.as_os_str());
+        assert_eq!(
+            harness_root(home, Root::State).as_os_str(),
+            root.as_os_str()
+        );
+        assert_eq!(harness_roots(home), [root]);
     }
 
     /// A hit the guard keeps on purpose: its file, the text it matched, and why. Each excuses exactly one hit.

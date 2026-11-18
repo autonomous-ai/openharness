@@ -54,16 +54,19 @@ mod tests {
     #[test]
     fn every_entry_is_under_the_homes_harness() {
         let home = Path::new("/h");
-        assert_eq!(harness_path(home, Entry::Cli), PathBuf::from("/h").join(".harness").join("cli"));
-        assert_eq!(harness_path(home, Entry::Runtime), PathBuf::from("/h").join(".harness").join("runtime"));
+        let cli = PathBuf::from("/h").join(".harness").join("cli");
+        let runtime = PathBuf::from("/h").join(".harness").join("runtime");
+        assert_eq!(harness_path(home, Entry::Cli).as_os_str(), cli.as_os_str());
+        assert_eq!(harness_path(home, Entry::Runtime).as_os_str(), runtime.as_os_str());
         assert_eq!((Entry::Cli.root(), Entry::Runtime.root()), (Root::Data, Root::State));
     }
 
     #[test]
     fn both_roots_are_one_folder() {
         let home = Path::new("/h");
-        assert_eq!(harness_root(home, Root::Data), PathBuf::from("/h").join(".harness"));
-        assert_eq!(harness_root(home, Root::State), PathBuf::from("/h").join(".harness"));
+        let root = PathBuf::from("/h").join(".harness");
+        assert_eq!(harness_root(home, Root::Data).as_os_str(), root.as_os_str());
+        assert_eq!(harness_root(home, Root::State).as_os_str(), root.as_os_str());
     }
 
     /// A hit the guard keeps on purpose: its file, the text it matched, and why. Each excuses exactly one hit.
