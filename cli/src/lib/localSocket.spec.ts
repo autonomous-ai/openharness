@@ -449,5 +449,24 @@ describe('a data folder too long to hold a socket', () => {
       symlinkSync(elsewhere, dirname(path))
       await expect(listenLocalSocket(() => {}, path)).rejects.toThrow(/not private/)
     })
+
+    it('a short folder under the state root is made private', async () => {
+      const path = join(home, 'harness', 's', hash(long), 'daemon-1.sock')
+      const listening = await listenLocalSocket(() => {}, path)
+      closers.push(listening.close)
+      expect(lstatSync(dirname(path)).mode & 0o777).toBe(0o700)
+      expect(lstatSync(join(home, 'harness', 's')).mode & 0o777).toBe(0o700)
+      expect(lstatSync(path).mode & 0o777).toBe(0o600)
+    })
+
+    it('a short folder whose parent is a link is refused', async () => {
+      for (const root of ['.harness', 'harness']) {
+        mkdirSync(join(home, root), { mode: 0o700 })
+        const elsewhere = mkdtempSync(join('/tmp', 'ls-other-'))
+        closers.push(async () => rmSync(elsewhere, { recursive: true, force: true }))
+        symlinkSync(elsewhere, join(home, root, 's'))
+        await expect(listenLocalSocket(() => {}, join(home, root, 's', hash(long), 'daemon-1.sock')), root).rejects.toThrow(/not private/)
+      }
+    })
   })
 })
