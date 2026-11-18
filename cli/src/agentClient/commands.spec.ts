@@ -924,6 +924,39 @@ describe('a harness held for the person', () => {
     const h = harness(d)
     expect(await waitCommand(['busy,kid', '--any'], h.deps)).toBe(EXIT.needsInput)
   })
+
+  it('show says held, the sentence and to tell the person, reading no screen', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' }), frame('kid', { activity: { state: 'working' }, namedState: MISSING_HELPER })]
+    d.screens.set('kid', ['working'])
+    const h = harness(d)
+    started(h.ledger, 'lead', 'kid')
+    expect(await showCommand(['kid'], h.deps)).toBe(EXIT.ok)
+    expect(h.out[0]).toBe('kid on studio: held · Codex · started by you')
+    expect(h.out[1]).toBe('held: This Harness install is incomplete. Reinstall Harness.')
+    expect(h.out.at(-1)).toContain('tell the person: This Harness install is incomplete. Reinstall Harness.')
+    expect(d.requests.some((r) => r.type === 'agent_close')).toBe(false)
+    const json = harness(d)
+    expect(await showCommand(['kid', '--json'], json.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(json.out[0])).toMatchObject({ state: 'held', namedState: MISSING_HELPER, needsPerson: true,
+      next: [{ tell: 'tell the person: This Harness install is incomplete. Reinstall Harness.' }] })
+  })
+
+  it('show gives a recovering state as the screen says, with its sentence', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' }), frame('kid', { namedState: OTHER_ENGINE_STATES.unavailable })]
+    d.screens.set('kid', ['idle'])
+    const h = harness(d)
+    started(h.ledger, 'lead', 'kid')
+    expect(await showCommand(['kid'], h.deps)).toBe(EXIT.ok)
+    expect(h.out[0]).toBe('kid on studio: idle · Codex · started by you')
+    expect(h.out[1]).toBe(OTHER_ENGINE_STATES.unavailable)
+    const json = harness(d)
+    expect(await showCommand(['kid', '--json'], json.deps)).toBe(EXIT.ok)
+    const result = JSON.parse(json.out[0])
+    expect(result).toMatchObject({ state: 'idle', namedState: OTHER_ENGINE_STATES.unavailable })
+    expect(result).not.toHaveProperty('needsPerson')
+  })
 })
 
 describe('harness close', () => {
