@@ -4,21 +4,23 @@
  */
 import { realpathSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { procNow, type BridgeRecord } from './bridge.js'
+import { bootNow, type BridgeRecord } from './bridge.js'
 import { oldUsers, procRows, type OldUserFacts, type ProcRow } from './oldUsers.js'
 
+const BOOT = 'c2a9e1d8-55a4-4c3e-9b8f-0f6d2d1e7a11'
+/** The move ran 50 000 s into this boot; its wall-clock time says nothing a step of the clock since cannot change. */
 const BRIDGE: BridgeRecord = {
   version: 1, movedAt: 1_700_001_234.56, oldHome: '/h/.harness', oldDataDir: '/h/.harness/cli/data',
-  oldTag: '0123456789abcdef', newTag: 'fedcba9876543210', panes: ['%1'],
+  oldTag: '0123456789abcdef', newTag: 'fedcba9876543210', panes: ['%1'], boot: { id: BOOT, uptime: 50_000 },
 }
 const DATA = '/h/.local/share/harness', STATE = '/h/.local/state/harness'
 const ME = 1000, SERVICE = 4000, MASTER = 3000
-const FACTS: OldUserFacts = {
-  uid: ME, master: MASTER, roots: [DATA, STATE], engines: new Set(['claude', 'codex']),
+const FACTS = {
+  uid: ME, master: MASTER, bootId: BOOT, roots: [DATA, STATE], engines: new Set(['claude', 'codex']),
   apps: new Set(['harness', 'harness-device']), panePids: [],
-}
-/** A minute before the move, and a minute after it. */
-const OLD = BRIDGE.movedAt - 60, NEW = BRIDGE.movedAt + 60
+} as OldUserFacts
+/** A minute before the move, and a minute after it, in seconds since the boot. */
+const OLD = 50_000 - 60, NEW = 50_000 + 60
 
 let pids = 100
 /** A process of this account that started a minute before the move, under pid 1, unless [over] says otherwise. */
@@ -59,9 +61,9 @@ describe('an old user, counted', () => {
     expect(count([server, pane, child, grandchild], { panePids: [pane.pid] })).toBe(3)
   })
 
-  it('a process that started in the move\'s own second', () => {
-    expect(count([row({ name: 'claude', startedAt: Math.floor(BRIDGE.movedAt) + 0.99 })])).toBe(1)
-    expect(count([row({ name: 'claude', startedAt: Math.floor(BRIDGE.movedAt) + 1 })])).toBe(0)
+  it('a process that started by the move, on the boot\'s own clock', () => {
+    expect(count([row({ name: 'claude', startedAt: 50_000 })])).toBe(1)
+    expect(count([row({ name: 'claude', startedAt: 50_000.01 })])).toBe(0)
   })
 })
 
@@ -93,6 +95,15 @@ describe('not an old user', () => {
       pane,
       row({ name: 'python3', exe: '/usr/bin/python3.12', parent: pane.pid, startedAt: NEW }),
     ], { panePids: [pane.pid] })).toBe(0)
+  })
+
+  it('a process of another boot, of any kind: this computer started again since the move', () => {
+    const rows = [row({ name: 'claude', startedAt: 30 }), row({ name: 'harness', exe: '/opt/harness/harness', startedAt: 30 })]
+    expect(count(rows)).toBe(2)
+    expect(count(rows, { bootId: 'another' } as Partial<OldUserFacts>)).toBe(0)
+    // A bridge.json with no boot was written where /proc has none, as no move is.
+    const { boot: _boot, ...unbooted } = BRIDGE
+    expect(oldUsers(unbooted as BridgeRecord, rows, FACTS)).toBe(0)
   })
 
   it('another account\'s process', () => {
@@ -134,14 +145,12 @@ describe('not an old user', () => {
 /** A process as /proc shows it: its status, its stat and its exe link (null: none, as a kernel thread's). */
 interface FakeProcess { pid: number; uid: number; comm: string; ppid: number; ticks: number; exe: string | null }
 
-const BTIME = 1_700_000_000
-
 /**
  * A /proc holding [processes], as the kernel writes it, noting each path asked in [asked]. A process in [ended] is listed
  * and its exe link read, then it is gone.
  */
 function fakeProc(processes: FakeProcess[], asked: string[], ended: readonly number[] = []): Parameters<typeof procRows>[0] {
-  const files = new Map<string, string>([['/proc/stat', `cpu  1 2 3\nbtime ${BTIME}\nprocesses 9\n`], ['/proc/uptime', '1234.56 999.00\n']])
+  const files = new Map<string, string>([['/proc/stat', 'cpu  1 2 3\nbtime 1700000000\nprocesses 9\n'], ['/proc/uptime', '99999.00 999.00\n']])
   const links = new Map<string, string>()
   for (const { pid, uid, comm, ppid, ticks, exe } of processes) {
     if (exe !== null) links.set(`/proc/${pid}/exe`, exe)
@@ -178,14 +187,14 @@ const CLAUDE: FakeProcess = { pid: 4242, uid: ME, comm: 'claude', ppid: 4200, ti
 const KTHREAD: FakeProcess = { pid: 2, uid: 0, comm: 'kthreadd', ppid: 0, ticks: 0, exe: null }
 
 describe('procRows', () => {
-  it('reads nothing but status, stat and the exe link', () => {
+  it('reads nothing but status, stat and the exe link: a start in seconds since the boot, no wall-clock time', () => {
     const asked: string[] = []
     expect(procRows(fakeProc([CLAUDE, KTHREAD], asked))).toEqual([
-      { pid: 4242, uid: ME, startedAt: BTIME + 1234.56, name: 'claude', exe: CLAUDE.exe, parent: 4200 },
-      { pid: 2, uid: 0, startedAt: BTIME, name: 'kthreadd', exe: null, parent: 0 },
+      { pid: 4242, uid: ME, startedAt: 1234.56, name: 'claude', exe: CLAUDE.exe, parent: 4200 },
+      { pid: 2, uid: 0, startedAt: 0, name: 'kthreadd', exe: null, parent: 0 },
     ])
     expect(asked.filter((path) => /(environ|cmdline)$/.test(path))).toEqual([])
-    expect(asked.filter((path) => !/^\/proc(\/stat|\/\d+\/(status|stat|exe))?$/.test(path))).toEqual([])
+    expect(asked.filter((path) => !/^\/proc(\/\d+\/(status|stat|exe))?$/.test(path))).toEqual([])
   })
 
   it('a process that ends mid-read is skipped', () => {
@@ -196,20 +205,14 @@ describe('procRows', () => {
   it('a comm with spaces and brackets is read whole', () => {
     const odd: FakeProcess = { ...CLAUDE, comm: 'a) (b [c] d)' }
     expect(procRows(fakeProc([odd], []))).toEqual([
-      { pid: 4242, uid: ME, startedAt: BTIME + 1234.56, name: 'a) (b [c] d)', exe: CLAUDE.exe, parent: 4200 },
+      { pid: 4242, uid: ME, startedAt: 1234.56, name: 'a) (b [c] d)', exe: CLAUDE.exe, parent: 4200 },
     ])
   })
 
-  it('with no boot time in /proc/stat it says so, rather than count no process as old', () => {
-    const fs = fakeProc([CLAUDE], [])
-    const real = fs!.readFileSync
-    expect(() => procRows({ ...fs!, readFileSync: ((path: string) => path === '/proc/stat' ? 'cpu  1 2 3\n' : real(path, 'utf8')) as typeof real })).toThrow()
-  })
-
-  it.runIf(process.platform === 'linux')('reads this process from the real /proc, on the clock the move\'s time uses', () => {
+  it.runIf(process.platform === 'linux')('reads this process from the real /proc, on the boot\'s clock the move\'s time uses', () => {
     const me = procRows().find(({ pid }) => pid === process.pid)
     expect(me).toMatchObject({ uid: process.getuid!(), parent: process.ppid, exe: realpathSync(process.execPath) })
-    // btime is a whole second: a start time is that close to the one this process counts.
-    expect(Math.abs(me!.startedAt - (procNow() - process.uptime()))).toBeLessThan(2)
+    // A start time counts in ticks of a hundredth: it is that close to the one this process counts.
+    expect(Math.abs(me!.startedAt - (bootNow()!.uptime - process.uptime()))).toBeLessThan(0.5)
   })
 })

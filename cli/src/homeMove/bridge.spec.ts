@@ -13,7 +13,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MCP_SHIM_SOURCE } from '../lib/connectors/mcpShimSource.js'
 import { harnessPaneOwner } from '../lib/harnessSessionLabel.js'
 import { hookRouteFile, publishHookRoute } from '../lib/hookRoutes.js'
-import { BRIDGE_FILE, isBridge, makeRealFolders, procNow, readBridge, REAL_ENTRIES, removeBridge, serveOldPaths, writeBridge, type BridgeRecord, type Served } from './bridge.js'
+import { bootNow, BRIDGE_FILE, isBridge, makeRealFolders, procNow, readBridge, REAL_ENTRIES, removeBridge, serveOldPaths, writeBridge, type BridgeRecord, type Served } from './bridge.js'
 
 vi.mock('node:fs', async (real) => ({ ...await real<object>(), linkSync: vi.fn((await real<typeof import('node:fs')>()).linkSync) }))
 
@@ -284,17 +284,39 @@ describe('the bridge\'s layout', () => {
 })
 
 describe('the bridge\'s record', () => {
-  it('is read back as it was written, owner only; none without one', () => {
+  const BOOT_ID = 'c2a9e1d8-55a4-4c3e-9b8f-0f6d2d1e7a11'
+  const missing = (path: string): never => { throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' }) }
+  /** A /proc that says this boot's id and how long it has run. */
+  const proc = (path: string): string => ({ '/proc/sys/kernel/random/boot_id': `${BOOT_ID}\n`, '/proc/uptime': '1234.56 999.00\n' } as Record<string, string>)[path] ?? missing(path)
+  const record: BridgeRecord = {
+    version: 1, movedAt: 1_700_001_234.56, oldHome: '/h/.harness', oldDataDir: '/h/.harness/cli/data',
+    oldTag: '0123456789abcdef', newTag: 'fedcba9876543210', panes: ['%1', '%2'],
+  }
+
+  it('is read back as it was written, with the boot the move ran in, owner only; none without one', () => {
     const state = shortFolder()
     expect(readBridge(state)).toBeNull()
-    const record: BridgeRecord = {
-      version: 1, movedAt: 1_700_001_234.56, oldHome: '/h/.harness', oldDataDir: '/h/.harness/cli/data',
-      oldTag: '0123456789abcdef', newTag: 'fedcba9876543210', panes: ['%1', '%2'],
-    }
-    writeBridge(state, record)
-    expect(readBridge(state)).toEqual(record)
+    writeBridge(state, record, proc)
+    expect(readBridge(state)).toEqual({ ...record, boot: { id: BOOT_ID, uptime: 1234.56 } })
     expect(statSync(join(state, BRIDGE_FILE)).mode & 0o777).toBe(0o600)
     expect(readdirSync(state)).toEqual([BRIDGE_FILE])
+  })
+
+  it('the boot is /proc\'s boot id and uptime, the clock /proc start times count on: none where /proc has neither, off Linux', () => {
+    expect(bootNow(proc)).toEqual({ id: BOOT_ID, uptime: 1234.56 })
+    expect(bootNow(missing)).toBeNull()
+    // A /proc that says neither is not this boot's.
+    expect(() => bootNow((path) => path === '/proc/uptime' ? 'soon\n' : proc(path))).toThrow()
+    expect(() => bootNow((path) => path === '/proc/uptime' ? proc(path) : '\n')).toThrow()
+    const state = shortFolder()
+    writeBridge(state, record, missing)
+    expect(readBridge(state)).toEqual(record)
+  })
+
+  it.runIf(process.platform === 'linux')('reads this boot from the real /proc', () => {
+    const boot = bootNow()!
+    expect(boot.id).toMatch(/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/)
+    expect(boot.uptime).toBeGreaterThan(process.uptime())
   })
 
   it('the move\'s time is btime of /proc/stat plus /proc/uptime, the clock /proc start times use', () => {

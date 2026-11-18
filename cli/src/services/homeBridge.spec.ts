@@ -18,8 +18,11 @@ import { isolatedTmux } from '../testing/isolatedTmux.js'
 import { askForStore, CHECK_MS, startHomeBridge, startHomeBridgeInCore, type HomeBridgeDeps } from './homeBridge.js'
 
 const MOVED_AT = 1_700_001_234.56
-/** A minute before the move. */
-const OLD = MOVED_AT - 60
+/** The boot the move ran in, 50 000 s into it, as /proc says it. */
+const BOOT = 'c2a9e1d8-55a4-4c3e-9b8f-0f6d2d1e7a11', MOVED_UPTIME = 50_000
+const PROC: Record<string, string> = { '/proc/sys/kernel/random/boot_id': `${BOOT}\n`, '/proc/uptime': `${MOVED_UPTIME}.00 999.00\n` }
+/** A minute before the move, in seconds since the boot. */
+const OLD = MOVED_UPTIME - 60
 const ME = process.getuid!()
 /** A data folder name that puts its socket past sockaddr_un's room (lib/localSocket.ts, 96 bytes): it is in the short folder. */
 const LONG = 'x'.repeat(60)
@@ -67,7 +70,7 @@ function movedHome() {
     version: 1, movedAt: MOVED_AT, oldHome, oldDataDir: join(oldHome, 'cli', LONG),
     oldTag: '0123456789abcdef', newTag: harnessPaneOwner(dataDir), panes: ['%1'],
   }
-  writeBridge(state, bridge)
+  writeBridge(state, bridge, (path) => PROC[path])
   writeMoveRecord(state, BRIDGED)
   return { home, oldHome, data, state, dataDir, socket, connections, bridge }
 }
@@ -84,15 +87,16 @@ let pids = 100
 const row = (over: Partial<ProcRow>): ProcRow => ({ pid: pids++, uid: ME, startedAt: OLD, name: 'bash', exe: '/usr/bin/bash', parent: 1, ...over })
 
 /**
- * What the service is handed on [h]: Linux, no old user, no pane and no harness to set up, unless [over] says otherwise.
- * A member [over] sets to undefined is the service's own. The connections folder is named: off Linux its default is
- * ~/.harness's (lib/connectors/store.ts).
+ * What the service is handed on [h]: Linux, ten minutes later in the move's boot, no old user, no pane and no harness to
+ * set up, unless [over] says otherwise. A member [over] sets to undefined is the service's own. The connections folder is
+ * named: off Linux its default is ~/.harness's (lib/connectors/store.ts).
  */
 function handed(h: Home, over: Partial<HomeBridgeDeps> = {}) {
   const log = vi.fn()
   const deps: Partial<HomeBridgeDeps> = {
     platform: 'linux', home: h.home, environment: { HOME: h.home, HARNESS_CONNECTIONS_DIR: h.connections }, socket: h.socket,
-    rows: () => [], tmux: () => ({ status: 1, stdout: '' }), setupsPending: async () => 0, askForStore: async () => {}, log, ...over,
+    boot: () => ({ id: BOOT, uptime: MOVED_UPTIME + 600 }), rows: () => [], tmux: () => ({ status: 1, stdout: '' }),
+    setupsPending: async () => 0, askForStore: async () => {}, log, ...over,
   }
   return { log, given: Object.fromEntries(Object.entries(deps).filter(([, value]) => value !== undefined)) as Partial<HomeBridgeDeps> }
 }
@@ -313,6 +317,29 @@ describe('the home bridge service', () => {
     await settle()
     expect(existsSync(join(h.state, BRIDGE_FILE))).toBe(true)
     expect(log).not.toHaveBeenCalled()
+  })
+
+  it('it counts on the clock of the boot the move ran in: after this computer started again no process is old', async () => {
+    const h = movedHome()
+    const users = [row({ name: 'claude' }), row({ name: 'harness', exe: '/opt/harness/harness' })]
+    // The wall clock stepped back an hour since the move: the boot's clock did not, and they are still old.
+    start(h, { rows: () => users })
+    await settle()
+    expect(record(h)).toMatchObject({ state: 'bridged', oldProcesses: 2 })
+    // Started again: whatever runs started after the move.
+    const { log } = start(h, { boot: () => ({ id: 'e5b0c3a1-0000-4000-8000-000000000000', uptime: 30 }), rows: () => users.map((each) => ({ ...each, startedAt: 10 })) })
+    await settle()
+    expect(existsSync(join(h.state, BRIDGE_FILE))).toBe(false)
+    expect(log.mock.calls).toEqual([['home bridge: removed']])
+  })
+
+  it('a /proc that names no boot fails the check, and the bridge stays', async () => {
+    const h = movedHome()
+    const { bridge, log } = start(h, { boot: () => null })
+    await settle()
+    expect(log.mock.calls).toEqual([['home bridge: a check failed: /proc gives no boot id · tried again in 10 minutes']])
+    expect(existsSync(join(h.state, BRIDGE_FILE))).toBe(true)
+    bridge.stop()
   })
 
   it('the daemon\'s own processes are no old users: in its own process all its master started, in the core\'s all the core did', async () => {
