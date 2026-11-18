@@ -1098,15 +1098,17 @@ static void handle_notifications(const cJSON *p)
         if (n >= (int)(sizeof(rows) / sizeof(rows[0]))) break;
         const char *aid = str_of(it, "agentId");
         if (!aid || !aid[0] || strlen(aid) >= sizeof rows[n].agent_id) continue;
-        bool duplicate = false;
-        for (int i = 0; i < n; i++) if (!strcmp(rows[i].agent_id, aid)) duplicate = true;
+        // Since #4445 the drawer keeps an agent's question and its news as two rows; one row an agent here dropped
+        // the second. A row carries no question id, so the agent and the kind are the whole key.
+        bool question = bool_of(it, "question"), duplicate = false;
+        for (int i = 0; i < n; i++) if (!strcmp(rows[i].agent_id, aid) && rows[i].question == question) duplicate = true;
         if (duplicate) continue;
         memset(&rows[n], 0, sizeof(rows[n]));
         snprintf(rows[n].agent_id, sizeof(rows[n].agent_id), "%s", aid);
         snprintf(rows[n].name, sizeof(rows[n].name), "%s", str_of(it, "name") ? str_of(it, "name") : "");
         snprintf(rows[n].machine, sizeof(rows[n].machine), "%s", str_of(it, "machine") ? str_of(it, "machine") : "");
         snprintf(rows[n].summary, sizeof(rows[n].summary), "%s", str_of(it, "summary") ? str_of(it, "summary") : "");
-        rows[n].question = bool_of(it, "question");
+        rows[n].question = question;
         rows[n].failed = bool_of(it, "failed");
         const char *token = str_of(it, "readToken");
         if (token && token[0] && strlen(token) < sizeof rows[n].read_token)
