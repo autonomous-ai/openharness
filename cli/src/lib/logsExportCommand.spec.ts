@@ -102,4 +102,11 @@ describe('logsExportCommand', () => {
     await logsExportCommand(deps)
     expect(lines[0].startsWith(`wrote ${join('~', 'Desktop', ZIP)} (`)).toBe(true)
   })
+
+  it('without --json and with no home the zip is named in full', async () => {
+    // `homedir()` answers '' when HOME is set empty: every path would begin with it.
+    const { deps, lines, cwd } = setup(['export'], { home: '' })
+    await logsExportCommand(deps)
+    expect(lines[0].startsWith(`wrote ${join(cwd, ZIP)} (`)).toBe(true)
+  })
 })
