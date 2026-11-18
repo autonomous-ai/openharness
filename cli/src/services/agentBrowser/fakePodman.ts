@@ -4,9 +4,10 @@
  */
 import type * as ChildProcesses from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { wholeLines } from '../../testing/wholeLines.js'
 
 /** Each fake's script path: whether it was removed, and its children still running. */
 const fakes = new Map<string, { removed: boolean; running: Set<ChildProcess> }>()
@@ -80,12 +81,6 @@ setTimeout(() => {
   process.exitCode = reply.code || 0
 }, reply.hangMs || 0)
 `
-
-/** The lines a running fake has finished writing to [file]. Its append creates the file before it writes, and a line
- *  without its newline is still being written: read then, an empty file threw in a spec (2026-11-19). */
-function wholeLines(file: string): string[] {
-  return readFileSync(file, 'utf8').split('\n').slice(0, -1)
-}
 
 export function fakePodman(): FakePodman {
   if (!realSpawnSync) throw new Error('fakePodman needs trackingFakes as the spec\'s node:child_process')
