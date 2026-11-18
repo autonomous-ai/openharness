@@ -166,6 +166,19 @@ describe('asynchronous question evidence', () => {
       expect(apply).not.toHaveBeenCalled()
     })
 
+    it('refuses an answer that is not text, before anything reaches the terminal', async () => {
+      const apply = vi.fn(async () => true), capture = vi.fn(async () => '')
+      const controller = new AskQuestionController({ getSession: () => row(), capture, readQuestion: async () => null,
+        sendKey: vi.fn(async () => true), sendText: vi.fn(async () => true), acquireControl: () => vi.fn(), wait: async () => {},
+        questionControlFor: () => ({ apply }) })
+      const notText = { ok: false, error: 'ANSWER_FAILED', detail: 'The answer named no agent or carried no choice.' }
+      for (const value of [5, null, ['A'], { label: 'A' }]) {
+        expect(await controller.answer({ agentId: 'agent', answers: { 'Pick?': 'A', 'Size?': value as never } })).toEqual(notText)
+      }
+      expect(capture).not.toHaveBeenCalled()
+      expect(apply).not.toHaveBeenCalled()
+    })
+
     it('reads an answer of 4096 bytes of labels whole', async () => {
       const answer = `A${', A'.repeat(1365)}`
       expect(Buffer.byteLength(answer, 'utf8')).toBe(4096)
