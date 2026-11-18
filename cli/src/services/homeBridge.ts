@@ -17,6 +17,7 @@ import { openDaemon, whereFor, type Daemon } from '../agentClient/daemon.js'
 import type { CoreApi, ServiceRequests } from '../core/api.js'
 import { bootNow, BRIDGE_FILE, readBridge, removeBridge, serveOldPaths, type Boot, type Served } from '../homeMove/bridge.js'
 import { oldUsers, procRows, type ProcRow } from '../homeMove/oldUsers.js'
+import { OWN_FILES } from '../homeMove/plan.js'
 import { readMoveRecord, writeMoveRecord, type MoveRecord } from '../homeMove/record.js'
 import { connectorsDir } from '../lib/connectors/store.js'
 import { savedDaemonPort } from '../lib/daemonRecord.js'
@@ -147,10 +148,11 @@ export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = 
     })
   }
 
-  /** The move's record, written only when its state or count changed (homeMove/record.ts). */
+  /** The move's record, written only when its state or count changed (homeMove/record.ts). A failed move's says so until a
+   *  start finishes the move: only its count changes. */
   const note = (state: MoveRecord['state'], oldProcesses: number): void => {
     const record = readMoveRecord(deps.home, deps.environment)
-    if (record) writeMoveRecord(stateRoot, { ...record, state, oldProcesses, at: Date.now() })
+    if (record) writeMoveRecord(stateRoot, { ...record, state: record.state === 'failed' ? record.state : state, oldProcesses, at: Date.now() })
   }
 
   const check = async (): Promise<void> => {
@@ -173,6 +175,8 @@ export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = 
       const pending = await deps.setupsPending()
       if (pending > 0) await deps.askForStore()
       if (count > 0 || pending > 0) return
+      // A move a start has yet to finish keeps its journal in ~/.harness (homeMove/plan.ts), and finishes through the links.
+      if (existsSync(join(bridge.oldHome, OWN_FILES.journal))) return
       const outcome = removeBridge(bridge, stateRoot)
       // The record before bridge.json: a crash between the two leaves a bridge.json, and the next start finishes.
       note('moved', 0)
