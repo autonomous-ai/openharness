@@ -34,7 +34,7 @@ import { PERSON_AGENT_ID, REPLY_OFF_TEXT } from '../messages/replyLocal.js'
 import { TELL_OFF_TEXT } from '../messages/tell.js'
 import { sendPane } from '../messages/command.js'
 import { PROGRAM_TOKEN_FLAG, ProgramRecords, programMay, readProgramToken, sameHash, type ProgramHarness, type ProgramInput } from './program.js'
-import { asSaid, callerOf, clip, cloudMeta, cloudTurn, failureOf, forAgent, isAgent, lastTurn, matching, outsideCaller, rowsOf, stateOf, STOPPED_WITHIN_MS, type Caller, type CloudMeta, type Failure, type Frame, type HistoryEvent, type Row, type State } from './model.js'
+import { asSaid, callerOf, clip, cloudMeta, cloudTurn, failureOf, forAgent, isAgent, lastTurn, matching, namedStateOf, outsideCaller, rowsOf, stateOf, STOPPED_WITHIN_MS, type Caller, type CloudMeta, type Failure, type Frame, type HistoryEvent, type Row, type State } from './model.js'
 
 export interface ClientDeps {
   pane?: string | undefined
@@ -113,7 +113,7 @@ export const WAIT_USAGE = `Usage: harness wait [--machine <name>] <name>[,<name>
 
 Waits until each harness has stopped working and the background commands it started have ended, then prints its state.
 --any returns when the first one does.
-Exit status: 0 idle or closed by you, 3 one needs the person (a question or a permission), 4 one stopped or is gone,
+Exit status: 0 idle or closed by you, 3 one needs the person (a question, a permission, or a problem only they can fix), 4 one stopped or is gone,
 124 timed out.
 --timeout takes 90s, 30m, 2h; 0 waits as long as it takes.
 ${ON_MACHINE}`
@@ -1390,7 +1390,7 @@ function toldPending(o: Opened, t: Target, turn: { ask?: string | null } | null,
 const CLOCK_SLACK_MS = 60_000
 
 /** `closed`: stopped or gone because the caller closed it (`harness close`, the ledger's `Closed` line). */
-type Settled = 'idle' | 'needs-input' | 'stopped' | 'gone' | 'closed' | 'timeout' | 'failed'
+type Settled = 'idle' | 'needs-input' | 'held' | 'stopped' | 'gone' | 'closed' | 'timeout' | 'failed'
 
 /**
  * The harnesses `wait` or `watch` follows by what each daemon pushes when one changes (`agents_watch`,
@@ -1436,11 +1436,13 @@ function pushedBy(s: Setup) {
   }
 }
 
-/** What to do once a wait has ended on [state], with the commands that read it, wait again, and list the stopped ones. */
-function waitNext(state: string, run: { read: string; again: string; list: string }): NextStep[] {
+/** What to do once a wait has ended on [state], with the commands that read it, wait again, and list the stopped ones;
+ *  [sentence]: what a held one tells the person. */
+function waitNext(state: string, run: { read: string; again: string; list: string }, sentence?: string): NextStep[] {
   switch (state) {
     case 'idle': return [{ run: run.read, when: 'to read its answer' }]
     case 'needs-input': return [{ tell: 'tell the person; only they answer it (a question or a permission).' }]
+    case 'held': return [{ tell: `tell the person: ${sentence}` }]
     case 'timeout': case 'installing': case 'starting': return [{ run: run.again, when: 'to keep waiting' }]
     case 'stopped': return [{ run: run.read, when: 'its answer is kept' }]
     case 'gone': return [{ run: run.list, when: 'to see whether it was closed' }]
@@ -1542,6 +1544,8 @@ export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
         }
         t.frame = frame
         if (frame.status === 'stopped') return ended(t, 'stopped')
+        // Held until the person acts, whatever its screen shows: no screen to read.
+        if (namedStateOf(frame)?.held) return 'held'
         // A cloud harness says where it is itself, with no screen to read: done once it is no longer starting or working.
         if (frame.location === 'cloud') {
           const state = stateOf(frame)
@@ -1618,12 +1622,13 @@ export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
         const quiet = pushing && !following.length && targets.every((t) => settled.has(t) || pushedNext.has(t))
         await push.sleep(Math.min(quiet ? PUSHED_BACKSTOP_MS : s.intervalMs, Math.max(0, deadline - s.now())))
       }
-      const results: Array<{ name: string; id: string; state: Settled | 'installing' | 'starting'; detail?: string; cloud?: CloudMeta; backgroundCommands?: number }> = [
+      const results: Array<{ name: string; id: string; state: Settled | 'installing' | 'starting'; detail?: string; cloud?: CloudMeta; backgroundCommands?: number; namedState?: string }> = [
         ...targets.filter((t) => settled.has(t)).map((t) => {
           const cloud = cloudMeta(t.frame)
           // Held by its background commands at its last look, so it timed out on them.
           const running = background.get(t)
-          return { name: t.frame.name ?? t.frame.id.slice(0, 8), id: t.frame.id, state: settled.get(t)!, ...(cloud ? { cloud } : {}), ...(running ? { backgroundCommands: running } : {}) }
+          const named = namedStateOf(t.frame)?.sentence
+          return { name: t.frame.name ?? t.frame.id.slice(0, 8), id: t.frame.id, state: settled.get(t)!, ...(cloud ? { cloud } : {}), ...(running ? { backgroundCommands: running } : {}), ...(named ? { namedState: named } : {}) }
         }),
         // Not started yet when the wait ended: said as what it waits for, which is what the agent waits on.
         ...following.filter((a) => gave.has(a)).map((a) => {
@@ -1635,17 +1640,21 @@ export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
       const nextOf = (r: (typeof results)[number]): NextStep[] => {
         const at = onAway(addressOf({ machineId: '', agentId: r.id, name: r.name, engine: '' }), away)
         return waitNext(r.state, { read: step(s.env, 'show', at), again: step(s.env, 'wait', at),
-          list: step(s.env, 'ps', away ? machineOption(away.word) : '', { flag: '--all', arg: 'all: true' }) })
+          list: step(s.env, 'ps', away ? machineOption(away.word) : '', { flag: '--all', arg: 'all: true' }) }, r.namedState)
       }
       if (flags.has('--json')) {
-        s.out(JSON.stringify({ harnesses: results.map((r) => ({ ...r, ...(r.state === 'needs-input' ? { needsPerson: true } : {}), next: nextOf(r) })) }, null, 1))
+        s.out(JSON.stringify({ harnesses: results.map((r) => ({ ...r, ...(r.state === 'needs-input' || r.state === 'held' ? { needsPerson: true } : {}), next: nextOf(r) })) }, null, 1))
       }
       else for (const r of results) {
         if (r.state === 'closed') { s.out(`${r.name}: closed (you closed it)`); continue }
         const read = step(s.env, 'show', onAway(addressOf({ machineId: '', agentId: r.id, name: r.name, engine: '' }), away))
         const next = r.state === 'idle' ? `read it: ${read}`
           : r.state === 'needs-input' ? 'it waits for the person (a question or a permission); only the person answers it'
-          : r.state === 'timeout' ? `${r.backgroundCommands ? backgroundSaid(r.backgroundCommands) : 'still working'}; wait again or read it: ${read}`
+          : r.state === 'held' ? `${r.namedState} Only the person can fix this.`
+          : r.state === 'timeout' && r.backgroundCommands ? `${backgroundSaid(r.backgroundCommands)}; wait again or read it: ${read}`
+          // Recovering by itself (a live view rebuilding): what it says replaces "still working".
+          : r.state === 'timeout' && r.namedState ? `${r.namedState} Wait again or read it: ${read}`
+          : r.state === 'timeout' ? `still working; wait again or read it: ${read}`
           : r.state === 'installing' || r.state === 'starting' ? `${askedLine(s.env, following.find((a) => a.row.creation.creationId === r.id)!, away)}`
           : r.state === 'failed' && targets.some((t) => t.frame.id === r.id) ? `it failed in the cloud; what it said and its links: ${read}`
           : r.state === 'failed' ? `it never started: ${r.detail || 'its machine refused it'}`
@@ -1657,7 +1666,7 @@ export function waitCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
         if (r.state === 'gone') s.out(formatNext(nextOf(r))!)
       }
       const states = results.map((r) => r.state)
-      return states.some((x) => x === 'timeout' || x === 'installing' || x === 'starting') ? EXIT.timeout : states.includes('needs-input') ? EXIT.needsInput
+      return states.some((x) => x === 'timeout' || x === 'installing' || x === 'starting') ? EXIT.timeout : states.includes('needs-input') || states.includes('held') ? EXIT.needsInput
         : states.some((x) => x === 'stopped' || x === 'gone' || x === 'failed') ? EXIT.stopped : EXIT.ok
     } finally {
       for (const t of targets) if (t.remote) t.daemon.close()
