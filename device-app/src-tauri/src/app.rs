@@ -533,9 +533,10 @@ mod tests {
     use super::*;
     use crate::install::{DOWNLOADING_HARNESS, GETTING_READY, INSTALLING_TMUX};
     use crate::types::{
-        Action, DialStatus, Effect, Event, LoginEvent, MenuAction, MenuItem, NotifyMode, Phase, Saved, Screen,
-        UpdateFailure, View,
+        Action, DialStatus, Effect, Event, ExportFailure, Exported, LoginEvent, MenuAction, MenuItem, NotifyMode,
+        Phase, Saved, Screen, UpdateFailure, View,
     };
+    use std::path::PathBuf;
 
     /// Second 0 of a minute.
     const B: u64 = 1794556800;
@@ -921,8 +922,8 @@ mod tests {
         assert_eq!(reads(&app.handle(opened(B + 70, false))), [false; 2]);
 
         let effects = app.handle(opened(B + 80, true));
-        assert_eq!(rows(&effects), ["Starting Harness", "Open Harness", "About", "Quit"]);
-        assert_eq!(rows(&app.handle(opened(B + 90, false))), ["Starting Harness", "About", "Quit"]);
+        assert_eq!(rows(&effects), ["Starting Harness", "Open Harness", "Export logs", "About", "Quit"]);
+        assert_eq!(rows(&app.handle(opened(B + 90, false))), ["Starting Harness", "Export logs", "About", "Quit"]);
 
         assert_eq!(reads(&removed().handle(opened(B + 120, false))), [false; 2]);
     }
@@ -1008,7 +1009,7 @@ mod tests {
 
         let effects = app.handle(line(false));
         assert_eq!(checks(&effects), vec![on.clone()]);
-        assert!(has(&effects, &Effect::Log("menu: Device ready | Sound ✓ | About | Quit".into())));
+        assert!(has(&effects, &Effect::Log("menu: Device ready | Sound ✓ | Export logs | About | Quit".into())));
 
         // The click's own check flipped natively: the menu drawn again puts it back where the dial is.
         let effects = app.handle(Event::Menu(MenuAction::SoundOff));
@@ -1017,7 +1018,7 @@ mod tests {
 
         let effects = app.handle(line(true));
         assert_eq!(checks(&effects), [off]);
-        assert!(has(&effects, &Effect::Log("menu: Device ready | Sound | About | Quit".into())));
+        assert!(has(&effects, &Effect::Log("menu: Device ready | Sound | Export logs | About | Quit".into())));
 
         assert!(checks(&app.handle(Event::WatchExit(Some(3)))).is_empty());
     }
@@ -1066,7 +1067,10 @@ mod tests {
 
         let effects = app.handle(notifying(NotifyMode::Full));
         assert_eq!(submenus(&effects), [checked(true, false)]);
-        assert!(has(&effects, &Effect::Log("menu: Device ready | Notifications: All | About | Quit".into())));
+        assert!(has(
+            &effects,
+            &Effect::Log("menu: Device ready | Notifications: All | Export logs | About | Quit".into())
+        ));
 
         // The click's own check flipped natively: the menu drawn again puts it back where the watch says.
         let effects = app.handle(Event::Menu(MenuAction::NotifyYou));
@@ -1075,7 +1079,10 @@ mod tests {
 
         let effects = app.handle(notifying(NotifyMode::You));
         assert_eq!(submenus(&effects), [checked(false, true)]);
-        assert!(has(&effects, &Effect::Log("menu: Device ready | Notifications: Needs you | About | Quit".into())));
+        assert!(has(
+            &effects,
+            &Effect::Log("menu: Device ready | Notifications: Needs you | Export logs | About | Quit".into())
+        ));
 
         assert!(submenus(&app.handle(Event::WatchExit(Some(3)))).is_empty());
     }
@@ -1095,7 +1102,7 @@ mod tests {
         };
         let effects = app.handle(Event::WatchLine(line.clone()));
         assert_eq!(rows(&effects)[0], "Device ready");
-        assert!(has(&effects, &Effect::Log("menu: Device ready | About | Quit".into())));
+        assert!(has(&effects, &Effect::Log("menu: Device ready | Export logs | About | Quit".into())));
         assert!(app.handle(Event::WatchLine(line)).is_empty());
 
         assert_eq!(rows(&app.handle(Event::WatchExit(Some(3))))[0], "Starting Harness");
@@ -1152,7 +1159,7 @@ mod tests {
         for effect in [Effect::SpawnWatch, Effect::ReadAuth, Effect::ReadVersion] {
             assert!(has(&effects, &effect), "{effect:?}");
         }
-        assert_eq!(rows(&effects), ["Starting Harness", "About", "Quit"]);
+        assert_eq!(rows(&effects), ["Starting Harness", "Export logs", "About", "Quit"]);
 
         // An install under way is not looked past.
         assert!(!has(&fresh().handle(tick(B + 5)), &Effect::FindCli));
@@ -1459,5 +1466,97 @@ mod tests {
         app.handle(Event::UpdateFailed(UpdateFailure::NotWritable));
         app.handle(tick(B + 5 + 2 * M1));
         assert!(!rows(&app.handle(Event::UpdateChecked(None))).contains(&"Update 0.1.3…".to_string()));
+    }
+
+    const SAVED_LINE: &str = "Saved to ~/Desktop/harness-logs-20261118-1030.zip";
+
+    fn exported() -> Exported {
+        Exported {
+            zip: PathBuf::from("/Users/p/Desktop/harness-logs-20261118-1030.zip"),
+            shown: "~/Desktop/harness-logs-20261118-1030.zip".into(),
+        }
+    }
+
+    /// The labels of the menu the app last sent, whether or not this event sent one.
+    fn rows_now(app: &App) -> Vec<String> {
+        rows(&[Effect::Menu(app.menu.clone())])
+    }
+
+    #[test]
+    fn a_click_exports_and_the_row_waits() {
+        let mut app = found();
+        let effects = app.handle(Event::Menu(MenuAction::ExportLogs));
+        assert_eq!(count(&effects, &Effect::ExportLogs), 1);
+        assert!(menu_of(&effects).contains(&MenuItem::Text("Exporting logs…".into())));
+        assert!(app.handle(Event::Menu(MenuAction::ExportLogs)).is_empty());
+    }
+
+    #[test]
+    fn a_saved_export_is_revealed_and_named() {
+        let mut app = found();
+        app.handle(Event::Menu(MenuAction::ExportLogs));
+        let effects = app.handle(Event::LogsExported(Ok(exported())));
+        assert!(has(&effects, &Effect::Reveal(exported().zip)));
+        assert_eq!(logs(&effects), ["logs: exported"]);
+        assert_eq!(rows(&effects), ["Starting Harness", "Export logs", SAVED_LINE, "About", "Quit"]);
+        // The menu's own log line says Saved: the zip may be outside the home, and named whole.
+        for effect in &effects {
+            if let Effect::Log(line) = effect {
+                assert!(!line.contains("harness-logs-"), "{line}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_failed_export_says_why() {
+        let failures = [
+            (ExportFailure::TimedOut, "timed out"),
+            (ExportFailure::NoAnswer, "Harness did not answer"),
+            (ExportFailure::NoFile, "no file"),
+        ];
+        for (failure, reason) in failures {
+            let mut app = found();
+            app.handle(Event::Menu(MenuAction::ExportLogs));
+            let effects = app.handle(Event::LogsExported(Err(failure)));
+            assert_eq!(
+                rows(&effects),
+                ["Starting Harness", "Export logs", &format!("Export failed: {reason}"), "About", "Quit"],
+                "{failure:?}"
+            );
+            assert_eq!(logs(&effects), [format!("logs: export failed: {reason}")]);
+            assert!(!effects.iter().any(|effect| matches!(effect, Effect::Reveal(_))), "{failure:?}");
+        }
+    }
+
+    #[test]
+    fn the_line_stays_until_the_next_export() {
+        let mut app = found();
+        app.handle(Event::Menu(MenuAction::ExportLogs));
+        app.handle(Event::LogsExported(Ok(exported())));
+        app.handle(tick(B + 5));
+        app.handle(Event::MenuOpened { now: B + 10, desktop_installed: false });
+        assert_eq!(rows_now(&app), ["Starting Harness", "Export logs", SAVED_LINE, "About", "Quit"]);
+
+        // A CLI that goes away takes the row, not the line.
+        app.handle(Event::Cli(false));
+        assert_eq!(rows_now(&app), ["Harness removed", "Install", SAVED_LINE, "About", "Quit"]);
+
+        app.handle(Event::Cli(true));
+        assert_eq!(rows_now(&app), ["Starting Harness", "Export logs", SAVED_LINE, "About", "Quit"]);
+        app.handle(Event::Menu(MenuAction::ExportLogs));
+        assert_eq!(rows_now(&app), ["Starting Harness", "Exporting logs…", "About", "Quit"]);
+    }
+
+    #[test]
+    fn without_a_cli_a_click_exports_nothing() {
+        let mut app = removed();
+        assert!(!has(&app.handle(Event::Menu(MenuAction::ExportLogs)), &Effect::ExportLogs));
+        // An export the CLI started before it went still answers.
+        let effects = app.handle(Event::LogsExported(Err(ExportFailure::NoAnswer)));
+        assert_eq!(
+            rows(&effects),
+            ["Harness removed", "Install", "Export failed: Harness did not answer", "About", "Quit"]
+        );
+        assert_eq!(logs(&effects), ["logs: export failed: Harness did not answer"]);
     }
 }

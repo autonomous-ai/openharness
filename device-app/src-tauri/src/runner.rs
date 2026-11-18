@@ -449,7 +449,10 @@ mod tests {
     use crate::state::StateFile;
     use crate::tabs::{NoTabs, Selected, TabApp, TabError, TabScripts};
     use crate::testing::{Fake, alive, fake_harness, wait_gone};
-    use crate::types::{DialStatus, Effect, Event, LoginEvent, MenuItem, NotifyMode, Output, Saved, UpdateFailure};
+    use crate::types::{
+        DialStatus, Effect, Event, ExportFailure, Exported, LoginEvent, MenuItem, NotifyMode, Output, Saved,
+        UpdateFailure,
+    };
     use crate::update::AppUpdater;
     use std::collections::VecDeque;
     use std::fs;
@@ -965,6 +968,47 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn an_export_gives_the_zip() {
+        let w = world();
+        assert!(w.runner.find_cli());
+        let zip = w.home.path().join("Desktop").join("harness-logs-20261118-1030.zip");
+        let answer = serde_json::json!({ "path": zip, "included": ["harness.log"], "bytes": 9 }).to_string();
+        w.fake.script("logs export --json", &[&answer]);
+        let shown = "~/Desktop/harness-logs-20261118-1030.zip".to_string();
+        assert_eq!(w.answer(Effect::ExportLogs), Event::LogsExported(Ok(Exported { zip, shown })));
+        assert_eq!(w.fake.calls(), ["logs export --json"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_export_with_no_cli_still_answers() {
+        let no_answer = Event::LogsExported(Err(ExportFailure::NoAnswer));
+        let w = world_where(|doors| doors.cli_override = None);
+        assert!(!w.runner.find_cli());
+        assert_eq!(w.answer(Effect::ExportLogs), no_answer);
+
+        // Gone between the look and the click: the row must not wait on an export that never ran.
+        let w = world();
+        assert!(w.runner.find_cli());
+        fs::remove_file(w.fake.program()).unwrap();
+        assert_eq!(w.answer(Effect::ExportLogs), no_answer);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_reveal_is_one_fixed_open() {
+        let w = world();
+        let zip = "/Users/p/Desktop/harness-logs-20261118-1030.zip";
+        assert_eq!(w.runner.run(Effect::Reveal(PathBuf::from(zip))), None);
+        #[cfg(target_os = "macos")]
+        let expected = vec!["-R", zip];
+        #[cfg(not(target_os = "macos"))]
+        let expected = vec!["/Users/p/Desktop"];
+        assert_eq!(*w.doubles.opened.lock().unwrap(), [expected]);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn the_binary_gets_its_four_effects_back() {
         let w = world();
         assert!(w.runner.find_cli());
@@ -989,6 +1033,8 @@ mod tests {
             Effect::RegisterLoginItem,
             Effect::Save(Saved::default()),
             Effect::Log("menu: Quit".into()),
+            Effect::ExportLogs,
+            Effect::Reveal(PathBuf::from("/tmp/harness-logs-20261118-1030.zip")),
         ];
         for effect in others {
             assert_eq!(w.runner.run(effect.clone()), None, "{effect:?}");
