@@ -30,10 +30,12 @@
 
 # Harness's state folder, by the CLI's rule: ~/.harness off Linux. On Linux the XDG state folder, unless
 # this home is still on ~/.harness (no XDG data folder yet, ~/.harness there); once moved, ~/.harness
-# is a bridge that removes itself. An XDG variable that is not an absolute path is ignored. A setup's
-# output carries what this prints, so a PATH without uname reads as off Linux, silently.
+# is a bridge that removes itself. An XDG variable that is not an absolute path is ignored, and a trailing
+# slash dropped, so the paths match the daemon's. A setup's output carries what this prints, so a PATH
+# without uname reads as off Linux, silently.
 _harness_state_root() {
   local data="${XDG_DATA_HOME:-}" state="${XDG_STATE_HOME:-}"
+  data="${data%/}" state="${state%/}"
   if [ "$(uname -s 2>/dev/null)" != Linux ]; then echo "${HOME:-}/.harness"; return; fi
   case "$data" in /*) ;; *) data="${HOME:-}/.local/share" ;; esac
   case "$state" in /*) ;; *) state="${HOME:-}/.local/state" ;; esac

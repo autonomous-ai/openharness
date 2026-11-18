@@ -5,13 +5,14 @@ export GRID_NO_UPDATE_CHECK=1
 # Same priority as Harness: explicit override, managed runtime, package fallback, user's CLI.
 if [ -n "${HARNESS_GRID_BIN:-}" ]; then exec "$HARNESS_GRID_BIN" "$@"; fi
 # Harness's runtime folder, as the daemon resolves it: on Linux it is in the XDG state root unless only
-# ~/.harness exists; a base that is not an absolute path is ignored.
+# ~/.harness exists; a base that is not an absolute path is ignored, and a trailing slash dropped, so the
+# path matches the one the daemon recorded.
 harness_runtime() {
   if [ -n "${ADAPTER_RUNTIME_DIR:-}" ]; then printf '%s\n' "$ADAPTER_RUNTIME_DIR"; return; fi
   if [ "$(uname -s)" = Linux ]; then
     local data state
-    case "${XDG_DATA_HOME:-}" in /*) data="$XDG_DATA_HOME/harness" ;; *) data="$HOME/.local/share/harness" ;; esac
-    case "${XDG_STATE_HOME:-}" in /*) state="$XDG_STATE_HOME/harness" ;; *) state="$HOME/.local/state/harness" ;; esac
+    case "${XDG_DATA_HOME:-}" in /*) data="${XDG_DATA_HOME%/}/harness" ;; *) data="$HOME/.local/share/harness" ;; esac
+    case "${XDG_STATE_HOME:-}" in /*) state="${XDG_STATE_HOME%/}/harness" ;; *) state="$HOME/.local/state/harness" ;; esac
     if [ -e "$data" ] || [ ! -e "$HOME/.harness" ]; then printf '%s\n' "$state/runtime"; return; fi
   fi
   printf '%s\n' "$HOME/.harness/runtime"
