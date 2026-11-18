@@ -162,7 +162,7 @@ describe('readRecord', () => {
     expect(await read(record(11, { ...app, hostSessionId: undefined }))).toEqual({ name: 'Tho' })
   })
 
-  it.each<[unknown]>([[7], [null], [true], [{ id: LOCAL }], [[LOCAL]]])('a hostSessionId of %j gives none', async (hostSessionId) => {
+  it.each<[unknown]>([[''], [7], [null], [true], [{ id: LOCAL }], [[LOCAL]]])('a hostSessionId of %j gives none', async (hostSessionId) => {
     expect(await read(record(11, { ...app, hostSessionId }))).toEqual({ name: 'Tho' })
   })
 
