@@ -114,7 +114,8 @@ and the asked app's answer decides the route. This work:
     is always in front there, while the VS Code terminal's foreground is that program. An exit, a terminal gone or a
     failed read is refused, reason `ps`.
 - **Bounds the wait:** a stroke is held at most 500 ms of wall time. With no answer by then, its held travel goes out
-  as `lines` and the stroke stays `lines`. A newer `down` drops an older answer, as Herdr's `stroke !== asked` does.
+  as `lines` and the stroke stays `lines`. A newer `down` drops an older answer, as Herdr's `stroke !== asked` does;
+  the travel the older stroke held goes out at once as `lines`, since a refused guard is `lines` too.
 - **Checks the state again at each move** of a `page` stroke in `routeScroll`. A `needs-you` that the devices learn
   mid-stroke turns the rest of the stroke to `lines`.
 - **Keeps `page` in the line accumulator** (`vscodeTerminals.ts` `window.scroll`): lines with and without `page` are

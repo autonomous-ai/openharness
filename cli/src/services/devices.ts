@@ -759,6 +759,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     let answer: Promise<void> | undefined
     // A held up ended its stroke too: a frame after it begins a new one, and the older answer is stale.
     if (phase === 'down' || !route || (route !== 'windows' && 'held' in route && route.held.up !== undefined)) {
+      // An older stroke held for its page guard is its pane's lines whatever the answer (routeOf): what it held goes out
+      // now, with no page, as the answer it waited on is left behind. One held for Herdr's on screen may be the windows'.
+      if (route && route !== 'windows' && 'held' in route && !route.deciding.adapter.onScreen && !stopped) {
+        toPane({ ...route.deciding, lines: createScrollLines(), page: false }, 'move', route.held.dy)
+      }
       // Once the devices began to stop, no app is asked or run: a stroke then is the windows', as before this route.
       const target = stopped ? undefined : scrollTarget()
       const to = target && routeOf(target)
