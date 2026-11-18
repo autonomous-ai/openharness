@@ -1753,8 +1753,12 @@ foreach ($name in ($env:HARNESS_SIGNATURE_FILES -split [string][char]10)) {
   Future<File> _writeTerminalBootstrapScript({
     List<String> linuxPackages = const [],
   }) async {
+    // In the state root: it runs before the CLI is installed, and the data
+    // root is the rule's switch, which only the CLI's installer makes. A data
+    // root made here would split a home an older installer then fills at
+    // ~/.harness.
     final directory = Directory(
-      '${_roots.path(HarnessEntry.desktopApp)}/setup-runs/${DateTime.now().millisecondsSinceEpoch}',
+      '${_roots.root(HarnessRootKind.state)}/${HarnessEntry.desktopApp.segment}/setup-runs/${DateTime.now().millisecondsSinceEpoch}',
     );
     await directory.create(recursive: true);
     await _run('/bin/chmod', ['700', directory.path]);
