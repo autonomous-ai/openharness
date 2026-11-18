@@ -334,7 +334,7 @@ describe('buildLogBundle', () => {
     expect(readme).toContain([
       'Blanked before writing: secrets (tokens, keys, passwords, signed URLs), email addresses (<email>) and the home folder (~).',
       'Never included: conversations and transcripts, prompts, voice, tokens, keys, passwords and sign-in files, any process\'s environment, project files.',
-      'status.txt: what `harness status` and `harness device claude|codex|vscode status --json` printed.',
+      'status.txt: what `harness status` and `harness device claude|codex|vscode|cursor status --json` printed.',
       'logs/harness-device/: the Harness menu-bar app\'s own log.',
       'The dial\'s firmware version is in harness.log: the `fw` on the `cable: dial … on fw …` line of each dial greeting.',
       'dial-*.log: the dial\'s own console',

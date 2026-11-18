@@ -19,7 +19,7 @@ import { listenLocalSocket, unixSocketPath } from '../lib/localSocket.js'
 import { socketIsPrivate } from '../lib/localTransport.js'
 import { DEVICE_USAGE, runDeviceCommand, takesConnect, type DeviceDeps } from './command.js'
 import type { ClaudeRun } from '../devices/claudePlugin.js'
-import { VSCODE_EXTENSION_ID, type VscodeExtensionDeps } from '../devices/vscodeExtension.js'
+import { VSCODE_EXTENSION_ID, type VscodeEditor, type VscodeExtensionDeps } from '../devices/vscodeExtension.js'
 import { orcaPluginRun, type OrcaPluginFiles, type OrcaPluginRun } from '../devices/orcaPlugin.js'
 import { fakeOrcaCli, type FakeOrcaCli } from '../testing/fakeOrcaCli.js'
 
@@ -323,9 +323,9 @@ describe('harness device claude', () => {
     expect(DEVICE_USAGE).not.toMatch(/asked|approve|link|answers/)
   })
 
-  it('the usage says a dial sets the agents and VS Code up, and that disable is a removal Harness leaves alone', () => {
+  it('the usage says a dial sets the agents, VS Code and Cursor up, and that disable is a removal Harness leaves alone', () => {
     for (const line of [
-      'Harness device (with a dial plugged in, Claude Code and Codex are set up to ring it, and VS Code to follow it; disable takes that away, enable brings it back):',
+      'Harness device (with a dial plugged in, Claude Code and Codex are set up to ring it, and VS Code and Cursor to follow it; disable takes that away, enable brings it back):',
       'harness device claude status [--json]  whether the dial is on for Claude Code (its harness-device plugin on, and not removed), and its version',
       'harness device claude enable           set Claude Code up again: the plugin and the dial skill (Claude Code 2.1.287 or later), in each Orca account too',
       'harness device claude disable          remove the plugin and the dial skill, in each Orca account too; Harness leaves them removed',
@@ -334,7 +334,13 @@ describe('harness device claude', () => {
       'harness device codex disable           remove the dial skill Harness wrote; Harness leaves it removed',
       'harness device vscode enable           set VS Code up again: Harness\'s extension in it',
       'harness device vscode disable          remove Harness\'s extension; Harness leaves it removed',
+      'harness device cursor enable           set Cursor up again: Harness\'s extension in it',
+      'harness device cursor disable          remove Harness\'s extension; Harness leaves it removed',
     ]) expect(DEVICE_USAGE.split('\n').map((usage) => usage.trim())).toContain(line)
+    const lines = DEVICE_USAGE.split('\n').map((usage) => usage.trim())
+    expect(lines.indexOf('harness device cursor enable           set Cursor up again: Harness\'s extension in it'))
+      .toBe(lines.findIndex((usage) => usage.startsWith('harness device vscode disable')) + 1)
+    expect(DEVICE_USAGE).not.toMatch(/cursor status/)
   })
 
   it('no file under core/, services/ or cable/ imports deviceClaude/', () => {
@@ -1275,51 +1281,57 @@ describe('harness device orca status and connect', () => {
   })
 })
 
-describe('harness device vscode', () => {
-  const OK = { code: 0, timedOut: false }
+const OK = { code: 0, timedOut: false }
 
-  /**
-   * VS Code on a Mac as the command sees it, all fake: its app in a throwaway home's Applications, its record of
-   * extensions in memory, and a `code` that records each run and answers [answer]; a run that exits 0 leaves the record
-   * listing [installed] after an install, and nothing after an uninstall; [onRun] sees each run before it answers. The
-   * real VS Code, /Applications and ~/.vscode are never looked at.
-   */
-  function fakeVscode(options: { app?: boolean; cli?: boolean; version?: string; answer?: { code: number | null; timedOut: boolean }; installed?: string; onRun?: () => void } = {}) {
-    const home = folder()
-    const app = join(home, 'Applications', 'Visual Studio Code.app')
-    const record = join(home, '.vscode', 'extensions', 'extensions.json')
-    const disk = new Map<string, string>()
-    if (options.app !== false) disk.set(app, '')
-    if (options.app !== false && options.cli !== false) disk.set(join(app, 'Contents', 'Resources', 'app', 'bin', 'code'), '')
-    const list = (version: string | undefined) => {
-      if (version === undefined) disk.delete(record)
-      else disk.set(record, JSON.stringify([{ identifier: { id: VSCODE_EXTENSION_ID }, version }]))
-    }
-    list(options.version)
-    const runs: string[][] = []
-    const deps: VscodeExtensionDeps = {
-      editor: 'vscode', real: (path) => path, platform: 'darwin', home, pathVar: '',
-      exists: (path) => disk.has(path),
-      executable: (path) => disk.has(path),
-      read: (path) => disk.get(path) ?? null,
-      run: async (_file, args) => {
-        runs.push([...args])
-        options.onRun?.()
-        const answer = options.answer ?? OK
-        if (answer.code === 0) list(args[0] === '--install-extension' ? options.installed : undefined)
-        return answer
-      },
-      files: () => ({
-        manifest: JSON.stringify({ name: 'harness-device', displayName: 'Harness Device', description: 'The dial.', version: '0.6.60', publisher: 'autonomous-ai', engines: { vscode: '^1.75.0' } }),
-        main: '',
-      }),
-      tempDir: () => folder(),
-      write: (path, data) => writeFileSync(path, data, { mode: 0o600 }),
-      remove: (path) => rmSync(path, { recursive: true, force: true }),
-    }
-    return { vscode: () => deps, runs }
+/**
+ * [editor] (VS Code unless said) on a Mac as the command sees it, all fake: its app in a throwaway home's Applications,
+ * its record of extensions in memory, and its CLI, which records each run and answers [answer]; a run that exits 0
+ * leaves the record listing [installed] after an install, and nothing after an uninstall; [onRun] sees each run before
+ * it answers. Each editor the command asks for is in [asked], and is given deps for that editor, so asking for the
+ * other finds no app. The real VS Code and Cursor, /Applications, ~/.vscode and ~/.cursor are never looked at.
+ */
+function fakeVscode(options: { editor?: VscodeEditor; app?: boolean; cli?: boolean; version?: string; answer?: { code: number | null; timedOut: boolean }; installed?: string; onRun?: () => void } = {}) {
+  const editor = options.editor ?? 'vscode'
+  const { app: appName, cli, folder: recordFolder } = editor === 'vscode'
+    ? { app: 'Visual Studio Code.app', cli: 'code', folder: '.vscode' }
+    : { app: 'Cursor.app', cli: 'cursor', folder: '.cursor' }
+  const home = folder()
+  const app = join(home, 'Applications', appName)
+  const record = join(home, recordFolder, 'extensions', 'extensions.json')
+  const disk = new Map<string, string>()
+  if (options.app !== false) disk.set(app, '')
+  if (options.app !== false && options.cli !== false) disk.set(join(app, 'Contents', 'Resources', 'app', 'bin', cli), '')
+  const list = (version: string | undefined) => {
+    if (version === undefined) disk.delete(record)
+    else disk.set(record, JSON.stringify([{ identifier: { id: VSCODE_EXTENSION_ID }, version }]))
   }
+  list(options.version)
+  const runs: string[][] = []
+  const asked: VscodeEditor[] = []
+  const deps: VscodeExtensionDeps = {
+    editor, real: (path) => path, platform: 'darwin', home, pathVar: '',
+    exists: (path) => disk.has(path),
+    executable: (path) => disk.has(path),
+    read: (path) => disk.get(path) ?? null,
+    run: async (_file, args) => {
+      runs.push([...args])
+      options.onRun?.()
+      const answer = options.answer ?? OK
+      if (answer.code === 0) list(args[0] === '--install-extension' ? options.installed : undefined)
+      return answer
+    },
+    files: () => ({
+      manifest: JSON.stringify({ name: 'harness-device', displayName: 'Harness Device', description: 'The dial.', version: '0.6.60', publisher: 'autonomous-ai', engines: { vscode: '^1.75.0' } }),
+      main: '',
+    }),
+    tempDir: () => folder(),
+    write: (path, data) => writeFileSync(path, data, { mode: 0o600 }),
+    remove: (path) => rmSync(path, { recursive: true, force: true }),
+  }
+  return { vscode: (asking: VscodeEditor) => { asked.push(asking); return { ...deps, editor: asking } }, runs, asked }
+}
 
+describe('harness device vscode', () => {
   it('status --json prints one line: absent, off, or on with its version', async () => {
     expect(await device(['vscode', 'status', '--json'], fakeVscode({ app: false }))).toEqual({ code: 0, err: [], out: ['{"vscode":"absent"}'] })
     expect(await device(['vscode', 'status', '--json'], fakeVscode())).toEqual({ code: 0, err: [], out: ['{"vscode":"off"}'] })
@@ -1404,6 +1416,58 @@ describe('harness device vscode', () => {
     const vscode = vi.fn(fakeVscode().vscode)
     for (const argv of [['vscode', 'link'], ['orca', 'link'], ['claude', 'status'], ['codex', 'status'], ['link']]) await device(argv, { vscode })
     expect(vscode).not.toHaveBeenCalled()
+  })
+})
+
+describe('harness device cursor', () => {
+  it('status prints one line under cursor: absent, off, or on with its version', async () => {
+    expect(await device(['cursor', 'status', '--json'], fakeVscode({ editor: 'cursor', app: false }))).toEqual({ code: 0, err: [], out: ['{"cursor":"absent"}'] })
+    expect(await device(['cursor', 'status', '--json'], fakeVscode({ editor: 'cursor' }))).toEqual({ code: 0, err: [], out: ['{"cursor":"off"}'] })
+    const on = fakeVscode({ editor: 'cursor', version: '0.6.60' })
+    expect(await device(['cursor', 'status', '--json'], on)).toEqual({ code: 0, err: [], out: ['{"cursor":"on","version":"0.6.60"}'] })
+    expect(on.runs).toEqual([])
+  })
+
+  it('enable clears Cursor\'s removal, then installs with Cursor\'s own CLI; disable marks it, then uninstalls', async () => {
+    const dataDir = folder()
+    writeRemoved(dataDir, 'vscode', true)
+    writeRemoved(dataDir, 'cursor', true)
+    const atInstall: unknown[] = []
+    const cursor = fakeVscode({ editor: 'cursor', installed: '0.6.60', onRun: () => atInstall.push(readRemoved(dataDir)) })
+    expect(await device(['cursor', 'enable'], { ...cursor, dataDir })).toEqual({ code: 0, err: [], out: ['{"cursor":"on","version":"0.6.60"}'] })
+    expect(cursor.runs.map((args) => [args[0], args[2]])).toEqual([['--install-extension', '--force']])
+    expect(atInstall).toEqual([{ vscode: true }])
+
+    const atUninstall: unknown[] = []
+    const on = fakeVscode({ editor: 'cursor', version: '0.6.60', onRun: () => atUninstall.push(readRemoved(dataDir)) })
+    expect(await device(['cursor', 'disable'], { ...on, dataDir })).toEqual({ code: 0, err: [], out: ['{"cursor":"off"}'] })
+    expect(on.runs).toEqual([['--uninstall-extension', VSCODE_EXTENSION_ID]])
+    expect(atUninstall).toEqual([{ vscode: true, cursor: true }])
+    expect(answers(dataDir)).toEqual({ removed: { vscode: true, cursor: true } })
+  })
+
+  it('enable that fails prints {"cursor":"off","error":"failed"} and exits 1', async () => {
+    expect(await device(['cursor', 'enable'], fakeVscode({ editor: 'cursor', installed: '0.6.60', answer: { code: 1, timedOut: false } })))
+      .toEqual({ code: 1, err: [], out: ['{"cursor":"off","error":"failed"}'] })
+  })
+
+  it('the cursor words ask for Cursor\'s dependencies, and the vscode words for VS Code\'s', async () => {
+    for (const verb of ['status', 'enable', 'disable']) {
+      const cursor = fakeVscode({ editor: 'cursor', version: '0.6.60', installed: '0.6.60' })
+      await device(['cursor', verb], cursor)
+      expect(cursor.asked, verb).toEqual(['cursor'])
+      const vscode = fakeVscode({ version: '0.6.60', installed: '0.6.60' })
+      await device(['vscode', verb], vscode)
+      expect(vscode.asked, verb).toEqual(['vscode'])
+    }
+  })
+
+  it('cursor link, cursor with no verb and an unknown verb print the usage and exit 1', async () => {
+    const cursor = fakeVscode({ editor: 'cursor' })
+    for (const argv of [['cursor', 'link'], ['cursor'], ['cursor', 'install'], ['cursor', 'enable', 'extra']]) {
+      expect(await device(argv, cursor), argv.join(' ')).toEqual({ code: 1, out: [], err: [DEVICE_USAGE] })
+    }
+    expect(cursor.asked).toEqual([])
   })
 })
 
