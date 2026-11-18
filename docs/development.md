@@ -42,7 +42,7 @@ This is tracked work, not a claim that account-free startup is already available
 ```bash
 # cli
 cd cli && npm install && npm run typecheck && npm test
-make install-cli          # bundle this tree into ~/.harness/cli (Linux: ~/.local/share/harness/cli) and restart the daemon on it
+make install-cli          # bundle this tree into Harness's cli folder and restart the daemon on it
 
 # desktop (Flutter ≥ 3.47 / Dart ≥ 3.13; SPM on for macOS)
 cd desktop && flutter pub get && flutter analyze && flutter test
@@ -57,6 +57,9 @@ cd provider/e2e && npm install && npm test
 # device
 make device-test
 ```
+
+Harness's `cli` folder is `~/.harness/cli`; on Linux it is in the data root
+([where Harness keeps its files](cli.md#where-harness-keeps-its-files)).
 
 Harness package updates have a dedicated coverage gate and a desktop-to-daemon integration test:
 

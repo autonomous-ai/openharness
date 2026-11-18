@@ -73,7 +73,8 @@ ending. Afterwards a Harness older than this one starts as a new, signed-out com
 
 Each process reads `XDG_DATA_HOME` and `XDG_STATE_HOME` itself, so set them for your whole session
 (`~/.config/environment.d/` or `~/.profile`), not only in your shell's rc file, or the app and the terminal find
-different folders. `harness service install` carries them into the systemd unit.
+different folders. `harness service install` carries them into the systemd unit. Harness OS keeps the default
+folders: its services start without your `XDG_DATA_HOME` and `XDG_STATE_HOME`.
 
 After the move the Store sets each installed harness up again, two at a time.
 A harness whose setup fails says `Needs setup` on its Store page, and `needs setup` in `harness dsh list`.
