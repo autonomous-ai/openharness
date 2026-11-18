@@ -459,17 +459,17 @@ describe.skipIf(!hcBinary)("Herdr's agents on the dial, from a private Herdr Cor
     /** The keys the fake program read, in order. */
     const keys = async () => (await hc.screen(t)).match(/KEY\[\^\[\[[56]~\]/g) ?? []
 
-    // 1. Two moves of 64, 320 px: twenty lines toward older ones, a page up. Then as far back: a page down.
+    // 1. Two moves of 26, 130 px: eight lines toward older ones, a page up. Then as far back: a page down.
     const started = performance.now()
-    await stroke([64, 64])
+    await stroke([26, 26])
     await until('pageup read by the program', async () => (await keys()).length === 1, 30_000, 50)
     console.log(`[herdr scroll] pageup read ${Math.round(performance.now() - started)} ms after the stroke began`)
-    await stroke([-64, -64])
+    await stroke([-26, -26])
     await until('pagedown read by the program', async () => (await keys()).length === 2, 30_000, 50)
     expect(await keys()).toEqual(['KEY[^[[5~]', 'KEY[^[[6~]'])
 
     // 2. Each stroke asked which tab is on screen, and none ran terminal.scroll or reached Harness's window.
-    await until('the queue drained', () => sum(drained(d).map((tally) => tally.lines)) === 40, 30_000, 50)
+    await until('the queue drained', () => sum(drained(d).map((tally) => tally.lines)) === 16, 30_000, 50)
     expect(drained(d).every((tally) => tally.failed === 0)).toBe(true)
     expect(herdrApps(d).filter((run) => run !== `do agent.focus --terminal ${t}`)).toEqual(['status', 'status'])
     expect(dialScrolls()).toEqual([])
