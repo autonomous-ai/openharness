@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Place } from './adapter.js'
+import type { PageAgent, Place } from './adapter.js'
 import { detectApp, detectHost } from './hostDetect.js'
 import { bundleOf, createOpenActions, type OpenTarget } from './open.js'
 import { createVscodeAdapter, termPid } from './vscode.js'
@@ -17,13 +17,14 @@ interface Terminal { window: string; shell: number }
 
 /** A recording runner that runs nothing, so no spec opens the developer's own VS Code: each call answers the next of
  *  [codes], then exit 0. VS Code is in front unless told. The opener holds this adapter alone. No window holds a
- *  terminal until a test sets `windows.held`; each show and scroll is recorded, and `asked` keeps the order of the
- *  terminal's looks beside a test's own. */
+ *  terminal until a test sets `windows.held`; each show, scroll and page-key ask is recorded, and `asked` keeps the
+ *  order of the terminal's looks beside a test's own. The terminals take page keys while the agent does not ask. */
 function recorder(over: Partial<Deps> = {}, codes: Array<number | null> = []) {
   const calls: Call[] = []
   const logs: string[] = []
   const windows = { held: undefined as Terminal | undefined, writes: true, shows: [] as Array<{ terminal: Terminal; tap: boolean }>,
-    scrolls: [] as Array<{ terminal: Terminal; lines: number }> }
+    scrolls: [] as Array<{ terminal: Terminal; lines: number; page?: boolean }>,
+    guards: [] as Array<{ pid: number; agent: PageAgent }> }
   const asked: string[] = []
   const deps: Deps = {
     run: async (file, args, timeoutMs) => {
@@ -35,7 +36,8 @@ function recorder(over: Partial<Deps> = {}, codes: Array<number | null> = []) {
     terminals: {
       terminalOf: () => { asked.push('terminalOf'); return windows.held },
       show: (terminal, tap) => { windows.shows.push({ terminal, tap }); return windows.writes },
-      scroll: (terminal, lines) => { windows.scrolls.push({ terminal, lines }); return windows.writes },
+      scroll: (terminal, lines, page) => { windows.scrolls.push({ terminal, lines, page }); return windows.writes },
+      pageKeys: (pid, agent) => { windows.guards.push({ pid, agent }); return agent.asking ? false : Promise.resolve(true) },
     },
     ...over,
   }
@@ -340,7 +342,7 @@ describe('an agent in VS Code\'s integrated terminal (docs/plans/2026-11-17-dial
     expect(r.adapter.canScroll!(pane())).toBe(true)
     expect(r.asked).toEqual(['inFront', 'inFront', 'terminalOf'])
     r.adapter.scroll!(pane(), -3)
-    expect(r.windows.scrolls).toEqual([{ terminal: HELD, lines: -3 }])
+    expect(r.windows.scrolls).toEqual([{ terminal: HELD, lines: -3, page: false }])
     expect(r.calls).toEqual([])
     r.windows.held = undefined
     expect(r.adapter.canScroll!(pane())).toBe(false)
@@ -355,6 +357,33 @@ describe('an agent in VS Code\'s integrated terminal (docs/plans/2026-11-17-dial
       adapter.scroll!(pane(id), 2)
     }
     expect(windows.scrolls).toEqual([])
+  })
+
+  // Claude Code's fullscreen view (docs/plans/2026-11-18-dial-vscode-claude-fullscreen-scroll-design.md): the terminals
+  // own the guard's reads and deadline; the adapter names the pane's pid and passes on what the route knows.
+  it('pageKeys asks the terminals for the pane\'s own pid, with what the route knows of its agent', async () => {
+    const r = recorder()
+    const agent = { asking: false, cwd: '/w', transcriptPath: '/t/s1.jsonl' }
+    expect(await r.adapter.pageKeys!(pane(), agent)).toBe(true)
+    expect(r.adapter.pageKeys!(pane(), { ...agent, asking: true })).toBe(false)
+    expect(r.windows.guards).toEqual([{ pid: PID, agent }, { pid: PID, agent: { ...agent, asking: true } }])
+  })
+
+  it('pageKeys is false at once for the panel\'s pane or a term id out of form, and asks nothing', () => {
+    const { adapter, windows } = recorder()
+    windows.held = HELD
+    for (const id of [UUID, 'term:1', 'term:x']) {
+      expect(adapter.pageKeys!(pane(id), { asking: false, cwd: '/w' }), id).toBe(false)
+    }
+    expect(windows.guards).toEqual([])
+  })
+
+  it('scroll passes page on, and lines with none are plain', () => {
+    const { adapter, windows } = recorder()
+    windows.held = HELD
+    adapter.scroll!(pane(), -3, true)
+    adapter.scroll!(pane(), -3)
+    expect(windows.scrolls).toEqual([{ terminal: HELD, lines: -3, page: true }, { terminal: HELD, lines: -3, page: false }])
   })
 
   it('it declares VS Code\'s bundle', () => {

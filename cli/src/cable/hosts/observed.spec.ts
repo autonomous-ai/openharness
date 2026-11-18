@@ -1419,7 +1419,8 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
     { ...orca, type: (pane, text) => fake.orcaSend(pane.id, text), show: (pane) => fake.orcaSwitch(pane.id) },
     { ...claude, show: (pane, agentId) => fake.claudeShow(agentId, pane.id) },
     createCodexAppAdapter({ ...deps, inFront: () => fake.codexInFront(), log: () => {} }),
-    createVscodeAdapter({ ...deps, inFront: () => true, terminals: { terminalOf: () => undefined, show: () => false, scroll: () => false } }),
+    createVscodeAdapter({ ...deps, inFront: () => true, terminals: {
+      terminalOf: () => undefined, show: () => false, scroll: () => false, pageKeys: () => false } }),
     createTabsAdapter({ isOpen: () => fake.tabsOpen(), select: (tab, raise) => fake.tabSelect(tab.app, tab.tty, raise) === 'ok' }),
   ]
   return { actions: { ...fake, adapters }, ready, ran }
@@ -3888,6 +3889,36 @@ describe('ObservedSource and a waiting prompt', () => {
     expect(src.waitingOn(agent.id)).toBe('npm test')
     expect(src.capabilities(agent)).toEqual({ status: true, voice: true, focus: true, answer: false })
     expect(changes).toHaveBeenCalledTimes(1)
+  })
+
+  it('transcriptOf is the path the agent\'s latest hook gave, kept when a later hook gives none, and none for an agent it does not list', () => {
+    const { src, ev } = setup()
+    src.ingest(ev('session-start', { transcriptPath: '/o/home/projects/-work-proj/s0.jsonl' }))
+    src.ingest(ev('turn-start', { transcriptPath: '/o/home/projects/-work-proj/s1.jsonl' }))
+    src.ingest(ev('turn-stop'))
+    expect(src.transcriptOf(src.list()[0].id)).toBe('/o/home/projects/-work-proj/s1.jsonl')
+    expect(src.transcriptOf(observedAgentId('claude', 'unknown'))).toBeUndefined()
+  })
+
+  it('startedIn is the folder of the first hook that gave one, kept when a later hook names another, and none for an agent it does not list', () => {
+    const { src, ev } = setup()
+    src.ingest(ev('session-start', { cwd: undefined }))
+    src.ingest(ev('turn-start'))
+    // Its Bash moved into a folder below: Claude Code still reads the project's settings from where it started.
+    src.ingest(ev('turn-stop', { cwd: '/work/proj/packages/web' }))
+    expect(src.list()[0].cwd).toBe('/work/proj/packages/web')
+    expect(src.startedIn(src.list()[0].id)).toBe('/work/proj')
+    expect(src.startedIn(observedAgentId('claude', 'unknown'))).toBeUndefined()
+  })
+
+  it('startedIn of a session the scan found is the folder its row gave, kept when its hooks name another', async () => {
+    const { src, open, owners, externals, ev } = setup()
+    open.set('s1', 'terminal')
+    owners.set('s1', { pid: 100, engine: 'claude' })
+    externals.set('s1', { cwd: '/work/proj', transcriptPath: '/t/s1.jsonl' })
+    await src.scanOpen()
+    src.ingest(ev('turn-start', { cwd: '/work/proj/packages/web' }))
+    expect(src.startedIn(src.list()[0].id)).toBe('/work/proj')
   })
 
   it('asked for a session no hook listed lists nothing: the plugin\'s hook runs in a Harness pane too', () => {

@@ -3,7 +3,11 @@
 
 export interface Disposable { dispose(): void }
 
-export interface ApiTerminal { readonly processId: PromiseLike<number | undefined>; show(preserveFocus?: boolean): void }
+export interface ApiTerminal {
+  readonly processId: PromiseLike<number | undefined>
+  show(preserveFocus?: boolean): void
+  sendText(text: string, addNewLine?: boolean): void
+}
 
 export interface VscodeApi {
   env: { readonly remoteName: string | undefined }

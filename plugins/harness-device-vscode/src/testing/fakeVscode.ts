@@ -24,7 +24,15 @@ export function fakeVscode(options: { remoteName?: string; missing?: readonly st
   api: VscodeApi
   /** A terminal whose shell's pid resolves, or whose ask fails, when the test says. `relaunch` starts a new shell in the
    *  same terminal, as VS Code does: its processId answers the new pid from then on, and no event fires. */
-  open(): { terminal: ApiTerminal; resolve(pid: number | undefined): void; reject(): void; relaunch(pid: number): void; shown: boolean[] }
+  open(): {
+    terminal: ApiTerminal
+    resolve(pid: number | undefined): void
+    reject(): void
+    relaunch(pid: number): void
+    shown: boolean[]
+    /** Each sendText on that terminal, in order: its text and its addNewLine. */
+    sent: Array<[string, boolean | undefined]>
+  }
   close(terminal: ApiTerminal): void
   activate(terminal: ApiTerminal | undefined): void
   /** Fires onDidChangeTerminalState for that terminal. */
@@ -93,12 +101,14 @@ export function fakeVscode(options: { remoteName?: string; missing?: readonly st
         reject = no
       })
       const shown: boolean[] = []
+      const sent: Array<[string, boolean | undefined]> = []
       const terminal: ApiTerminal = {
         get processId() {
           return processId
         },
         // VS Code's preserveFocus is false when left out.
         show: (preserveFocus = false) => shown.push(preserveFocus),
+        sendText: (text, addNewLine) => sent.push([text, addNewLine]),
       }
       terminals.push(terminal)
       opened.fire(terminal)
@@ -110,6 +120,7 @@ export function fakeVscode(options: { remoteName?: string; missing?: readonly st
           processId = Promise.resolve(pid)
         },
         shown,
+        sent,
       }
     },
     close(terminal) {

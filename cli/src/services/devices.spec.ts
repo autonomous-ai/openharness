@@ -361,6 +361,18 @@ function fakeOrcaHomes(homes: OrcaHomes = { claude: [], codex: [] }) {
 /** The process table VS Code's windows match their agents by (services/devices.ts processParents): the spec's own, empty
  *  unless a spec sets it, and each read counted, so no spec reads this machine's processes. */
 const processTable = { rows: [] as Array<{ pid: number; ppid: number }>, reads: 0 }
+/** Whether a session's settings draw it fullscreen (services/devices.ts claudeFullscreen): the spec's own, fullscreen
+ *  unless a spec sets it, each read's folder and transcript path kept, so no spec reads this machine's settings. */
+const claudeSettings = { fullscreen: true, reads: [] as Array<[string, string | undefined]> }
+/** An agent's process group and its VS Code terminal's foreground group (services/devices.ts processGroups): the spec's
+ *  own, the agent in front unless a spec sets it, each read's agent and shell pids kept, and held while `held` until the
+ *  spec lands it, so no spec runs this machine's ps. */
+const processGroups = {
+  answer: { pgid: 4242, tpgid: 4242 } as { pgid: number; tpgid: number } | undefined,
+  reads: [] as Array<[number, number]>,
+  held: false,
+  land: [] as Array<() => void>,
+}
 
 /** VS Code and Harness's extension as the devices see them (services/devices.ts vscodeExtension): the spec's own, absent
  *  unless the spec says its [app] is there or names the version [installed], each `code` run kept, so no spec runs the
@@ -412,6 +424,12 @@ beforeEach(() => {
   readers.processes.mockResolvedValue([])
   processTable.rows = []
   processTable.reads = 0
+  claudeSettings.fullscreen = true
+  claudeSettings.reads = []
+  processGroups.answer = { pgid: 4242, tpgid: 4242 }
+  processGroups.reads = []
+  processGroups.held = false
+  processGroups.land = []
 })
 afterEach(() => {
   rmSync(dataDir, { recursive: true, force: true })
@@ -420,7 +438,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; claudeFullscreen?: null; claudeManagedSettings?: string } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   // None, and no read under way, unless the spec gives its own; null leaves the devices to read this computer's.
   const orcaHomes = over.orcaHomes ?? fakeOrcaHomes()
@@ -459,6 +477,17 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     processParents: async () => {
       processTable.reads++
       return processTable.rows
+    },
+    // null leaves it out: the devices read the session's settings files.
+    claudeFullscreen: over.claudeFullscreen === null ? undefined : async (cwd, transcriptPath) => {
+      claudeSettings.reads.push([cwd, transcriptPath])
+      return claudeSettings.fullscreen
+    },
+    claudeManagedSettings: over.claudeManagedSettings,
+    processGroups: async (agent, shell) => {
+      processGroups.reads.push([agent, shell])
+      if (processGroups.held) await new Promise<void>((resolve) => { processGroups.land.push(resolve) })
+      return processGroups.answer
     },
   })
   const port = ports.devices as DevicesPort
@@ -3346,15 +3375,15 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   /** The shell VS Code started for the terminal: the hook's caller, 4242, runs under it. */
   const SHELL = 4000
   const TERMINAL_TREE = [{ pid: 4242, ppid: SHELL }, { pid: SHELL, ppid: 1 }]
-  /** Claude Code in a VS Code terminal, its dial on the cable once the listener opened; on macOS its hook carries VS Code's
-   *  bundle id too. */
-  const inVscodeTerminal = async (over: Parameters<typeof start>[0] = {}) => {
+  /** Claude Code in a VS Code terminal, or the agent `agent` names, its dial on the cable once the listener opened; on
+   *  macOS its hook carries VS Code's bundle id too. */
+  const inVscodeTerminal = async (over: Parameters<typeof start>[0] = {}, agent: Partial<ObservedHookEvent> = {}) => {
     vi.useFakeTimers()
     processTable.rows = TERMINAL_TREE
     const listener = fakeListener()
     const started = startHere({ listen: listener.listen, ...over })
     const bundle: Record<string, string> = over.orca?.platform === 'darwin' ? { __CFBundleIdentifier: VSCODE } : {}
-    started.port.observed(hook('session-start', { hostHints: { TERM_PROGRAM: 'vscode', ...bundle } }))
+    started.port.observed(hook('session-start', { ...agent, hostHints: { TERM_PROGRAM: 'vscode', ...bundle } }))
     attach(started.port)
     await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
     const front = (app: string) => { expect(listener.front(app)).toBeUndefined() }
@@ -3442,11 +3471,15 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     .filter(({ type }) => type === 'dial_scroll')
   const toWindows = (phase: string, dy: number, velocity: number) => ({ type: 'dial_scroll', payload: { phase, dy, velocity } })
 
+  /** Codex in that terminal: no page keys to ask about, so its stroke is decided at once, each frame's lines written as
+   *  it comes. */
+  const IN_CODEX = { engine: 'codex', sessionId: 'cx-1' } as const
+
   it('with VS Code in front and the dial on an agent whose terminal a window holds, a stroke\'s lines go to that window and the windows hear no dial_scroll', async () => {
-    const { core, reported, front } = await inVscodeTerminal()
+    const { core, reported, front } = await inVscodeTerminal({}, IN_CODEX)
     const window = await reported()
     front('vscode')
-    shows(ID)
+    shows(CODEX)
     // 20 px toward older lines twice (one line each, 8 px kept), then 60 px toward newer: 52 px, three lines.
     stroke([8, 8, -24])
     expect(window.lines).toEqual([{ scroll: -1, pid: SHELL }, { scroll: -1, pid: SHELL }, { scroll: 3, pid: SHELL }])
@@ -3468,9 +3501,9 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   })
 
   it('a stroke keeps the route its down chose: the front changing in its middle moves neither its moves nor its up', async () => {
-    const { core, reported, front } = await inVscodeTerminal()
+    const { core, reported, front } = await inVscodeTerminal({}, IN_CODEX)
     const window = await reported()
-    shows(ID)
+    shows(CODEX)
     front('vscode')
     host().scrolled('down', 0, 0)
     front('ghostty')
@@ -3490,10 +3523,10 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   })
 
   it('a fling is not played: an up with a velocity writes its own travel and no more', async () => {
-    const { core, reported, front } = await inVscodeTerminal()
+    const { core, reported, front } = await inVscodeTerminal({}, IN_CODEX)
     const window = await reported()
     front('vscode')
-    shows(ID)
+    shows(CODEX)
     host().scrolled('down', 0, 0)
     host().scrolled('up', 8, 900)
     await vi.advanceTimersByTimeAsync(5_000)
@@ -3502,10 +3535,10 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   })
 
   it('a stroke whose window went writes nothing and never turns to the windows mid-stroke', async () => {
-    const { core, reported, front } = await inVscodeTerminal()
+    const { core, reported, front } = await inVscodeTerminal({}, IN_CODEX)
     const window = await reported()
     front('vscode')
-    shows(ID)
+    shows(CODEX)
     host().scrolled('down', 0, 0)
     host().scrolled('move', 8, 0)
     window.end('gone')
@@ -3516,13 +3549,226 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
   })
 
   it('a throw on the scroll path is the part\'s, not the dial\'s', async () => {
-    const { reported, front } = await inVscodeTerminal()
+    const { reported, front } = await inVscodeTerminal({}, IN_CODEX)
     const window = await reported()
     front('vscode')
-    shows(ID)
+    shows(CODEX)
     window.break()
     expect(() => host().scrolled('move', 8, 0)).not.toThrow()
     expect(logs).toContain('[devices] dial failed · write broken')
+  })
+
+  // A stroke on Claude Code drawn fullscreen, while it is its terminal's foreground program and does not ask, carries
+  // `"page":true`, and the extension presses its page keys beside the lines
+  // (docs/plans/2026-11-18-dial-vscode-claude-fullscreen-scroll-design.md, §1). A refused guard is the terminal's lines.
+  const page = (n: number) => ({ scroll: n, pid: SHELL, page: true })
+  const plain = (n: number) => ({ scroll: n, pid: SHELL })
+  /** The agent's later hook, from its VS Code terminal still. */
+  const inTerminal = (event: ObservedHookEvent['event']) => hook(event, { hostHints: { TERM_PROGRAM: 'vscode' } })
+  /** The agent in a VS Code terminal its window reported, VS Code in front and the dial on it. */
+  const shown = async (over: Parameters<typeof start>[0] = {}, agent: Partial<ObservedHookEvent> = {}) => {
+    const started = await inVscodeTerminal(over, agent)
+    const window = await started.reported()
+    started.front('vscode')
+    shows(agent.engine === 'codex' ? CODEX : ID)
+    return { ...started, window }
+  }
+
+  it("Claude Code drawn fullscreen in its terminal's foreground group: the stroke is held for the reads, then its lines carry page", async () => {
+    const { core, window } = await shown()
+    processGroups.held = true
+    host().scrolled('down', 0, 0)
+    host().scrolled('move', 8, 0)
+    host().scrolled('move', 8, 0)
+    await vi.waitFor(() => expect(processGroups.reads).toEqual([[4242, SHELL]]))
+    // The hook's own folder and transcript path.
+    expect([claudeSettings.reads, window.lines]).toEqual([[['/work/api', '/t/sess-1.jsonl']], []])
+    processGroups.land.shift()!()
+    // The held travel, as one piece.
+    await vi.waitFor(() => expect(window.lines).toEqual([page(-2)]))
+    host().scrolled('move', 8, 0)
+    host().scrolled('up', 0, 0)
+    expect(window.lines).toEqual([page(-2), page(-1)])
+    expect(dialScrolls(core)).toEqual([])
+  })
+
+  it("a session in an Orca account home: the renderer read gets the transcript path its hook gave, so that home's settings decide", async () => {
+    const transcriptPath = '/o/claude-profiles/acct/home/projects/-work-api/sess-1.jsonl'
+    const { window } = await shown({}, { transcriptPath })
+    stroke([8])
+    expect(claudeSettings.reads).toEqual([['/work/api', transcriptPath]])
+    await vi.waitFor(() => expect(window.lines).toEqual([page(-1)]))
+  })
+
+  it("a later hook from a folder below the session's: the renderer read gets the folder it started in, whose project settings Claude Code reads", async () => {
+    const { port, window } = await shown()
+    // Its Bash moved into packages/web: each hook from now on names that folder.
+    port.observed(hook('turn-start', { cwd: '/work/api/packages/web', hostHints: { TERM_PROGRAM: 'vscode' } }))
+    stroke([8])
+    expect(claudeSettings.reads).toEqual([['/work/api', '/t/sess-1.jsonl']])
+    await vi.waitFor(() => expect(window.lines).toEqual([page(-1)]))
+  })
+
+  it.each([
+    ['Codex', IN_CODEX, false],
+    ['an agent that asks at the down', {}, true],
+  ])('%s is decided at once as lines, with nothing read', async (_, agent, asks) => {
+    const { port, window } = await shown({}, agent)
+    if (asks) port.observed(inTerminal('needs-input'))
+    stroke([8, 8, -24])
+    expect(window.lines).toEqual([plain(-1), plain(-1), plain(3)])
+    expect([claudeSettings.reads, processGroups.reads]).toEqual([[], []])
+  })
+
+  it('settings that do not draw fullscreen: the lines carry no page, and no ps is read', async () => {
+    claudeSettings.fullscreen = false
+    const { window } = await shown()
+    stroke([8, 8])
+    await vi.waitFor(() => expect(window.lines).toEqual([plain(-2)]))
+    expect(processGroups.reads).toEqual([])
+  })
+
+  it.each<[string, { pgid: number; tpgid: number } | undefined]>([
+    ['another group in front', { pgid: 4242, tpgid: 4000 }],
+    ['no terminal', { pgid: 4242, tpgid: 0 }],
+    ['a failed read', undefined],
+  ])('%s: the lines carry no page, and the windows hear nothing', async (_, groups) => {
+    processGroups.answer = groups
+    const { core, window } = await shown()
+    stroke([8, 8])
+    await vi.waitFor(() => expect(window.lines).toEqual([plain(-2)]))
+    expect(dialScrolls(core)).toEqual([])
+  })
+
+  it('no answer in 500 ms: the held travel goes out as lines, the stroke stays lines, and the late answer changes nothing', async () => {
+    const { window } = await shown()
+    processGroups.held = true
+    host().scrolled('down', 0, 0)
+    host().scrolled('move', 8, 0)
+    host().scrolled('move', 8, 0)
+    await vi.advanceTimersByTimeAsync(499)
+    expect(window.lines).toEqual([])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(window.lines).toEqual([plain(-2)])
+    processGroups.land.shift()!()
+    await vi.advanceTimersByTimeAsync(1_000)
+    host().scrolled('move', 8, 0)
+    host().scrolled('up', 0, 0)
+    expect(window.lines).toEqual([plain(-2), plain(-1)])
+  })
+
+  it("a newer down leaves the older answer behind: the older stroke's held travel goes out at once as lines, with no page", async () => {
+    const { window } = await shown()
+    processGroups.held = true
+    host().scrolled('down', 0, 0)
+    host().scrolled('move', 8, 0)
+    host().scrolled('move', 8, 0)
+    host().scrolled('down', 0, 0)
+    expect(window.lines).toEqual([plain(-2)])
+    host().scrolled('move', 8, 0)
+    await vi.waitFor(() => expect(processGroups.land).toHaveLength(1))
+    processGroups.land.shift()!()
+    // The answer is the newer stroke's alone.
+    await vi.waitFor(() => expect(window.lines).toEqual([plain(-2), page(-1)]))
+    // The newer down joined the read in flight.
+    expect([claudeSettings.reads, processGroups.reads]).toEqual([[['/work/api', '/t/sess-1.jsonl']], [[4242, SHELL]]])
+  })
+
+  it("a frame after a held stroke's up begins a new one: the older stroke's held travel goes out at once as lines", async () => {
+    const { window } = await shown()
+    processGroups.held = true
+    stroke([8, 8])
+    // Its down lost on the way: a move begins the newer stroke.
+    host().scrolled('move', 8, 0)
+    expect(window.lines).toEqual([plain(-2)])
+    await vi.waitFor(() => expect(processGroups.land).toHaveLength(1))
+    processGroups.land.shift()!()
+    await vi.waitFor(() => expect(window.lines).toEqual([plain(-2), page(-1)]))
+  })
+
+  it('the answer lands after the up: the whole stroke goes out with page', async () => {
+    const { window } = await shown()
+    stroke([8, 8])
+    expect(window.lines).toEqual([])
+    await vi.waitFor(() => expect(window.lines).toEqual([page(-2)]))
+  })
+
+  it('needs-you learnt mid-stroke turns the rest of the stroke to lines', async () => {
+    const { port, window } = await shown()
+    host().scrolled('down', 0, 0)
+    host().scrolled('move', 8, 0)
+    await vi.waitFor(() => expect(window.lines).toEqual([page(-1)]))
+    port.observed(inTerminal('needs-input'))
+    host().scrolled('move', 8, 0)
+    host().scrolled('up', 0, 0)
+    expect(window.lines).toEqual([page(-1), plain(-1)])
+  })
+
+  it('an agent that asks by the time the answer lands gets its held travel as lines', async () => {
+    const { port, window } = await shown()
+    processGroups.held = true
+    host().scrolled('down', 0, 0)
+    host().scrolled('move', 8, 0)
+    host().scrolled('move', 8, 0)
+    port.observed(inTerminal('needs-input'))
+    await vi.waitFor(() => expect(processGroups.land).toHaveLength(1))
+    processGroups.land.shift()!()
+    await vi.waitFor(() => expect(window.lines).toEqual([plain(-2)]))
+  })
+
+  it('a stroke whose guard passed and whose agent then leaves writes nothing more', async () => {
+    const { core, port, window } = await shown()
+    host().scrolled('down', 0, 0)
+    host().scrolled('move', 8, 0)
+    await vi.waitFor(() => expect(window.lines).toEqual([page(-1)]))
+    port.observed(inTerminal('session-end'))
+    host().scrolled('move', 8, 0)
+    host().scrolled('up', 8, 0)
+    expect(window.lines).toEqual([page(-1)])
+    expect(dialScrolls(core)).toEqual([])
+  })
+
+  it('once the devices began to stop, the answer writes nothing', async () => {
+    const { core, port, window } = await shown()
+    processGroups.held = true
+    host().scrolled('down', 0, 0)
+    host().scrolled('move', 8, 0)
+    await vi.waitFor(() => expect(processGroups.land).toHaveLength(1))
+    await port.stop()
+    processGroups.land.shift()!()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(window.lines).toEqual([])
+    expect(dialScrolls(core)).toEqual([])
+  })
+
+  it("the minute's line counts a page stroke and a refusal for asking", async () => {
+    const { port, window } = await shown()
+    stroke([8])
+    await vi.waitFor(() => expect(window.lines).toEqual([page(-1)]))
+    port.observed(inTerminal('needs-input'))
+    stroke([8])
+    expect(window.lines).toEqual([page(-1), plain(-1)])
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(logs.filter((line) => line.startsWith('[devices] vscode · in the last minute'))).toEqual([
+      expect.stringMatching(/, 1 page strokes, guard refused: 0 renderer, 1 asking, 0 background, 0 ps, 0 slow$/),
+    ])
+  })
+
+  it("with no reader of its own, the devices read the session's settings: those of the home its transcript path names, under the managed file", async () => {
+    // A home of its own, never the person's: its settings.json says fullscreen, and the folder has no .claude. The
+    // managed file is the test's own too, never this computer's.
+    const home = mkdtempSync(join(tmpdir(), 'claude-home-'))
+    onTestFinished(() => { rmSync(home, { recursive: true, force: true }) })
+    writeFileSync(join(home, 'settings.json'), '{"tui":"fullscreen"}')
+    const managed = join(home, 'managed-settings.json')
+    const { window } = await shown({ claudeFullscreen: null, claudeManagedSettings: managed },
+      { cwd: join(home, 'api'), transcriptPath: join(home, 'projects', '-api', 'sess-1.jsonl') })
+    stroke([8, 8])
+    await vi.waitFor(() => expect(window.lines).toEqual([page(-2)]))
+    // The managed file outranks the user's.
+    writeFileSync(managed, '{"tui":"default"}')
+    stroke([8, 8])
+    await vi.waitFor(() => expect(window.lines).toEqual([page(-2), plain(-2)]))
   })
 
   it('no swipe line carries a handle, a session or an agent', async () => {
