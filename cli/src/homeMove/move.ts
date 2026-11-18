@@ -3,7 +3,7 @@
  * the XDG roots. Each step is in the journal before it acts, so a failure before the data root's rename is undone, and a
  * crash is undone or finished by the next start. Each step looks at what is there first, so one run twice does it once.
  */
-import { isAbsolute, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { legacyHarnessHome, type HarnessRootKind } from '../config/harnessHome.js'
 import { makeRealFolders, writeBridge } from './bridge.js'
 import type { MoveCheck, Reason } from './conditions.js'
@@ -36,6 +36,7 @@ export async function runMove(check: Extract<MoveCheck, { move: true }>, env: No
   const oldDataDir = dataDirOf(plan, env)
   let steps: Steps
   let bytesCopied = 0
+  let left: readonly string[] = []
   try {
     preflight(plan, io)
     const file = openJournal({ ...begun, done: [] }, io)
@@ -47,7 +48,7 @@ export async function runMove(check: Extract<MoveCheck, { move: true }>, env: No
     }
     for (const entry of plan.entries) bytesCopied += stage(entry, plan, steps, deps, begun.startedAt)
     // The data folder as staged, or where an override keeps it.
-    rewriteInside(plan, rebase(oldDataDir, plan.entries.map((entry) => [entry.from, entry.staged])), steps, io)
+    left = rewriteInside(plan, rebase(oldDataDir, plan.entries.map((entry) => [entry.from, entry.staged])), steps, io).left
     rewriteOutside(plan, outside(plan.home, env, oldDataDir), steps, deps.run)
     // A data folder an override keeps out of the tree keeps its tag, and its panes theirs.
     if (newTag !== oldTag) deps.tmux.retag(oldTag, newTag, steps)
@@ -61,7 +62,7 @@ export async function runMove(check: Extract<MoveCheck, { move: true }>, env: No
     rollBack({ ...begun, done }, deps)
     return failed(plan.legacy, error, deps)
   }
-  return complete({ ...begun, done }, steps, oldDataDir, bytesCopied, deps)
+  return complete({ ...begun, done }, steps, oldDataDir, { bytesCopied, left }, deps)
 }
 
 /**
@@ -73,8 +74,8 @@ export async function recoverMove(home: string, env: NodeJS.ProcessEnv, deps: Mo
   if (!journal) return null
   const { plan } = journal
   if (!committed(plan, deps.io)) return failed(plan.legacy, rollBack(journal, deps) ?? new Error('a move was cut short before its commit'), deps)
-  // What it copied is not in the journal: a move finished here counts no bytes.
-  return complete(journal, openJournal(journal, deps.io), dataDirOf(plan, env), 0, deps)
+  // What it copied, and the records it left, are not in the journal: a move finished here counts no bytes and says none.
+  return complete(journal, openJournal(journal, deps.io), dataDirOf(plan, env), { bytesCopied: 0, left: [] }, deps)
 }
 
 /**
@@ -100,8 +101,11 @@ function stage(entry: MoveEntry, plan: MovePlan, steps: Steps, { io }: MoveDeps,
   return bytes
 }
 
-/** Steps 10 and 11: the bridge, then what the move kept until now goes, the journal last. A failure leaves the journal for the next start. */
-function complete(journal: Journal, steps: Steps, oldDataDir: string, bytesCopied: number, deps: MoveDeps): MoveOutcome {
+/**
+ * Steps 10 and 11: the bridge, then what the move kept until now goes, the journal last. A failure leaves the journal for
+ * the next start. [run]: the bytes the move copied, and the records rewriteInside left as they were.
+ */
+function complete(journal: Journal, steps: Steps, oldDataDir: string, run: { bytesCopied: number; left: readonly string[] }, deps: MoveDeps): MoveOutcome {
   const { plan, done } = journal, { io } = deps
   try {
     const panes = done.flatMap((step) => step.did === 'pane' ? [step.id] : [])
@@ -111,6 +115,9 @@ function complete(journal: Journal, steps: Steps, oldDataDir: string, bytesCopie
       steps.add({ did: 'bridge' })
     }
     for (const entry of plan.entries) if (!entry.known) deps.log(`home move: unknown entry ${entry.name} · moved to data`)
+    // They still name the old tree, which the bridge's links serve while it lasts.
+    const { left } = run
+    if (left.length > 0) deps.log(`home move: ${left.length} record${left.length === 1 ? '' : 's'} left unchanged · ${[...new Set(left.map(recordKind))].sort().join(', ')}`)
     dropOriginals(plan, io)
     // Set aside while staged: in its root now.
     const roots = ROOTS.map((root) => [stagingOf(plan, root), plan[root]] as const)
@@ -118,7 +125,7 @@ function complete(journal: Journal, steps: Steps, oldDataDir: string, bytesCopie
     // The record of a start that waited, or failed, before: the bridge holds nothing of the move's.
     const record = join(plan.legacy, OWN_FILES.record)
     for (const path of [draftOf(record), record]) io.rmSync(path, { force: true })
-    const outcome = { state: 'bridged', entries: plan.entries.filter((entry) => entry.present).length, bytesCopied, panes: panes.length } as const
+    const outcome = { state: 'bridged', entries: plan.entries.filter((entry) => entry.present).length, bytesCopied: run.bytesCopied, panes: panes.length } as const
     writeMoveRecord(plan.state, { version: 1, ...outcome, oldProcesses: 0, at: deps.now() })
     forgetJournal(plan.legacy, io)
     return outcome
@@ -185,6 +192,9 @@ function reasonOf(error: unknown): Reason {
   if (code === 'ENOSPC') return 'no-space'
   return code === 'EACCES' || code === 'EPERM' ? 'permission' : 'io'
 }
+
+/** What a record is, by its name, never its path: a stopped agent's is named for the agent. */
+const recordKind = (path: string): string => basename(dirname(path)) === 'stopped-agents' ? 'stopped-agents' : basename(path)
 
 /** The daemon's data folder before the move: an override's, or the tree's own. */
 const dataDirOf = (plan: MovePlan, env: NodeJS.ProcessEnv): string => resolve(env.ADAPTER_DATA_DIR || join(plan.legacy, 'cli', 'data'))
