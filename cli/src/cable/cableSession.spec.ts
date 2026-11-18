@@ -4040,6 +4040,26 @@ describe('hello capabilities', () => {
     } finally { await session.stop() }
   })
 
+  it('a Pro is never rung, given back or closed a question whose id it closes nothing by', async () => {
+    const ask = [{ key: 'k', q: 'Ship it?', options: ['yes', 'no'] }]
+    // pro_cable.c ignores a question.close whose id is 64 bytes or more: a ring for it could never be closed.
+    const asked = async (id: string) => {
+      const { session, port } = await connect(richHost())
+      try {
+        port.say({ ...PRO_HELLO })
+        await vi.waitFor(() => expect(port.types()).toContain('notif.replace'))
+        port.sent.length = 0
+        await session.question('a1', id, ask)
+        await session.replaceNotifications([])        // no row of the window's carries it
+        await session.questionClose('a1', id)
+        return port.sent.filter((m) => m.t === 'question' || m.t === 'question.close' ||
+          (m.t === 'notif.replace' && (m.items as unknown[]).length > 0)).map((m) => m.t)
+      } finally { await session.stop() }
+    }
+    expect(await asked('é'.repeat(32))).toEqual([])   // 64 UTF-8 bytes, as the firmware's strlen counts them
+    expect(await asked('x'.repeat(63))).toEqual(['question', 'notif.replace', 'question.close'])
+  })
+
   it('a refused question whose id is past the bound an answerable one has is not sent, nor filed as a row', async () => {
     const plan = [{ key: 'k', q: 'Approve this plan?', options: [] }]
     for (const hello of [{ t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0', questionTier: 'v1' }, { ...PRO_HELLO }]) {
