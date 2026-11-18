@@ -873,8 +873,10 @@ async function psMachines(s: Setup, all: boolean, json: boolean): Promise<number
 }
 
 /** What `show` says to do next, from its state and whose it is: never `close` for a harness the caller did not start.
- *  Idle and the caller's: a harness left open after its answer is read sits there for nobody (owner, October 12). */
-function showNext(env: NodeJS.ProcessEnv, state: State, yours: boolean, at: string, canTell: boolean, background: number | null): NextStep[] {
+ *  Idle and the caller's: a harness left open after its answer is read sits there for nobody (owner, October 12).
+ *  [sentence]: what a held one tells the person. */
+function showNext(env: NodeJS.ProcessEnv, state: State, yours: boolean, at: string, canTell: boolean, background: number | null, sentence?: string): NextStep[] {
+  if (state === 'held') return [{ tell: `tell the person: ${sentence}` }]
   if (state === 'needs-input') return [{ tell: 'tell the person; only they answer it (a question or a permission).' }]
   if (state === 'working' || state === 'unknown' || state === 'starting' || state === 'installing') return [{ run: step(env, 'wait', at), when: 'until it stops working' }]
   // It keeps what it learned: more work for it costs less than a new harness told everything again.
@@ -979,9 +981,11 @@ export function showCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
         const name = t.frame.name ?? t.frame.id.slice(0, 8)
         throw new UsageError(`${name} runs in its maker's cloud: it has no folder here to read. Its links are in ${step(s.env, 'show', onAway(name, away))}.`)
       }
-      const listed = stateOf(t.frame)
-      // A cloud harness has no screen: its state is the cloud service's.
-      const { screen, background } = listed === 'stopped' || listed === 'offline' || t.frame.location === 'cloud'
+      const named = namedStateOf(t.frame)
+      const listed: State = named?.held ? 'held' : stateOf(t.frame)
+      // A cloud harness has no screen: its state is the cloud service's. A held one waits for the person whatever its
+      // screen shows.
+      const { screen, background } = listed === 'held' || listed === 'stopped' || listed === 'offline' || t.frame.location === 'cloud'
         ? { screen: null, background: null } : await inspect(t)
       const state: State = screen === 'draft' ? 'idle' : screen ?? listed
       const parent = o.ledger.parentOf({ machineId: t.machineId, agentId: t.frame.id })
@@ -1002,9 +1006,9 @@ export function showCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
       const next = t.frame.location === 'cloud' && state === 'needs-input' && !o.caller && !o.orphan
         // Answered by the person, or a program speaking for them (the lamp): no agent tool says it.
         ? [{ run: `harness reply ${at} -- <the person's answer>`, when: 'it waits for the person: tell them what it asks' }]
-        : pendingTell && state !== 'needs-input' ? [{ run: step(s.env, 'wait', at), when: 'until it has taken the work you told it' }]
+        : pendingTell && state !== 'needs-input' && state !== 'held' ? [{ run: step(s.env, 'wait', at), when: 'until it has taken the work you told it' }]
         // `close` and `tell` take no cloud harness.
-        : showNext(s.env, state, t.yours && t.frame.location !== 'cloud', at, tellsHere(o, s.pane), background)
+        : showNext(s.env, state, t.yours && t.frame.location !== 'cloud', at, tellsHere(o, s.pane), background, named?.sentence)
       const cloud = cloudMeta(t.frame)
       const failure = failureOf(t.frame)
       const result = {
@@ -1012,7 +1016,8 @@ export function showCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
         folder: t.frame.project?.cwd ?? null, branch: t.frame.project?.branch ?? null,
         ask: turn?.ask ?? null, answer: clip(answer, chars), truncated: answer.length > chars, tools: turn?.tools ?? 0, next,
         ...(state === 'idle' ? { backgroundCommands: background } : {}),
-        ...(state === 'needs-input' ? { needsPerson: true } : {}),
+        ...(named ? { namedState: named.sentence } : {}),
+        ...(state === 'needs-input' || state === 'held' ? { needsPerson: true } : {}),
         ...(cloud ? { cloud } : {}),
         ...(failure ? { failure } : {}),
         ...(t.frame.cloud?.links?.length ? { links: t.frame.cloud.links } : {}),
@@ -1021,6 +1026,7 @@ export function showCommand(argv: readonly string[], deps: ClientDeps = {}): Pro
       if (flags.has('--json')) s.out(JSON.stringify(result, null, 1))
       else {
         s.out(`${result.name} on ${result.machine}: ${stateSaid(state)} · ${result.agent} · started by ${startedBy}`)
+        if (named) s.out(named.held ? `held: ${named.sentence}` : named.sentence)
         s.out(`folder: ${tilde(result.folder)}${result.branch ? ` (${result.branch})` : ''}`)
         if (failure) s.out(failedLine(failure))
         if (!turn) s.out('No turn yet.')
