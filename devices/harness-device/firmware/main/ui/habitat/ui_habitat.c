@@ -1453,8 +1453,12 @@ static void render_question(ht_scene_t *f)
         return;
     }
     if (s.q.error[0] || !s.q.valid || !s.q.supported) {
-        ui_wrap(f, FACE_CX(336), 173, 336, 5, 0, UI_FONT, DIM,
-            s.q.error[0] ? s.q.error : !s.q.valid ? "Answered elsewhere." : "This question needs the desktop.");
+        // A plan to approve, or a shape the inbox refused, opens to what is asked instead of a sentence that names
+        // nothing (2026-11-18). Only words Inter draws in full: a missing letter would read as a different question.
+        const char *prompt = s.q.item[0].prompt;
+        bool words = !s.q.error[0] && s.q.valid && prompt[0] && ui_can_display(prompt, UI_FONT, 336, INT_MAX);
+        ui_wrap(f, FACE_CX(336), 173, 336, 5, 0, UI_FONT, words ? FG : DIM,
+            words ? prompt : s.q.error[0] ? s.q.error : !s.q.valid ? "Answered elsewhere." : "This question needs the desktop.");
         control(f, 116, 346, 238, "[ on desktop ]", A_DESKTOP, 1, s.connected);
         return;
     }
