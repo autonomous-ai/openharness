@@ -2767,7 +2767,7 @@ async function logsExportCommand(json: boolean): Promise<void> {
   const notes = [`machine: ${readAuthSession()?.machineId ?? 'not signed in'}`]
   const { zip, included } = buildLogBundle({
     logsDir: env.HARNESS_LOGS_DIR, dataDir: env.ADAPTER_DATA_DIR, days, now, version: VERSION, notes,
-    redact: redactSecretsInText,
+    redact: redactSecretsInText, home: homedir(),
   })
   mkdirSync(to, { recursive: true })
   const path = join(to, bundleFileName(now))
