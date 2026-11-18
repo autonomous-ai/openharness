@@ -215,21 +215,22 @@ function dialReads(text: string): string {
 /** The dial's answers in the words they were asked with. The dial answers with the text it read, half an emoji '?'
  *  (dialJson), and '?yes' matched no row of the dialog, which typed it into its free-text row instead of choosing the
  *  option. Each key and chosen option is put back as asked; a value that reads as no option is words the person typed,
- *  kept as typed. Null when the dial's text reads as two of them: either could be what the person did not choose. */
+ *  kept as typed. Null when the dial's text reads as two of them: either could be what the person did not choose. Two in
+ *  the same words are one: refused, a question that repeats an option went to the terminal for nothing. */
 function asAsked(raw: unknown, answers: Record<string, string>): Record<string, string> | null {
   const questions = Array.isArray(raw)
     ? raw.filter((q): q is { key: string; options?: unknown; multi?: unknown } => typeof q?.key === 'string') : []
   const pick = (asked: string[], text: string): string | null => {
-    const found = asked.filter((a) => dialReads(a) === text)
-    return found.length > 1 ? null : found[0] ?? text
+    const found = new Set(asked.filter((a) => dialReads(a) === text))
+    return found.size > 1 ? null : [...found][0] ?? text
   }
   const out: Record<string, string> = {}
   for (const [key, value] of Object.entries(answers)) {
     const k = pick(questions.map((q) => q.key), key)
-    const question = questions.find((q) => q.key === k)
-    const options = Array.isArray(question?.options) ? question.options.filter((o): o is string => typeof o === 'string') : []
+    const named = questions.filter((q) => q.key === k)
+    const options = named.flatMap((q) => Array.isArray(q.options) ? q.options.filter((o): o is string => typeof o === 'string') : [])
     // The dial joins the options chosen with ', ' (q_done_tap).
-    const picked = (question?.multi === true ? value.split(', ') : [value]).map((part) => pick(options, part))
+    const picked = (named.some((q) => q.multi === true) ? value.split(', ') : [value]).map((part) => pick(options, part))
     if (k === null || picked.includes(null)) return null
     out[k] = picked.join(', ')
   }
