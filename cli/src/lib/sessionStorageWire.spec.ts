@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { credentialEquality, sessionCredentialReference, sessionDocument, sessionImageProof, storedGridLaunch } from './sessionStorageWire.js'
+import { SessionStorageUnavailable, sessionStorageFailureCode, credentialEquality, sessionCredentialReference, sessionDocument, sessionImageProof, storedGridLaunch } from './sessionStorageWire.js'
 
 const proof = { document: { kind: 'registry' }, identity: '1:2:3', bytes: 3, sha256: 'a'.repeat(64) }
 const credential = { version: 1, binding: 'b'.repeat(64), row: { agentId: 'fixture', registeredAt: 1 },
@@ -39,4 +39,21 @@ describe('private session storage wire guards', () => {
     expect(credentialEquality(launch)).toEqual({ ...launch, credential: { version: 1, binding: credential.binding, row: credential.row } })
     expect(credentialEquality({ unknown: true })).toEqual({ unknown: true })
   })
+})
+
+it.each(['ENOSPC', 'EDQUOT', 'EROFS', 'EACCES', 'EPERM'])('preserves only the fixed system code %s', code => {
+  const error = Object.assign(new Error('fixture private path and content'), { code, path: '/fixture/private' })
+  const category = sessionStorageFailureCode(error)
+  expect(category).toBe(code)
+  expect(new SessionStorageUnavailable(category).message).toBe(`Session storage unavailable: ${code}`)
+})
+
+it.each([null, undefined, false, 'ENOSPC', new Error('ENOSPC'), { code: 'EIO' }, { code: '/fixture/private' }])(
+  'does not serialize unknown errors or infer a system code from text (%#)', error => {
+    expect(sessionStorageFailureCode(error)).toBe('unsafe')
+  })
+
+it('preserves existing private failure classifications', () => {
+  expect(sessionStorageFailureCode(new SessionStorageUnavailable('cleanup-unconfirmed'))).toBe('cleanup-unconfirmed')
+  expect(sessionStorageFailureCode(new SessionStorageUnavailable('changed'))).toBe('changed')
 })

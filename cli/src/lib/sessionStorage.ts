@@ -13,7 +13,7 @@ import { stoppedArchiveWitness, stoppedAuthorityHealthy } from './stoppedAuthori
 import { STOPPED_LIST_ROWS, sessionImageProof, type StoppedListPage, type StoppedArchiveAnswer, type StoppedArchiveQuery } from './sessionStorageWire.js'
 import { sessionStorageFrames } from './sessionStorageFrames.js'
 import { privateRegistryDirectory } from './registryPersistence.js'
-import { SESSION_STORAGE_QUEUE, SESSION_STORAGE_REQUEST_MS,
+import { SESSION_STORAGE_QUEUE, SESSION_STORAGE_REQUEST_MS, SESSION_STORAGE_SYSTEM_FAILURES, sessionStorageFailureCode,
   SessionStorageUnavailable, type CredentialRow, type SessionDocument, type SessionImage, type SessionImageProof,
   storedGridLaunch, sessionDocument, sessionFileIdentity, type SessionImageReservation, type SessionPreparedImage, type SessionStorageFailure,
   type SessionStorageOperation, type StoredGridLaunch } from './sessionStorageWire.js'
@@ -48,7 +48,7 @@ interface Pending {
 export interface SessionStorageChildEntry { file: string; sha256: string; execArgv?: string[] }
 
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT'
-const failures = new Set<SessionStorageFailure>(['missing', 'unsafe', 'changed', 'invalid', 'busy', 'expired', 'disconnected', 'cleanup-unconfirmed'])
+const failures = new Set<SessionStorageFailure>([...SESSION_STORAGE_SYSTEM_FAILURES, 'missing', 'unsafe', 'changed', 'invalid', 'busy', 'expired', 'disconnected', 'cleanup-unconfirmed'])
 
 export class SessionStorage {
   private child: ChildProcess | undefined
@@ -524,7 +524,7 @@ export class SessionStorage {
       fd = await new Promise<number>((resolve, reject) => open(this.path(document),
         constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
         (error, descriptor) => error ? reject(error) : resolve(descriptor)))
-    } catch (error) { if (!missing(error)) throw new SessionStorageUnavailable('unsafe') }
+    } catch (error) { if (!missing(error)) throw new SessionStorageUnavailable(sessionStorageFailureCode(error)) }
     try {
       const image = await this.request<SessionImage>({ kind: 'read', document, retain: lease })
       if (image.state === 'image') {

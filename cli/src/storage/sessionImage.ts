@@ -6,7 +6,7 @@ import { dirname, isAbsolute, join, resolve as resolvePath, sep } from 'node:pat
 import { performance } from 'node:perf_hooks'
 import { parseGridLaunchOverride, type GridLaunchOverride } from '../lib/gridLaunchWire.js'
 import { privateRegistryDirectory } from '../lib/registryPersistence.js'
-import { SessionStorageUnavailable, sessionDocument, sessionImageProof, storedGridLaunch, sessionFileIdentity,
+import { sessionStorageFailureCode, SessionStorageUnavailable, sessionDocument, sessionImageProof, storedGridLaunch, sessionFileIdentity,
   type CredentialRow, type SessionCredentialReference, type SessionDocument, type SessionImage,
   type SessionImageProof, type SessionImageReservation, type SessionPreparedImage, type StoredGridLaunch } from '../lib/sessionStorageWire.js'
 import { readPrivateImage } from './privateImage.js'
@@ -92,8 +92,7 @@ export function createSessionImageCodec(root: string, retained: readonly Retaine
       return { contents: read.bytes.toString('utf8'), proof: { document, identity: sessionImageIdentity(read.stat), bytes: read.bytes.length, sha256: digest(read.bytes) } }
     } catch (error) {
       if (absent(error)) return null
-      if (error instanceof SessionStorageUnavailable) throw error
-      throw new SessionStorageUnavailable('unsafe')
+      throw new SessionStorageUnavailable(sessionStorageFailureCode(error))
     }
   }
 
@@ -261,8 +260,7 @@ export function createSessionImageCodec(root: string, retained: readonly Retaine
         try { await closing.close() }
         catch { uncertainHandles.add(closing); throw new SessionStorageUnavailable('cleanup-unconfirmed') }
       }
-      if (error instanceof SessionStorageUnavailable) throw error
-      throw new SessionStorageUnavailable('unsafe')
+      throw new SessionStorageUnavailable(sessionStorageFailureCode(error))
     }
   }
 

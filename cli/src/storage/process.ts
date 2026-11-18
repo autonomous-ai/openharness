@@ -2,7 +2,7 @@
 import { isAbsolute, join } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { sessionStorageFrames } from '../lib/sessionStorageFrames.js'
-import { SESSION_STORAGE_REQUEST_MS, SessionStorageUnavailable, sessionImageProof, type SessionStorageOperation } from '../lib/sessionStorageWire.js'
+import { SESSION_STORAGE_REQUEST_MS, SessionStorageUnavailable, sessionStorageFailureCode, sessionImageProof, type SessionStorageOperation } from '../lib/sessionStorageWire.js'
 import { createSessionImageCodec, type RetainedSessionImage } from './sessionImage.js'
 import { StateFileCleanupUnconfirmed, stateFileCustodyHealthy } from '../lib/secureState.js'
 import { createPendingCreationIndex } from './pendingCreations.js'
@@ -72,7 +72,7 @@ export function runSessionStorage(): void {
             await frames!.send(id, { ok: true, value })
           } catch (error) {
             const code = error instanceof StateFileCleanupUnconfirmed ? 'cleanup-unconfirmed'
-              : error instanceof SessionStorageUnavailable ? error.code : 'unsafe'
+              : sessionStorageFailureCode(error)
             await frames!.send(id, { ok: false, code })
             if (code === 'cleanup-unconfirmed') stop()
           } finally { busy = false }

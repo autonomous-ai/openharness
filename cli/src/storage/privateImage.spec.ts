@@ -178,3 +178,10 @@ it('refuses new handles under shared cleanup uncertainty and preserves failed-cl
   })
   await expect(readPrivateImage(file, 1024)).rejects.toMatchObject({ code: 'cleanup-unconfirmed' })
 })
+
+it.each(['ENOSPC', 'EDQUOT', 'EROFS', 'EACCES', 'EPERM'])('preserves %s from an actual file read without carrying private error text', async code => {
+  const close = vi.spyOn(nativeFs, 'closeSync')
+  vi.spyOn(nativeFs, 'readSync').mockImplementationOnce(() => { throw Object.assign(new Error('fixture private read'), { code }) })
+  await expect(readPrivateImage(file, 1024)).rejects.toMatchObject({ code, message: `Session storage unavailable: ${code}` })
+  expect(close).toHaveBeenCalledTimes(2) // Directory authority and the selected image descriptor both settle.
+})

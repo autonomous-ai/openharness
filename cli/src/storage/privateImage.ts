@@ -2,7 +2,7 @@
 import { constants, fchmodSync, fstatSync, lstatSync, openSync, readFileSync, readSync, type BigIntStats } from 'node:fs'
 import { dirname } from 'node:path'
 import { closeStateFileDescriptor, requireWindowsStateFile, secureStateDirectory, stateFileCustodyHealthy, StateFileCleanupUnconfirmed } from '../lib/secureState.js'
-import { sameSessionFileIdentity, SessionStorageUnavailable } from '../lib/sessionStorageWire.js'
+import { sameSessionFileIdentity, SessionStorageUnavailable, sessionStorageFailureCode } from '../lib/sessionStorageWire.js'
 
 export async function readPrivateImage(file: string, maxBytes: number): Promise<{ bytes: Buffer; stat: BigIntStats } | null> {
   let fd: number | undefined
@@ -47,8 +47,7 @@ export async function readPrivateImage(file: string, maxBytes: number): Promise<
   } catch (error) {
     if (error instanceof StateFileCleanupUnconfirmed) throw new SessionStorageUnavailable('cleanup-unconfirmed')
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-    if (error instanceof SessionStorageUnavailable) throw error
-    throw new SessionStorageUnavailable('unsafe')
+    throw new SessionStorageUnavailable(sessionStorageFailureCode(error))
   } finally {
     if (fd !== undefined) {
       // The shared owner keeps a failed close sticky until actual process exit, without retrying a reused FD.

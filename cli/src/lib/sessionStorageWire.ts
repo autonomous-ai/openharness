@@ -44,14 +44,23 @@ export interface SessionCredentialReference {
 
 export type StoredGridLaunch = Omit<GridLaunchOverride, 'apiKey'> & { credential: SessionCredentialReference }
 
+export const SESSION_STORAGE_SYSTEM_FAILURES = ['ENOSPC', 'EDQUOT', 'EROFS', 'EACCES', 'EPERM'] as const
+
 export type SessionStorageFailure = 'missing' | 'unsafe' | 'changed' | 'invalid' | 'busy' | 'expired'
-  | 'disconnected' | 'cleanup-unconfirmed'
+  | 'disconnected' | 'cleanup-unconfirmed' | typeof SESSION_STORAGE_SYSTEM_FAILURES[number]
 
 export class SessionStorageUnavailable extends Error {
   constructor(readonly code: SessionStorageFailure) {
     super(`Session storage unavailable: ${code}`)
     this.name = 'SessionStorageUnavailable'
   }
+}
+
+/** A finite code preserves disk-vs-build decisions without carrying paths or operating-system error text. */
+export function sessionStorageFailureCode(error: unknown): SessionStorageFailure {
+  if (error instanceof SessionStorageUnavailable) return error.code
+  const code = (error as NodeJS.ErrnoException | null)?.code
+  return SESSION_STORAGE_SYSTEM_FAILURES.find(known => code === known) ?? 'unsafe'
 }
 
 export type SessionImage = { state: 'missing' }

@@ -533,3 +533,34 @@ and four redundant public-row canonical passes for the two-row caller. Acceptanc
 requires malformed/missing/duplicate/foreign references and wrong binding/proof refusal,
 clone/rekey success, actual raw legacy bytes, witness resolution after rename and existing
 child-loss/uncertain-publication recovery. Final gates and matched measurement remain pending.
+
+## Design: preserve finite disk failures across required storage
+
+Upstream `c50947ccd7` makes Registry preserve ENOSPC, EDQUOT and EROFS in its fixed
+persistence category, so the supervisor does not roll back a good build because its
+state volume is full or read-only. Required storage's generic `unsafe` normalization
+must preserve that behavior across the child boundary. Its private failure union will
+carry those three fixed codes and EACCES/EPERM, which preserve the existing access-refusal
+category. It will never serialize arbitrary error messages, paths, causes or errno codes.
+The same finite classifier applies at child image read/write and dispatcher boundaries;
+unknown errors remain unsafe. Shared descriptor cleanup uncertainty takes precedence and
+still requires actual child reap. Parent publication's post-rename directory-sync failure
+continues through AtomicWriteUnconfirmed with its original finite disk code.
+
+The regression uses an admitted private child fixture which runs the real codec and wire,
+with only its selected temporary write failing, then checks the actual Registry error and
+supervisor namesTheDisk decision. It also covers the existing parent directory-sync case
+and proves no private path appears. The upstream fixture's old parent fs/promises write
+and syncStateDirectory interception is replaced by the actual current child/parent seams;
+its exact error-category assertions are retained. No public schema, rollback floor or
+storage publication authority changes.
+
+Failure-first receipt `/tmp/core-grid-storage-disk-code-red3-20261118.log` has four expected
+child-to-Registry failures (the three disk codes and EACCES became `write failed`) and four
+passing controls, including post-rename failures. Two preceding attempts had an incomplete
+fixture export interception and are retained as fixture failures, not behavioral RED evidence.
+The correction passes 95 selected real-child/reader/Registry cases, then 101 expanded cases
+including temporary open/write/chmod/sync failures; reader and wire retain all four coverage
+metrics at 100% (`/tmp/core-grid-storage-disk-code-coverage2-20261118.log`). These use combined
+main `86558dafad` dependencies, lock SHA256
+`a578fb81a3757cfd14de2c687dfe9b7f687d56f8c0112082edf640245995ea61`.
