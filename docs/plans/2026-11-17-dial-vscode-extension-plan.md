@@ -1465,3 +1465,17 @@ PR CI runs by itself on the pull request and needs no start. This change selects
 No check runs against production: nothing here calls a backend. No check uses an account: none is needed.
 
 **In the pull request:** the red-then-green commits; checks 1 to 5 with their links or output; the numbers of Tasks 3, 14 and 23; the spike's findings; the sentence of Task 6 about the shard verifier and of Task 14 about releases; the platforms (macOS and Linux; on Windows the extension stops and the menu item never shows; Cursor, VS Code Insiders, VSCodium and remote windows are not covered); and, if Tasks 20 to 25 were dropped, that scroll follows in the next pull request.
+
+## Decision fix #1 (Diego, 2026-11-18): the extension turns on by itself
+
+The design's "Set up once a computer" replaces task 17's menu item and the start-only update:
+
+- **DF1a (`xhigh`):** `cli/src/cable/vscodeExtensionSetup.ts` replaces `vscodeExtensionUpdate.ts`; `dial-setup.json`
+  gains `vscode`, `dial-skill.json`'s `removed` gains `vscode`; `harness device vscode enable` clears it and `disable`
+  sets it; the setup runs at the service's start, at each attach and an hour after a failure. Red first: a dial attached
+  with VS Code there installs once; an extension removed is never installed again; no VS Code does nothing. An e2e
+  daemon never reaches a real VS Code. Files: `cli/src/cable/`, `cli/src/devices/`, `cli/src/deviceClaude/command.ts`,
+  `cli/src/services/devices.ts` and their specs, `cli/e2e/` (isolation only), `cli/AGENTS.md`,
+  `plugins/harness-device-vscode/README.md`.
+- **DF1b (`medium`):** `device-app/` and `docs/plans/2026-11-13-device-menubar-design.md` back to `main`; red first:
+  the menu test forbids every "Turn on" row.

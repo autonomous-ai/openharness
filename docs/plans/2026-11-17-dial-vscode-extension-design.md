@@ -26,10 +26,12 @@ own, which talks to the devices process as the Orca plugin does.
    it. PR B (the next branch, its own spec): (3) switching terminal in VS Code moves the dial, and the follow of the
    Claude Code extension's panel by its tab name (see "PR B, decided now"). Within PR A, scroll is the last task, so (1)
    and (2) can merge without it if it runs late (cut-off 2026-11-22).
-2. **Install: one "Turn on VS Code" item in Harness Device's menu**, shown only while VS Code is installed on this
-   computer and the extension is not. Nothing changes in VS Code until the person clicks it. This narrows #4399's rule
-   (no agent rows in the menu): VS Code is an app, not an agent, so the menu test keeps forbidding agent rows and allows
-   this one item. To turn it off, the person uninstalls it in VS Code's Extensions view, which Harness then leaves alone.
+2. **Install: automatic, once a computer, as #4399 sets up Claude Code's plugin (Diego, 2026-11-18; this replaces the
+   menu item decided on 2026-11-17).** The person installs Harness Device and nothing else: once a dial has attached on
+   this computer and VS Code is there, the devices process installs the extension once and records it. An extension the
+   person uninstalls in VS Code, or removes with `harness device vscode disable`, is never installed again;
+   `harness device vscode enable` turns it back on. Harness Device's menu has no VS Code item: #4399's rule (no "Turn
+   on" rows) holds unchanged.
 3. **Shipping: the `.vsix` is built with the CLI and inlined in `cli.js`**, so the extension's version is the CLI's and
    they change together. No Marketplace, no Open VSX, no outside service or secret in this work; a Marketplace or Open
    VSX listing (VS Code would then update it itself; Cursor needs Open VSX) is Diego's decision later.
@@ -43,10 +45,11 @@ own, which talks to the devices process as the Orca plugin does.
 
 ## What a person sees
 
-- Harness Device's menu, VS Code installed and the extension not: one item, **Turn on VS Code**, above the separator.
-  A click installs the extension into VS Code (a few seconds; VS Code may show its own "reload" hint for windows open
-  before). The item goes away once the extension is on. On failure the item stays and Harness Device's log says why
-  (a reason word, no path).
+- Nothing to turn on. The first time a dial attaches on a computer with VS Code (or the first start or attach after VS
+  Code is installed), the extension is installed into VS Code in a few seconds; windows open before may show VS Code's
+  own "reload" hint. On failure the devices log says why (a reason word, no path) and it is tried again an hour later.
+  To turn it off, the person uninstalls it in VS Code's Extensions view (or runs `harness device vscode disable`);
+  `harness device vscode enable` turns it on again.
 - Claude Code or Codex in VS Code's integrated terminal, with the extension on:
   - **Tap** a session on the dial: VS Code comes forward and shows that session's terminal.
   - **Swipe** and rest on a session while VS Code is in front: VS Code switches to that terminal.
@@ -191,26 +194,44 @@ that cannot be written at once (the window's stream not drained) are added to th
 
 ### 5. `harness device vscode`
 
-In `cli/src/deviceClaude/command.ts`, beside `claude` and `orca`, left out of the usage text like `orca link`. The work
-itself is one module, `cli/src/devices/vscodeExtension.ts`, which the command and the devices process both call:
+In `cli/src/deviceClaude/command.ts`, beside `claude` and `orca`. `enable` and `disable` are in the usage text as
+`claude`'s are (they are the person's way to turn it back on or off); `link` and `status` are left out like `orca link`.
+The work itself is one module, `cli/src/devices/vscodeExtension.ts`, which the command and the devices process both
+call:
 
 - `link`: the same function and output as `orca link`.
 - `status --json`: `{"vscode":"absent"|"off"|"on","version"?:"<installed version>"}`. `absent`: no VS Code found
   (macOS: `Visual Studio Code.app` in `/Applications` or `~/Applications`; Linux: `code` on `PATH`; Windows: always
   absent). `on`: VS Code's own extensions record for its default profile (`~/.vscode/extensions/extensions.json`) lists
-  `autonomous-ai.harness-device`, and `version` is that entry's. Reads files only, so it is fast enough for a menu: it
-  runs no `code`.
-- `enable`: packs the `.vsix` (below) into a private temporary file, runs VS Code's own CLI (the app's
-  `Contents/Resources/app/bin/code` on macOS, `code` on Linux) with `--install-extension <file> --force` (60 s), removes
-  the file, and prints the status; exit 0 when on. On failure it prints
-  `{"vscode":"off","error":"no-code"|"timeout"|"failed"}` and exits 1.
-- `disable`: `--uninstall-extension autonomous-ai.harness-device` (60 s). Not in the menu; for support and tests.
+  `autonomous-ai.harness-device`, and `version` is that entry's. Reads files only: it runs no `code`.
+- `enable`: clears `removed.vscode` in `dial-skill.json` (below), packs the `.vsix` (below) into a private temporary
+  file, runs VS Code's own CLI (the app's `Contents/Resources/app/bin/code` on macOS, `code` on Linux) with
+  `--install-extension <file> --force` (60 s), removes the file, and prints the status; exit 0 when on. On failure it
+  prints `{"vscode":"off","error":"no-code"|"timeout"|"failed"}` and exits 1.
+- `disable`: records `removed.vscode: true` in `dial-skill.json`, then `--uninstall-extension
+  autonomous-ai.harness-device` (60 s).
 
-**Brought current with the CLI.** The devices process checks once each time it starts (a CLI update restarts it),
-in-process through `vscodeExtension.ts`: when the extension is on at a version other than this CLI's, it runs `enable`.
-Never when it is off: an extension the person uninstalled stays uninstalled (`dialPluginSetup.ts`'s rule for Claude
-Code's plugin). A failed update retries after 1 h while the process runs. Recorded nowhere new: VS Code's record is the
-truth.
+**Set up once a computer (Diego, 2026-11-18).** `cli/src/cable/vscodeExtensionSetup.ts` replaces
+`vscodeExtensionUpdate.ts`, in the devices' own process alone, as `dialPluginSetup.ts` sets up Claude Code's plugin. Its
+record: `dial-setup.json` gains `vscode`, the CLI version that last set the extension up or found it, written only by
+the devices service through the dial setup's record (one writer, as `plugin`); `dial-skill.json`'s `removed` gains
+`vscode`, written only by the command's `disable` and `enable`. A pass runs at the service's start, at each dial attach,
+and an hour after a failed one; one at a time; never on Windows or with no built extension. A pass:
+
+1. `removed.vscode`, or a record that could not be read: nothing.
+2. `vscode` recorded at this CLI's version: nothing.
+3. VS Code `absent`: nothing, nothing recorded; the next start or attach looks again.
+4. The extension `on`: at another version, `enable` (counted `updated`); then this version is recorded.
+5. The extension `off` with a `vscode` recorded: the person uninstalled it; left alone, this version recorded, counted
+   `left removed` (once a CLI version).
+6. The extension `off`, nothing recorded, and a dial has attached here once (`dial-setup.json` `dial`): `enable`
+   (counted `set up`), then recorded. No dial yet: nothing.
+7. An `enable` that fails is counted `failed` with its reason word, records nothing, and is tried again an hour later.
+   A `disable` that lands while a pass installs is honoured: the pass reads `removed` again after the install and
+   uninstalls, recording nothing.
+
+No test, e2e daemon or gate run ever reaches a real VS Code: unit tests use a fake `code` and record, and an e2e
+daemon's devices process finds no VS Code even on a Mac that has one in `/Applications`.
 
 **The build.** The CLI builds (`cli/build.mjs`, `build-bundle.mjs`) bundle the extension to one JavaScript file and
 inline it, with its `package.json`, as text through esbuild `define`, as `__STATUS_LINE_SCRIPT__` is inlined (tens of
@@ -221,30 +242,25 @@ sha is all digits with a leading zero is not valid semver, so the build guards i
 
 ### 6. Harness Device's menu
 
-`device-app/`: a `MenuAction::TurnOnVscode` and one `Action` item, "Turn on VS Code", above the separator, shown when
-the CLI is installed and `harness device vscode status --json` last said `off`. A new `Effect::ReadVscode` joins `fn
-read` (`app.rs`), so the status runs at start, on `MenuOpened` at most every `READ_EVERY_SECS` (60 s), and after a
-click; its answer (`Event::Vscode(..)`) redraws the menu, which shows on the next open. The click runs
-`harness device vscode enable` with fixed arguments and a 90 s deadline; while it runs the item is hidden and clicks
-are ignored, and its `error` word goes to the app's log. `no_agent_rows_in_any_state` keeps forbidding "Claude Code",
-"Codex" and every "Turn off"/"Turning" row, allows exactly the item "Turn on VS Code", and its states include the VS
-Code ones. `docs/naming-system.md` lists VS Code among the vendor names kept as they
-are; `docs/plans/2026-11-13-device-menubar-design.md` gains the item. The menu is native, so no gallery screen changes.
+No change (Diego, 2026-11-18). The "Turn on VS Code" item, its status read, its runner and its wait on relaunch, which
+this branch first added, are removed: `device-app/` and `docs/plans/2026-11-13-device-menubar-design.md` match `main`,
+and the menu test forbids every "Turn on" row again as #4399 left it. `docs/naming-system.md` keeps VS Code among the
+vendor names kept as they are (the extension's README and log copy name it).
 
 ## Measures (rule 8)
 
 The devices log: a `vscode` stream opening and ending, with its reason and the number of windows open; once a minute,
-when any happened, counts of shows, taps, scroll lines sent and dropped, refused states, `ps` reads and failed `ps` reads; the extension
-update (`set up`, `updated`, `failed`, `off`, as the plugin's tally). Never a pid, a window id, a path, a name
+when any happened, counts of shows, taps, scroll lines sent and dropped, refused states, `ps` reads and failed `ps` reads; the extension's
+setup (`set up`, `updated`, `failed`, `left removed`: the plugin's tally, `SETUP_COUNTS`). Never a pid, a window id, a path, a name
 or a label. The extension's output channel: its state and counts, nothing else.
 
 ## Failure
 
 | What fails | Who notices | What the person sees | Recovery |
 | --- | --- | --- | --- |
-| Extension not on | `status` says `off` | a tap brings VS Code forward as today; no swipe or scroll | the menu item |
-| VS Code not found | `status` says `absent` | no menu item | none needed |
-| `enable` fails (no VS Code CLI, timeout) | Harness Device's log, a reason word | the item stays | click again |
+| Extension not on (removed by the person) | `status` says `off` | a tap brings VS Code forward as today; no swipe or scroll | `harness device vscode enable` |
+| VS Code not found | `status` says `absent` | nothing installed | the next start or attach looks again |
+| The setup's `enable` fails (no VS Code CLI, timeout) | the devices log, `failed` with a reason word | as with the extension off | tried again an hour later; or `enable` |
 | Daemon or devices process down | the stream ends; `link` | a tap falls back to `open -b`; no scroll | the extension's backoff (30 s at most) and folder watch |
 | A 9th window | 409 | that window's terminals are not reached | backoff; it gets a slot when another window closes |
 | An agent's terminal not found (no chain, a shell not reported) | no pane | as with the extension off | the next `ps` read or state |
@@ -256,13 +272,15 @@ or a label. The extension's output channel: its state and counts, nothing else.
 
 ## Design (docs/feature-design-rules.md)
 
-1. **Growth:** nothing stored. In memory: at most 8 windows' states (32 pids each), one kept chain per VS Code agent
-   (16 pids), dropped when the window's stream ends or the agent leaves. No file is added; VS Code's own record says
-   whether the extension is on.
+1. **Growth:** two fields in files that exist: `dial-setup.json` `vscode` (a version, at most 64 characters) and
+   `dial-skill.json` `removed.vscode` (true or absent). In memory: at most 8 windows' states (32 pids each), one kept
+   chain per VS Code agent (16 pids), dropped when the window's stream ends or the agent leaves. VS Code's own record
+   says whether the extension is on.
 2. **Concurrency:** the devices' single event loop owns every state. A window's newer state replaces the older whole. At
    most one `ps` read runs, with one more queued. A reloaded window's old stream ends with its extension host's socket
-   (`gone`); the new activation has a new id. `enable` from the menu and the devices' update can meet: both run VS Code's own
-   `--install-extension --force` of the same file, which ends with the same extension installed.
+   (`gone`); the new activation has a new id. One setup pass at a time. The command's `enable` and a pass can meet:
+   both run VS Code's own `--install-extension --force` of the same file, which ends with the same extension
+   installed. A `disable` during a pass's install is undone by that pass (step 7). Each record has one writer.
 3. **Read cost:** a state message is under 1 KiB, sent only on change, at most 4 a second per window; a show line
    under 32 bytes; scroll at most one line per dial scroll frame.
 4. **Scale:** 8 windows × 32 terminals; a `ps` read per new VS Code agent, not per state. First warning
@@ -271,7 +289,8 @@ or a label. The extension's output channel: its state and counts, nothing else.
    reads both as `notRunning` and backs off. An extension newer or older than the daemon speaks the same lines; a field
    it does not know is ignored on both sides. `tabs` and `dial` keep their one-per-type rule.
 6. **Migration and rollback:** none. Rolling the CLI back leaves the extension installed and reading `notRunning`; the
-   person can uninstall it in VS Code.
+   person can uninstall it in VS Code. An older CLI that rewrites `dial-setup.json` drops `vscode`, so after rolling
+   forward an extension removed in between is installed once more; accepted, as a rollback is rare.
 7. **Audience:** shell pids and the window's state go only over the devices socket (0600, this account's folder) to
    the devices process. Nothing leaves the computer. Nothing is logged but counts.
 8. **Identity:** everything runs as the person, on their computer. The extension types nothing and starts nothing but
@@ -280,7 +299,7 @@ or a label. The extension's output channel: its state and counts, nothing else.
 10. **Platforms:** macOS (the customer, and where a tap brings VS Code forward). Linux: a tap shows the terminal
     without raising VS Code; swipe and scroll need the app in front, which only Harness Device's X11 reader reports, so
     they work under X11 with Harness Device running, not under Wayland. Windows: the devices listener has no Windows
-    path, so the extension stops and the menu item never shows. VS Code's default profile only (`--install-extension`
+    path, so the extension stops and the setup never installs it. VS Code's default profile only (`--install-extension`
     and `~/.vscode/extensions`); Cursor, VS Code Insiders and VSCodium are not in this work.
 
 ## Verification
@@ -294,7 +313,11 @@ or a label. The extension's output channel: its state and counts, nothing else.
   unchanged, a refused id, a gone stream); the shown agent's id reaching `CableHost`; scroll routing (to the window only
   when VS Code is in front and the shown agent has a terminal, else `dial_scroll`) and the line count against
   `dial.rs`'s numbers; `device vscode link|status|enable|disable` with a fake `code` and a fake extensions record, and
-  the `.vsix` packed by `zipWriter`; the update at start when the version differs, and never when off. The extension's
+  the `.vsix` packed by `zipWriter`; `enable` clearing and `disable` setting `removed.vscode`; the setup (a dial attached
+  and VS Code there installs once and records it, a second pass or attach does nothing, an extension uninstalled after
+  the setup is never installed again and counts `left removed` once, `removed.vscode` does nothing, no VS Code does
+  nothing and records nothing, no dial yet does nothing, on at another version is updated, a failure records nothing and
+  is tried an hour later, a `disable` during the install is undone, Windows does nothing). The extension's
   loop and its line handling with a fake VS Code facade run in the same suite: `cli/vitest.config.ts` includes
   `../plugins/harness-device-vscode/src/**/*.test.ts`, and `scripts/ci-plan.py` maps `plugins/harness-device-vscode/`
   to the CLI's checks (the CLI build reads it), so PR CI runs them.
@@ -309,19 +332,18 @@ or a label. The extension's output channel: its state and counts, nothing else.
   terminal (the extension's count); the gate does not read the scroll position, which the person checks after merge
   (PM, 2026-11-17). The spike (task 1) runs in the same throwaway.
   Tests never open anything by bundle id or `vscode://` link (that reaches Diego's VS Code): `open` is stubbed.
-- **device-app:** `cargo test` (the menu with and without the item, the click's effect, the runner with the fake
-  `harness`), and `cargo test --locked` on this Mac.
+- **device-app:** no change from `main`.
 - **Local gates:** `npm run test:core` (the listener is under `src/services/`), recorded in the PR.
-- **By a person, after merge:** the menu click and a real tap, swipe and scroll on a dial, in a VS Code that is theirs
-  to change (Diego decides where); not run by an agent.
+- **By a person, after merge:** a dial attached with VS Code installed turns the extension on with no step, and a real
+  tap, swipe and scroll on a dial, in a VS Code that is theirs to change (Diego decides where); not run by an agent.
 
 ## Docs changed in the same pull request
 
 `cli/AGENTS.md` (the devices row: VS Code's terminals, the extension's update), `cli/src/services/AGENTS.md` and the
 header of `devicesListener.ts` (a keyed stream type beside one-per-type), `docs/validation-and-release.md` (the
-`@vscode/test-electron` local gate), `docs/naming-system.md` (VS Code among vendor names),
-`docs/plans/2026-11-13-device-menubar-design.md` (the item), and `plugins/harness-device-vscode/README.md` (what it
-does and never does, how it is turned on and off).
+`@vscode/test-electron` local gate), `docs/naming-system.md` (VS Code among vendor names), and
+`plugins/harness-device-vscode/README.md` (what it does and never does, that it turns on by itself, how it is turned off
+and on again).
 
 ## PR B, decided now (its own spec and branch)
 
