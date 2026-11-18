@@ -256,10 +256,14 @@ const orca = {
   mtime: () => null,
 }
 /** What the devices ran as `codex`: recorded, so no spec runs the developer's own. */
-const codexRuns: Array<[string, string[], { cwd: string; env: Record<string, string>; timeoutMs: number }]> = []
+const codexRuns: Array<[string, string[], { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number }]> = []
 const codex: NonNullable<DevicesDeps['codex']> = {
   run: async (file, args, options) => { codexRuns.push([file, args, options]); return 0 },
   binary: () => '/opt/codex/bin/codex',
+  appBinary: () => null,
+  parentEnv: () => ({ PATH: '/usr/bin' }),
+  // Never the developer's own shell: a spec reads when it would have been read.
+  readLoginShell: vi.fn(),
   platform: 'linux',
 }
 /** What the devices asked of herdr's socket: recorded, so no spec reaches the developer's own herdr. It takes every
@@ -4060,6 +4064,8 @@ describe('codex queue, for Codex outside a pane (docs/specs/2026-11-15-device-co
   const THREAD = '01a1de76-a3b7-7270-b39e-1245893274c1'
   const ID = observedAgentId('codex', THREAD)
   const HANDLE = 'term_0123abcd-0000-4000-8000-0123456789ab'
+  /** The ChatGPT app's own Codex CLI, where the real look finds it. */
+  const APP = '/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex'
   /** Its rollout, in Harness's own Codex home. */
   const transcriptPath = join(env.CODEX_HOME, 'sessions', '2026', '11', '15', `rollout-2026-11-15T16-07-59-${THREAD}.jsonl`)
   const hook = (event: ObservedHookEvent['event'], over: Partial<ObservedHookEvent> = {}): ObservedHookEvent => ({
@@ -4086,9 +4092,39 @@ describe('codex queue, for Codex outside a pane (docs/specs/2026-11-15-device-co
     expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sv' }])
     expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
     expect(codexRuns).toEqual([['/opt/codex/bin/codex', ['queue', '--thread', THREAD, '--message=run the tests'],
-      { cwd: homedir(), env: { CODEX_HOME: env.CODEX_HOME }, timeoutMs: 10_000 }]])
+      { cwd: homedir(), env: { PATH: '/usr/bin', CODEX_HOME: env.CODEX_HOME }, timeoutMs: 10_000 }]])
     expect(said()).toEqual(['[device] voice · codex'])
     expect(orcaRuns).toEqual([])
+  })
+
+  // The interactive shell can take its 5 s: a computer whose dial never meets a Codex session never starts it.
+  it('the login shell is read once a Codex session is listed, never for a computer with none', async () => {
+    const { port } = start({ faults: ['fleet'] })
+    const CLAUDE = observedAgentId('claude', 'sess-1')
+    port.observed(hook('session-start', { engine: 'claude', sessionId: 'sess-1', callerPid: 4343, transcriptPath: '/t/sess-1.jsonl' }))
+    seen.host.watching!(true)
+    port.swarms(null)
+    expect((await listed()).map(({ id }) => id)).toEqual([CLAUDE])
+    expect(codex.readLoginShell).not.toHaveBeenCalled()
+
+    port.observed(hook('session-start'))
+    for (let i = 0; i < 3; i++) expect(await listed()).toContainEqual({ id: ID, name: 'api', caps: 'sv' })
+    expect(codex.readLoginShell).toHaveBeenCalledTimes(1)
+  })
+
+  it('a ChatGPT app session on macOS runs the app\'s own codex', async () => {
+    started({ codex: { ...codex, platform: 'darwin', appBinary: () => APP }, orca: { ...orca, platform: 'darwin' } }, { hostHints: { __CFBundleIdentifier: 'com.openai.codex' } })
+    expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
+    expect(codexRuns.map(([file]) => file)).toEqual([APP])
+    expect(said()).toEqual(['[device] voice · codex'])
+    expect(logs.filter((line) => line.includes(APP))).toEqual([])
+  })
+
+  // On macOS a tap opens the app's session by its thread's link (codexApp.ts): f.
+  it('with no codex but the app\'s, an app session lists sv', async () => {
+    started({ codex: { ...codex, platform: 'darwin', appBinary: () => APP, binary: () => null }, orca: { ...orca, platform: 'darwin' } },
+      { hostHints: { __CFBundleIdentifier: 'com.openai.codex' } })
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
   })
 
   it('a Codex app session\'s words still go through codex queue, and nothing is opened', async () => {
@@ -4109,15 +4145,26 @@ describe('codex queue, for Codex outside a pane (docs/specs/2026-11-15-device-co
 
   it('a failed queue is said in one line with its exit code, then today\'s route answers', async () => {
     started({ codex: ending(1) })
-    expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false, message: 'api did not answer.' })
+    expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false, message: 'Codex could not take it. Try again.' })
     expect(codexRuns).toHaveLength(1)
-    expect(said()).toEqual(['[device] voice · codex-failed (exit 1)', '[device] voice · no-answer'])
+    expect(said()).toEqual(['[device] voice · codex-failed (exit 1 · path)', '[device] voice · no-answer'])
   })
 
   it('a codex that could not start is said with no binary', async () => {
     started({ codex: ending('not-started') })
-    expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false, message: 'api did not answer.' })
-    expect(said()).toEqual(['[device] voice · codex-failed (no binary)', '[device] voice · no-answer'])
+    expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false, message: 'Codex could not take it. Try again.' })
+    expect(said()).toEqual(['[device] voice · codex-failed (no binary · path)', '[device] voice · no-answer'])
+  })
+
+  // An older app's CLI has no queue: updating the app is what helps, and the log names no path and no app.
+  it('a ChatGPT app session whose app codex exits 127 is told to update ChatGPT, in one line that names no path', async () => {
+    started({ codex: { ...ending(127), platform: 'darwin', appBinary: () => APP }, orca: { ...orca, platform: 'darwin' } },
+      { hostHints: { __CFBundleIdentifier: 'com.openai.codex' } })
+    expect(await host().sendTurn(ID, 'run the tests')).toMatchObject({ ok: false, message: 'Update ChatGPT, then try again.' })
+    expect(codexRuns.map(([file]) => file)).toEqual([APP])
+    expect(said()).toEqual(['[device] voice · codex-failed (exit 127 · app)', '[device] voice · no-answer'])
+    expect(logs.filter((line) => line.includes(APP))).toEqual([])
+    expect(said().filter((line) => line.includes('ChatGPT'))).toEqual([])
   })
 
   // The spec's first failure case: voice only where Orca can type, as today.
@@ -4141,8 +4188,8 @@ describe('codex queue, for Codex outside a pane (docs/specs/2026-11-15-device-co
   it('no log line carries the thread id, the words, the transcript\'s path or the Codex home', async () => {
     started({ codex: ending(0, 1, 'not-started', 'unknown') }, { hostHints: { ORCA_TERMINAL_HANDLE: HANDLE } })
     for (let i = 0; i < 4; i++) await host().sendTurn(ID, 'run the tests')
-    expect(said()).toEqual(['[device] voice · codex', '[device] voice · codex-failed (exit 1)', '[device] voice · orca',
-      '[device] voice · codex-failed (no binary)', '[device] voice · orca', '[device] voice · codex-timeout'])
+    expect(said()).toEqual(['[device] voice · codex', '[device] voice · codex-failed (exit 1 · path)', '[device] voice · orca',
+      '[device] voice · codex-failed (no binary · path)', '[device] voice · orca', '[device] voice · codex-timeout'])
     expect(logs.filter((line) => [THREAD, 'run the tests', transcriptPath, env.CODEX_HOME].some((secret) => line.includes(secret)))).toEqual([])
   })
 })

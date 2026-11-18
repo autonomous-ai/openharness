@@ -140,9 +140,12 @@ describe('the device without the app', () => {
     await heard(dial, (m) => m.t === 'agents.end', 'the first list')
     const engine = await startOutside(d, 'in-ghostty', { TERM_PROGRAM: 'ghostty' })
     await showing(dial, 'the agent listed', (r) => ids(r).includes(engine.id))
-    // Idle: listed, and no turn told of it.
+    // The dial held no agent until this list, so it is landed on its first, and the footer of the agent it shows is read.
+    await heard(dial, (m) => m.t === 'focus' && m.agentId === engine.id, 'the dial landed on it')
+    // Idle: listed, and no turn told of it: the landing and an empty footer only.
     const since = dial.messages.length
-    expect(dial.messages.some((m) => m.agentId === engine.id)).toBe(false)
+    expect(dial.messages.filter((m) => m.agentId === engine.id
+      && m.t !== 'focus' && !(m.t === 'turn.activity' && m.text === ''))).toEqual([])
     engine.type('hello from ghostty')
     await heard(dial, (m) => m.t === 'turn.started' && m.agentId === engine.id, 'its turn started', since)
     const done = await heard(dial, (m) => m.t === 'turn.done' && m.agentId === engine.id, 'its turn done', since)

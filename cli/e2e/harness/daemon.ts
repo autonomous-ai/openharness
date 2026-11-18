@@ -69,6 +69,8 @@ export interface EngineConfig {
   trustPrompt?: boolean
   /** Send Claude Code's kitty graphics query on start, then set this title [titleAfterMs] later (fakeEngine.mjs). */
   graphicsQuery?: { title: string; titleAfterMs: number }
+  /** The file under [root] where `codex queue` notes its calls: `codex-queue` when unset (harness/codexAppCli.ts). */
+  queueLedger?: string
 }
 
 export interface DaemonOptions {
@@ -454,6 +456,10 @@ export class IsolatedDaemon {
       // (cable/vscodeExtensionSetup.ts): /Applications is the computer's, whatever the home, so the devices look for VS
       // Code's `code` here alone, in place of /Applications, ~/Applications and PATH. Missing until a test writes its own.
       HARNESS_VSCODE_BIN: join(own, 'vscode', 'code'),
+      // Nor does a word to a ChatGPT app session reach the developer's ChatGPT app (cable/hosts/codexQueue.ts):
+      // /Applications is the computer's, whatever the home, so the devices look for the app's own Codex CLI here alone,
+      // in place of /Applications and ~/Applications. Missing until a test writes its own (harness/codexAppCli.ts).
+      HARNESS_CODEX_APP_BIN: join(own, 'ChatGPT.app', 'Contents', 'Resources', 'codex-cli', 'CodexCLI.app', 'Contents', 'MacOS', 'codex'),
       // Claude Code's and Codex's hooks, installed as on a person's computer, into this home and CODEX_HOME
       // (assertHooksContained), and run by the fake engines. Every other engine's installer writes into
       // folders these tests have no engine for.

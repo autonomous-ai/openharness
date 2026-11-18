@@ -132,8 +132,9 @@ export interface DevicesDeps {
   orca?: OrcaReadDeps
   /** For this service's tests: Orca's focus and order reads (cable/hosts/orca.ts); built on `orca` when unset. */
   orcaReads?: OrcaReads
-  /** For this service's tests: how `codex` is found and run (cable/hosts/codexQueue.ts). */
-  codex?: Pick<CodexQueueDeps, 'run' | 'binary' | 'platform'>
+  /** For this service's tests: how `codex` is found and run, what it runs under, and the read of the login shell that
+   *  both take (cable/hosts/codexQueue.ts). */
+  codex?: Omit<CodexQueueDeps, 'home' | 'cwd'>
   /** For this service's tests: herdr's socket (cable/hosts/herdrClient.ts). */
   herdr?: HerdrClient
   /** For this service's tests: Herdr Core's socket (cable/hosts/hcClient.ts). */

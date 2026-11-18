@@ -117,9 +117,11 @@ describe('the dial shows Claude Code waiting outside Harness', () => {
     // Answered in Orca, the turn goes to its end: the session's Stop.
     const answered = dial.messages.length
     await claude.hook('Stop', { stop_hook_active: false })
-    await dial.next((m) => m.t === 'question.close' && m.agentId === claude.id && m.id === question.id, 45_000, 'the question closed', answered)
+    const closed = await dial.next((m) => m.t === 'question.close' && m.agentId === claude.id && m.id === question.id, 45_000, 'the question closed', answered)
     await dial.next((m) => m.t === 'turn.done' && m.agentId === claude.id, 45_000, 'its turn done', answered)
-    expect(dial.messages.slice(answered).some((m) => m.agentId === claude.id && m.text === 'printf hi · answer in Orca')).toBe(false)
+    // The dial was landed on the agent, so its line is read again as the shown agent's until the Stop clears it: never
+    // after.
+    expect(dial.messages.slice(dial.messages.indexOf(closed)).some((m) => m.agentId === claude.id && m.text === 'printf hi · answer in Orca')).toBe(false)
   })
 
   it('the dial reads a session by its folder, then by the name its hook says, and no log holds the name', async () => {

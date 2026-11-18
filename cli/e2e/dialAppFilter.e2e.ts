@@ -447,6 +447,26 @@ describe('the dial\'s app filter', () => {
     await shows(again, 'vscode', vscode)
   })
 
+  // docs/plans/2026-11-18-dial-chatgpt-pick-and-voice-design.md, A: a dial whose list was empty is left on no agent by the
+  // firmware, which "Choose a pane" says, until the daemon puts it on one.
+  it('a dial plugged in over an app\'s ring is sent a focus on its first agent, after its list, and nothing is brought forward', async () => {
+    const { d, desk } = await fresh()
+    const first = await plugged(desk)
+    const a1 = await startFirst(d, first, 'ghostty', 'a1', GHOSTTY)
+    const a2 = await startOutside(d, 'a2', GHOSTTY)
+    await shows(first, 'ghostty', [a1, a2])
+    // Its list went from none to a1.
+    await first.next((m) => m.t === 'focus' && m.agentId === a1.id, 30_000, 'the focus on a1')
+    const opened = d.opens().length
+    const second = await plugged(desk, FILTER, 'E2E-B', 'e2:e0:00:00:00:0b')
+    await shows(second, 'ghostty', [a1, a2])
+    const focus = await second.next((m) => m.t === 'focus', 30_000, 'the focus after the list')
+    expect(focus.agentId).toBe(a1.id)
+    const both = rosters(second).find((r) => same(ids(r), idsOf([a1, a2])))!
+    expect(second.messages.indexOf(focus)).toBeGreaterThan(second.messages.indexOf(both.end))
+    expect(d.opens()).toHaveLength(opened)
+  })
+
   // Windows learns no app at the scan: its agents wait for their first hook.
   it.skipIf(process.platform === 'win32')('a dial plugged in while VS Code is already in front (the watch started first) is sent VS Code\'s ring', async () => {
     const { d, desk } = await fresh()

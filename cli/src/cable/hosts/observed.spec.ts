@@ -1391,8 +1391,8 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
     tabSelect: vi.fn((_app: TabApp, _tty: string, _raise: boolean): PaneSwitch => 'ok'),
     // Codex is there, and queues every message.
     codexQueue: {
-      can: vi.fn(() => true),
-      send: vi.fn(async (_threadId: string, _text: string): Promise<CodexQueueResult> => ({ outcome: 'queued' })),
+      can: vi.fn((_isApp: boolean) => true),
+      send: vi.fn(async (_threadId: string, _text: string, _isApp: boolean): Promise<CodexQueueResult> => ({ outcome: 'queued' })),
     },
     codexHome: '/home/u/.codex',
     count: vi.fn((_what: Parameters<ObservedActions['count']>[0]) => {}),
@@ -1831,7 +1831,7 @@ describe('ObservedSource actions', () => {
     const { actions } = fakeActions()
     const orca = actions.adapters.find((a) => a.id === 'orca')!
     expect(countWord('busy')).toBe('busy')
-    expect(countWord('codex-failed (exit 1)')).toBe('codex-failed (exit 1)')
+    expect(countWord('codex-failed (exit 1 · path)')).toBe('codex-failed (exit 1 · path)')
     expect(countWord(orca)).toBe('orca')
     expect(countWord({ refused: orca })).toBe('refused (orca)')
   })
@@ -2261,7 +2261,7 @@ describe('ObservedSource and a Claude app session the scan found (docs/plans/202
 })
 
 const THREAD = '01a1de76-a3b7-7270-b39e-1245893274c1'
-const FAILED: CodexQueueResult = { outcome: 'failed', reason: 'exit 1' }
+const FAILED: CodexQueueResult = { outcome: 'failed', reason: 'exit 1', ran: 'path' }
 
 // Codex outside Harness takes the dial's words through its own queue, in every state: a queued message types nothing and
 // answers no approval (docs/specs/2026-11-15-device-codex.md).
@@ -2334,7 +2334,7 @@ describe('ObservedSource and codex queue', () => {
         const { src, actions } = given(session, state)
         expect(src.list()[0].state).toBe(state)
         expect(await src.send(src.list()[0], 'next')).toEqual({ ok: true })
-        expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next']])
+        expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', false]])
         expect(actions.orcaSend).not.toHaveBeenCalled()
         expect(actions.toMod).not.toHaveBeenCalled()
         expect(actions.count.mock.calls).toEqual([['codex']])
@@ -2347,14 +2347,14 @@ describe('ObservedSource and codex queue', () => {
       [inOrca, 'idle', { ok: true }, 'orca'],
       [inOrca, 'working', { ok: false, reason: 'proj is busy. Say it when it is done.' }, 'busy'],
       [inOrca, 'needs-you', { ok: false, reason: 'proj is waiting for your answer in Orca.' }, 'waiting'],
-      [cx, 'idle', { ok: false, reason: 'proj did not answer.' }, 'no-answer'],
+      [cx, 'idle', { ok: false, reason: 'Codex could not take it. Try again.' }, 'no-answer'],
     ]
     for (const [session, state, sent, said] of cases) {
       const { src, actions } = given(session, state)
       actions.codexQueue.send.mockResolvedValue(FAILED)
       expect(await src.send(src.list()[0], 'next')).toEqual(sent)
       expect(actions.orcaSend.mock.calls).toEqual(said === 'orca' ? [[HANDLE, 'next']] : [])
-      expect(counted(actions.count)).toEqual(['codex-failed (exit 1)', said])
+      expect(counted(actions.count)).toEqual(['codex-failed (exit 1 · path)', said])
     }
   })
 
@@ -2367,20 +2367,35 @@ describe('ObservedSource and codex queue', () => {
       for (const engine of ['claude', 'codex'] as const) {
         const { src, actions } = given({ ...inOrca, engine, hostHints: { ...inOrca.hostHints, ...hints } })
         actions.codexQueue.send.mockResolvedValue(FAILED)
-        expect(await src.send(src.list()[0], 'next')).toEqual(herdrSocket ? { ok: true } : { ok: false, reason: 'proj did not answer.' })
+        const refused = engine === 'codex' ? 'Codex could not take it. Try again.' : 'proj did not answer.'
+        expect(await src.send(src.list()[0], 'next')).toEqual(herdrSocket ? { ok: true } : { ok: false, reason: refused })
         expect(actions.herdrPrompt.mock.calls).toEqual(herdrSocket ? [['w1:p2', engine, 'next']] : [])
         expect(actions.orcaSend).not.toHaveBeenCalled()
-        expect(counted(actions.count)).toEqual([...(engine === 'codex' ? ['codex-failed (exit 1)'] : []), herdrSocket ? 'herdr' : 'no-answer'])
+        expect(counted(actions.count)).toEqual([...(engine === 'codex' ? ['codex-failed (exit 1 · path)'] : []), herdrSocket ? 'herdr' : 'no-answer'])
       }
     }
   })
 
-  it('a failure is counted with its reason', async () => {
-    for (const reason of ['no binary', 'refused'] as const) {
+  it('a failure is counted with its reason and the codex that ran; a refused one keeps today\'s sentence', async () => {
+    const cases: Array<[CodexQueueResult, string, string]> = [
+      [{ outcome: 'failed', reason: 'no binary', ran: 'path' }, 'Codex could not take it. Try again.', 'codex-failed (no binary · path)'],
+      [{ outcome: 'failed', reason: 'refused' }, 'proj did not answer.', 'codex-failed (refused)'],
+    ]
+    for (const [result, reason, count] of cases) {
       const { src, actions } = given(cx)
-      actions.codexQueue.send.mockResolvedValue({ outcome: 'failed', reason })
-      expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'proj did not answer.' })
-      expect(actions.count.mock.calls).toEqual([[`codex-failed (${reason})`], ['no-answer']])
+      actions.codexQueue.send.mockResolvedValue(result)
+      expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason })
+      expect(actions.count.mock.calls).toEqual([[count], ['no-answer']])
+    }
+  })
+
+  // A session in the ChatGPT app has no pane to type into, and an older app's CLI has no queue: updating it is what helps.
+  it('an app session whose queue failed is told to update ChatGPT', async () => {
+    for (const ran of ['app', 'path'] as const) {
+      const { src, actions } = given({ ...cx, hostHints: { __CFBundleIdentifier: 'com.openai.codex' } })
+      actions.codexQueue.send.mockResolvedValue({ outcome: 'failed', reason: 'exit 127', ran })
+      expect(await src.send(src.list()[0], 'next')).toEqual({ ok: false, reason: 'Update ChatGPT, then try again.' })
+      expect(actions.count.mock.calls).toEqual([[`codex-failed (exit 127 · ${ran})`], ['no-answer']])
     }
   })
 
@@ -2463,7 +2478,7 @@ describe('ObservedSource and codex queue', () => {
     await src.scanOpen()
     expect(src.capabilities(src.list()[0])).toMatchObject({ voice: true })
     expect(await src.send(src.list()[0], 'next')).toEqual({ ok: true })
-    expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next']])
+    expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', false]])
   })
 
   it('a text over 2000 characters is refused before the queue', async () => {
@@ -2536,10 +2551,44 @@ describe('ObservedSource and the Codex app', () => {
       const agent = src.list()[0]
       expect(src.capabilities(agent)).toMatchObject({ voice: true })
       expect(await src.send(agent, 'next')).toEqual({ ok: true })
-      expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next']])
+      expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', true]])
       expect(counted(actions.count).at(-1)).toBe('codex')
       expect(ran).not.toHaveBeenCalled()
     }
+  })
+
+  // The ChatGPT app's own codex queues into its threads (codexQueue.ts): the queue is told which sessions are the app's.
+  it('a Codex app session asks the queue as the app\'s, and a Codex in Ghostty does not', async () => {
+    for (const [session, isApp] of [[{ ...inApp, transcriptPath: rollout }, true],
+      [{ ...inApp, transcriptPath: rollout, hostHints: { TERM_PROGRAM: 'ghostty' } }, false]] as const) {
+      const { src, actions } = hooked(session)
+      const agent = src.list()[0]
+      src.capabilities(agent)
+      expect(await src.send(agent, 'next')).toEqual({ ok: true })
+      expect(actions.codexQueue.can.mock.calls.length).toBeGreaterThan(0)
+      expect(new Set(actions.codexQueue.can.mock.calls.map(([asked]) => asked))).toEqual(new Set([isApp]))
+      expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', isApp]])
+    }
+  })
+
+  it('with only the app\'s codex there, an app session lists voice and a Codex in Ghostty does not', () => {
+    for (const [session, voice] of [[{ ...inApp, transcriptPath: rollout }, true],
+      [{ ...inApp, transcriptPath: rollout, hostHints: { TERM_PROGRAM: 'ghostty' } }, false]] as const) {
+      const { src, actions } = hooked(session)
+      actions.codexQueue.can.mockImplementation((isApp) => isApp)
+      expect(src.capabilities(src.list()[0]).voice).toBe(voice)
+    }
+  })
+
+  // Its app is learned from its next hook: until then it takes the other codex.
+  it('a session whose app is not known yet is not the app\'s', async () => {
+    const { src, actions } = await scanned(new Map())
+    const agent = src.list()[0]
+    expect(src.capabilities(agent)).toMatchObject({ voice: true })
+    expect(await src.send(agent, 'next')).toEqual({ ok: true })
+    expect(actions.codexQueue.can.mock.calls.length).toBeGreaterThan(0)
+    expect(new Set(actions.codexQueue.can.mock.calls.map(([asked]) => asked))).toEqual(new Set([false]))
+    expect(actions.codexQueue.send.mock.calls).toEqual([[THREAD, 'next', false]])
   })
 
   it('a Codex session in Ghostty has no Codex pane', async () => {

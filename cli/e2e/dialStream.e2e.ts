@@ -4,9 +4,9 @@
  * agent it shows. The stream is found as Orca's Harness Device plugin finds it: the real `harness device orca link`,
  * under the throwaway daemon's environment only, prints the devices' socket, and the test opens it there.
  *
- * Every agent is listed before the first focus. After a ring push that re-asserted the focus, a session drops a dial's
- * other `focus` until it hears that focus echoed (cableSession.ts, `expectedAppFocusEcho`), and the fake dial echoes
- * nothing: each move is sent again every 2 s until its line is read.
+ * A dial plugged in before any agent lands on the first one listed (cableSession.ts, the landing), and that is the stream's
+ * first move. After it, and after each ring push that re-asserts it, a session drops a dial's other `focus` for 750 ms,
+ * and the fake dial echoes nothing: each move is a `FakeDial.turnUntil`, sent again every 2 s until its line is read.
  *
  * Orca's plugin's own loop (plugins/harness-device-orca/src/dial.ts, with Node's inputs) runs too, in a process whose
  * whole environment is the throwaway home and a bare PATH (harness/pluginDial.ts): it finds this daemon through a
@@ -172,23 +172,9 @@ describe('the dial stream, for Orca\'s Harness Device plugin', () => {
   const shown = (dial: FakeDial, agent: InOrca, app: string): string =>
     JSON.stringify({ attached: true, agent: { name: nameOn(dial, agent), app } })
 
-  /** [dial] turns to [agent], again every 2 s until [probe] gives a value; that value. */
-  const turned = <T>(dial: FakeDial, agent: InOrca, what: string, probe: () => T | undefined): Promise<T> => {
-    let sent = 0
-    return until(what, () => {
-      const got = probe()
-      if (got !== undefined) return got
-      if (Date.now() - sent >= 2_000) {
-        dial.send({ t: 'focus', agentId: agent.id })
-        sent = Date.now()
-      }
-      return undefined
-    }, 60_000, 50)
-  }
-
   /** [dial] turns to [agent] until the stream's line [count] is there; that line. */
   const moved = (dial: FakeDial, agent: InOrca, open: Stream, count: number): Promise<string> =>
-    turned(dial, agent, `line ${count}`, () => (open.lines.length >= count ? open.lines[count - 1] : undefined))
+    dial.turnUntil(agent.id, `line ${count}`, () => (open.lines.length >= count ? open.lines[count - 1] : undefined))
 
   /** A word the shell takes as it is. */
   const quoted = (word: string): string => `'${word.replaceAll("'", `'\\''`)}'`
@@ -253,14 +239,15 @@ describe('the dial stream, for Orca\'s Harness Device plugin', () => {
   it('the stream opens on the state as it is, and each move of the dial is one line', async () => {
     const { d, desk } = await fresh()
     const dial = await plugged(desk, 'E2E-A', 'e2:e0:00:00:00:0a')
-    const { o, w } = await sessions(d, dial)
     const open = await stream(await ready(d))
     expect(open.status).toBe(200)
     await until('the first line', () => open.lines.length >= 1)
     expect(open.lines).toEqual([NO_AGENT])
+    // O, the first agent listed, is where the dial lands: its line is the next.
+    const { o, w } = await sessions(d, dial)
     const onO = shown(dial, o, 'Orca')
     const onW = shown(dial, w, 'WezTerm')
-    expect(await moved(dial, o, open, 2)).toBe(onO)
+    expect(await until('the landing', () => open.lines[1])).toBe(onO)
     expect(await moved(dial, w, open, 3)).toBe(onW)
     // A second focus on W says nothing: the next line is O's.
     dial.send({ t: 'focus', agentId: w.id })
@@ -295,10 +282,11 @@ describe('the dial stream, for Orca\'s Harness Device plugin', () => {
     const { d, desk } = await fresh()
     const a = await plugged(desk, 'E2E-A', 'e2:e0:00:00:00:0a')
     const b = await plugged(desk, 'E2E-B', 'e2:e0:00:00:00:0b')
-    const { o, w } = await sessions(d, a, b)
     const open = await stream(await ready(d))
     await until('the first line', () => open.lines.length >= 1)
-    expect(await moved(a, o, open, 2)).toBe(shown(a, o, 'Orca'))
+    // Both dials land on O, the first agent listed: one line, as the stream writes only a change.
+    const { o, w } = await sessions(d, a, b)
+    expect(await until('the landing', () => open.lines[1])).toBe(shown(a, o, 'Orca'))
     expect(await moved(b, w, open, 3)).toBe(shown(b, w, 'WezTerm'))
     await desk.unplug('E2E-A')
     // A's port closed before B moves: a none from A that reached the stream would come before B's line.
@@ -316,10 +304,11 @@ describe('the dial stream, for Orca\'s Harness Device plugin', () => {
     const { d, desk } = await fresh()
     const a = await plugged(desk, 'E2E-A', 'e2:e0:00:00:00:0a')
     const b = await plugged(desk, 'E2E-B', 'e2:e0:00:00:00:0b')
-    const { o, w } = await sessions(d, a, b)
     const open = await stream(await ready(d))
     await until('the first line', () => open.lines.length >= 1)
-    await moved(a, o, open, 2)
+    // Both dials land on O, the first agent listed; then B moves, last.
+    const { o, w } = await sessions(d, a, b)
+    expect(await until('the landing', () => open.lines[1])).toBe(shown(a, o, 'Orca'))
     await moved(b, w, open, 3)
     await desk.unplug('E2E-B')
     await until('agent null', () => open.lines.length >= 4)
@@ -341,7 +330,7 @@ describe('the dial stream, for Orca\'s Harness Device plugin', () => {
     // a SessionStart sent before the devices process exists is dropped.
     const { o } = await sessions(d, dial)
     const onO: DialState = { state: 'attached', agent: { name: TITLE, app: 'Orca' } }
-    await turned(dial, o, 'O shown', () => (last()?.agent?.name === TITLE || undefined))
+    await dial.turnUntil(o.id, 'O shown', () => (last()?.agent?.name === TITLE || undefined))
     expect(last()).toEqual(onO)
     await desk.unplug('E2E-A')
     await until('unplugged again', () => last()?.state === 'unplugged', 60_000)
@@ -367,8 +356,9 @@ describe('the dial stream, for Orca\'s Harness Device plugin', () => {
     const { o, w } = await sessions(d, dial)
     const open = await stream(await ready(d))
     await until('the first line', () => open.lines.length >= 1)
-    await moved(dial, o, open, 2)
-    await moved(dial, w, open, 3)
+    // The dial landed on O, the first agent listed: the stream opened on it.
+    await moved(dial, w, open, 2)
+    await moved(dial, o, open, 3)
     open.close()
     await until('the stream ended', () => endedGone(d) >= 1)
     const lines = streamLines(d)
@@ -465,8 +455,7 @@ describe('the dial stream, for Orca\'s Harness Device plugin', () => {
     since = dial.messages.length
     plugin.front([a2, a1])
     await lists(dial, onA, since, "A's agents again")
-    dial.send({ t: 'focus', agentId: sessions.a2.id })
-    await said(d, '[device] swipe · ok')
+    await dial.turnUntil(sessions.a2.id, 'the swipe', () => (d.log().includes('[device] swipe · ok') || undefined))
     since = dial.messages.length
     expect(await prompted(d, sessions.a1)).toBe('[device] prompt · moved')
     await dial.next((m) => m.t === 'focus' && m.agentId === sessions.a1.id, 30_000, "A1's focus", since)
