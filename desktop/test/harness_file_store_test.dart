@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/harness_file_store.dart';
 import 'package:harness/core/posix_file_mode.dart';
+import 'package:harness/core/uninstall_marker.dart';
 import 'package:harness/settings/config_store.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -29,6 +30,25 @@ void main() {
 
     expect(path, '/Users/tester/.harness/desktop-app-v2');
   }, skip: Platform.isWindows);
+
+  test('names a sibling under Harness home', () {
+    String sibling(String name) => HarnessFileStore.defaultDirectoryPath(
+      environment: {'HOME': '/Users/tester'},
+      name: name,
+    );
+
+    expect(sibling('logs'), '/Users/tester/.harness/logs');
+    expect(sibling('flasher'), '/Users/tester/.harness/flasher');
+    expect(sibling('uninstalling'), '/Users/tester/.harness/uninstalling');
+  }, skip: Platform.isWindows);
+
+  test('with no home', () {
+    expect(
+      () => HarnessFileStore.defaultDirectoryPath(environment: {}),
+      throwsStateError,
+    );
+    expect(UninstallMarker.path(environment: {}), isNull);
+  });
 
   test(
     'persists values across instances without losing concurrent writes',
