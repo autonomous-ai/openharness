@@ -46,6 +46,84 @@ describe('hosting services so one that fails cannot take the core down', () => {
 
   describe('bounded inline calls', () => {
     const asker = { local: true, owner: true }
+    it.each(['route', 'call'] as const)('bounds actual handlers across request types before a deadline through %s', async entry => {
+      vi.useFakeTimers()
+      const h = host(), finish: Array<(value: Record<string, unknown>) => void> = []
+      const handler = vi.fn(() => new Promise<Record<string, unknown>>(resolve => finish.push(resolve)))
+      h.services.serve('bounded', () => ({ first: handler, second: handler }), fakeCore(), ['first', 'second'])
+      const replies: Record<string, unknown>[] = []
+      const ask = (type: string): void => {
+        if (entry === 'route') h.services.route(type, {}, asker, result => replies.push(result))
+        else void h.services.call(type, {}, asker, 1_000).then(result => replies.push(result))
+      }
+      try {
+        for (let n = 0; n < 100; n++) ask(n % 2 ? 'first' : 'second')
+        ask('second')
+        await vi.advanceTimersByTimeAsync(0)
+        expect(handler).toHaveBeenCalledTimes(100)
+        expect(replies).toEqual([{ error: 'SERVICE_UNAVAILABLE', service: 'bounded', retryable: true }])
+        expect(h.lines).toContain('[services] bounded SERVICE_REQUESTS_FULL')
+      } finally {
+        for (const done of finish) done({ ok: true })
+        await vi.advanceTimersByTimeAsync(0)
+      }
+      expect(vi.getTimerCount()).toBe(0)
+    })
+
+    it('keeps a second service available while the first owns one hundred actual handlers', async () => {
+      vi.useFakeTimers()
+      const h = host(), finish: Array<(value: Record<string, unknown>) => void> = []
+      const held = vi.fn(() => new Promise<Record<string, unknown>>(resolve => finish.push(resolve)))
+      h.services.serve('bounded', () => ({ hold: held, another: held }), fakeCore(), ['hold', 'another'])
+      h.services.serve('independent', () => ({ read: () => ({ ok: true }) }), fakeCore(), ['read'])
+      try {
+        for (let n = 0; n < 100; n++) h.services.route('hold', {}, asker, () => {})
+        const refused: Record<string, unknown>[] = []
+        h.services.route('another', {}, asker, result => refused.push(result))
+        expect(refused).toEqual([{ error: 'SERVICE_UNAVAILABLE', service: 'bounded', retryable: true }])
+        expect(held).toHaveBeenCalledTimes(100)
+        expect(await h.services.call('read', {}, asker, 1_000)).toEqual({ ok: true })
+      } finally {
+        for (const done of finish) done({ ok: true })
+        await vi.advanceTimersByTimeAsync(0)
+      }
+    })
+
+    it('retains the same service charge after timeout and connection abort until actual settlement', async () => {
+      vi.useFakeTimers()
+      const h = host(), requests: Array<{ signal: AbortSignal; finish(value: Record<string, unknown>): void }> = []
+      const held = vi.fn((_payload, _asker, signal?: AbortSignal) => new Promise<Record<string, unknown>>(finish => requests.push({ signal: signal!, finish })))
+      h.services.serve('bounded', () => ({ timed: held, routed: held, next: held }), fakeCore(), ['timed', 'routed', 'next'])
+      try {
+        const timed = Array.from({ length: 50 }, () => h.services.call('timed', {}, { ...asker, connection: 'window' }, 10))
+        for (let n = 0; n < 50; n++) h.services.route('routed', {}, { ...asker, connection: 'window' }, () => {})
+        await vi.advanceTimersByTimeAsync(10)
+        expect((await Promise.all(timed)).every(result => result.error === 'SERVICE_UNAVAILABLE')).toBe(true)
+        h.services.closeConnection('window')
+        expect(requests.every(request => request.signal.aborted)).toBe(true)
+        const replies: Record<string, unknown>[] = []
+        h.services.route('next', {}, asker, result => replies.push(result))
+        expect(replies).toEqual([{ error: 'SERVICE_UNAVAILABLE', service: 'bounded', retryable: true }])
+        expect(held).toHaveBeenCalledTimes(100)
+        requests[0].finish({ late: true })
+        await vi.advanceTimersByTimeAsync(0)
+        h.services.route('next', {}, asker, result => replies.push(result))
+        expect(held).toHaveBeenCalledTimes(101)
+        h.services.route('next', {}, asker, result => replies.push(result))
+        expect(held).toHaveBeenCalledTimes(101)
+        requests[100].finish({ current: true })
+        await vi.advanceTimersByTimeAsync(0)
+        expect(replies).toEqual([
+          { error: 'SERVICE_UNAVAILABLE', service: 'bounded', retryable: true },
+          { error: 'SERVICE_UNAVAILABLE', service: 'bounded', retryable: true }, { current: true },
+        ])
+      } finally {
+        for (const request of requests) request.finish({ settled: true })
+        await vi.advanceTimersByTimeAsync(0)
+      }
+      expect(vi.getTimerCount()).toBe(0)
+    })
+
     it('answers unavailable and failed calls without leaving a deadline', async () => {
       vi.useFakeTimers()
       const h = host()

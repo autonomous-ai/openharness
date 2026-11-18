@@ -424,3 +424,160 @@ These are macOS focused results, with Windows transport behavior mocked where st
 claim native Windows/Linux, process-tree cost, or final combined/native Wi-Fi acceptance. Feed,
 normalized streams and focus remain pending as described above; this is a reviewable transport slice,
 not completion of the whole core extraction.
+
+## Remaining feed/focus caller audit (proposal, not runtime approval)
+
+The matching inline request bound is separately approved. `SERVICE_REQUESTS_MAX = 100` lives in the
+existing light `core/serviceHost.ts`; `serviceLinks` keeps its existing re-export. All request types
+claimed by one inline service share a scalar count in their existing owner record. Route and call
+admit against that count in constant time, before allocating an AbortController or invoking a handler.
+Deadline and connection abort retain the count; only actual handler settlement releases it. A second
+service has independent credit. Expired same-type admission uses another scalar on that same owner,
+replacing the former scan of all executing handlers. No request queue or second handler registry is
+added. Refusal is the existing `SERVICE_UNAVAILABLE` reply with fixed `SERVICE_REQUESTS_FULL` log code.
+Four behavioral RED cases in `/tmp/core-wifi-inline-cap-red.log` demonstrate actual 101st admission,
+cross-type bypass, and timeout/abort failing to preserve a service-wide charge before this correction.
+
+The transport slice is committed separately at `bc326e39dd`. The following is the next source-only
+review packet. It does not authorize a second core registry or claim that forwarding an app frame is
+already equivalent to the removed feed.
+
+### Actual sources and consumers
+
+| Contract | Existing source | Actual component use | Required replacement property |
+| --- | --- | --- | --- |
+| Input dispatch | `SessionInputController.progress` → `deliveries.input` → the delivery maker | `service.inputProgress` records adapted input hash, actual dispatch time and bound session | Keep this shared authority and maker fencing. Arm component evidence before calling shared input. |
+| Raw evidence | `transcripts/ingest.observeLine` and `transcripts/attach` side-read | `DeviceResultEvidence` proves Claude parent ancestry or Codex explicit turn membership | Component reads only a captured authoritative file/binding; incomplete proof stays unknown. |
+| Normalized events | `turns/funnel` → ordinary `BackendSocket.send` app frames; separate Wi-Fi batch calls | Turn lifecycle and `AgentStreams` answer/tool/final state | Preserve original batch adjacency, live versus replay, and whole-turn final text. |
+| Cards/full answer | `core/main` commander callback → `wifiCore.card` with `mirror.lastFullText` | Non-native `turn.summary`, tool and error events | Use ordinary card events plus the existing bounded conversation read or the component's full-answer state; do not recreate a core Wi-Fi cache. |
+| Focus | Physical local window → `onAppFocusState`; device `focus.ensure` asks that window | Component revision and final synchronous window authority | Remove cached component revision, preserve newer explicit window choice and unavailable/replaced-service refusal. |
+
+`agents_watch` is metadata-only and permits eight named agents per tool. The explicit questions
+observer is question-content-only. Neither is a normalized event stream. The app path already carries
+the normalized event payload, agent ID, engine session ID, replay bit and activity; tools are excluded
+before it reaches their sockets. The component must remain a tool, never a window or desk-presence
+claim. Existing input/progress and delivery events continue on their current maker-owned service link.
+
+The original normalized batch has one observable distinction that individual app frames lack:
+`services/wifi.ts` does not close a busy-input receipt on an end immediately followed by a start in
+the same batch. `AgentStreams` also accumulates the first 16 KiB of the answer for every open turn,
+including before a device subscribes. A replacement cannot simply send only current subscriptions,
+interpret every end as an independent close, or replay historical deltas as live text.
+
+### Proposed shared observation shape
+
+The candidate uses the ordinary authenticated local app transport and the existing `LocalClient`
+record. It adds an explicitly negotiated normalized-event scope on that record, not a broker or
+service registry. Candidate wire names, subject to review:
+
+```text
+machine_select.payload.eventsProtocol = 1
+connected.payload.eventsProtocol = 1
+events_observe { requestId, scope: "all" | { agentIds: string[] } }
+events_observe_result { requestId, ok: true, generation }
+session_events { generation, agentId, sessionId, replay, events: LiveEvent[] }
+```
+
+An empty named scope removes interest; it does not claim foreground presence. Scope is installed
+before the successful reply and the connection's ordered socket carries every subsequent event.
+No event history or per-turn answer is retained in core. The existing tool/question admission is
+shared: at most 64 tool connections, one admission per physical connection even if it asks for both.
+Scope replacement and disconnect revoke old delivery authority without freeing writes that have not
+physically settled. Devices own their existing stream subscriptions and per-turn answer state.
+
+For real convergence, the proposed change also migrates the Desktop's local `ws_conn.dart` event
+decoder to this negotiated envelope and expands each batch through its existing event dispatcher.
+Legacy app connections retain their existing individual frames. Merely naming a device-only feed
+`events_observe` is not the proposal. A Desktop protocol change needs its applicable instructions,
+decoder coverage and a person-level session-stream test before integration.
+
+Unresolved before approval: where the funnel emits the negotiated envelope without changing the
+existing per-event app-before-input ordering or the receipt-before-recap ordering; whether individual
+frames carrying bounded batch provenance produce a smaller shared change than an array envelope;
+and the exact byte/count ceilings for both wire and component retention. Existing engine pages allow
+1 MiB pages and fragmented 64 MiB results (`engines/worker/liveProtocol.ts`), so 16 MiB cannot be called
+a historical universal event maximum. Any new overload refusal must be named and tested, including
+escaped content, large tool inputs and a slow app as well as a slow device observer.
+
+### Proposed component raw-evidence owner
+
+The only candidate file authority is a current `AgentView` from the existing `resolve` contract,
+with engine, session, transcript path, process birth, evidence revision and hold state captured before
+input. A device-supplied path or session ID is never authority. `conversations.discover` is currently
+authorized only for the handoff service, not Wi-Fi; it cannot be assumed available or silently added
+to the Wi-Fi query switch. Prefer existing binding announcements and current `resolve` to broadening
+that authority. Missing or held identity cannot be repaired by guessed directory scans.
+
+For an already-bound file, install the filesystem watch and capture regular-file identity/offset
+before invoking shared input. One actual read owns each file; notifications coalesce into a dirty bit.
+Bytes that arrive before the maker's `dispatching` fact can stay in the file behind the captured
+offset, rather than a second in-memory line queue. Parse only after the matching dispatch fact has
+installed its exact adapted hash/time/session. Read fixed-size chunks, retain at most one bounded
+partial record, and verify inode/device and the captured boundary before accepting appended evidence.
+Replacement, truncation, overflow, stale binding, lost core connection or read failure marks the
+existing receipt unknown by a fixed no-content reason and never repeats Enter.
+
+A first input can precede both session binding and transcript creation. It therefore needs a pending
+capture bound to the original live process, installed before input, followed by the first authoritative
+binding announcement. The first bounded catch-up may include older records; timestamps alone never
+prove a result. Only the existing exact prompt match plus complete Claude ancestry or Codex explicit
+turn membership can do so. A skipped prefix, oversized record or missing parent must remain a known
+gap, never inferred success. `agentLife` with its current default does not announce every same-agent
+binding; this needs the actual ordinary `agent_synced`/resolve caller or a demonstrated existing
+`follow({ each: true })` binding path. No new polling loop is proposed.
+
+The existing 64 unresolved native-input admission bounds initial pending captures. It does not by
+itself bound all result parser state: consumed inputs no longer count toward that admission and
+`DeviceResultEvidence` currently retains up to 8,192 Claude nodes or 16,384 Codex seen IDs per agent.
+Before replacing transport-bound lines with direct filesystem reads, the design must supply both
+record and byte budgets for active readers, partial records, parsed ancestry and result retention.
+Current output checks are 64 correlated inputs, 512 results and a 32 KiB encoded result payload;
+these remain authoritative. A reused `streamRecords` reader must surface skipped oversized records:
+its current API silently skips them, so it cannot be used unchanged for proof of an uninterrupted read.
+
+Raw file observation and app events are different channels. Their ordering is not automatically the
+old raw-before-normalized order: a fast app `turn_ended` can otherwise mark a native receipt unknown
+before its raw result is read. The first RED must exercise that race, along with a complete first turn
+written before its binding announcement. A bounded ordered handoff or a proven lifecycle adjustment
+inside the component is required before the core raw side-read is deleted. There is no approval to
+hide this race behind a sleep or to weaken native result evidence.
+
+### Focus: existing mutation authority and pending decision
+
+The complete mutation audit of `AutonomousDeviceService` finds exactly two `focusCounter` increments:
+`appFocus`, which originates from an actual core window update/disconnect, and `focusSnapshot`, which
+clears a focused local agent that disappeared. `focus.step` and `focus.ensure` do not independently
+choose authoritative focus; they request a window move and wait for its acknowledgment. This favors
+capturing existing `appFormWindow` and `appVoiceFocus` object identities over adding another generation
+map. Both objects are replaced by explicit focus and cleared when their owning window disconnects.
+
+Candidate service request: `wifi_focus_current { revision }` returns `{ current: boolean }` from the
+component's current focus snapshot, after prior window notices. A conditional `app_focus` captures the
+two existing window objects and the original physical socket/bound machine. After the bounded check,
+the final core apply is synchronous and requires those objects unchanged, the same physical window
+still open, and the target agent still current. Explicit untagged `app_focus` continues immediately,
+superseding a pending conditional check. No component revision is cached in core.
+
+This is still a proposal: `localWsServer` currently assumes a synchronous callback, and neither
+`serviceLinks.call` nor `inlineHost.call` is a blanket count bound for arbitrary simultaneous callers.
+The check must use existing connection-owned request custody with a precise actual-unsettled bound,
+not an unbounded Promise chain or a new Wi-Fi waiter map. A reply from a replaced/disabled service
+must not authorize a window move. The actual service callback and physical-window completion need
+RED cases for old reply/new explicit focus, disconnect/reconnect with the same agent, replacement,
+timeout/hung inline handler, target deletion and two conditional acknowledgments in flight.
+
+### Proposed files and next validation selection
+
+Raw evidence: component `lib/autonomous-device/` reader and its specs, `services/wifi.ts` and
+`wifiProcess.ts`, with deletion from `core/wifi.ts`, `transcripts/attach.ts`, `transcripts/ingest.ts`,
+`core/main.ts`, `core/api.ts` and `core/wifiLink.ts`. Existing shared input delivery authority stays.
+Normalized observation: existing `backendSocket.ts`, `localWsServer.ts`, `turns/funnel.ts`, a small
+`agentClient/` consumer, component stream lifecycle, and the actual Desktop decoder/tests if the
+batch-envelope option is approved. Focus: existing local window callback/composition, service request
+owner and component focus handler, plus deletion of `core/wifi` revision state. No new dependency.
+
+Pick before execution: bound/unbound first-turn and raw-before-progress races; end/start batch
+adjacency; mid-turn full final; slow observer physical settlement; audience teardown/re-enable;
+stale binding/path replacement and deliberate gaps; final focus races above. Then affected per-file
+core/service coverage, types and architecture. Packaged native Wi-Fi/inline and cost comparisons stay
+with the coordinator after the integrated source is frozen.

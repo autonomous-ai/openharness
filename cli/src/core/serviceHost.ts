@@ -1,4 +1,8 @@
 /** Shared service fallbacks and failure identity; inline hosting is loaded through services/inline.ts only. */
+/** Outstanding requests per service. Inline handlers retain their charge until actual settlement;
+ * an external link retains its request until reply, deadline or connection loss. */
+export const SERVICE_REQUESTS_MAX = 100
+
 /** The fallback of a member whose failure belongs to its caller: it throws (or rejects). */
 export const FAIL = Symbol('fail')
 

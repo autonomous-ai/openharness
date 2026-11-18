@@ -23,6 +23,7 @@
  *   again.
  */
 import { FAIL, readFallback, ServiceUnavailableError, type Asker, type CoreApi, type CorePorts, type PortFallbacks, type ServiceRequest, type ServiceRequests } from '../core/api.js'
+import { SERVICE_REQUESTS_MAX } from '../core/serviceHost.js'
 
 export interface ServiceHostOptions {
   /** Failures within `windowMs` that switch a service off. */
@@ -54,7 +55,7 @@ export function createServiceHost(ports: CorePorts, options: ServiceHostOptions 
   const offHandlers = new Map<string, Array<() => void>>()
   const stoppers = new Map<string, () => void>()
   /** The service that answers each request type, and its handler once it has started. */
-  const owners = new Map<string, { service: string; answer: ServiceRequest | null }>()
+  const owners = new Map<string, { service: string; answer: ServiceRequest | null; active: { count: number }; expired: number }>()
   /** The requests still being answered, each with the connection that asked: what its closing aborts. */
   const answering = new Map<AbortController, { connection: string | undefined; type: string; expired: boolean }>()
 
@@ -120,7 +121,8 @@ export function createServiceHost(ports: CorePorts, options: ServiceHostOptions 
       const owner = owners.get(type)
       if (owner) throw new Error(`${type} is answered by ${owner.service}`)
     }
-    for (const type of requests) owners.set(type, { service: name, answer: null })
+    const active = { count: 0 }
+    for (const type of requests) owners.set(type, { service: name, answer: null, active, expired: 0 })
   }
 
   /** Install a started service's handlers: exactly the types it declared, no more and no fewer. */
@@ -130,7 +132,7 @@ export function createServiceHost(ports: CorePorts, options: ServiceHostOptions 
     const unanswered = requests.filter((type) => !given.includes(type))
     if (undeclared.length) throw new Error(`it answers ${undeclared.join(', ')} without declaring ${undeclared.length > 1 ? 'them' : 'it'}`)
     if (unanswered.length) throw new Error(`it declares ${unanswered.join(', ')} without answering ${unanswered.length > 1 ? 'them' : 'it'}`)
-    for (const type of requests) owners.set(type, { service: name, answer: (answers as ServiceRequests)[type] })
+    for (const type of requests) owners.get(type)!.answer = (answers as ServiceRequests)[type]
   }
 
   const didNotStart = (name: string, error: unknown): void => {
@@ -149,6 +151,11 @@ export function createServiceHost(ports: CorePorts, options: ServiceHostOptions 
       reply({ error: 'SERVICE_UNAVAILABLE', service, retryable: false })
       return true
     }
+    if (owner.active.count >= SERVICE_REQUESTS_MAX) {
+      log(`[services] ${service} SERVICE_REQUESTS_FULL`)
+      reply({ error: 'SERVICE_UNAVAILABLE', service, retryable: true })
+      return true
+    }
     let replied = false, deadline: ReturnType<typeof setTimeout> | undefined
     const replyOnce = (value: Record<string, unknown>): void => {
       if (replied) return
@@ -165,9 +172,15 @@ export function createServiceHost(ports: CorePorts, options: ServiceHostOptions 
     const closed = new AbortController()
     const entry = { connection: asker.connection, type, expired: false }
     answering.set(closed, entry)
-    const settled = (): void => { answering.delete(closed) }
+    owner.active.count++
+    const settled = (): void => {
+      answering.delete(closed)
+      owner.active.count--
+      if (entry.expired) owner.expired--
+    }
     if (waitMs !== undefined) deadline = setTimeout(() => {
       entry.expired = true
+      owner.expired++
       log(`[services] ${service}.${type} timed out · SERVICE_DEADLINE`)
       // Revoke reply authority before abort listeners can synchronously re-enter the host.
       replyOnce({ error: 'SERVICE_UNAVAILABLE', service, retryable: true })
@@ -248,7 +261,7 @@ export function createServiceHost(ports: CorePorts, options: ServiceHostOptions 
     route,
     /** A deadline ends the caller's wait, never the actual handler's admission charge. */
     call(type: string, payload: Record<string, unknown>, asker: Asker, waitMs: number): Promise<Record<string, unknown>> {
-      for (const entry of answering.values()) if (entry.type === type && entry.expired) {
+      if (owners.get(type)?.expired) {
         return Promise.resolve({ error: 'SERVICE_UNAVAILABLE', retryable: true })
       }
       return new Promise(resolve => {
