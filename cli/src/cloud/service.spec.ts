@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CloudCore } from '../core/api.js'
 import type { CloudHarness } from '../lib/cloudAgents.js'
 import type { Bridge } from './bridge.js'
-import { repositoryOf } from '../lib/cloudAgents.js'
+import { cloudFingerprint, repositoryOf } from '../lib/cloudAgents.js'
 import { cloudCard, nameFor, startCloudService } from './service.js'
 import { CloudError, type CloudAdapter, type CloudUpdate } from './types.js'
 
@@ -17,14 +17,14 @@ let dataDir: string
 let clock: number
 let timers: Map<number, { fn: () => void; ms: number }>
 let nextTimer: number
-let doors: { publish: ReturnType<typeof vi.fn>; ask: ReturnType<typeof vi.fn>; unask: ReturnType<typeof vi.fn> }
+let doors: { checkpoint: ReturnType<typeof vi.fn>; publish: ReturnType<typeof vi.fn>; ask: ReturnType<typeof vi.fn>; unask: ReturnType<typeof vi.fn> }
 
 beforeEach(() => {
   dataDir = mkdtempSync(join(tmpdir(), 'cloud-'))
   clock = Date.parse('2026-10-11T10:00:00Z')
   timers = new Map()
   nextTimer = 1
-  doors = { publish: vi.fn(), ask: vi.fn(), unask: vi.fn() }
+  doors = { checkpoint: vi.fn(() => cloudFingerprint([])), publish: vi.fn(() => ({ ok: true as const })), ask: vi.fn(), unask: vi.fn() }
 })
 afterEach(() => rmSync(dataDir, { recursive: true, force: true }))
 
@@ -50,13 +50,15 @@ const bridge = (connections: unknown[] = []): Bridge => ({
 })
 
 function start(adapters: Record<string, CloudAdapter>, given = bridge()) {
-  return startCloudService({
+  const service = startCloudService({
     dataDir, core: doors as unknown as CloudCore, bridge: given, adapters: adapters as never,
     now: () => clock,
     setTimer: (fn, ms) => { const id = nextTimer++; timers.set(id, { fn, ms }); return id },
     clearTimer: (id) => { timers.delete(id as number) },
     log: () => {},
   })
+  void service.republish()
+  return service
 }
 
 /** Runs every timer due now, as many times as it takes, then lets the looks settle. */
@@ -126,7 +128,7 @@ describe('a cloud harness', () => {
     expect(devin.start).not.toHaveBeenCalled()
     expect(await service.port.create({ engine: 'devin-cloud', prompt: 'x', repository: 'acme/api' })).toEqual({ ok: false, error: 'NOT_CONNECTED', detail: 'Add your Devin API key' })
     expect(await service.port.create({ engine: 'fo', prompt: 'x' })).toEqual({ ok: false, error: 'CLOUD_FAILED', detail: 'Fo could not be reached. Try again.' })
-    expect(doors.publish).not.toHaveBeenCalled()
+    expect(doors.publish.mock.calls.every(([rows]) => rows.length === 0)).toBe(true)
   })
 
   it('reads what its maker says, asks the person when it waits, and stops looking once idle', async () => {
@@ -222,7 +224,7 @@ describe('a cloud harness', () => {
     const devin = maker()
     const first = start({ 'devin-cloud': devin })
     await first.port.create({ engine: 'devin-cloud', prompt: 'fix it', repository: 'acme/api' })
-    expect(published()[0].said).toBeUndefined()
+    expect(published()[0].said).toBeNull()
     devin.looks.push({ messages: [{ id: 'm1', text: 'Opened #42.', at: 'x' }], state: 'idle' })
     await tick()
     expect(published()[0].said).toBe('Opened #42.')
@@ -233,7 +235,7 @@ describe('a cloud harness', () => {
     const saved = JSON.parse(readFileSync(file, 'utf8'))
     delete saved.harnesses[0].harness.said
     writeFileSync(file, JSON.stringify(saved))
-    start({ 'devin-cloud': devin }).republish()
+    await start({ 'devin-cloud': devin }).republish()
     expect(published()[0].said).toBe('Opened #42.')
     expect(published()[0].card).toEqual({ recap: 'Opened #42.', text: 'Opened #42.' })
     // The card is never saved: it is worked out from what was.
@@ -242,7 +244,7 @@ describe('a cloud harness', () => {
     saved.harnesses[0].harness.said = null
     writeFileSync(file, JSON.stringify(saved))
     rmSync(join(dataDir, 'cloud', `${saved.harnesses[0].harness.agentId}.jsonl`))
-    start({ 'devin-cloud': devin }).republish()
+    await start({ 'devin-cloud': devin }).republish()
     expect(published()[0].said).toBeNull()
     expect(published()[0].card).toBeNull()
   })
@@ -263,7 +265,7 @@ describe('a cloud harness', () => {
     expect(published()[0].card).toEqual({ recap: 'Booked for 9:30 at Hair Lab. See you Saturday.', text: 'Booked Booked for 9:30 at Hair Lab. See you Saturday.' })
     // Told again with nothing new said: the same card, not worked out again.
     const card = published()[0].card
-    service.republish()
+    await service.republish()
     expect(published()[0].card).toBe(card)
     // Only markers: something said, and nothing a card can show.
     await service.port.create({ engine: 'devin-cloud', prompt: 'and this', repository: 'acme/api' })
@@ -284,7 +286,7 @@ describe('a cloud harness', () => {
     expect(timers.size).toBe(0)
     // Nothing more is told once stopped.
     const told = doors.publish.mock.calls.length
-    first.republish()
+    await first.republish()
     expect(doors.publish.mock.calls.length).toBe(told)
 
     doors.publish.mockClear()
@@ -296,20 +298,21 @@ describe('a cloud harness', () => {
     await tick()
     expect(doors.ask).toHaveBeenCalledTimes(1)
     expect(doors.ask.mock.calls[0][2]).toEqual({ text: 'Devin Cloud is waiting for you.', choices: [] })
-    second.republish()
+    await second.republish()
     expect(doors.publish).toHaveBeenCalled()
-    expect(doors.ask).toHaveBeenCalledTimes(2)
+    await vi.waitFor(() => expect(doors.ask).toHaveBeenCalledTimes(2))
     second.stop()
   })
 
-  it('reads a saved file that is broken or half-written as nothing it cannot use', () => {
+  it('holds malformed provider rows without erasing them and keeps their transcript readable', async () => {
     mkdirSync(join(dataDir, 'cloud'), { recursive: true })
     writeFileSync(join(dataDir, 'cloud', 'harnesses.json'), JSON.stringify({ harnesses: [null, { harness: { agentId: 'cloud_x', agent: 'nope' }, remote: { id: 'r' } }, { harness: { agentId: 'cloud_y', agent: 'fo', state: 'idle' }, remote: {} }] }))
     writeFileSync(join(dataDir, 'cloud', 'cloud_x.jsonl'), 'not json\n{"id":"a","from":"agent","text":"hi","at":"x"}\n')
     const service = start({})
     expect(timers.size).toBe(0)
-    service.republish()
-    expect(published()).toEqual([])
+    await service.republish()
+    expect(doors.publish).not.toHaveBeenCalled()
+    expect(await service.requests.cloud_agents({}, owner)).toMatchObject({ error: 'CLOUD_STATE_UNAVAILABLE' })
     expect(service.transcript('cloud_x')).toEqual([{ id: 'a', from: 'agent', text: 'hi', at: 'x' }])
   })
 
@@ -346,7 +349,7 @@ describe('a cloud harness', () => {
     service.stop()
     doors.publish.mockClear()
     const again = start({ 'devin-cloud': devin })
-    again.republish()
+    await again.republish()
     expect(published()[0].providerStatus).toEqual({ status: 'running', detail: 'finished' })
     // A harness saved before this field existed is still a harness.
     const saved = JSON.parse(readFileSync(file, 'utf8'))
@@ -354,7 +357,7 @@ describe('a cloud harness', () => {
     writeFileSync(file, JSON.stringify(saved))
     again.stop()
     const restarted = start({ 'devin-cloud': devin })
-    restarted.republish()
+    await restarted.republish()
     expect(published()[0].providerStatus).toBeUndefined()
     expect(published()[0]).toMatchObject({ agentId, state: 'idle' })
     devin.looks.push({ messages: [], state: 'working', providerStatus: { status: 'running', detail: 'working' } })
@@ -525,6 +528,7 @@ describe('what the review found', () => {
     const request = { engine: 'devin-cloud', prompt: 'fix it', repository: 'acme/api', creationId: 'c-1' }
     const first = service.port.create(request)
     const retried = service.port.create(request)
+    await vi.waitFor(() => expect(devin.start).toHaveBeenCalledOnce())
     release()
     const [a, b] = await Promise.all([first, retried])
     expect(devin.start).toHaveBeenCalledTimes(1)

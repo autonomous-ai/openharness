@@ -50,6 +50,7 @@ export function runCloudService(options: CloudProcessOptions): ServiceProcess {
       rename: (payload) => port.rename(text(payload.agentId), text(payload.name)),
       stopHarness: (payload) => port.stopHarness(text(payload.agentId)),
     },
-    onConnected: (connection) => { core = connection; service.republish() },
+    onConnected: (connection) => { core = connection; void service.republish() },
+    onDisconnected: () => { core = null; service.disconnected() },
   })
 }

@@ -344,7 +344,7 @@ describe('the core API services stand on', () => {
     expect(createCoreApi({ ...deps, conversations }).conversations).toBe(conversations)
     // The cloud agents' doors, only from a core that offers them.
     expect(core.cloud).toBeUndefined()
-    const cloud = { publish: vi.fn(), ask: vi.fn(), unask: vi.fn() }
+    const cloud = { checkpoint: vi.fn(() => 'a'.repeat(64)), publish: vi.fn(() => ({ ok: true as const })), ask: vi.fn(), unask: vi.fn() }
     expect(createCoreApi({ ...deps, cloud }).cloud).toBe(cloud)
     expect(core.agents.cloud).toBeUndefined()
     const rows = [{ agentId: 'cloud_1' }] as RegisteredSession[]

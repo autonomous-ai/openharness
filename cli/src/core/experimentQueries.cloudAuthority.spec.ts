@@ -9,7 +9,7 @@ const payload = { harnesses: [], agentId: 'cloud_fixture', questionId: 'cloud_q_
   question: { text: 'Fixture question', choices: [] } }
 
 it.each(queries)('%s cannot act after its connection is replaced during asynchronous dispatch', async query => {
-  const cloud = { checkpoint: vi.fn(() => 'a'.repeat(64)), publish: vi.fn(() => ({ ok: true })), ask: vi.fn(), unask: vi.fn() }, core = fakeCore({ cloud })
+  const cloud = { checkpoint: vi.fn(() => 'a'.repeat(64)), publish: vi.fn(() => ({ ok: true as const })), ask: vi.fn(), unask: vi.fn() }, core = fakeCore({ cloud })
   let entered!: () => void, release!: () => void
   const entering = new Promise<void>(resolve => { entered = resolve })
   const held = new Promise<void>(resolve => { release = resolve })
@@ -37,14 +37,14 @@ it.each(queries)('%s cannot act after its connection is replaced during asynchro
 })
 
 it.each(queries)('%s refuses an authority that cannot prove its current connection', async query => {
-  const cloud = { checkpoint: vi.fn(() => 'a'.repeat(64)), publish: vi.fn(() => ({ ok: true })), ask: vi.fn(), unask: vi.fn() }, core = fakeCore({ cloud })
+  const cloud = { checkpoint: vi.fn(() => 'a'.repeat(64)), publish: vi.fn(() => ({ ok: true as const })), ask: vi.fn(), unask: vi.fn() }, core = fakeCore({ cloud })
   expect(await answerExperimentQuery(core, new Set(['cloud']), 'cloud', query, payload, undefined,
     { ownsRequest: () => false })).toEqual({ error: 'SERVICE_UNAVAILABLE' })
   for (const effect of Object.values(cloud)) expect(effect).not.toHaveBeenCalled()
 })
 
 it.each(queries)('%s refuses a process query without connection authority', async query => {
-  const cloud = { checkpoint: vi.fn(() => 'a'.repeat(64)), publish: vi.fn(() => ({ ok: true })), ask: vi.fn(), unask: vi.fn() }, core = fakeCore({ cloud })
+  const cloud = { checkpoint: vi.fn(() => 'a'.repeat(64)), publish: vi.fn(() => ({ ok: true as const })), ask: vi.fn(), unask: vi.fn() }, core = fakeCore({ cloud })
   expect(await answerExperimentQuery(core, new Set(['cloud']), 'cloud', query, payload))
     .toEqual({ error: 'SERVICE_UNAVAILABLE' })
   for (const effect of Object.values(cloud)) expect(effect).not.toHaveBeenCalled()

@@ -232,8 +232,14 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
           if (typeof result.fingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(result.fingerprint)) throw new Error('CLOUD_PUBLICATION_UNAVAILABLE')
           return result.fingerprint
         },
-        ask: (agentId, requestId, question) => { void ask('cloud_ask', { agentId, questionId: requestId, question }).catch(() => {}) },
-        unask: (agentId, requestId) => { void ask('cloud_unask', { agentId, questionId: requestId }).catch(() => {}) },
+        ask: async (agentId, requestId, question) => {
+          const result = await ask('cloud_ask', { agentId, questionId: requestId, question })
+          if (result.error) throw new Error('CLOUD_PUBLICATION_UNAVAILABLE')
+        },
+        unask: async (agentId, requestId) => {
+          const result = await ask('cloud_unask', { agentId, questionId: requestId })
+          if (result.error) throw new Error('CLOUD_PUBLICATION_UNAVAILABLE')
+        },
       } satisfies CloudCore,
     } : {}),
   }

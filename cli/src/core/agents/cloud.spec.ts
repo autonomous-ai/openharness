@@ -3,7 +3,7 @@ import { CLOUD_DOWN, type CloudPort } from '../api.js'
 import type { CloudHarness } from '../../lib/cloudAgents.js'
 import { createCloudAgents } from './cloud.js'
 import { cloudCard } from '../../cloud/service.js'
-import { createCloudCards } from '../../cloud/cards.js'
+import { emptyPresentation, prepareCloudCards } from '../../cloud/cards.js'
 
 /** A row as the cloud service publishes it: what it said, and those words as a card reads them (cloud/service.ts). */
 const harness = (over: Partial<CloudHarness> = {}): CloudHarness => {
@@ -23,8 +23,14 @@ function setup(port: CloudPort | null = null) {
 
 /** The component's real transition producer feeding the core's private publication boundary. */
 function preparedSetup() {
-  const test = setup(), cards = createCloudCards(), publish = test.cloud.doors.publish
-  test.cloud.doors.publish = rows => publish(rows, cards(rows))
+  const test = setup(), publish = test.cloud.doors.publish
+  let accepted = emptyPresentation()
+  test.cloud.doors.publish = rows => {
+    const prepared = prepareCloudCards(rows, accepted)
+    const result = publish(rows, prepared.cards)
+    accepted = prepared.next
+    return result
+  }
   return test
 }
 
@@ -61,7 +67,7 @@ describe('agents a service owns', () => {
       expect(clients.sendCommander).not.toHaveBeenCalled()
     }
     cloud.doors.publish(next, [card])
-    expect(clients.sendCommander).toHaveBeenLastCalledWith(card)
+    expect(clients.sendCommander).toHaveBeenNthCalledWith(2, card)
     expect(cloud.frames()).toHaveLength(2)
     clients.send.mockClear(); clients.sendCommander.mockClear()
     cloud.doors.publish([], [card])

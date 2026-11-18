@@ -178,3 +178,34 @@ Retained core / component restart / replacement core; drop before send / apply t
 
 
 The component-owned bounded journal and ordered admission/backpressure were approved before runtime changes. Explicit operator recovery is required; the implementation must not silently reset uncertain history.
+
+## Implemented recovery shape
+
+The component journal stores accepted and pending presentation checkpoints. Each contains a fingerprint of the
+normalized ordered owner image and, per owner, its row fingerprint, busy flag and last-notified text. A checksum covers those checkpoint fields so a damaged but still syntactically valid checkpoint is refused. It does
+not duplicate full provider catalogs on disk. A same-image publication must have exactly the same transition
+checkpoint because unchanged rows advance nothing. Recovery matches the accepted image before the pending
+image; either match has identical state in the same-image case. A verified empty core starts quietly from saved
+provider rows, whether the prior pending image was also empty or the daemon was explicitly restarted.
+
+The existing saved `harnesses` array remains unchanged in format; optional `publication` metadata is additive.
+Before sending a publication the component atomically renames a new copy of that file containing its pending
+checkpoint. A pure optimistic working publication reuses the last durable provider snapshot. Other harnesses'
+saves also preserve an in-flight optimistic harness's previous provider state until its provider accepts input.
+Healthy output is a single ordered queue shared by rows and questions. Row actions hold deltas; initial recovery
+seeds the one active wire image rather than enqueuing a full catalog. The component bounds output to 64 actions
+and 6 MiB, reserves six actions and 448 KiB before a provider operation, and reserves image growth too. There is
+no admission waiter list. A ten-second output deadline holds further sends until a physical reconnection.
+The process callback revokes the component generation on disconnect, and core checks the existing current
+service authority immediately before each effect. Every reply is checked again against the component generation.
+
+A nonempty retained core with missing, corrupt or unmatched journal metadata is
+`CLOUD_PUBLICATION_RECOVERY_REQUIRED`, exposed by the existing `cloud_agents` status and a content-free log.
+Restarting only Cloud does not clear it. The operator recovery is the existing explicit `harness start --restart` command: a verified empty core then reconstructs presentation quietly from intact saved provider
+sessions. The component never restarts core automatically, deletes provider sessions, or guesses which completion
+was delivered. A corrupt provider state file remains unavailable; presentation recovery does not erase it.
+
+Normalized owner rows are bounded before entering the ordered queue. Public application frames retain the same
+core normalization and card format. This private cohort now carries that normalized projection on its local
+publication door; render-cache card objects are retained where their normalized value is unchanged. Whole-cohort
+rollback remains required, including provider-file metadata being ignored by older readers.

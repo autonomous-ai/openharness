@@ -1,38 +1,43 @@
 /** Cloud turn transitions belong to the component that owns these agents. */
 import type { TurnCardFrame } from '../core/api.js'
-import type { CloudHarness } from '../lib/cloudAgents.js'
+import { cloudFingerprint, type CloudHarness } from '../lib/cloudAgents.js'
 
-export function createCloudCards() {
-  let previous = new Map<string, { busy: boolean; told: string }>()
-  return (harnesses: readonly CloudHarness[], reconnect = false): TurnCardFrame[] => {
-    if (reconnect) previous.clear()
-    const next = new Map<string, { busy: boolean; told: string }>()
-    const cards: TurnCardFrame[] = []
-    for (const harness of harnesses) {
-      const before = previous.get(harness.agentId)
-      const busy = harness.state === 'working' || harness.state === 'starting'
-      const state = { busy, told: before?.told ?? harness.said ?? '' }
-      next.set(harness.agentId, state)
-      const card = (payload: Record<string, unknown>): void => {
-        cards.push({ type: 'commander_event', agentId: harness.agentId, dbSessionId: harness.agentId,
-          ...(payload.kind === 'summary' ? { name: harness.name } : {}), payload })
-      }
-      // A stopped harness has no tile. First-seen answers are history, not new notifications.
-      if (harness.state === 'stopped') continue
-      if (busy) {
-        if (!before?.busy) card({ kind: 'processing', text: harness.activity ?? 'Working…' })
-      } else if (before) {
-        if (harness.said && harness.card && harness.said !== state.told) {
-          state.told = harness.said
-          card({ kind: 'summary', ...harness.card, ...(harness.state === 'failed' ? { failed: true } : {}),
-            notification: harness.state === 'needs_input' ? null : { id: `${harness.agentId}:${harness.messages}`, kind: 'done' } })
-        } else if (before.busy) {
-          card(harness.state === 'failed' ? { kind: 'error', text: harness.activity ?? 'It stopped with an error.' }
-            : { kind: 'done', text: 'done' })
-        }
+export interface CloudPresentation {
+  fingerprint: string
+  owners: Array<{ agentId: string; fingerprint: string; busy: boolean; told: string }>
+}
+
+export const emptyPresentation = (): CloudPresentation => ({ fingerprint: cloudFingerprint([]), owners: [] })
+
+/** Preparing is pure: only acknowledged or reconciled publication advances the caller's checkpoint. */
+export function prepareCloudCards(harnesses: readonly CloudHarness[], previous: CloudPresentation = emptyPresentation()) {
+  const beforeById = new Map(previous.owners.map(owner => [owner.agentId, owner]))
+  const next: CloudPresentation = { fingerprint: cloudFingerprint(harnesses), owners: [] }
+  const cards: TurnCardFrame[] = []
+  for (const harness of harnesses) {
+    const before = beforeById.get(harness.agentId)
+    const busy = harness.state === 'working' || harness.state === 'starting'
+    const state = { agentId: harness.agentId, fingerprint: cloudFingerprint([harness]), busy, told: before?.told ?? harness.said ?? '' }
+    next.owners.push(state)
+    // Core suppresses unchanged rows. A same-image publication therefore cannot change notification history.
+    if (before?.fingerprint === state.fingerprint) continue
+    const card = (payload: Record<string, unknown>): void => {
+      cards.push({ type: 'commander_event', agentId: harness.agentId, dbSessionId: harness.agentId,
+        ...(payload.kind === 'summary' ? { name: harness.name } : {}), payload })
+    }
+    if (harness.state === 'stopped') continue
+    if (busy) {
+      if (!before?.busy) card({ kind: 'processing', text: harness.activity ?? 'Working…' })
+    } else if (before) {
+      if (harness.said && harness.card && harness.said !== state.told) {
+        state.told = harness.said
+        card({ kind: 'summary', ...harness.card, ...(harness.state === 'failed' ? { failed: true } : {}),
+          notification: harness.state === 'needs_input' ? null : { id: `${harness.agentId}:${harness.messages}`, kind: 'done' } })
+      } else if (before.busy) {
+        card(harness.state === 'failed' ? { kind: 'error', text: harness.activity ?? 'It stopped with an error.' }
+          : { kind: 'done', text: 'done' })
       }
     }
-    previous = next
-    return cards
   }
+  return { cards, next }
 }
