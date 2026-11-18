@@ -9,8 +9,9 @@
  * The Cloud component prepares its cards. Core admits them against the published owners and forwards them.
  */
 import type { CloudCore, CloudPort, CloudResult, CloudQuestionClose, CloudQuestionPresentation, TurnCardFrame } from '../api.js'
-import { CLOUD_DOWN } from '../api.js'
+import { CLOUD_DOWN, CLOUD_REPLY_DOWN, CLOUD_ANSWER_DOWN } from '../api.js'
 import { cloudAgentFrame, cloudFingerprint, cloudHarnessIn, isCloudAgent, type CloudAgentFrame, type CloudHarness } from '../../lib/cloudAgents.js'
+import { boundedJsonBytes } from '../../lib/boundedJsonBytes.js'
 import type { QuestionAnswerResult } from '../../lib/questionController.js'
 
 type Frame = { type: string; agentId?: string; dbSessionId?: string; payload: Record<string, unknown> }
@@ -18,6 +19,8 @@ type Frame = { type: string; agentId?: string; dbSessionId?: string; payload: Re
 export interface CloudAgentsDeps {
   /** The cloud service's port, or null while it is off. */
   port: () => CloudPort | null
+  /** Existing bounded first-start readiness; capture authority only after the first connection exists. */
+  whenStarting?: () => Promise<boolean> | null
   /** Every client (`send`), the dial (`sendCommander`) and the windows on this computer (`sendLocal`). */
   clients: { send(frame: Frame): void; sendCommander(frame: Frame): void; sendLocal(frame: Frame): void }
   /** What is still being asked, by agent, for a window that connects later (core/questions.ts). */
@@ -25,7 +28,6 @@ export interface CloudAgentsDeps {
   log?: (line: string) => void
 }
 
-const DOWN = async (): Promise<typeof CLOUD_DOWN> => CLOUD_DOWN
 const busy = (harness: CloudHarness): boolean => harness.state === 'working' || harness.state === 'starting'
 /** Legacy stored rows are rendered by the component before this private cohort publishes them. */
 const recapOf = (harness: CloudHarness) => harness.said ? harness.card ?? null : null
@@ -68,7 +70,19 @@ function admittedQuestion(value: unknown, agentId: string, requestId: string): v
   return Buffer.byteLength(JSON.stringify(value)) <= 22 * 1024
 }
 
-export function createCloudAgents({ port, clients, openQuestions, log = (line) => console.log(line) }: CloudAgentsDeps) {
+const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
+const refusal = (value: unknown): boolean => record(value) && typeof value.error === 'string' && !!value.error
+  && (value.detail === undefined || typeof value.detail === 'string') && Object.keys(value).every(key => key === 'error' || key === 'detail')
+const agentReply = (value: unknown): value is CloudAgentFrame => record(value) && typeof value.id === 'string'
+  && value.id.startsWith('cloud_') && value.id.length <= 80 && value.sessionId === value.id && isCloudAgent(value.engine)
+  && value.location === 'cloud' && typeof value.name === 'string' && value.name.length <= 120 && typeof value.createdAt === 'string'
+const answerReply = (value: unknown): boolean => fields(value, ['ok']) && value.ok === true
+  || fields(value, ['ok', 'error', 'detail']) && value.ok === false
+    && (value.error === 'STALE_QUESTION' || value.error === 'ANSWER_FAILED') && typeof value.detail === 'string'
+const stopReply = (value: unknown): boolean => refusal(value) || record(value) && value.deleted === true
+  && (value.detail === undefined || typeof value.detail === 'string') && Object.keys(value).every(key => key === 'deleted' || key === 'detail')
+
+export function createCloudAgents({ port, whenStarting, clients, openQuestions, log = (line) => console.log(line) }: CloudAgentsDeps) {
   let harnesses = new Map<string, CloudHarness>()
   /** One accepted request per owner; its original close destination survives reconnects and replacement. */
   const asked = new Map<string, { agentId: string; close: CloudQuestionClose; dial: boolean }>()
@@ -152,9 +166,22 @@ export function createCloudAgents({ port, clients, openQuestions, log = (line) =
     },
   }
 
-  const call = async <T>(work: (cloud: CloudPort) => Promise<T>, fallback: () => Promise<T>): Promise<T> => {
+  const call = async <T>(work: (cloud: CloudPort) => Promise<T>, fallback: T, admit: (value: unknown) => boolean,
+    current = () => true, apply = (_value: T): void => {}): Promise<T> => {
+    const starting = whenStarting?.()
+    if (starting && !await starting) return fallback
     const cloud = port()
-    return cloud ? work(cloud) : fallback()
+    if (!cloud || !current()) return fallback
+    const result = await work(cloud)
+    // The final physical-connection and owner check shares the synchronous continuation with its effects.
+    if (port() !== cloud || !current()) return fallback
+    if (boundedJsonBytes(result, 256 * 1024) === null || !admit(result)) {
+      log('[cloud] CLOUD_RESPONSE_INVALID')
+      return fallback
+    }
+    const accepted: T = JSON.parse(JSON.stringify(result))
+    apply(accepted)
+    return accepted
   }
 
   return {
@@ -193,12 +220,13 @@ export function createCloudAgents({ port, clients, openQuestions, log = (line) =
     /** `agent_create` for a cloud agent, answered as the socket answers one (`{ agent }`, or the refusal); null for any other engine. */
     create(payload: Record<string, unknown>): Promise<Record<string, unknown>> | null {
       if (!isCloudAgent(payload.engine)) return null
-      return call((cloud) => cloud.create(payload), DOWN).then((result) => (result.ok ? { agent: result.agent } : { error: result.error, ...(result.detail ? { detail: result.detail } : {}) }))
+      return call(cloud => cloud.create(payload), CLOUD_REPLY_DOWN, result => refusal(result)
+        || fields(result, ['agent']) && agentReply(result.agent) && result.agent.engine === payload.engine)
     },
     /** Words for a cloud harness; null when it is not one. */
     deliver(agentId: string, text: string): Promise<CloudResult> | null {
       if (!harnesses.has(agentId)) return null
-      return call((cloud) => cloud.deliver(agentId, text), DOWN)
+      return call(cloud => cloud.deliver(agentId, text), CLOUD_DOWN, result => record(result) && (result.ok === true || result.ok === false && typeof result.error === 'string'))
     },
     /** `question_response` to a cloud harness's question, answered as a terminal agent's is; null when it is not one. */
     answer(payload: { requestId?: unknown; answers?: unknown }): Promise<QuestionAnswerResult> | null {
@@ -207,9 +235,7 @@ export function createCloudAgents({ port, clients, openQuestions, log = (line) =
       if (!agentId || !harnesses.has(agentId) || currentRequest(agentId) !== requestId) return null
       const answers = Object.fromEntries(Object.entries(payload.answers && typeof payload.answers === 'object' ? payload.answers : {})
         .filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
-      return call((cloud) => cloud.answer(agentId, requestId, answers), DOWN)
-        .then((result): QuestionAnswerResult => (result.ok ? { ok: true }
-          : { ok: false, error: result.error === 'STALE_QUESTION' ? 'STALE_QUESTION' : 'ANSWER_FAILED', detail: result.detail ?? '' }))
+      return call(cloud => cloud.answer(agentId, requestId, answers), CLOUD_ANSWER_DOWN, answerReply)
     },
     /**
      * `agent_update` for a cloud harness, answered as a terminal agent's is (core/agents/update.ts): its frame
@@ -225,14 +251,19 @@ export function createCloudAgents({ port, clients, openQuestions, log = (line) =
       }
       const name = typeof payload.name === 'string' ? payload.name.trim().slice(0, 120) : ''
       if (!name) return Promise.resolve({ error: 'MISSING_NAME' })
-      return call((cloud) => cloud.rename(agentId, name), DOWN).then((result) => {
-        if (!result.ok) return { error: result.error, ...(result.detail ? { detail: result.detail } : {}) }
-        // As a terminal agent's rename is told; the service's next list says it again, which changes nothing.
-        const renamed: Frame = { type: 'agent_renamed', payload: { agentId, name, engine: harness.agent } }
-        clients.send(renamed)
-        clients.sendCommander(renamed)
-        return { agent: cloudAgentFrame({ ...harness, name }) }
-      })
+      const current = () => {
+        const owner = harnesses.get(agentId)
+        return owner?.agent === harness.agent && owner.createdAt === harness.createdAt
+      }
+      return call(cloud => cloud.rename(agentId, name, JSON.parse(JSON.stringify(harness))), CLOUD_REPLY_DOWN,
+        result => refusal(result) || fields(result, ['agent', 'renamed']) && agentReply(result.agent)
+          && result.agent.id === agentId && result.agent.engine === harness.agent && result.agent.createdAt === harness.createdAt
+          && result.agent.name === name && fields(result.renamed, ['type', 'payload']) && result.renamed.type === 'agent_renamed'
+          && fields(result.renamed.payload, ['agentId', 'name', 'engine']) && result.renamed.payload.agentId === agentId
+          && result.renamed.payload.name === name && result.renamed.payload.engine === harness.agent,
+        current, result => {
+          if ('renamed' in result) { clients.send(result.renamed); clients.sendCommander(result.renamed) }
+        }).then(result => 'agent' in result ? { agent: result.agent } : result)
     },
     /**
      * Stop Harness for a cloud harness, answered as `agent_delete` is; null when it is not one. The socket waits
@@ -241,8 +272,7 @@ export function createCloudAgents({ port, clients, openQuestions, log = (line) =
      */
     stop(agentId: string, quickMs = 3_000): Promise<Record<string, unknown>> | null {
       if (!harnesses.has(agentId)) return null
-      const stopped = call((cloud) => cloud.stopHarness(agentId), DOWN)
-        .then((result) => (result.ok ? { deleted: true, ...(result.detail ? { detail: result.detail } : {}) } : { error: result.error, ...(result.detail ? { detail: result.detail } : {}) }))
+      const stopped = call(cloud => cloud.stopHarness(agentId), CLOUD_REPLY_DOWN, stopReply)
       let timer: ReturnType<typeof setTimeout> | undefined
       const stopping = new Promise<Record<string, unknown>>((resolve) => {
         timer = setTimeout(() => resolve({ deleted: true, detail: 'Stopping. Its pane says when it has.' }), quickMs)

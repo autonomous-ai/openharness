@@ -10,7 +10,8 @@ const owner: CloudHarness = { agentId: 'cloud_1', agent: 'devin-cloud', name: 'F
 function fixture() {
   const clients = { send: vi.fn(), sendCommander: vi.fn(), sendLocal: vi.fn() }, openQuestions = new Map<string, Record<string, unknown>>()
   const answer = vi.fn(async () => ({ ok: true as const }))
-  const cloud = createCloudAgents({ clients, openQuestions, port: () => ({ answer }) as never, log: () => {} })
+  const port = { answer }
+  const cloud = createCloudAgents({ clients, openQuestions, port: () => port as never, log: () => {} })
   cloud.doors.publish([owner])
   return { cloud, clients, openQuestions, answer }
 }

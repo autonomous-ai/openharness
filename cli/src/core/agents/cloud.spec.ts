@@ -1,7 +1,7 @@
 import { cloudQuestionClose, prepareCloudQuestion } from '../../cloud/questions.js'
 import { describe, expect, it, vi } from 'vitest'
 import { CLOUD_DOWN, type CloudPort } from '../api.js'
-import type { CloudHarness } from '../../lib/cloudAgents.js'
+import { cloudAgentFrame, type CloudHarness } from '../../lib/cloudAgents.js'
 import { createCloudAgents } from './cloud.js'
 import { cloudCard } from '../../cloud/service.js'
 import { emptyPresentation, prepareCloudCards } from '../../cloud/cards.js'
@@ -36,11 +36,11 @@ function preparedSetup() {
 }
 
 const port = (): CloudPort & { [K in keyof CloudPort]: ReturnType<typeof vi.fn> } => ({
-  create: vi.fn(async () => ({ ok: true as const, agent: { id: 'cloud_2' } })),
+  create: vi.fn(async () => ({ agent: cloudAgentFrame(harness({ agentId: 'cloud_2', agent: 'fo' })) })),
   deliver: vi.fn(async () => ({ ok: true as const })),
   answer: vi.fn(async () => ({ ok: true as const })),
-  rename: vi.fn(async () => ({ ok: true as const })),
-  stopHarness: vi.fn(async () => ({ ok: true as const, detail: 'Fo keeps working on its own.' })),
+  rename: vi.fn(async (agentId: string, name: string, before: CloudHarness) => ({ agent: cloudAgentFrame({ ...before, name }), renamed: { type: 'agent_renamed' as const, payload: { agentId, name, engine: before.agent } } })),
+  stopHarness: vi.fn(async () => ({ deleted: true as const, detail: 'Fo keeps working on its own.' })),
 })
 
 describe('agents a service owns', () => {
@@ -225,10 +225,10 @@ describe('agents a service owns', () => {
     const { cloud } = setup(service)
     cloud.doors.publish([harness()])
     expect(cloud.create({ engine: 'claude' })).toBeNull()
-    expect(await cloud.create({ engine: 'fo', prompt: 'x' })).toEqual({ agent: { id: 'cloud_2' } })
-    service.create.mockResolvedValueOnce({ ok: false, error: 'NOT_CONNECTED', detail: 'Connect Fo' })
+    expect(await cloud.create({ engine: 'fo', prompt: 'x' })).toEqual({ agent: cloudAgentFrame(harness({ agentId: 'cloud_2', agent: 'fo' })) })
+    service.create.mockResolvedValueOnce({ error: 'NOT_CONNECTED', detail: 'Connect Fo' })
     expect(await cloud.create({ engine: 'fo' })).toEqual({ error: 'NOT_CONNECTED', detail: 'Connect Fo' })
-    service.create.mockResolvedValueOnce({ ok: false, error: 'X' })
+    service.create.mockResolvedValueOnce({ error: 'X' })
     expect(await cloud.create({ engine: 'fo' })).toEqual({ error: 'X' })
 
     expect(cloud.deliver('a1', 'hi')).toBeNull()
@@ -240,13 +240,13 @@ describe('agents a service owns', () => {
     cloud.doors.ask('cloud_1', 'cloud_q_1', prepareCloudQuestion('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] }))
     expect(await cloud.answer({ requestId: 'cloud_q_1', answers: { answer: 'main', other: 3 } })).toEqual({ ok: true })
     expect(service.answer).toHaveBeenCalledWith('cloud_1', 'cloud_q_1', { answer: 'main' })
-    service.answer.mockResolvedValueOnce({ ok: false, error: 'STALE_QUESTION', detail: 'gone' }).mockResolvedValueOnce({ ok: false, error: 'BUSY' })
+    service.answer.mockResolvedValueOnce({ ok: false, error: 'STALE_QUESTION', detail: 'gone' }).mockResolvedValueOnce({ ok: false, error: 'ANSWER_FAILED', detail: '' })
     expect(await cloud.answer({ requestId: 'cloud_q_1', answers: 'x' })).toEqual({ ok: false, error: 'STALE_QUESTION', detail: 'gone' })
     expect(await cloud.answer({ requestId: 'cloud_q_1' })).toEqual({ ok: false, error: 'ANSWER_FAILED', detail: '' })
 
     expect(cloud.stop('a1')).toBeNull()
     expect(await cloud.stop('cloud_1')).toEqual({ deleted: true, detail: 'Fo keeps working on its own.' })
-    service.stopHarness.mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ok: false, error: 'CLOUD_FAILED', detail: 'down' }).mockResolvedValueOnce({ ok: false, error: 'X' })
+    service.stopHarness.mockResolvedValueOnce({ deleted: true }).mockResolvedValueOnce({ error: 'CLOUD_FAILED', detail: 'down' }).mockResolvedValueOnce({ error: 'X' })
     expect(await cloud.stop('cloud_1')).toEqual({ deleted: true })
     expect(await cloud.stop('cloud_1')).toEqual({ error: 'CLOUD_FAILED', detail: 'down' })
     expect(await cloud.stop('cloud_1')).toEqual({ error: 'X' })
@@ -261,13 +261,13 @@ describe('agents a service owns', () => {
     expect(cloud.update({ agentId: 'a1', name: 'x' })).toBeNull()
     expect(cloud.update({})).toBeNull()
     expect(await cloud.update({ agentId: 'cloud_1', name: '  Trip planning  ' })).toEqual({ agent: expect.objectContaining({ id: 'cloud_1', name: 'Trip planning' }) })
-    expect(service.rename).toHaveBeenCalledWith('cloud_1', 'Trip planning')
+    expect(service.rename).toHaveBeenCalledWith('cloud_1', 'Trip planning', expect.objectContaining({ agentId: 'cloud_1', name: 'hi' }))
     const renamed = { type: 'agent_renamed', payload: { agentId: 'cloud_1', name: 'Trip planning', engine: 'fo' } }
     expect(clients.send).toHaveBeenCalledWith(renamed)
     expect(clients.sendCommander).toHaveBeenCalledWith(renamed)
     expect(await cloud.update({ agentId: 'cloud_1', name: ' ' })).toEqual({ error: 'MISSING_NAME' })
     expect(await cloud.update({ agentId: 'cloud_1', name: 3 })).toEqual({ error: 'MISSING_NAME' })
-    service.rename.mockResolvedValueOnce({ ok: false, error: 'UNKNOWN_AGENT', detail: 'gone' }).mockResolvedValueOnce({ ok: false, error: 'X' })
+    service.rename.mockResolvedValueOnce({ error: 'UNKNOWN_AGENT', detail: 'gone' }).mockResolvedValueOnce({ error: 'X' })
     expect(await cloud.update({ agentId: 'cloud_1', name: 'y' })).toEqual({ error: 'UNKNOWN_AGENT', detail: 'gone' })
     expect(await cloud.update({ agentId: 'cloud_1', name: 'y' })).toEqual({ error: 'X' })
     // An app opening it: its frame as it stands, nothing told.

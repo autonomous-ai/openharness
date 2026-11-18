@@ -19,7 +19,7 @@ describe('cloud agents in the core\'s process', () => {
     expect(Object.keys(requests).sort()).toEqual([...CLOUD_REQUESTS].sort())
     await vi.waitFor(() => expect(cloud.publish).toHaveBeenCalledWith([], []))
     expect(ports.cloud).toMatchObject({ create: expect.any(Function), deliver: expect.any(Function), answer: expect.any(Function), rename: expect.any(Function), stopHarness: expect.any(Function), stop: expect.any(Function) })
-    expect(await ports.cloud!.create({ engine: 'claude' })).toMatchObject({ ok: false, error: 'INVALID_ENGINE' })
+    expect(await ports.cloud!.create({ engine: 'claude' })).toMatchObject({ error: 'INVALID_ENGINE' })
     ;(ports.cloud as unknown as { stop: () => void }).stop()
   })
 

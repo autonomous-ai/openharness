@@ -20,16 +20,12 @@ function result(answer: Record<string, unknown>): CloudResult {
 
 export function createCloudLink(call: CallCloud): CloudPort {
   return {
-    create: async (request) => {
-      const answer = await call('create', request)
-      if (answer.ok === true && answer.agent && typeof answer.agent === 'object') return { ok: true, agent: answer.agent as Record<string, unknown> }
-      const refused = result(answer)
-      return refused.ok ? DOWN : refused
-    },
+    // Prepared replies are admitted by the owner boundary for both inline and IPC calls.
+    create: async request => await call('create', request) as Awaited<ReturnType<CloudPort['create']>>,
     deliver: async (agentId, text) => result(await call('deliver', { agentId, text })),
     // `questionId`: a call's own `requestId` is the link's, written over whatever the payload carried.
-    answer: async (agentId, requestId, answers) => result(await call('answer', { agentId, questionId: requestId, answers })),
-    rename: async (agentId, name) => result(await call('rename', { agentId, name })),
-    stopHarness: async (agentId) => result(await call('stopHarness', { agentId })),
+    answer: async (agentId, requestId, answers) => await call('answer', { agentId, questionId: requestId, answers }) as Awaited<ReturnType<CloudPort['answer']>>,
+    rename: async (agentId, name, before) => await call('rename', { agentId, name, before }) as Awaited<ReturnType<CloudPort['rename']>>,
+    stopHarness: async agentId => await call('stopHarness', { agentId }) as Awaited<ReturnType<CloudPort['stopHarness']>>,
   }
 }

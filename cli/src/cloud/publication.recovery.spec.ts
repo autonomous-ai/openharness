@@ -54,10 +54,10 @@ function fixture() {
   let service = makeService()
   const completions = () => clients.sendCommander.mock.calls.map(([frame]) => frame)
     .filter(frame => frame.type === 'commander_event' && frame.payload.notification?.kind === 'done')
-  return { dataDir, clients, completions, adapter, publicationCalls: () => publicationCalls, poll: () => poll!(), get core() { return core }, get service() { return service },
+  return { row: () => JSON.parse(readFileSync(join(dataDir, 'cloud/harnesses.json'), 'utf8')).harnesses[0].harness, dataDir, clients, completions, adapter, publicationCalls: () => publicationCalls, poll: () => poll!(), get core() { return core }, get service() { return service },
     async create() {
       service.republish()
-      expect((await service.port.create({ engine: 'devin-cloud', prompt: 'fixture' })).ok).toBe(true)
+      expect(await service.port.create({ engine: 'devin-cloud', prompt: 'fixture' })).toHaveProperty('agent')
       await vi.waitFor(() => expect(core.frames()[0]?.cloud.state).toBe('working'))
       return core.frames()[0].id
     },
@@ -96,7 +96,7 @@ it('adopts a completion with a lost acknowledgement before applying a later rena
   try {
     const id = await f.create(); f.dropAck(); await f.complete()
     expect(f.completions()).toHaveLength(1)
-    await f.service.port.rename(id, 'Renamed')
+    await f.service.port.rename(id, 'Renamed', f.row())
     f.restartComponent(); f.reconnect()
     await vi.waitFor(() => expect(f.core.frames()[0]?.name).toBe('Renamed'))
     expect(f.completions()).toHaveLength(1)
@@ -112,7 +112,7 @@ it.each(['missing', 'corrupt', 'unmatched', 'damaged checkpoint'] as const)('hol
     f.restartComponent(); f.reconnect()
     await vi.waitFor(async () => expect(await f.service.requests.cloud_agents({}, { owner: true, local: true }))
       .toMatchObject({ error: 'CLOUD_PUBLICATION_RECOVERY_REQUIRED' }))
-    expect(await f.service.port.rename(id, 'Must not be applied')).toMatchObject({ ok: false, error: 'CLOUD_PUBLICATION_RECOVERY_REQUIRED' })
+    expect(await f.service.port.rename(id, 'Must not be applied', f.row())).toMatchObject({ error: 'CLOUD_PUBLICATION_RECOVERY_REQUIRED' })
     f.restartComponent(); f.reconnect()
     await vi.waitFor(async () => expect(await f.service.requests.cloud_agents({}, { owner: true, local: true }))
       .toMatchObject({ error: 'CLOUD_PUBLICATION_RECOVERY_REQUIRED' }))
@@ -134,7 +134,7 @@ it.each(['before send', 'after apply'] as const)('keeps optimistic working out o
     void f.service.port.deliver(id, 'Next work')
     await vi.waitFor(() => expect(f.adapter.send).toHaveBeenCalledOnce())
     // A concurrent ordinary save must not make the other operation's optimistic state durable either.
-    await f.service.port.rename(id, 'After crash')
+    await f.service.port.rename(id, 'After crash', f.row())
     const file = join(f.dataDir, 'cloud/harnesses.json')
     expect(JSON.parse(readFileSync(file, 'utf8')).harnesses[0].harness.state).toBe('idle')
     f.restartComponent(); f.reconnect()
@@ -153,13 +153,13 @@ it('reserves bounded output before starting or sending provider work', async () 
     f.adapter.start.mockImplementation(() => held)
     const starting = Array.from({ length: 10 }, () => f.service.port.create({ engine: 'devin-cloud', prompt: 'Queued work' }))
     await vi.waitFor(() => expect(f.adapter.start).toHaveBeenCalledTimes(11))
-    expect(await f.service.port.create({ engine: 'devin-cloud', prompt: 'Over capacity' })).toMatchObject({ ok: false, error: 'CLOUD_PUBLICATION_BUSY' })
+    expect(await f.service.port.create({ engine: 'devin-cloud', prompt: 'Over capacity' })).toMatchObject({ error: 'CLOUD_PUBLICATION_BUSY' })
     expect(await f.service.port.deliver(id, 'Must not send')).toMatchObject({ ok: false, error: 'CLOUD_PUBLICATION_BUSY' })
-    expect(await f.service.port.stopHarness(id)).toMatchObject({ ok: false, error: 'CLOUD_PUBLICATION_BUSY' })
+    expect(await f.service.port.stopHarness(id)).toMatchObject({ error: 'CLOUD_PUBLICATION_BUSY' })
     expect(f.adapter.send).not.toHaveBeenCalled()
     expect(f.adapter.stop).not.toHaveBeenCalled()
     release()
-    expect((await Promise.all(starting)).every(result => result.ok)).toBe(true)
+    expect((await Promise.all(starting)).every(result => 'agent' in result)).toBe(true)
   } finally { f.close() }
 })
 
@@ -174,7 +174,7 @@ it.each(['broken JSON', 'unknown provider row'] as const)('does not erase %s dur
     writeFileSync(file, damaged)
     f.restartDaemon(); f.reconnect()
     await vi.waitFor(async () => expect(await f.service.requests.cloud_agents({}, { owner: true, local: true })).toMatchObject({ error: 'CLOUD_STATE_UNAVAILABLE' }))
-    expect(await f.service.port.create({ engine: 'devin-cloud', prompt: 'No overwrite' })).toMatchObject({ ok: false, error: 'CLOUD_STATE_UNAVAILABLE' })
+    expect(await f.service.port.create({ engine: 'devin-cloud', prompt: 'No overwrite' })).toMatchObject({ error: 'CLOUD_STATE_UNAVAILABLE' })
     expect(readFileSync(file, 'utf8')).toBe(damaged)
   } finally { f.close() }
 })
@@ -199,7 +199,7 @@ it.each(['accepted', 'pending'] as const)('skips redundant writes/publications a
   const f = fixture()
   try {
     const id = await f.create(), file = join(f.dataDir, 'cloud/harnesses.json')
-    if (match === 'accepted') await f.service.port.rename(id, f.core.frames()[0].name)
+    if (match === 'accepted') await f.service.port.rename(id, f.core.frames()[0].name, f.row())
     const saved = JSON.parse(readFileSync(file, 'utf8'))
     expect(saved.publication[match].fingerprint).toBe(await f.core.doors.checkpoint())
     if (match === 'accepted') expect(saved.publication.pending).toBeNull()

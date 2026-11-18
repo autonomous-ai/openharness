@@ -1544,7 +1544,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const questions = asking.questions
   // Cloud harnesses (core/agents/cloud.ts): listed with the rest; their questions shown as the panes' are, and
   // answered through the cloud service.
-  cloudAgents = createCloudAgents({ port: () => ports.cloud, clients: backend, openQuestions: asking.openQuestions })
+  cloudAgents = createCloudAgents({ port: () => serviceHost?.isOff('cloud') ? null : ports.cloud,
+    whenStarting: () => outOfProcess.has('cloud') ? serviceLinks.whenStarting('cloud') : null,
+    clients: backend, openQuestions: asking.openQuestions })
   const cloud = cloudAgents
   backend.questionProvider = createQuestionResponse((payload) => cloud.answer(payload) ?? asking.answer(payload))
   // An app away from this desk is told what is still being asked as it connects (core/questions.ts).
@@ -1779,6 +1781,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // The gateway first hears what it starts from, then the shared tabs it held before a restart.
       if (service === 'gateway') { gatewayLink?.connected(); tabRelay.connected() }
       if (service === 'devices') devicesLink.connected()
+      if (service === 'cloud' && ports.cloud) ports.cloud = { ...ports.cloud }
       if (service === 'wifi') {
         ports.wifi = { ...wifiLink.port }
         void ports.wifi.resume({ focus: focusState.state().voice }).catch(() => {})
@@ -1811,6 +1814,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // Agent Messages' process went: its tabs' sockets have no one to hear them, and it opens them again as it starts.
       if (service === 'messages') tabRelay.closeOpened()
       if (service === 'devices') devicesLink.disconnected()
+      if (service === 'cloud' && ports.cloud) ports.cloud = { ...ports.cloud }
       if (service === 'wifi') ports.wifi = null
       if (service === 'recaps') recapsLink.disconnected()
       clientStreams.disconnected(service)

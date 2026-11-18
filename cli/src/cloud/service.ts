@@ -1,3 +1,4 @@
+import { prepareCloudPort, type CloudCreateResult } from './responses.js'
 /**
  * Cloud agents (docs/design/2026-10-11-cloud-agents.md): harnesses that run on their maker's servers. This
  * service owns them. It starts one through its adapter, keeps its conversation, looks at the maker while it
@@ -13,7 +14,7 @@
 import { randomBytes } from 'node:crypto'
 import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { CloudCore, CloudPort, CloudResult, ServiceRequests } from '../core/api.js'
+import type { CloudCore, CloudResult, ServiceRequests } from '../core/api.js'
 import { CLOUD_AGENT_IDS, CLOUD_AGENTS, SAID_MAX, cloudAgentFrame, cloudHarnessIn, cloudRequestRefusal, isCloudAgent, repositoryOf, type CloudAgentId, type CloudCard, type CloudHarness } from '../lib/cloudAgents.js'
 import { deriveTurnSummary } from '../lib/deviceRecap.js'
 import { splitSummary } from '../lib/recapReads.js'
@@ -287,9 +288,9 @@ export function startCloudService(options: CloudServiceOptions) {
     : { ok: false, error: 'CLOUD_FAILED', detail: `${agent ? CLOUD_AGENTS[agent].name : 'The cloud agent'} could not be reached. Try again.` }
 
   /** New Harnesses still starting at their maker, by `creationId`: a retry while one starts gets its answer. */
-  const creating = new Map<string, ReturnType<CloudPort['create']>>()
+  const creating = new Map<string, Promise<CloudCreateResult>>()
 
-  const create: CloudPort['create'] = (request) => {
+  const create = (request: Record<string, unknown>): Promise<CloudCreateResult> => {
     // The same New Harness asked again (a window that timed out waiting): the harness it made, not a second.
     const creationId = typeof request.creationId === 'string' && request.creationId ? request.creationId.slice(0, 120) : undefined
     if (!creationId) return createNew(request, undefined)
@@ -300,7 +301,7 @@ export function startCloudService(options: CloudServiceOptions) {
     return pending
   }
 
-  const createNew = async (request: Record<string, unknown>, creationId: string | undefined): ReturnType<CloudPort['create']> => {
+  const createNew = async (request: Record<string, unknown>, creationId: string | undefined): Promise<CloudCreateResult> => {
     const agent = request.engine
     if (!isCloudAgent(agent)) return { ok: false, error: 'INVALID_ENGINE', detail: 'That is not a cloud agent.' }
     const task = typeof request.prompt === 'string' ? request.prompt.trim() : ''
@@ -394,9 +395,10 @@ export function startCloudService(options: CloudServiceOptions) {
   })
 
   /** Only the name Harness shows: nothing is asked of the maker, and its activity time stands. */
-  const rename = async (agentId: string, name: string): Promise<CloudResult> => admitted(async reservation => {
+  const rename = async (agentId: string, name: string, before: CloudHarness): Promise<CloudResult> => admitted(async reservation => {
     const entry = entries.get(agentId)
     if (!entry) return { ok: false, error: 'UNKNOWN_AGENT', detail: 'That cloud harness is gone.' }
+    if (entry.harness.agent !== before.agent || entry.harness.createdAt !== before.createdAt) return { ok: false, error: 'UNKNOWN_AGENT', detail: 'That cloud harness is gone.' }
     const trimmed = name.trim().slice(0, 120)
     if (!trimmed) return { ok: false, error: 'MISSING_NAME', detail: 'A harness needs a name.' }
     entry.harness.name = trimmed
@@ -476,7 +478,7 @@ export function startCloudService(options: CloudServiceOptions) {
 
   return {
     requests,
-    port: { create, deliver, answer, rename, stopHarness } satisfies CloudPort,
+    port: prepareCloudPort({ create, deliver, answer, rename, stopHarness }),
     /** The core connected again (its restart): it is told every harness, and asked every open question, again. */
     republish(): Promise<void> { ready = stateUnavailable ? Promise.resolve() : publication.connect(); return ready },
     disconnected(): void { publication.disconnect() },

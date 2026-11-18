@@ -4,9 +4,10 @@ import type { ClientStreamQuota } from '../lib/clientStreamQueue.js'
 import type { ProductUsageMetric } from '../lib/productUsageContract.js'
 import type { PreparedHandoff, HandoffPermit, HandoffOutcome } from '../lib/handoffAuthority.js'
 import type { AgentTokenUsage, AgentUsageTarget } from '../lib/agentUsageWire.js'
-import type { CloudHarness } from '../lib/cloudAgents.js'
+import type { CloudAgentFrame, CloudHarness } from '../lib/cloudAgents.js'
 import type { SharedTrustPeer } from '../lib/sharedMachinesAccount.js'
 import type { GridAssignmentProcess, GridAssignmentAnswer } from '../lib/gridAssignmentWire.js'
+import type { QuestionAnswerResult } from '../lib/questionController.js'
 /**
  * The boundary the services stand on (docs/design/2026-10-03-harnessd.md, "The core boundary"):
  * `CoreApi` is what a service may ask of the core, and `CorePorts` is what the core asks of services.
@@ -1367,22 +1368,29 @@ export interface CloudCore {
 /** What the cloud service answers the core: done, or why not, in words a person reads. */
 export type CloudResult = { ok: true; detail?: string } | { ok: false; error: string; detail?: string }
 
+/** Component-prepared public replies; the port carries no provider records. */
+export type CloudRefusal = { error: string; detail?: string }
+export type CloudCreateReply = { agent: CloudAgentFrame } | CloudRefusal
+export type CloudRenameReply = { agent: CloudAgentFrame; renamed: { type: 'agent_renamed'; payload: { agentId: string; name: string; engine: string } } } | CloudRefusal
+export type CloudStopReply = { deleted: true; detail?: string } | CloudRefusal
+
 /** The core's calls into the cloud agents' service: a New Harness for one, a person's words, an answer, a new name, a Stop. */
 export interface CloudPort {
-  /** `agent_create` for a cloud agent: the new harness's frame, or why not. */
-  create(request: Record<string, unknown>): Promise<{ ok: true; agent: Record<string, unknown> } | { ok: false; error: string; detail?: string }>
+  create(request: Record<string, unknown>): Promise<CloudCreateReply>
   deliver(agentId: string, text: string): Promise<CloudResult>
-  answer(agentId: string, requestId: string, answers: Record<string, string>): Promise<CloudResult>
-  /** Rename Harness: the name Harness shows. The maker's own name for the work stays as it is. */
-  rename(agentId: string, name: string): Promise<CloudResult>
+  answer(agentId: string, requestId: string, answers: Record<string, string>): Promise<QuestionAnswerResult>
+  /** The captured accepted row preserves the caller's rename snapshot, without another retained catalogue. */
+  rename(agentId: string, name: string, before: CloudHarness): Promise<CloudRenameReply>
   /** Stop Harness. Not `stop`: a service host reads a port's `stop` as stopping the service itself. */
-  stopHarness(agentId: string): Promise<CloudResult>
+  stopHarness(agentId: string): Promise<CloudStopReply>
 }
 
 /** A call the cloud service could not take: it is off, failing, or slower than the core waits. */
 export const CLOUD_DOWN = { ok: false as const, error: 'SERVICE_UNAVAILABLE', detail: 'Cloud agents are not running here. Try again in a moment.' }
+export const CLOUD_REPLY_DOWN: CloudRefusal = { error: CLOUD_DOWN.error, detail: CLOUD_DOWN.detail }
+export const CLOUD_ANSWER_DOWN: QuestionAnswerResult = { ok: false, error: 'ANSWER_FAILED', detail: CLOUD_DOWN.detail }
 /** What the core gets when the cloud service fails: each call is refused with a reason, and nothing is lost but it. */
-export const CLOUD_FALLBACKS: PortFallbacks<CloudPort> = { create: later(CLOUD_DOWN), deliver: later(CLOUD_DOWN), answer: later(CLOUD_DOWN), rename: later(CLOUD_DOWN), stopHarness: later(CLOUD_DOWN) }
+export const CLOUD_FALLBACKS: PortFallbacks<CloudPort> = { create: later(CLOUD_REPLY_DOWN), deliver: later(CLOUD_DOWN), answer: later(CLOUD_ANSWER_DOWN), rename: later(CLOUD_REPLY_DOWN), stopHarness: later(CLOUD_REPLY_DOWN) }
 
 /** What a delivered turn answers: delivered, or refused with the machine's name and a reason a person can read. */
 export type SendResult = { ok: true } | { ok: false; machine: string; reason: string }

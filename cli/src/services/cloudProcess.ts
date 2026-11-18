@@ -9,6 +9,7 @@
  * (services/processCoreApi.ts `cloud`), and told again whole each time it connects: a core that restarted
  * knows none of it.
  */
+import type { CloudHarness } from '../lib/cloudAgents.js'
 import { emptyPorts } from '../core/api.js'
 import { startCloudOn } from './cloud.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
@@ -47,7 +48,7 @@ export function runCloudService(options: CloudProcessOptions): ServiceProcess {
       create: (payload) => port.create(payload),
       deliver: (payload) => port.deliver(text(payload.agentId), text(payload.text)),
       answer: (payload) => port.answer(text(payload.agentId), text(payload.questionId), answers(payload.answers)),
-      rename: (payload) => port.rename(text(payload.agentId), text(payload.name)),
+      rename: (payload) => port.rename(text(payload.agentId), text(payload.name), payload.before as CloudHarness),
       stopHarness: (payload) => port.stopHarness(text(payload.agentId)),
     },
     onConnected: (connection) => { core = connection; void service.republish() },

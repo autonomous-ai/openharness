@@ -1,7 +1,7 @@
 import { SERVICE_HOSTS } from '../harnessd/services.js'
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { captureSessionSnapshot, SESSION_SNAPSHOT_MAX_BYTES, SESSION_SNAPSHOT_MAX_ROWS, AGENT_BROWSER_REQUESTS, CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_SYNC_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, sendLocalWindow, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, GATEWAY_REQUESTS, LANE_OFF, MACHINE_ADDON_REQUESTS, PAIR_WAIT_MS, SERVICE_HTTP_ROUTES, SERVICE_WS_FRAMES, WIFI_REQUESTS, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, WIFI_FALLBACKS, WIFI_OFF, WORKSPACES_FALLBACKS, WORKSPACES_OFF, WORKSPACES_UNAVAILABLE, type CoreApiDeps } from './api.js'
+import { captureSessionSnapshot, SESSION_SNAPSHOT_MAX_BYTES, SESSION_SNAPSHOT_MAX_ROWS, AGENT_BROWSER_REQUESTS, CLOUD_DOWN, CLOUD_REPLY_DOWN, CLOUD_ANSWER_DOWN, CLOUD_FALLBACKS, CONNECTOR_SYNC_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, sendLocalWindow, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, GATEWAY_REQUESTS, LANE_OFF, MACHINE_ADDON_REQUESTS, PAIR_WAIT_MS, SERVICE_HTTP_ROUTES, SERVICE_WS_FRAMES, WIFI_REQUESTS, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, TURN_DELIVERERS, WIFI_FALLBACKS, WIFI_OFF, WORKSPACES_FALLBACKS, WORKSPACES_OFF, WORKSPACES_UNAVAILABLE, type CoreApiDeps } from './api.js'
 import { FAIL, readFallback } from './serviceHost.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
 import { answerAgentQuery } from './agentQueries.js'
@@ -766,7 +766,9 @@ describe('the core API services stand on', () => {
   })
 
   it('falls back, when cloud agents fail, to refusing each call with a reason a person reads', () => {
-    for (const fallback of Object.values(CLOUD_FALLBACKS)) expect(readFallback(fallback)).toEqual({ deferred: true, value: CLOUD_DOWN })
+    for (const member of ['create', 'rename', 'stopHarness'] as const) expect(readFallback(CLOUD_FALLBACKS[member])).toEqual({ deferred: true, value: CLOUD_REPLY_DOWN })
+    expect(readFallback(CLOUD_FALLBACKS.deliver)).toEqual({ deferred: true, value: CLOUD_DOWN })
+    expect(readFallback(CLOUD_FALLBACKS.answer)).toEqual({ deferred: true, value: CLOUD_ANSWER_DOWN })
     expect(CLOUD_DOWN.detail).toContain('Cloud agents are not running here')
   })
 
