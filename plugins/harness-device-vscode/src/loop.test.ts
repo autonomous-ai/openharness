@@ -705,6 +705,37 @@ describe('startLoop', () => {
     win.release()
   })
 
+  it("a page line that comes during a run sends its keys at once: they wait behind none of the run's lines", async () => {
+    const win = fakeWindow({ terminals: [101], active: 101 })
+    const { w, stream } = await connected(win)
+    win.scrollReplies.push('held')
+    stream.send('{"scroll":-40,"pid":101,"page":true}\n')
+    await w.until(() => win.scrolls.length === 1)
+    stream.send('{"scroll":-100,"pid":101,"page":true}\n')
+    await flush()
+    expect([win.pageKeys.length, win.scrolls.length]).toEqual([7, 1])
+    win.release()
+    await w.until(() => win.scrolls.length === 140)
+    await flush()
+    expect(win.pageKeys).toHaveLength(7)
+  })
+
+  it('no key follows a line with no page for that shell, though a page line came before it during the run', async () => {
+    const win = fakeWindow({ terminals: [101], active: 101 })
+    const { w, stream } = await connected(win)
+    win.scrollReplies.push('held')
+    stream.send('{"scroll":-1,"pid":101}\n')
+    await w.until(() => win.scrolls.length === 1)
+    // The devices learned mid-stroke that the agent is asking: the rest of the stroke comes as lines with no page.
+    stream.send('{"scroll":-40,"pid":101,"page":true}\n{"scroll":-5,"pid":101}\n')
+    await flush()
+    const pressed = win.pageKeys.length
+    win.release()
+    await w.until(() => win.scrolls.length === 46)
+    await flush()
+    expect(win.pageKeys).toHaveLength(pressed)
+  })
+
   it.each([
     ['1 s with no page line', null],
     ['a page line for another shell', '{"scroll":-15,"pid":202,"page":true}'],
@@ -782,14 +813,14 @@ describe('startLoop', () => {
     expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 0 page keys, 45 scroll lines, 0 dropped')
   })
 
-  it('at most 5 keys from one line, and from what waits', async () => {
+  it('at most 5 keys from one line', async () => {
     const win = fakeWindow({ terminals: [101], active: 101 })
     const { w, stream } = await connected(win)
     stream.send('{"scroll":-250,"pid":101,"page":true}\n')
     await w.until(() => win.scrolls.length === 100)
     await flush()
     expect(win.pageKeys).toHaveLength(5)
-    // Two page lines of 100 wait behind a held line: one run of 100 lines and 5 keys.
+    // Two page lines of 100 during a held line: 5 keys each at once, and their lines wait as one run of 100.
     win.scrollReplies.push('held')
     stream.send('{"scroll":-1,"pid":101}\n')
     await w.until(() => win.scrolls.length === 101)
@@ -798,8 +829,8 @@ describe('startLoop', () => {
     win.release()
     await w.until(() => win.scrolls.length === 201)
     await w.to(60_000)
-    expect([win.pageKeys.length, win.scrolls.length]).toEqual([10, 201])
-    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 10 page keys, 201 scroll lines, 0 dropped')
+    expect([win.pageKeys.length, win.scrolls.length]).toEqual([15, 201])
+    expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 15 page keys, 201 scroll lines, 0 dropped')
   })
 
   it("the minute's line counts the page keys sent", async () => {
@@ -811,7 +842,7 @@ describe('startLoop', () => {
     expect(w.logs.at(-1)).toBe('in the last minute: 0 shows, 0 not found, 0 lines skipped, 1 states sent, 0 not sent, 2 page keys, 45 scroll lines, 0 dropped')
   })
 
-  it('stop ends a run: what waited sends no key', async () => {
+  it('stop ends a run: a page line that came during it sent its keys at once, and none of its lines run', async () => {
     const win = fakeWindow({ terminals: [101], active: 101 })
     const { w, stream } = await connected(win)
     win.scrollReplies.push('held')
@@ -822,7 +853,7 @@ describe('startLoop', () => {
     await w.loop!.stop()
     win.release()
     await w.to(600_000)
-    expect([win.pageKeys.length, win.scrolls.length, w.logs]).toEqual([2, 1, ['state: connected']])
+    expect([win.pageKeys.length, win.scrolls.length, w.logs]).toEqual([4, 1, ['state: connected']])
   })
 
   it('a line split across two chunks is one line, and two lines in one chunk are two', async () => {
