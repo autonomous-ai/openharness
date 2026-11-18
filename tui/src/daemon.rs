@@ -480,6 +480,7 @@ fn dechunk(body: &[u8]) -> Vec<u8> {
 #[cfg(all(test, unix))]
 mod recovery_tests {
     use super::*;
+    use std::ffi::OsString;
     use std::os::unix::fs::PermissionsExt;
 
     struct TestSocket(PathBuf);
@@ -503,6 +504,57 @@ mod recovery_tests {
         let long = format!("/{}", "x".repeat(100));
         let path = socket_in(Path::new(&long), 1, || PathBuf::from("/h/.local/state/harness/s"));
         assert_eq!(path.to_str().unwrap(), "/h/.local/state/harness/s/e50e7828cbafcbee/daemon-1.sock");
+    }
+
+    /// A folder of this account's under /tmp, short so a socket fits under it, removed on drop.
+    struct Runtime(PathBuf);
+    impl Drop for Runtime { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); } }
+    fn runtime(mode: u32) -> Runtime {
+        let path = PathBuf::from(format!("/tmp/hn-rt-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir(&path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        Runtime(path)
+    }
+
+    fn state_sockets() -> PathBuf { PathBuf::from("/h/.local/state/harness/s") }
+
+    #[test]
+    fn a_long_folders_socket_is_in_xdg_runtime_dir_while_it_is_the_accounts_own_0700_folder() {
+        let run = runtime(0o700);
+        // The example store/'s and Desktop's tests pin too.
+        let data = format!("/home/{}/.local/share/harness/cli/data", "u".repeat(80));
+        let path = socket_in(Path::new(&data), 18473, || short_sockets(true, Some(run.0.clone().into()), state_sockets));
+        assert_eq!(path, run.0.join("harness/410894cc1bc77e10/daemon-18473.sock"));
+        let long = format!("/{}", "x".repeat(100));
+        let slashed = format!("{}/", run.0.display());
+        let path = socket_in(Path::new(&long), 1, || short_sockets(true, Some(slashed.into()), state_sockets));
+        assert_eq!(path.to_str().unwrap(), format!("{}/harness/e50e7828cbafcbee/daemon-1.sock", run.0.display()));
+    }
+
+    #[test]
+    fn a_long_folders_socket_is_in_the_state_root_when_xdg_runtime_dir_is_unset_relative_open_or_a_link() {
+        let state = PathBuf::from("/h/.local/state/harness/s/e50e7828cbafcbee/daemon-1.sock");
+        let long = format!("/{}", "x".repeat(100));
+        let at = |runtime: Option<OsString>| socket_in(Path::new(&long), 1, || short_sockets(true, runtime, state_sockets));
+        assert_eq!(at(None), state);
+        assert_eq!(at(Some("run".into())), state);
+        let open = runtime(0o750);
+        assert_eq!(at(Some(open.0.clone().into())), state);
+        assert_eq!(at(Some(open.0.join("none").into())), state);
+        let own = runtime(0o700);
+        let link = PathBuf::from(format!("{}-link", own.0.display()));
+        std::os::unix::fs::symlink(&own.0, &link).unwrap();
+        let linked = at(Some(link.clone().into()));
+        std::fs::remove_file(&link).unwrap();
+        assert_eq!(linked, state);
+    }
+
+    #[test]
+    fn off_linux_a_long_folders_socket_is_never_in_xdg_runtime_dir() {
+        let run = runtime(0o700);
+        let long = format!("/{}", "x".repeat(100));
+        let path = socket_in(Path::new(&long), 1, || short_sockets(false, Some(run.0.clone().into()), state_sockets));
+        assert_eq!(path, PathBuf::from("/h/.local/state/harness/s/e50e7828cbafcbee/daemon-1.sock"));
     }
 
     #[tokio::test]
