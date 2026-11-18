@@ -586,3 +586,77 @@ changed stoppedList has 100% statements/branches/functions/lines. TypeScript als
 Receipts: `/tmp/core-grid-storage-unreadable-archive-green1-20261118.log` and
 `/tmp/core-grid-storage-unreadable-archive-types1-20261118.log`. Tests retain fatal busy, expired,
 disconnected and cleanup-unconfirmed replies after a readable record, with no partial catalog.
+
+## Design: reuse a page-owned directory descriptor
+
+The accepted d038 attribution splits native open self samples into 379.5 ms in
+secureStateDirectory and 337.5 ms in readPrivateImage. Per-file byte reads, identity
+fences and digests remain required. Only repeated directory open/close is replaced.
+
+### Security and compatibility
+
+Each POSIX page owns one O_RDONLY|O_DIRECTORY|O_NOFOLLOW descriptor, acquired after
+the shared custody-health guard. Initial admission uses the existing policy:
+directory type and current UID, refuse group/world-writable directories, tighten
+other safe modes to 0700 and verify. Before **every file**, fstat that descriptor
+and lstat its pathname; require directory type, original dev/ino, current UID and
+exact private mode on both. A safe mode changed since initial admission may be
+tightened by the same existing policy, but a group/world writable mode is refused.
+Final page validation repeats those checks, before any rows return. No mtime,
+ctime, size or nlink equality is imposed: unrelated cooperative directory writes
+retain the current listing behavior. Existing archive authority witnesses remain
+unchanged, including nonmatching in-place changes.
+
+Current secureStateDirectory opens the current pathname and checks the opened
+descriptor before every file, closing immediately afterward. The page owner keeps
+the same descriptor security check at that point and adds a pathname/descriptor
+identity check, so directory replacement cannot redirect a later file while this
+page is in flight. It also checks at the end, whereas the existing helper has no
+post-file directory check. It cannot prove an unobserved permission ABA; neither
+can the current open/fstat/close admission. No such guarantee is claimed.
+
+Every file retains its O_NOFOLLOW|O_NONBLOCK open, UID/type/mode and tightening,
+size and EOF/growth bounds, all ten before/after/path fields, and digest. Windows
+uses the unchanged per-file secureStateDirectory and requireWindowsStateFile path;
+this change makes no new claim about Windows native descriptor/ACL semantics.
+
+### Composition and custody
+
+Use a child-private `withPrivateImageDirectory(directory, work)` callback. Its
+reader is bound to that exact directory and refuses use after the callback has
+settled. No descriptor/token enters IPC or core. It owns and closes its descriptor
+in finally with closeStateFileDescriptor; failed close remains sticky, revokes
+future work, and surfaces cleanup-unconfirmed for actual child reap. Existing
+already-owned file/iterator handles still get their close attempts.
+
+The codec supplies a named stopped-page callback to createStoppedList; each page
+continues to consider at most 64 names, preserving byte packing, held lookahead,
+offset advancement and zero partial list success. Directory changes between pages
+remain permitted. Standalone selected-image/Registry reads retain their reader.
+
+The codec's existing stopped query loops in groups of at most 64 considered names
+inside the same directory callback; its total work/deadline bound, exact selected
+row proofs and final whole-archive metadata witness remain. Maximum extra custody
+is one directory FD beside its existing iterator and one active file FD. No cache,
+new serialization, archive copy, retry, or changed authority field is introduced.
+
+### Tests and remaining parent cost
+
+Failure-first actual read fixture counts repeated directory opens while checking
+returned row bytes/proofs. Add before-file and final replacement/UID/mode checks,
+safe tightening, unrelated temporary and JSON writes during a page, writes between
+pages, wrong-directory/expired-reader refusal and shared sticky close uncertainty.
+Retain individual unreadable-record filtering and fatal whole-query failures.
+Existing size/growth/ten-field/file replacement tests continue through this reader.
+
+The proposed whole-graph Registry clone is withdrawn: strictPersistedRow preserves
+grid and unknown compatible nested fields, so shared inputs could become newly
+aliased installed rows. Per-row deep capture remains. The adapted real-child
+preparation fixture and final-installed shared-Grid regression retain that contract.
+The large fingerprint/normalization cost remains open; any invocation-local reuse
+must first show duplicated comparisons within a non-yielding ownership interval.
+
+The first bounded page regression fails with 65 actual directory opens for 64
+proved images, versus the selected limit of three (initial list admission, page
+admission, retained page descriptor). Sixteen existing cursor/filtering controls
+pass. Receipt: `/tmp/core-grid-storage-directory-page-red1-20261118.log`.

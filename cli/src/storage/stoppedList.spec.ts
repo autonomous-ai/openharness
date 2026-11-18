@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { chmodSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import * as fs from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
@@ -7,6 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createStoppedList } from './stoppedList.js'
 import { createSessionImageCodec } from './sessionImage.js'
 import { SessionStorageUnavailable, type SessionDocument, type SessionImage } from '../lib/sessionStorageWire.js'
+
+vi.mock('node:fs', async original => ({ ...await original<object>() }))
 
 let root: string, directory: string
 beforeEach(() => {
@@ -26,6 +29,21 @@ const fixture = () => {
 const ids = (images: SessionImage[]) => images.map(image => image.state === 'image' && image.proof.document.kind === 'stopped' ? image.proof.document.agentId : '')
 
 describe('child-owned stopped list pages', () => {
+  it.skipIf(process.platform === 'win32')('reuses directory opens within a page while reading every exact image', async () => {
+    for (let index = 0; index < 64; index++) write(`row-${index}`)
+    const open = vi.spyOn(fs, 'openSync'), { listing } = fixture()
+    const page = await listing.page(null, deadline())
+    expect(page).toMatchObject({ done: true, next: 64, total: 64 })
+    expect(new Set(ids(page.images)).size).toBe(64)
+    for (const image of page.images) {
+      expect(image.state).toBe('image')
+      if (image.state !== 'image') throw new Error('fixture image was missing')
+      expect(image.proof.sha256).toMatch(/^[a-f0-9]{64}$/)
+      expect(image.json).toBe(true)
+    }
+    expect(open.mock.calls.filter(([file]) => file === directory)).toHaveLength(3)
+  })
+
   it('considers at most64 names and completes every row without retaining a whole projection', async () => {
     for (let index = 0; index < 129; index++) write(`row-${String(index).padStart(3, '0')}`)
     const { read, listing } = fixture()
