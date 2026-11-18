@@ -16,7 +16,9 @@ catalog is added. Remote request sealing stays unchanged; replies are encrypted 
 WiFi owns the bounded one-shot tool connection, exact machine handshake and exact type/id matching.
 Its existing process-wide control-work budget (100 operations / 16 MiB) spans component rebuilds.
 The component aborts its pending sockets on disconnect, resume and stop. A 15-second deadline covers
-connect, handshake and confirmation; bounded 4 KiB replies are matched by exact type and id. A timeout settles unavailable,
+connect, handshake and confirmation; bounded 4 KiB replies are matched by exact type and id.
+An unexpected frame or mismatched id invalidates and closes this one-shot connection; it is not ignored.
+The owner-tool handshake negotiates question protocol 1 without an observation, suppressing legacy replay. A timeout settles unavailable,
 closes the connection and retains capacity until physical close; no effect is replayed. The component's
 verified machine/core binding is checked before send and after reply. The private `wifi.stop` door and
 its fallbacks are removed together. The remaining create and mixed-host desk doors stay explicit.
@@ -50,3 +52,8 @@ caller control: cancellation methods have 55/55 statements, 34/34 branches and 1
 this is changed-method coverage, not a claim that the existing input controller has whole-file 100%.
 Types pass. Failed fixture/type/coverage receipts remain recorded; native packaging and cost acceptance
 are still integration work.
+
+The prepared packaged extension adds actual Stop to the existing supervised and inline WiFi cases:
+a held turn, the engine's recorded C-c, its interrupted pane, a duplicate idempotency key that emits no
+second interrupt, and a subsequent completed turn. It adds no cancel-route instrumentation or product
+hook. Native execution remains pending the final combined artifact.

@@ -206,6 +206,25 @@ if (process.argv[2] === '__run' && process.env.NODE_ENV === 'test' && process.en
     await d.nextEvent((e) => (e.kind === 'turn.done' || e.kind === 'turn.summary') && e.agentId === agentId, `the turn's end (${text})`, since)
     return sent
   }
+  /** The receipt alone cannot prove a stop: observe the key in its engine and then a fresh successful turn. */
+  const deviceStop = async (w: PhoneMachine, client: LocalClient, d: FakeWifiDevice, agent: { id: string; tmuxPane: string }) => {
+    const { daemon, machineId } = w.machine, agentId = agent.id
+    const path = join(daemon.engineConfig.root, 'interrupts')
+    const interrupts = () => existsSync(path) ? readFileSync(path, 'utf8').trim().split('\n').filter(Boolean) : []
+    const before = interrupts().length, since = d.mark()
+    expect(await d.ask('turn.send', { machineId, agentId, idempotencyKey: 'held-for-stop', text: '!hold' }))
+      .toMatchObject({ status: 'accepted' })
+    await d.nextEvent(e => e.kind === 'turn.started' && e.agentId === agentId, 'the held turn to start', since)
+    await until('the held agent to read as working', async () => (await row(client, agentId))?.activity?.state === 'working' || null, 15_000, 100)
+    const stop = { machineId, agentId, idempotencyKey: 'confirmed-stop' }
+    expect(await d.ask('turn.stop', stop)).toMatchObject({ receipt: { idempotencyKey: 'confirmed-stop', state: 'completed' } })
+    await until('the exact agent pane to take its interrupt', async () =>
+      interrupts().length > before && (await daemon.capture(agent.tmuxPane)).includes('(interrupted)') || null, 15_000, 100)
+    expect(interrupts().slice(before).map(line => line.split(' ')[0])).toEqual(['C-c'])
+    expect(await d.ask('turn.stop', stop)).toMatchObject({ receipt: { idempotencyKey: 'confirmed-stop', state: 'completed' } })
+    await deviceTurn(d, machineId, agentId, 'after-confirmed-stop', 'a fresh turn after Stop')
+    expect(interrupts().slice(before).map(line => line.split(' ')[0])).toEqual(['C-c'])
+  }
   const askQuestion = async (d: FakeWifiDevice, machineId: string, agentId: string, key: string) => {
     const since = d.mark()
     expect(await d.ask('turn.send', { machineId, agentId, idempotencyKey: key, text: '!ask' })).toMatchObject({ status: 'accepted' })
@@ -223,7 +242,7 @@ if (process.argv[2] === '__run' && process.env.NODE_ENV === 'test' && process.en
   it.each([['from the devices\' process', {}], ['from the core\'s own, with every service there', { HARNESSD_SERVICES: 'none' }]] as const)(
     'is answered %s as it was: its hello, its agents, a prompt and its receipt, a question, a window\'s focus', async (_where, env) => {
     const cohost = !('HARNESSD_SERVICES' in env)
-    const { w, machine, window, agentId, device } = await fresh(env, cohost)
+    const { w, machine, window, agent, agentId, device } = await fresh(env, cohost)
     const others = [await createAgent(w, window, 'question-b'), await createAgent(w, window, 'question-c')]
     const hello = await connect(device)
     expect(hello).toMatchObject({ type: 'hello_result', proto: 1, machineId: machine.machineId })
@@ -241,6 +260,7 @@ if (process.argv[2] === '__run' && process.env.NODE_ENV === 'test' && process.en
     expect(receipt).toMatchObject({ idempotencyKey: 'first', agentId, machineId: machine.machineId })
     // The window, too, saw the turn the device sent.
     expect(window.frames.some((f) => f.type === 'turn_started' && f.agentId === agentId)).toBe(true)
+    await deviceStop(w, window, device, agent)
     // A window moving to the agent moves the device's focus.
     const since = device.mark()
     window.send('app_focus', { agentId })
