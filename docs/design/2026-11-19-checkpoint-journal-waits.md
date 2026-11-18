@@ -158,3 +158,13 @@ Receipt `.harness/validation/20261118T210853.259025Z-58363/receipt.json` retains
 exit 1, no timeout). The fixture now assigns each open a monotonic identity and counts that exact
 open's close; the no-close-before-actual-callback guard remains. Runtime is unchanged. The planned
 all-19 control pass includes the same eight cases, so it also supplies their corrected GREEN result.
+
+## New controls GREEN
+
+At clean `d19d9a101a`, all 19 new controls pass, including all eight previous RED cases. The stage
+file runs 17 controls in 2.5 seconds; storage's two controls run in 0.7 seconds. Receipt:
+`.harness/validation/20261118T210953.902607Z-59437/receipt.json` (actual exit 0, no timeout, unchanged
+source). Fixtures drain the actual file callbacks and history closes before removing private roots.
+The initial failed close-count receipt remains above. Broader validation is prepared but not run:
+10 affected journal/store/Close/secure-state/storage files, changed core storage at 100% per-file,
+checkpoint helper coverage, architecture and types. Native timing remains pending.
