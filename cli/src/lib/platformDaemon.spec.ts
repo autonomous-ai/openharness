@@ -61,6 +61,13 @@ describe('the definition for this install', () => {
     expect(CARRIED_ENV).toContain('HARNESS_AUTH_DIR')
   })
 
+  it('carries XDG_DATA_HOME and XDG_STATE_HOME when they are set', () => {
+    expect(serviceDefinition({ logFile: '/data/harness.log', source: { XDG_DATA_HOME: '/d', XDG_STATE_HOME: '/s' } }).env)
+      .toEqual({ XDG_DATA_HOME: '/d', XDG_STATE_HOME: '/s' })
+    expect(serviceDefinition({ logFile: '/data/harness.log', source: { XDG_DATA_HOME: '' } }).env).toEqual({})
+    expect(serviceDefinition({ logFile: '/data/harness.log', source: {} }).env).toEqual({})
+  })
+
   it('runs the managed Node and the installed bundle from this home by default', () => {
     const definition = serviceDefinition({ logFile: '/data/harness.log' })
     expect(definition.scriptPath).toBe(join(env.ADAPTER_CLI_DIR, 'cli.js'))
