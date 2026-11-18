@@ -145,10 +145,10 @@ describe('what happens to agents, for the services that follow them', () => {
       hub.follow((event) => { after.push(event) })
       expect(() => hub.stopped('a1')).not.toThrow()
       expect(log.mock.calls).toEqual([
-        ['[agents] a follower failed on running: boom'],
-        ['[agents] a follower failed on running: not an error'],
-        ['[agents] a follower failed on stopped: boom'],
-        ['[agents] a follower failed on stopped: not an error'],
+        ['[agents] a follower failed on running: Error'],
+        ['[agents] a follower failed on running: string'],
+        ['[agents] a follower failed on stopped: Error'],
+        ['[agents] a follower failed on stopped: string'],
       ])
       expect(after.map((event) => event.kind)).toEqual(['running', 'stopped'])
     })
@@ -159,7 +159,7 @@ describe('what happens to agents, for the services that follow them', () => {
       hub.follow(listener, VIEWERS_FOLLOW)
       for (let i = 0; i < FOLLOWER_FAILURES_MAX + 3; i++) hub.running(agent('a1', { dsh: 'acme/blender' }))
       expect(listener).toHaveBeenCalledTimes(FOLLOWER_FAILURES_MAX)
-      expect(log).toHaveBeenLastCalledWith(`[agents] a follower failed ${FOLLOWER_FAILURES_MAX} times: it hears nothing more`)
+      expect(log).toHaveBeenLastCalledWith(`[agents] a follower failed ${FOLLOWER_FAILURES_MAX} times: it hears nothing more · Error`)
       expect(log).toHaveBeenCalledTimes(FOLLOWER_FAILURES_MAX + 1)
       hub.stopped('a1')
       expect(listener).toHaveBeenCalledTimes(FOLLOWER_FAILURES_MAX)
@@ -175,7 +175,7 @@ describe('what happens to agents, for the services that follow them', () => {
       const hub = createAgentLife({ live: () => [], notify: () => true, hears: {} })
       hub.follow(() => { throw new Error('boom') })
       hub.stopped('a1')
-      expect(warn).toHaveBeenCalledWith('[agents] a follower failed on stopped: boom')
+      expect(warn).toHaveBeenCalledWith('[agents] a follower failed on stopped: Error')
     })
 
     it('hears nothing once it stops following', () => {
