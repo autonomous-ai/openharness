@@ -877,7 +877,8 @@ export class TerminalStreamManager {
     const gate = this.heldGate(state)
     if (gate) {
       const held = Uint8Array.from(bytes)
-      this.enqueueHeldInput(gate, state, () => this.reportInput(state, this.writeRawTo(state, held, true)), retain)
+      this.enqueueHeldInput(gate, state, () => this.reportInput(state, this.writeRawTo(state, held, true)), retain,
+        () => { this.moveRefused(state, 'TERMINAL_INPUT_FAILED') })
       return
     }
     // Not awaited. `writeRaw` hands its `send-keys` to the control client's FIFO synchronously, so
@@ -889,10 +890,12 @@ export class TerminalStreamManager {
   }
 
   /** Ordering transfers to the existing move queue now; its admission stays owned until delivery ends. */
-  private enqueueHeldInput(gate: MoveGate, state: ActiveStream, deliver: () => Promise<void>, retain: RetainInput): void {
+  private enqueueHeldInput(gate: MoveGate, state: ActiveStream, deliver: () => Promise<void>, retain: RetainInput,
+    refuse: () => void): void {
     let release!: () => void
     retain(new Promise<void>((resolve) => { release = resolve }))
-    gate.enqueue(state.agentId, async () => { try { await deliver() } finally { release() } })
+    gate.enqueue(state.agentId, async () => { try { await deliver() } finally { release() } },
+      () => { try { refuse() } finally { release() } })
   }
 
   /** A keystroke write's outcome, told to the client when it failed. */
@@ -1022,7 +1025,8 @@ export class TerminalStreamManager {
     // Held while the agent changes host, in order with its keystrokes (see `input`).
     const gate = this.heldGate(state)
     if (gate) {
-      this.enqueueHeldInput(gate, state, () => this.deliverPaste(state, text, true), retain)
+      this.enqueueHeldInput(gate, state, () => this.deliverPaste(state, text, true), retain,
+        () => { this.moveRefused(state, 'TERMINAL_PASTE_FAILED') })
       return
     }
     await this.deliverPaste(state, text)
@@ -1167,7 +1171,14 @@ export class TerminalStreamManager {
       }
     }
     const gate = this.heldGate(state)
-    if (gate) { pending.held = true; this.enqueueHeldInput(gate, state, () => run(true), retain) }
+    if (gate) {
+      pending.held = true
+      this.enqueueHeldInput(gate, state, () => run(true), retain, () => {
+        if (!this.uploadCurrent(state, pending, true)) return
+        try { this.moveRefused(state, 'TERMINAL_PASTE_FAILED') }
+        finally { this.clearUpload(state, pending) }
+      })
+    }
     else await run(false)
   }
 

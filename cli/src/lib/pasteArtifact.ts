@@ -44,6 +44,7 @@ export function openPreparedPaste(generation: string, artifact: NonNullable<Extr
   if (process.platform === 'win32') {
     if (!insideWindowsRoots(path, windowsStateRoots())) throw new Error('PASTE_INVALID_ARTIFACT')
   } else if (parent.info.uid !== BigInt(process.getuid!()) || (parent.info.mode & 0o077n) !== 0n) throw new Error('PASTE_INVALID_ARTIFACT')
+  const verifyRoute = paths.retain()
   const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0))
   let closed = false, closeFailed = false
   const close = (): void => {
@@ -55,7 +56,7 @@ export function openPreparedPaste(generation: string, artifact: NonNullable<Extr
   const current = (): boolean => {
     if (closed) return false
     try {
-      paths.verify()
+      verifyRoute()
       const info = fstatSync(fd, { bigint: true })
       const fresh = new NativePaths(new NativeEvidenceBudget()).resolveSync(path)!.info
       return info.isFile() && info.nlink === 1n && info.size > 0n && info.size <= BigInt(maximumBytes)

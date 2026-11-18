@@ -135,7 +135,7 @@ describe('agent browser streams through the socket', () => {
     const keystroke = { ...screen, kind: TerminalBinaryKind.input }
     await socket.fromGateway.binary('mac-2', keystroke)
     expect(streams.binary.mock.calls).toEqual([['mac-2', encodeTerminalLocal(screen)]])
-    expect(terminals.handleBinary.mock.calls).toEqual([['mac-2', keystroke]])
+    expect(terminals.handleBinary.mock.calls).toEqual([['mac-2', keystroke, expect.any(Function)]])
   })
 
   it('client disconnected, link down and local window gone each close that connection\'s streams', async () => {

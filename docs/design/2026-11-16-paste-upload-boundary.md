@@ -865,3 +865,34 @@ Three real-file cases falsely rejected healthy retained authority after 3001 ms 
 the per-verification deadline control passed. The raw/text move-refusal test saw overflow instead of
 65 static refusals; both file/image held uploads failed to regain admission and current-generation
 availability. These are actual source REDs before the following narrow runtime corrections.
+
+The correction keeps the two existing ownership boundaries: `NativePaths.retain()` captures immutable
+route facts before opening the fd and gives each later fence a fresh bounded verification; MoveGate's
+refusal callback reports its existing static refusal and releases only work that never began. A refused
+completed upload clears only its still-current generation. Cancelled generations emit no late error;
+started input and uncertain descriptor cleanup keep their original physical-settlement charges.
+
+The preselected 19-file focused invocation with private-socket access exited 1: 586 passed and one
+current client-stream test expected only two terminal callback arguments. Its browser-byte routing
+assertion passed; the terminal callback now also takes the reviewed admission function. Updating that
+single test expectation was the only change after that run, and rerunning its file passed 11/11.
+All seven new authority/settlement cases passed in the focused invocation. Source `tsc --noEmit`
+exited 0. This is exact-source reuse of 18 passing files plus the corrected test file, not a report that
+one all-green 19-file invocation ran. The runtime correction has not changed between those checks.
+
+An earlier sandboxed invocation was interrupted (exit 130) after private-socket failures; a focused
+control captured `listen EPERM` on its own temporary Unix socket. Those are environment failures,
+not passing or source-failure evidence. The interrupted runner and identified child were confirmed
+gone, and no owned fixture root remained. No native clipboard, bundle build, full gate, performance
+run, owner daemon or real home was used. Native/full combined gates and cost acceptance remain root-owned.
+
+Current focused evidence SHA256:
+
+- `/tmp/paste-completion-plan-red.log`: `5e8456299a3b9266e4b9b4338eb4f8b064638b8daec943e2d8cb87f8a6ba9ba7`.
+- `/tmp/paste-completion-plan-red-with-admission.log`: `fd714591c69e78ab75f467392dcc5f7b35c872f2cd78d7e0319066f7764a7194`.
+- `/tmp/paste-completion-authority-red.log`: `8038b1cdabca178ee551bb7e654e6fd4faff87782e1ef06e4396c0451c039df7`.
+- `/tmp/paste-completion-focused-green.log`: `8e9d84094f5cfb4ee7f1bfa28788ebbabc125884ab0580986140c020be9433b1`.
+- `/tmp/paste-completion-sandbox-socket-control.log`: `81a2aee95a952cf85abc4d6722294d3654ac0d72b85451fb1e5c156641170e6b`.
+- `/tmp/paste-completion-focused-green-native-sockets.log`: `dee5083497b8a8436c2a52466901f1d4366525f41af345759ee098b943be5d3e`.
+- `/tmp/paste-completion-client-stream-green.log`: `704d8652a9e7dd4fa5a763fa9297cedab724c50727abe24a177d3e3666c7a98f`.
+- `/tmp/paste-completion-typecheck.log`: `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
