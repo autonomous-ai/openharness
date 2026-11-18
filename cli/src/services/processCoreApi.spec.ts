@@ -188,15 +188,25 @@ describe('the core API a light service runs on in its own process', () => {
     expect(await processCoreApi('/data', 'store', { ask }).account.backend('GET', '/api/harness-shares')).toEqual({ status: 502, body: { error: 'NOT_AN_EXPERIMENT' } })
   })
 
-  it('gives the cloud agents their doors only with a core to ask, and never waits on or throws from them', async () => {
+  it('keeps publication acknowledgement and recovery reads truthful across the process door', async () => {
     expect(processCoreApi('/data', 'cloud').cloud).toBeUndefined()
-    const ask = vi.fn(async (_query: string): Promise<Record<string, unknown>> => { throw new Error('gone') })
+    const ask = vi.fn(async (_query: string): Promise<Record<string, unknown>> => ({ ok: true }))
     const doors = processCoreApi('/data', 'cloud', { ask }).cloud!
-    doors.publish([])
-    doors.ask('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] })
-    doors.unask('cloud_1', 'cloud_q_1')
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(ask.mock.calls.map(([query]) => query)).toEqual(['cloud_publish', 'cloud_ask', 'cloud_unask'])
+    expect(await doors.publish([])).toEqual({ ok: true })
+    ask.mockResolvedValueOnce({ ok: false, error: 'CLOUD_PUBLICATION_INVALID' })
+    expect(await doors.publish([])).toEqual({ ok: false, error: 'CLOUD_PUBLICATION_INVALID' })
+    ask.mockResolvedValueOnce({})
+    await expect(doors.publish([])).rejects.toThrow('CLOUD_PUBLICATION_UNAVAILABLE')
+    ask.mockResolvedValueOnce({ fingerprint: 'a'.repeat(64) })
+    expect(await doors.checkpoint()).toBe('a'.repeat(64))
+    ask.mockResolvedValueOnce({ error: 'SERVICE_UNAVAILABLE' })
+    await expect(doors.checkpoint()).rejects.toThrow('CLOUD_PUBLICATION_UNAVAILABLE')
+    ask.mockRejectedValueOnce(new Error('gone'))
+    await expect(doors.publish([])).rejects.toThrow('gone')
+    await doors.ask('cloud_1', 'cloud_q_1', { text: 'Which?', choices: [] })
+    await doors.unask('cloud_1', 'cloud_q_1')
+    expect(ask.mock.calls.map(([query]) => query)).toEqual(['cloud_publish', 'cloud_publish', 'cloud_publish',
+      'cloud_checkpoint', 'cloud_checkpoint', 'cloud_publish', 'cloud_ask', 'cloud_unask'])
   })
 
   it('acts on the core for an experiment: agents made, turns stopped and delivered, windows told, each asked', async () => {

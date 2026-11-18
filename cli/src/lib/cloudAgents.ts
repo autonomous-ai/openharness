@@ -8,6 +8,7 @@
  * A cloud agent's id is never an engine id (engines/types.ts `ENGINES`): it has no launch, transcript or pane,
  * and every per-engine table in the core would otherwise need a row for it that could only refuse.
  */
+import { createHash } from 'node:crypto'
 import type { AgentFrame } from './agentFrame.js'
 
 export interface CloudAgentInfo {
@@ -250,3 +251,6 @@ export function cloudAgentFrame(harness: CloudHarness): CloudAgentFrame {
     },
   }
 }
+
+/** Recovery-only fingerprint of the normalized owner image already accepted by the core. */
+export const cloudFingerprint = (rows: readonly CloudHarness[]): string => createHash('sha256').update(JSON.stringify(rows)).digest('hex')

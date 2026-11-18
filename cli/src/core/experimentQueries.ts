@@ -31,7 +31,7 @@ import type { ServiceQueryAuthority } from './serviceLinks.js'
 type Payload = Record<string, unknown>
 type Core = Pick<CoreApi, 'agents' | 'turns' | 'clients' | 'daemon' | 'account' | 'cloud'>
 
-const QUERIES: ReadonlySet<string> = new Set(['shown', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_publish', 'cloud_ask', 'cloud_unask'])
+const QUERIES: ReadonlySet<string> = new Set(['shown', 'create', 'stop_turn', 'windows', 'daemon', 'backend', 'observer_key', 'observer_send', 'account', 'cloud_checkpoint', 'cloud_publish', 'cloud_ask', 'cloud_unask'])
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 
 
@@ -148,13 +148,15 @@ export async function answerExperimentQuery(core: Core, experiments: ReadonlySet
       } catch (error) {
         return { error: error instanceof Error ? error.message : String(error) }
       }
+    case 'cloud_checkpoint':
     case 'cloud_publish':
     case 'cloud_ask':
     case 'cloud_unask': {
       if (service !== 'cloud' || !core.cloud) return { error: 'NOT_CLOUD' }
       // Earlier asynchronous handlers can outlive this service connection; check at the effect itself.
       if (authority?.current?.() !== true) return { error: 'SERVICE_UNAVAILABLE' }
-      if (query === 'cloud_publish') core.cloud.publish(Array.isArray(payload.harnesses) ? payload.harnesses : [], payload.cards as Parameters<NonNullable<Core['cloud']>['publish']>[1])
+      if (query === 'cloud_checkpoint') return { fingerprint: await core.cloud.checkpoint() }
+      if (query === 'cloud_publish') return await core.cloud.publish(Array.isArray(payload.harnesses) ? payload.harnesses : [], payload.cards as Parameters<NonNullable<Core['cloud']>['publish']>[1])
       else if (query === 'cloud_ask') core.cloud.ask(text(payload.agentId), text(payload.questionId), (payload.question ?? {}) as { text: string; choices: string[] })
       else core.cloud.unask(text(payload.agentId), text(payload.questionId))
       return {}

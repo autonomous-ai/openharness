@@ -904,7 +904,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // the socket are, below; the cloud service starts after both.
   let cloudAgents: CloudAgents | null = null
   const cloudDoors: CloudCore = {
-    publish: (harnesses) => cloudAgents?.doors.publish(harnesses),
+    publish: (harnesses, cards) => cloudAgents?.doors.publish(harnesses, cards) ?? { ok: false, error: 'CLOUD_PUBLICATION_INVALID' },
+    checkpoint: () => { if (!cloudAgents) throw new Error('CLOUD_PUBLICATION_UNAVAILABLE'); return cloudAgents.doors.checkpoint() },
     ask: (agentId, requestId, question) => cloudAgents?.doors.ask(agentId, requestId, question),
     unask: (agentId, requestId) => cloudAgents?.doors.unask(agentId, requestId),
   }

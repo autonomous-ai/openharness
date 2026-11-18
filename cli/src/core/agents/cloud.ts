@@ -10,7 +10,7 @@
  */
 import type { CloudCore, CloudPort, CloudResult, TurnCardFrame } from '../api.js'
 import { CLOUD_DOWN } from '../api.js'
-import { cloudAgentFrame, cloudHarnessIn, isCloudAgent, type CloudAgentFrame, type CloudHarness } from '../../lib/cloudAgents.js'
+import { cloudAgentFrame, cloudFingerprint, cloudHarnessIn, isCloudAgent, type CloudAgentFrame, type CloudHarness } from '../../lib/cloudAgents.js'
 import type { QuestionAnswerResult } from '../../lib/questionController.js'
 
 type Frame = { type: string; agentId?: string; dbSessionId?: string; payload: Record<string, unknown> }
@@ -63,23 +63,27 @@ export function createCloudAgents({ port, clients, openQuestions, log = (line) =
   }
 
   const doors: CloudCore = {
+    checkpoint: () => cloudFingerprint([...harnesses.values()]),
     publish(list, cards = []) {
       const next = new Map<string, CloudHarness>()
       for (const raw of Array.isArray(list) ? list : []) {
         const harness = cloudHarnessIn(raw)
         if (harness) next.set(harness.agentId, harness)
       }
-      if (!admittedCards(cards, next)) { log('[cloud] CLOUD_PUBLICATION_INVALID'); return }
+      if (!admittedCards(cards, next)) { log('[cloud] CLOUD_PUBLICATION_INVALID'); return { ok: false, error: 'CLOUD_PUBLICATION_INVALID' } }
+      const byOwner = new Map(cards.map(card => [card.agentId, card]))
       const before = harnesses
       harnesses = next
       for (const [agentId, harness] of next) {
         const prior = before.get(agentId)
         if (JSON.stringify(prior) === JSON.stringify(harness)) continue
         sync(harness)
+        const frame = byOwner.get(agentId)
+        if (frame) clients.sendCommander({ type: frame.type, agentId: frame.agentId,
+          dbSessionId: frame.dbSessionId, ...(frame.name !== undefined ? { name: frame.name } : {}), payload: frame.payload })
       }
       for (const agentId of before.keys()) if (!next.has(agentId)) gone(agentId)
-      for (const frame of cards) clients.sendCommander({ type: frame.type, agentId: frame.agentId,
-        dbSessionId: frame.dbSessionId, ...(frame.name !== undefined ? { name: frame.name } : {}), payload: frame.payload })
+      return { ok: true }
     },
     ask(agentId, requestId, question) {
       if (!harnesses.has(agentId) || typeof requestId !== 'string' || !requestId.startsWith('cloud_q_') || typeof question?.text !== 'string') return

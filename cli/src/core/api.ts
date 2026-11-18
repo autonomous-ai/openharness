@@ -1296,9 +1296,13 @@ export const MESSAGES_FALLBACKS: PortFallbacks<MessagesPort> = { canWrite: false
  * harnesses its service owns, which have no pane, and the questions they ask. The core lists them beside the
  * terminal agents and tells every client what changed (core/agents/cloud.ts).
  */
+export type CloudPublicationResult = { ok: true } | { ok: false; error: 'CLOUD_PUBLICATION_INVALID' }
+
 export interface CloudCore {
   /** Every cloud harness and its component-prepared cards, admitted together under the private worker cohort. */
-  publish(harnesses: CloudHarness[], cards?: TurnCardFrame[]): void
+  publish(harnesses: CloudHarness[], cards?: TurnCardFrame[]): CloudPublicationResult | Promise<CloudPublicationResult>
+  /** Recovery only: fingerprint the current accepted owner rows; no publication history is retained here. */
+  checkpoint(): string | Promise<string>
   /** One waits on the person: shown wherever questions show; the answer comes back through `CloudPort.answer`. */
   ask(agentId: string, requestId: string, question: { text: string; choices: string[] }): void
   /** That question is no longer asked. */

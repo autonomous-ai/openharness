@@ -218,12 +218,20 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
     // Hachi's daemon counters, handed to the core (core/agentQueries.ts `count`), which refuses any other name. A count
     // the core cannot take now is lost: counters are measures, never state.
     count: (metric) => { void ask?.('count', { metric }).catch(() => {}) },
-    // The cloud agents' doors (core/experimentQueries.ts): told to the core in order, never waited on. A core
-    // that is not connected hears it all again when it is (services/cloudProcess.ts `republish`). A question's
-    // id travels as `questionId`: `requestId` is the query's own, which the link writes over.
+    // Cloud owns delivery recovery; admission acknowledgements must reach its ordered publisher.
     ...(ask ? {
       cloud: {
-        publish: (harnesses, cards = []) => { void ask('cloud_publish', { harnesses, cards }).catch(() => {}) },
+        publish: async (harnesses, cards = []) => {
+          const result = await ask('cloud_publish', { harnesses, cards })
+          if (result.ok === true) return { ok: true }
+          if (result.ok === false && result.error === 'CLOUD_PUBLICATION_INVALID') return { ok: false, error: 'CLOUD_PUBLICATION_INVALID' }
+          throw new Error('CLOUD_PUBLICATION_UNAVAILABLE')
+        },
+        checkpoint: async () => {
+          const result = await ask('cloud_checkpoint', {})
+          if (typeof result.fingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(result.fingerprint)) throw new Error('CLOUD_PUBLICATION_UNAVAILABLE')
+          return result.fingerprint
+        },
         ask: (agentId, requestId, question) => { void ask('cloud_ask', { agentId, questionId: requestId, question }).catch(() => {}) },
         unask: (agentId, requestId) => { void ask('cloud_unask', { agentId, questionId: requestId }).catch(() => {}) },
       } satisfies CloudCore,

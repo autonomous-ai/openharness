@@ -13,13 +13,13 @@ const experiments = new Set(['orchestrator'])
 
 describe('the cloud agents\' doors', () => {
   it('are the cloud service\'s alone, and carry its harnesses and questions to the core', async () => {
-    const cloud = { publish: vi.fn(), ask: vi.fn(), unask: vi.fn() }
+    const cloud = { checkpoint: vi.fn(() => 'a'.repeat(64)), publish: vi.fn(() => ({ ok: true as const })), ask: vi.fn(), unask: vi.fn() }
     const core = fakeCore({ cloud })
     const both = new Set(['orchestrator', 'cloud'])
     const ask = (query: string, payload: Record<string, unknown>) => answerExperimentQuery(core, both, 'cloud', query, payload,
       undefined, { current: () => true, ownsRequest: () => false })
     const cards = [{ type: 'commander_event', agentId: 'cloud_1', dbSessionId: 'cloud_1', payload: { kind: 'done', text: 'done' } }]
-    expect(await ask('cloud_publish', { harnesses: [{ agentId: 'cloud_1' }], cards })).toEqual({})
+    expect(await ask('cloud_publish', { harnesses: [{ agentId: 'cloud_1' }], cards })).toEqual({ ok: true })
     expect(cloud.publish).toHaveBeenLastCalledWith([{ agentId: 'cloud_1' }], cards)
     await ask('cloud_publish', { harnesses: 'x' })
     expect(cloud.publish).toHaveBeenLastCalledWith([], undefined)
