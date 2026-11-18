@@ -70,8 +70,16 @@ static void ui_apps_replace(const cable_app_t *rows,int n,const char *shown) {
     assert(!held&&n>=0&&n<=CABLE_MAX_APPS&&shown);app_calls++;app_count=n;
     memcpy(apps,rows,(size_t)n*sizeof *rows);snprintf(app_shown,sizeof app_shown,"%s",shown);
 }
+static unsigned shows,beeps;
+static bool shown_list;
+static char shown_request[80];
+static bool ui_question_show(const char *id,const char *name,const char *machine,const char *request,const cJSON *questions,bool list) {
+    (void)name;(void)machine;assert(id&&questions);shows++;shown_list=list;
+    snprintf(shown_request,sizeof shown_request,"%s",request?request:"");return !list;
+}
+static void audio_notify_done(void) { beeps++; }
 '''
-for name in ['str_of','bool_of','caps_of','handle_agent','handle_swarms','handle_notifications','handle_models','count_of','handle_apps']:
+for name in ['str_of','bool_of','caps_of','handle_agent','handle_swarms','handle_notifications','handle_models','count_of','handle_apps','handle_question']:
     code += function(name)
 code += r'''
 static cJSON *object(const char *key,const char *value) {
@@ -175,6 +183,20 @@ int main(void) {
     p=cJSON_Parse("{\"shown\":\"b\"}");assert(p);handle_apps(p);cJSON_Delete(p);
     p=cJSON_Parse("{\"shown\":\"b\",\"apps\":{\"id\":\"b\"}}");assert(p);handle_apps(p);cJSON_Delete(p);
     assert(app_calls==calls&&app_count==2&&!strcmp(app_shown,"a"));bounds();
+    // `question` with tier "list" files a silent row: no beep. With no tier, or any other, it is an alert.
+    p=cJSON_Parse("{\"id\":\"q1\",\"tier\":\"list\",\"questions\":[{\"key\":\"\",\"q\":\"Ship it?\",\"options\":[]}]}");
+    assert(p);handle_question(p,"a");cJSON_Delete(p);assert(shows==1&&shown_list&&!beeps&&!strcmp(shown_request,"q1"));
+    const char *alerts[]={"{\"id\":\"q1\",\"questions\":[]}","{\"id\":\"q1\",\"tier\":\"alert\",\"questions\":[]}",
+        "{\"id\":\"q1\",\"tier\":\"silent\",\"questions\":[]}","{\"id\":\"q1\",\"tier\":5,\"questions\":[]}",
+        "{\"id\":\"q1\",\"tier\":\"LIST\",\"questions\":[]}"};
+    for(unsigned i=0;i<sizeof alerts/sizeof *alerts;i++) {
+        p=cJSON_Parse(alerts[i]);assert(p);handle_question(p,"a");cJSON_Delete(p);
+        assert(shows==2+i&&!shown_list&&beeps==1+i);
+    }
+    // No questions, or no agent: nothing, as before.
+    p=cJSON_Parse("{\"id\":\"q1\",\"tier\":\"list\"}");assert(p);handle_question(p,"a");cJSON_Delete(p);
+    p=cJSON_Parse("{\"id\":\"q1\",\"questions\":[]}");assert(p);handle_question(p,NULL);cJSON_Delete(p);
+    assert(shows==6&&beeps==5);
     printf("Protocol identities: exact %u-byte targets / %zu-byte profiles, overlong/duplicate rejection, malformed lists preserve state, fixed row bounds PASS\n",ID_MAX-1,sizeof profile-1);
 }
 '''
