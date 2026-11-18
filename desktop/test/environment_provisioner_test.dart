@@ -1076,6 +1076,8 @@ void main() {
         ..createSync(recursive: true);
       File('$state/runtime/current-node').writeAsStringSync(managedNode.path);
       File('$data/cli/cli.js').createSync(recursive: true);
+      // A moved home: the data root holds the marker the move writes.
+      File('$data/.harness-root').writeAsStringSync('1\n');
       final provisioner = EnvironmentProvisioner(
         look: HomeLook(
           linux: true,

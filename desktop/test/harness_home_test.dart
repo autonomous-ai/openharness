@@ -134,6 +134,18 @@ void main() {
       );
       expect(platformHomeLook().environment, same(Platform.environment));
     });
+
+    test('a folder by the marker\'s name is no marker', () {
+      final scratch = Directory.systemTemp.createTempSync('home-look');
+      addTearDown(() => scratch.deleteSync(recursive: true));
+      final folder = Directory('${scratch.path}/$harnessRootMarker')
+        ..createSync();
+      final file = File('${scratch.path}/file')..createSync();
+      final look = platformHomeLook();
+      expect(look.exists(folder.path), isTrue);
+      expect(look.isFile(folder.path), isFalse);
+      expect(look.isFile(file.path), isTrue);
+    });
   });
 
   group('HarnessHome on Linux', () {

@@ -7,6 +7,9 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 const HARNESS_DIR: &str = ".harness";
+/// The file in the XDG data root that says Harness lives there. Only the CLI's move, its installers and its first start
+/// write it; hn only reads it.
+const MARKER: &str = ".harness-root";
 
 /// Data is what a person would miss, state what Harness rebuilds. Off Linux both are ~/.harness.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,11 +46,13 @@ impl Entry {
     }
 }
 
-/// What the rule reads of this computer: whether it is Linux, its environment and one existence check.
+/// What the rule reads of this computer: whether it is Linux, its environment, whether a path exists and whether it
+/// is a file.
 pub struct Look<'a> {
     pub linux: bool,
     pub env: &'a dyn Fn(&str) -> Option<OsString>,
     pub exists: &'a dyn Fn(&Path) -> bool,
+    pub file: &'a dyn Fn(&Path) -> bool,
 }
 
 /// `<base>/harness` for an XDG base folder, or for `<home>/<default>` when the variable is unset, empty or relative.
@@ -57,15 +62,15 @@ fn xdg_root(home: &Path, look: &Look, variable: &str, default: &str) -> PathBuf 
 }
 
 /// The rule every Harness app follows: on Linux the XDG roots, but `~/.harness` for both while it exists and the
-/// XDG data root does not (a home from before the move). Off Linux both are `~/.harness`. An empty home (HOME
-/// unset) gives relative folders, as the callers joined them before.
+/// XDG data root holds no marker (a home from before the move, or a data root something else made). Off Linux both
+/// are `~/.harness`. An empty home (HOME unset) gives relative folders, as the callers joined them before.
 pub fn harness_root_with(home: &Path, root: Root, look: &Look) -> PathBuf {
     let legacy = home.join(HARNESS_DIR);
     if !look.linux {
         return legacy;
     }
     let data = xdg_root(home, look, "XDG_DATA_HOME", ".local/share");
-    if !(look.exists)(&data) && (look.exists)(&legacy) {
+    if !(look.file)(&data.join(MARKER)) && (look.exists)(&legacy) {
         return legacy;
     }
     match root {
@@ -82,7 +87,7 @@ pub fn harness_path_with(home: &Path, entry: Entry, look: &Look) -> PathBuf {
 /// [harness_path_with] for this process, looked at again on each call so a move is followed.
 pub fn harness_path(home: impl AsRef<Path>, entry: Entry) -> PathBuf {
     let env = |variable: &str| std::env::var_os(variable);
-    let look = Look { linux: cfg!(target_os = "linux"), env: &env, exists: &Path::exists };
+    let look = Look { linux: cfg!(target_os = "linux"), env: &env, exists: &Path::exists, file: &Path::is_file };
     harness_path_with(home.as_ref(), entry, &look)
 }
 
@@ -99,13 +104,13 @@ mod tests {
         panic!("off Linux the rule looks at no folder")
     }
 
-    const OFF_LINUX: Look<'static> = Look { linux: false, env: &no_env, exists: &no_folder };
+    const OFF_LINUX: Look<'static> = Look { linux: false, env: &no_env, exists: &no_folder, file: &no_folder };
 
     /// Both roots for the home `/h` on Linux, where only `existing` exist and `env` is the environment.
     fn linux_roots(env: &[(&str, &str)], existing: &[&str]) -> (PathBuf, PathBuf) {
         let env = |name: &str| env.iter().find(|(key, _)| *key == name).map(|(_, value)| OsString::from(value));
         let exists = |path: &Path| existing.iter().any(|folder| Path::new(folder) == path);
-        let look = Look { linux: true, env: &env, exists: &exists };
+        let look = Look { linux: true, env: &env, exists: &exists, file: &exists };
         let home = Path::new("/h");
         (harness_root_with(home, Root::Data, &look), harness_root_with(home, Root::State, &look))
     }
@@ -179,7 +184,7 @@ mod tests {
 
     #[test]
     fn every_entry_is_under_its_root() {
-        let fresh_linux = Look { linux: true, env: &|_| None, exists: &|_| false };
+        let fresh_linux = Look { linux: true, env: &|_| None, exists: &|_| false, file: &|_| false };
         let entries = [
             (Entry::Tui, "/h/.harness/tui", "/h/.local/share/harness/tui"),
             (Entry::Cli, "/h/.harness/cli", "/h/.local/share/harness/cli"),
@@ -265,7 +270,7 @@ mod tests {
             for env in envs {
                 let read = |name: &str| env.iter().find(|(key, _)| *key == name).map(|(_, value)| OsString::from(value));
                 for (uname, linux) in [("Linux", true), ("Darwin", false)] {
-                    let look = Look { linux, env: &read, exists: &Path::exists };
+                    let look = Look { linux, env: &read, exists: &Path::exists, file: &Path::is_file };
                     let rust = harness_root_with(&home, Root::State, &look);
                     let rust = rust.to_str().unwrap();
                     let at = format!("{uname} {env:?} with {}", step.display());

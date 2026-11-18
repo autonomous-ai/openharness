@@ -10,4 +10,5 @@ HomeLook platformHomeLook({Map<String, String>? environment}) => HomeLook(
   environment: environment ?? Platform.environment,
   exists: (path) =>
       FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound,
+  isFile: FileSystemEntity.isFileSync,
 );

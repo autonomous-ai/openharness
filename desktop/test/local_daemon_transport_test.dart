@@ -224,6 +224,25 @@ void main() {
 
       test('is in XDG_RUNTIME_DIR, by the CLI\'s hash, while it is the account\'s own 0700 folder', () {
         expect(socket(runtime), '$runtime/harness/e50e7828cbafcbee/daemon-1.sock');
+        expect(socket('$runtime/'), '$runtime/harness/e50e7828cbafcbee/daemon-1.sock');
+      });
+
+      test('a long home\'s default data folder has the hash every client pins', () {
+        // The same example as store/'s and hn's daemon.rs tests.
+        final home = '/home/${'u' * 80}';
+        expect(
+          defaultDaemonSocketPath(
+            18473,
+            environment: {'HOME': home},
+            isWindows: false,
+            look: HomeLook(
+              linux: true,
+              environment: {'XDG_RUNTIME_DIR': runtime},
+              exists: (path) => false,
+            ),
+          ),
+          '$runtime/harness/410894cc1bc77e10/daemon-18473.sock',
+        );
       });
 
       test('is in the state root when XDG_RUNTIME_DIR is unset, relative, open to others or a link', () {

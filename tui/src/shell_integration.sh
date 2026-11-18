@@ -1,8 +1,9 @@
 # Loaded only in shells opened by Harness. Never installed in user startup files.
 # >>> harness state root
 # The folder Harness keeps its state in, by harness_home.rs's rule: on Linux the
-# XDG state folder, but ~/.harness while it exists and the XDG data folder does
-# not; elsewhere ~/.harness. An unset, empty or relative XDG variable is ignored.
+# XDG state folder, but ~/.harness while it exists and the XDG data folder holds
+# no .harness-root file; elsewhere ~/.harness. An unset, empty or relative XDG
+# variable is ignored.
 _hn_state_root() (
     _hn_legacy="$HOME/.harness"
     # `command`: a shell function or alias named uname never decides the folder.
@@ -19,7 +20,7 @@ _hn_state_root() (
         /*) _hn_state="${XDG_STATE_HOME%/}/harness" ;;
         *) _hn_state="$HOME/.local/state/harness" ;;
     esac
-    if [ ! -e "$_hn_data" ] && [ -e "$_hn_legacy" ]; then
+    if [ ! -f "$_hn_data/.harness-root" ] && [ -e "$_hn_legacy" ]; then
         _hn_state=$_hn_legacy
     fi
     printf '%s\n' "$_hn_state"

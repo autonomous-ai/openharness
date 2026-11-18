@@ -83,7 +83,7 @@ fn find_cli_with(home: &Path, path_var: Option<&OsStr>, over: Option<&Path>, xdg
         None => installed_with(
             home,
             path_var,
-            &Look { linux: cfg!(target_os = "linux"), env: &xdg, exists: &Path::exists },
+            &Look { linux: cfg!(target_os = "linux"), env: &xdg, exists: &Path::exists, file: &Path::is_file },
         )?,
     };
     let locale =
@@ -663,7 +663,7 @@ mod tests {
             }
             path.exists()
         };
-        let look = Look { linux: true, env: &no_env, exists: &exists };
+        let look = Look { linux: true, env: &no_env, exists: &exists, file: &exists };
         assert_eq!(installed_with(home, None, &look), Some((node, vec![cli_js.into_os_string()])));
         assert_eq!(asked.get(), 1);
     }

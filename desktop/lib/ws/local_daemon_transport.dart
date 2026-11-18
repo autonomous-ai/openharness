@@ -39,7 +39,8 @@ const _maxSocketPathBytes = 96;
 /// `$ADAPTER_DATA_DIR/daemon-<port>.sock`, by default
 /// `cli/data/daemon-<port>.sock` in Harness's data root — or null where there
 /// is none (Windows, or a home too long as well). [look] is for tests: both
-/// folders' roots are found by it, this computer's by default.
+/// folders' roots, whether it is Linux and `XDG_RUNTIME_DIR` are found by it,
+/// this computer's by default.
 String? defaultDaemonSocketPath(
   int port, {
   Map<String, String>? environment,
@@ -59,20 +60,42 @@ String? defaultDaemonSocketPath(
   if (dataDir == null) return null;
   final path = '$dataDir/${daemonSocketName(port)}';
   if (utf8.encode(path).length <= _maxSocketPathBytes) return path;
-  // Too long to hold a socket: the daemon's is under the home folder, named by
-  // the folder's hash (CLI `lib/localSocket.ts` `socketPathIn`).
+  // Too long to hold a socket: the daemon's is in a short folder named by the
+  // folder's hash (CLI `lib/localSocket.ts` `socketPathIn`): on Linux under
+  // XDG_RUNTIME_DIR while that is the account's own, else in the state root.
   // No HOME: the empty path has no socket, so this reads as the daemon being
   // down, never as a place with no socket at all, which would allow the port.
   final home = (environment ?? Platform.environment)['HOME'] ?? '';
   final hash = const DartSha256().hashSync(utf8.encode(dataDir)).bytes;
   final hex = hash.take(8).map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-  final sockets = HarnessHome.of(
-    home,
-    join: separatorJoin('/'),
-    look: rule,
-  ).path(HarnessEntry.s);
+  // Its trailing slashes go, as the CLI's `join` drops them.
+  final runtime = rule.environment['XDG_RUNTIME_DIR']?.replaceFirst(
+    RegExp(r'/+$'),
+    '',
+  );
+  final sockets = rule.linux && runtime != null && _ownPrivateFolder(runtime)
+      ? '$runtime/harness'
+      : HarnessHome.of(
+          home,
+          join: separatorJoin('/'),
+          look: rule,
+        ).path(HarnessEntry.s);
   final short = '$sockets/$hex/${daemonSocketName(port)}';
   return utf8.encode(short).length <= _maxSocketPathBytes ? short : null;
+}
+
+/// Whether [path] is absolute and names a folder itself (no link) of mode
+/// exactly 0700 that this process can enter. dart:io shows no owner, but only
+/// the owner (or root) can enter a 0700 folder, so that stands for the CLI's
+/// "owned by this account".
+bool _ownPrivateFolder(String path) {
+  if (!path.startsWith('/')) return false;
+  if (FileSystemEntity.typeSync(path, followLinks: false) !=
+      FileSystemEntityType.directory) {
+    return false;
+  }
+  if (FileStat.statSync(path).mode & 0xfff != 0x1c0) return false;
+  return FileStat.statSync('$path/.').type != FileSystemEntityType.notFound;
 }
 
 /// The header a call to the daemon's loopback PORT carries its local

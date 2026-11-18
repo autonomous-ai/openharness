@@ -1,8 +1,8 @@
 """Harness's folders in a fixture's home, by the rule hn follows (src/harness_home.rs).
 
 The fixtures lay out and read what an install on this computer has: on Linux the XDG data and
-state folders, but ~/.harness for both while it exists and the XDG data folder does not; elsewhere
-~/.harness. The full table of entries is the CLI's (cli/src/config/harnessHome.ts).
+state folders, but ~/.harness for both while it exists and the XDG data folder holds no .harness-root
+file; elsewhere ~/.harness. The full table of entries is the CLI's (cli/src/config/harnessHome.ts).
 
     python3 tests/harness_home.py <home> <entry>   prints the entry's folder for this environment
 """
@@ -27,7 +27,7 @@ def roots(home, env):
         return (Path(value) if os.path.isabs(value) else home / default) / 'harness'
 
     data = xdg('XDG_DATA_HOME', '.local/share')
-    if not data.exists() and legacy.exists():
+    if not (data / '.harness-root').is_file() and legacy.exists():
         return legacy, legacy
     return data, xdg('XDG_STATE_HOME', '.local/state')
 

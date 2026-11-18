@@ -11,6 +11,10 @@ export 'harness_home_look_stub.dart'
 /// The folder under the account's home that holds everything Harness keeps.
 const harnessHomeName = '.harness';
 
+/// The file in the XDG data root that says Harness lives there. Only the CLI's
+/// move, its installers and its first start write it; Desktop only reads it.
+const harnessRootMarker = '.harness-root';
+
 /// What an entry holds: something the person would miss (data), or something
 /// Harness can rebuild (state). On Linux each kind has its XDG root; elsewhere,
 /// and on a Linux home not moved yet, both are `~/.harness`.
@@ -60,26 +64,33 @@ HarnessJoin separatorJoin(String separator) =>
     (left, right) => '$left$separator$right';
 
 /// What the rule reads of this computer: whether it is Linux, its environment
-/// (the XDG variables) and one existence check.
+/// (the XDG variables), whether a path exists and whether it is a file. A
+/// look that leaves [isFile] out answers it as [exists].
 final class HomeLook {
   const HomeLook({
     required this.linux,
     required this.environment,
     required this.exists,
+    this._isFile,
   });
 
   final bool linux;
   final Map<String, String> environment;
   final bool Function(String path) exists;
+  final bool Function(String path)? _isFile;
 
-  /// This look, each folder answered as it first was: roots found through it
+  bool isFile(String path) => (_isFile ?? exists)(path);
+
+  /// This look, each path answered as it first was: roots found through it
   /// twice come from one layout even while Harness's folder moves.
   HomeLook remembered() {
     final seen = <String, bool>{};
+    final files = <String, bool>{};
     return HomeLook(
       linux: linux,
       environment: environment,
       exists: (path) => seen[path] ??= exists(path),
+      isFile: (path) => files[path] ??= isFile(path),
     );
   }
 }
@@ -87,8 +98,9 @@ final class HomeLook {
 /// Harness's roots and the paths of its entries.
 final class HarnessHome {
   /// The roots for [home] by the rule (docs/plans/2026-11-18-linux-xdg-paths-design.md):
-  /// on Linux the XDG roots when the data root exists, else `<home>/.harness`
-  /// when that exists, else the XDG roots. Off Linux, `<home>/.harness`.
+  /// on Linux the XDG roots when the data root holds [harnessRootMarker], else
+  /// `<home>/.harness` when that exists, else the XDG roots. Off Linux,
+  /// `<home>/.harness`.
   /// Resolved here, once: a caller that must follow a move builds it again.
   factory HarnessHome.of(
     String home, {
@@ -106,9 +118,10 @@ final class HarnessHome {
       _xdgBase(rule, 'XDG_STATE_HOME', home, 'state', join),
       'harness',
     );
-    // The data root is the one switch, so the bridge or a ~/.harness that
-    // something old recreates never sends a moved home back.
-    if (!rule.exists(data) && rule.exists(legacy)) {
+    // The marker is the one switch: the bridge or a ~/.harness that something
+    // old recreates never sends a moved home back, and a data root Desktop's
+    // own store made before the CLI never strands a ~/.harness home.
+    if (!rule.isFile(join(data, harnessRootMarker)) && rule.exists(legacy)) {
       return HarnessHome._(legacy, legacy, legacy, join);
     }
     return HarnessHome._(data, state, legacy, join);
