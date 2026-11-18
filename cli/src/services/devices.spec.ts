@@ -24,10 +24,10 @@ import { createServiceHost } from '../core/serviceHost.js'
 import * as claudePlugin from '../devices/claudePlugin.js'
 import type { ClaudeRun } from '../devices/claudePlugin.js'
 import { DIAL_SKILL } from '../devices/dialSkill.js'
-import { readSetup, writeSetup } from '../devices/dialSkillFiles.js'
+import { readSetup, writeRemoved, writeSetup } from '../devices/dialSkillFiles.js'
 import type { OrcaHomes, OrcaHomesCache } from '../devices/orcaHomes.js'
 import * as vscodeExtension from '../devices/vscodeExtension.js'
-import type { VscodeExtensionDeps } from '../devices/vscodeExtension.js'
+import type { VscodeEditor, VscodeExtensionDeps } from '../devices/vscodeExtension.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
 import { STOP_HOOK_GRACE_MS } from '../core/turns/turnHooks.js'
 import type { FleetEvent } from '../cable/machineFleet.js'
@@ -379,14 +379,15 @@ const processGroups = {
   land: [] as Array<() => void>,
 }
 
-/** VS Code and Harness's extension as the devices see them (services/devices.ts vscodeExtension): the spec's own, absent
- *  unless the spec says its [app] is there or names the version [installed], each `code` run kept, so no spec runs the
- *  developer's VS Code or reads its ~/.vscode. A run installs this build's 9.9.9. */
-function fakeVscode({ installed = null, app = installed !== null }: { installed?: string | null; app?: boolean } = {}) {
+/** An editor, VS Code or Cursor, and Harness's extension in it as the devices see them (services/devices.ts
+ *  vscodeExtension, cursorExtension): the spec's own, absent unless the spec says its [app] is there or names the version
+ *  [installed], each run of its CLI kept, so no spec runs the developer's VS Code or Cursor or reads its ~/.vscode or
+ *  ~/.cursor. A run installs this build's 9.9.9. */
+function fakeVscode({ installed = null, app = installed !== null, editor = 'vscode' }: { installed?: string | null; app?: boolean; editor?: VscodeEditor } = {}) {
   const runs: string[][] = []
   let version = installed
   const deps: VscodeExtensionDeps = {
-    editor: 'vscode',
+    editor,
     real: (path) => path,
     platform: 'darwin',
     home: '/nowhere',
@@ -445,7 +446,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; claudeFullscreen?: null; claudeManagedSettings?: string } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; claudeFullscreen?: null; claudeManagedSettings?: string } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   // None, and no read under way, unless the spec gives its own; null leaves the devices to read this computer's.
   const orcaHomes = over.orcaHomes ?? fakeOrcaHomes()
@@ -479,8 +480,10 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     // A `claude` that finds none unless the spec gives its own: no spec runs the developer's. null leaves it out.
     claude: over.claude === null ? undefined : over.claude ?? (async () => null),
     orcaHomes: over.orcaHomes === null ? undefined : orcaHomes.cache(),
-    // A VS Code that is absent unless the spec gives its own: no spec runs the developer's. null leaves it out.
+    // A VS Code and a Cursor that are absent unless the spec gives its own: no spec runs the developer's. null leaves it
+    // out.
     vscodeExtension: over.vscodeExtension === null ? undefined : over.vscodeExtension ?? fakeVscode().deps,
+    cursorExtension: over.cursorExtension === null ? undefined : over.cursorExtension ?? fakeVscode({ editor: 'cursor' }).deps,
     processParents: async () => {
       processTable.reads++
       return processTable.rows
@@ -8457,11 +8460,12 @@ describe('the dial setup, from the devices\' own process (cable/dialSetup.ts)', 
   })
 })
 
-describe('Harness\'s VS Code extension, set up once a computer from the devices\' own process (cable/vscodeExtensionSetup.ts)', () => {
+describe('Harness\'s VS Code extension, set up once a computer in VS Code and in Cursor from the devices\' own process (cable/vscodeExtensionSetup.ts)', () => {
   /** Lets an install's answer be taken. */
   const settled = () => new Promise((resolve) => setImmediate(resolve))
   const flags = (vscode: ReturnType<typeof fakeVscode>) => vscode.runs.map(([, flag]) => flag)
-  const tallied = (line: string) => line.startsWith('[device] vscode extension · vscode')
+  /** The tally's lines for one editor. */
+  const counted = (editor: VscodeEditor) => (line: string) => line.startsWith(`[device] vscode extension · ${editor}`)
 
   it('a dial\'s first attach installs it once, records it in dial-setup.json and counts it set up', async () => {
     const vscode = fakeVscode({ app: true })
@@ -8474,8 +8478,8 @@ describe('Harness\'s VS Code extension, set up once a computer from the devices\
 
     await vi.waitFor(() => expect(readSetup(dataDir).vscode).toBe('9.9.9'))
     expect(flags(vscode)).toEqual(['--install-extension'])
-    expect(logs.filter(tallied)).toEqual(['[device] vscode extension · vscode · set up'])
-    expect(logs).toContainEqual(expect.stringMatching(/^\[device\] vscode extension · day \d{4}-\d\d-\d\d · vscode set up 1 updated 0 failed 0 left removed 0$/))
+    expect(logs.filter(counted('vscode'))).toEqual(['[device] vscode extension · vscode · set up'])
+    expect(logs).toContainEqual(expect.stringMatching(/^\[device\] vscode extension · day \d{4}-\d\d-\d\d · vscode set up 1 updated 0 failed 0 left removed 0 · cursor set up 0 updated 0 failed 0 left removed 0$/))
     // A replug installs nothing more.
     seen.host.watching!(false)
     seen.host.watching!(true)
@@ -8486,14 +8490,16 @@ describe('Harness\'s VS Code extension, set up once a computer from the devices\
   it.each([
     ['their own process: brought current as they start', true, ['--install-extension']],
     ['the core\'s process: nothing, at a start or an attach', false, []],
-  ])('on at another version, in %s', async (_, own, runs) => {
+  ])('on at another version in VS Code and in Cursor, in %s', async (_, own, runs) => {
     const vscode = fakeVscode({ installed: '0.0.1' })
-    start({ faults: ['fleet'], listen: own ? fakeListener().listen : undefined, vscodeExtension: vscode.deps })
-    await vi.waitFor(() => expect(flags(vscode)).toEqual(runs))
+    const cursor = fakeVscode({ installed: '0.0.1', editor: 'cursor' })
+    start({ faults: ['fleet'], listen: own ? fakeListener().listen : undefined, vscodeExtension: vscode.deps, cursorExtension: cursor.deps })
+    await vi.waitFor(() => expect([flags(vscode), flags(cursor)]).toEqual([runs, runs]))
     seen.host.watching!(true)
     await settled()
-    expect(flags(vscode)).toEqual(runs)
-    expect(logs.filter(tallied)).toEqual(own ? ['[device] vscode extension · vscode · updated'] : [])
+    expect([flags(vscode), flags(cursor)]).toEqual([runs, runs])
+    expect(logs.filter(counted('vscode'))).toEqual(own ? ['[device] vscode extension · vscode · updated'] : [])
+    expect(logs.filter(counted('cursor'))).toEqual(own ? ['[device] vscode extension · cursor · updated'] : [])
   })
 
   // The end-to-end harness points HARNESS_VSCODE_BIN at a file inside each daemon's own root that is not there
@@ -8523,6 +8529,88 @@ describe('Harness\'s VS Code extension, set up once a computer from the devices\
     await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
     await settled()
     expect(vscode.runs).toEqual([])
+  })
+
+  it('a dial\'s first attach installs it into Cursor too, records it and counts it under cursor', async () => {
+    const cursor = fakeVscode({ app: true, editor: 'cursor' })
+    start({ faults: ['fleet'], listen: fakeListener().listen, cursorExtension: cursor.deps })
+    await settled()
+    expect(cursor.runs).toEqual([])
+
+    seen.host.watching!(true)
+
+    await vi.waitFor(() => expect(readSetup(dataDir).cursor).toBe('9.9.9'))
+    expect(flags(cursor)).toEqual(['--install-extension'])
+    // No VS Code on this computer: nothing is recorded for it.
+    expect(readSetup(dataDir).vscode).toBeUndefined()
+    expect(logs.filter(counted('cursor'))).toEqual(['[device] vscode extension · cursor · set up'])
+    expect(logs).toContainEqual(expect.stringMatching(/^\[device\] vscode extension · day \d{4}-\d\d-\d\d · vscode set up 0 updated 0 failed 0 left removed 0 · cursor set up 1 updated 0 failed 0 left removed 0$/))
+  })
+
+  it('Cursor\'s install failing leaves VS Code\'s alone: VS Code\'s is set up and recorded, Cursor\'s counted failed', async () => {
+    const vscode = fakeVscode({ app: true })
+    const cursor = fakeVscode({ app: true, editor: 'cursor' })
+    start({ faults: ['fleet'], listen: fakeListener().listen, vscodeExtension: vscode.deps, cursorExtension: { ...cursor.deps, run: async () => ({ code: 1, timedOut: false }) } })
+    seen.host.watching!(true)
+    await vi.waitFor(() => expect(logs.filter(counted('cursor'))).toEqual(['[device] vscode extension · cursor · failed · failed']))
+    await vi.waitFor(() => expect(readSetup(dataDir).vscode).toBe('9.9.9'))
+    expect(readSetup(dataDir).cursor).toBeUndefined()
+    expect(logs.filter(counted('vscode'))).toEqual(['[device] vscode extension · vscode · set up'])
+  })
+
+  it.each([
+    ['Cursor', 'cursor', 'vscode'],
+    ['VS Code', 'vscode', 'cursor'],
+  ] as const)('marked removed for %s, nothing is installed there, and the other editor\'s still is', async (_, off, on) => {
+    expect(writeRemoved(dataDir, off, true)).toBeUndefined()
+    const editors = { vscode: fakeVscode({ app: true }), cursor: fakeVscode({ app: true, editor: 'cursor' }) }
+    start({ faults: ['fleet'], listen: fakeListener().listen, vscodeExtension: editors.vscode.deps, cursorExtension: editors.cursor.deps })
+    seen.host.watching!(true)
+    await vi.waitFor(() => expect(readSetup(dataDir)[on]).toBe('9.9.9'))
+    await settled()
+    expect(flags(editors[on])).toEqual(['--install-extension'])
+    expect(flags(editors[off])).toEqual([])
+    expect(readSetup(dataDir)[off]).toBeUndefined()
+  })
+
+  it('a read of Cursor\'s record that throws is counted by a fixed word: no line holds its path, the home or the error\'s words', async () => {
+    const cursor = fakeVscode({ app: true, editor: 'cursor' })
+    const home = '/Users/SECRET-HOME-MARKER'
+    const read = (): never => { throw new Error(`EACCES: ${home}/.cursor/extensions/extensions.json`) }
+    start({ faults: ['fleet'], listen: fakeListener().listen, cursorExtension: { ...cursor.deps, home, read } })
+    seen.host.watching!(true)
+    await vi.waitFor(() => expect(logs.filter(counted('cursor'))).toEqual(['[device] vscode extension · cursor · failed · error']))
+    expect(cursor.runs).toEqual([])
+    expect(logs.filter((line) => line.includes('SECRET-'))).toEqual([])
+  })
+
+  // As VS Code's: the end-to-end harness points HARNESS_CURSOR_BIN at a file inside each daemon's own root that is not
+  // there (e2e/harness/daemon.ts), so a fake dial's attach on a Mac with Cursor in /Applications installs nothing into it.
+  it.each([
+    ['unset: Cursor in /Applications is found, and installed into', undefined, ['--install-extension']],
+    ['a file that is not there: none is found, and nothing runs', '/tmp/e2e/root/cursor/cursor', []],
+  ])('HARNESS_CURSOR_BIN %s', async (_, bin, runs) => {
+    vi.stubEnv('HARNESS_CURSOR_BIN', bin)
+    const cursor = fakeVscode({ app: true, editor: 'cursor' })
+    const inApplications = (path: string) => path.startsWith('/Applications/')
+    const own = vi.spyOn(vscodeExtension, 'vscodeExtensionDeps')
+      .mockImplementation((editor, given) => ({ ...cursor.deps, editor, exists: inApplications, executable: inApplications, bin: given }))
+    start({ faults: ['fleet'], listen: fakeListener().listen, cursorExtension: null })
+    seen.host.watching!(true)
+    await settled()
+    expect(own.mock.calls).toEqual([['cursor', bin]])
+    expect(flags(cursor)).toEqual(runs)
+    expect(readSetup(dataDir).cursor).toBe(runs.length ? '9.9.9' : undefined)
+  })
+
+  it('a throw on Cursor\'s path costs the dial, and VS Code\'s setup, nothing', async () => {
+    const vscode = fakeVscode({ installed: '0.0.1' })
+    const cursor = fakeVscode({ installed: '0.0.1', editor: 'cursor' })
+    await start({ faults: ['fleet', 'cursorExtension'], listen: fakeListener().listen, vscodeExtension: vscode.deps, cursorExtension: cursor.deps }).orcaHomes.landed()
+    expect(logs).toContain('[devices] cursorExtension failed · injected fault: cursorExtension')
+    await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+    await vi.waitFor(() => expect(flags(vscode)).toEqual(['--install-extension']))
+    expect(cursor.runs).toEqual([])
   })
 })
 
