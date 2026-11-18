@@ -49,12 +49,11 @@ export interface OldUserFacts { uid: number; master: number; bootId: string; roo
 
 /**
  * How many of [rows] can still use an old path: this account's processes that started before the move, on the clock of
- * the boot it ran in (in another boot every process started after it), and are an engine
- * by name, run an executable in the old tree or the roots it moved to (the kernel names a moved executable at its new
- * place), are Desktop or the Device app, or are a retagged pane's process or one of its descendants. The daemon's own
- * are not, all of them the master's: the master and its ancestors, as a master that moved re-executed in place, keeping
- * its start time, and runs from the new paths; and its descendants, the core, the services and what they started, which
- * it started from the new paths, some in the move's own second.
+ * the boot it ran in (in another boot every process started after it), and are an engine by name, run an executable in
+ * the old tree or the roots it moved to (the kernel names a moved executable at its new place), are Desktop or the Device
+ * app, or are a retagged pane's process or one of its descendants. The daemon's own are not, all of them the master's:
+ * the master and its ancestors, as a master that moved re-executed in place, keeping its start time, and runs from the
+ * new paths; and its descendants, the core, the services and what they started, all from the new paths.
  */
 export function oldUsers(bridge: BridgeRecord, rows: readonly ProcRow[], facts: OldUserFacts): number {
   // A bridge with no boot was written where /proc has none, as no move is.
