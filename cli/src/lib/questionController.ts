@@ -71,22 +71,37 @@ export function matchRow(rows: QuestionRow[], answer: string): QuestionRow | nul
  * with ", " and a label may hold a comma itself, so the answer is split only where every piece is a whole label
  * (exactly, as matchRow's first test). Of several readings the fewest pieces wins; on a tie, the longest first
  * piece, then the same rule on the rest. Null when no reading spells the whole answer.
+ *
+ * The answer is outside text read in the core's own loop, so the work grows with its length alone: a piece holds
+ * as many commas as the label it spells, never more than the label with the most. Trying every run of pieces
+ * held the core 12 s on a 3 KB answer (2026-11-18).
  */
 export function partitionLabels(rows: QuestionRow[], answer: string): QuestionRow[] | null {
+  // The first row of each label, as matchRow's find takes it; norm keeps every comma.
+  const byLabel = new Map<string, QuestionRow>()
+  let widest = 1
+  for (const row of rows) {
+    const label = norm(row.label)
+    if (!label || byLabel.has(label)) continue
+    byLabel.set(label, row)
+    widest = Math.max(widest, label.split(',').length)
+  }
   const parts = answer.split(',')
-  // best[i]: the fewest rows that spell parts[i..]; parts.length spells nothing.
-  const best = Array<QuestionRow[] | null>(parts.length + 1).fill(null)
-  best[parts.length] = []
+  // count[i]: the fewest rows that spell parts[i..], the first of them first[i], the rest from parts[next[i]].
+  const count = Array<number>(parts.length + 1).fill(Infinity)
+  const first = Array<QuestionRow | undefined>(parts.length), next = Array<number>(parts.length)
+  count[parts.length] = 0
   for (let i = parts.length - 1; i >= 0; i--) {
     // Longest piece first, so a tie keeps it.
-    for (let j = parts.length; j > i; j--) {
-      const piece = norm(parts.slice(i, j).join(','))
-      const row = piece ? rows.find((r) => norm(r.label) === piece) : undefined
-      const rest = best[j], current = best[i]
-      if (row && rest && (!current || rest.length + 1 < current.length)) best[i] = [row, ...rest]
+    for (let j = Math.min(parts.length, i + widest); j > i; j--) {
+      const row = byLabel.get(norm(parts.slice(i, j).join(',')))
+      if (row && count[j] + 1 < count[i]) { count[i] = count[j] + 1; first[i] = row; next[i] = j }
     }
   }
-  return best[0]
+  if (count[0] === Infinity) return null
+  const spelled: QuestionRow[] = []
+  for (let i = 0; i < parts.length; i = next[i]) spelled.push(first[i]!)
+  return spelled
 }
 
 /**
