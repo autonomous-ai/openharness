@@ -1,9 +1,10 @@
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { homedir, tmpdir } from 'node:os'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { findTuiBinary, opensClient, platformKey, TUI_NOT_IN_PAYLOAD, tuiCommand } from './index.js'
+import { harnessPath } from '../config/harnessHome.js'
 import { localDaemonStatus } from '../lib/daemonEndpoint.js'
 vi.mock('../lib/daemonEndpoint.js', () => ({ localDaemonStatus: vi.fn() }))
 
@@ -111,10 +112,34 @@ describe('harness tui launcher', () => {
     })])
   })
 
-  it('with no ADAPTER_DATA_DIR the data folder is <home>/.harness/cli/data', async () => {
+  // cli.ts always hands over the resolved data folder; naming it to the daemon would pin it to
+  // today's root, so the rule picks the folder in the daemon instead.
+  it('the daemon hn starts gets no ADAPTER_DATA_DIR the person did not set', async () => {
+    vi.stubEnv('ADAPTER_DATA_DIR', undefined)
+    vi.mocked(localDaemonStatus).mockResolvedValueOnce(null).mockResolvedValue({ machineId: 'guest-computer' })
+    await expect(tuiCommand([], { port: 19418, dataDir: join(harnessPath('cli'), 'data') })).resolves.toBe(0)
+    const [start, hn] = vi.mocked(spawnSync).mock.calls
+    expect(start[1]).toContain('start')
+    expect(start[2]?.env).not.toHaveProperty('ADAPTER_DATA_DIR')
+    expect(hn[0]).toBe(binary)
+    expect(hn[2]?.env).not.toHaveProperty('ADAPTER_DATA_DIR')
+  })
+
+  it('a data folder the person set is passed on', async () => {
+    const mine = join(home, 'my-data')
+    vi.stubEnv('ADAPTER_DATA_DIR', mine)
+    vi.mocked(localDaemonStatus).mockResolvedValueOnce(null).mockResolvedValue({ machineId: 'guest-computer' })
+    await expect(tuiCommand([], { port: 19418, dataDir: mine })).resolves.toBe(0)
+    expect(localDaemonStatus).toHaveBeenCalledWith(mine, 19418)
+    const [start, hn] = vi.mocked(spawnSync).mock.calls
+    expect(start[2]?.env?.ADAPTER_DATA_DIR).toBe(mine)
+    expect(hn[2]?.env?.ADAPTER_DATA_DIR).toBe(mine)
+  })
+
+  it('hn still finds the daemon in the default folder', async () => {
     vi.stubEnv('ADAPTER_DATA_DIR', undefined)
     await expect(tuiCommand(['-L', 'hnr19fix-launcher', '--port', '19419'], { port: 19418 })).resolves.toBe(0)
-    expect(localDaemonStatus).toHaveBeenCalledWith(join(homedir(), '.harness', 'cli', 'data'), 19419)
+    expect(localDaemonStatus).toHaveBeenCalledWith(join(harnessPath('cli'), 'data'), 19419)
   })
 
   it('opens a local client after the daemon startup deadline', async () => {
