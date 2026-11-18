@@ -57,12 +57,15 @@ export function createEngineStorage(deps: EngineStorageDeps) {
           if (!current()) throw new Error('checkpoint unavailable')
           await ownership.writer(lifetime?.pid ?? process.pid)
           if (!current()) throw new Error('checkpoint unavailable')
-          return deps.isolated
+          const exported = deps.isolated
             ? await exports.read(session.engine, STORAGE_EXPORT, { session: captured, stage, source, lifetime }, exportReceipt) as ExportReceipt
             : await deps.inlineExport?.(session.engine as StorageEngine, captured, stage, source, current)
+          if (!current() || !exportReceipt(exported)) throw new Error('checkpoint unavailable')
+          await ownership.settled()
+          if (!current()) throw new Error('checkpoint unavailable')
+          return exported
         }), Math.max(0, Math.ceil(deadline - performance.now())), () => new Error('checkpoint unavailable'))
         if (!current() || !exportReceipt(receipt)) throw new Error('checkpoint unavailable')
-        ownership.settled()
         return receipt
       } finally { active = false }
     },

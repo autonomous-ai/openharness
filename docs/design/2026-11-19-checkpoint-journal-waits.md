@@ -138,3 +138,13 @@ work settles, so an explicit retry after a completed callback failure still perf
 Close drains that promise too. Its descriptor-close dependency never calls stage.close, so the wait
 graph remains acyclic. A new held-history-close RED demands second-publication refusal and the first
 intent remaining unchanged; it will fail on the original runtime before correction.
+
+## Actual RED before runtime
+
+At clean `bab40380d4`, all eight selected cases fail as intended. Five journal operations hit the
+synchronous-fsync trap; the held history-close case admits a second publication; storage returns
+receipts before settlement and accepts the four pending settlements instead of timing them out.
+No timeout or unexpected harness failure occurs. Receipt:
+`.harness/validation/20261118T210804.400032Z-57354/receipt.json` (1.2 s + 0.7 s, actual exit 1).
+The reviewed runtime patch SHA `cca38744d9203531c65478baf8cf9d4854ac62e349dd1c90533af6a4f450ff89`
+follows this captured RED; targeted GREEN and all 19 new controls are next.

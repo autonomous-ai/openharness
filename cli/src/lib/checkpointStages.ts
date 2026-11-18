@@ -1,5 +1,5 @@
 /** Four durable reservations. An unsettled writer keeps its slot across core replacement. */
-import { constants, lstatSync, mkdirSync, openSync, closeSync, writeFileSync, ftruncateSync, fstatSync, fsyncSync,
+import { constants, lstatSync, mkdirSync, openSync, writeFileSync, ftruncateSync, fstatSync, fsync,
   unlinkSync, rmdirSync, renameSync, type BigIntStats } from 'node:fs'
 import { lstat, open, type FileHandle } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
@@ -7,7 +7,7 @@ import { basename, dirname, join } from 'node:path'
 import { nativeFileKey } from '../engines/kit/nativePaths.js'
 import { exportReceipt, STORAGE_CHUNK_BYTES, STORAGE_IN_FLIGHT, STORAGE_STAGE_BYTES, STORAGE_EXPORT_WAIT_MS, type ExportReceipt, type ExportStage,
   type ExportOwnership } from '../engines/worker/storageProtocol.js'
-import { readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
+import { closeStateFileDescriptor, directorySyncSupported, readPrivateStateFile, secureStateDirectory, syncStateDirectory } from './secureState.js'
 
 function privateFile(stat: BigIntStats): void {
   if (!stat.isFile() || stat.nlink !== 1n || (process.platform !== 'win32' && (stat.mode & 0o777n) !== 0o600n)
@@ -22,6 +22,19 @@ function identity(path: string, key: string): BigIntStats {
 function directoryIdentity(path: string, key: string): void {
   secureStateDirectory(path, false)
   if (nativeFileKey(lstatSync(path, { bigint: true })) !== key) throw new Error('checkpoint slot changed')
+}
+function flush(fd: number): Promise<void> {
+  return new Promise((resolve, reject) => fsync(fd, error => { if (error) reject(error); else resolve() }))
+}
+async function flushSlot(directory: string, key: string): Promise<void> {
+  if (!directorySyncSupported()) return
+  const fd = openSync(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
+  try {
+    if (nativeFileKey(fstatSync(fd, { bigint: true })) !== key) throw new Error('checkpoint slot changed')
+    directoryIdentity(directory, key)
+    await flush(fd)
+    directoryIdentity(directory, key)
+  } finally { closeStateFileDescriptor(fd) }
 }
 function absent(pid: number): boolean {
   try { process.kill(pid, 0); return false } catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH' }
@@ -127,42 +140,67 @@ export class CheckpointStages {
       let key: string
       try { const before = await file.stat({ bigint: true }); privateFile(before); key = nativeFileKey(before) }
       catch (error) { await file.close(); throw error }
-      const owner: Owner = { version: 1, core: process.pid, writer: null, settled: false, key }
-      let recordKey: string | undefined
-      const writeOwner = () => {
-        directoryIdentity(directory, directoryKey)
-        if (recordKey) identity(record, recordKey)
-        const fd = openSync(record, constants.O_WRONLY | constants.O_NOFOLLOW | (recordKey ? 0 : constants.O_CREAT | constants.O_EXCL), 0o600)
-        try {
-          const opened = fstatSync(fd, { bigint: true }); privateFile(opened)
-          const openedKey = nativeFileKey(opened)
-          if (recordKey && recordKey !== openedKey) throw new Error('checkpoint stage changed')
+      let owner: Owner = { version: 1, core: process.pid, writer: null, settled: false, key }
+      let recordKey: string | undefined, ownerWrite: Promise<void> | undefined
+      const writeOwner = (next: Owner): Promise<void> => {
+        if (ownerWrite) throw new Error('checkpoint owner update busy')
+        owner = next
+        const work = (async () => {
           directoryIdentity(directory, directoryKey)
-          identity(record, openedKey)
-          ftruncateSync(fd, 0); writeFileSync(fd, JSON.stringify(owner)); fsyncSync(fd)
-          // Only creation changes the directory. Retain its durability after both flushes and exact identity checks.
-          if (!recordKey) syncStateDirectory(directory)
-          directoryIdentity(directory, directoryKey)
-          identity(record, openedKey)
-          recordKey ??= openedKey
-        } finally { closeSync(fd) }
+          if (recordKey) identity(record, recordKey)
+          const fd = openSync(record, constants.O_WRONLY | constants.O_NOFOLLOW | (recordKey ? 0 : constants.O_CREAT | constants.O_EXCL), 0o600)
+          try {
+            const opened = fstatSync(fd, { bigint: true }); privateFile(opened)
+            const openedKey = nativeFileKey(opened)
+            if (recordKey && recordKey !== openedKey) throw new Error('checkpoint stage changed')
+            directoryIdentity(directory, directoryKey)
+            identity(record, openedKey)
+            ftruncateSync(fd, 0); writeFileSync(fd, JSON.stringify(next))
+            const written = fstatSync(fd, { bigint: true }); privateFile(written)
+            const verifyOwner = () => {
+              directoryIdentity(directory, directoryKey)
+              const actual = fstatSync(fd, { bigint: true }); privateFile(actual)
+              if (version(actual) !== version(written) || version(identity(record, openedKey)) !== version(written)) {
+                throw new Error('checkpoint stage changed')
+              }
+            }
+            await flush(fd)
+            verifyOwner()
+            // Initial owner creation still requires both durable names before a lease may escape.
+            if (!recordKey) await flushSlot(directory, directoryKey)
+            verifyOwner()
+            recordKey ??= openedKey
+          } finally { closeStateFileDescriptor(fd) }
+        })()
+        // Keep the actual callback/close alive after a bounded caller reply. This work never calls stage.close().
+        ownerWrite = work
+        void work.then(() => { ownerWrite = undefined }, () => { ownerWrite = undefined })
+        return work
       }
-      try { writeOwner() } catch (error) { await file.close(); throw error }
+      try { await writeOwner(owner) } catch (error) { await file.close(); throw error }
       let closed = false, verified: string | undefined, verification: Promise<void> | undefined, cleanup: Promise<void> | undefined
-      let descriptorClose: Promise<void> | undefined
+      let descriptorClose: Promise<void> | undefined, publication: Promise<void> | undefined
       const closeDescriptor = () => descriptorClose ??= file.close()
       const current = () => { if (closed || performance.now() >= deadline) throw expired() }
       return {
         deadline,
         stage: { path, key },
         writer: async pid => {
-          if (closed || owner.writer !== null || !Number.isSafeInteger(pid) || pid <= 0) throw new Error('checkpoint writer unavailable')
-          owner.writer = pid; writeOwner()
+          current()
+          if (publication) throw new Error('checkpoint publication busy')
+          if (owner.writer !== null || !Number.isSafeInteger(pid) || pid <= 0) throw new Error('checkpoint writer unavailable')
+          await beforeDeadline(writeOwner({ ...owner, writer: pid }), deadline)
+          current()
         },
-        settled: () => { owner.settled = true; writeOwner() },
+        settled: async () => {
+          current()
+          if (publication) throw new Error('checkpoint publication busy')
+          await beforeDeadline(writeOwner({ ...owner, settled: true }), deadline)
+          current()
+        },
         verify: async receipt => {
           current()
-          if (verification) throw new Error('checkpoint verification busy')
+          if (verification || ownerWrite || publication) throw new Error('checkpoint verification busy')
           const work = (async () => {
             if (!exportReceipt(receipt)) throw new Error('invalid checkpoint receipt')
             const before = await file.stat({ bigint: true }); current(); privateFile(before)
@@ -191,21 +229,31 @@ export class CheckpointStages {
         },
         publish: async (destination, allowed) => {
           current()
-          if (!verified || (owner.writer !== null && !owner.settled)) throw new Error('checkpoint stage unconfirmed')
-          if (dirname(destination) !== dirname(this.directory) || !historyName(basename(destination))) throw new Error('checkpoint destination refused')
-          owner.destination = basename(destination); writeOwner()
-          await beforeDeadline(closeDescriptor(), deadline)
-          current()
-          directoryIdentity(directory, directoryKey)
-          if (version(identity(path, key)) !== verified) throw new Error('checkpoint stage changed')
-          allowed()
-          current()
-          renameSync(path, destination)
+          if (publication) throw new Error('checkpoint publication busy')
+          const work = (async () => {
+            if (ownerWrite || !verified || (owner.writer !== null && !owner.settled)) throw new Error('checkpoint stage unconfirmed')
+            if (dirname(destination) !== dirname(this.directory) || !historyName(basename(destination))) throw new Error('checkpoint destination refused')
+            await writeOwner({ ...owner, destination: basename(destination) })
+            current()
+            await closeDescriptor()
+            current()
+            directoryIdentity(directory, directoryKey)
+            if (version(identity(path, key)) !== verified) throw new Error('checkpoint stage changed')
+            allowed()
+            current()
+            renameSync(path, destination)
+          })()
+          // Retain the destination through actual descriptor close, not just its journal write or bounded reply.
+          publication = work
+          void work.then(() => { publication = undefined }, () => { publication = undefined })
+          await beforeDeadline(work, deadline)
         },
         close: async () => {
           cleanup ??= (async () => {
             closed = true
-            // Never unlink a file while the core's actual read or close can still be holding its descriptor.
+            // Closing revokes new work first. These raw operations never await this cleanup continuation.
+            await ownerWrite?.catch(() => {})
+            await publication?.catch(() => {})
             await verification?.catch(() => {})
             await closeDescriptor()
             if (owner.writer !== null && !owner.settled) { retained(); return }
