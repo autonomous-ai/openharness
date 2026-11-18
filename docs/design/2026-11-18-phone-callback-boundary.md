@@ -80,7 +80,7 @@ verification is explicitly deferred by the owner. No Desktop/mobile UI change or
 - Affected unit tests/types/architecture and per-file coverage; final mapped gates remain root's responsibility.
 - Freeze the implementation and workload for before/after cost; retain every exit and cleanup receipt.
 
-Current state: implementation and selected unit validation are underway in an isolated worktree. Native isolation, matched cost, independent review and final integration gates remain open; this document does not claim completed extraction.
+Current state: implementation, selected unit coverage and packaged Mac isolation cases pass in an isolated worktree. The matched core-logic input comparison below is complete. Independent review and combined native performance/integration gates remain open; this document does not claim completed extraction.
 
 ### First shared seam selected before implementation
 
@@ -107,6 +107,37 @@ The browser shim writer now belongs to engineSetup, and only its pure shell prel
 
 The selected second receipt passed 622 cases with one existing skip and types; it retained a failed coverage gate for one browser branch. The subsequent unrelated-agent lifecycle assertion passes, with browser.ts at 100% on all four metrics and types passing. The other 14 selected files were already at 100% in that second receipt.
 
-Two packaged macOS cases pass: supervised gateway/engineSetup and explicit inline compatibility. They exercise encrypted terminal input, page routing, a callback with an endless body, same-port redirect, one-use redemption, gateway kill/reconnect, and unrelated local work without a core restart. A tightened rerun also asserts master exit zero, actual close, stdout/stderr EOF, private root removal, and propagates the daemon fixture's cleanup failures. Receipts: `.harness/validation/20261118T022041.238642Z-5901/receipt.json` (focused final coverage/types), `.harness/validation/20261118T022951.700174Z-15165/receipt.json` (packaged cases, 38 seconds). Earlier failed receipts remain retained. Matched hot-path cost and independent full review remain open.
+Two packaged macOS cases pass: supervised gateway/engineSetup and explicit inline compatibility. They exercise encrypted terminal input, page routing, a callback with an endless body, same-port redirect, one-use redemption, gateway kill/reconnect, and unrelated local work without a core restart. A tightened rerun also asserts master exit zero, actual close, stdout/stderr EOF, private root removal, and propagates the daemon fixture's cleanup failures. Receipts: `.harness/validation/20261118T022041.238642Z-5901/receipt.json` (focused final coverage/types), `.harness/validation/20261118T022951.700174Z-15165/receipt.json` (packaged cases, 38 seconds). Earlier failed receipts remain retained. Combined native cost and independent full review remain open.
 
 **Terminal-only first use.** Engine setup remains on demand. A terminal-only pane opened on a fresh data directory before setup runs keeps its original local BROWSER for that pane, even if the shim appears later. This is the existing missing-shim fallback made reachable by removing the eager core writer; a new pane after setup uses the shim. Native agent preparation waits for optional setup as described above. The real-shell browserPrelude test covers both missing and present shim behavior. This optional phone-routing limitation is accepted for the extraction; terminal creation does not wake an optional component or depend on its success.
+
+### Matched core input cost, 18 November
+
+Baseline `c77241c8bd` versus extraction `3f1c474154`, pinned Node 24.22.2 on the same Mac. Frozen v4 rig:
+`/tmp/core-phone-input-cost-v4/frozen.json`, SHA-256
+`adb2da8c19410cceaed7f19dd621ff41ea74b280ceaa351bded0fe88b019724c` (316 inputs).
+The real `TerminalStreamManager.handleBinary` and production browser/cleanup or AgentLife callbacks run against
+the same immediate controlled backend. Notifications are serialized and counted; no IPC or gateway execution is
+included. Each arm opens 16, 160 and 1,600 independent controlling streams, measures first input separately, warms
+1,600 writes, then measures 40 batches of 800 accepted one-byte writes. Fixed A/B/B/A order followed a passing
+two-arm smoke and positive idle confirmations from all workers. Raw manifest and derived summary are under
+`/tmp/core-phone-input-cost-v4-abba/`.
+
+| Streams | Warm CPU, µs/write A → B | Median batch cost, µs/write A → B | First input across all streams, ms A → B |
+|---|---|---|---|
+| 16 | 0.968 → 0.909 | 0.475 → 0.420 | 0.586 → 0.778 |
+| 160 | 0.689 → 0.677 | 0.429 → 0.420 | 0.393 → 0.790 |
+| 1,600 | 0.589 → 0.484 | 0.457 → 0.385 | 1.882 → 4.133 |
+
+These are two-arm means per variant, with latency amortized over each 800-write batch, not individual terminal
+echo percentiles. The 160-stream CPU arms overlap; no significant improvement is claimed there. The first accepted
+input now publishes two bounded source facts instead of one cleanup fact and is measurably more expensive; repeated
+accepted input publishes none. Core retained heap is lower by 0.09/0.12/0.18 MiB; RSS varies by +0.46/+0.26/−0.04 MiB,
+so this is not whole-daemon memory evidence. Composer input, real IPC, gateway CPU, startup and callback latency
+remain outside this packet and must not inherit its warm-input result.
+
+All four timing arms exited zero, closed with both output EOFs, and left no workload/guardian PID, group or private
+root (8 PIDs, 4 groups, 8 roots). All 316 frozen inputs still matched after completion. Earlier smoke failures are
+retained: v2 refused a wrongly shaped standalone-Node directory before launch; v3 found missing snapshot methods
+in the controlled backend before measurement. Both were fixture defects corrected before timing; their roots were
+removed and the v3 failed child was actually reaped. No performance run was retried.
