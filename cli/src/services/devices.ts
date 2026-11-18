@@ -170,6 +170,9 @@ export interface DevicesDeps {
   /** For this service's tests: how VS Code and Harness's extension in it are found and `code` is run; the real ones by
    *  default (devices/vscodeExtension.ts). */
   vscodeExtension?: VscodeExtensionDeps
+  /** For this service's tests: how Cursor and Harness's extension in it are found and `cursor` is run; the real ones by
+   *  default. */
+  cursorExtension?: VscodeExtensionDeps
 }
 
 /** ⌘K's answer while the fleet is not running: it never started, so there is no list to weigh. */
@@ -539,18 +542,28 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const skillPass = (): void => {
     if (skill && !stopped) part.call('skill', () => skill.started())
   }
-  // Harness's VS Code extension, set up once a computer through the dial setup's record (cable/vscodeExtensionSetup.ts),
-  // in the devices' own process alone, as the dial setup: inside the core's the core would run VS Code's `code`. A part
-  // of its own, so a throw in VS Code's files is never the dial's. `HARNESS_VSCODE_BIN`: the end-to-end tests' VS Code,
-  // so a daemon under test finds none of this computer's own (devices/vscodeExtension.ts).
-  const vscodeCount = createEngineTally('[device] vscode extension', ['vscode'], SETUP_COUNTS, log)
+  // Harness's VS Code extension, set up once a computer in VS Code and once in Cursor through the dial setup's record
+  // (cable/vscodeExtensionSetup.ts), in the devices' own process alone, as the dial setup: inside the core's the core
+  // would run the editor's `code` or `cursor`. Each editor's setup a part of its own, so a throw in one editor's files is
+  // never the dial's, and a fault or a failed pass's hour in one never holds the other. `HARNESS_VSCODE_BIN` and
+  // `HARNESS_CURSOR_BIN`: the end-to-end tests' VS Code and Cursor, so a daemon under test finds none of this computer's
+  // own (devices/vscodeExtension.ts).
+  const extensionCount = createEngineTally('[device] vscode extension', ['vscode', 'cursor'], SETUP_COUNTS, log)
   const vscodeSetup = skill ? createVscodeExtensionSetup({
     vscode: deps.vscodeExtension ?? vscodeExtensionDeps('vscode', process.env.HARNESS_VSCODE_BIN),
     removed: () => readRemoved(core.dataDir),
     recorded: () => skill.vscode(),
     record: (version) => skill.recordVscode(version),
     after: timerIn('vscodeExtension'),
-    count: (kind, reason) => vscodeCount('vscode', kind, reason),
+    count: (kind, reason) => extensionCount('vscode', kind, reason),
+  }) : null
+  const cursorSetup = skill ? createVscodeExtensionSetup({
+    vscode: deps.cursorExtension ?? vscodeExtensionDeps('cursor', process.env.HARNESS_CURSOR_BIN),
+    removed: () => readRemoved(core.dataDir),
+    recorded: () => skill.cursor(),
+    record: (version) => skill.recordCursor(version),
+    after: timerIn('cursorExtension'),
+    count: (kind, reason) => extensionCount('cursor', kind, reason),
   }) : null
   const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, orcaHomes, {
     adapters,
@@ -575,8 +588,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // that read (at most its 5 s), so an Orca home gets the skill with the default one.
   if (skill || observed) void orcaHomes.refresh().then(() => {
     skillPass()
-    // After the dial setup's start pass, which reads the record VS Code's goes by (dialHomeSetup.ts vscode()).
+    // After the dial setup's start pass, which reads the record each editor's goes by (dialHomeSetup.ts vscode(),
+    // cursor()).
     if (vscodeSetup && !stopped) part.call('vscodeExtension', () => vscodeSetup.pass())
+    if (cursorSetup && !stopped) part.call('cursorExtension', () => cursorSetup.pass())
   })
   /** An open scan, once Orca's homes are read again where the last read is old (at most its 5 s): a session in an account
    *  added since is found by this scan. */
@@ -850,9 +865,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     environment: () => core.account.environment(),
     watching: (on) => {
       core.clients.dialWatching(on)
-      // Before the scan the attach starts, so that scan finds the dial recorded; and before VS Code's pass, which reads it.
+      // Before the scan the attach starts, so that scan finds the dial recorded; and before each editor's pass, which
+      // reads it.
       if (on && skill) part.call('skill', () => skill.attached())
       if (on && vscodeSetup) part.call('vscodeExtension', () => vscodeSetup.pass())
+      if (on && cursorSetup) part.call('cursorExtension', () => cursorSetup.pass())
       dialAttached(on)
       part.call('dialStream', () => dial.attached(on))
     },
