@@ -711,6 +711,19 @@ describe.each(['claude', 'codex'] as const)('%s: turns end by hook', (engine) =>
     expect(next.turnOpen).toBe(true)
   })
 
+  // CI 44381432197: a Stop whose fired time read 1 ms before its own turn opened left that turn's end held for the
+  // 2-minute backstop, and the daemon said nothing of why.
+  stopRule('a Stop run before the held turn opened says so, once', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const run = await hookDriven()
+    run.hooks.transcript('s1', END, { turn: turnOf('t1', 1_000) })
+    run.hooks.onTurnStop({ sessionId: 's1', firedAt: 999 })
+    await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS * 2)
+    expect(run.hooks.held('s1')).toBe(true)
+    expect(log.mock.calls.map(call => String(call[0])).filter(line => line.startsWith('[turn] s1 ')))
+      .toEqual(['[turn] s1 Stop ran before the held turn opened: left held'])
+  })
+
   // The wall clock set back an hour during a turn, as an NTP correction does (e2e/clockjump.e2e.ts): by the times taken
   // before the step, its Stop ran before its prompt hook and before the turn opened, and the end held for it waited.
   stopRule('the wall clock set back during a turn: its Stop delivers its end, read before it or after it', async () => {
