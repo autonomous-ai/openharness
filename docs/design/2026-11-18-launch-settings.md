@@ -894,3 +894,59 @@ These are process measurements, not whole-daemon totals. Worker CPU includes its
 semantic assertions are inside operation latency. Permission-probe runtime/cost, extra model capture, cold service
 startup, real terminal I/O and native Windows/Linux remain excluded. No next diagnostic, runtime correction or
 performance acceptance is inferred from these results.
+
+## V9 attribution: optional checks now belong to the worker
+
+The reviewed profile-v3 packet is frozen at SHA256
+`2084c19c8f0e4333bc4efb9d25989cfaa9689b4ad8afae4b3bf8d779a17812d3` (807 independently checked inputs).
+CPU uses unchanged `ebb65bce18`; `94a74a974c` is a separate six-file diagnostic counter snapshot, never a product
+candidate or integration commit. The same operation body, fixture data and custody helpers run once in each of two
+sequential children, CPU then counts: first operation, five warmups, fifty measured operations. Product arguments,
+awaits and failure/authority checks are unchanged. Fixed enums bound periods/phases/counter names; four 500 µs
+core/worker first/measure profiles are each capped at 16 MiB. No content or identifiers enter the counters.
+
+After an exact quiet grant, the one run passed actual outer 0 in 12.851 s with both children at 56 operations,
+matching v9 semantics, no unused launch scripts and 56 factories each. All eight PIDs, two groups, two sockets,
+four private roots and outer settled; actual exits, EOF/close, all 807 hashes and clean source heads/trees were checked.
+The four profile files are 7,139, 48,881, 68,753 and 56,335 bytes; no count-role profile exists. The coordinator released
+quiet before analysis. Receipts and source hashes: `/tmp/core-launch-settings-profile-v3-output/manifest.json`,
+`/tmp/core-launch-settings-profile-v3-outer-receipt.json`, `-custody.json`. Full normalized owner/phase counts are
+`-attribution.json`, with sample self/inclusive buckets in `-cpu-summary.json`; raw profiles remain unchanged.
+
+| Warm phase | Core native.current | Worker file.verify | Worker lstatSync | Worker full source passes |
+| --- | ---: | ---: | ---: | ---: |
+| Core settings, including fixture returned-current assertion | 6 | 0 | 0 | 0 |
+| Core preflight command | 1 | 0 | 0 | 0 |
+| Core backend guards | 3 | 0 | 0 | 0 |
+| Core final factory | 2 | 0 | 0 | 0 |
+| Worker capture/render | 0 | 9 | 188 | 1 |
+| Worker post-commit/read-only output | 0 | 5 | 54 | 1 |
+| Worker final proof | 0 | 5 | 54 | 1 |
+
+Core has zero optional-source/file/publication/fsync checks. Its total is 12 native.current, eight settings.current,
+16 owner predicates, 13 realpathSync, 12 statSync and 20 readFileSync calls per operation. Its one intercepted
+lstatSync is shared fixture verification/cleanup. These are named Node APIs, not kernel syscalls: native realpath
+does internal filesystem work too. This case has port 0 and no required hook-file proofs; it cannot characterize
+the whole daemon's hook preparation. The five real settings preparation checkpoints plus the fixture assertion
+explain its six native-current entries; final authority stays unchanged.
+
+Worker warm totals are 296 lstatSync, 19 file.verify, three full source passes, four artifact-route checks, five
+opens/reads/closes, ten fstatSync and one static-script readFileSync; no flush or generic publication. In the count
+run, mean capture/render is 1.544940 ms, post-commit/read-only output 0.436920, final proof 0.351772, import resolution
+0.076467 and commit wait 0.263329. Inclusive core prepare/commit spans are 1.832825/0.964064 ms; they overlap worker
+execution and commit wait, so their subtraction is not a pure IPC measurement. These instrumented spans explain
+ownership and phases, not performance acceptance.
+
+First worker import takes 23.584494 ms, capture/render 4.813470, commit wait 0.922582, publication 65.491338 and final
+proof 0.615220. Publication alone runs 20 full source passes, 102 file.verify, 1,797 lstatSync, 19 publication.verify,
+nine attempt.verify, 55 attempt.check, 32 routes.verify and seven fsync calls. Entire first worker operation has
+2,063 lstatSync, 116 file.verify and 22 full source passes. The untouched CPU profile shows esbuild runCallSync with
+12.548 ms first-window sampled self time, plus compilation/tsx frames. Warm worker self samples include 35.264 ms
+in native lstat across fifty operations, 10.254 ms in open and repeated NativePaths/retained-file verification frames.
+
+The CPU profiles are main-thread sampled wall time, not process CPU totals: they visibly include about 22–30 ms of
+inspector start/stop self time per window and idle/control waits. Cold source/tsx transformation is not a packaged
+cold-start figure. Seven fsync calls and an inclusive publication span do not measure aggregate kernel flush waiting.
+Neither serialization nor the two-hop authority protocol is identified as a dominant safe optimization target.
+V9's baseline/cold/combined holds remain. A separate source-only proposal identifies the duplicated post-commit
+source pass on the worker's read-only branch; no runtime correction or new workload follows from this evidence alone.
