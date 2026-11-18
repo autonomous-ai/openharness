@@ -25,7 +25,8 @@ const INTERPOLATED = /\}[\\/]+\.harness(?![\w-])/g
 /** A regular expression that matches a home path: \/\.harness, [\\/]\.harness. */
 const PATTERN = /(?:\\\/|\[\\\\\/\])\\\.harness(?![\w-])/g
 
-interface Hit { file: string, line: number, text: string }
+/** [code] is the hit's whole line, without comments, trimmed. */
+interface Hit { file: string, line: number, text: string, code: string }
 
 const printed = (hit: Hit): string => `${hit.file}:${hit.line}: ${hit.text}`
 
@@ -35,7 +36,7 @@ function hitsIn(file: string, source: string): Hit[] {
   return lines.flatMap((code, index) => {
     const nearHome = lines.slice(Math.max(0, index - 2), index + 1).some((line) => HOME.test(line))
     const texts = [...(nearHome ? [...code.matchAll(SEGMENT), ...code.matchAll(INTERPOLATED)] : []), ...code.matchAll(INLINE), ...code.matchAll(PATTERN)]
-    return texts.map(([text]) => ({ file, line: index + 1, text }))
+    return texts.map(([text]) => ({ file, line: index + 1, text, code: code.trim() }))
   })
 }
 
@@ -72,18 +73,18 @@ function withoutComments(lines: string[], shell: boolean): string[] {
   })
 }
 
-/** Whether a matched text is all of one shape. */
-const isShape = (shape: RegExp) => (text: string): boolean => new RegExp(`^(?:${shape.source})$`).test(text)
+/** A hit on one of these lines, each as Hit's [code]: a second hit in the same file is not excused with it. */
+const onLine = (...lines: string[]) => (hit: Hit): boolean => lines.includes(hit.code)
 
-const ALLOWED: { files: string[], text: (text: string) => boolean, why: string }[] = [
-  { files: ['hook/notify.mjs'], text: () => true, why: 'Runs as an installed copy with no import from src; its bytes feed Codex\'s trusted hash' },
-  { files: ['engines/kit/notifyHooks.ts'], text: isShape(PATTERN), why: 'LEGACY_SCRIPT: what old installs wrote' },
-  { files: ['lib/localSocket.ts'], text: isShape(PATTERN), why: 'prepareShortFolder checks the shape of a folder it is handed' },
-  { files: ['harnessd/platform.ts'], text: isShape(SEGMENT), why: 'The master imports only Node and its own folder; its fallback is listed for PR 2' },
-  { files: ['cli.ts', 'lib/uninstall/command.ts', 'config/startHome.ts', 'config/testIsolation.ts'], text: (text) => text.startsWith('~'), why: 'Help and message text a person reads' },
+const ALLOWED: { files: string[], hit: (hit: Hit) => boolean, why: string }[] = [
+  { files: ['hook/notify.mjs'], hit: () => true, why: 'Runs as an installed copy with no import from src; its bytes feed Codex\'s trusted hash' },
+  { files: ['engines/kit/notifyHooks.ts'], hit: onLine(String.raw`const LEGACY_SCRIPT = /\/\.harness\/cli\/(?:hook\/)?notify\.mjs$/`), why: 'LEGACY_SCRIPT: what old installs wrote' },
+  { files: ['lib/localSocket.ts'], hit: onLine(String.raw`if (!/[\\/]\.harness[\\/]s[\\/][0-9a-f]{16}$/.test(folder)) return`), why: 'prepareShortFolder checks the shape of a folder it is handed' },
+  { files: ['harnessd/platform.ts'], hit: onLine('return this.deps.dataDir ?? join(this.deps.home, \'.harness\', \'cli\', \'data\')'), why: 'The master imports only Node and its own folder; its fallback is listed for PR 2' },
+  { files: ['cli.ts', 'lib/uninstall/command.ts', 'config/startHome.ts', 'config/testIsolation.ts'], hit: (hit) => hit.text.startsWith('~'), why: 'Help and message text a person reads' },
 ]
 
-const allowed = (hit: Hit): boolean => ALLOWED.some((entry) => entry.files.includes(hit.file) && entry.text(hit.text))
+const allowed = (hit: Hit): boolean => ALLOWED.some((entry) => entry.files.includes(hit.file) && entry.hit(hit))
 
 /** Every hit in cli/src and cli/hook but tests, fixtures, generated code and the module itself. */
 function treeHits(): Hit[] {
@@ -162,7 +163,7 @@ describe('no hand-built home .harness path outside config/harnessHome.ts', () =>
 
   it('every allowlist entry still matches a hit', () => {
     const hits = treeHits()
-    const stale = ALLOWED.flatMap(({ files, text }) => files.filter((file) => !hits.some((hit) => hit.file === file && text(hit.text))))
+    const stale = ALLOWED.flatMap((entry) => entry.files.filter((file) => !hits.some((hit) => hit.file === file && entry.hit(hit))))
     expect(stale).toEqual([])
   })
 })
