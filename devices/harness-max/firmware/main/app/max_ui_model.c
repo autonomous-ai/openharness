@@ -515,6 +515,20 @@ bool max_ui_talk(max_talk_t state, uint32_t now_ms)
     return changed;
 }
 
+bool max_ui_wall(bool known, int hour, int min, int wday, int mday, int mon)
+{
+    const bool ok = known && hour >= 0 && hour < 24 && min >= 0 && min < 60 && wday >= 0 && wday < 7 && mday >= 1 &&
+                    mday <= 31 && mon >= 0 && mon < 12;
+    const bool changed = ok != max_m.wall_known ||
+                         (ok && (hour != max_m.wall_hour || min != max_m.wall_min || mday != max_m.wall_mday));
+    max_m.wall_known = ok;
+    if (ok) {
+        max_m.wall_hour = (uint8_t)hour, max_m.wall_min = (uint8_t)min, max_m.wall_wday = (uint8_t)wday;
+        max_m.wall_mday = (uint8_t)mday, max_m.wall_mon = (uint8_t)mon;
+    }
+    return changed;
+}
+
 bool max_ui_level(unsigned level, uint32_t now_ms)
 {
     if (max_m.talk != MAX_TALK_RECORDING) return false;

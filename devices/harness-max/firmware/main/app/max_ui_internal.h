@@ -231,6 +231,8 @@ typedef struct {
     uint8_t levels[MAX_LEVELS];      // the mic's levels, oldest first
     int level_count;
     uint32_t idle_from;              // since when nothing works or waits (Ambient)
+    bool wall_known;                 // the wall clock (max_ui_wall): Ambient's clock and date, else no clock
+    uint8_t wall_hour, wall_min, wall_wday, wall_mday, wall_mon;   // local time; wday 0 = Sunday, mon 0 = January
     // What the last render drew, for the finger and the clock.
     max_box_t cell_box[MAX_CELLS];
     char cell_id[MAX_CELLS][ID_MAX];

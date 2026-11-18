@@ -101,6 +101,9 @@ typedef enum { MAX_TALK_IDLE, MAX_TALK_RECORDING, MAX_TALK_SENDING } max_talk_t;
 // The recorder's state, read by the app on every tick and after every voice call. Entering RECORDING starts the
 // recording's clock and its listening (max_ui_level).
 bool max_ui_talk(max_talk_t state, uint32_t now_ms);
+// The local wall clock, once a tick: known false where the device has none (an ESP32 the daemon never set). Hour 0..23,
+// minute 0..59, weekday 0..6 from Sunday, day of the month 1..31, month 0..11. True when the minute shown changed.
+bool max_ui_wall(bool known, int hour, int min, int wday, int mday, int mon);
 // The mic's envelope while recording, 0..4 (pro_rec_level), once a tick: the band's waveform and the listening.
 bool max_ui_level(unsigned level, uint32_t now_ms);
 // A firmware update in progress: pct 0..100, or -1 when there is none. `to` is the version being installed.
