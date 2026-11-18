@@ -459,6 +459,34 @@ describe('the home bridge service', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
+  it('a failed move\'s record stays failed: a check writes only its count', async () => {
+    const h = movedHome()
+    const failed: MoveRecord = { ...BRIDGED, state: 'failed', reason: 'io', failedAt: 1_700_001_300_000 }
+    writeMoveRecord(h.state, failed)
+    const { bridge } = start(h, { rows: () => [row({ name: 'claude' })] })
+    await settle()
+    expect(record(h)).toMatchObject({ state: 'failed', reason: 'io', failedAt: failed.failedAt, oldProcesses: 1 })
+    bridge.stop()
+  })
+
+  it('while the move\'s journal is in ~/.harness the bridge stays: the start that finishes the move needs it', async () => {
+    fakeInterval()
+    const h = movedHome()
+    writeFileSync(join(h.oldHome, '.move.json'), '{}')
+    const { bridge, log } = start(h)
+    await settle()
+    expect(existsSync(join(h.state, BRIDGE_FILE))).toBe(true)
+    expect(lstatSync(join(h.oldHome, 'cli')).isSymbolicLink()).toBe(true)
+    expect(record(h)).toMatchObject({ state: 'bridged', oldProcesses: 0 })
+    expect(log).not.toHaveBeenCalled()
+    // The start finished it.
+    rmSync(join(h.oldHome, '.move.json'))
+    await vi.advanceTimersByTimeAsync(CHECK_MS)
+    await settle()
+    expect(existsSync(h.oldHome)).toBe(false)
+    bridge.stop()
+  })
+
   it('with no move record it still removes the bridge, and writes none', async () => {
     const h = movedHome()
     rmSync(join(h.state, 'home-move.json'))
