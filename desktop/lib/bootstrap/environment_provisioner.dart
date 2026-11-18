@@ -496,11 +496,15 @@ Future<void> _defaultOpenTerminal(String scriptPath) async {
 
 /// Prepares the only system dependencies required by the desktop transport.
 ///
-/// Node lives beneath [harnessHome] rather than in Homebrew/nvm/PATH. The
+/// Node lives beneath Harness's roots rather than in Homebrew/nvm/PATH. The
 /// CLI launcher is written against that exact binary, so launching Harness
 /// from Finder and from Terminal has identical runtime behavior.
 class EnvironmentProvisioner {
-  final Directory harnessHome;
+  /// A folder a test handed in, both roots at once; null follows the rule.
+  final Directory? _fixedHome;
+
+  /// How the rule looks at this computer; null is this platform's own look.
+  final HomeLook? _look;
   final ProcessRunner _run;
   final ProcessStarter? _start;
   final TerminalLauncher _openTerminal;
@@ -518,6 +522,7 @@ class EnvironmentProvisioner {
 
   EnvironmentProvisioner({
     Directory? harnessHome,
+    this._look,
     ProcessRunner? run,
     ProcessStarter? start,
     TerminalLauncher? openTerminal,
@@ -528,7 +533,7 @@ class EnvironmentProvisioner {
     String? windowsInstallScriptUrl,
     this.probeTimeout = const Duration(seconds: 10),
     this.checkWindowsSignatures = !kDebugMode,
-  }) : harnessHome = harnessHome ?? Directory(_defaultHarnessHome()),
+  }) : _fixedHome = harnessHome,
        _run = run ?? _defaultRun,
        _start = start ?? (run == null ? _defaultStart : null),
        _openTerminal = openTerminal ?? _defaultOpenTerminal,
@@ -543,16 +548,22 @@ class EnvironmentProvisioner {
   /// A launch from Explorer has no HOME at all.
   static String? userHome() => maybeHomeDir();
 
-  static String _defaultHarnessHome() {
+  /// Harness's roots: the folder a test handed in, or this computer's by the
+  /// rule, looked up again at each use so a move during setup is followed.
+  HarnessHome get _roots {
+    final join = separatorJoin(Platform.pathSeparator);
+    final fixed = _fixedHome;
+    if (fixed != null) return HarnessHome.at(fixed.path, join: join);
     final home = userHome();
     if (home == null) {
       throw StateError('Could not resolve the current user home directory');
     }
-    return HarnessHome.of(
-      home,
-      join: separatorJoin(Platform.pathSeparator),
-    ).root(HarnessRootKind.data);
+    return HarnessHome.of(home, join: join, look: _look);
   }
+
+  /// The data root; the one `.harness` folder on macOS and Windows, whose
+  /// layout the Windows checks read.
+  Directory get harnessHome => Directory(_roots.root(HarnessRootKind.data));
 
   /// Checks the complete environment, and mutates it only when [install] is explicitly true.
   Future<EnvironmentReadiness> ensureReady({
@@ -1462,16 +1473,14 @@ fi''';
     _harnessOutdated = null;
     _harnessUnsigned = null;
     if (_isWindows) return _hasWindowsHarness();
-    final runtime = HarnessHome.at(
-      harnessHome.path,
-      join: separatorJoin('/'),
-    ).path(HarnessEntry.runtime);
+    // One look for both, so the node and cli.js never come from two layouts.
+    final roots = _roots;
+    final runtime = roots.path(HarnessEntry.runtime);
     final currentNode = File('$runtime/current-node');
     if (!await currentNode.exists()) return false;
     final nodePath = (await currentNode.readAsString()).trim();
     if (nodePath.isEmpty || !File(nodePath).existsSync()) return false;
-    final runtimeRoot =
-        '${HarnessHome.at(harnessHome.absolute.path, join: separatorJoin('/')).path(HarnessEntry.runtime)}/';
+    final runtimeRoot = '${Directory(runtime).absolute.path}/';
     if (!File(nodePath).absolute.path.startsWith(runtimeRoot)) return false;
     final node = await _runProbe(
       nodePath,
@@ -1481,9 +1490,7 @@ fi''';
     );
     if (!_nodeRuns(node)) return false;
     try {
-      final cli = File(
-        '${HarnessHome.at(harnessHome.path, join: separatorJoin('/')).path(HarnessEntry.cli)}/cli.js',
-      );
+      final cli = File('${roots.path(HarnessEntry.cli)}/cli.js');
       if (!await cli.exists()) return false;
       return _versionAccepted(
         await _probeHarnessCommand(nodePath, [cli.path, 'version']),
@@ -1545,7 +1552,7 @@ fi''';
         _platformEnvironment['HARNESS_ALLOW_UNSIGNED'] == '1') {
       return true;
     }
-    final bin = HarnessHome.at(harnessHome.path).path(HarnessEntry.bin);
+    final bin = _roots.path(HarnessEntry.bin);
     final ProcessResult result;
     try {
       result = await _runProbe(
@@ -1676,7 +1683,8 @@ foreach ($name in ($env:HARNESS_SIGNATURE_FILES -split [string][char]10)) {
 
   Future<void> _ensureHarness(void Function(String line) onOutput) async {
     final runner = HarnessCliRunner(
-      harnessHome: harnessHome,
+      harnessHome: _fixedHome,
+      look: _look,
       runProcess: _probeHarnessCommand,
     );
     if (await _hasHarness()) return;
@@ -1746,7 +1754,7 @@ foreach ($name in ($env:HARNESS_SIGNATURE_FILES -split [string][char]10)) {
     List<String> linuxPackages = const [],
   }) async {
     final directory = Directory(
-      '${HarnessHome.at(harnessHome.path, join: separatorJoin('/')).path(HarnessEntry.desktopApp)}/setup-runs/${DateTime.now().millisecondsSinceEpoch}',
+      '${_roots.path(HarnessEntry.desktopApp)}/setup-runs/${DateTime.now().millisecondsSinceEpoch}',
     );
     await directory.create(recursive: true);
     await _run('/bin/chmod', ['700', directory.path]);

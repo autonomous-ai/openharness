@@ -12,12 +12,14 @@ import 'windows_layout.dart';
 /// Runs the Harness CLI owned by this desktop app without depending on a
 /// terminal shell, its rc files, or Finder's inherited PATH.
 ///
-/// The normal path is the managed tier: `~/.harness/runtime/current-node` — a
+/// The normal path is the managed tier: `runtime/current-node` — a
 /// private, checksum-verified Node that the `harness` installer provisions and
-/// records — paired with the `~/.harness/cli/cli.js` bundle,
+/// records — paired with the `cli/cli.js` bundle,
 /// invoked as `<node> <cli.js> …` with no shell in between. Because both are
-/// absolute paths beneath [harnessHome], launching Harness from Finder and from
-/// Terminal have identical runtime behavior; PATH never enters into it.
+/// absolute paths beneath Harness's [roots] (`~/.harness`; on Linux the node
+/// under the state root, cli.js under the data root), launching Harness from
+/// Finder and from Terminal have identical runtime behavior; PATH never enters
+/// into it.
 ///
 /// Behind that come the installed `~/.local/bin/harness` launcher and finally
 /// bare `harness` on PATH, which cover a developer-managed install and the
@@ -33,8 +35,13 @@ import 'windows_layout.dart';
 /// Every path is handed over as one argument and never re-parsed by a shell, so
 /// a profile such as `C:\Users\Nguyễn Văn A'` reaches the child unchanged.
 class HarnessCliRunner {
-  final Directory harnessHome;
   final Map<String, String> environment;
+
+  /// A folder a test handed in, both roots at once; null follows the rule.
+  final Directory? _fixedHome;
+
+  /// How the rule looks at this computer; null is this platform's own look.
+  final HomeLook? _look;
 
   /// Which tiers [resolve] tries. Windows has its own install layout.
   final bool _isWindows;
@@ -60,6 +67,7 @@ class HarnessCliRunner {
 
   HarnessCliRunner({
     Directory? harnessHome,
+    this._look,
     Map<String, String>? environment,
     bool? isWindows,
     this.runTimeout = defaultRunTimeout,
@@ -77,15 +85,7 @@ class HarnessCliRunner {
     startProcess,
   }) : environment = environment ?? Platform.environment,
        _isWindows = isWindows ?? Platform.isWindows,
-       // homeDir, not HOME: Windows sets only USERPROFILE, so a launch from Explorer threw here
-       // before any UI existed to report it, and Git Bash's HOME is not where the CLI lives.
-       harnessHome =
-           harnessHome ??
-           Directory(
-             HarnessHome.of(
-               homeDir(environment: environment, isWindows: isWindows),
-             ).root(HarnessRootKind.data),
-           ),
+       _fixedHome = harnessHome,
        _runProcess = runProcess ?? runHidden,
        _startProcess = startProcess ?? startHidden,
        _realRun = runProcess == null,
@@ -108,32 +108,38 @@ class HarnessCliRunner {
     );
   }
 
-  /// The managed tier's folders, joined with the platform's separator as the
-  /// lookup always has, not normalized by `p.join`.
-  HarnessHome get _managedHome => HarnessHome.at(
-    harnessHome.path,
-    join: separatorJoin(Platform.pathSeparator),
-  );
+  /// Harness's roots: the folder a test handed in, or this computer's by the
+  /// rule, looked up again at each use so a move under a running app is
+  /// followed at its next command.
+  HarnessHome get roots {
+    final fixed = _fixedHome;
+    if (fixed != null) return HarnessHome.at(fixed.path);
+    return HarnessHome.of(
+      // homeDir, not HOME: Windows sets only USERPROFILE, and Git Bash's HOME is not where the
+      // CLI lives.
+      homeDir(environment: environment, isWindows: _isWindows),
+      look: _look,
+    );
+  }
 
-  Directory get _runtimeDirectory =>
-      Directory(_managedHome.path(HarnessEntry.runtime));
-
-  File get _currentNodeFile =>
-      File('${_runtimeDirectory.path}${Platform.pathSeparator}current-node');
-
-  File get _cliFile => File(
-    '${_managedHome.path(HarnessEntry.cli)}${Platform.pathSeparator}cli.js',
-  );
+  /// The data root, where the CLI is; the one `.harness` folder on macOS and
+  /// Windows, whose layout the Windows tiers read.
+  Directory get harnessHome => Directory(roots.root(HarnessRootKind.data));
 
   /// Builds the direct invocation used by [run] and [start]. Public for
   /// focused tests and diagnostics; callers should generally call [run].
   Future<HarnessCliInvocation> resolve(List<String> arguments) async {
     if (_isWindows) return _resolveWindows(arguments);
-    final node = await _managedNode();
-    if (node != null && await _cliFile.exists()) {
+    // One look for both, so the node and cli.js never come from two layouts.
+    final roots = this.roots;
+    final node = await _managedNode(roots);
+    final cli = File(
+      '${roots.path(HarnessEntry.cli)}${Platform.pathSeparator}cli.js',
+    );
+    if (node != null && await cli.exists()) {
       return HarnessCliInvocation(
         executable: node.path,
-        arguments: [_cliFile.path, ...arguments],
+        arguments: [cli.path, ...arguments],
         environment: _commandEnvironment(),
         source: HarnessCliSource.managed,
       );
@@ -174,12 +180,7 @@ class HarnessCliRunner {
         source: HarnessCliSource.managed,
       );
     }
-    final launcher = File(
-      p.join(
-        HarnessHome.at(harnessHome.path).path(HarnessEntry.bin),
-        'harness.exe',
-      ),
-    );
+    final launcher = File(p.join(roots.path(HarnessEntry.bin), 'harness.exe'));
     if (await launcher.exists()) {
       return HarnessCliInvocation(
         executable: launcher.path,
@@ -265,12 +266,16 @@ class HarnessCliRunner {
   static String _displayLine(List<String> arguments) =>
       'harness ${arguments.join(' ')}';
 
-  Future<File?> _managedNode() async {
+  /// The Node `runtime/current-node` names, when it is a file in that same
+  /// `runtime` folder: on Linux, the state root's.
+  Future<File?> _managedNode(HarnessHome roots) async {
+    final runtime = Directory(roots.path(HarnessEntry.runtime));
     try {
-      final raw = (await _currentNodeFile.readAsString()).trim();
+      final raw = (await File(
+        '${runtime.path}${Platform.pathSeparator}current-node',
+      ).readAsString()).trim();
       if (raw.isEmpty) return null;
-      final runtimeRoot =
-          '${_runtimeDirectory.absolute.path}${Platform.pathSeparator}';
+      final runtimeRoot = '${runtime.absolute.path}${Platform.pathSeparator}';
       if (!raw.startsWith(runtimeRoot)) return null;
       final node = File(raw);
       return await node.exists() ? node : null;
@@ -286,9 +291,7 @@ class HarnessCliRunner {
   /// that `harness` names it: `~/.local/bin`, or on Windows `bin` in
   /// [harnessHome], where install.ps1 writes `harness.exe`.
   String? _launcherDirectory() {
-    if (_isWindows) {
-      return HarnessHome.at(harnessHome.path).path(HarnessEntry.bin);
-    }
+    if (_isWindows) return roots.path(HarnessEntry.bin);
     final home = _home();
     return home == null || home.isEmpty
         ? null
