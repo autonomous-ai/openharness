@@ -37,12 +37,14 @@ const _maxSocketPathBytes = 96;
 
 /// Where the socket of the daemon on [port] would be —
 /// `$ADAPTER_DATA_DIR/daemon-<port>.sock`, by default
-/// `~/.harness/cli/data/daemon-<port>.sock` — or null where there is none
-/// (Windows, or a home too long as well).
+/// `cli/data/daemon-<port>.sock` in Harness's data root — or null where there
+/// is none (Windows, or a home too long as well). [look] is for tests: the
+/// short folder's root is found by it, this computer's by default.
 String? defaultDaemonSocketPath(
   int port, {
   Map<String, String>? environment,
   bool? isWindows,
+  HomeLook? look,
 }) {
   if (isWindows ?? Platform.isWindows) return null;
   final dataDir = defaultDaemonDataDir(
@@ -62,6 +64,7 @@ String? defaultDaemonSocketPath(
   final sockets = HarnessHome.of(
     home,
     join: separatorJoin('/'),
+    look: look,
   ).path(HarnessEntry.s);
   final short = '$sockets/$hex/${daemonSocketName(port)}';
   return utf8.encode(short).length <= _maxSocketPathBytes ? short : null;

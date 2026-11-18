@@ -44,11 +44,13 @@ class DailyLogFile {
        // ignore: prefer_initializing_formals
        _clock = clock;
 
-  /// The app's own log directory, `~/.harness/logs`.
+  /// The app's own log directory, `logs` in Harness's state root
+  /// (`~/.harness/logs` off Linux).
   ///
   /// Through [HarnessFileStore.defaultDirectoryPath] rather than a second path
-  /// helper: one place already knows how to find `~/.harness` on every platform
-  /// this ships to, including the Windows fallbacks.
+  /// helper: one place already knows how to find Harness's roots on every
+  /// platform this ships to, including the Windows fallbacks. A getter, so a
+  /// log opened after the move is in the moved root.
   static Directory get defaultDirectory => Directory(
     HarnessFileStore.defaultDirectoryPath(entry: HarnessEntry.logs),
   );

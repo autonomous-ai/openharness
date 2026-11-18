@@ -11,7 +11,6 @@ import '../core/serial_port_lease.dart';
 import '../core/uninstall_marker.dart';
 import '../core/config.dart';
 import '../core/harness_cli_runner.dart';
-import '../core/harness_file_store.dart';
 import '../core/harness_home.dart';
 import '../core/models.dart';
 import 'daemon_node.dart';
@@ -78,26 +77,37 @@ class LocalCliEndpoint {
 
 /// Reads the stable identity shared by the Harness CLI and backend machine record.
 class LocalMachineIdentity {
-  final File computerIdFile;
+  /// The file to read, else the one the rule finds at each read.
+  final File? computerIdFile;
   final Map<String, String> environment;
 
-  LocalMachineIdentity({File? computerIdFile, Map<String, String>? environment})
-    : environment = environment ?? Platform.environment,
-      computerIdFile =
-          computerIdFile ??
-          File(defaultComputerIdPath(environment: environment));
+  /// For tests; null is this computer's.
+  final HomeLook? look;
 
-  static String defaultComputerIdPath({Map<String, String>? environment}) =>
-      HarnessFileStore.defaultDirectoryPath(
-        environment: environment,
-        entry: HarnessEntry.computerId,
-      );
+  LocalMachineIdentity({
+    this.computerIdFile,
+    Map<String, String>? environment,
+    this.look,
+  }) : environment = environment ?? Platform.environment;
+
+  static String defaultComputerIdPath({
+    Map<String, String>? environment,
+    HomeLook? look,
+  }) => HarnessHome.of(
+    homeDir(environment: environment),
+    look: look,
+  ).path(HarnessEntry.computerId);
 
   Future<String?> computerId() async {
     final pinned = _normalizeComputerId(environment['ADAPTER_COMPUTER_ID']);
     if (pinned != null) return pinned;
     try {
-      final id = (await computerIdFile.readAsString()).trim();
+      // Found again at each read: the move takes `~/.harness` to the data
+      // root while the app runs, and the old file goes with it.
+      final file =
+          computerIdFile ??
+          File(defaultComputerIdPath(environment: environment, look: look));
+      final id = (await file.readAsString()).trim();
       return _normalizeComputerId(id);
     } catch (_) {
       return null;
