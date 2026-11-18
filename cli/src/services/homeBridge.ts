@@ -10,9 +10,9 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { env } from '../config/env.js'
-import { harnessRoot, harnessRoots, legacyHarnessHome } from '../config/harnessHome.js'
+import { harnessPath, harnessRoot, harnessRoots, legacyHarnessHome } from '../config/harnessHome.js'
 import { openDaemon, whereFor, type Daemon } from '../agentClient/daemon.js'
 import type { CoreApi, ServiceRequests } from '../core/api.js'
 import { bootNow, BRIDGE_FILE, readBridge, removeBridge, serveOldPaths, type Boot, type Served } from '../homeMove/bridge.js'
@@ -119,6 +119,9 @@ export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = 
   const bridge = readBridge(stateRoot)
   if (!bridge) return IDLE
   const roots = harnessRoots(deps.home, 'linux', look)
+  const connections = connectorsDir(deps.environment)
+  // A connections folder a setting keeps elsewhere was there before the move too, where an old client still finds it.
+  const connectionsMoved = resolve(connections) === harnessPath('connections', deps.home, 'linux', look)
   const unlinkedSaid = new Set<string>()
   let running = true
   let checking = false
@@ -128,12 +131,12 @@ export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = 
   /** The route record, a hard link where an old client looks for a socket, and the shim's files: made again at each check,
    *  as the core and the connections bridge make their sockets again whenever they start. */
   const serve = (): void => {
-    const connections = connectorsDir(deps.environment)
-    const sockets = [[bridge.oldDataDir, deps.socket], [join(bridge.oldHome, 'connections'), socketPathIn(connections, 'bridge.sock', deps.home)]] as const
+    const sockets: [oldFolder: string, path: string | null][] = [[bridge.oldDataDir, deps.socket]]
+    if (connectionsMoved) sockets.push([join(bridge.oldHome, 'connections'), socketPathIn(connections, 'bridge.sock', deps.home)])
     const served: Served = {
       routes: { dataDir: core.dataDir, port: savedDaemonPort(core.dataDir, env.PORT) },
       sockets: sockets.flatMap(([oldFolder, path]) => (path ? [{ oldFolder, folder: dirname(path), name: basename(path) }] : [])),
-      files: [{ from: join(connections, 'mcp-shim.mjs'), name: 'mcp-shim.mjs' }],
+      files: connectionsMoved ? [{ from: join(connections, 'mcp-shim.mjs'), name: 'mcp-shim.mjs' }] : [],
     }
     const unlinked = serveOldPaths(bridge, served, publishHookRoute).filter((name) => !unlinkedSaid.has(name))
     if (!unlinked.length) return
