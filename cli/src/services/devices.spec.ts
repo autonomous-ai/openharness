@@ -6053,6 +6053,89 @@ describe('an agent\'s notice (docs/plans/2026-11-16-dial-agent-notify-design.md)
     expect(logs).toContain('[device] notify · agent · no dial')
     expect(logs).toContainEqual(expect.stringMatching(/^\[device\] notify · day \d{4}-\d\d-\d\d · claude shown 0 no dial 0 limited 0 · codex shown 0 no dial 0 limited 0 · agent shown 0 no dial 1 limited 0$/))
   })
+
+  describe('outlives a restart of the devices (docs/plans/2026-11-18-dial-notices-restart-design.md)', () => {
+    const FILE = () => join(dataDir, 'dial-notices.json')
+    const saved = () => JSON.parse(readFileSync(FILE(), 'utf8'))
+    const T = Date.parse('2026-11-18T03:00:00Z')
+    beforeEach(() => {
+      vi.useFakeTimers()
+      vi.setSystemTime(T)
+    })
+
+    it('a notice shown is in the file a second later, with its agent\'s keys', () => {
+      const { port, listener } = devices()
+      port.observed(hook('session-start'))
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+      expect(existsSync(FILE())).toBe(false)
+      vi.advanceTimersByTime(1_000)
+      expect(saved()).toEqual({ v: 1, cards: [{ agentId: ID, keys: ['claude:sess-1'], id: ids()[0], line: LINE, host: 'orca', at: T }] })
+    })
+
+    it('a Harness agent\'s card and a caller no list holds are kept too', () => {
+      const { listener } = devices({ core: bound() })
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
+      listener.notice({ text: LINE, engine: 'codex', sessionId: 't-9', folder: 'api' })
+      vi.advanceTimersByTime(1_000)
+      const [own, caller] = ids()
+      expect(saved().cards).toEqual([
+        { agentId: 'h1', keys: ['claude:s-h1'], id: own, line: LINE, host: 'harness', at: T },
+        { agentId: observedAgentId('codex', 't-9'), keys: [], id: caller, line: LINE, host: '',
+          who: { name: 'api', engine: 'codex', machine: 'This machine' }, at: T },
+      ])
+    })
+
+    it('a card that ends leaves the file', () => {
+      const { port, listener } = devices()
+      port.observed(hook('session-start'))
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })
+      vi.advanceTimersByTime(1_000)
+      port.observed(hook('turn-start'))
+      vi.advanceTimersByTime(1_000)
+      expect(saved().cards).toEqual([])
+    })
+
+    // The stop detaches the dial and empties herdr's list, which end their cards in memory as an unplug or an agent
+    // leaving does: the file must keep them for the next start.
+    it('a stop writes what was waiting; neither its detach nor herdr\'s emptied list is written', async () => {
+      const subs: HerdrSubscriber[] = []
+      let list: Promise<HerdrAnswer> | undefined
+      const agent = { pane_id: 'w1:p1', agent: 'claude', agent_status: 'idle', cwd: '/work/api', agent_session: { kind: 'id', agent: 'claude', value: 'sess-h' } }
+      const client: HerdrClient = {
+        request: () => (list = Promise.resolve<HerdrAnswer>({ ok: true, result: { type: 'agent_list', agents: [agent] } })),
+        subscribe: (_entries, to) => { subs.push(to); return { close: () => {} } },
+        prompt: async () => ({ outcome: 'sent' }),
+        socketStamp: () => '1:1',
+      }
+      const onMac = { ...orca, platform: 'darwin' as const, onPath: (name: string) => `/opt/${name}/bin/${name}` }
+      const { port, listener } = devices({ core: bound(), herdr: client, orca: onMac, tty: async () => undefined })
+      seen.host.watching!(true)
+      port.swarms(null)
+      subs[0].started()
+      await list
+      const [{ id }] = (await host().listAgentSnapshot()).agents.filter((entry) => entry.id !== 'h1')
+      listener.notice({ text: LINE, engine: 'claude', sessionId: 's-h1' })
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-h' })).toEqual({ result: 'shown' })
+      const [own, outside] = ids()
+      await port.stop()
+      expect(saved().cards.map((card: { agentId: string }) => card.agentId)).toEqual(['h1', id])
+      expect(saved().cards[1].keys).toEqual(['claude:sess-h', 'herdr:w1:p1'])
+      expect(calls('questionClose')).toEqual(expect.arrayContaining([['h1', own], [id, outside]]))
+      const kept = readFileSync(FILE(), 'utf8')
+      vi.advanceTimersByTime(10_000)
+      expect(readFileSync(FILE(), 'utf8')).toBe(kept)
+    })
+
+    it('a write that fails is one line with the error\'s code', () => {
+      mkdirSync(FILE())
+      const { port, listener } = devices()
+      port.observed(hook('session-start'))
+      expect(listener.notice({ text: LINE, engine: 'claude', sessionId: 'sess-1' })).toEqual({ result: 'shown' })
+      vi.advanceTimersByTime(1_000)
+      expect(logs).toContain('[device] notices · not saved · EISDIR')
+      expect(logs.filter((line) => ['dial-notices', 'VPN', 'sess-1'].some((secret) => line.includes(secret)))).toEqual([])
+    })
+  })
 })
 
 describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-design.md)', () => {
