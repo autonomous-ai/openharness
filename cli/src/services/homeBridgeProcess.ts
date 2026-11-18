@@ -1,7 +1,7 @@
 /**
  * The home bridge in its own process (`harness __service homeBridge`, in the edge host): the same service as in the core's
  * process (services/homeBridge.ts), on this process's data folder and socket. A core that starts again makes its socket
- * again, so each connection to it serves the old paths once more. The apps ask it nothing.
+ * again, so each connection to it is a check, which serves the old paths once more. The apps ask it nothing.
  */
 import { startHomeBridge } from './homeBridge.js'
 import { runServiceProcess, type ServiceProcess } from './process.js'

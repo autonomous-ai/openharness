@@ -11,9 +11,9 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
+import { openDaemon, whereFor, type Daemon } from '../agentClient/daemon.js'
 import { env } from '../config/env.js'
 import { harnessPath, harnessRoot, harnessRoots, legacyHarnessHome } from '../config/harnessHome.js'
-import { openDaemon, whereFor, type Daemon } from '../agentClient/daemon.js'
 import type { CoreApi, ServiceRequests } from '../core/api.js'
 import { bootNow, BRIDGE_FILE, readBridge, removeBridge, serveOldPaths, type Boot, type Served } from '../homeMove/bridge.js'
 import { oldUsers, procRows, type ProcRow } from '../homeMove/oldUsers.js'
@@ -110,7 +110,8 @@ export function startHomeBridgeInCore(core: CoreApi, given: Partial<HomeBridgeDe
 export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = {}): { stop(): void; connected(): void } {
   const deps: HomeBridgeDeps = {
     platform: process.platform, home: homedir(), environment: process.env, socket: unixSocketPath(core.dataDir, env.PORT),
-    master: process.ppid, boot: bootNow, rows: procRows, tmux: listPanes, setupsPending: pendingSetups, askForStore, log: console.log, ...given,
+    master: process.ppid, boot: bootNow, rows: procRows, tmux: listPanes, setupsPending: pendingSetups, askForStore,
+    log: console.log, ...given,
   }
   // Nothing moves off Linux, and with no bridge.json there is no bridge to keep.
   if (deps.platform !== 'linux') return IDLE
