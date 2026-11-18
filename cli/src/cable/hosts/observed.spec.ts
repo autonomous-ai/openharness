@@ -2176,7 +2176,8 @@ describe('ObservedSource and a Claude app session the scan found (docs/plans/202
     expect(await t.src.showPane(agent)).toBe('ok')
     expect(t.actions.claudeShow.mock.calls).toEqual([[agent.id, LOCAL]])
     expect(await t.src.focus(agent)).toBe(true)
-    expect(t.actions.open.mock.calls).toEqual([[agent.id, { pane: { adapter: 'claude', id: LOCAL } }]])
+    // No hook named its app: its pane's adapter does, so a link that fails still brings the app (open.ts).
+    expect(t.actions.open.mock.calls).toEqual([[agent.id, { bundle: CLAUDE_APP, pane: { adapter: 'claude', id: LOCAL } }]])
   })
 
   it('with the Claude app not in front, no rest is offered and none runs', async () => {

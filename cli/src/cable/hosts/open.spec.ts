@@ -93,10 +93,18 @@ describe('opening an agent outside Harness from the dial', () => {
     expect(calls).toEqual([run(OPEN, '-b', CLAUDE, `claude://code/continue?session=${SESSION}`)])
   })
 
-  // As the observed source builds it before the first hook: the pane its record gave, and no bundle
-  // (docs/plans/2026-11-18-dial-claude-app-swipe-before-hook-design.md).
+  it('the Claude app: a link and an app that both fail run open -b once, said in one line', async () => {
+    const { calls, logs, opener } = recorder({}, [1, 1])
+    const app = target({ __CFBundleIdentifier: CLAUDE, CLAUDE_CODE_HOST_SESSION_ID: SESSION })
+    expect(await opener.open('a1', app)).toBe(false)
+    expect(calls).toEqual([run(OPEN, '-b', CLAUDE, `claude://code/continue?session=${SESSION}`), forward(CLAUDE)])
+    expect(logs).toEqual(['[device] open · claude · fallback'])
+  })
+
+  // As the observed source builds it before the first hook: the pane its record gave, and its adapter's bundle
+  // (observed.ts target(); docs/plans/2026-11-18-dial-claude-app-swipe-before-hook-design.md).
   it('a Claude app session only the scan found opens by its link, and still gets its app when the link fails', async () => {
-    const scanned: OpenTarget = { pane: { adapter: 'claude', id: SESSION } }
+    const scanned: OpenTarget = { bundle: CLAUDE, pane: { adapter: 'claude', id: SESSION } }
     const link = run(OPEN, '-b', CLAUDE, `claude://code/continue?session=${SESSION}`)
     const ok = recorder()
     expect(ok.opener.can(scanned)).toBe(true)

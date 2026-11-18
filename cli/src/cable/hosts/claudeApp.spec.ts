@@ -6,7 +6,6 @@ const SESSION = 'local_8d1f2c3a-4b5e-4f60-9a7b-1c2d3e4f5a6b'
 const OTHER = 'local_0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
 const CLAUDE = 'com.anthropic.claudefordesktop'
 const OPEN = '/usr/bin/open'
-const FALLBACK = '[device] open · claude · fallback'
 
 interface Call { file: string; args: string[]; timeoutMs: number }
 type Deps = Parameters<typeof createClaudeAppAdapter>[0]
@@ -45,15 +44,15 @@ function holding() {
 const place = (hints: Record<string, string>): Place => ({ host: 'claude', app: 'claude', hints })
 const pane = (id: string) => ({ adapter: 'claude', id })
 const link = (session: string): Call => ({ file: OPEN, args: ['-b', CLAUDE, `claude://code/continue?session=${session}`], timeoutMs: 10_000 })
-const forward: Call = { file: OPEN, args: ['-b', CLAUDE], timeoutMs: 10_000 }
 /** A session the open scan found: the app its parents name and the id its record holds, and no hook's hints yet. */
 const scanned = (over: Partial<Place> = {}): Place => ({ host: 'terminal', app: 'claude', hints: {}, hostSession: SESSION, ...over })
 
 describe('the Claude app adapter', () => {
-  it('its id is claude, and its link takes the place of open -b', () => {
+  it('its id is claude, its link takes the place of open -b, and its bundle is the Claude app\'s', () => {
     const { adapter } = recorder()
     expect(adapter.id).toBe('claude')
     expect(adapter.tap).toBe('instead')
+    expect(adapter.bundle).toBe(CLAUDE)
     expect(adapter.type).toBeUndefined()
   })
 
@@ -106,11 +105,17 @@ describe('the Claude app adapter', () => {
     expect(adapter.canShow(pane(SESSION))).toBe(false)
   })
 
-  it('focus runs the continue link alone, and nothing is said', async () => {
-    const { calls, logs, adapter } = recorder()
+  // A link that fails leaves the app to the opener's fallback, by the adapter's bundle (open.ts).
+  it('focus runs the continue link alone', async () => {
+    const { calls, adapter } = recorder()
     expect(await adapter.focus(pane(SESSION))).toBe(true)
     expect(calls).toEqual([link(SESSION)])
-    expect(logs).toEqual([])
+
+    for (const code of [1, null]) {
+      const failed = recorder({}, [code])
+      expect(await failed.adapter.focus(pane(SESSION)), String(code)).toBe(false)
+      expect(failed.calls).toEqual([link(SESSION)])
+    }
 
     const linux = recorder({ platform: 'linux' })
     expect(await linux.adapter.focus(pane(SESSION))).toBe(false)
@@ -121,25 +126,6 @@ describe('the Claude app adapter', () => {
     expect(forged.calls).toEqual([])
   })
 
-  it('a link that exits non-zero or times out brings the app forward once, in one line with no session id', async () => {
-    for (const code of [1, null]) {
-      const { calls, logs, adapter } = recorder({}, [code])
-      expect(await adapter.focus(pane(SESSION)), String(code)).toBe(true)
-      expect(calls).toEqual([link(SESSION), forward])
-      expect(logs).toEqual([FALLBACK])
-      for (const line of logs) expect(line).not.toContain(SESSION)
-    }
-  })
-
-  it('a link and an app that both fail answer false', async () => {
-    for (const codes of [[1, 1], [null, null]]) {
-      const { calls, logs, adapter } = recorder({}, codes)
-      expect(await adapter.focus(pane(SESSION)), String(codes)).toBe(false)
-      expect(calls).toEqual([link(SESSION), forward])
-      expect(logs).toEqual([FALLBACK])
-    }
-  })
-
   // The end-to-end harness points HARNESS_OPEN_BIN at a fake that opens nothing (e2e/harness/daemon.ts), as open.ts
   // takes it.
   it.each([
@@ -147,11 +133,11 @@ describe('the Claude app adapter', () => {
     ['', OPEN],
     ['fake-open', OPEN],
     [undefined, OPEN],
-  ])('HARNESS_OPEN_BIN %j: an absolute path is the open a tap, its fallback and a rest run; empty, relative and none run /usr/bin/open', async (bin, file) => {
-    const { calls, adapter } = recorder({ bin }, [1])
+  ])('HARNESS_OPEN_BIN %j: an absolute path is the open a tap and a rest run; empty, relative and none run /usr/bin/open', async (bin, file) => {
+    const { calls, adapter } = recorder({ bin })
     expect(await adapter.focus(pane(SESSION))).toBe(true)
     expect(await adapter.show(pane(SESSION), 'a1')).toBe('ok')
-    expect(calls).toEqual([{ ...link(SESSION), file }, { ...forward, file }, { ...link(SESSION), file }])
+    expect(calls).toEqual([{ ...link(SESSION), file }, { ...link(SESSION), file }])
   })
 })
 
@@ -164,10 +150,9 @@ describe('a rest on a Claude app session', () => {
 
   it('a link that exits non-zero, or never exits, is failed, and no app is brought forward', async () => {
     for (const code of [1, null]) {
-      const { calls, logs, adapter } = recorder({}, [code])
+      const { calls, adapter } = recorder({}, [code])
       expect(await adapter.show(pane(SESSION), 'a1'), String(code)).toBe('failed')
       expect(calls).toEqual([link(SESSION)])
-      expect(logs).toEqual([])
     }
   })
 
