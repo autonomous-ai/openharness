@@ -1622,7 +1622,8 @@ class Registry {
       if (changed) this.save()
       if (ownModes) atomicWriteJson(OWN_MODES_FILE, Date.now())
     } catch (error) {
-      if (error instanceof SyntaxError) this.quarantine(`is not JSON (${error.message})`)
+      // Not the parse error's message: it quotes the rows around the fault, and they hold the person's harness names.
+      if (error instanceof SyntaxError) this.quarantine('is not JSON')
       else if (existsSync(FILE)) {
         this.writeBlocked = true
         console.error('[registry] registry is unreadable; refusing to overwrite it:', error instanceof Error ? error.message : error)
