@@ -91,6 +91,9 @@ export interface HcTerminal {
   live: boolean
   /** Its labels hold `herdr.space`: Herdr's window shows it. */
   space: boolean
+  /** Its `herdr.tab` label: the tab of Herdr's window that holds it, the id `herdr-app status` names for the tab on
+   *  screen (dial-herdr-scroll-design.md §3). */
+  tab?: string
   status?: HcStatus
   kind?: string
   name?: string
@@ -142,6 +145,7 @@ export function hcTerminal(value: unknown): HcTerminal | undefined {
   if (!isObject(value) || typeof value.address !== 'string' || !HC_TERMINAL.test(value.address)) return undefined
   const labels = isObject(value.labels) ? value.labels : {}
   const space = Object.hasOwn(labels, 'herdr.space') ? labels['herdr.space'] : undefined
+  const tab = Object.hasOwn(labels, 'herdr.tab') ? labels['herdr.tab'] : undefined
   const status = isObject(value.status) ? value.status : {}
   const kind = hcKind(status.app)
   const foreground = isObject(value.foreground) ? value.foreground : {}
@@ -150,6 +154,7 @@ export function hcTerminal(value: unknown): HcTerminal | undefined {
     address: value.address,
     live: value.state === 'live',
     space: typeof space === 'string' && space !== '',
+    ...(typeof tab === 'string' && tab !== '' ? { tab } : {}),
     ...(STATUSES.has(status.state) ? { status: status.state as HcStatus } : {}),
     ...(kind ? { kind } : {}),
     ...(typeof value.name === 'string' ? { name: value.name } : {}),
@@ -165,7 +170,7 @@ export function hcTerminal(value: unknown): HcTerminal | undefined {
  *  devices pair a session the scan found with the terminal running it by that pid; it is an id, never logged or sent. */
 const READ: Record<string, readonly string[] | undefined> = {
   address: undefined, state: undefined, name: undefined, cwd: undefined, turn: undefined,
-  labels: ['herdr.space'], status: ['app', 'state'], foreground: ['cwd', 'pid'],
+  labels: ['herdr.space', 'herdr.tab'], status: ['app', 'state'], foreground: ['cwd', 'pid'],
 }
 const only = (value: unknown, keys: readonly string[]): unknown => isObject(value)
   ? Object.fromEntries(keys.filter((key) => Object.hasOwn(value, key)).map((key) => [key, value[key]]))
@@ -191,8 +196,8 @@ const TAKES: Record<string, (facts: Fields, data: Fields) => Fields> = {
   finished: (facts) => ({ ...facts, state: 'finished' }),
 }
 
-const same = (a: HcTerminal, b: HcTerminal) => a.live === b.live && a.space === b.space && a.status === b.status
-  && a.kind === b.kind && a.name === b.name && a.cwd === b.cwd && a.turn === b.turn
+const same = (a: HcTerminal, b: HcTerminal) => a.live === b.live && a.space === b.space && a.tab === b.tab
+  && a.status === b.status && a.kind === b.kind && a.name === b.name && a.cwd === b.cwd && a.turn === b.turn
   && a.foregroundPid === b.foregroundPid
 
 const lineOf = (id: string, method: string, params: Record<string, unknown>) =>

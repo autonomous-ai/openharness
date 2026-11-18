@@ -18,8 +18,11 @@
  * queue is its own: a scroll that joined an `agent.focus` run would lose its lines.
  *
  * Which terminal is on screen is the window's alone: hc's terminal facts have no focus or viewer. So a stroke asks
- * `herdr-app status` (one run took 0.04 s) and reads its `agent` alone: the rest names the person's spaces and layouts.
- * One read at a time, shared by every ask meanwhile: a dial may send `down` after `down` faster than it answers.
+ * `herdr-app status` (one run took 0.04 s) and reads its `tab` alone, the tab on screen, which it matches with the
+ * terminal's `herdr.tab` label in hc. Its `agent` is not what is on screen: on Diego's first check (2026-11-18) it still
+ * named the agent of the tab before, and a stroke ran 175 scrolls on a terminal nobody saw. The rest names the person's
+ * spaces and layouts. One read at a time, shared by every ask meanwhile: a dial may send `down` after `down` faster than
+ * it answers.
  */
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { HC_TERMINAL, hcPaneKey, type HcClient, type HcPrompt } from './hcClient.js'
@@ -46,6 +49,9 @@ export interface HerdrAppDeps extends OrcaDeps {
   /** Whether Herdr's window shows that terminal: a live one labeled `herdr.space`, with an agent or none (hcSource.ts
    *  shows). */
   shows(address: string): boolean
+  /** The tab of Herdr's window that holds that terminal, its `herdr.tab` label, for a terminal it shows (hcSource.ts
+   *  tabOf). */
+  tabOf(address: string): string | undefined
   /** Whether hc reports an agent's status for that live terminal, shown or not (hcSource.ts reports). */
   reports(address: string): boolean
   /** The devices follow the default hc session, the one session whose addresses the hook sends (notify.mjs): another
@@ -95,7 +101,7 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
   const scrolling = new Map<string, Scrolling>()
   // A stroke sends many lines: the failure is said once until a scroll run succeeds, not once a frame.
   let scrollFailedSaid = false
-  // The `status` read under way, which every ask meanwhile joins: its agent, or null.
+  // The `status` read under way, which every ask meanwhile joins: the tab on screen, or null.
   let reading: Promise<string | null> | undefined
   // As a scroll's: said once until a read succeeds.
   let statusFailedSaid = false
@@ -168,9 +174,9 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
     }
   }
 
-  // A Herdr that changes what `status` prints must be seen, so a stdout that is no object is said; an agent missing or
-  // another is a terminal not on screen, and says nothing.
-  const readAgent = async (): Promise<string | null> => {
+  // A Herdr that changes what `status` prints must be seen, so a stdout that is no object is said; a tab missing or
+  // empty is no tab on screen, and says nothing.
+  const readTab = async (): Promise<string | null> => {
     const status = await readStatus()
     if (status === undefined) {
       if (!statusFailedSaid) deps.log('[herdr-app] status · failed')
@@ -178,13 +184,14 @@ export function createHerdrAppAdapter(deps: HerdrAppDeps): HerdrAppAdapter {
       return null
     }
     statusFailedSaid = false
-    return typeof status.agent === 'string' ? status.agent : null
+    return typeof status.tab === 'string' && status.tab !== '' ? status.tab : null
   }
 
   const onScreen = async (pane: Pane): Promise<boolean> => {
     if (!mac || !HC_TERMINAL.test(pane.id)) return false
-    reading ??= readAgent().finally(() => { reading = undefined })
-    return (await reading) === pane.id
+    reading ??= readTab().finally(() => { reading = undefined })
+    // No tab on screen (null) matches no terminal, and a terminal with no `herdr.tab` label (none) no tab.
+    return (await reading) === deps.tabOf(pane.id)
   }
 
   const scroll = (pane: Pane, lines: number): void => {

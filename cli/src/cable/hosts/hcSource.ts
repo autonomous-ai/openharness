@@ -69,9 +69,9 @@ export class HcSource implements HostSource {
   private readonly listeners = new Set<() => void>()
   /** Every listable terminal, by address, in the order each became listable. */
   private readonly rows = new Map<string, Row>()
-  /** The live terminals the window shows, and those hc reports an agent for, listed or not, which the Herdr adapter
-   *  asks after (shows, reports). Each holds the client's 1,024 at most. */
-  private readonly shown = new Set<string>()
+  /** The live terminals the window shows with their tab, and those hc reports an agent for, listed or not, which the
+   *  Herdr adapter asks after (shows, tabOf, reports). Each holds the client's 1,024 at most. */
+  private readonly shown = new Map<string, string | undefined>()
   private readonly reported = new Set<string>()
   /** The pid of the program each live terminal runs now (hc's foreground), shown or not, which the devices ask after
    *  (terminalOf). It holds the client's 1,024 at most. */
@@ -178,6 +178,12 @@ export class HcSource implements HostSource {
    *  the 64. */
   shows(address: string): boolean {
     return this.shown.has(address)
+  }
+
+  /** The tab of Herdr's window that holds a terminal it shows, its `herdr.tab` label as hc tells it now: a stroke
+   *  matches it with the tab `herdr-app status` names on screen (herdrApp.ts onScreen). */
+  tabOf(address: string): string | undefined {
+    return this.shown.get(address)
   }
 
   /** Whether hc reports an agent's status for that live terminal, shown or not: a hidden worker's hooked copy takes
@@ -287,10 +293,11 @@ export class HcSource implements HostSource {
     this.told(before, this.foregrounds.get(terminal.address) !== pid)
   }
 
-  /** Notes whether the window shows a terminal, whether hc reports an agent there, and the pid it runs now. */
+  /** Notes whether the window shows a terminal and in which tab, whether hc reports an agent there, and the pid it runs
+   *  now. */
   private note(terminal: HcTerminal): void {
     const { address } = terminal
-    if (inWindow(terminal)) this.shown.add(address)
+    if (inWindow(terminal)) this.shown.set(address, terminal.tab)
     else this.shown.delete(address)
     if (reporting(terminal)) this.reported.add(address)
     else this.reported.delete(address)

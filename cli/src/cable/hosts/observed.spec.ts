@@ -1411,7 +1411,8 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
     // As devices.ts takes it where the hook's addresses are hc's own session's.
     createHerdrAppAdapter({ ...deps, client: { prompt: (address, kind, text) => fake.hcPrompt(address, kind, text) },
       hookIds: true, inFront: () => fake.herdrInFront(), shows: (address) => fake.hcShows(address),
-      reports: (address) => fake.hcReports(address), log: () => {} }),
+      // No stroke reaches it here: only the dial's scroll asks which tab holds a terminal.
+      tabOf: () => undefined, reports: (address) => fake.hcReports(address), log: () => {} }),
     createWeztermAdapter(deps),
     { ...orca, type: (pane, text) => fake.orcaSend(pane.id, text), show: (pane) => fake.orcaSwitch(pane.id) },
     { ...claude, show: (pane, agentId) => fake.claudeShow(agentId, pane.id) },
