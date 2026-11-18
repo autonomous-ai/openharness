@@ -905,3 +905,17 @@ test('on Windows, and after stop(), front() posts nothing and throws nothing; st
   await stopping
   assert.deepEqual([waiting.w.posts.length, waiting.w.timers.size], [1, 0])
 })
+
+test('an answer that comes as stop() is called sends nothing more, though the stream ends a moment after it', async () => {
+  const { w } = await streaming()
+  let answer: (status: number) => void = () => {}
+  w.replies.push(new Promise((done) => (answer = done)))
+  w.dial.front([H(1)])
+  await w.until(() => w.posts.length === 1)
+  w.dial.front([H(2)])
+  const stopping = w.dial.stop()
+  answer(204)
+  await stopping
+  await answered()
+  assert.deepEqual(bodies(w), [fronted(H(1))])
+})
