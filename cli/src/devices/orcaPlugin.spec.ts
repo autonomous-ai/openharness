@@ -37,13 +37,14 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
 })
 
-/** A throwaway data folder, by its real path, and the fake `orca`'s calls from now on. */
+/** A throwaway data folder, by its real path, the fake `orca`'s calls from now on, and the lines said on stderr. */
 function setup(over: Partial<OrcaPluginDeps> = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'orca-plugin-')))
   roots.push(root)
   const dataDir = join(root, 'data')
   mkdirSync(dataDir)
   const before = orca.calls().length
+  const said: string[] = []
   const deps: OrcaPluginDeps = {
     platform: 'darwin',
     orca: () => orca.bin,
@@ -51,9 +52,10 @@ function setup(over: Partial<OrcaPluginDeps> = {}) {
     files: () => FILES,
     dataDir,
     folder: join(dataDir, 'orca-plugin'),
+    err: (line) => { said.push(line) },
     ...over,
   }
-  return { root, deps, folder: deps.folder, calls: () => orca.calls().slice(before) }
+  return { root, deps, folder: deps.folder, calls: () => orca.calls().slice(before), said }
 }
 
 /** `orca status --json`, as Orca 1.4.262 answers it. */
@@ -213,7 +215,7 @@ describe('orcaStatus', () => {
   })
 
   it('the folder is written before Orca is asked about it, and only when it differs', async () => {
-    const { deps, folder } = setup()
+    const { deps, folder, said } = setup()
     up([entry(folder)])
     mkdirSync(folder)
     writeFileSync(join(folder, 'orca-plugin.json'), '{"version":"1.2.2"}\n')
@@ -232,6 +234,7 @@ describe('orcaStatus', () => {
     expect(await orcaStatus(deps)).toEqual({ orca: 'current' })
     expect(statSync(folder).ino).toBe(inode)
     expect(Object.keys(FILES).map((path) => statSync(join(folder, path)).ino)).toEqual(files)
+    expect(said).toEqual([])
   })
 
   it('the entry names the folder through a link', async () => {
@@ -258,12 +261,13 @@ describe('orcaStatus', () => {
     expect(await orcaStatus(deps)).toEqual({ orca: 'current' })
   })
 
-  it.skipIf(process.getuid?.() === 0)('a folder that cannot be written is absent', async () => {
-    const { deps, folder, calls } = setup()
+  it.skipIf(process.getuid?.() === 0)('a folder that cannot be written is absent, and its code is said, never its path', async () => {
+    const { deps, folder, calls, said } = setup()
     up([entry(folder)])
     chmodSync(deps.dataDir, 0o500)
     locked.push(deps.dataDir)
     expect(await orcaStatus(deps)).toEqual({ orca: 'absent' })
+    expect(said).toEqual(['orca plugin folder: EACCES'])
     expect(calls()).toEqual(['status --json'])
     expect(existsSync(folder)).toBe(false)
   })
@@ -419,6 +423,17 @@ describe('connect', () => {
     for (const over of [{ orca: () => null }, { platform: 'win32' as const }]) {
       expect(await orcaConnect(setup(over).deps)).toStrictEqual({ connect: 'failed', error: 'not-running' })
     }
+  })
+
+  it.skipIf(process.getuid?.() === 0)('a folder that cannot be written is failed, not not-running, and its code is said', async () => {
+    const { deps, folder, calls, said } = setup()
+    up([])
+    orca.answer('plugin install', installed(folder))
+    chmodSync(deps.dataDir, 0o500)
+    locked.push(deps.dataDir)
+    expect(await orcaConnect(deps, FINGERPRINT)).toStrictEqual(FAILED)
+    expect(said).toEqual(['orca plugin folder: EACCES'])
+    expect(calls()).toEqual(['status --json'])
   })
 
   it('from the sources it is no-plugin', async () => {

@@ -1206,6 +1206,17 @@ describe('harness device orca status and connect', () => {
     expect(readOrcaConnected(dataDir)).toEqual({ connected: false })
   })
 
+  it.skipIf(process.getuid?.() === 0)("a plugin folder that cannot be written: status is absent, connect is failed, each says the folder's code", async () => {
+    const dataDir = folder()
+    const calls = up()
+    installs()
+    readOnly(dataDir)
+    const said = ['orca plugin folder: EACCES']
+    expect(await device(['orca', 'status', '--json'], { dataDir, orca: orcaRun })).toEqual({ code: 0, out: ['{"orca":"absent"}'], err: said })
+    expect(await device(['orca', 'connect', '--approve', FP, '--json'], { dataDir, orca: orcaRun })).toEqual({ code: 1, out: [FAILED_LINE], err: said })
+    expect(calls().filter((call) => call.startsWith('plugin install'))).toEqual([])
+  })
+
   it('what the build carries is what the folder holds', async () => {
     const dataDir = folder()
     const calls = up()

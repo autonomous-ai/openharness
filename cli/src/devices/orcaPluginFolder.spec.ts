@@ -199,7 +199,7 @@ describe('the Orca plugin\'s folder', () => {
     expect(readdirSync(dirname(folder)).sort()).toEqual(['orca-plugin', `orca-plugin.new.${running}`])
   })
 
-  it('a swap whose second rename fails answers failed and puts the earlier folder back whole', () => {
+  it('a swap whose second rename fails answers its code and puts the earlier folder back whole', () => {
     const folder = aFolder()
     ensureOrcaPluginFolder(folder, EARLIER)
     const inode = lstatSync(folder).ino
@@ -213,20 +213,20 @@ describe('the Orca plugin\'s folder', () => {
       return real(from, to)
     })
 
-    expect(ensureOrcaPluginFolder(folder, FILES)).toBe('failed')
+    expect(ensureOrcaPluginFolder(folder, FILES)).toEqual({ failed: 'EIO' })
 
     expect(failed).toBe(true)
     expect(lstatSync(folder).ino).toBe(inode)
     holdsOnly(folder, EARLIER)
   })
 
-  it('a parent that cannot be written answers failed and leaves the folder as it was', () => {
+  it('a parent that cannot be written answers EACCES and leaves the folder as it was', () => {
     const folder = aFolder()
     ensureOrcaPluginFolder(folder, EARLIER)
     const inode = lstatSync(folder).ino
     chmodSync(dirname(folder), 0o500)
 
-    expect(ensureOrcaPluginFolder(folder, FILES)).toBe('failed')
+    expect(ensureOrcaPluginFolder(folder, FILES)).toEqual({ failed: 'EACCES' })
 
     chmodSync(dirname(folder), 0o700)
     expect(lstatSync(folder).ino).toBe(inode)
@@ -239,7 +239,7 @@ describe('the Orca plugin\'s folder', () => {
     mkdirSync(`${folder}.old`)
 
     for (const key of ['../x', '/abs', 'a//b', 'src/../x', 'src/.', '', 'src/', 'a\\b']) {
-      expect(ensureOrcaPluginFolder(folder, { ...FILES, [key]: 'x' }), key).toBe('failed')
+      expect(ensureOrcaPluginFolder(folder, { ...FILES, [key]: 'x' }), key).toEqual({ failed: 'EINVAL' })
     }
 
     expect(readdirSync(dirname(folder))).toEqual(['orca-plugin.old'])
@@ -248,8 +248,8 @@ describe('the Orca plugin\'s folder', () => {
   it('a key that names a file and a folder at once writes nothing', () => {
     const folder = aFolder()
 
-    expect(ensureOrcaPluginFolder(folder, { src: 'x', 'src/a.ts': 'y' })).toBe('failed')
-    expect(ensureOrcaPluginFolder(folder, { 'src/a.ts': 'y', src: 'x' })).toBe('failed')
+    expect(ensureOrcaPluginFolder(folder, { src: 'x', 'src/a.ts': 'y' })).toEqual({ failed: 'EINVAL' })
+    expect(ensureOrcaPluginFolder(folder, { 'src/a.ts': 'y', src: 'x' })).toEqual({ failed: 'EINVAL' })
 
     expect(readdirSync(dirname(folder))).toEqual([])
   })
@@ -281,7 +281,8 @@ describe('the Orca plugin\'s folder', () => {
       return real(from, to)
     })
 
-    expect(ensureOrcaPluginFolder(folder, { ...FILES, 'src/plugin.ts': 'export const answer = 2\n' })).toBe('failed')
+    // A code, never a message: the message names the folder's path.
+    expect(ensureOrcaPluginFolder(folder, { ...FILES, 'src/plugin.ts': 'export const answer = 2\n' })).toEqual({ failed: expect.stringMatching(/^E[A-Z]+$/) })
 
     expect(other).toBe('written')
     holdsOnly(folder, FILES)
