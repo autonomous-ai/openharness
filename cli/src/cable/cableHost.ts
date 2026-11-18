@@ -41,9 +41,14 @@ import { HarnessSource } from './hosts/harness.js'
 import { AppFilter, type AppCounts } from './hosts/appFilter.js'
 import { appDisplayName, hostDisplayName } from './hosts/hostDetect.js'
 import type { HostEntry, HostRegistry } from './hosts/registry.js'
-import { APP_LIMIT, AppRings, DialRing, type RingRank } from './hosts/select.js'
+import { APP_LIMIT, AppRings, DialRing, pageOf, type RingRank } from './hosts/select.js'
 import { FRONT_NONE } from './hosts/frontApp.js'
 import { capsLetters, type AppList, type AppPick, type DialView, type HostAgent, type PaneSwitch, type SwitchCause, type ViewCause } from './hosts/types.js'
+
+/** Which of an app's agents its ring lists while that app is shown and settled in front (Orca's worktree on screen). */
+export interface RingScope {
+  inScope(agentId: string): boolean
+}
 
 /** One completed turn's recap, as the mirror keeps them. */
 
@@ -677,6 +682,9 @@ export class DaemonCableHost implements CableHost {
   private readonly rings = new AppRings()
   /** Each app's own order, by app id, for its ring alone; the single ring takes none. In memory only, as the rings. */
   private readonly ranks = new Map<string, RingRank>()
+  /** Each app's scope and the ring of its own it lists in, apart from the app's ring so dropping the scope gives that
+   *  ring back as it was. In memory only, as the ranks. */
+  private readonly scopes = new Map<string, { scope: RingScope; ring: DialRing }>()
   private readonly filter: AppFilter
 
   /** Its changes reach the dial on the session's next tick, which reads the list every second. */
@@ -687,6 +695,14 @@ export class DaemonCableHost implements CableHost {
   /** That app's own order, for its ring alone. It reaches the dial on the session's next list, as any ring change. */
   setRank(app: string, rank: RingRank): void {
     this.ranks.set(app, rank)
+  }
+
+  /** That app's ring lists only the agents in scope while the app is shown and settled in front; undefined lists them
+   *  all again. A new scope object is a new set of agents, so it starts a ring of its own; the same one keeps its ring.
+   *  It reaches the dial on the session's next list, as a rank does. */
+  setScope(app: string, scope: RingScope | undefined): void {
+    if (!scope) this.scopes.delete(app)
+    else if (this.scopes.get(app)?.scope !== scope) this.scopes.set(app, { scope, ring: new DialRing() })
   }
 
   /** An agent of the machine list and the source that holds it. A dial on a window's tab may do everything with its
@@ -899,7 +915,7 @@ export class DaemonCableHost implements CableHost {
     const sourceOf = new Map(entries.map((e) => [e.agent, e.source]))
     const listed = entries.map((e) => e.agent)
     const list = apps ? this.appList(listed) : undefined
-    const { rows, total } = list ? this.rings.ring(list.shown) : this.ring.select(listed)
+    const { rows, total } = list ? this.appRing(listed, list.shown) : this.ring.select(listed)
     const agents = rows.map((a): CableAgent => {
       // A Harness agent keeps the row the window would show (its chips too); another app's is drawn from what was heard.
       const row = byId.get(a.id) ?? { id: a.id, name: a.name, engine: a.engine, machineId: local.id, machine: local.name }
@@ -912,6 +928,14 @@ export class DaemonCableHost implements CableHost {
   /** Each app's agents in the registry now: the filter and the view decide on these, never on the last read's. */
   private counts(): AppCounts {
     return this.rings.counts(this.registry?.entries().map((e) => e.agent) ?? [])
+  }
+
+  /** The shown app's ring, or its scope's while that app is settled in front: a scope is what that app has on screen,
+   *  which means nothing while the person looks at another app. */
+  private appRing(agents: HostAgent[], app: string): { rows: HostAgent[]; total: number } {
+    const scoped = this.filter.settledApp() === app ? this.scopes.get(app) : undefined
+    if (!scoped) return this.rings.ring(app)
+    return scoped.ring.select(agents.filter((a) => pageOf(a) === app && scoped.scope.inScope(a.id)), this.ranks.get(app))
   }
 
   /** The apps of the machine list, in the order they appeared, and the one shown over these agents. */
