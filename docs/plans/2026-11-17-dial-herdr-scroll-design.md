@@ -23,7 +23,10 @@ built the way the VS Code branch (`feat/dial-vscode-extension`, `docs/plans/2026
   Mac. The plan measures `do terminal.scroll` against a private Herdr only if one can run without the person's window;
   otherwise the person checks the feel after merge.
 - **Which terminal is on screen** is the window's alone: hc's terminal facts have no focus or viewer. `herdr-app status`
-  ("what's on screen: layout, focus, overlays, zoom") answers it; one run took 0.04 s.
+  ("what's on screen: layout, focus, overlays, zoom") answers it; one run took 0.04 s. Its `tab` is the tab on screen;
+  its `agent` is **not** what is on screen (found 2026-11-18, after Diego's first check scrolled nothing): with a
+  temporary terminal's tab opened and shown, `tab` changed to that tab while `agent` still named the agent of the tab
+  before. hc labels each terminal Herdr's window holds with `herdr.space` and `herdr.tab`, so the tab is matched there.
 - **The alternate screen has no history.** A program on it (an editor, a pager) is not scrolled: `terminal.scroll` has
   nothing to move. Claude Code and Codex run on the main screen by default.
 - **herdr 0.8.0** (the older multiplexer, `herdrClient.ts`) is left out (PM, 2026-11-17): its public API only reports a
@@ -35,7 +38,8 @@ built the way the VS Code branch (`feat/dial-vscode-extension`, `docs/plans/2026
   at its `down` (PM, 2026-11-17):
   1. **Herdr is in front** (`cableHost.latestFront() === 'herdr'`, the rule a Herdr swipe uses);
   2. the dial **shows an agent with a terminal in Herdr's window** (`hcSource.shows(address)`);
-  3. that terminal is **the one Herdr shows on screen**: `herdr-app status`'s `agent` names it.
+  3. that terminal is **in the tab Herdr shows on screen**: `herdr-app status`'s `tab` equals the terminal's
+     `herdr.tab` label in hc (PM, 2026-11-18; `status`'s `agent` is not what is on screen, see below).
   Harness's windows then hear none of that stroke.
 - Otherwise the stroke goes to Harness's windows as today (`dial_scroll`), so no terminal nobody sees is scrolled.
 - The route is chosen at a stroke's `down` and kept to its `up`, as on the VS Code branch: Harness's windows are never
@@ -83,19 +87,26 @@ the active one.
   `canShow`), and `binary()` found.
 - `onScreen(pane)`: runs `herdr-app status` (no shell, `SCROLL_TIMEOUT_MS`; it took 0.04 s against Diego's window, run
   once with the PM's go). Its stdout is one JSON object (Herdr 0.1.16): `zoom`, `font_size`, `ui_font_size`, `space`,
-  `tab`, `focused_pane`, `layout`, `agent`, `floats`, `overlays`, `errors`. `agent` is the terminal address of "the agent
-  an agent block shows" (`herdr.d.ts` `focused()`), the one `agent.focus` switches to. True only when the exit code is 0,
-  the stdout parses as an object, and its `agent` is a string equal to `pane.id`; a missing or null `agent` (a layout
-  with no agent block), another address, bad JSON or a failed run is false. Only `agent` is read; the rest (names of the
-  person's spaces and layouts) is never kept or logged. A failed run logs `[herdr-app] status · failed` once until one
+  `tab`, `focused_pane`, `layout`, `agent`, `floats`, `overlays`, `errors`. `tab` is the id of the tab on screen. True
+  only when the exit code is 0, the stdout parses as an object, its `tab` is a non-empty string, and it equals the
+  pane's terminal's `herdr.tab` label (`tabOf(pane.id)`, a new adapter dep the hc source answers); a missing or null
+  `tab`, a terminal with no `herdr.tab` label, another tab, bad JSON or a failed run is false. Only `tab` is read; the
+  rest (names of the person's spaces and layouts) is never kept or logged.
+- The hc side of that match: `hcClient.ts` keeps the `herdr.tab` label beside `herdr.space` (its `READ` list) and
+  reads it into `HcTerminal.tab` (a non-empty string, else none); a `labels` event updates it, so a terminal moved to
+  another tab is matched there. `HcSource.tabOf(address)` answers it for the same terminals `shows` covers (listed or
+  past the 64), and `devices.ts` passes it to the adapter as `tabOf`. A failed run logs `[herdr-app] status · failed` once until one
   succeeds; a mismatch logs nothing of its own (the routing counts it, §4). The test fixture is written by hand in this
   shape with made-up ids; the raw output stays in the session's scratchpad only.
 - `scroll(pane, n)`: checks the id again, drops `n === 0`, and runs
   `herdr-app do terminal.scroll --terminal <address> --lines <n>` with no shell, each value one argument, with a
   timeout of its own, `SCROLL_TIMEOUT_MS = 2_000` (a run took 10–50 ms; the 10 s `RUN_TIMEOUT_MS` of a focus would
   freeze a stroke). **One run at a time per terminal:** lines that come while a run is under way are added to a pending
-  count, clamped to ±100, which the next run carries once the current one ends. So a fast stroke costs one process per
-  `herdr-app` round trip, not one per dial frame, and no line is lost to the queue.
+  count, clamped to ±100, which the next run carries once the current one ends. **And a run starts no sooner than
+  `SCROLL_GAP_MS = 50` after the last one for that terminal started** (PM, 2026-11-18): Diego's first check logged 109
+  runs for 161 lines in about 3 s, about 40 processes a second carrying 1–2 lines each. With the gap a stroke costs at
+  most 20 processes a second, the lines that come in the gap are summed into the next run, and none is lost; the first
+  run of a stroke still starts at once.
 - Its queue is a map of its own (`scrolling`, by address), never the `running` map and `once()` that a tap and a rest
   share: a scroll never joins an `agent.focus` run (it would lose its lines), and a scroll and a focus may run together.
 - A run that fails (non-zero exit, timeout, no binary) drops its lines and what is pending for that terminal, and logs
@@ -166,9 +177,11 @@ becomes `{ adapter, pane }`. On the rebase there is one route only:
 | Herdr not in front, or the shown agent has no terminal Herdr's window shows | the stroke goes to Harness's windows | as today |
 | `herdr-app` missing or failing | lines dropped, counted, one log line | nothing scrolls in Herdr |
 | A run hangs | `SCROLL_TIMEOUT_MS` (2 s) ends it; lines pending meanwhile are dropped with it | the scroll stops for up to 2 s |
-| The shown agent's terminal is in Herdr's window but not the one focused on screen (the person clicked another, or the rest's switch failed) | `herdr-app status` at the stroke's `down` names another terminal: no `terminal.scroll` runs, and the whole stroke goes to Harness's windows (PM, 2026-11-17) | as today |
+| The shown agent's terminal is in Herdr's window but not in the tab on screen (the person clicked another, or the rest's switch failed) | `herdr-app status`'s `tab` at the stroke's `down` is another tab than the terminal's `herdr.tab`: no `terminal.scroll` runs, and the whole stroke goes to Harness's windows (PM, 2026-11-17; matched by tab, PM 2026-11-18) | as today |
+| `status`'s `agent` names the shown agent while another tab is on screen (Diego's first check, 2026-11-18: 175 runs, nothing seen) | `agent` is not read; only `tab` decides | — |
 | `herdr-app status` fails or takes over 2 s | the stroke goes to Harness's windows | as today |
-| Herdr's layout has no agent block (`status`'s `agent` is null or missing) | not on screen as far as the devices can tell: the stroke goes to Harness's windows | as today |
+| `status` has no `tab`, or the terminal has no `herdr.tab` label | not on screen as far as the devices can tell: the stroke goes to Harness's windows | as today |
+| A fast stroke | at most one `terminal.scroll` run per terminal every 50 ms; the lines of the gap are summed into the next run | at most 20 processes a second |
 | `status` is under way when the finger moves | the stroke is held in a fixed size and replayed on the answer | the first lines arrive about 0.04 s later |
 | Herdr Core is not on its default session (`hookIds` false) and the dial shows the hooked copy | that copy has no Herdr pane | the stroke goes to Harness's windows |
 | The terminal is on the alternate screen | Herdr has no history to move | nothing scrolls |
@@ -190,10 +203,16 @@ every stroke goes to Harness's windows).
     with pending lines summed and clamped to ±100; a scroll during a focus run of the same terminal runs on its own; a
     failure drops and logs once; the drain line's counts; a bad id or 0 lines runs nothing; off macOS nothing runs.
   - `herdrApp.spec.ts`, `onScreen`: the exact argv (`status`) and `SCROLL_TIMEOUT_MS`; true for the hand-written
-    fixture whose `agent` is the pane's address; false for another address, a null or missing `agent`, bad JSON, a
+    fixture whose `tab` is the pane's terminal's `tabOf`; false for another tab, a null or missing `tab`, a terminal with
+    no `tabOf`, a fixture whose `agent` is the pane's address but whose `tab` is another, bad JSON, a
     non-object, a non-zero exit and a timeout; one `status · failed` line until a run succeeds; nothing of the stdout
-    but `agent` read.
-  - `hcSource.spec.ts`: `paneOf(agentId)` answers a listed row's address and none for another id.
+    but `tab` read.
+  - `herdrApp.spec.ts`, the gap: a run starts no sooner than 50 ms after the last one for that terminal started; lines
+    of the gap are summed into one run; a stroke's first run starts at once; another terminal's runs do not wait.
+  - `hcClient.spec.ts`: `herdr.tab` is kept and read into `tab`; a `labels` event changes it; a missing or empty label
+    is none.
+  - `hcSource.spec.ts`: `paneOf(agentId)` answers a listed row's address and none for another id; `tabOf(address)`
+    answers a shown terminal's tab and none for a terminal it does not show.
   - `devices.spec.ts`: a stroke with Herdr in front and a shown Herdr agent goes to the adapter and sends no
     `dial_scroll`, both for a hooked agent (observed pane) and one the hc source alone lists; any other case sends
     `dial_scroll` as today; the route holds from `down` to `up`. The hooked path is tested here only (the e2e sets
@@ -208,8 +227,9 @@ every stroke goes to Harness's windows).
   - a stroke on the fake dial (`down`, moves, `up`) runs the fake `herdr-app` with `do terminal.scroll --terminal <t>
     --lines <n>`; the `--lines` values summed over those runs equal the stroke's lines (the number of runs is not
     fixed), and the rest's `agent.focus` runs are ignored;
-  - the fake `herdr-app` answers `status` with a hand-written object whose `agent` is a file the test writes: first the
-    agent's terminal, then another address; a stroke while it names another terminal runs no `terminal.scroll` and
+  - the private hc terminal carries `herdr.space` and `herdr.tab` labels; the fake `herdr-app` answers `status` with a
+    hand-written object whose `tab` is a file the test writes: first the terminal's tab, then another tab (with `agent`
+    still the terminal's address); a stroke while it names another tab runs no `terminal.scroll` and
     reaches the window as `dial_scroll` (the third condition, end to end);
   - then another app goes in front through the watch, a second stroke is sent, and the window's `dial_scroll` phases are
     exactly the strokes sent while Herdr was not the target: the first reached no window;

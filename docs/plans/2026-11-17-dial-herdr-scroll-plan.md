@@ -440,3 +440,33 @@ Answered by the PM, 2026-11-17:
 **5. On a real Herdr (person-only; after merge, not in this pull request):** a real stroke on Diego's dial over his own Herdr window: that it scrolls the shown agent's terminal only while it is the one on screen, and its feel (speed, lag). It needs his own Herdr, his dial and his eye. No agent runs it.
 
 **6. Against production:** none, and never.
+
+## Fixes after Diego's first check (2026-11-18)
+
+Diego's check on a shared test build scrolled nothing while the log said 175 runs succeeded. `herdr-app status`'s
+`agent` is not the terminal on screen (spec, "What Herdr offers"), so the third condition read the wrong field. The PM
+approved both fixes below (2026-11-18). One `devcrew-implementer` does them in order, each red then green.
+
+### Task 9: The third condition matches the tab on screen
+
+Files: `cli/src/cable/hosts/hcClient.ts` (+spec), `cli/src/cable/hosts/hcSource.ts` (+spec),
+`cli/src/cable/hosts/herdrApp.ts` (+spec), `cli/src/testing/herdrAppStatus.ts`, `cli/src/services/devices.ts` (+spec,
+the `tabOf` wiring only), `cli/e2e/deviceHerdrApp.e2e.ts`. Depends on: none. Effort: `xhigh`.
+
+- Red: `herdrApp.spec.ts`: `onScreen` is false for a status whose `agent` is the pane's address but whose `tab` is
+  another than `tabOf(pane.id)`, and true when `tab` equals it (fails today: `agent` decides). Then the spec's other
+  `onScreen`, `hcClient` and `hcSource` cases.
+- Green: as the spec's §3 says: `READ` keeps `herdr.tab`; `HcTerminal.tab`; `HcSource.tabOf(address)` for the
+  terminals `shows` covers (the change check `same` counts `tab`, so a moved terminal is seen); the adapter dep
+  `tabOf(address): string | undefined`; `onScreen` reads `tab` only.
+- The e2e's private terminal gets a `herdr.tab` label; its fake `status` prints `tab` from the file the test writes,
+  with `agent` left on the terminal's address in the not-on-screen step.
+
+### Task 10: At most one scroll run every 50 ms per terminal
+
+Files: `cli/src/cable/hosts/herdrApp.ts` (+spec). Depends on: Task 9 (same file). Effort: `xhigh`.
+
+- Red: with a fake clock and instant runs, lines sent every 10 ms start a run at most every 50 ms per terminal, their
+  lines summed; a stroke's first run starts at once; another terminal does not wait.
+- Green: `SCROLL_GAP_MS = 50`: the drain waits on the deps' timer, never a sleep, until 50 ms after the last run of that
+  terminal started; pending stays clamped to ±100; the quiet-second tally and the failure line are unchanged.
