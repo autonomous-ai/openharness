@@ -1,10 +1,10 @@
 /** Joined, bounded kernel evidence for control. Discovery's partial image reader is not authority. */
 import { execFile } from 'node:child_process'
 import { constants, closeSync, fstatSync, openSync, opendirSync, readlinkSync, readSync, statSync } from 'node:fs'
-import { IdentityReadUnavailable, REPLACED_PROGRAM } from '../engines/kit/identityScan.js'
+import { IdentityReadUnavailable, MISSING_HELPER, REPLACED_PROGRAM } from '../engines/kit/identityScan.js'
 import type { NativeDescriptor } from '../engines/kit/nativeDescriptors.js'
 import { NativeEvidenceBudget, nativeText, nativeUnavailable } from '../engines/kit/nativeEvidence.js'
-import { bundledProcessImageHelper, invalidateProcessImageHelper, parseNativeProcessImages } from './nativeProcessImages.js'
+import { bundledProcessImageHelper, invalidateProcessImageHelper, parseNativeProcessImages, processImageHelperBundled } from './nativeProcessImages.js'
 import { psEnv } from './childLocale.js'
 
 export interface NativeControlRow {
@@ -227,6 +227,9 @@ export async function nativeProcessControl(pids: readonly number[], parent: numb
     || (parent !== 0 && (!validPid(parent) || !pids.includes(parent)))) return nativeUnavailable('the native control request is invalid')
   if (process.platform === 'linux') return linuxControl(pids, parent, budget)
   if (process.platform !== 'darwin') return nativeUnavailable('native control evidence is unavailable on this platform')
+  // A build with no helper never recovers until Harness is reinstalled, so its hold says so; a helper that failed to
+  // prepare below may recover on a later pass, so that hold stays the transient reason.
+  if (!processImageHelperBundled()) throw new IdentityReadUnavailable('', MISSING_HELPER)
   let timer: ReturnType<typeof setTimeout> | undefined
   let probeFailed: string | undefined
   try {
