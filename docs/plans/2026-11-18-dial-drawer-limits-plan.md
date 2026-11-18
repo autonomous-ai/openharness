@@ -6,15 +6,15 @@
 
 **Architecture:**
 - **The inbox** (`cli/src/cable/questionInbox.ts`) keeps `told` beside `asked`, and keeps a refused question as an unreadable, summary-only entry instead of deleting it.
-- **The session** (`cli/src/cable/cableSession.ts`) reads `hello.questionTier`, and one rule decides what a question the dial does not hold is sent as: a ring, a `tier: 'list'` row, the Pro's plain frame, or nothing. `resendQuestions` and `question()` both use it. `replaceNotifications` is not edited.
-- **The firmware** (`devices/harness-device/firmware/`) says `questionTier: 'v1'`, files a `tier: 'list'` question with no beep and no wake, shows the words of a question it cannot answer, and its `notif.replace` reader keeps a row per agent and kind.
+- **The session** (`cli/src/cable/cableSession.ts`) reads `hello.questionTier`, answers it with `question.tier` in `welcome.features`, and one rule decides what a question the dial does not hold is sent as: a ring, a `tier: 'list'` row, the Pro's plain frame, or nothing. `resendQuestions` and `question()` both use it. `replaceNotifications` is not edited.
+- **The firmware** (`devices/harness-device/firmware/`) says `questionTier: 'v1'`, reads `question.tier` from the welcome (`cable_features.c`), files a `tier: 'list'` question with no beep and no wake only when the welcome listed it, shows the words of a question it cannot answer, and its `notif.replace` reader keeps a row per agent and kind.
 - Everything on the computer runs in the devices process. Nothing goes through the core, nothing is stored, no Desktop or Pro firmware change.
 
 **Tech Stack:** TypeScript daemon (Node, vitest, `cli/`); ESP-IDF 5.5.4 C firmware with Python host tests (`devices/harness-device/firmware/`).
 
 **Spec:** `docs/plans/2026-11-18-dial-drawer-limits-design.md`. Read it with this plan, the root `AGENTS.md` and `cli/AGENTS.md`.
 
-**Open questions:** none. harness-pm answered both on 2026-11-18 ("Decided here", 13 and 14).
+**Open questions:** none. harness-pm answered both on 2026-11-18 ("Decided here", 13 and 14), and decided how the capability is declared (16).
 
 ## Base
 
@@ -24,6 +24,7 @@
   - `IDF_PATH=$HOME/esp/esp-idf make device-test`: every test passes up to `test_cable_models.py`, which fails to build on macOS (`'snprintf' macro redefined`, the known exception of earlier dial plans; green on CI's Linux) and stops `run.sh` before `test_cable_outbound.py`. So the SDK-dependent tests are run one file at a time here. `test_question_ui.py`, `test_touch_ui.py`, `test_cable_identity.py` and `test_cable_outbound.py` each pass alone.
   - `e2e/deviceNotify.e2e.ts` and `e2e/deviceClaudeOrca.e2e.ts`: 10 passed, **2 failed at the base**. Both wait 45 s for a second `question` frame that #4445 replaced with a drawer row. Task 10 fixes them.
   - The firmware builds with check 1's two commands: the default in 41 s (`interns_commander.bin`, 0x294d50 bytes, 67% of the app partition free), the bench variant in 1 min 37 s. Both leave `git status` clean. The probe's build folders were removed; the ignored `managed_components/` it downloaded is still in the firmware folder.
+- **#4441 (`8773f5056f`, on `main`) is the pattern for the capability** (Decided here, 16). It adds `apps.switch` to the welcome in `cableSession.ts` and `CABLE_FEATURE_APPS_SWITCH` (`1u << 7`) to `cable_features.h`/`.c`, with `test_cable_features.c`. This branch's base predates it: the rebase that gates Task 1 brings it in, and Tasks 4 and 7 build on it.
 - **Three other branches touch the same files.** Keep every edit where its task says, so whichever lands second merges by hand in minutes:
   - `fix/dial-frame-cap` (#4451, open on 2026-11-18, about to merge) rewrites `noticeSummary` inside `cableSession.ts` into `dialText(text, max)` (also used for names, with `NAME_MAX`), and edits `whoIs`, `owed`, `send` and `replaceNotifications`. **No hand merge for it:** Task 1 starts only after #4451 has merged and the main session has rebased `fix/dial-drawer-limits` onto that `main`, with no task running. Task 1 then moves whatever #4451 left, keeping **one** function for the drawer's words and the inbox's summary. Two functions would make a read question come back unread. Tasks 3, 4 and 5 reach `noticeSummary` through Task 1, so none of them starts before that rebase either.
   - `fix/dial-inbox-count` merged as #4448 on 2026-11-18, after this plan was written. The rebase above brings it in, and Tasks 6, 8 and 9, started before it, meet it there: a conflict in `ui_habitat.c` is resolved at that rebase by the rule of this line. It edits `notice_add`, `notice_unread` and `ui_notif_replace`, deletes `notice_sequence` (one line of `ui_question_show`), and lets `notice_add` return NULL. Task 6 leaves the `s.notice_sequence++` line alone and checks the row for NULL.
@@ -37,21 +38,21 @@
 | 1 One `noticeSummary` for the drawer and the inbox | `cli/src/cable/noticeSummary.ts` (new), `cableSession.ts` | #4451 merged + this branch rebased onto `main` | medium | none: a move, no behavior, one commit |
 | 2 The inbox remembers what the dial was told | `cli/src/cable/questionInbox.ts`, `questionInbox.spec.ts` | none | high | `questionInbox.spec.ts` |
 | 3 The inbox keeps a refused question as its summary | `cli/src/cable/questionInbox.ts`, `questionInbox.spec.ts`, `cableSession.spec.ts` (one existing test) | 1 | high | `questionInbox.spec.ts` |
-| 4 A told question comes back as a silent row, never a ring | `cli/src/cable/cableSession.ts`, `cableSession.spec.ts` | 1, 2 | xhigh | `cableSession.spec.ts` |
+| 4 A told question comes back as a silent row, never a ring; the welcome says `question.tier` | `cli/src/cable/cableSession.ts`, `cableSession.spec.ts` | 1, 2 | xhigh | `cableSession.spec.ts` |
 | 5 A refused question reaches the dial small and stays on its drawer | `cli/src/cable/cableSession.ts`, `cableSession.spec.ts`, `cableFleet.spec.ts` | 3, 4 | high | `cableSession.spec.ts`, `cableFleet.spec.ts` |
 | 6 Firmware: a `question` with `tier: 'list'` files its row silently | `main/ui/habitat/ui_habitat.c`, `main/ui/ui_screens.h`, `main/ui/ui_perf.c`, `main/cable_client.c`, `test/test_question_ui.py`, `test/test_cable_identity.py` | none | high | `test_question_ui.py`, `test_cable_identity.py` |
-| 7 Firmware: the hello says `questionTier: 'v1'` | `main/cable_client.c`, `test/test_cable_outbound.py` | 6 | medium | `test_cable_outbound.py` |
+| 7 Firmware: the hello says `questionTier: 'v1'`, and only a welcome's `question.tier` makes `tier: 'list'` silent | `main/cable_features.h`, `main/cable_features.c`, `main/cable_client.c`, `test/test_cable_features.c`, `test/test_cable_outbound.py`, `test/test_cable_identity.py` | 6, and the rebase that gates Task 1 | high | `test_cable_features.c`, `test_cable_outbound.py`, `test_cable_identity.py` |
 | 8 Firmware: a question the dial cannot answer shows its words | `main/ui/habitat/ui_habitat.c`, `test/test_question_ui.py` | none | high | `test_question_ui.py` |
 | 9 Firmware: the drawer's reader keeps a row per agent and kind | `main/cable_client.c`, `test/test_cable_identity.py` | none | medium | `test_cable_identity.py` |
 | 10 End to end: an open question comes back as a drawer row | `cli/e2e/deviceNotify.e2e.ts`, `cli/e2e/deviceClaudeOrca.e2e.ts` | none | high | none of its own: test-only, one commit; its two cases are red at the base |
 
 Firmware paths are under `devices/harness-device/firmware/`.
 
-Longest chain: three tasks (1 → 3 → 5, 1 → 4 → 5, or 2 → 4 → 5), after the wait for #4451 and the rebase, which gates Task 1 and through it 3, 4 and 5.
+Longest chain: three tasks (1 → 3 → 5, 1 → 4 → 5, or 2 → 4 → 5), after the wait for #4451 and the rebase, which gates Task 1 and through it 3, 4 and 5. Task 7 waits for Task 6 and for the same rebase (it needs #4441's `cable_features`).
 
-- Tasks 2, 6, 8 and 9 are running from the committed plan. Task 10 starts at once. Task 1 starts once #4451 has merged and the main session has rebased this branch onto `main`, with no task running.
+- Tasks 2, 6, 8 and 9 are running from the committed plan. Task 10 starts at once. Task 1 starts once #4451 has merged and the main session has rebased this branch onto `main`, with no task running. Task 7 starts after that rebase and Task 6, whichever is later.
 - The CLI tasks, the firmware tasks and Task 10 share no file.
-- Shared files, with no dependency between the tasks (they do not run together, in either order): `questionInbox.ts` and its spec (2, 3); `cableSession.spec.ts` (3, 4); `ui_habitat.c` and `test_question_ui.py` (6, 8); `cable_client.c` (6, 9; 7, 9) and `test_cable_identity.py` (6, 9).
+- Shared files, with no dependency between the tasks (they do not run together, in either order): `questionInbox.ts` and its spec (2, 3); `cableSession.spec.ts` (3, 4); `ui_habitat.c` and `test_question_ui.py` (6, 8); `cable_client.c` (6, 9; 7, 9) and `test_cable_identity.py` (6, 9; 7, 9).
 
 ## Layers
 
@@ -72,7 +73,8 @@ No file under `cli/src/core/` or `cli/src/services/` changes, `src/architecture.
 
 ## Global Constraints
 
-- **Wire values, exact:** `hello.questionTier` is `'v1'`, a positive string match per greeting, like `appFilter`. `tier: 'list'` goes only to a dial that said it. A Pro (`hello.board === 'pro'`, the session's `seqOn`) does not say it, and neither does an older round dial.
+- **Wire values, exact:** `hello.questionTier` is `'v1'`, a positive string match per greeting, like `appFilter`. The daemon answers it with `question.tier` in `welcome.features`, only for that greeting. `tier: 'list'` goes only to a dial that said it, and the firmware files it silently only when its session's welcome listed `question.tier`.
+- **The welcome's 16 names:** the firmware drops every feature of a welcome over 16 names. After this plan the fullest round-dial welcome is 9 names, a Pro's fullest 9, a greeting that said every capability 11. A Pro (`hello.board === 'pro'`, the session's `seqOn`) does not say it, and neither does an older round dial.
 - **A `tier: 'list'` frame's `questions`:** `[{ key: '', q: <summary>, options: [] }]`.
 - **An unreadable entry's `questions`:** `[{ key: '', q: <summary>, options: [], multi: false }]`. `<summary>` is `noticeSummary` (239 bytes) of the first question's text, else of `Needs your answer`.
 - **Limits unchanged:** 8 rows a `notif.replace`, 64 inbox entries, 6500 bytes of signature, 8192 bytes a frame, 4 questions, 6 options.
@@ -108,6 +110,7 @@ Most likely to bite first. Each is pinned by a test in the task named.
 13. **Both rows of one agent in one drawer** (harness-pm, 2026-11-18): the daemon does **not** start sending an agent's news beside its question. `replaceNotifications` keeps putting an agent's open question in the place of its news, and `ui_notif_replace` is not changed. Task 9 fixes the dial's reader only. Task 9's "(open question 1)" points here.
 14. **The end-to-end reds from #4445** (harness-pm, 2026-11-18): fixed in this branch, by Task 10. Test-only: the daemon's frames are what #4445 meant them to be.
 15. **`noticeSummary` after #4451** (harness-pm, 2026-11-18): Task 1 waits for #4451 and a rebase, then moves what #4451 left. Task 4 depends on Task 1 too: its rule calls `noticeSummary`, which #4451 takes out of `cableSession.ts`, so a Task 4 written before the rebase would not build after it.
+16. **One way to declare the capability** (harness-pm, from diego-pm, 2026-11-18), as #4441 does for `apps.switch`: the dial says `questionTier: 'v1'` in its hello; the daemon answers `question.tier` in `welcome.features` only to that greeting (Task 4); the firmware parses it into `CABLE_FEATURE_QUESTION_TIER` (`1u << 8`, after #4441's `1u << 7`) and `handle_question` files a `tier: 'list'` frame silently only with that bit, otherwise it is an alert (Task 7). In the welcome, `question.tier` goes after `apps.switch`, before `settings`.
 
 ---
 
@@ -283,18 +286,19 @@ describe('a question the dial cannot answer', () => {
 - [ ] **Step 5: Run** `cd cli && npm run typecheck && npx vitest run src/cable/questionInbox.spec.ts src/cable/cableSession.spec.ts src/cable/cableFleet.spec.ts`. Expected: PASS.
 - [ ] **Step 6: Commit** `Dial: a question the inbox refuses is kept as its summary`.
 
-### Task 4: A told question comes back as a silent row, never a ring
+### Task 4: A told question comes back as a silent row, never a ring; the welcome says `question.tier`
 
 **Files:**
-- Modify: `cli/src/cable/cableSession.ts` (the capability fields, `hello`, `resendQuestions`, `question`; not `replaceNotifications`)
-- Test: `cli/src/cable/cableSession.spec.ts` (`describe('hello capabilities')`)
+- Modify: `cli/src/cable/cableSession.ts` (the capability fields, `hello` and its `welcome.features`, `resendQuestions`, `question`; not `replaceNotifications`)
+- Test: `cli/src/cable/cableSession.spec.ts` (`describe('hello capabilities')`, and #4441's "the fullest round-dial welcome is eight names" in `describe('the app filter')`)
 
 **Depends on:** 1, 2. **Effort:** xhigh (two async paths, three kinds of dial).
 
 **Interfaces:**
 - Consumes: `QuestionInbox.told`, `refile`, `ask` (Task 2); `noticeSummary(text)` from `./noticeSummary.js` (Task 1).
 - Produces:
-  - `private questionTier = false` — `hello.questionTier === 'v1'`, read at every hello, cleared in `resetCapabilities`, named `questionTier` in `capabilitiesNamed` (after `appFilter`).
+  - `private questionTier = false` — `hello.questionTier === 'v1'`, read at every hello beside `appFilter` (before the welcome is sent), cleared in `resetCapabilities`, named `questionTier` in `capabilitiesNamed` (after `appFilter`).
+  - `welcome.features` gains `...(this.questionTier ? ['question.tier'] : [])`, after the `apps.switch` line and before `'settings'`, with a comment: the dial files a `tier: 'list'` question silently only when told, so an older daemon's frame stays an alert (Decided here, 16).
   - `private async giveQuestion(agentId: string, id: string, questions: unknown, words: string): Promise<void>` — the one rule. `questions` is what a ring and a Pro's plain frame carry; `words` is the first question's text as the inbox holds it.
 
 The rule, for a question the dial does not hold. Every mark is set before its frame is written:
@@ -416,6 +420,21 @@ it('a question delivered again while its row is being written is sent once', asy
   } finally { await session.stop() }
 })
 
+it('the welcome says question.tier only to a dial that says questionTier v1', async () => {
+  const round = { t: 'hello', product: 'harness', mac: 'aa:bb', fw: '1.0.0' }
+  const features = async (hello: Record<string, unknown>) => {
+    const { session, port } = await connect(richHost())
+    try {
+      port.say(hello)
+      await vi.waitFor(() => expect(port.types()).toContain('welcome'))
+      return ofType(port, 'welcome')[0].features as string[]
+    } finally { await session.stop() }
+  }
+  expect(await features({ ...round, questionTier: 'v1' })).toContain('question.tier')
+  for (const hello of [round, { ...round, questionTier: 'v2' }, { ...round, questionTier: 'V1' }, { ...round, questionTier: true }, { ...PRO_HELLO }])
+    expect(await features(hello)).not.toContain('question.tier')
+})
+
 it('names questionTier in the greeting line', async () => {
   const log = vi.fn()
   const { session, port } = await connect(richHost({ log }))
@@ -426,12 +445,20 @@ it('names questionTier in the greeting line', async () => {
 })
 ```
 
-- [ ] **Step 2: Run** `cd cli && npx vitest run src/cable/cableSession.spec.ts -t "hello capabilities"`. Expected: the five tests FAIL (a ninth question is asked again as a plain `question` on every dial; no `tier`; no `questionTier` in the log).
-- [ ] **Step 3: Implement** `questionTier`, `giveQuestion`, `resendQuestions` and `question` as above. `resendQuestions` still clears `greeting` first and still asks only what `owed` says. Update the comments of `resendQuestions`, `question` and the capability fields to say the rule and why (a ring at every change of the window's list, 2026-11-18).
+In `describe('the app filter')`, #4441's "the fullest round-dial welcome is eight names" becomes "the fullest round-dial welcome is nine names": the dial greets with `connect(host)` and `port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', appFilter: 'v1', questionTier: 'v1' })` (the file's `greeted` helper is left as it is), waits for `notif.replace`, and expects
+
+```ts
+expect(features).toEqual(['voice.draft', 'agents.refresh', 'form', 'selection', 'visit', 'question.review', 'apps.switch', 'question.tier', 'settings'])
+// The dial drops every feature of a welcome that lists more than 16 names.
+expect(features.length).toBeLessThanOrEqual(16)
+```
+
+- [ ] **Step 2: Run** `cd cli && npx vitest run src/cable/cableSession.spec.ts -t "hello capabilities|the fullest round-dial welcome"`. Expected: the seven tests FAIL (a ninth question is asked again as a plain `question` on every dial; no `tier`; no `question.tier` in the welcome; no `questionTier` in the log).
+- [ ] **Step 3: Implement** `questionTier`, the welcome's `question.tier`, `giveQuestion`, `resendQuestions` and `question` as above. `resendQuestions` still clears `greeting` first and still asks only what `owed` says. Update the comments of `resendQuestions`, `question` and the capability fields to say the rule and why (a ring at every change of the window's list, 2026-11-18).
 - [ ] **Step 4: Run** `cd cli && npm run typecheck && npx vitest run src/cable/cableSession.spec.ts src/cable/cableFleet.spec.ts`. Expected: PASS, every other test unchanged.
 - [ ] **Step 5: Commit** `Dial: a question the dial was told comes back as a silent row, never a ring`.
 
-**End to end:** Task 10's two cases see the same frames after this task. Their fake dial says no `questionTier`, and each question is told and carried by the drawer as a row (`forget(kept)` marks it asked and told), so `giveQuestion` sends nothing, as at the base; a re-ask that lands after a greeting's drawer finds a new, untold entry and rings once, as at the base. No end-to-end run after this task: check 4 runs them at the final head.
+**End to end:** Task 10's two cases see the same frames after this task. Their fake dial says no `questionTier`, so its welcome is as before, and each question is told and carried by the drawer as a row (`forget(kept)` marks it asked and told), so `giveQuestion` sends nothing, as at the base; a re-ask that lands after a greeting's drawer finds a new, untold entry and rings once, as at the base. No end-to-end run after this task: check 4 runs them at the final head.
 
 ### Task 5: A refused question reaches the dial small and stays on its drawer
 
@@ -644,25 +671,81 @@ static void audio_notify_done(void) { beeps++; }
 - [ ] **Step 4: Run** both tests again, then `python3 devices/harness-device/firmware/test/test_touch_ui.py`, then `grep -rn "ui_question_show(" devices/harness-device/firmware/main`. Expected: PASS three times; four lines, each call with six arguments (the call in `ui_perf.c` is compiled only with `DEVICE_PERF_BENCH`, so no default build checks it).
 - [ ] **Step 5: Commit** `Dial firmware: a question with tier list files its row silently`.
 
-### Task 7: Firmware: the hello says `questionTier: 'v1'`
+### Task 7: Firmware: the hello says `questionTier: 'v1'`, and only a welcome's `question.tier` makes `tier: 'list'` silent
 
 **Files** (under `devices/harness-device/firmware/`):
-- Modify: `main/cable_client.c` (`send_hello`)
-- Test: `test/test_cable_outbound.py`
+- Modify: `main/cable_features.h` (a new bit), `main/cable_features.c` (`cable_features_parse`'s names), `main/cable_client.c` (`send_hello`, `handle_question`)
+- Test: `test/test_cable_features.c`, `test/test_cable_outbound.py`, `test/test_cable_identity.py`
 
-**Depends on:** 6 (a build must never say it before it does it). **Effort:** medium.
+**Depends on:** 6 (a build must never say it before it does it, and the gate sits in Task 6's `handle_question`), and the rebase onto `main` that gates Task 1 (it brings #4441's `CABLE_FEATURE_APPS_SWITCH`, `1u << 7`, which the new bit follows; Base). **Effort:** high.
 
-- [ ] **Step 1: Write the failing test.** In `test_cable_outbound.py`, inside the block that parses the hello and checks `appFilter`:
+**Interfaces:**
+- Consumes: `handle_question` and its `list` argument to `ui_question_show` (Task 6); `cable_client_supports(uint32_t features)` (`cable_client.h`, as on `main`).
+- Produces:
+  - `CABLE_FEATURE_QUESTION_TIER = 1u << 8` in `cable_features.h`, with a comment like #4441's: the daemon sends a told question back as a `tier: 'list'` row; without the bit the dial treats such a frame as an alert, so an older daemon never mutes a ring.
+  - `cable_features_parse` maps the exact name `question.tier` to it.
+  - `send_hello` adds `msg_string(&root, "questionTier", "v1");` after `appFilter`.
+  - `handle_question` passes `list` true only when `cable_client_supports(CABLE_FEATURE_QUESTION_TIER)` and the frame's `tier` is the string `list` (Decided here, 16).
+
+- [ ] **Step 1: Write the failing tests.**
+
+In `test_cable_features.c`, beside the `apps.switch` checks:
+
+```c
+    check("{\"features\":[\"question.tier\"]}", CABLE_FEATURE_QUESTION_TIER);
+    check("{\"features\":[\"Question.tier\",\"question.Tier\",\"question\",\"tier\",\"questionTier\",\"question.tier.2\"]}", 0);
+    assert(!(CABLE_FEATURE_QUESTION_TIER & 255u));
+```
+
+and the fullest welcome becomes the daemon's nine names (Task 4), every bit:
+
+```c
+    // The daemon's fullest round-dial welcome sets every bit.
+    check("{\"features\":[\"voice.draft\",\"agents.refresh\",\"form\",\"selection\",\"visit\","
+          "\"question.review\",\"apps.switch\",\"question.tier\",\"settings\"]}", 511u);
+```
+
+In `test_cable_outbound.py`, inside the block that parses the hello and checks `appFilter`:
 
 ```c
       const cJSON *tier=cJSON_GetObjectItemCaseSensitive(hello,"questionTier");
       assert(cJSON_IsString(tier)&&!strcmp(tier->valuestring,"v1"));
 ```
 
-- [ ] **Step 2: Run** `IDF_PATH=$HOME/esp/esp-idf python3 devices/harness-device/firmware/test/test_cable_outbound.py`. Expected: FAIL (the assertion).
-- [ ] **Step 3: Implement** `msg_string(&root, "questionTier", "v1");` in `send_hello`, after `appFilter`, with a comment: this dial files a `question` with `tier: "list"` as a silent row; an older daemon ignores the field and never sends the tier.
-- [ ] **Step 4: Run** the same command. Expected: PASS.
-- [ ] **Step 5: Commit** `Dial firmware: the hello says questionTier v1`.
+In `test_cable_identity.py`, a double beside Task 6's `ui_question_show` double (non-static: `cable_client.h` declares it; if the harness already has one, it is extended instead):
+
+```c
+static uint32_t welcome_features;
+bool cable_client_supports(uint32_t features) { return (welcome_features & features) == features; }
+```
+
+In `main`, the first line before Task 6's `handle_question` assertions sets the bit, since those assertions are the session whose welcome listed `question.tier`:
+
+```c
+    welcome_features=CABLE_FEATURE_QUESTION_TIER;
+```
+
+and after Task 6's last `handle_question` assertion:
+
+```c
+    // A welcome without question.tier (an older daemon, or no welcome yet): tier "list" is an alert.
+    const uint32_t without[]={0,~(uint32_t)CABLE_FEATURE_QUESTION_TIER};
+    for(unsigned i=0;i<sizeof without/sizeof *without;i++) {
+        unsigned shows_before=shows,beeps_before=beeps;welcome_features=without[i];
+        p=cJSON_Parse("{\"id\":\"q1\",\"tier\":\"list\",\"questions\":[]}");assert(p);handle_question(p,"a");cJSON_Delete(p);
+        assert(shows==shows_before+1&&!shown_list&&beeps==beeps_before+1);
+    }
+```
+
+- [ ] **Step 2: Run**, from the repo root:
+  - `F=devices/harness-device/firmware; J=$HOME/esp/esp-idf/components/json/cJSON; cc -std=c11 -Wall -Wextra -Werror -Wno-deprecated-declarations -O1 -g -fsanitize=undefined,bounds -I $F/main -I $J -o /tmp/test_cable_features $F/test/test_cable_features.c $F/main/cable_features.c $J/cJSON.c && /tmp/test_cable_features` (the command `run.sh` uses)
+  - `IDF_PATH=$HOME/esp/esp-idf python3 devices/harness-device/firmware/test/test_cable_outbound.py`
+  - `IDF_PATH=$HOME/esp/esp-idf python3 devices/harness-device/firmware/test/test_cable_identity.py`
+
+  Expected: all three FAIL (`CABLE_FEATURE_QUESTION_TIER` undeclared; the hello's assertion; `tier: "list"` with no `question.tier` is filed silently).
+- [ ] **Step 3: Implement** the four interfaces above. The comment over `send_hello`'s line: this dial files a `question` with `tier: "list"` as a silent row once the welcome lists `question.tier`; an older daemon ignores the field and never sends the tier. Update the comment over `handle_question` to say the gate.
+- [ ] **Step 4: Run** Step 2's three commands, then `python3 devices/harness-device/firmware/test/test_question_ui.py` and `python3 devices/harness-device/firmware/test/test_touch_ui.py` (both include `cable_features.h`). Expected: PASS five times.
+- [ ] **Step 5: Commit** `Dial firmware: the hello says questionTier v1, and the welcome's question.tier makes a list question silent`.
 
 ### Task 8: Firmware: a question the dial cannot answer shows its words
 
@@ -806,6 +889,7 @@ Neither case changes after Tasks 4 and 5 (their "End to end" notes): the fake di
 - **Platforms:** the daemon on macOS, Linux and Windows (one code path; unit tests on Linux in PR CI, and on this Mac). The round dial: firmware built and host-tested, not flashed in this pull request. The Harness Pro: no firmware change; the daemon sends it what it sent before, and a refused question as its summary.
 - **Fixes the end-to-end reds from #4445 (deviceNotify, deviceClaudeOrca).** Test-only (Task 10): each case now reads the open question as a row of the drawer, which #4445 sends in place of a second `question` frame.
 - **Evidence:** each task's red commit and code commit; Task 10's two cases red at the base and green after it; the receipts of Verification checks 1 to 4; `HABITAT_PREVIEW_DIR`'s `unanswerable.ppm` as a picture.
+- **Declared as #4441 declares `apps.switch`:** `hello.questionTier: 'v1'`, answered by `question.tier` in `welcome.features`; the firmware files `tier: 'list'` silently only with that feature. The fullest round-dial welcome is 9 names (limit 16).
 - **Says plainly:** an older round dial is never sent a told question again, so its row for a ninth or later question is missing until its next greeting. End to end on a real dial is harness-pm's, after its flash.
 
 ## Verification
@@ -831,7 +915,7 @@ Neither case changes after Tasks 4 and 5 (their "End to end" notes): the fake di
 - On GitHub: none (above).
 
 **2. The firmware's host tests** (this Mac, the final head)
-- Run: `env -u IDF_PATH make device-test`, then each of `test_cable_identity.py`, `test_cable_outbound.py`, `test_cable_json_parse.py`, `test_cable_crc.py` and `test_cable_models.py` under `devices/harness-device/firmware/test/` with `IDF_PATH=$HOME/esp/esp-idf python3 <file>`.
+- Run: `env -u IDF_PATH make device-test`, then Task 7's `test_cable_features.c` command, then each of `test_cable_identity.py`, `test_cable_outbound.py`, `test_cable_json_parse.py`, `test_cable_crc.py` and `test_cable_models.py` under `devices/harness-device/firmware/test/` with `IDF_PATH=$HOME/esp/esp-idf python3 <file>`.
 - A person sees: every one passes, except `test_cable_models.py`, which fails to build on macOS at the base too (`'snprintf' macro redefined`). Any other failure is this branch's.
 - On GitHub, by itself: `firmware-checks` runs every `test_*.py` on Linux, `test_cable_models.py` included.
 
@@ -853,6 +937,7 @@ Neither case changes after Tasks 4 and 5 (their "End to end" notes): the fake di
 
 **7. Numbers** (root rule 4, idle daemon work), held by the specs:
 - at rest: nothing new runs. No timer, no poll;
+- the welcome: one name more (`question.tier`) for a dial that says `questionTier`. The fullest round-dial welcome is 9 names, under the firmware's bound of 16 (Task 4's test);
 - per `notif.replace`: one frame under 600 bytes for each open question past the drawer's eight rows, at most 56 (the inbox holds 64). Before: the same count of full `question` frames, up to 6.5 kB each, and a beep for each.
 
 **8. Against production:** none, and never.

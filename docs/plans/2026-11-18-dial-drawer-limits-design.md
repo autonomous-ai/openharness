@@ -68,8 +68,19 @@ reachable on the dial until it is answered.
 
 ### The protocol
 
+- **One way to declare it, as #4441 (`apps.switch`, 8773f5056f) does** (harness-pm, from diego-pm, 2026-11-18): the
+  dial says it in its `hello`, and the daemon answers in `welcome.features`.
 - **`hello.questionTier: 'v1'`** (round dial firmware): this dial files a `question` with `tier: 'list'` as a silent
   row. The daemon reads it like `appFilter` (a positive string match, per greeting). The Pro does not send it.
+- **`welcome.features` gains `question.tier`**, only when that greeting said `questionTier: 'v1'`. The firmware reads
+  it in `cable_features_parse` (`cable_features.c`) as a new bit, `CABLE_FEATURE_QUESTION_TIER`, beside #4441's
+  `CABLE_FEATURE_APPS_SWITCH`. It files a `question` with `tier: 'list'` silently only when its session's welcome
+  listed `question.tier`; otherwise (an older daemon, or no welcome yet in this session) the frame is an alert, as
+  today.
+- **The 16-name bound.** The firmware drops every feature of a welcome that lists more than 16 names. After this
+  change the fullest round-dial welcome lists **9**: `voice.draft`, `agents.refresh`, `form`, `selection`, `visit`,
+  `question.review`, `apps.switch`, `question.tier`, `settings`. A Pro's fullest lists 9 too (`player.library` and
+  `resync`, never `apps.switch` or `question.tier`). Even a greeting that said every capability would get 11.
 - **`question` frame, `tier: 'list'`**: only ever sent to a dial that said `questionTier: 'v1'`. The dial files (or
   keeps) the question's drawer row and does nothing else: no beep, no display wake, no celebration, and the row's read
   state is kept (no `notice_forget_read`), so a question the person already read stays read: the re-filed row is
@@ -134,7 +145,8 @@ A question the dial holds (`asked`) is not sent again, as today.
 ### The firmware (`devices/harness-device/firmware/`)
 
 - `send_hello` adds `questionTier: 'v1'`.
-- `handle_question` reads `tier`: `list` files the row silently (`ui_question_show` with a flag that skips
+- `cable_features_parse` reads `question.tier` into `CABLE_FEATURE_QUESTION_TIER`.
+- `handle_question` reads `tier`: `list`, on a session whose welcome listed `question.tier`, files the row silently (`ui_question_show` with a flag that skips
   `notice_forget_read`, `display_wake` and the return that makes the caller beep); anything else is today's alert.
   A silent re-file of the question being read on screen changes nothing of the open answer screen.
 - **The answer screen of a question it cannot answer shows the question's words.** Today `render_question` shows
@@ -179,14 +191,16 @@ above (a replace never clears `told`, a greeting does) hold wherever the calls e
   refuses `submit`, `canSpeak` and `draft`, and is replaced or closed like any entry; an empty id keeps nothing.
 - `cableSession.spec.ts`: with 9+ open questions on a live `questionTier` dial, a second `notif.replace` sends the 9th
   with `tier: 'list'` and no ring; on an older round dial it sends nothing; on a Pro the plain frame; a question the
-  greeting's drawer carried and a later replace cuts is not rung; an unchanged re-delivery of a told question the dial
+  greeting's drawer carried and a later replace cuts is not rung; the welcome lists `question.tier` only to a dial that
+  said `questionTier: 'v1'`, and the fullest round-dial welcome is 9 names, at most 16; an unchanged re-delivery of a told question the dial
   lost follows the same rule; a greeting rings once each question its drawer does not carry; a
   refused question of 10 kB reaches the dial as the small unreadable frame (under the cap) and is carried by the next
   drawer; `question.read` of it returns its summary.
 - `cableFleet.spec.ts`, only if the sibling path changes.
 - Firmware: `test_question_ui.py` for the silent re-file (no beep, no wake, read state kept with a different token)
   and the answer screen
-  with words; the hello's new field where the hello is tested.
+  with words; the hello's new field where the hello is tested; `test_cable_features.c` for `question.tier`;
+  `handle_question` treats `tier: 'list'` as an alert when the welcome did not list `question.tier`.
 - Firmware, `test_cable_identity.py` (where `handle_notifications` is tested): a `notif.replace` with an agent's
   question row and its news row, in either order, hands both to the drawer; a second row of the same agent and kind
   is dropped.
