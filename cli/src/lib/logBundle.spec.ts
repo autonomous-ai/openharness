@@ -193,6 +193,30 @@ describe('buildLogBundle', () => {
     expect(blanked.endsWith('x <email>')).toBe(true)
   })
 
+  it('a day of long runs that hold an @ is blanked in a moment', () => {
+    // Each start of a run tried against the rule costs its 64 characters of local part, and each of the 64 starts
+    // before an `@` its whole domain: 20 MB took 4.4 s and 9.3 s.
+    const mb20 = 20 * 1024 * 1024
+    for (const text of ['x'.repeat(mb20) + '@', 'a'.repeat(64) + '@' + 'b'.repeat(mb20)]) {
+      const started = performance.now()
+      expect(blankPersonal(text, '/Users/al')).toBe(text)
+      expect(performance.now() - started).toBeLessThan(2_000)
+    }
+  })
+
+  it('blanks what the menu-bar app\'s email rule matches, its local part held to 64 characters', () => {
+    const rule = /[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g
+    const pieces = ['@', '.', 'com', 'a', 'Z', '0', '_', '%', '+', '-', ' ', '<', '>', '"', '/', ':', 'é', '😀', '\n', 'x'.repeat(70)]
+    let seed = 1
+    const random = (n: number) => { seed = (seed * 1_103_515_245 + 12_345) % 2 ** 31; return seed % n }
+    for (let i = 0; i < 50_000; i++) {
+      const text = Array.from({ length: 1 + random(40) }, () => pieces[random(pieces.length)]).join('')
+      expect(blankPersonal(text, '/Users/al'), JSON.stringify(text)).toBe(text.replace(rule, '<email>'))
+    }
+    expect(blankPersonal('<a.b+tag@sub.example.co.uk> "x@y.io",z@w.org a@b.coc@d.com', '/Users/al'))
+      .toBe('<<email>> "<email>",<email> <email>@d.com')
+  })
+
   it('never includes a transcript, a sign-in file or a project file placed beside the logs', () => {
     const root = mkdtempSync(join(tmpdir(), 'bundle-'))
     const logs = join(root, 'logs'), device = join(logs, 'usb-AA'), data = join(root, 'data'), app = join(root, 'app')
