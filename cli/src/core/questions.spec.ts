@@ -125,10 +125,20 @@ describe('questions', () => {
     // The owner's apps away from this desk hear the same question, over the relay.
     expect(vi.mocked(deps.clients.sendRemote).mock.calls.at(-1)).toEqual([asked])
     expect(asking.openQuestions.get('s1')).toBe(asked)
-    expect(log.mock.calls[0][0]).toContain('asking the user · "Ship it?" · req=r1')
+    expect(log.mock.calls[0][0]).toContain('asking the user · question 8 chars · req=r1')
     // A question with nothing shaped still goes out, and still says so.
     given(asking.questionWatcher).onQuestion('s1', 'r2', [])
-    expect(log.mock.calls[1][0]).toContain('asking the user · "" · req=r2')
+    expect(log.mock.calls[1][0]).toContain('asking the user · question 0 chars · req=r2')
+  })
+
+  it('logs the size of a question, never its words', () => {
+    const { asking } = setup()
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    given(asking.questionWatcher).onQuestion('s1', 'r1', [{ q: 'SECRET-QUESTION-MARKER?', options: [] }])
+    const line = log.mock.calls.map(([said]) => String(said)).find((said) => said.includes('asking the user'))
+    expect(line).toContain('[question] s1 ')
+    expect(line).toContain('req=r1')
+    expect(line).not.toContain('SECRET')
   })
 
   it.each([true, false])('preserves permission metadata only for approval dialogs (%s)', permission => {

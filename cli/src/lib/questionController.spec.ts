@@ -330,3 +330,32 @@ describe('a hook said a dialog is coming', () => {
     watcher.stopAll()
   })
 })
+
+describe('the log of an answer that was not keyed', () => {
+  // The question and the answer are the person's words: the log names the harness and their sizes, never the words.
+  const QUESTION = 'SECRET-QUESTION-MARKER?'
+  const question = { kind: 'question' as const, question: QUESTION, multi: false, typeRow: null,
+    rows: [{ number: '1', label: 'Tea', checked: false }, { number: '2', label: 'Coffee', checked: false }] }
+  const warned = async (answer: { answers: Record<string, string>, requestId?: string }) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const controller = new AskQuestionController({ getSession: () => row(), capture: async () => capture,
+      readQuestion: async () => question, sendKey: vi.fn(async () => true), sendText: vi.fn(async () => true),
+      acquireControl: () => vi.fn(), wait: async () => {}, questionControlFor: () => ({ apply: async () => true }) })
+    await controller.answer({ agentId: 'agent', ...answer })
+    return warn.mock.calls.map(([line]) => String(line))
+  }
+
+  it.each([
+    ['stuck on the dialog', { answers: { [QUESTION]: 'Coffee' } }, 'dialog stuck'],
+    ['the dialog changed', { answers: { [QUESTION]: 'Coffee' }, requestId: 'req-1' }, 'req=req-1'],
+    ['no answer names the question', { answers: { 'Other?': 'Coffee' } }, 'no answer names'],
+    ['no option matches the answer', { answers: { [QUESTION]: 'SECRET-ANSWER-MARKER' } }, 'no option matched'],
+  ])('says the harness and sizes, not the words, when %s', async (_, answer, says) => {
+    const lines = (await warned(answer)).filter(line => line.includes(says))
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain('[question] agent ')
+    expect(lines[0]).toMatch(/\d+ chars/)
+    expect(lines[0]).not.toContain('SECRET')
+  })
+})

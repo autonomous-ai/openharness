@@ -273,7 +273,7 @@ describe('the session input controller\'s dependencies', () => {
   })
 
   it('holds the Enter back when the pane cannot be read for three seconds, or shows no composer that long', async () => {
-    for (const screen of [null, '✻ Welcome to Claude Code']) {
+    for (const screen of [null, '✻ Welcome to Claude Code\n> SECRET-SCREEN-MARKER']) {
       let reads = 0
       const answers: Array<string | null> = []
       const write = messageWriter({ readScreen: deps().deps.readScreen,
@@ -296,8 +296,10 @@ describe('the session input controller\'s dependencies', () => {
       } finally { vi.useRealTimers() }
       expect(answers).toEqual([screen === null ? 'screen_unreadable' : 'prompt_hidden'])
       expect(reads).toBe(13)
-      // The screen the Enter was held on is in the log, to read back what the reader missed.
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining(`Enter held · ${answers[0]} · screen ${heldScreen(screen)}`))
+      // The screen holds what the person typed: the log says its size, never its words.
+      const said = screen === null ? 'unread' : '2 rows, 47 chars'
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(`[inject] a1 Enter held · ${answers[0]} · screen ${said}`))
+      expect(warn.mock.calls.flat().join('\n')).not.toContain('SECRET')
       warn.mockRestore()
     }
   })
