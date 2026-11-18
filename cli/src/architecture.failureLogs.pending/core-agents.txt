@@ -1,0 +1,13 @@
+core/agents/bind.ts 8
+core/agents/conversationOwners.ts 1
+core/agents/create.ts 4
+core/agents/discovery.ts 4
+core/agents/events.ts 1
+core/agents/forget.ts 1
+core/agents/heldLaunches.ts 1
+core/agents/launch.ts 1
+core/agents/launches.ts 2
+core/agents/newPane.ts 2
+core/agents/quietTitles.ts 1
+core/agents/update.ts 1
+lib/sessionSync.ts 1
