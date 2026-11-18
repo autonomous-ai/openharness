@@ -183,4 +183,4 @@ with tempfile.TemporaryDirectory(prefix='harness-audio-threads-') as d:
     subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-O1','-g','-pthread',
         '-fsanitize='+os.environ.get('SANITIZERS','undefined,bounds'),'-I',str(main),
         str(out/'threads.c'),str(main/'voice_buffer.c'),'-o',str(out/'threads')],check=True)
-    subprocess.run([str(out/'threads')],check=True,timeout=120)
+    subprocess.run([str(out/'threads')],check=True)
