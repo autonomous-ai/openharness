@@ -1,12 +1,24 @@
 import { REMOVALS_FILE } from './signOut.js'
-import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { readZip } from '../testing/readZip.js'
 import { blankPersonal, buildLogBundle, bundleFileName } from './logBundle.js'
 import { redactSecretsInText } from './redactSecrets.js'
 import { crc32, writeZip } from './zipWriter.js'
+
+// Lets a test change the logs folders right after the bundler lists a folder or checks a file, as another process could.
+const race = vi.hoisted(() => ({ afterList: (_dir: string) => {}, afterCheck: (_path: string) => {} }))
+vi.mock('node:fs', async (importOriginal) => {
+  const fs = await importOriginal<typeof import('node:fs')>()
+  return {
+    ...fs,
+    readdirSync: (...args: Parameters<typeof fs.readdirSync>) => { const listed = fs.readdirSync(...args); race.afterList(String(args[0])); return listed },
+    lstatSync: (...args: Parameters<typeof fs.lstatSync>) => { const stats = fs.lstatSync(...args); race.afterCheck(String(args[0])); return stats },
+  }
+})
+afterEach(() => { race.afterList = () => {}; race.afterCheck = () => {} })
 
 describe('zipWriter', () => {
   it('round-trips deflated and stored entries', () => {
@@ -275,6 +287,27 @@ describe('buildLogBundle', () => {
     const { zip } = buildLogBundle({ logsDir: logs, dataDir: data, now: new Date(2026, 8, 15, 10, 30), version: '0', home: '/Users/nobody', redact: (t) => t })
     const files = readZip(zip)
     expect([...files.keys()]).toEqual(['README.txt', 'logs/app-20260915.log'])
+    expect([...files].filter(([, bytes]) => bytes.includes('NEVER-IN-THE-BUNDLE')).map(([name]) => name)).toEqual([])
+  })
+
+  it('never follows a log swapped for a link after it was listed or checked', () => {
+    // A file that is a log when listed or checked, and a link by the time it is read, must not pull its target in.
+    const root = mkdtempSync(join(tmpdir(), 'bundle-'))
+    const logs = join(root, 'logs'), device = join(logs, 'usb-AA'), data = join(root, 'data'), app = join(root, 'app')
+    for (const dir of [device, data, app]) mkdirSync(dir, { recursive: true })
+    const elsewhere = join(root, 'elsewhere')
+    writeFileSync(elsewhere, 'NEVER-IN-THE-BUNDLE\n'.repeat(100))
+    const listed = new Map([[logs, join(logs, 'cli-20260915.log')], [app, join(app, 'app-20260915.log')]])
+    const checked = [join(data, 'harness.log'), join(data, REMOVALS_FILE), join(device, 'dial-20260915.log')]
+    for (const path of [...listed.values(), ...checked]) writeFileSync(path, 'a log\n'.repeat(100))
+    const toLink = (path: string) => { rmSync(path); symlinkSync(elsewhere, path) }
+    race.afterList = (dir) => { const path = listed.get(dir); if (path) toLink(path) }
+    race.afterCheck = (path) => { if (checked.includes(path)) toLink(path) }
+    const { zip } = buildLogBundle({
+      logsDir: logs, dataDir: data, deviceAppLogsDir: app, now: new Date(2026, 8, 15, 10, 30), version: '0', home: '/Users/nobody',
+      redact: (t) => t, harnessLogTailBytes: 64, deviceLogCapBytes: 64,
+    })
+    const files = readZip(zip)
     expect([...files].filter(([, bytes]) => bytes.includes('NEVER-IN-THE-BUNDLE')).map(([name]) => name)).toEqual([])
   })
 
