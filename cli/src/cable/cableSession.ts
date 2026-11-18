@@ -36,6 +36,7 @@ import { PassageCarry, withCarriedPassage, type CarryRead } from './passageCarry
 import { VoiceDraft, type DraftPin } from './voiceDraft.js'
 import { QuestionInbox, type ReviewedAnswer, type AnswerReceipt, type QuestionSpeech } from './questionInbox.js'
 import { notificationReadToken, type UnreadNotification } from '../lib/notificationRead.js'
+import { partitionTexts } from '../lib/questionController.js'
 
 /** Bumped when the VOCABULARY changes. Separate from the frame version, which is the envelope. */
 export const CABLE_PROTO_VERSION = 3   // 3: + question.close (a question answered on another client)
@@ -229,8 +230,13 @@ function asAsked(raw: unknown, answers: Record<string, string>): Record<string, 
     const k = pick(questions.map((q) => q.key), key)
     const named = questions.filter((q) => q.key === k)
     const options = named.flatMap((q) => Array.isArray(q.options) ? q.options.filter((o): o is string => typeof o === 'string') : [])
-    // The dial joins the options chosen with ', ' (q_done_tap).
-    const picked = (named.some((q) => q.multi === true) ? value.split(', ') : [value]).map((part) => pick(options, part))
+    // The dial joins the options chosen with ', ' (q_done_tap), and an option may hold one itself: '?Yes, continue' was
+    // cut in two halves that read as no option. Read by the options as the dial reads them; cut on every ', ' only
+    // when they cannot spell it, as words the person typed.
+    const reads = options.map(dialReads)
+    const parts = !named.some((q) => q.multi === true) ? [value]
+      : partitionTexts(reads, value, (text) => text.trim())?.map((index) => reads[index]) ?? value.split(', ')
+    const picked = parts.map((part) => pick(options, part))
     if (k === null || picked.includes(null)) return null
     out[k] = picked.join(', ')
   }

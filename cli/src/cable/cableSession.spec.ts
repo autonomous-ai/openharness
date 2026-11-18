@@ -469,6 +469,20 @@ describe('cable session', () => {
       } finally { await session.stop() }
     })
 
+    it.each([
+      // An option holding ', ' was cut in two, neither half an option, and its '?' reached the host as the dial read it.
+      [['\ud83dYes, continue', 'No', 'Maybe'], '?Yes, continue, Maybe', '\ud83dYes, continue, Maybe'],
+      // Read greedily, '?a, b' is an option and '?c' none; only '?a' then 'b, ?c' spells the whole answer.
+      [['\ud83da, b', '\ud83da', 'b, \ud83dc'], '?a, b, ?c', '\ud83da, b, \ud83dc'],
+    ])('reaches the host in the words it was asked with when a chosen option holds a comma (%j)', async (options, read, words) => {
+      const { session, port, host } = await asked([{ key: 'k', q: 'Which?', options, multi: true }])
+      try {
+        port.say({ t: 'answer', agentId: 'a1', requestId: 'q1', answers: { k: read } })
+        await vi.waitFor(() => expect(host.answer).toHaveBeenCalled())
+        expect(host.answer).toHaveBeenCalledWith('a1', 'q1', { k: words })
+      } finally { await session.stop() }
+    })
+
     it('is refused when two options read the same on the dial', async () => {
       const { session, port, host } = await asked([{ key: 'k', q: 'Which?', options: ['\ud83dyes', '\udc00yes'] }])
       try {

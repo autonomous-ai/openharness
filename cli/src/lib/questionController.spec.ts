@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { screenFor } from '../engines/screens.js'
 import type { PaneView } from '../engines/facets/screen.js'
 import type { RegisteredSession } from './registry.js'
-import { AskQuestionController, QuestionWatcher } from './questionController.js'
+import { AskQuestionController, QuestionWatcher, partitionLabels, partitionTexts } from './questionController.js'
 
 const capture = readFileSync(new URL('./__fixtures__/permission-claude.txt', import.meta.url), 'utf8')
 const view = screenFor('claude').inspect(capture).question
@@ -105,6 +105,103 @@ describe('asynchronous question evidence', () => {
       expect(stayed.apply).toHaveBeenCalledTimes(2)
       expect((await run('refused', [question, review], [true, false])).result).toMatchObject({ error: 'ANSWER_BUSY' })
       expect((await run(undefined, [question, review], [true, false])).result).toMatchObject({ detail: 'The answers could not be submitted.' })
+    })
+  })
+
+  describe('a multi-choice answer joined with ", "', () => {
+    // The labels of the rows the answer toggled, from an unreviewed answer string.
+    const toggled = async (labels: string[], answer: string) => {
+      const question = { kind: 'question' as const, question: 'Pick?', multi: true, typeRow: null,
+        rows: labels.map((label, i) => ({ number: String(i + 1), label, checked: false })) }
+      const apply = vi.fn(async (_step: { kind: string, rows?: { label: string }[] }) => true)
+      const readQuestion = vi.fn(async (): Promise<PaneView> => null).mockResolvedValueOnce(question)
+      const controller = new AskQuestionController({ getSession: () => row(), capture: async () => capture, readQuestion,
+        sendKey: vi.fn(async () => true), sendText: vi.fn(async () => true), acquireControl: () => vi.fn(), wait: async () => {},
+        questionControlFor: () => ({ apply }) })
+      expect(await controller.answer({ agentId: 'agent', answers: { 'Pick?': answer } })).toEqual({ ok: true })
+      expect(apply).toHaveBeenCalledOnce()
+      return apply.mock.calls[0][0].rows?.map(row => row.label)
+    }
+
+    it('keeps an option whose label holds a comma whole', async () => {
+      expect(await toggled(['Yes, continue', 'No', 'Maybe'], 'Yes, continue, Maybe')).toEqual(['Yes, continue', 'Maybe'])
+      expect(await toggled(['Yes, continue', 'No', 'Maybe'], 'Yes, continue')).toEqual(['Yes, continue'])
+      // Cut on every comma, "Yes" reads as the first option it starts.
+      expect(await toggled(['Yes, continue', 'Yes, stop', 'Maybe'], 'Yes, stop, Maybe')).toEqual(['Yes, stop', 'Maybe'])
+    })
+
+    it('reads the answer as labels that spell all of it, where taking the longest label first would not', async () => {
+      expect(await toggled(['A, B', 'A', 'B, C'], 'A, B, C')).toEqual(['A', 'B, C'])
+    })
+
+    it('takes the reading with the fewest options when several spell it', async () => {
+      expect(await toggled(['A', 'B', 'A, B'], 'A, B')).toEqual(['A, B'])
+    })
+
+    it('passes over a blank piece, as the loose reading always did', async () => {
+      expect(await toggled(['Yes, continue', 'Yes, stop', 'Maybe'], 'Yes, stop, Maybe, ')).toEqual(['Yes, stop', 'Maybe'])
+      expect(await toggled(['Yes, continue', 'Yes, stop', 'Maybe'], ', Yes, stop,, Maybe')).toEqual(['Yes, stop', 'Maybe'])
+    })
+
+    it('matches each piece loosely, as before, when no labels spell the answer', async () => {
+      expect(await toggled(['Tea', 'Coffee', 'Milk'], 'tea, coff')).toEqual(['Tea', 'Coffee'])
+    })
+
+    it('reads each piece trimmed, as before, so a full stop before a space still matches', async () => {
+      // norm drops a trailing full stop before it trims: " No. " reads "no." unless the piece is trimmed first.
+      expect(await toggled(['Tea', 'Coffee', 'No'], 'tea, coff, No. ')).toEqual(['Tea', 'Coffee', 'No'])
+      expect(await toggled(['Yes, continue', 'Yes, stop', 'No'], 'Yes, stop, No. ')).toEqual(['Yes, stop', 'No'])
+    })
+
+    it('refuses an answer longer than any dialog asks for, before anything reaches the terminal', async () => {
+      const apply = vi.fn(async () => true), capture = vi.fn(async () => '')
+      const controller = new AskQuestionController({ getSession: () => row(), capture, readQuestion: async () => null,
+        sendKey: vi.fn(async () => true), sendText: vi.fn(async () => true), acquireControl: () => vi.fn(), wait: async () => {},
+        questionControlFor: () => ({ apply }) })
+      const tooLong = { ok: false, error: 'ANSWER_FAILED', detail: 'The answer is too long. Answer it in the terminal.' }
+      expect(await controller.answer({ agentId: 'agent', answers: { 'Pick?': 'A, '.repeat(2731) } })).toEqual(tooLong)
+      const many = Object.fromEntries(Array.from({ length: 15 }, (_, i) => [`Q${i}?`, 'A']))
+      expect(await controller.answer({ agentId: 'agent', answers: many })).toEqual(tooLong)
+      expect(capture).not.toHaveBeenCalled()
+      expect(apply).not.toHaveBeenCalled()
+    })
+
+    it('refuses an answer that is not text, before anything reaches the terminal', async () => {
+      const apply = vi.fn(async () => true), capture = vi.fn(async () => '')
+      const controller = new AskQuestionController({ getSession: () => row(), capture, readQuestion: async () => null,
+        sendKey: vi.fn(async () => true), sendText: vi.fn(async () => true), acquireControl: () => vi.fn(), wait: async () => {},
+        questionControlFor: () => ({ apply }) })
+      const notText = { ok: false, error: 'ANSWER_FAILED', detail: 'The answer named no agent or carried no choice.' }
+      for (const value of [5, null, ['A'], { label: 'A' }]) {
+        expect(await controller.answer({ agentId: 'agent', answers: { 'Pick?': 'A', 'Size?': value as never } })).toEqual(notText)
+      }
+      expect(capture).not.toHaveBeenCalled()
+      expect(apply).not.toHaveBeenCalled()
+    })
+
+    it('reads an answer of 4096 bytes of labels whole', async () => {
+      const answer = `A${', A'.repeat(1365)}`
+      expect(Buffer.byteLength(answer, 'utf8')).toBe(4096)
+      expect(await toggled(['A'], answer)).toHaveLength(1366)
+    })
+
+    it('reads a long answer in time that grows with its length', () => {
+      // The answer is outside text and the core reads it in line: trying every run of pieces as a label held the
+      // core 12 s on this 3 KB answer, its time growing with the cube of the pieces (2026-11-18).
+      const rows = ['Yes, continue', 'No', 'A'].map((label, i) => ({ number: String(i + 1), label, checked: false }))
+      const ms = (answer: string) => { const start = performance.now(); partitionLabels(rows, answer); return performance.now() - start }
+      expect(ms(Array(1000).fill('x').join(', '))).toBeLessThan(50)
+      expect(ms(Array(1000).fill('A').join(', '))).toBeLessThan(50)
+      expect(partitionLabels(rows, Array(1000).fill('A').join(', '))).toHaveLength(1000)
+    })
+
+    it('reads a long answer in work that grows with its length times the labels\' length, however many commas they hold', () => {
+      // A label on screen may hold many commas: trying every run of pieces up to the label with the most held the core
+      // 16 s on a 4 KB answer against a label of 2,000 commas, its work growing with the square of them (2026-11-18).
+      const texts = [`${'a,'.repeat(300)}b`, 'x'], answer = `${'a,'.repeat(2047)}a`
+      let keyed = 0
+      partitionTexts(texts, answer, (text) => { keyed += text.length; return text.trim() })
+      expect(keyed).toBeLessThanOrEqual(answer.length * texts.reduce((sum, text) => sum + text.length, 0))
     })
   })
 
