@@ -419,27 +419,51 @@ mod tests {
 
     #[test]
     fn a_view_is_the_json_the_window_reads() {
-        let view = View { screen: Screen::SignIn, phase: Phase::Browser, lines: vec!["Waiting".into()] };
+        let view = View { screen: Screen::SignIn, phase: Phase::Browser, lines: vec!["Waiting".into()], update: false };
+        // No screen's JSON but the Orca screen's gains a key: `update` is there only when true.
         assert_eq!(
             serde_json::to_value(view).unwrap(),
             json!({"screen":"sign_in","phase":"browser","lines":["Waiting"]})
         );
         assert_eq!(serde_json::to_value(Screen::Install).unwrap(), json!("install"));
+        let update = View { screen: Screen::Orca, phase: Phase::Approve, lines: vec!["A".into()], update: true };
+        assert_eq!(
+            serde_json::to_value(update).unwrap(),
+            json!({"screen":"orca","phase":"approve","lines":["A"],"update":true})
+        );
+        let phases = [(Phase::Asking, "asking"), (Phase::Approve, "approve"), (Phase::Done, "done")];
+        for (phase, name) in phases {
+            let view = View { screen: Screen::Orca, phase, lines: Vec::new(), update: false };
+            assert_eq!(serde_json::to_value(view).unwrap(), json!({"screen":"orca","phase":name,"lines":[]}));
+        }
     }
 
     #[test]
-    fn the_window_may_ask_four_things() {
+    fn the_window_may_ask_five_things() {
         let asks = [
             ("retry", Action::Retry),
             ("sign_in", Action::SignIn),
             ("later", Action::Later),
             ("cancel", Action::Cancel),
+            ("connect_orca", Action::ConnectOrca),
         ];
         for (name, action) in asks {
             assert_eq!(serde_json::from_value::<Action>(json!(name)).unwrap(), action);
         }
-        // The offers of Claude Code and Codex are gone, and their buttons with them.
-        for other in [json!("turn_on"), json!("not_now"), json!("quit"), json!("sh -c x"), json!(1), Value::Null] {
+        // The offers of Claude Code and Codex are gone, and their buttons with them. Connect carries no fingerprint:
+        // Rust keeps the one Orca answered.
+        let fingerprint = "ap1-0123456789abcdef0123456789abcdef";
+        let others = [
+            json!("turn_on"),
+            json!("not_now"),
+            json!("quit"),
+            json!("sh -c x"),
+            json!(1),
+            Value::Null,
+            json!({ "connect_orca": fingerprint }),
+            json!(format!("connect_orca {fingerprint}")),
+        ];
+        for other in others {
             assert!(serde_json::from_value::<Action>(other.clone()).is_err(), "{other}");
         }
     }

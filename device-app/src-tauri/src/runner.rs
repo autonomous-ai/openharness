@@ -463,8 +463,8 @@ mod tests {
     use crate::tabs::{NoTabs, Selected, TabApp, TabError, TabScripts};
     use crate::testing::{Fake, alive, fake_harness, wait_gone};
     use crate::types::{
-        DialStatus, Effect, Event, ExportFailure, Exported, LoginEvent, MenuItem, NotifyMode, Output, Saved,
-        UpdateFailure,
+        DialStatus, Effect, Event, ExportFailure, Exported, Fingerprint, LoginEvent, MenuItem, NotifyMode, OrcaAnswer,
+        Output, Saved, UpdateFailure,
     };
     use crate::update::AppUpdater;
     use std::collections::VecDeque;
@@ -1052,6 +1052,33 @@ mod tests {
         for effect in others {
             assert_eq!(w.runner.run(effect.clone()), None, "{effect:?}");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_connect_runs_with_the_fingerprint_it_is_handed() {
+        let w = world();
+        assert!(w.runner.find_cli());
+        let fingerprint = Fingerprint::parse("ap1-0123456789abcdef0123456789abcdef").unwrap();
+        let grants = vec!["Read your projects and workspaces.".to_string()];
+        let approve = serde_json::json!({
+            "connect": "approve",
+            "name": "Harness Device",
+            "version": "0.6.70",
+            "fingerprint": fingerprint.as_str(),
+            "grants": grants,
+            "update": false,
+        })
+        .to_string();
+        let approved = format!("device orca connect --approve {} --json", fingerprint.as_str());
+        w.fake.script("device orca connect --json", &[&approve]);
+        w.fake.script(&approved, &[r#"{"connect":"done"}"#]);
+        assert_eq!(
+            w.answer(Effect::RunOrcaConnect(None)),
+            Event::OrcaConnect(OrcaAnswer::Approve { fingerprint: fingerprint.clone(), grants, update: false })
+        );
+        assert_eq!(w.answer(Effect::RunOrcaConnect(Some(fingerprint))), Event::OrcaConnect(OrcaAnswer::Done));
+        assert_eq!(w.fake.calls(), ["device orca connect --json", approved.as_str()]);
     }
 
     #[cfg(unix)]

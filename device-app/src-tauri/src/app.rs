@@ -552,8 +552,8 @@ mod tests {
     use super::*;
     use crate::install::{DOWNLOADING_HARNESS, GETTING_READY, INSTALLING_TMUX};
     use crate::types::{
-        Action, DialStatus, Effect, Event, ExportFailure, Exported, LoginEvent, MenuAction, MenuItem, NotifyMode,
-        Phase, Saved, Screen, UpdateFailure, View,
+        Action, DialStatus, Effect, Event, ExportFailure, Exported, Fingerprint, LoginEvent, MenuAction, MenuItem,
+        NotifyMode, OrcaAnswer, OrcaError, Phase, Saved, Screen, UpdateFailure, View,
     };
     use std::path::PathBuf;
 
@@ -644,7 +644,7 @@ mod tests {
     }
 
     fn shown(screen: Screen, phase: Phase, lines: &[&str]) -> Option<View> {
-        Some(View { screen, phase, lines: lines.iter().map(|line| line.to_string()).collect() })
+        Some(View { screen, phase, lines: lines.iter().map(|line| line.to_string()).collect(), update: false })
     }
 
     fn tick(now: u64) -> Event {
@@ -1577,5 +1577,285 @@ mod tests {
             ["Harness removed", "Install", "Export failed: Harness did not answer", "About", "Quit"]
         );
         assert_eq!(logs(&effects), ["logs: export failed: Harness did not answer"]);
+    }
+
+    const FP1: &str = "ap1-0123456789abcdef0123456789abcdef";
+    /// The fingerprint of an `approval_stale`: the plugin's files changed after the first was shown.
+    const FP2: &str = "ap1-fedcba9876543210fedcba9876543210";
+    const ASKING: &str = "Asking Orca…";
+    const NOT_RUNNING: &str = "Orca isn't running.";
+    const COULD_NOT: &str = "Couldn't connect Orca.";
+    /// The access, as Orca words it.
+    const GRANTS: [&str; 2] = [
+        "Runs its own code in a separate Node.js process on the Orca host.",
+        "Read your projects and workspaces, and get notified when they change",
+    ];
+
+    fn fingerprint(text: &str) -> Fingerprint {
+        Fingerprint::parse(text).unwrap()
+    }
+
+    /// Orca lists the access, with this fingerprint.
+    fn approve(text: &str, update: bool) -> Event {
+        let grants = GRANTS.iter().map(|grant| grant.to_string()).collect();
+        Event::OrcaConnect(OrcaAnswer::Approve { fingerprint: fingerprint(text), grants, update })
+    }
+
+    fn connected() -> Event {
+        Event::OrcaConnect(OrcaAnswer::Done)
+    }
+
+    fn failed(error: OrcaError) -> Event {
+        Event::OrcaConnect(OrcaAnswer::Failed(error))
+    }
+
+    fn orca(phase: Phase, lines: &[&str], update: bool) -> Option<View> {
+        Some(View { screen: Screen::Orca, phase, lines: lines.iter().map(|line| line.to_string()).collect(), update })
+    }
+
+    /// The connects the effects run, by the fingerprint each passes.
+    fn connects(effects: &[Effect]) -> Vec<Option<Fingerprint>> {
+        effects
+            .iter()
+            .filter_map(|effect| match effect {
+                Effect::RunOrcaConnect(approve) => Some(approve.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Found and signed in, so no screen is due, and the row clicked: the window asks Orca.
+    fn asking() -> App {
+        let mut app = found();
+        answer(&mut app, true);
+        app.handle(Event::Menu(MenuAction::Orca));
+        assert_eq!(app.view(), orca(Phase::Asking, &[ASKING], false));
+        app
+    }
+
+    /// Orca listed the access, and the window shows it.
+    fn on_approve() -> App {
+        let mut app = asking();
+        app.handle(approve(FP1, false));
+        assert_eq!(app.view(), orca(Phase::Approve, &GRANTS, false));
+        app
+    }
+
+    #[test]
+    fn a_click_on_the_row_asks_orca() {
+        let mut app = found();
+        answer(&mut app, true);
+        let effects = app.handle(Event::Menu(MenuAction::Orca));
+        assert_eq!(connects(&effects), [None]);
+        assert_eq!(shows(&effects), [orca(Phase::Asking, &[ASKING], false)]);
+
+        // With no CLI there is nothing to ask.
+        let effects = removed().handle(Event::Menu(MenuAction::Orca));
+        assert!(connects(&effects).is_empty());
+        assert!(shows(&effects).is_empty());
+    }
+
+    #[test]
+    fn the_grants_are_shown_as_orca_words_them() {
+        for update in [false, true] {
+            let mut app = asking();
+            assert_eq!(shows(&app.handle(approve(FP1, update))), [orca(Phase::Approve, &GRANTS, update)]);
+            // An update keeps its words in every phase after it: the click, and each answer to it.
+            assert_eq!(shows(&app.handle(Event::Act(Action::ConnectOrca))), [orca(Phase::Asking, &[ASKING], update)]);
+            assert_eq!(shows(&app.handle(connected())), [orca(Phase::Done, &[], update)]);
+
+            let mut app = asking();
+            app.handle(approve(FP1, update));
+            app.handle(Event::Act(Action::ConnectOrca));
+            assert_eq!(shows(&app.handle(failed(OrcaError::Timeout))), [orca(Phase::Failed, &[COULD_NOT], update)]);
+        }
+    }
+
+    #[test]
+    fn nothing_is_approved_without_the_click() {
+        let answers = [
+            approve(FP1, false),
+            approve(FP2, true),
+            connected(),
+            failed(OrcaError::NotRunning),
+            failed(OrcaError::Failed),
+        ];
+        for each in answers {
+            let mut app = found();
+            let mut effects = answer(&mut app, true);
+            effects.extend(app.handle(Event::Menu(MenuAction::Orca)));
+            effects.extend(app.handle(each.clone()));
+            assert_eq!(connects(&effects), [None], "{each:?}");
+        }
+
+        // Connect while the window asks, says done or failed.
+        let mut app = asking();
+        assert!(app.handle(Event::Act(Action::ConnectOrca)).is_empty());
+        for end in [connected(), failed(OrcaError::Off)] {
+            let mut app = asking();
+            app.handle(end);
+            assert!(app.handle(Event::Act(Action::ConnectOrca)).is_empty());
+        }
+        // On another screen, before the Orca screen or after it left the access.
+        assert!(on_sign_in().handle(Event::Act(Action::ConnectOrca)).is_empty());
+        let mut app = on_approve();
+        app.handle(Event::Menu(MenuAction::SignIn));
+        assert!(app.handle(Event::Act(Action::ConnectOrca)).is_empty());
+        // With the window closed.
+        let mut app = on_approve();
+        app.handle(Event::WindowClosed);
+        assert!(app.handle(Event::Act(Action::ConnectOrca)).is_empty());
+        // Asked again from the row, the window asks Orca afresh: the access it showed is gone.
+        let mut app = on_approve();
+        assert_eq!(connects(&app.handle(Event::Menu(MenuAction::Orca))), [None]);
+        assert!(app.handle(Event::Act(Action::ConnectOrca)).is_empty());
+    }
+
+    #[test]
+    fn connect_runs_approve_with_the_fingerprint_of_the_last_answer_only() {
+        let mut app = on_approve();
+        let effects = app.handle(Event::Act(Action::ConnectOrca));
+        assert_eq!(connects(&effects), [Some(fingerprint(FP1))]);
+        assert_eq!(shows(&effects), [orca(Phase::Asking, &[ASKING], false)]);
+        // The window asks Orca, with no button: a second click runs nothing.
+        assert!(app.handle(Event::Act(Action::ConnectOrca)).is_empty());
+
+        // The files changed meanwhile: Orca lists the access again, under another fingerprint.
+        assert_eq!(shows(&app.handle(approve(FP2, false))), [orca(Phase::Approve, &GRANTS, false)]);
+        assert_eq!(connects(&app.handle(Event::Act(Action::ConnectOrca))), [Some(fingerprint(FP2))]);
+    }
+
+    #[test]
+    fn done_and_each_failure() {
+        let mut app = asking();
+        assert_eq!(shows(&app.handle(connected())), [orca(Phase::Done, &[], false)]);
+        let failures = [
+            (OrcaError::NotRunning, NOT_RUNNING),
+            (OrcaError::Off, COULD_NOT),
+            (OrcaError::NoPlugin, COULD_NOT),
+            (OrcaError::Timeout, COULD_NOT),
+            (OrcaError::Failed, COULD_NOT),
+        ];
+        for (error, line) in failures {
+            let mut app = asking();
+            assert_eq!(shows(&app.handle(failed(error))), [orca(Phase::Failed, &[line], false)], "{error:?}");
+        }
+    }
+
+    #[test]
+    fn cancel_done_and_close_close_the_window_and_install_nothing() {
+        // Cancel on the access, Done, and Close on a failure: each sends `cancel`.
+        for end in [approve(FP1, false), connected(), failed(OrcaError::NotRunning)] {
+            let mut app = asking();
+            app.handle(end.clone());
+            assert_eq!(app.handle(Event::Act(Action::Cancel)), [Effect::Show(None)], "{end:?}");
+            assert_eq!(app.view(), None);
+            assert!(app.handle(Event::Act(Action::ConnectOrca)).is_empty(), "{end:?}");
+        }
+        // While it asks, the window has no button.
+        assert!(asking().handle(Event::Act(Action::Cancel)).is_empty());
+    }
+
+    #[test]
+    fn a_second_click_on_the_row_starts_no_second_run() {
+        let mut app = found();
+        answer(&mut app, true);
+        let mut effects = app.handle(Event::Menu(MenuAction::Orca));
+        effects.extend(app.handle(Event::Menu(MenuAction::Orca)));
+        assert_eq!(connects(&effects), [None]);
+        // The window comes up again: the person asked for it.
+        assert_eq!(shows(&effects), [orca(Phase::Asking, &[ASKING], false), orca(Phase::Asking, &[ASKING], false)]);
+
+        // Nor once the window was closed while it runs; its answer is drawn in the window opened again.
+        app.handle(Event::WindowClosed);
+        assert!(connects(&app.handle(Event::Menu(MenuAction::Orca))).is_empty());
+        assert_eq!(shows(&app.handle(connected())), [orca(Phase::Done, &[], false)]);
+        // Once it answered, the row asks afresh.
+        assert_eq!(connects(&app.handle(Event::Menu(MenuAction::Orca))), [None]);
+    }
+
+    #[test]
+    fn a_closed_window_stays_closed() {
+        let answers = [
+            (approve(FP1, false), "orca connect: approve"),
+            (connected(), "orca connect: done"),
+            (failed(OrcaError::NotRunning), "orca connect: failed not-running"),
+        ];
+        for (each, line) in answers {
+            let mut app = asking();
+            app.handle(Event::WindowClosed);
+            let effects = app.handle(each);
+            assert!(shows(&effects).is_empty(), "{line}");
+            assert_eq!(logs(&effects), [line]);
+            assert_eq!(app.view(), None);
+        }
+    }
+
+    #[test]
+    fn the_log_names_the_answer_and_nothing_orca_listed() {
+        let answers = [
+            (connected(), "orca connect: done"),
+            (approve(FP1, false), "orca connect: approve"),
+            (failed(OrcaError::NotRunning), "orca connect: failed not-running"),
+            (failed(OrcaError::NoPlugin), "orca connect: failed no-plugin"),
+            (failed(OrcaError::Off), "orca connect: failed off"),
+            (failed(OrcaError::Timeout), "orca connect: failed timeout"),
+            (failed(OrcaError::Failed), "orca connect: failed failed"),
+        ];
+        for (each, line) in answers {
+            assert_eq!(logs(&asking().handle(each)), [line]);
+        }
+
+        // From the start through two approvals: no line, the menu's included, holds a grant or a fingerprint.
+        let (mut app, mut effects) = App::new(SEEN, true, false, B);
+        effects.extend(answer(&mut app, true));
+        effects.extend(app.handle(Event::Menu(MenuAction::Orca)));
+        effects.extend(app.handle(approve(FP1, false)));
+        effects.extend(app.handle(Event::Act(Action::ConnectOrca)));
+        effects.extend(app.handle(approve(FP2, true)));
+        effects.extend(app.handle(Event::Act(Action::ConnectOrca)));
+        effects.extend(app.handle(connected()));
+        let lines: Vec<&String> = effects
+            .iter()
+            .filter_map(|effect| match effect {
+                Effect::Log(line) => Some(line),
+                _ => None,
+            })
+            .collect();
+        for listed in [FP1, &FP1[4..], FP2, &FP2[4..], GRANTS[0], GRANTS[1], "Orca host", "workspaces"] {
+            assert!(lines.iter().all(|line| !line.contains(listed)), "{listed}: {lines:?}");
+        }
+    }
+
+    #[test]
+    fn an_answer_nobody_waits_for_changes_nothing() {
+        let mut app = found();
+        answer(&mut app, true);
+        for each in [approve(FP1, false), connected(), failed(OrcaError::NotRunning)] {
+            assert!(app.handle(each.clone()).is_empty(), "{each:?}");
+        }
+        assert_eq!(app.view(), None);
+
+        // Nor a second answer to the one run.
+        let mut app = asking();
+        app.handle(connected());
+        assert!(app.handle(approve(FP1, false)).is_empty());
+        assert_eq!(app.view(), orca(Phase::Done, &[], false));
+    }
+
+    #[test]
+    fn a_cli_that_goes_away_ends_the_orca_screen() {
+        let mut app = asking();
+        assert_eq!(shows(&app.handle(Event::Cli(false))), [None]);
+        // Its late answer is not heard.
+        assert!(app.handle(approve(FP1, false)).is_empty());
+        assert_eq!(app.view(), None);
+
+        // The access it showed goes with it: a CLI that comes back asks Orca afresh.
+        let mut app = on_approve();
+        app.handle(Event::Cli(false));
+        app.handle(Event::Cli(true));
+        assert!(connects(&app.handle(Event::Act(Action::ConnectOrca))).is_empty());
+        assert_eq!(connects(&app.handle(Event::Menu(MenuAction::Orca))), [None]);
     }
 }

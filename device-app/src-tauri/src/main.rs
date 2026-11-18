@@ -311,21 +311,34 @@ mod tests {
     use harness_device::types::{Phase, Screen};
 
     fn view(screen: Screen, phase: Phase, lines: &[&str]) -> View {
-        View { screen, phase, lines: lines.iter().map(|line| line.to_string()).collect() }
+        View { screen, phase, lines: lines.iter().map(|line| line.to_string()).collect(), update: false }
     }
 
     #[test]
     fn every_menu_action_has_its_own_id() {
         use MenuAction::*;
-        let actions =
-            [Install, SignIn, SoundOn, SoundOff, NotifyFull, NotifyYou, Update, OpenHarness, About, Quit, ExportLogs];
+        let actions = [
+            Install,
+            SignIn,
+            Orca,
+            SoundOn,
+            SoundOff,
+            NotifyFull,
+            NotifyYou,
+            Update,
+            OpenHarness,
+            About,
+            Quit,
+            ExportLogs,
+        ];
         for action in actions {
             assert_eq!(menu_action(menu_id(action)), Some(action));
         }
         let ids: std::collections::HashSet<_> = actions.into_iter().map(menu_id).collect();
-        assert_eq!(ids.len(), 11);
+        assert_eq!(ids.len(), 12);
         assert_eq!(menu_id(About), "about");
         assert_eq!(menu_id(ExportLogs), "export_logs");
+        assert_eq!(menu_id(Orca), "orca");
         assert_eq!(menu_id(NotifyFull), "notify_full");
         assert_eq!(menu_id(NotifyYou), "notify_you");
         assert_eq!(menu_action("sound"), None);
