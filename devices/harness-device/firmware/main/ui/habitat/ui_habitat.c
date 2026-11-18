@@ -351,7 +351,8 @@ static void change(void)
     habitat_render_notify();
 }
 /*
- * What the bell counts: unread notices about any agent EXCEPT the one on the face.
+ * What the bell counts: agents with an unread notice, EXCEPT the one on the face. An agent's question and its news are
+ * two rows but one agent, so they count one, as the window counts them.
  *
  * That agent's news is already on the glass — its recap, or its question in the recap's place — so
  * counting it too told a person something else had happened, somewhere else (owner, 2026-09-30:
@@ -361,8 +362,14 @@ static void change(void)
 static unsigned notice_unread(const char *except)
 {
     unsigned count = 0;
-    for (int i = 0; i < s.notice_count; i++)
-        count += !s.notice[i].read_on_dial && !(except && !strcmp(s.notice[i].agent_id, except));
+    for (int i = 0; i < s.notice_count; i++) {
+        if (s.notice[i].read_on_dial || (except && !strcmp(s.notice[i].agent_id, except))) continue;
+        // Counted at the agent's first unread row; NOTICES bounds this pairwise check.
+        bool counted = false;
+        for (int j = 0; j < i && !counted; j++)
+            counted = !s.notice[j].read_on_dial && !strcmp(s.notice[j].agent_id, s.notice[i].agent_id);
+        count += !counted;
+    }
     return count;
 }
 static bool notice_was_read(const cable_notif_t *n)
@@ -3946,13 +3953,16 @@ static cable_notif_t *notice_add(const char *id, const char *name, const char *m
     // while it waits took the question off the dial (2026-11-18). A question replaces both, as it is the newer state.
     notice_remove(id, question);
     if (s.notice_count == NOTICES) {
-        // Keep a message being read even when the bounded inbox fills. The
-        // oldest other message gives way; arrival never moves the current card.
-        int drop = s.notice_count - 1;
-        if (!strcmp(selected, s.notice[drop].agent_id) && s.notice[drop].question == selected_question) drop--;
-        memmove(&s.notice[drop], &s.notice[drop + 1],
-                (size_t)(s.notice_count - drop - 1) * sizeof(cable_notif_t));
-        s.notice_count--;
+        // The bounded inbox is full. A question waits on the person, so it never gives way to a message: the oldest
+        // message goes, else the oldest question for a new question, else the new row is refused. The card being
+        // read stays either way, and arrival never moves it. Rows run newest first, a held card last.
+        int drop = -1;
+        for (int pass = 0; pass < (question ? 2 : 1) && drop < 0; pass++)
+            for (int i = s.notice_count - 1; i >= 0 && drop < 0; i--)
+                if (s.notice[i].question == (pass == 1) &&
+                    !(!strcmp(selected, s.notice[i].agent_id) && s.notice[i].question == selected_question)) drop = i;
+        if (drop < 0) return NULL;
+        notice_drop(drop);
     }
     int pos = 0;
     if (!question)
