@@ -229,18 +229,24 @@ export class Outside {
   async close(): Promise<void> {
     this.kill()
     const shell = this.shellPid
-    if (shell !== undefined) {
-      // The shell stays after its engine and holds the terminal open, so the tab's helper reads on while it lives: killed,
-      // and waited for, gone once the helper, its parent, ends with the terminal, so nothing of the test outlives it.
-      try { process.kill(shell, 'SIGKILL') } catch { /* already gone */ }
-      await until(`${this.folder}'s shell gone`, () => {
-        try { process.kill(shell, 0) } catch { return true }
-        return false
-      }, 10_000, 50)
+    try {
+      if (shell !== undefined) {
+        // The shell stays after its engine and holds the terminal open, so the tab's helper reads on while it lives:
+        // killed, and waited for, gone once the helper, its parent, ends with the terminal, so nothing of the test
+        // outlives it.
+        try { process.kill(shell, 'SIGKILL') } catch { /* already gone */ }
+        await until(`${this.folder}'s shell gone`, () => {
+          try { process.kill(shell, 0) } catch { return true }
+          return false
+        }, 10_000, 50)
+      }
+    } finally {
+      // The tab goes too when the wait failed: the failure is reported, and the tab never outlives the test.
+      if (this.tab.exitCode === null && this.tab.signalCode === null) {
+        const exited = new Promise<void>((done) => this.tab.once('exit', () => done()))
+        this.tab.kill('SIGKILL')
+        await exited
+      }
     }
-    if (this.tab.exitCode !== null || this.tab.signalCode !== null) return
-    const exited = new Promise<void>((done) => this.tab.once('exit', () => done()))
-    this.tab.kill('SIGKILL')
-    await exited
   }
 }
