@@ -130,6 +130,17 @@ int main(void) {
            notices[1].question && !notices[1].failed && !notices[2].question && !notices[2].failed);
     p=cJSON_Parse("{\"items\":[{\"agentId\":\"failed\"}]}");
     assert(p);handle_notifications(p);cJSON_Delete(p);assert(notice_count==1&&!notices[0].failed);
+    // An agent's question and its news are two rows (the drawer keeps a row per agent and kind), in either order.
+    // A second row of one agent and kind is still dropped. A row carries no question id: the kind is the whole key.
+    p=cJSON_Parse("{\"items\":[{\"agentId\":\"a\",\"question\":true,\"summary\":\"Ship it?\"},{\"agentId\":\"a\",\"summary\":\"Built.\"},"
+        "{\"agentId\":\"a\",\"question\":true,\"summary\":\"Again?\"},{\"agentId\":\"a\",\"summary\":\"Again.\"},{\"agentId\":\"b\",\"summary\":\"Done.\"}]}");
+    assert(p);handle_notifications(p);cJSON_Delete(p);
+    assert(notice_count==3 && notices[0].question && !strcmp(notices[0].summary,"Ship it?") &&
+           !notices[1].question && !strcmp(notices[1].agent_id,"a") && !strcmp(notices[1].summary,"Built.") &&
+           !strcmp(notices[2].agent_id,"b"));
+    p=cJSON_Parse("{\"items\":[{\"agentId\":\"a\",\"summary\":\"Built.\"},{\"agentId\":\"a\",\"question\":true,\"summary\":\"Ship it?\"}]}");
+    assert(p);handle_notifications(p);cJSON_Delete(p);
+    assert(notice_count==2 && !notices[0].question && notices[1].question);
     for(int len=0;len<=65;len++) {
         char token[66];memset(token,'t',len);token[len]=0;
         p=cJSON_CreateObject();assert(p);cJSON *entries=cJSON_AddArrayToObject(p,"items");
