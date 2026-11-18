@@ -1,4 +1,5 @@
 import { lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, type BigIntStats } from 'node:fs'
+import * as nativeFs from 'node:fs'
 import * as fs from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -7,6 +8,7 @@ import { readPrivateImage } from './privateImage.js'
 import { sameSessionFileIdentity, sessionFileIdentity } from '../lib/sessionStorageWire.js'
 
 vi.mock('node:fs/promises', async original => ({ ...await original<object>() }))
+vi.mock('node:fs', async original => ({ ...await original<object>() }))
 
 vi.mock('../lib/sessionStorageWire.js', async original => {
   const actual = await original<typeof import('../lib/sessionStorageWire.js')>()
@@ -58,22 +60,79 @@ it('does not promote atime into an identity field', () => {
 it.each(fields.flatMap(field => ['after', 'path'].map(phase => ({ field, phase }))))(
   'refuses the actual read when $phase metadata changes $field', async ({ field, phase }) => {
     let closed = false
-    const open = fs.open
-    vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
-      const handle = await open(...args), stat = handle.stat.bind(handle), close = handle.close.bind(handle)
-      let count = 0
-      handle.stat = (async (options: { bigint: true }) => {
-        const result = await stat(options)
-        return phase === 'after' && ++count === 2 ? change(result, field) : result
-      }) as typeof handle.stat
-      handle.close = async () => { await close(); closed = true }
-      return handle
-    })
-    const lstat = fs.lstat
-    vi.spyOn(fs, 'lstat').mockImplementation((async (...args: Parameters<typeof fs.lstat>) => {
-      const result = await lstat(...args)
+    const stat = nativeFs.fstatSync, close = nativeFs.closeSync
+    let count = 0
+    vi.spyOn(nativeFs, 'fstatSync').mockImplementation(((...args: Parameters<typeof stat>) => {
+      const result = stat(...args)
+      return phase === 'after' && args[1]?.bigint && ++count === 2 ? change(result as BigIntStats, field) : result
+    }) as typeof stat)
+    vi.spyOn(nativeFs, 'closeSync').mockImplementation(fd => { if (stat(fd).isFile()) closed = true; close(fd) })
+    const lstat = nativeFs.lstatSync
+    vi.spyOn(nativeFs, 'lstatSync').mockImplementation(((...args: Parameters<typeof lstat>) => {
+      const result = lstat(...args)
       return phase === 'path' ? change(result as BigIntStats, field) : result
-    }) as typeof fs.lstat)
+    }) as typeof lstat)
     await expect(readPrivateImage(file, 1024)).rejects.toMatchObject({ code: 'changed' })
     expect(closed).toBe(true)
   })
+
+it('reads through short system reads and proves actual file growth or truncation', async () => {
+  const read = nativeFs.readSync
+  vi.spyOn(nativeFs, 'readSync').mockImplementation(((fd: number, bytes: Buffer, offset: number, length: number, position: number) =>
+    read(fd, bytes, offset, Math.min(length, 2), position)) as typeof read)
+  expect((await readPrivateImage(file, 1024))?.bytes.toString()).toBe('[{"title":"fixture"}]')
+  vi.restoreAllMocks()
+  const grow = vi.spyOn(nativeFs, 'readSync').mockImplementationOnce(((...args: Parameters<typeof read>) => {
+    nativeFs.appendFileSync(file, 'x'.repeat(2048))
+    return read(...args)
+  }) as typeof read)
+  await expect(readPrivateImage(file, 1024)).rejects.toMatchObject({ code: 'unsafe' })
+  grow.mockRestore()
+  vi.spyOn(nativeFs, 'readSync').mockImplementationOnce(((...args: Parameters<typeof read>) => {
+    nativeFs.truncateSync(file, 2)
+    return read(...args)
+  }) as typeof read)
+  await expect(readPrivateImage(file, 4096)).rejects.toMatchObject({ code: 'changed' })
+})
+
+it('preserves the unlimited Registry-image path and refuses an oversized bounded archive', async () => {
+  expect((await readPrivateImage(file, Number.MAX_SAFE_INTEGER))?.bytes.toString()).toBe('[{"title":"fixture"}]')
+  await expect(readPrivateImage(file, 2)).rejects.toMatchObject({ code: 'unsafe' })
+})
+
+it('handles missing files and rejects non-file or symlink input without following it', async () => {
+  expect(await readPrivateImage(join(root, 'state', 'missing'), 1024)).toBeNull()
+  await expect(readPrivateImage(join(root, 'state'), 1024)).rejects.toMatchObject({ code: 'unsafe' })
+  if (process.platform !== 'win32') {
+    const link = join(root, 'state', 'link.json')
+    nativeFs.symlinkSync(file, link)
+    await expect(readPrivateImage(link, 1024)).rejects.toMatchObject({ code: 'unsafe' })
+  }
+})
+
+it('tightens owner-readable modes but refuses writable containers and images', async () => {
+  if (process.platform === 'win32') return
+  nativeFs.chmodSync(file, 0o644)
+  const image = await readPrivateImage(file, 1024)
+  expect(image!.stat.mode & 0o777n).toBe(0o600n)
+  nativeFs.chmodSync(file, 0o644)
+  const chmod = vi.spyOn(nativeFs, 'fchmodSync').mockImplementation(() => {})
+  await expect(readPrivateImage(file, 1024)).rejects.toMatchObject({ code: 'unsafe' })
+  chmod.mockRestore()
+  nativeFs.chmodSync(file, 0o666)
+  await expect(readPrivateImage(file, 1024)).rejects.toMatchObject({ code: 'unsafe' })
+  expect(nativeFs.statSync(file).mode & 0o777).toBe(0o666)
+  nativeFs.chmodSync(file, 0o600); nativeFs.chmodSync(join(root, 'state'), 0o777)
+  await expect(readPrivateImage(file, 1024)).rejects.toMatchObject({ code: 'unsafe' })
+})
+
+it('refuses a foreign image owner and closes the opened file', async () => {
+  if (typeof process.getuid !== 'function') return
+  const stat = nativeFs.fstatSync, close = vi.spyOn(nativeFs, 'closeSync')
+  vi.spyOn(nativeFs, 'fstatSync').mockImplementation(((...args: Parameters<typeof stat>) => {
+    const result = stat(...args)
+    return args[1]?.bigint ? change(result as BigIntStats, 'uid') : result
+  }) as typeof stat)
+  await expect(readPrivateImage(file, 1024)).rejects.toMatchObject({ code: 'unsafe' })
+  expect(close).toHaveBeenCalledTimes(2)
+})

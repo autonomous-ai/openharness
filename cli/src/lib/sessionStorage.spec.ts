@@ -34,7 +34,7 @@ const override = () => ({ networkId: 'fixture', networkName: 'Fixture', baseUrl:
 const row = () => ({ agentId: 'fixture-agent', registeredAt: 1, title: 'fixture', gridLaunch: override() })
 const containsKey = (value: unknown) => JSON.stringify(value).includes(key)
 
-function faultChild(fault: 'after-sync' | 'replace-before-open' | 'directory-close'): void {
+function faultChild(fault: 'after-sync' | 'replace-before-open' | 'directory-close' | 'file-close'): void {
   const file = join(root, 'storage-fixture.mjs')
   const processModule = new URL('../storage/process.ts', import.meta.url).href
   const admissionModule = new URL('../harnessd/childAdmission.ts', import.meta.url).href
@@ -48,7 +48,8 @@ function faultChild(fault: 'after-sync' | 'replace-before-open' | 'directory-clo
     const closeSync = syncFs.closeSync;
     let directoryFault = false;
     syncFs.closeSync = fd => {
-      if (${JSON.stringify(fault)} === 'directory-close' && !directoryFault && syncFs.fstatSync(fd).isDirectory()) {
+      if (!directoryFault && (${JSON.stringify(fault)} === 'directory-close' && syncFs.fstatSync(fd).isDirectory()
+        || ${JSON.stringify(fault)} === 'file-close' && syncFs.fstatSync(fd).isFile())) {
         directoryFault = true; throw new Error('fixture directory close failure');
       }
       return closeSync(fd);
@@ -95,8 +96,8 @@ describe('required session storage process', () => {
     expect(release).toHaveBeenCalledOnce()
   })
 
-  it('reaps the storage child after a shared directory-helper close fails', async () => {
-    faultChild('directory-close')
+  it.each(['directory-close', 'file-close'] as const)('reaps the storage child after a shared %s fails', async fault => {
+    faultChild(fault)
     writeFileSync(join(root, 'registry.json'), JSON.stringify([row()]), { mode: 0o600 })
     const reading = storage.read({ kind: 'registry' })
     const child = (storage as unknown as { child: ChildProcess }).child
