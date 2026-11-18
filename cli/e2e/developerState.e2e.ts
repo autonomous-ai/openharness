@@ -12,12 +12,14 @@
  * Every path and value here is made up, in a folder of this test. `vi.stubEnv` puts them in this worker's environment
  * as a developer's shell would, and takes them out again: no real value of these variables is read or printed.
  */
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFailed, vi } from 'vitest'
 import { LocalClient } from './harness/client.js'
+import { appQueued, pathQueueRuns, writeAppCodex, writePathCodexWhoseQueueFails } from './harness/codexAppCli.js'
+import { CodexOutside } from './harness/codexOutside.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { Store } from '../src/lib/connectors/store.js'
 import { placeNode } from '../src/testing/placeNode.js'
@@ -125,6 +127,33 @@ describe('a daemon under test knows nothing of the developer\'s own state', () =
     expect(isAbsolute(bin), bin).toBe(true)
     expect(relative(d.root, bin).startsWith('..'), bin).toBe(false)
     expect(existsSync(bin), bin).toBe(false)
+  })
+
+  // A word to a Codex session of the ChatGPT app goes to the app's own CLI (cable/hosts/codexQueue.ts): /Applications is
+  // the computer's, whatever the home, so the devices look for it in the daemon's own root alone, where there is none.
+  it('finds none of the developer\'s ChatGPT app: its devices look for the app\'s own codex only in its own root, where there is none', async () => {
+    const d = daemon = await IsolatedDaemon.create()
+    const bin = d.env.HARNESS_CODEX_APP_BIN ?? ''
+    expect(isAbsolute(bin), bin).toBe(true)
+    expect(relative(d.root, bin).startsWith('..'), bin).toBe(false)
+    expect(existsSync(bin), bin).toBe(false)
+  })
+
+  // Shell scripts, and Windows never runs `codex queue`.
+  it.skipIf(process.platform === 'win32')('a test\'s own app codex notes its queue calls apart from the PATH codex\'s, whose queue exits 127', async () => {
+    const d = daemon = await IsolatedDaemon.create()
+    writeAppCodex(d)
+    writePathCodexWhoseQueueFails(d)
+    // Its constructor writes the thread's rollout, which a queue looks for.
+    const codex = new CodexOutside(d, 'api', [], {})
+    const queue = ['queue', '--thread', codex.sessionId, '--message=hi']
+    execFileSync(d.env.HARNESS_CODEX_APP_BIN!, queue, { env: d.env })
+    expect(appQueued(d)).toEqual([{ args: queue, codexHome: d.env.CODEX_HOME }])
+    expect(existsSync(join(d.root, 'codex-queue'))).toBe(false)
+    const path = join(d.root, 'bin', 'codex')
+    expect(spawnSync(path, queue, { env: d.env }).status).toBe(127)
+    expect(pathQueueRuns(d)).toBe(1)
+    expect(spawnSync(path, ['--version'], { env: d.env }).status).toBe(0)
   })
 
   it('takes nothing from the shell but what it needs to run', async () => {
