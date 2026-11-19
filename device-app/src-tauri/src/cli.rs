@@ -645,6 +645,8 @@ fn ended(name: &str, code: Option<i32>, stderr: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use crate::appimage_env::tests::{PERSON_PATH, assert_outside, from_an_appimage};
     use crate::harness_home::Look;
     #[cfg(unix)]
     use crate::testing::{Fake, wait_gone};
@@ -964,6 +966,33 @@ mod tests {
         fake.script("auth status --json", &["ok", "@err bad", "@exit 7"]);
         let output = fake.cli().run(&["auth", "status", "--json"], WAIT).unwrap();
         assert_eq!(output, Output { code: Some(7), timed_out: false, stdout: "ok\n".into(), stderr: "bad\n".into() });
+    }
+
+    /// `env`, run over what an AppImage hands the app. The command sets it as its own, as the CLI's PATH is.
+    #[cfg(unix)]
+    fn env_in_an_appimage() -> Command {
+        let mut command = Command::new("/usr/bin/env");
+        command.envs(from_an_appimage(&[("PATH", PERSON_PATH)]));
+        command
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_run_starts_without_what_the_appimage_set() {
+        // The install's runs behind the screen are runs too.
+        assert_outside(&run(env_in_an_appimage(), WAIT).unwrap().stdout);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_child_starts_without_what_the_appimage_set() {
+        let mut child = Child::start(env_in_an_appimage(), "env".into(), Arc::new(MemoryLog::default())).unwrap();
+        let mut printed = String::new();
+        while let Some(line) = child.line(WAIT).unwrap() {
+            printed.push_str(&line);
+            printed.push('\n');
+        }
+        assert_outside(&printed);
     }
 
     /// Runs `sh -c script` in a folder of its own, its deadline WAIT away on a clock the sink moves: at the first line,

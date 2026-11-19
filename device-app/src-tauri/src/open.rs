@@ -210,4 +210,26 @@ mod tests {
         assert_eq!(desktop_args("linux"), None);
         assert_eq!(desktop_args("windows"), None);
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn what_opens_starts_without_what_the_appimage_set() {
+        use crate::appimage_env::tests::{PERSON_PATH, assert_outside, from_an_appimage};
+        use std::{fs, sync::mpsc, thread, time::Duration};
+        // A page, the logs' folder, Harness and Linux's terminal all start this way.
+        let folder = tempfile::tempdir().unwrap();
+        let fifo = folder.path().join("env");
+        let made = {
+            let _spawning = crate::cli::spawn_lock();
+            Command::new("mkfifo").arg(&fifo).status().unwrap()
+        };
+        assert!(made.success());
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", r#"env > "$0""#]).arg(&fifo).envs(from_an_appimage(&[("PATH", PERSON_PATH)]));
+        start(&mut command, None).unwrap();
+        // Read on a thread, so a child that never writes fails the test instead of hanging it.
+        let (send, printed) = mpsc::channel();
+        thread::spawn(move || send.send(fs::read_to_string(fifo)));
+        assert_outside(&printed.recv_timeout(Duration::from_secs(5)).unwrap().unwrap());
+    }
 }

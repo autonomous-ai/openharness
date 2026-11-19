@@ -5,6 +5,8 @@
 
 pub mod account;
 pub mod app;
+#[cfg(any(target_os = "linux", all(test, unix)))]
+mod appimage_env;
 #[cfg(unix)]
 mod child_unix;
 #[cfg(windows)]
