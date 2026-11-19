@@ -33,7 +33,7 @@ Four builds, all local branches (nothing pushed):
 | V1 | `feat/harness-max-all` | C firmware on the Pro's sources, the "room + three lanes" layout. Kept for history |
 | V2 | `feat/harness-max-v2` | C firmware, the [Demo V2](../superpowers/specs/2026-11-18-harness-max-v2-design.md) pages in the dial's look |
 | V3 | `feat/harness-max-v3` | Flutter on the Orange Pi. Frozen: the reference for how the bar behaves, not the product |
-| V4 | `feat/harness-max-v4` | C firmware: V2's pages, V3's changes, `main`'s protocol. In progress |
+| V4 | `feat/harness-max-v4` | C firmware: V2's pages, V3's changes, `main`'s protocol. Runs on the Orange Pi (M1) |
 
 What V3 settled, which V4 carries into C:
 
@@ -89,6 +89,13 @@ Done when: the Orange Pi runs V4 in `--demo` at 1280 x 320 with every V3 case; t
 1920 x 480; the P4 image fits; and with the branch CLI on the Mac and the bar on `--usb`, a Harness agent's question
 is answered and a permission prompt approved on the bar, and an open question survives a restart of the Mac's devices
 process.
+
+Status, 19 Nov: everything above is in `feat/harness-max-v4` and the Orange Pi runs it in `--demo` (Ambient, Apps
+with V3's icons, App Detail, an agent opened with the mic on, checked on the bar). The host tests pass at 480 and 415,
+the 38 goldens match, the Linux build's tests pass on the Mac and on the board, and `harness_max.bin` is 0x431d40
+bytes of `ota_0`'s 0x7e0000 (47% free). Not yet run: `--usb` against the Mac's real daemon, which needs the branch CLI
+installed on the Mac. Deviations from V3, for the P4's renderer: no blur or motion on the slivers, no width animation
+when an agent opens, a swipe moves the row a cell at a time.
 
 ### M2: On Pro hardware
 
