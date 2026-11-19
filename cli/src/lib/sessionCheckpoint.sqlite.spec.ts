@@ -120,6 +120,25 @@ it('closes an OpenClaw session the Gateway never wrote with no checkpoint, and r
   expect(readdirSync(join(directory, '.stages'))).toEqual([])
 })
 
+it.each(['absent', 'empty'] as const)('refuses %s OpenClaw history after saving a nonempty checkpoint', async mode => {
+  const path = join(root, 'agents', 'main', 'agent', 'openclaw-agent.sqlite')
+  mkdirSync(dirname(path), { recursive: true })
+  const database = new (builtinSqlite()!)(path, { readOnly: false })
+  databases.push(database)
+  const fixture = (name: string) => readFileSync(join(import.meta.dirname, '..', 'engines', 'openclaw', '__fixtures__', `${name}.sql`), 'utf8')
+  database.exec(fixture('schema')); database.exec(fixture('plain'))
+  const { SessionCheckpointStore, SessionCheckpointError } = await import('./sessionCheckpoint.js')
+  const directory = join(root, 'backups'), store = new SessionCheckpointStore(directory, workerExport)
+  const row = { agentId: 'fixture', sessionId: 'agent:main:plain', engine: 'openclaw', openclawStateDir: root } as RegisteredSession
+  await store.save(row)
+  const files = readdirSync(directory).filter(name => name !== '.stages')
+  const before = files.map(name => readFileSync(join(directory, name)))
+  if (mode === 'empty') database.exec('DELETE FROM transcript_events; DELETE FROM session_windows; DELETE FROM session_nodes;')
+  else { databases.pop()!.close(); closeSqliteHandles(); rmSync(path) }
+  await expect(store.save(row)).rejects.toBeInstanceOf(SessionCheckpointError)
+  expect(files.map(name => readFileSync(join(directory, name)))).toEqual(before)
+})
+
 // Only the read threads enforce a reply limit. The stores are built with the binding: the sqlite3 CLI cannot take
 // megabytes on a command line.
 const withBuiltin = builtinSqlite() ? describe : describe.skip

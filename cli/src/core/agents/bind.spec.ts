@@ -2025,6 +2025,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     }
     const logged = () => vi.mocked(console.log).mock.calls.flat().map(String)
 
+
     it('holds once the Gateway has been gone 10 s, and says so once', async () => {
       expect(await passes([0, LOST], [5, LOST], [10, LOST], [15, LOST])).toEqual([undefined, undefined, NO_GATEWAY, NO_GATEWAY])
       expect(run.deps.announceSession).toHaveBeenCalledOnce()
@@ -2115,7 +2116,9 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     /** The pane bound to `agent:main:plain` with its first task on the row, its stream attached. */
     const handing = (shown: () => string, over: Partial<BindDeps> = {}) => {
       const run = setup({ capturePane: vi.fn(async () => shown()), openclawPaneRead: vi.fn(() => true), ...over })
-      vi.mocked(run.deps.registry.byProcess).mockReturnValue(pane({ sessionId: 'agent:main:plain', firstTask: TASK }))
+      const row = pane({ sessionId: 'agent:main:plain', firstTask: TASK })
+      run.byAgent.set('a1', row)
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
       return run
     }
 
@@ -2128,7 +2131,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       // The person's own message to the agent, where its confirmation arrives (core/turns/funnel.ts): no delivery id.
       expect(vi.mocked(run.deps.submitFirstTask).mock.calls).toEqual([['a1', TASK]])
       expect(run.deps.registry.afterTransaction).toHaveBeenCalledOnce()
-      expect(run.deps.registry.takeFirstTask).toHaveBeenCalledWith('a1')
+      expect(run.deps.registry.takeFirstTask).toHaveBeenCalledWith('a1', { current: expect.any(Function) })
       expect(vi.mocked(run.deps.registry.takeFirstTask).mock.invocationCallOrder[0])
         .toBeLessThan(vi.mocked(run.deps.submitFirstTask).mock.invocationCallOrder[0])
       expect(console.log).toHaveBeenCalledWith('[agent] a1 first task handed over')
@@ -2144,7 +2147,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       vi.mocked(run.deps.registry.takeFirstTask).mockResolvedValue(TASK)
       await run.binding.bindObservedAgent(tui())
       await vi.waitFor(() => expect(run.deps.submitFirstTask).toHaveBeenCalled())
-      expect(vi.mocked(run.deps.input.expectFirstTask).mock.calls).toEqual([['a1']])
+      expect(vi.mocked(run.deps.input.expectFirstTask).mock.calls).toEqual([['a1', TASK]])
       expect(vi.mocked(run.deps.input.expectFirstTask).mock.invocationCallOrder[0])
         .toBeLessThan(vi.mocked(run.deps.registry.takeFirstTask).mock.invocationCallOrder[0])
     })
@@ -2246,10 +2249,40 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       await vi.waitFor(() => expect(run.deps.submitFirstTask).toHaveBeenCalledWith('a1', TASK))
     })
 
+    it.each(['removed', 'rebound', 'held', 'failed'] as const)('does not remove a first task when its owner is %s before the transaction commits', async change => {
+      let commit = () => {}
+      const run = handing(() => ready)
+      vi.mocked(run.deps.registry.afterTransaction).mockImplementation(((action: () => unknown) =>
+        new Promise(resolve => { commit = () => resolve(action()) })) as never)
+      await run.binding.bindObservedAgent(tui())
+      const row = run.byAgent.get('a1')!
+      if (change === 'removed') run.byAgent.delete('a1')
+      else if (change === 'rebound') row.sessionId = 'agent:main:other'
+      else if (change === 'held') row.identityHold = OPENCLAW_STATES.noGateway
+      else row.launch = { state: 'failed', error: 'FIRST_TASK_NOT_TAKEN' }
+      commit()
+      await new Promise(resolve => setImmediate(resolve))
+      expect(run.deps.registry.takeFirstTask).not.toHaveBeenCalled()
+      expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
+    })
+
+    it('does not type a first task if its launch changes during its durable removal', async () => {
+      let saved!: (task: string) => void
+      const run = handing(() => ready)
+      vi.mocked(run.deps.registry.takeFirstTask).mockImplementation(() => new Promise(resolve => { saved = resolve }))
+      await run.binding.bindObservedAgent(tui())
+      await vi.waitFor(() => expect(run.deps.registry.takeFirstTask).toHaveBeenCalledOnce())
+      run.byAgent.get('a1')!.launch = { state: 'failed', error: 'FIRST_TASK_NOT_TAKEN' }
+      saved(TASK)
+      await new Promise(resolve => setImmediate(resolve))
+      expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
+    })
+
     it('a pane that moved to another key binds it, and hands the task to that session once its stream is up', async () => {
       // `/new` before the task was typed: the pane shows a session the agent is not bound to yet.
       const other = ready.replace(/session plain/g, 'session other')
       const run = handing(() => other)
+      run.byAgent.clear()
       vi.mocked(run.deps.registry.register).mockResolvedValue({ entry: pane({ sessionId: 'agent:main:other', firstTask: TASK }), ...meta({ isNew: true }) } as never)
       vi.mocked(run.deps.registry.takeFirstTask).mockResolvedValue(TASK)
       await run.binding.bindObservedAgent(tui())
@@ -2318,6 +2351,25 @@ describe('binding an OpenClaw pane, read from its screen', () => {
         await vi.waitFor(() => expect(run.deps.submitFirstTask).toHaveBeenCalledWith('a1', TASK))
         expect(run.deps.openclawStateDir).toHaveBeenCalledWith(7714)
         expect(run.deps.submitFirstTask).toHaveBeenCalledOnce()
+      })
+
+      it.each(['removed', 'rebound', 'held', 'failed'] as const)('discards the attached pane reading after its agent is %s', async change => {
+        const { run, row } = streaming({ identityHold: OPENCLAW_STATES.noGateway })
+        let finish!: (value: string) => void
+        vi.mocked(run.deps.capturePane).mockResolvedValueOnce(ready).mockImplementationOnce(() =>
+          new Promise(resolve => { finish = resolve }))
+        await run.binding.bindObservedAgent(tui())
+        await vi.waitFor(() => expect(run.deps.capturePane).toHaveBeenCalledTimes(2))
+        const reads = vi.mocked(run.deps.openclawPaneRead).mock.calls.length
+        if (change === 'removed') run.byAgent.delete('a1')
+        else if (change === 'rebound') row.sessionId = 'agent:main:other'
+        else if (change === 'held') row.identityHold = OPENCLAW_STATES.noGateway
+        else row.launch = { state: 'failed', error: 'FIRST_TASK_NOT_TAKEN' }
+        finish(ready)
+        await new Promise(resolve => setImmediate(resolve))
+        expect(run.deps.openclawPaneRead).toHaveBeenCalledTimes(reads)
+        expect(run.deps.input.expectFirstTask).not.toHaveBeenCalled()
+        expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
       })
 
       it('a box that holds text once the stream is up keeps the task for a later pass', async () => {
@@ -2423,7 +2475,14 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       expect(run.deps.submitFirstTask).not.toHaveBeenCalled()
     })
 
-    it('a pass that reads anything else starts the count again', async () => {
+    it('a transient pane reading preserves the recovery spacing and count', async () => {
+      await pass(0)
+      await pass(5, screen('screen-banner'))
+      await pass(6)
+      expect(typed()).toEqual([SESSION])
+    })
+
+    it('a pass that reads ready history starts the count again', async () => {
       for (const [loads, second] of [0, 20, 40, 60, 80].entries()) await pass(second, failedTimes(loads + 1))
       expect(typed()).toHaveLength(5)
       await pass(85, screen('screen-plain'))
@@ -2534,6 +2593,27 @@ describe('binding an OpenClaw pane, read from its screen', () => {
     }
     const logged = () => vi.mocked(console.log).mock.calls.flat().map(String)
 
+    it('failed-launch cleanup cannot take a replacement launch task after the transaction', async () => {
+      let commit = () => {}
+      vi.mocked(run.deps.registry.afterTransaction).mockImplementation(((action: () => unknown) =>
+        new Promise(resolve => { commit = () => resolve(action()) })) as never)
+      await pass(0)
+      await pass(180)
+      row.launch = { state: 'starting' }
+      row.firstTask = 'A new task'
+      commit()
+      await new Promise(resolve => setImmediate(resolve))
+      expect(run.deps.registry.takeFirstTask).not.toHaveBeenCalled()
+      expect(row.firstTask).toBe('A new task')
+    })
+
+    it('does not remove a task when the failed launch has no surviving owner', async () => {
+      vi.mocked(run.deps.registry.setLaunch).mockReturnValue(null)
+      await pass(0)
+      await pass(180)
+      expect(run.deps.registry.takeFirstTask).not.toHaveBeenCalled()
+    })
+
     it('a task still on the row 3 minutes after its TUI started fails the launch, comes off the row, and is never typed', async () => {
       vi.mocked(run.deps.openclawPaneRead).mockReturnValue(true)
       vi.mocked(run.deps.registry.takeFirstTask).mockResolvedValue(TASK)
@@ -2543,7 +2623,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       expect(await pass(180, ready)).toBe(true)
       expect(row.launch).toEqual(FAILED)
       expect(run.deps.registry.setLaunch).toHaveBeenCalledOnce()
-      await vi.waitFor(() => expect(run.deps.registry.takeFirstTask).toHaveBeenCalledWith('a1'))
+      await vi.waitFor(() => expect(run.deps.registry.takeFirstTask).toHaveBeenCalledWith('a1', { current: expect.any(Function) }))
       expect(run.deps.registry.afterTransaction).toHaveBeenCalledOnce()
       expect(run.deps.input.forget).toHaveBeenCalledWith('a1')
       expect(run.deps.announceSession).toHaveBeenCalledWith(row)
@@ -2584,7 +2664,7 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       row.sessionId = ''
       expect(await pass(0)).toBe(false)
       expect(await pass(180)).toBe(true)
-      await vi.waitFor(() => expect(run.deps.registry.takeFirstTask).toHaveBeenCalledWith('a1'))
+      await vi.waitFor(() => expect(run.deps.registry.takeFirstTask).toHaveBeenCalledWith('a1', { current: expect.any(Function) }))
       expect(vi.mocked(run.deps.registry.setLaunch).mock.invocationCallOrder[0])
         .toBeLessThan(vi.mocked(run.deps.registry.afterTransaction).mock.invocationCallOrder[0])
     })

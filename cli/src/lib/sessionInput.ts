@@ -203,7 +203,7 @@ interface InputState {
   pastedAt: number
   /** The agent's first task is the controller's, from when it is expected until a turn takes it ([firstTaskEnded]): it
    *  is never given up here ([firstTaskWaiting]). */
-  firstTask: boolean
+  firstTask: string | null
   /** A message waits for its OpenClaw pane to be able to send ([OPENCLAW_NOT_READY]): nothing of it is typed. */
   paneWait: boolean
   /** The receipt of the person's message typed last, until it is settled ([settle]). */
@@ -412,7 +412,7 @@ export class SessionInputController {
 
   /** Whether [id]'s first task is expected, being typed, or typed, and its user row has not confirmed it yet. */
   firstTaskWaiting(id: string): boolean {
-    return this.states.get(id)?.firstTask === true
+    return !!this.states.get(id)?.firstTask
   }
 
   /**
@@ -420,10 +420,10 @@ export class SessionInputController {
    * from here ([firstTaskWaiting]), as the row no longer does once the task leaves it. Said from the paste, the agent
    * read idle with no ask between the two, about 350 ms (e2e/openclawShow.e2e.ts).
    */
-  expectFirstTask(id: string): void {
+  expectFirstTask(id: string, content: string): void {
     const state = this.state(id)
     if (state.firstTask) return
-    state.firstTask = true
+    state.firstTask = fingerprint(content)
     this.deps.onWaitChanged?.(id)
   }
 
@@ -449,13 +449,14 @@ export class SessionInputController {
    */
   private async injectWhenLeased(
     state: InputState,
+    firstTask: () => boolean,
     write: () => Promise<boolean | TerminalActionResult>,
     current: () => boolean,
     held: () => boolean,
   ): Promise<boolean | TerminalActionResult> {
     const now = this.deps.now ?? Date.now
     const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
-    const deadline = now() + LEASE_WAIT_MS
+    let leaseSince: number | undefined
     const refused = (): TerminalActionResult => ({ state: 'failed', dispatch: 'not_started', reason: 'held' })
     if (held()) return refused()
     if (!current()) return { state: 'failed', dispatch: 'not_started', reason: TERMINAL_LEASE_REFUSED }
@@ -465,8 +466,12 @@ export class SessionInputController {
       const notReady = paneNotReady(delivery)
       if (notReady) {
         notReadySince ??= now()
-        if (!state.firstTask && now() - notReadySince >= OPENCLAW_NOT_READY_MAX_MS) break
-      } else if (!leaseRefused(delivery) || now() >= deadline) break
+        if (!firstTask() && now() - notReadySince >= OPENCLAW_NOT_READY_MAX_MS) break
+      } else {
+        if (!leaseRefused(delivery)) break
+        leaseSince ??= now()
+        if (now() - leaseSince >= LEASE_WAIT_MS) break
+      }
       state.paneWait = notReady
       await sleep(notReady ? OPENCLAW_PANE_RETRY_MS : LEASE_RETRY_MS)
       state.paneWait = false
@@ -486,7 +491,7 @@ export class SessionInputController {
         awaitingFingerprint: null,
         awaitingContent: null,
         pastedAt: 0,
-        firstTask: false,
+        firstTask: null,
         paneWait: false,
         controlLocked: false,
         cancelling: 0,
@@ -567,7 +572,7 @@ export class SessionInputController {
    */
   private firstTaskEnded(sessionId: string, state: InputState): void {
     if (!state.firstTask) return
-    state.firstTask = false
+    state.firstTask = null
     this.deps.onWaitChanged?.(sessionId)
   }
 
@@ -734,10 +739,10 @@ export class SessionInputController {
    * the pane sat on the dialog looking like a hung agent, with nothing logged.
    *
    * Every other guard still applies: another writer holding the lock, a submit awaiting confirmation, a
-   * settling turn, or queued messages all still refuse; queued ones not while the message ahead of them waits for
-   * its pane to be able to send (`paneWait`), typed nowhere yet.
+   * settling turn, or queued messages all still refuse. Only pane recovery may pass queued messages while the
+   * message ahead waits for its pane to be able to send (`paneWait`), typed nowhere yet.
    */
-  acquireControl(sessionId: string, opts?: { forAnswer?: boolean }): (() => void) | null {
+  acquireControl(sessionId: string, opts?: { forAnswer?: boolean; forPaneRecovery?: boolean }): (() => void) | null {
     const session = this.controlSession(sessionId)
     if (!session) return null
     // Not while the agent changes host: what the holder typed would reach the pane being replaced. Refused
@@ -752,7 +757,7 @@ export class SessionInputController {
     const turnBlocks = state.turnOpen && !opts?.forAnswer
     const queuedTurn = state.queue.some(item => !this.correlatedComposer(item.request, session))
     if (state.controlLocked || state.cancelling || turnBlocks || state.awaitingFingerprint || state.settling
-      || !state.paneWait && (opts?.forAnswer ? queuedTurn : state.queue.length > 0)) return null
+      || !(opts?.forPaneRecovery && state.paneWait) && (opts?.forAnswer ? queuedTurn : state.queue.length > 0)) return null
     state.controlLocked = true
     let released = false
     return () => {
@@ -777,7 +782,7 @@ export class SessionInputController {
     const state = this.states.get(id)
     const injectCommand = this.deps.injectCommand
     if (!session || !injectCommand || (state?.writes && !state.paneWait)) return false
-    const release = this.acquireControl(id)
+    const release = this.acquireControl(id, { forPaneRecovery: true })
     if (!release) return false
     const ownedState = this.states.get(id)
     const sameBinding = captureSessionBinding(session)
@@ -816,6 +821,11 @@ export class SessionInputController {
       if (!state.operation.writing) void this.verifyComposer(sessionId, state, state.operation, false)
       return
     }
+    // A person's intervening turn cannot confirm the first task or discard its submission evidence.
+    if (state.firstTask && state.awaitingFingerprint === state.firstTask && fingerprint(userMessage) !== state.firstTask) {
+      state.turnOpen = true
+      return
+    }
     // An exact echo of the typed prompt needs no reading. Anything else is, for an engine whose worker
     // reads its submissions, that engine's to unwrap (Claude Code 2.1.283 records a bracketed paste inside
     // an envelope of its own), and is settled once it has; every other engine's record is compared whole.
@@ -843,7 +853,7 @@ export class SessionInputController {
     state.settleTimer = null
     state.settling = false
     state.turnOpen = true
-    this.firstTaskEnded(sessionId, state)
+    if (state.firstTask && fingerprint(userMessage) === state.firstTask) this.firstTaskEnded(sessionId, state)
     // Cursor does not clear its composer when it accepts a prompt: the submitted text stays on the "→"
     // line for the whole turn and long after it, so the terminal reads as if the question is still
     // waiting to be sent. Clearing before the NEXT paste (see inject) stops the two from running
@@ -904,6 +914,12 @@ export class SessionInputController {
     if (state.operation?.release) {
       state.turnOpen = false
       if (!state.operation.writing) void this.verifyComposer(sessionId, state, state.operation, false)
+      return
+    }
+    if (state.firstTask && state.awaitingFingerprint === state.firstTask) {
+      state.turnOpen = false
+      const session = this.controlSession(sessionId)
+      if (session) this.armSubmitCheck(sessionId, session, state)
       return
     }
     if (!state.dispatching) this.finishDelivery(sessionId, state, 'unknown', 'turn_ended_without_start')
@@ -1184,7 +1200,7 @@ export class SessionInputController {
         await write(() => this.deps.sendKey(session.agentId, 'C-u', current))
         if (!current()) { gone(); return }
       }
-      const result = await this.injectWhenLeased(state, () => write(() => {
+      const result = await this.injectWhenLeased(state, () => !!state.firstTask && state.firstTask === fingerprint(content), () => write(() => {
         if (!current()) return Promise.resolve(terminalActionNotStarted('caller_gone'))
         operation.writing = true
         operation.dispatched = true
@@ -1496,9 +1512,10 @@ export class SessionInputController {
   }
 
   private async retryOpenclaw(sessionId: string, session: RegisteredSession, state: InputState): Promise<void> {
+    const firstTask = !!state.firstTask && state.firstTask === state.awaitingFingerprint
     // A write that may have gone through is given up, but a first task's, which is never given up here: its box says
     // whether OpenClaw refused it, and an unread pane gets no Enter.
-    if (state.ambiguousDispatch && !state.firstTask) {
+    if (state.ambiguousDispatch && !firstTask) {
       this.failAmbiguousSubmission(sessionId, state)
       return
     }
@@ -1506,12 +1523,12 @@ export class SessionInputController {
     if (this.states.get(sessionId) !== state || !state.awaitingFingerprint || state.turnOpen) return
     const screen = capture ? readOpenclawScreen(capture) : null
     if (screen && screen.state !== 'ready') {
-      if (state.firstTask || (this.deps.now ?? Date.now)() - state.pastedAt < OPENCLAW_NOT_READY_MAX_MS) this.armSubmitCheck(sessionId, session, state)
+      if (firstTask || (this.deps.now ?? Date.now)() - state.pastedAt < OPENCLAW_NOT_READY_MAX_MS) this.armSubmitCheck(sessionId, session, state)
       else this.notAccepted(sessionId, session, state, `its pane could not send for ${OPENCLAW_NOT_READY_MAX_MS / 1000} s`)
       return
     }
     // A first task is never given up here: the binding pass bounds it from the agent's launch (core/agents/bind.ts).
-    if (state.retries >= SUBMIT_MAX_RETRIES && !state.firstTask) {
+    if (state.retries >= SUBMIT_MAX_RETRIES && !firstTask) {
       this.notAccepted(sessionId, session, state, `gave up after ${state.retries} retries`)
       return
     }

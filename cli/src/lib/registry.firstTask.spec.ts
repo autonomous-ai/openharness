@@ -66,6 +66,21 @@ it('taking it removes it from the file before it is returned, once', async () =>
   expect(next.registry.byAgent(row.agentId)).not.toHaveProperty('firstTask')
 })
 
+it('keeps the first task when its launch authority is withdrawn during preparation', async () => {
+  const { registry, row } = await bound()
+  const publication = await import('./sessionPublication.js')
+  const prepare = publication.prepareSessionPublication
+  let current = true
+  vi.spyOn(publication, 'prepareSessionPublication').mockImplementationOnce(async (...args) => {
+    const prepared = await prepare(...args)
+    current = false
+    return prepared
+  })
+  await expect(registry.takeFirstTask(row.agentId, { current: () => current })).rejects.toThrow()
+  expect(registry.byAgent(row.agentId)?.firstTask).toBe(TASK)
+  expect(disk()[0].firstTask).toBe(TASK)
+})
+
 it('an unbound agent keeps its task', async () => {
   const { registry, row } = await pending()
   expect((await registry.takeFirstTask(row.agentId))).toBeNull()

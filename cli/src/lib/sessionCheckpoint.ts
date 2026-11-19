@@ -165,7 +165,7 @@ export class SessionCheckpointStore {
         if (!databaseProof) throw new SessionCheckpointError('The conversation location is unavailable. The session has not been closed.')
         current()
         if (databaseProof.source === null) {
-          if (s.engine !== 'openclaw') throw new SessionCheckpointError('The conversation location is unavailable. The session has not been closed.')
+          if (s.engine !== 'openclaw' || previous) throw new SessionCheckpointError('The conversation location is unavailable. The session has not been closed.')
           saveScreen()
           return
         }
@@ -180,7 +180,7 @@ export class SessionCheckpointStore {
         current()
         await stage.verify(receipt)
         if (receipt.empty) {
-          if (s.engine !== 'openclaw') throw new SessionCheckpointError('Could not read the saved conversation. The session has not been closed.')
+          if (s.engine !== 'openclaw' || previous) throw new SessionCheckpointError('Could not read the saved conversation. The session has not been closed.')
           saveScreen()
           return
         }

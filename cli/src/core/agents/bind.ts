@@ -433,8 +433,8 @@ export function createBinding({
    * daemon that stops in between never types it twice. A pass that reads the pane again before then takes nothing. Null
    * when there is none, or when the removal could not be saved, which is said.
    */
-  const takeFirstTask = (agentId: string): Promise<string | null> =>
-    registry.afterTransaction(() => registry.takeFirstTask(agentId)).catch((error) => {
+  const takeFirstTask = (agentId: string, current: () => boolean): Promise<string | null> =>
+    registry.afterTransaction(() => current() ? registry.takeFirstTask(agentId, { current }) : null).catch((error) => {
       console.error(`[agent] ${sid(agentId)} first task kept · ${errorKind(error)}`)
       return null
     })
@@ -444,10 +444,17 @@ export function createBinding({
    * off the row already: it is said, not put back.
    */
   const handOverFirstTask = (agentId: string): void => {
+    const row = registry.byAgent(agentId)
+    if (!row?.firstTask || row.identityHold || row.launch?.state === 'failed') return
+    const selected = structuredClone(row)
+    const current = () => {
+      const latest = registry.byAgent(agentId)
+      return !latest?.identityHold && matchesLaunchReceipt(latest, selected)
+    }
     // Expected before its row lets it go: the frame reads starting from the one or the other all the way to its turn.
-    input.expectFirstTask(agentId)
-    void takeFirstTask(agentId).then((task) => {
-      if (!task) return
+    input.expectFirstTask(agentId, row.firstTask)
+    void takeFirstTask(agentId, current).then((task) => {
+      if (!task || !current()) return
       console.log(`[agent] ${sid(agentId)} first task handed over`)
       try { submitFirstTask(agentId, task) }
       catch (error) { console.error(`[agent] ${sid(agentId)} first task not typed · ${errorKind(error)}`) }
@@ -461,8 +468,11 @@ export function createBinding({
    */
   const failFirstTask = (agent: RegisteredSession): void => {
     firstTaskClock.delete(agent.agentId)
-    registry.setLaunch(agent.agentId, { state: 'failed', ...OPENCLAW_FIRST_TASK })
-    void takeFirstTask(agent.agentId)
+    const failed = registry.setLaunch(agent.agentId, { state: 'failed', ...OPENCLAW_FIRST_TASK })
+    if (failed) {
+      const selected = structuredClone(failed)
+      void takeFirstTask(agent.agentId, () => matchesLaunchReceipt(registry.byAgent(agent.agentId), selected))
+    }
     input.forget(agent.agentId)
     announceSession(agent)
     console.log(`[agent] ${sid(agent.agentId)} first task not taken · ${OPENCLAW_FIRST_TASK.error}`)
@@ -475,10 +485,12 @@ export function createBinding({
    */
   const handOverAttached = async (agentId: string): Promise<void> => {
     const row = registry.byAgent(agentId)
-    if (!row?.firstTask) return
+    if (!row?.firstTask || row.identityHold || row.launch?.state === 'failed') return
+    const selected = structuredClone(row)
     const revision = activityRevision(row.sessionId)
     const capture = await capturePane(agentId).catch(() => null)
-    if (!capture) return
+    const latest = registry.byAgent(agentId)
+    if (!capture || latest?.identityHold || !matchesLaunchReceipt(latest, selected)) return
     const screen = readOpenclawScreen(capture)
     if (screen.state === 'ready' && screen.box === '' && screen.key === row.sessionId
       && openclawPaneRead(row.sessionId, { ready: true, gatewayLost: screen.gatewayLost, running: screen.running }, capture, revision)) handOverFirstTask(agentId)
@@ -610,7 +622,8 @@ export function createBinding({
         failFirstTask(agent)
         return
       }
-      if (screen.state !== 'no-history') sessionTries.delete(agent.agentId)
+      // A hidden footer or loading frame says nothing about whether the last recovery ended.
+      if (screen.state === 'ready') sessionTries.delete(agent.agentId)
       // Told on every pass, the ones that say a state too: a pass that reads the Gateway gone is what lets the stream
       // close a turn its restart left `running`. A history that did not load is under a status line that says idle.
       const ready = screen.state === 'ready' || screen.state === 'no-history'

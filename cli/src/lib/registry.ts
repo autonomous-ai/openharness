@@ -2907,9 +2907,9 @@ class Registry {
    * The task is returned only after its removal is durable, to at most one caller. An unbound agent keeps it, as a task is
    * typed only into a session read, unless its launch failed: nothing types it then (core/agents/bind.ts `failFirstTask`).
    */
-  async takeFirstTask(agentId: string): Promise<string | null> {
+  async takeFirstTask(agentId: string, authority: RegistryAuthority = {}): Promise<string | null> {
     this.assertOpen()
-    const verify = this.ownerGuard(agentId)
+    const verify = this.ownerGuard(agentId, authority.current)
     return this.writer.run(async deadline => {
       verify()
       const row = this.agents.get(agentId)

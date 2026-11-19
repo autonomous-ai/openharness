@@ -1096,13 +1096,36 @@ describe('SessionInputController', () => {
       controller.forget('s1')
     })
 
+    it('an intervening turn leaves the first task pending and resumes its confirmation when that turn ends', async () => {
+      vi.useFakeTimers()
+      const { controller, sendKey, onError } = paneController(() => readyPane('Say hello'))
+      controller.expectFirstTask('s1', 'Say hello')
+      controller.submit('s1', 'Say hello')
+      await vi.advanceTimersByTimeAsync(1_000)
+      controller.onTurnStarted('s1', 'A different turn')
+      await vi.advanceTimersByTimeAsync(20_000)
+      expect(controller.awaitingConfirmation('s1')).toBe(true)
+      expect(controller.firstTaskWaiting('s1')).toBe(true)
+      expect(sendKey).not.toHaveBeenCalled()
+      controller.onTurnEnded('s1')
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(sendKey).toHaveBeenCalledOnce()
+      controller.onTurnStarted('s1', 'Say hello')
+      expect(controller.awaitingConfirmation('s1')).toBe(false)
+      expect(controller.firstTaskWaiting('s1')).toBe(false)
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(sendKey).toHaveBeenCalledOnce()
+      expect(onError).not.toHaveBeenCalled()
+      controller.forget('s1')
+    })
+
     it('a first task is never given up: it waits, said to the frame, until its user row confirms it', async () => {
       vi.useFakeTimers()
       let pane = startingPane()
       const { controller, sendKey, onError, onWaitChanged } = paneController(() => pane)
 
       expect(controller.firstTaskWaiting('s1')).toBe(false)
-      controller.expectFirstTask('s1')
+      controller.expectFirstTask('s1', 'Say hello')
       controller.submit('s1', 'Say hello')
       await vi.advanceTimersByTimeAsync(4 * 60_000)
       pane = readyPane()
@@ -1122,7 +1145,7 @@ describe('SessionInputController', () => {
       vi.useFakeTimers()
       const { controller, sendKey, onError, onWaitChanged } = paneController(() => null)
 
-      controller.expectFirstTask('s1')
+      controller.expectFirstTask('s1', 'Say hello')
       controller.submit('s1', 'Say hello')
       await vi.advanceTimersByTimeAsync(5 * 60_000)
       expect(sendKey).toHaveBeenCalledTimes(2)
@@ -1140,7 +1163,7 @@ describe('SessionInputController', () => {
       const { controller, inject } = paneController(() => readyPane())
       inject.mockImplementationOnce(() => new Promise<boolean>((done) => { paste = done }))
 
-      controller.expectFirstTask('s1')
+      controller.expectFirstTask('s1', 'Say hello')
       expect(controller.firstTaskWaiting('s1')).toBe(true)
       controller.submit('s1', 'Say hello')
       await vi.waitFor(() => expect(inject).toHaveBeenCalled())
@@ -1161,7 +1184,7 @@ describe('SessionInputController', () => {
       const { controller, inject, onError } = paneController(() => readyPane())
       inject.mockResolvedValueOnce(false)
 
-      controller.expectFirstTask('s1')
+      controller.expectFirstTask('s1', 'Say hello')
       controller.submit('s1', 'Say hello')
       await vi.advanceTimersByTimeAsync(5 * 60_000)
       expect(onError).toHaveBeenCalled()
@@ -1182,7 +1205,7 @@ describe('SessionInputController', () => {
         const { controller, inject, sendKey, onError } = paneController(() => pane)
         inject.mockResolvedValueOnce(maybe as never)
 
-        controller.expectFirstTask('s1')
+        controller.expectFirstTask('s1', 'Say hello')
         controller.submit('s1', 'Say hello')
         await vi.advanceTimersByTimeAsync(10_000)
         expect(sendKey.mock.calls).toEqual([['h1', 'Enter']])
@@ -1204,7 +1227,7 @@ describe('SessionInputController', () => {
         const { controller, inject, sendKey, onError } = paneController(() => pane)
         inject.mockResolvedValueOnce(maybe as never)
 
-        controller.expectFirstTask('s1')
+        controller.expectFirstTask('s1', 'Say hello')
         controller.submit('s1', 'Say hello')
         await vi.advanceTimersByTimeAsync(5 * 60_000)
         expect(sendKey).not.toHaveBeenCalled()
@@ -1218,7 +1241,7 @@ describe('SessionInputController', () => {
     it('a first task the person stops before a turn takes it waits no more', async () => {
       const { controller } = paneController(() => readyPane())
 
-      controller.expectFirstTask('s1')
+      controller.expectFirstTask('s1', 'Say hello')
       controller.submit('s1', 'Say hello')
       await vi.waitFor(() => expect(controller.awaitingConfirmation('s1')).toBe(true))
       expect(await controller.cancelConfirmed('s1')).toBe(true)
@@ -1353,6 +1376,53 @@ describe('SessionInputController', () => {
         return { controller, inject, onError, onDelivery, typed, canSend: () => { ready = true }, finishCommand: () => commandDone?.() }
       }
 
+      it('a long pane wait does not spend the following terminal lease wait', async () => {
+        vi.useFakeTimers()
+        const { controller, inject, canSend, typed, onError } = waitingPane()
+        controller.submit('s1', 'Say hello')
+        await vi.advanceTimersByTimeAsync(20_000)
+        inject.mockResolvedValueOnce({ state: 'failed', dispatch: 'not_started', reason: TERMINAL_LEASE_REFUSED })
+        canSend()
+        await vi.advanceTimersByTimeAsync(2_000)
+        expect(typed).toEqual(['Say hello'])
+        expect(onError).not.toHaveBeenCalled()
+        controller.forget('s1')
+      })
+
+      it('ordinary controls cannot jump queued messages while the pane waits', async () => {
+        vi.useFakeTimers()
+        const { controller } = waitingPane()
+        controller.submit('s1', 'Say hello', 'feature:first')
+        controller.submit('s1', 'Then this', 'feature:second')
+        await vi.advanceTimersByTimeAsync(2_000)
+        const release = controller.acquireControl('s1')
+        release?.()
+        expect(release).toBeNull()
+        controller.forget('s1')
+      })
+
+      it('an unrelated turn cannot confirm the waiting first task', async () => {
+        vi.useFakeTimers()
+        const { controller } = waitingPane()
+        controller.expectFirstTask('s1', 'Say hello')
+        controller.submit('s1', 'Say hello')
+        await vi.advanceTimersByTimeAsync(2_000)
+        controller.onTurnStarted('s1', 'A different turn')
+        expect(controller.firstTaskWaiting('s1')).toBe(true)
+        controller.forget('s1')
+      })
+
+      it('first-task patience is not lent to a different queued message', async () => {
+        vi.useFakeTimers()
+        const { controller, onError } = waitingPane()
+        controller.expectFirstTask('s1', 'Say hello')
+        controller.submit('s1', 'A different message')
+        await vi.advanceTimersByTimeAsync(181_000)
+        expect(onError).toHaveBeenCalled()
+        expect(controller.firstTaskWaiting('s1')).toBe(true)
+        controller.forget('s1')
+      })
+
       it('is typed once its pane can send, and not before', async () => {
         vi.useFakeTimers()
         const { controller, typed, onError, canSend } = waitingPane()
@@ -1416,7 +1486,7 @@ describe('SessionInputController', () => {
         vi.useFakeTimers()
         const { controller, inject, typed, onError } = waitingPane()
 
-        controller.expectFirstTask('s1')
+        controller.expectFirstTask('s1', 'Say hello')
         controller.submit('s1', 'Say hello')
         await vi.advanceTimersByTimeAsync(10 * 60_000)
         expect(onError).not.toHaveBeenCalled()

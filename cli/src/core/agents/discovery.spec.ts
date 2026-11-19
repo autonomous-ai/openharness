@@ -813,6 +813,32 @@ describe('discovery', () => {
         expect(run.deps.retainExitedSession).toHaveBeenCalledOnce()
       })
 
+      it('a failed pane capture leaves unconfirmed exit evidence unknown', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        const { capture, terminals } = paneShowing({ state: 'failed', reason: 'unavailable' })
+        const run = setup({ terminals })
+        const agent = row({ engine: 'openclaw', sessionId: '', launch: { state: 'starting' } } as Partial<RegisteredSession>)
+        run.rows.set('a1', agent)
+        capture.mockRejectedValueOnce(new Error('capture unavailable'))
+        await expect(run.handlers.onDormant(agent, 'engine exited')).resolves.toBeUndefined()
+        expect(run.deps.registry.setLaunch).not.toHaveBeenCalled()
+        expect(warn).toHaveBeenCalledWith('[discovery] a1 exit pane unreadable · Error')
+      })
+
+      it('a non-token reading cannot retire a launch that changed during capture', async () => {
+        const { capture, terminals } = paneShowing({ state: 'succeeded', value: 'some other screen' })
+        const run = setup({ terminals })
+        const agent = row({ engine: 'openclaw', sessionId: '', launch: { state: 'starting' } } as Partial<RegisteredSession>)
+        run.rows.set('a1', agent)
+        capture.mockImplementationOnce(async () => {
+          run.rows.set('a1', { ...agent, launch: { state: 'ready' } })
+          return { state: 'succeeded', value: 'some other screen' }
+        })
+        await run.handlers.onDormant(agent, 'engine exited')
+        expect(run.deps.registry.setActive).not.toHaveBeenCalled()
+        expect(run.deps.retainExitedSession).not.toHaveBeenCalled()
+      })
+
       it('changed while its pane was read is left as it is', async () => {
         const { capture, terminals } = paneShowing({ state: 'succeeded', value: tokenless })
         const run = setup({ terminals })

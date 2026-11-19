@@ -341,9 +341,12 @@ export function createDiscoveryHandlers({
     // An OpenClaw TUI whose config has no Gateway token prints so and exits, before it binds a session. Its launch
     // failed, saying what to run, and the agent stays for show to find instead of becoming a terminal.
     if (agent.engine === 'openclaw' && !agent.sessionId) {
-      const read = await backend?.capture(runtime)
+      const read = await backend?.capture(runtime).catch(error => {
+        console.warn(`[discovery] ${sid(agent.agentId)} exit pane unreadable · ${errorKind(error)}`)
+        return undefined
+      })
+      if (!current()) return
       if (read?.state === 'succeeded' && readOpenclawScreen(read.value).state === 'no-token') {
-        if (!current()) return
         const failed = registry.setLaunch(agent.agentId, { state: 'failed', error: 'OPENCLAW_NO_TOKEN', detail: OPENCLAW_STATES.noToken })
         if (failed) announceSession(failed)
         console.log(`[discovery] ${sid(agent.agentId)} failed · ${OPENCLAW_STATES.noToken}`)

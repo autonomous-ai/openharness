@@ -86,8 +86,13 @@ async function* databaseHistory(s: StorageSession & { engine: StorageEngine }, s
     firstTable = false
     let firstRow = true
     const read = paged ? pagedRows(database, table, where, s.sessionId, paged)
-      : await sqliteReadAll(database, `SELECT * FROM ${table} WHERE ${where};`, [s.sessionId]).then(result => {
-        if (s.engine === 'openclaw' && table === selections[0][0] && result.ok && result.rows.length === 0) throw new UnwrittenOpenclawHistory()
+      : await sqliteReadAll(database, `SELECT * FROM ${table} WHERE ${where};`, [s.sessionId]).then(async result => {
+        if (s.engine === 'openclaw' && table === selections[0][0] && result.ok && result.rows.length === 0) {
+          const windows = await sqliteReadAll(database, 'SELECT 1 FROM session_windows WHERE session_key = ? LIMIT 1', [s.sessionId])
+          // Selected events are joined through these windows; without any window none can belong to this key.
+          if (!windows.ok || windows.rows.length) throw new Error('checkpoint history is inconsistent')
+          throw new UnwrittenOpenclawHistory()
+        }
         if (!result.ok || (table === selections[0][0] && result.rows.length !== 1)) throw new Error('checkpoint row unavailable')
         return result.rows
       })

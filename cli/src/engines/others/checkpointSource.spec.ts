@@ -31,6 +31,7 @@ it.each(['empty', 'unreadable', 'changed', 'cancelled', 'other engine'] as const
     if (how === 'cancelled') current = false
     return how === 'unreadable' ? { ok: false, reason: 'unavailable' } as never : { ok: true, via: 'builtin', rows: [] }
   })
+  if (how === 'empty') vi.mocked(sqliteReadAll).mockResolvedValueOnce({ ok: true, via: 'builtin', rows: [] })
   const result = exportDatabase(how === 'other engine' ? 'hermes' : 'openclaw', { sessionId: 'agent:main:unwritten' }, stage, source, () => current)
   if (how === 'empty') {
     const receipt = await result
@@ -40,6 +41,12 @@ it.each(['empty', 'unreadable', 'changed', 'cancelled', 'other engine'] as const
     expect(exportReceipt({ ...receipt, bytes: 1 })).toBe(false)
     expect(exportReceipt({ ...receipt, sha256: 'a'.repeat(64) })).toBe(false)
   } else await expect(result).rejects.toThrow()
+  expect(readFileSync(stage.path, 'utf8')).toBe('')
+})
+
+it('refuses an orphaned OpenClaw window instead of claiming unwritten history', async () => {
+  vi.mocked(sqliteReadAll).mockResolvedValueOnce({ ok: true, via: 'builtin', rows: [] })
+  await expect(exportDatabase('openclaw', { sessionId: 'agent:main:wanted' }, stage, source)).rejects.toThrow()
   expect(readFileSync(stage.path, 'utf8')).toBe('')
 })
 

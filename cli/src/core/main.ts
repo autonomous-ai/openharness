@@ -1466,7 +1466,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     waitsForPane: (agentId: string): boolean => input.waitsForPane(agentId),
     firstTaskWaiting: (agentId: string): boolean => input.firstTaskWaiting(agentId),
     typeCommand: (agentId: string, line: string) => input.typeCommand(agentId, line),
-    expectFirstTask: (agentId: string) => input.expectFirstTask(agentId),
+    expectFirstTask: (agentId: string, task: string) => input.expectFirstTask(agentId, task),
   }
   // A window that connects while a message waits for its engine reads it off the agent's frame, pushed or listed. A message is
   // sent by an agent's id, or by its session's.

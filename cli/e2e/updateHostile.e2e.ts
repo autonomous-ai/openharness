@@ -217,7 +217,11 @@ class Installed {
         ...env,
       },
     })
-    await this.daemon.start()
+    try { await this.daemon.start() }
+    catch (cause) {
+      // Suite setup has no active test artifact directory. Keep its boot evidence before afterAll removes the home.
+      throw new Error(`Installed test daemon did not start:\n${this.daemon.log().slice(-12_000)}`, { cause })
+    }
     expect(await this.status()).toMatchObject({ version: first, harnessd: { masterVersion: first } })
     const client = await LocalClient.connect(this.daemon)
     try {
