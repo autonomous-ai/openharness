@@ -10,6 +10,7 @@ import { NODE_MIGRATION_FILE, failedNode, nodeMigration } from './lib/nodeMigrat
 import { launchDetached } from './lib/windows/launcher.js'
 import { PTY_PROTOCOL } from './lib/ptyHost/protocol.js'
 import type { WindowsMasterDeps } from './masterProcess.js'
+import { writeExecutable } from './testing/executableFixture.js'
 
 const runMaster = vi.hoisted(() => vi.fn((_config: Record<string, unknown>) => 'supervisor'))
 vi.mock('./harnessd/master.js', async (real) => ({ ...await real<object>(), runMaster }))
@@ -601,7 +602,7 @@ describe('starting the master', () => {
       // A paired host whose CLI build never went in: it says it speaks a protocol above this build's.
       mkdirSync(join(ptyRoot, '0.11.0'), { recursive: true })
       const host = join(ptyRoot, '0.11.0', 'harness-pty.exe')
-      writeFileSync(host, `#!/bin/sh\necho '{"version":"0.11.0","protocol":${PTY_PROTOCOL + 1},"features":["seed"]}'\n`, { mode: 0o755 })
+      writeExecutable(host, `#!/bin/sh\necho '{"version":"0.11.0","protocol":${PTY_PROTOCOL + 1},"features":["seed"]}'\n`)
       writeFileSync(join(ptyRoot, 'current-pty'), '0.11.0')
       writeFileSync(join(ptyRoot, 'pty-pending.json'), JSON.stringify({ version: '0.11.0', previous: '0.10.0' }))
       runMaster.mockClear()

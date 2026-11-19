@@ -20,6 +20,8 @@ import tempfile
 import termios
 import time
 
+import harness_home
+
 faulthandler.enable()
 faulthandler.dump_traceback_later(120, exit=True)
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,13 +57,13 @@ bind -x '"\\C-x\\C-b": _test_snapshot'
         wrapper.write_text('#!/bin/sh\n' + shlex.quote(BINARY) + ' "$@"\ncode=$?\nprintf "done\\n" >> "$HOME/done"\nexit "$code"\n')
         wrapper.chmod(0o755)
         bootstrap = (ROOT / 'src/shell_bootstrap.sh').read_text().replace('@INTEGRATION@', (ROOT / 'src/shell_integration.sh').read_text())
+        self.env = dict(HOME=str(root), SHELL=shell, PATH='/usr/bin:/bin:/usr/sbin:/sbin',
+                        TERM='xterm-256color', COLORTERM='truecolor', LANG='en_US.UTF-8',
+                        TMPDIR=str(root), _HN_CONTEXT=TOKEN, _HN_PICKER=str(wrapper), skip_global_compinit='1')
         self.pid, self.fd = pty.fork()
         if not self.pid:
             os.chdir(root)
-            env = dict(HOME=str(root), SHELL=shell, PATH='/usr/bin:/bin:/usr/sbin:/sbin',
-                       TERM='xterm-256color', COLORTERM='truecolor', LANG='en_US.UTF-8',
-                       TMPDIR=str(root), _HN_CONTEXT=TOKEN, _HN_PICKER=str(wrapper), skip_global_compinit='1')
-            os.execve('/bin/sh', ['/bin/sh', '-c', bootstrap], env)
+            os.execve('/bin/sh', ['/bin/sh', '-c', bootstrap], self.env)
         fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack('HHHH', 34, 120, 0, 0))
         self.wait(lambda: b'READY> ' in self.data, 'shell startup')
 
@@ -69,7 +71,7 @@ bind -x '"\\C-x\\C-b": _test_snapshot'
         os.write(self.fd, text.encode() if isinstance(text, str) else text)
 
     def answer(self, request_id, catalog):
-        path = self.root / '.harness/shell-requests' / TOKEN / request_id
+        path = harness_home.path(self.root, self.env, 'shell-requests') / TOKEN / request_id
         data = path.with_suffix('.json')
         try:
             if not path.exists():

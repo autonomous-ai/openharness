@@ -1,0 +1,11 @@
+diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -1,6 +1,6 @@
+ # slugline
+
+-Trun titles into URL slugs.
++Turn titles into URL slugs.
+
+ ```js
+ import { slug } from 'slugline'

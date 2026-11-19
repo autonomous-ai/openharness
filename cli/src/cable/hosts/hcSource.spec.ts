@@ -672,6 +672,169 @@ describe.skipIf(process.platform === 'win32')('the hc source (docs/plans/2026-11
     expect(reported()).toEqual([])
   })
 
+  /** hc's foreground of a terminal: the program running in it now, with that pid. */
+  const foreground = (pid: number): Partial<FakeHcTerminal> =>
+    ({ more: { foreground: { argv: ['/usr/local/bin/node'], cwd: '/work/api', name: 'node', pid } } })
+
+  it('terminalOf answers the one live terminal whose foreground is that pid, shown or not, reporting or not', async () => {
+    // The fake's foreground pids: 4242, then 4243.
+    server.terminals = [agent('t1'), agent('t2', { labels: {}, status: null })]
+    const s = setup()
+    await live(s)
+    expect(s.source.terminalOf(4242)).toBe('t1')
+    expect(s.source.terminalOf(4243)).toBe('t2')
+    expect(s.source.terminalOf(1)).toBeUndefined()
+  })
+
+  it('two terminals whose foreground is the same pid answer none', async () => {
+    server.terminals = [agent('t1', foreground(4242)), agent('t2', { labels: {}, ...foreground(4242) })]
+    const s = setup()
+    await live(s)
+    expect(s.source.terminalOf(4242)).toBeUndefined()
+    server.change('t2', foreground(5000))
+    await s.until(() => s.source.terminalOf(4242) === 't1')
+    expect(s.source.terminalOf(5000)).toBe('t2')
+  })
+
+  it('a terminal that finished or was removed answers none; a missed snapshot replaces every answer', async () => {
+    // The fake's foreground pids: 4242, 4243, 4244.
+    server.terminals = [agent('t1'), agent('t2'), agent('t3')]
+    const s = setup()
+    await live(s)
+    expect([4242, 4243, 4244].map((pid) => s.source.terminalOf(pid))).toEqual(['t1', 't2', 't3'])
+    server.change('t1', { state: 'finished' })
+    await s.until(() => row(s, 't1') === undefined)
+    expect(s.source.terminalOf(4242)).toBeUndefined()
+    server.remove('t2')
+    await s.until(() => row(s, 't2') === undefined)
+    expect(s.source.terminalOf(4243)).toBeUndefined()
+
+    // t3 is gone from hc's list with no line of its own, and another terminal runs its pid now.
+    server.terminals = [agent('t5', foreground(4244))]
+    server.missed()
+    await s.until(() => row(s, 't5') !== undefined)
+    expect(s.source.terminalOf(4244)).toBe('t5')
+  })
+
+  it('a foreground that moves tells one change though no listed row changed; nothing else is logged', async () => {
+    server.terminals = [agent('t1')]
+    const s = setup()
+    await live(s)
+    const changes = s.changes
+    const list = s.source.list()
+    const log = [...s.log]
+    server.change('t1', foreground(5000))
+    await s.until(() => s.source.terminalOf(5000) === 't1')
+    await turn()
+    expect(s.changes).toBe(changes + 1)
+    expect(s.source.list()).toEqual(list)
+    expect(s.log).toEqual(log)
+  })
+
+  it('stopped, it answers none and tells the change, though it listed no row', async () => {
+    server.terminals = [agent('t1', { labels: {} })]
+    const s = setup()
+    await live(s)
+    expect(s.source.list()).toEqual([])
+    expect(s.source.terminalOf(4242)).toBe('t1')
+    const changes = s.changes
+    s.source.stop()
+    expect(s.changes).toBe(changes + 1)
+    expect(s.source.terminalOf(4242)).toBeUndefined()
+  })
+
+  it('tabOf: the herdr.tab label of each terminal shows covers, listed or past the 64, as it changes; none for any other', async () => {
+    const tab = (id: string) => ({ labels: { 'herdr.space': 'sp0123', 'herdr.tab': id } })
+    server.terminals = [
+      agent('t7', tab('tbaaaa')),
+      agent('t8', { ...tab('tbbbbb'), status: null }),
+      // A hidden worker: the window does not show it.
+      agent('t9', { labels: { 'herdr.tab': 'tbcccc' } }),
+      // Shown, with no tab of its own.
+      agent('t10'),
+      agent('t11', { ...tab('tbdddd'), state: 'finished' }),
+      // With t7 and t10, 66 listable: t76 is past the 64.
+      ...Array.from({ length: 64 }, (_, at) => agent(`t${at + 13}`, tab('tbeeee'))),
+    ]
+    const s = setup()
+    await live(s)
+    const addresses = ['t7', 't8', 't9', 't10', 't11', 't76', 't99']
+    const tabs = () => addresses.map((address) => s.source.tabOf(address))
+    expect(tabs()).toEqual(['tbaaaa', 'tbbbbb', undefined, undefined, undefined, 'tbeeee', undefined])
+
+    // A terminal moved to another tab is matched there; one the window no longer shows has none.
+    server.change('t7', tab('tbffff'))
+    server.change('t8', { labels: { 'herdr.tab': 'tbbbbb' } })
+    await vi.waitFor(() => expect(tabs()).toEqual(['tbffff', undefined, undefined, undefined, undefined, 'tbeeee', undefined]))
+
+    s.source.stop()
+    expect(tabs()).toEqual(addresses.map(() => undefined))
+  })
+
+  // The dial's scroll presses a Claude Code terminal's own page keys, and none while it asks (herdrApp.ts).
+  it('kindOf and statusOf: the kind and hc\'s status of each terminal shows covers, listed or past the 64, as they change; none for any other', async () => {
+    server.terminals = [
+      agent('t7'),
+      agent('t8', status('working', 'codex')),
+      // Shown, its program reporting nothing.
+      agent('t9', { status: null }),
+      // A hidden worker: the window does not show it.
+      agent('t10', { labels: {} }),
+      agent('t11', { state: 'finished' }),
+      // With t7 and t8, 66 listable: t76 is past the 64.
+      ...Array.from({ length: 64 }, (_, at) => agent(`t${at + 13}`, status('blocked'))),
+    ]
+    const s = setup()
+    await live(s)
+    const addresses = ['t7', 't8', 't9', 't10', 't11', 't76', 't99']
+    const kinds = () => addresses.map((address) => s.source.kindOf(address))
+    const statuses = () => addresses.map((address) => s.source.statusOf(address))
+    expect(kinds()).toEqual(['claude', 'codex', undefined, undefined, undefined, 'claude', undefined])
+    expect(statuses()).toEqual(['idle', 'working', undefined, undefined, undefined, 'blocked', undefined])
+
+    server.change('t7', status('blocked'))
+    server.change('t8', { status: null })
+    await vi.waitFor(() => expect(statuses()).toEqual(['blocked', undefined, undefined, undefined, undefined, 'blocked', undefined]))
+    expect(kinds()).toEqual(['claude', undefined, undefined, undefined, undefined, 'claude', undefined])
+
+    s.source.stop()
+    expect(kinds()).toEqual(addresses.map(() => undefined))
+    expect(statuses()).toEqual(addresses.map(() => undefined))
+  })
+
+  // A drop keeps the rows for the retry, but hc may have changed a status meanwhile: a Claude Code that began to ask
+  // must not take the dial's keys on a status heard before the drop (herdrApp.ts).
+  it('statusOf is none from a drop until the next snapshot, which tells it again; kindOf is kept', async () => {
+    server.terminals = [agent('t7', status('working'))]
+    const s = setup()
+    await live(s)
+    expect(s.source.statusOf('t7')).toBe('working')
+    server.drop()
+    await s.until(() => s.log.at(-1) === '[herdr-app] retry · 1')
+    expect(s.source.shows('t7')).toBe(true)
+    expect(s.source.kindOf('t7')).toBe('claude')
+    expect(s.source.statusOf('t7')).toBeUndefined()
+
+    // It asked while nothing was subscribed: the next snapshot says so.
+    server.terminals[0].status = { state: 'blocked', app: 'claude-code' }
+    s.advance(1000)
+    await s.until(() => s.source.statusOf('t7') === 'blocked')
+  })
+
+  it('paneOf answers a listed agent\'s terminal, and none for another id or one that left', async () => {
+    server.terminals = [agent('t7'), agent('t8')]
+    const s = setup()
+    await live(s)
+    const left = row(s, 't7')!.id
+    expect(s.source.paneOf(left)).toBe('t7')
+    expect(s.source.paneOf(row(s, 't8')!.id)).toBe('t8')
+    expect(s.source.paneOf('nope')).toBeUndefined()
+
+    server.remove('t7')
+    await s.until(() => s.source.list().length === 1)
+    expect(s.source.paneOf(left)).toBeUndefined()
+  })
+
   it('no log line holds an address, a name, a folder or the words', async () => {
     server.terminals = Array.from({ length: 65 }, (_, at) => agent(`t${at + 1}`, { name: 'secret-name', cwd: '/work/secret-folder' }))
     const s = setup()

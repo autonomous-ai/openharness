@@ -221,7 +221,7 @@ pub fn state_dir() -> std::path::PathBuf {
     #[cfg(test)]
     return std::env::temp_dir().join(format!("hn-test-{}", std::process::id())).join("tui");
     #[allow(unreachable_code)]
-    std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".harness").join("tui")
+    crate::harness_home::harness_path(std::env::var("HOME").unwrap_or_default(), crate::harness_home::Entry::Tui)
 }
 
 /// The agent a reply is about (`agentId`).

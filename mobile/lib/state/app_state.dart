@@ -1,4 +1,6 @@
 import '../chat/chat_transcript.dart';
+import '../core/agent_command.dart';
+import '../core/agent_model_choice.dart';
 import '../core/app_version.dart';
 import '../core/client_build.dart';
 import '../core/install_source.dart';
@@ -2082,6 +2084,8 @@ class AppNotifier extends ChangeNotifier {
     unawaited(_machineCache?.clear());
     sessionPreviews.clear();
     chatConversations.clear();
+    _modelChoices.clear();
+    _commands.clear();
     agentNotices.reset();
     // The Settings row's usage figure was this account's — see [lastUsageSummary].
     lastUsageSummary.value = null;
@@ -2418,6 +2422,8 @@ class AppNotifier extends ChangeNotifier {
     _keptScreenStore?.clear();
     sessionPreviews.clear();
     chatConversations.clear();
+    _modelChoices.clear();
+    _commands.clear();
     agentNotices.reset();
     // The account's device notices go with it: the next sign-in may be another account's, and what
     // is still pending comes back from its own log once it registers.
@@ -7535,6 +7541,210 @@ class AppNotifier extends ChangeNotifier {
     _redialNow(machineId);
     await _loadMachineData(state, force: true);
     return failure;
+  }
+
+  /// The models [agentId]'s engine offers it, one row each with its name, the engine's line under it
+  /// and its efforts (`models_list` with `catalog`). Null when the machine could not say — an older
+  /// daemon answers without a catalog. Its first ask can take seconds: the machine asks the engine.
+  Future<List<AgentModelChoice>?> agentModelChoices(
+    String machineId,
+    String agentId,
+  ) async {
+    final key = '$machineId\u0000$agentId';
+    final asking = _modelChoicesAsking[key];
+    if (asking != null) return asking;
+    final ask = _askAgentModelChoices(machineId, agentId)
+        .then((choices) {
+          if (choices != null) {
+            _modelChoices
+              ..remove(key)
+              ..[key] = choices;
+            while (_modelChoices.length > _maxModelChoices) {
+              _modelChoices.remove(_modelChoices.keys.first);
+            }
+          }
+          return choices;
+        })
+        // A block, not an arrow: `remove` returns this very future, and `whenComplete` waits for a future its callback
+        // returns — the ask waited on itself and never ended.
+        .whenComplete(() {
+          _modelChoicesAsking.remove(key);
+        });
+    _modelChoicesAsking[key] = ask;
+    return ask;
+  }
+
+  /// The last list [agentModelChoices] got for [agentId], drawn the moment its sheet opens.
+  ///
+  /// ⚠️ **What made the sheet open at once rather than after seconds.** Its first ask crosses the relay and the
+  /// machine asks the engine itself; a chat asks as it opens ([prefetchAgentModelChoices]), and the sheet then reads
+  /// this and asks again behind it.
+  List<AgentModelChoice>? cachedAgentModelChoices(
+    String machineId,
+    String agentId,
+  ) => _modelChoices['$machineId\u0000$agentId'];
+
+  /// Asks for [agentId]'s models before anybody opens its sheet — once per agent, the first time its chat shows.
+  void prefetchAgentModelChoices(String machineId, String agentId) {
+    final key = '$machineId\u0000$agentId';
+    if (_modelChoices.containsKey(key) ||
+        _modelChoicesAsking.containsKey(key)) {
+      return;
+    }
+    unawaited(agentModelChoices(machineId, agentId));
+  }
+
+  /// At most this many agents' lists are kept; the oldest goes first.
+  static const _maxModelChoices = 24;
+  final Map<String, List<AgentModelChoice>> _modelChoices = {};
+  final Map<String, Future<List<AgentModelChoice>?>> _modelChoicesAsking = {};
+
+  Future<List<AgentModelChoice>?> _askAgentModelChoices(
+    String machineId,
+    String agentId,
+  ) async {
+    try {
+      final reply = await _conn(machineId).request(
+        'models_list',
+        payload: {'agentId': agentId, 'catalog': true},
+        timeout: const Duration(seconds: 30),
+      );
+      final catalog = reply['catalog'];
+      if (catalog is! List) return null;
+      return [
+        for (final row in catalog.whereType<Map>())
+          ?AgentModelChoice.fromJson(row.cast<String, dynamic>()),
+      ];
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// The `/` commands [agentId]'s engine offers (`models_list` with `commands`), for the chat's `/` list. Asked once
+  /// per agent and kept, as a person types `/` again and again; an answer with none (another engine, an older daemon,
+  /// a machine that could not ask) is asked again next time.
+  Future<List<AgentCommand>> agentCommands(String machineId, String agentId) {
+    final key = '$machineId\u0000$agentId';
+    final kept = _commands[key];
+    if (kept != null) return kept;
+    final ask = _askAgentCommands(machineId, agentId);
+    _commands
+      ..remove(key)
+      ..[key] = ask;
+    while (_commands.length > _maxModelChoices) {
+      _commands.remove(_commands.keys.first);
+    }
+    unawaited(
+      ask.then((commands) {
+        if (commands.isEmpty && identical(_commands[key], ask)) {
+          _commands.remove(key);
+        }
+      }),
+    );
+    return ask;
+  }
+
+  final Map<String, Future<List<AgentCommand>>> _commands = {};
+
+  Future<List<AgentCommand>> _askAgentCommands(
+    String machineId,
+    String agentId,
+  ) async {
+    try {
+      final reply = await _conn(machineId).request(
+        'models_list',
+        payload: {'agentId': agentId, 'commands': true},
+        timeout: const Duration(seconds: 30),
+      );
+      final commands = reply['commands'];
+      if (commands is! List) return const [];
+      return [
+        for (final row in commands.whereType<Map>())
+          ?AgentCommand.fromJson(row.cast<String, dynamic>()),
+      ];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// What [setAgentModel] says when the machine refused because the agent was not at an empty, idle prompt — the
+  /// one refusal the Model sheet offers a way past ("Clear prompt").
+  static const agentModelBusy =
+      'The agent is working, or its prompt holds unsent text.';
+
+  /// Moves [agentId] onto [model] at [effort] (`agent_update` with a runtime-v1 profile): the machine
+  /// types the engine's own `/model` and `/effort` into it and waits to see them take. Null once it
+  /// has; else the sentence to show.
+  Future<String?> setAgentModel(
+    String machineId,
+    String agentId, {
+    required String engine,
+    required String model,
+    required String effort,
+  }) async {
+    final profile =
+        'runtime-v1:${Uri.encodeComponent(agentId)}:$engine:'
+        '${Uri.encodeComponent(model)}@$effort';
+    // A refusal arrives as a thrown [WsRequestFailure] carrying the daemon's code, never as a reply.
+    String? code;
+    try {
+      await _conn(machineId).request(
+        'agent_update',
+        payload: {'agentId': agentId, 'selectedModel': profile},
+        timeout: const Duration(seconds: 45),
+      );
+    } on WsRequestFailure catch (failure) {
+      code = failure.code;
+    } catch (_) {
+      return "Couldn't reach the computer.";
+    }
+    return switch (code) {
+      null => null,
+      // The machine changes a model only at an empty, idle prompt: never over words typed and not sent, and never
+      // mid-turn. Seen on a Claude Code whose prompt still held a word typed from the phone.
+      'BUSY' => agentModelBusy,
+      'MODEL_UNAVAILABLE' => "That model isn't available here.",
+      'EFFORT_UNSUPPORTED' => "That model doesn't take this effort.",
+      'UNSUPPORTED_CLI_VERSION' => 'Update the agent to change its model here.',
+      _ => "Couldn't change the model.",
+    };
+  }
+
+  /// Starts [agentId] again under [permissionMode], the conversation carried on: saved and stopped (`agent_close`
+  /// `now`, as Change agent does), then resumed with the mode (`agent_resume`). For an engine whose terminal has no key
+  /// that changes it — Codex, OpenCode — the mode is a launch flag, and the machine refuses to change it on a live
+  /// process (`PERMISSION_CHANGE_REQUIRES_STOP`). Null once it is back; else the sentence to show.
+  Future<String?> restartAgentWithPermission(
+    String machineId,
+    String agentId,
+    String permissionMode,
+  ) async {
+    final agent = stateOf(machineId)?.agents
+        .where((a) => a.id == agentId)
+        .firstOrNull;
+    if (agent == null) return 'That harness is no longer available.';
+    if (agent.createdAt == null) return "This harness can't be restarted here.";
+    if (!agent.isStopped) {
+      final refused = await _closeAgentNow(machineId, agent);
+      if (refused != null) return refused;
+    }
+    try {
+      await _conn(machineId).request(
+        'agent_resume',
+        payload: {
+          'creationId': _newReceiptId(),
+          'agentId': agentId,
+          'permissionMode': permissionMode,
+        },
+        // The engine starts again and opens its saved conversation.
+        timeout: const Duration(seconds: 60),
+      );
+    } on WsRequestFailure catch (failure) {
+      return _resumeFailure(failure.code, failure.detail);
+    } catch (_) {
+      return "The computer didn't confirm the restart. Open the harness to check.";
+    }
+    return null;
   }
 
   /// Renames an agent via `agent_update`. Returns null on success, or an error message to show

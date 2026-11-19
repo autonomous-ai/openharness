@@ -31,15 +31,26 @@ describe('handing what Hachi started to the person', () => {
     await Promise.all([first, second])
     expect(tell).toHaveBeenCalledOnce()
     expect(t.count).toHaveBeenCalledOnce()
-    // A harness with no name is said by its id's start.
+    // A harness is said by its id's start.
     expect(t.log).toHaveBeenCalledWith('[hachi] handed far to the person: Hachi closed.')
   })
 
-  it('says a machine that could not be asked, whatever it threw, by the harness\'s id when it has no name', async () => {
+  it('says a machine that could not be asked, whatever it threw, by the harness\'s id', async () => {
     const t = setup(async () => { throw 'asleep' })
     start(t.ledger, 'far-away-harness', 'm2', '')
     await t.hand.over('hachi')
     expect(t.log).toHaveBeenCalledWith('[hachi] could not hand far-away to the person on its machine yet: asleep. Asked again at the next look.')
     expect(t.hand.handed('far-away-harness')).toBe(false)
+  })
+
+  it('says a harness by its id\'s start, never its name', async () => {
+    const t = setup(async () => { throw 'asleep' })
+    start(t.ledger, 'far-away-harness', 'm2', 'SECRET-NAME-MARKER')
+    start(t.ledger, 'near-harness', 'm1', 'SECRET-NAME-MARKER')
+    await t.hand.over('hachi')
+    expect(t.log.mock.calls).toEqual([
+      ['[hachi] could not hand far-away to the person on its machine yet: asleep. Asked again at the next look.'],
+      ['[hachi] handed near-har to the person: Hachi closed.'],
+    ])
   })
 })

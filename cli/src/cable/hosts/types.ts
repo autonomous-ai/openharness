@@ -65,12 +65,17 @@ export interface Caps {
 /** What a source's send answers: `reason` is the sentence the dial shows when it refused. */
 export type SendResult = { ok: true } | { ok: false; reason: string }
 
+/** What an adapter's `type` answers: sent (`true`), not sent (`false`), the agent is in a turn (`'busy'`) or waits on
+ *  the person (`'waiting'`) as its app says now, or a fixed sentence of the adapter's own for the dial (`refused`):
+ *  never a value from a hook or an app. */
+export type TypeResult = boolean | 'busy' | 'waiting' | { refused: string }
+
 /** What showing an agent's pane did: `busy` when words are still being typed into its terminal, or a Claude app link is
  *  still running for that agent, and then nothing ran. */
 export type PaneSwitch = 'ok' | 'failed' | 'busy'
 
 export interface HostSource {
-  /** 'harness' | 'observed' | a listing source's name (`herdr`, `herdr-app`). */
+  /** 'harness' | 'observed' | a listing source's name (`herdr`, `herdr-app`, `opencode`). */
   readonly id: string
   list(): HostAgent[]
   capabilities(agent: HostAgent): Caps

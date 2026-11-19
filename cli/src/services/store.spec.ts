@@ -17,6 +17,7 @@ const ASKER = { local: true, owner: true }
 function setup(over: Partial<StoreDeps> = {}, dataDir = '/data') {
   const deps: StoreDeps = {
     prepare: vi.fn(() => true),
+    setupAgain: vi.fn(async () => ({ done: 0, needsSetup: 0, busy: 0 })),
     refresh: vi.fn(async () => [{ id: 'acme/thing' }] as never),
     rows: vi.fn((_installed, catalog) => (catalog ?? []).map((entry: { id: string }) => ({ id: entry.id, installed: false }))),
     remove: vi.fn(() => ({ ok: true as const })),
@@ -32,6 +33,49 @@ describe('the store service', () => {
   it('prepares the release-owned harnesses before answering requests', () => {
     const { deps } = setup()
     expect(deps.prepare).toHaveBeenCalledExactlyOnceWith({ hachi: false })
+  })
+  it('sets up again what the move left, after it puts the built-ins in place', () => {
+    const order: string[] = []
+    setup({
+      prepare: vi.fn(() => { order.push('prepare'); return true }),
+      setupAgain: vi.fn(async () => { order.push('setupAgain'); return { done: 1, needsSetup: 0, busy: 0 } }),
+    })
+    expect(order).toEqual(['prepare', 'setupAgain'])
+  })
+  it('its requests do not wait for it', async () => {
+    const { requests, deps } = setup({ setupAgain: vi.fn(() => new Promise<never>(() => {})) })
+    expect(deps.setupAgain).toHaveBeenCalledOnce()
+    expect(await requests.dsh_list({}, ASKER)).toEqual({ dsh: [{ id: 'acme/thing', installed: false }] })
+  })
+  // By its code: what was thrown names the index's path, in the person's home.
+  it('says when setting them up again stops, by its code, and answers on', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const denied = Object.assign(new Error("EACCES: permission denied, open '/home/someone/.local/share/harness/dsh/installed.json'"), { code: 'EACCES' })
+      const { requests } = setup({ setupAgain: vi.fn(async () => { throw denied }) })
+      // The rejection is handled within the turn it happens in; setImmediate runs after it.
+      await new Promise((done) => setImmediate(done))
+      expect(warn).toHaveBeenCalledExactlyOnceWith('[dsh] setting harnesses up again stopped · EACCES')
+      expect(await requests.dsh_list({}, ASKER)).toEqual({ dsh: [{ id: 'acme/thing', installed: false }] })
+    } finally { warn.mockRestore() }
+  })
+
+  it('says a stop with no code by the kind of error', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      setup({ setupAgain: vi.fn(async () => { throw new SyntaxError("Unexpected token in JSON at /home/someone/.local/share/harness/dsh") }) })
+      await new Promise((done) => setImmediate(done))
+      expect(warn).toHaveBeenCalledExactlyOnceWith('[dsh] setting harnesses up again stopped · SyntaxError')
+    } finally { warn.mockRestore() }
+  })
+
+  it('says a stop that is no error at all as unknown', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      setup({ setupAgain: vi.fn(() => Promise.reject(null)) })
+      await new Promise((done) => setImmediate(done))
+      expect(warn).toHaveBeenCalledExactlyOnceWith('[dsh] setting harnesses up again stopped · unknown')
+    } finally { warn.mockRestore() }
   })
   it('puts Hachi in place when its switch turns on while it runs, and generates nothing of it while off', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'store-hachi-'))

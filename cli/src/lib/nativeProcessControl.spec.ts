@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { IdentityReadUnavailable, MISSING_HELPER, REPLACED_PROGRAM } from '../engines/kit/identityScan.js'
 import { parseDescriptors } from '../engines/kit/nativeDescriptors.js'
 import { NativeEvidenceBudget } from '../engines/kit/nativeEvidence.js'
 import { controlDescriptors, nativeProcessControl, parseNativeProcessControl } from './nativeProcessControl.js'
@@ -10,7 +11,12 @@ import { env } from '../config/env.js'
 
 const host = vi.hoisted(() => ({ root: '', exec: vi.fn(), helper: vi.fn(), before: undefined as undefined | ((operation: string, path: string) => void),
   // A filesystem lists a directory in its own order (a tmpfs, ext4's hash): CI listed task 99 before 42.
-  listDescending: false }))
+  listDescending: false,
+  // Entries a case writes, 64 at most: on a Mac flushing its drive for other tests each waited 12-25 ms, and a case
+  // writing 4,097 descriptor links took 50-77 s, past its 30 s, and removing them past afterEach's 10 s (2026-11-19).
+  writes: 0,
+  // Numbered entries a /proc directory lists past those written, so an oversized pool costs no writes.
+  listedMore: {} as Record<string, number> }))
 vi.mock('node:os', async original => ({ ...await original<object>(), platform: () => process.platform }))
 vi.mock('node:child_process', async original => ({ ...await original<object>(), execFile: host.exec }))
 vi.mock('./nativeProcessImages.js', async original => ({ ...await original<object>(), bundledProcessImageHelper: host.helper }))
@@ -18,6 +24,9 @@ vi.mock('node:fs', async original => {
   const fs = await original<typeof import('node:fs')>()
   const mapped = (path: unknown) => String(path).startsWith('/proc/') ? join(host.root, String(path).slice(1)) : path
   const result = { ...fs }
+  for (const method of ['mkdirSync', 'writeFileSync', 'symlinkSync'] as const) {
+    result[method] = ((...args: unknown[]) => { host.writes++; return Reflect.apply(fs[method], fs, args) }) as never
+  }
   for (const method of ['openSync', 'opendirSync', 'readlinkSync', 'statSync'] as const) {
     result[method] = ((path: unknown, ...args: unknown[]) => {
       host.before?.(method, String(path))
@@ -27,11 +36,13 @@ vi.mock('node:fs', async original => {
   const opendir = result.opendirSync
   result.opendirSync = ((path: unknown, ...args: unknown[]) => {
     const directory = Reflect.apply(opendir, fs, [path, ...args]) as import('node:fs').Dir
-    if (!host.listDescending) return directory
+    const more = host.listedMore[String(path)] ?? 0
+    if (!host.listDescending && !more) return directory
     const listed: import('node:fs').Dirent[] = []
     for (let next = directory.readSync(); next; next = directory.readSync()) listed.push(next)
     directory.closeSync()
-    listed.sort((a, b) => Number(b.name) - Number(a.name))
+    for (let i = 0; i < more; i++) listed.push({ name: String(1_000_000 + i) } as import('node:fs').Dirent)
+    if (host.listDescending) listed.sort((a, b) => Number(b.name) - Number(a.name))
     return { readSync: () => listed.shift() ?? null, closeSync: () => {} }
   }) as never
   return result
@@ -45,6 +56,8 @@ const record = (pid = 42) => ({ pid, parentPid: 1, startSeconds: 1_790_000_000, 
   commandHex: hex('codex'), imageHex: hex('/fixture/codex'), commandDigest: 'a'.repeat(64), fds: [regular] })
 const output = (row: unknown = record(), header: unknown = { schema: 2, mode: 'control', parent: 0, children: [] }) => `${JSON.stringify(header)}\n${JSON.stringify(row)}\n`
 const parse = (text: string) => parseNativeProcessControl(text, [42], 0, budget())
+const helperBytes = Buffer.alloc(64, 7)
+const helperArtifact = JSON.stringify({ schema: 1, size: helperBytes.length, base64: helperBytes.toString('base64'), sha256: createHash('sha256').update(helperBytes).digest('hex') })
 function file(path: string, text: string) { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text) }
 function processRow(pid = 42, parent = 1, command = 'codex', ticks = 100) {
   const root = join(host.root, 'proc', String(pid))
@@ -56,13 +69,18 @@ function processRow(pid = 42, parent = 1, command = 'codex', ticks = 100) {
 }
 beforeEach(() => {
   host.root = realpathSync(mkdtempSync(join(tmpdir(), 'native-control-')))
-  host.before = undefined; host.exec.mockReset(); host.helper.mockReset().mockResolvedValue({ path: '/fixture/native-helper', key: 'fixture' })
+  host.before = undefined; host.writes = 0; host.listedMore = {}; host.exec.mockReset(); host.helper.mockReset().mockResolvedValue({ path: '/fixture/native-helper', key: 'fixture' })
   Object.defineProperty(process, 'platform', { ...platform, value: 'darwin' })
   host.exec.mockImplementation((_path, _args, _options, callback) => callback(null, Buffer.from(output()), Buffer.alloc(0)))
 })
-afterEach(() => { Object.defineProperty(process, 'platform', platform); env.ADAPTER_RUNTIME_DIR = originalRuntime; vi.restoreAllMocks(); vi.unstubAllGlobals(); rmSync(host.root, { recursive: true, force: true }) })
+afterEach(() => {
+  Object.defineProperty(process, 'platform', platform); env.ADAPTER_RUNTIME_DIR = originalRuntime; vi.restoreAllMocks(); vi.unstubAllGlobals(); rmSync(host.root, { recursive: true, force: true })
+  expect(host.writes).toBeLessThanOrEqual(64)
+})
 
 describe('strict Darwin control protocol', () => {
+  // A build that bundles a valid helper; the helper's preparation and execution are faked per test.
+  beforeEach(() => { vi.stubGlobal('__DARWIN_PROCESS_IMAGES__', helperArtifact) })
   it('retains exact birth, image, command digest and lossless file keys without argv/environment text', () => {
     const snapshot = parse(output()), row = snapshot.rows.get(42)!
     expect(row).toMatchObject({ pid: 42, birth: '1790000000:123456', command: 'codex', imagePath: '/fixture/codex', commandDigest: 'a'.repeat(64) })
@@ -113,11 +131,14 @@ describe('strict Darwin control protocol', () => {
   it('names a live process whose program was replaced on disk, and only that, when the probe fails', async () => {
     const live = process.pid, gone = 2_000_000_000
     const paths = (pid: number) => `${JSON.stringify({ schema: 1, mode: 'paths' })}\n${JSON.stringify({ pid, unavailable: true })}\n`
-    for (const [pid, expected] of [[live, 'replaced on disk'], [gone, 'probe did not complete']] as const) {
+    for (const [pid, expected] of [[live, { message: REPLACED_PROGRAM }], [gone, 'probe did not complete']] as const) {
       host.exec.mockImplementation((_path, args, _options, callback) => args[0] === '--paths'
         ? callback(null, paths(pid), '')
         : callback(Object.assign(Error('exit 75'), { code: 75 }), Buffer.alloc(0), Buffer.alloc(0)))
-      await expect(nativeProcessControl([pid], 0, budget())).rejects.toThrow(expected)
+      const read = nativeProcessControl([pid], 0, budget())
+      await expect(read).rejects.toBeInstanceOf(IdentityReadUnavailable)
+      if (typeof expected === 'string') await expect(read).rejects.toThrow(expected)
+      else await expect(read).rejects.toMatchObject(expected)
       expect(host.exec.mock.calls.at(-1)?.[1]).toEqual(['--paths', String(pid)])
     }
     host.exec.mockClear().mockImplementation((_path, _args, _options, callback) => callback(null, Buffer.from(output({ ...record(), imageHex: 'zz' })), Buffer.alloc(0)))
@@ -134,6 +155,20 @@ describe('strict Darwin control protocol', () => {
     await expect(nativeProcessControl([42], 0, new NativeEvidenceBudget(10))).rejects.toThrow('unavailable')
     host.exec.mockImplementationOnce(() => { throw Error('spawn denied') })
     await expect(nativeProcessControl([42], 0, budget())).rejects.toThrow('could not start')
+  })
+  it('holds a build with no usable helper with the person\'s sentence, at once', async () => {
+    vi.unstubAllGlobals()
+    const read = nativeProcessControl([42], 0, budget())
+    await expect(read).rejects.toBeInstanceOf(IdentityReadUnavailable)
+    await expect(read).rejects.toMatchObject({ message: MISSING_HELPER })
+    expect(host.helper).not.toHaveBeenCalled()
+    expect(host.exec).not.toHaveBeenCalled()
+  })
+  it('keeps a valid helper that could not be prepared as the transient reason', async () => {
+    host.helper.mockResolvedValueOnce(null)
+    const read = nativeProcessControl([42], 0, budget())
+    await expect(read).rejects.toThrow('the native control helper is unavailable')
+    await expect(read).rejects.not.toMatchObject({ message: MISSING_HELPER })
   })
   it('recovers an evicted helper from pinned bytes using only control calls', async () => {
     const bytes = Buffer.alloc(64, 7)
@@ -230,9 +265,9 @@ describe('joined Linux control proof', () => {
     file(join(host.root, 'proc/42/cmdline'), 'c'.repeat(65_537))
     await expect(nativeProcessControl([42], 0, budget())).rejects.toThrow('byte limit')
     file(join(host.root, 'proc/42/cmdline'), 'codex\0')
-    for (let i = 100; i < 228; i++) file(join(host.root, 'proc/42/task', String(i), 'children'), '')
+    host.listedMore['/proc/42/task'] = 128 // With task 42, one past the limit.
     await expect(nativeProcessControl([42], 42, budget())).rejects.toThrow('directory pool')
-    for (let i = 0; i < 4097; i++) symlinkSync('pipe:[1]', join(host.root, 'proc/42/fd', String(i)))
+    host.listedMore['/proc/42/fd'] = 4097
     await expect(nativeProcessControl([42], 0, budget())).rejects.toThrow('directory pool')
   })
 })

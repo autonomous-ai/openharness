@@ -36,7 +36,7 @@ fn view(shared: tauri::State<Shared>) -> Option<View> {
     shared.view.lock().unwrap().clone()
 }
 
-/// An action that is not one of the six never gets here: its JSON does not parse.
+/// An action that is not one of the five never gets here: its JSON does not parse.
 #[tauri::command]
 fn act(action: Action, shared: tauri::State<Shared>) {
     let _ = shared.events.send(Event::Act(action));
@@ -60,7 +60,7 @@ fn main() {
             }
         })
         .build(tauri::generate_context!())
-        .expect("Harness Device could not start");
+        .expect("Harness could not start");
     // Decision 3: no Dock icon. Set before the event loop runs: in `setup`, macOS has already made the app Regular and
     // the window is made, so the Dock icon shows for a moment at each launch.
     #[cfg(target_os = "macos")]
@@ -106,7 +106,7 @@ fn start(handle: &AppHandle, events: Sender<Event>, queue: Receiver<Event>) -> t
     TrayIconBuilder::with_id(TRAY)
         .icon(tauri::include_image!("icons/tray.png"))
         .icon_as_template(true)
-        .tooltip("Harness Device")
+        .tooltip("Harness")
         .on_menu_event(move |_, event| {
             if let Some(action) = menu_action(event.id().as_ref()) {
                 let _ = chosen.send(Event::Menu(action));
@@ -286,6 +286,7 @@ fn menu_id(action: MenuAction) -> &'static str {
     match action {
         MenuAction::Install => "install",
         MenuAction::SignIn => "sign_in",
+        MenuAction::Orca => "orca",
         MenuAction::SoundOn => "sound_on",
         MenuAction::SoundOff => "sound_off",
         MenuAction::NotifyFull => "notify_full",
@@ -294,12 +295,13 @@ fn menu_id(action: MenuAction) -> &'static str {
         MenuAction::OpenHarness => "open_harness",
         MenuAction::About => "about",
         MenuAction::Quit => "quit",
+        MenuAction::ExportLogs => "export_logs",
     }
 }
 
 fn menu_action(id: &str) -> Option<MenuAction> {
     use MenuAction::*;
-    [Install, SignIn, SoundOn, SoundOff, NotifyFull, NotifyYou, Update, OpenHarness, About, Quit]
+    [Install, SignIn, Orca, SoundOn, SoundOff, NotifyFull, NotifyYou, Update, OpenHarness, About, Quit, ExportLogs]
         .into_iter()
         .find(|action| menu_id(*action) == id)
 }
@@ -310,19 +312,34 @@ mod tests {
     use harness_device::types::{Phase, Screen};
 
     fn view(screen: Screen, phase: Phase, lines: &[&str]) -> View {
-        View { screen, phase, lines: lines.iter().map(|line| line.to_string()).collect() }
+        View { screen, phase, lines: lines.iter().map(|line| line.to_string()).collect(), update: false }
     }
 
     #[test]
     fn every_menu_action_has_its_own_id() {
         use MenuAction::*;
-        let actions = [Install, SignIn, SoundOn, SoundOff, NotifyFull, NotifyYou, Update, OpenHarness, About, Quit];
+        let actions = [
+            Install,
+            SignIn,
+            Orca,
+            SoundOn,
+            SoundOff,
+            NotifyFull,
+            NotifyYou,
+            Update,
+            OpenHarness,
+            About,
+            Quit,
+            ExportLogs,
+        ];
         for action in actions {
             assert_eq!(menu_action(menu_id(action)), Some(action));
         }
         let ids: std::collections::HashSet<_> = actions.into_iter().map(menu_id).collect();
-        assert_eq!(ids.len(), 10);
+        assert_eq!(ids.len(), 12);
         assert_eq!(menu_id(About), "about");
+        assert_eq!(menu_id(ExportLogs), "export_logs");
+        assert_eq!(menu_id(Orca), "orca");
         assert_eq!(menu_id(NotifyFull), "notify_full");
         assert_eq!(menu_id(NotifyYou), "notify_you");
         assert_eq!(menu_action("sound"), None);

@@ -11,6 +11,11 @@ describe('parseObservedHook', () => {
     expect(parseObservedHook(full)).toEqual(full)
   })
 
+  // Codex's interrupt, and Claude Code's subagents, which keep a lead outside a pane working (hook/notify.mjs).
+  it.each(['turn-aborted', 'subagent-start', 'subagent-stop'])('parses %s', (event) => {
+    expect(parseObservedHook({ ...full, event })).toEqual({ ...full, event })
+  })
+
   it('parses an event without the optional fields', () => {
     expect(parseObservedHook({ engine: 'codex', sessionId: 's', event: 'session-start', callerPid: 1, hostHints: {} }))
       .toEqual({ engine: 'codex', sessionId: 's', event: 'session-start', callerPid: 1, hostHints: {} })
@@ -118,7 +123,8 @@ describe('parseObservedHook: relayed', () => {
   })
 
   const others = [
-    ...['session-start', 'needs-input', 'turn-stop', 'turn-error', 'session-end'].map((event) => ({ ...full, event })),
+    ...['session-start', 'needs-input', 'turn-stop', 'turn-error', 'session-end', 'turn-aborted', 'subagent-start', 'subagent-stop']
+      .map((event) => ({ ...full, event })),
     { engine: 'claude', sessionId: 's1', event: 'asked' },
   ]
   it.each(others.flatMap((body) => [true, false].map((relayed) => [body.event, relayed, body] as const)))(
@@ -179,7 +185,8 @@ describe('parseObservedHook: title', () => {
     })
 
   const others = [
-    ...['needs-input', 'turn-stop', 'turn-error', 'session-end'].map((event) => ({ ...full, event })),
+    ...['needs-input', 'turn-stop', 'turn-error', 'session-end', 'turn-aborted', 'subagent-start', 'subagent-stop']
+      .map((event) => ({ ...full, event })),
     { engine: 'claude', sessionId: 's1', event: 'asked' },
   ]
   it.each(others.map((body) => [body.event, body] as const))('rejects a title on %s', (_event, body) => {

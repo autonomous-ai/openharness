@@ -140,7 +140,7 @@ for (const engine of HARNESS_ENGINES) it(`${engine}: prepare → spawn → tool 
   const run = (launchEnv: Record<string, string>) => execFileSync(process.execPath, [fixture], { cwd: workspace, env: { PATH: process.env.PATH, ...launchEnv } })
   let recorded: Record<string, unknown> | undefined
   const created = await createAndRegisterPane({ engine, cwd: workspace, sessionLabel: 'created',
-    argv: [process.execPath, fixture], env: launch.env, dsh: pkg.id, dshRuntime: 'created',
+    argv: () => [process.execPath, fixture], env: launch.env, dsh: pkg.id, dshRuntime: 'created',
     tmuxBackend: { create: async input => { run(input.env!); return { state: 'succeeded', dispatch: 'executed', runtime: { backend: 'tmux', paneId: '%1' } } }, kill: async () => ({ state: 'succeeded', dispatch: 'executed' }) },
     registry: { openPendingAgent: async input => { recorded = input; return { ...input, agentId: 'registered' } as RegisteredSession } } })
   expect(created.ok).toBe(true)

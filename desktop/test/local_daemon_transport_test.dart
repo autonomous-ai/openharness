@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/api/api_client.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
+import 'package:harness/core/harness_home.dart';
 import 'package:harness/ws/daemon_pipe_record.dart' show defaultDaemonDataDir;
 import 'package:harness/ws/local_cli_discovery.dart';
 import 'package:harness/ws/local_daemon_transport.dart';
@@ -117,6 +118,13 @@ void main() {
   );
 
   group('defaultDaemonSocketPath', () {
+    /// macOS: the rule must not look.
+    final offLinux = HomeLook(
+      linux: false,
+      environment: const {},
+      exists: (path) => throw StateError('looked at $path off Linux'),
+    );
+
     test('uses USERPROFILE when a Windows shell also sets HOME', () {
       expect(
         defaultDaemonDataDir(
@@ -129,7 +137,7 @@ void main() {
 
     test('is the socket for the daemon\'s port in the CLI data directory', () {
       expect(
-        defaultDaemonSocketPath(18473, environment: {'HOME': '/Users/me'}, isWindows: false),
+        defaultDaemonSocketPath(18473, environment: {'HOME': '/Users/me'}, isWindows: false, look: offLinux),
         '/Users/me/.harness/cli/data/daemon-18473.sock',
       );
       // Another port, another daemon, another socket.
@@ -149,6 +157,7 @@ void main() {
           18473,
           environment: {'HOME': '/h', 'ADAPTER_DATA_DIR': '/${'x' * 100}'},
           isWindows: false,
+          look: offLinux,
         ),
         matches(RegExp(r'^/h/\.harness/s/[0-9a-f]{16}/daemon-18473\.sock$')),
       );
@@ -165,8 +174,109 @@ void main() {
           1,
           environment: {'HOME': '/h', 'ADAPTER_DATA_DIR': '/${'x' * 100}'},
           isWindows: false,
+          look: offLinux,
         ),
         '/h/.harness/s/e50e7828cbafcbee/daemon-1.sock',
+      );
+    });
+
+    test('the short socket folder is under the state root', () {
+      expect(
+        defaultDaemonSocketPath(
+          1,
+          environment: {'HOME': '/h', 'ADAPTER_DATA_DIR': '/${'x' * 100}'},
+          isWindows: false,
+          look: HomeLook(
+            linux: true,
+            environment: const {},
+            exists: (path) => path == '/h/.local/share/harness',
+          ),
+        ),
+        '/h/.local/state/harness/s/e50e7828cbafcbee/daemon-1.sock',
+      );
+    });
+
+    group('a long folder\'s socket on Linux', () {
+      late Directory scratch;
+      late String runtime;
+      final long = '/${'x' * 100}';
+
+      setUp(() {
+        // Short, so the socket under it fits.
+        scratch = Directory('/tmp').createTempSync('rt');
+        runtime = '${scratch.path}/run';
+        Directory(runtime).createSync();
+        Process.runSync('chmod', ['700', runtime]);
+      });
+      tearDown(() => scratch.deleteSync(recursive: true));
+
+      String? socket(String? runtimeDir, {bool linux = true}) =>
+          defaultDaemonSocketPath(
+            1,
+            environment: {'HOME': '/h', 'ADAPTER_DATA_DIR': long},
+            isWindows: false,
+            look: HomeLook(
+              linux: linux,
+              environment: {'XDG_RUNTIME_DIR': ?runtimeDir},
+              exists: (path) => false,
+            ),
+          );
+
+      test('is in XDG_RUNTIME_DIR, by the CLI\'s hash, while it is the account\'s own 0700 folder', () {
+        expect(socket(runtime), '$runtime/harness/e50e7828cbafcbee/daemon-1.sock');
+        expect(socket('$runtime/'), '$runtime/harness/e50e7828cbafcbee/daemon-1.sock');
+      });
+
+      test('a long home\'s default data folder has the hash every client pins', () {
+        // The same example as store/'s and hn's daemon.rs tests.
+        final home = '/home/${'u' * 80}';
+        expect(
+          defaultDaemonSocketPath(
+            18473,
+            environment: {'HOME': home},
+            isWindows: false,
+            look: HomeLook(
+              linux: true,
+              environment: {'XDG_RUNTIME_DIR': runtime},
+              exists: (path) => false,
+            ),
+          ),
+          '$runtime/harness/410894cc1bc77e10/daemon-18473.sock',
+        );
+      });
+
+      test('is in the state root when XDG_RUNTIME_DIR is unset, relative, open to others or a link', () {
+        const state = '/h/.local/state/harness/s/e50e7828cbafcbee/daemon-1.sock';
+        expect(socket(null), state);
+        expect(socket('run'), state);
+        expect(socket('${scratch.path}/none'), state);
+        final link = Link('${scratch.path}/link')..createSync(runtime);
+        expect(socket(link.path), state);
+        Process.runSync('chmod', ['750', runtime]);
+        expect(socket(runtime), state);
+      });
+
+      test('is never there off Linux', () {
+        expect(
+          socket(runtime, linux: false),
+          '/h/.harness/s/e50e7828cbafcbee/daemon-1.sock',
+        );
+      });
+    }, skip: Platform.isWindows);
+
+    test('the data folder is found by the same look as the short one', () {
+      expect(
+        defaultDaemonSocketPath(
+          1,
+          environment: {'HOME': '/h'},
+          isWindows: false,
+          look: HomeLook(
+            linux: true,
+            environment: const {},
+            exists: (path) => path == '/h/.local/share/harness',
+          ),
+        ),
+        '/h/.local/share/harness/cli/data/daemon-1.sock',
       );
     });
 
@@ -178,6 +288,34 @@ void main() {
       );
       expect(path, isNotNull);
       expect(File(path!).existsSync(), isFalse);
+    });
+
+    test('the data folder and the short one come from one look, even while the folder moves', () {
+      // The data root is there at the first look and gone at the next.
+      var asked = 0;
+      final dataRoot = '/${'d' * 80}/harness';
+      final path = defaultDaemonSocketPath(
+        1,
+        environment: {'HOME': '/h', 'XDG_DATA_HOME': '/${'d' * 80}', 'XDG_STATE_HOME': '/s'},
+        isWindows: false,
+        look: HomeLook(
+          linux: true,
+          environment: {'XDG_DATA_HOME': '/${'d' * 80}', 'XDG_STATE_HOME': '/s'},
+          exists: (path) => path == '$dataRoot/.harness-root'
+              ? ++asked == 1
+              : path == '/h/.harness',
+        ),
+      );
+      expect(path, matches(RegExp(r'^/s/harness/s/[0-9a-f]{16}/daemon-1\.sock$')));
+    });
+
+    test('the socket is looked for again at each use, so a move is followed', () {
+      var where = '/a/daemon-1.sock';
+      final transport = LocalDaemonTransport(candidate: () => where)..useSocket();
+      expect(transport.socketPath, '/a/daemon-1.sock');
+      where = '/b/daemon-1.sock';
+      transport.useSocket();
+      expect(transport.socketPath, '/b/daemon-1.sock');
     });
 
     test('is never looked for under flutter test', () {
@@ -212,7 +350,7 @@ void main() {
       final tcp = await start(_Daemon.tcp());
       final unix = await start(_Daemon.unix(socketPath));
       final transport = LocalDaemonTransport(
-        candidate: socketPath,
+        candidate: () => socketPath,
         credential: () => credential,
       )..useSocket();
       final api = ApiClient(
@@ -248,7 +386,7 @@ void main() {
 
     test('is not offered to a port while a socket can exist', () {
       final transport = LocalDaemonTransport(
-        candidate: socketPath,
+        candidate: () => socketPath,
         credential: () => credential,
       );
       expect(transport.portAllowed, isFalse);
@@ -285,7 +423,7 @@ void main() {
     test('asks the socket first and keeps the port untouched', () async {
       final tcp = await start(_Daemon.tcp());
       await start(_Daemon.unix(socketPath));
-      final transport = LocalDaemonTransport(candidate: socketPath);
+      final transport = LocalDaemonTransport(candidate: () => socketPath);
       final endpoint = await LocalCliDiscovery(
         config: configFor(tcp),
         identity: LocalMachineIdentity(computerIdFile: identityFile),
@@ -303,7 +441,7 @@ void main() {
       // The port's listener stands for another account: after a reboot it holds the
       // port until this user logs in, and could answer anything (audit H1).
       final tcp = await start(_Daemon.tcp());
-      final transport = LocalDaemonTransport(candidate: socketPath)..useSocket();
+      final transport = LocalDaemonTransport(candidate: () => socketPath)..useSocket();
       final endpoint = await LocalCliDiscovery(
         config: configFor(tcp),
         identity: LocalMachineIdentity(computerIdFile: identityFile),
@@ -334,7 +472,7 @@ void main() {
     test('goes over the socket, and fails as a daemon that is down once it is gone', () async {
       final tcp = await start(_Daemon.tcp());
       final unix = await start(_Daemon.unix(socketPath));
-      final transport = LocalDaemonTransport(candidate: socketPath)..useSocket();
+      final transport = LocalDaemonTransport(candidate: () => socketPath)..useSocket();
       final api = ApiClient(
         config: configFor(tcp),
         session: AuthSession(),
@@ -389,7 +527,7 @@ void main() {
           socket.destroy();
         });
       });
-      final transport = LocalDaemonTransport(candidate: socketPath)..useSocket();
+      final transport = LocalDaemonTransport(candidate: () => socketPath)..useSocket();
       final api = ApiClient(
         config: configFor(tcp),
         session: AuthSession(),
@@ -407,7 +545,7 @@ void main() {
       final tcp = await start(_Daemon.tcp());
       final other = await start(_Daemon.tcp());
       final unix = await start(_Daemon.unix(socketPath));
-      final transport = LocalDaemonTransport(candidate: socketPath)..useSocket();
+      final transport = LocalDaemonTransport(candidate: () => socketPath)..useSocket();
       final dio = Dio()
         ..httpClientAdapter = LocalDaemonHttpAdapter(
           transport,
@@ -446,7 +584,7 @@ void main() {
     test('dials the socket when discovery chose it', () async {
       final tcp = await start(_Daemon.tcp());
       final unix = await start(_Daemon.unix(socketPath));
-      final conn = connFor(tcp, LocalDaemonTransport(candidate: socketPath)..useSocket());
+      final conn = connFor(tcp, LocalDaemonTransport(candidate: () => socketPath)..useSocket());
       addTearDown(conn.close);
       await conn.connect();
       await until(() => unix.selects > 0);
@@ -461,7 +599,7 @@ void main() {
       // port; the next connect must still find the socket the new daemon made.
       final tcp = await start(_Daemon.tcp());
       final unix = await start(_Daemon.unix(socketPath));
-      final transport = LocalDaemonTransport(candidate: socketPath)..useTcp();
+      final transport = LocalDaemonTransport(candidate: () => socketPath)..useTcp();
       final conn = connFor(tcp, transport);
       addTearDown(conn.close);
       await conn.connect();
@@ -473,7 +611,7 @@ void main() {
 
     test('never dials the port when the socket is not there', () async {
       final tcp = await start(_Daemon.tcp());
-      final transport = LocalDaemonTransport(candidate: socketPath)..useSocket();
+      final transport = LocalDaemonTransport(candidate: () => socketPath)..useSocket();
       final conn = connFor(tcp, transport);
       addTearDown(conn.close);
       await conn.connect();

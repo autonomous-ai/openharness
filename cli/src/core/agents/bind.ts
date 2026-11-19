@@ -386,8 +386,11 @@ export function createBinding({
       if (!current()) return false
       const reason = error instanceof Error ? error.message : String(error)
       const set = registry.setIdentityHold(agent.agentId, reason)
-      if (set) announceSession(agent)
-      console.log(`[discovery] ${sid(agent.agentId)} binding held · ${reason}`)
+      // Said when the row changes, not on every pass: a hold only the person can clear lasts hours.
+      if (set) {
+        announceSession(agent)
+        console.log(`[discovery] ${sid(agent.agentId)} binding held · ${reason}`)
+      }
       return set
     }
     const commit = async (input: Parameters<typeof registry.register>[0]) => {
@@ -559,8 +562,10 @@ export function createBinding({
         })
         // A new session is a switch, said once the registry took it: one it refuses (a resume that reopened another
         // conversation) is tried again in the repair's rhythm, and is no switch; a resumed one confirmed is none either.
-        if (!rotated?.isNew) return
-        console.log(`[discovery] ${sid(agent.agentId)} switched hermes session ${sid(was)} → ${sid(answer.sessionId)}`)
+        if (!rotated) return
+        if (rotated.isNew) console.log(`[discovery] ${sid(agent.agentId)} switched hermes session ${sid(was)} → ${sid(answer.sessionId)}`)
+        // A confirmed one is followed all the same, as a hook's re-register is: the confirmation binds the row (`boundAt`),
+        // and the attach the resume started for the unbound row gives up on a binding that moved on (attach.ts).
         followRegistered(rotated.entry, rotated)
         return
       }

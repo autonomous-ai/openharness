@@ -25,6 +25,7 @@ const heading = () => page().querySelector('h1')?.textContent ?? null
 const text = () => page().textContent ?? ''
 const buttons = () => [...page().querySelectorAll('button')].map((b) => b.textContent)
 const spinner = () => page().querySelector('[role="status"]')
+const grants = () => [...page().querySelectorAll('li')].map((item) => item.textContent)
 
 function click(label: string): void {
   const button = [...page().querySelectorAll('button')].find((b) => b.textContent === label)
@@ -57,10 +58,39 @@ describe('screens', () => {
     expect(buttons()).toEqual([])
   })
 
+  it('install: the step under the spinner', async () => {
+    const step = () => page().querySelector('.body.muted')?.textContent ?? null
+    await mount(at('install', 'working', ['Installing tmux…']))
+    expect(spinner()).not.toBeNull()
+    expect(step()).toBe('Installing tmux…')
+
+    push(at('install', 'working', ['Downloading Harness…', 'a second line']))
+    expect(step()).toBe('Downloading Harness…')
+    expect(text()).not.toContain('a second line')
+
+    push(at('install', 'working'))
+    expect(spinner()).not.toBeNull()
+    expect(page().querySelectorAll('.content > *')).toHaveLength(2)
+  })
+
+  it('install: the spinner is named by the heading and the step', async () => {
+    // The text of each element the spinner's aria-labelledby names, as a screen reader reads it.
+    const name = () =>
+      (spinner()?.getAttribute('aria-labelledby') ?? '')
+        .split(' ')
+        .map((id) => document.getElementById(id)?.textContent)
+        .join(' ')
+    await mount(at('install', 'working', ['Installing tmux…']))
+    expect(name()).toBe('Setting up Harness Installing tmux…')
+
+    push(at('install', 'working'))
+    expect(name()).toBe('Setting up Harness')
+  })
+
   it('sign-in: offer, browser, done', async () => {
     await mount(at('sign_in', 'offer'))
     expect(heading()).toBe('Sign in')
-    expect(text()).toContain('Add your other computers to the dial.')
+    expect(text()).toContain('Add your other computers to your device.')
     expect(buttons()).toEqual(['Later', 'Sign in'])
     click('Sign in')
     expect(act).toHaveBeenCalledWith('sign_in')
@@ -123,6 +153,10 @@ describe('screens', () => {
       ['sign_in', 'working', null],
       ['sign_in', 'browser', null],
       ['sign_in', 'failed', 'Retry'],
+      ['orca', 'asking', null],
+      ['orca', 'approve', 'Connect'],
+      ['orca', 'done', 'Done'],
+      ['orca', 'failed', null],
     ]
     await mount(null)
     for (const [screen, phase, label] of table) {
@@ -142,6 +176,10 @@ describe('screens', () => {
     expect(text()).toContain(outside)
 
     push(at('sign_in', 'failed', [outside]))
+    expect(page().querySelector('img')).toBeNull()
+    expect(text()).toContain(outside)
+
+    push(at('install', 'working', [outside]))
     expect(page().querySelector('img')).toBeNull()
     expect(text()).toContain(outside)
   })
@@ -164,7 +202,7 @@ describe('screens', () => {
 
     push(at('sign_in', 'offer'))
     expect(alert()).toBeNull()
-    expect(described()).toBe('Add your other computers to the dial.')
+    expect(described()).toBe('Add your other computers to your device.')
   })
 
   it('the primary button has the focus, and no other', async () => {
@@ -179,5 +217,103 @@ describe('screens', () => {
     expect(document.activeElement?.textContent).not.toBe('Cancel')
     push(at('sign_in', 'browser', ['Harness is finishing an update']))
     expect(document.activeElement?.textContent).not.toBe('Cancel')
+  })
+
+  it('orca: asking, the grants, Connect, done', async () => {
+    await mount(at('orca', 'asking', ['Asking Orca…']))
+    expect(heading()).toBe('Connect Orca')
+    expect(spinner()).not.toBeNull()
+    expect(text()).toContain('Asking Orca…')
+    expect(buttons()).toEqual([])
+
+    push(at('orca', 'approve', ['Runs its own code.', 'Read your projects.']))
+    expect(heading()).toBe('Connect Orca')
+    expect(spinner()).toBeNull()
+    expect(text()).toContain('Orca will let Harness Device:')
+    expect(grants()).toEqual(['Runs its own code.', 'Read your projects.'])
+    expect(buttons()).toEqual(['Cancel', 'Connect'])
+    click('Connect')
+    expect(act).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(act).mock.calls).toEqual([['connect_orca']])
+
+    push(at('orca', 'done'))
+    expect(heading()).toBe('Connect Orca')
+    expect(text()).toContain('Orca connected.')
+    expect(buttons()).toEqual(['Done'])
+    click('Done')
+    expect(act).toHaveBeenLastCalledWith('cancel')
+  })
+
+  it('orca: Cancel sends cancel', async () => {
+    await mount(at('orca', 'approve', ['Runs its own code.']))
+    click('Cancel')
+    expect(vi.mocked(act).mock.calls).toEqual([['cancel']])
+  })
+
+  it('orca: an update says so', async () => {
+    const update = (phase: Phase, lines: string[] = []): View => ({ ...at('orca', phase, lines), update: true })
+    await mount(update('asking', ['Asking Orca…']))
+    expect(heading()).toBe('Update Orca connection')
+
+    push(update('approve', ['Runs its own code.']))
+    expect(heading()).toBe('Update Orca connection')
+    expect(buttons()).toEqual(['Cancel', 'Update'])
+    click('Update')
+    expect(vi.mocked(act).mock.calls).toEqual([['connect_orca']])
+
+    push(update('done'))
+    expect(heading()).toBe('Update Orca connection')
+
+    push(update('failed', ["Couldn't connect Orca."]))
+    expect(heading()).toBe('Update Orca connection')
+  })
+
+  it('orca: a failure is one line and Close', async () => {
+    await mount(at('orca', 'failed', ["Orca isn't running."]))
+    expect(heading()).toBe('Connect Orca')
+    expect(page().querySelector('[role="alert"]')?.textContent).toBe("Orca isn't running.")
+    expect(page().querySelector('.error')?.textContent).toBe("Orca isn't running.")
+    expect(buttons()).toEqual(['Close'])
+    click('Close')
+    expect(vi.mocked(act).mock.calls).toEqual([['cancel']])
+  })
+
+  it('orca: no button has the focus', async () => {
+    await mount(null)
+    const phases: [Phase, string[]][] = [
+      ['asking', ['Asking Orca…']],
+      ['approve', ['Runs its own code.']],
+      ['done', []],
+      ['failed', ["Orca isn't running."]],
+    ]
+    for (const [phase, lines] of phases) {
+      push(at('orca', phase, lines))
+      expect([phase, document.activeElement?.tagName]).toEqual([phase, 'BODY'])
+    }
+  })
+
+  it('orca: the grants are drawn as text', async () => {
+    const outside = '<img src=x onerror=alert(1)>'
+    await mount(at('orca', 'approve', [outside]))
+    expect(page().querySelector('img')).toBeNull()
+    expect(grants()).toEqual([outside])
+  })
+
+  it('orca: ten lines of 300 characters are all in the list', async () => {
+    const lines = Array.from({ length: 10 }, (_, i) => `${i}`.padEnd(300, 'x'))
+    await mount(at('orca', 'approve', lines))
+    expect(grants()).toEqual(lines)
+  })
+
+  it('orca: the grants are the first Tab stop, and nothing has the focus', async () => {
+    const lines = Array.from({ length: 10 }, (_, i) => `${i}`.padEnd(300, 'x'))
+    await mount(at('orca', 'approve', lines))
+    // The arrow keys scroll the list before Tab reaches Cancel or Connect.
+    const stops = [...page().querySelectorAll<HTMLElement>('*')].filter((node) => node.tabIndex >= 0)
+    expect(stops.map((node) => node.tagName)).toEqual(['UL', 'BUTTON', 'BUTTON'])
+    expect(document.activeElement?.tagName).toBe('BODY')
+    const list = page().querySelector<HTMLElement>('ul')!
+    list.focus()
+    expect(document.activeElement).toBe(list)
   })
 })

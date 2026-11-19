@@ -90,7 +90,7 @@ interface AppRing {
 }
 
 /** The app whose page an agent is on: an app outside the set is the unknown one, so there are never more than APP_IDS. */
-const pageOf = (a: HostAgent): string => (APP_IDS.includes(a.app) ? a.app : UNKNOWN_APP)
+export const pageOf = (a: HostAgent): string => (APP_IDS.includes(a.app) ? a.app : UNKNOWN_APP)
 
 /**
  * One `DialRing` per app, for the dial that shows one app at a time. The apps keep the order they appeared in, so the

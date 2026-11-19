@@ -7,11 +7,13 @@
  * - the turn that sent a notice ends silent, and its card stays;
  * - a Harness agent's notice is tied to the Harness agent, and a session nobody lists rings under its folder;
  * - it rings with a window open on its tab;
- * - with the dial unplugged, or no dial on this computer, it prints `no dial`, and the second starts nothing.
+ * - with the dial unplugged, or no dial on this computer, it prints `no dial`, and the second starts nothing;
+ * - a pending card comes back after the devices process restarts, as a silent row that opens to its line
+ *   (docs/plans/2026-11-18-dial-notices-restart-design.md).
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -20,7 +22,7 @@ import { observedAgentId } from '../src/cable/hosts/observed.js'
 import { LocalClient } from './harness/client.js'
 import { CodexOutside } from './harness/codexOutside.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
-import { Desk } from './harness/desk.js'
+import { Desk, devicesPids } from './harness/desk.js'
 import type { DialMessage, FakeDial } from './harness/fakeDial.js'
 import { Outside } from './harness/outsideAgent.js'
 
@@ -102,6 +104,8 @@ describe('harness device notify', () => {
   const questions = (dial: FakeDial, agentId: string): DialMessage[] =>
     dial.messages.filter((m) => m.t === 'question' && m.agentId === agentId)
   const card = (app: string) => [{ key: 'notice', q: LINE, options: [`In ${app}`] }]
+  /** What a ring carries of the card: its line, as the drawer row shows it. The dial reads the card itself. */
+  const rung = [{ key: '', q: LINE, options: [] }]
 
   it('an outside Claude Code session\'s notice is its own card, read without closing it, and closed by its next prompt', async () => {
     const { d, desk } = await fresh()
@@ -113,20 +117,22 @@ describe('harness device notify', () => {
 
     expect(await notify(d, caller, cwd)).toMatchObject({ code: 0, out: 'shown' })
     const question = await dial.next((m) => m.t === 'question' && m.agentId === engine.id, 45_000, 'the notice')
-    expect(question).toMatchObject({ agentId: engine.id, name: 'fix-login', id: expect.stringMatching(/^shown:/), questions: card('Ghostty') })
+    expect(question).toMatchObject({ agentId: engine.id, name: 'fix-login', id: expect.stringMatching(/^shown:/), questions: rung })
 
     // The same line again, within the minute: limited, and nothing more on the dial.
     expect(await notify(d, caller, cwd)).toMatchObject({ code: 0, out: 'limited' })
 
     // Opening the alert to read it leaves the card. The list asked after it is the barrier: the daemon has handled the
-    // read, and whatever it sent for it, by the time the list sends the questions still open again, after its end.
+    // read, and whatever it sent for it, by the time the list's drawer is sent. A drawer carries the dial's open
+    // questions as rows instead of asking them again (#4445): the card is one of them.
     let since = dial.messages.length
     dial.send({ t: 'question.read', agentId: engine.id, requestId: 'read-1' })
     const state = await dial.next((m) => m.t === 'question.state' && m.requestId === 'read-1', 45_000, 'the card read', since)
     expect(state).toMatchObject({ ok: true, id: question.id, questions: card('Ghostty') })
     since = dial.messages.length
     dial.send({ t: 'agents.list' })
-    await dial.next((m) => m.t === 'question' && m.agentId === engine.id, 45_000, 'the card sent again with the list', since)
+    const drawer = await dial.next((m) => m.t === 'notif.replace', 45_000, 'the drawer sent with the list', since)
+    expect(drawer.items).toContainEqual(expect.objectContaining({ agentId: engine.id, name: 'fix-login', summary: LINE, question: true }))
     // The same card each time it is sent, never a second one, and never closed.
     expect([...new Set(questions(dial, engine.id).map((m) => m.id))]).toEqual([question.id])
     const prompted = dial.messages.length
@@ -176,7 +182,8 @@ describe('harness device notify', () => {
     await listed(dial, codex.id)
     expect(await notify(d, { CODEX_THREAD_ID: codex.sessionId }, codex.cwd)).toMatchObject({ code: 0, out: 'shown' })
     expect(await dial.next((m) => m.t === 'question' && m.agentId === codex.id, 45_000, 'the notice'))
-      .toMatchObject({ name: 'api', id: expect.stringMatching(/^shown:/), questions: card('Ghostty') })
+      .toMatchObject({ name: 'api', id: expect.stringMatching(/^shown:/), questions: rung })
+    expect(await opened(dial, codex.id)).toMatchObject({ ok: true, questions: card('Ghostty') })
     await until('the notice in the daemon\'s log', () => d.log().includes('[device] notify · codex · shown'), 30_000, 50)
   })
 
@@ -189,7 +196,8 @@ describe('harness device notify', () => {
     const caller = { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: harness.sessionId }
     expect(await notify(d, caller, join(d.projectsDir, 'in-harness'))).toMatchObject({ code: 0, out: 'shown' })
     expect(await dial.next((m) => m.t === 'question' && m.agentId === harness.id, 45_000, 'the notice'))
-      .toMatchObject({ id: expect.stringMatching(/^shown:/), questions: card('Harness') })
+      .toMatchObject({ id: expect.stringMatching(/^shown:/), questions: rung })
+    expect(await opened(dial, harness.id)).toMatchObject({ ok: true, questions: card('Harness') })
     expect(questions(dial, observedAgentId('claude', harness.sessionId))).toEqual([])
     client.close()
   })
@@ -202,7 +210,8 @@ describe('harness device notify', () => {
     expect(await notify(d, { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: sessionId }, join(d.projectsDir, 'scratch')))
       .toMatchObject({ code: 0, out: 'shown' })
     expect(await dial.next((m) => m.t === 'question' && m.agentId === agentId, 45_000, 'the notice'))
-      .toMatchObject({ name: 'scratch', id: expect.stringMatching(/^shown:/), questions: card('Terminal') })
+      .toMatchObject({ name: 'scratch', id: expect.stringMatching(/^shown:/), questions: rung })
+    expect(await opened(dial, agentId)).toMatchObject({ ok: true, questions: card('Terminal') })
   })
 
   it('it rings with a window open on its tab', async () => {
@@ -219,7 +228,7 @@ describe('harness device notify', () => {
     const caller = { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: engine.sessionId }
     expect(await notify(d, caller, join(d.projectsDir, 'fix-login'))).toMatchObject({ code: 0, out: 'shown' })
     expect(await dial.next((m) => m.t === 'question' && m.agentId === engine.id, 45_000, 'the notice', since))
-      .toMatchObject({ questions: card('Ghostty') })
+      .toMatchObject({ questions: rung })
     window.close()
   })
 
@@ -241,5 +250,89 @@ describe('harness device notify', () => {
     const before = d.log().length
     expect(await notify(d, { CODEX_THREAD_ID: randomUUID() }, join(d.projectsDir, 'api'))).toMatchObject({ code: 0, out: 'no dial' })
     expect(d.log().slice(before)).not.toContain('asking for the devices\' process')
+  })
+
+  /** The cards of the daemon's file of pending notices, once it is there. */
+  const stored = (d: IsolatedDaemon): Array<{ id: string }> | null => {
+    try { return (JSON.parse(readFileSync(join(d.dataDir, 'dial-notices.json'), 'utf8')) as { cards: Array<{ id: string }> }).cards } catch { return null }
+  }
+  const inFile = (d: IsolatedDaemon, id: string) => until('the card in the file', () => stored(d)?.some((card) => card.id === id) || null, 30_000, 50)
+  /** That agent's row in the first drawer since [since] that carries one. */
+  const drawerRow = async (dial: FakeDial, agentId: string, since: number): Promise<Record<string, unknown>> => {
+    const items = (m: DialMessage) => (m.items ?? []) as Array<Record<string, unknown>>
+    const replaced = await dial.next((m) => m.t === 'notif.replace' && items(m).some((item) => item.agentId === agentId), 60_000, 'the row back', since)
+    return items(replaced).find((item) => item.agentId === agentId)!
+  }
+  /** Opening its row reads the line, as the dial asks once a question row is opened. The list asked first is the barrier:
+   *  the hold goes in its agent's order, a turn of the loop behind the drawer replace. */
+  const opened = async (dial: FakeDial, agentId: string): Promise<DialMessage> => {
+    let since = dial.messages.length
+    dial.send({ t: 'agents.list' })
+    await dial.next((m) => m.t === 'agents.end', 45_000, 'the list', since)
+    since = dial.messages.length
+    dial.send({ t: 'question.read', agentId, requestId: 'read-1' })
+    return dial.next((m) => m.t === 'question.state' && m.requestId === 'read-1', 45_000, 'the row read', since)
+  }
+  /** What rang for that agent since [since]: a question, an error, or a summary told aloud. */
+  const rang = (dial: FakeDial, agentId: string, since: number): DialMessage[] => dial.messages.slice(since).filter((m) => m.agentId === agentId &&
+    (m.t === 'question' || m.t === 'turn.error' || (m.t === 'summary' && m.restore !== true && m.tier !== 'silent')))
+
+  it('an outside session\'s notice comes back as a silent row after the devices restart, and its next prompt ends it', async () => {
+    const { d, desk } = await fresh()
+    const dial = await plugged(desk)
+    const engine = await startOutside(d, 'fix-login')
+    await listed(dial, engine.id)
+    // A turn, so the scan after the restart finds its conversation.
+    engine.type('before the restart')
+    await until('its Stop hook to run', () => engine.ran(d, 'Stop'), 30_000, 100)
+    await engine.idle(d)
+    const caller = { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: engine.sessionId }
+    expect(await notify(d, caller, join(d.projectsDir, 'fix-login'))).toMatchObject({ code: 0, out: 'shown' })
+    const question = await dial.next((m) => m.t === 'question' && m.agentId === engine.id, 45_000, 'the notice')
+    await inFile(d, question.id as string)
+
+    const back = dial.messages.length
+    for (const pid of devicesPids(d)) process.kill(pid, 'SIGKILL')
+    await dial.welcomeAfter(back, 60_000)
+    expect(await drawerRow(dial, engine.id, back)).toMatchObject({ agentId: engine.id, question: true, summary: LINE, name: 'fix-login' })
+    // The row opens to its line, never "No readable question. Check the terminal."
+    const state = await opened(dial, engine.id)
+    expect(state).toMatchObject({ ok: true, id: question.id, questions: [{ q: LINE }] })
+    expect(state.error).toBeUndefined()
+    expect(rang(dial, engine.id, back)).toEqual([])
+
+    // The person's next prompt: its turn starts, and the card goes, from the file too.
+    const prompted = dial.messages.length
+    engine.type('connected')
+    await dial.next((m) => m.t === 'question.close' && m.agentId === engine.id && m.id === question.id, 45_000, 'the card closed', prompted)
+    await until('the file emptied', () => stored(d)?.length === 0 || null, 30_000, 50)
+    expect(d.log()).toContain('[device] notices · restored 1 · aged out 0')
+    expect(d.log().split('\n').filter((line) => line.includes(LINE))).toEqual([])
+  })
+
+  it('a Harness agent\'s notice comes back as a silent row after the devices restart', async () => {
+    const { d, desk } = await fresh()
+    const client = await LocalClient.connect(d)
+    const harness = await create(d, client, 'in-harness')
+    const dial = await plugged(desk)
+    await listed(dial, harness.id)
+    const caller = { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: harness.sessionId }
+    expect(await notify(d, caller, join(d.projectsDir, 'in-harness'))).toMatchObject({ code: 0, out: 'shown' })
+    const question = await dial.next((m) => m.t === 'question' && m.agentId === harness.id, 45_000, 'the notice')
+    await inFile(d, question.id as string)
+
+    const back = dial.messages.length
+    for (const pid of devicesPids(d)) process.kill(pid, 'SIGKILL')
+    await dial.welcomeAfter(back, 60_000)
+    expect(await drawerRow(dial, harness.id, back)).toMatchObject({ agentId: harness.id, question: true, summary: LINE })
+    const state = await opened(dial, harness.id)
+    expect(state).toMatchObject({ ok: true, id: question.id, questions: [{ q: LINE }] })
+    expect(state.error).toBeUndefined()
+    expect(dial.messages.slice(back).filter((m) => m.t === 'question' && m.agentId === harness.id)).toEqual([])
+
+    const prompted = dial.messages.length
+    client.send('message', { agentId: harness.id, content: 'go on' })
+    await dial.next((m) => m.t === 'question.close' && m.agentId === harness.id && m.id === question.id, 45_000, 'the card closed', prompted)
+    client.close()
   })
 })

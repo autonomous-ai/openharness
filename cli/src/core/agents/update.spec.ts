@@ -124,7 +124,16 @@ describe('a rename', () => {
     expect(deps.onAgentRename).toHaveBeenCalledWith(expect.objectContaining({ defaultName: 'Release notes' }), 'Release notes')
     const renamed = { type: 'agent_renamed', payload: { agentId: 'a1', name: 'Release notes', engine: 'claude' } }
     expect(heard).toEqual([['reply', { agent: { id: 'a1', name: 'Release notes', lastOpenedAt: null } }], ['send', renamed], ['device', renamed]])
-    expect(log).toHaveBeenCalledWith('[rename] a1 → "Release notes" · broadcast to web + device')
+    expect(log).toHaveBeenCalledWith('[rename] a1 → name 13 chars · broadcast to web + device')
+  })
+
+  it('logs the size of the new name, never the name', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const { ask } = setup()
+    await ask({ agentId: 'a1', name: 'SECRET-NAME-MARKER' })
+    const line = log.mock.calls.map(([said]) => String(said)).find((said) => said.startsWith('[rename]'))
+    expect(line).toContain('[rename] a1 ')
+    expect(line).not.toContain('SECRET')
   })
 
   it('reports a refused rename without claiming success or titling a pane', async () => {

@@ -9,7 +9,7 @@
  */
 import { AskQuestionController, QuestionWatcher, type QuestionAnswerPayload, type QuestionAnswerResult } from '../lib/questionController.js'
 import type { AutonomousDeviceInput } from './deviceInput.js'
-import { preview, sid } from '../lib/log.js'
+import { sid } from '../lib/log.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { TerminalControl } from './terminals/control.js'
 
@@ -32,10 +32,14 @@ export interface QuestionDeps {
   /** Whether an agent's `harness wait` or `watch` follows [agentId] by what is pushed it (core/toolWatches.ts). */
   followedByTool: (agentId: string) => boolean
   deviceInput: Pick<AutonomousDeviceInput, 'setUserAction'>
+  /** The person is no longer waited on there: a question closed, or the pane read clear after a wait hook
+   *  (core/turns/turnHooks.ts). */
+  waitOver: (sessionId: string) => void
 }
 
 export function createQuestions({
   questionControlFor, readQuestion, resolve, terminal, acquireTerminalControl, clients, agentIdFor, sessionTurnOpen, someoneCanAnswer, followedByTool, deviceInput,
+  waitOver,
 }: QuestionDeps) {
   const { captureTerminal, submitTerminal, keyTerminal } = terminal
   // AskUserQuestion bridge: mirrors the question to the device's question screen, and keys the device's
@@ -125,7 +129,7 @@ export function createQuestions({
       clients.sendRemote(asked)
       openQuestions.set(sessionId, asked)
       askedRemotely.set(sessionId, asked)
-      console.log(`[question] ${sid(sessionId)} asking the user · "${preview(shaped[0]?.q ?? '')}" · req=${requestId}`)
+      console.log(`[question] ${sid(sessionId)} asking the user · question ${(shaped[0]?.q ?? '').length} chars · req=${requestId}`)
     },
     // Answered somewhere else — the app, or the pane by hand. Every client drawing it is told to stop
     // waiting, down the SAME path the question itself took, so the dial and the WiFi device cannot
@@ -133,6 +137,7 @@ export function createQuestions({
     onQuestionGone: (sessionId, requestId) => {
       heard?.('answered', sessionId, requestId)
       pending.delete(sessionId)
+      waitOver(sessionId)
       deviceInput.setUserAction(agentIdFor(sessionId), false)
       const closed = {
         type: 'commander_question_close',
@@ -150,6 +155,7 @@ export function createQuestions({
       askedRemotely.delete(sessionId)
       console.log(`[question] ${sid(sessionId)} answered elsewhere · closing on every client · req=${requestId}`)
     },
+    onClear: waitOver,
   })
   /**
    * An app away from this desk gained a session: it is told every question still open, then which are open

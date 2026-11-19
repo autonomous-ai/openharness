@@ -1,10 +1,12 @@
 // Node's real inputs, against scripts, sockets and folders this file makes under /tmp: never the developer's own.
 import { afterEach, assert, beforeEach, test } from 'orca/testing'
+import { spawnSync } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { MISSING, nodeInputs } from './inputs'
 
 const BODY = '{"type":"dial","standby":true}'
+const FRONT = '{"type":"orcaFront","terminals":null}'
 let dir = ''
 let servers: Server[] = []
 
@@ -23,8 +25,13 @@ afterEach(async () => {
 
 function script(name: string, body: string): string {
   const file = `${dir}/${name}`
-  writeFileSync(file, `#!/bin/sh\n${body}\n`)
+  // A bare /bin/sh, run once to its exit, then the body into the same file: macOS checks a new file on its first run,
+  // queued machine-wide, and under load that alone passed the 5 s a run is given (cli/src/testing/executableFixture.ts,
+  // which this plugin, with no dependencies, cannot import).
+  writeFileSync(file, '#!/bin/sh\n')
   chmodSync(file, 0o755)
+  spawnSync(file)
+  writeFileSync(file, `#!/bin/sh\n${body}\n`)
   return file
 }
 
@@ -145,6 +152,36 @@ test('an abort after it ends the chunks', async () => {
     abort.abort()
   }
   assert.equal(all, '{"attached":false}\n')
+})
+
+test('post posts the body to / on a connection of its own and answers the status', async () => {
+  const got: unknown[] = []
+  const socketPath = await serve((req, res, body) => {
+    got.push({ method: req.method, url: req.url, body, connection: req.headers.connection })
+    if (got.length === 1) res.writeHead(204).end()
+    else res.writeHead(400).end('{"error":"bad"}\n')
+  })
+  const signal = new AbortController().signal
+  assert.equal(await nodeInputs().post(socketPath, FRONT, signal), 204)
+  assert.equal(await nodeInputs().post(socketPath, FRONT, signal), 400)
+  const seen = { method: 'POST', url: '/', body: FRONT, connection: 'close' }
+  assert.deepEqual(got, [seen, seen])
+})
+
+test('post to a socket that is not there, and to one nothing listens on, is null', async () => {
+  const signal = new AbortController().signal
+  assert.equal(await nodeInputs().post(`${dir}/none.sock`, FRONT, signal), null)
+  const socketPath = await serve(() => {})
+  renameSync(socketPath, `${dir}/stale.sock`)
+  const server = servers.pop()!
+  await new Promise((done) => server.close(done))
+  assert.equal(await nodeInputs().post(`${dir}/stale.sock`, FRONT, signal), null)
+})
+
+test('an abort before the answer makes post null', async () => {
+  const abort = new AbortController()
+  const socketPath = await serve(() => abort.abort())
+  assert.equal(await nodeInputs().post(socketPath, FRONT, abort.signal), null)
 })
 
 test('watch tells the name of an entry made in its folder; after its close it tells nothing', async () => {

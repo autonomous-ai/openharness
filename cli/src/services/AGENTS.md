@@ -68,7 +68,7 @@ hang or leak costs only its process. A process per risk, not per feature (`SERVI
 | `engine-others` | the other fourteen engines' history and last turns (`src/engines/others/`) | their transcript and store readers, `node:sqlite` and Amp's `threads export` out of the core; a read names its engine, and each engine's code loads on its first read | on demand |
 | `search` | search | native `node:sqlite`, the index's memory | always |
 | `viewers` | viewers, store | the viewer servers, the remote viewer streams and rendered surfaces, minutes-long installs | on demand |
-| `edge` | workspaces, usage, monitor, projects, handoff, recaps, windowNames, shell, connectors, sharedMachines, agentCleanup, messages, osDevice, goals, hachi, engineProbe | light pure-JS services: isolated from the core, not from each other | always |
+| `edge` | workspaces, usage, monitor, projects, handoff, recaps, windowNames, shell, connectors, sharedMachines, agentCleanup, messages, osDevice, goals, hachi, engineProbe, homeBridge | light pure-JS services: isolated from the core, not from each other | always |
 | `gateway` | gateway | network, crypto and pure-JS WebRTC: the attack surface | on demand |
 | `models` | models | grid's installs, downloads and commands | on demand |
 | `devices` | devices, wifi | the dials' serial ports, the fleet's lane, the voice router's worker, the Wi-Fi device | on demand |
@@ -209,6 +209,7 @@ master too old to run it starts it beside itself, still in its own process (`src
   focused pane, its tab order) live in its adapter's file and are named once in src/services/devices.ts;
   `observed.ts` finds an agent by a pane and names no app. An app that lists its own
   agents is one source file beside its adapter under src/cable/hosts/, named once in src/services/devices.ts;
+  a program with no pane to bring forward is a source with no adapter (opencode);
   a hooked copy and a listed copy of one agent are one row (src/cable/hosts/registry.ts). Claude Code's mod and
   `codex queue` are not adapters: they are the source's routes at the agent's own layer, asked before any pane.
   The Wi-Fi device runs beside them on a link of its own
@@ -224,14 +225,21 @@ master too old to run it starts it beside itself, still in its own process (`src
   first is told as a notice. What a local tool tells the devices (first the app in front, from `harness hardware
   watch`) goes to their own listener (src/services/devicesListener.ts), never through the core: a new message is a
   handler registered there by its type, with its own body and rate limits, beside `front`, `tab`, the mod's
-  `attach`, the session the Claude app shows, `notice`, an agent's line from `harness device notify`, and `notify`,
-  the Notifications setting (src/services/devices.ts). Where the listener does not run (Windows, and devices inside
-  the core, as on Harness OS) `harness device notify` answers `no dial` and the dial's status carries no Notifications
-  setting, which nothing could change: a known gap. A handler of a second kind holds a stream open,
-  one of its type across every connection, and is told when the stream can take a line (`onWritable`) and why it
+  `attach`, the session the Claude app shows, `notice`, an agent's line from `harness device notify`, `notify`,
+  the Notifications setting, and `orcaFront`, the terminals of the worktree on Orca's screen from Orca's Harness
+  Device plugin, taken only while its `dial` stream is open (src/services/devices.ts). Where the listener does not
+  run (Windows, and devices inside the core, as on Harness OS) `harness device notify` answers `no dial` and the
+  dial's status carries no Notifications setting, which nothing could change: a known gap. A handler of a second kind holds a stream open,
+  one of its type across every connection (a keyed type keeps one per key up to its limit, a new key past it
+  answered 409), and is told when the stream can take a line (`onWritable`) and why it
   ended (`StreamEnd`): on `tabs` the devices tell the watch which terminal tab to select; on `dial` (`dialStream`),
   opened with `standby` so it never takes the stream from another Orca, they tell Orca's Harness Device plugin
-  (plugins/harness-device-orca) whether a dial is attached and which agent it shows.
+  (plugins/harness-device-orca) whether a dial is attached and which agent it shows, and its end drops what
+  `orcaFront` set; on `vscode`, keyed by its window and at most 8, they tell Harness's VS Code extension
+  (plugins/harness-device-vscode) which terminal to show and scroll, and that window reports its terminals' shells in
+  a `vscode-state` message (src/cable/hosts/vscodeTerminals.ts). Cursor's windows hold the same `vscode` stream: the
+  extension is the same and cannot tell the apps apart, and a terminal is found by its shell's pid, whichever app holds
+  it.
   Which path: a route of the core's local door, where the core checks who calls (the account's, the Wi-Fi device's,
   the add-ons'), is a `SERVICE_HTTP_ROUTES` route (above); what a tool on this computer tells the devices alone is a
   message on their listener, which the core never routes or reads.

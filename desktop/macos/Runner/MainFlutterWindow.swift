@@ -50,6 +50,7 @@ class MainFlutterWindow: NSWindow {
 
     RegisterGeneratedPlugins(registry: flutterViewController)
     AppDelegate.installCommunityLinks(messenger: flutterViewController.engine.binaryMessenger)
+    HarnessDeviceApp.install(messenger: flutterViewController.engine.binaryMessenger)
 
     menuChannel = FlutterMethodChannel(
       name: kMenuChannel,

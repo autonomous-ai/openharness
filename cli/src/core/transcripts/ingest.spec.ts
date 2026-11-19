@@ -16,7 +16,7 @@ const CLAUDE_PROMPT = JSON.stringify({ type: 'user', message: { role: 'user', co
 function setup(engines: Record<string, string>, over: Partial<IngestDeps> = {}) {
   const sessions = new Map(Object.entries(engines).map(([sessionId, engine]) =>
     [sessionId, { agentId: `agent-${sessionId}`, sessionId, engine, transcriptPath: `/t/${sessionId}.jsonl` } as RegisteredSession]))
-  const normalizers = createSessionNormalizers(noOtherStreams())
+  const normalizers = createSessionNormalizers(noOtherStreams(), { held: () => false, closed: () => {}, forget: () => {} })
   const service = { needsTranscript: vi.fn(() => false), observeTranscript: vi.fn() }
   const deps: IngestDeps = {
     liveFor,
@@ -49,19 +49,29 @@ describe('ingesting a transcript line', () => {
     p.ingest.acceptFrame('s1', 'codex', frame)
     expect(p.deps.emit).not.toHaveBeenCalled()
     p.ingest.acceptFrame('s1', 'claude', frame)
-    expect(p.deps.emit).toHaveBeenCalledWith('s1', frame.events, { replay: true })
+    expect(p.deps.emit).toHaveBeenCalledWith('s1', frame.events, { replay: true, turn: frame.turn })
     expect(p.deps.runtimeProfiles.ingest).toHaveBeenCalledWith(p.sessions.get('s1'), frame.raw)
     p.ingest.acceptFrame('s1', 'claude', { ...frame, replay: false, failure: 'rate limited' })
     expect(p.deps.announceTurnAborted).toHaveBeenCalledWith('s1', 'claude', 'rate limited')
     expect(vi.mocked(p.deps.announceTurnAborted).mock.invocationCallOrder[0])
       .toBeLessThan(vi.mocked(p.deps.emit).mock.invocationCallOrder[1])
-    expect(p.deps.emit).toHaveBeenLastCalledWith('s1', frame.events, { replay: false })
+    expect(p.deps.emit).toHaveBeenLastCalledWith('s1', frame.events, { replay: false, turn: frame.turn })
     expect(p.normalizers.hasState('s1')).toBe(false)
     vi.mocked(p.deps.runtimeProfiles.ingest).mockClear()
     p.ingest.acceptFrame('s1', 'claude', frame, true)
     expect(p.deps.runtimeProfiles.ingest).not.toHaveBeenCalled()
     expect(p.deps.tokenUsage.changed).toHaveBeenCalledWith(p.sessions.get('s1'))
-    expect(p.deps.emit).toHaveBeenLastCalledWith('s1', frame.events, { replay: true })
+    expect(p.deps.emit).toHaveBeenLastCalledWith('s1', frame.events, { replay: true, turn: frame.turn })
+  })
+
+  // The core's turn rules compare a read with the hooks' own times and hold its end (core/turns/turnHooks.ts).
+  it('hands a worker frame\'s time, own end and turn on with its events', () => {
+    const run = setup({ s1: 'claude' })
+    const turn = { identity: 'worker:turn', turnOpen: false, continued: true, openedAt: 1_000 }
+    const frame: LiveFrame = { raw: '{}', events: [{ type: 'turn_ended', payload: {} }], profile: false, observe: true,
+      replay: false, at: 2_000, over: true, turn }
+    run.ingest.acceptFrame('s1', 'claude', frame)
+    expect(vi.mocked(run.deps.emit).mock.calls).toStrictEqual([['s1', frame.events, { replay: false, at: 2_000, over: true, turn }]])
   })
 
   it('takes lines only for a registered session of the engine that wrote them', () => {
@@ -96,25 +106,26 @@ describe('ingesting a transcript line', () => {
     expect(none.ingest.ingestLine(line('s1', 'claude', CLAUDE_PROMPT))).toEqual(expect.any(Array))
   })
 
-  it('gives a line to its engine though the device or the runtime profile cannot take it in, and says so once a session', () => {
+  it('gives a line to its engine though the device or the runtime profile cannot take it in, and says so once a session by the error\'s kind', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const clean = setup({ s1: 'claude' })
     const expected = clean.ingest.ingestLine(line('s1', 'claude', CLAUDE_PROMPT))
     expect(expected).not.toEqual([])
     const { ingest, deps, service } = setup({ s1: 'claude', s2: 'claude' })
     service.needsTranscript.mockReturnValue(true)
-    service.observeTranscript.mockImplementation(() => { throw new Error('evidence unreadable') })
-    vi.mocked(deps.runtimeProfiles.ingest).mockImplementation(() => { throw 'profile unreadable' })
+    // A reader that parses the line throws an error quoting it: the person's words, never in the log.
+    service.observeTranscript.mockImplementation(() => { JSON.parse('SECRET-LINE-MARKER') })
+    vi.mocked(deps.runtimeProfiles.ingest).mockImplementation(() => { throw 'SECRET-PROFILE-MARKER' })
     // The line's events are the ones it has without the two readers: a turn's start, here.
     expect(ingest.ingestLine(line('s1', 'claude', CLAUDE_PROMPT))).toEqual(expected)
     ingest.ingestLine(line('s1', 'claude', '{}'))
     ingest.ingestLine(line('s2', 'claude', CLAUDE_PROMPT))
     expect(deps.runtimeProfiles.ingest).toHaveBeenCalledTimes(3)
     expect(error.mock.calls).toEqual([
-      ['[transcripts] the device could not take in a line of s1; the line goes on to its engine: evidence unreadable'],
-      ['[transcripts] the runtime profile could not take in a line of s1; the line goes on to its engine: profile unreadable'],
-      ['[transcripts] the device could not take in a line of s2; the line goes on to its engine: evidence unreadable'],
-      ['[transcripts] the runtime profile could not take in a line of s2; the line goes on to its engine: profile unreadable'],
+      ['[transcripts] the device could not take in a line of s1; the line goes on to its engine: SyntaxError'],
+      ['[transcripts] the runtime profile could not take in a line of s1; the line goes on to its engine: string'],
+      ['[transcripts] the device could not take in a line of s2; the line goes on to its engine: SyntaxError'],
+      ['[transcripts] the runtime profile could not take in a line of s2; the line goes on to its engine: string'],
     ])
   })
 
@@ -179,21 +190,46 @@ describe('the watcher wiring', () => {
     return { ...run, watcher }
   }
 
-  it('streams each live line, and contains a line that throws', () => {
+  it('streams each live line, and contains a line that throws, said by the error\'s kind', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const run = wired({ s1: 'claude' })
     run.watcher.emit('line', line('s1', 'claude', CLAUDE_PROMPT))
     run.watcher.emit('line', line('nobody', 'claude', CLAUDE_PROMPT))
     expect(vi.mocked(run.deps.emit).mock.calls).toHaveLength(1)
     expect(vi.mocked(run.deps.emit).mock.calls[0][0]).toBe('s1')
-    vi.mocked(run.deps.tokenUsage.changed).mockImplementationOnce(() => { throw new Error('bad line') })
+    // A parser that throws on a line quotes it: the person's words, never in the log.
+    vi.mocked(run.deps.tokenUsage.changed).mockImplementationOnce(() => { JSON.parse('SECRET-LINE-MARKER') })
     run.watcher.emit('line', line('s1', 'claude', CLAUDE_PROMPT))
-    vi.mocked(run.deps.tokenUsage.changed).mockImplementationOnce(() => { throw 'worse' })
+    vi.mocked(run.deps.tokenUsage.changed).mockImplementationOnce(() => { throw 'SECRET-LINE-MARKER' })
     run.watcher.emit('line', line('s1', 'claude', CLAUDE_PROMPT))
     expect(error.mock.calls).toEqual([
-      ['[cli] line handler error (session s1):', 'bad line'],
-      ['[cli] line handler error (session s1):', 'worse'],
+      ['[cli] line handler error (session s1):', 'SyntaxError'],
+      ['[cli] line handler error (session s1):', 'string'],
     ])
+  })
+
+  it('hands a live line\'s on, with the parser\'s turn after a line that ends one', () => {
+    const run = wired({ s1: 'claude' })
+    const record = (value: object, timestamp: string) => JSON.stringify({ ...value, timestamp })
+    run.watcher.emit('line', line('s1', 'claude', record(JSON.parse(CLAUDE_PROMPT), '2026-11-17T01:00:00.000Z')))
+    const parser = run.normalizers.liveParsers.get('s1')!
+    const opened = parser.snapshot()
+    expect(opened).toMatchObject({ turnOpen: true, openedAt: Date.parse('2026-11-17T01:00:00.000Z') })
+    expect(vi.mocked(run.deps.emit).mock.calls[0][2]).toStrictEqual({ at: Date.parse('2026-11-17T01:00:00.000Z'), over: undefined, turn: undefined })
+    // A paused `/goal` pass: its turn_duration is the engine's own end, with no Stop after it.
+    run.watcher.emit('line', line('s1', 'claude', record({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn' } }, '2026-11-17T01:00:00.500Z')))
+    run.watcher.emit('line', line('s1', 'claude', record({ type: 'attachment', attachment: { type: 'goal_status', met: false, condition: 'finish' } }, '2026-11-17T01:00:01.000Z')))
+    run.watcher.emit('line', line('s1', 'claude', record({ type: 'system', subtype: 'turn_duration', durationMs: 1 }, '2026-11-17T01:00:02.000Z')))
+    const read = vi.mocked(run.deps.emit).mock.calls.at(-1)![2]
+    expect(read).toEqual({ at: Date.parse('2026-11-17T01:00:02.000Z'), over: true, turn: parser.snapshot() })
+    expect(read?.turn?.turnOpen).toBe(false)
+  })
+
+  it('a history batch and another engine\'s frame say neither', () => {
+    const run = wired({ s1: 'claude', cc: 'commandcode' })
+    run.watcher.emit('history', { sessionId: 's1', lines: [line('s1', 'claude', JSON.stringify({ ...JSON.parse(CLAUDE_PROMPT), timestamp: '2026-11-17T01:00:00.000Z' }))] } as HistoryEvent)
+    run.ingest.acceptStreamFrame(run.sessions.get('cc')!, { serial: 1, events: [{ type: 'turn_ended', payload: {} }], turn: { identity: 't:1', turnOpen: false } })
+    expect(vi.mocked(run.deps.emit).mock.calls.map((call) => call.slice(2))).toStrictEqual([[{ replay: true }], []])
   })
 
   it('emits a catch-up batch as one replay, and nothing when it holds no events', () => {
@@ -204,13 +240,13 @@ describe('the watcher wiring', () => {
     run.watcher.emit('history', batch([line('nobody', 'claude')]))
     expect(vi.mocked(run.deps.emit).mock.calls).toHaveLength(1)
     expect(vi.mocked(run.deps.emit).mock.calls[0][2]).toEqual({ replay: true })
-    vi.mocked(run.deps.tokenUsage.changed).mockImplementationOnce(() => { throw new Error('bad batch') })
+    vi.mocked(run.deps.tokenUsage.changed).mockImplementationOnce(() => { JSON.parse('SECRET-LINE-MARKER') })
     run.watcher.emit('history', batch([line('s1', 'claude', CLAUDE_PROMPT)]))
-    vi.mocked(run.deps.tokenUsage.changed).mockImplementationOnce(() => { throw 'worse' })
+    vi.mocked(run.deps.tokenUsage.changed).mockImplementationOnce(() => { throw 'SECRET-LINE-MARKER' })
     run.watcher.emit('history', batch([line('s1', 'claude', CLAUDE_PROMPT)]))
     expect(error.mock.calls).toEqual([
-      ['[cli] history handler error (session s1):', 'bad batch'],
-      ['[cli] history handler error (session s1):', 'worse'],
+      ['[cli] history handler error (session s1):', 'SyntaxError'],
+      ['[cli] history handler error (session s1):', 'string'],
     ])
   })
 

@@ -1,7 +1,7 @@
 // How the wheel's rows are composed: the local row, and the fleet's rows around it.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { DaemonCableHost, HARNESS_OPEN_WAIT_MS, cableEventFor, cableQuestionFor, cableStepFor, type CableHostWiring } from './cableHost.js'
+import { DaemonCableHost, HARNESS_OPEN_WAIT_MS, cableEventFor, cableQuestionFor, cableStepFor, type CableHostWiring, type RingScope } from './cableHost.js'
 import { FleetError, type FleetMachine, type MachineFleet } from './machineFleet.js'
 import type { FleetRouting } from '../services/fleet.js'
 import { ServiceUnavailableError } from '../core/serviceHost.js'
@@ -95,7 +95,7 @@ describe('notification read receipts', () => {
   })
 
   // The dial's drawer is replaced whole by what is unread: the questions only the devices ask (a notice, a wait) are rows
-  // of it too, and the dial keeps one row an agent.
+  // of it too, and a drawer carries one row an agent.
   it('the rows the devices ask lead what the window has unread, one row an agent', () => {
     const notice = { agentId: 'o1', machineId: 'mine', question: true, text: 'Connect the VPN' }
     const host = new DaemonCableHost(wiring({ noticeRows: () => [notice] }))
@@ -1121,18 +1121,20 @@ describe('the dial that shows one app at a time', () => {
     ] })
   })
 
-  it('17 apps with agents send 16 rows, the shown one kept', async () => {
+  it('19 apps with agents send 16 rows, the shown one kept', async () => {
     const appIds = (snapshot: { apps?: { apps: Array<{ id: string }> } }): string[] | undefined => snapshot.apps?.apps.map((a) => a.id)
+    // The last three ids, codex, opencode and the unknown app, are past the 16 rows: the last is picked.
+    const last = APP_IDS[APP_IDS.length - 1]
     // A second agent in Ghostty, so Ghostty is shown with no draw.
     const host = setup([...APP_IDS.map((app) => agent(`a-${app}`, app)), agent('g2', 'ghostty')])
     const first = await host.listAgentSnapshot({ apps: true })
     expect(appIds(first)).toEqual(APP_IDS.slice(0, 16))
     expect(first.apps?.shown).toBe('ghostty')
-    expect(host.pickApp(APP_IDS[16])).toBe('switched')
+    expect(host.pickApp(last)).toBe('switched')
     const next = await host.listAgentSnapshot({ apps: true })
     // The 16th row gave the shown app its place, and the first 15 did not move.
-    expect(appIds(next)).toEqual([...APP_IDS.slice(0, 15), APP_IDS[16]])
-    expect(next.apps?.shown).toBe(APP_IDS[16])
+    expect(appIds(next)).toEqual([...APP_IDS.slice(0, 15), last])
+    expect(next.apps?.shown).toBe(last)
     expect(next.apps?.apps.at(-1)).toEqual({ id: 'terminal', name: 'Other', count: 1, waiting: 0 })
     // The bound is the frame's, not the ring's.
     expect(ids(next)).toEqual(['a-terminal'])
@@ -1168,6 +1170,118 @@ describe('the dial that shows one app at a time', () => {
     expect(ids(await host.listAgentSnapshot({ apps: true }))).toEqual(['o3', 'o1', 'o2'])
     host.setRank('orca', new Map([['o2', 0], ['o3', 1], ['o1', 2]]))
     expect(ids(await host.listAgentSnapshot({ apps: true }))).toEqual(['o2', 'o3', 'o1'])
+  })
+
+  describe('the front app\'s ring scoped (docs/plans/2026-11-18-dial-orca-tab-scope-design.md)', () => {
+    const without = (...out: string[]): RingScope => ({ inScope: (id) => !out.includes(id) })
+    /** A host over these agents whose settles run when `settle` says. */
+    function settling(agents: HostAgent[]): { host: DaemonCableHost; settle: (app: string) => void } {
+      const settles: Array<() => void> = []
+      const host = setup(agents, { appTimer: (_ms, run) => { settles.push(run); return () => {} } })
+      return { host, settle: (app) => { host.front(app); settles.at(-1)!() } }
+    }
+    const orcas = (n: number): HostAgent[] => Array.from({ length: n }, (_, i) => agent(`o${i + 1}`, 'orca'))
+
+    it('with Orca settled in front and a scope, the list is the in-scope agents in rank order, total is their count, and the app list is as it was', async () => {
+      const { host, settle } = settling(mixed())
+      settle('orca')
+      host.setRank('orca', new Map([['o3', 0], ['o1', 1], ['o2', 2]]))
+      const before = (await host.listAgentSnapshot({ apps: true })).apps?.apps
+      expect(before).toContainEqual({ id: 'orca', name: 'Orca', count: 3, waiting: 0 })
+      host.setScope('orca', without('o2'))
+      const scoped = await host.listAgentSnapshot({ apps: true })
+      expect(ids(scoped)).toEqual(['o3', 'o1'])
+      expect(scoped.total).toBe(2)
+      expect(scoped.apps?.apps).toEqual(before)
+    })
+
+    it('a scope that holds nobody gives an empty list and total 0', async () => {
+      const { host, settle } = settling(mixed())
+      settle('orca')
+      host.setScope('orca', without('o1', 'o2', 'o3'))
+      const scoped = await host.listAgentSnapshot({ apps: true })
+      expect(ids(scoped)).toEqual([])
+      expect(scoped.total).toBe(0)
+      expect(scoped.apps?.shown).toBe('orca')
+    })
+
+    it('the scope waits for Orca to settle in front: nothing settled, another app settled and none settled give today\'s list', async () => {
+      const { host, settle } = settling(mixed())
+      host.setScope('orca', without('o2'))
+      const today = async (): Promise<void> => {
+        const list = await host.listAgentSnapshot({ apps: true })
+        expect(list.apps?.shown).toBe('orca')
+        expect(ids(list)).toEqual(['o1', 'o2', 'o3'])
+        expect(list.total).toBe(3)
+      }
+      await today()
+      // In front, not settled yet.
+      host.front('orca')
+      await today()
+      // VS Code has no agents, so Orca stays shown.
+      settle('vscode')
+      await today()
+      settle('none')
+      await today()
+    })
+
+    it('another app shown is not scoped: with Orca in front, a pick of Ghostty lists Ghostty\'s two, and a pick back lists Orca\'s scope', async () => {
+      const { host, settle } = settling(mixed())
+      settle('orca')
+      host.setScope('orca', without('o2'))
+      expect(host.pickApp('ghostty')).toBe('switched')
+      const ghostty = await host.listAgentSnapshot({ apps: true })
+      expect(ids(ghostty)).toEqual(['g1', 'g2'])
+      expect(ghostty.total).toBe(2)
+      expect(host.pickApp('orca')).toBe('switched')
+      const orca = await host.listAgentSnapshot({ apps: true })
+      expect(ids(orca)).toEqual(['o1', 'o3'])
+      expect(orca.total).toBe(2)
+    })
+
+    it('a dial that does not say appFilter gets the single ring, scope or not', async () => {
+      const { host, settle } = settling(mixed())
+      settle('orca')
+      host.setScope('orca', without('o2'))
+      const all = await host.listAgentSnapshot()
+      expect(ids(all)).toEqual(['o1', 'g1', 'o2', 'o3', 'g2'])
+      expect(all.total).toBe(5)
+    })
+
+    it('setScope with undefined gives today\'s list again', async () => {
+      const { host, settle } = settling(mixed())
+      settle('orca')
+      host.setScope('orca', without('o2'))
+      expect(ids(await host.listAgentSnapshot({ apps: true }))).toEqual(['o1', 'o3'])
+      host.setScope('orca', undefined)
+      const today = await host.listAgentSnapshot({ apps: true })
+      expect(ids(today)).toEqual(['o1', 'o2', 'o3'])
+      expect(today.total).toBe(3)
+    })
+
+    it('more than 16 in scope: 16 rows, and total is all in scope', async () => {
+      // 19 Orca agents, 18 of them in scope: the total tells the scope's count from the app's.
+      const { host, settle } = settling(orcas(19))
+      settle('orca')
+      host.setScope('orca', without('o1'))
+      const scoped = await host.listAgentSnapshot({ apps: true })
+      expect(ids(scoped)).toEqual(orcas(17).slice(1).map((a) => a.id))
+      expect(scoped.total).toBe(18)
+    })
+
+    it('the same scope object keeps its ring, and a new one starts a new ring', async () => {
+      const agents = orcas(17)
+      const { host, settle } = settling(agents)
+      settle('orca')
+      const scope = without()
+      host.setScope('orca', scope)
+      expect(ids(await host.listAgentSnapshot({ apps: true }))).not.toContain('o17')
+      agents[16] = agent('o17', 'orca', { lastActivityAt: 100 })
+      host.setScope('orca', scope)
+      expect(ids(await host.listAgentSnapshot({ apps: true }))).not.toContain('o17')
+      host.setScope('orca', without())
+      expect(ids(await host.listAgentSnapshot({ apps: true }))).toContain('o17')
+    })
   })
 
   it('a pick switches the list and holds through a count change', async () => {
@@ -1307,39 +1421,60 @@ describe('the dial that shows one app at a time', () => {
     it('the dial that reported last is the one shown', () => {
       const dialShows = vi.fn()
       const host = setup(five(), { dialShows })
-      host.dialShows(A, x)
-      host.dialShows(B, y)
+      host.dialShows(A, x, 'x')
+      host.dialShows(B, y, 'y')
       expect(dialShows.mock.calls).toEqual([[x], [y]])
     })
 
     it('a none from another dial is dropped: unplugging one of two does not blank the other\'s agent', () => {
       const dialShows = vi.fn()
       const host = setup(five(), { dialShows })
-      host.dialShows(A, x)
-      host.dialShows(B, y)
-      host.dialShows(A, null)
+      host.dialShows(A, x, 'x')
+      host.dialShows(B, y, 'y')
+      host.dialShows(A, null, null)
       expect(dialShows.mock.calls).toEqual([[x], [y]])
     })
 
     it('a none from the dial that reported last reaches the wiring, and the other dial\'s next move fills it again', () => {
       const dialShows = vi.fn()
       const host = setup(five(), { dialShows })
-      host.dialShows(A, x)
-      host.dialShows(B, y)
-      host.dialShows(B, null)
-      host.dialShows(A, z)
+      host.dialShows(A, x, 'x')
+      host.dialShows(B, y, 'y')
+      host.dialShows(B, null, null)
+      host.dialShows(A, z, 'z')
       expect(dialShows.mock.calls).toEqual([[x], [y], [null], [z]])
     })
 
     it('a none with no report kept is not told', () => {
       const dialShows = vi.fn()
       const host = setup(five(), { dialShows })
-      host.dialShows(A, null)
+      host.dialShows(A, null, null)
       expect(dialShows).not.toHaveBeenCalled()
-      host.dialShows(B, y)
-      host.dialShows(B, null)
-      host.dialShows(B, null)
+      host.dialShows(B, y, 'y')
+      host.dialShows(B, null, null)
+      host.dialShows(B, null, null)
       expect(dialShows.mock.calls).toEqual([[y], [null]])
+    })
+
+    it('shownAgentId is the agent the dial that moved last shows; none once it shows none; another dial\'s none changes nothing', () => {
+      const host = setup(five())
+      expect(host.shownAgentId()).toBeUndefined()
+      host.dialShows(A, x, 'a1')
+      expect(host.shownAgentId()).toBe('a1')
+      host.dialShows(B, y, 'b1')
+      expect(host.shownAgentId()).toBe('b1')
+      host.dialShows(A, null, null)
+      expect(host.shownAgentId()).toBe('b1')
+      host.dialShows(B, null, null)
+      expect(host.shownAgentId()).toBeUndefined()
+    })
+
+    it('the wiring still hears a name and an app, and no id', () => {
+      const dialShows = vi.fn()
+      const host = setup(five(), { dialShows })
+      host.dialShows(A, x, 'a1')
+      host.dialShows(A, x, 'a2')
+      expect(dialShows.mock.calls).toEqual([[x], [x]])
     })
   })
 
@@ -1359,18 +1494,64 @@ describe('the dial that shows one app at a time', () => {
     expect(appRandom).toHaveBeenCalledOnce()
   })
 
-  it('with a window: the tab\'s list exactly as before, no apps, and a pick is ignored', async () => {
+  it('with a window: the tab\'s list as before with the other apps, shown harness; a dial without appFilter gets none', async () => {
     const appSwitched = vi.fn()
     const host = setup(five(), { sessions, appSwitched })
     expect(await shown(host)).toBe('ghostty')
     onTab(host, ['h2'])
-    expect(await host.listAgentSnapshot({ apps: true })).toStrictEqual({ tab: 't1', total: 2, agents: [
-      { id: 'h2', name: 'h2', engine: 'codex', machineId: 'mine', machine: 'MacbookPro.local' },
-    ] })
-    expect(host.pickApp('vscode')).toBe('ignored')
+    const h2 = { id: 'h2', name: 'h2', engine: 'codex', machineId: 'mine', machine: 'MacbookPro.local' }
+    expect(await host.listAgentSnapshot({ apps: true })).toStrictEqual({ tab: 't1', total: 2, agents: [h2], apps: { shown: 'harness', apps: [
+      { id: 'ghostty', name: 'Ghostty', count: 3, waiting: 0 },
+      { id: 'vscode', name: 'VS Code', count: 2, waiting: 0 },
+    ] } })
+    expect(await host.listAgentSnapshot()).toStrictEqual({ tab: 't1', total: 2, agents: [h2] })
+    expect(host.pickApp('harness')).toBe('ignored')
+    expect(host.pickApp('cursor')).toBe('ignored')
     host.setSwarms(null)
     expect(await shown(host)).toBe('ghostty')
     expect(appSwitched).not.toHaveBeenCalled()
+  })
+
+  it('on the tab the list of apps switches no filter', async () => {
+    const agents = five()
+    const appSwitched = vi.fn()
+    const host = setup(agents, { sessions, appSwitched })
+    expect(await shown(host)).toBe('ghostty')
+    onTab(host, ['h1'])
+    // The agents of the app the filter shows end: asking the filter would switch it.
+    agents.splice(0, agents.length, ...agents.filter((a) => a.app !== 'ghostty'))
+    expect((await host.listAgentSnapshot({ apps: true })).apps).toStrictEqual({ shown: 'harness', apps: [
+      { id: 'vscode', name: 'VS Code', count: 2, waiting: 0 },
+    ] })
+    expect(appSwitched).not.toHaveBeenCalled()
+    expect(host.holdsTab()).toBe(true)
+  })
+
+  it('the tab\'s apps count the agents that need the person', async () => {
+    const agents = five()
+    agents[4] = agent('v2', 'vscode', { state: 'needs-you' })
+    const host = setup(agents, { sessions })
+    onTab(host, ['h1'])
+    expect((await host.listAgentSnapshot({ apps: true })).apps?.apps).toContainEqual({ id: 'vscode', name: 'VS Code', count: 2, waiting: 1 })
+  })
+
+  it('no other app, or no registry: an empty list, shown harness', async () => {
+    const host = setup([], { sessions })
+    // A read with no window feeds Harness's agents, which the tab's list leaves out.
+    await host.listAgentSnapshot({ apps: true })
+    onTab(host, ['h1'])
+    expect((await host.listAgentSnapshot({ apps: true })).apps).toStrictEqual({ shown: 'harness', apps: [] })
+    const bare = new DaemonCableHost(wiring({ sessions }), fleetOf([]))
+    onTab(bare, ['h1'])
+    expect((await bare.listAgentSnapshot({ apps: true })).apps).toStrictEqual({ shown: 'harness', apps: [] })
+  })
+
+  it('eighteen other apps: the tab\'s apps are the first sixteen', async () => {
+    const others = APP_IDS.filter((app) => app !== 'harness')
+    expect(others).toHaveLength(18)
+    const host = setup(others.map((app) => agent(`a-${app}`, app)), { sessions })
+    onTab(host, ['h1'])
+    expect((await host.listAgentSnapshot({ apps: true })).apps?.apps.map((a) => a.id)).toEqual(others.slice(0, 16))
   })
 
   it('appOf is the agent\'s app in the machine view, undefined on the window\'s tab', async () => {
@@ -1663,12 +1844,12 @@ describe('the dial that shows one app at a time', () => {
       expect(told).toEqual(['view tabs pick', 'brought harness'])
     })
 
-    it('with a window, a pick on the tab is ignored and brings nothing; a pick of another app on an app\'s ring brings it', () => {
+    it('a pick of another app brings it, on the tab and on an app\'s ring', () => {
       const { told, over } = telling()
       const host = setup(five(), over)
       onTab(host, ['h1'])
-      expect(host.pickApp('ghostty')).toBe('ignored')
-      expect(told).toEqual(['view tabs window'])
+      expect(host.pickApp('ghostty')).toBe('switched')
+      expect(told).toEqual(['view tabs window', 'view apps pick', 'brought ghostty'])
       settle(host, 'ghostty')
       told.length = 0
       expect(host.pickApp('vscode')).toBe('switched')
@@ -1684,15 +1865,76 @@ describe('the dial that shows one app at a time', () => {
       expect(appPicked).not.toHaveBeenCalled()
     })
 
-    it('a pick of another app works on an app\'s ring and is ignored on the tab', async () => {
+    it('a pick of another app works on an app\'s ring and on the tab', async () => {
       const appSwitched = vi.fn()
       const { host } = viewed(five(), { appSwitched })
       await onGhosttyRing(host)
       expect(host.pickApp('vscode')).toBe('switched')
       expect(appSwitched.mock.calls).toEqual([['pick']])
       settle(host, 'harness')
-      expect(host.pickApp('ghostty')).toBe('ignored')
-      expect(appSwitched.mock.calls).toEqual([['pick']])
+      expect(host.pickApp('ghostty')).toBe('switched')
+      expect(appSwitched.mock.calls).toEqual([['pick'], ['pick']])
+    })
+
+    it('a tab pick holds the app, turns the view to apps and brings it; Harness in front with known agents does not turn it back', async () => {
+      const { told, over } = telling()
+      const host = setup(five(), { sessions, ...over })
+      await host.listAgentSnapshot({ apps: true })
+      settle(host, 'harness')
+      onTab(host, ['h1'])
+      told.length = 0
+      expect(host.pickApp('vscode')).toBe('switched')
+      expect(told).toEqual(['switched pick', 'view apps pick', 'brought vscode'])
+      for (let i = 0; i < 2; i++) {
+        const read = await host.listAgentSnapshot({ apps: true })
+        expect(read).toMatchObject({ tab: '', view: 'machine', apps: { shown: 'vscode' } })
+        expect(read.apps?.apps.map((a) => a.id)).toEqual(['harness', 'ghostty', 'vscode'])
+        expect(ids(read)).toEqual(['v1', 'v2'])
+      }
+      expect(told).toEqual(['switched pick', 'view apps pick', 'brought vscode'])
+      expect(host.holdsTab()).toBe(false)
+    })
+
+    it('a tab pick of the app the filter already shows holds it too', async () => {
+      const { told, over } = telling()
+      let live: RegisteredSession[] = []
+      const host = setup(five(), { sessions: () => live, ...over })
+      await host.listAgentSnapshot({ apps: true })
+      settle(host, 'harness')
+      live = sessions()
+      onTab(host, ['h1'])
+      told.length = 0
+      expect(host.pickApp('ghostty')).toBe('switched')
+      expect(told).toEqual(['view apps pick', 'brought ghostty'])
+      // With a pick that holds nothing, the first read would feed Harness's agents and its D1 turn the view back.
+      for (let i = 0; i < 2; i++) expect(await host.listAgentSnapshot({ apps: true })).toMatchObject({ view: 'machine', apps: { shown: 'ghostty' } })
+      expect(told).toEqual(['view apps pick', 'brought ghostty'])
+    })
+
+    it('Harness, an app with no agents and a notice\'s pick stay ignored on the tab', () => {
+      const { told, over } = telling()
+      const appPicked = vi.fn()
+      const host = setup(five(), { sessions, appPicked, ...over })
+      onTab(host, ['h1'])
+      told.length = 0
+      expect([host.pickApp('harness'), host.pickApp('cursor'), host.pickApp('vscode', 'notice')]).toEqual(['ignored', 'ignored', 'ignored'])
+      expect(told).toEqual([])
+      expect(appPicked).toHaveBeenCalledTimes(2)
+      expect(host.holdsTab()).toBe(true)
+    })
+
+    it('a tab pick of the app Harness was picked over ends that hold', async () => {
+      const agents = [agent('g1', 'ghostty')]
+      const { host, views } = viewed(agents)
+      await onGhosttyRing(host)
+      expect(host.pickApp('harness')).toBe('tabs')
+      expect(host.pickApp('ghostty')).toBe('switched')
+      agents.length = 0
+      await host.listAgentSnapshot({ apps: true })
+      expect(views).toEqual(['apps window', 'tabs pick', 'apps pick', 'tabs empty'])
+      agents.push(agent('g2', 'ghostty'))
+      await host.listAgentSnapshot({ apps: true })
+      expect(views).toEqual(['apps window', 'tabs pick', 'apps pick', 'tabs empty', 'apps front'])
     })
 
     it('the window closing drops the view and a pick of Harness', async () => {
@@ -1751,8 +1993,8 @@ describe('the dial that shows one app at a time', () => {
       expect(told).toEqual(['front', 'apps front', 'settled vscode'])
     })
 
-    it.each([['nothing', undefined], ['harness', 'harness'], ['none', 'none']])(
-      'with %s settled in front, a tab read does not read the registry', async (_name, front) => {
+    it.each([['nothing', undefined], ['harness', 'harness'], ['none', 'none'], ['cursor (another app, no agents)', 'cursor']])(
+      'with %s settled in front, a tab read reads the registry once', async (_name, front) => {
         const list = vi.fn(five)
         const host = new DaemonCableHost(wiring({ sessions }), fleetOf([]))
         host.setRegistry(new HostRegistry([host.harness, { id: 'observed', list,
@@ -1762,7 +2004,7 @@ describe('the dial that shows one app at a time', () => {
         onTab(host, ['h1'])
         const before = list.mock.calls.length
         for (let i = 0; i < 3; i++) await host.listAgentSnapshot({ apps: true })
-        expect(list).toHaveBeenCalledTimes(before)
+        expect(list).toHaveBeenCalledTimes(before + 3)
       })
 
     it.each([
@@ -1895,7 +2137,7 @@ describe('the dial that shows one app at a time', () => {
       const { host } = viewed(agents, { sessions })
       await onGhosttyRing(host)
       agents.length = 0
-      expect(await host.listAgentSnapshot({ apps: true })).toStrictEqual({ tab: 't1', total: 2, agents: [H1] })
+      expect(await host.listAgentSnapshot({ apps: true })).toStrictEqual({ tab: 't1', total: 2, agents: [H1], apps: { shown: 'harness', apps: [] } })
       expect(host.listSwarms({ apps: true })).toMatchObject({ selected: 't1' })
     })
   })
@@ -2246,6 +2488,16 @@ describe('the dial reaches the fleet through the core\'s port', () => {
       expect(await host.sendTurn('o1', 'ship it')).toMatchObject({ ok: false })
       expect(observed.send).not.toHaveBeenCalled()
       expect(JSON.stringify(heard())).not.toContain('o1')
+    })
+
+    it('isOutside: an agent of another source is, a Harness agent, an unknown id and a session moved into a Harness pane are not', () => {
+      const { host, w } = setup()
+      expect(host.isOutside('o1')).toBe(true)
+      expect(host.isOutside('h-unknown')).toBe(false)
+      const advertised = w.sessions
+      w.sessions = () => [...advertised(), { agentId: 'r1', sessionId: 's-o1' } as unknown as RegisteredSession]
+      expect(host.isOutside('o1')).toBe(false)
+      expect(host.isOutside('r1')).toBe(false)
     })
 
     // The dial only shows a waiting prompt (docs/specs/2026-11-13-device-claude-orca.md): an answer for an agent outside

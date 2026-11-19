@@ -2,6 +2,7 @@
 """Native hn picker against paged protocol fixtures. No personal sessions are read."""
 import json, os, shlex, shutil, socket, subprocess, tempfile, time, urllib.request
 from pathlib import Path
+import harness_home
 ROOT=Path(__file__).resolve().parents[1]
 BASE=Path(tempfile.mkdtemp(prefix='hn-workspace-sessions-',dir='/tmp')).resolve()
 HN=BASE/'hn'; shutil.copy2(os.environ['HN_SESSION_TEST_BINARY'],HN)
@@ -34,7 +35,8 @@ def keys(*v): tm('send-keys','-t','test',*v)
 def query(s): tm('send-keys','-t','test','-l',s)
 def creates(): return [r for r in state()['requests'] if r['type'] in ('agent_create','shell_open')]
 with (BASE/'fixture.log').open('w') as log:
- peer=subprocess.Popen([NODE,str(ROOT/'tests/workspace-mock.mjs'),str(PORT)],env=ENV,stdout=log,stderr=subprocess.STDOUT)
+ # The mock's socket sits where a daemon on this computer puts it; hn finds it by its own rule.
+ peer=subprocess.Popen([NODE,str(ROOT/'tests/workspace-mock.mjs'),str(PORT)],env={**ENV,'ADAPTER_DATA_DIR':str(harness_home.path(BASE,ENV,'cli')/'data')},stdout=log,stderr=subprocess.STDOUT)
  try:
   wait(lambda:state(),'fixture start')
   command=shlex.join(['env','-u','TMUX','-u','TMUX_PANE','-u','HN_SOCKET',str(HN),'-L',NAME,'--port',str(PORT),'-f','/dev/null','sessions'])

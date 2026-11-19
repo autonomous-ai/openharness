@@ -6,10 +6,11 @@ import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { AgentEngine } from './types.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 const captured = vi.hoisted(() => ({ panes: [] as Record<string, any>[] }))
 vi.mock('../lib/createAgentPane.js', () => ({ createAndRegisterPane: async (input: Record<string, any>) => {
-  captured.panes.push(input)
+  captured.panes.push({ ...input, argv: input.argv(1) })
   return { ok: false, error: 'RECORDED', detail: 'No pane is opened by this golden.' }
 } }))
 vi.mock('../lib/paneEngineProcess.js', async real => ({ ...await real<object>(),
@@ -68,7 +69,7 @@ beforeAll(() => {
   vi.stubEnv('OPENCODE_PATH', join(root, 'bin', 'v1'))
   // These binaries only report facts or record requests. They never launch an engine or open a real store.
   for (const [name, version] of [['v1', '1.18.31'], ['v2', 'opencode v2.0.18'], ['unknown', 'not-a-version']]) {
-    writeFileSync(join(root, 'bin', name), `#!${process.execPath}
+    writeExecutable(join(root, 'bin', name), `#!${process.execPath}
 const fs = require('node:fs');
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify({binary:'opencode',args,cwd:process.cwd()})+'\\n');
@@ -77,12 +78,12 @@ else if(args[1]==='model.list') console.log(JSON.stringify({data:[{providerID:'f
 else if(args[1]==='session.switchModel') { fs.writeFileSync(${JSON.stringify(join(root, 'model.json'))}, args[args.indexOf('-d')+1]); console.log('{}'); }
 else if(args[1]==='session.get') console.log(JSON.stringify({data:{id:'ses_fixture',...JSON.parse(fs.readFileSync(${JSON.stringify(join(root, 'model.json'))},'utf8'))}}));
 else { console.error('Unexpected fixture command'); process.exitCode=1; }
-`, { mode: 0o755 })
+`)
   }
-  writeFileSync(join(root, 'bin', 'sqlite3'), `#!${process.execPath}
+  writeExecutable(join(root, 'bin', 'sqlite3'), `#!${process.execPath}
 require('node:fs').appendFileSync(${JSON.stringify(calls)}, JSON.stringify({binary:'sqlite3',args:process.argv.slice(2)})+'\\n');
 console.log('5000\\n1\\n1');
-`, { mode: 0o755 })
+`)
   vi.resetModules()
 })
 afterAll(() => {

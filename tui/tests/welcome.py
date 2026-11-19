@@ -16,6 +16,7 @@ import time
 import urllib.request
 
 from account_fixture import signed_in_account
+import harness_home
 
 ROOT = Path(__file__).resolve().parents[1]
 PORT = int(os.environ.get('HN_WELCOME_TEST_PORT', '19787'))
@@ -161,7 +162,9 @@ mock = None
 started = False
 try:
     with socket.socket() as probe: probe.bind(('127.0.0.1', PORT))
-    mock = subprocess.Popen(['node', str(ROOT / 'tests/mock-daemon.mjs'), str(PORT)], env=ENV,
+    # The mock puts its socket where a daemon on this computer would; hn finds it by its own rule.
+    DATA = harness_home.path(BASE, ENV, 'cli') / 'data'
+    mock = subprocess.Popen(['node', str(ROOT / 'tests/mock-daemon.mjs'), str(PORT)], env={**ENV, 'ADAPTER_DATA_DIR': str(DATA)},
                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     for _ in range(100):
         assert mock.poll() is None
@@ -312,7 +315,7 @@ try:
         fresh = BASE / ('usb-startup-' + order)
         fresh.mkdir()
         ENV.update(HOME=str(fresh), HN_TMPDIR=str(fresh), HARNESS_OS='1', HARNESS_OS_LIVE='1',
-                   ADAPTER_DATA_DIR=str(BASE / '.harness/cli/data'))
+                   ADAPTER_DATA_DIR=str(DATA))
         state('welcome', {'holdTerminals': True})
         launch()
         wait(lambda: state('welcome')['pendingTerminals'] == 1, 'USB welcome creation held')
@@ -435,7 +438,7 @@ try:
     offline.mkdir()
     # Upgrading a user who last chose Terminal must start with a real agent,
     # without retaining Terminal's name or specialized harness identity.
-    defaults = offline / '.harness/tui/new-harness.json'
+    defaults = harness_home.path(offline, ENV, 'tui') / 'new-harness.json'
     defaults.parent.mkdir(parents=True, exist_ok=True)
     defaults.write_text(json.dumps({'engine': 'terminal', 'label': 'Terminal', 'dsh': 'old/shell'}))
     ENV.update(HOME=str(offline), HN_TMPDIR=str(offline))

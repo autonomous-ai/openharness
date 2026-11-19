@@ -235,8 +235,10 @@ beforeAll(() => {
   saved.ADAPTER_DATA_DIR = env.ADAPTER_DATA_DIR
   saved.CODEX_HOME = env.CODEX_HOME
   env.ADAPTER_DATA_DIR = dataDir
-  // The profile is a throwaway one (HOME for POSIX, USERPROFILE for Windows), so no engine home is the person's.
-  mkdirSync(join(root, 'home'))
+  // The profile is a throwaway one (HOME for POSIX, USERPROFILE for Windows), so no engine home is the person's. Harness ran
+  // there before the XDG move (`~/.harness` is in it), so linux's script names `$HOME/.harness/…` as darwin's does and the
+  // record holds for both; lib/engineLaunch.spec.ts checks the text on a moved home.
+  mkdirSync(join(root, 'home', '.harness'), { recursive: true })
   for (const name of ['HOME', 'USERPROFILE']) { savedEnv[name] = process.env[name]; process.env[name] = join(root, 'home') }
   env.CODEX_HOME = join(homedir(), '.codex')
   for (const name of ENGINE_PATHS) { savedEnv[`config:${name}`] = config[name]; config[name] = undefined }

@@ -656,6 +656,15 @@ describe('restoreAgents — which agents get a pane back', () => {
     expect(h.calls).toEqual(['updateIdentity:agent-a:1003'])
   })
 
+  it('re-identifies a live row whose engine\'s hook dropped its ready launch during the survey', async () => {
+    const h = harness([row()], { livePanes: ['%3'], alivePanes: ['%3'] })
+    const live = h.deps.liveProcess
+    // What a hook's registration does to the row (registry.ts `register`): no `launch`.
+    h.deps.liveProcess = async (entry, runtime) => { delete h.rows.get('agent-a')!.launch; return live(entry, runtime) }
+    await restoreAgents(h.deps)
+    expect(h.calls).toContain('updateIdentity:agent-a:1003')
+  })
+
   it('does not touch a live row that still knows its process', async () => {
     const h = harness([row({ processIdentity: identity(1003) })], { livePanes: ['%3'] })
     await restoreAgents(h.deps)
@@ -913,7 +922,7 @@ describe('restoreAgents — held until the service a launch asks is ready', () =
     expect(h.paneCreates).toBe(0)
     expect(h.calls.filter((call) => call.endsWith('@tx'))).toEqual([])
     expect(h.calls).toContain('respawn:%47:claude --resume session-gridded --grid grid-abc')
-    expect(h.rows.get('gridded')?.launch).toEqual({ state: 'starting' })
+    expect(h.calls).toContain('setLaunch:gridded:starting')
     await settled(h, 1, 1)
   })
 
@@ -1137,8 +1146,8 @@ describe('restoreAgents — waiting for the engine', () => {
     expect(h.respawns).toBe(2)
     expect(h.launches.map((l) => l.resumeSessionId ?? 'fresh')).toEqual(['session-a', 'fresh'])
     const tail = h.calls.slice(7)
-    expect(tail.slice(0, 4)).toEqual(['inheritName:session-a->agent-a', 'unbind:session-a', 'hold:tmux\u0000%0', 'respawn:%0:claude'])
-    expect(h.calls).not.toContain('updateIdentity:agent-a:7')
+    expect(tail.slice(0, 7)).toEqual(['updateIdentity:agent-a:7', 'clearIdentity:agent-a', 'setLaunch:agent-a:starting',
+      'inheritName:session-a->agent-a', 'unbind:session-a', 'hold:tmux\u0000%0', 'respawn:%0:claude'])
     expect(tail).toContain('updateIdentity:agent-a:8')
     expect(tail).toContain('clearRemainOnExit:%0')
     // remain-on-exit was NOT cleared before the first engine died — that is what kept the pane.

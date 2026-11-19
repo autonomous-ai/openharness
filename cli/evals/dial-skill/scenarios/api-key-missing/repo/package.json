@@ -1,0 +1,9 @@
+{
+  "name": "weekly-weather-report",
+  "version": "1.4.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "report": "node scripts/report.js"
+  }
+}

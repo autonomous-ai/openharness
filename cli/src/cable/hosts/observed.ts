@@ -8,11 +8,12 @@ import { type fileStamp, within } from '../../lib/sessionSearch/externals/suppor
 import type { ExternalEngine, RunningProcess } from '../../lib/sessionSearch/externals/types.js'
 import { roundDrawable } from '../roundGlyphs.js'
 import type { HostAdapter, Pane } from './adapter.js'
-import { CODEX_THREAD, type CodexQueue, type CodexQueueFailure } from './codexQueue.js'
-import { detectApp, detectHost, hostDisplayName, UNKNOWN_APP } from './hostDetect.js'
+import { CODEX_THREAD, type CodexQueue, type CodexQueueFailure, type CodexRan } from './codexQueue.js'
+import { APP_BUNDLES, detectApp, detectHost, hostDisplayName, UNKNOWN_APP } from './hostDetect.js'
 import type { Delivery } from './inbox.js'
 import { bundleOf, type OpenTarget } from './open.js'
 import { MAX_TEXT } from './orca.js'
+import type { SessionRecord } from './record.js'
 import { isTabApp } from './tabs.js'
 import type { Caps, HostAgent, HostAgentState, HostSource, PaneSwitch, SendResult } from './types.js'
 
@@ -25,8 +26,14 @@ const NO_GENERATION_TTL_MS = 12 * 60 * 60 * 1000
 /** The dial's card is small; keep what it can show. */
 const ANSWER_CHARS = 300
 /** The core's Stop grace (STOP_HOOK_GRACE_MS, core/turns/turnHooks.ts, which this process must not load): Claude's
- *  transcript can lag its Stop hook, and an answer read at once is the last turn's or none. */
+ *  transcript can lag its Stop hook, and an answer read at once is the last turn's or none. A turn is told done only
+ *  once it passed with no word of the turn going on: a Stop another Stop hook keeps going is followed at once by a
+ *  prompt or a next turn, and the dial would sound for a turn that never ended. */
 const ANSWER_GRACE_MS = 1_500
+/** A lead's subagents counted at most, as the core counts a pane's (SUBAGENTS_MAX, core/turns/turnHooks.ts). */
+const SUBAGENTS_MAX = 64
+/** A lead heard nothing of for this long lost a SubagentStop: none is counted, as the core does (SUBAGENT_TIMEOUT_MS). */
+const SUBAGENT_TIMEOUT_MS = 600_000
 /** A turn's hook runs before the engine marks the turn begun in its record: a turn younger than this may still read idle. */
 const TURN_SETTLE_MS = 2_000
 /** The tool call's line reaches the transcript just after its permission hook ran, and nobody answers a prompt sooner than
@@ -66,6 +73,13 @@ export function observedAgentId(engine: string, sessionId: string): string {
   return `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20, 32)}`
 }
 
+/** An answer as the dial's card keeps it. By code point: a cut through an emoji's surrogate pair leaves a broken
+ *  character on the card. */
+function cutAnswer(text: string): string {
+  const chars = Array.from(text)
+  return chars.length > ANSWER_CHARS ? `${chars.slice(0, ANSWER_CHARS - 1).join('')}…` : text
+}
+
 /** The name of an agent with no title: its folder's, else its engine (a folder such as `/` has no name). */
 function folderName(cwd: string | undefined, engine: string): string {
   return (cwd && basename(cwd)) || engine
@@ -89,14 +103,17 @@ export interface ObservedDeps {
   actions?: ObservedActions
   /** The app each of these processes runs in, where its parents name one (scannedApp.ts); absent, nothing is learned. */
   apps?(pids: readonly number[]): Promise<ReadonlyMap<number, string>>
-  /** The name the person gave a Claude Code session, from its own process record (recordName.ts); one that rejects names
-   *  nothing. Absent, the scan names by folder. */
-  recordName?(owner: Pick<SessionOwner, 'pid' | 'record'> & { sessionId: string }): Promise<string | undefined>
+  /** What a Claude Code session's own process record gives (record.ts): the name the person gave it, and the Claude
+   *  app's id of it; one that rejects gives nothing. Absent, the scan names by folder and places by its app alone. */
+  record?(owner: Pick<SessionOwner, 'pid' | 'record'> & { sessionId: string }): Promise<SessionRecord>
   /** The tty of a process in a tab app (tabs.ts readTty), rejecting when `ps` could not be read; absent (off macOS), no
    *  agent has a tab. */
   tty?(pid: number): Promise<string | undefined>
   /** Every owner a scan read, before any is listed. Absent, nothing is told. */
   scanned?(owners: ReadonlyMap<string, SessionOwner>): void
+  /** The hc terminal whose foreground is that pid, when exactly one is (hcSource.ts terminalOf). Absent, nothing is
+   *  paired. */
+  herdrTerminal?(pid: number): string | undefined
 }
 
 export interface ObservedActions {
@@ -113,10 +130,18 @@ export interface ObservedActions {
   codexQueue: Pick<CodexQueue, 'can' | 'send'>
   /** The Codex home Harness reads (env.CODEX_HOME): `codex queue` loads its config, so a hook's path never chooses it. */
   codexHome: string
-  /** The route (`codex`, `mod`, or the adapter that typed, said by its fixed id) or the refusal, and a failed queue's
-   *  reason. Fixed words or an adapter only: a string from a hook, a pane's id, cannot reach the log line. */
+  /** The route (`codex`, `mod`, or the adapter that typed, said by its fixed id) or the refusal, the adapter that
+   *  refused in its own sentence, and a failed queue's reason and which `codex` ran. Fixed words or an adapter only: a
+   *  string from a hook, a pane's id, a binary's path, cannot reach the log line. */
   count(what: 'mod' | 'waiting' | 'busy' | 'pending' | 'too-long' | 'no-answer' | 'codex' | 'codex-timeout'
-    | `codex-failed (${CodexQueueFailure})` | HostAdapter): void
+    | 'codex-failed (refused)' | `codex-failed (${Exclude<CodexQueueFailure, 'refused'>} · ${CodexRan})`
+    | HostAdapter | { refused: HostAdapter }): void
+}
+
+/** What a count says in the log: a fixed word, the adapter that typed by its id, or `refused (<its id>)`. */
+export function countWord(what: Parameters<ObservedActions['count']>[0]): string {
+  if (typeof what === 'string') return what
+  return 'refused' in what ? `refused (${what.refused.id})` : what.id
 }
 
 /** One of an agent's panes, beside the adapter whose it is. */
@@ -138,11 +163,19 @@ interface Entry {
   /** When its state began (a turn's start renews it): how long a turn has run, and since when an agent waits. */
   since: number
   transcriptPath?: string
+  /** The folder of its first event that named one, a hook's or the scan's row: where its session started, whose
+   *  project settings Claude Code reads, while `agent.cwd` follows each hook. */
+  startedIn?: string
   pid: number
   /** Its latest event's host hints: none for a session the scan found, until its first. */
   hints: Readonly<Record<string, string>>
   /** The process its latest event came from: none for a session the scan found, until its first. */
   caller?: number
+  /** The hc terminal a session the scan found runs in, until its first hook, and the app the scan gave it, which a
+   *  pairing that no longer holds puts back. No hook's hints: only locate() reads it. */
+  paired?: { address: string; app: string; appPending?: true }
+  /** The Claude app's id of a session the scan found, from its record, until its first hook: only locate() reads it. */
+  hostSession?: string
   /** Every pane an adapter knows it by, from its latest event and its tty, in the adapters' order. */
   panes: readonly Located[]
   /** The process its tty was read for, its latest in a tab app, and that tty once read. */
@@ -167,8 +200,12 @@ interface Entry {
   title?: string
   generation?: string
   endAt?: number
-  /** The read of the last answer, waiting out the grace. */
-  answerTimer?: ReturnType<typeof setTimeout>
+  /** Its Stop, waiting out the grace before it is told as done and its answer is read. */
+  heldStop?: ReturnType<typeof setTimeout>
+  /** How many of Claude Code's subagents run for it, the lead: its Stop while one runs does not end its turn. */
+  subagents: number
+  /** It sent a Stop in this run: its Finished comes from that, so its owner reading idle with none is a turn stopped. */
+  sentStop?: boolean
   /** When the dial's words reached it, oldest first, each until a turn starts for it. */
   dialPrompts: { at: number }[]
 }
@@ -234,7 +271,15 @@ export class ObservedSource implements HostSource {
    */
   private queueable(e: Entry, actions: ObservedActions): boolean {
     return e.agent.engine === 'codex' && !!e.transcriptPath && within(join(actions.codexHome, 'sessions'), e.transcriptPath)
-      && CODEX_THREAD.test(e.agent.sessionId!) && actions.codexQueue.can()
+      && CODEX_THREAD.test(e.agent.sessionId!) && actions.codexQueue.can(this.inCodexApp(e))
+  }
+
+  /**
+   * A session of the ChatGPT app, whose own codex queues into its threads (codexQueue.ts): the test codexApp.ts `paneOf`
+   * uses. One whose app is not known yet is not: it takes the other codex until its next hook names the app.
+   */
+  private inCodexApp(e: Entry): boolean {
+    return e.agent.app === 'codex' && e.agent.engine === 'codex'
   }
 
   /**
@@ -243,7 +288,10 @@ export class ObservedSource implements HostSource {
    * (docs/specs/2026-11-15-device-codex.md, the spike). Claude Code's go to its mod in every state, as a Harness agent's
    * are (lib/sessionInput.ts), whose `$.prompt.submit` types nothing and starts them once the turn is over. Else, and
    * after a queue that definitely failed, they are typed into the first of its panes whose app types (a herdr pane, an
-   * Orca terminal), only at its prompt.
+   * Orca terminal), only at its prompt. A queue whose codex failed, for a session with no such pane, says what helps: a
+   * session in the ChatGPT app is told `Update ChatGPT, then try again.` (an older app's codex has no queue), another
+   * `Codex could not take it. Try again.`; "did not answer" names nothing a person can do
+   * (docs/plans/2026-11-18-dial-chatgpt-pick-and-voice-design.md, cause 2).
    */
   async send(agent: HostAgent, text: string): Promise<SendResult> {
     const e = this.entries.get(agent.id)
@@ -257,11 +305,13 @@ export class ObservedSource implements HostSource {
     const noAnswer = (): SendResult => refuse('no-answer', `${name} did not answer.`)
     // Its session ended: its terminal holds a shell now, where these words would run.
     if (!e || !actions || !this.live(e)) return noAnswer()
+    const waiting = (): SendResult => refuse('waiting', `${name} is waiting for your answer in ${hostDisplayName(e.agent.host)}.`)
+    const busy = (): SendResult => refuse('busy', `${name} is busy. Say it when it is done.`)
     const typer = this.first(e, words)
     if (this.queueable(e, actions)) {
       // Recorded first: an idle Codex starts the queued turn, and its hook can be heard, before `codex queue` has exited.
       const record = this.dialPrompt(e)
-      const queued = await actions.codexQueue.send(e.agent.sessionId!, text)
+      const queued = await actions.codexQueue.send(e.agent.sessionId!, text, this.inCodexApp(e))
       if (queued.outcome === 'queued') {
         actions.count('codex')
         return { ok: true }
@@ -274,7 +324,11 @@ export class ObservedSource implements HostSource {
         actions.count('codex-timeout')
         return { ok: false, reason: `${name} did not answer.` }
       }
-      actions.count(`codex-failed (${queued.reason})`)
+      if (queued.reason === 'refused') actions.count('codex-failed (refused)')
+      else {
+        actions.count(`codex-failed (${queued.reason} · ${queued.ran})`)
+        if (!typer) return refuse('no-answer', this.inCodexApp(e) ? 'Update ChatGPT, then try again.' : 'Codex could not take it. Try again.')
+      }
     }
     if (this.modReady(e, actions)) {
       const delivery = await actions.toMod(e.agent.sessionId!, text)
@@ -292,15 +346,22 @@ export class ObservedSource implements HostSource {
     if (!typer || !this.live(e) || still?.pane.adapter !== typer.pane.adapter || still.pane.id !== typer.pane.id) return noAnswer()
     // A prompt open in the terminal takes what is typed as its answer: Enter there would allow what the dial only shows,
     // as the core never types into a Harness pane that shows one (lib/messageHolds.ts `permission_open`).
-    if (e.agent.state === 'needs-you') return refuse('waiting', `${name} is waiting for your answer in ${hostDisplayName(e.agent.host)}.`)
+    if (e.agent.state === 'needs-you') return waiting()
     // A working turn may show a prompt not yet heard of: Codex's approval overlay, which takes `y` or Enter, has no hook, and
     // Claude Code's comes a few hundred ms after its prompt opens.
-    if (e.agent.state === 'working' || !this.idleKnown(e)) return refuse('busy', `${name} is busy. Say it when it is done.`)
+    if (e.agent.state === 'working' || !this.idleKnown(e)) return busy()
     // Recorded first: `orca terminal send` returns once the prompt is submitted, and its turn's hook can be heard before.
     const record = this.dialPrompt(e)
-    if (!await typer.adapter.type!(typer.pane, text, e.agent.engine)) {
+    const typed = await typer.adapter.type!(typer.pane, text, e.agent.engine)
+    // Only `true` was sent: a refusal is an object, and truthy.
+    if (typed !== true) {
       this.forgetDialPrompt(e, record)
-      return noAnswer()
+      if (typed === 'busy') return busy()
+      if (typed === 'waiting') return waiting()
+      // `false`, or an answer outside the type, says nothing: a refusal is read only off an object that holds one.
+      if (!typed || typeof typed !== 'object' || typeof typed.refused !== 'string') return noAnswer()
+      actions.count({ refused: typer.adapter })
+      return { ok: false, reason: typed.refused }
     }
     actions.count(typer.adapter)
     return { ok: true }
@@ -367,11 +428,10 @@ export class ObservedSource implements HostSource {
   }
 
   /** What a tap opens: its app, and the first of its panes the opener brings forward. Asked at each look, as a rest's.
-   *  An agent placed by its caller has had no hook to name its app: the adapter it was placed in names it. */
+   *  An agent placed by its caller, or found by the scan, has had no hook to name its app: its pane's adapter names it. */
   private target(e: Entry): OpenTarget {
     const near = this.shownOnly(e).find(({ adapter, pane }) => tapped(adapter, pane))
-    const placed = near && !e.panes.includes(near)
-    const bundle = e.bundle ?? (placed ? near.adapter.bundle : undefined)
+    const bundle = e.bundle ?? near?.adapter.bundle
     return { ...(bundle ? { bundle } : {}), ...(near ? { pane: near.pane } : {}) }
   }
 
@@ -387,10 +447,13 @@ export class ObservedSource implements HostSource {
     })
   }
 
-  /** Every pane its adapters know it by, afresh: a session resumed elsewhere keeps none it left. */
+  /** Every pane its adapters know it by, afresh: a session resumed elsewhere keeps none it left. One paired with an hc
+   *  terminal is where that terminal's hook would place it. A session the scan found has no caller until its first hook:
+   *  its own process (the engine's record's, or the rollout's owner) places it. */
   private locate(entry: Entry): void {
-    const place = { host: entry.agent.host, app: entry.agent.app, hints: entry.hints, tty: entry.tty, pid: entry.caller,
-      sessionId: entry.agent.sessionId, engine: entry.agent.engine }
+    const hints = entry.paired ? { HC_TERMINAL_ID: entry.paired.address } : entry.hints
+    const place = { host: entry.agent.host, app: entry.agent.app, hints, tty: entry.tty, hostSession: entry.hostSession,
+      pid: entry.caller ?? entry.pid, sessionId: entry.agent.sessionId, engine: entry.agent.engine, cwd: entry.agent.cwd }
     entry.panes = (this.deps.actions?.adapters ?? []).flatMap((adapter) => {
       const pane = adapter.paneOf(place)
       return pane ? [{ adapter, pane }] : []
@@ -421,6 +484,11 @@ export class ObservedSource implements HostSource {
   paneOf(agentId: string, adapter: string): string | undefined {
     const e = this.entries.get(agentId)
     return e && this.live(e) ? e.panes.find(({ pane }) => pane.adapter === adapter)?.pane.id : undefined
+  }
+
+  /** The pane its caller last placed it at in that adapter (setPaneNames), as shownOnly reads it; never one of its panes. */
+  placedAt(agentId: string, adapter: string): string | undefined {
+    return this.paneNames.get(adapter)?.placed.get(agentId)
   }
 
   /**
@@ -532,14 +600,30 @@ export class ObservedSource implements HostSource {
     return this.entries.get(agentId)?.asked
   }
 
+  /** The transcript path the agent's latest hook or the scan gave, as given; none when neither gave one. Its user
+   *  settings' home for the page guard (claudeRenderer.ts judges the path). */
+  transcriptOf(agentId: string): string | undefined {
+    return this.entries.get(agentId)?.transcriptPath
+  }
+
+  /** The folder the agent's session started in (Entry.startedIn); none when no event named one. The project settings'
+   *  folder for the page guard. */
+  startedIn(agentId: string): string | undefined {
+    return this.entries.get(agentId)?.startedIn
+  }
+
   /** Takes the event; for a turn's start of a session it lists, answers what started it. */
   ingest(e: ObservedEvent): PromptSource | undefined {
     if (e.event === 'asked') {
       this.asked(e)
       return
     }
+    const known = this.entries.get(observedAgentId(e.engine, e.sessionId))
     // The end of a session never listed (one of the 50 dropped when full, or ended before the devices started) lists none.
-    if (e.event === 'session-end' && !this.entries.has(observedAgentId(e.engine, e.sessionId))) return
+    if (e.event === 'session-end' && !known) return
+    // Each hook is a process of its own, and a subagent stopped as its lead exits still sends SubagentStop: one that comes
+    // after the lead's SessionEnd is no resume, and the ended session's terminal holds a shell now.
+    if ((e.event === 'subagent-start' || e.event === 'subagent-stop') && known?.endAt !== undefined) return
     const now = this.deps.now()
     const entry = this.entry(e.engine, e.sessionId, now, {
       cwd: e.cwd, transcriptPath: e.transcriptPath, pid: e.callerPid,
@@ -547,6 +631,11 @@ export class ObservedSource implements HostSource {
     if (!entry) return
     const a = entry.agent
     a.lastActivityAt = now
+    // Its own hook places it now, and with a caller it is never paired again. The pairing's Herdr is given back first:
+    // no hook said it, so until the caller's parents answer it keeps the app the scan gave it.
+    if (entry.paired) a.app = entry.paired.app
+    entry.paired = undefined
+    entry.hostSession = undefined
     // A hook says where a session runs: one the open scan found is not known yet until its first, unless its parent
     // processes named its app. A hook whose hints name no app (the Codex app's own Codex) learns it from its caller's
     // parents.
@@ -557,9 +646,14 @@ export class ObservedSource implements HostSource {
     // Every event's own: a session resumed elsewhere must not be typed into the terminal it left.
     entry.hints = e.hostHints
     entry.caller = e.callerPid
+    // Before locate: learnTty returns early for a caller it already read, so nothing places the session again at this
+    // hook, and a pane by folder must see the one this hook names.
+    if (e.cwd) {
+      a.cwd = e.cwd
+      entry.startedIn ??= e.cwd
+    }
     this.locate(entry)
     entry.bundle = bundleOf(a.host, e.hostHints)
-    if (e.cwd) a.cwd = e.cwd
     if (e.event === 'session-start' || e.event === 'turn-start') {
       if (e.title !== undefined) entry.title = e.title
       else if (e.engine === 'claude') entry.title = undefined
@@ -568,6 +662,11 @@ export class ObservedSource implements HostSource {
     if (e.transcriptPath) entry.transcriptPath = e.transcriptPath
     if (e.event === 'session-end') {
       entry.endAt = now
+      // No turn goes on in an ended session: one whose Stop waits out the grace (`claude -p` ends at once), a lead's whose
+      // subagents ran, or one cut short, at its prompt too, is over, told as nothing. One left waiting would read working
+      // once the interrupt reached its transcript (checkWorking).
+      if (entry.agent.state === 'working' || entry.agent.state === 'needs-you') this.setState(entry, 'idle', now)
+      this.dropStop(entry)
       this.clearAsked(entry)
       this.emit()
       return
@@ -581,31 +680,75 @@ export class ObservedSource implements HostSource {
         // A start must not undo a state a faster event already set.
         break
       case 'turn-start':
+        this.dropStop(entry)
         this.setState(entry, 'working', now)
         a.unseenDone = false
         // The last turn's answer is not this one's: cleared, the same answer at this turn's end is a change the dial hears.
         a.lastAnswer = undefined
+        // A SubagentStop that was lost keeps the count no longer, as the core's pane turns (core/turns/turnHooks.ts).
+        entry.subagents = 0
         source = this.promptSource(entry, e, now)
         break
       case 'needs-input':
         // In every state: the hook hears a prompt only (hook/notify.mjs, never the idle notice), and one can open in any.
         // An agent the open scan found reads idle until its next hook though its turn may run, the quota's resume asks
         // after its turn stopped, and a turn another Stop hook keeps going asks after its Stop.
+        this.dropStop(entry)
         this.setState(entry, 'needs-you', now)
         break
       case 'turn-error':
+        this.dropStop(entry)
         this.setState(entry, 'error', now)
         break
+      case 'turn-aborted':
+        // Codex's Interrupt: the person stopped the turn, and nothing is told as done, as a Claude turn stopped with Esc.
+        this.dropStop(entry)
+        this.setState(entry, 'idle', now)
+        a.unseenDone = false
+        break
       case 'turn-stop':
-        this.setState(entry, 'done', now)
-        a.unseenDone = true
-        clearTimeout(entry.answerTimer)
-        entry.answerTimer = setTimeout(() => { void this.readAnswer(entry) }, ANSWER_GRACE_MS)
-        entry.answerTimer.unref()
+        entry.sentStop = true
+        this.dropStop(entry)
+        // A lead whose subagents run has not finished, though they stop within the grace: its wrap-up after the last one
+        // is still to come, and its own Stop ends the turn, as a pane's does (engines/kit/stopHook.ts).
+        if (entry.subagents) break
+        entry.heldStop = setTimeout(() => { this.finish(entry) }, ANSWER_GRACE_MS)
+        entry.heldStop.unref()
+        break
+      case 'subagent-start':
+        if (entry.subagents < SUBAGENTS_MAX) entry.subagents++
+        // Fixed words: never the session.
+        else this.deps.log(`[observed] subagent not counted · ${SUBAGENTS_MAX} running`)
+        break
+      case 'subagent-stop':
+        // One started before the devices did can stop now.
+        if (entry.subagents) entry.subagents--
         break
     }
     this.emit()
     return source
+  }
+
+  /** Its Stop passed the grace with no word of the turn going on: done, unless its subagents still run. */
+  private finish(entry: Entry): void {
+    entry.heldStop = undefined
+    if (entry.subagents) return
+    this.setState(entry, 'done', this.deps.now())
+    entry.agent.unseenDone = true
+    this.emit()
+    void this.readAnswer(entry)
+  }
+
+  /** Its turn goes on, or is over without a Finished: the Stop it held is not told. */
+  private dropStop(entry: Entry): void {
+    clearTimeout(entry.heldStop)
+    entry.heldStop = undefined
+  }
+
+  /** No longer listed: a Stop it held is told of nothing. */
+  private remove(entry: Entry): void {
+    this.dropStop(entry)
+    this.entries.delete(entry.agent.id)
   }
 
   private promptSource(entry: Entry, e: ObservedHookEvent, now: number): PromptSource | undefined {
@@ -626,6 +769,7 @@ export class ObservedSource implements HostSource {
     const entry = this.entries.get(observedAgentId(e.engine, e.sessionId))
     if (!entry || !this.live(entry)) return
     const now = this.deps.now()
+    this.dropStop(entry)
     this.setState(entry, 'needs-you', now)
     // A new prompt, though the agent may still read needs-you for the last one: what was written before is not its answer.
     entry.since = now
@@ -657,11 +801,14 @@ export class ObservedSource implements HostSource {
     const id = observedAgentId(engine, sessionId)
     // Harness's own session (the voice router's Claude Code runs in the data folder, outside a pane) is never an agent
     // outside it: one first heard of without its folder (a hook cut to its bound) goes once the folder is known.
+    const have = this.entries.get(id)
     if (init.cwd && this.deps.excluded.some((dir) => within(dir, init.cwd!))) {
-      if (this.entries.delete(id)) this.emit()
+      if (have) {
+        this.remove(have)
+        this.emit()
+      }
       return undefined
     }
-    const have = this.entries.get(id)
     if (have) return have
     if (this.entries.size >= MAX_SESSIONS && !this.evict()) {
       this.deps.log(`[observed] full; dropped ${engine} session`)
@@ -681,7 +828,9 @@ export class ObservedSource implements HostSource {
       hints: {},
       panes: [],
       dialPrompts: [],
+      subagents: 0,
       ...(init.transcriptPath ? { transcriptPath: init.transcriptPath } : {}),
+      ...(init.cwd ? { startedIn: init.cwd } : {}),
     }
     this.entries.set(id, entry)
     return entry
@@ -695,7 +844,7 @@ export class ObservedSource implements HostSource {
         .sort((x, y) => x.agent.lastActivityAt - y.agent.lastActivityAt)[0]
     const victim = oldest(['idle']) ?? oldest(['done', 'error'])
     if (!victim) return false
-    this.entries.delete(victim.agent.id)
+    this.remove(victim)
     return true
   }
 
@@ -704,16 +853,15 @@ export class ObservedSource implements HostSource {
     let text: string | undefined
     try {
       text = await this.deps.lastAnswer(entry.agent.engine, entry.transcriptPath)
-    } catch (error) {
-      this.deps.log(`[observed] last answer not read: ${error instanceof Error ? error.message : error}`)
+    } catch {
+      // A count only, as the scan's read logs none: its error can hold the transcript's path, and so the account's name.
+      this.deps.log('[observed] last answer · not read')
       return
     }
     if (!text || this.entries.get(entry.agent.id) !== entry) return
     // A newer turn began while the file was read; its answer is not this one's.
     if (entry.agent.state !== 'done') return
-    // By code point: a cut through an emoji's surrogate pair leaves a broken character on the card.
-    const chars = Array.from(text)
-    entry.agent.lastAnswer = chars.length > ANSWER_CHARS ? `${chars.slice(0, ANSWER_CHARS - 1).join('')}…` : text
+    entry.agent.lastAnswer = cutAnswer(text)
     this.emit()
   }
 
@@ -736,31 +884,39 @@ export class ObservedSource implements HostSource {
     }
     if (!open.size) return
     const rows = await this.deps.sessionRows.find(open)
-    // Asked once, as a session is first listed, for the ones this look is about to list: a listed session is never looked
-    // at again, and its next hook is the next word on where it runs and what it is called.
+    // The sessions this look lists, each read once as it is first listed: a listed session is never looked at again, and
+    // its next hook is the next word on where it runs and what it is called. No row, no folder to tell Harness's own from a
+    // person's (the voice router's transcript is a program's, in the data folder) or to name it by.
     const listing = [...open].filter(([sessionId, engine]) => rows.has(sessionId) && !this.entries.has(observedAgentId(engine, sessionId)))
       .slice(0, MAX_SESSIONS)
+    // Every read of the look runs before any session of it is listed, and nothing is awaited from the first entry to the
+    // emit: the dial reads list() every second and its restore marks an agent restored before reading its recap, so a
+    // session listed before its answer was read would never be restored. The loop's own check then sees a session a hook
+    // told of during the reads, which keeps what it said.
     const learning = this.deps.now()
     const apps = await this.appsOf(listing.map(([sessionId]) => owners.get(sessionId)!.pid))
+    const records = await this.recordsOf(listing, owners)
+    const busy = await this.busyOf(listing, owners)
+    const answers = await this.answersOf(listing, rows, busy)
+    // Every read of the look, so a slow one shows in the line.
     const ms = this.deps.now() - learning
-    // Read before the loop: its own check then sees a session a hook told of during the reads, which keeps what it said.
-    const names = await this.namesOf(listing, owners)
     let listed = 0
     let known = 0
     let named = 0
+    let answered = 0
+    let paired = 0
     const now = this.deps.now()
-    for (const [sessionId, engine] of open) {
-      // No row, no folder to tell Harness's own from a person's (the voice router's transcript is a program's, in the data
-      // folder) or to name it by. A hook may also have told of it while the rows or the apps were read: it said more.
-      const row = rows.get(sessionId)
-      if (!row || this.entries.has(observedAgentId(engine, sessionId))) continue
+    for (const [sessionId, engine] of listing) {
+      // A hook may have told of it while the reads ran: it said more.
+      if (this.entries.has(observedAgentId(engine, sessionId))) continue
+      const row = rows.get(sessionId)!
       const owner = owners.get(sessionId)!
       const entry = this.entry(engine, sessionId, now, { cwd: row.cwd, transcriptPath: row.transcriptPath, pid: owner.pid })
       if (!entry) continue
       listed++
-      const name = names.get(sessionId)
-      if (name) {
-        entry.title = name
+      const record = records.get(sessionId)
+      if (record?.name) {
+        entry.title = record.name
         named++
       }
       // The app alone: its host and what a tap opens stay unknown until its first hook.
@@ -770,38 +926,134 @@ export class ObservedSource implements HostSource {
         delete entry.agent.appPending
         known++
       }
+      // The Claude app's id of it: with its app, it places it until its first hook (claudeApp.ts).
+      if (record?.hostSession) entry.hostSession = record.hostSession
+      if (this.pair(entry)) paired++
       this.learnTty(entry, owner.pid)
       // Once its panes are known.
       entry.agent.name = this.nameOf(entry)
       // A turn it is in when found reads working, as checkWorking reads it, which ends it once its owner reads idle: listed
       // idle, its compaction's SessionStart (which moves no state) would give a running turn a handle to type into.
-      if ((engine === 'claude' || engine === 'codex') && await this.deps.openSessions.busy(owner)
-        && entry.agent.state === 'idle' && this.live(entry)) this.setState(entry, 'working', this.deps.now())
+      if (busy.has(sessionId)) this.setState(entry, 'working', now)
+      // Its last turn's answer, from before the dial: history, not news, so it stays idle with nothing unseen, and the
+      // dial's restore shows it.
+      const answer = answers.get(sessionId)
+      if (answer) {
+        entry.agent.lastAnswer = cutAnswer(answer)
+        answered++
+      }
     }
     if (!listed) return
-    // Counts only: an app, a pid or a path would say whose session runs where, and a name is the person's own.
-    this.deps.log(`[observed] scan · ${listed} found · ${known} app known · ${named} named · ${ms} ms`)
+    // Counts only: an app, a pid or a path would say whose session runs where, and a name or an answer is the person's own.
+    this.deps.log(`[observed] scan · ${listed} found · ${known} app known · ${named} named · ${answered} answered · ${ms} ms`)
+    this.logPaired(paired)
     this.emit()
   }
 
-  /** The name in each Claude Code session's own record, by session id, read one at a time; none when there is no reader.
-   *  A read that fails names nothing and logs nothing: its error can hold a path, and the session keeps its folder. */
-  private async namesOf(
+  /** Each session the scan found that no hook has told of yet, placed again in the hc terminal it runs in: Herdr's list
+   *  can come after the scan, and a terminal's foreground moves. Called on each change of the hc source. */
+  placeHerdr(): void {
+    let changed = false
+    let paired = 0
+    for (const e of this.entries.values()) {
+      if (!this.pair(e)) continue
+      changed = true
+      // Paired anew or moved; one taken back is not counted.
+      if (e.paired) paired++
+    }
+    this.logPaired(paired)
+    if (changed) this.emit()
+  }
+
+  /**
+   * Places a session the scan found, which no hook has told of, in the hc terminal whose foreground is its process. hc's
+   * own foreground pid, equal to the pid the scan lists it by and named by one terminal only, is a certain place (the
+   * addendum of docs/plans/2026-11-17-dial-recap-after-restart-design.md, decision 5, and the PM's decision of
+   * 2026-11-17), so it is placed as a hook from that terminal would place it: its pane, words and tap follow Herdr's own
+   * rules. It writes no hook state: a hook's hints and caller are what later code and the next hook read, and the next
+   * hook wins. A pairing that no longer holds gives back what the scan gave it. Whether anything changed.
+   */
+  private pair(entry: Entry): boolean {
+    if (!this.deps.herdrTerminal || entry.caller !== undefined) return false
+    const address = this.deps.herdrTerminal(entry.pid)
+    if (address === entry.paired?.address) return false
+    const a = entry.agent
+    if (address !== undefined) {
+      // A move keeps what the scan gave it, not the Herdr it was placed in.
+      const { app, appPending } = entry.paired ?? a
+      entry.paired = { address, app, ...(appPending ? { appPending } : {}) }
+      a.host = 'herdr'
+      a.app = 'herdr'
+      delete a.appPending
+      entry.bundle = APP_BUNDLES.herdr
+    } else {
+      const { app, appPending } = entry.paired!
+      a.host = 'terminal'
+      a.app = app
+      if (appPending) a.appPending = appPending
+      entry.bundle = undefined
+      entry.paired = undefined
+    }
+    this.locate(entry)
+    return true
+  }
+
+  /** A count only: a pid or a terminal's address would say whose session runs where. */
+  private logPaired(paired: number): void {
+    if (paired) this.deps.log(`[observed] herdr · ${paired} paired`)
+  }
+
+  /** The Claude Code and Codex sessions in a turn, by session id, read one at a time. One that cannot say counts as busy,
+   *  as OpenSessions.busy counts an engine whose store cannot say. */
+  private async busyOf(
     listing: readonly [string, ExternalEngine][], owners: ReadonlyMap<string, SessionOwner>,
+  ): Promise<ReadonlySet<string>> {
+    const busy = new Set<string>()
+    for (const [sessionId, engine] of listing) {
+      if (engine !== 'claude' && engine !== 'codex') continue
+      if (await this.deps.openSessions.busy(owners.get(sessionId)!).catch(() => true)) busy.add(sessionId)
+    }
+    return busy
+  }
+
+  /** The last answer of each idle Claude Code or Codex session, by session id, with the Stop hook's reader, one at a time.
+   *  Harness's own session is not read: it is never listed. A read that fails gives none and logs nothing: its error can
+   *  hold a path. */
+  private async answersOf(
+    listing: readonly [string, ExternalEngine][],
+    rows: ReadonlyMap<string, { cwd?: string; transcriptPath?: string | null }>,
+    busy: ReadonlySet<string>,
   ): Promise<ReadonlyMap<string, string>> {
-    const names = new Map<string, string>()
-    if (!this.deps.recordName) return names
+    const answers = new Map<string, string>()
+    for (const [sessionId, engine] of listing) {
+      const { cwd, transcriptPath } = rows.get(sessionId)!
+      if ((engine !== 'claude' && engine !== 'codex') || busy.has(sessionId) || !transcriptPath) continue
+      if (cwd && this.deps.excluded.some((dir) => within(dir, cwd))) continue
+      const answer = await this.deps.lastAnswer(engine, transcriptPath).catch(() => undefined)
+      if (answer) answers.set(sessionId, answer)
+    }
+    return answers
+  }
+
+  /** What each Claude Code session's own record gives, by session id, read one at a time; none when there is no reader.
+   *  A read that fails gives nothing and logs nothing: its error can hold a path, and the session keeps its folder and
+   *  its app's place. */
+  private async recordsOf(
+    listing: readonly [string, ExternalEngine][], owners: ReadonlyMap<string, SessionOwner>,
+  ): Promise<ReadonlyMap<string, SessionRecord>> {
+    const records = new Map<string, SessionRecord>()
+    if (!this.deps.record) return records
     for (const [sessionId, engine] of listing) {
       if (engine !== 'claude') continue
       try {
         const { pid, record } = owners.get(sessionId)!
-        const name = await this.deps.recordName({ pid, record, sessionId })
-        if (name) names.set(sessionId, name)
+        const read = await this.deps.record({ pid, record, sessionId })
+        if (read.name !== undefined || read.hostSession !== undefined) records.set(sessionId, read)
       } catch {
         // Named by its folder, as a session with no name is.
       }
     }
-    return names
+    return records
   }
 
   /** None when there is no reader or it failed: every session is still listed, not known yet. */
@@ -837,15 +1089,16 @@ export class ObservedSource implements HostSource {
       else if (gen) gone = gen !== e.generation
       // No generation to tell a reused pid by: running, and heard from in the last 12 h.
       else gone = !this.deps.alive(e.pid) || now - e.agent.lastActivityAt >= NO_GENERATION_TTL_MS
-      if (gone) { this.entries.delete(id); changed = true }
+      if (gone) { this.remove(e); changed = true }
     }
     if (changed) this.emit()
   }
 
   /**
    * The turns no hook moves, every 3 s. A person who answers a prompt in their own terminal sends no hook: the transcript
-   * growing past the moment the agent began waiting says the turn goes on. Codex sends no end-of-turn hook, and a Claude
-   * turn stopped with Esc gets no Stop: the owner's record reading idle says each is over.
+   * growing past the moment the agent began waiting says the turn goes on. An older Codex sends no end-of-turn hook, and a
+   * turn stopped with Esc gets no Stop: the owner's record reading idle says each is over. A Stop waiting out its grace,
+   * and a lead's subagents, are the hooks' word that the turn goes on, whatever the record reads.
    */
   async checkWorking(): Promise<void> {
     const all = [...this.entries.values()]
@@ -861,18 +1114,26 @@ export class ObservedSource implements HostSource {
       this.emit()
     }
     const at = this.deps.now()
+    for (const e of all) {
+      if (!e.subagents || at - e.agent.lastActivityAt < SUBAGENT_TIMEOUT_MS) continue
+      e.subagents = 0
+      // Fixed words: never the session.
+      this.deps.log('[observed] subagent count reset · no event in 10 min')
+    }
+    const ownerEnds = (e: Entry): boolean => e.agent.state === 'working' && e.heldStop === undefined && !e.subagents
     const turns = all.filter((e) => (e.agent.engine === 'codex' || e.agent.engine === 'claude')
-      && e.agent.state === 'working' && at - e.since >= TURN_SETTLE_MS)
+      && ownerEnds(e) && at - e.since >= TURN_SETTLE_MS)
     if (!turns.length) return
     const owners = await this.deps.openSessions.owners()
     for (const e of turns) {
       // Not found says nothing (a process read that timed out finds nobody): only an owner that reads idle ends a turn.
       const owner = owners.get(e.agent.sessionId ?? '')
       if (!owner || await this.deps.openSessions.busy(owner)) continue
-      if (e.agent.state !== 'working' || this.entries.get(e.agent.id) !== e) continue
+      if (!ownerEnds(e) || this.entries.get(e.agent.id) !== e) continue
       const now = this.deps.now()
       e.agent.lastActivityAt = now
-      if (e.agent.engine === 'claude') {
+      // Only an older Codex, which sends no Stop, is told done here.
+      if (e.agent.engine === 'claude' || e.sentStop) {
         // Stopped with Esc: no answer, nothing to tell as done.
         this.setState(e, 'idle', now)
         this.emit()

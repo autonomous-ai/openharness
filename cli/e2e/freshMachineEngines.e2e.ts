@@ -25,6 +25,7 @@ import { afterEach, expect, it, onTestFailed } from 'vitest'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
+import { harnessPath, thisComputer } from '../src/config/harnessHome.js'
 import { resolveBinaryOnPath } from '../src/lib/binaryOnPath.js'
 
 let daemon: IsolatedDaemon | undefined
@@ -251,7 +252,9 @@ it('waits for the Desktop\'s own download of Codex, rather than installing it be
     const npm = join(d.root, 'bin', 'npm'), script = readFileSync(npm, 'utf8').split('\n')
     writeFileSync(npm, [script[0], `printf '%s\\n' "$*" >> ${JSON.stringify(join(d.root, 'npm-calls'))}`, ...script.slice(1)].join('\n'), { mode: 0o755 })
   })
-  const home = d.env.HOME!, bin = join(home, '.local', 'bin'), run = join(home, '.harness', 'run')
+  // Harness's run folder as the Desktop finds it by the root rule, read after the start: on a fresh Linux home the
+  // start makes the XDG roots Harness's, and the marker goes in the state root.
+  const home = d.env.HOME!, bin = join(home, '.local', 'bin'), run = harnessPath('run', home, process.platform, thisComputer(d.env))
   mkdirSync(bin, { recursive: true }); mkdirSync(run, { recursive: true })
   // What npm has linked before it has written the package the launcher needs (a brand-new Mac, 2026-10-16).
   writeFileSync(join(bin, 'codex'), `#!${process.execPath}\nconsole.error("Error: Cannot find module '@openai/codex-darwin-arm64'");\nprocess.exit(1)\n`, { mode: 0o755 })

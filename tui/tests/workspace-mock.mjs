@@ -254,7 +254,8 @@ wss.on('connection', ws => {
     }
   })
 })
-const socketDir = join(home, '.harness/cli/data')
+// The daemon's data folder, as the fixture gives it: the socket hn finds by its own rule.
+const socketDir = process.env.ADAPTER_DATA_DIR || ''
 if (!resolve(socketDir).startsWith(resolve(home) + '/')) throw new Error('unsafe socket directory')
 mkdirSync(socketDir, { recursive: true, mode: 0o700 })
 const socketPath = join(socketDir, `daemon-${port}.sock`)

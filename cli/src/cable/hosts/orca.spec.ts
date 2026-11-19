@@ -1,10 +1,11 @@
 import { ChildProcess, execFile, spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { chmodSync, existsSync, lutimesSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, lutimesSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { createOrcaAdapter, createOrcaReads, ORCA_HANDLE, type OrcaChild, orcaDeps, type OrcaDeps, type OrcaReadDeps } from './orca.js'
+import { writeExecutable } from '../../testing/executableFixture.js'
 
 // The real execFile and spawn, watched: a spec reads how the child of a run or a watch ended.
 vi.mock('node:child_process', async (original) => {
@@ -71,8 +72,7 @@ afterEach(() => {
 function fakeOrca(tail = 'exit 0'): { file: string; argv(): string[] } {
   const file = join(dir, 'orca')
   const out = join(dir, 'argv')
-  writeFileSync(file, `#!/bin/sh\nprintf '%s\\0' "$@" > '${out}'\n${tail}\n`)
-  chmodSync(file, 0o755)
+  writeExecutable(file, `#!/bin/sh\nprintf '%s\\0' "$@" > '${out}'\n${tail}\n`)
   return { file, argv: () => readFileSync(out, 'utf8').split('\0').slice(0, -1) }
 }
 
@@ -182,6 +182,29 @@ describe('Orca actions', () => {
     expect(orcaDeps().onPath('orca')).toBeNull()
     const fake = fakeOrca()
     expect(orcaDeps().onPath('orca')).toBe(fake.file)
+  })
+
+  // GNOME's screen reader is /usr/bin/orca: it ignores the arguments it does not know, and starts.
+  it('an orca on PATH that is not Orca\'s launcher is never run', async () => {
+    fakeOrca()
+    vi.stubEnv('PATH', dir)
+    // Nor the app's own.
+    const orca = createOrcaActions({ ...orcaDeps(), exists: () => false })
+    expect(await orca.send(HANDLE, 'hi')).toBe(false)
+    expect(await orca.switchTo(HANDLE)).toBe('failed')
+    expect(existsSync(join(dir, 'argv'))).toBe(false)
+  })
+
+  // The end-to-end tests' daemons run inside the real Orca on a developer's Mac: their harness names a fake as the app's
+  // (e2e/harness/daemon.ts). The run is recorded: nothing is started, whichever file the lookup lands on.
+  it('the real deps\' app is the one HARNESS_ORCA_APP_BIN names', async () => {
+    const fake = join(dir, 'Orca.app', 'Contents', 'Resources', 'bin', 'orca')
+    vi.stubEnv('PATH', dir)
+    vi.stubEnv('HARNESS_ORCA_APP_BIN', fake)
+    const { calls, run } = recordingRun()
+    const orca = createOrcaActions({ ...orcaDeps(), run, platform: 'darwin', exists: (path) => path === fake || path === APP_ORCA })
+    expect(await orca.send(HANDLE, 'hi')).toBe(true)
+    expect(calls.map((call) => call.file)).toEqual([fake])
   })
 
   it('the app\'s own binary is used on macOS when PATH has none', async () => {

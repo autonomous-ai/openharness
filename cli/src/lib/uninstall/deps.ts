@@ -1,16 +1,21 @@
 /** This computer's side of `harness uninstall` (command.ts): every module it needs, loaded only when it runs. */
 import { existsSync, rmSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join, win32 } from 'node:path'
+import { join } from 'node:path'
 import { env } from '../../config/env.js'
+import { HARNESS_ENTRIES, harnessPath, harnessRoot, harnessRoots, legacyHarnessHome } from '../../config/harnessHome.js'
 import { openDaemon, whereFor } from '../../agentClient/daemon.js'
+import { readBridge, removeBridge } from '../../homeMove/bridge.js'
+import { moveLockPath } from '../../homeMove/lock.js'
 import { AUTH_DIR } from '../authSession.js'
 import { daemonPort, isAlive, readPid } from '../daemonState.js'
 import { SpawnLockBusyError, withSpawnLock } from '../daemonSpawnLock.js'
 import { stopDaemonProcess } from '../daemonStop.js'
 import { gridCredentialsPath, gridCredentialsExist } from '../gridCredentials.js'
 import { ownedBinEntries } from '../launchers.js'
+import { runtimeShortRoot } from '../localSocket.js'
 import { platformDaemonDeps } from '../platformDaemon.js'
+import { removePath } from '../removePath.js'
 import { runPowershell } from '../windows/powershell.js'
 import { stopEveryAgent } from './agents.js'
 import { labelHookRemoval, lockHolder, UninstallLockBusy, type UninstallDeps } from './command.js'
@@ -32,14 +37,15 @@ function line(fd: 1 | 2, text: string): void {
 
 export async function uninstallDeps(options: { tildify: (path: string) => string; ask: (question: string) => Promise<string> }): Promise<UninstallDeps> {
   const home = homedir()
-  // config/env.ts adapterRootDir: the product root, which no setting moves.
-  const root = join(home, '.harness')
+  // config/harnessHome.ts: Harness's roots, which no setting moves.
+  const roots = harnessRoots(home)
+  const binDir = harnessPath('bin', home)
   const platform = platformDaemonDeps()
   const service = platform.service
   const out = (text: string) => line(1, text)
-  const marker = join(root, UNINSTALL_MARKER)
+  const marker = harnessPath(UNINSTALL_MARKER, home)
   return {
-    platform: process.platform, cwd: process.cwd(), home, root,
+    platform: process.platform, cwd: process.cwd(), home, roots, binDir,
     cliDir: env.ADAPTER_CLI_DIR, dataDir: env.ADAPTER_DATA_DIR, authDir: AUTH_DIR,
     isTTY: process.stdin.isTTY === true && process.stdout.isTTY === true,
     harnessOs: service?.os === true,
@@ -101,14 +107,15 @@ export async function uninstallDeps(options: { tildify: (path: string) => string
       }
       return (await removeEngineHooks(targets)).map((hook) => labelHookRemoval(hook, labels))
     },
-    removeLaunchers: () => ownedBinEntries(env.HARNESS_BIN_DIR, join(env.ADAPTER_CLI_DIR, 'cli.js'), root).map((path) => {
+    // The managed tmux link points into runtime, under the root the table gives it.
+    removeLaunchers: () => ownedBinEntries(env.HARNESS_BIN_DIR, join(env.ADAPTER_CLI_DIR, 'cli.js'), harnessRoot(HARNESS_ENTRIES.runtime, home)).map((path) => {
       // Unlinked, never followed (ownedBinEntries): rmSync without recursive removes a link, not what it names.
       try { rmSync(path, { force: true }); return path } catch (error) {
         return { path, failed: error instanceof Error ? error.message : String(error) }
       }
     }),
     removePathEntry: () => {
-      if (process.platform === 'win32') return { kind: 'windows', result: removeUserPathEntry(win32.join(root, 'bin'), runPowershell) }
+      if (process.platform === 'win32') return { kind: 'windows', result: removeUserPathEntry(binDir, runPowershell) }
       // The lines put ~/.local/bin on PATH, which other installers share (Claude Code's, uv, pipx): kept while it holds their commands.
       // Said to be kept only when there is a line of Harness's to keep (B5.9 review, M8).
       const others = listEntries(join(home, '.local', 'bin')).map((entry) => entry.name).filter((name) => !name.startsWith('.'))
@@ -117,6 +124,10 @@ export async function uninstallDeps(options: { tildify: (path: string) => string
     },
     listEntries,
     exists: existsSync,
+    // A start takes the move's lock beside ~/.harness before it knows whether it moves (homeMove/lock.ts).
+    move: process.platform === 'linux'
+      ? { lock: moveLockPath(legacyHarnessHome(home, 'linux')), readBridge, removeBridge: (bridge, state) => removeBridge(bridge, state, runtimeShortRoot()), remove: removePath }
+      : null,
     // On Windows with the temp folder the last step runs from, which must not be in the root.
     checkRemovable: (plan) => { checkRemovable(plan, process.platform === 'win32' ? { tempDir: finalRemovalDeps().tempDir } : {}) },
     removeNow: (plan) => removeNow(plan),

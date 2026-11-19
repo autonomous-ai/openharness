@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { CABLE_MAX_PAYLOAD } from './cableFrame.js'
 import { QuestionInbox, type ReviewedAnswer } from './questionInbox.js'
 
 const question = () => [{ key: 'scope', q: 'Which scope?', options: ['This file', 'Whole project'], multi: false }]
@@ -62,15 +63,196 @@ describe('QuestionInbox', () => {
     expect((await queued).ok).toBe(false)
     expect(send).toHaveBeenCalledTimes(1)
   })
-  it('refuses oversized or ambiguous catalogs and bounds the pending set', () => {
+  it('bounds the pending set', () => {
     const inbox = new QuestionInbox()
-    inbox.set('a', 'q', [...question(), ...question()])
-    expect(inbox.read('a').ok).toBe(false)
-    inbox.set('a', 'q', [{ ...question()[0], q: 'x'.repeat(7000) }])
-    expect(inbox.read('a').ok).toBe(false)
     for (let i = 0; i < 65; i++) inbox.set(`agent-${i}`, 'q', question())
     expect(inbox.read('agent-0').ok).toBe(false)
     expect(inbox.read('agent-64').ok).toBe(true)
+  })
+  it('keeps the questions each agent asked last as they came, but none over a frame', () => {
+    const inbox = new QuestionInbox(), source = question()
+    inbox.set('a', 'qa', source)
+    source[0].options[0] = 'changed'
+    expect(inbox.asked('a', 'qa')).toEqual(question())
+    expect(inbox.asked('a', 'old')).toBeUndefined()
+    // The dial never read one over a frame, so no answer is in its words: 64 agents' worth were held for nothing.
+    inbox.set('a', 'qb', [{ ...question()[0], options: ['x'.repeat(CABLE_MAX_PAYLOAD)] }])
+    expect(inbox.asked('a', 'qb')).toBeUndefined()
+    expect(() => inbox.set('a', 'qd', [{ ...question()[0], size: BigInt(1) }])).not.toThrow()
+    expect(inbox.asked('a', 'qd')).toBeUndefined()
+    inbox.set('a', 'qc', question())
+    inbox.close('a', 'qc')
+    expect(inbox.asked('a', 'qc')).toBeUndefined()
+  })
+  it('asks each question once until the dial loses it, and a drawer that carries one holds it as asked', () => {
+    const inbox = new QuestionInbox()
+    inbox.set('a', 'qa', question()); inbox.set('b', 'qb', question()); inbox.set('c', 'qc', question())
+    expect(inbox.ask('a', 'qa')).toBe(true)
+    expect(inbox.ask('a', 'qa')).toBe(false)
+    expect(inbox.ask('a', 'old')).toBe(false)
+    // A drawer naming b's question as a row puts it on the dial, asked or not; a's, which it does not name, is gone.
+    inbox.forget(new Set(['b']))
+    expect(inbox.ask('b', 'qb')).toBe(false)
+    expect(inbox.ask('a', 'qa')).toBe(true)
+    expect(inbox.ask('c', 'qc')).toBe(true)
+    inbox.forget()
+    expect(['a', 'b', 'c'].map((id) => inbox.ask(id, `q${id}`))).toEqual([true, true, true])
+  })
+  const notice = [{ key: 'notice', q: 'Tests pass.', options: ['In Terminal'] }]
+  it('a held question is read, never asked, though the dial loses its questions', () => {
+    const inbox = new QuestionInbox()
+    inbox.set('a', 'shown:n1', notice, true)
+    const state = read(inbox)
+    expect(state.id).toBe('shown:n1')
+    expect(state.questions[0].q).toBe('Tests pass.')
+    expect(inbox.ask('a', 'shown:n1')).toBe(false)
+    inbox.forget()
+    inbox.forget(new Set())
+    expect(inbox.ask('a', 'shown:n1')).toBe(false)
+    inbox.set('a', 'shown:n1', notice)
+    expect(inbox.ask('a', 'shown:n1')).toBe(false)
+    expect(inbox.open()).toEqual([{ agentId: 'a', id: 'shown:n1',
+      questions: [expect.objectContaining({ q: 'Tests pass.' })], held: true }])
+  })
+  it('a later question of the agent replaces a held one and is asked; a close under the held id removes it', () => {
+    const inbox = new QuestionInbox()
+    inbox.set('a', 'shown:n1', notice, true)
+    inbox.set('a', 'q2', question())
+    expect(inbox.ask('a', 'q2')).toBe(true)
+    expect(inbox.open()[0]).not.toHaveProperty('held')
+    const fresh = new QuestionInbox()
+    fresh.set('a', 'shown:n1', notice, true)
+    expect(fresh.close('a', 'shown:n1')).toBe(true)
+    expect(fresh.read('a').ok).toBe(false)
+  })
+  it('remembers what the dial was told, by a ring or a drawer row, until the dial loses everything', () => {
+    const inbox = new QuestionInbox()
+    for (const agent of ['a', 'b', 'c']) inbox.set(agent, `q${agent}`, question())
+    expect(inbox.told('a', 'qa')).toBe(false)
+    expect(inbox.refile('a', 'qa')).toBe(false)   // never told: it is rung, not filed
+    expect(inbox.ask('a', 'qa')).toBe(true)       // a ring tells it
+    expect(inbox.told('a', 'qa')).toBe(true)
+    expect(inbox.told('a', 'old')).toBe(false)    // not the open one
+    expect(inbox.refile('a', 'qa')).toBe(false)   // the dial holds it
+    inbox.forget(new Set(['b']))                  // a drawer that carries b's row and not a's
+    expect(inbox.told('b', 'qb')).toBe(true)      // shown as a row: told, with no ring
+    expect(inbox.refile('b', 'qb')).toBe(false)   // and the dial holds it
+    expect(inbox.told('a', 'qa')).toBe(true)      // a replace never clears it
+    expect(inbox.told('c', 'qc')).toBe(false)
+    expect(inbox.refile('a', 'old')).toBe(false)
+    expect(inbox.refile('a', 'qa')).toBe(true)    // back on the dial as a row
+    expect(inbox.refile('a', 'qa')).toBe(false)
+    expect(inbox.ask('a', 'qa')).toBe(false)
+    inbox.forget()                                // a greeting: its RAM is gone
+    expect(['a', 'b', 'c'].map((agent) => inbox.told(agent, `q${agent}`))).toEqual([false, false, false])
+    expect(['a', 'b', 'c'].map((agent) => inbox.ask(agent, `q${agent}`))).toEqual([true, true, true])
+    inbox.set('a', 'qa2', question())             // a new question id: a new entry, neither mark
+    expect(inbox.told('a', 'qa2')).toBe(false)
+    expect(inbox.ask('a', 'qa2')).toBe(true)
+  })
+  it('a held question was told, as it rang before: it goes back on the dial as a row, never as a ring', () => {
+    const inbox = new QuestionInbox()
+    inbox.set('a', 'shown:n1', notice, true)
+    expect(inbox.told('a', 'shown:n1')).toBe(true)
+    expect(inbox.ask('a', 'shown:n1')).toBe(false)
+    expect(inbox.refile('a', 'shown:n1')).toBe(true)
+  })
+})
+
+describe('a question the dial cannot answer', () => {
+  const one = question()[0]
+  const summaryOnly = (q: string) => [{ key: '', q, options: [], multi: false }]
+
+  it('is kept as its summary, whatever made the inbox refuse it', () => {
+    const refused: Array<[string, unknown, string]> = [
+      ['five questions', Array.from({ length: 5 }, (_, i) => ({ ...one, key: `k${i}` })), 'Which scope?'],
+      ['seven options', [{ ...one, options: ['1', '2', '3', '4', '5', '6', '7'] }], 'Which scope?'],
+      ['no options', [{ ...one, options: [] }], 'Which scope?'],
+      ['a duplicate key', [one, one], 'Which scope?'],
+      ['over 6500 bytes', [{ ...one, q: `Approve  this\n\nplan? ${'x'.repeat(7000)}` }], `Approve this plan? ${'x'.repeat(220)}`],
+      ['a BigInt beside its words', [{ ...one, options: [], size: BigInt(1) }], 'Which scope?'],
+      ['a BigInt for text', [{ ...one, q: BigInt(7), options: [] }], 'Needs your answer'],
+      ['no words', [{ ...one, q: ' \n ', options: [] }], 'Needs your answer'],
+      ['no text', [{ key: 'k' }], 'Needs your answer'],
+      ['a number for text', [{ ...one, q: 7, options: [] }], 'Needs your answer'],
+      ['an empty list', [], 'Needs your answer'],
+      ['not a list', 'approve?', 'Needs your answer'],
+      ['a null question', [null], 'Needs your answer'],
+    ]
+    for (const [why, raw, words] of refused) {
+      const inbox = new QuestionInbox()
+      inbox.set('a', 'q', raw)
+      expect(read(inbox).questions, why).toEqual(summaryOnly(words))
+      expect(inbox.open(), why).toEqual([{ agentId: 'a', id: 'q', questions: summaryOnly(words) }])
+    }
+  })
+
+  it('is kept under the bound an answerable one has: an id past it keeps nothing, not even the summary', () => {
+    // 8 kB of id; and 1400 control characters, 1.4 kB as they came but 8.4 kB as JSON writes them, past a frame.
+    for (const id of ['x'.repeat(8000), '\u0001'.repeat(1400)]) {
+      const inbox = new QuestionInbox()
+      inbox.set('a', 'q', question())
+      expect(read(inbox).questions).toEqual(question())
+      for (const raw of [[{ ...one, options: [] }], question()]) {
+        inbox.set('a', id, raw)
+        expect(inbox.read('a').ok).toBe(false)              // the earlier question is replaced, by nothing
+        expect(inbox.open()).toEqual([])
+      }
+      inbox.set('a', id, [{ ...one, options: [] }], true)
+      expect(inbox.open()).toEqual([])
+      expect(inbox.close('a', id)).toBe(true)
+    }
+  })
+
+  it('is readable and refuses every answer', async () => {
+    const inbox = new QuestionInbox(), send = vi.fn(async () => ({ ok: true as const }))
+    inbox.set('a', 'q', [{ ...one, options: [] }])
+    const { token } = read(inbox), pin = { agentId: 'a', token, index: 0 }
+    for (const [masks, drafts] of [[[1], undefined], [[0], undefined], [[0], ['draft']], [[], undefined]] as const)
+      expect((await inbox.submit('a', token, masks, send, drafts)).ok).toBe(false)
+    expect(inbox.canSpeak(pin)).toBe(false)
+    expect(inbox.draft(pin, 'Yes').ok).toBe(false)
+    expect(send).not.toHaveBeenCalled()
+  })
+
+  it('is the same entry when delivered again or as its own summary, and is replaced or closed like any other', () => {
+    const inbox = new QuestionInbox(), plan = [{ ...one, q: `Approve? ${'x'.repeat(7000)}` }]
+    inbox.set('a', 'q', plan)
+    const first = read(inbox)
+    expect(first.questions).toEqual(summaryOnly(`Approve? ${'x'.repeat(230)}`))
+    expect(inbox.ask('a', 'q')).toBe(true)
+    inbox.set('a', 'q', plan)
+    inbox.set('a', 'q', first.questions)                       // the fleet hands a dial beside this one `open()`'s questions
+    expect(read(inbox).token).toBe(first.token)
+    expect(inbox.ask('a', 'q')).toBe(false)                    // the same entry, still asked
+    inbox.set('a', 'q', question())                            // the same id, answerable now: a new entry
+    const answerable = read(inbox)
+    expect(answerable.token).not.toBe(first.token)
+    expect(answerable.questions).toEqual(question())
+    inbox.set('a', 'q', question())                            // unchanged: the same entry, still as it came
+    expect(read(inbox).token).toBe(answerable.token)
+    inbox.set('a', 'q2', plan)
+    expect(inbox.close('a', 'q')).toBe(false)
+    expect(inbox.close('a', 'q2')).toBe(true)
+    expect(inbox.open()).toEqual([])
+  })
+
+  it('counts against the 64 entries, and an empty agent or id keeps, evicts and changes nothing', () => {
+    const inbox = new QuestionInbox()
+    inbox.set('a', 'q', question())
+    const before = inbox.open()
+    for (const [agent, id] of [['', 'q'], ['a', ''], ['', '']]) inbox.set(agent, id, question())
+    inbox.set('a', '', [])
+    expect(inbox.open()).toEqual(before)                       // a's open question is as it was
+    expect(inbox.asked('a', 'q')).toEqual(question())          // and so are the words it was asked in
+    expect(inbox.close('a', 'q')).toBe(true)
+    for (let i = 0; i < 65; i++) inbox.set(`agent-${i}`, 'q', [])
+    expect(inbox.read('agent-0').ok).toBe(false)
+    expect(inbox.open()).toHaveLength(64)
+    const full = new QuestionInbox()
+    for (let i = 0; i < 64; i++) full.set(`agent-${i}`, 'q', question())
+    full.set('', 'q', question())
+    expect(full.read('agent-0').ok).toBe(true)                 // not evicted for a question nobody can close
   })
 })
 

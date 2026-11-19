@@ -192,7 +192,11 @@ setInterval(() => {}, 1000);
       BACKEND_WS_URL: base.replace('http:', 'ws:'), WEB_URL: base, HARNESS_STORE_CATALOG_URL: 'http://127.0.0.1:9/catalog.json',
       DISABLE_HOOK_INSTALL: 'true', ADAPTER_UPDATE_DISABLE: 'true', ANALYTICS_ENABLED: 'false', RECAP_FORCE: 'false',
       RECAP_WITHOUT_DEVICE: 'false', CABLE_DISABLE: 'true', CABLE_FW_DISABLE: 'true', TERMINAL_BACKENDS: 'tmux',
-      TMUX_REAP_INTERVAL_MS: '5000', TERMINAL_RECONCILE_INTERVAL_MS: '5000' }
+      TMUX_REAP_INTERVAL_MS: '5000', TERMINAL_RECONCILE_INTERVAL_MS: '5000',
+      // The developer's own HOME: the devices would bring the developer's VS Code and Cursor extension current with this
+      // build's (cable/vscodeExtensionSetup.ts). They look for VS Code's `code` and Cursor's `cursor` here alone, where
+      // there is none.
+      HARNESS_VSCODE_BIN: join(dir, 'no-vscode', 'code'), HARNESS_CURSOR_BIN: join(dir, 'no-cursor', 'cursor') }
     let port = 0
     async function boot() {
       const child = run(`cli-${name}`, join(repo, 'cli'), ['--import', 'tsx', 'src/cli.ts', '__run'], env)

@@ -9,6 +9,7 @@ import { env } from '../config/env.js'
 import { DOCTOR_TIMEOUT_MS, gitStartFailure, installDsh, isTransientGitFailure, removeDsh, resolveInstallSource, runDshDoctor, type DshInstallProgress } from './install.js'
 import { dshInstallDir, installedDsh, invalidateInstalledDsh, listInstalledDsh, readInstalledIndex, type InstalledDsh } from './installed.js'
 import { HARNESS_MONOREPO, type DshRegistryEntry } from './registry.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 // A setup or a doctor runs in the login shell (dsh/shell.ts): the person's own, with their rc files, took seconds a spawn here.
 // A plain sh stands in for it, as update.spec does.
@@ -216,7 +217,7 @@ describe('installDsh, every way it can go', () => {
   const stubGit = (script: string): void => {
     const bin = join(root, 'bin')
     mkdirSync(bin, { recursive: true })
-    writeFileSync(join(bin, 'git'), `#!/bin/sh\nREAL_GIT='${REAL_GIT}'\n${script}\n`, { mode: 0o755 })
+    writeExecutable(join(bin, 'git'), `#!/bin/sh\nREAL_GIT='${REAL_GIT}'\n${script}\n`)
     process.env.PATH = `${bin}:${savedPath}`
   }
   const leftovers = (): string[] => (existsSync(env.DSH_DIR) ? readdirSync(env.DSH_DIR).filter((name) => name.startsWith('.tmp-')) : [])

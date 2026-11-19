@@ -76,8 +76,10 @@ impl Default for Saved {
 pub enum Screen {
     Install,
     SignIn,
+    Orca,
 }
 
+/// Asking, Approve and Done are the Orca screen's, with its Failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Phase {
@@ -85,6 +87,9 @@ pub enum Phase {
     Working,
     Browser,
     Failed,
+    Asking,
+    Approve,
+    Done,
 }
 
 /// What the window draws: `{"screen":"sign_in","phase":"browser","lines":["…"]}`.
@@ -93,9 +98,13 @@ pub struct View {
     pub screen: Screen,
     pub phase: Phase,
     pub lines: Vec<String>,
+    /// The Orca screen of an update. In the JSON only when true, so no other screen's JSON changes.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub update: bool,
 }
 
-/// What the window may ask: `"retry" | "sign_in" | "later" | "cancel"`. Anything else is refused.
+/// What the window may ask: `"retry" | "sign_in" | "later" | "cancel" | "connect_orca"`. Anything else is refused.
+/// Connect carries no fingerprint: Rust keeps the one of the access the window shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Action {
@@ -103,12 +112,15 @@ pub enum Action {
     SignIn,
     Later,
     Cancel,
+    ConnectOrca,
 }
 
+/// Orca: `Connect Orca…`, or `Update Orca connection…`; one action, two labels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuAction {
     Install,
     SignIn,
+    Orca,
     SoundOn,
     SoundOff,
     NotifyFull,
@@ -117,6 +129,7 @@ pub enum MenuAction {
     OpenHarness,
     About,
     Quit,
+    ExportLogs,
 }
 
 /// Text is a disabled line. Check: the action a click does, the label, whether it is checked. Submenu: its label and
@@ -161,6 +174,17 @@ pub struct AppState {
     pub app_update: AppUpdate,
     /// What `harness --version` printed, for the About panel.
     pub cli_version: Option<String>,
+    pub logs: LogsExport,
+    pub orca: OrcaState,
+}
+
+/// The menu's Orca row: `Connect Orca…` (Offer), `Update Orca connection…` (Update), or none.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OrcaState {
+    #[default]
+    None,
+    Offer,
+    Update,
 }
 
 /// AuthorizeUrl holds an `https:` URL only (account.rs lets no other through).
@@ -171,7 +195,56 @@ pub enum LoginEvent {
     Done(Result<(), String>),
 }
 
-/// What happened. WatchExit(None): ended by a signal. UpdateChecked(Some): a strictly newer release.
+/// An approval fingerprint as Orca prints one: `ap1-` and 32 lowercase hex digits. Only `parse` makes one: it is the
+/// one argument the app runs that is not fixed text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Fingerprint(String);
+
+impl Fingerprint {
+    pub fn parse(text: &str) -> Option<Fingerprint> {
+        let digits = text.strip_prefix("ap1-")?;
+        let hex = |byte: u8| matches!(byte, b'0'..=b'9' | b'a'..=b'f');
+        (digits.len() == 32 && digits.bytes().all(hex)).then(|| Fingerprint(text.into()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// What the Harness Device plugin is in Orca, as `harness device orca status` says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OrcaStatus {
+    Absent,
+    Offer,
+    Off,
+    Approve,
+    Behind,
+    Current,
+}
+
+/// The CLI's five codes; anything else it prints is `Failed`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OrcaError {
+    NotRunning,
+    NoPlugin,
+    Off,
+    Timeout,
+    Failed,
+}
+
+/// What `harness device orca connect` answered. Approve: the access Orca lists, a line each in Orca's words and order,
+/// and whether the plugin is installed already.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OrcaAnswer {
+    Done,
+    Approve { fingerprint: Fingerprint, grants: Vec<String>, update: bool },
+    Failed(OrcaError),
+}
+
+/// What happened. WatchExit(None): ended by a signal. UpdateChecked(Some): a strictly newer release. InstallStep:
+/// `'static`, so only the step table's fixed copy can be one, never a line of the script's. OrcaConnect and OrcaStatus:
+/// the number of the run that answers, then its answer. OrcaStatus(_, None): the CLI could not say.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
     Tick { now: u64, desktop_running: bool },
@@ -180,6 +253,7 @@ pub enum Event {
     WatchLine(DialStatus),
     WatchExit(Option<i32>),
     StartDone { ok: bool },
+    InstallStep(&'static str),
     InstallDone(Result<(), Vec<String>>),
     Auth(Option<bool>),
     CliVersion(Option<String>),
@@ -191,10 +265,15 @@ pub enum Event {
     UpdateChecked(Option<String>),
     UpdateInstalled,
     UpdateFailed(UpdateFailure),
+    LogsExported(Result<Exported, ExportFailure>),
+    OrcaConnect(u64, OrcaAnswer),
+    OrcaStatus(u64, Option<OrcaStatus>),
 }
 
 /// What to do about it. Show(None) hides the window. ShowAbout: the About panel, with its credits line. Menu, Show,
-/// ShowAbout, Quit and Relaunch are the binary's.
+/// ShowAbout, Quit and Relaunch are the binary's. RunOrcaConnect and RunOrcaStatus: the run's number first, which its
+/// answer carries back. RunOrcaConnect(_, Some): only from the Connect click, with the fingerprint of the access the
+/// window showed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
     FindCli,
@@ -216,11 +295,16 @@ pub enum Effect {
     Log(String),
     CheckUpdate,
     InstallUpdate,
+    RunOrcaConnect(u64, Option<Fingerprint>),
+    RunOrcaStatus(u64),
     Menu(Vec<MenuItem>),
     Show(Option<View>),
     ShowAbout(Option<String>),
     Quit,
     Relaunch,
+    ExportLogs,
+    /// Shows the zip an export wrote.
+    Reveal(std::path::PathBuf),
 }
 
 /// A finished run.
@@ -230,6 +314,31 @@ pub struct Output {
     pub timed_out: bool,
     pub stdout: String,
     pub stderr: String,
+}
+
+/// Why an export gave no zip.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExportFailure {
+    TimedOut,
+    NoAnswer,
+    NoFile,
+}
+
+/// The zip an export wrote, and how the menu names it: the home folder as `~`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Exported {
+    pub zip: std::path::PathBuf,
+    pub shown: String,
+}
+
+/// The export of logs, as the menu shows it. Saved: the zip with the home as `~`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum LogsExport {
+    #[default]
+    Idle,
+    Running,
+    Saved(String),
+    Failed(ExportFailure),
 }
 
 pub trait Clock: Send + Sync {
@@ -339,28 +448,73 @@ mod tests {
 
     #[test]
     fn a_view_is_the_json_the_window_reads() {
-        let view = View { screen: Screen::SignIn, phase: Phase::Browser, lines: vec!["Waiting".into()] };
+        let view = View { screen: Screen::SignIn, phase: Phase::Browser, lines: vec!["Waiting".into()], update: false };
+        // No screen's JSON but the Orca screen's gains a key: `update` is there only when true.
         assert_eq!(
             serde_json::to_value(view).unwrap(),
             json!({"screen":"sign_in","phase":"browser","lines":["Waiting"]})
         );
         assert_eq!(serde_json::to_value(Screen::Install).unwrap(), json!("install"));
+        let update = View { screen: Screen::Orca, phase: Phase::Approve, lines: vec!["A".into()], update: true };
+        assert_eq!(
+            serde_json::to_value(update).unwrap(),
+            json!({"screen":"orca","phase":"approve","lines":["A"],"update":true})
+        );
+        let phases = [(Phase::Asking, "asking"), (Phase::Approve, "approve"), (Phase::Done, "done")];
+        for (phase, name) in phases {
+            let view = View { screen: Screen::Orca, phase, lines: Vec::new(), update: false };
+            assert_eq!(serde_json::to_value(view).unwrap(), json!({"screen":"orca","phase":name,"lines":[]}));
+        }
     }
 
     #[test]
-    fn the_window_may_ask_four_things() {
+    fn the_window_may_ask_five_things() {
         let asks = [
             ("retry", Action::Retry),
             ("sign_in", Action::SignIn),
             ("later", Action::Later),
             ("cancel", Action::Cancel),
+            ("connect_orca", Action::ConnectOrca),
         ];
         for (name, action) in asks {
             assert_eq!(serde_json::from_value::<Action>(json!(name)).unwrap(), action);
         }
-        // The offers of Claude Code and Codex are gone, and their buttons with them.
-        for other in [json!("turn_on"), json!("not_now"), json!("quit"), json!("sh -c x"), json!(1), Value::Null] {
+        // The offers of Claude Code and Codex are gone, and their buttons with them. Connect carries no fingerprint:
+        // Rust keeps the one Orca answered.
+        let fingerprint = "ap1-0123456789abcdef0123456789abcdef";
+        let others = [
+            json!("turn_on"),
+            json!("not_now"),
+            json!("quit"),
+            json!("sh -c x"),
+            json!(1),
+            Value::Null,
+            json!({ "connect_orca": fingerprint }),
+            json!(format!("connect_orca {fingerprint}")),
+        ];
+        for other in others {
             assert!(serde_json::from_value::<Action>(other.clone()).is_err(), "{other}");
+        }
+    }
+
+    #[test]
+    fn a_fingerprint_is_ap1_and_32_hex_digits() {
+        let good = "ap1-0123456789abcdef0123456789abcdef";
+        assert_eq!(Fingerprint::parse(good).as_ref().map(Fingerprint::as_str), Some(good));
+        let hex = &good[4..];
+        let bad = [
+            format!("AP1-{hex}"),
+            format!("ap1-{}", &hex[1..]),
+            format!("ap1-{hex}0"),
+            format!("ap1-{}A", &hex[1..]),
+            format!(" {good}"),
+            format!("{good} "),
+            // 32 bytes, 16 characters.
+            format!("ap1-{}", "é".repeat(16)),
+            String::new(),
+        ];
+        for text in bad {
+            assert_eq!(Fingerprint::parse(&text), None, "{text:?}");
         }
     }
 
@@ -382,11 +536,47 @@ mod tests {
         assert_eq!(windows.len(), 1);
         let window = &windows[0];
         assert_eq!(window["label"], "main");
-        assert_eq!(window["title"], "Harness Device");
+        assert_eq!(window["title"], "Harness");
         assert_eq!((window["width"].as_f64(), window["height"].as_f64()), (Some(420.0), Some(320.0)));
         assert_eq!(window["resizable"], false);
         assert_eq!(window["center"], true);
         assert_eq!(window["visible"], false);
+    }
+
+    /// The file stays Harness Device.app beside the desktop app's Harness.app, and updates find it by that name;
+    /// Finder, Login Items, the About panel and permission prompts show the bundle's name, Harness.
+    #[test]
+    fn the_app_is_named_harness() {
+        let config: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(config["productName"], "Harness Device");
+        let macos = &config["bundle"]["macOS"];
+        assert_eq!(macos["bundleName"], "Harness");
+        // One line per tag, so the plist's indentation does not matter. Tauri writes the region "English": "en" names
+        // the folder the strings below ship in.
+        let plist: String = include_str!("../Info.plist").lines().map(str::trim).collect();
+        for entry in
+            ["<key>CFBundleDevelopmentRegion</key><string>en</string>", "<key>LSHasLocalizedDisplayName</key><true/>"]
+        {
+            assert!(plist.contains(entry), "{plist}");
+        }
+        // macOS shows the localized name only while the plist's display name, which Tauri sets to productName, is the
+        // file's name.
+        assert!(!plist.contains("CFBundleDisplayName"), "{plist}");
+        let source = macos["files"]["Resources/en.lproj/InfoPlist.strings"].as_str().expect("InfoPlist.strings mapped");
+        let strings = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(source)).unwrap();
+        assert_eq!(strings, "CFBundleName = \"Harness\";\nCFBundleDisplayName = \"Harness\";\n");
+    }
+
+    /// A template image 18 points square at two pixels a point: macOS keeps only its alpha, so it tints it for a light
+    /// bar and a dark one.
+    #[test]
+    fn the_tray_is_a_36_pixel_template() {
+        let png = include_bytes!("../icons/tray.png");
+        // A PNG's width and height are the big-endian u32s at bytes 16..24, in its IHDR chunk.
+        assert_eq!(png[16..24], [0, 0, 0, 36, 0, 0, 0, 36]);
+        let image = tauri::image::Image::from_bytes(png).unwrap();
+        assert!(image.rgba().chunks(4).all(|pixel| pixel[..3] == [0, 0, 0]), "a pixel is not black");
+        assert!(image.rgba().chunks(4).any(|pixel| pixel[3] == 255), "no pixel is opaque");
     }
 
     #[test]

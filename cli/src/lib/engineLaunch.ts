@@ -9,6 +9,7 @@ import { homedir } from 'node:os'
 import { isAbsolute, basename, dirname, join } from 'node:path'
 import { baseNode } from '../harnessd/baseNode.js'
 import { env } from '../config/env.js'
+import { harnessPathText } from '../config/harnessHome.js'
 import { launchContract, launchField } from '../engines/launches.js'
 import { startupFunctions, startupNeedsScript, startupRuns } from '../engines/kit/launchStartup.js'
 import { screenArgs, screenEnvPrefix, screenPrelude, screenVariables } from '../engines/kit/launchScreen.js'
@@ -608,6 +609,37 @@ function sourcedOnce(script: string): string {
   } catch {
     return script
   }
+}
+
+/**
+ * A pane's command for each attempt of its create (createAgentPane.ts `argv`): [first], built before the pane, then a
+ * launch built again ([build]) for each retry, with a one-time file of its own: the shell of the pane before it removed
+ * its file as it read it, and a retry handed that argv ran a file already gone (CI, cli/e2e/scale.e2e.ts, 2026-11-19).
+ * A pane closed at once (its registration refused) may never have read its file: the retry removes it, which nothing
+ * else would before the sweep an hour on. A launch with no such file (Windows, or no data folder) runs again as it is:
+ * on Windows the pane's other launch facts were read from it (`windowsPaneLaunch`'s `held`).
+ */
+export function launchAttempts(first: string[], build: () => string[]): (attempt: number) => string[] {
+  let last = first
+  return (attempt) => {
+    const file = attempt === 1 ? null : launchFileOf(last)
+    if (!file) return last
+    try { rmSync(file, { force: true }) } catch { /* the sweep takes it */ }
+    last = build()
+    return last
+  }
+}
+
+/** The one-time file [argv] names: the argument `sourcedOnce` or `throughPosixShell` made, exactly; null without one. */
+function launchFileOf(argv: readonly string[]): string | null {
+  for (const arg of argv) {
+    const name = /([\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}\.sh)'$/.exec(arg)?.[1]
+    if (!name) continue
+    const file = join(env.ADAPTER_DATA_DIR, 'launch', name)
+    const quoted = shellSingleQuote(file)
+    if (arg === `. ${quoted}` || arg === `exec ${posixRunner()} ${quoted}`) return file
+  }
+  return null
 }
 
 /**
@@ -1336,7 +1368,7 @@ function installIfMissingScript(recipe: EngineInstallRecipe, runtimeNode: string
     // minutes) while the download still runs ends the pane rather than starting a second install.
     ...(downloadEngine ? [
       'harness_wait_download() {',
-      '  harness_dl_pid=$(cat "$HOME/.harness/run/downloading-$1" 2>/dev/null) || return 0',
+      `  harness_dl_pid=$(cat "${harnessPathText('run')}/downloading-$1" 2>/dev/null) || return 0`,
       "  case \"$harness_dl_pid\" in ''|*[!0-9]*) return 0 ;; esac",
       '  kill -0 "$harness_dl_pid" 2>/dev/null || return 0',
       '  ps -p "$harness_dl_pid" -o command= 2>/dev/null | grep -q harness-download || return 0',
@@ -1353,10 +1385,10 @@ function installIfMissingScript(recipe: EngineInstallRecipe, runtimeNode: string
     ] : []),
     'harness_quiet=0',
     ...(friendly ? [
-      'harness_install_log="$HOME/.harness/logs/install-' + friendly.engine.replace(/[^a-z0-9-]/g, '') + '.log"',
+      'harness_install_log="' + harnessPathText('logs') + '/install-' + friendly.engine.replace(/[^a-z0-9-]/g, '') + '.log"',
       // Beside the log rather than in a temporary folder: nothing machine-specific in the script.
-      'harness_install_rc="$HOME/.harness/logs/install-' + friendly.engine.replace(/[^a-z0-9-]/g, '') + '-$$.rc"',
-      `[ -x ${shellSingleQuote(runtimeNode)} ] && mkdir -p "$HOME/.harness/logs" 2>/dev/null && harness_quiet=1`,
+      'harness_install_rc="' + harnessPathText('logs') + '/install-' + friendly.engine.replace(/[^a-z0-9-]/g, '') + '-$$.rc"',
+      `[ -x ${shellSingleQuote(runtimeNode)} ] && mkdir -p "${harnessPathText('logs')}" 2>/dev/null && harness_quiet=1`,
     ] : []),
     ...(downloadEngine ? [`harness_find_engine "$1" || harness_wait_download ${shellSingleQuote(downloadEngine.replace(/[^a-z0-9-]/g, ''))}`] : []),
     'if ! harness_find_engine "$1"; then',

@@ -11,6 +11,9 @@ function multiSubmitKey(engine: AgentEngine): string { return engine === 'devin'
 const STEP_MS = 350          // let the TUI repaint between keystrokes
 const TEXT_MS = 250
 const MAX_STEPS = 14         // hard bound on the drive loop (questions × keys), never spin on a stuck pane
+// The longest answer value a dialog asks for: its longest options joined, with headroom (a reviewed text answer is
+// capped at 1200 bytes). Every sender's answer reaches the core's own loop through answer(), so it is bounded there.
+const ANSWER_BYTES_MAX = 4096
 const CAPTURE_LINES = 60
 
 function norm(value: string): string {
@@ -64,6 +67,52 @@ export function matchRow(rows: QuestionRow[], answer: string): QuestionRow | nul
   return rows.find((r) => norm(r.label) === a)
     ?? (a.length >= 3 ? rows.find((r) => norm(r.label).startsWith(a)) ?? rows.find((r) => a.startsWith(norm(r.label)) && norm(r.label).length >= 3) : undefined)
     ?? null
+}
+
+/**
+ * Read an answer of texts joined with ", " as the texts that spell it, by index. A text may hold a comma itself, so
+ * the answer is split only where every piece, trimmed, is a whole text (`key` of each the same) or blank. Of several
+ * readings the fewest pieces wins; on a tie, the longest first piece, then the same rule on the rest. Null when no
+ * reading spells the whole answer.
+ *
+ * The answer is outside text read in the core's own loop, so the work grows with its length times the texts' length:
+ * a piece holds as many commas as the text it spells, so only runs of as many pieces as some text has are tried.
+ * Trying every run of pieces held the core 12 s on a 3 KB answer; every run up to the text with the most commas,
+ * 16 s on a 4 KB answer against a text of 2,000 (2026-11-18).
+ */
+export function partitionTexts(texts: string[], answer: string, key: (text: string) => string): number[] | null {
+  // The first text of each key, as a find takes it; the key keeps every comma.
+  const byKey = new Map<string, number>()
+  texts.forEach((text, index) => { const k = key(text); if (k && !byKey.has(k)) byKey.set(k, index) })
+  // How many pieces each text spans, most first, so a tie keeps the longest piece.
+  const spans = [...new Set([...byKey.keys()].map((k) => k.split(',').length))].sort((a, b) => b - a)
+  const parts = answer.split(',')
+  // count[i]: the fewest texts that spell parts[i..], the first of them first[i], the rest from parts[next[i]].
+  const count = Array<number>(parts.length + 1).fill(Infinity)
+  const first = Array<number | undefined>(parts.length), next = Array<number>(parts.length)
+  count[parts.length] = 0
+  for (let i = parts.length - 1; i >= 0; i--) {
+    // A blank piece (a stray or trailing comma) spells nothing, as the loose reading drops it: refusing it would
+    // send a comma text back to that reading.
+    if (!key(parts[i].trim())) { count[i] = count[i + 1]; next[i] = i + 1; continue }
+    // Trimmed first, as the loose reading's pieces: norm drops a trailing full stop before it trims, so " No. " would
+    // read "no.".
+    for (const span of spans) {
+      const j = i + span
+      if (j > parts.length) continue
+      const index = byKey.get(key(parts.slice(i, j).join(',').trim()))
+      if (index !== undefined && count[j] + 1 < count[i]) { count[i] = count[j] + 1; first[i] = index; next[i] = j }
+    }
+  }
+  if (count[0] === Infinity) return null
+  const spelled: number[] = []
+  for (let i = 0; i < parts.length; i = next[i]) if (first[i] !== undefined) spelled.push(first[i]!)
+  return spelled
+}
+
+/** A multi-choice answer as the rows whose labels spell it (partitionTexts), each label read as matchRow's first test. */
+export function partitionLabels(rows: QuestionRow[], answer: string): QuestionRow[] | null {
+  return partitionTexts(rows.map((row) => row.label), answer, norm)?.map((index) => rows[index]) ?? null
 }
 
 /**
@@ -177,9 +226,19 @@ export class AskQuestionController {
     const remembered = this.pending.get(requestId)
     const sessionId = payload.sessionId || payload.agentId || remembered || ''
     const answers = payload.answers && typeof payload.answers === 'object' ? structuredClone(payload.answers) : null
-    if (!sessionId || !answers || Object.keys(answers).length === 0) {
+    // A value that is not text has no option to name, and reading one threw in the core's loop with the terminal held.
+    if (!sessionId || !answers || Object.keys(answers).length === 0 ||
+        Object.values(answers).some((value) => typeof value !== 'string')) {
       console.warn(`[question] ignoring answer with no session/answers (req=${requestId})`)
       return failed('The answer named no agent or carried no choice.')
+    }
+    // A dialog asks at most 4 questions in Claude Code and 3 in Codex; opencode and Kilo set no limit, but the drive keys
+    // one question a step, so more than MAX_STEPS answers could never all go in.
+    const values = Object.values(answers)
+    const longest = values.reduce((max, value) => Math.max(max, Buffer.byteLength(value, 'utf8')), 0)
+    if (values.length > MAX_STEPS || longest > ANSWER_BYTES_MAX) {
+      console.warn(`[question] answer refused · ${values.length} answers, longest ${longest} bytes`)
+      return failed('The answer is too long. Answer it in the terminal.')
     }
     const session = this.deps.getSession(sessionId)
     const terminalTarget = session?.agentId || session?.sessionId
@@ -315,7 +374,7 @@ export class AskQuestionController {
       // then treat it as stuck rather than hammering the pane with more keystrokes. Never consume a
       // second answer for it.
       if (view.question === lastQuestion) {
-        if (++repeats >= 2) { console.warn(`[question] dialog stuck on "${view.question.slice(0, 60)}"`); return STUCK }
+        if (++repeats >= 2) { console.warn(`[question] ${terminalTarget.slice(0, 8)} dialog stuck on a question of ${view.question.length} chars`); return STUCK }
         await wait(STEP_MS)
         continue
       }
@@ -327,7 +386,7 @@ export class AskQuestionController {
       let positional = false
       if (answered === 0 && asked.requestId) {
         if (!asked.owners.some((owner) => questionRequestId(owner, view) === asked.requestId)) {
-          console.warn(`[question] answer for req=${asked.requestId} arrived after the dialog changed to "${view.question.slice(0, 60)}" — nothing typed`)
+          console.warn(`[question] ${terminalTarget.slice(0, 8)} answer for req=${asked.requestId} arrived after the dialog changed to a question of ${view.question.length} chars — nothing typed`)
           return STALE_CHANGED
         }
         positional = true
@@ -347,7 +406,7 @@ export class AskQuestionController {
         : pickAnswer(answers, view.question, used, { positional })
       if (!picked) {
         if (answered > 0 && reviewedComplete()) return { ok: true }
-        console.warn(`[question] no answer names "${view.question.slice(0, 60)}" — nothing typed`)
+        console.warn(`[question] ${terminalTarget.slice(0, 8)} no answer names the question of ${view.question.length} chars — nothing typed`)
         return STALE_CHANGED
       }
       used.add(picked.key)
@@ -365,13 +424,15 @@ export class AskQuestionController {
       }
 
       if (view.multi) {
-        // Device joins the selected labels with ", " (q_done_tap).
-        const labels = reviewed ? reviewed.selectedLabels?.[picked.key] ?? []
-          : picked.value.split(',').map((s) => s.trim()).filter(Boolean)
+        // A reviewed answer lists its labels. An unreviewed one is one string of labels joined with ", " (the hn TUI,
+        // the dial's `answer`, the device `question.answer` API), read by the labels on screen because a label may
+        // hold a comma; only an answer they cannot spell is cut on every comma and matched loosely, piece by piece.
+        const labels = reviewed?.selectedLabels?.[picked.key] ?? []
         if (reviewed && (!labels.length || labels.some(label => !view.rows.some(row => row.label === label)))) return failed('That answer matches no option.')
         // Core chooses the exact approved set; the engine owns toggling and advancing its UI.
         const rows = reviewed ? view.rows.filter(row => row.checked !== labels.includes(row.label))
-          : labels.map(label => matchRow(view.rows, label)).filter((row): row is QuestionRow => !!row && !row.checked)
+          : (partitionLabels(view.rows, picked.value) ?? picked.value.split(',').map(label => matchRow(view.rows, label.trim())))
+            .filter((row): row is QuestionRow => !!row && !row.checked)
         const freeText = !reviewed && !rows.length && view.typeRow ? { row: view.typeRow, text: picked.value } : undefined
         const toggled = notEntered(await apply({ kind: 'multiple', rows, ...(freeText ? { freeText } : {}) }))
         if (toggled) return toggled
@@ -385,7 +446,7 @@ export class AskQuestionController {
         continue
       }
       if (reviewed) return failed('That answer matches no option.')
-      if (!view.typeRow) { console.warn(`[question] no option matched "${picked.value.slice(0, 40)}" and no free-text row`); return failed('That answer matches no option.') }
+      if (!view.typeRow) { console.warn(`[question] ${terminalTarget.slice(0, 8)} no option matched an answer of ${picked.value.length} chars and no free-text row`); return failed('That answer matches no option.') }
       const typed = notEntered(await apply({ kind: 'text', row: view.typeRow, text: picked.value }))
       if (typed) return typed
     }
@@ -453,6 +514,8 @@ export interface QuestionWatcherDeps {
 
   /** True while that session's dialog is being keyed by an answer already in flight. */
   isDriving?: (sessionId: string) => boolean
+  /** A hook said this session waits (`awaitDialog`), and two polls in a row since found no dialog: nothing is asked there. */
+  onClear?: (sessionId: string) => void
 }
 
 const POLL_MS = 1500
@@ -497,6 +560,8 @@ export class QuestionWatcher {
   private last = new Map<string, string>() // sessionId → fingerprint of the announced question
   private lastId = new Map<string, string>()  // sessionId → requestId of the announced question
   private misses = new Map<string, number>()  // sessionId → consecutive polls with no dialog
+  /** Watched sessions a hook said wait, with no dialog of this turn read since. */
+  private readonly told = new Set<string>()
   private readonly blocked = new Map<string, string>()
   /** sessionId → the dialog that was ALREADY on the pane when this turn began. */
   private readonly preTurn = new Map<string, string>()
@@ -597,6 +662,15 @@ export class QuestionWatcher {
   }
 
   /**
+   * A hook said a dialog is coming. Reads nothing now: the engine draws its dialog after the hook returns, so
+   * a read now finds nothing, and the next poll reads the pane, as every poll does. A session not watched has
+   * no poll to tell, so nothing is kept for it.
+   */
+  awaitDialog(sessionId: string): void {
+    if (this.watching.has(sessionId)) this.told.add(sessionId)
+  }
+
+  /**
    * Stop polling — and CLOSE any question still outstanding on this session.
    *
    * ⚠️ THIS IS THE COMMON CASE, NOT THE EDGE ONE, and leaving it out made the whole close mechanism look
@@ -613,6 +687,7 @@ export class QuestionWatcher {
     this.cancelPending(sessionId)
     this.preTurn.delete(sessionId)
     this.blocked.delete(sessionId)
+    this.told.delete(sessionId)
     this.watching.delete(sessionId)
     if (!this.watching.size && this.timer) { clearInterval(this.timer); this.timer = undefined }
     const requestId = this.lastId.get(sessionId)
@@ -630,6 +705,7 @@ export class QuestionWatcher {
     this.preTurn.clear()
     this.beforePrompt.clear()
     this.blocked.clear()
+    this.told.clear()
     this.last.clear()
     this.lastId.clear()
     this.misses.clear()
@@ -657,18 +733,25 @@ export class QuestionWatcher {
 
   /**
    * A poll found no dialog. Announce the close once the miss is CONFIRMED, and only if we announced the
-   * question in the first place — a session nobody was told about has nothing to take back.
+   * question in the first place — a session nobody was told about has nothing to take back. A session a hook
+   * said waits, with no question announced, is told clear on the same confirmed miss: a dialog answered
+   * before any poll found it (a fast key, the dial's own hook) leaves nothing else to end that wait.
    */
   private noteGone(sessionId: string): void {
     this.last.delete(sessionId)   // unchanged: a dialog that comes back announces fresh
     const requestId = this.lastId.get(sessionId)
-    if (!requestId) return
+    if (!requestId && !this.told.has(sessionId)) return
     const misses = (this.misses.get(sessionId) ?? 0) + 1
     this.misses.set(sessionId, misses)
     if (misses < GONE_TICKS) return
-    this.lastId.delete(sessionId)
     this.misses.delete(sessionId)
-    this.deps.onQuestionGone?.(sessionId, requestId)
+    if (requestId) {
+      this.lastId.delete(sessionId)
+      this.deps.onQuestionGone?.(sessionId, requestId)
+      return
+    }
+    this.told.delete(sessionId)
+    this.deps.onClear?.(sessionId)
   }
 
 
@@ -725,6 +808,8 @@ export class QuestionWatcher {
     // before, and has been answered. Say nothing until it changes or leaves.
     if (this.preTurn.get(sessionId) === fingerprint) return
     this.preTurn.delete(sessionId)
+    // This turn's dialog is on screen: its close is told as a question's (onQuestionGone), not as clear.
+    this.told.delete(sessionId)
     if (this.last.get(sessionId) === fingerprint) return
     this.last.set(sessionId, fingerprint)
 

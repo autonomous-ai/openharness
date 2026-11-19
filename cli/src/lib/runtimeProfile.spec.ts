@@ -1,7 +1,8 @@
 import { mkdtemp, mkdir, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { listClaudeModels } from '../engines/claude/lists.js'
 import type { RegisteredSession } from './registry.js'
 import { loadEngine, OTHER_ENGINES } from '../engines/inProcess.js'
 import { transcriptEvidence as cursorEvidence } from '../engines/cursor/profileReader.js'
@@ -141,11 +142,13 @@ describe('RuntimeProfileManager', () => {
     ])
   })
 
-  it('offers no switching outside Claude and Codex', async () => {
+  it('offers no switching outside Claude, Codex and OpenCode', async () => {
     // View-only engines still SHOW what they run (the ingest paths do that); they just have nothing to
     // pick and nothing to drive. Both gates are asserted: an empty catalogue, and a refusal to control.
     const manager = new RuntimeProfileManager()
-    for (const engine of ['cursor', 'commandcode', 'devin', 'pi', 'opencode', 'hermes', 'grok'] as const) {
+    // OpenCode drives its own pickers (engines/opencode/profileReader.ts), and is left to its own specs: its list is
+    // `opencode` itself, which no spec may run.
+    for (const engine of ['cursor', 'commandcode', 'devin', 'pi', 'hermes', 'grok'] as const) {
       const value = { ...session('cursor'), engine }
       expect(supportsNativeRuntimeControl(value)).toBe(false)
       await expect(manager.modelsForSession(value)).resolves.toEqual([])
@@ -531,6 +534,27 @@ describe('RuntimeProfileManager', () => {
     expect(olderProfiles.map((profile) => profile.effort)).not.toContain('ultracode')
   })
 
+  it('publishes the models Claude Code itself lists, with their names, lines and efforts, ultracode where it takes it', async () => {
+    vi.mocked(listClaudeModels).mockResolvedValueOnce([
+      { value: 'opus', displayName: 'Opus 5.5', description: 'For complex work and everyday tasks', efforts: ['low', 'high'] },
+      { value: 'claude-fable-5-1', displayName: 'Fable 5.1', description: 'Most capable for your hardest tasks', efforts: ['low'] },
+      { value: 'haiku', displayName: 'Haiku 4.5', description: 'Fastest for quick answers', efforts: [] },
+    ])
+    const manager = new RuntimeProfileManager()
+    const value = session('claude')
+    value.cliVersion = '2.1.283'
+    manager.hydrate(value, [])
+
+    const options = await manager.modelsForSession(value)
+    const rows = options.map((option) => ({ ...parseRuntimeProfile(option.id), displayName: option.displayName, description: option.description }))
+    expect([...new Set(rows.map((row) => row.model))]).toEqual(['opus', 'claude-fable-5-1', 'haiku'])
+    expect(rows.filter((row) => row.model === 'opus').map((row) => row.effort)).toEqual(['auto', 'low', 'high', 'ultracode'])
+    expect(rows.filter((row) => row.model === 'haiku').map((row) => row.effort)).toEqual(['auto'])
+    expect(rows.find((row) => row.model === 'claude-fable-5-1')).toMatchObject({
+      displayName: 'Fable 5.1 / Auto', description: 'Most capable for your hardest tasks',
+    })
+  })
+
   it('observes Claude ultracode effort from JSONL and the live footer', () => {
     const manager = new RuntimeProfileManager()
     const value = session('claude')
@@ -595,6 +619,48 @@ describe('RuntimeProfileManager', () => {
 
     manager.ingestPane(value, '› \ngpt-5.6-sol ultra ·', true)
     expect(parseRuntimeProfile(manager.selectedModel(value))).toMatchObject({ effort: 'ultra' })
+  })
+})
+
+// The engine-claude worker must answer within its 5 s deadline, and a Claude Code that is slow to list its models
+// made it miss that and restart (#4413): models() waits for the list at most 1 s, then answers the aliases.
+describe('Claude Code\'s own model list, waited for at most 1 s', () => {
+  afterEach(() => { vi.useRealTimers() })
+
+  const aliases = ['default', 'opus', 'fable', 'sonnet', 'haiku']
+  const offeredModels = (options: Awaited<ReturnType<RuntimeProfileManager['modelsForSession']>>) =>
+    [...new Set(options.map((option) => parseRuntimeProfile(option.id)?.model))]
+
+  it('answers the aliases when Claude Code has not listed its models within the second', { timeout: 5_000 }, async () => {
+    vi.useFakeTimers()
+    vi.mocked(listClaudeModels).mockReturnValueOnce(new Promise(() => {}))
+    const pending = new RuntimeProfileManager().modelsForSession(session('claude'))
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(offeredModels(await pending)).toEqual(aliases)
+  })
+
+  it('offers Claude Code\'s own list when it answers within the second, and leaves no timer', { timeout: 5_000 }, async () => {
+    vi.useFakeTimers()
+    const opusRow = { value: 'opus', displayName: 'Opus 5.5', description: 'For complex work', efforts: ['low', 'high'] }
+    const haikuRow = { value: 'haiku', displayName: 'Haiku 4.5', description: 'Fastest', efforts: [] }
+    vi.mocked(listClaudeModels).mockReturnValueOnce(new Promise((resolve) => setTimeout(() => resolve([opusRow, haikuRow]), 999)))
+    const pending = new RuntimeProfileManager().modelsForSession(session('claude'))
+
+    await vi.advanceTimersByTimeAsync(999)
+    expect(offeredModels(await pending)).toEqual(['opus', 'haiku'])
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it.each([100, 1_500])('answers the aliases when the list read fails after %i ms, and the failure stays handled', { timeout: 5_000 }, async (ms) => {
+    vi.useFakeTimers()
+    vi.mocked(listClaudeModels).mockReturnValueOnce(new Promise((_, reject) => setTimeout(() => reject(new Error('claude exited')), ms)))
+    const pending = new RuntimeProfileManager().modelsForSession(session('claude'))
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(offeredModels(await pending)).toEqual(aliases)
+    // The late rejection lands inside the test, where Vitest would fail the run on it if it went unhandled.
+    await vi.advanceTimersByTimeAsync(1_000)
   })
 })
 

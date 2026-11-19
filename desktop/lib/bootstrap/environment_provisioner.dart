@@ -10,6 +10,7 @@ import 'dart:typed_data';
 import 'package:path/path.dart' as p;
 
 import '../core/harness_cli_runner.dart';
+import '../core/harness_home.dart';
 import '../core/hidden_process.dart';
 import '../core/staging_build.dart';
 import '../core/windows_layout.dart';
@@ -24,10 +25,8 @@ const String kHarnessDesktopInstallCommand =
     '/bin/sh -s -- --desktop';
 
 /// The same installer's host half — tmux and what the CLI runs beside it.
-/// On macOS this is how tmux is obtained, in-app: Homebrew's if Homebrew is
-/// already there, else the managed build downloaded into `~/.harness/runtime`
-/// (no compiler, no package manager, no password). One ladder, implemented
-/// once, in the script.
+/// On macOS this is how tmux is obtained, in-app: the managed build downloaded
+/// into `~/.harness/runtime` (no compiler, no package manager, no password).
 const String kHarnessHostSetupCommand =
     'curl -fsSL https://cdn.autonomous.ai/harness/cli/install.sh | '
     '/bin/sh -s -- --host';
@@ -152,9 +151,9 @@ const String _linuxClockRepairCommand =
     'sudo systemctl restart systemd-timesyncd; fi';
 
 /// What Harness Desktop RUNS — the only things readiness is about. Everything
-/// else the setup screen ever mentions (Homebrew, the Apple developer tools,
-/// apt, curl) is a way of obtaining one of these, appears only in the plan
-/// for a step that is missing, and is never probed while the step is ready.
+/// else the setup screen ever mentions (the managed tmux download, apt, curl)
+/// is a way of obtaining one of these, appears only in the plan for a step
+/// that is missing, and is never probed while the step is ready.
 enum EnvironmentStep {
   /// The native image-paste helper of the active Linux display (`wl-copy` /
   /// `xclip`). Not applicable on macOS or a headless Linux host.
@@ -187,7 +186,7 @@ enum EnvironmentSetupMode { automatic, manual }
 
 /// Identifies which host setup owns a visible Terminal handoff. Only Linux has
 /// one now — apt needs a password on a real tty; on macOS nothing does since
-/// tmux comes from Homebrew-if-present or the managed download. Linux can wait
+/// tmux comes from the managed download. Linux can wait
 /// on the clipboard helper even when tmux itself is already ready, so a
 /// resumed failure must not always be attributed to the tmux row.
 enum EnvironmentTerminalSetup { linuxHost }
@@ -273,8 +272,7 @@ enum EnvironmentStepStatus {
 
 /// One thing setup will do to obtain a missing [step], in the order it will
 /// be done. Computed by the provisioner from what it actually probed, so the
-/// screen renders it rather than inferring it — a plan that names Xcode is a
-/// plan for a computer where Homebrew was found missing, never a guess.
+/// screen renders it rather than inferring it.
 class EnvironmentPlanItem {
   final EnvironmentStep step;
   final String title;
@@ -299,16 +297,7 @@ class EnvironmentPlanItem {
   });
 
   /// The items a plan is assembled from, written down once. tmux on macOS
-  /// is a single in-app step whichever way it is obtained; the detail says
-  /// which, because that is the one thing the person reading the plan may
-  /// care about.
-  static const tmuxViaHomebrew = EnvironmentPlanItem(
-    step: EnvironmentStep.tmux,
-    title: 'tmux',
-    detail: 'Installs with the Homebrew already on this Mac',
-    command: kHarnessHostSetupCommand,
-  );
-
+  /// is a single in-app step: the managed download.
   static const tmuxManaged = EnvironmentPlanItem(
     step: EnvironmentStep.tmux,
     title: 'tmux',
@@ -507,11 +496,15 @@ Future<void> _defaultOpenTerminal(String scriptPath) async {
 
 /// Prepares the only system dependencies required by the desktop transport.
 ///
-/// Node lives beneath [harnessHome] rather than in Homebrew/nvm/PATH. The
+/// Node lives beneath Harness's roots rather than in Homebrew/nvm/PATH. The
 /// CLI launcher is written against that exact binary, so launching Harness
 /// from Finder and from Terminal has identical runtime behavior.
 class EnvironmentProvisioner {
-  final Directory harnessHome;
+  /// A folder a test handed in, both roots at once; null follows the rule.
+  final Directory? _fixedHome;
+
+  /// How the rule looks at this computer; null is this platform's own look.
+  final HomeLook? _look;
   final ProcessRunner _run;
   final ProcessStarter? _start;
   final TerminalLauncher _openTerminal;
@@ -529,6 +522,7 @@ class EnvironmentProvisioner {
 
   EnvironmentProvisioner({
     Directory? harnessHome,
+    this._look,
     ProcessRunner? run,
     ProcessStarter? start,
     TerminalLauncher? openTerminal,
@@ -539,7 +533,7 @@ class EnvironmentProvisioner {
     String? windowsInstallScriptUrl,
     this.probeTimeout = const Duration(seconds: 10),
     this.checkWindowsSignatures = !kDebugMode,
-  }) : harnessHome = harnessHome ?? Directory(_defaultHarnessHome()),
+  }) : _fixedHome = harnessHome,
        _run = run ?? _defaultRun,
        _start = start ?? (run == null ? _defaultStart : null),
        _openTerminal = openTerminal ?? _defaultOpenTerminal,
@@ -550,17 +544,37 @@ class EnvironmentProvisioner {
        _windowsInstallScriptUrl =
            windowsInstallScriptUrl ?? harnessInstallScriptUrl();
 
-  /// The current user's home: USERPROFILE on Windows, HOME elsewhere.
-  /// A launch from Explorer has no HOME at all.
-  static String? userHome() => maybeHomeDir();
-
-  static String _defaultHarnessHome() {
-    final home = userHome();
-    if (home == null) {
-      throw StateError('Could not resolve the current user home directory');
+  /// Harness's roots: the folder a test handed in, or this computer's by the
+  /// rule, looked up again at each use so a move during setup is followed.
+  HarnessHome get _roots {
+    // A macOS or Linux layout is joined with '/', as the CLI writes the paths
+    // it records (current-node), whatever the host the provisioner runs on.
+    final join = separatorJoin(_isWindows ? Platform.pathSeparator : '/');
+    final fixed = _fixedHome;
+    if (fixed != null) return HarnessHome.at(fixed.path, join: join);
+    // The home and the XDG variables of the one environment this provisioner
+    // reads, so one a test hands in never meets the computer's own home.
+    // USERPROFILE on Windows, HOME elsewhere; a launch from Explorer has no
+    // HOME at all.
+    final home = homeDir(
+      environment: _platformEnvironment,
+      isWindows: _isWindows,
+    );
+    // The Linux rule never runs for a Windows profile, whatever the host: no
+    // Windows profile has the XDG roots.
+    if (_isWindows) {
+      return HarnessHome.at(join(home, harnessHomeName), join: join);
     }
-    return '$home${Platform.pathSeparator}.harness';
+    return HarnessHome.of(
+      home,
+      join: join,
+      look: _look ?? platformHomeLook(environment: _platformEnvironment),
+    );
   }
+
+  /// The data root; the one `.harness` folder on macOS and Windows, whose
+  /// layout the Windows checks read.
+  Directory get harnessHome => Directory(_roots.root(HarnessRootKind.data));
 
   /// Checks the complete environment, and mutates it only when [install] is explicitly true.
   Future<EnvironmentReadiness> ensureReady({
@@ -951,15 +965,12 @@ class EnvironmentProvisioner {
       }
 
       if (_isMacOS && !probe.tmuxRuns) {
-        // One in-app step whichever rung applies: the installer's host half
-        // uses the Homebrew already here or downloads the managed build.
-        // Neither needs a password, so no Terminal window and no waiting.
+        // One in-app step: the installer's host half downloads the managed
+        // build. It needs no password, so no Terminal window and no waiting.
         emit(
           step: EnvironmentStep.tmux,
           status: EnvironmentStepStatus.running,
-          message: probe.homebrewInstallsTmux
-              ? 'Installing tmux via Homebrew…'
-              : 'Downloading the managed tmux…',
+          message: 'Downloading the managed tmux…',
         );
         ProcessResult? installResult;
         try {
@@ -1161,16 +1172,7 @@ class EnvironmentProvisioner {
     }
     if (_isMacOS) {
       final tmuxRuns = await _hasTmux();
-      var homebrewInstallsTmux = false;
-      if (!tmuxRuns) {
-        // Asked only to word the plan: the installer decides the same way.
-        homebrewInstallsTmux = await _hasHomebrew();
-        plan.add(
-          homebrewInstallsTmux
-              ? EnvironmentPlanItem.tmuxViaHomebrew
-              : EnvironmentPlanItem.tmuxManaged,
-        );
-      }
+      if (!tmuxRuns) plan.add(EnvironmentPlanItem.tmuxManaged);
       final harnessRuns = await _hasHarness();
       if (!harnessRuns) plan.add(EnvironmentPlanItem.harnessCli);
       return _HostProbe(
@@ -1178,7 +1180,6 @@ class EnvironmentProvisioner {
         clipboardApplicable: false,
         clipboardRuns: true,
         harnessRuns: harnessRuns,
-        homebrewInstallsTmux: homebrewInstallsTmux,
         plan: plan,
       );
     }
@@ -1483,11 +1484,14 @@ fi''';
     _harnessOutdated = null;
     _harnessUnsigned = null;
     if (_isWindows) return _hasWindowsHarness();
-    final currentNode = File('${harnessHome.path}/runtime/current-node');
+    // One look for both, so the node and cli.js never come from two layouts.
+    final roots = _roots;
+    final runtime = roots.path(HarnessEntry.runtime);
+    final currentNode = File('$runtime/current-node');
     if (!await currentNode.exists()) return false;
     final nodePath = (await currentNode.readAsString()).trim();
     if (nodePath.isEmpty || !File(nodePath).existsSync()) return false;
-    final runtimeRoot = '${harnessHome.absolute.path}/runtime/';
+    final runtimeRoot = '${Directory(runtime).absolute.path}/';
     if (!File(nodePath).absolute.path.startsWith(runtimeRoot)) return false;
     final node = await _runProbe(
       nodePath,
@@ -1497,7 +1501,7 @@ fi''';
     );
     if (!_nodeRuns(node)) return false;
     try {
-      final cli = File('${harnessHome.path}/cli/cli.js');
+      final cli = File('${roots.path(HarnessEntry.cli)}/cli.js');
       if (!await cli.exists()) return false;
       return _versionAccepted(
         await _probeHarnessCommand(nodePath, [cli.path, 'version']),
@@ -1559,7 +1563,7 @@ fi''';
         _platformEnvironment['HARNESS_ALLOW_UNSIGNED'] == '1') {
       return true;
     }
-    final bin = p.join(harnessHome.path, 'bin');
+    final bin = _roots.path(HarnessEntry.bin);
     final ProcessResult result;
     try {
       result = await _runProbe(
@@ -1689,8 +1693,13 @@ foreach ($name in ($env:HARNESS_SIGNATURE_FILES -split [string][char]10)) {
   }
 
   Future<void> _ensureHarness(void Function(String line) onOutput) async {
+    // This provisioner's home, environment and platform, so the CLI it
+    // verifies is the one it installed.
     final runner = HarnessCliRunner(
-      harnessHome: harnessHome,
+      harnessHome: _fixedHome,
+      look: _look,
+      environment: _platformEnvironment,
+      isWindows: _isWindows,
       runProcess: _probeHarnessCommand,
     );
     if (await _hasHarness()) return;
@@ -1754,22 +1763,17 @@ foreach ($name in ($env:HARNESS_SIGNATURE_FILES -split [string][char]10)) {
     return result.exitCode == 0;
   }
 
-  Future<bool> _hasHomebrew() async {
-    final result = await _probeShell(
-      'command -v brew >/dev/null && brew --version',
-      'Homebrew',
-      step: EnvironmentStep.tmux,
-    );
-    return result.exitCode == 0;
-  }
-
   /// The Linux apt transaction as a script for a real terminal — the one
   /// host step left that needs a password on a tty.
   Future<File> _writeTerminalBootstrapScript({
     List<String> linuxPackages = const [],
   }) async {
+    // In the state root: it runs before the CLI is installed, and the data
+    // root is the rule's switch, which only the CLI's installer makes. A data
+    // root made here would split a home an older installer then fills at
+    // ~/.harness.
     final directory = Directory(
-      '${harnessHome.path}/desktop-app-v2/setup-runs/${DateTime.now().millisecondsSinceEpoch}',
+      '${_roots.root(HarnessRootKind.state)}/${HarnessEntry.desktopApp.segment}/setup-runs/${DateTime.now().millisecondsSinceEpoch}',
     );
     await directory.create(recursive: true);
     await _run('/bin/chmod', ['700', directory.path]);
@@ -1846,13 +1850,10 @@ fi
     // `~/.zprofile` and never `~/.zshrc`
     // — which is where `brew shellenv` sits on plenty of machines. A Finder
     // launch then starts from launchd's bare `/usr/bin:/bin:/usr/sbin:/sbin`
-    // and this probe reports tmux missing on a computer that has it, then
-    // "installs" it through whichever `brew` it can see. Measured: an Apple
-    // Silicon Mac with both Homebrews picked up Intel `/usr/local/bin/brew`
-    // and built openssl@3 from source under Rosetta, holding the boot open
-    // on "Checking tmux…" for as long as that took. Apple Silicon first, so
-    // a machine with both never installs through the Intel one. The CLI
-    // closed the same gap in `lib/tmuxOnPath.ts`.
+    // and this probe would report a Homebrew tmux missing on a computer that
+    // has it, then download the managed one. Apple Silicon first, so a
+    // machine with both Homebrews finds the native tmux. The CLI closed the
+    // same gap in `lib/tmuxOnPath.ts`.
     'export PATH="\$HOME/.local/bin${_isMacOS ? ':/opt/homebrew/bin:/usr/local/bin' : ''}:\$PATH"; $command',
   ];
 
@@ -2145,9 +2146,6 @@ class _HostProbe {
   final String? clipboardPackage;
   final bool harnessRuns;
 
-  /// macOS: Homebrew is present, so tmux installs in-app without a password.
-  final bool homebrewInstallsTmux;
-
   /// Windows: the terminal step is B's terminal host, and this is the version
   /// `runtime\pty\current-pty` names (null when it is not installed).
   final bool windows;
@@ -2166,7 +2164,6 @@ class _HostProbe {
     this.clipboardCommand,
     this.clipboardPackage,
     required this.harnessRuns,
-    this.homebrewInstallsTmux = false,
     this.windows = false,
     this.terminalHostVersion,
     this.aptPackages = const [],
@@ -2202,9 +2199,7 @@ class _HostProbe {
     if (aptPackages.isNotEmpty) {
       return '${psRuns ? 'tmux' : 'tmux and ps'} will be installed with apt.';
     }
-    return homebrewInstallsTmux
-        ? 'tmux will be installed with Homebrew.'
-        : 'tmux will be downloaded into ~/.harness/runtime.';
+    return 'tmux will be downloaded into ~/.harness/runtime.';
   }
 
   String get tmuxOutput {
@@ -2216,11 +2211,7 @@ class _HostProbe {
     if (terminalReady) return '✓ tmux --version';
     final lines = <String>[tmuxRuns ? '✓ tmux --version' : '✗ tmux --version'];
     if (!psRuns) lines.add('✗ ps');
-    if (aptPackages.isEmpty) {
-      lines.add(
-        homebrewInstallsTmux ? '✓ brew --version' : '– managed tmux download',
-      );
-    }
+    if (aptPackages.isEmpty) lines.add('– managed tmux download');
     return lines.join(' · ');
   }
 }

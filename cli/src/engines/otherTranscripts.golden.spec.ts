@@ -36,6 +36,7 @@ import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 const SRC = fileURLToPath(new URL('..', import.meta.url))
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/other-transcripts.golden.json', import.meta.url))
@@ -263,7 +264,7 @@ function livePath(core: Core, session: RegisteredSession, pane: string | null) {
     call: async (type, payload) => json(await requests[type](json(payload), { owner: true, local: true }) as Record<string, unknown>),
     bySession: () => session, frame: (s, frame) => ingest.acceptStreamFrame(s, frame), reattach: () => {}, log: () => {},
   })
-  const normalizers = core.createSessionNormalizers(streams)
+  const normalizers = core.createSessionNormalizers(streams, { held: () => false, closed: () => {}, forget: () => {} })
   const runtimeProfiles = {
     transcriptFields: () => [], beginHydrate: () => ({ ingest: () => {}, commit: () => {} }), hydrate: () => {}, hydrateEvidence: () => {},
     ingest: () => false, evidence: () => false, ingestConfig: async () => {}, ingestPane: () => false,
@@ -345,7 +346,7 @@ beforeAll(async () => {
   const amp = join(root, 'bin', 'amp')
   mkdirSync(join(root, 'bin'), { recursive: true })
   // Amp's own store, as `amp threads export` answers for the one thread the fixture holds, and nothing else.
-  writeFileSync(amp, `#!/bin/sh\nif [ "$3" = "${AMP_THREAD}" ]; then cat ${JSON.stringify(join(fixturesDir, 'amp-thread-export.json'))}; else exit 1; fi\n`, { mode: 0o755 })
+  writeExecutable(amp, `#!/bin/sh\nif [ "$3" = "${AMP_THREAD}" ]; then cat ${JSON.stringify(join(fixturesDir, 'amp-thread-export.json'))}; else exit 1; fi\n`)
   const env: Record<string, string | undefined> = {
     HOME: home, XDG_CONFIG_HOME: join(home, '.config'), XDG_DATA_HOME: join(home, '.local', 'share'), ADAPTER_DATA_DIR: join(root, 'data'),
     CURSOR_HOME: join(home, '.cursor'), CURSOR_CONFIG_DIR: undefined, CURSOR_DATA_DIR: undefined, DEVIN_HOME: join(root, 'devin'),

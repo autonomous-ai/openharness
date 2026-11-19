@@ -93,6 +93,12 @@ describe('scannedApps on macOS', () => {
     expect(d.bundleId.mock.calls).toEqual([['/Applications/ChatGPT.app']])
   })
 
+  it('a session under cmux is in cmux', async () => {
+    const d = deps([[500, 499, '/bin/zsh'], [499, 1, '/Applications/cmux.app/Contents/MacOS/cmux']],
+      { '/Applications/cmux.app': 'com.cmuxterm.app' })
+    expect(await scannedApps([500], d)).toEqual(new Map([[500, 'cmux']]))
+  })
+
   it("OpenAI's chat app at that path names nothing", async () => {
     const d = deps(CODEX_ROWS, { '/Applications/ChatGPT.app': 'com.openai.chat' })
     expect(await scannedApps([500], d)).toEqual(new Map())

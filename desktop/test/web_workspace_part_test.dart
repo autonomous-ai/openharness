@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -70,24 +71,31 @@ void main() {
     expect(part.loaded, isFalse);
   });
 
-  test('the workspace part waits for the terminal font as well', () async {
-    final library = Completer<void>();
-    final fonts = Completer<void>();
-    var done = false;
-    unawaited(
-      downloadWorkspace(
-        library: () => library.future,
-        fonts: () => fonts.future,
-      ).then((_) => done = true),
-    );
+  // The font grace is a timer. The tests that wait on it run on fake time:
+  // real time under parallel test workers lets it fire while a test is still
+  // looking.
+  test('the workspace part waits for the terminal font as well', () {
+    fakeAsync((async) {
+      final library = Completer<void>();
+      final fonts = Completer<void>();
+      var done = false;
+      unawaited(
+        downloadWorkspace(
+          library: () => library.future,
+          fonts: () => fonts.future,
+        ).then((_) => done = true),
+      );
 
-    library.complete();
-    await pumpEventQueue();
-    expect(done, isFalse);
+      library.complete();
+      // One millisecond short of the grace, so what lets the workspace in
+      // below is the font and not the clock.
+      async.elapse(terminalFontsGrace - const Duration(milliseconds: 1));
+      expect(done, isFalse);
 
-    fonts.complete();
-    await pumpEventQueue();
-    expect(done, isTrue);
+      fonts.complete();
+      async.flushMicrotasks();
+      expect(done, isTrue);
+    });
   });
 
   test('a terminal font that fails does not keep the workspace away', () async {
@@ -97,22 +105,24 @@ void main() {
     );
   });
 
-  test('fonts that never arrive hold the workspace only so long', () async {
-    final stalled = Completer<void>();
-    var done = false;
-    unawaited(
-      downloadWorkspace(
-        library: () async {},
-        fonts: () => stalled.future,
-        fontsGrace: const Duration(milliseconds: 50),
-      ).then((_) => done = true),
-    );
+  test('fonts that never arrive hold the workspace only so long', () {
+    fakeAsync((async) {
+      final stalled = Completer<void>();
+      var done = false;
+      unawaited(
+        downloadWorkspace(
+          library: () async {},
+          fonts: () => stalled.future,
+          fontsGrace: const Duration(milliseconds: 50),
+        ).then((_) => done = true),
+      );
 
-    await pumpEventQueue();
-    expect(done, isFalse);
+      async.elapse(const Duration(milliseconds: 49));
+      expect(done, isFalse);
 
-    await Future<void>.delayed(const Duration(milliseconds: 100));
-    expect(done, isTrue);
+      async.elapse(const Duration(milliseconds: 1));
+      expect(done, isTrue);
+    });
   });
 
   test('a workspace library that fails fails the part', () async {

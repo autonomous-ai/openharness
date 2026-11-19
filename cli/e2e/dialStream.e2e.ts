@@ -4,13 +4,15 @@
  * agent it shows. The stream is found as Orca's Harness Device plugin finds it: the real `harness device orca link`,
  * under the throwaway daemon's environment only, prints the devices' socket, and the test opens it there.
  *
- * Every agent is listed before the first focus. After a ring push that re-asserted the focus, a session drops a dial's
- * other `focus` until it hears that focus echoed (cableSession.ts, `expectedAppFocusEcho`), and the fake dial echoes
- * nothing: each move is sent again every 2 s until its line is read.
+ * A dial plugged in before any agent lands on the first one listed (cableSession.ts, the landing), and that is the stream's
+ * first move. After it, and after each ring push that re-asserts it, a session drops a dial's other `focus` for 750 ms,
+ * and the fake dial echoes nothing: each move is a `FakeDial.turnUntil`, sent again every 2 s until its line is read.
  *
  * Orca's plugin's own loop (plugins/harness-device-orca/src/dial.ts, with Node's inputs) runs too, in a process whose
  * whole environment is the throwaway home and a bare PATH (harness/pluginDial.ts): it finds this daemon through a
- * launcher shim in that home, and nothing on this Mac's PATH.
+ * launcher shim in that home, and nothing on this Mac's PATH. Handed the worktree on Orca's screen, as Orca hands its
+ * terminals to the plugin, it tells the devices, and while Orca is in front a dial that says appFilter lists only that
+ * worktree's agents (docs/plans/2026-11-18-dial-orca-tab-scope-design.md).
  */
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -22,7 +24,7 @@ import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { devicesListenerPath } from '../src/devices/listenerPath.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
-import type { FakeDial } from './harness/fakeDial.js'
+import type { DialMessage, FakeDial } from './harness/fakeDial.js'
 import { FakeOrca } from './harness/fakeOrca.js'
 import { InOrca } from './harness/inOrca.js'
 import type { DialState } from '../../plugins/harness-device-orca/src/protocol.ts'
@@ -30,6 +32,8 @@ import type { DialState } from '../../plugins/harness-device-orca/src/protocol.t
 const run = promisify(execFile)
 
 const ORCA = 'com.stablyai.orca'
+/** What the round dial's firmware says in its greeting: it holds one app's ring (docs/specs/2026-11-14-dial-app-filter.md). */
+const FILTER = { appFilter: 'v1' }
 /** The everyday daemon's port: a `link` under test that reached it would hand the test this Mac's devices' socket. */
 const EVERYDAY_PORT = '18473'
 /** What Orca's plugin sends to open the stream: 30 bytes. */
@@ -51,6 +55,8 @@ interface Loop {
   states: DialState[]
   /** Its log lines. */
   logs: string[]
+  /** Hands it the terminals of the worktree on Orca's screen, as Orca does, or null for none. */
+  front(terminals: string[] | null): void
   /** Ends its stdin, which stops it; its exit code, once it exits within 10 s. */
   stop(): Promise<number | null>
 }
@@ -91,10 +97,10 @@ describe('the dial stream, for Orca\'s Harness Device plugin', () => {
     writeFileSync(file, '[]')
     const theDesk = new Desk(file)
     desk = theDesk
-    FakeOrca.install(d)
+    const orca = FakeOrca.install(d)
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-200).join('\n')}`) })
     await d.start()
-    return { d, desk: theDesk }
+    return { d, desk: theDesk, orca }
   }
 
   /** A dial with no appFilter, so one ring holds every agent, shown its first list. */
@@ -166,23 +172,9 @@ describe('the dial stream, for Orca\'s Harness Device plugin', () => {
   const shown = (dial: FakeDial, agent: InOrca, app: string): string =>
     JSON.stringify({ attached: true, agent: { name: nameOn(dial, agent), app } })
 
-  /** [dial] turns to [agent], again every 2 s until [probe] gives a value; that value. */
-  const turned = <T>(dial: FakeDial, agent: InOrca, what: string, probe: () => T | undefined): Promise<T> => {
-    let sent = 0
-    return until(what, () => {
-      const got = probe()
-      if (got !== undefined) return got
-      if (Date.now() - sent >= 2_000) {
-        dial.send({ t: 'focus', agentId: agent.id })
-        sent = Date.now()
-      }
-      return undefined
-    }, 60_000, 50)
-  }
-
   /** [dial] turns to [agent] until the stream's line [count] is there; that line. */
   const moved = (dial: FakeDial, agent: InOrca, open: Stream, count: number): Promise<string> =>
-    turned(dial, agent, `line ${count}`, () => (open.lines.length >= count ? open.lines[count - 1] : undefined))
+    dial.turnUntil(agent.id, `line ${count}`, () => (open.lines.length >= count ? open.lines[count - 1] : undefined))
 
   /** A word the shell takes as it is. */
   const quoted = (word: string): string => `'${word.replaceAll("'", `'\\''`)}'`
@@ -221,6 +213,7 @@ describe('the dial stream, for Orca\'s Harness Device plugin', () => {
     child.once('close', (code) => { exited = { code } })
     return {
       states, logs,
+      front: (terminals) => { child.stdin.write(`${JSON.stringify(terminals)}\n`) },
       stop: async () => {
         child.stdin.end()
         return (await until('the loop to exit', () => exited, 10_000, 50)).code
@@ -246,14 +239,15 @@ describe('the dial stream, for Orca\'s Harness Device plugin', () => {
   it('the stream opens on the state as it is, and each move of the dial is one line', async () => {
     const { d, desk } = await fresh()
     const dial = await plugged(desk, 'E2E-A', 'e2:e0:00:00:00:0a')
-    const { o, w } = await sessions(d, dial)
     const open = await stream(await ready(d))
     expect(open.status).toBe(200)
     await until('the first line', () => open.lines.length >= 1)
     expect(open.lines).toEqual([NO_AGENT])
+    // O, the first agent listed, is where the dial lands: its line is the next.
+    const { o, w } = await sessions(d, dial)
     const onO = shown(dial, o, 'Orca')
     const onW = shown(dial, w, 'WezTerm')
-    expect(await moved(dial, o, open, 2)).toBe(onO)
+    expect(await until('the landing', () => open.lines[1])).toBe(onO)
     expect(await moved(dial, w, open, 3)).toBe(onW)
     // A second focus on W says nothing: the next line is O's.
     dial.send({ t: 'focus', agentId: w.id })
@@ -288,10 +282,11 @@ describe('the dial stream, for Orca\'s Harness Device plugin', () => {
     const { d, desk } = await fresh()
     const a = await plugged(desk, 'E2E-A', 'e2:e0:00:00:00:0a')
     const b = await plugged(desk, 'E2E-B', 'e2:e0:00:00:00:0b')
-    const { o, w } = await sessions(d, a, b)
     const open = await stream(await ready(d))
     await until('the first line', () => open.lines.length >= 1)
-    expect(await moved(a, o, open, 2)).toBe(shown(a, o, 'Orca'))
+    // Both dials land on O, the first agent listed: one line, as the stream writes only a change.
+    const { o, w } = await sessions(d, a, b)
+    expect(await until('the landing', () => open.lines[1])).toBe(shown(a, o, 'Orca'))
     expect(await moved(b, w, open, 3)).toBe(shown(b, w, 'WezTerm'))
     await desk.unplug('E2E-A')
     // A's port closed before B moves: a none from A that reached the stream would come before B's line.
@@ -309,10 +304,11 @@ describe('the dial stream, for Orca\'s Harness Device plugin', () => {
     const { d, desk } = await fresh()
     const a = await plugged(desk, 'E2E-A', 'e2:e0:00:00:00:0a')
     const b = await plugged(desk, 'E2E-B', 'e2:e0:00:00:00:0b')
-    const { o, w } = await sessions(d, a, b)
     const open = await stream(await ready(d))
     await until('the first line', () => open.lines.length >= 1)
-    await moved(a, o, open, 2)
+    // Both dials land on O, the first agent listed; then B moves, last.
+    const { o, w } = await sessions(d, a, b)
+    expect(await until('the landing', () => open.lines[1])).toBe(shown(a, o, 'Orca'))
     await moved(b, w, open, 3)
     await desk.unplug('E2E-B')
     await until('agent null', () => open.lines.length >= 4)
@@ -334,7 +330,7 @@ describe('the dial stream, for Orca\'s Harness Device plugin', () => {
     // a SessionStart sent before the devices process exists is dropped.
     const { o } = await sessions(d, dial)
     const onO: DialState = { state: 'attached', agent: { name: TITLE, app: 'Orca' } }
-    await turned(dial, o, 'O shown', () => (last()?.agent?.name === TITLE || undefined))
+    await dial.turnUntil(o.id, 'O shown', () => (last()?.agent?.name === TITLE || undefined))
     expect(last()).toEqual(onO)
     await desk.unplug('E2E-A')
     await until('unplugged again', () => last()?.state === 'unplugged', 60_000)
@@ -360,8 +356,9 @@ describe('the dial stream, for Orca\'s Harness Device plugin', () => {
     const { o, w } = await sessions(d, dial)
     const open = await stream(await ready(d))
     await until('the first line', () => open.lines.length >= 1)
-    await moved(dial, o, open, 2)
-    await moved(dial, w, open, 3)
+    // The dial landed on O, the first agent listed: the stream opened on it.
+    await moved(dial, w, open, 2)
+    await moved(dial, o, open, 3)
     open.close()
     await until('the stream ended', () => endedGone(d) >= 1)
     const lines = streamLines(d)
@@ -369,5 +366,123 @@ describe('the dial stream, for Orca\'s Harness Device plugin', () => {
     // Each line whole: no name or app could sit in one.
     expect(lines.every((line) => /^\[devices\] dial stream · (open|ended · (gone|stalled|closed)|lines in the last minute: \d+)$/.test(line))).toBe(true)
     expect(d.log()).not.toContain(TITLE_MARK)
+  })
+
+  /** A session in the Orca terminal [handle], with Orca's bundle id as an app's terminal inherits it. */
+  const inOrca = (d: IsolatedDaemon, folder: string, handle: string): InOrca =>
+    new InOrca(d, folder, children, { ORCA_TERMINAL_HANDLE: handle, __CFBundleIdentifier: ORCA })
+
+  /** The app in front, as the Harness Device app tells it: a line on the stdin of the real `harness hardware watch --json`,
+   *  which it holds open until it quits. One watch, each call a line. */
+  const frontWatch = (d: IsolatedDaemon): ((bundle: string) => void) => {
+    const watch = spawn(process.execPath, [...CLI_ENTRY, 'hardware', 'watch', '--json'], {
+      cwd: CLI_ROOT, env: { ...d.env, TMUX_PANE: '' }, stdio: ['pipe', 'ignore', 'ignore'],
+    })
+    children.push(watch)
+    return (bundle) => { watch.stdin!.write(`${JSON.stringify({ front: bundle })}\n`) }
+  }
+
+  /** The dial's latest list: the `agent` frames between its last `agents.begin` and `agents.end`, that end, and where. */
+  const latestList = (dial: FakeDial): { agents: DialMessage[]; end: DialMessage; at: number } | undefined => {
+    const at = dial.messages.findLastIndex((m) => m.t === 'agents.end')
+    if (at < 0) return undefined
+    const begin = dial.messages.findLastIndex((m, i) => i < at && m.t === 'agents.begin')
+    return { agents: dial.messages.slice(begin + 1, at).filter((m) => m.t === 'agent'), end: dial.messages[at], at }
+  }
+
+  /** The dial's latest list, once one sent after [since] is [agents], in that order. */
+  const lists = (dial: FakeDial, agents: InOrca[], since: number, what: string) => until(what, () => {
+    const latest = latestList(dial)
+    return latest && latest.at >= since && latest.agents.map((m) => m.id).join() === agents.map((a) => a.id).join() ? latest : undefined
+  }, 45_000, 50)
+
+  /** The daemon's lines that hold [prefix], each from its `[device]` on. */
+  const deviceLines = (d: IsolatedDaemon, prefix: string): string[] =>
+    d.log().split('\n').filter((line) => line.includes(prefix)).map((line) => line.slice(line.indexOf('[device]')))
+  const said = (d: IsolatedDaemon, line: string): Promise<true> =>
+    until(`"${line}" in the daemon's log`, () => d.log().includes(line), 30_000, 50)
+
+  /** [claude]'s typed prompt, and the line the devices said for it. */
+  const prompted = async (d: IsolatedDaemon, claude: InOrca): Promise<string> => {
+    const told = deviceLines(d, '[device] prompt · ').length
+    await claude.hook('UserPromptSubmit', { prompt: 'run the tests' })
+    return until("the prompt's line", () => deviceLines(d, '[device] prompt · ')[told], 30_000, 50)
+  }
+
+  it('the plugin\'s loop tells the worktree on screen, and Orca\'s ring on the dial is that worktree\'s agents', async () => {
+    const { d, desk, orca } = await fresh()
+    const [a1, a2, b1, e] = [0, 1, 2, 3].map(() => `term_${randomUUID()}`)
+    // Three worktrees: A's two tabs, B's one, and a third whose terminal has no agent.
+    orca.layout([[[a2], [a1]], [[b1]], [[e]]])
+    const plugin = loop(d)
+    onTestFailed(() => { console.log(`---- the loop's states\n${plugin.states.map((s) => JSON.stringify(s)).join('\n')}\n---- its log\n${plugin.logs.join('\n')}`) })
+
+    // 1. Handed a worktree before any dial: it goes as the stream opens.
+    plugin.front([a2, a1])
+    const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a', FILTER)
+    await dial.next((m) => m.t === 'agents.end', 45_000, 'the first list')
+    await until('attached', () => plugin.states.at(-1)?.state === 'attached', 60_000)
+    await said(d, '[device] orca front · set · 2 terminals')
+
+    // 2. Every Orca agent, in Orca's tab order across worktrees, while no app is settled in front.
+    const sessions = { a1: inOrca(d, 'a1', a1), a2: inOrca(d, 'a2', a2), b1: inOrca(d, 'b1', b1) }
+    for (const claude of Object.values(sessions)) {
+      await claude.hook('SessionStart', { source: 'startup' })
+      await dial.next((m) => m.t === 'agent' && m.id === claude.id, 45_000, 'the agent listed')
+    }
+    const all = [sessions.a2, sessions.a1, sessions.b1]
+    const onA = [sessions.a2, sessions.a1]
+    await lists(dial, all, 0, 'every Orca agent')
+
+    // 3. Orca in front: the worktree on screen, and the APPS page still counts every Orca agent.
+    const front = frontWatch(d)
+    let since = dial.messages.length
+    front(ORCA)
+    const scoped = await lists(dial, onA, since, "A's agents")
+    expect(scoped.end.total).toBe(2)
+    const apps = dial.messages.filter((m) => m.t === 'apps').at(-1)?.apps as { id: string; count: number }[]
+    expect(apps.find((app) => app.id === 'orca')?.count).toBe(3)
+
+    // 4. The other worktree, then the one with no agent: an empty list.
+    since = dial.messages.length
+    plugin.front([b1])
+    await lists(dial, [sessions.b1], since, "B's agent")
+    since = dial.messages.length
+    plugin.front([e])
+    expect((await lists(dial, [], since, 'an empty list')).end.total).toBe(0)
+
+    // 5. Back on A, the dial turned to A2 by hand: A1's prompt moves the dial, B1's in the other worktree does not.
+    since = dial.messages.length
+    plugin.front([a2, a1])
+    await lists(dial, onA, since, "A's agents again")
+    await dial.turnUntil(sessions.a2.id, 'the swipe', () => (d.log().includes('[device] swipe · ok') || undefined))
+    since = dial.messages.length
+    expect(await prompted(d, sessions.a1)).toBe('[device] prompt · moved')
+    await dial.next((m) => m.t === 'focus' && m.agentId === sessions.a1.id, 30_000, "A1's focus", since)
+    expect(await prompted(d, sessions.b1)).toBe('[device] prompt · skipped · no tile')
+    expect(dial.messages.filter((m) => m.t === 'focus' && m.agentId === sessions.b1.id)).toEqual([])
+
+    // 6. Another app in front: every Orca agent. Orca again: the worktree on screen.
+    since = dial.messages.length
+    front('com.apple.Safari')
+    await lists(dial, all, since, 'every Orca agent with Safari in front')
+    since = dial.messages.length
+    front(ORCA)
+    await lists(dial, onA, since, "A's agents with Orca in front again")
+
+    // 7. The plugin stopped: its stream ends, and with it the worktree on screen.
+    since = dial.messages.length
+    expect(await plugin.stop()).toBe(0)
+    await said(d, '[device] orca front · cleared')
+    await lists(dial, all, since, 'every Orca agent once the plugin stopped')
+
+    // 8. Counts only: no handle in the daemon's log or the loop's, and every send was taken.
+    for (const line of deviceLines(d, '[device] orca front')) expect(line).toMatch(/^\[device\] orca front · (set · \d+ terminals|cleared)$/)
+    const loopLog = plugin.logs.join('\n')
+    for (const handle of [a1, a2, b1, e]) {
+      expect(d.log()).not.toContain(handle)
+      expect(loopLog).not.toContain(handle)
+    }
+    expect(plugin.logs).not.toContain('dial: front not sent')
   })
 })

@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as childProcess from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { engineAccount, type EngineStatusRun } from './engineAccount.js'
 import { resetLoginShellEnvironmentCache } from './loginShellEnv.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 vi.mock('node:child_process', async original => {
   const actual = await original<typeof import('node:child_process')>()
@@ -140,10 +141,9 @@ describe('engineAccount', () => {
     const root = home()
     const bin = join(root, 'bin')
     mkdirSync(bin)
-    writeFileSync(join(bin, 'claude'), '#!/bin/sh\n[ "$1 $2 $3" = "auth status --json" ] || exit 2\n'
+    writeExecutable(join(bin, 'claude'), '#!/bin/sh\n[ "$1 $2 $3" = "auth status --json" ] || exit 2\n'
       + 'if [ "$CLAUDE_CONFIG_DIR" = /signed/in ]; then echo \'{"loggedIn": true}\'; else echo \'{"loggedIn": false}\'; exit 1; fi\n')
-    writeFileSync(join(bin, 'codex'), '#!/bin/sh\n[ "$1 $2" = "login status" ] || exit 2\n[ "$CODEX_HOME" = /signed/in ]\n')
-    for (const name of ['claude', 'codex']) chmodSync(join(bin, name), 0o755)
+    writeExecutable(join(bin, 'codex'), '#!/bin/sh\n[ "$1 $2" = "login status" ] || exit 2\n[ "$CODEX_HOME" = /signed/in ]\n')
     const account = (engine: 'claude' | 'codex', env: NodeJS.ProcessEnv) => engineAccount(engine, { home: root, env: { PATH: bin, ...env }, lastUsed: false })
     expect((await account('claude', { CLAUDE_CONFIG_DIR: '/signed/in' })).signedIn).toBe(true)
     expect((await account('claude', {})).signedIn).toBe(false)

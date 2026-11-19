@@ -123,7 +123,7 @@ const inWorker = (run: { others: ReturnType<typeof streamsFor> }, sessionId: str
 function setup(over: Partial<AttachDeps> = {}) {
   let deps!: AttachDeps
   const others = streamsFor(() => deps, () => deps.emit)
-  const normalizers = createSessionNormalizers(over.others as never ?? others.streams)
+  const normalizers = createSessionNormalizers(over.others as never ?? others.streams, { held: () => false, closed: () => {}, forget: () => {} })
   const service = { needsTranscript: vi.fn(() => false), observeTranscript: vi.fn() }
   const profile = { ingest: vi.fn(), commit: vi.fn() }
   deps = {
@@ -318,6 +318,23 @@ it('defers history publication if identity becomes held during pane hydration', 
   expect(await run.attach.attachSession(row)).toBe(true)
   // Its tail is the worker's, started as it folded; what the attach would say of it, it does not.
   expect(run.deps.emit).not.toHaveBeenCalled()
+})
+
+// A hookless Hermes resume is attached with its row unbound, and its terminal record's confirmation binds the row
+// (agents/bind.ts): the attach that gives up on it leaves the attach after it a session to open, not a stream to find.
+it.each([['hermes', 'profile'], ['opencode', 'pane']] as const)('leaves its %s stream to the next attach when the binding moves on while its %s is read', async (engine, read) => {
+  vi.spyOn(console, 'log').mockImplementation(() => {})
+  const run = setup(), row = session(engine, undefined, { boundAt: null })
+  const moveOn = () => { bindings.set(row.agentId, { ...row, boundAt: 1 }) }
+  if (read === 'profile') vi.mocked(run.deps.runtimeProfiles.ingestConfig).mockImplementationOnce(async () => { moveOn(); return false })
+  else vi.mocked(run.deps.captureTerminal).mockImplementationOnce(async () => { moveOn(); return 'pane' })
+  expect(await run.attach.attachSession(row)).toBe(false)
+  expect(run.normalizers.hasState(row.sessionId)).toBe(false)
+  expect(await run.attach.attachSession(bindings.get(row.agentId)!)).toBe(true)
+  // The next attach read the conversation itself, and watches it for a question.
+  expect(made(engine)).toHaveLength(2)
+  expect(run.deps.questionWatcher.start).toHaveBeenCalledExactlyOnceWith(row.sessionId)
+  run.attach.forget(row.sessionId)
 })
 
 describe('the order of an attach of another engine\'s session', () => {
@@ -756,10 +773,10 @@ describe('attaching a session', () => {
       expect(run.service.observeTranscript).toHaveBeenCalledWith('claude-agent', 'claude-s', 'claude', expect.any(String))
       expect(run.profile.commit).toHaveBeenCalled()
       expect(error.mock.calls).toEqual([
-        ['[transcripts] the device could not take in a line of terminal; the line goes on to its engine: device state unreadable'],
-        ['[transcripts] the device could not take in a line of terminal; the line goes on to its engine: evidence unreadable'],
-        ['[transcripts] the runtime profile could not take in a line of terminal; the line goes on to its engine: profile unreadable'],
-        ['[transcripts] the device could not take in a line of claude-s; the line goes on to its engine: evidence unreadable'],
+        ['[transcripts] the device could not take in a line of terminal; the line goes on to its engine: Error'],
+        ['[transcripts] the device could not take in a line of terminal; the line goes on to its engine: Error'],
+        ['[transcripts] the runtime profile could not take in a line of terminal; the line goes on to its engine: string'],
+        ['[transcripts] the device could not take in a line of claude-s; the line goes on to its engine: Error'],
       ])
     })
 
@@ -830,7 +847,9 @@ describe('attaching a session', () => {
       const run = setup()
       const s = session('pi', transcript([{ events: [started('first')] }, { events: [{ type: 'text_delta', payload: { content: 'hi' } }] }]))
       await run.attach.attachSession(s, false, false, true)
-      expect(run.deps.emit).toHaveBeenCalledWith(s.sessionId, [expect.objectContaining({ type: 'turn_started' }), expect.objectContaining({ type: 'text_delta' })])
+      // Read whole after it ran: an end in it goes on at once, never held for a Stop that came already (core/turns/turnHooks.ts).
+      expect(run.deps.emit).toHaveBeenCalledWith(s.sessionId, [expect.objectContaining({ type: 'turn_started' }), expect.objectContaining({ type: 'text_delta' })],
+        { over: true })
       expect(log.mock.calls.map(([line]) => String(line)).some((line) => line.includes('replayed the first turn'))).toBe(true)
       // Once replayed, never again.
       run.normalizers.forget(s.sessionId)
@@ -884,7 +903,7 @@ describe('attaching a session', () => {
       vi.spyOn(console, 'log').mockImplementation(() => {})
       const run = setup()
       await run.attach.attachSession(session('claude', transcript([CLAUDE_PROMPT])), false, false, true)
-      expect(vi.mocked(run.deps.emit).mock.calls[0][2]).toBeUndefined()
+      expect(vi.mocked(run.deps.emit).mock.calls[0][2]).toEqual({ over: true })
       const held = setup()
       vi.mocked(held.deps.watcher.hold).mockResolvedValue({ offset: 1_000_000, expired: false, release: vi.fn() })
       await held.attach.attachSession(session('claude', transcript([CLAUDE_PROMPT])), true, false, true)
@@ -976,6 +995,20 @@ describe('attaching a session', () => {
         run.attach.forget(s.sessionId)
       },
     )
+
+    it('leaves its agy stream to the next attach when the binding moves on while its pane is read', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const run = setup(), row = session('agy', transcript([{ events: [started()], open: true }]), { boundAt: null })
+      vi.mocked(run.deps.captureTerminal).mockImplementationOnce(async () => { bindings.set(row.agentId, { ...row, boundAt: 1 }); return 'pane' })
+      expect(await run.attach.attachSession(row)).toBe(false)
+      expect(run.normalizers.hasState(row.sessionId)).toBe(false)
+      expect(await run.attach.attachSession(bindings.get(row.agentId)!)).toBe(true)
+      // The next attach read the conversation itself.
+      expect(made('agy')).toHaveLength(2)
+      expect(log.mock.calls.some(([line]) => String(line).includes('attached · engine=agy'))).toBe(true)
+      run.attach.forget(row.sessionId)
+    })
 
     it('tells the recaps when the last turn was already over at attach, never for one open or killed', async () => {
       vi.spyOn(console, 'log').mockImplementation(() => {})
@@ -1116,7 +1149,9 @@ describe('attaching a session', () => {
         expect(usage).not.toHaveBeenCalled()
         await watcher.pollSession(row.sessionId)
         expect(usage).toHaveBeenCalledExactlyOnceWith(row)
-        expect(emit).toHaveBeenCalledExactlyOnceWith(row.sessionId, expect.arrayContaining([expect.objectContaining({ type: 'turn_ended' })]))
+        // A live line: the answer has no time and Claude's transcript never marks its own end, so only the closed turn goes on.
+        expect(emit).toHaveBeenCalledExactlyOnceWith(row.sessionId, expect.arrayContaining([expect.objectContaining({ type: 'turn_ended' })]),
+          { at: undefined, over: undefined, turn: expect.objectContaining({ turnOpen: false }) })
         expect(run.normalizers.sessionTurnOpen(row.sessionId)).toBe(false)
       } finally { await watcher.stop() }
     })
@@ -1392,7 +1427,8 @@ describe('attaching a session', () => {
           expect(add).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: row.sessionId }), { fromOffset: end })
           await watcher.pollSession(row.sessionId)
           expect(usage).toHaveBeenCalledExactlyOnceWith(row)
-          expect(emit).toHaveBeenCalledExactlyOnceWith(row.sessionId, expect.arrayContaining([expect.objectContaining({ type: 'turn_ended' })]))
+          expect(emit).toHaveBeenCalledExactlyOnceWith(row.sessionId, expect.arrayContaining([expect.objectContaining({ type: 'turn_ended' })]),
+            { at: undefined, over: undefined, turn: expect.objectContaining({ turnOpen: false }) })
         } finally { await watcher.stop() }
       })
 
@@ -1405,7 +1441,7 @@ describe('attaching a session', () => {
         expect(vi.getTimerCount()).toBe(1)
         await vi.advanceTimersByTimeAsync(1_000)
         await read(run, 2)
-        expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith(row.sessionId, [expect.objectContaining({ type: 'turn_started' })])
+        expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith(row.sessionId, [expect.objectContaining({ type: 'turn_started' })], { over: true })
         expect(run.attach.replayedFirstTurn.has(row.sessionId)).toBe(true)
       })
 
@@ -1797,7 +1833,7 @@ it.each(['inline', 'worker'] as const)('preserves eager cancel while the %s reco
   const cancel = createCancel({ resolve: () => row, normalizers: run.normalizers,
     input: { cancel: vi.fn(), cancelConfirmed: vi.fn(async () => true) },
     device: () => undefined, stopHeartbeat: vi.fn(), questionWatcher: { stop: vi.fn() }, mirror: { cancel: vi.fn() },
-    turnActivity: { observe: vi.fn(), snapshot: vi.fn() }, turnStartedAt: new Map(), agentIdFor: () => row.agentId, clients: { send: vi.fn() },
+    turnActivity: { observe: vi.fn() }, turnStartedAt: new Map(), tell: vi.fn(),
   })
   await cancel(row.agentId)
   finish(); await pending

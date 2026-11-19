@@ -1,9 +1,10 @@
 // Opt-in benchmark adapter. Uses production transport in its own process/pool;
 // never changes the installed daemon, saved trust, authentication, or routing.
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
-import { homedir, tmpdir } from 'node:os'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { WebSocket, WebSocketServer } from 'ws'
+import { harnessPath } from '../src/config/harnessHome.js'
 import type { AuthSessionManager } from '../src/lib/authSession.js'
 import type { MachinePeer, MachinePeerStore } from '../src/lib/e2ee/machinePeers.js'
 import type { RemoteRelayPool, RelaySession } from '../src/lib/remoteRelay.js'
@@ -68,8 +69,8 @@ type InspectedPool = {
 export async function createBenchmarkRoute(machineId: string, route: BenchmarkRoute) {
   // env.ts has legacy adoption at import time. Refuse a non-established install
   // and use an explicit scratch directory to bypass the remaining migrations.
-  if (!existsSync(join(homedir(), '.harness', 'computer-id'))) throw new Error('Established Harness computer identity required')
-  const stateDir = process.env.ADAPTER_DATA_DIR || join(homedir(), '.harness', 'cli', 'data')
+  if (!existsSync(harnessPath('computer-id'))) throw new Error('Established Harness computer identity required')
+  const stateDir = process.env.ADAPTER_DATA_DIR || join(harnessPath('cli'), 'data')
   const rawIdentity = JSON.parse(readFileSync(join(stateDir, 'e2e', 'identity.json'), 'utf8'))
   const identity = { priv: Buffer.from(rawIdentity.priv, 'base64'), pub: Buffer.from(rawIdentity.pub, 'base64') }
   if (identity.priv.length !== 32 || identity.pub.length !== 32) throw new Error('Invalid existing identity')

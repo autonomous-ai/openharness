@@ -1,4 +1,5 @@
 import type { ChildProcess } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type AddressInfo, type Server } from 'node:net'
@@ -20,7 +21,7 @@ import { READY_LINE, STOPPED_LINE } from './agentBrowser/notices.js'
 import { createPodman } from './agentBrowser/podman.js'
 import { runAgentBrowserService } from './agentBrowserProcess.js'
 import type { ServiceProcessOptions } from './process.js'
-import { defaultSettings, type BrowserSettings } from './agentBrowser/settings.js'
+import { defaultSettings, settingsHash, type BrowserSettings } from './agentBrowser/settings.js'
 import { StateFile } from './agentBrowser/stateFile.js'
 import { resetAgentTmpSweep } from '../lib/agentTmp.js'
 import { Browsers } from './agentBrowser/browsers.js'
@@ -240,6 +241,25 @@ async function lookupProxy(answer: Record<string, unknown> = { status: 'success'
   await new Promise<void>(done => server.listen(0, '127.0.0.1', done))
   return (server.address() as AddressInfo).port
 }
+
+describe('the daemon\'s label on its containers', () => {
+  const labelOf = (path: string) => createHash('sha256').update(path).digest('hex').slice(0, 16)
+  const moved = { env: {}, exists: (path: string) => path === '/h/.local/share/harness', isFile: (path: string) => path === '/h/.local/share/harness/.harness-root' }
+  const notMoved = { env: {}, exists: (path: string) => path === '/h/.harness', isFile: () => false }
+
+  it('the label is the folder\'s old spelling when the data folder is the default one under the XDG roots', () => {
+    expect(daemonIdOf('/h/.local/share/harness/cli/data', '/h', 'linux', moved)).toBe(labelOf('/h/.harness/cli/data'))
+  })
+
+  it('a data folder set by ADAPTER_DATA_DIR labels as given', () => {
+    expect(daemonIdOf('/srv/harness-data', '/h', 'linux', moved)).toBe(labelOf('/srv/harness-data'))
+  })
+
+  it('macOS and a legacy home label as before', () => {
+    expect(daemonIdOf('/h/.harness/cli/data', '/h', 'darwin', moved)).toBe(labelOf('/h/.harness/cli/data'))
+    expect(daemonIdOf('/h/.harness/cli/data', '/h', 'linux', notMoved)).toBe(labelOf('/h/.harness/cli/data'))
+  })
+})
 
 describe('the agent browser service', () => {
   it('declares its requests and answers each', () => {
@@ -1202,11 +1222,20 @@ describe('the person\'s Start and Stop', () => {
   it('stops a browser left running for an agent that is not here, or whose Browser is off, as it starts', async () => {
     saveState({ gone: defaultSettings(HOST), off: defaultSettings(HOST), kept: defaultSettings(HOST) })
     new StateFile(join(dataDir, 'agent-browser.json')).update(state => { state.on = { kept: true, gone: true } })
-    const label = (agentId: string) => ({ Names: [`harness-browser-${agentId}`], Labels: { 'harness.agent': agentId, 'harness.daemon': daemonIdOf(dataDir) }, State: 'running' })
-    fake.reply('ps', { stdout: JSON.stringify([label('gone'), label('off'), label('kept')]) })
-    startSwitching([session('kept', { browser: undefined }), session('off', { browser: undefined })], { options: { everyAgent: async () => [session('kept'), session('off'), session('gone')] } })
+    // Each as this daemon started it, on this week's image with its settings now: kept's own start finds its browser
+    // running and replaces nothing, so an `rm` of it is only ever the sweep's.
+    const applied = settingsHash({ ...defaultSettings(HOST), timeZone: HOST.timeZone })
+    const label = (agentId: string) => ({
+      Names: [`harness-browser-${agentId}`], Image: `localhost/${imageTag(browserAssetsHash(), NOW)}`, State: 'running',
+      Labels: { 'harness.agent': agentId, 'harness.daemon': daemonIdOf(dataDir), 'harness.settings': applied },
+    })
+    // Listed first: the look at what runs has judged it before it stops the others, so a stop of it would be asked by then.
+    fake.reply('ps', { stdout: JSON.stringify([label('kept'), label('gone'), label('off')]) })
+    const { port } = startSwitching([session('kept', { browser: undefined }), session('off', { browser: undefined })], { options: { everyAgent: async () => [session('kept'), session('off'), session('gone')] } })
     await eventually(() => expect(asked()).toContain('rm --force --time 10 harness-browser-off'))
     await eventually(() => expect(asked()).toContain('rm --force --time 10 harness-browser-gone'))
+    // Its own start, which runs beside that look, is done too: whatever it removed is asked by then (CI, 2026-11-17).
+    await ready(port, 'kept')
     expect(asked()).not.toContain('rm --force --time 10 harness-browser-kept')
   })
 

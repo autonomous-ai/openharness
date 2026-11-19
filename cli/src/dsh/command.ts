@@ -49,7 +49,7 @@ export async function dshCommand(verb: string | undefined, rest: readonly string
       for (const dsh of installed) {
         seen.add(dsh.id)
         const update = dshUpdateInfo(dsh, registry.find(entry => entry.id === dsh.id))
-        rows.push(`  ${dsh.id.padEnd(28)} ${dsh.manifest.name.padEnd(12)} ${(dsh.manifest.kind === 'viewer' ? 'viewer' : `on ${dsh.manifest.engine}`).padEnd(11)} tier ${dshTier(dsh.manifest)}  installed${dsh.linked ? ' (linked)' : ''}${dsh.commit ? ` @ ${dsh.commit.slice(0, 8)}` : ''}${update.updateAvailable ? ` · update available (${update.availableCommit!.slice(0, 8)})` : ''} · ${dsh.dir}`)
+        rows.push(`  ${dsh.id.padEnd(28)} ${dsh.manifest.name.padEnd(12)} ${(dsh.manifest.kind === 'viewer' ? 'viewer' : `on ${dsh.manifest.engine}`).padEnd(11)} tier ${dshTier(dsh.manifest)}  installed${dsh.linked ? ' (linked)' : ''}${dsh.commit ? ` @ ${dsh.commit.slice(0, 8)}` : ''}${update.updateAvailable ? ` · update available (${update.availableCommit!.slice(0, 8)})` : ''} · ${dsh.dir}${dsh.setup === 'needs-setup' ? ' · needs setup' : ''}`)
       }
       for (const row of broken) {
         seen.add(row.id)

@@ -28,7 +28,7 @@ The commands an agent uses:
 harness whoami                                      # who and where you are, whether you may start harnesses, your limits
 harness ps [--all]                                  # the harnesses here: state, who started each, what each is about
 harness new [agent] [--machine NAME] [folder | project] --name NAME -- TASK
-harness wait NAME[,NAME…] [--any] [--timeout 30m]   # exits 0 idle, 3 needs the person, 4 stopped or gone, 124 timed out
+harness wait NAME[,NAME…] [--any] [--timeout 30m]   # exits 0 idle, 3 needs the person (a question, a permission, or a problem only they can fix), 4 stopped or gone, 124 timed out
 harness show NAME [--chars N]                       # its state, the last ask and its answer
 harness send NAME "text"                            # a teammate in this tab, while Agent Messages are on
 harness close NAME [--now]                          # save its screen and stop it; the conversation is kept
@@ -36,7 +36,7 @@ harness close NAME [--now]                          # save its screen and stop i
 
 `ps`, `show`, `wait` and `close` take `--machine NAME` too, for a harness on another of the person's machines.
 
-Every command ends with `Next:`, the command to run next, and `--json` gives the same as `next`. Exit 5 means refused (your limits, the person's setting, or a harness you did not start): do not retry it; tell the person, or do the work yourself. A harness waiting on a question or a permission is said as `needs the person`: tell the person, only they answer it. `harness help agents` prints the commands, states, exit codes and rules on one screen.
+Every command ends with `Next:`, the command to run next, and `--json` gives the same as `next`. Exit 5 means refused (your limits, the person's setting, or a harness you did not start): do not retry it; tell the person, or do the work yourself. A harness waiting on a question or a permission is said as `needs the person`: tell the person, only they answer it. An agent Harness cannot follow until the person acts is said as `held`, with what to do: tell the person, only they can fix it. `harness help agents` prints the commands, states, exit codes and rules on one screen.
 
 Once Harness runs on a computer, Claude Code and Codex there run these commands and Harness's MCP tools without asking: Harness adds them to their permission rules, and Codex runs them outside its sandbox. Run each `harness` command by itself or join them with `&&`; piped or joined with other commands, the rule no longer matches. Where Harness has not set an agent up, run `harness` outside its sandbox, which cannot reach Harness's local daemon.
 

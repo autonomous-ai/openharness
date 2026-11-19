@@ -171,7 +171,7 @@ export async function ensureTmuxOnPath(
     env.PATH = env.PATH ? `${dir}${delimiter}${env.PATH}` : dir
     return { state: 'adopted', path: managed, from: 'managed runtime' }
   }
-  // install.sh can find Homebrew and install tmux by temporarily evaluating `brew shellenv`.
+  // install.sh finds a Homebrew tmux by putting that prefix's bin on its own PATH, and never runs brew.
   // That PATH belongs only to the installer: a fresh macOS user's rc files do not inherit it.
   // Desktop explicitly checks these locations too. Preserve the user's existing PATH/shell choice
   // above, then verify the installed fallback without invoking Homebrew or changing shell profiles.

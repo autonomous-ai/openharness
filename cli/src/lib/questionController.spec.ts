@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { screenFor } from '../engines/screens.js'
 import type { PaneView } from '../engines/facets/screen.js'
 import type { RegisteredSession } from './registry.js'
-import { AskQuestionController, QuestionWatcher } from './questionController.js'
+import { AskQuestionController, QuestionWatcher, partitionLabels, partitionTexts } from './questionController.js'
 
 const capture = readFileSync(new URL('./__fixtures__/permission-claude.txt', import.meta.url), 'utf8')
 const view = screenFor('claude').inspect(capture).question
@@ -108,6 +108,103 @@ describe('asynchronous question evidence', () => {
     })
   })
 
+  describe('a multi-choice answer joined with ", "', () => {
+    // The labels of the rows the answer toggled, from an unreviewed answer string.
+    const toggled = async (labels: string[], answer: string) => {
+      const question = { kind: 'question' as const, question: 'Pick?', multi: true, typeRow: null,
+        rows: labels.map((label, i) => ({ number: String(i + 1), label, checked: false })) }
+      const apply = vi.fn(async (_step: { kind: string, rows?: { label: string }[] }) => true)
+      const readQuestion = vi.fn(async (): Promise<PaneView> => null).mockResolvedValueOnce(question)
+      const controller = new AskQuestionController({ getSession: () => row(), capture: async () => capture, readQuestion,
+        sendKey: vi.fn(async () => true), sendText: vi.fn(async () => true), acquireControl: () => vi.fn(), wait: async () => {},
+        questionControlFor: () => ({ apply }) })
+      expect(await controller.answer({ agentId: 'agent', answers: { 'Pick?': answer } })).toEqual({ ok: true })
+      expect(apply).toHaveBeenCalledOnce()
+      return apply.mock.calls[0][0].rows?.map(row => row.label)
+    }
+
+    it('keeps an option whose label holds a comma whole', async () => {
+      expect(await toggled(['Yes, continue', 'No', 'Maybe'], 'Yes, continue, Maybe')).toEqual(['Yes, continue', 'Maybe'])
+      expect(await toggled(['Yes, continue', 'No', 'Maybe'], 'Yes, continue')).toEqual(['Yes, continue'])
+      // Cut on every comma, "Yes" reads as the first option it starts.
+      expect(await toggled(['Yes, continue', 'Yes, stop', 'Maybe'], 'Yes, stop, Maybe')).toEqual(['Yes, stop', 'Maybe'])
+    })
+
+    it('reads the answer as labels that spell all of it, where taking the longest label first would not', async () => {
+      expect(await toggled(['A, B', 'A', 'B, C'], 'A, B, C')).toEqual(['A', 'B, C'])
+    })
+
+    it('takes the reading with the fewest options when several spell it', async () => {
+      expect(await toggled(['A', 'B', 'A, B'], 'A, B')).toEqual(['A, B'])
+    })
+
+    it('passes over a blank piece, as the loose reading always did', async () => {
+      expect(await toggled(['Yes, continue', 'Yes, stop', 'Maybe'], 'Yes, stop, Maybe, ')).toEqual(['Yes, stop', 'Maybe'])
+      expect(await toggled(['Yes, continue', 'Yes, stop', 'Maybe'], ', Yes, stop,, Maybe')).toEqual(['Yes, stop', 'Maybe'])
+    })
+
+    it('matches each piece loosely, as before, when no labels spell the answer', async () => {
+      expect(await toggled(['Tea', 'Coffee', 'Milk'], 'tea, coff')).toEqual(['Tea', 'Coffee'])
+    })
+
+    it('reads each piece trimmed, as before, so a full stop before a space still matches', async () => {
+      // norm drops a trailing full stop before it trims: " No. " reads "no." unless the piece is trimmed first.
+      expect(await toggled(['Tea', 'Coffee', 'No'], 'tea, coff, No. ')).toEqual(['Tea', 'Coffee', 'No'])
+      expect(await toggled(['Yes, continue', 'Yes, stop', 'No'], 'Yes, stop, No. ')).toEqual(['Yes, stop', 'No'])
+    })
+
+    it('refuses an answer longer than any dialog asks for, before anything reaches the terminal', async () => {
+      const apply = vi.fn(async () => true), capture = vi.fn(async () => '')
+      const controller = new AskQuestionController({ getSession: () => row(), capture, readQuestion: async () => null,
+        sendKey: vi.fn(async () => true), sendText: vi.fn(async () => true), acquireControl: () => vi.fn(), wait: async () => {},
+        questionControlFor: () => ({ apply }) })
+      const tooLong = { ok: false, error: 'ANSWER_FAILED', detail: 'The answer is too long. Answer it in the terminal.' }
+      expect(await controller.answer({ agentId: 'agent', answers: { 'Pick?': 'A, '.repeat(2731) } })).toEqual(tooLong)
+      const many = Object.fromEntries(Array.from({ length: 15 }, (_, i) => [`Q${i}?`, 'A']))
+      expect(await controller.answer({ agentId: 'agent', answers: many })).toEqual(tooLong)
+      expect(capture).not.toHaveBeenCalled()
+      expect(apply).not.toHaveBeenCalled()
+    })
+
+    it('refuses an answer that is not text, before anything reaches the terminal', async () => {
+      const apply = vi.fn(async () => true), capture = vi.fn(async () => '')
+      const controller = new AskQuestionController({ getSession: () => row(), capture, readQuestion: async () => null,
+        sendKey: vi.fn(async () => true), sendText: vi.fn(async () => true), acquireControl: () => vi.fn(), wait: async () => {},
+        questionControlFor: () => ({ apply }) })
+      const notText = { ok: false, error: 'ANSWER_FAILED', detail: 'The answer named no agent or carried no choice.' }
+      for (const value of [5, null, ['A'], { label: 'A' }]) {
+        expect(await controller.answer({ agentId: 'agent', answers: { 'Pick?': 'A', 'Size?': value as never } })).toEqual(notText)
+      }
+      expect(capture).not.toHaveBeenCalled()
+      expect(apply).not.toHaveBeenCalled()
+    })
+
+    it('reads an answer of 4096 bytes of labels whole', async () => {
+      const answer = `A${', A'.repeat(1365)}`
+      expect(Buffer.byteLength(answer, 'utf8')).toBe(4096)
+      expect(await toggled(['A'], answer)).toHaveLength(1366)
+    })
+
+    it('reads a long answer in time that grows with its length', () => {
+      // The answer is outside text and the core reads it in line: trying every run of pieces as a label held the
+      // core 12 s on this 3 KB answer, its time growing with the cube of the pieces (2026-11-18).
+      const rows = ['Yes, continue', 'No', 'A'].map((label, i) => ({ number: String(i + 1), label, checked: false }))
+      const ms = (answer: string) => { const start = performance.now(); partitionLabels(rows, answer); return performance.now() - start }
+      expect(ms(Array(1000).fill('x').join(', '))).toBeLessThan(50)
+      expect(ms(Array(1000).fill('A').join(', '))).toBeLessThan(50)
+      expect(partitionLabels(rows, Array(1000).fill('A').join(', '))).toHaveLength(1000)
+    })
+
+    it('reads a long answer in work that grows with its length times the labels\' length, however many commas they hold', () => {
+      // A label on screen may hold many commas: trying every run of pieces up to the label with the most held the core
+      // 16 s on a 4 KB answer against a label of 2,000 commas, its work growing with the square of them (2026-11-18).
+      const texts = [`${'a,'.repeat(300)}b`, 'x'], answer = `${'a,'.repeat(2047)}a`
+      let keyed = 0
+      partitionTexts(texts, answer, (text) => { keyed += text.length; return text.trim() })
+      expect(keyed).toBeLessThanOrEqual(answer.length * texts.reduce((sum, text) => sum + text.length, 0))
+    })
+  })
+
   it('keeps a previously announced question while the screen reader is unavailable', async () => {
     vi.useFakeTimers()
     const current = row(), onQuestion = vi.fn(), onQuestionGone = vi.fn()
@@ -155,5 +252,110 @@ describe('asynchronous question evidence', () => {
     expect(result).toMatchObject({ ok: false, error: change === 'unavailable' ? 'ANSWER_FAILED' : 'STALE_QUESTION' })
     expect(sendKey).not.toHaveBeenCalled(); expect(sendText).not.toHaveBeenCalled()
     expect(release).toHaveBeenCalledOnce()
+  })
+})
+
+describe('a hook said a dialog is coming', () => {
+  const POLL_MS = 1_500
+  // The watcher polls one session; `pane` is what each read finds there, and `device` whether anyone listens.
+  const watching = (pane: PaneView) => {
+    vi.useFakeTimers()
+    const current = row(), onQuestion = vi.fn(), onQuestionGone = vi.fn(), onClear = vi.fn()
+    const state = { device: true }
+    const capture = vi.fn(async (): Promise<string | null> => 'pane')
+    const readQuestion = vi.fn(async (): Promise<PaneView> => pane)
+    const watcher = new QuestionWatcher({ getSession: () => current, capture, hasDevice: () => state.device,
+      readQuestion, onQuestion, onQuestionGone, onClear })
+    watcher.start(current.sessionId)
+    return { watcher, capture, readQuestion, onQuestion, onQuestionGone, onClear, state, id: current.sessionId }
+  }
+
+  it('told a dialog is coming, reads nothing until the next poll', async () => {
+    const { watcher, capture, id } = watching(view)
+    watcher.awaitDialog(id)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(capture).not.toHaveBeenCalled()
+    watcher.stopAll()
+  })
+  it('two polls in a row with no dialog since it was told say the pane is clear, once', async () => {
+    const { watcher, onClear, id } = watching(null)
+    watcher.awaitDialog(id)
+    await vi.advanceTimersByTimeAsync(POLL_MS); expect(onClear).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(POLL_MS); expect(onClear).toHaveBeenCalledExactlyOnceWith(id)
+    await vi.advanceTimersByTimeAsync(POLL_MS * 4); expect(onClear).toHaveBeenCalledTimes(1)
+    watcher.stopAll()
+  })
+  it('a dialog read since ends the count: its close is a question\'s close, and nothing is called clear', async () => {
+    const { watcher, readQuestion, onQuestion, onQuestionGone, onClear, id } = watching(view)
+    watcher.awaitDialog(id)
+    await vi.advanceTimersByTimeAsync(POLL_MS)
+    expect(onQuestion).toHaveBeenCalledOnce()
+    readQuestion.mockResolvedValue(null)
+    await vi.advanceTimersByTimeAsync(POLL_MS * 6)
+    expect(onQuestionGone).toHaveBeenCalledOnce()
+    expect(onClear).not.toHaveBeenCalled()
+    watcher.stopAll()
+  })
+  it.each(['a capture that fails', 'a read that fails', 'a paused poll'] as const)('%s is no read', async (kind) => {
+    const { watcher, capture, readQuestion, onClear, state, id } = watching(null)
+    watcher.awaitDialog(id)
+    await vi.advanceTimersByTimeAsync(POLL_MS)
+    // A failed capture or read breaks the run; a paused poll reads nothing, so it neither counts nor breaks it.
+    if (kind === 'a capture that fails') capture.mockResolvedValueOnce(null)
+    if (kind === 'a read that fails') readQuestion.mockRejectedValueOnce(new Error('worker unavailable'))
+    if (kind === 'a paused poll') state.device = false
+    await vi.advanceTimersByTimeAsync(POLL_MS * 2)
+    expect(onClear).not.toHaveBeenCalled()
+    state.device = true
+    await vi.advanceTimersByTimeAsync(POLL_MS * 2)
+    expect(onClear).toHaveBeenCalledExactlyOnceWith(id)
+    watcher.stopAll()
+  })
+  it('not told: polls with no dialog call nothing, as today', async () => {
+    const { watcher, onQuestionGone, onClear } = watching(null)
+    await vi.advanceTimersByTimeAsync(POLL_MS * 6)
+    expect(onClear).not.toHaveBeenCalled()
+    expect(onQuestionGone).not.toHaveBeenCalled()
+    watcher.stopAll()
+  })
+  it.each(['stop', 'stopAll', 'never watched'] as const)('%s forgets what was told', async (kind) => {
+    const { watcher, onClear, id } = watching(null)
+    if (kind === 'never watched') watcher.stop(id)
+    watcher.awaitDialog(id)
+    if (kind === 'stop') watcher.stop(id)
+    if (kind === 'stopAll') watcher.stopAll()
+    watcher.start(id)
+    await vi.advanceTimersByTimeAsync(POLL_MS * 4)
+    expect(onClear).not.toHaveBeenCalled()
+    watcher.stopAll()
+  })
+})
+
+describe('the log of an answer that was not keyed', () => {
+  // The question and the answer are the person's words: the log names the harness and their sizes, never the words.
+  const QUESTION = 'SECRET-QUESTION-MARKER?'
+  const question = { kind: 'question' as const, question: QUESTION, multi: false, typeRow: null,
+    rows: [{ number: '1', label: 'Tea', checked: false }, { number: '2', label: 'Coffee', checked: false }] }
+  const warned = async (answer: { answers: Record<string, string>, requestId?: string }) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const controller = new AskQuestionController({ getSession: () => row(), capture: async () => capture,
+      readQuestion: async () => question, sendKey: vi.fn(async () => true), sendText: vi.fn(async () => true),
+      acquireControl: () => vi.fn(), wait: async () => {}, questionControlFor: () => ({ apply: async () => true }) })
+    await controller.answer({ agentId: 'agent', ...answer })
+    return warn.mock.calls.map(([line]) => String(line))
+  }
+
+  it.each([
+    ['stuck on the dialog', { answers: { [QUESTION]: 'Coffee' } }, 'dialog stuck'],
+    ['the dialog changed', { answers: { [QUESTION]: 'Coffee' }, requestId: 'req-1' }, 'req=req-1'],
+    ['no answer names the question', { answers: { 'Other?': 'Coffee' } }, 'no answer names'],
+    ['no option matches the answer', { answers: { [QUESTION]: 'SECRET-ANSWER-MARKER' } }, 'no option matched'],
+  ])('says the harness and sizes, not the words, when %s', async (_, answer, says) => {
+    const lines = (await warned(answer)).filter(line => line.includes(says))
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain('[question] agent ')
+    expect(lines[0]).toMatch(/\d+ chars/)
+    expect(lines[0]).not.toContain('SECRET')
   })
 })

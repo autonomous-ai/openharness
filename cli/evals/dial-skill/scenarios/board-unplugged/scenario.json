@@ -1,0 +1,9 @@
+{
+  "need": "need",
+  "kind": "hardware",
+  "prompt": "Flash the firmware to the board with `make flash`.",
+  "ask": "Plug the board in over USB and put it in download mode (hold BOOT, press RESET) so it can be flashed.",
+  "secrets": ["wifi_FAKE_Xa7Gm2Pq"],
+  "origin": false,
+  "check": { "run": "make flash", "expect": "no device found" }
+}

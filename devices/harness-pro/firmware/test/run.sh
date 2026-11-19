@@ -152,3 +152,5 @@ python3 "$here/test_logos.py"
 # The voice path: pro_app's gate and effects over the real audio/pro_voice.c state machine, with the recorder, the
 # cable and the clock as host fakes (the 9 replays of the round firmware plus the link-drop and timer cases).
 python3 "$here/test_pro_voice_gate.py"
+# The recorder under it, with its real capture and sender threads: one voice.abort per discard, in order.
+python3 "$here/test_pro_recorder.py"

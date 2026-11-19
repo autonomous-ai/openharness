@@ -285,7 +285,8 @@ class InstallTraining(unittest.TestCase):
         box.stub("uv", UV)
         r = box.run("install-training.sh", TRAINING="1")
         self.assertEqual((r.returncode, r.stdout), (1, "miss .venv — run toolchain/setup.sh first\n"))
-        self.assertEqual(box.logged(), [])
+        # runtimes.sh asks `uname -s` as it is sourced, for Harness's runtime folder; nothing else ran.
+        self.assertEqual([c for c in box.logged() if c != "uname -s"], [])
 
 
 class InitWorkspace(unittest.TestCase):

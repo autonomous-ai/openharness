@@ -63,8 +63,6 @@ HEADLESS = Path('/etc/harness-os/headless')
 DRM = Path('/sys/class/drm')
 USER = 'me'
 HOME = Path('/home') / USER
-SESSION = HOME / '.harness/auth/session.json'
-COMPUTER_ID = HOME / '.harness/computer-id'
 # A sign-in the backend did not answer is tried this many times in all, this many seconds apart.
 SIGN_IN_ATTEMPTS = 4
 SIGN_IN_PAUSE = 5
@@ -114,8 +112,29 @@ def log(message):
 
 
 
+def harness_data_root(home, environ):
+    """The CLI's data root on Linux (cli config/harnessHome.ts): XDG once it holds Harness's marker
+    (.harness-root, which the CLI writes; this only reads it), else ~/.harness while that exists, else XDG
+    (a fresh image). An XDG_DATA_HOME that is not an absolute path counts as unset."""
+    base = Path(environ.get('XDG_DATA_HOME', ''))
+    data = (base if base.is_absolute() else home / '.local/share') / 'harness'
+    legacy = home / '.harness'
+    return legacy if not (data / '.harness-root').is_file() and legacy.exists() else data
+
+
+def data_root():
+    # Looked up at each use: the daemon moves ~/.harness at its start. The person's daemon and sign-in
+    # run with no XDG_DATA_HOME (harness-daemon.service, as_user, run_sign_in), and this root process's
+    # own would be root's, so the default is theirs.
+    return harness_data_root(HOME, {})
+
+
+def session_file():
+    return data_root() / 'auth/session.json'
+
+
 def computer_id():
-    for path in [COMPUTER_ID, Path('/etc/machine-id')]:
+    for path in [data_root() / 'computer-id', Path('/etc/machine-id')]:
         try:
             value = path.read_text().strip()
             if value:
@@ -169,7 +188,7 @@ def signed_in():
     backend refused stays on disk with its mark, and a computer signed in by that alone took no
     ticket: the Dell, 2026-11-03, said signed in to the phone with an account it could not use."""
     try:
-        return not json.loads(SESSION.read_text()).get('signedOut')
+        return not json.loads(session_file().read_text()).get('signedOut')
     except (OSError, ValueError, AttributeError):
         return False
 
@@ -703,7 +722,7 @@ def hotspot_wait(now, started):
 def signed_in_account():
     """The account this computer is signed in to: the session's `signInAcct` (cli recordSignInAccount)."""
     try:
-        return json.loads(SESSION.read_text()).get('signInAcct')
+        return json.loads(session_file().read_text()).get('signInAcct')
     except (OSError, ValueError, AttributeError):
         return None
 

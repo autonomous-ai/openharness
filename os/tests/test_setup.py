@@ -210,7 +210,8 @@ class SetUpAsUnlocked(unittest.TestCase):
             sent = folder / 'phone-setup.json'
             if request is not None:
                 sent.write_text(json.dumps(request))
-            session = folder / 'session.json'
+            session = folder / '.local/share/harness/auth/session.json'
+            session.parent.mkdir(parents=True)
             session.write_text(json.dumps(dict(signInAcct=account)))
             users, state = [], dict(signed_in=signed_in)
 
@@ -220,7 +221,7 @@ class SetUpAsUnlocked(unittest.TestCase):
                 if command[1] == 'logout' and not refused:
                     state['signed_in'] = False
 
-            with patch.object(setup, 'PHONE_SETUP', sent), patch.object(setup, 'SESSION', session), \
+            with patch.object(setup, 'PHONE_SETUP', sent), patch.object(setup, 'HOME', folder), \
                  patch.object(setup, 'STATE', folder), patch.object(setup, 'RESULT', folder / 'r.json'), \
                  patch.object(setup, 'wifi_device', return_value='wlo1'), \
                  patch.object(setup, 'online', return_value=False), \
@@ -290,8 +291,9 @@ class FromPhone(unittest.TestCase):
 class SignedIn(unittest.TestCase):
     def test_a_session_marked_signed_out_is_no_sign_in(self):
         with tempfile.TemporaryDirectory() as folder:
-            session = Path(folder) / 'session.json'
-            with patch.object(setup, 'SESSION', session):
+            session = Path(folder) / '.local/share/harness/auth/session.json'
+            session.parent.mkdir(parents=True)
+            with patch.object(setup, 'HOME', Path(folder)):
                 self.assertFalse(setup.signed_in())
                 session.write_text(json.dumps(dict(accessToken='a')))
                 self.assertTrue(setup.signed_in())
@@ -300,6 +302,65 @@ class SignedIn(unittest.TestCase):
                 self.assertFalse(setup.signed_in())
                 session.write_text('{')
                 self.assertFalse(setup.signed_in())
+
+
+class DataRoot(unittest.TestCase):
+    """The CLI's data root on Linux (cli config/harnessHome.ts): XDG once it holds Harness's marker,
+    else ~/.harness while that exists, else XDG (a fresh image)."""
+
+    def read(self, home, root):
+        (home / root / 'auth').mkdir(parents=True)
+        (home / root / 'auth/session.json').write_text(json.dumps(dict(accessToken='a', signInAcct='u-1')))
+        (home / root / 'computer-id').write_text('601cb0af-9a2d-44cf-8381-df989bf4a192\n')
+        with patch.object(setup, 'HOME', home):
+            return setup.signed_in(), setup.signed_in_account(), setup.computer_id()
+
+    def test_the_session_and_the_computer_id_are_read_from_the_data_root_once_it_holds_the_marker(self):
+        with tempfile.TemporaryDirectory() as folder:
+            home = Path(folder)
+            # A ~/.harness left beside the moved root is not read.
+            (home / '.harness/auth').mkdir(parents=True)
+            (home / '.harness/auth/session.json').write_text(json.dumps(dict(signedOut=dict(reason='old'))))
+            (home / '.harness/computer-id').write_text('old\n')
+            (home / '.local/share/harness').mkdir(parents=True)
+            (home / '.local/share/harness/.harness-root').write_text('1\n')
+            self.assertEqual(self.read(home, '.local/share/harness'),
+                             (True, 'u-1', '601cb0af-9a2d-44cf-8381-df989bf4a192'))
+
+    def test_a_data_root_without_the_marker_switches_nothing(self):
+        with tempfile.TemporaryDirectory() as folder:
+            home = Path(folder)
+            (home / '.harness').mkdir()
+            (home / '.local/share/harness/.harness-root').mkdir(parents=True)
+            self.assertEqual(setup.harness_data_root(home, {}), home / '.harness', 'a folder is no marker')
+
+    def test_from_harness_while_only_that_exists(self):
+        with tempfile.TemporaryDirectory() as folder:
+            self.assertEqual(self.read(Path(folder), '.harness'),
+                             (True, 'u-1', '601cb0af-9a2d-44cf-8381-df989bf4a192'))
+
+    def test_from_the_data_root_on_a_fresh_image(self):
+        with tempfile.TemporaryDirectory() as folder:
+            home = Path(folder)
+            self.assertEqual(setup.harness_data_root(home, {}), home / '.local/share/harness')
+
+    def test_xdg_data_home_is_used_when_absolute(self):
+        with tempfile.TemporaryDirectory() as folder:
+            home = Path(folder)
+            (home / '.harness').mkdir()
+            self.assertEqual(setup.harness_data_root(home, dict(XDG_DATA_HOME='/data')), home / '.harness')
+            (home / 'data/harness').mkdir(parents=True)
+            (home / 'data/harness/.harness-root').write_text('1\n')
+            self.assertEqual(setup.harness_data_root(home, dict(XDG_DATA_HOME=str(home / 'data'))),
+                             home / 'data/harness')
+            self.assertEqual(setup.harness_data_root(home, dict(XDG_DATA_HOME=f"{home / 'data'}/")),
+                             home / 'data/harness')
+            # Empty or relative: as unset.
+            for value in ['', 'data']:
+                self.assertEqual(setup.harness_data_root(home, dict(XDG_DATA_HOME=value)), home / '.harness', value)
+            (home / '.local/share/harness').mkdir(parents=True)
+            (home / '.local/share/harness/.harness-root').write_text('1\n')
+            self.assertEqual(setup.harness_data_root(home, dict(XDG_DATA_HOME='data')), home / '.local/share/harness')
 
 
 class SignInAgain(unittest.TestCase):
@@ -664,8 +725,9 @@ class Machine(unittest.TestCase):
         # No address to read: the computer id, as before.
         with tempfile.TemporaryDirectory() as folder, \
              patch.object(setup, 'permanent_mac', return_value=''), \
-             patch.object(setup, 'COMPUTER_ID', Path(folder) / 'computer-id'):
-            (Path(folder) / 'computer-id').write_text('601cb0af-9a2d-44cf-8381-df989bf4a192\n')
+             patch.object(setup, 'HOME', Path(folder)):
+            (Path(folder) / '.local/share/harness').mkdir(parents=True)
+            (Path(folder) / '.local/share/harness/computer-id').write_text('601cb0af-9a2d-44cf-8381-df989bf4a192\n')
             self.assertEqual(setup.hotspot_name('wlo1'), 'Harness-A192')
 
     def test_the_permanent_address_falls_back_to_the_current_one(self):
@@ -725,8 +787,9 @@ class Machine(unittest.TestCase):
     def test_the_hotspot_is_named_after_the_computer(self):
         with tempfile.TemporaryDirectory() as folder:
             state = Path(folder)
-            with patch.object(setup, 'COMPUTER_ID', state / 'computer-id'):
-                (state / 'computer-id').write_text('601cb0af-9a2d-44cf-8381-df989bf4a192\n')
+            with patch.object(setup, 'HOME', state):
+                (state / '.local/share/harness').mkdir(parents=True)
+                (state / '.local/share/harness/computer-id').write_text('601cb0af-9a2d-44cf-8381-df989bf4a192\n')
                 self.assertEqual(setup.hotspot_name(), 'Harness-A192')
 
     def test_the_hotspot_is_open_on_2_4_ghz(self):

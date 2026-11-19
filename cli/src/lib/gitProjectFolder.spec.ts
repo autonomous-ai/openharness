@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { cloneFailure, cloneRepository, prepareGitFolder, RepositoryAccessError, RepositoryHostKeyError } from './gitProjectFolder.js'
 import { repositoryIdentity } from './githubRepository.js'
 import { parseProjectFolder, ProjectFolderError, type GitProjectFolder } from './projectFolder.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 /** A checkout at [folder] whose origin is [origin] (none when null), made by the real git, with no network. */
 function checkout(folder: string, origin: string | null): void {
@@ -342,7 +343,7 @@ describe('the project clone of a large repository', () => {
   /** A stand-in for git at [root]/fake-git: [body] runs for `clone`; `config` succeeds. Its pid is written to [root]/pid. */
   async function fakeGit(body: string): Promise<string> {
     const path = join(root, 'fake-git')
-    await writeFile(path, `#!/bin/sh\necho $$ > '${join(root, 'pid')}'\n[ "$1" = clone ] || exit 0\n${body}\n`, { mode: 0o755 })
+    writeExecutable(path, `#!/bin/sh\necho $$ > '${join(root, 'pid')}'\n[ "$1" = clone ] || exit 0\n${body}\n`)
     return path
   }
   const running = (pid: number) => { try { process.kill(pid, 0); return true } catch { return false } }

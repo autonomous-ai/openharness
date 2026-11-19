@@ -26,6 +26,10 @@ static atomic_bool active, recording, stop_requested, abort_requested, capture_d
 static atomic_uint input_level;
 static portMUX_TYPE state_lock = portMUX_INITIALIZER_UNLOCKED;
 static char agent[ID_MAX], upload[24];
+// Where `upload` stands with the host, under state_lock, so a cancel and the sender's end-or-abort decision
+// cannot both tell the host. `discarded` holds a cancel that came after voice.end, for the sender to send.
+static enum { UPLOAD_CLOSED, UPLOAD_SENDING, UPLOAD_ENDED } phase;
+static char discarded[24];
 static char selection[48];
 static unsigned selection_revision;
 static char search_id[48];
@@ -106,7 +110,17 @@ static void send_audio(void *unused)
     (void)unused;
     for (;;) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        if (!atomic_load(&active))
+        // Before any new voice.begin: the host must hear the old clip's cancel first. Both are read in one step: a
+        // cancel that landed before the start is then never left behind it.
+        char cancel[sizeof discarded];
+        portENTER_CRITICAL(&state_lock);
+        snprintf(cancel, sizeof cancel, "%s", discarded);
+        discarded[0] = 0;
+        bool started = atomic_load(&active);
+        portEXIT_CRITICAL(&state_lock);
+        if (cancel[0])
+            cable_client_voice_cancel(cancel);
+        if (!started)
             continue;
         char lang[CFG_VLANG_MAX];
         config_load_voicelang(lang, sizeof(lang));
@@ -149,7 +163,11 @@ static void send_audio(void *unused)
         atomic_store(&stop_requested, true);
         while (!atomic_load_explicit(&capture_done, memory_order_acquire))
             ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(20));
-        if (atomic_load(&abort_requested))
+        portENTER_CRITICAL(&state_lock);
+        bool aborted = atomic_load(&abort_requested);
+        phase = aborted ? UPLOAD_CLOSED : UPLOAD_ENDED;
+        portEXIT_CRITICAL(&state_lock);
+        if (aborted)
             audio_stream_abort("capture or cable interrupted");
         else
             audio_stream_end();
@@ -159,7 +177,7 @@ static void send_audio(void *unused)
                  (unsigned long)((esp_timer_get_time() - began) / 1000), (unsigned long)produced,
                  (unsigned long)delivered, (unsigned long)high_water, (unsigned long)read_max_us,
                  (unsigned long)send_max_us, (unsigned long)audio_capture_overruns(),
-                 atomic_load(&abort_requested), atomic_load(&heard),
+                 aborted, atomic_load(&heard),
                  (unsigned)uxTaskGetStackHighWaterMark(capture_task),
                  (unsigned)uxTaskGetStackHighWaterMark(NULL));
         // The next gesture cannot reuse metadata or the ring until capture and finalization
@@ -196,17 +214,17 @@ void audio_client_init(void)
     }
     ESP_LOGI(TAG, "10ms PCM capture; independent sender; %d-byte ring", BUFFER_BYTES);
 }
-static void start_context(const char *id, voice_cmd_t cmd, const char *selected, unsigned revision, const char *form, unsigned form_rev, const char *carried, const char *question, unsigned index, const char *draft, unsigned draft_rev, bool append, const char *search, unsigned search_rev)
+static bool start_context(const char *id, voice_cmd_t cmd, const char *selected, unsigned revision, const char *form, unsigned form_rev, const char *carried, const char *question, unsigned index, const char *draft, unsigned draft_rev, bool append, const char *search, unsigned search_rev)
 {
     if (!capture_task || !sender_task) {
         ESP_LOGE(TAG, "Audio unavailable");
-        return;
+        return false;
     }
     uint32_t u0 = esp_random(), u1 = esp_random();
     portENTER_CRITICAL(&state_lock);
     if (atomic_load(&active)) {
         portEXIT_CRITICAL(&state_lock);
-        return;
+        return false;
     }
     snprintf(agent, sizeof(agent), "%s", id ? id : "");
     snprintf(selection, sizeof(selection), "%s", selected ? selected : "");
@@ -217,6 +235,7 @@ static void start_context(const char *id, voice_cmd_t cmd, const char *selected,
     form_revision = form_rev;
     snprintf(carry_id, sizeof(carry_id), "%s", carried ? carried : "");
     snprintf(upload, sizeof(upload), "%08lx%08lx", (unsigned long)u0, (unsigned long)u1);
+    phase = UPLOAD_SENDING;
     snprintf(question_token, sizeof(question_token), "%s", question ? question : "");
     question_index = index;
     snprintf(draft_id, sizeof(draft_id), "%s", draft ? draft : "");
@@ -234,25 +253,26 @@ static void start_context(const char *id, voice_cmd_t cmd, const char *selected,
     atomic_store(&active, true);
     portEXIT_CRITICAL(&state_lock);
     xTaskNotifyGive(sender_task);
+    return true;
 }
-void audio_client_start_cable(const char *id, voice_cmd_t cmd) { start_context(id, cmd, NULL, 0, NULL, 0, NULL, NULL, 0, NULL, 0, false, NULL, 0); }
-void audio_client_start_selection(const char *id, const char *selected, unsigned revision)
+bool audio_client_start_cable(const char *id, voice_cmd_t cmd) { return start_context(id, cmd, NULL, 0, NULL, 0, NULL, NULL, 0, NULL, 0, false, NULL, 0); }
+bool audio_client_start_selection(const char *id, const char *selected, unsigned revision)
 {
-    if (id && *id && selected && *selected && revision) start_context(id, VOICE_CMD_NONE, selected, revision, NULL, 0, NULL, NULL, 0, NULL, 0, false, NULL, 0);
+    return id && *id && selected && *selected && revision && start_context(id, VOICE_CMD_NONE, selected, revision, NULL, 0, NULL, NULL, 0, NULL, 0, false, NULL, 0);
 }
-void audio_client_start_form(const char *id, unsigned revision)
+bool audio_client_start_form(const char *id, unsigned revision)
 {
-    if (id && *id) start_context(NULL, VOICE_CMD_NONE, NULL, 0, id, revision, NULL, NULL, 0, NULL, 0, false, NULL, 0);
+    return id && *id && start_context(NULL, VOICE_CMD_NONE, NULL, 0, id, revision, NULL, NULL, 0, NULL, 0, false, NULL, 0);
 }
-void audio_client_start_carry(const char *id, const char *carried)
+bool audio_client_start_carry(const char *id, const char *carried)
 {
-    if (id && *id && carried && *carried) start_context(id, VOICE_CMD_NONE, NULL, 0, NULL, 0, carried, NULL, 0, NULL, 0, false, NULL, 0);
+    return id && *id && carried && *carried && start_context(id, VOICE_CMD_NONE, NULL, 0, NULL, 0, carried, NULL, 0, NULL, 0, false, NULL, 0);
 }
 void audio_client_request_review(void) { atomic_store(&review_requested,true); }
 bool audio_client_review_requested(void) { return atomic_load(&review_requested); }
-void audio_client_start_draft(const char *id,unsigned revision,bool append)
+bool audio_client_start_draft(const char *id,unsigned revision,bool append)
 {
-    if (id && *id) start_context(NULL,VOICE_CMD_NONE,NULL,0,NULL,0,NULL,NULL,0,id,revision,append,NULL,0);
+    return id && *id && start_context(NULL,VOICE_CMD_NONE,NULL,0,NULL,0,NULL,NULL,0,id,revision,append,NULL,0);
 }
 void audio_client_copy_draft(char *out,size_t capacity,unsigned *revision,bool *append)
 {
@@ -262,9 +282,9 @@ void audio_client_copy_draft(char *out,size_t capacity,unsigned *revision,bool *
     if (append) *append=draft_append;
     portEXIT_CRITICAL(&state_lock);
 }
-void audio_client_start_question(const char *id, const char *token, unsigned index)
+bool audio_client_start_question(const char *id, const char *token, unsigned index)
 {
-    if (id && *id && token && *token && index < 4)
+    return id && *id && token && *token && index < 4 &&
         start_context(id, VOICE_CMD_NONE, NULL, 0, NULL, 0, NULL, token, index, NULL, 0, false, NULL, 0);
 }
 void audio_client_copy_question(char *out, size_t capacity, unsigned *index)
@@ -310,6 +330,24 @@ void audio_client_abort(void)
     }
     portEXIT_CRITICAL(&state_lock);
 }
+void audio_client_cancel(const char *id)
+{
+    bool wake = false;
+    portENTER_CRITICAL(&state_lock);
+    if (id && *id && !strcmp(id, upload)) {
+        if (phase == UPLOAD_SENDING) {
+            atomic_store(&abort_requested, true);
+            atomic_store(&stop_requested, true);
+        } else if (phase == UPLOAD_ENDED) {
+            phase = UPLOAD_CLOSED;
+            snprintf(discarded, sizeof discarded, "%s", upload);
+            wake = true;
+        }
+    }
+    portEXIT_CRITICAL(&state_lock);
+    if (wake)
+        xTaskNotifyGive(sender_task);
+}
 bool audio_client_active(void) { return atomic_load_explicit(&active, memory_order_acquire); }
 bool audio_client_recording(void) { return atomic_load(&recording); }
 bool audio_client_heard_voice(void) { return atomic_load(&heard); }
@@ -329,9 +367,9 @@ bool audio_client_upload_matches(const char *id)
     return match;
 }
 
-void audio_client_start_search(const char *id, const char *selected, unsigned revision)
+bool audio_client_start_search(const char *id, const char *selected, unsigned revision)
 {
-    if (id && *id && selected && *selected && revision)
+    return id && *id && selected && *selected && revision &&
         start_context(id,VOICE_CMD_NONE,NULL,0,NULL,0,NULL,NULL,0,NULL,0,false,selected,revision);
 }
 void audio_client_copy_search(char *out,size_t capacity,unsigned *revision)

@@ -1,21 +1,22 @@
 /**
  * The dial's setup in the devices' own process, its homes and its plugin together, over throwaway homes, a throwaway
- * data folder and a fake `claude` whose install turns the plugin on in the throwaway Claude Code home's settings, as
- * Claude Code's own does. The real `claude`, ~/.claude and ~/.codex are never touched.
+ * data folder and a fake `claude` whose install, or enable in an Orca home, turns the plugin on in that home's settings,
+ * as Claude Code's own does. The real `claude`, ~/.claude, ~/.codex and Orca's profiles are never touched.
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { ClaudeRun } from '../devices/claudePlugin.js'
 import { DIAL_PLUGIN_ID, DIAL_SKILL, removeSkill } from '../devices/dialSkill.js'
-import { DIAL_SETUP_FILE, readRemoved, readSetup, writeRemoved } from '../devices/dialSkillFiles.js'
+import { DIAL_SETUP_FILE, readRemoved, readSetup, writePluginHomes, writeRemoved, writeSetup } from '../devices/dialSkillFiles.js'
 import type { RolloutOwner } from './codexRolloutHome.js'
 import { createDialSetup, type DialSetupDeps } from './dialSetup.js'
 
 const ADD = 'plugin marketplace add autonomous-ai/openharness --sparse .claude-plugin plugins'
 const INSTALL = 'plugin install harness-device@openharness --scope user'
 const UNINSTALL = 'plugin uninstall harness-device@openharness --scope user'
+const ENABLE = 'plugin enable harness-device@openharness --scope user'
 const HOUR = 3_600_000
 
 const folders: string[] = []
@@ -37,8 +38,8 @@ const ownerIn = (home: string): RolloutOwner =>
   ({ engine: 'codex', record: join(home, 'sessions', '2026', '11', '17', 'rollout-a.jsonl'), tty: '/dev/ttys003' })
 
 /**
- * A `claude` 2.1.287 whose plugin is on while [claudeHome]'s settings say so: its install and uninstall write them, as
- * Claude Code's do, and a /plugin uninstall is the test writing them. A call in [fail] exits 1.
+ * A `claude` 2.1.287 whose plugin is on while [claudeHome]'s settings say so: its install, enable and uninstall write
+ * them, as Claude Code's do, and a /plugin uninstall is the test writing them. A call in [fail] exits 1.
  */
 function fakeClaude(claudeHome: string) {
   const calls: string[] = []
@@ -53,7 +54,7 @@ function fakeClaude(claudeHome: string) {
     if (call === '--version') return answer('2.1.287 (Claude Code)\n')
     if (call === 'plugin list --json') return answer(JSON.stringify(on() ? [{ id: DIAL_PLUGIN_ID, scope: 'user', enabled: true, version: '16a92abfab3f' }] : []))
     if (call === 'plugin marketplace list --json') return answer('[]')
-    if (call === INSTALL) writeFileSync(settings, JSON.stringify({ enabledPlugins: { [DIAL_PLUGIN_ID]: true } }))
+    if (call === INSTALL || call === ENABLE) writeFileSync(settings, JSON.stringify({ enabledPlugins: { [DIAL_PLUGIN_ID]: true } }))
     if (call === UNINSTALL) writeFileSync(settings, JSON.stringify({ enabledPlugins: {} }))
     return answer()
   }
@@ -62,11 +63,17 @@ function fakeClaude(claudeHome: string) {
   return { run, calls, fail, writes }
 }
 
-/** A setup over throwaway homes on a computer that never had a dial; `found` says whether the lookup finds the fake. */
+/** A setup over throwaway homes on a computer that never had a dial; `found` says whether the lookup finds the fake, one
+ *  for each Claude Code home it is asked for, and `orca` is Orca's last read. */
 function rig() {
   const [dataDir, claudeHome, codexHome] = [folder(), folder(), folder()]
-  const fake = fakeClaude(claudeHome)
-  const state = { found: true }
+  const fakes = new Map<string, ReturnType<typeof fakeClaude>>()
+  const fakeIn = (home: string): ReturnType<typeof fakeClaude> => {
+    if (!fakes.has(home)) fakes.set(home, fakeClaude(home))
+    return fakes.get(home)!
+  }
+  const fake = fakeIn(claudeHome)
+  const state = { found: true, orca: { homes: [] as readonly string[], answered: true } }
   const looked: string[] = []
   /** Whether each lookup read the login shell's PATH. */
   const shells: boolean[] = []
@@ -86,11 +93,12 @@ function rig() {
     claude: async (home, shell) => {
       looked.push(home)
       shells.push(shell)
-      return state.found ? fake.run : null
+      return state.found ? fakeIn(home).run : null
     },
+    orcaClaude: () => state.orca,
     version: '0.6.59',
   }
-  return { dataDir, claudeHome, codexHome, fake, state, looked, shells, counted, clock, setup: createDialSetup(deps) }
+  return { dataDir, claudeHome, codexHome, fake, fakeIn, state, looked, shells, counted, clock, setup: createDialSetup(deps) }
 }
 
 describe('createDialSetup', () => {
@@ -212,6 +220,66 @@ describe('createDialSetup', () => {
     expect(r.fake.writes().filter((call) => call === INSTALL)).toHaveLength(2)
     expect(hasSkill(r.claudeHome)).toBe(true)
     expect(readSetup(r.dataDir).plugin).toBe('0.6.59')
+  })
+
+  it('the Orca step uses the home setup\'s record and the command\'s', async () => {
+    const r = rig()
+    const [a, b, c] = [folder(), folder(), folder()].map((home) => realpathSync(home))
+    // c turned on by an earlier run of the devices, b by `harness device claude enable`.
+    writeSetup(r.dataDir, { dial: false, homes: { claude: [], codex: [] }, pluginHomes: [c] })
+    writePluginHomes(r.dataDir, [b])
+    r.state.orca = { homes: [a, b, c], answered: true }
+
+    await r.setup.attached()
+
+    // After the default home's install, which turned its plugin on: Orca homes follow it.
+    expect(r.looked).toEqual([r.claudeHome, a])
+    expect(r.fakeIn(a).writes()).toEqual([ENABLE])
+    expect(readSetup(r.dataDir).pluginHomes).toEqual([c, a])
+  })
+
+  it('the VS Code extension\'s version is kept in the same record, beside the dial, the plugin and the homes', async () => {
+    const r = rig()
+    // Not read yet: nothing is known, so nothing is written over the record.
+    expect(r.setup.vscode()).toBeUndefined()
+    await r.setup.started()
+    expect(r.setup.vscode()).toEqual({ dial: false })
+    await r.setup.attached()
+
+    expect(r.setup.recordVscode('0.6.60')).toBe(true)
+
+    expect(r.setup.vscode()).toEqual({ dial: true, version: '0.6.60' })
+    expect(readSetup(r.dataDir)).toMatchObject({ dial: true, plugin: '0.6.59', vscode: '0.6.60', homes: { codex: [expect.any(String)] } })
+    // A version a read would drop is not saved, and the one before stays.
+    expect(r.setup.recordVscode('0.6.61 beta')).toBe(false)
+    expect(r.setup.vscode()).toEqual({ dial: true, version: '0.6.60' })
+    expect(readSetup(r.dataDir).vscode).toBe('0.6.60')
+  })
+
+  it('Cursor\'s version is recorded beside VS Code\'s, and each save keeps the other', async () => {
+    const r = rig()
+    await r.setup.attached()
+    expect(r.setup.cursor()).toEqual({ dial: true })
+    expect(r.setup.recordVscode('0.6.60')).toBe(true)
+    expect(r.setup.recordCursor('0.6.61')).toBe(true)
+    expect(r.setup.cursor()).toEqual({ dial: true, version: '0.6.61' })
+    expect(r.setup.vscode()).toEqual({ dial: true, version: '0.6.60' })
+    expect(readSetup(r.dataDir)).toMatchObject({ vscode: '0.6.60', cursor: '0.6.61' })
+    // A version a read would drop is not saved, and the one before stays.
+    expect(r.setup.recordCursor('0.6.62 beta')).toBe(false)
+    expect(r.setup.cursor()).toEqual({ dial: true, version: '0.6.61' })
+    expect(readSetup(r.dataDir)).toMatchObject({ vscode: '0.6.60', cursor: '0.6.61' })
+  })
+
+  it('a record that could not be read leaves the VS Code extension\'s part not known', async () => {
+    const r = rig()
+    const file = join(r.dataDir, DIAL_SETUP_FILE)
+    writeFileSync(file, JSON.stringify({ dial: true, vscode: '0.6.60' }))
+    // Stands for any read error: EACCES, EIO, EMFILE.
+    chmodSync(file, 0o000)
+    await r.setup.started()
+    await r.setup.attached()
+    expect(r.setup.vscode()).toBeUndefined()
   })
 
   it('an attach reads the login shell\'s PATH at once, and the scans between read it at most every ten minutes', async () => {

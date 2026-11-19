@@ -97,6 +97,8 @@ async function binWith(node) {
 /** A HOME, with Harness's own Node recorded in it when `node` is given (a path). */
 async function homeWith(node) {
   const home = await scratch('home');
+  // Still on ~/.harness, so Harness's runtime is ~/.harness/runtime on Linux too (runtimes.sh's rule).
+  await mkdir(join(home, '.harness'));
   if (node) {
     await mkdir(join(home, '.harness', 'runtime'), { recursive: true });
     await writeFile(join(home, '.harness', 'runtime', 'current-node'), node);

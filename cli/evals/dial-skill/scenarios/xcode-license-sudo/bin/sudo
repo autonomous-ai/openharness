@@ -1,0 +1,10 @@
+#!/usr/bin/env node
+const err = (text) => process.stderr.write(`${text}\n`)
+
+if (process.argv.includes('-S')) {
+  err('sudo: no password was provided')
+} else {
+  err('sudo: a terminal is required to read the password; either use the -S option to read from standard input or configure an askpass helper')
+}
+err('sudo: a password is required')
+process.exit(1)

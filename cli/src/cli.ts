@@ -19,13 +19,13 @@ import { fingerprint as e2eeCoreFingerprint, b64d as e2eeCoreDecode } from './li
  * and the backend socket (events up / chat + RPCs down).
  */
 
-import { readFileSync, readdirSync, writeFileSync, writeSync, mkdirSync, openSync, existsSync, rmSync, statSync } from 'fs'
+import { readFileSync, readdirSync, writeSync, mkdirSync, openSync, existsSync, rmSync, statSync } from 'fs'
 import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { spawn } from 'child_process'
 import { createServer } from 'http'
 import { createInterface, emitKeypressEvents } from 'readline'
-import { homedir, hostname } from 'os'
+import { homedir, hostname, release } from 'os'
 import { env } from './config/env.js'
 import { VERSION } from './version.js'
 import { runCoreInForeground } from './core/main.js'
@@ -34,10 +34,10 @@ import { backendHttpBase } from './lib/backendHttpBase.js'
 import { GRID_MINT_TIMEOUT_MS, requestJson, postJson, controlPlaneAuth } from './lib/controlPlane.js'
 import { LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabel, DAEMON_LOG_FILE, HARNESSD_STATUS_FILE, daemonPort, isAlive, isDaemonRunning, onError, readPid } from './lib/daemonState.js'
 import { daemonUnreachableText, sandboxed, startRefusalText } from './lib/unreachable.js'
-import { BIND_WAIT_MS, connectFailure, defaultLaunchDeps, waitForBind } from './lib/daemonLaunch.js'
+import { BIND_WAIT_MS, connectFailure, daemonSpawnOptions, defaultLaunchDeps, waitForBind } from './lib/daemonLaunch.js'
 import { ensureUtf8Locale } from './lib/childLocale.js'
-import { buildLogBundle, bundleFileName } from './lib/logBundle.js'
-import { redactSecretsInText } from './lib/redactSecrets.js'
+import { collectBundleFacts, runCommand } from './lib/logBundleFacts.js'
+import { logsExportCommand } from './lib/logsExportCommand.js'
 
 import { machineListCachePath } from './device/machineList.js'
 import { registry } from './lib/registry.js'
@@ -50,11 +50,14 @@ import { isInstalledCopy } from './lib/installedCopy.js'
 import { askRuntimePort, readCgroup, takeRuntimeBack } from './lib/osUnitTakeover.js'
 import { serviceCommand, serviceCommandDeps } from './lib/serviceCommand.js'
 import { infoBlockFooter } from './lib/infoBlockFooter.js'
+import { readMoveRecord } from './homeMove/record.js'
+import { moveStatusLine } from './homeMove/statusLine.js'
 import { flashCommand } from './lib/flash.js'
 import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE, type LoginCallbackParams } from './lib/loginCallback.js'
 import { ancestorsOnce, removeSignIn, SIGN_OUT_BUTTON_FLAG, signOutAsked, type Asker, type SignOutAsked } from './lib/signOut.js'
 import { AUTH_DIR, AuthSessionError, knownSsoClientId, recordMachineId, newSignInEpoch, readAuthSession, readSignedOut, ssoClientIdFor, updateAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
 import { AuthSessionManager, harnessSessionRequest } from './lib/authRefresh.js'
+import { computerName } from './lib/computerName.js'
 import { handOffToGrid } from './lib/gridHandoff.js'
 import { claimTicket, qrSignIn, type QrSignInTokens } from './lib/qrSignIn.js'
 import { pickSignInMethod, signInMethodFlag, signInProviderName, withSignInProvider, type SignInMethod, type SignInProvider } from './lib/signInMethodPicker.js'
@@ -72,7 +75,10 @@ import { apiCommand, apiUsage } from './lib/apiCommand.js'
 import { connectionsCommand, connectionsUsage } from './lib/connectors/command.js'
 // Static, not import(): --help prints DEVICE_USAGE, so the module loads at start anyway, and the core and services never load cli.ts.
 import { DEVICE_USAGE, runDeviceCommand } from './deviceClaude/command.js'
-import { claudeRun } from './devices/claudePlugin.js'
+import { vscodeExtensionDeps } from './devices/vscodeExtension.js'
+import { claudeRun, claudeRunIn } from './devices/claudePlugin.js'
+import { orcaHomesDeps, readOrcaHomes } from './devices/orcaHomes.js'
+import { orcaPluginRun } from './devices/orcaPlugin.js'
 import { remoteCommand } from './remoteCommand.js'
 import { tuiCommand } from './tui/index.js'
 import { machineChoices, newCommand, type MachineRow, type NewMachine } from './lib/newCommand.js'
@@ -108,7 +114,8 @@ import { ensureManagedGrid, ensureManagedRuntime } from './lib/runtimeInstall.js
 // Before ANY child is spawned: on Linux an absent locale makes tmux and ps mangle their output,
 // which silently costs the daemon every pane it would have discovered. See lib/childLocale.ts.
 ensureUtf8Locale()
-import { prepareLogFile } from './lib/log.js'
+import { prepareLogFile, ts } from './lib/log.js'
+import { narrowOwnEnvironment, startEnvLine } from './lib/startEnvironment.js'
 import { privacyCommand } from './lib/privacyCommand.js'
 
 
@@ -323,7 +330,7 @@ async function resolveComputerMachine(signal?: AbortSignal): Promise<AuthSession
   const accessToken = await auth.accessToken()
   const result = await postJson<{ machine?: { machineId?: string } }>('/api/machines/resolve-computer', {
     computerId: current.computerId,
-    label: hostname(),
+    label: await computerName(),
     // Same claim the adapter-ws dial carries: a machine deleted while this computer was offline must
     // come back as 403, not as a quietly minted replacement.
     ...(current.machineId ? { machineId: current.machineId } : {}),
@@ -717,7 +724,7 @@ async function qrSignInCommand(
   const result = await qrSignIn({
     post: (path, body) => postJson(path, body),
     ...(hooks.onStarted ? { onStarted: hooks.onStarted } : {}),
-    label: hostname().slice(0, 80),
+    label: await computerName(),
     computerId: computerId(),
     ...(hooks.spoken ? {
       showCode: (code: string, expiresIn: number) => {
@@ -891,7 +898,7 @@ async function browserSignIn(
         // The utm_* and rid auth.autonomous.ai carried back: how the account came (PR #785).
         ...(callbackResult.attribution ? { attribution: callbackResult.attribution } : {}),
         // A Harness session in place of the SSO tokens (backend lib/ssoSession.ts); an older backend sends those.
-        harnessSession: harnessSessionRequest(),
+        harnessSession: await harnessSessionRequest(),
       })
       if (!exchanged.token) throw new Error('SSO exchange returned no access token')
     } catch (err) {
@@ -1632,12 +1639,18 @@ async function launch(foreground: boolean, repair: boolean = false): Promise<voi
     // Beside a daemon that serves this data folder, leave at once and say so, as its core would have:
     // the master would start its services and a core only to see the core refused, and end with 0.
     await refuseServedDataFolder(localSocketPath(env.ADAPTER_DATA_DIR, env.PORT), 1_000, servedFolderDeps(env.ADAPTER_DATA_DIR, env.PORT))
+    // This process becomes the daemon, so the shell's environment would be the daemon's and every child's: only the
+    // allowlist stays, then HARNESS_ENV_FILE is read again, its variables having gone with the rest
+    // (docs/plans/2026-11-17-daemon-minimal-env-design.md).
+    console.log(`${ts()} ${narrowOwnEnvironment()}`)
     startMasterInForeground(SCRIPT_PATH)
     return
   }
   // …and a dev/tsx run (a .ts is not spawned detached): the core inline, on its own. A repo run never updates
   // itself (runForeground), so it has no update to hand over.
   if (foreground || SCRIPT_PATH.endsWith('.ts')) {
+    // The same as the master's start above: the core runs in this process, a dev run's too (the design's decision 8).
+    console.log(`${ts()} ${narrowOwnEnvironment()}`)
     if (!foreground) console.log('[cli] dev mode — running in the foreground (Ctrl-C to stop)')
     await runCoreInForeground(session, SCRIPT_PATH)
     return
@@ -1721,14 +1734,15 @@ async function spawnDaemon(session: AuthSession | null, runtimeNode: string | nu
     }
   }
   const logFd = openSync(LOG_FILE, 'a')
+  // The daemon gets only the allowlist of the shell that ran this start, not this process's environment: another
+  // program's session tokens would reach the daemon, its tmux server and every pane
+  // (docs/plans/2026-11-17-daemon-minimal-env-design.md). Its log says how many were left out, never which.
+  const options = daemonSpawnOptions(process.env, logFd)
+  writeSync(logFd, `${ts()} ${startEnvLine(process.env, options.env)}\n`)
   // The daemon starts on the managed runtime straight away rather than inheriting this process's
   // interpreter and waiting for some later restart to adopt it.
   // Under its own name in Activity Monitor (harnessd/processName.ts) rather than `node`.
-  const child = spawn(namedNode(runtimeNode ?? process.execPath, entry === '__run' ? 'harnessd-core' : 'harnessd', env.ADAPTER_RUNTIME_DIR), [SCRIPT_PATH, entry], {
-    detached: true,
-    env: { ...process.env },
-    stdio: ['ignore', logFd, logFd],
-  })
+  const child = spawn(namedNode(runtimeNode ?? process.execPath, entry === '__run' ? 'harnessd-core' : 'harnessd', env.ADAPTER_RUNTIME_DIR), [SCRIPT_PATH, entry], options)
   let childExited = false
   child.on('exit', () => { childExited = true })
   child.on('error', () => { childExited = true })
@@ -2736,37 +2750,9 @@ async function status(): Promise<void> {
       authDir: alive ? daemonStatus?.authDir ?? null : AUTH_DIR,
     },
   })
-  process.exit(0)
-}
-
-/**
- * `harness logs export [--to <dir>] [--days N] [--json]` — the last week of every log this product
- * writes, zipped to the Desktop (or `--to`), secrets blanked. The file a bug report is made of; the
- * desktop app's Settings ▸ Debug ▸ Export logs runs this same command.
- */
-async function logsExportCommand(json: boolean): Promise<void> {
-  const flagValue = (name: string): string | undefined => {
-    const at = process.argv.indexOf(name)
-    return at >= 0 ? process.argv[at + 1] : undefined
-  }
-  const days = Math.max(1, Number(flagValue('--days') ?? 7) || 7)
-  const desktop = join(homedir(), 'Desktop')
-  const to = flagValue('--to') ?? (existsSync(desktop) ? desktop : process.cwd())
-  const now = new Date()
-  const notes = [`machine: ${readAuthSession()?.machineId ?? 'not signed in'}`]
-  const { zip, included } = buildLogBundle({
-    logsDir: env.HARNESS_LOGS_DIR, dataDir: env.ADAPTER_DATA_DIR, days, now, version: VERSION, notes,
-    redact: redactSecretsInText,
-  })
-  mkdirSync(to, { recursive: true })
-  const path = join(to, bundleFileName(now))
-  writeFileSync(path, zip)
-  if (json) console.log(JSON.stringify({ path, included, bytes: zip.length }))
-  else {
-    console.log(`wrote ${tildify(path)} (${Math.round(zip.length / 1024)} KB)`)
-    for (const name of included) console.log(`  ${name}`)
-    if (!included.length) console.log('  (no logs found)')
-  }
+  // Only Linux moves ~/.harness; a move that is held or failed says what to do.
+  const moveLine = process.platform === 'linux' ? moveStatusLine(readMoveRecord(homedir(), process.env)) : null
+  if (moveLine) console.log(`  ${moveLine}\n`)
   process.exit(0)
 }
 
@@ -3113,12 +3099,18 @@ switch (cmd) {
   case 'device':
     runDeviceCommand(rest, {
       dataDir: env.ADAPTER_DATA_DIR,
+      home: homedir(),
       port: daemonPort(),
       platform: process.platform,
       stdin: process.stdin,
       claude: claudeRun,
+      orcaHomes: () => readOrcaHomes(orcaHomesDeps()).then((read) => read.homes.claude),
+      claudeIn: claudeRunIn,
+      defaultClaudeHome: dirname(env.CLAUDE_PROJECTS_DIR),
       codexHome: env.CODEX_HOME,
       codex: () => installedEngineBin('codex') !== null,
+      vscode: vscodeExtensionDeps,
+      orca: orcaPluginRun,
       env: process.env,
       cwd: process.cwd(),
       out: (line) => console.log(line),
@@ -3184,8 +3176,17 @@ switch (cmd) {
     status().catch(onError)
     break
   case 'logs':
-    if (args[0] === 'export') logsExportCommand(flags.includes('--json')).catch(onError)
-    else { console.error(`Unknown command: logs ${args[0] ?? ''}`); usage(1) }
+    if (args[0] === 'export') {
+      logsExportCommand({
+        args: rest, logsDir: env.HARNESS_LOGS_DIR, dataDir: env.ADAPTER_DATA_DIR, version: VERSION, home: homedir(),
+        cwd: process.cwd(), now: new Date(), machineId: readAuthSession()?.machineId,
+        facts: () => collectBundleFacts({
+          self: [process.execPath, ...process.execArgv, process.argv[1]], platform: process.platform, home: homedir(),
+          env: process.env, nodeVersion: process.version, osRelease: release(), exists: existsSync, run: runCommand,
+        }),
+        out: (line) => console.log(line),
+      }).then(() => process.exit(0)).catch(onError)
+    } else { console.error(`Unknown command: logs ${args[0] ?? ''}`); usage(1) }
     break
   case 'update':
     updateCommand(flags.includes('--force')).catch(onError)

@@ -187,6 +187,11 @@ first app shown, and going to none when every agent has ended, are no switch and
 - Browsing the pages does not switch: only Done, or a tap on a page, sends `app.pick`. This is unlike TABS, which
   switches the desk while browsing (`tabs_sync`), because a pick here rebuilds the ring.
 - Picking returns to the face, on the first agent of the new ring.
+- A dial whose list was empty is put on the first agent of the machine list it is sent, by the daemon's `focus`: after
+  an attach, after a list that emptied and filled again, and on the push that answers the dial's own `agents.list`. The
+  agent the dial was last on goes on the face instead when the list holds it. A daemon or devices process that
+  restarts behind a plugged dial lands it on the first agent too
+  (2026-11-18, [design](../plans/2026-11-18-dial-chatgpt-pick-and-voice-design.md)).
 - With no agents at all, there is no app, so the hold opens nothing (anh Dee: an empty list shows nothing).
 - With one app, the picker opens with one page.
 - An `apps` push while the picker is open moves the carousel by id, never by index. A page whose app went away closes

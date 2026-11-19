@@ -828,12 +828,15 @@ describe('PlatformService over schtasks', () => {
     expect(discarded.calls).toEqual([])
   })
 
-  it('cannot render a task without a launcher, and takes this process\'s user and the home\'s data folder by default', () => {
+  it('a Task Scheduler service needs its data folder', () => {
+    expect(() => new PlatformService('taskscheduler', stubDeps({ whoami: ok(WHOAMI) }).deps)).toThrow('Task Scheduler needs the daemon\'s data folder')
+  })
+
+  it('cannot render a task without a launcher, and takes this process\'s user by default', () => {
     const { service } = make()
     expect(() => service.render({ ...definition(), launcherPath: undefined })).toThrow(/must be absolute/)
-    const stub = stubDeps({ whoami: ok(WHOAMI) })
+    const stub = stubDeps({ whoami: ok(WHOAMI) }, {}, { dataDir: data })
     const plain = new PlatformService('taskscheduler', stub.deps)
-    expect(plain.file).toBe(join('/Users/demo', '.harness', 'cli', 'data', 'harnessd-task.xml'))
     // No user given: the name is this process's user's; the XML names the user by the SID whoami gives.
     expect(plain.target).toBe(taskName(userInfo().username))
     expect(plain.render(definition())).toContain('<TimeTrigger>')

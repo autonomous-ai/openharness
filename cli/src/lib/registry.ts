@@ -88,8 +88,10 @@ export interface LaunchPublicationInput {
 
 export type LaunchPublication = { state: 'not-published' } | { state: 'confirmed'; entry: RegisteredSession | null }
 
+/** A launch published `ready` and the row a hook's registration rebuilds without one are the same launch. Read
+ *  apart, the second of two restarts took the engine down and answered AGENT_CHANGED (e2e/races.e2e.ts, 2026-11-17). */
 function launchIdentity(row: RegisteredSession | undefined): string {
-  return rowFingerprint({ launch: row?.launch, launchArgs: row?.launchArgs, grid: row?.grid,
+  return rowFingerprint({ launch: row?.launch?.state === 'ready' ? undefined : row?.launch, launchArgs: row?.launchArgs, grid: row?.grid,
     gridLaunch: row?.gridLaunch, gridWebSearch: row?.gridWebSearch, subscriptionModel: row?.subscriptionModel, active: row?.active })
 }
 
@@ -568,12 +570,18 @@ export class RegistryOwnershipChanged extends IdentityReadUnavailable {}
 function persistenceFailure(error: unknown, names = false): Error {
   if (error instanceof IdentityReadUnavailable || error instanceof RegistryPersistenceUnavailable) return error
   const subject = names ? 'name storage' : 'registry storage'
-  const code = (error as NodeJS.ErrnoException | null)?.code
+  // A write unconfirmed after its rename (the folder's fsync) carries the disk's code on its cause.
+  const code = (error instanceof AtomicWriteUnconfirmed ? error.cause as NodeJS.ErrnoException | undefined
+    : error as NodeJS.ErrnoException | null)?.code
+  // The master tells a full disk from a broken build by these codes (harnessd/supervisor.ts namesTheDisk).
+  // Without them a good build whose core could not save on a full disk was rolled back
+  // (e2e/updateHostile.e2e.ts, 2026-11-17). A code names no path.
   const category = error instanceof SyntaxError ? 'contains invalid JSON'
-    : code === 'ENOSPC' || code === 'EDQUOT' ? 'has no available space'
-      : code === 'EACCES' || code === 'EPERM' ? 'access was refused'
-        : code === 'ENOENT' ? 'is unavailable'
-          : code === 'ELOOP' ? 'has an unsafe file type' : 'write failed'
+    : code === 'ENOSPC' || code === 'EDQUOT' ? `has no available space (${code})`
+      : code === 'EROFS' ? 'is read-only (EROFS)'
+        : code === 'EACCES' || code === 'EPERM' ? 'access was refused'
+          : code === 'ENOENT' ? 'is unavailable'
+            : code === 'ELOOP' ? 'has an unsafe file type' : 'write failed'
   const failure = new RegistryPersistenceUnavailable(`${subject} ${category}`)
   return error instanceof AtomicWriteUnconfirmed ? new AtomicWriteUnconfirmed(failure) : failure
 }
@@ -1219,6 +1227,17 @@ function writeBoot(bootId: string): void {
   } catch { /* registry load will remain conservative on the next restart */ }
 }
 
+/**
+ * What a log says of a failed admission: the error's kind and code, each only in its own shape (a class name, a code such
+ * as ENOSPC), never its message or other text (it can quote a path, a file's or a person's name). A retried create said
+ * only "failed", and nothing told why its first pane was not admitted (CI, cli/e2e/scale.e2e.ts, 2026-11-19).
+ */
+function admissionError(error: unknown): string {
+  const shaped = (value: unknown, shape: RegExp) => typeof value === 'string' && shape.test(value) ? value : null
+  const code = shaped((error as { code?: unknown } | null)?.code, /^[A-Z][A-Z0-9_]{0,39}$/)
+  return (error instanceof Error ? shaped(error.name, /^[A-Z][A-Za-z0-9]{0,39}$/) ?? 'Error' : typeof error) + (code ? ` ${code}` : '')
+}
+
 class Registry {
   /** agentId → record. The store. */
   private agents = new Map<string, RegisteredSession>()
@@ -1614,7 +1633,8 @@ class Registry {
       if (changed) this.save()
       if (ownModes) atomicWriteJson(OWN_MODES_FILE, Date.now())
     } catch (error) {
-      if (error instanceof SyntaxError) this.quarantine(`is not JSON (${error.message})`)
+      // Not the parse error's message: it quotes the rows around the fault, and they hold the person's harness names.
+      if (error instanceof SyntaxError) this.quarantine('is not JSON')
       else if (existsSync(FILE)) {
         this.writeBlocked = true
         console.error('[registry] registry is unreadable; refusing to overwrite it:', error instanceof Error ? error.message : error)
@@ -1943,7 +1963,13 @@ class Registry {
       this.terminalAvailableAgents.add(entry.agentId)
       if (entry.firstTask) firstTaskKept(agentId)
       return structuredClone(committed)
-    }).catch(() => { console.error('[registry] pending admission failed'); return null })
+    }).catch(error => {
+      console.error(`[registry] pending admission failed · ${admissionError(error)}`)
+      // Read as a taken route, a storage refusal opened and closed three panes and answered "tmux pane could not
+      // be registered" (e2e/diskfull.e2e.ts, 2026-11-17). Its caller answers it by name instead.
+      if (error instanceof RegistryPersistenceUnavailable || error instanceof AtomicWriteUnconfirmed) throw error
+      return null
+    })
   }
 
   /** A stopped agent gets a new terminal route while keeping its saved conversation and identity.
@@ -1976,7 +2002,7 @@ class Registry {
       if (!committed) return null
       this.terminalAvailableAgents.add(entry.agentId)
       return structuredClone(committed)
-    }).catch(() => { console.error('[registry] resume admission failed'); return null })
+    }).catch(error => { console.error(`[registry] resume admission failed · ${admissionError(error)}`); return null })
   }
 
   /** Readiness, its native process and the launch words are one durable authority change. */
@@ -1984,13 +2010,20 @@ class Registry {
     this.writer.assertOpen()
     const selected = this.byAgent(agentId)
     if (!selected || (!isTerminalEngine(selected.engine) && !validProcessIdentity(input.processIdentity))) return { state: 'not-published' }
-    const verifyOwner = this.ownerGuard(agentId, authority.current)
-    const beforeLaunch = launchIdentity(selected)
+    // A peer that recorded this same process while this write waited (discovery's pass over the pane: its confirmation,
+    // active and ready, or the process and the grid its argv names after a retarget) wrote part of this launch, not
+    // another owner's. Read apart, a resume that discovery beat answered RESUME_UNCONFIRMED over its running engine
+    // (e2e/eagerOpenCode.e2e.ts, 2026-11-17). Any other process or field still ends the write.
+    const owners = [selected, { ...selected, processIdentity: input.processIdentity }].map(ownershipIdentity)
+    const grids = input.grid === undefined ? [selected] : [selected, { ...selected, grid: input.grid }]
+    const launches = grids.flatMap(row => [row, { ...row, active: true, launch: { state: 'ready' as const } }]).map(launchIdentity)
     const requested = structuredClone(input)
     const expires = Math.min(authority.expires ?? Infinity, performance.now() + 5_000)
     const verify = () => {
-      verifyOwner()
-      if (launchIdentity(this.byAgent(agentId)) !== beforeLaunch) {
+      if (authority.current?.() === false || !owners.includes(ownershipIdentity(this.byAgent(agentId)))) {
+        throw new RegistryOwnershipChanged('the registry owner changed while its write was being prepared')
+      }
+      if (!launches.includes(launchIdentity(this.byAgent(agentId)))) {
         throw new RegistryOwnershipChanged('the selected launch changed while its write was being prepared')
       }
     }

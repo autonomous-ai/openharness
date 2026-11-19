@@ -352,16 +352,16 @@ Terminal launch behave identically. One implementation, shared with everyone who
 a terminal, instead of a second copy here that had to keep its own pinned checksums in step.
 **tmux** on Linux is the one dependency still taken from the OS package manager, and the only reason
 the setup screen ever opens a terminal: `apt-get install` needs a password prompt on a real tty. On
-macOS it is a managed runtime (or the Homebrew one, if Homebrew is already there) and needs neither.
+macOS it is a managed runtime and needs neither; a tmux Homebrew already installed is found, and
+Homebrew is never run.
 
 **Readiness is the list of commands the app runs, nothing more** (`EnvironmentStep`: tmux — plus `ps`
-on Linux — the Harness CLI, and on a Linux desktop the clipboard helper). Homebrew, the Apple developer
-tools, apt and the curl/tar/sed/awk/sha256sum the CLI installer downloads Node with are *recipes* for a
+on Linux — the Harness CLI, and on a Linux desktop the clipboard helper). The managed tmux download,
+apt and the curl/tar/sed/awk/sha256sum the CLI installer downloads Node with are *recipes* for a
 missing command, kept in `EnvironmentReadiness.plan` and probed top-down only while the command is
-missing: a Mac with tmux is never asked about Homebrew, and a Linux box with a managed runtime never
-about curl. The ladder itself is implemented once, in `cli/scripts/install.sh` (`--host` runs just
-that half): on macOS tmux comes from the Homebrew already present or, failing that, the managed
-build downloaded into `~/.harness/runtime` — no compiler, no package manager, no password, so the
+missing: a Linux box with a managed runtime is never asked about curl. The ladder itself is implemented once, in `cli/scripts/install.sh` (`--host` runs just
+that half): on macOS a tmux Homebrew already installed is found, Homebrew is never run, and a Mac
+without tmux gets the managed build downloaded into `~/.harness/runtime` — no compiler, no package manager, no password, so the
 app runs `--host` in-app and never opens a Terminal window there. Linux keeps the app's own apt
 transaction (its clock-skew repair) and the one Terminal handoff. Gating readiness on the recipes
 was what sent a computer whose tmux ran fine into Terminal to reinstall developer tools after a macOS
