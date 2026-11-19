@@ -1,10 +1,10 @@
-// The finger on the pages (max_ui.h): a tap acts on what the last render drew (its hits first, then Overview's
-// cells), a sideways swipe pages Overview's cells, walks the ring on the agent page, or moves the form's choice. A tap
-// on a card's button or the form queues its message in the outbox. While a recording is up the page is its send: X
-// cancels it, Back and the strip send what was heard (else drop it) and go on, any other tap sends it. Only the Dial's
-// tap counts then (MAX_TAP_*): a hold or a slide is the dead zone, and the mic stays open. A touch that opens the mic
-// lets go before MAX_HOLD_MS, and touches that begin within MAX_GUARD_MS of a voice action are part of it. The clock's
-// side of a recording is max_ui_talk_due.
+// The finger on the pages (max_ui.h): a tap acts on what the last render drew (its hits first, then App Detail's
+// cells or the slivers beside the open agent), a sideways swipe scrolls the row a cell at a time or moves the form's
+// choice. A tap on a card's button or the form queues its message in the outbox. While a recording is up the glass is
+// its send: X cancels it, any other tap sends it (a sliver too: it opens nothing). Only the Dial's tap counts then
+// (MAX_TAP_*): a hold or a slide is the dead zone, and the mic stays open. A touch that opens the mic lets go before
+// MAX_HOLD_MS, and touches that begin within MAX_GUARD_MS of a voice action are part of it. The clock's side of a
+// recording is max_ui_talk_due.
 #include <stdio.h>
 #include <string.h>
 
@@ -30,9 +30,7 @@ static void go(max_view_t view)
 
 static void show_agent(const char *id)
 {
-    if (strcmp(max_m.selected, id)) max_m.talk_closed = false;   // "Mic closed" was the other agent's
-    max_copy(max_m.selected, sizeof max_m.selected, id);
-    max_show(MAX_VIEW_AGENT);
+    max_open(id);
     max_m.dirty = true;
 }
 
@@ -92,7 +90,7 @@ static max_act_t send_onward(uint32_t now_ms)
     return send_talk(now_ms);
 }
 
-// The person moved on while it recorded (Back, the strip, a swipe, its agent gone): what was heard goes, else nothing.
+// The recording's agent left the ring: what was heard goes, else nothing.
 static max_act_t settle_talk(uint32_t now_ms)
 {
     if (max_m.talk_heard) return send_talk(now_ms);
@@ -145,7 +143,8 @@ static max_act_t talk_to(const max_agent_t *a, max_act_kind_t kind, uint32_t now
     return act_for(kind, a->id);
 }
 
-// A cell, as drawn: the cell's agent even if the ring moved since; gone from the ring, it opens nothing.
+// A cell, or a sliver beside the open agent, as drawn: the agent opens across the row with the mic on (the computer
+// opens it too), even if the ring moved since; gone from the ring, it opens nothing. One that asks opens Attention.
 static max_act_t open_cell(const char *id, uint32_t now_ms)
 {
     const max_agent_t *a = max_find(id);
@@ -202,13 +201,11 @@ static max_act_t press(const max_hit_t *h, uint32_t now_ms)
         return act;
     }
     case MAX_HIT_CLOSE:
-    case MAX_HIT_WAKE:
-    case MAX_HIT_BACK: go(MAX_VIEW_OVERVIEW); break;
-    case MAX_HIT_NOTE: return open_note(h->arg, now_ms);
-    case MAX_HIT_SEG:
-        if (view == MAX_VIEW_AGENT && h->arg >= 0 && h->arg < MAX_SEGS && max_find(max_m.seg_id[h->arg]))
-            show_agent(max_m.seg_id[h->arg]);
+    case MAX_HIT_WAKE: go(MAX_VIEW_OVERVIEW); break;
+    case MAX_HIT_AGENT_X:   // the row comes back
+        if (view == MAX_VIEW_AGENT) go(MAX_VIEW_OVERVIEW);
         break;
+    case MAX_HIT_NOTE: return open_note(h->arg, now_ms);
     case MAX_HIT_BODY: {   // the mic, or the computer when the bar cannot listen for it now
         const max_agent_t *a = view == MAX_VIEW_AGENT ? max_find(max_m.selected) : NULL;
         if (!a || !start_tap(now_ms)) break;
@@ -271,12 +268,16 @@ static max_act_t press(const max_hit_t *h, uint32_t now_ms)
     return nothing();
 }
 
-// A tap while a recording is up: X drops it and the page stays, whatever the touch; else only the Dial's tap acts.
-// Back and the strip send what was heard (else drop it) and go where they go, with the mic closed; the toast sends it,
-// then opens its Attention; anything else, even bare glass, sends it now.
+// A tap while a recording is up. X drops it whatever the touch: the open agent's closes too, and says so when words
+// were heard; the form's Cancel leaves the form as it is. Else only the Dial's tap acts: the toast sends it, then opens
+// its Attention; anything else, even bare glass or a sliver, sends it now.
 static max_act_t recording_tap(const max_hit_t *h, uint32_t now_ms)
 {
-    if (h && h->kind == MAX_HIT_TALK_CANCEL) {
+    if (h && (h->kind == MAX_HIT_TALK_CANCEL || h->kind == MAX_HIT_AGENT_X)) {
+        if (h->kind == MAX_HIT_AGENT_X) {
+            if (max_m.talk_heard) max_notice_set("Cancelled, nothing sent", now_ms);
+            go(MAX_VIEW_OVERVIEW);
+        }
         guard(now_ms);
         max_m.dirty = true;
         return act_for(MAX_ACT_CANCEL, max_m.talk_id);
@@ -291,16 +292,6 @@ static max_act_t recording_tap(const max_hit_t *h, uint32_t now_ms)
             max_form_dismiss();
             max_attention(id, why, now_ms);
         }
-        return act;
-    }
-    if (h && h->kind == MAX_HIT_BACK) {
-        go(MAX_VIEW_OVERVIEW);
-        return settle_talk(now_ms);
-    }
-    if (h && h->kind == MAX_HIT_SEG && max_m.view == MAX_VIEW_AGENT && h->arg >= 0 && h->arg < MAX_SEGS &&
-        max_find(max_m.seg_id[h->arg])) {
-        const max_act_t act = settle_talk(now_ms);
-        show_agent(max_m.seg_id[h->arg]);
         return act;
     }
     return send_onward(now_ms);
@@ -318,18 +309,11 @@ static max_act_t tap(int x, int y, uint32_t now_ms)
     return nothing();
 }
 
-// The next agent of the ring (step +1) or the one before (-1), round its ends, from the agent page's.
-static void browse(int step)
+// A sideways swipe of dx px: to the left shows what comes next. The row moves a cell for each cell's width the finger
+// went, at least one, and comes to rest on a cell's edge; the open agent's row rests.
+static max_act_t swipe(int dx, uint32_t now_ms)
 {
-    const max_agent_t *a = max_find(max_m.selected);
-    if (!a || max_m.count < 2) return;
-    const int i = (int)(a - max_m.agents);
-    show_agent(max_m.agents[(i + step + max_m.count) % max_m.count].id);
-}
-
-// A sideways swipe: to the left shows what comes next.
-static max_act_t swipe(int step, uint32_t now_ms)
-{
+    const int step = dx < 0 ? 1 : -1;
     if (max_m.talk == MAX_TALK_RECORDING) return nothing();   // a slide is the dead zone: the mic stays open
     if (max_form_open()) {   // over the page: its choice moves, unless a spoken name is on its way
         if (max_m.talk == MAX_TALK_IDLE && max_m.form.page.revision == max_m.form_revision &&
@@ -338,16 +322,15 @@ static max_act_t swipe(int step, uint32_t now_ms)
         return nothing();
     }
     if (max_m.view == MAX_VIEW_OVERVIEW) {
-        int page = max_m.cell_page + step;
-        const int last = max_cell_pages() - 1;
-        if (page > last) page = last;
-        if (page < 0) page = 0;
-        if (page != max_m.cell_page) {
-            max_m.cell_page = page;
+        const int w = max_m.cell_hits ? max_m.cell_box[0].w : 0, cells = w ? (iabs(dx) + w / 2) / w : 1;
+        const int last = max_row_last();
+        int first = max_m.row_first + step * (cells > 1 ? cells : 1);
+        if (first > last) first = last;
+        if (first < 0) first = 0;
+        if (first != max_m.row_first) {
+            max_m.row_first = first;
             max_m.dirty = true;
         }
-    } else if (max_m.view == MAX_VIEW_AGENT) {
-        browse(step);
     }
     return nothing();
 }
@@ -386,7 +369,7 @@ max_act_t max_ui_touch(bool down, int x, int y, uint32_t now_ms)
     max_m.down = false;
     const int dx = x - max_m.down_x, dy = y - max_m.down_y;
     if (!max_m.moved && iabs(dx) <= MAX_TAP_SLOP && iabs(dy) <= MAX_TAP_SLOP) return tap(max_m.down_x, max_m.down_y, now_ms);
-    if (iabs(dx) >= MAX_SWIPE_PX && iabs(dx) * 2 > iabs(dy) * 3) return swipe(dx < 0 ? 1 : -1, now_ms);
+    if (iabs(dx) >= MAX_SWIPE_PX && iabs(dx) * 2 > iabs(dy) * 3) return swipe(dx, now_ms);
     return nothing();
 }
 

@@ -139,8 +139,8 @@ typedef struct {
     char app[PRO_APP_ID_BYTES];
 } max_act_t;
 // One contact at a time: down with the first point, then moves, then up (down false). A tap acts on the lift; a
-// sideways swipe pages the cells on Overview, browses the ring on the agent page, or moves the form. Returns what the
-// app must do (most calls: MAX_ACT_NONE); a tap on an answer or the form queues its message in the outbox instead.
+// sideways swipe scrolls App Detail's row of cells, or moves the form. Returns what the app must do (most calls:
+// MAX_ACT_NONE); a tap on an answer or the form queues its message in the outbox instead.
 // Every lift is a person at the bar (idle_from: Ambient waits for them).
 max_act_t max_ui_touch(bool down, int x, int y, uint32_t now_ms);
 void max_ui_touch_cancel(void);

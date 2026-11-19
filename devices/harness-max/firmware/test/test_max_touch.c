@@ -1,7 +1,7 @@
 // The finger on the pages: what a tap or a sideways swipe does on each page, and what the clock owes a recording. The
 // targets are planted as the pages record them (max_test.h), never drawn: the drawing's layout is its own. While a
-// recording is up the page is its send: X cancels, Back and the strip send what was heard, any other tap sends; only
-// the Dial's tap counts then, and a voice action's guard takes the touches right after it.
+// recording is up the glass is its send: X cancels, any other tap sends (a sliver too); only the Dial's tap counts
+// then, and a voice action's guard takes the touches right after it.
 #include "max_test.h"
 
 static const char *const ABCDE[] = {"a", "b", "c", "d", "e"};
@@ -59,21 +59,21 @@ static void overview_drawn(void)
     plant(MAX_HIT_BELL, 0);
     plant_cells();
 }
-// The agent page for max_m.selected: Back, the strip, X while it records, then the body.
+// The open agent (max_m.selected) as App Detail draws it: its X, the slivers beside it, its panel (the body), which
+// lies clear of the slivers.
 static void agent_drawn(void)
 {
     CHECK(max_m.view == MAX_VIEW_AGENT);
     drawn_page(MAX_VIEW_AGENT);
-    plant(MAX_HIT_BACK, 0);
-    plant_strip();
-    if (max_m.talk == MAX_TALK_RECORDING) plant(MAX_HIT_TALK_CANCEL, 0);
-    plant_page(MAX_HIT_BODY);
+    plant(MAX_HIT_AGENT_X, 0);
+    plant_slivers();
+    plant_at(MAX_HIT_BODY, 0, 0, 320, HT_WIDTH, HT_HEIGHT - 320);
 }
-// The agent page for this agent, as a tap on its segment would put it up.
+static const max_hit_t *x_of_agent(void) { return &max_m.hits[0]; }
+// This agent open across the row, as a cell's tap would open it, the mic closed.
 static void agent_page(const char *id)
 {
-    max_copy(max_m.selected, sizeof max_m.selected, id);
-    max_show(MAX_VIEW_AGENT);
+    max_open(id);
     agent_drawn();
 }
 // Attention: `options` answers and Say it when asked for, then the rest of the page.
@@ -130,6 +130,8 @@ static void test_cell_tap(void)
     // While the last words are still being sent the page opens with the mic closed.
     max_show(MAX_VIEW_OVERVIEW);
     overview_drawn();
+    swipe_left();   // c a b d: d is the row's last
+    overview_drawn();
     max_ui_talk(MAX_TALK_SENDING, 0);
     act = tap_box(cell_of("d"));
     CHECK(act.kind == MAX_ACT_OPEN && !strcmp(max_ui_selected(), "d"));
@@ -156,33 +158,43 @@ static void test_drag_is_not_a_tap(void)
     max_ui_touch(true, x, y, 0);
     max_ui_touch(true, x, y + 60, 50);
     CHECK(max_ui_touch(false, x, y, 100).kind == MAX_ACT_NONE);
-    CHECK(max_m.view == MAX_VIEW_OVERVIEW && max_m.cell_page == 0);
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW && max_m.row_first == 0);
     // A lift with no contact is nothing.
     CHECK(max_ui_touch(false, x, y, 200).kind == MAX_ACT_NONE);
 }
 
-// A sideways swipe pages Overview's cells, within the pages there are.
-static void test_swipe_pages_the_cells(void)
+// A sideways swipe scrolls App Detail's row a cell for each cell's width the finger went (at least one), within the
+// row there is; an open agent's row rests.
+static void test_swipe_scrolls_the_row(void)
 {
-    linked(XS, 2 * MAX_CELLS + 1);
+    linked(XS, 2 * MAX_CELLS + 1);   // seven: the row's last cells from 4
     overview_drawn();
-    CHECK(swipe_left().kind == MAX_ACT_NONE && max_m.cell_page == 1 && max_m.dirty);
+    CHECK(swipe_left().kind == MAX_ACT_NONE && max_m.row_first == 1 && max_m.dirty);
+    overview_drawn();
     swipe_left();
-    CHECK(max_m.cell_page == 2);
+    CHECK(max_m.row_first == 2);
+    overview_drawn();
+    drag(HT_WIDTH - 100, HT_HEIGHT / 2, -(2 * 280 + 141), 0);   // past two and a half cells: three
+    CHECK(max_m.row_first == 4);
     max_m.dirty = false;
-    swipe_left();   // the last page: no further
-    CHECK(max_m.cell_page == 2 && !max_m.dirty);
+    overview_drawn();
+    swipe_left();   // the row's end: no further
+    CHECK(max_m.row_first == 4 && !max_m.dirty);
     swipe_right();
-    CHECK(max_m.cell_page == 1);
-    // Too short, or more down than across: no page.
+    CHECK(max_m.row_first == 3);
+    // Too short, or more down than across: the row stays.
     drag(HT_WIDTH / 2, 100, -(MAX_SWIPE_PX - 1), 0);
     drag(HT_WIDTH / 2, 60, -120, 300);
-    CHECK(max_m.cell_page == 1);
-    // One page: a swipe does nothing.
+    CHECK(max_m.row_first == 3);
+    // An agent open: the row rests.
+    agent_page("x5");
+    CHECK(swipe_left().kind == MAX_ACT_NONE && swipe_right().kind == MAX_ACT_NONE);
+    CHECK(max_m.view == MAX_VIEW_AGENT && !strcmp(max_ui_selected(), "x5"));
+    // Three agents fill the glass: a swipe does nothing.
     linked(ABCDE, 3);
     overview_drawn();
     swipe_left();
-    CHECK(max_m.cell_page == 0 && !max_m.dirty);
+    CHECK(max_m.row_first == 0 && !max_m.dirty);
 }
 
 // Inbox as drawn: Close, then a card for each notice.
@@ -290,10 +302,11 @@ static void test_ambient_wakes(void)
     CHECK(tap_at(10, 10, 5000).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_OVERVIEW && max_m.idle_from == 5090);
 }
 
-// ---- the agent page ----
+// ---- the open agent ----
 
-// A tap on the page opens the mic for its agent (one without voice is brought up on the computer instead). While it
-// records, a tap on the page sends at once, says so, and goes back to Overview; X cancels and the page stays.
+// A tap on its panel opens the mic for it (one without voice is brought up on the computer instead). While it records,
+// a tap on the panel sends at once, says so, and the row comes back. X drops the recording, says so when words were
+// heard, and the row comes back; with no recording X only closes it.
 static void test_agent_page_talks(void)
 {
     max_ui_reset();
@@ -306,11 +319,19 @@ static void test_agent_page_talks(void)
     CHECK(act.kind == MAX_ACT_TALK && !strcmp(act.agent_id, "a") && !strcmp(max_m.talk_id, "a"));
     max_ui_talk(MAX_TALK_RECORDING, 0);
     agent_drawn();
-    act = tap_on(&max_m.hits[max_m.hit_count - 2]);   // X
-    CHECK(act.kind == MAX_ACT_CANCEL && max_m.view == MAX_VIEW_AGENT && !strcmp(max_ui_selected(), "a"));
+    no_notice();
+    act = tap_on(x_of_agent());
+    CHECK(act.kind == MAX_ACT_CANCEL && !strcmp(act.agent_id, "a") && max_m.view == MAX_VIEW_OVERVIEW);
+    CHECK(!max_notice_shown(0));   // nothing was heard: nothing to say
+    max_ui_talk(MAX_TALK_IDLE, 0);
+    // Words heard, then X: dropped, and the bar says nothing went.
+    agent_page("a");
+    recording(true);
+    act = tap_on(x_of_agent());
+    CHECK(act.kind == MAX_ACT_CANCEL && noticed("Cancelled, nothing sent") && max_m.view == MAX_VIEW_OVERVIEW);
     max_ui_talk(MAX_TALK_IDLE, 0);
     // The mic again: a tap sends, whether or not the level said anything was heard.
-    agent_drawn();
+    agent_page("a");
     CHECK(tap_page().kind == MAX_ACT_TALK);
     max_ui_talk(MAX_TALK_RECORDING, 0);
     agent_drawn();
@@ -318,18 +339,17 @@ static void test_agent_page_talks(void)
     act = tap_page();
     CHECK(act.kind == MAX_ACT_SEND && !strcmp(act.agent_id, "a") && noticed("Sent to a"));
     CHECK(max_m.view == MAX_VIEW_OVERVIEW && max_m.dirty);
-    // While it is sent the page takes no voice: a tap there brings the agent up instead.
+    // While it is sent the panel takes no voice: a tap there brings the agent up instead.
     max_ui_talk(MAX_TALK_SENDING, 0);
     agent_page("a");
     act = tap_page();
     CHECK(act.kind == MAX_ACT_OPEN && !strcmp(act.agent_id, "a"));
     max_ui_talk(MAX_TALK_IDLE, 0);
-    // No voice: brought up on the computer; X does nothing when no recording is up.
+    // No voice: brought up on the computer; X closes it, nothing else.
     agent_page("b");
     act = tap_page();
     CHECK(act.kind == MAX_ACT_OPEN && !strcmp(act.agent_id, "b") && max_m.talk_id[0] != 'b');
-    drawn_page(MAX_VIEW_AGENT);   // X alone, over no body
-    CHECK(tap_on(plant(MAX_HIT_TALK_CANCEL, 0)).kind == MAX_ACT_NONE);
+    CHECK(tap_on(x_of_agent()).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_OVERVIEW);
     // A permission prompt takes Yes or No only, and an answer on its way no voice either.
     max_ui_question("a", "r1", DEPLOY.q, &DEPLOY, 1, true, false, 0);
     agent_page("a");
@@ -338,67 +358,54 @@ static void test_agent_page_talks(void)
     max_ask_hit(max_find("a"), MAX_HIT_OPTION, 0, 0);
     agent_page("a");
     CHECK(max_ask_of("a")->phase == MAX_ASK_SENDING && tap_page().kind == MAX_ACT_OPEN);
-    // A page whose agent left the ring since it was drawn opens nothing.
+    // A panel whose agent left the ring since it was drawn opens nothing.
     agent_page("b");
     max_ui_agents(rows, 1, 0);
     CHECK(tap_page().kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_OVERVIEW);
 }
 
-// Back goes to Overview; a segment or a sideways swipe shows another agent of the ring with the mic closed. While a
-// recording is up Back and a segment first send what was heard (else drop it); a swipe is the dead zone.
-static void test_back_and_the_strip(void)
+// A sliver opens its agent as a cell's tap does (the mic on, the row's order held); one that asks opens its Attention.
+// While a recording is up a sliver is glass like the rest: the tap sends, and opens nothing.
+static void test_slivers(void)
 {
     linked(ABCDE, 5);
-    agent_page("a");
-    CHECK(tap_on(seg_of("c")).kind == MAX_ACT_NONE && !strcmp(max_ui_selected(), "c") && max_m.view == MAX_VIEW_AGENT);
+    agent_page("c");   // a b c d e: b and d beside it
+    CHECK(max_m.cell_hits == 2 && cell_of("b") && cell_of("d"));
+    max_act_t act = tap_box(cell_of("d"));
+    CHECK(act.kind == MAX_ACT_OPEN_TALK && !strcmp(act.agent_id, "d") && !strcmp(max_m.talk_id, "d"));
+    CHECK(max_m.view == MAX_VIEW_AGENT && !strcmp(max_ui_selected(), "d") && max_m.held_count == 5);
+    // Recording for d: a sliver sends d's words, and the row comes back.
+    max_ui_talk(MAX_TALK_RECORDING, 0);
     agent_drawn();
-    CHECK(swipe_left().kind == MAX_ACT_NONE && !strcmp(max_ui_selected(), "d"));   // to the left: the next
-    swipe_left();
-    swipe_left();
-    CHECK(!strcmp(max_ui_selected(), "a"));   // round the ring
-    swipe_right();
-    CHECK(!strcmp(max_ui_selected(), "e"));
-    agent_drawn();
-    CHECK(tap_on(&max_m.hits[0]).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_OVERVIEW);
-    // Back while recording: what was heard is sent, and says so.
-    agent_page("b");
-    recording(true);
     no_notice();
-    max_act_t act = tap_on(&max_m.hits[0]);
-    CHECK(act.kind == MAX_ACT_SEND && !strcmp(act.agent_id, "b") && noticed("Sent to b"));
+    act = tap_box(cell_of("c"));
+    CHECK(act.kind == MAX_ACT_SEND && !strcmp(act.agent_id, "d") && noticed("Sent to d"));
     CHECK(max_m.view == MAX_VIEW_OVERVIEW);
-    // Nothing heard: dropped, nothing said.
-    agent_page("b");
-    recording(false);
-    no_notice();
-    CHECK(tap_on(&max_m.hits[0]).kind == MAX_ACT_CANCEL && !max_notice_shown(0) && max_m.view == MAX_VIEW_OVERVIEW);
-    // The strip: sent, then that agent's page with the mic closed.
-    agent_page("b");
-    recording(true);
-    act = tap_on(seg_of("d"));
-    CHECK(act.kind == MAX_ACT_SEND && !strcmp(act.agent_id, "b") && noticed("Sent to b"));
-    CHECK(max_m.view == MAX_VIEW_AGENT && !strcmp(max_ui_selected(), "d"));
-    agent_page("b");
-    recording(false);
-    CHECK(tap_on(seg_of("d")).kind == MAX_ACT_CANCEL && !strcmp(max_ui_selected(), "d"));
-    // A swipe is a slide: the dead zone, the mic stays open on the same agent.
-    agent_page("b");
-    recording(true);
-    CHECK(swipe_left().kind == MAX_ACT_NONE && !strcmp(max_ui_selected(), "b") && max_m.view == MAX_VIEW_AGENT);
-    // A segment whose agent left since it was drawn is no segment: while recording, the tap sends as one on the page.
-    agent_page("b");
-    recording(false);
-    const max_hit_t gone = *seg_of("e");
-    roster(ABCDE, 4);
-    act = tap_on(&gone);
-    CHECK(act.kind == MAX_ACT_SEND && !strcmp(act.agent_id, "b") && max_m.view == MAX_VIEW_OVERVIEW);
     max_ui_talk(MAX_TALK_IDLE, 0);
-    agent_page("b");
-    CHECK(tap_on(&max_m.hits[5]).kind == MAX_ACT_TALK);   // the body under where e's segment was
+    // A held press on a sliver while recording: the dead zone.
+    agent_page("c");
+    recording(true);
+    const max_box_t b = *cell_of("b");
+    CHECK(press_for(b.x + 4, b.y + 4, 0, 0, T += 1000, MAX_TAP_MAX_MS + 50).kind == MAX_ACT_NONE);
+    CHECK(max_m.view == MAX_VIEW_AGENT && !strcmp(max_ui_selected(), "c"));
+    max_ui_talk(MAX_TALK_IDLE, 0);
+    T += 1000;
+    // A sliver whose agent asks: its question on Attention, nothing recorded.
+    max_ui_question("b", "r1", DB.q, &DB, 1, false, false, 0);
+    agent_page("a");   // b a c d e: b and c beside it
+    max_m.talk_id[0] = 0;
+    act = tap_box(cell_of("b"));
+    CHECK(act.kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_ATTENTION && !strcmp(max_m.attn_id, "b"));
+    CHECK(max_m.talk_id[0] == 0);
+    // A sliver whose agent left the ring since it was drawn opens nothing.
+    max_ui_question_close("b");
+    agent_page("c");
+    const max_box_t gone = *cell_of("d");
+    roster((const char *const[]){"a", "b", "c", "e"}, 4);
+    CHECK(tap_box(&gone).kind == MAX_ACT_NONE && !strcmp(max_ui_selected(), "c"));
 }
 
-// While a recording is up, a tap on anything but X, Back and the strip sends it: the toast (then its Attention), a
-// cell, the bare glass.
+// While a recording is up, a tap on anything but X sends it: the toast (then its Attention), a cell, the bare glass.
 static void test_any_other_tap_sends(void)
 {
     linked(ABCDE, 5);
@@ -546,8 +553,7 @@ static void test_talk_due(void)
     // Another agent's page: not its mic that closed.
     agent_page("a");
     max_m.talk_closed = true;
-    agent_drawn();
-    swipe_left();
+    max_open("b");
     CHECK(!strcmp(max_ui_selected(), "b") && !max_m.talk_closed);
     // The form's spoken name has no band: the notice says the mic closed.
     max_m.talk_id[0] = 0;
@@ -611,10 +617,11 @@ static void test_only_the_dials_tap_sends(void)
     CHECK(swipe_left().kind == MAX_ACT_NONE);
     CHECK(!max_notice_shown(0) && max_m.view == MAX_VIEW_AGENT && !strcmp(max_ui_selected(), "a"));
     // X: held long, it still cancels.
-    const max_hit_t *x_hit = &max_m.hits[max_m.hit_count - 2];
-    CHECK(x_hit->kind == MAX_HIT_TALK_CANCEL);
+    const max_hit_t *x_hit = x_of_agent();
+    CHECK(x_hit->kind == MAX_HIT_AGENT_X);
     CHECK(press_for(x_hit->x + 4, x_hit->y + 4, 0, 0, T += 1000, 2000).kind == MAX_ACT_CANCEL);
     // The Dial's tap at its edges sends: the shortest, and the longest that moved 10 px.
+    agent_page("a");
     recording(true);
     CHECK(press_for(x, y, 10, 0, T += 3000, MAX_TAP_MIN_MS).kind == MAX_ACT_SEND);
     agent_page("a");
@@ -664,14 +671,16 @@ static void test_the_guard(void)
     t += MAX_GUARD_MS + 90;
     max_ui_talk(MAX_TALK_RECORDING, t);
     agent_drawn();
-    // X right after the mic opened: never held back. Then the cancel's own guard.
-    const max_hit_t x_hit = max_m.hits[max_m.hit_count - 2];
-    CHECK(tap_at(x_hit.x + 4, x_hit.y + 4, t + 10).kind == MAX_ACT_CANCEL);
+    // X right after the mic opened: never held back. Then the cancel's own guard, on the row X brought back.
+    const max_hit_t x_hit = *x_of_agent();
+    CHECK(tap_at(x_hit.x + 4, x_hit.y + 4, t + 10).kind == MAX_ACT_CANCEL && max_m.view == MAX_VIEW_OVERVIEW);
     max_ui_talk(MAX_TALK_IDLE, 0);
     t += 100;
-    agent_drawn();
-    CHECK(tap_at(page_x, page_y, t + MAX_GUARD_MS - 1).kind == MAX_ACT_NONE);
-    CHECK(tap_at(page_x, page_y, t + MAX_GUARD_MS).kind == MAX_ACT_TALK);
+    overview_drawn();
+    const max_box_t d = *cell_of("a");
+    CHECK(tap_at(d.x + d.w / 2, d.y + d.h / 2, t + MAX_GUARD_MS - 1).kind == MAX_ACT_NONE);
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW);
+    CHECK(tap_at(d.x + d.w / 2, d.y + d.h / 2, t + MAX_GUARD_MS).kind == MAX_ACT_OPEN_TALK);
     T = t + 10000;
 }
 
@@ -728,7 +737,7 @@ static void test_update_screen(void)
     max_ui_update(10, "0.9.0");
     CHECK(tap_box(cell_of("x0")).kind == MAX_ACT_NONE && tap_on(&max_m.hits[0]).kind == MAX_ACT_NONE);
     swipe_left();
-    CHECK(max_m.cell_page == 0 && max_m.view == MAX_VIEW_OVERVIEW);
+    CHECK(max_m.row_first == 0 && max_m.view == MAX_VIEW_OVERVIEW);
 }
 
 // New Harness: its moves, choice, Back and Close; Say records a name for its field, sent by a tap or cancelled by X;
@@ -802,12 +811,12 @@ int main(void)
 {
     test_cell_tap();
     test_drag_is_not_a_tap();
-    test_swipe_pages_the_cells();
+    test_swipe_scrolls_the_row();
     test_inbox();
     test_apps();
     test_ambient_wakes();
     test_agent_page_talks();
-    test_back_and_the_strip();
+    test_slivers();
     test_any_other_tap_sends();
     test_attention();
     test_toast();

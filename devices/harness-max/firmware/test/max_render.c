@@ -151,7 +151,7 @@ static void s_overview_one(void)
     work("fw", "Flashing", "the bar over USB, 40%", 190, FW_STEPS, 3);
     show(MAX_VIEW_OVERVIEW, NULL);
 }
-// More agents than a page holds: the second page shown, a question waiting on the first.
+// More agents than the glass holds: the row scrolled a cell on, past the question waiting at its front.
 static void s_overview_pages(void)
 {
     orca();
@@ -165,7 +165,7 @@ static void s_overview_pages(void)
     work("bill", "Reading", "the invoices schema", 97, NULL, 0);
     unread(2);
     show(MAX_VIEW_OVERVIEW, NULL);
-    max_m.cell_page = 1;
+    max_m.row_first = 1;
 }
 static void s_overview_long(void)
 {
@@ -188,7 +188,8 @@ static void s_agent_mic_closed(void)
 {
     orca();
     show(MAX_VIEW_AGENT, "sweep");
-    max_ui_notice("Mic closed \xc2\xb7 tap to talk", 3000, T0);
+    max_copy(max_m.talk_id, sizeof max_m.talk_id, "sweep");
+    max_m.talk_closed = true;   // 5 s with nothing heard
 }
 static void s_agent_listening(void) { orca(); show(MAX_VIEW_AGENT, "e2e"); talk("e2e", 2, true, 700); }
 static void s_agent_listening_start(void) { orca(); show(MAX_VIEW_AGENT, "sweep"); talk("sweep", 1, false, 0); }

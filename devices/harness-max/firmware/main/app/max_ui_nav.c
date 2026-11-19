@@ -1,37 +1,35 @@
-// What Demo V2's pages read from the model: Overview's cells and their pages, the agent page's strip, Inbox's unread
+// What Demo V2's pages read from the model: App Detail's cells on the glass and an open agent's window, Inbox's unread
 // count, the shown app's name, and what the bar may do with an agent (its caps). Pure reads of max_m.
 #include <string.h>
 
 #include "max_ui_internal.h"
 
-int max_cell_pages(void) { return (max_m.count + MAX_CELLS - 1) / MAX_CELLS; }
+int max_row_last(void)
+{
+    int row[MAX_AGENTS];
+    const int last = max_row(row) - MAX_CELLS;
+    return last > 0 ? last : 0;
+}
 
 int max_cells(int out[MAX_CELLS])
 {
-    int k = 0;
-    for (int i = max_m.cell_page * MAX_CELLS; i < max_m.count && k < MAX_CELLS; i++) out[k++] = i;
+    int row[MAX_AGENTS], k = 0;
+    const int n = max_row(row), last = max_row_last();
+    const int first = max_m.row_first < 0 ? 0 : max_m.row_first > last ? last : max_m.row_first;
+    for (int i = first; i < n && k < MAX_CELLS; i++) out[k++] = row[i];
     return k;
 }
 
-bool max_page_waits(int page)
+int max_open_first(int i, int n)
 {
-    for (int i = page * MAX_CELLS; i >= 0 && i < max_m.count && i < (page + 1) * MAX_CELLS; i++)
-        if (max_m.agents[i].state == MAX_ASKING) return true;
-    return false;
+    const int last = n - MAX_CELLS > 0 ? n - MAX_CELLS : 0;
+    return i - 1 < 0 ? 0 : i - 1 > last ? last : i - 1;
 }
 
-// The window keeps the selected agent in it, as near its middle as the roster's ends allow, so the strip shifts by one
-// as the person browses rather than jumping a page.
-int max_segs(int out[MAX_SEGS])
+const char *max_summary(const max_agent_t *a)
 {
-    const max_agent_t *sel = max_find(max_m.selected);
-    const int at = sel ? (int)(sel - max_m.agents) : 0;
-    int from = at - MAX_SEGS / 2;
-    if (from > max_m.count - MAX_SEGS) from = max_m.count - MAX_SEGS;
-    if (from < 0) from = 0;
-    int k = 0;
-    for (int i = from; i < max_m.count && k < MAX_SEGS; i++) out[k++] = i;
-    return k;
+    if (a->state == MAX_WORKING) return a->activity[0] ? a->activity : a->step_count ? a->steps[0] : "";
+    return a->state == MAX_ASKING ? a->question : a->note;
 }
 
 int max_unread(void)

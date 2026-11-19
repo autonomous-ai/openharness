@@ -247,11 +247,6 @@ static void line24(ht_scene_t *s, int x, int y, int size, int x0, int y0, int x1
 {
     max_stroke16(s, at16(x, size, x0), at16(y, size, y0), at16(x, size, x1), at16(y, size, y1), size * 6 / 5, rgb);
 }
-void max_icon_back(ht_scene_t *s, int x, int y, int size, unsigned rgb)
-{
-    line24(s, x, y, size, 30, 12, 18, 24, rgb);   // m15 6-6 6 6 6
-    line24(s, x, y, size, 18, 24, 30, 36, rgb);
-}
 void max_icon_x(ht_scene_t *s, int x, int y, int size, unsigned rgb)
 {
     line24(s, x, y, size, 12, 12, 36, 36, rgb);
@@ -324,18 +319,30 @@ unsigned max_rail_ink(const max_agent_t *a)
 {
     return a->state == MAX_FAILED ? FAIL_RAIL : a->state == MAX_IDLE ? IDLE_RAIL : max_state_ink(a);
 }
+unsigned max_chip_ink(const max_agent_t *a) { return a->state == MAX_IDLE ? CHIP_IDLE : max_rail_ink(a); }
+
+// ---- the state chip ----
+
+enum { CHIP_DOT = DX(8), CHIP_GAP = DX(8) };
+static int chip_pad(bool small) { return small ? DX(13) : DX(16); }
+int max_chip_w(const max_agent_t *a, bool small, int max_w)
+{
+    const int w = 2 * chip_pad(small) + CHIP_DOT + CHIP_GAP + ht_pro_width(&ph_sb_22, max_status_word(a));
+    return w < max_w ? w : max_w;
+}
+int max_chip(ht_scene_t *s, int x, int cy, const max_agent_t *a, bool small, int max_w)
+{
+    const unsigned c = max_chip_ink(a);
+    const unsigned words = a->state == MAX_IDLE ? REST : a->state == MAX_FAILED ? FAIL : c;
+    const int h = small ? DY(30) : DY(34), pad = chip_pad(small), w = max_chip_w(a, small, max_w);
+    max_box(s, x, cy - h / 2, w, h, h / 2, 1, max_mix(c, GROUND, 40), max_mix(c, GROUND, 15));
+    max_dot(s, x + pad, cy, CHIP_DOT, c);
+    const int tx = x + pad + CHIP_DOT + CHIP_GAP;
+    max_text(s, tx, cy, x + w - pad - tx, &ph_sb_22, words, max_status_word(a));
+    return w;
+}
+
 unsigned max_kind_ink(max_attn_t kind) { return kind == MAX_ATTN_ASK ? WAIT : kind == MAX_ATTN_DONE ? DONE : FAIL; }
-const char *max_engine_label(char *out, size_t cap, const char *engine)
-{
-    if (!strcmp(engine, "claude")) snprintf(out, cap, "Claude Code");
-    else snprintf(out, cap, "%s", engine);
-    if (out[0] >= 'a' && out[0] <= 'z') out[0] = (char)(out[0] - 'a' + 'A');   // "codex": "Codex"
-    return out;
-}
-unsigned max_engine_ink(const char *engine)
-{
-    return !strcmp(engine, "claude") ? CLAUDE : !strcmp(engine, "codex") ? CODEX : !strcmp(engine, "muse") ? MUSE : REST;
-}
 
 // ---- buttons ----
 
@@ -394,8 +401,8 @@ uint32_t max_motion_ms(uint32_t now_ms)
 
 enum { TOAST_W = DX(760), TOAST_H = DY(52), TOAST_Y = DY(6), PILL_PAD = DX(22), PILL_DOT = DY(8) };
 
-// The toast's place: top centre, over the strip of the agent page; while New Harness is up, in its title row left of
-// Close, so it covers none of the form's buttons.
+// The toast's place: top centre; while New Harness is up, in its title row left of Close, so it covers none of the
+// form's buttons.
 static max_box_t toast_box(bool form)
 {
     if (!form) return (max_box_t){(HT_WIDTH - TOAST_W) / 2, TOAST_Y, TOAST_W, TOAST_H};
@@ -453,12 +460,12 @@ static void update_screen(ht_scene_t *s)
     }
 }
 
-// The page the model shows. One that names an agent no longer in the ring shows Overview instead.
+// The page the model shows. One that names an agent no longer in the ring shows Overview instead; App Detail draws the
+// agent page, its agent open across the row.
 static void page(ht_scene_t *s, uint32_t now_ms)
 {
-    const max_agent_t *agent = max_find(max_m.selected), *attn = max_find(max_m.attn_id);
-    if (max_m.view == MAX_VIEW_AGENT && agent) max_draw_agent(s, agent, now_ms);
-    else if (max_m.view == MAX_VIEW_ATTENTION && attn) max_draw_attention(s, attn, now_ms);
+    const max_agent_t *attn = max_find(max_m.attn_id);
+    if (max_m.view == MAX_VIEW_ATTENTION && attn) max_draw_attention(s, attn, now_ms);
     else if (max_m.view == MAX_VIEW_INBOX) max_draw_inbox(s, now_ms);
     else if (max_m.view == MAX_VIEW_APPS) max_draw_apps(s);
     else if (max_m.view == MAX_VIEW_AMBIENT) max_draw_ambient(s);

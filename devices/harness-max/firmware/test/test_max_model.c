@@ -45,7 +45,7 @@ static void test_link_down_clears_everything(void)
     CHECK(max_m.view == MAX_VIEW_ATTENTION && !strcmp(max_m.attn_id, "c"));
     CHECK(max_ui_link(false, NULL, 40));
     CHECK(!max_m.link && max_m.computer[0] == 0);
-    CHECK(max_m.count == 0 && max_m.machine_count == 0 && max_m.cell_page == 0);
+    CHECK(max_m.count == 0 && max_m.machine_count == 0 && max_m.row_first == 0);
     CHECK(max_m.view == MAX_VIEW_AMBIENT && max_ui_selected() == NULL && max_m.attn_id[0] == 0);
     // Inbox is the bar's own: its notices stay.
     CHECK(max_m.inbox_count == 1 && !strcmp(max_m.inbox[0].id, "c"));
@@ -204,55 +204,136 @@ static void test_order_and_stability(void)
     max_ui_turn("d", "started", "", 0, 0);
     max_ui_question("d", "r", "Push?", NULL, 0, false, false, 10);
     max_ui_turn("e", "error", "Boom", 0, 20);
-    CHECK(!strcmp(order_ids(buf, sizeof buf), "d e b a c"));
-    // Progress on a working lane never moves it.
+    CHECK(!strcmp(order_ids(buf, sizeof buf), "d b e a c"));   // asking, working, failed, then the rest
+    // Progress on a working agent never moves it.
     for (int i = 0; i < 20; i++) {
         max_ui_turn("b", "activity", i % 2 ? "Editing" : "Reading", i, 100 + (uint32_t)i);
         max_ui_turn("b", "verb", i % 2 ? "Musing" : "Brewing", -1, 100 + (uint32_t)i);
         max_ui_turn("b", "step", i % 2 ? "Read \xc2\xb7 x" : "Edit \xc2\xb7 y", -1, 100 + (uint32_t)i);
-        CHECK(!strcmp(order_ids(buf, sizeof buf), "d e b a c"));
+        CHECK(!strcmp(order_ids(buf, sizeof buf), "d b e a c"));
     }
-    // Neither does the clock: a summary running out keeps a done lane where it is.
+    // Done goes after failed and before resting; the clock running its summary out keeps it there.
     max_ui_turn("a", "started", "", 0, 0);
     max_ui_summary("a", "Done it", NULL, false, POD_TIER_ALERT, 200);
-    CHECK(!strcmp(order_ids(buf, sizeof buf), "d e b a c"));
+    CHECK(!strcmp(order_ids(buf, sizeof buf), "d b e a c"));
+    max_ui_turn("c", "started", "", 0, 210);
+    max_ui_summary("c", "Done too", NULL, false, POD_TIER_LIST, 220);
+    CHECK(!strcmp(order_ids(buf, sizeof buf), "d b e a c"));
     max_ui_tick(200 + MAX_DONE_MS);
-    CHECK(!strcmp(order_ids(buf, sizeof buf), "d e b a c"));
-    // The question answered: d works again, after e.
+    CHECK(!strcmp(order_ids(buf, sizeof buf), "d b e a c"));
+    // The question answered: d works again, after b (the ring's order within a state).
     max_ui_question_close("d");
-    CHECK(!strcmp(order_ids(buf, sizeof buf), "e b d a c"));
+    CHECK(!strcmp(order_ids(buf, sizeof buf), "b d e a c"));
     max_ui_turn("e", "started", "", 0, 300);
     CHECK(!strcmp(order_ids(buf, sizeof buf), "b d e a c"));
+    max_ui_turn("c", "started", "", 0, 310);
+    CHECK(!strcmp(order_ids(buf, sizeof buf), "b c d e a"));
 }
 
-// Overview's cells: five a page, in the ring's order; the page stays within the pages there are.
-static void test_cell_pages(void)
+// App Detail's row: three cells on the glass from row_first, which stays within the row there is; another app's ring
+// starts at its front.
+static void test_row_scrolls(void)
 {
     enum { N = 2 * MAX_CELLS + 1 };
     linked(XS, N);
+    max_show(MAX_VIEW_OVERVIEW);
     int c[MAX_CELLS];
-    CHECK(max_cell_pages() == 3 && max_m.cell_page == 0);
+    CHECK(max_row_last() == N - MAX_CELLS && max_m.row_first == 0);
     CHECK(max_cells(c) == MAX_CELLS && c[0] == 0 && c[MAX_CELLS - 1] == MAX_CELLS - 1);
-    max_m.cell_page = 2;
-    CHECK(max_cells(c) == 1 && c[0] == N - 1);
-    // A question on the second page: its dot is yellow, and only its.
-    max_ui_question(XS[MAX_CELLS + 1], "r1", "Ok?", NULL, 0, false, false, 0);
-    CHECK(!max_page_waits(0) && max_page_waits(1) && !max_page_waits(2));
-    // Fewer agents: the page comes back within the pages there are.
+    max_m.row_first = N - MAX_CELLS;
+    CHECK(max_cells(c) == MAX_CELLS && c[0] == N - MAX_CELLS && c[MAX_CELLS - 1] == N - 1);
+    // Fewer agents: the row comes back within itself.
     roster(XS, MAX_CELLS + 1);
-    CHECK(max_cell_pages() == 2 && max_m.cell_page == 1);
+    CHECK(max_m.row_first == 1 && max_cells(c) == MAX_CELLS && c[0] == 1);
     roster(XS, 2);
-    CHECK(max_cell_pages() == 1 && max_m.cell_page == 0);
-    // Another app's ring starts on its first page.
+    CHECK(max_m.row_first == 0 && max_row_last() == 0 && max_cells(c) == 2);
+    // Another app's ring starts at its front.
     roster(XS, N);
-    max_m.cell_page = 2;
+    max_m.row_first = 2;
     const pro_app_row_t apps[] = {{"orca", "Orca", N, 0}, {"vscode", "VS Code", 2, 0}};
-    CHECK(max_ui_apps("orca", apps, 2, 0) && max_m.cell_page == 0);
-    max_m.cell_page = 2;
-    CHECK(!max_ui_apps("orca", apps, 2, 0) && max_m.cell_page == 2);   // the same app: the page stays
-    CHECK(max_ui_apps("vscode", apps, 2, 0) && max_m.cell_page == 0);
+    CHECK(max_ui_apps("orca", apps, 2, 0) && max_m.row_first == 0);
+    max_m.row_first = 2;
+    CHECK(!max_ui_apps("orca", apps, 2, 0) && max_m.row_first == 2);   // the same app: the row stays
+    CHECK(max_ui_apps("vscode", apps, 2, 0) && max_m.row_first == 0);
     roster(NULL, 0);
-    CHECK(max_cell_pages() == 0 && max_m.cell_page == 0);
+    CHECK(max_row_last() == 0 && max_m.row_first == 0 && max_cells(c) == 0);
+    // An open agent's window: a sliver before it where there is one, the row's end in view.
+    CHECK(max_open_first(0, 7) == 0 && max_open_first(1, 7) == 0 && max_open_first(3, 7) == 2);
+    CHECK(max_open_first(6, 7) == 4 && max_open_first(5, 7) == 4 && max_open_first(1, 2) == 0);
+}
+
+// An agent open across the row holds the order it opened on as states change; one that comes meanwhile goes after
+// them by need, and one that leaves leaves. Closed, the row is by need again with the agent that was open one cell
+// in; from any other page it starts at its front.
+static void test_row_holds_while_open(void)
+{
+    char buf[128];
+    linked(ABCDE, 5);
+    max_show(MAX_VIEW_OVERVIEW);
+    max_open("c");
+    CHECK(max_m.view == MAX_VIEW_AGENT && !strcmp(order_ids(buf, sizeof buf), "a b c d e"));
+    max_ui_turn("e", "started", "", 0, 10);
+    max_ui_question("d", "r1", "Ok?", NULL, 0, false, false, 20);
+    CHECK(max_m.view == MAX_VIEW_ATTENTION);   // a question takes the glass: the row is by need again
+    CHECK(!strcmp(order_ids(buf, sizeof buf), "d e a b c"));
+    max_open("c");
+    CHECK(!strcmp(order_ids(buf, sizeof buf), "d e a b c"));
+    max_ui_question_close("d");
+    max_ui_turn("e", "done", "", 0, 30);
+    max_ui_turn("a", "started", "", 0, 40);
+    CHECK(!strcmp(order_ids(buf, sizeof buf), "d e a b c"));   // held
+    const pro_agent_row_t rows[] = {{"a", "a", "claude", "m1", "MacBook Pro", NULL, NULL},
+                                    {"b", "b", "claude", "m1", "MacBook Pro", NULL, NULL},
+                                    {"c", "c", "claude", "m1", "MacBook Pro", NULL, NULL},
+                                    {"e", "e", "claude", "m1", "MacBook Pro", NULL, NULL},
+                                    {"f", "f", "claude", "m1", "MacBook Pro", NULL, NULL}};
+    max_ui_agents(rows, 5, 50);   // d leaves, f comes
+    CHECK(max_m.view == MAX_VIEW_AGENT && !strcmp(order_ids(buf, sizeof buf), "e a b c f"));
+    // Another agent opened from a sliver keeps the order held.
+    max_open("b");
+    CHECK(!strcmp(order_ids(buf, sizeof buf), "e a b c f") && !strcmp(max_ui_selected(), "b"));
+    // Closed: by need (a at work, e done, the rest resting), b one cell in from the left where it stands.
+    CHECK(max_show(MAX_VIEW_OVERVIEW) && !strcmp(order_ids(buf, sizeof buf), "a e b c f") && max_m.row_first == 1);
+    max_open("f");
+    CHECK(max_show(MAX_VIEW_OVERVIEW) && max_m.row_first == max_row_last());   // the last: the row's end in view
+    max_open("a");
+    CHECK(max_show(MAX_VIEW_OVERVIEW) && max_m.row_first == 0);
+    // From any other page the row starts at its front.
+    max_m.row_first = 2;
+    max_show(MAX_VIEW_INBOX);
+    CHECK(max_show(MAX_VIEW_OVERVIEW) && max_m.row_first == 0);
+    // The open agent leaves the ring: Overview, at the row's front.
+    max_open("f");
+    max_ui_agents(rows, 4, 60);
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW && max_m.row_first == 0 && max_m.held_count == 0);
+}
+
+// An agent moving up past the cells before the glass would go out of sight: the row goes to its front, unless a
+// finger holds it. One moving within the glass or after it leaves the row where it is.
+static void test_row_front_if_passed(void)
+{
+    linked(XS, 8);
+    max_show(MAX_VIEW_OVERVIEW);
+    max_ui_tick(0);
+    max_m.row_first = 2;
+    // x6 starts work: it moves up to the row's front, past x0 and x1.
+    max_ui_turn("x6", "started", "", 0, 10);
+    CHECK(max_m.row_first == 0);
+    // The same agents before the glass in another order: the row stays (x0 starts work, before x6 by the ring).
+    max_m.row_first = 3;
+    max_ui_tick(20);
+    max_ui_turn("x0", "started", "", 0, 30);
+    CHECK(max_m.row_first == 3);
+    // A finger on the glass holds the row where it is.
+    max_ui_touch(true, 900, 200, 40);
+    max_ui_turn("x7", "started", "", 0, 50);
+    CHECK(max_m.row_first == 3);
+    max_ui_touch_cancel();
+    max_ui_tick(60);
+    CHECK(max_m.row_first == 3);   // what it passed meanwhile is the row as it stands
+    // Off Overview the row is not watched.
+    max_ui_question("x5", "r1", "Ok?", NULL, 0, false, false, 70);
+    CHECK(max_m.view == MAX_VIEW_ATTENTION);
 }
 
 // The computer's window moving is not a person at the bar: no page changes.
@@ -538,25 +619,20 @@ static void test_no_talk_while_an_answer_waits(void)
     CHECK(max_can_talk(a));
 }
 
-// The agent page draws its agent's clock while it works, else how long ago its state changed: the render task wakes
-// for each, and Overview draws neither.
+// The open agent draws no clock and no "ago" (App Detail): neither the agent page nor Overview wakes the render task
+// for a turn's seconds or minutes.
 static void test_agent_page_clock(void)
 {
     linked(XS, 3);
     max_ui_turn("x1", "started", "", 0, 1000);
     as_drawn(1000);
     CHECK(max_ui_next_wake_ms(1500) == MAX_WAKE_MS && !max_ui_tick(5000));
-    max_copy(max_m.selected, sizeof max_m.selected, "x1");
-    max_show(MAX_VIEW_AGENT);
+    max_open("x1");
     as_drawn(1000);
-    CHECK(max_ui_next_wake_ms(1500) == 500 && !max_ui_tick(1999) && max_ui_tick(2000));
-    // Done: "just now", then "1m ago" as its summary stops showing, then each minute.
+    CHECK(max_ui_next_wake_ms(1500) == MAX_WAKE_MS && !max_ui_tick(2000) && !max_ui_tick(5000));
     max_ui_summary("x1", "Done it", NULL, false, POD_TIER_LIST, 4000);
     as_drawn(4000);
-    CHECK(max_ui_next_wake_ms(34000) == 30000);
-    CHECK(!max_ui_tick(63999) && max_ui_tick(64000));
-    as_drawn(64000);
-    CHECK(!max_ui_tick(123999) && max_ui_tick(124000));
+    CHECK(max_ui_next_wake_ms(34000) == MAX_WAKE_MS && !max_ui_tick(64000));
 }
 
 // While a recording is up the band redraws every MAX_TALK_FRAME_MS, and the render task wakes for what the clock owes
@@ -587,7 +663,7 @@ static void test_recording_clock(void)
     max_ui_talk(MAX_TALK_SENDING, 2000);
     CHECK(!max_ui_level(3, 2000));
     as_drawn(2000);
-    CHECK(max_ui_next_wake_ms(2000) == 60000 - 2000 && !max_ui_tick(2000 + MAX_TALK_FRAME_MS));
+    CHECK(max_ui_next_wake_ms(2000) == MAX_WAKE_MS && !max_ui_tick(2000 + MAX_TALK_FRAME_MS));
     // A new recording starts its own clock, nothing heard, and "Mic closed" goes.
     max_m.talk_closed = true;
     CHECK(max_ui_talk(MAX_TALK_RECORDING, 5000) && max_m.talk_from == 5000 && !max_m.talk_heard && !max_m.level_count);
@@ -650,7 +726,9 @@ int main(void)
     test_question();
     test_summary_tiers();
     test_order_and_stability();
-    test_cell_pages();
+    test_row_scrolls();
+    test_row_holds_while_open();
+    test_row_front_if_passed();
     test_focus_changes_no_page();
     test_questions_take_attention_oldest_first();
     test_turn_ends_take_attention();

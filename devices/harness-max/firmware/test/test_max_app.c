@@ -217,14 +217,12 @@ static void overview_drawn(void)
     plant(MAX_HIT_BELL, 0);
     plant_cells();
 }
-// The agent page as drawn: Back, the strip, X while it records, then the body.
+// The open agent as drawn: its X, then its panel (the body).
 static void agent_drawn(void)
 {
     CHECK(max_m.view == MAX_VIEW_AGENT);
     drawn_page(MAX_VIEW_AGENT);
-    plant(MAX_HIT_BACK, 0);
-    plant_strip();
-    if (max_m.talk == MAX_TALK_RECORDING) plant(MAX_HIT_TALK_CANCEL, 0);
+    plant(MAX_HIT_AGENT_X, 0);
     plant_page(MAX_HIT_BODY);
 }
 // Attention as drawn: the card's options, Say it, then the page around them.
@@ -283,14 +281,14 @@ static const max_hit_t *find_hit(max_hit_kind_t kind, int arg)
 
 // ---- tests ----
 
-// A swipe that pages the cells and a tap that opens a page only mark the model for redraw (max_ui_touch returns
+// A swipe that scrolls the row and a tap that opens a page only mark the model for redraw (max_ui_touch returns
 // MAX_ACT_NONE for them): the touch path must wake the render task, or the page shows at its next wake, up to 60 s
 // later.
 static void test_touch_wakes_the_renderer(void)
 {
     fresh();
     contact(HT_WIDTH / 2, HT_HEIGHT / 2, -(MAX_SWIPE_PX + 40), 0);
-    CHECK(max_m.cell_page == 1 && NOTIFIES > 0);
+    CHECK(max_m.row_first == 1 && NOTIFIES > 0);
 
     fresh();
     tap_on(find_hit(MAX_HIT_BELL, 0));
@@ -349,20 +347,26 @@ static void test_the_mic_closes_when_nothing_is_heard(void)
     render_pass();
     CHECK(!V_OPEN && !V_WAITING && max_m.talk == MAX_TALK_IDLE);
     CHECK(max_m.talk_closed && max_m.view == MAX_VIEW_AGENT);
+    // Its panel opens the mic again.
+    agent_drawn();
+    V_BEGINS = 0;
+    now += MAX_GUARD_MS;   // past the close's guard
+    tap_page();
+    CHECK(V_BEGINS == 1 && V_OPEN && !strcmp(V_AGENT, "a") && max_m.talk == MAX_TALK_RECORDING);
 }
 
-// The agent page's body opens the mic, X drops it (the page stays), and the body again sends it.
+// X drops the recording and closes the agent; its cell opens the mic again, and the panel sends it.
 static void test_the_body_talks_and_x_cancels(void)
 {
     fresh();
     tap_cell("a");
     agent_drawn();
-    tap_on(find_hit(MAX_HIT_TALK_CANCEL, 0));
-    CHECK(!V_OPEN && max_m.talk == MAX_TALK_IDLE && max_m.view == MAX_VIEW_AGENT);
-    agent_drawn();
+    tap_on(find_hit(MAX_HIT_AGENT_X, 0));
+    CHECK(!V_OPEN && max_m.talk == MAX_TALK_IDLE && max_m.view == MAX_VIEW_OVERVIEW);
+    overview_drawn();
     V_BEGINS = 0;
     now += MAX_GUARD_MS;   // past the cancel's guard
-    tap_page();
+    tap_cell("a");
     CHECK(V_BEGINS == 1 && V_OPEN && !strcmp(V_AGENT, "a") && max_m.talk == MAX_TALK_RECORDING);
     agent_drawn();
     now += MAX_GUARD_MS;   // past the opening's

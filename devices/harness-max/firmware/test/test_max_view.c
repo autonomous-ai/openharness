@@ -286,9 +286,18 @@ static void test_budget(void)
     printf("test_max_view: at most %d runs of %d on the busiest screens\n", most_runs, HT_RUNS);
 }
 
-// ---- Overview ----
+// ---- App Detail ----
 
-// The app column (Apps when the daemon lists apps), up to five cells, the bell; nothing else to hit, nothing moving.
+// The runs the compositor draws of one kind (a sliver's veil).
+static int runs_of(int kind)
+{
+    int n = 0;
+    for (int i = 0; i < S.count; i++) n += S.runs[i].pro_kind == kind;
+    return n;
+}
+
+// The app column (Apps when the daemon lists apps), three cells by need, the bell; nothing else to hit, nothing
+// moving. Each cell: its name, the line of its task, its chip.
 static void test_overview(void)
 {
     ring(NULL);
@@ -296,78 +305,101 @@ static void test_overview(void)
     show(MAX_VIEW_OVERVIEW, NULL);
     render_at(T0);
     CHECK(HITS_ARE(MAX_HIT_APPS, MAX_HIT_BELL));
-    CHECK(max_m.cell_hits == 5);
+    CHECK(max_m.cell_hits == MAX_CELLS);
     const max_box_t apps = box_of(find_hit(MAX_HIT_APPS, 0)), bell = box_of(find_hit(MAX_HIT_BELL, 0));
     for (int i = 0; i < max_m.cell_hits; i++) {
         CHECK(apart(max_m.cell_box[i], apps) && apart(max_m.cell_box[i], bell));
         CHECK(max_find(max_m.cell_id[i]) != NULL);
         if (i) CHECK(max_m.cell_box[i].x == max_m.cell_box[i - 1].x + max_m.cell_box[i - 1].w);
     }
+    CHECK(max_m.cell_box[MAX_CELLS - 1].x + max_m.cell_box[MAX_CELLS - 1].w <= bell.x);
+    // By need: e asks, a and b work (the ring's order); c (done) and d (resting) past the glass.
+    CHECK(!strcmp(max_m.cell_id[0], "e") && !strcmp(max_m.cell_id[1], "a") && !strcmp(max_m.cell_id[2], "b"));
     max_box_t boxes[MAX_CELLS + 2] = {apps, bell};
     for (int i = 0; i < max_m.cell_hits; i++) boxes[2 + i] = max_m.cell_box[i];
     check_words(boxes, 2 + max_m.cell_hits);
     check_glass();
     check_hits();
-    CHECK(word("Harness") && word("2") && word("Needs you") && word("Done"));   // the shown app, the badge: 2 unread
+    // The shown app, how many agents, the badge (2 unread), the chips, the tasks.
+    CHECK(word("Harness") && word("5 agents") && word("2") && word("Needs you") && word("Infusing"));
+    CHECK(text_run("Which database") && text_run("Editing the touch driver") && !word("Done"));
     CHECK(max_motion_ms(T0) == MAX_WAKE_MS);   // the cells' pets hold one frame
     // Long and Vietnamese names cut with an ellipsis, inside their cells.
     const ht_run_t *cut = NULL;
     for (int i = 0; i < S.count; i++)
         if (S.runs[i].pro_kind == K_TEXT && !strncmp(S.runs[i].text, "an-agent", 8)) cut = &S.runs[i];
     CHECK(cut && strstr(cut->text, ELLIPSIS));
+    // Scrolled to its end: c's summary and chip, d with nothing to say.
+    max_m.row_first = 2;
+    render_at(T0);
+    CHECK(!strcmp(max_m.cell_id[0], "b") && !strcmp(max_m.cell_id[2], "d"));
+    CHECK(word("Done") && word("Resting") && word("No task yet") && !word("Needs you"));
+    for (int i = 0; i < max_m.cell_hits; i++) boxes[2 + i] = max_m.cell_box[i];
+    check_words(boxes, 2 + max_m.cell_hits);
+    max_m.row_first = 9;   // past the row's end: its last cells
+    render_at(T0);
+    CHECK(!strcmp(max_m.cell_id[0], "b") && max_m.cell_hits == MAX_CELLS);
+    max_m.row_first = 0;
     // No apps frame (an older daemon): the computer's name, no Apps.
     max_m.apps_known = false;
     max_m.app_count = 0;
     render_at(T0);
     CHECK(HITS_ARE(MAX_HIT_BELL) && word("MacBook Pro"));
-    // More agents than a page: the second page, its cells a full page's width each.
-    static const pro_agent_row_t seven[] = {{"a", "a", "claude", "m1", "M", NULL, NULL}, {"b", "b", "claude", "m1", "M", NULL, NULL},
-                                            {"c", "c", "claude", "m1", "M", NULL, NULL}, {"d", "d", "claude", "m1", "M", NULL, NULL},
-                                            {"e", "e", "claude", "m1", "M", NULL, NULL}, {"f", "f", "codex", "m1", "M", NULL, NULL},
-                                            {"g", "g", "muse", "m1", "M", NULL, NULL}};
-    max_ui_agents(seven, 7, T0);
-    max_m.cell_page = 1;
+    // Three agents or fewer: no dots, the cells keep their width.
+    static const pro_agent_row_t two[] = {{"a", "a", "claude", "m1", "M", NULL, NULL},
+                                          {"f", "f", "codex", "m1", "M", NULL, NULL}};
+    max_ui_agents(two, 2, T0);
     render_at(T0);
-    CHECK(max_m.cell_hits == 2 && max_m.cell_box[0].w == max_m.cell_box[1].w);
-    CHECK(max_m.cell_box[0].w * MAX_CELLS <= HT_WIDTH && max_m.cell_box[0].w * 3 < HT_WIDTH);
+    CHECK(max_m.cell_hits == 2 && max_m.cell_box[0].w == max_m.cell_box[1].w && word("2 agents"));
+    CHECK(max_m.cell_box[0].w * 3 < HT_WIDTH);
     check_glass();
     // Empty: no agents, not connected; no cells either way.
     max_ui_agents(NULL, 0, T0);
     render_at(T0);
-    CHECK(max_m.cell_hits == 0 && word("No agents yet"));
+    CHECK(max_m.cell_hits == 0 && word("No agents yet") && !text_run("0 agents"));
     max_ui_reset();
     show(MAX_VIEW_OVERVIEW, NULL);
     render_at(T0);
     CHECK(max_m.cell_hits == 0 && word("Not connected") && HITS_ARE(MAX_HIT_BELL));
 }
 
-// ---- the agent page ----
+// ---- the open agent ----
 
-// The strip (Back, a segment per agent), the pet's column and the words beside it, the band while it records.
+// Its words in its panel (the body), the app column's and the bell's in theirs; the slivers have none (a pet-less
+// engine's ">_" mark is its pet).
 static void agent_words(void)
 {
-    const max_box_t back = box_of(find_hit(MAX_HIT_BACK, 0));
-    max_box_t boxes[MAX_SEGS + 3] = {back, {0, back.h, back.w, HT_HEIGHT - back.h},
-                                     {back.w, back.h, HT_WIDTH - back.w, HT_HEIGHT - back.h}};
-    int n = 3;
-    for (int i = 0; i < max_m.hit_count; i++)
-        if (max_m.hits[i].kind == MAX_HIT_SEG) boxes[n++] = box_of(&max_m.hits[i]);
-    check_words(boxes, n);
+    const max_hit_t *body = find_hit(MAX_HIT_BODY, 0), *x = find_hit(MAX_HIT_AGENT_X, 0);
+    const max_box_t panel = body ? box_of(body) : (max_box_t){(int16_t)(x->x + x->w - DX(900)), 0, (int16_t)DX(900),
+                                                              (int16_t)HT_HEIGHT};
+    max_box_t boxes[3 + MAX_CELLS] = {panel, box_of(find_hit(MAX_HIT_BELL, 0)),
+                                      {0, 0, (int16_t)DX(196), (int16_t)HT_HEIGHT}};
+    for (int i = 0; i < max_m.cell_hits; i++) boxes[3 + i] = max_m.cell_box[i];
+    check_words(boxes, 3 + max_m.cell_hits);
     check_glass();
     check_hits();
+    for (int i = 0; i < max_m.cell_hits; i++) {
+        CHECK(apart(max_m.cell_box[i], panel));
+        for (int k = 0; k < S.count; k++)
+            if (S.runs[k].pro_kind == K_TEXT && within(ht_run_bounds(&S.runs[k]), max_m.cell_box[i]))
+                CHECK(!strcmp(S.runs[k].text, ">_"));
+    }
 }
 static void test_agent_page(void)
 {
     ring(NULL);
-    show(MAX_VIEW_AGENT, "c");   // done, its summary in Vietnamese
+    show(MAX_VIEW_AGENT, "c");   // done, its summary in Vietnamese; by need e a b c d: b and d beside it
     render_at(T0);
-    CHECK(HITS_ARE(MAX_HIT_BACK, MAX_HIT_SEG, MAX_HIT_SEG, MAX_HIT_SEG, MAX_HIT_SEG, MAX_HIT_SEG, MAX_HIT_BODY));
-    for (int i = 0; i < 5; i++) CHECK(find_hit(MAX_HIT_SEG, i) && max_find(max_m.seg_id[i]) != NULL);
-    CHECK(!strcmp(max_m.seg_id[2], "c"));
-    check_page_hit_last(MAX_HIT_BODY);
-    CHECK(word("Done") && word("Tap to talk") && word("Muse"));
+    CHECK(HITS_ARE(MAX_HIT_APPS, MAX_HIT_AGENT_X, MAX_HIT_BODY, MAX_HIT_BELL));
+    CHECK(max_m.cell_hits == 2 && !strcmp(max_m.cell_id[0], "b") && !strcmp(max_m.cell_id[1], "d"));
+    CHECK(runs_of(POD_VEIL) == 2 && max_m.cell_box[0].w == max_m.cell_box[1].w && max_m.cell_box[0].w < DX(200));
+    const max_box_t panel = box_of(find_hit(MAX_HIT_BODY, 0));
+    CHECK(panel.x == max_m.cell_box[0].x + max_m.cell_box[0].w && max_m.cell_box[1].x == panel.x + panel.w);
+    const max_hit_t *x = find_hit(MAX_HIT_AGENT_X, 0);
+    CHECK(x->y == 0 && x->x + x->w == panel.x + panel.w);   // at the panel's top right
+    CHECK(word("Done") && word("Tap to talk") && text_run("\xc4\x90\xc3\xa2y l\xc3\xa0"));
     agent_words();
-    // The clock closed its mic on nothing heard: the page says so, for its own agent only.
+    // The clock closed its mic on nothing heard: the band says so, for its own agent only.
     max_copy(max_m.talk_id, sizeof max_m.talk_id, "c");
     max_m.talk_closed = true;
     render_at(T0);
@@ -378,43 +410,47 @@ static void test_agent_page(void)
     CHECK(word("Tap to talk") && !word("Mic closed \xc2\xb7 tap to talk"));
     max_m.talk_closed = false;
     max_m.talk_id[0] = 0;
-    // Its pet moves, on its own beat; a logo holds still.
+    // Its pet moves, on its own beat; a logo holds still (the slivers' pets hold one frame).
     const uint32_t beat = max_motion_ms(T0);
     CHECK(beat > 0 && beat < MAX_WAKE_MS);
     set_engine("c", "gemini");
     render_at(T0);
     CHECK(max_motion_ms(T0) == MAX_WAKE_MS);
-    // Nothing said: "What's next?".
+    // The first of the row: slivers after it only; the last: before it.
+    show(MAX_VIEW_AGENT, "e");
+    render_at(T0);
+    CHECK(max_m.cell_hits == 2 && !strcmp(max_m.cell_id[0], "a") && !strcmp(max_m.cell_id[1], "b"));
+    CHECK(box_of(find_hit(MAX_HIT_BODY, 0)).x == DX(196));
+    agent_words();
+    show(MAX_VIEW_AGENT, "d");
+    render_at(T0);
+    CHECK(max_m.cell_hits == 2 && !strcmp(max_m.cell_id[0], "b") && !strcmp(max_m.cell_id[1], "c"));
+    agent_words();
+    // Nothing said: "No task yet", alone in the row.
     max_ui_agents((const pro_agent_row_t[]){{"z", "zulu", "claude", "m1", "MacBook Pro", "harness", NULL}}, 1, T0);
     show(MAX_VIEW_AGENT, "z");
     render_at(T0);
-    CHECK(word("What's next?") && HITS_ARE(MAX_HIT_BACK, MAX_HIT_SEG, MAX_HIT_BODY));
+    CHECK(word("No task yet") && word("zulu") && word("Resting") && max_m.cell_hits == 0);
+    CHECK(HITS_ARE(MAX_HIT_APPS, MAX_HIT_AGENT_X, MAX_HIT_BODY, MAX_HIT_BELL));
     agent_words();
-    // At work: the spinner word, the activity, the clock.
+    // At work: its spinner word on the chip, its activity.
     ring(NULL);
     show(MAX_VIEW_AGENT, "a");
     render_at(T0);
-    CHECK(word("Infusing") && word("2") && word("14"));   // the clock's 2:14, its colon drawn
-    // The last steps oldest first, each cut to its share of the row.
-    int read_at = -1, edit_at = -1;
-    for (int i = 0; i < S.count; i++) {
-        if (S.runs[i].pro_kind != K_TEXT) continue;
-        if (!strncmp(S.runs[i].text, "Read \xc2\xb7", 7)) read_at = i;
-        if (!strncmp(S.runs[i].text, "Edit \xc2\xb7", 7)) edit_at = i;
-    }
-    CHECK(read_at >= 0 && edit_at > read_at && strstr(S.runs[read_at].text, ELLIPSIS));
-    CHECK(S.runs[read_at].x < S.runs[edit_at].x);
+    CHECK(word("Infusing") && text_run("Editing the touch driver") && word("alpha"));
+    CHECK(word("alpha")->pro_font == &ph_sb_48);   // a name the large face draws
     agent_words();
     // An agent the bar cannot record for: where to talk to it, and no body to tap.
     ring("sf");
     show(MAX_VIEW_AGENT, "c");
     render_at(T0);
     CHECK(!find_hit(MAX_HIT_BODY, 0) && word("Talk to it in Harness") && !word("Tap to talk"));
+    CHECK(HITS_ARE(MAX_HIT_APPS, MAX_HIT_AGENT_X, MAX_HIT_BELL));
     agent_words();
 }
 
-// Recording: the band (Listening, its clock, the waveform, Tap to send and its ring, X), X's hit before the page's;
-// a frame every MAX_TALK_FRAME_MS. Sending: nothing to hit on the page.
+// Recording: the band (Listening, its clock, the waveform, Tap to send and its ring), X over the panel's top right; a
+// frame every MAX_TALK_FRAME_MS. Sending: X only.
 static void test_talking(void)
 {
     ring(NULL);
@@ -422,29 +458,27 @@ static void test_talking(void)
     talk("c", MAX_TALK_RECORDING, false);
     render_at(T0);
     CHECK(word("Listening") && word("Tap to send") && word("Say it" ELLIPSIS) && word("0:03"));
-    CHECK(HITS_ARE(MAX_HIT_BACK, MAX_HIT_SEG, MAX_HIT_SEG, MAX_HIT_SEG, MAX_HIT_SEG, MAX_HIT_SEG, MAX_HIT_TALK_CANCEL,
-                   MAX_HIT_BODY));
-    const max_hit_t *x = find_hit(MAX_HIT_TALK_CANCEL, 0);
-    CHECK(x->x + x->w == HT_WIDTH && x->y + x->h == HT_HEIGHT);
-    CHECK(max_motion_ms(T0) <= MAX_TALK_FRAME_MS && !word("Muse"));   // the band needs the engine's room
+    CHECK(HITS_ARE(MAX_HIT_APPS, MAX_HIT_AGENT_X, MAX_HIT_BODY, MAX_HIT_BELL));
+    CHECK(max_motion_ms(T0) <= MAX_TALK_FRAME_MS);
     agent_words();
-    // Heard: no "Say it", the ring fills.
+    // Heard: no "Say it", the ring fills, and the send is coming.
     talk("c", MAX_TALK_RECORDING, true);
     render_at(T0);
-    CHECK(!word("Say it" ELLIPSIS) && word("Listening"));
-    // Working while it records: the words stay, smaller, the steps go.
+    CHECK(!word("Say it" ELLIPSIS) && word("Listening") && text_run("Sending soon") && !word("Tap to send"));
+    agent_words();
+    // Working while it records: its words stay.
     show(MAX_VIEW_AGENT, "a");
     talk("a", MAX_TALK_RECORDING, true);
     render_at(T0);
-    CHECK(word("Listening") && !word("Edit \xc2\xb7 main/display/pro_display.c"));
+    CHECK(word("Listening") && text_run("Editing the touch driver"));
     agent_words();
-    // Sending: no X, no body; another agent's page: no band.
+    // Sending: X, no body; another agent's page: no band.
     talk("a", MAX_TALK_SENDING, true);
     render_at(T0);
-    CHECK(word("Sending" ELLIPSIS) && !find_hit(MAX_HIT_TALK_CANCEL, 0) && !find_hit(MAX_HIT_BODY, 0));
+    CHECK(word("Sending") && HITS_ARE(MAX_HIT_APPS, MAX_HIT_AGENT_X, MAX_HIT_BELL));
     show(MAX_VIEW_AGENT, "c");
     render_at(T0);
-    CHECK(!word("Sending" ELLIPSIS) && !find_hit(MAX_HIT_BODY, 0));   // the mic is busy for "a"
+    CHECK(!word("Sending") && !find_hit(MAX_HIT_BODY, 0) && word("Tap to talk"));   // the mic is busy for "a"
     talk("", MAX_TALK_IDLE, false);
 }
 
