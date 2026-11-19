@@ -996,7 +996,7 @@ export class SessionInputController {
       // Restore exposes the conversation before its engine exists. Only the same lifecycle may
       // supply its first process; a pane alone never authorizes typing into the startup shell.
       if (typed.sessionId && typed.boundAt != null && typed.launch?.state === 'starting'
-        && !typed.processIdentity && this.deps.launchRevision) {
+        && this.deps.launchRevision) {
         const restoredRevision = this.deps.launchRevision(session.agentId)
         const token = typed.launch.nativeToken
         const sameRestore = captureSessionBinding({ ...typed, processIdentity: null, evidenceRevision: undefined })

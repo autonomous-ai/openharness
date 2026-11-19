@@ -84,6 +84,44 @@ const settle = () => new Promise((done) => setTimeout(done, 0))
 const grid = (name: string) => ({ grid: name, baseUrl: `http://${name}.local`, model: 'm' })
 
 describe('discovery', () => {
+  it.each(['ordinary', 'starting', 'held', 'degraded'] as const)(
+    'leaves foreground lifecycle ownership untouched during background retirement: %s', async kind => {
+      const run = setup({ current: () => false })
+      const selected = row(kind === 'starting' ? { launch: { state: 'starting' } }
+        : kind === 'held' ? { launch: { state: 'held', service: 'store', detail: 'Waiting.' } } : {})
+      run.rows.set(selected.agentId, selected)
+      if (kind === 'degraded') run.degrade()
+      await run.handlers.onDormant(selected, 'engine gone')
+      await run.handlers.onRemoved(selected, 'pane gone')
+      expect(run.deps.invalidateTerminalControl).not.toHaveBeenCalled()
+      expect(run.deps.input.forget).not.toHaveBeenCalled()
+      expect(run.deps.questionWatcher.stop).not.toHaveBeenCalled()
+      expect(run.deps.stopHeartbeat).not.toHaveBeenCalled()
+      expect(run.deps.retainExitedSession).not.toHaveBeenCalled()
+      expect(run.deps.forgetSession).not.toHaveBeenCalled()
+      expect(run.deps.registry.setActive).not.toHaveBeenCalled()
+      expect(run.deps.announceSession).not.toHaveBeenCalled()
+    })
+
+  it('withdraws a pending background removal when a foreground lifecycle takes ownership', async () => {
+    let current = true
+    const run = setup({ current: () => current })
+    const selected = row()
+    run.rows.set(selected.agentId, selected)
+    let release!: () => void
+    const blocked = new Promise<void>(resolve => { release = resolve })
+    vi.mocked(run.deps.forgetSession).mockImplementation(async (id, opts) => {
+      await blocked
+      if (opts?.authority?.current?.() !== false) run.rows.delete(id)
+    })
+    const removal = run.handlers.onRemoved(selected, 'pane gone')
+    expect(run.deps.forgetSession).toHaveBeenCalledOnce()
+    current = false
+    release()
+    await removal
+    expect(run.rows.get(selected.agentId)).toEqual(selected)
+  })
+
   it.each(['same', 'missing backend', 'backend', 'cancelled', 'owner', 'gone', 'process', 'executable'] as const)(
     'revalidates every selected owner and the native discovery source: %s', async change => {
       let live = true
@@ -749,7 +787,8 @@ describe('discovery', () => {
   it('removes a row whose pane is gone, unless restore never ran this boot', () => {
     const run = setup()
     run.handlers.onRemoved(row(), 'pane gone')
-    expect(run.deps.forgetSession).toHaveBeenCalledWith('a1', { force: true, captured: row() })
+    expect(run.deps.forgetSession).toHaveBeenCalledWith('a1', { force: true, captured: row(), authority: { current: expect.any(Function) } })
+    expect(vi.mocked(run.deps.forgetSession).mock.calls[0]![1]!.authority!.current!()).toBe(true)
     run.degrade()
     run.handlers.onRemoved(row(), 'pane gone')
     expect(run.deps.forgetSession).toHaveBeenCalledTimes(1)
@@ -763,7 +802,7 @@ describe('discovery', () => {
     const run = setup()
     run.degrade('a2')
     run.handlers.onRemoved(row(), 'pane gone')
-    expect(run.deps.forgetSession).toHaveBeenCalledWith('a1', { force: true, captured: row() })
+    expect(run.deps.forgetSession).toHaveBeenCalledWith('a1', { force: true, captured: row(), authority: { current: expect.any(Function) } })
     run.handlers.onRemoved({ ...row(), agentId: 'a2' }, 'pane gone')
     expect(run.deps.forgetSession).toHaveBeenCalledTimes(1)
     expect(run.deps.registry.setActive).toHaveBeenCalledWith('a2', false)

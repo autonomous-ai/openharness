@@ -36,7 +36,7 @@ export interface DiscoveryDeps {
   attach: (session: RegisteredSession) => void
   /** The new committed agent took the previous agent's pane. */
   taken: (from: string, to: RegisteredSession) => void
-  forgetSession: (id: string, opts?: { force?: boolean; agentId?: string; captured?: RegisteredSession }) => Promise<void>
+  forgetSession: (id: string, opts?: { force?: boolean; agentId?: string; captured?: RegisteredSession; authority?: RegistryAuthority }) => Promise<void>
   announceSession: (session: RegisteredSession) => void
   bindObservedAgent: (observed: DiscoveredTerminalAgent) => Promise<void>
   syncRecapPool: () => void
@@ -323,7 +323,7 @@ export function createDiscoveryHandlers({
     if (refreshed) announceSession(refreshed)
   }
   const onDormant = async (agent: RegisteredSession, reason: string): Promise<void> => {
-    if (!agent.active || agent.launch?.state === 'held') return
+    if (!agent.active || agent.launch?.state === 'held' || operationCurrent?.(agent.agentId) === false) return
     const selected = structuredClone(agent), runtime = primaryRuntime(selected)
     const backend = terminals.backendFor(runtime)
     const current = () => operationCurrent?.(selected.agentId) !== false
@@ -360,6 +360,9 @@ export function createDiscoveryHandlers({
     announceSession(agent)
   }
   const onRemoved = async (agent: RegisteredSession, reason: string): Promise<void> => {
+    // A scan can finish while Resume owns this row. Keep its selection through publication.
+    const current = () => operationCurrent?.(agent.agentId) !== false
+    if (!current()) return
     // A missing waiting shell does not end the conversation held for preparation/recovery.
     if (agent.launch?.state === 'held') {
       registry.setActive(agent.agentId, false)
@@ -377,7 +380,7 @@ export function createDiscoveryHandlers({
       return
     }
     console.log(`[discovery] ${sid(agent.agentId)} removed · ${reason}`)
-    await forgetSession(agent.agentId, { force: true, captured: structuredClone(agent) })
+    await forgetSession(agent.agentId, { force: true, captured: structuredClone(agent), authority: { current } })
   }
   const onTerminalAvailability = (agent: RegisteredSession, available: boolean): void => {
     const changed = registry.terminalAvailable(agent.agentId) !== available

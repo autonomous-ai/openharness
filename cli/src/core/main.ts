@@ -2075,7 +2075,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // What the reconciler's scans mean for the registry (core/agents/discovery.ts).
   const discovery = createDiscoveryHandlers({
     registry,
-    current: id => !launchCancelled(id),
+    current: id => !launchCancelled(id) && !restartJobs.busy(id) && !restorePanes.busy(id),
     attach: agentHere,
     taken: (from, to) => agentLife.taken(from, to),
     forgetSession,

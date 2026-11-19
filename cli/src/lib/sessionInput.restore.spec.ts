@@ -86,8 +86,8 @@ it('keeps a team restore wait private, then refuses a new lifecycle during valid
   } finally { controller.forget('agent') }
 })
 
-it('does not treat a discovered process as the committed ready launch', async () => {
-  let row = restoring(), wake!: () => void
+it.each(['before input', 'during wait'] as const)('does not treat a process discovered %s as the committed ready launch', async arrival => {
+  let row = { ...restoring(), ...(arrival === 'before input' ? { processIdentity } : {}) }, wake!: () => void
   const onSubmitted = vi.fn(), onWaiting = vi.fn(), validateRuntime = vi.fn(async () => true)
   const controller = new SessionInputController({ getSession: () => row, readScreen: readInlineScreen,
     submission: inlineSubmission, validateRuntime, inject: async () => true, sendKey: async () => true,
