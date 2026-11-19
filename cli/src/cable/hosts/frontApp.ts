@@ -18,7 +18,11 @@ const EXE_APPS: Readonly<Record<string, string>> = {
   ghostty: 'ghostty',
   // Harness Desktop's Linux binary (desktop/linux/CMakeLists.txt, BINARY_NAME).
   harness: 'harness',
-  // The Claude and ChatGPT apps' Linux processes (cli/src/testing/recordedLinuxApps.ts, comm).
+}
+
+// The Claude and ChatGPT apps' Linux processes (cli/src/testing/recordedLinuxApps.ts, comm), lower-cased: never with
+// `.exe`, since ChatGPT.exe on Windows is OpenAI's chat app, not the Codex app.
+const LINUX_APPS: Readonly<Record<string, string>> = {
   'claude-desktop': 'claude',
   chatgpt: 'codex',
 }
@@ -26,8 +30,10 @@ const EXE_APPS: Readonly<Record<string, string>> = {
 /** The app id of the app in front, or FRONT_NONE. A bundle id matches whole, as detectApp reads it. */
 export function frontAppId(value: string): string {
   if (Object.hasOwn(BUNDLE_APPS, value)) return BUNDLE_APPS[value]
-  const exe = value.toLowerCase().replace(/\.exe$/, '')
-  return Object.hasOwn(EXE_APPS, exe) ? EXE_APPS[exe] : FRONT_NONE
+  const name = value.toLowerCase()
+  const exe = name.replace(/\.exe$/, '')
+  if (Object.hasOwn(EXE_APPS, exe)) return EXE_APPS[exe]
+  return exe === name && Object.hasOwn(LINUX_APPS, name) ? LINUX_APPS[name] : FRONT_NONE
 }
 
 // The spellings each app's window is known by on Linux: X11's WM_CLASS class and Wayland's app id, which some desktops
