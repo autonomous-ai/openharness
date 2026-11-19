@@ -692,9 +692,11 @@ export class DaemonCableHost implements CableHost {
     this.registry = registry
   }
 
-  /** That app's own order, for its ring alone. It reaches the dial on the session's next list, as any ring change. */
-  setRank(app: string, rank: RingRank): void {
-    this.ranks.set(app, rank)
+  /** That app's own order, for its ring alone; undefined drops it. It reaches the dial on the session's next list, as
+   *  any ring change. */
+  setRank(app: string, rank: RingRank | undefined): void {
+    if (rank) this.ranks.set(app, rank)
+    else this.ranks.delete(app)
   }
 
   /** That app's ring lists only the agents in scope while the app is shown and settled in front; undefined lists them
@@ -934,7 +936,9 @@ export class DaemonCableHost implements CableHost {
     const sourceOf = new Map(entries.map((e) => [e.agent, e.source]))
     const listed = entries.map((e) => e.agent)
     const list = apps ? this.appList(listed) : undefined
-    const { rows, total } = list ? this.appRing(listed, list.shown) : this.ring.select(listed)
+    // The single ring leaves resting rows to the app pages: sixteen recent resting threads would push live idle
+    // agents out of its 16 places.
+    const { rows, total } = list ? this.appRing(listed, list.shown) : this.ring.select(listed.filter((a) => !a.resting))
     const agents = rows.map((a): CableAgent => {
       // A Harness agent keeps the row the window would show (its chips too); another app's is drawn from what was heard.
       const row = byId.get(a.id) ?? { id: a.id, name: a.name, engine: a.engine, machineId: local.id, machine: local.name }

@@ -108,7 +108,7 @@ export class ClaudeAppSource implements HostSource {
   private slowest: number | undefined
   private said: number | undefined
   private over = 0
-  /** Whether the last pass failed, so a run of failures says one line. */
+  /** Whether the last pass of this start failed, so a run of failures says one line. */
   private failed = false
 
   constructor(private readonly deps: ClaudeAppSourceDeps) {}
@@ -117,6 +117,7 @@ export class ClaudeAppSource implements HostSource {
     if (this.running) return
     this.running = true
     this.slowest = undefined
+    this.failed = false
     const { root } = this.deps
     // Held before the folders are listed, so a store made between the two is still heard.
     this.unwatch = this.deps.watch([root, dirname(root)], (file) => this.rootChanged(file))
@@ -177,8 +178,12 @@ export class ClaudeAppSource implements HostSource {
     return this.rows.find(({ agent }) => agent.id === agentId)
   }
 
+  /** Each listener on its own: one that throws neither keeps the next from hearing nor fails a good read. devices.ts
+   *  runs each of its listeners through its part guard, which says what failed. */
   private emit(): void {
-    for (const listener of [...this.listeners]) listener()
+    for (const listener of [...this.listeners]) {
+      try { listener() } catch { /* said by the listener's own guard */ }
+    }
   }
 
   /** Drops the rows, told once if there were any. The next count is said again, even with as many rows. */
@@ -257,8 +262,8 @@ export class ClaudeAppSource implements HostSource {
     if (this.listing || this.named > 0 || this.again) void this.run()
   }
 
-  /** One pass: what waited, then a read. A store call or a listener that fails ends it with the rows kept; the next
-   *  change runs one. */
+  /** One pass: what waited, then a read. A store call that fails ends it with the rows kept; the next change runs
+   *  one. */
   private async run(): Promise<void> {
     const pass: Pass = { under: true, tooSoon: true, cancel: () => {} }
     this.pass = pass

@@ -8,6 +8,7 @@ import type { CableHostWiring, DaemonCableHost } from '../cable/cableHost.js'
 import { AppFilter, FRONT_SETTLE_MS } from '../cable/hosts/appFilter.js'
 import type { CodexRunEnd } from '../cable/hosts/codexQueue.js'
 import type { ClaudeAppSession } from '../cable/hosts/claudeAppStore.js'
+import type { CodexAppRead, CodexAppThread } from '../cable/hosts/codexAppThreads.js'
 import { CMUX_APP_BINARY, type CmuxClient, type CmuxInputState, type CmuxSession } from '../cable/hosts/cmuxCli.js'
 import { hcClientDeps, type HcClient, type HcPrompt, type HcSubscriber, type HcTerminal } from '../cable/hosts/hcClient.js'
 import { herdrClientDeps, type HerdrAnswer, type HerdrClient, type HerdrEntry, type HerdrPrompt, type HerdrSubscriber } from '../cable/hosts/herdrClient.js'
@@ -37,6 +38,7 @@ import type { ExternalProvider, ProcessView } from '../lib/sessionSearch/externa
 import type { TierInput } from '../lib/notifyTier.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { claudeAppFixture } from '../testing/claudeAppFixture.js'
+import { codexAppFixture } from '../testing/codexAppFixture.js'
 import { fakeCmux, touchStore } from '../testing/fakeCmux.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { herdrAppStatus } from '../testing/herdrAppStatus.js'
@@ -307,6 +309,12 @@ const noCmux: CmuxClient = {
   inputState: async () => undefined,
   paste: async () => false,
 }
+/** The ChatGPT app's threads as every spec but their own has them: no Codex home, so no spec reads the throwaway home's. */
+const noCodexApp: NonNullable<DevicesDeps['codexAppThreads']> = {
+  there: () => false,
+  read: async () => ({ ok: false, kind: 'ENOENT' }),
+  forget: () => {},
+}
 /** What the devices asked of opencode's service: recorded, so no spec reaches the developer's own opencode. It has no
  *  service.json, and its prompt fails. */
 const opencodeCalls: unknown[][] = []
@@ -451,7 +459,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; claudeFullscreen?: null; claudeManagedSettings?: string } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; claudeFullscreen?: null; claudeManagedSettings?: string } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
   // None, and no read under way, unless the spec gives its own; null leaves the devices to read this computer's.
   const orcaHomes = over.orcaHomes ?? fakeOrcaHomes()
@@ -478,6 +486,10 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     // None unless the spec gives its own: on macOS the devices read the Claude app's store under the suite's throwaway
     // home, where there is none.
     claudeAppStore: over.claudeAppStore,
+    // No Codex home and no ChatGPT app unless the spec gives its own: no spec reads the throwaway home's ~/.codex, or runs
+    // plutil on this Mac's /Applications. null leaves each out.
+    codexAppThreads: over.codexAppThreads === null ? undefined : over.codexAppThreads ?? noCodexApp,
+    bundleId: over.bundleId === null ? undefined : over.bundleId ?? (async () => undefined),
     decideTier: over.decideTier === null ? undefined : over.decideTier ?? (async () => ({ tier: 'alert', by: 'test', detail: '', ms: 0 })),
     faults: new Set(over.faults ?? []),
     log: (line) => { logs.push(line) },
@@ -8335,7 +8347,9 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
   const host = () => seen.dial as unknown as DaemonCableHost
   /** A dial on the cable, on this computer's agents: no window. */
   const attach = (port: DevicesPort) => { seen.host.watching!(true); port.swarms(null) }
-  const listed = async () => (await host().listAgentSnapshot()).agents.map(({ id, name, caps }) => ({ id, name, caps }))
+  /** The page a dial that says appFilter reads, the Claude app's while it is the one app with rows: the store's resting
+   *  rows show on app pages only, never in the single machine ring (D7). */
+  const listed = async () => (await host().listAgentSnapshot({ apps: true })).agents.map(({ id, name, caps }) => ({ id, name, caps }))
   const ids = async () => (await listed()).map(({ id }) => id)
   /** The list a dial that says appFilter reads with no window. */
   const appList = async (port: DevicesPort) => { port.swarms(null); return (await host().listAgentSnapshot({ apps: true })).apps }
@@ -8526,7 +8540,7 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
     await live()
     const ghostty = { hostHints: { TERM_PROGRAM: 'ghostty' } }
     port.observed(hook('session-start', ghostty))
-    expect(await ids()).toEqual([ID])
+    expect((await host().listAgentSnapshot()).agents.map(({ id }) => id)).toEqual([ID])
     expect(host().appOf(ID)).toBe('ghostty')
     port.observed(hook('session-end', ghostty))
     expect(await listed()).toEqual([{ id: ID, name: 'Fix the build', caps: 'sf' }])
@@ -8595,6 +8609,304 @@ describe("the Claude app's Code sessions, from its store (docs/plans/2026-11-19-
     attach(port)
     await vi.waitFor(() => expect(logs).toContain('[claude-app] listed · 1 sessions'))
     expect(await listed()).toEqual([{ id: ID, name: 'Fix the build', caps: 'sf' }])
+  })
+})
+
+describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-dial-chatgpt-ring-and-follow-design.md)", () => {
+  /** The app's Codex home in the suite's throwaway home, never the person's own. */
+  const CODEX_HOME = join(homedir(), '.codex')
+  /** Where the app is looked for: /Applications, then the home's own Applications. */
+  const APPS = join('/Applications', 'ChatGPT.app')
+  const HOME_APPS = join(homedir(), 'Applications', 'ChatGPT.app')
+  const BUNDLE = 'com.openai.codex'
+  /** A thread of the app (Codex's session id), and two more. */
+  const THREAD = '7d3e9a10-2b4c-4d5e-8f60-1a2b3c4d5e6f'
+  const SECOND = '2c4e6a80-1b3d-4f5a-9c7e-0d2f4b6a8c0e'
+  const THIRD = '9e8d7c6b-5a49-4382-a1b0-c9d8e7f6a5b4'
+  const ID = observedAgentId('codex', THREAD)
+  /** THREAD's row as the reader lists it. */
+  const ROW = { id: ID, name: 'Fix the build', caps: 'sf' }
+  const opened = (thread: string): [string, string[], number] => ['/usr/bin/open', ['-b', BUNDLE, `codex://threads/${thread}`], 10_000]
+  /** A thread the reader lists: in /work/api, named Fix the build. */
+  const thread = (over: Partial<CodexAppThread> = {}): CodexAppThread =>
+    ({ id: THREAD, cwd: '/work/api', name: 'Fix the build', at: 1, inProject: false, ...over })
+  /** A read of these threads, in the sidebar's order given, else in theirs. */
+  const read = (listed: CodexAppThread[], order = listed.map(({ id }) => id)): CodexAppRead =>
+    ({ ok: true, order, listed, rows: listed.length, skipped: 0 })
+  /** Codex in the ChatGPT app on THREAD, as its hook says. */
+  const hook = (event: ObservedHookEvent['event']): ObservedHookEvent => ({
+    engine: 'codex', sessionId: THREAD, event, cwd: '/work/api', callerPid: 4242, transcriptPath: `/t/${THREAD}.jsonl`,
+    hostHints: { __CFBundleIdentifier: BUNDLE },
+  })
+  const host = () => seen.dial as unknown as DaemonCableHost
+  /** A dial on the cable, on this computer's agents: no window. */
+  const attach = (port: DevicesPort) => { seen.host.watching!(true); port.swarms(null) }
+  /** The page a dial that says appFilter reads, the ChatGPT app's while it is the one app with rows: the threads' resting
+   *  rows show on app pages only, never in the single machine ring (D7). */
+  const listed = async () => (await host().listAgentSnapshot({ apps: true })).agents.map(({ id, name, caps }) => ({ id, name, caps }))
+  const ids = async () => (await listed()).map(({ id }) => id)
+  const codexLines = () => logs.filter((line) => line.startsWith('[codex-app]'))
+  /** The fake timers' clock is the devices' too: the settle moves with it. */
+  const wait = (ms: number) => vi.advanceTimersByTimeAsync(ms)
+  const flush = () => wait(0)
+  beforeEach(() => {
+    vi.useFakeTimers()
+    // /Applications first, whatever the shell running the suite says.
+    vi.stubEnv('HARNESS_APPLICATIONS_DIR', undefined)
+  })
+
+  /**
+   * The devices on macOS with a reader of the app's threads the test answers, the dial not attached yet. The reader's
+   * calls are recorded: its home is there, and `read` answers `fake.read`. Each bundle the look asks of is recorded and
+   * answered from `fake.ids`, the app in /Applications unless the test says otherwise, or, while `hold` is set, held until
+   * the test lands it with an id. Every `open` is a recorded run, nothing executed, the next `failing` of them answering
+   * code 1. `live` attaches the dial and lets the look and the first read land.
+   */
+  const withThreads = (over: Parameters<typeof start>[0] = {}) => {
+    const fake = {
+      read: read([thread()]),
+      calls: [] as string[],
+      asked: [] as string[],
+      ids: new Map<string, string>([[APPS, BUNDLE]]),
+      hold: false,
+      held: [] as Array<(id: string | undefined) => void>,
+      failing: 0,
+    }
+    const threads: NonNullable<DevicesDeps['codexAppThreads']> = {
+      there: () => { fake.calls.push('there'); return true },
+      read: async () => { fake.calls.push('read'); return fake.read },
+      forget: () => { fake.calls.push('forget') },
+    }
+    const bundleId: NonNullable<DevicesDeps['bundleId']> = async (app) => {
+      fake.asked.push(app)
+      return fake.hold ? new Promise((resolve) => { fake.held.push(resolve) }) : fake.ids.get(app)
+    }
+    const onMac = {
+      ...orca, platform: 'darwin' as const,
+      run: async (file: string, args: string[], timeoutMs: number) => {
+        orcaRuns.push([file, args, timeoutMs])
+        if (fake.failing === 0) return { code: 0, stdout: '' }
+        fake.failing--
+        return { code: 1, stdout: '' }
+      },
+    }
+    const listener = fakeListener()
+    const started = start({ faults: ['fleet'], listen: listener.listen, orca: onMac, now: () => Date.now(), tty: async () => undefined,
+      codexAppThreads: threads, bundleId, ...over })
+    const front = async (to: string) => {
+      expect(listener.front(to)).toBeUndefined()
+      await wait(FRONT_SETTLE_MS)
+    }
+    const live = async () => {
+      attach(started.port)
+      await flush()
+    }
+    return { ...started, fake, listener, front, live }
+  }
+
+  it('on macOS with a dial attached the app\'s threads are listed sf, idle, on the ChatGPT page, the Codex home alone watched; detached, the source stops, its watch closes, the reader forgets and the rank goes', async () => {
+    const { fake, live } = withThreads()
+    const rank = vi.spyOn(host(), 'setRank')
+    await flush()
+    // No dial: nothing is read, and the app is not looked for.
+    expect(fake.calls).toEqual([])
+    expect(fake.asked).toEqual([])
+    await live()
+    expect(await listed()).toEqual([ROW])
+    expect(host().appOf(ID)).toBe('codex')
+    // Idle: no turn is told.
+    expect(calls('turnStarted')).toEqual([])
+    expect(watchedFolders.calls).toEqual(expect.arrayContaining([[[CODEX_HOME], expect.any(Function)]]))
+    expect(watchedFolders.calls.filter(([folders]) => (folders as string[]).includes(homedir()))).toEqual([])
+    expect(rank.mock.lastCall).toEqual(['codex', new Map([[ID, 0]])])
+    seen.host.watching!(false)
+    expect(await listed()).toEqual([])
+    expect(watchedFolders.stopped).toBe(watchedFolders.calls.length)
+    expect(fake.calls.at(-1)).toBe('forget')
+    expect(rank.mock.lastCall).toEqual(['codex', undefined])
+  })
+
+  it.each([['off macOS', 'linux', true], ['with HARNESS_DEVICE_OBSERVED off', 'darwin', false]] as const)('%s there is no source', async (_, platform, on) => {
+    const switched = env as { HARNESS_DEVICE_OBSERVED: boolean }
+    switched.HARNESS_DEVICE_OBSERVED = on
+    onTestFinished(() => { switched.HARNESS_DEVICE_OBSERVED = true })
+    const { fake, live } = withThreads({ orca: { ...orca, platform } })
+    await live()
+    expect(fake.calls).toEqual([])
+    expect(fake.asked).toEqual([])
+  })
+
+  // The PM, 2026-11-19 (question 2): a Mac with Codex CLI alone gets no ChatGPT page of threads a tap cannot open.
+  it.each([
+    ['in /Applications', [[APPS, BUNDLE]], [APPS], true],
+    ['in ~/Applications alone', [[HOME_APPS, BUNDLE]], [APPS, HOME_APPS], true],
+    ['in neither', [], [APPS, HOME_APPS], false],
+    ['of another id in both', [[APPS, 'com.openai.chat'], [HOME_APPS, 'com.openai.chat']], [APPS, HOME_APPS], false],
+  ] as const)('the source runs only with the ChatGPT app installed, looked for in /Applications, then ~/Applications: %s', async (_, found, asked, starts) => {
+    const { fake, live } = withThreads()
+    fake.ids = new Map<string, string>(found)
+    await live()
+    expect(fake.asked).toEqual(asked)
+    expect(fake.calls).toEqual(starts ? ['there', 'read'] : [])
+    expect(await listed()).toEqual(starts ? [ROW] : [])
+    // The look says nothing: with no app, the page is today's.
+    expect(codexLines()).toEqual(starts ? expect.arrayContaining(['[codex-app] watch · on']) : [])
+  })
+
+  it('the app is looked for at each attach: gone at the next attach, the source is stopped; back, it starts', async () => {
+    const { fake, live } = withThreads()
+    await live()
+    expect(await listed()).toEqual([ROW])
+    seen.host.watching!(false)
+    fake.ids = new Map()
+    await live()
+    expect(await listed()).toEqual([])
+    expect(fake.calls.filter((call) => call === 'read')).toHaveLength(1)
+    seen.host.watching!(false)
+    fake.ids = new Map([[APPS, BUNDLE]])
+    await live()
+    expect(await listed()).toEqual([ROW])
+    expect(fake.asked).toEqual([APPS, APPS, HOME_APPS, APPS])
+  })
+
+  // Review Focus 7: each look is a plutil run, up to 1 s.
+  it('a detach while the app is looked for starts nothing; the next attach looks again', async () => {
+    const { fake, live } = withThreads()
+    fake.hold = true
+    await live()
+    expect(fake.asked).toEqual([APPS])
+    seen.host.watching!(false)
+    fake.held.shift()!(BUNDLE)
+    await flush()
+    expect(fake.calls).toEqual([])
+    expect(await listed()).toEqual([])
+    fake.hold = false
+    await live()
+    expect(fake.asked).toEqual([APPS, APPS])
+    expect(await listed()).toEqual([ROW])
+  })
+
+  it('a look that lands after a newer attach\'s look began starts nothing', async () => {
+    const { fake, live } = withThreads()
+    fake.hold = true
+    await live()
+    seen.host.watching!(false)
+    fake.hold = false
+    fake.ids = new Map()
+    await live()
+    expect(fake.asked).toEqual([APPS, APPS, HOME_APPS])
+    fake.held.shift()!(BUNDLE)
+    await flush()
+    expect(fake.calls).toEqual([])
+    expect(await listed()).toEqual([])
+  })
+
+  it.each([
+    ['/tmp/apps', [join('/tmp/apps', 'ChatGPT.app'), HOME_APPS]],
+    ['apps', [APPS, HOME_APPS]],
+  ] as const)('HARNESS_APPLICATIONS_DIR, when absolute, is looked in for the app in place of /Applications; a relative one is ignored: %s', async (dir, asked) => {
+    vi.stubEnv('HARNESS_APPLICATIONS_DIR', dir)
+    const { fake, live } = withThreads()
+    fake.ids = new Map()
+    await live()
+    expect(fake.asked).toEqual(asked)
+  })
+
+  it('the ChatGPT page\'s ring is in the reader\'s order', async () => {
+    const { fake, live } = withThreads()
+    // Newest first, as a read lists them; the sidebar puts SECOND's project first.
+    fake.read = read([thread({ at: 3 }), thread({ id: SECOND, name: 'Ship it', at: 2 }), thread({ id: THIRD, name: 'Tidy up', at: 1 })],
+      [SECOND, THREAD, THIRD])
+    await live()
+    expect(await ids()).toEqual([SECOND, THREAD, THIRD].map((id) => observedAgentId('codex', id)))
+  })
+
+  it('a hooked thread the reader does not list takes its place in the sidebar\'s order', async () => {
+    const { fake, port, live } = withThreads()
+    fake.read = read([thread({ at: 2 }), thread({ id: THIRD, name: 'Tidy up', at: 1 })], [THREAD, SECOND, THIRD])
+    await live()
+    port.observed({ ...hook('session-start'), sessionId: SECOND, transcriptPath: `/t/${SECOND}.jsonl` })
+    expect(await ids()).toEqual([THREAD, SECOND, THIRD].map((id) => observedAgentId('codex', id)))
+  })
+
+  it('a tap on a thread row is one open of its link with the ChatGPT bundle, and the dial\'s own move', async () => {
+    const { listener, live } = withThreads()
+    await live()
+    // The settle's echo is the Claude app's alone: the move shows through a Terminal tab report waiting for its settle.
+    expect(listener.front('terminal-app')).toBeUndefined()
+    expect((listener.given[0].handlers.tab as ListenerHandler)
+      .handle({ type: 'tab', app: 'terminal-app', tty: '/dev/ttys023' }, new AbortController().signal)).toBeUndefined()
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns).toEqual([opened(THREAD)])
+    await wait(FRONT_SETTLE_MS)
+    expect(logs.filter((line) => line.startsWith('[device] tab'))).toEqual(['[device] tab · skipped · echo'])
+  })
+
+  it('a tap whose link fails brings the app by its bundle, said in one line with no id', async () => {
+    const { fake, live } = withThreads()
+    await live()
+    fake.failing = 1
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(orcaRuns).toEqual([opened(THREAD), ['/usr/bin/open', ['-b', BUNDLE], 10_000]])
+    expect(logs.filter((line) => line.startsWith('[device] open'))).toEqual(['[device] open · codex · fallback'])
+    expect(logs.filter((line) => line.includes(THREAD))).toEqual([])
+  })
+
+  it('a rest with the ChatGPT app in front shows the thread by its link; with another app in front it has no pane', async () => {
+    const { front, live } = withThreads()
+    await live()
+    await front('codex')
+    expect(host().swipeSwitches(ID)).toBe(true)
+    host().swipeEnded(ID, 'rest')
+    await flush()
+    expect(orcaRuns).toEqual([opened(THREAD)])
+    // No pane: the dial sends no rest, and nothing more runs.
+    await front('orca')
+    expect(host().swipeSwitches(ID)).toBe(false)
+    expect(orcaRuns).toEqual([opened(THREAD)])
+  })
+
+  it('a hooked ChatGPT thread the reader lists is one row, under the same id, named as the reader names it', async () => {
+    const { port, live } = withThreads()
+    await live()
+    port.observed(hook('session-start'))
+    // The hook's copy, with caps of its own: named as the reader names the thread, never by its folder.
+    expect((await listed()).map(({ id, name }) => ({ id, name }))).toEqual([{ id: ID, name: 'Fix the build' }])
+  })
+
+  // On every platform: the reader the devices build is what test:core holds to 100% in CI on Linux and Windows too.
+  it('with no reader given the devices read the Codex home under the home folder', async () => {
+    vi.useRealTimers()
+    // The suite's throwaway home (vitest.setup.ts), never the person's: only the Codex home the fixture makes goes.
+    expect(homedir().startsWith(`${tmpdir()}${sep}`)).toBe(true)
+    onTestFinished(() => rmSync(CODEX_HOME, { recursive: true, force: true }))
+    codexAppFixture(CODEX_HOME).threads([{ id: THREAD, cwd: '/work/api', recencyAtMs: Date.now() }])
+    const { port } = start({ faults: ['fleet'], orca: { ...orca, platform: 'darwin' }, tty: async () => undefined, codexAppThreads: null,
+      bundleId: async (app) => app === APPS ? BUNDLE : undefined })
+    attach(port)
+    await vi.waitFor(() => expect(logs).toContain('[codex-app] listed · 1 threads · 0 in projects'), { timeout: 5_000 })
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+  })
+
+  it.skipIf(process.platform !== 'darwin')('with no reader or look given the devices find the app by its Info.plist and read the Codex home under the home folder', async () => {
+    vi.useRealTimers()
+    // The suite's throwaway home (vitest.setup.ts), never the person's: only the Codex home the fixture makes goes.
+    expect(homedir().startsWith(`${tmpdir()}${sep}`)).toBe(true)
+    onTestFinished(() => rmSync(CODEX_HOME, { recursive: true, force: true }))
+    codexAppFixture(CODEX_HOME).threads([{ id: THREAD, cwd: '/work/api', recencyAtMs: Date.now() }])
+    // The app's Info.plist alone, in a folder of the test's own in place of /Applications: plutil reads it.
+    const apps = join(dataDir, 'Applications')
+    mkdirSync(join(apps, 'ChatGPT.app', 'Contents'), { recursive: true })
+    writeFileSync(join(apps, 'ChatGPT.app', 'Contents', 'Info.plist'),
+      `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>${BUNDLE}</string></dict></plist>\n`)
+    vi.stubEnv('HARNESS_APPLICATIONS_DIR', apps)
+    // The suite fakes readBundleId for the tmux client's walk: this test is the one that reads a real Info.plist.
+    const { readBundleId } = await vi.importActual<typeof import('../cable/hosts/scannedApp.js')>('../cable/hosts/scannedApp.js')
+    readers.bundleId.mockImplementation((bundle) => readBundleId(bundle))
+    const { port } = start({ faults: ['fleet'], orca: { ...orca, platform: 'darwin' }, tty: async () => undefined, codexAppThreads: null, bundleId: null })
+    attach(port)
+    await vi.waitFor(() => expect(logs).toContain('[codex-app] listed · 1 threads · 0 in projects'), { timeout: 5_000 })
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
   })
 })
 

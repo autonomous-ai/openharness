@@ -3308,6 +3308,28 @@ describe('ObservedSource panes', () => {
     expect(src.list().find((a) => a.sessionId === 's2')!.name).toBe('Dev')
   })
 
+  // The ChatGPT page names its threads through the codex pane names (docs/plans/2026-11-19-dial-chatgpt-ring-and-follow-design.md, D4).
+  it('a hooked ChatGPT thread is called by the codex pane names, and keeps the name at its next hook', () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    const inApp = { engine: 'codex' as const, sessionId: THREAD, hostHints: { __CFBundleIdentifier: 'com.openai.codex' } }
+    src.ingest(ev('session-start', inApp))
+    src.setPaneNames('codex', named([THREAD, 'Fix the build']), none)
+    expect(src.list()[0].name).toBe('Fix the build')
+    src.ingest(ev('turn-start', inApp))
+    expect(src.list()[0].name).toBe('Fix the build')
+  })
+
+  it('an empty placed map places no Codex thread at the codex pane: a terminal thread keeps its folder\'s name and its tap', () => {
+    const { actions } = fakeActions()
+    const { src, ev } = setup({ actions })
+    src.ingest(ev('session-start', { engine: 'codex', sessionId: THREAD, hostHints: { TERM_PROGRAM: 'ghostty' } }))
+    src.setPaneNames('codex', named([THREAD, 'Fix the build']), none)
+    const agent = src.list()[0]
+    expect(agent.name).toBe('proj')
+    expect(src.placedAt(agent.id, 'codex')).toBeUndefined()
+  })
+
   it('its own title (the hook\'s) and a user record name win over a pane name the person did not set', async () => {
     const { actions } = fakeActions()
     const s = setup({ actions, record: async () => ({ name: 'Mine' }) })

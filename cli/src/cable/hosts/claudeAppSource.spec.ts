@@ -560,12 +560,29 @@ describe("the Claude app's source (docs/plans/2026-11-19-dial-claude-app-session
       expect(failed()).toHaveLength(2)
     })
 
-    it('a listener that throws throws nothing into the devices process, and read · failed is said', async () => {
+    it('read · failed is said again for the first failure after a stop and a start', async () => {
       const s = setup()
+      s.source.start()
+      await s.fail()
+      s.gap()
+      s.source.stop()
+      s.source.start()
+      await s.fail()
+      expect(s.log.filter((line) => line.startsWith('[claude-app] read · failed'))).toHaveLength(2)
+    })
+
+    it('a listener that throws costs the listeners after it nothing, is no failed read, and throws nothing', async () => {
+      const s = setup()
+      let heard = 0
       s.source.onChange(() => { throw new Error('broken') })
+      s.source.onChange(() => { heard++ })
       s.source.start()
       await s.land()
-      expect(s.log.at(-1)).toBe('[claude-app] read · failed · Error')
+      expect(heard).toBe(1)
+      expect(s.changes).toBe(1)
+      expect(s.log.filter((line) => line.startsWith('[claude-app] read · failed'))).toEqual([])
+      expect(() => s.source.stop()).not.toThrow()
+      expect(heard).toBe(2)
     })
   })
 
