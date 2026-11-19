@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { alive } from '../testing/spawnedRuns.js'
 import { tiedScene } from '../testing/tiedStandIn.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 import { execFileTied, spawnTied, type TiedExecError, type TiedExecOptions } from './tied.js'
 
 // The next spawn fails as Node's does out of fds (EMFILE), here in this process so its coverage counts: a child never
@@ -95,7 +96,7 @@ async function fds(child: ChildProcess): Promise<number[]> {
 /** Writes an executable shell script at `path`, its folder made first. */
 function script(path: string, text: string): void {
   mkdirSync(dirname(path), { recursive: true })
-  writeFileSync(path, `#!/bin/sh\n${text}\n`, { mode: 0o755 })
+  writeExecutable(path, `#!/bin/sh\n${text}\n`)
 }
 
 const shells = ['/bin/sh', '/bin/bash', '/bin/zsh'].filter(shell => existsSync(shell))

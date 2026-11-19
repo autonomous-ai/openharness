@@ -19,6 +19,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { isDeepStrictEqual } from 'node:util'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { PROCESS_ENGINES, type AgentEngine } from './types.js'
 import { baseNode } from '../harnessd/baseNode.js'
@@ -33,7 +34,7 @@ const pane = vi.hoisted(() => ({ calls: [] as Array<Record<string, unknown>>, tm
 const init = vi.hoisted(() => ({ calls: [] as Array<Record<string, unknown>>, code: 0 as number | null, timedOut: false }))
 vi.mock('../lib/createAgentPane.js', () => ({
   createAndRegisterPane: vi.fn(async (input: Record<string, unknown>) => {
-    pane.calls.push(input)
+    pane.calls.push({ ...input, argv: (input.argv as (attempt: number) => string[])(1) })
     return { ok: false, error: 'RECORDED', detail: 'the pane is not opened by this spec' }
   }),
 }))
@@ -205,12 +206,20 @@ async function logged<T>(run: () => Promise<T>): Promise<{ value: T; lines: stri
   const warn = vi.spyOn(console, 'warn').mockImplementation(keep)
   try { return { value: await run(), lines } } finally { log.mockRestore(); warn.mockRestore() }
 }
-const home = (): unknown => tree(join(root, 'home'))
-/** A home whose Claude Code and Codex have been run before: each keeps its folder trust in a file it made. */
+const home = (): unknown => {
+  const files = tree(join(root, 'home'))!
+  // The empty `.harness` resetHome makes is the test's own; whatever a launch puts in it stays in the record.
+  if (isDeepStrictEqual(files['.harness'], { dir: {} })) delete files['.harness']
+  return files
+}
+/** A home whose Claude Code and Codex have been run before: each keeps its folder trust in a file it made. Harness ran there
+ *  before the XDG move (`~/.harness` is in it), so linux's launch names `$HOME/.harness/…` as darwin's does and the record
+ *  holds for both; lib/engineLaunch.spec.ts checks the text on a moved home. */
 const resetHome = (): void => {
   rmSync(join(root, 'home'), { recursive: true, force: true })
   write(join(root, 'home', '.claude.json'), '{\n  "projects": {}\n}\n')
   write(join(root, 'home', '.codex', 'config.toml'), 'model = "gpt-5"\n')
+  mkdirSync(join(root, 'home', '.harness'))
 }
 /** The pane a launch asked for, as far as a harness has a say in it. */
 const paneOf = (call: Record<string, unknown> | undefined): unknown => call ? {

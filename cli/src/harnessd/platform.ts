@@ -391,7 +391,7 @@ export interface PlatformDeps {
   configHome?: string
   /** Windows: the user name (USERNAME, no domain), which names the task. */
   user?: string
-  /** Windows: the data folder, where the task's definition and a stop are written. `~/.harness/cli/data` when unset. */
+  /** Windows: the data folder, where the task's definition and a stop are written. Task Scheduler needs it. */
   dataDir?: string
   /** When this computer started (`bootTimeMs`). */
   bootTime?: () => number
@@ -497,14 +497,17 @@ export class PlatformService {
   /** `os`: the unit is Harness OS's own (OS_SYSTEMD_UNIT), not the one `harness service install` writes. */
   constructor(readonly platform: PlatformName, private readonly deps: PlatformDeps, readonly os = false) {
     if (os && platform !== 'systemd') throw new Error('Harness OS runs harnessd under systemd')
+    // The master imports no path rule (config/harnessHome.ts): the folder is its caller's.
+    if (platform === 'taskscheduler' && !deps.dataDir) throw new Error('Task Scheduler needs the daemon\'s data folder')
   }
 
   private get unit(): string {
     return this.os ? OS_SYSTEMD_UNIT : SYSTEMD_UNIT
   }
 
+  /** Read only under Task Scheduler, whose service the constructor gave a data folder. */
   private get dataDir(): string {
-    return this.deps.dataDir ?? join(this.deps.home, '.harness', 'cli', 'data')
+    return this.deps.dataDir!
   }
 
   private get stoppedFile(): string {

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -17,6 +17,8 @@ import {
   HANDOFF_DIR, HandoffError, MAX_FORK_HOPS, cutTurnsAt, excludePathOf, handoffBaseName, isSubagentTranscript, prepareAgentHandoff, redactHandoffSecrets,
   renderHandoff, renderTranscript, repoState, secureText, type HandoffDeps, type HandoffRequest, type HandoffResult,
 } from './agentHandoff.js'
+import { writeExecutable } from '../testing/executableFixture.js'
+import { MISSING_HELPER, REPLACED_PROGRAM } from '../engines/kit/identityScan.js'
 
 // What the publication does on disk, in order, while `on`: each flush (fsync) and each name it adds to a directory.
 const disk = vi.hoisted(() => ({ on: false, seq: 0, flushes: [] as Array<{ seq: number; ino: bigint; directory: boolean; state: string }>,
@@ -497,12 +499,14 @@ describe('prepareAgentHandoff: a repository', () => {
 
   // The hold names a program updated while it ran: no retry reads it, only a restart. The reply says so in a code.
   it('names a held binding whose program was replaced, and only that one', async () => {
-    const replaced = 'Conversation identity is held: the agent\u2019s program was replaced on disk while it was running; restart the agent.'
-    await expect(prepareAgentHandoff(depsFor([session({ identityHold: replaced })]), request()))
+    await expect(prepareAgentHandoff(depsFor([session({ identityHold: REPLACED_PROGRAM })]), request()))
       .rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE', hold: 'PROGRAM_REPLACED' })
-    const other = await prepareAgentHandoff(depsFor([session({ identityHold: 'Conversation identity is held: an exact transcript could not be read.' })]), request()).catch(e => e)
-    expect(other).toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
-    expect(other.hold).toBeUndefined()
+    // A reinstall restarts the daemon, so a missing helper is not the restart PROGRAM_REPLACED asks for.
+    for (const identityHold of ['Conversation identity is held: an exact transcript could not be read.', MISSING_HELPER]) {
+      const other = await prepareAgentHandoff(depsFor([session({ identityHold })]), request()).catch(e => e)
+      expect(other).toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+      expect(other.hold).toBeUndefined()
+    }
   })
 
   const claudeLines = (...records: object[]) => records.map((r) => JSON.stringify(r)).join('\n') + '\n'
@@ -611,8 +615,7 @@ describe('prepareAgentHandoff: a repository', () => {
   function fakeGit(body: string): string {
     const real = execFileSync('which', ['git'], { encoding: 'utf8' }).trim()
     const path = join(root, 'gitwrap')
-    writeFileSync(path, `#!/bin/sh\n${body.replaceAll('REAL', real)}\nexec ${real} "$@"\n`)
-    chmodSync(path, 0o755)
+    writeExecutable(path, `#!/bin/sh\n${body.replaceAll('REAL', real)}\nexec ${real} "$@"\n`)
     return path
   }
 

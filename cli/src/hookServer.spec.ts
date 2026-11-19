@@ -478,6 +478,8 @@ describe('process-owned hook server', () => {
     ['/api/hook/turn-start', {}, 'onTurnStart'],
     ['/api/hook/tool-start', { toolUseId: 'tool-1', toolName: 'Task' }, 'onToolStart'],
     ['/api/hook/turn-stop', { status: 'error' }, 'onTurnStop'],
+    ['/api/hook/wait', { hookEvent: 'PermissionRequest' }, 'onPersonWait'],
+    ['/api/hook/subagent', { hookEvent: 'SubagentStart' }, 'onSubagent'],
   ] as const)('rejects a forged bound-session mutation on %s', async (path, extra, handlerName) => {
     const handler = vi.fn()
     const resolveHookAgent = vi.fn(async () => ({
@@ -525,6 +527,120 @@ describe('process-owned hook server', () => {
     for (const value of [undefined, '', 'soon', '-5', '0', '1.5', '1e400']) {
       expect(hookFiredAt({ headers: { 'x-harness-hook-fired-at': value } })).toBeUndefined()
     }
+  })
+
+  describe('the wait and subagent routes', () => {
+    const hook = (base: string, headers: Record<string, string>, path: string, extra: Record<string, unknown> = {}) =>
+      fetch(`${base}${path}`, { method: 'POST', headers,
+        body: JSON.stringify({ engine: 'claude', sessionId: 'real-session', tmuxPane: '%1', callerPid: 123, ...extra }) })
+    /** The session bound to the pane its hook ran in: the process the hook resolves to is its agent's. */
+    const bound = () => {
+      const agent = { engine: 'claude', sessionId: 'real-session', agentId: 'agent-1', runtimes: [], processIdentity: null } as unknown as RegisteredSession
+      vi.spyOn(registry, 'bySession').mockReturnValue(agent)
+      vi.spyOn(registry, 'byAgent').mockReturnValue(agent)
+      return vi.fn(async () => agent)
+    }
+
+    it('hands a wait on with when its engine ran it', async () => {
+      const onPersonWait = vi.fn()
+      const { base, headers } = await start({ onPersonWait, resolveHookAgent: bound() })
+      const waited = await hook(base, { ...headers, 'x-harness-hook-fired-at': '1700000000000' }, '/api/hook/wait',
+        { hookEvent: 'PermissionRequest', toolName: 'Bash' })
+      expect(waited.status).toBe(200)
+      expect(await waited.json()).toEqual({ ok: true })
+      expect(onPersonWait).toHaveBeenLastCalledWith({ sessionId: 'real-session', firedAt: 1_700_000_000_000 })
+      // A hook client too old to say: the wait is handed on with no time.
+      expect((await hook(base, headers, '/api/hook/wait', { hookEvent: 'PermissionRequest' })).status).toBe(200)
+      expect(onPersonWait.mock.lastCall).toStrictEqual([{ sessionId: 'real-session' }])
+    })
+
+    it('a subagent hook says started or stopped by its event, and any other event is refused', async () => {
+      const onSubagent = vi.fn()
+      const resolveHookAgent = bound()
+      const { base, headers } = await start({ onSubagent, resolveHookAgent })
+      expect((await hook(base, headers, '/api/hook/subagent', { hookEvent: 'SubagentStart' })).status).toBe(200)
+      expect(onSubagent).toHaveBeenLastCalledWith({ sessionId: 'real-session', started: true })
+      // With when its engine ran it: a stop can be taken before its start (core/turns/turnHooks.ts).
+      expect((await hook(base, { ...headers, 'x-harness-hook-fired-at': '1700000000000' }, '/api/hook/subagent',
+        { hookEvent: 'SubagentStop' })).status).toBe(200)
+      expect(onSubagent).toHaveBeenLastCalledWith({ sessionId: 'real-session', started: false, firedAt: 1_700_000_000_000 })
+      onSubagent.mockClear()
+      resolveHookAgent.mockClear()
+      for (const extra of [{ hookEvent: 'Stop' }, { hookEvent: 'subagentstart' }, {}]) {
+        const refused = await hook(base, headers, '/api/hook/subagent', extra)
+        expect(refused.status).toBe(400)
+        expect(await refused.json()).toEqual({ error: 'invalid hook body' })
+      }
+      expect(onSubagent).not.toHaveBeenCalled()
+      expect(resolveHookAgent).not.toHaveBeenCalled()
+    })
+
+    // What the person is asked is theirs: a wait says only that the engine waits, and when.
+    it('refuses a wait that carries a tool\'s input or a prompt', async () => {
+      const onPersonWait = vi.fn()
+      const resolveHookAgent = bound()
+      const { base, headers } = await start({ onPersonWait, resolveHookAgent })
+      for (const extra of [{ input: { command: 'ls' } }, { prompt: 'go on' }]) {
+        const refused = await hook(base, headers, '/api/hook/wait', { hookEvent: 'PermissionRequest', ...extra })
+        expect(refused.status).toBe(400)
+        expect(await refused.json()).toEqual({ error: 'invalid hook body' })
+      }
+      expect(onPersonWait).not.toHaveBeenCalled()
+      expect(resolveHookAgent).not.toHaveBeenCalled()
+    })
+
+    // A pane whose binding went stale sends one on every turn: a line a minute says it, as a refused host is said, on
+    // every route, whichever session and route it was for.
+    it('says an unbound hook at most once a minute on any route, and answers each one 403', async () => {
+      const said = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      vi.useFakeTimers({ toFake: ['Date'] })
+      try {
+        const handlers = { onPersonWait: vi.fn(), onSubagent: vi.fn(), onTurnStop: vi.fn(), onSessionEnd: vi.fn(), onToolStart: vi.fn(),
+          onTurnStart: vi.fn() }
+        const { base, headers } = await start(handlers)
+        const unbound = async (path: string, sessionId?: string) => {
+          const refused = await hook(base, headers, path, { sessionId, hookEvent: 'SubagentStart', toolUseId: 'tool-1', toolName: 'Read' })
+          expect(refused.status).toBe(403)
+          expect(await refused.json()).toEqual({ error: 'UNBOUND_HOOK' })
+        }
+        await unbound('/api/hook/session-end', 'gone0001')
+        await unbound('/api/hook/wait', 'gone0002')
+        for (const [path, sessionId] of [['/api/hook/tool-start', 'gone0001'], ['/api/hook/turn-start', 'gone0002'],
+          ['/api/hook/turn-stop', 'gone0001'], ['/api/hook/subagent', 'gone0003'], ['/api/hook/wait', undefined]] as const) {
+          vi.setSystemTime(Date.now() + 60_001)
+          await unbound(path, sessionId)
+        }
+        expect(said.mock.calls.filter(([line]) => String(line).includes('unbound'))).toEqual([
+          ['[hooks] gone0001 session-end refused · unbound'],
+          ['[hooks] gone0001 tool-start refused · unbound'],
+          ['[hooks] gone0002 turn-start refused · unbound'],
+          ['[hooks] gone0001 turn-stop refused · unbound'],
+          ['[hooks] gone0003 subagent refused · unbound'],
+          ['[hooks] ? wait refused · unbound'],
+        ])
+        for (const handler of Object.values(handlers)) expect(handler).not.toHaveBeenCalled()
+      } finally { vi.useRealTimers() }
+    })
+
+    it('needs the hook token on each', async () => {
+      const handlers = { onPersonWait: vi.fn(), onSubagent: vi.fn() }
+      const { base } = await start({ ...handlers, resolveHookAgent: bound() })
+      for (const path of ['/api/hook/wait', '/api/hook/subagent']) {
+        const refused = await hook(base, { 'content-type': 'application/json' }, path, { hookEvent: 'SubagentStart' })
+        expect(refused.status).toBe(401)
+        expect(await refused.json()).toEqual({ error: 'UNAUTHORIZED' })
+      }
+      for (const handler of Object.values(handlers)) expect(handler).not.toHaveBeenCalled()
+    })
+
+    it('answers 400 to a body that is not JSON on every bound route', async () => {
+      const { base, headers } = await start({ resolveHookAgent: bound() })
+      for (const path of ['/api/hook/session-end', '/api/hook/tool-start', '/api/hook/turn-start', '/api/hook/wait', '/api/hook/subagent']) {
+        const refused = await fetch(`${base}${path}`, { method: 'POST', headers, body: '{' })
+        expect(refused.status).toBe(400)
+        expect(await refused.json()).toEqual({ error: 'bad json' })
+      }
+    })
   })
 
   it('answers a proxied control-plane read whose handler throws, instead of hanging it', async () => {
@@ -961,6 +1077,24 @@ describe('requests must name this server', () => {
     expect(onStatus).not.toHaveBeenCalled()
   })
 
+  // Each is said at most once a minute, on a minute of its own: a pane whose binding went stale, refused every turn,
+  // never hides a page refused for its Host, nor such a page the pane.
+  it('says a refused Host in the same minute an unbound hook was said, and the other way round', async () => {
+    const said = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { base, headers } = await start()
+    const evil = { host: 'rebind.evil.example:' + new URL(base).port }
+    const unbound = () => fetch(`${base}/api/hook/wait`, { method: 'POST', headers,
+      body: JSON.stringify({ engine: 'claude', sessionId: 'gone0001', tmuxPane: '%1', callerPid: 123 }) })
+    expect((await unbound()).status).toBe(403)
+    expect(await send(base, 'GET', '/api/status', evil)).toBe(403)
+    expect(await send(base, 'GET', '/api/status', evil)).toBe(403)
+    expect((await unbound()).status).toBe(403)
+    expect(said.mock.calls.map(([line]) => String(line).split(' · ')[0]).filter(line => line.includes('refused'))).toEqual([
+      '[hooks] gone0001 wait refused',
+      '[hooks] refused GET /api/status',
+    ])
+  })
+
   it('serves no web dashboard: its page, log tail and stop button are gone', async () => {
     // Nothing opened the page (no app, website, script or the backend), and the web client that linked to
     // it retired with the browser setup links (#348). `harness stop` stops the daemon by its pid.
@@ -1210,7 +1344,7 @@ describe('the daemon socket', () => {
   })
 })
 
-it.each(['/api/hook/session-end', '/api/hook/turn-start', '/api/hook/tool-start', '/api/hook/turn-stop'])(
+it.each(['/api/hook/session-end', '/api/hook/turn-start', '/api/hook/tool-start', '/api/hook/turn-stop', '/api/hook/wait', '/api/hook/subagent'])(
   'refuses a binding changed during process resolution on %s', async path => {
     const row = { engine: 'claude', sessionId: 'race-session', agentId: 'race-agent', runtimes: [], processIdentity: null,
       evidenceRevision: 1 } as unknown as RegisteredSession
@@ -1218,10 +1352,11 @@ it.each(['/api/hook/session-end', '/api/hook/turn-start', '/api/hook/tool-start'
     vi.spyOn(registry, 'byAgent').mockReturnValue(row)
     const mutation = vi.fn()
     const { base, headers } = await start({ onSessionEnd: mutation, onTurnStart: mutation, onToolStart: mutation, onTurnStop: mutation,
+      onPersonWait: mutation, onSubagent: mutation,
       resolveHookAgent: async () => { await Promise.resolve(); row.evidenceRevision = 2; return row } })
     const response = await fetch(`${base}${path}`, { method: 'POST', headers,
       body: JSON.stringify({ engine: 'claude', sessionId: row.sessionId, tmuxPane: '%1', callerPid: 4242,
-        toolUseId: 'fixture-tool', toolName: 'Task' }) })
+        toolUseId: 'fixture-tool', toolName: 'Task', hookEvent: 'SubagentStart' }) })
     expect(response.status).toBe(403)
     expect(mutation).not.toHaveBeenCalled()
   },

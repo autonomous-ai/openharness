@@ -606,8 +606,8 @@ describe.skipIf(!DISKFULL)('an update on a disk that fills', () => {
     server.offer = { version: '44.0.4' }
     await until('the core to stage 44.0.4', () => machine.log().slice(from).includes('[update] staged 44.0.4'), 90_000, 50)
     fillVolume(volume)
-    // A core cannot claim its socket on a full disk (listen ENOSPC), so the core on the new bundle starts in
-    // safe mode. The build before would too: the master keeps the update on trial and tries again,
+    // A core cannot save its registry on a full disk (ENOSPC; before #4356 it was the socket's claim, listen
+    // ENOSPC), so the core on the new bundle starts in safe mode. The build before would too: the master keeps the update on trial and tries again,
     // backing off. Before, it rolled back (the rollback freeing the room the build before needed) and
     // remembered a good build as bad.
     // The volume is kept full until then. The master may be writing its lean bundle out as the volume fills: what
@@ -615,7 +615,7 @@ describe.skipIf(!DISKFULL)('an update on a disk that fills', () => {
     // room the core starts and the update simply stays up, which is right and is not this test (a slow macOS
     // runner, 2026-10-12).
     await until('the master to try the new bundle again for want of room', () => { fillVolume(volume); return count(machine.log().slice(from), 'had no room to start') >= 2 }, 150_000, 100)
-    expect(machine.log().slice(from)).toContain('could not start on the new bundle for want of room on the disk (listen ENOSPC')
+    expect(machine.log().slice(from)).toMatch(/could not start on the new bundle for want of room on the disk \([^\n]*ENOSPC/)
     expect(machine.log().slice(from)).not.toContain('the updated core failed')
     expect(IsolatedDaemon.alive(master), 'the master outlives a full disk in the middle of an update').toBe(true)
     machine.holds('44.0.4')

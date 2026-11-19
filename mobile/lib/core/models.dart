@@ -357,7 +357,7 @@ class Agent {
       gridWebSearch: grid is Map
           ? GridWebSearch.fromWire(grid['webSearch'])
           : null,
-      selectedModel: _safeLabel(j['selectedModel']),
+      selectedModel: _safeModel(j['selectedModel']),
       dsh: _safeDsh(j['dsh']),
       dshName: _safeLabel(j['dshName']),
       parentAgentId: _safeLabel(j['parentAgentId'] ?? j['parentId']),
@@ -570,6 +570,11 @@ class Agent {
         ? raw
         : null;
   }
+
+  /// The `runtime-v1:` profile whole, or none: cut short it names no model (an OpenCode one carries its provider and
+  /// runs past a label's 80). [runtimeModelDetails] reads it, to the same 1024.
+  static String? _safeModel(Object? raw) =>
+      raw is String && raw.isNotEmpty && raw.length <= 1024 ? raw : null;
 
   static String? _safeLabel(Object? raw) {
     if (raw is! String || raw.isEmpty) return null;

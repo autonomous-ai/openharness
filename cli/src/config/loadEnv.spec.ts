@@ -57,4 +57,17 @@ describe('Harness environment loading', () => {
     expect(result.status).not.toBe(0)
     expect(result.stderr).toContain('Cannot read Harness environment file')
   })
+
+  it('reads the selected file again into an environment it is handed, keeping what is set there', async () => {
+    const root = project()
+    const file = join(root, 'harness.env')
+    writeFileSync(file, 'FROM_FILE=in-the-file\nALREADY=in-the-file\n')
+    const { loadEnvFile } = await import('./loadEnv.js')
+    const env: NodeJS.ProcessEnv = { HARNESS_ENV_FILE: file, ALREADY: 'in-the-environment' }
+    loadEnvFile(env)
+    expect(env).toEqual({ HARNESS_ENV_FILE: file, FROM_FILE: 'in-the-file', ALREADY: 'in-the-environment' })
+    expect(process.env.FROM_FILE).toBeUndefined()
+    expect(() => loadEnvFile({})).not.toThrow()
+    expect(() => loadEnvFile({ HARNESS_ENV_FILE: join(root, 'missing.env') })).toThrow('Cannot read Harness environment file')
+  })
 })

@@ -15,6 +15,8 @@ import tempfile
 import time
 import urllib.parse
 
+import harness_home
+
 ROOT = Path(__file__).resolve().parents[1]
 TOKEN = '8c73ea55-683a-4207-a9aa-ab8a9e813bea'
 REQUEST = re.compile(rb'\x1b\]633;hn;([^;]+);([^;]+);([^;]+);([^\x07]*)\x07')
@@ -59,6 +61,10 @@ class Shell:
                     text += "alias pi='printf ALIAS_PI\\\\n'\n"
             (root / rc).write_text(text)
         bootstrap = (ROOT / 'src/shell_bootstrap.sh').read_text().replace('@INTEGRATION@', (ROOT / 'src/shell_integration.sh').read_text())
+        self.env = {k:v for k,v in os.environ.items() if k in ('LANG','LC_ALL','TZ')}
+        self.env.update(HOME=str(root), SHELL=shell, PATH=str(binpath)+':/usr/bin:/bin:/usr/sbin:/sbin', _HN_CLI=str(binpath/'harness'),
+                        TERM='xterm-256color', STARTUP=str(root/'startup'), CALLS=str(self.capture),
+                        TMPDIR=str(root), _HN_CONTEXT=TOKEN, _HN_PICKER=str(picker), skip_global_compinit='1')
         self.pid, self.fd = pty.fork()
         if not self.pid:
             # A terminal (tmux too) starts its shell with default signals. A runner
@@ -67,11 +73,7 @@ class Shell:
             signal.signal(signal.SIGINT, signal.SIG_DFL)
             signal.signal(signal.SIGQUIT, signal.SIG_DFL)
             os.chdir(root)
-            env = {k:v for k,v in os.environ.items() if k in ('LANG','LC_ALL','TZ')}
-            env.update(HOME=str(root), SHELL=shell, PATH=str(binpath)+':/usr/bin:/bin:/usr/sbin:/sbin', _HN_CLI=str(binpath/'harness'),
-                       TERM='xterm-256color', STARTUP=str(root/'startup'), CALLS=str(self.capture),
-                       TMPDIR=str(root), _HN_CONTEXT=TOKEN, _HN_PICKER=str(picker), skip_global_compinit='1')
-            os.execve('/bin/sh', ['/bin/sh','-c',bootstrap], env)
+            os.execve('/bin/sh', ['/bin/sh','-c',bootstrap], self.env)
         self.data = b''
         self.request_ids = set()
         self.read_until(b'READY> ')
@@ -105,9 +107,11 @@ class Shell:
         if b'READY> ' not in data[pattern.search(data).end():]: self.read_until(b'READY> ')
         return data
     def reply(self, match, reply='', code=0):
-        path = self.root/'.harness/shell-requests'/TOKEN/match[2].decode()
+        path = self.requests()/TOKEN/match[2].decode()
         with path.open('w') as out:
             out.write('HN:'+match[2].decode()+':'+str(code)+':'+base64.b64encode(reply.encode()).decode()+'\n')
+    # Where the shell's integration leaves its requests: the state folder, by the rule.
+    def requests(self): return harness_home.path(self.root, self.env, 'shell-requests')
     def calls(self): return [json.loads(s) for s in self.capture.read_text().splitlines()] if self.capture.exists() else []
     def close(self):
         self.send('exit\r')
@@ -305,7 +309,7 @@ with tempfile.TemporaryDirectory(prefix='hn-shell-test-') as tmp:
                 assert first.groups() == retry.groups()
                 s.reply(retry, code=1)
                 s.read_until(b'READY> ')
-                assert not list((root/'.harness/shell-requests').glob('*/*'))
+                assert not list(s.requests().glob('*/*'))
                 (root/'picker-choice').write_text('external:local:old-task\n')
                 s.request('hn sessions old task','session-inline')
                 (root/'picker-choice').unlink()

@@ -21,13 +21,15 @@ typedef enum { VOICE_CMD_NONE = 0, VOICE_CMD_GOAL, VOICE_CMD_LOOP } voice_cmd_t;
  *
  * `agent_id` NULL or "" = spoken from the Overview: the daemon decides from the words which agent they
  * belong to. `cmd` is the one modifier a person can express by how they hold the button.
+ *
+ * Every start_* returns true only when the start took: audio ready, no clip still finishing, a valid context.
  */
-void audio_client_start_cable(const char *agent_id, voice_cmd_t cmd);
+bool audio_client_start_cable(const char *agent_id, voice_cmd_t cmd);
 // Habitat's deliberate quote-and-speak flow. No selected text is held on the device.
-void audio_client_start_form(const char *id, unsigned revision);
+bool audio_client_start_form(const char *id, unsigned revision);
 void audio_client_copy_form(char *out, size_t capacity, unsigned *revision);
-void audio_client_start_selection(const char *agent_id, const char *selection_id, unsigned revision);
-void audio_client_start_carry(const char *agent_id, const char *carry_id);
+bool audio_client_start_selection(const char *agent_id, const char *selection_id, unsigned revision);
+bool audio_client_start_carry(const char *agent_id, const char *carry_id);
 void audio_client_copy_carry(char *out, size_t capacity);
 void audio_client_copy_selection(char *out, size_t capacity, unsigned *revision);
 
@@ -35,6 +37,10 @@ void audio_client_stop(void);
 
 // Quota rejection: stop recording/uploading and discard the utterance without drain/retry/finalize.
 void audio_client_abort(void);
+// A discard of the upload `upload_id` names, told to the host once, from the sender task: its own voice.abort
+// before it decides end or abort, one voice.abort "discarded" after voice.end. Nothing for "", an older upload or
+// one already closed: an abort naming no upload would cancel whatever the host has open.
+void audio_client_cancel(const char *upload_id);
 
 bool audio_client_active(void);
 
@@ -53,13 +59,13 @@ bool audio_client_heard_voice(void);
 // 0..4 measured mic envelope for local visual feedback; not speech recognition/VAD.
 unsigned audio_client_input_level(void);
 
-void audio_client_start_question(const char *id, const char *token, unsigned index);
+bool audio_client_start_question(const char *id, const char *token, unsigned index);
 void audio_client_copy_question(char *out, size_t capacity, unsigned *index);
 
 void audio_client_request_review(void);
 bool audio_client_review_requested(void);
-void audio_client_start_draft(const char *id, unsigned revision, bool append);
+bool audio_client_start_draft(const char *id, unsigned revision, bool append);
 void audio_client_copy_draft(char *out, size_t capacity, unsigned *revision, bool *append);
 
-void audio_client_start_search(const char *agent_id, const char *selection_id, unsigned revision);
+bool audio_client_start_search(const char *agent_id, const char *selection_id, unsigned revision);
 void audio_client_copy_search(char *out, size_t capacity, unsigned *revision);

@@ -80,7 +80,9 @@ vi.mock('node:child_process', async original => {
 })
 vi.mock('../lib/processTable.js', async original => ({ ...await original<object>(), processRows: async () => fixture.rows }))
 vi.mock('../lib/loginShellEnv.js', () => ({ loginShellEnvironment: () => ({}) }))
+// A healthy macOS build bundles its helper: without one every control read is the missing-helper hold.
 vi.mock('../lib/nativeProcessImages.js', async original => ({ ...await original<object>(),
+  processImageHelperBundled: () => true,
   bundledProcessImageHelper: async () => ({ path: '/fixture-tools/native-control', key: 'fixture' }),
 }))
 

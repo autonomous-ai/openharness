@@ -90,7 +90,8 @@ function readJoined(file: string): Map<string, number> {
 /** One run of a harness's process: a resume, a restore or a restart is another. */
 const incarnation = (s: RegisteredSession): string => `${s.agentId}|${s.processIdentity?.pid ?? ''}|${s.processIdentity?.startMarker ?? ''}`
 
-const label = (s: RegisteredSession): string => `${s.defaultName || s.title || 'a harness'} (${s.agentId.slice(0, 8)})`
+/** A harness in the log: its id, as its name and title hold the person's words. */
+const label = (s: RegisteredSession): string => s.agentId.slice(0, 8)
 const reason = (error: unknown): string => (error instanceof Error ? error.message : String(error))
 const STARTER_CLOSED = 'the harness that started it was closed'
 

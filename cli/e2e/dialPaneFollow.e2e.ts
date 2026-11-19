@@ -6,7 +6,9 @@
  * as the Harness Device app writes it.
  *
  * Each case lists its sessions and acts at once: the observed source checks a session's process every 30 s, and a
- * session's process here is whatever its hook's shell left as its parent.
+ * session's process here is whatever its hook's shell left as its parent. The dial lands on the first agent listed, and
+ * drops a hand's turn for 750 ms after that focus and each re-assert of it: a turn right after a list is made again
+ * until its effect is seen (`FakeDial.turnUntil`, `turnedPast`).
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -115,11 +117,31 @@ describe('the dial and the apps follow each other', () => {
     await dial.next((m) => m.t === 'focus' && m.agentId === claude.id, 30_000, "the prompt's agent's focus", since)
   }
 
-  /** Two sessions in Orca terminals, listed, and the dial turned to the first by hand, its rest over. */
+  /** The first swipe line, once the daemon has said one. */
+  const swiped = (d: IsolatedDaemon): string | undefined => swipeLines(d)[0]
+
+  /** Two sessions in Orca terminals, listed, and the dial turned to the first by hand, its rest over. The dial landed on
+   *  the first as it was listed, and a turn to it within 750 ms of the second's re-assert is taken as that focus's echo. */
   const turnedToFirst = async (d: IsolatedDaemon, dial: FakeDial, first: InOrca, second: InOrca): Promise<void> => {
     await listed(dial, first, second)
-    dial.send({ t: 'focus', agentId: first.id })
-    await said(d, '[device] swipe · ok')
+    expect(await dial.turnUntil(first.id, 'the swipe', () => swiped(d))).toBe('[device] swipe · ok')
+  }
+
+  /** The dial turned by hand past [past] to [to], both again every 2 s until the daemon says a swipe line, as
+   *  `FakeDial.turnUntil` turns to one agent. The two go together, so the turn that swipes is one whose pass over [past]
+   *  the daemon took too. */
+  const turnedPast = (d: IsolatedDaemon, dial: FakeDial, past: string, to: string): Promise<string> => {
+    let sentAt = 0
+    return until('the swipe', () => {
+      const line = swiped(d)
+      if (line !== undefined) return line
+      if (Date.now() - sentAt >= 2_000) {
+        dial.send({ t: 'focus', agentId: past })
+        dial.send({ t: 'focus', agentId: to })
+        sentAt = Date.now()
+      }
+      return undefined
+    }, 60_000, 50)
   }
 
   it("the dial's turn to an agent in an Orca terminal runs the fake switch once, 400 ms after", async () => {
@@ -127,8 +149,7 @@ describe('the dial and the apps follow each other', () => {
     const a = inOrca(d, 'a')
     await listed(dial, a.claude)
     const before = Date.now()
-    dial.send({ t: 'focus', agentId: a.claude.id })
-    await said(d, '[device] swipe · ok')
+    expect(await dial.turnUntil(a.claude.id, 'the swipe', () => swiped(d))).toBe('[device] swipe · ok')
     const [run, ...more] = runs()
     expect(more).toEqual([])
     expect(run.args).toBe(`terminal switch --terminal ${a.handle} --json`)
@@ -141,9 +162,7 @@ describe('the dial and the apps follow each other', () => {
     const b = inOrca(d, 'b')
     const w = new InOrca(d, 'w', children, { WEZTERM_PANE: '7' })
     await listed(dial, b.claude, w)
-    dial.send({ t: 'focus', agentId: w.id })
-    dial.send({ t: 'focus', agentId: b.claude.id })
-    await said(d, '[device] swipe · ok')
+    expect(await turnedPast(d, dial, w.id, b.claude.id)).toBe('[device] swipe · ok')
     expect(runs().map((run) => run.args)).toEqual([`terminal switch --terminal ${b.handle} --json`])
     // W started no rest: B's turn superseded none.
     expect(swipeLines(d)).toEqual(['[device] swipe · ok'])
@@ -155,8 +174,7 @@ describe('the dial and the apps follow each other', () => {
     await listed(dial, a.claude)
     refuse()
     const since = dial.messages.length
-    dial.send({ t: 'focus', agentId: a.claude.id })
-    await said(d, '[device] swipe · failed')
+    expect(await dial.turnUntil(a.claude.id, 'the swipe', () => swiped(d))).toBe('[device] swipe · failed')
     expect(runs()).toHaveLength(1)
     expect(swipeLines(d)).toEqual(['[device] swipe · failed'])
     expect(dial.messages.slice(since).filter((m) => m.t === 'toast')).toEqual([])
@@ -167,8 +185,7 @@ describe('the dial and the apps follow each other', () => {
     const a = inOrca(d, 'a')
     const b = inOrca(d, 'b')
     await listed(dial, a.claude, b.claude)
-    dial.send({ t: 'focus', agentId: b.claude.id })
-    dial.send({ t: 'focus', agentId: a.claude.id })
+    await turnedPast(d, dial, b.claude.id, a.claude.id)
     await said(d, '[device] swipe · ok')
     // B's turn did not rest: it ran nothing and is one line. Its run's time alone could not tell (500 ms from the dial's
     // send to orca's run with no rest at all, measured on a Mac).
@@ -254,8 +271,7 @@ describe('the dial and the apps follow each other', () => {
     const c = new InOrca(d, 'c', children, { __CFBundleIdentifier: CLAUDE_APP, ORCA_AGENT_SESSION_ID: '' })
     // The dial on A, in Orca's ring, by hand.
     await listed(dial, a)
-    dial.send({ t: 'focus', agentId: a.id })
-    await said(d, '[device] swipe · ok')
+    expect(await dial.turnUntil(a.id, 'the swipe', () => swiped(d))).toBe('[device] swipe · ok')
     // C has a ring of its own: the dial is shown it once the Claude app has settled in front.
     const since = dial.messages.length
     await c.hook('SessionStart', { source: 'startup' })
@@ -301,8 +317,7 @@ describe('the dial and the apps follow each other', () => {
 
     // 1. The dial on B, by hand.
     await listed(dial, a.claude, b.claude)
-    dial.send({ t: 'focus', agentId: b.claude.id })
-    await until("B's switch", () => switchesTo(b.handle) === 1, 30_000, 50)
+    await dial.turnUntil(b.claude.id, "B's switch", () => (switchesTo(b.handle) === 1 || undefined))
 
     // 2. Orca settled in front: A's typed prompt moves the dial. Then its turn ends: Orca's route types only at an idle prompt.
     front(d, ORCA)

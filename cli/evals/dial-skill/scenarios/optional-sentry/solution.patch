@@ -1,0 +1,32 @@
+--- a/src/app.js
++++ b/src/app.js
+@@ -1,13 +1,15 @@
++import { readFileSync } from 'node:fs'
+ import { errorReporter } from './errors.js'
+ import { listInvoices } from './invoices.js'
+ 
+ const reporter = errorReporter()
++const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+ 
+ // Routes a request to { status, body }; the server and the tests both call it.
+ export function handle(method, url) {
+   const [path, query = ''] = url.split('?')
+   try {
+-    if (method === 'GET' && path === '/health') return { status: 200, body: { ok: true } }
++    if (method === 'GET' && path === '/health') return { status: 200, body: { ok: true, version } }
+     if (method === 'GET' && path === '/invoices') {
+       const status = new URLSearchParams(query).get('status') ?? undefined
+       return { status: 200, body: { invoices: listInvoices({ status }) } }
+--- a/test/app.test.js
++++ b/test/app.test.js
+@@ -2,8 +2,8 @@
+ import { test } from 'node:test'
+ import { handle } from '../src/app.js'
+ 
+-test('/health answers ok', () => {
+-  assert.deepEqual(handle('GET', '/health'), { status: 200, body: { ok: true } })
++test('/health answers ok with the app version', () => {
++  assert.deepEqual(handle('GET', '/health'), { status: 200, body: { ok: true, version: '3.2.0' } })
+ })
+ 
+ test('/invoices lists every invoice', () => {

@@ -15,7 +15,7 @@
  */
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, symlink, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -23,6 +23,7 @@ import { promisify } from 'node:util'
 import { isolatedTmux, type IsolatedTmux } from '../../src/testing/isolatedTmux.js'
 import { artifactLog, artifactsEnabled } from './artifacts.js'
 import { daemonEnvironment } from '../../src/testing/daemonEnvironment.js'
+import { writeExecutable } from '../../src/testing/executableFixture.js'
 import { GH_FORBIDDEN_STUB } from '../../src/testing/ghStub.js'
 import { readAdoptedHomes } from '../../src/engines/kit/homeAdoption.js'
 import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
@@ -30,6 +31,7 @@ import { endRootProcesses } from '../../src/testing/rootProcesses.js'
 import { assertSocketPathFits } from '../../src/testing/socketPathRoom.js'
 import { alive, processTable } from '../../src/testing/spawnedRuns.js'
 import { assertNodeAlone } from '../../src/testing/testNode.js'
+import { SYSTEM_FOLDERS } from '../../src/testing/testPath.js'
 import { forgetGroup, forgetTmux, leaderGone, watchGroup, watchTmux } from './reaper.js'
 
 const exec = promisify(execFile)
@@ -56,6 +58,8 @@ export interface EngineConfig {
   hookLog: string
   version?: string
   without?: string[]
+  /** The hook events this release does not have: it never runs a hook for one (Codex 0.144.0: `['Interrupt']`). */
+  withoutHooks?: string[]
   startDelayMs?: number
   /** Hold a descriptor the daemon's process reader cannot classify for this long once started (Codex 0.162.1's first seconds). */
   unreadableDescriptorMs?: number
@@ -67,11 +71,16 @@ export interface EngineConfig {
   trustPrompt?: boolean
   /** Send Claude Code's kitty graphics query on start, then set this title [titleAfterMs] later (fakeEngine.mjs). */
   graphicsQuery?: { title: string; titleAfterMs: number }
+  /** The file under [root] where `codex queue` notes its calls: `codex-queue` when unset (harness/codexAppCli.ts). */
+  queueLedger?: string
 }
 
 export interface DaemonOptions {
   /** Extra environment for the daemon. */
   env?: Record<string, string>
+  /** More lines for the env file a start through `harness start` reads (`shellEnv`): what reaches that daemon only
+   *  through the file, as it does on a person's computer. */
+  envFile?: Record<string, string>
   /** V8 heap ceiling for the daemon process, MiB. Defaults to Node's own. */
   heapMiB?: number
   /** Models the fake engines report. */
@@ -97,6 +106,9 @@ export interface DaemonOptions {
   /** Run this bundle (an installed `cli.js`, its `notify.mjs` beside it: `assertHookScriptBeside`) instead of
    *  the checkout's source. */
   scriptPath?: string
+  /** Start from the sources with no process-image helper, even under `E2E_BUNDLE` (whose build embeds it): a build
+   *  that ships without the helper (identityHoldVisible.e2e.ts). */
+  withoutProcessImages?: boolean
   /** Keep the daemon's data folder here instead of under the throwaway root (a test volume). The fake
    *  engines read their hook credential from it, so it is set for them too. Its socket path is never measured:
    *  where it sits is the test's subject (noSocket.e2e.ts passes one too long on purpose). */
@@ -296,6 +308,8 @@ export class IsolatedDaemon {
     readonly engineConfig: EngineConfig,
     /** Where the fake open notes each run's arguments. */
     private readonly opensLog: string,
+    /** The names of the settings the harness gives every daemon, before a test's own (`shellEnv`). */
+    private readonly settingNames: readonly string[],
   ) {}
 
   static async create(options: DaemonOptions = {}): Promise<IsolatedDaemon> {
@@ -363,17 +377,43 @@ export class IsolatedDaemon {
     // helper (lib/guestAccounts.ts), which may be installed on the Mac the tests run on. Refused, as for an owner who
     // never turned guest access on.
     await writeFile(join(dirs.bin, 'sudo'), '#!/bin/sh\necho "sudo: a password is required" >&2\nexit 1\n', { mode: 0o755 })
+    // Nor does its open scan see a file held outside its root. The scan reads every `codex` on the computer
+    // (sessionSearch/externals/support.ts) and the devices write the dial skill into each Codex home whose rollout one
+    // holds: every daemon with a dial attached wrote it into another test's Codex homes, and deviceDialSkill.e2e.ts
+    // failed whenever the other dial files ran beside it, and into the developer's real ones too (2026-11-19). Found by
+    // name, first on its PATH. Only the open files the scan reads (-Fpn) lose the names outside the root. A process's
+    // folder (-d cwd) is kept: adoption reads it to place an engine process with no record, and one it cannot read may
+    // hold any conversation. lsof's other callers (process images, held files) see the computer as it is. A computer
+    // with no lsof has no scan to hide. Admitted before the daemon runs it: the scan gives lsof 3 s, and macOS checks a
+    // new executable on its first exec. It exits with lsof's status, never awk's: the scan tells lsof's empty match (1,
+    // nothing said) from a failure.
+    const lsof = SYSTEM_FOLDERS.map((folder) => join(folder, 'lsof')).find((file) => existsSync(file))
+    if (lsof) writeExecutable(join(dirs.bin, 'lsof'), `#!/bin/sh
+case " $* " in
+  *" -d cwd "*) exec '${lsof}' "$@" ;;
+  *" -Fpn "*)
+    exec 4>&1
+    status=$({ { '${lsof}' "$@" 3>&- 4>&-; echo $? >&3; } | awk -v root='${root}/' 'substr($0, 1, 1) != "n" || index($0, "n" root) == 1' >&4 3>&- 4>&-; } 3>&1)
+    exit "$status" ;;
+  *) exec '${lsof}' "$@" ;;
+esac
+`)
     // Nor does it ever reach the real Orca app on the Mac the tests run on, which every session here may be running
-    // inside: with no `orca` on its PATH a daemon runs the Orca app's own, and a listed Orca agent asks it for a list.
-    // Refused, until a test writes its own (harness/fakeOrca.ts).
-    await writeFile(join(dirs.bin, 'orca'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+    // inside: a listed Orca agent asks Orca for a list. A launcher is an `orca` whose real path is in Orca's install
+    // (devices/orcaHomes.ts), so the stub sits in one, linked from bin, and it is the Orca app's own too
+    // (HARNESS_ORCA_APP_BIN), which a daemon on a Mac runs with no launcher on its PATH: never /Applications'. Refused,
+    // until a test writes its own through the link (harness/fakeOrca.ts).
+    const orcaLauncher = join(own, 'orca-app', 'resources', 'bin', 'orca')
+    await mkdir(dirname(orcaLauncher), { recursive: true })
+    await writeFile(orcaLauncher, '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+    await symlink(orcaLauncher, join(dirs.bin, 'orca'))
     // A pick on the dial brings that app forward with `open -b` (services/devices), and dialAppFilter.e2e.ts taps and
     // picks VS Code and Ghostty: with the real open, a dial test on a Mac would bring the developer's own apps forward.
     // Out of bin: the devices run open by its path, never by name. One line of arguments per run, for `opens()`.
     const fakeOpen = join(own, 'fake-open')
     const opensLog = join(own, 'opens.log')
     await writeFile(fakeOpen, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${opensLog}'\n`, { mode: 0o755 })
-    const env = daemonEnvironment(tmux.env, {
+    const settings = {
       NODE_ENV: 'test',
       HOME: dirs.home,
       // Its profile, under that home too. On Windows os.homedir() follows USERPROFILE, not HOME, so every default
@@ -437,6 +477,17 @@ export class IsolatedDaemon {
       GRID_CONTROL_PLANE_URL: 'http://127.0.0.1:9',
       HARNESS_GRID_BIN: '',
       HARNESS_OPEN_BIN: fakeOpen,
+      HARNESS_ORCA_APP_BIN: orcaLauncher,
+      // Nor does a fake dial's attach install Harness's VS Code extension into the developer's VS Code or Cursor
+      // (cable/vscodeExtensionSetup.ts): /Applications is the computer's, whatever the home, so the devices look for VS
+      // Code's `code` and Cursor's `cursor` here alone, in place of /Applications, ~/Applications and PATH. Missing
+      // until a test writes its own.
+      HARNESS_VSCODE_BIN: join(own, 'vscode', 'code'),
+      HARNESS_CURSOR_BIN: join(own, 'cursor', 'cursor'),
+      // Nor does a word to a ChatGPT app session reach the developer's ChatGPT app (cable/hosts/codexQueue.ts):
+      // /Applications is the computer's, whatever the home, so the devices look for the app's own Codex CLI here alone,
+      // in place of /Applications and ~/Applications. Missing until a test writes its own (harness/codexAppCli.ts).
+      HARNESS_CODEX_APP_BIN: join(own, 'ChatGPT.app', 'Contents', 'Resources', 'codex-cli', 'CodexCLI.app', 'Contents', 'MacOS', 'codex'),
       // Claude Code's and Codex's hooks, installed as on a person's computer, into this home and CODEX_HOME
       // (assertHooksContained), and run by the fake engines. Every other engine's installer writes into
       // folders these tests have no engine for.
@@ -454,9 +505,9 @@ export class IsolatedDaemon {
       TERMINAL_BACKENDS: 'tmux',
       TMUX_REAP_INTERVAL_MS: '5000',
       TERMINAL_RECONCILE_INTERVAL_MS: '5000',
-      ...options.env,
-    })
-    return new IsolatedDaemon(root, tmux, port, env, options, config, opensLog)
+    }
+    const env = daemonEnvironment(tmux.env, { ...settings, ...options.env })
+    return new IsolatedDaemon(root, tmux, port, env, options, config, opensLog, Object.keys(settings))
   }
 
   /** What the fake engines noted of every hook they ran (fakeEngine.mjs `hookLog`); kept once the root is gone. */
@@ -514,6 +565,10 @@ export class IsolatedDaemon {
     // and a test may name its script after `create` (`masterIpcExit.e2e.ts`).
     assertHooksContained(this.root, this.env)
     if (this.options.scriptPath) assertHookScriptBeside(this.options.scriptPath)
+    // An installed bundle may embed a helper of its own, and a test's own launcher starts what it says.
+    if (this.options.withoutProcessImages && (this.options.scriptPath || this.options.launch)) {
+      throw new Error('withoutProcessImages runs the sources; it cannot run a given bundle or launcher')
+    }
     // The product looks for npm-installed engines beside the Node the daemon runs on (lib/engineLaunch.ts
     // `npmRuntimeBins`), and on a developer's Mac the worker's Node was in the version manager's folder with their real
     // engines, which freshMachineEngines.e2e.ts's daemon found "already installed" (audit of 2026-11-16,
@@ -528,12 +583,16 @@ export class IsolatedDaemon {
     // Readiness is judged from what this start prints, never from an earlier boot's lines.
     const from = this.output.length
     // A test's own bundle (an old release), the run's bundle (`E2E_BUNDLE`, see bundle.ts), or the sources.
-    const bundle = this.options.scriptPath ?? process.env.E2E_BUNDLE_PATH
-    const script = bundle ? [bundle] : ['--import', 'tsx', 'src/cli.ts']
+    const bundle = this.options.withoutProcessImages ? undefined : this.options.scriptPath ?? process.env.E2E_BUNDLE_PATH
+    // From the sources on macOS, the helper a release embeds comes in by a preload (processImages.ts): without it the
+    // daemon held every Codex read for good. The master passes its flags on to the core and the services.
+    const preload = this.options.withoutProcessImages ? undefined : process.env.E2E_PROCESS_IMAGES_PRELOAD
+    const script = bundle ? [bundle] : [...(preload ? ['--import', preload] : []), '--import', 'tsx', 'src/cli.ts']
     // A process group of its own, which the core and the services join: one signal reaches all of them, whether or
     // not the master is still there, and the worker's reaper (reaper.ts) ends it should the worker go without closing it.
+    const env = this.options.foreground ? await this.shellEnv() : this.env
     const child = spawn(node, this.options.launch ?? [...heap, ...script, ...entry], {
-      cwd: CLI_ROOT, env: this.env, stdio: ['ignore', 'pipe', 'pipe'], ...ownProcessGroup(),
+      cwd: CLI_ROOT, env, stdio: ['ignore', 'pipe', 'pipe'], ...ownProcessGroup(),
     })
     this.child = child
     if (child.pid) {
@@ -576,6 +635,36 @@ export class IsolatedDaemon {
         this.assertHooksStayedInside()
       }
     })()])
+  }
+
+  /**
+   * The environment of a shell that runs `harness start` or `harness start -f` for this daemon. Such a start keeps only
+   * an allowlist of it (docs/plans/2026-11-17-daemon-minimal-env-design.md), so the harness's settings the allowlist
+   * leaves out, and the test's `envFile`, go in the file HARNESS_ENV_FILE names, as a person's would. A test's `env`
+   * never does: a variable it sets to see a start drop it stays dropped.
+   */
+  async shellEnv(): Promise<NodeJS.ProcessEnv> {
+    // Loaded here, not at the top: lib/startEnvironment.ts loads config/env.ts, which reads and checks the worker's
+    // environment as it loads, and the files that never start a daemon this way keep loading only what they did.
+    const { startEnvFile } = await import('../../src/testing/startEnvFile.js')
+    const file = join(dirname(this.engineConfig.hookLog), 'start.env')
+    await writeFile(file, startEnvFile(this.env, this.settingNames, this.options.envFile))
+    return { ...this.env, HARNESS_ENV_FILE: file }
+  }
+
+  /** The environment of the shell [pane] runs, as that shell sees it, written to `<root>/<name>.env`. */
+  async paneEnvironment(pane: string, name: string): Promise<Record<string, string>> {
+    const file = join(this.root, `${name}.env`)
+    // The shell creates the file before env writes it, so it shows up empty first: written aside and moved into place whole.
+    await this.tmux.run('send-keys', '-t', pane, `env > ${file}.tmp && mv ${file}.tmp ${file}`, 'Enter')
+    await until(`${name}'s shell to write its environment`, () => existsSync(file) || null, 20_000, 100)
+    const env: Record<string, string> = {}
+    // A line with no `=` is the rest of a value that spans lines: not a variable of its own.
+    for (const line of readFileSync(file, 'utf8').split('\n')) {
+      const at = line.indexOf('=')
+      if (at > 0) env[line.slice(0, at)] = line.slice(at + 1)
+    }
+    return env
   }
 
   /** SIGTERM, then SIGKILL to its whole process group after `ms`. Resolves when the process is gone. */

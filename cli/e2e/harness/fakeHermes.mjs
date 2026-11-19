@@ -125,7 +125,9 @@ export function run(options) {
     reopen()
     record()
   } else start()
-  writeFileSync(join(home, 'started.json'), JSON.stringify({ given: process.env.FAKE_GIVEN_HERMES_HOME ?? '', terminal, session }))
+  // Written aside and moved into place whole: a test parses it the moment it exists.
+  writeFileSync(join(home, 'started.json.tmp'), JSON.stringify({ given: process.env.FAKE_GIVEN_HERMES_HOME ?? '', terminal, session }))
+  renameSync(join(home, 'started.json.tmp'), join(home, 'started.json'))
   process.stdout.write('fake-hermes-ready\n❯ ')
 
   const step = (line) => {

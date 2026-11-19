@@ -15,7 +15,8 @@ import type { NativeHookOptions } from '../../engines/kit/nativeLocations.js'
 import type { OpencodeLaunchSnapshot } from '../../engines/launchControl.js'
 import { sid } from '../../lib/log.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
-import { RegistryOwnershipChanged, validTerminalRuntime } from '../../lib/registry.js'
+import { validTerminalRuntime } from '../../lib/registry.js'
+import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { processRows } from '../../lib/terminalAgentDiscovery.js'
 import { hermesGatewayProcess, type ProcessRow } from '../../lib/processTable.js'
 import { sameProcessIdentity } from '../../lib/terminalRuntime.js'
@@ -31,7 +32,7 @@ export interface EngineHookDeps {
   tmuxBackend: unknown
   /** A ptyhost hint names a pane of the Harness PTY host; without that backend there is nothing it can point at. */
   ptyHostBackend?: unknown
-  agentReconciler: Pick<TerminalAgentReconciler, 'triggerHint' | 'trigger'>
+  agentReconciler: Pick<TerminalAgentReconciler, 'triggerHint' | 'nudge'>
   registry: Pick<typeof registry, 'byRuntimeEngine' | 'byAgent'>
   syncSession: (row: RegisteredSession) => void
 }
@@ -41,8 +42,8 @@ export interface EngineHookDeps {
  * starts its engine before it records it: a resume looks for the process every 250ms, a create or a
  * fork backs off to 750ms, and a restart finds it the same way and then probes it, twice over when it
  * falls back to a new conversation (two 8s discovery budgets, swap.ts). The hook itself is answered
- * before the wait (`onWait`): its client gives up on a reply after 500ms and then writes the registry
- * itself (hook/notify.mjs), so only the daemon's record waits.
+ * before the wait (`onWait`): its engine waits on it, and its client gives up on a reply after 500ms
+ * (hook/notify.mjs), so only the daemon's record waits.
  */
 export const PROCESS_RECORD_WAIT_MS = 20_000
 /** How often a waiting hook reads the rows on its panes again: memory, not a process table. */
@@ -141,10 +142,13 @@ export function createEngineHooks(deps: EngineHookDeps) {
 
   const resolveHookAgent: ResolveHookAgent = async ({ engine, runtimeHints, callerPid, bySessionPane = false, onWait }) => {
     if (!callerPid) return null
-    // Who the hook came from, read as it arrives. On Linux dash keeps its `sh -c` as the hook's parent, a
-    // shell that exits with the hook (its 500ms, or `onWait`'s answer); read after the reconcile pass or
-    // the wait, the ancestry stopped at a pid already gone and a restart's new conversation was never
-    // bound (e2e/updates.e2e.ts). macOS's /bin/sh is a bash that execs the hook: never seen there.
+    // Who the hook came from, read as it arrives. A caller that exits with its hook (its 500ms, or `onWait`'s
+    // answer) is gone after the reconcile pass or the wait, and a restart's new conversation was then never
+    // bound (e2e/updates.e2e.ts, on Linux at the time). On Linux the hook now names the nearest ancestor that
+    // outlives it (hook/notify.mjs hookCallerPid), and macOS's /bin/sh execs the hook, so on both the caller
+    // is alive. Windows still needs this read: Codex and Copilot run their hook through PowerShell, Command
+    // Code through cmd.exe, a shell that is the hook's parent and exits with it. The read only narrows that
+    // window: a core held past the shell's exit starts it too late (e2e/stallHook.e2e.ts).
     const arrival = processRows().then(rows => rows?.map(row => ({ ...row })) ?? null)
     const resolved: TerminalRuntimeRef[] = []
     for (const hint of runtimeHints ?? []) {
@@ -161,10 +165,13 @@ export function createEngineHooks(deps: EngineHookDeps) {
     for (const runtime of resolved) {
       try { if (!await agentReconciler.triggerHint(runtime, engine)) overdue = true }
       catch (error) {
-        if (!(error instanceof RegistryOwnershipChanged)) throw error
-        // A pane commit can supersede discovery's observation. Match fresh evidence through the existing wait.
+        if (!(error instanceof IdentityReadUnavailable)) throw error
+        // A pane commit can supersede discovery's observation, or the process it observed change before it could
+        // publish it. Match fresh evidence through the existing wait. Answered 500, the hook client wrote the
+        // registry itself while this daemon ran, and the agent it replaced never bound (e2e/scale.e2e.ts).
         overdue = true
-        console.log('[hooks] reconciliation owner changed; checking current process evidence')
+        // Its message is one of a fixed set (IdentityReadUnavailable), never a path or a process's content.
+        console.log(`[hooks] reconciliation held · ${error.message} · checking current process evidence`)
       }
     }
 
@@ -202,7 +209,7 @@ export function createEngineHooks(deps: EngineHookDeps) {
     }
     // Cursor may admit a unique runtime without recorded ancestry. A hook from the engine just
     // dispatched there must not rewrite its row before that pane operation has committed its route.
-    // Acknowledge now so the hook client never falls back to writing the registry itself.
+    // Acknowledge now, as before the wait above: the engine waits on its hook.
     for (;;) {
       const pending = choice.agent && panePending?.(choice.agent.agentId)
       if (!pending) break
@@ -239,7 +246,7 @@ export function createEngineHooks(deps: EngineHookDeps) {
   // SessionEnd describes the mutable engine session, never process lifetime. Reconcile now; discovery
   // decides whether the agent still exists from terminal inventory + ps.
   const onSessionEnd = (_sessionId: string, _reason: string | undefined): void => {
-    void agentReconciler.trigger()
+    agentReconciler.nudge()
   }
   const onAdmissionHeld = (id: string, reason: string | undefined): void => {
     const row = registry.byAgent(id)

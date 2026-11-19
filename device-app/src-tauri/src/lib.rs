@@ -10,11 +10,14 @@ pub mod front_macos;
 // Its pure rules compile everywhere under test, so a Mac checks them too; the X11 source is Linux only.
 #[cfg(any(target_os = "linux", test))]
 pub mod front_x11;
+pub mod harness_home;
 pub mod install;
 pub mod keepalive;
 pub mod log;
 pub mod loginitem;
+pub mod logs;
 pub mod model;
+pub mod orca_cli;
 pub mod runner;
 pub mod state;
 pub mod tabs;

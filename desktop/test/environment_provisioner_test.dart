@@ -3,6 +3,9 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/bootstrap/environment_provisioner.dart';
+import 'package:harness/core/harness_home.dart';
+
+import 'support/scratch_home_look.dart';
 
 ProcessResult result(int exitCode, {String stdout = '', String stderr = ''}) =>
     ProcessResult(1, exitCode, stdout, stderr);
@@ -32,7 +35,6 @@ void main() {
 
   ProcessRunner runner({
     required bool Function() tmuxPresent,
-    bool Function()? homebrewPresent,
     bool Function()? xclipPresent,
     bool Function()? wlCopyPresent,
     bool aptPresent = true,
@@ -101,11 +103,6 @@ void main() {
           stderr: tmuxInstallExitCode == 0 ? '' : 'tmux install failed',
         );
       }
-      if (shell.contains('command -v brew')) {
-        return (homebrewPresent?.call() ?? true)
-            ? result(0, stdout: 'Homebrew 4.0')
-            : result(1);
-      }
       if (shell.contains('command -v tmux')) {
         return tmuxPresent() ? result(0, stdout: 'tmux 3.4') : result(1);
       }
@@ -140,6 +137,37 @@ void main() {
       return result(0);
     };
   }
+
+  test('with no harnessHome it is .harness under the user home', () {
+    expect(
+      EnvironmentProvisioner(
+        look: HomeLook(
+          linux: false,
+          environment: const {},
+          exists: (path) => throw StateError('looked at $path off Linux'),
+        ),
+        platformEnvironment: const {'HOME': '/Users/me'},
+      ).harnessHome.path,
+      '/Users/me${Platform.pathSeparator}.harness',
+    );
+  });
+
+  test('a Windows profile keeps the .harness layout on a Linux host', () {
+    expect(
+      EnvironmentProvisioner(
+        look: HomeLook(
+          linux: true,
+          environment: const {},
+          exists: (path) => throw StateError('looked at $path for Windows'),
+        ),
+        isMacOS: false,
+        isLinux: false,
+        isWindows: true,
+        platformEnvironment: const {'USERPROFILE': r'C:\Users\me'},
+      ).harnessHome.path,
+      '${r'C:\Users\me'}${Platform.pathSeparator}.harness',
+    );
+  });
 
   test(
     'launch pre-flight is read-only when required tools are missing',
@@ -183,11 +211,7 @@ void main() {
           onProgress: (_) {},
           install: false,
         );
-        expect(
-          readiness.isReady,
-          ready,
-          reason: readiness.output.join('\n'),
-        );
+        expect(readiness.isReady, ready, reason: readiness.output.join('\n'));
       },
     );
   }
@@ -224,9 +248,8 @@ void main() {
     );
   }
 
-  // The macOS ladder: tmux, else one in-app installer step that uses the
-  // Homebrew already here or downloads the managed build. Nothing here ever
-  // needs a Terminal window, Xcode, or a password.
+  // macOS: tmux, else one in-app installer step that downloads the managed
+  // build. Nothing here ever needs a Terminal window, Xcode, or a password.
   test('a computer with tmux is ready without Homebrew', () async {
     // Homebrew is how tmux MIGHT have got here, not how it runs — a `brew
     // install` from last year keeps working after Homebrew itself broke.
@@ -239,7 +262,6 @@ void main() {
       isWindows: false,
       openTerminal: (_) async => terminalLaunches++,
       run: runner(
-        homebrewPresent: () => false,
         tmuxPresent: () => true,
         installHarness: createManagedHarness,
         calls: calls,
@@ -260,19 +282,29 @@ void main() {
     expect(terminalLaunches, 0);
   });
 
-  test('without tmux the plan is one in-app step, worded by whether Homebrew is here', () async {
-    for (final homebrew in [true, false]) {
+  test(
+    'without tmux the plan is one in-app step: the managed download',
+    () async {
+      // The installer never runs Homebrew, so a Homebrew here changes nothing.
       final calls = <String>[];
+      final withoutHomebrew = runner(tmuxPresent: () => false, calls: calls);
       final provisioner = EnvironmentProvisioner(
         harnessHome: scratch,
         isMacOS: true,
         isLinux: false,
         isWindows: false,
-        run: runner(
-          homebrewPresent: () => homebrew,
-          tmuxPresent: () => false,
-          calls: calls,
-        ),
+        run: (executable, arguments, {environment}) async {
+          final shell = arguments.isNotEmpty ? arguments.last : '';
+          if (shell.contains('command -v brew')) {
+            calls.add('$executable ${arguments.join(' ')}');
+            return result(0, stdout: 'Homebrew 4.0');
+          }
+          return withoutHomebrew(
+            executable,
+            arguments,
+            environment: environment,
+          );
+        },
       );
 
       final readiness = await provisioner.ensureReady(
@@ -287,20 +319,15 @@ void main() {
       ]);
       expect(readiness.plan.first.requiresTerminal, isFalse);
       expect(readiness.plan.first.command, kHarnessHostSetupCommand);
-      expect(
-        readiness.plan.first.detail,
-        homebrew ? contains('Homebrew') : contains('~/.harness/runtime'),
-      );
-      expect(
-        readiness.output.join('\n'),
-        homebrew
-            ? contains('✓ brew --version')
-            : contains('managed tmux download'),
-      );
+      expect(readiness.plan.first.detail, contains('~/.harness/runtime'));
+      expect(readiness.output.join('\n'), contains('managed tmux download'));
+      // Every call's PATH names /opt/homebrew/bin, so these are the probes.
+      expect(calls.any((line) => line.contains('command -v brew')), isFalse);
+      expect(calls.any((line) => line.contains('brew --version')), isFalse);
       expect(calls.any((line) => line.contains('xcrun')), isFalse);
       expect(calls.any((line) => line.contains('--host')), isFalse);
-    }
-  });
+    },
+  );
 
   test('automatic setup obtains tmux in-app through the installer, never in Terminal', () async {
     await createManagedHarness();
@@ -314,15 +341,15 @@ void main() {
       isWindows: false,
       openTerminal: (_) async => terminalLaunches++,
       run: runner(
-        homebrewPresent: () => false,
         tmuxPresent: () => tmuxPresent,
         installTmux: () async => tmuxPresent = true,
         calls: calls,
       ),
     );
 
+    final messages = <String?>[];
     final readiness = await provisioner.ensureReady(
-      onProgress: (_) {},
+      onProgress: (state) => messages.add(state.message),
       install: true,
       mode: EnvironmentSetupMode.automatic,
     );
@@ -332,6 +359,7 @@ void main() {
     expect(terminalLaunches, 0);
     expect(calls.where((line) => line.contains('--host')), hasLength(1));
     expect(calls.any((line) => line.contains('brew install')), isFalse);
+    expect(messages, contains('Downloading the managed tmux…'));
     expect(readiness.output.join('\n'), contains('tmux ready (tmux 3.7c)'));
   });
 
@@ -391,6 +419,39 @@ void main() {
     expect(calls[harnessInstall], contains('/bin/sh -s -- --desktop'));
   });
 
+  test('on a fresh Linux home setup installs Harness, then verifies it in the same home', () async {
+    final data = '${scratch.path}/.local/share/harness';
+    final state = '${scratch.path}/.local/state/harness';
+    managedNode = File('$state/runtime/node-v24.22.2/bin/node');
+    Future<void> install() async {
+      managedNode.createSync(recursive: true);
+      File('$state/runtime/current-node').writeAsStringSync(managedNode.path);
+      File('$data/cli/cli.js').createSync(recursive: true);
+      File('$data/.harness-root').writeAsStringSync('1\n');
+    }
+
+    final provisioner = EnvironmentProvisioner(
+      look: scratchHomeLook(scratch.path),
+      isMacOS: false,
+      isLinux: true,
+      isWindows: false,
+      platformEnvironment: {'HOME': scratch.path},
+      run: runner(tmuxPresent: () => true, installHarness: install),
+    );
+
+    final readiness = await provisioner.ensureReady(
+      onProgress: (_) {},
+      install: true,
+      mode: EnvironmentSetupMode.automatic,
+    );
+
+    expect(
+      readiness.steps[EnvironmentStep.harness],
+      EnvironmentStepStatus.ready,
+      reason: readiness.output.join('\n'),
+    );
+  });
+
   test('missing tmux opens a real terminal before the CLI installer', () async {
     String? terminalScript;
     final calls = <String>[];
@@ -415,6 +476,10 @@ void main() {
       EnvironmentStepStatus.needsTerminal,
     );
     expect(terminalScript, isNotNull);
+    expect(
+      terminalScript,
+      startsWith('${scratch.path}/desktop-app-v2/setup-runs/'),
+    );
     expect(calls.where((line) => line.contains('install.sh')), isEmpty);
     final script = await File(terminalScript!).readAsString();
     expect(script, contains('apt_as_root install -y tmux'));
@@ -425,6 +490,31 @@ void main() {
       (await Process.run('/bin/bash', ['-n', terminalScript!])).exitCode,
       0,
     );
+  });
+
+  test('on a fresh Linux home the terminal script is in the state root, and the data root waits for the CLI', () async {
+    String? terminalScript;
+    final data = '${scratch.path}/.local/share/harness';
+    final state = '${scratch.path}/.local/state/harness';
+    final provisioner = EnvironmentProvisioner(
+      look: scratchHomeLook(scratch.path),
+      isMacOS: false,
+      isLinux: true,
+      isWindows: false,
+      platformEnvironment: {'HOME': scratch.path},
+      openTerminal: (path) async => terminalScript = path,
+      run: runner(tmuxPresent: () => false),
+    );
+
+    await provisioner.ensureReady(
+      onProgress: (_) {},
+      install: true,
+      mode: EnvironmentSetupMode.automatic,
+    );
+
+    expect(terminalScript, startsWith('$state/desktop-app-v2/setup-runs/'));
+    // The data root is the rule's switch: only the CLI's installer makes it.
+    expect(Directory(data).existsSync(), isFalse);
   });
 
   test(
@@ -1004,6 +1094,39 @@ void main() {
     expect(calls.any((line) => line.contains('for c in tar')), isFalse);
     expect(calls.any((line) => line.contains('command -v apt-get')), isFalse);
   });
+
+  test(
+    'the provisioner reports Harness installed from the two roots',
+    () async {
+      final data = '${scratch.path}/.local/share/harness';
+      final state = '${scratch.path}/.local/state/harness';
+      managedNode = File('$state/runtime/node-v24.22.2/bin/node')
+        ..createSync(recursive: true);
+      File('$state/runtime/current-node').writeAsStringSync(managedNode.path);
+      File('$data/cli/cli.js').createSync(recursive: true);
+      // A moved home: the data root holds the marker the move writes.
+      File('$data/.harness-root').writeAsStringSync('1\n');
+      final provisioner = EnvironmentProvisioner(
+        look: scratchHomeLook(scratch.path),
+        isMacOS: false,
+        isLinux: true,
+        isWindows: false,
+        platformEnvironment: {'HOME': scratch.path},
+        run: runner(tmuxPresent: () => true),
+      );
+
+      final readiness = await provisioner.ensureReady(
+        onProgress: (_) {},
+        install: false,
+      );
+
+      expect(
+        readiness.steps[EnvironmentStep.harness],
+        EnvironmentStepStatus.ready,
+        reason: readiness.output.join('\n'),
+      );
+    },
+  );
 
   test('a missing ps joins tmux in the one apt transaction', () async {
     await createManagedHarness();

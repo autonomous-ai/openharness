@@ -1,5 +1,6 @@
 //! Find the `harness` CLI and run it: deadlines, NDJSON lines.
 
+use crate::harness_home::{Entry, Look, harness_roots_with};
 use crate::types::{Log, Output};
 use std::collections::VecDeque;
 use std::env;
@@ -48,7 +49,7 @@ const CODE_MAX: usize = 32;
 const VERSION_MAX: usize = 32;
 
 /// How to run the CLI: `program`, then `prefix`, then the arguments, with `env` on top of the app's own.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct Invocation {
     pub program: PathBuf,
     pub prefix: Vec<OsString>,
@@ -57,20 +58,33 @@ pub struct Invocation {
     from: Lookup,
 }
 
+/// The XDG variables Harness's folders are found by: this process's, or a test's.
+type Env = fn(&str) -> Option<OsString>;
+
 /// What `find_cli` looks with.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 struct Lookup {
     home: PathBuf,
     path_var: Option<OsString>,
     over: Option<PathBuf>,
+    xdg: Env,
 }
 
 /// The desktop app's order: `over`, then the managed runtime with its `cli.js`, then `~/.local/bin/harness`, then a
 /// `harness` in one of PATH's absolute folders. A Finder-launched app has launchd's bare PATH, hence the first two.
 pub fn find_cli(home: &Path, path_var: Option<&OsStr>, over: Option<&Path>) -> Option<Invocation> {
+    find_cli_with(home, path_var, over, |name| env::var_os(name))
+}
+
+/// `find_cli`, Harness's folders found by `xdg`'s XDG variables.
+fn find_cli_with(home: &Path, path_var: Option<&OsStr>, over: Option<&Path>, xdg: Env) -> Option<Invocation> {
     let (program, prefix) = match over {
         Some(over) => (over.to_path_buf(), Vec::new()),
-        None => installed(home, path_var)?,
+        None => installed_with(
+            home,
+            path_var,
+            &Look { linux: cfg!(target_os = "linux"), env: &xdg, exists: &Path::exists, file: &Path::is_file },
+        )?,
     };
     let locale =
         ["LC_ALL", "LC_CTYPE", "LANG"].into_iter().find_map(|name| env::var_os(name).filter(|value| !value.is_empty()));
@@ -78,14 +92,16 @@ pub fn find_cli(home: &Path, path_var: Option<&OsStr>, over: Option<&Path>) -> O
         home: home.to_path_buf(),
         path_var: path_var.map(OsStr::to_os_string),
         over: over.map(Path::to_path_buf),
+        xdg,
     };
     Some(Invocation { program, prefix, env: child_env(home, path_var, locale.as_deref()), from })
 }
 
-fn installed(home: &Path, path_var: Option<&OsStr>) -> Option<(PathBuf, Vec<OsString>)> {
-    let harness = home.join(".harness");
-    let cli_js = harness.join("cli").join("cli.js");
-    if let Some(node) = managed_node(&harness.join("runtime")).filter(|_| cli_js.is_file()) {
+/// The installed CLI, Harness's folders found by one look, so its `cli.js` and its Node never come from two layouts.
+fn installed_with(home: &Path, path_var: Option<&OsStr>, look: &Look) -> Option<(PathBuf, Vec<OsString>)> {
+    let roots = harness_roots_with(home, look);
+    let cli_js = roots.path(Entry::Cli).join("cli.js");
+    if let Some(node) = managed_node(&roots.path(Entry::Runtime)).filter(|_| cli_js.is_file()) {
         return Some((node, vec![cli_js.into_os_string()]));
     }
     let launcher = home.join(".local").join("bin").join("harness");
@@ -138,23 +154,51 @@ pub(crate) fn spawn_lock() -> MutexGuard<'static, ()> {
 
 /// Runs `command` in its own process group to its end, stdin empty. Past `deadline` the whole group is killed and
 /// `timed_out` is true. Each stream keeps its last 256 KiB.
-pub fn run(mut command: Command, deadline: Duration) -> io::Result<Output> {
-    let end = Instant::now() + deadline;
+pub fn run(command: Command, deadline: Duration) -> io::Result<Output> {
+    run_lines(command, deadline, &mut |_| {})
+}
+
+/// As `run`, and hands `sink` each line of stdout and stderr, without its newline, on the caller's thread, in the
+/// order the lines arrive. A line longer than LINE_MAX is not handed. Past the deadline no more lines are handed.
+pub fn run_lines(command: Command, deadline: Duration, sink: &mut dyn FnMut(&str)) -> io::Result<Output> {
+    run_until(command, Instant::now() + deadline, &Instant::now, sink)
+}
+
+/// As `run_lines`, until `end` on the clock `now` reads: a test moves its own clock past `end` instead of sleeping
+/// there.
+fn run_until(
+    mut command: Command,
+    end: Instant,
+    now: &dyn Fn() -> Instant,
+    sink: &mut dyn FnMut(&str),
+) -> io::Result<Output> {
     command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
     let mut child = {
         let _spawning = spawn_lock();
         command.spawn()?
     };
     let pid = child.id() as libc::pid_t;
-    let (done, finished) = mpsc::channel();
-    let stdout = tail(child.stdout.take().expect("stdout is piped"), done.clone(), |_| {});
-    let stderr = tail(child.stderr.take().expect("stderr is piped"), done.clone(), |_| {});
+    // One queue for both streams, so their lines come in the order they were read; bounded, so a slow sink makes the
+    // child wait on its pipe instead of lines piling up here.
+    let (send, lines) = mpsc::sync_channel(LINES_QUEUED);
+    let stdout = tailed_lines(child.stdout.take().expect("stdout is piped"), send.clone());
+    let stderr = tailed_lines(child.stderr.take().expect("stderr is piped"), send);
+    let (send_exit, exit) = mpsc::channel();
     thread::spawn(move || {
         exited(pid);
-        let _ = done.send(());
+        let _ = send_exit.send(());
     });
-    // Its exit and both streams' ends. The child is reaped only after this, so its group is still its own to kill.
-    let timed_out = (0..3).any(|_| finished.recv_timeout(end.saturating_duration_since(Instant::now())).is_err());
+    let left = || end.saturating_duration_since(now());
+    // Both streams' ends, then its exit. The child is reaped only after this, so its group is still its own to kill.
+    // The deadline is checked at each line too: recv_timeout hands a waiting line however late, and behind a slow sink
+    // a child that never stops printing always has one waiting.
+    let timed_out = loop {
+        match lines.recv_timeout(left()) {
+            Ok(line) if now() < end => sink(&line),
+            Err(mpsc::RecvTimeoutError::Disconnected) => break exit.recv_timeout(left()).is_err(),
+            _ => break true,
+        }
+    };
     if timed_out {
         kill_group(pid);
     }
@@ -183,8 +227,9 @@ impl HarnessCli {
 
     /// NotFound when the CLI has gone since, as when it was never there.
     fn command(&self, args: &[&str]) -> io::Result<Command> {
-        let Lookup { home, path_var, over } = &self.from;
-        let invocation = find_cli(home, path_var.as_deref(), over.as_deref()).ok_or(io::ErrorKind::NotFound)?;
+        let Lookup { home, path_var, over, xdg } = &self.from;
+        let invocation =
+            find_cli_with(home, path_var.as_deref(), over.as_deref(), *xdg).ok_or(io::ErrorKind::NotFound)?;
         let mut command = Command::new(&invocation.program);
         command.args(&invocation.prefix).args(args).envs(invocation.env);
         Ok(command)
@@ -458,10 +503,7 @@ fn tail(
                             line.push(byte);
                         }
                     }
-                    let mut kept = writer.lock().unwrap();
-                    kept.extend(&chunk[..read]);
-                    let over = kept.len().saturating_sub(TAIL_MAX);
-                    kept.drain(..over);
+                    keep(&writer, &chunk[..read]);
                 }
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
                 Err(_) => break,
@@ -469,6 +511,38 @@ fn tail(
         }
         let _ = done.send(());
     });
+    kept
+}
+
+/// Adds `bytes` to `tail`, which keeps its last TAIL_MAX.
+fn keep(tail: &Tail, bytes: &[u8]) {
+    let mut kept = tail.lock().unwrap();
+    kept.extend(bytes);
+    let over = kept.len().saturating_sub(TAIL_MAX);
+    kept.drain(..over);
+}
+
+/// A stream that keeps what is read of it in a Tail.
+struct Tailed<R> {
+    stream: R,
+    kept: Tail,
+}
+
+impl<R: Read> Read for Tailed<R> {
+    fn read(&mut self, into: &mut [u8]) -> io::Result<usize> {
+        let read = self.stream.read(into)?;
+        keep(&self.kept, &into[..read]);
+        Ok(read)
+    }
+}
+
+/// Reads `stream` on a thread, keeping its last TAIL_MAX bytes and sending its lines as `read_lines` splits them,
+/// until it ends or nobody receives. `send` is dropped only once the tail is whole, so a queue that has ended means
+/// both tails are.
+fn tailed_lines(stream: impl Read + Send + 'static, send: mpsc::SyncSender<String>) -> Tail {
+    let kept = Tail::default();
+    let stream = Tailed { stream, kept: kept.clone() };
+    thread::spawn(move || read_lines(stream, |line| send.send(line).is_ok()));
     kept
 }
 
@@ -513,8 +587,15 @@ fn read_lines(stream: impl Read, mut send: impl FnMut(String) -> bool) {
     }
 }
 
+/// The run's name in the log: its arguments but the one after `--approve`, Orca's fingerprint, which a log never holds.
 fn name(args: &[&str]) -> String {
-    format!("harness {}", args.join(" "))
+    let shown: Vec<&str> = std::iter::once("")
+        .chain(args.iter().copied())
+        .zip(args)
+        .filter(|(before, _)| *before != "--approve")
+        .map(|(_, arg)| *arg)
+        .collect();
+    format!("harness {}", shown.join(" "))
 }
 
 /// The log line for a child that ended: its code and, after a failure, stderr's last line. Never stdout, which may
@@ -531,8 +612,11 @@ fn ended(name: &str, code: Option<i32>, stderr: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::orca_cli;
+    use crate::harness_home::Look;
     use crate::testing::{Fake, wait_gone};
-    use crate::types::MemoryLog;
+    use crate::types::{Fingerprint, MemoryLog};
+    use std::cell::Cell;
     use std::env;
     use std::fs;
     use std::time::Instant;
@@ -551,8 +635,37 @@ mod tests {
         path
     }
 
+    /// No XDG variable set: the folders a test lays out are the only ones the rule finds, whatever the computer
+    /// running it holds.
+    fn no_env(_: &str) -> Option<OsString> {
+        None
+    }
+
     fn found(home: &Path, path_var: Option<&OsStr>) -> Option<(PathBuf, Vec<OsString>)> {
-        find_cli(home, path_var, None).map(|cli| (cli.program, cli.prefix))
+        find_cli_with(home, path_var, None, no_env).map(|cli| (cli.program, cli.prefix))
+    }
+
+    #[test]
+    fn the_cli_and_its_node_come_from_one_look() {
+        let home = tempfile::tempdir().unwrap();
+        let home = home.path();
+        let legacy = home.join(".harness");
+        let node = put(legacy.join("runtime").join("node-v22").join("bin").join("node"));
+        fs::write(legacy.join("runtime").join("current-node"), node.display().to_string()).unwrap();
+        let cli_js = put(legacy.join("cli").join("cli.js"));
+        // The move lands between two looks: the XDG data root's marker is there from the second one on.
+        let marker = home.join(".local").join("share").join("harness").join(".harness-root");
+        let asked = Cell::new(0);
+        let exists = |path: &Path| {
+            if path == marker {
+                asked.set(asked.get() + 1);
+                return asked.get() > 1;
+            }
+            path.exists()
+        };
+        let look = Look { linux: true, env: &no_env, exists: &exists, file: &exists };
+        assert_eq!(installed_with(home, None, &look), Some((node, vec![cli_js.into_os_string()])));
+        assert_eq!(asked.get(), 1);
     }
 
     #[test]
@@ -658,7 +771,7 @@ mod tests {
         std::os::unix::fs::symlink("/usr/bin/true", &old).unwrap();
         std::os::unix::fs::symlink("/usr/bin/false", &new).unwrap();
         fs::write(runtime.join("current-node"), old.display().to_string()).unwrap();
-        let cli = HarnessCli::new(find_cli(home, None, None).unwrap(), Arc::new(MemoryLog::default()));
+        let cli = HarnessCli::new(find_cli_with(home, None, None, no_env).unwrap(), Arc::new(MemoryLog::default()));
         let status = ["auth", "status", "--json"];
         assert_eq!(cli.run(&status, WAIT).unwrap().code, Some(0));
         // The CLI's updater repoints it while the app runs.
@@ -679,28 +792,141 @@ mod tests {
         assert_eq!(output, Output { code: Some(7), timed_out: false, stdout: "ok\n".into(), stderr: "bad\n".into() });
     }
 
+    /// Runs `sh -c script` in a folder of its own, its deadline WAIT away on a clock the sink moves: at the first line,
+    /// which the script prints once it has written `pid`, the sink reads that file and moves the clock to the deadline.
+    /// Gives whether the run timed out, the lines it handed and the pid read.
+    fn past_its_deadline(script: &str) -> (bool, usize, Option<i32>) {
+        let folder = tempfile::tempdir().unwrap();
+        let mut command = Command::new("sh");
+        command.args(["-c", script]).current_dir(folder.path());
+        let pid_file = folder.path().join("pid");
+        // On a thread, so a run that hands lines for ever fails the test instead of hanging it.
+        let (send, back) = mpsc::channel();
+        thread::spawn(move || {
+            let start = Instant::now();
+            let (clock, end) = (Cell::new(start), start + WAIT);
+            let (mut handed, mut pid) = (0, None);
+            let output = run_until(command, end, &|| clock.get(), &mut |_| {
+                handed += 1;
+                if handed == 1 {
+                    pid = fs::read_to_string(&pid_file).ok().and_then(|pid| pid.trim().parse().ok());
+                    clock.set(end);
+                }
+            });
+            send.send((output.map(|output| output.timed_out), handed, pid))
+        });
+        let (timed_out, handed, pid) = back.recv_timeout(WAIT * 2).expect("back within WAIT twice");
+        (timed_out.unwrap(), handed, pid)
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_run_past_its_deadline_dies_with_its_children() {
-        // Under load `sh` can take the whole deadline to start and die before it writes the pid: the deadline then
-        // doubles until a run got that far.
-        let mut deadline = Duration::from_millis(300);
-        loop {
-            let folder = tempfile::tempdir().unwrap();
-            let mut command = Command::new("sh");
-            command.args(["-c", "sleep 600 & echo $! > pid; wait"]).current_dir(folder.path());
-            let started = Instant::now();
-            let output = run(command, deadline).unwrap();
-            assert!(output.timed_out);
-            assert!(started.elapsed() < deadline + WAIT);
-            let pid = fs::read_to_string(folder.path().join("pid")).ok().and_then(|pid| pid.trim().parse().ok());
-            if let Some(pid) = pid {
-                assert!(wait_gone(pid));
-                return;
+        let (timed_out, handed, pid) = past_its_deadline("sleep 600 & echo $! > pid; echo started; wait");
+        assert!(timed_out);
+        assert_eq!(handed, 1);
+        assert!(wait_gone(pid.expect("the pid sh wrote")));
+    }
+
+    /// What `sh -c script` hands a sink, and its output. `args` are the script's `$1` on.
+    fn handed(script: &str, args: &[&str]) -> (Vec<String>, Output) {
+        let mut command = Command::new("sh");
+        command.args(["-c", script, "sh"]).args(args);
+        let mut seen = Vec::new();
+        let output = run_lines(command, WAIT, &mut |line| seen.push(line.to_string())).unwrap();
+        (seen, output)
+    }
+
+    /// A child that prints `a` on stdout, `b` on stderr, then `c` on stdout and exits 3, each line only once the sink
+    /// has the one before: it waits on a FIFO the sink writes to.
+    fn in_turn() -> (Vec<String>, Output) {
+        let folder = tempfile::tempdir().unwrap();
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", "mkfifo one two; echo a; read go < one; echo b >&2; read go < two; echo c; exit 3"])
+            .current_dir(folder.path());
+        let mut fifos = ["one", "two"].map(|name| folder.path().join(name)).into_iter();
+        let mut seen = Vec::new();
+        let output = run_lines(command, WAIT, &mut |line| {
+            seen.push(line.to_string());
+            if let Some(fifo) = fifos.next() {
+                // On a thread: a run that held its lines back would leave this open waiting for a reader, not the test.
+                thread::spawn(move || fs::write(fifo, "\n"));
             }
-            deadline *= 2;
-            assert!(deadline < Duration::from_secs(10), "sh never wrote the pid");
-        }
+        })
+        .unwrap();
+        (seen, output)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_run_hands_each_line_as_it_arrives_in_the_order_written() {
+        assert_eq!(in_turn().0, ["a", "b", "c"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_run_with_a_sink_still_gives_code_and_both_streams() {
+        let output = Output { code: Some(3), timed_out: false, stdout: "a\nc\n".into(), stderr: "b\n".into() };
+        assert_eq!(in_turn().1, output);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_line_over_64_kib_is_not_handed_and_the_next_one_is() {
+        let (over, longest) = ("x".repeat(LINE_MAX + 1), "y".repeat(LINE_MAX));
+        let (seen, _) = handed(r#"printf '%s\n' "$1" "$2" next"#, &[&over, &longest]);
+        assert_eq!(seen, [longest.as_str(), "next"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_last_line_without_a_newline_is_handed() {
+        assert_eq!(handed(r"printf 'a\nb'", &[]).0, ["a", "b"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bytes_that_are_not_utf_8_are_handed_as_text() {
+        let (seen, output) = handed(r"printf 'a\377b\n'", &[]);
+        assert_eq!(seen, ["a\u{fffd}b"]);
+        assert_eq!((output.code, output.timed_out), (Some(0), false));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_sink_slower_than_the_child_loses_no_line() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut command = Command::new("sh");
+        // `written` opens once every line is in the pipe, past the lines the run queues.
+        command.args(["-c", "mkfifo written; seq 2000; : > written"]).current_dir(folder.path());
+        let written = folder.path().join("written");
+        let (all_written, child_done) = mpsc::channel();
+        let mut seen = Vec::new();
+        let output = run_lines(command, WAIT, &mut |line| {
+            if seen.is_empty() {
+                // The first line waits for the child to have written them all. On a thread, so a run that never gets
+                // there fails the test instead of hanging it.
+                let (written, all_written) = (written.clone(), all_written.clone());
+                thread::spawn(move || all_written.send(fs::read(written).is_ok()));
+                assert_eq!(child_done.recv_timeout(WAIT), Ok(true));
+            }
+            seen.push(line.to_string());
+        })
+        .unwrap();
+        let all: Vec<String> = (1..=2000).map(|line| line.to_string()).collect();
+        assert_eq!(seen, all);
+        assert_eq!((output.code, output.timed_out), (Some(0), false));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_run_past_its_deadline_stops_handing_lines_and_dies_with_its_children() {
+        // A child that never stops printing: lines wait behind the sink when the deadline passes, and none is handed.
+        let (timed_out, handed, pid) = past_its_deadline("sleep 600 & echo $! > pid; while :; do echo x; done");
+        assert!(timed_out);
+        assert_eq!(handed, 1);
+        assert!(wait_gone(pid.expect("the pid sh wrote")));
     }
 
     #[cfg(unix)]
@@ -821,6 +1047,36 @@ mod tests {
         let mut child = fake.cli().spawn(&WATCH).unwrap();
         assert_eq!(child.exit(WAIT), Ok(Some(3)));
         assert_eq!(fake.log().lines(), ["harness hardware watch --json: exit 3: gone"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_log_names_a_run_without_its_fingerprint() {
+        let fingerprint = Fingerprint::parse("ap1-0123456789abcdef0123456789abcdef").unwrap();
+        let grant = "Read your projects and workspaces.";
+        let approve = serde_json::json!({
+            "connect": "approve",
+            "name": "Harness Device",
+            "version": "0.6.70",
+            "fingerprint": fingerprint.as_str(),
+            "grants": [grant],
+            "update": false,
+        })
+        .to_string();
+        let fake = Fake::new();
+        fake.script("device orca connect --json", &[&approve]);
+        fake.script(
+            &format!("device orca connect --approve {} --json", fingerprint.as_str()),
+            &[r#"{"connect":"done"}"#],
+        );
+        orca_cli::connect(&fake.cli(), None);
+        orca_cli::connect(&fake.cli(), Some(&fingerprint));
+        let lines = fake.log().lines();
+        assert_eq!(
+            lines,
+            ["harness device orca connect --json: exit 0", "harness device orca connect --approve --json: exit 0"]
+        );
+        assert!(lines.iter().all(|line| !line.contains(fingerprint.as_str()) && !line.contains(grant)), "{lines:?}");
     }
 
     #[cfg(unix)]

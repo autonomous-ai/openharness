@@ -78,7 +78,7 @@ describe.skipIf(process.platform === 'win32')('the run\'s Node', () => {
     expect(process.env.E2E_NODE_PATH).toBe(join(tmp, readdirSync(tmp)[0], 'bin', 'node'))
     teardown()
     expect(readdirSync(tmp)).toEqual([])
-    expect(config.test.globalSetup).toEqual(['./e2e/harness/socketRoom.ts', './e2e/harness/testNode.ts', './e2e/harness/bundle.ts'])
+    expect(config.test.globalSetup).toEqual(['./e2e/harness/socketRoom.ts', './e2e/harness/testNode.ts', './e2e/harness/processImages.ts', './e2e/harness/bundle.ts'])
   })
 
   it('lets a Node be alone but for libnode, which Homebrew\'s Node loads from beside it', () => {

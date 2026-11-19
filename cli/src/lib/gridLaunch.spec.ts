@@ -694,6 +694,13 @@ describe('web tools (grid ADR 0041)', () => {
     expect(launchOf('codex', WITH_MCP).env.GRID_MCP_AUTHORIZATION).toBe(`Bearer ${WIRE.apiKey}`)
   })
 
+  it('puts the Codex web tools in every request, not behind tool search', () => {
+    // Deferred, they lost the search to ChatGPT apps and the model used the apps' web search
+    // (e2e, codex 0.170.0, 2026-11-18). See `codexMcpArgs`.
+    expect(codexArg('mcp_servers.harness.omit_tools_from'))
+      .toBe('mcp_servers.harness.omit_tools_from=["deferred"]')
+  })
+
   it('declares it in the config file opencode already gets', () => {
     expect(opencodeConfig().mcp['harness'])
       .toEqual({

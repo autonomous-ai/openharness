@@ -1,0 +1,6 @@
+{
+  "smtpHost": "smtp.mail.invalid",
+  "smtpPort": 587,
+  "user": "shop-admin",
+  "password": "smtp_FAKE8Wq3Ld6Zn1Rv5Kt2Mx9"
+}

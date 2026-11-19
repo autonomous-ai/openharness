@@ -153,19 +153,30 @@ export class RuntimeProfileController {
     // The other engines' pane drivers read the pane with their engine's own code, loaded in this process: without
     // it the switch is refused before any key is sent.
     if (!native && isOtherEngine(session.engine) && !await loadEngine(session.engine)) throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
+    // Which of the several refusals answered BUSY: on an agent that refused every switch with an empty, idle composer
+    // (MSI, 2026-11-17) the log could not say whether the input, the screen or an unfinished switch held it.
     const release = await this.deps.acquireInput(session.agentId)
-    if (!release) throw new RuntimeProfileControlError('BUSY')
+    if (!release) {
+      console.warn(`[runtime-profile] ${sessionId.slice(0, 8)} ${session.engine} set ${target.model}@${target.effort} failed: BUSY (input held)`)
+      throw new RuntimeProfileControlError('BUSY')
+    }
     let controlStarted = false
     let pickerOpen = false
+    let held = ''
     try {
       if (!await this.deps.validateRuntime(session)) throw new RuntimeProfileControlError('TMUX_FAILED')
       const capture = await this.deps.capture(session.agentId, 100)
       if (!capture) throw new RuntimeProfileControlError('TMUX_FAILED')
       const inspection = (await this.deps.readScreen(session, capture))?.pane
+      held = 'screen unread'
       if (!inspection) throw new RuntimeProfileControlError('BUSY')
+      held = 'scope'
       await native?.validate({ stage: 'scope', target, state: observed, pane: inspection })
+      held = inspection.dialog ? 'dialog' : inspection.draft ? 'draft' : 'no prompt'
       if (!inspection.idle) throw new RuntimeProfileControlError('BUSY')
+      held = 'switch unfinished'
       if (!this.deps.manager.beginControl(session, target)) throw new RuntimeProfileControlError('BUSY')
+      held = ''
       controlStarted = true
       if (native) {
         await native.apply({ target, current, options })
@@ -179,7 +190,7 @@ export class RuntimeProfileController {
         pickerOpen = false
       } else if (session.engine === 'opencode') {
         pickerOpen = true
-        await this.setOpencode(session, target)
+        await this.setOpencode(session, target, current)
         pickerOpen = false
       } else if (session.engine === 'hermes') {
         pickerOpen = true
@@ -212,7 +223,7 @@ export class RuntimeProfileController {
       // A failed switch used to leave NOTHING in the log — the picker just flashed open and shut on the
       // user's terminal and the device said nothing useful. Name the session, engine and reason.
       const code = error instanceof RuntimeProfileControlError ? error.code : 'TMUX_FAILED'
-      console.warn(`[runtime-profile] ${sessionId.slice(0, 8)} ${session.engine} set ${target.model}@${target.effort} failed: ${code}`)
+      console.warn(`[runtime-profile] ${sessionId.slice(0, 8)} ${session.engine} set ${target.model}@${target.effort} failed: ${code}${held && code === 'BUSY' ? ` (${held})` : ''}`)
       if (error instanceof RuntimeProfileControlError) throw error
       throw new RuntimeProfileControlError('TMUX_FAILED')
     } finally {
@@ -347,13 +358,86 @@ export class RuntimeProfileController {
    * same model name) the switch is refused rather than guessed — picking the wrong model silently is worse
    * than not switching, and blind arrow-driving is what sank the Command Code attempt.
    */
-  private async setOpencode(session: RegisteredSession, target: RuntimeProfile): Promise<void> {
-    const entry = (await this.deps.manager.opencodeCatalog()).find((item) => item.id === target.model)
+  private async setOpencode(session: RegisteredSession, target: RuntimeProfile, current: RuntimeProfile | null): Promise<void> {
+    const catalog = await this.deps.manager.opencodeCatalog(session.cwd)
+    const entry = catalog.find((item) => item.id === target.model)
     if (!entry) throw new RuntimeProfileControlError('MODEL_UNAVAILABLE')
-    await this.driveOpencodePicker(session, entry)
-    if (!await this.waitObservedProfile(session, target)) {
+    const opencode = this.engine('opencode')
+    // An agent nobody has written to has no session yet (OpenCode makes it at the first message), and so no profile the
+    // state keeps for it: its footer is read here instead, as the state would read it (MSI, 2026-11-17).
+    const bound = !!session.sessionId
+    const onScreen = (capture: string) => {
+      const text = stripAnsi(capture)
+      const footer = opencode.parseOpencodeFooter(text)
+      return footer && { model: opencode.opencodeFooterModelId(text, catalog), effort: footer.effort ?? 'auto' }
+    }
+    const shows = (capture: string, effort: boolean) => {
+      const now = onScreen(capture)
+      return now?.model === target.model && (!effort || now.effort === target.effort)
+    }
+    let variantOpen = false
+    if (current?.model !== target.model) {
+      await this.driveOpencodePicker(session, entry)
+      // OpenCode 2.2 opens `Select variant` itself once a model with variants is picked, and a picker left open takes
+      // whatever is typed next: it is answered below, Default included (MSI, 2026-11-17).
+      if (entry.efforts?.length) {
+        variantOpen = !!await this.waitPane(session.agentId, (v) => opencode.parseOpencodeVariantRows(stripAnsi(v)) !== null, PICKER_STEP_MS)
+      }
+      const moved = bound ? await this.waitObservedModel(session, target)
+        : !!await this.waitPane(session.agentId, (v) => shows(v, false), COMMAND_CONFIRM_MS)
+      if (!moved) throw new RuntimeProfileControlError('CONFIRM_TIMEOUT')
+    }
+    // A model OpenCode switches to starts on its Default variant (MSI, 2026-11-17), which is `auto` here.
+    const effortNow = bound ? parseRuntimeProfile(this.deps.manager.selectedModel(session))?.effort
+      : onScreen(await this.deps.capture(session.agentId, 100) ?? '')?.effort
+    if (variantOpen || effortNow !== target.effort) {
+      if (target.effort !== 'auto' && !entry.efforts?.includes(target.effort)) throw new RuntimeProfileControlError('EFFORT_UNSUPPORTED')
+      await this.pickOpencodeVariant(session, target.effort === 'auto' ? 'Default' : target.effort, variantOpen)
+    }
+    const taken = bound ? await this.waitObservedProfile(session, target)
+      : !!await this.waitPane(session.agentId, (v) => shows(v, true), COMMAND_CONFIRM_MS)
+    if (!taken) throw new RuntimeProfileControlError('CONFIRM_TIMEOUT')
+  }
+
+  /**
+   * Opens one of OpenCode's pickers by its command, as a person does: the command typed, then Enter once OpenCode
+   * lists it under the composer. OpenCode 2.2 drops an Enter that comes before that list is drawn, and the picker
+   * never opens (MSI, 2026-11-17: `/models` and Enter sent together switched nothing, now and then). A command it never
+   * lists is taken back out of the composer before this refuses.
+   */
+  private async openOpencodePicker(session: RegisteredSession, command: string, opened: (capture: string) => boolean): Promise<void> {
+    if (!await this.deps.sendLiteral(session.agentId, command)) throw new RuntimeProfileControlError('TMUX_FAILED')
+    // On one line: the command, a gap, its description (`┃ /models     Switch model ┃`). Across lines, `\s` matched the
+    // composer's own `┃  /models` and the gutter under it, and Enter went before the list was there.
+    const listed = new RegExp(`┃[ \\t]*${command.replace('/', '\\/')}[ \\t]{2,}\\S`)
+    if (!await this.waitPane(session.agentId, (v) => listed.test(stripAnsi(v)), PICKER_STEP_MS)) {
+      for (let i = 0; i < command.length; i++) await this.deps.sendKey(session.agentId, 'BSpace')
       throw new RuntimeProfileControlError('CONFIRM_TIMEOUT')
     }
+    if (!await this.deps.sendKey(session.agentId, 'Enter')) throw new RuntimeProfileControlError('TMUX_FAILED')
+    if (!await this.waitPane(session.agentId, (v) => opened(stripAnsi(v)), PICKER_OPEN_MS)) {
+      throw new RuntimeProfileControlError('CONFIRM_TIMEOUT')
+    }
+  }
+
+  /**
+   * OpenCode 2's `/effort`: a `Select variant` picker with a typed filter, as `/models` is. Enter only once the row the
+   * filter puts first is the variant itself: `high` also leaves `xhigh` in the list, and the first row is the one Enter
+   * takes. Anything else closes the picker and refuses.
+   */
+  private async pickOpencodeVariant(session: RegisteredSession, variant: string, open: boolean): Promise<void> {
+    const opencode = this.engine('opencode')
+    if (!open) {
+      const before = opencode.countOpencodeVariantPickers(stripAnsi(await this.deps.capture(session.agentId, 100) ?? ''))
+      await this.openOpencodePicker(session, '/effort', (v) => opencode.countOpencodeVariantPickers(v) > before)
+    }
+    if (!await this.deps.sendLiteral(session.agentId, variant)) throw new RuntimeProfileControlError('TMUX_FAILED')
+    const first = (v: string) => opencode.parseOpencodeVariantRows(stripAnsi(v))?.[0]?.name.toLowerCase()
+    if (!await this.waitPane(session.agentId, (v) => first(v) === variant.toLowerCase(), PICKER_STEP_MS)) {
+      await this.deps.sendKey(session.agentId, 'Escape')
+      throw new RuntimeProfileControlError('EFFORT_UNSUPPORTED')
+    }
+    if (!await this.deps.sendKey(session.agentId, 'Enter')) throw new RuntimeProfileControlError('TMUX_FAILED')
   }
 
   /**
@@ -395,16 +479,7 @@ export class RuntimeProfileController {
     // composer and submitted as a message. Count the openings instead and wait for one more.
     const opencode = this.engine('opencode')
     const before = opencode.countOpencodePickers(stripAnsi(await this.deps.capture(session.agentId, 100) ?? ''))
-    if (!await this.deps.sendText(session.agentId, '/models')) {
-      throw new RuntimeProfileControlError('TMUX_FAILED')
-    }
-    if (!await this.waitPane(
-      session.agentId,
-      (v) => opencode.countOpencodePickers(stripAnsi(v)) > before,
-      PICKER_OPEN_MS,
-    )) {
-      throw new RuntimeProfileControlError('CONFIRM_TIMEOUT')
-    }
+    await this.openOpencodePicker(session, '/models', (v) => opencode.countOpencodePickers(v) > before)
     if (!await this.deps.sendLiteral(session.agentId, filter)) {
       throw new RuntimeProfileControlError('TMUX_FAILED')
     }
@@ -418,6 +493,9 @@ export class RuntimeProfileController {
       // Leave the pane as it was found. A picker left open with a dead filter in it swallows whatever
       // the user types next, and the retry below would type its filter on top of this one.
       await this.deps.sendKey(session.agentId, 'Escape')
+      // Gone before the retry counts pickers: counted while this one was still drawn, the retry's own picker read
+      // as no new one, and every switch that needed the second filter timed out (MSI, OpenCode 2.2, 2026-11-17).
+      await this.waitPane(session.agentId, (v) => opencode.countOpencodePickers(stripAnsi(v)) <= before, PICKER_STEP_MS)
       return false
     }
     if (!await this.deps.sendKey(session.agentId, 'Enter')) {

@@ -93,6 +93,31 @@ describe('opening an agent outside Harness from the dial', () => {
     expect(calls).toEqual([run(OPEN, '-b', CLAUDE, `claude://code/continue?session=${SESSION}`)])
   })
 
+  it('the Claude app: a link and an app that both fail run open -b once, said in one line', async () => {
+    const { calls, logs, opener } = recorder({}, [1, 1])
+    const app = target({ __CFBundleIdentifier: CLAUDE, CLAUDE_CODE_HOST_SESSION_ID: SESSION })
+    expect(await opener.open('a1', app)).toBe(false)
+    expect(calls).toEqual([run(OPEN, '-b', CLAUDE, `claude://code/continue?session=${SESSION}`), forward(CLAUDE)])
+    expect(logs).toEqual(['[device] open · claude · fallback'])
+  })
+
+  // As the observed source builds it before the first hook: the pane its record gave, and its adapter's bundle
+  // (observed.ts target(); docs/plans/2026-11-18-dial-claude-app-swipe-before-hook-design.md).
+  it('a Claude app session only the scan found opens by its link, and still gets its app when the link fails', async () => {
+    const scanned: OpenTarget = { bundle: CLAUDE, pane: { adapter: 'claude', id: SESSION } }
+    const link = run(OPEN, '-b', CLAUDE, `claude://code/continue?session=${SESSION}`)
+    const ok = recorder()
+    expect(ok.opener.can(scanned)).toBe(true)
+    expect(await ok.opener.open('a1', scanned)).toBe(true)
+    expect(ok.calls).toEqual([link])
+    expect(ok.logs).toEqual([])
+
+    const failed = recorder({}, [1])
+    expect(await failed.opener.open('a1', scanned)).toBe(true)
+    expect(failed.calls).toEqual([link, forward(CLAUDE)])
+    expect(failed.logs).toEqual(['[device] open · claude · fallback'])
+  })
+
   it('WezTerm: its pane is activated, then WezTerm comes forward', async () => {
     const { calls, opener } = recorder()
     expect(await opener.open('a1', target({ WEZTERM_PANE: '7' }))).toBe(true)
@@ -147,6 +172,16 @@ describe('opening an agent outside Harness from the dial', () => {
     }
     const vscode = { HC_TERMINAL_ID: 't3', TERM_PROGRAM: 'vscode', __CFBundleIdentifier: 'com.microsoft.VSCode' }
     expect(bundleOf(detectHost(vscode), vscode)).toBe('com.microsoft.VSCode')
+  })
+
+  // cmux is built on Ghostty, and its terminals may carry Ghostty's bundle id: after a failed cmux link, Ghostty would
+  // come forward instead of cmux.
+  it('an agent in cmux brings cmux, whatever bundle id its terminal carries', () => {
+    const cmux = { CMUX_SURFACE_ID: '6F1C2B3A-4D5E-4F60-8172-93A4B5C6D7E8', CMUX_WORKSPACE_ID: '0A1B2C3D-4E5F-4061-8273-94A5B6C7D8E9' }
+    for (const bundle of [undefined, 'com.mitchellh.ghostty', 'com.cmuxterm.app']) {
+      const hints = { ...cmux, TERM_PROGRAM: 'ghostty', ...(bundle ? { __CFBundleIdentifier: bundle } : {}) }
+      expect(bundleOf(detectHost(hints), hints), String(bundle)).toBe('com.cmuxterm.app')
+    }
   })
 
   it('an app with no known bundle id opens nothing', async () => {

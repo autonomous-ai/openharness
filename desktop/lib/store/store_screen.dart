@@ -1182,7 +1182,7 @@ class _ProductPageState extends State<_ProductPage> {
     final local = widget.notifier.localMachineState;
     if (local == null ||
         local.machine.machineId != machineId ||
-        _machineHarness(local, widget.entry.id)?.hasUpdate != true ||
+        _machineHarness(local, widget.entry.id)?.canUpdate != true ||
         _busy.contains(machineId)) {
       return;
     }
@@ -1316,7 +1316,7 @@ class _ProductPageState extends State<_ProductPage> {
     final operationId = _operationId(local, entry.id);
     final hasUpdate =
         workspace == null &&
-        _machineHarness(local, entry.id)?.hasUpdate == true;
+        _machineHarness(local, entry.id)?.canUpdate == true;
     final base = entry.engine.isNotEmpty
         ? entry.engine
         : (knownHarnessBase[entry.id] ?? '');
@@ -1764,7 +1764,9 @@ class _InstallLine extends StatelessWidget {
       ].whereType<String>().join('\n');
       if (words.isNotEmpty) failureTooltip = words;
     } else if (installed) {
-      status = row?.linked == true
+      status = row?.needsSetup == true
+          ? 'Needs setup'
+          : row?.linked == true
           ? 'Installed · linked to a checkout'
           : row?.hasUpdate == true
           ? 'Update available'

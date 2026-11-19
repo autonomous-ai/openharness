@@ -469,15 +469,17 @@ describe('DshViewerManager, the rest of a viewer\'s life', () => {
     expect(urls).toEqual([])
   })
 
-  it('logs what the viewer prints, up to forty lines, without blank lines or zsh noise, and a failure to start', async () => {
+  it('logs the size of each line the viewer prints, never its words, up to forty lines, without blank lines or zsh noise, and a failure to start', async () => {
+    // A viewer reads the person's workspace: what it prints (a traceback, a notebook's output) can quote their work.
     const { spawned, logs, manager } = setup()
     await manager.start('a1', dsh({ command: 'v', url: 'http://127.0.0.1:${port}/' }), '/ws')
-    const printed = Array.from({ length: 45 }, (_, i) => `line ${i}`)
+    const printed = Array.from({ length: 45 }, (_, i) => `SECRET line ${i}`)
     spawned[0].stdout!.emit('data', Buffer.from(`\n${printed.slice(0, 20).join('\n')}\n   \n`))
     spawned[0].stderr!.emit('data', Buffer.from(`zsh: can't change option: zle\n${printed.slice(20).join('\n')}\n`))
     spawned[0].emit('error', new Error('spawn EACCES'))
-    const viewerLines = logs.filter((line) => line.startsWith('[dsh] acme/thing viewer · '))
-    expect(viewerLines).toEqual(printed.slice(0, 40).map((line) => `[dsh] acme/thing viewer · ${line}`))
+    const viewerLines = logs.filter((line) => line.startsWith('[dsh] acme/thing viewer printed '))
+    expect(viewerLines).toEqual(printed.slice(0, 40).map((line) => `[dsh] acme/thing viewer printed a line of ${line.length} chars`))
+    expect(logs.join('\n')).not.toContain('SECRET')
     expect(logs).toContain('[dsh] acme/thing viewer could not start · spawn EACCES')
   })
 

@@ -334,7 +334,7 @@ Owner, October 12: "we need to properly clean up after too". What an agent start
 for no one or sits in the person's windows. Harness closes those itself, in a service (`services/agentCleanup.ts`, in
 the edge host; `core/agentCleanupLink.ts` is the core's side). A close is `harness close`'s: the screen saved, the
 process stopped, the conversation kept, so the person can resume it and `harness show` still reads its answer. One log
-line for each (`[agent-cleanup] closed kid (3f2a9c1e): …`).
+line for each (`[agent-cleanup] closed 3f2a9c1e: …`).
 
 - **With its starter.** Closing a harness closes the harnesses it started on this machine (registry `parentAgentId`),
   at once and working or not: an orphan that keeps working spends tokens for a starter that will never read it. Every
@@ -352,7 +352,7 @@ line for each (`[agent-cleanup] closed kid (3f2a9c1e): …`).
   within a minute (the review of #1234). So the cleanup closes nothing in its first half hour after it starts, and an
   engine that keeps no dated transcript (only Claude Code and Codex declare one) is never closed for being idle.
   Nor one that still runs background commands: `closeStarted` answers `SESSION_NOT_IDLE` with `backgroundCommands`,
-  logged once (`[agent-cleanup] left kid (3f2a9c1e) open: 2 background commands running`) and asked again five
+  logged once (`[agent-cleanup] left 3f2a9c1e open: 2 background commands running`) and asked again five
   minutes later, until it has sat two hours (`BACKGROUND_CLOSE_MS`) after its last answer: then it is closed whatever
   runs, and the log line carries the count (`…, with 2 background commands running. Its conversation is kept.`). An
   agent often leaves a dev server or a watcher running on purpose, and a stale Hermes entry never ends. Only the

@@ -20,7 +20,8 @@ export function createSideReads(): SideRead {
       const key = `${reader}\n${sessionId}`
       if (reported.has(key)) return
       reported.add(key)
-      console.error(`[transcripts] the ${reader} could not take in a line of ${sid(sessionId)}; the line goes on to its engine: ${error instanceof Error ? error.message : String(error)}`)
+      // The error's kind only: a reader that parses the line quotes it in its message, and the line is the person's.
+      console.error(`[transcripts] the ${reader} could not take in a line of ${sid(sessionId)}; the line goes on to its engine: ${error instanceof Error ? error.name : typeof error}`)
     }
   }
 }

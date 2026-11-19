@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { basename, join } from 'path'
+import { harnessPath } from '../config/harnessHome.js'
 import type * as ClaudeHomesModule from './claudeHomes.js'
 import type * as ClaudeProfilesModule from './claudeProfiles.js'
 
@@ -210,15 +211,45 @@ describe('profileHome', () => {
     expect(profileHome('codex', profileId(machineId, 'codex', codex), machineId, { home, environment: {} })).toBe('default')
   })
 
-  it('takes a claudeHome that is a listed profile or a folder under ~/.harness/claude-profiles, never the default or any other path', async () => {
+  // Harness's claude-profiles folder is ~/.harness's on macOS and the XDG data root's on a fresh Linux home like this one.
+  it('takes a claudeHome that is a listed profile or a folder under Harness\'s claude-profiles, never the default or any other path', async () => {
     const { claudeHomeListed } = await loadModule()
     const work = join(home, '.claude-work')
     account(work, { displayName: 'Work' })
     const options = { home, environment: {} }
+    const own = harnessPath('claude-profiles', home)
     expect(claudeHomeListed(work, machineId, options)).toBe(true)
-    expect(claudeHomeListed(join(home, '.harness', 'claude-profiles', 'new-one'), machineId, options)).toBe(true)
-    expect(claudeHomeListed(join(home, '.harness', 'claude-profiles', '..', '..', 'elsewhere'), machineId, options)).toBe(false)
+    expect(claudeHomeListed(join(own, 'new-one'), machineId, options)).toBe(true)
+    expect(claudeHomeListed(join(`${own}x`, 'new-one'), machineId, options)).toBe(false)
+    expect(claudeHomeListed(join(own, '..', '..', 'elsewhere'), machineId, options)).toBe(false)
     expect(claudeHomeListed(home, machineId, options)).toBe(false)
     expect(claudeHomeListed(join(home, 'not-listed'), machineId, options)).toBe(false)
+  })
+})
+
+// The id hashes the folder's real path, so a profile moved with Harness's folder takes its new folder's id; nothing stores
+// one (the move rewrites the folders), and Desktop's swarmProfileId computes the same from the folder the daemon reports.
+describe('profile ids after Harness\'s folder moves', () => {
+  const moved = { env: {}, exists: (path: string) => path === '/h/.local/share/harness', isFile: (path: string) => path === '/h/.local/share/harness/.harness-root' }
+
+  it('a profile in the moved folder takes the id of its new folder', async () => {
+    const { profileFor, profileId } = await loadModule()
+    const folder = join(harnessPath('claude-profiles', '/h', 'linux', moved), '2')
+    expect(folder).toBe('/h/.local/share/harness/claude-profiles/2')
+    expect(profileFor('m', folder, folder, '/h').id).toBe(profileId('m', 'claude', folder))
+    // swarmProfileId('m', 'claude', '/h/.local/share/harness/claude-profiles/2') in Desktop.
+    expect(profileId('m', 'claude', folder)).toBe('872709902d494c68')
+  })
+
+  it('the default profile\'s id does not change', async () => {
+    const { profileFor } = await loadModule()
+    expect(profileFor('m', '/h', '/h', '/h', true).id).toBe('71dc90339553114c')
+  })
+
+  it('macOS hashes the real path as before', async () => {
+    const { profileFor } = await loadModule()
+    const folder = join(harnessPath('claude-profiles', '/Users/h', 'darwin', moved), '2')
+    expect(folder).toBe('/Users/h/.harness/claude-profiles/2')
+    expect(profileFor('m', folder, folder, '/Users/h').id).toBe('9a02c3def3094fc3')
   })
 })

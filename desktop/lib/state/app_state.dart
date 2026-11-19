@@ -2,6 +2,7 @@ import '../browser/browser_availability.dart';
 import '../browser/browser_settings.dart';
 import '../browser/browser_stream.dart';
 import '../browser/browser_tiles.dart';
+import '../core/harness_home.dart';
 import '../core/home_dir.dart';
 import '../usage/usage_account_key.dart';
 import '../measurement/product_measurement.dart';
@@ -105,6 +106,8 @@ import '../settings/experimental_features.dart';
 import '../core/local_key_value_store.dart';
 import '../measurement/setup_preference_store.dart';
 import '../devices/device_hosts.dart';
+import '../devices/device_app_offer.dart';
+import '../devices/device_app_setup.dart';
 import '../stats/harness_stats.dart';
 import '../terminal/terminal_session.dart';
 import '../terminal/terminal_theme.dart';
@@ -4171,6 +4174,7 @@ class AppNotifier extends ChangeNotifier {
     AgentUnread? agentUnread,
     SystemNotifications? systemNotifications,
     this.experimentalSettingsTransport,
+    DeviceAppOffer? deviceAppOffer,
   }) : agentPrefetch =
            agentPrefetch ??
            (kUnderTest
@@ -4195,6 +4199,9 @@ class AppNotifier extends ChangeNotifier {
        // layout is remembered: with a layout store there is a state file, and
        // without one (the tests) nothing is written anywhere.
        dial = DialState(paneLayoutStore?.storage),
+       deviceAppOffer =
+           deviceAppOffer ??
+           deviceAppOfferForThisComputer(store: paneLayoutStore?.storage),
        agentPreference = AgentPreference(paneLayoutStore?.storage),
        firstArrival = FirstArrival(paneLayoutStore?.storage),
        projectHistory = ProjectHistory(paneLayoutStore?.storage),
@@ -4277,6 +4284,15 @@ class AppNotifier extends ChangeNotifier {
     // scope here and is the nullable one.
     this.agentUnread.addListener(_announceUnreadToDial);
     addListener(_syncDeviceHosts);
+    // The menu-bar app's offer looks again when a dial attaches and when the
+    // window comes back in front. The dial outlives the app; a disposed offer
+    // is told nothing.
+    dial.addListener(() {
+      if (!_disposed) this.deviceAppOffer.dialChanged(dial.status.attached);
+    });
+    foreground.addListener(() {
+      if (foreground.value) this.deviceAppOffer.windowFronted();
+    });
     addListener(_firstArrivalBehindTour);
     _autoRenameTabs = appearancePrefsStore.value.autoRenameTabs;
     appearancePrefsStore.addListener(_autoRenameChanged);
@@ -4526,6 +4542,10 @@ class AppNotifier extends ChangeNotifier {
   /// frames from the local daemon; its own notifier, so the row rebuilds
   /// without dragging the whole rail through a machine-list rebuild.
   final DialState dial;
+
+  /// The Harness menu-bar app's offer, for the band and the Devices row; fed
+  /// the dial and the window coming back in front.
+  final DeviceAppOffer deviceAppOffer;
   final AgentPreference agentPreference;
   final ProjectHistory projectHistory;
 
@@ -4534,6 +4554,11 @@ class AppNotifier extends ChangeNotifier {
 
   /// The first workspace on a computer new to Harness opens with agents already in it.
   final FirstArrival firstArrival;
+
+  /// How this app finds Harness's folders: this computer's look, or a test's,
+  /// so a folder a test pins does not depend on the computer running it.
+  @visibleForTesting
+  HomeLook? homeLook;
 
   /// Whether this computer had the Harness CLI before this launch's setup: `~/.harness/cli`
   /// exists. Tests answer no, as on a fresh computer.
@@ -4544,8 +4569,10 @@ class AppNotifier extends ChangeNotifier {
           final home = maybeHomeDir();
           return home == null ||
               FileSystemEntity.typeSync(
-                    '$home${Platform.pathSeparator}.harness'
-                    '${Platform.pathSeparator}cli',
+                    HarnessHome.of(
+                      home,
+                      join: separatorJoin(Platform.pathSeparator),
+                    ).path(HarnessEntry.cli),
                   ) !=
                   FileSystemEntityType.notFound;
         };
@@ -4561,7 +4588,7 @@ class AppNotifier extends ChangeNotifier {
           if (home == null) return false;
           final sep = Platform.pathSeparator;
           return FileSystemEntity.typeSync(
-                '$home$sep.harness${sep}auth${sep}session.json',
+                '${HarnessHome.of(home, join: separatorJoin(sep)).path(HarnessEntry.auth)}${sep}session.json',
               ) ==
               FileSystemEntityType.file;
         };
@@ -14866,11 +14893,7 @@ class AppNotifier extends ChangeNotifier {
         for (final a in stateOf(machineId)?.agents ?? const <Agent>[])
           a.claudeHome,
       };
-      var n = 1;
-      while (taken.contains('$home/.harness/claude-profiles/$n')) {
-        n++;
-      }
-      final path = '$home/.harness/claude-profiles/$n';
+      final path = newClaudeAccountFolder(home, taken, look: homeLook);
       // The folder only exists once Claude has signed in there; the machine finds it by itself then.
       final error = await createAgent(
         machineId,
@@ -22274,6 +22297,7 @@ class AppNotifier extends ChangeNotifier {
     setupDownloads.dispose();
     experimentalFeatures.dispose();
     deviceHosts.dispose();
+    deviceAppOffer.dispose();
     viewer?.auth.dispose();
     _deviceVisit?.dispose();
     _modelManager?.dispose();
@@ -22374,3 +22398,23 @@ String machineSelectErrorText(String code, String machine) => switch (code) {
 String startupLogLine(Map<String, int> timings) => timings.entries
     .map((step) => '${step.key} after ${step.value} ms')
     .join(', ');
+
+/// The first folder among [home]'s Claude profiles that is not [taken]: where
+/// "Add Claude account" opens a new Claude. [home] is only ever this
+/// computer's, so this computer's look finds the root; [look] is for tests.
+String newClaudeAccountFolder(
+  String home,
+  Set<Object?> taken, {
+  HomeLook? look,
+}) {
+  final profiles = HarnessHome.of(
+    home,
+    join: separatorJoin('/'),
+    look: look,
+  ).path(HarnessEntry.claudeProfiles);
+  var n = 1;
+  while (taken.contains('$profiles/$n')) {
+    n++;
+  }
+  return '$profiles/$n';
+}

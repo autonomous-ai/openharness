@@ -5,7 +5,6 @@
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 10: docs/design/2026-10-03-harnessd.md).
  */
-import { correlateAgentEvent } from '../../lib/agentEvent.js'
 import type { QuestionWatcher } from '../../lib/questionController.js'
 import type { WifiFeed } from '../wifi.js'
 import type { TurnRecaps } from './recaps.js'
@@ -24,17 +23,15 @@ export interface CancelDeps {
   stopHeartbeat: (sessionId: string) => void
   questionWatcher: Pick<QuestionWatcher, 'stop'>
   mirror: Pick<TurnRecaps, 'cancel'>
-  turnActivity: Pick<TurnActivity, 'observe' | 'snapshot'>
+  turnActivity: Pick<TurnActivity, 'observe'>
   /** When each open turn started (the heartbeats'): the WiFi device reads an agent as running by it. */
   turnStartedAt: Map<string, number>
-  agentIdFor: (sessionId: string) => string
-  /** The app. */
-  clients: { send(frame: ReturnType<typeof correlateAgentEvent>): void }
+  /** Every window is told how the agent reads now (core/turns/heartbeats.ts). */
+  tell: (sessionId: string) => void
 }
 
 export function createCancel({
-  resolve, normalizers, input, device, stopHeartbeat, questionWatcher, mirror, turnActivity, turnStartedAt,
-  agentIdFor, clients, beforeCancel,
+  resolve, normalizers, input, device, stopHeartbeat, questionWatcher, mirror, turnActivity, turnStartedAt, tell, beforeCancel,
 }: CancelDeps) {
   // Web cancel (C-c) interrupts the turn — claude writes no end_turn line to close it, so stop the
   // heartbeat and mark the turn closed here (mirrors the hosted runtime stopping its heartbeat on cancel). We do
@@ -53,11 +50,11 @@ export function createCancel({
     mirror.cancel(sessionId) // close the device's "Working…" tile (bare done, no recap) — a cancel emits no turn_ended
     // ...but the turn IS over, and every window — not only the one that cancelled — reads it so at once,
     // rather than as working until the 30-second lease runs out and as unknown after (found end to end).
-    // An engine that ignores the interrupt says so with its next output, which reads as working again.
+    // An engine that ignores the interrupt says so with its next output, which reads as working again; one whose turns
+    // end by hook reads idle until its next turn starts (core/turns/turnHooks.ts).
     turnStartedAt.delete(sessionId)
     turnActivity.observe(sessionId, 'turn_ended')
-    const activity = turnActivity.snapshot(sessionId)
-    if (activity) clients.send(correlateAgentEvent({ type: 'agent_activity', payload: { activity } }, sessionId, agentIdFor(sessionId)))
+    tell(sessionId)
     return cancelled
   }
   return cancelAgent

@@ -37,8 +37,9 @@
  */
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { availableParallelism, totalmem } from 'node:os'
+import { availableParallelism, homedir, totalmem } from 'node:os'
 import { join, resolve } from 'node:path'
+import { harnessPath, legacyHarnessPath, type HomeLook } from '../config/harnessHome.js'
 import { AGENT_BROWSER_REQUESTS, mayOpenBrowser, type AgentLife, type AgentView, type Asker, type CoreApi, type CorePorts, type ServiceRequests } from '../core/api.js'
 import { sweepAgentTmpWhenDue } from '../lib/agentTmp.js'
 import { browserTools } from '../lib/browserToolsAsset.js'
@@ -100,9 +101,13 @@ export interface AgentBrowserOptions {
   now?: () => Date
 }
 
-/** The daemon's id on Podman's labels: a dev or test daemon beside the installed one never touches another's. */
-export function daemonIdOf(dataDir: string): string {
-  return createHash('sha256').update(resolve(dataDir)).digest('hex').slice(0, 16)
+/** The daemon's id on Podman's labels: a dev or test daemon beside the installed one never touches another's. The
+ *  default data folder is labelled by its spelling before Harness's folder moved on Linux, so a browser started before
+ *  the move stays this daemon's after it. */
+export function daemonIdOf(dataDir: string, home = homedir(), platform = process.platform, look?: HomeLook): string {
+  const folder = resolve(dataDir)
+  const labelled = folder === resolve(harnessPath('cli', home, platform, look), 'data') ? join(legacyHarnessPath('cli', home, platform), 'data') : folder
+  return createHash('sha256').update(labelled).digest('hex').slice(0, 16)
 }
 
 /** The machine's zone and language, read once: a browser's defaults (spec § Settings per agent). Under launchd the

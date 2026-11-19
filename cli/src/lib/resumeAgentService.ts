@@ -427,7 +427,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
           maxAttempts: 1,
           engine: saved.engine,
           sessionLabel: buildHarnessSessionLabel(saved.engine),
-          argv,
+          argv: () => argv,
           // Windows: the workspace to start in and the shell the pane becomes after the engine (windows/engineStart.ts).
           paneLaunch: windowsPaneLaunch(saved.engine, { ...options, held: isWindowsHeldPane(argv) }),
           ...(Object.keys(paneEnv).length ? { env: paneEnv } : {}),

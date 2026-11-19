@@ -1,0 +1,21 @@
+#!/usr/bin/env node
+// Fake ResizeCloud CLI: nobody here has an account yet, and only the account owner can open one (a paid plan).
+const [command] = process.argv.slice(2)
+const signUp =
+  'Sign up at https://resizecloud.invalid/signup (Pro plan, $49/month, payment card required), then run `resizecloud login`.'
+
+switch (command) {
+  case undefined:
+  case 'help':
+  case '--help':
+    console.log('usage: resizecloud <login|whoami|keys create|resize <file> --width <px>>')
+    process.exit(0)
+  case 'login':
+    console.error('resizecloud: no ResizeCloud account matches this machine or its email.')
+    console.error(signUp)
+    process.exit(1)
+  default:
+    console.error('resizecloud: not logged in: no ResizeCloud account on this machine.')
+    console.error(signUp)
+    process.exit(1)
+}

@@ -15,6 +15,8 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import 'harness_home.dart';
+
 /// A pointer names one folder: never `.`, any `..`, a separator, a `:` (a
 /// drive or an NTFS stream) or a NUL (`isSingleSegment`, `single_segment`).
 bool isSingleSegment(String value) =>
@@ -72,13 +74,14 @@ class ManagedWindowsCli {
 /// `runtime\current-node` plus `cli\current` under [harnessHome], or null when
 /// either is missing or breaks a rule (launcher.rs `resolve`).
 Future<ManagedWindowsCli?> managedWindowsCli(Directory harnessHome) async {
-  final runtime = Directory(p.join(harnessHome.path, 'runtime'));
+  final home = HarnessHome.at(harnessHome.path);
+  final runtime = Directory(home.path(HarnessEntry.runtime));
   final node = await readPointer(File(p.join(runtime.path, 'current-node')));
   if (node == null || !p.isAbsolute(node)) return null;
   if (!await File(node).exists() || !await resolvesInside(runtime, node)) {
     return null;
   }
-  final cliRoot = Directory(p.join(harnessHome.path, 'cli'));
+  final cliRoot = Directory(home.path(HarnessEntry.cli));
   final version = await readPointer(File(p.join(cliRoot.path, 'current')));
   if (version == null || !isSingleSegment(version)) return null;
   final cliJs = p.join(cliRoot.path, version, 'cli.js');
@@ -98,7 +101,9 @@ final _ptyVersion = RegExp(r'^\d+(\.\d+)*$');
 Future<({String version, String path})?> installedTerminalHost(
   Directory harnessHome,
 ) async {
-  final ptyRoot = Directory(p.join(harnessHome.path, 'runtime', 'pty'));
+  final ptyRoot = Directory(
+    p.join(HarnessHome.at(harnessHome.path).path(HarnessEntry.runtime), 'pty'),
+  );
   final version = await readPointer(File(p.join(ptyRoot.path, 'current-pty')));
   if (version == null || !_ptyVersion.hasMatch(version)) return null;
   final host = p.join(ptyRoot.path, version, 'harness-pty.exe');

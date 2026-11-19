@@ -145,7 +145,7 @@ export function createGuestCreate(deps: GuestCreateDeps) {
       // its PATH is the owner's, which the guest may not read).
       ...(launch.guestHostUser ? { paneLaunch: { cwd: launch.workspace, afterExit: windowsAfterExit(engine) } } : {}),
       sessionLabel: label,
-      argv,
+      argv: () => argv,
       env: launch.env,
       bypassPermission,
       permissionMode,

@@ -183,9 +183,6 @@ void ui_focus_project(const char *project_id);
 // commander_route_confirm. `need_new` = no agent fit. Runs on the commander-WS task (takes the display lock).
 void ui_voice_routed(bool auto_sent, bool need_new, const char *route_id, const char *agent_id,
                      const char *agent_name, double confidence);
-// Backend abandoned an Overview route voice (empty transcript / STT or router error) → drop the loading
-// overlay now instead of waiting out the routing watchdog. No-op unless a route voice is waiting.
-void ui_voice_route_abort(void);
 // One short line from the cabled Mac (a routing refusal, a send that did not land). Releases the routing
 // overlay first, then shows the message for ~2s over whatever is on screen.
 void ui_cable_toast(const char *msg);
@@ -251,11 +248,12 @@ void ui_voice_error(const char *msg);
 // `name`, `machine` and `recap` come from the frame: the dial holds one tab, and the agent may be on
 // another — the row has nobody else to ask. Any may be NULL; a held tile's own model wins when present.
 // A live `summary`. TIER is the wire's "alert" | "list" | "silent"; NULL or unknown falls back to the old
-// flags (silent, then quiet, else alert). Returns true when the caller should beep: an alert, and not
-// for the pane already on the face. A list entry is a drawer row only; silent files nothing.
+// flags (silent, then quiet, else alert). Returns true when the caller should beep: an alert the drawer
+// took, and not for the pane already on the face. A list entry is a drawer row only; silent files nothing.
 bool ui_notify_summary(const char *project_id, const char *name, const char *machine, const char *recap,
                        const char *tier, bool quiet, bool silent);
-// A failed turn: an alert. Files a drawer row, shows the error for 8 s. True when the caller should beep.
+// A failed turn: an alert. Files a drawer row, shows the error for 8 s. True when the caller should beep: the
+// drawer took the row and the pane is not on the face.
 bool ui_turn_error(const char *project_id, const char *message);
 // The WINDOW looked at this agent → drop its FINISHED-turn row here, as a tap on that row does.
 //
@@ -288,8 +286,10 @@ void ui_project_clear_event(const char *project_id);
 // Also records it behind the bell: a blocked agent is counted, and stays counted until the question is
 // ANSWERED rather than until somebody looks at it. Not gated on the window having the agent on screen —
 // showing a question asks the window to bring it forward, so that gate could never open.
-// True when the caller should beep: not for the pane already on the face.
-bool ui_question_show(const char *project_id, const char *agent_name, const char *machine, const char *request_id, const struct cJSON *questions);
+// `list`: a question the dial was told before, back on the daemon's drawer. Its row is filed with no wake and no
+// beep, and stays read when the dial already read that agent's question in the same words.
+// True when the caller should beep: never for `list`, nor for the pane already on the face.
+bool ui_question_show(const char *project_id, const char *agent_name, const char *machine, const char *request_id, const struct cJSON *questions, bool list);
 // That question was answered somewhere else (the app, or the pane by hand) — leave the screen instead of
 // waiting for an answer that can no longer be delivered. No-op unless THIS request is the one on screen.
 void ui_question_close(const char *project_id, const char *request_id);

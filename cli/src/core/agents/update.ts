@@ -135,7 +135,7 @@ export function createAgentUpdate({
       // it" had no evidence to work from: nothing said whether the request even arrived. One line
       // here splits the question in two — no line means it never reached the adapter, a line means
       // the fan-out is downstream.
-      console.log(`[rename] ${sid(projectId)} → "${preview(name, 40)}" · broadcast to web + device`)
+      console.log(`[rename] ${sid(projectId)} → name ${name.length} chars · broadcast to web + device`)
     }
   }
 

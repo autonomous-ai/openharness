@@ -9,11 +9,12 @@
  * environment, `TZ` is UTC, and no path's length matters. Results name the root `<root>`. The argv each launch
  * is built with is (c1)'s launchArgv.golden.spec.ts. `RECORD_OTHER_ENGINES_GOLDEN=1` writes the fixture.
  */
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/other-launch.golden.json', import.meta.url))
 const RECORD = process.env.RECORD_OTHER_ENGINES_GOLDEN === '1'
@@ -46,8 +47,7 @@ beforeAll(() => {
   for (const dir of ['data', 'runtime', 'work', join('home', '.claude', 'projects'), join('home', '.codex')]) mkdirSync(join(root, dir), { recursive: true })
   for (const [version, prints] of [['v1', '1.18.31'], ['v2', 'opencode v2.0.18']]) {
     mkdirSync(join(root, 'bin', version), { recursive: true })
-    writeFileSync(join(root, 'bin', version, 'opencode'), `#!/bin/sh\necho "${prints}"\n`)
-    chmodSync(join(root, 'bin', version, 'opencode'), 0o755)
+    writeExecutable(join(root, 'bin', version, 'opencode'), `#!/bin/sh\necho "${prints}"\n`)
   }
   golden = RECORD ? {} : JSON.parse(readFileSync(GOLDEN, 'utf8')) as Record<string, unknown>
 })

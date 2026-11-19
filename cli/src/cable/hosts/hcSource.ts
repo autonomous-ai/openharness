@@ -69,10 +69,16 @@ export class HcSource implements HostSource {
   private readonly listeners = new Set<() => void>()
   /** Every listable terminal, by address, in the order each became listable. */
   private readonly rows = new Map<string, Row>()
-  /** The live terminals the window shows, and those hc reports an agent for, listed or not, which the Herdr adapter
-   *  asks after (shows, reports). Each holds the client's 1,024 at most. */
-  private readonly shown = new Set<string>()
+  /** The live terminals the window shows, with their tab, kind and status, and those hc reports an agent for, listed
+   *  or not, which the Herdr adapter asks after (shows, tabOf, kindOf, statusOf, reports). Each holds the client's
+   *  1,024 at most. */
+  private readonly shown = new Map<string, Pick<HcTerminal, 'tab' | 'kind' | 'status'>>()
   private readonly reported = new Set<string>()
+  /** The pid of the program each live terminal runs now (hc's foreground), shown or not, which the devices ask after
+   *  (terminalOf). It holds the client's 1,024 at most. */
+  private readonly foregrounds = new Map<string, number>()
+  /** A subscription's snapshot came, and it has not ended since: only then is a status in `shown` hc's now. */
+  private following = false
   private running = false
   private subscription: { close(): void } | undefined
   /** The count of listed agents last said, and of those left out. */
@@ -177,10 +183,44 @@ export class HcSource implements HostSource {
     return this.shown.has(address)
   }
 
+  /** The tab of Herdr's window that holds a terminal it shows, its `herdr.tab` label as hc tells it now: a stroke
+   *  matches it with the tab `herdr-app status` names on screen (herdrApp.ts onScreen). */
+  tabOf(address: string): string | undefined {
+    return this.shown.get(address)?.tab
+  }
+
+  /** The kind and hc's status of the agent in a terminal the window shows, as hc tells them now: a stroke presses a
+   *  Claude Code terminal's own page keys, and none while it asks (herdrApp.ts). A drop keeps the rows for the retry,
+   *  but no status: hc may have changed it meanwhile, so none is told until the next snapshot. */
+  kindOf(address: string): string | undefined {
+    return this.shown.get(address)?.kind
+  }
+
+  statusOf(address: string): HcStatus | undefined {
+    return this.following ? this.shown.get(address)?.status : undefined
+  }
+
   /** Whether hc reports an agent's status for that live terminal, shown or not: a hidden worker's hooked copy takes
    *  words too. */
   reports(address: string): boolean {
     return this.reported.has(address)
+  }
+
+  /** The one live terminal whose foreground is that pid. Two terminals naming one pid leave no certain terminal, and a
+   *  wrong one would take that session's words (docs/plans/2026-11-17-dial-recap-after-restart-design.md, Addendum). */
+  terminalOf(pid: number): string | undefined {
+    let found: string | undefined
+    for (const [address, foreground] of this.foregrounds) {
+      if (foreground !== pid) continue
+      if (found !== undefined) return undefined
+      found = address
+    }
+    return found
+  }
+
+  /** The terminal of a listed agent, for the dial's scroll: an agent only hc lists has no other pane to name. */
+  paneOf(agentId: string): string | undefined {
+    return this.find(agentId)?.address
   }
 
   private listed(): Row[] {
@@ -221,12 +261,14 @@ export class HcSource implements HostSource {
    *  `closed ·`. */
   private closed(listed: boolean, reason: SocketFault): void {
     this.subscription = undefined
+    this.following = false
     this.attempts.failed(!listed && (reason === 'rejected' || reason === 'bad_answer') ? 'list' : 'closed', reason)
   }
 
   private close(): void {
     this.subscription?.close()
     this.subscription = undefined
+    this.following = false
   }
 
   private clear(): void {
@@ -234,40 +276,50 @@ export class HcSource implements HostSource {
     this.said = undefined
     this.over = 0
     this.unkept = 0
+    const held = this.rows.size > 0 || this.foregrounds.size > 0
     this.shown.clear()
     this.reported.clear()
-    if (this.rows.size === 0) return
+    this.foregrounds.clear()
     this.rows.clear()
-    this.emit()
+    if (held) this.emit()
   }
 
   /** hc's whole list: a row that stays listable with the same kind keeps its id and its place. */
   private snapshot(terminals: readonly HcTerminal[]): void {
     const before = JSON.stringify(this.list())
+    const foregrounds = new Map(this.foregrounds)
+    this.following = true
     this.shown.clear()
     this.reported.clear()
+    this.foregrounds.clear()
     for (const terminal of terminals) this.note(terminal)
     const fresh = new Map(terminals.filter(listable).map((terminal) => [terminal.address, terminal]))
     for (const [address, row] of this.rows) if (fresh.get(address)?.kind !== row.agent.engine) this.rows.delete(address)
     for (const terminal of fresh.values()) this.take(terminal, true)
-    this.told(before)
+    const moved = foregrounds.size !== this.foregrounds.size
+      || [...foregrounds].some(([address, pid]) => this.foregrounds.get(address) !== pid)
+    this.told(before, moved)
   }
 
   private changed(terminal: HcTerminal): void {
     const before = JSON.stringify(this.list())
+    const pid = this.foregrounds.get(terminal.address)
     this.note(terminal)
     if (listable(terminal)) this.take(terminal, false)
     else this.rows.delete(terminal.address)
-    this.told(before)
+    this.told(before, this.foregrounds.get(terminal.address) !== pid)
   }
 
-  /** Notes whether the window shows a terminal, and whether hc reports an agent there. */
+  /** Notes whether the window shows a terminal, in which tab and with which agent's kind and status, whether hc
+   *  reports an agent there, and the pid it runs now. */
   private note(terminal: HcTerminal): void {
-    const { address } = terminal
-    if (inWindow(terminal)) this.shown.add(address)
+    const { address, tab, kind, status } = terminal
+    if (inWindow(terminal)) this.shown.set(address, { tab, kind, status })
     else this.shown.delete(address)
     if (reporting(terminal)) this.reported.add(address)
     else this.reported.delete(address)
+    if (terminal.live && terminal.foregroundPid !== undefined) this.foregrounds.set(address, terminal.foregroundPid)
+    else this.foregrounds.delete(address)
   }
 
   /** Sets a terminal's row. Another kind at its address is another agent, whose first status ends no turn of the one
@@ -292,10 +344,11 @@ export class HcSource implements HostSource {
     this.status(row, terminal.status, terminal.turn, snapshot)
   }
 
-  /** The counts said when they change, and one onChange when anything a listed row shows changed. */
-  private told(before: string): void {
+  /** The counts said when they change, and one onChange when anything a listed row shows changed, or a terminal's
+   *  foreground pid did (`moved`): the devices pair a session with its terminal by it, listed or not. */
+  private told(before: string, moved: boolean): void {
     this.counted()
-    if (JSON.stringify(this.list()) !== before) this.emit()
+    if (moved || JSON.stringify(this.list()) !== before) this.emit()
   }
 
   /** The listed agents, and those left out: past the dial's 64, and the terminals past the client's own bound, which

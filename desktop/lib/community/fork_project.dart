@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 
 import '../core/harness_cli_runner.dart';
+import '../core/harness_home.dart';
 import '../core/project_folder.dart';
 import 'fork_link.dart';
 import 'hub_contract.dart';
@@ -40,18 +41,21 @@ class ForkProject {
 /// the trusted Store, never a package URL supplied by a publication.
 class ForkProjectImporter {
   ForkProjectImporter({
-    Directory? root,
+    this._root,
     this.projectsRoot,
     this.origin = const String.fromEnvironment(
       'HARNESS_COMMUNITY_ORIGIN',
       defaultValue: 'https://harness.autonomous.ai',
     ),
     HarnessCliRunner? cli,
-  }) : root =
-           root ??
-           Directory(p.join(HarnessCliRunner().harnessHome.path, 'community')),
-       cli = cli ?? HarnessCliRunner(runTimeout: const Duration(minutes: 5));
-  final Directory root;
+  }) : cli = cli ?? HarnessCliRunner(runTimeout: const Duration(minutes: 5));
+  final Directory? _root;
+
+  /// The folder a test handed in, or the community folder under [cli]'s data
+  /// root, looked up at each use so a fork made after the home moved lands in
+  /// the new place.
+  Directory get root =>
+      _root ?? Directory(cli.roots.path(HarnessEntry.community));
 
   /// Null uses the same ~/harnesses default as New Harness. Tests supply both
   /// roots so importing never writes into the person's real projects.
@@ -428,23 +432,30 @@ class ForkProjectImporter {
   Future<void> prepareRuntime(ForkProject project) async {
     if (project.dsh != 'autonomous/godogen') return;
     final modules = Link(p.join(project.folder, 'node_modules'));
-    if (await FileSystemEntity.type(modules.path, followLinks: false) !=
-        FileSystemEntityType.notFound) {
+    final roots = cli.roots;
+    final dsh = roots.path(HarnessEntry.dsh);
+    final type = await FileSystemEntity.type(modules.path, followLinks: false);
+    final String target;
+    if (type == FileSystemEntityType.notFound) {
+      target = p.join(dsh, 'autonomous', 'godogen', 'node_modules');
+    } else if (type == FileSystemEntityType.link) {
+      // A link made before the home moved names the old dsh folder, which only
+      // the bridge serves, and only until it removes itself.
+      final old = '${roots.legacyPath(HarnessEntry.dsh)}${p.separator}';
+      final current = await modules.target();
+      if (old == '$dsh${p.separator}' || !current.startsWith(old)) return;
+      target = p.join(dsh, current.substring(old.length));
+    } else {
       return;
     }
-    final target = p.join(
-      cli.harnessHome.path,
-      'dsh',
-      'autonomous',
-      'godogen',
-      'node_modules',
-    );
     if (!await Directory(target).exists()) {
       throw const FormatException(
         'Godogen needs its tools. Open Store, update Godogen, then retry.',
       );
     }
-    await modules.create(target);
+    await (type == FileSystemEntityType.link
+        ? modules.update(target)
+        : modules.create(target));
   }
 
   static Map<String, List<int>> validate(

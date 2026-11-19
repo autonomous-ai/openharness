@@ -10,6 +10,8 @@ import { agentSettingsPath } from '../lib/agentSettings.js'
 import { setAgentSettingsForTest, signedOutForTest, TEST_ACCOUNT } from '../testing/agentSettings.js'
 import type { Frame } from './model.js'
 import { HACHI_ID } from '../dsh/builtinIds.js'
+import { MISSING_HELPER, REPLACED_PROGRAM } from '../engines/kit/identityScan.js'
+import { OTHER_ENGINE_STATES } from '../engines/otherEngines.js'
 
 const NOW = Date.parse('2026-10-11T12:00:00Z')
 
@@ -876,6 +878,84 @@ describe('refusals and the person', () => {
     const shownJson = harness(d)
     expect(await showCommand(['asker', '--json'], shownJson.deps)).toBe(EXIT.ok)
     expect(JSON.parse(shownJson.out[0])).toMatchObject({ state: 'needs-input', needsPerson: true })
+  })
+})
+
+describe('a harness held for the person', () => {
+  it('wait ends on a held one with exit 3 and its sentence, in text and JSON', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('kid', { namedState: MISSING_HELPER })]
+    const h = harness(d)
+    expect(await waitCommand(['kid'], h.deps)).toBe(EXIT.needsInput)
+    expect(h.out[0]).toBe('kid: held · This Harness install is incomplete. Reinstall Harness. Only the person can fix this.')
+    const json = harness(d)
+    expect(await waitCommand(['kid', '--json'], json.deps)).toBe(EXIT.needsInput)
+    expect(JSON.parse(json.out.join('\n')).harnesses[0]).toMatchObject({ state: 'held', namedState: MISSING_HELPER, needsPerson: true,
+      next: [{ tell: 'tell the person: This Harness install is incomplete. Reinstall Harness.' }] })
+  })
+
+  it('wait ends on a held one over a working screen, at the first look', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('kid', { activity: { state: 'working' }, namedState: REPLACED_PROGRAM })]
+    d.screens.set('kid', ['working'])
+    const h = harness(d)
+    expect(await waitCommand(['kid'], h.deps)).toBe(EXIT.needsInput)
+    expect(d.requests.some((r) => r.type === 'agent_close')).toBe(false)
+  })
+
+  it('wait does not end on a recovering state, and says it when the time is up', async () => {
+    for (const sentence of [OTHER_ENGINE_STATES.lost, 'A state from a newer Harness.']) {
+      const d = new FakeDaemon()
+      d.frames = [frame('kid', { activity: { state: 'working' }, namedState: sentence })]
+      const h = harness(d)
+      expect(await waitCommand(['kid', '--timeout', '1s'], h.deps)).toBe(EXIT.timeout)
+      expect(h.out[0]).toBe(`kid: timeout · ${sentence} Wait again or read it: harness show kid`)
+      const json = harness(d)
+      expect(await waitCommand(['kid', '--timeout', '1s', '--json'], json.deps)).toBe(EXIT.timeout)
+      const result = JSON.parse(json.out.join('\n')).harnesses[0]
+      expect(result).toMatchObject({ state: 'timeout', namedState: sentence })
+      expect(result).not.toHaveProperty('needsPerson')
+    }
+  })
+
+  it('wait with --any returns on the held one', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('busy', { activity: { state: 'working' } }), frame('kid', { namedState: MISSING_HELPER })]
+    const h = harness(d)
+    expect(await waitCommand(['busy,kid', '--any'], h.deps)).toBe(EXIT.needsInput)
+  })
+
+  it('show says held, the sentence and to tell the person, reading no screen', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' }), frame('kid', { activity: { state: 'working' }, namedState: MISSING_HELPER })]
+    d.screens.set('kid', ['working'])
+    const h = harness(d)
+    started(h.ledger, 'lead', 'kid')
+    expect(await showCommand(['kid'], h.deps)).toBe(EXIT.ok)
+    expect(h.out[0]).toBe('kid on studio: held · Codex · started by you')
+    expect(h.out[1]).toBe('held: This Harness install is incomplete. Reinstall Harness.')
+    expect(h.out.at(-1)).toContain('tell the person: This Harness install is incomplete. Reinstall Harness.')
+    expect(d.requests.some((r) => r.type === 'agent_close')).toBe(false)
+    const json = harness(d)
+    expect(await showCommand(['kid', '--json'], json.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(json.out[0])).toMatchObject({ state: 'held', namedState: MISSING_HELPER, needsPerson: true,
+      next: [{ tell: 'tell the person: This Harness install is incomplete. Reinstall Harness.' }] })
+  })
+
+  it('show gives a recovering state as the screen says, with its sentence', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' }), frame('kid', { namedState: OTHER_ENGINE_STATES.unavailable })]
+    d.screens.set('kid', ['idle'])
+    const h = harness(d)
+    started(h.ledger, 'lead', 'kid')
+    expect(await showCommand(['kid'], h.deps)).toBe(EXIT.ok)
+    expect(h.out[0]).toBe('kid on studio: idle · Codex · started by you')
+    expect(h.out[1]).toBe(OTHER_ENGINE_STATES.unavailable)
+    const json = harness(d)
+    expect(await showCommand(['kid', '--json'], json.deps)).toBe(EXIT.ok)
+    const result = JSON.parse(json.out[0])
+    expect(result).toMatchObject({ state: 'idle', namedState: OTHER_ENGINE_STATES.unavailable })
+    expect(result).not.toHaveProperty('needsPerson')
   })
 })
 
@@ -2374,6 +2454,23 @@ describe('harness watch', () => {
     expect(said[3]).toMatchObject({ state: 'idle', summary: 'Fixed: 12 passed.', tools: 1 })
   })
 
+  it('says held once with its sentence, and working again once the hold is gone', async () => {
+    const d = new FakeDaemon()
+    const looks = [
+      frame('kid', { activity: { state: 'working' } }),
+      frame('kid', { namedState: MISSING_HELPER }),
+      frame('kid', { namedState: MISSING_HELPER }),
+      frame('kid', { activity: { state: 'working' } }),
+    ]
+    d.frames = [looks[0]]
+    let round = 0
+    const h = harness(d, { sleep: async (ms) => { h.advance(ms); d.frames = [looks[Math.min(++round, looks.length - 1)]] } })
+    expect(await watchCommand(['kid', '--json', '--timeout', '5s'], h.deps)).toBe(EXIT.timeout)
+    const said = lines(h.out)
+    expect(said.map((l) => l.event)).toEqual(['working', 'held', 'working'])
+    expect(said[1]).toMatchObject({ state: 'held', namedState: MISSING_HELPER })
+  })
+
   it('says idle, not done, for a harness with nothing asked of it, once it is past its start', async () => {
     const d = new FakeDaemon()
     d.frames = [frame('new', { createdAt: '2026-10-11T11:00:00Z' })]
@@ -2613,6 +2710,17 @@ describe('wait and watch on pushed events', () => {
     // A push for each change, one look to confirm the idle one, then nothing but the backstop, a minute at a time.
     expect(slept.slice(0, 4)).toEqual([60_000, 60_000, 60_000, 1_000])
     expect(slept.slice(4, -1).every((ms) => ms === 60_000)).toBe(true)
+  })
+
+  it('waits a minute between looks while held, as while working', async () => {
+    const d = new PushingDaemon()
+    d.frames = [frame('kid', { namedState: MISSING_HELPER })]
+    const h = harness(d)
+    const slept: number[] = []
+    h.deps.sleep = async (ms) => { slept.push(ms); h.advance(ms) }
+    expect(await watchCommand(['kid', '--timeout', '3m'], h.deps)).toBe(EXIT.timeout)
+    expect(h.out).toEqual(['12:00:00Z kid: held: This Harness install is incomplete. Reinstall Harness.'])
+    expect(slept).toEqual([60_000, 60_000, 60_000])
   })
 
   it('watch says background while commands run, again when their number changes, and done once none does', async () => {

@@ -23,6 +23,7 @@ import {
   accessSync,
   closeSync,
   constants,
+  existsSync,
   fchmodSync,
   fstatSync,
   fsyncSync,
@@ -142,9 +143,27 @@ function agyStopStatus(input) {
   return input.fullyIdle === false ? 'waiting' : failed || input.error ? 'error' : undefined
 }
 
+/**
+ * Harness's data and state folders, by the rule of src/config/harnessHome.ts: on Linux the XDG ones once the data one
+ * holds its marker (`.harness-root`, a file: a folder of its name is none), else ~/.harness while that exists, else the
+ * XDG ones (a variable counts only as an absolute path); ~/.harness elsewhere.
+ */
+function harnessRoots() {
+  const legacy = join(homedir(), '.harness')
+  if (process.platform !== 'linux') return { data: legacy, state: legacy }
+  const base = (name, ...fallback) => isAbsolute(process.env[name] || '') ? process.env[name] : join(homedir(), ...fallback)
+  const xdg = { data: join(base('XDG_DATA_HOME', '.local', 'share'), 'harness'), state: join(base('XDG_STATE_HOME', '.local', 'state'), 'harness') }
+  return isRegularFile(join(xdg.data, '.harness-root')) || !existsSync(legacy) ? xdg : { data: legacy, state: legacy }
+}
+
+/** A regular file, through a link as the installers' `test -f` looks; a folder, or nothing, is none. */
+function isRegularFile(path) {
+  try { return statSync(path).isFile() } catch { return false }
+}
+
 function paths() {
-  const cliDir = join(homedir(), '.harness', 'cli')
-  const dataDir = routed?.dataDir ?? argValue('--data-dir', process.env.ADAPTER_DATA_DIR || join(cliDir, 'data'))
+  // Every installed command names its data folder: the rule is looked up only for one that does not.
+  const dataDir = routed?.dataDir ?? (argValue('--data-dir', '') || process.env.ADAPTER_DATA_DIR || join(harnessRoots().data, 'cli', 'data'))
   const claudeProjectsDir = argValue('--claude-projects-dir', process.env.CLAUDE_PROJECTS_DIR || join(homedir(), '.claude', 'projects'))
   const codexHome = argValue('--codex-home', process.env.CODEX_HOME || join(homedir(), '.codex'))
   const grokHome = argValue('--grok-home', process.env.GROK_HOME || join(homedir(), '.grok'))
@@ -282,9 +301,11 @@ function boundedPrompt(prompt) {
 
 /**
  * POST one hook event to the daemon. Resolves true when it answered 2xx, false when it could not be
- * reached or refused, 'held' for live admission backpressure, and 'late' when it took the request but
- * did not answer within the budget. Neither live hold is permission for an offline registry write.
+ * reached, 'refused' when it answered anything else, 'held' for live admission backpressure, and 'late'
+ * when it took the request but did not answer within the budget. Only false permits an offline registry write.
  *
+ * 'refused' is a daemon that runs: a 500 taken for an outage wrote the hook's own row in place of the
+ * agent's, which the daemon's next save took in, and the agent it had created was gone (e2e/scale.e2e.ts).
  * 'late' is not "the daemon is down", and nothing may be written behind its back for it: the request is
  * in its socket, and it handles it once it gets to it. A daemon whose event loop is held for a few
  * seconds (or one simply slow to answer a session-start, which waits for a discovery pass) used to get
@@ -316,8 +337,24 @@ function privateSocket(file) {
 function socketIn(dataDir, port) {
   const beside = join(dataDir, `daemon-${port}.sock`)
   if (Buffer.byteLength(beside) <= MAX_SOCKET_PATH_BYTES) return beside
-  const short = join(homedir(), '.harness', 's', createHash('sha256').update(dataDir).digest('hex').slice(0, 16), `daemon-${port}.sock`)
+  const root = runtimeShortRoot() ?? join(harnessRoots().state, 's')
+  const short = join(root, createHash('sha256').update(dataDir).digest('hex').slice(0, 16), `daemon-${port}.sock`)
   return Buffer.byteLength(short) <= MAX_SOCKET_PATH_BYTES ? short : null
+}
+
+/**
+ * Where short folders go on Linux when the account has its own runtime folder, as src/lib/localSocket.ts finds it:
+ * `$XDG_RUNTIME_DIR/harness` when the variable names an absolute path to a real folder, not a link, of this account's,
+ * mode 0700. Null otherwise.
+ */
+function runtimeShortRoot() {
+  const dir = process.env.XDG_RUNTIME_DIR
+  if (process.platform !== 'linux' || !dir || !isAbsolute(dir)) return null
+  try {
+    const seen = lstatSync(dir)
+    const uid = typeof process.getuid === 'function' ? process.getuid() : null
+    return seen.isDirectory() && seen.uid === uid && (seen.mode & 0o7777) === 0o700 ? join(dir, 'harness') : null
+  } catch { return null }
 }
 
 function daemonSocket(port, dataDir) {
@@ -445,7 +482,7 @@ function post(port, path, body, onResponse, facts = {}) {
           if (ok && onResponse && response.length <= 16_384) {
             try { onResponse(JSON.parse(response)) } catch { /* Unavailable context never blocks a turn. */ }
           }
-          resolve(ok)
+          resolve(ok || 'refused')
         })
       }
     )
@@ -503,14 +540,20 @@ function postObserved(port, body) {
  * another terminal: it is sent from the default session alone. And on macOS alone: hc runs on Linux too, but macOS is
  * the one platform the devices try Herdr's window on (Q5).
  *
+ * CMUX_SURFACE_ID and CMUX_WORKSPACE_ID are cmux's ids of the terminal and the workspace it sits in (UUIDs): ids, no
+ * credential. cmux sets TERM_PROGRAM=ghostty, so without them an agent in cmux reads as Ghostty's. Sent on macOS alone,
+ * the one platform cmux runs on. cmux sets CMUX_SOCKET_PASSWORD and other CMUX_ names there too, and they must never
+ * leave this process.
+ *
  * In order: the app's names first, then the hosts from the nearest, as detectHost reads them (cable/hosts/hostDetect.ts),
  * so a session with more than MAX_HINTS set loses the farthest. HC_TERMINAL_ID comes after the multiplexers: one started
- * in an hc terminal keeps that terminal's address, and is the nearer host. CLAUDE_CODE_ENTRYPOINT is last, the first the
+ * in an hc terminal keeps that terminal's address, and is the nearer host. cmux's ids come after them: a multiplexer
+ * started in a cmux terminal keeps cmux's ids, and is the nearer host. CLAUDE_CODE_ENTRYPOINT is last, the first the
  * cap drops: without it a tap still brings the app forward.
  */
 const HOST_HINTS = ['TERM_PROGRAM', '__CFBundleIdentifier', 'HERDR_PANE_ID', 'REX_BLOCK', 'ZELLIJ', 'TMUX_PANE',
-  'HC_TERMINAL_ID', 'KITTY_WINDOW_ID', 'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID', 'ORCA_TERMINAL_HANDLE',
-  'CLAUDE_CODE_HOST_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT']
+  'HC_TERMINAL_ID', 'CMUX_SURFACE_ID', 'CMUX_WORKSPACE_ID', 'KITTY_WINDOW_ID', 'WEZTERM_PANE', 'ORCA_AGENT_SESSION_ID',
+  'ORCA_TERMINAL_HANDLE', 'CLAUDE_CODE_HOST_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT']
 /** The core's observed route takes no more (core/observedHook.ts MAX_HINTS, which hookNotify.spec.ts keeps this equal to). */
 const MAX_HINTS = 10
 
@@ -532,6 +575,11 @@ function hostHints() {
     // alone would read as Herdr's own terminal (hostDetect.ts inHerdr).
     if (name === 'HC_TERMINAL_ID' && (process.platform !== 'darwin' || process.env.HERDR_PANE_ID
       || process.env.HERDR_SESSION || (process.env.HC_SESSION && process.env.HC_SESSION !== 'default'))) continue
+    // cmux's ids off macOS (see HOST_HINTS), and under herdr or hc, the nearer host when started in a cmux terminal: a
+    // named session of either sends no pane id or address above, and the ids alone would read as cmux's own terminal
+    // (hostDetect.ts inCmux), which the dial's words are pasted into. Skipped before the cap counts them too.
+    if ((name === 'CMUX_SURFACE_ID' || name === 'CMUX_WORKSPACE_ID') && (process.platform !== 'darwin'
+      || process.env.HERDR_PANE_ID || process.env.HERDR_SESSION || process.env.HC_TERMINAL_ID)) continue
     const value = process.env[name]?.slice(0, 64)
     if (value && !CONTROL.test(value)) hints[name] = value
   }
@@ -584,6 +632,21 @@ const OBSERVED_EVENTS = new Map([
  *  link, or a resume after the quota ran out. */
 const NEEDS_INPUT = ['permission_prompt', 'elicitation_dialog', 'elicitation_url_dialog', 'quota_auto_resume_stale']
 
+/** Claude Code and Codex wait on the person at these, each run before its dialog is drawn: PreToolUse for its question
+ *  tool alone, so a matcher edited by hand cannot turn each tool call into a request to the daemon. */
+function waitsOnPerson(engine, event, input) {
+  if (event === 'PreToolUse') return input.tool_name === (engine === 'claude' ? 'AskUserQuestion' : 'request_user_input')
+  return event === 'PermissionRequest' || (engine === 'claude' && event === 'Elicitation')
+}
+
+/**
+ * Whether a Claude Code subagent event is one the daemon counts. Its own helpers (prompt suggestions, `/btw`) end with a
+ * SubagentStop of no type after no SubagentStart: it is not sent, so the count stays even.
+ */
+function countsSubagent(event, input) {
+  return event !== 'SubagentStop' || !!input.agent_type
+}
+
 /** A paneless hook's event in the devices' words (core/observedHook.ts); null for one that says none of them. */
 function observedEvent(engine, event, input) {
   const name = engine === 'copilot' ? argCopilotEvent() : engine === 'agy' ? argAgyEvent() : engine === 'grok' ? grokHookEvent(event) : event
@@ -598,6 +661,14 @@ function observedEvent(engine, event, input) {
   if (name === 'PreInvocation' || (engine === 'commandcode' && (name === 'PreToolUse' || name === 'preToolUse'))) return 'turn-start'
   // Grok writes its Stop before the turn's last words (its branch in main()).
   if (engine === 'grok' && name === 'Stop') return null
+  // Codex's Stop says Finished outside a pane as Claude Code's does (the devices hold it 1.5 s for a next turn), and its
+  // Interrupt is a turn the person stopped, with nothing to tell as done.
+  if (engine === 'codex' && name === 'Interrupt') return 'turn-aborted'
+  // A lead's subagents keep it working past its Stop. Codex's are not counted: its SubagentStop fires at each child
+  // turn's end and never for a failed one (facts-codex §2).
+  if (engine === 'claude' && (name === 'SubagentStart' || name === 'SubagentStop')) {
+    return countsSubagent(name, input) ? (name === 'SubagentStart' ? 'subagent-start' : 'subagent-stop') : null
+  }
   // Claude Code also says idle_prompt a minute after a finished turn, and auth_success: no answer is waited for, and a
   // done agent stays done. One too old to name its type sends that idle notice untyped too, so it says nothing.
   if (name === 'Notification') return NEEDS_INPUT.includes(input.notification_type) ? 'needs-input' : null
@@ -614,21 +685,51 @@ function relayedPrompt(engine, event, input) {
 }
 
 /** The shells an engine runs its hook through: `/bin/sh -c` is dash on Debian and Ubuntu, bash on Fedora and Arch,
- *  BusyBox's on Alpine, and each runs as `sh`; an engine that asks for bash or dash by name runs it so. */
-const HOOK_SHELLS = new Set(['sh', 'dash', 'bash'])
+ *  BusyBox's on Alpine, and each runs as `sh`; an engine that asks for a shell by name, the person's own zsh or fish
+ *  among them, runs it so. */
+const HOOK_SHELLS = new Set(['sh', 'dash', 'bash', 'zsh', 'fish'])
 
 /**
- * The engine's pid, which the devices keep for a paneless agent (cable/hosts/observed.ts). On Linux dash keeps an
- * engine's `sh -c` as the hook's parent, and it exits with the hook: the devices walked from a pid already gone,
- * refused a tap on the agent's tmux pane and dropped the agent 30 s later (GitHub run 43721656615). The shell's parent
- * is the engine, read from /proc, never the environment. macOS's /bin/sh is a bash that execs the hook, so its parent
- * is the engine already, with no `ps` on the engine's wait.
+ * Whether a shell's command line (/proc's, NUL-separated) has it run a command string: before its first operand, `-c`
+ * or a single-dash cluster holding `c` (`-lc`, `-ec`). `-o pipefail`, `+o` and `-O extglob` take the next word as
+ * their own, so it is no operand; a long option (`--norc`) is no cluster, whatever its letters.
  */
-function observedCallerPid() {
+function runsCommandString(cmdline) {
+  const words = cmdline.split('\0')
+  for (let index = 1; index < words.length; index++) {
+    const word = words[index]
+    const cluster = /^-[^-]/.test(word)
+    if (cluster && word.includes('c')) return true
+    if ((cluster || word.startsWith('+')) && /[oO]/.test(word)) index++
+    // The first operand (a script), `-`, `--` or another `+` word: the scan reads no further, and the shell is named.
+    else if (!cluster && !/^--./.test(word)) return false
+  }
+  return false
+}
+
+/**
+ * The hook's caller, the nearest ancestor that outlives it: the core checks it against the engine's recorded process
+ * (core/engines/hooks.ts), and the devices keep it for a paneless agent (cable/hosts/observed.ts). On Linux dash keeps
+ * an engine's `sh -c` as the hook's parent, and it exits with the hook: the devices kept a pid already gone and dropped
+ * the agent (GitHub run 43721656615), and a core held for a second read its process table after the shell had exited
+ * and refused the Stop as unbound (e2e/stallHook.e2e.ts). So the climb passes every command shell in a row, at most 8
+ * on the engine's wait, read from /proc, never the environment. Only command shells: an engine may itself be a shell
+ * that runs a script, and a person's pane shell runs no `-c`, so the climb stops at either and never names a process
+ * above the engine. A process /proc cannot show is named, as nothing above it can be read. A shell left to init, its
+ * engine gone, is named itself: pid 1 never exits, and the devices would keep the agent. macOS's /bin/sh is a bash
+ * that execs the hook, so its parent is the engine already, with nothing to climb.
+ */
+function hookCallerPid() {
   if (process.platform !== 'linux') return process.ppid
-  const parent = linuxOwnerBirth(process.ppid)
-  // A shell left to init, its engine gone, is named itself: pid 1 never exits, and the devices would keep the agent.
-  return parent && HOOK_SHELLS.has(parent.command) && parent.parentPid > 1 ? parent.parentPid : process.ppid
+  let pid = process.ppid
+  for (let step = 0; step < 8; step++) {
+    const shell = linuxOwnerBirth(pid)
+    if (!shell || !HOOK_SHELLS.has(shell.command) || shell.parentPid <= 1) break
+    const cmdline = readProcField(pid, 'cmdline')
+    if (cmdline === null || !runsCommandString(cmdline)) break
+    pid = shell.parentPid
+  }
+  return pid
 }
 
 /** The core refuses an event whose title is longer (core/observedHook.ts): the hook cuts it to this instead. */
@@ -669,7 +770,7 @@ function observedBody(engine, event, input) {
     : Array.isArray(input.workspacePaths) ? input.workspacePaths[0]
       : input.cwd || input.workspaceRoot || (engine === 'devin' ? process.cwd() : undefined)
   const body = {
-    engine, sessionId, event: kind, cwd: path(cwd), callerPid: observedCallerPid(),
+    engine, sessionId, event: kind, cwd: path(cwd), callerPid: hookCallerPid(),
     transcriptPath: path(input.transcript_path || input.transcriptPath), hostHints: hostHints(),
   }
   if (relayedPrompt(engine, event, input)) body.relayed = true
@@ -811,7 +912,7 @@ function terminalHookFields(tmuxPane) {
   const runtimeHints = []
   if (tmuxPane) runtimeHints.push({ backend: 'tmux', paneId: tmuxPane })
   else if (PTY_PANE) runtimeHints.push({ backend: 'ptyhost', instance: PTY_PANE.instance, paneId: PTY_PANE.paneId })
-  return { tmuxPane, runtimeHints, callerPid: process.ppid }
+  return { tmuxPane, runtimeHints, callerPid: hookCallerPid() }
 }
 
 function sleep(ms) {
@@ -972,11 +1073,11 @@ async function ownPane(pane) {
 }
 
 /**
- * Where every daemon on this computer says it listens, one file per pane tag (src/lib/hookRoutes.ts,
- * which hookNotify.spec.ts keeps this equal to).
+ * Where every daemon on this computer says it listens, one file per pane tag (src/lib/hookRoutes.ts), by default
+ * in the state folder.
  */
 function hookRoutesDir() {
-  return process.env.HARNESS_HOOK_ROUTES_DIR || join(homedir(), '.harness', 'hook-routes')
+  return process.env.HARNESS_HOOK_ROUTES_DIR || join(harnessRoots().state, 'hook-routes')
 }
 
 /**
@@ -2060,7 +2161,9 @@ async function main() {
   // nothing.
   const paneless = (!tmuxPane && !PTY_PANE) || await ownPane(tmuxPane)
   // Notification is installed for the session outside a pane, to say it waits for the person. In an agent's pane
-  // nothing is told, as before it was installed; whose pane it is is tmux's to say, so even that asks tmux first.
+  // nothing is told: there PermissionRequest and Elicitation say it, as the dialog opens, where Notification comes only
+  // once the person has not typed for 6 s, and never for a dialog answered sooner (facts-claude §1). Whose pane it is is
+  // tmux's to say, so even that asks tmux first.
   if (!paneless && event === 'Notification') return
   // Before anything reads the data folder or posts: which daemon this pane is (routeToPaneOwner).
   if (!paneless && await routeToPaneOwner(tmuxPane)) port = argPort()
@@ -2279,6 +2382,34 @@ async function main() {
     })
     if (stopped === true) await clearCursorTasks(sessionId)
     return
+  }
+
+  // What Claude Code and Codex tell the daemon of a pane's turn beyond its registration: a wait on the person, a
+  // subagent of Claude Code's, and Codex's own turn end and interrupt. The event and the tool's name only, never a tool's
+  // input or what is asked. Every answer, none included, leaves the hook silent on stdout with exit 0, which both
+  // engines read as no decision (main()'s finally).
+  if (engine === 'claude' || engine === 'codex') {
+    const sessionId = input.session_id
+    if (event === 'PreToolUse' || event === 'PermissionRequest' || event === 'Elicitation') {
+      if (waitsOnPerson(engine, event, input)) {
+        await post(port, '/api/hook/wait', { sessionId, hookEvent: event, toolName: input.tool_name, ...mutationFields })
+      }
+      return
+    }
+    // Codex's subagents are not counted: its SubagentStop fires at each child turn's end and never for a failed one
+    // (facts-codex §2).
+    if (engine === 'claude' && (event === 'SubagentStart' || event === 'SubagentStop')) {
+      // A subagent's events carry its lead's session_id (facts-claude §2).
+      if (countsSubagent(event, input)) await post(port, '/api/hook/subagent', { sessionId, hookEvent: event, ...mutationFields })
+      return
+    }
+    if (engine === 'codex' && (event === 'Stop' || event === 'Interrupt')) {
+      await post(port, '/api/hook/turn-stop', {
+        sessionId, hookEvent: event, transcriptPath: input.transcript_path,
+        status: event === 'Interrupt' ? 'interrupted' : undefined, ...mutationFields,
+      })
+      return
+    }
   }
 
   // Stop / StopFailure (claude): the authoritative turn-close signal, independent of JSONL parsing.

@@ -13,9 +13,9 @@ import type { SocketFault } from './unixSocket.js'
 
 /** The waits before each retry of a failed attempt; after the last, the last again while each attempt lists, else only
  *  the watch. */
-const RETRIES_S = [1, 2, 4, 8, 16, 32, 60]
+export const RETRIES_S = [1, 2, 4, 8, 16, 32, 60]
 /** Followed this long, a program that drops its subscription is retried from the first wait again. */
-const LIVE_MS = 60_000
+export const LIVE_MS = 60_000
 /** A socket this young may be bound before its server listens: its first refusal is tried once more (spec Q8). */
 const YOUNG_MS = 2_000
 

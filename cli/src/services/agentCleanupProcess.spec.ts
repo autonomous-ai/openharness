@@ -155,7 +155,7 @@ describe('the agent cleanup in its own process', () => {
       options.onEvent!({ kind: 'agent', event: { kind: 'stopped', agentId: 'lead' } })
       await vi.advanceTimersByTimeAsync(0)
       expect(query.mock.calls).toEqual([['live', {}], ['daemon', {}], ['closeStarted', { agentId: 'k1', mode: 'now' }]])
-      expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\[agent-cleanup\] closed a harness \(k1\): the harness that started it was closed/))
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(/^\[agent-cleanup\] closed k1: the harness that started it was closed/))
       service.stop()
     } finally { vi.useRealTimers() }
   })

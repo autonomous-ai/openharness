@@ -121,7 +121,7 @@ describe('runtime profile routing', () => {
     const fields = vi.spyOn(local, 'transcriptFields').mockReturnValue(['model'])
     const stage = { ingest: vi.fn(), commit: vi.fn() }
     vi.spyOn(local, 'beginHydrate').mockReturnValue(stage)
-    vi.spyOn(local, 'supportsControl').mockReturnValue(true)
+    vi.spyOn(local, 'supportsControl').mockResolvedValue(true)
     vi.spyOn(local, 'effortAllowed').mockReturnValue(true)
     vi.spyOn(local, 'codexCatalog').mockResolvedValue([])
     vi.spyOn(local, 'modelsForSession').mockResolvedValue([])

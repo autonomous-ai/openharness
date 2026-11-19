@@ -4,11 +4,12 @@
  * type in it. Every adapter keeps four rules:
  * 1. `paneOf` checks each hint against its own form, and each verb checks the pane's id again before a command.
  * 2. An adapter is a plain object from a factory. No member uses `this`, so a caller may wrap one by spreading it.
- * 3. A verb that cannot run answers `false`, `'failed'` or `'refused'`. It never throws.
+ * 3. A verb that cannot run answers `false`, `'failed'` or `'refused'`; `type` may say why, in a `TypeResult`. It never
+ *    throws.
  * 4. An agent may have a pane in more than one adapter: the source keeps them all, and each verb uses the first whose
  *    adapter can do it. So `paneOf` answers from its own app's values alone, never from another app's being absent.
  */
-import type { PaneSwitch } from './types.js'
+import type { PaneSwitch, TypeResult } from './types.js'
 
 /** Where an outside agent runs, from its latest hook event and what was learnt of its process. */
 export interface Place {
@@ -19,7 +20,16 @@ export interface Place {
   pid?: number                                  // its process: that event's caller
   sessionId?: string                            // the engine's own id of the session: the VS Code extension's link names it
   engine?: string                               // whose session it is: that link names Claude Code's alone
+  cwd?: string                                  // the folder its latest event named, else its scan row's: Cursor's folder window opens it
+  /** The Claude app's own id of a session the open scan found, from the session's record (record.ts), until its first
+   *  hook; only the Claude app's adapter reads it. */
+  hostSession?: string
 }
+
+/** What a page guard knows of the agent: whether it waits on the person, the folder its session started in (its
+ *  project settings'), and its transcript path as its hook or the scan gave it (the user settings' home:
+ *  claudeRenderer.ts). */
+export interface PageAgent { asking: boolean; cwd?: string; transcriptPath?: string }
 
 /** One adapter's own handle on one agent: an Orca terminal, a Claude app session, a tab's tty, a pane id. */
 export interface Pane {
@@ -45,11 +55,27 @@ export interface HostAdapter {
   canShow?(pane: Pane): boolean
   show?(pane: Pane, agentId: string): Promise<PaneSwitch>
   /** Types a line at the agent's prompt and submits it; `engine` is the agent's, for an app that checks who holds the
-   *  pane. Only the source decides that the prompt is free. */
-  type?(pane: Pane, text: string, engine: string): Promise<boolean>
+   *  pane. The source decides that the prompt is free from the hooks; an app that knows better says `'busy'` or
+   *  `'waiting'`, or refuses in a fixed sentence of its own, which the dial shows as it is. Only `true` was sent. */
+  type?(pane: Pane, text: string, engine: string): Promise<TypeResult>
   /** Whether `type` can reach the pane now (its app's socket there): asked at each look. One that cannot leaves the words
    *  to the agent's next pane whose app types. */
   canType?(pane: Pane): boolean
+  /** Whether a stroke on the dial may scroll that pane's view now, as far as the adapter knows without asking its app:
+   *  its app in front and the pane in its window. */
+  canScroll?(pane: Pane): boolean
+  /** Whether the pane is the one its app shows on screen now, asked of the app once a stroke, after `canScroll`. False on
+   *  any failure or past its deadline; never throws. An adapter that knows it from `canScroll` alone has none. */
+  onScreen?(pane: Pane): Promise<boolean>
+  /** Whether the program in the pane takes its own page keys now: Claude Code's fullscreen view keeps no history for its
+   *  app to scroll. Asked at a stroke's down, after `canScroll`, only for an agent whose engine has such keys, with
+   *  whether it waits on the person, the folder it started in and its transcript path. `false` at once when no key may
+   *  go and nothing was read; else a promise, never rejected, settled within the adapter's own deadline. */
+  pageKeys?(pane: Pane, agent: PageAgent): false | Promise<boolean>
+  /** Scrolls the app's view of the pane's history by whole lines, n < 0 toward older lines. Fire and forget: a line it
+   *  could not send is never retried into the program. `page`: this stroke's `pageKeys` said yes, and the lines may
+   *  carry those keys too. */
+  scroll?(pane: Pane, lines: number, page?: boolean): void
   /** The key a source that lists this app's agents knows the same pane by (registry.ts). Only an app with such a
    *  source has one. */
   paneKey?(pane: Pane): string
@@ -58,6 +84,7 @@ export interface HostAdapter {
    *  (a tab is selected once its app is in front). A pane that comes after its app is raised only when it is the pane a
    *  rest would show, so an adapter with `tap: 'after'` needs `show`: without it, its `focus` never runs from a tap. */
   readonly tap: 'before' | 'instead' | 'after'
-  /** Its app's macOS bundle id, for a tap on a pane its caller placed an agent at whose hook never named its app. */
+  /** Its app's macOS bundle id: a tap brings that app forward for an agent at one of its panes whose app no hook named,
+   *  one its caller placed there or the scan found (observed.ts target()). */
   readonly bundle?: string
 }

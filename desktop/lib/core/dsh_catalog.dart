@@ -88,6 +88,7 @@ class DshEntry {
     this.installedCommit,
     this.availableCommit,
     this.updateAvailable = false,
+    this.needsSetup = false,
     this.unverified = false,
   });
 
@@ -150,6 +151,13 @@ class DshEntry {
   final bool updateAvailable;
   bool get hasUpdate => installed && !linked && updateAvailable;
 
+  /// Its setup failed when Harness's folder moved (`needsSetup` in
+  /// `dsh_list`): an update runs it again, even with nothing new to fetch.
+  final bool needsSetup;
+
+  /// Whether the package page offers Update: a new version, or a setup to run again.
+  bool get canUpdate => installed && !linked && (updateAvailable || needsSetup);
+
   /// The machine says Harness has NOT reviewed this package (`verified: false`
   /// in `dsh_list`): a community entry whose code lives in someone else's
   /// repository. Installing or updating it runs that code's setup script as
@@ -200,6 +208,7 @@ class DshEntry {
       installedCommit: _commit(raw['installedCommit']),
       availableCommit: _commit(raw['availableCommit']),
       updateAvailable: raw['updateAvailable'] == true,
+      needsSetup: raw['needsSetup'] == true,
       unverified: raw['verified'] == false,
       name: name is String && name.trim().isNotEmpty
           ? name.trim().substring(0, name.trim().length.clamp(0, 40))

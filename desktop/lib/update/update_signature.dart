@@ -96,15 +96,20 @@ MacSigner? parseMacSigner(String codesignDisplay) {
   );
 }
 
-/// The code requirement a staged bundle must meet: Apple's Developer ID chain
-/// (intermediate and leaf marker fields), the running app's team and
-/// identifier, and Apple's notarization ticket.
-String macUpdateRequirement(MacSigner signer) =>
+/// The code requirement a bundle must meet: Apple's Developer ID chain
+/// (intermediate and leaf marker fields), [team] and [identifier], and
+/// Apple's notarization ticket. The updater passes the running app's own;
+/// installing Harness Device passes its identifier, so one team's other app
+/// cannot pass as it.
+String macUpdateRequirement({
+  required String team,
+  required String identifier,
+}) =>
     'anchor apple generic'
     ' and certificate 1[field.1.2.840.113635.100.6.2.6]'
     ' and certificate leaf[field.1.2.840.113635.100.6.1.13]'
-    ' and certificate leaf[subject.OU] = "${signer.team}"'
-    ' and identifier "${signer.identifier}"'
+    ' and certificate leaf[subject.OU] = "$team"'
+    ' and identifier "$identifier"'
     ' and notarized';
 
 /// One Authenticode signature as `Get-AuthenticodeSignature` reports it.
@@ -258,6 +263,42 @@ String? windowsUpdateRefusal(
   return null;
 }
 
+/// The signer of [bundle], or null when it is ad hoc or unsigned. Throws
+/// [cannotCheckSignature] when codesign cannot say.
+Future<MacSigner?> readMacSigner(
+  String bundle, {
+  Duration timeout = signatureCheckTimeout,
+}) async {
+  final display = await _run('/usr/bin/codesign', [
+    '-dv',
+    '--verbose=2',
+    bundle,
+  ], timeout);
+  return parseMacSigner('${display.stdout}${display.stderr}');
+}
+
+/// Whether [bundle] meets [macUpdateRequirement] for [team] and [identifier].
+/// Throws [cannotCheckSignature] when codesign cannot start or runs out of
+/// time.
+Future<bool> verifyMacBundle({
+  required String bundle,
+  required String team,
+  required String identifier,
+  Duration timeout = signatureCheckTimeout,
+}) async {
+  final check = await _run('/usr/bin/codesign', [
+    '--verify',
+    '--deep',
+    '--strict',
+    '-R=${macUpdateRequirement(team: team, identifier: identifier)}',
+    bundle,
+  ], timeout);
+  if (check.exitCode != 0) {
+    debugPrint('UpdateSignature: refused: ${'${check.stderr}'.trim()}');
+  }
+  return check.exitCode == 0;
+}
+
 /// Refuses [stagedBundle] unless it meets [macUpdateRequirement] for the
 /// signer of [runningBundle]; a running bundle with no signer passes it.
 Future<void> verifyMacUpdate({
@@ -265,29 +306,20 @@ Future<void> verifyMacUpdate({
   required String runningBundle,
   Duration timeout = signatureCheckTimeout,
 }) async {
-  final display = await _run('/usr/bin/codesign', [
-    '-dv',
-    '--verbose=2',
-    runningBundle,
-  ], timeout);
-  final signer = parseMacSigner('${display.stdout}${display.stderr}');
+  final signer = await readMacSigner(runningBundle, timeout: timeout);
   if (signer == null) {
     debugPrint(
       'UpdateSignature: the running app is not signed; the update is checked by sha256 only',
     );
     return;
   }
-  final check = await _run('/usr/bin/codesign', [
-    '--verify',
-    '--deep',
-    '--strict',
-    '-R=${macUpdateRequirement(signer)}',
-    stagedBundle,
-  ], timeout);
-  if (check.exitCode != 0) {
-    debugPrint('UpdateSignature: refused: ${'${check.stderr}'.trim()}');
-    throw notFromPublisher(signer.name);
-  }
+  final verified = await verifyMacBundle(
+    bundle: stagedBundle,
+    team: signer.team,
+    identifier: signer.identifier,
+    timeout: timeout,
+  );
+  if (!verified) throw notFromPublisher(signer.name);
 }
 
 /// Prints one [WindowsSignatureReport] as JSON. Paths come in through the

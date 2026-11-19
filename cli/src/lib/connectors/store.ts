@@ -10,6 +10,7 @@ import { closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFi
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { harnessPath } from '../../config/harnessHome.js'
 import { cleanRestEntry, transport, type RestEntry, type Transport } from './rest.js'
 
 export const MAX_BYTES = 1024 * 1024
@@ -63,7 +64,7 @@ export interface Client {
 }
 
 export function connectorsDir(env: NodeJS.ProcessEnv = process.env): string {
-  return env.HARNESS_CONNECTIONS_DIR || join(env.HOME || homedir(), '.harness', 'connections')
+  return env.HARNESS_CONNECTIONS_DIR || harnessPath('connections', env.HOME || homedir())
 }
 
 /** Harness OS 0.1.2 kept them here, before the CLI did; read once, then the CLI's copy is the one. */

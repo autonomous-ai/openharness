@@ -99,7 +99,7 @@ const copilotRuns = (line: string) => spawnSync('powershell.exe', ['-NoProfile',
     expect(await engineHooks.claude.installIn(PORT, claudeHome, { environment })).toBe(true)
     expect(await engineHooks.codex.installIn(PORT, codexHome, { environment })).toBe(true)
     expect(files.map(stamp)).toEqual(before)
-    expect(log).toHaveBeenCalledWith('[hooks] Claude session + turn (Stop/StopFailure) hooks already installed')
+    expect(log).toHaveBeenCalledWith('[hooks] Claude Code session, turn, wait and subagent hooks already installed')
     expect(log).toHaveBeenCalledWith(codexContract.settings.messages.current.replace('{file}', join(codexHome, 'hooks.json')))
   })
 

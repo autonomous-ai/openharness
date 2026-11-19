@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { checkRemovable, finalRemovalScript, listEntries, removalPlan, removeNow, scheduleFinalRemoval, type FinalRemovalDeps, type PlanInput, type RemovalPlan, type RootEntry } from './removal.js'
 import { UNINSTALL_MARKER } from './marker.js'
 
@@ -133,6 +133,70 @@ describe('removalPlan refuses a root that is not a .harness folder of its own', 
   it('names only paths strictly inside the root', () => {
     const p = removalPlan({ ...mac, entries, cliEntries, keepData: false })
     for (const t of p.remove) expect(t.path.startsWith('/u/.harness/')).toBe(true)
+  })
+})
+
+// On Linux Harness keeps its files in two XDG folders, each named harness (config/harnessHome.ts xdgRoots): a removal
+// takes those two as the rule resolves them, and still refuses any other folder not named .harness.
+describe('removalPlan on Linux\'s two roots', () => {
+  const DATA = '/h/.local/share/harness'
+  const STATE = '/h/.local/state/harness'
+  afterEach(() => { vi.unstubAllEnvs() })
+  const plan = (root: string, platform: NodeJS.Platform = 'linux') =>
+    () => removalPlan({ platform, root, home: '/h', cliDir: `${DATA}/cli`, dataDir: `${DATA}/cli/data`, entries: [d('bin')], cliEntries: [], keepData: false })
+
+  it('on Linux a root is one of the two XDG roots, exactly', () => {
+    for (const root of [DATA, STATE, `${STATE}/`]) expect(plan(root), root).not.toThrow()
+    for (const root of ['/h/.local/share', '/h/.local/share/harness2', `${DATA}/cli`, '/tmp/harness', '/h/harness', '/h/.local/harness']) {
+      expect(plan(root), root).toThrow(`Harness will not remove "${root}": it is not a folder named .harness, ${DATA} or ${STATE}.`)
+    }
+    // XDG_DATA_HOME names where the data root is: its harness is the root, never that folder nor its parent, nor the default.
+    vi.stubEnv('XDG_DATA_HOME', '/d/share')
+    expect(plan('/d/share/harness')).not.toThrow()
+    for (const root of ['/d/share', '/d', DATA]) expect(plan(root), root).toThrow(/Harness will not remove/)
+    vi.stubEnv('XDG_STATE_HOME', '/s')
+    expect(plan('/s/harness')).not.toThrow()
+    expect(plan(STATE)).toThrow(/Harness will not remove/)
+    // A variable that is not a full path is ignored, as the rule ignores it.
+    vi.stubEnv('XDG_DATA_HOME', 'share')
+    expect(plan(DATA)).not.toThrow()
+    // Off Linux no rule runs: a folder named harness is refused, as before.
+    expect(plan(DATA, 'darwin')).toThrow(`Harness will not remove "${DATA}": it is not a folder named .harness.`)
+  })
+
+  it('a root named .harness passes as before, on every platform', () => {
+    for (const platform of ['linux', 'darwin'] as const) expect(plan('/h/.harness', platform), platform).not.toThrow()
+    vi.stubEnv('XDG_DATA_HOME', '/d/share')
+    expect(plan('/h/.harness')).not.toThrow()
+    expect(() => removalPlan({
+      platform: 'win32', root: 'C:\\Users\\h\\.harness', home: 'C:\\Users\\h', cliDir: 'C:\\Users\\h\\.harness\\cli',
+      dataDir: 'C:\\Users\\h\\.harness\\cli\\data', entries: [d('bin')], cliEntries: [], keepData: false,
+    })).not.toThrow()
+  })
+
+  it('the program is found per root', () => {
+    const at = (root: string, entries: RootEntry[], keepData: boolean) => removalPlan({
+      platform: 'linux', root, home: '/h', cliDir: `${DATA}/cli`, dataDir: `${DATA}/cli/data`, entries, cliEntries, keepData,
+    })
+    // What the table gives each root, and in each a name of the other root's program, which is not this root's.
+    const dataEntries = [d('auth'), d('bin'), d('cli'), f('computer-id'), d('dsh'), d('runtime')]
+    const stateEntries = [d('bin'), d('logs'), d('pty'), d('runtime'), f(UNINSTALL_MARKER)]
+    // --keep-data: the data root's data stays, and both roots' program goes.
+    const data = at(DATA, dataEntries, true)
+    expect(data.remove.map((t) => t.path)).toEqual([`${DATA}/bin`, `${DATA}/cli/cli.js`, `${DATA}/cli/notify.mjs`, `${DATA}/cli/package.json`])
+    expect(data.kept).toEqual(['auth', 'computer-id', 'dsh', 'runtime', 'cli/data'])
+    const state = at(STATE, stateEntries, true)
+    expect(state.remove.map((t) => t.path)).toEqual([`${STATE}/pty`, `${STATE}/runtime`])
+    expect(state.kept).toEqual(['bin', 'logs'])
+    // The uninstall marker is the state root's, and removeNow's to take last, whatever --keep-data keeps.
+    for (const keepData of [false, true]) {
+      const marked = at(STATE, stateEntries, keepData)
+      expect(marked.remove.map((t) => t.path)).not.toContain(`${STATE}/${UNINSTALL_MARKER}`)
+      expect(marked.kept).not.toContain(UNINSTALL_MARKER)
+    }
+    // Without --keep-data each root goes whole.
+    expect(at(DATA, dataEntries, false)).toMatchObject({ kept: [], removeRoot: true })
+    expect(at(STATE, stateEntries, false)).toMatchObject({ kept: [], removeRoot: true })
   })
 })
 

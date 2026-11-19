@@ -34,8 +34,10 @@ import { SerialLink, findDialPort } from './serial.js'
 import { PLAYER_PAGE_SIZE, playerPage, type PlayerSession } from './playerLibrary.js'
 import { PassageCarry, withCarriedPassage, type CarryRead } from './passageCarry.js'
 import { VoiceDraft, type DraftPin } from './voiceDraft.js'
+import { dialText, noticeSummary } from './dialText.js'
 import { QuestionInbox, type ReviewedAnswer, type AnswerReceipt, type QuestionSpeech } from './questionInbox.js'
 import { notificationReadToken, type UnreadNotification } from '../lib/notificationRead.js'
+import { partitionTexts } from '../lib/questionController.js'
 
 /** Bumped when the VOCABULARY changes. Separate from the frame version, which is the envelope. */
 export const CABLE_PROTO_VERSION = 3   // 3: + question.close (a question answered on another client)
@@ -54,8 +56,7 @@ const PING_EVERY_MS = 5_000
 const SILENCE_MS = 20_000
 /** How often a connected port's traffic counters go to the dial's log. */
 const LINK_LOG_MS = 60_000
-/** Non-frame text kept per logging interval, and the shortest printable run worth keeping. */
-const NOISE_MAX = 200
+/** The shortest printable run of non-frame bytes counted as text. */
 const NOISE_RUN_MIN = 4
 const REOPEN_EVERY_MS = 2_000
 // How long one attempt at opening the port may take before it is abandoned.
@@ -106,6 +107,16 @@ const FOREIGN_AFTER_MS = 12_000
 // Most firmware writes one dial may take in an hour. A real release is one; anything repeating is two
 // pieces of software disagreeing about who owns the board, and the dial pays for that in erase cycles.
 const FW_WRITES_PER_HOUR = 3
+// The most travel one scroll report may carry, and the most speed its `up` may throw. A report carries the
+// finger's travel since the last one, which the glass bounds (720 px on Harness Pro, 466 on the round dial), and
+// every firmware caps the speed at 6000 px/s (MAX_SPEED in its scroll.c), so no real report comes near
+// either; a bigger one is a broken frame. Unbounded, a travel scrolled VS Code's terminal without end, and a speed
+// over f32's range is a fling hn never stops (tui/src/dial.rs).
+const SCROLL_DY_MAX = 1000
+const SCROLL_V_MAX = 10_000
+/** A scroll report's number held to ±max; one that is not a finite number is 0. */
+const bounded = (value: unknown, max: number): number =>
+  typeof value === 'number' && Number.isFinite(value) ? Math.max(-max, Math.min(max, value)) : 0
 /** How often the machine list is re-read. Slower than the agent list because it is an HTTP read, not a
  *  map lookup — and because a machine appearing is not something anyone is waiting on a stopwatch for. */
 const MACHINES_POLL_MS = 15_000
@@ -165,6 +176,8 @@ export interface ActivitySnapshot {
 
 /** The device keeps 192 B of the agent's latest sentence (cable.md); a longer one is cut on a character boundary. */
 const ACTION_MAX_BYTES = 188
+/** An agent's name and machine on the device (CABLE_NAME_MAX, 40 B with its end). */
+const NAME_MAX = 39
 
 /** What the Pro's firmware holds of a swarms frame: 24 tabs, 24 ids each, and 512 JSON tokens (480 here). */
 const SWARMS_MAX = 24
@@ -187,11 +200,77 @@ function fitsFrame(m: unknown): boolean {
   return Buffer.byteLength(JSON.stringify(m), 'utf8') <= CABLE_MAX_PAYLOAD - 256 && jsonTokens(m) <= SWARM_TOKENS_MAX
 }
 
+/** An escaped backslash, matched so the text after it is not read as an escape, or half an emoji as JSON escapes it. */
+const JSON_LONE_SURROGATE = /\\\\|\\ud[89a-f][0-9a-f]{2}/g
+
+/** A frame's JSON as the dial can parse it. JSON writes half an emoji as the escape \ud83d, and the dial's parser
+ *  refuses the whole frame for it: an agent named with one never got its question onto the dial. It is written '?', as
+ *  the dial writes a byte it cannot read, in keys and values alike. */
+function dialJson(m: unknown): string {
+  const json = JSON.stringify(m)
+  return json.includes('\\ud') ? json.replace(JSON_LONE_SURROGATE, (escape) => escape === '\\\\' ? escape : '?') : json
+}
+
+/** A text as the dial reads it from a frame: dialJson's own rewrite, so the two cannot disagree. */
+function dialReads(text: string): string {
+  return JSON.parse(dialJson(text)) as string
+}
+
+/** The dial's answers in the words they were asked with. The dial answers with the text it read, half an emoji '?'
+ *  (dialJson), and '?yes' matched no row of the dialog, which typed it into its free-text row instead of choosing the
+ *  option. Each key and chosen option is put back as asked; a value that reads as no option is words the person typed,
+ *  kept as typed. Null when the dial's text reads as two of them: either could be what the person did not choose. Two in
+ *  the same words are one: refused, a question that repeats an option went to the terminal for nothing. */
+function asAsked(raw: unknown, answers: Record<string, string>): Record<string, string> | null {
+  const questions = Array.isArray(raw)
+    ? raw.filter((q): q is { key: string; options?: unknown; multi?: unknown } => typeof q?.key === 'string') : []
+  const pick = (asked: string[], text: string): string | null => {
+    const found = new Set(asked.filter((a) => dialReads(a) === text))
+    return found.size > 1 ? null : [...found][0] ?? text
+  }
+  const out: Record<string, string> = {}
+  for (const [key, value] of Object.entries(answers)) {
+    const k = pick(questions.map((q) => q.key), key)
+    const named = questions.filter((q) => q.key === k)
+    const options = named.flatMap((q) => Array.isArray(q.options) ? q.options.filter((o): o is string => typeof o === 'string') : [])
+    // The dial joins the options chosen with ', ' (q_done_tap), and an option may hold one itself: '?Yes, continue' was
+    // cut in two halves that read as no option. Read by the options as the dial reads them; cut on every ', ' only
+    // when they cannot spell it, as words the person typed.
+    const reads = options.map(dialReads)
+    const parts = !named.some((q) => q.multi === true) ? [value]
+      : partitionTexts(reads, value, (text) => text.trim())?.map((index) => reads[index]) ?? value.split(', ')
+    const picked = parts.map((part) => pick(options, part))
+    if (k === null || picked.includes(null)) return null
+    out[k] = picked.join(', ')
+  }
+  return out
+}
+
 function clipUtf8(text: string, max: number): string {
   const flat = text.replace(/[\r\n\t]+/g, ' ')
   if (Buffer.byteLength(flat, 'utf8') <= max) return flat
   const decoded = new TextDecoder('utf-8').decode(Buffer.from(flat, 'utf8').subarray(0, max - 3))
   return `${decoded.replace(/\uFFFD+$/, '')}\u2026`
+}
+
+/** Whether the dial keeps a drawer row of this agent: it skips an id of ID_MAX (48 B) or more. One with a control
+ *  character or half an emoji is left out too: JSON writes the first six bytes wide, past the room eight rows have,
+ *  and the dial gets the second as '?', an id no agent has. No agent's id holds either. */
+function dialKeepsId(agentId: string): boolean {
+  return Buffer.byteLength(agentId, 'utf8') < 48 && !/[\u0000-\u001f\ud800-\udfff]/u.test(agentId)
+}
+
+/**
+ * The leading drawer rows that fit one frame. Every field is bounded, so eight rows fit today; this guards a field added
+ * later without a bound, whose frame `send` would refuse, leaving the dial without its drawer. A question row cut here
+ * is not on the dial: the forget that follows takes the drawer after this cut, so the question keeps told and loses
+ * asked, and comes back by giveQuestion's rule (a silent row, the Pro's plain frame, or nothing on an older dial), never
+ * as a second ring.
+ */
+export function fitDrawer<T>(rows: T[]): T[] {
+  const kept = [...rows]
+  while (kept.length > 0 && !fitsFrame({ t: 'notif.replace', items: kept })) kept.pop()
+  return kept
 }
 
 export interface CableAgent {
@@ -371,8 +450,8 @@ export interface CableHost {
   stopTurn(agentId: string): void
   /**
    * The user answered a `question`. `answers` is keyed by the QUESTION keys the daemon itself asked with
-   * and travels verbatim — re-deriving it, or keying it by the requestId, is how a rename at either end
-   * becomes an answer nobody gave.
+   * and travels verbatim, but for half an emoji the dial read as '?', put back — re-deriving it, or keying it by the
+   * requestId, is how a rename at either end becomes an answer nobody gave.
    */
   answer(agentId: string, requestId: string, answers: Record<string, string>): void
   answerReviewed?(answer: ReviewedAnswer): Promise<AnswerReceipt>
@@ -393,9 +472,9 @@ export interface CableHost {
   turned?(): void
   /** What a local follow did to this dial: turned it to the agent, or found no tile for it on the ring it walks. */
   localFollowed?(cause: FollowCause, outcome: 'moved' | 'no-tile'): void
-  /** The agent this dial shows changed: as its ring last drew it, or null for none. `dial` is the session that says so,
-   *  which is how a host tells two dials apart. */
-  dialShows?(dial: object, agent: DialAgent | null): void
+  /** The agent this dial shows changed: as its ring last drew it and its id, or null for none. `dial` is the session that
+   *  says so, which is how a host tells two dials apart. */
+  dialShows?(dial: object, agent: DialAgent | null, agentId: string | null): void
   focus(agentId: string): void
   /**
    * "Put this one in front of me" — a NOTIFICATION was tapped.
@@ -643,7 +722,7 @@ export class CableSession {
   private link: CablePort | null = null
   private decoder = new CableDecoder()
   /** This port's traffic since it opened, logged once a minute and when it closes (see logLink). */
-  private traffic = { at: 0, tx: 0, txFrames: 0, rx: 0, rxFrames: 0, corrupt: 0, discarded: 0, run: '', noise: '' }
+  private traffic = { at: 0, tx: 0, txFrames: 0, rx: 0, rxFrames: 0, corrupt: 0, discarded: 0, run: 0, noise: 0 }
   private timer: NodeJS.Timeout | null = null
   private greetedMac: string | null = null
   /** This session has spoken with a real dial at least once. Never reset: a port that has been a dial
@@ -659,6 +738,8 @@ export class CableSession {
   private greetedFw: string | null = null
   private lastRx = 0
   private stopped = false
+  /** A bad scroll report was logged in this stroke: a stream of them logs one line, not one each. */
+  private scrollBadLogged = false
 
   /** What the dial was last told the agent list is. Empty = it has been told nothing. */
   private lastAgentsKey = ''
@@ -685,6 +766,10 @@ export class CableSession {
   /** `appFilter: 'v1'` (the round dial, spec 2026-11-14-dial-app-filter): with no window, or a window and the app in
    *  front, it holds one app's ring, is sent `apps` and picks with `app.pick`. Any other device gets the single ring. */
   private appFilter = false
+  /** `questionTier: 'v1'` (the round dial): it files a `question` sent with `tier: 'list'` as a silent row. A question it
+   *  was told and no longer holds goes back on it that way, since a ring at every change of the window's list was a beep
+   *  for nothing new (2026-11-18); a round dial that does not say it would beep, so it is sent nothing (giveQuestion). */
+  private questionTier = false
   private playerOffset = 0
   private playerRequest = 0
   private playerLibraryKey = ''
@@ -701,13 +786,14 @@ export class CableSession {
 
   /** For the greeting's log line: which capabilities this hello named, or nothing. */
   private capabilitiesNamed(): string {
-    const named = [this.swarmMembers && 'swarms', this.longRecap && 'recap', this.stepsActivity && 'activity', this.statsTurn && 'stats', this.playerCapable && 'player', this.appFilter && 'appFilter']
+    const named = [this.swarmMembers && 'swarms', this.longRecap && 'recap', this.stepsActivity && 'activity', this.statsTurn && 'stats', this.playerCapable && 'player', this.appFilter && 'appFilter', this.questionTier && 'questionTier']
       .filter(Boolean)
     return named.length ? ` caps ${named.join(',')}` : ''
   }
 
   private resetCapabilities(): void {
     this.swarmMembers = this.longRecap = this.stepsActivity = this.statsTurn = this.playerCapable = this.appFilter = false
+    this.questionTier = false
     this.seqOn = false
     this.seq = 0
     this.resyncAt = 0
@@ -745,6 +831,7 @@ export class CableSession {
   private focusRecord = ''
   /** What this session last told the host its dial shows. */
   private shown: DialAgent | null = null
+  private shownId: string | null = null
   /**
    * The record's agent as the ring last sent draws it, or none: the record alone outlives an unplug, can name an agent
    * on another tab, and is not cleared when its agent leaves. Told to the host only when it changed.
@@ -755,11 +842,14 @@ export class CableSession {
     const shown = entry
       ? { name: entry.name, app: entry.host !== undefined && APP_IDS.includes(entry.host) ? appDisplayName(entry.host) : 'Harness' }
       : null
-    if (shown?.name === this.shown?.name && shown?.app === this.shown?.app) return
+    // The id too: a move between two agents of one name and app changes where the dial's scroll goes.
+    const shownId = entry ? entry.id : null
+    if (shown?.name === this.shown?.name && shown?.app === this.shown?.app && shownId === this.shownId) return
     this.shown = shown
+    this.shownId = shownId
     // This dial's fault, never the move, the push or the close that got here: thrown out of a close, it would end the
     // whole devices process.
-    try { this.host.dialShows?.(this, shown) } catch (error) { this.fault(error) }
+    try { this.host.dialShows?.(this, shown, shownId) } catch (error) { this.fault(error) }
   }
   /** A superseded list refresh can record the selection without ever writing its focus frame. */
   private appFocusUnsent = false
@@ -1091,7 +1181,7 @@ export class CableSession {
     this.framesSinceOpen = 0
     this.traffic = {
       at: Date.now(), tx: 0, txFrames: 0, rx: 0, rxFrames: 0,
-      corrupt: this.decoder.corruptFrames, discarded: this.decoder.discardedBytes, run: '', noise: '',
+      corrupt: this.decoder.corruptFrames, discarded: this.decoder.discardedBytes, run: 0, noise: 0,
     }
     this.link = opened
     // Leftover bytes belong to a session that has ended; carrying them across would put a stale
@@ -1149,6 +1239,9 @@ export class CableSession {
     this.greetedMac = null
     this.greetedFw = null
     this.appFocusGeneration += 1
+    // The generation above ends a follow in flight before its focus, and nothing else would clear its mark: kept, the next
+    // attach would read a follow still in flight and land nothing, leaving the dial on "Choose a pane" (syncAgentsNow).
+    this.appFocusUnsent = false
     this.expectedAppFocusEcho = ''
     this.expectedAppFocusEchoUntil = 0
     this.endRest()
@@ -1194,30 +1287,29 @@ export class CableSession {
 
   /**
    * This port's counters in the dial's log, to read beside the firmware's own `alive` line: a gap between
-   * what one side wrote and the other decoded is the lossy link. Plus the printable runs of the bytes the
-   * decoder stepped over (at most NOISE_MAX characters a minute), so a device panic's text is kept.
+   * what one side wrote and the other decoded is the lossy link. Plus how much of what the decoder stepped
+   * over was text (a boot or a panic), never the text: a frame of the dial's that arrives broken is stepped
+   * over too, and its words are the person's.
    */
   private logLink(label: string): void {
     const t = this.traffic
     this.keepRun()
-    this.log(`cable: ${label} · tx ${t.tx} B in ${t.txFrames} frames · rx ${t.rx} B in ${t.rxFrames} frames · corrupt ${this.decoder.corruptFrames - t.corrupt} · discarded ${this.decoder.discardedBytes - t.discarded} B${t.noise ? ` · non-frame text: ${t.noise}` : ''}`)
+    this.log(`cable: ${label} · tx ${t.tx} B in ${t.txFrames} frames · rx ${t.rx} B in ${t.rxFrames} frames · corrupt ${this.decoder.corruptFrames - t.corrupt} · discarded ${this.decoder.discardedBytes - t.discarded} B${t.noise ? ` · non-frame text ${t.noise} chars` : ''}`)
     t.at = Date.now()
-    t.noise = ''
+    t.noise = 0
   }
 
-  /** Close the current run of printable discarded bytes into the minute's text, if it is long enough to read. */
+  /** Count the current run of printable discarded bytes into the minute's text, if it is long enough to read. */
   private keepRun(): void {
     const t = this.traffic
-    if (t.run.length >= NOISE_RUN_MIN && t.noise.length < NOISE_MAX) {
-      t.noise = `${t.noise}${t.noise ? ' | ' : ''}${t.run}`.slice(0, NOISE_MAX)
-    }
-    t.run = ''
+    if (t.run >= NOISE_RUN_MIN) t.noise += t.run
+    t.run = 0
   }
 
   private noted = (bytes: Uint8Array): void => {
     for (const b of bytes) {
       if (b >= 0x20 && b < 0x7f) {
-        if (this.traffic.run.length < NOISE_MAX) this.traffic.run += String.fromCharCode(b)
+        this.traffic.run++
       } else this.keepRun()
     }
   }
@@ -1322,6 +1414,7 @@ export class CableSession {
         this.statsTurn = str('stats') === 'turn-v1'
         this.playerCapable = str('player') === 'library-v1'
         this.appFilter = str('appFilter') === 'v1'
+        this.questionTier = str('questionTier') === 'v1'
         this.seqOn = isP4Board(str('board'))
         this.seq = 0
         const mac = str('mac') ?? ''
@@ -1349,6 +1442,12 @@ export class CableSession {
             ...(this.host.selectPassage ? ['selection'] : []),
             ...(this.host.visit ? ['visit'] : []),
             ...(this.host.answerReviewed ? ['question.review'] : []),
+            // The dial shows its TABS | APPS switch only when told, so a list kept from an earlier machine view
+            // never becomes a control nothing answers.
+            ...(this.appFilter && this.host.pickApp ? ['apps.switch'] : []),
+            // The dial files a `tier: 'list'` question silently only when told, so a daemon that does not name it never
+            // mutes a ring: such a frame stays an alert.
+            ...(this.questionTier ? ['question.tier'] : []),
             // The desktop will carry this device's preferences. A device that does not see this keeps
             // its own settings screens and never reports.
             'settings',
@@ -1386,8 +1485,9 @@ export class CableSession {
           // BEFORE the state push, not after: the push reads the selected machine, and for a remote one
           // that means an RPC over a lane this is what re-opens.
           // The host asks again, as the dial arrives, what it should hold (a pending notice, a wait, an open
-          // question): those wait for the push below.
+          // question): those wait for the push below. Its RAM held every question it was asked, and they went with it.
           this.greeting = true
+          this.questionInbox.forget()
           try {
             this.host.onDialAttached?.()
             // Both halves of the test above mean the same thing to this line: a dial with nothing on its
@@ -1395,7 +1495,8 @@ export class CableSession {
             // which is the whole reason the branch exists.
             await this.pushAgents()
           } finally {
-            // Still greeting: the push failed before its walk of the open questions, so the ones it held are asked now.
+            // The push's drawer left its questions to here, after it; or the push failed before the drawer, and every
+            // open question is asked now.
             if (this.greeting) await this.resendQuestions()
           }
           const focused = this.host.appFocus?.(this.asItself)
@@ -1413,6 +1514,9 @@ export class CableSession {
       case 'pong':
         return
       case 'agents.list':
+        // A dial asks for the list only when it holds none (its 15 s silence rule empties it while the port stays
+        // open), so the answer is a push after an empty list. The record stays: one in the ring is re-asserted.
+        this.lastRing = []
         await this.pushAgents()
         return
       case 'agents.refresh':
@@ -1587,8 +1691,14 @@ export class CableSession {
         // with nothing in it is a finger that came to rest before it lifted and must not be thrown.
         const phase = str('phase')
         if (phase !== 'down' && phase !== 'move' && phase !== 'up') return
-        const dy = typeof msg.dy === 'number' ? msg.dy : 0
-        const v = typeof msg.v === 'number' ? msg.v : 0
+        // `"dy":1e999` parses to Infinity: a value that is not a finite number is no travel, and the phase still goes.
+        const dy = bounded(msg.dy, SCROLL_DY_MAX), v = bounded(msg.v, SCROLL_V_MAX)
+        if (phase === 'down') this.scrollBadLogged = false
+        const bad = (typeof msg.dy === 'number' && dy !== msg.dy) || (typeof msg.v === 'number' && v !== msg.v)
+        if (bad && !this.scrollBadLogged) {
+          this.scrollBadLogged = true
+          this.log('cable: scroll report out of bounds, bounded')
+        }
         this.host.scrolled(phase, dy, v)
         return
       }
@@ -1698,8 +1808,9 @@ export class CableSession {
       }
       case 'answer': {
         // `answers` is the dial's own object, one entry per question, keyed by the keys WE asked with. It
-        // travels verbatim. Until proto 2 this case demanded `{id, optionId}` — a shape the dial has never
-        // sent — so every answer from the question screen was silently dropped on the floor.
+        // travels as the dial sent it, but for half an emoji it read as '?' (asAsked). Until proto 2 this case
+        // demanded `{id, optionId}` — a shape the dial has never sent — so every answer from the question screen was
+        // silently dropped on the floor.
         const agentId = str('agentId')
         const requestId = str('requestId')
         const answers = msg.answers
@@ -1717,7 +1828,9 @@ export class CableSession {
           }
           // Its agent may have gone from the list since: the id alone says nothing here answers it.
           if (requestId.startsWith(SHOWN_ONLY_PREFIX)) return
-          this.host.answer(agentId, requestId, flat)
+          const asked = asAsked(this.questionInbox.asked(agentId, requestId), flat)
+          if (!asked) { await this.toast('Use the terminal to answer this question.'); return }
+          this.host.answer(agentId, requestId, asked)
         }
         return
       }
@@ -2534,7 +2647,7 @@ export class CableSession {
     let frame: Uint8Array
     try {
       const framed = this.seqOn ? { ...msg, seq: this.seq } : msg
-      frame = encodeCableFrame(CableType.Json, Buffer.from(JSON.stringify(framed), 'utf8'))
+      frame = encodeCableFrame(CableType.Json, Buffer.from(dialJson(framed), 'utf8'))
     } catch (err) {
       this.log(`cable: dropped a ${String(msg.t)} frame (${(err as Error).message})`)
       return false
@@ -2679,16 +2792,18 @@ export class CableSession {
     // A port that closed under the push holds no ring: kept, it would show the host an agent after the close said none,
     // and the re-assert and the restores below would read it.
     if (!await this.send({ t: 'agents.end', total, tab, ...(view ? { view } : {}) })) return
+    // Read before the ring takes this push's agents: whether the dial held none until this list.
+    const heldNone = this.lastRing.length === 0
     this.lastRing = agents.map(({ id, name, host }) => ({ id, name, host }))
     // A rename, or the shown agent leaving the ring, reaches the host with no move of the dial.
     this.reportShown()
 
     // The list just changed shape under the dial, so say again which agent both screens are on.
     //
-    // This is the ONLY thing the daemon re-asserts, and it is the current record rather than a second
-    // memory of it — see desiredFocus. A re-anchor after a push is silent by design (the dial reports
-    // nothing it did not do itself), so without this a dial that landed on the wrong tile would sit there
-    // with nobody to notice.
+    // The record is the only thing the daemon sends here, and it is the current record rather than a
+    // second memory of it — see desiredFocus. A re-anchor after a push is silent by design (the dial
+    // reports nothing it did not do itself), so without this a dial that landed on the wrong tile would
+    // sit there with nobody to notice. A dial that holds no agent has the record written first (below).
     //
     // Only for an agent the list just sent. The record can name one on another tab — the window focused
     // it there, then switched — and a focus the dial cannot land is a frame it holds for five seconds and
@@ -2697,6 +2812,18 @@ export class CableSession {
       this.expectedAppFocusEcho = this.desiredFocus
       this.expectedAppFocusEchoUntil = Date.now() + APP_FOCUS_SETTLE_MS
       await this.focusAgent(this.desiredFocus)
+    } else if (view === 'machine' && heldNone && agents.length > 0 && !this.appFocusUnsent) {
+      // A machine list that follows none (an attach, an emptied list, the dial's own agents.list) leaves the dial
+      // on no agent: the firmware adds a list's agents before it removes the old ones, so only a ring that replaces
+      // none leaves its face empty, and it lands a face only on a pick of another app, a focus or a swipe. Seen as
+      // "Choose a pane" on a ChatGPT dial after a reattach, with its app picked and nothing to land it
+      // (docs/plans/2026-11-18-dial-chatgpt-pick-and-voice-design.md). Its first agent goes on the face, as a picked
+      // app's does. Not while a follow is in flight: it wrote its record before this push and sends its own focus
+      // after it, and a landing first would step the dial through the first agent. A window's tab never lands: the
+      // window says where the dial goes.
+      this.expectedAppFocusEcho = agents[0].id
+      this.expectedAppFocusEchoUntil = Date.now() + APP_FOCUS_SETTLE_MS
+      await this.focusAgent(agents[0].id)
     }
 
     // A tile that has just appeared has no history on the dial. The usual case is a remote machine: its
@@ -2806,33 +2933,71 @@ export class CableSession {
     }
     await this.pushRestores()
     // …and the drawer, which is the one thing a dial that has just greeted us is KNOWN to have lost:
-    // its rows live in RAM. Last, because it names agents the pushes above put on the carousel.
+    // its rows live in RAM. Last, because it names agents the pushes above put on the carousel. Its questions with it:
+    // see replaceNotifications.
     await this.replaceNotifications(this.host.listUnread())
-    // A question is a drawer row on the dial, and the drawer replaces them all: the ones still open come after it.
-    await this.resendQuestions()
   }
 
-  /** Every question still open, asked again of a dial that lost it: each once, here or by an ask that overtakes this walk. */
+  /** Every open, owed question the dial does not hold, given to it by giveQuestion's rule: rung if it was never told,
+   *  else back as a row with no ring. Each once, here or by an ask that overtakes this walk. */
   private async resendQuestions(): Promise<void> {
-    this.questionInbox.forget()
     this.greeting = false
     for (const { agentId, id, questions } of this.questionInbox.open()) {
-      if (this.owed(agentId, id) && this.questionInbox.ask(agentId, id)) {
-        await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions, ...this.permissionMark(agentId, id) })
-      }
+      if (this.owed(agentId, id)) await this.giveQuestion(agentId, id, questions[0].q)
     }
   }
 
+  /**
+   * The one rule for a question the dial does not hold. One it was never told is rung. One it was told
+   * since it last lost everything (a drawer cut its row, its turn moved on) is never rung again: a ring at every change
+   * of the window's list was a beep for nothing new (2026-11-18). It goes back as a silent `tier: 'list'` row of `words`
+   * to a dial that says questionTier, as the plain frame to a Pro (it mutes a question sent again by its id and words),
+   * and not at all to an older round dial, which would beep, nor for an id the dial cannot keep. A held one is never
+   * given to a Pro: it mutes a repeat only by a hash in its RAM, and the restart that held it may have cleared that too.
+   * Each mark is set before its frame is written, so two paths cannot both send it.
+   *
+   * Every frame carries only what the firmware reads of it, the first question's words as its drawer row shows them: a
+   * question with kilobytes in fields the dial never reads passed the frame cap and was dropped (2026-11-19). The words
+   * are the same at each send, so a Pro's mute by id and words holds. The dial reads the whole of it by question.read.
+   */
+  private async giveQuestion(agentId: string, id: string, words: string): Promise<void> {
+    // The dial drops a frame of an id it cannot keep: a question never on it is neither asked nor told.
+    if (!this.dialKeeps(agentId, id)) return
+    const inbox = this.questionInbox
+    // Read only for a frame: every drawer change walks each open question here, and most send nothing.
+    const send = (tier: Record<string, unknown>) => {
+      const { name, machine } = this.whoIs(agentId)
+      return this.send({ t: 'question', agentId, name, machine, id, ...tier,
+        questions: [{ key: '', q: noticeSummary(words), options: [] }], ...this.permissionMark(agentId, id) })
+    }
+    if (!inbox.told(agentId, id)) {
+      if (inbox.ask(agentId, id)) await send({})
+    } else if ((this.questionTier || (this.seqOn && !inbox.held(agentId, id))) && inbox.refile(agentId, id)) {
+      await send(this.questionTier ? { tier: 'list' } : {})
+    }
+  }
+
+  /** Whether this dial keeps a question: its agent's drawer row (dialKeepsId), and on a Pro its id, which the Pro
+   *  closes nothing by when its strlen is 0 or 64 bytes on (pro_cable.c handle_question_close): one rung with it rang
+   *  until its agent's next turn. cJSON keeps a `\u0000`, so strlen stops there, and an id with one is not sent. */
+  private dialKeeps(agentId: string, id: string): boolean {
+    return dialKeepsId(agentId) && (!this.seqOn || (Buffer.byteLength(id, 'utf8') < 64 && !id.includes('\u0000')))
+  }
+
   /** Whether a dial that lost its questions is asked this one again. A real question whose turn moved on without a close
-   *  is not. A notice or a wait is: its owner closes it, and it stays on the dial after its turn ends. */
+   *  is not. A notice or a wait is: its owner closes it, and it stays on the dial after its turn ends. One whose id no
+   *  drawer row carries is not either (dialKeepsId), and it was sent again for nothing at each drawer: the dial drops an
+   *  id of 48 B or more and gets half an emoji as '?', no agent's id, and a control character, six bytes of JSON, is
+   *  left out here. */
   private owed(agentId: string, id: string): boolean {
-    return id.startsWith(SHOWN_ONLY_PREFIX) || this.liveTurns.get(agentId) === 'question'
+    return dialKeepsId(agentId) && (id.startsWith(SHOWN_ONLY_PREFIX) || this.liveTurns.get(agentId) === 'question')
   }
 
   /**
    * A Pro saw a hole in `seq` (or a frame that failed its CRC): resend what a lost frame could have carried. The attach
-   * push minus the history replay, plus the open questions — a replayed `summary` is heavy, and a second burst on a link
-   * that just dropped bytes is what the rate limit (once per 2 s, here and on the device) is there to avoid.
+   * push minus the history replay, its drawer carrying the open questions — a replayed `summary` is heavy, and a second
+   * burst on a link that just dropped bytes is what the rate limit (once per 2 s, here and on the device) is there to
+   * avoid.
    */
   private async resync(): Promise<void> {
     const now = Date.now()
@@ -2842,7 +3007,6 @@ export class CableSession {
     await this.syncSwarms(true)
     await this.syncAgents(true)
     await this.replaceNotifications(this.host.listUnread())
-    await this.resendQuestions()
   }
 
   // ── swarms ────────────────────────────────────────────────────────────────────────────────────────
@@ -3204,15 +3368,20 @@ export class CableSession {
   }
 
   /**
-   * The name, engine and machine that ride on every `summary` and `question`.
+   * The name, engine and machine that ride on every `summary`, and the name and machine on every `question`.
    *
    * The dial holds ONE TAB's agents, and a turn can finish on any of them — the drawer row and the
    * question card for an agent off this tab have nobody to ask but the frame. Sent on every card rather
    * than only the off-tab ones: the dial then has one path, and a tab switch mid-flight cannot strand a
    * card with an id and no name.
+   *
+   * Name and machine are cut to what the dial keeps: they are the host's words, of any length, and a frame of a few KB
+   * of them passed the cable cap and was dropped, the card with it.
    */
   private whoIs(agentId: string): { name: string; engine: string; machine: string } {
-    return this.host.describe(agentId) ?? { name: '', engine: '', machine: '' }
+    const who = this.host.describe(agentId)
+    if (!who) return { name: '', engine: '', machine: '' }
+    return { name: dialText(who.name, NAME_MAX), engine: who.engine, machine: dialText(who.machine, NAME_MAX) }
   }
   /**
    * Replace the dial's whole drawer with what the window still has unread.
@@ -3231,7 +3400,7 @@ export class CableSession {
     const replay = { seen: new Set<string>() }
     this.notificationReplay = replay
     const link = this.link
-    const rows = await Promise.all(items.slice(0, 8).map(async (item) => {
+    const rows = await Promise.all(items.filter((item) => dialKeepsId(item.agentId)).slice(0, 8).map(async (item) => {
       const who = this.whoIs(item.agentId)
       // A QUESTION BRINGS ITS OWN WORDS; a finished turn takes the recap this daemon summarised. The
       // dial cannot supply either after a reboot, and a row with neither renders as the word its type
@@ -3243,20 +3412,42 @@ export class CableSession {
           summary = summary ? extendShortRecap(summary, saved?.text ?? '') : saved?.recap ?? ''
         } catch { /* keep the supplied text if history cannot be read */ }
       }
-      return { agentId: item.agentId, name: who.name, machine: who.machine, summary, question: item.question,
-        ...(notificationReadToken(item.readToken) ? { readToken: item.readToken } : {}) }
+      return { agentId: item.agentId, name: who.name, machine: who.machine, summary: noticeSummary(summary),
+        question: item.question, ...(notificationReadToken(item.readToken) ? { readToken: item.readToken } : {}) }
     }))
     if (this.notificationReplay !== replay) return
     this.notificationReplay = undefined
     if (this.link !== link || this.stopped) return
     // Reading clears the notice, not the underlying question. Versioned clears
     // cannot eat a newer turn whose history happened to take longer to load.
-    const drawer = rows.filter(row =>
+    const listed = rows.filter(row =>
       (row.question || !replay.seen.has(row.agentId)) && !replay.seen.has(`${row.agentId}\0${row.readToken}`))
-    // The dial keeps a question as a row of this drawer: one the new drawer does not carry is gone from it, and its next
-    // ask (the core's, as the devices reconnect) is sent. Before the frame, so an ask that overtakes it stays marked.
+    // The dial keeps a question as a row of this drawer, and the drawer replaces them all. A live dial was asked its
+    // questions already: one the window's list leaves out (its mark turned into news, the person looked, the eight-row
+    // cap) goes back on it as a row, first, in place of that agent's news (2026-11-18). An ask would beep and wake it
+    // at every change of that list. A greeting dial lost them with its RAM, and its push asks them after this drawer.
+    const carried = new Set(listed.filter((row) => row.question).map((row) => row.agentId))
+    // Owed is this dial's own rule here (dialKeeps); owedQuestions stays the same for any kind of dial beside it.
+    const open = this.greeting ? []
+      : this.owedQuestions().filter(({ agentId, id }) => !carried.has(agentId) && this.dialKeeps(agentId, id))
+    const back = new Set(open.map(({ agentId }) => agentId))
+    const rest = listed.filter((row) => !back.has(row.agentId))
+    // Questions before news within the eight: a question cut for a news row was asked again, a beep, at every change.
+    const eight = [
+      ...open.map(({ agentId, questions }) => {
+        const { name, machine } = this.whoIs(agentId)
+        return { agentId, name, machine, summary: noticeSummary(questions[0].q), question: true }
+      }),
+      ...rest.filter((row) => row.question),
+      ...rest.filter((row) => !row.question),
+    ].slice(0, 8)
+    const drawer = fitDrawer(eight)
+    if (drawer.length < eight.length) this.log(`cable: notif.replace over the cap, dropped ${eight.length - drawer.length} rows`)
+    // Before the frame, so an ask that overtakes it stays marked.
     this.questionInbox.forget(new Set(drawer.filter((row) => row.question).map((row) => row.agentId)))
     await this.send({ t: 'notif.replace', items: drawer })
+    // One the eight rows could not hold is given back now, by giveQuestion's rule. A greeting gives them as its push ends.
+    if (!this.greeting) await this.resendQuestions()
   }
 
   /**
@@ -3294,6 +3485,8 @@ export class CableSession {
    * came through quiet, no row was ever recorded, and looking away later left nothing behind.
    */
   async question(agentId: string, id: string, questions: unknown, permission = false): Promise<void> {
+    // Nobody could close it: it would stay on the dial for good.
+    if (!agentId || !id) return
     // The newest ask under an id is what is on screen: it moves to the end, and the oldest beyond the bound goes.
     const key = `${agentId}\0${id}`
     this.asked.delete(key)
@@ -3302,9 +3495,16 @@ export class CableSession {
     this.questionInbox.set(agentId, id, questions)
     this.liveTurns.set(agentId, 'question')
     // The dial beeps at each ask, and the devices and the core ask again what a dial should hold as it arrives or they
-    // reconnect: one the inbox holds is asked once until the dial loses it. One it cannot hold is sent as it comes.
-    if (this.questionInbox.read(agentId).ok && (this.greeting || !this.questionInbox.ask(agentId, id))) return
-    await this.send({ t: 'question', agentId, ...this.whoIs(agentId), id, questions, ...this.permissionMark(agentId, id) })
+    // reconnect: it goes by giveQuestion's rule, rung once and never again after the dial was told it, and during a
+    // greeting it waits for the walk. One the inbox cannot hold whole is kept as its summary, and rung in its words.
+    const open = this.questionInbox.read(agentId)
+    if (!open.ok || this.greeting) return
+    await this.giveQuestion(agentId, id, open.questions[0].q)
+  }
+  /** A question the dial reads when its row is opened and is never asked: a notice restored after the devices process
+   *  restarted rang before it (cable/notices.ts). */
+  async hold(agentId: string, id: string, questions: unknown): Promise<void> {
+    this.questionInbox.set(agentId, id, questions, true)
   }
   /** `permission: true` on the device's `question` for a prompt the core marked, so it can draw approve/deny; a plain
    *  question carries no key, which is also all older firmware reads (it ignores keys it does not know). */
@@ -3339,7 +3539,11 @@ export class CableSession {
     if (!this.questionInbox.close(agentId, id)) return
     // Answered: the turn goes on (its end clears it).
     if (this.liveTurns.get(agentId) === 'question') this.liveTurns.set(agentId, 'working')
-    await this.send({ t: 'question.close', agentId, id })
+    // A close of an id the dial cannot keep, or one that does not fit a frame, names a question no frame carried
+    // (giveQuestion; a question's frame is the larger): the dial never had it, and send would drop an over-cap one as
+    // this side's bug. The inbox keeps no id past 6500 bytes; the close came anyway.
+    const close = { t: 'question.close', agentId, id }
+    if (this.dialKeeps(agentId, id) && fitsFrame(close)) await this.send(close)
   }
 
   async focusAgent(agentId: string): Promise<void> {

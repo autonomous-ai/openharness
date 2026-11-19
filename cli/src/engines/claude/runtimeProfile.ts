@@ -2,6 +2,7 @@
 import { join } from 'node:path'
 import { sessionClaudeHome } from '../../lib/engineHomes.js'
 import type { EngineRuntime, RuntimeContext, RuntimeModelOption, RuntimeRecord, RuntimeSession, RuntimeState } from '../facets/runtime.js'
+import { listClaudeModels, type ClaudeListedModel } from './lists.js'
 import { addOption, currentPaneUi, encodeRuntimeProfile, flattenContent, parseVersion, readJson, record, showEffort, stripAnsi, text, versionAtLeast } from '../kit/runtime.js'
 
 const CLAUDE_EFFORTS = new Set(['auto', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode'])
@@ -192,11 +193,41 @@ function pane({ state }: RuntimeContext, paneText: string): void {
   else if (/\b(?:auto|default) mode on\b/i.test(currentUi)) state.mode = 'default'
 }
 
+// #4413 made models() wait up to 15 s for Claude Code's answer, but the core waits 5 s for this worker
+// (RUNTIME_WAIT_MS): a miss failed models_list and restarted engine-claude, which killed the read with it. The engine's
+// reads also queue one at a time (core/engines/runtimeSessions.ts), so the wait must be short. A list that comes is
+// cached for 30 min, so only a first ask waits.
+const LISTED_WAIT_MS = 1_000
+
+/** Claude Code's list if it comes within [ms], else null; the read runs on past that to fill lists.ts's cache. */
+function listedWithin(session: RuntimeSession, ms: number): Promise<ClaudeListedModel[] | null> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), ms)
+    // Caught here so a read that fails after the answer was sent is not an unhandled rejection, which kills the worker.
+    listClaudeModels(session).catch(() => null).then((listed) => {
+      clearTimeout(timer)
+      resolve(listed)
+    })
+  })
+}
+
 async function models(session: RuntimeSession, state: RuntimeState | undefined): Promise<RuntimeModelOption[]> {
+  // Started before the first await, so the second counts from the request's start.
+  const listing = listedWithin(session, LISTED_WAIT_MS)
   const output: RuntimeModelOption[] = []
   const seen = new Set<string>()
   const allowed = await claudeAvailableModels(session)
-  for (const model of CLAUDE_ALIASES) {
+  // Claude Code's own `/model` list, names and lines included; the aliases below when it could not be asked or has not
+  // listed within the second.
+  const listed = await listing
+  for (const entry of listed ?? []) {
+    if (!availableModelMatches(entry.value, allowed)) continue
+    addOption(output, seen, session, entry.value, 'auto', entry.displayName, entry.description)
+    const efforts = entry.efforts.length && versionAtLeast(session.cliVersion, CLAUDE_ULTRACODE_MIN_VERSION)
+      ? [...entry.efforts, 'ultracode'] : entry.efforts
+    for (const effort of efforts) addOption(output, seen, session, entry.value, effort, entry.displayName, entry.description)
+  }
+  for (const model of listed ? [] : CLAUDE_ALIASES) {
     if (model === 'fable' && !versionAtLeast(session.cliVersion, [2, 1, 170])) continue
     if (!availableModelMatches(model, allowed)) continue
     addOption(output, seen, session, model, 'auto')

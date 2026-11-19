@@ -129,13 +129,14 @@ export function addOption(
   model: string,
   effort: string,
   modelLabel = runtimeModelLabel(model),
+  description?: string,
 ): void {
   // The id inside a `runtime-v1:` string is what the web/device echoes back on a pick, so it is the
   // AGENT id — the public one — not the engine session that happens to be bound right now.
   const id = encodeRuntimeProfile({ sessionId: session.agentId, engine: session.engine, model, effort })
   if (seen.has(id)) return
   seen.add(id)
-  output.push({ id, displayName: `${modelLabel} / ${effortLabel(effort)}` })
+  output.push({ id, displayName: `${modelLabel} / ${effortLabel(effort)}`, ...(description ? { description } : {}) })
 }
 
 /** Use the engine's actual reducer on an isolated value. No live session or control is mutated. */

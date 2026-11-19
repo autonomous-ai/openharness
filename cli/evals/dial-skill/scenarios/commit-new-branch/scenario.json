@@ -1,0 +1,11 @@
+{
+  "need": "no-need",
+  "kind": "git",
+  "prompt": "Commit the README typo fix on a new branch `docs/readme-typo`.",
+  "secrets": [],
+  "origin": false,
+  "check": {
+    "run": "git rev-parse -q --verify refs/heads/docs/readme-typo >/dev/null || { echo 'no branch docs/readme-typo'; exit 1; }; if git show docs/readme-typo:README.md | grep -q recieve; then echo 'README typo not fixed on docs/readme-typo'; exit 1; fi",
+    "expect": "no branch docs/readme-typo"
+  }
+}

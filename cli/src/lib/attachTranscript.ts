@@ -247,7 +247,9 @@ export async function replayAttachSpan(
   }, isWholeRecord, undefined, closeFileIdentity(closes))
   if (!read && closes.length) throw new Error('ENGINE_CONTROL_BOUNDARY_CHANGED')
   if (read) closeThrough(read.next)
-  if (failures) console.warn(`[attach] ${filePath}: ${failures} record(s) could not be taken in: ${String(firstFailure)}`)
+  // The error's kind only: a parse error's message quotes the record, which is the person's transcript.
+  const failure = firstFailure instanceof Error ? firstFailure.name : typeof firstFailure
+  if (failures) console.warn(`[attach] ${filePath}: ${failures} record(s) could not be taken in: ${failure}`)
   return { next: read?.next ?? span.end, records, content: records > 0 || !!read?.partial }
 }
 

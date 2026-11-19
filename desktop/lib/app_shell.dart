@@ -49,6 +49,7 @@ import 'shortcuts/app_keymap.dart';
 import 'shortcuts/keymap_native.dart';
 import 'shortcuts/keyboard_practice.dart';
 import 'widgets/shortcuts_sheet.dart';
+import 'widgets/device_app_band.dart';
 import 'widgets/new_device_notice.dart';
 import 'widgets/shared_tab_notice.dart';
 import 'widgets/update_notice.dart';
@@ -544,7 +545,8 @@ class _RootShellState extends ConsumerState<RootShell>
         // three buttons beside it, which is the one strip of this window that
         // must stay reachable.
         // Device bands, most urgent first: a removal (red before neutral), a key that joined and left,
-        // a new device, a held computer id. The mobile app stacks them in the same order. They are
+        // a new device, a held computer id, then the menu-bar app's offer, the least urgent. The mobile
+        // app stacks the first four in the same order. They are
         // the workspace's: a shared harness (`/s/…`, web only) is someone's session, not the place
         // to review your own devices.
         final deviceBands = home && shared == null;
@@ -573,6 +575,7 @@ class _RootShellState extends ConsumerState<RootShell>
               NewDeviceNotice(notifier: app),
             if (app.deviceConflict != null && deviceBands)
               DeviceConflictNoticeBand(notifier: app),
+            if (deviceBands) DeviceAppBand(offer: app.deviceAppOffer),
             if (deviceBands)
               ListenableBuilder(
                 listenable: app.sharedTabs,

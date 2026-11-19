@@ -1,6 +1,7 @@
 import 'package:web/web.dart' as web;
 
 import 'browser_lock.dart';
+import 'harness_home.dart';
 import 'local_key_value_store.dart';
 
 /// The browser adapter behind the same state-store entry point as desktop.
@@ -115,6 +116,7 @@ class HarnessFileStore
   /// Native-only services must never turn a browser path into a local file.
   static String defaultDirectoryPath({
     Map<String, String>? environment,
-    String? name,
+    HarnessEntry? entry,
+    HomeLook? look,
   }) => throw UnsupportedError('The browser has no Harness home directory.');
 }

@@ -1,5 +1,5 @@
 import { execFileSync } from 'child_process'
-import { chmodSync, existsSync, realpathSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, realpathSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -9,6 +9,7 @@ import {
   PTY_PAYLOAD_FILES, PtyPayloadRefused, PtyPayloadUnpackFailed, CANARY_HOME_STALE_MS, SERVE_CANARY_BOUND_MS, fetchPtyEntry, preparePtyPayload, ptyManifestUrl, ptyPlatformKey,
   probeVersionLine, processesInFolder, ptyUpdateWanted, serveCanary, sweepCanaryHomes, sweepStagingFolders, type PtyEntry,
 } from './ptyPayload.js'
+import { writeExecutable } from '../../testing/executableFixture.js'
 
 let tmp: string
 beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'pty-payload-')) })
@@ -212,8 +213,7 @@ describe('the serve canary', () => {
 describe.skipIf(process.platform === 'win32')('serveCanary, against stand-in binaries', () => {
   function script(name: string, body: string): string {
     const file = join(tmp, name)
-    writeFileSync(file, `#!/bin/sh\n${body}\n`)
-    chmodSync(file, 0o755)
+    writeExecutable(file, `#!/bin/sh\n${body}\n`)
     return file
   }
   const canaryHomes = (dir: string) => readdirSync(dir).filter((n) => n.startsWith('harness-pty-canary-'))
@@ -297,10 +297,10 @@ describe('probeVersionLine', () => {
   // The same `<bin> version` run as ptyHost/launch.ts binaryVersion's (one implementation, 5 s, hidden).
   it.skipIf(process.platform === 'win32')('parses the last line a binary prints, and rejects one that fails', async () => {
     const good = join(tmp, 'good')
-    writeFileSync(good, '#!/bin/sh\necho "starting"\necho \'{"version":"0.11.0"}\'\n', { mode: 0o755 })
+    writeExecutable(good, '#!/bin/sh\necho "starting"\necho \'{"version":"0.11.0"}\'\n')
     await expect(probeVersionLine(good)).resolves.toEqual({ version: '0.11.0' })
     const bad = join(tmp, 'bad')
-    writeFileSync(bad, '#!/bin/sh\nexit 3\n', { mode: 0o755 })
+    writeExecutable(bad, '#!/bin/sh\nexit 3\n')
     await expect(probeVersionLine(bad)).rejects.toThrow()
   })
 

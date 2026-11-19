@@ -150,11 +150,9 @@ export function startViewers(core: CoreApi, ports: CorePorts): void {
   const unfollow = core.agents.follow?.((event) => {
     if (event.kind === 'running') {
       const session = event.session
-      const prior = sessions.get(session.agentId)
-      if (prior && session.frameEpoch && prior.frameEpoch !== session.frameEpoch) {
-        sessions.delete(session.agentId)
-        detachDsh(session.agentId)
-      }
+      // A new core's lease is the same agent's: its viewer stays up and its URL goes out under the new lease.
+      // Replaced here, every viewer restarted under a new URL at each core restart (e2e/viewersProcess.e2e.ts,
+      // 2026-11-17).
       sessions.set(session.agentId, session)
       attachDsh(session)
       publish(session)

@@ -28,7 +28,7 @@ import { enginePathOverride } from '../../lib/engineBin.js'
 import { engineInstallRecipe } from '../../lib/engineInstall.js'
 import {
   buildEngineCommandArgv, buildEngineLaunchArgv, engineLaunchEnv, namedAgentArgs, permissionModeApproves, permissionModeFlags,
-  refusePermissionFlagIfUnsupported, supportsFirstPrompt, supportsNamedAgent, typedFirstPrompt, NamedAgentUnsupportedError,
+  launchAttempts, refusePermissionFlagIfUnsupported, supportsFirstPrompt, supportsNamedAgent, typedFirstPrompt, NamedAgentUnsupportedError,
 } from '../../lib/engineLaunch.js'
 import { setUpWithin } from '../../lib/setUpWithin.js'
 import { agentLaunchArgs, joinedInstructions } from '../../lib/agentAttribution.js'
@@ -401,7 +401,7 @@ export function createAgentCreator({
       engine,
       cwd,
       sessionLabel: label,
-      argv,
+      argv: launchAttempts(argv, () => buildEngineLaunchArgv(engine, launchOptions)),
       // Windows: the workspace to start in and the shell the pane becomes after the engine (lib/windows/engineStart.ts).
       paneLaunch: windowsPaneLaunch(engine, { ...launchOptions, held: isWindowsHeldPane(argv) }),
       // Windows: the variables the argv's `/usr/bin/env` prefix carries elsewhere, last (engineLaunchEnv).

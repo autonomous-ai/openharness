@@ -1,12 +1,13 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { parse as parseToml } from 'smol-toml'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { env } from '../../config/env.js'
 import { hooks as claude } from '../claude/hookContract.js'
 import { hooks as codex } from '../codex/hookContract.js'
 import { defaultHookHome, harnessRules, installHookSettings } from './hookSettings.js'
-import { HOOK_SCRIPT } from './notifyHooks.js'
+import { command, HOOK_SCRIPT } from './notifyHooks.js'
 import type { HookPreparationProof } from './nativeHookFiles.js'
 import { messagesCommand } from './messagesHook.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
@@ -129,6 +130,29 @@ it('approves the required Codex hook when an earlier optional hook uses the same
   expect(config).toContain(`[hooks.state.${JSON.stringify(key)}]\ntrusted_hash = ${JSON.stringify(hash)}`)
   expect(confirmed).toHaveBeenCalledOnce()
   expect(confirmed.mock.calls[0]![0].current()).toBe(true)
+})
+
+// Codex keys a hook's review by its place: put after the person's when its command changes (the move, a Node update), ours
+// moved theirs, and Codex asked for its review again.
+it('an updated Codex hook of Harness\'s keeps its place, and the person\'s beside it its review', async () => {
+  vi.spyOn(console, 'log').mockImplementation(() => {})
+  const home = join(root, 'codex'); mkdirSync(home)
+  const file = join(home, codex.settings.file), config = join(home, codex.settings.reviewed!.file)
+  expect(await installHookSettings('codex', codex.settings, 19474, home)).toBe(true)
+  const theirs = { hooks: [{ type: 'command', command: 'my-own-hook', timeout: 7 }] }
+  const settings = JSON.parse(readFileSync(file, 'utf8'))
+  settings.hooks.Stop.push(theirs)
+  writeFileSync(file, JSON.stringify(settings, null, 2) + '\n')
+  const at = (block: number) => `${realpathSync(file)}:${codex.settings.reviewed!.events.Stop}:${block}:0`
+  const trusted = reviewHash(codex.settings.reviewed!, 'Stop', undefined, theirs.hooks[0]!)
+  writeFileSync(config, `${readFileSync(config, 'utf8')}\n[hooks.state.${JSON.stringify(at(1))}]\ntrusted_hash = ${JSON.stringify(trusted)}\n`)
+  expect(await installHookSettings('codex', codex.settings, 19473, home)).toBe(true)
+  const stop = JSON.parse(readFileSync(file, 'utf8')).hooks.Stop
+  expect(stop[0].hooks[0].command).toContain('--port 19473')
+  expect(stop.slice(1)).toEqual([theirs])
+  const state = (parseToml(readFileSync(config, 'utf8')) as { hooks: { state: Record<string, { trusted_hash: string }> } }).hooks.state
+  expect(state[at(0)]?.trusted_hash).toBe(reviewHash(codex.settings.reviewed!, 'Stop', stop[0].matcher, stop[0].hooks[0]))
+  expect(state[at(1)]?.trusted_hash).toBe(trusted)
 })
 
 it('names a home literally in its log lines, whatever characters the path holds', async () => {
@@ -387,4 +411,74 @@ it.skipIf(process.getuid?.() === 0)('says only the allowance failed when a read-
     expect(warn.mock.calls.map(call => call[0])).toEqual([`[hooks] could not allow Harness's agent commands in ${file} (the engine asks before each one):`])
     expect(existsSync(join(env.HARNESS_AGENT_MESSAGES_DIR, 'hook.mjs'))).toBe(true)
   } finally { chmodSync(file, 0o644) }
+})
+
+/** Claude Code's contract as a release that declares only [events]: no Agent Messages, no allowance. */
+const declaring = (events: typeof claude.settings.events) => ({ ...claude.settings, events, inbox: undefined, allow: undefined })
+const oursAt = (port: number) => ({ hooks: [{ type: 'command', command: command(port, 'claude'), timeout: 5 }] })
+
+// Codex caps an Interrupt hook at 3 s and hashes the capped value (facts-codex §1): written with the contract's 5,
+// its review record would never match.
+it('writes a declared event\'s own timeout in place of the contract\'s, and the contract\'s for the others', async () => {
+  const home = join(root, 'claude'), file = join(home, claude.settings.file)
+  expect(await installHookSettings('claude', declaring([{ event: 'SessionStart' }, { event: 'Stop', timeout: 3 }]), 19473, home)).toBe(true)
+  const { hooks } = JSON.parse(readFileSync(file, 'utf8'))
+  expect(hooks).toEqual({ SessionStart: [oursAt(19473)], Stop: [{ hooks: [{ ...oursAt(19473).hooks[0], timeout: 3 }] }] })
+  expect(claude.settings.timeout).toBe(5)
+})
+
+it('takes Harness\'s block out of an event its engine no longer declares, and leaves the person\'s', async () => {
+  const home = join(root, 'claude'), file = join(home, claude.settings.file)
+  mkdirSync(home)
+  const ours = oursAt(19473), theirs = { matcher: 'auto', hooks: [{ type: 'command', command: 'echo compacting' }] }
+  const shared = { matcher: 'mcp', hooks: [...ours.hooks, { type: 'command', command: 'echo asked' }] }
+  writeFileSync(file, JSON.stringify({ model: 'opus', hooks: { PreCompact: [ours, theirs], SubagentStop: [ours], Elicitation: [shared], PreToolUse: [theirs] }, statusLine: 'mine' }))
+  expect(await installHookSettings('claude', declaring([{ event: 'SessionStart' }]), 19473, home)).toBe(true)
+  expect(readFileSync(file, 'utf8')).toBe(JSON.stringify({
+    model: 'opus',
+    hooks: { PreCompact: [theirs], Elicitation: [{ matcher: 'mcp', hooks: [{ type: 'command', command: 'echo asked' }] }], PreToolUse: [theirs], SessionStart: [ours] },
+    statusLine: 'mine',
+  }, null, 2) + '\n')
+})
+
+it('a second install writes nothing', async () => {
+  const home = join(root, 'claude'), file = join(home, claude.settings.file)
+  mkdirSync(home)
+  writeFileSync(file, JSON.stringify({ hooks: { SubagentStop: [oursAt(19474)] } }))
+  expect(await installHookSettings('claude', declaring([{ event: 'SessionStart' }]), 19473, home)).toBe(true)
+  const written = readFileSync(file, 'utf8'), before = statSync(file, { bigint: true })
+  expect(Object.keys(JSON.parse(written).hooks)).toEqual(['SessionStart'])
+  expect(await installHookSettings('claude', declaring([{ event: 'SessionStart' }]), 19473, home)).toBe(true)
+  const after = statSync(file, { bigint: true })
+  expect(readFileSync(file, 'utf8')).toBe(written)
+  expect([after.ino, after.mtimeNs]).toEqual([before.ino, before.mtimeNs])
+})
+
+it('leaves Agent Messages\' block where it is', async () => {
+  const home = join(root, 'claude'), file = join(home, claude.settings.file)
+  mkdirSync(home)
+  const messages = { hooks: [{ type: 'command', command: messagesCommand(env.HARNESS_AGENT_MESSAGES_DIR), timeout: 5 }] }
+  writeFileSync(file, JSON.stringify({ hooks: { PostToolUse: [messages, oursAt(19473)] } }))
+  expect(await installHookSettings('claude', declaring([{ event: 'SessionStart' }]), 19473, home)).toBe(true)
+  expect(JSON.parse(readFileSync(file, 'utf8')).hooks.PostToolUse).toEqual([messages])
+})
+
+it('leaves an event it does not declare alone when nothing of Harness\'s is in it, whatever its shape', async () => {
+  const home = join(root, 'claude'), file = join(home, claude.settings.file)
+  mkdirSync(home)
+  const odd = [null, 'text', { hooks: 'no' }, { hooks: [null, { command: 5 }] }]
+  writeFileSync(file, JSON.stringify({ hooks: { PreCompact: odd, SubagentStop: [oursAt(19473)] } }))
+  expect(await installHookSettings('claude', declaring([{ event: 'SessionStart' }]), 19473, home)).toBe(true)
+  expect(JSON.parse(readFileSync(file, 'utf8')).hooks).toEqual({ PreCompact: odd, SessionStart: [oursAt(19473)] })
+})
+
+it('on Windows, prunes the forms Harness writes there', async () => {
+  const home = join(root, 'claude'), file = join(home, claude.settings.file)
+  vi.spyOn(console, 'log').mockImplementation(() => {})
+  expect(await installHookSettings('claude', declaring([{ event: 'SessionStart' }, { event: 'PreCompact' }]), 19473, home, {}, 'win32')).toBe(true)
+  const execForm = JSON.parse(readFileSync(file, 'utf8')).hooks.PreCompact[0].hooks[0]
+  expect(execForm.command).toBe(managedNodePath())
+  expect(execForm.args).toEqual(expect.arrayContaining(['--port', '19473']))
+  expect(await installHookSettings('claude', declaring([{ event: 'SessionStart' }]), 19473, home, {}, 'win32')).toBe(true)
+  expect(Object.keys(JSON.parse(readFileSync(file, 'utf8')).hooks)).toEqual(['SessionStart'])
 })

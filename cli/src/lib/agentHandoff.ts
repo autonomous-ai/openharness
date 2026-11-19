@@ -609,7 +609,7 @@ export function prepareAgentHandoff(deps: HandoffDeps, req: HandoffRequest): Pro
     if (expired()) throw new HandoffError('TIMEOUT')
     if (!session) throw new HandoffError('UNKNOWN_AGENT')
     if (session.identityHold) {
-      throw new HandoffError('IDENTITY_UNAVAILABLE', session.identityHold.includes(REPLACED_PROGRAM) ? 'PROGRAM_REPLACED' : undefined)
+      throw new HandoffError('IDENTITY_UNAVAILABLE', session.identityHold === REPLACED_PROGRAM ? 'PROGRAM_REPLACED' : undefined)
     }
     const cwd = session.cwd
     if (!cwd || !isAbsolute(cwd) || !isDirectory(cwd)) throw new HandoffError('NO_PROJECT')

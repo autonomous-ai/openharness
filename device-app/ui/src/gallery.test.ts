@@ -11,12 +11,17 @@ const CONTRACT_PAIRS = [
   'sign_in.working',
   'sign_in.browser',
   'sign_in.failed',
+  'orca.asking',
+  'orca.approve',
+  'orca.done',
+  'orca.failed',
 ]
 
 describe('gallery', () => {
   it('the gallery draws every state in both themes', () => {
-    expect(STATES).toHaveLength(8)
+    expect(STATES).toHaveLength(14)
     expect(new Set(STATES.map(({ view }) => `${view.screen}.${view.phase}`))).toEqual(new Set(CONTRACT_PAIRS))
+    expect(STATES.find((state) => state.name === 'Install · working')?.view.lines).toEqual(['Installing tmux…'])
 
     const root = document.createElement('div')
     draw(root)
@@ -41,6 +46,7 @@ describe('gallery', () => {
 
       const trays = root.querySelectorAll<HTMLImageElement>(`[data-theme="${theme}"] .bar img.tray`)
       expect(trays).toHaveLength(1)
+      // A template image: the menu bar tints it for each theme.
       expect(trays[0].getAttribute('src')).toBe('../src-tauri/icons/tray.png')
     }
     expect(root.querySelectorAll('img.tray')).toHaveLength(2)

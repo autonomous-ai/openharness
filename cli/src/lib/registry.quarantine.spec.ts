@@ -65,10 +65,20 @@ describe('a registry no version can load', () => {
     rename.fails = 'error'
     const registry = await loadRegistry()
     registry.load()
-    expect(error).toHaveBeenCalledWith(expect.stringMatching(/^\[registry\] registry is not JSON \(.*\), and it could not be moved aside \(EXDEV: cross-device link not permitted\); refusing to overwrite it$/))
+    expect(error).toHaveBeenCalledWith('[registry] registry is not JSON, and it could not be moved aside (EXDEV: cross-device link not permitted); refusing to overwrite it')
     ;(await registry.openProcessAgent({ agentId: 'must-not-write', engine: 'claude', tmuxPane: '%9', processIdentity: processIdentity(109) }))
     expect(readFileSync(file, 'utf8')).toBe('[{"agentId":')
     expect(readdirSync(dataDir).filter((name) => name.startsWith('registry.json.corrupt-'))).toEqual([])
+  })
+
+  it('that is not JSON is said without the parse error\'s message, which quotes its rows: the names of the person\'s harnesses', async () => {
+    const file = join(dataDir, 'registry.json')
+    writeFileSync(file, '[{"agentId":"a1","defaultName": SECRET-NAME-MARKER}]', { mode: 0o600 })
+    const registry = await loadRegistry()
+    registry.load()
+    expect(registry.list()).toEqual([])
+    expect(error).toHaveBeenCalledWith(expect.stringMatching(/^\[registry\] registry is not JSON; moved it aside to .*registry\.json\.corrupt-\S+ and started empty$/))
+    expect(error.mock.calls.flat().join('\n')).not.toContain('SECRET')
   })
 
   it('says why it could not be moved, whatever the failure was', async () => {

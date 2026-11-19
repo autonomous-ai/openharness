@@ -9,6 +9,7 @@
 // milliseconds, never a name, path or message.
 import 'dart:io';
 
+import 'package:harness/core/harness_home.dart';
 import 'package:harness/measurement/speed_report.dart';
 
 void main(List<String> args) {
@@ -34,7 +35,9 @@ void main(List<String> args) {
 }
 
 List<File> _recentLogs(String home) {
-  final dir = Directory('$home/.harness/logs');
+  final dir = Directory(
+    HarnessHome.of(home, join: separatorJoin('/')).path(HarnessEntry.logs),
+  );
   if (!dir.existsSync()) return const [];
   final logs =
       dir

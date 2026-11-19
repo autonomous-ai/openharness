@@ -8,6 +8,7 @@ import type { PtyEvent, PtyOp } from './ptyHost/protocol.js'
 import type { PtyHostClient } from './ptyHost/client.js'
 import type { EnsurePtyHostResult, PtyHostTarget } from './ptyHost/launch.js'
 import type { PtyRuntimeRef } from './terminalTypes.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 // validate's branches, not the process table: the same narrow mock tmuxBackendValidate.spec.ts uses.
 const lookupPaneEngineProcess = vi.hoisted(() => vi.fn())
@@ -1271,7 +1272,7 @@ describe('PtyHostBackend hosts by instance', () => {
     const binary = path.join(home, 'harness-pty-stub')
     // `serve --home <home>`: says how it was started, then serves as [instance] (hello, `ok` to every op) and
     // publishes its discovery file. It ends itself after 30 s if nothing kills it.
-    writeFileSync(binary, `#!${process.execPath}
+    writeExecutable(binary, `#!${process.execPath}
 const { createHash } = require('node:crypto')
 const fs = require('node:fs')
 const net = require('node:net')
@@ -1304,7 +1305,7 @@ server.listen(endpoint, () => {
   fs.writeFileSync(path.join(home, 'run', ${JSON.stringify(discoveryFileName(instance))}), JSON.stringify({ protocol: ${P}, instance: ${JSON.stringify(instance)}, endpoint, pid: process.pid, version: '0.2.0', token }))
 })
 setTimeout(() => process.exit(0), 30000)
-`, { mode: 0o755 })
+`)
     vi.stubEnv('HARNESS_PTY_BIN', binary)
     const own = await hostIn(home, instance, '0.2.0', GONE_PID)
     const other = await hostIn(home, `p${P}-0.3.0`, '0.3.0')

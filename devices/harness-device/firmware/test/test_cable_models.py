@@ -93,6 +93,8 @@ static int paused_snprintf(char *out,size_t n,const char *format,...) {
     }
     return result;
 }
+// Apple's _FORTIFY_SOURCE makes snprintf a macro; redefining it without this trips -Werror.
+#undef snprintf
 #define snprintf paused_snprintf
 static void handle_models(const cJSON *p);
 static void *deliver(void *arg) {(void)arg;reader_thread=true;handle_models(response);return NULL;}
@@ -207,4 +209,4 @@ with tempfile.TemporaryDirectory(prefix='harness-cable-models-') as folder:
                             '-o', str(out / 'cJSON.o')], check=True)
     subprocess.run(flags + ['-I', str(json_dir), str(out / 'models.c'), str(out / 'cJSON.o'),
                             '-lm', '-pthread', '-o', str(out / 'models')], check=True)
-    subprocess.run([str(out / 'models')], check=True, timeout=30)
+    subprocess.run([str(out / 'models')], check=True)

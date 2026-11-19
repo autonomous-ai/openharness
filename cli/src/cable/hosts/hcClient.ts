@@ -1,9 +1,9 @@
 /**
  * Herdr Core's socket (hc, docs/plans/2026-11-16-herdr-app-design.md): the terminals Herdr's window shows, their status,
- * and the dial's words, for the hc source and the Herdr adapter. hc is the core the Herdr app runs its terminals in, a
- * program of its own with its own API: not herdr 0.8.0, the older multiplexer herdrClient.ts speaks to. JSON-RPC 2.0,
- * one message a line. A request is one connection; a subscription is a connection of its own that writes `hello` and
- * `events.subscribe` together, then only reads.
+ * the dial's words, and the page keys its scroll presses in Claude Code, for the hc source and the Herdr adapter. hc is
+ * the core the Herdr app runs its terminals in, a program of its own with its own API: not herdr 0.8.0, the older
+ * multiplexer herdrClient.ts speaks to. JSON-RPC 2.0, one message a line. A request is one connection; a subscription
+ * is a connection of its own that writes `hello` and `events.subscribe` together, then only reads.
  *
  * Everything is checked here. The socket is another program's: it must be this user's before anything connects, a line
  * has a bound, an answer counts only under its own id, and an error only by its kind, never by its message. The address
@@ -91,6 +91,9 @@ export interface HcTerminal {
   live: boolean
   /** Its labels hold `herdr.space`: Herdr's window shows it. */
   space: boolean
+  /** Its `herdr.tab` label: the tab of Herdr's window that holds it, the id `herdr-app status` names for the tab on
+   *  screen (dial-herdr-scroll-design.md §3). */
+  tab?: string
   status?: HcStatus
   kind?: string
   name?: string
@@ -98,6 +101,8 @@ export interface HcTerminal {
   /** hc's count of its program's turns: it goes up each time the status leaves `working` (F7), so a turn that ran while
    *  nothing was subscribed still shows. */
   turn?: number
+  /** The pid of the program it runs now, never its shell's own. */
+  foregroundPid?: number
 }
 
 export interface HcSubscriber {
@@ -115,6 +120,9 @@ export interface HcClient {
   request(method: string, params: Record<string, unknown>, deadlineMs?: number): Promise<HcAnswer>
   subscribe(to: HcSubscriber): { close(): void }
   prompt(address: string, kind: string, text: string): Promise<HcPrompt>
+  /** Presses those named keys in the terminal's program (`terminal.keys`): hc encodes each for the program's keyboard
+   *  modes, so none is typed as text. True only for hc's result. */
+  keys(address: string, keys: readonly string[], deadlineMs: number): Promise<boolean>
   /** The socket's inode and change time while it is a socket of this user's; else none. */
   socketStamp(): string | undefined
 }
@@ -140,6 +148,7 @@ export function hcTerminal(value: unknown): HcTerminal | undefined {
   if (!isObject(value) || typeof value.address !== 'string' || !HC_TERMINAL.test(value.address)) return undefined
   const labels = isObject(value.labels) ? value.labels : {}
   const space = Object.hasOwn(labels, 'herdr.space') ? labels['herdr.space'] : undefined
+  const tab = Object.hasOwn(labels, 'herdr.tab') ? labels['herdr.tab'] : undefined
   const status = isObject(value.status) ? value.status : {}
   const kind = hcKind(status.app)
   const foreground = isObject(value.foreground) ? value.foreground : {}
@@ -148,20 +157,23 @@ export function hcTerminal(value: unknown): HcTerminal | undefined {
     address: value.address,
     live: value.state === 'live',
     space: typeof space === 'string' && space !== '',
+    ...(typeof tab === 'string' && tab !== '' ? { tab } : {}),
     ...(STATUSES.has(status.state) ? { status: status.state as HcStatus } : {}),
     ...(kind ? { kind } : {}),
     ...(typeof value.name === 'string' ? { name: value.name } : {}),
     ...(typeof cwd === 'string' ? { cwd } : {}),
     ...(Number.isSafeInteger(value.turn) && (value.turn as number) >= 0 ? { turn: value.turn as number } : {}),
+    ...(Number.isSafeInteger(foreground.pid) && (foreground.pid as number) > 0 ? { foregroundPid: foreground.pid as number } : {}),
   }
 }
 
 /** What a subscription keeps of a terminal, for up to HC_MAX_TERMINALS of them: the fields hcTerminal reads, an
- *  object's own narrowed to the keys it reads. A terminal's command line (in it and in its foreground), its title and a
- *  status's records are left in the line they came in. */
+ *  object's own narrowed to the keys it reads. A terminal's command line (in it and in its foreground), its foreground's
+ *  name, its title and a status's records are left in the line they came in. The foreground's pid is kept because the
+ *  devices pair a session the scan found with the terminal running it by that pid; it is an id, never logged or sent. */
 const READ: Record<string, readonly string[] | undefined> = {
   address: undefined, state: undefined, name: undefined, cwd: undefined, turn: undefined,
-  labels: ['herdr.space'], status: ['app', 'state'], foreground: ['cwd'],
+  labels: ['herdr.space', 'herdr.tab'], status: ['app', 'state'], foreground: ['cwd', 'pid'],
 }
 const only = (value: unknown, keys: readonly string[]): unknown => isObject(value)
   ? Object.fromEntries(keys.filter((key) => Object.hasOwn(value, key)).map((key) => [key, value[key]]))
@@ -187,8 +199,9 @@ const TAKES: Record<string, (facts: Fields, data: Fields) => Fields> = {
   finished: (facts) => ({ ...facts, state: 'finished' }),
 }
 
-const same = (a: HcTerminal, b: HcTerminal) => a.live === b.live && a.space === b.space && a.status === b.status
-  && a.kind === b.kind && a.name === b.name && a.cwd === b.cwd && a.turn === b.turn
+const same = (a: HcTerminal, b: HcTerminal) => a.live === b.live && a.space === b.space && a.tab === b.tab
+  && a.status === b.status && a.kind === b.kind && a.name === b.name && a.cwd === b.cwd && a.turn === b.turn
+  && a.foregroundPid === b.foregroundPid
 
 const lineOf = (id: string, method: string, params: Record<string, unknown>) =>
   `${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`
@@ -368,5 +381,8 @@ export function createHcClient(deps: HcClientDeps): HcClient {
     return sent.fault === 'rejected' && sent.kind === 'status_mismatch' ? { outcome: 'busy' } : failed(sent)
   }
 
-  return { request, subscribe, prompt, socketStamp }
+  const keys = async (address: string, names: readonly string[], deadlineMs: number): Promise<boolean> =>
+    HC_TERMINAL.test(address) && (await request('terminal.keys', { terminal: address, keys: [...names] }, deadlineMs)).ok
+
+  return { request, subscribe, prompt, keys, socketStamp }
 }

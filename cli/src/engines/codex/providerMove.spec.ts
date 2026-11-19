@@ -1,16 +1,17 @@
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import gridInstructions from './gridInstructions.json' with { type: 'json' }
 import { appServerArgs, GRID_SHELL_INSTRUCTION, moveCodexConversation } from './providerMove.js'
+import { writeExecutable } from '../../testing/executableFixture.js'
 
 /** A stand-in `codex` that speaks app-server's JSONL, records what it is asked, and refuses the fork when told to. */
 function fakeCodex(fork: 'works' | 'refused' = 'works') {
   const dir = mkdtempSync(join(tmpdir(), 'fake-codex-'))
   const seen = join(dir, 'seen.jsonl')
   const command = join(dir, 'codex')
-  writeFileSync(command, `#!/usr/bin/env node
+  writeExecutable(command, `#!/usr/bin/env node
 const { appendFileSync } = require('node:fs')
 appendFileSync(${JSON.stringify(seen)}, JSON.stringify({ argv: process.argv.slice(2) }) + '\\n')
 if (process.argv[2] === 'debug') { console.log(JSON.stringify({ models: [{ slug: 'own-model', base_instructions: 'OWN' }] })); process.exit(0) }
@@ -24,7 +25,6 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
   say({ id: m.id, result: {} })
 })
 `)
-  chmodSync(command, 0o755)
   const requests = () => readFileSync(seen, 'utf8').trim().split('\n').map((line) => JSON.parse(line))
   return { command, requests }
 }

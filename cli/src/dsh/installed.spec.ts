@@ -6,8 +6,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
 import {
-  dshInstallDir, dshRootDir, installedDsh, invalidateInstalledDsh, isBrokenDsh, listDshState, listInstalledDsh,
-  readInstalledIndex, removeInstalledRecord, resolveInstalled, upsertInstalledRecord, writeInstalledIndex,
+  awaitsSetup, dshInstallDir, dshRootDir, installedDsh, invalidateInstalledDsh, isBrokenDsh, listDshState, listInstalledDsh, markSetup,
+  readInstalledIndex, removeInstalledRecord, resolveInstalled, setupsPending, upsertInstalledRecord, writeInstalledIndex,
   type InstalledDshRecord,
 } from './installed.js'
 
@@ -125,6 +125,44 @@ describe('the installed index', () => {
     expect(listInstalledDsh().map((dsh) => dsh.id)).toEqual(['acme/more', 'acme/ok'])
     removeInstalledRecord('acme/more')
     expect(listInstalledDsh().map((dsh) => dsh.id)).toEqual(['acme/ok'])
+  })
+
+  it('a record keeps its setup mark through a read and a write', () => {
+    const marked = [record('acme/a', { setup: 'pending' }), record('acme/b', { setup: 'needs-setup' })]
+    writeInstalledIndex(marked)
+    expect(readInstalledIndex()).toEqual(marked)
+    upsertInstalledRecord(record('acme/c'))
+    expect(readInstalledIndex()).toEqual([...marked, record('acme/c')])
+  })
+
+  it('setupsPending counts pending only', () => {
+    const records = [
+      record('acme/pending', { setup: 'pending' }), record('acme/failed', { setup: 'needs-setup' }), record('acme/plain'),
+      // A linked package's checkout stays where it is, but what its setup built runs on Harness's Python, which moved.
+      record('acme/linked', { setup: 'pending', linked: true }),
+    ]
+    expect(records.filter(awaitsSetup).map(({ id }) => id)).toEqual(['acme/pending', 'acme/linked'])
+    expect(setupsPending(records)).toBe(2)
+    expect(setupsPending()).toBe(0)
+    writeInstalledIndex(records)
+    expect(setupsPending()).toBe(2)
+  })
+
+  it('markSetup with null removes the field', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(1_000_000)
+    writeInstalledIndex([{ ...pkg('acme/a'), setup: 'pending' }, record('acme/b', { setup: 'pending' })])
+    expect(listInstalledDsh().map((dsh) => dsh.setup)).toEqual(['pending'])
+    markSetup('acme/a', 'needs-setup')
+    expect(readInstalledIndex().map((row) => [row.id, row.setup])).toEqual([['acme/a', 'needs-setup'], ['acme/b', 'pending']])
+    // The Store's list says it at once, not after the cache's two seconds.
+    expect(listInstalledDsh().map((dsh) => dsh.setup)).toEqual(['needs-setup'])
+    markSetup('acme/a', null)
+    const [a, b] = readInstalledIndex()
+    expect(a).toEqual(record('acme/a'))
+    expect('setup' in a!).toBe(false)
+    expect(b).toEqual(record('acme/b', { setup: 'pending' }))
+    expect(listInstalledDsh().map((dsh) => 'setup' in dsh)).toEqual([false])
   })
 
   it('finds a harness by its own id first, then by an id it went by before', () => {

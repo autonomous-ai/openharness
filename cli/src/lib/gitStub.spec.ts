@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -9,6 +9,7 @@ import { insideGitCheckout } from './gitProject.js'
 import { readGitPullRequest } from './gitPullRequest.js'
 import { projectPreview } from './projectPreview.js'
 import { inspectWorkspace, inspectWorktree } from './worktreeDeletion.js'
+import { writeExecutable } from '../testing/executableFixture.js'
 
 // On a Mac without the Command Line Tools, `/usr/bin/git` is Apple's stub: running it opens the
 // "install the command line developer tools" dialog. A fresh Mac's first harness runs in a folder
@@ -22,8 +23,7 @@ describe('a folder with no .git runs no git', () => {
     root = await realpath(await mkdtemp(join(tmpdir(), 'harness-git-stub-')))
     calls = join(root, 'git-calls')
     await mkdir(join(root, 'bin'))
-    await writeFile(join(root, 'bin', 'git'), `#!/bin/sh\necho "$*" >> '${calls}'\nexit 1\n`)
-    await chmod(join(root, 'bin', 'git'), 0o755)
+    writeExecutable(join(root, 'bin', 'git'), `#!/bin/sh\necho "$*" >> '${calls}'\nexit 1\n`)
     await mkdir(join(root, 'project'))
     path = process.env.PATH
     process.env.PATH = `${join(root, 'bin')}:${path}`

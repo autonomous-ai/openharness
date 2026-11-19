@@ -12,6 +12,7 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { runInNewContext } from 'node:vm'
+import { wholeLines } from './wholeLines.js'
 
 export interface FakePlatformState {
   /** launchd: the user's GUI domain exists (someone is logged in at the screen). */
@@ -166,7 +167,7 @@ export function fakePlatform(bin: string, initial: Partial<FakePlatformState> = 
   const callsFile = join(bin, 'calls.jsonl')
   return {
     bin,
-    calls: () => existsSync(callsFile) ? readFileSync(callsFile, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line) as string[]) : [],
+    calls: () => existsSync(callsFile) ? wholeLines(callsFile).map((line) => JSON.parse(line) as string[]) : [],
     state: () => JSON.parse(readFileSync(stateFile, 'utf8')) as FakePlatformState,
     set: (change) => writeFileSync(stateFile, JSON.stringify({ ...(JSON.parse(readFileSync(stateFile, 'utf8')) as FakePlatformState), ...change })),
     run: (command, args) => {

@@ -8,6 +8,7 @@
  */
 import { type ChildProcess, execFile, spawn } from 'node:child_process'
 import { existsSync, realpathSync, statSync } from 'node:fs'
+import { orcaBinary } from '../../devices/orcaHomes.js'
 import { resolveBinaryOnPath } from '../../lib/binaryOnPath.js'
 import type { HostAdapter } from './adapter.js'
 import { APP_BUNDLES } from './hostDetect.js'
@@ -16,7 +17,6 @@ import type { PaneSwitch } from './types.js'
 
 export const ORCA_HANDLE = /^term_[0-9a-f-]{36}$/
 
-const APP_ORCA = '/Applications/Orca.app/Contents/Resources/bin/orca'
 /** How long any app's command may run (open.ts too). */
 export const RUN_TIMEOUT_MS = 10_000
 /** The longest text typed into a terminal; the mod's prompt takes no more either (observed.ts). */
@@ -32,7 +32,8 @@ const MULTIPLEXERS: ReadonlySet<string> = new Set(['herdr', 'rex', 'zellij', 'tm
 export interface OrcaDeps {
   /** Its stdout too: tmux's answer is what it printed (tmux.ts). */
   run(file: string, args: string[], timeoutMs: number): Promise<{ code: number | null; stdout: string }>
-  onPath(name: string): string | null
+  /** The first executable [name] on PATH that [accept] takes: any, by default. */
+  onPath(name: string, accept?: (path: string) => boolean): string | null
   exists(path: string): boolean
   platform: NodeJS.Platform
 }
@@ -72,7 +73,7 @@ export function orcaDeps(): OrcaReadDeps {
         resolve({ code: null, stdout: '' })
       }
     }),
-    onPath: (name) => resolveBinaryOnPath(name),
+    onPath: (name, accept) => resolveBinaryOnPath(name, process.env, accept),
     exists: existsSync,
     platform: process.platform,
     spawn: (file, args) => {
@@ -106,11 +107,6 @@ export function orcaDeps(): OrcaReadDeps {
       }
     },
   }
-}
-
-/** Orca's CLI: the one on PATH, else, on macOS, the app's own. */
-function orcaBinary(deps: OrcaDeps): string | null {
-  return deps.onPath('orca') ?? (deps.platform === 'darwin' && deps.exists(APP_ORCA) ? APP_ORCA : null)
 }
 
 /** What a switch reads beside its deps: each terminal's worktree, by its id in Orca, from the latest layout read, and
