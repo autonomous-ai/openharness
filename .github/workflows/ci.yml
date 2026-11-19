@@ -345,7 +345,8 @@ jobs:
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     needs: plan
     if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.tui == 'true'
-    runs-on: ubuntu-latest
+    # ubuntu-latest moved to 26.04, which has no zsh package; 24.04 until it does.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
       run:
