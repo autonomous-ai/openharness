@@ -169,6 +169,26 @@ describe('the session input controller\'s dependencies', () => {
     expect(run.calls.filter((call) => call.startsWith('submit'))).toEqual(['submit cc hi', 'submit a1 hi'])
   })
 
+  // Found in review: typed into an OpenClaw pane whose history had not loaded, a message was refused back into its input
+  // box, where nothing sent it.
+  it('types an OpenClaw message only into a pane ready to send it with an empty box, and says why not', async () => {
+    const openclawPane = (name: string) => readFileSync(new URL(`../engines/openclaw/__fixtures__/${name}`, import.meta.url), 'utf8')
+    const notReady = { state: 'failed', dispatch: 'not_started', reason: 'openclaw_not_ready' }
+    const run = deps()
+    const wired = sessionInputDeps(run.deps, () => lock(run.calls))
+    for (const pane of ['screen-history-failed.txt', 'screen-history-refused.txt', 'screen-starting-up.txt', 'screen-sending.txt', 'screen-no-gateway.txt']) {
+      run.setPane(openclawPane(pane))
+      expect(await wired.inject('oc', 'hi'), pane).toEqual(notReady)
+    }
+    run.setPane(null)
+    expect(await wired.inject('oc', 'hi')).toEqual(notReady)
+    const unread = deps({ readScreen: async () => null })
+    expect(await sessionInputDeps(unread.deps, () => lock([])).inject('oc', 'hi')).toEqual(notReady)
+    run.setPane(openclawPane('screen-plain.txt'))
+    expect(await wired.inject('oc', 'hi')).toBe(ok)
+    expect([...run.calls, ...unread.calls].filter((call) => call.startsWith('submit'))).toEqual(['submit oc hi'])
+  })
+
   it('reads the pane after its engine has answered, so a dialog opened during the wait is seen', async () => {
     const run = deps()
     const wired = sessionInputDeps(run.deps, () => lock(run.calls))

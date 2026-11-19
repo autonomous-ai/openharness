@@ -1044,6 +1044,114 @@ describe('SessionInputController', () => {
       expect(inject.mock.calls).toEqual([['h1', 'Say hello'], ['h1', command]])
       controller.forget('s1')
     })
+
+    // Found in review: typed into a pane whose history had not loaded, a message was refused back into the input box,
+    // where the binding pass's `/session` (typed only into an empty box) never ran; it was given up after 3 minutes and
+    // stayed in the box under the next paste.
+    describe('a message its OpenClaw pane cannot send yet', () => {
+      const notReady: TerminalActionResult = { state: 'failed', dispatch: 'not_started', reason: 'openclaw_not_ready' }
+      /** A pane that types nothing (core/input.ts reads it unable to send) until `canSend`, but the pane's own command. */
+      const waitingPane = () => {
+        let ready = false
+        let commandDone: (() => void) | null = null
+        const typed: string[] = []
+        const inject = vi.fn(async (_id: string, text: string): Promise<boolean | TerminalActionResult> => {
+          if (text.startsWith('/session')) {
+            typed.push(text)
+            await new Promise<void>((done) => { commandDone = done })
+            return true
+          }
+          if (!ready) return notReady
+          typed.push(text)
+          return true
+        })
+        const onError = vi.fn()
+        const onDelivery = vi.fn()
+        const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+          getSession: () => session('openclaw'),
+          validateRuntime: async () => true,
+          inject, sendKey: vi.fn(async () => true), capture: async () => readyPane(), onError, onDelivery,
+        })
+        return { controller, inject, onError, onDelivery, typed, canSend: () => { ready = true }, finishCommand: () => commandDone?.() }
+      }
+
+      it('is typed once its pane can send, and not before', async () => {
+        vi.useFakeTimers()
+        const { controller, typed, onError, canSend } = waitingPane()
+
+        controller.submit('s1', 'Say hello')
+        await vi.advanceTimersByTimeAsync(60_000)
+        expect(typed).toEqual([])
+        expect(controller.awaitingConfirmation('s1')).toBe(false)
+        canSend()
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(typed).toEqual(['Say hello'])
+        expect(controller.awaitingConfirmation('s1')).toBe(true)
+        expect(onError).not.toHaveBeenCalled()
+        controller.forget('s1')
+      })
+
+      it.each([
+        ['a person\'s message', undefined],
+        ['a delivery', 'delivery-1'],
+      ])('%s waits 3 minutes, then is given up, typed nowhere', async (_, deliveryId) => {
+        vi.useFakeTimers()
+        const { controller, inject, typed, onError, onDelivery } = waitingPane()
+
+        controller.submit('s1', 'Say hello', deliveryId)
+        await vi.advanceTimersByTimeAsync(179_000)
+        expect(onError).not.toHaveBeenCalled()
+        await vi.advanceTimersByTimeAsync(2_000)
+        expect(onError).toHaveBeenCalledWith('s1', 'The agent did not accept the message. Please try again.')
+        if (deliveryId) expect(onDelivery).toHaveBeenLastCalledWith({ sessionId: 's1', deliveryId, state: 'rejected', reason: 'not_submitted' })
+        const tries = inject.mock.calls.length
+        await vi.advanceTimersByTimeAsync(60_000)
+        expect(inject).toHaveBeenCalledTimes(tries)
+        expect(typed).toEqual([])
+        controller.forget('s1')
+      })
+
+      it('a first task waits for it until the binding pass lets the task go', async () => {
+        vi.useFakeTimers()
+        const { controller, inject, typed, onError } = waitingPane()
+
+        controller.expectFirstTask('s1')
+        controller.submit('s1', 'Say hello')
+        await vi.advanceTimersByTimeAsync(10 * 60_000)
+        expect(onError).not.toHaveBeenCalled()
+        expect(controller.firstTaskWaiting('s1')).toBe(true)
+        controller.forget('s1')
+        const tries = inject.mock.calls.length
+        await vi.advanceTimersByTimeAsync(60_000)
+        expect(inject).toHaveBeenCalledTimes(tries)
+        expect(typed).toEqual([])
+      })
+
+      it('lets the pane\'s own command be typed meanwhile, tries nothing while it is, and is typed after it', async () => {
+        vi.useFakeTimers()
+        const { controller, inject, typed, onError, canSend, finishCommand } = waitingPane()
+        const command = '/session agent:main:plain'
+
+        controller.submit('s1', 'Say hello', 'delivery-1')
+        controller.submit('s1', 'And then this', 'delivery-2')
+        await vi.advanceTimersByTimeAsync(2_000)
+        const typing = controller.typeCommand('s1', command)
+        const tries = inject.mock.calls.length
+        await vi.advanceTimersByTimeAsync(5_000)
+        expect(inject).toHaveBeenCalledTimes(tries)
+        finishCommand()
+        expect(await typing).toBe(true)
+        canSend()
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(typed).toEqual([command, 'Say hello'])
+        controller.onTurnStarted('s1', 'Say hello')
+        controller.onTurnEnded('s1')
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(typed).toEqual([command, 'Say hello', 'And then this'])
+        expect(onError).not.toHaveBeenCalled()
+        controller.forget('s1')
+      })
+    })
   })
 
   describe('Claude Code and Codex readings from their engine worker', () => {
