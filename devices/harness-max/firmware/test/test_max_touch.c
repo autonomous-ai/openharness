@@ -510,6 +510,65 @@ static void test_toast(void)
     CHECK(tap_on(&toast).kind == MAX_ACT_NONE && max_form_open() && max_m.view == MAX_VIEW_OVERVIEW);
 }
 
+// A finished turn's note: a tap opens its agent across the row with the mic closed, to read what it did, and reads
+// that agent's done notices; the others stay unread. While the mic is open only the Dial's tap counts: the words go
+// first (what was heard is sent, else dropped), then the note's agent opens. Its agent gone since it was drawn: Inbox,
+// where its notice still is.
+static void test_done_note(void)
+{
+    linked(ABCDE, 5);
+    max_ui_turn("c", "started", "", 0, 0);
+    max_ui_summary("c", "Fixed the login race", NULL, false, POD_TIER_ALERT, 0);
+    max_ui_turn("d", "started", "", 0, 0);
+    max_ui_summary("d", "Docs updated", NULL, false, POD_TIER_ALERT, 0);
+    CHECK(!strcmp(max_m.done_id, "d") && max_m.view == MAX_VIEW_OVERVIEW);
+    overview_drawn();
+    max_m.dirty = false;
+    max_act_t act = tap_on(plant(MAX_HIT_DONE_NOTE, 0));
+    CHECK(act.kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_AGENT && !strcmp(max_ui_selected(), "d"));
+    CHECK(max_m.talk_id[0] == 0 && max_m.talk == MAX_TALK_IDLE && max_m.done_id[0] == 0 && max_m.dirty);
+    for (int i = 0; i < max_m.inbox_count; i++) CHECK(max_m.inbox[i].unread == !strcmp(max_m.inbox[i].id, "c"));
+    // The mic open for a, words heard: a held press is the dead zone; the Dial's tap sends, then opens e.
+    agent_page("a");
+    recording(true);
+    max_ui_turn("e", "started", "", 0, 0);
+    max_ui_summary("e", "Fixed", NULL, false, POD_TIER_ALERT, 0);
+    CHECK(max_m.talk == MAX_TALK_RECORDING && !strcmp(max_m.done_id, "e"));
+    drawn_page(MAX_VIEW_AGENT);
+    const max_hit_t note = *plant(MAX_HIT_DONE_NOTE, 0);
+    CHECK(press_for(note.x + 5, note.y + 5, 0, 0, T += 1000, MAX_TAP_MAX_MS + 50).kind == MAX_ACT_NONE);
+    CHECK(max_m.talk == MAX_TALK_RECORDING && !strcmp(max_m.done_id, "e"));
+    no_notice();
+    act = tap_on(&note);
+    CHECK(act.kind == MAX_ACT_SEND && !strcmp(act.agent_id, "a") && noticed("Sent to a"));
+    CHECK(max_m.view == MAX_VIEW_AGENT && !strcmp(max_ui_selected(), "e") && max_m.done_id[0] == 0);
+    max_ui_talk(MAX_TALK_IDLE, 0);
+    // Nothing heard: dropped, and the next touch within the guard is part of it.
+    agent_page("a");
+    recording(false);
+    max_ui_turn("c", "started", "", 0, 0);
+    max_ui_summary("c", "Fixed again", NULL, false, POD_TIER_ALERT, 0);
+    drawn_page(MAX_VIEW_AGENT);
+    plant(MAX_HIT_DONE_NOTE, 0);
+    act = tap_on(&note);
+    CHECK(act.kind == MAX_ACT_CANCEL && !strcmp(act.agent_id, "a") && !strcmp(max_ui_selected(), "c"));
+    max_ui_talk(MAX_TALK_IDLE, 0);
+    agent_drawn();
+    CHECK(tap_at(HT_WIDTH / 2, HT_HEIGHT - 20, T + 90 + MAX_GUARD_MS - 1).kind == MAX_ACT_NONE);
+    // Its agent left the ring since the note was drawn: Inbox.
+    max_ui_turn("b", "started", "", 0, 0);
+    max_ui_summary("b", "Shipped", NULL, false, POD_TIER_ALERT, 0);
+    max_show(MAX_VIEW_OVERVIEW);
+    overview_drawn();
+    plant(MAX_HIT_DONE_NOTE, 0);
+    roster((const char *const[]){"a", "c", "d", "e"}, 4);
+    CHECK(tap_on(&max_m.hits[1]).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_INBOX);
+    // Read since (the tap above cleared it): a stale hit opens nothing.
+    max_show(MAX_VIEW_OVERVIEW);
+    overview_drawn();
+    CHECK(tap_on(plant(MAX_HIT_DONE_NOTE, 0)).kind == MAX_ACT_NONE && max_m.view == MAX_VIEW_OVERVIEW);
+}
+
 // ---- the clock's side of a recording ----
 
 // Speech, then MAX_SILENCE_MS of quiet: sent, as a tap on the page; so is speech that runs MAX_TALK_MAX_MS. Nothing
@@ -820,6 +879,7 @@ int main(void)
     test_any_other_tap_sends();
     test_attention();
     test_toast();
+    test_done_note();
     test_talk_due();
     test_only_the_dials_tap_sends();
     test_a_hold_opens_no_mic();

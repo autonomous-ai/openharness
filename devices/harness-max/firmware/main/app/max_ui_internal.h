@@ -20,6 +20,7 @@
 #define MAX_DONE_MS 60000u          // how long a finished turn's summary stays on its lane
 #define MAX_WAKE_MS 60000u          // the render task's longest sleep when nothing drawn depends on the time
 #define MAX_TOAST_MS 5000u          // what needs a person who is talking is announced this long, as the Pro's toast
+#define MAX_DONE_NOTE_MS 6000u      // a finished turn's note at the bottom right (V3 kDoneNoteFor)
 
 // The glass, 1920 x 480 at about 225 ppi (8.86 px a mm), or the demo bar's 1920 x 415. Columns, left to right, on one
 // row 22 px from the glass's ends: the room (one agent, large), the lanes (the others, up to three a page sharing their
@@ -146,6 +147,7 @@ typedef enum {
     MAX_HIT_TALK_SEND,   // the room's Send while recording
     MAX_HIT_TALK_CANCEL, // the room's Cancel while recording: nothing is sent
     MAX_HIT_TOAST,       // the toast: Attention for its agent (toast_id, toast_attn)
+    MAX_HIT_DONE_NOTE,   // a finished turn's note (done_id): its agent open, the mic closed, its done notices read
     MAX_HIT_FORM_SAY,    // the form's Say, while max_form_can_say(): a spoken name for its field
     MAX_HIT_PAGE,        // the pager: the next page of lanes, the first after the last
     // Demo V2's pages:
@@ -210,7 +212,9 @@ typedef struct {
     char selected[ID_MAX];           // the agent page's agent, "" = none (it left the ring)
     char toast_id[ID_MAX];           // what needed the person while they talked or the form was up, from toast_from
     uint32_t toast_from;
-    max_attn_t toast_attn;           // why: a question, a turn done or failed
+    max_attn_t toast_attn;           // why: a question or a failure
+    char done_id[ID_MAX];            // the last finished turn's agent, its note shown from done_from (max_done_shown)
+    uint32_t done_from;
     char notice[MAX_NOTICE_BYTES];
     uint32_t notice_until;
     max_talk_t talk;
@@ -293,8 +297,10 @@ bool max_notice_set(const char *text, uint32_t now_ms);   // for MAX_NOTICE_MS
 // A state change, with the turn's clock (stopped at the end of a turn, dropped when one we did not see start begins).
 void max_set_state(max_agent_t *, max_state_t st, uint32_t now_ms);
 
-// The toast is up: its agent still is what it announced (asking, done, failed), for MAX_TOAST_MS from toast_from.
+// The toast is up: its agent still is what it announced (asking, failed), for MAX_TOAST_MS from toast_from.
 bool max_toast_shown(uint32_t now_ms);
+// The done note is up: its agent is still in the ring and done, for MAX_DONE_NOTE_MS from done_from.
+bool max_done_shown(uint32_t now_ms);
 // The bar may record for this agent now: the link is up, nothing is recorded or sent, no form is up, and the agent is
 // neither on a permission prompt (Yes or No only) nor waiting on an answer that is on its way or in. Whether the agent
 // takes voice at all is max_takes_voice.
@@ -311,9 +317,10 @@ void max_open(const char *id);
 void max_attention(const char *id, max_attn_t why, uint32_t now_ms);
 // The agent still is what `why` says (asking, done, failed): Attention and the toast hold only while it is.
 bool max_attn_holds(const char *id, max_attn_t why);
-// An agent needs the person (a new question, a failed turn, an alert's summary): an unread notice in Inbox, and
-// Attention takes the glass, unless a person talks or New Harness is up (then only the toast), or another agent's
-// question is on Attention (a question then waits its turn; a turn's end stays in Inbox).
+// An agent needs the person (a new question, a failed turn, an alert's summary): an unread notice in Inbox. An alert's
+// summary never takes the glass: its note (done_id) for MAX_DONE_NOTE_MS. Else Attention takes the glass, unless a
+// person talks or New Harness is up (then only the toast), or another agent's question is on Attention (a question
+// then waits its turn; a failure stays in Inbox).
 void max_attend(max_agent_t *, max_attn_t why, uint32_t now_ms);
 // Attention leaves `except`'s question (answered, or gone): the question that has waited longest takes it, else
 // Overview.

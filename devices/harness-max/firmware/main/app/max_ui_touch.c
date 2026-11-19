@@ -90,10 +90,11 @@ static max_act_t send_onward(uint32_t now_ms)
     return send_talk(now_ms);
 }
 
-// The recording's agent left the ring: what was heard goes, else nothing.
+// The recording's agent left the ring, or the done note took the person elsewhere: what was heard goes, else nothing.
 static max_act_t settle_talk(uint32_t now_ms)
 {
     if (max_m.talk_heard) return send_talk(now_ms);
+    guard(now_ms);
     max_m.dirty = true;
     return act_for(MAX_ACT_CANCEL, max_m.talk_id);
 }
@@ -179,6 +180,24 @@ static max_act_t open_note(int i, uint32_t now_ms)
     return bring_up(n->id, n->name, n->app, now_ms);
 }
 
+// The done note: its agent open across the row with the mic closed, to read what it did, and its done notices read;
+// one gone from the ring since leaves Inbox, where its notice still is. A note already read or replaced opens nothing.
+static void open_done(void)
+{
+    char id[ID_MAX];
+    memcpy(id, max_m.done_id, sizeof id);
+    max_m.done_id[0] = 0;
+    max_m.dirty = true;
+    if (!id[0]) return;
+    if (!max_find(id)) {
+        go(MAX_VIEW_INBOX);
+        return;
+    }
+    for (int i = 0; i < max_m.inbox_count; i++)
+        if (max_m.inbox[i].kind == MAX_ATTN_DONE && !strcmp(max_m.inbox[i].id, id)) max_m.inbox[i].unread = false;
+    show_agent(id);
+}
+
 // A button of a page, the toast, the card or the form. A page's buttons act only while that page is up (a tap can land
 // between a change and the redraw). The card must still be the one the person saw: the same question, at the same
 // step, in the same phase; the form's page the one drawn.
@@ -206,6 +225,7 @@ static max_act_t press(const max_hit_t *h, uint32_t now_ms)
         if (view == MAX_VIEW_AGENT) go(MAX_VIEW_OVERVIEW);
         break;
     case MAX_HIT_NOTE: return open_note(h->arg, now_ms);
+    case MAX_HIT_DONE_NOTE: open_done(); break;
     case MAX_HIT_BODY: {   // the mic, or the computer when the bar cannot listen for it now
         const max_agent_t *a = view == MAX_VIEW_AGENT ? max_find(max_m.selected) : NULL;
         if (!a || !start_tap(now_ms)) break;
@@ -270,7 +290,8 @@ static max_act_t press(const max_hit_t *h, uint32_t now_ms)
 
 // A tap while a recording is up. X drops it whatever the touch: the open agent's closes too, and says so when words
 // were heard; the form's Cancel leaves the form as it is. Else only the Dial's tap acts: the toast sends it, then opens
-// its Attention; anything else, even bare glass or a sliver, sends it now.
+// its Attention; the done note sends what was heard (else drops it), then opens its agent; anything else, even bare
+// glass or a sliver, sends it now.
 static max_act_t recording_tap(const max_hit_t *h, uint32_t now_ms)
 {
     if (h && (h->kind == MAX_HIT_TALK_CANCEL || h->kind == MAX_HIT_AGENT_X)) {
@@ -292,6 +313,11 @@ static max_act_t recording_tap(const max_hit_t *h, uint32_t now_ms)
             max_form_dismiss();
             max_attention(id, why, now_ms);
         }
+        return act;
+    }
+    if (h && h->kind == MAX_HIT_DONE_NOTE) {
+        const max_act_t act = settle_talk(now_ms);
+        open_done();
         return act;
     }
     return send_onward(now_ms);

@@ -94,25 +94,26 @@ static void check_notice(void)
     if (max_form_open()) CHECK(b.y + b.h < HT_HEIGHT / 2);
     else CHECK(b.y > HT_HEIGHT / 2 && abs(b.x + b.w / 2 - HT_WIDTH / 2) < DX(40));
 }
-// Every word inside one of the boxes, the toast's words inside the toast, the notice's where check_notice says; and
-// no word cut after an ellipsis.
+// Every word inside one of the boxes, the toast's and the done note's inside theirs, the notice's where check_notice
+// says; and no word cut after an ellipsis.
 static void check_words(const max_box_t *boxes, int n)
 {
-    const max_hit_t *toast = find_hit(MAX_HIT_TOAST, 0);
+    const max_hit_t *toast = find_hit(MAX_HIT_TOAST, 0), *done = find_hit(MAX_HIT_DONE_NOTE, 0);
     for (int i = 0; i < S.count; i++) {
         const ht_run_t *r = &S.runs[i];
         if (r->pro_kind != K_TEXT) continue;
         CHECK(!strstr(r->text, ELLIPSIS ELLIPSIS));
         const ht_rect_t b = ht_run_bounds(r);
-        bool in = (toast && within(b, box_of(toast))) || (max_m.notice[0] && !strcmp(r->text, max_m.notice));
+        bool in = (toast && within(b, box_of(toast))) || (done && within(b, box_of(done))) ||
+                  (max_m.notice[0] && !strcmp(r->text, max_m.notice));
         for (int k = 0; !in && k < n; k++) in = within(b, boxes[k]);
         if (!in) fprintf(stderr, "word run %d (%d,%d %dx%d) \"%s\" outside its box\n", i, b.x, b.y, b.w, b.h, r->text);
         CHECK(in);
     }
     check_notice();
 }
-// Every hit a finger's size, on the glass; none over another but the toast and the hits that cover a whole page
-// (Body, Away, Wake), which the finger reads last.
+// Every hit a finger's size, on the glass; none over another but the toast, the done note and the hits that cover a
+// whole page (Body, Away, Wake), which the finger reads last.
 static void check_hits(void)
 {
     CHECK(max_m.hit_count <= MAX_HITS);
@@ -120,11 +121,12 @@ static void check_hits(void)
         const max_hit_t *h = &max_m.hits[i];
         CHECK(h->x >= 0 && h->y >= 0 && h->x + h->w <= HT_WIDTH && h->y + h->h <= HT_HEIGHT);
         CHECK(h->w >= 40 && h->h >= 40);
-        if (h->kind == MAX_HIT_TOAST || h->kind == MAX_HIT_BODY || h->kind == MAX_HIT_AWAY || h->kind == MAX_HIT_WAKE)
+        if (h->kind == MAX_HIT_TOAST || h->kind == MAX_HIT_DONE_NOTE || h->kind == MAX_HIT_BODY ||
+            h->kind == MAX_HIT_AWAY || h->kind == MAX_HIT_WAKE)
             continue;
         for (int j = 0; j < i; j++) {
             const max_hit_t *o = &max_m.hits[j];
-            if (o->kind != MAX_HIT_TOAST) CHECK(apart(box_of(h), box_of(o)));
+            if (o->kind != MAX_HIT_TOAST && o->kind != MAX_HIT_DONE_NOTE) CHECK(apart(box_of(h), box_of(o)));
         }
     }
 }
@@ -366,9 +368,10 @@ static void test_overview(void)
 // ---- the open agent ----
 
 // Its words in its panel (the body), the app column's and the bell's in theirs; the slivers have none (a pet-less
-// engine's ">_" mark is its pet).
+// engine's ">_" mark is its pet), but for the done note's over them.
 static void agent_words(void)
 {
+    const max_hit_t *done = find_hit(MAX_HIT_DONE_NOTE, 0);
     const max_hit_t *body = find_hit(MAX_HIT_BODY, 0), *x = find_hit(MAX_HIT_AGENT_X, 0);
     const max_box_t panel = body ? box_of(body) : (max_box_t){(int16_t)(x->x + x->w - DX(900)), 0, (int16_t)DX(900),
                                                               (int16_t)HT_HEIGHT};
@@ -381,7 +384,8 @@ static void agent_words(void)
     for (int i = 0; i < max_m.cell_hits; i++) {
         CHECK(apart(max_m.cell_box[i], panel));
         for (int k = 0; k < S.count; k++)
-            if (S.runs[k].pro_kind == K_TEXT && within(ht_run_bounds(&S.runs[k]), max_m.cell_box[i]))
+            if (S.runs[k].pro_kind == K_TEXT && within(ht_run_bounds(&S.runs[k]), max_m.cell_box[i]) &&
+                !(done && within(ht_run_bounds(&S.runs[k]), box_of(done))))
                 CHECK(!strcmp(S.runs[k].text, ">_"));
     }
 }
@@ -664,6 +668,69 @@ static void test_toast(void)
     CHECK(find_hit(MAX_HIT_TOAST, 0) && max_motion_ms(T0) == MAX_WAKE_MS);
 }
 
+// A finished turn's note at the bottom right for MAX_DONE_NOTE_MS: the first hit (after a toast), reaching past its
+// card, its pet still and its words inside it, the name cut to leave room for "is done". Over an agent that records
+// too; never over New Harness or the update screen.
+static void test_done_note(void)
+{
+    ring(NULL);
+    show(MAX_VIEW_OVERVIEW, NULL);
+    max_copy(max_m.done_id, sizeof max_m.done_id, "c");   // done, a long Vietnamese name and summary
+    max_m.done_from = T0 - 1000;
+    render_at(T0);
+    CHECK(HITS_ARE(MAX_HIT_DONE_NOTE, MAX_HIT_APPS, MAX_HIT_BELL));
+    const max_box_t note = box_of(&max_m.hits[0]);
+    CHECK(note.x + note.w > HT_WIDTH - DX(16) && note.y + note.h > HT_HEIGHT - DY(10));
+    CHECK(note.x > HT_WIDTH / 2 && note.y > HT_HEIGHT / 2 && note.w <= DX(460) + 2 * DX(12));
+    CHECK(word(" is done") && within(ht_run_bounds(word(" is done")), note));
+    const ht_run_t *name = NULL, *said = NULL;
+    for (int i = 0; i < S.count; i++) {
+        if (S.runs[i].pro_kind != K_TEXT || !within(ht_run_bounds(&S.runs[i]), note)) continue;
+        if (!strncmp(S.runs[i].text, "Tr\xe1\xbb\xa3", 4)) name = &S.runs[i];
+        if (!strncmp(S.runs[i].text, "\xc4\x90\xc3\xa2" "y", 4)) said = &S.runs[i];
+    }
+    CHECK(name && strstr(name->text, ELLIPSIS) && said && strstr(said->text, ELLIPSIS));
+    CHECK(ht_run_bounds(name).x < ht_run_bounds(word(" is done")).x);
+    CHECK(ht_run_bounds(word(" is done")).x < ht_run_bounds(said).x);
+    max_box_t boxes[2 + MAX_CELLS] = {box_of(find_hit(MAX_HIT_APPS, 0)), box_of(find_hit(MAX_HIT_BELL, 0))};
+    for (int i = 0; i < max_m.cell_hits; i++) boxes[2 + i] = max_m.cell_box[i];
+    check_words(boxes, 2 + max_m.cell_hits);
+    check_glass();
+    check_hits();
+    check_budget();
+    CHECK(max_motion_ms(T0) == MAX_WAKE_MS);   // its pet holds one frame
+    // A short one: its card fits its words.
+    max_find("c")->name[0] = 'x';
+    max_find("c")->name[1] = 0;
+    max_find("c")->note[0] = 0;
+    render_at(T0);
+    CHECK(box_of(&max_m.hits[0]).w < note.w && word(" is done") && !word(" \xc2\xb7 "));
+    ring(NULL);
+    max_copy(max_m.done_id, sizeof max_m.done_id, "c");
+    max_m.done_from = T0 - 1000;
+    // Gone after MAX_DONE_NOTE_MS.
+    render_at(T0 - 1000 + MAX_DONE_NOTE_MS);
+    CHECK(!find_hit(MAX_HIT_DONE_NOTE, 0) && !word(" is done"));
+    // With a toast over an agent that records: the toast first, then the note.
+    show(MAX_VIEW_AGENT, "a");
+    talk("a", MAX_TALK_RECORDING, true);
+    max_copy(max_m.toast_id, sizeof max_m.toast_id, "e");
+    max_m.toast_from = T0 - 1000;
+    render_at(T0);
+    CHECK(max_m.hits[0].kind == MAX_HIT_TOAST && max_m.hits[1].kind == MAX_HIT_DONE_NOTE);
+    agent_words();
+    check_budget();
+    // Not over New Harness, nor the update screen.
+    talk("", MAX_TALK_IDLE, false);
+    CHECK(max_ui_form_open("form-1", T0));
+    render_at(T0);
+    CHECK(!find_hit(MAX_HIT_DONE_NOTE, 0) && !word(" is done"));
+    max_form_dismiss();
+    max_ui_update(40, "0.9.0");
+    render_at(T0);
+    CHECK(!find_hit(MAX_HIT_DONE_NOTE, 0) && !word(" is done"));
+}
+
 static void test_notice(void)
 {
     ring(NULL);
@@ -794,6 +861,7 @@ int main(void)
     test_apps();
     test_ambient();
     test_toast();
+    test_done_note();
     test_notice();
     test_cut_after_an_ellipsis();
     test_update_screen();

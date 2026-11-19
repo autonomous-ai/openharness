@@ -382,8 +382,8 @@ static void test_questions_take_attention_oldest_first(void)
     CHECK(max_ui_tick(7000) && max_m.view == MAX_VIEW_OVERVIEW && max_ui_selected() == NULL);
 }
 
-// A failed turn and an alert's summary take Attention (red, green) and go back to Overview by themselves; a quieter
-// summary or history does not. A question replaces a turn's end on the page; a turn's end waits in Inbox behind a
+// A failed turn takes Attention (red) and goes back to Overview by itself; an alert's summary only leaves its note, a
+// quieter summary or history nothing. A question replaces a failure on the page; a failure waits in Inbox behind a
 // question.
 static void test_turn_ends_take_attention(void)
 {
@@ -402,14 +402,15 @@ static void test_turn_ends_take_attention(void)
     CHECK(max_ui_summary("c", "Sub-agent finished", NULL, false, POD_TIER_SILENT, 11000));
     CHECK(!max_ui_summary("d", "Old news", "Old recap", true, POD_TIER_ALERT, 12000));
     CHECK(max_m.view == MAX_VIEW_OVERVIEW && max_m.inbox_count == 1);
-    // An alert's summary: done.
+    // An alert's summary: done. It never takes the glass: its note, and its notice.
     max_ui_turn("e", "started", "", 0, 12000);
     CHECK(max_ui_summary("e", "Fixed the login race", NULL, false, POD_TIER_ALERT, 13000));
-    CHECK(max_m.view == MAX_VIEW_ATTENTION && !strcmp(max_m.attn_id, "e") && max_m.attn == MAX_ATTN_DONE);
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW && strcmp(max_m.attn_id, "e") && max_m.toast_id[0] == 0);
+    CHECK(!strcmp(max_m.done_id, "e") && max_done_shown(13000));
     // One with nothing to say ends the turn, and is no news.
     max_ui_turn("d", "started", "", 0, 13000);
     CHECK(max_ui_summary("d", NULL, NULL, false, POD_TIER_ALERT, 13500));
-    CHECK(max_find("d")->state == MAX_DONE && !strcmp(max_m.attn_id, "e") && max_m.inbox_count == 2);
+    CHECK(max_find("d")->state == MAX_DONE && !strcmp(max_m.done_id, "e") && max_m.inbox_count == 2);
     // A question replaces a turn's end on the page.
     CHECK(max_ui_question("b", "r1", "Push?", NULL, 0, false, false, 14000));
     CHECK(!strcmp(max_m.attn_id, "b") && max_m.attn == MAX_ATTN_ASK && max_m.attn_from == 14000);
@@ -417,16 +418,71 @@ static void test_turn_ends_take_attention(void)
     max_ui_turn("c", "started", "", 0, 14500);
     CHECK(max_ui_turn("c", "error", "boom", 0, 15000));
     CHECK(!strcmp(max_m.attn_id, "b") && !strcmp(max_m.inbox[0].id, "c") && max_m.inbox[0].kind == MAX_ATTN_FAIL);
-    // A done page whose agent starts again is over at once.
+    // A done note whose agent starts again is over at once.
     max_ui_question_close("b");
     max_ui_tick(16000);
-    CHECK(max_ui_summary("e", "Fixed it again", NULL, false, POD_TIER_ALERT, 17000) && !strcmp(max_m.attn_id, "e"));
-    CHECK(max_ui_turn("e", "started", "", 0, 18000) && max_m.view == MAX_VIEW_OVERVIEW);
+    CHECK(max_ui_summary("e", "Fixed it again", NULL, false, POD_TIER_ALERT, 17000) && max_done_shown(17000));
+    CHECK(max_ui_turn("e", "started", "", 0, 18000) && !max_done_shown(18000) && max_m.view == MAX_VIEW_OVERVIEW);
     // So is a failed page whose agent leaves the ring.
     max_ui_turn("e", "error", "boom", 0, 19000);
     CHECK(max_m.view == MAX_VIEW_ATTENTION && !strcmp(max_m.attn_id, "e"));
     roster(ABCDE, 4);
     CHECK(max_m.view == MAX_VIEW_OVERVIEW);
+}
+
+// A finished turn never takes the glass (the owner's call, 18 Nov): its note at the bottom right for MAX_DONE_NOTE_MS,
+// the newest in the corner, over whatever is up, talk, New Harness and Ambient too; its notice stays unread in Inbox.
+static void test_done_note(void)
+{
+    linked(ABCDE, 5);
+    max_ui_turn("c", "started", "", 0, 0);
+    CHECK(max_ui_summary("c", "Fixed the login race", NULL, false, POD_TIER_ALERT, 1000));
+    CHECK(max_m.view == MAX_VIEW_OVERVIEW && max_m.attn_id[0] == 0 && max_m.toast_id[0] == 0);
+    CHECK(!strcmp(max_m.done_id, "c") && max_m.done_from == 1000);
+    CHECK(!strcmp(max_m.inbox[0].id, "c") && max_m.inbox[0].kind == MAX_ATTN_DONE && max_unread() == 1);
+    // Its clock: drawn until MAX_DONE_NOTE_MS, then gone, its notice still unread.
+    as_drawn(1000);
+    CHECK(max_ui_next_wake_ms(1000) == MAX_DONE_NOTE_MS);
+    CHECK(max_done_shown(1000 + MAX_DONE_NOTE_MS - 1) && !max_done_shown(1000 + MAX_DONE_NOTE_MS));
+    CHECK(max_time_key(1000) != max_time_key(1000 + MAX_DONE_NOTE_MS));
+    CHECK(max_ui_tick(1000 + MAX_DONE_NOTE_MS) && max_unread() == 1);
+    // The newer note takes the corner.
+    max_ui_turn("c", "started", "", 0, 2000);
+    max_ui_summary("c", "Fixed it", NULL, false, POD_TIER_ALERT, 2000);
+    max_ui_turn("d", "started", "", 0, 2000);
+    max_ui_summary("d", "Docs updated", NULL, false, POD_TIER_ALERT, 2100);
+    CHECK(!strcmp(max_m.done_id, "d") && max_done_shown(2100));
+    // A list summary is no news: no note.
+    max_ui_turn("b", "started", "", 0, 2000);
+    max_ui_summary("b", "Sub-agent finished", NULL, false, POD_TIER_LIST, 2200);
+    CHECK(!strcmp(max_m.done_id, "d"));
+    // While a person talks: the same note, no toast, the talk goes on.
+    max_open("a");
+    max_copy(max_m.talk_id, sizeof max_m.talk_id, "a");
+    max_ui_talk(MAX_TALK_RECORDING, 3000);
+    max_ui_turn("e", "started", "", 0, 3000);
+    max_ui_summary("e", "Fixed", NULL, false, POD_TIER_ALERT, 3100);
+    CHECK(!strcmp(max_m.done_id, "e") && max_m.toast_id[0] == 0 && max_m.talk == MAX_TALK_RECORDING);
+    CHECK(max_m.view == MAX_VIEW_AGENT);
+    max_ui_talk(MAX_TALK_IDLE, 3200);
+    // On Ambient: Ambient stays.
+    max_ui_turn("c", "started", "", 0, 4000);
+    max_show(MAX_VIEW_AMBIENT);
+    max_ui_summary("c", "Again", NULL, false, POD_TIER_ALERT, 4100);
+    CHECK(max_m.view == MAX_VIEW_AMBIENT && !strcmp(max_m.done_id, "c") && max_done_shown(4100));
+    // A failure still takes the glass; its agent's note is over.
+    max_ui_turn("c", "started", "", 0, 5000);
+    max_ui_turn("c", "error", "boom", 0, 5100);
+    CHECK(max_m.view == MAX_VIEW_ATTENTION && max_m.attn == MAX_ATTN_FAIL && !max_done_shown(5100));
+    // Its agent leaves the ring: over; the link goes: forgotten.
+    max_ui_turn("d", "started", "", 0, 6000);
+    max_ui_summary("d", "Docs again", NULL, false, POD_TIER_ALERT, 6100);
+    roster(ABCDE, 3);
+    CHECK(!max_done_shown(6100));
+    max_ui_summary("a", "Done", NULL, false, POD_TIER_ALERT, 6200);
+    CHECK(max_done_shown(6200));
+    max_ui_link(false, NULL, 6300);
+    CHECK(max_m.done_id[0] == 0);
 }
 
 // Inbox: every event an unread notice, newest first, kept after its agent leaves; the same one again moves to the top,
@@ -732,6 +788,7 @@ int main(void)
     test_focus_changes_no_page();
     test_questions_take_attention_oldest_first();
     test_turn_ends_take_attention();
+    test_done_note();
     test_inbox();
     test_ambient();
     test_caps();

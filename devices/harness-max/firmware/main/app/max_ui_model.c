@@ -249,6 +249,11 @@ void max_attend(max_agent_t *a, max_attn_t why, uint32_t now_ms)
 {
     max_m.idle_from = now_ms;
     inbox_add(a, why, now_ms);
+    if (why == MAX_ATTN_DONE) {   // never the glass (the owner's call, 18 Nov): the note over whatever is up, the newest
+        max_copy(max_m.done_id, sizeof max_m.done_id, a->id);
+        max_m.done_from = now_ms;
+        return;
+    }
     if (max_m.talk != MAX_TALK_IDLE || max_form_open()) {   // a person talks or fills the form: only the toast
         max_copy(max_m.toast_id, sizeof max_m.toast_id, a->id);
         max_m.toast_attn = why;
@@ -256,7 +261,7 @@ void max_attend(max_agent_t *a, max_attn_t why, uint32_t now_ms)
         if (max_m.view == MAX_VIEW_AMBIENT) max_show(MAX_VIEW_OVERVIEW);
         return;
     }
-    // Another agent's question keeps Attention: this one waits its turn, a turn's end stays in Inbox.
+    // Another agent's question keeps Attention: this one waits its turn, a failure stays in Inbox.
     if (max_m.view == MAX_VIEW_ATTENTION && max_m.attn == MAX_ATTN_ASK && strcmp(max_m.attn_id, a->id) &&
         max_attn_holds(max_m.attn_id, MAX_ATTN_ASK))
         return;
@@ -349,8 +354,9 @@ uint32_t max_time_key(uint32_t now_ms)
         const uint32_t frame = (now_ms - max_m.talk_from) / MAX_TALK_FRAME_MS;
         h = max_fnv(h, &frame, sizeof frame);
     }
-    const bool notice = max_notice_shown(now_ms), toast = max_toast_shown(now_ms);
+    const bool notice = max_notice_shown(now_ms), toast = max_toast_shown(now_ms), done = max_done_shown(now_ms);
     h = max_fnv(h, &notice, sizeof notice);
+    h = max_fnv(h, &done, sizeof done);
     return max_fnv(h, &toast, sizeof toast);
 }
 
@@ -426,7 +432,7 @@ bool max_ui_link(bool up, const char *machine, uint32_t now_ms)
     max_m.link = false;
     max_m.computer[0] = 0;
     max_m.count = max_m.machine_count = 0;
-    max_m.selected[0] = max_m.attn_id[0] = max_m.toast_id[0] = 0;
+    max_m.selected[0] = max_m.attn_id[0] = max_m.toast_id[0] = max_m.done_id[0] = 0;
     max_m.row_first = 0;
     memset(max_m.asks, 0, sizeof max_m.asks);
     max_form_reset();
@@ -778,6 +784,7 @@ uint32_t max_ui_next_wake_ms(uint32_t now_ms)
     if (ambient_waits()) until(&ms, max_m.idle_from + MAX_AMBIENT_MS, now_ms);
     if (max_notice_shown(now_ms)) until(&ms, max_m.notice_until, now_ms);
     if (max_toast_shown(now_ms)) until(&ms, max_m.toast_from + MAX_TOAST_MS, now_ms);
+    if (max_done_shown(now_ms)) until(&ms, max_m.done_from + MAX_DONE_NOTE_MS, now_ms);
     if (max_m.link) ms = max_form_wake(now_ms, max_ask_wake(now_ms, ms));   // a read again, a poll, a reply overdue
     sooner(&ms, max_motion_ms(now_ms));   // the drawing's own motion
     return ms ? ms : 1;
@@ -795,6 +802,12 @@ bool max_toast_shown(uint32_t now_ms)
 {
     return max_m.toast_id[0] && max_attn_holds(max_m.toast_id, max_m.toast_attn) &&
            now_ms - max_m.toast_from < MAX_TOAST_MS;
+}
+
+bool max_done_shown(uint32_t now_ms)
+{
+    return max_m.done_id[0] && max_attn_holds(max_m.done_id, MAX_ATTN_DONE) &&
+           now_ms - max_m.done_from < MAX_DONE_NOTE_MS;
 }
 
 bool max_can_talk(const max_agent_t *a)

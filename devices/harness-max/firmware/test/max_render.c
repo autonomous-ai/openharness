@@ -224,6 +224,16 @@ static void s_toast(void)
     max_m.toast_from = T0 - 1000;
 }
 
+// A finished turn while the person is on App Detail: its note at the bottom right, the glass left as it was.
+static void s_done_note(void)
+{
+    orca();
+    max_ui_turn("sweep", "started", "", 0, T0 - 90000);
+    max_ui_summary("sweep", "Swept 41 pages: 6 dead links fixed, 2 pages merged, the sidebar regenerated.", NULL, false,
+                   POD_TIER_ALERT, T0 - 1000);
+    show(MAX_VIEW_OVERVIEW, NULL);
+}
+
 // ---- Attention ----
 static void s_attention_question(void)
 {
@@ -251,6 +261,7 @@ static void s_attention_done(void)
     orca();
     max_ui_summary("auth", "Token refresh retries once, then signs out cleanly. Auth suite: 14 of 14.", NULL, false,
                    POD_TIER_ALERT, T0);
+    max_m.done_id[0] = 0;   // its note is done-note's
     attention("auth", MAX_ATTN_DONE);
 }
 static void s_attention_failed(void)
@@ -421,7 +432,7 @@ static const screen_t SCREENS[] = {
     {"agent-reading", s_agent_reading}, {"agent-working", s_agent_working}, {"agent-mic-closed", s_agent_mic_closed},
     {"agent-listening", s_agent_listening}, {"agent-listening-start", s_agent_listening_start},
     {"agent-working-talking", s_agent_working_talking}, {"agent-sending", s_agent_sending},
-    {"agent-no-voice", s_agent_no_voice}, {"toast", s_toast},
+    {"agent-no-voice", s_agent_no_voice}, {"toast", s_toast}, {"done-note", s_done_note},
     {"attention-question", s_attention_question}, {"attention-permission", s_attention_permission},
     {"attention-outside", s_attention_outside}, {"attention-done", s_attention_done},
     {"attention-failed", s_attention_failed}, {"attention-six", s_attention_six},

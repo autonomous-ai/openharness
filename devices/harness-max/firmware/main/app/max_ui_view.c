@@ -1,7 +1,7 @@
 // The screen (max_ui.h), 1920 x 480 (or 415): one of Demo V2's pages over the whole glass (max_m.view), in the dial's
 // look; New Harness over it while it is up, the update screen instead of it. Over the page the toast of a question that
-// came while a person talks, and the notice pill. Here too what the page files share: text, shapes, icons, buttons and
-// what moves by the clock. Inter faces (gen_fonts.py ph_*): at the Max's 225 ppi they come out a little larger than
+// came while a person talks, a finished turn's note, and the notice pill. Here too what the page files share: text,
+// shapes, icons, buttons and what moves by the clock. Inter faces (gen_fonts.py ph_*): at the Max's 225 ppi they come out a little larger than
 // on the Pro's 258.
 #include <stdio.h>
 #include <string.h>
@@ -442,6 +442,59 @@ static void notice(ht_scene_t *s, bool form, max_box_t toast_at, bool toasting)
     ht_pro_text(s, x + PILL_PAD + PILL_DOT + DX(10), max_top_of(f, y + h / 2), tw, f, C(FG), row);
 }
 
+// ---- over the page: a finished turn's note ----
+
+// V3's done note: 460 x 42 design px at most, 16 from the glass's right and 10 from its foot, its pet 34 x 30; the
+// finger's target reaches 12 past it all round (the bar's touch lands off the finger at the right).
+enum {
+    DONE_W = DX(460), DONE_H = DY(42), DONE_RIGHT = DX(16), DONE_FOOT = DY(10), DONE_PAD_L = DX(10), DONE_PAD_R = DX(18),
+    DONE_PET_W = DX(34), DONE_PET_H = DY(30), DONE_GAP = DX(10), DONE_REACH = DX(12), DONE_MIN_SAID = DX(40),
+};
+#define DONE_IS " is done"
+#define DONE_DOT " \xc2\xb7 "
+
+typedef struct {
+    max_box_t card;
+    int name_w, said_w;   // what of the name and of what it said fits; no words when said_w is 0
+} done_t;
+
+// The note of agent a, as wide as its words up to DONE_W: the name (at most half the room when words follow it),
+// " is done", then as much of what the turn said as fits, if enough does to read.
+static done_t done_layout(const max_agent_t *a)
+{
+    const ht_pro_font_t *nf = &ph_sb_22, *sf = &ph_rg_24;
+    const int is_w = ht_pro_width(nf, DONE_IS), dot_w = ht_pro_width(sf, DONE_DOT);
+    const int left = DONE_W - DONE_PAD_L - DONE_PET_W - DONE_GAP - DONE_PAD_R - is_w;
+    char row[ROW_BYTES];
+    max_cut(row, a->name, nf, a->note[0] ? left / 2 : left, false);
+    done_t d = {.name_w = ht_pro_width(nf, row)};
+    if (a->note[0]) {
+        max_cut(row, a->note, sf, left - d.name_w - dot_w, false);
+        d.said_w = ht_pro_width(sf, row);
+        if (d.said_w < DONE_MIN_SAID) d.said_w = 0;
+    }
+    const int w = DONE_PAD_L + DONE_PET_W + DONE_GAP + d.name_w + is_w + (d.said_w ? dot_w + d.said_w : 0) + DONE_PAD_R;
+    d.card = (max_box_t){HT_WIDTH - DONE_RIGHT - w, HT_HEIGHT - DONE_FOOT - DONE_H, w, DONE_H};
+    return d;
+}
+
+// The pet, still, then "name is done · what it said" on one row, the name in the done green, on a card in the toast's
+// colours.
+static void done_note(ht_scene_t *s, const max_agent_t *a, const done_t *d)
+{
+    const max_box_t c = d->card;
+    max_box(s, c.x, c.y, c.w, c.h, DONE_H / 3, 1, RIM, CARD);
+    const int cy = c.y + c.h / 2;
+    max_pet(s, a->engine, POD_SCENE_REST, c.x + DONE_PAD_L + DONE_PET_W / 2, cy + DONE_PET_H / 2, DONE_PET_W / 2,
+            DONE_PET_H, CARD, 0, true);
+    int x = c.x + DONE_PAD_L + DONE_PET_W + DONE_GAP;
+    x += max_text(s, x, cy, d->name_w, &ph_sb_22, DONE, a->name);
+    x += max_text(s, x, cy, c.x + c.w - x, &ph_sb_22, DIM, DONE_IS);
+    if (!d->said_w) return;
+    x += max_text(s, x, cy, c.x + c.w - x, &ph_rg_24, FAINT, DONE_DOT);
+    max_text(s, x, cy, d->said_w, &ph_rg_24, RECAP, a->note);
+}
+
 // ---- the whole screen ----
 
 static void update_screen(ht_scene_t *s)
@@ -486,9 +539,20 @@ void max_ui_render(ht_scene_t *s, uint32_t now_ms)
         const bool form = max_form_open(), toasting = max_m.link && max_toast_shown(now_ms);
         const max_box_t t = toast_box(form);
         if (toasting) max_hit(t.x, t.y, t.w, t.h, MAX_HIT_TOAST, 0);   // first: it lies over the page's own
+        // The done note, over any page but the form (whose buttons it would cover; its notice waits in Inbox).
+        const max_agent_t *done = max_m.link && !form && max_done_shown(now_ms) ? max_find(max_m.done_id) : NULL;
+        done_t d = {.name_w = 0};
+        if (done) {
+            d = done_layout(done);
+            const int hx = d.card.x - DONE_REACH, hy = d.card.y - DONE_REACH;
+            const int hw = d.card.w + 2 * DONE_REACH, hh = d.card.h + 2 * DONE_REACH;
+            max_hit(hx, hy, hx + hw > HT_WIDTH ? HT_WIDTH - hx : hw, hy + hh > HT_HEIGHT ? HT_HEIGHT - hy : hh,
+                    MAX_HIT_DONE_NOTE, 0);
+        }
         if (form) max_draw_form(s);
         else page(s, now_ms);
         if (toasting) toast(s, t);
+        if (done) done_note(s, done, &d);
         if (max_notice_shown(now_ms)) notice(s, form, t, toasting);
     }
     max_m.drawn_key = max_time_key(now_ms);
