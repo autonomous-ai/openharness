@@ -4,10 +4,14 @@ import type { AppPick, SwitchCause } from './types.js'
 export const FRONT_SETTLE_MS = 1_000
 
 /** Each app with agents and how many (`all`), and of those the agents whose app is known (`HostAgent.appPending`): an app
- *  with none is absent from `known`. */
+ *  with none is absent from `known` and `inFront`. */
 export interface AppCounts {
   all: ReadonlyMap<string, number>
+  /** Leaves out a resting agent (`HostAgent.resting`) too: a row with no process weighs nothing in the default. */
   known: ReadonlyMap<string, number>
+  /** Keeps a resting agent: the app in front shows its page even when no process runs there (the spec's "dial's default
+   *  page", PM 2026-11-19, 1b). */
+  inFront: ReadonlyMap<string, number>
 }
 
 export interface AppFilterDeps {
@@ -35,8 +39,8 @@ const sameCounts = (a: ReadonlyMap<string, number>, b: ReadonlyMap<string, numbe
  * the one with the most agents whose app is known. An agent the open scan found, which nothing has told of yet, is on the
  * unknown app's page and counts for nothing in that default: a dial plugged in over many agents already running would
  * otherwise open on that page. It is the default only while no app has a known agent, and gives way once one has; a pick
- * or the front can still show it. The app in front is shown whenever it has known agents and no pick holds, so a default
- * gives way to it. One per cable host, shared by every dial on it. Time and chance come in through `deps`,
+ * or the front can still show it. The app in front is shown whenever it has known or resting agents and no pick holds, so a
+ * default gives way to it. One per cable host, shared by every dial on it. Time and chance come in through `deps`,
  * so a test drives both.
  */
 export class AppFilter {
@@ -60,11 +64,11 @@ export class AppFilter {
    * emptying, and the default's page of agents not known yet giving way, are decided here, when the counts are read.
    */
   shown(): string | undefined {
-    const { all: counts, known } = this.deps.counts()
+    const { all: counts, known, inFront } = this.deps.counts()
     const front = this.settledFront
     // An agent started in the app the person is using turns the dial to it, over any default (the PM, D1). `none` is no
     // app, so it never has agents.
-    if (!this.pickedOnDial && front !== undefined && front !== this.showing && has(known, front)) {
+    if (!this.pickedOnDial && front !== undefined && front !== this.showing && has(inFront, front)) {
       this.byDefault = false
       this.show(front, 'front')
       return this.showing
