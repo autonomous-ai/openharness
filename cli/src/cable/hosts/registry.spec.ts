@@ -154,6 +154,23 @@ describe('an ended copy (docs/plans/2026-11-19-dial-claude-app-sessions-design.m
     expect(new HostRegistry([observed, store]).entries()).toEqual([{ agent: c, source: store }])
   })
 
+  // The ChatGPT app's threads (docs/plans/2026-11-19-dial-chatgpt-ring-and-follow-design.md): its listed copy carries no
+  // pane key, so the session id alone makes a hooked thread and its listed copy one row.
+  it('an observed copy and a codex-app copy of one ChatGPT thread are one row, the observed one', () => {
+    const o = agent({ id: 'o', engine: 'codex', sessionId: 't' })
+    const observed = fakeSource('observed', [o])
+    const app = fakeSource('codex-app', [agent({ id: 'o', engine: 'codex', sessionId: 't', host: 'codex', app: 'codex', resting: true })])
+    expect(new HostRegistry([observed, app]).entries()).toEqual([{ agent: o, source: observed }])
+    expect(new HostRegistry([app, observed]).entries()).toEqual([{ agent: o, source: observed }])
+  })
+
+  it('an ended observed copy gives its row to the codex-app copy of its thread', () => {
+    const c = agent({ id: 'o', engine: 'codex', sessionId: 't', host: 'codex', app: 'codex', resting: true })
+    const app = fakeSource('codex-app', [c])
+    const observed = fakeSource('observed', [ended({ id: 'o', engine: 'codex', sessionId: 't' })])
+    expect(new HostRegistry([observed, app]).entries()).toEqual([{ agent: c, source: app }])
+  })
+
   it("… and to herdr's, by the session id or by a pane key", () => {
     const observed = fakeSource('observed', [ended({ id: 'o', sessionId: 's' })])
     const herdr = fakeSource('herdr', [agent({ id: 'x', sessionId: 's' })])
