@@ -136,7 +136,7 @@ export function ensureCommand(argv: readonly string[], deps: EnsureDeps): Promis
           if (!(resumed instanceof AgentClientError) || resumed.code === 'RESUME_UNCONFIRMED') {
             const frame = resumed instanceof AgentClientError ? closedOne.frame : resumed.frame
             p.records.started(closedOne.frame.id, s.now())
-            const settled = await settle(frame)
+            const settled = await settle(frame, !(resumed instanceof AgentClientError))
             if (settled.state === 'stopped') {
               // Its engine exited at once. Gone from the engine's store, the conversation is let go and a new one started;
               // otherwise it is said stopped, and the next ensure tries it again.
@@ -160,8 +160,10 @@ export function ensureCommand(argv: readonly string[], deps: EnsureDeps): Promis
         return created()
 
         /** [frame] just opened again, watched until its engine is seen up (its pane idle, working or asking) or SETTLE_MS
-         *  pass: stopped when its row or its engine is gone meanwhile. */
-        async function settle(frame: Frame): Promise<Settled> {
+         *  pass: stopped when its row or its engine is gone meanwhile. A resume the daemon confirmed whose engine still
+         *  runs when the watch ends is confirmed too: on a slow machine (a lamp's arm64) OpenClaw's TUI is not drawn
+         *  within 15 s, yet the engine that would have exited ("No session found") has stayed up the whole time. */
+        async function settle(frame: Frame, daemonConfirmed: boolean): Promise<Settled> {
           const until = s.now() + SETTLE_MS
           for (;;) {
             const now = (await list(o.daemon, true).catch(() => [] as Frame[])).find((f) => f.id === frame.id)
@@ -171,7 +173,9 @@ export function ensureCommand(argv: readonly string[], deps: EnsureDeps): Promis
             if (runs === false || runs === 'pane-gone') return { state: 'stopped', confirmed: false }
             const { screen } = await inspect({ daemon: o.daemon, frame: current })
             const up = screen === 'idle' || screen === 'working' || screen === 'needs-input'
-            if (up || s.now() >= until) return { state: stateFrom(screen, current, p.records.get(frame.id)), confirmed: up }
+            if (up || s.now() >= until) {
+              return { state: stateFrom(screen, current, p.records.get(frame.id)), confirmed: up || (daemonConfirmed && runs === true) }
+            }
             // Never past SETTLE_MS by a step: a program's own timeout is close behind it.
             await s.sleep(Math.min(SETTLE_STEP_MS, until - s.now()))
           }

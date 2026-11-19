@@ -519,12 +519,23 @@ describe('harness ensure, a conversation its engine no longer holds (#4484)', ()
     clock = NOW
     const never = closed()
     never.extra.agent_close = (p) => p.mode === 'inspect' ? {} : { closed: true }
-    const slow = harness(never, { now: () => clock, sleep: async (ms) => { clock += ms + 300 } })
+    const slow = harness(never, { now: () => clock, sleep: async (ms) => { clock += ms + 300 }, engineAlive: async () => null })
     await ensureCommand(args(), slow.deps)
     expect(slow.json()).toMatchObject({ result: 'resumed', id: 'c1', state: 'starting', confirmed: false })
     expect(slow.json()).not.toHaveProperty('whyCode')
     expect(clock - NOW).toBeGreaterThanOrEqual(SETTLE_MS)
     expect(clock - NOW).toBeLessThanOrEqual(SETTLE_MS + 300)
+  })
+
+  it('confirms a resume whose engine still runs when the watch ends, its TUI not drawn yet (a lamp\'s arm64)', async () => {
+    let clock = NOW
+    const d = closed()
+    d.extra.agent_close = (p) => p.mode === 'inspect' ? {} : { closed: true }
+    const h = harness(d, { now: () => clock, sleep: async (ms) => { clock += ms }, engineAlive: async () => true })
+    await ensureCommand(args(), h.deps)
+    expect(h.json()).toMatchObject({ result: 'resumed', id: 'c1', state: 'starting', confirmed: true })
+    expect(h.json()).not.toHaveProperty('whyCode')
+    expect(clock - NOW).toBe(SETTLE_MS)
   })
 
   it('says a resume the daemon has not confirmed resumed, confirmed false, rather than as a plain resume', async () => {
