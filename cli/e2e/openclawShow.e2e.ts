@@ -64,6 +64,13 @@ function notStarting(samples: Look[], t0: number): string[] {
     .map((s) => `${s.start - t0}ms show=${s.json.state ?? s.json.unparsed} ps=${s.ps?.state}`).slice(0, 5)
 }
 
+/** The looks that read idle in `show --json` or in `ps`, said briefly: none may before its first task is answered, a look
+ *  that overlaps the task's hand-over included (a row whose task was taken but not yet typed once read idle there). */
+function idleLooks(samples: Look[], t0: number): string[] {
+  return samples.filter((s) => s.json.state === 'idle' || s.ps?.state === 'idle')
+    .map((s) => `${s.start - t0}ms show=${s.json.state} ask=${s.json.ask ?? null} ps=${s.ps?.state}`).slice(0, 5)
+}
+
 let daemon: IsolatedDaemon | undefined
 let client: LocalClient | undefined
 afterEach(async () => {
@@ -183,8 +190,9 @@ describe.runIf(process.platform !== 'win32')('an OpenClaw agent, through every s
     r.step({ advance: true })
     await r.logged('connected', (e) => e.drawn === 'gateway connected | idle')
     const taken = () => r.at((e) => e.accepted === TASK)
-    const before = (await r.sample(() => taken() !== null, 60_000)).filter((s) => s.end < (taken() ?? Infinity))
-    expect.soft(notStarting(before, t0), 'row 3: every look before the task was taken says starting').toEqual([])
+    const looks = await r.sample(() => taken() !== null, 60_000)
+    expect.soft(notStarting(looks.filter((s) => s.end < (taken() ?? Infinity)), t0), 'row 3: every look before the task was taken says starting').toEqual([])
+    expect.soft(idleLooks(looks, t0), 'row 3: no look reads idle').toEqual([])
     expect(taken(), 'row 3: the task taken').not.toBeNull()
     await r.keepsWaiting('row 3')
     r.step({ release: 'send' })
@@ -199,8 +207,9 @@ describe.runIf(process.platform !== 'win32')('an OpenClaw agent, through every s
     await r.logged('the history load failed', (e) => e.history === 'failed')
     const id = (await r.look()).json.id
     const taken = () => r.at((e) => e.accepted === TASK)
-    const before = (await r.sample(() => taken() !== null, 90_000)).filter((s) => s.end < (taken() ?? Infinity))
-    expect.soft(notStarting(before, t0), 'row 4: every look before the task was taken says starting').toEqual([])
+    const looks = await r.sample(() => taken() !== null, 90_000)
+    expect.soft(notStarting(looks.filter((s) => s.end < (taken() ?? Infinity)), t0), 'row 4: every look before the task was taken says starting').toEqual([])
+    expect.soft(idleLooks(looks, t0), 'row 4: no look reads idle').toEqual([])
     const reload = r.at((e) => e.command === `/session agent:main:harness-${id}`)
     expect(reload, 'row 4: /session typed').not.toBeNull()
     expect(taken(), 'row 4: the task taken').not.toBeNull()
@@ -214,13 +223,14 @@ describe.runIf(process.platform !== 'win32')('an OpenClaw agent, through every s
 
   it('row 5: a history that never loads fails the launch within the bound, visibly, and it can be closed', async () => {
     const r = await rig({ history: 'fail-always' })
-    const t0 = Date.now()
     await r.launch(NAME, TASK)
+    // The bound counts from the TUI's start at the earliest, and a pass applies it, 5 s apart.
+    const started = r.at((e) => !!e.started)!
     await r.logged('row 5: the first /session', (e) => e.command?.startsWith('/session '), 60_000)
     const failed = await until('row 5: failed', async () => {
       const s = await r.look()
       return s.json.state === 'failed' ? s : null
-    }, t0 + 210_000 - Date.now(), 1_000)
+    }, started + 210_000 - Date.now(), 1_000)
     expect.soft(failed.text, 'row 5: show').toContain(`failed: ${NOT_TAKEN}`)
     expect.soft(failed.json.failure?.error, 'row 5: show --json').toBe('FIRST_TASK_NOT_TAKEN')
     expect.soft(failed.ps?.state, 'row 5: ps').toBe('failed')
@@ -245,8 +255,9 @@ describe.runIf(process.platform !== 'win32')('an OpenClaw agent, through every s
     r.step({ refuseNext: 'disconnected', historyMs: 25_000 })
     r.begin()
     const taken = () => r.at((e) => e.accepted === TASK)
-    const before = (await r.sample(() => taken() !== null, 120_000)).filter((s) => s.end < (taken() ?? Infinity))
-    expect.soft(notStarting(before, t0), 'row 6: every look before the task was taken says starting').toEqual([])
+    const looks = await r.sample(() => taken() !== null, 120_000)
+    expect.soft(notStarting(looks.filter((s) => s.end < (taken() ?? Infinity)), t0), 'row 6: every look before the task was taken says starting').toEqual([])
+    expect.soft(idleLooks(looks, t0), 'row 6: no look reads idle').toEqual([])
     const refused = r.at((e) => e.refused === 'disconnected')
     expect(refused, 'row 6: refused once').not.toBeNull()
     expect(taken(), 'row 6: the task taken').not.toBeNull()
@@ -271,15 +282,16 @@ describe.runIf(process.platform !== 'win32')('an OpenClaw agent, through every s
     const taken = () => r.at((e) => e.accepted === TASK)
     let up = false
     let heldWait: Run | null = null
+    // Back after the TUI's try 15 s into the outage, so its next, 31 s in, connects: the outage outlasts the hold's 10 s.
     const samples = await r.sample(() => taken() !== null, 150_000, async (s) => {
-      if (!up && Date.now() >= t0 + 20_000) { r.step({ gateway: 'up' }); up = true }
+      if (!up && Date.now() >= down + 16_000) { r.step({ gateway: 'up' }); up = true }
       if (!heldWait && connected() === null && s.json.state === 'held') heldWait = await r.run('wait', NAME, '--timeout', '5s')
     })
     const held = (s: Look) => s.json.state === 'held' || s.ps?.state === 'held'
     expect.soft(samples.filter((s) => s.end < down + 10_000 && held(s)).map((s) => `${s.start - down}ms`),
       'row 7: not held before the Gateway was gone 10 s').toEqual([])
-    // Held once a pass has read it gone 10 s: its passes are 5 s apart, and the line between the TUI's tries reads
-    // `disconnected` alone, which neither holds nor clears, so the pass after that one by the outage's 20th second.
+    // Held once a pass has read it gone 10 s: the first reads it within 5 s, and the next 10 s on, by the outage's 20th
+    // second; the line between the TUI's tries, `disconnected` alone, is the same outage.
     const late = samples.filter((s) => s.start >= down + 21_000 && s.end < (connected() ?? Infinity))
     expect.soft(late.length, 'row 7: looks while it was gone').toBeGreaterThan(0)
     expect.soft(late.filter((s) => !(s.json.state === 'held' && s.json.needsPerson === true && s.json.namedState === OPENCLAW_STATES.noGateway
@@ -288,7 +300,11 @@ describe.runIf(process.platform !== 'win32')('an OpenClaw agent, through every s
     expect(connected(), 'row 7: the TUI connected again').not.toBeNull()
     expect(taken(), 'row 7: the task taken').not.toBeNull()
     expect.soft(taken()! - connected()!, 'row 7: taken in the pass that clears the hold').toBeLessThan(10_000)
-    expect.soft(notStarting(samples.filter((s) => s.start > connected()! && s.end < taken()!), t0), 'row 7: starting once connected').toEqual([])
+    // Held until the pass that reads it connected clears the hold (passes are 5 s apart): starting from then until taken.
+    const reconnected = samples.filter((s) => s.start > connected()! && s.end < taken()!)
+    const cleared = reconnected.findIndex((s) => s.json.state !== 'held' && s.ps?.state !== 'held')
+    expect.soft(notStarting(cleared < 0 ? [] : reconnected.slice(cleared), t0), 'row 7: starting once the hold cleared').toEqual([])
+    expect.soft(idleLooks(samples, t0), 'row 7: no look reads idle').toEqual([])
     expect.soft(samples.filter((s) => s.json.state === 'failed').length, 'row 7: never failed').toBe(0)
     expect(r.events().filter((e) => e.accepted), 'row 7: typed once').toHaveLength(1)
     await until('row 7: working', async () => (await r.look()).json.state === 'working' || null, 30_000, 0)
