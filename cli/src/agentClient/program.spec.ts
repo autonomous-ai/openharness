@@ -1,13 +1,33 @@
-import { chmodSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, type PathLike } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { dirname, join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { KEPT_INPUTS, ownedBy, ProgramRecords, programMay, readProgramToken, sameHash, withProgramLock } from './program.js'
+
+// Every file opened for writing and every rename, in order; each call passes through (lib/secureState.ts imports
+// node:fs too).
+const disk = vi.hoisted(() => ({ calls: [] as Array<[op: 'write' | 'rename', path: string, to?: string]> }))
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  const { O_WRONLY, O_RDWR } = actual.constants
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => {
+      const flags = args[1]
+      if (typeof flags === 'number' ? flags & (O_WRONLY | O_RDWR) : flags !== undefined && flags !== 'r') disk.calls.push(['write', String(args[0])])
+      return actual.openSync(...args)
+    },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (typeof args[0] !== 'number') disk.calls.push(['write', String(args[0])])
+      return actual.writeFileSync(...args)
+    },
+    renameSync: (from: PathLike, to: PathLike) => { disk.calls.push(['rename', String(from), String(to)]); return actual.renameSync(from, to) },
+  }
+})
 
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'program-')) })
-afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
+afterEach(() => { disk.calls = []; vi.restoreAllMocks(); rmSync(dir, { recursive: true, force: true }) })
 
 const TOKEN = 'a'.repeat(40)
 const tokenFile = (content = `${TOKEN}\n`, mode = 0o600): string => {
@@ -76,12 +96,41 @@ describe('the program harness records', () => {
 
   it('reads past a file that is not its own shape', () => {
     const records = new ProgramRecords(dir)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
     writeFileSync(records.path, 'not json')
     expect(records.all()).toEqual([])
     writeFileSync(records.path, JSON.stringify({ v: 1, harnesses: null }))
     expect(records.all()).toEqual([])
     writeFileSync(records.path, JSON.stringify({ v: 1, harnesses: { x: { agentId: 'x' }, y: { ...row('y'), inputs: 'no', createdAt: 'no' } } }))
     expect(records.all()).toEqual([{ ...row('y'), createdAt: 0 }])
+  })
+
+  it('the save goes through a temporary file renamed onto the target', () => {
+    const records = new ProgramRecords(dir)
+    records.put(row('a'))
+    expect(disk.calls.filter(([op, path]) => op === 'write' && path === records.path)).toEqual([])
+    const renames = disk.calls.filter(([op, , to]) => op === 'rename' && to === records.path)
+    expect(renames).toHaveLength(1)
+    expect(renames[0][1]).not.toBe(records.path)
+    expect(dirname(renames[0][1])).toBe(dir)
+  })
+
+  it('a file at the old temporary name is left alone', () => {
+    const records = new ProgramRecords(dir)
+    const old = `${records.path}.${process.pid}.tmp`
+    writeFileSync(old, 'another writer')
+    records.put(row('a'))
+    expect(readFileSync(old, 'utf8')).toBe('another writer')
+  })
+
+  it('a torn program-harnesses.json is set aside, not written over', () => {
+    const records = new ProgramRecords(dir)
+    writeFileSync(records.path, '{"')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    records.put(row('a'))
+    expect(readFileSync(`${records.path}.unreadable`, 'utf8')).toBe('{"')
+    expect(records.all().map((h) => h.agentId)).toEqual(['a'])
+    expect(warn).toHaveBeenCalledWith('[state] program-harnesses.json could not be read (not valid JSON); kept as program-harnesses.json.unreadable, starting empty.')
   })
 
   it('runs two ensures of one name one after the other', async () => {

@@ -1,10 +1,34 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync, type PathLike } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Ledger, LedgerBusyError, ledgerPath, parseHanded, parsePending, parseStarted, PENDING_WITHIN_MS, ROTATE_BYTES, type Closed, type Pending, type Started, type Told } from './ledger.js'
+
+// Every file opened for writing and every rename, in order; each call passes through (lib/secureState.ts imports
+// node:fs too).
+const disk = vi.hoisted(() => ({ calls: [] as Array<[op: 'write' | 'rename', path: string, to?: string]> }))
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  const { O_WRONLY, O_RDWR } = actual.constants
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => {
+      const flags = args[1]
+      if (typeof flags === 'number' ? flags & (O_WRONLY | O_RDWR) : flags !== undefined && flags !== 'r') disk.calls.push(['write', String(args[0])])
+      return actual.openSync(...args)
+    },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (typeof args[0] !== 'number') disk.calls.push(['write', String(args[0])])
+      return actual.writeFileSync(...args)
+    },
+    appendFileSync: (...args: Parameters<typeof actual.appendFileSync>) => {
+      if (typeof args[0] !== 'number') disk.calls.push(['write', String(args[0])])
+      return actual.appendFileSync(...args)
+    },
+    renameSync: (from: PathLike, to: PathLike) => { disk.calls.push(['rename', String(from), String(to)]); return actual.renameSync(from, to) },
+  }
+})
 
 const dirs: string[] = []
 const fresh = (): Ledger => {
@@ -12,7 +36,7 @@ const fresh = (): Ledger => {
   dirs.push(dir)
   return new Ledger(ledgerPath(dir))
 }
-afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
+afterEach(() => { disk.calls = []; for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 
 const row = (by: string, child: string, depth = 1, at = 1): Started => ({
   at, depth,
@@ -143,6 +167,27 @@ setTimeout(() => fs.unlinkSync(lock), 300)`
     const none = fresh()
     expect(none.forgetTold('kid')).toBe(0)
     expect(existsSync(none.path)).toBe(false)
+  })
+
+  it('the rewrite goes through a temporary file renamed onto the ledger', () => {
+    const ledger = placed()
+    writeFileSync(ledger.path, lines(STARTED, told('kid', 'email zanzibar')))
+    disk.calls = []
+    expect(ledger.forgetTold('kid')).toBe(1)
+    expect(disk.calls.filter(([op, path]) => op === 'write' && path === ledger.path)).toEqual([])
+    const renames = disk.calls.filter(([op, , to]) => op === 'rename' && to === ledger.path)
+    expect(renames).toHaveLength(1)
+    expect(renames[0][1]).not.toBe(ledger.path)
+    expect(dirname(renames[0][1])).toBe(dirname(ledger.path))
+  })
+
+  it('a file at the old temporary name is left alone', () => {
+    const ledger = placed()
+    writeFileSync(ledger.path, lines(STARTED, told('kid', 'email zanzibar')))
+    writeFileSync(`${ledger.path}.tmp`, 'another writer')
+    expect(ledger.forgetTold('kid')).toBe(1)
+    expect(readFileSync(`${ledger.path}.tmp`, 'utf8')).toBe('another writer')
+    expect(readFileSync(ledger.path, 'utf8')).toBe(lines(STARTED))
   })
 
   it('an append made while another process holds the lock lands once it is released', async () => {
