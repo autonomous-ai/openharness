@@ -1813,6 +1813,16 @@ describe('the dial that shows one app at a time', () => {
       expect(views).toEqual(['tabs window', 'apps front'])
     })
 
+    it('the app settled in front getting only resting agents turns tabs to apps at the next list a dial that says appFilter reads', async () => {
+      const agents = five()
+      const { host, views } = viewed(agents)
+      onTab(host, ['h1'])
+      settle(host, 'claude')
+      agents.push(agent('c1', 'claude', { resting: true }))
+      await host.listAgentSnapshot({ apps: true })
+      expect(views).toEqual(['tabs window', 'apps front'])
+    })
+
     it('a pick of Harness on an app\'s ring answers tabs and holds as a pick does', async () => {
       const appPicked = vi.fn()
       const { host, views } = viewed(five(), { appPicked })
@@ -2071,7 +2081,20 @@ describe('the dial that shows one app at a time', () => {
       expect(views).toEqual(['apps window', 'tabs empty', 'apps front'])
     })
 
-    const H1 = { id: 'h1', name: 'h1', engine: 'claude', machineId: 'mine', machine: 'MacbookPro.local' }
+    it('a pick of Harness made before the window opened holds with the app in front holding only resting agents', async () => {
+      const { host, views } = viewed([...five(), agent('c1', 'claude', { resting: true }), agent('c2', 'claude', { resting: true })], { sessions })
+      await host.listAgentSnapshot({ apps: true })
+      settle(host, 'claude')
+      expect(host.pickApp('harness')).toBe('switched')
+      onTab(host, ['h1'])
+      expect(views).toEqual(['apps window'])
+      await host.listAgentSnapshot({ apps: true })
+      expect(views).toEqual(['apps window', 'tabs empty'])
+      for (let i = 0; i < 3; i++) await host.listAgentSnapshot({ apps: true })
+      expect(views).toEqual(['apps window', 'tabs empty'])
+    })
+
+    const H1 ={ id: 'h1', name: 'h1', engine: 'claude', machineId: 'mine', machine: 'MacbookPro.local' }
 
     it('on an app\'s ring a dial that says appFilter is answered as with no window', async () => {
       const { host } = viewed(five(), { sessions })

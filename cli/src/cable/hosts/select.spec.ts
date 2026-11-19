@@ -430,6 +430,36 @@ describe('AppRings', () => {
       expect(rings.apps()).toEqual([{ id: 'ghostty', count: 2, waiting: 0 }])
       expect(ringIds(rings, 'ghostty')).toEqual(['g1', 'g2'])
     })
+
+    const resting = (id: string) => agent(id, { app: 'claude', host: 'claude', resting: true })
+
+    it('known leaves out a resting agent; all and inFront keep it', () => {
+      const { all, known, inFront } = new AppRings().counts([resting('c1'), resting('c2'), at('ghostty')(agent('g'))])
+      expect([...all]).toEqual([['claude', 2], ['ghostty', 1]])
+      expect([...inFront]).toEqual([['claude', 2], ['ghostty', 1]])
+      expect([...known]).toEqual([['ghostty', 1]])
+    })
+
+    it('an app whose agents all rest is absent from known, and in inFront', () => {
+      const { all, known, inFront } = new AppRings().counts([resting('c1')])
+      expect(known.size).toBe(0)
+      expect(all.get('claude')).toBe(1)
+      expect(inFront.get('claude')).toBe(1)
+    })
+
+    it('inFront leaves out an agent not known yet, as known does', () => {
+      const { all, known, inFront } = new AppRings().counts([agent('t', { appPending: true })])
+      expect(known.size).toBe(0)
+      expect(inFront.size).toBe(0)
+      expect(all.size).toBe(1)
+    })
+
+    it('a resting agent is on its app\'s page and in its ring', () => {
+      const rings = new AppRings()
+      rings.update([resting('c1'), resting('c2')])
+      expect(rings.apps()).toEqual([{ id: 'claude', count: 2, waiting: 0 }])
+      expect(ringIds(rings, 'claude')).toEqual(['c1', 'c2'])
+    })
   })
 
   it('a rank for one app orders that ring only', () => {
