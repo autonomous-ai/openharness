@@ -666,6 +666,9 @@ describe('orcaSetUp', () => {
       ['the version before', (f) => [entry(f, { version: '1.2.2' })]],
       ['another folder', () => [entry(CHECKOUT)]],
       ['disabled', (f) => [entry(f, { status: 'disabled' })]],
+      ['errored', (f) => [entry(f, { status: 'errored' })]],
+      ['invalid', (f) => [entry(f, { status: 'invalid' })]],
+      ['a development install', (f) => [entry(f, { isDev: true })]],
       ['a list that cannot be read', () => '{"ok": tr'],
     ]
     for (const [name, after] of others) {
