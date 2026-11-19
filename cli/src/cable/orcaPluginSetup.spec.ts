@@ -366,6 +366,22 @@ describe('Harness Device\'s plugin for Orca, set up from the devices\' process',
     expect(r.setUp).toHaveBeenCalledTimes(1)
     expect(r.counted).toEqual([['set up']])
   })
+
+  it('a pass asked while another runs is run once after it: Orca settling while the attach\'s pass finds it not running', async () => {
+    const r = rig()
+    let answer!: () => void
+    r.state.hold = new Promise((resolve) => { answer = resolve })
+    r.state.setUps.push({ orca: 'absent', error: 'not-running' })
+    const attach = r.setup.pass()
+    // Orca comes up and settles in front, twice, while the attach's pass waits for `orca status`.
+    await r.setup.pass()
+    await r.setup.pass()
+    answer()
+    await attach
+    expect(r.setUp).toHaveBeenCalledTimes(2)
+    expect(r.state.record).toEqual({ dial: true, version: VERSION })
+    expect(r.counted).toEqual([['set up']])
+  })
 })
 
 describe('orcaPluginParts', () => {
