@@ -60,7 +60,7 @@ export function createAgentUpdate({
     const current = () => matchesLaunchReceipt(registry.resolve(s!.agentId), s!)
       && JSON.stringify(registry.resolve(s!.agentId)?.launchModel) === JSON.stringify(s!.launchModel)
     const persistenceFailed = (error: unknown) => {
-      console.error('[agent_update] explicit choice publication failed')
+      console.error(`[agent_update] explicit choice publication failed · ${errorKind(error)}`)
       reply({ error: error instanceof RegistryOwnershipChanged ? 'AGENT_CHANGED' : 'PERSISTENCE_UNCONFIRMED' })
     }
     if (hasProfile) {
