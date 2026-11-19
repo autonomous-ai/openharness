@@ -30,8 +30,8 @@ export interface Place {
   /** The Claude app's own id of a session the open scan found, from the session's record (record.ts), until its first
    *  hook; only the Claude app's adapter reads it. */
   hostSession?: string
-  /** The app and tab of the terminal holding the multiplexer's client the agent runs in, from observed.ts; only the tmux
-   *  and tabs adapters read it. */
+  /** The app and tab of the terminal holding the multiplexer's client the agent runs in, from observed.ts; only the tmux,
+   *  herdr and tabs adapters read it. */
   outer?: Outer
 }
 

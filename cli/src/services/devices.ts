@@ -386,7 +386,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** Where herdr's socket is, from the daemon's own environment: the client reads it, and the herdr source watches for it. */
   const herdrAt = herdrClientDeps()
   const herdrClient = deps.herdr ?? createHerdrClient(herdrAt)
-  const herdrAdapter = createHerdrAdapter({ ...apps, client: herdrClient })
+  const herdrAdapter = createHerdrAdapter({ ...apps, client: herdrClient, front: () => cableHost.latestFront() })
   /** `HARNESS_OPEN_BIN`: the end-to-end tests' fake `open`, run for each `open -b` (cable/hosts/open.ts). */
   const openBin = process.env.HARNESS_OPEN_BIN
   /** `HARNESS_APPLICATIONS_DIR`, an absolute path alone: where the ChatGPT app is looked for in place of /Applications.
