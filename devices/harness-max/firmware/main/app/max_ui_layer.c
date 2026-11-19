@@ -709,6 +709,34 @@ static uint16_t *patch_px(int area)
     return px;
 }
 
+void max_layer_light(ht_scene_t *s, int lx, int lw, int l, int r, unsigned base, unsigned peak)
+{
+    int x0 = imax(imax(l, lx), 0), x1 = imin(imin(r, lx + lw), HT_WIDTH);
+    // Off the rail it keeps a column of the rail's own colour at the end it left or comes in at: the scene's runs keep
+    // their places from frame to frame, so the damage stays the light's (ht_damage compares the runs in order).
+    if (x1 <= x0) {
+        x0 = lx >= r ? imin(r, HT_WIDTH) - 1 : imax(l, 0);
+        x1 = x0 + 1;
+    }
+    const int w = x1 - x0;
+    uint16_t *px = x0 >= 0 && x1 <= HT_WIDTH && lw > 0 ? patch_px(w * RAIL_H) : NULL;
+    if (!px) return;
+    for (int x = x0; x < x1; x++) {
+        // V3's gradient base, peak, base at 0, .5 and 1 of the light, at the pixel's middle: t of MAX_ONE the peak's.
+        const int from_mid = 2 * (2 * (x - lx) + 1) - 2 * lw;
+        const int32_t t = imax(0, MAX_ONE - (int)((int64_t)(from_mid < 0 ? -from_mid : from_mid) * MAX_ONE / (2 * lw)));
+        rgb_t c;
+        int32_t *ch[3] = {&c.r, &c.g, &c.b};
+        for (int k = 0, sh = 16; k < 3; k++, sh -= 8) {
+            const int32_t b = (int32_t)(base >> sh & 255), p = (int32_t)(peak >> sh & 255);
+            *ch[k] = b + ((p - b) * t + MAX_ONE / 2) / MAX_ONE;
+        }
+        for (int y = 0; y < RAIL_H; y++) px[y * w + x - x0] = t ? dither(c, x, y) : ht_rgb(base);   // the rail's own
+    }
+    const ht_pro_bitmap_t b = {px, NULL, (uint16_t)w, RAIL_H, s_frame, NULL};
+    ht_pro_image(s, x0, 0, &b);
+}
+
 // What the agent draws over `rect` up to its run i, that run as `last`: rasterised as a patch in that run's place.
 // Returns the runs out.
 static int patch(int i, const ht_run_t *last, ht_rect_t rect, int out)

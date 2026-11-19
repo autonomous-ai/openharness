@@ -212,11 +212,12 @@ typedef struct {
 #define MAX_ONE 4096                // a look's whole, as its parts count (Q12)
 #define MAX_ROW_MS 420u             // the row's move (V3 kRowMove), its carry, its way back and a settle
 #define MAX_ROW_FRAME_MS 16u        // a frame while anything in the row moves
+#define MAX_LOOP_FRAME_MS 33u       // a frame while only what loops by the clock moves (V3's Motion): its pulses and sweeps
 #define MAX_ROW_HITS 8              // the cells and slivers on the glass at once, cut by its ends
 #define MAX_TRACK 8                 // the finger's last moves, for its speed as it lets go
-// The curves V3 eases by: kRowEase Cubic(.2, .8, .2, 1), Curves.ease, and the open agent's fade in, Interval(140 /
-// 440, 1, ease).
-typedef enum { MAX_EASE_ROW, MAX_EASE, MAX_EASE_LATE } max_curve_t;
+// The curves V3 eases by: kRowEase Cubic(.2, .8, .2, 1), Curves.ease, the open agent's fade in, Interval(140 / 440,
+// 1, ease), and the pulses' Curves.easeInOut, Cubic(.42, 0, .58, 1).
+typedef enum { MAX_EASE_ROW, MAX_EASE, MAX_EASE_LATE, MAX_EASE_IN_OUT } max_curve_t;
 // One value easing from `from` at `at` to `to` over `ms`, as an implicit animation: a new end starts again from where
 // it is. At rest when ms is 0 or it has run.
 typedef struct {
@@ -248,7 +249,13 @@ typedef struct {
     int16_t track_x[MAX_TRACK];
     uint32_t track_t[MAX_TRACK];
     uint8_t track_n;
+    max_tween_t fade_l, fade_r;     // the row's faded ends (MAX_ONE shown): while more of it lies that way
 } max_row_t;
+// An overlay (the toast, the done note, the notice) as the last render drew it: up, or fading out from when it went.
+typedef struct {
+    bool up;
+    max_tween_t out;
+} max_fade_t;
 
 typedef struct {
     bool link;
@@ -272,7 +279,7 @@ typedef struct {
     char done_id[ID_MAX];            // the last finished turn's agent, its note shown from done_from (max_done_shown)
     uint32_t done_from;
     char notice[MAX_NOTICE_BYTES];
-    uint32_t notice_until;
+    uint32_t notice_from, notice_until;   // it came at notice_from (it fades in from there)
     max_talk_t talk;
     char talk_id[ID_MAX];            // the agent the recording is for (set by the tap that starts it; "": Say's)
     int update_pct;                  // -1: no update
@@ -308,6 +315,15 @@ typedef struct {
     bool wall_known;                 // the wall clock (max_ui_wall): Ambient's clock and date, else no clock
     uint8_t wall_hour, wall_min, wall_wday, wall_mday, wall_mon;   // local time; wday 0 = Sunday, mon 0 = January
     max_row_t row;                   // App Detail's row in motion (max_ui_row.c)
+    // The render's own clocks (max_ui_view.c): what loops, from when the page came up (page_from, the page drawn as
+    // page_face: the agent page is App Detail's); the band's colours easing between talking and not for band_id; the
+    // overlays fading.
+    bool page_up;
+    uint8_t page_face;
+    uint32_t page_from;
+    max_tween_t band;
+    char band_id[ID_MAX];
+    max_fade_t toast_fade, done_fade, notice_fade;
     // What the last render drew, for the finger and the clock.
     max_box_t cell_box[MAX_ROW_HITS];   // the row's cells, or the slivers beside the open agent, as on the glass
     char cell_id[MAX_ROW_HITS][ID_MAX];
@@ -435,6 +451,9 @@ uint8_t max_caps_of(const char *letters);
 int32_t max_ease(max_curve_t curve, int32_t t);
 int32_t max_tween_at(const max_tween_t *, uint32_t now_ms);
 bool max_tween_done(const max_tween_t *, uint32_t now_ms);
+// At rest at v; and an implicit animation to `to`: a new end starts it again from where it is, the same end runs on.
+void max_tween_rest(max_tween_t *, int32_t v);
+void max_tween_to(max_tween_t *, int32_t to, uint32_t ms, max_curve_t curve, uint32_t now_ms);
 // One agent of the row as it lies on the glass at now_ms: x from the glass's left, its width.
 typedef struct {
     const max_agent_t *a;

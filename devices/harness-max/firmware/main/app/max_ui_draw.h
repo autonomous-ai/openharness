@@ -85,8 +85,9 @@ void max_box(ht_scene_t *s, int x, int y, int w, int h, int r, int line, unsigne
 void max_round(ht_scene_t *s, int cx, int cy, int d);
 // A line from (x0, y0) to (x1, y1), `w` px thick, in sixteenths of a px: two triangles that share their seam.
 void max_stroke16(ht_scene_t *s, int x0, int y0, int x1, int y1, int w, unsigned rgb);
-// pct % of colour a over colour b (0xRRGGBB), as the Pro's ph_mix.
+// pct % of colour a over colour b (0xRRGGBB), as the Pro's ph_mix; and q of MAX_ONE of a over b, rounded.
 unsigned max_mix(unsigned a, unsigned b, unsigned pct);
+unsigned max_mix_q(unsigned a, unsigned b, int32_t q);
 // Remember a hit area the finger can use (dropped past MAX_HITS).
 void max_hit(int x, int y, int w, int h, max_hit_kind_t kind, int arg);
 
@@ -111,11 +112,25 @@ unsigned max_rail_ink(const max_agent_t *);
 // Its chip's and glow's: the rail's, a resting agent's a quiet grey.
 unsigned max_chip_ink(const max_agent_t *);
 // The state chip (App Detail): a pill in the chip's colour (.15 over the ground, its rim .4), its dot and the status
-// word, at most max_w wide, from x and centred on cy; `small` beside the open agent's name. Returns its width.
-int max_chip(ht_scene_t *s, int x, int cy, const max_agent_t *a, bool small, int max_w);
+// word, at most max_w wide, from x and centred on cy; `small` beside the open agent's name. As V3's chip loops: a
+// working agent's dot fades to .25 and back every 1.2 s, an asking agent's chip to .35 every 1 s (toward the colour
+// max_tint fades toward). Returns its width.
+int max_chip(ht_scene_t *s, int x, int cy, const max_agent_t *a, bool small, int max_w, uint32_t now_ms);
 int max_chip_w(const max_agent_t *a, bool small, int max_w);
 // An Inbox notice's or Attention's colour by why it came.
 unsigned max_kind_ink(max_attn_t kind);
+// Its glow from the top of its column: a waiting agent's .18, a failure's .14, any other's .08, none at rest, in %;
+// and the glow's top over `under` as drawn at now_ms, a waiting one's breathing .18 to .05 and back every 1 s unless
+// `still`.
+unsigned max_glow_pct(const max_agent_t *a);
+unsigned max_glow_top(const max_agent_t *a, unsigned under, uint32_t now_ms, bool still);
+// Its status rail along the top of x..x + w over `under` (what lies under the rail's top row), as V3's rail loops
+// unless `still`: a waiting agent's pulses to .35 and back every 1 s, a working agent's has a white light 55 % of the
+// rail long sweeping along it every 1.5 s.
+void max_rail(ht_scene_t *s, int x, int w, const max_agent_t *a, unsigned under, uint32_t now_ms, bool still);
+// The talk band's live dot's glow (V3's MaskFilter.blur(BlurStyle.outer, 7)), outside a dot LIVE_DOT across from x
+// centred on cy, `o` of MAX_ONE there (and as much of what max_tint keeps).
+void max_voice_halo(ht_scene_t *s, int x, int cy, int32_t o);
 
 // ---- buttons ----
 typedef enum { STYLE_PLAIN, STYLE_CHOSEN, STYLE_PRIMARY, STYLE_REJECT, STYLE_GHOST, STYLE_OFF } max_style_t;
@@ -139,6 +154,12 @@ int max_pet_h(const char *engine, pod_scene_t scene, int half, int max_h, bool s
 uint32_t max_pet_next_ms(const char *engine, pod_scene_t scene, uint32_t now_ms);
 // Something drawn moves on by the clock alone in `ms`: the render task wakes for it (max_motion_ms).
 void max_motion(uint32_t now_ms, uint32_t ms);
+// What loops by the clock (V3's Motion): where a loop of period_ms is at now_ms, Q16 of the way round from when the
+// page came up; the render task wakes MAX_LOOP_FRAME_MS on for its next frame.
+int32_t max_loop(uint32_t now_ms, uint32_t period_ms);
+// V3's keyframes(p, from, to, curve): `from` to `to` over the loop's first half, back over its second, in from's units.
+int32_t max_keyframes(int32_t p, int32_t from, int32_t to, max_curve_t curve);
+#define MAX_PULSE_LOW (MAX_ONE * 35 / 100)   // V3's pulse: down to .35 of the way and back
 
 // ---- App Detail's row off the glass (max_ui_layer.c) ----
 // Paints one agent of the row from the glass's x.
@@ -157,6 +178,10 @@ void max_layer_pet(ht_scene_t *s, int from, unsigned ground, int dim, unsigned k
 // way (max_dim) and its pets by max_layer_pet, cut to the glass's [l, r) as its own layer would be cut, and its rail
 // and its sides blurred as the layer's blur would blur them.
 void max_layer_cut(ht_scene_t *s, int from, int x, int w, int l, int r, int dim);
+// A light across a rail from the glass's lx, lw wide: `base` at its ends, `peak` in its middle, cut to the glass's
+// [l, r) and RAIL_H down from the top, as one of this frame's images (dithered: a ramp this long bands in RGB565).
+// Left out when the frame has no room for it.
+void max_layer_light(ht_scene_t *s, int lx, int lw, int l, int r, unsigned base, unsigned peak);
 // How many layers and pets were rasterised so far (a test's count of what was kept).
 unsigned max_layer_painted(void);
 // Every kept layer and pet image dropped, the pets' pixels scribbled over (a test's fresh start).

@@ -11,6 +11,7 @@
 #include "max_ui_draw.h"
 #include "max_ui_icons.h"
 #include "max_ui_motion.h"
+#include "pod/pod_mem.h"   // EXT_RAM_BSS_ATTR: what a going overlay said, the halo's image
 
 static const char ELLIPSIS[] = "\xe2\x80\xa6";   // the Inter faces draw it (gen_fonts.py CONSOLE_EXTRA)
 
@@ -235,6 +236,14 @@ unsigned max_mix(unsigned a, unsigned b, unsigned pct)
     for (int sh = 0; sh <= 16; sh += 8) out |= ((((a >> sh) & 0xff) * pct + ((b >> sh) & 0xff) * (100 - pct)) / 100) << sh;
     return out;
 }
+unsigned max_mix_q(unsigned a, unsigned b, int32_t q)
+{
+    const unsigned k = q < 0 ? 0 : q > MAX_ONE ? MAX_ONE : (unsigned)q;
+    unsigned out = 0;
+    for (int sh = 0; sh <= 16; sh += 8)
+        out |= ((((a >> sh) & 0xff) * k + ((b >> sh) & 0xff) * (MAX_ONE - k) + MAX_ONE / 2) >> 12) << sh;
+    return out;
+}
 static unsigned s_toward, s_keep = 256;
 static int s_dim;
 static max_dim_t s_dim_m;
@@ -362,6 +371,48 @@ unsigned max_rail_ink(const max_agent_t *a)
 }
 unsigned max_chip_ink(const max_agent_t *a) { return a->state == MAX_IDLE ? CHIP_IDLE : max_rail_ink(a); }
 
+unsigned max_glow_pct(const max_agent_t *a)
+{
+    return a->state == MAX_ASKING ? 18 : a->state == MAX_FAILED ? 14 : a->state == MAX_IDLE ? 0 : 8;
+}
+unsigned max_glow_top(const max_agent_t *a, unsigned under, uint32_t now_ms, bool still)
+{
+    const unsigned ink = max_chip_ink(a);
+    if (still || a->state != MAX_ASKING) return max_mix(ink, under, max_glow_pct(a));
+    // In tenths of a percent, rounded down as max_mix rounds: the loop's start is the glow at rest.
+    const unsigned pm = (unsigned)max_keyframes(max_loop(now_ms, 1000), 180, 50, MAX_EASE_IN_OUT);
+    unsigned out = 0;
+    for (int sh = 0; sh <= 16; sh += 8)
+        out |= ((((ink >> sh) & 0xff) * pm + ((under >> sh) & 0xff) * (1000 - pm)) / 1000) << sh;
+    return out;
+}
+
+// V3's overlayWhite: each channel under half doubled, the rest white (the sweep's peak over the rail's colour).
+static unsigned overlay_white(unsigned c)
+{
+    unsigned out = 0;
+    for (int sh = 0; sh <= 16; sh += 8) {
+        const unsigned v = (c >> sh) & 0xff;
+        out |= (v < 128 ? 2 * v : 255) << sh;
+    }
+    return out;
+}
+void max_rail(ht_scene_t *s, int x, int w, const max_agent_t *a, unsigned under, uint32_t now_ms, bool still)
+{
+    const unsigned c = max_rail_ink(a);
+    if (!still && a->state == MAX_ASKING) {
+        const int32_t o = max_keyframes(max_loop(now_ms, 1000), MAX_ONE, MAX_PULSE_LOW, MAX_EASE_IN_OUT);
+        ht_pro_rect(s, x, 0, w, RAIL_H, 0, C(max_mix_q(c, under, o)));
+        return;
+    }
+    ht_pro_rect(s, x, 0, w, RAIL_H, 0, C(c));
+    if (still || a->state != MAX_WORKING) return;
+    // The light's start at sweep(p) = -1 + 2.9 p of its lengths along the rail: off it at the loop's start and end.
+    const int32_t p = max_loop(now_ms, 1500);
+    const int lw = w * 55 / 100, lx = x + (int)(((int64_t)p * 29 / 10 - 65536) * lw >> 16);
+    max_layer_light(s, lx, lw, x, x + w, max_tinted(c), max_tinted(overlay_white(c)));
+}
+
 // ---- the state chip ----
 
 enum { CHIP_DOT = DX(8), CHIP_GAP = DX(8) };
@@ -371,15 +422,22 @@ int max_chip_w(const max_agent_t *a, bool small, int max_w)
     const int w = 2 * chip_pad(small) + CHIP_DOT + CHIP_GAP + ht_pro_width(&ph_sb_22, max_status_word(a));
     return w < max_w ? w : max_w;
 }
-int max_chip(ht_scene_t *s, int x, int cy, const max_agent_t *a, bool small, int max_w)
+int max_chip(ht_scene_t *s, int x, int cy, const max_agent_t *a, bool small, int max_w, uint32_t now_ms)
 {
-    const unsigned c = max_chip_ink(a);
+    const unsigned c = max_chip_ink(a), fill = max_mix(c, GROUND, 15);
     const unsigned words = a->state == MAX_IDLE ? REST : a->state == MAX_FAILED ? FAIL : c;
     const int h = small ? DY(30) : DY(34), pad = chip_pad(small), w = max_chip_w(a, small, max_w);
-    max_box(s, x, cy - h / 2, w, h, h / 2, 1, max_mix(c, GROUND, 40), max_mix(c, GROUND, 15));
-    max_dot(s, x + pad, cy, CHIP_DOT, c);
+    const unsigned toward = s_toward, keep = s_keep;
+    if (a->state == MAX_ASKING)   // the whole chip by its opacity, over what the tint fades toward
+        max_tint(toward, keep * (unsigned)max_keyframes(max_loop(now_ms, 1000), MAX_ONE, MAX_PULSE_LOW,
+                                                        MAX_EASE_IN_OUT) / MAX_ONE);
+    max_box(s, x, cy - h / 2, w, h, h / 2, 1, max_mix(c, GROUND, 40), fill);
+    const int32_t lit = a->state == MAX_WORKING
+                            ? max_keyframes(max_loop(now_ms, 1200), MAX_ONE, MAX_ONE / 4, MAX_EASE_IN_OUT) : MAX_ONE;
+    max_dot(s, x + pad, cy, CHIP_DOT, max_mix_q(c, fill, lit));   // over the pill
     const int tx = x + pad + CHIP_DOT + CHIP_GAP;
     max_text(s, tx, cy, x + w - pad - tx, &ph_sb_22, words, max_status_word(a));
+    max_tint(toward, keep);
     return w;
 }
 
@@ -437,10 +495,74 @@ uint32_t max_motion_ms(uint32_t now_ms)
     const int32_t left = (int32_t)(s_due - now_ms);
     return left > 0 ? (uint32_t)left : 0;
 }
+int32_t max_loop(uint32_t now_ms, uint32_t period_ms)
+{
+    max_motion(now_ms, MAX_LOOP_FRAME_MS);
+    return (int32_t)((uint64_t)((now_ms - max_m.page_from) % period_ms) * 65536u / period_ms);
+}
+int32_t max_keyframes(int32_t p, int32_t from, int32_t to, max_curve_t curve)
+{
+    const int32_t half = 65536 / 2;
+    if (p < half) return from + (int32_t)(((int64_t)(to - from) * max_ease(curve, 2 * p) + half) >> 16);
+    return to + (int32_t)(((int64_t)(from - to) * max_ease(curve, 2 * (p - half)) + half) >> 16);
+}
+
+// The halo's alpha (of 255) by the distance from the dot's middle in quarter px, from HALO_FROM (the dot's edge,
+// 7.5 px) on: a disc 15 px across blurred by a Gaussian of sigma 7 * 1.297 px, worked out offline. Past it, nothing.
+enum { HALO_FROM = 30, HALO_K = 31, HALO_N = 2 * HALO_K + 1 };
+static const uint8_t HALO[] = {
+    55, 54, 53, 52, 51, 50, 49, 48, 47, 45, 44, 43, 42, 41, 40, 39, 38, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26,
+    25, 24, 23, 22, 22, 21, 20, 19, 18, 17, 17, 16, 15, 15, 14, 13, 13, 12, 12, 11, 10, 10, 9, 9, 8, 8, 8, 7, 7,
+    6, 6, 6, 5, 5, 5, 5, 4, 4, 4, 4, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
+void max_voice_halo(ht_scene_t *s, int x, int cy, int32_t o)
+{
+    static EXT_RAM_BSS_ATTR uint16_t px[HALO_N * HALO_N];
+    static EXT_RAM_BSS_ATTR uint8_t alpha[HALO_N * HALO_N];
+    static bool made;
+    if (!made) {
+        for (int i = 0; i < HALO_N * HALO_N; i++) {
+            const int dx = i % HALO_N - HALO_K, dy = i / HALO_N - HALO_K;
+            const int q = (int)ht_pro_isqrt((unsigned)(16 * (dx * dx + dy * dy))) - HALO_FROM;
+            px[i] = ht_rgb(VOICE);
+            alpha[i] = q >= 0 && q < (int)sizeof HALO ? HALO[q] : 0;
+        }
+        made = true;
+    }
+    const unsigned opacity = (unsigned)(o < 0 ? 0 : o > MAX_ONE ? MAX_ONE : o) * s_keep / 256 * 255 / MAX_ONE;
+    const ht_pro_bitmap_t b = {px, alpha, HALO_N, HALO_N, 1, NULL};
+    const int left = x + DX(12) / 2 - HALO_K, top = cy - HALO_K;   // on the live dot's middle pixel (max_dot)
+    if (opacity >= 255) ht_pro_image(s, left, top, &b);
+    else if (opacity) ht_pro_image_faded(s, left, top, &b, opacity);
+}
 
 // ---- over the page: the toast of a question that came while a person talks, and the notice pill ----
 
-enum { TOAST_W = DX(760), TOAST_H = DY(52), TOAST_Y = DY(6), PILL_PAD = DX(22), PILL_DOT = DY(8) };
+enum {
+    TOAST_W = DX(760), TOAST_H = DY(52), TOAST_Y = DY(6), PILL_PAD = DX(22), PILL_DOT = DY(8),
+    OVERLAY_MS = 300, RISE = DY(20), SLIDE = DX(24),   // V3's toast rises in, its done note slides in, both fading
+};
+
+// How much of an overlay shows at now_ms (MAX_ONE whole): up, coming in over OVERLAY_MS from when it came; gone, going
+// the same way from where it was then (Curves.ease). Frames while it moves.
+static int32_t overlay(max_fade_t *f, bool up, uint32_t from, uint32_t now_ms)
+{
+    int32_t v;
+    if (up) {
+        const int32_t gone = (int32_t)(now_ms - from);
+        v = gone >= OVERLAY_MS ? MAX_ONE : gone <= 0 ? 0
+          : (int32_t)(((int64_t)max_ease(MAX_EASE, gone * 65536 / OVERLAY_MS) * MAX_ONE + 32768) >> 16);
+        f->up = true;
+        max_tween_rest(&f->out, v);   // where it goes out from
+    } else {
+        if (f->up) f->out = (max_tween_t){f->out.to, 0, now_ms, OVERLAY_MS, MAX_EASE};
+        f->up = false;
+        v = max_tween_at(&f->out, now_ms);
+    }
+    if (up ? v < MAX_ONE : v > 0) max_motion(now_ms, MAX_ROW_FRAME_MS);
+    return v;
+}
+// The overlay's colours `v` of MAX_ONE their own, the rest the ground's.
+static void fade_by(int32_t v) { max_tint(GROUND, (unsigned)v * 256 / MAX_ONE); }
 
 // The toast's place: top centre; while New Harness is up, in its title row left of Close, so it covers none of the
 // form's buttons.
@@ -452,9 +574,8 @@ static max_box_t toast_box(bool form)
 
 // Who needs the person, in its kind's colour, and what for, on one row: its question, or its turn's summary or failure.
 // The toast holds only while its agent still is what it announced (max_toast_shown), so its state says which.
-static void toast(ht_scene_t *s, max_box_t t)
+static void toast(ht_scene_t *s, max_box_t t, const max_agent_t *a)
 {
-    const max_agent_t *a = max_find(max_m.toast_id);
     const max_attn_t kind = a->state == MAX_DONE ? MAX_ATTN_DONE : a->state == MAX_FAILED ? MAX_ATTN_FAIL : MAX_ATTN_ASK;
     const unsigned ink = max_kind_ink(kind);
     max_box(s, t.x, t.y, t.w, t.h, t.h / 2, 1, RIM, CARD);
@@ -468,16 +589,17 @@ static void toast(ht_scene_t *s, max_box_t t)
              kind == MAX_ATTN_ASK ? a->question : a->note);
 }
 
-// The notice at the bottom centre after a green dot; while New Harness is up, in its title row left of the toast's place.
-static void notice(ht_scene_t *s, bool form, max_box_t toast_at, bool toasting)
+// The notice at the bottom centre after a green dot, `rise` px under its place; while New Harness is up, in its title
+// row left of the toast's place.
+static void notice(ht_scene_t *s, const char *text, bool form, max_box_t toast_at, bool toasting, int rise)
 {
     const ht_pro_font_t *f = &ph_rg_24;
     char row[ROW_BYTES];
-    max_cut(row, max_m.notice, f, DX(900), false);
+    max_cut(row, text, f, DX(900), false);
     const int tw = ht_pro_width(f, row), w = 2 * PILL_PAD + PILL_DOT + DX(10) + tw, h = NOTICE_H;
     const int right = toasting ? toast_at.x - 12 : FORM_CLOSE_X - 16;
     const int x = form ? right - w : (HT_WIDTH - w) / 2;
-    const int y = form ? FORM_HEAD_Y + (MAX_BUTTON_H - h) / 2 : HT_HEIGHT - DY(22) - h;
+    const int y = (form ? FORM_HEAD_Y + (MAX_BUTTON_H - h) / 2 : HT_HEIGHT - DY(22) - h) + rise;
     max_box(s, x, y, w, h, h / 2, 1, RIM, CARD);
     max_dot(s, x + PILL_PAD, y + h / 2, PILL_DOT, DONE);
     ht_pro_text(s, x + PILL_PAD + PILL_DOT + DX(10), max_top_of(f, y + h / 2), tw, f, C(FG), row);
@@ -520,14 +642,15 @@ static done_t done_layout(const max_agent_t *a)
 }
 
 // The pet, still, then "name is done · what it said" on one row, the name in the done green, on a card in the toast's
-// colours.
-static void done_note(ht_scene_t *s, const max_agent_t *a, const done_t *d)
+// colours, `slide` px right of its place; the pet fades by its alpha as the rest by its colours.
+static void done_note(ht_scene_t *s, const max_agent_t *a, const done_t *d, int slide)
 {
-    const max_box_t c = d->card;
+    const max_box_t c = {(int16_t)(d->card.x + slide), d->card.y, d->card.w, d->card.h};
     max_box(s, c.x, c.y, c.w, c.h, DONE_H / 3, 1, RIM, CARD);
-    const int cy = c.y + c.h / 2;
+    const int cy = c.y + c.h / 2, from = s->count;
     max_pet(s, a->engine, POD_SCENE_REST, c.x + DONE_PAD_L + DONE_PET_W / 2, cy + DONE_PET_H / 2, DONE_PET_W / 2,
             DONE_PET_H, CARD, 0, true);
+    max_layer_pet(s, from, CARD, 0, s_keep);
     int x = c.x + DONE_PAD_L + DONE_PET_W + DONE_GAP;
     x += max_text(s, x, cy, d->name_w, &ph_sb_22, DONE, a->name);
     x += max_text(s, x, cy, c.x + c.w - x, &ph_sb_22, DIM, DONE_IS);
@@ -568,6 +691,12 @@ static void page(ht_scene_t *s, uint32_t now_ms)
 
 void max_ui_render(ht_scene_t *s, uint32_t now_ms)
 {
+    // What loops runs from when this page came up (V3's Motion comes with its page); the agent page is App Detail's.
+    const uint8_t face = max_m.update_pct >= 0 ? 0xFF : max_form_open() ? 0xFE
+                       : max_m.view == MAX_VIEW_AGENT ? MAX_VIEW_OVERVIEW : (uint8_t)max_m.view;
+    if (!max_m.page_up || face != max_m.page_face) max_m.page_from = now_ms;
+    max_m.page_up = true;
+    max_m.page_face = face;
     s->background = C(GROUND);
     max_m.cell_hits = 0;
     max_m.hit_count = 0;
@@ -582,14 +711,26 @@ void max_ui_render(ht_scene_t *s, uint32_t now_ms)
     if (max_m.update_pct >= 0) {
         update_screen(s);
     } else {
+        // What each overlay says, kept while it goes: its agent may be gone by then.
+        static EXT_RAM_BSS_ATTR max_agent_t toast_a, done_a;
+        static EXT_RAM_BSS_ATTR char said[MAX_NOTICE_BYTES];
         const bool form = max_form_open(), toasting = max_m.link && max_toast_shown(now_ms);
         const max_box_t t = toast_box(form);
-        if (toasting) max_hit(t.x, t.y, t.w, t.h, MAX_HIT_TOAST, 0);   // first: it lies over the page's own
+        if (toasting) {
+            max_hit(t.x, t.y, t.w, t.h, MAX_HIT_TOAST, 0);   // first: it lies over the page's own
+            toast_a = *max_find(max_m.toast_id);
+        }
         // The done note, over any page but the form (whose buttons it would cover; its notice waits in Inbox).
         const max_agent_t *done = max_m.link && !form && max_done_shown(now_ms) ? max_find(max_m.done_id) : NULL;
+        if (done) done_a = *done;
+        const bool noticing = max_notice_shown(now_ms);
+        if (noticing) memcpy(said, max_m.notice, sizeof said);
+        const int32_t toast_v = overlay(&max_m.toast_fade, toasting, max_m.toast_from, now_ms);
+        const int32_t done_v = overlay(&max_m.done_fade, done != NULL, max_m.done_from, now_ms);
+        const int32_t notice_v = overlay(&max_m.notice_fade, noticing, max_m.notice_from, now_ms);
         done_t d = {.name_w = 0};
+        if (done_v) d = done_layout(&done_a);
         if (done) {
-            d = done_layout(done);
             const int hx = d.card.x - DONE_REACH, hy = d.card.y - DONE_REACH;
             const int hw = d.card.w + 2 * DONE_REACH, hh = d.card.h + 2 * DONE_REACH;
             max_hit(hx, hy, hx + hw > HT_WIDTH ? HT_WIDTH - hx : hw, hy + hh > HT_HEIGHT ? HT_HEIGHT - hy : hh,
@@ -597,9 +738,19 @@ void max_ui_render(ht_scene_t *s, uint32_t now_ms)
         }
         if (form) max_draw_form(s);
         else page(s, now_ms);
-        if (toasting) toast(s, t);
-        if (done) done_note(s, done, &d);
-        if (max_notice_shown(now_ms)) notice(s, form, t, toasting);
+        if (toast_v) {
+            fade_by(toast_v);
+            toast(s, (max_box_t){t.x, (int16_t)(t.y + RISE * (MAX_ONE - toast_v) / MAX_ONE), t.w, t.h}, &toast_a);
+        }
+        if (done_v && !form) {
+            fade_by(done_v);
+            done_note(s, &done_a, &d, SLIDE * (MAX_ONE - done_v) / MAX_ONE);
+        }
+        if (notice_v) {
+            fade_by(notice_v);
+            notice(s, said, form, t, toast_v > 0, RISE * (MAX_ONE - notice_v) / MAX_ONE);
+        }
+        max_tint(0, 256);
     }
     max_m.drawn_key = max_time_key(now_ms);
 }

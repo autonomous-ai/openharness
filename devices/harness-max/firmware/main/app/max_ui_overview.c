@@ -2,7 +2,8 @@
 // and name, the grid glyph to Apps, how many agents, and a dot an agent while the row scrolls), the row of agents by
 // need three cells to the glass, and the bell column (the round bell, the yellow badge of unread notices). A cell: a
 // status rail, a faint glow of its chip's colour from the top, its pet holding one frame, its name, the line of its
-// task and its state chip. An agent open (the agent page) lies across the row, the agents beside it dimmed and blurred
+// task and its state chip; the rail, the glow and the chip loop as V3's do. The row's ends fade to black while more of
+// it lies that way. An agent open (the agent page) lies across the row, the agents beside it dimmed and blurred
 // slivers: its pet smaller and lower, its words gone. The row moves as V3's (max_ui_row.c): an agent opening widens
 // over its neighbours as they narrow, its face fading and its panel coming in, and the row follows the finger. An
 // agent between looks is drawn on the glass as a cell is, dimmed by its colours and cut to its window (max_ui_layer.c).
@@ -20,6 +21,7 @@ enum {
     SLIVER_FOOT = DY(188), SLIVER_HALF = DX(45), SLIVER_PET_H = DY(65),   // the cell's pet at .6, 52 px lower
     SLIVER_DX = (SLIVER_W - CELL_W) / 2,                                  // the face in a sliver's middle
     GLOW_H = DY(138), BADGE = DY(24), DOT = DX(9), DOT_GAP = DX(7),
+    FADE_W = DX(64), FADE_H = HT_HEIGHT - RAIL_H,   // the row's faded ends, under the rails
 };
 
 static int imin(int a, int b) { return a < b ? a : b; }
@@ -85,11 +87,6 @@ static void bell_column(ht_scene_t *s)
     max_hit(x, 0, BELL_W, HT_HEIGHT, MAX_HIT_BELL, 0);
 }
 
-// The glow's strength: a waiting agent's .18, a failure's .14, any other's .08; none at rest.
-static unsigned glow_pct(const max_agent_t *a)
-{
-    return a->state == MAX_ASKING ? 18 : a->state == MAX_FAILED ? 14 : a->state == MAX_IDLE ? 0 : 8;
-}
 // The glow's colour at height y: pct % of ink at the top, nothing gh px down, over `under`.
 static unsigned glow_at(unsigned ink, unsigned pct, unsigned under, int gh, int y)
 {
@@ -98,12 +95,13 @@ static unsigned glow_at(unsigned ink, unsigned pct, unsigned under, int gh, int 
 // a over b, `t` of MAX_ONE of the way to a.
 static unsigned mix_q(unsigned a, unsigned b, int t) { return max_mix(a, b, (unsigned)(t * 100 / MAX_ONE)); }
 
-// A cell's ground: the glow of its chip's colour from the top, its rail, its right line.
-static void cell_ground(ht_scene_t *s, int x, int w, const max_agent_t *a)
+// A cell's ground: the glow of its chip's colour from the top, its rail, its right line; `still` holding them as at
+// the loops' start.
+static void cell_ground(ht_scene_t *s, int x, int w, const max_agent_t *a, uint32_t now_ms, bool still)
 {
-    const unsigned pct = glow_pct(a), ink = max_chip_ink(a);
-    if (pct) pod_grad_aa_dither(s, x, 0, w, GLOW_H, 0, C(max_mix(ink, GROUND, pct)), C(GROUND));
-    rail(s, x, w, RAIL_H, max_rail_ink(a));
+    const unsigned pct = max_glow_pct(a), top = pct ? max_glow_top(a, GROUND, now_ms, still) : GROUND;
+    if (pct) pod_grad_aa_dither(s, x, 0, w, GLOW_H, 0, C(top), C(GROUND));
+    max_rail(s, x, w, a, top, now_ms, still);
     right_line(s, x, w);
 }
 
@@ -120,9 +118,10 @@ static void centred_rows(ht_scene_t *s, int cx, int y, int w, int rows, unsigned
 typedef struct { unsigned ink, pct, under; int gh; } under_t;
 
 // A cell's face, a cell wide from fx (V3 _Face): its pet holding one frame, `sl` of the way to a sliver's (.6 the size,
-// 52 px lower), its name, the line of its task and its chip; the pet `pet` (by its alpha) and the words `words` (by
-// their colours) of MAX_ONE there over what lies under them, all dimmed as C() dims (max_dim).
-static void face(ht_scene_t *s, int fx, const max_agent_t *a, int sl, int pet, int words, const under_t *u)
+// 52 px lower), its name, the line of its task and its chip as at now_ms; the pet `pet` (by its alpha) and the words
+// `words` (by their colours) of MAX_ONE there over what lies under them, all dimmed as C() dims (max_dim).
+static void face(ht_scene_t *s, int fx, const max_agent_t *a, int sl, int pet, int words, const under_t *u,
+                 uint32_t now_ms)
 {
     const int cx = fx + CELL_W / 2, inner = CELL_W - 2 * CELL_PAD;
     const int half = PET_HALF - (PET_HALF - SLIVER_HALF) * sl / MAX_ONE;
@@ -144,26 +143,26 @@ static void face(ht_scene_t *s, int fx, const max_agent_t *a, int sl, int pet, i
     centred_rows(s, cx, TASK_Y, inner < TASK_W ? inner : TASK_W, 2, task[0] ? DIM : FAINT,
                  task[0] ? task : "No task yet");
     const int chip = max_chip_w(a, false, inner);
-    max_chip(s, cx - chip / 2, CHIP_CY, a, false, inner);
+    max_chip(s, cx - chip / 2, CHIP_CY, a, false, inner, now_ms);
     max_tint(0, 256);
 }
 
 // One agent's cell while none is open: its pet holding one frame, its name, the line of its task, its chip.
-static void cell(ht_scene_t *s, int x, const max_agent_t *a)
+static void cell(ht_scene_t *s, int x, const max_agent_t *a, uint32_t now_ms)
 {
-    cell_ground(s, x, CELL_W, a);
-    const under_t u = {max_chip_ink(a), glow_pct(a), GROUND, GLOW_H};
-    face(s, x, a, 0, MAX_ONE, MAX_ONE, &u);
+    cell_ground(s, x, CELL_W, a, now_ms, false);
+    const under_t u = {max_chip_ink(a), max_glow_pct(a), GROUND, GLOW_H};
+    face(s, x, a, 0, MAX_ONE, MAX_ONE, &u, now_ms);
 }
 
 // A sliver at rest beside the open agent, before its dimming: its ground, its face in its middle, the pet smaller and
-// lower, the words gone.
+// lower, the words gone. Kept as a layer while it paints the same, so its rail and glow hold still.
 static void sliver(ht_scene_t *s, int x, const void *arg)
 {
     const max_agent_t *a = arg;
-    cell_ground(s, x, SLIVER_W, a);
-    const under_t u = {max_chip_ink(a), glow_pct(a), GROUND, GLOW_H};
-    face(s, x + SLIVER_DX, a, MAX_ONE, MAX_ONE, 0, &u);
+    cell_ground(s, x, SLIVER_W, a, 0, true);
+    const under_t u = {max_chip_ink(a), max_glow_pct(a), GROUND, GLOW_H};
+    face(s, x + SLIVER_DX, a, MAX_ONE, MAX_ONE, 0, &u, 0);
 }
 
 // An agent of the row between looks: its parts at now (MAX_ONE whole).
@@ -172,6 +171,7 @@ typedef struct {
     int w, sl, words, face, dim, ground, panel;
     bool opening;   // its panel is on its way in
     bool cover;     // something drawn before spills over it: its ground first
+    bool still;     // its rail and glow hold still: it is cut to its window and blurred as a layer would be
     uint32_t now;
 } item_t;
 
@@ -202,17 +202,19 @@ static void paint_item(ht_scene_t *s, int x, const void *arg)
     const item_t *it = arg;
     const max_agent_t *a = it->a;
     const unsigned g = mix_q(PANEL, GROUND, it->ground);
-    const under_t u = {max_chip_ink(a), glow_pct(a), mix_q(PANEL, g, it->panel),
+    const under_t u = {max_chip_ink(a), max_glow_pct(a), mix_q(PANEL, g, it->panel),
                        GLOW_H + (PANEL_GLOW_H - GLOW_H) * it->panel / MAX_ONE};
     if (it->cover || u.under != GROUND) ht_pro_rect(s, x, 0, it->w, HT_HEIGHT, 0, C(u.under));
-    if (u.pct) pod_grad_aa_dither(s, x, 0, it->w, u.gh, 0, C(max_mix(u.ink, u.under, u.pct)), C(u.under));
-    rail(s, x, it->w, RAIL_H, max_rail_ink(a));
+    const unsigned top = u.pct ? max_glow_top(a, u.under, it->now, it->still) : u.under;
+    if (u.pct) pod_grad_aa_dither(s, x, 0, it->w, u.gh, 0, C(top), C(u.under));
+    max_rail(s, x, it->w, a, top, it->now, it->still);
     right_line(s, x, it->w);
     const int seen = it->face * (MAX_ONE - it->panel) / MAX_ONE, from = s->count;
     const unsigned keep = (unsigned)it->panel * 256 / MAX_ONE;
     for (int pass = 0, mid = from; pass < 2; pass++) {   // the one going first
         if ((pass == 0) == it->opening) {
-            if (seen) face(s, x + SLIVER_DX * it->sl / MAX_ONE, a, it->sl, seen, it->words * seen / MAX_ONE, &u);
+            if (seen)
+                face(s, x + SLIVER_DX * it->sl / MAX_ONE, a, it->sl, seen, it->words * seen / MAX_ONE, &u, it->now);
         } else if (it->panel) {
             max_agent_body(s, a, x, OPEN_W, keep, u.under, u.gh, it->now);
         }
@@ -265,12 +267,36 @@ static item_t item_of(const max_place_t *p, uint32_t now_ms)
     const max_look_t *l = p->look;
     return (item_t){p->a, p->w, max_tween_at(&l->sl, now_ms), max_tween_at(&l->words, now_ms),
                     max_tween_at(&l->face, now_ms), max_tween_at(&l->dim, now_ms), max_tween_at(&l->ground, now_ms),
-                    max_tween_at(&l->panel, now_ms), l->panel.to == MAX_ONE, false, now_ms};
+                    max_tween_at(&l->panel, now_ms), l->panel.to == MAX_ONE, false, false, now_ms};
 }
 // How far right of x what is drawn on the glass for it reaches: the open agent's panel is laid out at its full width.
 static int reach(const item_t *it, kind_t k)
 {
     return k == AS_CELL ? CELL_W : imax(it->w, it->panel ? OPEN_W : CELL_W);
+}
+
+// The row's faded ends (V3 _Fade): black from .9 at the row's end to clear FADE_W in, from under the rails down, each
+// by its own opacity (max_row_step eases them).
+static void fades(ht_scene_t *s, uint32_t now_ms)
+{
+    static EXT_RAM_BSS_ATTR uint16_t black[FADE_W * FADE_H];   // nothing but black
+    static EXT_RAM_BSS_ATTR uint8_t alpha[2][FADE_W * FADE_H];
+    static bool made;
+    if (!made) {   // .9 of 255 at the pixel's middle, i + .5 of FADE_W from the end
+        for (int i = 0; i < FADE_W; i++) {
+            const uint8_t a = (uint8_t)((459 * (2 * FADE_W - 2 * i - 1) + 2 * FADE_W) / (4 * FADE_W));
+            for (int y = 0; y < FADE_H; y++) alpha[0][y * FADE_W + i] = alpha[1][y * FADE_W + FADE_W - 1 - i] = a;
+        }
+        made = true;
+    }
+    const int32_t on[2] = {max_tween_at(&max_m.row.fade_l, now_ms), max_tween_at(&max_m.row.fade_r, now_ms)};
+    for (int k = 0; k < 2; k++) {
+        const unsigned opacity = (unsigned)on[k] * 255 / MAX_ONE;
+        const ht_pro_bitmap_t b = {black, alpha[k], FADE_W, FADE_H, 1, NULL};
+        const int x = k ? ROW_X + ROW_W - FADE_W : ROW_X;
+        if (opacity >= 255) ht_pro_image(s, x, RAIL_H, &b);
+        else if (opacity) ht_pro_image_faded(s, x, RAIL_H, &b, opacity);
+    }
 }
 
 void max_draw_overview(ht_scene_t *s, uint32_t now_ms)
@@ -315,12 +341,13 @@ void max_draw_overview(ht_scene_t *s, uint32_t now_ms)
         }
         it.cover = p->x < drawn;
         if (it.cover && (k == AS_CELL || k == AS_OPEN)) ht_pro_rect(s, l, 0, r - l, HT_HEIGHT, 0, C(GROUND));
-        if (k == AS_CELL) cell(s, p->x, p->a);
+        if (k == AS_CELL) cell(s, p->x, p->a, now_ms);
         else if (k == AS_SLIVER) max_layer_kept(s, p->x, l, r, sliver, p->a);
         else if (k == AS_OPEN) max_draw_agent(s, p->a, p->x, OPEN_W, now_ms);
         else if (k == AS_ON_GLASS) paint_item(s, p->x, &it);
         else {
             const int from = s->count;
+            it.still = true;
             max_dim(it.dim);
             paint_item(s, p->x, &it);
             max_dim(0);
@@ -329,6 +356,7 @@ void max_draw_overview(ht_scene_t *s, uint32_t now_ms)
         if (k != AS_SLIVER && k != AS_MOVING) drawn = imax(drawn, p->x + reach(&it, k));
         cut_hits(h, l, r, open);
     }
+    fades(s, now_ms);
     if (spill_l) {
         ht_pro_rect(s, 0, 0, APP_W, HT_HEIGHT, 0, C(GROUND));
         app_column(s, row, n, now_ms);

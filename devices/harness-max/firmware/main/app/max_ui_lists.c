@@ -1,7 +1,7 @@
 // Inbox and Apps (max_ui_draw.h): a header column, then cards in a row, newest notice or the daemon's first app first.
 // What does not fit whole runs off the glass's right edge. Inbox: Close, "Inbox" and the unread count; a card per
 // notice with its pet, its name in the kind's colour, its app, the word and how long ago, and its words; an unread
-// card lit in its colour, with a dot. Apps: "APPS", a card per app with its icon, name, agent count and a dot per
+// card lit in its colour, with a dot that pulses (V3's: to .35 and back every 1.4 s, while any card is unread). Apps: "APPS", a card per app with its icon, name, agent count and a dot per
 // agent, the shown app's card raised and marked; "+ New" last while the computer offers New Harness.
 #include <stdio.h>
 #include <string.h>
@@ -66,7 +66,9 @@ static void note(ht_scene_t *s, int x, const max_inbox_t *n, uint32_t now_ms)
     const int text_y = top + SLOT_H + DY(14), rows = (NOTE_Y + NOTE_H - NOTE_PAD_Y - text_y) / ph_rg_28.height;
     max_paragraph(s, x + NOTE_PAD_X, text_y, w - 2 * NOTE_PAD_X, &ph_rg_28, n->unread ? RECAP : REST, n->text,
                   rows < 4 ? rows : 4);
-    if (n->unread) max_dot(s, x + w - DX(22) - NOTE_DOT, NOTE_Y + DY(22) + NOTE_DOT / 2, NOTE_DOT, ink);
+    if (n->unread)
+        max_dot(s, x + w - DX(22) - NOTE_DOT, NOTE_Y + DY(22) + NOTE_DOT / 2, NOTE_DOT,
+                max_mix_q(ink, fill, max_keyframes(max_loop(now_ms, 1400), MAX_ONE, MAX_PULSE_LOW, MAX_EASE_IN_OUT)));
 }
 
 void max_draw_inbox(ht_scene_t *s, uint32_t now_ms)

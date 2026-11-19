@@ -16,6 +16,7 @@ enum {
     TRACK_MS = 100,       // the speed is the finger's over its last 100 ms (VelocityTracker's horizon)
     STOPPED_MS = 40,      // a finger that rested this long before a move or the lift had stopped
     WORDS_MS = 200, FACE_MS = 250, DIM_MS = 350, GROUND_MS = 350, PANEL_IN_MS = 440, PANEL_OUT_MS = 300, DOT_MS = 250,
+    FADE_MS = 250, FADE_SLOP = DX(4),   // the row's faded ends: on while more than this of it lies that way (V3 _Fade)
 };
 
 static int imin(int a, int b) { return a < b ? a : b; }
@@ -47,6 +48,7 @@ static int32_t cubic(int32_t x1, int32_t y1, int32_t x2, int32_t y2, int32_t t)
 int32_t max_ease(max_curve_t curve, int32_t t)
 {
     if (curve == MAX_EASE_ROW) return cubic(Q / 5, Q * 4 / 5, Q / 5, Q, t);   // Cubic(.2, .8, .2, 1)
+    if (curve == MAX_EASE_IN_OUT) return cubic((Q * 42 + 50) / 100, 0, (Q * 58 + 50) / 100, Q, t);   // (.42, 0, .58, 1)
     if (curve == MAX_EASE_LATE) {   // Interval(140 / 440, 1, ease): nothing for the first 140 ms of 440
         const int32_t begin = 140 * Q / 440;
         if (t <= begin) return 0;
@@ -79,6 +81,11 @@ static void run(max_tween_t *t, int32_t to, uint32_t ms, max_curve_t curve, uint
 static void ease_to(max_tween_t *t, int32_t to, uint32_t ms, max_curve_t curve, uint32_t now_ms)
 {
     if (t->to != to) run(t, to, ms, curve, now_ms);
+}
+void max_tween_rest(max_tween_t *t, int32_t v) { rest(t, v); }
+void max_tween_to(max_tween_t *t, int32_t to, uint32_t ms, max_curve_t curve, uint32_t now_ms)
+{
+    ease_to(t, to, ms, curve, now_ms);
 }
 
 // ---- the row ----
@@ -239,19 +246,31 @@ void max_row_step(uint32_t now_ms)
     }
     memcpy(r->open, open, sizeof r->open);
     r->first = max_m.row_first;
-    // The dots follow the scroll: lit while at least half the agent is on the glass.
+    // The dots follow the scroll: lit while at least half the agent is on the glass. So do the row's faded ends.
     static max_place_t at[MAX_AGENTS];
-    max_row_layout(now_ms, at, NULL);
+    int px = 0, content = 0;
+    max_row_layout(now_ms, at, &px);
     for (int i = 0; i < n; i++) {
+        content += at[i].w;
         if (fresh) rest(&r->looks[i].dot, seen(&at[i]) ? MAX_ONE : 0);
         else ease_to(&r->looks[i].dot, seen(&at[i]) ? MAX_ONE : 0, DOT_MS, MAX_EASE, now_ms);
+    }
+    const int32_t left = px > FADE_SLOP ? MAX_ONE : 0, right = px < content - ROW_W - FADE_SLOP ? MAX_ONE : 0;
+    if (fresh) {
+        rest(&r->fade_l, left);
+        rest(&r->fade_r, right);
+    } else {
+        ease_to(&r->fade_l, left, FADE_MS, MAX_EASE, now_ms);
+        ease_to(&r->fade_r, right, FADE_MS, MAX_EASE, now_ms);
     }
 }
 
 bool max_row_moving(uint32_t now_ms)
 {
     const max_row_t *r = &max_m.row;
-    if (r->back || !max_tween_done(&r->px, now_ms)) return true;
+    if (r->back || !max_tween_done(&r->px, now_ms) || !max_tween_done(&r->fade_l, now_ms) ||
+        !max_tween_done(&r->fade_r, now_ms))
+        return true;
     for (int i = 0; i < r->look_count; i++) {
         const max_look_t *l = &r->looks[i];
         const max_tween_t *parts[] = {&l->w, &l->sl, &l->words, &l->face, &l->dim, &l->ground, &l->panel, &l->dot};

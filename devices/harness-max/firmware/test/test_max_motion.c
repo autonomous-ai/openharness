@@ -203,10 +203,11 @@ static void test_frame_clock(void)
 
 // What is drawn where: a cell at rest on the glass itself, a sliver at rest as a kept layer, an agent between looks as
 // a layer painted this frame, each cut to the row; the row's hits are the windows on the glass.
-static int images(void)
+static int images(void)   // but the row's faded ends
 {
     int k = 0;
-    for (int i = 0; i < S.count; i++) k += S.runs[i].pro_kind == 3;
+    for (int i = 0; i < S.count; i++)
+        k += S.runs[i].pro_kind == 3 && !(S.runs[i].y == RAIL_H && S.runs[i].bitmap.width == DX(64));
     return k;
 }
 static void test_drawn(void)

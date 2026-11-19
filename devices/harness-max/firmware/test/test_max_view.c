@@ -253,7 +253,7 @@ static void test_budget(void)
     for (int e = 0; e < 4; e++) {
         ring(NULL);
         inbox(MAX_INBOX);
-        max_ui_notice("Sent to an-agent-name-that-is-far-too-long-for-one", 3000, T0);
+        max_ui_notice("Sent to an-agent-name-that-is-far-too-long-for-one", 3000, T0 - 300);   // up whole by T0
         show(MAX_VIEW_OVERVIEW, NULL);
         render_at(T0);
         check_budget();
@@ -328,7 +328,7 @@ static void test_overview(void)
     // The shown app, how many agents, the badge (2 unread), the chips, the tasks.
     CHECK(word("Harness") && word("5 agents") && word("2") && word("Needs you") && word("Infusing"));
     CHECK(text_run("Which database") && text_run("Editing the touch driver") && !word("Done"));
-    CHECK(max_motion_ms(T0) == MAX_WAKE_MS);   // the cells' pets hold one frame
+    CHECK(max_motion_ms(T0) == MAX_LOOP_FRAME_MS);   // the cells' pets hold one frame; their rails and chips loop
     // Long and Vietnamese names cut with an ellipsis, inside their cells.
     const ht_run_t *cut = NULL;
     for (int i = 0; i < S.count; i++)
@@ -568,7 +568,7 @@ static void test_attention(void)
     max_ui_notice("", 0, 0);
     render_at(T0);
     CHECK(HITS_ARE(MAX_HIT_RELOAD, MAX_HIT_AWAY) && word("Question changed."));
-    max_ui_notice("Question changed.", 3000, T0);
+    max_ui_notice("Question changed.", 3000, T0 - 300);   // up whole by T0: it fades in over 300 ms
     render_at(T0);
     int said = 0;
     for (int i = 0; i < S.count; i++) said += S.runs[i].pro_kind == K_TEXT && !strcmp(S.runs[i].text, "Question changed.");
@@ -596,10 +596,11 @@ static void test_inbox(void)
     check_words(boxes, max_m.hit_count);
     check_glass();
     check_hits();
-    CHECK(max_motion_ms(T0) == MAX_WAKE_MS);
-    // Empty: it says so.
+    CHECK(max_motion_ms(T0) == MAX_LOOP_FRAME_MS);   // the unread cards' dots pulse
+    // Empty: it says so, and nothing loops.
     max_m.inbox_count = 0;
     render_at(T0);
+    CHECK(max_motion_ms(T0) == MAX_WAKE_MS);
     CHECK(HITS_ARE(MAX_HIT_CLOSE) && word("Nothing new") && !word("0 unread"));
 }
 
@@ -760,7 +761,7 @@ static void test_done_note(void)
     check_glass();
     check_hits();
     check_budget();
-    CHECK(max_motion_ms(T0) == MAX_WAKE_MS);   // its pet holds one frame
+    CHECK(max_motion_ms(T0) == MAX_LOOP_FRAME_MS);   // its pet holds one frame; the cells' rails and chips loop
     // A short one: its card fits its words.
     max_find("c")->name[0] = 'x';
     max_find("c")->name[1] = 0;
@@ -797,22 +798,26 @@ static void test_notice(void)
 {
     ring(NULL);
     show(MAX_VIEW_OVERVIEW, NULL);
-    max_ui_notice("Mic closed \xc2\xb7 tap to talk", 3000, T0);
+    max_ui_notice("Mic closed \xc2\xb7 tap to talk", 3000, T0 - 300);   // up whole by T0: it fades in over 300 ms
     render_at(T0);
     CHECK(word("Mic closed \xc2\xb7 tap to talk"));
     check_notice();
     check_glass();
     // Too long for the pill: cut with an ellipsis, still centred on the glass.
-    max_ui_notice(LONG_TEXT, 3000, T0);
+    max_ui_notice(LONG_TEXT, 3000, T0 - 300);
     render_at(T0);
     const ht_run_t *cut = NULL;
     for (int i = 0; i < S.count; i++)
         if (S.runs[i].pro_kind == K_TEXT && !strncmp(S.runs[i].text, "Editing the touch", 17)) cut = &S.runs[i];
     CHECK(cut && strstr(cut->text, ELLIPSIS) && ht_run_bounds(cut).w < HT_WIDTH);
     check_glass();
-    // Run out: gone.
+    // Run out: it goes over 300 ms, then nothing of it is left.
+    char was[ROW_BYTES];
+    snprintf(was, sizeof was, "%s", cut->text);
+    render_at(T0 + 2700);
+    CHECK(word(was));
     render_at(T0 + 3000);
-    CHECK(!cut || !word(cut->text));
+    CHECK(!word(was));
 }
 
 static void test_cut_after_an_ellipsis(void)
@@ -874,7 +879,7 @@ static void test_new_harness(void)
     // A question that waits: its toast left of Close, over none of the form's buttons; a notice left of it.
     max_copy(max_m.toast_id, sizeof max_m.toast_id, "e");
     max_m.toast_from = T0 - 1000;
-    max_ui_notice("Sent to backend", 3000, T0);
+    max_ui_notice("Sent to backend", 3000, T0 - 300);
     render_at(T0);
     const max_hit_t *toast = find_hit(MAX_HIT_TOAST, 0);
     CHECK(toast && toast->x + toast->w < find_hit(MAX_HIT_FORM_CLOSE, 0)->x);

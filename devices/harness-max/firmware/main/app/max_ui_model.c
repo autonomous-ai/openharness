@@ -732,6 +732,7 @@ bool max_ui_notice(const char *text, uint32_t duration_ms, uint32_t now_ms)
         max_m.notice[0] = 0;
         return changed;
     }
+    if (!max_notice_shown(now_ms)) max_m.notice_from = now_ms;   // a notice already up only changes its words
     max_copy(max_m.notice, sizeof max_m.notice, text);
     max_m.notice_until = now_ms + duration_ms;
     return true;

@@ -45,7 +45,7 @@ for h in ${MAX_HEIGHTS:-480 415}; do
     build_obj "$h" 100000 "$pro/main/display/terminal.c" "$pro/main/display/pro_canvas.c" "$pro/main/pod/pod_draw.c" \
         "$pro"/main/pod/{pets,pets_ask,pets_codex,engine_logos}.c "$out/pro_fonts.c"
 
-    for t in test_max_model test_max_ask test_max_form test_max_view test_max_touch test_max_motion; do
+    for t in test_max_model test_max_ask test_max_form test_max_view test_max_touch test_max_motion test_max_loops; do
         cc "${cflags[@]}" -o "$out/$h-$t" "$here/$t.c" "${objs[@]}" -lm   # test_max_motion: its plain filter
         "$out/$h-$t"
     done

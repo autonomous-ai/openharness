@@ -4,7 +4,8 @@
 // it opens the mic, or sends what is being said. The band, live: "Listening" and its clock, the waveform of the mic's
 // level ("Say it…" until speech is heard), "Tap to send" with the ring that fills in the quiet after speech; sending,
 // "Sending". At rest one quiet line: "Tap to talk", "Mic closed · tap to talk", or where to talk to an agent the bar
-// cannot record for.
+// cannot record for. As V3's: its rail, glow and chip loop, the band's colours ease between talking and not, and the
+// live dot pulses in its glow.
 #include <stdio.h>
 #include <string.h>
 
@@ -18,14 +19,8 @@ enum {
     X_HIT_W = DX(92), X_HIT_H = DY(88), X_D = DY(52), X_ICON = DY(28), X_CY = DY(44), X_RIGHT = DX(46),
     LIVE_W = DX(140), LIVE_DOT = DX(12), LISTEN_CY = BAND_Y + DY(30), CLOCK_CY = BAND_Y + DY(62),
     WAVE_CY = BAND_Y + DY(32), WAVE_HALF = DY(21), SAY_CY = BAND_Y + DY(71),
-    SEND_W = DX(190), RING_D = DX(28), MIC = DY(26),
+    SEND_W = DX(190), RING_D = DX(28), MIC = DY(26), BAND_MS = 300,
 };
-
-// The glow's strength: a waiting agent's .18, a failure's .14, any other's .08; none at rest.
-static unsigned glow_pct(const max_agent_t *a)
-{
-    return a->state == MAX_ASKING ? 18 : a->state == MAX_FAILED ? 14 : a->state == MAX_IDLE ? 0 : 8;
-}
 
 // The glow's colour at height y: pct % of ink at the top, nothing glow_h px down, over `under`. What a part of the panel
 // fades toward, so that no box of it shows on the glow while it comes in or goes.
@@ -66,12 +61,19 @@ static void send_ring(ht_scene_t *s, int cx, int cy, uint32_t now_ms)
     else max_dot(s, cx - w16 / 32, cy - r16 / 16, w16 / 16 > 2 ? w16 / 16 : 2, VOICE);   // the stroke's round cap
 }
 
-// The mic records for this agent, or sends what it recorded.
-static void live_band(ht_scene_t *s, int x, int r, uint32_t now_ms)
+// The mic records for this agent (the live dot pulsing every 0.8 s in its glow, over the band's fill), or sends what
+// it recorded.
+static void live_band(ht_scene_t *s, int x, int r, unsigned fill, uint32_t now_ms)
 {
     const bool listening = max_m.talk == MAX_TALK_RECORDING;
     const unsigned ink = listening ? VOICE : REST;
-    max_dot(s, x, LISTEN_CY, LIVE_DOT, ink);
+    if (listening) {
+        const int32_t o = max_keyframes(max_loop(now_ms, 800), MAX_ONE, MAX_PULSE_LOW, MAX_EASE);
+        max_voice_halo(s, x, LISTEN_CY, o);
+        max_dot(s, x, LISTEN_CY, LIVE_DOT, max_mix_q(VOICE, fill, o));
+    } else {
+        max_dot(s, x, LISTEN_CY, LIVE_DOT, ink);
+    }
     max_text(s, x + LIVE_DOT + DX(10), LISTEN_CY, LIVE_W - LIVE_DOT - DX(10), &ph_sb_26, ink,
              listening ? "Listening" : "Sending");
     char clock[24];
@@ -112,19 +114,29 @@ static void quiet_band(ht_scene_t *s, const max_agent_t *a, int x, int r)
              closed ? "Mic closed \xc2\xb7 tap to talk" : "Tap to talk");
 }
 
+// Its colours ease between talking and not over BAND_MS (V3's AnimatedContainer, Curves.ease), what it says at once; a
+// panel just up, or another agent's, starts where it is.
 static void band(ht_scene_t *s, const max_agent_t *a, int x, int w, bool talking, uint32_t now_ms)
 {
     const int bx = x + PAD_L, bw = w - PAD_L - PAD_R;
-    if (talking) max_box(s, bx, BAND_Y, bw, BAND_H, BAND_R, 1, max_mix(VOICE, GROUND, 30), max_mix(VOICE, GROUND, 6));
-    else max_box(s, bx, BAND_Y, bw, BAND_H, BAND_R, 1, APP_RIM, BAND_BG);
-    if (talking) live_band(s, bx + BAND_PAD, bx + bw - BAND_PAD, now_ms);
+    max_tween_t *t = &max_m.band;
+    if (!max_m.row.had || strcmp(max_m.band_id, a->id)) {
+        max_tween_rest(t, talking ? MAX_ONE : 0);
+        max_copy(max_m.band_id, sizeof max_m.band_id, a->id);
+    }
+    max_tween_to(t, talking ? MAX_ONE : 0, BAND_MS, MAX_EASE, now_ms);
+    if (!max_tween_done(t, now_ms)) max_motion(now_ms, MAX_ROW_FRAME_MS);
+    const int32_t live = max_tween_at(t, now_ms);
+    const unsigned fill = max_mix_q(max_mix(VOICE, GROUND, 6), BAND_BG, live);
+    max_box(s, bx, BAND_Y, bw, BAND_H, BAND_R, 1, max_mix_q(max_mix(VOICE, GROUND, 30), APP_RIM, live), fill);
+    if (talking) live_band(s, bx + BAND_PAD, bx + bw - BAND_PAD, fill, now_ms);
     else quiet_band(s, a, bx + BAND_PAD, bx + bw - BAND_PAD);
 }
 
 // ---- the panel ----
 
 // The name and the chip beside it, then the task in three rows at most, the block centred beside the pet.
-static void words(ht_scene_t *s, const max_agent_t *a, int x, int r)
+static void words(ht_scene_t *s, const max_agent_t *a, int x, int r, uint32_t now_ms)
 {
     const ht_pro_font_t *name_f = max_big_can_draw(a->name) ? &ph_sb_48 : &ph_sb_34, *task_f = &ph_rg_28;
     const char *task = max_summary(a);
@@ -133,7 +145,7 @@ static void words(ht_scene_t *s, const max_agent_t *a, int x, int r)
     const int block = NAME_H + TASK_GAP + n * task_f->height, top = PAD_T + (TOP_H - block) / 2;
     const int chip = max_chip_w(a, true, (r - x) / 2), name_cy = top + NAME_H / 2;
     const int nw = max_text(s, x, name_cy, r - x - chip - NAME_GAP, name_f, FG, a->name);
-    max_chip(s, x + nw + NAME_GAP, name_cy, a, true, chip);
+    max_chip(s, x + nw + NAME_GAP, name_cy, a, true, chip, now_ms);
     for (int i = 0; i < n; i++)
         ht_pro_text(s, x, top + NAME_H + TASK_GAP + i * task_f->height, r - x, task_f, C(task[0] ? RECAP : FAINT),
                     rows[i]);
@@ -141,10 +153,10 @@ static void words(ht_scene_t *s, const max_agent_t *a, int x, int r)
 
 void max_draw_agent(ht_scene_t *s, const max_agent_t *a, int x, int w, uint32_t now_ms)
 {
-    const unsigned pct = glow_pct(a), ink = max_chip_ink(a);
+    const unsigned pct = max_glow_pct(a), top = pct ? max_glow_top(a, PANEL, now_ms, false) : PANEL;
     ht_pro_rect(s, x, 0, w - 1, HT_HEIGHT, 0, C(PANEL));
-    if (pct) pod_grad_aa_dither(s, x, 0, w - 1, GLOW_H, 0, C(max_mix(ink, PANEL, pct)), C(PANEL));
-    ht_pro_rect(s, x, 0, w, RAIL_H, 0, C(max_rail_ink(a)));
+    if (pct) pod_grad_aa_dither(s, x, 0, w - 1, GLOW_H, 0, C(top), C(PANEL));
+    max_rail(s, x, w, a, top, now_ms, false);
     ht_pro_rect(s, x + w - 1, 0, 1, HT_HEIGHT, 0, C(LINE));
     max_agent_body(s, a, x, w, 256, PANEL, GLOW_H, now_ms);
 }
@@ -153,7 +165,7 @@ void max_agent_body(ht_scene_t *s, const max_agent_t *a, int x, int w, unsigned 
                     uint32_t now_ms)
 {
     const bool talking = max_m.talk != MAX_TALK_IDLE && !strcmp(max_m.talk_id, a->id);
-    const unsigned pct = glow_pct(a), ink = max_chip_ink(a);
+    const unsigned pct = max_glow_pct(a), ink = max_chip_ink(a);
     // The pet, centred down the space over the band, on the glow's colour at its middle; coming in or going, by its
     // alpha over what lies under it.
     // Its ground as the page's at rest, also while the cell's lightens it (by 6 levels at most): a frame below 1x is
@@ -168,7 +180,7 @@ void max_agent_body(ht_scene_t *s, const max_agent_t *a, int x, int w, unsigned 
     max_layer_pet(s, from, ground, dim, keep);
     max_motion(now_ms, max_pet_next_ms(a->engine, scene, now_ms));
     max_tint(glow_at(ink, pct, under, glow_h, mid), keep);   // the words are centred beside the pet
-    words(s, a, x + PAD_L + PET_W + WORDS_GAP, x + w - PAD_R - X_ROOM);
+    words(s, a, x + PAD_L + PET_W + WORDS_GAP, x + w - PAD_R - X_ROOM, now_ms);
     max_tint(under, keep);
     band(s, a, x, w, talking, now_ms);
     // X, its reach past the button on every side: a miss there is not harmless, it sends what is being said.

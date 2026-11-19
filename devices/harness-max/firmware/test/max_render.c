@@ -144,7 +144,7 @@ static void s_overview_harness(void)
     harness();
     unread(1);
     show(MAX_VIEW_OVERVIEW, NULL);
-    max_ui_notice("Following Harness on your Mac", 3000, T0);
+    max_ui_notice("Following Harness on your Mac", 3000, T0 - 300);   // up whole: it fades in over 300 ms
 }
 static void s_overview_one(void)
 {
@@ -244,20 +244,20 @@ static void s_attention_question(void)
     max_ui_turn("cli", "started", "", 0, T0 - 60000);
     ask("cli", "q-bump", &BUMP, 1, false, true);
     attention("cli", MAX_ATTN_ASK);
-    max_ui_notice("Sent to auth-refactor", 3000, T0);
+    max_ui_notice("Sent to auth-refactor", 3000, T0 - 300);
 }
 static void s_attention_permission(void)
 {
     harness();
     ask("fw", "q-flash", &FLASH, 1, true, true);
     attention("fw", MAX_ATTN_ASK);
-    max_ui_notice("Sent: Keep 3", 3000, T0);
+    max_ui_notice("Sent: Keep 3", 3000, T0 - 300);
 }
 static void s_attention_outside(void)
 {
     orca();
     attention("hero", MAX_ATTN_ASK);
-    max_ui_notice("Allowed: make flash PORT=usb", 3000, T0);
+    max_ui_notice("Allowed: make flash PORT=usb", 3000, T0 - 300);
 }
 static void s_attention_done(void)
 {
@@ -299,9 +299,10 @@ static void s_attention_error(void)
 {
     harness();
     ask("cli", "q-bump", &BUMP, 1, false, true);
-    max_ask_hit(max_find("cli"), MAX_HIT_OPTION, 1, T0);
+    max_ask_hit(max_find("cli"), MAX_HIT_OPTION, 1, T0 - 300);
     take();
-    max_ui_answer_receipt("cli", max_ask_of("cli")->fetch, "tok-1", false, false, "Question changed.", T0);
+    // 300 ms before: its notice up whole, past its fade in.
+    max_ui_answer_receipt("cli", max_ask_of("cli")->fetch, "tok-1", false, false, "Question changed.", T0 - 300);
     attention("cli", MAX_ATTN_ASK);
 }
 static void s_attention_long_vi(void)
@@ -347,7 +348,7 @@ static void s_inbox(void)
         e->unread = NOTES[i].unread;
     }
     show(MAX_VIEW_INBOX, NULL);
-    max_ui_notice("Following Harness on your Mac", 3000, T0);
+    max_ui_notice("Following Harness on your Mac", 3000, T0 - 300);
 }
 static void s_inbox_empty(void)
 {
@@ -425,7 +426,7 @@ static void s_form_toast(void)
     s_form_page();
     max_copy(max_m.toast_id, sizeof max_m.toast_id, "hero");
     max_m.toast_from = T0 - 2000;
-    max_ui_notice("Sent to auth-refactor", 3000, T0);
+    max_ui_notice("Sent to auth-refactor", 3000, T0 - 300);
 }
 
 // App Detail's row in motion, at a frame the render task draws: an agent opening half way through the row's move
@@ -452,6 +453,14 @@ static void s_row_closing(void)
     frame(T0 - 2000);
     max_show(MAX_VIEW_OVERVIEW);
     frame(T0 - 225);
+}
+// The page up 750 ms: the asking agent's rail, chip and glow at their faintest, the working agents' lights half way
+// along their rails, their chips' dots part way faded.
+static void s_overview_loops(void)
+{
+    orca();
+    show(MAX_VIEW_OVERVIEW, NULL);
+    frame(T0 - 750);
 }
 static void s_row_drag(void)
 {
@@ -481,6 +490,7 @@ static const screen_t SCREENS[] = {
     {"form-opening", s_form_opening}, {"form-page", s_form_page}, {"form-start", s_form_start},
     {"form-busy", s_form_busy}, {"form-failed", s_form_failed}, {"form-say", s_form_say}, {"form-toast", s_form_toast},
     {"row-opening", s_row_opening}, {"row-closing", s_row_closing}, {"row-drag", s_row_drag},
+    {"overview-loops", s_overview_loops},
 };
 enum { SCREEN_COUNT = sizeof SCREENS / sizeof SCREENS[0] };
 
