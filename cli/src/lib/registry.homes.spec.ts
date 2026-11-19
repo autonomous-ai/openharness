@@ -15,6 +15,21 @@ vi.mock('node:fs', async original => {
     return directory
   } }
 })
+// A slow disk: a registry image that names `slow.image` is synced only once the test waits for the registry's writes.
+const slow = vi.hoisted(() => ({ image: undefined as string | undefined, waited: Promise.resolve(), release: () => {} }))
+vi.mock('node:fs/promises', async original => {
+  const actual = await original<typeof import('node:fs/promises')>()
+  return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
+    const handle = await actual.open(...args), sync = handle.sync.bind(handle)
+    handle.sync = async () => {
+      await sync()
+      const path = String(args[0])
+      if (slow.image && path.includes('registry.json.') && path.endsWith('.tmp')
+        && (await actual.readFile(path, 'utf8')).includes(slow.image)) await slow.waited
+    }
+    return handle
+  } }
+})
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
 function observeHomeReads(): void { vi.doMock('./engineHomes.js', async original => {
   const actual = await original<typeof import('./engineHomes.js')>()
@@ -29,7 +44,7 @@ vi.mock('./processLiveness.js', async original => ({ ...await original<object>()
   processLockIdentity: () => ({ startMarker: 'fixture-start', generationMarker: 'fixture-generation' }), lockOwnerAlive: () => true,
 }))
 let root: string | undefined
-afterEach(() => { fault.beforeVerify = undefined; fault.onDirectoryOpen = undefined; fault.captures = 0; vi.doUnmock('./engineHomes.js'); vi.unstubAllEnvs(); vi.resetModules(); if (root) rmSync(root, { recursive: true, force: true }) })
+afterEach(() => { slow.release(); slow.image = undefined; fault.beforeVerify = undefined; fault.onDirectoryOpen = undefined; fault.captures = 0; vi.doUnmock('./engineHomes.js'); vi.unstubAllEnvs(); vi.resetModules(); if (root) rmSync(root, { recursive: true, force: true }) })
 
 it('repairs a child-overwritten parent from an adopted Codex home before the login shell is read', async () => {
   // Found by QA on a quiet machine: restart searched only the default home and discarded this parent binding.
@@ -54,6 +69,9 @@ it('repairs a child-overwritten parent from an adopted Codex home before the log
   }]), { mode: 0o600 })
   vi.resetModules()
   const { registry } = await import('./registry.js')
+  slow.image = `rollout-${parentId}.jsonl`; slow.waited = new Promise<void>(done => { slow.release = done })
+  const flush = registry.flush.bind(registry)
+  vi.spyOn(registry, 'flush').mockImplementation(options => { slow.release(); return flush(options) })
   // An ancestor that changes during every look (`ENUMERATION_ATTEMPTS`); one change alone is looked at again.
   let looks = ENUMERATION_ATTEMPTS
   fault.onDirectoryOpen = () => {
