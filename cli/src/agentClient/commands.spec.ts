@@ -1052,6 +1052,17 @@ describe('a harness starting, or whose launch failed here', () => {
     expect(lines(f.out).map((l) => [l.event, l.state])).toEqual([['failed', 'failed']])
   })
 
+  it('watch says why a launch failed, in text and JSON', async () => {
+    const d = new FakeDaemon()
+    d.frames = [failed('kid', inUse)]
+    const json = harness(d)
+    expect(await watchCommand(['kid', '--json', '--timeout', '10s'], json.deps)).toBe(EXIT.timeout)
+    expect(lines(json.out)[0]).toMatchObject({ event: 'failed', failure: { error: inUse.error, detail: inUse.detail } })
+    const text = harness(d)
+    expect(await watchCommand(['kid', '--timeout', '10s'], text.deps)).toBe(EXIT.timeout)
+    expect(text.out[0]).toMatch(new RegExp(`Z kid: failed: ${inUse.detail.replace(/\./g, '\\.')}$`))
+  })
+
   it('wait and watch read back past a page of heartbeat runs to the last turn', async () => {
     const d = new FakeDaemon()
     // Just started: with no turn found, wait would take it for one whose task is not typed yet.
