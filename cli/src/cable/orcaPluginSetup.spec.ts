@@ -206,6 +206,26 @@ describe('Harness Device\'s plugin for Orca, set up from the devices\' process',
     expect(r.counted).toEqual([['failed', 'timeout']])
   })
 
+  it('a disable during an install that runs past its deadline: what Orca installs late is taken out at the hour', async () => {
+    const r = rig()
+    r.state.during = () => { r.state.removed = { orca: true } }
+    r.state.setUps.push({ orca: 'failed', error: 'timeout' })
+    await r.setup.pass()
+    expect(r.remove).not.toHaveBeenCalled()
+    expect(r.counted).toEqual([['failed', 'timeout']])
+
+    r.timers[0].run()
+    await settled()
+    expect(r.remove).toHaveBeenCalledTimes(1)
+    expect(r.setUp).toHaveBeenCalledTimes(1)
+    expect(r.state.record).toEqual({ dial: true })
+
+    // Owed no more: the passes after leave it removed.
+    await r.setup.pass()
+    expect(r.remove).toHaveBeenCalledTimes(1)
+    expect(r.counted).toEqual([['failed', 'timeout']])
+  })
+
   it('a removal that cannot be read after the install: nothing undone, nothing recorded; the next pass records it', async () => {
     const r = rig()
     r.state.during = () => { r.state.removed = { unread: true } }
