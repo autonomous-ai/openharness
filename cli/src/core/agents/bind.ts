@@ -42,16 +42,23 @@ const REPAIR_EAGER_ATTEMPTS = 24   // ≈2 min at the 5s sweep
 const OPENCLAW_HOLDS = new Set<string>(Object.values(OPENCLAW_SCREEN_HOLDS))
 /** What the other engines' reader says on a row while its worker is out or it rebuilds the live view. */
 const OTHER_ENGINE_HOLDS = new Set<string>(Object.values(OTHER_ENGINE_STATES))
+/** How long OpenClaw's Gateway is gone before its agent is held: a drop the TUI reconnects from by itself is not. */
+const GATEWAY_HOLD_MS = 10_000
+
+/** The status line says the TUI is connected, its history loaded or not: the one line that ends a Gateway outage. */
+const openclawConnected = (screen: OpenclawScreen): boolean => screen.state === 'ready' || screen.state === 'no-history'
 
 /**
  * The hold a pane's screen gives its agent. A stopped local run keeps the reason it was seen with once OpenClaw's later
- * footer no longer says it. The Gateway holds never apply to a local run, which has no Gateway.
+ * footer no longer says it. The Gateway holds never apply to a local run, which has no Gateway, and the Gateway gone
+ * holds only once it has been gone GATEWAY_HOLD_MS.
  */
-function openclawScreenHold(screen: OpenclawScreen, agent: RegisteredSession): string | undefined {
+function openclawScreenHold(screen: OpenclawScreen, agent: RegisteredSession, gatewayGoneMs: number): string | undefined {
   if (screen.state === 'local-stopped') {
     if (screen.stopped !== null) return openclawLocalStopped(screen.stopped)
     return isOpenclawLocalStopped(agent.identityHold) ? agent.identityHold : openclawLocalStopped(null)
   }
+  if (screen.state === 'no-gateway' && gatewayGoneMs < GATEWAY_HOLD_MS) return undefined
   return screen.state && !agent.openclawLocal ? OPENCLAW_SCREEN_HOLDS[screen.state] : undefined
 }
 
@@ -144,6 +151,24 @@ export function createBinding({
     if (openclawFolderReads.size >= 256) openclawFolderReads.clear()
     openclawFolderReads.set(agentId, tuiProcess(tui))
     return openclawStateDir(tui.pid)
+  }
+  /**
+   * When each agent's pane first read `gateway disconnected` since it last read connected, agentId → ms. Through a
+   * lasting outage the TUI redraws `gateway disconnected: <error>` at each try to reconnect and a bare `disconnected |
+   * idle` or `startup failed | idle` between them, so a hold set and cleared by each line went and came back every few
+   * seconds (reproduction, 2026-11-19); those lines and a start or a run neither end the outage nor count it again.
+   * Cleared at 256 entries rather than aged: a hold then comes late, never early.
+   */
+  const gatewayGone = new Map<string, number>()
+  /** How long the pane has read its Gateway gone, as of this pass; 0 for a pass that reads anything else. */
+  const gatewayGoneMs = (agentId: string, screen: OpenclawScreen): number => {
+    if (openclawConnected(screen)) gatewayGone.delete(agentId)
+    if (screen.state !== 'no-gateway') return 0
+    const since = gatewayGone.get(agentId)
+    if (since !== undefined) return Date.now() - since
+    if (gatewayGone.size >= 256) gatewayGone.clear()
+    gatewayGone.set(agentId, Date.now())
+    return 0
   }
   /**
    * The hold a failed native read set, agentId → that hold as the row stored it: its reason, and the row's
@@ -458,7 +483,7 @@ export function createBinding({
       // Told on every pass, the ones that say a state too: a pass that reads the Gateway gone is what lets the stream
       // close a turn its restart left `running`.
       const streamed = !!agent.sessionId && openclawPaneRead(agent.sessionId, { ready: screen.state === 'ready', gatewayLost: screen.gatewayLost, running: screen.running }, captured.value)
-      const held = openclawScreenHold(screen, agent)
+      const held = openclawScreenHold(screen, agent, gatewayGoneMs(agent.agentId, screen))
       const ours = !agent.identityHold || OPENCLAW_HOLDS.has(agent.identityHold) || isOpenclawLocalStopped(agent.identityHold)
       if (held) {
         // A hold another reason set (the store unreadable, an identity read that failed) is that reason's to clear.
@@ -471,8 +496,11 @@ export function createBinding({
       }
       if (agent.identityHold && ours) {
         // A remote TUI's title scrolls off a long conversation: only a title naming this machine's Gateway clears it.
+        // The Gateway's only a connected line does: a bare `disconnected` between two tries is the same outage.
         // The others only a footer does: an overlay or autocomplete that hides it shows no state at all.
-        if (!(agent.identityHold === OPENCLAW_STATES.remote ? screen.url : screen.footer)) return
+        const clears = agent.identityHold === OPENCLAW_STATES.remote ? !!screen.url
+          : agent.identityHold === OPENCLAW_STATES.noGateway ? openclawConnected(screen) : !!screen.footer
+        if (!clears) return
         if (registry.setIdentityHold(agent.agentId, undefined)) {
           console.log(`[discovery] ${sid(agent.agentId)} openclaw · working again`)
           announceSession(agent)
