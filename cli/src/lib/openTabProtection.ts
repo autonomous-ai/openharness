@@ -8,6 +8,7 @@ export class OpenTabError extends Error {
 
 export class OpenTabProtection {
   private readonly windows = new Map<string, Set<string>>()
+  private readonly pendingWindows = new Set<string>()
   private shared = new Set<string>()
   private revision = -1
   constructor(private readonly deps: {
@@ -20,6 +21,12 @@ export class OpenTabProtection {
   updateWindow(connection: string, ids: string[] | null): void {
     if (ids === null) this.windows.delete(connection)
     else this.windows.set(connection, new Set(ids))
+  }
+
+  /** An accepted local report is not evidence of an empty window while its interpreter loads. */
+  pendingWindow(connection: string, pending: boolean): void {
+    if (pending) this.pendingWindows.add(connection)
+    else this.pendingWindows.delete(connection)
   }
 
   async refresh(): Promise<void> {
@@ -44,6 +51,7 @@ export class OpenTabProtection {
   }
 
   isHidden(session: RegisteredSession): boolean {
+    if (this.pendingWindows.size) throw new OpenTabError('TABS_UNAVAILABLE', 'Could not check your open tabs. Nothing was closed.')
     const ids = new Set([...this.shared, ...[...this.windows.values()].flatMap(ids => [...ids])])
     if (ids.has(session.agentId)) return false
     // Two registry aliases can describe one terminal. Keep the entire placement if either is open.

@@ -104,6 +104,8 @@ const PTY_HOST_DOOR = { importer: 'core/main.ts', target: 'core/ptyHost.ts' }
 const TMUX_BACKEND_DOOR = { importer: 'core/main.ts', target: 'lib/tmuxBackend.ts' }
 /** An already admitted core reuses its payload; only standalone packaged startup prepares a cohort. */
 const STORAGE_PREPARATION_DOOR = { importer: 'harnessd/sessionStorageOwner.ts', target: 'harnessd/executionArtifactProcess.ts' }
+/** Existing Desktop clients cannot replay on a Devices-only restart; reviewed removal conditions are in the audit. */
+const LEGACY_DEVICE_WINDOW_DOOR = { importer: 'lib/legacyDeviceWindowLoader.ts', target: 'lib/legacyDeviceWindowState.ts' }
 
 /**
  * Every file the core's process loads, one a line and in order: the walk from `core/main.ts` with every door shut.
@@ -145,6 +147,7 @@ function followed(importer: string, target: string, dynamic: boolean): boolean {
     && !(importer === PTY_HOST_DOOR.importer && target === PTY_HOST_DOOR.target)
     && !(importer === TMUX_BACKEND_DOOR.importer && target === TMUX_BACKEND_DOOR.target)
     && !(importer === STORAGE_PREPARATION_DOOR.importer && target === STORAGE_PREPARATION_DOOR.target)
+    && !(importer === LEGACY_DEVICE_WINDOW_DOOR.importer && target === LEGACY_DEVICE_WINDOW_DOOR.target)
     && !(importer === 'core/conversationQueries.ts' && target === 'core/handoffDependencies.ts'))
 }
 
@@ -717,6 +720,21 @@ describe('the daemon\'s shape', () => {
     expect(followed(STORAGE_PREPARATION_DOOR.importer, STORAGE_PREPARATION_DOOR.target, false)).toBe(true)
     expect(followed('core/main.ts', STORAGE_PREPARATION_DOOR.target, true)).toBe(true)
     expect(followed(STORAGE_PREPARATION_DOOR.importer, 'harnessd/executionArtifacts.ts', true)).toBe(true)
+  }, WALK_TIMEOUT_MS)
+
+  it('loads old Desktop desk interpretation only through its exact compatibility door', () => {
+    const importer = 'lib/legacyDeviceWindowLoader.ts', target = 'lib/legacyDeviceWindowState.ts'
+    const cold = closureOf('core/main.ts'), opened = closureOf(target)
+    const implementation = ['lib/deviceWindowState.ts', 'lib/notificationRead.ts', target]
+    expect(implementation.filter(file => cold.has(file))).toEqual([])
+    expect([...opened.keys()].filter(file => !cold.has(file)).sort()).toEqual(implementation.sort())
+    expect(importsFor(importer, readFileSync(join(SRC, importer), 'utf8'))
+      .filter(({ from }) => from === './legacyDeviceWindowState.js'))
+      .toEqual([{ from: './legacyDeviceWindowState.js', dynamic: true }])
+    expect(followed(importer, target, true)).toBe(false)
+    expect(followed(importer, target, false)).toBe(true)
+    expect(followed('core/main.ts', target, true)).toBe(true)
+    expect(followed(importer, 'lib/deviceWindowState.ts', true)).toBe(true)
   }, WALK_TIMEOUT_MS)
 
   it('the core\'s process loads no edge file but those listed, and reports source size for review', () => {

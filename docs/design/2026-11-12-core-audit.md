@@ -315,6 +315,17 @@ with the Swarm on: 563 -> 561 files, 96,222 -> 95,875 lines; off, 548 files, 94,
 
 ### 4. Modes where everything runs in the core
 
+- **Desktop desk-state compatibility door (19 November):** `localWsServer.ts` uses the bounded
+  `lib/legacyDeviceWindowLoader.ts` first-use transport. Only after a desk frame does it load
+  `lib/legacyDeviceWindowState.ts`, `lib/deviceWindowState.ts` and `lib/notificationRead.ts`.
+  Its finite 128-frame/8 MiB loading queue has a five-second timeout and never blocks terminal input;
+  shared cleanup holds unknown tab membership until resolved or physically closed.
+  Main's duplicate pane/tab/unread records are removed, but the loaded owner still runs and
+  retains old-client state in the core process. Its old aggregate retention remains unbounded.
+  It preserves latest-live reporter selection and Devices-only restart recovery. Remove the
+  door only after an ordering-safe Desktop replay migration has shipped and its actual release
+  date has started the thirty-day compatibility window; no expiry date is invented here.
+  [Design and exact residual](2026-11-19-device-window-state.md).
 - **Harness OS** runs the core alone, with every service inside it: 113,149 more lines. A decision, below.
 - **`HARNESSD_SERVICES=none`** and the fallbacks for an old master: `services/inline.ts`, the start and serve half of
   `services/inlineHost.ts`, reached through the explicit inline branches in `core/main.ts`. The October plan ends it once every service has run in its

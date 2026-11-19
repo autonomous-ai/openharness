@@ -53,8 +53,6 @@ import { sqlitePreflightMessage } from '../lib/sqliteAvailability.js'
 import { loginShellCaptureLine, warmLoginShellEnvironment } from '../lib/loginShellEnv.js'
 import { enableOffThreadExec } from '../lib/offThreadExec.js'
 import { enableOffThreadSqlite } from '../lib/sqliteThread.js'
-import type { AppSwarms } from '../cable/cableSession.js'
-import type { UnreadNotification } from '../lib/notificationRead.js'
 import { claudeHomeListed } from '../lib/claudeHomes.js'
 import { registry, projectDisplayName, validTranscriptPath, type RegisteredSession } from '../lib/registry.js'
 import { engineSessionTitle } from '../lib/sessionTitle.js'
@@ -241,7 +239,7 @@ import { createWifiLink } from './wifiLink.js'
 import { createServiceRoutes } from './serviceRoutes.js'
 import { GATEWAY_REQUESTS, SERVICE_HTTP_ROUTES, SERVICE_WS_FRAMES, WIFI_REQUESTS } from './api.js'
 import { loadOrCreateHookCredential } from '../lib/hookAuth.js'
-import { attachLocalWsServer, LOCAL_WS_PATH, LOCAL_WS_PROTOCOL_VERSION } from '../localWsServer.js'
+import { attachLocalWsServer, LOCAL_WS_PATH, LOCAL_WS_PROTOCOL_VERSION, type LocalWsServer } from '../localWsServer.js'
 import { TERMINAL_BINARY_VERSION } from '../lib/terminalBinary.js'
 import { isLoopbackRequest, loopbackHosts } from '../lib/loopbackRequest.js'
 import { isInstalledCopy } from '../lib/installedCopy.js'
@@ -278,33 +276,6 @@ function terminalHintMachineName(): string {
 function dialMachineName(): string {
   try { return readFileSync(MACHINE_NAME_FILE, 'utf8').trim() || 'This machine' } catch { return 'This machine' }
 }
-
-/**
- * The window's tiles, in tile order, as last reported.
- *
- * Kept HERE rather than only handed to the cable host, because the window can
- * report them before that host exists: the local websocket server is listening
- * long before the cable is wired up, and a daemon restart has the app
- * reconnecting into that window. The roster is only re-sent when it CHANGES, so
- * one early report used to leave the dial's ring flat and edgeless for as long
- * as the tiles held still — which looks exactly like the feature not being
- * installed, and cost most of a morning proving otherwise.
- */
-let appPaneAgents: string[] = []
-
-/**
- * The window's tabs, kept for the same reason: a window can connect while this daemon is still
- * booting (the app no longer waits for its first scan), and an `app_swarms` that lands before the
- * cable host exists was dropped — the dial then had no tab, drew "Choose a pane" and took no swipe
- * or voice until the window happened to send its tabs again (measured 2026-10-01: 80 s).
- *
- * Kept by the core, too, because the devices can restart where the windows do not: in a process of
- * their own (step 9), a devices process that starts again is told the desk, the tabs, what is unread
- * and which window has the person's attention, as they stand (services/devices.ts).
- */
-let appSwarmsLatest: AppSwarms | null = null
-/** What the window still has unread, kept for the same reason. */
-let appUnreadLatest: UnreadNotification[] = []
 
 // OpenCode's SQLite store — polled per session by OpencodeReader (no per-session transcript file).
 const OPENCODE_DB = join(env.OPENCODE_DATA_DIR, 'opencode.db')
@@ -854,7 +825,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   /** The last `dial_status` the devices sent the windows: a window that connects afterwards is told it. */
   let lastDialStatus: Record<string, unknown> = { attached: false }
   /** The local socket, once it exists: the window bridges ask one window through it. */
-  let localWsServerRef: { sendToWindow(connId: string, frame: { type: string; payload: Record<string, unknown> }): boolean } | null = null
+  let localWsServerRef: LocalWsServer | null = null
   // The core's side of the boundary its services stand on, and the ports it reaches them through (core/api.ts).
   // Delivered turns (core/deliveries.ts): text a feature writes into an agent under a delivery id of its
   // own, and what becomes of each, told back to whoever made it, in this process or in its own.
@@ -1209,9 +1180,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     sessions: () => registry.list(),
     readDesk: () => proxyBackend('GET', '/api/desk'),
   })
-  let openPaneAgents = new Set<string>()
-  /** Whether the window those tiles belong to is actually in front. See onAppPanes. */
-  let appWindowForeground = true
   /** A dial plugged into this computer, as the devices said last (`clients.dialWatching`): kept here so
    *  the cards are made for it in line, without asking the devices, which may be in another process. */
   const cableWatchingLocal = (): boolean => dialWatching
@@ -1655,12 +1623,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // What the core keeps of models in its own process for frames and keystrokes, and how it asks it the rest (core/modelsLink.ts).
   const modelsLink = createModelsLink(coreApi, (type, payload) => serviceLinks.call('models', type, payload), (frame) => serviceLinks.notify('models', frame))
   // The devices in their own process (core/devicesLink.ts): told what the windows say, asked ⌘K, and told it
-  // all again whenever they connect, from what the core keeps.
+  // all again whenever they connect, from the lazily loaded Desktop compatibility owner.
   const devicesLink = createDevicesLink({
     core: coreApi,
     notify: (frame) => serviceLinks.notify('devices', frame),
     call: (type, payload, waitMs) => serviceLinks.call('devices', type, payload, waitMs),
-    state: () => ({ desk: appPaneAgents, foreground: appWindowForeground, swarms: appSwarmsLatest, unread: appUnreadLatest,
+    state: () => ({ ...(localWsServerRef?.legacyDeviceSnapshot()
+      ?? { desk: [], foreground: true, swarms: null, unread: [] }),
       focus: focusState.state(), engines: registry.active().map((agent) => agent.engine), commanders: backend.hasCommander() }),
   })
   // Input facts and final focus validation use the ordered core link (core/wifiLink.ts).
@@ -2388,10 +2357,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onAppFocus: (machineId, agentId) => ports.devices?.appFocus(machineId, agentId),
     // Everything the window still has unread. Held rather than acted on: the dial is handed it when a
     // cable attaches, which is the one moment its own drawer is known to be empty.
-    onAppUnread: (items) => {
-      appUnreadLatest = items
-      ports.devices?.unread(items)
-    },
+    onAppUnread: (items) => ports.devices?.unread(items),
     // The window looked at a harness, so the dial's drawer row for it is stale.
     // The dial's own tap already reaches the window (`agent.open`); this is the
     // return leg, and the pair is what keeps the badge and the pill equal.
@@ -2399,29 +2365,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The window's swarms. Relayed to the dial as its own list — the dial names the one on screen above
     // the agent and offers the rest — and, through setSwarms, what makes the desk strict: a present
     // window with an empty swarm is an empty carousel, not the whole machine.
-    onAppSwarms: (swarms) => {
-      appSwarmsLatest = swarms
-      ports.devices?.swarms(swarms)
-    },
+    onAppSwarms: (swarms) => ports.devices?.swarms(swarms),
     onAppTabAgents: (connection, ids) => cleanupTabs.updateWindow(connection, ids),
+    onAppTabPending: (connection, pending) => cleanupTabs.pendingWindow(connection, pending),
     // Agents the window has a tile for, in tile order: the dial's ring (services/devices.ts). A finished turn
     // on one of these is already in front of the person, so the dial updates its tile in silence rather
     // than beeping about something being looked at. An OPEN tile counts as seen, deliberately — not a
     // focused one: with four tiles on a grid all four are on screen.
-    onAppPanes: (agentIds, foreground) => {
-      appPaneAgents = agentIds
-      // A tile behind a browser is not a tile anybody is looking at: the roster does not change when the
-      // window loses focus, so without this the dial went quiet about work nobody could see.
-      appWindowForeground = foreground
-      ports.devices?.desk(agentIds, foreground)
-      const next = new Set(agentIds)
-      // Logged on CHANGE only. It fires on every pane add, close and reconnect,
-      // and it is the one place the whole feature is observable from — without
-      // it, "the dial went quiet" and "the roster never arrived" look identical.
-      const changed = next.size !== openPaneAgents.size || [...next].some((id) => !openPaneAgents.has(id))
-      openPaneAgents = next
-      if (changed) console.log(`[cable] window tiles: ${next.size ? [...next].map(sid).join(' ') : '(none)'}`)
-    },
+    onAppPanes: (agentIds, foreground) => ports.devices?.desk(agentIds, foreground),
     // A window's frames a service answers (core/api.ts `SERVICE_WS_FRAMES`): ⌘K's pick and its send, the fleet's beside the
     // dial in the devices (services/fleet.ts), and its answer to a spoken task.
     serviceFrames: serviceRoutes.frames,

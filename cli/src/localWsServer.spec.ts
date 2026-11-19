@@ -210,6 +210,27 @@ describe('local CLI WebSocket', () => {
     }
   })
 
+  it('keeps exact desk normalization behind the legacy compatibility door', async () => {
+    const backend = new FakeBackend(), panes = vi.fn(), unread = vi.fn(), tabs = vi.fn(), routed = vi.fn(async () => null)
+    const ws = new WebSocket(await start(backend, { onAppPanes: panes, onAppUnread: unread, onAppSwarms: tabs,
+      serviceFrames: new Map(['app_panes', 'app_unread', 'app_swarms'].map(type => [type, routed])) }))
+    try {
+      await onceOpen(ws)
+      const connected = onceMessage(ws)
+      ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+      await connected
+      ws.send(JSON.stringify({ type: 'app_panes', payload: { agentIds: ['active', '', 7] } }))
+      ws.send(JSON.stringify({ type: 'app_unread', payload: { items: [{ agentId: 'active', machineId, text: 'Synthetic recap' }, { agentId: '' }] } }))
+      ws.send(JSON.stringify({ type: 'app_swarms', payload: { active: 'missing', swarms: [{ id: 'tab', name: 'Tab', agentIds: ['active', 7] }], tiles: [] } }))
+      ws.send(JSON.stringify({ type: 'terminal_resize', payload: { streamId, cols: 90, rows: 25 } }))
+      await vi.waitFor(() => expect(backend.frames.at(-1)?.type).toBe('terminal_resize'))
+      expect(panes).toHaveBeenCalledExactlyOnceWith(['active'], true)
+      expect(unread).toHaveBeenCalledExactlyOnceWith([{ agentId: 'active', machineId, question: false, text: 'Synthetic recap' }])
+      expect(tabs).toHaveBeenCalledExactlyOnceWith({ active: 'tab', swarms: [{ id: 'tab', name: 'Tab', agentIds: ['active'], panes: 1 }], tiles: [] })
+      expect(routed).not.toHaveBeenCalled()
+    } finally { ws.close() }
+  })
+
   it('keeps notification identities on the local read and snapshot paths', async () => {
     const backend = new FakeBackend(), seen = vi.fn(), unread = vi.fn()
     const ws = new WebSocket(await start(backend, { onAgentSeen: seen, onAppUnread: unread }))
@@ -1067,6 +1088,30 @@ describe('local CLI WebSocket', () => {
     ws.close()
     await vi.waitFor(() => expect(disconnected).toHaveBeenCalledExactlyOnceWith(machineId, states[0].conn))
     expect(states).toHaveLength(2)
+  })
+
+  it('clears window membership and unregisters when optional disconnect notification throws', async () => {
+    const backend = new FakeBackend(), tabs = vi.fn()
+    const logged = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const url = await start(backend, {
+      onAppTabAgents: tabs,
+      onAppSwarms: () => {},
+      onAppDisconnect: () => { throw new Error('private device failure') },
+    })
+    const ws = new WebSocket(url)
+    try {
+      await onceOpen(ws)
+      const connected = onceMessage(ws)
+      ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+      await connected
+      ws.send(JSON.stringify({ type: 'app_swarms', payload: { swarms: [{ id: 'tab', name: 'Tab', agentIds: ['agent'] }] } }))
+      await vi.waitFor(() => expect(tabs).toHaveBeenCalledWith(backend.connId, ['agent']))
+      ws.close()
+      await vi.waitFor(() => expect(backend.unregisters).toContain(backend.connId))
+      expect(tabs).toHaveBeenLastCalledWith(backend.connId, null)
+      expect(local!.legacyDeviceSnapshot()?.swarms).toBeNull()
+      expect(logged).toHaveBeenCalledExactlyOnceWith('[local-ws] APP_DISCONNECT_FAILED')
+    } finally { ws.terminate(); logged.mockRestore() }
   })
 
   it('keeps Find on the live desktop when a background or replaced socket closes', async () => {

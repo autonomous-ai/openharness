@@ -5,6 +5,7 @@ import { inspectCloseActivity, type CloseAgentServiceDeps } from '../../lib/clos
 import { projectDisplayName, type RegisteredSession } from '../../lib/registry.js'
 import { CLOSE_READ_RECONNECT_MS, createAgentClosing, createCloseRequests, type ClosingDeps } from './close.js'
 import * as TAKEOVER from '../../lib/__fixtures__/takeoverScreens.js'
+import { OpenTabProtection } from '../../lib/openTabProtection.js'
 
 // The real close service, recording what it was built with so its callbacks can be driven directly.
 vi.mock('../../lib/closeAgentService.js', async (real) => {
@@ -201,6 +202,22 @@ describe('closing agents no window shows', () => {
   })
 
   describe('the cleanup preview', () => {
+    it('answers pending local membership as unavailable without inspecting or closing a session', async () => {
+      const session = row({ runtimes: [] })
+      const cleanupTabs = new OpenTabProtection({ machineId: () => 'machine', sessions: () => [session],
+        readDesk: async () => ({ status: 200, body: { success: true, data: { revision: 1, tabs: [] } } }) })
+      const { deps, closing } = setup({ cleanupTabs }, [session], session)
+      const inspect = vi.spyOn(closing.closeAgentService, 'request')
+      const replies: Record<string, unknown>[] = []
+      cleanupTabs.pendingWindow('window', true)
+      createCloseRequests({ cleanupPreview: closing.cleanupPreview, closeAgentService: () => closing.closeAgentService }).preview(result => { replies.push(result) })
+      await vi.waitFor(() => expect(replies).toEqual([{ error: 'TABS_UNAVAILABLE', detail: 'Could not check your open tabs. Nothing was closed.' }]))
+      expect(inspect).not.toHaveBeenCalled(); expect(deps.stopAgent).not.toHaveBeenCalled()
+      cleanupTabs.updateWindow('window', [session.agentId]); cleanupTabs.pendingWindow('window', false)
+      expect(await closing.cleanupPreview()).toEqual({ version: 1, agents: [], kept: 1 })
+      expect(inspect).not.toHaveBeenCalled()
+    })
+
     it('lists the hidden agents a close would take, as they are now, and counts the rest as kept', async () => {
       const shown = row({ agentId: 'shown' })
       const changing = row({ agentId: 'changing' })
