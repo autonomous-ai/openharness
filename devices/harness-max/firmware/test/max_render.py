@@ -36,15 +36,18 @@ def main() -> int:
     font = os.environ.get("PRO_FONT")
     subprocess.run([sys.executable, str(pro / "scripts" / "gen_fonts.py"), *(["--font", font] if font else []),
                     "--out", str(fonts)], check=True)
-    disp, app = pro / "main" / "display", fw / "main" / "app"
+    disp, app, fork = pro / "main" / "display", fw / "main" / "app", fw / "main" / "pro_fork"
     for h in heights:
         exe = out / f"max_render-{h}"
+        # As test/max_tree.sh: main/pro_fork/ first on the path, the glass force-included, the Max's compositor copies.
         subprocess.run(["cc", "-std=c11", "-D_DEFAULT_SOURCE", "-Wall", "-Wextra", "-Werror", "-O1", "-g",
-                        "-DHT_WIDTH=1920", f"-DHT_HEIGHT={h}", f"-I{app}", f"-I{pro / 'main'}", f"-I{disp}",
+                        "-DHT_WIDTH=1920", f"-DHT_HEIGHT={h}", f"-I{fork}", "-include", str(fw / "main" / "max_glass.h"),
+                        f"-I{app}", f"-I{pro / 'main'}", f"-I{disp}",
                         "-o", str(exe), str(here / "max_render.c"), *sorted(str(p) for p in app.glob("max_ui*.c")),
-                        str(disp / "terminal.c"), str(disp / "pro_canvas.c"),
+                        str(fork / "display" / "terminal.c"), str(fork / "display" / "pro_canvas.c"),
+                        str(fork / "pod" / "pod_draw.c"),
                         *(str(pro / "main" / "pod" / f"{name}.c")
-                          for name in ("pod_draw", "pod_pet", "pets", "pets_ask", "pets_codex", "engine_logos")),
+                          for name in ("pod_pet", "pets", "pets_ask", "pets_codex", "engine_logos")),
                         str(fonts)],
                        check=True)
         screens = args or subprocess.run([str(exe), "--list"], check=True, capture_output=True, text=True).stdout.split()

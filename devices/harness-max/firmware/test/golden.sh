@@ -3,11 +3,12 @@
 #   test/golden.sh           writes the baselines: test/golden.txt and test/golden-415.txt, or test/golden-liberation.txt
 #                            and test/golden-liberation-415.txt when PRO_FONT is Liberation
 #   test/golden.sh --check   compares a fresh render with them: exit 0 all match, 1 one differs, 2 a baseline is missing
-# Builds test/max_render.c into test/out/golden/, with the Pro's compositor and fonts.
+# Builds test/max_render.c into test/out/golden/, with the Max's copies of the Pro's compositor and the Pro's fonts.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fw="$(cd "$here/.." && pwd)"
 pro="$(cd "$fw/../../harness-pro/firmware" && pwd)"
+source "$here/max_tree.sh"
 out="$here/out/golden"
 check=""
 [[ "${1:-}" == "--check" ]] && check=1
@@ -35,8 +36,8 @@ status=0
 for h in "${heights[@]}"; do
     exe="$out/max_render-$h" base="$(baseline "$h")" now="$out/now-$h.txt"
     cc -std=c11 -D_DEFAULT_SOURCE -Wall -Wextra -Werror -O1 -g -DHT_WIDTH=1920 -DHT_HEIGHT="$h" \
-       -I"$fw/main/app" -I"$pro/main" -I"$disp" -o "$exe" "$here/max_render.c" "$fw"/main/app/max_ui_*.c \
-       "$disp/terminal.c" "$disp/pro_canvas.c" "$pro"/main/pod/{pod_draw,pod_pet,pets,pets_ask,pets_codex,engine_logos}.c \
+       "${max_pro_flags[@]}" -I"$fw/main/app" -I"$pro/main" -I"$disp" -o "$exe" "$here/max_render.c" \
+       "$fw"/main/app/max_ui_*.c "${max_compositor[@]}" "$pro"/main/pod/{pod_pet,pets,pets_ask,pets_codex,engine_logos}.c \
        "$out/pro_fonts.c"
     for s in $("$exe" --list); do
         "$exe" "$s" "$out/r.ppm" >/dev/null

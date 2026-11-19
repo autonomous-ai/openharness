@@ -1,7 +1,8 @@
 # The bench's one component: bench_main.c, the bench's portable timing code (../bench_*.c, also built on the host by
 # ../profile.sh), and from the product what draws and turns the glass: Max's screens (../../main/app/max_ui*.c) and their
-# demo scenes (../../test/max_render.c), the Pro's compositor, the strip turn (CPU and PPA) and the frame path that
-# shares the strips between the cores and turns them into the framebuffer (max_present.c, max_strips.c).
+# demo scenes (../../test/max_render.c), the compositor (the Max's copies of the Pro's, MAX_COMPOSITOR_SRCS), the strip
+# turn (CPU and PPA) and the frame path that shares the strips between the cores and turns them into the framebuffer
+# (max_present.c, max_strips.c). Its include path and glass are the product's (../../sources.cmake).
 include(${CMAKE_CURRENT_LIST_DIR}/../../sources.cmake)
 set(BENCH ${CMAKE_CURRENT_LIST_DIR}/..)
 
@@ -15,15 +16,14 @@ idf_component_register(
         "${MAX_FW}/main/display/max_turn.c"
         "${MAX_FW}/main/display/max_turn_ppa.c"
         ${MAX_UI_SRCS}
-        "${PRO_MAIN}/display/terminal.c"
-        "${PRO_MAIN}/display/pro_canvas.c"
-        "${PRO_MAIN}/pod/pod_draw.c"
+        ${MAX_COMPOSITOR_SRCS}
         "${PRO_MAIN}/pod/pod_pet.c"
         "${PRO_MAIN}/pod/pets.c"
         "${PRO_MAIN}/pod/pets_ask.c"
         "${PRO_MAIN}/pod/pets_codex.c"
         "${PRO_MAIN}/pod/engine_logos.c"
     INCLUDE_DIRS
+        "${MAX_PRO_FORK}"
         "${BENCH}"
         "${MAX_FW}/test"
         "${MAX_FW}/main/app"
@@ -42,6 +42,7 @@ idf_component_register(
 
 # The product's glass and flags (../../main/CMakeLists.txt).
 target_compile_definitions(${COMPONENT_LIB} PRIVATE HT_WIDTH=1920 HT_HEIGHT=480 PRO_DISPLAY_W=1920 PRO_DISPLAY_H=480)
+max_glass(${COMPONENT_LIB})
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-format-truncation)
 
 set(PRO_FONTS_C ${CMAKE_BINARY_DIR}/pro_fonts.c)

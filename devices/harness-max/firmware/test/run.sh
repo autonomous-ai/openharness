@@ -7,6 +7,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fw="$(cd "$here/.." && pwd)"
 pro="$(cd "$fw/../../harness-pro/firmware" && pwd)"
+source "$here/max_tree.sh"
 out="$(mktemp -d)"
 trap 'rm -rf "$out"' EXIT
 
@@ -22,7 +23,7 @@ python3 "$pro/scripts/gen_fonts.py" ${font_args[@]+"${font_args[@]}"} --out "$ou
 # frames), the drawing on the render task (4 KB frames).
 glass() {   # glass <height>: cflags for that glass
     cflags=(-std=c11 -D_DEFAULT_SOURCE -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}"
-            -DHT_WIDTH=1920 -DHT_HEIGHT="$1" -I"$fw/main/app" -I"$pro/main" -I"$pro/main/display")
+            -DHT_WIDTH=1920 -DHT_HEIGHT="$1" "${max_pro_flags[@]}" -I"$fw/main/app" -I"$pro/main" -I"$pro/main/display")
 }
 build_obj() {   # build_obj <height> <limit-bytes> <source>...
     local h="$1" limit="$2"; shift 2
@@ -42,8 +43,7 @@ for h in ${MAX_HEIGHTS:-480 415}; do
     objs=()
     build_obj "$h" 1024 "$fw"/main/app/max_ui_{model,touch,ask,form,nav,row}.c
     build_obj "$h" 4096 "$fw"/main/app/max_ui_{view,card,pet,overview,agent,lists,icons,layer,warm}.c "$pro/main/pod/pod_pet.c"
-    build_obj "$h" 100000 "$pro/main/display/terminal.c" "$pro/main/display/pro_canvas.c" "$pro/main/pod/pod_draw.c" \
-        "$pro"/main/pod/{pets,pets_ask,pets_codex,engine_logos}.c "$out/pro_fonts.c"
+    build_obj "$h" 100000 "${max_compositor[@]}" "$pro"/main/pod/{pets,pets_ask,pets_codex,engine_logos}.c "$out/pro_fonts.c"
 
     for t in test_max_model test_max_ask test_max_form test_max_view test_max_touch test_max_motion test_max_loops \
              test_max_warm; do
@@ -72,8 +72,8 @@ done
 glass 480
 cflags=("${cflags[@]/-fsanitize=*/-fsanitize=thread}")
 cc "${cflags[@]}" "${present[@]}" -DPRO_DISPLAY_H=480 -o "$out/test_max_present_tsan" "$here/test_max_present.c" \
-    "$fw/main/display/max_present.c" "${linux_rtos[@]}" "$fw"/main/app/max_ui_*.c "$pro/main/display/terminal.c" \
-    "$pro/main/display/pro_canvas.c" "$pro"/main/pod/{pod_draw,pod_pet,pets,pets_ask,pets_codex,engine_logos}.c "$out/pro_fonts.c"
+    "$fw/main/display/max_present.c" "${linux_rtos[@]}" "$fw"/main/app/max_ui_*.c "${max_compositor[@]}" \
+    "$pro"/main/pod/{pod_pet,pets,pets_ask,pets_codex,engine_logos}.c "$out/pro_fonts.c"
 "$out/test_max_present_tsan"
 
 # The strip turn into the portrait panel (the platform's), on the ESP32-P4's glass.
@@ -89,6 +89,28 @@ glass 480
 cc "${cflags[@]}" "${present[@]}" -DPRO_DISPLAY_H=480 -o "$out/test_max_strips" "$here/test_max_strips.c" \
     "$fw/main/display/max_strips.c" "$fw/main/display/max_turn.c" "${linux_rtos[@]}"
 "$out/test_max_strips"
+
+# The Max's cable (main/pro_fork/cable/pro_cable.c): the daemon's JSON in, pro_app_* out, over the real cJSON (CJSON_DIR,
+# else ESP-IDF's, as test_max_demo.sh), the Pro's cable helpers as they are, a recording stub of the Max's pro_app_api.h
+# and a stub cable_link (test_max_cable.c). On the cable_link task: every frame capped at 1 KB, as the Pro's.
+cjson="${CJSON_DIR:-${IDF_PATH:-$HOME/esp/esp-idf-5.5.4}/components/json/cJSON}"
+if [[ ! -f "$cjson/cJSON.c" ]]; then
+    echo "run.sh: no cJSON.c in $cjson: set CJSON_DIR, or IDF_PATH to ESP-IDF" >&2
+    exit 1
+fi
+cable_flags=(-std=c11 -D_DEFAULT_SOURCE -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}"
+             -DHT_WIDTH=1920 -DHT_HEIGHT=480 "${max_pro_flags[@]}" -I"$fw/main" -I"$pro/main" -I"$pro/main/display"
+             -I"$pro/main/cable" -I"$pro/test/host_esp" -I"$cjson")
+cable_objs=()
+for src in "$fw/main/pro_fork/cable/pro_cable.c" "$pro"/main/cable/{cable_json_guard,cable_features,cable_machines,cable_scroll,cable_frame}.c; do
+    cc "${cable_flags[@]}" -Wframe-larger-than=1024 -c -o "$out/cable-$(basename "$src" .c).o" "$src"
+    cable_objs+=("$out/cable-$(basename "$src" .c).o")
+done
+cc -std=c11 -D_DEFAULT_SOURCE -w -O1 -g -c -o "$out/cJSON.o" "$cjson/cJSON.c"
+cc "${cable_flags[@]}" -o "$out/test_max_cable" "$here/test_max_cable.c" "${cable_objs[@]}" "$out/cJSON.o" -lpthread -lm
+"$out/test_max_cable"
+# Its hello: the Pro's keys with the Max's board and capabilities (send_hello lifted out and run over stubs).
+python3 "$here/test_max_hello.py"
 
 # The scripted demo daemon (main/demo/), under its own sanitizers.
 bash "$here/test_max_demo.sh"

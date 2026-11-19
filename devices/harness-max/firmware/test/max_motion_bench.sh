@@ -6,6 +6,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fw="$(cd "$here/.." && pwd)"
 pro="$(cd "$fw/../../harness-pro/firmware" && pwd)"
+source "$here/max_tree.sh"
 out="$here/out/bench"
 mkdir -p "$out"
 font_args=()
@@ -23,8 +24,8 @@ for mode in vector scalar; do
     for h in 480 415; do
         exe="$out/max_motion_bench-$h-$mode"
         cc -std=c11 -D_DEFAULT_SOURCE -Wall -Wextra -Werror -O2 ${flags[@]+"${flags[@]}"} -DHT_WIDTH=1920 -DHT_HEIGHT="$h" \
-           -I"$here" -I"$fw/main/app" -I"$pro/main" -I"$disp" -o "$exe" "$here/max_motion_bench.c" "$fw"/main/app/max_ui_*.c \
-           "$disp/terminal.c" "$disp/pro_canvas.c" "$pro"/main/pod/{pod_draw,pod_pet,pets,pets_ask,pets_codex,engine_logos}.c \
+           "${max_pro_flags[@]}" -I"$here" -I"$fw/main/app" -I"$pro/main" -I"$disp" -o "$exe" "$here/max_motion_bench.c" \
+           "$fw"/main/app/max_ui_*.c "${max_compositor[@]}" "$pro"/main/pod/{pod_pet,pets,pets_ask,pets_codex,engine_logos}.c \
            "$out/pro_fonts.c"
         "$exe" "$@"
     done

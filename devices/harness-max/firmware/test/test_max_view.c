@@ -4,6 +4,7 @@
 // and what moves by the clock. Pages are set straight in max_m, so these tests do not lean on the model's own moves.
 #include "max_test.h"
 #include "max_ui_motion.h"
+#include "pod/pod_draw.h"
 
 enum { K_TEXT = 1, K_IMAGE = 3 };   // pro_canvas.c's PRO_TEXT, PRO_IMAGE
 #define T0 1000000u
@@ -917,8 +918,26 @@ static void test_new_harness(void)
     check_glass();
 }
 
+// The Max's pod_draw.c (main/pro_fork/pod/pod_draw.c) draws a triangle right of 1023 px, as far as int16 sixteenths reach
+// (the Pro's refuses it): the 1920 px glass's arrows and tails there. An edge too long for tri_raster's 32-bit isqrt,
+// or a vertex past int16, is still refused.
+static void test_triangle_reach(void)
+{
+    const uint16_t ink = 0xFFFF;
+    static ht_scene_t s;
+    ht_scene_clear(&s, 0);
+    CHECK(!pod_tri(&s, 0, 0, 160, 160, 320, 320, ink) && s.count == 0);       // degenerate
+    CHECK(!pod_tri(&s, 40000, 0, 0, 0, 0, 160, ink) && s.count == 0);         // past int16 sixteenths
+    CHECK(!pod_tri(&s, -0x7000, 0, 0x7000, 0, 0, 160, ink) && s.count == 0);  // an edge too long for isqrt
+    CHECK(pod_tri(&s, 1500 * 16, 0, 1530 * 16, 0, 1515 * 16, 16 * 16, ink) && s.count == 1);
+    static uint16_t px[32 * 16];
+    ht_raster(&s, (ht_rect_t){1500, 0, 32, 16}, px);
+    CHECK(px[2 * 32 + 15] == ink && px[15 * 32 + 1] == 0);   // inside its middle, and outside a lower corner
+}
+
 int main(void)
 {
+    test_triangle_reach();
     test_budget();
     test_overview();
     test_agent_page();

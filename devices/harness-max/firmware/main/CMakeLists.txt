@@ -48,9 +48,10 @@ idf_component_register(
         mbedtls
 )
 
-# The compositor and every shared caller at the Max's glass: 1920 x 480, landscape. pro_display.h and terminal.h take
-# these instead of their 720 defaults.
+# The compositor and every shared caller at the Max's glass: 1920 x 480, landscape. main/max_glass.h, force-included,
+# puts these in place of the 720 of the Pro's pro_display.h and terminal.h.
 target_compile_definitions(${COMPONENT_LIB} PRIVATE HT_WIDTH=1920 HT_HEIGHT=480 PRO_DISPLAY_W=1920 PRO_DISPLAY_H=480)
+max_glass(${COMPONENT_LIB})
 
 # As the Pro: snprintf() truncates safely, and -O2's format-truncation analysis errors on same-size copies.
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-format-truncation)
