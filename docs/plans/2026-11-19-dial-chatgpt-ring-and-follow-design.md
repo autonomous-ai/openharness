@@ -170,8 +170,8 @@ dial.
   binding is a failed read. One query, with no value from outside in it, served by the store's
   `idx_threads_recency_at_ms`:
   `SELECT id, source, cwd, recency_at_ms, updated_at_ms FROM threads WHERE archived = 0 AND source IN ('cli','vscode')
-  ORDER BY recency_at_ms DESC LIMIT 200`. A row whose `id` fails `CODEX_THREAD`, or whose `cwd` is not a non-empty
-  string of at most 4,096 characters, is skipped and counted. A `transient` or `missing` answer is a failed read.
+  ORDER BY recency_at_ms DESC, id DESC LIMIT 200`. A row whose `id` fails `CODEX_THREAD`, or whose `cwd` is not a
+  non-empty string of at most 4,096 characters, is skipped and counted. A `transient` or `missing` answer is a failed read.
 - **The JSON file:** a regular file (`lstat`, no link) of at most 1 MiB, read whole and parsed. Only `project-order` (a
   list of strings, at most 64 kept) and `thread-project-assignments` (an object, whose entries are kept only for the
   threads the query returned, with `projectId` a string) are taken. Nothing else of the parsed object is kept, read or

@@ -34,9 +34,11 @@ const INDEX = 'session_index.jsonl'
 /** The binding is synchronous on the devices event loop: a store the app holds locked fails fast, and is read next time. */
 const BUSY_TIMEOUT_MS = 50
 /** A person's own threads, a terminal's (`cli`) and the app's or an editor's (`vscode`), never a script's, a subagent's or
- *  a guardian review's; served by the store's own `idx_threads_recency_at_ms`. No value from outside goes in. */
+ *  a guardian review's; served by the store's own `idx_threads_recency_at_ms`. A tie goes by id, as that index orders
+ *  it, so the rows taken at the limit do not hang on which index the store's planner picks. No value from outside goes
+ *  in. */
 const QUERY = 'SELECT id, source, cwd, recency_at_ms, updated_at_ms FROM threads WHERE archived = 0 AND source IN '
-  + `('cli','vscode') ORDER BY recency_at_ms DESC LIMIT ${MAX_ROWS}`
+  + `('cli','vscode') ORDER BY recency_at_ms DESC, id DESC LIMIT ${MAX_ROWS}`
 
 export interface CodexAppThread {
   /** Checked against CODEX_THREAD: the Codex session id. */
