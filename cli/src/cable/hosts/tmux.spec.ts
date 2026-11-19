@@ -62,16 +62,17 @@ const forward = (bundle: string): Call => run(OPEN, '-b', bundle)
 const PANE = '%3'
 const IN_GHOSTTY = { TMUX_PANE: PANE, TERM_PROGRAM: 'tmux', __CFBundleIdentifier: 'com.mitchellh.ghostty' }
 const TAG = 'abcdef0123456789'
-/** One line of `list-clients`, as tmux prints it: when it was used last, its name, the tag of the pane it shows, its session. */
-const client = (activity: number, name: string, tag: string, session: string) => `${activity}|${name}|${tag}|${session}\n`
+/** One line of `list-clients`, as tmux prints it: when it was used last, its process, its name, the tag of the pane it
+ *  shows, its session. */
+const client = (activity: number, pid: number | string, name: string, tag: string, session: string) => `${activity}|${pid}|${name}|${tag}|${session}\n`
 /** What tmux says of the pane: its process, its session, and the tag of the daemon that made it, empty for the person's. */
 const says = (pid: number, session = 'work', owner = '') => `${pid}|${session}|${owner}\n`
 /** The pane holds the agent's shell, and the person's one client is on a session of their own. */
-const OWN = { pane: says(90), clients: client(1794700050, '/dev/ttys004', '', 'work') }
+const OWN = { pane: says(90), clients: client(1794700050, 5004, '/dev/ttys004', '', 'work') }
 const askedOf = (pane: string): Call => run('tmux', 'display-message', '-p', '-t', pane, '#{pane_pid}|#{session_name}|#{@harness_daemon}'
   + '#{?#{m:/usr/bin/env HARNESS_DAEMON=*,#{pane_start_command}},#{=44:pane_start_command},#{?#{m:harness-*,#{session_name}},#{@harness_daemon},}}')
 const asked = askedOf(PANE)
-const listed: Call = run('tmux', 'list-clients', '-F', '#{client_activity}|#{client_name}|#{@harness_daemon}|#{session_name}')
+const listed: Call = run('tmux', 'list-clients', '-F', '#{client_activity}|#{client_pid}|#{client_name}|#{@harness_daemon}|#{session_name}')
 const switched = (name = '/dev/ttys004'): Call => run('tmux', 'switch-client', '-c', name, '-t', PANE)
 const ghostty = forward('com.mitchellh.ghostty')
 const fallback = ['[device] open · tmux · fallback']
@@ -203,6 +204,56 @@ describe('a pane with its app', () => {
   })
 })
 
+// The raise on Linux starts its walk for a window from the client tmux switched, not the agent (the dial-linux spec, 2.2).
+describe('the client a tap switched', () => {
+  const pane = { adapter: 'tmux', id: '%3:100' }
+
+  it('is the switched client\'s process, said once', async () => {
+    const { adapter } = recorder({}, [], OWN)
+    expect(adapter.windowPid?.(pane)).toBeUndefined()
+    expect(await adapter.focus(pane)).toBe(true)
+    expect(adapter.windowPid?.(pane)).toBe(5004)
+    expect(adapter.windowPid?.(pane)).toBeUndefined()
+  })
+
+  it('is none for another pane, or after a switch that failed or was refused', async () => {
+    const other = recorder({}, [], OWN)
+    expect(await other.adapter.focus(pane)).toBe(true)
+    expect(other.adapter.windowPid?.({ adapter: 'tmux', id: '%4:100' })).toBeUndefined()
+    expect(other.adapter.windowPid?.({ adapter: 'tmux', id: '%3:101' })).toBeUndefined()
+    // A tap that switched, then one whose switch failed: the first one's client is not the window now.
+    const failed = recorder({}, [0, 0, 0, 0, 0, 1], OWN)
+    expect(await failed.adapter.focus(pane)).toBe(true)
+    expect(await failed.adapter.focus(pane)).toBe(false)
+    expect(failed.adapter.windowPid?.(pane)).toBeUndefined()
+    const refused = recorder({}, [], { ...OWN, pane: says(4242) })
+    expect(await refused.adapter.focus(pane)).toBe('refused')
+    expect(refused.adapter.windowPid?.(pane)).toBeUndefined()
+    // A pane with its app is selected on its own session and no client moves: its window is its app's client's.
+    const selectedOnly = recorder({}, [], OWN)
+    expect(await selectedOnly.adapter.focus(WITH_APP)).toBe(true)
+    expect(selectedOnly.calls).toEqual([asked, selected])
+    expect(selectedOnly.adapter.windowPid?.(WITH_APP)).toBeUndefined()
+  })
+
+  it('a client whose process is not a whole number above 1 is still switched, and none is kept', async () => {
+    for (const pid of ['', '1', '0', '-5', 'abc', '01', '12345678901']) {
+      const odd = recorder({}, [], { pane: says(90), clients: client(1794700050, pid, '/dev/ttys004', '', 'work') })
+      expect(await odd.adapter.focus(pane), pid).toBe(true)
+      expect(odd.calls, pid).toEqual([asked, listed, switched()])
+      expect(odd.adapter.windowPid?.(pane), pid).toBeUndefined()
+    }
+  })
+
+  it('is kept for the last sixteen panes switched to, the oldest dropped', async () => {
+    const panes = Array.from({ length: 17 }, (_, i) => ({ adapter: 'tmux', id: `%${i}:100` }))
+    const { adapter } = recorder({}, [], OWN)
+    for (const p of panes) expect(await adapter.focus(p)).toBe(true)
+    expect(adapter.windowPid?.(panes[0])).toBeUndefined()
+    for (const p of panes.slice(1)) expect(adapter.windowPid?.(p), p.id).toBe(5004)
+  })
+})
+
 describe('a tap on an agent in the person\'s own tmux pane (docs/specs/2026-11-15-device-wave1-checks.md)', () => {
   it('the pane holds the agent: the person\'s client is switched to it, then its app comes forward', async () => {
     const { calls, logs, opener } = recorder({}, [], OWN)
@@ -263,22 +314,23 @@ describe('a tap on an agent in the person\'s own tmux pane (docs/specs/2026-11-1
   // Desktop's terminals, a phone's and hn's are tmux clients too, on the same server: a tap never moves one of them.
   it('the client switched is the one used last among those not on a session Harness made', async () => {
     const clients = [
-      client(1794700100, 'client-501', TAG, 'harness-claude-1790000000000-x'), // a Harness terminal, used last of all
-      client(1794700090, 'client-502', '', 'harness-codex-1790000000000-y'), // a session a build before the tag named
-      client(1794700080, 'client-503', TAG, 'work'), // showing a Harness pane the person moved
-      client(1794700050, '/dev/ttys004', '', 'work'),
-      client(1794700070, '/dev/ttys009', '', 'notes|2'), // a session's name may hold a bar
-      client(1794700070, 'client-777', '', 'notes|2'), // the same second: the one listed later
-      'not a client\n', 'soon|/dev/ttys010||work\n', '1794700099|||work\n', // no line tmux prints: each is passed over
+      client(1794700100, 5001, 'client-501', TAG, 'harness-claude-1790000000000-x'), // a Harness terminal, used last of all
+      client(1794700090, 5002, 'client-502', '', 'harness-codex-1790000000000-y'), // a session a build before the tag named
+      client(1794700080, 5003, 'client-503', TAG, 'work'), // showing a Harness pane the person moved
+      client(1794700050, 5004, '/dev/ttys004', '', 'work'),
+      client(1794700070, 5009, '/dev/ttys009', '', 'notes|2'), // a session's name may hold a bar
+      client(1794700070, 5777, 'client-777', '', 'notes|2'), // the same second: the one listed later
+      'not a client\n', 'soon|5010|/dev/ttys010||work\n', '1794700099|5011|||work\n', '1794700099|/dev/ttys011||work\n', // no line tmux prints: each is passed over
     ].join('')
-    const { calls, logs, opener } = recorder({}, [], { pane: says(90), clients })
+    const { calls, logs, adapter, opener } = recorder({}, [], { pane: says(90), clients })
     expect(await opener.open('a1', target(IN_GHOSTTY))).toBe(true)
     expect(calls).toEqual([asked, listed, switched('client-777'), ghostty])
     expect(logs).toEqual([])
+    expect(adapter.windowPid?.({ adapter: 'tmux', id: '%3:100' })).toBe(5777)
   })
 
   it('with no client of the person\'s nothing is switched: the app comes forward, as a fallback', async () => {
-    const harnessOnly = client(1794700100, 'client-501', TAG, 'harness-claude-1790000000000-x') + client(1794700090, 'client-502', '', 'harness-codex-1790000000000-y')
+    const harnessOnly = client(1794700100, 5001, 'client-501', TAG, 'harness-claude-1790000000000-x') + client(1794700090, 5002, 'client-502', '', 'harness-codex-1790000000000-y')
     for (const clients of ['', harnessOnly]) {
       const none = recorder({}, [], { pane: says(90), clients })
       expect(await none.opener.open('a1', target(IN_GHOSTTY))).toBe(true)
