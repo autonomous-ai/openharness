@@ -1,9 +1,10 @@
 /** Durable associations, scoped to one conversation on its owning machine. Never cleanup authority. */
-import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { mkdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
 import type { RegisteredSession } from './registry.js'
+import { atomicWriteFile, jsonObject, readState } from './secureState.js'
 import type { SessionGitContext } from './sessionGitContext.js'
 import { validPullRequestUrl, validWorkPath } from './sessionWorkWire.js'
 import type { WorkPullRequest } from './sessionWork.js'
@@ -67,9 +68,9 @@ export class SessionGitHistoryStore {
         try {
           const path = join(this.directory, `${key}.json`)
           if ((await stat(path)).size > 512 * 1024) return
-          const data: unknown = JSON.parse(await readFile(path, 'utf8'))
-          if (valid(data)) current.value = data
-        } catch { /* Missing/corrupt history remains unknown, never a reason to stop a session. */ }
+          const read = readState(path, 'cache', jsonObject)
+          if (read.state === 'ok' && valid(read.value)) current.value = read.value
+        } catch { /* Missing history, or a shape `valid` trips on, remains unknown, never a reason to stop a session. */ }
       })()
       this.entries.set(key, entry)
     }
@@ -142,12 +143,8 @@ export class SessionGitHistoryStore {
     const bytes = JSON.stringify(entry.value)
     entry.writes++
     entry.saving = entry.saving.then(async () => {
-      const temporary = join(this.directory, `${key}.${randomUUID()}.tmp`)
-      try {
-        await mkdir(this.directory, { recursive: true, mode: 0o700 })
-        await writeFile(temporary, bytes, { mode: 0o600, flag: 'wx' })
-        await rename(temporary, join(this.directory, `${key}.json`))
-      } finally { await unlink(temporary).catch(() => {}) }
+      await mkdir(this.directory, { recursive: true, mode: 0o700 })
+      atomicWriteFile(join(this.directory, `${key}.json`), bytes, 'cache')
     }).catch(() => { /* Display keeps the in-memory observations if disk is temporarily unavailable. */ })
       .finally(() => { entry.writes--; this.trim() })
   }

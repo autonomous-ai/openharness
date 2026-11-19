@@ -4,9 +4,10 @@
  * architecture. Grid's llama.cpp starts one only when its app is not installed here. */
 import { spawn } from 'node:child_process'
 import { closeSync, openSync } from 'node:fs'
-import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, open, rm } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { processExists } from './processLiveness.js'
+import { atomicWriteFile, jsonArray, readState } from './secureState.js'
 import { execFileTied, type TiedExecError } from './tied.js'
 
 export type AppEngine = 'ollama' | 'lm-studio' | 'llama.cpp'
@@ -344,15 +345,13 @@ export function appEngineOps(env: NodeJS.ProcessEnv, request: typeof fetch = fet
 
 /** The engines this daemon started, by model id. */
 export async function readAppRecords(file: string): Promise<AppEngineRecord[]> {
-  try {
-    return rows(JSON.parse(await readFile(file, 'utf8'))).filter(r => r.spec === 1 && str(r.modelId) && str(r.grid) &&
-      ['ollama', 'lm-studio', 'llama.cpp'].includes(r.engine) && typeof r.port === 'number' && safe(str(r.alias))) as AppEngineRecord[]
-  } catch { return [] }
+  const read = readState(file, 'cache', jsonArray)
+  if (read.state !== 'ok') return []
+  return rows(read.value).filter(r => r.spec === 1 && str(r.modelId) && str(r.grid) &&
+    ['ollama', 'lm-studio', 'llama.cpp'].includes(r.engine) && typeof r.port === 'number' && safe(str(r.alias))) as AppEngineRecord[]
 }
 
 export async function writeAppRecords(file: string, records: AppEngineRecord[]): Promise<void> {
   await mkdir(join(file, '..'), { recursive: true, mode: 0o700 })
-  const temp = `${file}.${process.pid}.${Date.now()}.tmp`
-  await writeFile(temp, JSON.stringify(records), { mode: 0o600 })
-  await rename(temp, file)
+  atomicWriteFile(file, JSON.stringify(records), 'cache')
 }

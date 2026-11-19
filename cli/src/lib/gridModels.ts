@@ -19,8 +19,8 @@
  * which rows only a computer of the account's that seems offline serves (`gridPresence.ts`): a label,
  * never a removal.
  */
-import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { mkdir, readdir, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { env as config } from '../config/env.js'
 import { annotate, glanceFor, type AgentGridTarget, type GridAnnotation, type GridGlance, type GridNote } from './gridAnnotation.js'
@@ -40,6 +40,7 @@ import {
 import type { GridLaunchOverride } from './gridLaunch.js'
 import { PrewarmDebounce, wakeRead, type RelayAccess, type WakePurpose } from './gridWake.js'
 import { readRunRecords } from './localModels.js'
+import { atomicWriteFile } from './secureState.js'
 
 export interface GridModel {
   /** The id an engine is pointed at, in the exact case the grid serves it. */
@@ -705,10 +706,8 @@ export class GridModelsService {
     try {
       const file = this.file(tracked)
       await mkdir(dirname(file), { recursive: true, mode: 0o700 })
-      const temp = `${file}.${randomUUID()}.tmp`
       const saved: SavedPicture = { networkId: tracked.id, name: tracked.name, own: tracked.own, picture: tracked.picture }
-      await writeFile(temp, JSON.stringify(saved), { mode: 0o600 })
-      await rename(temp, file)
+      atomicWriteFile(file, JSON.stringify(saved), 'cache')
       tracked.saved = text
     } catch { /* the picture is still in memory; the next read tries again */ }
   }

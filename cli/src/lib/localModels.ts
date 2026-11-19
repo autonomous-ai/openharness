@@ -1,7 +1,7 @@
 /** The Models popover's local lifecycle. Grid remains the hardware, catalog,
  * download and process authority. A click is a durable daemon operation, never a chat task. */
 import { createHash, randomUUID } from 'node:crypto'
-import { readFile, readdir, stat, mkdir, rename, writeFile, statfs, symlink, lstat, readlink } from 'node:fs/promises'
+import { readFile, readdir, stat, mkdir, statfs, symlink, lstat, readlink } from 'node:fs/promises'
 import { createServer, type AddressInfo } from 'node:net'
 import { basename, dirname, join } from 'node:path'
 import { GridFleetRpc, type GridFleetResult } from './gridFleetRpc.js'
@@ -16,6 +16,7 @@ import type { GpuProcess } from './gpuProcesses.js'
 import { downloadedBytes, removeDownload, unfinishedDownload } from './modelFiles.js'
 import { APP_LABEL, AppStartError, GRID_LABEL, appContext, readAppRecords, writeAppRecords, type AppEngine, type AppEngineOps, type AppEngineRecord, type AppModel } from './appModels.js'
 import { osToken, type OsToken } from './osToken.js'
+import { atomicWriteFile, jsonArray, readState } from './secureState.js'
 
 // Its own module, so the API launches the core keeps need not load this one (codingContext.ts).
 export { MIN_CODING_CONTEXT }
@@ -29,20 +30,20 @@ const key = (v: string): string => createHash('sha256').update(v).digest('hex').
 
 /** The models a grid's known-models file names, each checked: a malformed row is left out, never forwarded as argv. */
 async function readKnown(path: string): Promise<Candidate[]> {
-  try {
-    return rows(JSON.parse(await readFile(path, 'utf8'))).filter(c =>
-      c.id === `local:${c.file}` && basename(str(c.file)) === c.file && validArg(c.file) &&
-      c.pull === '' && typeof c.name === 'string' && c.name.length < 256 && num(c.size) &&
-      Array.isArray(c.files) && c.files.length === 1 && c.files[0] === c.file).map(({ context: _pinned, ...c }) => ({
-        // A saved `context` is dropped, not carried: older receipts pinned 16K, and a model
-        // restarted from one would come back too small for a coding agent. The engine sizes it.
-        ...c,
-        // Older receipts kept only the displayed alias. Preserve that name
-        // when upgrading, and never forward malformed saved argv values.
-        aliases: (Array.isArray(c.aliases) ? c.aliases : [c.name])
-          .filter((alias: unknown): alias is string => typeof alias === 'string' && validArg(alias)),
-      })) as Candidate[]
-  } catch { return [] }
+  const read = readState(path, 'cache', jsonArray)
+  if (read.state !== 'ok') return []
+  return rows(read.value).filter(c =>
+    c.id === `local:${c.file}` && basename(str(c.file)) === c.file && validArg(c.file) &&
+    c.pull === '' && typeof c.name === 'string' && c.name.length < 256 && num(c.size) &&
+    Array.isArray(c.files) && c.files.length === 1 && c.files[0] === c.file).map(({ context: _pinned, ...c }) => ({
+      // A saved `context` is dropped, not carried: older receipts pinned 16K, and a model
+      // restarted from one would come back too small for a coding agent. The engine sizes it.
+      ...c,
+      // Older receipts kept only the displayed alias. Preserve that name
+      // when upgrading, and never forward malformed saved argv values.
+      aliases: (Array.isArray(c.aliases) ? c.aliases : [c.name])
+        .filter((alias: unknown): alias is string => typeof alias === 'string' && validArg(alias)),
+    })) as Candidate[]
 }
 const cleanName = (v: string): string => basename(v).replace(/\.gguf$/i, '').replace(/-GGUF$/i, '')
 // Grid advertises a GGUF filename as a lowercase model name without its extension.
@@ -613,8 +614,7 @@ export class LocalModels {
     }
     if (changed) {
       await mkdir(this.options.stateDir, { recursive: true, mode: 0o700 })
-      const temp = `${path}.${randomUUID()}.tmp`
-      await writeFile(temp, JSON.stringify(known), { mode: 0o600 }); await rename(temp, path)
+      atomicWriteFile(path, JSON.stringify(known), 'cache')
     }
     const existing = await Promise.all(known.map(async candidate =>
       await this.downloaded(candidate) && !await this.tooSmallToCode(candidate.file) ? candidate : null))
@@ -710,9 +710,7 @@ export class LocalModels {
     const value: Receipt = { spec: 1, grid, operation: { ...operation, updatedAt: new Date().toISOString() } }
     this.receipt = value; this.receiptScope = grid; this.cached = undefined
     await mkdir(this.options.stateDir, { recursive: true, mode: 0o700 })
-    const file = this.receiptPath(grid), temp = `${file}.${randomUUID()}.tmp`
-    await writeFile(temp, JSON.stringify(value), { mode: 0o600 })
-    await rename(temp, file)
+    atomicWriteFile(this.receiptPath(grid), JSON.stringify(value), 'cache')
   }
 
   /**
@@ -756,9 +754,7 @@ export class LocalModels {
 
   private async saveApps(value: AppModel[]): Promise<void> {
     await mkdir(this.options.stateDir, { recursive: true, mode: 0o700 })
-    const temp = `${this.appsFile}.${randomUUID()}.tmp`
-    await writeFile(temp, JSON.stringify(value), { mode: 0o600 })
-    await rename(temp, this.appsFile)
+    atomicWriteFile(this.appsFile, JSON.stringify(value), 'cache')
   }
 
   /** An app's model that Grid's llama.cpp serves (its app is not installed here), as a candidate whose

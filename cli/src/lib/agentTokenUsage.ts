@@ -1,12 +1,13 @@
 /** Per-conversation token totals, computed on the owning machine. No Git or vendor requests.
  * Frames read a tiny in-memory snapshot; a bounded background queue maintains private checkpoints.
  * JSONL is scanned once, then only appended bytes are read. Nothing walks transcript directories. */
-import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { mkdir, open, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
 import { loadEngine } from '../engines/inProcess.js'
 import { openclawSessionDb } from './openclawStore.js'
+import { atomicWriteFile } from './secureState.js'
 import { sqliteReadAll } from './sqliteRead.js'
 import { emptyOutputLedger, ingestOutput, outputSnapshot, validOutputLedger, type AgentOutputStats, type OutputLedger } from './agentOutputStats.js'
 import { emptySessionWork, ingestSessionWork, sessionWorkSnapshot, validSessionWork, type SessionWork, type SessionWorkLedger } from './sessionWork.js'
@@ -356,12 +357,7 @@ export class AgentTokenUsageCache {
     const bytes = JSON.stringify(state)
     if (Buffer.byteLength(bytes) > MAX_CACHE_BYTES) throw new Error('Usage checkpoint is too large')
     await mkdir(this.directory, { recursive: true, mode: 0o700 })
-    const file = join(this.directory, `${key}.json`)
-    const temporary = `${file}.${randomUUID()}.tmp`
-    try {
-      await writeFile(temporary, bytes, { mode: 0o600, flag: 'wx' })
-      await rename(temporary, file)
-    } finally { await unlink(temporary).catch(() => {}) }
+    atomicWriteFile(join(this.directory, `${key}.json`), bytes, 'cache')
   }
   private async refresh(key: string, entry: Entry): Promise<boolean> {
     let nextFingerprint: string | undefined
