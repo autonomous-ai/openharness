@@ -119,15 +119,30 @@ static REDACTIONS: LazyLock<[(Regex, &str); 6]> = LazyLock::new(|| {
     ]
 });
 
-/// The home folder holds the person's name (`/Users/<name>`), and the install script prints paths under it.
-static HOME: LazyLock<Option<Regex>> = LazyLock::new(|| home_rule(&std::env::var("HOME").unwrap_or_default()));
+/// The home folder holds the person's name (`/Users/<name>`, `C:\Users\<name>`), and the install script prints paths
+/// under it.
+static HOME: LazyLock<Option<Regex>> = LazyLock::new(|| {
+    let var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    home_rule(&std::env::var(var).unwrap_or_default(), cfg!(windows))
+});
 
 /// `home` as a whole path segment, so `/Users/a` leaves `/Users/ab` and `/Users/a.b` alone: it ends at a character
 /// no user name holds, at the end of the text, or at dots before either (a sentence's end). None for a home of `/` or
-/// nothing.
-fn home_rule(home: &str) -> Option<Regex> {
-    let home = home.trim_end_matches('/');
-    (!home.is_empty()).then(|| Regex::new(&format!(r"{}(\.*(?:[^A-Za-z0-9_.\-]|$))", regex::escape(home))).unwrap())
+/// nothing. A Windows path's letters match in either case and `\` and `/` are one separator there; its user names
+/// hold spaces and accents, so only a character Windows refuses in one ends it.
+fn home_rule(home: &str, windows: bool) -> Option<Regex> {
+    let separators: &[char] = if windows { &['\\', '/'] } else { &['/'] };
+    let home = home.trim_end_matches(separators);
+    if home.is_empty() {
+        return None;
+    }
+    let (path, end) = if windows {
+        let segments: Vec<String> = home.split(separators).map(regex::escape).collect();
+        (format!("(?i:{})", segments.join(r"[\\/]")), r#"[\\/"\[\]:;|=,+*?<>]"#)
+    } else {
+        (regex::escape(home), r"[^A-Za-z0-9_.\-]")
+    };
+    Some(Regex::new(&format!(r"{path}(\.*(?:{end}|$))")).unwrap())
 }
 
 /// `text` with anything that could be a secret or a person's address blanked.
