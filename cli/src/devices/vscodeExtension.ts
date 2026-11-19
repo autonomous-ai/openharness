@@ -9,7 +9,7 @@
 import { spawn } from 'node:child_process'
 import { accessSync, closeSync, constants, existsSync, fstatSync, mkdtempSync, openSync, readSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { delimiter, isAbsolute, join } from 'node:path'
+import { delimiter, dirname, isAbsolute, join } from 'node:path'
 import { ownProcessGroup } from '../lib/windows/noWindow.js'
 import { writeZip } from '../lib/zipWriter.js'
 
@@ -88,6 +88,33 @@ function vscodeCli(deps: VscodeExtensionDeps): string | null {
   if (found === null || found === deps.bin || deps.platform !== 'darwin') return found
   const cli = join(found, 'Contents', 'Resources', 'app', 'bin', EDITORS[deps.editor].cli)
   return deps.exists(cli) ? cli : null
+}
+
+/** The `.desktop` file Cursor's Linux package installs (testing/recordedLinuxApps.ts). */
+const CURSOR_DESKTOP = 'cursor.desktop'
+/** An app's `.desktop` file is a few KiB. */
+const DESKTOP_MAX_BYTES = 64 * 1024
+/** Linux's PATH_MAX. */
+const EXEC_MAX = 4096
+
+/** The Cursor CLI a tap opens an agent's folder with on Linux (docs/plans/2026-11-19-dial-linux-design.md § 1.6), from
+ *  Cursor's deps: the tests' own; else the `bin/cursor` beside the binary Cursor's `.desktop` file starts, where its
+ *  package puts its CLI, which no PATH need hold; else the `cursor` on PATH that is not cursor-agent's shim. Null off
+ *  Linux, where macOS opens the folder by Cursor's bundle. */
+export function cursorFolderCli(deps: VscodeExtensionDeps): string | null {
+  if (deps.platform !== 'linux') return null
+  if (deps.bin && isAbsolute(deps.bin)) return installed(deps)
+  // The person's own entries before the computer's, as the desktop's menu reads them.
+  for (const share of [join(deps.home, '.local', 'share'), '/usr/local/share', '/usr/share']) {
+    const text = deps.read(join(share, 'applications', CURSOR_DESKTOP), DESKTOP_MAX_BYTES)
+    const binary = text?.split('\n').find((line) => line.startsWith('Exec='))?.slice('Exec='.length).trim().split(/\s+/)[0]
+    // What the file names decides the file run: only an absolute path, no longer than a path can be, with no control
+    // character.
+    if (!binary || binary.length > EXEC_MAX || !isAbsolute(binary) || /[\u0000-\u001f\u007f-\u009f]/.test(binary)) continue
+    const cli = join(dirname(binary), 'bin', EDITORS.cursor.cli)
+    if (deps.executable(cli)) return cli
+  }
+  return installed(deps)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

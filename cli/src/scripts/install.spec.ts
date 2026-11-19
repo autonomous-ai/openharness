@@ -260,7 +260,7 @@ const gridFixture = (scratch: string, tamperSha = false, drain = false) => {
 // The constants and helpers (install_hn among them), then step 3c alone.
 const hnStepOf = (source: string) =>
   source.slice(source.indexOf('METADATA_URL="${HARNESS_METADATA_URL'), source.indexOf("# 1. Host requirements")) +
-  source.slice(source.indexOf("# 3c. hn's binary"), source.indexOf("# 4. Ensure ~/.local/bin"));
+  source.slice(source.indexOf("# 3c. hn's binary"), source.indexOf("# 3d. Start at login"));
 
 const hnFixture = (scratch: string, { tamper = false, runs = true, drain = false } = {}) => {
   const home = join(scratch, "home");
@@ -356,6 +356,15 @@ const runFinale = (mode: "standalone" | "desktop", pathHasBin: boolean, script =
   }
 };
 
+// The login entry install.sh writes on Linux (spec § 1.1), under `home` when XDG_CONFIG_HOME is not absolute.
+// No NoDisplay=true: GNOME's Startup Applications hides such an entry, and that is where the person turns it off.
+const loginEntryPath = (home: string) => join(home, ".config", "autostart", "harnessd.desktop");
+const loginEntryOf = (launcherExec: string) =>
+  ["[Desktop Entry]", "Type=Application", "Name=Harness", `Exec=${launcherExec}`, "X-GNOME-Autostart-enabled=true", ""].join("\n");
+const ownLoginEntry = (home: string) => loginEntryOf(`"${home}/.local/bin/harness" start`);
+const TURNED_OFF = ["Hidden=true", "X-GNOME-Autostart-enabled=false", "X-MATE-Autostart-enabled=false"];
+const OTHER_APPS_ENTRY = loginEntryOf("/opt/harness-device/harness-device --login");
+
 const LOGO = [
   "    _",
   "   | |__   __ _ _ __ _ __   ___  ___ ___",
@@ -431,6 +440,45 @@ describe("scripts/install.sh: what it says once it is done", () => {
     expect(out).not.toContain("Get started");
     expect(out).not.toContain(LOGO[1]);
     expect(out).not.toContain("Next: harness start");
+  }, 20_000);
+
+  // The guide, with `uname` answering `os` and `entry` (if any) where the login entry goes.
+  const guideWith = ({ os = "Linux", mode = "standalone", entry }: { os?: string; mode?: "standalone" | "desktop"; entry?: (home: string) => string }) => {
+    const scratch = mkdtempSync(join(tmpdir(), "harness-finale-login-"));
+    try {
+      const { home, node } = installedFixture(scratch);
+      writeUname(scratch, os);
+      if (entry) {
+        mkdirSync(dirname(loginEntryPath(home)), { recursive: true });
+        writeFileSync(loginEntryPath(home), entry(home));
+      }
+      const result = spawnSync("/bin/sh", ["-c", finaleOf(readFileSync(installer, "utf8"))], {
+        encoding: "utf8",
+        env: { HOME: home, INSTALL_MODE: mode, NODE_BIN: node, PATH: `${join(home, ".local", "bin")}:${scratch}:/usr/bin:/bin` },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      return result.stdout;
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  };
+  const STARTS_AT_LOGIN = "  Harness starts when you log in to the desktop.\n";
+
+  it("on Linux, with its own login entry in place, says Harness starts at login, after the three commands", () => {
+    const out = guideWith({ entry: ownLoginEntry });
+    expect(out).toContain(STARTS_AT_LOGIN);
+    expect(out.indexOf(STARTS_AT_LOGIN)).toBeGreaterThan(out.indexOf("harness remote-password set"));
+    expect(out.indexOf(STARTS_AT_LOGIN)).toBeLessThan(out.indexOf("harness remote  "));
+  }, 20_000);
+
+  it.each([
+    { case: "no entry", os: "Linux", mode: "standalone" as const, entry: undefined },
+    ...TURNED_OFF.map((line) => ({ case: `an entry with ${line}`, os: "Linux", mode: "standalone" as const, entry: (home: string) => `${ownLoginEntry(home)}${line}\n` })),
+    { case: "another program's entry", os: "Linux", mode: "standalone" as const, entry: () => OTHER_APPS_ENTRY },
+    { case: "a Mac", os: "Darwin", mode: "standalone" as const, entry: ownLoginEntry },
+    { case: "desktop mode", os: "Linux", mode: "desktop" as const, entry: ownLoginEntry },
+  ])("does not say it with $case", ({ os, mode, entry }) => {
+    expect(guideWith({ os, mode, entry })).not.toContain("starts when you log in");
   }, 20_000);
 });
 
@@ -1480,6 +1528,125 @@ describe("scripts/install.sh: hn", () => {
       expect(readdirSync(bin).sort()).toEqual(['harness', 'hn']);
     } finally { rmSync(scratch, { recursive: true, force: true }); }
   }, 20_000);
+});
+
+describe("scripts/install.sh: the login entry", () => {
+  // The constants and helpers, then step 3d alone.
+  const loginStepOf = (source: string) =>
+    constantsOf(source) + source.slice(source.indexOf("# 3d. Start at login"), source.indexOf("# 4. Ensure ~/.local/bin"));
+
+  // Step 3d under a home named `homeName`, `uname` answering `os`, after `before` ran with that home.
+  const runLoginStep = (
+    { os = "Linux", mode = "standalone", configHome, homeName = "home", before = () => {} }:
+    { os?: string; mode?: string; configHome?: (scratch: string) => string; homeName?: string; before?: (home: string) => void },
+    then: (result: ReturnType<typeof spawnSync>, home: string, scratch: string) => void,
+  ) => {
+    const scratch = mkdtempSync(join(tmpdir(), "harness-login-entry-"));
+    try {
+      const home = join(scratch, homeName);
+      mkdirSync(home, { recursive: true });
+      writeUname(scratch, os);
+      before(home);
+      const result = spawnSync("/bin/sh", ["-c", loginStepOf(readFileSync(installer, "utf8"))], {
+        encoding: "utf8",
+        env: { HOME: home, INSTALL_MODE: mode, PATH: `${scratch}:/usr/bin:/bin`, ...(configHome ? { XDG_CONFIG_HOME: configHome(scratch) } : {}) },
+      });
+      expect(result.status, String(result.stderr)).toBe(0);
+      then(result, home, scratch);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  };
+  const placeEntry = (text: (home: string) => string) => (home: string) => {
+    mkdirSync(dirname(loginEntryPath(home)), { recursive: true });
+    writeFileSync(loginEntryPath(home), text(home));
+  };
+
+  it.each(["standalone", "desktop"])("writes it on Linux in %s mode", (mode) => {
+    runLoginStep({ mode }, (result, home) => {
+      expect(readFileSync(loginEntryPath(home), "utf8")).toBe(ownLoginEntry(home));
+      expect(statSync(loginEntryPath(home)).mode & 0o777).toBe(0o644);
+      expect(readdirSync(dirname(loginEntryPath(home)))).toEqual(["harnessd.desktop"]);
+      expect(result.stdout).toBe("  ✓ Starts at login\n");
+    });
+  });
+
+  it("takes XDG_CONFIG_HOME only when it is absolute", () => {
+    const where = (configHome: string) => {
+      const result = spawnSync("/bin/sh", ["-c", `${constantsOf(readFileSync(installer, "utf8"))}\nlogin_entry_file`], {
+        encoding: "utf8",
+        env: { HOME: "/home/u", PATH: "/usr/bin:/bin", XDG_CONFIG_HOME: configHome },
+      });
+      return result.stdout;
+    };
+    expect(where("/x/cfg")).toBe("/x/cfg/autostart/harnessd.desktop\n");
+    expect(where("cfg")).toBe("/home/u/.config/autostart/harnessd.desktop\n");
+    expect(where("")).toBe("/home/u/.config/autostart/harnessd.desktop\n");
+    runLoginStep({ configHome: (scratch) => join(scratch, "cfg") }, (_result, home, scratch) => {
+      expect(readFileSync(join(scratch, "cfg", "autostart", "harnessd.desktop"), "utf8")).toBe(ownLoginEntry(home));
+      expect(existsSync(join(home, ".config"))).toBe(false);
+    });
+  });
+
+  it.each([
+    { case: "on a Mac", os: "Darwin", mode: "standalone" },
+    { case: "in host mode", os: "Linux", mode: "host" },
+  ])("writes none $case", ({ os, mode }) => {
+    runLoginStep({ os, mode }, (result, home) => {
+      expect(existsSync(join(home, ".config"))).toBe(false);
+      expect(result.stdout).toBe("");
+    });
+  });
+
+  it.each(TURNED_OFF)("leaves an entry the person turned off with %s", (line) => {
+    const text = (home: string) => `${ownLoginEntry(home)}${line}\n`;
+    runLoginStep({ before: placeEntry(text) }, (result, home) => {
+      expect(readFileSync(loginEntryPath(home), "utf8")).toBe(text(home));
+      expect(result.stdout).toBe("  · Start at login is off\n");
+    });
+  });
+
+  it("leaves an entry whose Exec is another program's", () => {
+    runLoginStep({ before: placeEntry(() => OTHER_APPS_ENTRY) }, (result, home) => {
+      expect(readFileSync(loginEntryPath(home), "utf8")).toBe(OTHER_APPS_ENTRY);
+      expect(result.stdout).toBe("  · Start at login: set by another app\n");
+    });
+  });
+
+  it("writes it again once deleted, and rewrites its own", () => {
+    runLoginStep({}, (_result, home, scratch) => {
+      const again = () => spawnSync("/bin/sh", ["-c", loginStepOf(readFileSync(installer, "utf8"))], {
+        encoding: "utf8",
+        env: { HOME: home, INSTALL_MODE: "standalone", PATH: `${scratch}:/usr/bin:/bin` },
+      });
+      rmSync(loginEntryPath(home));
+      expect(again().stdout).toBe("  ✓ Starts at login\n");
+      expect(readFileSync(loginEntryPath(home), "utf8")).toBe(ownLoginEntry(home));
+      // An older one, which had NoDisplay=true, is still its own.
+      writeFileSync(loginEntryPath(home), `${ownLoginEntry(home)}NoDisplay=true\n`, { mode: 0o600 });
+      expect(again().stdout).toBe("  ✓ Starts at login\n");
+      expect(readFileSync(loginEntryPath(home), "utf8")).toBe(ownLoginEntry(home));
+      expect(statSync(loginEntryPath(home)).mode & 0o777).toBe(0o644);
+    });
+  });
+
+  it.each([
+    // The Desktop Entry spec quotes an argument, then reads the value as a string: a backslash is doubled twice.
+    { case: "a space, a $ and a %", homeName: "a b$c%d", quoted: "a b\\\\$c%%d" },
+    { case: 'a backslash, a " and a backtick', homeName: 'e\\f"g`h', quoted: 'e\\\\\\\\f\\\\"g\\\\`h' },
+  ])("quotes a launcher path with $case", ({ homeName, quoted }) => {
+    runLoginStep({ homeName }, (result, home, scratch) => {
+      expect(readFileSync(loginEntryPath(home), "utf8")).toBe(loginEntryOf(`"${scratch}/${quoted}/.local/bin/harness" start`));
+      expect(result.stdout).toBe("  ✓ Starts at login\n");
+    });
+  });
+
+  it("writes none for a launcher path holding a control character", () => {
+    runLoginStep({ homeName: "a\tb" }, (result, home) => {
+      expect(existsSync(join(home, ".config"))).toBe(false);
+      expect(result.stdout).toBe("");
+    });
+  });
 });
 
 describe("scripts/install.sh: OpenCode for hn's first window", () => {

@@ -41,6 +41,10 @@ describe('the environment harness start gives the daemon', () => {
     'XAUTHORITY', 'npm_config_prefix', 'BROWSER'])('keeps the setting %s', (name) => {
     expect(startEnvironment({ [name]: 'x' }, 'linux')).toEqual({ [name]: 'x' })
   })
+  it('keeps the sockets the raise finds sway and Hyprland by', () => {
+    const desktop = { SWAYSOCK: '/run/user/1000/sway-ipc.1000.1.sock', HYPRLAND_INSTANCE_SIGNATURE: 'abc_1', XDG_RUNTIME_DIR: '/run/user/1000' }
+    expect(startEnvironment(desktop, 'linux')).toEqual(desktop)
+  })
   it('keeps each provider by its own prefix, and nothing because it looks like a secret', () => {
     const providers = {
       ANTHROPIC_AUTH_TOKEN: 'a', OPENAI_API_KEY: 'o', AWS_SECRET_ACCESS_KEY: 'w', GOOGLE_APPLICATION_CREDENTIALS: '/g',

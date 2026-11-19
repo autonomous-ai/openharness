@@ -51,7 +51,7 @@ function fixture(extra: Partial<CableFleetOptions> = {}, Log: typeof DialLog = D
   }
   const logs = mkdtempSync(join(tmpdir(), 'usb-fleet-'))
   const options = {
-    canUseUsb: vi.fn(() => true),
+    canUseUsb: vi.fn((_dialHere: boolean) => true),
     // Nobody else holds these ports. The default asks `lsof`, a process per port per scan, which on a
     // loaded machine outlasts the second a test waits for both dials.
     inUse: vi.fn(async () => false),
@@ -204,6 +204,25 @@ describe('USB dial fleet', () => {
       await vi.waitFor(() => expect(f.ports).toHaveLength(4))
       await f.greet(f.ports.slice(2))
       expect(f.fleet.isConnected).toBe(true)
+    } finally { await f.fleet.stop() }
+  })
+
+  it('says whether a dial is on USB when it asks whose USB it is, so an empty desk starts no process', async () => {
+    const f = fixture()
+    f.setPorts([])
+    const scan = () => (f.fleet as unknown as { scan(): Promise<void> }).scan()
+    try {
+      f.fleet.start()
+      for (let i = 0; i < 3; i++) await scan()
+      expect(f.options.discover.mock.calls.length).toBeGreaterThanOrEqual(3)
+      expect(f.options.canUseUsb.mock.calls.every(([dialHere]) => dialHere === false)).toBe(true)
+      f.setPorts([device('/dev/tim', 'AA:01')])
+      await scan()
+      await vi.waitFor(() => expect(f.ports).toHaveLength(1))
+      expect(f.options.canUseUsb).toHaveBeenLastCalledWith(true)
+      f.options.canUseUsb.mockClear()
+      await scan()
+      expect(f.options.canUseUsb).toHaveBeenCalledWith(true)
     } finally { await f.fleet.stop() }
   })
 
@@ -1116,6 +1135,54 @@ describe('a Harness Pro that is silent from the moment its port opens', () => {
       Quiet.made[0].silent()
       await vi.waitFor(() => expect(s.reset).toHaveBeenCalledTimes(1))
     } finally { await s.fleet.stop() }
+  })
+})
+
+describe('a port that never opened', () => {
+  // Stands in for a session whose every open fails (no access to the tty): it only reports its problem.
+  class Closed {
+    static made: Closed[] = []
+    isConnected = false
+    wantsStats = false
+    constructor(readonly host: CableHost) { Closed.made.push(this) }
+    start() {}
+    async stop() {}
+    petDial() { return { supported: false, held: [], sending: null, errors: {} } }
+  }
+  function setup() {
+    Closed.made = []
+    const f = fixture()
+    f.setPorts([device('/dev/ttyACM0', 'CC:03')])
+    const fleet = new CableFleet(Closed as unknown as typeof CableSession, f.host, f.logs, DialLog, f.options)
+    const scan = () => (fleet as unknown as { scan(): Promise<void> }).scan()
+    const rows = () => (vi.mocked(f.host.onDialStatus!).mock.calls.at(-1)?.[0].devices ?? [])
+    return { f, fleet, scan, rows }
+  }
+
+  it('has a row carrying only its problem', async () => {
+    const s = setup()
+    try {
+      s.fleet.start()
+      await vi.waitFor(() => expect(Closed.made).toHaveLength(1))
+      Closed.made[0].host.onDialStatus?.({ attached: false, problem: 'P' })
+      expect(s.rows()).toEqual([{ id: 'CC:03', attached: false, problem: 'P' }])
+    } finally { await s.fleet.stop() }
+  })
+
+  it('the row goes with the problem, with the port, and when USB passes to another account', async () => {
+    for (const change of ['problem', 'port', 'usb'] as const) {
+      const s = setup()
+      try {
+        s.fleet.start()
+        await vi.waitFor(() => expect(Closed.made).toHaveLength(1))
+        Closed.made[0].host.onDialStatus?.({ attached: false, problem: 'P' })
+        expect(s.rows()).toHaveLength(1)
+        if (change === 'problem') Closed.made[0].host.onDialStatus?.({ attached: false })
+        if (change === 'port') { s.f.setPorts([]); await s.scan() }
+        if (change === 'usb') { s.f.options.canUseUsb.mockReturnValue(false); await s.scan() }
+        expect(s.rows()).toEqual([])
+      } finally { await s.fleet.stop() }
+    }
   })
 })
 

@@ -11,7 +11,7 @@
  * from a hook or from tmux, so it is checked against its form, and tmux runs with no shell.
  */
 import { HARNESS_OWNER_OPTION, isHarnessSession, paneOwnerFormat } from '../../lib/harnessSessionLabel.js'
-import { ensureTmuxOnPath, tmuxAvailableNow, type TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
+import type { TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { APP_IDS } from './hostDetect.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
@@ -20,7 +20,8 @@ import { parentChain, scannedApps, type ProcessName } from './scannedApp.js'
 import { TAB_TTY } from './tabs.js'
 
 const TMUX_PANE_ID = /^%[0-9]{1,9}$/
-/** A process id as the table and the hooks give it; the herdr lookup holds its pids to it too (herdrOuter.ts). */
+/** A process id as the table and the hooks give it; the herdr and Zellij lookups hold their pids to it too
+ *  (herdrOuter.ts, zellij.ts). */
 export const PID = /^[1-9][0-9]{0,9}$/
 /** This adapter's pane: tmux's pane id and the agent's process, `%3:100`, as the hook's event named them, and the app
  *  holding the client that shows its session when one was found, `%3:100:terminal-app`. */
@@ -32,18 +33,21 @@ const PANE_AND_PID = /^(%[0-9]{1,9}):([1-9][0-9]{0,9})(?::([a-z-]{1,32}))?$/
 const TMUX_PANE_FACTS = `#{pane_pid}|#{session_name}|#{${HARNESS_OWNER_OPTION}}${paneOwnerFormat(false)}`
 /** One line of TMUX_PANE_FACTS: the tag is last, cut at the last bar, as the hook cuts it; the session may hold a bar. */
 const TMUX_PANE_FACT = /^([1-9][0-9]{0,9})\|(.*)\|([^|]*)$/
-/** Each client: when it was used last, its name, the tag of the pane it shows, its session. The daemon's own names for
- *  the tag and the session prefix, which the hook mirrors. The session's name is last: it may hold a bar. */
-const TMUX_CLIENTS = `#{client_activity}|#{client_name}|#{${HARNESS_OWNER_OPTION}}|#{session_name}`
-/** One line of TMUX_CLIENTS, cut at its first three bars; one with fewer, an activity that is no whole number or an
+/** Each client: when it was used last, its process, its name, the tag of the pane it shows, its session. The daemon's
+ *  own names for the tag and the session prefix, which the hook mirrors. The session's name is last: it may hold a bar. */
+const TMUX_CLIENTS = `#{client_activity}|#{client_pid}|#{client_name}|#{${HARNESS_OWNER_OPTION}}|#{session_name}`
+/** One line of TMUX_CLIENTS, cut at its first four bars; one with fewer, an activity that is no whole number or an
  *  empty name is no client. */
-const TMUX_CLIENT = /^([0-9]+)\|([^|]+)\|([^|]*)\|(.*)$/
+const TMUX_CLIENT = /^([0-9]+)\|([^|]*)\|([^|]+)\|([^|]*)\|(.*)$/
+/** The switched clients' processes kept for `windowPid`: one per tap, read once, so a few cover taps in flight. */
+const MAX_SWITCHED = 16
 /** Each client of one session: when it was used last, its process, its tty. The tty is last: a control client has none. */
 const TMUX_CLIENT_PLACES = '#{client_activity}|#{client_pid}|#{client_tty}'
 /** One line of TMUX_CLIENT_PLACES; one with no whole activity or no pid in form is no client. */
 const TMUX_CLIENT_PLACE = /^([0-9]+)\|([1-9][0-9]{0,9})\|(.*)$/
 /** How long a pane's answer holds, from its lookup's start: Command Code's turn-start comes at every tool call, and a
- *  lookup is a `ps` and up to BUNDLES_A_PASS `plutil` runs. The herdr lookup holds its answers as long (herdrOuter.ts). */
+ *  lookup is a `ps` and up to BUNDLES_A_PASS `plutil` runs. The herdr and Zellij lookups hold their answers as long
+ *  (herdrOuter.ts, zellij.ts). */
 export const OUTER_EVERY_MS = 5_000
 
 export interface TmuxDeps {
@@ -55,29 +59,6 @@ export interface TmuxDeps {
   log(line: string): void
   /** The app in front (cableHost.latestFront()): a rest shows a pane only in the app the person is looking at. */
   front(): string | undefined
-}
-
-/** tmux as the core finds it (lib/tmuxOnPath.ts), asked at the first tmux call and shared by the adapter and the lookup,
- *  on a copy of the environment: this process's own PATH stays the master's. A tmux found holds. No tmux, or a lookup
- *  that threw, is asked again once a tmux is where the core looks without a shell (tmuxAvailableNow), as the core
- *  retries its own (lib/terminalBackendRecovery.ts): a tmux installed after this process started, or a login shell that
- *  timed out on a loaded Mac, otherwise left the dial with no tmux until the process restarted. Never rejects. */
-export function tmuxFinder(
-  find = (): Promise<TmuxPathOutcome> => ensureTmuxOnPath({ ...process.env }),
-  arrived = (): boolean => tmuxAvailableNow(),
-): () => Promise<TmuxPathOutcome> {
-  let found: Promise<TmuxPathOutcome> | undefined
-  let none = false
-  return () => {
-    if (!found || (none && arrived())) {
-      none = false
-      const asking = find().catch((): TmuxPathOutcome => ({ state: 'absent', reason: 'the lookup failed' }))
-      // Registered before any caller's wait on it, so it runs first: a call after the answer sees it.
-      void asking.then((outcome) => { none = outcome.state === 'absent' })
-      found = asking
-    }
-    return found
-  }
 }
 
 /** One run of tmux where it was found; nothing when no tmux was. A run that rejects is one that failed, so the lookup's
@@ -115,6 +96,9 @@ function paneParts(pane: Pane): { id: string; pid: number; app?: string } | unde
 }
 
 export function createTmuxAdapter(deps: TmuxDeps): HostAdapter {
+  /** Each pane's last switched client's process, by pane id, oldest first. */
+  const switched = new Map<string, number>()
+
   /**
    * The client used last among those not on a session Harness made. Every terminal Harness has open (Desktop's, a
    * phone's, hn's) is a tmux client on this server, and a bare `switch-client` moves the client used last, one of those
@@ -122,18 +106,19 @@ export function createTmuxAdapter(deps: TmuxDeps): HostAdapter {
    * switching is the mistake that costs nothing. tmux gives the activity in whole seconds: on a tie the one listed later,
    * which attached later, wins.
    */
-  async function personsClient(): Promise<string | undefined> {
+  async function personsClient(): Promise<{ name: string; pid?: number } | undefined> {
     const listed = await runTmux(deps, ['list-clients', '-F', TMUX_CLIENTS])
     if (listed?.code !== 0) return undefined
-    let last: { activity: number; name: string } | undefined
+    let last: { activity: number; name: string; pid?: number } | undefined
     for (const line of listed.stdout.split('\n')) {
       const client = TMUX_CLIENT.exec(line)
       if (!client) continue
-      const [, activity, name, tag, session] = client
+      const [, activity, pid, name, tag, session] = client
       if (tag || isHarnessSession(session)) continue
-      if (!last || Number(activity) >= last.activity) last = { activity: Number(activity), name }
+      // A pid that is no process of its own (none, or init's) names no window: the client is still switched.
+      if (!last || Number(activity) >= last.activity) last = { activity: Number(activity), name, pid: PID.test(pid) && Number(pid) > 1 ? Number(pid) : undefined }
     }
-    return last?.name
+    return last
   }
 
   /** A pane the tap may not switch to: another process's, or one Harness made. */
@@ -176,11 +161,23 @@ export function createTmuxAdapter(deps: TmuxDeps): HostAdapter {
     async focus(pane) {
       const parts = paneParts(pane)
       if (!parts) return false
+      // An earlier tap's client is not this tap's window.
+      switched.delete(pane.id)
       const checked = await checkedPane(parts.id, parts.pid)
       if (checked !== true) return checked
       if (parts.app) return select(parts.id)
       const client = await personsClient()
-      return !!client && (await runTmux(deps, ['switch-client', '-c', client, '-t', parts.id]))?.code === 0
+      if (!client || (await runTmux(deps, ['switch-client', '-c', client.name, '-t', parts.id]))?.code !== 0) return false
+      if (client.pid !== undefined) {
+        switched.set(pane.id, client.pid)
+        if (switched.size > MAX_SWITCHED) switched.delete(switched.keys().next().value!)
+      }
+      return true
+    },
+    windowPid(pane) {
+      const pid = switched.get(pane.id)
+      switched.delete(pane.id)
+      return pid
     },
     // A rest never switches a client: only the session's own pane moves, and only in the app the person looks at.
     canShow(pane) {
@@ -205,8 +202,8 @@ export interface TmuxOuterDeps {
   bundleId(bundle: string): Promise<string | undefined>
 }
 
-/** The app that holds the tmux client showing an agent's pane, and that client's tty when it names a tab. */
-interface ClientPlace { app?: string; tty?: string }
+/** The app that holds the tmux client showing an agent's pane, that client's tty when it names a tab, and its process. */
+interface ClientPlace { app?: string; tty?: string; pid?: number }
 /** The step of a lookup that could not be read, as its line names it: no tmux found, the pane's facts, the process
  *  table, the session's clients, the client's app. */
 type NotRead = 'tmux' | 'pane' | 'processes' | 'clients' | 'app'
@@ -248,7 +245,7 @@ export function createTmuxOuter(deps: TmuxOuterDeps): OuterLookup {
     const app = apps.get(client.pid)
     if (!app) return {}
     // A tty out of form names no tab: a control client has none, and Linux's are no tab the dial selects.
-    return TAB_TTY.test(client.tty) ? { app, tty: client.tty } : { app }
+    return TAB_TTY.test(client.tty) ? { app, tty: client.tty, pid: client.pid } : { app, pid: client.pid }
   }
 
   async function lookUp(id: string, pid: number): Promise<ClientPlace> {

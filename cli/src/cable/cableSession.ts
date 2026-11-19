@@ -31,6 +31,7 @@ import { planPetSync } from './pets/sync.js'
 import type { PetStore } from './pets/store.js'
 import type { PetDialState } from './pets/sync.js'
 import { SerialLink, findDialPort } from './serial.js'
+import { PortAccessError } from './portAccess.js'
 import { PLAYER_PAGE_SIZE, playerPage, type PlayerSession } from './playerLibrary.js'
 import { PassageCarry, withCarriedPassage, type CarryRead } from './passageCarry.js'
 import { VoiceDraft, type DraftPin } from './voiceDraft.js'
@@ -1095,6 +1096,13 @@ export class CableSession {
    * taking an update is neither simply present nor absent, and the row says so.
    */
   private offeringTo = ''
+  /**
+   * What the person has to do before this account can open the port, as last shown on the row, or ''.
+   *
+   * Before this the refusal was a log line every 2 s and nothing was shown. Kept so the row and the log say
+   * it once, and the row is cleared when the cause is gone.
+   */
+  private openProblem = ''
 
   private lastPing = 0
 
@@ -1148,15 +1156,25 @@ export class CableSession {
         clearTimeout(timer)
       }
     } catch (err) {
+      if (err instanceof PortAccessError) {
+        if (err.problem !== this.openProblem) {
+          this.openProblem = err.problem
+          this.log(`cable: cannot open the dial: ${err.problem}`)
+          this.host.onDialStatus?.({ attached: false, problem: err.problem })
+        }
+        return
+      }
       // A port that another process holds is the ordinary case, not a fault: esptool, a serial monitor,
       // or a second daemon. Say so and try again on the next tick.
       this.log(`cable: cannot open the dial: ${errorKind(err)}`)
+      this.clearOpenProblem()
       return
     } finally {
       this.opening = false
     }
     if (!opened) return   // no dial plugged in — this daemon's resting state
     if (this.stopped) { await opened.close('stopped while opening'); return }
+    this.clearOpenProblem()
     // Nothing reaches this line holding a live port — tick() only calls in when the link is closed — but
     // assigning over one would strand it exactly as above, and the cost of being sure is one branch.
     if (this.link) await this.link.close('replaced')
@@ -1197,6 +1215,12 @@ export class CableSession {
     this.offered.clear()
     this.lastRx = Date.now()
     this.log(`cable: open on ${opened.path}`)
+  }
+
+  private clearOpenProblem(): void {
+    if (!this.openProblem) return
+    this.openProblem = ''
+    this.host.onDialStatus?.({ attached: false })
   }
 
   private onClosed(why: string): void {

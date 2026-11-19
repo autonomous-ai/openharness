@@ -12,6 +12,7 @@ import { writeInstalledIndex, type InstalledDshRecord } from '../dsh/installed.j
 import { BRIDGE_FILE, makeRealFolders, writeBridge, type BridgeRecord } from '../homeMove/bridge.js'
 import type { ProcRow } from '../homeMove/oldUsers.js'
 import { writeMoveRecord, type MoveRecord } from '../homeMove/record.js'
+import { resolveBinaryOnPath } from '../lib/binaryOnPath.js'
 import { harnessPaneOwner } from '../lib/harnessSessionLabel.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { isolatedTmux } from '../testing/isolatedTmux.js'
@@ -96,7 +97,7 @@ function handed(h: Home, over: Partial<HomeBridgeDeps> = {}) {
   const log = vi.fn()
   const deps: Partial<HomeBridgeDeps> = {
     platform: 'linux', home: h.home, environment: { HOME: h.home, HARNESS_CONNECTIONS_DIR: h.connections }, socket: h.socket,
-    bootId: () => BOOT, rows: () => [], tmux: () => NO_SERVER,
+    bootId: () => BOOT, rows: () => [], tmux: () => NO_SERVER, tmuxAt: async () => ({ state: 'present' }),
     setupsPending: async () => 0, askForStore: async () => {}, log, ...over,
   }
   return { log, given: Object.fromEntries(Object.entries(deps).filter(([, value]) => value !== undefined)) as Partial<HomeBridgeDeps> }
@@ -664,6 +665,42 @@ describe('the home bridge service', () => {
     expect(record(h).oldProcesses).toBe(1)
     expect(existsSync(h.oldHome)).toBe(true)
     bridge.stop()
+  })
+
+  // The master hands this process a PATH that may hold no tmux; only the core adopted it, on its own PATH.
+  it('runs tmux where the core found it, off this process\'s PATH: a pane carrying the new tag keeps the bridge', async () => {
+    const tmux = await isolatedTmux()
+    restore.push(() => tmux.close())
+    const binary = resolveBinaryOnPath('tmux')!
+    vi.stubEnv('TMUX', undefined)
+    vi.stubEnv('TMUX_PANE', undefined)
+    vi.stubEnv('TMUX_TMPDIR', tmux.root)
+    const h = movedHome()
+    const noTmux = join(h.home, 'bin')
+    mkdirSync(noTmux)
+    vi.stubEnv('PATH', noTmux)
+    await tmux.run('new-session', '-d', '-s', 'agent', 'sleep 600')
+    await tmux.run('set-option', '-p', '-t', 'agent', '@harness_daemon', h.bridge.newTag)
+    const pane = Number(await tmux.run('display-message', '-p', '-t', 'agent', '#{pane_pid}'))
+    const { bridge, log } = start(h, {
+      rows: () => [row({ pid: pane, name: 'sleep', exe: '/bin/sleep' })], tmux: undefined,
+      tmuxAt: async () => ({ state: 'adopted', path: binary, from: dirname(binary) }),
+    })
+    await settle()
+    expect(record(h).oldProcesses).toBe(1)
+    expect(existsSync(h.oldHome)).toBe(true)
+    expect(log).not.toHaveBeenCalled()
+    bridge.stop()
+  })
+
+  it('no tmux found has no panes, as a tmux not installed: none is run, and the bridge goes', async () => {
+    const h = movedHome()
+    const tmux = vi.fn(() => NO_SERVER)
+    const { log } = start(h, { tmux, tmuxAt: async () => ({ state: 'absent', reason: 'tmux was not found' }) })
+    await settle()
+    expect(tmux).not.toHaveBeenCalled()
+    expect(existsSync(join(h.state, BRIDGE_FILE))).toBe(false)
+    expect(log.mock.calls).toEqual([['home bridge: removed']])
   })
 
   it('a tmux with no server has no panes, as tmux itself says it', async () => {

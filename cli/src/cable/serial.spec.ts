@@ -2,9 +2,10 @@ import { EventEmitter } from 'node:events'
 import { constants } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const io = vi.hoisted(() => ({ open: vi.fn(), close: vi.fn(), configure: vi.fn(), stream: vi.fn(), readdir: vi.fn(), lstat: vi.fn(), read: vi.fn() }))
+const io = vi.hoisted(() => ({ open: vi.fn(), close: vi.fn(), configure: vi.fn(), stream: vi.fn(), readdir: vi.fn(), lstat: vi.fn(), read: vi.fn(), access: vi.fn() }))
 vi.mock('node:fs', async (original) => ({ ...await original<typeof import('node:fs')>(), openSync: io.open, closeSync: io.close, readdirSync: io.readdir, lstatSync: io.lstat, readSync: io.read }))
 vi.mock('./portStream.js', () => ({ portStream: io.stream }))
+vi.mock('./portAccess.js', () => ({ portAccessProblem: io.access }))
 vi.mock('node:child_process', () => ({ execFile: io.configure }))
 
 import { SerialLink, SerialToolTimeoutError, createDarwinDialFinder, findDialPorts } from './serial.js'
@@ -104,6 +105,15 @@ describe('event-driven serial link', () => {
       expect(io.close).toHaveBeenCalledExactlyOnceWith(41)
     } else expect(io.open).not.toHaveBeenCalled()
     expect(io.stream).not.toHaveBeenCalled()
+  })
+
+  it('refuses a port the account may not open before claiming it or running stty', async () => {
+    const denied = Object.assign(new Error('No access to the dial yet. Log out and in.'), { code: 'EACCES' })
+    io.access.mockReturnValue(denied)
+    await expect(SerialLink.open('/dev/fake', vi.fn(), vi.fn())).rejects.toBe(denied)
+    expect(io.access).toHaveBeenCalledExactlyOnceWith('/dev/fake')
+    expect(io.configure).not.toHaveBeenCalled()
+    expect(io.open).not.toHaveBeenCalled()
   })
 
   it('gives up on an stty that never answers, kills it and lets the claim go', async () => {

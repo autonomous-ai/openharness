@@ -147,6 +147,12 @@ function prepareShortFolder(path: string): void {
   const folder = dirname(path)
   const inRuntime = dirname(folder) === runtimeShortRoot() && SHORT_NAME.test(basename(folder))
   if (!inRuntime && !/[\\/]\.?harness[\\/]s[\\/][0-9a-f]{16}$/.test(folder)) return
+  privateFolder(folder)
+}
+
+/** Makes [folder] when it is not there, and holds it and its parent to this account's real folders, owner only: a link,
+ *  or another account's folder, throws. */
+export function privateFolder(folder: string): void {
   mkdirSync(folder, { recursive: true, mode: 0o700 })
   for (const each of [dirname(folder), folder]) {
     const seen = lstatSync(each), uid = process.getuid?.()

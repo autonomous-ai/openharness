@@ -5,7 +5,8 @@
  * a hooked Claude Code in a herdr pane is one row, its hook's. A socket a stopped herdr left is said once and never
  * retried (docs/plans/2026-11-16-herdr-app-design.md).
  *
- * Skipped where herdr or `cc` is not installed, as on every GitHub runner, but for the stale socket, which runs no herdr.
+ * Skipped where herdr or `cc` is not installed, but for the stale socket, which runs no herdr. CI's `e2e (dial hosts)`
+ * job installs herdr, and there a missing one fails the file (harness/dialHosts.ts).
  * It never starts herdr against the developer's own config, and no `herdr` the daemon runs reaches any other server. A
  * herdr of the developer's may run on this Mac: each daemon's process table hides every herdr outside the test's tree
  * (ownHerdrsOnly), so the devices' herdr lookup never asks of them.

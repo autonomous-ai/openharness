@@ -1,5 +1,5 @@
 /** This computer's side of `harness uninstall` (command.ts): every module it needs, loaded only when it runs. */
-import { existsSync, rmSync, writeSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { env } from '../../config/env.js'
@@ -21,6 +21,7 @@ import { atomicWriteFile } from '../secureState.js'
 import { runPowershell } from '../windows/powershell.js'
 import { stopEveryAgent } from './agents.js'
 import { labelHookRemoval, lockHolder, UninstallLockBusy, type UninstallDeps } from './command.js'
+import { removeLoginEntry } from './loginEntry.js'
 import { UNINSTALL_MARKER } from './marker.js'
 import { endPtyHosts, ptyHostsDeps } from './ptyHosts.js'
 import { filesWithHarnessPathLines, removeHarnessPathLines } from './rcFiles.js'
@@ -117,6 +118,13 @@ export async function uninstallDeps(options: { tildify: (path: string) => string
       try { rmSync(path, { force: true }); return path } catch (error) {
         return { path, failed: error instanceof Error ? error.message : String(error) }
       }
+    }),
+    // The launcher install.sh wrote the entry for: the one removeLaunchers removes.
+    removeLoginEntry: () => removeLoginEntry({
+      platform: process.platform, home, configHome: process.env.XDG_CONFIG_HOME, launcher: join(env.HARNESS_BIN_DIR, 'harness'),
+      read: (path) => { try { return readFileSync(path, 'utf8') } catch { return null } },
+      // Unlinked, never followed, as a launcher.
+      remove: (path) => { rmSync(path, { force: true }) },
     }),
     removePathEntry: () => {
       if (process.platform === 'win32') return { kind: 'windows', result: removeUserPathEntry(binDir, runPowershell) }

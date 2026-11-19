@@ -13,6 +13,7 @@ import type { Socket } from 'node:net'
 import type { Duplex } from 'node:stream'
 import { promisify } from 'node:util'
 import { errorKind } from '../lib/log.js'
+import { portAccessProblem } from './portAccess.js'
 import { portStream } from './portStream.js'
 import type { CommandFor } from './windowsSerial.js'
 
@@ -294,6 +295,9 @@ export class SerialLink {
     onClosed: (why: string) => void,
   ): Promise<SerialLink> {
     if (process.platform === 'win32') return SerialLink.openWindows(path, onData, onClosed)
+    // Before stty, whose "Permission denied" says nothing a person can act on.
+    const denied = portAccessProblem(path)
+    if (denied) throw denied
     // Keep the claim on a separate open description: libuv reopens/replaces
     // the stream's descriptor and would otherwise release this advisory lock.
     // Acquire it before stty can change a port another Harness is using.

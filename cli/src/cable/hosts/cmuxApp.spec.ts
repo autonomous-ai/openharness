@@ -45,6 +45,7 @@ function recorder(over: Partial<CmuxAppDeps> = {}, codes: Array<number | null> =
       return { code: codes.length ? codes.shift()! : 0, stdout: '' }
     },
     platform: 'darwin',
+    onPath: () => null,
     inFront: () => true,
     client: {
       mode: async () => {
