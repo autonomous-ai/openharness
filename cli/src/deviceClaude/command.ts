@@ -11,7 +11,8 @@
  * `disable` turns those off first and never uninstalls there: an uninstall takes the files every home names, and another
  * home's entry would then stay on with nothing left to turn off (check 8).
  * `harness device orca link` and `harness device vscode link` are Orca's plugin's word and Harness's VS Code extension's,
- * never typed either: whether the daemon is up and where the devices' socket is, so neither builds a path.
+ * never typed either: whether the daemon is up and where the devices' socket is (on Windows their pipe, its token and
+ * their record), so neither builds a path.
  * `harness device vscode enable|disable` and `harness device cursor enable|disable` are the person's way to turn
  * Harness's extension back on or off in VS Code or in Cursor, which the devices service installs by itself once a dial
  * has attached here (cable/vscodeExtensionSetup.ts): `disable` marks it removed for that editor in dial-skill.json, which
@@ -32,10 +33,14 @@ import { claudeDisable, claudeEnable, claudeHomeDisable, claudeHomeEnable, claud
 import { claudePluginState, ownDirectory, removeSkill, skillsFolderOf, skillWanted, writeSkill } from '../devices/dialSkill.js'
 import { listable, MAX_HOMES, readRemoved, readSetup, readWritten, writeOrcaConnected, writePluginHomes, writeRemoved, type DialEngine } from '../devices/dialSkillFiles.js'
 import { devicesListenerPath } from '../devices/listenerPath.js'
+import { devicesPipe, devicesRecordPath } from '../devices/listenerPipe.js'
 import { NOTICE_USAGE, runNotice } from '../devices/notice.js'
 import { type OrcaPluginDeps, type OrcaPluginRun, orcaRemove, orcaSetUp, orcaStatus } from '../devices/orcaPlugin.js'
 import { vscodeDisable, vscodeEnable, vscodeStatus, type VscodeChange, type VscodeEditor, type VscodeExtensionDeps } from '../devices/vscodeExtension.js'
+import { askDataFolderServer } from '../lib/localSocket.js'
 import { localSocketRoute, socketIsPrivate } from '../lib/localTransport.js'
+import { daemonPipe } from '../lib/windows/daemonPipe.js'
+import type { PipeTarget } from '../lib/windows/pipeClient.js'
 import { daemonPost, runAsked } from './asked.js'
 import { claudePluginOn, claudeSettingsPath } from './plugin.js'
 
@@ -84,6 +89,9 @@ export interface DeviceDeps {
   /** The command's own environment and folder: `notify` reads its caller from them. */
   env: NodeJS.ProcessEnv
   cwd: string
+  /** How `orca link` and `vscode link` find the daemon's pipe and the devices' on Windows; by default each record's
+   *  process is proven by the process table (tests take it as running). */
+  pipes?: { daemon(dataDir: string, port: number): Promise<PipeTarget | null>; devices(dataDir: string): Promise<PipeTarget | null> }
   out(line: string): void
   err(line: string): void
 }
@@ -448,12 +456,34 @@ async function turnOff(engine: DialEngine, home: string, deps: DeviceDeps, plugi
   return 1
 }
 
+const WINDOWS_PIPES: NonNullable<DeviceDeps['pipes']> = { daemon: daemonPipe, devices: devicesPipe }
+
 /**
  * Orca's plugin and the VS Code extension ask this before each pass. `daemon` connects only to a socket that is this account's own, since a socket
  * a crashed daemon left behind is still there and still private. `devicesReady` does not connect: a connection there
  * counts against that listener's own, and the plugin's open finds a stale socket itself.
+ * On Windows there is no socket. `daemon` is the recorded daemon pipe answering its status with its token's proof within
+ * a second: once the daemon is gone, any account may create a pipe of its name. `devicesReady` is the devices' record
+ * and token read and the recorded process proven running, again with no connect; their pipe and token are printed then,
+ * and the plugins sign with that token and never log it. The record's path is printed either way: the plugins watch its
+ * folder, as they watch the socket's.
  */
 async function devicesLink(deps: DeviceDeps): Promise<number> {
+  if (deps.platform === 'win32') {
+    const pipes = deps.pipes ?? WINDOWS_PIPES
+    const daemonUp = async (): Promise<boolean> => {
+      const target = await pipes.daemon(deps.dataDir, deps.port)
+      // A status only: an answer without the proof, or none in time, is 'none' or 'unknown'.
+      return target !== null && typeof (await askDataFolderServer(target.pipe, 1_000, target.token)) === 'object'
+    }
+    // Side by side: each proof may read the process table, which starts the pty host.
+    const [daemon, devices] = await Promise.all([daemonUp(), pipes.devices(deps.dataDir)])
+    const devicesRecord = devicesRecordPath(deps.dataDir)
+    deps.out(JSON.stringify(devices
+      ? { daemon, devicesPipe: devices.pipe, devicesToken: devices.token.toString('hex'), devicesReady: true, devicesRecord }
+      : { daemon, devicesReady: false, devicesRecord }))
+    return 0
+  }
   const daemonSocket = localSocketRoute(deps.dataDir, deps.port, deps.platform)
   const daemon = daemonSocket !== null && socketIsPrivate(daemonSocket) && await takesConnect(daemonSocket)
   const devicesSocket = devicesListenerPath(deps.dataDir, deps.platform)
