@@ -8,6 +8,36 @@ import { processLockIdentity, processStartMarker } from './processLiveness.js'
 import type { AgentEngine } from '../engines/types.js'
 import type { ProcessIdentity, RegisteredSession, RegisterInput } from './registry.js'
 
+// A registry image flush that outlives every real wait from 250 ms up to the 5 s write deadline, as a loaded
+// disk's does: each one still running fires as the sync returns, if not before.
+const slowSync = vi.hoisted(() => ({ due: new Map<unknown, () => void>() }))
+vi.mock('node:fs/promises', async original => {
+  const actual = await original<typeof import('node:fs/promises')>()
+  return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
+    const handle = await actual.open(...args), sync = handle.sync.bind(handle)
+    handle.sync = async () => {
+      await sync()
+      if (!(String(args[0]).includes('registry.json.') && String(args[0]).endsWith('.tmp'))) return
+      for (const [timer, fire] of slowSync.due) { slowSync.due.delete(timer); fire() }
+    }
+    return handle
+  } }
+})
+const realTimeout = globalThis.setTimeout, realClear = globalThis.clearTimeout
+function slowTimeout(callback: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) {
+  if (ms === undefined || ms < 250 || ms > 5_000) return realTimeout(callback, ms, ...args)
+  const timer = realTimeout(() => { slowSync.due.delete(timer); callback(...args) }, ms)
+  slowSync.due.set(timer, () => { realClear(timer); callback(...args) })
+  return timer
+}
+beforeEach(() => {
+  vi.spyOn(globalThis, 'setTimeout').mockImplementation(slowTimeout as typeof setTimeout)
+  vi.spyOn(globalThis, 'clearTimeout').mockImplementation(((timer?: Parameters<typeof clearTimeout>[0]) => {
+    slowSync.due.delete(timer); realClear(timer)
+  }) as typeof clearTimeout)
+})
+afterEach(() => { slowSync.due.clear() })
+
 let dataDir = ''
 const registryInstances = new Set<typeof import('./registry.js')['registry']>()
 async function settleRegistries() {
@@ -75,7 +105,7 @@ async function loadRegistryModule() {
 /** Advance only the bounded lock wait, with no wall-clock sleep or blocked event loop. */
 function pausesTake(taken: (asked: number) => number): void {
   let elapsed = 0
-  const began = performance.now(), realTimeout = globalThis.setTimeout
+  const began = performance.now()
   vi.spyOn(performance, 'now').mockImplementation(() => began + elapsed)
   vi.spyOn(globalThis, 'setTimeout').mockImplementation(((callback: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) => {
     if (ms !== undefined && ms > 0 && ms <= 20) {
@@ -83,7 +113,7 @@ function pausesTake(taken: (asked: number) => number): void {
       vi.setSystemTime(Date.now() + taken(ms))
       return realTimeout(callback, 0, ...args)
     }
-    return realTimeout(callback, ms, ...args)
+    return slowTimeout(callback, ms, ...args)
   }) as typeof setTimeout)
 }
 
