@@ -75,7 +75,9 @@ reads 480 x 1920 x 2 bytes 60 times a second (about 110 MB/s) from PSRAM, so PSR
   from its `before` painted whole; the last line is the helper task's unused stack.
 - **(g) the row in motion**: App Detail's row replayed frame by frame (`test/max_motions.h`, the host's
   `test/max_motion_bench.c` replays the same): a drag across Overview and its snap, an agent opening, the same agent
-  closing, and a drag over the slivers beside it, one frame every 16 ms of the row's clock however long a frame takes.
+  closing, a drag over the slivers beside it, and 2 s of the loops alone (V3's pulses and sweeps): on Overview, one
+  agent asking and two working (`loops`), and the asking agent open (`agent loops`, its panel's glow breathing), one
+  frame every 16 ms of the row's clock however long a frame takes (the product draws the loops every 33 ms).
   Each frame is the render task's: `max_ui_render` (`build`), then `max_present` in the product's way (`present`: the
   row's blurs that the build leaves to the frame, shared by both cores before the strips, then the strips), into the
   framebuffer, wall ms. Per motion: its frames, the mean and worst frame, `fps` (frames over their time) and `min` (the

@@ -11,7 +11,7 @@
 #include "max_motions.h"
 #include "max_ui_draw.h"   // max_layer_painted
 
-enum { REPEATS = 9, FRAMES = 96, STRIP = 24, FRAME_MS = 16 };
+enum { REPEATS = 9, FRAMES = 128, STRIP = 24, FRAME_MS = 16 };
 
 static ht_scene_t s_scene[2];
 static int s_front;

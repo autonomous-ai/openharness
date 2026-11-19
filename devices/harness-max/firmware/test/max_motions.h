@@ -1,6 +1,7 @@
 // App Detail's row in motion, as the benches replay it (test/max_motion_bench.c on the host, bench/ on the ESP32-P4):
 // each from its page at rest (set_up, drawing through the bench's own frame what it must), started at T0 (go), and
-// stepped before each of its first `steps` frames, one frame every MAX_ROW_FRAME_MS, until the row stops moving.
+// stepped before each of its first `steps` frames, one frame every MAX_ROW_FRAME_MS, until the row stops moving. The
+// loops alone (V3's pulses and sweeps) run their `steps` frames, 2 s.
 // Included after max_render.c: its demo model and its helpers.
 #pragma once
 
@@ -26,6 +27,14 @@ static void motion_agent(max_motion_draw_t draw)
     draw(T0 - 2000);
     max_open("rate");
 }
+// The agent page of the agent that asks: its panel's glow breathes, its rail and chip pulse.
+static void motion_asking(max_motion_draw_t draw)
+{
+    orca();
+    show(MAX_VIEW_OVERVIEW, NULL);
+    draw(T0 - 2000);
+    max_open("hero");
+}
 static void motion_none(void) {}
 static void motion_open(void) { max_open("rate"); }
 static void motion_close(void) { max_show(MAX_VIEW_OVERVIEW); }
@@ -49,5 +58,8 @@ static const max_motion_t MAX_MOTIONS[] = {
     {"open", motion_overview, motion_open, NULL, 0},
     {"close", motion_agent, motion_close, NULL, 0},
     {"drag slivers", motion_agent, motion_none, motion_drag_slivers, 32},
+    // Orca's App Detail: one agent asks, two work.
+    {"loops", motion_overview, motion_none, NULL, 2000 / MAX_ROW_FRAME_MS},
+    {"agent loops", motion_asking, motion_none, NULL, 2000 / MAX_ROW_FRAME_MS},
 };
 enum { MAX_MOTION_COUNT = sizeof MAX_MOTIONS / sizeof MAX_MOTIONS[0] };
