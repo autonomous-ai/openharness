@@ -22,6 +22,7 @@ import { resolveBinaryOnPath } from '../../src/lib/binaryOnPath.js'
 import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
 import { writeExecutable } from '../../src/testing/executableFixture.js'
 import { IsolatedDaemon, until } from './daemon.js'
+import { dialHost } from './dialHosts.js'
 import { tabUnder, type FakeApp } from './outsideAgent.js'
 import { forgetGroup, leaderGone, watchGroup } from './reaper.js'
 
@@ -46,12 +47,12 @@ int main(void) {
 
 /** The installed herdr: on the worker's PATH, else ~/.local/bin/herdr of the account that runs the tests
  *  (`userInfo().homedir`: the suite's HOME is a throwaway one). Null when there is none, or no `cc`: the file is
- *  then skipped. */
-export const herdrBinary: string | null = (() => {
+ *  then skipped, but on a dial-hosts run (dialHosts.ts). */
+export const herdrBinary: string | null = dialHost('herdr', (() => {
   if (process.platform === 'win32' || !resolveBinaryOnPath('cc')) return null
   const installed = join(userInfo().homedir, '.local', 'bin', 'herdr')
   return resolveBinaryOnPath('herdr') ?? (existsSync(installed) ? installed : null)
-})()
+})())
 
 export class PrivateHerdr {
   private constructor(private readonly d: IsolatedDaemon, private readonly server: ChildProcess, private readonly config: string,
