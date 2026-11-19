@@ -2961,6 +2961,16 @@ describe('harness reply to a harness in a pane (a program acting for the person)
     expect(r.calls).toEqual([])
   })
 
+  it('is refused while the harness is starting, though its screen says idle', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('kid', { engine: 'openclaw', starting: true })]
+    const r = replied()
+    const h = program(d, { record: r.record })
+    expect(await replyCommand(['kid', '--', 'x'], h.deps)).toBe(EXIT.failed)
+    expect(h.err.join('\n')).toBe('kid is starting: wait for it, then reply.')
+    expect(r.calls).toEqual([])
+  })
+
   it('refuses an agent: it tells the harnesses it started (harness tell), and only those', async () => {
     const d = new FakeDaemon()
     d.frames = [frame('lead', { engine: 'claude' }), frame('kid')]

@@ -105,6 +105,20 @@ describe('harness reply to a program\'s own harness (#4393)', () => {
     expect(await reply(h)).toBe(EXIT.ok)
   })
 
+  it('waits while it is starting, though its screen says idle, and types once it has started', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('a1', { starting: true })]
+    own('a1')
+    const h = harness(d)
+    expect(await reply(h, 'lamp-openclaw', ['--timeout', '3s'])).toBe(EXIT.refused)
+    expect(JSON.parse(h.out[0]).error).toBe('ENGINE_NOT_READY')
+    expect(d.requests.some((r) => r.type === 'input_ack')).toBe(false)
+    let lists = 0
+    d.extra.agents_list = () => ({ agents: [frame('a1', { starting: ++lists < 3 })] })
+    d.extra.input_ack = () => ({ inputId: 'program:x5', state: 'taken', takenAt: NOW })
+    expect(await reply(harness(d))).toBe(EXIT.ok)
+  })
+
   it('says NOT_IDLE at once while it works on words it took, and NOT_RUNNING (4) once it was closed', async () => {
     const d = new FakeDaemon()
     d.frames = [frame('a1')]
