@@ -52,7 +52,8 @@ const SESSION_TRIES = 5
 /** How long a `/session`'s load is left to end when no line says it failed: OpenClaw's history request times out at
  *  30 s, and a newer `/session` drops the load in flight (its tui `setSession`). */
 const SESSION_LOAD_MS = 35_000
-/** How long an OpenClaw's first task waits, not counting the time its agent is held, before its launch fails. */
+/** How long an OpenClaw's first task waits, not counting the time its agent is held or its TUI starts, before its launch
+ *  fails. */
 const FIRST_TASK_BOUND_MS = 180_000
 
 /**
