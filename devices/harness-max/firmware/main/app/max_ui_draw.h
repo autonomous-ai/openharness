@@ -197,8 +197,8 @@ typedef enum { MAX_WARM_DONE, MAX_WARM_MORE, MAX_WARM_FULL } max_warm_t;
 // taken and left for max_layer_warm_paint; and its agents between looks are left uncut (their cuts and edges are each
 // frame's own). Returns what the step that ends met.
 max_warm_t max_layer_warm(uint32_t from);
-// The image or layer a warming step left made, a band of rows at a time (about BAND_PX: a fraction of a ms on the
-// P4), while go_on() says so, at least one band: true while some of it is left. It reads none of the model: out of
+// The image or layer a warming step left made, a band of rows at a time (about a ms on the P4), while go_on() says
+// so, at least one band: true while some of it is left. It reads none of the model: out of
 // its lock, on the render task, between its frames.
 bool max_layer_warm_paint(bool (*go_on)(void));
 // Whether a warming step left an image or a layer to make.

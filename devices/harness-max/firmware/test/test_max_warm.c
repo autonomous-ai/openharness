@@ -68,7 +68,7 @@ static bool (*s_go_on)(void) = one_band;
 
 // max_ui_warm until it has nothing left, max_ui_warm_paint first while it has something, as max_app.c steps them: a
 // step under the lock leaves one image or layer at most to make and the model as it was (but for what the warming is
-// of); one out of it leaves the model as it was. Its steps under the lock.
+// of); one out of it leaves the model as it was and, a band, bakes nothing. Its steps under the lock.
 static int s_paints;   // and out of it
 static int warm(uint32_t now)
 {
@@ -78,9 +78,12 @@ static int warm(uint32_t now)
     for (bool more = true; more;) {
         CHECK(steps < STEPS && s_paints < 64 * STEPS);
         memcpy(&before, &max_m, sizeof before);
+        const bool band = max_layer_owes();
+        const unsigned bakes = pod_cell_bakes();
         if (max_ui_warm_paint(s_go_on)) {
             s_paints++;
             CHECK(!memcmp(&before, &max_m, sizeof before));
+            CHECK(!band || pod_cell_bakes() == bakes);   // a band copies a frame below 1x, it never bakes it
             continue;
         }
         const unsigned painted = max_layer_painted();
@@ -337,10 +340,25 @@ static void test_bands(void)
     CHECK(!memcmp(banded.hash, in_one.hash, (size_t)in_one.frames * sizeof in_one.hash[0]));
 }
 
+// Codex's pets below 1x over the slivers' glows and the open agent's ground: each band of what the warming makes copies
+// them (a whole bake there would be one long step), and every frame of the open after it is the same pixels as cold.
+static void test_band_flats(void)
+{
+    rest_of(5, "c", "codex");
+    const motion_t cold = motion("");
+    rest_of(5, "c", "codex");
+    s_go_on = one_band;
+    warm(T0);   // its bands bake nothing
+    const motion_t ahead = motion("");
+    CHECK(ahead.frames == cold.frames && !ahead.paints[0] && !ahead.paints[1]);
+    CHECK(!memcmp(ahead.hash, cold.hash, (size_t)cold.frames * sizeof cold.hash[0]));
+}
+
 int main(void)
 {
     test_ahead();
     test_bands();
+    test_band_flats();
     test_first_frames();
     test_bakes_full();
     test_not_resting();

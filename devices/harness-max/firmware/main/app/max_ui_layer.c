@@ -571,7 +571,9 @@ static bool movable(const ht_run_t *r)
 // max_layer_warm_paint to make a band of rows at a time, out of the model's lock: no step of the warming holds the
 // render task or the lock for more than a band. The frame is drawn again once it is made.
 
-enum { BAND_PX = 1024 };   // a band's pixels: under a ms on the P4 (a pet's blur reads 2 * BLUR_R rows more a band)
+// A band's pixels, about a ms on the P4: a pet's blur (it reads 2 * BLUR_R rows more a band), or a raster (a pet's
+// frame below 1x resampled straight in costs about four times a blur's pixel).
+enum { BAND_PX = 1024, RASTER_PX = BAND_PX / 4 };
 typedef enum { OWED_NONE, OWED_BARE, OWED_DIM, OWED_KEPT } owed_kind_t;
 static EXT_RAM_BSS_ATTR struct {
     owed_kind_t kind;
@@ -591,6 +593,61 @@ static void owed_drop(void)
     s_owed.pet = s_owed.src = NULL;
     s_owed.kept = NULL;
 }
+// A pet's frame below 1x on one colour (pod_cell_flat) is baked whole by pod_draw.c the first time a raster meets it
+// (resampled onto that colour into its arena) and copied from then on where it is not that colour: one band of an
+// image would bake all of it, in one go. So a band of a warming's image draws each such frame as that copy instead:
+// its rows in the band resampled onto the colour, then put down as an image whole where that is not the colour and
+// clear where it is. The same pixels; no bake.
+enum { FLATS = 4, FLAT_PX = 2 * BAND_PX };
+static EXT_RAM_BSS_ATTR uint16_t s_flat_px[FLATS][FLAT_PX];
+static EXT_RAM_BSS_ATTR uint8_t s_flat_a[FLATS][FLAT_PX];
+static EXT_RAM_BSS_ATTR ht_scene_t s_flat, s_band;   // a frame alone; the scene with its frames as those copies
+static bool flat_in(const ht_run_t *r, ht_rect_t band)
+{
+    const ht_rect_t b = ht_run_bounds(r);
+    return r->pro_kind == POD_CELL && r->text[0] == 1 && b.x < band.x + band.w && band.x < b.x + b.w &&
+           b.y < band.y + band.h && band.y < b.y + b.h;
+}
+static void band_raster(const ht_scene_t *sc, ht_rect_t band, uint16_t *out)
+{
+    int n = 0, i = 0;
+    while (i < sc->count && !flat_in(&sc->runs[i], band)) i++;
+    if (i == sc->count) {   // none in it
+        ht_raster(sc, band, out);
+        return;
+    }
+    s_band.background = sc->background;
+    s_band.count = sc->count;
+    memcpy(s_band.runs, sc->runs, (size_t)sc->count * sizeof sc->runs[0]);
+    for (; i < sc->count; i++) {
+        const ht_run_t *r = &sc->runs[i];
+        if (r->pro_kind != POD_CELL || r->text[0] != 1) continue;
+        const ht_rect_t b = ht_run_bounds(r);
+        const int x0 = imax(b.x, band.x), x1 = imin(b.x + b.w, band.x + band.w);
+        const int y0 = imax(b.y, band.y), y1 = imin(b.y + b.h, band.y + band.h);
+        if (x1 <= x0 || y1 <= y0) continue;
+        const int w = x1 - x0, area = w * (y1 - y0);
+        if (n == FLATS || area > FLAT_PX) {   // no room: as the glass draws it, baked
+            ht_raster(sc, band, out);
+            return;
+        }
+        uint16_t *px = s_flat_px[n];
+        uint8_t *a = s_flat_a[n];
+        ht_scene_clear(&s_flat, r->fg);
+        s_flat.runs[0] = *r;
+        s_flat.runs[0].text[0] = 0;   // the frame resampled as its bake is, onto its colour
+        s_flat.count = 1;
+        ht_raster(&s_flat, (ht_rect_t){(int16_t)x0, (int16_t)y0, (int16_t)w, (int16_t)(y1 - y0)}, px);
+        for (int k = 0; k < area; k++) a[k] = px[k] != r->fg ? 255 : 0;
+        ht_scene_clear(&s_flat, 0);
+        const ht_pro_bitmap_t bmp = {px, a, (uint16_t)w, (uint16_t)(y1 - y0), s_frame, NULL};
+        ht_pro_image(&s_flat, x0, y0, &bmp);
+        s_band.runs[i] = s_flat.runs[0];
+        n++;
+    }
+    ht_raster(&s_band, band, out);
+}
+
 static bool owed_any(void) { return s_owed.kind != OWED_NONE; }
 bool max_layer_owes(void) { return owed_any(); }
 // An image or a layer the warming is making, or making one from: neither shown nor given up until it is made.
@@ -659,11 +716,12 @@ static pet_t *take(const pet_t *k)
 
 // Rows [y0, y1) of p undimmed, from its scene: its runs rasterised on its ground, what is not the ground its alpha
 // (premultiplied: 0 where it is not).
-static void bare_rows(const pet_t *p, const ht_scene_t *one, int y0, int y1)
+static void bare_rows(const pet_t *p, const ht_scene_t *one, int y0, int y1,
+                      void (*raster)(const ht_scene_t *, ht_rect_t, uint16_t *))
 {
     uint16_t *px = &s_pool_px[p->at];
     uint8_t *a = &s_pool_a[p->at];
-    ht_raster(one, (ht_rect_t){p->x, (int16_t)(p->y + y0), p->w, (int16_t)(y1 - y0)}, px + (size_t)y0 * p->w);
+    raster(one, (ht_rect_t){p->x, (int16_t)(p->y + y0), p->w, (int16_t)(y1 - y0)}, px + (size_t)y0 * p->w);
     for (int i = y0 * p->w; i < y1 * p->w; i++) {
         const bool on = px[i] != p->ground;
         a[i] = on ? 255 : 0;
@@ -701,7 +759,7 @@ static pet_t *undimmed(const pet_t *k, const ht_run_t *runs)
         s_owed.kind = OWED_BARE, s_owed.pet = p, s_owed.y = 0;
         return NULL;
     }
-    bare_rows(p, one, 0, p->h);
+    bare_rows(p, one, 0, p->h, ht_raster);
     return p;
 }
 
@@ -1097,8 +1155,8 @@ bool max_layer_warm_paint(bool (*go_on)(void))
         bool made = false;
         if (s_owed.kind == OWED_BARE) {
             pet_t *p = s_owed.pet;
-            const int y1 = imin(p->h, y0 + imax(1, BAND_PX / p->w));
-            bare_rows(p, &s_owed.scene, y0, y1);
+            const int y1 = imin(p->h, y0 + imax(1, RASTER_PX / p->w));
+            bare_rows(p, &s_owed.scene, y0, y1, band_raster);
             s_owed.y = y1;
             made = y1 == p->h;
         } else if (s_owed.kind == OWED_DIM) {
@@ -1110,10 +1168,10 @@ bool max_layer_warm_paint(bool (*go_on)(void))
             made = y1 == j->oh;
         } else {   // a layer: its rows rasterised, then blurred
             uint16_t *px = s_kept_px[s_owed.kept - s_kept];
-            const int y1 = imin(2 * HT_HEIGHT, y0 + BAND_PX / LAYER_W);
+            const int y1 = imin(2 * HT_HEIGHT, y0 + imax(1, (y0 < HT_HEIGHT ? RASTER_PX : BAND_PX) / LAYER_W));
             if (y0 < HT_HEIGHT) {
-                ht_raster(&s_owed.scene, (ht_rect_t){0, (int16_t)y0, LAYER_W, (int16_t)(imin(y1, HT_HEIGHT) - y0)},
-                          px + (size_t)y0 * LAYER_W);
+                band_raster(&s_owed.scene, (ht_rect_t){0, (int16_t)y0, LAYER_W, (int16_t)(imin(y1, HT_HEIGHT) - y0)},
+                            px + (size_t)y0 * LAYER_W);
                 if (y1 >= HT_HEIGHT) s_owed.bottom = busy_of(&s_owed.busy, &s_owed.scene, LAYER_W);
                 s_owed.y = imin(y1, HT_HEIGHT);
             } else {
