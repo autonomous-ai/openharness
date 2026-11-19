@@ -15,11 +15,15 @@
 static int imin(int a, int b) { return a < b ? a : b; }
 static int imax(int a, int b) { return a > b ? a : b; }
 
-// Per-kind parameters, packed into run->text.
+// Per-kind parameters, packed into run->text. The Max's: none has a padding byte (a gradient's last one is a member,
+// zero), as ht_damage compares runs byte for byte: the ESP32-P4's compiler copies a padding byte in as the stack left
+// it, and a glow drawn over another frame's stack repaints whole though nothing in it changed.
 typedef struct { int16_t cx16, cy16; uint16_t r16, w16; int16_t ux, uy, cosh; } arc_params_t;
-typedef struct { uint16_t top, bottom; uint8_t aa; } grad_params_t;
+typedef struct { uint16_t top, bottom; uint8_t aa, zero; } grad_params_t;
 _Static_assert(sizeof(arc_params_t) <= HT_TEXT_BYTES, "arc parameters fit run->text");
 _Static_assert(sizeof(grad_params_t) <= HT_TEXT_BYTES, "gradient parameters fit run->text");
+_Static_assert(sizeof(arc_params_t) == 7 * sizeof(int16_t), "arc parameters: no padding byte");
+_Static_assert(sizeof(grad_params_t) == 2 * sizeof(uint16_t) + 2, "gradient parameters: no padding byte");
 
 static ht_run_t *new_run(ht_scene_t *s, int kind, int x, int y, int w, int h)
 {
@@ -546,7 +550,7 @@ bool pod_grad(ht_scene_t *s, int x, int y, int w, int h, int radius, uint16_t to
     if (!r) return false;
     r->radius = (uint8_t)imin(imax(0, radius), imin(w, h) / 2);
     r->fg = top;
-    grad_params_t p = {top, bottom, 0};
+    grad_params_t p = {top, bottom, 0, 0};
     memcpy(r->text, &p, sizeof p);
     return true;
 }
@@ -554,7 +558,7 @@ void pod_grad_aa(ht_scene_t *s, int x, int y, int w, int h, int radius, uint16_t
 {
     if (!pod_grad(s, x, y, w, h, radius, top, bottom)) return;
     ht_run_t *r = &s->runs[s->count - 1];
-    grad_params_t p = {top, bottom, 1};
+    grad_params_t p = {top, bottom, 1, 0};
     memcpy(r->text, &p, sizeof p);
 }
 // pod_grad_aa with the steps dithered away (aa == 3): see grad_raster.
@@ -562,11 +566,12 @@ void pod_grad_aa_dither(ht_scene_t *s, int x, int y, int w, int h, int radius, u
 {
     if (!pod_grad(s, x, y, w, h, radius, top, bottom)) return;
     ht_run_t *r = &s->runs[s->count - 1];
-    grad_params_t p = {top, bottom, 3};
+    grad_params_t p = {top, bottom, 3, 0};
     memcpy(r->text, &p, sizeof p);
 }
 typedef struct { uint16_t top, bottom, bg; int16_t edge, gy0, gh; uint8_t k, inside_left; } veil_params_t;
 _Static_assert(sizeof(veil_params_t) <= HT_TEXT_BYTES, "veil parameters fit run->text");
+_Static_assert(sizeof(veil_params_t) == 6 * sizeof(uint16_t) + 2, "veil parameters: no padding byte");
 void pod_veil(ht_scene_t *s, int x, int y, int w, int h, int edge, bool inside_left, int gy0, int gh, uint16_t top, uint16_t bottom, uint16_t bg, unsigned k)
 {
     if (w <= 0 || h <= 0) return;
@@ -700,8 +705,10 @@ static void grad_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
 
 // ---- triangle -------------------------------------------------------------------------------------------
 
-typedef struct { int16_t v[6]; uint8_t inner; } tri_params_t;   // x0 y0 x1 y1 x2 y2, sixteenths of a px; edges that bleed
+// x0 y0 x1 y1 x2 y2, sixteenths of a px; edges that bleed; the Max's: the byte after them a member, zero (no padding)
+typedef struct { int16_t v[6]; uint8_t inner, zero; } tri_params_t;
 _Static_assert(sizeof(tri_params_t) <= HT_TEXT_BYTES, "triangle parameters fit run->text");
+_Static_assert(sizeof(tri_params_t) == 6 * sizeof(int16_t) + 2, "triangle parameters: no padding byte");
 
 bool pod_tri(ht_scene_t *s, int x0, int y0, int x1, int y1, int x2, int y2, uint16_t ink)
 {
@@ -721,7 +728,7 @@ bool pod_tri_inner(ht_scene_t *s, int x0, int y0, int x1, int y1, int x2, int y2
     int bx0 = (lx >> 4) - 1, by0 = (ly >> 4) - 1, bx1 = ((hx + 15) >> 4) + 1, by1 = ((hy + 15) >> 4) + 1;
     ht_run_t *r = new_run(s, POD_TRI, bx0, by0, bx1 - bx0, by1 - by0);
     if (!r) return false;
-    tri_params_t p = {{0}, 0};
+    tri_params_t p = {{0}, 0, 0};
     for (int i = 0; i < 6; i++) p.v[i] = (int16_t)v[i];
     p.inner = (uint8_t)(inner & 7);
     memcpy(r->text, &p, sizeof p);

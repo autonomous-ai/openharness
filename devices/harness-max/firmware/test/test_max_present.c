@@ -160,9 +160,19 @@ static void last_row(void)
     check_frame("full damage and the last row", &b);
 }
 
+// Another frame's work over the stack the next scene is built on (the P4's render task runs the frame, the blurs and
+// the paint-ahead between two scenes): what a run's bytes are must not be what that work left there.
+static __attribute__((noinline)) void scribble_stack(uint8_t v)
+{
+    volatile uint8_t junk[3072];   // within the render task's 4 KB frames
+    for (size_t i = 0; i < sizeof junk; i++) junk[i] = (uint8_t)(v + i);
+}
+
 // A run added or dropped mid-scene (a line of words wrapping onto two): the damage is what it draws, not every run after
 // it, and the glass is the scene's. The listening band's partial frame does that: the new level ends the quiet, and the
-// send prompt's two rows become one, before the X, the slivers and the row's faded ends.
+// send prompt's two rows become one, before the X, the slivers and the row's faded ends. Built over another stack than
+// the frame before's, it repaints the band alone: ht_damage compares runs byte for byte, and a glow whose parameters
+// carried a padding byte off the stack (the P4's compiler copies it in) repainted the page's every glow, 337,600 px.
 static void runs_added(void)
 {
     draw(&SCREENS[0]);
@@ -191,6 +201,7 @@ static void runs_added(void)
     a = S;
     present(NULL, &a, "listening, before");
     max_ui_level(4, T0 + MAX_TALK_FRAME_MS);
+    scribble_stack(0x5A);
     frame(T0 + MAX_TALK_FRAME_MS);
     b = S;
     CHECK(b.count == a.count - 1);   // the case
@@ -200,7 +211,7 @@ static void runs_added(void)
     CHECK(tail >= 10);
     for (int k = 0; k < tail; k++)
         for (int n = 0; n < d.count; n++) CHECK(!overlap(ht_run_bounds(&b.runs[b.count - 1 - k]), d.rect[n]));
-    CHECK(d.pixels < 100000);
+    CHECK(d.pixels <= 70000);   // the band and the prompt: 64,556 px at 480 rows
     present(&a, &b, "listening, the next level");
 }
 
