@@ -340,8 +340,10 @@ static struct { double build, present; } s_motion[BENCH_MOTION_FRAMES];
 static ht_scene_t *s_motion_last;
 static bool s_motion_shown;
 // The warming's steps as max_app.c takes them: one under the lock, or out of it WARM_STEP_US of bands (max_app.c's).
+// Their log is PSRAM's heap's, taken after the bench's buffers: in internal RAM its 32 KB would split the block the
+// header's "largest" reports, and in static PSRAM it would move the product's buffers.
 enum { AHEAD_STEPS = 4096, WARM_STEP_US = 3000, OVER_US = 4000 };
-static struct { int steps, locked, over; double ms, locked_max, step_ms[AHEAD_STEPS]; } s_ahead;
+static struct { int steps, locked, over; double ms, locked_max, step_ms[AHEAD_STEPS]; } *s_ahead;
 static int64_t s_ahead_until, s_band_from;
 static bool ahead_on(void)   // max_app.c's warm_on
 {
@@ -374,9 +376,9 @@ static void motion_frame(uint32_t now, int f)
 // step, timed.
 static void motion_ahead(uint32_t now)
 {
-    s_ahead.steps = s_ahead.locked = s_ahead.over = 0;
-    s_ahead.ms = s_ahead.locked_max = 0;
-    for (bool more = true; more && s_ahead.steps < AHEAD_STEPS; s_ahead.steps++) {
+    s_ahead->steps = s_ahead->locked = s_ahead->over = 0;
+    s_ahead->ms = s_ahead->locked_max = 0;
+    for (bool more = true; more && s_ahead->steps < AHEAD_STEPS; s_ahead->steps++) {
         const int64_t t0 = esp_timer_get_time();
         s_band_from = t0;
         s_ahead_until = t0 + WARM_STEP_US;
@@ -385,12 +387,12 @@ static void motion_ahead(uint32_t now)
         const int64_t us = esp_timer_get_time() - t0;
         const double ms = us / 1000.0;
         if (!out) {
-            s_ahead.locked++;
-            if (ms > s_ahead.locked_max) s_ahead.locked_max = ms;
+            s_ahead->locked++;
+            if (ms > s_ahead->locked_max) s_ahead->locked_max = ms;
         }
-        s_ahead.over += us > OVER_US;
-        s_ahead.step_ms[s_ahead.steps] = ms;
-        s_ahead.ms += ms;
+        s_ahead->over += us > OVER_US;
+        s_ahead->step_ms[s_ahead->steps] = ms;
+        s_ahead->ms += ms;
         vTaskDelay(1);   // the idle task's turn
     }
 }
@@ -432,12 +434,12 @@ static void motions(void)
                    1000.0 / worst, build / frames, build_max, present / frames, present_max,
                    fb_is_want() ? "same" : "DIFFERS");
             if (run == 1) {
-                const int n = s_ahead.steps;
-                qsort(s_ahead.step_ms, (size_t)n, sizeof s_ahead.step_ms[0], by_time);
+                const int n = s_ahead->steps;
+                qsort(s_ahead->step_ms, (size_t)n, sizeof s_ahead->step_ms[0], by_time);
                 printf("%-14s painted ahead in %d steps (%d under the lock), %.1f ms: a step p50 %.2f p95 %.2f max %.2f ms,"
                        " %d over %d ms; under the lock max %.2f ms\n",
-                       "", n, s_ahead.locked, s_ahead.ms, n ? s_ahead.step_ms[n / 2] : 0, n ? s_ahead.step_ms[n * 95 / 100] : 0,
-                       n ? s_ahead.step_ms[n - 1] : 0, s_ahead.over, OVER_US / 1000, s_ahead.locked_max);
+                       "", n, s_ahead->locked, s_ahead->ms, n ? s_ahead->step_ms[n / 2] : 0, n ? s_ahead->step_ms[n * 95 / 100] : 0,
+                       n ? s_ahead->step_ms[n - 1] : 0, s_ahead->over, OVER_US / 1000, s_ahead->locked_max);
             }
         }
     }
@@ -650,11 +652,12 @@ void app_main(void)
     s_fb = heap_caps_malloc(FB_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_CACHE_ALIGNED);
     s_want = heap_caps_malloc(FB_BYTES, MALLOC_CAP_SPIRAM);
     s_layer = heap_caps_malloc((size_t)LAYER_W * LAYER_H * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+    s_ahead = heap_caps_malloc(sizeof *s_ahead, MALLOC_CAP_SPIRAM);
     max_strips_framebuffer(s_fb);
     max_present_work(max_ui_work);   // as max_app.c: what the scene leaves to the frame, its blurs, both cores do
     const ppa_client_config_t srm = {.oper_type = PPA_OPERATION_SRM};
     const esp_err_t ppa = ppa_register_client(&srm, &s_srm);
-    if (!s_strip || !s_strip2 || !s_band || !s_ref || !s_fb || !s_want || !s_layer || ppa != ESP_OK) {
+    if (!s_strip || !s_strip2 || !s_band || !s_ref || !s_fb || !s_want || !s_layer || !s_ahead || ppa != ESP_OK) {
         printf("bench: no memory or no PPA (%s); free internal %u KB, PSRAM %u KB\n", esp_err_to_name(ppa),
                (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
                (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));

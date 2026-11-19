@@ -103,6 +103,11 @@ static void random_rects(ht_scene_t *s, int kind)
         case 0: ht_pro_rect(s, x, y, w, h, r, ink); break;
         case 1: ht_pro_rect_aa(s, x, y, w, h, r, ink); break;
         case 2: ht_pro_rect_aa_stroke(s, x, y, w, h, r, ink, fill); break;
+        case 4:   // a gradient from ink to fill: dithered (two pixels a store, from any x), anti-aliased or plain
+            if (next() % 3 == 0) pod_grad(s, x, y, w, h, r, ink, fill);
+            else if (next() & 1) pod_grad_aa(s, x, y, w, h, r, ink, fill);
+            else pod_grad_aa_dither(s, x, y, w, h, r, ink, fill);
+            break;
         default: {
             const int edge = next() & 1 ? pick(x - 20, x + w + 20) : (next() & 1 ? x : x + w);
             const int gh = next() & 1 ? pick(0, h + 40) : h;
@@ -165,9 +170,9 @@ int main(void)
         draw(&SCREENS[i]);
         dump(SCREENS[i].name, &S);
     }
-    static const char *const KINDS[] = {"rect", "rect_aa", "rect_aa_stroke", "veil"};
+    static const char *const KINDS[] = {"rect", "rect_aa", "rect_aa_stroke", "veil", "grad"};
     char name[40];
-    for (int kind = 0; kind < 4; kind++)
+    for (int kind = 0; kind < 5; kind++)
         for (int n = 0; n < 60; n++) {
             random_rects(&s, kind);
             snprintf(name, sizeof name, "%s %d", KINDS[kind], n);

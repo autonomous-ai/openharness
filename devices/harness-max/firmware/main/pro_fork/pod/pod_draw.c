@@ -617,6 +617,21 @@ static void veil_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
         for (int x = bg0; x < bg1; x++) d[x] = p.bg;
     }
 }
+// The Max's: d[x, x1) as pat[x & 3], two pixels a 32-bit store (little-endian: the lower one the word's low half). A
+// memcpy of the pattern to where d's alignment is unknown is sixteen byte loads and stores on the ESP32-P4.
+typedef uint32_t __attribute__((__may_alias__)) two_px_t;
+_Static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__, "a word's low half is its lower pixel");
+static void pattern_fill(uint16_t *d, int x, int x1, const uint16_t pat[4])
+{
+    if (x < x1 && ((uintptr_t)(d + x) & 2)) {
+        d[x] = pat[x & 3];
+        x++;
+    }
+    const uint32_t a = pat[x & 3] | (uint32_t)pat[(x + 1) & 3] << 16, b = pat[(x + 2) & 3] | (uint32_t)pat[(x + 3) & 3] << 16;
+    two_px_t *w = (two_px_t *)(d + x);
+    for (; x + 4 <= x1; x += 4, w += 2) w[0] = a, w[1] = b;
+    for (; x < x1; x++) d[x] = pat[x & 3];
+}
 static void grad_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
 {
     grad_params_t p;
@@ -648,10 +663,7 @@ static void grad_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
                     pat[k] = (uint16_t)(((vr > 31 ? 31 : vr) << 11) | ((vg > 63 ? 63 : vg) << 5) | (vb > 31 ? 31 : vb));
                 }
                 if (cy < 0) {   // a row clear of the corners: a plain fill of the pattern
-                    int x = x0;
-                    for (; x < x1 && (x & 3); x++) d[x] = pat[x & 3];
-                    for (; x + 4 <= x1; x += 4) memcpy(d + x, pat, sizeof pat);   // four pixels a store
-                    for (; x < x1; x++) d[x] = pat[x & 3];
+                    pattern_fill(d, x0, x1, pat);
                     continue;
                 }
             }

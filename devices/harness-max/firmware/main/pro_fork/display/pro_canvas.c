@@ -44,6 +44,11 @@ static void fill_span(uint16_t *dst, int count, uint16_t ink)
     for (; count >= 2; count -= 2) *w++ = two;
     if (count > 0) *(uint16_t *)w = ink;
 }
+// The Max's: four coverages a load once the alpha is 4-byte aligned (the pixels before that one at a time, as the
+// rest): a memcpy of them, their alignment unknown, is four byte loads and a round trip through the stack on the
+// ESP32-P4, and one of four whole pixels sixteen byte loads and stores.
+typedef uint32_t __attribute__((__may_alias__)) four_a_t;
+static int unaligned_(const uint8_t *alpha, int count) { return min_(count, (int)(-(uintptr_t)alpha & 3)); }
 static void image_span(uint16_t *dst, const uint16_t *src, const uint8_t *alpha, int count)
 {
     if (!alpha) {
@@ -53,12 +58,15 @@ static void image_span(uint16_t *dst, const uint16_t *src, const uint8_t *alpha,
         return;
     }
     int i = 0;
+    for (const int head = unaligned_(alpha, count); i < head; i++) {
+        unsigned a = alpha[i];
+        if (a) dst[i] = over(src[i], dst[i], a);
+    }
     for (; i + 4 <= count; i += 4) {
-        uint32_t coverage;
-        memcpy(&coverage, alpha + i, sizeof coverage); // alpha rows may be unaligned
+        const uint32_t coverage = *(const four_a_t *)(alpha + i);
         if (!coverage) continue;
         if (coverage == UINT32_MAX) {
-            memcpy(dst + i, src + i, 4 * sizeof *dst);
+            dst[i] = src[i], dst[i + 1] = src[i + 1], dst[i + 2] = src[i + 2], dst[i + 3] = src[i + 3];
             continue;
         }
         for (int j = i; j < i + 4; j++) {
@@ -81,9 +89,12 @@ static void faded_span(uint16_t *dst, const uint16_t *src, const uint8_t *alpha,
         for (; i < count; i++) dst[i] = over(src[i], dst[i], o);
         return;
     }
+    for (const int head = unaligned_(alpha, count); i < head; i++) {
+        const unsigned x = alpha[i] * o, a = (x + 1 + (x >> 8)) >> 8;
+        if (a) dst[i] = over(src[i], dst[i], a);
+    }
     for (; i + 4 <= count; i += 4) {
-        uint32_t coverage;
-        memcpy(&coverage, alpha + i, sizeof coverage); // alpha rows may be unaligned
+        const uint32_t coverage = *(const four_a_t *)(alpha + i);
         if (!coverage) continue;
         if (coverage == UINT32_MAX) {
             for (int j = i; j < i + 4; j++) dst[j] = over(src[j], dst[j], o);

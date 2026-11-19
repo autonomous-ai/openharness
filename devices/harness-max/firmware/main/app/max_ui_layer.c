@@ -9,7 +9,12 @@
 // like its pets' images. The P4 copies a big layer out of PSRAM about as slowly as it rasterises it: these images stay
 // small.
 #include <stdatomic.h>
+#include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
+#ifdef ESP_PLATFORM
+#include "esp_heap_caps.h"
+#endif
 
 #include "max_ui.h"
 #include "max_ui_draw.h"
@@ -107,14 +112,6 @@ static EXT_RAM_BSS_ATTR uint16_t s_patch[PATCH_PX];
 static EXT_RAM_BSS_ATTR uint16_t s_edges[EDGES_PX];   // the frame's edges as drawn, before their blur
 static EXT_RAM_BSS_ATTR uint16_t s_edge[EDGE_PX];     // one when they have no room
 static EXT_RAM_BSS_ATTR ht_run_t s_cut[HT_RUNS];
-static EXT_RAM_BSS_ATTR edge_t s_edge_kept[EDGE_KEYS];
-static EXT_RAM_BSS_ATTR uint32_t s_edge_tag[EDGE_KEYS];   // an entry's key's hash (edge_tag), 0 where none is kept
-static EXT_RAM_BSS_ATTR uint64_t s_edge_arena[EDGE_ARENA / 8];
-static EXT_RAM_BSS_ATTR struct {
-    int next, count;   // where the arena's next goes; the entries kept
-    uint32_t over;     // the warming the arena had no room for
-    unsigned glass;    // the edges worked out on the glass
-} s_edge_ring;
 static EXT_RAM_BSS_ATTR uint16_t s_ring[BLUR_R][LAYER_W];   // the rows above the one the vertical pass writes
 static EXT_RAM_BSS_ATTR uint16_t s_line[LINE_W + 2 * BLUR_R];
 static EXT_RAM_BSS_ATTR uint32_t s_rb[LINE_W + 2 * BLUR_R], s_g[LINE_W + 2 * BLUR_R];
@@ -158,13 +155,12 @@ static bool may_paint(void)
     s_more = true;
     return false;
 }
+static void edges_forget(void);
 void max_layer_forget(void)
 {
     for (int i = 0; i < KEPT; i++) s_kept[i].full = false;
     for (int i = 0; i < PETS; i++) s_pets[i].full = false;
-    memset(s_edge_tag, 0, sizeof s_edge_tag);
-    s_edge_ring.next = s_edge_ring.count = 0, s_edge_ring.over = 0;
-    memset(s_edge_arena, 0xA5, sizeof s_edge_arena);
+    edges_forget();
     memset(s_pool_px, 0xA5, sizeof s_pool_px);
     memset(s_pool_a, 0xA5, sizeof s_pool_a);
     owed_drop();
@@ -622,27 +618,39 @@ static EXT_RAM_BSS_ATTR struct {
     busy_t busy;
     uint16_t ring[BLUR_R][LAYER_W];
     ht_scene_t scene;   // what a bare pet or a layer is rasterised from; a bake's frame below 1x; an agent's runs
-    // An agent's edges: their entry once placed (edge_of till then, tag its key's), their reads, each rasterised
-    // into read_px, then its runs worked out and its patches blurred (part: the read; ops: its runs, op the patch
-    // being blurred), the images their key's runs show kept till they are made.
-    edge_t *edge, edge_of;
-    uint32_t tag;
+} s_owed;
+// The edges kept (the entries and their tags, the arena's next place, how many are kept, the warming it had no room
+// for) and the edges a warming is making: their entry once placed (`of` till then, `tag_of` its key's), their reads,
+// each rasterised into read_px, then its runs worked out and its patches blurred (part: the read; ops: its runs, op
+// the patch being blurred), the images their key's runs show kept till they are made. PSRAM's, from the heap the first
+// time a warming meets an agent between looks: in the static PSRAM the frame's buffers lie in, their 2 MB would move
+// those buffers where the cache meets them otherwise.
+typedef struct {
+    edge_t kept[EDGE_KEYS];
+    uint32_t tag[EDGE_KEYS];   // an entry's key's hash (edge_tag), 0 where none is kept
+    int next, count;
+    uint32_t over;
+    edge_t *edge, of;
+    uint32_t tag_of;
     read_t reads[3];
     int nreads, part, ops, op;
     bool rastered;
     edge_op_t op_list[EDGE_RUNS + 1];
     pet_t *refs[PETS];
     int nrefs;
-    uint16_t read_px[EDGE_PX];
-} s_owed;
+    uint16_t read_px[EDGE_PX], band[BAND_PX];
+    uint64_t arena[EDGE_ARENA / 8];
+} edge_store_t;
+static edge_store_t *s_es;     // none till then
+static bool s_es_none;         // the heap had no room for it
+static unsigned s_edges_glass;   // the edges worked out on the glass
 
 static void owed_drop(void)
 {
     s_owed.kind = OWED_NONE;
     s_owed.pet = s_owed.src = NULL;
     s_owed.kept = NULL;
-    s_owed.edge = NULL;
-    s_owed.nrefs = 0;
+    if (s_es) s_es->edge = NULL, s_es->nrefs = 0;
 }
 // A pet's frame below 1x on one colour (pod_cell_flat) is baked whole by pod_draw.c the first time a raster meets it
 // (resampled onto that colour into its arena) and copied from then on where it is not that colour: one band of an
@@ -709,9 +717,11 @@ bool max_layer_owes(void) { return owed_any(); }
 // An image or a layer the warming is making, or making one from: neither shown nor given up until it is made.
 static bool owed(const void *c)
 {
-    for (int i = 0; i < s_owed.nrefs; i++)
-        if (c == s_owed.refs[i]) return true;
-    return c == s_owed.pet || c == s_owed.src || c == s_owed.kept || c == s_owed.edge;
+    if (c == s_owed.pet || c == s_owed.src || c == s_owed.kept) return true;
+    if (!s_es) return false;
+    for (int i = 0; i < s_es->nrefs; i++)
+        if (c == s_es->refs[i]) return true;
+    return c == s_es->edge;
 }
 
 // Room for `area` px in the pool from the next place on, past any image this frame shows; the images there given up.
@@ -1133,21 +1143,44 @@ static int reads_of(int x, int w, int l, int r, read_t *rd)
 // would blur it (transparent past the agent and the glass). Where the rows it reads are all one row (an agent's sides
 // below its glow), its rows are that row blurred across alone: columns of squares, rounded where a patch dithers, with
 // a patch above and below them.
-static int edge_patch(const read_t *rd, int y0, int y1, edge_op_t *ops, int n, int most)
+// Where an edge read's ops go: into a list of at most `most` (a warming's), or with no list straight out as the
+// frame's runs (the glass's), each patch blurred from src (now: in the one buffer, done at once).
+typedef struct {
+    edge_op_t *list;
+    int n, most;
+    const uint16_t *src, *kx, *ky;
+    const read_t *rd;
+    bool now;
+    int out;
+} edge_out_t;
+static void edge_put_op(edge_out_t *o, edge_op_t op)
 {
-    if (y1 > y0 && n < most) ops[n++] = (edge_op_t){rd->x0, rd->x1, (int16_t)y0, (int16_t)y1, 0, false, 0};
-    return n;
+    if (o->list) {
+        if (o->n < o->most) o->list[o->n++] = op;
+    } else if (op.square) {
+        o->out = square(op.x0, op.y0, op.x1 - op.x0, op.y1 - op.y0, op.ink, o->out);
+    } else {
+        const read_t *rd = o->rd;
+        o->out = blur_patch(o->src, rd->c0, rd->r0, rd->sw, rd->sh, op.x0, op.x1, op.y0, op.y1, o->kx, o->ky, o->now,
+                            o->out);
+    }
 }
-static int edge_ops(const uint16_t *src, const read_t *rd, const uint16_t *kx, edge_op_t *ops, int most)
+static void edge_patch(edge_out_t *o, const read_t *rd, int y0, int y1)
+{
+    if (y1 > y0) edge_put_op(o, (edge_op_t){rd->x0, rd->x1, (int16_t)y0, (int16_t)y1, 0, false, 0});
+}
+static void edge_ops(const uint16_t *src, const read_t *rd, const uint16_t *kx, edge_out_t *o)
 {
     const int sw = rd->sw, sh = rd->sh, c0 = rd->c0, r0 = rd->r0, x0 = rd->x0, x1 = rd->x1;
-    int n = 0;
     int same = sh - 1;   // the rows from `same` on are one row
     while (same > 0 && !memcmp(&src[(size_t)(same - 1) * sw], &src[(size_t)same * sw], (size_t)sw * sizeof src[0]))
         same--;
     const int f0 = imax(rd->y0, r0 + same + BLUR_R), f1 = imin(rd->y1, r0 + sh - BLUR_R);
-    if (f1 - f0 < 2 * BLUR_R) return edge_patch(rd, rd->y0, rd->y1, ops, n, most);
-    n = edge_patch(rd, rd->y0, f0, ops, n, most);
+    if (f1 - f0 < 2 * BLUR_R) {
+        edge_patch(o, rd, rd->y0, rd->y1);
+        return;
+    }
+    edge_patch(o, rd, rd->y0, f0);
     const uint16_t *row = &src[(size_t)(f0 - r0) * sw];
     uint16_t ink = 0;
     for (int c = x0, from = x0; c <= x1; c++) {
@@ -1163,12 +1196,12 @@ static int edge_ops(const uint16_t *src, const read_t *rd, const uint16_t *kx, e
             at = (uint16_t)(((r + 128) >> 8) << 11 | ((g + 128) >> 8) << 5 | ((b + 128) >> 8));
         }
         if (c > x0 && (c == x1 || at != ink)) {
-            if (n < most) ops[n++] = (edge_op_t){(int16_t)from, (int16_t)c, (int16_t)f0, (int16_t)f1, ink, true, 0};
+            edge_put_op(o, (edge_op_t){(int16_t)from, (int16_t)c, (int16_t)f0, (int16_t)f1, ink, true, 0});
             from = c;
         }
         ink = at;
     }
-    return edge_patch(rd, f1, rd->y1, ops, n, most);
+    edge_patch(o, rd, f1, rd->y1);
 }
 
 // The glass's [x0, x1) x [y0, y1) of the agent from x (w wide) blurred as its layer would blur it, over the runs out.
@@ -1183,20 +1216,14 @@ static int blurred(int x, int w, int x0, int x1, int y0, int y1, const uint16_t 
     const ht_rect_t read = {rd.c0, rd.r0, rd.sw, rd.sh};
     ready(s_sub.runs, s_sub.count, read);
     ht_raster(&s_sub, read, src);
-    // At most a frame's runs: only patches with no room put out none (two at most a read).
-    static EXT_RAM_BSS_ATTR edge_op_t ops[HT_RUNS + 2];
-    const int n = edge_ops(src, &rd, kx, ops, HT_RUNS + 2);
-    for (int i = 0; i < n; i++) {
-        const edge_op_t *o = &ops[i];
-        out = o->square ? square(o->x0, o->y0, o->x1 - o->x0, o->y1 - o->y0, o->ink, out)
-                        : blur_patch(src, rd.c0, rd.r0, rd.sw, rd.sh, o->x0, o->x1, o->y0, o->y1, kx, ky, !room, out);
-    }
-    return out;
+    edge_out_t o = {.src = src, .kx = kx, .ky = ky, .rd = &rd, .now = !room, .out = out};
+    edge_ops(src, &rd, kx, &o);
+    return o.out;
 }
 
 // ---- an agent's edges, made ahead ----
 
-unsigned max_layer_edges(void) { return s_edge_ring.glass; }
+unsigned max_layer_edges(void) { return s_edges_glass; }
 
 // Whether run c draws in any of an agent's edge reads: only those it meets are what they are worked out from.
 static bool meets(const ht_run_t *c, const read_t *rd, int reads)
@@ -1230,15 +1257,15 @@ static uint32_t edge_tag(const ht_run_t *runs, int n, uint16_t background, const
     return h ? h : 1;
 }
 
-static ht_run_t *edge_key(const edge_t *e) { return (ht_run_t *)((uint8_t *)s_edge_arena + e->at); }
+static ht_run_t *edge_key(const edge_t *e) { return (ht_run_t *)((uint8_t *)s_es->arena + e->at); }
 static uint16_t *edge_px(const edge_t *e) { return (uint16_t *)(edge_key(e) + e->keys); }
 // The edges kept under `tag` for the agent runs[0, n) on `background` from x (w wide) in [l, r), dimmed dim.
 static edge_t *edge_find(uint32_t tag, const ht_run_t *runs, int n, int keys, const read_t *rd, int reads,
                          uint16_t background, int x, int w, int l, int r, int dim)
 {
     for (int i = 0; i < EDGE_KEYS; i++) {
-        if (s_edge_tag[i] != tag) continue;
-        edge_t *e = &s_edge_kept[i];
+        if (s_es->tag[i] != tag) continue;
+        edge_t *e = &s_es->kept[i];
         if (e->keys != keys || e->x != x || e->w != w || e->l != l || e->r != r || e->dim != dim ||
             e->background != background)
             continue;
@@ -1282,25 +1309,45 @@ static int edge_put(edge_t *e, int out)
 static int edge_place(int bytes)
 {
     if (bytes <= 0 || bytes > EDGE_ARENA) return -1;
-    int at = s_edge_ring.next;
+    int at = s_es->next;
     for (int tries = 0; tries < 16; tries++) {
         if (at + bytes > EDGE_ARENA) at = 0;
         const edge_t *shown = NULL;
         for (int i = 0; i < EDGE_KEYS && !shown; i++) {
-            const edge_t *c = &s_edge_kept[i];
-            if (s_edge_tag[i] && held(c->used) && c->at < at + bytes && at < c->at + c->bytes) shown = c;
+            const edge_t *c = &s_es->kept[i];
+            if (s_es->tag[i] && held(c->used) && c->at < at + bytes && at < c->at + c->bytes) shown = c;
         }
         if (!shown) {
             for (int i = 0; i < EDGE_KEYS; i++) {
-                const edge_t *c = &s_edge_kept[i];
-                if (s_edge_tag[i] && c->at < at + bytes && at < c->at + c->bytes) s_edge_tag[i] = 0, s_edge_ring.count--;
+                const edge_t *c = &s_es->kept[i];
+                if (s_es->tag[i] && c->at < at + bytes && at < c->at + c->bytes) s_es->tag[i] = 0, s_es->count--;
             }
-            s_edge_ring.next = at + bytes;
+            s_es->next = at + bytes;
             return at;
         }
         at = shown->at + shown->bytes;
     }
     return -1;
+}
+// The edges' store, taken from PSRAM's heap the first time (all but its pixels cleared); false when there is no room.
+static void edges_forget(void)
+{
+    if (!s_es) return;
+    memset(s_es->tag, 0, sizeof s_es->tag);
+    s_es->next = s_es->count = 0, s_es->over = 0;
+    memset(s_es->arena, 0xA5, sizeof s_es->arena);
+}
+static bool edge_store(void)
+{
+    if (s_es || s_es_none) return s_es != NULL;
+#ifdef ESP_PLATFORM
+    s_es = heap_caps_malloc(sizeof *s_es, MALLOC_CAP_SPIRAM);
+#else
+    s_es = malloc(sizeof *s_es);
+#endif
+    if (s_es) memset(s_es, 0, offsetof(edge_store_t, read_px));
+    s_es_none = !s_es;
+    return s_es != NULL;
 }
 // A warming's frame met the agent runs[0, n) of s from x (w wide) in [l, r), dimmed dim: its edges, kept from this
 // frame on, or made (its first paint) out of the lock: here only the runs they are worked out from are kept for them.
@@ -1312,135 +1359,136 @@ static void edges_ahead(const ht_scene_t *s, int from, int n, int x, int w, int 
     if (!reads) return;
     int keys;
     const uint32_t tag = edge_tag(runs, n, s->background, rd, reads, x, w, l, r, dim, &keys);
-    edge_t *e = s_edge_ring.count ? edge_find(tag, runs, n, keys, rd, reads, s->background, x, w, l, r, dim) : NULL;
+    edge_t *e = s_es && s_es->count ? edge_find(tag, runs, n, keys, rd, reads, s->background, x, w, l, r, dim) : NULL;
     if (e) {
         e->used = s_frame;
         return;
     }
-    if (keys > EDGE_KEY || s_edge_ring.over == s_warm || !may_paint()) return;
+    if (keys > EDGE_KEY || (s_es && s_es->over == s_warm) || !may_paint() || !edge_store()) return;
     ht_scene_clear(&s_owed.scene, s->background);
     int k = 0;
     for (int i = 0; i < n; i++)
         if (meets(&runs[i], rd, reads)) s_owed.scene.runs[k++] = runs[i];
     s_owed.scene.count = k;
-    s_owed.nrefs = 0;
+    s_es->nrefs = 0;
     for (int i = 0; i < k; i++) {   // the pets' images it shows, kept till it is made
         const ht_run_t *c = &s_owed.scene.runs[i];
         if (c->pro_kind != RUN_IMAGE || c->bitmap.pixels < s_pool_px || c->bitmap.pixels >= s_pool_px + POOL_PX)
             continue;
         for (int p = 0; p < PETS; p++)
             if (s_pets[p].full && c->bitmap.pixels == &s_pool_px[s_pets[p].at] && !owed(&s_pets[p]))
-                s_owed.refs[s_owed.nrefs++] = &s_pets[p];   // each once: PETS at most
+                s_es->refs[s_es->nrefs++] = &s_pets[p];   // each once: PETS at most
     }
-    memcpy(s_owed.reads, rd, sizeof rd);
-    s_owed.edge_of = (edge_t){.background = s->background, .x = (int16_t)x, .w = (int16_t)w, .l = (int16_t)l,
+    memcpy(s_es->reads, rd, sizeof rd);
+    s_es->of = (edge_t){.background = s->background, .x = (int16_t)x, .w = (int16_t)w, .l = (int16_t)l,
                               .r = (int16_t)r, .dim = (int16_t)dim, .keys = (uint8_t)k};
-    s_owed.tag = tag;
-    s_owed.kind = OWED_EDGE, s_owed.edge = NULL, s_owed.flat = 0;
-    s_owed.nreads = reads, s_owed.part = 0, s_owed.rastered = false, s_owed.y = 0;
+    s_es->tag_of = tag;
+    s_owed.kind = OWED_EDGE, s_es->edge = NULL, s_owed.flat = 0;
+    s_es->nreads = reads, s_es->part = 0, s_es->rastered = false, s_owed.y = 0;
     s_painted++;
 }
 // Where the edges owed are: placed or not, their read, rasterised or not, and the patch being blurred. Bands of one
 // cost about the same; the next may cost many times them (a rail's blur after its rows' raster).
 static int edge_phase(void)
 {
-    return s_owed.edge ? 1 + (s_owed.part * 2 + s_owed.rastered) * (EDGE_RUNS + 2) + s_owed.op : 0;
+    return s_es->edge ? 1 + (s_es->part * 2 + s_es->rastered) * (EDGE_RUNS + 2) + s_es->op : 0;
 }
 // The edges owed a place: the longest unseen entry and the arena's room for their key's runs and their patches. False
 // when there is none: none are kept.
 static bool edge_room(void)
 {
-    const edge_t *of = &s_owed.edge_of;
+    const edge_t *of = &s_es->of;
     int area = 0;   // its patches' px at most
-    for (int i = 0; i < s_owed.nreads; i++)
-        area += (s_owed.reads[i].x1 - s_owed.reads[i].x0) * (s_owed.reads[i].y1 - s_owed.reads[i].y0);
+    for (int i = 0; i < s_es->nreads; i++)
+        area += (s_es->reads[i].x1 - s_es->reads[i].x0) * (s_es->reads[i].y1 - s_es->reads[i].y0);
     const int bytes = ((int)(of->keys * sizeof(ht_run_t)) + 2 * area + 7) & ~7;
     int pick = -1;
     for (int i = 0; i < EDGE_KEYS; i++) {
-        if (!s_edge_tag[i]) {
+        if (!s_es->tag[i]) {
             pick = i;
             break;
         }
-        const edge_t *c = &s_edge_kept[i];
-        if (!held(c->used) && (pick < 0 || c->used < s_edge_kept[pick].used)) pick = i;
+        const edge_t *c = &s_es->kept[i];
+        if (!held(c->used) && (pick < 0 || c->used < s_es->kept[pick].used)) pick = i;
     }
     const int at = pick >= 0 ? edge_place(bytes) : -1;
     if (at < 0) {
-        s_edge_ring.over = s_warm;
+        s_es->over = s_warm;
         return false;
     }
-    if (s_edge_tag[pick]) s_edge_tag[pick] = 0, s_edge_ring.count--;
-    edge_t *e = &s_edge_kept[pick];
+    if (s_es->tag[pick]) s_es->tag[pick] = 0, s_es->count--;
+    edge_t *e = &s_es->kept[pick];
     *e = *of;
     e->at = at, e->bytes = bytes;
     e->count = 0;
     e->used = s_frame;
     e->revision = ++s_revision;
     memcpy(edge_key(e), s_owed.scene.runs, (size_t)e->keys * sizeof(ht_run_t));
-    s_owed.edge = e;
+    s_es->edge = e;
     return true;
 }
 // A band of the edges owed: first their place; then the next rows of a read rasterised; once it is, its runs; then a
 // band of rows of each of its patches blurred. True once they are all made, or have no place.
 static bool edge_band(void)
 {
-    if (!s_owed.edge) return !edge_room();
-    edge_t *e = s_owed.edge;
-    const read_t *rd = &s_owed.reads[s_owed.part];
+    if (!s_es->edge) return !edge_room();
+    edge_t *e = s_es->edge;
+    const read_t *rd = &s_es->reads[s_es->part];
     const uint16_t *kx = kernel_x(e->dim), *ky = kernel_y(e->dim);
-    if (!s_owed.rastered) {
+    if (!s_es->rastered) {
         const int y0 = s_owed.y, y1 = imin(rd->sh, y0 + imax(1, RASTER_PX / rd->sw));
         band_raster(&s_owed.scene, (ht_rect_t){rd->c0, (int16_t)(rd->r0 + y0), rd->sw, (int16_t)(y1 - y0)},
-                    s_owed.read_px + (size_t)y0 * rd->sw);
+                    s_es->read_px + (size_t)y0 * rd->sw);
         s_owed.y = y1;
         if (y1 < rd->sh) return false;
-        s_owed.ops = edge_ops(s_owed.read_px, rd, kx, s_owed.op_list, EDGE_RUNS + 1);
-        if (e->count + s_owed.ops > EDGE_RUNS) {   // more than it holds: the glass works them out
+        edge_out_t list = {.list = s_es->op_list, .most = EDGE_RUNS + 1};
+        edge_ops(s_es->read_px, rd, kx, &list);
+        s_es->ops = list.n;
+        if (e->count + s_es->ops > EDGE_RUNS) {   // more than it holds: the glass works them out
             e->count = EDGE_RUNS + 1;
             return true;
         }
         int at = 0;   // the next patch's, of the entry's pixels
         for (int i = 0; i < e->count; i++)
             if (!e->ops[i].square) at += (e->ops[i].x1 - e->ops[i].x0) * (e->ops[i].y1 - e->ops[i].y0);
-        for (int i = 0; i < s_owed.ops; i++) {
-            edge_op_t *o = &s_owed.op_list[i];
+        for (int i = 0; i < s_es->ops; i++) {
+            edge_op_t *o = &s_es->op_list[i];
             if (!o->square) o->at = at, at += (o->x1 - o->x0) * (o->y1 - o->y0);
             e->ops[e->count++] = *o;
         }
-        s_owed.rastered = true, s_owed.op = 0, s_owed.y = 0;
+        s_es->rastered = true, s_es->op = 0, s_owed.y = 0;
     }
-    while (s_owed.op < s_owed.ops && s_owed.op_list[s_owed.op].square) s_owed.op++;
-    if (s_owed.op == s_owed.ops) {   // the read is made: the next
-        s_owed.part++, s_owed.rastered = false, s_owed.y = 0;
-        return s_owed.part == s_owed.nreads;
+    while (s_es->op < s_es->ops && s_es->op_list[s_es->op].square) s_es->op++;
+    if (s_es->op == s_es->ops) {   // the read is made: the next
+        s_es->part++, s_es->rastered = false, s_owed.y = 0;
+        return s_es->part == s_es->nreads;
     }
-    const edge_op_t *o = &s_owed.op_list[s_owed.op];
+    const edge_op_t *o = &s_es->op_list[s_es->op];
     const int ow = o->x1 - o->x0, oh = o->y1 - o->y0;
     uint16_t *px = edge_px(e) + o->at;
     if (BAND_PX / ow >= 2) {   // a band of its rows
         const int y0 = s_owed.y, y1 = imin(oh, y0 + BAND_PX / ow);
-        blur(&s_work[0], s_owed.read_px, NULL, rd->sw, rd->sh, kx, ky, NULL, o->x0 - rd->c0, o->y0 - rd->r0 + y0, ow,
+        blur(&s_work[0], s_es->read_px, NULL, rd->sw, rd->sh, kx, ky, NULL, o->x0 - rd->c0, o->y0 - rd->r0 + y0, ow,
              y1 - y0, px + (size_t)y0 * ow, NULL, o->x0, o->y0 + y0);
         s_owed.y = y1;
-        if (y1 == oh) s_owed.op++, s_owed.y = 0;
+        if (y1 == oh) s_es->op++, s_owed.y = 0;
         return false;
     }
     // A rail's: a band of its columns, all its rows (a band of rows would read the 2 * BLUR_R rows around it again),
     // from the columns of the read its taps reach (a blur reads its source's whole rows) as they are there: in s_edge,
     // which only a glass frame's edges() uses, and only while it works one out.
-    static EXT_RAM_BSS_ATTR uint16_t band[BAND_PX];
-    uint16_t *from = s_edge;   // fw x sh is at most the read's
+    uint16_t *band = s_es->band, *from = s_edge;   // fw x sh is at most the read's
     const int x0 = s_owed.y, x1 = imin(ow, x0 + imax(1, BAND_PX / oh));
     const int ox = o->x0 - rd->c0, f0 = imax(0, ox + x0 - BLUR_R), f1 = imin(rd->sw, ox + x1 + BLUR_R), fw = f1 - f0;
     const int ya = imax(0, o->y0 - rd->r0 - BLUR_R), yb = imin(rd->sh, o->y1 - rd->r0 + BLUR_R);
     for (int y = ya; y < yb; y++)
-        memcpy(from + (size_t)y * fw, s_owed.read_px + (size_t)y * rd->sw + f0, (size_t)fw * sizeof from[0]);
+        memcpy(from + (size_t)y * fw, s_es->read_px + (size_t)y * rd->sw + f0, (size_t)fw * sizeof from[0]);
     blur(&s_work[0], from, NULL, fw, rd->sh, kx, ky, NULL, ox + x0 - f0, o->y0 - rd->r0, x1 - x0, oh, band, NULL,
          o->x0 + x0, o->y0);
     for (int y = 0; y < oh; y++)
         memcpy(px + (size_t)y * ow + x0, band + (size_t)y * (x1 - x0), (size_t)(x1 - x0) * sizeof band[0]);
     s_owed.y = x1;
-    if (x1 == ow) s_owed.op++, s_owed.y = 0;
+    if (x1 == ow) s_es->op++, s_owed.y = 0;
     return false;
 }
 
@@ -1452,7 +1500,7 @@ static int edges(int x, int w, int l, int r, int dim, int out)
     const uint16_t *kx = kernel_x(dim), *ky = kernel_y(dim);
     if (!blurs(kx) && !blurs(ky)) return out;
     read_t rd[3];
-    const int reads = s_edge_ring.count ? reads_of(x, w, l, r, rd) : 0;
+    const int reads = s_es && s_es->count ? reads_of(x, w, l, r, rd) : 0;
     if (reads) {
         int keys;
         const uint32_t tag = edge_tag(s_sub.runs, s_sub.count, s_sub.background, rd, reads, x, w, l, r, dim, &keys);
@@ -1460,7 +1508,7 @@ static int edges(int x, int w, int l, int r, int dim, int out)
         if (e && e->count <= EDGE_RUNS) return edge_put(e, out);
         if (e) e->used = s_frame;
     }
-    s_edge_ring.glass++;
+    s_edges_glass++;
     const int top = RAIL_H + BLUR_R;
     out = blurred(x, w, l, r, 0, top, kx, ky, out);
     if (x >= l) out = blurred(x, w, x, imin(r, x + BLUR_R), top, HT_HEIGHT, kx, ky, out);
@@ -1591,9 +1639,9 @@ bool max_layer_warm_paint(bool (*go_on)(void))
         } else if (s_owed.kind == OWED_EDGE) {
             const int phase = edge_phase();
             edge_t *e;
-            if ((made = edge_band()) && (e = s_owed.edge)) {
+            if ((made = edge_band()) && (e = s_es->edge)) {
                 if (e->count > EDGE_RUNS) e->bytes = (int32_t)(e->keys * sizeof(ht_run_t) + 7) & ~7;   // its key alone
-                s_edge_tag[e - s_edge_kept] = s_owed.tag, s_edge_ring.count++;
+                s_es->tag[e - s_es->kept] = s_es->tag_of, s_es->count++;
             } else if (!made && edge_phase() != phase) {
                 break;   // the next band's cost is not this one's: a step of its own, go_on's guess from its own
             }
@@ -1628,7 +1676,7 @@ bool max_layer_warm_paint(bool (*go_on)(void))
             if (s_owed.pet) s_owed.pet->used = s_frame;
             if (s_owed.src) s_owed.src->used = s_frame;
             if (s_owed.kept) s_owed.kept->used = s_frame;
-            if (s_owed.edge) s_owed.edge->used = s_frame;
+            if (s_es && s_es->edge) s_es->edge->used = s_frame;
             owed_drop();
         }
         if (!go_on()) break;
