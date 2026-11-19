@@ -1,6 +1,6 @@
 // The chime on the board's speaker through ALSA's aplay (no plugins on flutter-pi), each sound a WAV on aplay's stdin:
-// a failure the C build's beep (three ~2 kHz square tones of 80 ms with 60 ms gaps, linux/audio/beep_tone.h), a
-// question two of them at two thirds the loudness, a finished turn two soft sine notes.
+// a question or a failure two of the C build's beep tones (~2 kHz squares of 80 ms, 60 ms apart, linux/audio/
+// beep_tone.h) at well under its loudness, a finished turn two soft sine notes.
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -95,9 +95,9 @@ final Map<ChimeSound, Uint8List> _wavs = {};
 
 /// [sound] as a 16 kHz mono 16-bit WAV.
 Uint8List chimeWav(ChimeSound sound) => _wavs[sound] ??= _wav(switch (sound) {
-      ChimeSound.failed => _tones(3, 6000),
-      // Two thirds of the failure's loudness (the owner's call, 19 Nov).
-      ChimeSound.ask => _tones(2, 4000),
+      // Two tones, not the C build's three, at 2700 rather than its 6000: the owner's call, 19 Nov (louder read as too
+      // loud on the desk).
+      ChimeSound.ask || ChimeSound.failed => _tones(2, 2700),
       ChimeSound.done => _soft(),
     });
 
@@ -113,7 +113,7 @@ Int16List _tones(int count, int peak) {
 }
 
 /// A finished turn, gently: G5 then C6 150 ms later, each a sine that swells in over 10 ms and dies away (120 ms
-/// time constant), below a question's loudness; the last 30 ms fade to nothing so it ends without a click.
+/// time constant), softer than a question's square tones; the last 30 ms fade to nothing so it ends without a click.
 Int16List _soft() {
   const peak = 2200.0, swell = _rate * 10 ~/ 1000, fade = _rate * 30 ~/ 1000;
   final out = Int16List(_rate * 600 ~/ 1000);

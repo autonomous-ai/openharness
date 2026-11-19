@@ -21,48 +21,43 @@ class _Runs {
 int _sample(Uint8List wav, int i) => ByteData.sublistView(wav).getInt16(44 + 2 * i, Endian.little);
 
 void main() {
-  group('a failure', () {
-    final wav = chimeWav(ChimeSound.failed);
+  group('a question or a failure', () {
+    final wav = chimeWav(ChimeSound.ask);
 
-    test('is a 16 kHz mono 16-bit WAV of three tones with two gaps: 360 ms', () {
+    test('is a 16 kHz mono 16-bit WAV of two tones with a gap: 220 ms', () {
       final h = ByteData.sublistView(wav);
       expect(String.fromCharCodes(wav.sublist(0, 4)), 'RIFF');
       expect(String.fromCharCodes(wav.sublist(8, 12)), 'WAVE');
       expect(h.getUint16(22, Endian.little), 1); // mono
       expect(h.getUint32(24, Endian.little), 16000);
       expect(h.getUint16(34, Endian.little), 16);
-      expect(h.getUint32(40, Endian.little), 5760 * 2);
-      expect(wav.length, 44 + 5760 * 2);
+      expect(h.getUint32(40, Endian.little), 3520 * 2);
+      expect(wav.length, 44 + 3520 * 2);
       expect(h.getUint32(4, Endian.little), wav.length - 8);
     });
 
-    test('is the C build\'s beep_tone: a ~2 kHz square at 6000, silent in the gaps', () {
-      expect(_sample(wav, 0), -6000);
-      expect(_sample(wav, 4), 6000);
-      expect(_sample(wav, 1279), 6000);
-      expect(_sample(wav, 1280), 0); // the first gap: 80 ms in
+    test('is beep_tone\'s ~2 kHz square at 2700 (the owner\'s level, 19 Nov), silent in the gap', () {
+      expect(_sample(wav, 0), -2700);
+      expect(_sample(wav, 4), 2700);
+      expect(_sample(wav, 1279), 2700);
+      expect(_sample(wav, 1280), 0); // the gap: 80 ms in
       expect(_sample(wav, 2239), 0);
-      expect(_sample(wav, 2240), -6000); // the second tone: 140 ms in
+      expect(_sample(wav, 2240), -2700); // the second tone: 140 ms in
+      expect(_sample(wav, 3519), 2700);
+    });
+
+    test('a failure sounds as a question does', () {
+      expect(chimeWav(ChimeSound.failed), chimeWav(ChimeSound.ask));
     });
   });
 
-  test('a question is two of those tones, at two thirds of their loudness: 220 ms', () {
-    final wav = chimeWav(ChimeSound.ask);
-    expect(wav.length, 44 + 3520 * 2);
-    expect(_sample(wav, 0), -4000);
-    expect(_sample(wav, 4), 4000);
-    expect(_sample(wav, 1280), 0);
-    expect(_sample(wav, 2240), -4000);
-    expect(_sample(wav, 3519), 4000);
-  });
-
-  test('a finished turn is soft: two sine notes that swell in and fade, quieter than a question', () {
+  test('a finished turn is soft: two sine notes that swell in and fade, no louder than a question', () {
     final wav = chimeWav(ChimeSound.done);
     final n = (wav.length - 44) ~/ 2;
     expect(n, 16000 * 600 ~/ 1000);
     final s = [for (var i = 0; i < n; i++) _sample(wav, i)];
     final peak = s.map((v) => v.abs()).reduce((a, b) => a > b ? a : b);
-    expect(peak, inInclusiveRange(2000, 3000));
+    expect(peak, inInclusiveRange(2000, 2700));
     expect(s.first.abs(), lessThan(50)); // no click going in
     expect(s.last.abs(), lessThan(50)); // nor going out
     expect(s.toSet().length, greaterThan(500), reason: 'a curve, not a square');

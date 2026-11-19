@@ -5,7 +5,7 @@ enum ChimeSound {
   /// An agent asks: an approval or a question. Two short tones.
   ask,
 
-  /// A turn failed: the C build's beep, three short tones.
+  /// A turn failed: the same two short tones.
   failed,
 
   /// A turn finished: soft, two notes that fade.
