@@ -36,8 +36,13 @@ const FOOTER_START = /^\s*agent \S+(?: \([^)]*\))? \| session /
 const TITLE_START = /^\s*openclaw tui - (wss?:\/\/\S+) - agent /
 const TITLE = /^openclaw tui - wss?:\/\/\S+ - agent ([A-Za-z0-9_-]{1,64})(?: \([^)]*\))? - session ([A-Za-z0-9._:-]{1,128})$/
 
-/** The composer's borders: the two rules under the footer are the last lines a running TUI draws. */
-const OPENCLAW_RULE = /^\s*─{8,}\s*$/
+/**
+ * The composer's borders: the two rules under the footer are the last lines a running TUI draws. A box holding more
+ * lines than it shows (30% of the rows, at least 5) names the lines scrolled out of view in them, `──── ↑ 3 more ────`
+ * above and `──── ↓ 2 more ────` below (pi-tui's editor `createScrollBorder`).
+ */
+const OPENCLAW_RULE = /^\s*(?:─{8,}|─+ [↑↓] \d+ more ─+)\s*$/
+const SCROLLED = / [↑↓] (\d+) more /
 
 /**
  * The status line, the last line above the footer: `<connection> | <activity>` while idle (`connected | idle`, `gateway
@@ -128,15 +133,21 @@ export interface OpenclawScreen {
   /** The running TUI's status line as drawn, trimmed. */
   status: string | null
   /**
-   * What the running TUI's input box holds: its lines between the last two rules, trimmed, blank ones dropped, joined
+   * What the running TUI's input box shows: its lines between the last two rules, trimmed, blank ones dropped, joined
    * by a space; `''` when it is empty. A message OpenClaw refused is put back here.
    */
   box: string | null
+  /** The box's lines scrolled out of view above and below what it shows. */
+  boxHidden: OpenclawBoxHidden
 }
+
+export interface OpenclawBoxHidden { above: number; below: number }
+
+const NOT_SCROLLED: OpenclawBoxHidden = { above: 0, below: 0 }
 
 const NOTHING: OpenclawScreen = {
   key: null, url: null, state: null, footer: null, gatewayLost: false, running: false, gatewayStarting: false, stopped: null,
-  status: null, box: null,
+  status: null, box: null, boxHidden: NOT_SCROLLED,
 }
 
 /** Lines as drawn: escapes removed, trailing blanks dropped. */
@@ -173,9 +184,14 @@ function readTitle(lines: readonly string[], start: number): RegExpExecArray | n
 }
 
 /** The input box: a live footer has it under it, between the last two rules. */
-function readBox(lines: readonly string[]): string {
+function readBox(lines: readonly string[]): Pick<OpenclawScreen, 'box' | 'boxHidden'> {
   const rules = lines.flatMap((line, index) => (OPENCLAW_RULE.test(line) ? [index] : []))
-  return lines.slice(rules[rules.length - 2] + 1, rules[rules.length - 1]).map((line) => line.trim()).filter((line) => line).join(' ')
+  const [top, bottom] = rules.slice(-2)
+  const hidden = (rule: string): number => Number(SCROLLED.exec(rule)?.[1] ?? 0)
+  return {
+    box: lines.slice(top + 1, bottom).map((line) => line.trim()).filter((line) => line).join(' '),
+    boxHidden: { above: hidden(lines[top]), below: hidden(lines[bottom]) },
+  }
 }
 
 /**
@@ -231,7 +247,7 @@ export function readOpenclawScreen(capture: string): OpenclawScreen {
     gatewayStarting: STATUS.gatewayStarting.test(said),
     stopped,
     status: said,
-    box: readBox(lines),
+    ...readBox(lines),
   }
 }
 
@@ -261,9 +277,16 @@ export const OPENCLAW_LAUNCH = {
 
 /**
  * A box holds a message when it starts with the message's first 32 characters, whitespace runs collapsed: the TUI
- * wraps a long message over several lines, which the box joins by a space.
+ * wraps a long message over several lines, which the box joins by a space. A box scrolled over it ([hidden]) shows
+ * only a part: its end under lines hidden above, its start over lines hidden below, a part between with both. Those
+ * are compared with all whitespace removed, as the TUI also breaks a word longer than a line.
  */
-export function openclawBoxHolds(box: string | null, message: string): boolean {
+export function openclawBoxHolds(box: string | null, message: string, hidden: OpenclawBoxHidden = NOT_SCROLLED): boolean {
+  if (hidden.above || hidden.below) {
+    const shown = box?.replace(/\s+/g, '') ?? ''
+    const whole = message.replace(/\s+/g, '')
+    return !!shown && (hidden.above && hidden.below ? whole.includes(shown) : hidden.above ? whole.endsWith(shown) : whole.startsWith(shown))
+  }
   const start = message.replace(/\s+/g, ' ').trim().slice(0, 32)
   return !!start && !!box && box.replace(/\s+/g, ' ').startsWith(start)
 }
