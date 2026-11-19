@@ -457,7 +457,8 @@ export function createBinding({
   /**
    * Once the stream an attach brought up is there, the pane is read once more and the first task handed over: the pass
    * that binds the session or clears a hold types it, not the next one (reproduction: three passes, 5 s apart, before a
-   * task was typed). The same rule as the pass's own: a ready pane on the row's key, and a stream that took the reading.
+   * task was typed). The same rule as the pass's own: a ready pane on the row's key with an empty box, and a stream that
+   * took the reading.
    */
   const handOverAttached = async (agentId: string): Promise<void> => {
     const row = registry.byAgent(agentId)
@@ -465,7 +466,7 @@ export function createBinding({
     const capture = await capturePane(agentId).catch(() => null)
     if (!capture) return
     const screen = readOpenclawScreen(capture)
-    if (screen.state === 'ready' && screen.key === row.sessionId
+    if (screen.state === 'ready' && screen.box === '' && screen.key === row.sessionId
       && openclawPaneRead(row.sessionId, { ready: true, gatewayLost: screen.gatewayLost, running: screen.running }, capture)) handOverFirstTask(agentId)
   }
   const ownTranscript = (engine: 'cursor' | 'grok' | 'agy' | 'copilot', sessionId: string, cwd: string): Promise<string | null> =>
@@ -642,7 +643,8 @@ export function createBinding({
       // The first task is typed once the Gateway answers and the history loaded, into the session the pane shows, and
       // only with a stream attached: typed before it, its user row is history, nothing confirms it, and the person sends
       // it again. A pane that moved to another key binds it below first, and hands the task over once its stream is up.
-      if (streamed && agent.firstTask && screen.state === 'ready' && screen.key === agent.sessionId) handOverFirstTask(agent.agentId)
+      // Only into an empty box: the person's text or a message OpenClaw refused would go with it on one Enter.
+      if (streamed && agent.firstTask && screen.state === 'ready' && screen.box === '' && screen.key === agent.sessionId) handOverFirstTask(agent.agentId)
       // A history that did not load (a Gateway too slow to answer the TUI's first read) refuses every message until a
       // load works: `/session` loads it again, typed only into an empty box, never over the person's text or a message
       // OpenClaw refused, and only for a first task or a message of Harness's waiting there: a TUI the person runs alone
