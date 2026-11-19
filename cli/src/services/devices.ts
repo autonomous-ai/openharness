@@ -29,6 +29,8 @@ import { cableEventFor, cableStepFor, cableQuestionCloseFor, cableQuestionFor, D
 import { CableSession, SHOWN_ONLY_PREFIX, type DialStatus, type FollowCause } from '../cable/cableSession.js'
 import type { HostAdapter, Pane } from '../cable/hosts/adapter.js'
 import { createClaudeAppAdapter } from '../cable/hosts/claudeApp.js'
+import { ClaudeAppSource, type ClaudeAppSourceDeps } from '../cable/hosts/claudeAppSource.js'
+import { ClaudeAppStore } from '../cable/hosts/claudeAppStore.js'
 import { MANAGED_SETTINGS, readFullscreen } from '../cable/hosts/claudeRenderer.js'
 import { cmuxClientDeps, cmuxStoreDir, cmuxStores, createCmuxClient, type CmuxClient } from '../cable/hosts/cmuxCli.js'
 import { createCmuxAppAdapter } from '../cable/hosts/cmuxApp.js'
@@ -36,6 +38,7 @@ import { CmuxSource } from '../cable/hosts/cmuxSource.js'
 import { createCursorFolderAdapter, isFolder } from '../cable/hosts/cursorFolder.js'
 import { watchNearest } from '../cable/hosts/folderWatch.js'
 import { createCodexAppAdapter } from '../cable/hosts/codexApp.js'
+import { APP_BUNDLES } from '../cable/hosts/hostDetect.js'
 import { codexQueueDeps, createCodexQueue, type CodexQueueDeps } from '../cable/hosts/codexQueue.js'
 import { createHcClient, hcClientDeps, hcPaneKey, hcSocketPath, type HcClient } from '../cable/hosts/hcClient.js'
 import { HcSource } from '../cable/hosts/hcSource.js'
@@ -144,6 +147,8 @@ export interface DevicesDeps {
   cmux?: CmuxClient
   /** For this service's tests: opencode's service (cable/hosts/opencodeClient.ts). */
   opencode?: OpencodeClient
+  /** For this service's tests: the reader of the Claude app's store (cable/hosts/claudeAppStore.ts). */
+  claudeAppStore?: ClaudeAppSourceDeps['store']
   /** Opens the devices' own listener with these handlers (services/devicesListener.ts). Given by the devices process
    *  alone: inside the core's process (`HARNESSD_SERVICES=none`, Harness OS) there is none, so the core's process opens
    *  no socket for the devices, and the dial follows no app in front there. */
@@ -391,6 +396,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     inFront: () => cableHost.latestFront() === 'cmux', kindAt: (surface) => cmuxSource?.kindAt(surface) })
   const cmuxPane = (pane: string): Pane => ({ adapter: cmuxApp.id, id: pane })
   const claude = createClaudeAppAdapter({ ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'claude' })
+  const claudePane = (localId: string): Pane => ({ adapter: claude.id, id: localId })
   // Harness's own Codex home, whose config `codex queue` loads; run from the home folder, so no project's .codex/ is read.
   const codexQueue = createCodexQueue({ ...(deps.codex ?? codexQueueDeps()), home: env.CODEX_HOME, cwd: homedir() })
   // The stream a watch holds open on the devices' listener: a rest or a tap on an agent in Terminal, iTerm2 or Ghostty
@@ -466,6 +472,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   const herdrAppNoted = noting(herdrApp)
   /** cmux's adapter as the dial's verbs reach it: a tap or a rest on an agent cmux lists (below) is the dial's own move. */
   const cmuxAppNoted = noting(cmuxApp)
+  /** The Claude app's adapter as the dial's verbs reach it, a hooked agent's and a store row's alike: a rest's continue
+   *  link is the dial's own move, and the app's attach that follows is its echo. */
+  const claudeNoted = noting({ ...claude, show: (pane, agentId) => { noteLink(agentId); return claude.show(pane, agentId) } })
   /** Each Orca terminal's worktree, by handle, from the latest layout read that landed (below): a rest's or a tap's
    *  switch activates it first. */
   let orcaWorktrees: ReadonlyMap<string, string> = new Map()
@@ -482,8 +491,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     { ...orca,
       show: (pane: Pane, agentId: string) => { orcaSwitches.note(pane.id); return orca.show(pane, agentId) },
       focus: (pane: Pane) => { orcaSwitches.note(pane.id); return orca.focus(pane) } },
-    // A rest's continue link: the app's attach that follows is the dial's own echo.
-    { ...claude, show: (pane: Pane, agentId: string) => { noteLink(agentId); return claude.show(pane, agentId) } },
+  ].map(noting), claudeNoted, ...[
     // No echo to guard: the Codex app sends no attach for the follow to take as a person's.
     createCodexAppAdapter({ ...apps, bin: openBin, inFront: () => cableHost.latestFront() === 'codex', log }),
     // No echo to guard: VS Code sends no attach for the follow to take as a person's.
@@ -693,6 +701,29 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     messageId: opencodeMessageId,
     log,
     count: voiced,
+  }) : null
+  /** The Claude app's store, in the person's home: the app's own folder, not a Harness path. */
+  const claudeAppRoot = join(homedir(), 'Library', 'Application Support', 'Claude', 'claude-code-sessions')
+  /** The Claude app's Code sessions, with or without a process, listed from its store when a file of it changes
+   *  (docs/plans/2026-11-19-dial-claude-app-sessions-design.md). It runs only while a dial is attached, behind the
+   *  observed agents' switch, on macOS alone, where the app runs. A session with a process is the observed source's
+   *  copy, which holds its row while it runs (registry.ts). */
+  const claudeApp = observed && apps.platform === 'darwin' ? new ClaudeAppSource({
+    store: deps.claudeAppStore ?? new ClaudeAppStore(claudeAppRoot),
+    root: claudeAppRoot,
+    watch: (folders, changed) => watchNearest(folders, changed),
+    after: timerIn('claude-app'),
+    // Through the opener, as a hooked agent's tap: noted before it, and its attach the link's echo.
+    focus: (localId, agentId) => {
+      noteMove()
+      noteLink(agentId)
+      return opener.open(agentId, { bundle: APP_BUNDLES.claude, pane: claudePane(localId) })
+    },
+    canShow: (localId) => claude.canShow(claudePane(localId)),
+    // The noted copy keeps the show the Claude app's adapter has.
+    show: (localId, agentId) => claudeNoted.show!(claudePane(localId), agentId),
+    monotonic,
+    log,
   }) : null
   /** The ones the dial lists, each with its source: the merged list's, not each source's own, as a copy a stronger source
    *  also holds (a Harness agent's session, a hooked agent's pane) is that one's row and must get no second card. */
@@ -984,7 +1015,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   })
   // What the dial lists with no window, or with one in the apps view: this computer's harness agents, and the ones outside
   // a pane unless switched off.
-  const registry = new HostRegistry([cableHost.harness, observed, herdr, hcSource, cmuxSource, opencode].filter((source) => source !== null))
+  const registry = new HostRegistry([cableHost.harness, observed, herdr, hcSource, cmuxSource, opencode, claudeApp].filter((source) => source !== null))
   cableHost.setRegistry(registry)
   // The dial's log lives with the app's, one file a day (dialLog.ts). The old unbounded `dial.log` in the
   // data folder is cut down to a pointer, for anyone with a bookmark.
@@ -1356,6 +1387,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   hcSource?.onChange(() => part.call('dial', outsideTurn))
   cmuxSource?.onChange(() => part.call('dial', outsideTurn))
   opencode?.onChange(() => part.call('dial', outsideTurn))
+  claudeApp?.onChange(() => part.call('dial', outsideTurn))
   /** One of the observed source's timers, each run guarded as a notice is: one that throws is logged and the next runs. */
   const every = (ms: number, run: () => unknown): ReturnType<typeof setInterval> => {
     const timer = setInterval(() => part.call('observed', run), ms)
@@ -1615,7 +1647,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     log('[device] orca watch · ended')
   }
 
-  /** The scan, the reminders, herdr's and Herdr Core's sockets, and opencode's service, for an attached dial alone. */
+  /** The scan, the reminders, herdr's and Herdr Core's sockets, opencode's service and the Claude app's store, for an
+   *  attached dial alone. */
   let attached: ReturnType<typeof setInterval>[] = []
   const dialAttached = (on: boolean): void => {
     dialOn = on
@@ -1642,6 +1675,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       return cmuxFound ? cmuxSource.start() : cmuxSource.stop()
     })
     part.call('opencode', () => on ? opencode.start() : opencode.stop())
+    if (claudeApp) part.call('claude-app', () => on ? claudeApp.start() : claudeApp.stop())
     if (!on) {
       // The next attach checks Orca's ring afresh, and a read under way lands on nothing.
       orcaRing = { again: false }

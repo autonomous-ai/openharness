@@ -7943,6 +7943,10 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
   /** On macOS, each app's command on the path but `herdr-app`, so Herdr Core's source does not start: what a tap runs is
    *  read in `orcaRuns`. */
   const onMac = { ...orca, platform: 'darwin' as const, onPath: (name: string) => (name === 'herdr-app' ? null : `/opt/${name}/bin/${name}`) }
+  /** The watch the Claude app's store source holds on macOS beside opencode's, on its root and the app's folder: in the
+   *  throwaway home neither is there. */
+  const claudeStore = join(homedir(), 'Library', 'Application Support', 'Claude')
+  const claudeStoreWatch = [[join(claudeStore, 'claude-code-sessions'), claudeStore], expect.any(Function)]
   const host = () => seen.dial as unknown as DaemonCableHost
   /** A dial on the cable, on this computer's agents: no window. */
   const attach = (port: DevicesPort) => { seen.host.watching!(true); port.swarms(null) }
@@ -8019,7 +8023,8 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
     seen.host.watching!(false)
     expect(oc.streams.map(({ closed }) => closed)).toEqual([true])
     expect(await listed()).toEqual([])
-    expect(watchedFolders.stopped).toBe(1)
+    // opencode's, and the Claude app store's.
+    expect(watchedFolders.stopped).toBe(2)
   })
 
   it('a turn is its cards', async () => {
@@ -8195,12 +8200,12 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
     const folders = [dirname(path), dirname(dirname(path))]
     expect(watchedFolders.calls).toEqual([])
     attach(port)
-    expect(watchedFolders.calls).toEqual([[folders, expect.any(Function)]])
+    expect(watchedFolders.calls).toEqual([[folders, expect.any(Function)], claudeStoreWatch])
     seen.host.watching!(false)
-    expect(watchedFolders.stopped).toBe(1)
+    expect(watchedFolders.stopped).toBe(2)
     // A state folder made while neither was there is watched from the next attach.
     attach(port)
-    expect(watchedFolders.calls.map(([watched]) => watched)).toEqual([folders, folders])
+    expect(watchedFolders.calls.map(([watched]) => watched)).toEqual([folders, claudeStoreWatch[0], folders, claudeStoreWatch[0]])
   })
 
   it('a state folder that is the home folder or a disk\'s root is not watched', () => {
@@ -8209,7 +8214,7 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
       vi.stubEnv('XDG_STATE_HOME', state)
       watchedFolders.calls.length = 0
       attach(withOpencode().port)
-      expect(watchedFolders.calls).toEqual([[[join(state, 'opencode')], expect.any(Function)]])
+      expect(watchedFolders.calls).toEqual([[[join(state, 'opencode')], expect.any(Function)], claudeStoreWatch])
     }
   })
 
@@ -8218,7 +8223,8 @@ describe("opencode's sessions, over its local server (docs/plans/2026-11-17-dial
     await live()
     await port.stop()
     expect(oc.streams.map(({ closed }) => closed)).toEqual([true])
-    expect(watchedFolders.stopped).toBe(1)
+    // opencode's, and the Claude app store's.
+    expect(watchedFolders.stopped).toBe(2)
   })
 
   it('an opencode part that throws costs the dial nothing', async () => {
