@@ -91,6 +91,33 @@ void main() {
     dial.dispose();
   });
 
+  test('a dial this account cannot open is listed with how to fix it', () async {
+    final dial = DialState();
+    final controller = DevicesController(
+      dial: dial,
+      accountId: 'a',
+      sendSettings: (_, _) async => true,
+    );
+    await controller.load();
+    const problem =
+        'No access to the dial. Run: sudo usermod -aG dialout \$USER, then log out and in.';
+    // Linux's row for a port this account may not open: never seen, no MAC, only the problem.
+    report(dial, [
+      DialStatus.fromJson({
+        'id': 'E2E-DIAL',
+        'attached': false,
+        'problem': problem,
+      }),
+    ]);
+    expect(controller.devices, hasLength(1));
+    expect(controller.devices.single.connectionLabel, problem);
+    report(dial, [deviceStatus('E2E-DIAL', mac: 'e2:e2')]);
+    expect(controller.devices, hasLength(1));
+    expect(controller.devices.single.connectionLabel, 'Connected');
+    controller.dispose();
+    dial.dispose();
+  });
+
   test('a failed library read cannot overwrite saved devices; retry merges new arrivals', () async {
     final storage = _ReadFailureStore();
     final dial = DialState();
