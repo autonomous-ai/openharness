@@ -1,5 +1,6 @@
 // Harness Max's glass behind the Pro's pro_display.h: the app draws 1920 x 480 landscape, the OTA7290B's framebuffer is
-// 480 x 1920 portrait. Every strip is turned on its way in (max_turn.h) and every touch on its way out.
+// 480 x 1920 portrait. Every strip is turned on its way in (max_turn.h: by the PPA, max_turn_ppa.h, else by the CPU) and
+// every touch on its way out.
 #include "pro_display.h"
 
 #include <assert.h>
@@ -9,6 +10,7 @@
 #include "max_panel.h"
 #include "max_touch.h"
 #include "max_turn.h"
+#include "max_turn_ppa.h"
 #include "pins_max.h"
 
 #include "esp_attr.h"
@@ -34,6 +36,9 @@ static SemaphoreHandle_t      s_dma_done;
 static uint16_t              *s_strip;   // landscape, rows at the strip's width: the renderer's
 static uint16_t              *s_band;    // the same pixels in the panel's portrait raster: the DMA's
 static bool                   s_in_flight;
+static bool                   s_ppa;      // the PPA turns the strips; off for good after its first failure
+
+#define BAND_BYTES ((size_t)PRO_STRIP_PX * sizeof(uint16_t))
 
 static esp_lcd_panel_io_handle_t s_touch_io;
 static esp_lcd_touch_handle_t    s_touch;
@@ -54,10 +59,15 @@ static bool IRAM_ATTR color_done(esp_lcd_panel_handle_t p, esp_lcd_dpi_panel_eve
 void pro_display_init(void)
 {
     s_dma_done = xSemaphoreCreateBinary();
-    // Internal RAM for both: the raster and the turn walk them pixel by pixel. Only the band needs to be DMA-capable.
-    s_strip = heap_caps_malloc((size_t)PRO_STRIP_PX * sizeof(uint16_t), MALLOC_CAP_INTERNAL);
-    s_band = heap_caps_malloc((size_t)PRO_STRIP_PX * sizeof(uint16_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    // Internal RAM for both: the raster and the CPU's turn walk them pixel by pixel. Both DMA-capable: the PPA reads the
+    // strip and writes the band, the panel's DMA reads the band. DMA-capable memory comes aligned to the cache line,
+    // which the PPA needs of what it writes.
+    s_strip = heap_caps_malloc(BAND_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    s_band = heap_caps_malloc(BAND_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
     assert(s_dma_done && s_strip && s_band);
+    const esp_err_t ppa = max_turn_ppa_open();
+    s_ppa = ppa == ESP_OK;
+    if (!s_ppa) ESP_LOGW(TAG, "no PPA (%s): the CPU turns the strips", esp_err_to_name(ppa));
 
     // Dark until the panel is up: the framebuffer starts zeroed (black), and the light comes on after.
     ESP_ERROR_CHECK(max_panel_open(&s_panel));
@@ -79,13 +89,23 @@ uint16_t *pro_panel_strip(int which)
     return s_strip;
 }
 
+// The PPA's turn of a strip into the band. False when it failed: logged, and the CPU turns every strip from then on.
+static bool ppa_turn(const uint16_t *buf, int w, int h)
+{
+    const esp_err_t err = max_turn_ppa(buf, w, h, s_band, BAND_BYTES);
+    if (err == ESP_OK) return true;
+    ESP_LOGE(TAG, "PPA turn of %dx%d failed (%s): the CPU turns the strips from now on", w, h, esp_err_to_name(err));
+    s_ppa = false;
+    return false;
+}
+
 void pro_panel_submit(int x, int y, int w, int h, const uint16_t *buf)
 {
     assert(s_panel && w > 0 && h > 0 && x >= 0 && y >= 0 && x + w <= PRO_DISPLAY_W && y + h <= PRO_DISPLAY_H);
     assert(buf == s_strip && w * h <= PRO_STRIP_PX);
     assert(!s_in_flight);   // the band is still the DMA's: writing it now would tear the last strip
     const max_rect_t panel = max_turn_rect((max_rect_t){x, y, w, h});
-    max_turn_pixels(buf, w, h, s_band);
+    if (!s_ppa || !ppa_turn(buf, w, h)) max_turn_pixels(buf, w, h, s_band);
     xSemaphoreTake(s_dma_done, 0);   // drop a stale give from an earlier timed-out push
     ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(s_panel, panel.x, panel.y, panel.x + panel.w, panel.y + panel.h, s_band));
     s_in_flight = true;

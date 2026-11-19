@@ -30,9 +30,10 @@ idf.py -B build -DPROJECT_VER=0.0.99-dev build
 - `PROJECT_VER=0.0.99-dev` keeps a dev build from being overwritten by the daemon's OTA update.
 - `-DPRO_PYTHON=/path/to/python` when the first `python3` on the PATH has no Pillow; `-DPRO_FONT=/path/font.ttf` picks
   the text face as on the Pro.
-- The app draws landscape; `main/display/max_turn.c` turns every strip into the panel's portrait framebuffer, and every
-  touch back. If the picture comes out upside down, set `MAX_TURN_FLIPPED` to 1 in `main/display/max_turn.h`: the
-  finger turns with it.
+- The app draws landscape; every strip is turned into the panel's portrait framebuffer by the P4's PPA
+  (`main/display/max_turn_ppa.c`), by `main/display/max_turn.c` on the CPU when the PPA fails, and every touch back.
+  If the picture comes out upside down, set `MAX_TURN_FLIPPED` to 1 in `main/display/max_turn.h`: the finger turns
+  with it.
 
 The same sources also build as a Linux program: a simulator window on the Mac, and the Orange Pi 4 Pro's bar for
 demos. See `linux/README.md`.
@@ -81,7 +82,8 @@ When the board arrives, check and write the numbers here:
    brightness setting; asleep, register 0x96 at 0 is dark.
 3. Touch: the boot log names the address that answered (0x14 or 0x5D); a tap lands where the finger is.
 4. The heartbeat line (`alive ... raster_max_us=... frame_max_us=...`): the longest frame for a full screen and for one
-   lane, and the time `pro_panel_submit` spends turning a strip. If the CPU turn is too slow, the P4's PPA does it.
+   lane, and the time `pro_panel_submit` spends turning a strip. The PPA turns them; a boot log line says when the
+   CPU does instead (`no PPA`, `PPA turn ... failed`).
 5. Free internal RAM and PSRAM from the heartbeat (`heap=`, `psram=`). The strip and the turned band take 2 x 90 KB of
    internal RAM.
 6. Audio: the chimes (`main/app/max_chime.h`: a question's or a failure's two tones, a finished turn's two soft notes)
