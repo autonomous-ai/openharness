@@ -1,6 +1,7 @@
 // App Detail (the owner's call, 18 Nov): the app column, every agent of the ring in a row that scrolls sideways three
-// cells to the glass, and the bell. A tap opens an agent across the row and the others shrink to dimmed slivers beside
-// it; opening and closing are this page's own motion (the mockup's Bar.openAt and close), not a change of page.
+// cells to the glass, those who need the person first (BarModel.row), and the bell. A tap opens an agent across the row
+// and the others shrink to dimmed slivers beside it; opening and closing are this page's own motion (the mockup's
+// Bar.openAt and close), not a change of page.
 import 'dart:math' as math;
 import 'dart:ui' show lerpDouble;
 
@@ -79,7 +80,7 @@ class _OverviewPageState extends State<OverviewPage> with SingleTickerProviderSt
   String? _openOf() => model.page == BarPage.agent ? model.selected?.id : null;
 
   Map<String, double> _targets(String? open) => {
-        for (final a in model.agents) a.id: open == null ? kCellW : (a.id == open ? kOpenW : kSliverW),
+        for (final a in model.row) a.id: open == null ? kCellW : (a.id == open ? kOpenW : kSliverW),
       };
 
   double _width(String id) {
@@ -91,7 +92,7 @@ class _OverviewPageState extends State<OverviewPage> with SingleTickerProviderSt
 
   /// Where the row rests with [id] open: one sliver before it where there is one.
   double _openScroll(String id) {
-    final n = model.agents.length, i = model.agents.indexWhere((a) => a.id == id);
+    final row = model.row, n = row.length, i = row.indexWhere((a) => a.id == id);
     final end = math.max(0.0, kOpenW + (n - 1) * kSliverW - kRowW);
     return ((i - 1) * kSliverW).clamp(0.0, end);
   }
@@ -111,7 +112,7 @@ class _OverviewPageState extends State<OverviewPage> with SingleTickerProviderSt
       }
     }
     if (open == null && _open != null) {
-      final n = model.agents.length, i = model.agents.indexWhere((a) => a.id == _open);
+      final row = model.row, n = row.length, i = row.indexWhere((a) => a.id == _open);
       _carry = null;
       _back = i < 0 ? null : ((i - 1) * kCellW).clamp(0.0, math.max(0.0, (n - 3) * kCellW));
     }
@@ -145,7 +146,7 @@ class _OverviewPageState extends State<OverviewPage> with SingleTickerProviderSt
   List<bool> _seen() {
     var left = -_pixels;
     final seen = <bool>[];
-    for (final a in model.agents) {
+    for (final a in model.row) {
       final w = _width(a.id);
       seen.add(math.min(left + w, kRowW) - math.max(left, 0) >= w / 2);
       left += w;
@@ -155,7 +156,7 @@ class _OverviewPageState extends State<OverviewPage> with SingleTickerProviderSt
 
   @override
   Widget build(BuildContext context) {
-    final agents = model.agents;
+    final agents = model.row;
     final talk = model.talk;
     return DefaultTextHeightBehavior(
       textHeightBehavior: kEvenLeading,
@@ -183,7 +184,7 @@ class _OverviewPageState extends State<OverviewPage> with SingleTickerProviderSt
 
   /// One dot per agent in its state's colour, lit while its cell is on the glass; only when the row scrolls.
   Widget? _dots() {
-    final agents = model.agents;
+    final agents = model.row;
     if (agents.length <= 3) return null;
     return ListenableBuilder(
       listenable: Listenable.merge([_scroll, _move]),
@@ -222,7 +223,7 @@ class _OverviewPageState extends State<OverviewPage> with SingleTickerProviderSt
           ? const SnapPhysics(origin: 0, extent: kCellW, parent: ClampingScrollPhysics())
           : const ClampingScrollPhysics(),
       child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        for (final a in model.agents)
+        for (final a in model.row)
           ListenableBuilder(
             key: ValueKey(a.id),
             listenable: _move,
@@ -238,7 +239,7 @@ class _OverviewPageState extends State<OverviewPage> with SingleTickerProviderSt
         ListenableBuilder(
           listenable: Listenable.merge([_scroll, _move]),
           builder: (context, _) {
-            final x = _pixels, end = model.agents.fold(0.0, (w, a) => w + _width(a.id)) - kRowW;
+            final x = _pixels, end = model.row.fold(0.0, (w, a) => w + _width(a.id)) - kRowW;
             return Stack(fit: StackFit.expand, children: [
               _Fade(left: true, on: x > 4),
               _Fade(left: false, on: x < end - 4),

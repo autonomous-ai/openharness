@@ -104,6 +104,32 @@ class BarModel extends ChangeNotifier {
   /// The shown app's ring, in the daemon's order (an agent keeps its place).
   final List<Agent> agents = [];
 
+  /// The row's order of need (the owner's call, 19 Nov): waiting on the person (an approval, a question) first, then
+  /// at work, failed, done, resting.
+  static const kNeed = [AgentState.asking, AgentState.working, AgentState.failed, AgentState.done, AgentState.idle];
+
+  /// The order the row held when an agent opened (ids), null while none is open.
+  List<String>? _heldRow;
+
+  /// The ring as the row and its dots list it: by [kNeed], each state in the ring's order. While an agent is open the
+  /// order it opened on is held, so the open agent and the slivers beside it stay put as states change; an agent that
+  /// comes meanwhile goes after them, by need.
+  List<Agent> get row {
+    final byNeed = [
+      for (final s in kNeed)
+        for (final a in agents)
+          if (a.state == s) a,
+    ];
+    final held = _heldRow;
+    if (held == null) return byNeed;
+    final kept = {for (final id in held) id};
+    return [
+      for (final id in held) ?agentById(id),
+      for (final a in byNeed)
+        if (!kept.contains(a.id)) a,
+    ];
+  }
+
   /// Every app with agents (`apps` frame), and the shown one's id. [appsKnown]: an `apps` frame arrived; without one
   /// (an older daemon) the app column shows the computer's name and there is no Apps page.
   final List<AppInfo> apps = [];
@@ -1278,6 +1304,8 @@ class BarModel extends ChangeNotifier {
       }
     }
     if (talk == TalkPhase.closed) talk = TalkPhase.off;
+    // Opening an agent holds the row's order until it closes (see row).
+    _heldRow = p == BarPage.agent ? [for (final a in row) a.id] : null;
     page = p;
     _dirty = true;
   }

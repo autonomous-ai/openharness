@@ -78,11 +78,11 @@ class _AppsPageState extends State<AppsPage> {
     );
   }
 
-  /// The shown app's ring in its own states; another app's waiting agents in yellow and the rest faint, as the daemon
-  /// counts them but does not send their states.
+  /// The shown app's agents in their own states, in the row's order; another app's waiting agents in yellow and the
+  /// rest faint, as the daemon counts them but does not send their states.
   List<Color> _dots(AppInfo app, bool shown) {
     if (shown && model.agents.isNotEmpty) {
-      return [for (final a in model.agents.take(kAppDots)) appDotInk(a.state)];
+      return [for (final a in model.row.take(kAppDots)) appDotInk(a.state)];
     }
     final n = app.count < kAppDots ? app.count : kAppDots;
     return [for (var i = 0; i < n; i++) i < app.waiting ? appDotInk(AgentState.asking) : appDotInk(AgentState.idle)];

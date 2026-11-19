@@ -34,9 +34,10 @@ void main() {
     expect(tester.widget<AppCard>(shown).app!.id, 'orca');
   });
 
-  testWidgets('the shown app\'s dots are its agents\' states; another\'s, its waiting ones', (tester) async {
+  testWidgets('the shown app\'s dots are its agents\' states, in the row\'s order; another\'s, its waiting ones',
+      (tester) async {
     await pumpPage(tester, AppsPage(model: _apps()));
-    expect(_dotsOf(tester, 'orca'), [Ink.accent, Ink.ask, Ink.done, Ink.accent, Ink.faint]);
+    expect(_dotsOf(tester, 'orca'), [Ink.ask, Ink.accent, Ink.accent, Ink.done, Ink.faint]);
     expect(_dotsOf(tester, 'harness'), [Ink.ask, Ink.faint, Ink.faint]);
   });
 
