@@ -13,6 +13,7 @@ import { CMUX_APP_BINARY, type CmuxClient, type CmuxInputState, type CmuxSession
 import { hcClientDeps, type HcClient, type HcPrompt, type HcSubscriber, type HcTerminal } from '../cable/hosts/hcClient.js'
 import { herdrClientDeps, type HerdrAnswer, type HerdrClient, type HerdrEntry, type HerdrPrompt, type HerdrSubscriber } from '../cable/hosts/herdrClient.js'
 import { HerdrSource } from '../cable/hosts/herdrSource.js'
+import type { LinuxRaise } from '../cable/hosts/linuxRaise.js'
 import { observedAgentId, ObservedSource } from '../cable/hosts/observed.js'
 import { OPENCODE_MESSAGE, opencodeClientDeps, type OpencodeAnswer, type OpencodeClient, type OpencodeEvent, type OpencodeFault, type OpencodePrompt } from '../cable/hosts/opencodeClient.js'
 import { OpencodeSource } from '../cable/hosts/opencodeSource.js'
@@ -342,6 +343,21 @@ const opencode: OpencodeClient = {
   },
   prompt: async (...args) => { opencodeCalls.push(['prompt', ...args]); return 'failed' },
 }
+/** Linux's raise as every spec but its own has it: no desktop found, so nothing is raised. */
+const noDesktop: LinuxRaise = { ready: () => false, raise: async () => false }
+/** A raise a spec drives: whether it found a desktop, what it answers, and each window it was asked for. */
+function fakeRaise() {
+  const fake: { found: boolean; answer: boolean; raised: Array<{ pid?: number; app?: string }>; raise: LinuxRaise } = {
+    found: true,
+    answer: true,
+    raised: [],
+    raise: {
+      ready: () => fake.found,
+      raise: async (window) => { fake.raised.push(window); return fake.answer },
+    },
+  }
+  return fake
+}
 /** Orca's reads for every spec but Orca's own: nothing lands, so no other spec hears of an order or a watch. */
 const inertOrcaReads: OrcaReads = {
   orcaWatchesFocus: () => new Promise(() => {}),
@@ -516,8 +532,9 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string } = {}) {
+function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolean; testDialPort?: string; readUsage?: DevicesDeps['readUsage']; now?: () => number; decideTier?: DevicesDeps['decideTier'] | null; refresh?: DevicesDeps['refresh']; orca?: DevicesDeps['orca']; orcaReads?: DevicesDeps['orcaReads']; codex?: DevicesDeps['codex']; herdr?: DevicesDeps['herdr']; hc?: DevicesDeps['hc']; cmux?: DevicesDeps['cmux'] | null; opencode?: DevicesDeps['opencode']; claudeAppStore?: DevicesDeps['claudeAppStore']; codexAppThreads?: DevicesDeps['codexAppThreads'] | null; bundleId?: DevicesDeps['bundleId'] | null; listen?: DevicesDeps['listen']; tty?: DevicesDeps['tty']; claude?: DevicesDeps['claude'] | null; orcaHomes?: ReturnType<typeof fakeOrcaHomes> | null; vscodeExtension?: DevicesDeps['vscodeExtension'] | null; cursorExtension?: DevicesDeps['cursorExtension'] | null; orcaPlugin?: DevicesDeps['orcaPlugin'] | null; claudeFullscreen?: null; claudeManagedSettings?: string; raise?: DevicesDeps['raise'] | null } = {}) {
   const core = over.core ?? fakeCore({ dataDir })
+  const apps = over.orca ?? orca
   // None, and no read under way, unless the spec gives its own; null leaves the devices to read this computer's.
   const orcaHomes = over.orcaHomes ?? fakeOrcaHomes()
   const ports: CorePorts = emptyPorts()
@@ -532,7 +549,7 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
     readUsage: over.readUsage,
     now: over.now,
     refresh: over.refresh,
-    orca: over.orca ?? orca,
+    orca: apps,
     orcaReads: over.orcaReads ?? inertOrcaReads,
     codex: over.codex ?? codex,
     herdr: over.herdr ?? herdr,
@@ -573,6 +590,9 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
       return claudeSettings.fullscreen
     },
     claudeManagedSettings: over.claudeManagedSettings,
+    // On Linux a raise that finds no desktop unless the spec gives its own: no spec reads this login's sockets or raises
+    // the developer's windows. null leaves it out: the devices build the system's.
+    raise: over.raise === null ? undefined : over.raise ?? (apps.platform === 'linux' ? noDesktop : undefined),
     processGroups: async (agent, shell) => {
       processGroups.reads.push([agent, shell])
       if (processGroups.held) await new Promise<void>((resolve) => { processGroups.land.push(resolve) })
@@ -2637,8 +2657,18 @@ describe('agents outside a pane, from their hooks and the open sessions (cable/h
         await vi.waitFor(() => expect(orcaRuns).toEqual([[file, ['-b', 'com.microsoft.VSCode'], 10_000]]))
       })
 
-      it('off macOS a pick runs nothing', async () => {
-        const { port } = start({ faults: ['fleet'] })
+      it('on Linux a pick brings the picked app through the raise, and logs bring · ok', async () => {
+        const linux = fakeRaise()
+        const { port } = start({ faults: ['fleet'], raise: linux.raise })
+        await twoApps(port)
+        expect(host().pickApp('vscode')).toBe('switched')
+        await vi.waitFor(() => expect(brings()).toEqual(['[device] app filter: bring · ok']))
+        expect(linux.raised).toEqual([{ app: 'vscode' }])
+        expect(orcaRuns).toEqual([])
+      })
+
+      it('on Windows a pick runs nothing', async () => {
+        const { port } = start({ faults: ['fleet'], orca: { ...orca, platform: 'win32' } })
         await twoApps(port)
         expect(host().pickApp('vscode')).toBe('switched')
         await settled()
@@ -2999,6 +3029,59 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(await caps()).toEqual([{ id: 'h1', caps: 'sva' }])
     host().openAgent('h1')
     expect(orcaRuns).toEqual([])
+  })
+
+  // On Linux a tap brings the agent's window forward through the raise (docs/plans/2026-11-19-dial-linux-design.md § 2.1).
+  describe('on Linux, the raise', () => {
+    it('a tap on a hooked agent in a WezTerm pane activates the pane, then raises its caller\'s window in WezTerm', async () => {
+      const linux = fakeRaise()
+      const { port } = startHere({ raise: linux.raise })
+      port.observed(hook('session-start', { engine: 'codex', sessionId: 'cx-1', hostHints: { TERM_PROGRAM: 'WezTerm', WEZTERM_PANE: '3' } }))
+      attach(port)
+      expect(await host().openAgent(CODEX)).toBeUndefined()
+      expect(orcaRuns).toEqual([['/opt/orca/bin/orca', ['cli', 'activate-pane', '--pane-id', '3'], 10_000]])
+      expect(linux.raised).toEqual([{ pid: 4242, app: 'wezterm' }])
+    })
+
+    it('an agent with no pane lists f once a desktop is found, and its tap answers what the raise did', async () => {
+      const linux = fakeRaise()
+      linux.found = false
+      const { port } = startHere({ raise: linux.raise })
+      port.observed(hook('session-start', { hostHints: { TERM_PROGRAM: 'ghostty' } }))
+      attach(port)
+      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 's' }])
+      linux.found = true
+      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+      expect(await host().openAgent(ID)).toBeUndefined()
+      linux.answer = false
+      expect(await host().openAgent(ID)).toEqual({ ok: false, error: 'Ghostty did not open it.' })
+      expect(linux.raised).toEqual([{ pid: 4242, app: 'ghostty' }, { pid: 4242, app: 'ghostty' }])
+      expect(orcaRuns).toEqual([])
+    })
+
+    /** This login's desktop as the system's raise reads it: X11 on :0, every other variable empty, so no spec reads the
+     *  developer's own sockets or session bus. */
+    const onX11 = () => {
+      for (const name of ['SWAYSOCK', 'HYPRLAND_INSTANCE_SIGNATURE', 'XDG_RUNTIME_DIR', 'WAYLAND_DISPLAY', 'DBUS_SESSION_BUS_ADDRESS', 'XAUTHORITY']) vi.stubEnv(name, '')
+      vi.stubEnv('DISPLAY', ':0')
+    }
+    const raiseLines = () => said().filter((line) => line.startsWith('[device] raise · '))
+
+    it('with none given the devices build the system\'s: it says its desktop once and runs nothing but the devices\' runner', async () => {
+      onX11()
+      const { port } = startHere({ raise: null })
+      attach(port)
+      await vi.waitFor(() => expect(raiseLines()).toEqual(['[device] raise · x11']))
+      expect(orcaRuns).toEqual([])
+    })
+
+    it('macOS builds none', async () => {
+      onX11()
+      const { port } = startHere({ orca: mac, raise: null })
+      attach(port)
+      await new Promise((done) => setImmediate(done))
+      expect(raiseLines()).toEqual([])
+    })
   })
 
   it('a Claude Code in the Claude app opens on its session; a link that fails still brings the app forward, said in one line with no id', async () => {
@@ -4117,6 +4200,16 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(window.lines).toEqual([{ show: SHELL, raise: true }])
     expect(orcaRuns).toEqual([['/usr/bin/open', ['-b', CURSOR], 10_000]])
     expect(said()).toEqual([])
+  })
+
+  it.each([['VS Code', VSCODE, 'vscode'], ['Cursor', CURSOR, 'cursor']])('on Linux a tap on an agent in %s\'s terminal writes the show with the raise, then raises the agent\'s window there', async (_, bundle, app) => {
+    const linux = fakeRaise()
+    const { reported } = await inVscodeTerminal({ raise: linux.raise }, {}, bundle)
+    const window = await reported()
+    expect(await host().openAgent(ID)).toBeUndefined()
+    expect(window.lines).toEqual([{ show: SHELL, raise: true }])
+    expect(linux.raised).toEqual([{ pid: 4242, app }])
+    expect(orcaRuns).toEqual([])
   })
 
   it('a rest shows Cursor\'s terminal while Cursor is in front, and nothing while VS Code is', async () => {

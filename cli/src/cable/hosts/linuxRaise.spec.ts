@@ -1,6 +1,16 @@
-import { describe, expect, it, vi } from 'vitest'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { createServer, type Server } from 'node:net'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { RECORDED_GNOME_SHELL } from '../../testing/recordedGnomeShell.js'
+import { RECORDED_HYPRLAND } from '../../testing/recordedHyprland.js'
+import { RECORDED_KWIN } from '../../testing/recordedKwin.js'
+import { RECORDED_SWAY } from '../../testing/recordedSway.js'
+import { RECORDED_WMCTRL } from '../../testing/recordedWmctrl.js'
 import type { LinuxDesktop } from './linuxDesktop.js'
-import { createLinuxRaise, type LinuxRaiseDeps, type RaiseTarget } from './linuxRaise.js'
+import { createLinuxRaise, systemLinuxRaise, type LinuxRaiseDeps, type RaiseTarget } from './linuxRaise.js'
+import type { OrcaDeps } from './orca.js'
 import { WALK_PARENTS } from './scannedApp.js'
 
 const SWAY: LinuxDesktop = { kind: 'sway', socket: '/run/user/1000/sway-ipc.1000.7.sock' }
@@ -142,5 +152,126 @@ describe('createLinuxRaise', () => {
     second.resolve(true)
     first.resolve(true)
     expect(await Promise.all(both)).toEqual([true, true])
+  })
+})
+
+describe('systemLinuxRaise', () => {
+  const VARIABLES = ['SWAYSOCK', 'HYPRLAND_INSTANCE_SIGNATURE', 'XDG_RUNTIME_DIR', 'WAYLAND_DISPLAY', 'DBUS_SESSION_BUS_ADDRESS', 'DISPLAY', 'XAUTHORITY'] as const
+  // Abstract: no socket on disk to make, and the session bus's own form.
+  const BUS = 'unix:abstract=/tmp/dbus-u'
+  let folder: string
+  const servers: Server[] = []
+  beforeEach(() => {
+    folder = mkdtempSync(join(tmpdir(), 'linuxRaise-'))
+  })
+  afterEach(async () => {
+    vi.unstubAllEnvs()
+    await Promise.all(servers.splice(0).map((server) => new Promise((done) => server.close(done))))
+    rmSync(folder, { recursive: true, force: true })
+  })
+
+  /** This login's variables as the case gives them, every other one empty: none of the developer's own is read. */
+  const session = (values: Partial<Record<typeof VARIABLES[number], string>>) => {
+    for (const name of VARIABLES) vi.stubEnv(name, values[name] ?? '')
+  }
+  /** A socket this account owns, listening at [path]. */
+  const socket = async (path: string) => {
+    mkdirSync(dirname(path), { recursive: true })
+    const server = createServer()
+    servers.push(server)
+    await new Promise<void>((done) => server.listen(path, done))
+  }
+  /** A machine with every program on PATH in /usr/bin, each run kept and answered by [answer] (else exit 1): the
+   *  devices' own runner, so nothing of the developer's runs. */
+  const machine = (answer: (args: string[]) => { code: number; stdout: string } | undefined) => {
+    const runs: Array<[string, string[], number]> = []
+    const lines: string[] = []
+    const apps: OrcaDeps = {
+      run: async (file, args, timeoutMs) => {
+        runs.push([file, args, timeoutMs])
+        return answer(args) ?? { code: 1, stdout: '' }
+      },
+      onPath: (name) => `/usr/bin/${name}`,
+      exists: () => false,
+      platform: 'linux',
+    }
+    return { runs, lines, raise: systemLinuxRaise(apps, (line) => lines.push(line)) }
+  }
+
+  it('on sway asks swaymsg for its windows over the socket found', async () => {
+    const sway = join(folder, 'sway.sock')
+    await socket(sway)
+    session({ SWAYSOCK: sway })
+    const { runs, lines, raise } = machine((args) =>
+      args.includes('get_version') ? { code: 0, stdout: RECORDED_SWAY.getVersion.stdout }
+        : args.includes('get_tree') ? { code: 0, stdout: RECORDED_SWAY.tree } : undefined)
+    await vi.waitFor(() => expect(lines).toEqual(['[device] raise · sway']))
+    expect(raise.ready()).toBe(true)
+    await raise.raise({ app: 'kitty' })
+    expect(runs).toContainEqual(['/usr/bin/swaymsg', ['-s', sway, '-t', 'get_tree'], 10_000])
+  })
+
+  it('on Hyprland asks hyprctl for its windows with the instance found', async () => {
+    // Made up and short: a socket's path has a length limit, and a recorded signature with this folder passes it.
+    const signature = 'abc_1_x'
+    await socket(join(folder, 'hypr', signature, '.socket.sock'))
+    session({ XDG_RUNTIME_DIR: folder })
+    const { runs, lines, raise } = machine((args) =>
+      args.includes('clients') ? { code: 0, stdout: RECORDED_HYPRLAND.clients.stdout } : undefined)
+    await vi.waitFor(() => expect(lines).toEqual(['[device] raise · hyprland']))
+    await raise.raise({ app: 'kitty' })
+    expect(runs).toContainEqual(['/usr/bin/hyprctl', ['-i', signature, 'clients', '-j'], 10_000])
+  })
+
+  it('on KDE writes its script to a private folder in the runtime dir, 0600, a name each raise, and removes it', async () => {
+    session({ XDG_RUNTIME_DIR: folder, DBUS_SESSION_BUS_ADDRESS: BUS })
+    const loaded: Array<{ file: string; mode: number; folderMode: number }> = []
+    const { runs, lines, raise } = machine((args) => {
+      if (args.includes('string:org.kde.KWin')) return { code: 0, stdout: RECORDED_KWIN.nameHasOwner.stdout }
+      if (args.includes('org.kde.kwin.Scripting.loadScript')) {
+        const file = args.find((arg) => arg.startsWith('string:/'))!.slice('string:'.length)
+        loaded.push({ file, mode: statSync(file).mode & 0o777, folderMode: statSync(dirname(file)).mode & 0o777 })
+        return { code: 0, stdout: RECORDED_KWIN.loadScript.stdout }
+      }
+      if (args.includes('org.kde.kwin.Script.run')) return { code: 0, stdout: RECORDED_KWIN.run.stdout }
+      if (args.includes('org.kde.kwin.Scripting.unloadScript')) return { code: 0, stdout: RECORDED_KWIN.unloadScript.stdout }
+      return undefined
+    })
+    await vi.waitFor(() => expect(lines).toEqual(['[device] raise · kwin']))
+    expect(await raise.raise({ app: 'kitty' })).toBe(true)
+    expect(await raise.raise({ app: 'kitty' })).toBe(true)
+    expect(runs.filter(([file]) => file !== '/usr/bin/dbus-send')).toEqual([])
+    expect(loaded.map(({ mode, folderMode }) => [mode, folderMode])).toEqual([[0o600, 0o700], [0o600, 0o700]])
+    for (const { file } of loaded) {
+      expect(dirname(file)).toBe(join(folder, 'harness'))
+      expect(file).toMatch(new RegExp(`/raise-${process.pid}-[0-9]+\\.js$`))
+      expect(existsSync(file)).toBe(false)
+    }
+    expect(loaded[0].file).not.toBe(loaded[1].file)
+  })
+
+  it('on GNOME asks the extension for the app\'s class over the bus found', async () => {
+    session({ DBUS_SESSION_BUS_ADDRESS: BUS })
+    const { runs, lines, raise } = machine((args) =>
+      args.includes('org.gnome.Shell') && args.includes('org.freedesktop.DBus.NameHasOwner') ? { code: 0, stdout: RECORDED_GNOME_SHELL.shellOwned.stdout }
+        : args[0] === 'introspect' ? { code: 0, stdout: RECORDED_GNOME_SHELL.introspect.stdout }
+          : args.includes('de.lucaswerkmeister.ActivateWindowByTitle.activateByWmClass') ? { code: 0, stdout: RECORDED_GNOME_SHELL.activateHit.stdout }
+            : undefined)
+    await vi.waitFor(() => expect(lines).toEqual(['[device] raise · gnome']))
+    expect(await raise.raise({ app: 'kitty' })).toBe(true)
+    expect(runs.at(-1)).toEqual(['/usr/bin/gdbus', [
+      'call', '--address', BUS, '--dest', 'org.gnome.Shell', '--object-path', '/de/lucaswerkmeister/ActivateWindowByTitle',
+      '--method', 'de.lucaswerkmeister.ActivateWindowByTitle.activateByWmClass', 'kitty',
+    ], 10_000])
+  })
+
+  it('on X11 asks wmctrl for its windows with the display and cookie found', async () => {
+    const cookie = join(folder, 'xauth')
+    writeFileSync(cookie, '')
+    session({ DISPLAY: ':0', XAUTHORITY: cookie })
+    const { runs, lines, raise } = machine((args) => args.includes('-lpx') ? { code: 0, stdout: RECORDED_WMCTRL.lpx } : undefined)
+    await vi.waitFor(() => expect(lines).toEqual(['[device] raise · x11']))
+    await raise.raise({ app: 'kitty' })
+    expect(runs).toContainEqual(['/usr/bin/env', ['DISPLAY=:0', `XAUTHORITY=${cookie}`, 'wmctrl', '-lpx'], 10_000])
   })
 })
