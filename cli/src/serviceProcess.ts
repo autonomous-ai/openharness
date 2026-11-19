@@ -25,7 +25,7 @@ export interface ServiceProcessOptions {
 type Runner = (options: ServiceProcessOptions) => ServiceProcess
 
 /** The processes the master runs that speak only to it, never to the core: they need no local socket. */
-const BESIDE_THE_CORE: ReadonlySet<string> = new Set(['updater'])
+const BESIDE_THE_CORE: ReadonlySet<string> = new Set(['updater', 'componentStartup'])
 
 /** Every service this build can run in its own process, and how to load its runner alone. */
 export const SERVICE_RUNNERS: ReadonlyMap<string, () => Promise<Runner>> = new Map<string, () => Promise<Runner>>([
@@ -38,6 +38,7 @@ export const SERVICE_RUNNERS: ReadonlyMap<string, () => Promise<Runner>> = new M
   ['usage', async () => (await import('./services/usageProcess.js')).runUsageService],
   ['monitor', async () => (await import('./services/monitorProcess.js')).runMonitorService],
   ['paste', async () => (await import('./services/pasteProcess.js')).runPasteService],
+  ['componentStartup', async () => (await import('./services/componentStartupProcess.js')).runComponentStartupService],
   ['projects', async () => (await import('./services/projectsProcess.js')).runProjectsService],
   ['windowNames', async () => (await import('./services/windowNamesProcess.js')).runWindowNamesService],
   ['engineSetup', async () => (await import('./services/engineSetupProcess.js')).runEngineSetupService],

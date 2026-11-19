@@ -39,7 +39,7 @@ componentStartup belongs to the existing edge process and is master-only (alongs
 
 Before runtime edits, add behavior tests to existing serviceSupervisor caller fixture: a current edge child asks for a declared off peer and the peer must start once (fails today); positive undeclared/old-child/ending restrictions; initial/delta peer-started notice proves a detector can stop without a core feature callback (fails today). These run through actual child message callbacks and spawn records, not nonexistent imports.
 
-Also add architecture RED proving core eager closure still contains the four wake modules and saved path catalogue. This is supplementary boundary evidence, not replacement for caller RED.
+The architecture guard proves the final eager closure excludes the four old wake modules and the three new component modules, and the core composition/contracts contain none of the moved feature paths. This is supplementary boundary evidence; no separate architecture RED was run.
 
 After runtime edit, migrate existing devices/models/gateway/viewers/wakeExperiments behavior controls to their component owner. Add componentStartup caller tests for empty/saved files, repeated/externally started devices, Windows/cable disabled, stopped detector, corrupt/bounded files, directory bound, send refusal and channel shutdown. Include runtime source-exit checks that core no longer loads the old files.
 

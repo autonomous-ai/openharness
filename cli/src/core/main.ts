@@ -219,7 +219,7 @@ import { answerAgentQuery, answerSessionRead } from './agentQueries.js'
 import { createDeliveries } from './deliveries.js'
 import { createTerminalWatch } from './terminalWatch.js'
 import { createSharingLink } from './sharingLink.js'
-import { createAgentSettingsSync, createExperimentHooks, wakeExperiments } from './experiments.js'
+import { createAgentSettingsSync, createExperimentHooks } from './experiments.js'
 import { answerExperimentQuery, answerDaemonQuery, createForExperiment } from './experimentQueries.js'
 import { answerConnectorsQuery } from './connectorsQueries.js'
 import { answerSharedMachinesQuery } from './sharedMachinesQueries.js'
@@ -237,10 +237,6 @@ import { publishHookRoute } from '../lib/hookRoutes.js'
 import { BackendSocket, isLocalClientId } from '../backendSocket.js'
 import { createGatewayLink, laneOf, tabKeyOf, tabRelayOf } from './gatewayLink.js'
 import { createWindowFocus } from './windowFocus.js'
-import { createDevicesWake, DEVICES_ON_DEMAND } from './devicesWake.js'
-import { wakeModels } from './modelsWake.js'
-import { wakeGateway } from './gatewayWake.js'
-import { createViewersWake, VIEWERS_ON_DEMAND, wakeViewers } from './viewersWake.js'
 import { createWifiLink } from './wifiLink.js'
 import { createServiceRoutes } from './serviceRoutes.js'
 import { GATEWAY_REQUESTS, SERVICE_HTTP_ROUTES, SERVICE_WS_FRAMES, WIFI_REQUESTS } from './api.js'
@@ -376,10 +372,6 @@ function startMasterHere(): void {
 /** This process's channel to a harnessd master, when one started it (see harnessd/coreLink.ts).
  *  Inert otherwise: a daemon run on its own claims its pid file, and gets no updates. */
 const coreLink = connectToMaster()
-/** When the devices' process starts: once there is a device, a dial's port, a Wi-Fi device or a request for one
- *  (core/devicesWake.ts). Asked of the master through the channel above. */
-const devicesWake = createDevicesWake({ want: (service) => coreLink.want(service), dataDir: env.ADAPTER_DATA_DIR, cableDisabled: env.CABLE_DISABLE, testDialPort: harnessdEnv().HARNESSD_TEST_DIAL_PORT })
-
 const daemonBoot: {
   /** Stops the updater this core runs beside itself under a master too old to run it (core/updaterBeside.ts). */
   updaterBeside: (() => void) | null
@@ -541,7 +533,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     restore: (only, current) => restoreOnly?.(only, current) ?? Promise.resolve({ restored: [], skipped: [], failed: [], held: [], unsurveyed: [] }),
     log: (line) => console.log(line),
   })
-  wakeGateway({ outOfProcess: servicesTheMasterRuns(harnessd, KNOWN_SERVICES), signedIn: !!session, dataDir: env.ADAPTER_DATA_DIR, want: (service) => coreLink.want(service) })
+  // Signed-in session transport starts beside core; component state is inspected by the edge host.
+  if (session && servicesTheMasterRuns(harnessd, KNOWN_SERVICES).has('gateway')) coreLink.want('gateway')
   // …or, under a master too old to run the updater, from the updater this core runs beside itself
   // (core/updaterBeside.ts), in a process of its own: the core downloads no build either way.
   if (needsUpdaterBeside(harnessd, coreLink.supervised, isInstalledCopy(SCRIPT_PATH, env.ADAPTER_CLI_DIR), env.ADAPTER_UPDATE_DISABLE)) {
@@ -718,8 +711,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   }
   const knownServices = [...KNOWN_SERVICES]
   const outOfProcess = servicesTheMasterRuns(harnessd, knownServices)
-  // The viewers' process (the viewers and the Store) runs once something needs it (core/viewersWake.ts).
-  const viewersWake = createViewersWake({ want: (service) => coreLink.want(service), outOfProcess })
   const liveHosted = masterRunsLiveEngines(harnessd, process.ppid)
   const runtimeHosted = liveHosted && masterRunsEngineRuntime(harnessd, process.ppid)
   // An older master's explicit capability report selects compatibility. A failed worker never does.
@@ -1626,8 +1617,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const messagesLink = createMessagesLink({ core: coreApi, notify: (frame) => serviceLinks.notify('messages', frame),
     share: (type, payload) => outOfProcess.has('sharing') ? serviceLinks.call('sharing', type, payload)
       : serviceHost?.call(type, payload, { local: true, owner: true }, 30_000) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }) })
-  // An experiment asked for, and the account's notices for those that hear them (core/experiments.ts).
-  const experimentHooks = createExperimentHooks({ want: (service) => coreLink.want(service), notify: (service, frame) => serviceLinks.notify(service, frame),
+  // The account's notices for the components that hear them (core/experiments.ts).
+  const experimentHooks = createExperimentHooks({ notify: (service, frame) => serviceLinks.notify(service, frame),
     outOfProcess, experiments })
   backend.onAccountNotice = (notice) => {
     experimentHooks.notice(notice)
@@ -1703,7 +1694,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // once needed: a request asks. Shell, Agent Messages and the engine probe are in the always-running edge host, but
     // a first request can beat that host's connection. Hold it through the same bounded startup gate; after any
     // disconnect, fail promptly as before. Under a master from before, Agent Messages' own process starts at its first request this way.
-    onDemand: new Set([...experiments, ...DEVICES_ON_DEMAND, ...VIEWERS_ON_DEMAND, ...Object.values(READER_SERVICES), OTHER_ENGINES_SERVICE, 'models', 'gateway', 'shell', 'messages', 'agentBrowser', 'engineProbe', 'engineSetup']),
+    onDemand: new Set([...experiments, 'devices', 'wifi', 'machineAddons', 'viewers', 'store', ...Object.values(READER_SERVICES), OTHER_ENGINES_SERVICE, 'models', 'gateway', 'shell', 'messages', 'agentBrowser', 'engineProbe', 'engineSetup']),
     // But the Store's requests wait through its process's restart too: a window's Store list was answered unavailable
     // while the master restarted the viewers (core/serviceLinks.ts `waitsThroughRestart`). So does an engine probe
     // asked while the edge host is restarting: the core's own probe always answered while it ran in this process. One
@@ -1713,7 +1704,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     waitsThroughRestart: new Set(['store', 'engineProbe', 'engineSetup', 'wifi']),
     // Claude Code's and Codex's readers may take longer to start: a person's first message waits for them (core/input.ts).
     startWaits: Object.fromEntries([...Object.values(READER_SERVICES), OTHER_ENGINES_SERVICE].map(service => [service, READER_START_MS])),
-    want: (service) => experimentHooks.want(service),
+    want: (service) => coreLink.want(service),
     // The gateway's first: its `backend` reads (the device key log) were refused below as NOT_AN_EXPERIMENT.
     answer: async (service, query, payload, authority) => (query === 'count' && authority.current?.() === true
       ? answerAgentQuery(coreApi, query, payload, { service, report: backend.reportUsage }) : null)
@@ -1783,8 +1774,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       }
       const streamSink = clientStreams.connected(service)
       if (streamSink) streamSinks.set(service, streamSink)
-      devicesWake.connected(service)
-      viewersWake.connected(service)
       // A service up again (or up at last): the agents held for it are launched (core/agents/heldLaunches.ts).
       void heldLaunches.restoreHeld(service)
     },
@@ -2287,7 +2276,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // file changes (messages/service.ts).
     onNotice: (listener) => experimentHooks.onNotice(listener), messagesChanged: () => ports.messages?.settingsChanged(),
     // Hachi's package is put in place by the Store (dsh/builtins.ts), whose process may not be running yet.
-    hachiOn: () => viewersWake.ask('store', 'Hachi to put in place') })
+    hachiOn: () => { if (outOfProcess.has('store')) coreLink.want('store') } })
   // Windows: the daemon's pipe takes only requests that prove this token (lib/windows/pipeAuth.ts). It is made on
   // the first start and kept in the data folder, in the profile.
   const pipeToken = process.platform === 'win32' ? ensureDaemonToken(env.ADAPTER_DATA_DIR) : null
@@ -2356,19 +2345,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // Saved bindings will need their reader after terminal reconciliation. Start its process alongside that work;
     // no transcript is read until the binding is confirmed and attached. Empty, inline and old-master cores ask for none.
     if (othersLive && registry.list().some(session => session.sessionId && session.boundAt && isOtherEngine(session.engine))) coreLink.want(OTHER_ENGINES_SERVICE)
-    // The experiments with saved state are on: their processes are asked for now, the master heeding a bound core
-    // alone (core/experiments.ts). The others wait for their first request. Agent Messages is asked for too, which
-    // starts a process only under a master from before it joined the edge host (core/messagesLink.ts).
-    wakeExperiments({ dataDir: env.ADAPTER_DATA_DIR, experiments: EXPERIMENTS, outOfProcess, want: (service) => experimentHooks.want(service) })
+    // Retained compatibility: Agent Messages has its own process under older masters.
     askForMessages(outOfProcess, (service) => coreLink.want(service))
-    devicesWake.start(outOfProcess)
-    wakeModels({ outOfProcess, dataDir: env.ADAPTER_DATA_DIR, runtimeDir: env.ADAPTER_RUNTIME_DIR, want: (service) => coreLink.want(service) })
-    wakeViewers({ wake: viewersWake, agents: () => registry.list(), dataDir: env.ADAPTER_DATA_DIR })
-    wakeExperiments({ dataDir: env.ADAPTER_DATA_DIR, experiments: Object.fromEntries(CLIENT_STREAMS.filter(spec => spec.state).map(spec => [spec.service, { state: spec.state! }])), outOfProcess, want: service => coreLink.want(service) })
   } else {
     try { writeFileSync(PID_FILE, String(process.pid) + '\n') } catch { /* best effort */ }
   }
-  // The account's agent experiments, read now and as they change, once the experiments above may be asked for.
+  // Shared account settings are authoritative here; optional saved-state discovery belongs to edge.
   agentSettings.start()
   // The one thing a handoff that happens before start-up finishes has to release: the port has no
   // fallback, so a successor that cannot bind it is a daemon that does not come up (see bootHandoff).

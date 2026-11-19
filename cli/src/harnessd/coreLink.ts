@@ -108,6 +108,7 @@ export function connectToMaster(
         for (const listener of shutdownListeners.splice(0)) listener()
         return
       }
+      if (message.type !== 'harnessd:update') return
       if (updateListener) updateListener(message.version)
       else update = message.version
     })

@@ -24,7 +24,7 @@ import {
 
 export interface CoreHandle {
   readonly pid: number | undefined
-  send(message: MasterMessage): void
+  send(message: MasterMessage, settled?: (delivered: boolean) => void): void
   kill(signal: NodeJS.Signals): void
   onMessage(listener: (message: unknown) => void): void
   onExit(listener: (code: number | null, signal: NodeJS.Signals | null) => void): void

@@ -5,67 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { agentSettingsPath, readAgentSettings } from '../lib/agentSettings.js'
 import type { AuthSession } from '../lib/authSession.js'
 import { setAgentSettingsForTest, signedOutForTest } from '../testing/agentSettings.js'
-import { EXPERIMENTS, type BackendNotice } from './api.js'
-import { AGENT_SETTINGS_SIGNED_OUT, AGENT_SETTINGS_SYNC_MS, createAccountNotices, createAgentSettingsSync, createExperimentHooks, stateIsThere, wakeExperiments } from './experiments.js'
+import { type BackendNotice } from './api.js'
+import { AGENT_SETTINGS_SIGNED_OUT, AGENT_SETTINGS_SYNC_MS, createAccountNotices, createAgentSettingsSync, createExperimentHooks } from './experiments.js'
 
 describe('the experiments on as the core starts', () => {
   let dataDir: string
   beforeEach(() => { dataDir = mkdtempSync(join(tmpdir(), 'experiments-')) })
   afterEach(() => { rmSync(dataDir, { recursive: true, force: true }); signedOutForTest() })
-  it('finds saved state by path, or by a file of its kind in its folder', () => {
-    expect(stateIsThere(dataDir, ['agent-messages'])).toBe(false)
-    expect(stateIsThere(dataDir, ['orchestrator/*.json'])).toBe(false)
-    mkdirSync(join(dataDir, 'orchestrator'))
-    // A folder made by a look, with no project in it, is not a project.
-    writeFileSync(join(dataDir, 'orchestrator', 'notes.txt'), '')
-    expect(stateIsThere(dataDir, ['orchestrator/*.json'])).toBe(false)
-    writeFileSync(join(dataDir, 'orchestrator', `${'a'.repeat(32)}.json`), '{}')
-    expect(stateIsThere(dataDir, ['orchestrator/*.json'])).toBe(true)
-    mkdirSync(join(dataDir, 'agent-messages'))
-    expect(stateIsThere(dataDir, ['nothing', 'agent-messages'])).toBe(true)
-    expect(stateIsThere(dataDir, [])).toBe(false)
-  })
-
-  it('finds a file by a prefix and a suffix', () => {
-    const journal = ['saved/host-*.json']
-    expect(stateIsThere(dataDir, journal)).toBe(false)
-    mkdirSync(join(dataDir, 'saved'))
-    // The folder's other files are not the kind asked for.
-    for (const name of ['native-m1.json', 'host-m1.txt', 'retained.json']) writeFileSync(join(dataDir, 'saved', name), '{}')
-    expect(stateIsThere(dataDir, journal)).toBe(false)
-    writeFileSync(join(dataDir, 'saved', `host-${'a'.repeat(32)}.json`), '{}')
-    expect(stateIsThere(dataDir, journal)).toBe(true)
-  })
-
-  it('asks for each experiment in its own process that has saved state, and for no other', () => {
-    mkdirSync(join(dataDir, 'orchestrator'))
-    writeFileSync(join(dataDir, 'orchestrator', 'p.json'), '{}')
-    writeFileSync(join(dataDir, 'harness-shares.json'), '[]')
-    const want = vi.fn()
-    const woken = wakeExperiments({
-      dataDir,
-      experiments: { orchestrator: { state: ['orchestrator/*.json'] }, sharing: { state: ['harness-shares.json'] }, messages: { state: ['agent-messages'] } },
-      // Share runs in the core's process here: it is started there, not asked for.
-      outOfProcess: new Set(['orchestrator', 'messages']),
-      want,
-    })
-    expect(woken).toEqual(['orchestrator'])
-    expect(want.mock.calls).toEqual([['orchestrator']])
-  })
-
-  it('asks for none on a fresh data folder, whatever the account\'s switches say: no switch starts an experiment', () => {
-    // Agent Messages was the one a switch started, and left the experiments for the edge host (2026-10-12): its
-    // agents' note no longer needs a process of its own started for it.
-    expect(Object.keys(EXPERIMENTS)).not.toContain('messages')
-    const outOfProcess = new Set([...Object.keys(EXPERIMENTS), 'messages'])
-    for (const agentMessages of [true, false]) {
-      setAgentSettingsForTest(dataDir, { agentMessages })
-      const want = vi.fn()
-      expect(wakeExperiments({ dataDir, experiments: EXPERIMENTS, outOfProcess, want })).toEqual([])
-      expect(want).not.toHaveBeenCalled()
-    }
-  })
-
   it('hands the account\'s notices to each listener here, guarded, and to the experiments\' processes', () => {
     const tell = vi.fn()
     const log = vi.fn()
@@ -95,21 +41,18 @@ describe('the experiments on as the core starts', () => {
     }
   })
 
-  it('asks for an experiment, and tells each experiment in its own process the account\'s notices', () => {
-    const order: string[] = []
+  it('tells each experiment in its own process the account\'s notices', () => {
     const notify = vi.fn(() => true)
     const hooks = createExperimentHooks({
-      want: (service) => order.push(`want ${service}`), notify, outOfProcess: new Set(['sharing']), experiments: ['orchestrator', 'sharing'],
+      notify, outOfProcess: new Set(['sharing']), experiments: ['orchestrator', 'sharing'],
     })
-    hooks.want('sharing')
-    hooks.want('orchestrator')
-    expect(order).toEqual(['want sharing', 'want orchestrator'])
     const heard = vi.fn()
     hooks.onNotice(heard)
     hooks.notice({ type: 'desk_changed', revision: 5 })
     expect(heard).toHaveBeenCalledWith({ type: 'desk_changed', revision: 5 })
     expect(notify.mock.calls).toEqual([['sharing', { type: 'service_event', payload: { kind: 'notice', notice: { type: 'desk_changed', revision: 5 } } }]])
-    createExperimentHooks({ want: vi.fn(), notify, outOfProcess: new Set(), experiments: [] }).want('x')
+    createExperimentHooks({ notify, outOfProcess: new Set(), experiments: [] }).notice({ type: 'desk_changed', revision: 6 })
+    expect(notify).toHaveBeenCalledOnce()
   })
 })
 

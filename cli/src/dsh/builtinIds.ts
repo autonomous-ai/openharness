@@ -38,8 +38,7 @@ declare const __BUILTIN_REVISIONS__: string | undefined
 
 /**
  * The revision of each harness this build bundles, by its name: what ./builtins.ts records in the installed index
- * once it is in place (the sha256 of its files' JSON), worked out by the release build (build-bundle.mjs). The core
- * checks the index against it as it starts, without loading the files (core/viewersWake.ts). None in a build from the
+ * once it is in place (the sha256 of its files' JSON), worked out by the release build (build-bundle.mjs). Store checks the index when admitting a package, without loading its files into core. None in a build from the
  * sources, which bundles no files and so has none to put in place.
  */
 export function bundledRevisions(): Readonly<Record<string, string>> {

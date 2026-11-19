@@ -1,7 +1,7 @@
 /** Executed private worker semantics. Breaking changes bump this contract; public clients are independent. */
 export const WORKER_CONTRACT = 7
 /** Machine-checked against service/native factory declarations and capability versions, without loading them at entry. */
-export const WORKER_PLAN = 'c0e779383f9daf58c0844778d2a2de8867acca3287ab6fb0958ebbe78fa429e5'
+export const WORKER_PLAN = '8bc4706b4e1c2f14f71c2b9f3a5cb27841165e08fe4ecd2926d00bdca7fa7635'
 export const WORKER_COHORT_ENV = 'HARNESSD_WORKER_COHORT'
 export const SERVICES_EXPLICIT_ENV = 'HARNESSD_SERVICES_EXPLICIT'
 

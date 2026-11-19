@@ -882,8 +882,8 @@ export const MESSAGES_WINDOW_FRAMES: readonly string[] = [MESSAGES_WINDOW_FRAME,
 /**
  * The experiments: services that cost nothing until they are on (docs/design/2026-10-06-core-boundary-next.md,
  * "Experimental features: move only"). Each runs in a process of its own that the master starts only once the
- * core asks for it (harnessd/services.ts `onDemand`): when one of its `requests` arrives, or at start when its
- * saved `state` is in the data folder (paths under it; `dir/*.ext` for a file of that kind in that folder).
+ * core asks for it (harnessd/services.ts `onDemand`), or the edge startup component finds its saved state.
+ * This contract declares requests; saved paths and startup inspection belong to the component.
  * Off, it has no process and none of its code is loaded anywhere. Each may act on the core through the hooks
  * an experiment has (core/experimentQueries.ts, core/deliveries.ts), and no other process may.
  *
@@ -892,19 +892,19 @@ export const MESSAGES_WINDOW_FRAMES: readonly string[] = [MESSAGES_WINDOW_FRAME,
  * entry here; the backend routes it may call (`EXPERIMENT_BACKEND_ROUTES`, `[]` for none); and its start for the
  * core's own process (services/inline.ts `EXPERIMENT_STARTS`). Removing one is deleting those.
  */
-export const EXPERIMENTS: Readonly<Record<string, { requests: readonly string[]; state: readonly string[] }>> = {
-  orchestrator: { requests: ORCHESTRATOR_REQUESTS, state: ['orchestrator/*.json'] },
+export const EXPERIMENTS: Readonly<Record<string, { requests: readonly string[] }>> = {
+  orchestrator: { requests: ORCHESTRATOR_REQUESTS },
   // Its invitations and links: a harness was shared from here. Or a shared tab held here (Agent Messages' file): the
   // observers its members are granted are derived and renewed by Share, and taken back once one leaves.
-  sharing: { requests: SHARE_REQUESTS, state: ['harness-shares.json', 'harness-collaboration.json', 'agent-messages/shared-tabs.json'] },
+  sharing: { requests: SHARE_REQUESTS },
   // Request-only, on from its first request until the daemon stops: another machine's Memories pane asks, and
   // the package's own files are its state.
-  memory: { requests: MEMORY_REQUESTS, state: [] },
+  memory: { requests: MEMORY_REQUESTS },
   // Request-only too: it keeps nothing, and asks Jev only when a client asks it.
-  router: { requests: ROUTER_REQUESTS, state: [] },
+  router: { requests: ROUTER_REQUESTS },
   // Cloud agents. Its harnesses: one was started here, and is watched again as the daemon starts. A New Harness
   // for one, an answer or a message to one wakes it too (its declared session port).
-  cloud: { requests: CLOUD_REQUESTS, state: ['cloud/harnesses.json'] },
+  cloud: { requests: CLOUD_REQUESTS },
 }
 
 const each = (methods: readonly string[], path: RegExp): BackendRoute[] => methods.map((method) => ({ method, path }))

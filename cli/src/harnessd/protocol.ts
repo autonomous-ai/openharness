@@ -19,7 +19,7 @@ import type { SupervisorStatus } from './supervisor.js'
  *  only once grid is in use here or a request needs it, and for the gateway's, which runs once this machine is
  *  signed in, has anything paired or needs it; and `want` before `bound` (./services.ts `askedSince`).
  *  5: `want` for the viewers' process (the harness viewers and the Store), which runs once a harness is here, a
- *  request needs it or the release's own harnesses are to be put in place (core/viewersWake.ts).
+ *  request needs it or the release's own harnesses are to be put in place (now owned by services/componentStartup.ts).
  *  6: `stop`, the core asking its master to stop everything (`harness stop` on Windows, where the CLI has no signal
  *  to send the master), and `shutdown`, the master asking the core or a service to leave, where a signal cannot:
  *  on Windows Node's `kill` is TerminateProcess, whatever the signal, and nothing would be torn down.
@@ -78,6 +78,8 @@ export type CoreMessage =
    *  `bound` too), or the viewers (protocol 5). A master from before ignores it, or finds that process already
    *  running, having started it at once. */
   | { type: 'harnessd:want'; service: string }
+  /** A component host subscribes to its declared peers after installing its listener. */
+  | { type: 'harnessd:watch-peers' }
   /** Stop the services, this core and the master, and stay stopped (protocol 6): `harness stop` asked this core
    *  over its pipe (core/daemonStopRoute.ts). A master from before ignores it; the CLI then ends it. */
   | { type: 'harnessd:stop' }
@@ -89,6 +91,9 @@ export type MasterMessage =
   /** Leave, as on SIGTERM (protocol 6): what the master says where it has no signal to send (Windows). A process
    *  from before ignores it, and is ended once its grace is over, as one that ignored SIGTERM was. */
   | { type: 'harnessd:shutdown' }
+  /** Initial peer availability, followed only by starts; no feature data or child identity crosses here. */
+  | { type: 'harnessd:peers'; available: readonly string[]; started: readonly string[] }
+  | { type: 'harnessd:peer-started'; service: string }
 
 /** What the updater says to the master: it staged CLI build `version`, terminal host `ptyVersion` (Windows), or both,
  *  on disk, for one handover. At least one of the two is there. A master from before takes only `version`. */
@@ -127,6 +132,7 @@ export function isCoreMessage(value: unknown): value is CoreMessage {
     case 'harnessd:want':
       return typeof message.service === 'string' && message.service.length > 0
     case 'harnessd:stop':
+    case 'harnessd:watch-peers':
       return true
     default:
       return false
@@ -138,5 +144,10 @@ export function isMasterMessage(value: unknown): value is MasterMessage {
   const message = value as Record<string, unknown>
   if (message.type === 'harnessd:update') return typeof message.version === 'string' && message.version.length > 0
   if (message.type === 'harnessd:shutdown') return true
+  if (message.type === 'harnessd:peer-started') return peerName(message.service)
+  if (message.type === 'harnessd:peers') return peerNames(message.available) && peerNames(message.started)
   return message.type === 'harnessd:status' && !!message.status && typeof message.status === 'object'
 }
+
+const peerName = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 64
+const peerNames = (value: unknown): value is string[] => Array.isArray(value) && value.length <= 64 && value.every(peerName)

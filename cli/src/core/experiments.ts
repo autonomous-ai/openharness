@@ -1,53 +1,7 @@
-/**
- * Which experiments are on as the core starts (core/api.ts `EXPERIMENTS`): one whose saved state is in the
- * data folder is asked for at once, so that what it does on its own (a saved project's queued work) goes on
- * after a restart, as it did when it ran in the core's process. One without waits for its first request: off,
- * it has no process. Read once, at start, and bounded: a name or a folder listing.
- *
- * Agent Messages was the one experiment a Settings ▸ Agents switch started, and it is no longer one: it runs in the
- * edge host and sleeps while it is off (messages/service.ts, 2026-10-12). Its switch, with the agents' other two, is
- * now an experiment of the account, kept for this computer here (`createAgentSettingsSync`).
- */
-import { readdirSync, existsSync } from 'node:fs'
-import { join } from 'node:path'
+/** Shared account settings and authority for agent launches. Feature startup policy lives in edge. */
 import { AGENT_SETTING_EXPERIMENTS, AGENT_SETTING_NAMES, agentSettingsFromAnswer, ownsAgentSettings, readAgentSettings, saveAgentSettings, type AgentSettings } from '../lib/agentSettings.js'
 import type { AuthSession } from '../lib/authSession.js'
 import type { BackendNotice } from './api.js'
-
-type Experiments = Readonly<Record<string, { state: readonly string[] }>>
-
-/** Whether any of `state` is in `dataDir`: a path under it, or `dir/prefix*suffix` for a file of that kind in that folder.
- *  The star was only read after a slash, so `folder/name-*.json` was looked up as that literal file name and never found:
- *  an experiment with saved state was not woken at a start, and after the master re-executed (every update) it stayed off
- *  until some request started it (remote-deepseek, 3 hours offline, 2026-10-22). */
-export function stateIsThere(dataDir: string, state: readonly string[]): boolean {
-  return state.some((entry) => {
-    const slash = entry.lastIndexOf('/')
-    const star = entry.indexOf('*', slash + 1)
-    if (star < 0) return existsSync(join(dataDir, entry))
-    const prefix = entry.slice(slash + 1, star)
-    const suffix = entry.slice(star + 1)
-    try {
-      return readdirSync(join(dataDir, entry.slice(0, slash))).some((name) => name.startsWith(prefix) && name.endsWith(suffix))
-    } catch {
-      return false
-    }
-  })
-}
-
-/** Ask for each experiment that runs in its own process and has saved state here. */
-export function wakeExperiments(options: {
-  dataDir: string
-  experiments: Experiments
-  outOfProcess: ReadonlySet<string>
-  want: (service: string) => void
-}): string[] {
-  const woken = Object.entries(options.experiments)
-    .filter(([name, experiment]) => options.outOfProcess.has(name) && stateIsThere(options.dataDir, experiment.state))
-    .map(([name]) => name)
-  for (const name of woken) options.want(name)
-  return woken
-}
 
 /** How often the core reads the account's experiments again when nothing else asks: a safety net for a `desk_changed`
  *  it never heard (its link to the backend down while another computer turned one on). */
@@ -84,7 +38,7 @@ export function createAgentSettingsSync(deps: {
   /** Agent Messages' switch changed here (core/api.ts `MessagesPort.settingsChanged`). */
   messagesChanged: () => void
   /** The account turned Hachi on: its package must be in place before the person's first ⇧⌘H creates it, and the Store
-   *  that puts it there may not be running (core/viewersWake.ts). Absent, nobody is told. */
+   *  that puts it there may not be running. Absent, nobody is told. */
   hachiOn?: () => void
   everyMs?: number
   log?: (line: string) => void
@@ -221,11 +175,10 @@ export function createAccountNotices(tell: (notice: BackendNotice) => void, log:
 }
 
 /**
- * What the core does for the experiments as a whole: ask the master for one (`want`), and hand the account's
+ * What the core does for the experiments as a whole: hand the account's
  * notices to the listeners here and to each experiment in its own process.
  */
 export function createExperimentHooks(deps: {
-  want: (service: string) => void
   notify: (service: string, frame: { type: string; payload: Record<string, unknown> }) => boolean
   outOfProcess: ReadonlySet<string>
   experiments: Iterable<string>
@@ -235,7 +188,6 @@ export function createExperimentHooks(deps: {
     for (const name of deps.experiments) if (deps.outOfProcess.has(name)) deps.notify(name, { type: 'service_event', payload: { kind: 'notice', notice } })
   }, deps.log)
   return {
-    want: deps.want,
     onNotice: notices.onNotice,
     notice: notices.notice,
   }

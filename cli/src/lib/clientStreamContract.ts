@@ -10,7 +10,6 @@ export interface StreamAsker {
 
 export interface ClientStreamSpec {
   service: string
-  state?: readonly string[]
   wakeField: 'dsh' | 'browser'
   open: string
   opened?: string
@@ -48,7 +47,7 @@ export const CLIENT_STREAMS: readonly ClientStreamSpec[] = [
   },
   {
     // The browser row flag is public migration input until 2026-12-18.
-    service: 'agentBrowser', state: ['agent-browser.json'], wakeField: 'browser', open: 'agent_browser_open', opened: 'agent_browser_open_result', close: 'agent_browser_close', ack: 'agent_browser_ack',
+    service: 'agentBrowser', wakeField: 'browser', open: 'agent_browser_open', opened: 'agent_browser_open_result', close: 'agent_browser_close', ack: 'agent_browser_ack',
     down: ['agent_browser_open', 'agent_browser_ack', 'agent_browser_close'], up: ['agent_browser_open_result', 'agent_browser_close'],
     transport: 'terminal', audience: 'account', ids: 'reply', grants: 2048, perConnection: 256, pending: 512, pendingPerConnection: 8,
     idBytes: 8 * 1024 * 1024, connectionIdBytes: 4 * 1024 * 1024, waitMs: 10_000, firstStart: false,

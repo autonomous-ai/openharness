@@ -199,7 +199,7 @@ describe('the probe a re-executing master asks a bundle', () => {
 
 describe('coreHandle', () => {
   const fake = () => {
-    const child = new EventEmitter() as EventEmitter & { pid: number; send: (m: unknown) => void; kill: (s: string) => void }
+    const child = new EventEmitter() as EventEmitter & { pid: number; send: (m: unknown, done?: (error?: Error | null) => void) => void; kill: (s: string) => void }
     child.pid = 4242
     child.send = vi.fn()
     child.kill = vi.fn()
@@ -276,6 +276,28 @@ describe('coreHandle', () => {
     child.send = () => { throw new Error('closed') }
     child.kill = () => { throw new Error('ESRCH') }
     expect(() => { handle.send({ type: 'harnessd:status', status: {} as never }); handle.kill('SIGKILL') }).not.toThrow()
+  })
+
+  it.each(['delivered', 'callback', 'throw'])('settles IPC delivery once on %s', mode => {
+    const child = fake()
+    child.send = (_message, done) => {
+      if (mode === 'throw') throw new Error('closed')
+      done?.(mode === 'callback' ? new Error('closed') : null)
+      done?.(new Error('late'))
+    }
+    const settled = vi.fn()
+    coreHandle(child as unknown as ChildProcess).send({ type: 'harnessd:shutdown' }, settled)
+    expect(settled.mock.calls).toEqual([[mode === 'delivered']])
+  })
+
+  it('contains a failed delivery observer and permits sends without an observer', () => {
+    const child = fake()
+    child.send = (_message, done) => done?.()
+    const log = vi.fn()
+    const handle = coreHandle(child as unknown as ChildProcess, log)
+    expect(() => handle.send({ type: 'harnessd:shutdown' }, () => { throw new Error('private') })).not.toThrow()
+    handle.send({ type: 'harnessd:shutdown' })
+    expect(log).toHaveBeenCalledWith('[harnessd] child_channel_callback_failed')
   })
 })
 

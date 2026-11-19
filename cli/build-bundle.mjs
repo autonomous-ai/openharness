@@ -30,9 +30,9 @@ const harnessMonitorBundle = JSON.stringify(readHarnessMonitorBundle(fileURLToPa
 const memoriesBundle = JSON.stringify(readMemoriesBundle(fileURLToPath(new URL('../store/agents/memories', import.meta.url))))
 const hachiBundle = JSON.stringify(readHachiBundle(fileURLToPath(new URL('../store/agents/hachi', import.meta.url))))
 // What src/dsh/builtins.ts records in the installed index as each bundled harness's revision once it is in place: the
-// sha256 of its files' JSON, as it reads them back (src/dsh/bundledFiles.ts). The core checks the index against these
-// as it starts, without loading the files, and starts the Store's process only when one is not in place
-// (src/core/viewersWake.ts). A harness whose files are missing is never put in place, so it has none.
+// sha256 of its files' JSON, as it reads them back (src/dsh/bundledFiles.ts). Store checks the index against these
+// during package admission in Store, without loading the files into core. A harness whose files are missing
+// is never put in place, so it has none.
 const builtinRevisions = JSON.stringify(Object.fromEntries(
   [['models', modelManagerBundle], ['devices', devicesBundle], ['monitor', harnessMonitorBundle], ['memories', memoriesBundle], ['hachi', hachiBundle]]
     .filter(([, bundle]) => JSON.parse(bundle)['harness.json'])

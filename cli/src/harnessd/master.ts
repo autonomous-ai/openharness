@@ -258,7 +258,15 @@ export function coreHandle(child: ChildProcess, log: (line: string) => void = (l
     pid: child.pid,
     // Found by QA after a quiet-machine run: CI lost an update exit 75 to a failed status send.
     // A callback keeps IPC send errors out of the child's spawn-error/exit path.
-    send: (message: MasterMessage) => { try { child.send(message, () => {}) } catch { /* the core is going */ } },
+    send: (message: MasterMessage, settled) => {
+      let done = false
+      const finish = (delivered: boolean): void => {
+        if (done) return
+        done = true
+        try { settled?.(delivered) } catch { log('[harnessd] child_channel_callback_failed') }
+      }
+      try { child.send(message, error => finish(!error)) } catch { finish(false) }
+    },
     kill: (signal) => { try { child.kill(signal) } catch { /* already gone */ } },
     onMessage: (listener) => { child.on('message', listener) },
     onExit: (listener) => { exits.push(listener) },

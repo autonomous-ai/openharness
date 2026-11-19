@@ -69,7 +69,7 @@ hang or leak costs only its process. A process per risk, not per feature (`SERVI
 | `engineSetup` | engineSetup | optional installation, probes and hook/configuration candidate rendering; only core selects destinations and publishes native files | on demand |
 | `search` | search | native `node:sqlite`, the index's memory | always |
 | `viewers` | viewers, store | the viewer servers, the remote viewer streams and rendered surfaces, minutes-long installs | on demand |
-| `edge` | workspaces, usage, monitor, projects, handoff, recaps, windowNames, shell, connectors, sharedMachines, agentCleanup, messages, osDevice, goals, hachi, engineProbe | light pure-JS services: isolated from the core, not from each other | always |
+| `edge` | workspaces, usage, monitor, projects, handoff, recaps, windowNames, shell, connectors, sharedMachines, agentCleanup, messages, osDevice, goals, hachi, engineProbe, componentStartup | light pure-JS services: isolated from the core, not from each other | always |
 | `gateway` | gateway | network, crypto and pure-JS WebRTC: the attack surface | on demand |
 | `models` | models | grid's installs, downloads and commands | on demand |
 | `devices` | devices, wifi | the dials' serial ports, the fleet's lane, the voice router's worker, the Wi-Fi device | on demand |
@@ -262,27 +262,20 @@ master too old to run it starts it beside itself, still in its own process (`src
 ## On demand
 
 A process with `onDemand: true` in `SERVICE_HOSTS` is not started with the others. The master starts it when
-the core asks for one of its services (`harnessd:want`, sent by `coreLink.want`), and then keeps it running
+core or a declared component host asks for one of its services (`harnessd:want`), and then keeps it running
 like any other. Named in `HARNESSD_SERVICES`, it starts with the others.
 
 - **What asks.** A request for a service that has not connected yet (`serviceLinks` `onDemand`, in
   `src/core/main.ts`) asks for it and waits for it, within the request's own wait. The service is welcomed
-  before its queued requests are delivered. Each experiment with saved state in the data folder is asked for as the
-  core starts (`src/core/experiments.ts`). So is Agent Messages, which starts nothing under this build's master (it is
-  in the edge host) and starts its own process under a master from before it moved there (`src/core/messagesLink.ts`).
-  The devices are asked for once there is a device:
-  a dial's port in /dev, a paired Wi-Fi device, or its session (`src/core/devicesWake.ts`). Models is asked
-  for as the core starts when grid is in use here: a managed grid, whose pin it follows, saved grid pictures,
-  which agents' grid notes are read from, or local models (`src/core/modelsWake.ts`); otherwise its first
-  request asks for it. The gateway is asked for as the core starts, before it binds, when this machine is
-  signed in or has anything paired or linked directly (`src/core/gatewayWake.ts`), so the relay comes up
-  beside the core as before; otherwise by what needs it (`src/core/gatewayLink.ts`): a pairing, a window's
-  E2EE request or session to another machine, which wait for its first start, a key or device command, or
-  the Wi-Fi device's service. `/api/status` never starts it. The viewers' process (the viewers and the Store)
-  is asked for by a harness here, as the core starts or as one is attached (created, forked, restored, found),
-  by a request (the Store's, a harness's create or restore, a client's viewer stream or rendered frame, which
-  wait for it), and as the core starts when the viewers' ledger names viewer servers an earlier
-  process left running (`src/core/viewersWake.ts`). The core never reads the installed index. Models and Memories
+  before its queued requests are delivered. The edge host's `componentStartup` owns optional saved-state
+  discovery and the two-second Unix USB scan; no such file paths or timer live in core. Its declared `wakes`
+  names bound which present peers it can start. A one-time snapshot and start notices from the master stop
+  scanning once Devices is owned; restarts and parking remain the master's. Models starts for a managed grid,
+  grid pictures or local models; gateway for pairings/direct links; viewers for its retained server ledger;
+  experiments for their saved state. Core separately requests signed-in gateway transport before binding,
+  and shared session stream declarations wake viewers/Browser for attached sessions. Account settings wake
+  Store when Hachi is enabled. Agent Messages still asks for its older standalone process for compatibility
+  (`core/messagesLink.ts`). The core never reads the installed index. Models and Memories
   prepare their own bundled package on actual first use; the Store retries incomplete preparation on actual package
   requests. Different-package index mutations share one lock, with immediate visible busy refusal. A stream before it has first connected is held, bounded,
   until it does (`src/core/clientStreams.ts`).
@@ -302,8 +295,7 @@ like any other. Named in `HARNESSD_SERVICES`, it starts with the others.
 ## Experiments
 
 An experiment (the orchestrator, Share, memory, the router, cloud agents) is a service that costs nothing until it is
-on: its own process, which the master starts only when the core asks for it (`want`), when one of its requests arrives
-or, as the core starts, when its saved state is in the data folder. Off, nothing of it runs or is loaded anywhere; one
+on: its own process, which the master starts when a core request needs it or the edge startup detector finds its saved state. Off, nothing of it runs or is loaded anywhere; one
 failing costs its own process and nothing else. `e2e/experiments.e2e.ts` proves it: off, on by request, on by saved
 state, killed, hung and crashing on every start.
 
@@ -321,7 +313,8 @@ To add one:
    also reads the backend as the account (`core.account.backend`) and has its welcomes signed by the gateway
    (`core.account.observerKey`), so it holds no credential, and watches terminals read-only
    (`core.terminals.watch`, `services/watchLink.ts`).
-2. Its entry in `EXPERIMENTS` (`src/core/api.ts`): its requests and its saved state. And its backend routes in
+2. Its entry in `EXPERIMENTS` (`src/core/api.ts`): its requests. Its saved-state startup paths belong in `services/componentStartup.ts`, and its peer name
+   in edge's `wakes`. Its backend routes belong in
    `EXPERIMENT_BACKEND_ROUTES` beside it, each a method and a whole path, `[]` when it calls none: the core signs a
    call of its process on those and no other, and answers any other `ROUTE_NOT_DECLARED`, said in the core's log. A new backend call is a line
    there in the same pull request; `src/core/experimentQueries.spec.ts` fails on a path, or a method, written in

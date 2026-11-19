@@ -30,6 +30,19 @@ describe('connectToMaster', () => {
   beforeEach(() => vi.useFakeTimers())
   afterEach(() => vi.useRealTimers())
 
+  it('never treats component peer notices as a core update', async () => {
+    const channel = new FakeChannel(), link = connectToMaster(channel, supervised)
+    channel.say({ type: 'harnessd:update', version: '9.9.9' })
+    channel.say({ type: 'harnessd:peers', available: ['devices'], started: [] })
+    const update = vi.fn()
+    link.onUpdate(update)
+    await Promise.resolve()
+    expect(update.mock.calls).toEqual([['9.9.9']])
+    channel.say({ type: 'harnessd:peer-started', service: 'devices' })
+    expect(update.mock.calls).toEqual([['9.9.9']])
+    link.close()
+  })
+
   it('is inert without a master: nothing sent, nothing listened for', () => {
     const channel = new FakeChannel()
     for (const link of [connectToMaster(channel, {}), connectToMaster({ ...channel, send: undefined, once: channel.once.bind(channel), on: channel.on.bind(channel), memoryUsage: () => channel.memoryUsage(), parentPid: 1 }, supervised)]) {

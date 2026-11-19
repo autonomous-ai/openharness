@@ -34,6 +34,9 @@ The core stays small and secure, in the code and at run time: read
 
 ## Where things are
 
+- Optional startup discovery is in `services/componentStartup.ts` in the existing edge process. Core
+  retains request/stream demand and signed-in session transport authority, not feature file paths or USB polling.
+
 - `agents/`: create, fork, restart, retarget, stop, resume, close, discovery, adoption, binding, the list.
   `agents/sessionOwners.ts`: one presentation per service-owned session, with native ownership taking precedence.
   Common facts arrive through bounded current-link staging (`agents/sessionOwnerStage.ts`); questions and prepared cards

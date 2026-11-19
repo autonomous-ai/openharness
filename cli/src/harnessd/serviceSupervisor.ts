@@ -9,7 +9,7 @@
  * bind and no update to prove; it beats, or it is restarted. Everything that touches the operating
  * system is injected, so every decision here is tested without one.
  */
-import { SERVICE_EXIT_RESTART, describeStaged, heartbeatGraceMs, isCoreMessage, isUpdaterMessage, type StagedUpdate } from './protocol.js'
+import { SERVICE_EXIT_RESTART, describeStaged, heartbeatGraceMs, isCoreMessage, isUpdaterMessage, type MasterMessage, type StagedUpdate } from './protocol.js'
 import type { ServiceSpec } from './services.js'
 import { UPDATER_PROCESS } from './servicePlan.js'
 import { describeExit, type CoreHandle } from './supervisor.js'
@@ -99,12 +99,16 @@ class Service {
   private restartTimer: unknown = null
   private onStopped: Array<() => void> = []
   private refusedStaged = false
+  private watchingPeers = false
+  private refusedPeer = false
+  private failedPeerChannel = false
 
   constructor(
     readonly spec: ServiceSpec,
     private readonly deps: ServiceSupervisorDeps,
     private readonly options: ServiceSupervisorOptions,
     private readonly env: Record<string, string>,
+    private readonly peers: { want(service: string): boolean; watch(): void; started(): void },
   ) {
     this.backoff = options.initialBackoffMs
     this.since = deps.wallClock()
@@ -133,13 +137,17 @@ class Service {
     this.child = child
     this.killReason = null
     this.ending = false
+    this.watchingPeers = false
+    this.refusedPeer = false
+    this.failedPeerChannel = false
     this.upAt = this.deps.now()
-    if (!child) { this.onExit(null, null, 'not started'); return }
+    if (!child) { this.onExit(null, null, 'not started'); this.peers.started(); return }
     child.onMessage((message) => { if (this.child === child) this.onMessage(child, message) })
     child.onExit((code, signal) => { if (this.child === child) this.onExit(code, signal) })
     this.deps.log(`[harnessd] service ${this.spec.name} started (pid ${child.pid ?? '?'})${this.restarts ? ` · restart ${this.restarts}` : ''}`)
     this.setState(this.restarts === 0 ? 'starting' : 'restarting')
     this.watchHeartbeat(child)
+    this.peers.started()
   }
 
   /** Start a process on demand the core asked for: once, while it is off. One already started is the
@@ -172,6 +180,17 @@ class Service {
   }
 
   private onMessage(child: CoreHandle, message: unknown): void {
+    if (isCoreMessage(message) && (message.type === 'harnessd:want' || message.type === 'harnessd:watch-peers')) {
+      if (this.ending || this.state === 'stopping') return
+      if (!this.spec.wakes?.length || (message.type === 'harnessd:want' && !this.peers.want(message.service))) {
+        if (!this.refusedPeer) this.deps.log(`[harnessd] service ${this.spec.name}: PEER_START_REFUSED`)
+        this.refusedPeer = true
+      } else if (message.type === 'harnessd:watch-peers' && !this.watchingPeers) {
+        this.watchingPeers = true
+        this.peers.watch()
+      }
+      return
+    }
     if (isUpdaterMessage(message)) {
       // It restarts the core: from any other service than the updater, a bug or worse, said once and ignored.
       const staged: StagedUpdate = {
@@ -192,6 +211,25 @@ class Service {
     } else if (this.spec.rssLimitMiB && message.rssBytes > this.spec.rssLimitMiB * MIB) {
       this.restartForMemory(`it is using ${Math.round(message.rssBytes / MIB)} MiB, over its ${this.spec.rssLimitMiB} MiB budget`)
     }
+  }
+
+  peerSnapshot(available: readonly string[], started: readonly string[]): void {
+    this.tellPeer({ type: 'harnessd:peers', available, started })
+  }
+
+  peerStarted(service: string): void {
+    if (this.spec.wakes?.includes(service)) this.tellPeer({ type: 'harnessd:peer-started', service })
+  }
+
+  private tellPeer(message: MasterMessage): void {
+    const child = this.child
+    if (!child || !this.watchingPeers || this.ending || this.state === 'stopping') return
+    const settled = (delivered: boolean): void => {
+      if (delivered || this.child !== child || this.ending || this.failedPeerChannel) return
+      this.failedPeerChannel = true
+      this.deps.log(`[harnessd] service ${this.spec.name}: PEER_CHANNEL_UNAVAILABLE`)
+    }
+    try { child.send(message, settled) } catch { settled(false) }
   }
 
   private restartForMemory(why: string): void {
@@ -293,6 +331,7 @@ class Service {
 /** Every enabled service's process, started together and stopped together. */
 export class ServiceSupervisor {
   private readonly services: Service[]
+  private ending = false
 
   constructor(
     specs: readonly ServiceSpec[],
@@ -301,13 +340,35 @@ export class ServiceSupervisor {
     /** What every service is started with: the token that lets the core know it, for one. */
     env: Record<string, string> = {},
   ) {
-    this.services = specs.map((spec) => new Service(spec, deps, options, env))
+    this.services = specs.map((spec) => {
+      const wakes = spec.wakes ?? []
+      const service = new Service(spec, deps, options, env, {
+        want: target => {
+          if (this.ending || !wakes.includes(target) || !this.services.some(peer => peer !== service && peer.spec.services.includes(target))) return false
+          this.want(target)
+          return true
+        },
+        watch: () => {
+          // Only the current non-ending physical child can reach this synchronous callback.
+          const peers = this.services.filter(peer => peer !== service)
+          const available = wakes.filter(name => peers.some(peer => peer.spec.services.includes(name)))
+          const started = available.filter(name => peers.some(peer => peer.spec.services.includes(name) && peer.state !== 'off' && peer.state !== 'stopped'))
+          service.peerSnapshot(available, started)
+        },
+        started: () => {
+          // Delivery fences each recipient; starting a peer never reopens an ending recipient's channel.
+          for (const peer of this.services) for (const name of spec.services) peer.peerStarted(name)
+        },
+      })
+      return service
+    })
   }
 
   /** Start every service but those on demand, which wait to be asked for again; none waits on another, or on the
    *  core. Found end to end (e2e/reexec.e2e.ts): a master whose re-execution was refused stops its services and
    *  starts them again, and a process on demand stayed stopped, so a core too old to ask never got models. */
   start(): void {
+    this.ending = false
     for (const service of this.services) {
       if (!service.spec.onDemand) service.start()
       else service.rest()
@@ -316,6 +377,7 @@ export class ServiceSupervisor {
 
   /** Start the process on demand that hosts [service], if it is not running yet: the core asked for it (`harnessd:want`). */
   want(service: string): void {
+    if (this.ending) return
     for (const each of this.services) if (each.spec.services.includes(service)) each.want()
   }
 
@@ -326,11 +388,13 @@ export class ServiceSupervisor {
    * before the viewers were (4) never for theirs.
    */
   unasked(protocol: number): void {
+    if (this.ending) return
     for (const each of this.services) if (each.spec.onDemand && (each.spec.askedSince ?? 3) > protocol) each.want()
   }
 
   /** Stop every service; `done` once all are gone. */
   stop(done: () => void): void {
+    this.ending = true
     let left = this.services.length
     if (!left) { done(); return }
     for (const service of this.services) service.stop(() => { if (--left === 0) done() })

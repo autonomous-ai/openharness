@@ -56,7 +56,6 @@ core/daemonStopRoute.ts
 core/deliveries.ts
 core/deviceHookCalls.ts
 core/devicesLink.ts
-core/devicesWake.ts
 core/engines/admissionOrder.ts
 core/engines/backgroundJobs.ts
 core/engines/controlTransport.ts
@@ -89,13 +88,11 @@ core/experimentQueries.ts
 core/experiments.ts
 core/frameParts.ts
 core/gatewayLink.ts
-core/gatewayWake.ts
 core/guestPolicy.ts
 core/input.ts
 core/main.ts
 core/messagesLink.ts
 core/modelsLink.ts
-core/modelsWake.ts
 core/monitorLink.ts
 core/observedHook.ts
 core/orchestratorLink.ts
@@ -145,7 +142,6 @@ core/updaterBeside.ts
 core/usageLink.ts
 core/usageOutcomes.ts
 core/viewersLink.ts
-core/viewersWake.ts
 core/wifiLink.ts
 core/windowFocus.ts
 core/workspacesLink.ts

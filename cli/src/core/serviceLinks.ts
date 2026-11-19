@@ -75,7 +75,7 @@ export interface ServiceLinksOptions {
    *  `LONG_ANSWERS`): a grid command, grid's set-up, a harness's install. */
   waits?: Readonly<Record<string, Readonly<Record<string, number>>>>
   /** The services whose process runs only once asked for: the experiments (core/api.ts `EXPERIMENTS`), the
-   *  devices (core/devicesWake.ts), models (core/modelsWake.ts) and the viewers and the Store (core/viewersWake.ts). A request for one that has not connected yet
+   *  devices (services/componentStartup.ts), models (services/componentStartup.ts) and the viewers and the Store (services/componentStartup.ts). A request for one that has not connected yet
    *  asks for it (`want`) and waits for it to connect, for its own wait or `startWaitMs`, whichever is shorter,
    *  and then for its answer, for its own wait. One that has connected and is down again is answered as any
    *  service is, at once, unless it is in `waitsThroughRestart`; so is one that did not connect in time, until it does. */

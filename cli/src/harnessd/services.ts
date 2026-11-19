@@ -46,6 +46,8 @@ export interface ServiceSpec {
   reads?: Readonly<Record<string, readonly string[]>>
   /** Session factories owned by a service hosted here; fixed by the selected artifact. */
   factories?: Readonly<Record<string, readonly string[]>>
+  /** Peer starts permitted over this host's physical master channel. No feature state is interpreted by master. */
+  wakes?: readonly string[]
 }
 
 /** The kinds of what happens to an agent that a service in its own process can be held (core/api.ts `AgentLife`): a stop
@@ -85,7 +87,7 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // Its file watches on every harness's workspace; the viewer servers it starts are processes of their
   // own, outside this budget. The Store beside them: its installs run git and the harnesses' toolchains
   // in their own processes too, and take minutes, which is what it must not spend in the core.
-  // Started only once something needs it (core/viewersWake.ts): a harness here, a Store or viewer request, or
+  // Started only once something needs it (services/componentStartup.ts): a harness here, a Store or viewer request, or
   // orphan viewer servers. Bundled consumers prepare on first use outside core. It idled at about 96 MiB on every computer, and few harnesses
   // have a viewer: 1 of 14 on one real machine, 2 of 35 on another (2026-10-12).
   viewers: { services: ['viewers', 'store'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 5,
@@ -106,7 +108,8 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // The engine probe (services/engineProbe.ts) holds this process's login-shell environment, read once; the shells
   // a probe starts, four at once, are processes of their own, outside this budget.
   // A harness stopped while the host is down still closes the harnesses it started: held for the cleanup.
-  edge: { services: ['workspaces', 'usage', 'monitor', 'paste', 'projects', 'handoff', 'recaps', 'windowNames', 'shell', 'connectors', 'sharedMachines', 'agentCleanup', 'messages', 'osDevice', 'goals', 'hachi', 'engineProbe'], heapLimitMiB: 384, rssLimitMiB: 768,
+  edge: { services: ['workspaces', 'usage', 'monitor', 'paste', 'projects', 'handoff', 'recaps', 'windowNames', 'shell', 'connectors', 'sharedMachines', 'agentCleanup', 'messages', 'osDevice', 'goals', 'hachi', 'engineProbe', 'componentStartup'], heapLimitMiB: 384, rssLimitMiB: 768,
+    wakes: ['devices', 'wifi', 'models', 'gateway', 'viewers', 'orchestrator', 'sharing', 'cloud', 'agentBrowser'],
     hears: { agentCleanup: ['stopped', 'input'] }, frameParts: { workspaces: { fields: ['project', 'gitContext'] } } },
   // The orchestrator (services/orchestratorProcess.ts), an experiment: started only once it is on, for a
   // saved project or a request (core/api.ts `EXPERIMENTS`). Its projects' files and the frames of their
@@ -130,12 +133,12 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // the terminals' WebRTC channels and their queues. Network, crypto and pure-JS WebRTC, the attack surface,
   // where a fault costs the remote clients and nothing else (docs/design/2026-10-06-core-boundary-next.md).
   // Started as the core starts when it is signed in or anything is paired here, and otherwise by the first
-  // thing that needs it (core/gatewayWake.ts): about 75 MiB at idle a computer signed out with nothing
+  // thing that needs it (services/componentStartup.ts): about 75 MiB at idle a computer signed out with nothing
   // paired never pays.
   gateway: { services: ['gateway'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 4, hears: { gateway: ['input', 'purged'] } },
   // Grid's pictures, the Model Manager's catalog and the models found on this machine. Its downloads, model
   // servers and `grid` commands run in processes of their own, outside this budget. Started only once grid is
-  // in use here or a request needs it (core/modelsWake.ts): about 70 MiB at idle, which a computer that uses
+  // in use here or a request needs it (services/componentStartup.ts): about 70 MiB at idle, which a computer that uses
   // no grid never pays.
   models: { services: ['models'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 4 },
   // The devices (services/devicesProcess.ts): the dials on USB (pure-JS serial, a frame decoder whose buffer
@@ -143,7 +146,7 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // worker (a process of its own, outside this budget). Hardware that speaks whatever its firmware says:
   // what it costs, it costs here, never a session. The Wi-Fi device beside them (services/wifiProcess.ts),
   // on a link of its own: its receipts, its streams and its Store preparations. Started only once there is
-  // a device, or a request for one (core/devicesWake.ts): about 72 MiB at idle, which a computer with none
+  // a device, or a request for one (services/componentStartup.ts): about 72 MiB at idle, which a computer with none
   // never pays.
   devices: { services: ['devices', 'wifi', 'machineAddons'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true, askedSince: 4,
     reads: { devices: ['session_read_advertised'], wifi: ['session_read_registered'] },

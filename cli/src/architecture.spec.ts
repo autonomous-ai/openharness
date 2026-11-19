@@ -756,6 +756,15 @@ describe('the daemon\'s shape', () => {
     expect(readFileSync(join(SRC, CORE_FILES), 'utf8').split('\n')).not.toContain('lib/computerName.ts')
   })
 
+  it('keeps optional startup policy and its filesystem discovery outside the core closure', () => {
+    const loaded = closureOf('core/main.ts')
+    for (const file of ['core/devicesWake.ts', 'core/gatewayWake.ts', 'core/modelsWake.ts', 'core/viewersWake.ts',
+      'services/componentStartup.ts', 'services/componentStartupFiles.ts', 'services/componentStartupProcess.ts']) expect(loaded.has(file), file).toBe(false)
+    for (const file of ['core/main.ts', 'core/experiments.ts', 'core/api.ts', 'lib/clientStreamContract.ts']) {
+      expect(readFileSync(join(SRC, file), 'utf8'), file).not.toMatch(/orchestrator\/\*\.json|harness-shares\.json|cloud\/harnesses\.json|agent-browser\.json|cu\.usbmodem|ttyACM|current-grid|viewers\.json/)
+    }
+  }, WALK_TIMEOUT_MS)
+
   it('Change agent loads its publication transaction only through its exact conversation door', () => {
     const handoff = ['core/handoffDependencies.ts', 'core/handoffPublication.ts', 'lib/handoffDiscovery.ts',
       'lib/handoffFiles.ts', 'lib/handoffGit.ts', 'lib/handoffPublication.ts', 'lib/handoffValidation.ts', 'lib/subagentTranscript.ts']

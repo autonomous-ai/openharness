@@ -45,7 +45,7 @@ export interface GatewayLinkDeps {
   backend(method: 'GET', path: string): Promise<HttpAnswer>
   /** The last machine list reported by the gateway, for the models service's presence labels. */
   machines?(state: GatewayMachines): void
-  /** Ask the master for the gateway's process (harnessd/coreLink.ts `want`): it runs on demand (core/gatewayWake.ts). */
+  /** Ask the master for the gateway's process (harnessd/coreLink.ts `want`): it runs on demand (services/componentStartup.ts). */
   want?(): void
   /** Whether the Wi-Fi device's service serves, its process asked for and waited for a while (core/wifi.ts `serving`):
    *  the gateway's look for devices and its pairing wait for it, and only the core can ask for that process. */
