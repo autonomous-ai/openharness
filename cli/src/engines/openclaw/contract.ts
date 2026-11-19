@@ -97,12 +97,15 @@ const CONTROL = /[\u0000-\u001f\u007f-\u009f]/g
 const NO_TOKEN = /^Missing gateway auth token\./
 
 /**
- * The system lines a TUI whose session history did not load draws in its chat, one leading space as every system line
- * (a model's text starts at column 0): `history failed: <error>` (OpenClaw's tui `loadHistory`), and `session history
- * not ready — wait or retry /session` for each message it then refuses. It still draws a ready status line, and
- * refuses every message until a load succeeds, which clears the chat, these lines with it.
+ * The system lines a TUI whose session history did not load draws in its chat: `history failed: <error>` for each load
+ * that failed (OpenClaw's tui `loadHistory`), and `session history not ready — wait or retry /session` for each message
+ * it then refuses. It still draws a ready status line, and refuses every message until a load succeeds, which clears
+ * the chat, these lines with it. A system line is a blank line, then its text one column in (`createSystemMessage`).
+ * A model's code block, a tool's output or an earlier TUI in the same pane can show the same words one column in too,
+ * so only lines under a blank one, from this TUI's title down, are read as its own.
  */
 const NO_HISTORY = /^ (?:history failed: |session history not ready — wait or retry \/session$)/
+const HISTORY_FAILED = /^ history failed: /
 
 export type OpenclawPaneState = 'ready' | 'busy' | 'starting' | 'no-history' | 'no-gateway' | 'no-token' | 'remote' | 'local-stopped'
 
@@ -125,6 +128,8 @@ export interface OpenclawScreen {
   running: boolean
   /** The status line says the Gateway is starting: it answered, so it is running. */
   gatewayStarting: boolean
+  /** The `history failed:` lines in the running TUI's chat: one for each history load that failed since one worked. */
+  historyFailures: number
   /**
    * The reason on a `local runtime stopped` status line, `''` when it gives none. Null on every other screen, the
    * `local stopped` one after it included: that one no longer says why.
@@ -146,8 +151,8 @@ export interface OpenclawBoxHidden { above: number; below: number }
 const NOT_SCROLLED: OpenclawBoxHidden = { above: 0, below: 0 }
 
 const NOTHING: OpenclawScreen = {
-  key: null, url: null, state: null, footer: null, gatewayLost: false, running: false, gatewayStarting: false, stopped: null,
-  status: null, box: null, boxHidden: NOT_SCROLLED,
+  key: null, url: null, state: null, footer: null, gatewayLost: false, running: false, gatewayStarting: false, historyFailures: 0,
+  stopped: null, status: null, box: null, boxHidden: NOT_SCROLLED,
 }
 
 /** Lines as drawn: escapes removed, trailing blanks dropped. */
@@ -181,6 +186,11 @@ function readTitle(lines: readonly string[], start: number): RegExpExecArray | n
     if (title) return title
   }
   return null
+}
+
+/** The lines from [from] up to [to] each drawn under a blank line, as a system line is. */
+function systemLines(lines: readonly string[], from: number, to: number): string[] {
+  return lines.slice(from, to).filter((line, index, drawn) => index > 0 && !drawn[index - 1].trim())
 }
 
 /** The input box: a live footer has it under it, between the last two rules. */
@@ -230,13 +240,14 @@ export function readOpenclawScreen(capture: string): OpenclawScreen {
   const above = lines.slice(0, start).map((line) => line.trim()).filter((line) => line).slice(-STOPPED_LINES)
   const said = above.at(-1) ?? ''
   const stopped = readStopped(above)
+  const chat = systemLines(lines, Math.max(titled, 0), start)
   const state: OpenclawPaneState | null = remote ? 'remote'
     : stopped !== null || STATUS.localStopped.test(said) ? 'local-stopped'
       : STATUS.noGateway.test(said) ? 'no-gateway'
         : STATUS.starting.test(said) ? 'starting'
           : STATUS.busy.test(said) ? 'busy'
             : !STATUS.ready.test(said) ? null
-              : lines.slice(0, start).some((line) => NO_HISTORY.test(line)) ? 'no-history' : 'ready'
+              : chat.some((line) => NO_HISTORY.test(line)) ? 'no-history' : 'ready'
   return {
     key: shown && agrees ? `agent:${shown[1]}:${shown[2]}` : null,
     url,
@@ -245,6 +256,7 @@ export function readOpenclawScreen(capture: string): OpenclawScreen {
     gatewayLost: STATUS.gatewayLost.test(said),
     running: STATUS.running.test(said),
     gatewayStarting: STATUS.gatewayStarting.test(said),
+    historyFailures: chat.filter((line) => HISTORY_FAILED.test(line)).length,
     stopped,
     status: said,
     ...readBox(lines),
