@@ -647,10 +647,16 @@ export function createBinding({
         && (agent.firstTask || input.firstTaskWaiting(agent.agentId) || input.awaitingConfirmation(agent.agentId))) {
         const now = Date.now()
         const tried = sessionTries.get(agent.agentId) ?? { tries: 0, lastAt: -Infinity }
-        if (tried.tries < SESSION_TRIES && now - tried.lastAt >= SESSION_RETRY_MS && await input.typeCommand(agent.agentId, `/session ${screen.key}`)) {
+        if (tried.tries < SESSION_TRIES && now - tried.lastAt >= SESSION_RETRY_MS) {
+          // Counted before it is typed and not waited for: a pass while it is typed types no second one, and this pass is
+          // the serial discovery pass, every other agent's behind it.
+          const tries = tried.tries + 1
           if (sessionTries.size >= 256) sessionTries.clear()
-          sessionTries.set(agent.agentId, { tries: tried.tries + 1, lastAt: now })
-          console.log(`[discovery] ${sid(agent.agentId)} openclaw · history not loaded · /session ${tried.tries + 1}/${SESSION_TRIES}`)
+          sessionTries.set(agent.agentId, { tries, lastAt: now })
+          console.log(`[discovery] ${sid(agent.agentId)} openclaw · history not loaded · /session ${tries}/${SESSION_TRIES}`)
+          void input.typeCommand(agent.agentId, `/session ${screen.key}`).catch(() => false).then((typed) => {
+            if (!typed) console.warn(`[discovery] ${sid(agent.agentId)} openclaw · /session ${tries}/${SESSION_TRIES} not typed`)
+          })
         }
       }
       const key = screen.key
