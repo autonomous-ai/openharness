@@ -2094,7 +2094,7 @@ describe('the dial that shows one app at a time', () => {
       expect(views).toEqual(['apps window', 'tabs empty'])
     })
 
-    const H1 ={ id: 'h1', name: 'h1', engine: 'claude', machineId: 'mine', machine: 'MacbookPro.local' }
+    const H1 = { id: 'h1', name: 'h1', engine: 'claude', machineId: 'mine', machine: 'MacbookPro.local' }
 
     it('on an app\'s ring a dial that says appFilter is answered as with no window', async () => {
       const { host } = viewed(five(), { sessions })
