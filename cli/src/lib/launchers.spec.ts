@@ -1,8 +1,29 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { isOwnHarnessLauncher, isOwnHnLauncher, ownedBinEntries } from './launchers.js'
+
+// Pass-through, recording each path written to by name, each flush (by the path its descriptor was opened on), each
+// rename's target and each link.
+const disk = vi.hoisted(() => ({ events: [] as string[], opened: new Map<number, string>() }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => {
+      const fd = actual.openSync(...args)
+      disk.opened.set(fd, String(args[0]))
+      return fd
+    },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (typeof args[0] !== 'number') disk.events.push(`write ${String(args[0])}`)
+      return actual.writeFileSync(...args)
+    },
+    fsyncSync: (fd: number) => { disk.events.push(`fsync ${disk.opened.get(fd)}`); return actual.fsyncSync(fd) },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.events.push(`rename ${String(args[1])}`); return actual.renameSync(...args) },
+    linkSync: (...args: Parameters<typeof actual.linkSync>) => { disk.events.push(`link ${String(args[0])} ${String(args[1])}`); return actual.linkSync(...args) },
+  }
+})
 
 const cli = '/Users/u/.harness/cli/cli.js'
 
@@ -149,5 +170,60 @@ describe('isOwnHarnessLauncher shapes', () => {
     expect(isOwnHarnessLauncher('#!/bin/sh\nexec "`cmd`" "' + cli + '" "$@"\n', cli)).toBe(false)
     expect(isOwnHarnessLauncher(`#!/bin/sh\nexec "\\x" "${cli}" "$@"\n`, cli)).toBe(false)
     expect(isOwnHarnessLauncher(`#!/bin/sh\r\nexec '/n/node' '${cli}' "$@"\r\n`, cli)).toBe(false)
+  })
+})
+
+describe('the launchers, written whole', () => {
+  let home: string, bin: string, cli: string, launcher: string
+  let api: typeof import('./launchers.js')
+  const quote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
+
+  beforeEach(async () => {
+    home = mkdtempSync(join(tmpdir(), 'launchers-'))
+    bin = join(home, 'bin')
+    cli = join(home, 'cli', 'cli.js')
+    launcher = join(bin, 'harness')
+    mkdirSync(bin)
+    mkdirSync(join(home, 'cli'))
+    writeFileSync(cli, '// installed bundle')
+    writeFileSync(launcher, `#!/bin/sh\nexec '/old/node' ${quote(cli)} "$@"\n`, { mode: 0o755 })
+    vi.stubEnv('HARNESS_BIN_DIR', bin)
+    vi.stubEnv('ADAPTER_CLI_DIR', join(home, 'cli'))
+    vi.resetModules()
+    api = await import('./launchers.js')
+    disk.events = []
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    rmSync(home, { recursive: true, force: true })
+  })
+
+  it('the harness launcher goes through a temporary file renamed onto it', () => {
+    expect(api.ensureLauncher('/new/node')).toBe(true)
+    expect(readFileSync(launcher, 'utf8')).toBe(`#!/bin/sh\nexec '/new/node' ${quote(cli)} "$@"\n`)
+    expect(statSync(launcher).mode & 0o777).toBe(0o755)
+    expect(disk.events).toContain(`rename ${launcher}`)
+    expect(disk.events).not.toContain(`write ${launcher}`)
+  })
+
+  it('a file at the harness launcher\'s old temporary name is left alone', () => {
+    const old = `${launcher}.tmp-${process.pid}`
+    writeFileSync(old, 'not this writer\'s')
+    expect(api.ensureLauncher('/new/node')).toBe(true)
+    expect(readFileSync(old, 'utf8')).toBe('not this writer\'s')
+  })
+
+  it('hn is flushed before it is published, and only where nothing is', () => {
+    const hn = join(bin, 'hn')
+    expect(api.ensureHnLauncher(cli)).toBe(true)
+    expect(readFileSync(hn, 'utf8')).toBe(`#!/bin/sh\nexec ${quote(launcher)} tui "$@"\n`)
+    expect(statSync(hn).mode & 0o777).toBe(0o755)
+    const published = disk.events.findIndex(event => event.startsWith('link ') && event.endsWith(` ${hn}`))
+    expect(published).toBeGreaterThan(0)
+    const staged = disk.events[published]!.split(' ')[1]
+    expect(disk.events.slice(0, published)).toContain(`fsync ${staged}`)
+    writeFileSync(hn, 'the person\'s own hn')
+    expect(api.ensureHnLauncher(cli)).toBe(false)
+    expect(readFileSync(hn, 'utf8')).toBe('the person\'s own hn')
   })
 })

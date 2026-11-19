@@ -3,6 +3,19 @@ import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+// Pass-through, recording each path written to by name and each rename's target.
+const disk = vi.hoisted(() => ({ events: [] as string[] }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (typeof args[0] !== 'number') disk.events.push(`write ${String(args[0])}`)
+      return actual.writeFileSync(...args)
+    },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.events.push(`rename ${String(args[1])}`); return actual.renameSync(...args) },
+  }
+})
+
 const probe = vi.hoisted(() => vi.fn())
 // Native version output is a fixture. Never execute a developer's real hn or an unknown command.
 vi.mock('node:child_process', async original => {
@@ -95,6 +108,23 @@ describe('hn launcher migration', () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining('hn now follows automatic updates'))
     await api.repairHnLauncher(cli, log)
     expect(readdirSync(bin).filter(s => s.startsWith('.hn-backup-'))).toEqual(backups)
+  })
+
+  it('the migrated hn goes through a temporary file renamed onto it', async () => {
+    developmentLink()
+    disk.events = []
+    await api.repairHnLauncher(cli, vi.fn())
+    expect(readFileSync(hn, 'utf8')).toBe(managed())
+    expect(disk.events).toContain(`rename ${hn}`)
+    expect(disk.events).not.toContain(`write ${hn}`)
+  })
+
+  it('the migrated hn is 0755 whatever the umask', async () => {
+    developmentLink()
+    const umask = process.umask(0o077)
+    try { await api.repairHnLauncher(cli, vi.fn()) } finally { process.umask(umask) }
+    expect(readFileSync(hn, 'utf8')).toBe(managed())
+    expect(lstatSync(hn).mode & 0o777).toBe(0o755)
   })
 
   it('migrates a copied native hn with a verified version response', async () => {
