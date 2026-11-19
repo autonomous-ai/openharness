@@ -1,5 +1,28 @@
 //! Linux: whether the session has a tray host to show the icon.
 
+/// The name a StatusNotifier host owns on the session bus. With no owner the icon shows nowhere: stock GNOME has none
+/// until the AppIndicator extension is on.
+pub const WATCHER: &str = "org.kde.StatusNotifierWatcher";
+
+/// The log line for the bus's answer: only a bus that says no watcher is there. A bus that cannot be asked says
+/// nothing about the tray.
+pub fn log_line(answer: Option<bool>) -> Option<&'static str> {
+    (answer == Some(false)).then_some("tray: no host")
+}
+
+/// Whether a watcher is on the session bus; `None` when the bus cannot be asked.
+#[cfg(target_os = "linux")]
+pub fn host_there() -> Option<bool> {
+    asks(&dbus::blocking::Connection::new_session().ok()?)
+}
+
+#[cfg(target_os = "linux")]
+fn asks(bus: &dbus::blocking::Connection) -> Option<bool> {
+    let daemon = bus.with_proxy("org.freedesktop.DBus", "/org/freedesktop/DBus", std::time::Duration::from_secs(2));
+    let (owned,): (bool,) = daemon.method_call("org.freedesktop.DBus", "NameHasOwner", (WATCHER,)).ok()?;
+    Some(owned)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

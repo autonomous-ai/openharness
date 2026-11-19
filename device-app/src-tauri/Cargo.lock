@@ -1257,6 +1257,7 @@ name = "harness-device"
 version = "0.0.0"
 dependencies = [
  "block2",
+ "dbus",
  "libc",
  "objc2",
  "objc2-app-kit",
