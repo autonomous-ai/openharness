@@ -1,6 +1,6 @@
 // The ChatGPT app's threads, read from a fixture Codex home in a temp folder: no test reads anyone's own ~/.codex.
 import { execFileSync, spawnSync } from 'node:child_process'
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
@@ -214,6 +214,17 @@ describe('the JSON file', () => {
       fx.state({ ...GOOD, padTo: 200 })
     }
     expect(await reader.read()).toEqual({ ok: false })
+    expect((await ok(reader)).listed[0]!.inProject).toBe(true)
+  })
+
+  it('a JSON file that cannot be opened is a failed read, not one with no projects; once it opens it is parsed', async () => {
+    const fx = fixture()
+    fx.threads([thread(1, 10)])
+    fx.state(GOOD)
+    chmodSync(stateOf(fx), 0o000)
+    const reader = new CodexAppThreads(fx.home)
+    expect(await reader.read()).toEqual({ ok: false })
+    chmodSync(stateOf(fx), 0o644)
     expect((await ok(reader)).listed[0]!.inProject).toBe(true)
   })
 
