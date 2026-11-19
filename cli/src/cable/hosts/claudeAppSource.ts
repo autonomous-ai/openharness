@@ -13,7 +13,8 @@
  * A log line says only fixed words and counts: the store names people's folders and sessions.
  */
 import { basename, dirname, join, sep } from 'node:path'
-import { CLAUDE_SESSION, claudePaneKey } from './claudeApp.js'
+import { claudePaneKey } from './claudeApp.js'
+import { localIdOf } from './claudeAppStore.js'
 import type { ClaudeAppSession, ClaudeAppStore, StoreFolders, StoreRead } from './claudeAppStore.js'
 import { observedAgentId } from './observed.js'
 import { observedTitle } from './observedTitle.js'
@@ -58,11 +59,6 @@ interface Pass {
   gap: boolean
   cancel: () => void
 }
-
-/** A session's own file. An event naming anything else in an org folder changes no session: an archive or a delete also
- *  writes or removes the session's own file, and a write by temp file and rename names the final file too. */
-const sessionFile = (name: string): boolean =>
-  name.endsWith('.json') && CLAUDE_SESSION.test(name.slice(0, -'.json'.length))
 
 /** What the dial is told a change of: never a new `lastActivityAt` alone, or each write of a working turn would run the
  *  dial's merge. */
@@ -218,9 +214,11 @@ export class ClaudeAppSource implements HostSource {
     }
   }
 
+  /** An event of an org's watch. One naming anything but a session's own file changes no session: an archive or a delete
+   *  also writes or removes the session's own file, and a write by temp file and rename names the final file too. */
   private orgChanged(org: string, file?: string): void {
     if (file === undefined) this.relist()
-    else if (sessionFile(file)) this.touched(org, file)
+    else if (localIdOf(file) !== undefined) this.touched(org, file)
   }
 
   /** A listing of the folders waits: it lists every file again, so no name needs to wait beside it. */
