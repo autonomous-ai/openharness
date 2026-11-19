@@ -30,6 +30,7 @@ export const MAX_CWD = 4_096
 
 const STORE = 'state_5.sqlite'
 const STATE = '.codex-global-state.json'
+const INDEX = 'session_index.jsonl'
 /** The binding is synchronous on the devices event loop: a store the app holds locked fails fast, and is read next time. */
 const BUSY_TIMEOUT_MS = 50
 /** A person's own threads, a terminal's (`cli`) and the app's or an editor's (`vscode`), never a script's, a subagent's or
@@ -147,6 +148,7 @@ export class CodexAppThreads {
       }
       const projects = this.readProjects(kept.map((thread) => thread.id))
       if (!projects) return { ok: false }
+      const indexed = this.indexed()
       this.projects = projects
       const placeOf = (thread: Kept) => projects.places.get(thread.id) ?? MAX_PROJECTS
       const order = [...kept].sort((a, b) => placeOf(a) - placeOf(b) || newest(a, b))
@@ -156,7 +158,7 @@ export class CodexAppThreads {
         order: order.map((thread) => thread.id),
         listed: order.filter((thread) => listed.has(thread.id)).map(({ id, cwd, at }) => ({
           id, cwd, at,
-          name: observedTitle(codexThreadName(id, this.home)) ?? (basename(cwd) || 'codex'),
+          name: observedTitle(indexed ? codexThreadName(id, this.home) : null) ?? (basename(cwd) || 'codex'),
           inProject: projects.places.has(id),
         })),
         rows: rows.length,
@@ -170,6 +172,12 @@ export class CodexAppThreads {
   /** Drops the JSON file's last parse, so the next read parses it afresh. */
   forget(): void {
     this.projects = undefined
+  }
+
+  /** Whether Codex's session index is a regular file: codexThreadName opens it to read it, and a FIFO, or a link to one,
+   *  opened so waits for a writer for good, and the devices event loop with it. */
+  private indexed(): boolean {
+    try { return lstatSync(join(this.home, INDEX)).isFile() } catch { return false }
   }
 
   private query(): readonly SqliteRow[] | null {
