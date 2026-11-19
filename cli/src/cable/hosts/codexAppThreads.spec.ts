@@ -313,6 +313,20 @@ describe('names', () => {
     expect(JSON.stringify(result)).not.toContain(NEVER_READ)
   })
 
+  it('a name Codex gives after a read, and a thread new to the list, are named at the next read', async () => {
+    const fx = fixture()
+    fx.threads([thread(1, 20), thread(2, 10)])
+    fx.name(uuid(1), 'Alpha')
+    fx.name(uuid(3), 'Charlie')
+    const reader = new CodexAppThreads(fx.home)
+    expect((await ok(reader)).listed.map((t) => t.name)).toEqual(['Alpha', 't2'])
+    fx.name(uuid(2), 'Bravo')
+    expect((await ok(reader)).listed.map((t) => t.name)).toEqual(['Alpha', 'Bravo'])
+    // The index held still since: the new thread's name is still read.
+    fx.threads([thread(3, 30)])
+    expect((await ok(reader)).listed.map((t) => t.name)).toEqual(['Charlie', 'Alpha', 'Bravo'])
+  })
+
   it('forget() keeps no name: the next read reads Codex\'s index afresh', async () => {
     const fx = fixture()
     fx.threads([thread(1, 10)])

@@ -69,6 +69,12 @@ interface Projects {
   ids: ReadonlySet<string> | null
 }
 
+/** Codex's names of the listed threads (null: none), kept under the stamp of its index they were read at. */
+interface Names {
+  stamp: string
+  byId: ReadonlyMap<string, string | null>
+}
+
 interface Kept { id: string; cwd: string; at: number }
 
 const noProjects = (stamp: string): Projects => ({ stamp, places: new Map(), ids: null })
@@ -120,6 +126,7 @@ export class CodexAppThreads {
   private readonly sqlite: () => DatabaseConstructor | null
   private readonly readState: (fd: number, max: number) => Buffer
   private projects: Projects | undefined
+  private names: Names | undefined
 
   constructor(private readonly home: string, seams: CodexAppSeams = {}) {
     this.sqlite = seams.sqlite ?? builtinSqlite
@@ -148,17 +155,17 @@ export class CodexAppThreads {
       }
       const projects = this.readProjects(kept.map((thread) => thread.id))
       if (!projects) return { ok: false }
-      const indexed = this.indexed()
       this.projects = projects
       const placeOf = (thread: Kept) => projects.places.get(thread.id) ?? MAX_PROJECTS
       const order = [...kept].sort((a, b) => placeOf(a) - placeOf(b) || newest(a, b))
       const listed = new Set([...kept].sort(newest).slice(0, MAX_LISTED).map((thread) => thread.id))
+      const names = this.namesOf(listed)
       return {
         ok: true,
         order: order.map((thread) => thread.id),
         listed: order.filter((thread) => listed.has(thread.id)).map(({ id, cwd, at }) => ({
           id, cwd, at,
-          name: observedTitle(indexed ? codexThreadName(id, this.home) : null) ?? (basename(cwd) || 'codex'),
+          name: observedTitle(names.get(id)) ?? (basename(cwd) || 'codex'),
           inProject: projects.places.has(id),
         })),
         rows: rows.length,
@@ -173,13 +180,28 @@ export class CodexAppThreads {
    *  no dial is attached. Nothing else in the devices process asks codexThreadName, so its cache goes whole. */
   forget(): void {
     this.projects = undefined
+    this.names = undefined
     resetCodexThreadNames()
   }
 
-  /** Whether Codex's session index is a regular file: codexThreadName opens it to read it, and a FIFO, or a link to one,
-   *  opened so waits for a writer for good, and the devices event loop with it. */
-  private indexed(): boolean {
-    try { return lstatSync(join(this.home, INDEX)).isFile() } catch { return false }
+  /**
+   * Codex's own names for `ids`. codexThreadName opens the index to read it, and a FIFO, or a link to one, opened so
+   * waits for a writer for good, and the devices event loop with it: only a regular file is read. Each of its answers
+   * costs a copy of the environment (launchCodexHome), most of a read: while the index holds still, only a thread not
+   * listed last time is asked.
+   */
+  private namesOf(ids: ReadonlySet<string>): ReadonlyMap<string, string | null> {
+    let found: Stats | undefined
+    try { found = lstatSync(join(this.home, INDEX)) } catch { /* no index: every thread has its folder's name */ }
+    if (!found?.isFile()) {
+      this.names = undefined
+      return new Map()
+    }
+    const stamp = stampOf(found)
+    const last = this.names?.stamp === stamp ? this.names.byId : new Map<string, string | null>()
+    const byId = new Map([...ids].map((id) => [id, last.has(id) ? last.get(id)! : codexThreadName(id, this.home)]))
+    this.names = { stamp, byId }
+    return byId
   }
 
   private query(): readonly SqliteRow[] | null {
