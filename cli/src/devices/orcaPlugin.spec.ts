@@ -505,6 +505,40 @@ describe('orcaSetUp', () => {
     expect(calls().slice(3)).toEqual([`plugin update ${KEY} --json`])
   })
 
+  it('from the folder at another version and not on, whatever its status: updated, then listed, never the old copy enabled', async () => {
+    const older: [string, Record<string, unknown>, boolean][] = [
+      ['disabled, with force', { status: 'disabled' }, true],
+      ['pending', { status: 'pending' }, false],
+      ['needing consent again', { needsReconsent: true }, false],
+    ]
+    for (const [name, over, force] of older) {
+      const { deps, folder, calls } = setup()
+      orca.answer('plugin list', list([entry(folder, { version: '1.2.2', ...over })]))
+      holds()
+      expect({ name, ...await orcaSetUp(deps, { force }) }).toStrictEqual({ name, ...UPDATED })
+      expect(calls().slice(3)).toEqual([`plugin update ${KEY} --json`, `plugin update ${KEY} --approve ${FINGERPRINT} --json`, 'plugin list --json'])
+      expect(orca.entry()).toMatchObject({ status: 'running', version: '1.2.3', source: { kind: 'local-path', reference: folder } })
+    }
+  })
+
+  it('with force, an update Orca leaves disabled: enabled after it, then approved', async () => {
+    const { deps, folder, calls } = setup()
+    orca.answer('plugin list', list([entry(folder, { version: '1.2.2', status: 'disabled' })]))
+    holds()
+    // An Orca that brings the folder's files in and leaves the person's switch off.
+    const run: OrcaPluginDeps['run'] = async (file, args, opts) => {
+      const ran = await deps.run(file, args, opts)
+      if (args[1] === 'update' && ran.code === 0) orca.disable()
+      return ran
+    }
+    expect(await orcaSetUp({ ...deps, run }, { force: true })).toStrictEqual(UPDATED)
+    expect(calls().slice(3)).toEqual([
+      `plugin update ${KEY} --json`, `plugin update ${KEY} --approve ${FINGERPRINT} --json`, 'plugin list --json',
+      `plugin enable ${KEY} --json`, `plugin enable ${KEY} --approve ${FINGERPRINT} --json`,
+    ])
+    expect(orca.entry()).toMatchObject({ status: 'running', version: '1.2.3', source: { kind: 'local-path', reference: folder } })
+  })
+
   it('pending from the folder: enabled, then approved', async () => {
     const { deps, folder, calls } = setup()
     orca.answer('plugin list', list([entry(folder, { status: 'pending' })]))
@@ -523,6 +557,28 @@ describe('orcaSetUp', () => {
       expect(calls().slice(3)).toEqual([`plugin install ${folder} --json`, `plugin install ${folder} --approve ${FINGERPRINT} --json`])
       expect(calls().filter((call) => call.startsWith('plugin enable'))).toEqual([])
       expect(orca.entry()).toMatchObject({ status: 'running', source: { kind: 'local-path', reference: folder } })
+    }
+  })
+
+  it("running from a person's checkout, at this version or another, or recorded through a link to the folder: installed from the folder, never updated", async () => {
+    const sources: [string, (root: string, folder: string) => Record<string, unknown>][] = [
+      ['a checkout at this version', () => entry(CHECKOUT)],
+      ['a checkout at another version', () => entry(CHECKOUT, { version: '1.2.2' })],
+      // A Linux computer whose files moved: Orca recorded ~/.harness/orca-plugin, now the bridge's link to the folder,
+      // and updates from the path it recorded.
+      ['a link to the folder', (root, folder) => {
+        const old = join(root, 'orca-plugin')
+        symlinkSync(folder, old)
+        return entry(old, { version: '1.2.2' })
+      }],
+    ]
+    for (const [name, listed] of sources) {
+      const { root, deps, folder, calls } = setup()
+      orca.answer('plugin list', list([listed(root, folder)]))
+      holds()
+      expect({ name, ...await orcaSetUp(deps, { force: false }) }).toStrictEqual({ name, ...UPDATED })
+      expect(calls().slice(3)).toEqual([`plugin install ${folder} --json`, `plugin install ${folder} --approve ${FINGERPRINT} --json`])
+      expect(orca.entry()).toMatchObject({ status: 'running', version: '1.2.3', source: { kind: 'local-path', reference: folder } })
     }
   })
 

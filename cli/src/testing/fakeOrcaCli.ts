@@ -25,9 +25,11 @@ export interface FakeOrcaCli {
   /** From now on an Orca that runs, at 1.4.262, holding [plugin]'s approvals: `status` and `plugin inspect` answer so;
    *  `plugin install <folder>`, `update <key>` and `enable <key>` without `--approve <fingerprint>` exit 3
    *  `approval_required` (data: pluginKey, name, version, approvalFingerprint, grants), and with it exit 0 and leave the
-   *  entry `running` at [plugin]'s version from the folder `install` was handed, by its real path (`update` and `enable`
-   *  keep the entry's); `plugin uninstall <key>` removes it; `plugin list` lists it. A word given an `answer` answers
-   *  that. The entry with [plugin]'s key in a `plugin list` answered before is the one it holds; that answer is dropped. */
+   *  entry `running` from the folder `install` was handed, by its real path (`update` and `enable` keep the entry's).
+   *  `install` and `update` bring in [plugin]'s version; `enable` turns on the version the entry holds, as Orca enables
+   *  the copy it installed, and its refusal names that version. `plugin uninstall <key>` removes it; `plugin list`
+   *  lists it. A word given an `answer` answers that. The entry with [plugin]'s key in a `plugin list` answered before
+   *  is the one it holds; that answer is dropped. */
   holds(plugin: FakeOrcaPlugin): void
   /** The person turned it off in Orca: the entry lists `status: disabled`. */
   disable(): void
@@ -37,8 +39,9 @@ export interface FakeOrcaCli {
 
 // An answer is two files in `answer/` named for its word: what it prints and its exit code. Any other word exits 1, as
 // Orca does for a command it does not have. A plugin held is its files in `plugin/`, and its entry, when Orca lists one,
-// is `entry.json` and its source `source.json`, which `update` and `enable` keep. A path is written into JSON as it is:
-// a test's folders hold no character JSON escapes.
+// is `entry.json`, its version `entry-version` and its source `source.json`, which `update` and `enable` keep. The
+// refusal names the version a word would run in place of `@VERSION@`. A path is written into JSON as it is: a test's
+// folders hold no character JSON escapes.
 const script = (dir: string): string => `#!/bin/sh
 dir=${shellSingleQuote(dir)}
 printf '%s\\n' "$*" >> "$dir/calls"
@@ -65,20 +68,23 @@ case "$word" in
     printf '{"id":"req-3","ok":true,"result":{"plugins":[%s]}}\\n' "$entry" ;;
   plugin-uninstall)
     [ -f "$held/entry.json" ] || exit 1
-    rm -f "$held/entry.json" "$held/source.json"
+    rm -f "$held/entry.json" "$held/entry-version" "$held/source.json"
     printf '{"id":"req-6","ok":true,"result":{"pluginKey":"%s"}}\\n' "$(cat "$held/key")" ;;
   *)
     [ "$word" = plugin-install ] || [ -f "$held/entry.json" ] || exit 1
+    version=$(cat "$held/version")
+    [ "$word" = plugin-enable ] && version=$(cat "$held/entry-version")
     if [ "$4" != --approve ] || [ "$5" != "$(cat "$held/fingerprint")" ]; then
-      cat "$held/refusal.json"
+      sed "s/@VERSION@/$version/g" "$held/refusal.json"
       exit 3
     fi
     if [ "$word" = plugin-install ]; then
       printf '{"kind":"local-path","reference":"%s"}' "$(cd "$3" && pwd -P)" > "$held/source.json"
     fi
+    printf '%s' "$version" > "$held/entry-version"
     printf '{"pluginKey":"%s","name":"Harness Device","version":"%s","status":"running","needsReconsent":false,"isDev":false,"source":%s}' \\
-      "$(cat "$held/key")" "$(cat "$held/version")" "$(cat "$held/source.json")" > "$held/entry.json"
-    printf '{"id":"req-5","ok":true,"result":{"pluginKey":"%s","version":"%s"}}\\n' "$(cat "$held/key")" "$(cat "$held/version")" ;;
+      "$(cat "$held/key")" "$version" "$(cat "$held/source.json")" > "$held/entry.json"
+    printf '{"id":"req-5","ok":true,"result":{"pluginKey":"%s","version":"%s"}}\\n' "$(cat "$held/key")" "$version" ;;
 esac
 `
 
@@ -126,8 +132,8 @@ export function fakeOrcaCli(dir: string, bin = join(dir, 'resources', 'bin', 'or
       writeFileSync(join(held, 'refusal.json'), pretty({
         id: 'req-4', ok: false,
         error: {
-          code: 'approval_required', message: `${key} ${version} needs approval before it can run.`,
-          data: { pluginKey: key, name: 'Harness Device', version, approvalFingerprint: fingerprint, grants },
+          code: 'approval_required', message: `${key} @VERSION@ needs approval before it can run.`,
+          data: { pluginKey: key, name: 'Harness Device', version: '@VERSION@', approvalFingerprint: fingerprint, grants },
         },
       }))
       const listAnswer = join(answers, 'plugin-list')
@@ -138,6 +144,7 @@ export function fakeOrcaCli(dir: string, bin = join(dir, 'resources', 'bin', 'or
       const listed = plugins.find((plugin) => plugin.pluginKey === key)
       if (listed === undefined) return
       writeFileSync(entryFile, JSON.stringify(listed))
+      writeFileSync(join(held, 'entry-version'), String(listed.version))
       writeFileSync(join(held, 'source.json'), JSON.stringify(listed.source))
     },
     disable() {
