@@ -859,6 +859,137 @@ describe('SessionInputController', () => {
       expect(onError).not.toHaveBeenCalled()
       controller.forget('s1')
     })
+
+    /** An OpenClaw screen as its TUI draws it (engines/openclaw/__fixtures__), its input box holding [box]. */
+    const openclawScreen = (name: string, box: string) => {
+      const lines = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'engines', 'openclaw', '__fixtures__', name), 'utf8').split('\n')
+      const rules = lines.flatMap((line, at) => (/^─+$/.test(line) ? [at] : []))
+      return [...lines.slice(0, rules.at(-2)! + 1), box, ...lines.slice(rules.at(-1)!)].join('\n')
+    }
+    const readyPane = (box = '') => openclawScreen('screen-plain.txt', box)
+    const startingPane = (box = '') => openclawScreen('screen-starting-up.txt', box)
+    const paneController = (pane: () => string | null) => {
+      const inject = vi.fn(async (_id: string, _text: string) => true)
+      const sendKey = vi.fn(async (_id: string, _key: string) => true)
+      const onError = vi.fn()
+      const onWaitChanged = vi.fn()
+      const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+        getSession: () => session('openclaw'),
+        validateRuntime: async () => true,
+        inject, sendKey, capture: async () => pane(), onError, onWaitChanged,
+      })
+      return { controller, inject, sendKey, onError, onWaitChanged }
+    }
+
+    it('a message OpenClaw put back in its box while it started up is sent with one Enter at the first ready read', async () => {
+      vi.useFakeTimers()
+      let pane = startingPane('Say hello')
+      const { controller, inject, sendKey, onError } = paneController(() => pane)
+
+      controller.submit('s1', 'Say hello')
+      await vi.advanceTimersByTimeAsync(25_000)
+      expect(sendKey).not.toHaveBeenCalled()
+      pane = readyPane('Say hello')
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(sendKey.mock.calls).toEqual([['h1', 'Enter']])
+      pane = readyPane()
+      await vi.advanceTimersByTimeAsync(5_000)
+      controller.onTurnStarted('s1', 'Say hello')
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(sendKey).toHaveBeenCalledTimes(1)
+      expect(inject).toHaveBeenCalledTimes(1)
+      expect(onError).not.toHaveBeenCalled()
+      controller.forget('s1')
+    })
+
+    it('no Enter on a ready OpenClaw pane whose box holds other text: each window counts', async () => {
+      vi.useFakeTimers()
+      const { controller, sendKey, onError } = paneController(() => readyPane('my own words'))
+
+      controller.submit('s1', 'Say hello')
+      await vi.advanceTimersByTimeAsync(29_900)
+      expect(onError).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(200)
+      expect(sendKey).not.toHaveBeenCalled()
+      expect(onError).toHaveBeenCalledWith('s1', expect.stringContaining('did not accept'))
+      controller.forget('s1')
+    })
+
+    it('no Enter on a ready OpenClaw pane with an empty box, which sent the message: each window counts', async () => {
+      vi.useFakeTimers()
+      const { controller, sendKey, onError } = paneController(() => readyPane())
+
+      controller.submit('s1', 'Say hello')
+      await vi.advanceTimersByTimeAsync(29_900)
+      expect(onError).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(200)
+      expect(sendKey).not.toHaveBeenCalled()
+      expect(onError).toHaveBeenCalledWith('s1', expect.stringContaining('did not accept'))
+      controller.forget('s1')
+    })
+
+    it('an OpenClaw message whose pane cannot send waits, uncounted, 3 minutes from the paste, then is given up', async () => {
+      vi.useFakeTimers()
+      const { controller, sendKey, onError } = paneController(() => startingPane('Say hello'))
+
+      controller.submit('s1', 'Say hello')
+      await vi.advanceTimersByTimeAsync(179_900)
+      expect(onError).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(200)
+      expect(sendKey).not.toHaveBeenCalled()
+      expect(onError).toHaveBeenCalledWith('s1', expect.stringContaining('did not accept'))
+      controller.forget('s1')
+    })
+
+    it('a first task is never given up: it waits, said to the frame, until its user row confirms it', async () => {
+      vi.useFakeTimers()
+      let pane = startingPane()
+      const { controller, sendKey, onError, onWaitChanged } = paneController(() => pane)
+
+      expect(controller.firstTaskWaiting('s1')).toBe(false)
+      controller.submit('s1', 'Say hello', undefined, undefined, { firstTask: true })
+      await vi.advanceTimersByTimeAsync(4 * 60_000)
+      pane = readyPane()
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(onError).not.toHaveBeenCalled()
+      expect(sendKey).not.toHaveBeenCalled()
+      expect(controller.firstTaskWaiting('s1')).toBe(true)
+      expect(onWaitChanged.mock.calls).toEqual([['s1']])
+      controller.onTurnStarted('s1', 'Say hello')
+      expect(controller.firstTaskWaiting('s1')).toBe(false)
+      expect(onWaitChanged.mock.calls).toEqual([['s1'], ['s1']])
+      controller.forget('s1')
+      expect(onWaitChanged).toHaveBeenCalledTimes(2)
+    })
+
+    it('a first task on a pane it cannot read gets the two Enters any message does, and waits until it is forgotten', async () => {
+      vi.useFakeTimers()
+      const { controller, sendKey, onError, onWaitChanged } = paneController(() => null)
+
+      controller.submit('s1', 'Say hello', undefined, undefined, { firstTask: true })
+      await vi.advanceTimersByTimeAsync(5 * 60_000)
+      expect(sendKey).toHaveBeenCalledTimes(2)
+      expect(onError).not.toHaveBeenCalled()
+      expect(controller.firstTaskWaiting('s1')).toBe(true)
+      controller.forget('s1')
+      expect(controller.firstTaskWaiting('s1')).toBe(false)
+      expect(onWaitChanged.mock.calls).toEqual([['s1'], ['s1']])
+    })
+
+    it('types an OpenClaw command only while nothing is pending for its pane', async () => {
+      const { controller, inject } = paneController(() => readyPane())
+      const command = '/session agent:main:plain'
+
+      controller.submit('s1', 'Say hello')
+      await vi.waitFor(() => expect(controller.awaitingConfirmation('s1')).toBe(true))
+      expect(await controller.typeCommand('s1', command)).toBe(false)
+      controller.onTurnStarted('s1', 'Say hello')
+      expect(await controller.typeCommand('s1', command)).toBe(false)
+      controller.onTurnEnded('s1')
+      expect(await controller.typeCommand('s1', command)).toBe(true)
+      expect(inject.mock.calls).toEqual([['h1', 'Say hello'], ['h1', command]])
+      controller.forget('s1')
+    })
   })
 
   describe('Claude Code and Codex readings from their engine worker', () => {

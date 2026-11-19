@@ -523,6 +523,18 @@ describe('createInput', () => {
     expect(log.mock.calls.flat().filter((line) => String(line).includes('slash-command adapted'))).toHaveLength(1)
   })
 
+  it('submits an agent\'s first task as one, on the path every message takes', () => {
+    const inputs = createInput(deps().deps)
+    const submit = vi.spyOn(inputs.input, 'submit').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    inputs.submitFirstTask('s1', 'fix the bug')
+    inputs.submitFirstTask('cc', '/loop fix it')
+    expect(submit.mock.calls).toEqual([
+      ['a1', 'fix the bug', undefined, undefined, { firstTask: true }],
+      ['cc', 'fix it', undefined, undefined, { firstTask: true }],
+    ])
+  })
+
   it('logs a held delivery once, not once for every retry of the same delivery id', () => {
     const inputs = createInput(deps().deps)
     vi.spyOn(inputs.input, 'submit').mockImplementation(() => {})
