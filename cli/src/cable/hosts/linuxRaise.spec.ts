@@ -73,7 +73,21 @@ describe('createLinuxRaise', () => {
     expect(await raise.raise({ app: 'wezterm' })).toBe(false)
     await vi.waitFor(() => expect(looks()).toBe(2))
     expect(await raise.raise({ app: 'wezterm' })).toBe(false)
-    await vi.waitFor(() => expect(lines).toEqual(['[device] raise · sway', '[device] raise · hyprland']))
+    await vi.waitFor(() => expect(lines).toEqual(['[device] raise · sway', '[device] raise · sway · failed', '[device] raise · hyprland']))
+  })
+
+  it('logs a raise that failed, once until a raise ends otherwise, in fixed words', async () => {
+    const outcomes = [false, false, true, false]
+    const { raise, lines } = login({ answer: async () => outcomes.shift()! })
+    await vi.waitFor(() => expect(lines).toEqual(['[device] raise · sway']))
+    for (const answer of [false, false, true, false]) expect(await raise.raise({ app: 'code' })).toBe(answer)
+    expect(lines).toEqual(['[device] raise · sway', '[device] raise · sway · failed', '[device] raise · sway · failed'])
+  })
+
+  it('logs a backend that throws as a raise that failed', async () => {
+    const { raise, lines } = login({ desktops: [HYPRLAND], answer: () => Promise.reject(new Error('boom')) })
+    expect(await raise.raise({ app: 'code' })).toBe(false)
+    expect(lines).toEqual(['[device] raise · hyprland', '[device] raise · hyprland · failed'])
   })
 
   it('is not ready before the first look lands, and is ready once it found a desktop', async () => {
