@@ -726,6 +726,7 @@ export function startHookServer(
         let committing = false, settled = false, stopRetained = false, stopUnmatched = false, stopInvocationClaimed = false
         const stopCurrent = processAgent.sessionId === body.sessionId && stopScope === scope ? stopWitness : undefined
         let followupFingerprint: string | undefined, committedIdentity: string | undefined
+        // A turn-stop answered pending before this settled, kept only until acceptance claims it or rejection drops it.
         let parkedStop: { stop: BoundHookBody; firedAt: number | undefined } | undefined
         // The agent's hold count when this began waiting on an earlier hook's write.
         let waitedHolds: number | undefined
@@ -770,7 +771,7 @@ export function startHookServer(
           // HTTP delivery outruns source recovery. Never close a later live turn.
           // Its client leaves on pending and never sends it again: acceptance claims it.
           if (!settled || stopRetained) {
-            parkedStop = { stop, firedAt }
+            if (!settled) parkedStop = { stop, firedAt }
             return { status: 200, reply: { pending: true } }
           }
           if (stopCurrent && !stopCurrent()) stopInvocationClaimed = true
@@ -897,6 +898,7 @@ export function startHookServer(
             commit,
             held,
             reject: reason => {
+              parkedStop = undefined
               clearHold()
               console.log(`[hooks] ${sid(body.sessionId ?? '?')} ${body.hookEvent ?? 'session-start'} ignored · ${reason}`)
               if (reason === 'invalid_session_registration') completedReply(400, { error: 'invalid session registration' })
@@ -904,9 +906,13 @@ export function startHookServer(
             },
             accept: () => {
               completedReply(200, { ok: true }); notify()
-              // A turn-stop parked while this was in flight is claimed as its retry would be, through every fence.
-              if (parkedStop) void Promise.resolve(linkedStop(parkedStop.stop, parkedStop.firedAt))
-                .catch(error => console.warn('[hooks] parked linked Stop claim failed', error))
+              // A turn-stop parked while this was in flight is claimed as one sent now would be, through every fence.
+              const parked = parkedStop
+              parkedStop = undefined
+              // Its client left on pending and hears no reply: a claim that closed nothing is said here.
+              if (parked) void Promise.resolve(linkedStop(parked.stop, parked.firedAt)).then(({ status }) => {
+                if (status !== 200) console.log(`[hooks] ${sid(body.sessionId ?? '?')} parked Stop not claimed · status=${status}`)
+              }).catch(error => console.warn('[hooks] parked linked Stop claim failed', error))
             },
           })
           if (queued) {
