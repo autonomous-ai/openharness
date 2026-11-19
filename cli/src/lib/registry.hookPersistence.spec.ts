@@ -30,6 +30,9 @@ function slowTimeout(callback: (...args: unknown[]) => void, ms: number | undefi
 // The write deadline is a test's to expire (limit), never the host's clock.
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
 vi.mock('./bootId.js', async original => ({ ...await original<object>(), currentBootId: () => 'fixture-boot', bootChanged: () => false }))
+// Loads the module graph once, before any hook's time limit: cold, it takes seconds on a loaded machine. Each test
+// still imports fresh modules (vi.resetModules), now from the warm transform cache.
+await import('./registry.js'); await import('../hookServer.js')
 const deferred = () => {
   let resolve!: () => void
   const promise = new Promise<void>(done => { resolve = done })

@@ -69,6 +69,9 @@ function observeNativeProof(): void { vi.doMock('../engines/transcriptBindings.j
     return { ...proof, verify: (...selected: Parameters<typeof proof.verify>) => { fault.beforeVerify?.(); proof.verify(...selected) } }
   } }
 }) }
+// Loads the module graph once, before any hook's time limit: cold, it takes seconds on a loaded machine. Each test
+// still imports fresh modules (vi.resetModules), now from the warm transform cache.
+await import('./registry.js'); await import('../hookServer.js')
 const A = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', B = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb'
 let server: Server | undefined
 let root: string, home: string, file: string, transcript: string
