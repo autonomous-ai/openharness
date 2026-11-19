@@ -28,6 +28,7 @@ const agents = new Map<string, RegisteredSession>([
   ['cx', { agentId: 'cx', sessionId: 'cx-s', engine: 'codex' } as RegisteredSession],
   ['s1', { agentId: 'a1', sessionId: 's1', engine: 'claude' } as RegisteredSession],
   ['cc', { agentId: 'cc', sessionId: 'cc-s', engine: 'commandcode' } as RegisteredSession],
+  ['oc', { agentId: 'oc', sessionId: 'agent:main:oc', engine: 'openclaw' } as RegisteredSession],
   ['cc-new', { agentId: 'cc-new', sessionId: '', engine: 'commandcode' } as RegisteredSession],
   ['cc-none', { agentId: 'cc-none', sessionId: 'cc-none-s', engine: 'commandcode' } as RegisteredSession],
 ])
@@ -399,6 +400,18 @@ describe('the session input controller\'s dependencies', () => {
     wired.onSubmitted!('cc', 'hi')
     await vi.waitFor(() => expect(given.emit).toHaveBeenCalledWith('cc-s', [{ type: 'turn_started', text: 'hi' }]))
     expect(normalizer.openTurn).toHaveBeenCalledWith('cc-s', 'hi')
+  })
+
+  // Found end to end (e2e/openclawShow.e2e.ts row 13): OpenClaw draws a message's run at once (`sending`), and writes its
+  // first row only when its Gateway does, 15-45 s on a slow one: `show` read the run off the pane while `ps` said idle
+  // until the binding pass had read the run's timer change.
+  it('says an OpenClaw works from our own paste of a message, and nobody else', () => {
+    const sending = vi.fn()
+    const wired = sessionInputDeps(deps({ sending }).deps, () => lock([]))
+    for (const id of ['a1', 'nobody', 'cc']) wired.onSubmitted!(id, 'hi')
+    expect(sending).not.toHaveBeenCalled()
+    wired.onSubmitted!('oc', 'hi')
+    expect(sending.mock.calls).toEqual([['agent:main:oc']])
   })
 })
 
