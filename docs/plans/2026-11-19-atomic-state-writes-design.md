@@ -102,6 +102,10 @@ the re-exec handover, `daemonLaunch`, `platformDaemon`); the plan lists each.
 - `group-blocked.json`: read as empty, then `block()` writes one entry, which un-blocks the others.
 - `lib/commander.ts` already has an atomic path (`strict`) but the 200 ms timer path writes in place. The timer path
   goes through the helper too; one path.
+- `lib/registryPersistence.ts`: the registry lock is made with `mkdir`, then `owner.json` is written into it. A process
+  killed between the two leaves a lock with no owner; the next core waits 5 s for it, past its 2 s budget, and goes to
+  safe mode (`master.e2e.ts`, Linux CI). Fix: the owner is written in a temporary folder that is renamed into place,
+  so the lock never exists without its owner.
 - Windows: renaming over a file another process holds open (an antivirus, an indexer) fails with `EPERM`, `EACCES` or
   `EBUSY` for a moment. The helper retries the rename a bounded number of times there, then throws.
 

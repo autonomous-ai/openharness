@@ -9,6 +9,7 @@
 - **Two kinds, one flag:** `'trust'` (left as it is, the store refuses to write, `harness status` names it) and `'cache'` (renamed to `<name>.unreadable`, read as missing).
 - **Each store keeps its shape:** same files, names, folders and bytes. Only how they are written, and what a parse error means, changes.
 - **The pid file** is read three ways (a pid, missing, unreadable); a command that needs a pid from an unreadable file asks the daemon's local status.
+- **The registry lock** is built in a temporary folder with its owner already in it, then renamed into place: no lock is ever there without its owner (Task 33, Decision 16).
 
 **Tech Stack:** TypeScript (Node 22+, vitest), `cli/`. No new dependency.
 
@@ -47,7 +48,8 @@
 | 16 Scripts and launch files | `lib/engineLaunch.ts`, `lib/browserShim.ts`, `lib/windows/hermesLaunch.ts` | 9, 10 | high | their three specs |
 | 17 Pointers, markers and the computer id | `lib/runtimeInstall.ts`, `lib/uninstall/deps.ts`, `lib/computerIdentity.ts` | 9, 10 | high | `runtimeInstall.spec.ts`, `computerIdentity.spec.ts`, `uninstall/command.spec.ts` |
 | 18 JSON caches | `device/machineList.ts`, `lib/hostTheme.ts`, `lib/codexProfiles.ts` | 9, 10 | high | `machineList.spec.ts`, `hostTheme.spec.ts`, `codexProfiles.test.ts` |
-| 19 The guard, part 2 | `lib/stateWrites.guard.spec.ts` | 11, 12, 14, 15, 16, 17, 18 | medium | none (a list grows, one commit) |
+| 33 The registry lock is made with its owner in it | `lib/registryPersistence.ts`, `lib/registryPersistence.spec.ts`, `lib/registry.persistence.spec.ts`, `lib/__fixtures__/registryCrashWriter.ts`, `lib/registryLock.publish.spec.ts` (new), `.github/workflows/windows.yml` | 1 | xhigh | `registry.persistence.spec.ts`, `registryPersistence.spec.ts` |
+| 19 The guard, part 2 | `lib/stateWrites.guard.spec.ts` | 11, 12, 14, 15, 16, 17, 18, 33 | medium | none (a list grows, one commit) |
 | **Part 3: what the sweep found (pull request 3)** | | | | |
 | 20 to 30 Writers found by the sweep, and their readers, by area | see [Part 3](#part-3-the-writers-the-sweep-found-and-their-readers) | 19 | high each | each module's spec |
 | 31 The profile lists and the dial skill record: readers | `lib/codexProfiles.ts`, `lib/claudeHomes.ts`, `devices/dialSkillFiles.ts` | 19 | high | `codexProfiles.test.ts`, `claudeProfiles.test.ts`, `dialSkillFiles.spec.ts` |
@@ -59,6 +61,7 @@ Longest chain: 1 → 2 → 3 → 9 → 13 → 15 → 19 → 20 → 32, nine task
 
 - **Tasks 3 to 8 share no file** and start together once Task 2 is done; so do 9 and 10 after them, and 11, 12, 13, 16, 17, 18 after those.
 - **"9, 10" is the delivery order the brief asks for:** Part 1 must stand alone as a prefix of the branch, so no Part 2 commit lands before both. Tasks 9 and 15 also extend `cli.ts` after Task 8; Tasks 11 and 15 extend Task 9's files. Tasks 15 and 17 both change `lib/uninstall/deps.ts`, so they never run together; neither needs the other.
+- **Task 33 depends on Task 1 only** (it shares `lib/registryPersistence.ts` and `windows.yml` with it) and shares no file with any other task, so it runs beside Tasks 2 to 8. Its two commits belong to Part 2: when the branch is cut into pull requests they move after Task 10 (they touch only Task 33's files, so the move does not conflict). Task 19 waits for it, so Part 2 stays a prefix.
 - **Part 3 waits for Task 19** so Part 2 is a prefix too (Decision 10). Task 31 changes `lib/codexProfiles.ts` after Task 18, which Task 19 already orders. Tasks 20 to 31 share no file.
 - **Three pull requests, stacked and merged in order** (Decision 10): Part 1 (the helper, the reader, the e2ee stores and the auth session), Part 2, Part 3.
 
@@ -66,7 +69,7 @@ Longest chain: 1 → 2 → 3 → 9 → 13 → 15 → 19 → 20 → 32, nine task
 
 | Files | Process | Gate |
 |---|---|---|
-| `lib/secureState.ts`, `lib/daemonState.ts`, `lib/registry.ts`, `lib/hookAuth.ts`, `lib/engineLaunch.ts`, `lib/browserShim.ts`, `lib/hostTheme.ts`, `lib/computerIdentity.ts`, `lib/windows/hermesLaunch.ts`, `lib/claudeHomes.ts`, `lib/nodeMigration.ts`, `core/main.ts` | the core's (and others') | their specs in PR CI `cli-tests`; `src/architecture.spec.ts` (no new line in `architecture.coreFiles.txt`); `core/main.ts` by the end-to-end suite |
+| `lib/secureState.ts`, `lib/daemonState.ts`, `lib/registry.ts`, `lib/registryPersistence.ts`, `lib/hookAuth.ts`, `lib/engineLaunch.ts`, `lib/browserShim.ts`, `lib/hostTheme.ts`, `lib/computerIdentity.ts`, `lib/windows/hermesLaunch.ts`, `lib/claudeHomes.ts`, `lib/nodeMigration.ts`, `core/main.ts` | the core's (and others') | their specs in PR CI `cli-tests`; `src/architecture.spec.ts` (no new line in `architecture.coreFiles.txt`); `core/main.ts` by the end-to-end suite |
 | `lib/e2ee/*`, `lib/remoteRelay.ts` | the gateway, the fleet, the CLI | their specs (PR CI) |
 | `lib/commander.ts` | the edge host (recaps) | its specs (PR CI) |
 | `harnessd/master.ts` | the master | 100% per file, `npm run test:harnessd` (local) |
@@ -76,7 +79,7 @@ Longest chain: 1 → 2 → 3 → 9 → 13 → 15 → 19 → 20 → 32, nine task
 
 The local gates run once, at the final commit, with `python3 scripts/local-checks.py --run` ([Verification](#verification)).
 
-Not changed, and a diff in any is a finding: `cli/src/architecture.coreFiles.txt`; the master's import rule in `cli/src/architecture.spec.ts`; the write queue and lock in `lib/registryPersistence.ts` (only `AtomicWriteUnconfirmed` moves out of it); any file's name, folder or serialized bytes; `desktop/`, `mobile/`, `backend/`, `device-app/`.
+Not changed, and a diff in any is a finding: `cli/src/architecture.coreFiles.txt`; the master's import rule in `cli/src/architecture.spec.ts`; the write queue in `lib/registryPersistence.ts` (only `AtomicWriteUnconfirmed` moves out of it), and its lock beyond how Task 33 makes it (the takeover, the ownerless rule, `removeLockNow`, `checkOwner`, the bytes of `owner.json`, `LOCK_MS` and `OWNERLESS_MS`); any file's name, folder or serialized bytes; `desktop/`, `mobile/`, `backend/`, `device-app/`.
 
 ## Global Constraints
 
@@ -103,7 +106,7 @@ Not changed, and a diff in any is a finding: `cli/src/architecture.coreFiles.txt
 
 ## Decisions
 
-1 to 7 and 14 to 15 are the builder's calls. 8 to 13 are the orchestrator's answers to the draft's questions (2026-11-19).
+1 to 7 and 14 to 15 are the builder's calls. 8 to 13 are the orchestrator's answers to the draft's questions (2026-11-19). 16 is the orchestrator's case (2026-11-19); its platform details are the builder's.
 
 1. **`kind` is a required argument** of both writers. The callers that exist today (the registry's files, checkpoints, stopped agents, the safe-mode marker) pass `'trust'`, which is exactly what they do today: the existing target's owner and mode are checked. Their readers are not touched.
 2. **The reader is the gate.** A trust store's write path reads first (`requireState`), or carries a flag from its last load and reads again before it writes. The writer does not parse.
@@ -120,6 +123,7 @@ Not changed, and a diff in any is a finding: `cli/src/architecture.coreFiles.txt
 13. **A full recap history for the measurement is 200 sessions, measured on the developer's Mac only (was Q5, default kept).**
 14. **Part 3's async readers call the synchronous `readState`.** Each reads one small file once per load (the largest is bounded at 512 KiB, `session-git-history`), and the retry's wait is paid only for a file that cannot be parsed, once, since the file is then set aside. One reader, not a second async one.
 15. **A reader that bounds its read keeps its bound** (`cable/noticeFile.ts`, `devices/dialSkillFiles.ts`): a file within the bound that is not valid JSON or not a JSON object is handed to `readState(file, 'cache', jsonObject)`, which reads it again with the retry, sets it aside and logs the cache line; its answer is used. A file past the bound reads as today: the bound is what keeps the read small.
+16. **The registry lock comes into existence with its owner in it (Task 33).** Today `registryFileLock` makes `registry.json.lock` with `mkdir`, then writes `owner.json` into it; a process killed between the two leaves a lock with no owner, which the next core waits `OWNERLESS_MS` (5 s) for, past its `LOCK_MS` (2 s): `registry lock is busy`, and safe mode (`master.e2e.ts`, Linux CI run 44406838335, shard 7). The owner is now written in a temporary folder that is renamed onto the lock's path. A folder cannot be hard-linked, and a symbolic link would break the protocol older builds still speak, so the publish is a rename, with a look first: a rename replaces an empty folder on macOS and Linux, and Windows refuses a folder over any folder. The protocol on disk is unchanged (`registry.json.lock`, `0700`, holding only `owner.json`, `0600`), so older builds keep working beside this one.
 
 ## The sweep
 
@@ -142,6 +146,7 @@ About 300 `writeFile*` calls in `cli/src`. The 201 write sites outside specs and
 | `lib/log.ts:76`, `services/devices.ts:993` | the log trim, the old log's pointer line | not here: logs; the trim is in place on purpose (the daemon's descriptor is `O_APPEND`) |
 | `cable/fwPush.ts:133` | `firmware/<key>-<version>.bin` | not here: its size and sha256 are checked on every use, then fetched again |
 | `lib/daemonSpawnLock.ts:189`, `agentClient/program.ts:216`, `agentClient/ledger.ts:295` | lock owner records | not here: a lock being made reads as busy, and an ownerless one is cleared; the directory or `O_EXCL` create is the atomic step |
+| `lib/registryPersistence.ts` `registryFileLock` | `registry.json.lock/owner.json` | fixed here (Task 33, Decision 16): a kill between `mkdir` and the owner write leaves a lock the next core waits 5 s for, past its 2 s budget, and it goes to safe mode |
 | `dsh/lock.ts:31` | `.lock-<owner>_<name>/pid` | not here, follow-up: a crash between `mkdir` and the write leaves a lock nobody reaps, which a file write cannot close |
 | `lib/agentCreationReceipt.ts:571` (exclusive), `lib/autonomous-device/store.ts:107` (exclusive), `lib/stoppedAgents.ts:195`, `engines/resumeRepairs.ts:59` | reservations made exclusive, filled, flushed | not here, follow-up: each fails closed on a partial file by design; the `link` publish would remove the window |
 | `lib/piSessionHome.ts:28` | a Pi transcript copied exclusive to its final path | not here, follow-up: a file copy; it should copy to a temporary name and `link` |
@@ -193,7 +198,7 @@ About 300 `writeFile*` calls in `cli/src`. The 201 write sites outside specs and
 
 Unique temporary name, `fsync`, rename or `link`. They stay; a follow-up moves them to the helper.
 
-`lib/harnessRuntimeIgnore.ts:35` · `lib/handoffPublication.ts:77` · `lib/claudeProfiles.ts:24` (its reader, `readLinkedPaths` in `lib/claudeHomes.ts`, is fixed in Task 31) · `lib/apiConnections.ts:102` · `lib/agentCreationReceipt.ts:441,468` and `:571` when not exclusive · `lib/connectors/store.ts:117` · `lib/autonomous-device/resultJournal.ts:32` · `lib/autonomous-device/store.ts:107` when not exclusive · `lib/windows/pipeAuth.ts:192` · `dsh/preparation.ts:26` · `dsh/runtime.ts:59` · `engines/resumeTranscript.ts:94` · `engines/kit/nativeHookFiles.ts:220` · `engines/kit/nativeInstall.ts:120` · `engines/kit/homeAdoption.ts:264` · `devices/dialSkill.ts:120` · `devices/dialSkillFiles.ts:95` (its reader is fixed in Task 31) · `lib/registryPersistence.ts` (out of scope by the spec).
+`lib/harnessRuntimeIgnore.ts:35` · `lib/handoffPublication.ts:77` · `lib/claudeProfiles.ts:24` (its reader, `readLinkedPaths` in `lib/claudeHomes.ts`, is fixed in Task 31) · `lib/apiConnections.ts:102` · `lib/agentCreationReceipt.ts:441,468` and `:571` when not exclusive · `lib/connectors/store.ts:117` · `lib/autonomous-device/resultJournal.ts:32` · `lib/autonomous-device/store.ts:107` when not exclusive · `lib/windows/pipeAuth.ts:192` · `dsh/preparation.ts:26` · `dsh/runtime.ts:59` · `engines/resumeTranscript.ts:94` · `engines/kit/nativeHookFiles.ts:220` · `engines/kit/nativeInstall.ts:120` · `engines/kit/homeAdoption.ts:264` · `devices/dialSkill.ts:120` · `devices/dialSkillFiles.ts:95` (its reader is fixed in Task 31) · `lib/registryPersistence.ts` (the registry image, out of scope by the spec; its lock is Task 33's).
 
 ## The guard's module list
 
@@ -202,6 +207,7 @@ Unique temporary name, `fsync`, rename or `link`. They stay; a follow-up moves t
 - **Part 1 (Task 10):** `lib/registry.ts`, `lib/e2ee/store.ts`, `lib/e2ee/machinePeers.ts`, `lib/e2ee/trustGroup.ts`, `lib/e2ee/deviceLogStore.ts`, `lib/e2ee/accountTrust.ts`, `lib/authSession.ts`.
 - **Part 2 (Task 19):** `lib/hookAuth.ts`, `lib/commander.ts`, `lib/daemonState.ts`, `core/main.ts`, `harnessd/master.ts`, `masterProcess.ts`, `device/machineList.ts`, `lib/runtimeInstall.ts`, `lib/engineLaunch.ts`, `lib/windows/hermesLaunch.ts`, `lib/browserShim.ts`, `lib/uninstall/deps.ts`, `lib/hostTheme.ts`, `lib/computerIdentity.ts`, `lib/codexProfiles.ts`.
 - **Part 3 (Task 32):** every module of Tasks 20 to 30. Task 31's modules: `lib/codexProfiles.ts` is listed since Part 2; `lib/claudeHomes.ts` writes nothing; `lib/claudeProfiles.ts` and `devices/dialSkillFiles.ts` keep their already-correct writers until the follow-up, so they are not listed.
+- **Not listed:** `lib/registryPersistence.ts`. Its registry image and, after Task 33, its lock owner are each written whole in a temporary place and published by its own rename, under the lock's protocol, not through the helper.
 - **Marked calls:** `lib/runtimeInstall.ts` (the archive), `lib/engineLaunch.ts` (the launch script), `harnessd/master.ts` (the status file, Decision 12), and in Part 3 whatever a module writes that Table A leaves.
 
 ## Who reads the pid file
@@ -776,9 +782,49 @@ export async function settlePidFile(deps?: SettleDeps): Promise<Settled>
 - [ ] Run the three specs and `npm run typecheck`: green.
 - [ ] Commit `Machine list, host theme, Codex profiles: written whole through the one helper, and a cache that cannot be read is set aside`.
 
+### Task 33: The registry lock is made with its owner in it
+
+**Depends on:** 1 (it shares `lib/registryPersistence.ts` and `windows.yml`; done). It shares no file with Tasks 2 to 32 and runs beside them. **Effort:** `xhigh` (a lock between processes, on three platforms).
+
+**Files:**
+- Modify: `cli/src/lib/registryPersistence.ts` (`registryFileLock` only), `cli/src/lib/registryPersistence.spec.ts`, `cli/src/lib/registry.persistence.spec.ts` (the crash cases), `cli/src/lib/__fixtures__/registryCrashWriter.ts`
+- Create: `cli/src/lib/registryLock.publish.spec.ts` (the real file system, no mocks)
+- Modify: `.github/workflows/windows.yml` (add `'src/lib/registryLock.publish.spec.ts'` to the same `$paths` list as Task 1)
+
+**Interfaces:** none new. `registryFileLock(directory, deadline, apply)` keeps its signature and every answer. What changes is how one turn of its loop takes the lock (Decision 16):
+1. **Build.** `mkdir(<directory>/registry.json.lock.<pid>.<uuid>.tmp, 0o700)`; in it, `owner.json` opened `O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW` at `0o600`, written with today's bytes, `sync`, closed. `check()` between the steps, as today.
+2. **Look.** `lstat(lock)`: there means busy. The temporary folder is removed, and today's busy path runs unchanged (the wait, the ownerless rule, the dead-owner takeover).
+3. **Publish.** `rename(temporary, lock)`. On success `identity = lstat(lock)`, then `checkOwner()` (the folder and the token), and the lock is held, as today after `mkdir`.
+   - Refused while the lock is there (`EEXIST`, `ENOTEMPTY`; on Windows `EPERM` or `EACCES`, which refuse a folder renamed onto any folder): the temporary folder is removed, then the busy path.
+   - Refused with no lock there, `EPERM`, `EACCES` or `EBUSY` (Windows: an antivirus or indexer holding the new folder for a moment): the temporary folder is removed and the loop turns again; `check()` bounds it at `LOCK_MS`. Any other error: removed, thrown.
+   - On macOS and Linux a rename replaces an empty folder. This build never leaves one at the lock's path, so only an older build's folder made between steps 2 and 3 can be one. That build's own `O_EXCL` create of `owner.json` then fails with `EEXIST`, so it does not enter: there is still one owner. Windows refuses the rename, and that build's folder is waited for like any lock.
+4. **Clean up.** The temporary folder is removed with `unlink(<temporary>/owner.json)` and `rmdir(temporary)`, best effort, never recursive (as `removeLockNow`). After a kill in steps 1 to 3, the temporary folder stays, as every temporary file does after a kill (Global Constraints). It blocks nobody.
+- `removeOwned` and the `created` flag apply only once the rename has succeeded. The ownerless rule stays for the empty folders older builds can still leave.
+- The comment says why: the lock that was there without its owner, from `master.e2e.ts` on Linux CI (run 44406838335, shard 7).
+
+**Tests that fail first:**
+- `registry.persistence.spec.ts`, the crash cases: phase `'ownerless'` becomes `'taking'`. `registryCrashWriter.ts` halts once the first `owner.json` it opens is open, before the write (`io.open` wrapped, wherever that file is). The writer is SIGKILLed and the lock is **not** aged: `registry.setClosePlan` commits at once and `rows()[0].title` is `null`. Fails today with `Registry persistence unavailable: registry lock is busy`: the empty lock waits `OWNERLESS_MS` (5 s), past `LOCK_MS` (2 s).
+- `registry.persistence.spec.ts`, kept with today's behavior: `an older build's ownerless folder is still cleared`. An empty `registry.json.lock` (`0700`) is made by hand and aged 6 s; `setClosePlan` commits. The fixture no longer makes such a folder, so the ownerless rule needs this case.
+- `registryPersistence.spec.ts` (`rename` joins the `node:fs/promises` wrapper, with an `interleave.rename` hook):
+  - `a lock is never there without its owner`: at every `interleave.phase` and `interleave.rename` of one acquire, if `lock` exists then `owner.json` in it parses with `pid === process.pid` and a `token`. The violations are collected and asserted `[]` at the end, so the acquire itself is not disturbed. Fails today at the `mkdir` step.
+  - `a writer stopped while it takes the lock does not hold it`: the first `open` of an `owner.json` never settles; a second `registryFileLock(directory, deadline(), apply)` runs `apply` and resolves. Fails today: `registry lock is busy`.
+  - `a setup that fails leaves no lock and no temporary folder`: the owner write throws `ENOSPC`; the call throws; `readdirSync(directory)` has no `registry.json.lock*` entry.
+  - `a publish refused for a moment with no lock there is tried again`: `rename` throws `EPERM` once; `apply` runs once; no temporary folder is left.
+  - `an older build that makes its folder between the look and the publish does not enter` (`it.skipIf(win32)`): `interleave.rename` runs `mkdirSync(lock, { mode: 0o700 })` before the real rename; the acquire holds the lock; inside `apply`, `openSync(owner, 'wx', 0o600)` throws `EEXIST`.
+  - Updated, not new: the three `does not publish after the deadline expires during owner %s` cases and `includes late owner publication in the two-second acquisition budget` key on the temporary folder and its `owner.json` (today they key on `lock` and `owner`, which this build no longer writes before the publish). Each ends with no lock and no temporary folder, `mkdir` included. Today's "conservative debris" line goes: no folder is made at the lock's path before its owner is in it.
+- `registryLock.publish.spec.ts`, the real file system on every platform (on Windows through `windows.yml`). These pass today and pin the publish on each platform:
+  - `an acquire and its release leave the folder as it was`: `readdirSync(directory)` is `[]` afterwards.
+  - `a lock with a live owner is waited for, not replaced`: `registry.json.lock/owner.json` holds `{ pid: process.pid, startMarker: '', token: 'held' }`; `registryFileLock(directory, deadline(300), apply)` rejects with `registry lock is busy`; `apply` is not called; the owner's bytes are unchanged; no temporary folder is left.
+  - `an empty lock folder is not replaced`: a fresh, empty `registry.json.lock`; the same rejection; the folder is still empty and its `ino` unchanged.
+
+- [ ] Write the tests and the fixture's phase; run `cd cli && npx vitest run src/lib/registryPersistence.spec.ts src/lib/registry.persistence.spec.ts src/lib/registryLock.publish.spec.ts`: `taking`, `a lock is never there without its owner` and `a writer stopped while it takes the lock does not hold it` fail. Commit `test(state): the registry lock is made with its owner in it (red)`.
+- [ ] Implement.
+- [ ] Run the three specs, `src/lib/registry.spec.ts`, `src/lib/registry.diskFailure.spec.ts`, `src/lib/resumeAgentService.spec.ts`, `src/hookNotify.spec.ts`, `src/architecture.spec.ts`, `npx vitest run --config vitest.e2e.config.ts e2e/recovery.e2e.ts`, and `npm run typecheck`: green.
+- [ ] Commit `Registry lock: made with its owner already in it, so a writer killed while taking it leaves no lock to wait for`.
+
 ### Task 19: The guard, part 2
 
-**Depends on:** 11, 12, 14, 15, 16, 17, 18. **Effort:** `medium`. **No red test:** a list grows; one commit.
+**Depends on:** 11, 12, 14, 15, 16, 17, 18, 33. **Effort:** `medium`. **No red test:** a list grows; one commit. Task 33 adds no module to the list (see [The guard's module list](#the-guards-module-list)); it is here so Part 2 ends after it.
 
 **Files:** Modify `cli/src/lib/stateWrites.guard.spec.ts` (add the Part 2 list to `STATE_MODULES`).
 
@@ -852,9 +898,9 @@ Each task's steps: write the recipe's tests for its modules and see them fail; c
 
 No check runs against production, and none needs a sign-in: the end-to-end suite uses its fake backend. No temporary workflow: both long checks have a workflow that runs from a branch by hand. Run the two workflows one after the other, never together, each once, on the final head.
 
-1. **Windows, on GitHub: `windows.yml`.** `gh workflow run windows.yml --ref fix/atomic-state-writes` (inputs left at their defaults, so the tests run). In each `windows-pty` job, the step "Contract suite against the real host, and the Windows CLI specs" runs `src/lib/secureState.spec.ts` (the real-Windows replace and exclusive cases must be run, not skipped), `src/lib/windows` (the Hermes boot file; Part 3's pointers) and `src/lib/uninstall`. The install jobs then install with PowerShell, start the daemon, check it and uninstall: that is the atomic pid file, its claim and its removal on a real Windows. A person should see every job green; report the run link.
-2. **The real daemon, on GitHub: `cli-e2e.yml`.** `gh workflow run cli-e2e.yml --ref fix/atomic-state-writes`. Eight Linux shards, throwaway homes, private tmux servers, fake engines. It runs the new `e2e/stateFiles.e2e.ts` and the suites that live on these files: `cli.e2e.ts`, `master.e2e.ts`, `twodaemons.e2e.ts`, `reexec.e2e.ts`, the update suites (pid file, handover), `recapsProcess.e2e.ts` and `recapsCompat.e2e.ts` (recap files), `relay.e2e.ts`, `p2p.e2e.ts`, `sharedMachines.e2e.ts`, `deviceAck.e2e.ts` (trust stores), `diskfull.e2e.ts`. A person should see the summary green with every file run once; report the run link.
-3. **macOS, on the developer's Mac** (no workflow runs the CLI there): `cd cli && npx vitest run src/lib/secureState.spec.ts src/lib/stateWrites.guard.spec.ts` and `npx vitest run --config vitest.e2e.config.ts e2e/stateFiles.e2e.ts`. The end-to-end harness isolates it (`e2e/harness/daemon.ts`: its own home, data folder, port and tmux server; never `~/.harness`, port 18473 or the person's tmux, `cli/AGENTS.md` rule 6). Both green, in about two minutes.
+1. **Windows, on GitHub: `windows.yml`.** `gh workflow run windows.yml --ref fix/atomic-state-writes` (inputs left at their defaults, so the tests run). In each `windows-pty` job, the step "Contract suite against the real host, and the Windows CLI specs" runs `src/lib/secureState.spec.ts` (the real-Windows replace and exclusive cases must be run, not skipped), `src/lib/registryLock.publish.spec.ts` (a folder renamed onto the registry lock is refused, and the lock is untouched), `src/lib/windows` (the Hermes boot file; Part 3's pointers) and `src/lib/uninstall`. The install jobs then install with PowerShell, start the daemon, check it and uninstall: that is the atomic pid file, its claim and its removal on a real Windows. A person should see every job green; report the run link.
+2. **The real daemon, on GitHub: `cli-e2e.yml`.** `gh workflow run cli-e2e.yml --ref fix/atomic-state-writes`. Eight Linux shards, throwaway homes, private tmux servers, fake engines. It runs the new `e2e/stateFiles.e2e.ts` and the suites that live on these files: `cli.e2e.ts`, `master.e2e.ts`, `twodaemons.e2e.ts`, `reexec.e2e.ts`, the update suites (pid file, handover), `recapsProcess.e2e.ts` and `recapsCompat.e2e.ts` (recap files), `relay.e2e.ts`, `p2p.e2e.ts`, `sharedMachines.e2e.ts`, `deviceAck.e2e.ts` (trust stores), `diskfull.e2e.ts`, and for the registry lock (Task 33) `recovery.e2e.ts` (a lock a crashed daemon left). `master.e2e.ts` is where the lock with no owner was seen (run 44406838335, shard 7). A person should see the summary green with every file run once; report the run link.
+3. **macOS, on the developer's Mac** (no workflow runs the CLI there): `cd cli && npx vitest run src/lib/secureState.spec.ts src/lib/stateWrites.guard.spec.ts src/lib/registryLock.publish.spec.ts` and `npx vitest run --config vitest.e2e.config.ts e2e/stateFiles.e2e.ts`. The end-to-end harness isolates it (`e2e/harness/daemon.ts`: its own home, data folder, port and tmux server; never `~/.harness`, port 18473 or the person's tmux, `cli/AGENTS.md` rule 6). Both green, in about two minutes.
 4. **The gates PR CI does not run, on the developer's machine:** from a clean tree at the final commit, `python3 scripts/local-checks.py --run`. It picks the gates by the paths changed: `test:core` (for `core/main.ts`), `test:harnessd` and `test:resume` for Parts 1 and 2; with Part 3 also `test:local-models`, `test:sharing`, `test:orchestrator` and `test:portability`. Paste its receipts into the pull request.
 5. **The recap save's cost, on the developer's Mac:** Task 12's two sets of three lines, before and after, same machine. The pull request states the machine and both medians and p95s.
 6. **PR CI** (automatic, once the pull request is ready): `cli-typecheck`, `cli-tests`, `pty-checks`, `companions`; the workflow file change reruns every component once.
