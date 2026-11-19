@@ -1,7 +1,7 @@
 // The ChatGPT app's threads, read from a fixture Codex home in a temp folder: no test reads anyone's own ~/.codex.
 import { execFileSync, spawnSync } from 'node:child_process'
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -384,6 +384,13 @@ describe('names', () => {
       { encoding: 'utf8', timeout: 10_000 })
     expect(child.signal).toBeNull()
     expect((JSON.parse(child.stdout) as Extract<CodexAppRead, { ok: true }>).listed.map((t) => t.name)).toEqual(['t1'])
+  })
+})
+
+describe('the fixture', () => {
+  it('the fixture refuses the account\'s own Codex home, whatever HOME says', () => {
+    expect(() => codexAppFixture(join(userInfo().homedir, '.codex'))).toThrow()
+    expect(() => codexAppFixture(join(userInfo().homedir, '.codex', '..', '.codex', '/'))).toThrow()
   })
 })
 
