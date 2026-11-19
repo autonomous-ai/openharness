@@ -3,7 +3,7 @@
  */
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CloudCore } from '../core/api.js'
 import type { CloudHarness } from '../lib/cloudAgents.js'
@@ -11,6 +11,17 @@ import type { Bridge } from './bridge.js'
 import { repositoryOf } from '../lib/cloudAgents.js'
 import { cloudCard, nameFor, startCloudService } from './service.js'
 import { CloudError, type CloudAdapter, type CloudUpdate } from './types.js'
+
+// Pass-through, each call that could write a file recorded: what a save does to its target.
+const fsCalls = vi.hoisted(() => [] as Array<{ call: string; path: unknown; from?: unknown }>)
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => { fsCalls.push({ call: 'openSync', path: args[0] }); return actual.openSync(...args) },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => { fsCalls.push({ call: 'writeFileSync', path: args[0] }); return actual.writeFileSync(...args) },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { fsCalls.push({ call: 'renameSync', path: args[1], from: args[0] }); return actual.renameSync(...args) },
+  }
+})
 
 const owner = { local: true, owner: true }
 let dataDir: string
@@ -26,7 +37,7 @@ beforeEach(() => {
   nextTimer = 1
   doors = { publish: vi.fn(), ask: vi.fn(), unask: vi.fn() }
 })
-afterEach(() => rmSync(dataDir, { recursive: true, force: true }))
+afterEach(() => { vi.restoreAllMocks(); rmSync(dataDir, { recursive: true, force: true }) })
 
 /** A maker whose answers the test scripts, one look at a time. */
 function maker(over: Partial<CloudAdapter> = {}) {
@@ -559,5 +570,44 @@ describe('what the apps ask', () => {
       { id: 'cursor-cloud', name: 'Cursor Cloud', place: "Cursor's cloud", kind: 'coding', connected: false, connect: expect.stringContaining('add-key Cursor') },
     ])
     expect(await service.requests.cloud_agents!({}, { local: false, owner: false })).toEqual({ error: 'OWNER_REQUIRED' })
+  })
+})
+
+describe('the saved list', () => {
+  const file = (): string => join(dataDir, 'cloud', 'harnesses.json')
+  const create = (service: ReturnType<typeof start>) => service.port.create({ engine: 'devin-cloud', prompt: 'fix it', repository: 'acme/api' })
+
+  it('the save goes through a temporary file renamed onto the target', async () => {
+    const service = start({ 'devin-cloud': maker() })
+    fsCalls.length = 0
+    await create(service)
+    const onto = fsCalls.filter(c => c.path === file())
+    expect(onto.length).toBeGreaterThan(0)
+    expect(onto.every(c => c.call === 'renameSync' && dirname(String(c.from)) === dirname(file()))).toBe(true)
+    expect(JSON.parse(readFileSync(file(), 'utf8')).harnesses).toHaveLength(1)
+    service.stop()
+  })
+
+  it('a file at the old temporary name is left alone', async () => {
+    mkdirSync(join(dataDir, 'cloud'), { recursive: true })
+    const old = `${file()}.${process.pid}.tmp`
+    writeFileSync(old, 'another writer')
+    const service = start({ 'devin-cloud': maker() })
+    await create(service)
+    expect(readFileSync(old, 'utf8')).toBe('another writer')
+    expect(JSON.parse(readFileSync(file(), 'utf8')).harnesses).toHaveLength(1)
+    service.stop()
+  })
+
+  it('a torn harnesses.json is set aside, not written over', async () => {
+    mkdirSync(join(dataDir, 'cloud'), { recursive: true })
+    writeFileSync(file(), '{"')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const service = start({ 'devin-cloud': maker() })
+    await create(service)
+    expect(readFileSync(`${file()}.unreadable`, 'utf8')).toBe('{"')
+    expect(JSON.parse(readFileSync(file(), 'utf8')).harnesses).toHaveLength(1)
+    expect(warn).toHaveBeenCalledWith('[state] harnesses.json could not be read (not valid JSON); kept as harnesses.json.unreadable, starting empty.')
+    service.stop()
   })
 })
