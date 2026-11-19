@@ -353,46 +353,46 @@ export async function registryFileLock<T>(directory: string, deadline: RegistryW
   check()
   const lock = join(directory, 'registry.json.lock')
   const ownerFile = join(lock, 'owner.json')
-  for (;;) {
-    check()
-    const token = randomUUID()
-    let created = false, entered = false
-    let identity: { ino: number; dev: number } | undefined
-    const checkOwner = () => {
-      deadline.check()
-      const stat = identity && lockNow(lock, identity)
-      const saved = readOwnerNow(ownerFile).owner
-      if (!stat || saved?.token !== token || saved.pid !== process.pid) {
-        throw new RegistryPersistenceUnavailable('registry lock ownership changed')
-      }
+  const token = randomUUID()
+  let created = false, entered = false
+  let identity: { ino: number; dev: number } | undefined
+  const checkOwner = () => {
+    deadline.check()
+    const stat = identity && lockNow(lock, identity)
+    const saved = readOwnerNow(ownerFile).owner
+    if (!stat || saved?.token !== token || saved.pid !== process.pid) {
+      throw new RegistryPersistenceUnavailable('registry lock ownership changed')
     }
-    const removeOwned = async () => {
-      if (!identity) return
-      try {
-        const stat = await fs.lstat(lock)
-        if (stat.ino !== identity.ino || stat.dev !== identity.dev) return
-        const owner = await readOwner(ownerFile)
-        if (owner?.token === token && owner.pid === process.pid) removeLockNow(lock, identity, owner)
-      } catch (error) { console.warn(`[registry] lock cleanup refused an unsafe owner · ${errorKind(error)}`) }
-    }
-    // Built aside with its owner in it, then renamed into place. Made with mkdir and filled after, a core killed in
-    // between left a lock with no owner, which the next core waited 5 s for, past its 2 s budget: master.e2e.ts on
-    // Linux CI (run 44406838335, shard 7).
-    const temporary = `${lock}.${process.pid}.${randomUUID()}.tmp`
-    let built = false
+  }
+  const removeOwned = async () => {
+    if (!identity) return
     try {
-      await fs.mkdir(temporary, { mode: 0o700 })
-      built = true
+      const stat = await fs.lstat(lock)
+      if (stat.ino !== identity.ino || stat.dev !== identity.dev) return
+      const owner = await readOwner(ownerFile)
+      if (owner?.token === token && owner.pid === process.pid) removeLockNow(lock, identity, owner)
+    } catch (error) { console.warn(`[registry] lock cleanup refused an unsafe owner · ${errorKind(error)}`) }
+  }
+  // Built aside with its owner in it, then renamed into place. Made with mkdir and filled after, a core killed in
+  // between left a lock with no owner, which the next core waited 5 s for, past its 2 s budget: master.e2e.ts on
+  // Linux CI (run 44406838335, shard 7). Built once and kept through every busy turn, as each build is an fsync (a full
+  // drive flush on macOS); its owner names no time, so it is as true on the last turn as on the first.
+  const temporary = `${lock}.${process.pid}.${randomUUID()}.tmp`
+  let built = false
+  try {
+    await fs.mkdir(temporary, { mode: 0o700 })
+    built = true
+    check()
+    const handle = await fs.open(join(temporary, 'owner.json'), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600)
+    try {
       check()
-      const handle = await fs.open(join(temporary, 'owner.json'), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600)
-      try {
-        check()
-        await handle.writeFile(JSON.stringify({ pid: process.pid, startMarker: ownGeneration?.startsWith('ps-c:') ? '' : ownGeneration ?? '',
-          generationMarker: ownGeneration ?? '', token }))
-        check()
-        await handle.sync()
-        check()
-      } finally { await handle.close() }
+      await handle.writeFile(JSON.stringify({ pid: process.pid, startMarker: ownGeneration?.startsWith('ps-c:') ? '' : ownGeneration ?? '',
+        generationMarker: ownGeneration ?? '', token }))
+      check()
+      await handle.sync()
+      check()
+    } finally { await handle.close() }
+    for (;;) {
       check()
       // A rename replaces an empty folder on macOS and Linux, so look first: only an older build's folder made since
       // can be replaced, and that build's O_EXCL create of its owner then fails, so it does not enter.
@@ -415,47 +415,47 @@ export async function registryFileLock<T>(directory: string, deadline: RegistryW
           created = false
         }
       }
-    } catch (error) {
-      if (!entered && created) await removeOwned()
-      throw error
-    } finally { if (built) await removeTemporaryLock(temporary) }
-    // Busy: the lock is there, or the publish was refused for a moment. The ownerless rule below stays for the empty
-    // folders older builds can still leave; this one never leaves its lock without its owner.
-    check()
-    let owner: Owner | undefined
-    let since = Date.now()
-    let lockIdentity: { ino: number; dev: number } | undefined
-    try {
-      const stat = await fs.lstat(lock)
-      lockIdentity = stat
-      since = stat.mtimeMs
-      const ownerUid = uid()
-      if (!stat.isDirectory() || stat.isSymbolicLink() || (ownerUid !== null && stat.uid !== ownerUid)
-        || (process.platform !== 'win32' && (stat.mode & 0o777) !== 0o700)) throw new RegistryPersistenceUnavailable('registry lock has unsafe owner, mode, or type')
-      const ownerStat = await fs.lstat(ownerFile)
-      since = Math.max(since, ownerStat.mtimeMs)
-      if (!ownerStat.isFile() || ownerStat.isSymbolicLink() || (ownerUid !== null && ownerStat.uid !== ownerUid)
-        || (process.platform !== 'win32' && (ownerStat.mode & 0o777) !== 0o600)) throw new RegistryPersistenceUnavailable('registry lock owner has unsafe owner, mode, or type')
-      owner = await readOwner(ownerFile) ?? undefined
-    } catch (error) { if (error instanceof RegistryPersistenceUnavailable) throw error }
-    check()
-    if (!(Number(owner?.pid) > 0 && owner?.token)) {
-      if (Date.now() - since > OWNERLESS_MS && lockIdentity) {
-        const current = await fs.lstat(lock).catch(() => null)
-        if (current?.ino === lockIdentity.ino && current.dev === lockIdentity.dev
-          && removeLockNow(lock, lockIdentity)) continue
-      }
-    } else if (!await alive(Number(owner!.pid), lockStartMarker(owner), expires - performance.now())) {
+      // Busy: the lock is there, or the publish was refused for a moment. The ownerless rule below stays for the empty
+      // folders older builds can still leave; this one never leaves its lock without its owner.
       check()
+      let owner: Owner | undefined
+      let since = Date.now()
+      let lockIdentity: { ino: number; dev: number } | undefined
       try {
-        const current = await readOwner(ownerFile)
-        if (current && sameOwner(current, owner!) && !await alive(Number(current.pid), lockStartMarker(current), expires - performance.now())) {
-          check()
-          if (lockIdentity && removeLockNow(lock, lockIdentity, current)) continue
-        }
+        const stat = await fs.lstat(lock)
+        lockIdentity = stat
+        since = stat.mtimeMs
+        const ownerUid = uid()
+        if (!stat.isDirectory() || stat.isSymbolicLink() || (ownerUid !== null && stat.uid !== ownerUid)
+          || (process.platform !== 'win32' && (stat.mode & 0o777) !== 0o700)) throw new RegistryPersistenceUnavailable('registry lock has unsafe owner, mode, or type')
+        const ownerStat = await fs.lstat(ownerFile)
+        since = Math.max(since, ownerStat.mtimeMs)
+        if (!ownerStat.isFile() || ownerStat.isSymbolicLink() || (ownerUid !== null && ownerStat.uid !== ownerUid)
+          || (process.platform !== 'win32' && (ownerStat.mode & 0o777) !== 0o600)) throw new RegistryPersistenceUnavailable('registry lock owner has unsafe owner, mode, or type')
+        owner = await readOwner(ownerFile) ?? undefined
       } catch (error) { if (error instanceof RegistryPersistenceUnavailable) throw error }
+      check()
+      if (!(Number(owner?.pid) > 0 && owner?.token)) {
+        if (Date.now() - since > OWNERLESS_MS && lockIdentity) {
+          const current = await fs.lstat(lock).catch(() => null)
+          if (current?.ino === lockIdentity.ino && current.dev === lockIdentity.dev
+            && removeLockNow(lock, lockIdentity)) continue
+        }
+      } else if (!await alive(Number(owner!.pid), lockStartMarker(owner), expires - performance.now())) {
+        check()
+        try {
+          const current = await readOwner(ownerFile)
+          if (current && sameOwner(current, owner!) && !await alive(Number(current.pid), lockStartMarker(current), expires - performance.now())) {
+            check()
+            if (lockIdentity && removeLockNow(lock, lockIdentity, current)) continue
+          }
+        } catch (error) { if (error instanceof RegistryPersistenceUnavailable) throw error }
+      }
+      check()
+      await new Promise(resolve => setTimeout(resolve, Math.min(WAIT_MS, Math.max(1, expires - performance.now()))))
     }
-    check()
-    await new Promise(resolve => setTimeout(resolve, Math.min(WAIT_MS, Math.max(1, expires - performance.now()))))
-  }
+  } catch (error) {
+    if (!entered && created) await removeOwned()
+    throw error
+  } finally { if (built) await removeTemporaryLock(temporary) }
 }
