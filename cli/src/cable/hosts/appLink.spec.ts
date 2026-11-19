@@ -6,15 +6,17 @@ const FAKE: AppLink = { session: /^s[0-9]{1,3}$/, url: (session) => `fake://open
 
 interface Call { file: string; args: string[]; timeoutMs: number }
 
-/** A recording runner that runs nothing, so no spec opens an app: each call answers the next of [codes], then exit 0. */
-function recorder(over: Partial<AppLinkDeps> = {}, codes: Array<number | null> = [], link: AppLink = FAKE) {
+/** A recording runner that runs nothing, so no spec opens an app: each call answers the next of [codes], then exit 0.
+ *  Every tool is on PATH under /fake/bin, and xdg-mime prints [handler] as the scheme's app. */
+function recorder(over: Partial<AppLinkDeps> = {}, codes: Array<number | null> = [], link: AppLink = FAKE, handler = 'fake-app.desktop\n') {
   const calls: Call[] = []
   const deps: AppLinkDeps = {
     run: async (file, args, timeoutMs) => {
       calls.push({ file, args, timeoutMs })
-      return { code: codes.length ? codes.shift()! : 0, stdout: '' }
+      return { code: codes.length ? codes.shift()! : 0, stdout: file.endsWith('/xdg-mime') ? handler : '' }
     },
     platform: 'darwin',
+    onPath: (name) => `/fake/bin/${name}`,
     inFront: () => true,
     ...over,
   }
@@ -50,14 +52,26 @@ function forwarding(answer: boolean) {
 const pane = (id: string) => ({ adapter: 'fake', id })
 const opened = (session: string): Call => ({ file: '/usr/bin/open', args: [`fake://open/${session}`], timeoutMs: 10_000 })
 const BAD = ['', 's1&x=1', '-b', 's1/../s2']
+const asked: Call = { file: '/fake/bin/xdg-mime', args: ['query', 'default', 'x-scheme-handler/fake'], timeoutMs: 10_000 }
+const xdgOpened = (session: string, file = '/fake/bin/xdg-open'): Call => ({ file, args: [`fake://open/${session}`], timeoutMs: 10_000 })
+/** Lets a read that started settle: the recorder answers at once, so every promise it chains has run by the next turn. */
+const settled = () => new Promise((resolve) => setImmediate(resolve))
 
 describe('an app whose session opens by its link', () => {
-  it('canFocus is macOS only; canShow also needs the app in front, asked each time', () => {
-    for (const platform of ['linux', 'win32'] as const) {
-      const { verbs } = recorder({ platform })
-      expect(verbs.canFocus(pane('s1')), platform).toBe(false)
-      expect(verbs.canShow(pane('s1')), platform).toBe(false)
-    }
+  it('canFocus is macOS\'s, and Linux\'s once the scheme\'s app is known; canShow also needs the app in front, asked each time', async () => {
+    let linuxFront = true
+    const linux = recorder({ platform: 'linux', inFront: () => linuxFront })
+    // The first ask starts the read and answers false; a second while it runs starts none.
+    expect(linux.verbs.canFocus(pane('s1'))).toBe(false)
+    expect(linux.verbs.canShow(pane('s1'))).toBe(false)
+    await settled()
+    expect(linux.verbs.canFocus(pane('s1'))).toBe(true)
+    expect(linux.verbs.canShow(pane('s1'))).toBe(true)
+    linuxFront = false
+    expect(linux.verbs.canFocus(pane('s1'))).toBe(true)
+    expect(linux.verbs.canShow(pane('s1'))).toBe(false)
+    expect(linux.calls).toEqual([asked])
+
     let front = true
     const { verbs } = recorder({ inFront: () => front })
     expect(verbs.canFocus(pane('s1'))).toBe(true)
@@ -76,12 +90,6 @@ describe('an app whose session opens by its link', () => {
       const failed = recorder({}, [code])
       expect(await failed.verbs.focus(pane('s1')), String(code)).toBe(false)
       expect(failed.calls).toEqual([opened('s1')])
-    }
-
-    for (const platform of ['linux', 'win32'] as const) {
-      const off = recorder({ platform })
-      expect(await off.verbs.focus(pane('s1')), platform).toBe(false)
-      expect(off.calls).toEqual([])
     }
 
     const forged = recorder()
@@ -116,10 +124,6 @@ describe('an app whose session opens by its link', () => {
     const forged = forwarding(true)
     expect(await recorder({}, [], forged.link).verbs.focus(pane('-b'))).toBe(false)
     expect(forged.forward.runs).toBe(0)
-
-    const linux = forwarding(true)
-    expect(await recorder({ platform: 'linux' }, [], linux.link).verbs.focus(pane('s1'))).toBe(false)
-    expect(linux.forward.runs).toBe(0)
   })
 })
 
@@ -132,7 +136,7 @@ describe('a rest on an app session opened by its link', () => {
     expect(calls).toEqual([opened('s1')])
   })
 
-  it('a rest: ok, failed, and nothing for a bad id or off macOS', async () => {
+  it('a rest: ok, failed, and nothing for a bad id', async () => {
     const { calls, verbs } = recorder()
     expect(await verbs.show(pane('s1'), 'a1')).toBe('ok')
     expect(calls).toEqual([opened('s1')])
@@ -146,12 +150,6 @@ describe('a rest on an app session opened by its link', () => {
     const forged = recorder()
     for (const id of BAD) expect(await forged.verbs.show(pane(id), 'a1'), id).toBe('failed')
     expect(forged.calls).toEqual([])
-
-    for (const platform of ['linux', 'win32'] as const) {
-      const off = recorder({ platform })
-      expect(await off.verbs.show(pane('s1'), 'a1'), platform).toBe('failed')
-      expect(off.calls).toEqual([])
-    }
   })
 
   it('a link still running drops the next rest for that agent, and another agent\'s runs', async () => {
@@ -187,6 +185,87 @@ describe('a rest on an app session opened by its link', () => {
     for (const done of waiting.splice(0)) done()
     expect(await tapFirst).toBe(true)
     expect(await restAfter).toBe('ok')
+  })
+})
+
+describe('a link on Linux', () => {
+  it('on Linux a link opens through xdg-open once its scheme has an app', async () => {
+    const { calls, verbs } = recorder({ platform: 'linux' })
+    expect(await verbs.focus(pane('s1'))).toBe(true)
+    expect(calls).toEqual([asked, xdgOpened('s1')])
+    expect(await verbs.show(pane('s2'), 'a1')).toBe('ok')
+    expect(calls).toEqual([asked, xdgOpened('s1'), xdgOpened('s2')])
+
+    // The bundle is macOS's (open -b): xdg-open takes the URL alone.
+    const bundled = recorder({ platform: 'linux' }, [], { ...FAKE, bundle: 'com.example.fake' })
+    expect(await bundled.verbs.focus(pane('s1'))).toBe(true)
+    expect(bundled.calls).toEqual([asked, xdgOpened('s1')])
+
+    const forged = recorder({ platform: 'linux' })
+    for (const id of BAD) {
+      expect(await forged.verbs.focus(pane(id)), id).toBe(false)
+      expect(await forged.verbs.show(pane(id), 'a1'), id).toBe('failed')
+    }
+    expect(forged.calls).toEqual([])
+  })
+
+  it('reads the scheme\'s app once, and again after an open that failed', async () => {
+    for (const code of [1, null]) {
+      const { calls, verbs } = recorder({ platform: 'linux' }, [0, code])
+      expect(await verbs.focus(pane('s1')), String(code)).toBe(false)
+      expect(await verbs.show(pane('s1'), 'a1')).toBe('ok')
+      expect(await verbs.focus(pane('s2'))).toBe(true)
+      expect(calls).toEqual([asked, xdgOpened('s1'), asked, xdgOpened('s1'), xdgOpened('s2')])
+    }
+
+    const together = recorder({ platform: 'linux' })
+    expect(await Promise.all([together.verbs.focus(pane('s1')), together.verbs.focus(pane('s2'))])).toEqual([true, true])
+    expect(together.calls).toEqual([asked, xdgOpened('s1'), xdgOpened('s2')])
+  })
+
+  it('no app, no xdg-mime, no xdg-open or a failed open answers false, and runs no forward', async () => {
+    const tried = async (label: string, made: (link: AppLink) => ReturnType<typeof recorder>, calls: Call[]) => {
+      const { forward, link } = forwarding(true)
+      const { calls: ran, verbs } = made(link)
+      expect(await verbs.focus(pane('s1')), label).toBe(false)
+      expect(await verbs.show(pane('s1'), 'a1'), label).toBe('failed')
+      expect(forward.runs, label).toBe(0)
+      expect(ran, label).toEqual(calls)
+    }
+    // No app is kept as the read's answer: nothing opens, and nothing is read again.
+    for (const handler of ['', '\n', 'fake-app', 'fake app.desktop', '../fake.desktop', `${'a'.repeat(129)}.desktop`]) {
+      await tried(`printed ${JSON.stringify(handler)}`, (link) => recorder({ platform: 'linux' }, [], link, handler), [asked])
+    }
+    await tried('xdg-mime failed', (link) => recorder({ platform: 'linux' }, [1], link), [asked])
+    await tried('no xdg-mime', (link) => recorder({ platform: 'linux', onPath: (name) => name === 'xdg-mime' ? null : `/fake/bin/${name}` }, [], link), [])
+    await tried('no xdg-open', (link) => recorder({ platform: 'linux', onPath: (name) => name === 'xdg-open' ? null : `/fake/bin/${name}` }, [], link), [asked])
+    for (const code of [1, null]) {
+      await tried(`open ${code}`, (link) => recorder({ platform: 'linux' }, [0, code, 0, code], link), [asked, xdgOpened('s1'), asked, xdgOpened('s1')])
+    }
+  })
+
+  it.each([
+    ['/tmp/e2e/fake-open', '/tmp/e2e/fake-open'],
+    ['', '/fake/bin/xdg-open'],
+    ['fake-open', '/fake/bin/xdg-open'],
+    [undefined, '/fake/bin/xdg-open'],
+  ])('HARNESS_OPEN_BIN %j takes xdg-open\'s place when it is an absolute path', async (bin, file) => {
+    const { calls, verbs } = recorder({ platform: 'linux', bin })
+    expect(await verbs.focus(pane('s1'))).toBe(true)
+    expect(calls).toEqual([asked, xdgOpened('s1', file)])
+  })
+
+  it('Windows runs nothing', async () => {
+    const { forward, link } = forwarding(true)
+    const { calls, verbs } = recorder({ platform: 'win32' }, [], link)
+    expect(verbs.canFocus(pane('s1'))).toBe(false)
+    expect(verbs.canShow(pane('s1'))).toBe(false)
+    expect(await verbs.focus(pane('s1'))).toBe(false)
+    expect(await verbs.show(pane('s1'), 'a1')).toBe('failed')
+    await settled()
+    expect(verbs.canFocus(pane('s1'))).toBe(false)
+    expect(forward.runs).toBe(0)
+    expect(calls).toEqual([])
   })
 })
 
