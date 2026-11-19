@@ -1,82 +1,308 @@
-//! hn's one way to name a folder under the account's ~/.harness. The table here holds only what hn
-//! uses; the full one is in cli/src/config/harnessHome.ts and desktop/lib/core/harness_home.dart.
+//! hn's one way to name a folder Harness keeps: the account's ~/.harness, or on Linux the XDG data and state
+//! folders by the rule below. The table here holds only what hn uses; the full one is in
+//! cli/src/config/harnessHome.ts and desktop/lib/core/harness_home.dart.
 //! The guard below fails on a .harness path built by hand anywhere else in src.
 
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 const HARNESS_DIR: &str = ".harness";
+/// The file in the XDG data root that says Harness lives there. Only the CLI's move, its installers and its first start
+/// write it; hn only reads it.
+const MARKER: &str = ".harness-root";
 
-/// Data is what a person would miss, state what Harness rebuilds. Both are one folder today.
+/// Data is what a person would miss, state what Harness rebuilds. Off Linux both are ~/.harness.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Root { Data, State }
 
-/// What hn builds through the helper: tui (Data), shell-requests (State).
+/// What hn builds through the helper: tui and cli (Data), shell-requests and s, the short socket folders (State).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Entry {
     Tui,
+    // Only Linux finds the daemon's socket through it; elsewhere daemon.rs keeps its own text.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    Cli,
     // Its callers are Unix only: a Windows hn has no Harness shell yet.
     #[cfg_attr(windows, allow(dead_code))]
     ShellRequests,
+    S,
 }
 
 impl Entry {
     pub fn name(self) -> &'static str {
         match self {
             Entry::Tui => "tui",
+            Entry::Cli => "cli",
             Entry::ShellRequests => "shell-requests",
+            Entry::S => "s",
         }
     }
 
     pub fn root(self) -> Root {
         match self {
-            Entry::Tui => Root::Data,
-            Entry::ShellRequests => Root::State,
+            Entry::Tui | Entry::Cli => Root::Data,
+            Entry::ShellRequests | Entry::S => Root::State,
         }
     }
 }
 
-/// `<home>/.harness` for either root, as the callers joined it before. An empty home (HOME unset)
-/// gives today's relative `.harness`.
-pub fn harness_root(home: impl AsRef<Path>, root: Root) -> PathBuf {
+/// What the rule reads of this computer: whether it is Linux, its environment, whether a path exists and whether it
+/// is a file.
+pub struct Look<'a> {
+    pub linux: bool,
+    pub env: &'a dyn Fn(&str) -> Option<OsString>,
+    pub exists: &'a dyn Fn(&Path) -> bool,
+    pub file: &'a dyn Fn(&Path) -> bool,
+}
+
+/// Whether an XDG variable names an absolute folder, by Linux's rule rather than the host's: its value starts with `/`.
+fn linux_absolute(value: &OsStr) -> bool {
+    value.as_encoded_bytes().first() == Some(&b'/')
+}
+
+/// `<base>/harness` for an XDG base folder, or for `<home>/<default>` when the variable is unset, empty or relative.
+fn xdg_root(home: &Path, look: &Look, variable: &str, default: &str) -> PathBuf {
+    let base = (look.env)(variable).filter(|base| linux_absolute(base)).map(PathBuf::from);
+    base.unwrap_or_else(|| home.join(default)).join("harness")
+}
+
+/// The rule every Harness app follows: on Linux the XDG roots, but `~/.harness` for both while it exists and the
+/// XDG data root holds no marker (a home from before the move, or a data root something else made). Off Linux both
+/// are `~/.harness`. An empty home (HOME unset) gives relative folders, as the callers joined them before.
+pub fn harness_root_with(home: &Path, root: Root, look: &Look) -> PathBuf {
+    let legacy = home.join(HARNESS_DIR);
+    if !look.linux {
+        return legacy;
+    }
+    let data = xdg_root(home, look, "XDG_DATA_HOME", ".local/share");
+    if !(look.file)(&data.join(MARKER)) && (look.exists)(&legacy) {
+        return legacy;
+    }
     match root {
-        Root::Data | Root::State => home.as_ref().join(HARNESS_DIR),
+        Root::Data => data,
+        Root::State => xdg_root(home, look, "XDG_STATE_HOME", ".local/state"),
     }
 }
 
-/// `<home>/.harness/<entry>`: `home.join(".harness").join(name)`.
+/// `<its root>/<entry>`, by [harness_root_with].
+pub fn harness_path_with(home: &Path, entry: Entry, look: &Look) -> PathBuf {
+    harness_root_with(home, entry.root(), look).join(entry.name())
+}
+
+/// [harness_path_with] for this process, looked at again on each call so a move is followed.
 pub fn harness_path(home: impl AsRef<Path>, entry: Entry) -> PathBuf {
-    harness_root(home, entry.root()).join(entry.name())
+    let env = |variable: &str| std::env::var_os(variable);
+    let look = Look { linux: cfg!(target_os = "linux"), env: &env, exists: &Path::exists, file: &Path::is_file };
+    harness_path_with(home.as_ref(), entry, &look)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
+
+    fn no_env(_: &str) -> Option<OsString> {
+        panic!("off Linux the rule reads no variable")
+    }
+
+    fn no_folder(_: &Path) -> bool {
+        panic!("off Linux the rule looks at no folder")
+    }
+
+    const OFF_LINUX: Look<'static> = Look { linux: false, env: &no_env, exists: &no_folder, file: &no_folder };
+
+    /// Both roots for the home `/h` on Linux, where only `existing` exist and `env` is the environment.
+    fn linux_roots(env: &[(&str, &str)], existing: &[&str]) -> (PathBuf, PathBuf) {
+        let env = |name: &str| env.iter().find(|(key, _)| *key == name).map(|(_, value)| OsString::from(value));
+        let exists = |path: &Path| existing.iter().any(|folder| Path::new(folder) == path);
+        let look = Look { linux: true, env: &env, exists: &exists, file: &exists };
+        let home = Path::new("/h");
+        (harness_root_with(home, Root::Data, &look), harness_root_with(home, Root::State, &look))
+    }
+
+    fn pair(data: &str, state: &str) -> (PathBuf, PathBuf) {
+        (PathBuf::from(data), PathBuf::from(state))
+    }
+
+    const XDG: (&str, &str) = ("/h/.local/share/harness", "/h/.local/state/harness");
+    const LEGACY: (&str, &str) = ("/h/.harness", "/h/.harness");
+    const MARKER: &str = "/h/.local/share/harness/.harness-root";
 
     #[test]
-    fn every_entry_is_under_the_homes_harness() {
-        let harness = PathBuf::from("/h").join(".harness");
-        assert_eq!(harness_path("/h", Entry::Tui).as_os_str(), harness.join("tui").as_os_str());
-        assert_eq!(harness_path("/h", Entry::ShellRequests).as_os_str(), harness.join("shell-requests").as_os_str());
-        assert_eq!(Entry::Tui.root(), Root::Data);
-        assert_eq!(Entry::ShellRequests.root(), Root::State);
+    fn fresh_linux_is_xdg() {
+        assert_eq!(linux_roots(&[], &[]), pair(XDG.0, XDG.1));
     }
 
     #[test]
-    fn both_roots_are_one_folder() {
-        assert_eq!(harness_root("/h", Root::Data), harness_root("/h", Root::State));
-        assert_eq!(harness_root("/h", Root::Data).as_os_str(), PathBuf::from("/h").join(".harness").as_os_str());
+    fn legacy_linux_is_dot_harness() {
+        assert_eq!(linux_roots(&[], &["/h/.harness"]), pair(LEGACY.0, LEGACY.1));
+    }
+
+    #[test]
+    fn the_marked_data_root_wins_over_a_bridge() {
+        assert_eq!(linux_roots(&[], &["/h/.harness", XDG.0, MARKER]), pair(XDG.0, XDG.1));
+    }
+
+    #[test]
+    fn a_data_root_without_the_marker_beside_dot_harness_stays_legacy() {
+        // Desktop's own store, or anything else, made it: it switches nothing.
+        assert_eq!(linux_roots(&[], &["/h/.harness", XDG.0]), pair(LEGACY.0, LEGACY.1));
+    }
+
+    #[test]
+    fn a_data_root_without_the_marker_and_no_dot_harness_is_xdg() {
+        assert_eq!(linux_roots(&[], &[XDG.0]), pair(XDG.0, XDG.1));
+    }
+
+    #[test]
+    fn an_unset_empty_or_relative_variable_is_ignored() {
+        for value in ["", "share"] {
+            let env = [("XDG_DATA_HOME", value), ("XDG_STATE_HOME", value)];
+            assert_eq!(linux_roots(&env, &[]), pair(XDG.0, XDG.1), "{value:?}");
+            assert_eq!(linux_roots(&env, &["/h/.harness", XDG.0, MARKER]), pair(XDG.0, XDG.1), "{value:?}");
+        }
+    }
+
+    #[test]
+    fn a_custom_absolute_variable_is_used() {
+        let env = [("XDG_DATA_HOME", "/d"), ("XDG_STATE_HOME", "/s")];
+        assert_eq!(linux_roots(&env, &[]), pair("/d/harness", "/s/harness"));
+        // The data root the rule looks for is the variable's, not the default.
+        assert_eq!(linux_roots(&env, &["/h/.harness", XDG.0, MARKER]), pair(LEGACY.0, LEGACY.1));
+        let custom = ["/h/.harness", "/d/harness", "/d/harness/.harness-root"];
+        assert_eq!(linux_roots(&env, &custom), pair("/d/harness", "/s/harness"));
+    }
+
+    #[test]
+    fn a_linux_value_is_absolute_by_its_leading_slash_on_any_host() {
+        // A Windows host would call `/d` relative and `C:\d` absolute; Linux reads neither that way.
+        assert!(linux_absolute(OsStr::new("/d")));
+        for value in ["", "d", "\\d", "C:\\d"] {
+            assert!(!linux_absolute(OsStr::new(value)), "{value:?}");
+        }
+    }
+
+    #[test]
+    fn a_variable_with_a_trailing_slash_names_the_same_folder() {
+        // As text: a PathBuf compares by its parts, so it would let `/d//harness` pass.
+        let (data, state) = linux_roots(&[("XDG_DATA_HOME", "/d/"), ("XDG_STATE_HOME", "/s/")], &[]);
+        assert_eq!((data.to_str().unwrap(), state.to_str().unwrap()), ("/d/harness", "/s/harness"));
+    }
+
+    #[test]
+    fn off_linux_the_rule_is_not_run() {
+        for root in [Root::Data, Root::State] {
+            assert_eq!(harness_root_with(Path::new("/h"), root, &OFF_LINUX), PathBuf::from("/h").join(".harness"));
+        }
+    }
+
+    #[test]
+    fn every_entry_is_under_its_root() {
+        let fresh_linux = Look { linux: true, env: &|_| None, exists: &|_| false, file: &|_| false };
+        let entries = [
+            (Entry::Tui, "/h/.harness/tui", "/h/.local/share/harness/tui"),
+            (Entry::Cli, "/h/.harness/cli", "/h/.local/share/harness/cli"),
+            (Entry::ShellRequests, "/h/.harness/shell-requests", "/h/.local/state/harness/shell-requests"),
+            (Entry::S, "/h/.harness/s", "/h/.local/state/harness/s"),
+        ];
+        for (entry, off_linux, linux) in entries {
+            assert_eq!(harness_path_with(Path::new("/h"), entry, &OFF_LINUX), PathBuf::from(off_linux));
+            assert_eq!(harness_path_with(Path::new("/h"), entry, &fresh_linux), PathBuf::from(linux));
+        }
     }
 
     #[test]
     fn an_empty_home() {
-        // HOME unset: callers read "" and get today's relative .harness/…
-        assert_eq!(harness_path("", Entry::Tui).as_os_str(), PathBuf::from("").join(".harness").join("tui").as_os_str());
+        // HOME unset: callers read "" and, off Linux, get today's relative .harness/…
+        assert_eq!(harness_root_with(Path::new(""), Root::Data, &OFF_LINUX).as_os_str(), PathBuf::from(".harness").as_os_str());
+    }
+
+    /// `_hn_state_root` as shell_integration.sh defines it between its markers, run by `sh` for `home` and `env`.
+    #[cfg(unix)]
+    fn shell_state_root(uname: &str, home: &Path, env: &[(&str, &str)]) -> String {
+        let script = include_str!("shell_integration.sh");
+        let start = script.find("# >>> harness state root\n").expect("the start marker");
+        let end = script.find("# <<< harness state root\n").expect("the end marker");
+        // A `uname` first on PATH stands in for the command, so both branches run on any computer.
+        let bin = home.join(format!("bin-{uname}"));
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("uname"), format!("#!/bin/sh\necho {uname}\n")).unwrap();
+        let executable = <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755);
+        std::fs::set_permissions(bin.join("uname"), executable).unwrap();
+        let text = format!("{}_hn_state_root", &script[start..end]);
+        let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default());
+        let mut sh = std::process::Command::new("sh");
+        sh.arg("-c").arg(text).env("HOME", home).env("PATH", path).env_remove("XDG_DATA_HOME").env_remove("XDG_STATE_HOME");
+        let out = sh.envs(env.iter().copied()).output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8(out.stdout).unwrap().trim_end_matches('\n').to_string()
+    }
+
+    /// The state root tests/harness_home.py lays the fixtures out in for `home` and `env`, on this computer.
+    #[cfg(unix)]
+    fn fixture_state_root(home: &Path, env: &[(&str, &str)]) -> String {
+        let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/harness_home.py");
+        let mut python = std::process::Command::new("python3");
+        python.arg(script).arg(home).arg("shell-requests").env_remove("XDG_DATA_HOME").env_remove("XDG_STATE_HOME");
+        let out = python.envs(env.iter().copied()).output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let entry = String::from_utf8(out.stdout).unwrap();
+        entry.trim_end_matches('\n').strip_suffix("/shell-requests").expect("the entry under its root").to_string()
+    }
+
+    // Compared as text: a PathBuf compares by its parts, so `a//b` would pass for `a/b`.
+    #[cfg(unix)]
+    #[test]
+    fn the_shell_function_and_the_fixtures_give_the_same_folder() {
+        let home = std::env::temp_dir().join(format!("hn-home-{}", uuid::Uuid::new_v4()));
+        let custom = home.join("xdg");
+        let (custom_data, custom_state) = (custom.join("data"), custom.join("state"));
+        let custom_env = [("XDG_DATA_HOME", custom_data.to_str().unwrap()), ("XDG_STATE_HOME", custom_state.to_str().unwrap())];
+        let (slashed_data, slashed_state) = (format!("{}/", custom_data.display()), format!("{}/", custom_state.display()));
+        let slashed_env = [("XDG_DATA_HOME", slashed_data.as_str()), ("XDG_STATE_HOME", slashed_state.as_str())];
+        let envs: [&[(&str, &str)]; 4] = [&[], &[("XDG_DATA_HOME", ""), ("XDG_STATE_HOME", "share")], &custom_env, &slashed_env];
+        // Fresh, legacy, each data root beside it unmarked, marked by a folder (no marker), then marked.
+        let (data, custom_root) = (home.join(".local/share/harness"), custom_data.join("harness"));
+        let steps = [
+            (home.clone(), false),
+            (home.join(".harness"), false),
+            (data.clone(), false),
+            (custom_root.clone(), false),
+            (data.join(".harness-root"), false),
+            (data.join(".harness-root"), true),
+            (custom_root.join(".harness-root"), true),
+        ];
+        for (step, marker) in steps {
+            if marker {
+                if step.is_dir() {
+                    std::fs::remove_dir(&step).unwrap();
+                }
+                std::fs::write(&step, "1\n").unwrap();
+            } else {
+                std::fs::create_dir_all(&step).unwrap();
+            }
+            for env in envs {
+                let read = |name: &str| env.iter().find(|(key, _)| *key == name).map(|(_, value)| OsString::from(value));
+                for (uname, linux) in [("Linux", true), ("Darwin", false)] {
+                    let look = Look { linux, env: &read, exists: &Path::exists, file: &Path::is_file };
+                    let rust = harness_root_with(&home, Root::State, &look);
+                    let rust = rust.to_str().unwrap();
+                    let at = format!("{uname} {env:?} with {}", step.display());
+                    assert_eq!(shell_state_root(uname, &home, env), rust, "the shell: {at}");
+                    // The fixtures follow the platform they run on.
+                    if linux == cfg!(target_os = "linux") {
+                        assert_eq!(fixture_state_root(&home, env), rust, "the fixtures: {at}");
+                    }
+                }
+            }
+        }
+        std::fs::remove_dir_all(&home).unwrap();
     }
 
     /// A hit the guard keeps on purpose: its file, the text it matched, and why. Each excuses exactly one hit.
     const ALLOWED: &[(&str, &str, &str)] = &[
-        ("shell_integration.sh", "$HOME/.harness", "sourced by a shell, which cannot call the helper"),
-        ("daemon.rs", "\".harness/cli/data\"", "joined in one piece its Windows text is today's …\\.harness/cli/data; PR 2 moves it"),
+        ("shell_integration.sh", "$HOME/.harness", "_hn_state_root: the rule for a shell, which cannot call the helper"),
+        ("daemon.rs", "\".harness/cli/data\"", "off Linux, joined in one piece so its Windows text stays …\\.harness/cli/data"),
     ];
 
     // The guard: no home `.harness` path built by hand in src but this file. Each Rust crate's harness_home.rs holds

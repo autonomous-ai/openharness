@@ -24,7 +24,10 @@
  * it, then what it leaves or what to do.
  */
 import { posix, win32 } from 'node:path'
+import { legacyHarnessHome } from '../../config/harnessHome.js'
 import type { HookFileRemoval } from '../../engines/kit/hookRemovalOutcome.js'
+import { BRIDGE_FILE, type BridgeRecord } from '../../homeMove/bridge.js'
+import { OWN_FILES } from '../../homeMove/plan.js'
 import type { SpawnLockOwner, SpawnLockPurpose } from '../daemonSpawnLock.js'
 import type { AgentsStopped } from './agents.js'
 import type { PtyHostEnd } from './ptyHosts.js'
@@ -116,7 +119,7 @@ export interface UninstallDeps {
   platform: NodeJS.Platform
   cwd: string
   home: string
-  /** Harness's roots in this home, the data root first (config/harnessHome.ts harnessRoots): today one, ~/.harness. */
+  /** Harness's roots in this home, the data root first (config/harnessHome.ts harnessRoots): ~/.harness, or Linux's two XDG roots. */
   roots: readonly string[]
   /** Harness's bin folder (harnessPath('bin')): on Windows the PATH entry the uninstall removes. */
   binDir: string
@@ -150,6 +153,18 @@ export interface UninstallDeps {
   removePathEntry(): PathStep
   listEntries(dir: string): RootEntry[]
   exists(path: string): boolean
+  /**
+   * Linux, where Harness moves from ~/.harness to the XDG roots (homeMove/): the move's lock, ~/.harness.move-lock
+   * whether or not the move ran (lock.ts moveLockPath); the bridge it leaves at ~/.harness, by its record in the state
+   * root (bridge.ts readBridge and removeBridge: each link goes, never what it points to); and what removes a file or
+   * folder of the move's, a link as a link. Null on macOS and Windows, where nothing moves.
+   */
+  move: {
+    lock: string
+    readBridge(stateRoot: string): BridgeRecord | null
+    removeBridge(bridge: BridgeRecord, stateRoot: string): 'removed' | 'left'
+    remove(path: string): void
+  } | null
   /** removal.ts checkRemovable: throws RemovalRefused for a plan removeNow or the last step would refuse. */
   checkRemovable(plan: RemovalPlan): void
   /** Throws RemovalRefused, removing nothing, on a plan it will not carry out. */
@@ -171,6 +186,8 @@ function inside(root: string, path: string, windows: boolean): boolean {
 }
 
 const plural = (n: number, word: string, many = `${word}s`) => `${n} ${n === 1 ? word : many}`
+/** The roots as one phrase: one root as today, Linux's two as both. */
+const rootsNamed = (deps: UninstallDeps): string => deps.roots.map((root) => deps.tildify(root)).join(' and ')
 const message = (error: unknown): string => (error instanceof Error ? error.message : String(error))
 /** A sentence ending in a full stop, without it: the report's lines are clauses. */
 const clause = (text: string): string => text.trim().replace(/\.$/, '')
@@ -192,9 +209,9 @@ function whatItDoes(deps: UninstallDeps, daemon: number | null, keepData: boolea
     deps.platform === 'win32'
       ? `  · removes ${deps.tildify(deps.binDir)} from your PATH`
       : '  · removes the harness and hn commands, and the PATH line the installer added',
-    ...deps.roots.map((root) => (keepData
-      ? `  · deletes the program in ${deps.tildify(root)}, and keeps your sign-in, this computer's identity, history and settings there`
-      : `  · deletes ${deps.tildify(root)}: your sign-in, this computer's identity, history and settings (--keep-data keeps them)`)),
+    keepData
+      ? `  · deletes the program in ${rootsNamed(deps)}, and keeps your sign-in, this computer's identity, history and settings there`
+      : `  · deletes ${rootsNamed(deps)}: your sign-in, this computer's identity, history and settings (--keep-data keeps them)`,
     '',
   ]
 }
@@ -306,6 +323,28 @@ function removeFiles(deps: UninstallDeps, dir: string, keepData: boolean, proble
     deps.out(`· kept the Harness desktop app's own settings in ${root}: the app sets Harness up again when it starts. Remove the app to remove them.`)
   }
   return true
+}
+
+/**
+ * Linux: what moving Harness to the XDG roots left, whatever --keep-data keeps, as no later install reads it: the bridge
+ * at ~/.harness, by its record; then that record, the move's own, and the move's lock.
+ */
+function removeMoved(deps: UninstallDeps, move: NonNullable<UninstallDeps['move']>, problems: string[]): void {
+  // The data root comes first, so the last root holds the state.
+  const state = deps.roots[deps.roots.length - 1]
+  const bridged = deps.tildify(legacyHarnessHome(deps.home, deps.platform))
+  try {
+    const bridge = move.readBridge(state)
+    // The folder it names is the one removeBridge empties: only ~/.harness is the move's (services/homeBridge.ts refuses the same).
+    if (bridge && bridge.oldHome !== legacyHarnessHome(deps.home, 'linux')) problems.push(`${deps.tildify(posix.join(state, BRIDGE_FILE))} names a folder other than ${bridged}: nothing in that folder was removed`)
+    else if (bridge && move.removeBridge(bridge, state) === 'removed') deps.out(`✓ removed ${bridged}, which held only links`)
+    else if (bridge) problems.push(`${bridged} is still there: something in it is not Harness's. Look in it, then delete it yourself`)
+  } catch (error) {
+    problems.push(`could not remove ${bridged}, which links to Harness's folders (${message(error)}): delete it yourself`)
+  }
+  for (const path of [posix.join(state, BRIDGE_FILE), posix.join(state, OWN_FILES.record), move.lock]) {
+    try { move.remove(path) } catch (error) { problems.push(`could not remove ${deps.tildify(path)} (${message(error)}): delete it yourself`) }
+  }
 }
 
 /**
@@ -436,12 +475,14 @@ async function removeHarness(deps: UninstallDeps, daemon: number | null, keepDat
   await step(problems, (detail) => `Harness could not take itself off your PATH (${detail}): remove its entry yourself`,
     () => reportPath(deps, deps.removePathEntry(), problems))
 
+  // Before the roots' files: the bridge's record is in the state root, which they take.
+  if (deps.move) removeMoved(deps, deps.move, problems)
+
   // Every root, even after one that failed: the summary then lists what each left.
   const filesDone = deps.roots.map((root) => removeFiles(deps, root, keepData, problems, handover)).every(Boolean)
   if (!keepData) {
-    const root = deps.tildify(deps.roots[0])
     for (const dir of [deps.dataDir, deps.authDir]) {
-      if (!deps.roots.some((each) => inside(each, dir, windows)) && deps.exists(dir)) deps.out(`· left ${deps.tildify(dir)}: it is outside ${root} (ADAPTER_DATA_DIR or HARNESS_AUTH_DIR names it); delete it yourself if it is Harness's`)
+      if (!deps.roots.some((each) => inside(each, dir, windows)) && deps.exists(dir)) deps.out(`· left ${deps.tildify(dir)}: it is outside ${rootsNamed(deps)} (ADAPTER_DATA_DIR or HARNESS_AUTH_DIR names it); delete it yourself if it is Harness's`)
     }
   }
   // A note about what is not Harness's: nothing to report when it cannot be said.

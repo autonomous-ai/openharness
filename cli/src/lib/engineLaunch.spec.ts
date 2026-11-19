@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { constants, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
+import { harnessPathText } from '../config/harnessHome.js'
 import {
   AGENT_NAME_RE,
   BYPASS_PERMISSION_FLAGS,
@@ -1702,7 +1703,9 @@ describe('buildEngineLaunchArgv with installIfMissing', () => {
     const friendly = (install: EngineInstallRecipe, firstPrompt?: string): string =>
       buildEngineLaunchArgv('opencode', { installIfMissing: install, ...(firstPrompt ? { firstPrompt } : {}) }, '/bin/zsh', process.execPath)[4]
     const run = (paneScript: string) => runPaneScript(paneScript, 'harness-no-such-engine', { ...process.env, HOME: home })
-    const log = () => readFileSync(join(home, '.harness', 'logs', 'install-opencode.log'), 'utf8')
+    // Where the script's `$HOME/…` lands with HOME set to [home]: the logs folder the suite's own home resolves to.
+    const logFile = () => `${harnessPathText('logs', home)}/install-opencode.log`
+    const log = () => readFileSync(logFile(), 'utf8')
 
     it('shows what is happening without the installer, and keeps the installer\'s output in the log', async () => {
       const result = await run(friendly(recipe("printf 'npm notice New major version of npm available!\\n'")))
@@ -1724,8 +1727,32 @@ describe('buildEngineLaunchArgv with installIfMissing', () => {
       expect(result).toMatchObject({ code: 1, ranEngine: false })
       expect(result.stdout).toContain('OpenCode could not be installed.')
       expect(result.stdout).toContain('E404 not found: fixture')
-      expect(result.stdout).toContain(`Full details: ${join(home, '.harness', 'logs', 'install-opencode.log')}`)
+      expect(result.stdout).toContain(`Full details: ${logFile()}`)
       expect(result.stdout).not.toContain('The command is above')
+    })
+
+    // Moved: the data root is in place with its marker, and ~/.harness is the bridge left for what started before the move.
+    it('the prelude names the state root on a moved Linux home', () => {
+      for (const folder of [['.local', 'share', 'harness'], ['.harness']]) mkdirSync(join(home, ...folder), { recursive: true })
+      writeFileSync(join(home, '.local', 'share', 'harness', '.harness-root'), '1\n')
+      const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE }
+      const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+      process.env.HOME = process.env.USERPROFILE = home
+      Object.defineProperty(process, 'platform', { ...platform, value: 'linux' })
+      try {
+        // Linux's zsh sources the script from a one-time file.
+        const paneScript = launchScriptOf(buildEngineLaunchArgv('opencode', { installIfMissing: recipe('true') }, '/bin/zsh', process.execPath))
+        expect(paneScript).toContain('harness_install_log="$HOME/.local/state/harness/logs/install-opencode.log"')
+        expect(paneScript).toContain('mkdir -p "$HOME/.local/state/harness/logs"')
+        expect(paneScript).toContain('harness_dl_pid=$(cat "$HOME/.local/state/harness/run/downloading-$1" 2>/dev/null)')
+        expect(paneScript).not.toContain('$HOME/.harness')
+      } finally {
+        Object.defineProperty(process, 'platform', platform)
+        for (const [name, value] of Object.entries(saved)) {
+          if (value === undefined) delete process.env[name]
+          else process.env[name] = value
+        }
+      }
     })
 
     it('runs the engine after an install that put it in place', async () => {

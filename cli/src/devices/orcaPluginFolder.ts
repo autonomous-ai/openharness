@@ -1,6 +1,6 @@
 /**
  * The folder Orca installs Harness Device's plugin from (`orca plugin install <folder>`) and copies again at each
- * `orca plugin update`: the plugin's files `cli.js` carries, written in the home's .harness by the `harness device orca`
+ * `orca plugin update`: the plugin's files `cli.js` carries, written in Harness's data root by the `harness device orca`
  * command's own process. Orca must never read half a folder, after a crash or with two commands at once (the app's
  * `status` beside a person's `connect`), so a write goes whole into a folder beside it and is renamed into place.
  *
@@ -26,7 +26,7 @@ export function ensureOrcaPluginFolder(folder: string, files: Readonly<Record<st
   try {
     const tree = treeOf(files)
     if (!tree) return { failed: 'EINVAL' }
-    // The home's .harness, which a CLI run with its own data folder (ADAPTER_DATA_DIR) may not have made yet.
+    // Harness's data root, which a CLI run with its own data folder (ADAPTER_DATA_DIR) may not have made yet.
     mkdirSync(dirname(folder), { recursive: true, mode: 0o700 })
     recover(folder)
     if (same(folder, tree)) return 'same'

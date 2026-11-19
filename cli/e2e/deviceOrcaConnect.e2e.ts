@@ -1,7 +1,7 @@
 /**
  * `harness device orca status` and `connect` from the built `cli.js` (docs/plans/2026-11-18-connect-orca-design.md),
  * run as the Harness app runs them, against a fake `orca` (testing/fakeOrcaCli.ts):
- * - the build's own plugin is written into the home's .harness, private, at the build's version, before Orca is asked;
+ * - the build's own plugin is written into Harness's data root, private, at the build's version, before Orca is asked;
  * - `status` follows what Orca lists: `offer`, `current`, `behind`, `off`, and `absent` for an Orca that is not running;
  * - `connect` prints the access Orca lists and passes no fingerprint; only `connect --approve` installs, and records it;
  * - a plugin `behind` is updated, and one the person removed is never installed again.
@@ -15,6 +15,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } 
 import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { harnessPath, thisComputer } from '../src/config/harnessHome.js'
 import { fakeOrcaCli, type FakeOrcaCli } from '../src/testing/fakeOrcaCli.js'
 import { CLI_ROOT, IsolatedDaemon } from './harness/daemon.js'
 
@@ -81,6 +82,8 @@ describe('harness device orca, from the built CLI', () => {
     pluginKey: KEY, name: 'Harness Device', version, status: 'running', needsReconsent: false, isDev: false,
     source: { kind: 'local-path', reference },
   })
+  /** The plugin's folder where the paths rule puts it for the machine's home and settings, as the command finds it. */
+  const pluginFolder = (d: IsolatedDaemon): string => harnessPath('orca-plugin', d.env.HOME!, process.platform, thisComputer(d.env))
   const record = (d: IsolatedDaemon): Record<string, unknown> => {
     const file = join(d.dataDir, 'dial-skill.json')
     return existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown> : {}
@@ -89,7 +92,7 @@ describe('harness device orca, from the built CLI', () => {
   it('offers the plugin, shows what Orca lists, installs it only with the fingerprint, then follows the list', async () => {
     const { d, orca, harness } = await machine()
     running(orca)
-    const folder = join(d.env.HOME!, '.harness', 'orca-plugin')
+    const folder = pluginFolder(d)
 
     expect(await harness('device', 'orca', 'status', '--json')).toEqual({ code: 0, out: '{"orca":"offer"}\n', err: '' })
     expect(orca.calls()[0]).toBe('status --json')
@@ -152,6 +155,6 @@ describe('harness device orca, from the built CLI', () => {
     orca.answer('status', { id: 'req-1', ok: true, result: { app: { running: false }, runtime: { reachable: false } } })
     expect(await harness('device', 'orca', 'status', '--json')).toEqual({ code: 0, out: '{"orca":"absent"}\n', err: '' })
     expect(orca.calls()).toEqual(['status --json'])
-    expect(existsSync(join(d.env.HOME!, '.harness', 'orca-plugin'))).toBe(false)
+    expect(existsSync(pluginFolder(d))).toBe(false)
   })
 })

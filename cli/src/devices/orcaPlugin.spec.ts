@@ -237,15 +237,21 @@ describe('orcaStatus', () => {
     expect(said).toEqual([])
   })
 
-  it('the entry names the folder through a link', async () => {
+  it('the folder handed through a link is current: Orca records the real path it was handed', async () => {
     const { root, deps, folder } = setup()
     const link = join(root, 'link')
     symlinkSync(deps.dataDir, link)
-    up([entry(join(link, 'orca-plugin'))])
-    expect(await orcaStatus(deps)).toEqual({ orca: 'current' })
-    // And the other way: the folder handed through the link, Orca recording its real path.
     up([entry(folder)])
     expect(await orcaStatus({ ...deps, folder: join(link, 'orca-plugin') })).toEqual({ orca: 'current' })
+  })
+
+  it('an entry that names the folder through a link is behind: Orca updates from the path it recorded', async () => {
+    // A Linux computer whose files moved: Orca recorded ~/.harness/orca-plugin, now the bridge's link to the folder.
+    const { root, deps, folder } = setup()
+    const old = join(root, 'orca-plugin')
+    symlinkSync(folder, old)
+    up([entry(old)])
+    expect(await orcaStatus(deps)).toEqual({ orca: 'behind' })
   })
 
   it.skipIf(process.getuid?.() === 0)('a record that cannot be read', async () => {
@@ -510,6 +516,16 @@ describe('connect', () => {
   it('a hand install from another folder is installed from ours', async () => {
     const { deps, folder, calls } = setup()
     up([entry('/checkout/plugins/harness-device-orca')])
+    orca.answer('plugin install', approval('approval_required'), 3)
+    expect(await orcaConnect(deps)).toMatchObject({ connect: 'approve', update: true })
+    expect(calls().slice(3)).toEqual([`plugin install ${folder} --json`])
+  })
+
+  it("an install from the folder's old place is installed from the folder, never updated through the link", async () => {
+    const { root, deps, folder, calls } = setup()
+    const old = join(root, 'orca-plugin')
+    symlinkSync(folder, old)
+    up([entry(old, { version: '1.2.2' })])
     orca.answer('plugin install', approval('approval_required'), 3)
     expect(await orcaConnect(deps)).toMatchObject({ connect: 'approve', update: true })
     expect(calls().slice(3)).toEqual([`plugin install ${folder} --json`])

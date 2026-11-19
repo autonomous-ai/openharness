@@ -1,4 +1,5 @@
 import type { ChildProcess } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type AddressInfo, type Server } from 'node:net'
@@ -240,6 +241,25 @@ async function lookupProxy(answer: Record<string, unknown> = { status: 'success'
   await new Promise<void>(done => server.listen(0, '127.0.0.1', done))
   return (server.address() as AddressInfo).port
 }
+
+describe('the daemon\'s label on its containers', () => {
+  const labelOf = (path: string) => createHash('sha256').update(path).digest('hex').slice(0, 16)
+  const moved = { env: {}, exists: (path: string) => path === '/h/.local/share/harness', isFile: (path: string) => path === '/h/.local/share/harness/.harness-root' }
+  const notMoved = { env: {}, exists: (path: string) => path === '/h/.harness', isFile: () => false }
+
+  it('the label is the folder\'s old spelling when the data folder is the default one under the XDG roots', () => {
+    expect(daemonIdOf('/h/.local/share/harness/cli/data', '/h', 'linux', moved)).toBe(labelOf('/h/.harness/cli/data'))
+  })
+
+  it('a data folder set by ADAPTER_DATA_DIR labels as given', () => {
+    expect(daemonIdOf('/srv/harness-data', '/h', 'linux', moved)).toBe(labelOf('/srv/harness-data'))
+  })
+
+  it('macOS and a legacy home label as before', () => {
+    expect(daemonIdOf('/h/.harness/cli/data', '/h', 'darwin', moved)).toBe(labelOf('/h/.harness/cli/data'))
+    expect(daemonIdOf('/h/.harness/cli/data', '/h', 'linux', notMoved)).toBe(labelOf('/h/.harness/cli/data'))
+  })
+})
 
 describe('the agent browser service', () => {
   it('declares its requests and answers each', () => {

@@ -3,15 +3,19 @@ import { existsSync, rmSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { env } from '../../config/env.js'
-import { HARNESS_ENTRIES, harnessPath, harnessRoot, harnessRoots } from '../../config/harnessHome.js'
+import { HARNESS_ENTRIES, harnessPath, harnessRoot, harnessRoots, legacyHarnessHome } from '../../config/harnessHome.js'
 import { openDaemon, whereFor } from '../../agentClient/daemon.js'
+import { readBridge, removeBridge } from '../../homeMove/bridge.js'
+import { moveLockPath } from '../../homeMove/lock.js'
 import { AUTH_DIR } from '../authSession.js'
 import { daemonPort, isAlive, readPid } from '../daemonState.js'
 import { SpawnLockBusyError, withSpawnLock } from '../daemonSpawnLock.js'
 import { stopDaemonProcess } from '../daemonStop.js'
 import { gridCredentialsPath, gridCredentialsExist } from '../gridCredentials.js'
 import { ownedBinEntries } from '../launchers.js'
+import { runtimeShortRoot } from '../localSocket.js'
 import { platformDaemonDeps } from '../platformDaemon.js'
+import { removePath } from '../removePath.js'
 import { runPowershell } from '../windows/powershell.js'
 import { stopEveryAgent } from './agents.js'
 import { labelHookRemoval, lockHolder, UninstallLockBusy, type UninstallDeps } from './command.js'
@@ -120,6 +124,10 @@ export async function uninstallDeps(options: { tildify: (path: string) => string
     },
     listEntries,
     exists: existsSync,
+    // A start takes the move's lock beside ~/.harness before it knows whether it moves (homeMove/lock.ts).
+    move: process.platform === 'linux'
+      ? { lock: moveLockPath(legacyHarnessHome(home, 'linux')), readBridge, removeBridge: (bridge, state) => removeBridge(bridge, state, runtimeShortRoot()), remove: removePath }
+      : null,
     // On Windows with the temp folder the last step runs from, which must not be in the root.
     checkRemovable: (plan) => { checkRemovable(plan, process.platform === 'win32' ? { tempDir: finalRemovalDeps().tempDir } : {}) },
     removeNow: (plan) => removeNow(plan),

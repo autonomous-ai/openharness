@@ -81,10 +81,13 @@ async function daemonUp(port: number, dataDir: string, identity?: () => string):
     && (!identity || status.machineId === identity())
 }
 
-/** Start this user's local service. Signing in is a separate, explicit action. */
-function runSelf(args: string[], port: number, dataDir: string): number {
+/**
+ * Start this user's local service. Signing in is a separate, explicit action. An ADAPTER_DATA_DIR
+ * reaches it only when the person set one: naming the default would pin the daemon to today's root.
+ */
+function runSelf(args: string[], port: number): number {
   const script = process.argv[1]
-  const result = spawnSync(process.execPath, [...process.execArgv, ...(script ? [script] : []), ...args], { stdio: 'inherit', env: { ...process.env, PORT: String(port), ADAPTER_DATA_DIR: dataDir, HARNESS_SELF: '1' } })
+  const result = spawnSync(process.execPath, [...process.execArgv, ...(script ? [script] : []), ...args], { stdio: 'inherit', env: { ...process.env, PORT: String(port), HARNESS_SELF: '1' } })
   return result.status ?? 1
 }
 
@@ -95,7 +98,7 @@ function runSelf(args: string[], port: number, dataDir: string): number {
 async function ensureDaemon(port: number, dataDir: string, identity?: () => string): Promise<boolean> {
   if (await daemonUp(port, dataDir, identity)) return true
   console.log('  Starting the Harness daemon…')
-  if (runSelf(['start'], port, dataDir) !== 0) return false
+  if (runSelf(['start'], port) !== 0) return false
   for (let i = 0; i < 60; i++) {
     if (await daemonUp(port, dataDir, identity)) return true
     await new Promise((resolve) => setTimeout(resolve, 250))
@@ -135,7 +138,7 @@ export async function tuiCommand(
   const result = spawnSync(binary, argv, {
     stdio: 'inherit',
     // How the TUI runs this CLI back (`harness link connect` for a machine it has to link).
-    env: { ...process.env, PORT: String(port ?? opts.port), ADAPTER_DATA_DIR: dataDir, HARNESS_CLI: process.execPath, HARNESS_SELF: '1', HARNESS_CLI_ARGS: JSON.stringify([...process.execArgv, process.argv[1] ?? '']) },
+    env: { ...process.env, PORT: String(port ?? opts.port), HARNESS_CLI: process.execPath, HARNESS_SELF: '1', HARNESS_CLI_ARGS: JSON.stringify([...process.execArgv, process.argv[1] ?? '']) },
   })
   if (result.error) { console.error(`  ✗ Could not start ${binary}: ${result.error.message}`); return 1 }
   return result.status ?? 0

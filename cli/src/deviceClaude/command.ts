@@ -18,7 +18,7 @@
  * the service then leaves alone, before the editor's own uninstall, and `enable` clears the mark before its install
  * (devices/vscodeExtension.ts); `status` is support's. `harness device notify` is an agent's,
  * from the dial skill (devices/notice.ts). `harness device orca status|connect` are the Harness app's, never typed: what
- * Orca's plugin is in Orca, and its install, update or enable, from a folder in the home's .harness that holds what cli.js
+ * Orca's plugin is in Orca, and its install, update or enable, from a folder in Harness's data root that holds what cli.js
  * carries (devices/orcaPlugin.ts); a `connect` Orca answered with success is recorded in dial-skill.json, and Harness
  * offers the plugin no more. This runs only in the `harness` command's own process; nothing the core or a service loads
  * imports this folder.
@@ -57,7 +57,7 @@ export const DEVICE_USAGE = `Harness device (with a dial plugged in, Claude Code
 
 export interface DeviceDeps {
   dataDir: string
-  /** The account's home, whose .harness holds the Orca plugin's folder. */
+  /** The account's home, by which the paths rule finds the Orca plugin's folder in Harness's data root. */
   home: string
   port: number
   platform: NodeJS.Platform
@@ -216,8 +216,8 @@ async function vscodeCommand(editor: VscodeEditor, verb: string, json: boolean, 
 }
 
 /**
- * The Harness app's two words for Orca's plugin. Its folder is the data folder's, beside dial-skill.json: Orca installs
- * from it and copies it again at each update, so it stays put. `--approve` is the one argument that carries consent, the
+ * The Harness app's two words for Orca's plugin. Its folder is in Harness's data root: Orca installs from it and copies
+ * it again at each update. `--approve` is the one argument that carries consent, the
  * fingerprint of the access a person was shown: one off its pattern, a second, or any other argument is `failed` before
  * Orca is looked for. The record is written after Orca's success, as VS Code's mark is; one not saved is said on stderr,
  * and the line stays `done`, since Orca did connect.

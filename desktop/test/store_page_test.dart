@@ -389,6 +389,77 @@ void main() {
       );
     },
   );
+  group('a harness that needs setup', () {
+    const id = 'acme/moved';
+    // As the machine's dsh_list sends it: installed, up to date, and its setup
+    // failed when Harness's folder moved.
+    void seed(_Notifier app, {bool needsSetup = true}) => app.machine(
+      'machine-1',
+      local: true,
+      dsh: [
+        DshEntry.fromJson({
+          'id': id,
+          'name': 'Moved',
+          'engine': 'claude',
+          'installed': true,
+          'updateAvailable': false,
+          'needsSetup': needsSetup,
+        })!,
+      ],
+    );
+
+    Future<void> openPage(WidgetTester tester) async {
+      await tester.enterText(_key('store-search'), 'Moved');
+      await tester.pumpAndSettle();
+      await tester.tap(_key('store-card:$id'));
+      await tester.pumpAndSettle();
+      expect(_key('store-page:$id'), findsOneWidget);
+    }
+
+    Finder says(String text) => find.descendant(
+      of: _key('store-machine:machine-1'),
+      matching: find.text(text),
+    );
+
+    testWidgets('a harness that needs setup says so on its page', (
+      tester,
+    ) async {
+      await _open(tester, seed: seed);
+      await openPage(tester);
+      expect(says('Needs setup'), findsOneWidget);
+      expect(says('Installed'), findsNothing);
+    });
+
+    testWidgets('one that does not still says Installed', (tester) async {
+      await _open(tester, seed: (app) => seed(app, needsSetup: false));
+      await openPage(tester);
+      expect(says('Installed'), findsOneWidget);
+      expect(says('Needs setup'), findsNothing);
+    });
+
+    testWidgets('the Update button sets up again a harness that needs setup', (
+      tester,
+    ) async {
+      final (app, _) = await _open(tester, seed: seed);
+      await openPage(tester);
+      expect(_in('store-primary-action', find.text('Update')), findsOneWidget);
+      await tester.tap(_key('store-primary-action'));
+      await tester.pumpAndSettle();
+      expect(app.updates, [('machine-1', id)]);
+      expect(app.installs, isEmpty);
+      await tester.tap(_key('store-back'));
+      await tester.pumpAndSettle();
+      await tester.enterText(_key('store-search'), 'Moved');
+      await tester.pumpAndSettle();
+      expect(_key('store-card:$id'), findsOneWidget);
+      expect(_in('store-card:$id', find.text('Needs setup')), findsNothing);
+      expect(
+        _in('store-card:$id', find.text('Update available')),
+        findsNothing,
+      );
+    });
+  });
+
   // Real glyph widths: the review dialog's buttons are laid out against Arial,
   // not against Ahem's squares, which overflow a row no person would see.
   setUpAll(loadRealFonts);

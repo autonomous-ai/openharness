@@ -4555,6 +4555,11 @@ class AppNotifier extends ChangeNotifier {
   /// The first workspace on a computer new to Harness opens with agents already in it.
   final FirstArrival firstArrival;
 
+  /// How this app finds Harness's folders: this computer's look, or a test's,
+  /// so a folder a test pins does not depend on the computer running it.
+  @visibleForTesting
+  HomeLook? homeLook;
+
   /// Whether this computer had the Harness CLI before this launch's setup: `~/.harness/cli`
   /// exists. Tests answer no, as on a fresh computer.
   @visibleForTesting
@@ -14888,15 +14893,7 @@ class AppNotifier extends ChangeNotifier {
         for (final a in stateOf(machineId)?.agents ?? const <Agent>[])
           a.claudeHome,
       };
-      final profiles = HarnessHome.of(
-        home,
-        join: separatorJoin('/'),
-      ).path(HarnessEntry.claudeProfiles);
-      var n = 1;
-      while (taken.contains('$profiles/$n')) {
-        n++;
-      }
-      final path = '$profiles/$n';
+      final path = newClaudeAccountFolder(home, taken, look: homeLook);
       // The folder only exists once Claude has signed in there; the machine finds it by itself then.
       final error = await createAgent(
         machineId,
@@ -22401,3 +22398,23 @@ String machineSelectErrorText(String code, String machine) => switch (code) {
 String startupLogLine(Map<String, int> timings) => timings.entries
     .map((step) => '${step.key} after ${step.value} ms')
     .join(', ');
+
+/// The first folder among [home]'s Claude profiles that is not [taken]: where
+/// "Add Claude account" opens a new Claude. [home] is only ever this
+/// computer's, so this computer's look finds the root; [look] is for tests.
+String newClaudeAccountFolder(
+  String home,
+  Set<Object?> taken, {
+  HomeLook? look,
+}) {
+  final profiles = HarnessHome.of(
+    home,
+    join: separatorJoin('/'),
+    look: look,
+  ).path(HarnessEntry.claudeProfiles);
+  var n = 1;
+  while (taken.contains('$profiles/$n')) {
+    n++;
+  }
+  return '$profiles/$n';
+}

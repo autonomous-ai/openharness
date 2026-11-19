@@ -1,9 +1,15 @@
 //! Harness's folders under the person's home, built in one place. The CLI's `config/harnessHome.ts` holds the whole
 //! table; this crate declares only the entries it uses. A test below fails on a home `.harness` path built elsewhere.
 
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 const HARNESS_DIR: &str = ".harness";
+/// Each root's name under its XDG base on Linux.
+const XDG_DIR: &str = "harness";
+/// The file in the XDG data root that says Harness lives there. Only the CLI's move, its installers and its first start
+/// write it; the app only reads it.
+const MARKER: &str = ".harness-root";
 
 /// What the person made or set (data), and what can be built again (state).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,38 +41,174 @@ impl Entry {
     }
 }
 
-/// Both roots are `<home>/.harness` today.
-pub fn harness_root(home: &Path, root: Root) -> PathBuf {
-    match root {
-        Root::Data | Root::State => home.join(HARNESS_DIR),
+/// What the rule reads: whether it runs (Linux), the environment, whether a path is there and whether it is a file.
+pub struct Look<'a> {
+    pub linux: bool,
+    pub env: &'a dyn Fn(&str) -> Option<OsString>,
+    pub exists: &'a dyn Fn(&Path) -> bool,
+    pub file: &'a dyn Fn(&Path) -> bool,
+}
+
+/// Both roots, from one look: two entries a caller pairs never come from two layouts, even while Harness's folder
+/// moves.
+pub struct Roots {
+    data: PathBuf,
+    state: PathBuf,
+}
+
+impl Roots {
+    pub fn root(&self, root: Root) -> &Path {
+        match root {
+            Root::Data => &self.data,
+            Root::State => &self.state,
+        }
+    }
+
+    /// The entry's folder under its root.
+    pub fn path(&self, entry: Entry) -> PathBuf {
+        self.root(entry.root()).join(entry.name())
     }
 }
 
-/// `<home>/.harness/<entry>`.
-pub fn harness_path(home: &Path, entry: Entry) -> PathBuf {
-    harness_root(home, entry.root()).join(entry.name())
+/// On Linux: the XDG roots once the data root holds the marker, else `<home>/.harness` while that exists (not moved
+/// yet), else the XDG roots. The marker alone decides, so the bridge left at `~/.harness` never flips a moved machine
+/// back, and a data root something else made never strands a `~/.harness` one.
+/// Elsewhere both roots are `<home>/.harness`. A caller looks again at each lookup, so a move during the app's life is
+/// followed.
+pub fn harness_roots_with(home: &Path, look: &Look) -> Roots {
+    let legacy = home.join(HARNESS_DIR);
+    if !look.linux {
+        return Roots { data: legacy.clone(), state: legacy };
+    }
+    let data = xdg_root(home, "XDG_DATA_HOME", "share", look);
+    if !(look.file)(&data.join(MARKER)) && (look.exists)(&legacy) {
+        return Roots { data: legacy.clone(), state: legacy };
+    }
+    Roots { data, state: xdg_root(home, "XDG_STATE_HOME", "state", look) }
+}
+
+/// Whether an XDG variable names an absolute folder, by Linux's rule rather than the host's: its value starts with `/`.
+fn linux_absolute(value: &OsStr) -> bool {
+    value.as_encoded_bytes().first() == Some(&b'/')
+}
+
+/// `$<var>/harness` when the variable is an absolute path, else `<home>/.local/<fallback>/harness`.
+fn xdg_root(home: &Path, var: &str, fallback: &str, look: &Look) -> PathBuf {
+    let base = (look.env)(var).filter(|base| linux_absolute(base)).map(PathBuf::from);
+    base.unwrap_or_else(|| home.join(".local").join(fallback)).join(XDG_DIR)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn every_entry_is_under_the_homes_harness() {
-        let home = Path::new("/h");
-        let cli = PathBuf::from("/h").join(".harness").join("cli");
-        let runtime = PathBuf::from("/h").join(".harness").join("runtime");
-        assert_eq!(harness_path(home, Entry::Cli).as_os_str(), cli.as_os_str());
-        assert_eq!(harness_path(home, Entry::Runtime).as_os_str(), runtime.as_os_str());
-        assert_eq!((Entry::Cli.root(), Entry::Runtime.root()), (Root::Data, Root::State));
+    const HOME: &str = "/h";
+
+    fn path(parts: &[&str]) -> PathBuf {
+        parts.iter().fold(PathBuf::from(HOME), |path, part| path.join(part))
+    }
+
+    /// Both roots on Linux, with these variables set and these folders there.
+    fn roots(vars: &[(&str, &str)], there: &[PathBuf]) -> (PathBuf, PathBuf) {
+        let env = |name: &str| vars.iter().find(|(key, _)| *key == name).map(|(_, value)| OsString::from(value));
+        let exists = |path: &Path| there.iter().any(|folder| folder == path);
+        let look = Look { linux: true, env: &env, exists: &exists, file: &exists };
+        let roots = harness_roots_with(Path::new(HOME), &look);
+        (roots.root(Root::Data).to_path_buf(), roots.root(Root::State).to_path_buf())
+    }
+
+    fn xdg() -> (PathBuf, PathBuf) {
+        (path(&[".local", "share", "harness"]), path(&[".local", "state", "harness"]))
     }
 
     #[test]
-    fn both_roots_are_one_folder() {
-        let home = Path::new("/h");
-        let root = PathBuf::from("/h").join(".harness");
-        assert_eq!(harness_root(home, Root::Data).as_os_str(), root.as_os_str());
-        assert_eq!(harness_root(home, Root::State).as_os_str(), root.as_os_str());
+    fn fresh_linux_is_xdg() {
+        assert_eq!(roots(&[], &[]), xdg());
+    }
+
+    #[test]
+    fn legacy_linux_is_dot_harness() {
+        let legacy = path(&[".harness"]);
+        assert_eq!(roots(&[], &[path(&[".harness"])]), (legacy.clone(), legacy));
+    }
+
+    #[test]
+    fn the_marked_data_root_wins_over_a_bridge() {
+        let marker = xdg().0.join(".harness-root");
+        assert_eq!(roots(&[], &[path(&[".harness"]), xdg().0, marker]), xdg());
+    }
+
+    #[test]
+    fn a_data_root_without_the_marker_beside_dot_harness_stays_legacy() {
+        // Desktop's own store, or anything else, made it: it switches nothing.
+        let legacy = path(&[".harness"]);
+        assert_eq!(roots(&[], &[legacy.clone(), xdg().0]), (legacy.clone(), legacy));
+    }
+
+    #[test]
+    fn a_data_root_without_the_marker_and_no_dot_harness_is_xdg() {
+        assert_eq!(roots(&[], &[xdg().0]), xdg());
+    }
+
+    #[test]
+    fn an_unset_empty_or_relative_variable_is_ignored() {
+        let empty = [("XDG_DATA_HOME", ""), ("XDG_STATE_HOME", "")];
+        let relative = [("XDG_DATA_HOME", "data"), ("XDG_STATE_HOME", "state")];
+        assert_eq!(roots(&empty, &[]), xdg());
+        assert_eq!(roots(&relative, &[]), xdg());
+    }
+
+    #[test]
+    fn a_custom_absolute_variable_is_used() {
+        let vars = [("XDG_DATA_HOME", "/d"), ("XDG_STATE_HOME", "/s")];
+        let custom = (PathBuf::from("/d").join("harness"), PathBuf::from("/s").join("harness"));
+        assert_eq!(roots(&vars, &[]), custom);
+        // The custom data root's marker, not the default one's, is what wins over a `~/.harness`.
+        let marked = [path(&[".harness"]), custom.0.clone(), custom.0.join(".harness-root")];
+        assert_eq!(roots(&vars, &marked), custom);
+        let legacy = path(&[".harness"]);
+        let default_marked = [legacy.clone(), xdg().0, xdg().0.join(".harness-root")];
+        assert_eq!(roots(&vars, &default_marked), (legacy.clone(), legacy));
+    }
+
+    #[test]
+    fn a_linux_value_is_absolute_by_its_leading_slash_on_any_host() {
+        // A Windows host would call `/d` relative and `C:\d` absolute; Linux reads neither that way.
+        assert!(linux_absolute(OsStr::new("/d")));
+        for value in ["", "d", "\\d", "C:\\d"] {
+            assert!(!linux_absolute(OsStr::new(value)), "{value:?}");
+        }
+    }
+
+    #[test]
+    fn a_variable_with_a_trailing_slash_names_the_same_folder() {
+        // As text: a PathBuf compares by its parts, so it would let `/d//harness` pass.
+        let (data, state) = roots(&[("XDG_DATA_HOME", "/d/"), ("XDG_STATE_HOME", "/s/")], &[]);
+        assert_eq!((data.to_str().unwrap(), state.to_str().unwrap()), ("/d/harness", "/s/harness"));
+    }
+
+    #[test]
+    fn off_linux_the_rule_is_not_run() {
+        let env = |_: &str| -> Option<OsString> { panic!("read the environment") };
+        let exists = |_: &Path| -> bool { panic!("looked for a folder") };
+        let look = Look { linux: false, env: &env, exists: &exists, file: &exists };
+        let roots = harness_roots_with(Path::new(HOME), &look);
+        let legacy = path(&[".harness"]);
+        assert_eq!(roots.root(Root::Data), legacy);
+        assert_eq!(roots.root(Root::State), legacy);
+        assert_eq!(roots.path(Entry::Cli), legacy.join("cli"));
+        assert_eq!(roots.path(Entry::Runtime), legacy.join("runtime"));
+    }
+
+    #[test]
+    fn the_cli_is_in_data_and_the_runtime_in_state() {
+        let env = |_: &str| None;
+        let exists = |_: &Path| false;
+        let look = Look { linux: true, env: &env, exists: &exists, file: &exists };
+        let roots = harness_roots_with(Path::new(HOME), &look);
+        let (data, state) = xdg();
+        assert_eq!(roots.path(Entry::Cli), data.join("cli"));
+        assert_eq!(roots.path(Entry::Runtime), state.join("runtime"));
     }
 
     /// A hit the guard keeps on purpose: its file, the text it matched, and why. Each excuses exactly one hit.

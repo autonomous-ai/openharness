@@ -303,6 +303,9 @@ beforeAll(async () => {
   delete process.env.CLAUDE_PROJECTS_DIR
   mkdirSync(join(root, 'data'), { recursive: true })
   mkdirSync(join(root, 'runtime'), { recursive: true })
+  // A home Harness ran in before the XDG move (`~/.harness` is in it) while the modules resolve their paths, so the hooks
+  // name `<home>/.harness/…` and the record holds for every platform. The first case's reset empties the home again.
+  mkdirSync(join(root, 'home', '.harness'), { recursive: true })
   // A regression (a home that is not the throwaway one) must fail here, before any installer writes.
   expect(homedir()).toBe(join(root, 'home'))
   vi.resetModules()

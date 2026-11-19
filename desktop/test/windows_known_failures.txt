@@ -117,7 +117,7 @@ test/terminal_panel_links_test.dart::TargetPlatform.macOS remote preview shows p
 test/connection_review_render_test.dart::(setUpAll)
 test/desktop_welcome_composer_test.dart::(setUpAll)
 
-# POSIX-shell-or-installer-fixture (47)
+# POSIX-shell-or-installer-fixture (31)
 # These fixtures exercise POSIX setup/agent recipes, shell/tmux probes or Terminal/apt flows, rather than Windows terminal-host/PowerShell setup.
 test/environment_probe_lifecycle_test.dart::a process that starts after timeout is stopped without updating UI
 test/environment_probe_lifecycle_test.dart::an injected run-only check also has a bounded wait
@@ -129,38 +129,22 @@ test/environment_probe_lifecycle_test.dart::partial UTF-8 in tool output does no
 test/environment_probe_lifecycle_test.dart::retrying a previous verification never reports ready before checking
 test/environment_probe_lifecycle_test.dart::shell timeout is a failed check, and Retry can recover
 test/environment_probe_lifecycle_test.dart::tmux timeout is a failed check, and Retry can recover
-test/environment_provisioner_test.dart::Terminal rechecks show recent output without loading the whole log
 test/environment_provisioner_test.dart::Wayland installs wl-clipboard in-app with passwordless sudo
 test/environment_provisioner_test.dart::Wayland wins when both Linux display variables exist
 test/environment_provisioner_test.dart::X11 with tmux ready still opens Terminal when xclip needs sudo
 test/environment_provisioner_test.dart::a Linux computer that runs tmux, ps and Harness is ready whatever else it lacks
 test/environment_provisioner_test.dart::a Terminal poll trusts live Linux probes when terminal.exit is absent
-test/environment_provisioner_test.dart::a Terminal recheck tolerates a partially written empty result
-test/environment_provisioner_test.dart::a Terminal recheck tolerates invalid UTF-8 in its log
-test/environment_provisioner_test.dart::a Terminal recheck tolerates invalid UTF-8 in its result
-test/environment_provisioner_test.dart::a completed host transaction that still misses clipboard fails without reopening Terminal
 test/environment_provisioner_test.dart::a computer with tmux is ready without Homebrew
-test/environment_provisioner_test.dart::a failed admin Terminal run surfaces its exit code and full log
-test/environment_provisioner_test.dart::a failed in-app tmux install fails the step with the installer as the manual command
 test/environment_provisioner_test.dart::a fully prepared machine passes a fresh read-only launch probe
 test/environment_provisioner_test.dart::a missing ps joins tmux in the one apt transaction
-test/environment_provisioner_test.dart::a running Linux Terminal setup is not opened a second time
-test/environment_provisioner_test.dart::an apt future-release error is reported as system clock skew
 test/environment_provisioner_test.dart::automatic setup installs Harness, then verifies
 test/environment_provisioner_test.dart::automatic setup obtains tmux in-app through the installer, never in Terminal
-test/environment_provisioner_test.dart::curl is added to the transaction only because Harness must be downloaded
 test/environment_provisioner_test.dart::debug desktop checks CLI 0.0.1-dev.7c3d6315c.startup-retry.dirty without replacing a local build
 test/environment_provisioner_test.dart::debug desktop checks CLI 0.2.48 without replacing a local build
-test/environment_provisioner_test.dart::explicit Retry clears the failed Terminal result and opens one new run
-test/environment_provisioner_test.dart::failed apt refresh does not retry with stale indexes
-test/environment_provisioner_test.dart::failed automatic clock sync stops with actionable guidance
-test/environment_provisioner_test.dart::failed background apt falls back to a visible Terminal
 test/environment_provisioner_test.dart::headless Linux does not require an OS clipboard helper
 test/environment_provisioner_test.dart::missing Linux base tools are installed before Harness
 test/environment_provisioner_test.dart::missing tmux and X11 clipboard share one Terminal transaction
 test/environment_provisioner_test.dart::missing tmux opens a real terminal before the CLI installer
-test/environment_provisioner_test.dart::non-apt Linux returns package-manager guidance
-test/environment_provisioner_test.dart::without tmux the plan is one in-app step: the managed download
 test/environment_setup_screen_test.dart::setup details and recovery text have readable contrast in dark
 test/environment_setup_screen_test.dart::setup details and recovery text have readable contrast in light
 test/harness_cli_runner_test.dart::remote-password status invokes cli.js as direct argv and reads its JSON result

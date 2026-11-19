@@ -6,7 +6,10 @@ import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/harness_cli_runner.dart';
+import 'package:harness/core/harness_home.dart';
 import 'package:harness/ws/local_cli_discovery.dart';
+
+import 'support/scratch_home_look.dart';
 
 void main() {
   HttpServer? server;
@@ -25,8 +28,62 @@ void main() {
   test('uses the stable Harness computer id path', () {
     final path = LocalMachineIdentity.defaultComputerIdPath(
       environment: {'HOME': '/Users/tester'},
+      look: HomeLook(
+        linux: false,
+        environment: const {},
+        exists: (path) => throw StateError('looked at $path off Linux'),
+      ),
     );
     expect(path, '/Users/tester/.harness/computer-id');
+  }, skip: Platform.isWindows);
+
+  test('the computer id path reads the XDG variables of the environment it is handed', () {
+    expect(
+      LocalMachineIdentity.defaultComputerIdPath(
+        environment: {'HOME': '/home/t', 'XDG_DATA_HOME': '/x'},
+      ),
+      // Off Linux the rule reads no variable.
+      Platform.isLinux
+          ? '/x/harness/computer-id'
+          : '/home/t/.harness/computer-id',
+    );
+  }, skip: Platform.isWindows);
+
+  group('the computer id by the rule', () {
+    const before = '0123456789abcdef0123456789abcdef';
+    const after = 'fedcba9876543210fedcba9876543210';
+
+    /// This scratch home's real folders, on [linux] or not.
+    HomeLook look({required bool linux}) =>
+        scratchHomeLook(scratch.path, linux: linux);
+
+    void write(String folder, String id) => (File(
+      '$folder/computer-id',
+    )..createSync(recursive: true)).writeAsStringSync('$id\n');
+
+    test('the computer id is read again after the folder moves', () async {
+      write('${scratch.path}/.harness', before);
+      final identity = LocalMachineIdentity(
+        environment: {'HOME': scratch.path},
+        look: look(linux: true),
+      );
+      expect(await identity.computerId(), before);
+      // The move: the data root, with the marker its commit writes.
+      write('${scratch.path}/.local/share/harness', after);
+      File('${scratch.path}/.local/share/harness/.harness-root')
+          .writeAsStringSync('1\n');
+      expect(await identity.computerId(), after);
+    });
+
+    test('on macOS the computer id is under ~/.harness', () async {
+      write('${scratch.path}/.harness', before);
+      write('${scratch.path}/.local/share/harness', after);
+      final identity = LocalMachineIdentity(
+        environment: {'HOME': scratch.path},
+        look: look(linux: false),
+      );
+      expect(await identity.computerId(), before);
+    });
   }, skip: Platform.isWindows);
 
   test('discovers only an exact-computer loopback endpoint', () async {
@@ -630,12 +687,14 @@ void main() {
     var slotOpen = false;
     final discovery = _SupervisionProbe(
       readProbe: () async => running
-          ? LocalCliProbe.ready(LocalCliEndpoint(
-              computerId: computerId,
-              wsUri: Uri.parse('ws://127.0.0.1/api/local-ws'),
-              protocolVersion: localWsProtocolVersion,
-              terminalProtocolVersion: localTerminalProtocolVersion,
-            ))
+          ? LocalCliProbe.ready(
+              LocalCliEndpoint(
+                computerId: computerId,
+                wsUri: Uri.parse('ws://127.0.0.1/api/local-ws'),
+                protocolVersion: localWsProtocolVersion,
+                terminalProtocolVersion: localTerminalProtocolVersion,
+              ),
+            )
           : const LocalCliProbe.down('fixture daemon is down'),
       spawnCommand: () async {
         spawnCount++;
@@ -699,12 +758,14 @@ void main() {
     final readies = <LocalCliEndpoint>[];
     final discovery = _SupervisionProbe(
       readProbe: () async => running
-          ? LocalCliProbe.ready(LocalCliEndpoint(
-              computerId: computerId,
-              wsUri: Uri.parse('ws://127.0.0.1/api/local-ws'),
-              protocolVersion: localWsProtocolVersion,
-              terminalProtocolVersion: localTerminalProtocolVersion,
-            ))
+          ? LocalCliProbe.ready(
+              LocalCliEndpoint(
+                computerId: computerId,
+                wsUri: Uri.parse('ws://127.0.0.1/api/local-ws'),
+                protocolVersion: localWsProtocolVersion,
+                terminalProtocolVersion: localTerminalProtocolVersion,
+              ),
+            )
           : const LocalCliProbe.down('fixture daemon is down'),
       spawnCommand: () async {
         spawnCount++;
@@ -909,7 +970,8 @@ void main() {
       var spawnCount = 0;
       var signedOutCalls = 0;
       final discovery = _SupervisionProbe(
-        readProbe: () async => const LocalCliProbe.down('fixture daemon is down'),
+        readProbe: () async =>
+            const LocalCliProbe.down('fixture daemon is down'),
         spawnCommand: () async {
           spawnCount++;
         },
@@ -949,7 +1011,8 @@ void main() {
       var spawnCount = 0;
       var signedOutCalls = 0;
       final discovery = _SupervisionProbe(
-        readProbe: () async => const LocalCliProbe.down('fixture daemon is down'),
+        readProbe: () async =>
+            const LocalCliProbe.down('fixture daemon is down'),
         spawnCommand: () async {
           spawnCount++;
         },
@@ -992,7 +1055,8 @@ void main() {
       var spawnCount = 0;
       var signedOutCalls = 0;
       final discovery = _SupervisionProbe(
-        readProbe: () async => const LocalCliProbe.down('fixture daemon is down'),
+        readProbe: () async =>
+            const LocalCliProbe.down('fixture daemon is down'),
         spawnCommand: () async {
           spawnCount++;
         },

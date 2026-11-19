@@ -78,7 +78,7 @@ void main() {
     expect(logs.single, contains('winget exited 7'));
   });
 
-  test('marks its one try under the profile\'s .harness/run', () async {
+  test('marks its one try under the profile\'s .harness/run on any host', () async {
     final asked = <String>[];
     // Answering yes for the marker stops start() before it creates the file,
     // so a wrong path is only recorded, never written.

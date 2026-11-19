@@ -4,10 +4,11 @@ One thing to know from the start: **the daemon only knows about panes it created
 start from the app are tmux sessions named `harness-*`, owned by the daemon. A `claude` you launch
 by hand in your own tmux is not picked up. Another machine needs Node ≥ 20 and tmux; `sqlite3` only
 for the engines that keep their conversations in SQLite (OpenCode, Kilo, Hermes, Devin). There is no
-token to copy between machines: a durable computer id under `~/.harness` keeps later starts attached
-to the same machine record.
+token to copy between machines: a durable computer id in Harness's folder
+([where Harness keeps its files](#where-harness-keeps-its-files)) keeps later starts attached to the same machine
+record.
 
-`harness` is one pure-JS bundle run by the managed Node under `~/.harness/cli`. Everything below
+`harness` is one pure-JS bundle in that folder's `cli`, run by the managed Node. Everything below
 works the same on a headless Linux server; the app is not required on a machine, only the daemon.
 
 | Command | What it does |
@@ -43,6 +44,41 @@ page and never a transcript. Configuration is environment
 variables (`BACKEND_WS_URL`, `WEB_URL`, `ADAPTER_DATA_DIR`, `ADAPTER_COMPUTER_ID`, `PORT`, and the
 per-engine home directories); [`cli/README.md`](cli/README.md) has the full table and the
 `.env.example`.
+
+## Where Harness keeps its files
+
+On macOS and Windows everything is in `~/.harness` (`%USERPROFILE%\.harness`). On Linux Harness keeps its files in
+two folders, the data root `$XDG_DATA_HOME/harness` (by default `~/.local/share/harness`) and the state root
+`$XDG_STATE_HOME/harness` (by default `~/.local/state/harness`); a variable that is unset, empty or not an absolute
+path is ignored. Which folders a Linux process uses:
+
+1. The data root exists: the two roots.
+2. Else `~/.harness` exists: `~/.harness` for both, not moved yet.
+3. Else the two roots, a fresh install.
+
+| Root | What it holds |
+|---|---|
+| data | `auth` (the SSO session), `computer-id`, `cli` (the CLI; `cli/data` is the daemon's data folder), `connections`, `agent-messages`, `bin`, `dsh` (installed harnesses), `claude-profiles`, `desktop-app-v2` and Desktop's other `desktop-app*` folders, `viewer-app-v2`, `tui`, `devices`, `lessons`, `grid-fleet`, `community`, `memory`, and anything not listed here |
+| state | `logs`, `runtime` (managed Node, tmux, PTY host), `hook-routes`, `s` (short socket folders), `run`, `shell-requests`, `pty`, `uninstalling`, `flasher`, `monitor` |
+
+Every `~/.harness/<entry>` in these docs is in the root this table names. An override such as `ADAPTER_DATA_DIR`
+still wins.
+
+An existing `~/.harness` moves to the two roots the next time Harness starts (`harness start`, its `-f` and
+`--if-down` forms, or systemd's start). The move waits while an update awaits its verdict, another start is moving,
+an override names a folder inside `~/.harness`, tmux is older than 3.0 with a Harness pane open, or a PTY host runs;
+a `~/.harness` that is itself a link never moves. `harness status` says why a move waits or failed, and what to do.
+Agents already running keep working through links left in `~/.harness`, which go within minutes of the last one
+ending. Afterwards a Harness older than this one starts as a new, signed-out computer.
+
+Each process reads `XDG_DATA_HOME` and `XDG_STATE_HOME` itself, so set them for your whole session
+(`~/.config/environment.d/` or `~/.profile`), not only in your shell's rc file, or the app and the terminal find
+different folders. `harness service install` carries them into the systemd unit. Harness OS keeps the default
+folders: its services start without your `XDG_DATA_HOME` and `XDG_STATE_HOME`.
+
+After the move the Store sets each installed harness up again, two at a time.
+A harness whose setup fails says `Needs setup` on its Store page, and `needs setup` in `harness dsh list`.
+`harness dsh update <owner/name>` or the page's `Update` button sets it up again.
 
 ## The daemon's environment
 
@@ -90,7 +126,7 @@ WebSocket at `ws://127.0.0.1:18473/api/local-ws` takes a `machine_select` frame 
 and answers them with `<type>_result`. Since 0.4.21 every loopback request (REST and this WebSocket)
 shows the daemon's local credential, `X-Harness-Local: <credential>` (or `Authorization: Bearer
 <credential>`): the contents of the 0600 `hook-credential` file in `ADAPTER_DATA_DIR`
-(`~/.harness/cli/data`). Without it the daemon answers 401; `/api/status` then gives only its public fields. Selecting one of your other machines proxies the request
+(`~/.harness/cli/data`, on Linux in the data root). Without it the daemon answers 401; `/api/status` then gives only its public fields. Selecting one of your other machines proxies the request
 through this daemon's link to it.
 
 What it answers: `agents_list`, `agent_create`, `agent_restart`, `agent_retarget`, `agent_delete`,

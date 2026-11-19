@@ -1,6 +1,6 @@
 import { existsSync, realpathSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
-import { harnessRoots } from '../config/harnessHome.js'
+import { harnessRoots, legacyHarnessHome } from '../config/harnessHome.js'
 
 /** `path` with symlinks resolved as far as it exists; the part that does not exist yet is kept as written. */
 function realOrResolved(path: string): string {
@@ -39,7 +39,8 @@ export function inheritedAccountDataFolder(
   const account = realOrResolved(accountHome)
   if (realOrResolved(home) === account) return false
   const data = realOrResolved(dataDir)
-  return harnessRoots(account).some((root) => {
+  // A ~/.harness beside the moved Linux roots too: a stray an old build made after the move is still the account's.
+  return [...harnessRoots(account), legacyHarnessHome(account)].some((root) => {
     const inside = relative(realOrResolved(root), data)
     return inside !== '' && !inside.startsWith('..') && !isAbsolute(inside) && !inside.startsWith(sep)
   })

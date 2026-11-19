@@ -21,7 +21,7 @@ import type { Socket } from 'node:net'
 import type { Duplex } from 'node:stream'
 import { chmodSync, linkSync, lstatSync, mkdirSync, renameSync, unlinkSync, type Stats } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 import { harnessPath } from '../config/harnessHome.js'
 import { configuredPortOf, readDaemonRecord } from './daemonRecord.js'
 import { daemonPipe, type LocalDaemonOptions } from './windows/daemonPipe.js'
@@ -53,25 +53,45 @@ const trustedSockets = new WeakSet<Socket>()
 /** Requests over the daemon's pipe whose auth checked out, and the proof each answer to them carries. */
 const pipeProofs = new WeakMap<IncomingMessage, string>()
 
-/** Where a folder too long to hold a socket keeps its sockets: under the home folder, as /tmp is shared and TMPDIR differs between launchd
- *  and a shell, so clients would disagree. The same rule is in cli/hook/notify.mjs, store/tools/local-daemon.mjs and Desktop's
- *  local_daemon_transport.dart. */
-export function shortSocketFolder(folder: string, home: string = homedir()): string {
-  return join(harnessPath('s', home), createHash('sha256').update(folder).digest('hex').slice(0, 16))
+/** A short folder's name: the hash of the folder too long to hold its sockets. */
+const SHORT_NAME = /^[0-9a-f]{16}$/
+
+/**
+ * `$XDG_RUNTIME_DIR/harness`, when the variable names the account's own runtime folder (the XDG Base Directory spec's):
+ * an absolute path to a real folder, not a link, of this account's, mode 0700. Null otherwise. Read at each call, as the
+ * roots are.
+ */
+export function runtimeShortRoot(environment: NodeJS.ProcessEnv = process.env): string | null {
+  const dir = environment.XDG_RUNTIME_DIR
+  if (!dir || !isAbsolute(dir)) return null
+  try {
+    const seen = lstatSync(dir)
+    return seen.isDirectory() && seen.uid === process.getuid?.() && (seen.mode & 0o7777) === 0o700 ? join(dir, 'harness') : null
+  } catch {
+    return null
+  }
+}
+
+/** Where a folder too long to hold a socket keeps its sockets: on Linux in the account's runtime folder when it has one, else under the
+ *  home folder, as /tmp is shared and TMPDIR differs between launchd and a shell, so clients would disagree. The same rule is in
+ *  cli/hook/notify.mjs, store/tools/local-daemon.mjs and Desktop's local_daemon_transport.dart. */
+export function shortSocketFolder(folder: string, home: string = homedir(), platform: NodeJS.Platform = process.platform): string {
+  const root = (platform === 'linux' ? runtimeShortRoot() : null) ?? harnessPath('s', home, platform)
+  return join(root, createHash('sha256').update(folder).digest('hex').slice(0, 16))
 }
 
 /** `name` in [folder], or in its short folder when that path is too long for a socket; null when even that is, the one case left on TCP. */
-export function socketPathIn(folder: string, name: string, home: string = homedir()): string | null {
+export function socketPathIn(folder: string, name: string, home: string = homedir(), platform: NodeJS.Platform = process.platform): string | null {
   const beside = join(folder, name)
   if (Buffer.byteLength(beside) <= MAX_SOCKET_PATH_BYTES) return beside
-  const short = join(shortSocketFolder(folder, home), name)
+  const short = join(shortSocketFolder(folder, home, platform), name)
   return Buffer.byteLength(short) <= MAX_SOCKET_PATH_BYTES ? short : null
 }
 
 /** The daemon's Unix socket for `port` in this data directory, or null where there is none: Windows, or a home too long as well. */
 export function unixSocketPath(dataDir: string, port: number, platform: NodeJS.Platform = process.platform): string | null {
   if (platform === 'win32') return null
-  return socketPathIn(dataDir, localSocketName(port))
+  return socketPathIn(dataDir, localSocketName(port), homedir(), platform)
 }
 
 /**
@@ -119,10 +139,14 @@ export interface LocalSocketServer {
   closeSync: () => void
 }
 
-/** A short folder (shortSocketFolder) is made here, and it and its parent are this account's real folders, owner only, before a socket goes in. */
+/**
+ * A short folder (shortSocketFolder) is made here, and it and its parent are this account's real folders, owner only, before a socket goes in.
+ * Its parent is `harness` in the runtime folder, or `s` in `~/.harness` or on Linux in the state root, named `harness` (config/harnessHome.ts).
+ */
 function prepareShortFolder(path: string): void {
   const folder = dirname(path)
-  if (!/[\\/]\.harness[\\/]s[\\/][0-9a-f]{16}$/.test(folder)) return
+  const inRuntime = dirname(folder) === runtimeShortRoot() && SHORT_NAME.test(basename(folder))
+  if (!inRuntime && !/[\\/]\.?harness[\\/]s[\\/][0-9a-f]{16}$/.test(folder)) return
   mkdirSync(folder, { recursive: true, mode: 0o700 })
   for (const each of [dirname(folder), folder]) {
     const seen = lstatSync(each), uid = process.getuid?.()

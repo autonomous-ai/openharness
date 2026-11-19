@@ -1,6 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { parse as parseToml } from 'smol-toml'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { env } from '../../config/env.js'
 import { hooks as claude } from '../claude/hookContract.js'
@@ -129,6 +130,29 @@ it('approves the required Codex hook when an earlier optional hook uses the same
   expect(config).toContain(`[hooks.state.${JSON.stringify(key)}]\ntrusted_hash = ${JSON.stringify(hash)}`)
   expect(confirmed).toHaveBeenCalledOnce()
   expect(confirmed.mock.calls[0]![0].current()).toBe(true)
+})
+
+// Codex keys a hook's review by its place: put after the person's when its command changes (the move, a Node update), ours
+// moved theirs, and Codex asked for its review again.
+it('an updated Codex hook of Harness\'s keeps its place, and the person\'s beside it its review', async () => {
+  vi.spyOn(console, 'log').mockImplementation(() => {})
+  const home = join(root, 'codex'); mkdirSync(home)
+  const file = join(home, codex.settings.file), config = join(home, codex.settings.reviewed!.file)
+  expect(await installHookSettings('codex', codex.settings, 19474, home)).toBe(true)
+  const theirs = { hooks: [{ type: 'command', command: 'my-own-hook', timeout: 7 }] }
+  const settings = JSON.parse(readFileSync(file, 'utf8'))
+  settings.hooks.Stop.push(theirs)
+  writeFileSync(file, JSON.stringify(settings, null, 2) + '\n')
+  const at = (block: number) => `${realpathSync(file)}:${codex.settings.reviewed!.events.Stop}:${block}:0`
+  const trusted = reviewHash(codex.settings.reviewed!, 'Stop', undefined, theirs.hooks[0]!)
+  writeFileSync(config, `${readFileSync(config, 'utf8')}\n[hooks.state.${JSON.stringify(at(1))}]\ntrusted_hash = ${JSON.stringify(trusted)}\n`)
+  expect(await installHookSettings('codex', codex.settings, 19473, home)).toBe(true)
+  const stop = JSON.parse(readFileSync(file, 'utf8')).hooks.Stop
+  expect(stop[0].hooks[0].command).toContain('--port 19473')
+  expect(stop.slice(1)).toEqual([theirs])
+  const state = (parseToml(readFileSync(config, 'utf8')) as { hooks: { state: Record<string, { trusted_hash: string }> } }).hooks.state
+  expect(state[at(0)]?.trusted_hash).toBe(reviewHash(codex.settings.reviewed!, 'Stop', stop[0].matcher, stop[0].hooks[0]))
+  expect(state[at(1)]?.trusted_hash).toBe(trusted)
 })
 
 it('names a home literally in its log lines, whatever characters the path holds', async () => {

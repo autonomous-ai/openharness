@@ -3,15 +3,16 @@
 import { execFile } from 'node:child_process'
 import { createServer } from 'node:http'
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { tmpdir, homedir } from 'node:os'
+import { tmpdir } from 'node:os'
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomBytes } from 'node:crypto'
 import { promisify } from 'node:util'
+import { harnessPath } from '../src/config/harnessHome.js'
 
 const live = process.env.HARNESS_ORCHESTRATOR_LIVE === '1'
 if (!live && process.env.HARNESS_ORCHESTRATOR_E2E !== '1') throw new Error('Opt in with HARNESS_ORCHESTRATOR_E2E=1, or explicitly authorize model usage with HARNESS_ORCHESTRATOR_LIVE=1')
-const installedRoot = process.env.DSH_DIR ?? join(homedir(), '.harness', 'dsh')
+const installedRoot = process.env.DSH_DIR ?? harnessPath('dsh')
 const exec = promisify(execFile)
 const root = await mkdtemp(join(tmpdir(), 'orchestrator-e2e-'))
 const cliRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')

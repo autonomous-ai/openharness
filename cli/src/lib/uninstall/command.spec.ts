@@ -1,6 +1,12 @@
-import { describe, expect, it } from 'vitest'
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
+import { BRIDGE_FILE, makeRealFolders, readBridge, removeBridge, writeBridge, type BridgeRecord } from '../../homeMove/bridge.js'
+import { moveLockPath } from '../../homeMove/lock.js'
+import { removePath } from '../removePath.js'
 import { labelHookRemoval, lockHolder, UNINSTALL_USAGE, uninstallCommand, UninstallLockBusy, type UninstallDeps } from './command.js'
-import { RemovalRefused } from './removal.js'
+import { checkRemovable, listEntries, RemovalRefused, removeNow } from './removal.js'
 
 function fake(overrides: Partial<UninstallDeps> = {}) {
   const calls: string[] = []
@@ -29,6 +35,7 @@ function fake(overrides: Partial<UninstallDeps> = {}) {
     removePathEntry: () => { calls.push('path'); return { kind: 'rc', edits: [{ file: '/Users/u/.zshrc', removed: 1, changedByPerson: 0 }], keptFor: [] } },
     listEntries: (dir) => (dir === '/Users/u/.harness' ? [{ name: 'auth', dir: true }, { name: 'cli', dir: true }, { name: 'runtime', dir: true }] : [{ name: 'cli.js', dir: false }, { name: 'data', dir: true }]),
     exists: () => true,
+    move: null,
     checkRemovable: () => {},
     removeNow: (plan) => { calls.push(`files ${plan.remove.map((t) => t.path.replace('/Users/u/.harness/', '')).join(',')}${plan.removeRoot ? ' +root' : ''}`); return [] },
     scheduleFinalRemoval: (plan) => { calls.push(`final ${plan.remove.length}${plan.removeRoot ? ' +root' : ''}`); return { ok: true, script: 'C:\\T\\h.cmd', log: 'C:\\T\\h.log' } },
@@ -473,6 +480,197 @@ describe('harness uninstall, review round 1', () => {
     expect(await uninstallCommand(['--yes'], t.deps)).toBe(0)
     expect(t.out).toContain('· if you had added a permission rule in ~/.claude/settings.json that is the same as one of Harness\'s, it went too: add it again if you need it')
     expect(fake().out.some((line) => line.includes('permission rule'))).toBe(false)
+  })
+})
+
+/** Linux's two roots once Harness moved there (config/harnessHome.ts), as the fakes above see them. */
+const DATA = '/home/u/.local/share/harness'
+const STATE = '/home/u/.local/state/harness'
+const linux = {
+  platform: 'linux' as const, cwd: '/home/u/code', home: '/home/u', binDir: `${DATA}/bin`,
+  service: { name: 'systemd', present: () => true, unregister: () => ({ ok: true as const }) },
+  removeHooks: async () => [{ file: '/home/u/.claude/settings.json', removed: 5 }],
+  removeLaunchers: () => ['/home/u/.local/bin/harness', '/home/u/.local/bin/hn'],
+  removePathEntry: () => ({ kind: 'rc' as const, edits: [{ file: '/home/u/.bashrc', removed: 1, changedByPerson: 0 }], keptFor: [] }),
+  move: { lock: '/home/u/.harness.move-lock', readBridge: () => null, removeBridge: () => 'removed' as const, remove: () => {} },
+  tildify: (path: string) => path.replace('/home/u', '~'),
+}
+const xdg = {
+  ...linux, roots: [DATA, STATE], cliDir: `${DATA}/cli`, dataDir: `${DATA}/cli/data`, authDir: `${DATA}/auth`,
+  listEntries: (dir: string) => (dir === DATA ? [{ name: 'auth', dir: true }, { name: 'bin', dir: true }, { name: 'cli', dir: true }]
+    : dir === STATE ? [{ name: 'logs', dir: true }, { name: 'runtime', dir: true }] : [{ name: 'cli.js', dir: false }, { name: 'data', dir: true }]),
+}
+/** A Linux home that has not moved: ~/.harness, as on macOS. */
+const legacyLinux = {
+  ...linux, roots: ['/home/u/.harness'], binDir: '/home/u/.harness/bin', cliDir: '/home/u/.harness/cli', dataDir: '/home/u/.harness/cli/data', authDir: '/home/u/.harness/auth',
+  listEntries: (dir: string) => (dir === '/home/u/.harness' ? [{ name: 'auth', dir: true }, { name: 'cli', dir: true }, { name: 'runtime', dir: true }] : [{ name: 'cli.js', dir: false }, { name: 'data', dir: true }]),
+}
+
+const homes: string[] = []
+afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }) })
+
+/**
+ * A Linux home Harness moved to its two XDG folders, on disk: the program and the person's data in them, the data root's
+ * marker; the bridge at ~/.harness, a link per entry and its two real folders (connections with a hard link to the shim);
+ * the bridge's record, the move's own, and the lock a start left beside ~/.harness.
+ */
+function movedHome() {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'uninstall-')))
+  homes.push(home)
+  const oldHome = join(home, '.harness'), data = join(home, '.local', 'share', 'harness'), state = join(home, '.local', 'state', 'harness')
+  const kept: Record<string, string> = {
+    [join(data, 'auth', 'session.json')]: 'signed in', [join(data, 'cli', 'data', 'registry.json')]: '[]',
+    [join(data, 'connections', 'mcp-shim.mjs')]: 'shim', [join(state, 'logs', 'harness.log')]: 'started', [join(data, '.harness-root')]: '1\n',
+  }
+  const program = [join(data, 'bin', 'harness'), join(data, 'cli', 'cli.js'), join(state, 'runtime', 'current-node')]
+  const written = { ...kept, ...Object.fromEntries(program.map((path) => [path, 'program'])), [join(state, 'home-move.json')]: '{}', [join(moveLockPath(oldHome), 'owner')]: '{}' }
+  for (const [path, text] of Object.entries(written)) {
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, text)
+  }
+  mkdirSync(oldHome)
+  for (const [name, root] of [['auth', data], ['bin', data], ['cli', data], ['connections', data], ['logs', state], ['runtime', state]]) symlinkSync(join(root, name), join(oldHome, name))
+  makeRealFolders(oldHome)
+  linkSync(join(data, 'connections', 'mcp-shim.mjs'), join(oldHome, 'connections', 'mcp-shim.mjs'))
+  writeFileSync(join(oldHome, 'hook-routes', 'route.json'), '{}')
+  writeBridge(state, { version: 1, oldHome, oldDataDir: join(oldHome, 'cli', 'data'), newTag: '1'.repeat(16) }, 1)
+  return { home, oldHome, data, state, kept, program }
+}
+
+/** This computer's removal (deps.ts) on [home]'s disk, with Linux's paths wherever the suite runs. */
+const onDisk = (home: string, roots: string[], lock: string) => ({
+  ...linux, home, cwd: home, roots, binDir: join(roots[0], 'bin'), cliDir: join(roots[0], 'cli'), dataDir: join(roots[0], 'cli', 'data'), authDir: join(roots[0], 'auth'),
+  listEntries, exists: existsSync,
+  checkRemovable: (plan: Parameters<UninstallDeps['checkRemovable']>[0]) => { checkRemovable(plan, { platform: 'linux', home }) },
+  removeNow: (plan: Parameters<UninstallDeps['removeNow']>[0]) => removeNow(plan, { platform: 'linux', home }),
+  move: { lock, readBridge, removeBridge: (bridge: BridgeRecord, state: string) => removeBridge(bridge, state, null), remove: removePath },
+  tildify: (path: string) => path.replace(home, '~'),
+})
+const movedDisk = (m: ReturnType<typeof movedHome>) => onDisk(m.home, [m.data, m.state], moveLockPath(m.oldHome))
+
+// Linux moves Harness from ~/.harness to two XDG folders, and leaves a bridge at ~/.harness while old processes run.
+describe('harness uninstall on Linux\'s two roots', () => {
+  // Links are Linux's here: on Windows a standard user cannot make one.
+  it.runIf(process.platform !== 'win32')('it removes the bridge without following a link', async () => {
+    const m = movedHome()
+    const t = fake(movedDisk(m))
+    expect(await uninstallCommand(['--yes', '--keep-data'], t.deps)).toBe(0)
+    expect(existsSync(m.oldHome)).toBe(false)
+    // What the links pointed to is whole, the shim the real connections folder linked to too, and the data root's marker
+    // with the data it keeps; both roots' program is gone.
+    for (const [path, text] of Object.entries(m.kept)) expect(readFileSync(path, 'utf8'), path).toBe(text)
+    for (const path of m.program) expect(existsSync(path), path).toBe(false)
+    expect(t.out).toContain('✓ removed ~/.harness, which held only links')
+    expect(t.err).toEqual([])
+    // A file of the person's in it stays, with the folder, and is said.
+    const mine = movedHome()
+    writeFileSync(join(mine.oldHome, 'notes.txt'), 'mine')
+    const left = fake(movedDisk(mine))
+    expect(await uninstallCommand(['--yes'], left.deps)).toBe(1)
+    expect(readdirSync(mine.oldHome)).toEqual(['notes.txt'])
+    // The data root goes whole, its marker with it.
+    expect(existsSync(mine.data) || existsSync(mine.state)).toBe(false)
+    expect(left.err).toEqual(['✗ Harness is uninstalled, except:', '  · ~/.harness is still there: something in it is not Harness\'s. Look in it, then delete it yourself'])
+  })
+
+  it.runIf(process.platform !== 'win32')('it removes the move lock and both records', async () => {
+    for (const keepData of [false, true]) {
+      const m = movedHome()
+      expect(await uninstallCommand(['--yes', ...(keepData ? ['--keep-data'] : [])], fake(movedDisk(m)).deps)).toBe(0)
+      for (const path of [moveLockPath(m.oldHome), join(m.state, BRIDGE_FILE), join(m.state, 'home-move.json')]) expect(existsSync(path), `${path}, --keep-data ${keepData}`).toBe(false)
+    }
+    // A home that has not moved: the record a waiting move left in ~/.harness, and the lock a start left beside it.
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'uninstall-')))
+    homes.push(home)
+    const root = join(home, '.harness'), lock = moveLockPath(root)
+    for (const path of [join(root, 'auth', 'session.json'), join(root, 'cli', 'cli.js'), join(root, 'home-move.json'), join(lock, 'owner')]) {
+      mkdirSync(dirname(path), { recursive: true })
+      writeFileSync(path, '{}')
+    }
+    const t = fake(onDisk(home, [root], lock))
+    expect(await uninstallCommand(['--yes', '--keep-data'], t.deps)).toBe(0)
+    expect([existsSync(join(root, 'home-move.json')), existsSync(lock), existsSync(join(root, 'cli', 'cli.js'))]).toEqual([false, false, false])
+    expect(readFileSync(join(root, 'auth', 'session.json'), 'utf8')).toBe('{}')
+    expect(t.out.at(-1)).toBe('Harness is uninstalled. Your sign-in and history are kept for the next install.')
+  })
+
+  // Only ~/.harness is the move's: a record naming any other folder would have the uninstall empty it.
+  it.runIf(process.platform !== 'win32')('a bridge.json that names a folder other than ~/.harness is refused: nothing in that folder is removed, and that is said', async () => {
+    const m = movedHome()
+    const other = join(m.home, 'projects')
+    for (const name of ['connections', 'hook-routes']) {
+      mkdirSync(join(other, name), { recursive: true })
+      writeFileSync(join(other, name, 'mine.txt'), 'mine')
+    }
+    symlinkSync(join(m.home, 'code'), join(other, 'code'))
+    writeBridge(m.state, { ...readBridge(m.state)!, oldHome: other, oldDataDir: join(other, 'cli', 'data') }, 1)
+    const t = fake(movedDisk(m))
+    expect(await uninstallCommand(['--yes', '--keep-data'], t.deps)).toBe(1)
+    expect(readdirSync(other).sort()).toEqual(['code', 'connections', 'hook-routes'])
+    for (const name of ['connections', 'hook-routes']) expect(readFileSync(join(other, name, 'mine.txt'), 'utf8')).toBe('mine')
+    expect(t.err).toEqual(['✗ Harness is uninstalled, except:', '  · ~/.local/state/harness/bridge.json names a folder other than ~/.harness: nothing in that folder was removed'])
+    // The record itself goes, with the move's own.
+    expect(existsSync(join(m.state, BRIDGE_FILE))).toBe(false)
+  })
+
+  it('its lines name both folders', async () => {
+    const asked = fake({ ...xdg, isTTY: true })
+    expect(await uninstallCommand([], asked.deps)).toBe(1)
+    expect(asked.out).toContain('  · deletes ~/.local/share/harness and ~/.local/state/harness: your sign-in, this computer\'s identity, history and settings (--keep-data keeps them)')
+    const askedKeep = fake({ ...xdg, isTTY: true })
+    expect(await uninstallCommand(['--keep-data'], askedKeep.deps)).toBe(1)
+    expect(askedKeep.out).toContain('  · deletes the program in ~/.local/share/harness and ~/.local/state/harness, and keeps your sign-in, this computer\'s identity, history and settings there')
+    const t = fake({ ...xdg })
+    expect(await uninstallCommand(['--yes'], t.deps)).toBe(0)
+    expect(t.out).toEqual(expect.arrayContaining(['✓ removed ~/.local/share/harness', '✓ removed ~/.local/state/harness']))
+    const kept = fake({ ...xdg })
+    expect(await uninstallCommand(['--yes', '--keep-data'], kept.deps)).toBe(0)
+    expect(kept.out).toEqual(expect.arrayContaining(['✓ removed the program from ~/.local/share/harness', '✓ removed the program from ~/.local/state/harness']))
+    // A data folder ADAPTER_DATA_DIR puts outside both.
+    const outside = fake({ ...xdg, dataDir: '/srv/data' })
+    expect(await uninstallCommand(['--yes'], outside.deps)).toBe(0)
+    expect(outside.out).toContain('· left /srv/data: it is outside ~/.local/share/harness and ~/.local/state/harness (ADAPTER_DATA_DIR or HARNESS_AUTH_DIR names it); delete it yourself if it is Harness\'s')
+  })
+
+  it('with one root every line is today\'s', async () => {
+    const asked = (service: string, path: string, root: string, keepData: boolean) => [
+      'harness uninstall removes Harness from this computer:',
+      '  · stops every harness running here, then the Harness daemon',
+      `  · takes the Harness daemon out of ${service}, so it no longer starts at login`,
+      '  · removes the hooks and permission rules Harness added to Claude Code, Codex and your other agents (a rule of yours that is the same as one of Harness\'s goes too)',
+      path,
+      keepData
+        ? `  · deletes the program in ${root}, and keeps your sign-in, this computer's identity, history and settings there`
+        : `  · deletes ${root}: your sign-in, this computer's identity, history and settings (--keep-data keeps them)`,
+      '',
+      '✓ stopped 2 harnesses',
+      `✓ removed the Harness daemon from ${service}: it no longer starts at login`,
+      '✓ stopped the Harness daemon (pid 4242)',
+      '✓ removed Harness\'s hooks from ~/.claude/settings.json',
+    ]
+    const done = (keepData: boolean) => (keepData ? 'Harness is uninstalled. Your sign-in and history are kept for the next install.' : 'Harness is uninstalled.')
+    const posixLines = (service: string, rc: string) => (keepData: boolean) => [
+      ...asked(service, '  · removes the harness and hn commands, and the PATH line the installer added', '~/.harness', keepData),
+      '✓ removed ~/.local/bin/harness',
+      '✓ removed ~/.local/bin/hn',
+      `✓ removed the PATH line Harness added to ${rc}`,
+      keepData ? '✓ removed the program from ~/.harness' : '✓ removed ~/.harness',
+      done(keepData),
+    ]
+    const windowsLines = (keepData: boolean) => [
+      ...asked('Task Scheduler', '  · removes ~\\.harness\\bin from your PATH', '~\\.harness', keepData),
+      '✓ removed ~\\.harness\\bin from your PATH',
+      `✓ ${keepData ? 'the program in ~\\.harness' : '~\\.harness'} goes once this command has exited (anything left is listed in C:\\T\\h.log)`,
+      done(keepData),
+    ]
+    for (const [name, platform, lines] of [['macOS', {}, posixLines('launchd', '~/.zshrc')], ['Windows', win, windowsLines], ['Linux', legacyLinux, posixLines('systemd', '~/.bashrc')]] as const) {
+      for (const keepData of [false, true]) {
+        const t = fake({ ...platform, isTTY: true, ask: async () => 'y' })
+        expect(await uninstallCommand(keepData ? ['--keep-data'] : [], t.deps), name).toBe(0)
+        expect(t.out, `${name}, --keep-data ${keepData}`).toEqual(lines(keepData))
+        expect(t.err, name).toEqual([])
+      }
+    }
   })
 })
 

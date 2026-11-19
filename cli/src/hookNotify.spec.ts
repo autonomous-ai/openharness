@@ -1,12 +1,12 @@
 import { execFileSync, spawn, spawnSync } from 'child_process'
-import { randomBytes } from 'crypto'
+import { createHash, randomBytes } from 'crypto'
 import { createServer, type IncomingHttpHeaders } from 'http'
 import { connect as netConnect, createServer as createNetServer } from 'net'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { observedTitle } from './cable/hosts/observedTitle.js'
 import { MAX_HINTS, MAX_TITLE, parseObservedHook } from './core/observedHook.js'
 import { ENGINES } from './engines/types.js'
@@ -68,6 +68,11 @@ async function daemonSocketFor(port: number, dataDir: string | undefined, home?:
     try { writeFileSync(hookTokenPath(dataDir), `${'b'.repeat(43)}\n`, { mode: 0o600, flag: 'wx' }) } catch { /* already exists */ }
     return
   }
+  await proxySocket(path, port)
+}
+
+/** A socket at [path] in front of a test's fake daemon on [port], unless one is there. */
+async function proxySocket(path: string, port: number): Promise<void> {
   if (existsSync(path)) return
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
   const proxy = createNetServer((client) => {
@@ -2093,10 +2098,182 @@ describe('a hook reaches the daemon that made its pane', () => {
     expect(rows(release.dataDir)?.map((row) => row.sessionId)).toEqual(['session-offline'])
     expect(rows(dev.dataDir)).toBeNull()
   })
+})
 
-  it('looks where the daemons record by default', () => {
-    // lib/hookRoutes.ts writes under env.HARNESS_HOOK_ROUTES_DIR, whose default is the product root's.
-    expect(readFileSync(HOOK, 'utf8')).toContain("process.env.HARNESS_HOOK_ROUTES_DIR || join(homedir(), '.harness', 'hook-routes')")
+/**
+ * On Linux Harness's folders follow the XDG Base Directory paths (docs/plans/2026-11-18-linux-xdg-paths-design.md, The
+ * roots on Linux): the XDG data and state folders once the data one exists, else ~/.harness while that exists. macOS and
+ * Windows keep ~/.harness (Windows with the pipe's cases, below). An installed command names its data folder; these are
+ * the folders behind it: the data folder when it names none, the daemons' route records, and the short folder that holds
+ * the socket of a data folder too long for one. A preload sets the platform, so each case runs on any computer.
+ */
+describe('the hook finds Harness\'s folders by the rule', () => {
+  const everyFallback = { data: true, routes: true, socket: true }
+
+  /** A home short enough for a socket under it, holding [folders]. */
+  function homeWith(...folders: string[]): string {
+    const home = shortHome()
+    for (const folder of folders) mkdirSync(join(home, folder), { recursive: true, mode: 0o700 })
+    return home
+  }
+
+  /** A moved home: ~/.harness (the bridge) and the data root [dataRoot] with the marker the move's commit writes in it. */
+  function movedHome(dataRoot = '.local/share/harness'): string {
+    const home = homeWith('.harness', dataRoot)
+    writeFileSync(join(home, dataRoot, '.harness-root'), '1\n', { mode: 0o600 })
+    return home
+  }
+
+  /** The hook's environment as on [platform], in [home], naming no data or routes folder, nor this computer's runtime folder. */
+  function asOn(platform: NodeJS.Platform, home: string, env: Record<string, string> = {}): Record<string, string> {
+    const preload = join(home, 'platform.mjs')
+    writeFileSync(preload, `Object.defineProperty(process, 'platform', { value: ${JSON.stringify(platform)} })\n`)
+    return { HOME: home, ADAPTER_DATA_DIR: '', HARNESS_HOOK_ROUTES_DIR: '', XDG_RUNTIME_DIR: '', NODE_OPTIONS: `--import ${pathToFileURL(preload).href}`, ...env }
+  }
+
+  /** A daemon serving [dataDir]: its credential there, its socket beside it or where [socketAt] puts it. */
+  async function daemonIn(dataDir: string, socketAt = (port: number) => join(dataDir, `daemon-${port}.sock`)) {
+    mkdirSync(dataDir, { recursive: true, mode: 0o700 })
+    const credential = randomBytes(32).toString('base64url')
+    writeFileSync(join(dataDir, 'hook-credential'), `${credential}\n`, { mode: 0o600 })
+    const daemon = await collect({}, credential)
+    await proxySocket(socketAt(daemon.port), daemon.port)
+    return daemon
+  }
+
+  /** A hook whose command names no data folder reaches the daemon serving [dataDir]. */
+  async function reachesData(dataDir: string, env: Record<string, string>): Promise<boolean> {
+    const daemon = await daemonIn(dataDir)
+    await runHook({ port: daemon.port, tmuxPane: '%42', env })
+    return daemon.requests.length === 1
+  }
+
+  /** A hook in another daemon's pane follows that daemon's route record in [routes]. */
+  async function followsRoute(routes: string, home: string, env: Record<string, string>): Promise<boolean> {
+    const ownerDir = join(home, 'owner'), ownDir = join(home, 'own')
+    const owner = await daemonIn(ownerDir)
+    const own = await daemonIn(ownDir)
+    publishHookRoute(ownerDir, owner.port, routes)
+    await runHook({ port: own.port, dataDir: ownDir, tmuxPane: '%7', paneOwner: harnessPaneOwner(ownerDir), env })
+    return owner.requests.length === 1 && own.requests.length === 0
+  }
+
+  /** A short folder's name: its data folder's hash (lib/localSocket.ts shortSocketFolder). */
+  const shortName = (dataDir: string): string => createHash('sha256').update(dataDir).digest('hex').slice(0, 16)
+
+  /** A hook whose data folder is too long for a socket reaches its daemon through the short folder in [shortRoot]. */
+  async function reachesShortSocket(shortRoot: string, home: string, env: Record<string, string>): Promise<boolean> {
+    const dataDir = join(home, 'd'.repeat(100))
+    const short = join(shortRoot, shortName(dataDir))
+    const daemon = await daemonIn(dataDir, (port) => join(short, `daemon-${port}.sock`))
+    // Named in args, not dataDir: runHook would put a socket where it thinks the short folder is.
+    await runHook({ port: daemon.port, args: ['--data-dir', dataDir], tmuxPane: '%42', env })
+    return daemon.requests.length === 1
+  }
+
+  /** Whether each fallback is under [roots]. */
+  async function fallbacks(home: string, env: Record<string, string>, roots: { data: string, state: string }) {
+    return {
+      data: await reachesData(join(roots.data, 'cli', 'data'), env),
+      routes: await followsRoute(join(roots.state, 'hook-routes'), home, env),
+      socket: await reachesShortSocket(join(roots.state, 's'), home, env),
+    }
+  }
+
+  const xdgDefaults = (home: string) => ({ data: join(home, '.local', 'share', 'harness'), state: join(home, '.local', 'state', 'harness') })
+
+  it('on a moved Linux home the fallbacks are under the XDG roots', async () => {
+    // ~/.harness is the bridge the move leaves: the XDG data folder's marker is what decides.
+    const home = movedHome()
+    expect(await fallbacks(home, asOn('linux', home), xdgDefaults(home))).toEqual(everyFallback)
+  })
+
+  it.each([
+    ['a legacy Linux home', 'linux', ['.harness']],
+    // Made by something else: the machine stays where its files are.
+    ['a Linux home with a data root that holds no marker', 'linux', ['.harness', '.local/share/harness']],
+    // The marker is a file: a folder of its name is none.
+    ['a Linux home with a folder named as the marker', 'linux', ['.harness', '.local/share/harness/.harness-root']],
+    ['macOS', 'darwin', ['.harness', '.local/share/harness']],
+  ] as const)('on %s the fallbacks are under ~/.harness, as before', async (_name, platform, folders) => {
+    const home = homeWith(...folders)
+    const legacy = join(home, '.harness')
+    expect(await fallbacks(home, asOn(platform, home), { data: legacy, state: legacy })).toEqual(everyFallback)
+  })
+
+  it('takes XDG_DATA_HOME and XDG_STATE_HOME only when each is an absolute path', async () => {
+    for (const value of ['', 'xdg']) {
+      const home = movedHome()
+      const env = asOn('linux', home, { XDG_DATA_HOME: value, XDG_STATE_HOME: value })
+      expect(await fallbacks(home, env, xdgDefaults(home)), `XDG_*_HOME=${JSON.stringify(value)}`).toEqual(everyFallback)
+    }
+    const home = movedHome('xd/harness')
+    const env = asOn('linux', home, { XDG_DATA_HOME: join(home, 'xd'), XDG_STATE_HOME: join(home, 'xs') })
+    expect(await fallbacks(home, env, { data: join(home, 'xd', 'harness'), state: join(home, 'xs', 'harness') })).toEqual(everyFallback)
+  })
+
+  // An agent from before the move runs the command it started with: --data-dir ~/.harness/cli/data, which the bridge's
+  // `cli` link turns into the moved folder, and in a pane the move retagged with that folder's tag.
+  it('an old command reaches a moved daemon', async () => {
+    const home = movedHome()
+    const moved = join(xdgDefaults(home).data, 'cli', 'data')
+    const daemon = await daemonIn(moved)
+    symlinkSync(join(xdgDefaults(home).data, 'cli'), join(home, '.harness', 'cli'))
+    const command = { args: ['--data-dir', join(home, '.harness', 'cli', 'data')], tmuxPane: '%7', paneSession: 'mine', paneOwner: harnessPaneOwner(moved) }
+
+    // Up: the credential read through the link, the event posted on the socket beside the moved folder.
+    await runHook({ port: daemon.port, ...command, env: asOn('linux', home) })
+    expect(daemon.requests.map((request) => request.url)).toEqual(['/api/hook/session-end'])
+
+    // Down: the pane is this command's daemon's, so its offline row is written, in the moved folder.
+    const claudeProjectsDir = join(home, 'claude-projects')
+    const transcriptPath = join(claudeProjectsDir, 'demo', 'session-old.jsonl')
+    mkdirSync(dirname(transcriptPath), { recursive: true })
+    writeFileSync(transcriptPath, '{}\n')
+    await runHook({
+      port: 9, ...command, processEngine: 'claude', nativeProcess: 'linux', claudeProjectsDir, env: asOn('linux', home),
+      input: { hook_event_name: 'SessionStart', session_id: 'session-old', transcript_path: transcriptPath, cwd: '/tmp/demo' },
+    })
+    expect(JSON.parse(readFileSync(join(moved, 'registry.json'), 'utf8'))).toMatchObject([{ sessionId: 'session-old' }])
+  })
+
+  // The account's own runtime folder (XDG Base Directory), as the daemon finds it (lib/localSocket.ts): a link there, or
+  // a folder another account could reach, is not one, and the short folder stays in the state root.
+  describe('a data folder too long for a socket', () => {
+    let runtime: string
+    beforeEach(() => { runtime = mkdtempSync('/tmp/hr-'); tmpDirs.push(runtime); chmodSync(runtime, 0o700) })
+
+    it('has its short folder under XDG_RUNTIME_DIR when that is the account\'s own', async () => {
+      // The example every client pins (lib/localSocket.spec.ts, Desktop, hn, the store's local-daemon.mjs).
+      expect(shortName(`/home/${'u'.repeat(80)}/.local/share/harness/cli/data`)).toBe('410894cc1bc77e10')
+      const home = movedHome()
+      expect(await reachesShortSocket(join(runtime, 'harness'), home, asOn('linux', home, { XDG_RUNTIME_DIR: runtime }))).toBe(true)
+    })
+
+    it('has it in the state root\'s s when XDG_RUNTIME_DIR is a link, open to others, or not absolute', async () => {
+      const linked = `${runtime}-link`
+      symlinkSync(runtime, linked)
+      tmpDirs.push(linked)
+      const looser = mkdtempSync('/tmp/hr-')
+      tmpDirs.push(looser)
+      chmodSync(looser, 0o755)
+      for (const value of [linked, looser, 'run/user']) {
+        const home = movedHome()
+        expect(await reachesShortSocket(join(xdgDefaults(home).state, 's'), home, asOn('linux', home, { XDG_RUNTIME_DIR: value })), value).toBe(true)
+      }
+    })
+
+    it('on macOS keeps it in ~/.harness/s, whatever XDG_RUNTIME_DIR says', async () => {
+      const home = homeWith('.harness')
+      expect(await reachesShortSocket(join(home, '.harness', 's'), home, asOn('darwin', home, { XDG_RUNTIME_DIR: runtime }))).toBe(true)
+    })
+  })
+
+  it('HARNESS_HOOK_ROUTES_DIR and ADAPTER_DATA_DIR still win on a moved home', async () => {
+    const home = movedHome()
+    const env = asOn('linux', home, { ADAPTER_DATA_DIR: join(home, 'mine', 'data'), HARNESS_HOOK_ROUTES_DIR: join(home, 'mine', 'routes') })
+    expect(await reachesData(join(home, 'mine', 'data'), env)).toBe(true)
+    expect(await followsRoute(join(home, 'mine', 'routes'), home, env)).toBe(true)
   })
 })
 
@@ -2152,9 +2329,10 @@ describe('hook notify posts over the daemon\'s pipe on Windows (W1)', () => {
     return { ...recordings.claude.input, hook_event_name: 'SessionStart' }
   }
 
-  /** A data folder short enough for a socket, with the daemon's token, and a preload that runs the hook as on Windows. */
-  function windowsData(): { dataDir: string; token: Buffer; id: string; socket: string; preload: string } {
-    const dataDir = mkdtempSync('/tmp/hkp-'); tmpDirs.push(dataDir)
+  /** [dataDir], by default a new one short enough for a socket, with the daemon's token, and a preload that runs the hook
+   *  as on Windows. */
+  function windowsData(dataDir = mkdtempSync('/tmp/hkp-')): { dataDir: string; token: Buffer; id: string; socket: string; preload: string } {
+    tmpDirs.push(dataDir)
     const token = randomBytes(32), id = randomBytes(16).toString('hex')
     writeFileSync(join(dataDir, 'daemon-token'), `${token.toString('hex')}\n`, { mode: 0o644 })
     const preload = join(dataDir, 'win32-pipe.mjs')
@@ -2202,6 +2380,22 @@ describe('hook notify posts over the daemon\'s pipe on Windows (W1)', () => {
     await run(tcp.port, dataDir, preload)
     expect(requests).toEqual([{ url: '/api/hook/session-start', trusted: true, hookToken: undefined, credential: undefined }])
     expect(tcp.requests).toEqual([])
+  })
+
+  // Windows keeps ~/.harness, whatever is at the XDG folders (the hook finds Harness's folders by the rule, above). It has
+  // no tmux pane to route and no socket, so the data folder is its one fallback.
+  it('finds its data folder under ~/.harness when its command names none', async () => {
+    const home = shortHome()
+    mkdirSync(join(home, '.local', 'share', 'harness'), { recursive: true })
+    const dataDir = join(home, '.harness', 'cli', 'data')
+    mkdirSync(dataDir, { recursive: true })
+    const { token, id, socket, preload } = windowsData(dataDir)
+    const tcp = await collect()
+    record(dataDir, tcp.port, { pipe: `\\\\.\\pipe\\harness-${id}`, pid: process.pid })
+    const requests = await pipeDaemon(socket, token)
+    await runHook({ port: tcp.port, env: { HOME: home, ADAPTER_DATA_DIR: '', HARNESS_PANE: 'p1:%1', NODE_OPTIONS: `--import ${pathToFileURL(preload).href}` },
+      input: sessionStart() })
+    expect(requests.map((request) => request.url)).toEqual(['/api/hook/session-start'])
   })
 
   // A Codex home on a share or a device would have the core open another computer's folder on every registration

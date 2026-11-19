@@ -1,10 +1,11 @@
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
+import { harnessPath, thisComputer } from './harnessHome.js'
 
 // Pins the folders today's code resolves under the home, so moving each caller onto the module changes none of them.
 // These modules read the environment and the home once, as they load: each case is a process of its own, in a
@@ -21,8 +22,10 @@ function throwaway(): string {
   return folder
 }
 
-function run(script: string, variables: Record<string, string> = {}) {
+/** Runs [script] in a throwaway home that holds [made], folders relative to it. */
+function run(script: string, variables: Record<string, string> = {}, made: string[] = []) {
   const home = throwaway()
+  for (const folder of made) mkdirSync(join(home, folder), { recursive: true })
   const passed = process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot, TEMP: process.env.TEMP, TMP: process.env.TMP } : {}
   const env = Object.fromEntries(Object.entries({ PATH: process.env.PATH, HOME: home, USERPROFILE: home, ...passed, ...variables })
     .filter((entry): entry is [string, string] => entry[1] !== undefined))
@@ -52,29 +55,47 @@ function accountHome(): string | null {
   try { return userInfo().homedir } catch { return null }
 }
 
+/** What READ_FOLDERS prints with the data entries under [data] and the state entries under [state]. */
+function defaults(data: string, state: string) {
+  return {
+    ADAPTER_CLI_DIR: join(data, 'cli'),
+    ADAPTER_DATA_DIR: join(data, 'cli', 'data'),
+    AMP_SESSIONS_DIR: join(data, 'cli', 'data', 'amp-sessions'),
+    ADAPTER_RUNTIME_DIR: join(state, 'runtime'),
+    ADAPTER_COMPUTER_ID_FILE: join(data, 'computer-id'),
+    HARNESS_LOGS_DIR: join(state, 'logs'),
+    HARNESS_PTY_DIR: join(state, 'pty'),
+    HARNESS_DEVICES_DIR: join(data, 'devices'),
+    HARNESS_HOOK_ROUTES_DIR: join(state, 'hook-routes'),
+    HARNESS_AGENT_MESSAGES_DIR: join(data, 'agent-messages'),
+    DSH_DIR: join(data, 'dsh'),
+    AUTH_DIR: join(data, 'auth'),
+    FLASHER_DIR: join(state, 'flasher'),
+    connectorsDir: join(data, 'connections'),
+    installedTuiPath: join(data, 'bin', 'harness-tui'),
+    shortSocketFolder: join(state, 's', createHash('sha256').update('/x').digest('hex').slice(0, 16)),
+  }
+}
+
 describe('the default folders, as today', () => {
-  it('with nothing set, every default is under <home>/.harness', () => {
+  it.skipIf(process.platform === 'linux')('on macOS and Windows, with nothing set, every default is under <home>/.harness', () => {
     const child = run(READ_FOLDERS)
     expect(child.status, child.stderr).toBe(0)
     const root = join(child.home, '.harness')
-    expect(JSON.parse(child.stdout)).toEqual({
-      ADAPTER_CLI_DIR: join(root, 'cli'),
-      ADAPTER_DATA_DIR: join(root, 'cli', 'data'),
-      AMP_SESSIONS_DIR: join(root, 'cli', 'data', 'amp-sessions'),
-      ADAPTER_RUNTIME_DIR: join(root, 'runtime'),
-      ADAPTER_COMPUTER_ID_FILE: join(root, 'computer-id'),
-      HARNESS_LOGS_DIR: join(root, 'logs'),
-      HARNESS_PTY_DIR: join(root, 'pty'),
-      HARNESS_DEVICES_DIR: join(root, 'devices'),
-      HARNESS_HOOK_ROUTES_DIR: join(root, 'hook-routes'),
-      HARNESS_AGENT_MESSAGES_DIR: join(root, 'agent-messages'),
-      DSH_DIR: join(root, 'dsh'),
-      AUTH_DIR: join(root, 'auth'),
-      FLASHER_DIR: join(root, 'flasher'),
-      connectorsDir: join(root, 'connections'),
-      installedTuiPath: join(root, 'bin', 'harness-tui'),
-      shortSocketFolder: join(root, 's', createHash('sha256').update('/x').digest('hex').slice(0, 16)),
-    })
+    expect(JSON.parse(child.stdout)).toEqual(defaults(root, root))
+  }, 70_000)
+
+  it.runIf(process.platform === 'linux')('on a fresh Linux home, every default is in its XDG root', () => {
+    const child = run(READ_FOLDERS)
+    expect(child.status, child.stderr).toBe(0)
+    expect(JSON.parse(child.stdout)).toEqual(defaults(join(child.home, '.local', 'share', 'harness'), join(child.home, '.local', 'state', 'harness')))
+  }, 70_000)
+
+  it.runIf(process.platform === 'linux')('on a Linux home not moved yet, every default is under <home>/.harness', () => {
+    const child = run(READ_FOLDERS, {}, ['.harness'])
+    expect(child.status, child.stderr).toBe(0)
+    const root = join(child.home, '.harness')
+    expect(JSON.parse(child.stdout)).toEqual(defaults(root, root))
   }, 70_000)
 
   it('an override still wins', () => {
@@ -105,13 +126,16 @@ describe('the default folders, as today', () => {
     })
   }, 70_000)
 
-  // startHome.ts compares paths and opens nothing, so the account's own folder is named as a string only.
+  // startHome.ts compares paths and opens nothing, so the account's own folder is named as a string only: where the rule
+  // finds it for an environment with no XDG variable, as the child's is.
   const account = accountHome()
   it.skipIf(process.platform === 'win32' || !account)('a HOME that is not the account\'s is told its data folder', () => {
-    const dataDir = join(account!, '.harness', 'cli', 'data')
+    const dataDir = join(harnessPath('cli', account!, process.platform, thisComputer({})), 'data')
     const child = run(`process.argv[2] = 'status'; import(${JSON.stringify(source('./startHome.ts'))})`, { ADAPTER_DATA_DIR: dataDir })
     expect(child.status, child.stderr).toBe(0)
+    const cli = process.platform === 'linux' ? join(child.home, '.local', 'share', 'harness', 'cli') : join(child.home, '.harness', 'cli')
+    const outside = process.platform === 'linux' ? '~/.harness, ~/.local/share/harness and ~/.local/state/harness' : '~/.harness'
     expect(child.stderr).toBe(`harness: HOME is ${child.home}, not this account's home, so ignoring ADAPTER_DATA_DIR=${dataDir}; `
-      + `using ${child.home}/.harness/cli/data. Set ADAPTER_DATA_DIR to a folder outside ~/.harness to choose one.\n`)
+      + `using ${cli}/data. Set ADAPTER_DATA_DIR to a folder outside ${outside} to choose one.\n`)
   }, 70_000)
 })

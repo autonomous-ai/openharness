@@ -68,11 +68,12 @@ const flatHeadings = (text) => text.replace(/^#{1,6}[ \t]+(.+?)[ \t#]*$/gm, '$1:
 export const CITATION = /[ \t]*\[[a-z][a-z-]*:[^\]\n]*\][ \t]*$/gm
 export const withoutSources = (text) => String(text).replace(CITATION, '')
 
-export function packet(text) {
+/** `where` is the full profile's path as the person reads it, named when the copy is cut. */
+export function packet(text, where) {
   let body = flatHeadings(inert(withoutSources(text)).trim())
   if (body.length > MAX_DELIVERED) {
     const cut = body.lastIndexOf('\n', MAX_DELIVERED)
-    body = body.slice(0, cut > 0 ? cut : MAX_DELIVERED) + '\n(cut here: the full profile is in ~/.harness/memory/about-you.md)'
+    body = body.slice(0, cut > 0 ? cut : MAX_DELIVERED) + `\n(cut here: the full profile is in ${where})`
   }
   return `<about-you source="Harness Memories">\n${PREAMBLE}\n\n${body}\n</about-you>`
 }
@@ -147,7 +148,7 @@ export function withBlock(text, block) {
   return source + (source.endsWith('\n') ? '\n' : '\n\n') + block + '\n'
 }
 
-const blockFor = (about) => `${START}\n${packet(about)}\n${END}`
+const blockFor = (about, where) => `${START}\n${packet(about, where)}\n${END}`
 
 /** Our own copies, as `readInstructions` must not count them as something the person wrote. */
 export function withoutOurBlock(text) {
@@ -183,6 +184,7 @@ function readJson(path) {
 /** Install, refresh or remove one target. Returns what happened, never throws. */
 function apply(target, about, on, h, created) {
   const shown = tilde(target.file, h.home)
+  const where = tilde(join(h.memory, ABOUT_FILE), h.home)
   try {
     const linked = linkedPath(target.file, h.home)
     if (linked) return { ...target, file: shown, ok: false, error: `${tilde(linked, h.home)} is a link to another place; left as it is` }
@@ -206,14 +208,14 @@ function apply(target, about, on, h, created) {
     }
     if (target.kind === 'file') {
       if (!on || !about) { const had = existsSync(target.file); rmSync(target.file, { force: true }); return { ...target, file: shown, ok: true, changed: had } }
-      const text = `${START}\n${packet(about)}\n${END}\n`
+      const text = `${START}\n${packet(about, where)}\n${END}\n`
       if (existsSync(target.file) && readFileSync(target.file, 'utf8') === text) return { ...target, file: shown, ok: true, changed: false }
       writeAtomic(target.file, text)
       return { ...target, file: shown, ok: true, changed: true }
     }
     const existed = existsSync(target.file)
     const current = existed ? readFileSync(target.file, 'utf8') : ''
-    const next = withBlock(current, on && about ? blockFor(about) : null)
+    const next = withBlock(current, on && about ? blockFor(about, where) : null)
     if (next === current && existed) return { ...target, file: shown, ok: true, changed: false }
     if (!existed && !next) return { ...target, file: shown, ok: true, changed: false }
     // A file this created and that now holds nothing else goes; a file the person had stays, even empty.
@@ -295,6 +297,7 @@ export function status({ env = process.env, home } = {}) {
   const h = homes(env, home)
   const state = readState(h)
   const about = aboutText(h)
+  const where = tilde(join(h.memory, ABOUT_FILE), h.home)
   const agents = targets(h).map((target) => {
     const shown = tilde(target.file, h.home)
     try {
@@ -305,13 +308,13 @@ export function status({ env = process.env, home } = {}) {
       }
       const text = existsSync(target.file) ? readFileSync(target.file, 'utf8') : ''
       const delivered = text.includes(START_PREFIX)
-      return { agent: target.agent, file: shown, delivered, current: delivered && Boolean(about) && text.includes(packet(about)) }
+      return { agent: target.agent, file: shown, delivered, current: delivered && Boolean(about) && text.includes(packet(about, where)) }
     } catch (error) {
       return { agent: target.agent, file: shown, delivered: false, current: false, error: error instanceof Error ? error.message : String(error) }
     }
   })
   // What it costs: every new session of every agent that gets it starts with this many more tokens
   // (about four characters a token for English prose).
-  const tokens = about ? Math.round(packet(about).length / 4) : 0
+  const tokens = about ? Math.round(packet(about, where).length / 4) : 0
   return { on: Boolean(state.on), choseOff: Boolean(state.choseOff), choiceAt: state.choiceAt ?? null, tokens, built: Boolean(about), agents }
 }

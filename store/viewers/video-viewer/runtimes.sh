@@ -7,9 +7,10 @@
 # has failed its install. So:
 #
 #   harness_node 18                 node >= 18 on PATH, with npm: the machine's own, else the Node Harness
-#                                   itself runs on (~/.harness/runtime/current-node, laid down with the CLI)
+#                                   itself runs on (current-node in Harness's runtime folder, laid down
+#                                   with the CLI)
 #   harness_uv                      uv on PATH: the machine's own, else a pinned, checksummed release
-#                                   fetched into ~/.harness/runtime
+#                                   fetched into Harness's runtime folder
 #   harness_venv DIR 3.12 [MIN [BELOW]]
 #                                   DIR is a venv on CPython 3.12, which uv downloads when the machine
 #                                   has none. A venv already there on a Python in [MIN, BELOW) is kept.
@@ -20,14 +21,29 @@
 #
 # Every function prints `miss …` and returns 1 when it cannot deliver, so `harness_node 18 || exit 1`
 # reads like the rest of a setup script. Nothing here touches the user's shell profile; what it
-# installs lands in ~/.harness/runtime or the package's own directory (uv keeps its download cache
-# where it always does, which a venv does not depend on).
+# installs lands in Harness's runtime folder or the package's own directory (uv keeps its download
+# cache where it always does, which a venv does not depend on).
 #
 # ONE copy is written by hand: store/tools/runtimes.sh in the OpenHarness repository. Each package
 # carries an identical copy (a package installs alone, so it cannot reach this one);
 # `node store/tools/sync-runtimes.mjs` rewrites them and the CLI's store spec fails when one drifts.
 
-HARNESS_RUNTIME="${ADAPTER_RUNTIME_DIR:-${HOME:-}/.harness/runtime}"
+# Harness's state folder, by the CLI's rule: ~/.harness off Linux. On Linux the XDG state folder, unless
+# this home is still on ~/.harness (no marker, .harness-root, in the XDG data folder, and ~/.harness
+# there); once moved, ~/.harness is a bridge that removes itself. An XDG variable that is not an absolute path is ignored, and a trailing
+# slash dropped, so the paths match the daemon's. A setup's output carries what this prints, so a PATH
+# without uname reads as off Linux, silently.
+_harness_state_root() {
+  local data="${XDG_DATA_HOME:-}" state="${XDG_STATE_HOME:-}"
+  data="${data%/}" state="${state%/}"
+  if [ "$(uname -s 2>/dev/null)" != Linux ]; then echo "${HOME:-}/.harness"; return; fi
+  case "$data" in /*) ;; *) data="${HOME:-}/.local/share" ;; esac
+  case "$state" in /*) ;; *) state="${HOME:-}/.local/state" ;; esac
+  if [ ! -f "$data/harness/.harness-root" ] && [ -e "${HOME:-}/.harness" ]; then echo "${HOME:-}/.harness"; return; fi
+  echo "$state/harness"
+}
+
+HARNESS_RUNTIME="${ADAPTER_RUNTIME_DIR:-$(_harness_state_root)/runtime}"
 # The Pythons uv downloads live with Harness's other runtimes, not in uv's own ~/.local/share/uv:
 # a package's venv points at its interpreter, and `uv python uninstall` there must not break it.
 UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR:-$HARNESS_RUNTIME/python}"
@@ -130,11 +146,24 @@ harness_uv() {
   PATH="$dir:$PATH"; export PATH
 }
 
+# True when the venv DIR names ~/.harness (its Python, or pip's) while this home has moved off it: that
+# venv runs only through the bridge the move leaves there, and the bridge goes. The state root says
+# whether it moved; a runtime set elsewhere (ADAPTER_RUNTIME_DIR) leaves ~/.harness where it is.
+_harness_venv_on_old_tree() {
+  local old="${HOME:-}/.harness/" cfg pip=""
+  case "$(_harness_state_root)/" in "$old"*) return 1 ;; esac
+  cfg="$(cat "$1/pyvenv.cfg" 2>/dev/null || true)"
+  [ -r "$1/bin/pip" ] && IFS= read -r pip < "$1/bin/pip"
+  case "$cfg
+$pip" in *"$old"*) return 0 ;; esac
+  return 1
+}
+
 # harness_venv DIR VERSION [MIN [BELOW]] — MIN defaults to VERSION; BELOW is exclusive and optional.
 harness_venv() {
   local dir="${1:?harness_venv needs a directory}" want="${2:?harness_venv needs a Python version}"
   local min="${3:-$2}" below="${4:-}"
-  if [ -x "$dir/bin/python" ] && "$dir/bin/python" -c '
+  if [ -x "$dir/bin/python" ] && ! _harness_venv_on_old_tree "$dir" && "$dir/bin/python" -c '
 import sys
 at = lambda s: tuple(int(p) for p in s.split("."))
 v = sys.version_info[:2]
@@ -183,7 +212,7 @@ harness_micromamba() {
   export HARNESS_MICROMAMBA
 }
 
-# harness_conda_env DIR SPEC… — conda-forge only, packages cached under ~/.harness/runtime/mamba.
+# harness_conda_env DIR SPEC… — conda-forge only, packages cached in mamba in Harness's runtime folder.
 harness_conda_env() {
   local dir="${1:?harness_conda_env needs a directory}"
   shift

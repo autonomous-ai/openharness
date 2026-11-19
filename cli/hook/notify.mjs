@@ -23,6 +23,7 @@ import {
   accessSync,
   closeSync,
   constants,
+  existsSync,
   fchmodSync,
   fstatSync,
   fsyncSync,
@@ -142,9 +143,27 @@ function agyStopStatus(input) {
   return input.fullyIdle === false ? 'waiting' : failed || input.error ? 'error' : undefined
 }
 
+/**
+ * Harness's data and state folders, by the rule of src/config/harnessHome.ts: on Linux the XDG ones once the data one
+ * holds its marker (`.harness-root`, a file: a folder of its name is none), else ~/.harness while that exists, else the
+ * XDG ones (a variable counts only as an absolute path); ~/.harness elsewhere.
+ */
+function harnessRoots() {
+  const legacy = join(homedir(), '.harness')
+  if (process.platform !== 'linux') return { data: legacy, state: legacy }
+  const base = (name, ...fallback) => isAbsolute(process.env[name] || '') ? process.env[name] : join(homedir(), ...fallback)
+  const xdg = { data: join(base('XDG_DATA_HOME', '.local', 'share'), 'harness'), state: join(base('XDG_STATE_HOME', '.local', 'state'), 'harness') }
+  return isRegularFile(join(xdg.data, '.harness-root')) || !existsSync(legacy) ? xdg : { data: legacy, state: legacy }
+}
+
+/** A regular file, through a link as the installers' `test -f` looks; a folder, or nothing, is none. */
+function isRegularFile(path) {
+  try { return statSync(path).isFile() } catch { return false }
+}
+
 function paths() {
-  const cliDir = join(homedir(), '.harness', 'cli')
-  const dataDir = routed?.dataDir ?? argValue('--data-dir', process.env.ADAPTER_DATA_DIR || join(cliDir, 'data'))
+  // Every installed command names its data folder: the rule is looked up only for one that does not.
+  const dataDir = routed?.dataDir ?? (argValue('--data-dir', '') || process.env.ADAPTER_DATA_DIR || join(harnessRoots().data, 'cli', 'data'))
   const claudeProjectsDir = argValue('--claude-projects-dir', process.env.CLAUDE_PROJECTS_DIR || join(homedir(), '.claude', 'projects'))
   const codexHome = argValue('--codex-home', process.env.CODEX_HOME || join(homedir(), '.codex'))
   const grokHome = argValue('--grok-home', process.env.GROK_HOME || join(homedir(), '.grok'))
@@ -318,8 +337,24 @@ function privateSocket(file) {
 function socketIn(dataDir, port) {
   const beside = join(dataDir, `daemon-${port}.sock`)
   if (Buffer.byteLength(beside) <= MAX_SOCKET_PATH_BYTES) return beside
-  const short = join(homedir(), '.harness', 's', createHash('sha256').update(dataDir).digest('hex').slice(0, 16), `daemon-${port}.sock`)
+  const root = runtimeShortRoot() ?? join(harnessRoots().state, 's')
+  const short = join(root, createHash('sha256').update(dataDir).digest('hex').slice(0, 16), `daemon-${port}.sock`)
   return Buffer.byteLength(short) <= MAX_SOCKET_PATH_BYTES ? short : null
+}
+
+/**
+ * Where short folders go on Linux when the account has its own runtime folder, as src/lib/localSocket.ts finds it:
+ * `$XDG_RUNTIME_DIR/harness` when the variable names an absolute path to a real folder, not a link, of this account's,
+ * mode 0700. Null otherwise.
+ */
+function runtimeShortRoot() {
+  const dir = process.env.XDG_RUNTIME_DIR
+  if (process.platform !== 'linux' || !dir || !isAbsolute(dir)) return null
+  try {
+    const seen = lstatSync(dir)
+    const uid = typeof process.getuid === 'function' ? process.getuid() : null
+    return seen.isDirectory() && seen.uid === uid && (seen.mode & 0o7777) === 0o700 ? join(dir, 'harness') : null
+  } catch { return null }
 }
 
 function daemonSocket(port, dataDir) {
@@ -1008,11 +1043,11 @@ async function ownPane(pane) {
 }
 
 /**
- * Where every daemon on this computer says it listens, one file per pane tag (src/lib/hookRoutes.ts,
- * which hookNotify.spec.ts keeps this equal to).
+ * Where every daemon on this computer says it listens, one file per pane tag (src/lib/hookRoutes.ts), by default
+ * in the state folder.
  */
 function hookRoutesDir() {
-  return process.env.HARNESS_HOOK_ROUTES_DIR || join(homedir(), '.harness', 'hook-routes')
+  return process.env.HARNESS_HOOK_ROUTES_DIR || join(harnessRoots().state, 'hook-routes')
 }
 
 /**

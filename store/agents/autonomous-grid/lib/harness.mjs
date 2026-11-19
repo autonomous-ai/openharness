@@ -1,10 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { closeSync, constants, fstatSync, openSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { DaemonWebSocket, daemonSocketPath } from './localDaemon.mjs';
+import { DaemonWebSocket, daemonDataDir, daemonSocketPath } from './localDaemon.mjs';
 
 const updateMessage = 'This machine needs a Harness version with Grid fleet support. Update Harness there, or configure an existing SSH target.';
 
@@ -29,7 +28,7 @@ export function bridgeUrl(env = process.env) {
  *
  * Since Harness 0.4.21 the loopback port (REST and `/api/local-ws`) answers 401 to a process that does
  * not show `X-Harness-Local: <credential>`, the 0600 `hook-credential` file in Harness's data folder
- * (`ADAPTER_DATA_DIR`, default `~/.harness/cli/data`) — so only the OS user Harness runs as gets in.
+ * (`ADAPTER_DATA_DIR`, default `cli/data` in its data root) — so only the OS user Harness runs as gets in.
  * Read with the CLI's own checks (cli/src/lib/hookAuth.ts `readHookCredential`): a folder that is ours
  * and nobody else can write, a 0600 regular file of ours, a 43-character base64url value. Anything else
  * is no credential and no header (the CLI also tightens a 0755 folder; a reader leaves it alone).
@@ -39,7 +38,7 @@ export function localCredentialHeaders(env = process.env) {
   // Where a socket can be, and on Windows, where the daemon's pipe is the way, nothing carries the credential: a holder of the
   // TCP port would hear it (localDaemon.mjs; on Windows the Team account's daemon can hold it from boot, audit W1).
   if (process.platform === 'win32' || daemonSocketPath(65_535, env)) return {};
-  const dir = env.ADAPTER_DATA_DIR || join(homedir(), '.harness', 'cli', 'data');
+  const dir = daemonDataDir(env);
   const uid = typeof process.getuid === 'function' ? process.getuid() : null;
   const opened = [];
   try {

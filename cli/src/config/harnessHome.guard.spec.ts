@@ -23,8 +23,8 @@ const HOME = /home|userprofile|\baccount\b/i
 const INLINE = /(?:\$HOME|~|%USERPROFILE%|\$env:USERPROFILE)[\\/]+\.harness(?![\w-])/g
 /** `.harness` straight after an interpolation, ${x}/.harness: a hit only near a home, like SEGMENT, as ${workspace}/.harness is a project's. */
 const INTERPOLATED = /\}[\\/]+\.harness(?![\w-])/g
-/** A regular expression that matches a home path: \/\.harness, [\\/]\.harness. */
-const PATTERN = /(?:\\\/|\[\\\\\/\])\\\.harness(?![\w-])/g
+/** A regular expression that matches a home path: \/\.harness, [\\/]\.harness, [\\/]\.?harness. */
+const PATTERN = /(?:\\\/|\[\\\\\/\])\\\.\??harness(?![\w-])/g
 /** The home folder's name, which joined onto a home is a hand-built path with no literal to find. */
 const NAME = /\bHARNESS_HOME_NAME\b/g
 
@@ -82,10 +82,9 @@ const onLine = (...lines: string[]) => (hit: Hit): boolean => lines.includes(hit
 const ALLOWED: { files: string[], hit: (hit: Hit) => boolean, why: string }[] = [
   { files: ['hook/notify.mjs'], hit: () => true, why: 'Runs as an installed copy with no import from src; its bytes feed Codex\'s trusted hash' },
   { files: ['engines/kit/notifyHooks.ts'], hit: onLine(String.raw`const LEGACY_SCRIPT = /\/\.harness\/cli\/(?:hook\/)?notify\.mjs$/`), why: 'LEGACY_SCRIPT: what old installs wrote' },
-  { files: ['lib/localSocket.ts'], hit: onLine(String.raw`if (!/[\\/]\.harness[\\/]s[\\/][0-9a-f]{16}$/.test(folder)) return`), why: 'prepareShortFolder checks the shape of a folder it is handed' },
-  { files: ['harnessd/platform.ts'], hit: onLine('return this.deps.dataDir ?? join(this.deps.home, \'.harness\', \'cli\', \'data\')'), why: 'The master imports only Node and its own folder; its fallback is listed for PR 2' },
-  { files: ['lib/uninstall/removal.ts'], hit: onLine('import { HARNESS_HOME_NAME } from \'../../config/harnessHome.js\'', 'const ROOT_NAME = HARNESS_HOME_NAME'), why: 'checkRoot refuses a root not named after the home folder; listed for PR 2' },
-  { files: ['cli.ts', 'lib/uninstall/command.ts', 'config/startHome.ts', 'config/testIsolation.ts'], hit: (hit) => hit.text.startsWith('~'), why: 'Help and message text a person reads' },
+  { files: ['lib/localSocket.ts'], hit: onLine(String.raw`if (!inRuntime && !/[\\/]\.?harness[\\/]s[\\/][0-9a-f]{16}$/.test(folder)) return`), why: 'prepareShortFolder checks the shape of a folder it is handed' },
+  { files: ['lib/uninstall/removal.ts'], hit: onLine('import { HARNESS_ENTRIES, HARNESS_HOME_NAME, xdgRoots, type HarnessEntry } from \'../../config/harnessHome.js\'', 'const ROOT_NAME = HARNESS_HOME_NAME'), why: 'checkRoot refuses a root not named after the home folder, but Linux\'s two XDG roots' },
+  { files: ['cli.ts', 'lib/uninstall/command.ts', 'config/testIsolation.ts'], hit: (hit) => hit.text.startsWith('~'), why: 'Help and message text a person reads' },
 ]
 
 const allowed = (hit: Hit): boolean => ALLOWED.some((entry) => entry.files.includes(hit.file) && entry.hit(hit))
@@ -130,6 +129,7 @@ describe('no hand-built home .harness path outside config/harnessHome.ts', () =>
       String.raw`const dir = '%USERPROFILE%\\.harness'`,
       String.raw`const pattern = /\/\.harness\/cli/`,
       String.raw`const pattern = /[\\/]\.harness[\\/]s/`,
+      String.raw`const pattern = /[\\/]\.?harness[\\/]s/`,
       '/* a comment */ const dir = join(home, \'.harness\')',
       'const url = \'http://x //y\'; const dir = join(home, \'.harness\')',
       'const dir = join(homedir(), HARNESS_HOME_NAME, \'logs\')',
@@ -160,7 +160,6 @@ describe('no hand-built home .harness path outside config/harnessHome.ts', () =>
 
   it('excuses an allowlisted line, not another hit in the same file', () => {
     for (const [file, planted] of [
-      ['harnessd/platform.ts', 'const logs = join(this.deps.home, \'.harness\', \'logs\')'],
       ['lib/localSocket.ts', String.raw`const pattern = /\/\.harness\/run/`],
       ['engines/kit/notifyHooks.ts', String.raw`const pattern = /\/\.harness\/run/`],
     ]) expect(hitsIn(file, planted).filter((hit) => !allowed(hit)), `${file}: ${planted}`).toHaveLength(1)

@@ -1,8 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { atomicJson, cliDetail, DEFAULT_CONFIG, execute, gridJson, gridSelect, harnessNameFor, invocation, nameJoin, operations, runTracked, validateConfig } from '../lib/fleet.mjs';
 
 const temporary = async t => { const dir=await mkdtemp(join(tmpdir(),'grid-harness-test-'));t.after(()=>rm(dir,{recursive:true,force:true}));return dir; };
@@ -107,4 +110,57 @@ test('the name is read live for the machine the command targets',()=>{
   assert.equal(harnessNameFor({id:'local',transport:'local'},[]),null);
   // A name that would read as a flag or break an argument is not passed.
   for(const name of ['--all','a\nb','  '])assert.equal(harnessNameFor({id:'local',transport:'local'},[{current:true,name}]),null);
+});
+
+// Where a machine keeps the managed Grid follows Harness's rule: on Linux the runtime is in the XDG state root unless
+// ~/.harness exists and the XDG data root holds no marker (`marker`: the folder given one). Each home has a fake uname, so every platform's answer runs on any machine.
+const RUNTIME_HOMES=[
+  {name:'a fresh Linux home',system:'Linux',runtime:'.local/state/harness/runtime'},
+  {name:'a legacy Linux home',system:'Linux',make:['.harness'],runtime:'.harness/runtime'},
+  {name:'a moved Linux home',system:'Linux',make:['.harness'],marker:'.local/share/harness',runtime:'.local/state/harness/runtime'},
+  {name:'a data root without the marker',system:'Linux',make:['.harness','.local/share/harness'],runtime:'.harness/runtime'},
+  {name:'XDG bases set',system:'Linux',env:home=>({XDG_DATA_HOME:join(home,'d'),XDG_STATE_HOME:join(home,'s')}),make:['.harness'],marker:'d/harness',runtime:'s/harness/runtime'},
+  {name:'XDG bases with a trailing slash',system:'Linux',env:home=>({XDG_DATA_HOME:join(home,'d')+'/',XDG_STATE_HOME:join(home,'s')+'/'}),make:['.harness'],marker:'d/harness',runtime:'s/harness/runtime'},
+  {name:'macOS',system:'Darwin',make:['.harness'],marker:'.local/share/harness',runtime:'.harness/runtime'},
+];
+/** A home for `c`, with `grid(runtime)` recording there a grid that prints its own path; PATH holds only what the shell texts call. */
+async function gridHome(t,c){
+  const home=await temporary(t),bin=join(home,'bin');
+  await mkdir(bin);
+  for(const tool of ['cat','dirname'])await symlink(['/bin','/usr/bin'].map(dir=>join(dir,tool)).find(existsSync),join(bin,tool));
+  await writeFile(join(bin,'uname'),`#!/bin/sh\necho ${c.system}\n`,{mode:0o755});
+  for(const folder of c.make??[])await mkdir(join(home,folder),{recursive:true});
+  if(c.marker){await mkdir(join(home,c.marker),{recursive:true});await writeFile(join(home,c.marker,'.harness-root'),'1\n',{mode:0o600});}
+  const grid=async runtime=>{
+    const file=join(runtime,'grid-1','grid');
+    await mkdir(join(runtime,'grid-1'),{recursive:true});await writeFile(file,'#!/bin/sh\nprintf %s "$0"\n',{mode:0o755});
+    await writeFile(join(runtime,'current-grid'),file);
+    return file;
+  };
+  return {home,grid,env:{PATH:bin,HOME:home,...c.env?.(home)}};
+}
+test('the remote line finds current-grid by the rule',async t=>{
+  // The text SSH runs on the other machine, run here with sh.
+  const remote=invocation({transport:'ssh',host:'rig'},['--version']).args.at(-1);
+  for(const c of RUNTIME_HOMES){
+    const {home,grid,env}=await gridHome(t,c),want=await grid(join(home,c.runtime));
+    const run=spawnSync('/bin/sh',['-c',remote],{encoding:'utf8',env});
+    assert.equal(run.stdout,want,`${c.name}: ${run.stderr}`);
+  }
+});
+test('grid.sh does the same, HARNESS_GRID_BIN and ADAPTER_RUNTIME_DIR first',async t=>{
+  // A copy outside the package, so no .venv of a developer's checkout answers first.
+  const pkg=await temporary(t),gridSh=join(pkg,'toolchain','grid.sh');
+  await mkdir(join(pkg,'toolchain'));await copyFile(fileURLToPath(new URL('../toolchain/grid.sh',import.meta.url)),gridSh);
+  const runs=env=>spawnSync('/bin/bash',[gridSh,'--version'],{encoding:'utf8',env});
+  for(const c of RUNTIME_HOMES){
+    const {home,grid,env}=await gridHome(t,c),want=await grid(join(home,c.runtime));
+    const run=runs(env);
+    assert.equal(run.stdout,want,`${c.name}: ${run.stderr}`);
+  }
+  const {home,grid,env}=await gridHome(t,RUNTIME_HOMES[0]);
+  await grid(join(home,RUNTIME_HOMES[0].runtime));
+  const own=await grid(join(home,'own'));
+  assert.equal(runs({...env,ADAPTER_RUNTIME_DIR:join(home,'own')}).stdout,own,'ADAPTER_RUNTIME_DIR');
+  assert.equal(runs({...env,ADAPTER_RUNTIME_DIR:join(home,'own'),HARNESS_GRID_BIN:'/bin/echo'}).stdout,'--version\n','HARNESS_GRID_BIN');
 });

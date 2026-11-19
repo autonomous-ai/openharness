@@ -117,5 +117,6 @@ class HarnessFileStore
   static String defaultDirectoryPath({
     Map<String, String>? environment,
     HarnessEntry? entry,
+    HomeLook? look,
   }) => throw UnsupportedError('The browser has no Harness home directory.');
 }

@@ -1,6 +1,6 @@
 //! Find the `harness` CLI and run it: deadlines, NDJSON lines.
 
-use crate::harness_home::{Entry, harness_path};
+use crate::harness_home::{Entry, Look, harness_roots_with};
 use crate::types::{Log, Output};
 use std::collections::VecDeque;
 use std::env;
@@ -49,7 +49,7 @@ const CODE_MAX: usize = 32;
 const VERSION_MAX: usize = 32;
 
 /// How to run the CLI: `program`, then `prefix`, then the arguments, with `env` on top of the app's own.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct Invocation {
     pub program: PathBuf,
     pub prefix: Vec<OsString>,
@@ -58,20 +58,33 @@ pub struct Invocation {
     from: Lookup,
 }
 
+/// The XDG variables Harness's folders are found by: this process's, or a test's.
+type Env = fn(&str) -> Option<OsString>;
+
 /// What `find_cli` looks with.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 struct Lookup {
     home: PathBuf,
     path_var: Option<OsString>,
     over: Option<PathBuf>,
+    xdg: Env,
 }
 
 /// The desktop app's order: `over`, then the managed runtime with its `cli.js`, then `~/.local/bin/harness`, then a
 /// `harness` in one of PATH's absolute folders. A Finder-launched app has launchd's bare PATH, hence the first two.
 pub fn find_cli(home: &Path, path_var: Option<&OsStr>, over: Option<&Path>) -> Option<Invocation> {
+    find_cli_with(home, path_var, over, |name| env::var_os(name))
+}
+
+/// `find_cli`, Harness's folders found by `xdg`'s XDG variables.
+fn find_cli_with(home: &Path, path_var: Option<&OsStr>, over: Option<&Path>, xdg: Env) -> Option<Invocation> {
     let (program, prefix) = match over {
         Some(over) => (over.to_path_buf(), Vec::new()),
-        None => installed(home, path_var)?,
+        None => installed_with(
+            home,
+            path_var,
+            &Look { linux: cfg!(target_os = "linux"), env: &xdg, exists: &Path::exists, file: &Path::is_file },
+        )?,
     };
     let locale =
         ["LC_ALL", "LC_CTYPE", "LANG"].into_iter().find_map(|name| env::var_os(name).filter(|value| !value.is_empty()));
@@ -79,13 +92,16 @@ pub fn find_cli(home: &Path, path_var: Option<&OsStr>, over: Option<&Path>) -> O
         home: home.to_path_buf(),
         path_var: path_var.map(OsStr::to_os_string),
         over: over.map(Path::to_path_buf),
+        xdg,
     };
     Some(Invocation { program, prefix, env: child_env(home, path_var, locale.as_deref()), from })
 }
 
-fn installed(home: &Path, path_var: Option<&OsStr>) -> Option<(PathBuf, Vec<OsString>)> {
-    let cli_js = harness_path(home, Entry::Cli).join("cli.js");
-    if let Some(node) = managed_node(&harness_path(home, Entry::Runtime)).filter(|_| cli_js.is_file()) {
+/// The installed CLI, Harness's folders found by one look, so its `cli.js` and its Node never come from two layouts.
+fn installed_with(home: &Path, path_var: Option<&OsStr>, look: &Look) -> Option<(PathBuf, Vec<OsString>)> {
+    let roots = harness_roots_with(home, look);
+    let cli_js = roots.path(Entry::Cli).join("cli.js");
+    if let Some(node) = managed_node(&roots.path(Entry::Runtime)).filter(|_| cli_js.is_file()) {
         return Some((node, vec![cli_js.into_os_string()]));
     }
     let launcher = home.join(".local").join("bin").join("harness");
@@ -211,8 +227,9 @@ impl HarnessCli {
 
     /// NotFound when the CLI has gone since, as when it was never there.
     fn command(&self, args: &[&str]) -> io::Result<Command> {
-        let Lookup { home, path_var, over } = &self.from;
-        let invocation = find_cli(home, path_var.as_deref(), over.as_deref()).ok_or(io::ErrorKind::NotFound)?;
+        let Lookup { home, path_var, over, xdg } = &self.from;
+        let invocation =
+            find_cli_with(home, path_var.as_deref(), over.as_deref(), *xdg).ok_or(io::ErrorKind::NotFound)?;
         let mut command = Command::new(&invocation.program);
         command.args(&invocation.prefix).args(args).envs(invocation.env);
         Ok(command)
@@ -596,6 +613,7 @@ fn ended(name: &str, code: Option<i32>, stderr: &str) -> String {
 mod tests {
     use super::*;
     use crate::orca_cli;
+    use crate::harness_home::Look;
     use crate::testing::{Fake, wait_gone};
     use crate::types::{Fingerprint, MemoryLog};
     use std::cell::Cell;
@@ -617,8 +635,37 @@ mod tests {
         path
     }
 
+    /// No XDG variable set: the folders a test lays out are the only ones the rule finds, whatever the computer
+    /// running it holds.
+    fn no_env(_: &str) -> Option<OsString> {
+        None
+    }
+
     fn found(home: &Path, path_var: Option<&OsStr>) -> Option<(PathBuf, Vec<OsString>)> {
-        find_cli(home, path_var, None).map(|cli| (cli.program, cli.prefix))
+        find_cli_with(home, path_var, None, no_env).map(|cli| (cli.program, cli.prefix))
+    }
+
+    #[test]
+    fn the_cli_and_its_node_come_from_one_look() {
+        let home = tempfile::tempdir().unwrap();
+        let home = home.path();
+        let legacy = home.join(".harness");
+        let node = put(legacy.join("runtime").join("node-v22").join("bin").join("node"));
+        fs::write(legacy.join("runtime").join("current-node"), node.display().to_string()).unwrap();
+        let cli_js = put(legacy.join("cli").join("cli.js"));
+        // The move lands between two looks: the XDG data root's marker is there from the second one on.
+        let marker = home.join(".local").join("share").join("harness").join(".harness-root");
+        let asked = Cell::new(0);
+        let exists = |path: &Path| {
+            if path == marker {
+                asked.set(asked.get() + 1);
+                return asked.get() > 1;
+            }
+            path.exists()
+        };
+        let look = Look { linux: true, env: &no_env, exists: &exists, file: &exists };
+        assert_eq!(installed_with(home, None, &look), Some((node, vec![cli_js.into_os_string()])));
+        assert_eq!(asked.get(), 1);
     }
 
     #[test]
@@ -724,7 +771,7 @@ mod tests {
         std::os::unix::fs::symlink("/usr/bin/true", &old).unwrap();
         std::os::unix::fs::symlink("/usr/bin/false", &new).unwrap();
         fs::write(runtime.join("current-node"), old.display().to_string()).unwrap();
-        let cli = HarnessCli::new(find_cli(home, None, None).unwrap(), Arc::new(MemoryLog::default()));
+        let cli = HarnessCli::new(find_cli_with(home, None, None, no_env).unwrap(), Arc::new(MemoryLog::default()));
         let status = ["auth", "status", "--json"];
         assert_eq!(cli.run(&status, WAIT).unwrap().code, Some(0));
         // The CLI's updater repoints it while the app runs.
