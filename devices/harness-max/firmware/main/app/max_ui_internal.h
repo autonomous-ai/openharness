@@ -236,6 +236,7 @@ typedef struct {
     bool apps_known;                 // an `apps` frame came: else the app column names the computer, and no Apps page
     bool harness_own;                // apps[0] is the bar's own Harness, its count the ring's (max_ui_apps)
     char picked[PRO_APP_ID_BYTES];   // the app the person picked on Apps, until an `apps` shows another
+    unsigned news;                   // MAX_NEWS_* that rang since max_ui_take_news
     max_inbox_t inbox[MAX_INBOX];    // newest first
     int inbox_count;
     int cell_page;                   // Overview's page of cells, within max_cell_pages()
@@ -316,8 +317,8 @@ bool max_show(max_view_t view);
 void max_attention(const char *id, max_attn_t why, uint32_t now_ms);
 // The agent still is what `why` says (asking, done, failed): Attention and the toast hold only while it is.
 bool max_attn_holds(const char *id, max_attn_t why);
-// An agent needs the person (a new question, a failed turn, an alert's summary): an unread notice in Inbox, and
-// Attention takes the glass, unless a person talks or New Harness is up (then only the toast), or another agent's
+// An agent needs the person (a new question, a failed turn, an alert's summary): it rings (max_ui_take_news), an unread
+// notice in Inbox, and Attention takes the glass, unless a person talks or New Harness is up (then only the toast), or another agent's
 // question is on Attention (a question then waits its turn; a turn's end stays in Inbox).
 void max_attend(max_agent_t *, max_attn_t why, uint32_t now_ms);
 // A question back quietly (max_ui_question_quiet): its notice, and nothing more. The same notice keeps its place and

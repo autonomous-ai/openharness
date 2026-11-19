@@ -9,6 +9,7 @@
 #include "max_test.h"
 
 #include "app/max_app.h"
+#include "app/max_chime.h"
 #include "app/pro_touch.h"
 #include "app/pro_voice.h"
 #include "audio/audio_capture.h"
@@ -107,7 +108,14 @@ bool pro_cable_send_open(const char *agent_id)
     snprintf(OPENED, sizeof OPENED, "%s", agent_id);
     return true;
 }
-void audio_beep(void) { CHECK(LOCK_DEPTH == 0); BEEPS++; }
+// The board's chimes: BEEPS counts them all, CHIMES each sound.
+static int CHIMES[3];
+void max_chime(max_chime_t sound)
+{
+    CHECK(LOCK_DEPTH == 0 && (int)sound >= 0 && (int)sound < 3);
+    BEEPS++;
+    CHIMES[sound]++;
+}
 static char PICKED[PRO_APP_ID_BYTES];
 bool pro_cable_app_pick(const char *app, bool wait)
 {
@@ -174,7 +182,8 @@ time_t time(time_t *out)
     if (out) *out = WALL;
     return WALL;
 }
-bool pro_settings_muted(void) { return false; }
+static bool MUTED;
+bool pro_settings_muted(void) { return MUTED; }
 void pro_cable_counters(uint32_t *bad, uint32_t *unknown) { *bad = *unknown = 0; }
 uint32_t pro_cable_seq_gaps(void) { return 0; }
 cable_link_stats_t cable_link_stats(void) { return (cable_link_stats_t){0}; }
@@ -472,11 +481,56 @@ static void test_question_chimes_once(void)
     pro_app_question_close("a");
     now += 60000;
     pro_app_ask("a", NULL, "r2", "And this?", NULL, 0, false, false);
-    CHECK(BEEPS == 2);
-    // A failed turn is an alert too, but a second alert within 30 s does not chime again.
+    CHECK(BEEPS == 2 && CHIMES[MAX_CHIME_ASK] == 2);
+}
+
+static void reset_chimes(void)
+{
+    now += 60000;   // past every sound's coalescing window
+    BEEPS = 0;
+    memset(CHIMES, 0, sizeof CHIMES);
+}
+
+// Each alert its sound (V3's): a question rings MAX_CHIME_ASK, a failure MAX_CHIME_FAILED, a loud finished turn
+// MAX_CHIME_DONE. A summary of the list or silent tier, one restored on connect, and a failure's own summary are not
+// news. Each sound once per 30 s, so a soft done never holds back a question's chime.
+static void test_each_alert_its_chime(void)
+{
+    fresh();
+    reset_chimes();
+    pro_app_ask("a", NULL, "r1", "Proceed?", NULL, 0, false, false);
+    CHECK(BEEPS == 1 && CHIMES[MAX_CHIME_ASK] == 1);
     pro_app_turn("b", "started", "", 0);
     pro_app_turn("b", "error", "boom", 0);
+    CHECK(BEEPS == 2 && CHIMES[MAX_CHIME_FAILED] == 1);
+    pro_app_summary("b", "Could not reach the API", NULL, NULL, false, POD_TIER_ALERT);   // the failure's words
+    pro_app_turn("c", "started", "", 0);
+    pro_app_summary("c", "Listed", NULL, NULL, false, POD_TIER_LIST);
+    pro_app_turn("d", "started", "", 0);
+    pro_app_summary("d", "Quiet", NULL, NULL, false, POD_TIER_SILENT);
+    pro_app_summary("e", "From before", NULL, NULL, true, POD_TIER_ALERT);
     CHECK(BEEPS == 2);
+    pro_app_turn("f", "started", "", 0);
+    pro_app_summary("f", "Fixed the flaky test", NULL, NULL, false, POD_TIER_ALERT);
+    CHECK(BEEPS == 3 && CHIMES[MAX_CHIME_DONE] == 1);
+    // Within 30 s of its own last play a sound waits; another sound does not.
+    now += 29000;
+    pro_app_ask("g", NULL, "r2", "Merge?", NULL, 0, false, false);
+    pro_app_turn("h", "started", "", 0);
+    pro_app_turn("h", "error", "boom", 0);
+    pro_app_turn("i", "started", "", 0);
+    pro_app_summary("i", "Shipped", NULL, NULL, false, POD_TIER_ALERT);
+    CHECK(BEEPS == 3);
+    now += 1000;
+    pro_app_ask("j", NULL, "r3", "Push?", NULL, 0, false, false);
+    CHECK(BEEPS == 4 && CHIMES[MAX_CHIME_ASK] == 2 && LOCK_DEPTH == 0);
+    // Muted: no sound, the glass still wakes.
+    reset_chimes();
+    MUTED = true;
+    pro_app_sleep();
+    pro_app_ask("k", NULL, "r4", "Deploy?", NULL, 0, false, false);
+    CHECK(BEEPS == 0 && !pro_app_asleep());
+    MUTED = false;
 }
 
 // A `tier: "list"` question (one the bar was told before) is filed silently once the welcome lists question.tier: no
@@ -658,6 +712,7 @@ int main(void)
     test_update_gate_holds_talk();
     test_asleep_refuses_the_finger();
     test_question_chimes_once();
+    test_each_alert_its_chime();
     test_listed_question_is_silent();
     test_question_off_the_ring_rings_once();
     test_drawer_rows();

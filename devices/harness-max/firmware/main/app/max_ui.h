@@ -60,6 +60,10 @@ bool max_ui_focus(const char *id);
 bool max_ui_apps(const char *shown, const pro_app_row_t *rows, int n, uint32_t now_ms);
 // The person picked this app on Apps (MAX_ACT_PICK): the `apps` that shows it is their doing, not the computer's.
 void max_ui_app_picked(const char *app);
+// What rang since the last take, for the app's chime and wake: a question (one the bar was not told before), a failed
+// turn, a loud finished turn. Quiet filings (a list row, the drawer's rows) ring nothing.
+enum { MAX_NEWS_ASK = 1u << 0, MAX_NEWS_FAILED = 1u << 1, MAX_NEWS_DONE = 1u << 2 };
+unsigned max_ui_take_news(void);
 
 // ---- New Harness ----
 // The welcome offers `form`: Apps shows "+ New". Read on every tick: a daemon restarted inside a session

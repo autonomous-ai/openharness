@@ -231,6 +231,7 @@ static void inbox_words(const max_agent_t *a)
 void max_attend(max_agent_t *a, max_attn_t why, uint32_t now_ms)
 {
     max_m.idle_from = now_ms;
+    max_m.news |= why == MAX_ATTN_ASK ? MAX_NEWS_ASK : why == MAX_ATTN_FAIL ? MAX_NEWS_FAILED : MAX_NEWS_DONE;
     inbox_add(a, why, false, now_ms);
     if (max_m.talk != MAX_TALK_IDLE || max_form_open()) {   // a person talks or fills the form: only the toast
         max_copy(max_m.toast_id, sizeof max_m.toast_id, a->id);
@@ -250,8 +251,18 @@ void max_file_question(const max_agent_t *a, uint32_t now_ms) { inbox_add(a, MAX
 
 bool max_file_notice(const char *id, const char *name, const char *text, bool quiet, uint32_t now_ms)
 {
-    if (!quiet) max_m.idle_from = now_ms;
+    if (!quiet) {   // it rings, though its agent is not on the glass to take Attention
+        max_m.idle_from = now_ms;
+        max_m.news |= MAX_NEWS_ASK;
+    }
     return inbox_put(id, name, "", "", MAX_ATTN_ASK, text, quiet, now_ms);
+}
+
+unsigned max_ui_take_news(void)
+{
+    const unsigned news = max_m.news;
+    max_m.news = 0;
+    return news;
 }
 
 static bool busy(void)
