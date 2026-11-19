@@ -300,9 +300,9 @@ describe('Harness Device\'s plugin for Orca, set up from the devices\' process',
     expect(r.counted).toEqual([['set up']])
   })
 
-  it.each(['old', 'other'] as const)('Orca too old, or a plugin Orca keeps as it is (%s): an hour, nothing counted', async (error) => {
+  it.each(['old', 'other'] as const)('Orca too old, or a plugin Orca keeps as it is (%s): an hour with no pass at its end, nothing counted', async (error) => {
     const r = rig()
-    r.state.setUps.push({ orca: 'absent', error })
+    r.state.setUps.push({ orca: 'absent', error }, { orca: 'absent', error })
     await r.setup.pass()
     expect(r.state.record).toEqual({ dial: true })
     expect(r.counted).toEqual([])
@@ -312,9 +312,22 @@ describe('Harness Device\'s plugin for Orca, set up from the devices\' process',
     await r.setup.pass()
     expect(r.setUp).toHaveBeenCalledTimes(1)
 
+    // The hour's end asks Orca nothing either, so an old Orca's CLI is not run each hour.
     r.timers[0].run()
     await settled()
+    expect(r.setUp).toHaveBeenCalledTimes(1)
+    expect(r.timers).toHaveLength(1)
+
+    // The next settle asks again, and a second answer the same waits another hour.
+    await r.setup.pass()
     expect(r.setUp).toHaveBeenCalledTimes(2)
+    expect(r.timers.map(({ ms }) => ms)).toEqual([HOUR, HOUR])
+    await r.setup.pass()
+    expect(r.setUp).toHaveBeenCalledTimes(2)
+
+    r.timers[1].run()
+    await r.setup.pass()
+    expect(r.setUp).toHaveBeenCalledTimes(3)
     expect(r.counted).toEqual([['set up']])
   })
 
