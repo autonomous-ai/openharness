@@ -17,7 +17,7 @@
  * of its own: it rides the gateway's sessions, and borrows the dial's walk and stroke through the core.
  */
 import { randomUUID } from 'node:crypto'
-import { existsSync, writeFileSync } from 'node:fs'
+import { existsSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
 import { env } from '../config/env.js'
@@ -49,6 +49,7 @@ import { createHerdrAppAdapter } from '../cable/hosts/herdrApp.js'
 import { createHerdrClient, herdrClientDeps, type HerdrClient } from '../cable/hosts/herdrClient.js'
 import { createHerdrOuter, ttyAtime } from '../cable/hosts/herdrOuter.js'
 import { HerdrSource } from '../cable/hosts/herdrSource.js'
+import { createKittyAdapter, kittyFinder } from '../cable/hosts/kitty.js'
 import { Inbox } from '../cable/hosts/inbox.js'
 import { LAST_ANSWER_DEADLINE_MS, LAST_ANSWER_MAX_BYTES, readLastAnswer } from '../cable/hosts/lastAnswer.js'
 import { systemLinuxRaise, type LinuxRaise } from '../cable/hosts/linuxRaise.js'
@@ -64,12 +65,13 @@ import { HostRegistry, type HostEntry } from '../cable/hosts/registry.js'
 import { appRoots, learnApps, readBundleId, readProcessNames } from '../cable/hosts/scannedApp.js'
 import { createScrollLines } from '../cable/hosts/scrollLines.js'
 import { createTabsAdapter, readTty, type Tab } from '../cable/hosts/tabs.js'
-import { createTmuxAdapter, createTmuxOuter, tmuxFinder } from '../cable/hosts/tmux.js'
+import { createOuter, createTmuxAdapter, tmuxClients, tmuxFinder } from '../cable/hosts/tmux.js'
 import type { HostAgent, HostAgentState } from '../cable/hosts/types.js'
 import { watchSocket } from '../cable/hosts/unixSocket.js'
 import { createVscodeAdapter, termPid } from '../cable/hosts/vscode.js'
 import { readForeground, readProcessParents, vscodeStreams, type VscodeTerminalsDeps } from '../cable/hosts/vscodeTerminals.js'
 import { createWeztermAdapter } from '../cable/hosts/wezterm.js'
+import { createZellijAdapter, zellijClients, zellijFinder } from '../cable/hosts/zellij.js'
 import { createEngineTally } from '../cable/engineTally.js'
 import { createVscodeExtensionSetup } from '../cable/vscodeExtensionSetup.js'
 import { NoticeFile, NOTICES_FILE } from '../cable/noticeFile.js'
@@ -237,6 +239,16 @@ const LISTENER_WAIT_MS = 1_000
 /** How long after the dial's own continue link to a Claude app session an attach is that link's echo: the app attaches
  *  the session it shows within about a second. Also how long any move of the dial sets the Claude app's settle aside. */
 const ATTACH_ECHO_MS = 2_000
+
+/** The uid owning the socket at [path], for kitty's: null when none is there, it is no socket, or on any error. */
+function socketOwner(path: string): number | null {
+  try {
+    const stat = statSync(path)
+    return stat.isSocket() ? stat.uid : null
+  } catch {
+    return null
+  }
+}
 
 /** Orca's account homes on this computer, read with its own `orca` (devices/orcaHomes.ts). */
 function orcaHomesCache(now: () => number, log: (line: string) => void): OrcaHomesCache {
@@ -516,16 +528,20 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
    *  The nearest host first: a multiplexer keeps the environment it started in, so in a tmux pane WezTerm's and Orca's
    *  values name the terminal the tmux server began in, and herdr inside tmux carries tmux's pane. Herdr and cmux come
    *  after tmux, as a tmux inside their terminal is the nearer host, and before the terminals: each tells its programs
-   *  they run in Ghostty, whose tabs hold none of them. */
-  // One lookup of tmux for the tap and the client lookup (createTmuxOuter, below).
+   *  they run in Ghostty, whose tabs hold none of them. Zellij is a multiplexer as tmux is, and kitty a terminal as
+   *  WezTerm is. */
+  // One lookup of tmux and one of zellij, each for the tap, the words and the client lookup (createOuter, below).
   const tmuxAt = tmuxFinder()
+  const zellijAt = zellijFinder()
   const tmux = noting(createTmuxAdapter({ run: apps.run, tmux: tmuxAt, processes: readProcessNames, log, front: () => cableHost.latestFront() }))
   const orca = createOrcaAdapter(apps, { worktreeOf: (handle) => orcaWorktrees.get(handle), log, switching: (handle) => orcaSwitches.note(handle) })
   // Cursor as found here: its folder window's tap on Linux (below) and its extension's setup run the same `cursor`.
   const cursorExtension = deps.cursorExtension ?? vscodeExtensionDeps('cursor', process.env.HARNESS_CURSOR_BIN)
   // Linux's way to bring a window forward, where macOS runs `open -b` (docs/plans/2026-11-19-dial-linux-design.md § 2).
   const raise = deps.raise ?? (apps.platform === 'linux' ? systemLinuxRaise(apps, log) : undefined)
-  const adapters: readonly HostAdapter[] = [herdrNoted, tmux, herdrAppNoted, cmuxAppNoted, ...[
+  const adapters: readonly HostAdapter[] = [herdrNoted, noting(createZellijAdapter({ run: apps.run, zellij: zellijAt, platform: apps.platform })),
+    tmux, herdrAppNoted, cmuxAppNoted, ...[
+    createKittyAdapter({ run: apps.run, kitty: kittyFinder(), platform: apps.platform, log, uid: process.getuid?.() ?? -1, socketOwner }),
     createWeztermAdapter(apps),
     // A rest's or a tap's switch: Orca's focus line for that pane, a moment later, is the dial's own echo.
     { ...orca,
@@ -628,7 +644,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     after: timerIn('orcaPlugin'),
     count: (kind, reason) => orcaCount('orca', kind, reason),
   }) : null
-  /** What the lookups of an agent nested in the person's herdr or tmux read: the table, the apps and their bundle ids. */
+  /** What the lookups of an agent nested in the person's herdr, tmux or Zellij read: the table, the apps and their bundle
+   *  ids. */
   const outerDeps = { run: apps.run, processes: readProcessNames, log, now: monotonic, platform: apps.platform,
     roots: appRoots(homedir()), bundleId: readBundleId }
   const observed = env.HARNESS_DEVICE_OBSERVED ? observedSource(core.dataDir, log, orcaHomes, {
@@ -650,10 +667,11 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // Only where a hook's address is taken: following another hc session, Herdr's adapter gives its terminals no pane, so
   // a session paired there would be listed twice on Herdr's page.
   hookIds ? (pid): string | undefined => hcSource?.terminalOf(pid) : undefined,
-  // An agent in a pane of the person's herdr or tmux is on the page of the app holding the client that shows it: each
-  // lookup answers nothing at once for an agent in none of its panes. herdr's first: herdr inside the person's tmux is
-  // the nearer host, and keeps tmux's answer when herdr's finds no app.
-  firstOuter(createHerdrOuter({ ...outerDeps, atime: ttyAtime }), createTmuxOuter({ ...outerDeps, tmux: tmuxAt }))) : null
+  // An agent in a pane of the person's herdr, tmux or Zellij is on the page of the app holding the client that shows
+  // it: each lookup answers nothing at once for an agent in none of its panes. herdr's first: herdr inside the person's
+  // tmux is the nearer host, and keeps tmux's answer when herdr's finds no app.
+  firstOuter(createHerdrOuter({ ...outerDeps, atime: ttyAtime }), createOuter(outerDeps,
+    [tmuxClients({ run: apps.run, tmux: tmuxAt }), zellijClients({ run: apps.run, zellij: zellijAt, platform: apps.platform })]))) : null
   // Orca is asked only for the parts that use its homes, the first time as the devices start: the start pass waits for
   // that read (at most its 5 s), so an Orca home gets the skill with the default one.
   if (skill || observed) void orcaHomes.refresh().then(() => {

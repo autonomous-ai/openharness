@@ -6,7 +6,7 @@
  * that session shows it, and none is moved to another session. Those are the two things done there, each only once the
  * pane's process is checked to be the agent's or one of its parents, and never on a session Harness made: nothing is
  * typed, made or closed (Q1). Beside them, a lookup reads which client shows a pane's session, to place the agent on the
- * page of the app that holds it (createTmuxOuter). tmux is the daemon's, with no `-L` or `-S`: the master's PATH may hold
+ * page of the app that holds it (tmuxClients, in createOuter). tmux is the daemon's, with no `-L` or `-S`: the master's PATH may hold
  * none, so the devices find it as the core does (tmuxFinder), the same binary and so the same server. Each value came
  * from a hook or from tmux, so it is checked against its form, and tmux runs with no shell.
  */
@@ -227,11 +227,6 @@ export interface OuterDeps {
   bundleId(bundle: string): Promise<string | undefined>
 }
 
-export interface TmuxOuterDeps extends OuterDeps {
-  run: TmuxDeps['run']
-  tmux: TmuxDeps['tmux']
-}
-
 /** The app that holds the multiplexer's client showing an agent's pane, that client's tty when it names a tab, and its
  *  process. */
 interface ClientPlace { app?: string; tty?: string; pid?: number }
@@ -307,11 +302,6 @@ export function createOuter(deps: OuterDeps, lookups: readonly ClientLookup[]): 
     }
     return undefined
   }
-}
-
-/** The outer lookup of tmux alone. */
-export function createTmuxOuter(deps: TmuxOuterDeps): OuterLookup {
-  return createOuter(deps, [tmuxClients(deps)])
 }
 
 /** tmux's part of the outer lookup: the client used last on the pane's session, read only for a pane of the person's

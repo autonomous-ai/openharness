@@ -3459,7 +3459,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     })
 
     // A socket at a path is spoken to only when it is this account's: the devices read its owner from the file.
-    it('on macOS a kitty socket of this account\'s is spoken to, and a plain file at its path is not', async () => {
+    it('on macOS a kitty socket of this account\'s is spoken to, and a plain file or nothing at its path is not', async () => {
       const folder = mkdtempSync('/tmp/hk-')
       onTestFinished(() => { rmSync(folder, { recursive: true, force: true }) })
       const socket = join(folder, 's')
@@ -3475,9 +3475,11 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       const front: Run = ['/usr/bin/open', ['-b', 'net.kovidgoyal.kitty'], 10_000]
       expect(orcaRuns).toEqual([kittyAsked(`unix:${socket}`, 'focus-window', '--match', 'id:5'), front])
       orcaRuns.length = 0
-      port.observed(hook('session-start', { hostHints: { ...kitty, KITTY_LISTEN_ON: `unix:${join(folder, 'f')}` } }))
-      await host().openAgent(ID)
-      expect(orcaRuns).toEqual([front])
+      for (const path of [join(folder, 'f'), join(folder, 'gone')]) {
+        port.observed(hook('session-start', { hostHints: { ...kitty, KITTY_LISTEN_ON: `unix:${path}` } }))
+        await host().openAgent(ID)
+      }
+      expect(orcaRuns).toEqual([front, front])
     })
 
     it('an agent in Zellij inside kitty: the tap and the words are Zellij\'s', async () => {
