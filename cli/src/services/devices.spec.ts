@@ -1,6 +1,7 @@
 // The devices (services/devices.ts): what the core tells them reaches the dial and the window bridges, what
 // they say reaches the core through its API alone, and the fleet failing costs the dial nothing.
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
 import { delimiter, dirname, join, parse, sep } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
@@ -228,6 +229,15 @@ vi.mock('../cable/hosts/scannedApp.js', async (real) => ({
 vi.mock('../lib/tmuxOnPath.js', async (real) => ({
   ...await real<typeof import('../lib/tmuxOnPath.js')>(),
   ensureTmuxOnPath: async () => ({ state: 'present' }),
+}))
+// Where zellij and kitty's kitten are: on the PATH, so no spec asks the developer's login shell or finds their own.
+vi.mock('../cable/hosts/zellij.js', async (real) => ({
+  ...await real<typeof import('../cable/hosts/zellij.js')>(),
+  zellijFinder: () => async () => ({ state: 'present' }),
+}))
+vi.mock('../cable/hosts/kitty.js', async (real) => ({
+  ...await real<typeof import('../cable/hosts/kitty.js')>(),
+  kittyFinder: () => async () => ({ state: 'present' }),
 }))
 // What a session's own process record gives: never this machine's ~/.claude.
 vi.mock('../cable/hosts/record.js', () => ({ readRecord: readers.record }))
@@ -3350,6 +3360,157 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       expect(orcaRuns.filter(([file]) => file === 'tmux').map(([, args]) => args[0])).toEqual(['display-message', 'list-clients'])
       await vi.waitFor(async () => expect((await host().listAgentSnapshot({ apps: true })).apps?.apps)
         .toContainEqual(expect.objectContaining({ id: 'terminal-app', count: 2 })))
+    })
+  })
+
+  // Zellij after herdr and before tmux, kitty before WezTerm (docs/plans/2026-11-19-dial-linux-design.md § 3).
+  describe('Zellij and kitty', () => {
+    type Run = [string, string[], number]
+    const ZELLIJ = { ZELLIJ: '0', ZELLIJ_SESSION_NAME: 's1', ZELLIJ_PANE_ID: '3' }
+    const zellijAsked = (...args: string[]): Run => ['zellij', ['--session', 's1', 'action', ...args], 10_000]
+    const focusPane = zellijAsked('focus-pane-id', '3')
+    const zellijWords = [zellijAsked('list-panes', '--json'), zellijAsked('write-chars', '--pane-id', '3', '--', 'run the tests'),
+      zellijAsked('send-keys', '--pane-id', '3', 'Enter')]
+    /** Linux's abstract socket: no owner to read. */
+    const KITTY = { KITTY_WINDOW_ID: '5', KITTY_LISTEN_ON: 'unix:@kitty-1' }
+    const kittyAsked = (listenOn: string, ...args: string[]): Run => ['kitten', ['@', '--to', listenOn, ...args], 10_000]
+    const kittyWords = [kittyAsked('unix:@kitty-1', 'send-text', '--match', 'id:5', '--', 'run the tests'),
+      kittyAsked('unix:@kitty-1', 'send-key', '--match', 'id:5', 'enter')]
+    /** The devices' runs recorded, Zellij's listing naming its pane 3 a terminal. */
+    const listing = (base: typeof orca) => ({ ...base, run: async (file: string, args: string[], timeoutMs: number) => {
+      orcaRuns.push([file, args, timeoutMs])
+      return { code: 0, stdout: args.includes('list-panes') ? JSON.stringify([{ id: 3, is_plugin: false }]) : '' }
+    } })
+    const voice = () => said().filter((line) => line.startsWith('[device] voice'))
+    /** No other adapter was reached: herdr's and Herdr's sockets, Codex's queue. */
+    const noOther = () => expect([herdrCalls, hcCalls, codexRuns]).toEqual([[], [], []])
+
+    it('a hooked agent in a Zellij pane lists v and f; on macOS its tap focuses the pane, then brings its app forward', async () => {
+      const { port } = startHere({ orca: mac })
+      // macOS's Ghostty names itself by its bundle id, which a tap brings forward.
+      port.observed(hook('session-start', { hostHints: { ...ZELLIJ, TERM_PROGRAM: 'ghostty', __CFBundleIdentifier: 'com.mitchellh.ghostty' } }))
+      attach(port)
+      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(orcaRuns).toEqual([focusPane, ['/usr/bin/open', ['-b', 'com.mitchellh.ghostty'], 10_000]])
+    })
+
+    it('on Linux a tap on an agent in a Zellij pane focuses it, then raises its caller\'s window in its terminal', async () => {
+      const linux = fakeRaise()
+      const { port } = startHere({ raise: linux.raise })
+      port.observed(hook('session-start', { hostHints: { ...ZELLIJ, TERM_PROGRAM: 'ghostty' } }))
+      attach(port)
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(orcaRuns).toEqual([focusPane])
+      expect(linux.raised).toEqual([{ pid: 4242, app: 'ghostty' }])
+    })
+
+    it('the dial\'s words to an agent in a Zellij pane run Zellij\'s three calls, and reach no other adapter', async () => {
+      const { port } = startHere({ orca: listing(orca) })
+      port.observed(hook('session-start', { hostHints: ZELLIJ }))
+      attach(port)
+      expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
+      expect(orcaRuns).toEqual(zellijWords)
+      expect(voice()).toEqual(['[device] voice · zellij'])
+      noOther()
+    })
+
+    // The outer lookup's Zellij part (zellij.ts zellijClients); its walk is zellij.spec.ts's.
+    it('an agent in Zellij is on the page of the app that holds the session\'s one client', async () => {
+      const terminal = join(homedir(), 'Applications', 'Terminal.app')
+      readers.processes.mockResolvedValue([
+        { pid: 4242, ppid: 4000, executable: 'claude' }, { pid: 4000, ppid: 3900, executable: 'zsh' }, { pid: 3900, ppid: 1, executable: 'zellij' },
+        // The client, in its Terminal tab: under the home the devices read apps in.
+        { pid: 4300, ppid: 4298, executable: 'zellij' }, { pid: 4298, ppid: 1, executable: join(terminal, 'Contents', 'MacOS', 'Terminal') },
+      ])
+      readers.bundleId.mockImplementation(async (bundle) => bundle === terminal ? 'com.apple.Terminal' : undefined)
+      const { port } = startHere({ orca: { ...mac, run: async (file, args, timeoutMs) => {
+        orcaRuns.push([file, args, timeoutMs])
+        return { code: 0, stdout: args.includes('list-clients') ? 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1         terminal_0     N/A            \n' : '' }
+      } } })
+      port.observed(hook('session-start', { hostHints: ZELLIJ }))
+      attach(port)
+      await vi.waitFor(() => expect(said()).toEqual(['[device] zellij client · found']))
+      expect(orcaRuns).toEqual([zellijAsked('list-clients')])
+      const apps = (await host().listAgentSnapshot({ apps: true })).apps?.apps
+      expect(apps).toContainEqual(expect.objectContaining({ id: 'terminal-app', count: 1 }))
+      expect(apps?.map(({ id }) => id)).not.toContain('zellij')
+    })
+
+    it('on Linux a hooked agent in a kitty window lists v and f; its tap focuses the window, then raises it', async () => {
+      const linux = fakeRaise()
+      const { port } = startHere({ raise: linux.raise })
+      port.observed(hook('session-start', { hostHints: KITTY }))
+      attach(port)
+      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'svf' }])
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(orcaRuns).toEqual([kittyAsked('unix:@kitty-1', 'focus-window', '--match', 'id:5')])
+      expect(linux.raised).toEqual([{ pid: 4242, app: 'kitty' }])
+    })
+
+    it('the dial\'s words to an agent in a kitty window run kitty\'s two calls, and reach no other adapter', async () => {
+      const { port } = startHere()
+      port.observed(hook('session-start', { hostHints: KITTY }))
+      attach(port)
+      expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
+      expect(orcaRuns).toEqual(kittyWords)
+      expect(voice()).toEqual(['[device] voice · kitty'])
+      noOther()
+    })
+
+    // A socket at a path is spoken to only when it is this account's: the devices read its owner from the file.
+    it('on macOS a kitty socket of this account\'s is spoken to, and a plain file at its path is not', async () => {
+      const folder = mkdtempSync('/tmp/hk-')
+      onTestFinished(() => { rmSync(folder, { recursive: true, force: true }) })
+      const socket = join(folder, 's')
+      const server = createServer()
+      await new Promise<void>((resolve) => { server.listen(socket, resolve) })
+      onTestFinished(() => { server.close() })
+      writeFileSync(join(folder, 'f'), '')
+      const { port } = startHere({ orca: mac })
+      const kitty = { KITTY_WINDOW_ID: '5', __CFBundleIdentifier: 'net.kovidgoyal.kitty' }
+      port.observed(hook('session-start', { hostHints: { ...kitty, KITTY_LISTEN_ON: `unix:${socket}` } }))
+      attach(port)
+      expect(await host().openAgent(ID)).toBeUndefined()
+      const front: Run = ['/usr/bin/open', ['-b', 'net.kovidgoyal.kitty'], 10_000]
+      expect(orcaRuns).toEqual([kittyAsked(`unix:${socket}`, 'focus-window', '--match', 'id:5'), front])
+      orcaRuns.length = 0
+      port.observed(hook('session-start', { hostHints: { ...kitty, KITTY_LISTEN_ON: `unix:${join(folder, 'f')}` } }))
+      await host().openAgent(ID)
+      expect(orcaRuns).toEqual([front])
+    })
+
+    it('an agent in Zellij inside kitty: the tap and the words are Zellij\'s', async () => {
+      const linux = fakeRaise()
+      const { port } = startHere({ orca: listing(orca), raise: linux.raise })
+      port.observed(hook('session-start', { hostHints: { ...ZELLIJ, ...KITTY } }))
+      attach(port)
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
+      expect(orcaRuns).toEqual([focusPane, ...zellijWords])
+      expect(linux.raised).toEqual([{ pid: 4242, app: 'kitty' }])
+    })
+
+    it('kitty inside an Orca terminal still sends through Orca', async () => {
+      const { port } = startHere()
+      port.observed(hook('session-start', { hostHints: { ...KITTY, ORCA_TERMINAL_HANDLE: HANDLE } }))
+      attach(port)
+      expect(await host().sendTurn(ID, 'run the tests')).toEqual({ ok: true })
+      expect(orcaRuns).toEqual([
+        ['/opt/orca/bin/orca', ['terminal', 'send', '--terminal', HANDLE, '--text=run the tests', '--enter', '--wait-submit', '5', '--json'], 10_000],
+      ])
+      expect(voice()).toEqual(['[device] voice · orca'])
+    })
+
+    it('a kitty session with no socket logs it once, and on macOS keeps its tap by its bundle', async () => {
+      const { port } = startHere({ orca: mac })
+      port.observed(hook('session-start', { hostHints: { KITTY_WINDOW_ID: '5', __CFBundleIdentifier: 'net.kovidgoyal.kitty' } }))
+      attach(port)
+      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(orcaRuns).toEqual([['/usr/bin/open', ['-b', 'net.kovidgoyal.kitty'], 10_000], ['/usr/bin/open', ['-b', 'net.kovidgoyal.kitty'], 10_000]])
+      expect(said()).toEqual(['[device] kitty · remote control off'])
     })
   })
 
