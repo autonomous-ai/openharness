@@ -127,3 +127,38 @@ it.each(['sync', 'async'] as const)('refuses another atomic write after a failed
   expect(syncOpens).toHaveBeenCalledTimes(syncCount)
   expect(asyncOpens).toHaveBeenCalledTimes(asyncCount)
 })
+
+
+it.each(['prepare', 'published', 'admitted'] as const)('retains queue and shutdown ownership after an escaping %s helper close', async phase => {
+  const state = await import('./secureState.js'), { RegistryWriteQueue } = await import('./registryPersistence.js')
+  const queue = new RegistryWriteQueue(), close = fs.closeSync
+  let release!: () => void
+  const entered = new Promise<void>(resolve => { release = resolve })
+  vi.spyOn(fs, 'closeSync').mockImplementationOnce(fd => { cleanup.push(() => close(fd)); throw new Error('fixture close failure') })
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  try {
+    const result = queue.run(async deadline => {
+      if (phase !== 'prepare') deadline.markPublished()
+      if (phase === 'admitted') deadline.markAdmitted()
+      await entered
+      try { state.readPrivateStateFile(join(root, 'state.json')) }
+      catch (error) {
+        // Registry callers may preserve uncertainty in a named publication wrapper.
+        if (phase === 'published') throw new state.AtomicWriteUnconfirmed(error, false)
+        throw error
+      }
+    }).catch(error => error)
+    const next = vi.fn(async () => {}), following = queue.run(next).catch(error => error)
+    const finalWrite = vi.fn(async () => {}), settled = vi.fn()
+    void queue.finish(finalWrite).then(settled, settled)
+    release()
+    const error = await result
+    expect(error).toBeInstanceOf(phase === 'published' ? state.AtomicWriteUnconfirmed : phase === 'prepare' ? state.StateFileCleanupUnconfirmed : Error)
+    await vi.advanceTimersByTimeAsync(5_001)
+    expect(next).not.toHaveBeenCalled()
+    expect(finalWrite).not.toHaveBeenCalled()
+    expect(settled).not.toHaveBeenCalled()
+    expect(await following).toBeInstanceOf(Error)
+    expect(fs.closeSync).toHaveBeenCalledTimes(1)
+  } finally { vi.useRealTimers() }
+})

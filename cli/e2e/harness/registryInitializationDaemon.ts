@@ -4,6 +4,8 @@ import { createRequire, syncBuiltinESMExports } from 'node:module'
 import { Server } from 'node:http'
 import { basename, dirname, join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { fingerprint } from '../../src/harnessd/bundleFingerprint.js'
+import { rememberExecutedEntry } from '../../src/harnessd/executedEntry.js'
 
 const require = createRequire(import.meta.url)
 const fs = require('node:fs') as typeof import('node:fs')
@@ -72,6 +74,10 @@ process.once('exit', code => fs.writeFileSync(join(directory, 'initialization-da
   lockGone: !fs.existsSync(lock), socketGone: !fs.existsSync(socket),
 })))
 
+// This wrapper bypasses the CLI entry, so record the source it actually executes before composing the core.
+const entry = fileURLToPath(import.meta.url), sha256 = fingerprint(entry)
+assert(sha256)
+rememberExecutedEntry({ file: entry, sha256, admitted: false })
 const { runCoreInForeground } = await import('../../src/core/main.js')
 const { registry } = await import('../../src/lib/registry.js')
 await runCoreInForeground(null, fileURLToPath(new URL('../../src/cli.ts', import.meta.url)))
