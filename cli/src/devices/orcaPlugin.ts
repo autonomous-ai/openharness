@@ -166,6 +166,42 @@ export async function orcaStatus(deps: OrcaPluginDeps): Promise<{ orca: OrcaPlug
 
 /** An approval fingerprint as Orca prints one, held to it where it comes in: from the caller and from Orca. */
 export const ORCA_FINGERPRINT = /^ap1-[0-9a-f]{32}$/
+
+/** What Diego agreed Harness may approve for the person (2026-11-19): the access the plugin asks for as it ships, a
+ *  contribution as `<kind>/<name>` in Orca's words. A change here is that decision, reviewed. */
+export const ORCA_APPROVED: {
+  readonly execution: 'trusted-worker'
+  readonly capabilities: readonly string[]
+  readonly contributions: readonly string[]
+} = {
+  execution: 'trusted-worker',
+  capabilities: ['workspace:read'],
+  contributions: ['panels/Harness Device', 'statusBarItems/Dial', 'events/workspace.changed'],
+}
+
+/** A list of an approval's `grants`: absent is none, as Orca leaves `replacements` out when there are none; undefined
+ *  when it is no list. */
+const grantList = (value: unknown): unknown[] | undefined => value === undefined ? [] : Array.isArray(value) ? value : undefined
+
+/** Whether an approval's `data` asks for nothing beyond ORCA_APPROVED, for [key] at [version]. A field of another shape
+ *  is not within it. */
+export function withinApproved(data: unknown, key: string, version: string): boolean {
+  if (!isObject(data) || data.pluginKey !== key || data.version !== version) return false
+  const { grants } = data
+  if (!isObject(grants) || grants.execution !== ORCA_APPROVED.execution) return false
+  const capabilities = grantList(grants.capabilities)
+  const contributions = grantList(grants.contributions)
+  const replacements = grantList(grants.replacements)
+  if (capabilities === undefined || contributions === undefined || replacements === undefined || replacements.length > 0) return false
+  // Orca counts a capability by its whole object, so a field beside its kind and words (a scope) is access the pin
+  // never agreed to.
+  return capabilities.every((capability) => isObject(capability)
+      && Object.keys(capability).every((field) => field === 'kind' || field === 'description')
+      && typeof capability.kind === 'string' && ORCA_APPROVED.capabilities.includes(capability.kind))
+    && contributions.every((contribution) => isObject(contribution)
+      && typeof contribution.kind === 'string' && typeof contribution.name === 'string'
+      && ORCA_APPROVED.contributions.includes(`${contribution.kind}/${contribution.name}`))
+}
 /** With `status`, `inspect`, `list` and the `list` after a deadline passed, 95 s: within the app's 120 s for a connect. */
 export const ORCA_CONNECT_MS = 60_000
 export const ORCA_GRANTS_MAX = 10
