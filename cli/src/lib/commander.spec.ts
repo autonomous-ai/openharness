@@ -1257,6 +1257,17 @@ describe('the recap files are never written over or left half-written', () => {
     expect(FILES.map((name) => statSync(join(dir, name)).ino)).toEqual(flushed)
   })
 
+  // A deletion is asked for once: a power cut after it must not bring the session's recaps back.
+  it('a deletion flushes each file and the folder', async () => {
+    const mirror = build()
+    await turn(mirror, 's1')
+    await turn(mirror, 's2')
+    disk.synced = []
+    mirror.deleteHistory('s1')
+    expect(disk.synced).toEqual(FILES.flatMap(() => directorySyncSupported() ? ['file', 'folder'] : ['file']))
+    expect(Object.keys(JSON.parse(held()[0]!))).toEqual(['s2'])
+  })
+
   it('the timer\'s save and the strict save write the same bytes', async () => {
     const mirror = build()
     await turn(mirror, 's1')

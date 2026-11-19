@@ -5,8 +5,8 @@ import { join } from 'node:path'
 import { env } from '../config/env.js'
 import { writeGridConfigDir } from './gridConfigDir.js'
 
-// Pass-through, recording what reaches each file: opened, written, or renamed onto. Once a test fills the disk, a
-// write by either API stops part way, as ENOSPC leaves it.
+// Pass-through, recording what reaches each file: opened, written, or renamed onto, by node:fs's synchronous calls, or
+// by fs/promises (`async …`). Once a test fills the disk, a write by either API stops part way, as ENOSPC leaves it.
 const disk = vi.hoisted(() => ({ events: [] as string[], full: false }))
 const enospc = (): Error => Object.assign(new Error('ENOSPC: fixture'), { code: 'ENOSPC' })
 vi.mock('node:fs', async original => {
@@ -25,12 +25,14 @@ vi.mock('node:fs', async original => {
 vi.mock('node:fs/promises', async original => {
   const actual = await original<typeof import('node:fs/promises')>()
   return { ...actual,
-    writeFile: async (...args: Parameters<typeof actual.writeFile>) => {
-      disk.events.push(`write ${String(args[0])}`)
-      if (!disk.full) return actual.writeFile(...args)
-      await actual.writeFile(args[0], String(args[1]).slice(0, 8))
-      throw enospc()
+    open: async (...args: Parameters<typeof actual.open>) => {
+      disk.events.push(`async open ${String(args[0])}`)
+      const handle = await actual.open(...args)
+      if (!disk.full) return handle
+      const write = handle.writeFile.bind(handle)
+      return Object.assign(handle, { writeFile: async (data: string | Uint8Array) => { await write(String(data).slice(0, 8)); throw enospc() } })
     },
+    rename: (...args: Parameters<typeof actual.rename>) => { disk.events.push(`async rename ${String(args[1])}`); return actual.rename(...args) },
   }
 })
 
@@ -56,12 +58,14 @@ it('leaves a real folder in a link\'s place alone: it is the engine\'s own', asy
   expect(() => readlinkSync(join(dir, 'sessions'))).toThrow()
 })
 
-it('the save goes through a temporary file renamed onto the target', async () => {
+// The core writes it as an agent starts: a synchronous write would hold every session's event loop meanwhile.
+it('the save goes through a temporary file renamed onto the target, and never blocks the event loop', async () => {
   const dir = await writeGridConfigDir('agent-3', [{ name: 'opencode.json', content: '{"provider":{}}' }])
   const file = join(dir, 'opencode.json')
   disk.events = []
   await writeGridConfigDir('agent-3', [{ name: 'opencode.json', content: '{"provider":{"grid":{}}}' }])
-  expect(disk.events.filter((event) => event.endsWith(` ${file}`))).toEqual([`rename ${file}`])
+  expect(disk.events.filter((event) => event.endsWith(` ${file}`))).toEqual([`async rename ${file}`])
+  expect(disk.events.filter((event) => !event.startsWith('async '))).toEqual([])
   expect(readFileSync(file, 'utf8')).toBe('{"provider":{"grid":{}}}')
 })
 

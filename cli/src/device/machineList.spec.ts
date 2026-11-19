@@ -383,6 +383,18 @@ describe('MachineListCache file that cannot be read', () => {
     expect(JSON.parse(readFileSync(path, 'utf8')).machines).toHaveLength(1)
   })
 
+  // The devices' copy never writes the file: a torn one is the gateway's to set aside as it reads it.
+  it('a copy of another list leaves a torn file where it is', () => {
+    const dir = DIR()
+    const path = join(dir, 'machines.json')
+    writeFileSync(path, '{"machines":[{"machineId":"m1"')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const copy = new MachineListCache(ok([]), () => 'aabbccdd', () => {}, dir, () => OWNER, false)
+    expect(copy.find('m1')).toBeUndefined()
+    expect(readFileSync(path, 'utf8')).toBe('{"machines":[{"machineId":"m1"')
+    expect(existsSync(`${path}.unreadable`)).toBe(false)
+  })
+
   it('a save that fails part way leaves the old file', () => {
     const dir = DIR()
     const path = join(dir, 'machines.json')

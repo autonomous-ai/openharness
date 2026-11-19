@@ -5,22 +5,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PENDING_TASKS_FILE } from './contract.js'
 import { loadCursorPendingTasks, removeCursorPendingTasks } from './pendingTasks.js'
 
-// How the watched path is changed, by either fs API: opened for writing in place, or a file renamed onto it.
+// How the watched path is changed, by either fs API: opened for writing in place, or a file renamed onto it. node:fs's
+// synchronous calls say so (`sync …`), and count its temporary files too: a save on the event loop never makes them.
 const disk = vi.hoisted(() => ({ watch: '', changes: [] as string[] }))
 const writes = (flags: unknown) => typeof flags === 'number' ? (flags & 3) !== 0 : typeof flags === 'string' && flags !== 'r'
 vi.mock('node:fs', async original => {
   const actual = await original<typeof import('node:fs')>()
   return { ...actual,
     openSync: (...args: Parameters<typeof actual.openSync>) => {
-      if (args[0] === disk.watch && writes(args[1])) disk.changes.push('write')
+      if (disk.watch && String(args[0]).startsWith(disk.watch) && writes(args[1])) disk.changes.push('sync write')
       return actual.openSync(...args)
     },
     writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
-      if (args[0] === disk.watch) disk.changes.push('write')
+      if (args[0] === disk.watch) disk.changes.push('sync write')
       return actual.writeFileSync(...args)
     },
     renameSync: (...args: Parameters<typeof actual.renameSync>) => {
-      if (args[1] === disk.watch) disk.changes.push('rename')
+      if (args[1] === disk.watch) disk.changes.push('sync rename')
       return actual.renameSync(...args)
     },
   }
@@ -58,7 +59,7 @@ afterEach(() => {
 })
 
 describe('the Cursor pending tasks file', () => {
-  it('the save goes through a temporary file renamed onto the target', async () => {
+  it('the save goes through a temporary file renamed onto the target, and never blocks the event loop', async () => {
     writeFileSync(file, JSON.stringify([task()]))
     disk.watch = file
     expect(await loadCursorPendingTasks(dataDir)).toHaveLength(1)

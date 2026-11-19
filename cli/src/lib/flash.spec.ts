@@ -3,9 +3,10 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flashCommand, flasherScript, scriptUrl, type FlashDeps } from './flash.js'
 import { FLASHER_DIR } from './flasherDir.js'
+import { directorySyncSupported } from './secureState.js'
 
-// Pass-through, recording each path written to by name and each rename's target. `full`: a write stops part way, as
-// on a full disk.
+// Pass-through, recording each path written to by name, each rename's target and each flush (of a file or a folder).
+// `full`: a write stops part way, as on a full disk.
 const disk = vi.hoisted(() => ({ events: [] as string[], full: false }))
 vi.mock('node:fs', async original => {
   const actual = await original<typeof import('node:fs')>()
@@ -17,6 +18,7 @@ vi.mock('node:fs', async original => {
       throw Object.assign(new Error('ENOSPC: fixture'), { code: 'ENOSPC' })
     },
     renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.events.push(`rename ${String(args[1])}`); return actual.renameSync(...args) },
+    fsyncSync: (fd: number) => { disk.events.push(actual.fstatSync(fd).isDirectory() ? 'flush folder' : 'flush file'); return actual.fsyncSync(fd) },
   }
 })
 // The cached flasher in a throwaway folder of this file's own.
@@ -316,6 +318,15 @@ describe('harness flash — the cached copy', () => {
     expect(statSync(cached).mode & 0o777).toBe(0o755)
     expect(disk.events).toContain(`rename ${cached}`)
     expect(disk.events).not.toContain(`write ${cached}`)
+  })
+
+  // The cache is what runs offline: one a power cut emptied would be run.
+  it('the cached copy is flushed before it is renamed into place, and its folder after', async () => {
+    disk.events = []
+    expect(await flashCommand([], { ...offline, fetchScript: async () => SCRIPT })).toBe(0)
+    const at = disk.events.indexOf(`rename ${cached}`)
+    expect(disk.events.slice(at - 1, at + (directorySyncSupported() ? 2 : 1)))
+      .toEqual(['flush file', `rename ${cached}`, ...(directorySyncSupported() ? ['flush folder'] : [])])
   })
 
   it('a write that fails part way leaves the old file', async () => {

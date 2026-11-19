@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { isOwnHarnessLauncher, isOwnHnLauncher, ownedBinEntries } from './launchers.js'
+import { directorySyncSupported } from './secureState.js'
 
 // Pass-through, recording each path written to by name, each flush (by the path its descriptor was opened on), each
 // rename's target and each link.
@@ -204,6 +205,15 @@ describe('the launchers, written whole', () => {
     expect(statSync(launcher).mode & 0o777).toBe(0o755)
     expect(disk.events).toContain(`rename ${launcher}`)
     expect(disk.events).not.toContain(`write ${launcher}`)
+  })
+
+  // An emptied launcher stops `harness` from starting until a reinstall; it is rewritten once a Node update.
+  it('the harness launcher is flushed before it is renamed onto, and its folder after', () => {
+    expect(api.ensureLauncher('/new/node')).toBe(true)
+    const at = disk.events.indexOf(`rename ${launcher}`)
+    expect(disk.events[at - 1]).toMatch(/^fsync .*\.tmp$/)
+    expect(disk.events[at - 1]!.startsWith(`fsync ${launcher}.`)).toBe(true)
+    if (directorySyncSupported()) expect(disk.events[at + 1]).toBe(`fsync ${bin}`)
   })
 
   it('a file at the harness launcher\'s old temporary name is left alone', () => {

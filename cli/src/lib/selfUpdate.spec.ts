@@ -16,9 +16,10 @@ import { firstStart } from '../testing/testNode.js'
 import { SpawnLockBusyError } from './daemonSpawnLock.js'
 import { PTY_PROTOCOL } from './ptyHost/protocol.js'
 import { versionsOnDisk } from './windows/cliVersions.js'
+import { directorySyncSupported } from './secureState.js'
 
-// Pass-through, recording each path opened for writing and each rename's target. A write under `refuse` fails, as on a
-// full disk.
+// Pass-through, recording each path opened for writing, each rename's target and each flush (of a file or a folder). A
+// write under `refuse` fails, as on a full disk.
 const disk = vi.hoisted(() => ({ events: [] as string[], refuse: '' }))
 vi.mock('node:fs', async original => {
   const actual = await original<typeof import('node:fs')>()
@@ -33,6 +34,7 @@ vi.mock('node:fs', async original => {
     openSync: (...args: Parameters<typeof actual.openSync>) => { if (forWriting(args[1])) writing(args[0]); return actual.openSync(...args) },
     writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => { if (typeof args[0] !== 'number') writing(args[0]); return actual.writeFileSync(...args) },
     renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.events.push(`rename ${String(args[1])}`); return actual.renameSync(...args) },
+    fsyncSync: (fd: number) => { disk.events.push(actual.fstatSync(fd).isDirectory() ? 'flush folder' : 'flush file'); return actual.fsyncSync(fd) },
   }
 })
 afterEach(() => { disk.events = []; disk.refuse = '' })
@@ -1751,6 +1753,17 @@ console.log(process.execPath.includes('node-v24.') ? (named.includes('node-v24.'
     expect(readFileSync(currentNode, 'utf8')).toBe(`${v22}\n`)
     expect(nodeMigration(dir)).toBe('does-not-run')
     expect(failedNode(dir)).toBe(v24)
+  })
+
+  // An emptied current-node stops Harness from starting until a reinstall; it moves once an update.
+  it('flushes current-node before it is renamed into place, and its folder after', () => {
+    const dir = tempDir()
+    writeFileSync(currentNode, `${v24}\n`)
+    disk.events = []
+    putNodeBack(dir, v22, 'does-not-run')
+    const at = disk.events.indexOf(`rename ${currentNode}`)
+    expect(disk.events.slice(at - 1, at + (directorySyncSupported() ? 2 : 1)))
+      .toEqual(['flush file', `rename ${currentNode}`, ...(directorySyncSupported() ? ['flush folder'] : [])])
   })
 
   it('stages the build when Node 24 does not go in, and records why for `harness status`', async () => {

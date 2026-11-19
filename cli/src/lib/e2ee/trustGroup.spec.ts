@@ -3,16 +3,23 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, wr
 import { tmpdir } from 'os'
 import { join } from 'path'
 
-// A disk that fills part way through a write: the first bytes land, then ENOSPC. Pass-through otherwise.
-const fault = vi.hoisted(() => ({ tear: false }))
+// A disk that fills part way through a write: the first bytes land, then ENOSPC. `unreadable`: a read of that path fails
+// (EIO). Pass-through otherwise.
+const fault = vi.hoisted(() => ({ tear: false, unreadable: '' }))
 vi.mock('node:fs', async original => {
   const actual = await original<typeof import('node:fs')>()
-  return { ...actual, writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
-    if (!fault.tear) return actual.writeFileSync(...args)
-    fault.tear = false
-    actual.writeFileSync(args[0], String(args[1]).slice(0, 8))
-    throw Object.assign(new Error('ENOSPC: fixture'), { code: 'ENOSPC' })
-  } }
+  return { ...actual,
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (!fault.tear) return actual.writeFileSync(...args)
+      fault.tear = false
+      actual.writeFileSync(args[0], String(args[1]).slice(0, 8))
+      throw Object.assign(new Error('ENOSPC: fixture'), { code: 'ENOSPC' })
+    },
+    readFileSync: ((...args: Parameters<typeof actual.readFileSync>) => {
+      if (fault.unreadable && String(args[0]) === fault.unreadable) throw Object.assign(new Error('EIO: fixture'), { code: 'EIO' })
+      return actual.readFileSync(...args)
+    }) as typeof actual.readFileSync,
+  }
 })
 
 // ADAPTER_DATA_DIR must be set before config/env.js loads (see manager.test.ts).
@@ -175,6 +182,7 @@ describe('TrustGroupStore: a file it cannot read', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     fault.tear = false
+    fault.unreadable = ''
   })
 
   it('names its two files, each with the parse that tells an unreadable one', () => {
@@ -214,6 +222,19 @@ describe('TrustGroupStore: a file it cannot read', () => {
     expect(() => store.add(b, self)).toThrow(Sx.StateFileUnreadable)
     expect(() => store.remove(b.pub, self)).toThrow(Sx.StateFileUnreadable)
     expect(readFileSync(GROUP(), 'utf8')).toBe(text)
+  })
+
+  // A read that failed read nothing: the file may be whole, and moving it aside would lose the roster.
+  it('a roster the read fails on cannot merge, and says so without asking to move it aside', () => {
+    const self = pub()
+    put(GROUP(), JSON.stringify(empty()))
+    fault.unreadable = GROUP()
+    const store = new G.TrustGroupStore()
+    let error: unknown
+    try { store.merge({ members: [machine(MID_B)], removed: [] }, self) } catch (thrown) { error = thrown }
+    expect(error).toBeInstanceOf(Sx.StateFileUnreadable)
+    expect((error as Error).message).toContain('EIO')
+    expect((error as Error).message).not.toMatch(/move it aside/i)
   })
 
   it('a roster write that fails part way leaves the old roster', () => {

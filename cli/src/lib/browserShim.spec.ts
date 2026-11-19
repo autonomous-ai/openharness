@@ -4,10 +4,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { browserPrelude, browserShimPath, browserShimScript, writeBrowserShim } from './browserShim.js'
+import { directorySyncSupported } from './secureState.js'
 
 // `full`: a write stops part way, as on a full disk. `watch`: every size that path is seen at, after each write and
 // rename. Node's writeFileSync on a path opens it empty before it writes, so that one is taken apart to look between.
-const disk = vi.hoisted(() => ({ full: false, watch: '', sizes: [] as number[] }))
+// `events`: each flush (of a file or a folder) and each rename's target, as they happened.
+const disk = vi.hoisted(() => ({ full: false, watch: '', sizes: [] as number[], events: [] as string[] }))
 vi.mock('node:fs', async original => {
   const actual = await original<typeof import('node:fs')>()
   const look = () => { if (disk.watch && actual.existsSync(disk.watch)) disk.sizes.push(actual.statSync(disk.watch).size) }
@@ -23,10 +25,11 @@ vi.mock('node:fs', async original => {
       try { look(); actual.writeFileSync(fd, data) } finally { actual.closeSync(fd) }
       look()
     },
-    renameSync: (...args: Parameters<typeof actual.renameSync>) => { actual.renameSync(...args); look() },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.events.push(`rename ${String(args[1])}`); actual.renameSync(...args); look() },
+    fsyncSync: (fd: number) => { disk.events.push(actual.fstatSync(fd).isDirectory() ? 'flush folder' : 'flush file'); return actual.fsyncSync(fd) },
   }
 })
-afterEach(() => { disk.full = false; disk.watch = ''; disk.sizes = [] })
+afterEach(() => { disk.full = false; disk.watch = ''; disk.sizes = []; disk.events = [] })
 
 /** A pane's `BROWSER`: the daemon first, then the person's own browser, then the system's. Run for real in /bin/sh
  *  with stand-ins for the daemon's command and the browsers, each recording what it was given. */
@@ -98,6 +101,14 @@ describe('the pane browser script', () => {
     expect(writeBrowserShim("'new'", path)).toBe(false)
     disk.full = false
     expect(readFileSync(path, 'utf8')).toBe(browserShimScript("'old'"))
+  })
+
+  // Every pane's BROWSER runs it: one a power cut emptied opens nothing until the daemon starts again.
+  it('is flushed before it is renamed into place, and its folder after', () => {
+    const { dir } = sandbox()
+    const path = join(dir, 'bin', 'harness-browser')
+    writeBrowserShim("'a'", path)
+    expect(disk.events).toEqual(['flush file', `rename ${path}`, ...(directorySyncSupported() ? ['flush folder'] : [])])
   })
 
   it('is 0700 and never on disk with fewer bytes than the script', () => {

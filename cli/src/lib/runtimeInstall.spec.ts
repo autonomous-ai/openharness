@@ -5,18 +5,23 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 
-/** A write of exactly `text` reaches the disk half way, then the disk is full. */
-const tear = vi.hoisted(() => ({ text: undefined as string | undefined }))
+/** A write of exactly `text` reaches the disk half way, then the disk is full. `events`: each flush (of a file or a
+ *  folder) and each rename's target, as they happened. */
+const tear = vi.hoisted(() => ({ text: undefined as string | undefined, events: [] as string[] }))
 vi.mock('node:fs', async (original) => {
   const actual = await original<typeof import('node:fs')>()
-  return { ...actual, writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
-    const [target, data] = args
-    if (tear.text === undefined || data !== tear.text) return actual.writeFileSync(...args)
-    const half = tear.text.slice(0, tear.text.length >> 1)
-    if (typeof target === 'number') actual.writeSync(target, half)
-    else actual.writeFileSync(target, half)
-    throw Object.assign(new Error('ENOSPC: fixture, write'), { code: 'ENOSPC' })
-  } }
+  return { ...actual,
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      const [target, data] = args
+      if (tear.text === undefined || data !== tear.text) return actual.writeFileSync(...args)
+      const half = tear.text.slice(0, tear.text.length >> 1)
+      if (typeof target === 'number') actual.writeSync(target, half)
+      else actual.writeFileSync(target, half)
+      throw Object.assign(new Error('ENOSPC: fixture, write'), { code: 'ENOSPC' })
+    },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { tear.events.push(`rename ${String(args[1])}`); return actual.renameSync(...args) },
+    fsyncSync: (fd: number) => { tear.events.push(actual.fstatSync(fd).isDirectory() ? 'flush folder' : 'flush file'); return actual.fsyncSync(fd) },
+  }
 })
 
 let root = ''
@@ -147,6 +152,11 @@ describe('ensureManagedRuntime', () => {
     expect(node).toBe(join(runtimeDir, `node-v22.23.2-${key}`, 'bin', 'node'))
     expect(existsSync(node!)).toBe(true)
     expect(readFileSync(join(runtimeDir, 'current-node'), 'utf8').trim()).toBe(node)
+    // An emptied pointer stops Harness from starting until a reinstall: flushed before it is renamed into place.
+    const { directorySyncSupported } = await import('./secureState.js')
+    const at = tear.events.indexOf(`rename ${join(runtimeDir, 'current-node')}`)
+    expect(tear.events.slice(at - 1, at + (directorySyncSupported() ? 2 : 1)))
+      .toEqual(['flush file', `rename ${join(runtimeDir, 'current-node')}`, ...(directorySyncSupported() ? ['flush folder'] : [])])
     // Staging never survives, whatever happened.
     expect(readdirSync(runtimeDir).filter((n) => n.startsWith('.node-staging-'))).toEqual([])
   })

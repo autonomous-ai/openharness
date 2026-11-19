@@ -15,18 +15,29 @@ import { join } from 'node:path'
 import { installFakeGrid, type FakeGrid, type FakeGridPlan, type FakeGridTurn } from './__fixtures__/fakeGrid.js'
 import { forgetGridModels, gridInventory, gridServingNodes, listAllGridModels, listGridModels, resetGridModels, type GridModelsService, type GridSection } from './gridModels.js'
 
-// Pass-through, recording what replaced a file and what was opened by name.
-const disk = vi.hoisted(() => ({ renamed: [] as Array<[string, string]>, opened: [] as string[] }))
+// Pass-through, recording what replaced a file and what was opened by name through fs/promises; `sync`: each rename's
+// target and each path opened through node:fs's synchronous calls, which a save that must not block its event loop never
+// makes.
+const disk = vi.hoisted(() => ({ renamed: [] as Array<[string, string]>, opened: [] as string[], sync: [] as string[] }))
 vi.mock('node:fs', async original => {
   const actual = await original<typeof import('node:fs')>()
   return { ...actual,
-    renameSync: (...args: Parameters<typeof actual.renameSync>) => {
-      disk.renamed.push([String(args[0]), String(args[1])])
-      return actual.renameSync(...args)
-    },
-    openSync: (...args: Parameters<typeof actual.openSync>) => { disk.opened.push(String(args[0])); return actual.openSync(...args) },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => { disk.sync.push(`rename ${String(args[1])}`); return actual.renameSync(...args) },
+    openSync: (...args: Parameters<typeof actual.openSync>) => { disk.sync.push(`open ${String(args[0])}`); return actual.openSync(...args) },
   }
 })
+vi.mock('node:fs/promises', async original => {
+  const actual = await original<typeof import('node:fs/promises')>()
+  return { ...actual,
+    rename: (...args: Parameters<typeof actual.rename>) => {
+      disk.renamed.push([String(args[0]), String(args[1])])
+      return actual.rename(...args)
+    },
+    open: (...args: Parameters<typeof actual.open>) => { disk.opened.push(String(args[0])); return actual.open(...args) },
+  }
+})
+/** The synchronous writes of [file]: onto it, or of its temporary file. */
+const syncWrites = (file: string): string[] => disk.sync.filter(event => event === `rename ${file}` || event.startsWith(`open ${file}.`))
 
 const OWN = 'mine', OWN_ID = 'net-own', TEAM = 'team', TEAM_ID = 'net-team'
 const EMAIL = 'me@example.com'
@@ -517,9 +528,9 @@ describe('the grid list', () => {
 })
 
 describe('a saved picture', () => {
-  it('the save goes through a temporary file renamed onto the target', async () => {
+  it('the save goes through a temporary file renamed onto the target, and never blocks the event loop', async () => {
     answer(TEAM_ID, OVERVIEW, awake([node('rig', ['qwen'])]))
-    disk.renamed = []; disk.opened = []
+    disk.renamed = []; disk.opened = []; disk.sync = []
     await look()
     const folder = join(root, 'data', 'grid-pictures')
     const files = readdirSync(folder).filter((n) => n.endsWith('.json')).map((n) => join(folder, n))
@@ -528,6 +539,7 @@ describe('a saved picture', () => {
       expect(disk.renamed.filter(([, to]) => to === file).map(([from]) => from)).toEqual([expect.stringMatching(/\.tmp$/)])
       expect(disk.renamed.find(([, to]) => to === file)![0].startsWith(`${file}.`)).toBe(true)
       expect(disk.opened).not.toContain(file)
+      expect(syncWrites(file)).toEqual([])
     }
   })
 })

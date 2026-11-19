@@ -134,6 +134,17 @@ describe('the saved APIs\' note goes only into a project folder Harness made', (
     expect(readdirSync(project)).toEqual(['AGENTS.md'])
   })
 
+  // A file the person made read-only stays as they left it: the write refuses it, and the core logs why.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('leaves a read-only instruction file as it is, and throws', () => {
+    const project = made('scratch')
+    const file = join(project, 'AGENTS.md')
+    writeFileSync(file, '# Project rules\n')
+    chmodSync(file, 0o444)
+    expect(() => prepareApiInstructions(saved(), project, 'codex', root)).toThrow(/EACCES/)
+    expect(readFileSync(file, 'utf8')).toBe('# Project rules\n')
+    expect(statSync(file).mode & 0o777).toBe(0o444)
+  })
+
   // Windows keeps no mode bits.
   it.skipIf(process.platform === 'win32')('keeps the file\'s own mode, and gives a new one 0644', () => {
     const project = made('scratch')

@@ -6,9 +6,11 @@ import {
   CLI_POINTER, LAUNCH_EXE, currentCli, harnessLaunchPath, isSingleSegment, readPointer, writePointer,
 } from './installLayout.js'
 import { STABLE_NOTIFY } from './installNames.js'
+import { directorySyncSupported } from '../secureState.js'
 
-// Pass-through, noting each path written or opened by name and each rename's target.
-const io = vi.hoisted(() => ({ written: [] as string[], renamedOnto: [] as string[] }))
+// Pass-through, noting each path written or opened by name and each rename's target; `order`: each flush (of a file or
+// a folder) and each rename, as they happened.
+const io = vi.hoisted(() => ({ written: [] as string[], renamedOnto: [] as string[], order: [] as string[] }))
 vi.mock('node:fs', async (original) => {
   const actual = await original<typeof import('node:fs')>()
   const writeFileSync = (...args: Parameters<typeof actual.writeFileSync>) => {
@@ -16,8 +18,13 @@ vi.mock('node:fs', async (original) => {
     return actual.writeFileSync(...args)
   }
   const openSync = (...args: Parameters<typeof actual.openSync>) => { io.written.push(String(args[0])); return actual.openSync(...args) }
-  const renameSync = (...args: Parameters<typeof actual.renameSync>) => { io.renamedOnto.push(String(args[1])); return actual.renameSync(...args) }
-  const wrapped = { writeFileSync, openSync, renameSync }
+  const renameSync = (...args: Parameters<typeof actual.renameSync>) => {
+    io.renamedOnto.push(String(args[1]))
+    io.order.push(`rename ${String(args[1])}`)
+    return actual.renameSync(...args)
+  }
+  const fsyncSync = (fd: number) => { io.order.push(actual.fstatSync(fd).isDirectory() ? 'flush folder' : 'flush file'); return actual.fsyncSync(fd) }
+  const wrapped = { writeFileSync, openSync, renameSync, fsyncSync }
   return { ...actual, ...wrapped, default: { ...actual, ...wrapped } }
 })
 
@@ -25,6 +32,7 @@ const roots: string[] = []
 afterEach(() => {
   io.written.length = 0
   io.renamedOnto.length = 0
+  io.order.length = 0
   vi.restoreAllMocks()
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
 })
@@ -75,6 +83,13 @@ describe('pointer files', () => {
     writePointer(root, 'current', '1.2.3')
     expect(io.renamedOnto).toEqual([target, target])
     expect(io.written).not.toContain(target)
+  })
+
+  // An emptied pointer (cli\current, current-pty) stops Harness from starting until a reinstall; it moves once an update.
+  it('flushes the pointer before it is renamed into place, and its folder after', () => {
+    const root = scratch()
+    writePointer(root, 'current', '1.2.3')
+    expect(io.order).toEqual(['flush file', `rename ${join(root, 'current')}`, ...(directorySyncSupported() ? ['flush folder'] : [])])
   })
 
   it('a file at the old temporary name is left alone', () => {
