@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { lstatSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -168,6 +168,21 @@ describe.skipIf(process.platform === 'win32')('the Claude app\'s store', () => {
       await s.reader.touch(s.fixture.org(), basename(path))
       const read = await s.reader.read()
       expect(localIds(read)).toEqual([local(1)])
+      expect(read.skipped).toBe(0)
+    })
+
+    // Root reads a file of mode 000.
+    it.skipIf(process.getuid?.() === 0)('a file that could not be read is read again at the next read', async () => {
+      const s = store()
+      s.put(1)
+      const path = s.put(2)
+      chmodSync(path, 0o000)
+      const refused = await loaded(s.reader)
+      expect(localIds(refused)).toEqual([local(1)])
+      expect(refused.skipped).toBe(1)
+      chmodSync(path, 0o644)
+      const read = await s.reader.read()
+      expect(localIds(read)).toEqual([local(1), local(2)])
       expect(read.skipped).toBe(0)
     })
 
