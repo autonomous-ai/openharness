@@ -10,6 +10,8 @@ const APP_WEZTERM = '/Applications/WezTerm.app/Contents/MacOS/wezterm'
 const WEZTERM_PANE = /^[0-9]{1,9}$/
 // A pane that holds the agent's terminal but is not its own: words typed there land in whatever that terminal shows.
 const HELD = 'held:'
+// With no WezTerm running, `wezterm cli` would start a mux server of its own that outlives the command.
+const CLI = ['cli', '--no-auto-start']
 
 export function createWeztermAdapter(deps: OrcaDeps): HostAdapter {
   const mac = deps.platform === 'darwin'
@@ -33,7 +35,8 @@ export function createWeztermAdapter(deps: OrcaDeps): HostAdapter {
       const id = pane.id.startsWith(HELD) ? pane.id.slice(HELD.length) : pane.id
       if (!WEZTERM_PANE.test(id)) return false
       const wezterm = binary()
-      return wezterm ? (await deps.run(wezterm, ['cli', 'activate-pane', '--pane-id', id], RUN_TIMEOUT_MS)).code === 0 : false
+      if (!wezterm) return false
+      return (await deps.run(wezterm, [...CLI, 'activate-pane', '--pane-id', id], RUN_TIMEOUT_MS)).code === 0
     },
     canType: (pane) => WEZTERM_PANE.test(pane.id) && binary() !== null,
     async type(pane, text) {
@@ -42,8 +45,8 @@ export function createWeztermAdapter(deps: OrcaDeps): HostAdapter {
       if (!wezterm) return false
       // `--` keeps words that start with a dash from being read as flags; `--no-paste` types them as keys, so the agent
       // does not take them as a bracketed paste, and Enter, sent on its own, submits them.
-      const send = async (words: string) =>
-        (await deps.run(wezterm, ['cli', 'send-text', '--pane-id', pane.id, '--no-paste', '--', words], RUN_TIMEOUT_MS)).code === 0
+      const send = async (words: string) => (await deps.run(wezterm,
+        [...CLI, 'send-text', '--pane-id', pane.id, '--no-paste', '--', words], RUN_TIMEOUT_MS)).code === 0
       sending.add(pane.id)
       try {
         return await send(text.replace(CONTROL, ' ')) && await send('\r')

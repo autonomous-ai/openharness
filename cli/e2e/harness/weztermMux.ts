@@ -43,10 +43,8 @@ export class PrivateWezterm {
     const config = join(folder, 'wezterm.lua')
     await mkdir(folder, { recursive: true })
     await writeFile(config, `return { unix_domains = { { name = 'harness-e2e', socket_path = '${socket}' } } }\n`)
-    // The daemon's bin is first on its PATH: its `wezterm cli` reaches this server alone, and never starts one of its
-    // own, which would outlive the test.
+    // The daemon's bin is first on its PATH: its `wezterm cli` reaches this server alone.
     await writeFile(join(dirname(d.env.CLAUDE_PATH!), 'wezterm'), `#!/bin/sh
-if [ "$1" = cli ]; then shift; set -- cli --no-auto-start "$@"; fi
 WEZTERM_CONFIG_FILE='${config}' WEZTERM_UNIX_SOCKET='${socket}' exec '${weztermBinary}' "$@"
 `, { mode: 0o755 })
     const env = { ...d.env, WEZTERM_CONFIG_FILE: config }
