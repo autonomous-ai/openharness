@@ -222,6 +222,29 @@ mod tests {
         assert!(session_is_x11(Some("x11"), Some(""), Some(":0")));
     }
 
+    #[test]
+    fn the_linux_source_is_x11_then_sway_then_hyprland_then_none() {
+        let front = |vars: &[(&str, &str)]| {
+            let vars: Vec<(String, String)> = vars.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+            linux_front(&|name| vars.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone()))
+        };
+        let both = [("SWAYSOCK", "/run/user/1000/sway-ipc.sock"), ("HYPRLAND_INSTANCE_SIGNATURE", "abc_1_2")];
+        assert_eq!(
+            front(&[[("XDG_SESSION_TYPE", "x11"), ("DISPLAY", ":0")].as_slice(), &both[..1]].concat()),
+            LinuxFront::X11
+        );
+        let wayland = [("XDG_SESSION_TYPE", "wayland"), ("WAYLAND_DISPLAY", "wayland-1"), ("DISPLAY", ":0")];
+        assert_eq!(front(&[wayland.as_slice(), &both].concat()), LinuxFront::Sway);
+        assert_eq!(front(&[wayland.as_slice(), &both[1..]].concat()), LinuxFront::Hyprland);
+        // GNOME or KDE on Wayland: no common way to tell the app in front.
+        assert_eq!(front(&wayland), LinuxFront::None);
+        // An empty value counts as unset.
+        let empty = [("SWAYSOCK", ""), ("HYPRLAND_INSTANCE_SIGNATURE", "abc_1_2")];
+        assert_eq!(front(&[wayland.as_slice(), &empty].concat()), LinuxFront::Hyprland);
+        let empty = [("SWAYSOCK", ""), ("HYPRLAND_INSTANCE_SIGNATURE", "")];
+        assert_eq!(front(&[wayland.as_slice(), &empty].concat()), LinuxFront::None);
+    }
+
     const WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
     /// A log that hands each line on, so a test waits for it without a sleep.
