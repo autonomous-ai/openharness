@@ -3478,6 +3478,90 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(orcaRuns.at(-1)).toEqual(['tmux', ['select-window', '-t', '%3', ';', 'select-pane', '-t', '%3'], 10_000])
   })
 
+  // Diego's Terminal tab B ran `herdr` (2026-11-19): Claude Code in a pane of his herdr server, whose hints name no app.
+  // The lookup's own runs are this spec's; its walk is herdrOuter.spec.ts's.
+  describe('an agent in the person\'s herdr, attached from a Terminal tab', () => {
+    const terminal = join(homedir(), 'Applications', 'Terminal.app')
+    /** The agent under herdr's server, and herdr's client in its Terminal tab, under the home the devices read apps in. */
+    const inHerdr = [
+      { pid: 4242, ppid: 4000, executable: 'claude' }, { pid: 4000, ppid: 3900, executable: 'zsh' },
+      { pid: 3900, ppid: 1, executable: '/opt/homebrew/bin/herdr' },
+      { pid: 4300, ppid: 4298, executable: 'herdr' }, { pid: 4298, ppid: 1, executable: join(terminal, 'Contents', 'MacOS', 'Terminal') },
+    ]
+    /** The server's client socket, and the client connected to it. */
+    const sockets = 'p3900\nf5\nd0x1111\nn/Users/u/.config/herdr/herdr-client.sock\np4300\nf3\nd0x2222\nn->0x1111\n'
+    const focused: [string, string[], number] = ['/opt/herdr/bin/herdr', ['agent', 'focus', 'w1:p2'], 10_000]
+    /** lsof and ps as herdr's lookup reads them, and tmux's display-message and list-clients as tmux's does. */
+    const run = async (file: string, args: string[], timeoutMs: number) => {
+      orcaRuns.push([file, args, timeoutMs])
+      const stdout = file === '/usr/sbin/lsof' ? sockets : file === '/bin/ps' ? '4300 ttys004\n'
+        : args[0] === 'display-message' ? '5000|work|\n' : args[0] === 'list-clients' ? '1794700050|4400|/dev/ttys005\n' : ''
+      return { code: 0, stdout }
+    }
+    const onMac = { ...mac, onPath: (name: string) => `/opt/${name}/bin/${name}`, run }
+    beforeEach(() => {
+      readers.processes.mockResolvedValue(inHerdr)
+      readers.bundleId.mockImplementation(async (bundle) => bundle === terminal ? 'com.apple.Terminal' : undefined)
+    })
+
+    it('an agent in the person\'s herdr is on the page of the app that holds its client, and a rest selects its tab, then its herdr pane', async () => {
+      const listener = fakeListener()
+      const { port } = startHere({ listen: listener.listen, orca: onMac })
+      port.observed(hook('session-start', { hostHints: { HERDR_PANE_ID: 'w1:p2' } }))
+      attach(port)
+      await vi.waitFor(() => expect(said()).toContain('[device] herdr client · found'))
+      const apps = (await host().listAgentSnapshot({ apps: true })).apps?.apps
+      expect(apps).toContainEqual(expect.objectContaining({ id: 'terminal-app', count: 1 }))
+      expect(apps?.map(({ id }) => id)).not.toContain('herdr')
+      await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+      const stream = listener.tabs()
+      expect(listener.front('terminal-app')).toBeUndefined()
+      expect(host().swipeSwitches(ID)).toBe(true)
+      host().swipeEnded(ID, 'rest')
+      await swiped('ok')
+      expect(stream.lines).toStrictEqual([{ app: 'terminal-app', tty: '/dev/ttys004' }])
+      expect(orcaRuns.at(-1)).toEqual(focused)
+      // Another app in front: herdr is left as the person left it.
+      const runs = orcaRuns.length
+      expect(listener.front('ghostty')).toBeUndefined()
+      host().swipeEnded(ID, 'rest')
+      await vi.waitFor(() => expect(said().filter((line) => line.startsWith('[device] swipe ·'))).toHaveLength(2))
+      expect(orcaRuns.slice(runs)).toEqual([])
+    })
+
+    it('a tap on it focuses its herdr pane, brings Terminal forward, then raises its tab', async () => {
+      const listener = fakeListener()
+      const { port } = startHere({ listen: listener.listen, orca: onMac })
+      port.observed(hook('session-start', { hostHints: { HERDR_PANE_ID: 'w1:p2' } }))
+      attach(port)
+      await vi.waitFor(() => expect(said()).toContain('[device] herdr client · found'))
+      await vi.waitFor(() => expect(calls('start')).toHaveLength(1))
+      const stream = listener.tabs()
+      expect(await host().openAgent(ID)).toBeUndefined()
+      expect(orcaRuns.slice(-2)).toEqual([focused, ['/usr/bin/open', ['-b', 'com.apple.Terminal'], 10_000]])
+      expect(stream.lines).toStrictEqual([{ app: 'terminal-app', tty: '/dev/ttys004', raise: true }])
+    })
+
+    it('herdr\'s lookup is asked first, and tmux\'s only when herdr\'s found no app', async () => {
+      // A second agent in a pane of the person's tmux, with no herdr among its parents; tmux's client in a Terminal tab.
+      readers.processes.mockResolvedValue([...inHerdr,
+        { pid: 5242, ppid: 5000, executable: 'claude' }, { pid: 5000, ppid: 1, executable: 'zsh' },
+        { pid: 4400, ppid: 4298, executable: 'tmux' }])
+      const { port } = startHere({ orca: onMac })
+      port.observed(hook('session-start', { hostHints: { HERDR_PANE_ID: 'w1:p2', TMUX_PANE: '%3' } }))
+      attach(port)
+      await vi.waitFor(() => expect(said()).toEqual(['[device] herdr client · found']))
+      expect(orcaRuns.filter(([file]) => file === 'tmux')).toEqual([])
+      expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
+      expect((await host().listAgentSnapshot({ apps: true })).apps?.apps).toContainEqual(expect.objectContaining({ id: 'terminal-app', count: 1 }))
+      port.observed(hook('session-start', { sessionId: 'sess-2', callerPid: 5242, hostHints: { HERDR_PANE_ID: 'w1:p2', TMUX_PANE: '%3' } }))
+      await vi.waitFor(() => expect(said()).toEqual(['[device] herdr client · found', '[device] herdr client · none', '[device] tmux client · found']))
+      expect(orcaRuns.filter(([file]) => file === 'tmux').map(([, args]) => args[0])).toEqual(['display-message', 'list-clients'])
+      await vi.waitFor(async () => expect((await host().listAgentSnapshot({ apps: true })).apps?.apps)
+        .toContainEqual(expect.objectContaining({ id: 'terminal-app', count: 2 })))
+    })
+  })
+
   // A swipe that rests on an agent in an Orca terminal shows its pane, and Orca stays where it is.
   const switched: [string, string[], number] = ['/opt/orca/bin/orca', ['terminal', 'switch', '--terminal', HANDLE, '--json'], 10_000]
   /** The Codex agent in an Orca terminal, its dial on the cable. */

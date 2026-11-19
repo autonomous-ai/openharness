@@ -6,17 +6,26 @@
  *
  * Its agent is a C program named `claude`: herdr tells an agent by its process name, and a copied `/bin/cat` under that
  * name is killed by macOS. It prints `fake> `, then `GOT[<line>]` for each line it reads.
+ *
+ * Its client, in a fake terminal app's tab, is pinned to this server by its config folder: never the developer's herdr.
+ * `ownHerdrsOnly` keeps the daemon's herdr lookup off the developer's herdr, which may run on the Mac the tests run on.
  */
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { createConnection } from 'node:net'
 import { userInfo } from 'node:os'
 import { dirname, join } from 'node:path'
+import { promisify } from 'node:util'
+import { observedAgentId } from '../../src/cable/hosts/observed.js'
 import { resolveBinaryOnPath } from '../../src/lib/binaryOnPath.js'
 import { ownProcessGroup } from '../../src/lib/windows/noWindow.js'
+import { writeExecutable } from '../../src/testing/executableFixture.js'
 import { IsolatedDaemon, until } from './daemon.js'
+import { tabUnder, type FakeApp } from './outsideAgent.js'
 import { forgetGroup, leaderGone, watchGroup } from './reaper.js'
+
+const execFileAsync = promisify(execFile)
 
 /** sun_path's room, its last byte the terminator: a longer socket path fails to bind. */
 const SOCKET_ROOM = 103
@@ -45,7 +54,11 @@ export const herdrBinary: string | null = (() => {
 })()
 
 export class PrivateHerdr {
-  private constructor(private readonly d: IsolatedDaemon, private readonly server: ChildProcess, readonly socket: string) {}
+  private constructor(private readonly d: IsolatedDaemon, private readonly server: ChildProcess, private readonly config: string,
+    readonly socket: string) {}
+
+  /** The server's process. */
+  get pid(): number { return this.server.pid! }
 
   /** herdr installed for the daemon, and not running: its config, and the daemon's `herdr` on its PATH, as the devices
    *  look for it at each dial attach. Its config folder. */
@@ -78,7 +91,7 @@ export class PrivateHerdr {
     // A server that exits will never answer: the wait ends at once and says so.
     let exited: string | undefined
     server.once('exit', (code, signal) => { exited = String(code ?? signal) })
-    const herdr = new PrivateHerdr(d, server, socket)
+    const herdr = new PrivateHerdr(d, server, config, socket)
     try {
       await until('the private herdr to answer',
         async () => exited !== undefined || (existsSync(socket) && await herdr.rpc('workspace.list')), 20_000, 100)
@@ -127,6 +140,44 @@ export class PrivateHerdr {
     return (created.root_pane as { pane_id: string }).pane_id
   }
 
+  /**
+   * herdr's client attached to this server from a tab of a fake [app], as a person's runs in a terminal app: `herdr`
+   * itself is the tab's process, given a size first, which a pseudo-terminal lacks and the client draws to. Its pid and
+   * its tab's tty. Attached once the server holds one more `herdr-client.sock` connection than before it started.
+   */
+  async tabClient(app: FakeApp): Promise<{ pid: number; tty: string; close(): Promise<void> }> {
+    const before = await this.clientConnections()
+    const tab = await tabUnder(this.d, app, ['/bin/sh', '-c', 'stty rows 40 columns 120 && exec "$0"', herdrBinary!],
+      { ...this.d.env, XDG_CONFIG_HOME: this.config, TERM: 'xterm-256color' })
+    try {
+      await until('the herdr client to attach', async () => await this.clientConnections() > before, 20_000, 100)
+      const { stdout } = await execFileAsync('/bin/ps', ['-o', 'tty=', '-p', String(tab.pid)])
+      return { pid: tab.pid, tty: `/dev/${stdout.trim()}`, close: () => tab.close() }
+    } catch (error) {
+      await tab.close()
+      throw error
+    }
+  }
+
+  /** The server's `herdr-client.sock` descriptors. lsof exits 1 with none, its output intact. */
+  private async clientConnections(): Promise<number> {
+    const listed = await execFileAsync('/usr/sbin/lsof', ['-a', '-U', '-p', String(this.pid), '-F', 'n'])
+      .catch((error: { stdout?: string }) => ({ stdout: error.stdout ?? '' }))
+    return listed.stdout.split('\n').filter((line) => line.startsWith('n') && line.endsWith('/herdr-client.sock')).length
+  }
+
+  /** The suite's fake Claude Code started in a new pane's shell, so its hook runs with herdr's own HERDR_PANE_ID. */
+  async hooked(folder: string): Promise<{ pane: string; sessionId: string; id: string }> {
+    const pane = await this.pane(folder)
+    await until(`the shell in ${folder}`, async () => /\S/.test(await this.screen(pane)), 20_000, 100)
+    // Its own SessionStart: the first after the log's length before it was typed.
+    const from = this.d.hookLog().length
+    await this.type(pane, '"$CLAUDE_PATH"')
+    const sessionId = await until(`${folder}'s SessionStart hook to run`,
+      () => this.d.hookLog().slice(from).match(/claude pid=\d+ SessionStart\(startup\) session=(\S+) ran/)?.[1], 30_000, 100)
+    return { pane, sessionId, id: observedAgentId('claude', sessionId) }
+  }
+
   /** A line typed into the pane, then Enter. */
   async type(paneId: string, line: string): Promise<void> {
     await this.rpc('pane.send_text', { pane_id: paneId, text: `${line}\n` })
@@ -172,4 +223,61 @@ export class PrivateHerdr {
     IsolatedDaemon.killGroup(server)
     forgetGroup(server.pid!)
   }
+}
+
+/** The pids of the herdr processes outside this worker's tree, from the whole table: names are matched and dropped, and
+ *  nothing is asked of those processes. */
+export function othersNow(): number[] {
+  const rows = execFileSync('/bin/ps', ['-axo', 'pid=,ppid=,comm='], { encoding: 'utf8' }).split('\n').flatMap((line) => {
+    const row = /^\s*(\d+)\s+(\d+)\s+(.*?)\s*$/.exec(line)
+    return row ? [{ pid: Number(row[1]), ppid: Number(row[2]), herdr: row[3].split('/').pop() === 'herdr' }] : []
+  })
+  const parent = new Map(rows.map((row) => [row.pid, row.ppid]))
+  const ours = (pid: number): boolean => {
+    for (let at = pid, step = 0; at > 0 && step < 64; at = parent.get(at) ?? 0, step++) if (at === process.pid) return true
+    return false
+  }
+  return rows.filter((row) => row.herdr && !ours(row.pid)).map((row) => row.pid)
+}
+
+/**
+ * The daemon's process table holds no herdr but the test's: a herdr of the developer's runs on the Mac that runs the tests,
+ * and the daemon's herdr lookup must never read it (PM, 2026-11-19). A `ps` first on the daemon's PATH, admitted before
+ * the daemon runs it, as the harness's `lsof` (harness/daemon.ts). Only the table read `readProcessNames` makes
+ * (`ps -axo pid=,ppid=,comm=`, cable/hosts/scannedApp.ts) is touched, the herdr lookup's and every other walk's of the
+ * devices alike: each row whose name is `herdr` and whose parents do not reach [root] (the worker) goes, and is noted
+ * kept or dropped. Every other `ps` is the system's. It exits with ps's status, never awk's. Called after
+ * `IsolatedDaemon.create`, before `start`.
+ */
+export function ownHerdrsOnly(d: IsolatedDaemon, root: number = process.pid): { kept(): number[]; dropped(): number[] } {
+  const log = join(d.root, 'ps-herdr.log')
+  writeExecutable(join(dirname(d.env.CLAUDE_PATH!), 'ps'), `#!/bin/sh
+if [ $# -ne 2 ] || [ "$1" != -axo ] || [ "$2" != pid=,ppid=,comm= ]; then exec /bin/ps "$@"; fi
+exec 4>&1
+status=$({ { /bin/ps "$@" 3>&- 4>&-; echo $? >&3; } | awk -v root=${root} -v noted='${log}' '
+{
+  line[NR] = $0
+  if (match($0, /^ *[0-9]+ +[0-9]+ +/)) {
+    pid[NR] = $1; parent[$1] = $2
+    name = substr($0, RLENGTH + 1); sub(/ +$/, "", name)
+    n = split(name, part, "/"); herdr[NR] = part[n] == "herdr"
+  }
+}
+END {
+  for (i = 1; i <= NR; i++) {
+    if (herdr[i]) {
+      p = pid[i]; ours = 0
+      for (step = 0; step < 64 && p != "" && p != 0; step++) { if (p == root) { ours = 1; break }; p = parent[p] }
+      print (ours ? "kept " : "dropped ") pid[i] >> noted
+      if (!ours) continue
+    }
+    print line[i]
+  }
+}' >&4 3>&- 4>&-; } 3>&1)
+exit "$status"
+`)
+  const noted = (what: 'kept' | 'dropped'): number[] => existsSync(log)
+    ? [...new Set(readFileSync(log, 'utf8').split('\n').flatMap((line) => line.startsWith(`${what} `) ? [Number(line.slice(what.length + 1))] : []))]
+    : []
+  return { kept: () => noted('kept'), dropped: () => noted('dropped') }
 }

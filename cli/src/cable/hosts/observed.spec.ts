@@ -1421,7 +1421,7 @@ function fakeActions(over: Partial<Fakes> = {}, platform: NodeJS.Platform = 'dar
     createHerdrAdapter({ ...deps, client: {
       prompt: (pane, kind, text) => fake.herdrPrompt(pane, kind, text),
       socketStamp: () => fake.herdrStamp(),
-    } }),
+    }, front: () => undefined }),
     createTmuxAdapter({ run: ran, tmux: async () => ({ state: 'present' }), processes: async () => [{ pid: 100, ppid: 1, executable: 'claude' }],
       log: () => {}, front: () => fake.tmuxFront() }),
     // As devices.ts takes it where the hook's addresses are hc's own session's.

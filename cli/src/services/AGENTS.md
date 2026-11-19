@@ -360,3 +360,9 @@ from before (`src/harnessd/services.spec.ts`, `e2e/messagesSkew.e2e.ts`).
   nothing on a session Harness made. It never types, creates or closes anything there. Harness's panes and the
   person's can share one tmux server, so the rule is held per pane and session, by the owner tag the hook reads
   (`hook/notify.mjs` `paneFacts`).
+
+  In the person's herdr the devices process runs `herdr agent focus <pane>` alone, for the pane a hook named in the
+  default session, at a tap, and at a rest only while the app holding that pane's client is in front
+  (`cable/hosts/herdr.ts`), beside the dial's words over herdr's socket. To find that client it reads only process
+  names, parents and ttys, the unix-socket rows `lsof` gives for herdr's own processes and a tty's access time, never
+  another process's environment or argv (`cable/hosts/herdrOuter.ts`). It never creates or closes anything there.

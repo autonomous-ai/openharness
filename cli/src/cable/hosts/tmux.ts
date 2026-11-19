@@ -15,11 +15,13 @@ import { ensureTmuxOnPath, tmuxAvailableNow, type TmuxPathOutcome } from '../../
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { APP_IDS } from './hostDetect.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
+import type { OuterLookup } from './outer.js'
 import { parentChain, scannedApps, type ProcessName } from './scannedApp.js'
 import { TAB_TTY } from './tabs.js'
 
 const TMUX_PANE_ID = /^%[0-9]{1,9}$/
-const PID = /^[1-9][0-9]{0,9}$/
+/** A process id as the table and the hooks give it; the herdr lookup holds its pids to it too (herdrOuter.ts). */
+export const PID = /^[1-9][0-9]{0,9}$/
 /** This adapter's pane: tmux's pane id and the agent's process, `%3:100`, as the hook's event named them, and the app
  *  holding the client that shows its session when one was found, `%3:100:terminal-app`. */
 const PANE_AND_PID = /^(%[0-9]{1,9}):([1-9][0-9]{0,9})(?::([a-z-]{1,32}))?$/
@@ -41,8 +43,8 @@ const TMUX_CLIENT_PLACES = '#{client_activity}|#{client_pid}|#{client_tty}'
 /** One line of TMUX_CLIENT_PLACES; one with no whole activity or no pid in form is no client. */
 const TMUX_CLIENT_PLACE = /^([0-9]+)\|([1-9][0-9]{0,9})\|(.*)$/
 /** How long a pane's answer holds, from its lookup's start: Command Code's turn-start comes at every tool call, and a
- *  lookup is a `ps` and up to BUNDLES_A_PASS `plutil` runs. */
-const OUTER_EVERY_MS = 5_000
+ *  lookup is a `ps` and up to BUNDLES_A_PASS `plutil` runs. The herdr lookup holds its answers as long (herdrOuter.ts). */
+export const OUTER_EVERY_MS = 5_000
 
 export interface TmuxDeps {
   run: OrcaDeps['run']
@@ -209,18 +211,15 @@ interface ClientPlace { app?: string; tty?: string }
  *  table, the session's clients, the client's app. */
 type NotRead = 'tmux' | 'pane' | 'processes' | 'clients' | 'app'
 
-/** Nothing at once when the hints name no tmux pane in form or the caller is no pid; else the client's place, `{}` when
- *  none is found. Never rejects. */
-export type TmuxOuter = (hints: Readonly<Record<string, string>>, pid: number) => Promise<ClientPlace> | undefined
-
 /**
  * Where the person sees an agent in a pane of their own tmux: in the app that holds the client used last on the pane's
  * session, at that client's tty. The pane's own hints cannot say: tmux sets TERM_PROGRAM=tmux, and the bundle id is the
  * one the server started with, none when the daemon started it (Diego's Mac, 2026-11-19), and another app's after a
  * re-attach. It only reads, the pane's facts and its session's clients, and only for a pane of the person's that holds
- * the hook's caller (pid).
+ * the hook's caller (pid). Nothing at once when the hints name no tmux pane in form or the caller is no pid; else the
+ * client's place, `{}` when none is found. Never rejects.
  */
-export function createTmuxOuter(deps: TmuxOuterDeps): TmuxOuter {
+export function createTmuxOuter(deps: TmuxOuterDeps): OuterLookup {
   // By pane and caller: an answer holds for the caller whose chain held the pane, a pane of the same id may be another
   // server's. A lookup in flight is shared past its 5 s, so a tmux that hangs to its timeout runs no second one.
   const asked = new Map<string, { at: number; answer: Promise<ClientPlace>; settled: boolean }>()
