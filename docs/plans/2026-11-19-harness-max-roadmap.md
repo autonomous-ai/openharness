@@ -115,9 +115,12 @@ chip, without the panel: an open 36 fps (27.6 ms mean, 37.8 ms worst), a close 4
 frame 18 ms (open) and 36 ms (close), down from 76 ms and 182 ms cold; the swipe 55–61 fps; the loops over 200 fps.
 Two fixes came with it: a race in ESP-IDF 5.5.4's PPA driver left a frame's last strip waiting (`max_strips.c` now
 kicks it, and falls back to the CPU instead of aborting), and the Pro's `ht_damage` lines up the scenes' common tail
-when a run is added or dropped (the listening band 64k px a frame, from 735k). Still open: a step of the paint-ahead
-takes 17 ms on average on the chip, 88 ms at worst, and holds the UI lock meanwhile (loops and taps wait); the next
-round budgets each step to about 4 ms.
+when a run is added or dropped (the listening band 64k px a frame, from 735k). The paint-ahead first held the UI lock
+for 17 ms a step on the chip (88 ms at worst); it now makes its images out of the lock a band of rows at a time: on
+the chip a step's p50 is 2.9–3.2 ms and p95 4–4.8 ms, the longest under the lock 4 ms, so a tap never waits longer.
+Still open: the Pro's pet bake (`pod_draw.c`) is one block, so about 40 steps of an open's 638 run past 4 ms (36 ms
+at worst) and can put the next frame late; the paint-ahead takes 1.8 s (open) and 2.7 s (close) after App Detail
+lands. Reports: `bench/results/2026-11-20-*`.
 
 Deviations from V3 that remain: the pages switch without V3's cross-fade (a cross-faded frame costs 6–10 whole
 glasses); the cell pets hold their pose; the words and chips fade without V3's blur; the overlay, the asking chip and
