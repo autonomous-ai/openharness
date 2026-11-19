@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import { observedAgentId } from '../../src/cable/hosts/observed.js'
 import { until, type IsolatedDaemon } from './daemon.js'
 import { tabUnder, type FakeApp } from './outsideAgent.js'
+import { waitForNativeHooks } from './nativeHooks.js'
 
 /** The variables a pane needs to run the fake engine against this daemon, as e2e/hookclient.e2e.ts passes them. */
 const ENGINE_ENV = ['HOME', 'ZDOTDIR', 'PATH', 'CODEX_HOME', 'CLAUDE_PATH', 'CODEX_PATH']
@@ -32,6 +33,7 @@ export class InOwnTmux {
 
   /** [made] is the tmux command that makes its pane. */
   private static async begin(d: IsolatedDaemon, folder: string, made: readonly string[]): Promise<InOwnTmux> {
+    await waitForNativeHooks(d, 'claude')
     const cwd = join(d.projectsDir, folder)
     mkdirSync(cwd, { recursive: true })
     const from = d.hookLog().length

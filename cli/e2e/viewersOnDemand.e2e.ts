@@ -24,7 +24,7 @@ import { IsolatedDaemon, until } from './harness/daemon.js'
 const HARNESS = 'e2e/sketch'
 /** A run from a release bundle, which carries the release's own harnesses (only a bundle does). */
 const BUNDLED = !!process.env.E2E_BUNDLE_PATH
-const ASKING = "asking for the viewers' process"
+const ASKING = '[startup] viewers:'
 
 const viewerScript = (d: IsolatedDaemon) => join(d.env.DSH_DIR!, 'e2e', 'sketch', 'viewer.mjs')
 const installedFile = (d: IsolatedDaemon) => join(d.env.DSH_DIR!, 'installed.json')
@@ -98,8 +98,8 @@ describe('the viewers\' process, once something needs it', () => {
     started.push(d)
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
     await d.start()
-    const from = d.log().lastIndexOf('[harnessd] core started')
-    // The others are up, and the core has had time to ask for anything it would ask for as it starts.
+    const from = 0
+    // Explicitly enabled workers can start before the core's start log. The others are up, and the core has had time to ask for anything it would ask for as it starts.
     await until('the services to connect', () => since(d, from).includes('[services] search connected') || null, 30_000, 200)
     return { d, from }
   }
@@ -159,7 +159,7 @@ describe('the viewers\' process, once something needs it', () => {
 
     await d.restart()
     const after = d.log().lastIndexOf('[harnessd] core started')
-    expect(since(d, after)).toContain(`[viewers] a harness here: ${ASKING}`)
+    await until('retained viewers to request their process', () => since(d, after).includes(`${ASKING} retained viewer servers`) || null, 30_000, 100)
     await until('the viewers to connect', () => connections(d, after) >= 1 || null, 30_000, 200)
     const again = await LocalClient.connect(d)
     await until('the harness\'s viewer back', async () => {

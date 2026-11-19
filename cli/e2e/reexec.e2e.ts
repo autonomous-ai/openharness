@@ -13,6 +13,7 @@
  * e2e/update.e2e.ts, so nothing here reaches beyond the machine.
  */
 import { execFileSync } from 'node:child_process'
+import { daemonOwnsProcesses } from './harness/daemonOwnership.js'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
@@ -84,9 +85,7 @@ describe('the master re-executing itself on an update', () => {
       .map((match) => ({ pid: Number(match[1]), ppid: Number(match[2]), command: match[3] }))
   const nothingOrphaned = async (masterPid: number) => {
     // A probe is over within the update; give one a moment to end.
-    const own = (one: { pid: number; ppid: number; command: string }) =>
-      one.pid === masterPid || (one.ppid === masterPid && / __(?:run|service \S+)$/.test(one.command))
-    await until('only the master and its own children', () => daemonProcesses().every(own), 10_000, 200)
+    await until('only the master, its children and the core’s storage child', () => daemonOwnsProcesses(daemonProcesses(), masterPid), 10_000, 200)
     expect(daemonProcesses().filter((one) => one.command.endsWith(' __run'))).toHaveLength(1)
   }
 

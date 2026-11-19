@@ -636,7 +636,7 @@ esac
       // test); this line is printed once they are.
       if (options.ready !== 'port') {
         await until('the daemon to finish starting', () => /\[cli\] ready/.test(this.output.slice(from)), 60_000, 100)
-        // Its hooks are installed before it says it is ready.
+        // Optional hook installation continues after readiness; external-engine fixtures await their own files.
         this.assertHooksStayedInside()
       }
     })()])

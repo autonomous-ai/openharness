@@ -66,7 +66,7 @@ describe('a failing service never takes the core down', () => {
   afterEach(async () => { await daemon?.close(); daemon = undefined })
 
   it('with every service failing to start, in its own process or in the core, the core starts, runs an agent through turns and a restart, and says each one is unavailable', async () => {
-    daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: EVERY_PROCESS_FAILING, ...QUICK_TO_PARK } })
+    daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: `${EVERY_PROCESS_FAILING},edge.crash`, ...QUICK_TO_PARK } })
     const d = daemon
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-120).join('\n')}`) })
     // Grid in use here, so that models is asked for as the core starts and fails with the others (core/modelsWake.ts).
@@ -77,7 +77,8 @@ describe('a failing service never takes the core down', () => {
     // waits for it no longer than a start (core/serviceLinks.ts `ON_DEMAND_START_MS`).
     const client = await LocalClient.connect(d)
     const listing = client.request('dsh_list', {}, 60_000)
-    // Each process fails as it starts, again and again, until the master parks it; the core never waits for one.
+    // The startup detector speaks only to the master, so also crash its edge host: every feature remains unavailable.
+    // Each process fails until the master parks it; the core never waits for one.
     for (const service of SERVICE_PROCESSES) {
       await until(`the master to park ${service}`, () => d.log().includes(`[harnessd] service ${service} ended 3 times`) || null, 60_000, 250)
     }
@@ -154,7 +155,8 @@ describe('a failing service never takes the core down', () => {
     daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: EVERY_PROCESS_FAILING, ...IN_THE_CORE } })
     onTestFailed(() => { console.log(`---- daemon log\n${daemon?.log().split('\n').slice(-80).join('\n')}`) })
     await daemon.start()
-    for (const service of EVERY_PROCESS_FAILING.split(',')) {
+    // Startup discovery belongs to the master’s edge host and has no inline core service.
+    for (const service of EVERY_PROCESS_FAILING.split(',').filter(name => name !== 'componentStartup')) {
       expect(daemon.log()).toContain(`[services] ${service} did not start · Error · the core runs without it`)
     }
     const client = await LocalClient.connect(daemon)

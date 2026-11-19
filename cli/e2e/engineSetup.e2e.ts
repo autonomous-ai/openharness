@@ -7,6 +7,7 @@ import { afterEach, expect, it, onTestFailed } from 'vitest'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 import { harnessdProcesses } from './harness/endurance.js'
+import { harnessPath, thisComputer } from '../src/config/harnessHome.js'
 
 let daemon: IsolatedDaemon | undefined, client: LocalClient | undefined
 const setupPid = (d: IsolatedDaemon) => harnessdProcesses(d).get('engineSetup')
@@ -153,7 +154,7 @@ function operations(d: IsolatedDaemon): Array<{ type: string; pid: number }> {
   return existsSync(file) ? readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) : []
 }
 function nativeFiles(d: IsolatedDaemon): Array<string | null> {
-  return [join(d.env.HOME!, '.claude', 'settings.json'), join(d.env.HOME!, '.harness', 'agent-messages', 'hook.mjs')]
+  return [join(d.env.HOME!, '.claude', 'settings.json'), join(d.env.HARNESS_AGENT_MESSAGES_DIR || harnessPath('agent-messages', d.env.HOME!, process.platform, thisComputer(d.env)), 'hook.mjs')]
     .map(file => existsSync(file) ? readFileSync(file, 'utf8') : null)
 }
 

@@ -11,6 +11,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
+import { ApiConnections } from '../src/lib/apiConnections.js'
 import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 
@@ -94,10 +95,9 @@ describe('workspaces in their own process', () => {
 
   it.each(['ready', 'failed'] as const)('workspace instructions are optional and isolated when preparation is %s', async state => {
     const d = await fresh(state === 'failed' ? { HARNESSD_TEST_FAULTS: 'workspaces.prepareInstructions' } : {}, daemon => {
-      const api = join(daemon.dataDir, 'api-connections')
-      mkdirSync(api, { recursive: true, mode: 0o700 })
-      writeFileSync(join(api, 'list.json'), JSON.stringify({ version: 1, connections: [{ id: 'fixture', provider: 'fixture',
-        name: 'Fixture', baseUrl: 'https://fixture.invalid/v1', keyEnv: 'FIXTURE_KEY', authHeader: 'Authorization', authPrefix: 'Bearer' }] }), { mode: 0o600 })
+      // The metadata list is derived from the authoritative store; startup refreshes it.
+      new ApiConnections(daemon.dataDir).save({ provider: 'custom', name: 'Fixture',
+        baseUrl: 'https://fixture.invalid/v1', keyEnv: 'FIXTURE_KEY', apiKey: 'fixture-key' })
     })
     const client = await LocalClient.connect(d)
     try {

@@ -1,3 +1,4 @@
+import { admitFixtureCore } from './harness/admittedParent.js'
 /** A real core's viewer lifecycle and reconnect replies must not hand its saved launch key to a service. */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -34,6 +35,7 @@ it('keeps grid launch custody in the real core while a viewer attaches, reads fr
     writeFileSync(join(daemon.env.DSH_DIR!, 'installed.json'), JSON.stringify([
       { id, dir, source: dir, ref: null, commit: null, linked: false, installedAt: Date.now() },
     ]))
+    await admitFixtureCore(daemon)
     await daemon.start()
     const corePid = daemon.corePid()
     viewer = attach()

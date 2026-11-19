@@ -381,7 +381,7 @@ describe('the Wi-Fi device with the dials', () => {
     const log = () => machine.daemon.log()
     // No dial here: its pairing asks for the process (core/devicesWake.ts).
     await until('the Wi-Fi device\'s service to connect', () => wifiConnections(world!) >= 1 || null, 30_000, 200)
-    expect(log()).toContain('[devices] a paired Wi-Fi device: asking for the devices\' process')
+    expect(log()).toContain('[startup] wifi: a paired device')
     await connect(device)
     expect(log()).not.toContain('[services] devices connected')
     await gestures(window, device, agentId, 'mixed-wifi-external')

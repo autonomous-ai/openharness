@@ -93,7 +93,7 @@ describe('the gateway\'s process, once it is needed', () => {
       mkdirSync(join(d.dataDir, 'e2e'), { recursive: true })
       writeFileSync(join(d.dataDir, 'e2e', 'paired.json'), JSON.stringify([{ identityPub: b64e(newIdentity().pub), label: 'browser', pairedAt: 1, role: 'web' }]))
     })
-    expect(d.log()).toContain('[gateway] a pairing: asking for the gateway\'s process')
+    await until('saved links to request the gateway', () => d.log().includes('[startup] gateway: saved links') || null, 30_000, 100)
     await until('the gateway to connect', () => connections(d) >= 1 || null, 30_000, 200)
     expect((await status(d)).pairs).toEqual([expect.objectContaining({ label: 'browser' })])
   })
@@ -120,7 +120,6 @@ describe('the gateway\'s process, once it is needed', () => {
     const startedAt = Date.now()
     await d.start()
     const after = () => d.log().slice(from)
-    expect(after()).toContain('[gateway] signed in: asking for the gateway\'s process')
     await until('the machine to be on the relay', () => fake.nodeUp(machine.machineId) || null, 30_000, 50)
     const onRelayMs = Date.now() - startedAt
     // Asked before the core bound: started beside it, not after it.

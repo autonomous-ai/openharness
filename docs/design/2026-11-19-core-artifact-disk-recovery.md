@@ -23,3 +23,9 @@ Evidence (2026-11-19, isolated macOS worktree based on b93fceea72):
 - Caller GREEN: `20261119T115716.709537Z-37767`, 240 passed across five files and TypeScript passed; real admitted children recovered after storage became available.
 - Required supervisor gate: `20261119T115804.906879Z-38685`, 621 passed, one platform skip, all four coverage measures 100% per file. Every successful receipt includes actual exit and verified cleanup.
 - Native workflow 44513089598 remains a recorded failing baseline; the packaged full-disk acceptance must run on the integrated final build. This change does not provide final native or performance acceptance for the whole extraction.
+
+Native fixture correction and measured recovery:
+
+- The diagnostic `20261119T122057.963737Z-79594` retained allocated-file and free-block measurements outside the disposable volume. Before the last candidate it had 22.84 MiB free for a 27.35 MiB worker image: the budget omitted a separate 13.75 MiB master image for each fixture release. The volume now budgets both measured images per release and current/backup/canary files. Deliberate exhaustion still uses real write refusal.
+- `20261119T122559.236442Z-1034`: all four hostile full-disk scenarios and TypeScript passed in 134.4 seconds, with verified cleanup. Both ordinary disk-full cases had already passed in `20261119T121008.281204Z-60367` (that overall receipt failed on the last update case).
+- The crashing candidate now proves it is running before the fixture fills the volume and releases its external crash gate. This distinguishes an invalid running build from a valid build whose immutable payload cannot yet be prepared.

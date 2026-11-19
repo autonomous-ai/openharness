@@ -1,5 +1,4 @@
 /** The shipped gateway owns connector plaintext; losing it cannot stop a local session. */
-import { execFileSync } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, it, onTestFailed } from 'vitest'
@@ -10,12 +9,7 @@ import { until, type IsolatedDaemon } from './harness/daemon.js'
 import { FakeBackend } from './harness/fakeBackend.js'
 import { signedInDaemon, writeE2ee } from './harness/fleet.js'
 
-function gateways(daemon: IsolatedDaemon): number[] {
-  const owned = new Set([...daemon.log().matchAll(/\[harnessd\] service gateway started \(pid (\d+)\)/g)].map(match => Number(match[1])))
-  return execFileSync('ps', ['-A', '-o', 'pid=,command=']).toString().split('\n')
-    .map(line => line.trim().match(/^(\d+)\s+harnessd-gateway$/)).filter(match => !!match)
-    .map(match => Number(match![1])).filter(pid => owned.has(pid))
-}
+const gateways = (daemon: IsolatedDaemon): number[] => daemon.servicePids('gateway')
 
 it('isolates a Refresh interrupted by gateway death, keeps the agent usable, and recovers synchronization', async () => {
   const backend = await FakeBackend.start()

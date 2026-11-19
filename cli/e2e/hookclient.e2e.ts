@@ -21,6 +21,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
+import { waitForNativeHooks } from './harness/nativeHooks.js'
 
 type Engine = 'claude' | 'codex'
 type Row = Record<string, any>
@@ -332,6 +333,7 @@ setInterval(() => {}, 1000)
       return now?.status === 'active' && rowOnDisk(d, now.id)?.engine === 'terminal' ? now : null
     }, 60_000, 250)
     client.close()
+    await waitForNativeHooks(d, engine)
     await d.stop()
 
     // The person starts the engine in that terminal.
@@ -367,6 +369,7 @@ setInterval(() => {}, 1000)
 
   it.each(engines)('%s in a tmux session the person opened by hand is no agent, whether the daemon is down or up', async (engine) => {
     const d = await fresh()
+    await waitForNativeHooks(d, engine)
     await d.stop()
     const before = onDisk(d)
     const cwd = join(d.projectsDir, `own-session-${engine}`)

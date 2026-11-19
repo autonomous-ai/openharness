@@ -1,6 +1,7 @@
 /** Real launch dispatch keeps working without OpenCode's optional interpretation chunk. */
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { DatabaseSync } from 'node:sqlite'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterAll, afterEach, beforeAll, expect, it, onTestFailed } from 'vitest'
@@ -37,6 +38,16 @@ it.each([['missing', 1], ['stalled', 1], ['missing', 2], ['stalled', 2]] as cons
     d.env.OPENCODE_PATH = binary
     d.env.OPENCODE_DATA_DIR = join(d.root, 'opencode', 'data')
     d.env.OPENCODE_PLUGIN_DIR = join(d.root, 'opencode', 'plugin')
+    // OpenCode creates its native store before a conversation has any saved rows. Stop needs
+    // that real location; Close must still refuse a checkpoint for this unsaved conversation.
+    mkdirSync(d.env.OPENCODE_DATA_DIR, { recursive: true })
+    const database = new DatabaseSync(join(d.env.OPENCODE_DATA_DIR, 'opencode.db'))
+    database.exec('CREATE TABLE session (id TEXT PRIMARY KEY);'
+      + 'CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, data TEXT);'
+      + 'CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT, time_created INTEGER, data TEXT);'
+      + 'CREATE TABLE session_v2 (id TEXT PRIMARY KEY);'
+      + 'CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER, data TEXT);')
+    database.close()
     writeFileSync(binary, `#!${process.execPath}
 const fs = require('node:fs');
 const args = process.argv.slice(2);

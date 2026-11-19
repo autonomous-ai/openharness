@@ -1,3 +1,4 @@
+import { admitFixtureCore } from './harness/admittedParent.js'
 /** Found by QA on a quiet machine: a cold Share request reached its process before `connected`, so its
  * agent read ran without a core connection and said HARNESS_NOT_FOUND. Separate the real wire's frames
  * in time, preserving their order: socket coalescing must not decide whether an agent can be shared. */
@@ -58,6 +59,7 @@ it('a cold Share reads its live agent after being welcomed, even when each wire 
   let wire: SeparateFrames | undefined
   onTestFailed(() => console.log(`---- daemon log\n${d.log()}`))
   try {
+    await admitFixtureCore(d)
     await d.start()
     const core = d.corePid()
     client = await LocalClient.connect(d)

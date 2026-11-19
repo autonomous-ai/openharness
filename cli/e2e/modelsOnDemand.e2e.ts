@@ -77,7 +77,7 @@ describe('models\' process, once grid is in use or asked for', () => {
   ] as const) {
     it(`asks for it as the core starts when grid is in use here: ${what}`, async () => {
       const d = await fresh({ before: lay })
-      expect(d.log()).toContain(`[models] ${what}: asking for models' process`)
+      await until('models startup policy to request its process', () => d.log().includes('[startup] models: saved models') || null, 30_000, 100)
       await until('models to connect', () => connections(d) >= 1 || null, 30_000, 200)
       expect(starts(d)).toBe(1)
     })
