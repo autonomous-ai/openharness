@@ -3479,6 +3479,33 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
       expect(apps?.map(({ id }) => id)).not.toContain('zellij')
     })
 
+    // A Zellij server started in a tmux pane gives its panes that pane's TMUX_PANE, and keeps it after the person
+    // attaches from a Terminal tab: tmux's lookup finds no app there, and Zellij's is asked next (outer.ts firstOuter).
+    it('an agent in Zellij whose hints still name a tmux pane is on the page of the app that holds Zellij\'s client', async () => {
+      const terminal = join(homedir(), 'Applications', 'Terminal.app')
+      readers.processes.mockResolvedValue([
+        { pid: 4242, ppid: 4000, tty: 'ttys005', executable: 'claude' }, { pid: 4000, ppid: 3900, tty: 'ttys005', executable: 'zsh' },
+        { pid: 3900, ppid: 1, executable: 'zellij' },
+        { pid: 4300, ppid: 4298, tty: 'ttys002', executable: 'zellij' },
+        { pid: 4298, ppid: 1, executable: join(terminal, 'Contents', 'MacOS', 'Terminal') },
+      ])
+      readers.bundleId.mockImplementation(async (bundle) => bundle === terminal ? 'com.apple.Terminal' : undefined)
+      const { port } = startHere({ orca: { ...mac, run: async (file, args, timeoutMs) => {
+        orcaRuns.push([file, args, timeoutMs])
+        // The tmux pane's shell (5000) holds none of the agent's processes.
+        const stdout = args[0] === 'display-message' ? '5000|work|\n'
+          : args.includes('list-clients') ? 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1         terminal_0     N/A            \n' : ''
+        return { code: 0, stdout }
+      } } })
+      port.observed(hook('session-start', { hostHints: { ...ZELLIJ, TMUX_PANE: '%3' } }))
+      attach(port)
+      await vi.waitFor(() => expect(said()).toEqual(['[device] tmux client · none', '[device] zellij client · found']))
+      expect(orcaRuns.map(([file, args]) => [file, args.includes('list-clients') ? 'list-clients' : args[0]]))
+        .toEqual([['tmux', 'display-message'], ['zellij', 'list-clients']])
+      const apps = (await host().listAgentSnapshot({ apps: true })).apps?.apps
+      expect(apps).toContainEqual(expect.objectContaining({ id: 'terminal-app', count: 1 }))
+    })
+
     it('on Linux a hooked agent in a kitty window lists v and f; its tap focuses the window, then raises it', async () => {
       const linux = fakeRaise()
       const kitty = await kittyAt()
