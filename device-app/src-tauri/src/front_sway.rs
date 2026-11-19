@@ -1,19 +1,128 @@
 //! The app in front on sway: the IPC socket tells each window change. No timer, no permission.
+//!
+//! Spoken on the socket itself, not through `swaymsg`: one fixed protocol, and no program to run.
+
+use crate::front::Stop;
+use crate::front_x11::exe_name;
+use serde_json::Value;
+use std::io::{self, Read, Write};
+use std::path::Path;
+#[cfg(target_os = "linux")]
+use {
+    crate::front::{FrontSource, Source, on_thread},
+    crate::types::Log,
+    std::os::unix::net::UnixStream,
+    std::sync::Arc,
+};
+
+/// What sway sends is read whole before it is parsed: past this a message is refused, not allocated. A tree with
+/// thousands of windows is a few MB.
+pub const PAYLOAD_MAX: usize = 16 * 1024 * 1024;
+
+const MAGIC: &[u8; 6] = b"i3-ipc";
+const SUBSCRIBE: u32 = 2;
+const GET_TREE: u32 = 4;
+const WINDOW_EVENT: u32 = 0x8000_0003;
+
+/// The exe name of the process whose window is focused: once at start, then on each focus change.
+#[cfg(target_os = "linux")]
+pub struct SwayFront {
+    pub log: Arc<dyn Log>,
+}
+
+#[cfg(target_os = "linux")]
+impl FrontSource for SwayFront {
+    fn start(&self, changed: Box<dyn Fn(String) + Send + Sync>) {
+        on_thread(self.log.clone(), Source::Sway, move || {
+            let Some(socket) = std::env::var_os("SWAYSOCK") else { return Stop::NotFollowed };
+            let Ok(stream) = UnixStream::connect(socket) else { return Stop::NotFollowed };
+            follow(stream, Path::new("/proc"), &*changed)
+        });
+    }
+}
+
+/// One i3-ipc message: the magic, the payload's length and the message's kind in native byte order, the payload.
+pub fn message(kind: u32, payload: &[u8]) -> Vec<u8> {
+    let length = u32::try_from(payload.len()).expect("a payload under 4 GiB");
+    [MAGIC.as_slice(), &length.to_ne_bytes(), &kind.to_ne_bytes(), payload].concat()
+}
+
+/// The next message's kind and payload. Another magic, or a payload over PAYLOAD_MAX, is refused.
+pub fn read_message(stream: &mut impl Read) -> io::Result<(u32, Vec<u8>)> {
+    let mut header = [0; 14];
+    stream.read_exact(&mut header)?;
+    let (magic, rest) = header.split_at(MAGIC.len());
+    let (length, kind) = rest.split_at(4);
+    let length = u32::from_ne_bytes(length.try_into().unwrap()) as usize;
+    if magic != MAGIC || length > PAYLOAD_MAX {
+        return Err(io::ErrorKind::InvalidData.into());
+    }
+    let mut payload = vec![0; length];
+    stream.read_exact(&mut payload)?;
+    Ok((u32::from_ne_bytes(kind.try_into().unwrap()), payload))
+}
+
+/// The pid of the tree's focused node, walked through tiled and floating nodes alike. None when that node has no
+/// process (an empty workspace, a split).
+pub fn focused_pid(tree: &[u8]) -> Option<u32> {
+    let tree: Value = serde_json::from_slice(tree).ok()?;
+    // A stack, not recursion: the tree's depth is sway's, not ours.
+    let mut nodes = vec![&tree];
+    while let Some(node) = nodes.pop() {
+        if node["focused"] == true {
+            return pid(node);
+        }
+        for key in ["nodes", "floating_nodes"] {
+            nodes.extend(node[key].as_array().into_iter().flatten());
+        }
+    }
+    None
+}
+
+/// For a window event: None unless focus moved; then the pid of the container it moved to, None when it has none.
+pub fn focus_pid(event: &[u8]) -> Option<Option<u32>> {
+    let event: Value = serde_json::from_slice(event).ok()?;
+    (event["change"] == "focus").then(|| pid(&event["container"]))
+}
+
+fn pid(node: &Value) -> Option<u32> {
+    node["pid"].as_u64().and_then(|pid| u32::try_from(pid).ok()).filter(|&pid| pid > 0)
+}
+
+/// Tells the app in front now, then on each focus change, until the socket ends.
+pub fn follow(mut stream: impl Read + Write, proc_root: &Path, changed: &dyn Fn(String)) -> Stop {
+    let tell = |pid: Option<u32>| changed(pid.and_then(|pid| exe_name(proc_root, pid)).unwrap_or_default());
+    // Subscribed before the tree is asked for, so a change between the two is not missed.
+    let subscribed = stream.write_all(&message(SUBSCRIBE, br#"["window"]"#)).and_then(|()| read_message(&mut stream));
+    let Ok((SUBSCRIBE, answer)) = subscribed else { return Stop::NotFollowed };
+    if !serde_json::from_slice::<Value>(&answer).is_ok_and(|answer| answer["success"] == true) {
+        return Stop::NotFollowed;
+    }
+    if stream.write_all(&message(GET_TREE, b"")).is_err() {
+        return Stop::Ended;
+    }
+    // Told in the order sway sent them: an event ahead of the tree is older than the tree.
+    loop {
+        match read_message(&mut stream) {
+            Err(_) => return Stop::Ended,
+            Ok((GET_TREE, tree)) => tell(focused_pid(&tree)),
+            Ok((WINDOW_EVENT, event)) => {
+                if let Some(pid) = focus_pid(&event) {
+                    tell(pid);
+                }
+            }
+            Ok(_) => {}
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::front::Stop;
     use std::cell::RefCell;
     use std::fs;
-    use std::io::Write;
     use std::os::unix::fs::symlink;
     use std::os::unix::net::UnixStream;
-    use std::path::Path;
-
-    const SUBSCRIBE: u32 = 2;
-    const GET_TREE: u32 = 4;
-    const WINDOW: u32 = 0x8000_0003;
 
     /// sway's tree, as `swaymsg -t get_tree` prints it, cut to the fields read: foot (pid 101) and Code (pid 202) side
     /// by side, Code focused.
@@ -52,7 +161,8 @@ mod tests {
     const SPLIT: &str = r#"{"id":7,"type":"con","name":null,"layout":"splith","focused":true,"nodes":[],
         "floating_nodes":[]}"#;
     /// A window whose process is gone (or is another person's).
-    const GONE: &str = r#"{"id":8,"type":"con","app_id":"foot","pid":999,"focused":true,"nodes":[],"floating_nodes":[]}"#;
+    const GONE: &str =
+        r#"{"id":8,"type":"con","app_id":"foot","pid":999,"focused":true,"nodes":[],"floating_nodes":[]}"#;
 
     /// A `/proc` with foot as pid 101 and Code as pid 202.
     fn proc_root() -> tempfile::TempDir {
@@ -107,8 +217,8 @@ mod tests {
         let (told, stop) = run(root.path(), |sway| {
             subscribed(sway);
             send(sway, GET_TREE, TREE_FOOT);
-            send(sway, WINDOW, &event("title", CODE));
-            send(sway, WINDOW, &event("focus", CODE));
+            send(sway, WINDOW_EVENT, &event("title", CODE));
+            send(sway, WINDOW_EVENT, &event("focus", CODE));
         });
         assert_eq!(told, ["foot", "code"]);
         assert_eq!(stop, Stop::Ended);
@@ -120,7 +230,7 @@ mod tests {
         // Subscribed first, so focus moving to Code before the tree is read reaches the socket ahead of the tree.
         let (told, stop) = run(root.path(), |sway| {
             subscribed(sway);
-            send(sway, WINDOW, &event("focus", CODE));
+            send(sway, WINDOW_EVENT, &event("focus", CODE));
             send(sway, GET_TREE, TREE_CODE);
         });
         assert_eq!(told, ["code", "code"]);
@@ -133,9 +243,9 @@ mod tests {
         let (told, _) = run(root.path(), |sway| {
             subscribed(sway);
             send(sway, GET_TREE, TREE_FOOT);
-            send(sway, WINDOW, &event("focus", SPLIT));
-            send(sway, WINDOW, &event("focus", CODE));
-            send(sway, WINDOW, &event("focus", GONE));
+            send(sway, WINDOW_EVENT, &event("focus", SPLIT));
+            send(sway, WINDOW_EVENT, &event("focus", CODE));
+            send(sway, WINDOW_EVENT, &event("focus", GONE));
         });
         assert_eq!(told, ["foot", "", "code", ""]);
     }
