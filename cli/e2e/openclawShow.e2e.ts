@@ -117,6 +117,12 @@ async function rig(fake: FakeOptions = {}) {
     const rows = parsed(listed).harnesses as Array<Record<string, any>> | undefined
     return { start, end: Date.now(), line1: shown.out.split('\n')[0], text: shown.out + shown.err, json: parsed(json), ps: rows?.find((h) => h.name === name) }
   }
+  /** A look begun once `show --json` said [state], which lasts: a look's three reads run at once, so in the look that
+   *  first says it the others may have read before the change (row 5 on a GitHub Linux runner: `show` said starting). */
+  const reached = async (state: string, what: string, ms: number, name = NAME): Promise<Look> => {
+    await until(what, async () => (await look(name)).json.state === state || null, ms, 1_000)
+    return look(name)
+  }
   /** Looks about once a second until [done], [each] run on every look: every look, in order. Returns at [ms] all the
    *  same, so a row whose end never comes still has its looks checked. */
   const sample = async (done: () => boolean, ms: number, each?: (s: Look) => Promise<void> | void, name = NAME): Promise<Look[]> => {
@@ -155,7 +161,7 @@ async function rig(fake: FakeOptions = {}) {
     const waited = await run('wait', name, '--timeout', '3s')
     expect.soft(waited.code, `${row}: wait keeps waiting · ${waited.out}${waited.err}`).toBe(124)
   }
-  return { d, project, run, events, at, logged, step, look, sample, launch, begin, answered, keepsWaiting }
+  return { d, project, run, events, at, logged, step, look, reached, sample, launch, begin, answered, keepsWaiting }
 }
 
 /** What every verb says of a harness that has not taken its first task yet. */
@@ -227,10 +233,7 @@ describe.runIf(process.platform !== 'win32')('an OpenClaw agent, through every s
     // The bound counts from the TUI's start at the earliest, and a pass applies it, 5 s apart.
     const started = r.at((e) => !!e.started)!
     await r.logged('row 5: the first /session', (e) => e.command?.startsWith('/session '), 60_000)
-    const failed = await until('row 5: failed', async () => {
-      const s = await r.look()
-      return s.json.state === 'failed' ? s : null
-    }, started + 210_000 - Date.now(), 1_000)
+    const failed = await r.reached('failed', 'row 5: failed', started + 210_000 - Date.now())
     expect.soft(failed.text, 'row 5: show').toContain(`failed: ${NOT_TAKEN}`)
     expect.soft(failed.json.failure?.error, 'row 5: show --json').toBe('FIRST_TASK_NOT_TAKEN')
     expect.soft(failed.ps?.state, 'row 5: ps').toBe('failed')
@@ -327,7 +330,8 @@ describe.runIf(process.platform !== 'win32')('an OpenClaw agent, through every s
     const first = samples.findIndex((s) => s.json.state === 'held')
     expect(first, 'row 8: held').toBeGreaterThanOrEqual(0)
     const sentence = OPENCLAW_STATES.noGateway
-    const after = samples.slice(first).filter((s) => s.end < (back() ?? Infinity))
+    // From the look after it: in the look whose `show --json` first says held, `show` and `ps` may have read before.
+    const after = samples.slice(first + 1).filter((s) => s.end < (back() ?? Infinity))
     expect.soft(after.filter((s) => s.json.state !== 'held' || s.ps?.state !== 'held').map((s) => `${s.start - down}ms show=${s.json.state} ps=${s.ps?.state}`),
       'row 8: held until the Gateway is back').toEqual([])
     expect.soft(after.filter((s) => !s.text.includes(`\nheld: ${sentence}\n`) || s.json.next?.[0]?.tell !== `tell the person: ${sentence}`).length,
@@ -358,10 +362,7 @@ describe.runIf(process.platform !== 'win32')('an OpenClaw agent, through every s
   it('row 10: a TUI with no Gateway token fails the launch where show finds it', async () => {
     const r = await rig({ noToken: true })
     await r.launch(NAME, TASK)
-    const failed = await until('row 10: failed', async () => {
-      const s = await r.look()
-      return s.json.state === 'failed' ? s : null
-    }, 60_000, 1_000)
+    const failed = await r.reached('failed', 'row 10: failed', 60_000)
     expect.soft(failed.text, 'row 10: show').toContain(`failed: ${OPENCLAW_STATES.noToken}`)
     expect.soft(failed.json.failure?.error, 'row 10: show --json').toBe('OPENCLAW_NO_TOKEN')
     expect.soft(failed.ps?.state, 'row 10: ps').toBe('failed')
@@ -462,10 +463,7 @@ describe.runIf(process.platform !== 'win32')('an OpenClaw agent, through every s
     await r.answered(TASK)
     const closed = await r.run('close', NAME)
     expect(closed.code, closed.out + closed.err).toBe(0)
-    const shown = await until('row 19: stopped', async () => {
-      const s = await r.look()
-      return s.json.state === 'stopped' ? s : null
-    }, 30_000, 1_000)
+    const shown = await r.reached('stopped', 'row 19: stopped', 30_000)
     expect.soft(shown.ps, 'row 19: ps hides it').toBeUndefined()
     expect.soft((await listedAll(r.run, NAME))?.state, 'row 19: ps --all shows it').toBe('stopped')
     // The person's shell keeps no record of what it closed (an agent's does, and its wait ends 0): stopped, 4.
