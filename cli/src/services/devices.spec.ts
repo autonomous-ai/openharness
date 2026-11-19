@@ -3108,8 +3108,9 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     readers.processes.mockResolvedValue([{ pid: 4242, ppid: 4000, executable: 'claude' }, { pid: 4000, ppid: 1, executable: 'zsh' }])
     // The client lookup's, then the tap's.
     const says = ['4000|work|\n', '4000|work|\n', '9999|work|\n']
-    // A Harness terminal used last, and the person's own client: no line the lookup reads names a client, so no app is found.
-    const clients = '1794700100|client-501|abcdef0123456789|harness-claude-1790000000000-x\n1794700050|/dev/ttys004||work\n'
+    // A Harness terminal used last, and the person's own client: neither's process is in the table, so the lookup finds
+    // no app.
+    const clients = '1794700100|5001|client-501|abcdef0123456789|harness-claude-1790000000000-x\n1794700050|5004|/dev/ttys004||work\n'
     const { port } = startHere({ orca: { ...mac, run: async (file, args, timeoutMs) => {
       orcaRuns.push([file, args, timeoutMs])
       return { code: 0, stdout: args[0] === 'display-message' ? says.shift()! : args[0] === 'list-clients' ? clients : '' }
@@ -3122,7 +3123,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     expect(await host().openAgent(ID)).toBeUndefined()
     const asked: [string, string[], number] = ['tmux', ['display-message', '-p', '-t', '%3', '#{pane_pid}|#{session_name}|#{@harness_daemon}#{?#{m:/usr/bin/env HARNESS_DAEMON=*,#{pane_start_command}},#{=44:pane_start_command},#{?#{m:harness-*,#{session_name}},#{@harness_daemon},}}'], 10_000]
     const placesAsked: [string, string[], number] = ['tmux', ['list-clients', '-t', '%3', '-F', '#{client_activity}|#{client_pid}|#{client_tty}'], 10_000]
-    const clientsAsked: [string, string[], number] = ['tmux', ['list-clients', '-F', '#{client_activity}|#{client_name}|#{@harness_daemon}|#{session_name}'], 10_000]
+    const clientsAsked: [string, string[], number] = ['tmux', ['list-clients', '-F', '#{client_activity}|#{client_pid}|#{client_name}|#{@harness_daemon}|#{session_name}'], 10_000]
     const warp: [string, string[], number] = ['/usr/bin/open', ['-b', 'dev.warp.Warp-Stable'], 10_000]
     expect(orcaRuns).toEqual([asked, placesAsked, asked, clientsAsked, ['tmux', ['switch-client', '-c', '/dev/ttys004', '-t', '%3'], 10_000], warp])
     expect(said()).toEqual(['[device] tmux client · none'])
@@ -3138,7 +3139,7 @@ describe('the mod\'s voice and Orca, for agents outside a pane (docs/specs/2026-
     readers.processes.mockResolvedValue([{ pid: 4242, ppid: 4000, executable: 'claude' }, { pid: 4000, ppid: 1, executable: 'zsh' }])
     const { port } = startHere({ orca: { ...mac, run: async (file, args, timeoutMs) => {
       orcaRuns.push([file, args, timeoutMs])
-      return { code: 0, stdout: args[0] === 'display-message' ? '4000|work|\n' : args[0] === 'list-clients' ? '1794700050|/dev/ttys004||work\n' : '' }
+      return { code: 0, stdout: args[0] === 'display-message' ? '4000|work|\n' : args[0] === 'list-clients' ? '1794700050|5004|/dev/ttys004||work\n' : '' }
     } } })
     const around = { WEZTERM_PANE: '7', ORCA_TERMINAL_HANDLE: HANDLE, __CFBundleIdentifier: 'dev.warp.Warp-Stable' }
     port.observed(hook('session-start', { hostHints: { TMUX_PANE: '%3', ...around } }))

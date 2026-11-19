@@ -60,6 +60,9 @@ export interface HostAdapter {
    *  it. Refused: the pane is not the agent's, and the adapter said so in a line of its own, so the opener brings the
    *  app forward with no fallback line. */
   focus(pane: Pane): Promise<boolean | 'refused'>
+  /** The process whose window holds the pane, as its last `focus` found it; asked once after a `focus` that answered
+   *  true, and forgotten then. Absent, or none: the agent's own process. */
+  windowPid?(pane: Pane): number | undefined
   /** Whether a rest can show the pane inside its app now (the app in front, a watch open): asked at each look. */
   canShow?(pane: Pane): boolean
   show?(pane: Pane, agentId: string): Promise<PaneSwitch>

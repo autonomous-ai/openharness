@@ -32,12 +32,14 @@ const PANE_AND_PID = /^(%[0-9]{1,9}):([1-9][0-9]{0,9})(?::([a-z-]{1,32}))?$/
 const TMUX_PANE_FACTS = `#{pane_pid}|#{session_name}|#{${HARNESS_OWNER_OPTION}}${paneOwnerFormat(false)}`
 /** One line of TMUX_PANE_FACTS: the tag is last, cut at the last bar, as the hook cuts it; the session may hold a bar. */
 const TMUX_PANE_FACT = /^([1-9][0-9]{0,9})\|(.*)\|([^|]*)$/
-/** Each client: when it was used last, its name, the tag of the pane it shows, its session. The daemon's own names for
- *  the tag and the session prefix, which the hook mirrors. The session's name is last: it may hold a bar. */
-const TMUX_CLIENTS = `#{client_activity}|#{client_name}|#{${HARNESS_OWNER_OPTION}}|#{session_name}`
-/** One line of TMUX_CLIENTS, cut at its first three bars; one with fewer, an activity that is no whole number or an
+/** Each client: when it was used last, its process, its name, the tag of the pane it shows, its session. The daemon's
+ *  own names for the tag and the session prefix, which the hook mirrors. The session's name is last: it may hold a bar. */
+const TMUX_CLIENTS = `#{client_activity}|#{client_pid}|#{client_name}|#{${HARNESS_OWNER_OPTION}}|#{session_name}`
+/** One line of TMUX_CLIENTS, cut at its first four bars; one with fewer, an activity that is no whole number or an
  *  empty name is no client. */
-const TMUX_CLIENT = /^([0-9]+)\|([^|]+)\|([^|]*)\|(.*)$/
+const TMUX_CLIENT = /^([0-9]+)\|([^|]*)\|([^|]+)\|([^|]*)\|(.*)$/
+/** The switched clients' processes kept for `windowPid`: one per tap, read once, so a few cover taps in flight. */
+const MAX_SWITCHED = 16
 /** Each client of one session: when it was used last, its process, its tty. The tty is last: a control client has none. */
 const TMUX_CLIENT_PLACES = '#{client_activity}|#{client_pid}|#{client_tty}'
 /** One line of TMUX_CLIENT_PLACES; one with no whole activity or no pid in form is no client. */
@@ -115,6 +117,9 @@ function paneParts(pane: Pane): { id: string; pid: number; app?: string } | unde
 }
 
 export function createTmuxAdapter(deps: TmuxDeps): HostAdapter {
+  /** Each pane's last switched client's process, by pane id, oldest first. */
+  const switched = new Map<string, number>()
+
   /**
    * The client used last among those not on a session Harness made. Every terminal Harness has open (Desktop's, a
    * phone's, hn's) is a tmux client on this server, and a bare `switch-client` moves the client used last, one of those
@@ -122,18 +127,19 @@ export function createTmuxAdapter(deps: TmuxDeps): HostAdapter {
    * switching is the mistake that costs nothing. tmux gives the activity in whole seconds: on a tie the one listed later,
    * which attached later, wins.
    */
-  async function personsClient(): Promise<string | undefined> {
+  async function personsClient(): Promise<{ name: string; pid?: number } | undefined> {
     const listed = await runTmux(deps, ['list-clients', '-F', TMUX_CLIENTS])
     if (listed?.code !== 0) return undefined
-    let last: { activity: number; name: string } | undefined
+    let last: { activity: number; name: string; pid?: number } | undefined
     for (const line of listed.stdout.split('\n')) {
       const client = TMUX_CLIENT.exec(line)
       if (!client) continue
-      const [, activity, name, tag, session] = client
+      const [, activity, pid, name, tag, session] = client
       if (tag || isHarnessSession(session)) continue
-      if (!last || Number(activity) >= last.activity) last = { activity: Number(activity), name }
+      // A pid that is no process of its own (none, or init's) names no window: the client is still switched.
+      if (!last || Number(activity) >= last.activity) last = { activity: Number(activity), name, pid: PID.test(pid) && Number(pid) > 1 ? Number(pid) : undefined }
     }
-    return last?.name
+    return last
   }
 
   /** A pane the tap may not switch to: another process's, or one Harness made. */
@@ -176,11 +182,23 @@ export function createTmuxAdapter(deps: TmuxDeps): HostAdapter {
     async focus(pane) {
       const parts = paneParts(pane)
       if (!parts) return false
+      // An earlier tap's client is not this tap's window.
+      switched.delete(pane.id)
       const checked = await checkedPane(parts.id, parts.pid)
       if (checked !== true) return checked
       if (parts.app) return select(parts.id)
       const client = await personsClient()
-      return !!client && (await runTmux(deps, ['switch-client', '-c', client, '-t', parts.id]))?.code === 0
+      if (!client || (await runTmux(deps, ['switch-client', '-c', client.name, '-t', parts.id]))?.code !== 0) return false
+      if (client.pid !== undefined) {
+        switched.set(pane.id, client.pid)
+        if (switched.size > MAX_SWITCHED) switched.delete(switched.keys().next().value!)
+      }
+      return true
+    },
+    windowPid(pane) {
+      const pid = switched.get(pane.id)
+      switched.delete(pane.id)
+      return pid
     },
     // A rest never switches a client: only the session's own pane moves, and only in the app the person looks at.
     canShow(pane) {
