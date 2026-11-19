@@ -276,26 +276,44 @@ void main() {
       ..writeAsStringSync(computerId);
     // Not ready: a daemon answering for another computer.
     var status = readyStatus('fedcba9876543210fedcba9876543210');
-    server = await serveStatus(await freePort(), () => status);
+    // Counted on the server, not timed: the supervisor sends its next probe only once it has
+    // handled the last (owner check included), so n more answers mean n - 1 more probes handled.
+    final asked = StreamController<void>.broadcast();
+    addTearDown(asked.close);
+    Future<void> answered(int n) => asked.stream.take(n).drain<void>();
+    server = await serveStatus(await freePort(), () {
+      asked.add(null);
+      return status;
+    });
     final checked = <int>[];
+    final owners = StreamController<int>.broadcast();
+    addTearDown(owners.close);
+    var spawns = 0;
     final discovery = discoveryFor(
       server!.port,
       identityFile,
-      spawnCommand: () async =>
-          fail('A running daemon must not be spawned over'),
+      spawnCommand: () async => spawns++,
     );
     final timer = discovery.startSupervising(
       checkInterval: const Duration(milliseconds: 20),
-      checkOwner: (pid) async => checked.add(pid),
+      checkOwner: (pid) async {
+        checked.add(pid);
+        owners.add(pid);
+      },
     );
     addTearDown(timer.cancel);
-    await Future.delayed(const Duration(milliseconds: 150));
+    await answered(6);
     expect(checked, isEmpty, reason: 'not ready: no owner check');
+    var check = owners.stream.first;
     status = readyStatus(computerId);
-    await Future.delayed(const Duration(milliseconds: 200));
+    await check;
+    await answered(3);
+    check = owners.stream.first;
     status = readyStatus(computerId, extra: {'pid': 5353});
-    await Future.delayed(const Duration(milliseconds: 200));
+    await check;
+    await answered(3);
     expect(checked, [4242, 5353]);
+    expect(spawns, 0, reason: 'A running daemon must not be spawned over');
   });
 
   test('restart stops the daemon, waits for its port to go quiet, and spawns a new one', () async {
@@ -385,12 +403,13 @@ void main() {
         },
       );
       var readyCount = 0;
+      var spawns = 0;
       final before = Completer<void>();
       final after = Completer<void>();
       final discovery = discoveryFor(
         server!.port,
         identityFile,
-        spawnCommand: () async => fail('A ready daemon must not be restarted'),
+        spawnCommand: () async => spawns++,
       );
       final timer = discovery.startSupervising(
         checkInterval: const Duration(milliseconds: 20),
@@ -406,6 +425,7 @@ void main() {
       cwd = '${scratch.path}/after';
       await after.future.timeout(const Duration(seconds: 3));
       expect(readyCount, 1);
+      expect(spawns, 0, reason: 'A ready daemon must not be restarted');
     },
   );
 
@@ -569,30 +589,30 @@ void main() {
     const computerId = '0123456789abcdef0123456789abcdef';
     final identityFile = File('${scratch.path}/computer-id')
       ..writeAsStringSync(computerId);
-    server = await serveStatus(
-      0,
-      () => readyStatus(computerId, extra: {'discoveryReady': false}),
-    );
-    final watch = Stopwatch()..start();
+    var asked = 0;
+    server = await serveStatus(0, () {
+      asked++;
+      return readyStatus(computerId, extra: {'discoveryReady': false});
+    });
     final probe = await discoveryFor(
       server!.port,
       identityFile,
     ).ensureRunning(readyTimeout: const Duration(seconds: 5));
     expect(probe.state, LocalCliProbeState.ready);
     expect(probe.endpoint!.scanning, isTrue);
-    expect(watch.elapsedMilliseconds, lessThan(1000));
+    expect(asked, 1, reason: 'the first probe is the answer: no wait for another');
   });
 
   test('ensureRunning waits for a daemon that answers but is not ready, without spawning', () async {
     const computerId = '0123456789abcdef0123456789abcdef';
     final identityFile = File('${scratch.path}/computer-id')
       ..writeAsStringSync(computerId);
-    var scanned = false;
-    // Answers, but not ready yet: for another computer until it flips.
+    var asked = 0;
+    // Answers, but not ready for its first two probes: for another computer until it flips.
     server = await serveStatus(
       0,
       () => readyStatus(
-        scanned ? computerId : 'fedcba9876543210fedcba9876543210',
+        ++asked > 2 ? computerId : 'fedcba9876543210fedcba9876543210',
       ),
     );
     var spawned = false;
@@ -603,7 +623,6 @@ void main() {
         spawned = true;
       },
     );
-    Future.delayed(const Duration(milliseconds: 700), () => scanned = true);
     final probe = await discovery.ensureRunning(
       readyTimeout: const Duration(seconds: 5),
     );
@@ -761,53 +780,57 @@ void main() {
     expect(inSpawnSlot(at(0), second: 5, window: 10), isTrue);
   });
 
-  test('startSupervising holds a spawn outside the slot and takes it on the first tick inside', () async {
-    const computerId = '0123456789abcdef0123456789abcdef';
-    var running = false;
-    var spawnCount = 0;
-    var slotOpen = false;
-    final discovery = _SupervisionProbe(
-      readProbe: () async => running
-          ? LocalCliProbe.ready(
-              LocalCliEndpoint(
-                computerId: computerId,
-                wsUri: Uri.parse('ws://127.0.0.1/api/local-ws'),
-                protocolVersion: localWsProtocolVersion,
-                terminalProtocolVersion: localTerminalProtocolVersion,
-              ),
-            )
-          : const LocalCliProbe.down('fixture daemon is down'),
-      spawnCommand: () async {
-        spawnCount++;
-        running = true;
-      },
-    );
+  test('startSupervising holds a spawn outside the slot and takes it on the first tick inside', () {
+    fakeAsync((async) {
+      const computerId = '0123456789abcdef0123456789abcdef';
+      var running = false;
+      var spawnCount = 0;
+      var slotOpen = false;
+      final discovery = _SupervisionProbe(
+        readProbe: () async => running
+            ? LocalCliProbe.ready(
+                LocalCliEndpoint(
+                  computerId: computerId,
+                  wsUri: Uri.parse('ws://127.0.0.1/api/local-ws'),
+                  protocolVersion: localWsProtocolVersion,
+                  terminalProtocolVersion: localTerminalProtocolVersion,
+                ),
+              )
+            : const LocalCliProbe.down('fixture daemon is down'),
+        spawnCommand: () async {
+          spawnCount++;
+          running = true;
+        },
+        monotonicClock: () => async.elapsed,
+      );
 
-    final timer = discovery.startSupervising(
-      checkInterval: const Duration(milliseconds: 20),
-      graceStep: const Duration(milliseconds: 10),
-      graceWindow: const Duration(milliseconds: 100),
-      initialBackoff: const Duration(milliseconds: 200),
-      maxBackoff: const Duration(milliseconds: 200),
-      spawnAllowedAt: (_) => slotOpen,
-    );
-    addTearDown(timer.cancel);
-
-    // Down for many ticks, but the slot is shut: nothing is spawned, and nothing is backed off
-    // either — the moment the slot opens the spawn is immediate.
-    await Future.delayed(const Duration(milliseconds: 200));
-    expect(spawnCount, 0);
-    slotOpen = true;
-    await Future.delayed(const Duration(milliseconds: 60));
-    expect(spawnCount, 1);
-    expect(running, isTrue);
+      final timer = discovery.startSupervising(
+        checkInterval: const Duration(milliseconds: 20),
+        graceStep: const Duration(milliseconds: 10),
+        graceWindow: const Duration(milliseconds: 100),
+        initialBackoff: const Duration(milliseconds: 200),
+        maxBackoff: const Duration(milliseconds: 200),
+        spawnAllowedAt: (_) => slotOpen,
+      );
+      try {
+        // Down for many ticks, but the slot is shut: nothing is spawned, and nothing is backed off
+        // either — the moment the slot opens the spawn is immediate.
+        async.elapse(const Duration(milliseconds: 200));
+        expect(spawnCount, 0);
+        slotOpen = true;
+        async.elapse(const Duration(milliseconds: 60));
+        expect(spawnCount, 1);
+        expect(running, isTrue);
+      } finally {
+        timer.cancel();
+      }
+    });
   });
 
   // `harness uninstall` stops the daemon, then removes its files (on Windows after it has exited): a daemon
   // started in between holds them and undoes the uninstall.
-  test(
-    'startSupervising starts no daemon while harness uninstall is at work',
-    () async {
+  test('startSupervising starts no daemon while harness uninstall is at work', () {
+    fakeAsync((async) {
       var uninstalling = true;
       var spawnCount = 0;
       final discovery = _SupervisionProbe(
@@ -815,22 +838,25 @@ void main() {
             const LocalCliProbe.down('fixture daemon is down'),
         spawnCommand: () async => spawnCount++,
         uninstalling: () => uninstalling,
+        monotonicClock: () => async.elapsed,
       );
       final timer = discovery.startSupervising(
         checkInterval: const Duration(milliseconds: 20),
         graceStep: const Duration(milliseconds: 10),
         graceWindow: const Duration(milliseconds: 20),
       );
-      addTearDown(timer.cancel);
+      try {
+        async.elapse(const Duration(milliseconds: 150));
+        expect(spawnCount, 0);
 
-      await Future.delayed(const Duration(milliseconds: 150));
-      expect(spawnCount, 0);
-
-      uninstalling = false;
-      await Future.delayed(const Duration(milliseconds: 150));
-      expect(spawnCount, greaterThan(0));
-    },
-  );
+        uninstalling = false;
+        async.elapse(const Duration(milliseconds: 150));
+        expect(spawnCount, greaterThan(0));
+      } finally {
+        timer.cancel();
+      }
+    });
+  });
 
   // `harness flash` stops the daemon and hands the dial's serial port to esptool: a daemon started
   // meanwhile takes the port back mid-write.
@@ -865,48 +891,53 @@ void main() {
     });
   });
 
-  test('startSupervising spawns harness start while down, and stops once discovery succeeds', () async {
-    const computerId = '0123456789abcdef0123456789abcdef';
-    var running = false;
-    var spawnCount = 0;
-    final readies = <LocalCliEndpoint>[];
-    final discovery = _SupervisionProbe(
-      readProbe: () async => running
-          ? LocalCliProbe.ready(
-              LocalCliEndpoint(
-                computerId: computerId,
-                wsUri: Uri.parse('ws://127.0.0.1/api/local-ws'),
-                protocolVersion: localWsProtocolVersion,
-                terminalProtocolVersion: localTerminalProtocolVersion,
-              ),
-            )
-          : const LocalCliProbe.down('fixture daemon is down'),
-      spawnCommand: () async {
-        spawnCount++;
-        running = true; // simulate `harness start` succeeding
-      },
-    );
+  test('startSupervising spawns harness start while down, and stops once discovery succeeds', () {
+    fakeAsync((async) {
+      const computerId = '0123456789abcdef0123456789abcdef';
+      var running = false;
+      var spawnCount = 0;
+      final readies = <LocalCliEndpoint>[];
+      final discovery = _SupervisionProbe(
+        readProbe: () async => running
+            ? LocalCliProbe.ready(
+                LocalCliEndpoint(
+                  computerId: computerId,
+                  wsUri: Uri.parse('ws://127.0.0.1/api/local-ws'),
+                  protocolVersion: localWsProtocolVersion,
+                  terminalProtocolVersion: localTerminalProtocolVersion,
+                ),
+              )
+            : const LocalCliProbe.down('fixture daemon is down'),
+        spawnCommand: () async {
+          spawnCount++;
+          running = true; // simulate `harness start` succeeding
+        },
+        monotonicClock: () => async.elapsed,
+      );
 
-    final timer = discovery.startSupervising(
-      checkInterval: const Duration(milliseconds: 20),
-      graceStep: const Duration(milliseconds: 10),
-      graceWindow: const Duration(milliseconds: 100),
-      initialBackoff: const Duration(milliseconds: 200),
-      maxBackoff: const Duration(milliseconds: 200),
-      onReady: readies.add,
-    );
-    addTearDown(timer.cancel);
+      final timer = discovery.startSupervising(
+        checkInterval: const Duration(milliseconds: 20),
+        graceStep: const Duration(milliseconds: 10),
+        graceWindow: const Duration(milliseconds: 100),
+        initialBackoff: const Duration(milliseconds: 200),
+        maxBackoff: const Duration(milliseconds: 200),
+        onReady: readies.add,
+      );
+      try {
+        async.elapse(const Duration(milliseconds: 120));
+        expect(spawnCount, 1);
+        expect(running, isTrue);
 
-    await Future.delayed(const Duration(milliseconds: 120));
-    expect(spawnCount, 1);
-    expect(running, isTrue);
-
-    // Discovery now succeeds on every tick — no further spawn should ever happen, and the
-    // transition into ready was reported exactly once.
-    await Future.delayed(const Duration(milliseconds: 200));
-    expect(spawnCount, 1);
-    expect(readies, hasLength(1));
-    expect(readies.single.computerId, computerId);
+        // Discovery now succeeds on every tick — no further spawn should ever happen, and the
+        // transition into ready was reported exactly once.
+        async.elapse(const Duration(milliseconds: 200));
+        expect(spawnCount, 1);
+        expect(readies, hasLength(1));
+        expect(readies.single.computerId, computerId);
+      } finally {
+        timer.cancel();
+      }
+    });
   });
 
   test(
@@ -953,15 +984,15 @@ void main() {
     },
   );
 
-  test(
-    'startSupervising never spawns over a daemon that answers but is not ready',
-    () async {
+  test('startSupervising never spawns over a daemon that answers but is not ready', () {
+    fakeAsync((async) {
       var spawnCount = 0;
       final discovery = _SupervisionProbe(
         readProbe: () async => const LocalCliProbe.notReady('startup scan'),
         spawnCommand: () async {
           spawnCount++;
         },
+        monotonicClock: () => async.elapsed,
       );
 
       final timer = discovery.startSupervising(
@@ -972,16 +1003,18 @@ void main() {
         maxBackoff: const Duration(milliseconds: 20),
         stillSignedIn: () async => true,
       );
-      addTearDown(timer.cancel);
-
-      await Future.delayed(const Duration(milliseconds: 400));
-      expect(
-        spawnCount,
-        0,
-        reason: 'it is running; a second one can only fail on the port',
-      );
-    },
-  );
+      try {
+        async.elapse(const Duration(milliseconds: 400));
+        expect(
+          spawnCount,
+          0,
+          reason: 'it is running; a second one can only fail on the port',
+        );
+      } finally {
+        timer.cancel();
+      }
+    });
+  });
 
   test('startSupervising waits for more than one quiet tick before spawning into an update gap', () {
     fakeAsync((clock) {
@@ -1051,30 +1084,36 @@ void main() {
     });
   });
 
-  test('startSupervising backs off between failed spawn attempts instead of spawning every tick', () async {
-    var spawnCount = 0;
-    final discovery = _SupervisionProbe(
-      readProbe: () async => const LocalCliProbe.down('fixture daemon is down'),
-      spawnCommand: () async {
-        spawnCount++;
-      },
-    );
+  test('startSupervising backs off between failed spawn attempts instead of spawning every tick', () {
+    fakeAsync((async) {
+      var spawnCount = 0;
+      final discovery = _SupervisionProbe(
+        readProbe: () async =>
+            const LocalCliProbe.down('fixture daemon is down'),
+        spawnCommand: () async {
+          spawnCount++;
+        },
+        monotonicClock: () => async.elapsed,
+      );
 
-    final timer = discovery.startSupervising(
-      checkInterval: const Duration(milliseconds: 20),
-      graceStep: const Duration(milliseconds: 10),
-      graceWindow: const Duration(milliseconds: 50),
-      initialBackoff: const Duration(milliseconds: 150),
-      maxBackoff: const Duration(milliseconds: 150),
-    );
-    addTearDown(timer.cancel);
-
-    await Future.delayed(const Duration(milliseconds: 500));
-    // Without backoff, ~500ms / 20ms checkInterval would spawn on nearly every tick (~25 times).
-    // With backoff (each failed attempt costs ~50ms grace window + a 150ms floor before the next),
-    // attempts are bounded to roughly 500 / 200 ≈ 2-3.
-    expect(spawnCount, greaterThan(0));
-    expect(spawnCount, lessThan(6));
+      final timer = discovery.startSupervising(
+        checkInterval: const Duration(milliseconds: 20),
+        graceStep: const Duration(milliseconds: 10),
+        graceWindow: const Duration(milliseconds: 50),
+        initialBackoff: const Duration(milliseconds: 150),
+        maxBackoff: const Duration(milliseconds: 150),
+      );
+      try {
+        async.elapse(const Duration(milliseconds: 500));
+        // Without backoff, ~500ms / 20ms checkInterval would spawn on nearly every tick (~25 times).
+        // With backoff (each failed attempt costs ~50ms grace window + a 150ms floor before the next),
+        // attempts are bounded to roughly 500 / 200 ≈ 2-3.
+        expect(spawnCount, greaterThan(0));
+        expect(spawnCount, lessThan(6));
+      } finally {
+        timer.cancel();
+      }
+    });
   });
 
   test(
@@ -1154,9 +1193,8 @@ void main() {
   });
 
   // Signed-out daemons now serve local agents in guest mode, so supervision must continue.
-  test(
-    'startSupervising keeps the guest daemon alive after sign-out',
-    () async {
+  test('startSupervising keeps the guest daemon alive after sign-out', () {
+    fakeAsync((async) {
       var spawnCount = 0;
       var signedOutCalls = 0;
       final discovery = _SupervisionProbe(
@@ -1165,6 +1203,7 @@ void main() {
         spawnCommand: () async {
           spawnCount++;
         },
+        monotonicClock: () => async.elapsed,
       );
 
       final timer = discovery.startSupervising(
@@ -1176,28 +1215,29 @@ void main() {
         stillSignedIn: () async => false,
         onSignedOut: () => signedOutCalls++,
       );
-      addTearDown(timer.cancel);
+      try {
+        async.elapse(const Duration(milliseconds: 300));
 
-      await Future.delayed(const Duration(milliseconds: 300));
+        expect(spawnCount, greaterThan(0));
+        expect(
+          spawnCount,
+          lessThan(6),
+          reason: 'guest restarts retain the backoff',
+        );
+        expect(
+          signedOutCalls,
+          spawnCount,
+          reason: 'auth is checked once per spawn attempt',
+        );
+        expect(timer.isActive, isTrue);
+      } finally {
+        timer.cancel();
+      }
+    });
+  });
 
-      expect(spawnCount, greaterThan(0));
-      expect(
-        spawnCount,
-        lessThan(6),
-        reason: 'guest restarts retain the backoff',
-      );
-      expect(
-        signedOutCalls,
-        spawnCount,
-        reason: 'auth is checked once per spawn attempt',
-      );
-      expect(timer.isActive, isTrue);
-    },
-  );
-
-  test(
-    'startSupervising keeps respawning while the CLI is still signed in',
-    () async {
+  test('startSupervising keeps respawning while the CLI is still signed in', () {
+    fakeAsync((async) {
       var spawnCount = 0;
       var signedOutCalls = 0;
       final discovery = _SupervisionProbe(
@@ -1206,6 +1246,7 @@ void main() {
         spawnCommand: () async {
           spawnCount++;
         },
+        monotonicClock: () => async.elapsed,
       );
 
       final timer = discovery.startSupervising(
@@ -1217,16 +1258,18 @@ void main() {
         stillSignedIn: () async => true,
         onSignedOut: () => signedOutCalls++,
       );
-      addTearDown(timer.cancel);
+      try {
+        async.elapse(const Duration(milliseconds: 300));
 
-      await Future.delayed(const Duration(milliseconds: 300));
-
-      // A daemon that merely crashed, or was stopped by hand, must still be brought back.
-      expect(spawnCount, greaterThan(0));
-      expect(signedOutCalls, 0);
-      expect(timer.isActive, isTrue);
-    },
-  );
+        // A daemon that merely crashed, or was stopped by hand, must still be brought back.
+        expect(spawnCount, greaterThan(0));
+        expect(signedOutCalls, 0);
+        expect(timer.isActive, isTrue);
+      } finally {
+        timer.cancel();
+      }
+    });
+  });
 
   // `harness auth status` sat out a refresh lock a dying daemon had left (30s) and threw on the app's
   // own timeout; the throw skipped the spawn and the local terminals stayed dark (2026-09-28 18:47).
@@ -1241,68 +1284,83 @@ void main() {
     ),
     ('never answers', () => Completer<bool>().future),
   ]) {
-    test('startSupervising still respawns when the auth check $name', () async {
+    test('startSupervising still respawns when the auth check $name', () {
+      fakeAsync((async) {
+        var spawnCount = 0;
+        var signedOutCalls = 0;
+        final discovery = _SupervisionProbe(
+          readProbe: () async =>
+              const LocalCliProbe.down('fixture daemon is down'),
+          spawnCommand: () async {
+            spawnCount++;
+          },
+          monotonicClock: () => async.elapsed,
+        );
+
+        final timer = discovery.startSupervising(
+          checkInterval: const Duration(milliseconds: 20),
+          graceStep: const Duration(milliseconds: 10),
+          graceWindow: const Duration(milliseconds: 50),
+          initialBackoff: const Duration(milliseconds: 20),
+          maxBackoff: const Duration(milliseconds: 20),
+          stillSignedIn: check,
+          onSignedOut: () => signedOutCalls++,
+        );
+        try {
+          async.elapse(const Duration(milliseconds: 300));
+
+          expect(spawnCount, greaterThan(0));
+          expect(
+            signedOutCalls,
+            0,
+            reason: 'an auth check with no answer is not a sign-out',
+          );
+        } finally {
+          timer.cancel();
+        }
+      });
+    });
+  }
+
+  test('startSupervising spawns without waiting for a slow auth check, and still reports its sign-out', () {
+    fakeAsync((async) {
       var spawnCount = 0;
       var signedOutCalls = 0;
+      final answer = Completer<bool>();
       final discovery = _SupervisionProbe(
         readProbe: () async =>
             const LocalCliProbe.down('fixture daemon is down'),
         spawnCommand: () async {
           spawnCount++;
         },
+        monotonicClock: () => async.elapsed,
       );
 
       final timer = discovery.startSupervising(
         checkInterval: const Duration(milliseconds: 20),
         graceStep: const Duration(milliseconds: 10),
         graceWindow: const Duration(milliseconds: 50),
-        initialBackoff: const Duration(milliseconds: 20),
-        maxBackoff: const Duration(milliseconds: 20),
-        stillSignedIn: check,
+        initialBackoff: const Duration(seconds: 10),
+        maxBackoff: const Duration(seconds: 10),
+        stillSignedIn: () => answer.future,
         onSignedOut: () => signedOutCalls++,
       );
-      addTearDown(timer.cancel);
+      try {
+        async.elapse(const Duration(milliseconds: 150));
+        expect(
+          spawnCount,
+          1,
+          reason: 'the spawn does not wait on the auth check',
+        );
+        expect(signedOutCalls, 0);
 
-      await Future.delayed(const Duration(milliseconds: 300));
-
-      expect(spawnCount, greaterThan(0));
-      expect(
-        signedOutCalls,
-        0,
-        reason: 'an auth check with no answer is not a sign-out',
-      );
+        answer.complete(false);
+        async.flushMicrotasks();
+        expect(signedOutCalls, 1, reason: 'a late answer is still told');
+      } finally {
+        timer.cancel();
+      }
     });
-  }
-
-  test('startSupervising spawns without waiting for a slow auth check, and still reports its sign-out', () async {
-    var spawnCount = 0;
-    var signedOutCalls = 0;
-    final answer = Completer<bool>();
-    final discovery = _SupervisionProbe(
-      readProbe: () async => const LocalCliProbe.down('fixture daemon is down'),
-      spawnCommand: () async {
-        spawnCount++;
-      },
-    );
-
-    final timer = discovery.startSupervising(
-      checkInterval: const Duration(milliseconds: 20),
-      graceStep: const Duration(milliseconds: 10),
-      graceWindow: const Duration(milliseconds: 50),
-      initialBackoff: const Duration(seconds: 10),
-      maxBackoff: const Duration(seconds: 10),
-      stillSignedIn: () => answer.future,
-      onSignedOut: () => signedOutCalls++,
-    );
-    addTearDown(timer.cancel);
-
-    await Future.delayed(const Duration(milliseconds: 150));
-    expect(spawnCount, 1, reason: 'the spawn does not wait on the auth check');
-    expect(signedOutCalls, 0);
-
-    answer.complete(false);
-    await Future.delayed(Duration.zero);
-    expect(signedOutCalls, 1, reason: 'a late answer is still told');
   });
 }
 
