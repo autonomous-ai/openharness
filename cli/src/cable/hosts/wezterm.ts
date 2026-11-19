@@ -17,7 +17,19 @@ export function createWeztermAdapter(deps: OrcaDeps): HostAdapter {
   const mac = deps.platform === 'darwin'
   // Per pane, the words being typed: two sends at once would mix in its prompt. Busy queues nothing.
   const sending = new Set<string>()
-  const binary = () => deps.onPath('wezterm') ?? (mac && deps.exists(APP_WEZTERM) ? APP_WEZTERM : null)
+  // Found once: canType runs at every look, each second for each WezTerm agent, and finding it walks PATH. None found,
+  // or a run that failed, is asked again: WezTerm installed, moved or removed since.
+  let found: string | null = null
+  const binary = () => (found ??= deps.onPath('wezterm') ?? (mac && deps.exists(APP_WEZTERM) ? APP_WEZTERM : null))
+  const ran = async (wezterm: string, args: string[]): Promise<boolean> => {
+    let ok = false
+    try {
+      ok = (await deps.run(wezterm, args, RUN_TIMEOUT_MS)).code === 0
+      return ok
+    } finally {
+      if (!ok) found = null
+    }
+  }
   return {
     id: 'wezterm',
     tap: 'before',
@@ -36,7 +48,7 @@ export function createWeztermAdapter(deps: OrcaDeps): HostAdapter {
       if (!WEZTERM_PANE.test(id)) return false
       const wezterm = binary()
       if (!wezterm) return false
-      return (await deps.run(wezterm, [...CLI, 'activate-pane', '--pane-id', id], RUN_TIMEOUT_MS)).code === 0
+      return ran(wezterm, [...CLI, 'activate-pane', '--pane-id', id])
     },
     canType: (pane) => WEZTERM_PANE.test(pane.id) && binary() !== null,
     async type(pane, text) {
@@ -45,8 +57,7 @@ export function createWeztermAdapter(deps: OrcaDeps): HostAdapter {
       if (!wezterm) return false
       // `--` keeps words that start with a dash from being read as flags; `--no-paste` types them as keys, so the agent
       // does not take them as a bracketed paste, and Enter, sent on its own, submits them.
-      const send = async (words: string) => (await deps.run(wezterm,
-        [...CLI, 'send-text', '--pane-id', pane.id, '--no-paste', '--', words], RUN_TIMEOUT_MS)).code === 0
+      const send = (words: string) => ran(wezterm, [...CLI, 'send-text', '--pane-id', pane.id, '--no-paste', '--', words])
       sending.add(pane.id)
       try {
         return await send(text.replace(CONTROL, ' ')) && await send('\r')
