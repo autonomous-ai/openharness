@@ -96,7 +96,12 @@ it.each(['linux', 'darwin'])('preserves healthy native hook admission on %s', as
       onToolStart: value => { turns.push({ tool: value }) },
       onSessionEnd: (sessionId, reason) => { ends.push({ sessionId, reason }) },
     // This spec fakes the platform and child_process, so the real lookup of who is calling cannot run (lib/peerAccount.spec.ts tests it).
-    }, { peerAccount: async () => true })
+    }, {
+      peerAccount: async () => true,
+      // This golden records settled admission. HTTP grace has separate clock-driven tests;
+      // storage/request deadlines stay real, even when other suites delay this private child.
+      replyClock: { after: () => () => {} },
+    })
     server = started.server
     const send = async (endpoint: string, body: Record<string, unknown>, authorized = true) => {
       const response = await fetch(`http://127.0.0.1:${started.port}/api/hook/${endpoint}`, {

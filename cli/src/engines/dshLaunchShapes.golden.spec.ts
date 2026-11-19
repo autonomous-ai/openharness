@@ -208,7 +208,8 @@ afterAll(() => {
   }
   rmSync(root, { recursive: true, force: true })
   vi.resetModules()
-})
+// Recursive cleanup owns the same native-fixture budget as setup, including macOS file scanning.
+}, 30_000)
 
 /** What was logged while `run` ran. */
 async function logged<T>(run: () => Promise<T>): Promise<{ value: T; lines: string[] }> {
