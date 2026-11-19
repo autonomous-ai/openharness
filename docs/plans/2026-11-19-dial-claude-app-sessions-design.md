@@ -179,6 +179,8 @@ Each session it keeps is one `HostAgent`:
 - `[claude-app] read · <ms> ms · <parsed> parsed · <skipped> skipped`, at the first read of an attach and when a read
   is the slowest of this attach.
 - `[claude-app] over · <n>` when a bound above cut something.
+- `[claude-app] read · failed`, once a run of failed passes: the error is not said, as it can name the store's folders
+  and files.
 
 ## Out of scope
 
