@@ -3,6 +3,7 @@
  * that owns one, else the first window of the app's classes. Every command runs with no shell, each value one argument,
  * and only a pid or node id checked as a whole number reaches sway's criteria.
  */
+import { isAgentPid } from './linuxDesktop.js'
 import type { RaiseBackend, RaiseRun } from './linuxRaise.js'
 import { RUN_TIMEOUT_MS } from './orca.js'
 
@@ -34,7 +35,6 @@ function windowsOf(tree: unknown): SwayWindow[] {
   return windows
 }
 
-const isPid = (value: number) => Number.isSafeInteger(value) && value > 0
 const isId = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0
 
 export function createSwayRaise(deps: RaiseRun, socket: string): RaiseBackend {
@@ -52,7 +52,7 @@ export function createSwayRaise(deps: RaiseRun, socket: string): RaiseBackend {
         return false
       }
       const windows = windowsOf(tree)
-      const pid = pids.find((p) => isPid(p) && windows.some((window) => window.pid === p))
+      const pid = pids.find((p) => isAgentPid(p) && windows.some((window) => window.pid === p))
       if (pid !== undefined) return (await run([`[pid=${pid}] focus`])).code === 0
       const wanted = new Set(classes.map((name) => name.toLowerCase()))
       const byClass = windows.find((window) => isId(window.id) && typeof window.class === 'string' && wanted.has(window.class.toLowerCase()))

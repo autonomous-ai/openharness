@@ -4,21 +4,18 @@
  * (`get_wm_class()`: a native window's Wayland app id, an XWayland window's WM_CLASS class), so the pids go unused and
  * each spelling of the app's class is asked in turn (RECORDED_GNOME_SHELL).
  */
+import { isSessionBus, isWindowClass } from './linuxDesktop.js'
 import type { RaiseBackend, RaiseRun } from './linuxRaise.js'
 import { RUN_TIMEOUT_MS } from './orca.js'
 
-// Anchored: a `,guid=…` or a second address after `;` would let the call reach another bus.
-const BUS = /^unix:(path|abstract)=[^,;\s]{1,200}$/
-// A leading `-` would be read by gdbus as an option.
-const CLASS = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 const HIT = '(true,)'
 const MISS = '(false,)'
 
 export function createGnomeRaise(deps: RaiseRun, bus: string): RaiseBackend {
   return {
     async raise({ classes }) {
-      if (!BUS.test(bus)) return false
-      const wanted = classes.filter((cls) => CLASS.test(cls))
+      if (!isSessionBus(bus)) return false
+      const wanted = classes.filter(isWindowClass)
       if (wanted.length === 0) return false
       const gdbus = deps.onPath('gdbus')
       if (!gdbus) return false

@@ -5,6 +5,7 @@
  * answered is a raise (plan: "KDE answers true once its script ran").
  */
 import { join } from 'node:path'
+import { isAgentPid, isSessionBus, isWindowClass } from './linuxDesktop.js'
 import type { RaiseBackend, RaiseRun } from './linuxRaise.js'
 import { RUN_TIMEOUT_MS } from './orca.js'
 
@@ -20,8 +21,6 @@ export interface KwinRaiseDeps extends RaiseRun {
   name(): string
 }
 
-// Every value reaches the script as JSON: a class in this form needs no escape, and nothing else is let in.
-const CLASS = /^[A-Za-z0-9._-]{1,64}$/
 // A load answers the script's id (RECORDED_KWIN.loadScript); KWin answers -1 for a name loaded already, no script's.
 const SCRIPT_ID = /^\s*int32 ([0-9]{1,10})$/m
 
@@ -40,10 +39,10 @@ const script = (pids: readonly number[], classes: readonly string[]) =>
 export function createKwinRaise(deps: KwinRaiseDeps, bus: string): RaiseBackend {
   return {
     async raise(target) {
-      // A window that names no process has pid 0, and pid 1 is no agent's: a whole number above 1, as linuxRaise takes.
-      const pids = target.pids.filter((pid) => Number.isSafeInteger(pid) && pid > 1)
-      const classes = target.classes.filter((spelling) => CLASS.test(spelling))
-      if (pids.length === 0 && classes.length === 0) return false
+      // Every value reaches the script as JSON, and the bus a command line: each only in its checked form.
+      const pids = target.pids.filter(isAgentPid)
+      const classes = target.classes.filter(isWindowClass)
+      if (!isSessionBus(bus) || (pids.length === 0 && classes.length === 0)) return false
       const dbusSend = deps.onPath('dbus-send')
       if (!dbusSend) return false
       const call = (path: string, method: string, ...args: string[]) =>

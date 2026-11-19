@@ -7,7 +7,7 @@
 import { rmSync, writeFileSync } from 'node:fs'
 import { privateFolder, runtimeShortRoot } from '../../lib/localSocket.js'
 import { windowClasses } from './frontApp.js'
-import { desktopLine, findLinuxDesktop, linuxDesktopDeps, type LinuxDesktop } from './linuxDesktop.js'
+import { desktopLine, findLinuxDesktop, isAgentPid, linuxDesktopDeps, type LinuxDesktop } from './linuxDesktop.js'
 import { createGnomeRaise } from './linuxRaiseGnome.js'
 import { createHyprlandRaise } from './linuxRaiseHyprland.js'
 import { createKwinRaise } from './linuxRaiseKwin.js'
@@ -67,9 +67,9 @@ export function createLinuxRaise(deps: LinuxRaiseDeps): LinuxRaise {
       await looking
       const found = desktop
       if (found === undefined || found.kind === 'none') return false
-      // pid 1 holds every orphan, so it names no agent's window. A desktop that takes no process is not handed one: with
-      // no class either, nothing runs and nothing is looked at again.
-      const pids = byProcess(found) && pid !== undefined && Number.isInteger(pid) && pid > 1 ? await chainOf(pid) : []
+      // A desktop that takes no process is not handed one: with no class either, nothing runs and nothing is looked at
+      // again.
+      const pids = byProcess(found) && pid !== undefined && isAgentPid(pid) ? await chainOf(pid) : []
       const classes = app === undefined ? [] : deps.classes(app)
       if (pids.length === 0 && classes.length === 0) return false
       try {

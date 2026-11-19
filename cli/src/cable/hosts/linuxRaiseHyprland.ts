@@ -2,6 +2,7 @@
  * The raise on Hyprland (docs/plans/2026-11-19-dial-linux-design.md § 2.3): `hyprctl clients -j` lists the windows,
  * then `dispatch focuswindow` brings forward the one of the first pid that owns a window, else the first of the class.
  */
+import { isAgentPid } from './linuxDesktop.js'
 import type { RaiseBackend, RaiseRun } from './linuxRaise.js'
 import { RUN_TIMEOUT_MS } from './orca.js'
 
@@ -41,8 +42,7 @@ export function createHyprlandRaise(deps: RaiseRun, signature: string): RaiseBac
   return {
     async raise({ pids, classes }) {
       const hyprctl = deps.onPath('hyprctl')
-      // pid 1 holds every orphan, so it names no agent's window.
-      const wanted = pids.filter((p) => Number.isInteger(p) && p > 1)
+      const wanted = pids.filter(isAgentPid)
       if (hyprctl === null || (wanted.length === 0 && classes.length === 0)) return false
       const listing = await run(hyprctl, ['clients', '-j'])
       const windows = listing.code === 0 ? windowsIn(listing.stdout) : undefined

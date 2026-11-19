@@ -43,6 +43,7 @@ const HYPRLAND_SIGNATURE = /^(?=.{1,128}$)[A-Za-z0-9]+(_[A-Za-z0-9]+){2,}$/
 // Unanchored at the end: a `,guid=…` or a second address after `;` is left off, so only the checked part reaches a
 // command line.
 const SESSION_BUS = /^unix:(path|abstract)=[^,;\s]{1,200}/
+const WINDOW_CLASS = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 const WAYLAND_SOCKET = /^wayland-[0-9]+$/
 const DISPLAY = /^:[0-9]{1,3}(\.[0-9]{1,2})?$/
 const X11_SOCKETS = '/tmp/.X11-unix'
@@ -54,6 +55,16 @@ const GNOME_EXTENSION = '/de/lucaswerkmeister/ActivateWindowByTitle'
 // GDBus answers an introspection of any path, with an empty node where nothing is: only the extension's own interface
 // says it is on (RECORDED_GNOME_SHELL.introspectWithout).
 const GNOME_INTERFACE = 'interface de.lucaswerkmeister.ActivateWindowByTitle '
+
+/** A bus as every raise hands it to a command: anchored, since a `,guid=…` or a second address after `;` would let the call
+ *  reach another bus. */
+export const isSessionBus = (bus: string): boolean => SESSION_BUS.exec(bus)?.[0] === bus
+/** A window class as every raise takes it: no leading `-`, which gdbus reads as an option, and nothing JSON escapes in a
+ *  KWin script. */
+export const isWindowClass = (spelling: string): boolean => WINDOW_CLASS.test(spelling)
+/** A process whose window may be an agent's: a whole number, and above 1, as pid 1 holds every orphan and a window that
+ *  names no process shows 0. */
+export const isAgentPid = (pid: number): boolean => Number.isSafeInteger(pid) && pid > 1
 
 export async function findLinuxDesktop(deps: LinuxDesktopDeps): Promise<LinuxDesktop> {
   const { env, uid } = deps

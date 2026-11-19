@@ -3,6 +3,7 @@
  * -lpx` lists the windows, and `wmctrl -i -a <id>` brings the chosen one forward. The daemon may have no `DISPLAY` of its
  * own, so each command runs through `env` with the display and cookie the login exposes.
  */
+import { isAgentPid } from './linuxDesktop.js'
 import type { RaiseBackend, RaiseRun } from './linuxRaise.js'
 import { RUN_TIMEOUT_MS } from './orca.js'
 
@@ -36,8 +37,7 @@ export function createX11Raise(deps: RaiseRun, display: string, xauthority?: str
       const listed = await wmctrl(env, ['-lpx'])
       if (listed.code !== 0) return false
       const windows = windowsOf(listed.stdout)
-      // A window that names no process shows pid 0, which is no agent's.
-      const byPid = pids.filter((pid) => pid > 0).map((pid) => windows.find((window) => window.pid === pid)).find((window) => window !== undefined)
+      const byPid = pids.filter(isAgentPid).map((pid) => windows.find((window) => window.pid === pid)).find((window) => window !== undefined)
       const found = byPid ?? windows.find((window) => classes.some((spelling) => hasClass(window.wmClass, spelling)))
       if (found === undefined) return false
       return (await wmctrl(env, ['-i', '-a', found.id])).code === 0
