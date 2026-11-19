@@ -131,7 +131,7 @@ describe('ensureImage', () => {
     const log = vi.fn(changed)
     await expect(ensureImage(podman, NOW, log)).resolves.toBe(OLDER)
     await until(() => log.mock.calls.length === 1)
-    expect(log).toHaveBeenCalledWith(`agent browser: image ${TAG}: its build or prune failed · PodmanError`)
+    expect(log).toHaveBeenCalledWith(`agent browser: image ${TAG}: its build or prune failed · PodmanError IMAGE_FAILED`)
     await expect(ensureImage(podman, NOW, log)).resolves.toBe(OLDER)
     await until(() => log.mock.calls.length === 2)
     expect(removals()).toEqual([])
@@ -159,7 +159,7 @@ describe('ensureImage', () => {
     expect(lines).toHaveLength(50)
     expect(lines.slice(-2)).toEqual(['E: Unable to locate package chromium', step])
     await settled()
-    expect(log).toHaveBeenCalledWith(`agent browser: image ${TAG}: its build or prune failed · PodmanError`)
+    expect(log).toHaveBeenCalledWith(`agent browser: image ${TAG}: its build or prune failed · PodmanError IMAGE_FAILED`)
   })
 
   it('a build that times out throws image_failed naming the timeout, as it printed no output of its own', async () => {

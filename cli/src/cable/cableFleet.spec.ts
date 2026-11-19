@@ -125,7 +125,7 @@ describe('one dial failing', () => {
       flooding.raw(Buffer.alloc(70 * 1024, 0x41))
       await vi.waitFor(() => expect(flooding.isOpen).toBe(false))
       expect(f.host.log).toHaveBeenCalledWith(expect.stringMatching(/cable: flooded · 716\d\d B that are no frames in a second, more than a dial sends/))
-      expect(f.host.log).toHaveBeenCalledWith(expect.stringMatching(/\/dev\/tim dropped \(flooding the port: .*\) — this dial alone; its port is looked at again in 0 s/))
+      expect(f.host.log).toHaveBeenCalledWith(expect.stringMatching(/\/dev\/tim dropped \(flooding the port\) — this dial alone; its port is looked at again in 0 s/))
       expect(healthy.isOpen).toBe(true)
       await new Promise((resolve) => setTimeout(resolve, 150))
       await scan()

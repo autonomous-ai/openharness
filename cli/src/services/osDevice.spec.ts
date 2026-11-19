@@ -696,7 +696,7 @@ describe('the defaults that run commands', () => {
     expect(proc.unref).toHaveBeenCalled()
     stdin.emit('error', new Error('EPIPE'))
     proc.emit('error', new Error('spawn sudo ENOENT'))
-    expect(error).toHaveBeenCalledWith('[os-device] could not start a detached command:', 'Error')
+    expect(error).toHaveBeenCalledWith('[os-device] could not start sudo:', 'Error')
     expect(JSON.stringify(error.mock.calls)).not.toContain('secret-pass')
     const bare = Object.assign(new EventEmitter(), { unref: vi.fn() })
     child.spawn.mockReturnValueOnce(bare)

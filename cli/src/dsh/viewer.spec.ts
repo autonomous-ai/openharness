@@ -621,8 +621,9 @@ describe('DshViewerManager, the rest of a viewer\'s life', () => {
       }) as typeof spawnDshCommand
       const { logs, urls, manager } = setup({ spawn: noGitBash })
       await manager.start('a1', watched(), workspace)
-      // The log names its kind; what to install is said where the person reads it, as the harness's install is refused.
-      expect(logs).toContain('[dsh] acme/thing viewer could not start · Error')
+      // The log names the missing shell by its code; what to install is said where the person reads it, as the harness's
+      // install is refused.
+      expect(logs).toContain('[dsh] acme/thing viewer could not start · SHELL_UNAVAILABLE')
       expect(watchers).toHaveLength(1)
       expect(watchers[0].closed).toBe(true)
       // The agents' scans attach every live agent again; the same viewer that just failed is not started each time.

@@ -713,7 +713,7 @@ describe('the agent browser service', () => {
     const log = vi.spyOn(console, 'log')
     port.purged('a1')
     // The delete ends at the state file it cannot record in, and says so.
-    await eventually(() => expect(log).toHaveBeenCalledWith('agent browser a1: not deleted · PodmanError'))
+    await eventually(() => expect(log).toHaveBeenCalledWith('agent browser a1: not deleted · PodmanError STATE_UNREADABLE'))
     expect(asked().filter(line => / rm |^rm /.test(line))).toEqual([])
   })
 
@@ -1209,7 +1209,7 @@ describe('the person\'s Start and Stop', () => {
     writeFileSync(join(dataDir, 'agent-browser.json'), '{ not json')
     const log = vi.spyOn(console, 'log')
     const sw = startSwitching([session('a1')])
-    expect(log).toHaveBeenCalledWith('agent browser a1: its Browser flag was not taken in · PodmanError')
+    expect(log).toHaveBeenCalledWith('agent browser a1: its Browser flag was not taken in · PodmanError STATE_UNREADABLE')
     rmSync(join(dataDir, 'agent-browser.json'))
     sw.end('a1')
     sw.attach('a1')

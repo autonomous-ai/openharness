@@ -280,7 +280,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     f.answer('machine', new Error('the core went away'))
     f.event({ kind: 'resume' })
     await f.settled()
-    expect(warn).toHaveBeenCalledWith('[wifi] Error')
+    expect(warn).toHaveBeenCalledWith('[wifi] a core event failed · Error')
     f.answer('machine', { id: 'machine-1' })
     f.event({ kind: 'resume' })
     await f.settled()
@@ -289,7 +289,7 @@ describe('the Wi-Fi device in the devices\' process', () => {
     f.event({ kind: 'appFocus', machineId: 'm', agentId: 'a', connId: 'w' })
     f.event({ kind: 'turnStarted', agentId: 'a' })
     await f.settled()
-    expect(warn).toHaveBeenCalledWith('[wifi] string')
+    expect(warn).toHaveBeenCalledWith('[wifi] a core event failed · string')
     expect(f.log.at(-1)).toBe('machine-1 turnStarted ["a"]')
   })
 

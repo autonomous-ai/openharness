@@ -220,7 +220,7 @@ describe('event-driven serial link', () => {
     stream.emit('error', Object.assign(new Error('unplugged'), { code }))
     stream.emit('data', Buffer.from('late'))
     await link.close()
-    expect(closed).toHaveBeenCalledExactlyOnceWith(code ?? 'Error: unplugged')
+    expect(closed).toHaveBeenCalledExactlyOnceWith(code ?? 'Error')
     expect(received).not.toHaveBeenCalled()
   })
 
@@ -229,7 +229,7 @@ describe('event-driven serial link', () => {
     const link = await SerialLink.open('/dev/fake', () => { throw new Error('bad frame') }, closed)
     stream.emit('data', Buffer.from('broken'))
     await link.close()
-    expect(closed).toHaveBeenCalledExactlyOnceWith('Error: bad frame')
+    expect(closed).toHaveBeenCalledExactlyOnceWith('Error')
   })
 
   it('propagates a write failure without stranding the next queued frame', async () => {
