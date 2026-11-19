@@ -516,4 +516,62 @@ describe('shared native databases', () => {
       expect(db.prepare('SELECT id FROM messages').all()).toHaveLength(2)
     } finally { db.close() }
   })
+
+  // OpenCode 2.2.6's tables that name a conversation (MSI, 2026-11-19), trimmed to their keys: every delete of one was
+  // refused as "Other engine data" while only session_message was known.
+  const opencode2Fixture = () => {
+    const data = join(root, 'opencode'); mkdirSync(data)
+    const was = env.OPENCODE_DATA_DIR
+    ;(env as { OPENCODE_DATA_DIR: string }).OPENCODE_DATA_DIR = data
+    const Database = builtinSqlite()!
+    const db = new Database(join(data, 'opencode.db'), { readOnly: false })
+    const cascade = "REFERENCES session_v2(id) ON DELETE CASCADE"
+    db.exec(`CREATE TABLE project(id TEXT PRIMARY KEY);
+      CREATE TABLE session(id TEXT PRIMARY KEY);
+      CREATE TABLE session_v2(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES project(id) ON DELETE CASCADE, parent_id TEXT, fork_session_id TEXT);
+      CREATE TABLE session_message(id TEXT PRIMARY KEY, session_id TEXT NOT NULL ${cascade}, data TEXT);
+      CREATE TABLE session_part(message_id TEXT NOT NULL REFERENCES session_message(id) ON DELETE CASCADE, session_id TEXT NOT NULL ${cascade}, ordinal INTEGER, data TEXT, PRIMARY KEY(message_id, ordinal));
+      CREATE TABLE blob(hash TEXT PRIMARY KEY, data BLOB);
+      CREATE TABLE blob_ref(session_id TEXT NOT NULL ${cascade}, message_id TEXT NOT NULL, hash TEXT NOT NULL REFERENCES blob(hash) ON DELETE CASCADE, PRIMARY KEY(session_id, message_id, hash));
+      CREATE TABLE instruction_entry(session_id TEXT NOT NULL ${cascade}, key TEXT, PRIMARY KEY(session_id, key));
+      CREATE TABLE instruction_state(session_id TEXT PRIMARY KEY ${cascade});
+      CREATE TABLE session_inbox(id TEXT PRIMARY KEY, session_id TEXT NOT NULL ${cascade});
+      CREATE TABLE schedule(id TEXT PRIMARY KEY, session_id TEXT ${cascade});
+      INSERT INTO project VALUES ('p'); INSERT INTO blob VALUES ('h', x'00');`)
+    for (const id of ['selected-session', 'keep']) db.exec(`INSERT INTO session_v2 VALUES ('${id}', 'p', NULL, NULL);
+      INSERT INTO session_message VALUES ('${id}-m', '${id}', 'said');
+      INSERT INTO session_part VALUES ('${id}-m', '${id}', 0, 'part');
+      INSERT INTO blob_ref VALUES ('${id}', '${id}-m', 'h');
+      INSERT INTO instruction_entry VALUES ('${id}', 'k'); INSERT INTO instruction_state VALUES ('${id}');
+      INSERT INTO session_inbox VALUES ('${id}-i', '${id}'); INSERT INTO schedule VALUES ('${id}-s', '${id}');`)
+    Object.assign(session, { engine: 'opencode', transcriptPath: null })
+    return { db, restore: () => { db.close(); (env as { OPENCODE_DATA_DIR: string }).OPENCODE_DATA_DIR = was } }
+  }
+  const opencode2Tables = ['session_v2', 'session_message', 'session_part', 'blob_ref', 'instruction_entry', 'instruction_state', 'session_inbox', 'schedule']
+
+  it('reads an OpenCode 2 conversation size without deleting its rows or the shared blobs', async () => {
+    const { db, restore } = opencode2Fixture()
+    try {
+      expect(await sessionDataBytes(session, checkpoints)).toBe(230)
+      await expect(inspectNativeHistory(session)).rejects.toMatchObject({ code: 'STORAGE_PURGE_AUTHORITY_UNAVAILABLE' })
+      for (const table of opencode2Tables) {
+        const column = table === 'session_v2' ? 'id' : 'session_id'
+        expect(db.prepare(`SELECT ${column} AS id FROM ${table} ORDER BY ${column}`).all(), table).toEqual([{ id: 'keep' }, { id: 'selected-session' }])
+      }
+      expect(db.prepare('SELECT hash FROM blob').all()).toEqual([{ hash: 'h' }])
+    } finally { restore() }
+  })
+
+  it('keeps an OpenCode 2 conversation size unknown for forks and tables it does not know', async () => {
+    const { db, restore } = opencode2Fixture()
+    try {
+      db.exec("INSERT INTO session_v2 VALUES ('fork', 'p', NULL, 'selected-session')")
+      expect(await sessionDataBytes(session, checkpoints)).toBeNull()
+      db.exec("DELETE FROM session_v2 WHERE id = 'fork'")
+      expect(await sessionDataBytes(session, checkpoints)).toBe(230)
+      db.exec('CREATE TABLE added(session_id TEXT REFERENCES session_v2(id) ON DELETE CASCADE)')
+      expect(await sessionDataBytes(session, checkpoints)).toBeNull()
+      for (const table of opencode2Tables) expect(db.prepare(`SELECT 1 FROM ${table}`).all(), table).toHaveLength(2)
+    } finally { restore() }
+  })
 })

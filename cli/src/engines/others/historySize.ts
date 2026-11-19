@@ -48,7 +48,13 @@ async function databaseBytes(s: RegisteredSession): Promise<number> {
   }
   if (s.engine === 'opencode' && (await query("SELECT name FROM sqlite_master WHERE type='table' AND name='session_v2'")).length
     && (await query(`SELECT id FROM session_v2 WHERE id = ${id}`)).length) {
-    sessionTable = 'session_v2'; children = [['session_message', `session_id = ${id}`]]
+    sessionTable = 'session_v2'
+    // OpenCode 2 stores parts, attachment links and instructions beside messages. Shared blob bytes
+    // belong to no single conversation, so only the links enter this read-only estimate.
+    const present = new Set((await query("SELECT name FROM sqlite_master WHERE type='table'")).map(t => String(t.name)))
+    children = ['session_part', 'blob_ref', 'session_message', 'instruction_entry', 'instruction_state', 'session_inbox', 'schedule']
+      .filter(table => table === 'session_message' || present.has(table))
+      .map(table => [table, `session_id = ${id}`])
   }
   await query(`SELECT id FROM ${sessionTable} WHERE id = ${id}`)
   // Keep the existing unknown result for stores whose dependencies prevent a reliable per-session estimate.
@@ -68,7 +74,7 @@ async function databaseBytes(s: RegisteredSession): Promise<number> {
   const columns = await query(`PRAGMA table_info(${sessionTable})`)
   const schemaVersion = Number((await query('PRAGMA schema_version'))[0]?.schema_version)
   if (!Number.isInteger(schemaVersion)) return fail('The engine history schema could not be verified.')
-  for (const parent of ['parent_id', 'parent_session_id']) if (columns.some(c => c.name === parent)) {
+  for (const parent of ['parent_id', 'parent_session_id', 'fork_session_id']) if (columns.some(c => c.name === parent)) {
     const predicate = `${parent} = ${id} AND id <> ${id}`
     if ((await query(`SELECT id FROM ${sessionTable} WHERE ${predicate} LIMIT 1`)).length) {
       return fail('Other conversations depend on this session. Size is unknown.')
