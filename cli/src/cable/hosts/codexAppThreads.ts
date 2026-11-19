@@ -178,7 +178,8 @@ export class CodexAppThreads {
   }
 
   /** Drops the JSON file's last parse and the names read of Codex's index, so nothing of the app's metadata is kept while
-   *  no dial is attached. Nothing else in the devices process asks codexThreadName, so its cache goes whole. */
+   *  no dial is attached. Nothing else in the devices process asks codexThreadName, so its cache goes whole; with
+   *  HARNESSD_SERVICES=none the core's terminal sweep (engineSessionTitle) shares it, and reads the index cold once after. */
   forget(): void {
     this.projects = undefined
     this.names = undefined
