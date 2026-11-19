@@ -298,6 +298,26 @@ it('a publish refused for a moment with no lock there is tried again', async () 
   expect(lockEntries()).toEqual([])
 })
 
+it('a wait for a held lock builds its owner once, not once a turn', async () => {
+  mkdirSync(lock, { mode: 0o700 })
+  publish('held')
+  let turns = 0, built = 0, synced = 0
+  interleave.phase = async (path, at) => {
+    if (!temporaryAt(path, at)) return
+    if (at === 'mkdir') built++
+    if (at === 'sync') synced++
+  }
+  interleave.stat = async (path, value) => {
+    // Each busy turn looks at the lock once; its holder lets go five turns in.
+    if (path === lock && ++turns === 5) rmSync(lock, { recursive: true })
+    return value
+  }
+  expect(await registryFileLock(directory, deadline(), async () => 'taken')).toBe('taken')
+  expect(turns).toBeGreaterThanOrEqual(5)
+  expect({ built, synced }).toEqual({ built: 1, synced: 1 })
+  expect(lockEntries()).toEqual([])
+})
+
 // Windows refuses a folder renamed onto any folder, so an older build's folder there is waited for like any lock.
 it.skipIf(process.platform === 'win32')('an older build that makes its folder between the look and the publish does not enter', async () => {
   let raced = false

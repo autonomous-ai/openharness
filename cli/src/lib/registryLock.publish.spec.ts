@@ -38,6 +38,17 @@ it('a lock with a live owner is waited for, not replaced', async () => {
   expect(readdirSync(directory)).toEqual(['registry.json.lock'])
 })
 
+it('a lock let go during the wait is taken, and its release leaves the folder as it was', async () => {
+  mkdirSync(lock, { mode: 0o700 })
+  writeFileSync(join(lock, 'owner.json'), JSON.stringify({ pid: process.pid, startMarker: '', token: 'held' }), { mode: 0o600 })
+  // The lock checks its deadline a few times a turn, so its holder lets go some turns in.
+  let checks = 0
+  const waited = { expires: performance.now() + 5_000, check: () => { if (++checks === 40) rmSync(lock, { recursive: true }) } }
+  expect(await registryFileLock(directory, waited, async () => readdirSync(directory))).toEqual(['registry.json.lock'])
+  expect(checks).toBeGreaterThan(40)
+  expect(readdirSync(directory)).toEqual([])
+})
+
 it('an empty lock folder is not replaced', async () => {
   mkdirSync(lock, { mode: 0o700 })
   const before = lstatSync(lock, { bigint: true }).ino
