@@ -582,19 +582,22 @@ export function createBinding({
       // keeps it. A bound pane is read when its stream says it may show something new: an idle one is not read every pass.
       // One a message was typed into is read on every pass until the message is confirmed: the run it starts shows on the
       // pane before the store, which may never show it (live.ts NO_SESSION_MS counts from the first pass that reads it).
+      // So is one whose first task waits: a history that did not load reads idle, and its `/session` and the task wait.
       // A first task past its bound is failed before that: its pane need not be read for it.
       if (firstTaskOverdue(agent, observed.processIdentity)) {
         failFirstTask(agent)
         return
       }
-      if (agent.sessionId && !openclawPaneDue(agent.sessionId) && !input.awaitingConfirmation(agent.agentId)) return
+      const waiting = !!agent.firstTask || input.firstTaskWaiting(agent.agentId) || input.awaitingConfirmation(agent.agentId)
+      if (agent.sessionId && !waiting && !openclawPaneDue(agent.sessionId)) return
       const captured = await read(() => capturePane(agent.agentId), (screen) => !screen)
       if (!captured?.value || !current()) return
       const screen = readOpenclawScreen(captured.value)
       if (screen.state !== 'no-history') sessionTries.delete(agent.agentId)
       // Told on every pass, the ones that say a state too: a pass that reads the Gateway gone is what lets the stream
-      // close a turn its restart left `running`.
-      const streamed = !!agent.sessionId && openclawPaneRead(agent.sessionId, { ready: screen.state === 'ready', gatewayLost: screen.gatewayLost, running: screen.running }, captured.value)
+      // close a turn its restart left `running`. A history that did not load is under a status line that says idle.
+      const ready = screen.state === 'ready' || screen.state === 'no-history'
+      const streamed = !!agent.sessionId && openclawPaneRead(agent.sessionId, { ready, gatewayLost: screen.gatewayLost, running: screen.running }, captured.value)
       const held = openclawScreenHold(screen, agent, gatewayGoneMs(agent.agentId, screen))
       const ours = !agent.identityHold || OPENCLAW_HOLDS.has(agent.identityHold) || isOpenclawLocalStopped(agent.identityHold)
       if (held) {
@@ -649,8 +652,7 @@ export function createBinding({
       // load works: `/session` loads it again, typed only into an empty box, never over the person's text or a message
       // OpenClaw refused, and only for a first task or a message of Harness's waiting there: a TUI the person runs alone
       // is theirs to reload. The key is the footer's, the session the pane is on; the row's would undo a `/new`.
-      if (screen.state === 'no-history' && screen.box === '' && screen.key
-        && (agent.firstTask || input.firstTaskWaiting(agent.agentId) || input.awaitingConfirmation(agent.agentId))) {
+      if (screen.state === 'no-history' && screen.box === '' && screen.key && waiting) {
         const now = Date.now()
         const tried = sessionTries.get(agent.agentId) ?? { tries: 0, lastAt: -Infinity, failures: 0 }
         // The next is typed once the last load failed, or had its time: one typed while a load is in flight drops it.
