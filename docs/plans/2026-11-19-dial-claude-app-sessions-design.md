@@ -50,6 +50,10 @@ Diego (2026-11-19, CLI 0.6.70): "Claude app vẫn chưa ổn định, có 3 sess
 9. A resting row counts for the app in front; it weighs nothing only in the default app (1b).
 10. The end-to-end file also runs a session with a fake process: one row while it runs, the same id idle once it ends.
 11. Verification: one hand-started `cli-e2e.yml` run in phase 4 (the PM gives the turn) and `deviceCmux.e2e.ts` locally.
+12. (Final review, the main session) A store row's `lastActivityAt` is its sort time, `min(lastActivityAt, mtime)`: a
+    timestamp the app wrote ahead of the clock cannot pin a row first on the dial's ring.
+13. (Final review, the main session) A `harness device notify` card for a Claude app session stays when its process
+    ends, since the session's row stays: it ends at a tap, the next turn or after 24 h, as for any listed agent.
 
 ## The fix
 
