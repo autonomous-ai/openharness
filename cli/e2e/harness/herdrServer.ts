@@ -228,10 +228,11 @@ export class PrivateHerdr {
 /**
  * The daemon's process table holds no herdr but the test's: a herdr of the developer's runs on the Mac that runs the tests,
  * and the daemon's herdr lookup must never read it (PM, 2026-11-19). A `ps` first on the daemon's PATH, admitted before
- * the daemon runs it, as the harness's `lsof` (harness/daemon.ts). Only the lookup's table read
- * (`ps -axo pid=,ppid=,comm=`, cable/hosts/scannedApp.ts) is touched: each row whose name is `herdr` and whose parents
- * do not reach [root] (the worker) goes, and is noted kept or dropped. Every other `ps` is the system's. It exits with
- * ps's status, never awk's. Called after `IsolatedDaemon.create`, before `start`.
+ * the daemon runs it, as the harness's `lsof` (harness/daemon.ts). Only the table read `readProcessNames` makes
+ * (`ps -axo pid=,ppid=,comm=`, cable/hosts/scannedApp.ts) is touched, the herdr lookup's and every other walk's of the
+ * devices alike: each row whose name is `herdr` and whose parents do not reach [root] (the worker) goes, and is noted
+ * kept or dropped. Every other `ps` is the system's. It exits with ps's status, never awk's. Called after
+ * `IsolatedDaemon.create`, before `start`.
  */
 export function ownHerdrsOnly(d: IsolatedDaemon, root: number = process.pid): { kept(): number[]; dropped(): number[] } {
   const log = join(d.root, 'ps-herdr.log')
