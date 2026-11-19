@@ -101,11 +101,13 @@ if [[ "$step" == compile ]]; then
 fi
 
 case "$os" in
-  macos) bundles=app,dmg ;;
-  linux) bundles=appimage ;;
-  windows) bundles=nsis ;;
+  macos) bundles=(--bundles "app,dmg") ;;
+  linux) bundles=(--bundles appimage) ;;
+  # Tauri would write the bundle type into the exe Authenticode already signed, breaking its signature. The updater
+  # needs no bundle type here: it finds the windows-<arch> key and tells an NSIS installer by its bytes.
+  windows) bundles=(--bundles nsis --no-binary-patching) ;;
 esac
-cargo tauri bundle --ci --target "$target" --bundles "$bundles" "${configs[@]}"
+cargo tauri bundle --ci --target "$target" "${bundles[@]}" "${configs[@]}"
 
 # CARGO_TARGET_DIR may put the target folder anywhere; cargo names it. sed, not Python, reads its one-line JSON: Windows
 # runners have no python3. A Windows path's escaped backslashes become slashes, which Git Bash reads as well.
