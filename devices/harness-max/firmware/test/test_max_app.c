@@ -507,6 +507,11 @@ static void reset_chimes(void)
 static void test_each_alert_its_chime(void)
 {
     fresh();
+    // Every agent this test names is on the ring: fresh() seats only MAX_CELLS + 1 (four with App Detail's three cells),
+    // and a summary of an agent off the ring is nobody's news.
+    static pro_agent_row_t rows[11];   // static: the 1 KB frame limit of the feeds' task counts the inlined tests too
+    for (int i = 0; i < 11; i++) rows[i] = (pro_agent_row_t){IDS[i], IDS[i], "claude", "m1", "MacBook Pro", NULL, NULL};
+    pro_app_agents(rows, 11);
     reset_chimes();
     pro_app_ask("a", NULL, "r1", "Proceed?", NULL, 0, false, false);
     CHECK(BEEPS == 1 && CHIMES[MAX_CHIME_ASK] == 1);
@@ -582,6 +587,7 @@ static void test_drawer_rows(void)
     fresh();
     now += 60000;
     BEEPS = 0;
+    max_m.inbox_count = 0;   // the earlier tests' notices can fill Inbox to MAX_INBOX, where one more replaces the oldest
     const int inbox = max_m.inbox_count;
     const pro_notif_row_t rows[] = {{"c", "c", "Keep the dark gradient?", "", true}, {"d", "d", "Done.", "t1", false}};
     pro_app_notif_replace(rows, 2);
