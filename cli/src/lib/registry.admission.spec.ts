@@ -25,6 +25,38 @@ vi.mock('fs', async original => {
     return actual.fsyncSync(fd)
   } }
 })
+// A registry image flush a test holds open, as a slow disk does.
+const preparation = vi.hoisted(() => ({ wait: undefined as undefined | (() => Promise<void>), release: undefined as undefined | (() => void),
+  due: new Map<unknown, () => void>() }))
+vi.mock('node:fs/promises', async original => {
+  const actual = await original<typeof import('node:fs/promises')>()
+  return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
+    const handle = await actual.open(...args), sync = handle.sync.bind(handle)
+    handle.sync = async () => {
+      await sync()
+      if (!(String(args[0]).includes('registry.json.') && String(args[0]).endsWith('.tmp'))) return
+      for (const [timer, fire] of preparation.due) { preparation.due.delete(timer); fire() }
+      await preparation.wait?.()
+    }
+    return handle
+  } }
+})
+// Under load a registry image sync outlives every real wait of 250 ms or more: each one still running fires
+// as that sync returns, if not before.
+const realTimeout = globalThis.setTimeout, realClear = globalThis.clearTimeout
+function slowTimeout(callback: (...args: unknown[]) => void, ms: number | undefined, args: unknown[]) {
+  if (ms === undefined || ms < 250) return realTimeout(callback, ms, ...args)
+  const timer = realTimeout(() => { preparation.due.delete(timer); callback(...args) }, ms)
+  preparation.due.set(timer, () => { realClear(timer); callback(...args) })
+  return timer
+}
+function hold() {
+  let entered!: () => void, release!: () => void
+  const reached = new Promise<void>(done => { entered = done }), released = new Promise<void>(done => { release = done })
+  preparation.release = release
+  preparation.wait = async () => { preparation.wait = undefined; entered(); await released }
+  return { entered: reached, release }
+}
 vi.mock('./bootId.js', async original => ({ ...await original<object>(), currentBootId: () => 'fixture-boot', bootChanged: () => false }))
 vi.mock('./processLiveness.js', async original => ({ ...await original<object>(),
   processLockIdentity: () => ({ startMarker: 'fixture-start', generationMarker: 'fixture-generation' }), lockOwnerAlive: () => true,
@@ -37,6 +69,9 @@ function observeNativeProof(): void { vi.doMock('../engines/transcriptBindings.j
     return { ...proof, verify: (...selected: Parameters<typeof proof.verify>) => { fault.beforeVerify?.(); proof.verify(...selected) } }
   } }
 }) }
+// Loads the module graph once, before any hook's time limit: cold, it takes seconds on a loaded machine. Each test
+// still imports fresh modules (vi.resetModules), now from the warm transform cache.
+await import('./registry.js'); await import('../hookServer.js')
 const A = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', B = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb'
 let server: Server | undefined
 let root: string, home: string, file: string, transcript: string
@@ -70,6 +105,7 @@ beforeEach(async () => {
   await registry.flush()
 })
 afterEach(async () => {
+  preparation.wait = undefined; preparation.release?.(); preparation.release = undefined; preparation.due.clear()
   if (server) await new Promise<void>(resolve => server!.close(() => resolve()))
   server = undefined
   fault.rename = false; fault.directorySync = false; fault.renamed = false; fault.afterProof = undefined; fault.beforeVerify = undefined
@@ -394,6 +430,17 @@ async function httpFixture(blocked: (agentId: string) => boolean = () => false, 
   const { startHookServer } = await import('../hookServer.js')
   const { readHookCredential } = await import('./hookAuth.js')
   const prompts: string[] = [], registered = vi.fn(), reasons: Array<string | undefined> = []
+  // The hook server answers a commit still in flight after 250 ms, and the registry expires a write after 5 s.
+  // Only a test fires either here, so how fast this machine writes the registry never changes the replies these tests pin.
+  let grace: (() => void) | undefined
+  vi.spyOn(globalThis, 'setTimeout').mockImplementation(((callback: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) => {
+    if (ms !== 250 && ms !== 5_000) return slowTimeout(callback, ms, args)
+    if (ms === 250) grace = () => callback(...args)
+    return realTimeout(() => {}, 0)
+  }) as typeof setTimeout)
+  vi.spyOn(globalThis, 'clearTimeout').mockImplementation(((timer?: Parameters<typeof clearTimeout>[0]) => {
+    preparation.due.delete(timer); realClear(timer)
+  }) as typeof clearTimeout)
   const started = await startHookServer(0, { onRegistered: registered, onSessionEnd: () => {},
     hookAdmissionBlocked: blocked,
     onPromptSubmitted: (_id, text) => prompts.push(text),
@@ -414,7 +461,7 @@ async function httpFixture(blocked: (agentId: string) => boolean = () => false, 
     })
     return { status: response.status, body: await response.json() }
   }
-  return { post, prompts, registered, reasons }
+  return { post, prompts, registered, reasons, replyGrace: () => grace }
 }
 
 it('keeps each prompt through an HTTP registration write failure and credits it only after recovery', async () => {
@@ -699,6 +746,152 @@ it('claims an immediate already-bound linked Stop once, including concurrent ret
     .toEqual([{ ok: true }, { ok: true, duplicate: true }])
   expect((await f.post(body, delivery, 'turn-stop')).body).toEqual({ ok: true, duplicate: true })
   expect(onTurnStop).toHaveBeenCalledExactlyOnceWith({ sessionId: A, status: undefined, transcriptPath: undefined, firedAt: delivery.firedAt })
+})
+
+it('claims an already-bound linked Stop once when its registration write outlives the reply grace', async () => {
+  const owner = (await registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } }))!.entry
+  ;(await registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! }))
+  // As the core's attach does for a bound session with a turn: it holds only an unmatched Stop.
+  const onTurnStop = vi.fn(), onAdmissionStop = vi.fn((_row: unknown, unmatched: boolean) => unmatched)
+  const f = await httpFixture(() => false, 65_536, { onTurnStop, onAdmissionStop })
+  const delivery = { id: 'fixture-stop-slow-write-01', firedAt: Date.now() }
+  const body = { engine: 'cursor', sessionId: A, transcriptPath: undefined, tmuxPane: '%3', hookEvent: 'stop', prompt: undefined }
+  const flush = hold(), registration = f.post(body, delivery)
+  await flush.entered
+  const grace = f.replyGrace()
+  expect(grace).toBeTypeOf('function')
+  grace!()
+  // notify.mjs sends turn-stop once, whatever the registration answered, and leaves on pending.
+  expect((await registration).body).toEqual({ pending: true })
+  expect((await f.post(body, delivery, 'turn-stop')).body).toEqual({ pending: true })
+  // A duplicate in flight is the same Stop, never a second one.
+  expect((await f.post(body, delivery, 'turn-stop')).body).toEqual({ pending: true })
+  flush.release()
+  await vi.waitFor(() => expect(f.registered).toHaveBeenCalledOnce())
+  expect(onAdmissionStop).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ agentId: owner.agentId }), false)
+  await vi.waitFor(() => expect(onTurnStop).toHaveBeenCalledOnce())
+  expect(onTurnStop).toHaveBeenCalledExactlyOnceWith({ sessionId: A, status: undefined, transcriptPath: undefined, firedAt: delivery.firedAt })
+  expect((await f.post(body, delivery, 'turn-stop')).body).toEqual({ ok: true, duplicate: true })
+  expect(onTurnStop).toHaveBeenCalledOnce()
+})
+
+it('never claims a parked linked Stop whose registration is rejected', async () => {
+  const owner = (await registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } }))!.entry
+  ;(await registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! }))
+  const onTurnStop = vi.fn(), onAdmissionStop = vi.fn((_row: unknown, unmatched: boolean) => unmatched)
+  const log = vi.spyOn(console, 'log')
+  const f = await httpFixture(() => false, 65_536, { onTurnStop, onAdmissionStop })
+  const delivery = { id: 'fixture-stop-rejected-01', firedAt: Date.now() }
+  const body = { engine: 'cursor', sessionId: A, transcriptPath: undefined, tmuxPane: '%3', hookEvent: 'stop', prompt: undefined }
+  const flush = hold(), registration = f.post(body, delivery)
+  await flush.entered
+  f.replyGrace()!()
+  expect((await registration).body).toEqual({ pending: true })
+  expect((await f.post(body, delivery, 'turn-stop')).body).toEqual({ pending: true })
+  // The agent goes inactive while its write is in flight: the registration is refused as stale.
+  registry.byAgent(owner.agentId)!.active = false
+  flush.release()
+  await vi.waitFor(() => expect(log.mock.calls.some(([line]) => String(line).includes('ignored · stale_hook'))).toBe(true), { timeout: 3_000 })
+  expect(f.registered).not.toHaveBeenCalled()
+  expect(onAdmissionStop).not.toHaveBeenCalled()
+  expect(onTurnStop).not.toHaveBeenCalled()
+})
+
+it('says when a parked linked Stop closes nothing once its registration is accepted', async () => {
+  const owner = (await registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } }))!.entry
+  ;(await registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! }))
+  const onTurnStop = vi.fn(), onAdmissionStop = vi.fn((_row: unknown, unmatched: boolean) => unmatched)
+  const log = vi.spyOn(console, 'log')
+  // The agent goes inactive the moment its registration is accepted, before the parked Stop is claimed.
+  const onRegistered = vi.fn(() => { registry.byAgent(owner.agentId)!.active = false })
+  const f = await httpFixture(() => false, 65_536, { onTurnStop, onAdmissionStop, onRegistered })
+  const delivery = { id: 'fixture-stop-unclaimed-01', firedAt: Date.now() }
+  const body = { engine: 'cursor', sessionId: A, transcriptPath: undefined, tmuxPane: '%3', hookEvent: 'stop', prompt: undefined }
+  const flush = hold(), registration = f.post(body, delivery)
+  await flush.entered
+  f.replyGrace()!()
+  expect((await registration).body).toEqual({ pending: true })
+  expect((await f.post(body, delivery, 'turn-stop')).body).toEqual({ pending: true })
+  flush.release()
+  // Its client left on pending and hears nothing more: the daemon log is where it is seen.
+  await vi.waitFor(() => expect(log.mock.calls.map(([line]) => String(line)))
+    .toContain(`[hooks] ${A.slice(0, 8)} parked Stop not claimed · status=403`), { timeout: 3_000 })
+  expect(onRegistered).toHaveBeenCalledOnce()
+  expect(onTurnStop).not.toHaveBeenCalled()
+})
+
+it('counts a parked linked Stop in the hook receipts\' byte budget until its registration settles', async () => {
+  const owner = (await registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } }))!.entry
+  ;(await registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! }))
+  const onTurnStop = vi.fn(), onAdmissionStop = vi.fn((_row: unknown, unmatched: boolean) => unmatched)
+  // Room for the registration, its 200 KB parked Stop, or the 100 KB prompt below: never all three.
+  const f = await httpFixture(() => false, 65_536, { onTurnStop, onAdmissionStop }, 250_000)
+  const delivery = { id: 'fixture-stop-parked-budget-01', firedAt: Date.now() }
+  const body = { engine: 'cursor', sessionId: A, transcriptPath: undefined, tmuxPane: '%3', hookEvent: 'stop', prompt: undefined }
+  const flush = hold(), registration = f.post(body, delivery)
+  await flush.entered
+  f.replyGrace()!()
+  expect((await registration).body).toEqual({ pending: true })
+  expect((await f.post({ ...body, prompt: 'x'.repeat(100_000) }, delivery, 'turn-stop')).body).toEqual({ pending: true })
+  const prompt = { ...body, hookEvent: 'beforeSubmitPrompt', prompt: 'y'.repeat(50_000) }, next = { id: 'fixture-prompt-after-park-01' }
+  expect(await f.post(prompt, next)).toEqual({ status: 429, body: expect.objectContaining({ error: 'HOOK_ADMISSION_BUSY' }) })
+  flush.release()
+  await vi.waitFor(() => expect(onTurnStop).toHaveBeenCalledOnce())
+  // Claimed, the parked Stop no longer holds its bytes.
+  expect((await f.post(prompt, next)).status).toBe(200)
+})
+
+it('claims a linked Stop once when it queued only behind the slow registry write of its agent\'s earlier hook', async () => {
+  const owner = (await registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } }))!.entry
+  ;(await registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! }))
+  const onTurnStop = vi.fn(), onAdmissionStop = vi.fn((_row: unknown, unmatched: boolean) => unmatched)
+  const f = await httpFixture(() => false, 65_536, { onTurnStop, onAdmissionStop })
+  const firedAt = Date.now()
+  const body = { engine: 'cursor', sessionId: A, transcriptPath: undefined, tmuxPane: '%3', hookEvent: 'stop', prompt: undefined }
+  // The turn's prompt hook, whose registry write a slow disk holds open.
+  const flush = hold(), prompt = f.post({ ...body, hookEvent: 'beforeSubmitPrompt' }, { id: 'fixture-prompt-slow-write-01', firedAt: firedAt - 1 })
+  await flush.entered
+  f.replyGrace()!()
+  expect((await prompt).body).toEqual({ pending: true })
+  const delivery = { id: 'fixture-stop-queued-write-01', firedAt }
+  expect((await f.post(body, delivery)).body).toEqual({ pending: true })
+  expect((await f.post(body, delivery, 'turn-stop')).body).toEqual({ pending: true })
+  flush.release()
+  await vi.waitFor(() => expect(f.registered).toHaveBeenCalledTimes(2))
+  expect(onAdmissionStop).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ agentId: owner.agentId }), false)
+  await vi.waitFor(() => expect(onTurnStop).toHaveBeenCalledOnce())
+  expect(onTurnStop).toHaveBeenCalledExactlyOnceWith({ sessionId: A, status: undefined, transcriptPath: undefined, firedAt })
+})
+
+it.each(['before', 'after'] as const)('keeps a linked Stop unmatched when the earlier hook it queued behind is held %s it arrives', async when => {
+  const owner = (await registry.openProcessAgent({ engine: 'cursor', tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 7103, startMarker: 'fixture-start', executable: '<engine>' } }))!.entry
+  ;(await registry.register({ engine: 'cursor', sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: owner.processIdentity! }))
+  const onTurnStop = vi.fn(), onAdmissionStop = vi.fn((_row: unknown, unmatched: boolean) => unmatched)
+  const f = await httpFixture(() => false, 65_536, { onTurnStop, onAdmissionStop })
+  const firedAt = Date.now()
+  const body = { engine: 'cursor', sessionId: A, transcriptPath: undefined, tmuxPane: '%3', hookEvent: 'stop', prompt: undefined }
+  // A held hook is a real wait, unlike a slow write: the Stop behind it may belong to an earlier turn.
+  const flush = when === 'after' ? hold() : undefined
+  if (!flush) fault.rename = true
+  const prompt = f.post({ ...body, hookEvent: 'beforeSubmitPrompt' }, { id: 'fixture-prompt-held-01', firedAt: firedAt - 1 })
+  if (flush) { await flush.entered; f.replyGrace()!() }
+  expect((await prompt).body).toEqual({ pending: true })
+  const delivery = { id: 'fixture-stop-queued-hold-01', firedAt }
+  expect((await f.post(body, delivery)).body).toEqual({ pending: true })
+  if (flush) { fault.rename = true; flush.release() }
+  expect((await f.post(body, delivery, 'turn-stop')).body).toEqual({ pending: true })
+  await vi.waitFor(() => expect(f.reasons.some(reason => reason?.includes('registry storage write failed'))).toBe(true), { timeout: 3_000 })
+  fault.rename = false
+  await vi.waitFor(() => expect(onAdmissionStop).toHaveBeenCalled(), { timeout: 3_000 })
+  expect(onAdmissionStop).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ agentId: owner.agentId }), true)
+  await vi.waitFor(() => expect(f.registered).toHaveBeenCalledTimes(2))
+  expect(onTurnStop).not.toHaveBeenCalled()
 })
 
 it.each([false, true])('retains an overtaking Stop after process resolution recovers, with onWait: %s', async waiting => {

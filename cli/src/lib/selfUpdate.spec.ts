@@ -3,7 +3,7 @@ import { failedNode, nodeMigration } from './nodeMigration.js'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { createHash } from 'crypto'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   DOWNLOAD_LIMITS, MANIFEST_LIMITS, REFUSED_RETRY_MAX_MS, RUNTIME_DOWNLOAD_LIMITS, TransferStalledError, canary, confirm, downloadVerified, fetchManifest, isLocalDevBuild,
   msUntilSlot, putNodeBack, rejectedVersions, restore as restoreOn, retireCliVersions, runCanary, semverGt, settleRolledBack as settleRolledBackOn, shouldAutoUpdate,
@@ -12,6 +12,7 @@ import {
 import { env } from '../config/env.js'
 import { managedNodePath } from './nodeRuntime.js'
 import { placeNode } from '../testing/placeNode.js'
+import { firstStart } from '../testing/testNode.js'
 import { SpawnLockBusyError } from './daemonSpawnLock.js'
 import { PTY_PROTOCOL } from './ptyHost/protocol.js'
 import { versionsOnDisk } from './windows/cliVersions.js'
@@ -1515,19 +1516,24 @@ describe('an update that moves the daemon to Node 24', { timeout: 20_000 }, () =
   const currentNode = join(runtime, 'current-node')
   const v22 = join(runtime, 'node-v22.23.2-test', 'bin', 'node')
   const v24 = join(runtime, 'node-v24.22.2-test', 'bin', 'node')
+  const newer = join(runtime, 'node-v24.23.0-test', 'bin', 'node')
   const note = (dir: string): Record<string, unknown> => JSON.parse(readFileSync(join(dir, 'update-pending.json'), 'utf8'))
-  // The managed Nodes the suite's own runtime folder holds (vitest.setup.ts): copies of this test's Node.
-  beforeEach(() => {
-    for (const node of [v22, v24]) { mkdirSync(dirname(node), { recursive: true }); placeNode(node) }
-    writeFileSync(currentNode, `${v22}\n`)
-    // Two full copies of this test's Node: about 120 ms here, but the describe's first copy timed out at the default
-    // 10 s on a loaded CI runner (2026-11-14, run 43603619102), later ones took under a second. Root fix (follow-up):
-    // make the hook cheaper, e.g. one copy per Node shared by the describe.
+  // The managed Nodes the suite's own runtime folder holds (vitest.setup.ts): copies of this test's Node, made once for
+  // the describe and started once here. A fresh copy's first start is the slow one: 2 to 4 s on a loaded Mac against
+  // 0.04 s after (2026-11-19). Copied before each test, it ran inside the tests' 10 s waits for a canary on it, and 1 to
+  // 7 of them failed a run under load. The copies also timed out the hook at the default 10 s on a loaded CI runner
+  // (2026-11-14, run 43603619102).
+  beforeAll(() => {
+    for (const node of [v22, v24, newer]) { mkdirSync(dirname(node), { recursive: true }); placeNode(node); firstStart(node) }
   }, 60_000)
+  afterAll(() => {
+    for (const node of [v22, v24, newer]) rmSync(dirname(dirname(node)), { recursive: true, force: true })
+  })
+  beforeEach(() => { writeFileSync(currentNode, `${v22}\n`) })
   afterEach(() => {
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
-    for (const path of [currentNode, dirname(dirname(v22)), dirname(dirname(v24))]) rmSync(path, { recursive: true, force: true })
+    rmSync(currentNode, { force: true })
     for (const dir of dirs) rmSync(dir, { recursive: true, force: true })
     dirs = []
   })
@@ -1622,22 +1628,18 @@ console.log(process.execPath.includes('node-v24.') ? (named.includes('node-v24.'
     expect(events).toEqual([`ensure on ${v22}`, `staged with ${v22}`])
     expect(nodeMigration(dir)).toBe('rolled-back')
     // A Node 24 the manifest offers since: the update moves to it.
-    const newer = join(runtime, 'node-v24.23.0-test', 'bin', 'node')
-    mkdirSync(dirname(newer), { recursive: true }); placeNode(newer)
+    confirm(dir)
+    const moved: string[] = []
+    poller = startSelfUpdater({
+      currentVersion: '9.9.8', url: 'https://updates.test/metadata.json', key: 'adapter', dir, intervalMs: 20,
+      node: { ensure: installs24(moved, newer), running: v22 },
+      onStaged: () => { moved.push(`staged with ${managedNodePath()}`) },
+    })
     try {
-      confirm(dir)
-      const moved: string[] = []
-      poller = startSelfUpdater({
-        currentVersion: '9.9.8', url: 'https://updates.test/metadata.json', key: 'adapter', dir, intervalMs: 20,
-        node: { ensure: installs24(moved, newer), running: v22 },
-        onStaged: () => { moved.push(`staged with ${managedNodePath()}`) },
-      })
-      try {
-        await vi.waitFor(() => expect(moved).toHaveLength(2), { timeout: 10_000 })
-      } finally { poller.stop() }
-      expect(moved).toEqual([`ensure on ${v22}`, `staged with ${newer}`])
-      expect(nodeMigration(dir)).toBeNull()
-    } finally { rmSync(dirname(dirname(newer)), { recursive: true, force: true }) }
+      await vi.waitFor(() => expect(moved).toHaveLength(2), { timeout: 10_000 })
+    } finally { poller.stop() }
+    expect(moved).toEqual([`ensure on ${v22}`, `staged with ${newer}`])
+    expect(nodeMigration(dir)).toBeNull()
   })
 
   it('stages on the Node the daemon runs on when current-node cannot be named, and says it cannot switch', async () => {

@@ -460,7 +460,8 @@ export function startHookServer(
   type StopAcknowledgement = { status: number; reply: unknown }
   type LinkedStop = (body: BoundHookBody, firedAt: number | undefined) => StopAcknowledgement | Promise<StopAcknowledgement>
   type Receipt = { fingerprint: string; status: number; reply: unknown; pending: boolean; bytes: number; linkedStop?: LinkedStop }
-  const admissionReceipts = new Map<string, { scope: string; records: Map<string, Receipt> }>()
+  // Per agent: its receipts, how many of its admissions are in their registry write, and how many holds it has had.
+  const admissionReceipts = new Map<string, { scope: string; records: Map<string, Receipt>; writing: number; holds: number }>()
   const resolvingStops = new Map<string, { fingerprint: string; stop: LinkedStop }>()
   let receiptCount = 0, receiptBytes = 0
   const saveReceipt = (records: Map<string, Receipt>, id: string, next?: Receipt) => {
@@ -660,6 +661,8 @@ export function startHookServer(
         const preliminary = carriesStop && body.sessionId ? registry.bySession(body.sessionId) : undefined
         const stopScope = preliminary?.engine === engine ? scopeOf(preliminary) : undefined
         const stopWitness = stopScope ? handlers.captureAdmissionStop?.(preliminary!) : undefined
+        // Waited on more than registry writes (the process record, a hold, a queue paused by one): its Stop
+        // may belong to an earlier turn. A slow write, its own or an earlier hook's of its agent, only delays the reply.
         let deferred = false
         if (carriesStop) resolvingStops.set(deliveryId, { fingerprint, stop: (stop, firedAt) => {
           if (stopProvenance(stop, firedAt) !== originalStop) return conflict
@@ -701,7 +704,7 @@ export function startHookServer(
           for (const delivery of history.records.keys()) saveReceipt(history.records, delivery)
           admissionReceipts.delete(id)
         }
-        const history = admissionReceipts.get(processAgent.agentId) ?? { scope: receiptScope(processAgent)!, records: new Map() }
+        const history = admissionReceipts.get(processAgent.agentId) ?? { scope: receiptScope(processAgent)!, records: new Map(), writing: 0, holds: 0 }
         admissionReceipts.set(processAgent.agentId, history)
         const completed = history.records.get(deliveryId)
         if (completed) {
@@ -723,6 +726,10 @@ export function startHookServer(
         let committing = false, settled = false, stopRetained = false, stopUnmatched = false, stopInvocationClaimed = false
         const stopCurrent = processAgent.sessionId === body.sessionId && stopScope === scope ? stopWitness : undefined
         let followupFingerprint: string | undefined, committedIdentity: string | undefined
+        // A turn-stop answered pending before this settled, kept only until acceptance claims it or rejection drops it.
+        let parkedStop: { stop: BoundHookBody; firedAt: number | undefined } | undefined
+        // The agent's hold count when this began waiting on an earlier hook's write.
+        let waitedHolds: number | undefined
         const live = () => registry.byAgent(processAgent.agentId)
         const current = () => !isRecentlyDeleted(processAgent.agentId) && !isRecentlyDeleted(body.sessionId)
           && live()?.active !== false && scopeOf(live()) === scope
@@ -734,6 +741,7 @@ export function startHookServer(
         const held = (reason: string) => {
           clearTimeout(replyTimer)
           deferred = true
+          history.holds++
           const holds = admissionHolds.get(processAgent.agentId) ?? new Map<string, string>()
           holds.set(deliveryId, reason); admissionHolds.set(processAgent.agentId, holds)
           publishHold()
@@ -761,10 +769,20 @@ export function startHookServer(
           followupFingerprint = sent
           // The registration itself owns this native Stop, even if its second
           // HTTP delivery outruns source recovery. Never close a later live turn.
-          if (!settled || stopRetained) {
-            deferred = true
+          // Its client leaves on pending and never sends it again: acceptance claims it.
+          if (!settled) {
+            // Its bytes join its registration's receipt, inside the same budget, until settling rewrites that receipt.
+            const receipt = history.records.get(deliveryId)
+            const bytes = retainedBytes + 2 * JSON.stringify(stop).length
+            if (!receipt || receiptBytes - receipt.bytes + bytes > bytesCapacity) {
+              return { status: 429, reply: { pending: false, error: 'HOOK_ADMISSION_BUSY',
+                detail: 'Hook acknowledgement storage is full; this Stop was not kept.' } }
+            }
+            saveReceipt(history.records, deliveryId, { ...receipt, bytes })
+            parkedStop = { stop, firedAt }
             return { status: 200, reply: { pending: true } }
           }
+          if (stopRetained) return { status: 200, reply: { pending: true } }
           if (stopCurrent && !stopCurrent()) stopInvocationClaimed = true
           if (stopInvocationClaimed) return { status: 200, reply: { ok: true, duplicate: true } }
           const owner = await verifiedBoundMutation(stop, handlers)
@@ -816,7 +834,9 @@ export function startHookServer(
           const before = prior && { sessionId: prior.sessionId, transcriptPath: prior.transcriptPath,
             held: !!(prior.identityHold || prior.interpretationHold) }
           let verifySource: (() => void) | undefined, verifyPane: (() => void) | undefined
+          if (waitedHolds !== undefined && waitedHolds !== history.holds) deferred = true
           committing = true
+          history.writing++
           try {
             committed = await registry.register(hermesHome ? { ...prepared, hermesHome } : prepared, { verifiedNativeSource: true,
               ...(engine === 'hermes' && body.sessionId ? { refresh: async () => {
@@ -837,7 +857,7 @@ export function startHookServer(
                 return admissionCurrent() && current() && paneReadIdentity(live()) === inspectionIdentity
                   && !handlers.hookAdmissionBlocked?.(processAgent.agentId)
               } })
-          } finally { committing = false }
+          } finally { committing = false; history.writing-- }
           if (committed?.refusedHome) refusedHeader(CODEX_HOME_HEADER)
           if (stopCurrent && !stopCurrent()) stopInvocationClaimed = true
           if (committed && carriesStop && !stopRetained && !stopInvocationClaimed) {
@@ -887,12 +907,22 @@ export function startHookServer(
             commit,
             held,
             reject: reason => {
+              parkedStop = undefined
               clearHold()
               console.log(`[hooks] ${sid(body.sessionId ?? '?')} ${body.hookEvent ?? 'session-start'} ignored · ${reason}`)
               if (reason === 'invalid_session_registration') completedReply(400, { error: 'invalid session registration' })
               else completedReply(200, { ignored: true, reason })
             },
-            accept: () => { completedReply(200, { ok: true }); notify() },
+            accept: () => {
+              completedReply(200, { ok: true }); notify()
+              // A turn-stop parked while this was in flight is claimed as one sent now would be, through every fence.
+              const parked = parkedStop
+              parkedStop = undefined
+              // Its client left on pending and hears no reply: a claim that closed nothing is said here.
+              if (parked) void Promise.resolve(linkedStop(parked.stop, parked.firedAt)).then(({ status }) => {
+                if (status !== 200) console.log(`[hooks] ${sid(body.sessionId ?? '?')} parked Stop not claimed · status=${status}`)
+              }).catch(error => console.warn('[hooks] parked linked Stop claim failed', error))
+            },
           })
           if (queued) {
             // A registry commit has its own bounded deadline and owns its reply.
@@ -900,13 +930,17 @@ export function startHookServer(
             if (engine === 'hermes') answer(200, { pending: true })
             else setImmediate(() => {
               if (settled) return
-              const pending = () => { if (!settled) deferred = true; answer(200, { pending: true }) }
               if (committing) {
                 // The hook process itself has a five-second timeout. Slow durable
                 // preparation retains the delivery while its caller leaves promptly.
-                replyTimer = setTimeout(pending, 250)
+                replyTimer = setTimeout(() => answer(200, { pending: true }), 250)
                 replyTimer.unref()
-              } else pending()
+                return
+              }
+              // Behind an earlier hook's write of its agent it waits on a write too, unless that hook is held by then.
+              if (history.writing && !admissionHolds.has(processAgent.agentId)) waitedHolds = history.holds
+              else deferred = true
+              answer(200, { pending: true })
             })
           } else {
             saveReceipt(history.records, deliveryId)
