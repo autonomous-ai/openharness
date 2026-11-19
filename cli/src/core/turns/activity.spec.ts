@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { readInlineScreen } from '../../testing/inlineScreen.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../../lib/registry.js'
@@ -8,7 +9,10 @@ import { activityOf, createTurnActivity, type TurnActivityDeps } from './activit
 const live = { agentId: 'a1', sessionId: 's1', engine: 'claude', active: true } as RegisteredSession
 const idle = { agentId: 'a2', sessionId: 's2', engine: 'claude', active: false } as RegisteredSession
 const shell = { agentId: 'a3', sessionId: 's3', engine: 'terminal', active: true } as RegisteredSession
-const sessions = new Map([[live.sessionId, live], [idle.sessionId, idle], [shell.sessionId, shell]])
+const claw = { agentId: 'a4', sessionId: 's4', engine: 'openclaw', active: true } as RegisteredSession
+const sessions = new Map([[live.sessionId, live], [idle.sessionId, idle], [shell.sessionId, shell], [claw.sessionId, claw]])
+const pane = (name: string) => readFileSync(new URL(`../../engines/openclaw/__fixtures__/screen-${name}.txt`, import.meta.url), 'utf8')
+const running = (seconds: number) => pane('running-quiet').replace('• 45s', `• ${seconds}s`)
 
 function setup(over: Partial<TurnActivityDeps> = {}) {
   const deps: TurnActivityDeps = {
@@ -83,6 +87,25 @@ describe('turn activity', () => {
     expect(deps.terminals.capture).toHaveBeenCalledWith(live, { mode: 'visible', ansi: true })
     vi.mocked(deps.terminals.capture).mockResolvedValueOnce({ state: 'failed', reason: 'no pane' })
     expect(await runtime.capture(live)).toBeNull()
+  })
+
+  it('a pane the binding pass read shows a moving OpenClaw timer as working with no turn open; a ready pane changes nothing', async () => {
+    const { deps, readers } = setup()
+    await readers.paneRead(claw, running(41))
+    expect(readers.turnActivity.snapshot('s4')?.state).toBe('idle')
+    await readers.paneRead(claw, running(46))
+    expect(readers.turnActivity.snapshot('s4')?.state).toBe('working')
+    await readers.paneRead(claw, pane('plain'))
+    await readers.paneRead(claw, pane('plain'))
+    expect(readers.turnActivity.snapshot('s4')?.state).toBe('working')
+    expect(deps.terminals.capture).not.toHaveBeenCalled()
+  })
+
+  it('a pane the binding pass read claims nothing while withheld', async () => {
+    const { readers } = setup({ withheld: () => true })
+    await readers.paneRead(claw, running(41))
+    await readers.paneRead(claw, running(46))
+    expect(readers.turnActivity.snapshot('s4')?.state).toBe('idle')
   })
 
   it('reports the working state of the live agents asked about, and leaves out those that are not live', () => {

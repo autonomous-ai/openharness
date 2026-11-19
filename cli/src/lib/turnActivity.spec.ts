@@ -120,6 +120,17 @@ describe('verified turn activity', () => {
     await t.activity.check('s'); expect(t.frame()?.state).toBe('working')
     t.advance(); await t.activity.check('s'); expect(t.frame()?.state).toBe('idle')
   })
+  it('checks with a probe it is given in place of its own', async () => {
+    const t = setup(); t.runtime({ key: 'agent:session:pid:start', turnOpen: false }); t.answer('idle')
+    await t.activity.check('s', async () => 'working'); expect(t.frame()?.state).toBe('working')
+  })
+  it('lets a turn_ended observed while a given probe runs win over its working', async () => {
+    const t = setup(); let resolve!: (s: ActivityState) => void
+    const pending = t.activity.check('s', () => new Promise(r => { resolve = r })); await Promise.resolve()
+    t.activity.observe('s', 'turn_ended')
+    resolve('working'); await pending
+    expect(t.frame()?.state).toBe('idle')
+  })
   it('coalesces overlapping checks', async () => {
     const t = setup(); let calls = 0; let resolve!: (s: ActivityState) => void
     t.probe(() => { calls++; return new Promise(r => { resolve = r }) })
