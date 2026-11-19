@@ -136,8 +136,10 @@ multiplexer's own pty is never a tab.
 - Several clients on one session: the client used last gives the app and tab; only its tab turns the dial (`byTab`).
 - A pane the person moves to another session: it keeps the app it had until the next `session-start` or `turn-start`.
 - A detached session: no client, so the "tmux" page, as today; a tap switches the person's client used last, as today.
-- tmux started inside herdr, cmux or Herdr's own terminal: the nearer host wins in `detectHost`; this path does not run
-  for it (out of scope).
+- tmux started inside cmux or Herdr's own terminal: tmux is the nearer host (`TMUX_PANE`), so the lookup runs and the
+  agent lands on the page of the app that holds the client (cmux, Herdr); a rest there selects the tmux pane as in any
+  app. herdr started inside tmux: herdr is the nearer host, but the lookup runs on its `TMUX_PANE` all the same; no
+  special case is made for either.
 
 ### Measures
 
