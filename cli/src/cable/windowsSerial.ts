@@ -32,6 +32,8 @@ export const CLOSE_WAIT_MS = 2_000
 export const PROBE_TIMEOUT_MS = 3_000
 
 const COM_NAME = /^COM[1-9]\d{0,2}$/
+/** harness-serial's exit when an open port fails under it (serial/src/model.rs `EXIT_CLOSED`). */
+const EXIT_CLOSED = 5
 
 export interface SerialCommand { file: string; args: string[] }
 export type CommandFor = (args: string[]) => SerialCommand | null
@@ -217,8 +219,8 @@ function openError(code: number | null, stderr: string): NodeJS.ErrnoException {
  * `harness-serial open <COMn>` as a duplex stream: what is written goes to its stdin, what it prints is the dial's.
  * Resolves once it says `open` on stderr (stdout carries only the dial's bytes, so the signal cannot ride there).
  * Destroying the stream ends the child's stdin and waits for it to exit, killing it after CLOSE_WAIT_MS; a child that
- * ends by itself (an unplug) destroys the stream with its last stderr line as the error's code, which SerialLink
- * hands to the session as the reason.
+ * ends by itself (an unplug) destroys the stream with its last stderr line as the error's message and a fixed code,
+ * which SerialLink hands to the session as the reason.
  */
 export function openWindowsPort(command: SerialCommand, deps: PortStreamDeps = {}): Promise<Duplex> {
   const run = deps.spawn ?? spawn
@@ -298,8 +300,10 @@ function childStream(proc: ChildProcessWithoutNullStreams, stderr: () => string,
     // A pipe's EOF can precede the child's failure status. SerialLink treats EOF as a reason itself,
     // so classify the exit first or an unplug's useful stderr reason is replaced by "end of stream".
     if (eof && code === 0) { stream.push(null); return }
+    // The code is fixed, as SerialLink logs it: exit 5 is the port failing while open (an unplug); stderr's
+    // words stay in the message.
     const why = lastLine(stderr()) ?? `harness-serial exited ${code}`
-    stream.destroy(Object.assign(new Error(why), { code: why }))
+    stream.destroy(Object.assign(new Error(why), { code: code === EXIT_CLOSED ? 'PORT_CLOSED' : 'EIO' }))
   })
   proc.on('error', (error) => stream.destroy(Object.assign(new Error(error.message), { code: 'EIO' })))
   return stream
