@@ -7,7 +7,7 @@ import { mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { engineAccount } from '../lib/engineAccount.js'
-import { atomicWriteFile, jsonObject, readState } from '../lib/secureState.js'
+import { atomicWriteFile, atomicWriteFileAsync, jsonObject, readState } from '../lib/secureState.js'
 import { loginShellEnvironment } from '../lib/loginShellEnv.js'
 import { launchEngine, type ProductUsageLaunchSignal } from '../lib/productUsageSignals.js'
 import { LAUNCH_ERROR_CODES, PRODUCT_USAGE_ACTIONS, PRODUCT_USAGE_AUTOMATIC_ACTIONS, PRODUCT_USAGE_DAYS,
@@ -253,7 +253,7 @@ export function createProductUsage(deps: ProductUsageDeps) {
             await mkdir(dirname(deps.file), { recursive: true, mode: 0o700 })
             // Stopped meanwhile: the final state is on disk, and this older snapshot must not go over it.
             if (final !== null) break
-            atomicWriteFile(deps.file, value, 'cache')
+            await atomicWriteFileAsync(deps.file, value, 'cache')
           }
         } while (writeAgain && final === null)
         return true

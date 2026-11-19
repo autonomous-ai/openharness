@@ -130,7 +130,11 @@ export function startCloudService(options: CloudServiceOptions) {
   const transcript = (agentId: string): TranscriptMessage[] => {
     try {
       return readFileSync(transcriptFile(agentId), 'utf8').split('\n').flatMap((line) => {
-        try { return line ? [JSON.parse(line) as TranscriptMessage] : [] } catch { return [] }
+        // A line of another shape (`null`, a number for its words) is no message: its readers read its words.
+        try {
+          const message = (line ? JSON.parse(line) : null) as TranscriptMessage | null
+          return typeof message?.text === 'string' ? [message] : []
+        } catch { return [] }
       })
     } catch { return [] }
   }
