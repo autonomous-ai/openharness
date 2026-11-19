@@ -1222,6 +1222,23 @@ describe('the recap files are never written over or left half-written', () => {
     expect(Object.keys(JSON.parse(readFileSync(join(dir, 'summaries.json'), 'utf8')))).toEqual(['s1', 's2'])
   })
 
+  // A read that failed at start (EMFILE, a scanner holding the file on Windows) is tried again at the next save: the run
+  // must not go on saving nothing to it until the daemon restarts, nor bring back a session deleted meanwhile.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('a history unread at start is saved once it can be read, with what it held and without a session deleted since', async () => {
+    const first = build()
+    await turn(first, 's1')
+    await turn(first, 's2')
+    const history = join(dir, 'summaries-history.json')
+    chmodSync(history, 0o000)
+    const mirror = build()
+    chmodSync(history, 0o600)
+    mirror.deleteHistory('s1')
+    await turn(mirror, 's3')
+    expect(Object.keys(JSON.parse(readFileSync(history, 'utf8'))).sort()).toEqual(['s2', 's3'])
+    expect(mirror.recent('s2')).toHaveLength(1)
+    expect(mirror.recent('s1')).toEqual([])
+  })
+
   it('a save that fails part way leaves the four files whole', async () => {
     const mirror = build()
     await turn(mirror, 's1')
