@@ -58,8 +58,10 @@ void main() {
     model.tapCell('ag-docs');
     runTo(90300);
     expect(model.talk, TalkPhase.listening);
-    // The made-up speech, then the model's own send after the quiet, then the scripted reply turn.
-    runTo(96000);
+    // The made-up speech (2.2 s), then the model's own send after 5 s of quiet, then the scripted reply turn.
+    runTo(97000);
+    expect(model.talk, TalkPhase.listening);
+    runTo(99000);
     expect(model.talk, isNot(TalkPhase.listening));
     expect(model.toast?.text, 'Sent to docs');
     expect(model.agentById('ag-docs')!.state, AgentState.working);

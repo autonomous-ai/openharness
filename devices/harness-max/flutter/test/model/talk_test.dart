@@ -1,6 +1,7 @@
-// One tap to talk (test_max_touch.c, test_max_app.c): a cell opens its agent with the mic on; speech then 1.6 s of
-// quiet sends, nothing heard in 4 s closes the mic; the body sends at once or opens the mic again, X cancels; Back, the
-// strip and a swipe send what was heard, else cancel; the talk follows the voice pipeline.
+// One tap to talk (test_max_touch.c, test_max_app.c, and the owner's voice rules of 18 Nov): a cell opens its agent
+// with the mic on; speech then 5 s of quiet sends, nothing heard in 5 s closes the mic, ten minutes is the longest; while
+// the mic is open the glass is one Send and X cancels, a send is the Dial's tap and anything else is its dead zone; Back,
+// the strip and a swipe send what was heard, else cancel; the talk follows the voice pipeline.
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_max_bar/link/bar_link.dart';
 import 'package:harness_max_bar/model/bar_model.dart';
@@ -52,7 +53,7 @@ void main() {
     expect(m.page, BarPage.overview);
   });
 
-  test('speech, then 1.6 s of quiet: sent, "Sent to <name>", and back to Overview', () {
+  test('speech, then 5 s of quiet: sent, "Sent to <name>", and back to Overview', () {
     final b = linked(abcde), m = b.model;
     b.at(1000);
     m.tapCell('a');
@@ -64,14 +65,14 @@ void main() {
     b.at(1200);
     m.onLevel(0.1);
     expect(m.levels, [0.75, 0.1]);
-    b.at(1900);
+    b.at(3600);
     m.tick();
     expect(m.quiet, closeTo(0.5, 1e-9));
-    b.at(2699);
+    b.at(6099);
     m.tick();
     expect(m.page, BarPage.agent);
     expect(b.sent(), isEmpty);
-    b.at(2700);
+    b.at(6100);
     m.tick();
     expect(b.sent(), ['send']);
     expect([m.toast!.text, m.page, m.talk], ['Sent to a', BarPage.overview, TalkPhase.sending]);
@@ -95,29 +96,29 @@ void main() {
     expect(m.levels.first, 0);
   });
 
-  test('nothing heard in 4 s closes the mic; the page stays, and a tap on it opens the mic again', () {
+  test('nothing heard in 5 s closes the mic; the page stays, and a tap on it opens the mic again', () {
     final b = linked(abcde), m = b.model;
     b.at(5000);
     m.tapCell('a');
     b.sent();
     b.at(6000);
     m.onLevel(0.3);
-    b.at(8999);
+    b.at(9999);
     m.tick();
     expect(m.talk, TalkPhase.listening);
-    b.at(9000);
+    b.at(10000);
     m.tick();
     expect(b.sent(), ['cancel']);
     // The open agent's band says it; a toast would sit over the band.
     expect([m.talk, m.toast?.text, m.page, m.selectedId], [TalkPhase.closed, null, BarPage.agent, 'a']);
     m.onTalkLink(TalkLink.idle);
     expect(m.talk, TalkPhase.closed, reason: 'the pipeline going idle keeps the page saying why');
-    b.at(9500);
+    b.at(10500);
     m.tapBody();
     expect(b.sent(), ['talk a']);
-    expect([m.talk, m.talkStarted, m.heard], [TalkPhase.listening, at(9500), false]);
+    expect([m.talk, m.talkStarted, m.heard], [TalkPhase.listening, at(10500), false]);
     // Closed belongs to the page it closed on: Back forgets it.
-    b.at(13500);
+    b.at(15500);
     m.tick();
     expect(m.talk, TalkPhase.closed);
     m.back();
@@ -305,7 +306,7 @@ void main() {
     expect([m.page, m.selectedId, m.talk], [BarPage.agent, 'b', TalkPhase.listening]);
     b.at(10200);
     m.onLevel(0.9);
-    b.at(11800);
+    b.at(15200);
     m.tick();
     expect(b.sent(), ['send']);
     expect([m.page, m.attention!.agentId], [BarPage.attention, 'c']);
@@ -375,7 +376,7 @@ void main() {
     b.at(1000);
     m.tapCell('c');
     b.sent();
-    b.at(5000);
+    b.at(6000);
     m.tick();
     b.sent();
     expect(m.talk, TalkPhase.closed);
@@ -384,22 +385,182 @@ void main() {
     expect([m.page, m.talk], [BarPage.overview, TalkPhase.off]);
   });
 
-  test('another agent beside the open one: none heard, the mic moves to it; words heard are sent first', () {
+  test('another agent beside the open one opens with the mic on; while the mic is open a sliver is glass: it sends', () {
     final b = linked(abcde), m = b.model;
     m.tapSliver('b');
     expect([b.sent(), m.page], [isEmpty, BarPage.overview], reason: 'only beside an open agent');
+    // The mic off on the open agent: the sliver opens its agent with the mic on.
     m.tapCell('a');
+    m.cancelTalk();
     b.sent();
     m.tapSliver('b');
-    expect(b.sent(), ['cancel', 'open b', 'talk b']);
+    expect(b.sent(), ['open b', 'talk b']);
     expect([m.page, m.selectedId, m.talk, m.talkingTo], [BarPage.agent, 'b', TalkPhase.listening, 'b']);
+    // The mic open: what is being said goes, heard or not, and no other agent opens.
     m.onLevel(0.9);
     m.tapSliver('c');
-    expect(b.sent(), ['send', 'open c']);
-    expect([m.page, m.selectedId, m.talk, m.talkingTo, m.toast?.text],
-        [BarPage.agent, 'c', TalkPhase.sending, 'b', 'Sent to b'],
-        reason: "b's words go; c opens with the mic off until they are through");
+    expect(b.sent(), ['send']);
+    expect([m.page, m.talk, m.talkingTo, m.toast?.text], [BarPage.overview, TalkPhase.sending, 'b', 'Sent to b']);
+    m.onTalkLink(TalkLink.idle);
+    m.tapCell('a');
+    b.sent();
+    m.tapSliver('c');
+    expect([b.sent(), m.page], [
+      ['send'],
+      BarPage.overview
+    ]);
+    m.onTalkLink(TalkLink.idle);
+    // A sliver whose agent left the ring: glass all the same.
+    m.tapCell('a');
+    b.sent();
     m.tapSliver('gone');
-    expect([b.sent(), m.selectedId], [isEmpty, 'c']);
+    expect(b.sent(), ['send']);
   });
+
+  group("the Dial's touch while the mic is open", () {
+    test('only its tap sends: 25..350 ms down, within 8 px; a press, a hold, a flick or a slide does nothing', () {
+      final b = linked(abcde), m = b.model;
+      m.tapCell('a');
+      m.onLevel(0.9);
+      b.sent();
+      touch(b, 1000, 400, m.tapBody);
+      touch(b, 2000, 1000, m.tapBody); // the Dial's draft hold: the bar has no draft
+      touch(b, 3000, 20, m.tapBody);
+      touch(b, 3500, 200, m.tapBody, moved: kTapSlop);
+      touch(b, 4000, 200, () => m.tapSliver('b'), moved: 30, detector: true);
+      expect(b.sent(), isEmpty);
+      expect([m.page, m.selectedId, m.talk], [BarPage.agent, 'a', TalkPhase.listening]);
+      // Anywhere on the glass: the bell is a send like the body.
+      touch(b, 4500, kTapMax.inMilliseconds, m.openInbox, moved: kTapSlop - .1);
+      expect(b.sent(), ['send']);
+      expect([m.page, m.talk, m.toast!.text], [BarPage.overview, TalkPhase.sending, 'Sent to a']);
+    });
+
+    test('a slide sideways (a swipe) leaves the mic open; the 5 s quiet still sends', () {
+      final b = linked(abcde), m = b.model;
+      m.tapCell('a');
+      m.onLevel(0.9);
+      b.sent();
+      touch(b, 1000, 150, m.tapBody, moved: 120);
+      expect([b.sent(), m.talk], [isEmpty, TalkPhase.listening]);
+      b.at(5000);
+      m.tick();
+      expect(b.sent(), ['send']);
+    });
+
+    test('the tap a GestureDetector calls (a sliver) reads the contact let go just before; older, a call is a tap', () {
+      final b = linked(abcde), m = b.model;
+      m.tapCell('a');
+      b.sent();
+      touch(b, 1000, 900, () => m.tapSliver('b'), detector: true);
+      expect([b.sent(), m.talk], [isEmpty, TalkPhase.listening]);
+      // No touch behind the call (the demo's script): a tap.
+      b.at(1900 + kContactFresh.inMilliseconds + 1);
+      m.tapBody();
+      expect(b.sent(), ['send']);
+    });
+
+    test('a contact the system cancels sends nothing', () {
+      final b = linked(abcde), m = b.model;
+      m.tapCell('a');
+      b.sent();
+      b.at(1000);
+      m.touchDown(1, 100, 100);
+      b.at(1100);
+      m.touchCancel(1);
+      m.tapBody();
+      expect([b.sent(), m.talk], [isEmpty, TalkPhase.listening]);
+    });
+
+    test('a touch that begins within 450 ms of the mic opening, a send or a cancel is part of it; X never waits', () {
+      final b = linked(abcde), m = b.model;
+      touch(b, 0, 100, () => m.tapCell('a')); // the mic opens at 100: held back until 550
+      expect(b.sent(), ['open a', 'talk a']);
+      touch(b, 500, 100, m.tapBody); // a double tap
+      expect([b.sent(), m.talk], [isEmpty, TalkPhase.listening]);
+      touch(b, 560, 100, m.tapBody); // sent at 660: held back until 1110
+      expect(b.sent(), ['send']);
+      m.onTalkLink(TalkLink.idle);
+      touch(b, 1000, 100, () => m.tapCell('b'));
+      expect([b.sent(), m.page], [isEmpty, BarPage.overview], reason: 'the tap after the send opens nothing');
+      touch(b, 1200, 100, () => m.tapCell('b')); // the mic opens at 1300
+      expect(b.sent(), ['open b', 'talk b']);
+      touch(b, 1400, 100, m.closeAgent);
+      expect(b.sent(), ['cancel'], reason: 'X cancels at once');
+      expect([m.page, m.talk], [BarPage.overview, TalkPhase.off]);
+      touch(b, 1700, 100, () => m.tapCell('c'));
+      expect(b.sent(), isEmpty, reason: 'within 450 ms of the cancel');
+      touch(b, 2000, 100, () => m.tapCell('c'));
+      touch(b, 2200, 100, m.cancelTalk); // the band's X
+      expect(b.sent(), ['open c', 'talk c', 'cancel']);
+    });
+
+    test('a touch held 650 ms or more opens no mic', () {
+      final b = linked(abcde), m = b.model;
+      touch(b, 0, kHoldFrom.inMilliseconds, () => m.tapCell('a'));
+      expect([b.sent(), m.page], [isEmpty, BarPage.overview]);
+      touch(b, 1000, kHoldFrom.inMilliseconds - 1, () => m.tapCell('a'));
+      expect(b.sent(), ['open a', 'talk a']);
+      m.cancelTalk();
+      b.sent();
+      touch(b, 3000, 700, m.tapBody);
+      expect([b.sent(), m.talk], [isEmpty, TalkPhase.off]);
+      touch(b, 4000, 300, m.tapBody);
+      expect(b.sent(), ['talk a']);
+    });
+
+    test('the clock ending the talk under a finger: that touch acts on nothing when let go', () {
+      final b = linked(abcde), m = b.model;
+      m.tapCell('a');
+      b.at(100);
+      m.onLevel(0.9);
+      b.sent();
+      b.at(4000);
+      m.touchDown(1, 100, 100);
+      b.at(5100);
+      m.tick(); // 5 s of quiet: sent while the finger is down
+      expect([b.sent(), m.page], [
+        ['send'],
+        BarPage.overview
+      ]);
+      m.onTalkLink(TalkLink.idle);
+      b.at(5200);
+      m.touchUp(1, 100, 100);
+      m.tapCell('c'); // the cell under the finger
+      expect([b.sent(), m.page], [isEmpty, BarPage.overview]);
+      touch(b, 5600, 100, () => m.tapCell('c'));
+      expect(b.sent(), ['open c', 'talk c']);
+    });
+  });
+
+  test('ten minutes of speech is the longest recording: then it is sent as a tap sends it', () {
+    final b = linked(abcde), m = b.model;
+    m.tapCell('a');
+    b.sent();
+    for (var s = 1; s < 600; s++) {
+      b.at(s * 1000);
+      m.onLevel(0.9);
+      m.tick();
+    }
+    b.at(599999);
+    m.tick();
+    expect([b.sent(), m.talk], [isEmpty, TalkPhase.listening]);
+    b.at(600000);
+    m.tick();
+    expect(b.sent(), ['send']);
+    expect([m.page, m.toast!.text], [BarPage.overview, 'Sent to a']);
+  });
+}
+
+/// A finger down at `from` ms and let go `held` ms later, `moved` px from where it went down, and the intent its tap
+/// calls: as a Tap calls it, while it is let go, or ([detector]) as a GestureDetector does, just after.
+void touch(TestBar b, int from, int held, void Function() intent, {double moved = 0, bool detector = false}) {
+  final m = b.model;
+  b.at(from);
+  m.touchDown(1, 100, 100);
+  if (moved > 0) m.touchMove(1, 100 + moved, 100);
+  b.at(from + held);
+  if (detector) m.touchUp(1, 100 + moved, 100);
+  intent();
+  if (!detector) m.touchUp(1, 100 + moved, 100);
 }

@@ -54,13 +54,41 @@ with `MAX_Y`, the text keeps its size).
 - While it records, the band takes the page's bottom (from the pet's right edge): "● Listening" with the recording's
   clock, a green waveform from the mic's level, "Tap to send" with a ring that fills while the person is silent, and
   X. Above the band the page keeps its words, smaller (two rows; the working page hides its steps).
-- It sends by itself after 1.6 s of quiet that follows speech. A tap on the page sends at once. X cancels. Nothing heard
-  in 4 s: the mic closes, the notice says "Mic closed · tap to talk", and the page stays to be read. A tap on the page
-  then opens the mic again.
+- It sends by itself after 5 s of quiet that follows speech. A tap on the page sends at once. X cancels. Nothing heard
+  in 5 s: the mic closes, the notice says "Mic closed · tap to talk", and the page stays to be read. A tap on the page
+  then opens the mic again. The full voice rules (owner, 18 Nov) are in "Voice rules" below.
 - After a send: the notice "Sent to <name>", and the bar goes back to Overview.
 - On the strip, a tap on another agent sends what was said (when something was heard; else it cancels) and shows that
   agent with the mic closed. Back does the same and goes to Overview. A sideways swipe browses the ring the same way.
 - The words are not shown as they are spoken: the daemon transcribes the recording after it is sent.
+
+### Voice rules (owner, 18 Nov 2026): the Dial's, with two changes
+
+The owner set these after reading how the Dial records and sends (`devices/harness-device`: `ui/habitat/gestures.c`,
+`ui_habitat.c`, `audio_client_habitat.c`; daemon `cli/src/cable/cableSession.ts`). They are in Demo V3 now
+(`devices/harness-max/flutter/lib/model/bar_model.dart`, tests in `test/model/talk_test.dart`). **They are to be applied
+to the real code as well**: the ESP32 firmware's model (`devices/harness-max/firmware/main/app/max_ui_internal.h`
+`MAX_HEAR_MS` / `MAX_SILENCE_MS`, `max_ui_touch.c`, `max_ui_model.c`) and the live cable mode, which already shares the
+Flutter model.
+
+1. **5 s of quiet sends.** After speech, 5 s of quiet stops the recording and sends it. Nothing heard 5 s after the mic
+   opened: the mic closes and nothing is sent. (Was 1.6 s and 4 s.) The Dial itself never stops on quiet.
+2. **X cancels; a tap anywhere else on the glass sends.** While the mic is open the whole glass is one Send, a dimmed
+   agent beside the open one included (it no longer moves the mic to that agent), and the tap does nothing else. X
+   drops the recording, at once, whatever the guard below says.
+3. **Everything else as the Dial:**
+   - A send is the Dial's tap: down 25..350 ms, the finger within 1.2 mm (`kTapSlop` 8 px of the canvas) of where it
+     went down. Anything else is the dead zone: a press of 350 ms or more, the Dial's 650..1800 ms draft hold (the bar
+     has no draft page yet, so it is dead too), a flick under 25 ms, a finger that slid. Nothing happens; the mic stays
+     open, and the 5 s quiet still sends.
+   - A touch that opens the mic (a cell, the page, Say it) lets go before 650 ms; held longer it opens nothing.
+   - The mic opening, a send and a cancel each take the touches that begin within 450 ms after them as part of the
+     same intent (the Dial's `ht_gesture_guard`), so a double tap neither opens and sends nor sends and opens again.
+   - When the clock ends the talk (the quiet send, the mic closing, the agent leaving the ring) under a finger, that
+     touch acts on nothing when it lets go (the Dial cancels a live gesture when its view changes).
+   - Ten minutes is the longest recording (the Dial's 600 s, the daemon's `VOICE_MAX_BYTES`): then it is sent.
+   - The recipient is always the open agent; the daemon transcribes after the send, and an empty transcript is the
+     daemon's "Didn't catch that".
 
 ## Who takes the glass
 

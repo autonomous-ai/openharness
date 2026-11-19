@@ -1,6 +1,8 @@
 // The bar's state and its rules (spec: docs/superpowers/specs/2026-11-18-harness-max-v2-design.md, Demo V2's rules,
 // ported from devices/harness-max/firmware/main/app/max_ui_*.c). The computer feeds it through the `on*` inputs, the
 // person through the intents, and the app's ticker through tick(). Pages only read its fields and call intents.
+import 'dart:math' as math;
+
 import 'package:flutter/foundation.dart';
 
 import '../link/bar_link.dart';
@@ -13,9 +15,35 @@ const int kSegments = 6;
 const int kInboxMax = 12;
 const int kLevels = 48;
 
-/// The talk's timing: nothing heard closes the mic; quiet after speech sends.
-const Duration kHearTimeout = Duration(milliseconds: 4000);
-const Duration kSilenceSend = Duration(milliseconds: 1600);
+/// The talk's timing (the owner's voice rules, 18 Nov): nothing heard in 5 s closes the mic and sends nothing; speech
+/// then 5 s of quiet sends.
+const Duration kHearTimeout = Duration(milliseconds: 5000);
+const Duration kSilenceSend = Duration(milliseconds: 5000);
+
+/// The longest recording: the Dial's 600 s (ui_habitat.c) and the daemon's VOICE_MAX_BYTES. Then it is sent as a tap
+/// sends it.
+const Duration kTalkMax = Duration(minutes: 10);
+
+/// The Dial's touch (gestures.c, ui_habitat.c), which the owner kept for the bar, 18 Nov. While the mic is open the
+/// glass is one Send, and a send is the Dial's tap: down 25..350 ms, the finger within [kTapSlop] of where it went down.
+/// A longer press (the Dial's 650..1800 ms hold opens a draft there; the bar has none) or a finger that moved is the
+/// dead zone: nothing happens and the mic stays open. X still cancels.
+const Duration kTapMin = Duration(milliseconds: 25);
+const Duration kTapMax = Duration(milliseconds: 350);
+
+/// The Dial's 12 px, 1.20 mm on its glass; 1.2 mm is 8 px of the bar's canvas on Max's 8.8" glass (1920 px for the
+/// canvas's 1480, 225 ppi), about 1.6 mm on the Orange Pi's.
+const double kTapSlop = 8;
+
+/// A touch that opens the mic lets go before this; held longer it opens nothing (the Dial's hold, 650 ms).
+const Duration kHoldFrom = Duration(milliseconds: 650);
+
+/// A voice action (the mic opening, a send, a cancel) takes the touches that begin within this after it as part of
+/// it, so a double tap is one intent (the Dial's ht_gesture_guard, 450 ms). X is never held back.
+const Duration kVoiceGuard = Duration(milliseconds: 450);
+
+/// A tap's intent reads the contact let go within this; older, or none (the demo's script, tests), the call is a tap.
+const Duration kContactFresh = Duration(milliseconds: 200);
 
 /// Ambient after a minute untouched; a done or failed Attention returns by itself; a toast's life.
 const Duration kAmbientAfter = Duration(seconds: 60);
@@ -133,6 +161,16 @@ class BarModel extends ChangeNotifier {
 
   /// The last speech heard: the quiet before the automatic send counts from it.
   DateTime? _quietFrom;
+
+  /// The glass's contact (BarScreen feeds it): which finger, when it went down and was let go, where it went down, the
+  /// farthest it went from there, and whether it began inside [kVoiceGuard] or the clock voided it.
+  int? _finger;
+  DateTime? _downAt, _upAt;
+  double _downX = 0, _downY = 0, _far = 0;
+  bool _held = false;
+
+  /// Touches that begin before this are part of the last voice action.
+  DateTime? _guardUntil;
 
   /// Names each question.read ("q1", "q2"...): a late reply to an older read is told apart from the current one's.
   int _askSerial = 0;
@@ -631,11 +669,73 @@ class BarModel extends ChangeNotifier {
   /// Any touch: the idle clock starts again.
   void touched() => _idleFrom = now();
 
+  /// A finger on the glass, in the canvas's px (BarScreen sees every contact). The intents its tap calls read it: a
+  /// Tap's call comes while it is let go, a GestureDetector's just after [touchUp].
+  void touchDown(int finger, double x, double y) {
+    _finger = finger;
+    _downAt = now();
+    _upAt = null;
+    _downX = x;
+    _downY = y;
+    _far = 0;
+    final g = _guardUntil;
+    _held = g != null && _downAt!.isBefore(g);
+  }
+
+  void touchMove(int finger, double x, double y) {
+    if (finger != _finger || _upAt != null) return;
+    final dx = x - _downX, dy = y - _downY, d2 = dx * dx + dy * dy;
+    if (d2 > _far * _far) _far = math.sqrt(d2);
+  }
+
+  void touchUp(int finger, double x, double y) {
+    if (finger != _finger || _upAt != null) return;
+    touchMove(finger, x, y);
+    _upAt = now();
+  }
+
+  /// The system took the contact (PointerCancel): no tap of it acts while the mic is open.
+  void touchCancel(int finger) {
+    if (finger != _finger || _upAt != null) return;
+    _held = true;
+    _upAt = now();
+  }
+
+  /// The contact the intent being called answers, or null when it answers no touch (the demo's script, tests).
+  ({Duration down, double far, bool held})? _contact() {
+    final d = _downAt, up = _upAt, t = now();
+    if (d == null || (up != null && t.difference(up) > kContactFresh)) return null;
+    return (down: (up ?? t).difference(d), far: _far, held: _held);
+  }
+
+  /// While the mic is open, whether this touch sends: the Dial's tap; anything else is the dead zone.
+  bool _sendTap() {
+    final c = _contact();
+    if (c == null) return true;
+    return !c.held && c.down >= kTapMin && c.down <= kTapMax && c.far < kTapSlop;
+  }
+
+  /// Whether this touch may open the mic: let go before [kHoldFrom], and not part of the last voice action.
+  bool _startTap() {
+    final c = _contact();
+    return c == null || (!c.held && c.down < kHoldFrom);
+  }
+
+  /// A voice action: the touches that begin within [kVoiceGuard] are part of it.
+  void _guard() => _guardUntil = now().add(kVoiceGuard);
+
+  /// The clock ended the talk under a finger: that contact acts on nothing (the Dial cancels a live gesture when its
+  /// view changes), and the next ones within the guard are part of it.
+  void _voidContact() {
+    if (_downAt != null && _upAt == null) _held = true;
+    _guard();
+  }
+
   /// One tap on a cell: the agent page with the mic open (agent.open and a recording); a waiting agent opens
   /// Attention; an agent without voice opens its page with the mic closed.
   void tapCell(String agentId) {
     touched();
-    if (_sendsFirst()) return;
+    if (_sendsFirst() || !_startTap()) return;
     final a = agentById(agentId);
     if (a == null) return; // a cell whose agent left the ring since it was drawn opens nothing
     if (a.state == AgentState.asking) {
@@ -721,7 +821,7 @@ class BarModel extends ChangeNotifier {
   /// The agent page's body: sends at once while listening; opens the mic when it is off or closed.
   void tapBody() {
     touched();
-    if (_sendsFirst()) return;
+    if (_sendsFirst() || !_startTap()) return;
     final a = page == BarPage.agent ? selected : null;
     if (a == null) return;
     if (_canTalk(a) && takesVoice(a)) {
@@ -739,20 +839,18 @@ class BarModel extends ChangeNotifier {
     if (talk == TalkPhase.listening) {
       if (heard) _notice('Cancelled, nothing sent');
       _setTalk(TalkPhase.off);
+      _guard();
       link.cancelTalk();
     }
     _show(BarPage.overview);
     _publish();
   }
 
-  /// A dimmed agent beside the open one: what was being said is settled first (sent when something was heard, else
-  /// dropped), then that agent opens as a cell's tap opens it, the mic on when it is free.
+  /// A dimmed agent beside the open one: that agent opens as a cell's tap opens it, the mic on when it is free. While
+  /// the mic is open a sliver is glass like the rest (the owner's rule, 18 Nov): the tap sends, and opens nothing.
   void tapSliver(String agentId) {
-    if (page != BarPage.agent || agentById(agentId) == null) {
-      touched();
-      return;
-    }
-    if (talk == TalkPhase.listening) _settleTalk()();
+    touched();
+    if (_sendsFirst() || page != BarPage.agent || agentById(agentId) == null) return;
     tapCell(agentId);
   }
 
@@ -762,6 +860,7 @@ class BarModel extends ChangeNotifier {
     if (talk != TalkPhase.listening) return;
     final said = heard;
     _setTalk(TalkPhase.off);
+    _guard();
     _notice(said ? 'Cancelled, nothing sent' : 'Mic closed');
     link.cancelTalk();
     _publish();
@@ -793,7 +892,7 @@ class BarModel extends ChangeNotifier {
   /// Attention's "Say it": the agent page with the mic open.
   void sayIt() {
     touched();
-    if (_sendsFirst()) return;
+    if (_sendsFirst() || !_startTap()) return;
     final at = attention;
     if (page != BarPage.attention || at == null || at.kind != AttnKind.ask) return;
     final a = agentById(at.agentId);
@@ -1366,6 +1465,7 @@ class BarModel extends ChangeNotifier {
   void _listenTo(Agent a) {
     _talkId = a.id;
     _setTalk(TalkPhase.listening);
+    _guard();
   }
 
   void _setTalk(TalkPhase p) {
@@ -1401,6 +1501,7 @@ class BarModel extends ChangeNotifier {
       _notice(a != null ? 'Sent to ${a.name}' : 'Sent');
     }
     _setTalk(TalkPhase.sending);
+    _guard();
     return () => link.sendTalk();
   }
 
@@ -1424,17 +1525,19 @@ class BarModel extends ChangeNotifier {
     return () => link.cancelTalk();
   }
 
-  /// While the mic is open the page is its send: any tap that is not X, Back, the strip or a swipe sends it now, and
-  /// does nothing else (C recording_tap).
+  /// While the mic is open the glass is its send: any tap that is not X sends it now, and does nothing else (C
+  /// recording_tap; the owner's rule, 18 Nov). A touch in the Dial's dead zone (held past [kTapMax], a finger that
+  /// moved, one that began inside the guard) is taken too, and does nothing: the mic stays open.
   bool _sendsFirst() {
     if (talk != TalkPhase.listening) return false;
-    _sendOnward()();
+    if (_sendTap()) _sendOnward()();
     _publish();
     return true;
   }
 
-  /// The clock's side of a recording: speech then quiet sends it, nothing heard closes the mic (the page stays), and
-  /// an agent gone from the ring takes its page with it.
+  /// The clock's side of a recording: speech then [kSilenceSend] of quiet sends it, as does [kTalkMax]; nothing heard
+  /// in [kHearTimeout] closes the mic (the page stays); an agent gone from the ring takes its page with it. Whatever
+  /// the clock ends, a finger on the glass then acts on nothing.
   void Function()? _talkDue() {
     if (talk != TalkPhase.listening) return null;
     final id = _talkId;
@@ -1442,17 +1545,21 @@ class BarModel extends ChangeNotifier {
       // Its page went with it. Only that page: a ring that emptied has put Ambient up, and an empty Overview is not
       // where the person was.
       if (page == BarPage.agent) _show(BarPage.overview);
+      _voidContact();
       return _settleTalk();
     }
     final t = now();
+    final started = talkStarted ?? t;
     if (heard) {
       final from = _quietFrom ?? t;
-      return t.isBefore(from.add(kSilenceSend)) ? null : _sendOnward();
+      if (t.isBefore(from.add(kSilenceSend)) && t.isBefore(started.add(kTalkMax))) return null;
+      _voidContact();
+      return _sendOnward();
     }
-    final from = talkStarted ?? t;
-    if (t.isBefore(from.add(kHearTimeout))) return null;
+    if (t.isBefore(started.add(kHearTimeout))) return null;
     // The open agent's band says "Mic closed · tap to talk": no toast over it.
     _setTalk(TalkPhase.closed);
+    _voidContact();
     return () => link.cancelTalk();
   }
 

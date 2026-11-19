@@ -199,7 +199,7 @@ enum AmbientMood { quiet, notConnected, noAgents }
 /// - [off]: closed, never opened on this page ("Tap to talk").
 /// - [listening]: recording ("● Listening", the waveform, the quiet ring).
 /// - [sending]: the recording is out to the computer.
-/// - [closed]: nothing was heard in 4 s; the page stays ("Mic closed · tap to talk").
+/// - [closed]: nothing was heard in 5 s; the page stays ("Mic closed · tap to talk").
 enum TalkPhase { off, listening, sending, closed }
 
 /// The toast at the bar's foot: a line, and optionally the agent a tap on it opens in Attention.

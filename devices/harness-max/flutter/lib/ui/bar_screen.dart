@@ -21,9 +21,17 @@ class BarScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Listener(
-        // Every touch, a drag through Inbox or Apps too, starts the idle clock again, not only the taps that act.
+        // Every touch, a drag through Inbox or Apps too, starts the idle clock again, not only the taps that act. The
+        // model also hears how long each finger stays down and how far it goes: while the mic is open only the Dial's
+        // tap sends (BarModel.kTapMax, kTapSlop).
         behavior: HitTestBehavior.translucent,
-        onPointerDown: (_) => model.touched(),
+        onPointerDown: (e) {
+          model.touched();
+          model.touchDown(e.pointer, e.localPosition.dx, e.localPosition.dy);
+        },
+        onPointerMove: (e) => model.touchMove(e.pointer, e.localPosition.dx, e.localPosition.dy),
+        onPointerUp: (e) => model.touchUp(e.pointer, e.localPosition.dx, e.localPosition.dy),
+        onPointerCancel: (e) => model.touchCancel(e.pointer),
         child: ListenableBuilder(
           listenable: model,
           builder: (context, _) => Stack(fit: StackFit.expand, children: [

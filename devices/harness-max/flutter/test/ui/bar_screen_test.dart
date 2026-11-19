@@ -1,6 +1,8 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_max_bar/dev/fixtures.dart';
+import 'package:harness_max_bar/link/bar_link.dart';
+import 'package:harness_max_bar/model/bar_model.dart';
 import 'package:harness_max_bar/model/types.dart';
 import 'package:harness_max_bar/ui/bar_screen.dart';
 import 'package:harness_max_bar/ui/overview/open_agent.dart';
@@ -98,5 +100,45 @@ void main() {
     await tester.dragFrom(const Offset(900, 160), const Offset(-200, 0));
     await tester.pump(const Duration(milliseconds: 400));
     expect(m.calls, contains('touched'));
+  });
+
+  testWidgets("the glass tells the model each finger's time and travel: with the mic open a press, a slide or a "
+      'double tap sends nothing, a tap sends', (tester) async {
+    await tester.runAsync(preloadPets);
+    var now = DateTime(2026, 11, 18, 14, 32);
+    final link = NullLink();
+    final m = BarModel(link: link, clock: () => now);
+    m.onLink(true, computer: 'MacBook Pro');
+    m.onAgents(const [
+      AgentRow(id: 'a', name: 'a', engine: 'claude'),
+      AgentRow(id: 'b', name: 'b', engine: 'codex'),
+    ]);
+    await pumpOnBar(tester, BarScreen(model: m));
+    // A tap on a cell opens its agent with the mic on.
+    final cell = tester.getCenter(find.text('a').first);
+    Future<void> press(Offset at, int ms, {Offset by = Offset.zero}) async {
+      final g = await tester.startGesture(at);
+      if (by != Offset.zero) await g.moveBy(by);
+      now = now.add(Duration(milliseconds: ms));
+      await tester.pump(Duration(milliseconds: ms));
+      await g.up();
+      await tester.pump();
+    }
+
+    await press(cell, 100);
+    expect(link.sent, ['open a', 'talk a']);
+    await tester.pump(const Duration(milliseconds: 600));
+    final body = tester.getCenter(find.byType(OpenAgent));
+    link.sent.clear();
+    await press(body, 100); // 100 ms after the mic opened: the same intent as the tap that opened it
+    now = now.add(const Duration(seconds: 1));
+    await press(body, 500);
+    now = now.add(const Duration(seconds: 1));
+    await press(body, 120, by: const Offset(30, 0));
+    expect([link.sent, m.talk], [isEmpty, TalkPhase.listening]);
+    now = now.add(const Duration(seconds: 1));
+    await press(body, 120);
+    expect(link.sent, ['send']);
+    expect(m.talk, TalkPhase.sending);
   });
 }
