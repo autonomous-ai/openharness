@@ -14,7 +14,7 @@
  * Moved verbatim out of `runForeground` (the core boundary, step 9: docs/design/2026-10-03-harnessd.md).
  */
 import { agyPaneIdle } from '../../engines/agy/contract.js'
-import { sid } from '../../lib/log.js'
+import { errorKind, sid } from '../../lib/log.js'
 import type { LiveEvent } from '../../engines/kit/events.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { OtherStreams } from '../engines/otherStreams.js'
@@ -59,7 +59,7 @@ export function createAgyBackstop({ streams, bySession, captureTerminal, drain, 
         console.log(`[turn] ${sid(sessionId)} closed by the agy idle backstop · no final Stop arrived`)
         emit(sessionId, await streams.close(sessionId, {}))
       })().catch((err) => {
-        console.error('[agy] idle backstop failed:', err instanceof Error ? err.message : err)
+        console.error('[agy] idle backstop failed:', errorKind(err))
       })
     }, AGY_IDLE_WATCH_MS)
     timer.unref?.()

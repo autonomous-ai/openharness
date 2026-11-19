@@ -7,7 +7,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { performance } from 'node:perf_hooks'
-import { ignoreLogWriteErrors, trimLogFile, ts } from '../lib/log.js'
+import { errorKind, ignoreLogWriteErrors, trimLogFile, ts } from '../lib/log.js'
 import { folderFingerprint } from './leanBundle.js'
 import { CORE, leanServices } from './leanServices.js'
 import { platformFromEnv, type PlatformName } from './platform.js'
@@ -269,7 +269,7 @@ export function probeMaster(config: { env: NodeJS.ProcessEnv; execArgv: string[]
     say(`${PROBE_ANSWER} · protocol ${status.protocol} · v${status.masterVersion} · ${PROBE_HANDOVER}`)
     return 0
   } catch (error) {
-    say(`harnessd-probe failed: ${error instanceof Error ? error.message : String(error)}`)
+    say(`harnessd-probe failed: ${errorKind(error)}`)
     return 1
   }
 }
@@ -338,7 +338,7 @@ export function runMaster(config: MasterConfig): Supervisor {
   const takeOver = ({ from, token }: { from: number; token: string }): boolean => {
     const leaving = (why: string): false => { log(`[harnessd] ${why} — leaving`); return false }
     const stopped = `the master that started this one (pid ${from}) stopped waiting for it`
-    const write = (pid: number): string | null => { try { writePidFile(pid); return null } catch (error) { return (error as Error).message } }
+    const write = (pid: number): string | null => { try { writePidFile(pid); return null } catch (error) { return errorKind(error) } }
     if (!markerFile || !takeHandover(markerFile, token, process.pid) || !mayClaimPidFile(markerFile, token)) return leaving(stopped)
     const failed = write(process.pid)
     if (failed !== null) return leaving(`could not take over from pid ${from} (${failed})`)
@@ -473,7 +473,7 @@ export function runMaster(config: MasterConfig): Supervisor {
     // On a full disk the claim fails, and the master carries on without it: it was thrown out of the
     // core's `bound` message, and took the master down.
     claimPidFile: () => {
-      try { writePidFile() } catch (error) { log(`[harnessd] could not write the pid file: ${(error as Error).message}`) }
+      try { writePidFile() } catch (error) { log(`[harnessd] could not write the pid file: ${errorKind(error)}`) }
     },
     // Removed as this master exits, below: once a handover under way (Windows) is decided.
     releasePidFile: () => { releaseOnExit = true },
@@ -512,7 +512,7 @@ export function runMaster(config: MasterConfig): Supervisor {
     // which is never a reason for the master to stop.
     coreUp: () => {
       if (reexec && markerFile) removeMarker(markerFile)
-      try { config.coreUp?.(node) } catch (error) { log(`[harnessd] what the master does after its core came up failed: ${(error as Error).message}`) }
+      try { config.coreUp?.(node) } catch (error) { log(`[harnessd] what the master does after its core came up failed: ${errorKind(error)}`) }
     },
   }, options, { version: config.version, resume, unjudgedUpdate: unjudged })
   for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) onSignal(signal, () => stopAll(signal))

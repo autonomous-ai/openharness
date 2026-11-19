@@ -8,7 +8,7 @@
 import type { BackendSocket } from '../../backendSocket.js'
 import type { AgentFrame } from '../../lib/agentFrame.js'
 import type { CloseAgentService } from '../../lib/closeAgentService.js'
-import { preview, sid } from '../../lib/log.js'
+import { errorKind, sid } from '../../lib/log.js'
 import { matchesLaunchReceipt, RegistryOwnershipChanged, type registry, type RegisteredSession } from '../../lib/registry.js'
 import { RuntimeProfileControlError, type RuntimeProfileErrorCode } from '../../lib/runtimeControl.js'
 import { pickedLaunchModel } from '../../lib/launchModel.js'
@@ -60,7 +60,7 @@ export function createAgentUpdate({
     const current = () => matchesLaunchReceipt(registry.resolve(s!.agentId), s!)
       && JSON.stringify(registry.resolve(s!.agentId)?.launchModel) === JSON.stringify(s!.launchModel)
     const persistenceFailed = (error: unknown) => {
-      console.error('[agent_update] explicit choice publication failed')
+      console.error(`[agent_update] explicit choice publication failed · ${errorKind(error)}`)
       reply({ error: error instanceof RegistryOwnershipChanged ? 'AGENT_CHANGED' : 'PERSISTENCE_UNCONFIRMED' })
     }
     if (hasProfile) {
@@ -71,11 +71,7 @@ export function createAgentUpdate({
       try {
         await onRuntimeProfileUpdate(projectId, payload.selectedModel)
       } catch (error) {
-        if (!(error instanceof RuntimeProfileControlError)) {
-          const name = error instanceof Error ? preview(error.name, 80) : 'UnknownError'
-          const message = error instanceof Error ? preview(error.message, 200) : 'non-Error exception'
-          console.error(`[agent_update] model update failed: ${name}: ${message}`)
-        }
+        if (!(error instanceof RuntimeProfileControlError)) console.error(`[agent_update] model update failed: ${errorKind(error)}`)
         const code: RuntimeProfileErrorCode | 'INTERNAL' = error instanceof RuntimeProfileControlError ? error.code : 'INTERNAL'
         reply({ error: code })
         return

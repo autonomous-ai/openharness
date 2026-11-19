@@ -231,7 +231,7 @@ describe('pending hook admission', () => {
     expect(newer.accept).toHaveBeenCalledOnce()
     queue.close()
     reject(new Error('late attachment failed')); await flush()
-    expect(warning).toHaveBeenCalledOnce()
+    expect(warning).toHaveBeenCalledExactlyOnceWith('[hooks] pending admission callback failed', 'Error')
     expect(vi.getTimerCount()).toBe(0)
     warning.mockRestore()
   })

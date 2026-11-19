@@ -14,7 +14,7 @@
  * A separate flight for each agent, after the boot: two passes never dispatch the same agent twice. An agent
  * the person stopped or closed meanwhile is no longer held, and is left alone.
  */
-import { sid } from '../../lib/log.js'
+import { errorKind, sid } from '../../lib/log.js'
 import { windowsHeldPaneArgv } from '../../lib/windows/engineStart.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 import type { RestoreSummary } from '../../lib/restoreAgents.js'
@@ -65,7 +65,7 @@ export function createHeldLaunches({ registry, restore, log }: HeldLaunchesDeps)
       retryTimer = undefined
       if (!summary.retry) quietPasses++
       void restoreHeld(undefined, false).catch(error => {
-        log(`[restore] core contention retry failed: ${String(error)}`)
+        log(`[restore] core contention retry failed: ${errorKind(error)}`)
         retryContention({ ...empty(), retry: true })
       })
     }, summary.retry ? 500 : heldRetryMs(quietPasses))

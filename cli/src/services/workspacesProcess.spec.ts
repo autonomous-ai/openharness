@@ -59,8 +59,8 @@ describe('workspaces in their own process', () => {
     options.onConnected!({ query: vi.fn(async () => { throw new Error('the core went away') }) })
     options.onConnected!({ query: vi.fn(async () => { throw 'closed' }) })
     await flush()
-    expect(warn.mock.calls).toEqual([['[workspaces] could not tell the core this process makes folders · the core went away'],
-      ['[workspaces] could not tell the core this process makes folders · closed'],
+    expect(warn.mock.calls).toEqual([['[workspaces] could not tell the core this process makes folders · Error'],
+      ['[workspaces] could not tell the core this process makes folders · string'],
       ['[agents] the core did not answer what agents to follow (no answer): none is heard of as it runs']])
     warn.mockRestore()
   })

@@ -258,9 +258,9 @@ describe('harnessd\'s master and services lean', () => {
       const created = await client.request('agent_create', { engine: 'amp', cwd: cwd('lean-amp') }, 90_000)
       expect(created.error, JSON.stringify(created)).toBeUndefined()
       await until('the loader to say the readers are unavailable', () => unavailable('screens') > 0 || null, 30_000, 200)
-      expect(d.log()).toMatch(/\[engine screens\] unavailable · .*core-legacyScreen-/)
+      expect(d.log()).toMatch(/\[engine screens\] unavailable · ERR_MODULE_NOT_FOUND$/m)
       await until('the loader to say Amp\'s code is unavailable', () => unavailable('amp') > 0 || null, 30_000, 200)
-      expect(d.log()).toMatch(/\[engine amp\] unavailable · .*core-inProcess-/)
+      expect(d.log()).toMatch(/\[engine amp\] unavailable · ERR_MODULE_NOT_FOUND$/m)
       // Native launch and plugin installation now belong to eager core. Losing the legacy
       // lazy hooks module cannot prevent an OpenCode launch. Ask needs no probed flag here.
       const launched = await client.request('agent_create', { engine: 'opencode', cwd: cwd('lean-opencode'), permissionMode: 'ask', bypassPermission: false }, 90_000)

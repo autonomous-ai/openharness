@@ -23,6 +23,7 @@ import { prepareInstructionWrites } from '../../scm/launch.js'
 import { opencodeMajorVersion } from '../../engines/launchControl.js'
 import { installOpencodePlugin } from '../../engines/nativeHooks.js'
 import { missingHookScript } from '../../engines/kit/notifyHooks.js'
+import { HookPreparationHeld } from '../../engines/kit/hookHeld.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
 import { projectsRoot } from '../../lib/projectFolder.js'
 import { NativeFiles } from '../../engines/kit/nativeFiles.js'
@@ -232,6 +233,7 @@ describe('creating an agent', () => {
       else expect(result.ok).toBe(true)
       expect(preTrustCodexProject, JSON.stringify(vi.mocked(console.warn).mock.calls)).toHaveBeenCalledTimes(expected ? 1 : 0)
       if (expected) expect(preTrustCodexProject).toHaveBeenCalledWith(cwd, mode === 'legacy' ? null : '/fixture/selected')
+      if (mode === 'error' || mode === 'thrown text') expect(console.warn).toHaveBeenCalledWith(`[agent] pre-trust skipped · codex · ${mode === 'error' ? 'Error' : 'string'}`)
     })
 
   // A Claude Code agent in an empty project here is trusted as a Codex one is, in the profile it reads.
@@ -544,6 +546,11 @@ describe('creating an agent', () => {
       vi.mocked(materializeWorkspace).mockRejectedValueOnce(new Error('disk full')).mockRejectedValueOnce('worse')
       expect(await create(request({ dsh: 'blender' }))).toMatchObject({ error: 'DSH_MATERIALIZE_FAILED', detail: 'could not prepare the workspace for blender · disk full' })
       expect(await create(request({ dsh: 'blender' }))).toMatchObject({ detail: 'could not prepare the workspace for blender · worse' })
+      // The reply keeps the words; the log names the kind alone.
+      expect(vi.mocked(console.warn).mock.calls.map(([line]) => String(line))).toEqual([
+        '[agent] create blender refused · could not prepare the workspace for blender · Error',
+        '[agent] create blender refused · could not prepare the workspace for blender · string',
+      ])
       launchDsh.mockResolvedValueOnce({ ok: false, error: 'DSH_RUNTIME', detail: 'no runtime', thrown: 'Error: no runtime' })
       expect(await create(request({ dsh: 'blender' }))).toEqual({ ok: false, error: 'DSH_RUNTIME', detail: 'no runtime' })
       launchDsh.mockResolvedValueOnce({ ok: false, error: 'DSH_UNAVAILABLE', detail: 'Store unavailable', unavailable: 'store' })
@@ -572,10 +579,16 @@ describe('creating an agent', () => {
       capabilities.mockResolvedValueOnce({ sessionEnv: false })
       expect(await create(request({ grid }))).toMatchObject({ error: 'TMUX_TOO_OLD_FOR_GRID' })
       const configured = { ok: true, launch: { env: {}, args: [], webSearch: 'off', configDir: { envVar: 'PI_CONFIG', files: {}, links: [] } } }
-      buildGridLaunch.mockResolvedValueOnce(configured as never).mockResolvedValueOnce(configured as never)
+      buildGridLaunch.mockResolvedValueOnce(configured as never).mockResolvedValueOnce(configured as never).mockResolvedValueOnce(configured as never)
       vi.mocked(writeGridConfigDir).mockRejectedValueOnce(new Error('read-only')).mockRejectedValueOnce('worse')
+        .mockRejectedValueOnce(new HookPreparationHeld('the generated configuration directory is not private'))
       expect(await create(request({ grid }))).toMatchObject({ error: 'GRID_CONFIG_FAILED', detail: "could not write claude's grid configuration · read-only" })
       expect(await create(request({ grid }))).toMatchObject({ detail: "could not write claude's grid configuration · worse" })
+      expect(await create(request({ grid }))).toMatchObject({ error: 'GRID_CONFIG_FAILED' })
+      expect(console.warn).toHaveBeenCalledWith("[agent] create claude refused · could not write claude's grid configuration · Error")
+      expect(console.warn).toHaveBeenCalledWith("[agent] create claude refused · could not write claude's grid configuration · string")
+      // A held publication says what holds it, in the fixed words of its reason.
+      expect(console.warn).toHaveBeenCalledWith("[agent] create claude refused · could not write claude's grid configuration · the generated configuration directory is not private")
     })
 
 
@@ -718,6 +731,8 @@ describe('creating an agent', () => {
       vi.mocked(preTrustClaudeProject).mockImplementationOnce(() => { throw new Error('settings locked') }).mockImplementationOnce(() => { throw 'worse' })
       expect(await create(request({ dsh: 'blender' }))).toMatchObject({ ok: true })
       expect(await create(request({ dsh: 'blender' }))).toMatchObject({ ok: true })
+      expect(console.warn).toHaveBeenCalledWith('[dsh] pre-trust skipped · claude · Error')
+      expect(console.warn).toHaveBeenCalledWith('[dsh] pre-trust skipped · claude · string')
       vi.mocked(materializeWorkspace).mockResolvedValueOnce({ warnings: [], created: ['AGENTS.md'], kept: [] } as never)
       await create(request({ dsh: 'blender' }))
       expect(preTrustClaudeProject).toHaveBeenCalledTimes(3)

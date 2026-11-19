@@ -48,7 +48,8 @@ describe('the loader', () => {
     expect(loader.loaded('gone')).toBeNull()
     expect(gone).toHaveBeenCalledTimes(1)
     expect(log).toHaveBeenCalledTimes(1)
-    expect(log.mock.calls[0][0]).toMatch(/^\[engine gone\] unavailable · .*core-legacyScreen-GONE\.mjs/)
+    // Its kind, never the file it could not find.
+    expect(log.mock.calls[0][0]).toMatch(/^\[engine gone\] unavailable · [A-Za-z_$][\w$]*( [A-Z][A-Z0-9_]+)?$/)
     expect(log.mock.calls[0][0]).not.toContain('\n')
     // Another module still loads.
     expect(await loader.load('other')).toEqual({ ok: true })
@@ -65,7 +66,7 @@ describe('the loader', () => {
     await tick()
     expect(await loader.load('throws')).toBeNull()
     expect(loader.loaded('throws')).toBeNull()
-    expect(log.mock.calls).toEqual([['[engine throws] unavailable · a chunk that throws as it loads']])
+    expect(log.mock.calls).toEqual([['[engine throws] unavailable · Error']])
     expect((await loader.load('fine'))?.fine).toBe(true)
   })
 
@@ -77,7 +78,7 @@ describe('the loader', () => {
     }, log)
     expect(await loader.load('sync')).toBeNull()
     expect(await loader.load('odd')).toBeNull()
-    expect(log.mock.calls).toEqual([['[engine sync] unavailable · thrown in line'], ['[engine odd] unavailable · a plain string']])
+    expect(log.mock.calls).toEqual([['[engine sync] unavailable · Error'], ['[engine odd] unavailable · string']])
   })
 })
 

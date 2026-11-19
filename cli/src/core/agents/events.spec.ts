@@ -75,8 +75,8 @@ describe('agent events', () => {
     events({ project: async () => { throw 'gone' } }, out.socket).syncSession(agent())
     await settle()
     expect(error.mock.calls).toEqual([
-      ['[cli] announceSession failed:', 'no transcript'],
-      ['[cli] announceSession failed:', 'gone'],
+      ['[cli] announceSession failed:', 'Error'],
+      ['[cli] announceSession failed:', 'string'],
     ])
     expect(out.app).toEqual([])
   })

@@ -17,6 +17,7 @@
 import { join } from 'node:path'
 import type { CoreApi, CorePorts, RemoteClient, ServiceRequests, WifiPort, WifiView } from '../core/api.js'
 import { startDevicePart } from '../lib/autonomous-device/parts.js'
+import { errorKind } from '../lib/log.js'
 import { deviceRelayOverGateway } from '../lib/autonomous-device/overGateway.js'
 import { DeviceResultJournal } from '../lib/autonomous-device/resultJournal.js'
 import { AutonomousDeviceService, type AutonomousDeviceFrame } from '../lib/autonomous-device/service.js'
@@ -131,7 +132,7 @@ export function startWifi(core: CoreApi, ports: CorePorts, deps: WifiDeps = {}):
       await refresh()
       // Answered on its own time; one that fails is that request's, said, and the next is answered.
       relay.handle(connId, frame, opened).catch((error: unknown) => {
-        console.warn(`[wifi] a device's request failed · ${error instanceof Error ? error.message : String(error)}`)
+        console.warn(`[wifi] a device's request failed · ${errorKind(error)}`)
       })
     },
     dropped: (connId) => relay.drop(connId),

@@ -265,7 +265,7 @@ describe('the watcher wiring', () => {
     run.watcher.emit('rewritten', rewritten('s1', '/t/s1.jsonl'))
     run.watcher.emit('rewritten', rewritten('s1', '/t/s1.jsonl'))
     await new Promise((done) => setTimeout(done, 0))
-    expect(error.mock.calls.map((call) => call[1])).toEqual(['pane gone', 'tmux down'])
+    expect(error.mock.calls.map((call) => call[1])).toEqual(['Error', 'string'])
   })
 })
 

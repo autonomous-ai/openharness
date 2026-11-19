@@ -8,6 +8,7 @@
 import { accessSync, constants, linkSync, lstatSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { env } from '../config/env.js'
+import { errorKind } from './log.js'
 
 /** The trailing `exec …` line, which is the only line any launcher we ship varies. */
 const EXEC_LINE = /^exec .*$/m
@@ -41,7 +42,7 @@ export function ensureLauncher(node: string, log: (message: string) => void = ()
   } catch (error) {
     try { rmSync(temporary, { force: true }) } catch { /* never written */ }
     // A read-only bin dir, a launcher owned by another user: said, and not worth failing a start over.
-    log(`  ✗ could not repoint ${launcher} at ${node}: ${(error as Error).message}`)
+    log(`  ✗ could not repoint bin/harness at the new Node: ${errorKind(error)}`)
     return false
   }
   log(`  ✓ repointed ${launcher} at ${node}`)

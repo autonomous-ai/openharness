@@ -1,6 +1,7 @@
 /** Repository observations belong to workspaces; a frame never waits for them. */
 import type { AgentView, CoreApi } from '../core/api.js'
 import { agentProject } from '../lib/agentProject.js'
+import { errorKind } from '../lib/log.js'
 import { sessionGitContext, SessionGitContextReader } from '../lib/sessionGitContext.js'
 import { sessionGitHistory } from '../lib/sessionGitHistory.js'
 import { describeScmProject } from '../scm/scmProjects.js'
@@ -45,7 +46,7 @@ export function startWorkspaceFrames(core: CoreApi) {
       if (!entry.queued || entry.running) continue
       entry.queued = false; entry.running = true; running++
       void inspect(entry).catch(error => {
-        if (error !== STALE && current(entry)) console.warn('[workspaces] WORKSPACE_FACTS_UNAVAILABLE')
+        if (error !== STALE && current(entry)) console.warn(`[workspaces] WORKSPACE_FACTS_UNAVAILABLE · ${errorKind(error)}`)
       }).finally(() => {
         entry.running = false; entry.at = Date.now(); running--
         drain()

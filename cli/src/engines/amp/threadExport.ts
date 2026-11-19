@@ -18,6 +18,7 @@
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { env } from '../../config/env.js'
+import { errorKind } from '../../lib/log.js'
 import type { SessionEvent } from '../../lib/normalize.js'
 import { ampToolInput, ampToolName, ampToolOutput, clip } from './normalizer.js'
 
@@ -59,7 +60,7 @@ export async function readAmpThread(threadId: string): Promise<JsonObject[] | nu
       env: { ...process.env, AMP_DISABLE_PLUGINS: '1' },
     }))
   } catch (err) {
-    console.warn(`[amp] threads export failed for ${threadId.slice(0, 12)}: ${err instanceof Error ? err.message : err}`)
+    console.warn(`[amp] threads export failed for ${threadId.slice(0, 12)}: ${errorKind(err)}`)
     return null
   }
   let parsed: unknown

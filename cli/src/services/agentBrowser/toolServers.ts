@@ -8,6 +8,7 @@
  */
 import { createInterface } from 'node:readline'
 import type { Readable, Writable } from 'node:stream'
+import { errorKind } from '../../lib/log.js'
 
 export interface ToolChild {
   stdin: Writable
@@ -160,9 +161,9 @@ export class ToolServers {
     let process: ToolChild
     try {
       process = this.deps.spawn(agentId)
-    } catch {
-      // The cause's words can name a path; the name is enough to act on.
-      this.deps.log(`agent browser ${agentId}: its tool server did not start`)
+    } catch (error) {
+      // The cause's words can name a path; its kind is enough to act on.
+      this.deps.log(`agent browser ${agentId}: its tool server did not start · ${errorKind(error)}`)
       return null
     }
     const child: Child = { process, answered: false, gone: false, pending: new Map() }

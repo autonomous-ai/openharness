@@ -1,5 +1,5 @@
 /** Explicit core decisions replay at their original byte boundary, before any later record. */
-import { recoveryBoundary, type RecoveryBoundary } from './transcriptBoundary.js'
+import { boundaryChanged, recoveryBoundary, type RecoveryBoundary } from './transcriptBoundary.js'
 
 export interface TranscriptClose {
   readonly offset: number
@@ -20,7 +20,7 @@ export function transcriptCloses(value: unknown): value is readonly TranscriptCl
 
 export function verifyCloses(file: string, closes: readonly TranscriptClose[]): void {
   try { for (const close of closes) if (close.boundary) recoveryBoundary(file, close.boundary) }
-  catch { throw new Error('ENGINE_CONTROL_BOUNDARY_CHANGED') }
+  catch { throw boundaryChanged() }
 }
 
 export const closeFileIdentity = (closes: readonly TranscriptClose[] | undefined): RecoveryBoundary | undefined =>

@@ -406,12 +406,12 @@ describe('discovery', () => {
         const resuming = typed(row({ agentId: 'ended', browser: true }), { resumeReservedAt: vi.fn((agentId: string) => (agentId === 'ended' ? 1 : null)) })
         await resuming.handlers.onObserved(seen(), resuming.shell)
         expect(resuming.deps.registry.adoptEngine).toHaveBeenCalled()
-        // Unreadable, whatever was thrown: said once, and the engine is the shell's agent all the same.
-        for (const thrown of [new Error('EACCES'), 'EIO']) {
+        // Unreadable, whatever was thrown: said once by its kind, and the engine is the shell's agent all the same.
+        for (const [thrown, kind] of [[Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }), 'EACCES'], ['EIO', 'string']]) {
           const unreadable = typed(null, { get: vi.fn(() => { throw thrown }) })
           await unreadable.handlers.onObserved(seen(), unreadable.shell)
           expect(unreadable.deps.registry.adoptEngine).toHaveBeenCalled()
-          expect(warn).toHaveBeenLastCalledWith(expect.stringMatching(/saved harnesses unreadable; .* takes nothing of its pane: (EACCES|EIO)$/))
+          expect(warn).toHaveBeenLastCalledWith(expect.stringMatching(new RegExp(`saved harnesses unreadable; .* takes nothing of its pane: ${kind}$`)))
           expect(unreadable.deps.taken).not.toHaveBeenCalled()
         }
         expect(warn).toHaveBeenCalledTimes(2)
@@ -568,23 +568,23 @@ describe('discovery', () => {
         const unreadable = setup()
         vi.mocked(unreadable.deps.stoppedAgents.list).mockImplementation(() => { throw 'EACCES' })
         await unreadable.handlers.onObserved(hermesSeen(), shell)
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining('adopts its engine as new: EACCES'))
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('adopts its engine as new: string'))
         const busy = setup()
         vi.mocked(busy.deps.stoppedAgents.list).mockReturnValue([archived()])
         vi.mocked(busy.deps.stoppedAgents.remove).mockImplementation(() => { throw 'EBUSY' })
         vi.mocked(busy.deps.registry.reinstateArchived).mockResolvedValue({ ...archived(), active: true } as RegisteredSession)
         await busy.handlers.onObserved(hermesSeen(), shell)
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining('archive could not be removed: EBUSY'))
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('archive could not be removed: string'))
       })
 
       it('says so, and stays back, when its archive cannot be removed', async () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
         const run = setup()
         vi.mocked(run.deps.stoppedAgents.list).mockReturnValue([archived()])
-        vi.mocked(run.deps.stoppedAgents.remove).mockImplementation(() => { throw new Error('EBUSY') })
+        vi.mocked(run.deps.stoppedAgents.remove).mockImplementation(() => { throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' }) })
         vi.mocked(run.deps.registry.reinstateArchived).mockResolvedValue({ ...archived(), active: true } as RegisteredSession)
         await run.handlers.onObserved(hermesSeen(), shell)
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining('archive could not be removed'))
+        expect(warn).toHaveBeenCalledWith(expect.stringMatching(/archive could not be removed: EBUSY$/))
         expect(run.deps.send).toHaveBeenCalled()
       })
     })
@@ -606,7 +606,7 @@ describe('discovery', () => {
       await run.handlers.onObserved(seen(), row({ active: false }))
       await run.handlers.onObserved(seen(), row({ active: false }))
       await settle()
-      expect(error.mock.calls.map((call) => call[1])).toEqual(['store locked', 'worse'])
+      expect(error.mock.calls.map((call) => call[1])).toEqual(['Error', 'string'])
       // Gone from the registry by then: nothing to wake.
       run.rows.clear()
       await run.handlers.onObserved(seen(), row({ active: false }))

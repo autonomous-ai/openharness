@@ -64,7 +64,7 @@ it.each([
   } })
   expect(log.mock.calls.flat().map(value => value instanceof Error ? value.message : String(value)).join(' '))
     .not.toContain('private-history-fixture')
-  expect(log).toHaveBeenCalledWith('[backend] HISTORY_READ_FAILED')
+  expect(log).toHaveBeenCalledWith(`[backend] HISTORY_READ_FAILED · ${failure.name}`)
 })
 
 it('reports a failed history reply without an unhandled promise rejection', async () => {
@@ -75,8 +75,8 @@ it('reports a failed history reply without an unhandled promise rejection', asyn
   })
   socket.historyProvider = async () => ({ events: [] })
   send('session_get', { requestId: 'failed-reply', sessionId: 'one' })
-  await vi.waitFor(() => expect(log).toHaveBeenCalledWith('[backend] HISTORY_REPLY_FAILED'))
-  expect(log.mock.calls).toEqual([['[backend] HISTORY_REPLY_FAILED']])
+  await vi.waitFor(() => expect(log).toHaveBeenCalledWith('[backend] HISTORY_REPLY_FAILED · Error'))
+  expect(log.mock.calls).toEqual([['[backend] HISTORY_REPLY_FAILED · Error']])
 })
 
 it('drops a history reply when its original connection has gone', async () => {
@@ -192,6 +192,6 @@ it('keeps an overflowing reply-sink failure content-free too', async () => {
   for (let i = 0; i < 17; i++) send('session_get', { requestId: `reply-${i}`, sessionId: 'one' })
   try {
     await vi.waitFor(() => expect(log).toHaveBeenCalled())
-    expect(log.mock.calls).toEqual([['[backend] HISTORY_REPLY_FAILED']])
+    expect(log.mock.calls).toEqual([['[backend] HISTORY_REPLY_FAILED · Error']])
   } finally { read.resolve({ events: [] }) }
 })

@@ -6,6 +6,7 @@ import { truncateUtf8 } from '../../lib/deviceRecentTrim.js'
 import type { OpenSessions, SessionOwner, SessionRows } from '../../lib/sessionSearch/external.js'
 import { type fileStamp, within } from '../../lib/sessionSearch/externals/support.js'
 import type { ExternalEngine, RunningProcess } from '../../lib/sessionSearch/externals/types.js'
+import { errorKind } from '../../lib/log.js'
 import { roundDrawable } from '../roundGlyphs.js'
 import type { HostAdapter, Pane } from './adapter.js'
 import { CODEX_THREAD, type CodexQueue, type CodexQueueFailure, type CodexRan } from './codexQueue.js'
@@ -512,10 +513,10 @@ export class ObservedSource implements HostSource {
       if (entry.ttyPid !== pid) return
       entry.tty = tty
       this.locate(entry)
-    }, () => {
+    }, (error) => {
       if (entry.ttyPid === pid) entry.ttyFailedAt = now
-      // A count only: never the pid or the session.
-      this.deps.log('[observed] tty · not read')
+      // Its kind only: never the pid or the session.
+      this.deps.log(`[observed] tty · not read · ${errorKind(error)}`)
     })
   }
 
@@ -532,9 +533,9 @@ export class ObservedSource implements HostSource {
     entry.appPid = pid
     entry.callerApp = undefined
     entry.appWalking = true
-    this.deps.apps!([pid]).then((apps) => apps.get(pid), () => {
-      // A count only: no error text, as a path in it holds the account's name.
-      this.deps.log('[observed] app · not read')
+    this.deps.apps!([pid]).then((apps) => apps.get(pid), (error) => {
+      // Its kind only: no error text, as a path in it holds the account's name.
+      this.deps.log(`[observed] app · not read · ${errorKind(error)}`)
       return undefined
     }).then((app) => {
       entry.appWalking = false
@@ -856,9 +857,9 @@ export class ObservedSource implements HostSource {
     let text: string | undefined
     try {
       text = await this.deps.lastAnswer(entry.agent.engine, entry.transcriptPath)
-    } catch {
-      // A count only, as the scan's read logs none: its error can hold the transcript's path, and so the account's name.
-      this.deps.log('[observed] last answer · not read')
+    } catch (error) {
+      // Its kind only, never its text: that can hold the transcript's path, and so the account's name.
+      this.deps.log(`[observed] last answer · not read · ${errorKind(error)}`)
       return
     }
     if (!text || this.entries.get(entry.agent.id) !== entry) return
@@ -1064,9 +1065,9 @@ export class ObservedSource implements HostSource {
     if (!this.deps.apps || !pids.length) return new Map()
     try {
       return await this.deps.apps(pids)
-    } catch {
-      // No error text: a path in it holds the account's name.
-      this.deps.log('[observed] scan · apps not read')
+    } catch (error) {
+      // Its kind, no error text: a path in it holds the account's name.
+      this.deps.log(`[observed] scan · apps not read · ${errorKind(error)}`)
       return new Map()
     }
   }

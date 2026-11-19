@@ -39,7 +39,7 @@ describe('handing what Hachi started to the person', () => {
     const t = setup(async () => { throw 'asleep' })
     start(t.ledger, 'far-away-harness', 'm2', '')
     await t.hand.over('hachi')
-    expect(t.log).toHaveBeenCalledWith('[hachi] could not hand far-away to the person on its machine yet: asleep. Asked again at the next look.')
+    expect(t.log).toHaveBeenCalledWith('[hachi] could not hand far-away to the person on its machine yet: string. Asked again at the next look.')
     expect(t.hand.handed('far-away-harness')).toBe(false)
   })
 
@@ -49,7 +49,7 @@ describe('handing what Hachi started to the person', () => {
     start(t.ledger, 'near-harness', 'm1', 'SECRET-NAME-MARKER')
     await t.hand.over('hachi')
     expect(t.log.mock.calls).toEqual([
-      ['[hachi] could not hand far-away to the person on its machine yet: asleep. Asked again at the next look.'],
+      ['[hachi] could not hand far-away to the person on its machine yet: string. Asked again at the next look.'],
       ['[hachi] handed near-har to the person: Hachi closed.'],
     ])
   })

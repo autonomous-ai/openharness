@@ -7,6 +7,7 @@
  *
  * Told only names and states (`heard`), and what it hands on is the same (lib/hachiWake.ts builds the line from them).
  */
+import { errorKind } from '../lib/log.js'
 import type { HachiDaemonMetric } from '../lib/serviceMetrics.js'
 import type { WakeItem, WakeState } from '../lib/hachiWake.js'
 
@@ -78,7 +79,7 @@ export function createHachiWakes(deps: HachiWakesDeps) {
     sentAt.push(now)
     let taken = false
     try { taken = await deps.send(items) } catch (error) {
-      deps.log(`[hachi] the wake was not delivered: ${error instanceof Error ? error.message : String(error)}`)
+      deps.log(`[hachi] the wake was not delivered: ${errorKind(error)}`)
     }
     if (!taken) { deps.count('hachi_mailbox_failed'); return }
     for (const item of items) deps.count(`hachi_wake_${item.state}`)

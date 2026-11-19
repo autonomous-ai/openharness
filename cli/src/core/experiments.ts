@@ -12,6 +12,7 @@ import { readdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { AGENT_SETTING_EXPERIMENTS, AGENT_SETTING_NAMES, agentSettingsFromAnswer, ownsAgentSettings, readAgentSettings, saveAgentSettings, type AgentSettings } from '../lib/agentSettings.js'
 import type { AuthSession } from '../lib/authSession.js'
+import { errorKind } from '../lib/log.js'
 import type { BackendNotice } from './api.js'
 
 type Experiments = Readonly<Record<string, { state: readonly string[] }>>
@@ -105,7 +106,7 @@ export function createAgentSettingsSync(deps: {
     if (!ownsAgentSettings(owner, now)) return answer
     const before = readAgentSettings(deps.dataDir, now)
     try { saveAgentSettings(deps.dataDir, owner, said.settings) } catch (error) {
-      log(`[experiments] the agents' settings could not be kept · ${String(error)}`)
+      log(`[experiments] the agents' settings could not be kept · ${errorKind(error)}`)
       return answer
     }
     if (said.settings.agentMessages !== before.agentMessages) deps.messagesChanged()
@@ -117,7 +118,7 @@ export function createAgentSettingsSync(deps: {
     const asked = deps.session()
     if (!asked?.machineId) return
     try { heard(await deps.backend('GET', EXPERIMENTAL_SETTINGS), asked) } catch (error) {
-      log(`[experiments] the account's experiments could not be read · ${error instanceof Error ? error.message : String(error)}`)
+      log(`[experiments] the account's experiments could not be read · ${errorKind(error)}`)
     }
   }
 
@@ -214,7 +215,7 @@ export function createAccountNotices(tell: (notice: BackendNotice) => void, log:
     },
     notice(notice: BackendNotice): void {
       for (const listener of listeners) {
-        try { listener(notice) } catch (error) { log(`[experiments] a notice's listener failed · ${error instanceof Error ? error.message : String(error)}`) }
+        try { listener(notice) } catch (error) { log(`[experiments] a notice's listener failed · ${errorKind(error)}`) }
       }
       tell(notice)
     },

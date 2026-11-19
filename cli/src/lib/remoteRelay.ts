@@ -18,7 +18,7 @@ import { BACKEND_IDLE_DEADLINE_MS, watchSocketLiveness, type LivenessWatch } fro
 import type { Frame, LocalClientSink } from '../backendSocket.js'
 import type { AuthSessionManager } from './authRefresh.js'
 import { b64d, type Identity } from './e2ee/core.js'
-import { sid } from './log.js'
+import { errorKind, sid } from './log.js'
 import { DAEMON_LOCAL_ONLY_TYPES, RelayConnectError } from './relayFrames.js'
 
 export { DAEMON_LOCAL_ONLY_TYPES, RelayConnectError }
@@ -590,7 +590,7 @@ export class RemoteRelayPool {
         return
       } catch (err) {
         // Held in memory (machinePeers.ts) and by the backoff below; never thrown out of here, where nothing would catch it.
-        console.warn(`[relay] could not keep machine=${sid(machineId)} as deleted: ${err instanceof Error ? err.message : String(err)}`)
+        console.warn(`[relay] could not keep machine=${sid(machineId)} as deleted: ${errorKind(err)}`)
       }
     }
     const count = (this.refusals.get(machineId)?.count ?? 0) + 1

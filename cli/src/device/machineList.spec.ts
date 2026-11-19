@@ -138,6 +138,16 @@ describe('MachineListCache', () => {
     await expect(down.refresh()).resolves.toBeNull()
   })
 
+  it('says an unreachable backend by its kind, never its words', async () => {
+    const log = vi.fn()
+    let answer: () => Promise<{ status: number; body: Record<string, unknown> }> = ok([row()])
+    const cache = new MachineListCache(() => answer(), () => 'z', log, DIR())
+    await cache.refresh()
+    answer = async () => { throw new Error('getaddrinfo ENOTFOUND api.example.test') }
+    await cache.refresh()
+    expect(log).toHaveBeenLastCalledWith('machines: unreachable (Error) — showing the last known list')
+  })
+
   it('writes no file when it is a copy of another list', async () => {
     const dir = DIR()
     const copy = new MachineListCache(async () => ({ status: 200, body: { machines: [{ machineId: 'm1', name: 'Mine' }] } }), () => 'z', vi.fn(), dir, () => null, false)

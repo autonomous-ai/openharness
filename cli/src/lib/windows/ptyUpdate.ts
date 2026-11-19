@@ -16,7 +16,8 @@
  */
 import { existsSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { SpawnLockBusyError, describeSpawnLockFailure } from '../daemonSpawnLock.js'
+import { SpawnLockBusyError, describeSpawnLockOwner } from '../daemonSpawnLock.js'
+import { errorKind } from '../log.js'
 import { binaryVersion, currentPtyVersion } from '../ptyHost/launch.js'
 import { PTY_PROTOCOL, SUPPORTED_PTY_PROTOCOLS } from '../ptyHost/protocol.js'
 import { REFUSED_RETRY_MAX_MS, msUntilSlot, type Poller } from '../selfUpdate.js'
@@ -76,8 +77,6 @@ export type PtyPoller = Poller & {
    *  otherwise the first to prepare it for the next build. Nothing once stopped, or with nothing installed. */
   takenBack(): void
 }
-
-const message = (error: unknown): string => (error instanceof Error ? error.message : String(error))
 
 /**
  * Poll on the CLI's schedule (scheduled ticks on the same slot), for a payload newer than `current-pty`. A download
@@ -188,7 +187,7 @@ export function startPtyUpdater(opts: {
 
   // At the updater's start, before any check prepares a staging folder the sweep would take for a stale one.
   const swept = opts.withLock(async () => { d.sweep(opts.rootDir, d.log) })
-    .catch((error: unknown) => d.error(`[update] could not sweep the terminal host's leftovers (${message(error)}) — the next start tries again`))
+    .catch((error: unknown) => d.error(`[update] could not sweep the terminal host's leftovers (${errorKind(error)}) — the next start tries again`))
 
   const tick = async (): Promise<void> => {
     // Booked first, from the clock, as the CLI's: a slow download neither drifts the slot nor ends the chain.
@@ -241,12 +240,13 @@ export function startPtyUpdater(opts: {
         // window leaves a host on probation this master never judges, until a master's start does (`unjudgedUpdate`).
         if (staged !== null) await opts.onStaged(staged.version)
       }).catch((error: unknown) => {
-        // A busy lock is no failed check: the payload is good and waiting, and the next tick tries again.
+        // A busy lock is no failed check: the payload is good and waiting, and the next tick tries again. A lock this CLI
+        // did not make is said in fixed words: its `reason` quotes the lock's path and an error's message.
         if (!(error instanceof SpawnLockBusyError)) throw error
-        once('busy', version, () => d.log(`[update] terminal host ${version} is ready but the daemon spawn lock is ${describeSpawnLockFailure(error)} — trying again next check`))
+        once('busy', version, () => d.log(`[update] terminal host ${version} is ready but the daemon spawn lock is ${error.owner ? `held (${describeSpawnLockOwner(error.owner)})` : error.reason ? 'not a lock this CLI made — remove it by hand' : 'held by an unknown process'} — trying again next check`))
       })
     } catch (error) {
-      d.error(`[update] terminal host check failed (will retry): ${message(error)}`)
+      d.error(`[update] terminal host check failed (will retry): ${errorKind(error)}`)
     } finally {
       checking = false
     }
@@ -275,7 +275,7 @@ export function startPtyUpdater(opts: {
       try {
         return installReady(forPtyProtocol)
       } catch (error) {
-        d.error(`[update] terminal host ${version} could not be installed (${message(error)}) — trying again next check`)
+        d.error(`[update] terminal host ${version} could not be installed (${errorKind(error)}) — trying again next check`)
         return null
       }
     },
@@ -339,7 +339,7 @@ export function sweepPtyLeftovers(rootDir: string, log: (line: string) => void, 
   const put = putBackAside(rootDir, BIN_FILES, all)
   for (const { name, from } of put.restored) log(`[update] put bin\\${name} back from ${from}`)
   for (const { name, from, error } of put.failed) {
-    log(`[update] bin\\${name} is missing and ${from} could not be put back (${message(error)}) — nothing is swept until it is`)
+    log(`[update] bin\\${name} is missing and ${from} could not be put back (${errorKind(error)}) — nothing is swept until it is`)
   }
   if (put.failed.length === 0) sweepAsideFiles(rootDir, all)
 }
@@ -376,7 +376,7 @@ export function rollBackStaged(o: {
         const put = putBackAside(root, result.missing)
         for (const { name, from } of put.restored) o.log(`[harnessd] put bin\\${name} back from ${from}`)
         for (const { name, from, error } of put.failed) {
-          o.log(`[harnessd] bin\\${name} is missing and ${from} could not be put back (${message(error)}) — the updater sweeps nothing until it is`)
+          o.log(`[harnessd] bin\\${name} is missing and ${from} could not be put back (${errorKind(error)}) — the updater sweeps nothing until it is`)
         }
         // A marker no one can read names nothing to go back to; left, it would hold every host update back for good.
         if (!pending) {
@@ -384,7 +384,7 @@ export function rollBackStaged(o: {
           o.log('[harnessd] removed an unreadable terminal host probation marker — the host in use stays')
         }
       } catch (error) {
-        o.log(`[harnessd] could not roll terminal host ${pending?.version ?? '(unreadable marker)'} back (${message(error)}) — the next probation tries again`)
+        o.log(`[harnessd] could not roll terminal host ${pending?.version ?? '(unreadable marker)'} back (${errorKind(error)}) — the next probation tries again`)
       }
     })
   }
@@ -415,7 +415,7 @@ export function takeBackPty(rootDir: string, log: (line: string) => void, prefix
     const result = restorePty(rootDir)
     // Before anything sweeps: the aside file is the only copy of that path's bytes.
     const put = putBackAside(rootDir, result.missing)
-    for (const { name, from, error } of put.failed) log(`${failedPrefix}bin\\${name} is missing and ${from} could not be put back (${message(error)})`)
+    for (const { name, from, error } of put.failed) log(`${failedPrefix}bin\\${name} is missing and ${from} could not be put back (${errorKind(error)})`)
     if (!pending) return
     const rejected = rejectedPtyVersions(rootDir)
     if (!rejectedBefore.includes(pending.version) && rejected.includes(pending.version)) {
@@ -429,7 +429,7 @@ export function takeBackPty(rootDir: string, log: (line: string) => void, prefix
       : `${failedPrefix}terminal host ${pending.version} could not be taken back out: ${pending.previous} is no longer there to go back to — it stays`)
   } catch (error) {
     // The marker stays: a master's start takes a host it cannot speak back out (`ptyUnjudged`), and failing that judges it.
-    log(`${failedPrefix}could not take terminal host ${pending?.version ?? '(unreadable marker)'} back out (${message(error)}) — it stays on probation: the next master takes it back out, or judges it and may keep it`)
+    log(`${failedPrefix}could not take terminal host ${pending?.version ?? '(unreadable marker)'} back out (${errorKind(error)}) — it stays on probation: the next master takes it back out, or judges it and may keep it`)
   }
 }
 
@@ -497,7 +497,7 @@ export function keepStaged(o: {
       (o.confirmPty ?? confirmPty)(root)
     } catch (error) {
       // The marker stays, and the poller checks nothing while it does: said, as host updates wait on the next start.
-      o.log?.(`[harnessd] could not keep terminal host ${pending?.version ?? '(unreadable marker)'} (${message(error)}) — judged again at the next start`)
+      o.log?.(`[harnessd] could not keep terminal host ${pending?.version ?? '(unreadable marker)'} (${errorKind(error)}) — judged again at the next start`)
     }
   })
 }

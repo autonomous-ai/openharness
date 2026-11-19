@@ -61,7 +61,7 @@ describe('restartAgent', () => {
       { ...d, log: (message) => logs.push(message), prepareFork: async () => { throw new Error('grid is down') } })
     expect(outcome.ok).toBe(true)
     expect(seen.at(-1)).toEqual({ bypassPermission: false, forkSessionId: 's1' })
-    expect(logs.join()).toContain('grid is down')
+    expect(logs).toEqual(['[restart] codex could not prepare the move, continuing in a plain fork: Error'])
   })
 
   it('never prepares history while the old writer may still be alive', async () => {

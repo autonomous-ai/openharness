@@ -167,7 +167,7 @@ describe('Containers', () => {
     // A clean-up that fails too is logged, and the start's own failure is the one returned.
     fake.reply('network rm', { code: 1, stderr: 'Error: network is being used' })
     await expect(containers.start('a1', 'a1', IMAGE, base, 'UTC', '')).rejects.toThrow('image not known')
-    expect(logged.at(-1)).toContain('network is being used')
+    expect(logged.at(-1)).toBe('agent browser a1: a failed start was not cleaned up · PodmanError PODMAN_FAILED')
   })
 
   it('without a proxy, the secret an earlier proxy left is removed', async () => {

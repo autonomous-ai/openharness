@@ -1,4 +1,5 @@
 import type { AgentEngine } from '../engines/types.js'
+import { errorKind } from './log.js'
 import type { RegisteredSession } from './registry.js'
 import { TERMINAL_UNAVAILABLE_CODE, type TerminalBackend, type TerminalBackendPrepared } from './terminalBackend.js'
 import { processIdentityKey, terminalInstanceId, terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
@@ -29,7 +30,7 @@ export function prepareTerminalBackends<B extends TerminalBackend>(
       return { backend, result: await backend.prepare({ ownedPanes: ownedPanes(backend) }) }
     } catch (error) {
       const reason = `could not prepare ${backend.name}: ${error instanceof Error ? error.message : String(error)}`
-      console.error(`[terminal] ${backend.name}: ${reason}`)
+      console.error(`[terminal] ${backend.name}: could not prepare ${backend.name}: ${errorKind(error)}`)
       return { backend, result: { state: 'unavailable' as const, code: TERMINAL_UNAVAILABLE_CODE[backend.name], reason } }
     }
   }))

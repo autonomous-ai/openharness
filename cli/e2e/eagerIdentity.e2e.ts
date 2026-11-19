@@ -70,7 +70,10 @@ console.log('fixture-${engine}-ready'); setInterval(() => {}, 1000);
   const newer = new Date(Date.now() + 2000); utimesSync(lock, newer, newer)
   // A competing native location that cannot be read must retain the old binding,
   // without stopping discovery of the Cursor siblings below.
-  await until('Copilot binding held for its incomplete lock pool', () => d.log().includes('binding held · Conversation identity is held: a native identity location is not a regular file'), 30_000, 100)
+  // The log names the hold's kind; its reason is on the agent's row, which clients are sent.
+  await until('Copilot binding held for its incomplete lock pool', () => d.log().includes('binding held · IdentityReadUnavailable IDENTITY_UNAVAILABLE'), 30_000, 100)
+  await until('the hold\'s reason on Copilot\'s row', async () => (await rows()).find(row => row.id === copilot.id)?.identityHold
+    ?.includes('a native identity location is not a regular file') || null, 30_000, 100)
   expect((await rows()).find(row => row.id === copilot.id)?.sessionId).toBe(first)
   // The two Copilot bindings already occupy reader slots. Three more pending Cursor sessions
   // saturate the four-slot pool before the final Cursor is asked to locate its transcript.

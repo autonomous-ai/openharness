@@ -9,6 +9,7 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node
 import { join } from 'node:path'
 import type { StatusLineContract } from '../facets/launch.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
+import { errorKind } from '../../lib/log.js'
 import { shellSingleQuote } from '../../lib/shellQuote.js'
 import { isRecord, jsonObject, merged, type AttributionFiles } from './attribution.js'
 import { quoteHookCommand } from './notifyHooks.js'
@@ -56,7 +57,7 @@ function scriptIn(dataDir: string): string | null {
     return file
   } catch (error) {
     // The session starts with the person's status line untouched, and the router reads no report for it.
-    if (!missing) console.warn(`[statusline] not written in ${folder}, so Claude sessions start without the quota report: ${String(error)}`)
+    if (!missing) console.warn(`[statusline] not written, so Claude sessions start without the quota report: ${errorKind(error)}`)
     missing = true
     return null
   }

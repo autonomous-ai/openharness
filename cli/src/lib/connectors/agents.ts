@@ -13,6 +13,7 @@ import { existsSync, readFileSync, realpathSync, renameSync, writeFileSync, mkdi
 import { homedir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { defaultCodexHome, listCodexProfiles } from '../codexProfiles.js'
+import { errorKind } from '../log.js'
 import { managedNodePath } from '../nodeRuntime.js'
 import { MCP_SHIM_SOURCE } from './mcpShimSource.js'
 import { CODE, locked, writePrivate, type Store } from './store.js'
@@ -362,7 +363,7 @@ function project(vault: Store, env: NodeJS.ProcessEnv, list: (record: Record<str
     }
     // One agent whose config cannot be written (a read-only home) leaves the others, and what was recorded, as they are.
     const attempt = (agent: Agent, work: () => void): void => {
-      try { work() } catch (error) { console.warn(`[connections] could not update ${agent.name}: ${error instanceof Error ? error.message : String(error)}`) }
+      try { work() } catch (error) { console.warn(`[connections] could not update ${agent.name}: ${errorKind(error)}`) }
     }
     const changed: Record<string, string[]> = {}
     for (const agent of targets) {

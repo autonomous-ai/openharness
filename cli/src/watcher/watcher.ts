@@ -7,6 +7,7 @@ import { open, readFile, stat } from 'fs/promises'
 import { basename, dirname } from 'path'
 import type { LiveStamp } from '../engines/worker/liveProtocol.js'
 import type { AgentEngine } from '../engines/types.js'
+import { errorKind } from '../lib/log.js'
 
 export interface WatchedSession {
   sessionId: string
@@ -127,7 +128,7 @@ export class Watcher extends EventEmitter {
         const state = this.files.get(filePath)
         if (state) state.pending = true // keep registration; a rotate/recreate may follow
       })
-      .on('error', (err: unknown) => console.error('[watcher] error:', err))
+      .on('error', (err: unknown) => console.error('[watcher] error:', errorKind(err)))
     if (this.files.size) this.watcher.add([...this.files.keys()])
   }
 
@@ -399,7 +400,7 @@ export class Watcher extends EventEmitter {
         await fh.close()
       }
     } catch (err) {
-      console.error(`[watcher] read failed (${basename(filePath)}):`, err)
+      console.error(`[watcher] read failed · ${errorKind(err)}`)
     }
     if (history.length && this.files.get(filePath) === state && state.deliveryAllowed?.() !== false) this.flushHistory(state, history)
   }

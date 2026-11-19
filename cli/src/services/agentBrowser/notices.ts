@@ -9,6 +9,7 @@
  * owed, and its next ready tries again.
  */
 import { randomUUID } from 'node:crypto'
+import { errorKind } from '../../lib/log.js'
 import type { StateFile } from './stateFile.js'
 
 export const READY_LINE = 'Your browser is ready: run `harness browser --help`'
@@ -75,7 +76,7 @@ export class Notices {
     try {
       if (this.deps.state.read().told?.[agentId] === true) return
     } catch (error) {
-      this.deps.log(`agent browser ${agentId}: the ready line is not typed: ${(error as Error).message}`)
+      this.deps.log(`agent browser ${agentId}: the ready line is not typed · ${errorKind(error)}`)
       return
     }
     this.send({ agentId, kind: 'ready', tries: 0 })
@@ -185,7 +186,7 @@ export class Notices {
     try {
       this.deps.state.update(s => { (s.told ??= {})[agentId] = true })
     } catch (error) {
-      this.deps.log(`agent browser ${agentId}: the ready line's mark was not saved: ${(error as Error).message}`)
+      this.deps.log(`agent browser ${agentId}: the ready line's mark was not saved · ${errorKind(error)}`)
     }
   }
 
@@ -196,7 +197,7 @@ export class Notices {
       this.deps.state.update(s => { delete s.told?.[agentId] })
       return true
     } catch (error) {
-      this.deps.log(`agent browser ${agentId}: the stop line is not typed: ${(error as Error).message}`)
+      this.deps.log(`agent browser ${agentId}: the stop line is not typed · ${errorKind(error)}`)
       return null
     }
   }

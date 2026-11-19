@@ -215,7 +215,7 @@ describe('the keys\' routes of the door, and the phone\'s sign-in code', () => {
       expect.soft(await ask(d, method, path, options), `${method} ${path}`).toEqual(answer)
       expect.soft(Date.now() - at, `${method} ${path} answered at once`).toBeLessThan(2_000)
     }
-    expect(d.log()).toContain('gateway_http failed · injected fault')
+    expect(d.log()).toContain('gateway_http failed · Error')
     expect(backend.seen.filter((line) => line.startsWith('POST /api/auth/handoff'))).toEqual([])
     expect(d.coresStarted()).toBe(1)
   }, 180_000)
@@ -269,7 +269,7 @@ describe('a window\'s ⌘K and its answer to a spoken task', () => {
       expect(await framed(window, 'route_send', 'route_send_result', { agentId: 'nobody', text: 'hello' })).toBe(unsent)
       expect(Date.now() - at).toBeLessThan(2_000)
     } finally { window.close() }
-    expect(d.log()).toContain('devices_ws failed · injected fault')
+    expect(d.log()).toContain('devices_ws failed · Error')
     expect(d.coresStarted()).toBe(1)
   }, 120_000)
 })

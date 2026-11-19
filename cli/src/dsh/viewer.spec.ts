@@ -444,7 +444,7 @@ describe('DshViewerManager, the rest of a viewer\'s life', () => {
     await other.start('a2', d, '/ws')
     expect(spawned).toEqual([])
     expect(urls).toEqual([])
-    expect(logs).toEqual(['[dsh] acme/thing viewer: no free port · EMFILE', '[dsh] acme/thing viewer: no free port · no ports left'])
+    expect(logs).toEqual(['[dsh] acme/thing viewer: no free port · Error', '[dsh] acme/thing viewer: no free port · string'])
   })
 
   it('a stop while the port is being found, or while the viewer comes up, publishes nothing', async () => {
@@ -480,7 +480,7 @@ describe('DshViewerManager, the rest of a viewer\'s life', () => {
     const viewerLines = logs.filter((line) => line.startsWith('[dsh] acme/thing viewer printed '))
     expect(viewerLines).toEqual(printed.slice(0, 40).map((line) => `[dsh] acme/thing viewer printed a line of ${line.length} chars`))
     expect(logs.join('\n')).not.toContain('SECRET')
-    expect(logs).toContain('[dsh] acme/thing viewer could not start · spawn EACCES')
+    expect(logs).toContain('[dsh] acme/thing viewer could not start · Error')
   })
 
   it('names a watcher close timeout and completes its stop within the cleanup deadline', async () => {
@@ -621,7 +621,9 @@ describe('DshViewerManager, the rest of a viewer\'s life', () => {
       }) as typeof spawnDshCommand
       const { logs, urls, manager } = setup({ spawn: noGitBash })
       await manager.start('a1', watched(), workspace)
-      expect(logs).toContain("[dsh] acme/thing viewer could not start · This harness's viewer needs Git Bash on Windows, and it was not found. Install Git for Windows from https://git-scm.com/download/win (or run: winget install --id Git.Git -e), then try again.")
+      // The log names the missing shell by its code; what to install is said where the person reads it, as the harness's
+      // install is refused.
+      expect(logs).toContain('[dsh] acme/thing viewer could not start · SHELL_UNAVAILABLE')
       expect(watchers).toHaveLength(1)
       expect(watchers[0].closed).toBe(true)
       // The agents' scans attach every live agent again; the same viewer that just failed is not started each time.
@@ -651,7 +653,7 @@ describe('DshViewerManager, the rest of a viewer\'s life', () => {
     it('a viewer whose process could not be started, or that found no port, closes its watch', async () => {
       const failing = setup({ waitForPort: async () => { failing.spawned[0].emit('error', new Error('spawn EACCES')); return false } })
       await failing.manager.start('a1', watched(), workspace)
-      expect(failing.logs).toContain('[dsh] acme/thing viewer could not start · spawn EACCES')
+      expect(failing.logs).toContain('[dsh] acme/thing viewer could not start · Error')
       expect(watchers[0].closed).toBe(true)
       const noPort = setup({ freePort: async () => { throw new Error('EMFILE') } })
       await noPort.manager.start('a2', watched(), workspace)
@@ -695,7 +697,7 @@ describe('DshViewerManager, the rest of a viewer\'s life', () => {
     const inner = (manager as unknown as { states: Map<string, { watcher: EventEmitter }> }).states.get('a1')!.watcher
     inner.emit('error', new Error('EMFILE'))
     inner.emit('error', 'lost')
-    expect(logs.filter((line) => line.includes('artifact watch error'))).toEqual(['[dsh] artifact watch error · EMFILE', '[dsh] artifact watch error · lost'])
+    expect(logs.filter((line) => line.includes('artifact watch error'))).toEqual(['[dsh] artifact watch error · Error', '[dsh] artifact watch error · string'])
 
     // a stop with a rescan still pending cancels it, and a watcher that fails to close does not fail the stop
     const state = (manager as unknown as { states: Map<string, { rescanTimer: unknown; watcher: { close: () => Promise<void> } }> }).states.get('a1')!
@@ -707,6 +709,7 @@ describe('DshViewerManager, the rest of a viewer\'s life', () => {
     await settle(500)
     expect(urls.at(-1)).toBeNull()
     expect(urls.filter((url) => url?.endsWith('newest.step'))).toEqual([])
+    expect(logs).toContain('[viewers] VIEWER_WATCH_CLOSE_FAILED · Error')
   }, 20_000)
 
   it('runs a real viewer through the user\'s shell, on the port it was given, and stops it', async () => {

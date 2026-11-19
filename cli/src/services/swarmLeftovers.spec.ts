@@ -80,13 +80,13 @@ describe('what the Swarm left in the data folder', () => {
     expect(existsSync(join(dataDir, 'swarm-github'))).toBe(false)
   })
 
-  it('names a failure that has no code as unknown', async () => {
+  it('names a failure that has no code by its type alone', async () => {
     mkdirSync(join(dataDir, 'uploads'))
     failing.add('uploads')
     const { rm } = await import('node:fs/promises')
     vi.mocked(rm).mockImplementationOnce(async () => { throw new Error('odd') })
     const log = vi.fn()
     expect(await removeSwarmLeftovers({ dataDir, log })).toBe(0)
-    expect(log).toHaveBeenCalledWith('could not remove uploads, left by the Swarm (unknown); trying again at the next start')
+    expect(log).toHaveBeenCalledWith('could not remove uploads, left by the Swarm (Error); trying again at the next start')
   })
 })

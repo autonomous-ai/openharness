@@ -17,7 +17,7 @@ import { isTerminalEngine } from '../../engines/types.js'
 import type { AutonomousDeviceInput } from '../deviceInput.js'
 import type { QuestionWatcher } from '../../lib/questionController.js'
 import { sameGridAssignment } from '../../lib/gridAssignmentWire.js'
-import { sid } from '../../lib/log.js'
+import { errorKind, sid } from '../../lib/log.js'
 import { matchesLaunchReceipt, type registry, type RegisteredSession, type RegistryAuthority, type LaunchPublication } from '../../lib/registry.js'
 import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { resolvePaneEngineProcess } from '../../lib/paneEngineProcess.js'
@@ -105,7 +105,7 @@ export function createDiscoveryHandlers({
   const archivedOwner = (terminal: RegisteredSession, observed: DiscoveredTerminalAgent): RegisteredSession | undefined => {
     let archived: RegisteredSession[]
     try { archived = stoppedAgents.list() } catch (error) {
-      console.warn(`[discovery] saved harnesses unreadable; ${sid(terminal.agentId)} adopts its engine as new: ${error instanceof Error ? error.message : error}`)
+      console.warn(`[discovery] saved harnesses unreadable; ${sid(terminal.agentId)} adopts its engine as new: ${errorKind(error)}`)
       return undefined
     }
     return archived.find((saved) => saved.engine === observed.engine
@@ -122,7 +122,7 @@ export function createDiscoveryHandlers({
     if (stoppedAgents.resumeReservedAt(previous) !== null) return
     let saved: RegisteredSession | null
     try { saved = stoppedAgents.get(previous) } catch (error) {
-      console.warn(`[discovery] saved harnesses unreadable; ${sid(adopted.agentId)} takes nothing of its pane: ${error instanceof Error ? error.message : error}`)
+      console.warn(`[discovery] saved harnesses unreadable; ${sid(adopted.agentId)} takes nothing of its pane: ${errorKind(error)}`)
       return
     }
     if (saved) taken(previous, adopted)
@@ -212,7 +212,7 @@ export function createDiscoveryHandlers({
     }
     if (revived) {
       try { stoppedAgents.remove(revived.agentId) } catch (error) {
-        console.warn(`[discovery] ${sid(revived.agentId)} archive could not be removed: ${error instanceof Error ? error.message : error}`)
+        console.warn(`[discovery] ${sid(revived.agentId)} archive could not be removed: ${errorKind(error)}`)
       }
       console.log(`[discovery] ${sid(revived.agentId)} back from the archive · its ${observed.engine} never stopped`
         + ` · ${observed.primaryRuntimeKey} · terminal ${sid(current.agentId)} gone`)
@@ -307,7 +307,7 @@ export function createDiscoveryHandlers({
         syncRecapPool()
         announceSession(active)
       }).catch((err) => {
-        console.error(`[discovery] ${sid(active.agentId)} attach failed:`, err instanceof Error ? err.message : err)
+        console.error(`[discovery] ${sid(active.agentId)} attach failed:`, errorKind(err))
       })
       return
     }

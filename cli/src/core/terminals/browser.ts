@@ -10,6 +10,7 @@
  * phone named, once, while it is fresh: a wrong redirect is not harmless (Claude Code drops the whole sign-in on
  * a mismatched `state`), and a phone must not reach arbitrary ports of this computer.
  */
+import { errorKind } from '../../lib/log.js'
 
 /** Who typed into an agent's terminal last, as the terminal stream knows them. */
 export interface InputSource {
@@ -98,7 +99,7 @@ export function createBrowser(deps: BrowserDeps) {
       answer = await deps.replay(url)
       deps.log(`[browser] sign-in handed to the program on port ${caught.port}: HTTP ${answer.status}`)
     } catch (error) {
-      deps.log(`[browser] sign-in not handed to the program on port ${caught.port}: ${error instanceof Error ? error.message : String(error)}`)
+      deps.log(`[browser] sign-in not handed to the program on port ${caught.port}: ${errorKind(error)}`)
       return { error: 'NOT_DELIVERED' }
     }
     const { status } = answer
@@ -115,7 +116,7 @@ export function createBrowser(deps: BrowserDeps) {
       }
     } catch (error) {
       // The sign-in is the program's already: only its own page after it is missed.
-      deps.log(`[browser] the program's next page on port ${caught.port} not opened: ${error instanceof Error ? error.message : String(error)}`)
+      deps.log(`[browser] the program's next page on port ${caught.port} not opened: ${errorKind(error)}`)
     }
     return { ok: status < 400, status }
   }

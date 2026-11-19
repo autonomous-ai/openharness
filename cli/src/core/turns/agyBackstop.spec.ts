@@ -105,6 +105,6 @@ describe('the agy idle backstop', () => {
     await vi.advanceTimersByTimeAsync(15_000)
     backstop.armAgyIdleWatch('s1')
     await vi.advanceTimersByTimeAsync(15_000)
-    expect(error.mock.calls).toEqual([['[agy] idle backstop failed:', 'pane gone'], ['[agy] idle backstop failed:', 'tmux down']])
+    expect(error.mock.calls).toEqual([['[agy] idle backstop failed:', 'Error'], ['[agy] idle backstop failed:', 'string']])
   })
 })

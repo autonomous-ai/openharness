@@ -41,6 +41,7 @@ import { MachinePeerStore } from '../lib/e2ee/machinePeers.js'
 import { applySharedTrust, isSharedKey } from './sharedTrust.js'
 import { E2eeStore } from '../lib/e2ee/store.js'
 import { TrustGroupStore, type GroupMember } from '../lib/e2ee/trustGroup.js'
+import { errorKind } from '../lib/log.js'
 import { RemoteRelayPool } from '../lib/remoteRelay.js'
 import { HarnessShareRelay, type SharedMachineReference } from '../sharing/relay.js'
 import { RelayGateway } from './gateway.js'
@@ -296,7 +297,7 @@ export function startGateway(given: GatewayHost): StartedGateway {
       try {
         switchAccountTrust(from, to)
       } catch (err) {
-        console.log(`[devlog] could not swap the trust stores to the new account: ${err instanceof Error ? err.message : String(err)}`)
+        console.log(`[devlog] could not swap the trust stores to the new account: ${errorKind(err)}`)
       }
       gateway.e2ee.reloadPaired()
       // Sessions to the old account's machines, and who the group last synced with, are that account's.

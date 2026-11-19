@@ -1,6 +1,7 @@
 import { closeSync, mkdirSync, openSync, writeSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { env } from '../../config/env.js'
+import { errorKind } from '../log.js'
 
 /**
  * Diagnostic dump of every frame between this daemon and a paired Autonomous device, one JSON object
@@ -54,7 +55,7 @@ export class DeviceDump {
           this.fd = openSync(this.path, 'a', 0o600)
           console.log(`[device-dump] recording device traffic IN THE CLEAR to ${this.path}`)
         } catch (e) {
-          console.error(`[device-dump] cannot open ${this.path}: ${e instanceof Error ? e.message : e}`)
+          console.error(`[device-dump] cannot open the dump file: ${errorKind(e)}`)
           this.path = null
         }
       }

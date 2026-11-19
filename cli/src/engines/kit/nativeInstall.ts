@@ -6,6 +6,7 @@ import { basename, dirname, isAbsolute, join } from 'node:path'
 import { buildEngineInstallationArgv } from '../../lib/engineLaunch.js'
 import type { EngineInstallRecipe } from '../../lib/engineInstall.js'
 import { failureReason } from '../../lib/failureReason.js'
+import { errorKind } from '../../lib/log.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
 import { secureStateDirectory } from '../../lib/secureState.js'
 import type { AgentEngine } from '../types.js'
@@ -340,9 +341,9 @@ export function createNativeInstallations({ directory, node = managedNodePath, d
       dispatch(runtime, file, hash)
       return running('Installing the required engine. The saved launch continues after installation is confirmed.')
     } catch (error) {
-      // Any failed check lands here, and the person sees only this line. Without the reason in the log, a hold
+      // Any failed check lands here, and the person sees only this line. Without what failed in the log, a hold
       // that never cleared could only be traced by hand over many round trips with the user (2026-10-19).
-      console.warn(`[native-install] ${engine} held:`, error instanceof Error ? error.message : error)
+      console.warn(`[native-install] ${engine} held:`, errorKind(error))
       return hold('Waiting to confirm durable engine installation ownership.')
     }
   }

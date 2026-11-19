@@ -107,7 +107,7 @@ describe('the event funnel', () => {
       'mirror',
     ])
     // Once a minute per consumer: the devices failed three times and said so once.
-    expect(error.mock.calls.map(([line]) => line)).toEqual(['[funnel] devices failed · device unplugged'])
+    expect(error.mock.calls.map(([line]) => line)).toEqual(['[funnel] devices failed · Error'])
   })
 
 
@@ -318,16 +318,16 @@ describe('a consumer outside the core', () => {
     outside('devices', () => { throw new Error('once more') })
     expect(ran).toEqual(['recaps'])
     expect(lines).toEqual([
-      '[funnel] devices failed · serial port gone',
-      '[funnel] devices failed · back and gone again · 1 more since',
-      '[funnel] devices failed · once more',
+      '[funnel] devices failed · Error',
+      '[funnel] devices failed · string · 1 more since',
+      '[funnel] devices failed · Error',
     ])
   })
 
   it('reports to the error log by default', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     outsideConsumers()('devices', () => { throw new Error('x') })
-    expect(error).toHaveBeenCalledWith('[funnel] devices failed · x')
+    expect(error).toHaveBeenCalledWith('[funnel] devices failed · Error')
     error.mockRestore()
   })
 
@@ -338,6 +338,6 @@ describe('a consumer outside the core', () => {
     outside('dial', () => { ran.push('dial') })
     outside('window', () => { ran.push('window') })
     expect(ran).toEqual(['window'])
-    expect(lines).toEqual(['[devices] dial failed · injected fault: dial'])
+    expect(lines).toEqual(['[devices] dial failed · Error'])
   })
 })

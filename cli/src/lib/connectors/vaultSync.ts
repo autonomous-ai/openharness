@@ -18,6 +18,7 @@
 import { createHash } from 'node:crypto'
 import { statSync } from 'node:fs'
 import { join } from 'node:path'
+import { errorKind } from '../log.js'
 import { sync } from './agents.js'
 import { cleanToken, locked, type Client, type Store, type Token } from './store.js'
 
@@ -205,7 +206,7 @@ export class VaultSync {
     this.running = (async () => {
       do {
         this.again = false
-        try { await this.exchange() } catch (error) { this.deps.log?.(`[connectors] could not keep connections in step · ${error instanceof Error ? error.message : String(error)}`) }
+        try { await this.exchange() } catch (error) { this.deps.log?.(`[connectors] could not keep connections in step · ${errorKind(error)}`) }
       } while (this.again)
     })().finally(() => { this.running = null })
     return this.running

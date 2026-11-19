@@ -13,6 +13,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import type { CoreApi, TurnDelivery } from './api.js'
+import { errorKind } from '../lib/log.js'
 
 type Payload = Record<string, unknown>
 
@@ -104,7 +105,7 @@ export function createDeliveries(deps: DeliveriesDeps) {
     if (event.state !== 'queued' && event.state !== 'delivered' && quiet.delete(event.deliveryId) && event.state === 'started') deps.quietStarted?.(event.sessionId)
     for (const listener of listeners) {
       try { listener(event) } catch (error) {
-        log(`[deliveries] a listener failed on ${event.deliveryId.slice(0, 40)} · ${error instanceof Error ? error.message : String(error)}`)
+        log(`[deliveries] a listener failed on ${event.deliveryId.slice(0, 40)} · ${errorKind(error)}`)
       }
     }
     const maker = makers.get(event.deliveryId)

@@ -20,7 +20,7 @@ import type { TurnRecaps } from './recaps.js'
 import type { QuietTitles } from '../agents/quietTitles.js'
 import type { ShortTurnGuard } from './shortTurnGuard.js'
 import { deviceErrorText } from '../cardText.js'
-import { preview, sid } from '../../lib/log.js'
+import { errorKind, preview, sid } from '../../lib/log.js'
 import type { CursorNormalizer } from '../../engines/cursor/normalizer.js'
 import type { QuestionWatcher } from '../../lib/questionController.js'
 import type { RegisteredSession } from '../../lib/registry.js'
@@ -105,7 +105,7 @@ export function outsideConsumers(options: {
       const at = now()
       const last = said.get(consumer)
       if (last && at - last.at < 60_000) { last.quiet++; return }
-      log(`[${prefix}] ${consumer} failed · ${error instanceof Error ? error.message : String(error)}${last?.quiet ? ` · ${last.quiet} more since` : ''}`)
+      log(`[${prefix}] ${consumer} failed · ${errorKind(error)}${last?.quiet ? ` · ${last.quiet} more since` : ''}`)
       said.set(consumer, { at, quiet: 0 })
     }
   }

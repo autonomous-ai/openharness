@@ -16,7 +16,7 @@ import {
   STREAMS_WAIT_MS, STREAMS_MAX, STREAM_FRAMES_MAX, streamEvents, type StreamFrame, type StreamOp, type StreamOpened, type StreamTurn,
 } from '../../engines/worker/otherStreamProtocol.js'
 import { READER_PART, READER_VERSION, record } from '../../engines/worker/protocol.js'
-import { sid } from '../../lib/log.js'
+import { errorKind, sid } from '../../lib/log.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { paneReadIdentity, transcriptReadIdentity } from '../transcripts/readIdentity.js'
 import { joinParts } from './readers.js'
@@ -158,7 +158,7 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
       deps.held?.(latest, false)
       deps.reattach(deps.bySession(sessionId)!)
     }
-    void job.then(settled, settled).catch(() => log('[engine-others] LIVE_RECOVERY_FAILED'))
+    void job.then(settled, settled).catch((error) => log(`[engine-others] LIVE_RECOVERY_FAILED · ${errorKind(error)}`))
     return true
   }
   const held = (session: RegisteredSession, value: boolean, rewritten?: boolean | 'lost'): void => {
@@ -188,7 +188,7 @@ export function createOtherStreams(deps: OtherStreamsDeps) {
           log(`[watcher] ${sid(handle.sessionId)} transcript rewritten in place — attaching it again from its end`)
           reattach(session)
         }
-        try { deps.frame(session, frame) } catch { log(`[engine-others] ${sid(handle.sessionId)} frame could not be applied`); unavailable(session) }
+        try { deps.frame(session, frame) } catch (error) { log(`[engine-others] ${sid(handle.sessionId)} frame could not be applied · ${errorKind(error)}`); unavailable(session) }
       }
     }
     return true

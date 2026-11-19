@@ -16,6 +16,7 @@ import { engineInstallPaths, engineInstallRecipe } from './engineInstall.js'
 import { currentUserShell } from './userShell.js'
 import { windowsLaunchCandidates, windowsLaunchCommand } from './binaryOnPath.js'
 import { hermesBootFile, hermesRoot } from './windows/hermesLaunch.js'
+import { errorKind } from './log.js'
 
 // Keep this historical import surface for callers, but never duplicate the
 // catalog here. `engines/types.ts` is the one iterable source of truth.
@@ -94,6 +95,9 @@ export const ENGINE_CLI_ALIASES: Readonly<Record<AgentEngine, readonly string[]>
   terminal: [],
 }
 
+/** The code is the error's `code` as well as its words: a log line names a failure by its code (`errorKind`). */
+const engineFailure = (code: string): Error => Object.assign(new Error(code), { code })
+
 let interactivePathCache: { shell: string; daemonPath: string; value: string[]; retryAt: number } | null = null
 let interactivePathFlight: Promise<string[]> | null = null
 let interactivePathFlightKey = ''
@@ -104,7 +108,7 @@ function warmInteractivePath(): Promise<string[]> {
   const shell = currentUserShell(), daemonPath = process.env.PATH ?? ''
   if (!shell) return Promise.resolve([])
   const key = `${shell}\0${daemonPath}`
-  if (interactivePathFlight) return interactivePathFlightKey === key ? interactivePathFlight : Promise.reject(new Error('ENGINE_PATH_CHANGED'))
+  if (interactivePathFlight) return interactivePathFlightKey === key ? interactivePathFlight : Promise.reject(engineFailure('ENGINE_PATH_CHANGED'))
   if (interactivePathCache?.shell === shell && interactivePathCache.daemonPath === daemonPath && Date.now() < interactivePathCache.retryAt) {
     return Promise.resolve(interactivePathCache.value)
   }
@@ -355,7 +359,7 @@ async function candidateNames(directory: string, wanted: Set<string>, wantedKey:
     const code = (error as NodeJS.ErrnoException).code
     if (code === 'ENOENT' || code === 'ENOTDIR') return new Set()
     if (code === 'EACCES') return null
-    throw new Error('ENGINE_LOOKUP_FAILED')
+    throw engineFailure('ENGINE_LOOKUP_FAILED')
   }
 }
 
@@ -367,14 +371,14 @@ const ownershipKey = () => JSON.stringify([process.env.PATH, currentUserShell(),
 /** Fresh identities per pass, eight filesystem reads at once, one pass shared by concurrent panes. */
 export function agentCommandOwnershipSnapshotAsync(): Promise<AgentCommandOwnershipSnapshot> {
   const key = ownershipKey()
-  if (ownershipFlight) return key === ownershipFlightKey ? ownershipFlight : Promise.reject(new Error('ENGINE_LOOKUP_CHANGED'))
+  if (ownershipFlight) return key === ownershipFlightKey ? ownershipFlight : Promise.reject(engineFailure('ENGINE_LOOKUP_CHANGED'))
   ownershipFlightKey = key
   let expired = false
   const work = (async () => {
     await warmInteractivePath()
-    if (key !== ownershipKey()) throw new Error('ENGINE_LOOKUP_CHANGED')
+    if (key !== ownershipKey()) throw engineFailure('ENGINE_LOOKUP_CHANGED')
     const input = ownershipInput()
-    if (input.paths.length > 1_024) throw new Error('ENGINE_LOOKUP_PATH_LIMIT')
+    if (input.paths.length > 1_024) throw engineFailure('ENGINE_LOOKUP_PATH_LIMIT')
     const windowsCandidates = windowsLaunchCandidates(input.hermes), windowsFiles = new Set(windowsCandidates)
     const commands = new Set([...input.commands.values()].flat().concat(windowsCandidates, ['agent', 'cursor-agent', 'grok', input.grokHome],
       input.cursor ? [input.cursor] : [], input.grok ? [input.grok] : []))
@@ -385,11 +389,11 @@ export function agentCommandOwnershipSnapshotAsync(): Promise<AgentCommandOwners
       while (!expired && directoryIndex < input.paths.length) {
         const directory = input.paths[directoryIndex++]
         try { names.set(resolve(directory), await candidateNames(directory, wanted, wantedKey)) }
-        catch { expired = true; directoryFailure = new Error('ENGINE_LOOKUP_FAILED') }
+        catch { expired = true; directoryFailure = engineFailure('ENGINE_LOOKUP_FAILED') }
       }
     }))
     if (directoryFailure) throw directoryFailure
-    if (expired) throw new Error('ENGINE_LOOKUP_TIMEOUT')
+    if (expired) throw engineFailure('ENGINE_LOOKUP_TIMEOUT')
     const visible = (directory: string, command: string) => {
       const known = names.get(resolve(directory))
       return !known || /[^\x00-\x7f]/.test(command) || known.has(command.toLowerCase())
@@ -399,7 +403,7 @@ export function agentCommandOwnershipSnapshotAsync(): Promise<AgentCommandOwners
         ? (!windowsFiles.has(command) || visible(dirname(command), basename(command)) ? [command] : [])
         : input.paths.filter(entry => visible(entry, command)).map(entry => join(entry, command))]))
     const paths = [...new Set([...byCommand.values()].flat())]
-    if (paths.length > 32_768) throw new Error('ENGINE_LOOKUP_PATH_LIMIT')
+    if (paths.length > 32_768) throw engineFailure('ENGINE_LOOKUP_PATH_LIMIT')
     const identities = new Map<string, ExecutableFileIdentity>()
     let next = 0
     let failure: Error | undefined
@@ -418,24 +422,24 @@ export function agentCommandOwnershipSnapshotAsync(): Promise<AgentCommandOwners
         } catch (error) {
           const code = (error as NodeJS.ErrnoException).code
           if (code !== 'ENOENT' && code !== 'ENOTDIR' && code !== 'EACCES') {
-            expired = true; failure = new Error('ENGINE_LOOKUP_FAILED')
+            expired = true; failure = engineFailure('ENGINE_LOOKUP_FAILED')
           }
         }
       }
     }))
     if (failure) throw failure
-    if (expired) throw new Error('ENGINE_LOOKUP_TIMEOUT')
-    if (key !== ownershipKey()) throw new Error('ENGINE_LOOKUP_CHANGED')
+    if (expired) throw engineFailure('ENGINE_LOOKUP_TIMEOUT')
+    if (key !== ownershipKey()) throw engineFailure('ENGINE_LOOKUP_CHANGED')
     return ownershipSnapshot(input, command => (byCommand.get(command) ?? []).flatMap(file => identities.get(file) ?? []),
       hermesBootFileKey(windowsCandidates.find(file => identities.has(file)) ?? input.hermes))
   })()
   // Do not start another pass while a timed-out filesystem read is still outstanding.
   let timer: ReturnType<typeof setTimeout>
   const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => { expired = true; reject(new Error('ENGINE_LOOKUP_TIMEOUT')) }, 10_000)
+    timer = setTimeout(() => { expired = true; reject(engineFailure('ENGINE_LOOKUP_TIMEOUT')) }, 10_000)
   })
   const result = Promise.race([work, deadline]).catch(error => {
-    console.error(`[engine] ${error.message}: executable ownership unavailable`)
+    console.error(`[engine] ${errorKind(error)}: executable ownership unavailable`)
     throw error
   })
   ownershipFlight = result

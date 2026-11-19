@@ -144,7 +144,7 @@ describe('the daemon\'s watch', () => {
     const { watch, log } = watchWith([line({ console: true, ports: [{ path: 'COM3' }] })], {}, { command, now: () => clock })
     expect(await watch.ports()).toEqual([])
     expect(watch.console()).toBe(false)
-    expect(log).toHaveBeenCalledTimes(1)
+    expect(log).toHaveBeenCalledExactlyOnceWith('cable: harness-serial watch could not start: ENOENT')
     missing = false
     clock = 5_000
     expect((await watch.ports())[0]?.path).toBe('COM3')
@@ -155,7 +155,7 @@ describe('the daemon\'s watch', () => {
     const { watch, log } = watchWith([], {}, { command: args => ({ file: '\0', args }) })
     expect(watch.console()).toBe(false)
     expect(await watch.ports()).toEqual([])
-    expect(log).toHaveBeenCalledTimes(1)
+    expect(log).toHaveBeenCalledExactlyOnceWith('cable: harness-serial watch could not start: TypeError ERR_INVALID_ARG_VALUE')
   })
 
   it('waits for the first line, then serves the dials and whether this user is at the screen', async () => {
@@ -352,7 +352,7 @@ describe('the link to one dial', () => {
     // Both listeners first: 'close' follows 'error' at once.
     const closed = new Promise((resolve) => stream.once('close', resolve))
     const error = await new Promise<NodeJS.ErrnoException>((resolve) => stream.once('error', resolve))
-    expect(error.code).toBe('closed: The device is not connected.')
+    expect(error).toMatchObject({ code: 'PORT_CLOSED', message: 'closed: The device is not connected.' })
     await closed
     expect(events[0]).toBe('error')
   })

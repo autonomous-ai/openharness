@@ -1795,7 +1795,7 @@ describe('cable session', () => {
           expect(port.sent).toEqual([{ t: 'focus', agentId: 'r1' }])
         } else {
           if (outcome === 'refused') expect(port.sent).toContainEqual(expect.objectContaining({ t: 'machine.error', code: 'UNREACHABLE' }))
-          else expect(log).toHaveBeenCalledWith('cable: could not follow app machine (connection lost)')
+          else expect(log).toHaveBeenCalledWith('cable: could not follow app machine (Error)')
           await session.followApp('mac-local', 'a2')
           expect(port.sent.filter(m => m.t === 'focus').at(-1)).toEqual({ t: 'focus', agentId: 'a2' })
         }
@@ -6491,7 +6491,7 @@ describe('what the dial cannot do for an agent', () => {
     const { session, port } = await greeted(caps({ sendTurn, log: (line) => lines.push(line) }))
     try {
       port.say({ t: 'turn.send', agentId: 'a2', text: 'hi' })
-      await vi.waitFor(() => expect(lines).toContain('cable: turn.send → failed'))
+      await vi.waitFor(() => expect(lines).toContain('cable: turn.send → failed · Error'))
       port.say({ t: 'turn.send', agentId: 'a2', text: 'again' })
       await vi.waitFor(() => expect(sendTurn).toHaveBeenCalledTimes(2))
     } finally { await session.stop() }

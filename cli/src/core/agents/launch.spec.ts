@@ -259,13 +259,13 @@ describe('relaunch helpers', () => {
     ])
     // A copy that fails never costs the relaunch: it runs after the old Pi stopped.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    vi.mocked(bringPiSessionHome).mockImplementationOnce(() => { throw new Error('EACCES') })
+    vi.mocked(bringPiSessionHome).mockImplementationOnce(() => { throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }) })
     await expect(helpers.prepareSessionResume(pi, held)).resolves.toBe(false)
     vi.mocked(bringPiSessionHome).mockImplementationOnce(() => { throw 'odd' })
     await expect(helpers.prepareSessionResume(pi, held)).resolves.toBe(false)
     expect(warn.mock.calls.map(([line]) => String(line))).toEqual([
       "[resume] a1 · could not bring pi's conversation home · EACCES",
-      "[resume] a1 · could not bring pi's conversation home · odd",
+      "[resume] a1 · could not bring pi's conversation home · string",
     ])
     vi.unstubAllEnvs()
   })

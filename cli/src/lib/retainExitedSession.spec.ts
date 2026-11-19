@@ -104,6 +104,14 @@ describe('retainExitedSession', () => {
     const warn = vi.fn()
     const h = harness({ publishStoppedAgent: () => Promise.reject(new Error('offline')), warn })
     expect(() => h.retain(row(), true)).not.toThrow()
-    await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledExactlyOnceWith('[resume] could not announce saved harness: archive announcement unavailable · Error'))
+  })
+
+  it('an engine exit the registry cannot publish is warned about with its kind, and the terminal stays held', async () => {
+    const warn = vi.fn()
+    const refused = Object.assign(new Error("EACCES: permission denied, open '/Users/dee/.harness/cli/data/registry.json'"), { code: 'EACCES' })
+    const h = harness({ registry: { confirmEngineExit: async () => { throw refused } }, warn })
+    expect(await h.retain(row(), true)).toEqual({ state: 'not-published' })
+    expect(warn).toHaveBeenCalledExactlyOnceWith('[resume] engine exit publication failed; the terminal remains held: registry publication unavailable · EACCES')
   })
 })

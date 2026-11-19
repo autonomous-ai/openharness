@@ -295,17 +295,17 @@ describe('durable orchestrator lifecycle', () => {
     await expect(start()).rejects.toMatchObject({ code: 'CORRUPT_STATE' })
     expect(readFileSync(file, 'utf8')).toBe('{"prompt": SECRET-TASK-MARKER}')
     expect(launches).toHaveLength(0)
-    expect(warn).toHaveBeenCalledWith(`[orchestrator] could not read ${id}.json: it is not JSON`)
+    expect(warn).toHaveBeenCalledWith(`[orchestrator] could not read ${id}.json: SyntaxError`)
     expect(warn.mock.calls.flat().join('\n')).not.toContain('SECRET')
   })
-  it('says a project that is JSON but not a project by its schema error, which names fields, never their values', async () => {
+  it('says a project that is JSON but not a project by its kind, never its values', async () => {
     mkdirSync(deps.stateDir, { recursive: true })
     const file = join(deps.stateDir, `${id}.json`)
     writeFileSync(file, JSON.stringify({ id, prompt: 'SECRET-TASK-MARKER', state: 'SECRET-STATE-MARKER', engine: 'SECRET-ENGINE-MARKER' }))
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     expect(service.list()).toEqual([])
     await expect(start()).rejects.toMatchObject({ code: 'CORRUPT_STATE' })
-    expect(warn).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`^\\[orchestrator\\] could not read ${id}\\.json: .*"path"`, 's')))
+    expect(warn).toHaveBeenCalledWith(`[orchestrator] could not read ${id}.json: ZodError`)
     expect(warn.mock.calls.flat().join('\n')).not.toContain('SECRET')
   })
   it('recovers interrupted director and worker launches conservatively', async () => {
@@ -472,7 +472,7 @@ describe('durable orchestrator lifecycle', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.spyOn(privateState, 'readPrivateStateFile').mockImplementationOnce(() => { throw 'untyped state failure' })
     service = new OrchestratorService(deps); expect(service.list()).toEqual([])
-    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('invalid state'))
+    expect(console.warn).toHaveBeenCalledWith(`[orchestrator] could not read ${id}.json: string`)
     service.stop(); service = new OrchestratorService(deps)
     let failOnce = true
     deps.changed = () => { if (failOnce) { failOnce = false; throw 'untyped observer failure' } }

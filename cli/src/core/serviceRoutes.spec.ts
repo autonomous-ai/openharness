@@ -237,8 +237,8 @@ describe('the door\'s routes a service answers', () => {
     expect(await frame(doors, conn, { type: 'route_task', payload: { requestId: 'q-4' } })).toEqual({ type: 'route_result', payload: { requestId: 'q-4', agentId: '', reason: 'down' } })
     const odd = createServiceRoutes({ routes, linked: router([]), hosted: { route: () => { throw 'private-request-fixture' } }, setTimer: () => 0, clearTimer: () => {}, log })
     expect(await odd.answer('/api/thing/save', read('/api/thing/save'))).toEqual(DOWN)
-    expect(log.mock.calls).toEqual([['[services] thing_http SERVICE_REQUEST_FAILED'], ['[services] devices_ws SERVICE_REQUEST_FAILED'],
-      ['[services] thing_http SERVICE_REQUEST_FAILED']])
+    expect(log.mock.calls).toEqual([['[services] thing_http SERVICE_REQUEST_FAILED · Error'], ['[services] devices_ws SERVICE_REQUEST_FAILED · Error'],
+      ['[services] thing_http SERVICE_REQUEST_FAILED · string']])
     expect(JSON.stringify(log.mock.calls)).not.toContain('private-request-fixture')
   })
 

@@ -21,6 +21,7 @@
  */
 import { existsSync } from 'node:fs'
 import path from 'node:path'
+import { errorKind } from '../log.js'
 import type { TerminalBackend } from '../terminalBackend.js'
 import { terminalInstanceId } from '../terminalRuntime.js'
 import type { TerminalRuntimeRef } from '../terminalTypes.js'
@@ -189,7 +190,7 @@ export class PtyHostDrain {
     try {
       this.deps.cleanup?.()
     } catch (error) {
-      console.error(`[terminal] ptyhost: cleanup after the drain failed: ${error instanceof Error ? error.message : String(error)}`)
+      console.error(`[terminal] ptyhost: cleanup after the drain failed: ${errorKind(error)}`)
     }
   }
 

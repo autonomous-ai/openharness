@@ -2,7 +2,7 @@
  * The OpenClaw reader against stores built from the recorded fixtures (`__fixtures__/schema.sql` plus a scenario),
  * OpenClaw 2026.11.2. The fixtures need a Node whose SQLite has fts5 (22.23 or 24; 23.11 lacks it).
  */
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import * as zlib from 'node:zlib'
@@ -146,9 +146,10 @@ describe('readOpenclawSince', () => {
     expect(seqs(await since(path, 'agent:main:plain', -1))).toEqual([0, 1, 3])
     expect(seqs(await since(path, 'agent:main:plain', -1))).toEqual([0, 1, 3])
     const lines = error.mock.calls.map((call) => String(call[0])).filter((line) => line.includes('unreadable'))
+    // The step that failed, in fixed words: zstd's own code is not a code-shaped token, so its kind alone says only Error.
     expect(lines).toEqual([
-      expect.stringMatching(new RegExp(`^\\[openclaw\\] ${sid('agent:main:plain')} seq 2 unreadable · `)),
-      expect.stringMatching(new RegExp(`^\\[openclaw\\] ${sid('agent:main:plain')} seq 6 unreadable · `)),
+      `[openclaw] ${sid('agent:main:plain')} seq 2 unreadable · json · SyntaxError`,
+      `[openclaw] ${sid('agent:main:plain')} seq 6 unreadable · zstd · Error`,
     ])
     // No row text and no key reaches the log.
     expect(lines.join('\n')).not.toContain('{bad')
@@ -294,6 +295,19 @@ describe('OpenclawReader', () => {
     await new Promise((resolve) => setTimeout(resolve, 50))
     tail.stop()
     expect(events).toEqual([])
+  })
+
+  it('says a read that failed once, by its kind and the store\'s own code, never the store\'s path', async () => {
+    // A file SQLite cannot read: the line names SQLite's code, which the read error carries on its `cause`.
+    const path = join(dir, 'openclaw-agent.sqlite')
+    writeFileSync(path, 'not a database, at all: longer than an SQLite header is')
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const { reader: tail } = reader(path, 'agent:main:plain')
+    await tail.start()
+    // Polls that fail the same way say nothing more.
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    tail.stop()
+    expect(error.mock.calls).toEqual([[`[openclaw] ${sid('agent:main:plain')} read failed · OpenclawReadError ERR_SQLITE_ERROR`]])
   })
 
   it('a key that was not there yet is read live from its start', async () => {

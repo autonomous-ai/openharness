@@ -11,6 +11,7 @@
 import { homedir } from 'node:os'
 import { resolveBinaryOnPath } from '../binaryOnPath.js'
 import { loginShellEnvironment } from '../loginShellEnv.js'
+import { errorKind } from '../log.js'
 import { execFileTied } from '../tied.js'
 import { ConnectorError } from './store.js'
 
@@ -205,7 +206,7 @@ async function answer<T>(engine: Via, reading: Promise<string>, parse: (listing:
     if (said !== LATE) return parse(said)
     console.warn(`[connections] ${engine} has not answered in ${Math.round(answerMs / 1000)}s; its read goes on, and the next look has it`)
   } catch (error) {
-    console.warn(`[connections] ${engine} could not say what it holds: ${error instanceof Error ? error.message : String(error)}`)
+    console.warn(`[connections] ${engine} could not say what it holds: ${errorKind(error)}`)
   } finally {
     clearTimeout(timer)
   }

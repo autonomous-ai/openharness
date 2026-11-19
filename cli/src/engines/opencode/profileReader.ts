@@ -3,6 +3,7 @@ import type { RuntimeModelOption } from '../facets/runtime.js'
 import { addOption, encodeRuntimeProfile, RUNTIME_EFFORTS } from '../kit/runtime.js'
 import { confirmObserved } from '../kit/runtimeReader.js'
 import { env } from '../../config/env.js'
+import { errorKind } from '../../lib/log.js'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import * as opencode from './runtimeProfile.js'
@@ -96,7 +97,7 @@ class ProfileReader {
       try {
         entries = opencode.parseOpencodeModelsOutput(await run(['models']))
       } catch (err) {
-        console.warn('[runtime-profile] OpenCode model catalog failed:', err instanceof Error ? err.message : err)
+        console.warn('[runtime-profile] OpenCode model catalog failed:', errorKind(err))
       }
     }
     this.catalogs.delete(key)

@@ -216,7 +216,7 @@ describe('the Wi-Fi device with the dials', () => {
     onTab(window, [agentId])
     const dial = await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')
     await heard(dial, 'agents.end')
-    await until('the Wi-Fi device\'s service to be left off', () => machine.daemon.log().includes('[service wifi] did not start · injected fault: wifi') || null, 30_000, 200)
+    await until('the Wi-Fi device\'s service to be left off', () => machine.daemon.log().includes('[service wifi] did not start · Error') || null, 30_000, 200)
     await device.open(30_000)
     // Its requests go unanswered, as frames lost on the way: it asks again later, by the same keys.
     await expect(device.ask('hello', { proto: 1 }, 5_000)).rejects.toThrow()

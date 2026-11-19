@@ -368,7 +368,7 @@ describe('routeVoiceTask', () => {
       routerImpl = async () => { throw Object.assign(new Error('spawn SECRET ENOENT'), { code: 'ENOENT' }) }
       await routeVoiceTask('fix the auth login please', AGENTS)
       const lines = log.mock.calls.map((call) => call.join(' '))
-      expect(lines).toContain('[voice-route] claude one-shot failed (exited 3 · stderr=40B) → name matching')
+      expect(lines).toContain('[voice-route] claude one-shot failed (Error · exited 3 · stderr=40B) → name matching')
       expect(lines).toContain('[voice-route] claude one-shot failed (ENOENT) → name matching')
       expect(lines.join('\n')).not.toContain('SECRET')
     } finally { log.mockRestore() }

@@ -8,6 +8,7 @@
  * there (e2e/keyRoutes.e2e.ts).
  */
 import type { HttpAnswer } from '../core/api.js'
+import { errorKind } from '../lib/log.js'
 
 /** What the routes do, as the gateway does it (gateway/start.ts). */
 export interface KeyOps {
@@ -118,8 +119,8 @@ export function keyRoutes(ops: KeyOps, log: (line: string) => void = (line) => c
         let body: Record<string, unknown>
         try { body = JSON.parse(text ?? '') as Record<string, unknown> } catch { return BAD_JSON }
         return await route.body!(body)
-      } catch {
-        log(`[gateway] ${method} ${path} KEY_ROUTE_FAILED`)
+      } catch (error) {
+        log(`[gateway] ${method} KEY_ROUTE_FAILED · ${errorKind(error)}`)
         return answer(500, { error: 'INTERNAL' })
       }
     })()

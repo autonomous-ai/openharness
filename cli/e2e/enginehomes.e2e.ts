@@ -574,8 +574,11 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     writeFileSync(faultFile, '{', { mode: 0o600 })
     await d.start()
     client = await LocalClient.connect(d)
-    await until('the binding hold with its reason', () => d.log().includes(`binding held · Conversation identity is held: ${reason}`))
-    const held = await row(client, tile.id)
+    // The log names the hold's kind; its reason is on the agent's row, which clients are sent.
+    await until('the binding hold', () => d.log().includes('binding held · IdentityReadUnavailable IDENTITY_UNAVAILABLE'))
+    const held = await until('the hold\'s reason on the row', async () => {
+      const now = await row(client, tile.id); return now?.identityHold?.includes(reason) ? now : null
+    })
     expect(held?.engine).toBe('claude')
     expect(held?.sessionId).toBeFalsy()
     expect(held?.status).toBe('active')
@@ -643,8 +646,11 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     writeFileSync(fault, 'hold', { mode: 0o600 })
     await d.start()
     client = await LocalClient.connect(d)
-    await until('the descriptor binding hold after readiness', () => /binding held · Conversation identity is held: the native (?:lsof|descriptor)/.test(d.log()), 45_000)
-    const held = await row(client, tile.id)
+    // The log names the hold's kind; its reason is on the agent's row, which clients are sent.
+    await until('the descriptor binding hold after readiness', () => d.log().includes('binding held · IdentityReadUnavailable IDENTITY_UNAVAILABLE'), 45_000)
+    const held = await until('the descriptor hold\'s reason on the row', async () => {
+      const now = await row(client, tile.id); return /the native (?:lsof|descriptor)/.test(now?.identityHold ?? '') ? now : null
+    })
     expect(held).toMatchObject({ engine: 'codex', status: 'active' })
     expect(held?.sessionId).toBeFalsy()
     const sibling = await client.request('agent_create', { engine: 'claude', cwd: d.projectsDir, bypassPermission: true }, 90_000)

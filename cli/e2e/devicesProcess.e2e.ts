@@ -322,7 +322,7 @@ describe('the devices in their own process', () => {
     const b = await desk.plug('E2E-B', 'e2:e0:00:00:00:0b')
     await heard(b, 'agents.end')
     await desk.plug('E2E-A', 'e2:e0:00:00:00:0a')
-    await until('A to be dropped', () => /cable: \S+ dropped \(\d+ faults in a minute: injected fault: dial\.E2E-A\) — this dial alone/.test(d.log()) || null, 60_000, 250)
+    await until('A to be dropped', () => /cable: \S+ dropped \(\d+ faults in a minute: Error\) — this dial alone.*\[usb E2E-A\]/.test(d.log()) || null, 60_000, 250)
     const opened = () => d.log().split('\n').filter((line) => /cable: open on .* \[usb E2E-A\]/.test(line)).length
     const first = opened()
     await until('A\'s port to be looked at again', () => opened() > first || null, 30_000, 250)
@@ -347,7 +347,7 @@ describe('the devices in their own process', () => {
     const flooded = Date.now()
     const pingsFrom = b.messages.length
     a.flood(Buffer.alloc(256 * 1024, 0x55))
-    await until('A to be dropped for flooding', () => /dropped \(flooding the port: .*\) — this dial alone.*\[usb E2E-A\]/.test(d.log()) || null, 30_000, 250)
+    await until('A to be dropped for flooding', () => /dropped \(flooding the port\) — this dial alone.*\[usb E2E-A\]/.test(d.log()) || null, 30_000, 250)
     const since = b.messages.length
     await turn(window, agentId, 'b carries on through the flood')
     await heard(b, 'summary', since, agentId)

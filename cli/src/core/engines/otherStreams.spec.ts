@@ -71,7 +71,7 @@ describe('the other engines\' streams, as the core holds them', () => {
     const run = setup({ log, frame: vi.fn(() => { throw new Error('taker broke') }) })
     run.answers.open.mockResolvedValueOnce(ok(opened({ frames: [frame(1)] })))
     await run.streams.open(row(), OPEN)
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('frame could not be applied'))
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('frame could not be applied · Error'))
     run.sessions.set('s1', row('s1', 'grok'))
     run.waits[0]?.(ok({ pages: [], lost: [] }))
     await vi.waitFor(() => expect(run.waits).toHaveLength(2))
@@ -751,7 +751,7 @@ describe('the other engines\' streams, as the core holds them', () => {
     stopping = undefined
     reservation.resolve()
     await vi.advanceTimersByTimeAsync(0)
-    expect(run.deps.log).toHaveBeenCalledWith('[engine-others] LIVE_RECOVERY_FAILED')
+    expect(run.deps.log).toHaveBeenCalledWith('[engine-others] LIVE_RECOVERY_FAILED · Error')
     run.streams.stop()
   })
 

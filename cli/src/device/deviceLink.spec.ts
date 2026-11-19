@@ -175,7 +175,7 @@ describe('the fleet\'s lane, sealed by the gateway', () => {
     await link.online()
     seal.hello.mockRejectedValueOnce(new Error('the gateway could not start an E2EE session: it is not running'))
     await link.sendSealed({ type: 'message', machineId: LINKED, payload: { content: 'never in the clear' } })
-    expect(lines.some((line) => line.includes('dropped message for linked-machine') && line.includes('not running'))).toBe(true)
+    expect(lines).toContain('device: dropped message for linked-machine — Error')
     await new Promise((resolve) => setTimeout(resolve, 50))
     expect(server.forMachines()).toEqual([])
   })

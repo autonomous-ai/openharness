@@ -525,7 +525,7 @@ describe('the updater when things go wrong', () => {
     serve(Buffer.from('#!/usr/bin/env node\nconsole.log("9.9.9")\n'), () => { downloads++ })
     const logs: string[] = []
     vi.spyOn(console, 'log').mockImplementation((line: string) => { logs.push(String(line)) })
-    vi.spyOn(console, 'error').mockImplementation((line: string) => { logs.push(String(line)) })
+    vi.spyOn(console, 'error').mockImplementation((...parts: unknown[]) => { logs.push(parts.join(' ')) })
     let attempts = 0
     const staged: string[] = []
     startSelfUpdater({
@@ -533,8 +533,10 @@ describe('the updater when things go wrong', () => {
       withLock: async (fn) => {
         attempts++
         if (attempts === 1) throw new SpawnLockBusyError(null)
-        if (attempts === 2) throw new Error('disk full')
-        if (attempts === 3) throw 'lock folder vanished' // not an Error: still logged, still retried
+        if (attempts === 2) throw new SpawnLockBusyError(null, 'not a lock this CLI made: /home/someone/.harness/spawn.lock — remove it by hand (EACCES)')
+        if (attempts === 3) throw new SpawnLockBusyError({ pid: 4242, startMarker: 's', token: 't', purpose: 'update', since: Date.now() })
+        if (attempts === 4) throw new Error('disk full')
+        if (attempts === 5) throw 'lock folder vanished' // not an Error: still logged, still retried
         return fn()
       },
       onStaged: (version) => { staged.push(version) },
@@ -542,8 +544,14 @@ describe('the updater when things go wrong', () => {
     // Staging stops the updater for good, so nothing is left running.
     await vi.waitFor(() => expect(staged).toEqual(['9.9.9']), { timeout: 5_000 })
     expect(downloads, 'downloaded once: later checks reuse the bytes already verified').toBe(2)
-    expect(logs).toContain('[update] 9.9.9 is ready but the daemon spawn lock is held by an unknown process — trying again next check')
-    expect(logs.filter((line) => line === '[update] check failed (will retry):')).toHaveLength(2)
+    const busy = logs.filter((line) => line.includes('is ready but the daemon spawn lock is'))
+    expect(busy.slice(0, 2)).toEqual([
+      '[update] 9.9.9 is ready but the daemon spawn lock is held by an unknown process — trying again next check',
+      '[update] 9.9.9 is ready but the daemon spawn lock is not a lock this CLI made — remove it by hand — trying again next check',
+    ])
+    expect(busy[2]).toMatch(/^\[update\] 9\.9\.9 is ready but the daemon spawn lock is held \(being updated by pid 4242 for \d+s\) — trying again next check$/)
+    expect(busy).toHaveLength(3)
+    expect(logs.filter((line) => line.startsWith('[update] check failed'))).toEqual(['[update] check failed (will retry): Error', '[update] check failed (will retry): string'])
   })
 })
 
@@ -953,7 +961,7 @@ describe('a build that fails on its own merits (e2e/updateHostile.e2e.ts)', () =
   const ticks = (n: number) => new Promise((resolve) => setTimeout(resolve, n * 10 + 5))
 
   it.each([
-    ['whose bytes do not match its manifest', (state: { cli: Buffer; named?: string }) => { state.named = sha(Buffer.from('other bytes')) }, 'does not match its manifest (sha256 mismatch'],
+    ['whose bytes do not match its manifest', (state: { cli: Buffer; named?: string }) => { state.named = sha(Buffer.from('other bytes')) }, 'does not match its manifest (DigestMismatchError) —'],
     ['that fails its canary', (state: { cli: Buffer; named?: string }) => { state.cli = Buffer.from('process.exit(3)\n') }, 'failed its canary (exit 3)'],
     // Found by QA on a quiet machine: a canary can finish after the test's fixed 55 ms wait.
     ['that fails its delayed canary', (state: { cli: Buffer; named?: string }) => { state.cli = Buffer.from('setTimeout(() => process.exit(3), 150)\n') }, 'failed its canary (exit 3)'],
@@ -1017,7 +1025,7 @@ describe('a build that fails on its own merits (e2e/updateHostile.e2e.ts)', () =
     try {
       await vi.waitFor(() => expect(staged).toEqual(['9.9.9']), { timeout: 5_000 })
       expect(attempts).toBe(3)
-      expect(errors).toEqual(['[update] check failed (will retry): terminated', '[update] check failed (will retry): terminated'])
+      expect(errors).toEqual(['[update] check failed (will retry): TypeError', '[update] check failed (will retry): TypeError'])
     } finally { poller.stop() }
   })
 
@@ -1175,9 +1183,9 @@ describe('a link that stalls without dropping (e2e/updateHostile.e2e.ts)', () =>
     })
     const started = Date.now()
     await expect(downloadVerified({ url: 'https://updates.test/quiet.js', sha256: 'x' }, limits))
-      .rejects.toThrow(new TransferStalledError('https://updates.test/quiet.js sent nothing for 60 ms'))
+      .rejects.toThrow(expect.objectContaining({ code: 'TRANSFER_STALLED', message: 'https://updates.test/quiet.js sent nothing for 60 ms' }))
     await expect(downloadVerified({ url: 'https://updates.test/trickle.js', sha256: 'x' }, limits))
-      .rejects.toThrow('https://updates.test/trickle.js took longer than 400 ms in all')
+      .rejects.toThrow(expect.objectContaining({ code: 'TRANSFER_DEADLINE', message: 'https://updates.test/trickle.js took longer than 400 ms in all' }))
     await expect(downloadVerified({ url: 'https://updates.test/silent.js', sha256: 'x' }, limits))
       .rejects.toBeInstanceOf(TransferStalledError)
     await expect(fetchManifest('https://updates.test/silent.json', 'adapter', limits)).rejects.toBeInstanceOf(TransferStalledError)
@@ -1271,7 +1279,7 @@ describe('a link that stalls without dropping (e2e/updateHostile.e2e.ts)', () =>
     try {
       await vi.waitFor(() => expect(staged).toEqual(['9.9.9']), { timeout: 5_000 })
       expect(attempts).toBe(2)
-      expect(errors).toEqual(['[update] check failed (will retry): https://updates.test/cli.js sent nothing for 50 ms'])
+      expect(errors).toEqual(['[update] check failed (will retry): TransferStalledError TRANSFER_STALLED'])
     } finally { poller.stop() }
     expect(MANIFEST_LIMITS.deadlineMs).toBeLessThan(DOWNLOAD_LIMITS.deadlineMs)
   })
@@ -1654,7 +1662,8 @@ console.log(process.execPath.includes('node-v24.') ? (named.includes('node-v24.'
       await vi.waitFor(() => expect(events).toHaveLength(2), { timeout: 10_000 })
     } finally { poller.stop(); rmSync(`${currentNode}.tmp`, { recursive: true, force: true }) }
     expect(events).toEqual([`ensure on ${v22}`, `staged with ${v22}`])
-    expect(said.mock.calls.flat().join('\n')).toContain(`could not name ${v24} in current-node`)
+    expect(said.mock.calls.flat().join('\n')).toContain('[update] could not name the new Node in current-node (')
+    expect(said.mock.calls.flat().join('\n'), 'no path on the line').not.toContain(v24)
     expect(nodeMigration(dir)).toBe('cannot-switch')
     // Node 24 did not fail here: the next update may move to it.
     expect(failedNode(dir)).toBeNull()

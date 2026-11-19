@@ -114,7 +114,7 @@ import { ensureManagedGrid, ensureManagedRuntime } from './lib/runtimeInstall.js
 // Before ANY child is spawned: on Linux an absent locale makes tmux and ps mangle their output,
 // which silently costs the daemon every pane it would have discovered. See lib/childLocale.ts.
 ensureUtf8Locale()
-import { prepareLogFile, ts } from './lib/log.js'
+import { errorKind, prepareLogFile, ts } from './lib/log.js'
 import { narrowOwnEnvironment, startEnvLine } from './lib/startEnvironment.js'
 import { privacyCommand } from './lib/privacyCommand.js'
 
@@ -1271,7 +1271,7 @@ async function resolveMachineIfUnknown(session: AuthSession): Promise<void> {
   try {
     await resolveComputerMachine(AbortSignal.timeout(RESOLVE_ON_START_TIMEOUT_MS))
   } catch (err) {
-    console.log(`  (machine id not resolved yet — ${err instanceof Error ? err.message : String(err)}; starting on the computer id, resolved on the next login or online start)`)
+    console.log(`  (machine id not resolved yet — ${errorKind(err)}; starting on the computer id, resolved on the next login or online start)`)
   }
 }
 const RESOLVE_ON_START_TIMEOUT_MS = 10_000
@@ -2688,7 +2688,7 @@ async function status(): Promise<void> {
   if (!alive) {
     registry.load()
     try { await registry.flush() }
-    catch { console.error('[registry] status flush failed') }
+    catch (error) { console.error(`[registry] status flush failed · ${errorKind(error)}`) }
   }
   // A daemon whose start-up failed is alive and answering, but nothing on this machine works. Say so
   // in the one line a person reads, rather than leaving it looking like an ordinary slow start.

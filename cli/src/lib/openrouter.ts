@@ -15,6 +15,7 @@
 import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { errorKind } from './log.js'
 
 const ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions'
 /**
@@ -146,12 +147,10 @@ export async function openRouterComplete(options: OpenRouterCompletionOptions): 
     if (options.signal?.aborted) {
       throw err instanceof Error && err.name === 'AbortError' ? err : new DOMException('aborted', 'AbortError')
     }
-    // By name and code, never the message: V8's JSON.parse error quotes a window of the body, and a completion's
-    // body can repeat the person's spoken words. fetch's own failure is the constant "fetch failed", its cause's
-    // code (ECONNRESET, ENOTFOUND) is what says why.
-    const name = err instanceof Error ? errorToken(err.name) : null
-    const code = errorToken((err as { cause?: { code?: unknown } } | null)?.cause?.code)
-    console.warn(`[openrouter] ${options.model} call failed: ${name ?? 'error'}${code ? ` · code=${code}` : ''}`)
+    // By kind, never the message: V8's JSON.parse error quotes a window of the body, and a completion's body can
+    // repeat the person's spoken words. fetch's own failure is the constant "fetch failed", its cause's code
+    // (ECONNRESET, ENOTFOUND) is what says why, and the kind carries it.
+    console.warn(`[openrouter] ${options.model} call failed: ${errorKind(err)}`)
     return null
   } finally {
     clearTimeout(timer)

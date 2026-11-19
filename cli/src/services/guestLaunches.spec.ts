@@ -138,7 +138,7 @@ describe('a guest\'s harness, as shared machines builds it', () => {
       // One that fails is said, and the rest go on.
       accounts.shareFolders.mockRejectedValueOnce(new Error('EPERM')).mockRejectedValueOnce('gone')
       await launches.sync(() => true, ['kim@acme.io'])
-      expect(lines.filter((l) => l.startsWith('could not share'))).toEqual([`could not share folders with ${KIM}: EPERM`, `could not share folders with ${LEE}: gone`])
+      expect(lines.filter((l) => l.startsWith('could not share'))).toEqual([`could not share folders with ${KIM}: Error`, `could not share folders with ${LEE}: string`])
     })
 
     it('asks nothing of the helper while there are no guests, or guest access is off', async () => {

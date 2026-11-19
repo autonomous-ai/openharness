@@ -124,7 +124,7 @@ describe('turn hooks', () => {
     other.hooks.onTurnStop({ sessionId: 's1' })
     await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
     expect(other.deps.emit).toHaveBeenCalledWith('s1', END)
-    expect(error).toHaveBeenCalledWith('[hooks] claude stop hook failed:', 'engine failed')
+    expect(error).toHaveBeenCalledWith('[hooks] claude stop hook failed:', 'Error')
   })
 
   it('refuses an engine closure for a replaced turn, changed engine or forgotten session', () => {
@@ -327,7 +327,7 @@ describe('turn hooks', () => {
         run.hooks.onTurnStop({ sessionId: 's1' })
         run.hooks.onTurnStop({ sessionId: 's1' })
         await vi.advanceTimersByTimeAsync(0)
-        expect(error.mock.calls.map((call) => call[1])).toEqual(['tail gone', 'worse'])
+        expect(error.mock.calls.map((call) => call[1])).toEqual(['Error', 'string'])
       })
     }
 
@@ -393,7 +393,7 @@ describe('turn hooks', () => {
       put(run, worse)
       run.hooks.onTurnStop({ sessionId: 's1' })
       await vi.advanceTimersByTimeAsync(0)
-      expect(error.mock.calls).toEqual([['[hooks] devin stop hook failed:', 'store gone'], ['[hooks] devin stop hook failed:', 'worse']])
+      expect(error.mock.calls).toEqual([['[hooks] devin stop hook failed:', 'Error'], ['[hooks] devin stop hook failed:', 'string']])
     })
   })
 
@@ -423,7 +423,7 @@ describe('turn hooks', () => {
       run.hooks.onTurnStop({ sessionId: 's1', status: 'error' })
       run.hooks.onTurnStop({ sessionId: 's1', status: 'error' })
       await vi.advanceTimersByTimeAsync(0)
-      expect(error.mock.calls).toEqual([['[hooks] grok stop hook failed:', 'tail gone'], ['[hooks] grok stop hook failed:', 'worse']])
+      expect(error.mock.calls).toEqual([['[hooks] grok stop hook failed:', 'Error'], ['[hooks] grok stop hook failed:', 'string']])
     })
   })
 
@@ -460,7 +460,7 @@ describe('turn hooks', () => {
       run.hooks.onTurnStop({ sessionId: 's1' })
       run.hooks.onTurnStop({ sessionId: 's1' })
       await vi.advanceTimersByTimeAsync(0)
-      expect(error.mock.calls).toEqual([['[hooks] cursor stop hook failed:', 'queue gone'], ['[hooks] cursor stop hook failed:', 'worse']])
+      expect(error.mock.calls).toEqual([['[hooks] cursor stop hook failed:', 'Error'], ['[hooks] cursor stop hook failed:', 'string']])
     })
   })
 
@@ -471,7 +471,7 @@ describe('turn hooks', () => {
     run.hooks.onTurnStop({ sessionId: 's1' })
     run.hooks.onTurnStop({ sessionId: 's1' })
     await vi.advanceTimersByTimeAsync(0)
-    expect(error.mock.calls).toEqual([['[hooks] claude stop hook failed:', 'tail gone'], ['[hooks] claude stop hook failed:', 'worse']])
+    expect(error.mock.calls).toEqual([['[hooks] claude stop hook failed:', 'Error'], ['[hooks] claude stop hook failed:', 'string']])
   })
 })
 

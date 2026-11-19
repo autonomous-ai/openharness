@@ -111,7 +111,7 @@ describe('the SCM seam, with git as its only implementation', { timeout: 30_000 
     try {
       const failing = { kind: 'git', prepareWrite: async () => { throw new Error('locked') } }
       await expect(prepareInstructionWrites(repo, [failing as unknown as ScmProject])).resolves.toBeUndefined()
-      expect(warn).toHaveBeenCalledWith('[scm] could not prepare instruction files for writing · locked')
+      expect(warn).toHaveBeenCalledWith('[scm] could not prepare instruction files for writing · Error')
     } finally { warn.mockRestore() }
   })
 

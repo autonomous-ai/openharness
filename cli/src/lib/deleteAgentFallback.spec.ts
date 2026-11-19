@@ -119,7 +119,8 @@ describe('delete-agent process termination', () => {
       kill: () => { throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' }) },
     })
     await expect(terminateDeletedAgent(SESSION, d)).resolves.toBe('failed')
-    expect(d.logs.join('\n')).toContain('operation not permitted')
+    expect(d.logs.join('\n')).toContain('could not SIGTERM claude pid 4242: EPERM')
+    expect(d.logs.join('\n')).not.toContain('operation not permitted')
   })
 
   it('treats a process that vanished mid-signal as gone, not as a failure', async () => {

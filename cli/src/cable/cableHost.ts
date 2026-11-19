@@ -22,6 +22,7 @@ import type { RegisteredSession } from '../lib/registry.js'
 import { fetchRelease, loadImage, shouldOffer, type FirmwareRelease } from './fwPush.js'
 import { routeVoiceTask, type RouterAgent, type RouterContinuity } from '../lib/voiceRouter.js'
 import { env } from '../config/env.js'
+import { errorKind } from '../lib/log.js'
 import { FleetRouter } from '../services/fleetRouter.js'
 import type { ForkResult } from '../core/api.js'
 import type { FleetRouting } from '../services/fleet.js'
@@ -382,7 +383,7 @@ export class DaemonCableHost implements CableHost {
       // only with a pick replaced: that one was still running, so the lane is up. Any other failure may be the lane's end (a
       // revoke, a 4403, an unplug), and telling it anything would dial straight back past what it decided.
       if (entry.replaced && REFUSALS.has(selected.code)) {
-        void this.announceSelection().catch((err) => this.wiring.log(`cable: could not announce (${(err as Error).message})`))
+        void this.announceSelection().catch((err) => this.wiring.log(`cable: could not announce (${errorKind(err)})`))
       }
       return selected
     }
@@ -443,7 +444,7 @@ export class DaemonCableHost implements CableHost {
       if (plugIn !== this.plugIn) return
       this.laneTries = 0
       await this.announceSelection()
-    })().catch((err) => this.wiring.log(`cable: could not open the lane (${(err as Error).message})`))
+    })().catch((err) => this.wiring.log(`cable: could not open the lane (${errorKind(err)})`))
   }
 
   private retryLane(plugIn: number): void {
@@ -1331,7 +1332,7 @@ export class DaemonCableHost implements CableHost {
       return await this.wiring.routeInWindow(text, cmd)
     } catch (err) {
       // Never let a broken window path swallow a sentence a person spoke: fall back to routing here.
-      this.wiring.log(`cable: the window route failed (${(err as Error).message}) — routing here`)
+      this.wiring.log(`cable: the window route failed (${errorKind(err)}) — routing here`)
       return { t: 'unavailable' }
     }
   }

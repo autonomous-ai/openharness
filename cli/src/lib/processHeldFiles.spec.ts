@@ -434,13 +434,13 @@ it('says once for each process why its listing gave no home, and names no path',
   expect(await mac(id(4251), STORE)).toBeUndefined()
 
   expect(said()).toEqual([
-    '[held-files] pid 4242: two homes',
-    '[held-files] pid 4243: pid changed',
-    '[held-files] pid 4244: unmappable',
-    '[held-files] pid 4245: unreadable',
-    '[held-files] pid 4246: lsof failed',
-    '[held-files] pid 4247: lsof timed out',
-    '[held-files] pid 4248: too many descriptors',
-    '[held-files] pid 4250: bad pid',
+    '[held-files] pid 4242: Unlisted TWO_HOMES',
+    '[held-files] pid 4243: Unlisted PID_CHANGED',
+    '[held-files] pid 4244: Unlisted UNMAPPABLE',
+    '[held-files] pid 4245: Unlisted UNREADABLE',
+    '[held-files] pid 4246: Unlisted LSOF_FAILED',
+    '[held-files] pid 4247: Unlisted LSOF_TIMED_OUT',
+    '[held-files] pid 4248: Unlisted TOO_MANY_DESCRIPTORS',
+    '[held-files] pid 4250: Unlisted BAD_PID',
   ])
 })
