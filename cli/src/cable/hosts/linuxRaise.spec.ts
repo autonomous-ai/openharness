@@ -93,6 +93,16 @@ describe('createLinuxRaise', () => {
     expect(raised).toEqual([])
   })
 
+  it('takes a look that throws as no desktop session, and raises nothing', async () => {
+    const { deps, lines, raised } = login()
+    deps.find = () => Promise.reject(new Error('look'))
+    const raise = createLinuxRaise(deps)
+    expect(await raise.raise({ pid: 4242, app: 'wezterm' })).toBe(false)
+    expect(raise.ready()).toBe(false)
+    expect(lines).toEqual(['[device] raise · none · no desktop session'])
+    expect(raised).toEqual([])
+  })
+
   it('waits for the look under way before it raises', async () => {
     const look = deferred<LinuxDesktop>()
     const { deps, raised } = login()
