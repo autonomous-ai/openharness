@@ -14,24 +14,51 @@ pub trait FrontSource: Send + Sync {
     fn start(&self, changed: Box<dyn Fn(String) + Send + Sync>);
 }
 
-/// Reports nothing: a platform with no source of its own yet (Windows, until its wave).
+/// Reports nothing: a Linux session with no common way to tell the app in front (GNOME or KDE on Wayland).
 pub struct NoFront;
 
 impl FrontSource for NoFront {
     fn start(&self, _changed: Box<dyn Fn(String) + Send + Sync>) {}
 }
 
-/// The source this platform has. Only the X11 one can fail after it starts, and says so in `log`.
-pub fn system(
-    #[cfg_attr(not(target_os = "linux"), expect(unused_variables))] log: Arc<dyn Log>,
-) -> Arc<dyn FrontSource> {
+/// The source this platform and session have. A source that stops after it starts says so in `log`.
+pub fn system(#[cfg_attr(target_os = "macos", expect(unused_variables))] log: Arc<dyn Log>) -> Arc<dyn FrontSource> {
     #[cfg(target_os = "macos")]
-    let source = crate::front_macos::MacFront;
+    return Arc::new(crate::front_macos::MacFront);
+    #[cfg(windows)]
+    return Arc::new(crate::front_windows::WinFront { log });
     #[cfg(target_os = "linux")]
-    let source = crate::front_x11::X11Front { log };
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    let source = NoFront;
-    Arc::new(source)
+    return match linux_front(&|name| std::env::var(name).ok()) {
+        LinuxFront::X11 => Arc::new(crate::front_x11::X11Front { log }),
+        LinuxFront::Sway => Arc::new(crate::front_sway::SwayFront { log }),
+        LinuxFront::Hyprland => Arc::new(crate::front_hyprland::HyprlandFront { log }),
+        LinuxFront::None => Arc::new(NoFront),
+    };
+}
+
+/// Which window system a Linux session tells the app in front through.
+#[derive(Debug, PartialEq, Eq)]
+pub enum LinuxFront {
+    X11,
+    Sway,
+    Hyprland,
+    None,
+}
+
+/// X11 first: an X11 session started from inside sway or Hyprland keeps their variables, but its windows are X11's.
+/// An empty value is unset.
+pub fn linux_front(var: &dyn Fn(&str) -> Option<String>) -> LinuxFront {
+    let set = |name| var(name).is_some_and(|value| !value.is_empty());
+    let (session_type, wayland_display, display) = (var("XDG_SESSION_TYPE"), var("WAYLAND_DISPLAY"), var("DISPLAY"));
+    if session_is_x11(session_type.as_deref(), wayland_display.as_deref(), display.as_deref()) {
+        LinuxFront::X11
+    } else if set("SWAYSOCK") {
+        LinuxFront::Sway
+    } else if set("HYPRLAND_INSTANCE_SIGNATURE") {
+        LinuxFront::Hyprland
+    } else {
+        LinuxFront::None
+    }
 }
 
 /// Which source is following the app in front, so a line that it stopped names it.
