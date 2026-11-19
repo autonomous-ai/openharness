@@ -588,11 +588,15 @@ describe('atomicWriteFileAsync', () => {
 
   // The event loop goes on while a scanner holds the file: the wait is a timer, never Atomics.wait or a sync call.
   it('on Windows a rename refused for a moment waits by a timer, and blocks nothing', async () => {
-    const f = join(folder(), 'f')
+    const dir = folder(), f = join(dir, 'f')
     writeFileSync(f, 'old')
     fault.rename = attempt => { if (attempt <= 2) throw errno('EBUSY') }
+    // A trust write: its check of the file there (and, on Windows, of where it is) is in the async steps too.
+    vi.stubEnv('ADAPTER_DATA_DIR', dir)
     fault.syncCalls = []
-    expect(await onPlatform('win32', () => atomicWriteFileAsync(f, 'new', 'trust'))).toBe(true)
+    try {
+      expect(await onPlatform('win32', () => atomicWriteFileAsync(f, 'new', 'trust'))).toBe(true)
+    } finally { vi.unstubAllEnvs() }
     const syncCalls = fault.syncCalls
     fault.syncCalls = undefined
     expect(syncCalls).toEqual([])

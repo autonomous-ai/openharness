@@ -15,10 +15,14 @@ import {
   rmSync,
   statSync,
   writeFileSync,
+  type Stats,
 } from 'node:fs'
+import * as fs from 'node:fs/promises'
+import type { FileHandle } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { basename, dirname, win32 } from 'node:path'
+import { setTimeout as sleep } from 'node:timers/promises'
 import { errorKind } from './log.js'
 
 const PRIVATE_DIRECTORY_MODE = 0o700
@@ -55,19 +59,99 @@ export function insideWindowsRoots(target: string, roots: readonly string[]): bo
   })
 }
 
-function realRoots(): string[] {
-  return windowsStateRoots().flatMap((root) => {
-    try { return [realpathSync.native(root)] } catch { return [] }
-  })
+/**
+ * One file system call of a state write. The rules (names, modes, flags, flushes, the retry, the clean-up) are written
+ * once, as generators of these steps, and run by one of two drivers: `runSync` with node:fs's synchronous calls, or
+ * `runAsync` with fs/promises and a timer, so the async form keeps every rule and never blocks its event loop.
+ */
+type Handle = number | FileHandle
+type Step =
+  | { call: 'open'; path: string; flags: number | string; mode?: number }
+  | { call: 'write'; handle: Handle; data: string | Uint8Array }
+  | { call: 'stat' | 'flush' | 'close'; handle: Handle }
+  | { call: 'chmod'; handle: Handle; mode: number }
+  // `copyNew` never replaces a file (COPYFILE_EXCL).
+  | { call: 'rename' | 'link' | 'copyNew'; from: string; to: string }
+  | { call: 'remove' | 'realpath'; path: string }
+  | { call: 'pause'; ms: number }
+type Steps<T> = Generator<Step, T, unknown>
+
+/** One step; its caller knows what the call answers. */
+function* step<T = void>(call: Step): Steps<T> {
+  return (yield call) as T
+}
+
+function callSync(s: Step): unknown {
+  switch (s.call) {
+    case 'open': return openSync(s.path, s.flags, s.mode)
+    case 'write': return writeFileSync(s.handle as number, s.data)
+    case 'stat': return fstatSync(s.handle as number)
+    case 'chmod': return fchmodSync(s.handle as number, s.mode)
+    case 'flush': return fsyncSync(s.handle as number)
+    case 'close': return closeSync(s.handle as number)
+    case 'rename': return renameSync(s.from, s.to)
+    case 'link': return linkSync(s.from, s.to)
+    case 'copyNew': return copyFileSync(s.from, s.to, constants.COPYFILE_EXCL)
+    case 'remove': return rmSync(s.path, { force: true })
+    case 'realpath': return realpathSync.native(s.path)
+    case 'pause': return pauseSync(s.ms)
+  }
+}
+
+function callAsync(s: Step): Promise<unknown> {
+  switch (s.call) {
+    case 'open': return fs.open(s.path, s.flags, s.mode)
+    case 'write': return (s.handle as FileHandle).writeFile(s.data)
+    case 'stat': return (s.handle as FileHandle).stat()
+    case 'chmod': return (s.handle as FileHandle).chmod(s.mode)
+    case 'flush': return (s.handle as FileHandle).sync()
+    case 'close': return (s.handle as FileHandle).close()
+    case 'rename': return fs.rename(s.from, s.to)
+    case 'link': return fs.link(s.from, s.to)
+    case 'copyNew': return fs.copyFile(s.from, s.to, constants.COPYFILE_EXCL)
+    case 'remove': return fs.rm(s.path, { force: true })
+    case 'realpath': return fs.realpath(s.path)
+    case 'pause': return sleep(s.ms)
+  }
+}
+
+/** Runs [steps] with the synchronous calls: a call that throws is thrown into the steps, where the rules catch it. */
+function runSync<T>(steps: Steps<T>): T {
+  let next = steps.next()
+  while (!next.done) {
+    let result: unknown
+    try { result = callSync(next.value) } catch (error) { next = steps.throw(error); continue }
+    next = steps.next(result)
+  }
+  return next.value
+}
+
+/** `runSync`, each call awaited instead. */
+async function runAsync<T>(steps: Steps<T>): Promise<T> {
+  let next = steps.next()
+  while (!next.done) {
+    let result: unknown
+    try { result = await callAsync(next.value) } catch (error) { next = steps.throw(error); continue }
+    next = steps.next(result)
+  }
+  return next.value
 }
 
 /** The Windows check for a state path: resolved through junctions and links, it must be inside the roots. */
-function requireInsideWindowsRoots(path: string, kind: 'directory' | 'file'): void {
-  const real = realpathSync.native(path)
-  if (!insideWindowsRoots(real, realRoots())) {
+function* insideWindowsRootsSteps(path: string, kind: 'directory' | 'file'): Steps<void> {
+  const real = yield* step<string>({ call: 'realpath', path })
+  const roots: string[] = []
+  for (const root of windowsStateRoots()) {
+    try { roots.push(yield* step<string>({ call: 'realpath', path: root })) } catch { /* a root that is not there holds nothing */ }
+  }
+  if (!insideWindowsRoots(real, roots)) {
     throw new Error(`state ${kind} ${path} is outside your user profile (${homedir()}), so its contents cannot be`
       + ' trusted. Keep Harness state in your profile, or set ADAPTER_DATA_DIR to the folder you want it in.')
   }
+}
+
+function requireInsideWindowsRoots(path: string, kind: 'directory' | 'file'): void {
+  runSync(insideWindowsRootsSteps(path, kind))
 }
 
 /**
@@ -89,9 +173,13 @@ export function requireWindowsStateFile(file: string): void {
  * save failed after its rename. NTFS journals the rename itself; the file's data was flushed before it.
  */
 export function syncStateDirectory(directory: string, flags: number | string = 'r'): void {
+  runSync(syncDirectorySteps(directory, flags))
+}
+
+function* syncDirectorySteps(directory: string, flags: number | string): Steps<void> {
   if (!directorySyncSupported()) return
-  const fd = openSync(directory, flags)
-  try { fsyncSync(fd) } finally { closeSync(fd) }
+  const handle = yield* step<Handle>({ call: 'open', path: directory, flags })
+  try { yield* step({ call: 'flush', handle }) } finally { yield* step({ call: 'close', handle }) }
 }
 
 /**
@@ -147,8 +235,8 @@ export function secureStateDirectory(directory: string, create = true): void {
   }
 }
 
-function inspectPrivateStateFile(fd: number, maxBytes: number): void {
-  const stat = fstatSync(fd)
+function* inspectSteps(handle: Handle, maxBytes: number): Steps<void> {
+  const stat = yield* step<Stats>({ call: 'stat', handle })
   const uid = ownerUid()
   if (!stat.isFile() || (uid !== null && stat.uid !== uid)) {
     throw new Error('state file has unsafe owner or type')
@@ -161,8 +249,8 @@ function inspectPrivateStateFile(fd: number, maxBytes: number): void {
   // trustworthy by tightening it now. Every writer under ADAPTER_DATA_DIR already passes mode 0o600.
   if ((mode & 0o022) !== 0) throw new Error('state file is group/world writable')
   if (mode !== PRIVATE_FILE_MODE) {
-    fchmodSync(fd, PRIVATE_FILE_MODE)
-    if ((fstatSync(fd).mode & 0o777) !== PRIVATE_FILE_MODE) {
+    yield* step({ call: 'chmod', handle, mode: PRIVATE_FILE_MODE })
+    if (((yield* step<Stats>({ call: 'stat', handle })).mode & 0o777) !== PRIVATE_FILE_MODE) {
       throw new Error('state file permissions could not be tightened')
     }
   }
@@ -172,7 +260,7 @@ export function readPrivateStateFile(file: string, maxBytes = Number.MAX_SAFE_IN
   if (process.platform === 'win32') requireInsideWindowsRoots(file, 'file')
   const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
   try {
-    inspectPrivateStateFile(fd, maxBytes)
+    runSync(inspectSteps(fd, maxBytes))
     return readFileSync(fd, 'utf8')
   } finally {
     closeSync(fd)
@@ -183,19 +271,23 @@ export function hardenPrivateStateFileIfPresent(
   file: string,
   maxBytes = Number.MAX_SAFE_INTEGER,
 ): boolean {
-  let fd: number
+  return runSync(hardenSteps(file, maxBytes))
+}
+
+function* hardenSteps(file: string, maxBytes: number): Steps<boolean> {
+  let handle: Handle
   try {
-    if (process.platform === 'win32') requireInsideWindowsRoots(file, 'file')
-    fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+    if (process.platform === 'win32') yield* insideWindowsRootsSteps(file, 'file')
+    handle = yield* step<Handle>({ call: 'open', path: file, flags: constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK })
   } catch (error) {
     if (isMissing(error)) return false
     throw error
   }
   try {
-    inspectPrivateStateFile(fd, maxBytes)
+    yield* inspectSteps(handle, maxBytes)
     return true
   } finally {
-    closeSync(fd)
+    yield* step({ call: 'close', handle })
   }
 }
 
@@ -235,37 +327,37 @@ function errorCode(error: unknown): string {
   return (error as NodeJS.ErrnoException | null)?.code ?? ''
 }
 
-function renameOver(temporary: string, file: string): void {
+function* renameOverSteps(temporary: string, file: string): Steps<void> {
   for (let attempt = 1; ; attempt++) {
     try {
-      renameSync(temporary, file)
+      yield* step({ call: 'rename', from: temporary, to: file })
       return
     } catch (error) {
       if (process.platform !== 'win32' || attempt >= RENAME_TRIES || !RENAME_BUSY.has(errorCode(error))) throw error
     }
-    pauseSync(RENAME_WAIT_MS)
+    yield* step({ call: 'pause', ms: RENAME_WAIT_MS })
   }
 }
 
 /** Puts the complete [temporary] at [file] unless a file is there: false when one is (another creator won). */
-function publishOnce(temporary: string, file: string): boolean {
+function* publishOnceSteps(temporary: string, file: string): Steps<boolean> {
   try {
-    linkSync(temporary, file)
+    yield* step({ call: 'link', from: temporary, to: file })
     return true
   } catch (error) {
     if (errorCode(error) === 'EEXIST') return false
     if (!LINK_REFUSED.has(errorCode(error))) throw error
   }
   try {
-    copyFileSync(temporary, file, constants.COPYFILE_EXCL)
+    yield* step({ call: 'copyNew', from: temporary, to: file })
   } catch (error) {
     if (errorCode(error) === 'EEXIST') return false
     throw error
   }
   // A copy is a new file, which the temporary's flush did not cover. Windows flushes only a handle open for writing.
   try {
-    const fd = openSync(file, constants.O_RDWR | constants.O_NOFOLLOW)
-    try { fsyncSync(fd) } finally { closeSync(fd) }
+    const handle = yield* step<Handle>({ call: 'open', path: file, flags: constants.O_RDWR | constants.O_NOFOLLOW })
+    try { yield* step({ call: 'flush', handle }) } finally { yield* step({ call: 'close', handle }) }
   } catch (error) {
     throw new AtomicWriteUnconfirmed(error)
   }
@@ -285,7 +377,21 @@ export function atomicWriteFile(
   kind: StateKind,
   options: AtomicWriteOptions = {},
 ): boolean {
-  if (kind === 'trust') hardenPrivateStateFileIfPresent(file)
+  return runSync(writeSteps(file, data, kind, options))
+}
+
+/** `atomicWriteFile` for the paths that must not block their event loop: the same rules, run with fs/promises. */
+export function atomicWriteFileAsync(
+  file: string,
+  data: string | Uint8Array,
+  kind: StateKind,
+  options: AtomicWriteOptions = {},
+): Promise<boolean> {
+  return runAsync(writeSteps(file, data, kind, options))
+}
+
+function* writeSteps(file: string, data: string | Uint8Array, kind: StateKind, options: AtomicWriteOptions): Steps<boolean> {
+  if (kind === 'trust') yield* hardenSteps(file, Number.MAX_SAFE_INTEGER)
   // The rename alone keeps a reader from half a file; the flushes made a full recap save cost 90-143 ms instead of 12
   // (2026-11-19). An exclusive file is made once and never written again (the computer id the backend binds this
   // computer to): no later write would put back what a power cut lost, so it is flushed whatever its kind.
@@ -294,20 +400,22 @@ export function atomicWriteFile(
   const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
   let published = false
   try {
-    const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, mode)
+    const handle = yield* step<Handle>({
+      call: 'open', path: temporary, flags: constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, mode,
+    })
     try {
-      writeFileSync(fd, data)
+      yield* step({ call: 'write', handle, data })
       // open's mode is narrowed by the umask: the file gets exactly its own.
-      fchmodSync(fd, mode)
-      if (durable) fsyncSync(fd)
-    } finally { closeSync(fd) }
+      yield* step({ call: 'chmod', handle, mode })
+      if (durable) yield* step({ call: 'flush', handle })
+    } finally { yield* step({ call: 'close', handle }) }
     if (options.exclusive) {
-      if (!publishOnce(temporary, file)) return false
+      if (!(yield* publishOnceSteps(temporary, file))) return false
     } else {
-      renameOver(temporary, file)
+      yield* renameOverSteps(temporary, file)
     }
     published = true
-    if (durable) syncStateDirectory(dirname(file))
+    if (durable) yield* syncDirectorySteps(dirname(file), 'r')
     return true
   } catch (error) {
     if (published) throw new AtomicWriteUnconfirmed(error)
@@ -316,7 +424,7 @@ export function atomicWriteFile(
     // A link or a copy leaves the temporary file's own name behind. Its removal must not replace what the write answers
     // (Windows refuses it while a scanner holds the file): one left behind is read by nobody.
     if (options.exclusive || !published) {
-      try { rmSync(temporary, { force: true }) } catch { /* left for nobody to read */ }
+      try { yield* step({ call: 'remove', path: temporary }) } catch { /* left for nobody to read */ }
     }
   }
 }
@@ -324,6 +432,11 @@ export function atomicWriteFile(
 /** `atomicWriteFile` of `JSON.stringify(value, null, 2)`. */
 export function atomicWriteJson(file: string, value: unknown, kind: StateKind, options?: AtomicWriteOptions): boolean {
   return atomicWriteFile(file, JSON.stringify(value, null, 2), kind, options)
+}
+
+/** `atomicWriteFileAsync` of `JSON.stringify(value, null, 2)`. */
+export function atomicWriteJsonAsync(file: string, value: unknown, kind: StateKind, options?: AtomicWriteOptions): Promise<boolean> {
+  return atomicWriteFileAsync(file, JSON.stringify(value, null, 2), kind, options)
 }
 
 // An older build still writes in place, so during an update a reader can find its file mid-write for a moment.
@@ -475,7 +588,7 @@ export function requireState<T>(file: string, parse: (text: string) => T, kind: 
 /** Rename to `<file>.unreadable`, over an older one. Never throws: a failure is one log line. True when set aside. */
 function setAsideUnreadable(file: string): boolean {
   try {
-    renameOver(file, `${file}.unreadable`)
+    runSync(renameOverSteps(file, `${file}.unreadable`))
     unreadableFiles.delete(file)
     return true
   } catch (error) {
