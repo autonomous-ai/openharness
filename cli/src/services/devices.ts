@@ -262,7 +262,7 @@ function orcaHomesCache(now: () => number, log: (line: string) => void): OrcaHom
 function observedSource(
   dataDir: string, log: (line: string) => void, orcaHomes: Pick<OrcaHomesCache, 'get'>, actions: ObservedActions,
   tty: ObservedDeps['tty'], scanned: ObservedDeps['scanned'], herdrTerminal: ObservedDeps['herdrTerminal'],
-  outer: ObservedDeps['outer'],
+  outer: ObservedDeps['outer'], ptyOwnerOf: ObservedDeps['ptyOwner'],
 ): ObservedSource {
   // Worked out at each read: a home the person moved is adopted while the daemon runs, and Orca's follow its last read.
   const places = observedPlaces({
@@ -287,8 +287,7 @@ function observedSource(
     log,
     actions,
     apps: learnApps,
-    // Windows has no `ps`, and a terminal there has no pseudo-terminal of a host's to read.
-    ...(process.platform === 'win32' ? {} : { ptyOwner: async (pid: number) => ptyOwner(pid, await readProcessNames()) }),
+    ptyOwner: ptyOwnerOf,
     // Asked for Claude Code's sessions alone (observed.ts), and read only inside its own records folders.
     record: (owner) => readRecord(owner, { records: places.claude.records() }),
     tty,
@@ -674,7 +673,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // it: each lookup answers nothing at once for an agent in none of its panes. herdr's first: herdr inside the person's
   // tmux is the nearer host, and keeps tmux's answer when herdr's finds no app.
   firstOuter(createHerdrOuter({ ...outerDeps, atime: ttyAtime }), createOuter(outerDeps,
-    [tmuxClients({ run: apps.run, tmux: tmuxAt }), zellijClients({ run: apps.run, zellij: zellijAt, platform: apps.platform })]))) : null
+    [tmuxClients({ run: apps.run, tmux: tmuxAt }), zellijClients({ run: apps.run, zellij: zellijAt, platform: apps.platform })])),
+  // Windows has no `ps`: there no terminal's pane is read as the agent's own, and none takes its words.
+  apps.platform === 'win32' ? undefined : async (pid) => ptyOwner(pid, await readProcessNames())) : null
   // Orca is asked only for the parts that use its homes, the first time as the devices start: the start pass waits for
   // that read (at most its 5 s), so an Orca home gets the skill with the default one.
   if (skill || observed) void orcaHomes.refresh().then(() => {
