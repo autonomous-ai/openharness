@@ -588,7 +588,9 @@ export function confirm(dir: string): void {
   }
   const kept = pendingVersion(dir)
   try {
-    if (kept && rejectedVersions(dir).includes(kept)) writeJson(join(dir, REJECTED), rejectedVersions(dir).filter((version) => version !== kept))
+    // Read once: a second read that failed would be written back as no version rolled back at all.
+    const listed = kept ? rejectedVersions(dir) : []
+    if (kept && listed.includes(kept)) writeJson(join(dir, REJECTED), listed.filter((version) => version !== kept))
     rmSync(join(dir, PENDING), { force: true })
   } catch { /* the new build runs either way */ }
 }
