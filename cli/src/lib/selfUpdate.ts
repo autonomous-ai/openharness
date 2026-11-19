@@ -814,7 +814,7 @@ export function startSelfUpdater(opts: {
           notifyBuf = await downloadVerified(entry.notify, download)
         } catch (error) {
           if (!(error instanceof DigestMismatchError)) throw error
-          refuse(`does not match its manifest (${error.message})`)
+          refuse(`does not match its manifest (${errorKind(error)})`)
           return
         }
         verified = { entry: key, version: entry.version, cliBuf, notifyBuf, canaried: false, ptyProtocol: PLAIN_VERSION_PTY_PROTOCOL, node: null }

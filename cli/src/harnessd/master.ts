@@ -269,7 +269,7 @@ export function probeMaster(config: { env: NodeJS.ProcessEnv; execArgv: string[]
     say(`${PROBE_ANSWER} · protocol ${status.protocol} · v${status.masterVersion} · ${PROBE_HANDOVER}`)
     return 0
   } catch (error) {
-    say(`harnessd-probe failed: ${error instanceof Error ? error.message : String(error)}`)
+    say(`harnessd-probe failed: ${errorKind(error)}`)
     return 1
   }
 }

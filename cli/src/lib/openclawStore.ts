@@ -18,6 +18,7 @@ import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { env } from '../config/env.js'
 import { OPENCLAW_KEY, openclawAgentDb } from '../engines/openclaw/contract.js'
+import { errorKind } from './log.js'
 import { nativeOpenFiles } from './nativeConversation.js'
 
 /** A TUI keeps its state folder for its whole life; a pid read again after this long may be another process. */
@@ -49,7 +50,7 @@ export async function openclawStateDir(pid: number, openFiles: (pid: number) => 
     held = stateDirOfOpenFiles(await openFiles(pid))
   } catch (error) {
     // Windows has neither /proc nor lsof; a TUI that exited has no files.
-    once(`[openclaw] open files of ${pid} unreadable · ${error instanceof Error ? error.message : String(error)}`)
+    once(`[openclaw] open files of ${pid} unreadable · ${errorKind(error)}`)
   }
   if (!held) return null
   if (cache.size >= CACHE_LIMIT) cache.clear()

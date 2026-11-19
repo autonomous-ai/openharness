@@ -148,8 +148,8 @@ export function handoverAlive(pid: number, kill: (pid: number, signal: 0) => voi
 
 /**
  * Under harness-launch.exe the master has no stderr: an error that ended it left no word of why. So, once it writes
- * the daemon's log itself, such an error is written there, at once (the process is about to end), and it exits 1, as
- * Node does on an uncaught error or an unhandled rejection.
+ * the daemon's log itself, such an error's kind is written there, at once (the process is about to end), and it exits
+ * 1, as Node does on an uncaught error or an unhandled rejection.
  */
 export function writeFatalTo(
   fd: number,
@@ -158,7 +158,7 @@ export function writeFatalTo(
 ): void {
   const fatal = (what: string) => (error: unknown): void => {
     try {
-      writeSync(fd, `${ts()} [harnessd] the master stopped on ${what}: ${error instanceof Error ? error.stack ?? error.message : format(error)}\n`)
+      writeSync(fd, `${ts()} [harnessd] the master stopped on ${what}: ${errorKind(error)}\n`)
     } catch { /* the log cannot be written: the line is lost, never the exit */ }
     exit(1)
   }
@@ -415,7 +415,7 @@ export function startMasterFromBundle(bundlePath: string, deps: BundleMasterDeps
     const lean = readLeanBundle(deps.read(bundlePath))
     written = lean ? { lean, path: deps.write(lean) } : null
   } catch (error) {
-    fromBundle(`the lean bundle could not be written out (${error instanceof Error ? error.message : String(error)}): the master, the core and the services run from ${bundlePath}`)
+    fromBundle(`the lean bundle could not be written out (${errorKind(error)}): the master, the core and the services run from cli.js`)
     return
   }
   if (!written) { fromBundle(`no lean bundle in ${bundlePath}: the master, the core and the services run from it`); return }
@@ -454,6 +454,6 @@ export function startMasterFromBundle(bundlePath: string, deps: BundleMasterDeps
     deps.execve(node, [node, ...process.execArgv, leanPath, '__harnessd'], leanEnv)
   } catch (error) {
     // Only what `process.execve` refuses before it begins: arguments it cannot take.
-    fromBundle(`the master could not re-execute on ${leanPath} (${error instanceof Error ? error.message : String(error)}): it runs from ${bundlePath}, the core and the services from ${leanPath}`, { path: leanPath, fingerprint })
+    fromBundle(`the master could not re-execute on the lean bundle (${errorKind(error)}): it runs from cli.js, the core and the services from the lean bundle`, { path: leanPath, fingerprint })
   }
 }

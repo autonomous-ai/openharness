@@ -14,6 +14,7 @@ import path from 'node:path'
 import { Duplex } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { env } from '../config/env.js'
+import { errorKind } from '../lib/log.js'
 import { currentPtyVersion } from '../lib/ptyHost/launch.js'
 // serial.ts imports this file too. The two ids are read inside functions only, never while the modules load.
 import { DIAL_PRODUCT_ID, DIAL_VENDOR_ID, type DialPort } from './serial.js'
@@ -135,7 +136,7 @@ export function createWindowsDialWatch(deps: WatchDeps): WindowsDialWatch {
     if (!command) { say('cable: harness-serial is not installed — no USB dial can be found'); return }
     let proc: ChildProcessWithoutNullStreams
     try { proc = run(command.file, command.args, { stdio: 'pipe', windowsHide: true }) }
-    catch (error) { say(`cable: harness-serial watch could not start: ${String(error)}`); return }
+    catch (error) { say(`cable: harness-serial watch could not start: ${errorKind(error)}`); return }
     child = proc
     firstRead = new Promise<void>((resolve) => {
       const timer = setTimeout(wake, firstLineMs)
@@ -158,7 +159,7 @@ export function createWindowsDialWatch(deps: WatchDeps): WindowsDialWatch {
     proc.stdin.on('error', () => { /* the child is gone; 'close' says so */ })
     proc.on('error', (error) => {
       if (child !== proc) return
-      say(`cable: harness-serial watch could not start: ${error.message}`)
+      say(`cable: harness-serial watch could not start: ${errorKind(error)}`)
       if (child === proc && proc.pid === undefined) { child = null; wake() }
     })
     proc.on('close', (code) => {

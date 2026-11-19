@@ -318,7 +318,7 @@ export class DshViewerManager {
     try {
       port = await (this.deps.freePort ?? freeLoopbackPort)()
     } catch (error) {
-      await this.fail(state, `[dsh] ${state.dsh.id} viewer: no free port · ${error instanceof Error ? error.message : error}`)
+      await this.fail(state, `[dsh] ${state.dsh.id} viewer: no free port · ${errorKind(error)}`)
       return
     }
     if (state.stopping) return
@@ -342,7 +342,7 @@ export class DshViewerManager {
       })
     } catch (error) {
       // Windows without Git Bash (shell.ts says what to install), or an argument spawn refuses.
-      await this.fail(state, `[dsh] ${state.dsh.id} viewer could not start · ${error instanceof Error ? error.message : error}`)
+      await this.fail(state, `[dsh] ${state.dsh.id} viewer could not start · ${errorKind(error)}`)
       return
     }
     state.child = child
