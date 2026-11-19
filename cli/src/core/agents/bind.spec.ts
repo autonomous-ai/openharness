@@ -2513,6 +2513,17 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       expect(await pass(180, sending)).toBe(true)
     })
 
+    // The registry lets an unbound row's task go only once its launch failed (registry.ts `takeFirstTask`): kept, the TUI
+    // that bound a session later had it typed.
+    it('a task on a row with no session yet comes off it too: the launch fails before the task is taken', async () => {
+      row.sessionId = ''
+      expect(await pass(0)).toBe(false)
+      expect(await pass(180)).toBe(true)
+      await vi.waitFor(() => expect(run.deps.registry.takeFirstTask).toHaveBeenCalledWith('a1'))
+      expect(vi.mocked(run.deps.registry.setLaunch).mock.invocationCallOrder[0])
+        .toBeLessThan(vi.mocked(run.deps.registry.afterTransaction).mock.invocationCallOrder[0])
+    })
+
     it('a task typed and not confirmed by the bound is let go, and the launch fails the same', async () => {
       delete row.firstTask
       vi.mocked(run.deps.input.firstTaskWaiting).mockReturnValue(true)
