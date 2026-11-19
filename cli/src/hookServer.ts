@@ -660,6 +660,8 @@ export function startHookServer(
         const preliminary = carriesStop && body.sessionId ? registry.bySession(body.sessionId) : undefined
         const stopScope = preliminary?.engine === engine ? scopeOf(preliminary) : undefined
         const stopWitness = stopScope ? handlers.captureAdmissionStop?.(preliminary!) : undefined
+        // Waited on more than its own registry write (the process record, a hold, a queue): its Stop may
+        // belong to an earlier turn. A slow write only delays the reply.
         let deferred = false
         if (carriesStop) resolvingStops.set(deliveryId, { fingerprint, stop: (stop, firedAt) => {
           if (stopProvenance(stop, firedAt) !== originalStop) return conflict
@@ -723,6 +725,7 @@ export function startHookServer(
         let committing = false, settled = false, stopRetained = false, stopUnmatched = false, stopInvocationClaimed = false
         const stopCurrent = processAgent.sessionId === body.sessionId && stopScope === scope ? stopWitness : undefined
         let followupFingerprint: string | undefined, committedIdentity: string | undefined
+        let parkedStop: { stop: BoundHookBody; firedAt: number | undefined } | undefined
         const live = () => registry.byAgent(processAgent.agentId)
         const current = () => !isRecentlyDeleted(processAgent.agentId) && !isRecentlyDeleted(body.sessionId)
           && live()?.active !== false && scopeOf(live()) === scope
@@ -761,8 +764,9 @@ export function startHookServer(
           followupFingerprint = sent
           // The registration itself owns this native Stop, even if its second
           // HTTP delivery outruns source recovery. Never close a later live turn.
+          // Its client leaves on pending and never sends it again: acceptance claims it.
           if (!settled || stopRetained) {
-            deferred = true
+            parkedStop = { stop, firedAt }
             return { status: 200, reply: { pending: true } }
           }
           if (stopCurrent && !stopCurrent()) stopInvocationClaimed = true
@@ -892,7 +896,12 @@ export function startHookServer(
               if (reason === 'invalid_session_registration') completedReply(400, { error: 'invalid session registration' })
               else completedReply(200, { ignored: true, reason })
             },
-            accept: () => { completedReply(200, { ok: true }); notify() },
+            accept: () => {
+              completedReply(200, { ok: true }); notify()
+              // A turn-stop parked while this was in flight is claimed as its retry would be, through every fence.
+              if (parkedStop) void Promise.resolve(linkedStop(parkedStop.stop, parkedStop.firedAt))
+                .catch(error => console.warn('[hooks] parked linked Stop claim failed', error))
+            },
           })
           if (queued) {
             // A registry commit has its own bounded deadline and owns its reply.
@@ -900,13 +909,15 @@ export function startHookServer(
             if (engine === 'hermes') answer(200, { pending: true })
             else setImmediate(() => {
               if (settled) return
-              const pending = () => { if (!settled) deferred = true; answer(200, { pending: true }) }
               if (committing) {
                 // The hook process itself has a five-second timeout. Slow durable
                 // preparation retains the delivery while its caller leaves promptly.
-                replyTimer = setTimeout(pending, 250)
+                replyTimer = setTimeout(() => answer(200, { pending: true }), 250)
                 replyTimer.unref()
-              } else pending()
+              } else {
+                deferred = true
+                answer(200, { pending: true })
+              }
             })
           } else {
             saveReceipt(history.records, deliveryId)
