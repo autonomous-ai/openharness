@@ -19,7 +19,7 @@ is no silent difference.
 
 1. `device-app/src-tauri` compiles, tests and runs on Windows; it already compiles on Linux.
 2. On both: installs the CLI when it is missing, keeps the daemon alive (`harness start --if-down`, the same keepalive
-   rule), starts at login, updates itself, signs in, Connect Orca, Export logs, the sound and Notifications toggles, the
+   rule), starts at login, updates itself, signs in, Export logs, the sound and Notifications toggles, the
    window's three screens, About, Quit, all with macOS's copy.
 3. The app in front feeds the dial on Windows (WinEvent hook), on Linux X11 (existing), sway and Hyprland (new), always
    through `harness hardware watch`'s stdin, as on macOS.
@@ -156,8 +156,8 @@ runs, …". Per OS:
 - **Windows:** Tauri's updater downloads the NSIS installer, checks its minisign signature and the signed version, and
   runs it per user in passive mode; the installer restarts the app. The plugin exits the app the moment it starts the
   installer (`tauri-plugin-updater` 2.x `updater.rs`, `std::process::exit(0)`), so on Windows the **install itself**
-  waits for the conditions macOS's relaunch waits for (window closed, no `harness start`, no CLI install, no sign-in,
-  no Orca run; `app.rs:337`); the download and signature check happen as soon as found (named difference: the
+  waits for the conditions macOS's relaunch waits for (window closed, no `harness start`, no CLI install, no sign-in;
+  `app.rs`); the download and signature check happen as soon as found (named difference: the
   `Updating Harness…` row shows from the install's start, as on macOS, only later). `replaceable()` checks the install
   folder (`%LOCALAPPDATA%\Harness Device`, Tauri's per-user default for the product name) is writable; when it is not
   (an admin-installed copy), `update: skipped not-writable` and the `Update X.Y.Z…` row, as on macOS.
@@ -195,7 +195,7 @@ stdin (`front_line`, `FrontFeed`), never logged. The CLI already maps exe names 
   follows changes pushed by `RegNotifyChangeKeyValue` (no poll). Linux uses the light glyph (named difference). The
   bundle gets `icon.ico` (Windows) and the PNG sizes Linux needs, generated from the existing `icon.png`.
 - **Linux tray clicks:** Tauri emits no tray click on Linux; the AppIndicator menu opens on click by itself. The
-  refresh a click triggers on macOS (`Event::MenuOpened`: re-read sign-in at most every 60 s, Orca at most every 5 min,
+  refresh a click triggers on macOS (`Event::MenuOpened`: re-read sign-in at most every 60 s,
   Desktop installed) runs from the 5 s tick on Linux instead, behind the same throttles (named difference).
 - **Window:** the same 420×320 webview and three screens. No taskbar button on Windows/Linux (`skip_taskbar`), as macOS
   shows no Dock icon; it raises and takes focus the same way.

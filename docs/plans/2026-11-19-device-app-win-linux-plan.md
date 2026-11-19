@@ -37,7 +37,7 @@ Checked on this Mac, 2026-11-19: `cargo check --locked --lib --target x86_64-pc-
 | 1 | Temporary workflow | `.github/workflows/tmp-device-app-win-linux.yml` | none | medium | none: temporary, one commit, removed before the merge |
 | 2 | Build inputs and the module map | `ST/Cargo.toml`, `ST/Cargo.lock`, `ST/src/lib.rs`, 17 new doc-only files in `ST/src/`, `ST/icons/icon.ico`, `ST/tauri.windows.conf.json`, `ST/tauri.linux.conf.json` | none | high | none: no behavior change, one commit |
 | 3 | Unix child code behind a seam | `ST/src/cli.rs`, `ST/src/child_unix.rs` | 2 | xhigh | none: a move, the unix tests stay green, one commit |
-| 4 | Windows children; the lib's tests run on Windows | `ST/src/child_windows.rs`, `ST/src/stdin_queue.rs`, `ST/src/cli.rs`, `ST/src/testing.rs`, test modules of `account.rs`, `watch.rs`, `runner.rs`, `logs.rs`, `orca_cli.rs`, `install.rs`, `update.rs`; `ST/build.rs` and `ST/windows/tests.manifest` if the hazard shows | 1, 2, 3 | xhigh | `stdin_queue` tests (Mac); `windows_children` tests and the job itself (`windows-unit`) |
+| 4 | Windows children; the lib's tests run on Windows | `ST/src/child_windows.rs`, `ST/src/stdin_queue.rs`, `ST/src/cli.rs`, `ST/src/testing.rs`, test modules of `account.rs`, `watch.rs`, `runner.rs`, `logs.rs`, `install.rs`, `update.rs`; `ST/build.rs` and `ST/windows/tests.manifest` if the hazard shows | 1, 2, 3 | xhigh | `stdin_queue` tests (Mac); `windows_children` tests and the job itself (`windows-unit`) |
 | 5 | Find the CLI on Windows; PATH per OS | `ST/src/cli.rs`, `ST/src/harness_home.rs` | 4 | xhigh | `cli.rs` new cases |
 | 6 | The log hides the Windows profile folder | `ST/src/log.rs` | none | xhigh | `log.rs` new case |
 | 7 | A stopped front source names itself | `ST/src/front.rs`, `ST/src/front_x11.rs` | none | medium | `front.rs` new case |
@@ -217,7 +217,7 @@ No behavior changes on macOS or Linux. Later tasks fill the files and never edit
 
 ### Task 4: Windows children; the lib's tests run on Windows
 
-**Files:** fill `ST/src/child_windows.rs`, `ST/src/stdin_queue.rs`; modify `ST/src/cli.rs` (the `cfg(windows)` import; `#[cfg(windows)] mod windows_children` in its tests), `ST/src/testing.rs`, and the test modules of `account.rs`, `watch.rs`, `runner.rs`, `logs.rs`, `orca_cli.rs`, `install.rs`, `update.rs`; `ST/build.rs` and `ST/windows/tests.manifest` only for the hazard below.
+**Files:** fill `ST/src/child_windows.rs`, `ST/src/stdin_queue.rs`; modify `ST/src/cli.rs` (the `cfg(windows)` import; `#[cfg(windows)] mod windows_children` in its tests), `ST/src/testing.rs`, and the test modules of `account.rs`, `watch.rs`, `runner.rs`, `logs.rs`, `install.rs`, `update.rs`; `ST/build.rs` and `ST/windows/tests.manifest` only for the hazard below.
 
 **Interfaces:**
 - Consumes: the seam of Task 3.
@@ -366,7 +366,7 @@ No behavior changes on macOS or Linux. Later tasks fill the files and never edit
 - `runner.rs`: `DownloadUpdate` runs `download()` on a thread and answers `UpdateDownloaded` or `UpdateFailed`.
 - `main.rs`: `App::new(…, update::install_exits_app())`.
 
-- [ ] **Step 1: Failing tests** (`app.rs`): `a_found_update_downloads_then_installs_then_relaunches` (property false: `DownloadUpdate` and the row at once; `UpdateDownloaded` → `InstallUpdate`; `UpdateInstalled` → `update: installed 0.1.3` and the relaunch waits exactly as today); `where_the_install_exits_the_app_it_waits_for_what_a_relaunch_waits_for` (property true: no row after the check; with the window open, a start running, the CLI installing, a sign-in running or an Orca run under way, ticks push no `InstallUpdate`; once none holds, one tick pushes the row, `update: installing 0.1.3` and `InstallUpdate`, and never `StopWatch` or `Relaunch`); `a_held_install_starts_no_second_check`; `an_install_that_fails_where_it_exits_the_app_is_tried_again_after_the_wait` (`UpdateFailed(Install)` clears the row and backs off as today); `a_blocked_or_failed_download_reads_as_before` on both values. Every existing update test passes with the extra `UpdateDownloaded` step. `runner.rs`: `a_download_then_an_install_reach_the_door_in_order`.
+- [ ] **Step 1: Failing tests** (`app.rs`): `a_found_update_downloads_then_installs_then_relaunches` (property false: `DownloadUpdate` and the row at once; `UpdateDownloaded` → `InstallUpdate`; `UpdateInstalled` → `update: installed 0.1.3` and the relaunch waits exactly as today); `where_the_install_exits_the_app_it_waits_for_what_a_relaunch_waits_for` (property true: no row after the check; with the window open, a start running, the CLI installing, or a sign-in running, ticks push no `InstallUpdate`; once none holds, one tick pushes the row, `update: installing 0.1.3` and `InstallUpdate`, and never `StopWatch` or `Relaunch`); `a_held_install_starts_no_second_check`; `an_install_that_fails_where_it_exits_the_app_is_tried_again_after_the_wait` (`UpdateFailed(Install)` clears the row and backs off as today); `a_blocked_or_failed_download_reads_as_before` on both values. Every existing update test passes with the extra `UpdateDownloaded` step. `runner.rs`: `a_download_then_an_install_reach_the_door_in_order`.
 - [ ] **Step 2:** `cargo test --locked --lib app:: runner::` FAILS. Commit red. **Step 3: Implement**; `SystemUpdater` keeps `(Update, Vec<u8>)` between the two calls. **Step 4:** `cargo test --locked` (lib and binary) passes on this Mac.
 - [ ] **Step 5: Commit** `The app's update is downloaded, then installed; where installing ends the app, it waits as a relaunch does`.
 
@@ -521,7 +521,7 @@ No behavior changes on macOS or Linux. Later tasks fill the files and never edit
   - `parity.rs`: `the_menu_and_the_rules_read_no_os` — `include_str!` of `model.rs` and `app.rs`, cut at their `#[cfg(test)]`, hold none of `cfg(target_os`, `cfg(windows)`, `cfg(unix)`, `cfg!(`, `cfg_attr(`, `consts::OS`.
   - `parity.rs`: `linuxs_tick_feeds_the_menu_opened_a_click_does` — `tick("linux", 7, true, &|| true)[1] == menu_opened(7, true) == Event::MenuOpened { now: 7, desktop_installed: true }`.
   - `parity.rs`: `the_one_os_property_of_the_rules_is_install_exits_app` — two `App`s, the property true and false, given one script of events with no update in it (a found CLI, status lines, a sign-in, an export, ticks) yield equal effects at every step; with an update in the script they differ only as Task 14 names (the row's moment, `update: installing`, no `Relaunch`).
-- [ ] **Step 2:** FAILS. Commit red. **Step 3: Implement.** **Step 4:** `cargo test --locked` passes here; `linux-unit` green. **Step 5: Commit** `Linux reads the account and Orca from the tick, as a click does elsewhere; a test holds the menu the same on every OS`.
+- [ ] **Step 2:** FAILS. Commit red. **Step 3: Implement.** **Step 4:** `cargo test --locked` passes here; `linux-unit` green. **Step 5: Commit** `Linux reads the account from the tick, as a click does elsewhere; a test holds the menu the same on every OS`.
 
 ### Task 26: Packaging details
 
