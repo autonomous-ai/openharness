@@ -23,7 +23,7 @@ import { PTY_PROTOCOL, SUPPORTED_PTY_PROTOCOLS } from '../ptyHost/protocol.js'
 import { atomicWriteFile } from '../secureState.js'
 import { REFUSED_RETRY_MAX_MS, msUntilSlot, type Poller } from '../selfUpdate.js'
 import {
-  BIN_FILES, PTY_PENDING, PTY_REJECTED, confirmPty, defaultPtyInstallFs, installPreparedPty, readPtyPending, rejectedPtyVersions, restorePty,
+  BIN_FILES, PTY_PENDING, PTY_REJECTED, confirmPty, defaultPtyInstallFs, installPreparedPty, readPtyPending, rejectedPtyToChange, rejectedPtyVersions, restorePty,
   sweepAsideFiles, type PtyInstallFs, type PtyPending, type PtyRestore,
 } from './ptyInstall.js'
 import {
@@ -410,9 +410,10 @@ export function ptyOnProbation(rootDir: string): string | null {
  */
 export function takeBackPty(rootDir: string, log: (line: string) => void, prefix: string, failedPrefix: string = prefix): void {
   const pending = readPtyPending(rootDir)
-  // Only the rejection this restore adds is taken back: one from before (a version installed anyway, by name) stays.
-  const rejectedBefore = rejectedPtyVersions(rootDir)
   try {
+    // Only the rejection this restore adds is taken back: one from before (a version installed anyway, by name) stays.
+    // A list that cannot be read now throws (StateFileUnreadable): read as none, that one would be taken back too.
+    const rejectedBefore = rejectedPtyToChange(rootDir)
     const result = restorePty(rootDir)
     // Before anything sweeps: the aside file is the only copy of that path's bytes.
     const put = putBackAside(rootDir, result.missing)

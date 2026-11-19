@@ -652,16 +652,20 @@ describe('takeBackPty', () => {
 
   // A read that failed read nothing: had it been taken as no rejection, the rejection from before (a version installed
   // anyway, by name) would be taken back as if this restore had added it.
-  it('a rejection from before stays when the list could not be read before the restore', async () => {
+  it('a rejection from before stays when the list cannot be read before the restore: nothing is taken back yet', async () => {
     const { READ_TRIES } = await import('../secureState.js')
     pairedIn()
     writeFileSync(join(ptyRoot, 'pty-rejected.json'), JSON.stringify(['0.11.0']))
     io.failReadOf = 'pty-rejected.json'
     io.failReads = READ_TRIES
     vi.spyOn(console, 'warn').mockImplementation(() => {})
-    takeBackPty(root, () => {}, '')
-    expect(pointer()).toBe('0.10.0')
+    const lines: string[] = []
+    takeBackPty(root, (l) => lines.push(l), '  ', '  ✗ ')
+    // Nothing done, and said: the marker stays, and the next master takes it back out.
+    expect(pointer()).toBe('0.11.0')
+    expect(existsSync(join(ptyRoot, 'pty-pending.json'))).toBe(true)
     expect(rejectedPtyVersions(root)).toEqual(['0.11.0'])
+    expect(lines).toEqual(['  ✗ could not take terminal host 0.11.0 back out (StateFileUnreadable) — it stays on probation: the next master takes it back out, or judges it and may keep it'])
   })
 
   it('on a failure, says the marker stays for the next master, which may keep it', () => {

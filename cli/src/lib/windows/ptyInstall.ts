@@ -319,7 +319,7 @@ export function restorePty(rootDir: string, fs: PtyInstallFs = defaultPtyInstall
   const previousDir = join(ptyRoot, pending.previous)
   const has = (name: string) => existsSync(join(previousDir, name))
 
-  const rejected = (requireState(join(ptyRoot, PTY_REJECTED), jsonArray, 'cache') ?? []).filter((v): v is string => typeof v === 'string')
+  const rejected = rejectedPtyToChange(rootDir)
   if (!rejected.includes(pending.version)) atomicWriteFile(join(ptyRoot, PTY_REJECTED), JSON.stringify([...rejected, pending.version]), 'cache')
 
   if (has('harness-pty.exe')) {
@@ -352,8 +352,16 @@ export function confirmPty(rootDir: string, fs: PtyInstallFs = defaultPtyInstall
 /** The versions rolled back on this machine. A missing list is empty; one that cannot be read is set aside, then empty. */
 export function rejectedPtyVersions(rootDir: string): string[] {
   const read = readState(join(ptyRootOf(rootDir), PTY_REJECTED), 'cache', jsonArray)
-  return read.state === 'ok' ? read.value.filter((v): v is string => typeof v === 'string') : []
+  return read.state === 'ok' ? versionsIn(read.value) : []
 }
+
+/** The list a change starts from. One that cannot be read now throws (StateFileUnreadable): read as none, the change
+ *  would lose a rejection, or take back one from before as its own. */
+export function rejectedPtyToChange(rootDir: string): string[] {
+  return versionsIn(requireState(join(ptyRootOf(rootDir), PTY_REJECTED), jsonArray, 'cache') ?? [])
+}
+
+const versionsIn = (list: unknown[]): string[] => list.filter((v): v is string => typeof v === 'string')
 
 /**
  * Delete the leftovers in bin\: `*.old-*` aside files (ours and install.ps1's `.<name>.old-*`), `.<name>.new-*`
