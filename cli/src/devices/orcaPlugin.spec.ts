@@ -7,9 +7,12 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
-import { fakeOrcaCli, type FakeOrcaCli } from '../testing/fakeOrcaCli.js'
-import { DIAL_SKILL_FILE, writeOrcaConnected } from './dialSkillFiles.js'
-import { orcaConnect, type OrcaPluginDeps, type OrcaPluginFiles, orcaPluginRun, type OrcaPluginState, orcaStatus, withinApproved } from './orcaPlugin.js'
+import { fakeOrcaCli, type FakeOrcaCli, type FakeOrcaPlugin } from '../testing/fakeOrcaCli.js'
+import { DIAL_SETUP_FILE, DIAL_SKILL_FILE, writeOrcaConnected, writeSetup } from './dialSkillFiles.js'
+import {
+  carriedVersion, orcaConnect, type OrcaPluginDeps, type OrcaPluginFiles, orcaPluginRun, type OrcaPluginState, orcaRemove, orcaSetUp,
+  type OrcaSetUp, orcaStatus, withinApproved,
+} from './orcaPlugin.js'
 
 // @ts-expect-error — plain ESM with no declaration file
 const { readOrcaPluginBundle } = await import('../../scripts/lib/orcaPluginBundle.mjs') as {
@@ -42,8 +45,10 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
 })
 
-/** A throwaway data folder, by its real path, the fake `orca`'s calls from now on, and the lines said on stderr. */
+/** A throwaway data folder, by its real path, the fake `orca`'s calls from now on, and the lines said on stderr. The
+ *  fake starts with no answers and no plugin. */
 function setup(over: Partial<OrcaPluginDeps> = {}) {
+  orca.reset()
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'orca-plugin-')))
   roots.push(root)
   const dataDir = join(root, 'data')
@@ -401,6 +406,405 @@ describe('withinApproved', () => {
   })
 })
 
+/** [deps] whose run [at] (an install, update or enable unless told) passes its deadline while Orca goes on and then
+ *  lists [after]; the deadlines of what runs after it. */
+function late(deps: OrcaPluginDeps, after: unknown[] | string, at = (args: string[]) => ['install', 'update', 'enable'].includes(args[1]!)) {
+  let past = false
+  const given: number[] = []
+  const run: OrcaPluginDeps['run'] = async (file, args, opts) => {
+    if (past) given.push(opts.timeoutMs)
+    if (!at(args)) return deps.run(file, args, opts)
+    past = true
+    orca.answer('plugin list', typeof after === 'string' ? after : list(after))
+    return { code: null, stdout: '', timedOut: true }
+  }
+  return { deps: { ...deps, run }, given }
+}
+
+/** The access Orca 1.4.262 lists for the plugin as it ships: what Harness approves. */
+const PINNED = approval('approval_required').error.data.grants
+/** An Orca that runs and holds the plugin's approvals at 1.2.3 for the pinned access, changed by [over]. An entry
+ *  `plugin list` was answered with before is the one it holds. */
+const holds = (over: Partial<FakeOrcaPlugin> = {}) => orca.holds({ key: KEY, version: '1.2.3', fingerprint: FINGERPRINT, grants: PINNED, ...over })
+/** A person's own checkout of the plugin, where Orca may hold an install Harness did not make. */
+const CHECKOUT = '/checkout/plugins/harness-device-orca'
+const SET_UP: OrcaSetUp = { orca: 'on', did: 'set up' }
+const UPDATED: OrcaSetUp = { orca: 'on', did: 'updated' }
+const SETUP_FAILED: OrcaSetUp = { orca: 'failed', error: 'failed' }
+/** The three reads every change starts with. */
+const reads = (folder: string) => ['status --json', `plugin inspect ${folder} --json`, 'plugin list --json']
+const approving = (call: string) => call.includes('--approve')
+
+describe('orcaSetUp', () => {
+  it("not installed: installed from the folder, refused, then approved with Orca's fingerprint", async () => {
+    const { deps, folder, calls } = setup()
+    holds()
+    expect(await orcaSetUp(deps, { force: false })).toStrictEqual(SET_UP)
+    expect(calls()).toEqual([...reads(folder), `plugin install ${folder} --json`, `plugin install ${folder} --approve ${FINGERPRINT} --json`])
+    expect(orca.entry()).toMatchObject({ status: 'running', version: '1.2.3', source: { kind: 'local-path', reference: folder } })
+  })
+
+  it('installed from the folder at another version: updated, refused, approved', async () => {
+    const { deps, folder, calls } = setup()
+    orca.answer('plugin list', list([entry(folder, { version: '1.2.2' })]))
+    holds()
+    expect(await orcaSetUp(deps, { force: false })).toStrictEqual(UPDATED)
+    expect(calls().slice(3)).toEqual([`plugin update ${KEY} --json`, `plugin update ${KEY} --approve ${FINGERPRINT} --json`])
+    expect(orca.entry()).toMatchObject({ status: 'running', version: '1.2.3', source: { kind: 'local-path', reference: folder } })
+  })
+
+  it('an update that asks for nothing new goes through with no --approve', async () => {
+    const { deps, folder, calls } = setup()
+    orca.answer('plugin list', list([entry(folder, { version: '1.2.2' })]))
+    holds()
+    orca.answer('plugin update', installed(folder))
+    expect(await orcaSetUp(deps, { force: false })).toStrictEqual(UPDATED)
+    expect(calls().slice(3)).toEqual([`plugin update ${KEY} --json`])
+  })
+
+  it('pending from the folder: enabled, then approved', async () => {
+    const { deps, folder, calls } = setup()
+    orca.answer('plugin list', list([entry(folder, { status: 'pending' })]))
+    holds()
+    expect(await orcaSetUp(deps, { force: false })).toStrictEqual(UPDATED)
+    expect(calls().slice(3)).toEqual([`plugin enable ${KEY} --json`, `plugin enable ${KEY} --approve ${FINGERPRINT} --json`])
+    expect(orca.entry()).toMatchObject({ status: 'running', source: { kind: 'local-path', reference: folder } })
+  })
+
+  it("pending from another folder (a person's checkout): installed from the folder, never enabled", async () => {
+    for (const pending of [{ status: 'pending' }, { needsReconsent: true }]) {
+      const { deps, folder, calls } = setup()
+      orca.answer('plugin list', list([entry(CHECKOUT, pending)]))
+      holds()
+      expect(await orcaSetUp(deps, { force: false })).toStrictEqual(UPDATED)
+      expect(calls().slice(3)).toEqual([`plugin install ${folder} --json`, `plugin install ${folder} --approve ${FINGERPRINT} --json`])
+      expect(calls().filter((call) => call.startsWith('plugin enable'))).toEqual([])
+      expect(orca.entry()).toMatchObject({ status: 'running', source: { kind: 'local-path', reference: folder } })
+    }
+  })
+
+  it('more access: held, and nothing approved', async () => {
+    const more = { ...PINNED, capabilities: [...PINNED.capabilities, { kind: 'agent:read', description: 'Read your agents' }] }
+    const present = setup()
+    orca.answer('plugin list', list([entry(present.folder, { version: '1.2.2' })]))
+    holds({ grants: more })
+    expect(await orcaSetUp(present.deps, { force: false })).toStrictEqual({ orca: 'held' })
+    expect(present.calls().filter(approving)).toEqual([])
+    // Orca leaves the running version in place when an update is refused.
+    expect(orca.entry()).toMatchObject({ status: 'running', version: '1.2.2' })
+    const missing = setup()
+    holds({ grants: more })
+    expect(await orcaSetUp(missing.deps, { force: true })).toStrictEqual({ orca: 'held' })
+    expect(missing.calls().filter(approving)).toEqual([])
+    expect(orca.entry()).toBeUndefined()
+  })
+
+  it('a refusal for another key or version: held', async () => {
+    for (const data of [{ pluginKey: 'local.other' }, { version: '1.2.4' }]) {
+      const { deps, calls } = setup()
+      holds()
+      orca.answer('plugin install', approval('approval_required', { data }), 3)
+      expect({ data, ...await orcaSetUp(deps, { force: false }) }).toStrictEqual({ data, orca: 'held' })
+      expect(calls().filter(approving)).toEqual([])
+    }
+  })
+
+  it('a second refusal is failed, never a third run', async () => {
+    const { deps, folder, calls } = setup()
+    holds()
+    orca.answer('plugin install', approval('approval_stale'), 3)
+    expect(await orcaSetUp(deps, { force: false })).toStrictEqual(SETUP_FAILED)
+    expect(calls().slice(3)).toEqual([`plugin install ${folder} --json`, `plugin install ${folder} --approve ${FINGERPRINT} --json`])
+  })
+
+  it('a fingerprint off its pattern: failed, nothing approved', async () => {
+    const { deps, calls } = setup()
+    for (const fingerprint of ['AP1-0123456789abcdef0123456789abcdef', 'ap1-0123456789abcdef0123456789abcde', `${FINGERPRINT} `, `${FINGERPRINT} --force`]) {
+      holds({ fingerprint })
+      expect({ fingerprint, ...await orcaSetUp(deps, { force: false }) }).toStrictEqual({ fingerprint, ...SETUP_FAILED })
+    }
+    expect(calls().filter(approving)).toEqual([])
+  })
+
+  it("Orca's other errors are failed, and its message is never read", async () => {
+    const { deps, said } = setup()
+    holds()
+    const marker = '/SECRET-PATH-MARKER'
+    const errors: [string, unknown, number][] = [
+      ['install failed', { id: 'req-4', ok: false, error: { code: 'plugin_install_failed', message: `Could not copy ${marker}: EACCES`, data: { pluginKey: KEY } } }, 1],
+      ['not JSON', `Error: could not reach ${marker}\n`, 1],
+      ['no code', { id: 'req-4', ok: false, error: { message: `Something failed in ${marker}` } }, 1],
+      ["another code with an approval's data", { ...approval('approval_required'), error: { ...approval('approval_required').error, code: 'plugin_blocked', message: marker } }, 1],
+      ['ok with an exit that is not 0', installed(marker), 1],
+    ]
+    for (const [label, answer, code] of errors) {
+      orca.answer('plugin install', answer, code)
+      const result = await orcaSetUp(deps, { force: false })
+      expect({ case: label, ...result }).toStrictEqual({ case: label, ...SETUP_FAILED })
+      expect(JSON.stringify(result)).not.toContain('SECRET-PATH-MARKER')
+    }
+    expect(said).toEqual([])
+  })
+
+  it('past the deadline: on when Orca lists it as asked, else timeout', async () => {
+    const asked: [string, (folder: string) => unknown[], OrcaSetUp, ((args: string[]) => boolean)?][] = [
+      ['an install', () => [], SET_UP],
+      ['an install with the fingerprint', () => [], SET_UP, (args) => args.includes('--approve')],
+      ['an update', (f) => [entry(f, { version: '1.2.2' })], UPDATED],
+      ['an enable', (f) => [entry(f, { status: 'pending' })], UPDATED],
+    ]
+    for (const [name, before, want, at] of asked) {
+      const { deps, folder } = setup()
+      orca.answer('plugin list', list(before(folder)))
+      holds()
+      const { deps: slow, given } = late(deps, [entry(folder, { status: 'idle' })], at)
+      expect({ name, ...await orcaSetUp(slow, { force: false }) }).toStrictEqual({ name, ...want })
+      expect(given).toEqual([10_000])
+    }
+    const others: [string, (folder: string) => unknown[] | string][] = [
+      ['no entry', () => []],
+      ['pending', (f) => [entry(f, { status: 'pending' })]],
+      ['the version before', (f) => [entry(f, { version: '1.2.2' })]],
+      ['another folder', () => [entry(CHECKOUT)]],
+      ['disabled', (f) => [entry(f, { status: 'disabled' })]],
+      ['a list that cannot be read', () => '{"ok": tr'],
+    ]
+    for (const [name, after] of others) {
+      const { deps, folder } = setup()
+      holds()
+      const { deps: slow } = late(deps, after(folder))
+      expect({ name, ...await orcaSetUp(slow, { force: false }) }).toStrictEqual({ name, orca: 'failed', error: 'timeout' })
+    }
+  })
+
+  it('a change has 60 s, and the list after it its own 10 s', async () => {
+    const given: { timeoutMs: number; maxBytes: number }[] = []
+    const { deps } = setup({
+      run: async (_file, _args, opts) => {
+        const answers = [status(), inspect(), list([])]
+        const n = given.push(opts) - 1
+        return n < answers.length ? { code: 0, stdout: JSON.stringify(answers[n]), timedOut: false } : { code: null, stdout: '', timedOut: true }
+      },
+    })
+    expect(await orcaSetUp(deps, { force: false })).toStrictEqual({ orca: 'failed', error: 'timeout' })
+    expect(given.slice(3)).toEqual([{ timeoutMs: 60_000, maxBytes: 262_144 }, { timeoutMs: 10_000, maxBytes: 262_144 }])
+  })
+
+  it('removed: off with nothing run after the list', async () => {
+    const homes = { claude: [], codex: [] }
+    const removals: [string, (dataDir: string, folder: string) => unknown[]][] = [
+      ['no entry, set up by the devices', (dataDir) => {
+        expect(writeSetup(dataDir, { dial: true, orca: '1.2.2', homes, pluginHomes: [] })).toBeUndefined()
+        return []
+      }],
+      ['no entry, set up by an enable', (dataDir) => {
+        expect(writeOrcaConnected(dataDir)).toBeUndefined()
+        return []
+      }],
+      ['disabled in Orca', (_, folder) => [entry(folder, { status: 'disabled' })]],
+    ]
+    for (const [name, removal] of removals) {
+      const { deps, folder, calls } = setup()
+      orca.answer('plugin list', list(removal(deps.dataDir, folder)))
+      holds()
+      expect({ name, ...await orcaSetUp(deps, { force: false }) }).toStrictEqual({ name, orca: 'off' })
+      expect(calls()).toEqual(reads(folder))
+    }
+  })
+
+  it('orcaHeld alone is not set up before: installed', async () => {
+    const { deps } = setup()
+    expect(writeSetup(deps.dataDir, { dial: true, orcaHeld: '1.2.3', homes: { claude: [], codex: [] }, pluginHomes: [] })).toBeUndefined()
+    holds()
+    expect(await orcaSetUp(deps, { force: false })).toStrictEqual(SET_UP)
+  })
+
+  it('with force: a disabled entry from the folder is enabled, one from another folder installed, a missing one installed', async () => {
+    const ours = setup()
+    holds()
+    expect(await orcaSetUp(ours.deps, { force: false })).toStrictEqual(SET_UP)
+    orca.disable()
+    expect(await orcaSetUp(ours.deps, { force: false })).toStrictEqual({ orca: 'off' })
+    const before = ours.calls().length
+    expect(await orcaSetUp(ours.deps, { force: true })).toStrictEqual(UPDATED)
+    expect(ours.calls().slice(before + 3)).toEqual([`plugin enable ${KEY} --json`, `plugin enable ${KEY} --approve ${FINGERPRINT} --json`])
+    expect(orca.entry()).toMatchObject({ status: 'running', source: { kind: 'local-path', reference: ours.folder } })
+
+    const elsewhere = setup()
+    orca.answer('plugin list', list([entry(CHECKOUT, { status: 'disabled' })]))
+    holds()
+    expect(await orcaSetUp(elsewhere.deps, { force: true })).toStrictEqual(UPDATED)
+    expect(elsewhere.calls().slice(3)).toEqual([`plugin install ${elsewhere.folder} --json`, `plugin install ${elsewhere.folder} --approve ${FINGERPRINT} --json`])
+    expect(orca.entry()).toMatchObject({ status: 'running', source: { kind: 'local-path', reference: elsewhere.folder } })
+
+    const missing = setup()
+    expect(writeOrcaConnected(missing.deps.dataDir)).toBeUndefined()
+    expect(writeSetup(missing.deps.dataDir, { dial: true, orca: '1.2.3', homes: { claude: [], codex: [] }, pluginHomes: [] })).toBeUndefined()
+    holds()
+    expect(await orcaSetUp(missing.deps, { force: true })).toStrictEqual(SET_UP)
+    expect(missing.calls().slice(3)).toEqual([`plugin install ${missing.folder} --json`, `plugin install ${missing.folder} --approve ${FINGERPRINT} --json`])
+  })
+
+  it('no Orca to ask', async () => {
+    for (const over of [{ platform: 'win32' as const }, { files: () => null }, { orca: () => null }]) {
+      const { deps, folder, calls } = setup(over)
+      holds()
+      expect(await orcaSetUp(deps, { force: true })).toStrictEqual({ orca: 'absent', error: 'not-running' })
+      expect(calls()).toEqual([])
+      expect(existsSync(folder)).toBe(false)
+    }
+    const unreachable = setup()
+    holds()
+    orca.answer('status', status(null, false))
+    expect(await orcaSetUp(unreachable.deps, { force: true })).toStrictEqual({ orca: 'absent', error: 'not-running' })
+    expect(unreachable.calls()).toEqual(['status --json'])
+    const old = setup()
+    holds()
+    orca.answer('status', status('1.4.247'))
+    expect(await orcaSetUp(old.deps, { force: true })).toStrictEqual({ orca: 'absent', error: 'old' })
+    expect(old.calls()).toEqual(['status --json'])
+    // Q1: a development install, or one Orca could not load, is the person's to mend; Harness leaves it as it is.
+    for (const over of [{ isDev: true }, { status: 'errored' }, { status: 'invalid' }]) {
+      const { deps, folder, calls } = setup()
+      orca.answer('plugin list', list([entry(folder, over)]))
+      holds()
+      expect({ over, ...await orcaSetUp(deps, { force: true }) }).toStrictEqual({ over, orca: 'absent', error: 'other' })
+      expect(calls()).toEqual(reads(folder))
+    }
+  })
+
+  it.skipIf(process.getuid?.() === 0)('a folder that cannot be written: failed · folder, its code said through err alone', async () => {
+    const { deps, folder, calls, said } = setup()
+    holds()
+    chmodSync(deps.dataDir, 0o500)
+    locked.push(deps.dataDir)
+    expect(await orcaSetUp(deps, { force: true })).toStrictEqual({ orca: 'failed', error: 'folder' })
+    expect(said).toEqual(['orca plugin folder: EACCES'])
+    expect(calls()).toEqual(['status --json'])
+    expect(existsSync(folder)).toBe(false)
+  })
+
+  it.skipIf(process.getuid?.() === 0)('a record that cannot be read, without force: absent · not-running, nothing installed', async () => {
+    for (const file of [DIAL_SKILL_FILE, DIAL_SETUP_FILE]) {
+      const { deps, folder, calls } = setup()
+      holds()
+      const record = join(deps.dataDir, file)
+      writeFileSync(record, '{}\n')
+      chmodSync(record, 0o000)
+      locked.push(record)
+      expect({ file, ...await orcaSetUp(deps, { force: false }) }).toStrictEqual({ file, orca: 'absent', error: 'not-running' })
+      expect(calls()).toEqual(reads(folder))
+      // An enable reads neither record.
+      expect({ file, ...await orcaSetUp(deps, { force: true }) }).toStrictEqual({ file, ...SET_UP })
+    }
+  })
+
+  it('current: on, nothing run after the list', async () => {
+    for (const force of [false, true]) {
+      const { deps, folder, calls } = setup()
+      orca.answer('plugin list', list([entry(folder)]))
+      holds()
+      expect(await orcaSetUp(deps, { force })).toStrictEqual({ orca: 'on' })
+      expect(calls()).toEqual(reads(folder))
+    }
+  })
+})
+
+describe('orcaRemove', () => {
+  it("uninstalls the entry with the plugin's key", async () => {
+    for (const listed of [(f: string) => entry(f), (f: string) => entry(f, { status: 'disabled' }), () => entry(CHECKOUT)]) {
+      const { deps, folder, calls } = setup()
+      orca.answer('plugin list', list([listed(folder)]))
+      holds()
+      expect(await orcaRemove(deps)).toStrictEqual({ orca: 'off' })
+      expect(calls()).toEqual([...reads(folder), `plugin uninstall ${KEY} --json`])
+      expect(orca.entry()).toBeUndefined()
+    }
+  })
+
+  it('no entry: off, no uninstall', async () => {
+    const { deps, folder, calls } = setup()
+    orca.answer('plugin list', list([entry(folder, { pluginKey: 'local.other' })]))
+    holds()
+    expect(await orcaRemove(deps)).toStrictEqual({ orca: 'off' })
+    expect(calls()).toEqual(reads(folder))
+  })
+
+  it('not reachable: off · not-running', async () => {
+    const unreachable = setup()
+    holds()
+    orca.answer('status', status(null, false))
+    expect(await orcaRemove(unreachable.deps)).toStrictEqual({ orca: 'off', error: 'not-running' })
+    expect(unreachable.calls()).toEqual(['status --json'])
+    const unread = setup()
+    holds()
+    orca.answer('plugin list', '{"ok": tr')
+    expect(await orcaRemove(unread.deps)).toStrictEqual({ orca: 'off', error: 'not-running' })
+    expect(unread.calls()).toEqual(reads(unread.folder))
+  })
+
+  it('no Orca to ask: off, nothing but status', async () => {
+    for (const over of [{ platform: 'win32' as const }, { files: () => null }, { orca: () => null }]) {
+      const { deps, calls } = setup(over)
+      holds()
+      expect(await orcaRemove(deps)).toStrictEqual({ orca: 'off' })
+      expect(calls()).toEqual([])
+    }
+    const { deps, calls } = setup()
+    holds()
+    orca.answer('status', status('1.4.247'))
+    expect(await orcaRemove(deps)).toStrictEqual({ orca: 'off' })
+    expect(calls()).toEqual(['status --json'])
+  })
+
+  it('past its deadline: off · timeout', async () => {
+    const given: { timeoutMs: number; maxBytes: number }[] = []
+    let folder = ''
+    const { deps } = setup({
+      run: async (_file, _args, opts) => {
+        const answers = [status(), inspect(), list([entry(folder)])]
+        const n = given.push(opts) - 1
+        return n < answers.length ? { code: 0, stdout: JSON.stringify(answers[n]), timedOut: false } : { code: null, stdout: '', timedOut: true }
+      },
+    })
+    folder = deps.folder
+    expect(await orcaRemove(deps)).toStrictEqual({ orca: 'off', error: 'timeout' })
+    expect(given.slice(3)).toEqual([{ timeoutMs: 60_000, maxBytes: 262_144 }])
+  })
+
+  it("Orca's error: off · failed", async () => {
+    const marker = '/SECRET-PATH-MARKER'
+    for (const [answer, code] of [
+      [{ id: 'req-6', ok: false, error: { code: 'plugin_uninstall_failed', message: `Could not remove ${marker}` } }, 1],
+      [`Error: ${marker}\n`, 1],
+      [{ id: 'req-6', ok: true, result: { pluginKey: KEY } }, 1],
+    ] as [unknown, number][]) {
+      const { deps, folder } = setup()
+      orca.answer('plugin list', list([entry(folder)]))
+      holds()
+      orca.answer('plugin uninstall', answer, code)
+      const result = await orcaRemove(deps)
+      expect(result).toStrictEqual({ orca: 'off', error: 'failed' })
+      expect(JSON.stringify(result)).not.toContain('SECRET-PATH-MARKER')
+    }
+  })
+
+  it.skipIf(process.getuid?.() === 0)('a folder that cannot be written: off · failed, its code said', async () => {
+    const { deps, calls, said } = setup()
+    holds()
+    chmodSync(deps.dataDir, 0o500)
+    locked.push(deps.dataDir)
+    expect(await orcaRemove(deps)).toStrictEqual({ orca: 'off', error: 'failed' })
+    expect(said).toEqual(['orca plugin folder: EACCES'])
+    expect(calls()).toEqual(['status --json'])
+  })
+})
+
+it("carriedVersion: the manifest's version, null from the sources", () => {
+  expect(carriedVersion({ files: () => FILES })).toBe('1.2.3')
+  expect(carriedVersion(REAL)).toBeNull()
+})
+
 describe('connect', () => {
   it('with no fingerprint it asks Orca and passes --approve to nobody', async () => {
     const { deps, folder, calls } = setup()
@@ -470,21 +874,6 @@ describe('connect', () => {
     expect(given.slice(3)).toEqual([{ timeoutMs: 60_000, maxBytes: 262_144 }, { timeoutMs: 10_000, maxBytes: 262_144 }])
     expect(given.reduce((total, { timeoutMs }) => total + timeoutMs, 0)).toBeLessThan(120_000)
   })
-
-  /** [deps] whose install, update or enable passes its deadline while Orca goes on and then lists [after]; the deadlines
-   *  of what runs after it. */
-  function late(deps: OrcaPluginDeps, after: unknown[] | string) {
-    let past = false
-    const given: number[] = []
-    const run: OrcaPluginDeps['run'] = async (file, args, opts) => {
-      if (past) given.push(opts.timeoutMs)
-      if (!['install', 'update', 'enable'].includes(args[1]!)) return deps.run(file, args, opts)
-      past = true
-      orca.answer('plugin list', typeof after === 'string' ? after : list(after))
-      return { code: null, stdout: '', timedOut: true }
-    }
-    return { deps: { ...deps, run }, given }
-  }
 
   it('past its deadline, Orca listing the plugin as asked is done', async () => {
     const asked: [string, (folder: string) => unknown[], string?][] = [
