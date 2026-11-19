@@ -262,47 +262,24 @@ void ht_damage(const ht_scene_t *a, const ht_scene_t *b, ht_damage_t *d)
     }
     if (!a || a->background != b->background) {
         damage_add(d, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, NULL);
-    } else {
-        // The runs both scenes end with, the same in the same order, draw the same pixels wherever the runs before them
-        // do: a run added or dropped before them (a line of words wrapping onto two) damages what it draws, not every
-        // run after it.
-        int tail = 0;
-        if (a->count != b->count)
-            while (tail < imin(a->count, b->count) &&
-                   memcmp(&a->runs[a->count - 1 - tail], &b->runs[b->count - 1 - tail], sizeof(ht_run_t)) == 0)
-                tail++;
-        for (int i = 0; i < imax(a->count, b->count) - tail; i++) {
-            const bool in_a = i < a->count - tail, in_b = i < b->count - tail;
-            if (in_a && in_b && memcmp(&a->runs[i], &b->runs[i], sizeof(ht_run_t)) == 0)
+    } else
+        for (int i = 0; i < imax(a->count, b->count); i++) {
+            if (i < a->count && i < b->count &&
+                memcmp(&a->runs[i], &b->runs[i], sizeof(ht_run_t)) == 0)
                 continue;
-            if (in_a)
+            if (i < a->count)
                 damage_add(d, ht_run_bounds(&a->runs[i]), rows);
-            if (in_b)
+            if (i < b->count)
                 damage_add(d, ht_run_bounds(&b->runs[i]), rows);
         }
-    }
     for (int i = 0; i < d->count; i++)
         d->pixels += (uint32_t)d->rect[i].w * d->rect[i].h;
     if (rows) damage_rows_finish(rows, d);
 }
-// `count` pixels of `ink`, two to a 32-bit store (the RV32's widest), four stores a turn. Pixel by pixel, the background
-// fill alone was a third of the ESP32-P4's raster time. may_alias: the words write pixels read back as uint16_t.
-typedef uint32_t __attribute__((__may_alias__)) two_px_t;
-static void fill_px(uint16_t *dst, size_t count, uint16_t ink)
-{
-    if (count && ((uintptr_t)dst & 2)) {
-        *dst++ = ink;
-        count--;
-    }
-    const uint32_t two = ink * 0x10001u;
-    two_px_t *w = (two_px_t *)dst;
-    for (; count >= 8; count -= 8, w += 4) w[0] = w[1] = w[2] = w[3] = two;
-    for (; count >= 2; count -= 2) *w++ = two;
-    if (count) *(uint16_t *)w = ink;
-}
 void ht_raster(const ht_scene_t *s, ht_rect_t clip, uint16_t *out)
 {
-    fill_px(out, (size_t)clip.w * clip.h, s->background);
+    for (size_t i = 0, n = (size_t)clip.w * clip.h; i < n; i++)
+        out[i] = s->background;
     for (int i = 0; i < s->count; i++) {
         const ht_run_t *r = &s->runs[i];
         if (r->pro_kind && intersect(ht_run_bounds(r), clip))

@@ -1,5 +1,5 @@
 // The board this image runs on: the Harness Max bring-up board (pins_max.h). There is one, so nothing is probed.
-// pro_cable.c, compiled from the Pro's tree, reads this header for the hello: `hw` is the name, `board` the kind.
+// The cable (main/pro_fork/cable/pro_cable.c) reads this header for the hello: `hw` is the name, `board` the kind.
 #pragma once
 
 typedef struct {

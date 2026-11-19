@@ -21,8 +21,8 @@ uint32_t pro_frame_present(const ht_scene_t *prev, const ht_scene_t *next, uint3
     uint32_t raster_us = 0;
     for (int n = 0; n < damage.count; n++) {
         const ht_rect_t rect = damage.rect[n];
-        assert(rect.x >= 0 && rect.y >= 0 && rect.w > 0 && rect.h > 0 && rect.x + rect.w <= PRO_DISPLAY_W &&
-               rect.y + rect.h <= PRO_DISPLAY_H);
+        assert(rect.x >= 0 && rect.y >= 0 && rect.w > 0 && rect.h > 0 && rect.x + rect.w <= PRO_DISPLAY_PX &&
+               rect.y + rect.h <= PRO_DISPLAY_PX);
         // A small edit fits in one transfer even when taller than a strip; larger regions stay pipelined.
         const int step = rect.w * rect.h <= 2048 ? rect.h : PRO_STRIP_LINES;
         for (int y = rect.y; y < rect.y + rect.h; y += step) {

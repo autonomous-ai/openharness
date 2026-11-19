@@ -2,12 +2,15 @@
 // What the Max adds: the hello's appFilter and questionTier (on the board table's kind "max"), each agent's host and
 // caps, `apps` and app.pick, a question's items, tier and permission mark, question.read and question.state,
 // answer.reviewed, answer and answer.receipt, New Harness (form, form.state, voice.form), a notification row's question
-// flag, and toast. Its includes name the Pro's cable headers from main/, as it is not beside them.
+// flag, and toast. cable/max_cable.h declares what it adds to the Pro's pro_cable.h; the welcome's features are read with
+// max_cable_features_parse (main/cable/max_cable_features.c). Its includes name the Pro's cable headers from main/, as
+// it is not beside them.
 // pro_fork upstream: devices/harness-pro/firmware/main/cable/pro_cable.c
 // pro_fork blob: d867ee456165982623bd3f398bc829000d0a8665 (main 91f60b6a7b)
 // scripts/check_pro_forks.py fails once the upstream file is no longer that blob: re-port its change here, then
 // record its new blob on these lines and in main/pro_fork/upstream.txt.
 #include "cable/pro_cable.h"
+#include "cable/max_cable.h"
 
 #include <limits.h>
 #include <stdatomic.h>
@@ -1141,7 +1144,7 @@ static void handle_voice_form(const cJSON *p)
 
 static void session_up(const cJSON *p)
 {
-    atomic_store(&s_features, cable_features_parse(p));
+    atomic_store(&s_features, max_cable_features_parse(p));
     const cJSON *machine = p ? cJSON_GetObjectItemCaseSensitive(p, "machine") : NULL;
     const char *name = str_of(machine, "name");
     copy_cut(s_machine_name, sizeof s_machine_name, name ? name : "Machine");

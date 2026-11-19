@@ -1,10 +1,11 @@
 // Harness Max's app layer: the lanes model (max_ui.h) fed from pro_cable's callbacks (pro_app_api.h), drawn on the
-// render task, and the finger from the touch task (app/pro_app_hooks.h). max_app.c implements all three headers.
+// render task, and the finger from the touch task (app/pro_app.h, the Max's in main/pro_fork). max_app.c implements all
+// three headers.
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "app/pro_app_hooks.h"
+#include "app/pro_app.h"   // the hooks the Pro's touch and voice tasks call (main/pro_fork/app/pro_app.h)
 
 // Bring the model up and start the render task (pro_render: 24 KB stack, core 1, priority 5). Needs
 // pro_display_init() to have run.

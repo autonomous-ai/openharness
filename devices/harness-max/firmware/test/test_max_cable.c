@@ -15,6 +15,7 @@
 #include <string.h>
 
 #include "cable/pro_cable.h"
+#include "cable/max_cable.h"
 #include "cable_features.h"
 #include "cable_frame.h"
 #include "cable_link.h"
@@ -1277,6 +1278,20 @@ static void test_features(void)
     // question.tier: the daemon files a question the Max was told before as a `tier: "list"` row (the Max's hello asks).
     welcome_with("\"question.review\",\"question.tier\"");
     CHECK(pro_cable_supports(CABLE_FEATURE_QUESTION_TIER | CABLE_FEATURE_QUESTION_REVIEW));
+    // The Max's names go by the Pro's rule for the list (main/cable/max_cable_features.c): an entry that is not a string,
+    // or a 17th, and the list names none of them, the Pro's or the Max's.
+    welcome_with("\"form\",\"resync\",\"question.review\",7");
+    CHECK(!pro_cable_supports(CABLE_FEATURE_FORM) && !pro_cable_supports(CABLE_FEATURE_RESYNC));
+    CHECK(!pro_cable_supports(CABLE_FEATURE_QUESTION_REVIEW));
+    welcome_with("\"form\",\"resync\",\"a\",\"b\",\"c\",\"d\",\"e\",\"f\",\"g\",\"h\",\"i\",\"j\",\"k\",\"l\",\"m\",\"n\",\"o\"");
+    CHECK(!pro_cable_supports(CABLE_FEATURE_FORM) && !pro_cable_supports(CABLE_FEATURE_RESYNC));
+    welcome_with("\"form\",\"resync\",\"a\",\"b\",\"c\",\"d\",\"e\",\"f\",\"g\",\"h\",\"i\",\"j\",\"k\",\"l\",\"m\",\"n\"");
+    CHECK(pro_cable_supports(CABLE_FEATURE_FORM | CABLE_FEATURE_RESYNC));   // 16 is the most there is
+    // No list at all, or not a list: none of the Max's either.
+    feed("{\"t\":\"welcome\",\"machine\":{\"id\":\"m1\",\"name\":\"Mac\"},\"features\":\"form\"}");
+    CHECK(!pro_cable_supports(CABLE_FEATURE_FORM));
+    feed("{\"t\":\"welcome\",\"machine\":{\"id\":\"m1\",\"name\":\"Mac\"}}");
+    CHECK(!pro_cable_supports(CABLE_FEATURE_FORM));
 }
 
 static void test_question_items(void)

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Host tests for Harness Max's screen (main/app/max_ui_*.c) over the Pro's compositor at both glass heights, its frame
-# path on two tasks (main/display/max_present.c), the P4's strips (main/display/max_strips.c) and the strip turn
-# (main/display/max_turn.c) when it is there. Needs no arguments and no board. Fonts are generated into a temp
+# Host tests for Harness Max's screen (main/app/max_ui_*.c) over its compositor (main/pro_fork/, its copies of the Pro's)
+# at both glass heights, its frame path on two tasks (main/display/max_present.c), the P4's strips
+# (main/display/max_strips.c), the strip turn (main/display/max_turn.c) when it is there, and its cable. Needs no
+# arguments and no board. Fonts are generated into a temp
 # directory: PRO_FONT=/path/to/font.ttf overrides the generator's default, as the Pro's run.sh.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -102,7 +103,8 @@ cable_flags=(-std=c11 -D_DEFAULT_SOURCE -Wall -Wextra -Werror -O1 -g -fsanitize=
              -DHT_WIDTH=1920 -DHT_HEIGHT=480 "${max_pro_flags[@]}" -I"$fw/main" -I"$pro/main" -I"$pro/main/display"
              -I"$pro/main/cable" -I"$pro/test/host_esp" -I"$cjson")
 cable_objs=()
-for src in "$fw/main/pro_fork/cable/pro_cable.c" "$pro"/main/cable/{cable_json_guard,cable_features,cable_machines,cable_scroll,cable_frame}.c; do
+for src in "$fw/main/pro_fork/cable/pro_cable.c" "$fw/main/cable/max_cable_features.c" \
+           "$pro"/main/cable/{cable_json_guard,cable_features,cable_machines,cable_scroll,cable_frame}.c; do
     cc "${cable_flags[@]}" -Wframe-larger-than=1024 -c -o "$out/cable-$(basename "$src" .c).o" "$src"
     cable_objs+=("$out/cable-$(basename "$src" .c).o")
 done
@@ -114,4 +116,8 @@ python3 "$here/test_max_hello.py"
 
 # The scripted demo daemon (main/demo/), under its own sanitizers.
 bash "$here/test_max_demo.sh"
+
+# Has a Pro file the Max forks or leans on changed since it was copied (main/pro_fork/upstream.txt)? A report here, not a
+# failure: the Pro's changes are its own, and scripts/check_pro_forks.py, which fails on one, is run at each merge of main.
+python3 "$fw/scripts/check_pro_forks.py" --warn
 echo "max run.sh: all host tests passed"

@@ -9,13 +9,8 @@
 #ifndef HT_FACE_PX
 #define HT_FACE_PX 720
 #endif
-// Harness Max compiles this compositor for its 1920 x 480 glass by defining both; the Pro's stays square.
-#ifndef HT_WIDTH
 #define HT_WIDTH HT_FACE_PX
-#endif
-#ifndef HT_HEIGHT
 #define HT_HEIGHT HT_FACE_PX
-#endif
 // A pet scene alone can take 40 runs, beside the status bar and the transport, and a Pets screen takes more. Scenes live in PSRAM
 // (EXT_RAM_BSS_ATTR where they are declared) for this.
 #define HT_RUNS 192
