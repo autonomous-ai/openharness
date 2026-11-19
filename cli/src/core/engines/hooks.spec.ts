@@ -85,6 +85,19 @@ describe('which agent a hook belongs to', () => {
     expect(console.log).not.toHaveBeenCalled()
   })
 
+  // A Linux hook names the nearest ancestor that outlives it (hook/notify.mjs hookCallerPid). When a held core reads
+  // the table, the hook and the shells that ran it are gone, and the process it named is still there.
+  it.each([
+    ['the recorded engine itself', tree([100, 1]), 100],
+    ['the engine program a recorded wrapper script started', tree([200, 100], [100, 1]), 200],
+  ])('the agent whose engine the named caller is, the hook and its shells gone: %s', async (_case, rows, callerPid) => {
+    const a1 = agent('a1', 100)
+    vi.mocked(processRows).mockResolvedValueOnce(rows as never)
+    expect(await setup({ '%1': a1 }).hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [hint('%1')], callerPid })).toEqual(a1)
+    expect(processRows).toHaveBeenCalledTimes(1)
+    expect(console.log).not.toHaveBeenCalled()
+  })
+
   it.each(['claude', 'cursor'] as const)('matches current %s evidence after a reconciliation owner changed', async engine => {
     const current = { ...agent('current', 100), engine } as RegisteredSession
     const { deps, hooks } = setup({ '%1': current })
@@ -286,6 +299,11 @@ describe('which agent a hook belongs to', () => {
       expect(await hooks.hookViaSharedProcess({ engine: 'claude', callerPid: 500 })).toBe(false)
     })
 
+    it('is one when the caller named is the gateway itself, as a Linux hook names it past its shell', async () => {
+      vi.mocked(processRows).mockResolvedValueOnce(gatewayTree().slice(0, 2) as never)
+      expect(await setup().hooks.hookViaSharedProcess({ engine: 'hermes', callerPid: 23704 })).toBe(true)
+    })
+
     it('is not one when nothing says so: no table, a chain that ends, or one that loops', async () => {
       const { hooks } = setup()
       vi.mocked(processRows).mockResolvedValueOnce(null as never)
@@ -423,8 +441,8 @@ describe('which agent a hook belongs to', () => {
       expect(hook.answer()).toEqual(agent('a1', 200))
     })
 
-    // On Linux the hook runs under dash, whose `sh -c` stays the hook's parent and exits with it: once
-    // `onWait` has answered the hook, the caller is gone from the table. It still belongs to its engine.
+    // On Windows a shell (PowerShell, cmd.exe) stays the hook's parent and exits with it: once `onWait` has
+    // answered the hook, the caller is gone from the table. It still belongs to its engine.
     it('belongs to the agent after the wait though its own process has exited by then, by its ancestry as it arrived', async () => {
       const onPane: Record<string, RegisteredSession> = { '%1': agent('a1', 100) }
       vi.mocked(processRows).mockResolvedValueOnce(newEngine() as never).mockResolvedValue(tree([200, 1]) as never)
