@@ -26,6 +26,13 @@ esp_err_t max_turn_ppa_into(int lane, const uint16_t *src, int w, int h, uint16_
 // The queued turns (max_turn_ppa_into with `landed`) of every lane that have not landed yet.
 int max_turn_ppa_queued(void);
 
+// Starts a queued turn the driver left waiting on an idle PPA. ESP-IDF 5.5's driver frees the PPA when its interrupt
+// finds no turn queued behind the one that landed; a turn queued from the other core between that look and the freeing
+// finds the PPA still taken and waits in the queue for the next turn to land, which, if none is queued after it, never
+// comes. The kick is such a next turn: a few pixels, on a client of its own, into a buffer nobody reads. Queued, never
+// waited for; ESP_OK when the PPA took it.
+esp_err_t max_turn_ppa_kick(void);
+
 // max_turn_pixels(src, w, h, dst) on the PPA (lane 0), returning when dst holds the turn: dst is the h x w picture.
 // On an error dst holds nothing usable.
 esp_err_t max_turn_ppa(const uint16_t *src, int w, int h, uint16_t *dst, size_t dst_bytes);

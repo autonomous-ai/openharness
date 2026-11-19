@@ -86,6 +86,13 @@ void *heap_caps_malloc(size_t size, uint32_t caps)
     return malloc(size);
 }
 
+void *heap_caps_aligned_alloc(size_t alignment, size_t size, uint32_t caps)
+{
+    (void)caps;
+    void *p = NULL;
+    return posix_memalign(&p, alignment < sizeof(void *) ? sizeof(void *) : alignment, size) ? NULL : p;
+}
+
 void heap_caps_free(void *ptr) { free(ptr); }
 size_t heap_caps_get_free_size(uint32_t caps) { (void)caps; return 0; }
 size_t heap_caps_get_minimum_free_size(uint32_t caps) { (void)caps; return 0; }

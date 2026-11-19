@@ -11,6 +11,8 @@
 #define MALLOC_CAP_INTERNAL (1 << 11)
 
 void *heap_caps_malloc(size_t size, uint32_t caps);
+// `alignment` a power of two, as the device's.
+void *heap_caps_aligned_alloc(size_t alignment, size_t size, uint32_t caps);
 void heap_caps_free(void *ptr);
 size_t heap_caps_get_free_size(uint32_t caps);
 size_t heap_caps_get_minimum_free_size(uint32_t caps);

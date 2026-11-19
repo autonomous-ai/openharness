@@ -6,10 +6,14 @@
 
 #include "driver/ppa.h"
 #include "esp_attr.h"
+#include "esp_heap_caps.h"
 
 _Static_assert(MAX_TURN_CCW_DEGREES == 90 || MAX_TURN_CCW_DEGREES == 270, "the turn is a quarter either way");
 
-static ppa_client_handle_t s_srm[MAX_TURN_PPA_LANES];
+enum { KICK_SIDE = 16, KICK_PX = KICK_SIDE * KICK_SIDE };   // the kick's turn: 512 bytes, eight cache lines, each way
+
+static ppa_client_handle_t s_srm[MAX_TURN_PPA_LANES], s_kick;
+static uint16_t *s_kick_px;   // the kick's source, then its picture
 static atomic_int s_queued;   // every lane's queued turns that have not landed
 
 // A turn has landed. A blocking one (no semaphore) is waited for by the driver itself.
@@ -32,6 +36,14 @@ esp_err_t max_turn_ppa_open(void)
         if (s_srm[lane]) continue;
         esp_err_t err = ppa_register_client(&config, &s_srm[lane]);
         if (err == ESP_OK) err = ppa_client_register_event_callbacks(s_srm[lane], &callbacks);
+        if (err != ESP_OK) return err;
+    }
+    if (!s_kick_px)
+        s_kick_px = heap_caps_aligned_alloc(64, 2 * KICK_PX * sizeof *s_kick_px, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    if (!s_kick_px) return ESP_ERR_NO_MEM;
+    if (!s_kick) {
+        esp_err_t err = ppa_register_client(&config, &s_kick);
+        if (err == ESP_OK) err = ppa_client_register_event_callbacks(s_kick, &callbacks);
         if (err != ESP_OK) return err;
     }
     return ESP_OK;
@@ -59,6 +71,22 @@ esp_err_t max_turn_ppa_into(int lane, const uint16_t *src, int w, int h, uint16_
 }
 
 int max_turn_ppa_queued(void) { return atomic_load(&s_queued); }
+
+esp_err_t max_turn_ppa_kick(void)
+{
+    if (!s_kick) return ESP_ERR_INVALID_STATE;
+    const ppa_srm_oper_config_t op = {
+        .in = {.buffer = s_kick_px, .pic_w = KICK_SIDE, .pic_h = KICK_SIDE, .block_w = KICK_SIDE, .block_h = KICK_SIDE,
+               .srm_cm = PPA_SRM_COLOR_MODE_RGB565},
+        .out = {.buffer = s_kick_px + KICK_PX, .buffer_size = KICK_PX * sizeof *s_kick_px, .pic_w = KICK_SIDE,
+                .pic_h = KICK_SIDE, .srm_cm = PPA_SRM_COLOR_MODE_RGB565},
+        .rotation_angle = PPA_SRM_ROTATION_ANGLE_90,
+        .scale_x = 1.0f,
+        .scale_y = 1.0f,
+        .mode = PPA_TRANS_MODE_NON_BLOCKING,   // no user data: landed() leaves the count of the panel's turns alone
+    };
+    return ppa_do_scale_rotate_mirror(s_kick, &op);   // refused with two kicks queued already: kicks enough
+}
 
 esp_err_t max_turn_ppa(const uint16_t *src, int w, int h, uint16_t *dst, size_t dst_bytes)
 {

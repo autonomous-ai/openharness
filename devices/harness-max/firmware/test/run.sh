@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Host tests for Harness Max's screen (main/app/max_ui_*.c) over the Pro's compositor at both glass heights, its frame
-# path on two tasks (main/display/max_present.c), and the strip turn (main/display/max_turn.c) when it is there. Needs
-# no arguments and no board. Fonts are generated into a temp directory: PRO_FONT=/path/to/font.ttf overrides the
-# generator's default, as the Pro's run.sh.
+# path on two tasks (main/display/max_present.c), the P4's strips (main/display/max_strips.c) and the strip turn
+# (main/display/max_turn.c) when it is there. Needs no arguments and no board. Fonts are generated into a temp
+# directory: PRO_FONT=/path/to/font.ttf overrides the generator's default, as the Pro's run.sh.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fw="$(cd "$here/.." && pwd)"
@@ -81,6 +81,13 @@ if [[ -f "$here/test_max_turn.c" ]]; then
     cc "${cflags[@]}" -I"$fw/main/display" -o "$out/test_max_turn" "$fw/main/display/max_turn.c" "$here/test_max_turn.c"
     "$out/test_max_turn"
 fi
+
+# The ESP32-P4's strips (main/display/max_strips.c) over a fake PPA that lands a turn, leaves it waiting for the next,
+# never lands it or refuses it, on the Linux build's FreeRTOS.
+glass 480
+cc "${cflags[@]}" "${present[@]}" -DPRO_DISPLAY_H=480 -o "$out/test_max_strips" "$here/test_max_strips.c" \
+    "$fw/main/display/max_strips.c" "$fw/main/display/max_turn.c" "${linux_rtos[@]}"
+"$out/test_max_strips"
 
 # The scripted demo daemon (main/demo/), under its own sanitizers.
 bash "$here/test_max_demo.sh"

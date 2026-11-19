@@ -89,7 +89,8 @@ reads 480 x 1920 x 2 bytes 60 times a second (about 110 MB/s) from PSRAM, so PSR
   `SAME`, and it should be `ccw 270` with no mirror (`MAX_TURN_CCW_DEGREES`, what the product asks for). Then its time
   into the internal band (the product's path: compare with (b)) and straight into a PSRAM framebuffer, and
   `product max_turn_ppa`: the product's own function (`main/display/max_turn_ppa.c`) on every strip shape the renderer
-  sends, all of which must be the same as `max_turn_pixels`.
+  sends, all of which must be the same as `max_turn_pixels`; `product max_turn_ppa_kick` must say `ESP_OK` (the turn
+  `max_strips.c` queues to start one the PPA's driver left waiting).
 - **(d) a layer's copy**: a 1169 x 480 RGB565 layer (Overview's row of cells) copied PSRAM to PSRAM and PSRAM to the
   internal strips, by `memcpy` a row at a time and by the PPA, with MB/s: what drawing a cached layer would cost.
 
@@ -97,6 +98,8 @@ What to do with it:
 
 - If `product max_turn_ppa` is not `8/8` or the PPA turn is slower than (b), the product should turn on the CPU: the
   PPA path is one commit, `Harness Max: the PPA turns the strips ...`; revert it.
+- `max_strips: a PPA turn did not land` in the console means a turn was lost even after its kick: the frame went on
+  with the CPU turning the strips (every `2c ppa`/`1c ppa` after it is a CPU number), and that is a fault to look into.
 - The full-repaint frame time (`build` + `warm` + 20 turns) against the 16-33 ms a moving row needs says whether motion
   can repaint whole strips or needs damage-sized frames, two cores, or cached layers ((d)).
 - (g)'s `min` is the row's frame rate at its worst moment: 30 or more is the target for every motion, cold and warm.

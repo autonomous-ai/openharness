@@ -481,6 +481,8 @@ static void turns(void)
     const double small_cpu = BEST_MS(10, max_turn_pixels(s_strip, 46, h, s_band));
     printf("  product max_turn_ppa: %d/%d shapes same as max_turn_pixels%s%s; 1920x24 %.3f ms, 46x24 %.3f ms (CPU %.3f)\n",
            ok, shapes, ok == shapes ? "" : ", failed:", failed, full, small, small_cpu);
+    // The kick max_strips.c gives a turn the driver left waiting: the PPA must take it, or such a turn is lost.
+    printf("  product max_turn_ppa_kick: %s\n", esp_err_to_name(max_turn_ppa_kick()));
 }
 
 // ---- (d) a cached layer's blit ----
