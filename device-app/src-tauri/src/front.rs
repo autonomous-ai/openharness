@@ -136,6 +136,40 @@ mod tests {
         }
     }
 
+    const WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+    /// A log that hands each line on, so a test waits for it without a sleep.
+    struct Lines(std::sync::mpsc::Sender<String>);
+    impl Log for Lines {
+        fn line(&self, text: &str) {
+            let _ = self.0.send(text.into());
+        }
+    }
+
+    #[test]
+    fn why_following_stopped_is_one_fixed_line_per_source() {
+        let cases = [
+            (Source::X11, "front-x11", "front: X11 not followed", "front: X11 ended"),
+            (Source::Sway, "front-sway", "front: sway not followed", "front: sway ended"),
+            (Source::Hyprland, "front-hyprland", "front: Hyprland not followed", "front: Hyprland ended"),
+            (Source::Windows, "front-windows", "front: Windows not followed", "front: Windows ended"),
+        ];
+        for (source, thread, not_followed, ended) in cases {
+            for (stop, line) in [(Stop::NotFollowed, not_followed), (Stop::Ended, ended)] {
+                let (send, lines) = std::sync::mpsc::channel();
+                let (name, named) = std::sync::mpsc::channel();
+                on_thread(Arc::new(Lines(send)), source, move || {
+                    let _ = name.send(std::thread::current().name().map(String::from));
+                    stop
+                });
+                assert_eq!(named.recv_timeout(WAIT), Ok(Some(thread.into())));
+                assert_eq!(lines.recv_timeout(WAIT).as_deref(), Ok(line));
+                // The thread has ended and dropped the log: one line, then nothing.
+                assert_eq!(lines.recv_timeout(WAIT), Err(std::sync::mpsc::RecvTimeoutError::Disconnected));
+            }
+        }
+    }
+
     #[test]
     fn no_front_reports_nothing() {
         let told = Arc::new(Mutex::new(Vec::new()));
