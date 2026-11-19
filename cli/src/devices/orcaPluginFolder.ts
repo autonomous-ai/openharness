@@ -1,12 +1,14 @@
 /**
  * The folder Orca installs Harness Device's plugin from (`orca plugin install <folder>`) and copies again at each
  * `orca plugin update`: the plugin's files `cli.js` carries, written in Harness's data root by the `harness device orca`
- * command's own process. Orca must never read half a folder, after a crash or with two commands at once (the app's
- * `status` beside a person's `connect`), so a write goes whole into a folder beside it and is renamed into place.
+ * command's process and by the devices' process (cable/orcaPluginSetup.ts). Orca must never read half a folder, after a
+ * crash or with two writers at once (the devices' pass beside a person's `enable`), so a write goes whole into a folder
+ * beside it and is renamed into place.
  *
- * Each command writes into a folder named by its pid (`<folder>.new.<pid>`), never into one named for all: a command
- * that cleared a shared `<folder>.new` as a leftover, file by file, could do it while another renamed that folder into
- * place, or make it again half full for the other to rename. A staging folder is removed only once its command is gone.
+ * Each process writes into its own staging folder, named by its pid (`<folder>.new.<pid>`), never into one named for
+ * all: a process that cleared a shared `<folder>.new` as a leftover, file by file, could do it while another renamed
+ * that folder into place, or make it again half full for the other to rename. A staging folder is removed only once its
+ * process is gone.
  */
 import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
