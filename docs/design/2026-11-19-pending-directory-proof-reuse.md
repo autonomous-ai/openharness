@@ -15,8 +15,10 @@ verification and approximately85.638 ms in its repeated absolute-path proof. The
 occupancy numbers across recovery and recurring discovery, not function CPU or acceptance timing.
 Receipt reads still dominate; the historical cost hold remains.
 
-The same duplicate occurs after directory iterators open and after marker durability. All three
-comparisons use the value returned from the immediately preceding verification, not a stored observation.
+The same adjacent duplicate occurs after directory iterators open. Both comparisons use the value
+returned from the immediately preceding verification, not a stored observation. The post-durability
+check remains unchanged: intervening root-path observations separate its two receipt-directory checks,
+so removing its later check would change the publication fence.
 Every invocation still lstats cwd and the absolute directory and checks directory kind, no symlink,
 owner, mode, device, inode, birthtime and group. A mismatch still throws
 `PendingCreationDirectoryLost`; the actual child exits, and only a new child can adopt another path.
@@ -54,3 +56,21 @@ Then run the pending index, actual directory/process, custody, ancestor and stor
 plus affected receipt/discovery callers, with one worker and scoped `pendingCreations.ts` coverage.
 Run source types separately. Keep initial failures and exact receipts; no benchmark/build/native
 suite or broader core gate in this task.
+
+## Evidence
+
+The corrected actual-child control failed before the runtime change: all 32 classifications made
+`cwd, absolute, absolute` checks instead of `cwd, absolute` (receipt
+`20261119T082041.678333Z-93310`). The earlier fixture run is retained separately: its evidence-file
+writes contaminated the counter and its first generated identifier was too short, so it is not the
+behavioral red.
+
+The seven selected suites then passed 126 tests, including all 21 actual directory-process controls,
+and failed two direct scanner fixtures (`20261119T082247.907742Z-95409`). Source types passed.
+The explicit-path adapter now performs two fixed admission checks; its syscall bound accounts for
+those checks. The restored-mtime fixture now verifies that APFS birthtime remains unchanged instead
+of rounding an mtime backwards across creation. Both corrected fixtures passed separately
+(`20261119T082514.004629Z-97933`), with production source unchanged. These complementary runs cover
+128 selected tests; they are not a new full suite run. Parent-process coverage does not instrument
+the real child: pendingCreations.ts reports 91.62% statements, 90.4% branches, 81.81% functions and
+91.72% lines. No full coverage or timing acceptance is claimed. Final matched performance remains open.

@@ -120,7 +120,8 @@ it('checks classified receipts and page boundaries without restatting both direc
   expect(status).toHaveBeenCalledTimes(33)
   expect(existsSync(join(markers, id))).toBe(true)
   expect(faults.closed).toEqual(expect.arrayContaining([directory, markers]))
-  expect(stat.mock.calls.filter(([path]) => path === directory).length).toBeLessThanOrEqual(33 + 2 * pages + 2)
+  // The explicit-path adapter now verifies admission too, adding two fixed open-time checks.
+  expect(stat.mock.calls.filter(([path]) => path === directory).length).toBeLessThanOrEqual(33 + 2 * pages + 4)
   expect(stat.mock.calls.filter(([path]) => path === markers).length).toBeLessThanOrEqual(2 * pages + 2)
 })
 
@@ -232,9 +233,13 @@ it('discovers bounded pending IDs across legacy history and preserves missing or
 
 it('rediscovers older writers after startup even with the original directory timestamps', async () => {
   const index = createPendingCreationIndex(directory); index.ensure(key(0))
+  // APFS can rewrite birthtime when Date rounding restores an mtime before creation. Keep this mtime-only control nonretrograde.
+  const timestamp = new Date(Date.now() + 1000)
+  utimesSync(directory, timestamp, timestamp)
   expect((await collect(index)).ids).toEqual([])
-  const original = statSync(directory)
+  const original = statSync(directory), birthtime = statSync(directory, { bigint: true }).birthtimeNs
   seed(key(1)); utimesSync(directory, original.atime, original.mtime)
+  expect(statSync(directory, { bigint: true }).birthtimeNs).toBe(birthtime)
   expect((await collect(index)).ids).toEqual([key(1)])
   rmSync(join(markers, key(1)))
   expect((await collect(index)).ids).toEqual([key(1)])

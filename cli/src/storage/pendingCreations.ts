@@ -23,7 +23,7 @@ const identity = (file: string): string => directoryProof(lstatSync(file, { bigi
 export interface PendingCreationDirectory {
   readonly path: string
   admit(expected: string): void
-  verify(): void
+  verify(): string | undefined
 }
 
 /** A lost cwd capability cannot be recovered by adopting a later pathname in the same child. */
@@ -37,7 +37,7 @@ export function createPendingCreationDirectory(directory: string): PendingCreati
   const verify = () => {
     if (pinned === undefined) return
     try {
-      if (identity('.') === pinned && identity(directory) === pinned) return
+      if (identity('.') === pinned && identity(directory) === pinned) return pinned
     } catch { /* Missing or unsafe authority is also a lost binding. */ }
     throw new PendingCreationDirectoryLost()
   }
@@ -150,8 +150,7 @@ export function createPendingCreationIndex(directory: string, binding: PendingCr
       try { own.index = identity(markers); own.dirs[0] = await opendir(`${binding.path}/.pending-v1`) }
       catch (error) { if (!missing(error)) throw error }
       own.dirs[1] = await opendir(binding.path)
-      binding.verify()
-      if (identity(directory) !== parent || own.index !== null && identity(markers) !== own.index) throw new SessionStorageUnavailable('changed')
+      if (binding.verify() !== parent || own.index !== null && identity(markers) !== own.index) throw new SessionStorageUnavailable('changed')
     } catch (error) { closeOwn(own); throw error }
   }
   const page = async (cursor: string | null, deadline: number): Promise<PendingCreationPage> => {
@@ -167,8 +166,8 @@ export function createPendingCreationIndex(directory: string, binding: PendingCr
       if (performance.now() >= deadline) throw new SessionStorageUnavailable('expired')
     }
     const verifyReceiptDirectory = () => {
-      binding.verify()
-      if (identity(directory) !== own.parent) throw new SessionStorageUnavailable('changed')
+      // Verification just checked both cwd and this absolute path; compare that fresh proof directly.
+      if (binding.verify() !== own.parent) throw new SessionStorageUnavailable('changed')
     }
     const verify = () => {
       timely(); verifyReceiptDirectory()
