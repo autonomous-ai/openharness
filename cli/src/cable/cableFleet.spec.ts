@@ -1013,6 +1013,8 @@ describe('a Harness Pro that is silent from the moment its port opens', () => {
       Quiet.made[1].silent()
       await vi.waitFor(() => expect(s.rows()).toEqual([{ id: PRO, attached: false, board: 'max', problem: NOTICE }]))
       expect(s.verdicts.isForeign(s.port)).toBe(false)
+      expect(s.verdicts.isPro(s.port)).toBe(false)
+      expect(s.f.host.log).not.toHaveBeenCalledWith(expect.stringContaining('Harness Pro'))
     } finally { await s.fleet.stop() }
   })
 
@@ -1128,7 +1130,7 @@ describe('a Harness Pro that is silent from the moment its port opens', () => {
     try {
       s.fleet.start()
       await vi.waitFor(() => expect(Quiet.made).toHaveLength(1))
-      expect(new DialVerdicts(file).boardOf(s.port)).toBe('pro')
+      expect(new DialVerdicts(file).isPro(s.port)).toBe(true)
       Quiet.made[0].silent()
       await vi.waitFor(() => expect(s.reset).toHaveBeenCalledTimes(1))
     } finally { await s.fleet.stop() }

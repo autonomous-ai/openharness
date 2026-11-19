@@ -70,25 +70,39 @@ describe('verdicts on USB boards', () => {
     expect(next.isForeign(board('2', 'BB:02'))).toBe(true)
   })
 
-  it('remembers which board greeted, across restarts, so only a known Harness Pro or Max is ever reset', () => {
+  it('remembers which board greeted, across restarts, so only a known Harness Pro is ever reset', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'verdicts-')), 'dial-ports.json')
     const verdicts = new DialVerdicts(file)
-    expect(verdicts.boardOf(board('1'))).toBeUndefined()
-    // A round dial (no board) is a dial with no board.
+    expect(verdicts.isPro(board('1'))).toBe(false)
+    // A round dial (no board) is a dial, not a Pro.
     verdicts.markDial(board('1', 'RD:01'))
-    expect(verdicts.boardOf(board('1', 'RD:01'))).toBeUndefined()
+    expect(verdicts.isPro(board('1', 'RD:01'))).toBe(false)
     // A dial recorded before the board was kept learns it on its next greeting.
     verdicts.markDial(board('1'))
     verdicts.markDial(board('1'), 'pro')
-    expect(new DialVerdicts(file).boardOf(board('2'))).toBe('pro')
+    expect(new DialVerdicts(file).isPro(board('2'))).toBe(true)
     // A later greeting that names no board keeps what is known.
     new DialVerdicts(file).markDial(board('2'))
-    expect(new DialVerdicts(file).boardOf(board('3'))).toBe('pro')
-    // Harness Max is kept by its own name.
-    verdicts.markDial(board('1', 'MX:03'), 'max')
-    expect(new DialVerdicts(file).boardOf(board('1', 'MX:03'))).toBe('max')
-    // A foreign board has none.
+    expect(new DialVerdicts(file).isPro(board('3'))).toBe(true)
+    // A foreign board is never a Pro.
     verdicts.markForeign(board('1', 'BB:02'))
-    expect(verdicts.boardOf(board('1', 'BB:02'))).toBeUndefined()
+    expect(verdicts.isPro(board('1', 'BB:02'))).toBe(false)
+  })
+
+  it('remembers a Harness Max by its own name, across restarts, and never takes it for a Pro or a Pro for it', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'verdicts-')), 'dial-ports.json')
+    const verdicts = new DialVerdicts(file)
+    expect(verdicts.isMax(board('1', 'MX:01'))).toBe(false)
+    verdicts.markDial(board('1', 'MX:01'), 'max')
+    expect(new DialVerdicts(file).isMax(board('2', 'MX:01'))).toBe(true)
+    expect(new DialVerdicts(file).isPro(board('2', 'MX:01'))).toBe(false)
+    // A later greeting that names no board keeps it a Max.
+    new DialVerdicts(file).markDial(board('2', 'MX:01'))
+    expect(new DialVerdicts(file).isMax(board('3', 'MX:01'))).toBe(true)
+    // A Pro, a round dial and a foreign board are no Max.
+    verdicts.markDial(board('1', 'PR:02'), 'pro')
+    verdicts.markDial(board('1', 'RD:03'))
+    verdicts.markForeign(board('1', 'BB:04'))
+    expect(['PR:02', 'RD:03', 'BB:04'].map((serial) => verdicts.isMax(board('1', serial)))).toEqual([false, false, false])
   })
 })
