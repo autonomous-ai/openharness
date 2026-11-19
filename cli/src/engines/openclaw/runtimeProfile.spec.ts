@@ -4,8 +4,10 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { inspectRuntimePane } from '../../lib/legacyPane.js'
 import { parseRuntimeProfile } from '../../lib/runtimeProfileWire.js'
+import { legacyScreen } from '../../lib/legacyScreen.js'
+import { inspectCloseActivity } from '../../lib/closeAgentService.js'
 import {
-  createRuntimeProfileReader, parseOpenclawFooter, transcriptEvidence, type OpenclawFooter,
+  createRuntimeProfileReader, openclawActivity, parseOpenclawFooter, transcriptEvidence, type OpenclawFooter,
 } from './runtimeProfile.js'
 import { readOpenclawScreen } from './contract.js'
 
@@ -106,6 +108,27 @@ describe('OpenClaw pane inspection', () => {
     const drafted = screen('plain').replace(/(─{8,}\n)\n(─{8,})/, '$1half a sentence\n$2')
     expect(drafted).not.toBe(screen('plain'))
     expect(inspectRuntimePane('openclaw', drafted)).toMatchObject({ idle: false, draft: true })
+  })
+})
+
+describe('OpenClaw activity', () => {
+  it.each([
+    ['sending', 'sending', '⠋ sending • 0s | connected'],
+    ['waiting', 'flibbertigibbeting...', '⠼ flibbertigibbeting… • 0s | connected'],
+    ['running-quiet', 'running', '⠦ running • 45s | connected'],
+  ])('%s reads as work, its status line the indicator', (name, label, indicator) => {
+    expect(openclawActivity(screen(name))).toEqual({ label, indicator })
+  })
+
+  it.each(['starting-up', 'connecting', 'plain'])('%s is no work', (name) => {
+    expect(openclawActivity(screen(name))).toBeNull()
+  })
+
+  it('a quiet run is working to a close, with no turn open', () => {
+    const reading = legacyScreen('openclaw', screen('running-quiet'))
+    expect(reading.busy).toBe(true)
+    const row = { engine: 'openclaw', sessionId: 'agent:main:plain', transcriptPath: null, boundAt: 1, launch: null, resumeOnly: false } as const
+    expect(inspectCloseActivity(row, reading, false, false)).toBe('working')
   })
 })
 
