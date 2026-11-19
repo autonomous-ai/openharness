@@ -416,14 +416,14 @@ void main() {
     });
   });
 
-  test('a sliver\'s colour matrix: none at rest, brightness .42 and opacity .42 when dimmed', () {
+  test('a sliver\'s colour matrix: none at rest, brightness .62 and opacity .62 when dimmed', () {
     expect(dimMatrix(0),
         [1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0].map((v) => closeTo(v, 1e-9)).toList());
     final m = dimMatrix(1);
-    // white stays grey (saturation keeps a grey grey) at .42; alpha .42
+    // white stays grey (saturation keeps a grey grey) at .62; alpha .62 (the owner's call, 19 Nov: .42 was too dark)
     for (final row in [0, 1, 2]) {
-      expect(m[row * 5] + m[row * 5 + 1] + m[row * 5 + 2], closeTo(.42, 1e-9));
+      expect(m[row * 5] + m[row * 5 + 1] + m[row * 5 + 2], closeTo(.62, 1e-9));
     }
-    expect(m[18], closeTo(.42, 1e-9));
+    expect(m[18], closeTo(.62, 1e-9));
   });
 }

@@ -202,8 +202,9 @@ class _OpeningState extends State<_Opening> {
   }
 }
 
-/// A sliver's dimming (opacity .42, filter brightness(.42) saturate(.55) blur(1.2px), .35s ease): one colour matrix and
-/// the blur in one filter, off (no layer) while the cell is not dimmed at all.
+/// A sliver's dimming (opacity .62, filter brightness(.62) saturate(.55) blur(1.2px), .35s ease; the mock's .42 read too
+/// dark on the bar, the owner's call 19 Nov): one colour matrix and the blur in one filter, off (no layer) while the cell
+/// is not dimmed at all.
 class _Dim extends StatelessWidget {
   const _Dim({required this.on, required this.child});
   final bool on;
@@ -230,7 +231,7 @@ class _Dim extends StatelessWidget {
 /// them, then the opacity on alpha.
 @visibleForTesting
 List<double> dimMatrix(double t) {
-  final b = 1 - .58 * t, s = 1 - .45 * t, o = 1 - .58 * t;
+  final b = 1 - .38 * t, s = 1 - .45 * t, o = 1 - .38 * t;
   return [
     b * (.213 + .787 * s), b * (.715 - .715 * s), b * (.072 - .072 * s), 0, 0, //
     b * (.213 - .213 * s), b * (.715 + .285 * s), b * (.072 - .072 * s), 0, 0,
