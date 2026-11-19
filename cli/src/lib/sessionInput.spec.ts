@@ -1045,6 +1045,54 @@ describe('SessionInputController', () => {
       controller.forget('s1')
     })
 
+    // Found in review: an Enter retry of a message with no delivery id checked only the agent's process once it answered,
+    // so a retry that answered after the agent was forgotten still pressed Enter into its pane.
+    describe('an Enter retry the agent is forgotten during', () => {
+      const retrying = () => {
+        const validateRuntime = vi.fn(async () => true)
+        const sendKey = vi.fn(async (_id: string, _key: string) => true)
+        const capture = vi.fn(async () => null)
+        const onError = vi.fn()
+        const controller = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
+          getSession: () => session('openclaw'), validateRuntime, inject: async () => true, sendKey, capture, onError })
+        return { controller, validateRuntime, sendKey, capture, onError }
+      }
+
+      it.each([true, false])('presses nothing and says nothing when its process check answers %s after', async (alive) => {
+        vi.useFakeTimers()
+        const { controller, validateRuntime, sendKey, onError } = retrying()
+
+        controller.submit('s1', 'hello')
+        let answer!: (alive: boolean) => void
+        validateRuntime.mockImplementationOnce(() => new Promise<boolean>((done) => { answer = done }))
+        await vi.advanceTimersByTimeAsync(10_000)
+        expect(validateRuntime).toHaveBeenCalledTimes(2)
+        controller.forget('s1')
+        answer(alive)
+        await vi.advanceTimersByTimeAsync(60_000)
+        expect(sendKey).not.toHaveBeenCalled()
+        expect(onError).not.toHaveBeenCalled()
+      })
+
+      it('reads the pane no more once the Enter it was pressing is done', async () => {
+        vi.useFakeTimers()
+        const { controller, validateRuntime, sendKey, capture } = retrying()
+        let pressed!: (done: boolean) => void
+        sendKey.mockImplementationOnce(() => new Promise<boolean>((done) => { pressed = done }))
+
+        controller.submit('s1', 'hello')
+        await vi.advanceTimersByTimeAsync(10_000)
+        expect(sendKey).toHaveBeenCalledTimes(1)
+        controller.forget('s1')
+        pressed(true)
+        const reads = capture.mock.calls.length, checks = validateRuntime.mock.calls.length
+        await vi.advanceTimersByTimeAsync(60_000)
+        expect(capture).toHaveBeenCalledTimes(reads)
+        expect(validateRuntime).toHaveBeenCalledTimes(checks)
+        expect(sendKey).toHaveBeenCalledTimes(1)
+      })
+    })
+
     // Found in review: typed into a pane whose history had not loaded, a message was refused back into the input box,
     // where the binding pass's `/session` (typed only into an empty box) never ran; it was given up after 3 minutes and
     // stayed in the box under the next paste.
