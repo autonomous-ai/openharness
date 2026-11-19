@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { TmuxBackend } from './tmuxBackend.js'
-import { ensureTmuxOnPath, managedTmuxPath, resolveViaLoginShell, TMUX_CHECK_MS, tmuxAvailableNow, tmuxFinder, tmuxInstallDirectories, type TmuxPathOutcome } from './tmuxOnPath.js'
+import { tmuxFinder } from './binaryFinder.js'
+import { ensureTmuxOnPath, managedTmuxPath, resolveViaLoginShell, TMUX_CHECK_MS, tmuxAvailableNow, tmuxInstallDirectories, type TmuxPathOutcome } from './tmuxOnPath.js'
 import { writeExecutable } from '../testing/executableFixture.js'
 
 const dirs: string[] = []

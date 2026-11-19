@@ -10,7 +10,8 @@
  */
 import { dirname, join } from 'node:path'
 import { binaryOnPath } from '../../lib/binaryOnPath.js'
-import { binaryFinder, resolveViaLoginShell, tmuxInstallDirectories, type TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
+import { binaryFinder } from '../../lib/binaryFinder.js'
+import { resolveViaLoginShell, tmuxInstallDirectories, type TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { CONTROL, MAX_TEXT, RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 import type { OuterLookup } from './outer.js'
@@ -41,7 +42,7 @@ export interface ZellijDeps {
 const installed = (env: NodeJS.ProcessEnv): string | undefined =>
   tmuxInstallDirectories(env).map((dir) => join(dir, 'zellij')).find((path) => binaryOnPath(path, env))
 
-/** zellij as the core finds tmux (tmuxOnPath.ts binaryFinder): on this process's PATH, else where the person's login shell
+/** zellij as the core finds tmux (binaryFinder.ts): on this process's PATH, else where the person's login shell
  *  finds it, else in a folder the core looks in. Under launchd or systemd the master's PATH holds no Homebrew or cargo
  *  folder, where zellij is installed. None found is asked again once a zellij is on the PATH or in one of those folders. */
 export function zellijFinder(env: NodeJS.ProcessEnv = process.env): () => Promise<TmuxPathOutcome> {

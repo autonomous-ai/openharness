@@ -25,7 +25,8 @@ import { savedDaemonPort } from '../lib/daemonRecord.js'
 import { HARNESS_OWNER_OPTION } from '../lib/harnessSessionLabel.js'
 import { publishHookRoute } from '../lib/hookRoutes.js'
 import { runtimeShortRoot, socketPathIn, unixSocketPath } from '../lib/localSocket.js'
-import { tmuxFinder, type TmuxPathOutcome } from '../lib/tmuxOnPath.js'
+import { tmuxFinder } from '../lib/binaryFinder.js'
+import type { TmuxPathOutcome } from '../lib/tmuxOnPath.js'
 
 /** How often it looks for a process that could still use an old path. */
 export const CHECK_MS = 600_000
@@ -56,7 +57,7 @@ export interface HomeBridgeDeps {
   /** This boot's id (homeMove/bridge.ts). */
   bootId(): string | null
   rows(): ProcRow[]
-  /** Where tmux is, as the core finds it (lib/tmuxOnPath.ts, tmuxFinder); it never rejects. */
+  /** Where tmux is, as the core finds it (lib/binaryFinder.ts tmuxFinder); it never rejects. */
   tmuxAt(): Promise<TmuxPathOutcome>
   /** Every pane on tmux's default server, each its process and its tag, as spawnSync gives the answer of [binary]. */
   tmux(binary: string): TmuxAnswer

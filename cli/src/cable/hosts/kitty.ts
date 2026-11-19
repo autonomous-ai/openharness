@@ -9,7 +9,8 @@
  */
 import { dirname, join } from 'node:path'
 import { binaryOnPath, resolveBinaryOnPath } from '../../lib/binaryOnPath.js'
-import { binaryFinder, resolveViaLoginShell, tmuxInstallDirectories, type TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
+import { binaryFinder } from '../../lib/binaryFinder.js'
+import { resolveViaLoginShell, tmuxInstallDirectories, type TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { APP_BUNDLES } from './hostDetect.js'
 import { CONTROL, MAX_TEXT, RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
@@ -42,7 +43,7 @@ const installed = (env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string | 
   [...tmuxInstallDirectories(env, platform).map((dir) => join(dir, 'kitten')), ...(platform === 'darwin' ? [APP_KITTEN] : [])]
     .find((path) => binaryOnPath(path, env))
 
-/** kitty's remote control as the core finds tmux (tmuxOnPath.ts binaryFinder): kitten on this process's PATH, else where the
+/** kitty's remote control as the core finds tmux (binaryFinder.ts): kitten on this process's PATH, else where the
  *  person's login shell finds it, else in a folder the core looks in, else on macOS kitty.app's own; else kitty on the
  *  PATH, as `kitty @` (an older kitty ships no kitten; `kitty +kitten @` fails on 0.32.2, RECORDED_KITTY.kittyAt). Under
  *  launchd or systemd the master's PATH holds no Homebrew folder and none of the person's own. None found is asked again

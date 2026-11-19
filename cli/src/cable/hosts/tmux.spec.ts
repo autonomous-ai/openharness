@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { detectApp, detectHost } from './hostDetect.js'
 import { bundleOf, createOpenActions, type OpenTarget } from './open.js'
-import { tmuxFinder, type TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
+import { tmuxFinder } from '../../lib/binaryFinder.js'
+import type { TmuxPathOutcome } from '../../lib/tmuxOnPath.js'
 import { createTmuxAdapter, createTmuxOuter, type TmuxDeps, type TmuxOuterDeps } from './tmux.js'
 
 const OPEN = '/usr/bin/open'

@@ -336,9 +336,9 @@ checks and orders the new names so a session in Zellij inside kitty keeps Zellij
   exited, where Enter runs that program again.
 - No follow: the dial does not follow the pane focused in Zellij. 0.44's `subscribe` reports pane render updates
   only, never a focus change (`RECORDED_ZELLIJ.subscribe`), so there is nothing to follow, and nothing polls instead.
-- `zellij` is found as the core finds tmux (`zellijFinder`, through `binaryFinder` in `tmux.ts`): on the devices
-  process's `PATH`, else where the person's login shell finds it, else in the folders the core looks in for tmux; none
-  found is asked again once one is there. One finder serves the tap, the words and the client lookup. `canFocus` is
+- `zellij` is found as the core finds tmux (`zellijFinder`, through `binaryFinder` in `lib/binaryFinder.ts`): on the
+  devices process's `PATH`, else where the person's login shell finds it, else in the folders the core looks in for tmux;
+  none found is asked again once one is there. One finder serves the tap, the words and the client lookup. `canFocus` is
   true for any Zellij pane (a tap that finds no `zellij` brings the app forward, as tmux's does); `canType` is true for
   the agent's own pane, one whose terminal Zellij's server made (§ 1.5), not one that only holds it (herdr, Rex, tmux,
   a terminal or an editor started in Zellij).
