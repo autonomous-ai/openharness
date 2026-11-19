@@ -14,7 +14,8 @@ permissions:
 
 jobs:
   e2e:
-    runs-on: ubuntu-latest
+    # ubuntu-latest is 26.04, which has no zsh or tcsh package.
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     defaults:
       run:
