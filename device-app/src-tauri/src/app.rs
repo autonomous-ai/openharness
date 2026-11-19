@@ -1184,6 +1184,29 @@ mod tests {
         assert_eq!(reads(&removed().handle(opened(B + 120, false))), [false; 2]);
     }
 
+    /// Whether any effect is about Orca, which the devices service sets up on its own.
+    fn of_orca(effects: &[Effect]) -> bool {
+        effects.iter().any(|effect| format!("{effect:?}").contains("Orca"))
+    }
+
+    #[test]
+    fn the_menu_opening_runs_nothing_of_orca() {
+        let (mut app, mut effects) = App::new(SEEN, true, false, B);
+        effects.extend(answer(&mut app, true));
+        // Past five minutes, when the menu once asked Orca again.
+        effects.extend(app.handle(Event::MenuOpened { now: B + 300, desktop_installed: false }));
+        assert!(!of_orca(&effects), "{effects:?}");
+    }
+
+    #[test]
+    fn a_new_cli_version_runs_nothing_of_orca() {
+        let (mut app, mut effects) = App::new(SEEN, true, false, B);
+        effects.extend(answer(&mut app, true));
+        effects.extend(app.handle(Event::CliVersion(Some("0.6.66".into()))));
+        effects.extend(app.handle(Event::CliVersion(Some("0.6.67".into()))));
+        assert!(!of_orca(&effects), "{effects:?}");
+    }
+
     #[test]
     fn the_first_status_line_after_a_start_reads_again() {
         let reads = |effects: &[Effect]| has(effects, &Effect::ReadAuth);

@@ -245,6 +245,16 @@ mod tests {
         }
     }
 
+    /// The devices service sets the Orca plugin up: the menu has nothing of Orca to offer.
+    #[test]
+    fn no_orca_row_in_any_state() {
+        for state in states() {
+            for item in menu(&state) {
+                assert!(!format!("{item:?}").contains("Orca"), "{item:?}");
+            }
+        }
+    }
+
     #[test]
     fn every_dial_line() {
         let with = |change: &dyn Fn(&mut AppState)| {

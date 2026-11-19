@@ -1049,6 +1049,11 @@ mod tests {
         assert_eq!(fake.log().lines(), ["harness hardware watch --json: exit 3: gone"]);
     }
 
+    #[test]
+    fn a_run_is_named_by_every_argument() {
+        assert_eq!(name(&["x", "--approve", "y"]), "harness x --approve y");
+    }
+
     #[cfg(unix)]
     #[test]
     fn the_log_names_a_run_without_its_fingerprint() {

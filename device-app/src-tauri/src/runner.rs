@@ -1537,28 +1537,24 @@ mod tests {
         w.fake.script("--version", &["0.6.58"]);
         let (mut app, mut effects) = App::new(Saved::default(), w.runner.find_cli(), false, B);
         let connected = MenuItem::Text("Device ready".into());
-        let (mut dial, mut auth, mut version, mut orca) = (false, false, false, false);
+        let (mut dial, mut auth, mut version) = (false, false, false);
         loop {
             for effect in effects {
                 if let Some(Effect::Menu(items)) = w.runner.run(effect) {
                     dial |= items.first() == Some(&connected);
                 }
             }
-            if dial && auth && version && orca {
+            if dial && auth && version {
                 break;
             }
             let event = w.next();
             auth |= event == Event::Auth(Some(true));
             version |= event == Event::CliVersion(Some("0.6.58".into()));
-            // A CLI with no `device orca` prints its usage: no row, and Orca is asked nothing more.
-            orca |= matches!(event, Event::OrcaStatus(_, None));
             effects = app.handle(event);
         }
-        let device: Vec<String> = w.fake.calls().into_iter().filter(|call| call.starts_with("device ")).collect();
-        assert_eq!(device, ["device orca status --json"]);
         let mut calls = w.fake.calls();
         calls.sort();
-        assert_eq!(calls, ["--version", "auth status --json", "device orca status --json", "hardware watch --json"]);
+        assert_eq!(calls, ["--version", "auth status --json", "hardware watch --json"]);
     }
 
     /// What the binary was last told to draw.
