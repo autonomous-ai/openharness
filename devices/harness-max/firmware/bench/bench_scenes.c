@@ -4,6 +4,7 @@
 #include "max_render.c"
 
 #include "bench_scenes.h"
+#include "max_motions.h"
 
 int bench_screen_count(void) { return SCREEN_COUNT; }
 const char *bench_screen_name(int i) { return SCREENS[i].name; }
@@ -70,4 +71,33 @@ void bench_partial(int i, ht_scene_t *before, ht_scene_t *after)
     if (PARTIALS[i].change) PARTIALS[i].change(at);
     ht_scene_clear(after, ht_rgb(HT_THEME_CANVAS));
     max_ui_render(after, at);
+}
+
+int bench_motion_count(void) { return MAX_MOTION_COUNT; }
+const char *bench_motion_name(int i) { return MAX_MOTIONS[i].name; }
+
+void bench_draw(ht_scene_t *out, uint32_t now)
+{
+    ht_scene_clear(out, ht_rgb(HT_THEME_CANVAS));
+    max_ui_render(out, now);
+}
+
+static void (*s_frame)(uint32_t now, int f);
+static void set_up_frame(uint32_t now) { s_frame(now, -1); }
+
+int bench_motion(int i, void (*frame)(uint32_t now, int f))
+{
+    const max_motion_t *m = &MAX_MOTIONS[i];
+    s_frame = frame;
+    m->set_up(set_up_frame);
+    frame(T0 - 1000, -1);
+    frame(T0 - MAX_ROW_FRAME_MS, -1);
+    m->go();
+    for (int f = 0; f < BENCH_MOTION_FRAMES; f++) {
+        const uint32_t now = T0 + (uint32_t)f * MAX_ROW_FRAME_MS;
+        if (m->step && f < m->steps) m->step(f, now);
+        frame(now, f);
+        if (f >= m->steps && !max_row_moving(now)) return f + 1;   // this frame drew where it rests
+    }
+    return BENCH_MOTION_FRAMES;
 }

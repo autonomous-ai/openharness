@@ -14,6 +14,8 @@
 #include "max_strips_p4.h"
 #include "max_turn.h"
 #include "max_turn_ppa.h"
+#include "max_ui.h"        // max_ui_share, max_ui_work
+#include "max_ui_draw.h"   // max_layer_forget
 #include "pod/pod_draw.h"
 
 #include "driver/ppa.h"
@@ -331,6 +333,64 @@ static void present_partials(void)
            helper ? (unsigned)uxTaskGetStackHighWaterMark(helper) : 0u);
 }
 
+// ---- (g) the row in motion, through the product's frame ----
+
+static struct { double build, present; } s_motion[BENCH_MOTION_FRAMES];
+static ht_scene_t *s_motion_last;
+static bool s_motion_shown;
+
+// A frame of a motion as the render task paints it: the scene built over the other buffer, then presented.
+static void motion_frame(uint32_t now, int f)
+{
+    ht_scene_t *next = s_motion_last == &s_before ? &s_after : &s_before;
+    const int64_t t0 = esp_timer_get_time();
+    bench_draw(next, now);
+    const int64_t t1 = esp_timer_get_time();
+    max_present(s_motion_shown ? s_motion_last : NULL, next, NULL);
+    const int64_t t2 = esp_timer_get_time();
+    if (f >= 0) s_motion[f].build = (t1 - t0) / 1000.0, s_motion[f].present = (t2 - t1) / 1000.0;
+    s_motion_last = next;
+    s_motion_shown = true;
+    vTaskDelay(1);   // the idle task's turn: the task watchdog watches it
+}
+
+static void motions(void)
+{
+    printf("(g) App Detail's row in motion through the product's frame (2c ppa, the row's blurs shared between the "
+           "cores as max_app.c has them), one frame every %u ms of the row's clock: each built (max_ui_render) then "
+           "presented (max_present) into the framebuffer, wall ms. cold: no pet cell baked, no sliver or pet image "
+           "kept; warm: the same motion again. framebuffer: after the last frame, as the CPU's raster and turn\n",
+           (unsigned)MAX_ROW_FRAME_MS);
+    printf("%-14s %4s %6s %7s %7s %6s %6s %7s %7s %7s %7s %s\n", "motion", "run", "frames", "mean", "worst", "fps",
+           "min", "build", "max", "present", "max", "framebuffer");
+    use_mode(PRODUCT);
+    max_ui_share(true);
+    for (int i = 0; i < bench_motion_count(); i++) {
+        const bool twice = !strcmp(bench_motion_name(i), "open") || !strcmp(bench_motion_name(i), "close");
+        for (int run = 0; run < (twice ? 2 : 1); run++) {
+            if (!run) {
+                max_layer_forget();
+                pod_cell_bake_reset();
+            }
+            s_motion_shown = false;
+            const int frames = bench_motion(i, motion_frame);
+            double sum = 0, worst = 0, build = 0, build_max = 0, present = 0, present_max = 0;
+            for (int f = 0; f < frames; f++) {
+                const double b = s_motion[f].build, p = s_motion[f].present;
+                sum += b + p, build += b, present += p;
+                if (b + p > worst) worst = b + p;
+                if (b > build_max) build_max = b;
+                if (p > present_max) present_max = p;
+            }
+            want_of(s_motion_last);
+            printf("%-14s %4s %6d %7.2f %7.2f %6.1f %6.1f %7.2f %7.2f %7.2f %7.2f %s\n", bench_motion_name(i),
+                   run ? "warm" : "cold", frames, sum / frames, worst, 1000.0 * frames / sum, 1000.0 / worst,
+                   build / frames, build_max, present / frames, present_max, fb_is_want() ? "same" : "DIFFERS");
+        }
+    }
+    max_ui_share(false);
+}
+
 // ---- (b) and (c): the strip turn on the CPU and on the PPA ----
 
 static esp_err_t ppa_turn(ppa_srm_rotation_angle_t angle, bool mirror_x, bool mirror_y, const uint16_t *src, int w, int h,
@@ -504,6 +564,7 @@ static void report(unsigned pass)
     partials();
     present_screens();
     present_partials();
+    motions();
     turns();
     copies();
     printf("==== end of pass %u ====\n", pass);
@@ -535,6 +596,7 @@ void app_main(void)
     s_want = heap_caps_malloc(FB_BYTES, MALLOC_CAP_SPIRAM);
     s_layer = heap_caps_malloc((size_t)LAYER_W * LAYER_H * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
     max_strips_framebuffer(s_fb);
+    max_present_work(max_ui_work);   // as max_app.c: what the scene leaves to the frame, its blurs, both cores do
     const ppa_client_config_t srm = {.oper_type = PPA_OPERATION_SRM};
     const esp_err_t ppa = ppa_register_client(&srm, &s_srm);
     if (!s_strip || !s_strip2 || !s_band || !s_ref || !s_fb || !s_want || !s_layer || ppa != ESP_OK) {

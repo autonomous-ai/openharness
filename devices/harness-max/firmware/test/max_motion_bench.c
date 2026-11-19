@@ -8,6 +8,7 @@
 #define main max_render_main
 #include "max_render.c"
 #undef main
+#include "max_motions.h"
 #include "max_ui_draw.h"   // max_layer_painted
 
 enum { REPEATS = 9, FRAMES = 96, STRIP = 24, FRAME_MS = 16 };
@@ -47,11 +48,11 @@ static cost_t frame_at(uint32_t now)
     return (cost_t){t1 - t0, now_us() - t1, d.pixels};
 }
 
-// The whole glass of the page as it stands, rasterised in strips: the least of 4 * REPEATS.
-static double whole_glass(void)
+// The whole glass of the page as it stands, rasterised in strips: the least of n.
+static double whole_glass(int n)
 {
     double least = 1e9;
-    for (int i = 0; i < 4 * REPEATS; i++) {
+    for (int i = 0; i < n; i++) {
         const double t0 = now_us();
         for (int y = 0; y < HT_HEIGHT; y += STRIP) {
             const int h = HT_HEIGHT - y < STRIP ? HT_HEIGHT - y : STRIP;
@@ -63,74 +64,39 @@ static double whole_glass(void)
     return least;
 }
 
-// A motion: set_up puts the page at rest (drawn at T0 - 1000 and the frame before T0), go starts it at T0, and step
-// (may be NULL) is called before each of its first `steps` frames with the frame's time. It runs until the row stops
-// moving.
-typedef struct {
-    const char *name;
-    void (*set_up)(void);
-    void (*go)(void);
-    void (*step)(int frame, uint32_t now);
-    int steps;
-} motion_t;
-
-static void overview_rest(void) { orca(); show(MAX_VIEW_OVERVIEW, NULL); }
-static void agent_rest(void)
-{
-    orca();
-    show(MAX_VIEW_OVERVIEW, NULL);
-    frame_at(T0 - 2000);
-    max_open("rate");
-}
-static void nothing(void) {}
-static void open_rate(void) { max_open("rate"); }
-static void close_rate(void) { max_show(MAX_VIEW_OVERVIEW); }
-// A finger across the row at 750 px/s for 40 frames from 1400, then let go: the row follows it, then settles.
-static void drag_row(int frame, uint32_t now)
-{
-    if (frame == 0) max_ui_touch(true, 1400, 240, now);
-    else if (frame <= 40) max_ui_touch(true, 1400 - 12 * frame, 240, now);
-    else if (frame == 41) max_ui_touch(false, 1400 - 12 * 40, 240, now);
-}
-// The same over the slivers beside the open agent: from the right one, the row dragged the other way.
-static void drag_slivers(int frame, uint32_t now)
-{
-    if (frame == 0) max_ui_touch(true, 1650, 240, now);
-    else if (frame <= 30) max_ui_touch(true, 1650 + 4 * frame, 240, now);
-    else if (frame == 31) max_ui_touch(false, 1650 + 4 * 30, 240, now);
-}
-
-static const motion_t MOTIONS[] = {
-    {"drag + snap", overview_rest, nothing, drag_row, 42},
-    {"open", overview_rest, open_rate, NULL, 0},
-    {"close", agent_rest, close_rate, NULL, 0},
-    {"drag slivers", agent_rest, nothing, drag_slivers, 32},
-};
-enum { MOTION_COUNT = sizeof MOTIONS / sizeof MOTIONS[0] };
+static void draw_frame(uint32_t now) { frame_at(now); }
 
 // Runs one motion REPEATS times; prints its frames' mean and worst cost (each frame's least of the runs: the host's
-// other work only ever adds), the first run's worst (before the kept slivers were painted), and each against the whole
-// glass of the page it moves on. verbose: each frame's build and raster, its damage and the layers it painted.
-static void bench(const motion_t *m, double glass, bool verbose)
+// other work only ever adds, and the runs after the first find the pets' images and the slivers kept), the first run's
+// mean and worst (cold: every image painted as it first appears), and each against the whole glass of the page it
+// moves on, timed before each run (the least of them: a host's cores and clocks change under a run of seconds, and
+// the frames and the glass they are measured against must be timed alike). verbose: each frame's build and raster, its
+// damage, the layers and pets it painted and the pet frames it resampled (pod_cell_bakes: below 1x a frame is
+// resampled once a size and ground).
+static void bench(const max_motion_t *m, bool verbose)
 {
     static cost_t cost[REPEATS][FRAMES];
-    static unsigned painted[FRAMES];
+    static unsigned painted[FRAMES], baked[FRAMES];
     int frames = 0;
-    double cold = 0;
+    double cold = 0, cold_sum = 0, glass = 1e9;
     for (int r = 0; r < REPEATS; r++) {
-        m->set_up();
+        m->set_up(draw_frame);
         frame_at(T0 - 1000);
         frame_at(T0 - FRAME_MS);
+        const double g = whole_glass(4);
+        glass = g < glass ? g : glass;
         m->go();
         int f = 0;
         for (; f < FRAMES; f++) {
             const uint32_t now = T0 + (uint32_t)(f * FRAME_MS);
             if (m->step && f < m->steps) m->step(f, now);
-            const unsigned before = max_layer_painted();
+            const unsigned before = max_layer_painted(), bakes = pod_cell_bakes();
             cost[r][f] = frame_at(now);
             painted[f] = max_layer_painted() - before;
+            baked[f] = pod_cell_bakes() - bakes;
             const double c = cost[r][f].build + cost[r][f].raster;
             if (!r && c > cold) cold = c;
+            if (!r) cold_sum += c;
             if (f >= m->steps && !max_row_moving(now)) {   // this frame drew where it rests
                 f++;
                 break;
@@ -150,29 +116,22 @@ static void bench(const motion_t *m, double glass, bool verbose)
         worst = c > worst ? c : worst;
         px += least.damage;
         if (verbose)
-            printf("    %3d ms  build %5.0f us  raster %5.0f us  damage %3.0f%%  layers painted %u\n", f * FRAME_MS,
-                   least.build, least.raster, 100.0 * least.damage / (HT_WIDTH * HT_HEIGHT), painted[f]);
+            printf("    %3d ms  build %5.0f us  raster %5.0f us  damage %3.0f%%  layers painted %u  pet frames baked %u\n",
+                   f * FRAME_MS, least.build, least.raster, 100.0 * least.damage / (HT_WIDTH * HT_HEIGHT), painted[f],
+                   baked[f]);
     }
-    const double mean = sum / frames;
-    printf("  %-13s %2d frames  mean %5.0f us (%3.0f%%)  worst %5.0f us (%3.0f%%)  cold worst %5.0f us (%3.0f%%)"
-           "  damage %3.0f%% of the glass\n",
-           m->name, frames, mean, 100 * mean / glass, worst, 100 * worst / glass, cold, 100 * cold / glass,
-           100 * px / frames / (HT_WIDTH * HT_HEIGHT));
+    const double mean = sum / frames, cold_mean = cold_sum / frames;
+    printf("  %-13s %2d frames  glass %4.0f us  mean %5.0f us (%3.0f%%)  worst %5.0f us (%3.0f%%)  cold mean %5.0f us"
+           " (%3.0f%%)  worst %5.0f us (%3.0f%%)  damage %3.0f%%\n",
+           m->name, frames, glass, mean, 100 * mean / glass, worst, 100 * worst / glass, cold_mean,
+           100 * cold_mean / glass, cold, 100 * cold / glass, 100 * px / frames / (HT_WIDTH * HT_HEIGHT));
 }
 
 int main(int argc, char **argv)
 {
     const bool verbose = argc > 1 && !strcmp(argv[1], "-v");
-    overview_rest();
-    frame_at(T0 - 1000);
-    frame_at(T0);
-    const double overview = whole_glass();
-    agent_rest();
-    frame_at(T0 - 1000);
-    frame_at(T0);
-    const double agent = whole_glass();
-    printf("%d x %d: whole glass raster  overview %.0f us  agent page %.0f us\n", HT_WIDTH, HT_HEIGHT, overview, agent);
-    for (int i = 0; i < MOTION_COUNT; i++)
-        bench(&MOTIONS[i], MOTIONS[i].set_up == agent_rest ? agent : overview, verbose);
+    printf("%d x %d: each motion's frames against a whole-glass raster of the page it starts on (glass)\n", HT_WIDTH,
+           HT_HEIGHT);
+    for (int i = 0; i < MAX_MOTION_COUNT; i++) bench(&MAX_MOTIONS[i], verbose);
     return 0;
 }
