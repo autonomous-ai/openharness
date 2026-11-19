@@ -41,21 +41,23 @@ export function parseOpenclawFooter(capture: string): OpenclawFooter | null {
   }
 }
 
-/** Idle is a ready TUI with nothing typed in its input box. */
-export function inspectOpenclawPane(capture: string): PaneInspection {
-  const screen = readOpenclawScreen(capture)
-  const draft = !!screen.box
-  return { idle: screen.state === 'ready' && !draft, plan: false, dialog: false, draft }
+/**
+ * An OpenClaw pane, from one reading of its screen. Idle is a ready TUI with nothing typed in its input box. A run on
+ * screen, `⠦ running • 45s | connected`, is its activity: its status word as the label (`…` as `...`, as Claude Code's
+ * and Codex's read) and the status line as the indicator. Starting up and connecting are not work.
+ */
+export function readOpenclawPane(capture: string): { pane: PaneInspection; activity: { label: string; indicator: string } | null } {
+  const { state, status, box } = readOpenclawScreen(capture)
+  const draft = !!box
+  const label = state === 'busy' && status ? /^\S{1,2} (.+?) • /.exec(status)?.[1] : undefined
+  return {
+    pane: { idle: state === 'ready' && !draft, plan: false, dialog: false, draft },
+    activity: label && status ? { label: label.replace(/…/g, '...'), indicator: status } : null,
+  }
 }
 
-/**
- * A run on screen, `⠦ running • 45s | connected`: its status word as the label (`…` as `...`, as Claude Code's and
- * Codex's read) and the status line as the indicator. Starting up and connecting are not work.
- */
-export function openclawActivity(capture: string): { label: string; indicator: string } | null {
-  const { state, status } = readOpenclawScreen(capture)
-  const label = state === 'busy' && status ? /^\S{1,2} (.+?) • /.exec(status)?.[1] : undefined
-  return label && status ? { label: label.replace(/…/g, '...'), indicator: status } : null
+export function inspectOpenclawPane(capture: string): PaneInspection {
+  return readOpenclawPane(capture).pane
 }
 
 /**

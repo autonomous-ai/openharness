@@ -7,7 +7,7 @@ import { parseRuntimeProfile } from '../../lib/runtimeProfileWire.js'
 import { legacyScreen } from '../../lib/legacyScreen.js'
 import { inspectCloseActivity } from '../../lib/closeAgentService.js'
 import {
-  createRuntimeProfileReader, openclawActivity, parseOpenclawFooter, transcriptEvidence, type OpenclawFooter,
+  createRuntimeProfileReader, parseOpenclawFooter, readOpenclawPane, transcriptEvidence, type OpenclawFooter,
 } from './runtimeProfile.js'
 import { readOpenclawScreen } from './contract.js'
 
@@ -117,11 +117,11 @@ describe('OpenClaw activity', () => {
     ['waiting', 'flibbertigibbeting...', '⠼ flibbertigibbeting… • 0s | connected'],
     ['running-quiet', 'running', '⠦ running • 45s | connected'],
   ])('%s reads as work, its status line the indicator', (name, label, indicator) => {
-    expect(openclawActivity(screen(name))).toEqual({ label, indicator })
+    expect(readOpenclawPane(screen(name)).activity).toEqual({ label, indicator })
   })
 
   it.each(['starting-up', 'connecting', 'plain'])('%s is no work', (name) => {
-    expect(openclawActivity(screen(name))).toBeNull()
+    expect(readOpenclawPane(screen(name)).activity).toBeNull()
   })
 
   it('a quiet run is working to a close, with no turn open', () => {
