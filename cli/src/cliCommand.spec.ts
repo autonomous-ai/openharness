@@ -467,6 +467,24 @@ describe('start beside a daemon that serves another account', () => {
   }, ONE_RUN_TEST_MS)
 })
 
+describe('start -f with no master, when its core cannot start', () => {
+  // Harness OS's unit runs the core alone in this process: what it prints is the daemon's log, which Export logs sends.
+  it('says only the failure\'s kind, never its words or its stack, and exits 1', async () => {
+    const root = freshRoot()
+    seedSession(root)
+    // Another daemon serves this data folder: the core refuses to start beside it.
+    const port = await daemonStatusServer(root, 'm_seeded')
+
+    const result = await runAsync(root, ['start', '-f'], { PORT: String(port), HARNESS_NO_MASTER: '1' })
+
+    expect(result.timedOut).toBe(false)
+    expect(result.status).toBe(1)
+    expect(result.stderr).toMatch(/Failed to start adapter: EADDRINUSE$/m)
+    expect(result.stdout + result.stderr).not.toContain('already serving')
+    expect(result.stdout + result.stderr).not.toMatch(/^\s+at /m)
+  }, ONE_RUN_TEST_MS)
+})
+
 describe('harness service, through the CLI', () => {
   // The whole command as a person runs it, on a throwaway home with fake launchctl or systemctl ALONE
   // on PATH: nothing can reach this machine's launchd or systemd, or the person's daemon.

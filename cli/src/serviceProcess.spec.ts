@@ -90,20 +90,23 @@ describe('a service in its own process', () => {
     expect(stops.usage).toHaveBeenCalledOnce()
   })
 
-  it('leaves off a service that cannot start and runs the others; with none started it fails as a lone one did', async () => {
+  it('leaves off a service that cannot start and runs the others; with none started it exits 1, as a lone one did', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const exit = vi.fn((code: number): never => { throw new Error(`exit ${code}`) })
     const fails = async () => () => { throw new Error('injected fault: usage') }
     const runners = new Map([['usage', fails], ['monitor', async () => () => ({ stop: () => {} })]])
     const { host, hosted } = fakeHost()
-    await startServiceProcess('usage,monitor', { runners, host })
+    await startServiceProcess('usage,monitor', { runners, host, exit })
     expect(hosted[0].services).toHaveLength(1)
     expect(error).toHaveBeenCalledWith('[service usage] did not start · Error')
-    await expect(startServiceProcess('usage', { runners, host })).rejects.toThrow('injected fault: usage')
+    // An exit, never the error thrown on: Node would print it whole, its words and its stack, into the daemon's log.
+    await expect(startServiceProcess('usage', { runners, host, exit })).rejects.toThrow('exit 1')
     // Nothing started, no process beats for it: the master sees it end before its first heartbeat.
     expect(hosted).toHaveLength(1)
     const thrown = new Map([['usage', async () => () => { throw 'not an error' }]])
-    await expect(startServiceProcess('usage', { runners: thrown, host })).rejects.toBe('not an error')
+    await expect(startServiceProcess('usage', { runners: thrown, host, exit })).rejects.toThrow('exit 1')
     expect(error).toHaveBeenCalledWith('[service usage] did not start · string')
+    expect(exit.mock.calls).toEqual([[1], [1]])
   })
 
   it('refuses, with exit 2 and why, a service this build does not know or a core with no socket', async () => {

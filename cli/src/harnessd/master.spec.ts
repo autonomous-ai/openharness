@@ -1005,7 +1005,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
           expect(existsSync(file), why).toBe(false)
         }
         expect(lines.filter((line) => line.endsWith('[harnessd] the master that started this one (pid 999999) stopped waiting for it — leaving'))).toHaveLength(4)
-        expect(lines.some((line) => line.includes('[harnessd] could not take over from pid 999999 (ENOENT'))).toBe(true)
+        expect(lines.some((line) => line.endsWith('[harnessd] could not take over from pid 999999 (ENOENT) — leaving'))).toBe(true)
         // Handed over to, with no marker file to take over at all.
         const alone: number[] = []
         runMaster({
