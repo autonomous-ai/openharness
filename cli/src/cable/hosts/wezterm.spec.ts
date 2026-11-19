@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Place } from './adapter.js'
-import type { OrcaDeps } from './orca.js'
+import { MAX_TEXT, type OrcaDeps } from './orca.js'
 import { createWeztermAdapter } from './wezterm.js'
 
 const APP_WEZTERM = '/Applications/WezTerm.app/Contents/MacOS/wezterm'
@@ -25,19 +25,93 @@ function recorder(over: Partial<OrcaDeps> = {}, codes: Array<number | null> = []
   return { calls, adapter: createWeztermAdapter(deps) }
 }
 
-const place = (hints: Record<string, string>): Place => ({ host: 'wezterm', app: 'wezterm', hints })
+const place = (hints: Record<string, string>, host = 'wezterm'): Place => ({ host, app: 'wezterm', hints })
 const pane = (id: string) => ({ adapter: 'wezterm', id })
 const activate = (file: string, id: string): Call => ({ file, args: ['cli', 'activate-pane', '--pane-id', id], timeoutMs: 10_000 })
+const send = (id: string, text: string, file = FAKE_PATH_WEZTERM): Call => ({ file, args: ['cli', 'send-text', '--pane-id', id, '--no-paste', '--', text], timeoutMs: 10_000 })
 
 describe('the WezTerm adapter', () => {
-  it('its id is wezterm, it taps before its app, and it has no show and no type', () => {
+  it('its id is wezterm, it taps before its app, it types, and it has no show', () => {
     const { adapter } = recorder()
     expect(adapter.id).toBe('wezterm')
     expect(adapter.tap).toBe('before')
     expect(adapter.show).toBeUndefined()
     expect(adapter.canShow).toBeUndefined()
-    expect(adapter.type).toBeUndefined()
+    expect(adapter.type).toBeTypeOf('function')
+    expect(adapter.canType?.(pane('7'))).toBe(true)
     expect(adapter.canFocus(pane('7'))).toBe(true)
+  })
+
+  it('types the words, then Enter on its own', async () => {
+    const { calls, adapter } = recorder()
+    expect(await adapter.type!(pane('7'), 'hello there', 'claude')).toBe(true)
+    expect(calls).toEqual([send('7', 'hello there'), send('7', '\r')])
+  })
+
+  it('types only into the agent\'s own pane', async () => {
+    const { calls, adapter } = recorder()
+    const held = [
+      ...['tmux', 'zellij', 'herdr', 'rex', 'kitty'].map((host) => place({ WEZTERM_PANE: '7' }, host)),
+      place({ WEZTERM_PANE: '7', ORCA_TERMINAL_HANDLE: 'term_0f8e2c1a-0000-4000-8000-000000000000' }),
+    ]
+    for (const at of held) {
+      const found = adapter.paneOf(at)!
+      expect(found, at.host).toEqual(pane('held:7'))
+      expect(adapter.canType!(found)).toBe(false)
+      expect(await adapter.type!(found, 'hello', 'claude')).toBe(false)
+      expect(calls).toEqual([])
+    }
+    expect(await adapter.focus(pane('held:7'))).toBe(true)
+    expect(calls).toEqual([activate(FAKE_PATH_WEZTERM, '7')])
+  })
+
+  it('one send at a time for a pane', async () => {
+    const calls: Call[] = []
+    let release = () => {}
+    const { adapter } = recorder({
+      run: (file, args, timeoutMs) => {
+        calls.push({ file, args, timeoutMs })
+        return calls.length === 1 ? new Promise((resolve) => { release = () => resolve({ code: 0, stdout: '' }) }) : Promise.resolve({ code: 0, stdout: '' })
+      },
+    })
+    const first = adapter.type!(pane('7'), 'first', 'claude')
+    expect(await adapter.type!(pane('7'), 'second', 'claude')).toBe(false)
+    expect(await adapter.type!(pane('8'), 'other', 'claude')).toBe(true)
+    release()
+    expect(await first).toBe(true)
+    expect(await adapter.type!(pane('7'), 'third', 'claude')).toBe(true)
+    expect(calls).toEqual([send('7', 'first'), send('8', 'other'), send('8', '\r'), send('7', '\r'), send('7', 'third'), send('7', '\r')])
+  })
+
+  it('a first command that fails sends no Enter', async () => {
+    const { calls, adapter } = recorder({}, [1, null, 0, 1])
+    expect(await adapter.type!(pane('7'), 'hello', 'claude')).toBe(false)
+    expect(await adapter.type!(pane('7'), 'hello', 'claude')).toBe(false)
+    expect(await adapter.type!(pane('7'), 'hello', 'claude')).toBe(false)
+    expect(calls).toEqual([send('7', 'hello'), send('7', 'hello'), send('7', 'hello'), send('7', '\r')])
+  })
+
+  it('words starting with a dash, and with control characters', async () => {
+    const { calls, adapter } = recorder()
+    expect(await adapter.type!(pane('7'), '--help\nnow\u001b[2J', 'claude')).toBe(true)
+    expect(calls).toEqual([send('7', '--help now [2J'), send('7', '\r')])
+    expect(await adapter.type!(pane('7'), '', 'claude')).toBe(false)
+    expect(await adapter.type!(pane('7'), 'x'.repeat(MAX_TEXT + 1), 'claude')).toBe(false)
+    expect(await adapter.type!(pane('7; rm -rf /'), 'hello', 'claude')).toBe(false)
+    expect(calls).toHaveLength(2)
+  })
+
+  it('no wezterm found: canType is false', async () => {
+    for (const platform of ['darwin', 'linux'] as const) {
+      const { calls, adapter } = recorder({ platform, onPath: () => null })
+      expect(adapter.canType!(pane('7')), platform).toBe(false)
+      expect(await adapter.type!(pane('7'), 'hello', 'claude')).toBe(false)
+      expect(calls).toEqual([])
+    }
+    const app = recorder({ onPath: () => null, exists: (path) => path === APP_WEZTERM })
+    expect(app.adapter.canType!(pane('7'))).toBe(true)
+    expect(await app.adapter.type!(pane('7'), 'hello', 'claude')).toBe(true)
+    expect(app.calls).toEqual([send('7', 'hello', APP_WEZTERM), send('7', '\r', APP_WEZTERM)])
   })
 
   it('paneOf takes a pane number, and refuses any other', () => {
