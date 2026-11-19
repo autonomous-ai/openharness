@@ -141,14 +141,36 @@ describe("this computer's pid file and its master's status file", () => {
     }
   }
 
-  it.each(['darwin', 'linux'] as const)('on %s, an unreadable pid file is kept while the master the status file names is alive', async (platform) => {
+  /** `ps -p 500 -o lstart=,comm=` as macOS and Linux answer it: the start in the C locale's local time, then the program. */
+  const ps = (startedMs: number, command: string) => {
+    const started = new Date(startedMs)
+    const [weekday, month, day, year] = started.toDateString().split(' ')
+    return `${weekday} ${month} ${day!.replace(/^0/, ' ')} ${started.toTimeString().slice(0, 8)} ${year} ${command}\n`
+  }
+  // macOS names a process by the file it ran, Linux by that file's name (harnessd/processName.ts).
+  const program = { darwin: '/Users/a/.harness/runtime/node-v24.11.1/libexec/harnessd/harnessd', linux: 'harnessd' } as const
+
+  it.each(['darwin', 'linux'] as const)('on %s, the master counts only when ps shows harnessd, started before it wrote the status file', async (platform) => {
     await computer(async ({ settle, deps, readPid, pidFile }) => {
+      const alive = (pid: number) => pid === 500
       writeFileSync(pidFile, 'x')
-      await expect(settle(deps(platform, { isAlive: (pid) => pid === 500 }))).resolves.toEqual({ state: 'pid', pid: 500, from: 'daemon' })
+      await expect(settle(deps(platform, { isAlive: alive, ps: async () => ps(CLAIMED - 5_000, program[platform]) }))).resolves.toEqual({ state: 'pid', pid: 500, from: 'daemon' })
       expect(readFileSync(pidFile, 'utf8')).toBe('x')
       expect(readPid()).toBe(500)
-      await expect(settle(deps(platform, { isAlive: () => false }))).resolves.toEqual({ state: 'missing' })
-      expect(existsSync(pidFile)).toBe(false)
+      // The status file outlives its master: another program has its pid now, or a harnessd started after the status
+      // file was written (the pid given out again), or ps could not say, or the pid is gone. Not the master, and the
+      // file is set aside: a stop must never signal such a pid.
+      for (const io of [
+        { isAlive: alive, ps: async () => ps(CLAIMED - 5_000, '/bin/zsh') },
+        { isAlive: alive, ps: async () => ps(CLAIMED - 5_000, 'harnessd-core') },
+        { isAlive: alive, ps: async () => ps(CLAIMED + 60_000, program[platform]) },
+        { isAlive: alive, ps: async () => null },
+        { isAlive: () => false, ps: async () => ps(CLAIMED - 5_000, program[platform]) },
+      ]) {
+        writeFileSync(pidFile, 'x')
+        await expect(settle(deps(platform, io))).resolves.toEqual({ state: 'missing' })
+        expect(existsSync(pidFile)).toBe(false)
+      }
       expect(readFileSync(`${pidFile}.unreadable`, 'utf8')).toBe('x')
     })
   })
@@ -158,8 +180,10 @@ describe("this computer's pid file and its master's status file", () => {
       writeFileSync(pidFile, 'x')
       await expect(settle(deps('win32', { isAlive: () => true, rows: async () => [master(CLAIMED - 5_000)] }))).resolves.toEqual({ state: 'pid', pid: 500, from: 'daemon' })
       expect(readFileSync(pidFile, 'utf8')).toBe('x')
-      // Started after it, or another program: Windows gave the master's pid to another process since.
-      for (const rows of [[master(CLAIMED + 60_000)], [row(500, CLAIMED - 5_000, ['C:\\Windows\\notepad.exe', 'a.txt'])]]) {
+      // Started after it, or another program: Windows gave the master's pid to another process since. A table that
+      // could not be read, or a command line it could not show, proves nothing, and is not the master either.
+      const unshown: ProcessRow = { ...master(CLAIMED - 5_000), nativeArgv: ['C:\\node.exe'] }
+      for (const rows of [[master(CLAIMED + 60_000)], [row(500, CLAIMED - 5_000, ['C:\\Windows\\notepad.exe', 'a.txt'])], null, [unshown]]) {
         writeFileSync(pidFile, 'x')
         await expect(settle(deps('win32', { isAlive: () => true, rows: async () => rows }))).resolves.toEqual({ state: 'missing' })
         expect(existsSync(pidFile)).toBe(false)
