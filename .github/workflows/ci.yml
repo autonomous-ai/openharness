@@ -141,9 +141,11 @@ jobs:
         run: python3 scripts/ci-source-inputs.py process
       - name: Require local validation receipts for mapped paths
         id: local
-        env:
-          CI_PLAN: ${{ needs.plan.outputs.plan }}
-        run: python3 scripts/local-checks.py
+        # Large diffs exceed Linux's per-environment-string limit. Quoted stdin also keeps paths as data.
+        run: |
+          python3 scripts/local-checks.py <<'CI_INPUT'
+          ${{ needs.plan.outputs.plan }}
+          CI_INPUT
       - name: Validation deadlines, cleanup, receipts and release version guards
         # The fixtures commit in temporary repositories. Each commit starts a detached
         # `git maintenance run --auto`, which can still be writing objects/pack when the
@@ -795,10 +797,11 @@ jobs:
           ref: ${{ env.CI_SOURCE_SHA }}
           sparse-checkout: scripts/
       - name: Require every selected job and complete coverage summaries
-        env:
-          CI_PLAN: ${{ needs.plan.outputs.plan }}
-          CI_NEEDS: ${{ toJSON(needs) }}
-        run: python3 scripts/ci-plan.py --verify --output "$RUNNER_TEMP/ci-required.json"
+        # needs includes the complete plan; putting it in an environment variable prevented bash starting on #4416.
+        run: |
+          python3 scripts/ci-plan.py --verify --output "$RUNNER_TEMP/ci-required.json" <<'CI_INPUT'
+          ${{ toJSON(needs) }}
+          CI_INPUT
       - uses: actions/upload-artifact@v4
         with:
           name: ci-required

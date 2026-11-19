@@ -24,3 +24,11 @@ The merge is a source checkpoint, not release acceptance. Full combined coverage
 ## Final main update
 
 The integration includes `36c1bac7aa` (Devices locates the same tmux as core) and `a38553f5f6` (bounded long voice delivery). Runtime and test merges are automatic; the only conflict is the Devices documentation row. Resolution retains component-owned startup discovery and adds main's tmux lookup description. The cohosted-focus correction remains in `devicesProcess.ts`, outside core. Final local gates cover the combined source; the added long-transcript native case is selected alongside Wi-Fi acceptance. No backend source differs from this main revision.
+
+## CI transport and complete source declarations
+
+Automatic run `44530493668` could not start `ci/required`: Linux rejected the 144,972-character `CI_NEEDS` environment string with `Argument list too long`. Its duplicated plan alone was already 130,763 characters. Both gates now read complete JSON from quoted stdin in the workflow script. No job, changed path or local receipt is dropped, and plan/source identity and draft checks are unchanged. A path containing shell commands or a heredoc delimiter stays JSON data.
+
+The full local process run `20261119T132231.248345Z-18949` ran 430 tests, with two failing cross-read subtests and one Git environment error. The benchmark's unit test now names the exact TypeScript workload it imports, and that file is declared for selection and evidence reuse. Existing connector-home and model-name test strings are documented as fixture data. Git 2.39 ignored `GIT_NO_LAZY_FETCH` in the partial-clone fixture; the installed Apple Git 2.50 runs that check correctly. These corrections change CI and test metadata only.
+
+`20261119T132914.447212Z-36082` passes all 108 affected CI tests and all 39 local-receipt tests. Five new transport tests cover a plan with 3,000 paths, rejected required jobs and literal shell-shaped path text; the first four tests failed before the transport change. Pinned actionlint v1.7.12 also passes. Unchanged process cases from the earlier full run remain recorded there; final automatic CI still runs the full process suite.

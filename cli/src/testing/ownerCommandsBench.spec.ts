@@ -59,7 +59,7 @@ beforeEach(async () => {
     : type === 'route_task' ? { agentId: 'agent' } : { agents: [{}] })
   // Capture the actual opt-in caller without registering a benchmark inside this unit test.
   const capture = vi.spyOn(it, 'runIf').mockImplementation((() => (_name: string, body: () => Promise<void>) => { run = body }) as never)
-  try { await import('../../e2e/ownerCommandsBench.e2e.js' as string) } finally { capture.mockRestore() }
+  try { await import('../../e2e/ownerCommandsBench.e2e.ts' as string) } finally { capture.mockRestore() }
 })
 
 afterEach(() => {
