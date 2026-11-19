@@ -205,9 +205,12 @@ export class CheckpointStages {
               }
             }
             await flush(fd)
-            verifyOwner()
             // Initial owner creation still requires both durable names before a lease may escape.
-            if (!recordKey) await flushSlot(directory, directoryKey)
+            if (!recordKey) {
+              verifyOwner()
+              await flushSlot(directory, directoryKey)
+            }
+            // An existing name has no second await: prove the owner once after its file flush.
             verifyOwner()
             recordKey ??= openedKey
           } finally { closeStateFileDescriptor(fd) }

@@ -281,3 +281,43 @@ All five selected controls then pass (1.4 seconds), including failed-flush retry
 Both GREEN receipts record actual exit 0, one worker and unchanged source. No additional typing,
 coverage, benchmark or broader suite was run for this approved narrow follow-up. Frozen comparison
 sources and all measured evidence remain unchanged; root owns final integrated input/Resume validation.
+
+
+## Design: remove repeated verification after an owner update
+
+The complete ABBA and mirrored BAAB pin/lease comparisons retain a CPU hold. The mirrored
+run reports system CPU +5.98% for 64 KiB and +9.42% for 4 MiB. An untimed four-publication
+API trace shows two verifier call sites; source inspection confirms that the calls are immediate
+after every update flush.
+No await, callback or mutation separates those calls once the owner filename is durable.
+The trace counts Node filesystem API invocations, not operating-system syscalls or CPU time.
+It contains one publication per side at each size; each publication performs four owner writes
+(initial, writer, settled, destination). Counts are reported separately for each side and size.
+
+Keep the final owner/directory proof after every file flush. On initial creation, also keep the
+proof before the awaited directory flush and the proof after it. On subsequent writer,
+settled and destination updates, omit only the duplicate verifier that has no intervening
+operation. Keep nonce rereads, history pinning, cleanup locking and all durability operations.
+
+This changes no stored or exposed data, format, audience, identity, compatibility contract,
+queue, limit, process or retry. Growth, migration and read amplification outside the fixed
+publication are unchanged. Concurrency still fences every asynchronous boundary; failures
+retain their existing named refusal and reservation. Rollback restores duplicate reads only.
+The shared TypeScript path affects macOS, Linux and Windows; native Windows remains deferred
+by the owner. Validation covers each public owner transition, the existing replacement and
+flush fault cases, and a scoped cost comparison before performance acceptance.
+
+The three new public-lease cost cases fail before the correction: writer and settled perform
+two post-flush directory proofs instead of one, and destination performs three instead of two
+(the second is its post-descriptor-close publication proof). Receipt
+`20261119T232229.242686Z-47761` retains the failures; no original timing samples are discarded.
+
+
+The descriptor-count assertions run on POSIX: Windows checks the directory with `statSync`
+and its native root proof instead. Initial-owner and destination-owner replacement controls
+also protect the retained checks and publication authority. The four stage suites pass 59
+cases, the three caller suites pass 110, and types pass (receipts
+`20261119T232314.884655Z-48461` and `20261119T232429.228631Z-49623`). The final durability
+file passes all 19 cases after the two extra safety controls (`20261119T232602.623506Z-51043`).
+Independent review approves the runtime correction and final tests; measured CPU acceptance
+remains open. No prior failed or noisy timing result is relabeled or discarded.

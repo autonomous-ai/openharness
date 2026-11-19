@@ -187,3 +187,47 @@ it('does not publish after a failed owner update and retries the complete file f
   expect(io.flushes.filter(value => value.path === record)).toHaveLength(before + 1)
   expect(await readFile(destination(), 'utf8')).toBe('history')
 })
+
+
+it.skipIf(process.platform === 'win32').each(['writer', 'settled', 'destination'] as const)('bounds directory proofs after the %s owner flush', async phase => {
+  const lease = await acquire(), record = ownerPath(lease), slot = dirname(record)
+  if (phase === 'settled') await lease.writer(process.pid)
+  if (phase === 'destination') { await lease.writer(process.pid); await lease.settled(); await verify(lease) }
+  let flushed = false, proofs = 0
+  io.afterSync = path => { if (path === record) flushed = true }
+  io.afterOpen = path => { if (flushed && path === slot) proofs++ }
+  if (phase === 'writer') await lease.writer(process.pid)
+  else if (phase === 'settled') await lease.settled()
+  else await lease.publish(destination(), () => {})
+  clearFaults()
+  // One proof after the owner flush; publication also checks its slot after closing the history descriptor.
+  expect(proofs).toBe(phase === 'destination' ? 2 : 1)
+  const owner = JSON.parse(await readFile(record, 'utf8'))
+  expect(owner[phase === 'destination' ? 'destination' : phase]).toBe(
+    phase === 'writer' ? process.pid : phase === 'settled' ? true : basename(destination()))
+})
+
+
+it.skipIf(process.platform === 'win32')('refuses an initial owner changed by its flush before flushing the slot', async () => {
+  const slot = join(directory, '.stages', '0'), record = join(slot, 'owner.json')
+  once('afterSync', record, () => {
+    fs.renameSync(record, `${record}.previous`)
+    fs.writeFileSync(record, 'unrelated owner', { mode: 0o600 })
+  })
+  await expect(stages().acquire()).rejects.toThrow('checkpoint stage changed')
+  expect(io.flushes.filter(value => value.path === slot)).toEqual([])
+  expect(await readFile(record, 'utf8')).toBe('unrelated owner')
+})
+
+it('refuses a destination owner changed by its flush before publication authority runs', async () => {
+  const lease = await acquire(), record = ownerPath(lease), allowed = vi.fn()
+  await lease.writer(process.pid); await lease.settled(); await verify(lease)
+  once('afterSync', record, () => {
+    fs.renameSync(record, `${record}.previous`)
+    fs.writeFileSync(record, 'unrelated owner', { mode: 0o600 })
+  })
+  await expect(lease.publish(destination(), allowed)).rejects.toThrow('checkpoint stage changed')
+  expect(allowed).not.toHaveBeenCalled()
+  await expect(stat(destination())).rejects.toMatchObject({ code: 'ENOENT' })
+  expect(await readFile(record, 'utf8')).toBe('unrelated owner')
+})
