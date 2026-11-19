@@ -18,6 +18,9 @@ const EXE_APPS: Readonly<Record<string, string>> = {
   ghostty: 'ghostty',
   // Harness Desktop's Linux binary (desktop/linux/CMakeLists.txt, BINARY_NAME).
   harness: 'harness',
+  // The Claude and ChatGPT apps' Linux processes (cli/src/testing/recordedLinuxApps.ts, comm).
+  'claude-desktop': 'claude',
+  chatgpt: 'codex',
 }
 
 /** The app id of the app in front, or FRONT_NONE. A bundle id matches whole, as detectApp reads it. */
