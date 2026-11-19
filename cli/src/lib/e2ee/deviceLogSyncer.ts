@@ -32,6 +32,7 @@ import {
 import { devLogHistory, type DevLogHistoryRow } from './deviceHistory.js'
 import { b64d, fingerprint, verify } from './core.js'
 import { errorKind } from '../log.js'
+import { StateFileUnreadable } from '../secureState.js'
 
 export interface DeviceLogFetched { acct: string; head: DevLogHead; entries: unknown[] }
 export type DeviceLogAppendAnswer = { head: DevLogHead } | { error: string; head?: DevLogHead }
@@ -372,8 +373,14 @@ export class DeviceLogSyncer {
    *  not frozen on an account it was not signed in to. Before that the roster here may still be the
    *  account this machine just left, and handing it out would carry its devices into the new one. */
   current(): boolean {
-    const file = this.deps.store.read()
-    return !file.state || (this.ownsFile(file) && file.frozen?.reason !== 'invalid')
+    try {
+      const file = this.deps.store.read()
+      return !file.state || (this.ownsFile(file) && file.frozen?.reason !== 'invalid')
+    } catch (err) {
+      // A log that cannot be read may be the account this machine left: its reader has said why.
+      if (err instanceof StateFileUnreadable) return false
+      throw err
+    }
   }
 
   /** Whether the file is the log of the sign-in this machine is under (or that cannot be told). Until a
@@ -567,9 +574,10 @@ export class DeviceLogSyncer {
       }
       if (reset) {
         if (now) {
-          // The departing trust and log are kept, for a sign-in back to that account.
-          this.deps.switchAccount?.(now.acct, got.acct)
+          // The departing log and trust are kept, for a sign-in back to that account. The log first: an archive that
+          // cannot be read stops the switch before the stores move, or every later read would move them again.
           this.deps.store.archive(latest)
+          this.deps.switchAccount?.(now.acct, got.acct)
         }
         // Back to an account this machine was signed in to before: its log as verified then, and every
         // mark on it (frozen, suspended, pending), go on from where they were.
@@ -877,6 +885,11 @@ export class DeviceLogSyncer {
     // that drop's `onDropped` asks again at once — begun right away, the second ask found no entry and
     // appended its own removal, and this one came back NOT_IN_LOG for a key it had just taken out.
     const task = Promise.resolve().then(() => this.removeOnce(pub))
+      // A log that cannot be read is an answer, not a throw: most callers start a removal and do not wait for it.
+      .catch((err: unknown): DeviceLogRemoveResult => {
+        if (err instanceof StateFileUnreadable) return { ok: false, error: 'UNAVAILABLE', detail: err.message }
+        throw err
+      })
       .finally(() => { this.removing.delete(pub); this.inFlightRemovals.delete(pub) })
     this.inFlightRemovals.set(pub, task)
     return task

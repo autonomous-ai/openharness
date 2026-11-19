@@ -6,9 +6,10 @@
  * daemon and a short-lived `harness devices …` process both read and write it. Beside it,
  * devlog.archive.json: the files of accounts this machine was signed in to before, by account id.
  */
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs'
+import { mkdirSync } from 'fs'
 import { join } from 'path'
 import { env } from '../../config/env.js'
+import { atomicWriteFile, jsonObject, requireState, type TrustFile } from '../secureState.js'
 import { parseDevLogEntry, type DevLogEntry, type DevLogHead, type DevLogState } from './deviceLog.js'
 
 /** How many of the newest entries are kept verbatim, for a peer that is behind. */
@@ -181,18 +182,32 @@ const trimmed = (next: DevLogFile): DevLogFile => ({
   ...(next.departed ? { departed: next.departed.slice(-DEVLOG_DEPARTED) } : {}),
 })
 
+const liveFile = (): string => join(env.ADAPTER_DATA_DIR, 'e2e', 'devlog.json')
+const archiveOf = (file: string): string => file.replace(/(\.json)?$/, '.archive.json')
+
+/** The live log and the archive, for whoever names the trust files that cannot be read. */
+export function deviceLogFiles(): TrustFile[] {
+  const live = liveFile()
+  return [{ file: live, parse: jsonObject }, { file: archiveOf(live), parse: jsonObject }]
+}
+
 export class DeviceLogStore {
   private readonly archiveFile: string
 
-  constructor(private readonly file = join(env.ADAPTER_DATA_DIR, 'e2e', 'devlog.json')) {
-    this.archiveFile = file.replace(/(\.json)?$/, '.archive.json')
+  constructor(private readonly file = liveFile()) {
+    this.archiveFile = archiveOf(file)
   }
 
+  /** The empty log when there is no file. A file that cannot be read throws StateFileUnreadable: the log has no safe
+   *  empty value, and one read as empty would drop the freeze and the rollback protection with its next write. */
   read(): DevLogFile {
-    try { return parseFile(JSON.parse(readFileSync(this.file, 'utf-8'))) } catch { return empty() }
+    const raw = requireState(this.file, jsonObject)
+    return raw ? parseFile(raw) : empty()
   }
 
   write(next: DevLogFile): void {
+    // Read first: a file that cannot be read is never replaced.
+    requireState(this.file, jsonObject)
     this.writeJson(this.file, trimmed(next))
   }
 
@@ -249,23 +264,15 @@ export class DeviceLogStore {
     return [...new Set(Object.values(this.archived()).flatMap((f) => f.suspended ?? []))]
   }
 
+  /** Throws StateFileUnreadable as `read` does: read as empty, the archive would lose every kept suspension. */
   private archived(): Record<string, DevLogFile> {
-    try {
-      const raw = JSON.parse(readFileSync(this.archiveFile, 'utf-8')) as unknown
-      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
-      return Object.fromEntries(Object.entries(raw as Record<string, unknown>).map(([acct, f]) => [acct, parseFile(f)]))
-    } catch { return {} }
+    const raw = requireState(this.archiveFile, jsonObject) ?? {}
+    return Object.fromEntries(Object.entries(raw).map(([acct, f]) => [acct, parseFile(f)]))
   }
 
-  /** Written whole or not at all: a torn file would read as no file, and start the log over. */
+  /** Written whole or not at all: the daemon and a `harness devices …` process read it any time. */
   private writeJson(path: string, value: unknown): void {
     mkdirSync(join(path, '..'), { recursive: true, mode: 0o700 })
-    const temp = `${path}.${process.pid}.${Date.now()}.tmp`
-    try {
-      writeFileSync(temp, JSON.stringify(value), { mode: 0o600 })
-      renameSync(temp, path)
-    } finally {
-      try { rmSync(temp, { force: true }) } catch { /* gone with the rename */ }
-    }
+    atomicWriteFile(path, JSON.stringify(value), 'trust')
   }
 }
