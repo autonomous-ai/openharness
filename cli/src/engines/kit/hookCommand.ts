@@ -68,4 +68,3 @@ function withoutTrailingSeparators(arg: string): string {
   while (end > root.length && arg[end - 1] === '\\') end--
   return arg.slice(0, end)
 }
-

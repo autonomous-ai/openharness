@@ -43,4 +43,3 @@ export function writeBrowserShim(command: string, path: string = browserShimPath
     return false
   }
 }
-

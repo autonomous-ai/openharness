@@ -19,4 +19,3 @@ export async function prepareInstructionWrites(cwd: string | null | undefined, s
   try { await prepareScmWrite(cwd, PROJECT_INSTRUCTION_FILES, scms) }
   catch (caughtFailure) { console.warn(('[scm] INSTRUCTION_PREPARATION_FAILED') + ' · ' + errorKind(caughtFailure)) }
 }
-

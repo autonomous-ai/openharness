@@ -47,4 +47,3 @@ export async function answerSharedMachinesOp(account: SharedMachinesAccount, pay
     return { error: error instanceof Error ? error.message : String(error) }
   }
 }
-

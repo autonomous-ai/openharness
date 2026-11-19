@@ -83,4 +83,3 @@ export function fingerprint(snapshot: Snapshot): string {
       : value
   return createHash('sha256').update(JSON.stringify(sorted(snapshot))).digest('hex')
 }
-

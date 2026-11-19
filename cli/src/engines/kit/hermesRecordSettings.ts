@@ -7,4 +7,3 @@ export async function hermesHomeIsTui(home: string): Promise<boolean> {
   const value = await readYamlSetting(join(home, HERMES_INTERFACE.file), HERMES_INTERFACE.section, HERMES_INTERFACE.key, HERMES_INTERFACE.maxBytes)
   return value?.trim().toLowerCase() === HERMES_INTERFACE.tui
 }
-

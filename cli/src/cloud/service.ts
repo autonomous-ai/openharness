@@ -280,7 +280,7 @@ export function startCloudService(options: CloudServiceOptions) {
       } catch (error) {
         // Cut short by the person's words: they are next in line, and look again after.
         if (controller.signal.aborted) return
-      
+
         entry.failures += 1
         const said = error instanceof CloudError ? error.message : `${CLOUD_AGENTS[entry.harness.agent].name} could not be reached.`
         log(`[cloud] ${agentId} look failed (${entry.failures}): ${errorKind(error)}`)

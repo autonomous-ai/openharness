@@ -35,4 +35,3 @@ export function serviceSpecs(env: NodeJS.ProcessEnv, hosts: Readonly<Record<stri
     return services.length ? [{ name, ...rest, services, ...onDemand, ...(Number.isInteger(heap) && heap > 0 ? { heapLimitMiB: heap } : {}) }] : []
   })
 }
-

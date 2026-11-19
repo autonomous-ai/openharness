@@ -65,4 +65,3 @@ export function appSwarmsFrom(payload: unknown): AppSwarms | null {
   }
   return { active, swarms, tiles }
 }
-

@@ -57,4 +57,3 @@ export function requireHookScript(engine: NotifyEngine): void {
   noteMissingHookScript(engine)
   throw new HookScriptMissing(missing)
 }
-

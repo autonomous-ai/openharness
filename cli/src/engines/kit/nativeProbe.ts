@@ -76,4 +76,3 @@ export function helpOf(executable: NativeExecutableSnapshot, environment: Readon
   })
   return help
 }
-

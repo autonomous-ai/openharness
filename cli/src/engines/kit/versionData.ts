@@ -30,4 +30,3 @@ export function releaseAtLeast(release: Release, floor: Release): boolean {
   for (let part = 0; part < 3; part++) if (release[part] !== floor[part]) return release[part]! > floor[part]!
   return true
 }
-
