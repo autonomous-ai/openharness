@@ -323,7 +323,10 @@ int max_unread(void);
 const max_app_t *max_shown_app(void);
 // The app column's name: the shown app's, else the computer's, else "Harness".
 const char *max_app_label(void);
-// The app an agent of the ring is in, for "Answer it in <App>": the shown app's name, else its host's id, else "".
+// The daemon's name for an app id ("cmux" -> "cmux", "vscode" -> "VS Code"), or NULL for an id it does not name.
+const char *max_app_name(const char *id);
+// The app an agent of the ring is in, for "Answer it in <App>": the shown app's name, else its host's name (the id
+// itself when the daemon does not name it), else "".
 const char *max_app_of(const max_agent_t *);
 // Whether the bar answers this agent's open question (caps a, and a question the inbox holds: a plain or reviewed path).
 bool max_takes_answers(const max_agent_t *);

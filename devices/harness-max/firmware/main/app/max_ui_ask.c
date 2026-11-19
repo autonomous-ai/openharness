@@ -118,6 +118,27 @@ static bool take_items(max_ask_t *k, const pro_ask_item_t *items, int n)
     return whole;
 }
 
+// The question's words alone, as the daemon's summary frame carries them (no key, no options): what the card shows
+// while the question is read, or when only the computer answers it.
+static void words_only(max_ask_t *k, const char *text)
+{
+    memset(&k->items[0], 0, sizeof k->items[0]);
+    max_copy(k->items[0].q, sizeof k->items[0].q, text);
+    k->count = 1;
+    k->step = 0;
+}
+
+// SHOWN: the app to answer it in. The question whole names it in its one option ("In Orca"); the summary frame does
+// not, and the agent's host does, by the daemon's name for it (devices.ts and notices.ts build "In <App>" from it).
+static void shown_app(max_ask_t *k, const max_agent_t *a)
+{
+    k->app[0] = 0;
+    if (k->count && k->items[0].option_count && !strncmp(k->items[0].options[0], "In ", 3))
+        max_copy(k->app, sizeof k->app, k->items[0].options[0] + 3);
+    else if (a && max_app_name(a->host))
+        max_copy(k->app, sizeof k->app, max_app_name(a->host));
+}
+
 static void start_read(max_ask_t *k, uint32_t now_ms)
 {
     k->phase = MAX_ASK_READING;
@@ -128,23 +149,24 @@ static void start_read(max_ask_t *k, uint32_t now_ms)
 }
 
 // How the question in k is answered, and what it starts.
-static void take_question(max_ask_t *k, const char *request, const pro_ask_item_t *items, int n, bool permission,
-                          bool review, uint32_t now_ms)
+static void take_question(max_ask_t *k, const max_agent_t *a, const char *request, const char *text,
+                          const pro_ask_item_t *items, int n, bool permission, bool review, uint32_t now_ms)
 {
     const bool request_ok = request && request[0] && exact(k->request, sizeof k->request, request);
     const bool whole = take_items(k, items, n);
-    k->permission = permission && n > 0;
+    if (!n) words_only(k, text);
+    k->permission = permission;   // kept on the summary frame: the read brings the yes and the no
     k->phase = MAX_ASK_READY;
     if (request_ok && !strncmp(request, SHOWN_ONLY, sizeof SHOWN_ONLY - 1)) {
-        k->path = MAX_PATH_SHOWN;   // its one option names the app: "In Orca"
-        if (n && !strncmp(k->items[0].options[0], "In ", 3)) max_copy(k->app, sizeof k->app, k->items[0].options[0] + 3);
-    } else if (!request_ok || !n) {
-        k->path = MAX_PATH_NONE;
+        k->path = MAX_PATH_SHOWN;
+        shown_app(k, a);
     } else if (review) {
+        // Every question is read whole first: the frame is the daemon's summary, its options question.state's. One with
+        // no id (a drawer row's) too: the read names it.
         k->path = MAX_PATH_REVIEWED;
         start_read(k, now_ms);
     } else {
-        k->path = whole ? MAX_PATH_PLAIN : MAX_PATH_NONE;
+        k->path = request_ok && whole ? MAX_PATH_PLAIN : MAX_PATH_NONE;
     }
 }
 
@@ -162,7 +184,7 @@ bool max_ui_question(const char *id, const char *request, const char *text, cons
     a->ask_since = now_ms;
     a->card = false;   // the question's card replaces a failure's or a summary's
     max_ask_t *k = ask_slot(id);
-    if (k) take_question(k, request, items, n, permission, review, now_ms);
+    if (k) take_question(k, a, request, text, items, n, permission, review, now_ms);
     max_attend(a, MAX_ATTN_ASK, now_ms);
     return true;
 }
@@ -191,13 +213,26 @@ bool max_ui_question_state(const char *id, const char *fetch, bool ok, const cha
     max_ask_t *k = max_ask_of(id);
     if (!k || k->path != MAX_PATH_REVIEWED || k->phase != MAX_ASK_READING || !fetch || strcmp(k->fetch, fetch))
         return false;   // not the read this card waits for
-    if (!ok || !items || n < 1 || n > PRO_ASK_ITEMS || !exact(k->token, sizeof k->token, token) ||
+    if (!ok || (n && !items) || n < 0 || n > PRO_ASK_ITEMS || !exact(k->token, sizeof k->token, token) ||
         !exact(k->request, sizeof k->request, request)) {
         k->phase = MAX_ASK_FAILED;
         max_copy(k->note, sizeof k->note, error && error[0] ? error : "Could not load the question.");
         return true;
     }
-    take_items(k, items, n);   // the daemon's own copy: what the token names
+    const max_agent_t *a = max_find(id);
+    if (n) take_items(k, items, n);   // the daemon's own copy: what the token names
+    else words_only(k, a ? a->question : "");
+    k->phase = MAX_ASK_READY;
+    k->note[0] = 0;
+    if (!strncmp(k->request, SHOWN_ONLY, sizeof SHOWN_ONLY - 1)) {   // a row's wait read whole: its app's, never ours
+        k->path = MAX_PATH_SHOWN;
+        shown_app(k, a);
+        return true;
+    }
+    if (!n) {   // held as its summary alone (one the daemon cannot take an answer for): the computer's, in its words
+        k->path = MAX_PATH_NONE;
+        return true;
+    }
     if (submitted) {           // taken already (another device, or a receipt that never came): it is not asked again
         k->phase = MAX_ASK_SENT;
         max_copy(k->note, sizeof k->note, "An answer was already sent. Check the terminal.");

@@ -488,22 +488,28 @@ static void test_reviewed_answer_is_sent_after_the_lock(void)
     CHECK(SENDS == 0 && max_m.view == MAX_VIEW_ATTENTION);   // nothing goes from the cable_link task's callback
     drawn_page(MAX_VIEW_ATTENTION);
     contact(HT_WIDTH - 2, HT_HEIGHT - 2, 0, 0);   // where nothing is drawn
-    CHECK(SENDS == 1 && WAITED && !strcmp(last_sent(), "question.read a q1"));
-    pro_app_question_state("a", "q1", true, "toolu_1", "tok", false, NULL, &DB, 1);
+    // Reads are numbered across the run (earlier tests' questions were read too): the card names this one's.
+    char fetch[16], want[64];
+    snprintf(fetch, sizeof fetch, "%s", max_ask_of("a")->fetch);
+    snprintf(want, sizeof want, "question.read a %s", fetch);
+    CHECK(SENDS == 1 && WAITED && !strcmp(last_sent(), want));
+    pro_app_question_state("a", fetch, true, "toolu_1", "tok", false, NULL, &DB, 1);
     attention_drawn(2);
     tap_on(find_hit(MAX_HIT_OPTION, 1));
-    CHECK(SENDS == 2 && WAITED && !strcmp(last_sent(), "answer.reviewed a tok q1 1:2"));
+    snprintf(want, sizeof want, "answer.reviewed a tok %s 1:2", fetch);
+    CHECK(SENDS == 2 && WAITED && !strcmp(last_sent(), want));
     CHECK(OPENS == 0 && max_m.view == MAX_VIEW_OVERVIEW);   // a button is not the page around it
-    pro_app_answer_receipt("a", "q1", "tok", true, false, NULL);
+    pro_app_answer_receipt("a", fetch, "tok", true, false, NULL);
     CHECK(!strcmp(max_m.notice, "Sent") && max_find("a")->state == MAX_WORKING);
     // The daemon refuses it: its words.
     pro_app_ask("a", "toolu_2", DB.q, &DB, 1, true, false);
     drawn_page(MAX_VIEW_ATTENTION);
     contact(HT_WIDTH - 2, HT_HEIGHT - 2, 0, 0);   // where nothing is drawn
-    pro_app_question_state("a", "q2", true, "toolu_2", "tok2", false, NULL, &DB, 1);
+    snprintf(fetch, sizeof fetch, "%s", max_ask_of("a")->fetch);
+    pro_app_question_state("a", fetch, true, "toolu_2", "tok2", false, NULL, &DB, 1);
     attention_drawn(2);
     tap_on(find_hit(MAX_HIT_OPTION, 0));
-    pro_app_answer_receipt("a", "q2", "tok2", false, false, "Permission prompts cannot be answered from here.");
+    pro_app_answer_receipt("a", fetch, "tok2", false, false, "Permission prompts cannot be answered from here.");
     CHECK(!strcmp(max_m.notice, "Permission prompts cannot be answered from here."));
     CHECK(LOCK_DEPTH == 0);
 }

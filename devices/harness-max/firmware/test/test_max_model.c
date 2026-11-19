@@ -357,11 +357,11 @@ static void test_inbox(void)
     const pro_agent_row_t rows[] = {{"a", "alpha", "codex", "m1", "MacBook Pro", "orca", NULL},
                                     {"b", "b", "claude", "m1", "MacBook Pro", NULL, NULL}};
     max_ui_agents(rows, 2, 0);
-    // No `apps` yet: a notice names the agent's own app (its host).
+    // No `apps` yet: a notice names the agent's own app (its host, by the daemon's name for it).
     CHECK(max_ui_question("a", "r1", "Keep the dark gradient?", NULL, 0, false, false, 1000));
     const max_inbox_t *n = &max_m.inbox[0];
     CHECK(max_m.inbox_count == 1 && !strcmp(n->id, "a") && !strcmp(n->name, "alpha") && !strcmp(n->engine, "codex"));
-    CHECK(!strcmp(n->app, "orca") && n->kind == MAX_ATTN_ASK && !strcmp(n->text, "Keep the dark gradient?"));
+    CHECK(!strcmp(n->app, "Orca") && n->kind == MAX_ATTN_ASK && !strcmp(n->text, "Keep the dark gradient?"));
     CHECK(n->at == 1000 && n->unread && max_unread() == 1);
     // With `apps`, the shown app's name.
     const pro_app_row_t apps[] = {{"orca", "Orca", 2, 1}};
