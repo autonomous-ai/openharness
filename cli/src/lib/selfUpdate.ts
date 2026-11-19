@@ -189,8 +189,10 @@ export const MANIFEST_LIMITS: TransferLimits = { idleMs: 30_000, deadlineMs: 60_
  */
 export const RUNTIME_DOWNLOAD_LIMITS: TransferLimits = { idleMs: 300_000, deadlineMs: Number.POSITIVE_INFINITY }
 
-/** The transfer went quiet for too long, or took too long in all. */
-export class TransferStalledError extends Error {}
+/** The transfer went quiet for too long, or took too long in all: the code says which, as the log names it by its code. */
+export class TransferStalledError extends Error {
+  constructor(message: string, readonly code: 'TRANSFER_STALLED' | 'TRANSFER_DEADLINE') { super(message) }
+}
 
 /** GET `url` whole within `limits`: the status, and the body once it has all arrived. */
 export async function fetchWithin(url: string, limits: TransferLimits, expectedBytes?: number): Promise<{ ok: boolean; status: number; body: Buffer }> {
@@ -199,30 +201,30 @@ export async function fetchWithin(url: string, limits: TransferLimits, expectedB
   const gaveUp = new Promise<never>((_, reject) => { stalled = reject })
   gaveUp.catch(() => {})
   let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
-  const giveUp = (why: string): void => {
-    stalled(new TransferStalledError(`${url} ${why}`))
+  const giveUp = (why: string, code: TransferStalledError['code']): void => {
+    stalled(new TransferStalledError(`${url} ${why}`, code))
     controller.abort()
     void reader?.cancel().catch(() => {})
   }
-  const timer = (ms: number, why: string): NodeJS.Timeout => {
-    const handle = setTimeout(() => giveUp(why), ms)
+  const timer = (ms: number, why: string, code: TransferStalledError['code']): NodeJS.Timeout => {
+    const handle = setTimeout(() => giveUp(why, code), ms)
     handle.unref?.()
     return handle
   }
   // No deadline at all for an infinite one: a timer given Infinity fires at once.
   const startedAt = performance.now()
-  let deadline = Number.isFinite(limits.deadlineMs) ? timer(limits.deadlineMs, `took longer than ${limits.deadlineMs} ms in all`) : undefined
+  let deadline = Number.isFinite(limits.deadlineMs) ? timer(limits.deadlineMs, `took longer than ${limits.deadlineMs} ms in all`, 'TRANSFER_DEADLINE') : undefined
   /** Once the size is known: the deadline the floor rate needs, when that is the longer. */
   const scaleDeadline = (bytes: number): void => {
     if (!deadline || !limits.floorBytesPerSecond || !(bytes > 0)) return
     const needed = Math.ceil(bytes / limits.floorBytesPerSecond * 1000)
     if (needed <= limits.deadlineMs) return
     clearTimeout(deadline)
-    deadline = timer(Math.max(0, needed - (performance.now() - startedAt)), `took longer than ${needed} ms in all (${bytes} bytes at ${limits.floorBytesPerSecond} B/s)`)
+    deadline = timer(Math.max(0, needed - (performance.now() - startedAt)), `took longer than ${needed} ms in all (${bytes} bytes at ${limits.floorBytesPerSecond} B/s)`, 'TRANSFER_DEADLINE')
   }
   if (expectedBytes !== undefined) scaleDeadline(expectedBytes)
-  let idle = timer(limits.idleMs, `sent nothing for ${limits.idleMs} ms`)
-  const heard = (): void => { clearTimeout(idle); idle = timer(limits.idleMs, `sent nothing for ${limits.idleMs} ms`) }
+  let idle = timer(limits.idleMs, `sent nothing for ${limits.idleMs} ms`, 'TRANSFER_STALLED')
+  const heard = (): void => { clearTimeout(idle); idle = timer(limits.idleMs, `sent nothing for ${limits.idleMs} ms`, 'TRANSFER_STALLED') }
   try {
     const res = await Promise.race([fetch(url, { signal: controller.signal }), gaveUp])
     heard()
@@ -890,9 +892,10 @@ export function startSelfUpdater(opts: {
         await opts.onStaged(ready.version, ptyVersion)
       }).catch((err: unknown) => {
         // A busy lock is not a failed check: the bytes are good and waiting, and the next tick tries
-        // the swap again. Say so, or a minute of "check failed" reads as the updater being broken.
+        // the swap again. Say so, or a minute of "check failed" reads as the updater being broken. A lock this CLI did
+        // not make is said in fixed words: its `reason` quotes the lock's path and an error's message.
         if (!(err instanceof SpawnLockBusyError)) throw err
-        console.log(`[update] ${ready.version} is ready but the daemon spawn lock is held (${err.owner ? describeSpawnLockOwner(err.owner) : errorKind(err)}) — trying again next check`)
+        console.log(`[update] ${ready.version} is ready but the daemon spawn lock is ${err.owner ? `held (${describeSpawnLockOwner(err.owner)})` : err.reason ? 'not a lock this CLI made — remove it by hand' : 'held by an unknown process'} — trying again next check`)
       })
     } catch (err) {
       console.error('[update] check failed (will retry):', errorKind(err))

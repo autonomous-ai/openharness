@@ -87,19 +87,22 @@ export function connectFailure(tail: string, port: number): ConnectFailure | nul
     const deauth = code === 401 || code === 403
     return { detail: `backend returned HTTP ${code}`, fatal: deauth || code === 404, deauth }
   }
+  // The kinds below are read off the gateway's socket-error lines only: another line in the window (an update check's
+  // fetch) names its own request's kind, and a certificate that request met says nothing of the backend link.
+  const kinds = Array.from(tail.matchAll(/\[backend\] socket error: ([^·\n]*)/g), (m) => m[1]).join('\n')
   // DNS failing is the ordinary shape of "this computer is offline" (no resolver, captive portal,
   // airplane mode) — not a misconfiguration. Fatal here used to SIGTERM a daemon that was serving its
   // agents perfectly well over the loopback, and the desktop app then had nothing to attach to. Left
   // running, it keeps retrying on its own backoff and connects the moment the network is back. Node's resolver codes, as
   // the gateway logs a socket error's kind: ENOTFOUND for a name with no answer, EAI_* for the rest (EAI_AGAIN, EAI_FAIL).
-  if (/ENOTFOUND|EAI_[A-Z]+/.test(tail)) return { detail: 'host not found (DNS)', fatal: false }
+  if (/ENOTFOUND|EAI_[A-Z]+/.test(kinds)) return { detail: 'host not found (DNS)', fatal: false }
   // Node's certificate codes, as the gateway logs a socket error's kind: OpenSSL's verify errors (CERT_HAS_EXPIRED,
   // DEPTH_ZERO_SELF_SIGNED_CERT, UNABLE_TO_VERIFY_LEAF_SIGNATURE, INVALID_CA, …) and its own host check
   // (ERR_TLS_CERT_ALTNAME_INVALID).
-  if (/\b(?:\w+_)?(?:CERT|CRL)(?:_\w+)?\b|\bUNABLE_TO_\w+|\b(?:INVALID_CA|INVALID_PURPOSE|PATH_LENGTH_EXCEEDED|HOSTNAME_MISMATCH)\b/.test(tail)) {
+  if (/\b(?:\w+_)?(?:CERT|CRL)(?:_\w+)?\b|\bUNABLE_TO_\w+|\b(?:INVALID_CA|INVALID_PURPOSE|PATH_LENGTH_EXCEEDED|HOSTNAME_MISMATCH)\b/.test(kinds)) {
     return { detail: 'TLS certificate error', fatal: true }
   }
-  if (/ECONNREFUSED/.test(tail)) return { detail: 'connection refused', fatal: false } // backend not up yet → retry
+  if (/ECONNREFUSED/.test(kinds)) return { detail: 'connection refused', fatal: false } // backend not up yet → retry
   // A 1006 close with no HTTP code — generic "couldn't reach it right now"; transient.
   if (/disconnected \(close 1006\)/.test(tail)) return { detail: 'cannot reach backend', fatal: false }
   return null

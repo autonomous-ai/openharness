@@ -480,8 +480,8 @@ describe('an update under hostile conditions', () => {
     server.faults = ['stall']
     server.offer = { version: '43.0.13' }
     // Before, the check waited out undici's five-minute body timeout, every later check skipped meanwhile.
-    // The log says the kind alone, which a stall and an overrun deadline share: nothing else shows which it was.
-    await until('the stalled download to be given up', () => machine.log().slice(from).includes('[update] check failed (will retry): TransferStalledError'), 60_000)
+    // The code tells a stall from an overrun deadline, which share the kind.
+    await until('the stalled download to be given up', () => machine.log().slice(from).includes('[update] check failed (will retry): TransferStalledError TRANSFER_STALLED'), 60_000)
     await machine.settled('43.0.13', { rejected: ['43.0.10', '43.0.11'] })
     expect(server.downloadsOf('43.0.13')).toBe(2)
   }, 300_000)
