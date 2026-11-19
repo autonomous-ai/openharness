@@ -131,6 +131,18 @@ describe('verified turn activity', () => {
     resolve('working'); await pending
     expect(t.frame()?.state).toBe('idle')
   })
+  it('lets a turn_ended drained or observed after the revision a given probe\'s evidence was read at win over its working', async () => {
+    const t = setup(); t.runtime({ key: 'agent:session:pid:start', turnOpen: false })
+    t.activity.observe('s', 'text_delta')
+    let ended = false
+    t.drain(async () => { if (!ended) { ended = true; t.activity.observe('s', 'turn_ended') } })
+    await t.activity.check('s', async () => 'working', t.frame()!.revision)
+    expect(t.frame()?.state).toBe('idle')
+    const before = t.frame()!.revision
+    t.activity.observe('s', 'text_delta'); t.activity.observe('s', 'turn_ended')
+    await t.activity.check('s', async () => 'working', before)
+    expect(t.frame()?.state).toBe('idle')
+  })
   it('coalesces overlapping checks', async () => {
     const t = setup(); let calls = 0; let resolve!: (s: ActivityState) => void
     t.probe(() => { calls++; return new Promise(r => { resolve = r }) })

@@ -101,6 +101,30 @@ describe('turn activity', () => {
     expect(deps.terminals.capture).not.toHaveBeenCalled()
   })
 
+  // Final review: the pass's capture was taken before the drain that delivered the run's end, so its timer, changed
+  // since the last pass, read as working for the 30 s lease after the answer was there.
+  it('a run\'s end drained after the binding pass captured its pane wins over that capture\'s timer', async () => {
+    let endOnDrain = false
+    const { readers } = setup({ drain: vi.fn(async () => {
+      if (endOnDrain) { endOnDrain = false; readers.turnActivity.observe('s4', 'turn_ended') }
+    }) })
+    await readers.paneRead(claw, running(41))
+    readers.turnActivity.observe('s4', 'text_delta')
+    endOnDrain = true
+    await readers.paneRead(claw, running(46))
+    expect(readers.turnActivity.snapshot('s4')?.state).toBe('idle')
+  })
+
+  it('a run\'s end observed after the revision the caller read before capturing wins over that capture\'s timer', async () => {
+    const { readers } = setup()
+    await readers.paneRead(claw, running(41))
+    readers.turnActivity.observe('s4', 'text_delta')
+    const revision = readers.turnActivity.snapshot('s4')!.revision
+    readers.turnActivity.observe('s4', 'turn_ended')
+    await readers.paneRead(claw, running(46), revision)
+    expect(readers.turnActivity.snapshot('s4')?.state).toBe('idle')
+  })
+
   it('a pane the binding pass read claims nothing while withheld', async () => {
     const { readers } = setup({ withheld: () => true })
     await readers.paneRead(claw, running(41))
