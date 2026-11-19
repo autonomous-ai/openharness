@@ -6991,6 +6991,18 @@ describe('Herdr\'s agents, through Herdr Core (docs/plans/2026-11-16-herdr-app-d
       expect(orcaRuns).toEqual([openHerdr])
     })
 
+    // Its terminal holds a shell now: the pane key it keeps is the registry's alone.
+    it('brings nothing once that hooked agent\'s session ended', async () => {
+      const { port, live } = withHc()
+      port.observed(hook('session-start'))
+      port.observed(hook('session-end'))
+      live([])
+      await pickHerdr(port)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(orcaRuns).toEqual([])
+      expect(brings()).toEqual([])
+    })
+
     it('brings nothing with herdr 0.8.0\'s agents alone on herdr\'s ring', async () => {
       const herdrSubs: HerdrSubscriber[] = []
       const herdrListing: HerdrClient = {
