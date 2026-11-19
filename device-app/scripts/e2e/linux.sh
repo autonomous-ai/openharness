@@ -1,0 +1,443 @@
+#!/usr/bin/env bash
+# End to end on Linux: a debug build's AppImage against the fake CLI (src-tauri/tests/fake-harness), a fake tray host
+# (sni-watcher.py), X11, headless sway and a scripted Hyprland (hypr-fake.py).
+#
+#   bash device-app/scripts/e2e/linux.sh <AppImage>
+#
+# Prints `ok: <check>` for each check, `note:` for what it saw but does not judge, and stops at the first
+# `FAILED: <check>`, exiting 1. Everything it runs is its own and goes with it: a scratch HOME and XDG folders, its own
+# D-Bus session, Xvfb display, window manager and compositor, a fake xdg-open and a fake desktop app; never an account,
+# a backend or a person's apps. It needs xvfb openbox xdotool xterm sway foot dbus-x11 python3-dbus python3-gi and FUSE
+# for the AppImage (libfuse2); where FUSE is missing, APPIMAGE_EXTRACT_AND_RUN=1 runs it unpacked.
+set -euo pipefail
+
+# Its own session bus, which ends with it.
+if [[ -z "${E2E_OWN_BUS:-}" ]]; then
+  E2E_OWN_BUS=1 exec dbus-run-session -- bash "$0" "$@"
+fi
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fake_cli="$(dirname "$(dirname "$here")")/src-tauri/tests/fake-harness"
+python=/usr/bin/python3
+# Every wait ends on what it waits for, bounded by this: a slow arm64 runner starts the AppImage in seconds.
+WAIT=60
+
+[[ $# -eq 1 && -f "$1" ]] || {
+  echo "usage: linux.sh <AppImage>" >&2
+  exit 2
+}
+
+work="$(mktemp -d)"
+home="$work/home"
+config="$work/config"
+data_home="$work/data"
+runtime="$work/run"
+fake="$work/fake"
+data="$data_home/ai.autonomous.harness.device"
+entry="$config/autostart/harnessd.desktop"
+mkdir -p "$home/My Apps" "$home/Desktop" "$config" "$data_home" "$runtime" "$fake" "$work/bin" "$work/procs" \
+  "$work/apps" "$work/cache" "$work/state"
+chmod 700 "$runtime"
+# A folder with a space, as a person's may be: the entry's Exec= must quote it.
+appimage="$home/My Apps/Harness-Device.AppImage"
+cp "$1" "$appimage"
+chmod +x "$appimage"
+[[ "$appimage" =~ ^[A-Za-z0-9/._\ -]+$ ]] || {
+  echo "linux.sh: the scratch folder's path holds a character the expected Exec= line does not quote" >&2
+  exit 2
+}
+
+pids=()
+app_pid=""
+mark=0
+
+cleanup() {
+  set +e
+  [[ -z "$app_pid" ]] || kill -KILL -- "-$app_pid" 2>/dev/null
+  for pid in "${pids[@]}"; do kill "$pid" 2>/dev/null; done
+  # The fake CLI's runs, while they are still the fake's.
+  if [[ -f "$fake/pids.log" ]]; then
+    while read -r pid; do
+      grep -qs fake-harness "/proc/$pid/cmdline" && kill "$pid" 2>/dev/null
+    done <"$fake/pids.log"
+  fi
+  wait 2>/dev/null
+  rm -rf "$work"
+}
+trap cleanup EXIT
+
+ok() { echo "ok: $1"; }
+note() { echo "note: $1"; }
+
+fail() {
+  echo "FAILED: $1"
+  echo "--- the app's log"
+  log_text | tail -n 60
+  echo "--- the fake CLI's calls"
+  cat "$fake/calls.log" 2>/dev/null
+  echo "--- the tray items registered"
+  cat "$work/tray-items" 2>/dev/null
+  echo "--- the app's output"
+  tail -n 40 "$work/app.out" 2>/dev/null
+  exit 1
+}
+
+# Runs the command until it succeeds, for WAIT seconds at most.
+waits() {
+  local deadline=$((SECONDS + WAIT))
+  until "$@"; do
+    ((SECONDS < deadline)) || return 1
+    sleep 0.1
+  done
+}
+
+started() { pids+=("$!"); }
+
+# The app's own environment: nothing of this machine's but its system folders.
+base=(HOME="$home" USER="$(id -un)" LOGNAME="$(id -un)" SHELL=/bin/sh LANG=C.UTF-8
+  PATH="$work/bin:/usr/local/bin:/usr/bin:/bin"
+  XDG_CONFIG_HOME="$config" XDG_DATA_HOME="$data_home" XDG_CACHE_HOME="$work/cache" XDG_STATE_HOME="$work/state"
+  XDG_RUNTIME_DIR="$runtime" DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" NO_AT_BRIDGE=1
+  HARNESS_DEVICE_CLI="$fake_cli" FAKE_HARNESS="$fake")
+[[ -z "${APPIMAGE_EXTRACT_AND_RUN:-}" ]] || base+=(APPIMAGE_EXTRACT_AND_RUN="$APPIMAGE_EXTRACT_AND_RUN")
+
+# --- The display, its window manager, the tray host
+
+exec 3>"$work/display"
+Xvfb -displayfd 3 -screen 0 1280x800x24 -nolisten tcp >"$work/xvfb.out" 2>&1 &
+started
+exec 3>&-
+waits grep -q '[0-9]' "$work/display" || fail "Xvfb starts"
+DISPLAY=":$(head -n 1 "$work/display")"
+export DISPLAY
+base+=(DISPLAY="$DISPLAY")
+env -i "${base[@]}" openbox --sm-disable >"$work/openbox.out" 2>&1 &
+started
+# Only a window manager that follows EWMH sets the desktops' count, as it sets the active window.
+waits xdotool get_num_desktops >/dev/null 2>&1 || fail "openbox starts"
+
+watcher_pid=""
+start_watcher() {
+  rm -f "$work/tray-items"
+  env -i "${base[@]}" "$python" "$here/sni-watcher.py" serve "$work/tray-items" >>"$work/watcher.out" 2>&1 &
+  watcher_pid=$!
+  pids+=("$watcher_pid")
+  waits test -e "$work/tray-items" || fail "the fake tray host takes its name"
+}
+
+watcher_owned() {
+  dbus-send --session --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus \
+    org.freedesktop.DBus.NameHasOwner string:org.kde.StatusNotifierWatcher | grep -q 'boolean true'
+}
+
+stop_watcher() {
+  kill "$watcher_pid"
+  waits eval '! watcher_owned' || fail "the fake tray host lets its name go"
+}
+
+tray_items() { if [[ -f "$work/tray-items" ]]; then wc -l <"$work/tray-items"; else echo 0; fi; }
+tray_registered() { [[ "$(tray_items)" -ge 1 ]]; }
+
+# Clicks a row of the tray's menu, as a tray host does.
+click() {
+  waits "$python" "$here/sni-watcher.py" click "$work/tray-items" "$1" 2>>"$work/click.err" \
+    || fail "the menu's $1 row can be clicked"
+}
+
+# --- The fake CLI, xdg-open and desktop app
+
+script() {
+  local name="$1"
+  shift
+  printf '%s\n' "$@" >"$fake/$name"
+}
+script 'hardware_watch_--json' '{"attached":false}' '@record'
+script 'auth_status_--json' '{"loggedIn":false}'
+script '--version' '0.6.99'
+script 'logs_export_--json' "{\"path\":\"$home/Desktop/harness-logs-20261120-1200.zip\"}"
+script 'login_--json' '{"type":"authorize_url","url":"https://example.com/e2e?state=S"}' '@stdin'
+
+# A GTK program, as a browser or the desktop app is: what it prints, then `ran` if it got that far.
+cat >"$work/gtk-probe.py" <<'PY'
+import sys
+import gi
+gi.require_version("Gtk", "3.0")
+gi.require_version("GdkPixbuf", "2.0")
+from gi.repository import GdkPixbuf, Gio, Gtk
+if not Gtk.init_check(sys.argv)[0]:
+    sys.exit("no display")
+Gio.AppInfo.get_all()
+GdkPixbuf.Pixbuf.get_formats()
+window = Gtk.Window(title="probe")
+window.show_all()
+while Gtk.events_pending():
+    Gtk.main_iteration()
+print("ran")
+PY
+
+# What it was given goes last: a run waits on that line, then reads the rest.
+for opener in xdg-open desktop-app; do
+  cat >"$work/$opener" <<SH
+#!/bin/sh
+env >"$work/$opener.env"
+$python "$work/gtk-probe.py" >"$work/$opener.probe" 2>&1
+printf '%s\n' "\$*" >>"$work/$opener.log"
+SH
+  chmod +x "$work/$opener"
+done
+mv "$work/xdg-open" "$work/bin/xdg-open"
+mv "$work/desktop-app" "$work/apps/Harness.AppImage"
+
+env -i "${base[@]}" "$python" "$work/gtk-probe.py" >"$work/clean.probe" 2>&1
+grep -qx ran "$work/clean.probe" || fail "a GTK program runs on the test display: $(cat "$work/clean.probe")"
+
+# The variables a program the app starts gets from the AppImage's runtime, not from the app's own environment.
+from_appimage() {
+  comm -13 <(sort "$work/launch.env") <(sort "$1") | cut -d= -f1 | grep -vx 'PWD\|SHLVL\|_\|OLDPWD' | sort -u \
+    | tr '\n' ' '
+}
+
+# Whether a GTK program started from the app runs as it does without the AppImage's environment: kept, with what that
+# environment held, for the last check.
+probe() {
+  local stem="$1" who="$2" extra
+  note "$who inherits from the AppImage: $(from_appimage "$work/$stem.env")"
+  if ! grep -qx ran "$work/$stem.probe"; then
+    broken+=("$who: $(grep -m 1 -i error "$work/$stem.probe" || tail -n 1 "$work/$stem.probe");")
+    return
+  fi
+  extra="$(grep -vxFf "$work/clean.probe" "$work/$stem.probe" || true)"
+  [[ -z "$extra" ]] || note "a GTK program run by $who prints what it does not without the AppImage: $extra"
+}
+broken=()
+
+# --- The app
+
+log_text() { cat "$data"/logs/app-*.log 2>/dev/null || true; }
+# This run's log lines, without their time.
+run_log() { log_text | tail -c +$((mark + 1)) | cut -d' ' -f2-; }
+logged() { run_log | grep -Fxq -- "$1"; }
+times_logged() { run_log | grep -Fxc -- "$1" || true; }
+fronts() { grep -c '^{"front":' "$fake/stdin.log" 2>/dev/null || true; }
+told() { grep -Fxqs -- "{\"front\":\"$1\"}" "$fake/stdin.log"; }
+
+MENU="menu: Plug in your device | Sign in… | Export logs | About | Quit"
+
+# Starts the app in a session of its own, so its whole process group ends together. The arguments are the session's
+# variables.
+launch() {
+  mark=$(log_text | wc -c)
+  printf '%s\n' "${base[@]}" "$@" >"$work/launch.env"
+  setsid env -i "${base[@]}" "$@" "$appimage" >>"$work/app.out" 2>&1 &
+  app_pid=$!
+}
+
+gone() { [[ ! -e "/proc/$1" ]] || [[ "$(sed 's/.*) //' "/proc/$1/stat" | cut -d' ' -f1)" == Z ]]; }
+
+fakes_gone() {
+  local pid
+  while read -r pid; do
+    if grep -qs fake-harness "/proc/$pid/cmdline"; then return 1; fi
+  done < <(cat "$fake/pids.log" 2>/dev/null)
+}
+
+# Ends the app, then waits for the fake CLI's runs, which end when its pipes close, and clears what they wrote.
+stop_app() {
+  gone "$app_pid" && fail "the app runs until it is ended"
+  kill -TERM -- "-$app_pid"
+  waits gone "$app_pid" || fail "the app ends on SIGTERM"
+  wait "$app_pid" 2>/dev/null || true
+  app_pid=""
+  waits fakes_gone || fail "the fake CLI's runs end with the app"
+  rm -f "$fake"/{calls,pids,ends,stdin}.log "$work"/{xdg-open,desktop-app}.{log,env,probe}
+}
+
+save_state() {
+  mkdir -p "$data"
+  chmod 700 "$data"
+  printf '{"version":1,"cliSeen":true,"askedSignIn":%s,"loginItem":%s}\n' "$1" "$2" >"$data/state.json"
+}
+
+# The entry's Exec= for this AppImage and the launcher in the scratch HOME: loginitem_linux.rs RUN, then both paths.
+# shellcheck disable=SC2016 # the entry's text, which no shell here expands
+run_line='/bin/sh -c "[ -x \\"\\$0\\" ] && exec \\"\\$0\\"; exec \\"\\$1\\" start"'
+own_exec="Exec=$run_line \"$appimage\" \"$home/.local/bin/harness\""
+
+# --- 1, 3, 7, 8, 9: X11, the tray host there, the first run
+
+start_watcher
+save_state true false
+launch XDG_SESSION_TYPE=x11
+waits logged "$MENU" || fail "the menu reads Plug in your device | Sign in… | Export logs | About | Quit"
+waits tray_registered || fail "the tray registers with the tray host"
+ok "the tray registers with the tray host"
+ok "the menu reads Plug in your device | Sign in… | Export logs | About | Quit"
+
+waits logged "login item: registered" || fail "the first run registers the login item"
+printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Harness' "$own_exec" 'X-GNOME-Autostart-enabled=true' \
+  >"$work/entry.expected"
+cmp -s "$work/entry.expected" "$entry" || fail "the first run writes harnessd.desktop with the app's Exec="
+[[ "$(ls -A "$config/autostart")" == harnessd.desktop ]] || fail "the login item is the one harnessd.desktop"
+ok "the first run writes the one harnessd.desktop, with the app's Exec="
+
+cp "$(command -v xterm)" "$work/procs/code"
+env -i "${base[@]}" xterm -T e2e-xterm -e sleep 600 >>"$work/xterm.out" 2>&1 &
+started
+env -i "${base[@]}" "$work/procs/code" -T e2e-code -e sleep 600 >>"$work/xterm.out" 2>&1 &
+started
+waits xdotool search --name '^e2e-xterm$' >/dev/null || fail "an xterm opens"
+waits xdotool search --name '^e2e-code$' >/dev/null || fail "an xterm copied as code opens"
+xterm_window="$(xdotool search --name '^e2e-xterm$' | head -n 1)"
+code_window="$(xdotool search --name '^e2e-code$' | head -n 1)"
+activate() { timeout 10 xdotool windowactivate --sync "$1" || fail "xdotool brings a window to the front"; }
+activate "$xterm_window"
+waits told xterm || fail "X11: the watch is told xterm when it is in front"
+activate "$code_window"
+waits told code || fail "X11: the watch is told code when it is in front"
+ok "X11: the watch is told xterm, then code, as each comes to the front"
+
+click "Export logs"
+waits grep -Fxqs "$home/Desktop" "$work/xdg-open.log" || fail "Export logs opens the zip's folder with xdg-open"
+logged "logs: exported" || fail "Export logs logs logs: exported"
+ok "Export logs hands xdg-open the zip's folder"
+
+timeout "$WAIT" env -i "${base[@]}" XDG_SESSION_TYPE=x11 "$appimage" >>"$work/app.out" 2>&1 \
+  || fail "a second launch exits by itself, with 0"
+[[ "$(times_logged "instance: already running")" -eq 1 ]] || fail "a second launch logs instance: already running"
+gone "$app_pid" && fail "the first launch keeps running"
+[[ "$(tray_items)" -eq 1 ]] || fail "a second launch adds no tray icon"
+ok "a second launch exits with instance: already running, and the first keeps its one tray icon"
+
+logged "tray: no host" && fail "with a tray host, the log has no tray: no host"
+ok "with a tray host, the log has no tray: no host"
+stop_app
+
+# --- 2, 6, 7: no tray host, a Wayland desktop with no source, the second run
+
+stop_watcher
+cp "$entry" "$work/entry.before"
+launch XDG_SESSION_TYPE=wayland
+waits logged "$MENU" || fail "Wayland: the menu reads as on X11"
+waits logged "tray: no host" || fail "with no tray host, the log has tray: no host"
+[[ "$(times_logged "tray: no host")" -eq 1 ]] || fail "tray: no host is logged once"
+ok "with no tray host, the log has tray: no host, once"
+
+activate "$xterm_window"
+activate "$code_window"
+[[ "$(fronts)" -eq 0 ]] || fail "a Wayland session with neither sway nor Hyprland tells the watch no app"
+run_log | grep -q '^front:' && fail "a Wayland session with neither sway nor Hyprland logs no front: line"
+ok "a Wayland session with neither sway nor Hyprland tells no app and logs no front: line"
+
+cmp -s "$work/entry.before" "$entry" || fail "a second run leaves the entry's bytes"
+ok "a second run leaves harnessd.desktop as it is"
+stop_app
+
+# --- 4, 7: sway, an entry the person turned off
+
+printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Harness' 'Exec="/opt/other/harness" start' 'Hidden=true' \
+  >"$entry"
+cp "$entry" "$work/entry.before"
+
+printf 'xwayland disable\n' >"$work/sway.conf"
+env -i "${base[@]}" WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman sway -c "$work/sway.conf" \
+  >"$work/sway.out" 2>&1 &
+started
+sway_pid=$!
+swaysock="$runtime/sway-ipc.$(id -u).$sway_pid.sock"
+waits swaymsg -s "$swaysock" -t get_version >/dev/null 2>&1 || fail "headless sway starts: $(tail -n 5 "$work/sway.out")"
+wayland="$(cd "$runtime" && find . -maxdepth 1 -name 'wayland-*' ! -name '*.lock' -printf '%f\n' | head -n 1)"
+[[ -n "$wayland" ]] || fail "headless sway has a Wayland socket"
+cp "$(command -v foot)" "$work/procs/kitty"
+env -i "${base[@]}" WAYLAND_DISPLAY="$wayland" foot --title=e2e-foot sleep 600 >>"$work/sway.out" 2>&1 &
+started
+env -i "${base[@]}" WAYLAND_DISPLAY="$wayland" "$work/procs/kitty" --title=e2e-kitty sleep 600 >>"$work/sway.out" 2>&1 &
+started
+sway_has() { swaymsg -s "$swaysock" -t get_tree | grep -Eq "\"name\": ?\"$1\""; }
+waits sway_has e2e-foot || fail "foot opens on sway"
+waits sway_has e2e-kitty || fail "foot copied as kitty opens on sway"
+
+launch XDG_SESSION_TYPE=wayland SWAYSOCK="$swaysock" WAYLAND_DISPLAY="$wayland" GDK_BACKEND=x11
+waits logged "$MENU" || fail "sway: the menu reads as on X11"
+swaymsg -s "$swaysock" '[title="^e2e-foot$"] focus' >/dev/null || fail "swaymsg focuses foot"
+waits told foot || fail "sway: the watch is told foot when it is in front"
+swaymsg -s "$swaysock" '[title="^e2e-kitty$"] focus' >/dev/null || fail "swaymsg focuses kitty"
+waits told kitty || fail "sway: the watch is told kitty when it is in front"
+ok "sway: the watch is told foot, then kitty, as each takes the focus"
+
+cmp -s "$work/entry.before" "$entry" || fail "an entry with Hidden=true and another Exec= is left as it is"
+ok "an entry turned off (Hidden=true), with another Exec=, is left as it is"
+stop_app
+kill "$sway_pid"
+
+# --- 5, 7: Hyprland, the installer's entry
+
+# The installer's own entry, and a line of the person's that a take-over keeps.
+installers() {
+  printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Harness' "$1" 'X-GNOME-Autostart-enabled=true' 'X-E2E=kept'
+}
+installers "Exec=\"$home/.local/bin/harness\" start" >"$entry"
+cp "$(command -v sleep)" "$work/procs/alacritty"
+cp "$(command -v sleep)" "$work/procs/wezterm-gui"
+"$work/procs/alacritty" 600 &
+started
+alacritty_pid=$!
+"$work/procs/wezterm-gui" 600 &
+started
+wezterm_pid=$!
+
+coproc HYPR { exec "$python" "$here/hypr-fake.py" "$runtime/hypr/e2e"; }
+pids+=("$HYPR_PID")
+hypr_in="${HYPR[1]}"
+read -r -t "$WAIT" ready <&"${HYPR[0]}" && [[ "$ready" == ready ]] || fail "the scripted Hyprland listens"
+
+launch XDG_SESSION_TYPE=wayland HYPRLAND_INSTANCE_SIGNATURE=e2e GDK_BACKEND=x11
+waits logged "$MENU" || fail "Hyprland: the menu reads as on X11"
+echo "$alacritty_pid" >&"$hypr_in"
+waits told alacritty || fail "Hyprland: the watch is told the exe name of the pid j/activewindow answers"
+echo "$wezterm_pid" >&"$hypr_in"
+waits told wezterm-gui || fail "Hyprland: the watch is told the next one's"
+ok "Hyprland: the watch is told alacritty, then wezterm-gui, the exe name of each pid j/activewindow answers"
+
+waits logged "login item: updated" || fail "an entry that is on, with the installer's Exec=, is taken over"
+installers "$own_exec" | cmp -s - "$entry" || fail "a taken-over entry has the app's Exec= and keeps the rest"
+ok "an entry that is on, with the installer's Exec=, takes the app's Exec= and the log has login item: updated"
+stop_app
+exec {hypr_in}>&-
+
+# --- 7, and a page and Open Harness from the AppImage: the sign-in window, the desktop app installed
+
+rm "$entry"
+save_state false true
+mkdir -p "$data_home/applications"
+printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Harness' "Exec=\"$work/apps/Harness.AppImage\" %U" \
+  >"$data_home/applications/harness.desktop"
+start_watcher
+launch XDG_SESSION_TYPE=x11
+waits logged "menu: Plug in your device | Sign in… | Open Harness | Export logs | About | Quit" \
+  || fail "with the desktop app installed, the menu has Open Harness"
+[[ ! -e "$entry" ]] || fail "a deleted entry stays deleted"
+ok "a deleted harnessd.desktop stays deleted"
+
+# Return takes the window's primary answer, Sign in, once the page has drawn it.
+sign_in() {
+  local window
+  window="$(xdotool search --onlyvisible --name '^Harness$' | head -n 1)" || return 1
+  [[ -n "$window" ]] && timeout 10 xdotool windowactivate --sync "$window" key Return \
+    && WAIT=3 waits grep -Fxqs 'login --json' "$fake/calls.log"
+}
+waits sign_in || fail "the Sign in window's Return starts harness login --json"
+waits grep -Fxqs "https://example.com/e2e?state=S" "$work/xdg-open.log" || fail "the sign-in page opens with xdg-open"
+ok "the sign-in page opens with xdg-open"
+probe xdg-open xdg-open
+
+click "Open Harness"
+waits test -s "$work/desktop-app.log" || fail "Open Harness runs the desktop app's AppImage"
+ok "Open Harness runs the desktop app's AppImage"
+probe desktop-app "the desktop app"
+stop_app
+
+[[ ${#broken[@]} -eq 0 ]] \
+  || fail "a GTK program xdg-open or the desktop app starts runs in the environment the AppImage hands it: ${broken[*]}"
+ok "a GTK program xdg-open or the desktop app starts runs in the environment the AppImage hands it"
+
+echo "0 FAILED"
