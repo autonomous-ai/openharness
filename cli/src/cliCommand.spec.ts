@@ -479,7 +479,7 @@ describe('start -f with no master, when its core cannot start', () => {
 
     expect(result.timedOut).toBe(false)
     expect(result.status).toBe(1)
-    expect(result.stderr).toMatch(/Failed to start adapter: EADDRINUSE$/m)
+    expect(result.stderr).toMatch(/Failed to start adapter: EADDRINUSE · another Harness daemon serves this data folder$/m)
     expect(result.stdout + result.stderr).not.toContain('already serving')
     expect(result.stdout + result.stderr).not.toMatch(/^\s+at /m)
   }, ONE_RUN_TEST_MS)
