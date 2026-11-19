@@ -19,7 +19,12 @@ export interface DeviceHookPort {
 }
 
 const MAX_SESSION_ID = 128
-const MAX_TEXT = 2000
+/**
+ * The same number as cable/hosts/orca.ts's MAX_TEXT, the longest dial text every host path takes. The core imports
+ * nothing from cable/, so it keeps its own; over it the poll is answered {} while the devices' inbox counts the words
+ * taken, so the two must not differ.
+ */
+const MAX_TEXT = 20_000
 /** One poll per session, so this bounds the sessions whose mod is held at once. */
 const MAX_POLLS = 64
 
