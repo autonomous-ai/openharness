@@ -921,7 +921,7 @@ export function startHookServer(
               // Its client left on pending and hears no reply: a claim that closed nothing is said here.
               if (parked) void Promise.resolve(linkedStop(parked.stop, parked.firedAt)).then(({ status }) => {
                 if (status !== 200) console.log(`[hooks] ${sid(body.sessionId ?? '?')} parked Stop not claimed · status=${status}`)
-              }).catch(error => console.warn('[hooks] parked linked Stop claim failed', error))
+              }).catch(error => console.warn(`[hooks] parked linked Stop claim failed · ${errorKind(error)}`))
             },
           })
           if (queued) {

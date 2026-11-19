@@ -20,6 +20,7 @@ import { oldUsers, procRows, type ProcRow } from '../homeMove/oldUsers.js'
 import { OWN_FILES } from '../homeMove/plan.js'
 import { readMoveRecord, writeMoveRecord, type MoveRecord } from '../homeMove/record.js'
 import { connectorsDir } from '../lib/connectors/store.js'
+import { errorKind } from '../lib/log.js'
 import { savedDaemonPort } from '../lib/daemonRecord.js'
 import { HARNESS_OWNER_OPTION } from '../lib/harnessSessionLabel.js'
 import { publishHookRoute } from '../lib/hookRoutes.js'
@@ -109,8 +110,6 @@ export async function askForStore(open: () => Promise<Daemon> = () => openDaemon
   }
 }
 
-const said = (error: unknown): string => (error instanceof Error ? error.message : String(error))
-
 /**
  * In the core's process (no master, or `HARNESSD_SERVICES=none`): the same service, which the apps ask nothing. The core is
  * the daemon's first process here, and there from its start, so it checks at once; and so is the Store, which it never
@@ -146,7 +145,7 @@ export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = 
   const unlinkedSaid = new Set<string>()
   let running = true
   let checking = false
-  /** The last failure said, until a check gets through. */
+  /** The last failure's kind said, until a check gets through. */
   let failure: string | null = null
 
   /** The route record, a hard link where an old client looks for a socket, and the shim's files: made again at each check,
@@ -225,8 +224,9 @@ export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = 
     } catch (error) {
       // /proc with no boot id, a file it could not remove: the bridge stays until a check gets through. Said once while it
       // lasts, not every 10 minutes.
-      if (said(error) !== failure) deps.log(`home bridge: a check failed: ${said(error)} · tried again in 10 minutes`)
-      failure = said(error)
+      const kind = errorKind(error)
+      if (kind !== failure) deps.log(`home bridge: a check failed: ${kind} · tried again in 10 minutes`)
+      failure = kind
     } finally {
       if (!again) checking = false
     }

@@ -114,8 +114,8 @@ describe('which agent a hook belongs to', () => {
     vi.mocked(processRows).mockResolvedValue(tree([300, 100], [100, 1]) as never)
     vi.mocked(deps.agentReconciler.triggerHint).mockRejectedValueOnce(new IdentityReadUnavailable('the observed process changed before publication'))
     expect(await hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [hint('%1')], callerPid: 300 })).toEqual(current)
-    // Any of the pass's holds lands here: the log says which.
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('the observed process changed before publication'))
+    // Any of the pass's holds lands here: the log names its kind, never its words.
+    expect(console.log).toHaveBeenCalledWith('[hooks] reconciliation held · IdentityReadUnavailable IDENTITY_UNAVAILABLE · checking current process evidence')
   })
 
   it.each(['committed', 'removed'] as const)('keeps Cursor resolution through a superseded reconciliation until pane %s', async outcome => {
