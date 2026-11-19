@@ -41,8 +41,13 @@ function slowTimeout(callback: (...args: unknown[]) => void, ms?: number, ...arg
   slow.due.set(timer, () => { realClear(timer); callback(...args) })
   return timer
 }
+// The registry expires a write after 5 s. No test here means to, so that timer is never scheduled: how fast this
+// machine writes the registry never fails these tests.
+function ownedTimeout(callback: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) {
+  return ms === 5_000 ? realTimeout(() => {}, 0) : slowTimeout(callback, ms, ...args)
+}
 beforeEach(() => {
-  vi.spyOn(globalThis, 'setTimeout').mockImplementation(slowTimeout as typeof setTimeout)
+  vi.spyOn(globalThis, 'setTimeout').mockImplementation(ownedTimeout as typeof setTimeout)
   vi.spyOn(globalThis, 'clearTimeout').mockImplementation(((timer?: Parameters<typeof clearTimeout>[0]) => {
     slow.due.delete(timer); realClear(timer)
   }) as typeof clearTimeout)
