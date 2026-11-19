@@ -1,6 +1,7 @@
 /** Eager mechanics for native JSON hook schemas; unreadable settings are never empty settings. */
-import { command, requireHookScript, hooksHeld, hooksNotInstalled, hooksNotOnWindows, identitySettings, isManagedHook, isManagedHookCommand, foreignHookBlocks, type HookRunner, type Settings, type HookBlock } from './notifyHooks.js'
+import { command, requireHookScript, isNamedHold, hooksNotInstalled, hooksNotOnWindows, identitySettings, isManagedHook, isManagedHookCommand, foreignHookBlocks, type HookRunner, type Settings, type HookBlock } from './notifyHooks.js'
 import { HookPreparationHeld, inspectHookFile, runHookPreparation } from './nativeHookFiles.js'
+import { HookScriptMissing } from './hookHeld.js'
 import type { NativeHookOptions } from './nativeLocations.js'
 import { errorKind } from '../../lib/log.js'
 import { hostPlatform } from './windowsFiles.js'
@@ -94,8 +95,10 @@ export async function installNativeHookSettings(rule: NativeHookSettings, port: 
       return true
     }, { ...options, identity: JSON.stringify([identitySettings(rule, platform), port, cmd]) })
   } catch (error) {
-    if (hooksHeld(error, platform)) console.error(`${hooksNotInstalled(rule.engine)} · ${errorKind(error)}`)
-    else console.error(rule.messages.failed, errorKind(error))
+    // A hold's reason is fixed words (hookHeld.ts); HookScriptMissing's names a path, so that one is said by its kind.
+    const held = error instanceof HookPreparationHeld && !(error instanceof HookScriptMissing) ? error.reason : errorKind(error)
+    if (isNamedHold(error, platform)) console.error(`${hooksNotInstalled(rule.engine)} · ${held}`)
+    else console.error(rule.messages.failed, held)
     return false
   }
 }

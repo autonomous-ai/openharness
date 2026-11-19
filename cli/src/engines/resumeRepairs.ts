@@ -36,8 +36,8 @@ function receiptValid(value: unknown): value is Receipt {
     && value.route.some(fact => fact.path === dirname(stage))
 }
 
-export function createResumeRepairWorker(deps: { directory: string; log?: (name: string) => void; ownerAlive?: (pid: number) => boolean }) {
-  const log = deps.log ?? ((name: string) => console.warn(`[resume] ${name}`))
+export function createResumeRepairWorker(deps: { directory: string; log?: (line: string) => void; ownerAlive?: (pid: number) => boolean }) {
+  const log = deps.log ?? ((line: string) => console.warn(`[resume] ${line}`))
   const slots: Array<Receipt | 'invalid' | null> = [null, null]
   const recovering = new Set<number>()
   const timers = new Map<string, ReturnType<typeof setTimeout>>()

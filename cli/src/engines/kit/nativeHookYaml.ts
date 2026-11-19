@@ -3,6 +3,7 @@ import { isMap, isScalar, isSeq, Lexer, parseDocument, visit, type Document } fr
 import { basename, join } from 'node:path'
 import { errorKind } from '../../lib/log.js'
 import { HookPreparationHeld, inspectHookFile, type HookFilePublication, runHookPreparation, type HookPreparationAttempt, type HookPreparationOptions } from './nativeHookFiles.js'
+import { HookScriptMissing } from './hookHeld.js'
 import { NativeEvidenceBudget } from './nativeEvidence.js'
 import { isManagedHookCommand } from './notifyHooks.js'
 import { nativeHookHomes, type NativeHookHomes } from './nativeHookHomes.js'
@@ -457,7 +458,8 @@ async function installIn(rule: NativeYamlHooks, cmd: string, home: string, optio
     log(rule.messages.after)
     return true
   }, { ...options, identity: JSON.stringify([rule, cmd, home]) }) } catch (err) {
-    error(rule.messages.failed, errorKind(err))
+    // A hold's reason is fixed words (hookHeld.ts); HookScriptMissing's names a path, so that one is said by its kind.
+    error(rule.messages.failed, err instanceof HookPreparationHeld && !(err instanceof HookScriptMissing) ? err.reason : errorKind(err))
     return false
   }
 }

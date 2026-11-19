@@ -2,7 +2,8 @@
 import { existsSync } from 'node:fs'
 import { lstat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { hookPreparationRoutes, runHookPreparation, type HookPreparationProof } from './kit/nativeHookFiles.js'
+import { HookPreparationHeld, hookPreparationRoutes, runHookPreparation, type HookPreparationProof } from './kit/nativeHookFiles.js'
+import { HookScriptMissing } from './kit/hookHeld.js'
 import { nativeHookLocations, type NativeHookOptions } from './kit/nativeLocations.js'
 import { env } from '../config/env.js'
 import { hookTokenPath } from '../lib/hookAuth.js'
@@ -18,7 +19,7 @@ import { opencodeMajorVersion, type OpencodeLaunchSnapshot } from './launchContr
 import { installNativePlugin, prepareNativePlugin, prepareNativePluginRemoval } from './kit/nativePlugin.js'
 import { installNativeYamlHooks, removeNativeYamlHooks } from './kit/nativeHookYaml.js'
 import { nativeHookHomes } from './kit/nativeHookHomes.js'
-import { command, hooksHeld, hooksNotInstalled, requireHookScript } from './kit/notifyHooks.js'
+import { command, isNamedHold, hooksNotInstalled, requireHookScript } from './kit/notifyHooks.js'
 import { hostPlatform } from './kit/windowsFiles.js'
 import { GROK_HOOK_SETTINGS } from './grok/contract.js'
 import { AGY_HOOK_SETTINGS } from './agy/contract.js'
@@ -77,7 +78,7 @@ export async function installHermesHooks(port: number, selectedHome?: string, op
 function hermesHooksAsToday(port: number, selectedHome: string | undefined, options: NativeHookOptions | undefined, platform: NodeJS.Platform): Promise<boolean> {
   // Once for every home, before the pool: a missing notify.mjs is a failed install said in one line, never a rejection.
   try { requireHookScript('hermes') } catch (error) {
-    if (hooksHeld(error, platform)) console.error(`${hooksNotInstalled('hermes')} · ${errorKind(error)}`)
+    if (isNamedHold(error, platform)) console.error(`${hooksNotInstalled('hermes')} · ${errorKind(error)}`)
     else console.error(HERMES_HOOK_SETTINGS.messages.failed, errorKind(error))
     return Promise.resolve(false)
   }
@@ -193,7 +194,8 @@ export async function installOpencodePlugin(port: number, snapshot?: OpencodeLau
     }, { ...options, timeoutMs: Math.max(0, deadline - performance.now()), confirmed: proof => installation.proofs.push(proof), identity: JSON.stringify([port, snapshot?.identity, major]),
       current: () => group.current.port === port && group.current.executable === installation.executable
         && group.current.major === major && performance.now() < deadline && snapshot?.current() !== false && options.current?.() !== false }) } catch (error) {
-      console.error('[hooks] OpenCode preparation held:', errorKind(error))
+      // A hold's reason is fixed words (hookHeld.ts); HookScriptMissing's names a path, so that one is said by its kind.
+      console.error('[hooks] OpenCode preparation held:', error instanceof HookPreparationHeld && !(error instanceof HookScriptMissing) ? error.reason : errorKind(error))
       return false
     }
   })()

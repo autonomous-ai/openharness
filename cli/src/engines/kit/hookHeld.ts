@@ -3,7 +3,10 @@
  * (windowsFiles.ts) can throw it without an import cycle through nativeHookFiles.ts, which re-exports it.
  */
 export class HookPreparationHeld extends Error {
-  /** What holds it, as a sentence's end: the message without its "is waiting" prefix (hookRemovalOutcome.ts). */
+  /**
+   * What holds it, as a sentence's end: the message without its "is waiting" prefix (hookRemovalOutcome.ts). Fixed words,
+   * so a log line names a hold by it; HookScriptMissing's alone names a path, and a log names that one by its kind.
+   */
   readonly reason: string
   constructor(detail: string) { super(`Hook preparation is waiting: ${detail}`); this.name = 'HookPreparationHeld'; this.reason = detail }
 }

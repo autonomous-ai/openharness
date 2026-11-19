@@ -43,8 +43,8 @@ export type OpenclawEvent = { windowId: string; seq: number; record: Record<stri
  * `transient`: locked, mid-checkpoint or replaced; read again on the next poll.
  */
 class OpenclawReadError extends Error {
-  constructor(readonly reason: 'missing' | 'unsupported' | 'transient', detail: string, options?: ErrorOptions) {
-    super(`openclaw store ${reason} · ${detail}`, options)
+  constructor(readonly reason: 'missing' | 'unsupported' | 'transient', options?: ErrorOptions) {
+    super(`openclaw store ${reason}`, options)
   }
 }
 
@@ -127,7 +127,7 @@ interface Page { events: OpenclawEvent[]; lastSeq: number | null; full: boolean;
 /** Before any read. No sqlite3 CLI fallback: its -json output mangles the compressed blobs. */
 function ensureReadable(): void {
   if (!builtinSqlite() || typeof zstd.zstdDecompressSync !== 'function') {
-    throw new OpenclawReadError('missing', 'this Node has no node:sqlite or zstd')
+    throw new OpenclawReadError('missing')
   }
 }
 
@@ -135,7 +135,7 @@ function unanswered(db: string, error: unknown): never {
   // A read that failed may be a store whose columns changed under it: check them again on the next read.
   checked.delete(db)
   // On `cause`, so the line that says it names the store's own code (errorKind reads it there), never a message.
-  throw new OpenclawReadError('transient', errorKind(error), { cause: error })
+  throw new OpenclawReadError('transient', { cause: error })
 }
 
 /** A read of ids and numbers, which sqliteReadAll's own reply limit holds. */
@@ -170,7 +170,7 @@ async function ensureSupported(db: string): Promise<void> {
     checked.set(db, missing)
     console.error(`[openclaw] agent schema ${await schemaVersion(db)}${missing.length ? ` · unsupported, missing ${missing.join(', ')}` : ''}`)
   }
-  if (missing.length) throw new OpenclawReadError('unsupported', `missing ${missing.join(', ')}`)
+  if (missing.length) throw new OpenclawReadError('unsupported')
 }
 
 async function schemaVersion(db: string): Promise<string> {
@@ -219,14 +219,18 @@ function decode(key: string, windowId: string, row: SqliteRow): Record<string, u
   // Over the row cap, the page returned its seq alone.
   if (row.page_big) { unreadable(key, windowId, seq, 'too big'); return null }
   if (row.hidden) return null
+  // Each step named in fixed words: zstd's own code is not a code-shaped token, so its kind alone says only Error.
+  let text: string
+  if (typeof row.event_json === 'string') text = row.event_json
+  else {
+    try { text = zstd.zstdDecompressSync!(row.event_zstd as Uint8Array, { maxOutputLength: MAX_EVENT_BYTES }).toString('utf8') } catch (error) {
+      unreadable(key, windowId, seq, `zstd · ${errorKind(error)}`)
+      return null
+    }
+  }
   let record: unknown
-  try {
-    const text = typeof row.event_json === 'string'
-      ? row.event_json
-      : zstd.zstdDecompressSync!(row.event_zstd as Uint8Array, { maxOutputLength: MAX_EVENT_BYTES }).toString('utf8')
-    record = JSON.parse(text)
-  } catch (error) {
-    unreadable(key, windowId, seq, errorKind(error))
+  try { record = JSON.parse(text) } catch (error) {
+    unreadable(key, windowId, seq, `json · ${errorKind(error)}`)
     return null
   }
   if (!isRecord(record)) { unreadable(key, windowId, seq, 'not an object'); return null }

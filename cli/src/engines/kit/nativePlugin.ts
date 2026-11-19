@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { errorKind } from '../../lib/log.js'
 import { HookPreparationHeld, directoryChanged, inspectHookFile, type HookFilePublication, runHookPreparation, type HookPreparationAttempt, type HookPreparationOptions } from './nativeHookFiles.js'
+import { HookScriptMissing } from './hookHeld.js'
 
 export interface NativePlugin {
   file: string
@@ -50,7 +51,8 @@ export async function installNativePlugin(rule: NativePlugin, values: NativePlug
     const published = await prepareNativePlugin(rule, values).commit(attempt)
     published.verify(); return true
   }, { ...options, identity: nativePluginSource(rule, values) }) }
-  catch (err) { console.error(rule.messages.failed, errorKind(err)); return false }
+  // A hold's reason is fixed words (hookHeld.ts); HookScriptMissing's names a path, so that one is said by its kind.
+  catch (err) { console.error(rule.messages.failed, err instanceof HookPreparationHeld && !(err instanceof HookScriptMissing) ? err.reason : errorKind(err)); return false }
 }
 
 export interface NativePluginRemoval {
@@ -81,5 +83,5 @@ export async function removeNativePlugin(rule: NativePluginRemoval): Promise<boo
     const removed = await prepareNativePluginRemoval(rule).commit(attempt)
     removed.verify(); return true
   }, { identity: JSON.stringify(rule) }) }
-  catch (err) { console.error(rule.failed, errorKind(err)); return false }
+  catch (err) { console.error(rule.failed, err instanceof HookPreparationHeld && !(err instanceof HookScriptMissing) ? err.reason : errorKind(err)); return false }
 }

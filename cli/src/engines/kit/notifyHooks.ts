@@ -66,11 +66,11 @@ export function hooksNotOnWindows(engine: string): true {
  * held file, and on every platform a missing notify.mjs. It is said in one line, no stack: a stack trace there buried
  * the hold (B4.10 VM log). Any other error or platform: the caller logs its own failure line.
  */
-export function hooksHeld(error: unknown, platform: NodeJS.Platform): boolean {
+export function isNamedHold(error: unknown, platform: NodeJS.Platform): boolean {
   return error instanceof HookPreparationHeld && (platform === 'win32' || error instanceof HookScriptMissing)
 }
 
-/** The words of that line; the caller adds the error's kind, never its reason, which can name a path. */
+/** The words of that line; the caller adds the hold's reason, or HookScriptMissing's kind: that reason names a path. */
 export function hooksNotInstalled(engine: NotifyEngine): string {
   return `[hooks] ${engineName(engine)} hooks are not installed`
 }

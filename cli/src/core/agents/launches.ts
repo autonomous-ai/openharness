@@ -177,7 +177,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
             && engineTrust.trusts(projectFolder.gitSource)))) {
           engineTrust.record(preparedFolder)
         }
-      } catch (error) { console.warn(`[agent] pre-trust skipped · ${errorKind(error)}`) }
+      } catch (error) { console.warn(`[agent] pre-trust skipped · ${input.engine} · ${errorKind(error)}`) }
     } else if (!dsh && !resumeSessionId && local && dirname(input.cwd) === projectsRoot()) {
       // On the LOCAL machine the desktop makes a new workspace ITSELF and sends the path as a plain
       // cwd, so `projectFolder` above never sees it. Such a folder is empty and is trusted the way a
@@ -196,7 +196,7 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       try {
         const empty = await readdir(input.cwd).then((names) => names.length === 0, () => false)
         if (empty) folderTrust(input.engine, input.codexHome ?? input.claudeHome ?? null)?.record(input.cwd)
-      } catch (error) { console.warn(`[agent] pre-trust skipped · ${errorKind(error)}`) }
+      } catch (error) { console.warn(`[agent] pre-trust skipped · ${input.engine} · ${errorKind(error)}`) }
     }
     const result = await invoke(preparedFolder ? { ...input, cwd: preparedFolder, scmLaunchRecord } : input)
     if (result.ok) return { state: 'created', agentId: result.session.agentId, ...(clonedVia ? { clonedVia } : {}) }

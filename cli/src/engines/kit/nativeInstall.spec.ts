@@ -334,7 +334,7 @@ it('keeps its history when a reboot renumbers the disk', async () => {
   expect(restarted.dispatch).not.toHaveBeenCalled()
 })
 
-it('logs why a failed check holds, which the person never sees', async () => {
+it('logs the kind of a failed check that holds, which the person never sees', async () => {
   await controller().ensure('opencode', recipe, environment, 'request', () => true)
   complete()
   unlinkSync(`${directory}.00000000.dispatch`)
