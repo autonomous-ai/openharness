@@ -198,10 +198,6 @@ jobs:
           pattern: cli-e2e-shard-*
           path: ${{ runner.temp }}/cli-e2e-shards
           merge-multiple: true
-      - name: Require the dial's hosts to pass
-        env:
-          DIAL_HOSTS_RESULT: ${{ needs.dial-hosts.result }}
-        run: test "$DIAL_HOSTS_RESULT" = success
       - name: Require every discovered file exactly once and every shard passing
         env:
           E2E_TEST_RESULT: ${{ needs.e2e.result }}
@@ -216,6 +212,10 @@ jobs:
           if-no-files-found: error
           overwrite: true
           retention-days: 7
+      - name: Require the dial's hosts to pass
+        env:
+          DIAL_HOSTS_RESULT: ${{ needs.dial-hosts.result }}
+        run: test "$DIAL_HOSTS_RESULT" = success
 
   # The agent browser on real Podman: rootless, as the runner's own user, as on a person's Linux
   # machine. The test runs Podman in a store of its own and removes it, whatever happened.

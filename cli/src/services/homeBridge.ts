@@ -129,7 +129,8 @@ export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = 
   const deps: HomeBridgeDeps = {
     platform: process.platform, home: homedir(), environment: process.env, socket: unixSocketPath(core.dataDir, env.PORT),
     // The master's PATH, this process's, may hold no tmux: it runs the one the core finds, so the core's server.
-    master: process.ppid, bootId, rows: procRows, tmuxAt: tmuxFinder(), tmux: listPanes, setupsPending: pendingSetups, askForStore,
+    // A failed shell lookup is retried at the next check even when tmux exists only on the shell's PATH.
+    master: process.ppid, bootId, rows: procRows, tmuxAt: tmuxFinder(undefined, () => true), tmux: listPanes, setupsPending: pendingSetups, askForStore,
     log: console.log, ...given,
   }
   // Nothing moves off Linux, and with no bridge.json there is no bridge to keep.
@@ -178,7 +179,7 @@ export function startHomeBridge(core: CoreApi, given: Partial<HomeBridgeDeps> = 
     const { status, stdout, stderr = '', error } = deps.tmux(found.state === 'adopted' ? found.path : 'tmux')
     if (status !== 0 || error) {
       // Only tmux itself can confirm there is no server. A missing binary or failed invocation says nothing of its panes.
-      if (!error && NO_SERVER.test(stderr)) return []
+      if (status === 1 && !error && NO_SERVER.test(stderr)) return []
       throw new Error(`tmux could not list its panes: ${error?.code ?? (stderr.trim().split('\n')[0] || `status ${status}`)}`)
     }
     return stdout.split('\n').flatMap((line) => {
