@@ -267,6 +267,7 @@ impl Runner {
             tabs: Arc::default(),
             chatgpt: Arc::new(chatgpt),
         });
+        shared.refresh_login_item();
         // Weakly: the source keeps its callback for as long as it runs, and the runner must still go.
         let weak = Arc::downgrade(&shared);
         shared.doors.front.start(Box::new(move |value| {
@@ -330,6 +331,10 @@ impl Runner {
                         &|| shared.find_cli(),
                         &mut |step| shared.answer(Event::InstallStep(step)),
                     );
+                    // An install can write the CLI's own login entry again.
+                    if result.is_ok() {
+                        shared.refresh_login_item();
+                    }
                     shared.answer(Event::InstallDone(result));
                 });
             }
@@ -416,6 +421,15 @@ impl Drop for Runner {
 impl Shared {
     fn answer(&self, event: Event) {
         (self.send)(event);
+    }
+
+    /// The login item's refresh (`LoginItem::refresh`): a change or a failure is one log line.
+    fn refresh_login_item(&self) {
+        match self.doors.login_item.refresh() {
+            Ok(false) => {}
+            Ok(true) => self.doors.log.line("login item: updated"),
+            Err(error) => self.doors.log.line(&format!("login item: not updated: {error}")),
+        }
     }
 
     fn find_cli(&self) -> bool {

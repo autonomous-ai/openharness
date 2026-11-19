@@ -2,6 +2,12 @@
 
 pub trait LoginItem: Send + Sync {
     fn register(&self) -> Result<(), String>;
+
+    /// Called at every launch and after each install: Linux takes over the entry the CLI's installer wrote. Ok(true):
+    /// it changed the entry.
+    fn refresh(&self) -> Result<bool, String> {
+        Ok(false)
+    }
 }
 
 pub struct SystemLoginItem;
@@ -47,13 +53,6 @@ impl LoginItem for SystemLoginItem {
     }
 }
 
-#[cfg(not(any(target_os = "macos", windows)))]
-impl LoginItem for SystemLoginItem {
-    fn register(&self) -> Result<(), String> {
-        Err("Login items are not supported here.".into())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -76,11 +75,5 @@ mod tests {
         assert_eq!(from(Status::RequiresApproval), (Ok(()), 0));
         // What macOS says of a main app's service it has never registered.
         assert_eq!(from(Status::NotFound), (Ok(()), 1));
-    }
-
-    #[cfg(not(any(target_os = "macos", windows)))]
-    #[test]
-    fn there_is_none_off_a_mac() {
-        assert_eq!(SystemLoginItem.register(), Err("Login items are not supported here.".to_string()));
     }
 }
