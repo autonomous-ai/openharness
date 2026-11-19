@@ -14,7 +14,7 @@ import type { ProcessRow } from './processTable.js'
 import { HARNESSD_REEXEC_FILE, HARNESSD_STATUS_FILE, PID_FILE, isAlive, pidFileWrittenMs, readPid } from './daemonState.js'
 import { readMarker, removeMarker } from '../harnessd/reexec.js'
 import { acquireSpawnLock, describeSpawnLockFailure, describeSpawnLockOwner, SPAWN_LOCK_WAIT_MS } from './daemonSpawnLock.js'
-import { settlePidFile } from './pidFileSettle.js'
+import { settlePidFile, type Settled } from './pidFileSettle.js'
 import { PLATFORM_STOP_WAIT_MS, clearTaskStopped, stopUnderPlatform, waitGone, type PlatformStop } from './platformDaemon.js'
 import { identifyDaemonProcess, judgePidFileOwner, type DaemonProcessVerdict } from './windows/daemonProcesses.js'
 import { askDaemonToStop, processStopCallDeps } from './windows/daemonStopCall.js'
@@ -30,7 +30,7 @@ export interface StopDeps {
   /** Acquire the spawn lock; resolves to a release. Injected so the stop sequence is testable alone. */
   lock: () => Promise<() => void>
   /** Ask the daemon about a pid file that cannot be read, or set it aside (./pidFileSettle.ts). */
-  settlePid: () => Promise<unknown>
+  settlePid: () => Promise<Settled>
   warn: (message: string) => void
   /**
    * Ask launchd or systemd to stop the master when it runs it (`harness service install`,
@@ -151,11 +151,16 @@ export async function stopDaemonProcess(deps: StopDeps = defaultStopDeps()): Pro
   const release = await deps.lock()
   try {
     // Under the lock, where no start or update writes the pid file: one that cannot be read is settled here.
-    await deps.settlePid()
+    const settled = await deps.settlePid()
     const stopped = await stopThroughPlatform(deps)
     if (stopped !== null) { clearReexecMarker(stopped); return { pid: stopped, stopped: true } }
     const pid = deps.readPid()
     if (!pid || !deps.isAlive(pid)) {
+      // A stop that went on without the lock: its holder may be writing the file, which is not debris.
+      if (settled.state === 'busy') {
+        deps.warn('  ! the pid file cannot be read and the daemon does not answer: nothing was stopped')
+        return { pid: null, stopped: false }
+      }
       // A pid file naming nothing is debris from a crash; nobody else can be relying on it.
       try { rmSync(PID_FILE, { force: true }) } catch { /* ignore */ }
       return { pid: null, stopped: false }

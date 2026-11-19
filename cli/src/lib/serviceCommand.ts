@@ -204,14 +204,16 @@ async function uninstallService(deps: ServiceCommandDeps): Promise<number> {
     deps.out(`harnessd is not installed with ${name}; nothing to remove.`)
     return 0
   }
-  await deps.settlePid()
-  const pid = deps.readPid()
-  // The platform's own master is the daemon: once it goes, the daemon is started the usual way.
-  const platformRan = pid !== null && deps.isAlive(pid) && before.pid === pid
-  const removed = await deps.withLock('stop', async () => {
+  const { outcome: removed, platformRan } = await deps.withLock('stop', async () => {
+    // Under the lock: outside it, a start that holds it leaves a pid file that reads as no pid, and the platform's master
+    // went with nothing started after it.
+    await deps.settlePid()
+    const pid = deps.readPid()
+    // The platform's own master is the daemon: once it goes, the daemon is started the usual way.
+    const platformRan = pid !== null && deps.isAlive(pid) && before.pid === pid
     const outcome = service.unregister()
     if (outcome.ok && platformRan && !await waitGone(deps, pid, PLATFORM_STOP_WAIT_MS)) await deps.stopDaemon()
-    return outcome
+    return { outcome, platformRan }
   })
   if (!removed.ok) {
     if (task) {
