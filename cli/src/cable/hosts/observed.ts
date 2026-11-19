@@ -520,6 +520,13 @@ export class ObservedSource implements HostSource {
     return e && this.live(e) ? e.panes.find(({ pane }) => pane.adapter === adapter)?.pane.id : undefined
   }
 
+  /** A live agent's latest process, the one whose window a raise brings forward, and its app; none once its session
+   *  ended, as its window holds something else now. */
+  windowOf(agentId: string): { pid: number; app: string } | undefined {
+    const e = this.entries.get(agentId)
+    return e && this.live(e) ? { pid: e.caller ?? e.pid, app: e.agent.app } : undefined
+  }
+
   /** The pane its caller last placed it at in that adapter (setPaneNames), as shownOnly reads it; never one of its panes. */
   placedAt(agentId: string, adapter: string): string | undefined {
     return this.paneNames.get(adapter)?.placed.get(agentId)
