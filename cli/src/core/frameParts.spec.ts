@@ -321,7 +321,7 @@ describe('service frame parts', () => {
   it('rejects declared authority fields or competing owners before accepting any service', () => {
     const core = fakeCore()
     const host = (fields: string[], service = 'one'): ServiceHostSpec => ({ services: ['one'], heapLimitMiB: 1, rssLimitMiB: 1, frameParts: { [service]: { fields } } })
-    for (const hosts of [{ a: host(['id']) }, { a: host(['__proto__']) }, { a: host(['']) }, { a: host(['x'.repeat(65)]) },
+    for (const hosts of [{ a: host(['id']) }, { a: host(['starting']) }, { a: host(['__proto__']) }, { a: host(['']) }, { a: host(['x'.repeat(65)]) },
       { a: host([]) }, { a: host(Array(33).fill('field')) }, { a: host(['field'], 'other') },
       { a: host(['field']), b: host(['other']) },
       { a: host(['field']), b: { ...host(['field'], 'two'), services: ['two'] } }]) {
