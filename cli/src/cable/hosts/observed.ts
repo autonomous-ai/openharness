@@ -14,6 +14,7 @@ import { APP_BUNDLES, detectApp, detectHost, hostDisplayName, UNKNOWN_APP } from
 import type { Delivery } from './inbox.js'
 import { bundleOf, type OpenTarget } from './open.js'
 import { MAX_TEXT } from './orca.js'
+import type { OuterLookup } from './outer.js'
 import type { SessionRecord } from './record.js'
 import { isTabApp } from './tabs.js'
 import type { Caps, HostAgent, HostAgentState, HostSource, PaneSwitch, SendResult } from './types.js'
@@ -115,10 +116,11 @@ export interface ObservedDeps {
   /** The hc terminal whose foreground is that pid, when exactly one is (hcSource.ts terminalOf). Absent, nothing is
    *  paired. */
   herdrTerminal?(pid: number): string | undefined
-  /** The place of an agent nested in a host whose own pty is no tab (tmux.ts createTmuxOuter), by its event's hints
-   *  and caller: undefined at once when it is not nested; else the app holding that host's client and the client's tty,
-   *  `{}` when none was found, never rejected. Absent, nothing is learned. */
-  outer?(hints: Readonly<Record<string, string>>, pid: number): Promise<{ app?: string; tty?: string }> | undefined
+  /** The place of an agent nested in a multiplexer whose own pty is no tab (outer.ts firstOuter of herdrOuter.ts's and
+   *  tmux.ts's lookups), by its event's hints and caller: undefined at once when it is not nested; else the app holding
+   *  that multiplexer's client and the client's tty, `{}` when none was found, never rejected. Absent, nothing is
+   *  learned. */
+  outer?: OuterLookup
 }
 
 /** Whether two events' hints are the same, key for key. */
@@ -592,8 +594,9 @@ export class ObservedSource implements HostSource {
   }
 
   /**
-   * Where an agent nested in a host whose own pty is no tab is seen (ObservedDeps.outer): an agent in Diego's tmux sat on
-   * a "tmux" page while the dial followed Terminal, whose page was empty (2026-11-19). Asked at its session's start and
+   * Where an agent nested in a multiplexer whose own pty is no tab is seen (ObservedDeps.outer): an agent in Diego's tmux
+   * sat on a "tmux" page while the dial followed Terminal, whose page was empty (2026-11-19), and one in the herdr his
+   * Terminal tab ran sat on a "herdr" page the same way (2026-11-19). Asked at its session's start and
    * at each turn's, as the person may have attached from another app since, and at an event whose caller or hints the
    * last ask was not for. Another caller or pane drops the place at once; a new ask keeps it until its answer, so the
    * agent does not leave its page meanwhile. Only the latest ask's answer lands, while the session lives. Whether it is

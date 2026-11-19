@@ -8,14 +8,34 @@
  * this adapter types while that socket is there. It comes before Orca's: herdr inside an Orca terminal takes the words
  * into the agent's own pane, where Orca would type into whichever pane herdr has in front.
  *
- * A tap and the words take turns per pane, as Orca's switch and send do (orca.ts). The turn is held here, as this file
- * alone holds both the command and the client, and the herdr source's words come through it too.
+ * A rest runs the same command, only while the app holding the pane's herdr client is in front: the pane id carries
+ * that app when observed.ts found it (`w1:p1:terminal-app`), and every verb takes the bare herdr id from it.
+ *
+ * A tap, a rest and the words take turns per pane, as Orca's switch and send do (orca.ts). The turn is held here, as
+ * this file alone holds both the command and the client, and the herdr source's words come through it too: its bare
+ * id and the id with its app share one turn.
  */
 import type { HostAdapter, Pane, Place } from './adapter.js'
 import { HERDR_PANE, herdrPaneKey, type HerdrClient, type HerdrPrompt } from './herdrClient.js'
+import { APP_IDS } from './hostDetect.js'
 import { RUN_TIMEOUT_MS, type OrcaDeps } from './orca.js'
 
-export interface HerdrAdapterDeps extends OrcaDeps { client: Pick<HerdrClient, 'prompt' | 'socketStamp'> }
+export interface HerdrAdapterDeps extends OrcaDeps {
+  client: Pick<HerdrClient, 'prompt' | 'socketStamp'>
+  /** The app in front, which a rest asks for. */
+  front(): string | undefined
+}
+
+/** The bare herdr pane id (`HERDR_PANE`), then the app holding its client when the id carries one. */
+const PANE_WITH_APP = /^(w[0-9]{1,9}:p[0-9]{1,9})(?::([a-z-]{1,32}))?$/
+
+function paneParts(pane: Pane): { id: string; app?: string } | undefined {
+  const match = PANE_WITH_APP.exec(pane.id)
+  if (!match) return undefined
+  const [, id, app] = match
+  if (app === undefined) return { id }
+  return APP_IDS.includes(app) ? { id, app } : undefined
+}
 
 export interface HerdrAdapter extends HostAdapter {
   paneKey(pane: Pane): string
@@ -27,6 +47,20 @@ export function createHerdrAdapter(deps: HerdrAdapterDeps): HerdrAdapter {
   // Per pane, the focus under way, which a second tap joins, and the words under way, beside which more are busy.
   const focusing = new Map<string, Promise<boolean>>()
   const prompting = new Map<string, Promise<HerdrPrompt>>()
+
+  /** `herdr agent focus` for a bare pane id, in that pane's turn: a second joins the one under way, and words under way
+   *  go first. */
+  const turn = (id: string): Promise<boolean> => {
+    const under = focusing.get(id)
+    if (under) return under
+    const herdr = deps.onPath('herdr')
+    if (!herdr) return Promise.resolve(false)
+    const command = async () => (await deps.run(herdr, ['agent', 'focus', id], RUN_TIMEOUT_MS)).code === 0
+    const typing = prompting.get(id)
+    const run = (typing ? typing.then(command) : command()).finally(() => focusing.delete(id))
+    focusing.set(id, run)
+    return run
+  }
 
   const prompt = (paneId: string, kind: string, text: string): Promise<HerdrPrompt> => {
     // Busy queues nothing: the dial asks again, never stacked behind.
@@ -43,29 +77,34 @@ export function createHerdrAdapter(deps: HerdrAdapterDeps): HerdrAdapter {
     tap: 'before',
     paneOf(place: Place): Pane | undefined {
       const id = place.hints.HERDR_PANE_ID
-      return id && HERDR_PANE.test(id) ? { adapter: 'herdr', id } : undefined
+      if (!id || !HERDR_PANE.test(id)) return undefined
+      const app = place.outer && APP_IDS.includes(place.outer.app) ? `:${place.outer.app}` : ''
+      return { adapter: 'herdr', id: `${id}${app}` }
     },
     canFocus: () => true,
     async focus(pane) {
-      if (!HERDR_PANE.test(pane.id)) return false
-      const under = focusing.get(pane.id)
-      if (under) return under
-      const herdr = deps.onPath('herdr')
-      if (!herdr) return false
-      const command = async () => (await deps.run(herdr, ['agent', 'focus', pane.id], RUN_TIMEOUT_MS)).code === 0
-      const typing = prompting.get(pane.id)
-      const run = (typing ? typing.then(command) : command()).finally(() => focusing.delete(pane.id))
-      focusing.set(pane.id, run)
-      return run
+      const parts = paneParts(pane)
+      return parts ? turn(parts.id) : false
+    },
+    canShow(pane) {
+      const app = paneParts(pane)?.app
+      return app !== undefined && app === deps.front()
+    },
+    async show(pane) {
+      const parts = paneParts(pane)
+      return parts && (await turn(parts.id)) ? 'ok' : 'failed'
     },
     ...(deps.platform === 'win32' ? {} : {
-      type: async (pane: Pane, text: string, engine: string) => (await prompt(pane.id, engine, text)).outcome === 'sent',
+      type: async (pane: Pane, text: string, engine: string) => {
+        const parts = paneParts(pane)
+        return !!parts && (await prompt(parts.id, engine, text)).outcome === 'sent'
+      },
       // A daemon started by launchd or systemd may not have the shell's XDG_CONFIG_HOME, and so no socket where herdr
       // listens: the words then skip herdr, and no other app types into a multiplexer's pane (orca.ts), so the agent's
       // voice is its mod's or the Codex queue's alone.
       canType: () => deps.client.socketStamp() !== undefined,
     }),
-    paneKey: (pane) => herdrPaneKey(pane.id),
+    paneKey: (pane) => herdrPaneKey(paneParts(pane)?.id ?? pane.id),
     prompt,
   }
 }
