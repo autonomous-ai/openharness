@@ -275,7 +275,7 @@ function lookup(over: Partial<TmuxOuterDeps> = {}, codes: Array<number | null> =
 describe('the outer place of an agent in the person\'s tmux', () => {
   it('not tmux: undefined at once, and nothing runs', () => {
     const { calls, reads, outer } = lookup({}, [], ONE)
-    for (const hints of [{}, { TERM_PROGRAM: 'tmux' }, { TMUX_PANE: '%3; x' }, { TMUX_PANE: '%1234567890' }, { TMUX_PANE: '-t' }]) {
+    for (const hints of [{}, { TERM_PROGRAM: 'tmux' }, { TMUX_PANE: '%3; x' }, { TMUX_PANE: '%1234567890' }, { TMUX_PANE: '-t' }] as Record<string, string>[]) {
       expect(outer(hints, 100), JSON.stringify(hints)).toBeUndefined()
     }
     for (const pid of [0, -1, 1.5, Number.NaN]) expect(outer(NESTED, pid), String(pid)).toBeUndefined()
