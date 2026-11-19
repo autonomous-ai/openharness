@@ -198,6 +198,7 @@ mod tests {
         assert_eq!(roots.root(Root::State), legacy);
         assert_eq!(roots.path(Entry::Cli), legacy.join("cli"));
         assert_eq!(roots.path(Entry::Runtime), legacy.join("runtime"));
+        assert_eq!(roots.path(Entry::Bin), legacy.join("bin"));
     }
 
     #[test]
@@ -208,6 +209,7 @@ mod tests {
         let roots = harness_roots_with(Path::new(HOME), &look);
         let (data, state) = xdg();
         assert_eq!(roots.path(Entry::Cli), data.join("cli"));
+        assert_eq!(roots.path(Entry::Bin), data.join("bin"));
         assert_eq!(roots.path(Entry::Runtime), state.join("runtime"));
     }
 

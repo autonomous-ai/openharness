@@ -607,6 +607,7 @@ mod tests {
         None
     }
 
+    #[cfg(unix)]
     fn found(home: &Path, path_var: Option<&OsStr>) -> Option<(PathBuf, Vec<OsString>)> {
         find_cli_with(home, path_var, None, no_env).map(|cli| (cli.program, cli.prefix))
     }
@@ -634,6 +635,8 @@ mod tests {
         assert_eq!(asked.get(), 1);
     }
 
+    // The unix layout, which Windows does not read (the Windows layout's tests below).
+    #[cfg(unix)]
     #[test]
     fn the_managed_cli_comes_first() {
         let home = tempfile::tempdir().unwrap();
@@ -651,6 +654,7 @@ mod tests {
         assert_eq!(found(home, Some(bin.as_os_str())), Some((launcher, vec![])));
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_node_pointer_outside_the_runtime_folder_is_not_used() {
         let home = tempfile::tempdir().unwrap();
@@ -726,6 +730,134 @@ mod tests {
             );
         }
         assert_eq!(child_env(home, None, None), [path("/Users/someone/.local/bin"), c_utf8]);
+    }
+
+    /// What Windows finds under `home`, whose Harness folder is `<home>/.harness`.
+    fn found_windows(home: &Path, path_var: Option<&OsStr>) -> Option<(PathBuf, Vec<OsString>)> {
+        let look = Look { linux: false, env: &no_env, exists: &Path::exists, file: &Path::is_file };
+        installed_windows(home, path_var, &look)
+    }
+
+    /// install.ps1's layout under `home`: `runtime/current-node` names a node.exe inside `runtime`, `cli/current` the
+    /// version folder that holds `cli.js`. What the CLI is then run as.
+    fn lay_out(home: &Path, version: &str) -> (PathBuf, Vec<OsString>) {
+        let root = home.join(".harness");
+        let node = put(root.join("runtime").join("node-v24.11.1-win-x64").join("node.exe"));
+        fs::write(root.join("runtime").join("current-node"), node.display().to_string()).unwrap();
+        let cli_js = put(root.join("cli").join(version).join("cli.js"));
+        fs::write(root.join("cli").join("current"), version).unwrap();
+        (node, vec![cli_js.into_os_string()])
+    }
+
+    /// A link at `at` to `target`, a file or a folder.
+    fn link(target: &Path, at: PathBuf) -> PathBuf {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, &at).unwrap();
+        #[cfg(windows)]
+        match target.is_dir() {
+            true => std::os::windows::fs::symlink_dir(target, &at).unwrap(),
+            false => std::os::windows::fs::symlink_file(target, &at).unwrap(),
+        }
+        at
+    }
+
+    #[test]
+    fn the_windows_layout_names_node_and_the_version_folders_cli_js() {
+        let home = tempfile::tempdir().unwrap();
+        let (node, cli_js) = lay_out(home.path(), "0.6.12");
+        let version = home.path().join(".harness").join("cli").join("0.6.12");
+        assert_eq!(cli_js, [version.join("cli.js").into_os_string()]);
+        assert_eq!(found_windows(home.path(), None), Some((node, cli_js)));
+    }
+
+    #[test]
+    fn a_pointer_with_a_byte_order_mark_and_a_crlf_reads() {
+        // As Notepad and Windows PowerShell 5.1 write a file, and as Node's trim() reads it.
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join(".harness");
+        let (node, cli_js) = lay_out(home.path(), "0.6.12");
+        fs::write(root.join("runtime").join("current-node"), format!("\u{feff}{}\r\n", node.display())).unwrap();
+        fs::write(root.join("cli").join("current"), "\u{feff}0.6.12\r\n").unwrap();
+        assert_eq!(found_windows(home.path(), None), Some((node, cli_js)));
+    }
+
+    #[test]
+    fn a_pointer_that_leads_out_is_refused() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join(".harness");
+        let (runtime, cli) = (root.join("runtime"), root.join("cli"));
+        let (node, _) = lay_out(home.path(), "0.6.12");
+        let outside = tempfile::tempdir().unwrap();
+        let elsewhere = put(outside.path().join("node.exe"));
+        let nodes = [
+            elsewhere.clone(),
+            // Under the runtime folder as text, outside it as a path, to a file that is there.
+            runtime.join("..").join("cli").join("0.6.12").join("cli.js"),
+            PathBuf::from("node.exe"),
+            link(&elsewhere, runtime.join("linked.exe")),
+        ];
+        for pointer in nodes {
+            fs::write(runtime.join("current-node"), pointer.display().to_string()).unwrap();
+            assert_eq!(found_windows(home.path(), None), None, "{}", pointer.display());
+        }
+        fs::write(runtime.join("current-node"), node.display().to_string()).unwrap();
+        // Each names a `cli.js` that is there, so only the rule refuses it.
+        put(root.join("cli.js"));
+        put(cli.join("cli.js"));
+        put(cli.join("a").join("b").join("cli.js"));
+        put(cli.join(r"a\b").join("cli.js"));
+        put(outside.path().join("cli.js"));
+        link(outside.path(), cli.join("linked"));
+        for version in ["..", ".", "  ", "a/b", r"a\b", "c:", "0.6.12/../0.6.12", "linked"] {
+            fs::write(cli.join("current"), version).unwrap();
+            assert_eq!(found_windows(home.path(), None), None, "{version:?}");
+        }
+    }
+
+    #[test]
+    fn then_bin_harness_exe_then_a_harness_exe_on_path() {
+        let home = tempfile::tempdir().unwrap();
+        let home = home.path();
+        let folders = tempfile::tempdir().unwrap();
+        // A unix `harness` is not Windows's.
+        let unix = put(folders.path().join("unix").join("harness"));
+        let near = put(folders.path().join("near").join("harness.exe"));
+        let far = put(folders.path().join("far").join("harness.exe"));
+        let path_var = env::join_paths([&unix, &near, &far].map(|file| file.parent().unwrap())).unwrap();
+        assert_eq!(found_windows(home, None), None);
+        assert_eq!(found_windows(home, Some(&path_var)), Some((near, vec![])));
+        let bin = put(home.join(".harness").join("bin").join("harness.exe"));
+        assert_eq!(found_windows(home, Some(&path_var)), Some((bin, vec![])));
+        let cli = lay_out(home, "0.6.12");
+        assert_eq!(found_windows(home, Some(&path_var)), Some(cli));
+    }
+
+    #[test]
+    fn the_layout_is_found_under_a_home_with_a_space_and_an_accent() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("Nguyễn Văn A");
+        let cli = lay_out(&home, "0.6.12");
+        assert_eq!(found_windows(&home, None), Some(cli));
+        fs::remove_file(home.join(".harness").join("cli").join("current")).unwrap();
+        let bin = put(home.join(".harness").join("bin").join("harness.exe"));
+        assert_eq!(found_windows(&home, None), Some((bin, vec![])));
+    }
+
+    #[test]
+    fn a_windows_child_has_bin_first_a_semicolon_and_no_lc_all() {
+        let home = Path::new("/h");
+        let path = |rest: &str| {
+            let mut path = home.join(".harness").join("bin").into_os_string();
+            path.push(rest);
+            [(OsString::from("PATH"), path)]
+        };
+        let system = Some(OsStr::new(r"C:\Windows\system32;C:\Windows"));
+        for locale in [None, Some("C"), Some("en_US.UTF-8")] {
+            let env = child_env_for(true, home, system, locale.map(OsStr::new));
+            assert_eq!(env, path(r";C:\Windows\system32;C:\Windows"), "{locale:?}");
+        }
+        assert_eq!(child_env_for(true, home, None, None), path(""));
+        assert_eq!(child_env_for(true, home, Some(OsStr::new("")), None), path(""));
     }
 
     #[cfg(unix)]
