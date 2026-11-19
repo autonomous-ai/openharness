@@ -12,12 +12,14 @@ const RUNTIME = '/run/user/1000'
 const BUS = `unix:path=${RUNTIME}/bus`
 const TOOLS = ['swaymsg', 'hyprctl', 'dbus-send', 'gdbus', 'wmctrl']
 
-type Entry = { type: 'socket' | 'file' | 'folder'; uid: number }
+/** What a path is and whose; [link] when the path is a link to it, seen only by a look that follows links. */
+type Entry = { type: 'socket' | 'file' | 'folder'; uid: number; link?: true }
 type Answer = { code: number | null; stdout: string }
 interface Call { file: string; args: string[]; timeoutMs: number }
 
 const socket = (uid = UID): Entry => ({ type: 'socket', uid })
 const file = (uid = UID): Entry => ({ type: 'file', uid })
+const link = (to: Entry): Entry => ({ ...to, link: true })
 
 interface Login {
   env?: LinuxDesktopDeps['env']
@@ -36,7 +38,10 @@ function login({ env = {}, files = {}, tools = TOOLS, answers = {} }: Login = {}
     uid: UID,
     home: '/home/u',
     list: (dir) => [...new Set(Object.keys(files).filter((path) => path.startsWith(`${dir}/`)).map((path) => path.slice(dir.length + 1).split('/')[0]))],
-    kind: (path) => files[path] ?? null,
+    kind: (path, follow) => {
+      const entry = files[path]
+      return entry && (!entry.link || follow) ? { type: entry.type, uid: entry.uid } : null
+    },
     run: async (file, args, timeoutMs) => {
       calls.push({ file, args, timeoutMs })
       return answers[[file, ...args].join(' ')] ?? { code: 1, stdout: '' }
@@ -185,6 +190,13 @@ describe('findLinuxDesktop', () => {
       { kind: 'x11', display: ':0', xauthority: `${RUNTIME}/xauth_AbCdEf` }],
     ['an auth file of another uid is none', { env: { DISPLAY: ':0' }, files: { [`${RUNTIME}/xauth_AbCdEf`]: file(1001) } },
       { kind: 'x11', display: ':0' }],
+    // The cookie is read by wmctrl, as this account: a link to it gives nothing more than this account could read itself.
+    ['an XAUTHORITY that is a link is followed', { env: { DISPLAY: ':0', XAUTHORITY: '/work/xauth' }, files: { '/work/xauth': link(file()) } },
+      { kind: 'x11', display: ':0', xauthority: '/work/xauth' }],
+    ['a ~/.Xauthority that is a link is followed', { env: { DISPLAY: ':0' }, files: { '/home/u/.Xauthority': link(file()) } },
+      { kind: 'x11', display: ':0', xauthority: '/home/u/.Xauthority' }],
+    ['an auth file in the runtime dir that is a link is none', { env: { DISPLAY: ':0' }, files: { [`${RUNTIME}/xauth_AbCdEf`]: link(file()) } },
+      { kind: 'x11', display: ':0' }],
     // Nothing above
     ['a DISPLAY beside WAYLAND_DISPLAY is an unknown compositor',
       { env: { DISPLAY: ':0', WAYLAND_DISPLAY: 'wayland-0' }, files: { [`${RUNTIME}/wayland-0`]: socket() } }, { kind: 'none', why: 'unknown compositor' }],
@@ -298,6 +310,7 @@ describe('linuxDesktopDeps', () => {
       expect(deps.kind(join(folder, 'd'))).toEqual({ type: 'folder', uid })
       expect(deps.kind(join(folder, 's'))).toEqual({ type: 'socket', uid })
       expect(deps.kind(join(folder, 'l'))).toBeNull()
+      expect(deps.kind(join(folder, 'l'), true)).toEqual({ type: 'file', uid })
       expect(deps.kind(join(folder, 'gone'))).toBeNull()
       expect(deps.list(folder).sort()).toEqual(['d', 'f', 'l', 's'])
       expect(deps.list(join(folder, 'gone'))).toEqual([])
