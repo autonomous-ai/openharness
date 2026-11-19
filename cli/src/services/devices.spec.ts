@@ -8812,16 +8812,21 @@ describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-di
     expect(fake.asked).toEqual(asked)
   })
 
-  it('the ChatGPT page\'s ring is in the reader\'s order, a hooked thread\'s copy in its place too', async () => {
-    const { fake, port, live } = withThreads()
+  it('the ChatGPT page\'s ring is in the reader\'s order', async () => {
+    const { fake, live } = withThreads()
     // Newest first, as a read lists them; the sidebar puts SECOND's project first.
     fake.read = read([thread({ at: 3 }), thread({ id: SECOND, name: 'Ship it', at: 2 }), thread({ id: THIRD, name: 'Tidy up', at: 1 })],
       [SECOND, THREAD, THIRD])
     await live()
-    const order = [SECOND, THREAD, THIRD].map((id) => observedAgentId('codex', id))
-    expect(await ids()).toEqual(order)
-    port.observed(hook('session-start'))
-    expect(await ids()).toEqual(order)
+    expect(await ids()).toEqual([SECOND, THREAD, THIRD].map((id) => observedAgentId('codex', id)))
+  })
+
+  it('a hooked thread the reader does not list takes its place in the sidebar\'s order', async () => {
+    const { fake, port, live } = withThreads()
+    fake.read = read([thread({ at: 2 }), thread({ id: THIRD, name: 'Tidy up', at: 1 })], [THREAD, SECOND, THIRD])
+    await live()
+    port.observed({ ...hook('session-start'), sessionId: SECOND, transcriptPath: `/t/${SECOND}.jsonl` })
+    expect(await ids()).toEqual([THREAD, SECOND, THIRD].map((id) => observedAgentId('codex', id)))
   })
 
   it('a tap on a thread row is one open of its link with the ChatGPT bundle, and the dial\'s own move', async () => {
@@ -8867,6 +8872,20 @@ describe("the ChatGPT app's threads, from its metadata (docs/plans/2026-11-19-di
     port.observed(hook('session-start'))
     // The hook's copy, with caps of its own: named as the reader names the thread, never by its folder.
     expect((await listed()).map(({ id, name }) => ({ id, name }))).toEqual([{ id: ID, name: 'Fix the build' }])
+  })
+
+  // On every platform: the reader the devices build is what test:core holds to 100% in CI on Linux and Windows too.
+  it('with no reader given the devices read the Codex home under the home folder', async () => {
+    vi.useRealTimers()
+    // The suite's throwaway home (vitest.setup.ts), never the person's: only the Codex home the fixture makes goes.
+    expect(homedir().startsWith(`${tmpdir()}${sep}`)).toBe(true)
+    onTestFinished(() => rmSync(CODEX_HOME, { recursive: true, force: true }))
+    codexAppFixture(CODEX_HOME).threads([{ id: THREAD, cwd: '/work/api', recencyAtMs: Date.now() }])
+    const { port } = start({ faults: ['fleet'], orca: { ...orca, platform: 'darwin' }, tty: async () => undefined, codexAppThreads: null,
+      bundleId: async (app) => app === APPS ? BUNDLE : undefined })
+    attach(port)
+    await vi.waitFor(() => expect(logs).toContain('[codex-app] listed · 1 threads · 0 in projects'), { timeout: 5_000 })
+    expect(await listed()).toEqual([{ id: ID, name: 'api', caps: 'sf' }])
   })
 
   it.skipIf(process.platform !== 'darwin')('with no reader or look given the devices find the app by its Info.plist and read the Codex home under the home folder', async () => {
