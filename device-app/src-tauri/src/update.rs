@@ -1,9 +1,10 @@
 //! The app's own update. The runner reaches the updater through this door only, so no test reaches the network.
 
 use crate::types::UpdateFailure;
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri_plugin_updater::{Error, Update, UpdaterExt};
 
 const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
@@ -26,10 +27,16 @@ pub fn install_exits_app() -> bool {
     cfg!(windows)
 }
 
-/// Whether this build updates itself: a release build on macOS that a release wrote its version into. A local
-/// `cargo tauri build` keeps the placeholder 0.0.0, which every published release outranks.
-pub fn enabled(debug: bool, os: &str, version: &str) -> bool {
-    !debug && os == "macos" && version != "0.0.0"
+/// Whether this build updates itself: a release build that a release wrote its version into, on macOS, on Windows,
+/// and on Linux run as an AppImage, the one Linux form the updater replaces. A local `cargo tauri build` keeps the
+/// placeholder 0.0.0, which every published release outranks.
+pub fn enabled(debug: bool, os: &str, version: &str, appimage: bool) -> bool {
+    let updates = match os {
+        "macos" | "windows" => true,
+        "linux" => appimage,
+        _ => false,
+    };
+    !debug && updates && version != "0.0.0"
 }
 
 /// A manifest's version when it is plain X.Y.Z, each part 1 to 5 digits: the only text of the manifest that
@@ -50,11 +57,29 @@ pub fn bundle_of(exe: &Path) -> Option<PathBuf> {
     inside.then(|| bundle.to_path_buf())
 }
 
-/// Whether the person can replace the bundle: its folder and the bundle itself are writable.
-pub fn replaceable(bundle: &Path) -> bool {
-    // The plugin moves the bundle out of its folder, which rewrites the bundle's own `..`: a refusal of either
-    // is where it asks for an administrator password.
-    bundle.parent().is_some_and(writable) && writable(bundle)
+/// What an update replaces: the bundle on macOS, the install folder on Windows, the AppImage on Linux. None: this
+/// run has nothing the updater can replace.
+pub fn target(os: &str, exe: &Path, appimage: Option<&Path>) -> Option<PathBuf> {
+    match os {
+        "macos" => bundle_of(exe),
+        "windows" => exe.parent().map(Path::to_path_buf),
+        "linux" => appimage.map(Path::to_path_buf),
+        _ => None,
+    }
+}
+
+/// Whether the person can replace `target` without being asked for an administrator.
+pub fn replaceable(os: &str, target: &Path) -> bool {
+    match os {
+        // The installer rewrites the folder's files; a copy an administrator installed refuses a new file where the
+        // installer would ask for elevation.
+        "windows" => a_file_can_be_made_in(target),
+        // The plugin moves the bundle or the AppImage out of its folder, which rewrites a bundle's own `..`: a
+        // refusal of either is where it asks for an administrator password.
+        #[cfg(unix)]
+        "macos" | "linux" => target.parent().is_some_and(writable) && writable(target),
+        _ => false,
+    }
 }
 
 /// access(2) answers for the person, with ACLs and a read-only volume (the app run from its dmg) included.
@@ -66,24 +91,36 @@ fn writable(path: &Path) -> bool {
     unsafe { libc::access(path.as_ptr(), libc::W_OK) == 0 }
 }
 
-/// Nothing is replaceable on Windows, which `enabled` never updates, until Task 15 of the Windows and Linux plan
-/// (docs/plans/2026-11-19-device-app-win-linux-plan.md) gives it its own rule.
-#[cfg(windows)]
-fn writable(_: &Path) -> bool {
-    false
+/// Whether a file can be made, then removed, in the folder: Windows answers for the person with every ACL included,
+/// where a folder's read-only flag says nothing.
+fn a_file_can_be_made_in(folder: &Path) -> bool {
+    // A name no earlier check left behind, even one whose process ended between the two calls.
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+    let probe = folder.join(format!("update-check-{}-{nanos}.tmp", std::process::id()));
+    File::create_new(&probe).is_ok() && fs::remove_file(&probe).is_ok()
 }
 
 /// The door, where this build updates itself (`enabled`); None elsewhere.
 pub fn system(handle: &tauri::AppHandle) -> Option<Arc<dyn AppUpdater>> {
-    if !enabled(cfg!(debug_assertions), std::env::consts::OS, &handle.package_info().version.to_string()) {
+    // An AppImage's runtime sets APPIMAGE to its own file: the one the plugin replaces.
+    let appimage = std::env::var_os("APPIMAGE").map(PathBuf::from).filter(|path| path.is_absolute());
+    let version = handle.package_info().version.to_string();
+    if !enabled(cfg!(debug_assertions), std::env::consts::OS, &version, appimage.is_some()) {
         return None;
     }
-    Some(Arc::new(SystemUpdater { handle: handle.clone(), found: Mutex::default(), downloaded: Mutex::default() }))
+    Some(Arc::new(SystemUpdater {
+        handle: handle.clone(),
+        appimage,
+        found: Mutex::default(),
+        downloaded: Mutex::default(),
+    }))
 }
 
 /// No error's text leaves this door: the plugin's may hold the manifest's URLs.
 struct SystemUpdater {
     handle: tauri::AppHandle,
+    /// The AppImage this run is, on Linux.
+    appimage: Option<PathBuf>,
     /// What the last check found, for the download that follows it.
     found: Mutex<Option<Update>>,
     /// The download whose signature checked out, for the install that follows it.
@@ -103,10 +140,12 @@ impl AppUpdater for SystemUpdater {
 
     fn download(&self) -> Result<(), UpdateFailure> {
         let mut update = self.found.lock().unwrap().take().ok_or(UpdateFailure::Check)?;
-        // Before any download, so the plugin's password prompt is never reached. Tauri's current_exe is the one the
-        // plugin finds the bundle from.
-        let bundle = tauri::utils::platform::current_exe().ok().and_then(|exe| bundle_of(&exe));
-        if !bundle.is_some_and(|bundle| replaceable(&bundle)) {
+        // Before any download, so the plugin's password prompt or the installer's elevation is never reached. Tauri's
+        // current_exe is the one the plugin finds the bundle or the install folder from.
+        let os = std::env::consts::OS;
+        let replaced =
+            tauri::utils::platform::current_exe().ok().and_then(|exe| target(os, &exe, self.appimage.as_deref()));
+        if !replaced.is_some_and(|replaced| replaceable(os, &replaced)) {
             return Err(UpdateFailure::NotWritable);
         }
         update.timeout = Some(DOWNLOAD_TIMEOUT);
