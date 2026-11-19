@@ -14,5 +14,5 @@ void bench_redraw(ht_scene_t *out);
 int bench_partial_count(void);
 const char *bench_partial_name(int i);
 // Frame i: the screen as drawn at one moment (`before`) and a moment later (`after`). The damage between them is what
-// pro_frame_present repaints.
+// a frame repaints. The last is a synthetic frame of motion: most of Overview 40 px to the right.
 void bench_partial(int i, ht_scene_t *before, ht_scene_t *after);

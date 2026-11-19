@@ -47,6 +47,10 @@ void bench_glass(const ht_scene_t *scene, uint16_t *strip, int first, int step);
 // The same strips through ht_raster's own loop, run by run, adding each run's time to its kind in `kinds`.
 void bench_glass_kinds(const ht_scene_t *scene, uint16_t *strip, bench_kinds_t *kinds, bench_clock_t clock);
 
+// The frame below (bench_frame), run by run, adding each run's time to its kind in `kinds`.
+void bench_frame_kinds(const ht_scene_t *prev, const ht_scene_t *next, uint16_t *strip, bench_kinds_t *kinds,
+                       bench_clock_t clock);
+
 // A frame as pro_frame_present paints it, without the panel: ht_damage, then each damage rectangle in strips (one
 // transfer when small). Returns the pixels repainted; `rects` gets the rectangle count.
 uint32_t bench_frame(const ht_scene_t *prev, const ht_scene_t *next, uint16_t *strip, int *rects);

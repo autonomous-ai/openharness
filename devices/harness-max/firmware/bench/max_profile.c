@@ -105,7 +105,7 @@ int main(void)
     printf("%-16s %9.3f   (every screen once, run by run)\n\n", "all", ms(total));
 
     // The frames that change part of a screen, as pro_frame_present repaints them.
-    printf("%-24s %5s %8s %8s\n", "partial frame", "rects", "px", "ms");
+    printf("%-24s %5s %8s %8s  %s\n", "partial frame", "rects", "px", "ms", "costliest kinds (ms)");
     for (int i = 0; i < bench_partial_count(); i++) {
         bench_partial(i, &before, &after);
         int rects = 0;
@@ -116,7 +116,19 @@ int main(void)
             bench_frame(&before, &after, strip, NULL);
             if (ns() - t < best) best = ns() - t;
         }
-        printf("%-24s %5d %8u %8.3f\n", bench_partial_name(i), rects, (unsigned)px, ms(best));
+        bench_kinds_t k = {0};
+        for (int rep = 0; rep < KIND_REPS; rep++) bench_frame_kinds(&before, &after, strip, &k, clock32);
+        printf("%-24s %5d %8u %8.3f ", bench_partial_name(i), rects, (unsigned)px, ms(best));
+        for (int shown = 0, done[BENCH_KINDS] = {0}; shown < 3; shown++) {
+            int top = -1;
+            for (int kind = 0; kind < BENCH_KINDS; kind++)
+                if (!done[kind] && k.ticks[kind] && (top < 0 || k.ticks[kind] > k.ticks[top])) top = kind;
+            if (top < 0) break;
+            done[top] = 1;
+            printf(" %s %.3f (%.0f k px)", bench_kind_name((bench_kind_t)top), ms(k.ticks[top] / KIND_REPS),
+                   (double)k.px[top] / KIND_REPS / 1000);
+        }
+        printf("\n");
     }
 
     // The strip turn into the panel's portrait raster (max_turn.c), as pro_panel_submit does it per strip.

@@ -38,12 +38,31 @@ static const struct {
     {"overview cell", s_overview, new_activity, 1000},
 };
 enum { PARTIAL_COUNT = sizeof PARTIALS / sizeof PARTIALS[0] };
+// And one frame of motion, which no screen has yet: Overview with everything but the glass-wide runs 40 px on, as a
+// row sliding a step would be. Most of the glass changes. A run that would cross the right edge stays put.
+#define MOTION_PX 40
 
-int bench_partial_count(void) { return PARTIAL_COUNT; }
-const char *bench_partial_name(int i) { return PARTIALS[i].name; }
+int bench_partial_count(void) { return PARTIAL_COUNT + 1; }
+const char *bench_partial_name(int i) { return i < PARTIAL_COUNT ? PARTIALS[i].name : "overview +40 px"; }
+
+static void motion(ht_scene_t *before, ht_scene_t *after)
+{
+    s_overview();
+    ht_scene_clear(before, ht_rgb(HT_THEME_CANVAS));
+    max_ui_render(before, T0);
+    *after = *before;
+    for (int i = 0; i < after->count; i++) {
+        ht_run_t *r = &after->runs[i];
+        if (r->w < HT_WIDTH && r->x + r->w + MOTION_PX <= HT_WIDTH) r->x += MOTION_PX;
+    }
+}
 
 void bench_partial(int i, ht_scene_t *before, ht_scene_t *after)
 {
+    if (i == PARTIAL_COUNT) {
+        motion(before, after);
+        return;
+    }
     PARTIALS[i].setup();
     ht_scene_clear(before, ht_rgb(HT_THEME_CANVAS));
     max_ui_render(before, T0);
