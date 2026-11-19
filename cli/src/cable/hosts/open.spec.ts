@@ -640,6 +640,19 @@ describe('a tap on Linux brings the window forward through the raise', () => {
     expect(found.opener.can(WARP)).toBe(true)
     expect(found.opener.can({})).toBe(true)
   })
+
+  // On GNOME the raise takes an app's class alone: an agent in an app with none would answer false at every tap.
+  it('Linux: can() asks the raise for an agent\'s window in the app its bundle names', () => {
+    const asked: Array<{ agent: boolean; app?: string }> = []
+    const r = recorder({
+      platform: 'linux',
+      raise: { ready: (window) => { asked.push(window); return window?.app === 'kitty' }, raise: async () => true },
+    })
+    expect(r.opener.can(target({ KITTY_WINDOW_ID: '1' }))).toBe(true)
+    expect(r.opener.can(WARP)).toBe(false)
+    expect(r.opener.can({})).toBe(false)
+    expect(asked).toEqual([{ agent: true, app: 'kitty' }, { agent: true, app: 'warp' }, { agent: true }])
+  })
 })
 
 // The last pick wins (docs/plans/2026-11-16-dial-pick-brings-app-design.md): the Mac's front app ends as the ring.
@@ -833,7 +846,28 @@ describe('a pick on the dial brings its app forward', () => {
     expect(opener.desktop).toBeUndefined()
   })
 
-  // herdr's agents have no window of their own, and Herdr.app is macOS's.
+  // A pick has no process: only an app whose class the raise knows, on a desktop found, has a window to bring.
+  it('Linux: a pick the raise cannot bring runs nothing and answers nothing', async () => {
+    const raised: Window[] = []
+    const asked: Array<{ agent: boolean; app?: string }> = []
+    let found = true
+    const { calls, opener } = recorder({
+      platform: 'linux',
+      raise: {
+        ready: (window) => { asked.push(window); return found && window?.app === 'vscode' },
+        raise: async (window) => { raised.push(window); return true },
+      },
+    })
+    expect(await opener.bring!('warp')).toBeUndefined()
+    expect(await opener.bring!('vscode')).toBe('ok')
+    found = false
+    expect(await opener.bring!('vscode')).toBeUndefined()
+    expect(asked).toEqual([{ agent: false, app: 'warp' }, { agent: false, app: 'vscode' }, { agent: false, app: 'vscode' }])
+    expect(raised).toEqual([{ app: 'vscode' }])
+    expect(calls).toEqual([])
+  })
+
+  // herdr's agents have no window of their own, and Herdr.app is macOS's: herdr has no class.
   it('Linux: a pick of herdr runs nothing', async () => {
     const raised: Window[] = []
     const { calls, opener } = recorder({

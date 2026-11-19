@@ -30,6 +30,7 @@ vi.mock('node:fs', async (importOriginal) => {
 const SWAY: LinuxDesktop = { kind: 'sway', socket: '/run/user/1000/sway-ipc.1000.7.sock' }
 const HYPRLAND: LinuxDesktop = { kind: 'hyprland', signature: 'abc_1700000000_x' }
 const NONE: LinuxDesktop = { kind: 'none', why: 'gnome without the extension' }
+const GNOME: LinuxDesktop = { kind: 'gnome', bus: 'unix:abstract=/tmp/dbus-u' }
 const CLASSES: Record<string, string[]> = { wezterm: ['org.wezfurlong.wezterm'], code: ['Code', 'code'] }
 
 type Process = { pid: number; ppid: number }
@@ -80,15 +81,15 @@ describe('createLinuxRaise', () => {
     const { deps } = login()
     deps.find = () => look.promise
     const raise = createLinuxRaise(deps)
-    expect(raise.ready()).toBe(false)
+    expect(raise.ready({ agent: true })).toBe(false)
     look.resolve(SWAY)
-    await vi.waitFor(() => expect(raise.ready()).toBe(true))
+    await vi.waitFor(() => expect(raise.ready({ agent: true })).toBe(true))
   })
 
   it('is not ready when the look found no desktop, and raises nothing', async () => {
     const { raise, lines, raised } = login({ desktops: [NONE] })
     await vi.waitFor(() => expect(lines).toEqual(['[device] raise · none · gnome without the extension']))
-    expect(raise.ready()).toBe(false)
+    expect(raise.ready({ agent: true })).toBe(false)
     expect(await raise.raise({ pid: 4242, app: 'wezterm' })).toBe(false)
     expect(raised).toEqual([])
   })
@@ -98,10 +99,32 @@ describe('createLinuxRaise', () => {
     deps.find = () => Promise.reject(new Error('look'))
     const raise = createLinuxRaise(deps)
     expect(await raise.raise({ pid: 4242, app: 'wezterm' })).toBe(false)
-    expect(raise.ready()).toBe(false)
+    expect(raise.ready({ agent: true })).toBe(false)
     // login() made a raise of its own over the same log, which found sway.
     expect(lines).toContain('[device] raise · none · no desktop session')
     expect(raised).toEqual([])
+  })
+
+  it('is ready for an agent on a desktop that raises by process, and for an app alone only with its class', async () => {
+    const { raise } = login()
+    await vi.waitFor(() => expect(raise.ready({ agent: true })).toBe(true))
+    expect(raise.ready({ agent: true, app: 'warp' })).toBe(true)
+    expect(raise.ready({ agent: false, app: 'wezterm' })).toBe(true)
+    expect(raise.ready({ agent: false, app: 'warp' })).toBe(false)
+    expect(raise.ready({ agent: false })).toBe(false)
+  })
+
+  // GNOME's extension matches a window by its app's class alone: an agent in an app with none has nothing to raise.
+  it('on GNOME is ready only for an app with a class, and runs no backend nor a new look for one without', async () => {
+    const { raise, raised, looks } = login({ desktops: [GNOME], table: async () => [{ pid: 100, ppid: 1 }] })
+    await vi.waitFor(() => expect(raise.ready({ agent: true, app: 'wezterm' })).toBe(true))
+    expect(raise.ready({ agent: true, app: 'warp' })).toBe(false)
+    expect(raise.ready({ agent: true })).toBe(false)
+    expect(await raise.raise({ pid: 100, app: 'warp' })).toBe(false)
+    expect(raised).toEqual([])
+    expect(await raise.raise({ pid: 100, app: 'wezterm' })).toBe(true)
+    expect(raised).toEqual([{ desktop: GNOME, target: { pids: [], classes: ['org.wezfurlong.wezterm'] } }])
+    expect(looks()).toBe(1)
   })
 
   it('waits for the look under way before it raises', async () => {
@@ -232,7 +255,7 @@ describe('systemLinuxRaise', () => {
       args.includes('get_version') ? { code: 0, stdout: RECORDED_SWAY.getVersion.stdout }
         : args.includes('get_tree') ? { code: 0, stdout: RECORDED_SWAY.tree } : undefined)
     await vi.waitFor(() => expect(lines).toEqual(['[device] raise · sway']))
-    expect(raise.ready()).toBe(true)
+    expect(raise.ready({ agent: true })).toBe(true)
     await raise.raise({ app: 'kitty' })
     expect(runs).toContainEqual(['/usr/bin/swaymsg', ['-s', sway, '-t', 'get_tree'], 10_000])
   })
