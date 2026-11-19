@@ -2040,8 +2040,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     stoppedAgents,
     syncRecapPool,
     input,
-    // A first task is the person's own message (core/input.ts).
-    submitAgent: inputs.submitAgent,
+    // A first task is the person's own message, kept by the controller until its user row confirms it (core/input.ts).
+    submitFirstTask: inputs.submitFirstTask,
     deviceInput,
     homes: { copilot: env.COPILOT_HOME, grok: env.GROK_HOME, agy: env.AGY_HOME },
     // OpenClaw's session key is on its TUI's footer and nowhere else. The scrollback above the screen keeps its title,

@@ -2174,16 +2174,18 @@ describe('binding an OpenClaw pane, read from its screen', () => {
         expect(run.deps.registry.takeFirstTask).toHaveBeenCalledOnce()
       })
 
-      it('a stream up already took the pass\'s own reading: the pass hands it over, with no second capture', async () => {
+      // The release changed the row, so a pass that then reads this TUI's folder for the first time ends there.
+      it('a stream up already: the pass that clears the hold hands the task over all the same, once', async () => {
         const run = handing(() => ready)
         const row = pane({ sessionId: 'agent:main:plain', firstTask: TASK, identityHold: OPENCLAW_STATES.noGateway })
         run.byAgent.set('a1', row)
         vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
-        vi.mocked(run.deps.registry.takeFirstTask).mockResolvedValue(TASK)
+        // As the registry does: the task comes off the row once.
+        vi.mocked(run.deps.registry.takeFirstTask).mockResolvedValueOnce(TASK).mockResolvedValue(null)
         await run.binding.bindObservedAgent(tui())
         await vi.waitFor(() => expect(run.deps.submitFirstTask).toHaveBeenCalledWith('a1', TASK))
-        expect(run.deps.attachSession).toHaveBeenCalledOnce()
-        expect(run.deps.capturePane).toHaveBeenCalledOnce()
+        expect(run.deps.openclawStateDir).toHaveBeenCalledWith(7714)
+        expect(run.deps.submitFirstTask).toHaveBeenCalledOnce()
       })
 
       it('a pane that cannot be read once the stream is up keeps the task for a later pass', async () => {
@@ -2390,6 +2392,18 @@ describe('binding an OpenClaw pane, read from its screen', () => {
       expect(await pass(605, starting, START + 600_000)).toBe(false)
       expect(await pass(779, starting, START + 600_000)).toBe(false)
       expect(await pass(780, starting, START + 600_000)).toBe(true)
+    })
+
+    it('a TUI start that cannot be read counts from the row\'s registration or the first pass', async () => {
+      const unread = tui({ processIdentity: { pid: 7714, startMarker: 'unknown', executable: 'openclaw' } })
+      vi.setSystemTime(START + 60_000)
+      await run.binding.bindObservedAgent(unread)
+      vi.setSystemTime(START + 239_000)
+      await run.binding.bindObservedAgent(unread)
+      expect(row.launch).toBeUndefined()
+      vi.setSystemTime(START + 240_000)
+      await run.binding.bindObservedAgent(unread)
+      expect(row.launch).toEqual(FAILED)
     })
 
     it('a daemon restarted over a TUI that started 10 minutes ago counts from its own first pass', async () => {
