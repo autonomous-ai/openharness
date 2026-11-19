@@ -71,6 +71,9 @@ path at 1920 x 480.
 
 ## On the bench
 
+Before it arrives, `bench/` times the display path (raster, turn, copies) on any ESP32-P4 v3, such as a Harness Pro,
+from its `ota_1` slot: see `bench/README.md`.
+
 When the board arrives, check and write the numbers here:
 
 1. It boots: the PSRAM (hex, 200 MHz) and flash (QIO) settings are the module's as documented, never seen running.
