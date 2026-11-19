@@ -720,6 +720,8 @@ void pro_app_start(void)
     s_lock = xSemaphoreCreateRecursiveMutex();
     assert(s_lock);
     max_ui_reset();
+    max_ui_share(true);   // the row's blurs: the frame path's two tasks do them, out of the model's lock
+    max_present_work(max_ui_work);
     s_dirty = true;
     pro_frame_init();
     pro_display_set_brightness(config_load_brightness());

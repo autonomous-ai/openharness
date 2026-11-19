@@ -3,7 +3,8 @@
 // waits for it, so a buffer written again too soon, or a frame that returns before its strips land, shows on the glass.
 // Every screen of max_render.c, whole and changed into the next, must leave the glass exactly as one ht_raster of the
 // scene; the strips across a cell run that pod_draw.c resamples (its statics) must be the render task's. So must a change
-// in the last row alone. run.sh builds this with ThreadSanitizer too.
+// in the last row alone. The UI's blurs are the frame's, as the app has them (max_ui_share): both tasks do them before
+// the strips, and the glass is the one they give when done in the build. run.sh builds this with ThreadSanitizer too.
 #define MAX_RENDER_SCREENS_ONLY
 #include "max_render.c"
 
@@ -13,6 +14,7 @@
 
 #include "max_present.h"
 #include "max_strips.h"
+#include "max_ui_draw.h"   // max_layer_forget
 #include "pod/pod_draw.h"
 
 static int checks, failures;
@@ -158,8 +160,34 @@ static void last_row(void)
     check_frame("full damage and the last row", &b);
 }
 
+// App Detail's row as it closes, its blurs left to the frame (max_ui_share): both tasks do them before any strip, and
+// the glass is the one those blurs done in the build give. A scene built and never shown (its blurs never done) leaves
+// no pet's image unmade for the next frame to take up: that frame paints them again.
+static void shared_blurs(void)
+{
+    static uint16_t built[HT_WIDTH * HT_HEIGHT];
+    for (int shared = 0; shared <= 1; shared++) {
+        max_layer_forget();
+        max_ui_share(shared);
+        orca();
+        show(MAX_VIEW_AGENT, "rate");
+        frame(T0 - 2000);
+        max_show(MAX_VIEW_OVERVIEW);
+        frame(T0 - 300);   // the close starts
+        frame(T0 - 200);   // never shown
+        frame(T0 - 200);
+        a = S;
+        present(NULL, &a, shared ? "row closing, its blurs shared" : "row closing");
+        if (!shared) memcpy(built, glass, sizeof glass);
+        else CHECK(!memcmp(glass, built, sizeof glass));
+    }
+}
+
 int main(void)
 {
+    max_present_work(max_ui_work);
+    shared_blurs();
+    max_ui_share(true);   // as the app has it
     last_row();
     every_screen(2);
     CHECK(helper_pushes > 0);   // the helper did paint

@@ -11,6 +11,9 @@
 // ht_damage outlines a layout change in pairs of rows. On a glass of odd height (the bar's 415 rows) the last row is in
 // no pair, and a change there is dropped from the outline; so the frame adds the last row's changes back itself.
 //
+// The scene can leave work to the frame (max_present_work: the UI's blurs, its costliest pixels): both tasks share it as
+// they share the strips, before either paints one, since the strips read it.
+//
 // pod_draw.c keeps state between rasters that only one task may touch: a pet frame drawn by the resampler (a cell run
 // not baked flat) works in its statics, and the first raster of a flat cell bakes it into a shared table. So the flat
 // cells a frame paints are baked before the helper starts, and a strip across an unbaked cell run is the render task's.
@@ -59,6 +62,7 @@ static SemaphoreHandle_t s_helper_done;
 static TaskHandle_t s_helper;
 static bool s_started;
 static int s_cores = 2;
+static void (*s_work)(int worker);
 
 typedef struct {
     int worker, slot;
@@ -119,6 +123,7 @@ static void helper_task(void *arg)
         int open = GATE_OPEN;
         if (!atomic_compare_exchange_strong(&s_gate, &open, GATE_JOINED)) continue;   // a frame done without it
         lane_t l = {1, 0, 0};
+        if (s_work) s_work(1);
         take_strips(&l);
         land(&l);
         s_helper_us = l.raster_us;
@@ -228,6 +233,9 @@ uint32_t max_present(const ht_scene_t *prev, const ht_scene_t *next, uint32_t *p
     if (shared) {
         atomic_store(&s_gate, GATE_OPEN);
         xTaskNotifyGive(s_helper);
+    }
+    if (s_work) s_work(0);
+    if (shared) {
         for (int i = 0; i < strips; i++) {
             const ht_rect_t strip = strip_at(i);
             if (serial(strip)) paint(&me, strip);
@@ -246,3 +254,4 @@ uint32_t max_present(const ht_scene_t *prev, const ht_scene_t *next, uint32_t *p
 }
 
 void max_present_cores(int cores) { s_cores = cores; }
+void max_present_work(void (*work)(int worker)) { s_work = work; }

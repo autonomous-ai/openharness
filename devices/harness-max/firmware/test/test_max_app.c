@@ -197,10 +197,14 @@ void pro_frame_init(void) {}
 static uint32_t PUSHED_PX;
 static int PRESENTS, SHOWS;
 static bool OWED;
+static void (*WORK)(int worker);   // what the scene left to the frame path (the row's blurs)
+void max_present_work(void (*work)(int worker)) { WORK = work; }
 uint32_t max_present(const ht_scene_t *prev, const ht_scene_t *next, uint32_t *pushed_px)
 {
     (void)prev; (void)next;
     CHECK(!OWED);   // the last frame was shown before the next is painted
+    CHECK(WORK == max_ui_work);   // the app leaves the row's blurs to the frame path, which does them first
+    WORK(0);
     PRESENTS++;
     OWED = PUSHED_PX != 0;
     *pushed_px = PUSHED_PX;
