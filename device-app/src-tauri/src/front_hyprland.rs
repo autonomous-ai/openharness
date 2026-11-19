@@ -1,5 +1,141 @@
 //! The app in front on Hyprland: the event socket says the window changed, the request socket names it.
 
+use crate::front::Stop;
+use crate::front_x11::exe_name;
+use std::io::{self, BufRead, BufReader, Read, Write};
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+#[cfg(target_os = "linux")]
+use {
+    crate::front::{FrontSource, Source, on_thread},
+    crate::types::Log,
+    std::sync::Arc,
+};
+
+/// An event line is outside text (the v1 window event carries a title): past this it is read past, never kept.
+pub const LINE_MAX: usize = 4096;
+/// `j/activewindow`'s answer is a few hundred bytes; one past this names no app.
+pub const ANSWER_MAX: usize = 64 * 1024;
+/// A Hyprland that takes the request and never answers would hold the source: the ask gives up after this.
+const ASK_WAIT: Duration = Duration::from_secs(2);
+
+/// The exe name of the active window's process: once at start, then on each change.
+#[cfg(target_os = "linux")]
+pub struct HyprlandFront {
+    pub log: Arc<dyn Log>,
+}
+
+#[cfg(target_os = "linux")]
+impl FrontSource for HyprlandFront {
+    fn start(&self, changed: Box<dyn Fn(String) + Send + Sync>) {
+        on_thread(self.log.clone(), Source::Hyprland, move || {
+            let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR").filter(|dir| !dir.is_empty());
+            let signature = std::env::var("HYPRLAND_INSTANCE_SIGNATURE");
+            let (Some(runtime_dir), Ok(signature)) = (runtime_dir, signature) else { return Stop::NotFollowed };
+            watch(Path::new(&runtime_dir), &signature, Path::new("/proc"), &*changed)
+        });
+    }
+}
+
+/// The event and request sockets of the Hyprland instance `signature` names. None unless the signature is one folder
+/// name: it comes from the environment, and must not reach outside `hypr/`.
+pub fn sockets(runtime_dir: &Path, signature: &str) -> Option<(PathBuf, PathBuf)> {
+    if signature.is_empty() || signature == "." || signature == ".." || signature.contains(['/', '\0']) {
+        return None;
+    }
+    let hypr = runtime_dir.join("hypr").join(signature);
+    Some((hypr.join(".socket2.sock"), hypr.join(".socket.sock")))
+}
+
+/// The event that says the active window changed. Its own text is never used: the v1 event's carries a title, and the
+/// answer to an ask names the app.
+pub fn is_active_window(line: &str) -> bool {
+    line.starts_with("activewindowv2>>")
+}
+
+/// The active window's pid in `j/activewindow`'s answer. None for `{}` (no window), a pid that is not above 0, or an
+/// answer over ANSWER_MAX.
+pub fn active_pid(answer: &[u8]) -> Option<u32> {
+    if answer.len() > ANSWER_MAX {
+        return None;
+    }
+    let answer: serde_json::Value = serde_json::from_slice(answer).ok()?;
+    u32::try_from(answer.get("pid")?.as_i64()?).ok().filter(|&pid| pid > 0)
+}
+
+/// Tells the app in front now, then after each `activewindowv2` event, until the events end. `events` is connected
+/// before the first ask, so a change between the two is not missed.
+pub fn follow(
+    events: impl Read,
+    ask: &dyn Fn() -> io::Result<Vec<u8>>,
+    proc_root: &Path,
+    changed: &dyn Fn(String),
+) -> Stop {
+    let name = |answer: &[u8]| active_pid(answer).and_then(|pid| exe_name(proc_root, pid)).unwrap_or_default();
+    let Ok(answer) = ask() else { return Stop::NotFollowed };
+    changed(name(&answer));
+    let mut events = BufReader::new(events);
+    let mut line = Vec::new();
+    loop {
+        match next_line(&mut events, &mut line) {
+            Err(_) => return Stop::Ended,
+            Ok(true) if std::str::from_utf8(&line).is_ok_and(is_active_window) => {
+                // An answer that cannot be had is no app: the dial must not keep following the last one.
+                changed(ask().map(|answer| name(&answer)).unwrap_or_default());
+            }
+            Ok(_) => {}
+        }
+    }
+}
+
+/// Reads the next line into `line`, without its newline. False for a line over LINE_MAX, which is read past and not
+/// kept. An error at the end: a half line there is no event.
+fn next_line(events: &mut impl BufRead, line: &mut Vec<u8>) -> io::Result<bool> {
+    line.clear();
+    let mut over = false;
+    loop {
+        let chunk = match events.fill_buf() {
+            Ok([]) => return Err(io::ErrorKind::UnexpectedEof.into()),
+            Ok(chunk) => chunk,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        let end = chunk.iter().position(|&byte| byte == b'\n');
+        let part = &chunk[..end.unwrap_or(chunk.len())];
+        over = over || line.len() + part.len() > LINE_MAX;
+        if over {
+            line.clear();
+        } else {
+            line.extend_from_slice(part);
+        }
+        let read = end.map_or(chunk.len(), |end| end + 1);
+        events.consume(read);
+        if end.is_some() {
+            return Ok(!over);
+        }
+    }
+}
+
+/// Follows the Hyprland instance under `runtime_dir`. No socket there is `NotFollowed`.
+fn watch(runtime_dir: &Path, signature: &str, proc_root: &Path, changed: &dyn Fn(String)) -> Stop {
+    let Some((events, requests)) = sockets(runtime_dir, signature) else { return Stop::NotFollowed };
+    let Ok(events) = UnixStream::connect(events) else { return Stop::NotFollowed };
+    follow(events, &|| ask(&requests), proc_root, changed)
+}
+
+/// `j/activewindow` on a connection of its own, as Hyprland answers one request per connection: the answer read to its
+/// end, or to one byte past ANSWER_MAX.
+fn ask(requests: &Path) -> io::Result<Vec<u8>> {
+    let mut stream = UnixStream::connect(requests)?;
+    stream.set_read_timeout(Some(ASK_WAIT))?;
+    stream.set_write_timeout(Some(ASK_WAIT))?;
+    stream.write_all(b"j/activewindow")?;
+    let mut answer = Vec::new();
+    stream.take(ANSWER_MAX as u64 + 1).read_to_end(&mut answer)?;
+    Ok(answer)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
