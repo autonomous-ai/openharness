@@ -1,5 +1,5 @@
 /** Four durable reservations. An unsettled writer keeps its slot across core replacement. */
-import { constants, lstatSync, mkdirSync, openSync, writeFileSync, ftruncateSync, fstatSync, fsync,
+import { constants, lstatSync, mkdirSync, openSync, readSync, writeFileSync, ftruncateSync, fstatSync, fsync,
   unlinkSync, rmdirSync, linkSync, type BigIntStats } from 'node:fs'
 import { lstat, open, type FileHandle } from 'node:fs/promises'
 import { createHash, randomBytes } from 'node:crypto'
@@ -43,14 +43,30 @@ function absent(pid: number): boolean {
 const historyName = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}-[a-f0-9-]{36}\.history$/.test(value)
 type Owner = { core: number; writer: number | null; settled: boolean; key: string; destination?: string }
   & ({ version: 1 } | { version: 2; lease: string })
-function readOwner(path: string): { owner: Owner; text: string } {
-  const text = readPrivateStateFile(path, 1024), value = JSON.parse(text) as Owner
+function parseOwner(text: string): { owner: Owner; text: string } {
+  const value = JSON.parse(text) as Owner
   if ((value.version !== 1 && (value.version !== 2 || typeof value.lease !== 'string' || !/^[a-f0-9]{32}$/.test(value.lease)))
     || !Number.isSafeInteger(value.core) || value.core <= 0 || typeof value.settled !== 'boolean'
     || (value.writer !== null && (!Number.isSafeInteger(value.writer) || value.writer <= 0))
     || typeof value.key !== 'string' || !/^\d+:\d+$/.test(value.key)
     || (value.destination !== undefined && !historyName(value.destination))) throw new Error('checkpoint owner unavailable')
   return { owner: value, text }
+}
+function readOwner(path: string): { owner: Owner; text: string } {
+  return parseOwner(readPrivateStateFile(path, 1024))
+}
+function readOpenedOwner(fd: number, before: BigIntStats): Owner {
+  if (before.size > 1024n) throw new Error('checkpoint owner unavailable')
+  const bytes = Buffer.alloc(Number(before.size))
+  for (let position = 0; position < bytes.length;) {
+    // Positioned reads leave the writer at zero, including after a short read.
+    const count = readSync(fd, bytes, position, bytes.length - position, position)
+    if (!count) throw new Error('checkpoint owner unavailable')
+    position += count
+  }
+  const after = fstatSync(fd, { bigint: true }); privateFile(after)
+  if (version(after) !== version(before)) throw new Error('checkpoint owner changed')
+  return parseOwner(bytes.toString('utf8')).owner
 }
 function retained(): void { console.error('[checkpoint] STAGE_CLEANUP_UNAVAILABLE') }
 function expired(): Error { return Object.assign(new Error('checkpoint disk wait expired'), { code: 'CHECKPOINT_STAGE_TIMEOUT' }) }
@@ -182,7 +198,8 @@ export class CheckpointStages {
         const work = (async () => {
           directoryIdentity(directory, directoryKey)
           if (recordKey) identity(record, recordKey)
-          const fd = openSync(record, constants.O_WRONLY | constants.O_NOFOLLOW | (recordKey ? 0 : constants.O_CREAT | constants.O_EXCL), 0o600)
+          const access = process.platform === 'win32' ? constants.O_WRONLY : constants.O_RDWR
+          const fd = openSync(record, access | constants.O_NOFOLLOW | (recordKey ? 0 : constants.O_CREAT | constants.O_EXCL), 0o600)
           try {
             const opened = fstatSync(fd, { bigint: true }); privateFile(opened)
             const openedKey = nativeFileKey(opened)
@@ -190,7 +207,8 @@ export class CheckpointStages {
             directoryIdentity(directory, directoryKey)
             identity(record, openedKey)
             if (recordKey) {
-              const saved = readOwner(record).owner
+              // Windows' secure reader also proves native root containment; retain that path.
+              const saved = process.platform === 'win32' ? readOwner(record).owner : readOpenedOwner(fd, opened)
               if (saved.version !== 2 || owner.version !== 2 || saved.lease !== owner.lease) throw new Error('checkpoint owner changed')
             }
             // Keep the previous complete owner if a write is refused before any bytes reach disk.

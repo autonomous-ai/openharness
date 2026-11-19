@@ -321,3 +321,36 @@ cases, the three caller suites pass 110, and types pass (receipts
 file passes all 19 cases after the two extra safety controls (`20261119T232602.623506Z-51043`).
 Independent review approves the runtime correction and final tests; measured CPU acceptance
 remains open. No prior failed or noisy timing result is relabeled or discarded.
+
+## Design: read the owner through its existing descriptor
+
+The next fixed ABBA/BAAB comparison retains a total/system CPU hold at both payload sizes.
+Its complete 512 cycles remain evidence; first-cycle JIT differences do not establish a CPU
+improvement. The filesystem trace and source identify three owner updates per publication
+that each reopen a file already held and checked by the writer, solely to inspect its lease.
+
+On POSIX, open the owner read/write and read its existing contents through that descriptor.
+Read at explicit positions so the subsequent write still starts at zero. Allocate no more
+than the existing 1 KiB owner limit, complete bounded short reads, refuse premature EOF,
+and compare private-file facts and descriptor version before and after reading. Parse the
+same owner schema and require the same random lease before writing or truncating. Keep all
+filename/directory identity checks, flushes, post-flush proofs and cleanup generation pins.
+Windows retains its existing write descriptor and secure path reader: that reader also proves
+native root containment, and Windows write opens can change ctime.
+
+There is no new data, cache, API, process, queue, retry or runtime dependency. Four slots and
+one in-flight update per slot remain the concurrency/growth bounds. Read work stays bounded
+to one 1 KiB owner, with at most 1,024 positive reads. Authority remains this account's private
+file and the exact live lease. Failure retains the existing named refusal and reservation;
+rollback restores the extra read descriptor, without migration or compatibility changes.
+macOS and Linux use the change; Windows keeps its established path (native validation deferred
+by the owner). Tests first demonstrate the extra open and exercise short/failed/changed reads,
+then run all stage and caller tests, types, independent review and the same cost workload.
+
+All seven new POSIX cases fail on the previous runtime; the three malformed/oversize controls
+already pass (`20261119T234522.145034Z-71553`, 1.5 s). After the correction, all eight affected
+stage/caller suites pass 181 cases in 25.4 s and TypeScript passes in 47.1 s
+(`20261119T234621.989101Z-72458`). Independent review approves the unchanged runtime/tests
+(`20261119T234658.525833Z-73101`). Generation tests already cover a preexisting changed lease;
+durability cases retain opened-path replacement and post-flush refusal coverage. These are source
+and safety results only. The next fixed scoped cost comparison remains required.
