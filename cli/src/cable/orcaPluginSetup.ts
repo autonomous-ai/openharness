@@ -126,7 +126,11 @@ export function createOrcaPluginSetup(deps: OrcaPluginSetupDeps): OrcaPluginSetu
             // to mend: Orca's CLI is not run again at each settle.
             if (result.error !== 'not-running') wait()
             return
-          case 'failed': return failed(result.error)
+          case 'failed':
+            // A `disable` that landed while Orca ran past its deadline found nothing to uninstall, and Orca may still
+            // install it: owed, and taken out at the hour's pass.
+            if (deps.removed().orca) undoOwed = true
+            return failed(result.error)
         }
       } catch {
         failed('error')
