@@ -21,6 +21,7 @@ import type { AutonomousDeviceInput } from '../deviceInput.js'
 import { isRecentlyDeleted } from '../../lib/deletedSessions.js'
 import { transcriptIsFirstTurn } from '../../lib/firstTurnReplay.js'
 import { errorKind, sid } from '../../lib/log.js'
+import { startMarkerMs } from '../../lib/processProof.js'
 import { matchesLaunchReceipt, projectDisplayName, type registry, type RegisteredSession } from '../../lib/registry.js'
 import type { SessionInputController } from '../../lib/sessionInput.js'
 import { findLiveSession, findResumedTranscript } from '../../lib/sessionRepair.js'
@@ -239,8 +240,7 @@ export function createBinding({
       delete clock.pausedSince
     }
     if (screen.state === 'busy' && input.awaitingConfirmation(agent.agentId)) return false
-    const started = Date.parse(tui.startMarker)
-    const from = Math.max(agent.registeredAt, Number.isFinite(started) ? started : 0, clock.seenAt)
+    const from = Math.max(agent.registeredAt, startMarkerMs(tui.startMarker) ?? 0, clock.seenAt)
     return now - from - clock.pausedMs >= FIRST_TASK_BOUND_MS
   }
   /**
