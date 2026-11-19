@@ -332,8 +332,10 @@ jobs:
           install -m 0755 "$downloads/herdr" "$HOME/.local/bin/herdr"
           tar -xzf "$downloads/zellij.tar.gz" -C "$HOME/.local/bin" zellij
           # A .deb installs its programs in /usr/bin, and apt brings the libraries it needs.
+          # kitty draws through Mesa's software renderer, and exits at start without fontconfig and a font
+          # (cli/src/testing/recordedKitty.ts).
           sudo bash ../scripts/apt-install.sh tmux zsh lsof xvfb openbox wmctrl xterm x11-utils sway foot \
-            fonts-dejavu-core "$downloads/wezterm.deb"
+            kitty libgl1-mesa-dri fontconfig fonts-dejavu-core "$downloads/wezterm.deb"
           # As in the shards: zsh's compinit stops every agent's pane at a question while a
           # completion folder is writable by others.
           insecure=$(zsh -fc 'autoload -U compaudit && compaudit' 2>/dev/null | grep '^/' | sort -u || true)
@@ -346,6 +348,7 @@ jobs:
             "$HOME/.local/bin/herdr" --version
             "$HOME/.local/bin/zellij" --version
             wezterm --version
+            kitty --version
             sway --version
           } | tee -a "$GITHUB_STEP_SUMMARY"
       - run: npm ci --no-audit --no-fund
