@@ -31,6 +31,13 @@ export interface AppFilterDeps {
 
 const has = (counts: ReadonlyMap<string, number>, app: string): boolean => (counts.get(app) ?? 0) > 0
 
+/** Every agent but the resting ones (in front and not known), while no app has a known agent; all of them when only resting
+ *  ones are there, as their page is then all there is to show. */
+const awake = (all: ReadonlyMap<string, number>, inFront: ReadonlyMap<string, number>): ReadonlyMap<string, number> => {
+  const left = new Map([...all].map(([app, n]) => [app, n - (inFront.get(app) ?? 0)] as const).filter(([, n]) => n > 0))
+  return left.size ? left : all
+}
+
 const sameCounts = (a: ReadonlyMap<string, number>, b: ReadonlyMap<string, number>): boolean =>
   a.size === b.size && [...a].every(([app, n]) => b.get(app) === n)
 
@@ -60,7 +67,7 @@ export class AppFilter {
   constructor(private readonly deps: AppFilterDeps) {}
 
   /**
-   * The app shown, `undefined` with no agents. The app in front getting known agents after it settled, the shown app
+   * The app shown, `undefined` with no agents. The app in front getting known or resting agents after it settled, the shown app
    * emptying, and the default's page of agents not known yet giving way, are decided here, when the counts are read.
    */
   shown(): string | undefined {
@@ -76,7 +83,7 @@ export class AppFilter {
     if (this.showing !== undefined && has(counts, this.showing) && !this.givesWay(known, this.showing)) return this.showing
     this.pickedOnDial = false
     this.byDefault = true
-    this.show(this.fallback(counts, known), 'empty')
+    this.show(this.fallback(counts, known, inFront), 'empty')
     return this.showing
   }
 
@@ -137,10 +144,15 @@ export class AppFilter {
     return this.byDefault && known.size > 0 && !has(known, app)
   }
 
-  private fallback(counts: ReadonlyMap<string, number>, known: ReadonlyMap<string, number>): string | undefined {
+  private fallback(
+    counts: ReadonlyMap<string, number>,
+    known: ReadonlyMap<string, number>,
+    inFront: ReadonlyMap<string, number>,
+  ): string | undefined {
     if (this.settledFront !== undefined && has(counts, this.settledFront)) return this.settledFront
-    // Agents not known yet count only when no app has a known one: their page is then all there is to show.
-    const by = known.size ? known : counts
+    // Agents not known yet count only when no app has a known one: their page is then all there is to show. Resting ones
+    // still weigh nothing, or 16 idle sessions would outweigh the agents the scan found.
+    const by = known.size ? known : awake(counts, inFront)
     let most = 0
     let tied: string[] = []
     for (const [app, n] of by) {
