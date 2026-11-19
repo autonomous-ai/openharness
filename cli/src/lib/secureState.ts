@@ -204,8 +204,11 @@ export function hardenPrivateStateFileIfPresent(
  */
 export type StateKind = 'trust' | 'cache'
 
-/** `mode` is the new file's (0o600 unless given). `exclusive` publishes only when the file is not there yet. */
-export interface AtomicWriteOptions { mode?: number; exclusive?: boolean }
+/**
+ * `mode` is the new file's (0o600 unless given). `exclusive` publishes only when the file is not there yet. `durable`
+ * flushes a cache write as a trust write is flushed: the last save before its process stops.
+ */
+export interface AtomicWriteOptions { mode?: number; exclusive?: boolean; durable?: boolean }
 
 export const RENAME_TRIES = 10
 export const RENAME_WAIT_MS = 100
@@ -268,8 +271,10 @@ function publishOnce(temporary: string, file: string): boolean {
 
 /**
  * Writes [file] whole or not at all: a reader in any process sees the old complete file or the new one. A temporary
- * file in the same folder is written, flushed and renamed over it (linked, for `exclusive`), then the folder is
- * flushed. True when written. False only for `exclusive`, when the file is already there.
+ * file in the same folder is written and renamed over it (linked, for `exclusive`). A trust write, an exclusive one
+ * and a `durable` one flush the temporary file before and the folder after; a cache write flushes neither, so a power
+ * cut can leave it empty, which its reader sets aside (`readState`). True when written. False only for `exclusive`,
+ * when the file is already there.
  */
 export function atomicWriteFile(
   file: string,
@@ -278,6 +283,10 @@ export function atomicWriteFile(
   options: AtomicWriteOptions = {},
 ): boolean {
   if (kind === 'trust') hardenPrivateStateFileIfPresent(file)
+  // The rename alone keeps a reader from half a file; the flushes made a full recap save cost 90-143 ms instead of 12
+  // (2026-11-19). An exclusive file is made once and never written again (the computer id the backend binds this
+  // computer to): no later write would put back what a power cut lost, so it is flushed whatever its kind.
+  const durable = kind === 'trust' || options.exclusive === true || options.durable === true
   const mode = options.mode ?? PRIVATE_FILE_MODE
   const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
   let published = false
@@ -287,7 +296,7 @@ export function atomicWriteFile(
       writeFileSync(fd, data)
       // open's mode is narrowed by the umask: the file gets exactly its own.
       fchmodSync(fd, mode)
-      fsyncSync(fd)
+      if (durable) fsyncSync(fd)
     } finally { closeSync(fd) }
     if (options.exclusive) {
       if (!publishOnce(temporary, file)) return false
@@ -295,7 +304,7 @@ export function atomicWriteFile(
       renameOver(temporary, file)
     }
     published = true
-    syncStateDirectory(dirname(file))
+    if (durable) syncStateDirectory(dirname(file))
     return true
   } catch (error) {
     if (published) throw new AtomicWriteUnconfirmed(error)
