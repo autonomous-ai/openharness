@@ -356,6 +356,7 @@ from before (`src/harnessd/services.spec.ts`, `e2e/messagesSkew.e2e.ts`).
   [the spec](../../../docs/specs/2026-11-15-device-wave1-checks.md)): the devices process may move to the pane a hook
   named, once it has checked that the pane's process is the agent's or one of its parents (`cable/hosts/tmux.ts`). It
   runs `select-window` and `select-pane` on the pane's own session, which every client on that session then shows, and
-  `switch-client` only when it found no client of the person's on that session; that names the client it moves. It
-  runs nothing on a session Harness made. It never types, creates or closes anything there. Harness's panes and the person's can share one tmux server, so the rule is held
-  per pane and session, by the owner tag the hook reads (`hook/notify.mjs` `paneFacts`).
+  `switch-client` only when it found no app holding a client of that session; that names the client it moves. It runs
+  nothing on a session Harness made. It never types, creates or closes anything there. Harness's panes and the
+  person's can share one tmux server, so the rule is held per pane and session, by the owner tag the hook reads
+  (`hook/notify.mjs` `paneFacts`).
