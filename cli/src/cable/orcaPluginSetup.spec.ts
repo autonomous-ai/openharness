@@ -45,6 +45,8 @@ function rig({ platform = 'darwin', dial = true, version, held }: {
   }
   const counted: Array<[SetupCount] | [SetupCount, string]> = []
   const timers: Array<{ ms: number; run: () => void }> = []
+  /** Each read of dial-skill.json, by what it was read for. */
+  const reads: Array<'removed' | 'connected'> = []
   const setUp = vi.fn(async (): Promise<OrcaSetUp> => {
     state.during?.()
     await state.hold
@@ -60,8 +62,14 @@ function rig({ platform = 'darwin', dial = true, version, held }: {
     version: () => state.build,
     setUp,
     remove,
-    removed: () => state.removed,
-    connected: () => state.connected,
+    removed: () => {
+      reads.push('removed')
+      return state.removed
+    },
+    connected: () => {
+      reads.push('connected')
+      return state.connected
+    },
     recorded: () => {
       if (state.fault) throw state.fault
       return state.record
@@ -71,7 +79,7 @@ function rig({ platform = 'darwin', dial = true, version, held }: {
     after: (ms, run) => { timers.push({ ms, run }) },
     count: (kind, reason) => { counted.push(reason === undefined ? [kind] : [kind, reason]) },
   })
-  return { state, counted, timers, setUp, remove, setup }
+  return { state, counted, timers, reads, setUp, remove, setup }
 }
 
 describe('Harness Device\'s plugin for Orca, set up from the devices\' process', () => {
@@ -109,13 +117,29 @@ describe('Harness Device\'s plugin for Orca, set up from the devices\' process',
   it.each([
     ['recorded', { version: VERSION }],
     ['held', { held: VERSION }],
-  ])('%s at this version: no Orca run', async (_, given) => {
+  ])('%s at this version: no Orca run, and no file read', async (_, given) => {
     const r = rig(given)
+    // A removal since was `disable`'s to carry out, as it uninstalls the plugin itself.
+    r.state.removed = { orca: true }
     await r.setup.pass()
     expect(r.setUp).not.toHaveBeenCalled()
     expect(r.remove).not.toHaveBeenCalled()
+    expect(r.reads).toEqual([])
     expect(r.counted).toEqual([])
     expect(r.timers).toEqual([])
+  })
+
+  it('dial-skill.json read once before Orca is asked: the removals with a dial here, orcaConnected with none', async () => {
+    const r = rig()
+    r.state.setUps.push({ orca: 'absent', error: 'not-running' })
+    await r.setup.pass()
+    expect(r.setUp).toHaveBeenCalledTimes(1)
+    expect(r.reads).toEqual(['removed'])
+
+    const none = rig({ dial: false })
+    await none.setup.pass()
+    expect(none.setUp).not.toHaveBeenCalled()
+    expect(none.reads).toEqual(['connected'])
   })
 
   it('recorded at another version: brought current and counted updated, a dial here or not', async () => {
@@ -385,7 +409,11 @@ describe('Harness Device\'s plugin for Orca, set up from the devices\' process',
 
   it.each<[string, (r: ReturnType<typeof rig>) => void]>([
     ['unread removals', (r) => { r.state.removed = { unread: true } }],
-    ['an unread orcaConnected', (r) => { r.state.connected = { connected: false, unread: true } }],
+    // Read only on a computer with no dial and nothing set up, where it decides the first set-up.
+    ['an unread orcaConnected', (r) => {
+      r.state.record = { dial: false }
+      r.state.connected = { connected: false, unread: true }
+    }],
     ['a record not yet read', (r) => { r.state.record = undefined }],
   ])('%s: nothing', async (_, given) => {
     const r = rig({ version: '9.9.8' })
@@ -477,9 +505,13 @@ describe('orcaPluginParts', () => {
     return { deps, calls }
   }
 
-  it('the carried version, null from the sources', () => {
+  it('the carried version, parsed once; null from the sources', () => {
     const { deps } = plugin([])
-    expect(orcaPluginParts(deps).version()).toBe('1.2.3')
+    const files = vi.fn(deps.files)
+    const parts = orcaPluginParts({ ...deps, files })
+    expect(parts.version()).toBe('1.2.3')
+    expect(parts.version()).toBe('1.2.3')
+    expect(files).toHaveBeenCalledTimes(1)
     expect(orcaPluginParts(deps).platform).toBe('darwin')
     expect(orcaPluginParts({ ...deps, files: () => null }).version()).toBeNull()
   })
