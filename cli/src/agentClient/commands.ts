@@ -1935,16 +1935,19 @@ function printWatch(s: Setup, json: boolean, chars: number, t: Target, event: Wa
     : event === 'stopped' && text ? { summary: clip(text, chars), truncated: text.length > chars }
     : {}
   const cloud = cloudMeta(t.frame)
+  // Its launch failed on its machine: why, as show and wait say it. A cloud harness's failure is its maker's.
+  const failure = event === 'failed' && t.frame.location !== 'cloud' ? failureOf(t.frame) : undefined
   const at = new Date(s.now()).toISOString()
   const line = {
     event, at, name: t.frame.name ?? t.frame.id.slice(0, 8), id: t.frame.id, ...(machine ? { machine } : {}), agent: engineName(t.frame.engine ?? ''),
     state: t.frame.location === 'cloud' && event !== 'stopped' ? stateOf(t.frame) : EVENT_STATES[event], ...words,
     // A cloud harness has no screen to count them on.
     ...(t.frame.location !== 'cloud' && (event === 'background' || event === 'done' || event === 'idle') ? { backgroundCommands: running } : {}),
-    ...(cloud ? { cloud } : {}), ...(t.frame.cloud?.links?.length ? { links: t.frame.cloud.links } : {}),
+    ...(cloud ? { cloud } : {}), ...(t.frame.cloud?.links?.length ? { links: t.frame.cloud.links } : {}), ...(failure ? { failure } : {}),
   }
   if (json) { s.out(JSON.stringify(line)); return }
-  const said = event === 'background' && running ? backgroundSaid(running)
+  const said = failure ? failure.detail ?? failure.error
+    : event === 'background' && running ? backgroundSaid(running)
     : typeof words.namedState === 'string' ? words.namedState
     : typeof words.question === 'string' ? words.question : typeof words.summary === 'string' ? words.summary
     : typeof words.ask === 'string' ? `asked: ${clip(words.ask, 200)}` : ''
