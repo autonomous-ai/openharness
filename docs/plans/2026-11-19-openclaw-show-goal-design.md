@@ -105,8 +105,10 @@ chat; a TUI that exits on `Missing gateway auth token.` leaves a plain terminal,
    `working`, and the runtime activity reader takes OpenClaw's changing run timer as work evidence, as it does Claude
    Code's and Codex's footers, so a quiet tool step stays `working` in `ps` too.
 7. **The Gateway hold waits 10 s and holds through the outage.** `noGateway` is set once `gateway disconnected` has
-   been read for at least 10 s with no `connected`/`reconnected` line between; bare `disconnected` and `startup failed`
-   neither set nor clear it; only a ready line clears it.
+   been read for at least 10 s with no `connected`/`reconnected` line between; a bare `disconnected` line counts as the same
+   outage (it starts the 10 s and can set the hold, since an idle pane is read only every 30 s and the error line
+   shows for 5 s per try), but never clears it; `startup failed` neither sets nor clears it; a ready line or `gateway
+   starting` clears it.
 8. **No token is a failed launch.** A TUI that exits printing `Missing gateway auth token.` fails the launch with
    `OPENCLAW_NO_TOKEN` and the `noToken` sentence, as a folder in use already does; `show` finds it and says `failed`.
 9. **One history read.** `wait` and `watch` read the last turn as `show` does (more pages only when the first holds no
