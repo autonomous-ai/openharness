@@ -467,6 +467,72 @@ static void test_band_flats(void)
     CHECK(!memcmp(ahead.hash, cold.hash, (size_t)cold.frames * sizeof cold.hash[0]));
 }
 
+// An agent between looks on the glass: its ground, its rail, and a mark in its middle that its edges' reads (its rail
+// and its sides) do not meet.
+static void agent_of(ht_scene_t *s, int x, int w, uint16_t rail, uint16_t middle)
+{
+    ht_scene_clear(s, ht_rgb(0x101418));
+    ht_pro_rect(s, x, 0, w, HT_HEIGHT, 0, ht_rgb(0x283848));
+    ht_pro_rect(s, x, 0, w, RAIL_H, 0, rail);
+    ht_pro_rect(s, x + w / 2, HT_HEIGHT / 2, 40, 40, 0, middle);
+}
+// The glass of that agent cut to itself and its edges blurred (max_layer_cut) in a frame of its own: its pixels' hash,
+// and whether the frame worked its edges out.
+static uint32_t cut_frame(int x, int w, uint16_t rail, uint16_t middle, bool *worked)
+{
+    static ht_scene_t s;
+    max_layer_frame();
+    const unsigned edges = max_layer_edges();
+    agent_of(&s, x, w, rail, middle);
+    max_layer_cut(&s, 0, x, w, x, x + w, MAX_ONE / 2);
+    *worked = max_layer_edges() != edges;
+    for (int y = 0; y < HT_HEIGHT; y += 24) {
+        const int h = HT_HEIGHT - y < 24 ? HT_HEIGHT - y : 24;
+        ht_raster(&s, (ht_rect_t){0, (int16_t)y, HT_WIDTH, (int16_t)h}, s_glass + y * HT_WIDTH);
+    }
+    return fnv(s_glass, sizeof s_glass);
+}
+
+// An agent's edges a warming made are found by each frame of the same place and the same runs under its edges' reads:
+// the runs they do not meet may differ (the frame works none out), those they meet may not; every frame is the pixels
+// it is with nothing kept. A step under the lock keeps only what they are worked out from: their place, their read
+// and their patches are each a step of their own out of it.
+static void test_edge_keys(void)
+{
+    const int x = 300, w = 400;
+    const uint16_t rail = ht_rgb(0xE0C040), middle = ht_rgb(0x40A0E0), other = ht_rgb(0xE04060);
+    bool worked;
+    uint32_t cold[3];
+    max_layer_forget();
+    cold[0] = cut_frame(x, w, rail, middle, &worked);
+    CHECK(worked);
+    cold[1] = cut_frame(x, w, rail, other, &worked);
+    cold[2] = cut_frame(x, w, other, middle, &worked);
+    CHECK(cold[1] != cold[0] && cold[2] != cold[0]);
+
+    static ht_scene_t s;
+    max_layer_forget();
+    max_layer_frame();
+    max_layer_warm(max_layer_now());
+    const unsigned painted = max_layer_painted();
+    agent_of(&s, x, w, rail, middle);
+    const ht_run_t ground = s.runs[0];
+    max_layer_cut(&s, 0, x, w, x, x + w, MAX_ONE / 2);
+    CHECK(s.count == 3 && !memcmp(&s.runs[0], &ground, sizeof ground));   // left uncut
+    CHECK(max_layer_painted() == painted + 1 && max_layer_owes());
+    max_layer_warm(0);
+    int steps = 0;
+    s_asked = 0;
+    while (max_layer_warm_paint(all_bands)) steps++;
+    CHECK(steps >= 4 && !max_layer_owes());   // its place, then its reads and their patches
+
+    CHECK(cut_frame(x, w, rail, middle, &worked) == cold[0] && !worked);
+    CHECK(cut_frame(x, w, rail, other, &worked) == cold[1] && !worked);   // a run its reads do not meet
+    CHECK(cut_frame(x, w, other, middle, &worked) == cold[2] && worked);  // one they meet
+    CHECK(cut_frame(x + 1, w, rail, middle, &worked) != cold[0] && worked);   // another place
+    CHECK(cut_frame(x, w, rail, middle, &worked) == cold[0] && !worked);
+}
+
 int main(void)
 {
     test_ahead();
@@ -479,6 +545,7 @@ int main(void)
     test_bakes_full();
     test_not_resting();
     test_again();
+    test_edge_keys();
     printf("test_max_warm: %d checks passed\n", checks);
     return 0;
 }
