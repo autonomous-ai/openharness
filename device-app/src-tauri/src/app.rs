@@ -29,6 +29,8 @@ pub struct App {
     keep: KeepAlive,
     /// The last menu sent.
     menu: Vec<MenuItem>,
+    /// The last About credits sent.
+    credits: Option<String>,
     /// What the window shows; None while it is hidden.
     window: Option<View>,
     /// The sign-in that runs, as its screen draws it.
@@ -90,6 +92,7 @@ impl App {
             state,
             keep,
             menu: Vec::new(),
+            credits: None,
             window: None,
             login: None,
             step: GETTING_READY,
@@ -631,9 +634,15 @@ impl App {
         }
     }
 
-    /// Every event ends here: a menu that changed is sent, and logged.
+    /// Every event ends here: a menu that changed is sent, and logged. Credits that changed go first, so a menu that
+    /// draws About with them has them.
     fn send_menu(&mut self, effects: &mut Vec<Effect>) {
         self.state.daemon = self.keep.daemon();
+        let credits = about_credits(&self.state);
+        if credits != self.credits {
+            effects.push(Effect::AboutCredits(credits.clone()));
+            self.credits = credits;
+        }
         let items = menu(&self.state);
         if items != self.menu {
             effects.push(Effect::Menu(items.clone()));

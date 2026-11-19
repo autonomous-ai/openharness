@@ -22,6 +22,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use tauri::image::Image;
+#[cfg(not(target_os = "macos"))]
+use tauri::menu::AboutMetadata;
 use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem as NativeItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, WindowEvent};
@@ -38,6 +40,14 @@ struct Shared {
     events: Sender<Event>,
     /// Off macOS, this copy's lock: let go before a relaunch, so the new copy never finds it held.
     instance: Mutex<Option<Instance>>,
+    /// The menu last drawn, with the About credits it has: off macOS, new credits draw it again.
+    menu: Mutex<Drawn>,
+}
+
+#[derive(Default)]
+struct Drawn {
+    items: Vec<MenuItem>,
+    credits: Option<String>,
 }
 
 #[tauri::command]
@@ -56,7 +66,12 @@ fn main() {
     #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
     let mut app = tauri::Builder::default()
         // Managed before the window is made, so its first `view` finds it.
-        .manage(Shared { view: Mutex::default(), events: events.clone(), instance: Mutex::default() })
+        .manage(Shared {
+            view: Mutex::default(),
+            events: events.clone(),
+            instance: Mutex::default(),
+            menu: Mutex::default(),
+        })
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![view, act])
         .setup(move |app| start(app.handle(), events, queue).map_err(Into::into))
@@ -230,8 +245,8 @@ fn run_loop(
     // `asked`: the effects answer a menu click.
     let run = |effects: Vec<Effect>, asked: bool| {
         for effect in effects {
-            // Menu, Show, ShowAbout, Quit and Relaunch are AppKit's, on the main thread, which runs them in the order
-            // they are handed over.
+            // Menu, Show, ShowAbout, AboutCredits, Quit and Relaunch are AppKit's, on the main thread, which runs them
+            // in the order they are handed over.
             if let Some(effect) = runner.run(effect) {
                 let (drawing, log) = (handle.clone(), log.clone());
                 let _ = handle.run_on_main_thread(move || {
@@ -252,11 +267,10 @@ fn run_loop(
 /// On the main thread.
 fn draw(handle: &AppHandle, effect: Effect, asked: bool) -> tauri::Result<()> {
     match effect {
-        Effect::Menu(items) => {
-            if let Some(tray) = handle.tray_by_id(TRAY) {
-                tray.set_menu(Some(native_menu(handle, &items)?))?;
-            }
-        }
+        Effect::Menu(items) => draw_menu(handle, |drawn| drawn.items = items)?,
+        // macOS's panel takes its credits when it opens.
+        #[cfg(not(target_os = "macos"))]
+        Effect::AboutCredits(credits) => draw_menu(handle, |drawn| drawn.credits = credits)?,
         Effect::Show(view) => {
             let last = std::mem::replace(&mut *handle.state::<Shared>().view.lock().unwrap(), view.clone());
             let Some(window) = handle.get_webview_window(WINDOW) else { return Ok(()) };
@@ -270,6 +284,8 @@ fn draw(handle: &AppHandle, effect: Effect, asked: bool) -> tauri::Result<()> {
                 None => window.hide()?,
             }
         }
+        // Elsewhere About is the menu's own item, which opens its dialog without a menu event.
+        #[cfg(target_os = "macos")]
         Effect::ShowAbout(credits) => show_about(credits.as_deref()),
         // The daemon is left running: the app only ever watched it.
         Effect::Quit => handle.exit(0),
@@ -311,10 +327,6 @@ fn show_about(credits: Option<&str>) {
     unsafe { app.orderFrontStandardAboutPanelWithOptions(&options) };
 }
 
-/// Only macOS is released.
-#[cfg(not(target_os = "macos"))]
-fn show_about(_credits: Option<&str>) {}
-
 /// Whether showing `next` after `last` raises the window and takes the keyboard: a new screen, or one the menu asked
 /// for, which may be behind another app's windows. A phase or its lines only redraw, so a sign-in's `Waiting` never
 /// takes the keyboard from the browser.
@@ -322,18 +334,30 @@ fn raises(last: Option<&View>, next: &View, asked: bool) -> bool {
     asked || last.map(|view| view.screen) != Some(next.screen)
 }
 
-fn native_menu(handle: &AppHandle, items: &[MenuItem]) -> tauri::Result<Menu<tauri::Wry>> {
-    let menu = Menu::new(handle)?;
-    for item in items {
-        menu.append(native_item(handle, item)?.as_ref())?;
+/// Draws the tray menu again once `change` is made to what it is drawn from.
+fn draw_menu(handle: &AppHandle, change: impl FnOnce(&mut Drawn)) -> tauri::Result<()> {
+    let shared = handle.state::<Shared>();
+    let mut drawn = shared.menu.lock().unwrap();
+    change(&mut drawn);
+    if let Some(tray) = handle.tray_by_id(TRAY) {
+        let menu = Menu::new(handle)?;
+        for item in &drawn.items {
+            menu.append(native_item(handle, item, drawn.credits.as_deref())?.as_ref())?;
+        }
+        tray.set_menu(Some(menu))?;
     }
-    Ok(menu)
+    Ok(())
 }
 
 /// A submenu's items are drawn by the rules the top level uses.
-fn native_item(handle: &AppHandle, item: &MenuItem) -> tauri::Result<Box<dyn IsMenuItem<tauri::Wry>>> {
+fn native_item(
+    handle: &AppHandle,
+    item: &MenuItem,
+    credits: Option<&str>,
+) -> tauri::Result<Box<dyn IsMenuItem<tauri::Wry>>> {
     Ok(match item {
         MenuItem::Text(text) => Box::new(NativeItem::new(handle, text, false, None::<&str>)?),
+        MenuItem::Action(MenuAction::About, text) => about_item(handle, text, credits)?,
         MenuItem::Action(action, text) => {
             Box::new(NativeItem::with_id(handle, menu_id(*action), text, true, None::<&str>)?)
         }
@@ -343,12 +367,35 @@ fn native_item(handle: &AppHandle, item: &MenuItem) -> tauri::Result<Box<dyn IsM
         MenuItem::Submenu(text, items) => {
             let submenu = Submenu::new(handle, text, true)?;
             for item in items {
-                submenu.append(native_item(handle, item)?.as_ref())?;
+                submenu.append(native_item(handle, item, credits)?.as_ref())?;
             }
             Box::new(submenu)
         }
         MenuItem::Separator => Box::new(PredefinedMenuItem::separator(handle)?),
     })
+}
+
+/// macOS's About is a plain item: its click reaches the app, which opens the panel in front with the credits then.
+#[cfg(target_os = "macos")]
+fn about_item(
+    handle: &AppHandle,
+    text: &str,
+    _credits: Option<&str>,
+) -> tauri::Result<Box<dyn IsMenuItem<tauri::Wry>>> {
+    Ok(Box::new(NativeItem::with_id(handle, menu_id(MenuAction::About), text, true, None::<&str>)?))
+}
+
+/// Elsewhere it is muda's own About, the one way to its dialog: the name, the version, and the credits line under
+/// them as its comments, the one field it shows on both Windows and Linux.
+#[cfg(not(target_os = "macos"))]
+fn about_item(handle: &AppHandle, text: &str, credits: Option<&str>) -> tauri::Result<Box<dyn IsMenuItem<tauri::Wry>>> {
+    let metadata = AboutMetadata {
+        name: Some("Harness".into()),
+        version: Some(handle.package_info().version.to_string()),
+        comments: credits.map(Into::into),
+        ..Default::default()
+    };
+    Ok(Box::new(PredefinedMenuItem::about(handle, Some(text), Some(metadata))?))
 }
 
 /// A menu item's id is its action's name.

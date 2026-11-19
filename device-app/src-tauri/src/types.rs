@@ -245,8 +245,9 @@ pub enum Event {
     FollowOffer,
 }
 
-/// What to do about it. Show(None) hides the window. ShowAbout: the About panel, with its credits line. Menu, Show,
-/// ShowAbout, Quit and Relaunch are the binary's.
+/// What to do about it. Show(None) hides the window. ShowAbout: the About panel, with its credits line. AboutCredits:
+/// the credits line now, for an About drawn into the menu. Menu, Show, ShowAbout, AboutCredits, Quit and Relaunch are
+/// the binary's.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
     FindCli,
@@ -272,6 +273,7 @@ pub enum Effect {
     Menu(Vec<MenuItem>),
     Show(Option<View>),
     ShowAbout(Option<String>),
+    AboutCredits(Option<String>),
     Quit,
     Relaunch,
     ExportLogs,
@@ -515,7 +517,7 @@ mod tests {
         let strings = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(source)).unwrap();
         // A Windows checkout ends its lines with \r\n; the file ships from a macOS build only.
         let strings = strings.replace("\r\n", "\n");
-        assert_eq!(strings,"CFBundleName = \"Harness\";\nCFBundleDisplayName = \"Harness\";\n");
+        assert_eq!(strings, "CFBundleName = \"Harness\";\nCFBundleDisplayName = \"Harness\";\n");
     }
 
     /// A template image 18 points square at two pixels a point: macOS keeps only its alpha, so it tints it for a light
