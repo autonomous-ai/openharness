@@ -7,8 +7,9 @@
  * started opens on its tab by the extension's `vscode://anthropic.claude-code/open?session=<id>` link (`cursor://` in
  * Cursor), sent to that editor alone by its bundle id (appLink.ts), on a tap and on a rest of the dial, a rest only while
  * that editor is in front. The link was read in the extension's code, not in any document, and may change with any
- * release. The link and `open` are macOS's, so elsewhere nothing runs. Every value came from a hook, so each is checked
- * against its form before it reaches the link.
+ * release. On Linux, which has no bundle id, the editor is the app the process scan named and the link opens by
+ * `xdg-open` once its scheme has an app (docs/plans/2026-11-19-dial-linux-design.md § 1.6); elsewhere nothing runs.
+ * Every value came from a hook, so each is checked against its form before it reaches the link.
  *
  * The integrated terminal (docs/plans/2026-11-17-dial-vscode-extension-design.md, §3): a Claude Code or Codex agent in a
  * terminal has the pane `term:<its pid>`, and Harness's own extension in the window that holds the terminal shows it on
@@ -79,8 +80,9 @@ export function createVscodeAdapter(
       // The extension says the same word in either editor, so each editor's own bundle id is what its adapter takes:
       // an app known by TERM_PROGRAM alone may be another fork. The link names Claude Code's sessions alone: an engine
       // Claude Code's tools ran from the tab (`codex exec`) inherits the word and the bundle id, and a Codex thread id
-      // is a UUID too.
-      if (place.engine === 'claude' && entrypoint === 'claude-vscode' && bundle === editorBundle && session
+      // is a UUID too. Linux has no bundle id: there the editor is the app the process scan named.
+      const inEditor = bundle === editorBundle || (deps.platform === 'linux' && bundle === undefined && place.app === editor)
+      if (place.engine === 'claude' && entrypoint === 'claude-vscode' && inEditor && session
         && VSCODE_SESSION.test(session)) return { adapter: editor, id: session }
       // The tab's word, inherited by what its tools run, is never a terminal's: the tab has no shell a window reports.
       if (inTerminal(place) && place.app === editor && entrypoint !== 'claude-vscode' && isPid(place.pid)) {
