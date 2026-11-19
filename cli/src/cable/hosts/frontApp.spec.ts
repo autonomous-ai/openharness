@@ -56,7 +56,9 @@ describe('frontAppId', () => {
 
   it.each(['com.apple.Safari', 'org.alacritty', 'net.kovidgoyal.kitty-quick-access', 'alacritty', '', 'x'.repeat(128),
     'constructor', '__proto__', 'toString', 'COM.MITCHELLH.GHOSTTY', 'com.openai.chat', 'codex', 'Codex.exe',
-    'com.cmuxterm.app.nightly', 'cmux'])(
+    'com.cmuxterm.app.nightly', 'cmux',
+    // OpenAI's chat app on Windows is not the Codex app, and the Linux processes' names are Linux's alone.
+    'ChatGPT.exe', 'chatgpt.exe', 'claude-desktop.exe'])(
     'an unknown app, the empty string and a 128-character string are none: %j', (value) => {
       expect(frontAppId(value)).toBe(FRONT_NONE)
     })
