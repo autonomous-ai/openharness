@@ -6,10 +6,10 @@
  * and a row whose manifest no longer parses is reported broken rather than silently dropped, so a
  * DSH that breaks on update is visible in `harness dsh list` instead of vanishing from the picker.
  */
-import { mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
-import { randomUUID } from 'node:crypto'
+import { mkdirSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
+import { atomicWriteFile, jsonArray, readState } from '../lib/secureState.js'
 import { DSH_ID_RE, readDshManifest, type DshManifest } from './manifest.js'
 
 /**
@@ -76,25 +76,13 @@ function validRecord(value: unknown): value is InstalledDshRecord {
 }
 
 export function readInstalledIndex(): InstalledDshRecord[] {
-  let text: string
-  try {
-    text = readFileSync(indexPath(), 'utf8')
-  } catch {
-    return []
-  }
-  try {
-    const parsed = JSON.parse(text) as unknown
-    return Array.isArray(parsed) ? parsed.filter(validRecord) : []
-  } catch {
-    return []
-  }
+  const read = readState(indexPath(), 'cache', jsonArray)
+  return read.state === 'ok' ? read.value.filter(validRecord) : []
 }
 
 export function writeInstalledIndex(records: readonly InstalledDshRecord[]): void {
   mkdirSync(dshRootDir(), { recursive: true, mode: 0o700 })
-  const temporary = `${indexPath()}.${randomUUID()}.tmp`
-  writeFileSync(temporary, JSON.stringify(records, null, 2) + '\n', { mode: 0o600 })
-  renameSync(temporary, indexPath())
+  atomicWriteFile(indexPath(), JSON.stringify(records, null, 2) + '\n', 'cache')
 }
 
 export function upsertInstalledRecord(record: InstalledDshRecord): void {
