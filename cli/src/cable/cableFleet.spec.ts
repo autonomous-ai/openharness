@@ -185,7 +185,6 @@ describe('USB dial fleet', () => {
       f.options.canUseUsb.mockReturnValue(false)
       f.fleet.start()
       await scan()
-      expect(f.options.discover).not.toHaveBeenCalled()
       expect(f.ports).toHaveLength(0)
       f.options.canUseUsb.mockReturnValue(true)
       await scan()
@@ -196,14 +195,28 @@ describe('USB dial fleet', () => {
       await scan()
       expect(f.ports.every(port => !port.isOpen)).toBe(true)
       expect(f.fleet.isConnected).toBe(false)
-      const discoveries = f.options.discover.mock.calls.length
       await scan()
-      expect(f.options.discover).toHaveBeenCalledTimes(discoveries)
+      expect(f.ports).toHaveLength(2)
       f.options.canUseUsb.mockReturnValue(true)
       await scan()
       await vi.waitFor(() => expect(f.ports).toHaveLength(4))
       await f.greet(f.ports.slice(2))
       expect(f.fleet.isConnected).toBe(true)
+    } finally { await f.fleet.stop() }
+  })
+
+  it('asks whose USB it is only while a dial is plugged in, so an empty desk starts no process', async () => {
+    const f = fixture()
+    f.setPorts([])
+    const scan = () => (f.fleet as unknown as { scan(): Promise<void> }).scan()
+    try {
+      f.fleet.start()
+      for (let i = 0; i < 3; i++) await scan()
+      expect(f.options.discover.mock.calls.length).toBeGreaterThanOrEqual(3)
+      expect(f.options.canUseUsb).not.toHaveBeenCalled()
+      f.setPorts([device('/dev/tim', 'AA:01')])
+      await scan()
+      expect(f.options.canUseUsb).toHaveBeenCalled()
     } finally { await f.fleet.stop() }
   })
 
