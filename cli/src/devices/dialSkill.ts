@@ -2,11 +2,13 @@
  * The dial skill in one agent home's `skills/dial/SKILL.md`, the same for Claude Code and Codex (both read
  * `<home>/skills/<name>/SKILL.md`), so a session knows it can ring the dial. Harness writes, refreshes and removes only
  * its own file, known by its marker line: anything else at that path is the person's. The `harness device` command and
- * the devices service both import it, so it loads nothing but Node's own modules.
+ * the devices service both import it, so it loads nothing but Node's own modules (lib/secureState.ts loads only those).
  */
 import { randomUUID } from 'node:crypto'
 import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { insideWindowsRoots } from '../lib/secureState.js'
 
 export const DIAL_SKILL_DESCRIPTION = 'The person has a Harness dial on their desk. Use it when the task stops on a step only they can take: give information, act outside your reach (connect a VPN, sign in, plug in a device, get another person to sign off), or decide.'
 
@@ -43,20 +45,65 @@ const MAX_SKILL_BYTES = 4096
 /** A settings.json is a few keys; one past this is not read whole. */
 const MAX_SETTINGS_BYTES = 1024 * 1024
 
-/** A platform with no uid owns nothing, so nothing is written there. */
+type Owned = 'ok' | 'missing' | 'owner' | 'unreadable'
+
+/** Windows gives no uid (-1): there the profile decides (ownWindowsPath). */
 function ownUid(): number {
   return process.getuid?.() ?? -1
 }
 
+/** The profile alone, resolved: not the data folder windowsStateRoots() also allows, since a skill home is the person's
+ *  engine home, never Harness's data. None when it cannot be resolved, so nothing is this account's. */
+function profileRoots(): string[] {
+  try {
+    return [realpathSync.native(homedir())]
+  } catch {
+    return []
+  }
+}
+
+/** Windows' roots by default, none elsewhere: there the uid decides. */
+function platformRoots(): readonly string[] | undefined {
+  return process.platform === 'win32' ? profileRoots() : undefined
+}
+
+function missingOr(error: unknown): 'missing' | 'unreadable' {
+  const code = (error as NodeJS.ErrnoException).code
+  return code === 'ENOENT' || code === 'ENOTDIR' ? 'missing' : 'unreadable'
+}
+
+/**
+ * This account's own on Windows, the rule its state files follow (lib/secureState.ts): a real file or folder, not a
+ * link or junction (lstat reports both as links), whose real path is inside a root. The profile's ACL is what protects
+ * it; a uid means nothing there. 'owner' for a link, which is the person's wherever it points, or a path outside.
+ */
+export function ownWindowsPath(path: string, kind: 'file' | 'directory', roots: readonly string[] = profileRoots()): Owned {
+  let info
+  try {
+    info = lstatSync(path)
+  } catch (error) {
+    return missingOr(error)
+  }
+  if (info.isSymbolicLink()) return 'owner'
+  if (kind === 'directory' ? !info.isDirectory() : !info.isFile()) return 'missing'
+  let real
+  try {
+    real = realpathSync.native(path)
+  } catch (error) {
+    return missingOr(error)
+  }
+  return insideWindowsRoots(real, roots) ? 'ok' : 'owner'
+}
+
 /** 'ok', or why a path is no folder of this user's: 'unreadable' when it cannot be looked at now (a folder above it
- *  shut), which says nothing of it being gone, so a listed folder stays listed. */
-export function ownDirectory(path: string, uid = ownUid()): 'ok' | 'missing' | 'owner' | 'unreadable' {
+ *  shut), which says nothing of it being gone, so a listed folder stays listed. With roots (Windows'), no uid is read. */
+export function ownDirectory(path: string, uid = ownUid(), windowsRoots: readonly string[] | undefined = platformRoots()): Owned {
+  if (windowsRoots) return ownWindowsPath(path, 'directory', windowsRoots)
   let info
   try {
     info = statSync(path)
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code
-    return code === 'ENOENT' || code === 'ENOTDIR' ? 'missing' : 'unreadable'
+    return missingOr(error)
   }
   if (!info.isDirectory()) return 'missing'
   return info.uid === uid ? 'ok' : 'owner'
@@ -66,7 +113,7 @@ export function ownDirectory(path: string, uid = ownUid()): 'ok' | 'missing' | '
  * `<home>/skills` through its link: an Orca profile's `skills/` points at `~/.claude/skills`, and homes that share one
  * folder are one write. null: not a directory this user owns, or missing and not made.
  */
-export function skillsFolderOf(home: string, make: boolean, uid = ownUid()): string | null {
+export function skillsFolderOf(home: string, make: boolean, uid = ownUid(), windowsRoots: readonly string[] | undefined = platformRoots()): string | null {
   const skills = join(home, 'skills')
   let real: string
   try {
@@ -81,7 +128,7 @@ export function skillsFolderOf(home: string, make: boolean, uid = ownUid()): str
       return null
     }
   }
-  return ownDirectory(real, uid) === 'ok' ? real : null
+  return ownDirectory(real, uid, windowsRoots) === 'ok' ? real : null
 }
 
 export function writeSkill(skills: string): 'written' | 'same' | 'theirs' | 'failed' {
