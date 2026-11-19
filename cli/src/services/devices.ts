@@ -1351,6 +1351,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     for (const entry of entries) {
       const { agent } = entry
       const was = told.get(agent.id)
+      // A resting row (the Claude app's store) says nothing and keeps the record of the copy before it: the app resumes a
+      // session moments after it ended its process, and the hooked copy's done, told once, is not told again.
+      if (agent.resting && was) continue
       const card = { agentId: agent.id, text: '', recap: '', subagent: false }
       // A wait whose line changed is told again.
       const line = waiting(entry)
